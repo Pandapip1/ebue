@@ -1,0 +1,67 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Resolving a program name for execvp.
+ *
+ * A name with a directory part (a '/', a '\\', or a drive letter) is
+ * taken as-is; __spawn reports ENOENT if it does not exist.  Anything
+ * else is looked up in each directory of PATH, trying the name and then
+ * the name with ".exe" appended, which is what Windows expects an image
+ * to be called.  PATH here is the Windows variable, whose entries are
+ * separated by ';' -- a ':' cannot be the separator because every
+ * absolute entry ("C:\Windows") contains one.  An empty entry means the
+ * current directory, as on Unix.
+ */
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include "libc.h"
+
+static int has_dir(const char *name)
+{
+	if (strchr(name, '/') || strchr(name, '\\')) return 1;
+	if (((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':') return 1;
+	return 0;
+}
+
+static char *try_dir(const char *dir, size_t dlen, const char *name)
+{
+	size_t nlen = strlen(name);
+	char *p = malloc(dlen + 1 + nlen + 4 + 1);
+	if (!p) return 0;
+	if (dlen) {
+		memcpy(p, dir, dlen);
+		if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\';
+	}
+	memcpy(p + dlen, name, nlen + 1);
+	if (access(p, X_OK) == 0) return p;
+	memcpy(p + dlen + nlen, ".exe", 5);
+	if (access(p, X_OK) == 0) return p;
+	free(p);
+	return 0;
+}
+
+char *__find_program(const char *name, int use_path)
+{
+	const char *path, *p;
+	char *r;
+	if (!use_path || has_dir(name)) {
+		r = malloc(strlen(name) + 1);
+		if (r) strcpy(r, name);
+		return r;
+	}
+	path = getenv("PATH");
+	if (!path) path = "";
+	p = path;
+	for (;;) {
+		const char *e = strchr(p, ';');
+		size_t len = e ? (size_t)(e - p) : strlen(p);
+		r = try_dir(p, len, name);
+		if (r) return r;
+		if (!e) break;
+		p = e + 1;
+	}
+	errno = ENOENT;
+	return 0;
+}
