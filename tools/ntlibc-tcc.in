@@ -1,0 +1,10 @@
+#!/bin/sh
+# Compile and link a program against ntlibc, the way musl-gcc does for musl.
+# Everything not recognised is passed through to the compiler.
+cc="@CC@"
+inc="@INCDIR@"
+lib="@LIBDIR@"
+case "$*" in
+*-c*|*-E*|*-S*) exec $cc -nostdinc -I"$inc" "$@" ;;
+esac
+exec $cc -nostdinc -nostdlib -I"$inc" "$lib/crt1.o" "$@" -L"$lib" -lc -lntdll

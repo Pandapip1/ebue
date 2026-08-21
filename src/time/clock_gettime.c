@@ -1,0 +1,123 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * CLOCK_REALTIME (and its coarse alias) is NtQuerySystemTime, the same
+ * NT-epoch 100ns-tick clock time() and gmtime() are built on.
+ *
+ * CLOCK_MONOTONIC and friends want a clock that never jumps when
+ * someone runs stime()/clock_settime(REALTIME): NtQueryPerformanceCounter
+ * gives a free-running counter plus its frequency, which is exactly
+ * that.  BOOTTIME is treated the same as MONOTONIC since this target
+ * has no separate suspend-time accounting to add back in.
+ *
+ * The CPUTIME clocks read KERNEL_USER_TIMES for the current process
+ * (there is no cheap equivalent for "this thread only" without
+ * NtQueryInformationThread, which nt.h doesn't have wired up, so
+ * THREAD_CPUTIME_ID reports the same thing PROCESS_CPUTIME_ID does --
+ * an acceptable approximation on a target with no libc to compare
+ * against, and still monotonic and CPU-time-like).
+ */
+#include <time.h>
+#include <unistd.h>
+#include <errno.h>
+#include "libc.h"
+
+static int realtime_get(struct timespec *ts)
+{
+	LARGE_INTEGER now;
+	NtQuerySystemTime(&now);
+	ts->tv_sec = (time_t)__nt_to_unix_sec(now);
+	ts->tv_nsec = __nt_to_unix_nsec(now);
+	return 0;
+}
+
+static int monotonic_get(struct timespec *ts)
+{
+	LARGE_INTEGER count, freq;
+	NTSTATUS st = NtQueryPerformanceCounter(&count, &freq);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	ts->tv_sec = (time_t)(count / freq);
+	ts->tv_nsec = (long)((count % freq) * 1000000000LL / freq);
+	return 0;
+}
+
+static int cputime_get(struct timespec *ts)
+{
+	KERNEL_USER_TIMES kt;
+	NTSTATUS st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, NULL);
+	long long ticks; /* 100ns units, kernel + user */
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	ticks = kt.KernelTime + kt.UserTime;
+	ts->tv_sec = (time_t)(ticks / __TICKS_PER_SEC);
+	ts->tv_nsec = (long)(ticks % __TICKS_PER_SEC) * 100;
+	return 0;
+}
+
+int clock_gettime(clockid_t id, struct timespec *ts)
+{
+	switch (id) {
+	case CLOCK_REALTIME:
+	case CLOCK_REALTIME_COARSE:
+		return realtime_get(ts);
+	case CLOCK_MONOTONIC:
+	case CLOCK_MONOTONIC_RAW:
+	case CLOCK_MONOTONIC_COARSE:
+	case CLOCK_BOOTTIME:
+		return monotonic_get(ts);
+	case CLOCK_PROCESS_CPUTIME_ID:
+	case CLOCK_THREAD_CPUTIME_ID:
+		return cputime_get(ts);
+	default:
+		errno = EINVAL;
+		return -1;
+	}
+}
+
+int clock_settime(clockid_t id, const struct timespec *ts)
+{
+	LARGE_INTEGER nt;
+	NTSTATUS st;
+
+	if (id != CLOCK_REALTIME) { errno = EINVAL; return -1; }
+	nt = __unix_to_nt(ts->tv_sec, ts->tv_nsec);
+	st = NtSetSystemTime(&nt, NULL);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return 0;
+}
+
+int clock_getres(clockid_t id, struct timespec *res)
+{
+	switch (id) {
+	case CLOCK_REALTIME:
+	case CLOCK_REALTIME_COARSE:
+	case CLOCK_PROCESS_CPUTIME_ID:
+	case CLOCK_THREAD_CPUTIME_ID:
+		res->tv_sec = 0;
+		res->tv_nsec = 100;    /* NT's system clock ticks in 100ns units */
+		return 0;
+	case CLOCK_MONOTONIC:
+	case CLOCK_MONOTONIC_RAW:
+	case CLOCK_MONOTONIC_COARSE:
+	case CLOCK_BOOTTIME: {
+		LARGE_INTEGER count, freq;
+		NTSTATUS st = NtQueryPerformanceCounter(&count, &freq);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		res->tv_sec = 0;
+		res->tv_nsec = freq > 1000000000LL ? 1 : (long)(1000000000LL / (freq ? freq : 1));
+		return 0;
+	}
+	default:
+		errno = EINVAL;
+		return -1;
+	}
+}
+
+int clock_getcpuclockid(pid_t pid, clockid_t *id)
+{
+	/* No handle-by-pid CPU-time clock without OpenProcess (and the
+	 * ACCESS_DENIED that usually comes with querying another process's
+	 * times); only "this process" is supported. */
+	if (pid != 0 && pid != getpid()) { errno = ESRCH; return -1; }
+	*id = CLOCK_PROCESS_CPUTIME_ID;
+	return 0;
+}

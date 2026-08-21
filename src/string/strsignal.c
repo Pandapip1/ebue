@@ -1,0 +1,47 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include <string.h>
+#include <signal.h>
+
+/* Indexed by signal number, 0 through SIGSYS (31). */
+static const char *const __sigmsgs[] = {
+	"Unknown signal",
+	"Hangup",
+	"Interrupt",
+	"Quit",
+	"Illegal instruction",
+	"Trace/breakpoint trap",
+	"Aborted",
+	"Bus error",
+	"Arithmetic exception",
+	"Killed",
+	"User defined signal 1",
+	"Segmentation fault",
+	"User defined signal 2",
+	"Broken pipe",
+	"Alarm clock",
+	"Terminated",
+	"Stack fault",
+	"Child process status",
+	"Continued",
+	"Stopped (signal)",
+	"Stopped",
+	"Stopped (tty input)",
+	"Stopped (tty output)",
+	"Urgent I/O condition",
+	"CPU time limit exceeded",
+	"File size limit exceeded",
+	"Virtual timer expired",
+	"Profiling timer expired",
+	"Window changed",
+	"I/O possible",
+	"Power failure",
+	"Bad system call",
+};
+
+char *strsignal(int sig)
+{
+	if (sig < 0 || (size_t)sig >= sizeof __sigmsgs / sizeof *__sigmsgs)
+		return (char *)"Unknown signal";
+	return (char *)__sigmsgs[sig];
+}

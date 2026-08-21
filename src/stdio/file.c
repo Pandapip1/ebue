@@ -1,0 +1,199 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * FILE* lifetime: fopen/fdopen/freopen/fclose, the three standard
+ * streams, and __stdio_exit, which exit() calls to flush and close
+ * whatever is still open.  Every FILE that fopen/fdopen/fmemopen hands
+ * out is linked into __stdio_files so __stdio_exit can find it without
+ * the caller having to remember to.
+ */
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include "stdio_impl.h"
+
+FILE *__stdio_files;
+
+static unsigned char stdin_buf[BUFSIZ], stdout_buf[BUFSIZ];
+
+static FILE stdin_f  = { .fd = 0, .bufmode = _IOFBF, .user_buf = 1, .readable = 1, .buf = stdin_buf,  .bufsz = sizeof stdin_buf,  .no_close = 1 };
+static FILE stdout_f = { .fd = 1, .bufmode = _IOLBF, .user_buf = 1, .writable = 1, .buf = stdout_buf, .bufsz = sizeof stdout_buf, .no_close = 1 };
+static FILE stderr_f = { .fd = 2, .bufmode = _IONBF, .writable = 1, .no_close = 1 };
+
+FILE *const stdin = &stdin_f;
+FILE *const stdout = &stdout_f;
+FILE *const stderr = &stderr_f;
+
+/* fopen's mode string turned into open()'s flags.  "b" is accepted and
+ * ignored (everything here is binary already); "x" (C11) maps to O_EXCL. */
+int __fmodeflags(const char *mode)
+{
+	int flags;
+	switch (mode[0]) {
+	case 'r': flags = O_RDONLY; break;
+	case 'w': flags = O_WRONLY | O_CREAT | O_TRUNC; break;
+	case 'a': flags = O_WRONLY | O_CREAT | O_APPEND; break;
+	default: errno = EINVAL; return -1;
+	}
+	mode++;
+	for (; *mode; mode++) {
+		switch (*mode) {
+		case '+': flags = (flags & ~O_ACCMODE) | O_RDWR; break;
+		case 'x': flags |= O_EXCL; break;
+		case 'b': case 't': break;
+		case 'e': flags |= O_CLOEXEC; break;
+		default: break;
+		}
+	}
+	return flags;
+}
+
+FILE *__file_new(int fd, int flags)
+{
+	FILE *f = malloc(sizeof *f);
+	if (!f) return 0;
+	memset(f, 0, sizeof *f);
+	f->fd = fd;
+	f->pid = -1;
+	switch (flags & O_ACCMODE) {
+	case O_RDONLY: f->readable = 1; break;
+	case O_WRONLY: f->writable = 1; break;
+	case O_RDWR: f->readable = f->writable = 1; break;
+	}
+	f->bufmode = isatty(fd) ? _IOLBF : _IOFBF;
+	f->next = __stdio_files;
+	__stdio_files = f;
+	return f;
+}
+
+void __file_free(FILE *f)
+{
+	FILE **pp;
+	for (pp = &__stdio_files; *pp; pp = &(*pp)->next) {
+		if (*pp == f) { *pp = f->next; break; }
+	}
+	if (f->buf && !f->user_buf) free(f->buf);
+	if (f->is_mem && f->mem_owned && f->mem_buf) free(f->mem_buf);
+	free(f);
+}
+
+FILE *fopen(const char *__restrict path, const char *__restrict mode)
+{
+	int flags = __fmodeflags(mode);
+	int fd;
+	FILE *f;
+	if (flags < 0) return 0;
+	fd = open(path, flags, 0666);
+	if (fd < 0) return 0;
+	f = __file_new(fd, flags);
+	if (!f) { int e = errno; close(fd); errno = e; return 0; }
+	return f;
+}
+
+FILE *fdopen(int fd, const char *mode)
+{
+	int flags = __fmodeflags(mode);
+	struct __fd *desc = __fd_get(fd);
+	FILE *f;
+	if (flags < 0) return 0;
+	if (!desc) return 0;
+	f = __file_new(fd, flags);
+	if (!f) return 0;
+	if ((desc->flags & O_APPEND) && (flags & O_WRONLY || flags & O_RDWR))
+		fseek(f, 0, SEEK_END);
+	return f;
+}
+
+FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__restrict f)
+{
+	int flags = __fmodeflags(mode);
+	int fd, oldfd;
+
+	if (flags < 0) return 0;
+	fflush(f);
+	oldfd = f->fd;
+
+	if (path) {
+		if (f->is_mem) {
+			if (f->mem_dynamic && f->mem_buf) free(f->mem_buf);
+			f->is_mem = 0; f->mem_buf = 0; f->mem_size = f->mem_len = f->mem_pos = 0;
+		} else if (oldfd >= 0) {
+			close(oldfd);
+		}
+		fd = open(path, flags, 0666);
+		if (fd < 0) { __file_free(f); return 0; }
+		f->fd = fd;
+	} else {
+		/* Reopening the same file with a new mode: just re-derive flags. */
+		if (oldfd < 0) { __file_free(f); return 0; }
+		fd = oldfd;
+	}
+
+	f->readable = f->writable = 0;
+	switch (flags & O_ACCMODE) {
+	case O_RDONLY: f->readable = 1; break;
+	case O_WRONLY: f->writable = 1; break;
+	case O_RDWR: f->readable = f->writable = 1; break;
+	}
+	f->eof = f->err = 0;
+	f->rpos = f->rend = f->wpos = 0;
+	f->nunget = 0;
+	if (flags & O_APPEND) fseek(f, 0, SEEK_END);
+	return f;
+}
+
+int fclose(FILE *f)
+{
+	int r = fflush(f);
+	if (!f->is_mem && !f->no_close && f->fd >= 0) {
+		if (close(f->fd) < 0) r = EOF;
+	}
+	if (f->no_close) {
+		/* stdin/stdout/stderr are never freed; just reset them. */
+		f->rpos = f->rend = f->wpos = 0;
+		f->nunget = 0;
+		return r;
+	}
+	__file_free(f);
+	return r;
+}
+
+int fileno(FILE *f)
+{
+	if (f->is_mem || f->fd < 0) { errno = EBADF; return -1; }
+	return f->fd;
+}
+int fileno_unlocked(FILE *f) { return fileno(f); }
+
+int feof(FILE *f) { return f->eof != 0; }
+int feof_unlocked(FILE *f) { return feof(f); }
+int ferror(FILE *f) { return f->err != 0; }
+int ferror_unlocked(FILE *f) { return ferror(f); }
+void clearerr(FILE *f) { f->eof = f->err = 0; }
+void clearerr_unlocked(FILE *f) { clearerr(f); }
+
+/* flockfile/funlockfile: there is no threading here (libpthread.a is an
+ * empty placeholder archive), so a FILE needs no real lock -- these exist
+ * only so that programs written against a threaded libc still link. */
+void flockfile(FILE *f) { (void)f; }
+int ftrylockfile(FILE *f) { (void)f; return 0; }
+void funlockfile(FILE *f) { (void)f; }
+
+/* exit() calls this to flush and close everything still open, the way a
+ * real process shutdown (or _exit after a clean run) is expected to
+ * leave nothing buffered unwritten. */
+void __stdio_exit(void)
+{
+	FILE *f;
+	fflush(stdout);
+	fflush(stderr);
+	for (f = __stdio_files; f; f = f->next)
+		fflush(f);
+	/* Buffers are not freed and fds not closed: the process is about to
+	 * end and NtTerminateProcess reclaims everything at once. Flushing
+	 * is the only observable effect that matters. */
+}

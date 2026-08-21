@@ -1,0 +1,182 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * x87 helpers shared by the math sources.  Everything goes through
+ * memory with a pointer in a general register, which is the one asm
+ * shape that is identical on i386 and x86_64 (double/float arguments
+ * arrive in xmm registers on x86_64, so they are moved via these long
+ * double temporaries anyway).
+ *
+ * ntlibc targets Windows NT only, but it is built with two different
+ * compilers with two different, incompatible ideas of what "long
+ * double" is:
+ *
+ *  - Under this tcc's -win32 targets (which define TCC_TARGET_PE), tcc
+ *    treats "long double" as an alias for "double" (matching the MSVC
+ *    ABI): sizeof(long double) == 8 here, not the 10/12/16-byte 80-bit
+ *    extended format.  So every memory transfer of a long double must
+ *    use the double-precision (8-byte) fld/fst opcodes (fldl/fstpl):
+ *    the 80-bit tbyte ones (fldt/fstpt) would write 10 bytes into an
+ *    8-byte C object and corrupt whatever is next to it on the stack.
+ *
+ *  - Under mingw-w64 gcc (the configure-time fallback compiler, see
+ *    ./configure), "long double" is genuinely gcc's native 80-bit x87
+ *    extended precision format, occupying the low 10 significant bytes
+ *    of a 12-byte (i386) or 16-byte (x86_64) object - the padding
+ *    exists only for alignment.  There, the memory transfer must use
+ *    the 80-bit tbyte opcodes (fldt/fstpt); the 8-byte ones would
+ *    truncate/misread the value.
+ *
+ * NTLIBC_LDBL_EXTENDED (defined below) selects between the two at
+ * compile time, and is the one test every long double bit-layout
+ * assumption in src/math should use - see fpclassify.c, frexp.c,
+ * copysign.c and fabs.c.  It is driven by __SIZEOF_LONG_DOUBLE__,
+ * which gcc/mingw predefine to the true sizeof(long double) (12 or 16)
+ * and which this tcc does not predefine at all (confirmed empirically:
+ * this tcc build has no __*LONG_DOUBLE__ macros and sizeof(long
+ * double) == 8; note its bundled <float.h> is misleading here - it
+ * unconditionally sets LDBL_MANT_DIG to 64 for __i386__/__x86_64__ as
+ * if long double were extended precision, which is wrong for this
+ * particular PE-mode tcc build, so LDBL_MANT_DIG must NOT be used for
+ * this test).
+ *
+ * The x87 stack registers are still 80 bits wide internally, so a
+ * single helper's intermediate arithmetic (kept on the FPU stack
+ * across multiple instructions, e.g. __x87_exp2's split into
+ * integer/fraction) still happens at full 80-bit precision under tcc;
+ * it is only the round trip through memory, at each helper's boundary,
+ * that is limited to double precision there.  Under gcc, the round
+ * trip through memory is itself full 80-bit precision, so there is no
+ * such extra rounding at all.
+ *
+ * Accuracy notes (Intel SDM vol 1, ch 8): fsqrt, frndint and fscale are
+ * correctly rounded; fprem is exact; fsin/fcos/fptan/fpatan/fyl2x/f2xm1
+ * are accurate to within 1 ulp of the 80-bit format over their defined
+ * ranges (the classic caveat is fsin's internal 66-bit pi, which costs
+ * accuracy only for arguments very close to a multiple of pi).  Since
+ * results are computed in 80 bits internally and rounded once to
+ * double (or float) at the store, the results here are well within
+ * 1 ulp for ordinary arguments. */
+#ifndef X87_H
+#define X87_H
+
+#if defined(__SIZEOF_LONG_DOUBLE__) && __SIZEOF_LONG_DOUBLE__ > 8
+#define NTLIBC_LDBL_EXTENDED 1
+#else
+#define NTLIBC_LDBL_EXTENDED 0
+#endif
+
+#if NTLIBC_LDBL_EXTENDED
+#define NTLIBC_FLDL "fldt"
+#define NTLIBC_FSTPL "fstpt"
+#else
+#define NTLIBC_FLDL "fldl"
+#define NTLIBC_FSTPL "fstpl"
+#endif
+
+static long double __x87_sqrt(long double x)
+{
+	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfsqrt\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
+	return x;
+}
+
+/* frndint under rounding control rc: 0 nearest, 1 down, 2 up, 3 trunc;
+ * rc < 0 means the current mode. */
+static long double __x87_rndint(long double x, int rc)
+{
+	unsigned short cw, cw2;
+	if (rc < 0) {
+		__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfrndint\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
+		return x;
+	}
+	__asm__ __volatile__("fnstcw (%0)" : : "r"(&cw) : "memory");
+	cw2 = (unsigned short)((cw & ~0x0c00) | (rc << 10));
+	__asm__ __volatile__("fldcw (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfrndint\n\t" NTLIBC_FSTPL " (%1)\n\tfldcw (%2)"
+		: : "r"(&cw2), "r"(&x), "r"(&cw) : "memory");
+	return x;
+}
+
+static long double __x87_fmod(long double x, long double y)
+{
+	__asm__ __volatile__(
+		NTLIBC_FLDL " (%1)\n\t"
+		NTLIBC_FLDL " (%0)\n\t"
+		"1:\n\t"
+		"fprem\n\t"
+		"fnstsw %%ax\n\t"
+		"testb $4, %%ah\n\t"
+		"jnz 1b\n\t"
+		NTLIBC_FSTPL " (%0)\n\t"
+		"fstp %%st(0)"
+		: : "r"(&x), "r"(&y) : "ax", "memory");
+	return x;
+}
+
+static long double __x87_sin(long double x)
+{
+	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfsin\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
+	return x;
+}
+
+static long double __x87_cos(long double x)
+{
+	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfcos\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
+	return x;
+}
+
+static long double __x87_tan(long double x)
+{
+	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfptan\n\tfstp %%st(0)\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
+	return x;
+}
+
+/* fpatan: atan2(y, x), full quadrant handling in hardware. */
+static long double __x87_atan2(long double y, long double x)
+{
+	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfpatan\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");
+	return y;
+}
+
+/* y * log2(x) via fyl2x. */
+static long double __x87_yl2x(long double x, long double y)
+{
+	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfyl2x\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");
+	return y;
+}
+
+/* 2^t for finite t well inside the exponent range: split into integer
+ * and fraction (round to nearest, so |f| <= 1/2, inside f2xm1's domain),
+ * 2^f via f2xm1, scale by 2^n via fscale. */
+static long double __x87_exp2(long double t)
+{
+	__asm__ __volatile__(
+		NTLIBC_FLDL " (%0)\n\t"
+		"fld %%st(0)\n\t"
+		"frndint\n\t"
+		"fxch %%st(1)\n\t"
+		"fsub %%st(1), %%st(0)\n\t"
+		"f2xm1\n\t"
+		"fld1\n\t"
+		"faddp\n\t"
+		"fscale\n\t"
+		"fstp %%st(1)\n\t"
+		NTLIBC_FSTPL " (%0)"
+		: : "r"(&t) : "memory");
+	return t;
+}
+
+/* x * 2^n exactly (fscale truncates st1, so feed it an integer). */
+static long double __x87_scalbn(long double x, int n)
+{
+	long double d = (long double)n;
+	__asm__ __volatile__(
+		NTLIBC_FLDL " (%1)\n\t"
+		NTLIBC_FLDL " (%0)\n\t"
+		"fscale\n\t"
+		NTLIBC_FSTPL " (%0)\n\t"
+		"fstp %%st(0)"
+		: : "r"(&x), "r"(&d) : "memory");
+	return x;
+}
+
+#endif

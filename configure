@@ -1,0 +1,310 @@
+#!/bin/sh
+#
+# configure for ntlibc -- same shape as musl's: probes a few things, writes
+# config.mak, and leaves everything else to the Makefile.
+
+usage () {
+cat <<USAGE
+Usage: $0 [OPTION]... [VAR=VALUE]...
+
+  --srcdir=DIR            source directory [detected]
+  --prefix=PREFIX         main installation prefix [/usr/local/ntlibc]
+  --exec-prefix=EPREFIX   installation prefix for executable files [PREFIX]
+  --bindir=DIR            user executables [EPREFIX/bin]
+  --libdir=DIR            library files for the linker [PREFIX/lib]
+  --includedir=DIR        include files for the C compiler [PREFIX/include]
+  --syslibdir=DIR         unused, accepted for musl compatibility
+  --host=HOST             target triple: i386-win32 or x86_64-win32 [guess from CC]
+  --target=TARGET         same as --host
+  --enable-debug          build with debugging information (-g)
+  --disable-debug         build without debugging information [default]
+  --enable-warnings       build with recommended warnings flags [default]
+  --disable-warnings      build without warnings flags
+  --enable-wrapper        build the ntlibc-tcc wrapper script [default]
+  --disable-wrapper       do not build the wrapper script
+  --enable-kernel32       allow the few places that have no pure-NTDLL way
+                          to do something to fall back to kernel32
+  --disable-kernel32      build with no kernel32 dependency at all;
+                          the features that need it are compiled out
+                          [default]
+
+Some influential environment variables:
+  CC                      C compiler command (a win32-targeting tcc)
+  CFLAGS                  C compiler flags
+  CROSS_COMPILE           prefix for cross compiler and tools (e.g. i386-win32-)
+  AR                      archiver [CC -ar]
+  WINE                    wine binary used by 'make check' [wine/wine64]
+
+USAGE
+exit 0
+}
+
+# Beginning of actual script
+
+quote () {
+tr '\n' ' ' <<EOQ | grep '^[-[:alnum:]_=,./:]* $' >/dev/null 2>&1 && { echo "$1" ; return 0 ; }
+$1
+EOQ
+printf %s\\n "$1" | sed -e "s/'/'\\\\''/g" -e "1s/^/'/" -e "\$s/\$/'/" -e "s#^'\([-[:alnum:]_,./:]*\)=\(.*\)\$#\1='\2#"
+}
+echo () { printf "%s\n" "$*" ; }
+fail () { echo "$*" ; exit 1 ; }
+fnmatch () { eval "case \"\$2\" in $1) return 0 ;; *) return 1 ;; esac" ; }
+cmdexists () { type "$1" >/dev/null 2>&1 ; }
+trycc () { test -z "$CC" && cmdexists "$1" && CC=$1 ; }
+
+stripdir () {
+while eval "fnmatch '*/' \"\${$1}\"" ; do eval "$1=\${$1%/}" ; done
+}
+
+tryflag () {
+printf "checking whether compiler accepts %s... " "$2"
+echo "typedef int x;" > "$tmpc"
+if $CC $CFLAGS_TRY $2 -c -o /dev/null "$tmpc" >/dev/null 2>&1 ; then
+printf "yes\n"
+eval "$1=\"\${$1} \$2\""
+eval "$1=\${$1# }"
+return 0
+else
+printf "no\n"
+return 1
+fi
+}
+
+CFLAGS_C99FSE=
+CFLAGS_AUTO=
+CFLAGS_TRY=
+srcdir=
+prefix=/usr/local/ntlibc
+exec_prefix='$(prefix)'
+bindir='$(exec_prefix)/bin'
+libdir='$(prefix)/lib'
+includedir='$(prefix)/include'
+syslibdir=
+target=
+debug=no
+warnings=yes
+wrapper=yes
+kernel32=no
+
+for arg ; do
+case "$arg" in
+--help|-h) usage ;;
+--srcdir=*) srcdir=${arg#*=} ;;
+--prefix=*) prefix=${arg#*=} ;;
+--exec-prefix=*) exec_prefix=${arg#*=} ;;
+--bindir=*) bindir=${arg#*=} ;;
+--libdir=*) libdir=${arg#*=} ;;
+--includedir=*) includedir=${arg#*=} ;;
+--syslibdir=*) syslibdir=${arg#*=} ;;
+--host=*|--target=*) target=${arg#*=} ;;
+--build=*) ;;
+--enable-debug|--enable-debug=yes) debug=yes ;;
+--disable-debug|--enable-debug=no) debug=no ;;
+--enable-warnings|--enable-warnings=yes) warnings=yes ;;
+--disable-warnings|--enable-warnings=no) warnings=no ;;
+--enable-wrapper|--enable-wrapper=yes) wrapper=yes ;;
+--disable-wrapper|--enable-wrapper=no) wrapper=no ;;
+--enable-kernel32|--enable-kernel32=yes) kernel32=yes ;;
+--disable-kernel32|--enable-kernel32=no) kernel32=no ;;
+--enable-*|--disable-*|--with-*|--without-*|--*) ;;
+-* ) echo "$0: unknown option $arg" ;;
+CC=*) CC=${arg#*=} ;;
+CFLAGS=*) CFLAGS=${arg#*=} ;;
+CPPFLAGS=*) CPPFLAGS=${arg#*=} ;;
+LDFLAGS=*) LDFLAGS=${arg#*=} ;;
+CROSS_COMPILE=*) CROSS_COMPILE=${arg#*=} ;;
+AR=*) AR=${arg#*=} ;;
+WINE=*) WINE=${arg#*=} ;;
+*=*) ;;
+*) ;;
+esac
+done
+
+for i in srcdir prefix exec_prefix bindir libdir includedir ; do
+stripdir $i
+done
+
+#
+# Get the source dir for out-of-tree builds
+#
+if test -z "$srcdir" ; then
+srcdir="${0%/configure}"
+stripdir srcdir
+fi
+abs_builddir="$(pwd)" || fail "$0: cannot determine working directory"
+abs_srcdir="$(cd $srcdir && pwd)" || fail "$0: invalid source directory $srcdir"
+test "$abs_srcdir" = "$abs_builddir" && srcdir=.
+test "$srcdir" != "." && test -f Makefile && test ! -h Makefile && fail "$0: Makefile already exists in the working directory"
+
+#
+# Get a temp filename we can use
+#
+i=0
+set -C
+while : ; do i=$(($i+1))
+tmpc="./conf$$-$PPID-$i.c"
+2>|/dev/null > "$tmpc" && break
+test "$i" -gt 50 && fail "$0: cannot create temporary file $tmpc"
+done
+set +C
+trap 'rm "$tmpc"' EXIT QUIT TERM HUP
+trap 'rm "$tmpc" ; exit 1' INT
+
+#
+# Find a C compiler to use.  Only tcc is known to work, but anything
+# producing PE objects with the same calling conventions should.
+#
+printf "checking for C compiler... "
+# A candidate must exist and must target Windows (define _WIN32); the
+# native tcc on a Unix host does not, so it is skipped.
+tryccwin () {
+test -z "$CC" || return 0
+cmdexists "$1" || return 1
+cat > "$tmpc" <<'EOC'
+#ifndef _WIN32
+#error not windows
+#endif
+typedef int x;
+EOC
+"$1" $CPPFLAGS $CFLAGS -c -o /dev/null "$tmpc" >/dev/null 2>&1 && CC=$1
+}
+case "$target" in
+i386*|i486*|i586*|i686*|x86) tryccwin ${CROSS_COMPILE}tcc ; tryccwin i386-win32-tcc ; tryccwin i686-w64-mingw32-gcc ;;
+x86_64*|amd64*) tryccwin ${CROSS_COMPILE}tcc ; tryccwin x86_64-win32-tcc ; tryccwin x86_64-w64-mingw32-gcc ;;
+esac
+tryccwin ${CROSS_COMPILE}tcc
+tryccwin ${CROSS_COMPILE}cc
+tryccwin ${CROSS_COMPILE}gcc
+test -z "$target" && tryccwin i386-win32-tcc
+test -z "$target" && tryccwin x86_64-win32-tcc
+printf "%s\n" "$CC"
+test -n "$CC" || { echo "$0: cannot find a C compiler targeting Windows (try CC=i386-win32-tcc)" ; exit 1 ; }
+
+printf "checking whether C compiler works... "
+echo "typedef int x;" > "$tmpc"
+if output=$($CC $CPPFLAGS $CFLAGS -c -o /dev/null "$tmpc" 2>&1) ; then
+printf "yes\n"
+else
+printf "no; compiler output follows:\n%s\n" "$output"
+exit 1
+fi
+
+#
+# Figure out the target architecture from the compiler, unless told.
+#
+if test -z "$target" ; then
+printf "checking target architecture... "
+cat > "$tmpc" <<'EOC'
+#if defined(__x86_64__) || defined(_WIN64)
+x86_64-win32
+#elif defined(__i386__) || defined(_WIN32)
+i386-win32
+#else
+unknown
+#endif
+EOC
+target=$($CC $CPPFLAGS -E "$tmpc" 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$' | tail -n1 | tr -d '[:space:]')
+printf "%s\n" "$target"
+fi
+
+case "$target" in
+i386*|i486*|i586*|i686*|x86) ARCH=i386 ;;
+x86_64*|amd64*) ARCH=x86_64 ;;
+*) fail "$0: unknown or unsupported target \"$target\"" ;;
+esac
+
+#
+# The compiler must be targeting Windows/PE at all.
+#
+printf "checking whether compiler targets Windows... "
+cat > "$tmpc" <<'EOC'
+#ifndef _WIN32
+#error not windows
+#endif
+typedef int x;
+EOC
+if $CC $CPPFLAGS $CFLAGS -c -o /dev/null "$tmpc" >/dev/null 2>&1 ; then
+printf "yes\n"
+else
+printf "no\n"
+fail "$0: $CC does not define _WIN32; a win32-targeting compiler is required"
+fi
+
+#
+# Archiver: tcc can act as one itself.
+#
+if test -z "$AR" ; then
+printf "checking for archiver... "
+if $CC -ar 2>&1 | grep -qi 'usage\|tcc' ; then
+AR="$CC -ar"
+elif cmdexists ${CROSS_COMPILE}ar ; then
+AR=${CROSS_COMPILE}ar
+else
+AR=ar
+fi
+printf "%s\n" "$AR"
+fi
+
+#
+# Wine, for 'make check' only.
+#
+if test -z "$WINE" ; then
+case "$ARCH" in
+x86_64) for w in wine64 /usr/lib/wine/wine64 wine ; do cmdexists "$w" && { WINE=$w ; break ; } ; done ;;
+*) for w in wine ; do cmdexists "$w" && { WINE=$w ; break ; } ; done ;;
+esac
+fi
+
+#
+# Flags.
+#
+tryflag CFLAGS_C99FSE -std=c99
+tryflag CFLAGS_C99FSE -nostdinc
+tryflag CFLAGS_C99FSE -fno-builtin
+
+if test "x$debug" = xyes ; then
+CFLAGS_AUTO=-g
+fi
+
+if test "x$warnings" = xyes ; then
+tryflag CFLAGS_AUTO -Wall
+tryflag CFLAGS_AUTO -Wno-unused-function
+fi
+
+printf "creating config.mak... "
+
+cmdline=$(quote "$0")
+for i ; do cmdline="$cmdline $(quote "$i")" ; done
+
+exec 3>&1 1>config.mak
+
+cat << EOM
+# This version of config.mak was generated by:
+# $cmdline
+# Any changes made here will be lost if configure is re-run
+AR = $AR
+ARCH = $ARCH
+srcdir = $srcdir
+TARGET = $target
+prefix = $prefix
+exec_prefix = $exec_prefix
+bindir = $bindir
+libdir = $libdir
+includedir = $includedir
+CC = $CC
+CFLAGS = $CFLAGS
+CFLAGS_AUTO = $CFLAGS_AUTO
+CFLAGS_C99FSE = $CFLAGS_C99FSE
+CPPFLAGS = $CPPFLAGS
+LDFLAGS = $LDFLAGS
+CROSS_COMPILE = $CROSS_COMPILE
+WINE = $WINE
+WRAPPER = $wrapper
+KERNEL32 = $kernel32
+EOM
+exec 1>&3 3>&-
+
+test "$srcdir" = "." || ln -sf $srcdir/Makefile .
+
+printf "done\n"
