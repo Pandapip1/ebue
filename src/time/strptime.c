@@ -67,7 +67,9 @@ char *strptime(const char *restrict s, const char *restrict f, struct tm *restri
 		f++;
 		if (!*f) return NULL;
 		switch (*f) {
-		case 'Y': if (!(s = read_num(s, 10, &v))) return NULL; tm->tm_year = (int)(v - 1900); break;
+		/* Widths follow musl/glibc: %Y 4, %j 3, %u/%w 1, everything else 2,
+		 * so an unseparated "%Y%m%d" doesn't let %Y swallow later fields. */
+		case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break;
 		case 'y': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_year = (int)(v < 69 ? v + 100 : v); break;
 		case 'm': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mon = (int)v - 1; break;
 		case 'd': case 'e': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mday = (int)v; break;
