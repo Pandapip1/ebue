@@ -563,7 +563,6 @@ static void test_file_io(void)
 	CHECK(f != 0);
 	if (f) {
 		CHECK(fputs("0123456789", f) == 0);
-/* BUG (live, expected to FAIL): src/stdio/seek.c:1175 ftello ignores pending buffered writes on a readable+writable stream ("w+"/"r+"), so ftell returns 0 here instead of 10 */
 		CHECK(ftell(f) == 10);
 		CHECK(fseek(f, 0, SEEK_SET) == 0);
 		CHECK(ftell(f) == 0);

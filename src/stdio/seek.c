@@ -29,8 +29,11 @@ off_t ftello(FILE *f)
 {
 	long long pos = __file_seek(f, 0, SEEK_CUR);
 	if (pos < 0) return -1;
-	if (f->readable) pos -= (long long)(f->rend - f->rpos) + f->nunget;
-	else pos += (long long)f->wpos;
+	/* The buffer is never both a read and a write buffer at once, so
+	 * whichever of these is nonzero is the one that applies; on a "w+"
+	 * or "r+" stream either may be, so test the buffer, not the mode. */
+	pos -= (long long)(f->rend - f->rpos) + f->nunget;
+	pos += (long long)f->wpos;
 	return (off_t)pos;
 }
 
