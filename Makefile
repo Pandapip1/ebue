@@ -157,14 +157,21 @@ install: install-libs install-headers install-tools
 # kaem: regenerate the kaem-only bootstrap build script from this
 # Makefile's own build recipe (tools/gen-kaem.sh runs `make -n -B
 # lib/libc.a lib/crt1.o` and rewrites the dry-run output into kaem syntax),
-# so boot/kaem/build-$(ARCH).kaem can never silently drift out of sync with
-# this Makefile as source files are added, removed, or renamed. See
+# so boot/kaem/build-*.kaem can never silently drift out of sync with this
+# Makefile as source files are added, removed, or renamed. See
 # CONTRIBUTING.md for what boot/kaem/ is for.
 #
-kaem: boot/kaem/build-$(ARCH).kaem
-
-boot/kaem/build-$(ARCH).kaem: $(BASE_SRCS) $(ARCH_SRCS) tools/gen-kaem.sh config.mak Makefile
-	./tools/gen-kaem.sh $@
+# gen-kaem.sh regenerates *every* arch's script, not just $(ARCH)'s, so a
+# new source file cannot land in one and miss the others (CI only runs this
+# on one matrix leg).
+#
+# Deliberately unconditional rather than a file target with prerequisites:
+# an mtime rule is defeated by a script that is newer than the sources but
+# wrong -- e.g. one git has just written with conflict markers in it -- and
+# both this target and the pre-commit hook that calls it would then quietly
+# do nothing and report success.
+kaem:
+	./tools/gen-kaem.sh
 
 .PHONY: kaem
 

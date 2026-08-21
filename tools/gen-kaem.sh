@@ -35,10 +35,23 @@
 #
 # Usage:
 #   ./configure --host=x86_64-win32 CC=x86_64-win32-tcc   # if not already done
-#   ./tools/gen-kaem.sh [output-file]
+#   ./tools/gen-kaem.sh                    # regenerate every arch (the default)
+#   ./tools/gen-kaem.sh --arch=i386 [out]  # just one, for debugging
 #
-# ARCH and CC are read out of config.mak (i.e. whatever ./configure was last
-# run with), and the output defaults to boot/kaem/build-$(ARCH).kaem.
+# With no --arch, this regenerates boot/kaem/build-$a.kaem for *every* arch
+# under arch/ (bar arch/generic, which is not a target of its own). Doing
+# them all every time is deliberate: a new source file otherwise lands in
+# whichever bootstrap script the developer happened to have configured and
+# silently misses the others, and CI's drift check only regenerates one leg,
+# so the stale one can sit broken indefinitely.
+#
+# The compiler name is *not* taken from config.mak. It is derived per arch
+# as $a-win32-tcc (with AR = $CC -ar, mirroring the Makefile), and handed to
+# make as a command-line override, so the committed scripts are a pure
+# function of the source tree rather than of whatever path ./configure was
+# last pointed at -- an absolute CC in config.mak used to get baked into the
+# generated output verbatim. config.mak is still required and still supplies
+# the arch-independent bits (CFLAGS_C99FSE, CFLAGS_AUTO, KERNEL32, ...).
 
 set -euo pipefail
 
@@ -50,22 +63,61 @@ if [ ! -f config.mak ]; then
 	exit 1
 fi
 
-ARCH=$(sed -n 's/^ARCH *= *//p' config.mak | tail -n1)
-CC=$(sed -n 's/^CC *= *//p' config.mak | tail -n1)
+# Every arch/<a>/ except the shared arch/generic/ fallback headers.
+kaem_arches() {
+	for d in arch/*/; do
+		a=${d%/}; a=${a#arch/}
+		[ "$a" = generic ] && continue
+		echo "$a"
+	done
+}
 
-if [ -z "$ARCH" ] || [ -z "$CC" ]; then
-	echo "gen-kaem.sh: could not read ARCH/CC out of config.mak" >&2
+ARCH=""
+OUT=""
+for arg in "$@"; do
+	case $arg in
+		--arch=*) ARCH=${arg#--arch=} ;;
+		-*)
+			echo "gen-kaem.sh: unknown option '$arg'" >&2
+			exit 1
+			;;
+		*) OUT=$arg ;;
+	esac
+done
+
+# No --arch: do the whole set, one child invocation each.
+if [ -z "$ARCH" ]; then
+	if [ -n "$OUT" ]; then
+		echo "gen-kaem.sh: an output file only makes sense with --arch=ARCH" >&2
+		exit 1
+	fi
+	for a in $(kaem_arches); do
+		"$0" --arch="$a"
+	done
+	exit 0
+fi
+
+if [ ! -d "arch/$ARCH" ]; then
+	echo "gen-kaem.sh: no such arch '$ARCH' (have: $(kaem_arches | tr '\n' ' '))" >&2
 	exit 1
 fi
 
-OUT=${1:-boot/kaem/build-${ARCH}.kaem}
+CC="${ARCH}-win32-tcc"
+AR="$CC -ar"
+
+OUT=${OUT:-boot/kaem/build-${ARCH}.kaem}
 mkdir -p "$(dirname "$OUT")"
 
 DRYRUN=$(mktemp)
 trap 'rm -f "$DRYRUN"' EXIT
 
-if ! make --no-print-directory -j1 -n -B lib/libc.a lib/crt1.o >"$DRYRUN" 2>&1; then
-	echo "gen-kaem.sh: 'make -n -B lib/libc.a lib/crt1.o' failed:" >&2
+# ARCH/CC/AR are forced on the command line (which beats config.mak's own
+# assignments) so this works for any arch regardless of what ./configure was
+# last run with -- see the note at the top of this file.
+if ! make --no-print-directory -j1 -n -B \
+		ARCH="$ARCH" CC="$CC" AR="$AR" \
+		lib/libc.a lib/crt1.o >"$DRYRUN" 2>&1; then
+	echo "gen-kaem.sh: 'make -n -B lib/libc.a lib/crt1.o' failed for $ARCH:" >&2
 	cat "$DRYRUN" >&2
 	exit 1
 fi
