@@ -4,6 +4,8 @@
  * (a crashing check would otherwise block on Wine's crash dialog). */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
@@ -356,13 +358,39 @@ static void test_scanf(void)
 	CHECK(sscanf("inf", "%lf", &d) == 1 && d > 1e300);
 
 	/* %n */
-/* BUG (live, expected to FAIL): src/stdio/scanf.c:758 %n always stores 0 instead of the characters consumed */
 	a = -1;
 	CHECK(sscanf("12345", "%d%n", &b, &a) == 1 && a == 5);
 	a = -1;
 	CHECK(sscanf("ab cd", "%s %s%n", str, str2, &a) == 2 && a == 5);
 	/* %n does not count as an assignment */
 	CHECK(sscanf("5", "%d%n", &a, &b) == 1);
+	/* leading whitespace skipped by %d counts; pushed-back look-ahead does not */
+	a = -1;
+	CHECK(sscanf("  12 abc", "%d%n", &b, &a) == 1 && b == 12 && a == 4);
+	a = -1;
+	CHECK(sscanf("0x1fz", "%i%n", &b, &a) == 1 && b == 0x1f && a == 4);
+	a = -1;
+	CHECK(sscanf("1.5e+x", "%lf%n", &d, &a) == 1 && d == 1.5 && a == 3);
+	/* %n at the very start, and after a literal match */
+	a = -1;
+	CHECK(sscanf("xyz", "%n", &a) == 0 && a == 0);
+	a = -1;
+	CHECK(sscanf("ab:cd", "ab:%n", &a) == 0 && a == 3);
+	/* a failed conversion stops before %n: n is untouched */
+	a = -1;
+	CHECK(sscanf("abc", "%d%n", &b, &a) == 0 && a == -1);
+	/* length modifiers */
+	{
+		signed char hh = -1; short h = -1; long l = -1; long long ll = -1;
+		size_t z = (size_t)-1; ptrdiff_t t = -1; intmax_t j = -1;
+		CHECK(sscanf("1234567", "%d%hhn", &b, &hh) == 1 && hh == 7);
+		CHECK(sscanf("1234567", "%d%hn", &b, &h) == 1 && h == 7);
+		CHECK(sscanf("1234567", "%d%ln", &b, &l) == 1 && l == 7);
+		CHECK(sscanf("1234567", "%d%lln", &b, &ll) == 1 && ll == 7);
+		CHECK(sscanf("1234567", "%d%zn", &b, &z) == 1 && z == 7);
+		CHECK(sscanf("1234567", "%d%tn", &b, &t) == 1 && t == 7);
+		CHECK(sscanf("1234567", "%d%jn", &b, &j) == 1 && j == 7);
+	}
 
 	/* vsscanf via sscanf already; a few more realistic lines */
 	{

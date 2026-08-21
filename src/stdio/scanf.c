@@ -20,19 +20,34 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <ctype.h>
 #include <errno.h>
 #include "stdio_impl.h"
 
 enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
 
-static int rd(FILE *f) { return __fgetc(f); }
-static void unrd(FILE *f, int c) { if (c != EOF) ungetc(c, f); }
+/* Input cursor: every character actually taken from the stream bumps
+ * nread, and every look-ahead character pushed back takes it off again,
+ * so nread is exactly what %n has to report. */
+struct sc { FILE *f; int nread; };
 
-static int skipspace(FILE *f)
+static int rd(struct sc *sc)
+{
+	int c = __fgetc(sc->f);
+	if (c != EOF) sc->nread++;
+	return c;
+}
+static void unrd(struct sc *sc, int c)
+{
+	if (c != EOF && ungetc(c, sc->f) != EOF) sc->nread--;
+}
+
+static int skipspace(struct sc *sc)
 {
 	int c;
-	while ((c = rd(f)) != EOF && isspace(c)) ;
+	while ((c = rd(sc)) != EOF && isspace(c)) ;
 	return c;
 }
 
@@ -41,24 +56,27 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 	int nmatched = 0, gotEOF = 0;
 	const char *p = fmt;
 	int c = 0;
+	struct sc sc;
 
+	sc.f = f;
+	sc.nread = 0;
 	for (; *p; p++) {
 		if (isspace((unsigned char)*p)) {
-			c = skipspace(f);
-			unrd(f, c);
+			c = skipspace(&sc);
+			unrd(&sc, c);
 			continue;
 		}
 		if (*p != '%') {
-			c = rd(f);
+			c = rd(&sc);
 			if (c == EOF) { gotEOF = 1; goto done; }
-			if (c != *p) { unrd(f, c); goto done; }
+			if (c != *p) { unrd(&sc, c); goto done; }
 			continue;
 		}
 		p++;
 		if (*p == '%') {
-			c = rd(f);
+			c = rd(&sc);
 			if (c == EOF) { gotEOF = 1; goto done; }
-			if (c != '%') { unrd(f, c); goto done; }
+			if (c != '%') { unrd(&sc, c); goto done; }
 			continue;
 		}
 
@@ -84,13 +102,13 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				char numbuf[80];
 				unsigned long long uv = 0;
 
-				c = skipspace(f);
+				c = skipspace(&sc);
 				if (c == EOF) { gotEOF = 1; goto done; }
-				if (c == '+' || c == '-') { neg = c == '-'; c = rd(f); }
+				if (c == '+' || c == '-') { neg = c == '-'; c = rd(&sc); }
 				if ((autodetect || base == 16) && c == '0') {
-					int c2 = rd(f);
-					if (c2 == 'x' || c2 == 'X') { base = 16; c = rd(f); }
-					else { if (autodetect) base = 8; unrd(f, c2); }
+					int c2 = rd(&sc);
+					if (c2 == 'x' || c2 == 'X') { base = 16; c = rd(&sc); }
+					else { if (autodetect) base = 8; unrd(&sc, c2); }
 				}
 				if (autodetect && base != 16 && base != 8) base = 10;
 				for (; c != EOF && nn < (int)sizeof numbuf - 1; ) {
@@ -103,9 +121,9 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 					if (width >= 0 && nn >= width) break;
 					uv = uv * (unsigned)base + (unsigned)d;
 					any = 1; nn++;
-					c = rd(f);
+					c = rd(&sc);
 				}
-				unrd(f, c);
+				unrd(&sc, c);
 				if (!any) goto done;
 				if (neg) uv = (unsigned long long)-(long long)uv;
 				if (assign) {
@@ -114,7 +132,8 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 					case LM_h:  *(unsigned short *)va_arg(ap, void *) = (unsigned short)uv; break;
 					case LM_l:  *(unsigned long *)va_arg(ap, void *) = (unsigned long)uv; break;
 					case LM_ll: case LM_j: *(unsigned long long *)va_arg(ap, void *) = uv; break;
-					case LM_z: case LM_t: *(unsigned long *)va_arg(ap, void *) = (unsigned long)uv; break;
+					case LM_z: *(size_t *)va_arg(ap, void *) = (size_t)uv; break;
+					case LM_t: *(ptrdiff_t *)va_arg(ap, void *) = (ptrdiff_t)uv; break;
 					default: *(unsigned int *)va_arg(ap, void *) = (unsigned int)uv; break;
 					}
 					nmatched++;
@@ -125,7 +144,7 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				char numbuf[64]; int nn = 0;
 				char *end; double dv;
 
-				c = skipspace(f);
+				c = skipspace(&sc);
 				if (c == EOF) { gotEOF = 1; goto done; }
 				for (; c != EOF && nn < (int)sizeof numbuf - 1; ) {
 					if (width >= 0 && nn >= width) break;
@@ -135,20 +154,20 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 					      c == 'n' || c == 'N' || c == 'i' || c == 'I' || c == 'p' || c == 'P'))
 						break;
 					numbuf[nn++] = (char)c;
-					c = rd(f);
+					c = rd(&sc);
 				}
-				unrd(f, c);
+				unrd(&sc, c);
 				numbuf[nn] = 0;
 				if (nn == 0) goto done;
 				dv = strtod(numbuf, &end);
 				if (end == numbuf) {
 					/* push everything back and fail the conversion */
-					int k; for (k = nn - 1; k >= 0; k--) unrd(f, (unsigned char)numbuf[k]);
+					int k; for (k = nn - 1; k >= 0; k--) unrd(&sc, (unsigned char)numbuf[k]);
 					goto done;
 				}
 				{
 					int consumed = (int)(end - numbuf);
-					int k; for (k = nn - 1; k >= consumed; k--) unrd(f, (unsigned char)numbuf[k]);
+					int k; for (k = nn - 1; k >= consumed; k--) unrd(&sc, (unsigned char)numbuf[k]);
 				}
 				if (assign) {
 					if (lm == LM_L) *(long double *)va_arg(ap, void *) = (long double)dv;
@@ -161,13 +180,13 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 			case 's': {
 				char *s = assign ? va_arg(ap, char *) : 0;
 				int nn = 0;
-				c = skipspace(f);
+				c = skipspace(&sc);
 				if (c == EOF) { gotEOF = 1; goto done; }
-				for (; c != EOF && !isspace(c) && (width < 0 || nn < width); c = rd(f)) {
+				for (; c != EOF && !isspace(c) && (width < 0 || nn < width); c = rd(&sc)) {
 					if (assign) s[nn] = (char)c;
 					nn++;
 				}
-				unrd(f, c);
+				unrd(&sc, c);
 				if (nn == 0) goto done;
 				if (assign) { s[nn] = 0; nmatched++; }
 				break;
@@ -176,7 +195,7 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				char *s = assign ? va_arg(ap, char *) : 0;
 				int w = width < 0 ? 1 : width, nn;
 				for (nn = 0; nn < w; nn++) {
-					c = rd(f);
+					c = rd(&sc);
 					if (c == EOF) break;
 					if (assign) s[nn] = (char)c;
 				}
@@ -204,13 +223,13 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 					} while (*p && *p != ']');
 					/* p now at the closing ']'; the outer for(;*p;p++) will step past it */
 				}
-				c = rd(f);
+				c = rd(&sc);
 				while (c != EOF && (set[(unsigned char)c] != 0) != neg && (width < 0 || nn < width)) {
 					if (assign) s[nn] = (char)c;
 					nn++;
-					c = rd(f);
+					c = rd(&sc);
 				}
-				unrd(f, c);
+				unrd(&sc, c);
 				if (nn == 0) { if (c == EOF) gotEOF = 1; goto done; }
 				if (assign) { s[nn] = 0; nmatched++; }
 				break;
@@ -218,10 +237,10 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 			case 'p': {
 				void **pp = assign ? va_arg(ap, void **) : 0;
 				unsigned long long uv = 0; int any = 0;
-				c = skipspace(f);
+				c = skipspace(&sc);
 				if (c == EOF) { gotEOF = 1; goto done; }
-				if (c == '0') { int c2 = rd(f); if (c2 == 'x' || c2 == 'X') c = rd(f); else unrd(f, c2); }
-				for (; c != EOF; c = rd(f)) {
+				if (c == '0') { int c2 = rd(&sc); if (c2 == 'x' || c2 == 'X') c = rd(&sc); else unrd(&sc, c2); }
+				for (; c != EOF; c = rd(&sc)) {
 					int d;
 					if (c >= '0' && c <= '9') d = c - '0';
 					else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
@@ -229,23 +248,22 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 					else break;
 					uv = uv * 16 + (unsigned)d; any = 1;
 				}
-				unrd(f, c);
+				unrd(&sc, c);
 				if (!any) goto done;
 				if (assign) { *pp = (void *)(uintptr_t)uv; nmatched++; }
 				break;
 			}
 			case 'n':
 				if (assign) {
-					/* the number of characters consumed so far is not
-					 * tracked precisely (ungetc'd look-ahead makes it
-					 * awkward); report 0, which is at least a valid int. */
+					/* %n never counts toward the return value */
 					switch (lm) {
-					case LM_hh: *(signed char *)va_arg(ap, void *) = 0; break;
-					case LM_h: *(short *)va_arg(ap, void *) = 0; break;
-					case LM_l: *(long *)va_arg(ap, void *) = 0; break;
-					case LM_ll: case LM_j: *(long long *)va_arg(ap, void *) = 0; break;
-					case LM_z: case LM_t: *(long *)va_arg(ap, void *) = 0; break;
-					default: *(int *)va_arg(ap, void *) = 0; break;
+					case LM_hh: *(signed char *)va_arg(ap, void *) = (signed char)sc.nread; break;
+					case LM_h: *(short *)va_arg(ap, void *) = (short)sc.nread; break;
+					case LM_l: *(long *)va_arg(ap, void *) = sc.nread; break;
+					case LM_ll: case LM_j: *(long long *)va_arg(ap, void *) = sc.nread; break;
+					case LM_z: *(size_t *)va_arg(ap, void *) = (size_t)sc.nread; break;
+					case LM_t: *(ptrdiff_t *)va_arg(ap, void *) = sc.nread; break;
+					default: *(int *)va_arg(ap, void *) = sc.nread; break;
 					}
 				}
 				break;
