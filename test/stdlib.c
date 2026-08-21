@@ -167,6 +167,7 @@ int main(void)
 	{
 		char t[] = "stdlibdir-XXXXXX";
 		char *r = mkdtemp(t);
+		if (!r) printf("DEBUG mkdtemp failed, errno=%d template=%s\n", errno, t);
 		CHECK(r == t && !strchr(t, 'X'));
 		if (r) rmdir(t);
 	}
