@@ -30,7 +30,10 @@ int execve(const char *path, char *const argv[], char *const envp[])
 	if (pid < 0) return -1;
 	if (waitpid(pid, &status, 0) < 0) return -1;
 	if (WIFEXITED(status)) exit(WEXITSTATUS(status));
-	exit(128 + WTERMSIG(status));
+	/* The child died by a signal; this process is standing in for it, so
+	 * end the same way and let *our* parent's waitpid see WIFSIGNALED. */
+	__stdio_exit();
+	__nt_exit(__NT_SIGNAL_EXIT(WTERMSIG(status)));
 }
 
 int execv(const char *path, char *const argv[])

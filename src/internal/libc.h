@@ -144,6 +144,22 @@ void __libc_exit_fini(void);
 _Noreturn void __nt_exit(int);
 
 /* ---- signals ------------------------------------------------------------ */
+/* Windows has no separate "killed by signal" field: a process exit code is
+ * one 32-bit DWORD, and waitpid() has nothing else to look at.  A process
+ * this library ends on behalf of a signal (kill(), abort(), the default
+ * action in __raise_internal(), the vectored exception handler) therefore
+ * exits with __NT_SIGNAL_EXIT(sig) and waitpid() decodes exactly that.
+ *
+ * 0xE0DE0000 is an NTSTATUS with severity error (bits 31-30) and the
+ * customer-defined bit (bit 29) set, so it can never be an NT status code
+ * the system produces, and it is far outside the 0..255 an exit() can
+ * return -- the two spaces cannot collide.  (The old scheme, 128 + signo,
+ * is a *shell* convention; using it here stole exit codes 129..192 from
+ * exit() and made e.g. exit(130) look like death by SIGABRT.) */
+#define __NT_SIGNAL_EXIT_BASE 0xE0DE0000u
+#define __NT_SIGNAL_EXIT(sig) ((int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu)))
+#define __NT_IS_SIGNAL_EXIT(code) (((unsigned)(code) & ~0x7fu) == __NT_SIGNAL_EXIT_BASE)
+
 void __signal_init(void);
 int __raise_internal(int);
 

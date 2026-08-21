@@ -5,9 +5,14 @@
  *
  * A pid is a process id; the handle needed to wait on it is kept in the
  * child table __spawn/fork filled in.  The exit code becomes a POSIX
- * wait status: an ordinary exit is (code << 8); a process ntlibc's kill
- * ended carries 128 + signo as its exit code, which is turned back into
- * "killed by signo" so that WIFSIGNALED/WTERMSIG report it.
+ * wait status: an ordinary exit is (code << 8), so all 256 exit codes
+ * survive intact.  A death by signal comes from one of exactly two
+ * places, neither of which a plain exit() can imitate:
+ *
+ *   - __NT_SIGNAL_EXIT(sig) (see libc.h), the out-of-range status this
+ *     library's kill()/abort()/raise() end a process with;
+ *   - an NT exception code the kernel itself terminated the process
+ *     with, which is an 0xC0000xxx/0x8000xxxx NTSTATUS.
  */
 #include <sys/wait.h>
 #include <signal.h>
@@ -15,15 +20,49 @@
 #include <errno.h>
 #include "libc.h"
 
+/* WIFSIGNALED, WTERMSIG == sig, plus the WCOREDUMP bit for the signals
+ * whose default action on Unix is "terminate and dump core". */
+static int sig_status(int sig)
+{
+	int core;
+	switch (sig) {
+	case SIGQUIT: case SIGILL: case SIGTRAP: case SIGABRT:
+	case SIGBUS: case SIGFPE: case SIGSEGV: case SIGSYS:
+	case SIGXCPU: case SIGXFSZ:
+		core = 0x80; break;
+	default:
+		core = 0; break;
+	}
+	return (sig & 0x7f) | core;
+}
+
 static int encode_status(int exitcode)
 {
-	/* kill() here exits a process with 128 + signo; recognise that. */
-	if (exitcode > 128 && exitcode < 128 + 65) {
-		int sig = exitcode - 128;
-		return sig & 0x7f;               /* WIFSIGNALED, WTERMSIG == sig */
+	unsigned code = (unsigned)exitcode;
+
+	/* Ended by this library on behalf of a signal. */
+	if (__NT_IS_SIGNAL_EXIT(code) && (code & 0x7f))
+		return sig_status((int)(code & 0x7f));
+
+	/* Ended by NT itself with an exception code. */
+	switch (code) {
+	case EXCEPTION_ACCESS_VIOLATION:
+	case EXCEPTION_IN_PAGE_ERROR:
+	case EXCEPTION_STACK_OVERFLOW:      return sig_status(SIGSEGV);
+	case EXCEPTION_DATATYPE_MISALIGNMENT: return sig_status(SIGBUS);
+	case EXCEPTION_ILLEGAL_INSTRUCTION:
+	case EXCEPTION_PRIV_INSTRUCTION:    return sig_status(SIGILL);
+	case EXCEPTION_INT_DIVIDE_BY_ZERO:
+	case EXCEPTION_INT_OVERFLOW:
+	case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+	case EXCEPTION_FLT_INVALID_OPERATION:
+	case EXCEPTION_FLT_OVERFLOW:        return sig_status(SIGFPE);
+	case EXCEPTION_BREAKPOINT:          return sig_status(SIGTRAP);
+	case (unsigned)STATUS_CONTROL_C_EXIT:
+	case DBG_CONTROL_C:
+	case DBG_CONTROL_BREAK:             return sig_status(SIGINT);
 	}
-	if (exitcode == (int)STATUS_CONTROL_C_EXIT || (unsigned)exitcode == 0xC000013A)
-		return SIGINT & 0x7f;
+
 	return (exitcode & 0xff) << 8;       /* WIFEXITED, WEXITSTATUS */
 }
 

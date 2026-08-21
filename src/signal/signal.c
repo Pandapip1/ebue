@@ -81,7 +81,7 @@ int __raise_internal(int sig)
 	if (h == SIG_DFL) {
 		if (!default_action(sig)) return 0;
 		__stdio_exit();
-		__nt_exit(128 + sig);
+		__nt_exit(__NT_SIGNAL_EXIT(sig));
 	}
 	if (sig != SIGILL && sig != SIGTRAP) handlers[sig] = handlers[sig];  /* BSD semantics: stays installed */
 	h(sig);
@@ -113,7 +113,7 @@ int kill(pid_t pid, int sig)
 		if (!NT_SUCCESS(st)) { errno = st == STATUS_ACCESS_DENIED ? EPERM : ESRCH; return -1; }
 	}
 	if (!sig) { if (!c) NtClose(h); return 0; }
-	st = NtTerminateProcess(h, 128 + sig);
+	st = NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig));
 	if (!c) NtClose(h);
 	if (!NT_SUCCESS(st) && st != STATUS_PROCESS_IS_TERMINATING) return __set_errno_status(st);
 	return 0;
@@ -185,11 +185,11 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	}
 	if (handlers[sig] == SIG_DFL) {
 		__stdio_exit();
-		__nt_exit(128 + sig);
+		__nt_exit(__NT_SIGNAL_EXIT(sig));
 	}
 	if (handlers[sig] == SIG_IGN) {
 		/* Ignoring a fault would loop forever; POSIX says undefined. Die. */
-		if (sig != SIGINT && sig != SIGTRAP) __nt_exit(128 + sig);
+		if (sig != SIGINT && sig != SIGTRAP) __nt_exit(__NT_SIGNAL_EXIT(sig));
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 	__raise_internal(sig);
