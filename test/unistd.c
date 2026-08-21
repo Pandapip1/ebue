@@ -87,13 +87,33 @@ int main(void)
 	CHECK(lseek(fd, 0, SEEK_SET) == 0);
 	CHECK(pwrite(fd, "J", 1, 4) == 1);
 	CHECK(pread(fd, buf, 5, 0) == 5 && !memcmp(buf, "hellJ", 5));
-/* BUG (live, expected to FAIL): pread/pwrite (src/unistd/read.c:672, src/unistd/write.c:932)
-       * pass an explicit ByteOffset to NtReadFile/NtWriteFile on a handle
-       * opened FILE_SYNCHRONOUS_IO_NONALERT, and NT then updates the
-       * handle's CurrentByteOffset, so the file position moves to the
-       * end of the transfer: here it becomes 5 instead of staying 0. */
 	CHECK(lseek(fd, 0, SEEK_CUR) == 0);
 	CHECK(pread(fd, buf, 10, 1000) == 0);
+	CHECK(lseek(fd, 0, SEEK_CUR) == 0);
+	/* pwrite beyond EOF extends the file but does not move the offset */
+	CHECK(lseek(fd, 2, SEEK_SET) == 2);
+	CHECK(pwrite(fd, "Z", 1, 30) == 1);
+	CHECK(lseek(fd, 0, SEEK_CUR) == 2);
+	CHECK(lseek(fd, 0, SEEK_END) == 31);
+	/* pread then read: read continues from the original offset */
+	CHECK(lseek(fd, 1, SEEK_SET) == 1);
+	CHECK(pread(fd, buf, 3, 5) == 3);
+	CHECK(read(fd, buf, 3) == 3 && !memcmp(buf, "ell", 3));
+	CHECK(lseek(fd, 0, SEEK_CUR) == 4);
+	/* pwrite on an O_APPEND fd: Linux ignores the offset and appends, and
+	 * the position must still not move; we only require that it works and
+	 * leaves the offset alone. */
+	{
+		int afd = open("a.txt", O_WRONLY | O_APPEND);
+		CHECK(afd >= 0);
+		CHECK(lseek(afd, 0, SEEK_SET) == 0);
+		CHECK(pwrite(afd, "Q", 1, 3) == 1);
+		CHECK(lseek(afd, 0, SEEK_CUR) == 0);
+		CHECK(close(afd) == 0);
+	}
+	/* back to the 21-byte file the checks below expect */
+	CHECK(ftruncate(fd, 21) == 0);
+	CHECK(lseek(fd, 0, SEEK_SET) == 0);
 	/* fsync, isatty, ttyname */
 	CHECK(fsync(fd) == 0);
 	CHECK(fdatasync(fd) == 0);

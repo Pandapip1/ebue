@@ -92,6 +92,8 @@ int __fd_install(HANDLE, unsigned flags, int type);    /* alloc + fill; -1 with 
 int __fd_install_at(int fd, HANDLE, unsigned flags, int type);
 struct __fd *__fd_get(int fd);               /* NULL with errno=EBADF */
 HANDLE __fd_handle(int fd);                  /* NULL with errno=EBADF */
+int __fd_pos_save(HANDLE, long long *pos);   /* FilePositionInformation; -1 with errno */
+void __fd_pos_restore(HANDLE, long long pos);/* put it back after positioned I/O */
 int __handle_type(HANDLE);                   /* classify by device type */
 int __fd_close_all_cloexec(void);
 void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from RuntimeData */
