@@ -113,3 +113,10 @@ sed's `$r` "last line" address) through its argument parser. Everything
 else -- every compile command and the final `tcc -ar` archiving step -- is
 carried through close to verbatim. See `tools/gen-kaem.sh`'s own comments
 for the details of each workaround.
+
+`./configure` enables a tracked pre-commit hook (`.githooks/pre-commit`,
+via `git config core.hooksPath .githooks`) that runs `make kaem` and
+blocks the commit if it changes anything, so this can't drift silently
+into a commit. If you're committing without having run `./configure` in
+this checkout, enable it by hand with the same `git config` line, or just
+run `make kaem` yourself before committing.

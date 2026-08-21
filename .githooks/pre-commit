@@ -1,0 +1,32 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Regenerates boot/kaem/build-$(ARCH).kaem and blocks the commit if that
+# changes anything, so a source-file add/remove/rename (or anything else
+# that shifts the Makefile's build recipe) can never be committed with a
+# stale kaem bootstrap script sitting alongside it -- see CONTRIBUTING.md's
+# "kaem bootstrap build path" section. This mirrors the "Regenerate kaem
+# bootstrap scripts and check for drift" step in .github/workflows/ci.yml.
+#
+# Enabled automatically by ./configure; to enable by hand:
+#   git config core.hooksPath .githooks
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+if [ ! -f config.mak ]; then
+	# Nothing configured yet, so there is no CC/ARCH to hand gen-kaem.sh;
+	# nothing to check without it.
+	exit 0
+fi
+
+make kaem >/dev/null
+
+if ! git diff --quiet -- boot/kaem/; then
+	echo "pre-commit: boot/kaem/ is out of sync with the Makefile." >&2
+	echo "pre-commit: 'make kaem' regenerated it -- review the diff, then" >&2
+	echo "pre-commit: 'git add boot/kaem/' and commit again." >&2
+	exit 1
+fi
