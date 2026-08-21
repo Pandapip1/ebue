@@ -7,7 +7,7 @@ fail=0; pass=0
 for t in "$@"; do
 	name=${t##*/}
 	if test -z "$wine"; then echo "SKIP $name (no wine)"; continue; fi
-	out=$(cd "${t%/*}" && WINEDEBUG=-all "$wine" "./$name" 2>&1 </dev/null); rc=$?
+	out=$(cd "${t%/*}" && WINEDEBUG=-all WINEDLLOVERRIDES=winedbg.exe=d "$wine" "./$name" 2>&1 </dev/null); rc=$?
 	if test $rc -eq 0; then
 		pass=$((pass+1)); echo "PASS $name"
 	else
