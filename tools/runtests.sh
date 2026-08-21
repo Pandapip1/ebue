@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Run each test executable under wine; report pass/fail; exit nonzero on any failure.
 wine=$1; shift
 fail=0; pass=0

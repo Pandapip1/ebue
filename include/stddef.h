@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 #ifndef _STDDEF_H
 #define _STDDEF_H
 

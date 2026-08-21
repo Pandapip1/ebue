@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 #ifndef	_STRINGS_H
 #define	_STRINGS_H
 

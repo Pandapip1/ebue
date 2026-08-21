@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 /* Hard links and symbolic links.  Hard links are FileLinkInformation.
  * Symbolic links need SeCreateSymbolicLinkPrivilege or developer mode on
  * Windows, so symlink tries and reports EPERM when it cannot; readlink

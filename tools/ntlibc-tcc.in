@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Compile and link a program against ntlibc, the way musl-gcc does for musl.
 # Everything not recognised is passed through to the compiler.
 cc="@CC@"

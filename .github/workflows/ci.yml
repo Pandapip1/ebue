@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 name: CI
 
 # Builds ntlibc and runs its test suite for both supported targets,
@@ -50,6 +53,12 @@ env:
   TINYCC_SHA: 2ba12e83b3599ca8f5d50c179fe5138fe956f0c9
 
 jobs:
+  reuse:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: fsfe/reuse-action@v5
+
   # Build the win32-cross tinycc toolchain once and cache it, keyed on the
   # pinned commit above, so a normal CI run restores a prebuilt toolchain
   # instead of rebuilding a whole cross-compiler from scratch every time.

@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 /* chmod can only express one thing on NTFS: whether the file is read-only. */
 #include <sys/stat.h>
 #include <fcntl.h>

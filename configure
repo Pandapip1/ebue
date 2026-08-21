@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # configure for ntlibc -- same shape as musl's: probes a few things, writes
 # config.mak, and leaves everything else to the Makefile.

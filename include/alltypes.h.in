@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 TYPEDEF unsigned _Addr size_t;
 TYPEDEF unsigned _Addr uintptr_t;
 TYPEDEF _Addr ptrdiff_t;

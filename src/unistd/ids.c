@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 /* There is one user as far as this library is concerned. */
 #include <unistd.h>
 #include <errno.h>

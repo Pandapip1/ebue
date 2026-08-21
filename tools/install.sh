@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: (C) Rich Felker
+# SPDX-License-Identifier: MIT OR 0BSD OR CC0-1.0
 #
 # Written by Rich Felker, originally as part of musl libc.
 # Multi-licensed under MIT, 0BSD, and CC0.

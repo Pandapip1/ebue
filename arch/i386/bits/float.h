@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 #define FLT_EVAL_METHOD 2
 
 #define LDBL_TRUE_MIN 3.6451995318824746025e-4951L

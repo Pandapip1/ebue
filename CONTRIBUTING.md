@@ -32,11 +32,15 @@ etc.), it does, and it needs a real ntdll-only fallback path too.
 
 ## Other conventions
 
-- SPDX header on every new file:
+- SPDX header on every new file (this project is
+  [REUSE](https://reuse.software/)-compliant; `reuse lint` checks it in CI):
   ```c
   /* SPDX-FileCopyrightText: (C) 2026 Gavin John
    * SPDX-License-Identifier: GPL-3.0-or-later */
   ```
+  Use `#`/`;`/`<!-- -->` in place of `/* */` for files whose syntax doesn't
+  support C comments. Vendored code (see `tools/install.sh`) keeps its
+  original copyright holder and license instead.
 - Comments explain non-obvious *why* (an NT quirk, a measured behavior
   difference, a rejected alternative and why it didn't work) — not what the
   code already says by being well-named. See `src/process/spawn.c` and
