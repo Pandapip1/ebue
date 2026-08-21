@@ -47,6 +47,13 @@ etc.), it does, and it needs a real ntdll-only fallback path too.
   make -j4
   make -j4 check   # builds test/*.c and runs them under wine
   ```
+- CI (`.github/workflows/ci.yml`) runs this loop under Wine on Linux
+  runners for both `i386-win32` and `x86_64-win32`, for fast feedback.
+  It also cross-builds the same `test/*.c` binaries on Linux and then
+  runs them on a real `windows-latest` runner (including the `*-win.c`
+  tests that Wine can't run) — that job is the one that actually proves
+  fork()/WOW64 behavior and kernel32 code paths against real Windows
+  rather than Wine's emulation of it.
 
 ## The kaem bootstrap build path (`boot/kaem/`)
 

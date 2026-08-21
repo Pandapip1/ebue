@@ -1,0 +1,191 @@
+name: CI
+
+# Builds ntlibc and runs its test suite for both supported targets,
+# i386-win32 and x86_64-win32, two ways:
+#
+#   - `test` (Linux + Wine): cross-builds with tinycc and runs the tests
+#     under Wine. Fast, but Wine emulates ntdll/kernel32 rather than being
+#     real Windows, so it can pass (or fail) differently than the real
+#     thing -- notably it doesn't implement everything (see the Makefile's
+#     TEST_RUN comment on the `*-win.c` tests it can't run at all).
+#   - `windows-test` (real `windows-latest` runner): downloads the very
+#     same test/*.exe built by the `test` job (including the `*-win.c`
+#     ones Wine skips) and runs them directly on real Windows. This is
+#     the job that actually proves fork()/WOW64 behavior and any
+#     kernel32 (Ctrl-C handler) code paths, rather than relying on Wine's
+#     emulation of them. GitHub-hosted Windows runners are free and
+#     unlimited for public repositories (this repo is public), so there's
+#     no cost reason not to run this in addition to the Wine-based jobs.
+#     No tcc/cross-toolchain is needed on that runner at all -- it never
+#     compiles anything, it only executes the binaries the Linux job
+#     already built.
+#
+# The only non-standard piece of the build itself is the compiler: ntlibc
+# is built with a win32-cross-targeting tinycc (upstream tinycc's own
+# `./configure --enable-cross` produces both the i386-win32-tcc and
+# x86_64-win32-tcc binaries used below, alongside the native/other cross
+# targets we don't need here). That's a completely ordinary,
+# from-scratch-buildable-in-CI toolchain -- nothing like the kaem/mescc-tools
+# bootstrap path under boot/kaem/, which is unrelated to CI and is not
+# exercised here except for the drift check in the `kaem` step below.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to a specific upstream tinycc commit (rather than always
+  # building tinycc's HEAD) so this workflow's toolchain -- and therefore
+  # ntlibc's own build/test results -- stay reproducible across CI runs
+  # and don't shift underneath us if tinycc lands a regression or a
+  # behavior change. Bump this deliberately (and re-validate ntlibc
+  # against the new commit) rather than tracking upstream automatically.
+  TINYCC_SHA: 2ba12e83b3599ca8f5d50c179fe5138fe956f0c9
+
+jobs:
+  # Build the win32-cross tinycc toolchain once and cache it, keyed on the
+  # pinned commit above, so a normal CI run restores a prebuilt toolchain
+  # instead of rebuilding a whole cross-compiler from scratch every time.
+  build-toolchain:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Cache tinycc toolchain
+        id: cache-tinycc
+        uses: actions/cache@v6
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Clone tinycc
+        if: steps.cache-tinycc.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/TinyCC/tinycc.git tinycc
+          git -C tinycc checkout "$TINYCC_SHA"
+
+      - name: Build and install tinycc (--enable-cross)
+        if: steps.cache-tinycc.outputs.cache-hit != 'true'
+        run: |
+          cd tinycc
+          ./configure --enable-cross --prefix="$HOME/tinycc-install"
+          make -j"$(nproc)"
+          make install
+
+      - name: Sanity-check the cross compilers exist
+        run: |
+          test -x "$HOME/tinycc-install/bin/i386-win32-tcc"
+          test -x "$HOME/tinycc-install/bin/x86_64-win32-tcc"
+
+  test:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i386
+            host: i386-win32
+            cc: i386-win32-tcc
+          - arch: x86_64
+            host: x86_64-win32
+            cc: x86_64-win32-tcc
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore tinycc toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      # Package set needed for `make check` to actually run the PE test
+      # binaries under Wine (both the 32- and 64-bit loaders are needed
+      # regardless of which ntlibc arch is under test).
+      - name: Install Wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y wine wine32:i386 wine64
+
+      - name: Configure
+        run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }}
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Check
+        run: make -j"$(nproc)" check
+
+      # Publish the built PE test binaries (everything under obj/test/,
+      # which includes the *-win.c ones the `check` step above
+      # deliberately doesn't run under Wine -- see the Makefile's
+      # TEST_RUN comment) so the windows-test job below can execute them
+      # on a real Windows runner.
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-exes-${{ matrix.arch }}
+          path: obj/test/*.exe
+          if-no-files-found: error
+
+      # Only needs to run once, not once per matrix leg: catches
+      # boot/kaem/build-$(ARCH).kaem drifting out of sync with the real
+      # Makefile build recipe as source files are added/removed/renamed.
+      # See CONTRIBUTING.md's "kaem bootstrap build path" section.
+      - name: Regenerate kaem bootstrap scripts and check for drift
+        if: matrix.arch == 'x86_64'
+        run: |
+          make kaem
+          git diff --exit-code -- boot/kaem/
+
+  # Runs the exact same PE binaries the `test` job built and (for the
+  # non-*-win.c ones) already ran under Wine, but this time on a real
+  # Windows machine. windows-latest is an x86_64 host; a plain i386 PE
+  # .exe runs on it transparently through WOW64 with no special setup --
+  # WOW64 is Windows' built-in compatibility layer specifically for
+  # running unmodified 32-bit x86 binaries on 64-bit Windows (see
+  # Microsoft's "WOW64 Implementation Details":
+  # https://learn.microsoft.com/en-us/windows/win32/winprog64/wow64-implementation-details).
+  windows-test:
+    needs: test
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [i386, x86_64]
+    steps:
+      - name: Download test binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: test-exes-${{ matrix.arch }}
+          path: test-exes
+
+      - name: Run test binaries on real Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $failed = $false
+          Get-ChildItem -Path test-exes -Filter *.exe | Sort-Object Name | ForEach-Object {
+            Write-Host "Running $($_.Name)"
+            & $_.FullName
+            $rc = $LASTEXITCODE
+            if ($rc -eq 0) {
+              Write-Host "PASS $($_.Name)"
+            } else {
+              Write-Host "FAIL $($_.Name) (rc=$rc)"
+              $failed = $true
+            }
+          }
+          if ($failed) {
+            Write-Host "One or more test binaries failed"
+            exit 1
+          }
