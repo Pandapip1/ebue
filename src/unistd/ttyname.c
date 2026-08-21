@@ -20,13 +20,5 @@ char *ttyname(int fd)
 	return buf;
 }
 
-char *ctermid(char *s)
-{
-	static char buf[8];
-	if (!s) s = buf;
-	strcpy(s, "CON");
-	return s;
-}
-
 pid_t tcgetpgrp(int fd) { (void)fd; return 1; }
 int tcsetpgrp(int fd, pid_t p) { (void)fd; (void)p; return 0; }

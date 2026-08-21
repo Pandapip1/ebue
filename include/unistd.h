@@ -122,7 +122,6 @@ int setegid(gid_t);
 char *getlogin(void);
 int getlogin_r(char *, size_t);
 int gethostname(char *, size_t);
-char *ctermid(char *);
 
 int getopt(int, char * const [], const char *);
 extern char *optarg;

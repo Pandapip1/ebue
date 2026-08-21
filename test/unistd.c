@@ -99,10 +99,6 @@ int main(void)
 	CHECK(fdatasync(fd) == 0);
 	errno = 0;
 	CHECK(isatty(fd) == 0 && errno == ENOTTY);
-/* BUG (live, expected to FAIL TO LINK): ctermid is defined in both src/unistd/ttyname.c:817 and
-       * src/stdio/misc.c:158, so any program pulling in ttyname.c
-       * (ttyname) together with misc.c (rename, perror) fails to link:
-       * "lib/libc.a: error: link symbol 'ctermid' defined twice". */
 	errno = 0;
 	CHECK(ttyname(fd) == 0 && errno == ENOTTY);
 	CHECK(ttyname_r(fd, buf, sizeof buf) == ENOTTY);
@@ -639,9 +635,6 @@ int main(void)
 	errno = 0;
 	CHECK(chroot("/") == -1 && errno == EPERM);
 	CHECK(issetugid() == 0);
-/* BUG (live, expected to FAIL TO LINK): ctermid is defined twice, src/unistd/ttyname.c:817 and
-       * src/stdio/misc.c:158 (returning "CON" and "/dev/tty"), so any
-       * program that references it fails to link against libc.a. */
 	CHECK(ctermid(0) != 0);
 	CHECK(ctermid(buf) == buf && buf[0]);
 
