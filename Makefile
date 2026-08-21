@@ -1,5 +1,5 @@
 #
-# Makefile for ntlibc
+# Makefile for ntlibc (requires GNU make)
 #
 # This is the same shape as musl's Makefile: the library is a single
 # static archive built from every source file under src/, plus a crt1.o
