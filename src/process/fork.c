@@ -131,8 +131,10 @@ pid_t fork(void)
 	 * child and let it run. */
 	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;
 	if (__child_add(pid, info.Process) < 0) {
-		/* The table is full; the child still runs, but waitpid on it
-		 * will have to reopen it (the same tradeoff __spawn makes). */
+		/* The table is full; the child still runs.  waitpid(pid) reopens
+		 * it by pid and verifies the parent (src/process/wait.c), but
+		 * waitpid(-1)/wait() will not see it -- the same tradeoff
+		 * __spawn makes. */
 		NtClose(info.Process);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,

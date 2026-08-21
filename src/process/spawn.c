@@ -188,8 +188,9 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	NtClose(info.Thread);
 	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;
 	if (__child_add(pid, info.Process) < 0) {
-		/* The table is full; the process still runs, but waitpid on it
-		 * will have to reopen it. */
+		/* The table is full; the process still runs.  waitpid(pid)
+		 * reopens it by pid (src/process/wait.c) and verifies it is our
+		 * child; waitpid(-1)/wait() will not see it. */
 		NtClose(info.Process);
 	}
 

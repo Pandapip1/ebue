@@ -11,6 +11,7 @@
  */
 #include <sys/wait.h>
 #include <signal.h>
+#include <unistd.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -63,7 +64,34 @@ pid_t waitpid(pid_t pid, int *status, int options)
 
 	if (pid < 0) pid = -pid;   /* process groups are single processes here */
 	c = __child_find(pid);
-	if (!c) { errno = ECHILD; return -1; }
+	if (!c) {
+		/* Not in the table.  Either it is not our child, or __spawn/fork
+		 * could not record it because the table (CHILD_MAX_) was full.
+		 * Reopen the process by pid and check that it really is ours:
+		 * its InheritedFromUniqueProcessId must be us.  waitpid(-1) and
+		 * wait() cannot see such children; they only scan the table. */
+		OBJECT_ATTRIBUTES oa;
+		CLIENT_ID cid;
+		HANDLE h;
+		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+		cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid;
+		cid.UniqueThread = 0;
+		st = NtOpenProcess(&h, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
+		if (!NT_SUCCESS(st)) { errno = ECHILD; return -1; }
+		st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
+		if (!NT_SUCCESS(st) || (pid_t)pbi.InheritedFromUniqueProcessId != getpid()) {
+			NtClose(h);
+			errno = ECHILD;
+			return -1;
+		}
+		st = NtWaitForSingleObject(h, 0, options & WNOHANG ? &zero : 0);
+		if (st == STATUS_TIMEOUT) { NtClose(h); return 0; }
+		if (!NT_SUCCESS(st)) { NtClose(h); return __set_errno_status(st); }
+		st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
+		NtClose(h);
+		if (status) *status = NT_SUCCESS(st) ? encode_status((int)pbi.ExitStatus) : 0;
+		return pid;
+	}
 	if (c->done) { if (status) *status = c->status; pid = c->pid; __child_remove(c); return pid; }
 
 	st = NtWaitForSingleObject(c->h, 0, options & WNOHANG ? &zero : 0);
