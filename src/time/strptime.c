@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * A strptime covering the same specifiers strftime writes (%Y %y %m %d
- * %H %M %S %e %j %a %A %b %B %p %z %% plus %n/%t as whitespace), which
- * is what round-tripping strftime's own output needs.  Unrecognized
+ * %H %M %S %e %j %a %A %b %B %p %z %% plus %n/%t as whitespace), plus
+ * the composite conversions %c %D %F %r %R %T %x %X, which are handled by
+ * expanding them to the equivalent simple format (matching what strftime
+ * writes for them in the C locale) and recursing.  Unrecognized
  * conversions and the locale %E/%O modifiers are not implemented.
  */
 #include <time.h>
@@ -51,11 +53,13 @@ static const char *match_name(const char *s, const char *const *full, const char
 	return NULL;
 }
 
-char *strptime(const char *restrict s, const char *restrict f, struct tm *restrict tm)
+/* pm: -1: no %p seen; 0: AM; 1: PM.  Shared across recursive calls so
+ * that %r's %p applies to its %I. */
+static const char *parse(const char *s, const char *f, struct tm *tm, int *pm)
 {
 	long v;
 	int idx;
-	int pm = -1;   /* -1: no %p seen; 0: AM; 1: PM */
+	const char *sub;
 
 	for (; *f; f++) {
 		if (*f != '%') {
@@ -67,6 +71,15 @@ char *strptime(const char *restrict s, const char *restrict f, struct tm *restri
 		f++;
 		if (!*f) return NULL;
 		switch (*f) {
+		case 'c': sub = "%a %b %e %H:%M:%S %Y"; goto expand;
+		case 'D': case 'x': sub = "%m/%d/%y"; goto expand;
+		case 'F': sub = "%Y-%m-%d"; goto expand;
+		case 'r': sub = "%I:%M:%S %p"; goto expand;
+		case 'R': sub = "%H:%M"; goto expand;
+		case 'T': case 'X': sub = "%H:%M:%S"; goto expand;
+		expand:
+			if (!(s = parse(s, sub, tm, pm))) return NULL;
+			break;
 		/* Widths follow musl/glibc: %Y 4, %j 3, %u/%w 1, everything else 2,
 		 * so an unseparated "%Y%m%d" doesn't let %Y swallow later fields. */
 		case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break;
@@ -89,8 +102,8 @@ char *strptime(const char *restrict s, const char *restrict f, struct tm *restri
 			tm->tm_mon = idx;
 			break;
 		case 'p':
-			if (!strncasecmp(s, "AM", 2)) { pm = 0; s += 2; }
-			else if (!strncasecmp(s, "PM", 2)) { pm = 1; s += 2; }
+			if (!strncasecmp(s, "AM", 2)) { *pm = 0; s += 2; }
+			else if (!strncasecmp(s, "PM", 2)) { *pm = 1; s += 2; }
 			else return NULL;
 			break;
 		case 'z':
@@ -120,6 +133,14 @@ char *strptime(const char *restrict s, const char *restrict f, struct tm *restri
 			return NULL;
 		}
 	}
+	return s;
+}
+
+char *strptime(const char *restrict s, const char *restrict f, struct tm *restrict tm)
+{
+	int pm = -1;
+
+	if (!(s = parse(s, f, tm, &pm))) return NULL;
 	if (pm == 1 && tm->tm_hour < 12) tm->tm_hour += 12;
 	else if (pm == 0 && tm->tm_hour == 12) tm->tm_hour = 0;
 	return (char *)s;

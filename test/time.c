@@ -284,9 +284,6 @@ int main(void)
 			"%d/%m/%y %H:%M",
 			"%j %Y %H:%M:%S",
 			"%H%M%S %d%m%Y",
-/* BUG (live, expected to FAIL): src/time/strptime.c does not implement the composite
-       * conversions %F %T %c %D %R (POSIX requires %D %R %T %c), so
-       * these strftime outputs cannot be parsed back. */
 			"%F %T",
 			"%j %Y %T",
 			"%c",
