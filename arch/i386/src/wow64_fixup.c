@@ -289,7 +289,7 @@ static ULONG gate_call(ULONGLONG target, ULONG arg1, ULONG arg2)
 	};
 
 	if (gate_init()) return (ULONG)-1;
-	memcpy(blob + 12, &target, 8);
+	memcpy(blob + 13, &target, 8);
 	memcpy(gate_page + 0x40, blob, sizeof blob);
 	gate_arg1 = arg1;
 	gate_arg2 = arg2;
