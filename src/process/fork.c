@@ -69,13 +69,20 @@
  * is (re-)marked inheritable here before cloning, the same way
  * __fd_runtime_data does for a spawned child.
  *
- * What does not carry over cleanly: any process handle already sitting
- * in __children for a grandchild spawned before this fork was not
- * necessarily created inheritable (RtlCreateUserProcess in __spawn
- * doesn't ask for that), so a child that calls fork() and then waitpid's
- * a process its parent started earlier may find that handle invalid in
- * its own process -- a real limitation of Windows handle inheritance,
- * not something this implementation papers over.  And, as on every
+ * The same goes for the process handles in __children: RtlCreateUserProcess
+ * in __spawn and RtlCloneUserProcess here both hand them back
+ * non-inheritable, so without help the clone's copy of the table would be
+ * full of handle *values* that mean nothing (or, once NT reuses the slot,
+ * something else entirely) in the child, and a waitpid on a sibling
+ * would fail -- or worse, wait on the wrong object.  They are marked
+ * inheritable around the clone, and un-marked again in both processes
+ * afterwards, rather than kept inheritable from __child_add on: __spawn
+ * passes InheritHandles=TRUE to RtlCreateUserProcess, which copies
+ * *every* inheritable handle, not just the fd table it describes in
+ * RuntimeData, so a permanently-inheritable child handle would leak into
+ * every exec'd program as a stray process handle it can neither see nor
+ * close.  The price is two NtDuplicateObject calls per tracked child per
+ * fork, which is cheap next to the clone itself.  And, as on every
  * fork(), only the calling thread is cloned; a multi-threaded caller's
  * other threads simply do not exist in the child, which is the same
  * contract POSIX fork() has always had.
@@ -97,8 +104,28 @@ static void mark_fds_inheritable(void)
 		HANDLE dup;
 		if (!__fds[i].h || (__fds[i].flags & O_CLOEXEC)) continue;
 		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __fds[i].h, NtCurrentProcess(), &dup,
-		                                 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES)))
+		                                 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES))) {
+			NtClose(__fds[i].h);
 			__fds[i].h = dup;
+		}
+	}
+}
+
+/* Set (inherit != 0) or clear the OBJ_INHERIT attribute on every tracked
+ * child-process handle.  DUPLICATE_SAME_ATTRIBUTES is deliberately not
+ * used: the attribute is being changed, not copied.  The table is
+ * ordinary memory, so the new handle values travel with the clone. */
+static void mark_children_inheritable(int inherit)
+{
+	int i;
+	for (i = 0; i < CHILD_MAX_; i++) {
+		HANDLE dup;
+		if (!__children[i].pid || !__children[i].h) continue;
+		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __children[i].h, NtCurrentProcess(), &dup,
+		                                 0, inherit ? OBJ_INHERIT : 0, DUPLICATE_SAME_ACCESS))) {
+			NtClose(__children[i].h);
+			__children[i].h = dup;
+		}
 	}
 }
 
@@ -109,6 +136,7 @@ pid_t fork(void)
 	int pid;
 
 	mark_fds_inheritable();
+	mark_children_inheritable(1);
 
 	memset(&info, 0, sizeof info);
 	info.Length = sizeof info;
@@ -121,10 +149,13 @@ pid_t fork(void)
 		 * thread the kernel built by copying the one that called it, in
 		 * a process that is a copy of this one.  Nothing else to set up
 		 * -- __peb, __teb(), the fd table, the heap are all just memory,
-		 * and all of it is already here. */
+		 * and all of it is already here.  The sibling handles in
+		 * __children made the trip; stop them travelling any further. */
+		mark_children_inheritable(0);
 		return 0;
 	}
 
+	mark_children_inheritable(0);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	/* The parent.  The child exists, suspended; track it like any other

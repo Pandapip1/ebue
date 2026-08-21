@@ -100,7 +100,11 @@ pid_t waitpid(pid_t pid, int *status, int options)
 
 reap:
 	st = NtQueryInformationProcess(c->h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
-	c->status = NT_SUCCESS(st) ? encode_status((int)pbi.ExitStatus) : 0;
+	/* Never invent a status: if the handle can't be queried, the entry is
+	 * left as it is (a retry may still reach it) and the caller gets the
+	 * real error rather than a fabricated "exited 0". */
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	c->status = encode_status((int)pbi.ExitStatus);
 	c->done = 1;
 	if (status) *status = c->status;
 	pid = c->pid;
