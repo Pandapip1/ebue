@@ -99,12 +99,22 @@ int __fd_close_all_cloexec(void);
 void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from RuntimeData */
 
 /* ---- children ---------------------------------------------------------- */
-/* The size of the statically allocated part of the child table, and the
- * value sysconf(_SC_CHILD_MAX) advertises.  It is not a limit: the table
- * grows onto the heap past this point rather than dropping a child's
- * process handle, which would make the child unreapable for good (see
- * src/process/children.c). */
+/* The size of the statically allocated part of the child table.  It is
+ * not a limit: the table grows onto the heap past this point rather than
+ * dropping a child's process handle, which would make the child
+ * unreapable for good (see src/process/children.c). */
 #define CHILD_MAX_ 256
+
+/* Refuse to grow the child table past this many entries; a process with
+ * a million unreaped children has a leak, not a capacity problem, and
+ * the cap keeps child_grow()'s doubling away from integer overflow.
+ *
+ * This, not CHILD_MAX_, is what sysconf(_SC_CHILD_MAX) reports: NT has
+ * no fixed per-user process limit for it to describe, so the honest
+ * answer is the ceiling on what this libc can still waitpid() for.
+ * Reporting CHILD_MAX_ there would understate it by four orders of
+ * magnitude now that the table grows. */
+#define CHILD_CAP_LIMIT_ (1 << 20)
 struct __child {
 	int pid;
 	HANDLE h;

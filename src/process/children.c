@@ -41,18 +41,13 @@ static struct __child __child_seed[CHILD_MAX_];
 struct __child *__children = __child_seed;
 int __child_cap = CHILD_MAX_;
 
-/* Refuse to grow past this many entries; a process with a million
- * unreaped children has a leak, not a capacity problem, and the cap
- * keeps the doubling below away from integer overflow. */
-#define CHILD_CAP_LIMIT (1 << 20)
-
 static int child_grow(void)
 {
 	struct __child *n;
 	int cap = __child_cap * 2;
 
-	if (__child_cap >= CHILD_CAP_LIMIT) return -1;
-	if (cap > CHILD_CAP_LIMIT) cap = CHILD_CAP_LIMIT;
+	if (__child_cap >= CHILD_CAP_LIMIT_) return -1;
+	if (cap > CHILD_CAP_LIMIT_) cap = CHILD_CAP_LIMIT_;
 	n = __malloc((size_t)cap * sizeof *n);
 	if (!n) return -1;
 	memcpy(n, __children, (size_t)__child_cap * sizeof *n);

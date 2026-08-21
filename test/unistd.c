@@ -238,15 +238,18 @@ int main(void)
 	CHECK(close(fd) == 0);
 	errno = 0;
 	CHECK(open("a.txt", O_RDONLY | O_DIRECTORY) == -1 && errno == ENOTDIR);
-	/* Opening a directory for writing is EISDIR.  Wine's server retries
-	 * a write-access open of a directory read-only (server/fd.c, "if we
-	 * tried to open a directory for write access, retry read-only"), so
-	 * there the open succeeds and the write is what reports EISDIR. */
+	/* Opening a directory for writing reports EISDIR -- but only on
+	 * systems that reject the open itself.  Wine's server retries a
+	 * write-access open of a directory read-only (server/fd.c, "if we
+	 * tried to open a directory for write access, retry read-only"), and
+	 * real Windows also hands back a usable handle here (measured on a
+	 * windows-latest CI runner), so on both the open succeeds and the
+	 * write is what reports EISDIR.  Accept either shape. */
 	errno = 0;
 	fd = open("sub", O_WRONLY);
 	if (fd == -1) CHECK(errno == EISDIR);
 	else {
-		printf("note: open(dir, O_WRONLY) succeeded (Wine); checking write instead\n");
+		printf("note: open(dir, O_WRONLY) succeeded; checking write instead\n");
 		errno = 0;
 		CHECK(write(fd, "x", 1) == -1 && errno == EISDIR);
 		CHECK(close(fd) == 0);
