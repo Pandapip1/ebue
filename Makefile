@@ -151,6 +151,21 @@ install-tools: $(ALL_TOOLS_BUILT:obj/%=$(DESTDIR)$(bindir)/%)
 install: install-libs install-headers install-tools
 
 #
+# kaem: regenerate the kaem-only bootstrap build script from this
+# Makefile's own build recipe (tools/gen-kaem.sh runs `make -n -B
+# lib/libc.a lib/crt1.o` and rewrites the dry-run output into kaem syntax),
+# so boot/kaem/build-$(ARCH).kaem can never silently drift out of sync with
+# this Makefile as source files are added, removed, or renamed. See
+# CONTRIBUTING.md for what boot/kaem/ is for.
+#
+kaem: boot/kaem/build-$(ARCH).kaem
+
+boot/kaem/build-$(ARCH).kaem: $(BASE_SRCS) $(ARCH_SRCS) tools/gen-kaem.sh config.mak Makefile
+	./tools/gen-kaem.sh $@
+
+.PHONY: kaem
+
+#
 # Tests: every test/*.c is built into a PE and run under wine.  A test
 # passes if it exits 0.  tests named *-win.c are built but not run: they
 # need something wine does not implement (RtlCloneUserProcess, say).
