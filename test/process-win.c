@@ -341,14 +341,13 @@ static void test_child_table_overflow(void)
 			CHECK(r == pids[i]);
 			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
 		} else {
-#if 0 /* BUG: src/process/spawn.c:196 and src/process/fork.c:137 say a
+/* BUG (live, expected to FAIL): src/process/spawn.c:196 and src/process/fork.c:137 say a
        * child that did not fit in __children "will have to be reopened"
        * by waitpid, but src/process/wait.c:62 only consults
        * __child_find() and answers ECHILD for it; the child can never be
        * reaped. */
 			CHECK(r == pids[i]);
 			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
-#endif
 			if (r == -1 && errno == ECHILD) untracked_echild++;
 			else if (r == pids[i]) CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
 			else CHECK(!"waitpid on an untracked child: neither reaped nor ECHILD");

@@ -284,20 +284,18 @@ int main(void)
 			"%d/%m/%y %H:%M",
 			"%j %Y %H:%M:%S",
 			"%H%M%S %d%m%Y",
-#if 0 /* BUG: src/time/strptime.c does not implement the composite
+/* BUG (live, expected to FAIL): src/time/strptime.c does not implement the composite
        * conversions %F %T %c %D %R (POSIX requires %D %R %T %c), so
        * these strftime outputs cannot be parsed back. */
 			"%F %T",
 			"%j %Y %T",
 			"%c",
 			"%D %R",
-#endif
-#if 0 /* BUG: src/time/strptime.c:70 %Y reads up to 10 digits, so in a
+/* BUG (live, expected to FAIL): src/time/strptime.c:70 %Y reads up to 10 digits, so in a
        * format with no separator after %Y it swallows the following
        * fields ("20380119031407" with "%Y%m%d%H%M%S" fails); POSIX/glibc
        * limit %Y to 4 digits. */
 			"%Y%m%d%H%M%S",
-#endif
 		};
 
 		gmtime_r(&t, &tm);

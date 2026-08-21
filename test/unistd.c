@@ -87,27 +87,25 @@ int main(void)
 	CHECK(lseek(fd, 0, SEEK_SET) == 0);
 	CHECK(pwrite(fd, "J", 1, 4) == 1);
 	CHECK(pread(fd, buf, 5, 0) == 5 && !memcmp(buf, "hellJ", 5));
-#if 0 /* BUG: pread/pwrite (src/unistd/read.c:672, src/unistd/write.c:932)
+/* BUG (live, expected to FAIL): pread/pwrite (src/unistd/read.c:672, src/unistd/write.c:932)
        * pass an explicit ByteOffset to NtReadFile/NtWriteFile on a handle
        * opened FILE_SYNCHRONOUS_IO_NONALERT, and NT then updates the
        * handle's CurrentByteOffset, so the file position moves to the
        * end of the transfer: here it becomes 5 instead of staying 0. */
 	CHECK(lseek(fd, 0, SEEK_CUR) == 0);
-#endif
 	CHECK(pread(fd, buf, 10, 1000) == 0);
 	/* fsync, isatty, ttyname */
 	CHECK(fsync(fd) == 0);
 	CHECK(fdatasync(fd) == 0);
 	errno = 0;
 	CHECK(isatty(fd) == 0 && errno == ENOTTY);
-#if 0 /* BUG: ctermid is defined in both src/unistd/ttyname.c:817 and
+/* BUG (live, expected to FAIL TO LINK): ctermid is defined in both src/unistd/ttyname.c:817 and
        * src/stdio/misc.c:158, so any program pulling in ttyname.c
        * (ttyname) together with misc.c (rename, perror) fails to link:
        * "lib/libc.a: error: link symbol 'ctermid' defined twice". */
 	errno = 0;
 	CHECK(ttyname(fd) == 0 && errno == ENOTTY);
 	CHECK(ttyname_r(fd, buf, sizeof buf) == ENOTTY);
-#endif
 	/* fstat on it */
 	CHECK(fstat(fd, &st) == 0);
 	CHECK(S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode));
@@ -641,12 +639,11 @@ int main(void)
 	errno = 0;
 	CHECK(chroot("/") == -1 && errno == EPERM);
 	CHECK(issetugid() == 0);
-#if 0 /* BUG: ctermid is defined twice, src/unistd/ttyname.c:817 and
+/* BUG (live, expected to FAIL TO LINK): ctermid is defined twice, src/unistd/ttyname.c:817 and
        * src/stdio/misc.c:158 (returning "CON" and "/dev/tty"), so any
        * program that references it fails to link against libc.a. */
 	CHECK(ctermid(0) != 0);
 	CHECK(ctermid(buf) == buf && buf[0]);
-#endif
 
 	/* cleanup */
 	CHECK(unlink("a.txt") == 0);

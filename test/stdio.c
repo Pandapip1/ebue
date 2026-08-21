@@ -9,6 +9,10 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/wait.h>
+
+extern char **environ;
+int __spawn(const char *path, char *const argv[], char *const envp[]);
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -188,9 +192,8 @@ static void test_printf(void)
 	FMT("3.1416", "%.4f", 3.14159);
 	FMT("3", "%.0f", 3.14159);
 	FMT("3.", "%#.0f", 3.14159);
-#if 0 /* BUG: src/stdio/printf.c:96-97 the one-digit first pass rounds 99.7 up to 1e2, overestimating decexp, so the real pass rounds to 3 digits and prints "99" */
+/* BUG (live, expected to FAIL): src/stdio/printf.c:96-97 the one-digit first pass rounds 99.7 up to 1e2, overestimating decexp, so the real pass rounds to 3 digits and prints "99" */
 	FMT("100", "%.0f", 99.7);
-#endif
 	FMT("0.001", "%.3f", 0.001);
 	FMT("0.000", "%.3f", 0.0001);
 	FMT("0.001", "%.3f", 0.0006);
@@ -353,12 +356,11 @@ static void test_scanf(void)
 	CHECK(sscanf("inf", "%lf", &d) == 1 && d > 1e300);
 
 	/* %n */
-#if 0 /* BUG: src/stdio/scanf.c:758 %n always stores 0 instead of the characters consumed */
+/* BUG (live, expected to FAIL): src/stdio/scanf.c:758 %n always stores 0 instead of the characters consumed */
 	a = -1;
 	CHECK(sscanf("12345", "%d%n", &b, &a) == 1 && a == 5);
 	a = -1;
 	CHECK(sscanf("ab cd", "%s %s%n", str, str2, &a) == 2 && a == 5);
-#endif
 	/* %n does not count as an assignment */
 	CHECK(sscanf("5", "%d%n", &a, &b) == 1);
 
@@ -561,9 +563,8 @@ static void test_file_io(void)
 	CHECK(f != 0);
 	if (f) {
 		CHECK(fputs("0123456789", f) == 0);
-#if 0 /* BUG: src/stdio/seek.c:1175 ftello ignores pending buffered writes on a readable+writable stream ("w+"/"r+"), so ftell returns 0 here instead of 10 */
+/* BUG (live, expected to FAIL): src/stdio/seek.c:1175 ftello ignores pending buffered writes on a readable+writable stream ("w+"/"r+"), so ftell returns 0 here instead of 10 */
 		CHECK(ftell(f) == 10);
-#endif
 		CHECK(fseek(f, 0, SEEK_SET) == 0);
 		CHECK(ftell(f) == 0);
 		memset(buf, 0, sizeof buf);
@@ -872,8 +873,6 @@ static void test_tmpfile(void)
 {
 	FILE *f = tmpfile();
 	char buf[64];
-	char nbuf[L_tmpnam];
-	char *nm;
 
 	CHECK(f != 0);
 	if (f) {
@@ -890,8 +889,21 @@ static void test_tmpfile(void)
 		CHECK(fclose(f) == 0);
 	}
 
-	/* tmpnam: a usable, unique name */
-#if 0 /* BUG: src/stdio/misc.c:133-134 tmpnam builds "$TMP/tXXXXXX", which under Wine is far longer than L_tmpnam (20): strcpy overflows the caller's L_tmpnam buffer (this test crashed with rc=139) and the static-buffer form returns a truncated, unusable name */
+}
+
+/* tmpnam: a usable, unique name.
+ * BUG (live, expected to FAIL): src/stdio/misc.c:133-134 tmpnam builds
+ * "$TMP/tXXXXXX", which under Wine is far longer than L_tmpnam (20):
+ * strcpy overflows the caller's L_tmpnam buffer (segfault, rc=139) and
+ * the static-buffer form returns a truncated, unusable name.  Because it
+ * crashes, this runs in a spawned child (--tmpnam-child) so the parent's
+ * other results survive; the parent CHECKs the child's exit status. */
+static int test_tmpnam_child(void)
+{
+	FILE *f;
+	char nbuf[L_tmpnam];
+	char *nm;
+
 	nm = tmpnam(nbuf);
 	CHECK(nm == nbuf);
 	if (nm) {
@@ -908,9 +920,23 @@ static void test_tmpfile(void)
 	nm = tmpnam(0);
 	CHECK(nm != 0);
 	if (nm) CHECK(remove(nm) == 0);
-#else
-	(void)nbuf; (void)nm;
-#endif
+	fflush(stdout);
+	return fails != 0;
+}
+
+static void test_tmpnam(const char *self)
+{
+	char *argv[3];
+	int pid, status = -1;
+	argv[0] = (char *)self;
+	argv[1] = (char *)"--tmpnam-child";
+	argv[2] = NULL;
+	fflush(stdout);
+	pid = __spawn(self, argv, environ);
+	CHECK(pid > 0);
+	if (pid <= 0) return;
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
 static void test_mem_streams(void)
@@ -1047,8 +1073,10 @@ static void test_mem_streams(void)
 	free(out);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+	if (argc > 1 && !strcmp(argv[1], "--tmpnam-child")) return test_tmpnam_child();
+
 	test_printf();
 	test_scanf();
 	test_file_io();
@@ -1059,6 +1087,9 @@ int main(void)
 	CHECK(printf("") == 0);
 	CHECK(fflush(stdout) == 0);
 	CHECK(!ferror(stdout));
+
+	/* last: the child may crash, so everything above is already reported */
+	test_tmpnam(argv[0]);
 
 	if (!fails) printf("stdio: all tests passed\n");
 	return fails != 0;
