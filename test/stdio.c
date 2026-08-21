@@ -890,13 +890,11 @@ static void test_tmpfile(void)
 
 }
 
-/* tmpnam: a usable, unique name.
- * BUG (live, expected to FAIL): src/stdio/misc.c:133-134 tmpnam builds
- * "$TMP/tXXXXXX", which under Wine is far longer than L_tmpnam (20):
- * strcpy overflows the caller's L_tmpnam buffer (segfault, rc=139) and
- * the static-buffer form returns a truncated, unusable name.  Because it
- * crashes, this runs in a spawned child (--tmpnam-child) so the parent's
- * other results survive; the parent CHECKs the child's exit status. */
+/* tmpnam: a usable, unique name that fits a char[L_tmpnam] however long
+ * $TMP is (it once built "$TMP/tXXXXXX" and overflowed the caller's
+ * buffer).  Runs in a spawned child (--tmpnam-child) so a regression
+ * there cannot take the parent's other results with it; the parent
+ * CHECKs the child's exit status. */
 static int test_tmpnam_child(void)
 {
 	FILE *f;

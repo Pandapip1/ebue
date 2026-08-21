@@ -116,25 +116,22 @@ FILE *tmpfile(void)
 	return f;
 }
 
+/* Like musl: a fixed short template, so the result always fits the
+ * caller's char[L_tmpnam] no matter how long $TMP is.  The name is
+ * relative to the current directory; mkstemp creates it, which is what
+ * keeps successive names unique. */
 char *tmpnam(char *s)
 {
 	static char buf[L_tmpnam];
-	char *tmpl;
-	size_t n = strlen(tmpdir());
+	char tmpl[] = "tmpnam_XXXXXX";
 	int fd;
 
-	tmpl = malloc(n + sizeof "/tXXXXXX");
-	if (!tmpl) return 0;
-	memcpy(tmpl, tmpdir(), n);
-	memcpy(tmpl + n, "/tXXXXXX", sizeof "/tXXXXXX");
 	fd = mkstemp(tmpl);
-	if (fd < 0) { free(tmpl); return 0; }
+	if (fd < 0) return 0;
 	close(fd);
-	if (s) { strcpy(s, tmpl); free(tmpl); return s; }
-	strncpy(buf, tmpl, sizeof buf - 1);
-	buf[sizeof buf - 1] = 0;
-	free(tmpl);
-	return buf;
+	if (!s) s = buf;
+	memcpy(s, tmpl, sizeof tmpl);
+	return s;
 }
 
 char *tempnam(const char *dir, const char *pfx)
