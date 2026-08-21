@@ -39,7 +39,7 @@ pid_t waitpid(pid_t pid, int *status, int options)
 		 * all live handles.  Simple approach: find the first not-yet
 		 * reaped child; if WNOHANG, poll each; else wait on the first. */
 		int i, any = 0;
-		for (i = 0; i < CHILD_MAX_; i++) {
+		for (i = 0; i < __child_cap; i++) {
 			if (!__children[i].pid || __children[i].done) continue;
 			any = 1;
 			st = NtWaitForSingleObject(__children[i].h, 0, options & WNOHANG ? &zero : 0);
@@ -51,7 +51,7 @@ pid_t waitpid(pid_t pid, int *status, int options)
 		if (!any) { errno = ECHILD; return -1; }
 		if (options & WNOHANG) return 0;
 		/* Every remaining child is live; wait on the first live one. */
-		for (i = 0; i < CHILD_MAX_; i++)
+		for (i = 0; i < __child_cap; i++)
 			if (__children[i].pid && !__children[i].done) {
 				c = &__children[i];
 				st = NtWaitForSingleObject(c->h, 0, 0);
@@ -65,11 +65,16 @@ pid_t waitpid(pid_t pid, int *status, int options)
 	if (pid < 0) pid = -pid;   /* process groups are single processes here */
 	c = __child_find(pid);
 	if (!c) {
-		/* Not in the table.  Either it is not our child, or __spawn/fork
-		 * could not record it because the table (CHILD_MAX_) was full.
-		 * Reopen the process by pid and check that it really is ours:
-		 * its InheritedFromUniqueProcessId must be us.  waitpid(-1) and
-		 * wait() cannot see such children; they only scan the table. */
+		/* Not in the table.  Almost always that means it is simply not
+		 * our child: the table grows on demand now (children.c), so the
+		 * only way a real child misses it is an allocation failure in
+		 * __child_add, whereupon __spawn/fork close the handle.  Reopen
+		 * the process by pid and check that it really is ours: its
+		 * InheritedFromUniqueProcessId must be us.  This can only work
+		 * while the child is still running -- once it exits and nobody
+		 * holds a handle, the process object is gone and the pid cannot
+		 * be opened at all -- and waitpid(-1)/wait() cannot see such
+		 * children either, since they only scan the table. */
 		OBJECT_ATTRIBUTES oa;
 		CLIENT_ID cid;
 		HANDLE h;

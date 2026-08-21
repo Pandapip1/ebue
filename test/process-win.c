@@ -19,9 +19,12 @@
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
-/* src/internal/libc.h: CHILD_MAX_ */
+/* src/internal/libc.h: CHILD_MAX_, the static seed size of the child
+ * table.  The table grows past it, so this is not a limit any more --
+ * NCHILDREN is deliberately well beyond it so that a regression to a
+ * fixed-size table shows up as unreapable children. */
 #define CHILD_TABLE 256
-#define NOVERFLOW (CHILD_TABLE + 4)
+#define NCHILDREN (CHILD_TABLE + 64)
 
 /* Arguments that exercise every quoting rule spawn.c's append_arg
  * implements and crt1.c's split_cmdline undoes. */
@@ -319,44 +322,30 @@ static void test_exec(const char *self)
 }
 #endif
 
-/* More children than __children holds, none reaped until all exist. */
-static void test_child_table_overflow(void)
+/* More children than the child table's static seed holds, none reaped
+ * until all exist: the table has to grow, and every child stays reapable
+ * with the right status. */
+static void test_child_table_growth(void)
 {
-	static pid_t pids[NOVERFLOW];
+	static pid_t pids[NCHILDREN];
 	int i, status;
-	int untracked_echild = 0;
 
-	for (i = 0; i < NOVERFLOW; i++) {
+	for (i = 0; i < NCHILDREN; i++) {
 		pids[i] = fork_exit(i % 250 + 1);
 		CHECK(pids[i] > 0);
 		if (pids[i] <= 0) break;
 	}
 
-	for (i = 0; i < NOVERFLOW && pids[i] > 0; i++) {
+	for (i = 0; i < NCHILDREN && pids[i] > 0; i++) {
 		pid_t r;
 		status = -1;
 		errno = 0;
 		r = waitpid(pids[i], &status, 0);
-		if (i < CHILD_TABLE) {
-			CHECK(r == pids[i]);
-			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
-		} else {
-/* BUG (live, expected to FAIL): src/process/spawn.c:196 and src/process/fork.c:137 say a
-       * child that did not fit in __children "will have to be reopened"
-       * by waitpid, but src/process/wait.c:62 only consults
-       * __child_find() and answers ECHILD for it; the child can never be
-       * reaped. */
-			CHECK(r == pids[i]);
-			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
-			if (r == -1 && errno == ECHILD) untracked_echild++;
-			else if (r == pids[i]) CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
-			else CHECK(!"waitpid on an untracked child: neither reaped nor ECHILD");
-		}
+		CHECK(r == pids[i]);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == i % 250 + 1);
 	}
-	printf("overflow: %d of %d children beyond the table answered ECHILD\n",
-	       untracked_echild, NOVERFLOW - CHILD_TABLE);
 
-	/* The table is empty again (the untracked ones were never in it). */
+	/* The table is empty again. */
 	errno = 0;
 	CHECK(waitpid(-1, &status, WNOHANG) == -1);
 	CHECK(errno == ECHILD);
@@ -380,7 +369,7 @@ int main(int argc, char **argv)
 	test_exec(argv[0]);
 #endif
 	(void)argv;
-	test_child_table_overflow();
+	test_child_table_growth();
 
 	if (!fails) printf("process: all tests passed\n");
 	return fails != 0;

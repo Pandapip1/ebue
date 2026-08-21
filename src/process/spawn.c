@@ -188,9 +188,12 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	NtClose(info.Thread);
 	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;
 	if (__child_add(pid, info.Process) < 0) {
-		/* The table is full; the process still runs.  waitpid(pid)
-		 * reopens it by pid (src/process/wait.c) and verifies it is our
-		 * child; waitpid(-1)/wait() will not see it. */
+		/* The table grows on demand (src/process/children.c), so this
+		 * only happens when the heap is exhausted.  Degrade rather than
+		 * fail the spawn: the process still runs, and waitpid(pid) can
+		 * reopen it by pid while it is alive (src/process/wait.c), but
+		 * once it exits it is unreapable and waitpid(-1)/wait() never
+		 * see it. */
 		NtClose(info.Process);
 	}
 

@@ -1,10 +1,18 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * waitpid on children that overflowed the child table (CHILD_MAX_ = 256):
+ * waitpid past the static seed of the child table (CHILD_MAX_ = 256):
  * spawn 260 copies of ourselves, wait on each by pid, and check that the
- * last four -- which waitpid has to reopen by pid -- report the right
- * status too.  Uses __spawn rather than fork since Wine cannot fork.
+ * last four -- the ones that only exist because the table grew onto the
+ * heap -- report the right status too.  Uses __spawn rather than fork
+ * since Wine cannot fork.
+ *
+ * The children exit immediately rather than sleeping first.  With 260
+ * spawns ahead of the first wait they are all long gone by the time
+ * waitpid runs, so this only passes if the parent still holds a process
+ * handle for each: an exited process whose last handle was closed cannot
+ * be reopened by pid at all.  That makes it a direct test of the table
+ * keeping every handle instead of dropping the ones that did not fit.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,10 +33,7 @@ int main(int argc, char **argv)
 	pid_t pids[NCHILD];
 	int i, status;
 
-	if (argc == 3 && !strcmp(argv[1], "--child")) {
-		usleep(100000);
-		return atoi(argv[2]) % 100;
-	}
+	if (argc == 3 && !strcmp(argv[1], "--child")) return atoi(argv[2]) % 100;
 
 	for (i = 0; i < NCHILD; i++) {
 		char num[16];

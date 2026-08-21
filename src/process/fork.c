@@ -114,11 +114,14 @@ static void mark_fds_inheritable(void)
 /* Set (inherit != 0) or clear the OBJ_INHERIT attribute on every tracked
  * child-process handle.  DUPLICATE_SAME_ATTRIBUTES is deliberately not
  * used: the attribute is being changed, not copied.  The table is
- * ordinary memory, so the new handle values travel with the clone. */
+ * ordinary memory -- the static seed array or, once grown, a process-heap
+ * allocation (children.c), both of which RtlCloneUserProcess duplicates
+ * along with the rest of the address space -- so the new handle values,
+ * and the __children pointer aiming at them, travel with the clone. */
 static void mark_children_inheritable(int inherit)
 {
 	int i;
-	for (i = 0; i < CHILD_MAX_; i++) {
+	for (i = 0; i < __child_cap; i++) {
 		HANDLE dup;
 		if (!__children[i].pid || !__children[i].h) continue;
 		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __children[i].h, NtCurrentProcess(), &dup,
@@ -162,10 +165,12 @@ pid_t fork(void)
 	 * child and let it run. */
 	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;
 	if (__child_add(pid, info.Process) < 0) {
-		/* The table is full; the child still runs.  waitpid(pid) reopens
-		 * it by pid and verifies the parent (src/process/wait.c), but
-		 * waitpid(-1)/wait() will not see it -- the same tradeoff
-		 * __spawn makes. */
+		/* The table grows on demand, so this only happens when it could
+		 * not be grown -- the heap is exhausted.  Degrade rather than
+		 * fail the fork: the child still runs, and waitpid(pid) can
+		 * reopen it by pid while it is alive (src/process/wait.c), but
+		 * once it exits it is unreapable and waitpid(-1)/wait() never
+		 * see it at all -- the same tradeoff __spawn makes. */
 		NtClose(info.Process);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,

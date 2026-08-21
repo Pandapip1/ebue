@@ -99,6 +99,11 @@ int __fd_close_all_cloexec(void);
 void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from RuntimeData */
 
 /* ---- children ---------------------------------------------------------- */
+/* The size of the statically allocated part of the child table, and the
+ * value sysconf(_SC_CHILD_MAX) advertises.  It is not a limit: the table
+ * grows onto the heap past this point rather than dropping a child's
+ * process handle, which would make the child unreapable for good (see
+ * src/process/children.c). */
 #define CHILD_MAX_ 256
 struct __child {
 	int pid;
@@ -106,7 +111,8 @@ struct __child {
 	int done;               /* reaped status is available */
 	int status;
 };
-extern struct __child __children[CHILD_MAX_];
+extern struct __child *__children;   /* __child_cap entries, pid==0 is free */
+extern int __child_cap;
 int __child_add(int pid, HANDLE);
 struct __child *__child_find(int pid);
 void __child_remove(struct __child *);
