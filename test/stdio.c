@@ -194,8 +194,22 @@ static void test_printf(void)
 	FMT("3.1416", "%.4f", 3.14159);
 	FMT("3", "%.0f", 3.14159);
 	FMT("3.", "%#.0f", 3.14159);
-/* BUG (live, expected to FAIL): src/stdio/printf.c:96-97 the one-digit first pass rounds 99.7 up to 1e2, overestimating decexp, so the real pass rounds to 3 digits and prints "99" */
+	/* rounding that carries into a new leading place */
 	FMT("100", "%.0f", 99.7);
+	FMT("100", "%.0f", 99.8);
+	FMT("100", "%.0f", 99.5);
+	FMT("1000", "%.0f", 999.6);
+	FMT("10", "%.0f", 9.5);
+	FMT("10.0", "%.1f", 9.99);
+	FMT("0.10", "%.2f", 0.0999);
+	FMT("1000000000000000000000", "%.0f", 1e21);
+	FMT("1.000e+06", "%.3e", 9.9999e5);
+	FMT("1e+01", "%.0e", 9.5);
+	/* exact ties round to even, as musl/glibc do */
+	FMT("0", "%.0f", 0.5);
+	FMT("2", "%.0f", 1.5);
+	FMT("2", "%.0f", 2.5);
+	FMT("0.001", "%.3f", 0.0005);
 	FMT("0.001", "%.3f", 0.001);
 	FMT("0.000", "%.3f", 0.0001);
 	FMT("0.001", "%.3f", 0.0006);

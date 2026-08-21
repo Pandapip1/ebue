@@ -52,28 +52,54 @@ static void pad(FILE *f, char c, size_t n, long *count, int *bad)
 	}
 }
 
-/* Round v (>0, finite) to ndigits significant decimal digits.  digits[]
- * receives them left to right; *decexp is the power of ten of the
- * leftmost one (value == 0.digits * 10^(decexp+1), i.e. digits[0] is
- * the 10^decexp place). */
-static void dtoa(double v, int ndigits, char *digits, int *decexp)
+/* Round x (>= 0) to an integer.  A half rounds to even, like musl/glibc's
+ * printf, but only when x is the caller's value unscaled (exact != 0):
+ * after multiplying by a power of ten a half may be the product of an
+ * inexact value (0.0005 * 1000), which the exact decimal expansion would
+ * round up. */
+static unsigned long long round_int(double x, int exact)
 {
-	int e = 0, i;
-	double scale = 1.0, scaled;
-	unsigned long long iv, maxv = 1;
+	unsigned long long iv = (unsigned long long)x;
+	double frac = x - (double)iv;
+	if (frac > 0.5 || (frac == 0.5 && (!exact || (iv & 1)))) iv++;
+	return iv;
+}
 
-	if (ndigits < 1) ndigits = 1;
-	if (ndigits > 34) ndigits = 34;
+/* Decimal exponent of v (>0, finite) before any rounding: the power of
+ * ten of its leading digit.  *m receives v scaled into [1, 10). */
+static int decexp_of(double v, double *m)
+{
+	int e = 0;
 	if (v != 0) {
 		while (v >= 10.0) { v /= 10.0; e++; }
 		while (v < 1.0) { v *= 10.0; e--; }
 	}
-	for (i = 1; i < ndigits; i++) scale *= 10.0;
-	scaled = v * scale + 0.5;
-	iv = (unsigned long long)scaled;
-	for (i = 0; i < ndigits; i++) maxv *= 10;
+	*m = v;
+	return e;
+}
+
+/* Round v (>0, finite) to ndigits significant decimal digits.  digits[]
+ * receives them left to right; *decexp is the power of ten of the
+ * leftmost one (value == 0.digits * 10^(decexp+1), i.e. digits[0] is
+ * the 10^decexp place).  Only the first 19 digits are computed (all a
+ * double can carry, and all an unsigned long long can hold); the rest
+ * are zero. */
+static void dtoa(double v, int ndigits, char *digits, int *decexp)
+{
+	int e, i, nd;
+	double m, scale = 1.0;
+	unsigned long long iv, maxv = 1;
+
+	if (ndigits < 1) ndigits = 1;
+	if (ndigits > 34) ndigits = 34;
+	nd = ndigits > 19 ? 19 : ndigits;
+	e = decexp_of(v, &m);
+	for (i = 1; i < nd; i++) scale *= 10.0;
+	iv = round_int(m * scale, e == 0 && nd == 1);
+	for (i = 0; i < nd; i++) maxv *= 10;
 	if (iv >= maxv) { iv /= 10; e++; }
-	for (i = ndigits - 1; i >= 0; i--) { digits[i] = (char)('0' + (int)(iv % 10)); iv /= 10; }
+	for (i = nd - 1; i >= 0; i--) { digits[i] = (char)('0' + (int)(iv % 10)); iv /= 10; }
+	for (i = nd; i < ndigits; i++) digits[i] = '0';
 	*decexp = e;
 }
 
@@ -93,7 +119,13 @@ static int fmt_f(char *buf, double v, int prec, int alt)
 		for (i = 0; i < prec; i++) buf[n++] = '0';
 		return n;
 	}
-	dtoa(v, 1, digits, &decexp);   /* cheap first pass just to learn decexp */
+	/* Use the unrounded exponent to choose how many significant digits
+	 * to ask for: rounding to a single digit (99.7 -> 1e2) would
+	 * overestimate it and then truncate instead of round.  If the real
+	 * rounding carries into a new place (99.7 at ".0f" -> "10" e2),
+	 * the digits are all zero past the leading 1 and the zero padding
+	 * below produces the right result. */
+	{ double m; decexp = decexp_of(v, &m); }
 	ndigits = decexp + 1 + prec;
 	if (ndigits < 1) {
 		/* v is small enough relative to prec that rounding to
@@ -105,9 +137,15 @@ static int fmt_f(char *buf, double v, int prec, int alt)
 		unsigned long long r;
 		char tmp[40]; int tn = 0;
 		for (i = 0; i < prec; i++) scale *= 10.0;
-		r = (unsigned long long)(v * scale + 0.5);
+		r = round_int(v * scale, prec == 0);
+		if (prec == 0) {
+			/* v < 1 rounded to an integer: 0 or 1 */
+			buf[n++] = (char)('0' + (int)r);
+			if (alt) buf[n++] = '.';
+			return n;
+		}
 		buf[n++] = '0';
-		if (prec > 0 || alt) buf[n++] = '.';
+		buf[n++] = '.';
 		if (r == 0) tmp[tn++] = '0';
 		while (r) { tmp[tn++] = (char)('0' + (int)(r % 10)); r /= 10; }
 		while (tn < prec) tmp[tn++] = '0';
