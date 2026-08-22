@@ -128,6 +128,16 @@ PPEB NTAPI RtlGetCurrentPeb(void) { return &shim_peb; }
  * the parts of __libc_start_main() that ntlibc code depends on have to
  * happen in a constructor instead.  ASan's own initialisation runs at
  * priority 1, ahead of this.
+ *
+ * A constructor that declares (argc, argv, envp) parameters is handed the
+ * process's real ones -- a glibc-specific extension of the .init_array
+ * calling convention (the same values __libc_start_main gives main()),
+ * good only for a native Linux build, which is all this file is for.  It
+ * exists here for one reason: telling an execve()'d child apart from a
+ * process the test harness started directly, and recovering what the
+ * *real* argv/envp said despite __argv/environ below being reset to a
+ * placeholder on every start.  See the two uses below and in
+ * RtlCreateUserProcess.
  */
 char **__argv;
 int __argc;
@@ -135,10 +145,18 @@ char *__progname;
 char *__progname_full;
 static char *shim_argv[2] = { (char *)"ntlibc-native", 0 };
 
+/* RtlCreateUserProcess appends this to the envp it hands the real execve,
+ * so that the child's constructor -- which otherwise has no way to tell
+ * "started fresh by the test harness" from "execve'd by this file" --
+ * knows to rebuild environ from its real, inherited envp instead of
+ * resetting it to empty.  Never left in the environment __ntshim_init()
+ * builds: filtered out below. */
+#define XCHILD_MARK "_NTLIBC_XCHILD=1"
 
-static void vfs_init(void);   /* the simulated file system, below */
+static void vfs_init(void);            /* the simulated file system, below */
+static void materialize_argv0(const char *host);  /* below, once nodes exist */
 
-__attribute__((constructor(200))) void __ntshim_init(void)
+__attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char **envp)
 {
 	vfs_init();
 	shim_peb.ProcessHeap = (PVOID)(long)0x1000;
@@ -157,11 +175,45 @@ __attribute__((constructor(200))) void __ntshim_init(void)
 	__argv = shim_argv;
 	__progname = shim_argv[0];
 	__progname_full = shim_argv[0];
-	/* setenv()/putenv() realloc environ, so it has to start out on the
-	 * heap the same way crt1.c's build_environ() leaves it. */
-	environ = __interceptor_malloc(sizeof(char *));
-	environ[0] = 0;
+
+	/* setenv()/putenv() realloc environ and free() its old entries, so
+	 * every entry has to be on the heap the same way crt1.c's
+	 * build_environ() leaves it -- entries out of the real envp cannot be
+	 * used as-is, they have to be copied in.  A process this file itself
+	 * execve'd (RtlCreateUserProcess below) marked its envp so that case
+	 * is told apart from the test harness's own, arbitrary environment:
+	 * without that, every native test would see the harness's real
+	 * environment instead of the empty one "layout" above promises. */
+	{
+		int n = 0, i, j = 0, xchild = 0;
+		if (envp) for (n = 0; envp[n]; n++)
+			if (!strcmp(envp[n], XCHILD_MARK)) xchild = 1;
+		if (xchild) {
+			environ = __interceptor_malloc(sizeof(char *) * (size_t)n);
+			for (i = 0; i < n; i++) {
+				if (!strcmp(envp[i], XCHILD_MARK)) continue;
+				environ[j] = __interceptor_malloc(strlen(envp[i]) + 1);
+				if (environ[j]) strcpy(environ[j], envp[i]);
+				j++;
+			}
+			environ[j] = 0;
+		} else {
+			environ = __interceptor_malloc(sizeof(char *));
+			environ[0] = 0;
+		}
+	}
 	__fd_init();
+
+	/* One more thing a real execve() gives a child and a constructor
+	 * cannot fabricate: a file at its own on-disk path.  Without this, a
+	 * test that opens argv[0] -- test/exec.c's failed-exec/cloexec check,
+	 * which does this in the *original* process, not even a spawned one
+	 * -- finds nothing, because the volume above starts with only C:\work
+	 * and C:\tmp.  This is the one deliberate exception to "nothing else
+	 * in this file touches the host file system" (see the file-system
+	 * comment below): it only ever reads, never shadows a path a test
+	 * itself populates, and only for this one path. */
+	if (argc > 0 && argv) materialize_argv0(argv[0]);
 
 	/* Nothing calls ntlibc's exit() in a native build -- glibc's start-up
 	 * calls main() and glibc's exit() ends it -- so __stdio_exit() never
@@ -452,6 +504,83 @@ static void dir_remove(struct vnode *dir, struct vent *victim)
 			node_release(n);
 			return;
 		}
+	}
+}
+
+#define SYS_openat 257
+#define SYS_close  3
+
+/* Put a copy of a real host file into the volume, at the same place
+ * src/internal/path.c's dos_from_posix() would put it: an absolute path
+ * with no drive letter is rooted at the current drive, so "/a/b/c" and
+ * "\??\C:\a\b\c" name the same node.  Called from __ntshim_init() with
+ * argv[0], the only host path this file has any business mirroring (see
+ * the call site).  Read-only and additive -- an existing entry at the
+ * target name, file or directory, is left alone rather than replaced, so
+ * this can never clobber something a test created first. */
+static void materialize_argv0(const char *host)
+{
+	struct vnode *dir;
+	const char *p;
+	unsigned char *data = 0;
+	size_t cap = 0, len = 0;
+	long fd;
+
+	if (!host || host[0] != '/') return;   /* relative argv[0]: not used here */
+	dir = vroot;
+	p = host + 1;
+	while (*p) {
+		const char *start = p;
+		WCHAR wname[512];
+		size_t clen, wn, i;
+		int last;
+
+		while (*p && *p != '/') p++;
+		clen = (size_t)(p - start);
+		if (*p) p++;
+		if (!clen) continue;
+		last = (*p == 0);
+		wn = clen < 512 ? clen : 511;
+		for (i = 0; i < wn; i++) wname[i] = (WCHAR)(unsigned char)start[i];
+
+		if (!last) {
+			struct vent *e = dir_find(dir, wname, wn);
+			if (e && e->node->isdir) { dir = e->node; continue; }
+			if (e) return;                 /* a file sits where a dir should */
+			{
+				struct vnode *nd = node_new(1);
+				if (!nd || !dir_add(dir, wname, wn, nd)) return;
+				dir = nd;
+			}
+			continue;
+		}
+
+		if (dir_find(dir, wname, wn)) return;   /* already there: leave it */
+
+		fd = syscall(SYS_openat, -100 /*AT_FDCWD*/, host, 0 /*O_RDONLY*/, 0);
+		if (fd < 0) return;
+		for (;;) {
+			unsigned char buf[65536];
+			long n = syscall(SYS_read, fd, buf, sizeof buf);
+			if (n <= 0) break;
+			if (len + (size_t)n > cap) {
+				size_t want = (len + (size_t)n) * 2 + 4096;
+				unsigned char *nd = __interceptor_realloc(data, want);
+				if (!nd) break;
+				data = nd; cap = want;
+			}
+			memcpy(data + len, buf, (size_t)n);
+			len += (size_t)n;
+		}
+		syscall(SYS_close, fd);
+		{
+			struct vnode *nf = node_new(0);
+			if (!nf || !dir_add(dir, wname, wn, nf)) { vfree(data); return; }
+			nf->data = data;
+			nf->size = (long long)len;
+			nf->cap = cap;
+		}
+		return;
 	}
 }
 
@@ -1792,15 +1921,28 @@ NTSTATUS NTAPI NtDelayExecution(BOOLEAN alertable, LARGE_INTEGER *t)
  *   - The image path is an NT path (\??\C:\...) which is turned back into
  *     a host path.  The simulated volume's root doubles as the host root
  *     for this one purpose, because the image has to be a file the host
- *     kernel can actually execute.  Nothing else in this file touches the
- *     host file system.
+ *     kernel can actually execute.
  *   - NT creates the process suspended and __spawn resumes it;
  *     fork+execve starts running at once, so NtResumeThread is a no-op.
  *   - Handle inheritance is the host's: an inherited descriptor is one
  *     the child gets because fork copies the descriptor table, not
  *     because OBJ_INHERIT was set.  The simulated file system does not
- *     cross the fork -- the child gets its own, empty but for the
- *     starting layout -- so a child cannot see a file its parent made.
+ *     cross a real execve -- it is ordinary heap memory, and execve
+ *     replaces the address space -- so the child gets its own, empty but
+ *     for the starting layout, and cannot see a file its parent made
+ *     there or a handle onto one (only descriptors 0-2, real host fds,
+ *     survive the trip, the same as they would for any host program).
+ *     __ntshim_init() below closes the one gap that actually matters to
+ *     test/exec.c: it re-materialises a real copy of argv[0] into the
+ *     freshly started volume (materialize_argv0(), above the node-tree
+ *     helpers), so a process -- exec'd or not -- can always open its own
+ *     on-disk path, and it rebuilds environ from the *real* envp execve()
+ *     was given when RtlCreateUserProcess marked that envp as this file's
+ *     own (XCHILD_MARK), rather than resetting environ to empty as a
+ *     freshly started process otherwise does.  Nothing here shares the
+ *     rest of the volume, or handles beyond 0-2, across the exec: a
+ *     child cannot see a file its parent created elsewhere, or a
+ *     descriptor its parent opened onto one.  No test needs it to.
  *   - A child killed by a host signal is reported with the exit code this
  *     library itself uses for a signal death, __NT_SIGNAL_EXIT(sig), so
  *     that waitpid() decodes it the way it would on NT.
@@ -2007,10 +2149,11 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
                                     RTL_USER_PROCESS_INFORMATION *info)
 {
 	char *host;
-	char **argv, **envp;
+	char **argv, **envp, **xenvp = 0;
 	struct ofile *f;
 	NTSTATUS st;
 	long pid;
+	int n;
 	(void)attrs; (void)psd; (void)tsd; (void)parent; (void)inherit; (void)debug; (void)token;
 
 	if (!image || !pp || !info) return STATUS_INVALID_PARAMETER;
@@ -2032,10 +2175,23 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	f->kind = OF_PROC;
 	f->exitcode = STATUS_PENDING;
 
+	/* envp plus the marker __ntshim_init() looks for -- see XCHILD_MARK's
+	 * definition -- so the child knows to rebuild environ from what
+	 * execve() actually gave it rather than resetting it to empty. xenvp
+	 * wraps envp's entries in a new array; the strings themselves are
+	 * still envp's to free below. */
+	for (n = 0; envp[n]; n++) ;
+	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 2));
+	if (xenvp) {
+		memcpy(xenvp, envp, sizeof(char *) * (size_t)n);
+		xenvp[n] = (char *)XCHILD_MARK;
+		xenvp[n + 1] = 0;
+	}
+
 	pid = syscall(SYS_fork);
 	if (pid < 0) { vfree(f); st = STATUS_INSUFFICIENT_RESOURCES; goto out; }
 	if (pid == 0) {
-		syscall(SYS_execve, host, argv, envp);
+		syscall(SYS_execve, host, argv, xenvp ? xenvp : envp);
 		syscall(SYS_exit_group, 127);
 	}
 	f->pid = (int)pid;
@@ -2053,6 +2209,7 @@ out:
 	vfree(host);
 	free_strv(argv);
 	free_strv(envp);
+	vfree(xenvp);           /* the wrapper array only; its strings are envp's */
 	return st;
 }
 

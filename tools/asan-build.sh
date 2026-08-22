@@ -178,8 +178,6 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 not_native()
 {
 	case $1 in
-	exec)
-		echo "the simulated file system does not cross execve (fuzz/ntstubs.c): a child cannot see its parent's files or inherited descriptors" ;;
 	waitpid-overflow)
 		echo "a host wait status carries 8 bits of exit code, too few for the 0xE0DE00xx a signal death uses" ;;
 	fork-win|fork-handles-win|process-win)
