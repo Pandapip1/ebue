@@ -215,7 +215,7 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 not_native()
 {
 	case $1 in
-	waitpid-overflow)
+	waitpid-overflow|posix-signal)
 		echo "a host wait status carries 8 bits of exit code, too few for the 0xE0DE00xx a signal death uses" ;;
 	fork-win|fork-handles-win|process-win)
 		echo "needs NT process cloning: RtlCloneUserProcess is a stub" ;;

@@ -47,7 +47,12 @@ static int sig_status(int sig)
 	return (sig & 0x7f) | core;
 }
 
-static int encode_status(int exitcode)
+/* Exposed (not static) purely so test/posix-signal.c can drive the
+ * exit-code -> wait-status mapping directly, without spawning a real
+ * process for every boundary case -- same reasoning as
+ * __errno_from_status() in src/internal/errno.c.  Declared in libc.h,
+ * not include/: this is not part of the public API. */
+int __wait_encode_status(int exitcode)
 {
 	unsigned code = (unsigned)exitcode;
 
@@ -184,7 +189,7 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
 		if (st == STATUS_TIMEOUT) { NtClose(h); return 0; }
 		if (!NT_SUCCESS(st)) { NtClose(h); return __set_errno_status(st); }
 		st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
-		if (status) *status = NT_SUCCESS(st) ? encode_status((int)pbi.ExitStatus) : 0;
+		if (status) *status = NT_SUCCESS(st) ? __wait_encode_status((int)pbi.ExitStatus) : 0;
 		if (ru) fill_child_rusage(h, ru);
 		else { struct rusage tmp; fill_child_rusage(h, &tmp); }
 		NtClose(h);
@@ -202,7 +207,7 @@ reap:
 	 * left as it is (a retry may still reach it) and the caller gets the
 	 * real error rather than a fabricated "exited 0". */
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	c->status = encode_status((int)pbi.ExitStatus);
+	c->status = __wait_encode_status((int)pbi.ExitStatus);
 	c->done = 1;
 	if (status) *status = c->status;
 	pid = c->pid;

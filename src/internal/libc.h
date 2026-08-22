@@ -213,6 +213,11 @@ _Noreturn void __nt_exit(int);
 void __signal_init(void);
 int __raise_internal(int);
 
+/* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/
+ * wait4() (src/process/wait.c); exposed non-static so tests can drive its
+ * boundary cases directly instead of only through a spawned process. */
+int __wait_encode_status(int);
+
 /* ---- misc -------------------------------------------------------------- */
 int __is_wow64(void);
 unsigned __rand_next(void);
