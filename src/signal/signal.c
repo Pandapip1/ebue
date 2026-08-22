@@ -83,8 +83,15 @@ int __raise_internal(int sig)
 		__stdio_exit();
 		__nt_exit(__NT_SIGNAL_EXIT(sig));
 	}
-	if (sig != SIGILL && sig != SIGTRAP) handlers[sig] = handlers[sig];  /* BSD semantics: stays installed */
-	h(sig);
+	/* else: h is a real handler.  Written as an else rather than a
+	 * fallthrough because __nt_exit is _Noreturn (libc.h) but cppcheck
+	 * does not track that, and so reads the fallthrough as h(sig) being
+	 * reachable with h == SIG_DFL, which is NULL.
+	 *
+	 * BSD semantics: the disposition stays installed across delivery, so
+	 * there is deliberately nothing to reset here -- unlike System V,
+	 * which would restore SIG_DFL before calling the handler. */
+	else h(sig);
 	return 0;
 }
 

@@ -67,9 +67,10 @@ int scandir(const char *path, struct dirent ***res,
 	if (errno) goto fail;
 	closedir(dp);
 
-	/* NOLINTNEXTLINE(bugprone-sizeof-expression) -- list is struct dirent **,
-	 * so *list is a pointer and sizeof *list is deliberately a pointer size:
-	 * the array being sorted holds pointers, not structs. */
+	/* list is struct dirent **, so *list is a pointer and sizeof *list is
+	 * deliberately a pointer size: the array being sorted holds pointers,
+	 * not structs. */
+	/* NOLINTNEXTLINE(bugprone-sizeof-expression) */
 	if (compar) qsort_r(list, n, sizeof *list, scandir_cmp, (void *)compar);
 	*res = list;
 	return (int)n;
