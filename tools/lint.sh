@@ -34,6 +34,12 @@
 #                         and NT-type narrowings this code is written around.
 #                         Worth a periodic read, not worth a gate.
 #   LINT_STRICT=0         always exit 0 (report only)
+#   LINT_ALLOW_MISSING=1  skip a stage whose tool is absent instead of
+#                         failing.  Off by default: a stage that cannot
+#                         run is a failure, because a silent skip makes a
+#                         local 'no findings' mean less than CI's -- which
+#                         is how the shellcheck, cppcheck and clang-tidy
+#                         backlogs each went unseen for a while.
 #
 # Exit status is 1 if any stage produced findings, so this can be used as a
 # gate once the current backlog is dealt with.  It does not pass today; see
@@ -50,6 +56,8 @@ cd "$srcdir" || exit 1
 builddir=obj/lint
 : "${LINT_CONVERSION:=0}"
 : "${LINT_STRICT:=1}"
+: "${LINT_ALLOW_MISSING:=0}"
+missing=0
 
 # Every arch/ subdirectory except the generic fallback header tree.
 if [ -z "${LINT_ARCHS:-}" ]; then
@@ -64,6 +72,27 @@ fi
 findings=0
 note() { printf '%s\n' "$*"; }
 hdr() { printf '\n=== %s ===\n' "$*"; }
+
+# A stage whose tool is absent is a *failure*, not a pass.  Silently
+# degrading is how three stages went untriaged for weeks: shellcheck and
+# cppcheck simply never ran here, and the analyzer quietly fell back to
+# `clang --analyze`, which runs none of the bugprone-*/cert-* checks --
+# so a local "no findings" meant "the checks you care about did not
+# run".  CI has all of them, so a green local run has to mean the same
+# thing CI means.  LINT_ALLOW_MISSING=1 restores the old behaviour for
+# anyone who genuinely cannot install one.
+require_tool() {
+	command -v "$1" >/dev/null 2>&1 && return 0
+	if [ "$LINT_ALLOW_MISSING" = 1 ]; then
+		note "SKIP: $1 not installed (LINT_ALLOW_MISSING=1)"
+		return 1
+	fi
+	note "MISSING: $1 is not installed, so this stage cannot run."
+	note "  install it, or set LINT_ALLOW_MISSING=1 to skip it and accept"
+	note "  that this run checks less than CI does."
+	missing=1
+	return 1
+}
 
 #
 # The warning set.  -Wall -Wextra plus the checks that actually mean
@@ -182,8 +211,9 @@ stage_warn() {
 
 stage_analyze() {
 	hdr "static analyzer"
-	command -v clang >/dev/null 2>&1 || { note "SKIP: clang not installed"; return 0; }
+	require_tool clang || return $missing
 	any=0
+	require_tool clang-tidy || [ "$LINT_ALLOW_MISSING" = 1 ] || return 1
 	tidy=$(command -v clang-tidy 2>/dev/null || true)
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || continue
@@ -217,7 +247,7 @@ stage_analyze() {
 
 stage_cppcheck() {
 	hdr "cppcheck"
-	command -v cppcheck >/dev/null 2>&1 || { note "SKIP: cppcheck not installed"; return 0; }
+	require_tool cppcheck || return $missing
 	any=0
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || continue
@@ -239,7 +269,7 @@ stage_cppcheck() {
 
 stage_shell() {
 	hdr "shellcheck"
-	command -v shellcheck >/dev/null 2>&1 || { note "SKIP: shellcheck not installed"; return 0; }
+	require_tool shellcheck || return $missing
 	out=$builddir/shellcheck.log
 	mkdir -p "$builddir"
 	# No -s: these scripts are a deliberate mix of #!/bin/sh (configure,
@@ -269,6 +299,11 @@ for s in $stages; do
 done
 
 hdr "summary"
+if [ "$missing" -ne 0 ]; then
+	note "one or more stages could not run because a tool is missing."
+	note "this run checked less than CI does, so it cannot report success."
+	exit 2
+fi
 if [ "$findings" -eq 0 ]; then
 	note "no findings"
 	exit 0
