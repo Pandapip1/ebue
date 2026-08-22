@@ -214,6 +214,13 @@ static void test_printf(void)
 	FMT("0.001", "%.3f", 0.001);
 	FMT("0.000", "%.3f", 0.0001);
 	FMT("0.001", "%.3f", 0.0006);
+	/* every digit of the value's exact expansion, not a 17-digit
+	 * approximation with zeros after it */
+	FMT("0.1000000000000000055511151231257827021181583404541015625", "%.55f", 0.1);
+	FMT("0.20000000000000001110223024625156540423631668090820312500", "%.56f", 0.2);
+	FMT("3.3333333333333331482961625624739099293947219848632812500e-01", "%.55e", 1.0 / 3.0);
+	FMT("0.100000000000000005551115123125782702", "%.36g", 0.1);
+	FMT("99999999999999991611392", "%.0f", 1e23);
 	FMT("123456789.000000", "%f", 123456789.0);
 	FMT("10000000000", "%.0f", 1e10);
 	FMT("-2.5", "%.1f", -2.5);
@@ -306,10 +313,10 @@ static void test_printf(void)
 /* Conversions far larger than any fixed buffer.  C99 7.19.6.1 puts no
  * bound on a precision, and DBL_MAX at "%f" alone runs to 316 bytes, so
  * none of these may be formatted through a buffer sized from a guess.
- * The lengths and return values below are what glibc produces; the
- * digits past the 19 significant ones this printf computes are zeros
- * where glibc has the exact expansion, so only the cases whose exact
- * expansion is short are compared in full. */
+ * The lengths, return values and digits below are all what glibc
+ * produces: this printf's expansion is exact, so every digit of a
+ * value's terminating decimal expansion has to match, and only the
+ * places past the end of that expansion are zeros. */
 static char hbuf[4096], hexp[4096];
 
 /* "<head><n zeros><tail>", the shape every case here has */
@@ -364,10 +371,10 @@ static void test_printf_huge(void)
 	/* DBL_MAX has 309 integer digits: "%f" of it is 316 bytes */
 	HUGE_ENDS(316, "17976931348623", ".000000", "%f", DBL_MAX);
 	HUGE_ENDS(317, "-17976931348623", ".000000", "%f", -DBL_MAX);
-	HUGE_ENDS(309, "17976931348623", "0000", "%.0f", DBL_MAX);
+	HUGE_ENDS(309, "17976931348623", "4026184124858368", "%.0f", DBL_MAX);
 	HUGE_ENDS(910, "17976931348623", "0000", "%.600f", DBL_MAX);
 	HUGE_ENDS(330, "              1797693134", ".000000", "%330f", DBL_MAX);
-	HUGE_ENDS(330, "+000000000000000000001797", "0000", "%+0330.0f", DBL_MAX);
+	HUGE_ENDS(330, "+000000000000000000001797", "4026184124858368", "%+0330.0f", DBL_MAX);
 	/* the short conversions of the same value still fit */
 	FMT("1.797693e+308", "%e", DBL_MAX);
 	FMT("1.79769e+308", "%g", DBL_MAX);
@@ -402,9 +409,9 @@ static void test_printf_huge(void)
 	/* denormals: their leading zeros reach the 323rd place */
 	HUGE_FMT("0.", 100, "", "%.100f", 5e-324);
 	HUGE_ENDS(332, "0.00000000000000000000", "4940656", "%.330f", 5e-324);
-	HUGE_ENDS(352, "0.00000000000000000000", "0000", "%.350f", 5e-324);
+	HUGE_ENDS(352, "0.00000000000000000000", "1246544176568793", "%.350f", 5e-324);
 	HUGE_ENDS(337, "4.94065645841246", "e-324", "%.330e", 5e-324);
-	HUGE_ENDS(332, "0.00000000000000000000", "0000", "%.330f", DBL_MIN);
+	HUGE_ENDS(332, "0.00000000000000000000", "8585072013830902", "%.330f", DBL_MIN);
 	FMT("0", "%.0f", 5e-324);
 	FMT("0.000000", "%f", DBL_MIN);
 

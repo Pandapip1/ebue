@@ -7,15 +7,15 @@
  * fmemopen's (see mem.c and __file_write in buf.c) but built on the
  * stack, so truncation and buffer-filling logic is not written twice.
  *
- * Floating-point conversions (%f/%e/%g and their capitals) are formatted
- * with plain double arithmetic -- multiply/divide to normalise, round
- * with +0.5, peel off decimal digits -- rather than an exact
- * arbitrary-precision decimal conversion such as glibc's.  That is
- * simpler and, for every ordinary magnitude, indistinguishable from
- * correct; it can be a unit or two off in the last digit for values
- * that sit exactly on a rounding boundary, and loses precision well
- * before 10^18.  %a/%A are exact instead: a double's significand is
- * already 13 hex digits, so they are read straight out of the bits.
+ * Floating-point conversions (%f/%e/%g and their capitals) are exact.
+ * A finite double is m * 2^e for integers m < 2^53 and e, so its value
+ * is a binary rational and its decimal expansion terminates: dec_exact
+ * below computes every digit of it with one big-integer multiply, and
+ * dec_round then rounds that expansion to the requested number of
+ * places, to nearest with ties to even.  Every digit printed is
+ * therefore the digit glibc and musl print.  %a/%A are exact for the
+ * same reason and more directly: a double's significand is already 13
+ * hex digits, so they are read straight out of the bits.
  * Positional (%n$) arguments are not implemented; nothing in this tree
  * uses them.
  *
@@ -37,19 +37,20 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
 
 /* A precision is an int and C99 7.19.6.1 puts no bound on it, so no
  * buffer may be sized from one.  PREC_MAX is the largest precision
- * fmt_f/fmt_e ever write out in full: dtoa yields at most 34 digits and
- * pads the rest with zeros, and the leading zeros of even the smallest
- * denormal stop at the 323rd fractional place, so every place past
- * PREC_MAX is a zero no matter what the value is.  emit_float formats
- * with the precision clamped to PREC_MAX and streams the dropped zeros
- * straight out, which makes the body length independent of the
- * caller's precision. */
-#define PREC_MAX 512
-/* Worst-case body: 309 integer digits (DBL_MAX at %f), a point, and up
- * to PREC_MAX+4 fractional digits (%g hands fmt_f a precision of
- * P-1-decexp, and decexp >= -4 on that path), or a mantissa plus a
- * five-byte exponent -- 826 bytes, rounded up. */
-#define BODYMAX 1024
+ * fmt_f/fmt_e ever write out in full: the exact expansion of a double
+ * runs to at most 767 significant digits and its last fractional place
+ * is the 1074th (the smallest subnormal is 2^-1074), so every place
+ * past PREC_MAX is a zero no matter what the value is.  emit_float
+ * formats with the precision clamped to PREC_MAX and streams the
+ * dropped zeros straight out, which makes the body length independent
+ * of the caller's precision. */
+#define PREC_MAX 1080
+/* Worst-case body: 309 integer digits (DBL_MAX at %f), a point and
+ * PREC_MAX fractional digits -- 1390 bytes, rounded up.  The other
+ * shapes are smaller: %e is one digit, a point, PREC_MAX more and a
+ * five-byte exponent, and %g hands fmt_f a precision of P-1-decexp,
+ * which makes its body PREC_MAX+1 whatever decexp is. */
+#define BODYMAX 1536
 
 /* Write n bytes to f, tracking the logical (untruncated) total in
  * *count.  A short write is a real error unless f is a fixed memory
@@ -74,123 +75,169 @@ static void pad(FILE *f, char c, size_t n, long *count, int *bad)
 	}
 }
 
-/* Round x (>= 0) to an integer.  A half rounds to even, like musl/glibc's
- * printf, but only when x is the caller's value unscaled (exact != 0):
- * after multiplying by a power of ten a half may be the product of an
- * inexact value (0.0005 * 1000), which the exact decimal expansion would
- * round up. */
-static unsigned long long round_int(double x, int exact)
-{
-	unsigned long long iv = (unsigned long long)x;
-	double frac = x - (double)iv;
-	if (frac > 0.5 || (frac == 0.5 && (!exact || (iv & 1)))) iv++;
-	return iv;
-}
+/* ---- exact decimal expansion of a double ---------------------------- */
 
-/* Decimal exponent of v (>0, finite) before any rounding: the power of
- * ten of its leading digit.  *m receives v scaled into [1, 10). */
-static int decexp_of(double v, double *m)
+/* Big non-negative integers in base 10^9, least significant limb first,
+ * so that reading the decimal digits back out is a matter of splitting
+ * limbs rather than dividing a binary big integer down.  Only mul_small
+ * is needed: nothing here ever adds, subtracts or divides.
+ *
+ * DEC_LIMBS is chosen so nothing can overflow it.  The widest value
+ * formed below is (2^53-1) * 5^1074, the numerator of the smallest
+ * subnormals, which has 767 digits and so 86 limbs; the widest of the
+ * other case, 2^1024, has 309 digits.  EXACT_DIG is the matching bound
+ * on the digits themselves. */
+#define DEC_LIMBS 88
+#define EXACT_DIG 768
+
+/* a = a * m, for m small enough that limb * m + carry stays inside a
+ * uint64 (every m used here is below 2^30). */
+static int mul_small(uint32_t *a, int n, uint32_t m)
 {
-	int e = 0;
-	if (v != 0) {
-		while (v >= 10.0) { v /= 10.0; e++; }
-		while (v < 1.0) { v *= 10.0; e--; }
+	uint64_t carry = 0;
+	int i;
+
+	for (i = 0; i < n; i++) {
+		uint64_t t = (uint64_t)a[i] * m + carry;
+		a[i] = (uint32_t)(t % 1000000000u);
+		carry = t / 1000000000u;
 	}
-	*m = v;
-	return e;
+	/* cannot run past DEC_LIMBS; do not corrupt memory if it does */
+	while (carry && n < DEC_LIMBS) {
+		a[n++] = (uint32_t)(carry % 1000000000u);
+		carry /= 1000000000u;
+	}
+	return n;
 }
 
-/* Round v (>0, finite) to ndigits significant decimal digits.  digits[]
- * receives them left to right; *decexp is the power of ten of the
- * leftmost one (value == 0.digits * 10^(decexp+1), i.e. digits[0] is
- * the 10^decexp place).  Only the first 19 digits are computed (all a
- * double can carry, and all an unsigned long long can hold); the rest
- * are zero. */
-static void dtoa(double v, int ndigits, char *digits, int *decexp)
-{
-	int e, i, nd;
-	double m, scale = 1.0;
-	unsigned long long iv, maxv = 1;
+/* The exact decimal expansion of a finite v >= 0: d[0..nd) are its
+ * significant digits, and d[0] is the 10^decexp place, so the value is
+ * 0.d * 10^(decexp+1) with every place past d[nd-1] a zero.  nd is
+ * never more than EXACT_DIG, and d[0] is '0' only for v == 0. */
+struct dec {
+	int nd;
+	int decexp;
+	char d[EXACT_DIG];
+};
 
-	if (ndigits < 1) ndigits = 1;
-	if (ndigits > 34) ndigits = 34;
-	nd = ndigits > 19 ? 19 : ndigits;
-	e = decexp_of(v, &m);
-	for (i = 1; i < nd; i++) scale *= 10.0;
-	iv = round_int(m * scale, e == 0 && nd == 1);
-	for (i = 0; i < nd; i++) maxv *= 10;
-	if (iv >= maxv) { iv /= 10; e++; }
-	for (i = nd - 1; i >= 0; i--) { digits[i] = (char)('0' + (int)(iv % 10)); iv /= 10; }
-	for (i = nd; i < ndigits; i++) digits[i] = '0';
-	*decexp = e;
+static void dec_exact(double v, struct dec *D)
+{
+	union { double f; uint64_t i; } u;
+	uint32_t bn[DEC_LIMBS];
+	uint64_t m;
+	int e2, bl = 0, k, i, j, nfrac = 0;
+	char *p;
+
+	u.f = v;
+	e2 = (int)(u.i >> 52 & 0x7ff);
+	m = u.i & 0xfffffffffffffULL;
+	if (e2) { m |= (uint64_t)1 << 52; e2 -= 1075; }
+	else e2 = -1074;   /* subnormal: no implicit bit, the same scale */
+
+	if (!m) { D->nd = 1; D->decexp = 0; D->d[0] = '0'; return; }
+	while (m) { bn[bl++] = (uint32_t)(m % 1000000000u); m /= 1000000000u; }
+
+	/* v = m * 2^e2.  For e2 >= 0 that is the integer m << e2; for
+	 * e2 < 0 it is m * 5^-e2 with the point -e2 places from the right,
+	 * since m / 2^k == m * 5^k / 10^k.  Either way one big integer
+	 * carries every digit, so no division is needed to produce them. */
+	while (e2 > 0) {
+		k = e2 > 29 ? 29 : e2;
+		bl = mul_small(bn, bl, 1u << k);
+		e2 -= k;
+	}
+	if (e2 < 0) {
+		nfrac = -e2;
+		for (k = nfrac; k > 0; ) {
+			if (k >= 12) { bl = mul_small(bn, bl, 244140625u); k -= 12; }  /* 5^12 */
+			else {
+				uint32_t f = 1;
+				while (k--) f *= 5;
+				bl = mul_small(bn, bl, f);
+			}
+		}
+	}
+
+	p = D->d;
+	{
+		uint32_t hi = bn[bl - 1];
+		char t[10];
+		i = 0;
+		do { t[i++] = (char)('0' + (int)(hi % 10)); hi /= 10; } while (hi);
+		while (i) *p++ = t[--i];
+	}
+	for (i = bl - 2; i >= 0; i--) {
+		uint32_t w = bn[i];
+		for (j = 8; j >= 0; j--) { p[j] = (char)('0' + (int)(w % 10)); w /= 10; }
+		p += 9;
+	}
+	D->nd = (int)(p - D->d);
+	D->decexp = D->nd - 1 - nfrac;
+	/* trailing zeros are implicit anyway, and dropping them keeps the
+	 * "is the discarded tail nonzero" test in dec_round short */
+	while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
+}
+
+/* Round D to want >= 1 significant digits, to nearest with ties to
+ * even.  Asking for more digits than the expansion has is a no-op: the
+ * rest are zeros already, and every reader here treats an index past nd
+ * as a zero.  A carry out of the leading digit bumps decexp, leaving
+ * "1" followed by zeros. */
+static void dec_round(struct dec *D, int want)
+{
+	int i, up;
+
+	if (want >= D->nd) return;
+	up = D->d[want] > '5';
+	if (D->d[want] == '5') {
+		for (i = want + 1; i < D->nd; i++) if (D->d[i] != '0') { up = 1; break; }
+		if (!up) up = (D->d[want - 1] - '0') & 1;   /* a tie goes to even */
+	}
+	D->nd = want;
+	if (!up) {
+		while (D->nd > 1 && D->d[D->nd - 1] == '0') D->nd--;
+		return;
+	}
+	for (i = want - 1; i >= 0; i--) {
+		if (D->d[i] != '9') { D->d[i]++; D->nd = i + 1; return; }
+		D->d[i] = '0';
+	}
+	D->d[0] = '1';
+	D->nd = 1;
+	D->decexp++;
 }
 
 /* %f-style body (no sign): pos digits before the point, then a point
- * and prec digits after it, taken from a decexp+1+prec-digit rounding
- * of v (clamped to at least one digit, which undersells precision only
- * when the whole request is below the least significant digit shown --
- * see the file comment). */
-static int fmt_f(char *buf, double v, int prec, int alt)
+ * and prec digits after it, from D rounded to decexp+1+prec significant
+ * digits.  When that count is not positive the whole value sits below
+ * the last place shown, and the result is a zero there -- or a one, if
+ * the value reaches half of it. */
+static int fmt_f(char *buf, struct dec *D, int prec, int alt)
 {
-	char digits[40];
-	int decexp, ndigits, pos, i, n = 0;
+	int want = D->decexp + 1 + prec, pos, i, n = 0;
 
-	if (v == 0) {
-		buf[n++] = '0';
-		if (prec > 0 || alt) buf[n++] = '.';
-		for (i = 0; i < prec; i++) buf[n++] = '0';
-		return n;
+	if (want >= 1) dec_round(D, want);
+	else {
+		/* want == 0 puts the leading digit exactly one place below the
+		 * last one shown, so the value rounds up to a one there when
+		 * that digit is past 5, or is 5 with anything nonzero after
+		 * it; an exact half ties to the even zero.  want < 0 puts it
+		 * further down still, which always rounds to zero. */
+		D->d[0] = (want == 0 && (D->d[0] > '5' || (D->d[0] == '5' && D->nd > 1)))
+		          ? '1' : '0';
+		D->nd = 1;
+		D->decexp = -prec;
 	}
-	/* Use the unrounded exponent to choose how many significant digits
-	 * to ask for: rounding to a single digit (99.7 -> 1e2) would
-	 * overestimate it and then truncate instead of round.  If the real
-	 * rounding carries into a new place (99.7 at ".0f" -> "10" e2),
-	 * the digits are all zero past the leading 1 and the zero padding
-	 * below produces the right result. */
-	{ double m; decexp = decexp_of(v, &m); }
-	ndigits = decexp + 1 + prec;
-	if (ndigits < 1) {
-		/* v is small enough relative to prec that rounding to
-		 * decexp+1+prec significant digits would clamp away the digit
-		 * that decides how the last shown place rounds (e.g. 0.0005 at
-		 * ".3f"): round the whole value to prec fractional digits
-		 * directly instead.  v * 10^prec is below 1 on this path, so
-		 * scaling by one factor of ten at a time stays in range,
-		 * where forming 10^prec first would not: prec reaches 323
-		 * here for a denormal, and 1e323 is an infinity. */
-		double x = v;
-		unsigned long long r;
-		char tmp[24]; int tn = 0;
-		for (i = 0; i < prec; i++) x *= 10.0;
-		r = round_int(x, prec == 0);
-		if (prec == 0) {
-			/* v < 1 rounded to an integer: 0 or 1 */
-			buf[n++] = (char)('0' + (int)r);
-			if (alt) buf[n++] = '.';
-			return n;
-		}
-		/* r is 0 or 1 -- v is below half of the last place shown --
-		 * but bound the loop anyway rather than trust the estimate. */
-		if (r == 0) tmp[tn++] = '0';
-		while (r && tn < (int)sizeof tmp) { tmp[tn++] = (char)('0' + (int)(r % 10)); r /= 10; }
-		buf[n++] = '0';
-		buf[n++] = '.';
-		for (i = tn; i < prec; i++) buf[n++] = '0';
-		for (i = tn - 1; i >= 0; i--) buf[n++] = tmp[i];
-		return n;
-	}
-	if (ndigits > 34) ndigits = 34;
-	dtoa(v, ndigits, digits, &decexp);
-	pos = decexp + 1;
+	pos = D->decexp + 1;
 	if (pos <= 0) {
 		buf[n++] = '0';
 		if (prec > 0 || alt) buf[n++] = '.';
 		for (i = 0; i < -pos && i < prec; i++) buf[n++] = '0';
-		for (i = 0; i < prec + pos; i++) buf[n++] = i < ndigits ? digits[i] : '0';
+		for (i = 0; i < prec + pos; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
 	} else {
-		for (i = 0; i < pos; i++) buf[n++] = i < ndigits ? digits[i] : '0';
+		for (i = 0; i < pos; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
 		if (prec > 0 || alt) buf[n++] = '.';
-		for (i = 0; i < prec; i++) buf[n++] = pos + i < ndigits ? digits[pos + i] : '0';
+		for (i = 0; i < prec; i++) buf[n++] = pos + i < D->nd ? D->d[pos + i] : '0';
 	}
 	return n;
 }
@@ -198,26 +245,21 @@ static int fmt_f(char *buf, double v, int prec, int alt)
 /* %e-style body (no sign).  *epos receives the offset of the 'e', the
  * point at which emit_float splices in any zeros a clamped precision
  * left out of the mantissa. */
-static int fmt_e(char *buf, double v, int prec, int alt, int upper, int *epos)
+static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *epos)
 {
-	char digits[40];
-	int decexp, i, n = 0;
-	int ndigits = prec + 1;
-	if (ndigits > 34) ndigits = 34;
+	int i, n = 0;
 
-	if (v == 0) { decexp = 0; memset(digits, '0', sizeof digits); }
-	else dtoa(v, ndigits, digits, &decexp);
-
-	buf[n++] = digits[0];
+	dec_round(D, prec + 1);
+	buf[n++] = D->d[0];
 	if (prec > 0 || alt) {
 		buf[n++] = '.';
-		for (i = 1; i <= prec; i++) buf[n++] = i < ndigits ? digits[i] : '0';
+		for (i = 1; i <= prec; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
 	}
 	*epos = n;
 	buf[n++] = upper ? 'E' : 'e';
-	buf[n++] = decexp < 0 ? '-' : '+';
+	buf[n++] = D->decexp < 0 ? '-' : '+';
 	{
-		int ax = decexp < 0 ? -decexp : decexp;
+		int ax = D->decexp < 0 ? -D->decexp : D->decexp;
 		char eb[8]; int ei = 0;
 		if (ax == 0) eb[ei++] = '0';
 		while (ax) { eb[ei++] = (char)('0' + ax % 10); ax /= 10; }
@@ -312,6 +354,7 @@ static void out_body(FILE *f, const char *body, int n, int zpos, long zeros, lon
 static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags, int width, long *count, int *bad)
 {
 	char body[BODYMAX];
+	struct dec D;
 	char pfx[3];
 	int n, neg = signbit(v);
 	int upper = conv == 'F' || conv == 'E' || conv == 'G' || conv == 'A';
@@ -324,7 +367,11 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 	int total, special = 0;
 
 	v = fabs(v);
-	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; if (!neg) sign = 0; special = 1; }
+	/* A NaN keeps whatever sign the flags ask for: C99 7.19.6.1p6 says a
+	 * signed conversion under '+' always begins with a sign, and p8's
+	 * "[-]nan" only makes the minus conditional.  glibc and musl both
+	 * print "+nan". */
+	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; special = 1; }
 	else if (isinf(v)) { memcpy(body, upper ? "INF" : "inf", 3); n = 3; special = 1; }
 	else if (av == 'a') {
 		int pu = prec > PREC_MAX ? PREC_MAX : prec;
@@ -335,23 +382,27 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 		int p = prec < 0 ? 6 : prec;
 		int pu = p > PREC_MAX ? PREC_MAX : p;
 		zeros = (long)p - pu;
-		if (av == 'f') { n = fmt_f(body, v, pu, alt); zpos = n; }
-		else n = fmt_e(body, v, pu, alt, upper, &zpos);
+		dec_exact(v, &D);
+		if (av == 'f') { n = fmt_f(body, &D, pu, alt); zpos = n; }
+		else n = fmt_e(body, &D, pu, alt, upper, &zpos);
 	} else { /* g/G */
 		int P = prec < 0 ? 6 : (prec == 0 ? 1 : prec);
 		int PU = P > PREC_MAX ? PREC_MAX : P;
-		char tmp[40]; int decexp;
-		if (v == 0) decexp = 0; else dtoa(v, PU, tmp, &decexp);
+		dec_exact(v, &D);
+		/* the form is chosen from the rounded value's exponent (C99
+		 * 7.19.6.1p8), so round first; fmt_e/fmt_f then round to the
+		 * same width again, which is a no-op */
+		dec_round(&D, PU);
 		/* without '#' the zeros a clamped precision drops are exactly
 		 * the ones strip_g would take off again, so they never go out */
 		zeros = alt ? (long)P - PU : 0;
 		/* decexp is at most 308, so the form is the same whether the
 		 * unclamped or the clamped precision picks it */
-		if (decexp < -4 || decexp >= P) {
-			n = fmt_e(body, v, PU - 1, alt, upper, &zpos);
+		if (D.decexp < -4 || D.decexp >= P) {
+			n = fmt_e(body, &D, PU - 1, alt, upper, &zpos);
 			if (!alt) n = strip_g(body, n, 1);
 		} else {
-			n = fmt_f(body, v, PU - 1 - decexp, alt);
+			n = fmt_f(body, &D, PU - 1 - D.decexp, alt);
 			zpos = n;
 			if (!alt) n = strip_g(body, n, 0);
 		}
