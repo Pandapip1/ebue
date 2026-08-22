@@ -260,6 +260,7 @@ for s in $stages; do
 	analyze)  stage_analyze  || findings=1 ;;
 	cppcheck) stage_cppcheck || findings=1 ;;
 	shell)    stage_shell    || findings=1 ;;
+	ushort)   tools/lint-ushort.sh || findings=1 ;;
 	*) note "unknown stage: $s"; exit 2 ;;
 	esac
 done
