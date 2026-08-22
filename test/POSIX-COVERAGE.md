@@ -364,9 +364,9 @@ coverage: `test/stdio.c` (~430 checks).
 | ftell / ftello | position accounts for buffered-ahead/behind bytes on update streams | covered | test/stdio.c |
 | rewind / fgetpos / fsetpos | round-trip; rewind clears the error indicator too | covered | test/stdio.c |
 | fflush | `fflush(NULL)` flushes every open stream | covered | test/stdio.c |
-| fflush | on a readable stream with an underlying fd: discards not-yet-reread ungetc() bytes and resyncs the fd offset to the stream position | **BUG (fenced)** — `src/stdio/buf.c`'s `__fflush_locked` returns immediately for any non-writable stream (`if (!f->writable \|\| !f->wpos) { f->wpos = 0; return 0; }`), still true in current source; still open | test/posix-stdio.c `test_fflush_read_stream` |
+| fflush | on a readable stream with an underlying fd: discards not-yet-reread ungetc() bytes and resyncs the fd offset to the stream position | covered — was a BUG (`__fflush_locked` short-circuited for any non-writable stream); **fixed in 99474ee** | test/posix-stdio.c `test_fflush_read_stream` |
 | setvbuf | valid before any other operation; returns 0 | covered | test/posix-stdio.c |
-| setvbuf | returns non-zero for an invalid `type` | **BUG (fenced)** — `setvbuf()` (`src/stdio/buf.c`) only special-cases `_IONBF`; any other value (valid or not) is accepted and 0 is returned unconditionally, still true in current source; still open | test/posix-stdio.c |
+| setvbuf | returns non-zero for an invalid `type` | covered — was a BUG (any `type` accepted, 0 returned unconditionally); **fixed in 99474ee**: only `_IOFBF`/`_IOLBF`/`_IONBF` accepted, else EINVAL | test/posix-stdio.c |
 | setbuf / setbuffer / setlinebuf | equivalence to a specific setvbuf call | covered | test/posix-stdio.c |
 | feof / ferror / clearerr | independent indicators; clearerr clears both at once | covered | test/stdio.c, test/posix-stdio.c |
 | printf family | conversion table, flags/width/precision, return value = bytes transmitted | covered | test/stdio.c, test/posix-stdio.c |
@@ -380,11 +380,13 @@ coverage: `test/stdio.c` (~430 checks).
 | fmemopen / open_memstream | buffer growth, NUL-termination, mode parsing | covered | test/stdio.c |
 | popen / pclose | no reachable POSIX shell semantics beyond src/stdio/misc.c's documented cmd.exe substitution | N/A (platform has no POSIX shell; divergence documented in src/stdio/misc.c) | -- |
 
-Both bugs found this session are still open (verified against current
-`src/stdio/buf.c`): `__fflush_locked` still short-circuits for
-non-writable streams, and `setvbuf()` still never validates `type`. Fix
-belongs in `src/stdio/buf.c`; left unfixed per the "never edit an
-assertion to match the implementation" rule.
+Both bugs found by this suite have since been fixed in `src/stdio/buf.c`
+(commit 99474ee) and their assertions un-fenced unmodified:
+`__fflush_locked` now discards pending `ungetc()` pushback and seeks the
+fd back by the read-ahead distance, and `setvbuf()` rejects any `type`
+outside `_IOFBF`/`_IOLBF`/`_IONBF` with EINVAL. `_IOLBF` was confirmed to
+be a real, distinct mode here (`src/stdio/rw.c` flushes on `'\n'`), not a
+synonym for full buffering.
 
 ### Not reached (stdio.h)
 
@@ -454,9 +456,9 @@ entries below.
 | kill | EPERM (differing real/effective uid) | N/A — not reliably triggerable under Wine without a second user | -- |
 | killpg | BSD extension, `killpg(pg,sig) == kill(pg,sig)` verbatim | N/A (not POSIX.1-2017 base) | -- |
 | sigaction | act==NULL queries without changing; EINVAL for SIGKILL/SIGSTOP | covered | test/posix-signal.c |
-| sigaction | SA_RESETHAND: disposition reset to SIG_DFL on entry to the handler | **BUG (fenced)** — `sigaction()` (`src/signal/signal.c`) only ever copies `act->sa_handler`, never reads `sa_flags`; confirmed still true in current source (no `sa_flags`/`sa_mask` reference anywhere in that file); still open | test/posix-signal.c `test_sa_resethand` |
-| sigaction | implicit self-mask on entry (signal blocked against re-entering its own handler unless SA_NODEFER) | **BUG (fenced)** — same root cause as above; still open | test/posix-signal.c `test_sigaction_implicit_mask` |
-| sigaction | sa_mask (blocking a *different* signal for the handler's duration) | **BUG, not separately tested** — same root cause (`sa_mask` is never read either); still open | -- |
+| sigaction | SA_RESETHAND: disposition reset to SIG_DFL on entry to the handler | covered — was a BUG (`sigaction()` only copied `sa_handler`); **fixed in 99474ee** via per-signal `act_flags[]` read by `__raise_internal()` | test/posix-signal.c `test_sa_resethand` |
+| sigaction | implicit self-mask on entry (signal blocked against re-entering its own handler unless SA_NODEFER) | covered — same root cause; **fixed in 99474ee** (SA_NODEFER honoured) | test/posix-signal.c `test_sigaction_implicit_mask` |
+| sigaction | sa_mask (blocking a *different* signal for the handler's duration) | covered — same root cause; **fixed in 99474ee** via per-signal `act_mask[]` applied around the handler call | test/posix-signal.c |
 | sigaction | SA_RESTART | N/A — no blocking call is ever interrupted by an asynchronously-delivered signal on this platform, so there is nothing to restart | -- |
 | sigemptyset / sigfillset / sigaddset / sigdelset / sigismember | return values, EINVAL for invalid signo | covered | test/posix-signal.c |
 | sigprocmask | SIG_BLOCK/SIG_UNBLOCK/SIG_SETMASK semantics; EINVAL for bad `how`; set==NULL leaves mask unchanged; SIGKILL/SIGSTOP unblockable without error; blocked signal becomes pending, delivered on unblock | covered | test/misc.c, test/posix-signal.c |
@@ -470,7 +472,7 @@ entries below.
 | psignal / psiginfo | not implemented anywhere in `src/`/`include/` | N/A (not implemented) | -- |
 | wait | any child, blocks until one changes state | covered | test/misc.c, test/waitpid-overflow.c |
 | waitpid | pid==-1/0 (any child — one implicit process group here), pid>0 (exactly that child), WNOHANG, ECHILD | covered | test/waitpid-overflow.c, test/posix-signal.c |
-| waitpid | EINVAL for an invalid `options` value | **BUG (fenced)** — `do_waitpid()` (`src/process/wait.c`) only ever tests `options & WNOHANG`, never validates the rest of the bits; confirmed still true in current source; still open | test/posix-signal.c `test_waitpid_einval_options` |
+| waitpid | EINVAL for an invalid `options` value | covered — was a BUG (no validation of the other bits); **fixed in 99474ee**: rejects anything outside `WNOHANG\|WUNTRACED\|WCONTINUED`, uniformly for wait/waitpid/wait3/wait4 | test/posix-signal.c `test_waitpid_einval_options` |
 | waitpid | EINTR (signal caught while waiting) | N/A — no asynchronous delivery exists to interrupt a blocking wait | -- |
 | wait3 / wait4 | BSD/historical, not POSIX.1-2017 base | N/A (not POSIX.1-2017 base) | test/posix-signal.c (sanity only) |
 | WIFEXITED / WEXITSTATUS / WIFSIGNALED / WTERMSIG | correct and mutually exclusive across all 256 exit codes and signal deaths | covered | test/waitpid-overflow.c, test/posix-signal.c |
@@ -478,12 +480,16 @@ entries below.
 | WIFSTOPPED / WSTOPSIG | never true / nothing to decode (no job control on this platform) | covered / N/A | test/posix-signal.c |
 | 0xE0DE00xx signal-death encoding never collides with a real exit code | covered — the exit-codes-129-192 regression this ledger's git history mentions (commit 607c289) is specifically re-checked | test/posix-signal.c |
 
-Two of the three related `sigaction()` bugs are still open (still no
-`sa_flags`/`sa_mask` handling in `src/signal/signal.c`), and the
-`waitpid()` EINVAL-for-bad-`options` bug is still open too (still no
-options validation in `src/process/wait.c`). None of these three were
-touched by the umask/rename/time bugfix commits, which were scoped to
-different subsystems; verified directly against current source.
+All three of these bugs have since been fixed (commit 99474ee) and their
+assertions un-fenced unmodified. `src/signal/signal.c` now keeps
+per-signal `act_mask[]`/`act_flags[]` that `__raise_internal()` applies
+around the handler call, making SA_RESETHAND, SA_NODEFER, the implicit
+self-mask and `sa_mask` all live -- these are exactly the clauses that
+can mean anything given synchronous-only delivery. `SA_RESTART`,
+`SA_ONSTACK`, `SA_SIGINFO`, `SA_NOCLDSTOP`, `SA_NOCLDWAIT` are stored so
+they round-trip through the old-disposition output, but are documented
+no-ops rather than silently dropped. `src/process/wait.c` now validates
+`options` for wait/waitpid/wait3/wait4.
 
 ### Not reached (signal.h group)
 
