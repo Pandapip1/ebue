@@ -63,7 +63,7 @@ if [ "${1:-}" = "--repro" ]; then
 fi
 
 time=${1:-60}
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then shift; fi
 harnesses=${*:-"strtod printf scanf utf"}
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then

@@ -254,12 +254,21 @@ stage_cppcheck() {
 	hdr "cppcheck"
 	require_tool cppcheck || return $missing
 	any=0
+	# cppcheck 2.13 (what Ubuntu 24.04 ships, and so what CI runs) rejects
+	# the comment and blank lines that document why each suppression exists
+	# -- "Failed to add suppression. No id." -- while 2.21 accepts them.
+	# Keep the documentation in the file and hand cppcheck a stripped copy,
+	# so the same tree passes on both.
+	suppr=$builddir/cppcheck-suppressions.stripped
+	mkdir -p "$builddir"
+	sed -e 's/[[:space:]]*#.*//' -e '/^[[:space:]]*$/d' \
+		tools/cppcheck-suppressions.txt > "$suppr"
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || continue
 		out=$builddir/$arch.cppcheck.log
 		# shellcheck disable=SC2046,SC2086
 		cppcheck --quiet --enable=warning,portability --std=c99 --force \
-			--inline-suppr --suppressions-list=tools/cppcheck-suppressions.txt \
+			--inline-suppr --suppressions-list="$suppr" \
 			--error-exitcode=0 \
 			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL \
 			-Iarch/"$arch" -Iarch/generic -I"$builddir/$arch/include" \
