@@ -23,6 +23,12 @@ static int fails;
 
 extern char **environ;
 
+/* Internal: spawn a program as a child, return its pid (see
+ * src/process/spawn.c).  Needed for the quick_exit() child-process test
+ * below; declared locally the same way test/posix-alloc.c does, rather
+ * than widening include/. */
+int __spawn(const char *path, char *const argv[], char *const envp[]);
+
 /* ---- strtol.html: EINVAL for an unsupported base, errno untouched on
  * success, no-conversion endptr rule for a non-numeric-but-nonempty base. ---- */
 static void test_strtol_base(void)
@@ -365,6 +371,58 @@ static void test_mkostemp(void)
 	}
 }
 
+/* ---- mkstemp.html DESCRIPTION: "The file shall be readable and
+ * writable only by the creating process's user ID" -- glibc/BSD sharpen
+ * this to exactly S_IRUSR|S_IWUSR (0600), which is what
+ * src/stdlib/mktemp.c actually requests: mkostemps() calls
+ * open(tmpl, flags|O_CREAT|O_EXCL|O_RDWR, 0600).
+ *
+ * UNIMPL: NT genuinely has the security-descriptor machinery to make
+ * "owner-only, no group/other access" real (a DACL granting access only
+ * to the creating SID), so this is implementable on this platform, just
+ * not attempted here -- src/stat/stat.c's header comment documents the
+ * actual design: "Mode bits are made up the way every Unix layer on
+ * Windows makes them up: a directory is 0755, a file 0644 (0444 when
+ * read-only)".  mode_from_attrs() hard-codes `S_IFREG | (exe ? 0755 :
+ * 0644)` before clearing the write bits for FILE_ATTRIBUTE_READONLY --
+ * group/other read bits are unconditional and completely independent of
+ * whatever mode open()/mkstemp() was asked to create the file with, so
+ * stat() can never report 0600 for any file, no matter what was
+ * requested at creation.  Confirmed live under Wine: mkstemp() followed
+ * by fstat() reports mode 0644, not 0600, for a file created with the
+ * literal open(..., 0600) call above.  This is not a Wine quirk in the
+ * usual "differs from real NT" sense flagged elsewhere in this suite --
+ * the 0644 is a compile-time constant in stat.c, so it would read
+ * exactly the same way on real Windows NT (Wine and this codebase share
+ * the same synthesis logic; nothing here queries the NT security
+ * descriptor at all) -- but flagged as a risk in the ledger because a
+ * fix would need to be verified against real ACL behaviour, which only
+ * a real NT box (not Wine) could confirm. */
+static void test_mkstemp_permission_bits(void)
+{
+#if 0 /* UNIMPL: mkstemp.html DESCRIPTION -- file created with mode
+       * S_IRUSR|S_IWUSR only (0600); src/stat/stat.c's mode synthesis
+       * (mode_from_attrs()) hard-codes 0644 for every non-executable
+       * regular file regardless of the mode given to open(), so this
+       * can never observe anything but 0644 until stat()/open() are
+       * taught to read/write a real NT DACL. */
+	char t[] = "mkperm-XXXXXX";
+	int fd = mkstemp(t);
+	struct stat st;
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(fstat(fd, &st) == 0);
+		CHECK((st.st_mode & 0777) == (S_IRUSR | S_IWUSR));
+		close(fd);
+		unlink(t);
+	}
+#endif
+	printf("note: mkstemp() permission bits (S_IRUSR|S_IWUSR only) not "
+	       "checked live -- ntlibc's stat() always synthesizes 0644 for "
+	       "a non-executable regular file (src/stat/stat.c), so the "
+	       "assertion above is fenced UNIMPL rather than run\n");
+}
+
 /* ---- realpath.html: caller-supplied (non-NULL) resolved_name buffer. ---- */
 static void test_realpath_buf(void)
 {
@@ -410,15 +468,59 @@ static void test_system(void)
 	st = system("exit 0");
 	CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
 
-	/* "If a shell could not be executed ... the value returned by
-	 * system() shall be as if the command interpreter terminated
-	 * using exit(127)."  Not independently triggerable here (cmd.exe
-	 * itself is what we depend on to exist), so instead check that a
-	 * command cmd.exe itself cannot find comes back through *its* own
-	 * 1-exit-code convention, which is a sanity check on the
-	 * status-decoding path rather than this specific POSIX clause. */
+	/* sanity check on the status-decoding path itself (distinct from
+	 * the exit(127) clause below): an ordinary nonzero exit still comes
+	 * back through system()'s own wait-status convention correctly. */
 	st = system("exit 1");
 	CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 1);
+
+	/* "If a shell could not be executed ... the value returned by
+	 * system() shall be as if the command interpreter terminated using
+	 * exit(127)."  This *is* independently triggerable, contrary to
+	 * what the ledger previously assumed: point $ComSpec at a file that
+	 * passes find_shell()'s own access(path, X_OK) check (which, per
+	 * src/stat/stat.c, requires a name ending in .exe/.com/.bat/.cmd/
+	 * .sh -- Windows has no real execute-permission bit, so ntlibc
+	 * derives X_OK from the filename suffix) but is not a valid PE
+	 * image, so the shell "cannot be executed" once ntlibc actually
+	 * tries to launch it.
+	 *
+	 * BUG: src/stdlib/system.c's find_shell() finds this file (it
+	 * passes the access() check), but __spawn() then fails outright
+	 * (NT process creation is atomic: an invalid image never produces
+	 * a process at all, unlike POSIX's fork()-then-exec() where the
+	 * child already exists when exec() discovers the image is bad).
+	 * system() takes the `pid < 0` branch and returns -1 with errno set
+	 * (confirmed live under Wine: errno comes back ENOEXEC), not a
+	 * WIFEXITED status with WEXITSTATUS()==127 as this clause requires.
+	 * A conforming fix would have system() synthesize a (127<<8)-shaped
+	 * status when __spawn() itself fails, the same way a real
+	 * fork()+execve() failure is turned into exit(127) by other libcs'
+	 * system() implementations. */
+	{
+		char t[] = "sysbad-XXXXXX.exe";
+		int fd = mkstemps(t, 4);
+		CHECK(fd >= 0);
+		if (fd >= 0) {
+			CHECK(write(fd, "not a valid PE image\n", 22) == 22);
+			CHECK(close(fd) == 0);
+			CHECK(setenv("ComSpec", t, 1) == 0);
+#if 0 /* BUG: system.html RETURN VALUE -- "the value returned by system()
+       * shall be as if the command interpreter terminated using
+       * exit(127)" when the shell cannot be executed.  Live result is
+       * system()==-1/errno==ENOEXEC instead of a WIFEXITED/127 status;
+       * see the comment above. */
+			st = system("exit 0");
+			CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 127);
+#endif
+			/* what actually happens today, pinned so a future fix to
+			 * the BUG above is forced to update this too */
+			errno = 0;
+			CHECK(system("exit 0") == -1);
+			unsetenv("ComSpec");
+			unlink(t);
+		}
+	}
 }
 
 /* ---- a64l.html / l64a.html: radix-64 digit mapping and the
@@ -454,6 +556,120 @@ static void test_a64l(void)
 	}
 }
 
+/* ================ quick_exit / at_quick_exit ================
+ *
+ * Not POSIX.1-2017 pages -- both
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/quick_exit.html
+ * and .../at_quick_exit.html return 404; quick_exit/at_quick_exit are a
+ * C11 addition (ISO/IEC 9899:2011, N1570 7.22.4.3 and 7.22.4.7) that
+ * <stdlib.h> happens to also declare here.  Cited against N1570 instead.
+ *
+ * Needs a real child process observed from the parent, the same way
+ * test/posix-alloc.c's exit()/_Exit()/abort() tests do: fork() needs
+ * RtlCloneUserProcess (unavailable under stock Wine), so this re-execs
+ * itself via __spawn(), with argv[1] selecting which child behaviour to
+ * run. */
+static int qe_spawn_self(const char *self, const char *flag, int *status)
+{
+	char *argv[3];
+	int pid;
+	argv[0] = (char *)self;
+	argv[1] = (char *)flag;
+	argv[2] = 0;
+	pid = __spawn(self, argv, environ);
+	if (pid < 0) return -1;
+	if (waitpid(pid, status, 0) != pid) return -1;
+	return 0;
+}
+
+/* N1570 7.22.4.3p3 (at_quick_exit): "The implementation shall support
+ * the registration of at least 32 functions."  src/exit/exit.c's
+ * `qhandlers[32]` (checked via `nqhandlers >= 32` before storing)
+ * provides exactly that minimum -- unlike atexit's ATEXIT_MAX=128, a
+ * 33rd registration here is expected to fail; that is conforming (the
+ * standard says "at least 32", not "unlimited"), just worth pinning as
+ * this implementation's actual capacity. */
+#define N_QE_MIN 32
+
+static int qe_order[N_QE_MIN];
+static int qe_norder;
+static int qe_atexit_ran;
+
+/* N1570 7.22.4.7p2: "No functions registered by the atexit function ...
+ * are called [by quick_exit]." -- registered in the child alongside the
+ * at_quick_exit handlers below; if quick_exit() incorrectly invoked it,
+ * qe_atexit_ran would be set before qe_fn_0 (the last at_quick_exit
+ * handler to run, since they run LIFO) checks it. */
+static void qe_atexit_marker(void) { qe_atexit_ran = 1; }
+/* target for the 33rd (expected-to-fail) at_quick_exit() registration;
+ * must never itself run since it's never expected to be registered. */
+static void qe_extra_marker(void) { _Exit(89); }
+
+#define QE_FN(n) static void qe_fn_##n(void) { qe_order[qe_norder++] = n; }
+QE_FN(1) QE_FN(2) QE_FN(3) QE_FN(4) QE_FN(5) QE_FN(6) QE_FN(7) QE_FN(8)
+QE_FN(9) QE_FN(10) QE_FN(11) QE_FN(12) QE_FN(13) QE_FN(14) QE_FN(15)
+QE_FN(16) QE_FN(17) QE_FN(18) QE_FN(19) QE_FN(20) QE_FN(21) QE_FN(22)
+QE_FN(23) QE_FN(24) QE_FN(25) QE_FN(26) QE_FN(27) QE_FN(28) QE_FN(29)
+QE_FN(30) QE_FN(31)
+
+/* qe_fn_0 was registered *first*, so per 7.22.4.7p3 ("in the reverse
+ * order of their registration") it is the *last* at_quick_exit handler
+ * to run -- the same place posix-alloc.c's atexit_fn_0 sits for atexit,
+ * and for the same reason: nothing after quick_exit()'s handler loop
+ * ever returns to main(), so the last handler to run must itself decide
+ * pass/fail and terminate the process with a status the parent can
+ * read back. */
+static void qe_fn_0(void)
+{
+	int i, ok;
+	qe_order[qe_norder++] = 0;
+	ok = (qe_norder == N_QE_MIN) && !qe_atexit_ran;
+	for (i = 0; ok && i < N_QE_MIN; i++)
+		if (qe_order[i] != N_QE_MIN - 1 - i) ok = 0;
+	_Exit(ok ? 77 : 78);
+}
+
+static void (*const qe_fns[N_QE_MIN])(void) = {
+	qe_fn_0, qe_fn_1, qe_fn_2, qe_fn_3, qe_fn_4, qe_fn_5, qe_fn_6,
+	qe_fn_7, qe_fn_8, qe_fn_9, qe_fn_10, qe_fn_11, qe_fn_12, qe_fn_13,
+	qe_fn_14, qe_fn_15, qe_fn_16, qe_fn_17, qe_fn_18, qe_fn_19, qe_fn_20,
+	qe_fn_21, qe_fn_22, qe_fn_23, qe_fn_24, qe_fn_25, qe_fn_26, qe_fn_27,
+	qe_fn_28, qe_fn_29, qe_fn_30, qe_fn_31,
+};
+
+/* child side: run entirely inside main() below (argv[1]=="--posix-stdlib-quickexit"). */
+static _Noreturn void run_quickexit_child(void)
+{
+	int i;
+
+	atexit(qe_atexit_marker);
+	for (i = 0; i < N_QE_MIN; i++) {
+		if (at_quick_exit(qe_fns[i]) != 0) _Exit(79); /* the guaranteed-32 must all succeed */
+	}
+	/* 33rd: this implementation's fixed-size qhandlers[32] is now full,
+	 * so this registration is expected to fail (see N_QE_MIN comment
+	 * above) -- not itself a spec requirement, just this
+	 * implementation's actual, pinned behaviour. */
+	if (at_quick_exit(qe_extra_marker) == 0) _Exit(80);
+	quick_exit(55); /* N1570 7.22.4.7p4: control passes to _Exit(status) */
+	_Exit(81); /* unreachable if quick_exit() truly never returns (p5) */
+}
+
+static void test_quick_exit(const char *self)
+{
+	int status;
+
+	if (qe_spawn_self(self, "--posix-stdlib-quickexit", &status) < 0) {
+		printf("note: cannot spawn \"%s\"; quick_exit() child test skipped\n", self);
+		return;
+	}
+	/* qe_fn_0 encodes "everything checked out" as exit 77, any other
+	 * detected failure (order wrong, atexit ran, a guaranteed
+	 * registration failed, an extra one unexpectedly succeeded, or
+	 * quick_exit() returned) as a distinct nonzero code. */
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 77);
+}
+
 /* ---- getsubopt.html: keylistp must not be modified by the call. ---- */
 static void test_getsubopt_keylist(void)
 {
@@ -472,8 +688,11 @@ static void test_getsubopt_keylist(void)
 	CHECK(subopts != 0 && *subopts == 0);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+	if (argc > 1 && !strcmp(argv[1], "--posix-stdlib-quickexit"))
+		run_quickexit_child();
+
 	test_strtol_base();
 	test_atoi_family();
 	test_qsort_bsearch_zero();
@@ -482,10 +701,12 @@ int main(void)
 	test_random_state();
 	test_env();
 	test_mkostemp();
+	test_mkstemp_permission_bits();
 	test_realpath_buf();
 	test_system();
 	test_a64l();
 	test_getsubopt_keylist();
+	test_quick_exit(argv[0]);
 
 	if (!fails) printf("posix-stdlib: all tests passed\n");
 	return fails != 0;

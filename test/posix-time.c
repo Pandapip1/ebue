@@ -430,6 +430,188 @@ static void test_timespec_get_matches_realtime(void)
 	CHECK(rt.tv_sec >= ts.tv_sec && rt.tv_sec - ts.tv_sec <= 5);
 }
 
+/* ---- strftime.html conversion-specifier table: %U, %W, %V, %G, %g
+ * (the ISO-8601 week-number family).  src/time/strftime.c's own header
+ * comment documents these as intentionally unimplemented: "this target
+ * has only the 'C' locale and no week-numbering rules were worth the
+ * extra code"; an unrecognized %<letter> passes through literally
+ * rather than being eaten (test/time.c already pins that pass-through
+ * for one fixed date).  Written here as the real assertions the spec
+ * table requires, per this session's new "fence it, don't drop it"
+ * rule, rather than only re-checking the pass-through behaviour.
+ *
+ * Definitions (quoted from strftime.html's conversion table):
+ *   %U: "week number of the year as a decimal number [00,53]. The
+ *       first Sunday of January is the first day of week 1; days in
+ *       the new year before this are in week 0."
+ *   %W: same, but "The first Monday of January is the first day of
+ *       week 1."
+ *   %V: "week number of the year (Monday as the first day of the
+ *       week) ... [01,53]. If the week containing 1 January has four
+ *       or more days in the new year, then it is considered week 1.
+ *       Otherwise, it is the last week of the previous year, and the
+ *       next week is week 1. Both January 4th and the first Thursday
+ *       of January are always in week 1."
+ *   %G: "the week-based year ... as a decimal number".
+ *   %g: "the last 2 digits of the week-based year ... [00,99]."
+ *
+ * Every expected value below was independently computed with GNU
+ * coreutils `date -u -d @<epoch> +%U/%W/%V/%G/%g` (glibc's strftime),
+ * not derived from ntlibc or from memory. */
+static void test_strftime_week_number_family(void)
+{
+#if 0 /* UNIMPL: strftime.html conversion table, %U/%W/%V/%G/%g --
+       * src/time/strftime.c's switch has no case for any of these
+       * five specifiers, so the `default:` branch (`PUT_CH('%');
+       * PUT_CH(*f);`) passes the two source characters through
+       * literally instead of computing a week number. Confirmed live:
+       * strftime(..., "%U", &tm) for 2000-02-29 currently yields the
+       * 2-byte string "%U", not "09". */
+	struct tm tm;
+	time_t t;
+	char buf[16];
+
+	/* 2000-02-29 (Tuesday), tm_yday=59: also the instant test/time.c
+	 * already pins the pass-through behaviour for, so the two files'
+	 * reference values are directly comparable. */
+	t = 951782400;
+	CHECK(gmtime_r(&t, &tm) != 0);
+	CHECK(strftime(buf, sizeof buf, "%U", &tm) == 2 && !strcmp(buf, "09"));
+	CHECK(strftime(buf, sizeof buf, "%W", &tm) == 2 && !strcmp(buf, "09"));
+	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "09"));
+	CHECK(strftime(buf, sizeof buf, "%G", &tm) == 4 && !strcmp(buf, "2000"));
+	CHECK(strftime(buf, sizeof buf, "%g", &tm) == 2 && !strcmp(buf, "00"));
+
+	/* 2000-01-01 (Saturday): before the year's first Sunday/Monday, so
+	 * %U and %W both fall in week 0; 1 January's Monday-Sunday week
+	 * has fewer than four days in the new year, so the ISO week-based
+	 * year (%G/%g) is 1999, not 2000, and %V is that year's week 52. */
+	t = 946684800;
+	CHECK(gmtime_r(&t, &tm) != 0);
+	CHECK(strftime(buf, sizeof buf, "%U", &tm) == 2 && !strcmp(buf, "00"));
+	CHECK(strftime(buf, sizeof buf, "%W", &tm) == 2 && !strcmp(buf, "00"));
+	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "52"));
+	CHECK(strftime(buf, sizeof buf, "%G", &tm) == 4 && !strcmp(buf, "1999"));
+	CHECK(strftime(buf, sizeof buf, "%g", &tm) == 2 && !strcmp(buf, "99"));
+
+	/* 2001-01-08 (Monday): the one reference instant where %U and %W
+	 * actually diverge (the year's first Sunday, week 1 under %U,
+	 * hasn't happened yet; the first Monday, week 1 under %W, has, so
+	 * this is already %W's week 2) -- pins that they are genuinely two
+	 * different algorithms, not aliases of each other. */
+	t = 978912000;
+	CHECK(gmtime_r(&t, &tm) != 0);
+	CHECK(strftime(buf, sizeof buf, "%U", &tm) == 2 && !strcmp(buf, "01"));
+	CHECK(strftime(buf, sizeof buf, "%W", &tm) == 2 && !strcmp(buf, "02"));
+	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "02"));
+#endif
+	printf("note: strftime() %%U/%%W/%%V/%%G/%%g (ISO-8601 week-number "
+	       "family) are unimplemented; an unrecognized conversion passes "
+	       "through literally instead (src/time/strftime.c)\n");
+}
+
+/* ---- getdate.html: real getdate() reads the file named by $DATEMSK, a
+ * newline-separated list of strptime templates, tries each against the
+ * argument, and defaults any field a matched template didn't set to
+ * "today"'s corresponding value.  src/time/getdate.c is an explicitly
+ * documented stand-in: it ignores $DATEMSK entirely and tries a fixed,
+ * hard-coded list of templates instead; unset fields default to zero
+ * (1900-01-00) rather than today.  Confirm what *is* implemented as a
+ * real, unfenced test, then fence each documented gap with the real
+ * spec-required assertion. */
+static void test_getdate(void)
+{
+	struct tm *tm;
+
+	/* what src/time/getdate.c actually does: one of its own hard-coded
+	 * templates ("%Y-%m-%d %H:%M:%S") matches and mktime() normalizes
+	 * tm_wday/tm_yday -- getdate.html RETURN VALUE: "a pointer to a
+	 * struct tm" on success. */
+	unsetenv("DATEMSK");
+	tm = getdate("2000-01-02 03:04:05");
+	CHECK(tm != 0);
+	if (tm) {
+		CHECK(tm->tm_year == 100 && tm->tm_mon == 0 && tm->tm_mday == 2);
+		CHECK(tm->tm_hour == 3 && tm->tm_min == 4 && tm->tm_sec == 5);
+		CHECK(tm->tm_wday == 0); /* 2000-01-02 was a Sunday */
+	}
+
+	/* getdate.html error table, code 7: "No line in the template file
+	 * matches the input date/time specification" -- reused correctly
+	 * here (source's own comment) for "none of the hard-coded
+	 * templates matched", which is a faithful re-purposing of the same
+	 * code for this design's equivalent situation. */
+	tm = getdate("not a date at all, definitely no template matches this");
+	CHECK(tm == 0 && getdate_err == 7);
+
+#if 0 /* UNIMPL: getdate.html DESCRIPTION -- getdate() must read
+       * templates from the file named by $DATEMSK, not a hard-coded
+       * list; ERRORS code 1: "The DATEMSK environment variable is
+       * null or undefined."  src/time/getdate.c never looks at
+       * $DATEMSK at all (confirmed by inspection: no getenv() call in
+       * the file), so neither half of this is true here.  Confirmed
+       * live: with $DATEMSK unset, a call that should fail with
+       * getdate_err==1 per POSIX instead succeeds via the built-in
+       * template list. */
+	unsetenv("DATEMSK");
+	tm = getdate("2000-01-02 03:04:05");
+	CHECK(tm == 0 && getdate_err == 1);
+
+	/* ERRORS code 2: "The template file specified by DATEMSK cannot be
+	 * opened for reading." -- $DATEMSK naming a nonexistent file must
+	 * fail with getdate_err==2; instead it is silently ignored and the
+	 * built-in template list is used, so this still succeeds. */
+	CHECK(setenv("DATEMSK", "/nonexistent/path/that/does/not/exist", 1) == 0);
+	tm = getdate("2000-01-02 03:04:05");
+	CHECK(tm == 0 && getdate_err == 2);
+	unsetenv("DATEMSK");
+#endif
+
+#if 0 /* UNIMPL: getdate.html DESCRIPTION: "elements of the [struct tm]
+       * that are not specified by the [matched] template ... shall be
+       * set the same as their equivalents in the current time and
+       * date."  src/time/getdate.c instead memset()s the whole struct
+       * tm to zero before trying each template, so any field the
+       * matched template doesn't set is left at its zero value
+       * (1900-01-00) rather than defaulted to today.  Confirmed live:
+       * a time-only template match ("13:45") comes back dated
+       * 1900-01-01, not the day the test actually ran. */
+	time_t now = time(0);
+	struct tm today;
+	CHECK(gmtime_r(&now, &today) != 0);
+	tm = getdate("13:45");
+	CHECK(tm != 0);
+	if (tm) {
+		CHECK(tm->tm_hour == 13 && tm->tm_min == 45);
+		CHECK(tm->tm_year == today.tm_year && tm->tm_mon == today.tm_mon && tm->tm_mday == today.tm_mday);
+	}
+#endif
+
+#if 0 /* UNIMPL: getdate.html ERRORS code 8: "The input date is not
+       * valid, but ... syntactically correct" (the page's own example
+       * is exactly this: February 31).  src/time/getdate.c parses the
+       * fields with strptime() (which does not range-check tm_mday
+       * against the actual days in tm_mon) and then calls mktime(),
+       * which normalizes out-of-range fields instead of rejecting
+       * them, so no getdate_err==8 case is ever produced. Confirmed
+       * live: getdate("2000-02-31") returns a non-NULL struct tm dated
+       * 2000-03-02 (mktime()'s normalization of the 2 excess days),
+       * not NULL with getdate_err==8. */
+	tm = getdate("2000-02-31");
+	CHECK(tm == 0 && getdate_err == 8);
+#endif
+}
+
+/* ---- nanosleep.html: audited under unistd.h, not here.  Confirmed by
+ * inspection: nanosleep() lives in src/unistd/sleep.c (grouped there,
+ * not under src/time/), and test/unistd.c exercises it (sanity-checked
+ * against CLOCK_MONOTONIC elapsed time, same file as the rest of
+ * <unistd.h>'s sleep family); test/POSIX-COVERAGE.md's time.h section
+ * cross-references the same split ("nanosleep -- src/unistd/sleep.c --
+ * see unistd.h section below").  Nothing to add here: duplicating the
+ * same clause-by-clause pass under time.h as well would just be two
+ * copies of the same test, not two different ones. */
+
 int main(void)
 {
 	test_difftime_return_type();
@@ -451,6 +633,8 @@ int main(void)
 	test_strptime_literal_percent_and_ws_run();
 	test_tzset_daylight_always_zero();
 	test_timespec_get_matches_realtime();
+	test_strftime_week_number_family();
+	test_getdate();
 
 	if (!fails) printf("posix-time: all tests passed\n");
 	return fails != 0;
