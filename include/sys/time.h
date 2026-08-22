@@ -21,8 +21,19 @@ struct itimerval {
 	struct timeval it_value;
 };
 
-int getitimer (int, struct itimerval *);
-int setitimer (int, const struct itimerval *__restrict, struct itimerval *__restrict);
+int getitimer (int, struct itimerval *);  /* undefined-ok: ITIMER_REAL needs
+	SIGALRM delivery on expiry, and there is none to build on -- alarm()
+	itself is already a permanent stub returning 0 (src/unistd/sleep.c),
+	for the identical reason (see ualarm() in unistd.h). ITIMER_VIRTUAL/
+	ITIMER_PROF fire on CPU time consumed rather than wall-clock time, an
+	even harder signal to generate without a scheduler tick this library
+	sees. A kernel32 timer queue (CreateTimerQueueTimer) does not change
+	this: it would still need to deliver from a callback thread into
+	__raise_internal()'s unlocked handlers/blocked/pending state, the
+	same data race src/signal/signal.c's ctrl_handler() already flags as
+	tolerable only because Ctrl-C is rare -- a real interval timer firing
+	repeatedly is not */
+int setitimer (int, const struct itimerval *__restrict, struct itimerval *__restrict);  /* undefined-ok: see getitimer */
 int utimes (const char *, const struct timeval [2]);
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
@@ -34,7 +45,14 @@ int futimes(int, const struct timeval [2]);
 int futimesat(int, const char *, const struct timeval [2]);
 int lutimes(const char *, const struct timeval [2]);
 int settimeofday(const struct timeval *, const struct timezone *);
-int adjtime (const struct timeval *, struct timeval *);
+int adjtime (const struct timeval *, struct timeval *);  /* undefined-ok:
+	adjtime() means a *gradual* slew towards the target, applied a little
+	at a time so nothing observes the clock jumping or running backwards.
+	The only ntdll (or kernel32) primitive this library has for setting
+	the clock at all is NtSetSystemTime (src/time/stime.c), a single hard
+	jump; there is no W32Time-style slew API reachable from a plain
+	process at either layer, so there is nothing to build the gradual
+	half of adjtime() on */
 #define timerisset(t) ((t)->tv_sec || (t)->tv_usec)
 #define timerclear(t) ((t)->tv_sec = (t)->tv_usec = 0)
 #define timercmp(s,t,op) ((s)->tv_sec == (t)->tv_sec ? \

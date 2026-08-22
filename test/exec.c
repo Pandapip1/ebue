@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 
 extern char **environ;
 int __spawn(const char *path, char *const argv[], char *const envp[]);
@@ -432,6 +433,47 @@ static void test_argv0_roundtrip(const char *self)
 	CHECK(errno == EINVAL);
 }
 
+/* wait3()/wait4(): same reaping as waitpid(), but with a struct rusage
+ * for the child, filled from its NT process times before its handle is
+ * closed -- runnable here (no fork()) via the same __spawn()+"--exit"
+ * shape run_role() uses. */
+static void test_wait_rusage(const char *self)
+{
+	char *argv[4];
+	struct rusage ru_before, ru_after, ru_child;
+	pid_t pid, r;
+	int status;
+
+	CHECK(getrusage(RUSAGE_CHILDREN, &ru_before) == 0);
+
+	argv[0] = (char *)self; argv[1] = (char *)"--exit"; argv[2] = (char *)"7"; argv[3] = 0;
+	fflush(stdout);
+	pid = __spawn(self, argv, environ);
+	CHECK(pid > 0);
+	status = -1;
+	memset(&ru_child, 0xff, sizeof ru_child);
+	r = wait4(pid, &status, 0, &ru_child);
+	CHECK(r == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+	CHECK(ru_child.ru_utime.tv_sec >= 0 && ru_child.ru_stime.tv_sec >= 0);
+
+	CHECK(getrusage(RUSAGE_CHILDREN, &ru_after) == 0);
+	CHECK(ru_after.ru_utime.tv_sec > ru_before.ru_utime.tv_sec
+	   || ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec
+	   || ru_after.ru_stime.tv_sec > ru_before.ru_stime.tv_sec
+	   || ru_after.ru_stime.tv_usec >= ru_before.ru_stime.tv_usec);
+
+	/* wait3() is the (-1, ...) shape of the same call; ru == NULL is
+	 * also valid, like waitpid(). */
+	fflush(stdout);
+	pid = __spawn(self, argv, environ);
+	CHECK(pid > 0);
+	status = -1;
+	r = wait3(&status, 0, 0);
+	CHECK(r == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--exit")) return atoi(argv[2]);
@@ -454,6 +496,7 @@ int main(int argc, char **argv)
 	test_empty_env_entry(argv[0]);
 	test_failed_exec_keeps_cloexec(argv[0]);
 	test_argv0_roundtrip(argv[0]);
+	test_wait_rusage(argv[0]);
 	/* Last: an execv() that is *meant* to fail with E2BIG will, if the
 	 * length check is ever lost, succeed instead -- and a successful
 	 * execv never comes back, so anything after it would not run. */

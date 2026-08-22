@@ -13,11 +13,22 @@
  *     library's kill()/abort()/raise() end a process with;
  *   - an NT exception code the kernel itself terminated the process
  *     with, which is an 0xC0000xxx/0x8000xxxx NTSTATUS.
+ *
+ * wait3()/wait4() are the same reaping logic as waitpid(), with an extra
+ * output: a struct rusage for the one child just reaped, filled from
+ * NtQueryInformationProcess(ProcessTimes) on its handle before it is
+ * closed -- the only piece of struct rusage NT actually has an answer
+ * for (see src/misc/resource.c for the same source feeding getrusage()).
+ * Every reap, whether or not the caller asked for it, is also folded
+ * into a running total so getrusage(RUSAGE_CHILDREN) has something to
+ * report even when the caller only ever called wait()/waitpid().
  */
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 #include "libc.h"
 
 /* WIFSIGNALED, WTERMSIG == sig, plus the WCOREDUMP bit for the signals
@@ -66,7 +77,48 @@ static int encode_status(int exitcode)
 	return (exitcode & 0xff) << 8;       /* WIFEXITED, WEXITSTATUS */
 }
 
-pid_t waitpid(pid_t pid, int *status, int options)
+/* Cumulative rusage of every child reaped so far, for RUSAGE_CHILDREN
+ * (src/misc/resource.c).  100ns NT ticks, converted to a timeval only
+ * when read out -- see __rusage_children(). */
+static unsigned long long children_ktime100ns, children_utime100ns;
+
+static void ticks_to_timeval(unsigned long long t100ns, struct timeval *tv)
+{
+	tv->tv_sec = (time_t)(t100ns / 10000000ULL);
+	tv->tv_usec = (suseconds_t)((t100ns % 10000000ULL) / 10);
+}
+
+void __rusage_children(struct rusage *ru)
+{
+	memset(ru, 0, sizeof *ru);
+	ticks_to_timeval(children_ktime100ns, &ru->ru_stime);
+	ticks_to_timeval(children_utime100ns, &ru->ru_utime);
+}
+
+/* Fill *ru with the resource usage of one child, from its still-open
+ * process handle -- the ru argument to wait3()/wait4() is documented as
+ * "resource usage of the terminated child", not the RUSAGE_CHILDREN
+ * running total.  A query failure (the handle really ought to still be
+ * valid here, since nothing has closed it yet) just leaves *ru zeroed
+ * rather than failing the whole wait: the pid was already reaped
+ * successfully, and losing the accounting detail is not worth losing
+ * that. */
+static void fill_child_rusage(HANDLE h, struct rusage *ru)
+{
+	KERNEL_USER_TIMES kt;
+	NTSTATUS st;
+
+	memset(ru, 0, sizeof *ru);
+	if (!h) return;
+	st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
+	if (!NT_SUCCESS(st)) return;
+	ticks_to_timeval((unsigned long long)kt.KernelTime, &ru->ru_stime);
+	ticks_to_timeval((unsigned long long)kt.UserTime, &ru->ru_utime);
+	children_ktime100ns += (unsigned long long)kt.KernelTime;
+	children_utime100ns += (unsigned long long)kt.UserTime;
+}
+
+static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
 {
 	struct __child *c;
 	LARGE_INTEGER zero = 0;
@@ -132,11 +184,13 @@ pid_t waitpid(pid_t pid, int *status, int options)
 		if (st == STATUS_TIMEOUT) { NtClose(h); return 0; }
 		if (!NT_SUCCESS(st)) { NtClose(h); return __set_errno_status(st); }
 		st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
-		NtClose(h);
 		if (status) *status = NT_SUCCESS(st) ? encode_status((int)pbi.ExitStatus) : 0;
+		if (ru) fill_child_rusage(h, ru);
+		else { struct rusage tmp; fill_child_rusage(h, &tmp); }
+		NtClose(h);
 		return pid;
 	}
-	if (c->done) { if (status) *status = c->status; pid = c->pid; __child_remove(c); return pid; }
+	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); __child_remove(c); return pid; }
 
 	st = NtWaitForSingleObject(c->h, 0, options & WNOHANG ? &zero : 0);
 	if (st == STATUS_TIMEOUT) return 0;
@@ -152,11 +206,30 @@ reap:
 	c->done = 1;
 	if (status) *status = c->status;
 	pid = c->pid;
+	if (ru) fill_child_rusage(c->h, ru);
+	else { struct rusage tmp; fill_child_rusage(c->h, &tmp); }
 	__child_remove(c);
 	return pid;
 }
 
+pid_t waitpid(pid_t pid, int *status, int options)
+{
+	return do_waitpid(pid, status, options, 0);
+}
+
 pid_t wait(int *status)
 {
-	return waitpid(-1, status, 0);
+	return do_waitpid(-1, status, 0, 0);
 }
+
+#if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
+pid_t wait3(int *status, int options, struct rusage *ru)
+{
+	return do_waitpid(-1, status, options, ru);
+}
+
+pid_t wait4(pid_t pid, int *status, int options, struct rusage *ru)
+{
+	return do_waitpid(pid, status, options, ru);
+}
+#endif

@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -622,6 +626,55 @@ int main(void)
 			CHECK(after >= before - 1 && after - before <= 5);
 			errno = 0;
 			CHECK(clock_settime(CLOCK_MONOTONIC, &ts) == -1 && errno == EINVAL);
+		}
+
+		/* gettimeofday: agrees with time()/clock_gettime(CLOCK_REALTIME) */
+		{
+			struct timeval tv;
+			time_t t1 = time(NULL), t2;
+			CHECK(gettimeofday(&tv, NULL) == 0);
+			t2 = time(NULL);
+			CHECK(tv.tv_sec >= t1 && tv.tv_sec <= t2 + 1);
+			CHECK(tv.tv_usec >= 0 && tv.tv_usec < 1000000);
+		}
+
+		/* settimeofday: same "set to now, unprivileged EPERM is fine"
+		 * shape as the stime test above */
+		{
+			struct timeval before, tv, after;
+			int r;
+			CHECK(gettimeofday(&before, NULL) == 0);
+			tv = before;
+			errno = 0;
+			r = settimeofday(&tv, NULL);
+			CHECK(r == 0 || (r == -1 && errno != 0));
+			CHECK(gettimeofday(&after, NULL) == 0);
+			CHECK(after.tv_sec >= before.tv_sec && after.tv_sec - before.tv_sec <= 5);
+		}
+
+		/* getrlimit: real, enforced numbers -- not just any value */
+		{
+			struct rlimit rl;
+			CHECK(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+			CHECK(rl.rlim_cur == 1024 && rl.rlim_max == 1024);
+			CHECK(getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur == RLIM_INFINITY);
+			errno = 0;
+			CHECK(getrlimit(999, &rl) == -1 && errno == EINVAL);
+		}
+
+		/* getrusage: RUSAGE_SELF reports nonzero-capable, monotonic
+		 * CPU time; RUSAGE_CHILDREN starts zeroed (waitpid() tests for
+		 * accumulation live in process-win.c, which actually spawns) */
+		{
+			struct rusage ru;
+			volatile unsigned long sink = 0, j;
+			CHECK(getrusage(RUSAGE_SELF, &ru) == 0);
+			for (j = 0; j < 20000000; j++) sink += j ^ (j >> 3);
+			CHECK(getrusage(RUSAGE_SELF, &ru) == 0);
+			CHECK(ru.ru_utime.tv_sec >= 0 && ru.ru_stime.tv_sec >= 0);
+			CHECK(getrusage(RUSAGE_CHILDREN, &ru) == 0);
+			errno = 0;
+			CHECK(getrusage(999, &ru) == -1 && errno == EINVAL);
 		}
 	}
 

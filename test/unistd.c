@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -479,6 +480,30 @@ int main(void)
 	errno = 0;
 	CHECK(truncate("nope", 0) == -1 && errno == ENOENT);
 
+	/* posix_fadvise: a no-op that validates fd/advice and returns an
+	 * error number directly rather than -1/errno */
+	fd = open("a.txt", O_RDWR);
+	CHECK(fd >= 0);
+	CHECK(posix_fadvise(fd, 0, 0, POSIX_FADV_NORMAL) == 0);
+	CHECK(posix_fadvise(fd, 0, 100, POSIX_FADV_SEQUENTIAL) == 0);
+	CHECK(posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED) == 0);
+	CHECK(posix_fadvise(fd, 0, 0, 999) == EINVAL);
+	CHECK(posix_fadvise(999, 0, 0, POSIX_FADV_NORMAL) == EBADF);
+
+	/* posix_fallocate: really reserves storage and can grow the file */
+	CHECK(posix_fallocate(fd, 0, 4096) == 0);
+	CHECK(fstat(fd, &st) == 0 && st.st_size >= 4096);
+	CHECK(posix_fallocate(fd, 0, 1) == 0);   /* already covered: a no-op */
+	CHECK(posix_fallocate(fd, -1, 1) == EINVAL);
+	CHECK(close(fd) == 0);
+	CHECK(posix_fallocate(999, 0, 1) == EBADF);
+	{
+		int p[2];
+		CHECK(pipe(p) == 0);
+		CHECK(posix_fallocate(p[0], 0, 1) == ESPIPE);
+		CHECK(close(p[0]) == 0 && close(p[1]) == 0);
+	}
+
 	/* utimensat/utime/futimens set mtime, read back via stat */
 	{
 		struct timespec ts[2];
@@ -510,6 +535,21 @@ int main(void)
 		CHECK(close(fd) == 0);
 		errno = 0;
 		CHECK(utimensat(AT_FDCWD, "nope", ts, 0) == -1 && errno == ENOENT);
+
+		/* futimesat: same as utimensat/timeval AT_FDCWD, timeval usec
+		 * resolution */
+		{
+			struct timeval tv[2];
+			tv[0].tv_sec = 1600000000; tv[0].tv_usec = 0;
+			tv[1].tv_sec = 1650000000; tv[1].tv_usec = 250000;
+			CHECK(futimesat(AT_FDCWD, "a.txt", tv) == 0);
+			CHECK(stat("a.txt", &st) == 0);
+			CHECK(st.st_mtime == 1650000000);
+			CHECK(st.st_mtim.tv_nsec == 250000000);
+			CHECK(st.st_atime == 1600000000);
+			errno = 0;
+			CHECK(futimesat(AT_FDCWD, "nope", tv) == -1 && errno == ENOENT);
+		}
 	}
 
 	/* chdir/getcwd round trip */

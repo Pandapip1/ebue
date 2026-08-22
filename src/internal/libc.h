@@ -161,6 +161,11 @@ extern int __child_cap;
 int __child_add(int pid, HANDLE);
 struct __child *__child_find(int pid);
 void __child_remove(struct __child *);
+/* RUSAGE_CHILDREN: the running total src/process/wait.c folds every
+ * reaped child's ProcessTimes into, read out by getrusage()
+ * (src/misc/resource.c). */
+struct rusage;
+void __rusage_children(struct rusage *);
 
 /* Start a program: the equivalent of posix_spawn.  Returns the child pid
  * (tracked in __children) or -1 with errno. */

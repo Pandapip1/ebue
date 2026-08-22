@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -176,6 +177,41 @@ static void test_wait_semantics(void)
 	errno = 0;
 	CHECK(waitpid(-1, &status, WNOHANG) == -1);
 	CHECK(errno == ECHILD);
+}
+
+/* wait3()/wait4(): same reaping as waitpid(), plus a struct rusage for
+ * the child just reaped, and getrusage(RUSAGE_CHILDREN)'s running total
+ * grows to match. */
+static void test_wait_rusage(void)
+{
+	struct rusage ru_before, ru_after, ru_child;
+	pid_t pid, r;
+	int status;
+
+	CHECK(getrusage(RUSAGE_CHILDREN, &ru_before) == 0);
+
+	pid = fork_exit(7);
+	CHECK(pid > 0);
+	status = -1;
+	memset(&ru_child, 0xff, sizeof ru_child);
+	r = wait4(pid, &status, 0, &ru_child);
+	CHECK(r == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+	CHECK(ru_child.ru_utime.tv_sec >= 0 && ru_child.ru_stime.tv_sec >= 0);
+
+	CHECK(getrusage(RUSAGE_CHILDREN, &ru_after) == 0);
+	CHECK(ru_after.ru_utime.tv_sec > ru_before.ru_utime.tv_sec
+	   || ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec
+	   || ru_after.ru_stime.tv_sec > ru_before.ru_stime.tv_sec
+	   || ru_after.ru_stime.tv_usec >= ru_before.ru_stime.tv_usec);
+
+	/* wait3() is the (-1, ...) shape of the same call. */
+	pid = fork_exit(8);
+	CHECK(pid > 0);
+	status = -1;
+	r = wait3(&status, 0, 0);   /* rusage is optional, like waitpid()'s ru == NULL path */
+	CHECK(r == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 8);
 }
 
 /* Encoded result of the forked child's waitpid on its elder sibling. */
@@ -364,6 +400,7 @@ int main(int argc, char **argv)
 
 	test_fork_basics();
 	test_wait_semantics();
+	test_wait_rusage();
 	test_prefork_handle();
 #if 0 /* BUG: see test_exec */
 	test_exec(argv[0]);

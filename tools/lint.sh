@@ -290,7 +290,7 @@ stage_shell() {
 	return 1
 }
 
-stages=${*:-warn analyze cppcheck shell}
+stages=${*:-warn analyze cppcheck shell undefined}
 mkdir -p "$builddir" || exit 1
 for s in $stages; do
 	case $s in

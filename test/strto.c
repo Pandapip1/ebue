@@ -8,6 +8,7 @@
 #include <math.h>
 #include <float.h>
 #include <inttypes.h>
+#include <wchar.h>
 
 static uint64_t dbits(double d) { union { double d; uint64_t u; } v; v.d = d; return v.u; }
 static uint32_t fbits(float f) { union { float f; uint32_t u; } v; v.f = f; return v.u; }
@@ -152,6 +153,19 @@ int main(void)
 	errno = 0; CHECK(strtoull("18446744073709551616", 0, 10) == ULLONG_MAX && errno == ERANGE);
 	CHECK(strtoimax("-42", 0, 0) == -42);
 	CHECK(strtoumax("0xff", 0, 0) == 255);
+
+	/* wcstoimax/wcstoumax: the wide mirror of strtoimax/strtoumax */
+	{
+		wchar_t *wend;
+		CHECK(wcstoimax(L"-42", 0, 0) == -42);
+		CHECK(wcstoumax(L"0xff", 0, 0) == 255);
+		CHECK(wcstoimax(L"  +123abc", &wend, 10) == 123 && *wend == L'a');
+		errno = 0;
+		CHECK(wcstoimax(L"9223372036854775808", 0, 10) == INTMAX_MAX && errno == ERANGE);
+		errno = 0;
+		CHECK(wcstoumax(L"-1", 0, 10) == UINTMAX_MAX && errno == 0);
+		CHECK(wcstoimax(L"777", &wend, 8) == 511 && *wend == 0);
+	}
 
 	/* atoi family */
 	CHECK(atoi("-17") == -17);

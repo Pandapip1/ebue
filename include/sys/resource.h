@@ -30,7 +30,15 @@ struct rusage {
 };
 
 int getrlimit (int, struct rlimit *);
-int setrlimit (int, const struct rlimit *);
+int setrlimit (int, const struct rlimit *);  /* undefined-ok: getrlimit()
+	(src/misc/resource.c) reports real numbers this library enforces
+	(FD_MAX, CHILD_CAP_LIMIT_) or RLIM_INFINITY, but nothing here can make
+	open()/fork() actually honor a *lower* value -- FD_MAX is a
+	compile-time array bound, not a runtime ceiling. A setrlimit() that
+	accepted a request without enforcing it would misrepresent itself the
+	same way a lockf() built on this library's no-op advisory locks would
+	(see lockf() below): it would look like real resource limiting while
+	providing none */
 int getrusage (int, struct rusage *);
 
 #define RUSAGE_SELF 0
