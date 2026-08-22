@@ -219,6 +219,8 @@ not_native()
 		echo "a host wait status carries 8 bits of exit code, too few for the 0xE0DE00xx a signal death uses" ;;
 	fork-win|fork-handles-win|process-win)
 		echo "needs NT process cloning: RtlCloneUserProcess is a stub" ;;
+	posix-misc)
+		echo "uses sigsetjmp, which lives in src/setjmp/*/setjmp.S; this build compiles only src/*.c" ;;
 	math)
 		echo "long double is 64-bit on the NT target and 80-bit here" ;;
 	strto)

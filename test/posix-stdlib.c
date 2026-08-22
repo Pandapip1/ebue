@@ -389,9 +389,17 @@ static void test_system(void)
 	int st;
 
 	/* RETURN VALUE: "the system() function shall always return
-	 * non-zero when command is NULL" (a command processor is
-	 * available: cmd.exe, via ComSpec or PATH). */
-	CHECK(system(0) != 0);
+	 * non-zero when command is NULL" -- non-zero exactly when a command
+	 * processor is available.  Under Wine that is cmd.exe, via ComSpec
+	 * or PATH.  The native sanitizer build has no cmd.exe at all (its
+	 * file system is simulated in fuzz/ntstubs.c), so 0 is the correct
+	 * answer there and the clauses below have nothing to run.  Detect
+	 * rather than assert either way, the same way test/unistd.c handles
+	 * Wine-vs-NT divergence. */
+	if (system(0) == 0) {
+		printf("note: no command processor; skipping the system() clauses\n");
+		return;
+	}
 
 	/* "the value returned by system() shall be the termination status
 	 * of the command language interpreter in the format specified by
