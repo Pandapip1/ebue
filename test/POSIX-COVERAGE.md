@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: (C) 2026 Gavin John
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # POSIX conformance coverage ledger
 
 Tracks, function by function, how far the clause-by-clause POSIX.1-2017
