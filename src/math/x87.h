@@ -89,7 +89,12 @@ static long double __x87_rndint(long double x, int rc)
 		__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfrndint\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
 		return x;
 	}
-	__asm__ __volatile__("fnstcw (%0)" : : "r"(&cw) : "memory");
+	/* A real "=m" output rather than the pointer-in-a-register shape the
+	 * rest of this header uses: fnstcw takes a plain memory operand on
+	 * both arches, and spelling it as an output is what makes it visible
+	 * -- to a reader and to clang's analyzer -- that this instruction is
+	 * what initialises cw. */
+	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
 	cw2 = (unsigned short)((cw & ~0x0c00) | (rc << 10));
 	__asm__ __volatile__("fldcw (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfrndint\n\t" NTLIBC_FSTPL " (%1)\n\tfldcw (%2)"
 		: : "r"(&cw2), "r"(&x), "r"(&cw) : "memory");

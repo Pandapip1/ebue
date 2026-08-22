@@ -42,7 +42,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 			if (!f) return -1;
 			st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
 			                       flags & O_CLOEXEC ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
-			if (!NT_SUCCESS(st)) return __set_errno_status(st);
+			if (!NT_SUCCESS(st)) { __set_errno_status(st); return -1; }
 			*out = h; *typeout = f->type;
 			return 0;
 		}
@@ -102,7 +102,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	if (!NT_SUCCESS(st)) {
 		/* FILE_CREATE on an existing directory, etc. */
 		if (st == STATUS_OBJECT_NAME_COLLISION) errno = EEXIST;
-		else return __set_errno_status(st);
+		else __set_errno_status(st);
 		return -1;
 	}
 

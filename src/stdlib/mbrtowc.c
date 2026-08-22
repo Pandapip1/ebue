@@ -125,7 +125,12 @@ size_t mbsrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t n, 
 	static mbstate_t internal;
 	const char *s = *src;
 	size_t out = 0, r;
-	wchar_t wc;
+	/* mbrtowc writes through &wc on every return other than -1 and -2,
+	 * both of which are handled below -- except on the one path where it
+	 * is handed a null s, which it redirects to a dummy.  *src being null
+	 * is a caller error POSIX leaves undefined; initialising here turns it
+	 * into a deterministic "empty string" instead of reading garbage. */
+	wchar_t wc = 0;
 
 	if (!st) st = &internal;
 	for (;;) {
@@ -137,8 +142,7 @@ size_t mbsrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t n, 
 		}
 		if (r == (size_t)-3) r = 0;
 		if (ws) ws[out] = wc;
-		if (r && !wc) { if (ws) *src = 0; return out; }
-		if (!r && !wc) { if (ws) *src = 0; return out; }
+		if (!wc) { if (ws) *src = 0; return out; }
 		s += r;
 		out++;
 	}

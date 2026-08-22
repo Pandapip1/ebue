@@ -128,9 +128,9 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 		if (fd < 0) { __file_free(f); return 0; }
 		f->fd = fd;
 	} else {
-		/* Reopening the same file with a new mode: just re-derive flags. */
+		/* Reopening the same file with a new mode: just re-derive flags.
+		 * f->fd already is oldfd, so there is nothing to reassign. */
 		if (oldfd < 0) { __file_free(f); return 0; }
-		fd = oldfd;
 	}
 
 	f->readable = f->writable = 0;
