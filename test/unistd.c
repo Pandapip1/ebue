@@ -353,6 +353,32 @@ int main(void)
 	CHECK(link("nope", "l2.txt") == -1 && errno == ENOENT);
 	CHECK(unlink("r2.txt") == 0);
 
+	/* Lengths that do not fit a USHORT must fail, not wrap.  A
+	 * UNICODE_STRING's Length and a reparse buffer's name lengths are
+	 * USHORTs counting bytes, so a path or symlink target past ~32k code
+	 * units used to narrow into a *shorter* name -- naming some other
+	 * object entirely -- instead of being refused. */
+	{
+		char *big = malloc(40001);
+		char cwdbefore[4096], cwdafter[4096];
+		CHECK(big != 0);
+		CHECK(getcwd(cwdbefore, sizeof cwdbefore) == cwdbefore);
+		if (big) {
+			memset(big, 'x', 40000);
+			big[40000] = 0;
+			errno = 0;
+			CHECK(chdir(big) == -1 && errno == ENAMETOOLONG);
+			CHECK(getcwd(cwdafter, sizeof cwdafter) == cwdafter);
+			CHECK(!strcmp(cwdbefore, cwdafter));
+			errno = 0;
+			CHECK(symlink(big, "toolong.lnk") == -1 && errno == ENAMETOOLONG);
+			/* and no half-made link left behind */
+			CHECK(stat("toolong.lnk", &st) == -1);
+			CHECK(lstat("toolong.lnk", &st) == -1);
+			free(big);
+		}
+	}
+
 	/* access */
 	CHECK(access("a.txt", F_OK) == 0);
 	CHECK(access("a.txt", R_OK) == 0);

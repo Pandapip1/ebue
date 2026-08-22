@@ -130,7 +130,7 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 	HANDLE h;
 	NTSTATUS st;
 	WCHAR *wt;
-	size_t tl, i, sz;
+	size_t tl, i, sz, off;
 	REPARSE_DATA_BUFFER *r;
 	int isdir = 0, relative;
 	FILE_NETWORK_OPEN_INFORMATION ni;
@@ -152,7 +152,22 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 	wt = __utf8_to_utf16(target, &tl);
 	if (!wt) { NtClose(h); return -1; }
 	for (i = 0; i < tl; i++) if (wt[i] == '/') wt[i] = '\\';
-	sz = 8 + 12 + 2 * tl * sizeof(WCHAR) + (relative ? 0 : 4 * sizeof(WCHAR));
+	off = relative ? 0 : 4;
+	/* Every length in a REPARSE_DATA_BUFFER is a USHORT counting bytes,
+	 * and ReparseDataLength -- the largest of them -- covers the target
+	 * twice, once as the substitute name and once as the print name.  A
+	 * target long enough to overflow it would wrap rather than truncate,
+	 * and the link would be created pointing somewhere else entirely, so
+	 * the bound is checked before any of them is narrowed. */
+	if (12 + (off + 2 * tl) * sizeof(WCHAR) > 0xffffu) {
+		FILE_DISPOSITION_INFORMATION d = { 1 };
+		NtSetInformationFile(h, &io, &d, sizeof d, FileDispositionInformation);
+		NtClose(h);
+		__free(wt);
+		errno = ENAMETOOLONG;
+		return -1;
+	}
+	sz = 8 + 12 + (off + 2 * tl) * sizeof(WCHAR);
 	r = __malloc(sz);
 	if (!r) { __free(wt); NtClose(h); return -1; }
 	memset(r, 0, sz);
@@ -160,8 +175,7 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 	r->SymbolicLinkReparseBuffer.Flags = relative ? SYMLINK_FLAG_RELATIVE : 0;
 	{
 		WCHAR *pb = r->SymbolicLinkReparseBuffer.PathBuffer;
-		size_t off = 0;
-		if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; off = 4; }
+		if (!relative) { pb[0] = '\\'; pb[1] = '?'; pb[2] = '?'; pb[3] = '\\'; }
 		memcpy(pb + off, wt, tl * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.SubstituteNameOffset = 0;
 		r->SymbolicLinkReparseBuffer.SubstituteNameLength = (USHORT)((off + tl) * sizeof(WCHAR));

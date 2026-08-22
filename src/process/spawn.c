@@ -34,11 +34,6 @@
 #include <fcntl.h>
 #include "libc.h"
 
-/* The longest string a UNICODE_STRING can describe: Length counts bytes
- * in a USHORT, and MaximumLength has to hold Length plus a terminating
- * NUL, so 65535 bytes minus that NUL -- 32766 UTF-16 code units. */
-#define __US_MAX_WCHARS ((size_t)((0xffffu - sizeof(WCHAR)) / sizeof(WCHAR)))
-
 /* Append one argument to a UTF-16 command-line buffer, quoting it if it
  * contains whitespace, a quote, or is empty. */
 static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)

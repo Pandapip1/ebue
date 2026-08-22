@@ -17,9 +17,13 @@ int chdir(const char *path)
 	w = __utf8_to_utf16(path, &n);
 	if (!w) return -1;
 	for (i = 0; i < n; i++) if (w[i] == '/') w[i] = '\\';
+	/* The path goes into a UNICODE_STRING, whose Length is a USHORT
+	 * counting bytes; a longer path would wrap rather than truncate and
+	 * we would chdir into some prefix of what was asked for. */
+	if (n > __US_MAX_WCHARS) { __free(w); errno = ENAMETOOLONG; return -1; }
 	us.Buffer = w;
 	us.Length = (USHORT)(n * sizeof(WCHAR));
-	us.MaximumLength = us.Length + sizeof(WCHAR);
+	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
 	st = RtlSetCurrentDirectory_U(&us);
 	__free(w);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);

@@ -48,6 +48,16 @@ char *__utf16_to_utf8(const WCHAR *, size_t n);
 int __utf16_to_utf8_buf(const WCHAR *, size_t n, char *, size_t);
 size_t wcslen_(const WCHAR *);
 
+/* ---- UNICODE_STRING ---------------------------------------------------- */
+/* The longest string a UNICODE_STRING can describe: Length counts bytes
+ * in a USHORT, and MaximumLength has to hold Length plus a terminating
+ * NUL, so 65535 bytes minus that NUL -- 32766 UTF-16 code units.  A
+ * longer string narrowed into those fields does not truncate, it wraps,
+ * and the object manager is handed some prefix of what was meant; every
+ * hand-built UNICODE_STRING that a caller's data reaches checks against
+ * this before narrowing. */
+#define __US_MAX_WCHARS ((size_t)((0xffffu - sizeof(WCHAR)) / sizeof(WCHAR)))
+
 /* ---- paths ------------------------------------------------------------- */
 /* A path ready to hand to the object manager: the NT path in a
  * UNICODE_STRING, the OBJECT_ATTRIBUTES wrapping it, and the buffer it

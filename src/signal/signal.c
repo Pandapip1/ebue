@@ -250,6 +250,8 @@ static void install_ctrl_handler(void)
 	if (!NT_SUCCESS(LdrLoadDll(NULL, NULL, &dllname, &kernel32))) return;
 
 	procname.Buffer = "SetConsoleCtrlHandler";
+	/* A 21-byte string literal, not anything a caller supplies, so this
+	 * narrowing to the ANSI_STRING's USHORT lengths cannot wrap. */
 	procname.Length = procname.MaximumLength = (USHORT)strlen(procname.Buffer);
 	if (!NT_SUCCESS(LdrGetProcedureAddress(kernel32, &procname, 0, &proc))) return;
 

@@ -93,7 +93,7 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		 * 32766 code units cannot be described -- and narrowing it would
 		 * wrap rather than truncate, naming some prefix of the caller's
 		 * path instead of failing. */
-		if (n > (size_t)((0xffffu - sizeof(WCHAR)) / sizeof(WCHAR))) {
+		if (n > __US_MAX_WCHARS) {
 			__free(w);
 			errno = ENAMETOOLONG;
 			return -1;
