@@ -20,14 +20,24 @@
 
 int feclearexcept(int excepts)
 {
-	unsigned char env[28];
+	/* Zero-initialised only to keep clang's static analyzer quiet: it
+	 * cannot see that the fnstenv/fnstsw/fnstcw/stmxcsr below write
+	 * through their pointer operand, so it treats the reads that
+	 * follow as garbage values (clang-analyzer-core.Undefined
+	 * BinaryOperatorResult; clang-tidy 18 reports it, 21 does not).
+	 * The stores overwrite every byte, so these initialisers are dead
+	 * in practice -- they are not a correctness fix. Passing the
+	 * buffers as "=m" outputs instead would inform the analyzer
+	 * properly, but tcc miscompiles that form here (SIGSEGV at
+	 * runtime on both arches), so this is the portable option. */
+	unsigned char env[28] = { 0 };
 	excepts &= FE_ALL_EXCEPT;
 	__asm__ __volatile__("fnstenv (%0)" : : "r"(env) : "memory");
 	env[4] = (unsigned char)(env[4] & ~excepts);
 	__asm__ __volatile__("fldenv (%0)" : : "r"(env) : "memory");
 #ifndef __i386__
 	{
-		unsigned int mxcsr;
+		unsigned int mxcsr = 0;
 		__asm__ __volatile__("stmxcsr (%0)" : : "r"(&mxcsr) : "memory");
 		mxcsr &= ~(unsigned int)excepts;
 		__asm__ __volatile__("ldmxcsr (%0)" : : "r"(&mxcsr) : "memory");
@@ -55,14 +65,14 @@ int feclearexcept(int excepts)
  * the implementation's choice: never synthesize a trap. */
 int feraiseexcept(int excepts)
 {
-	unsigned char env[28];
+	unsigned char env[28] = { 0 };
 	excepts &= FE_ALL_EXCEPT;
 	__asm__ __volatile__("fnstenv (%0)" : : "r"(env) : "memory");
 	env[4] = (unsigned char)(env[4] | excepts);
 	__asm__ __volatile__("fldenv (%0)" : : "r"(env) : "memory");
 #ifndef __i386__
 	{
-		unsigned int mxcsr;
+		unsigned int mxcsr = 0;
 		__asm__ __volatile__("stmxcsr (%0)" : : "r"(&mxcsr) : "memory");
 		mxcsr |= (unsigned int)excepts;
 		__asm__ __volatile__("ldmxcsr (%0)" : : "r"(&mxcsr) : "memory");
@@ -73,12 +83,12 @@ int feraiseexcept(int excepts)
 
 int fetestexcept(int excepts)
 {
-	unsigned short sw;
+	unsigned short sw = 0;
 	excepts &= FE_ALL_EXCEPT;
 	__asm__ __volatile__("fnstsw (%0)" : : "r"(&sw) : "memory");
 #ifndef __i386__
 	{
-		unsigned int mxcsr;
+		unsigned int mxcsr = 0;
 		__asm__ __volatile__("stmxcsr (%0)" : : "r"(&mxcsr) : "memory");
 		return (int)((sw | mxcsr) & (unsigned int)excepts);
 	}
@@ -103,14 +113,14 @@ int fesetexceptflag(const fexcept_t *flagp, int excepts)
 
 int fegetround(void)
 {
-	unsigned short cw;
+	unsigned short cw = 0;
 	__asm__ __volatile__("fnstcw (%0)" : : "r"(&cw) : "memory");
 	return cw & 0xc00;
 }
 
 int fesetround(int round)
 {
-	unsigned short cw;
+	unsigned short cw = 0;
 	if (round != FE_TONEAREST && round != FE_DOWNWARD &&
 	    round != FE_UPWARD && round != FE_TOWARDZERO)
 		return -1;
@@ -119,7 +129,7 @@ int fesetround(int round)
 	__asm__ __volatile__("fldcw (%0)" : : "r"(&cw) : "memory");
 #ifndef __i386__
 	{
-		unsigned int mxcsr;
+		unsigned int mxcsr = 0;
 		__asm__ __volatile__("stmxcsr (%0)" : : "r"(&mxcsr) : "memory");
 		mxcsr = (mxcsr & ~0x6000u) | ((unsigned int)round << 3);
 		__asm__ __volatile__("ldmxcsr (%0)" : : "r"(&mxcsr) : "memory");
