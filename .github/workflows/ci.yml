@@ -204,3 +204,64 @@ jobs:
             Write-Host "One or more test binaries failed"
             exit 1
           }
+
+  # Static checking that tcc does not do: gcc and clang strict-warning
+  # builds of the whole library for both arches, plus the clang static
+  # analyzer, cppcheck and shellcheck where installed. Strict on purpose
+  # -- `make lint` exits non-zero on any finding and nothing here is
+  # relaxed to keep the job green. It is expected to be RED until the
+  # open findings are worked off; a check that lies about the state of
+  # the tree is worse than one that is honestly failing.
+  #
+  # Independent of the tcc jobs: it never builds with tcc, so no `needs:`.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy cppcheck shellcheck \
+                                  gcc-mingw-w64-i686 gcc-mingw-w64-x86-64
+
+      # obj/include/bits/alltypes.h is just a concatenation of committed
+      # .h.gen files, so this needs no compiler -- but ./configure is what
+      # sets ARCH, and lint.sh reads it.
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
+
+      - name: make lint
+        run: make lint
+
+  # A second, native (Linux/ELF) build of the same src/*.c under
+  # AddressSanitizer and UBSan, running the test/*.c that do not need
+  # ntdll. This catches memory errors and undefined behaviour that the
+  # tcc/Wine build cannot see at all -- the LLONG_MIN negations in
+  # printf.c and scanf.c were both found this way, and both pass `make
+  # check` under tcc, which happens to emit the wrapping instruction.
+  #
+  # Also expected to be RED for now. Not relaxed.
+  asan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
+
+      - name: make asan
+        run: make asan
+
+      - name: Upload the failing test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-output
+          path: obj/asan/test/*.out
+          if-no-files-found: warn

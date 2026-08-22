@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Fuzz
+
+# Deliberately a separate workflow from ci.yml rather than another job in
+# it. Fuzzing is nondeterministic and time-boxed: it is not a gate on a
+# push, and a failure here means "this input is worth looking at", not
+# "this branch is broken". Keeping it separate also means adding a
+# schedule here does not start running ci.yml's jobs -- including the
+# Windows-runner leg -- once a night as a side effect.
+#
+# There is no corpus to cache. tools/fuzz.sh explains why at length:
+# libFuzzer reads a corpus and writes crash artefacts through the C
+# library it is linked against, which here is ntlibc, whose open/readdir
+# reach NtCreateFile and friends that a native build does not have. So
+# every run starts cold, and a reproducer worth keeping is meant to land
+# in test/*.c as a regression case rather than in a corpus directory.
+# That also means the run log *is* the artefact: harnesses print the
+# offending input, and libFuzzer prints the crashing unit as Base64.
+
+on:
+  schedule:
+    # 07:00 UTC daily. Any fixed time is arbitrary; this one is chosen to
+    # be off the hour, since GitHub delays scheduled runs at popular
+    # times and can drop them entirely under load.
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per harness'
+        required: false
+        default: '300'
+      harnesses:
+        description: 'Which harnesses (blank = all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Must match ci.yml's pin: the cache below is the one that job fills.
+  TINYCC_SHA: 2ba12e83b3599ca8f5d50c179fe5138fe956f0c9
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    # Four harnesses at 300s is ~20 min of fuzzing plus a ~200-object
+    # build; the cap is generous so a slow runner reports rather than
+    # being killed mid-run.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # Restore-only: ci.yml's build-toolchain job populates this. If it
+      # misses (cache evicted, or this ran before any CI run on a new
+      # pin), build it here rather than failing the nightly.
+      - name: Restore tinycc toolchain
+        id: cache-tinycc
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Build tinycc if the cache missed
+        if: steps.cache-tinycc.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/TinyCC/tinycc.git tinycc
+          git -C tinycc checkout "$TINYCC_SHA"
+          cd tinycc
+          ./configure --enable-cross --prefix="$HOME/tinycc-install"
+          make -j"$(nproc)"
+          make install
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      # The harnesses need obj/include/bits/alltypes.h, which `make`
+      # produces; they compile src/*.c themselves with clang afterwards.
+      - name: Configure and build
+        run: |
+          ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
+          make -j"$(nproc)"
+
+      - name: Fuzz
+        run: |
+          tools/fuzz.sh ${{ github.event.inputs.seconds || '300' }} \
+                        ${{ github.event.inputs.harnesses || '' }} \
+            2>&1 | tee fuzz.log
+
+      # tools/fuzz.sh exits non-zero when a harness finds something, so
+      # this only runs on a finding -- and the log is the reproducer.
+      - name: Upload the log when something was found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-log-${{ github.run_id }}
+          path: fuzz.log
+          if-no-files-found: warn
