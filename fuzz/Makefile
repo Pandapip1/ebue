@@ -45,12 +45,42 @@ RPATH   = -Wl,-rpath,$(dir $(ASAN_SO))
 HARNESSES = strtod printf scanf utf
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 
+# What the instrumented library is built from.  Derived with find, never
+# written out by hand: a hand-listed prerequisite set stops mentioning the
+# file somebody adds tomorrow, and the harness would then be fuzzing a
+# library that no longer matches src/.  The header sweep is deliberately
+# coarse -- every header the sanitized build can see, not the ones a given
+# .c happens to include -- because asan-build.sh is all-or-nothing anyway
+# (it starts with `rm -rf $OBJ`), so a finer set would buy nothing.
+LIBSRC := $(shell find $(srcdir)/src -name '*.c' 2>/dev/null | sort)
+LIBHDR := $(shell find $(srcdir)/src $(srcdir)/include $(srcdir)/arch \
+                       $(srcdir)/obj/include -name '*.h' 2>/dev/null | sort)
+LIBDEP  = $(LIBSRC) $(LIBHDR) $(srcdir)/tools/asan-build.sh ntstubs.c
+
 all: $(EXES)
 
-$(LIBDIR)/compiled.txt:
+# The stamp, not compiled.txt, is the target.  compiled.txt is written
+# line by line as the loop compiles, so a run that dies in the middle
+# leaves one behind that is newer than every source and describes only
+# half a library -- exactly the newer-but-wrong file that defeats an mtime
+# rule (see the comment above `kaem:` in the top-level Makefile).  The
+# stamp is touched only after the script exits 0, and asan-build.sh's own
+# `rm -rf $OBJ` removes the previous one before anything else, so a failed
+# or interrupted build leaves no stamp and the next make rebuilds.
+#
+# The rebuild is all 202 objects, because that is the granularity the
+# script offers; it costs about 7s (and 2s more to relink the four
+# harnesses), and happens only when a source, a header or the script
+# itself has actually changed.  An unconditional rebuild would be
+# defensible at that price, but it is not needed: unlike `make kaem`
+# there is no committed artefact here that a newer-but-wrong file could
+# corrupt -- the inputs are the same files the script itself reads, and
+# the only way to fool the stamp is to `touch` it by hand.
+$(LIBDIR)/.built: $(LIBDEP)
 	NTLIBC_ASAN_OBJ=$(abspath $(LIBDIR)) \
 	NTLIBC_ASAN_EXTRA=-fsanitize=fuzzer-no-link \
 	$(srcdir)/tools/asan-build.sh --objects-only
+	touch $@
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -58,13 +88,17 @@ $(OUT):
 $(OUT)/host_oracle.o: host_oracle.c | $(OUT)
 	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
 
-$(OUT)/ntstubs.o: ntstubs.c $(LIBDIR)/compiled.txt | $(OUT)
+$(OUT)/ntstubs.o: ntstubs.c $(LIBHDR) $(LIBDIR)/.built | $(OUT)
 	$(CC) $(CFLAGS_HARNESS) -c $< -o $@
 
-$(OUT)/fuzz_%: fuzz_%.c $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR)/compiled.txt | $(OUT)
+# The library objects are globbed by the shell, at recipe time.  $(wildcard)
+# would be expanded by make against a directory it may have cached before
+# the stamp rule refilled it, and an empty expansion links a harness with
+# no ntlibc in it at all.
+$(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT)
 	$(CC) $(CFLAGS_HARNESS) -shared-libasan $(RPATH) \
 	  $(ASAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o \
-	  $(wildcard $(LIBDIR)/obj/*.o) -ldl -lm -o $@
+	  $(LIBDIR)/obj/*.o -ldl -lm -o $@
 
 run: all
 	@rc=0; \
@@ -80,3 +114,7 @@ clean:
 	rm -rf $(OUT) $(LIBDIR)
 
 .PHONY: all run clean
+
+# A half-written object or executable left behind by a failed compile is
+# newer than its sources, so make would consider it up to date next time.
+.DELETE_ON_ERROR:
