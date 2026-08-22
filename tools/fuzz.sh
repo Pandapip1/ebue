@@ -33,8 +33,15 @@ srcdir=$(cd "$(dirname "$0")/.." && pwd)
 # why), and libFuzzer drags in libstdc++, which the linker puts ahead of
 # it.  ASan refuses to start unless its runtime is first in the library
 # list, so preload it -- which is what its own error message asks for.
+#
+# Deliberately not exported: the preload must apply to the harnesses when
+# they *run*, not to the build.  Exporting it puts clang, and in
+# particular ld, under ASan too, and the linker's ordinary allocations
+# then trip the leak checker and fail the link:
+#   SUMMARY: AddressSanitizer: 1596455 byte(s) leaked in 3224 allocation(s)
+#   clang: error: linker command failed with exit code 1
+# It is set per-invocation below instead.
 ASAN_SO=$(${CC:-clang} -print-file-name=libclang_rt.asan-x86_64.so)
-export LD_PRELOAD="$ASAN_SO"
 
 if [ "${1:-}" = "--repro" ]; then
 	shift
@@ -42,7 +49,8 @@ if [ "${1:-}" = "--repro" ]; then
 	art=$1
 	name=${2:-$(basename "$(dirname "$art")")}
 	make -C "$srcdir/fuzz" "$srcdir/obj/fuzz/fuzz_$name" >/dev/null
-	exec env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	exec env LD_PRELOAD="$ASAN_SO" \
+	     ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$name" "$art"
 fi
 
@@ -59,7 +67,8 @@ make -C "$srcdir/fuzz" all
 rc=0
 for h in $harnesses; do
 	echo "== fuzz_$h (${time}s)"
-	if ! ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	if ! LD_PRELOAD="$ASAN_SO" \
+	     ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$h" \
 	     -max_total_time="$time" -max_len=256 -print_funcs=0 -print_final_stats=1; then
 		echo "   fuzz_$h FOUND SOMETHING (input shown above)"
