@@ -38,13 +38,15 @@ int wctomb(char *s, wchar_t wc)
 size_t mbstowcs(wchar_t *__restrict ws, const char *__restrict s, size_t n)
 {
 	mbstate_t st;
+	const char *src = s;
 	memset(&st, 0, sizeof st);
-	return mbsrtowcs(ws, &s, n, &st);
+	return mbsrtowcs(ws, &src, n, &st);
 }
 
 size_t wcstombs(char *__restrict s, const wchar_t *__restrict ws, size_t n)
 {
 	mbstate_t st;
+	const wchar_t *src = ws;
 	memset(&st, 0, sizeof st);
-	return wcsrtombs(s, &ws, n, &st);
+	return wcsrtombs(s, &src, n, &st);
 }

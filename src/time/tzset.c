@@ -19,7 +19,7 @@
 
 int daylight;
 long timezone;
-char *tzname[2] = { "UTC", "UTC" };
+char *tzname[2] = { (char *)"UTC", (char *)"UTC" };
 
 static char __tzname_buf[32] = "UTC";
 

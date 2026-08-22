@@ -8,7 +8,7 @@
 
 int gethostname(char *name, size_t len)
 {
-	char *h = getenv("COMPUTERNAME");
+	const char *h = getenv("COMPUTERNAME");
 	size_t n;
 	if (!h) h = "localhost";
 	n = strlen(h);

@@ -196,7 +196,7 @@ FILE *popen(const char *cmd, const char *mode)
 	}
 	if (!shell) { pid = -1; }
 	else {
-		argv[0] = shell; argv[1] = "/c"; argv[2] = (char *)cmd; argv[3] = 0;
+		argv[0] = shell; argv[1] = (char *)"/c"; argv[2] = (char *)cmd; argv[3] = 0;
 		pid = __spawn(shell, argv, 0);
 		free(shell);
 	}
