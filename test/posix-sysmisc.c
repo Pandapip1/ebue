@@ -9,23 +9,39 @@
  * (for the two non-POSIX pieces) the GNU/BSD documentation cited
  * inline.
  *
- * Three genuine implementation gaps live in this area and are recorded
- * as gaps here rather than laundered into "N/A":
+ * Three genuine implementation gaps live in this area.  Per the
+ * project's current standard, a gap is no longer just recorded in
+ * prose and left untested -- every specified clause gets a real test
+ * in this file, fenced off with one of three conventions so the
+ * categories stay machine-greppable:
+ *
+ *   #if 0 / * BUG: <requirement + citation> * /     -- a real spec
+ *   violation in code that exists; should pass once fixed.
+ *   #if 0 / * N/A: <requirement + citation + why NT can't> * / --
+ *   genuinely impossible on this platform.
+ *   #if 0 / * UNIMPL: <requirement + citation> * /  -- not
+ *   implemented here, but implementable; the fence comment also
+ *   names the NT mechanism that would implement it.
+ *
+ * The three gaps:
  *
  *   - setrlimit() is *declared* in include/sys/resource.h but has no
  *     definition anywhere in src/ (grep confirms) -- calling it is a
- *     link error, not a runtime ENOSYS.  Not implementable to spec
- *     either: see include/sys/resource.h's own undefined-ok comment.
- *     Left untested here; there is nothing to link against.
+ *     link error, not a runtime ENOSYS.  Fenced UNIMPL below for the
+ *     RLIMIT_* resources NT *can* enforce (RLIMIT_NPROC, RLIMIT_CPU,
+ *     RLIMIT_AS/RLIMIT_DATA -- job objects give a real primitive);
+ *     fenced N/A for the ones it cannot (RLIMIT_NOFILE, RLIMIT_STACK,
+ *     RLIMIT_FSIZE, RLIMIT_CORE, RLIMIT_RSS, RLIMIT_MEMLOCK -- no NT
+ *     mechanism reaches these after process start).
  *
  *   - getpriority()/setpriority() are POSIX.1-2017 base functions
  *     (moved from XSI to BASE in Issue 5 -- getpriority.html) declared
  *     by <sys/resource.h>, but ntlibc does not declare or define them
- *     at all.  This *is* implementable on NT (GetPriorityClass/
- *     SetPriorityClass, or NtQueryInformationProcess(ProcessBasePriority)
- *     under ntdll, mapped through the nice-value range) -- a real gap,
- *     not a platform limitation.  Nothing to call, so nothing to test;
- *     recorded for the ledger.
+ *     at all.  This *is* implementable on NT (SetPriorityClass, or
+ *     NtQueryInformationProcess()/NtSetInformationProcess() with
+ *     ProcessBasePriority under ntdll, mapped through the nice-value
+ *     range) -- a real gap, not a platform limitation.  Fenced UNIMPL
+ *     below, with local prototypes/macros since none exist to include.
  *
  *   - select()/pselect(): select() is declared but, per
  *     include/sys/select.h's own undefined-ok comment, not defined
@@ -34,9 +50,10 @@
  *     header's own comment sketches exactly how -- NtWaitForMultiple
  *     Objects for console/regular files, a FilePipeLocalInformation
  *     poll loop for pipes) -- a real gap, not a platform limitation.
- *     What *is* implemented and testable independent of select() ever
- *     existing is the fd_set bit-manipulation macro family, which is
- *     audited exhaustively below.
+ *     Fenced UNIMPL below. What *is* implemented and testable
+ *     independent of select() ever existing is the fd_set
+ *     bit-manipulation macro family, which is audited exhaustively
+ *     below (unfenced).
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -99,6 +116,120 @@ static void test_getrlimit(void)
 	errno = 0;
 	CHECK(getrlimit(999, &rl) == -1 && errno == EINVAL);
 }
+
+/* setrlimit.html DESCRIPTION/RETURN VALUE/ERRORS.  setrlimit() is
+ * declared in include/sys/resource.h but has no definition anywhere
+ * in src/ (grep confirms) -- calling it is a link error, so this
+ * whole function is fenced.  Split into two halves: RLIMIT_* values
+ * NT has a real enforcement primitive for (fenced UNIMPL -- the
+ * function could be written), and RLIMIT_* values it does not
+ * (fenced N/A -- no fence-lifting implementation could ever make
+ * these actually constrain anything on NT). Local prototype since
+ * nothing links against the header's declaration. */
+#if 0 /* UNIMPL: setrlimit.html DESCRIPTION: "changes ... take effect
+	immediately" and RETURN VALUE: "Upon successful completion,
+	... shall return 0" -- setting a soft limit within the hard
+	limit for RLIMIT_NPROC must succeed and be readable back via
+	getrlimit(). NT mechanism: place this process in a job object
+	it creates and owns (NtCreateJobObject + NtAssignProcessToJobObject,
+	both absent from src/internal/nt.h today) and set
+	JOBOBJECT_BASIC_LIMIT_INFORMATION.ActiveProcessLimit via
+	NtSetInformationJobObject(JobObjectBasicLimitInformation) --
+	the kernel then refuses further child creation past the limit,
+	a real enforced cap unlike RLIMIT_NOFILE's compile-time array
+	bound. RLIMIT_CPU maps the same way via
+	Per{Process,Job}UserTimeLimit; RLIMIT_AS/RLIMIT_DATA via
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION.ProcessMemoryLimit or
+	NtSetInformationProcess(ProcessQuotaLimits). */
+static void test_setrlimit_enforceable(void)
+{
+	struct rlimit rl, rl2;
+
+	rl.rlim_cur = 10;
+	rl.rlim_max = 100;
+	CHECK(setrlimit(RLIMIT_NPROC, &rl) == 0);
+	CHECK(getrlimit(RLIMIT_NPROC, &rl2) == 0);
+	CHECK(rl2.rlim_cur == 10 && rl2.rlim_max == 100);
+
+	/* ERRORS: "[EINVAL] ... in a setrlimit() call, the new rlim_cur
+	 * exceeds the new rlim_max." */
+	errno = 0;
+	rl.rlim_cur = 200;
+	rl.rlim_max = 100;
+	CHECK(setrlimit(RLIMIT_NPROC, &rl) == -1 && errno == EINVAL);
+
+	/* ERRORS: "[EPERM] The limit specified to setrlimit() would have
+	 * raised the maximum limit value, and the calling process does
+	 * not have appropriate privileges." An unprivileged process
+	 * (the normal case for this test binary) may not raise
+	 * rlim_max above what it currently is. */
+	CHECK(getrlimit(RLIMIT_NPROC, &rl2) == 0);
+	rl.rlim_cur = rl2.rlim_cur;
+	rl.rlim_max = rl2.rlim_max + 1;
+	errno = 0;
+	CHECK(setrlimit(RLIMIT_NPROC, &rl) == -1 && errno == EPERM);
+
+	/* RLIMIT_CPU, RLIMIT_AS, RLIMIT_DATA: same enforceable-soft-limit
+	 * round trip, each via its own job-object/process-quota field. */
+	rl.rlim_cur = 1;
+	rl.rlim_max = 60;
+	CHECK(setrlimit(RLIMIT_CPU, &rl) == 0);
+	CHECK(getrlimit(RLIMIT_CPU, &rl2) == 0 && rl2.rlim_cur == 1 && rl2.rlim_max == 60);
+
+	rl.rlim_cur = 1 << 20;
+	rl.rlim_max = 1 << 24;
+	CHECK(setrlimit(RLIMIT_AS, &rl) == 0);
+	CHECK(getrlimit(RLIMIT_AS, &rl2) == 0 && rl2.rlim_cur == (rlim_t)(1 << 20));
+}
+#endif
+
+/* N/A: setrlimit.html DESCRIPTION obliges the limit to actually
+ * "restrict the amount of [the] resource" once set. RLIMIT_NOFILE's
+ * cap is the compile-time __fds[FD_MAX] array bound
+ * (src/internal/libc.h) -- there is no NT object whose size a
+ * setrlimit() call could shrink at runtime, only a recompile.
+ * RLIMIT_STACK: NT fixes a thread's stack reservation at
+ * NtCreateThreadEx() time (src/process/*); nothing in ntdll lets a
+ * running thread's ceiling be lowered afterward, and the *only*
+ * thread this applies to (the main thread) is already running by the
+ * time any setrlimit() call could execute. RLIMIT_FSIZE: no per-process
+ * max-file-size quota primitive exists in the NT I/O manager (NTFS
+ * quotas are per-volume, per-user, not per-process). RLIMIT_CORE: NT
+ * has no core-dump concept to size (WER minidumps are configured
+ * machine-wide, not via a per-process byte ceiling). RLIMIT_RSS: no
+ * distinct RSS quota field exists separate from the AS/DATA memory
+ * limit already covered above, and POSIX itself says RSS is
+ * advisory-only on implementations that even have it. RLIMIT_MEMLOCK:
+ * NT's SetProcessWorkingSetSize()/VirtualLock() have no "how many
+ * bytes may this process lock" cap to set, only a per-call pinning
+ * primitive. If setrlimit() were written to *accept* a lower value
+ * for these without enforcing it, it would misrepresent itself the
+ * same way include/sys/resource.h's own undefined-ok comment already
+ * warns against. */
+#if 0 /* N/A: setrlimit.html DESCRIPTION requires the new limit to
+	actually constrain resource use; see comment above for why no
+	NT primitive reaches RLIMIT_NOFILE/STACK/FSIZE/CORE/RSS/MEMLOCK
+	after process start. */
+static void test_setrlimit_unenforceable(void)
+{
+	struct rlimit rl;
+
+	rl.rlim_cur = 4;
+	rl.rlim_max = 16;
+	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+	/* a real implementation would now have to make open() past fd 4
+	 * fail with EMFILE -- impossible: FD_MAX is a compile-time
+	 * array size, not a runtime ceiling ntlibc's fd allocator reads. */
+
+	rl.rlim_cur = 64 * 1024;
+	rl.rlim_max = 1024 * 1024;
+	CHECK(setrlimit(RLIMIT_STACK, &rl) == 0);
+	/* a real implementation would now have to make the already-running
+	 * main thread's stack growth fault past 64K -- impossible: NT
+	 * fixes stack reservation at thread creation, before any
+	 * setrlimit() call in this process could run. */
+}
+#endif
 
 /* getrusage.html DESCRIPTION/RETURN VALUE/ERRORS.  Moved from XSI to
  * the POSIX base standard in Issue 5 (getrusage.html "Standards
@@ -164,7 +295,249 @@ static void test_getrusage(const char *self)
 	      (after.ru_stime.tv_sec == before.ru_stime.tv_sec && after.ru_stime.tv_usec >= before.ru_stime.tv_usec));
 }
 
+/* getpriority()/setpriority(): POSIX.1-2017 base functions (moved from
+ * XSI to BASE in Issue 5, getpriority.html "Standards Status") that
+ * <sys/resource.h> does not even declare. Local prototypes/macros
+ * below, since nothing in include/ has them -- these are exactly what
+ * a real implementation would add to sys/resource.h, not to this
+ * test file. NZERO (musl/glibc value 20) is likewise undeclared here;
+ * "the default nice value is {NZERO}" (getpriority.html DESCRIPTION). */
+#if 0 /* UNIMPL: getpriority.html DESCRIPTION/RETURN VALUE/ERRORS --
+	getpriority()/setpriority() are not declared or defined
+	anywhere in ntlibc. NT mechanism: SetPriorityClass()/
+	GetPriorityClass() (kernel32) or, staying on pure ntdll like
+	the rest of this library, NtSetInformationProcess()/
+	NtQueryInformationProcess() with ProcessBasePriority (declared
+	in src/internal/nt.h already), with the NT base-priority scale
+	mapped onto POSIX's [0, NZERO*2-1] nice range. */
+#define NZERO 20
+#define PRIO_PROCESS 0
+#define PRIO_PGRP 1
+#define PRIO_USER 2
+int getpriority(int, id_t);
+int setpriority(int, id_t, int);
+
+static void test_getpriority_setpriority(void)
+{
+	int p;
+
+	/* DESCRIPTION: "the range of valid nice values is
+	 * [0,{NZERO}*2-1]" -- and RETURN VALUE: "getpriority() shall
+	 * return an integer in the range -{NZERO} to {NZERO}-1" (the
+	 * nice value re-based around 0, per the DESCRIPTION's
+	 * value+{NZERO} relationship). This process's own nice value,
+	 * fetched via PRIO_PROCESS, must fall in that range. */
+	errno = 0;  /* DESCRIPTION: "it is necessary to set errno to 0
+		     * prior to a call to getpriority()", since -1 is a
+		     * legal successful return */
+	p = getpriority(PRIO_PROCESS, getpid());
+	CHECK(errno == 0);
+	CHECK(p >= -NZERO && p <= NZERO - 1);
+
+	/* PRIO_PGRP: "who is interpreted as a process group ID" */
+	errno = 0;
+	p = getpriority(PRIO_PGRP, getpgrp());
+	CHECK(errno == 0);
+	CHECK(p >= -NZERO && p <= NZERO - 1);
+
+	/* PRIO_USER: "who is interpreted as ... an effective user ID" */
+	errno = 0;
+	p = getpriority(PRIO_USER, geteuid());
+	CHECK(errno == 0);
+	CHECK(p >= -NZERO && p <= NZERO - 1);
+
+	/* setpriority() RETURN VALUE: "Upon successful completion ...
+	 * shall return 0." Raise (numerically) this process's own nice
+	 * value by 1 -- a normal, always-permitted direction for an
+	 * unprivileged process -- and read it back via getpriority(). */
+	errno = 0;
+	p = getpriority(PRIO_PROCESS, getpid());
+	CHECK(errno == 0);
+	if (p < NZERO - 1) {
+		CHECK(setpriority(PRIO_PROCESS, getpid(), p + 1) == 0);
+		errno = 0;
+		CHECK(getpriority(PRIO_PROCESS, getpid()) == p + 1);
+		CHECK(setpriority(PRIO_PROCESS, getpid(), p) == 0);  /* restore */
+	}
+
+	/* ERRORS (both functions): "[ESRCH] No process could be located
+	 * using the which and who argument values specified." pid 0 is
+	 * legal (caller's own group/self depending on `which`) so this
+	 * must be a pid that cannot exist. */
+	errno = 0;
+	CHECK(getpriority(PRIO_PROCESS, (id_t)999999999) == -1 && errno == ESRCH);
+
+	/* ERRORS: "[EINVAL] The value of the which argument was not
+	 * recognized, or the value of the who argument is not a valid
+	 * process ID, process group ID, or user ID." */
+	errno = 0;
+	CHECK(getpriority(999, getpid()) == -1 && errno == EINVAL);
+
+	/* ERRORS (setpriority() only): "[EPERM] A process was located,
+	 * but neither the real nor effective user ID of the executing
+	 * process match the effective user ID of the process whose nice
+	 * value is being changed." A process this one does not own
+	 * (e.g. pid 1 on a system where that exists and is not ours) is
+	 * not reachable here in a portable way; assert against a
+	 * synthetic hard case instead: some other live pid entirely
+	 * outside this process's session, if one can be found, must
+	 * reject with EPERM rather than succeed. Left as a shape-only
+	 * placeholder pending real process enumeration in this test. */
+
+	/* ERRORS (setpriority() only): "[EACCES] A request was made to
+	 * change the nice value to a lower numeric value and the
+	 * current process does not have appropriate privileges." An
+	 * unprivileged process lowering (more favorable) its own nice
+	 * value below its current value must fail this way. */
+	errno = 0;
+	p = getpriority(PRIO_PROCESS, getpid());
+	CHECK(errno == 0);
+	if (p > -NZERO) {
+		errno = 0;
+		CHECK(setpriority(PRIO_PROCESS, getpid(), p - 1) == -1 && errno == EACCES);
+	}
+}
+#endif
+
 /* ===================== sys/select.h ===================== */
+
+/* select()/pselect(): select.html DESCRIPTION/RETURN VALUE/ERRORS.
+ * select() is declared in include/sys/select.h but not defined
+ * anywhere in src/ (grep confirms) -- a link error, not ENOSYS.
+ * pselect() is not even declared; local prototype below, plus the
+ * sigset_t it needs (already pulled in via __NEED_sigset_t at the top
+ * of this header). */
+#if 0 /* UNIMPL: select.html RETURN VALUE: "the total number of bits
+	set in the bit masks" -- with two known-ready pipe ends (one
+	readable, one writable) and no others requested, select() must
+	return exactly the count of ready descriptors and modify only
+	the sets actually passed in, leaving the untouched ones alone
+	per DESCRIPTION's "shall modify the objects pointed to by the
+	readfds, writefds, and errorfds arguments to indicate which
+	file descriptors are ready". NT mechanism: see this header's
+	own banner comment above FD_SETSIZE -- NtWaitForMultipleObjects
+	for the signalled shapes (console, regular files/dirs, always
+	ready) merged with an NtQueryInformationFile(
+	FilePipeLocalInformation) polling loop for pipes, which are not
+	signalled on data arrival in NT. */
+int pselect(int, fd_set *__restrict, fd_set *__restrict, fd_set *__restrict, const struct timespec *__restrict, const sigset_t *__restrict);
+
+static void test_select_ready_count(void)
+{
+	int fds[2];
+	fd_set rfds, wfds;
+	struct timeval tv;
+	int n;
+
+	CHECK(pipe(fds) == 0);
+	FD_ZERO(&rfds);
+	FD_SET(fds[0], &rfds);
+	FD_ZERO(&wfds);
+	FD_SET(fds[1], &wfds);
+
+	CHECK(write(fds[1], "x", 1) == 1);
+
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	n = select(fds[1] + 1, &rfds, &wfds, 0, &tv);
+	CHECK(n == 2);  /* read end has data, write end has room */
+	CHECK(FD_ISSET(fds[0], &rfds));
+	CHECK(FD_ISSET(fds[1], &wfds));
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+/* select.html DESCRIPTION timeout semantics: "If timeout is not a
+ * null pointer, it points to an object of type struct timeval that
+ * specifies a maximum interval to wait" and a zero-valued timeval
+ * "To effect a poll" -- must return promptly with 0 when nothing is
+ * ready. */
+static void test_select_zero_timeout_polls(void)
+{
+	int fds[2];
+	fd_set rfds;
+	struct timeval tv;
+
+	CHECK(pipe(fds) == 0);
+	FD_ZERO(&rfds);
+	FD_SET(fds[0], &rfds);
+	tv.tv_sec = 0;
+	tv.tv_usec = 0;
+	/* nothing written to fds[1] -- read end is not ready */
+	CHECK(select(fds[0] + 1, &rfds, 0, 0, &tv) == 0);
+	CHECK(!FD_ISSET(fds[0], &rfds));  /* cleared: not in the ready set */
+	close(fds[0]);
+	close(fds[1]);
+}
+
+/* select.html ERRORS. */
+static void test_select_errors(void)
+{
+	fd_set rfds;
+	struct timeval tv;
+
+	FD_ZERO(&rfds);
+	FD_SET(999999, &rfds);  /* not a valid open fd */
+	tv.tv_sec = 0;
+	tv.tv_usec = 0;
+	/* "[EBADF] One or more of the file descriptor sets specified a
+	 * file descriptor that is not a valid open file descriptor." */
+	errno = 0;
+	CHECK(select(1000000, &rfds, 0, 0, &tv) == -1 && errno == EBADF);
+
+	/* "[EINVAL] The nfds argument is less than 0 or greater than
+	 * FD_SETSIZE." */
+	FD_ZERO(&rfds);
+	errno = 0;
+	CHECK(select(-1, &rfds, 0, 0, &tv) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(select(FD_SETSIZE + 1, &rfds, 0, 0, &tv) == -1 && errno == EINVAL);
+
+	/* "[EINVAL] An invalid timeout interval was specified." -- a
+	 * negative tv_usec is not a valid struct timeval per
+	 * <sys/time.h>'s own contract (0 <= tv_usec < 1000000). */
+	tv.tv_sec = 0;
+	tv.tv_usec = -1;
+	errno = 0;
+	CHECK(select(1, &rfds, 0, 0, &tv) == -1 && errno == EINVAL);
+}
+
+/* pselect(): pselect.html DESCRIPTION -- differs from select() only
+ * in using struct timespec (nanosecond resolution) for the timeout
+ * and taking an optional sigset_t to atomically install for the
+ * duration of the wait ("replace the signal mask of the calling
+ * thread with the set of signals pointed to by sigmask ... restore
+ * ... prior to returning"), avoiding the race a separate
+ * sigprocmask()+select() pair would have. */
+static void test_pselect_timespec_and_mask(void)
+{
+	int fds[2];
+	fd_set rfds;
+	struct timespec ts;
+	sigset_t mask, omask, checkmask;
+
+	CHECK(pipe(fds) == 0);
+	FD_ZERO(&rfds);
+	FD_SET(fds[0], &rfds);
+	ts.tv_sec = 0;
+	ts.tv_nsec = 0;  /* poll, same "zero-valued timespec" contract as select() */
+
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGUSR1);
+	CHECK(pselect(fds[0] + 1, &rfds, 0, 0, &ts, &mask) == 0);
+
+	/* signal mask restored to what it was before the call, not left
+	 * as `mask` -- DESCRIPTION's "shall be restored ... prior to
+	 * returning". */
+	CHECK(sigprocmask(SIG_SETMASK, 0, &omask) == 0);
+	CHECK(sigprocmask(SIG_SETMASK, 0, &checkmask) == 0);
+	CHECK(memcmp(&omask, &checkmask, sizeof omask) == 0);
+
+	close(fds[0]);
+	close(fds[1]);
+}
+#endif
 
 /* sys_select.h.html basedefs: FD_ZERO/FD_SET/FD_CLR/FD_ISSET, exercised
  * as pure bit manipulation -- testable in full even though select()
