@@ -142,6 +142,7 @@ int mkstemps (char *, int);
 int mkostemps (char *, int, int);
 void *valloc (size_t);
 void *memalign(size_t, size_t);
+size_t malloc_usable_size(void *);
 int getloadavg(double *, int);
 int clearenv(void);
 #define WCOREDUMP(s) ((s) & 0x80)

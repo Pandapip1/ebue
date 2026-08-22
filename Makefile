@@ -39,10 +39,14 @@ CRT_OBJS = $(filter obj/crt/%,$(ALL_OBJS))
 
 AOBJS = $(LIBC_OBJS)
 GENH = obj/include/bits/alltypes.h
-IMPH = $(addprefix $(srcdir)/, src/internal/libc.h src/internal/nt.h)
+IMPH = $(addprefix $(srcdir)/, src/internal/libc.h src/internal/nt.h src/internal/rtlib.h)
 
 CFLAGS_ALL = $(CFLAGS_C99FSE)
-CFLAGS_ALL += -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL
+# _ALL_SOURCE (features.h turns it into _GNU_SOURCE) is for the library
+# itself, not for programs: without it a TU implementing a GNU/BSD
+# extension never sees its own public declaration, so a mismatch between
+# the header and the definition is silent instead of a compile error.
+CFLAGS_ALL += -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL
 CFLAGS_ALL += -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -I$(srcdir)/src/internal
 CFLAGS_ALL += $(CPPFLAGS) $(CFLAGS_AUTO) $(CFLAGS)
 # KERNEL32 comes from config.mak, included below; deferred (not `ifeq`,

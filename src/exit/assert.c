@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 

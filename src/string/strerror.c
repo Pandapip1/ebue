@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include <locale.h>
+#include "libc.h"
 
 /* Indexed by errno; the highest value in bits/errno.h is
  * ENOTRECOVERABLE (131). */

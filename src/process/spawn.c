@@ -34,7 +34,6 @@
 #include <fcntl.h>
 #include "libc.h"
 
-void *__fd_runtime_data(size_t *len);
 
 /* Append one argument to a UTF-16 command-line buffer, quoting it if it
  * contains whitespace, a quote, or is empty. */

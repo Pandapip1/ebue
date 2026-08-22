@@ -6,6 +6,7 @@
  * explicit 32-bit halves so that compiling this file cannot itself emit
  * calls to the functions being defined.
  */
+#include "rtlib.h"
 
 union u64 {
 	unsigned long long ll;

@@ -1,0 +1,57 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Declarations for the functions the toolchain calls but C code never
+ * does: the helpers the code generator emits calls to, and the image
+ * entry point the loader jumps to.
+ *
+ * Nothing in the tree calls any of these by name, so without this header
+ * each is a definition with no prior declaration -- which is what
+ * -Wmissing-prototypes reports, but the warning is not the point.  The
+ * point is that such a definition has nothing to be type-checked
+ * against, so a wrong signature (a `long` where the code generator will
+ * pass a `long long`, a signed return on an unsigned helper) is not a
+ * compile error but a miscompile at every call site the code generator
+ * emitted -- call sites that appear in no source file, so nothing else
+ * would ever catch it.  Declaring them here restores the check.
+ *
+ * These names are deliberately not in any public header: a program that
+ * calls __divdi3 or _start by hand is doing something wrong.
+ */
+#ifndef _NTLIBC_RTLIB_H
+#define _NTLIBC_RTLIB_H
+
+/* ---- 64-bit integer helpers (arch/i386/src/int64.c) -------------------- */
+/* tcc's i386 code generator calls these for /, % and variable-count
+ * shifts on long long.  x86_64 has the instructions and needs none of
+ * them, so that arch defines none of these; the declarations are
+ * harmless there.  Signatures match libgcc's. */
+unsigned long long __udivdi3(unsigned long long, unsigned long long);
+unsigned long long __umoddi3(unsigned long long, unsigned long long);
+long long __divdi3(long long, long long);
+long long __moddi3(long long, long long);
+long long __ashldi3(long long, int);
+unsigned long long __lshrdi3(unsigned long long, int);
+long long __ashrdi3(long long, int);
+
+/* ---- float <-> 64-bit integer helpers (arch/<arch>/src/fpconv.c) ------- */
+/* Emitted for every float-to-long-long conversion on i386, and for the
+ * unsigned long long cases on both arches. */
+unsigned long long __fixunssfdi(float);
+unsigned long long __fixunsdfdi(double);
+unsigned long long __fixunsxfdi(long double);
+long long __fixsfdi(float);
+long long __fixdfdi(double);
+long long __fixxfdi(long double);
+double __floatundidf(unsigned long long);
+float __floatundisf(unsigned long long);
+long double __floatundixf(unsigned long long);
+
+/* ---- program entry (crt/crt1.c) ---------------------------------------- */
+/* ntdll's RtlUserThreadStart calls _start with the PEB as its argument,
+ * and tcc's PE linker picks _start up as the image entry point by name.
+ * Neither of these is ever called from C. */
+void __libc_start_main(void);
+void _start(void *peb);
+
+#endif

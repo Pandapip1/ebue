@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <string.h>
+#include "libc.h"
 
 char *optarg;
 int optind = 1, opterr = 1, optopt, optreset;

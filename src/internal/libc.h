@@ -21,6 +21,13 @@ extern int __argc;
 extern char *__progname;                     /* argv[0] */
 extern char *__progname_full;                /* image path, UTF-8 */
 
+/* environ helpers shared by getenv.c and setenv.c.  __env_find returns the
+ * slot in environ holding "name=..." for the first l bytes of name, or
+ * NULL.  __putenv installs s (which must contain a '='; l is the length of
+ * the name part) and takes ownership of `owned` if non-NULL. */
+char **__env_find(const char *name, size_t l);
+int __putenv(char *s, size_t l, char *owned);
+
 PTEB __teb(void);                            /* this thread's TEB */
 #define __process_heap() (__peb->ProcessHeap)
 
@@ -62,6 +69,20 @@ void __ntpath_free(struct __ntpath *);
 /* The DOS-form absolute path of a handle, UTF-8, malloc'd. */
 char *__handle_path(HANDLE);
 
+/* The guts of open()/openat(): resolve and open, handing back the raw
+ * handle and its __FD_* classification without installing a descriptor.
+ * Returns 0, or -1 with errno. */
+int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
+                  HANDLE *out, int *typeout);
+/* The guts of unlink()/rmdir()/unlinkat(); isdir selects the rmdir
+ * behaviour.  Returns 0, or -1 with errno. */
+int __unlink_at(int dirfd, const char *path, int isdir);
+/* The guts of stat()/fstat(): fill *st from an open handle of __FD_* type
+ * `type`.  Returns 0, or -1 with errno.  (struct stat is only ever used
+ * through this pointer here, so <sys/stat.h> stays out of this header.) */
+struct stat;
+int __fstat_handle(HANDLE h, int type, struct stat *st);
+
 /* ---- the descriptor table ---------------------------------------------- */
 #define FD_MAX 1024
 
@@ -97,6 +118,10 @@ void __fd_pos_restore(HANDLE, long long pos);/* put it back after positioned I/O
 int __handle_type(HANDLE);                   /* classify by device type */
 int __fd_close_all_cloexec(void);
 void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from RuntimeData */
+/* Serialise the inheritable part of the descriptor table into a freshly
+ * malloc'd blob for a child's RTL_USER_PROCESS_PARAMETERS RuntimeData;
+ * *len receives its size.  NULL with errno on failure. */
+void *__fd_runtime_data(size_t *len);
 
 /* ---- children ---------------------------------------------------------- */
 /* The size of the statically allocated part of the child table.  It is
@@ -176,6 +201,10 @@ int __raise_internal(int);
 /* ---- misc -------------------------------------------------------------- */
 int __is_wow64(void);
 unsigned __rand_next(void);
+/* getopt's diagnostic writer, shared with getopt_long. */
+void __getopt_msg(const char *msg, const char *optname, size_t l);
+/* The strerror table lookup, shared with strerror_r.  Never NULL. */
+const char *__strerror_msg(int e);
 
 /* ---- WOW64 clone repair (see arch/i386/src/wow64_fixup.c) -------------- */
 /* Repair the FS-base and stuck-SRW-lock damage RtlCloneUserProcess leaves

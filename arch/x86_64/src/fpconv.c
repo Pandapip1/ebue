@@ -10,6 +10,7 @@
  * IEEE representation apart with unions: a cast here would compile into
  * a call to the very helper being defined.
  */
+#include "rtlib.h"
 
 union fbits { float f; unsigned u; };
 union dbits { double d; struct { unsigned lo, hi; } u; };

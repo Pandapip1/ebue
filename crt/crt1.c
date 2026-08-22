@@ -18,12 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "libc.h"
+#include "rtlib.h"
 
 int main();
-
-/* Defined in src/internal so that crt1.o stays small; declared here
- * because the startup path cannot use the public headers' wchar.h. */
-size_t wcslen_(const WCHAR *);
 
 PPEB __peb;
 char **environ;

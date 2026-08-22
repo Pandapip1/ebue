@@ -3,9 +3,9 @@
 #define _GNU_SOURCE
 #include <string.h>
 #include <getopt.h>
+#include "libc.h"
 
 extern int __optpos;
-void __getopt_msg(const char *msg, const char *optname, size_t l);
 
 static void permute(char *const *argv, int dest, int src)
 {

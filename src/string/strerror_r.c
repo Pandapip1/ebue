@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <string.h>
 #include <errno.h>
+#include "libc.h"
 
-const char *__strerror_msg(int);
 
 int strerror_r(int err, char *buf, size_t buflen)
 {

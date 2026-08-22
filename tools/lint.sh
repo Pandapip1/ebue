@@ -89,7 +89,7 @@ gen_alltypes() {
 }
 
 cppflags_for() {
-	echo "-std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL" \
+	echo "-std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL" \
 	     "-Iarch/$1 -Iarch/generic -I$builddir/$1/include -Iinclude -Isrc/internal"
 }
 
@@ -223,7 +223,7 @@ stage_cppcheck() {
 		cppcheck --quiet --enable=warning,portability --std=c99 --force \
 			--inline-suppr --suppressions-list=tools/cppcheck-suppressions.txt \
 			--error-exitcode=0 \
-			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL \
+			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL \
 			-Iarch/"$arch" -Iarch/generic -I"$builddir/$arch/include" \
 			-Iinclude -Isrc/internal \
 			$(sources_for "$arch") > "$out" 2>&1

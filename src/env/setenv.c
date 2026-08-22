@@ -6,7 +6,6 @@
 #include <errno.h>
 #include "libc.h"
 
-char **__env_find(const char *name, size_t l);
 
 /* Strings put in the environment by setenv/putenv are ours to free; the
  * ones crt1 built are too, since all of them were malloc'd.  Strings
