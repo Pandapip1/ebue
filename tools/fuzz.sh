@@ -58,7 +58,7 @@ if [ "${1:-}" = "--repro" ]; then
 	name=${2:-$(basename "$(dirname "$art")")}
 	make -C "$srcdir/fuzz" "$srcdir/obj/fuzz/fuzz_$name" >/dev/null
 	exec env LD_PRELOAD="$ASAN_SO" \
-	     ASAN_OPTIONS=detect_leaks=$LEAKS UBSAN_OPTIONS=print_stacktrace=1 \
+	     ASAN_OPTIONS=detect_leaks="$LEAKS" UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$name" "$art"
 fi
 
@@ -76,7 +76,7 @@ rc=0
 for h in $harnesses; do
 	echo "== fuzz_$h (${time}s)"
 	if ! LD_PRELOAD="$ASAN_SO" \
-	     ASAN_OPTIONS=detect_leaks=$LEAKS UBSAN_OPTIONS=print_stacktrace=1 \
+	     ASAN_OPTIONS=detect_leaks="$LEAKS" UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$h" \
 	     -max_total_time="$time" -max_len=256 -print_funcs=0 -print_final_stats=1; then
 		echo "   fuzz_$h FOUND SOMETHING (input shown above)"
