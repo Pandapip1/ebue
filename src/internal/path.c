@@ -20,7 +20,7 @@
 #include <errno.h>
 #include "libc.h"
 
-static WCHAR *dos_from_posix(const char *path, size_t *wlen)
+static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 {
 	WCHAR *w;
 	size_t i, n;
@@ -35,22 +35,47 @@ static WCHAR *dos_from_posix(const char *path, size_t *wlen)
 	if (!w) return 0;
 	for (i = 0; i < n; i++)
 		if (w[i] == '/') w[i] = '\\';
-	/* Strip a trailing slash: "dir/" must mean "dir" to NtCreateFile. */
+	/* Strip a trailing slash: "dir/" must mean "dir" to NtCreateFile --
+	 * but remember it was there ("root" paths like "/" or "C:\" do not
+	 * count: they can only ever name a directory) so the caller can
+	 * still reject the name if what it resolves to is not one. */
+	if (trailing) *trailing = n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':');
 	while (n > 1 && w[n-1] == '\\' && !(n == 3 && w[1] == ':')) w[--n] = 0;
 	if (wlen) *wlen = n;
 	return w;
+}
+
+/* access.html ERRORS ENOTDIR / open.html DESCRIPTION: a trailing slash
+ * requires the resolved name to be a directory.  The slash itself is
+ * already stripped from *out (NtCreateFile does not accept one), so this
+ * re-checks the object type with a handle-less attribute query.  A name
+ * that does not exist yet, or that a query cannot be answered for some
+ * other reason, is left to whatever real operation the caller goes on to
+ * do -- this only rejects a trailing slash on something that positively
+ * exists and is not a directory. */
+static int reject_if_not_dir(struct __ntpath *out)
+{
+	FILE_BASIC_INFORMATION bi;
+	NTSTATUS st = NtQueryAttributesFile(&out->oa, &bi);
+	if (NT_SUCCESS(st) && !(bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		__ntpath_free(out);
+		errno = ENOTDIR;
+		return -1;
+	}
+	return 0;
 }
 
 int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 {
 	WCHAR *dos;
 	size_t n;
+	int trailing;
 	NTSTATUS st;
 
 	if (!path) { errno = EFAULT; return -1; }
 	if (!*path) { errno = ENOENT; return -1; }
 
-	dos = dos_from_posix(path, &n);
+	dos = dos_from_posix(path, &n, &trailing);
 	if (!dos) return -1;
 
 	memset(out, 0, sizeof *out);
@@ -63,6 +88,7 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 	out->buf = out->nt.Buffer;
 	out->dos = dos;
 	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
+	if (trailing && reject_if_not_dir(out)) return -1;
 	return 0;
 }
 
@@ -83,11 +109,12 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		struct __fd *f = __fd_get(dirfd);
 		WCHAR *w;
 		size_t n;
+		int trailing;
 		if (!f) return -1;
 		if (f->type != __FD_DIR) { errno = ENOTDIR; return -1; }
-		w = dos_from_posix(path, &n);
+		w = dos_from_posix(path, &n, &trailing);
 		if (!w) return -1;
-		if (n == 1 && w[0] == '.') { w[0] = 0; n = 0; }
+		if (n == 1 && w[0] == '.') { w[0] = 0; n = 0; trailing = 0; }
 		/* UNICODE_STRING.Length is a USHORT count of bytes and
 		 * MaximumLength has to hold one more code unit, so a name past
 		 * 32766 code units cannot be described -- and narrowing it would
@@ -105,6 +132,7 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		out->buf = 0;      /* w is freed as dos */
 		out->dos = w;
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, f->h, 0);
+		if (trailing && reject_if_not_dir(out)) return -1;
 		return 0;
 	}
 }

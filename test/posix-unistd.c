@@ -26,12 +26,10 @@ static int fails;
 /* open.html DESCRIPTION: "a bitwise AND is performed on the file-mode
  * bits and the corresponding bits in the complement of the process' file
  * mode creation mask" -- i.e. mode is ANDed with ~umask before it takes
- * effect.  src/fcntl/open.c's __open_handle() reads the mode argument
- * (its only use is the "mode & 0222" check that decides
- * FILE_ATTRIBUTE_READONLY) directly; src/stat/chmod.c's umask() records
- * umask_value but nothing in src/fcntl or src/stat ever consults it.
- * BUG: a umask that clears the write bits is silently ignored by
- * open(O_CREAT). */
+ * effect.  Fixed: src/fcntl/open.c's __open_handle() now ANDs mode with
+ * ~__umask_get() (src/stat/chmod.c) before deciding
+ * FILE_ATTRIBUTE_READONLY -- the only mode bit NTFS gives any meaning
+ * to here, so it is the only bit umask can be observed to affect. */
 static void test_open_umask_bug(void)
 {
 	mode_t old;
@@ -39,18 +37,32 @@ static void test_open_umask_bug(void)
 	struct stat st;
 
 	old = umask(0222);		/* clear all write bits */
-#if 0	/* BUG: open.html DESCRIPTION -- umask must AND out 0222 from the
-	 * mode, so this file should come out read-only (mode & 0222 == 0).
-	 * It does not: src/fcntl/open.c never applies umask_value. */
 	fd = open("um.txt", O_CREAT | O_WRONLY | O_TRUNC, 0666);
 	CHECK(fd >= 0);
 	close(fd);
 	CHECK(stat("um.txt", &st) == 0);
 	CHECK(!(st.st_mode & 0222));
-	unlink("um.txt");
-#endif
-	(void)fd; (void)st;
 	umask(old);
+	/* The file just created is read-only; Wine's server refuses to
+	 * unlink a read-only file (real NT does not -- see test/unistd.c's
+	 * "a file created read-only via the mode argument" case for the
+	 * same quirk), so clear the attribute first when that happens.
+	 * Wine also refuses a plain chmod() back from read-only (it maps
+	 * FILE_WRITE_ATTRIBUTES to a Unix O_WRONLY open, which a read-only
+	 * file's Unix mode 0444 does not permit); test/unistd.c's "chmod
+	 * back" case works around that with fchmod on an O_RDONLY
+	 * descriptor, which Wine's NtSetInformationFile does accept. */
+	if (unlink("um.txt") == -1) {
+		CHECK(errno == EACCES);
+		if (chmod("um.txt", 0644) == -1) {
+			CHECK(errno == EACCES);
+			fd = open("um.txt", O_RDONLY);
+			CHECK(fd >= 0);
+			CHECK(fchmod(fd, 0644) == 0);
+			CHECK(close(fd) == 0);
+		}
+		CHECK(unlink("um.txt") == 0);
+	}
 }
 
 /* dup.html DESCRIPTION (dup2()): "If fildes is equal to fildes2, ...
@@ -140,16 +152,13 @@ static void test_access_trailing_slash_enotdir(void)
 	int fd = open("t-notdir.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
 	CHECK(fd >= 0 && close(fd) == 0);
 	errno = 0;
-#if 0	/* BUG: access.html ERRORS ENOTDIR (trailing-slash clause).  Root
-	 * cause is src/internal/path.c's __ntpath(), which unconditionally
-	 * strips a trailing slash ("dir/" must mean "dir" to NtCreateFile")
-	 * without ever checking that the resolved object is actually a
-	 * directory -- so "regularfile/" resolves exactly like
-	 * "regularfile" and access() reports success.  path.c is outside
-	 * this agent's src/unistd, src/fcntl, src/stat scope, so this is
-	 * reported rather than fixed here. */
+	/* Fixed: src/internal/path.c's __ntpath()/__ntpath_at() now note
+	 * whether a trailing slash was stripped and, if so, re-check the
+	 * resolved object's type with a handle-less NtQueryAttributesFile
+	 * before returning -- ENOTDIR if it exists and is not a directory,
+	 * left alone otherwise (a name that does not exist yet is left to
+	 * whatever real operation the caller goes on to do). */
 	CHECK(access("t-notdir.txt/", F_OK) == -1 && errno == ENOTDIR);
-#endif
 	unlink("t-notdir.txt");
 }
 
@@ -177,17 +186,11 @@ static void test_rename_new_dir_old_file_eisdir(void)
 	CHECK(fd >= 0 && close(fd) == 0);
 	CHECK(mkdir("t-rdir", 0755) == 0);
 	errno = 0;
-#if 0	/* BUG: rename.html ERRORS EISDIR: "The new argument points to a
-	 * directory and the old argument points to a file that is not a
-	 * directory."  src/stdio/misc.c's renameat() reports whatever
-	 * __set_errno_status() maps NtSetInformationFile's status to; here
-	 * NT answers STATUS_ACCESS_DENIED (measured under Wine) and that
-	 * maps to EACCES, not EISDIR.  renameat lives in src/stdio, outside
-	 * this agent's scope, so reported rather than fixed here. */
+	/* Fixed: src/stdio/misc.c's renameat() now disambiguates NT's
+	 * STATUS_ACCESS_DENIED by querying old and new's types -- new an
+	 * existing directory and old not one maps to EISDIR here, the same
+	 * way open.c already special-cases STATUS_FILE_IS_A_DIRECTORY. */
 	CHECK(rename("t-rfile.txt", "t-rdir") == -1 && errno == EISDIR);
-#else
-	CHECK(rename("t-rfile.txt", "t-rdir") == -1);
-#endif
 	CHECK(rmdir("t-rdir") == 0);
 	unlink("t-rfile.txt");
 }
@@ -204,17 +207,9 @@ static void test_rename_onto_nonempty_dir(void)
 	fd = open("t-rdst/x.txt", O_CREAT | O_WRONLY, 0644);
 	CHECK(fd >= 0 && close(fd) == 0);
 	errno = 0;
-#if 0	/* BUG: rename.html ERRORS "[EEXIST] or [ENOTEMPTY] The link named
-	 * by new is a directory that is not an empty directory."  Same root
-	 * cause as the EISDIR case above: src/stdio/misc.c's renameat()
-	 * just forwards whatever __set_errno_status() derives from NT's
-	 * status (STATUS_ACCESS_DENIED here too, measured under Wine),
-	 * giving EACCES instead of ENOTEMPTY/EEXIST.  Outside this agent's
-	 * scope (src/stdio), reported rather than fixed here. */
+	/* Fixed: same disambiguation as the EISDIR case above -- old and
+	 * new both directories maps to ENOTEMPTY instead of EACCES. */
 	CHECK(rename("t-rsrc", "t-rdst") == -1 && (errno == ENOTEMPTY || errno == EEXIST));
-#else
-	CHECK(rename("t-rsrc", "t-rdst") == -1);
-#endif
 	unlink("t-rdst/x.txt");
 	CHECK(rmdir("t-rdst") == 0);
 	CHECK(rmdir("t-rsrc") == 0);

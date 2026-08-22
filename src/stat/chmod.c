@@ -55,6 +55,7 @@ int lchmod(const char *path, mode_t mode) { return fchmodat(AT_FDCWD, path, mode
 
 static mode_t umask_value = 022;
 mode_t umask(mode_t m) { mode_t o = umask_value; umask_value = m & 0777; return o; }
+unsigned __umask_get(void) { return umask_value; }
 
 int mkfifo(const char *p, mode_t m) { (void)p; (void)m; errno = ENOSYS; return -1; }
 int mkfifoat(int d, const char *p, mode_t m) { (void)d; (void)p; (void)m; errno = ENOSYS; return -1; }

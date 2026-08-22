@@ -75,6 +75,29 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 		st = NtSetInformationFile(h, &io, ri, (ULONG)bufsz, FileRenameInformation);
 	}
 	__free(ri);
+
+	/* rename.html ERRORS: STATUS_ACCESS_DENIED is what NT answers both
+	 * when new names a directory and old does not (should be EISDIR) and
+	 * when new names a non-empty directory (should be EEXIST/ENOTEMPTY);
+	 * the generic map in __set_errno_status turns both into plain
+	 * EACCES, which is right for genuine permission failures but wrong
+	 * here.  Disambiguate by type, the way open.c already special-cases
+	 * STATUS_FILE_IS_A_DIRECTORY -- old's type from the handle already
+	 * open on it, new's type from a handle-less attribute query (new was
+	 * never opened). */
+	if (st == STATUS_ACCESS_DENIED) {
+		FILE_BASIC_INFORMATION obi, nbi;
+		int old_isdir = NT_SUCCESS(NtQueryInformationFile(h, &io, &obi, sizeof obi, FileBasicInformation)) &&
+		                (obi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+		NTSTATUS qst = NtQueryAttributesFile(&np.oa, &nbi);
+		if (NT_SUCCESS(qst) && (nbi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+			NtClose(h);
+			__ntpath_free(&np);
+			errno = old_isdir ? ENOTEMPTY : EISDIR;
+			return -1;
+		}
+	}
+
 	NtClose(h);
 	__ntpath_free(&np);
 	if (st == STATUS_NOT_SAME_DEVICE) { errno = EXDEV; return -1; }

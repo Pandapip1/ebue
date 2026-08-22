@@ -84,6 +84,13 @@ char *__handle_path(HANDLE);
  * Returns 0, or -1 with errno. */
 int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
                   HANDLE *out, int *typeout);
+/* The current umask (src/stat/chmod.c owns umask_value), as plain
+ * unsigned rather than mode_t so this header does not need mode_t
+ * defined -- not every includer has pulled in <sys/stat.h>/<fcntl.h>
+ * first.  Callers that create a file apply it to the mode they were
+ * given themselves, the way open()/creat()/mkdir() do, since umask()
+ * only records the mask. */
+unsigned __umask_get(void);
 /* The guts of unlink()/rmdir()/unlinkat(); isdir selects the rmdir
  * behaviour.  Returns 0, or -1 with errno. */
 int __unlink_at(int dirfd, const char *path, int isdir);

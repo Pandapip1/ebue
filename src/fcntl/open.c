@@ -82,7 +82,12 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	if (flags & O_DIRECT) options |= FILE_NO_INTERMEDIATE_BUFFERING;
 
 	attrs = FILE_ATTRIBUTE_NORMAL;
-	if ((flags & O_CREAT) && !(mode & 0222)) attrs = FILE_ATTRIBUTE_READONLY;
+	/* open.html DESCRIPTION: mode is ANDed with the complement of the
+	 * process' umask before it takes effect.  NTFS has no room for the
+	 * rest of the mode bits (see the file comment), so umask's only
+	 * observable effect here, like mode's, is whether the write bits
+	 * survive to decide FILE_ATTRIBUTE_READONLY. */
+	if ((flags & O_CREAT) && !(mode & ~__umask_get() & 0222)) attrs = FILE_ATTRIBUTE_READONLY;
 
 	st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS,
 	                  disposition, options, 0, 0);
