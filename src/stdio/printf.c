@@ -462,7 +462,13 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 					default: sv = va_arg(ap, int); break;
 					}
 					neg = sv < 0;
-					uv = neg ? (unsigned long long)(-(sv)) : (unsigned long long)sv;
+					/* Negate after widening, not before: -sv is
+					 * undefined for LLONG_MIN, whose magnitude is not
+					 * representable as a long long.  Converting first
+					 * and negating the unsigned value is well defined
+					 * (C99 6.3.1.3p2: it wraps modulo 2**64, which is
+					 * exactly the magnitude wanted). */
+					uv = neg ? -(unsigned long long)sv : (unsigned long long)sv;
 				} else {
 					switch (lm) {
 					case LM_hh: uv = (unsigned char)va_arg(ap, unsigned int); break;
