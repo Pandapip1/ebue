@@ -82,6 +82,8 @@ for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
 	         continue ;;
 	esac
 	o="$OBJ/obj/$(echo "$f" | tr / _).o"
+	# $CC/$CFLAGS/$SAN are flag lists and must word-split.
+	# shellcheck disable=SC2086
 	if $CC -c $CFLAGS -w "$srcdir/$f" -o "$o" 2> "$o.err"; then
 		echo "$f" >> "$OBJ/compiled.txt"
 	else
@@ -89,6 +91,8 @@ for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
 		rm -f "$o"
 	fi
 done
+# $CC/$CFLAGS/$SAN are flag lists and must word-split.
+# shellcheck disable=SC2086
 $CC -c $CFLAGS -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
 echo "tsan: $(wc -l < "$OBJ/compiled.txt") src/*.c compiled natively,\
  $(wc -l < "$OBJ/skipped.txt") skipped"
@@ -172,8 +176,12 @@ TINC="-I$srcdir/obj/include -I$srcdir/include -I$srcdir/arch/$ARCH -I$srcdir/arc
 # sanitizer DSO exports weak str*/mem* interceptors that would otherwise
 # satisfy those references and leave ntlibc's versions untested.
 # shellcheck disable=SC2046  # deliberate word splitting of the object list
+# $CC/$CFLAGS/$SAN are flag lists and must word-split.
+# shellcheck disable=SC2086
 $CC $SAN -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
-    $TINC "$OBJ/driver.c" "$OBJ/ntstubs.o" $(ls "$OBJ"/obj/*.o) -lpthread -o "$OBJ/driver"
+# $CC/$CFLAGS/$SAN are flag lists and must word-split.
+# shellcheck disable=SC2086
+    $TINC "$OBJ/driver.c" "$OBJ/ntstubs.o" "$OBJ"/obj/*.o -lpthread -o "$OBJ/driver"
 
 TSAN_OPTIONS="symbolize=$SYMBOLIZE halt_on_error=0 exitcode=0"
 export TSAN_OPTIONS
@@ -198,7 +206,9 @@ if [ -n "$main_rt" ] && [ -n "$main_lt" ]; then
 	grep -oE 'at 0x[0-9a-f]+ by thread' "$OBJ/report.txt" |
 	awk '{print $2}' | sort -u |
 	while read -r a; do
-		off=$(printf '%016x\n' $(($a - base)))
+		# $CC/$CFLAGS/$SAN are flag lists and must word-split.
+		# shellcheck disable=SC2086
+		off=$(printf '%016x\n' $((a - base)))
 		sym=$(grep -i "^$off " "$OBJ/syms.txt" | head -1)
 		echo "  $a  ${sym:-<not a named object>}"
 	done
