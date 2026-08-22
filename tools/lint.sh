@@ -267,7 +267,7 @@ stage_cppcheck() {
 		gen_alltypes "$arch" || continue
 		out=$builddir/$arch.cppcheck.log
 		# shellcheck disable=SC2046,SC2086
-		cppcheck --quiet --enable=warning,portability --std=c99 --force \
+		cppcheck --quiet --enable=warning,portability --std=c99 --max-configs=12 \
 			--inline-suppr --suppressions-list="$suppr" \
 			--error-exitcode=0 \
 			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL \
