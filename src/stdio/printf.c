@@ -444,7 +444,7 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 	}
 }
 
-int __vfprintf(FILE *f, const char *fmt, va_list ap)
+__wraps int __vfprintf(FILE *f, const char *fmt, va_list ap)
 {
 	long count = 0;
 	int bad = 0;

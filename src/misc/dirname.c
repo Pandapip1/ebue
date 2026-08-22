@@ -5,7 +5,7 @@
 
 #define ISSEP(c) ((c) == '/' || (c) == '\\')
 
-char *dirname(char *s)
+__wraps char *dirname(char *s)
 {
 	size_t i, start = 0;
 	if (!s || !*s) return (char *)".";
