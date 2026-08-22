@@ -14,11 +14,12 @@
 double hypot(double x, double y)
 {
 	long double ax = fabsl(x), ay = fabsl(y), r;
-	if (x != x || y != y) {
-		/* an infinity wins even over nan */
-		if (fabs(x) == HUGE_VAL || fabs(y) == HUGE_VAL) return HUGE_VAL;
-		return x + y;
-	}
+	/* hypot.html RETURN VALUE: "If x or y is +-Inf, +Inf shall be
+	 * returned even if one of x or y is a NaN" -- an infinity outranks
+	 * a NaN, so that check must run first, unconditionally, not only
+	 * inside the x!=x||y!=y branch below. */
+	if (fabs(x) == HUGE_VAL || fabs(y) == HUGE_VAL) return HUGE_VAL;
+	if (x != x || y != y) return x + y;
 	if (ax < ay) { long double t = ax; ax = ay; ay = t; }
 	if (ax == 0) return 0;
 	r = ay / ax;

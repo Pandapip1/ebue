@@ -27,6 +27,7 @@
 #include <math.h>
 #include <float.h>
 #include <errno.h>
+#include <fenv.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -345,19 +346,13 @@ static void test_hypot(void)
 	CHECK(hypot(3.0, 4.0) == 5.0);
 	CHECK(hypot(DBL_MAX, DBL_MAX) == HUGE_VAL);  /* overflow -> HUGE_VAL */
 
-#if 0 /* BUG: hypot.html RETURN VALUE -- "If x or y is ±Inf, +Inf shall
-       * be returned (even if one of x or y is NaN)."  This holds for
-       * one-Inf-one-finite and one-Inf-one-NaN (both checked above),
-       * but src/math/hypot.c only special-cases the case where at
-       * least one argument is a NaN (`if (x != x || y != y) { ... }`);
-       * when BOTH arguments are (non-NaN) infinities it falls through
-       * to the general "scale by the larger magnitude" path, where
-       * r = ay/ax = Inf/Inf computes to NaN, and the final
-       * ax*sqrt(1+r*r) is Inf*NaN = NaN instead of +Inf. */
+	/* hypot.html RETURN VALUE -- "If x or y is ±Inf, +Inf shall be
+	 * returned (even if one of x or y is NaN)."  Both arguments
+	 * infinite, neither a NaN: the infinity check must run before (not
+	 * only alongside) the NaN check. */
 	CHECK(hypot(HUGE_VAL, HUGE_VAL) == HUGE_VAL);
 	CHECK(hypot(-HUGE_VAL, -HUGE_VAL) == HUGE_VAL);
 	CHECK(hypot(HUGE_VAL, -HUGE_VAL) == HUGE_VAL);
-#endif
 }
 
 /* ---- nan.html: RETURN VALUE -- "a quiet NaN, if available". ---- */
@@ -376,27 +371,113 @@ static void test_nan(void)
  * macros FE_DIVBYZERO, FE_INVALID, and FE_OVERFLOW in <fenv.h>." ---- */
 static void test_errhandling(void)
 {
+	volatile double big, tiny, zero, three, negone, result;
 	CHECK(MATH_ERRNO == 1 && MATH_ERREXCEPT == 2);
 	CHECK(math_errhandling == MATH_ERREXCEPT);
-	/* BUG (unfenceable as a runtime CHECK -- it is the absence of a
-	 * header, not a wrong return value; recorded here and in
-	 * test/posix-coverage/math.md instead): include/math.h hardcodes
-	 * `#define math_errhandling 2` i.e. MATH_ERREXCEPT, which the
-	 * clause above just confirmed is unconditionally non-zero. That
-	 * *requires* the implementation to define FE_DIVBYZERO, FE_INVALID,
-	 * FE_OVERFLOW (and, per every ERRORS section above, feclearexcept()/
-	 * fetestexcept() to observe them) in <fenv.h> -- but ntlibc has no
-	 * include/fenv.h at all, so an application "wishing to check for
-	 * error situations" as every RETURN VALUE section above literally
-	 * instructs cannot: math_errhandling & MATH_ERRNO is 0 (errno is
-	 * correctly never touched by src/math/*.c, verified below) and
-	 * math_errhandling & MATH_ERREXCEPT's promised mechanism does not
-	 * exist. The honest fix is either to implement <fenv.h> or to
-	 * define math_errhandling as 0 (conformance still permits this --
-	 * "0" is not one of the two bits, but nothing in the spec requires
-	 * math_errhandling to be nonzero, only that IF MATH_ERREXCEPT can
-	 * be nonzero THEN <fenv.h> exists); as shipped, the macro's value
-	 * is simply false advertising. */
+
+	/* <fenv.h> basedefs: FE_DIVBYZERO, FE_INVALID and FE_OVERFLOW (the
+	 * three basedefs/math.h.html names) must exist with these exact
+	 * values -- the traditional x86 status-word bit positions, which
+	 * is also what feclearexcept()/fetestexcept() below observe on the
+	 * real hardware flags. */
+	CHECK(FE_INVALID == 0x01 && FE_DIVBYZERO == 0x04 && FE_OVERFLOW == 0x08);
+	CHECK(FE_UNDERFLOW == 0x10 && FE_INEXACT == 0x20);
+	CHECK(FE_ALL_EXCEPT == (FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT));
+
+	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == 0);
+
+	/* sqrt.html ERRORS: "a domain error occurs" for sqrt(x) with x<0.
+	 * -1.0 goes straight to hardware fsqrt (src/math/sqrt.c), which
+	 * signals invalid for a negative operand on both arches. */
+	negone = -1.0;
+	(void)sqrt(negone);
+	CHECK(fetestexcept(FE_INVALID) == FE_INVALID);
+	CHECK(feclearexcept(FE_INVALID) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
+
+	/* log.html ERRORS: "a pole error may occur" for log(+-0); fyl2x
+	 * signals divide-by-zero for a zero operand (src/math/log.c). */
+	zero = 0.0;
+	(void)log(zero);
+	CHECK(fetestexcept(FE_DIVBYZERO) == FE_DIVBYZERO);
+	CHECK(feclearexcept(FE_DIVBYZERO) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
+
+	/* DBL_MAX*DBL_MAX overflows -- this is plain compiler-emitted `*`,
+	 * not a src/math/x87.h helper, so on x86_64 it exercises the SSE2
+	 * mulsd path (MXCSR) rather than x87; on i386 tcc still emits x87
+	 * fmul for `double`.  Either way fetestexcept() must see it.  The
+	 * result must actually land in a real `double` (not be discarded):
+	 * x87's registers are 80-bit, so overflow relative to *double*'s
+	 * narrower exponent range is only detected at the store that
+	 * rounds/converts down to 64 bits -- a discarded `(void)(a*b)` can
+	 * pop the x87 stack without ever performing that store. */
+	big = DBL_MAX;
+	result = big * big;
+	/* An overflowing result is necessarily also inexact (the true
+	 * mathematical product cannot be represented at all), so this
+	 * checks only that FE_OVERFLOW is among the raised flags, not
+	 * that it is the only one -- then clears everything before the
+	 * next case. */
+	CHECK((fetestexcept(FE_ALL_EXCEPT) & FE_OVERFLOW) == FE_OVERFLOW);
+	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
+
+	/* A tiny compiler-emitted division that rounds to a subnormal
+	 * result signals underflow (and inexact alongside it, same
+	 * both-flags-raised-together reasoning as overflow above); same
+	 * store-to-a-real-double requirement as above. */
+	tiny = DBL_MIN;
+	big = 1e16;
+	result = tiny / big;
+	CHECK((fetestexcept(FE_ALL_EXCEPT) & FE_UNDERFLOW) == FE_UNDERFLOW);
+	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
+
+	/* 1.0/3.0 is not exactly representable -- signals inexact, and
+	 * nothing else. */
+	three = 3.0;
+	result = 1.0 / three;
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == FE_INEXACT);
+	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
+	(void)result;
+
+	/* feraiseexcept()/fesetexceptflag() can set flags directly,
+	 * independent of any actual computation. */
+	CHECK(feraiseexcept(FE_INVALID | FE_OVERFLOW) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == (FE_INVALID | FE_OVERFLOW));
+	{
+		fexcept_t saved;
+		CHECK(fegetexceptflag(&saved, FE_ALL_EXCEPT) == 0);
+		CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
+		CHECK(fetestexcept(FE_ALL_EXCEPT) == 0);
+		CHECK(fesetexceptflag(&saved, FE_ALL_EXCEPT) == 0);
+		CHECK(fetestexcept(FE_ALL_EXCEPT) == (FE_INVALID | FE_OVERFLOW));
+	}
+	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
+
+	/* fegetround()/fesetround(): default is round-to-nearest; setting
+	 * and restoring another mode round-trips. */
+	CHECK(fegetround() == FE_TONEAREST);
+	CHECK(fesetround(FE_TOWARDZERO) == 0);
+	CHECK(fegetround() == FE_TOWARDZERO);
+	CHECK(fesetround(FE_TONEAREST) == 0);
+	CHECK(fegetround() == FE_TONEAREST);
+	CHECK(fesetround(0xdead) == -1);  /* not one of the four modes */
+
+	/* fegetenv()/fesetenv()/feholdexcept()/feupdateenv(): a
+	 * saved-and-restored environment round-trips the exception state
+	 * exactly as the C99 feupdateenv() contract requires -- raised
+	 * exceptions accumulated *during* the held region are merged back
+	 * in on top of whatever the caller had pending before. */
+	{
+		fenv_t env;
+		CHECK(feholdexcept(&env) == 0);
+		CHECK(fetestexcept(FE_ALL_EXCEPT) == 0);
+		zero = 0.0;
+		(void)log(zero);  /* raises FE_DIVBYZERO while "held" */
+		CHECK(fetestexcept(FE_DIVBYZERO) == FE_DIVBYZERO);
+		CHECK(feupdateenv(&env) == 0);
+		CHECK(fetestexcept(FE_DIVBYZERO) == FE_DIVBYZERO);
+		CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
+	}
 
 	/* Since MATH_ERRNO is (correctly, per math_errhandling's value)
 	 * not required, confirm errno is in fact left alone across a

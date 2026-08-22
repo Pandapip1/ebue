@@ -57,6 +57,10 @@ int __signbitl(long double);
 
 #define MATH_ERRNO  1
 #define MATH_ERREXCEPT 2
+/* MATH_ERREXCEPT: errno is never touched by any src/math/ function, but
+ * <fenv.h>'s FE_DIVBYZERO/FE_INVALID/FE_OVERFLOW/FE_UNDERFLOW/
+ * FE_INEXACT and feclearexcept()/fetestexcept() are real, observing
+ * genuine x87/SSE hardware exception flags -- see include/fenv.h. */
 #define math_errhandling 2
 
 #define FP_ILOGBNAN (-1-0x7fffffff)

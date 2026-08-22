@@ -540,17 +540,22 @@ get implemented later, audit them here.
 
 ## math.h (priority 9)
 
-New clause-cited audit: `test/posix-math.c` (98 `CHECK()` assertions).
-Existing ad-hoc coverage: `test/math.c`. Functions implemented and
-audited: `fabs`, `floor`/`ceil`/`trunc`/`round`, `sqrt`, `fmod`,
-`frexp`/`ldexp`/`scalbn`, `modf`, `copysign`, `exp`, `log`/`log2`/
-`log10`, `sin`/`cos`/`tan`/`atan`/`atan2`, `pow`, `fmax`/`fmin`,
-`hypot`, `nan`, `fpclassify`/`isnan`/`isinf`/`isfinite`/`isnormal`/
-`signbit`. Not implemented by `src/math/` at all (no coverage needed):
-`asin`/`acos`, `sinh`/`cosh`/`tanh` and inverses, `cbrt`, `expm1`/
-`log1p`, `erf`/`erfc`, `lgamma`/`tgamma`, Bessel functions, `remainder`/
-`remquo`, `nextafter`/`nexttoward`, `fdim`, `fma`, `ilogb`/`logb`,
-`nearbyint`, `scalbln`.
+New clause-cited audit: `test/posix-math.c`. Existing ad-hoc coverage:
+`test/math.c`. Functions implemented and audited: `fabs`,
+`floor`/`ceil`/`trunc`/`round`, `sqrt`, `fmod`, `frexp`/`ldexp`/
+`scalbn`, `modf`, `copysign`, `exp`, `log`/`log2`/`log10`, `sin`/`cos`/
+`tan`/`atan`/`atan2`, `pow`, `fmax`/`fmin`, `hypot`, `nan`,
+`fpclassify`/`isnan`/`isinf`/`isfinite`/`isnormal`/`signbit`. Not
+implemented by `src/math/` at all (no coverage needed): `asin`/`acos`,
+`sinh`/`cosh`/`tanh` and inverses, `cbrt`, `expm1`/`log1p`, `erf`/
+`erfc`, `lgamma`/`tgamma`, Bessel functions, `remainder`/`remquo`,
+`nextafter`/`nexttoward`, `fdim`, `fma`, `ilogb`/`logb`, `nearbyint`,
+`scalbln`.
+
+This session also added `include/fenv.h` + `src/math/fenv.c` (a full
+C99 `<fenv.h>` against real x87/MXCSR hardware exception flags on both
+arches) and fixed both bugs the previous audit found -- see the two
+table rows below.
 
 | function | clause checked | status | test |
 |---|---|---|---|
@@ -564,9 +569,9 @@ audited: `fabs`, `floor`/`ceil`/`trunc`/`round`, `sqrt`, `fmod`,
 | sin / cos / tan / atan / atan2 | special-value tables (atan2's full ~13-clause quadrant table) | covered | test/math.c, test/posix-math.c |
 | pow | full ~20-clause special-value table | covered | test/math.c (~10 sampled), test/posix-math.c (remaining ~14) |
 | fmax / fmin | one-NaN-arg returns the other, both-NaN -> NaN | covered | test/math.c, test/posix-math.c |
-| hypot | ±Inf wins even over a NaN co-argument; NaN with non-Inf co-arg -> NaN; overflow -> HUGE_VAL | **BUG, in progress** — a sibling agent is currently fixing `hypot(Inf,Inf)` returning NaN instead of +Inf (`src/math/hypot.c` only special-cases a NaN argument, not the both-infinite case; confirmed still reproducing in current source) | test/math.c (Inf-beats-NaN case), test/posix-math.c (both-Inf case fenced, see `test_hypot`) |
+| hypot | ±Inf wins even over a NaN co-argument; NaN with non-Inf co-arg -> NaN; overflow -> HUGE_VAL | **covered (bug fixed)** — `src/math/hypot.c` used to special-case only a NaN argument, so `hypot(Inf,Inf)` fell through to `Inf/Inf=NaN` and returned NaN instead of +Inf; fixed by moving the infinity check ahead of the NaN check (an infinity outranks a NaN per the spec's stated precedence), governing both cases with one unconditional check | test/math.c (Inf-beats-NaN case), test/posix-math.c (`test_hypot`, all cases including both-Inf, unfenced and passing) |
 | nan | "a quiet NaN, if available" | covered | test/math.c, test/posix-math.c |
-| math_errhandling / MATH_ERRNO / MATH_ERREXCEPT | required macro values; the conditional `<fenv.h>` requirement | **BUG, in progress** — a sibling agent is currently working on this: `include/math.h` unconditionally defines `math_errhandling` as `MATH_ERREXCEPT` (2), which per basedefs/math.h.html obligates the implementation to provide `<fenv.h>`'s `FE_DIVBYZERO`/`FE_INVALID`/`FE_OVERFLOW`, but `include/fenv.h` does not exist; confirmed still true in current source | test/posix-math.c `test_errhandling` |
+| math_errhandling / MATH_ERRNO / MATH_ERREXCEPT | required macro values; the conditional `<fenv.h>` requirement | **covered (bug fixed)** — `include/math.h` unconditionally defines `math_errhandling` as `MATH_ERREXCEPT` (2), which per basedefs/math.h.html obligated the implementation to provide `<fenv.h>`'s `FE_DIVBYZERO`/`FE_INVALID`/`FE_OVERFLOW`, but `include/fenv.h` did not exist. Fixed by adding a real `include/fenv.h` + `src/math/fenv.c`: the full C99 set (`feclearexcept`/`feraiseexcept`/`fetestexcept`/`fe{get,set}exceptflag`/`fe{get,set}round`/`fe{get,set}env`/`feholdexcept`/`feupdateenv`) against real hardware, aggregating the x87 status word and (on x86_64 only, `#ifndef __i386__`) MXCSR, since tcc/i386 compiles `double` arithmetic to x87 and tcc/x86_64 to SSE2 (confirmed by disassembling a trivial `double` function under both cross tcc targets) while `src/math/x87.h`'s helpers are x87 on both arches | test/posix-math.c `test_errhandling` (real hardware exceptions from both `src/math/*.c` helpers and plain compiler-emitted arithmetic, plus round-trips of every new function) |
 
 ### Not reached (math.h)
 
