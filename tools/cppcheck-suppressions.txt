@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# cppcheck suppressions for ntlibc, used by tools/lint.sh (`make lint`).
+#
+# Only categorical false positives belong here -- things cppcheck cannot
+# model about a freestanding libc built with -nostdinc on top of ntdll.
+# Findings that are merely inconvenient do not; they get reported and
+# judged like any other.  Note that lint.sh runs cppcheck with
+# --enable=warning,portability only, so the "prefer the _s variant" style
+# advice aimed at *callers* of the C library never fires in the first
+# place and needs no suppression here.
+#
+# Deliberately kept short and id-scoped rather than path-scoped: a
+# `*:src/string/*.c` style blanket entry would silence real findings along
+# with the noise, which defeats the point of running the tool.
+
+# cppcheck cannot see the system headers we deliberately do not include
+# (-nostdinc) and reports every one of them as missing.
+missingInclude
+missingIncludeSystem
+
+# Inline assembly writes through pointer operands with a "memory" clobber.
+# cppcheck's value-flow engine has no model for that and reports the
+# results as uninitialised reads.
+uninitvar:src/math/x87.h
+uninitvar:arch/i386/src/*.c
+uninitvar:arch/x86_64/src/*.c
+uninitvar:src/setjmp/*
+
+# Reported when a suppression above happens not to match on some arch or
+# cppcheck version; not itself a finding about the code.
+unmatchedSuppression

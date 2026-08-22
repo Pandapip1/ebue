@@ -84,7 +84,7 @@ long long __file_seek(FILE *f, long long off, int whence);
 /* The list of every FILE currently open, for __stdio_exit. */
 extern FILE *__stdio_files;
 
-/* The core formatter/parser every *printf/*scanf variant calls into. */
+/* The core formatter/parser every printf/scanf variant calls into. */
 int __vfprintf(FILE *f, const char *fmt, va_list ap);
 int __vfscanf(FILE *f, const char *fmt, va_list ap);
 

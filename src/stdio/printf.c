@@ -539,9 +539,8 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 			case 'p': {
 				void *ptr = va_arg(ap, void *);
 				uintptr_t uv = (uintptr_t)ptr;
-				char digbuf[2 + sizeof(uintptr_t) * 2]; int dn = 0;
+				int dn = 2;   /* the "0x" prefix, emitted literally below */
 				if (!ptr) { out(f, "(nil)", 5, &count, &bad); break; }
-				digbuf[dn++] = 'x'; digbuf[dn++] = '0';
 				{
 					char rev[sizeof(uintptr_t) * 2]; int rn = 0;
 					do { rev[rn++] = "0123456789abcdef"[uv % 16]; uv /= 16; } while (uv);

@@ -225,6 +225,18 @@ obj/test:
 check: $(TEST_EXES)
 	@$(srcdir)/tools/runtests.sh "$(WINE)" $(TEST_RUN)
 
+#
+# lint: opt-in static checking (gcc/clang strict warnings, the clang static
+# analyzer, cppcheck, shellcheck).  Never a prerequisite of anything: the
+# library is built with tcc, and tools/lint.sh only reports.  It skips any
+# tool that is not installed.  See tools/lint.sh for the flag set and
+# .clang-tidy for the check list.
+#
+lint:
+	./tools/lint.sh
+
+.PHONY: lint
+
 clean:
 	rm -rf obj lib
 

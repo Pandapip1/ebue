@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# clang-tidy configuration for ntlibc.  Consumed by tools/lint.sh (`make
+# lint`), which is opt-in and never part of the normal tcc build.
+#
+# The point of this file is the *disable* list.  clang-tidy's default
+# posture is "application code written against a hosted C library"; ntlibc
+# is the C library, freestanding, on top of raw ntdll.  A config that flags
+# every reserved identifier, every fixed-size buffer, every void* cast and
+# every implementation of a function clang-tidy considers unsafe reports
+# thousands of findings and is worth nothing.  So: four families on, and
+# everything below switched off with a reason.
+#
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-branch-clone,
+  -bugprone-signed-char-misuse,
+  -bugprone-casting-through-void,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-suspicious-include,
+  -bugprone-macro-parentheses,
+
+  -cert-dcl16-c,
+  -cert-err33-c,
+  -cert-env33-c,
+  -cert-msc24-c,
+  -cert-msc30-c,
+  -cert-msc32-c,
+  -cert-msc33-c,
+  -cert-msc50-cpp,
+  -cert-msc51-cpp,
+
+  -clang-analyzer-security.insecureAPI.strcpy,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-security.insecureAPI.rand,
+  -clang-analyzer-valist.Uninitialized,
+
+  -misc-no-recursion,
+  -misc-unused-parameters,
+  -misc-include-cleaner,
+  -misc-static-assert,
+  -misc-header-include-cycle,
+
+# Rationale, check by check:
+#
+#   bugprone-reserved-identifier, cert-dcl37-c, cert-dcl51-cpp
+#       A C library is *required* to define its internals in the reserved
+#       namespace (__environ, __libc_start_main, _start).  Every single one
+#       of ntlibc's internal symbols trips this.
+#   bugprone-easily-swappable-parameters
+#       memcpy(void*, const void*, size_t) is the shape of the entire
+#       public API; this check would flag most of the library.
+#   bugprone-narrowing-conversions
+#       Overlapping with -Wconversion, which lint.sh already offers behind
+#       LINT_CONVERSION=1 where the results can be read in one place.
+#   bugprone-assignment-in-if-condition, bugprone-branch-clone,
+#   bugprone-macro-parentheses
+#       Deliberate musl-derived house style.
+#   bugprone-signed-char-misuse
+#       ctype and the string routines index tables with (unsigned char)c on
+#       purpose; the check does not model that idiom.
+#   bugprone-casting-through-void, bugprone-multi-level-implicit-pointer-conversion
+#       Unavoidable when talking to the NT API's void*/PVOID* interfaces.
+#   bugprone-suspicious-include
+#       arch/ and src/*/ legitimately include .h fragments by relative path.
+#   cert-dcl16-c
+#       Literal-suffix casing.  Pure style.
+#   cert-err33-c
+#       "check the return value of this stdlib call" -- inside the stdlib,
+#       where the failure modes are already handled by errno plumbing.
+#   cert-env33-c, cert-msc24-c, cert-msc30-c, cert-msc32-c, cert-msc33-c,
+#   cert-msc50-cpp, cert-msc51-cpp
+#       These flag *calling* system(), gets(), rand(), asctime() and so on.
+#       ntlibc implements them; it cannot be told not to use them.
+#   clang-analyzer-security.insecureAPI.*
+#       Same: these are the definitions of strcpy/sprintf/rand, not calls.
+#   clang-analyzer-valist.Uninitialized
+#       Mis-fires across the vprintf/vscanf split where the va_list is
+#       started in the caller.  Re-enable if it ever stops doing that.
+#   misc-no-recursion
+#       Recursion is fine and used (e.g. qsort, glob).
+#   misc-unused-parameters
+#       Many POSIX entry points take arguments NT has no analogue for and
+#       must still accept them.
+#   misc-include-cleaner, misc-header-include-cycle
+#       Need a compilation database and a hosted include model; neither
+#       applies to a -nostdinc freestanding build.
+#   misc-static-assert
+#       Suggests C11 _Static_assert; this tree is C99.
+#
+# Everything still enabled -- notably the whole clang-analyzer-core.* and
+# unix.Malloc set, bugprone-sizeof-expression, bugprone-suspicious-memory-
+# comparison and bugprone-implicit-widening-of-multiplication-result -- is
+# there because it finds real bugs in this kind of code: uninitialised
+# reads, leaked allocations on error paths, and size arithmetic that
+# overflows before it is widened.
+
+HeaderFilterRegex: '(src|include|arch|crt)/.*\.h$'
+WarningsAsErrors: ''
+FormatStyle: none

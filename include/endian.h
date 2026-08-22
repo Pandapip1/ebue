@@ -10,7 +10,13 @@
 #define __BIG_ENDIAN 4321
 #define __PDP_ENDIAN 3412
 
+/* bits/alltypes.h defines this too (to the same value).  Guard rather than
+ * redefine: sys/types.h pulls in alltypes.h first and then endian.h, so an
+ * unguarded definition here makes every translation unit that includes
+ * <sys/types.h> emit a macro-redefinition diagnostic. */
+#ifndef __BYTE_ORDER
 #define __BYTE_ORDER __LITTLE_ENDIAN
+#endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 

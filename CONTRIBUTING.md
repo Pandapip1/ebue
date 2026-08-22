@@ -59,6 +59,37 @@ etc.), it does, and it needs a real ntdll-only fallback path too.
   fork()/WOW64 behavior and kernel32 code paths against real Windows
   rather than Wine's emulation of it.
 
+## Linting (`make lint`)
+
+The library is built with tcc, which is far more permissive than gcc or
+clang — the two compilers people actually build ntlibc *against*. `make
+lint` (i.e. `tools/lint.sh`) runs the checks tcc cannot:
+
+```
+make lint                        # everything that is installed
+tools/lint.sh warn               # just the strict gcc/clang warning build
+tools/lint.sh analyze            # just the clang static analyzer
+LINT_CONVERSION=1 tools/lint.sh warn   # add -Wconversion -Wsign-conversion
+```
+
+It is strictly opt-in: nothing in the build depends on it, it is not part
+of `make check`, and it is not a reason to put compiler-specific pragmas or
+casts into `src/`. Findings get judged, and either fixed properly or left
+alone with a note — not blanket-silenced. Any tool that isn't installed is
+skipped with a message rather than failing.
+
+`tools/lint.sh` documents the warning set and why particular checks are
+excluded; `.clang-tidy` does the same for the clang-tidy check list, and
+`tools/cppcheck-suppressions.txt` for cppcheck. A cross toolchain is *not*
+required: clang is invoked with `--target=i686-w64-mingw32` /
+`--target=x86_64-w64-mingw32`, which works with `-nostdinc` because the
+build never touches the target's own headers. gcc falls back to a native
+`-m32`/`-m64` pass (and says so) unless mingw-w64 gcc is installed.
+
+Deliberately absent: any formatting enforcement. The house style here is
+musl's, applied by hand; a reformat would be enormous churn for no
+correctness gain and would wreck `git blame`.
+
 ## The kaem bootstrap build path (`boot/kaem/`)
 
 `boot/kaem/build-x86_64.kaem` (and `build-i386.kaem`) is a second, alternate
