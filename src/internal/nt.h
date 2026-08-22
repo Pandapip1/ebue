@@ -27,7 +27,7 @@
 #define TRUE 1
 #define FALSE 0
 
-typedef long NTSTATUS;
+typedef int NTSTATUS;
 typedef void *HANDLE, **PHANDLE;
 typedef void *PVOID;
 typedef unsigned char BOOLEAN, UCHAR;

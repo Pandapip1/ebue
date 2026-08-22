@@ -178,8 +178,6 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 not_native()
 {
 	case $1 in
-	stdlib|unistd)
-		echo "every error path is unreachable natively: NTSTATUS is 'long' (src/internal/nt.h), 64-bit here and 32 on the target, so NT_SUCCESS() is true for every 0xC0000000 status" ;;
 	dirent)
 		echo "scandir passes its comparator to qsort_r through int (*)(const void *, const void *); -fsanitize=function traps on the call" ;;
 	exec)
