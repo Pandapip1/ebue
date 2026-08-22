@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <signal.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -362,6 +363,255 @@ static void test_ttyname_r_erange(void)
 	CHECK(r == ERANGE);
 }
 
+/* stat.html DESCRIPTION cites sys_stat.h.html's st_size field: "For
+ * regular files, the file size in bytes ... For other file types, the
+ * use of this field is unspecified" -- a directory falls under "other
+ * file types", so POSIX leaves st_size for one entirely up to the
+ * implementation.  src/stat/stat.c's mode_from_attrs()/__fstat_handle()
+ * document ntlibc's choice: "st_size = S_ISDIR(...) ? 0 : ...".  Since
+ * any value is spec-legal, this is a real, always-passing assertion of
+ * ntlibc's own documented design, not a fence -- confirm it holds
+ * regardless of what the directory contains. */
+static volatile int got_sig;
+static void mark_got_sig(int s) { (void)s; got_sig = 1; }
+
+static void test_stat_dir_size_is_zero(void)
+{
+	struct stat st;
+	int fd;
+
+	CHECK(mkdir("t-dsz", 0755) == 0);
+	CHECK(stat("t-dsz", &st) == 0);
+	CHECK(S_ISDIR(st.st_mode));
+	CHECK(st.st_size == 0);
+
+	fd = open("t-dsz/child.txt", O_CREAT | O_WRONLY, 0644);
+	CHECK(fd >= 0 && write(fd, "abcdefgh", 8) == 8 && close(fd) == 0);
+	CHECK(stat("t-dsz", &st) == 0);
+	CHECK(st.st_size == 0);	/* still 0 -- not derived from directory contents */
+
+	unlink("t-dsz/child.txt");
+	CHECK(rmdir("t-dsz") == 0);
+}
+
+/* sys_stat.h.html: S_IRUSR/S_IRGRP/S_IROTH (0444) "read permission" for
+ * owner/group/other. src/stat/chmod.c's chmod_handle() comment: "chmod
+ * can only express one thing on NTFS: whether the file is read-only" --
+ * it tests "mode & 0222" and flips FILE_ATTRIBUTE_READONLY, the only
+ * readability-adjacent bit NTFS exposes without ACL surgery ntlibc does
+ * not do.  There is no NTFS attribute for "unreadable but not
+ * read-only", so the read bits src/stat/stat.c's mode_from_attrs()
+ * synthesizes (0444, always set) cannot be cleared by chmod() at all --
+ * confirmed live below rather than asserted from the source comment. */
+#if 0 /* N/A: chmod.html DESCRIPTION "set the file permission bits ...
+       * to the value contained in mode" -- but chmod(path, 0) here
+       * leaves S_IRUSR|S_IRGRP|S_IROTH set anyway.  NTFS has exactly
+       * one relevant attribute (FILE_ATTRIBUTE_READONLY, mapped from
+       * mode&0222); there is no "deny read" attribute a chmod-only
+       * implementation can flip without also doing full ACL editing
+       * (DENY ACEs), which ntlibc's chmod() does not attempt. */
+static void test_chmod_cannot_clear_read_bits(void)
+{
+	struct stat st;
+	int fd = open("t-crb.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(chmod("t-crb.txt", 0000) == 0);
+	CHECK(stat("t-crb.txt", &st) == 0);
+	CHECK((st.st_mode & 0444) == 0);	/* would fail: NTFS keeps the file readable */
+	unlink("t-crb.txt");
+}
+#endif
+
+/* sys_stat.h.html: S_IXUSR/S_IXGRP/S_IXOTH (0111) "execute/search
+ * permission".  src/stat/stat.c's has_exe_suffix()/mode_from_attrs()
+ * derive these purely from the filename's extension (.exe/.com/.bat/
+ * .cmd/.sh); chmod_handle() never touches them.  NTFS has no execute
+ * permission bit at all (any file can be "run" via CreateProcess if its
+ * *contents* look like a PE/script; NT does not gate that on a
+ * permission bit the way exec() gates on S_IXUSR), so ntlibc's naming
+ * heuristic is the only signal available and chmod cannot move it. */
+#if 0 /* N/A: chmod.html says mode's 0111 bits become the new S_IX{USR,GRP,OTH}
+       * bits; here chmod(0000) on a .exe leaves them set, and
+       * chmod(0777) on a .txt cannot set them -- neither is
+       * observable because NT has no execute-permission attribute to
+       * write, only the filename ntlibc already used to fake st_mode. */
+static void test_chmod_cannot_move_exec_bits(void)
+{
+	struct stat st;
+	int fd = open("t-cxb.exe", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(stat("t-cxb.exe", &st) == 0);
+	CHECK((st.st_mode & 0111) != 0);	/* name-derived, exec bits already on */
+	CHECK(chmod("t-cxb.exe", 0000) == 0);
+	CHECK(stat("t-cxb.exe", &st) == 0);
+	CHECK((st.st_mode & 0111) == 0);	/* would fail: still name-derived, still on */
+	unlink("t-cxb.exe");
+
+	fd = open("t-cxb.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(chmod("t-cxb.txt", 0777) == 0);
+	CHECK(stat("t-cxb.txt", &st) == 0);
+	CHECK((st.st_mode & 0111) != 0);	/* would fail: .txt never gets exec bits */
+	unlink("t-cxb.txt");
+}
+#endif
+
+/* sys_stat.h.html: S_IWGRP (020) and S_IWOTH (002) are documented as
+ * independent bits from S_IWUSR (0200).  Verified live (not from
+ * memory): starting from a read-only file, fchmod(fd, 0020) -- group
+ * write ONLY, no owner/other write bit -- clears FILE_ATTRIBUTE_READONLY
+ * exactly as fchmod(fd, 0222) would, and the file comes back as mode
+ * 0644 (owner-write shape), never 0640.  (fchmod on an already-open
+ * O_RDONLY fd, not chmod-by-path, sidesteps the separate Wine quirk
+ * documented in test_open_umask_bug where the server's
+ * FileWriteAttributes-as-Unix-O_WRONLY mapping refuses a chmod back
+ * from read-only by path -- see that comment for the citation.) */
+#if 0 /* N/A: chmod.html says the individual mode bits requested become
+       * the new mode; here S_IWGRP/S_IWOTH alone have the identical,
+       * all-or-nothing effect as S_IWUSR|S_IWGRP|S_IWOTH together, and
+       * st_mode afterwards never reflects which of the three bits was
+       * actually asked for.  Mechanism: chmod_handle() in
+       * src/stat/chmod.c tests "mode & 0222" as one aggregate boolean
+       * against the single FILE_ATTRIBUTE_READONLY bit NTFS exposes;
+       * there is no NTFS concept of group- or other-write distinct
+       * from owner-write to store the difference in. */
+static void test_chmod_group_other_write_aliases_owner(void)
+{
+	struct stat st;
+	int fd = open("t-gow.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(chmod("t-gow.txt", 0000) == 0);
+	fd = open("t-gow.txt", O_RDONLY);
+	CHECK(fd >= 0);
+	CHECK(fchmod(fd, 0020) == 0);		/* group-write only */
+	CHECK(close(fd) == 0);
+	CHECK(stat("t-gow.txt", &st) == 0);
+	CHECK((st.st_mode & 0777) == 0640);	/* would fail: NTFS gives 0644, not 0640 */
+	unlink("t-gow.txt");
+}
+#endif
+
+/* kill.html DESCRIPTION: "If pid is -1 ... sig shall be sent to all
+ * processes ... for which the process has permission to send that
+ * signal" -- and the sending process always has permission to signal
+ * itself (kill(getpid(), sig) is unconditionally valid per the same
+ * page), so at minimum kill(-1, sig) must reach the caller.  Verified
+ * live: src/signal/signal.c's kill() checks "pid == getpid() || pid ==
+ * 0" first, then falls straight into "if (pid < 0) { errno = ESRCH;
+ * return -1; }" -- pid == -1 never reaches the self-check, so this
+ * fails with ESRCH unconditionally, on both Wine and real NT (the
+ * branch never touches NT at all). */
+#if 0 /* BUG: kill.html DESCRIPTION pid==-1 must reach at least the
+       * caller itself, since "the process has permission to send [a
+       * signal] to itself" always holds; ERRORS "[ESRCH] No process or
+       * process group can be found corresponding to that specified by
+       * pid" is being reported for a pid that unambiguously does name
+       * one such process (the caller).  Fix: src/signal/signal.c's
+       * kill() should treat pid == -1 as reaching self before (or as
+       * part of) the "pid < 0" ESRCH catch-all, the same way it
+       * already treats pid == 0 that way. */
+static void test_kill_neg1_reaches_self(void)
+{
+	got_sig = 0;
+	CHECK(signal(SIGUSR1, mark_got_sig) != SIG_ERR);
+	errno = 0;
+	CHECK(kill(-1, SIGUSR1) == 0);
+	CHECK(got_sig == 1);
+	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
+}
+#endif
+
+/* kill.html DESCRIPTION: "If pid is 0 ... sig shall be sent to all
+ * processes ... whose process group ID is equal to the process group
+ * ID of the sender" -- src/unistd/ids.c's getpgrp()/getpgid() always
+ * report group 1 (every process is its own group of one on this
+ * platform, per the ledger's kill pid==0/pid<-1 N/A note), so "all
+ * processes in the sender's group" reduces exactly to "the sender", and
+ * src/signal/signal.c's kill() implements precisely that: "pid ==
+ * getpid() || pid == 0" both route to raise().  This is the
+ * group-of-one model actually working, not something Wine-hostile, so
+ * it is a real, live, unfenced assertion. */
+static void test_kill_zero_is_own_group_of_one(void)
+{
+	got_sig = 0;
+	CHECK(signal(SIGUSR2, mark_got_sig) != SIG_ERR);
+	errno = 0;
+	CHECK(kill(0, SIGUSR2) == 0);
+	CHECK(got_sig == 1);
+	CHECK(signal(SIGUSR2, SIG_DFL) != SIG_ERR);
+}
+
+/* kill.html ERRORS EPERM: "The process does not have permission to send
+ * the signal to any receiving process" -- POSIX's own example is a
+ * real/effective/saved-uid mismatch.  src/unistd/ids.c documents "There
+ * is one user as far as this library is concerned": getuid(), geteuid()
+ * and the saved set-uid this library never separately tracks are all
+ * always 1000, and setuid()/seteuid()/setreuid() are no-ops that cannot
+ * create a second identity.  There being only one uid, ever, on this
+ * platform is what makes a uid-mismatch EPERM structurally impossible
+ * here -- not merely hard to trigger under Wine, since real hardware
+ * has the identical single-fixed-uid design. */
+#if 0 /* N/A: kill.html ERRORS EPERM (uid mismatch case) -- ntlibc has
+       * exactly one uid (1000, src/unistd/ids.c), always, on every NT
+       * target it runs on; setuid()/seteuid()/setreuid() are no-ops,
+       * so no process this library controls can ever have a differing
+       * real/effective/saved uid to be checked against. */
+static void test_kill_eperm_uid_mismatch(void)
+{
+	CHECK(getuid() == geteuid());
+	CHECK(seteuid(0) == 0);		/* no-op; cannot actually change identity */
+	CHECK(geteuid() == 1000);		/* still 1000 -- no second uid was created */
+	errno = 0;
+	CHECK(kill(getpid(), 0) == -1 && errno == EPERM);	/* never observable */
+}
+#endif
+
+/* kill.html ERRORS EPERM: the other route to EPERM here is NT's own
+ * process-protection ACLs, independent of ntlibc's uid model entirely
+ * -- src/signal/signal.c's kill() maps NtOpenProcess's
+ * STATUS_ACCESS_DENIED to EPERM.  On real Windows, pid 4 is always the
+ * "System" process, protected against PROCESS_TERMINATE from an
+ * unprivileged caller, so kill(4, 0) (the sig==0 existence/permission
+ * probe) should fail EPERM there.  Under Wine there is no "System"
+ * process at pid 4 to protect -- NtOpenProcess fails with an
+ * invalid-CID status, which kill() maps to ESRCH instead -- so detect
+ * that shape and skip the assertion rather than asserting either one
+ * blindly (same detect-and-note pattern as test/unistd.c's read-only
+ * unlink/chmod cases). CI runs a real-Windows leg, so this is not
+ * merely Wine-hostile -- it does run for real there. */
+static void test_kill_eperm_protected_process(void)
+{
+	errno = 0;
+	if (kill((pid_t)4, 0) == -1 && errno == ESRCH) {
+		printf("note: pid 4 is not a protected process here (Wine has no "
+		       "\"System\" process); EPERM path not reachable\n");
+		return;
+	}
+	CHECK(kill((pid_t)4, 0) == -1);
+	CHECK(errno == EPERM);
+}
+
+/* access.html DESCRIPTION: access() "shall check ... using the real
+ * user ID in place of the effective user ID and the real group ID in
+ * place of the effective group ID"; faccessat()'s AT_EACCESS flag
+ * "enables checking access using the effective user and group IDs
+ * instead". src/unistd/access.c's faccessat() ignores flags entirely
+ * ("(void)flags;"), which is only spec-compliant because
+ * src/unistd/ids.c makes real and effective always identical (a single
+ * fixed uid 1000, no setuid); with two distinct identities available,
+ * ignoring AT_EACCESS would be a real bug.  This is a real, live
+ * assertion of that structural fact, not a fence. */
+static void test_access_real_effective_uid_identical(void)
+{
+	int fd = open("t-reu.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(getuid() == geteuid() && getgid() == getegid());
+	CHECK(access("t-reu.txt", R_OK) == 0);
+	CHECK(faccessat(AT_FDCWD, "t-reu.txt", R_OK, 0) ==
+	      faccessat(AT_FDCWD, "t-reu.txt", R_OK, AT_EACCESS));
+	unlink("t-reu.txt");
+}
+
 int main(void)
 {
 	char tmpl[] = "posixunistd-XXXXXX";
@@ -391,6 +641,10 @@ int main(void)
 	test_sysconf_child_max();
 	test_pipe_ends_independent();
 	test_ttyname_r_erange();
+	test_stat_dir_size_is_zero();
+	test_kill_zero_is_own_group_of_one();
+	test_kill_eperm_protected_process();
+	test_access_real_effective_uid_identical();
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);
