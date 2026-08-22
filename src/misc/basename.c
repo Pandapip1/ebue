@@ -10,7 +10,7 @@ char *basename(char *s)
 	size_t i, start = 0;
 	if (!s || !*s) return (char *)".";
 	/* A drive prefix is not part of the last component. */
-	if (((s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2;
+	if (((unsigned)(s[0] | 32) - 'a') < 26u && s[1] == ':') start = 2;
 	i = strlen(s) - 1;
 	for (; i > start && ISSEP(s[i]); i--) s[i] = 0;
 	if (i == start && ISSEP(s[i])) {

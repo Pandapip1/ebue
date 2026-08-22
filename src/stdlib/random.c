@@ -11,8 +11,8 @@ static uint32_t init_state[32];   /* 31 words of state + 1 slot */
 static uint32_t *x = init_state + 1;
 static int n = 31, i = 3, j = 0;
 
-static uint32_t lcg31(uint32_t x) { return (1103515245u * x + 12345u) & 0x7fffffff; }
-static uint64_t lcg64(uint64_t x) { return 6364136223846793005ULL * x + 1; }
+static uint32_t lcg31(uint32_t v) { return (1103515245u * v + 12345u) & 0x7fffffff; }
+static uint64_t lcg64(uint64_t v) { return 6364136223846793005ULL * v + 1; }
 
 static void seed_state(unsigned s)
 {
