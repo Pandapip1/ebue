@@ -119,15 +119,20 @@ static int argv0_child(int argc, char **argv)
 /* The entries test_empty_env_entry() puts in front of the inherited
  * environment.  The empty one is second, so with the truncating bug
  * everything below it -- including whatever the child needs to start at
- * all -- disappears. */
+ * all -- disappears.  The last two are the pair that has to be told
+ * apart: an entry with no '=' at all, which Windows will not accept in
+ * an environment block and which spawn.c therefore drops, and one that
+ * merely begins with '=', which is Windows' own per-drive
+ * current-directory shape and must survive. */
+#define ENV_NOEQ_ENTRY "NTLIBC_EMPTY_NOEQ"
 #define ENV_DRIVE_ENTRY "=Z:=Z:\\ntlibc-test"
 static const char *const envblock_probes[] = {
 	"NTLIBC_EMPTY_A=1",
 	"",                     /* used to terminate the block */
 	"NTLIBC_EMPTY_B=2",
-	"NTLIBC_EMPTY_NOEQ",    /* no '=': passed on, names nothing */
+	ENV_NOEQ_ENTRY,         /* no '=' at all: not representable, dropped */
 	"NTLIBC_EMPTY_C=3",
-	ENV_DRIVE_ENTRY,        /* Windows' own per-drive current directory */
+	ENV_DRIVE_ENTRY,        /* '=' first, but a real name ("=Z:"): kept */
 	0
 };
 
@@ -149,15 +154,21 @@ static int envblock_child(void)
 			return RC_ENV_MISMATCH;
 		}
 	}
-	/* An entry with no '=' is passed through the way execve does on
-	 * Linux; it simply names no variable. */
-	if (getenv("NTLIBC_EMPTY_NOEQ")) {
-		printf("child: NTLIBC_EMPTY_NOEQ names a variable\n");
+	/* An entry with no '=' cannot be part of a Windows environment
+	 * block, so it is dropped on the way in: it must name no variable,
+	 * and it must not be sitting in environ either. */
+	if (getenv(ENV_NOEQ_ENTRY)) {
+		printf("child: %s names a variable\n", ENV_NOEQ_ENTRY);
 		return RC_ENV_MISMATCH;
 	}
-	/* An entry whose *name* is empty because it starts with '=' is a
-	 * real Windows entry, not a malformed one, and must not have been
-	 * mistaken for the empty entry and dropped. */
+	for (i = 0; environ[i]; i++)
+		if (!strcmp(environ[i], ENV_NOEQ_ENTRY)) {
+			printf("child: \"%s\" was passed through\n", ENV_NOEQ_ENTRY);
+			return RC_ENV_MISMATCH;
+		}
+	/* An entry whose name is empty by a naive reading, because it starts
+	 * with '=', is a real Windows entry and must not have been mistaken
+	 * for either of the malformed shapes. */
 	for (i = 0; environ[i]; i++)
 		if (!strcmp(environ[i], ENV_DRIVE_ENTRY)) break;
 	if (!environ[i]) {
@@ -265,32 +276,93 @@ static void test_cmdline_limit(const char *self)
 	free(big);
 }
 
+/* Spawn self in the --envblock role with the given environment and
+ * describe what happened in `out`.  Returns the child's exit code, or -1
+ * if there was never a child to ask.
+ *
+ * The description matters more than it looks: "not RC_OK" covers a spawn
+ * that was refused, a wait that failed, a child that died before main,
+ * and a child that ran and disagreed, and those want different fixes.  A
+ * child killed before main carries the low byte of an NT status
+ * (0xc0000142 STATUS_DLL_INIT_FAILED -> 0x42, STATUS_DLL_NOT_FOUND ->
+ * 0x35), which is distinguishable from this test's own small RC_* codes. */
+static int envblock_try(const char *self, char *const ev[], char *out, size_t outlen)
+{
+	char *av[3];
+	int pid, status = -1;
+
+	av[0] = (char *)self; av[1] = (char *)"--envblock"; av[2] = 0;
+	fflush(stdout);
+	errno = 0;
+	pid = __spawn(self, av, ev);
+	if (pid <= 0) {
+		snprintf(out, outlen, "__spawn refused it, errno %d", errno);
+		return -1;
+	}
+	if (waitpid(pid, &status, 0) != pid) {
+		snprintf(out, outlen, "waitpid failed, errno %d", errno);
+		return -1;
+	}
+	if (!WIFEXITED(status)) {
+		snprintf(out, outlen, "child did not exit normally, status 0x%08x", (unsigned)status);
+		return -1;
+	}
+	snprintf(out, outlen, "child exited %d (0x%02x)",
+	         WEXITSTATUS(status), (unsigned)WEXITSTATUS(status));
+	return WEXITSTATUS(status);
+}
+
+/* Run only when the real spawn failed.  Spawns once with no probes at
+ * all -- which exonerates or implicates everything that is not the
+ * environment, since argv[0], the command line and the current directory
+ * are identical -- and then once per probe with that one probe left out.
+ * The run that behaves differently from the rest names the entry the
+ * environment block was rejected for, instead of leaving a bare errno to
+ * guess from. */
+static void envblock_bisect(const char *self, char **ev, int nprobe, int nenv)
+{
+	char desc[128];
+	char **var = malloc((size_t)(nprobe + nenv + 1) * sizeof *var);
+	int skip, i, n;
+
+	if (!var) return;
+	for (skip = -1; skip < nprobe; skip++) {
+		n = 0;
+		for (i = 0; i < nprobe; i++) {
+			if (skip == -1 || i == skip) continue;
+			var[n++] = ev[i];
+		}
+		for (i = 0; i < nenv; i++) var[n++] = ev[nprobe + i];
+		var[n] = 0;
+		envblock_try(self, var, desc, sizeof desc);
+		printf("  env-block without %s: %s\n",
+		       skip == -1 ? "any probe" :
+		       ev[skip][0] ? ev[skip] : "the empty entry",
+		       desc);
+	}
+	free(var);
+}
+
 /* An empty envp entry must not cut the environment block short.
  *
  * The probes go in *front* of the whole inherited environment rather
  * than replacing it.  An earlier version of this test handed the child
  * six entries -- the probes and a hand-built SystemRoot -- and nothing
- * else; that passed under Wine and failed on real Windows, because a
- * real NT process needs considerably more of an environment than Wine
- * does to get as far as main.  Wine's RtlCreateProcessParametersEx
- * substitutes an empty DllPath when none is given (dlls/ntdll/env.c,
- * "if (!DllPath) DllPath = &null_str") and its loader is content with
- * that, whereas NT's inherits the parent's and its loader treats a path
- * it cannot use as fatal (ReactOS dll/ntdll/ldr/ldrinit.c,
- * LdrpInitializeProcess: "We need a valid path" ->
- * LdrpInitFailure(STATUS_INVALID_PARAMETER)); the DLL search path NT
- * builds is in turn %PATH%-derived.  Passing the real environment
- * through means the child gets PATH, SystemRoot, SystemDrive, windir,
- * TEMP and the per-drive "=C:=C:\dir" entries -- whatever it actually
- * needs -- while the probes still prove the point: the empty entry is
- * the *second* thing in the block, so if it truncated, everything after
- * it (all three NTLIBC_EMPTY_* variables and the entire inherited
- * environment) would be gone. */
+ * else.  That is enough under Wine and was never enough on real NT, and
+ * it also hid which of the two problems here was which, so the real
+ * environment is passed through: the child gets PATH, SystemRoot,
+ * SystemDrive, windir, TEMP and the per-drive "=C:=C:\dir" entries,
+ * whatever it actually needs to reach main.
+ *
+ * The probes still prove the point.  The empty entry is the *second*
+ * thing in the block, so if it truncated the block again, everything
+ * after it -- all three NTLIBC_EMPTY_* variables and the whole inherited
+ * environment -- would be gone. */
 static void test_empty_env_entry(const char *self)
 {
+	char desc[128];
 	char **ev;
-	char *av[3];
-	int i, n = 0, nenv = 0, nprobe = 0, pid, status = -1;
+	int i, n = 0, nenv = 0, nprobe = 0;
 
 	for (nprobe = 0; envblock_probes[nprobe]; nprobe++) ;
 	for (nenv = 0; environ[nenv]; nenv++) ;
@@ -301,30 +373,10 @@ static void test_empty_env_entry(const char *self)
 	for (i = 0; i < nenv; i++) ev[n++] = environ[i];
 	ev[n] = 0;
 
-	av[0] = (char *)self; av[1] = (char *)"--envblock"; av[2] = 0;
-	fflush(stdout);
-	errno = 0;
-	pid = __spawn(self, av, ev);
-	if (pid <= 0) {
+	if (envblock_try(self, ev, desc, sizeof desc) != RC_OK) {
 		fails++;
-		printf("FAIL %s:%d: spawn with an empty env entry failed, errno %d\n",
-		       __FILE__, __LINE__, errno);
-	} else if (waitpid(pid, &status, 0) != pid) {
-		fails++;
-		printf("FAIL %s:%d: waitpid on the env-block child failed, errno %d\n",
-		       __FILE__, __LINE__, errno);
-	} else if (!WIFEXITED(status) || WEXITSTATUS(status) != RC_OK) {
-		/* Say what actually happened rather than just "not RC_OK".  A
-		 * child that died before main carries the low byte of an NT
-		 * status here -- 0x42 for STATUS_DLL_INIT_FAILED (0xc0000142),
-		 * 0x35 for STATUS_DLL_NOT_FOUND -- which is distinguishable
-		 * from this test's own small RC_* codes. */
-		fails++;
-		printf("FAIL %s:%d: env-block child: wait status 0x%08x, exited %d, code %d (0x%02x)\n",
-		       __FILE__, __LINE__, (unsigned)status,
-		       WIFEXITED(status) ? 1 : 0,
-		       WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-		       WIFEXITED(status) ? (unsigned)WEXITSTATUS(status) : 0u);
+		printf("FAIL %s:%d: env block with an empty entry: %s\n", __FILE__, __LINE__, desc);
+		envblock_bisect(self, ev, nprobe, nenv);
 	}
 	free(ev);
 }

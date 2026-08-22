@@ -146,19 +146,39 @@ static WCHAR *build_env_block(char *const envp[])
 	for (i = 0; envp && envp[i]; i++) {
 		size_t wl;
 		WCHAR *w;
-		/* A zero-length entry would be written as an empty string, which
-		 * is exactly the block's terminator, so everything after it would
-		 * be invisible to the child.  There is no environment variable an
-		 * empty entry could name, so drop it.
+		/* Two shapes of entry cannot be expressed in a Windows
+		 * environment block at all, and are dropped rather than passed
+		 * on, because handing either to the child is worse than losing
+		 * it:
 		 *
-		 * Entries with no '=' are *not* dropped: execve on Linux passes
-		 * envp to the kernel verbatim and neither glibc nor musl filters
-		 * it, so a program that puts one there sees it again in the
-		 * child's environ.  crt1.c's build_environ hands them back
-		 * unchanged, so the round trip already matches; and Windows uses
-		 * the same shape for its own "=C:=C:\dir" per-drive entries,
-		 * which must survive for the same reason. */
-		if (!envp[i][0]) continue;
+		 *   - A zero-length entry would be written as an empty string,
+		 *     which is exactly the block's terminator, so everything
+		 *     after it would be invisible to the child.
+		 *
+		 *   - An entry with no '=' anywhere has no name/value split, so
+		 *     there is nothing for it to mean.  Windows rejects that
+		 *     shape outright: kernelbase's SetEnvironmentStringsW walks
+		 *     the block and fails with ERROR_INVALID_PARAMETER for any
+		 *     entry whose wcschr(p, '=') is NULL (Wine
+		 *     dlls/kernelbase/process.c; the rule is matched against
+		 *     real Windows by dlls/kernel32/tests/environ.c,
+		 *     test_SetEnvironmentStrings, which asserts L"testenv\0" is
+		 *     refused with exactly that error).  Passing one through
+		 *     failed the entire spawn on real NT -- EINVAL here, since
+		 *     ERROR_INVALID_PARAMETER is DOS error 87 and
+		 *     src/internal/errno.c maps it that way -- while Wine let it
+		 *     through, so it only ever showed up on Windows.
+		 *
+		 * An entry that merely *starts* with '=' is a different thing
+		 * and is kept: "=C:=C:\dir" is Windows' own shape for a
+		 * per-drive current directory, its name is "=C:", and ntdll
+		 * accepts a name like that (Wine dlls/ntdll/tests/env.c,
+		 * test_RtlSetEnvironmentVariable: setting L"=too" succeeds,
+		 * while L"me=too" -- an '=' inside the name -- is
+		 * STATUS_INVALID_PARAMETER).  Dropping one would silently change
+		 * a child's per-drive working directories.  crt1.c's
+		 * build_environ hands them back unchanged. */
+		if (!envp[i][0] || !strchr(envp[i], '=')) continue;
 		w = __utf8_to_utf16(envp[i], &wl);
 		if (!w) { free(blk); return 0; }
 		if (len + wl + 2 >= cap) {
