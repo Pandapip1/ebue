@@ -168,17 +168,26 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 # ---- 2. run the tests that a native build can say anything about -----------
 #
 # A test is run unless it is on this list, and each entry says why it is
-# not.  Two kinds: those that need NT services fuzz/ntstubs.c does not
-# provide (real files, real processes), and those that assert the target
-# ABI, which a native compiler does not have.  Nothing else is excused --
-# in particular a genuine ASan or UBSan finding in ntlibc must fail here.
+# not.  Three kinds: those that need NT services fuzz/ntstubs.c does not
+# provide (process cloning, a file system that survives execve); those
+# that assert the target ABI, which a native compiler does not have; and
+# those whose subject is an error path, which the native build cannot
+# reach at all while NTSTATUS is a 64-bit long (see the head of
+# fuzz/ntstubs.c).  Nothing else is excused -- in particular a genuine
+# ASan or UBSan finding in ntlibc must fail here.
 not_native()
 {
 	case $1 in
-	dirent|stdlib|unistd|misc)
-		echo "needs a real filesystem: NtCreateFile/NtQueryDirectoryFile are stubs" ;;
-	exec|fork-win|fork-handles-win|process-win|waitpid-overflow)
-		echo "needs real NT process creation: RtlCreateUserProcess is a stub" ;;
+	stdlib|unistd)
+		echo "every error path is unreachable natively: NTSTATUS is 'long' (src/internal/nt.h), 64-bit here and 32 on the target, so NT_SUCCESS() is true for every 0xC0000000 status" ;;
+	dirent)
+		echo "scandir passes its comparator to qsort_r through int (*)(const void *, const void *); -fsanitize=function traps on the call" ;;
+	exec)
+		echo "the simulated file system does not cross execve (fuzz/ntstubs.c): a child cannot see its parent's files or inherited descriptors" ;;
+	waitpid-overflow)
+		echo "a host wait status carries 8 bits of exit code, too few for the 0xE0DE00xx a signal death uses" ;;
+	fork-win|fork-handles-win|process-win)
+		echo "needs NT process cloning: RtlCloneUserProcess is a stub" ;;
 	math)
 		echo "long double is 64-bit on the NT target and 80-bit here" ;;
 	strto)
