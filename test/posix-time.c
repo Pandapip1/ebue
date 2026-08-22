@@ -107,9 +107,6 @@ static void test_mktime_ignores_wday_yday_input(void)
  * Confirmed live: tm_year=INT_MAX, tm_mon=100 makes
  * mktime() return 67768036422969600 with errno left at EOVERFLOW
  * (75) instead of returning (time_t)-1. */
-#if 0 /* BUG: mktime.html RETURN VALUE/ERRORS -- src/time/mktime.c:38 discards
-       * localtime_r()'s NULL-on-EOVERFLOW return instead of propagating it
-       * as (time_t)-1. */
 static void test_mktime_overflow_returns_minus_one(void)
 {
 	struct tm tm;
@@ -122,7 +119,6 @@ static void test_mktime_overflow_returns_minus_one(void)
 	CHECK(mktime(&tm) == (time_t)-1);
 	CHECK(errno == EOVERFLOW);
 }
-#endif
 
 /* clock.html DESCRIPTION: "the implementation's best approximation to
  * the processor time used by the process" -- CPU time, not wall-clock
@@ -175,15 +171,10 @@ static void test_clock_getres_cputime(void)
  * returning 0. Not exercised live here since it would take down this
  * whole test binary (and the "N tests passed/failed" accounting with
  * it) rather than failing a single CHECK. */
-#if 0 /* BUG: clock_getres.html DESCRIPTION -- src/time/clock_gettime.c's
-       * clock_getres() dereferences `res` unconditionally; NULL crashes
-       * (verified: SIGSEGV under wine) instead of being accepted as a
-       * legal "don't return the resolution" query. */
 static void test_clock_getres_null(void)
 {
 	CHECK(clock_getres(CLOCK_REALTIME, NULL) == 0);
 }
-#endif
 
 /* clock_settime.html ERRORS: "[EINVAL] The tp argument to
  * clock_settime() is outside the range for the clock ID, or the
@@ -200,10 +191,6 @@ static void test_clock_getres_null(void)
  * accept either outcome) and would either silently corrupt the host's
  * clock by a fraction of a second or mask the missing-EINVAL bug behind
  * a privilege-driven EPERM either way. */
-#if 0 /* BUG: clock_settime.html ERRORS -- src/time/clock_gettime.c's
-       * clock_settime() does not validate ts->tv_nsec is in
-       * [0, 999999999] before calling NtSetSystemTime, so an
-       * out-of-range nanosecond field is not rejected with EINVAL. */
 static void test_clock_settime_bad_nsec(void)
 {
 	struct timespec ts;
@@ -213,7 +200,6 @@ static void test_clock_settime_bad_nsec(void)
 	CHECK(clock_settime(CLOCK_REALTIME, &ts) == -1);
 	CHECK(errno == EINVAL);
 }
-#endif
 
 /* clock_nanosleep.html ERRORS: "[EINVAL] The rqtp argument specified a
  * nanosecond value less than zero or greater than or equal to 1000
@@ -276,12 +262,6 @@ static void test_clock_nanosleep_relative(void)
  * (near 1601), so NtDelayExecution returns immediately. Confirmed
  * live: requesting CLOCK_MONOTONIC/TIMER_ABSTIME for "now + 2s"
  * returned in about 3 microseconds instead of sleeping ~2 seconds. */
-#if 0 /* BUG: clock_nanosleep.html DESCRIPTION -- src/time/clock_nanosleep.c's
-       * TIMER_ABSTIME branch runs req through __unix_to_nt() (a
-       * unix-epoch/NT-FILETIME conversion) even when clock_id is
-       * CLOCK_MONOTONIC, whose absolute readings are not unix-epoch
-       * seconds; the sleep returns almost instantly instead of waiting
-       * for the requested monotonic instant. */
 static void test_clock_nanosleep_monotonic_abstime(void)
 {
 	struct timespec now, req, before, after;
@@ -298,7 +278,6 @@ static void test_clock_nanosleep_monotonic_abstime(void)
 	ns = (after.tv_sec - before.tv_sec) * 1000000000LL + (after.tv_nsec - before.tv_nsec);
 	CHECK(ns >= 900000000LL); /* should have waited ~1s; actually returns in microseconds */
 }
-#endif
 
 /* clock_nanosleep.html DESCRIPTION: "if, at the time of the call, the
  * time value specified by rqtp is less than or equal to the current
@@ -380,9 +359,6 @@ static void test_asctime_r_exact_buffer(void)
  * u/w/a/A/b/B/h/p/z/Z/n/t/%, and falls through to `default: return
  * NULL` for anything else) -- any format using %C is rejected outright.
  * Confirmed live: strptime("19", "%C", &tm) returns NULL. */
-#if 0 /* BUG: strptime.html conversion table -- src/time/strptime.c has no
-       * '%C' case (century, "all but the last two digits of the year"),
-       * so any format string using %C fails to parse at all. */
 static void test_strptime_century(void)
 {
 	struct tm tm;
@@ -393,7 +369,6 @@ static void test_strptime_century(void)
 	CHECK(end != NULL && *end == 0);
 	CHECK(tm.tm_year == 70);
 }
-#endif
 
 /* strptime.html RETURN VALUE: "Upon successful completion, strptime()
  * shall return a pointer to the character following the last character
@@ -460,14 +435,19 @@ int main(void)
 	test_difftime_return_type();
 	test_gmtime_overflow();
 	test_mktime_ignores_wday_yday_input();
+	test_mktime_overflow_returns_minus_one();
 	test_clock_is_cpu_time_not_wall_time();
 	test_clock_getres_cputime();
+	test_clock_getres_null();
+	test_clock_settime_bad_nsec();
 	test_clock_nanosleep_einval();
 	test_clock_nanosleep_relative();
+	test_clock_nanosleep_monotonic_abstime();
 	test_clock_nanosleep_realtime_abstime_past();
 	test_ctime_equals_asctime_localtime();
 	test_ctime_r_overflow_propagates();
 	test_asctime_r_exact_buffer();
+	test_strptime_century();
 	test_strptime_literal_percent_and_ws_run();
 	test_tzset_daylight_always_zero();
 	test_timespec_get_matches_realtime();

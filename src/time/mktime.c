@@ -35,6 +35,6 @@ time_t mktime(struct tm *tm)
 	secs = days * 86400 + (long long)tm->tm_hour * 3600 + (long long)tm->tm_min * 60 + tm->tm_sec;
 	t = (time_t)(secs + timezone);        /* local -> UTC */
 
-	localtime_r(&t, tm);
+	if (!localtime_r(&t, tm)) return (time_t)-1;
 	return t;
 }

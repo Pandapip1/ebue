@@ -1,12 +1,13 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * A strptime covering the same specifiers strftime writes (%Y %y %m %d
- * %H %M %S %e %j %a %A %b %B %p %z %% plus %n/%t as whitespace), plus
- * the composite conversions %c %D %F %r %R %T %x %X, which are handled by
- * expanding them to the equivalent simple format (matching what strftime
- * writes for them in the C locale) and recursing.  Unrecognized
- * conversions and the locale %E/%O modifiers are not implemented.
+ * A strptime covering the same specifiers strftime writes (%Y %y %C %m
+ * %d %H %M %S %e %j %U %W %a %A %b %B %p %z %% plus %n/%t as
+ * whitespace), plus the composite conversions %c %D %F %r %R %T %x %X,
+ * which are handled by expanding them to the equivalent simple format
+ * (matching what strftime writes for them in the C locale) and
+ * recursing.  Unrecognized conversions and the locale %E/%O modifiers
+ * are not implemented.
  */
 #include <time.h>
 #include <ctype.h>
@@ -53,9 +54,11 @@ static const char *match_name(const char *s, const char *const *full, const char
 	return NULL;
 }
 
-/* pm: -1: no %p seen; 0: AM; 1: PM.  Shared across recursive calls so
- * that %r's %p applies to its %I. */
-static const char *parse(const char *s, const char *f, struct tm *tm, int *pm)
+/* pm: -1: no %p seen; 0: AM; 1: PM.  century: -1: no %C seen, else the
+ * century value %C parsed (e.g. 19 for the 1900s).  Both are shared
+ * across recursive calls so that %r's %p applies to its %I and %C
+ * combines correctly with a %y anywhere else in the same format. */
+static const char *parse(const char *s, const char *f, struct tm *tm, int *pm, int *century)
 {
 	long v;
 	int idx;
@@ -78,12 +81,40 @@ static const char *parse(const char *s, const char *f, struct tm *tm, int *pm)
 		case 'R': sub = "%H:%M"; goto expand;
 		case 'T': case 'X': sub = "%H:%M:%S"; goto expand;
 		expand:
-			if (!(s = parse(s, sub, tm, pm))) return NULL;
+			if (!(s = parse(s, sub, tm, pm, century))) return NULL;
 			break;
 		/* Widths follow musl/glibc: %Y 4, %j 3, %u/%w 1, everything else 2,
 		 * so an unseparated "%Y%m%d" doesn't let %Y swallow later fields. */
 		case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break;
-		case 'y': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_year = (int)(v < 69 ? v + 100 : v); break;
+		case 'y':
+			if (!(s = read_num(s, 2, &v))) return NULL;
+			if (*century >= 0) {
+				/* %C already ran (in either order relative to %y): the
+				 * century it set wins, %y only supplies the low two
+				 * digits. */
+				tm->tm_year = (int)(*century * 100 + v - 1900);
+			} else {
+				/* No %C in this format: fall back to the traditional
+				 * "%y-alone" pivot -- 69..99 is 1969..1999, 00..68 is
+				 * 2000..2068. */
+				tm->tm_year = (int)(v < 69 ? v + 100 : v);
+			}
+			break;
+		case 'C':
+			/* "All but the last two digits of the year" -- combines with a
+			 * %y elsewhere in the format to form the full year; on its own
+			 * it sets the century with the low two digits defaulting to 0. */
+			if (!(s = read_num(s, 2, &v))) return NULL;
+			*century = (int)v;
+			tm->tm_year = (int)(v * 100 - 1900);
+			break;
+		case 'U': case 'W':
+			/* Week number (00..53); consumed like any other numeric
+			 * field but not fed back into tm -- struct tm has no
+			 * week-number member, and mktime/gmtime never look at one,
+			 * so (as in glibc/musl) it's parsed and discarded. */
+			if (!(s = read_num(s, 2, &v))) return NULL;
+			break;
 		case 'm': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mon = (int)v - 1; break;
 		case 'd': case 'e': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_mday = (int)v; break;
 		case 'H': if (!(s = read_num(s, 2, &v))) return NULL; tm->tm_hour = (int)v; break;
@@ -139,8 +170,9 @@ static const char *parse(const char *s, const char *f, struct tm *tm, int *pm)
 char *strptime(const char *restrict s, const char *restrict f, struct tm *restrict tm)
 {
 	int pm = -1;
+	int century = -1;
 
-	if (!(s = parse(s, f, tm, &pm))) return NULL;
+	if (!(s = parse(s, f, tm, &pm, &century))) return NULL;
 	if (pm == 1 && tm->tm_hour < 12) tm->tm_hour += 12;
 	else if (pm == 0 && tm->tm_hour == 12) tm->tm_hour = 0;
 	return (char *)s;

@@ -79,6 +79,7 @@ int clock_settime(clockid_t id, const struct timespec *ts)
 	NTSTATUS st;
 
 	if (id != CLOCK_REALTIME) { errno = EINVAL; return -1; }
+	if (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) { errno = EINVAL; return -1; }
 	nt = __unix_to_nt(ts->tv_sec, ts->tv_nsec);
 	st = NtSetSystemTime(&nt, NULL);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -92,15 +93,19 @@ int clock_getres(clockid_t id, struct timespec *res)
 	case CLOCK_REALTIME_COARSE:
 	case CLOCK_PROCESS_CPUTIME_ID:
 	case CLOCK_THREAD_CPUTIME_ID:
-		res->tv_sec = 0;
-		res->tv_nsec = 100;    /* NT's system clock ticks in 100ns units */
+		if (res) {
+			res->tv_sec = 0;
+			res->tv_nsec = 100;    /* NT's system clock ticks in 100ns units */
+		}
 		return 0;
 	case CLOCK_MONOTONIC:
 	case CLOCK_MONOTONIC_RAW:
 	case CLOCK_MONOTONIC_COARSE:
 	case CLOCK_BOOTTIME: {
 		LARGE_INTEGER count, freq;
-		NTSTATUS st = NtQueryPerformanceCounter(&count, &freq);
+		NTSTATUS st;
+		if (!res) return 0;
+		st = NtQueryPerformanceCounter(&count, &freq);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 		res->tv_sec = 0;
 		res->tv_nsec = freq > 1000000000LL ? 1 : (long)(1000000000LL / (freq ? freq : 1));
