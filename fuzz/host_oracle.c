@@ -15,10 +15,22 @@
  *
  * Reporting lives here too, and deliberately so: a harness must not format
  * a mismatch with ntlibc's own snprintf, which is itself under test.
+ *
+ * errno itself needs the same treatment as strtod: `errno` is
+ * `*__errno_location()`, and ntlibc's harnesses link this file's object
+ * directly against ntlibc's *.o (see Makefile), which defines its own
+ * __errno_location.  The plain `errno` macro from <errno.h> would therefore
+ * resolve, at static link time, straight to ntlibc's thread-local errno
+ * rather than glibc's -- there is no dynamic symbol lookup involved for a
+ * call to a symbol the static linker can already see defined in the same
+ * executable, so RTLD-level tricks (LD_PRELOAD, RTLD_NEXT) do not even
+ * enter into it.  ntlibc's __errno_location is hidden-visibility, so it is
+ * absent from the dynamic symbol table; going through dlsym() on the
+ * explicit libc.so.6 handle above (same as strtod et al.) reaches glibc's
+ * real __errno_location and cannot see ntlibc's hidden one at all.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -27,6 +39,7 @@
 typedef double (*strtod_fn)(const char *, char **);
 typedef float (*strtof_fn)(const char *, char **);
 typedef long long (*strtoll_fn)(const char *, char **, int);
+typedef int *(*errno_loc_fn)(void);
 
 static void *libc(void)
 {
@@ -45,15 +58,24 @@ static void *sym(const char *n)
 	return p;
 }
 
+/* glibc's real errno, not ntlibc's -- see the comment at the top of the
+ * file for why the plain `errno` macro cannot be used here. */
+static int *host_errno_loc(void)
+{
+	static errno_loc_fn f;
+	if (!f) f = (errno_loc_fn)sym("__errno_location");
+	return f();
+}
+
 double host_strtod(const char *s, size_t *endoff, int *err)
 {
 	static strtod_fn f;
 	char *e;
 	double r;
 	if (!f) f = (strtod_fn)sym("strtod");
-	errno = 0;
+	*host_errno_loc() = 0;
 	r = f(s, &e);
-	*err = errno;
+	*err = *host_errno_loc();
 	*endoff = (size_t)(e - s);
 	return r;
 }
@@ -64,9 +86,9 @@ float host_strtof(const char *s, size_t *endoff, int *err)
 	char *e;
 	float r;
 	if (!f) f = (strtof_fn)sym("strtof");
-	errno = 0;
+	*host_errno_loc() = 0;
 	r = f(s, &e);
-	*err = errno;
+	*err = *host_errno_loc();
 	*endoff = (size_t)(e - s);
 	return r;
 }
@@ -77,9 +99,9 @@ long long host_strtoll(const char *s, size_t *endoff, int base, int *err)
 	char *e;
 	long long r;
 	if (!f) f = (strtoll_fn)sym("strtoll");
-	errno = 0;
+	*host_errno_loc() = 0;
 	r = f(s, &e, base);
-	*err = errno;
+	*err = *host_errno_loc();
 	*endoff = (size_t)(e - s);
 	return r;
 }

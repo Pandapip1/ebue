@@ -178,8 +178,6 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 not_native()
 {
 	case $1 in
-	dirent)
-		echo "scandir passes its comparator to qsort_r through int (*)(const void *, const void *); -fsanitize=function traps on the call" ;;
 	exec)
 		echo "the simulated file system does not cross execve (fuzz/ntstubs.c): a child cannot see its parent's files or inherited descriptors" ;;
 	waitpid-overflow)
