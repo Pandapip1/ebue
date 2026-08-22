@@ -371,8 +371,10 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 	 * signed conversion under '+' always begins with a sign, and p8's
 	 * "[-]nan" only makes the minus conditional.  glibc and musl both
 	 * print "+nan". */
-	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; special = 1; }
-	else if (isinf(v)) { memcpy(body, upper ? "INF" : "inf", 3); n = 3; special = 1; }
+	/* body[] is a length-tracked buffer (n), never a NUL-terminated C
+	 * string -- out_body below always writes exactly n bytes. */
+	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; special = 1; } // NOLINT(bugprone-not-null-terminated-result)
+	else if (isinf(v)) { memcpy(body, upper ? "INF" : "inf", 3); n = 3; special = 1; } // NOLINT(bugprone-not-null-terminated-result)
 	else if (av == 'a') {
 		int pu = prec > PREC_MAX ? PREC_MAX : prec;
 		zeros = prec > PREC_MAX ? (long)prec - pu : 0;
@@ -505,7 +507,7 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				if (issigned) {
 					long long sv;
 					switch (lm) {
-					case LM_hh: sv = (signed char)va_arg(ap, int); break;
+					case LM_hh: sv = (signed char)va_arg(ap, int); break; // NOLINT(cert-str34-c) -- deliberate sign extension of a %hhd argument, not a table index
 					case LM_h: sv = (short)va_arg(ap, int); break;
 					case LM_l: sv = va_arg(ap, long); break;
 					case LM_ll: case LM_j: sv = va_arg(ap, long long); break;

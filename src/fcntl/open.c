@@ -55,7 +55,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	switch (flags & O_ACCMODE) {
 	case O_RDONLY: access |= FILE_GENERIC_READ; break;
 	case O_WRONLY: access |= FILE_GENERIC_WRITE; break;
-	case O_RDWR:   access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE; break;
+	case O_RDWR:   access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE; break; // NOLINT(misc-redundant-expression) -- both masks include SYNCHRONIZE, harmless ORed twice
 	default: __ntpath_free(&np); errno = EINVAL; return -1;
 	}
 	if (flags & O_APPEND) access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA;

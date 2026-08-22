@@ -32,8 +32,12 @@ Checks: >
   -bugprone-multi-level-implicit-pointer-conversion,
   -bugprone-suspicious-include,
   -bugprone-macro-parentheses,
+  -bugprone-switch-missing-default-case,
+  -bugprone-suspicious-string-compare,
+  -bugprone-unsafe-functions,
 
   -cert-dcl16-c,
+  -cert-fio38-c,
   -cert-err33-c,
   -cert-env33-c,
   -cert-msc24-c,
@@ -53,6 +57,7 @@ Checks: >
   -misc-include-cleaner,
   -misc-static-assert,
   -misc-header-include-cycle,
+  -misc-non-copyable-objects,
 
 # Rationale, check by check:
 #
@@ -76,8 +81,24 @@ Checks: >
 #       Unavoidable when talking to the NT API's void*/PVOID* interfaces.
 #   bugprone-suspicious-include
 #       arch/ and src/*/ legitimately include .h fragments by relative path.
+#   bugprone-switch-missing-default-case
+#       Several switches here deliberately fall through to code after the
+#       switch for the unhandled cases (e.g. wait.c's NT exception decode);
+#       that is not an omission, it does not need a `default:` restating it.
+#   bugprone-suspicious-string-compare
+#       Fires on ordinary `if (strcmp(a, b))`/`if (!strncmp(...))`, which is
+#       idiomatic C, not a mistaken comparison against 1 or -1.
+#   bugprone-unsafe-functions
+#       Flags *implementing* asctime_r ("use strftime instead") the same
+#       way the cert-msc/insecureAPI entries below flag implementing
+#       gets()/rand(); it cannot be told not to define these.
 #   cert-dcl16-c
 #       Literal-suffix casing.  Pure style.
+#   cert-fio38-c, misc-non-copyable-objects
+#       Flags the standard stdin/stdout/stderr FILE storage (a static FILE
+#       object, not opaque here -- ntlibc defines the struct) and the
+#       ordinary `malloc(sizeof *f)` idiom, which only ever takes the type
+#       of the dereference and never reads through it.
 #   cert-err33-c
 #       "check the return value of this stdlib call" -- inside the stdlib,
 #       where the failure modes are already handled by errno plumbing.

@@ -57,7 +57,7 @@ size_t malloc_usable_size(void *p)
 void *reallocarray(void *p, size_t m, size_t n)
 {
 	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
-	return realloc(p, m * n);
+	return realloc(p, m * n); // NOLINT(clang-analyzer-optin.portability.UnixAPI) -- realloc(p, 0) is a deliberate, defined passthrough here
 }
 
 /* Blocks with alignment above the heap's own are carved out of a larger

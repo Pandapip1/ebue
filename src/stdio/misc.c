@@ -141,9 +141,9 @@ char *tempnam(const char *dir, const char *pfx)
 	char *tmpl = malloc(n + 1 + pn + sizeof "XXXXXX");
 	int fd;
 	if (!tmpl) return 0;
-	memcpy(tmpl, d, n);
+	memcpy(tmpl, d, n); // NOLINT(bugprone-not-null-terminated-result) -- built up piece by piece, terminated below
 	tmpl[n] = '/';
-	if (pn) memcpy(tmpl + n + 1, pfx, pn);
+	if (pn) memcpy(tmpl + n + 1, pfx, pn); // NOLINT(bugprone-not-null-terminated-result) -- ditto
 	memcpy(tmpl + n + 1 + pn, "XXXXXX", sizeof "XXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }

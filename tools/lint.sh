@@ -213,8 +213,13 @@ stage_analyze() {
 	hdr "static analyzer"
 	require_tool clang || return $missing
 	any=0
-	require_tool clang-tidy || [ "$LINT_ALLOW_MISSING" = 1 ] || return 1
-	tidy=$(command -v clang-tidy 2>/dev/null || true)
+	# CLANG_TIDY lets a caller (CI) pin an exact binary/version -- clang-tidy's
+	# findings vary release to release (newer LLVM adds checks under the
+	# families this project enables), so an unpinned `command -v clang-tidy`
+	# is a gate that can flip red on a toolchain image bump alone.
+	: "${CLANG_TIDY:=clang-tidy}"
+	require_tool "$CLANG_TIDY" || [ "$LINT_ALLOW_MISSING" = 1 ] || return 1
+	tidy=$(command -v "$CLANG_TIDY" 2>/dev/null || true)
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || continue
 		flags=$(cppflags_for "$arch")

@@ -42,7 +42,7 @@ long double powl(long double x, long double y)
 		return is_odd_int(y) ? copysignl(0.0L, x) : 0.0L;
 	}
 	if (x < 0) {
-		if (!is_int(y)) return (x - x) / (x - x);   /* nan */
+		if (!is_int(y)) return (x - x) / (x - x);   /* nan */ // NOLINT(misc-redundant-expression) -- deliberate 0/0 to make a NaN
 		neg = is_odd_int(y);
 		x = -x;
 	}

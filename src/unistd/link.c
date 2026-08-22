@@ -75,18 +75,22 @@ ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsz)
 	if (st == STATUS_NOT_A_REPARSE_POINT) { errno = EINVAL; return -1; }
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
+	/* PathBuffer + byteOffset/sizeof(WCHAR): converting an NT byte offset
+	 * into a WCHAR element index before it is added to a WCHAR*, which
+	 * pointer arithmetic then scales by sizeof(WCHAR) itself -- the
+	 * correct idiom, not the double-scaling the check is looking for. */
 	if (r->ReparseTag == IO_REPARSE_TAG_SYMLINK) {
-		name = r->SymbolicLinkReparseBuffer.PathBuffer + r->SymbolicLinkReparseBuffer.PrintNameOffset / sizeof(WCHAR);
+		name = r->SymbolicLinkReparseBuffer.PathBuffer + r->SymbolicLinkReparseBuffer.PrintNameOffset / sizeof(WCHAR); // NOLINT(bugprone-sizeof-expression,cert-arr39-c)
 		nlen = r->SymbolicLinkReparseBuffer.PrintNameLength / sizeof(WCHAR);
 		if (!nlen) {
-			name = r->SymbolicLinkReparseBuffer.PathBuffer + r->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
+			name = r->SymbolicLinkReparseBuffer.PathBuffer + r->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(WCHAR); // NOLINT(bugprone-sizeof-expression,cert-arr39-c)
 			nlen = r->SymbolicLinkReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
 		}
 	} else if (r->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
-		name = r->MountPointReparseBuffer.PathBuffer + r->MountPointReparseBuffer.PrintNameOffset / sizeof(WCHAR);
+		name = r->MountPointReparseBuffer.PathBuffer + r->MountPointReparseBuffer.PrintNameOffset / sizeof(WCHAR); // NOLINT(bugprone-sizeof-expression,cert-arr39-c)
 		nlen = r->MountPointReparseBuffer.PrintNameLength / sizeof(WCHAR);
 		if (!nlen) {
-			name = r->MountPointReparseBuffer.PathBuffer + r->MountPointReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
+			name = r->MountPointReparseBuffer.PathBuffer + r->MountPointReparseBuffer.SubstituteNameOffset / sizeof(WCHAR); // NOLINT(bugprone-sizeof-expression,cert-arr39-c)
 			nlen = r->MountPointReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
 		}
 	} else if (r->ReparseTag == IO_REPARSE_TAG_LX_SYMLINK) {

@@ -219,10 +219,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Pin clang-tidy to a specific major version rather than whatever
+      # `clang-tidy` resolves to: newer LLVM releases add checks under the
+      # bugprone-*/cert-*/misc-*/clang-analyzer-* families this project
+      # enables, so an unpinned install makes the finding count -- and
+      # therefore whether this job is green -- depend on which Ubuntu image
+      # happens to be current, not on the code. clang-tidy-18 is what
+      # ubuntu-24.04's `clang-tidy` metapackage currently installs; naming
+      # it explicitly keeps that true across an image bump instead of
+      # silently following it.
       - name: Install the linters
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang clang-tidy cppcheck shellcheck \
+          sudo apt-get install -y clang clang-tidy-18 cppcheck shellcheck \
                                   gcc-mingw-w64-i686 gcc-mingw-w64-x86-64
 
       # obj/include/bits/alltypes.h is just a concatenation of committed
@@ -231,6 +240,8 @@ jobs:
       # tools/lint.sh reads neither config.mak nor ARCH: it derives the
       # arch list from arch/*/ and builds its own alltypes.h.
       - name: make lint
+        env:
+          CLANG_TIDY: clang-tidy-18
         run: make lint
 
   # A second, native (Linux/ELF) build of the same src/*.c under

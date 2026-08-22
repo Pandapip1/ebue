@@ -50,9 +50,9 @@ int scandir(const char *path, struct dirent ***res,
 
 		if (n == cap) {
 			size_t newcap = cap ? cap * 2 : 16;
-			struct dirent **nl = __malloc(newcap * sizeof *nl);
+			struct dirent **nl = __malloc(newcap * sizeof *nl); // NOLINT(bugprone-sizeof-expression) -- nl is dirent**, *nl is dirent*, the array holds pointers
 			if (!nl) goto fail;
-			if (list) memcpy(nl, list, n * sizeof *nl);
+			if (list) memcpy(nl, list, n * sizeof *nl); // NOLINT(bugprone-sizeof-expression)
 			__free(list);
 			list = nl;
 			cap = newcap;

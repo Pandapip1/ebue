@@ -28,11 +28,16 @@ static int has_dir(const char *name)
 static char *try_dir(const char *dir, size_t dlen, const char *name)
 {
 	size_t nlen = strlen(name);
-	char *p = malloc(dlen + 1 + nlen + 4 + 1);
+	/* dlen/nlen come from a PATH entry and the program name; the taint
+	 * checker can't see that the allocation size below exactly matches
+	 * what the writes that follow need (dlen + optional separator +
+	 * nlen+1 + up to ".exe\0"), with no clamp needed since malloc simply
+	 * fails on an absurd PATH rather than overflowing. */
+	char *p = malloc(dlen + 1 + nlen + 4 + 1); // NOLINT(clang-analyzer-optin.taint.TaintedAlloc)
 	if (!p) return 0;
 	if (dlen) {
 		memcpy(p, dir, dlen);
-		if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\';
+		if (p[dlen-1] != '/' && p[dlen-1] != '\\') p[dlen++] = '\\'; // NOLINT(clang-analyzer-security.ArrayBound)
 	}
 	memcpy(p + dlen, name, nlen + 1);
 	if (access(p, X_OK) == 0) return p;

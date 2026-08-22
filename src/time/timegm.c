@@ -21,7 +21,11 @@ time_t timegm(struct tm *tm)
 	m = (unsigned)mon + 1;
 
 	days = __days_from_civil(y, m, 1) + (tm->tm_mday - 1);
-	secs = days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+	/* tm_hour/tm_min are `int`, unbounded like tm_mon above (timegm must
+	 * accept and normalize out-of-range fields); widen before multiplying
+	 * so a large caller-supplied value overflows in `long long`, not in
+	 * `int`. */
+	secs = days * 86400 + (long long)tm->tm_hour * 3600 + (long long)tm->tm_min * 60 + tm->tm_sec;
 	t = (time_t)secs;
 
 	gmtime_r(&t, tm);

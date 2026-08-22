@@ -22,7 +22,12 @@ char *asctime_r(const struct tm *tm, char *buf)
 	n = __num_digits(p, 2, (unsigned)tm->tm_hour, 2, '0'); p += n; *p++ = ':';
 	n = __num_digits(p, 2, (unsigned)tm->tm_min, 2, '0'); p += n; *p++ = ':';
 	n = __num_digits(p, 2, (unsigned)tm->tm_sec, 2, '0'); p += n; *p++ = ' ';
-	n = __num_digits(p, 8, (unsigned long)(tm->tm_year + 1900), 4, '0'); p += n;
+	/* tm_year is `int` and unbounded (callers may hand back an out-of-range
+	 * value); widen to `long long` before the +1900 add so a caller-
+	 * supplied extreme value overflows there rather than in `int` --
+	 * plain `long` would not help here, since it is 32-bit on this
+	 * (LLP64) target same as `int`. */
+	n = __num_digits(p, 8, (unsigned long)((long long)tm->tm_year + 1900), 4, '0'); p += n;
 	*p++ = '\n';
 	*p = 0;
 	return buf;

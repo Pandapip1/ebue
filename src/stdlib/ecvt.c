@@ -26,7 +26,7 @@ char *ecvt(double x, int n, int *dp, int *sign)
 		if (isdigit((unsigned char)tmp[i])) buf[j++] = tmp[i];
 	buf[j] = 0;
 	e = tmp[i] ? tmp + i + 1 : 0;
-	exp = e ? atoi(e) : 0;
+	exp = e ? atoi(e) : 0; // NOLINT(cert-err34-c) -- e is our own snprintf("%.*e") output, always a well-formed exponent
 	*dp = x == 0 ? 0 : exp + 1;
 	return buf;
 }

@@ -22,19 +22,19 @@ static long double reduce(long double x)
 
 long double sinl(long double x)
 {
-	if (__fpclassifyl(x) <= FP_INFINITE) return (x - x) / (x - x);  /* nan for nan/inf */
+	if (__fpclassifyl(x) <= FP_INFINITE) return (x - x) / (x - x);  /* nan for nan/inf */ // NOLINT(misc-redundant-expression) -- deliberate 0/0
 	return __x87_sin(reduce(x));
 }
 
 long double cosl(long double x)
 {
-	if (__fpclassifyl(x) <= FP_INFINITE) return (x - x) / (x - x);
+	if (__fpclassifyl(x) <= FP_INFINITE) return (x - x) / (x - x); // NOLINT(misc-redundant-expression) -- deliberate 0/0
 	return __x87_cos(reduce(x));
 }
 
 long double tanl(long double x)
 {
-	if (__fpclassifyl(x) <= FP_INFINITE) return (x - x) / (x - x);
+	if (__fpclassifyl(x) <= FP_INFINITE) return (x - x) / (x - x); // NOLINT(misc-redundant-expression) -- deliberate 0/0
 	return __x87_tan(reduce(x));
 }
 
