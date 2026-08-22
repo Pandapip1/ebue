@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -228,6 +229,211 @@ static void test_clearerr_both(const char *name)
 	CHECK(fclose(f) == 0);
 }
 
+/* perror.html DESCRIPTION: "First (if s is not a null pointer and the
+ * character pointed to by s is not the null byte), the string pointed
+ * to by s followed by a <colon> and a <space>. Then an error message
+ * string followed by a <newline>." "The error messages ... shall be
+ * the same as those returned by strerror()." "The perror() function
+ * shall not change the orientation of the standard error stream" (not
+ * meaningfully testable here -- ntlibc's stderr is always byte
+ * oriented, there is no wide-orientation mode to switch into) and,
+ * from the "Error Checking" application-usage note (implicit in the
+ * DESCRIPTION's silence about errno), a successful perror() call must
+ * not itself change errno -- captured by comparing errno before/after.
+ * Output is captured through a real pipe on fd 2, the same technique
+ * test/posix-strings.c's test_assert_message_and_death() uses for the
+ * same reason (a named file isn't guaranteed visible the way an
+ * inherited/duplicated fd is, and this also works under the native
+ * ASan harness). No child process is needed here since perror() does
+ * not abort -- the redirect/restore happens in this process. */
+static void capture_stderr(void (*fn)(void), char *out, size_t outsz)
+{
+	int p[2], saved;
+	ssize_t n;
+
+	CHECK(pipe(p) == 0);
+	saved = dup(2);
+	CHECK(saved >= 0);
+	CHECK(dup2(p[1], 2) == 2);
+	close(p[1]);
+
+	fn();
+
+	dup2(saved, 2);
+	close(saved);
+	n = read(p[0], out, outsz - 1);
+	close(p[0]);
+	out[n > 0 ? n : 0] = 0;
+}
+
+static void perror_prefixed(void) { errno = ENOENT; perror("myprefix"); }
+static void perror_noprefix_null(void) { errno = EACCES; perror(0); }
+static void perror_noprefix_empty(void) { errno = EACCES; perror(""); }
+
+static void test_perror(void)
+{
+	char buf[256];
+	int e;
+
+	/* "s followed by a <colon> and a <space>. Then an error message
+	 * string ... followed by a <newline>." and "shall be the same as
+	 * those returned by strerror()". */
+	capture_stderr(perror_prefixed, buf, sizeof buf);
+	{
+		char want[256];
+		strcpy(want, "myprefix: ");
+		strcat(want, strerror(ENOENT));
+		strcat(want, "\n");
+		CHECK(strcmp(buf, want) == 0);
+	}
+
+	/* "if s is not a null pointer and the character pointed to by s is
+	 * not the null byte" -- s == NULL: no prefix/colon/space at all. */
+	capture_stderr(perror_noprefix_null, buf, sizeof buf);
+	{
+		char want[256];
+		strcpy(want, strerror(EACCES));
+		strcat(want, "\n");
+		CHECK(strcmp(buf, want) == 0);
+	}
+
+	/* s == "" (not null, but *s == '\0'): same "no prefix" case. */
+	capture_stderr(perror_noprefix_empty, buf, sizeof buf);
+	{
+		char want[256];
+		strcpy(want, strerror(EACCES));
+		strcat(want, "\n");
+		CHECK(strcmp(buf, want) == 0);
+	}
+
+	/* perror() itself must not change errno on success (the
+	 * "Error Checking" note only makes sense if a successful call
+	 * leaves errno as the caller set it -- otherwise the "clearerr()
+	 * then check errno" recipe it describes couldn't distinguish a
+	 * write failure from perror() clobbering errno on its own). */
+	e = ENOENT;
+	errno = e;
+	capture_stderr(perror_prefixed, buf, sizeof buf);
+	CHECK(errno == ENOENT);
+	(void)e;
+}
+
+/* popen.html/pclose.html: src/stdio/misc.c's own header comment
+ * documents that popen() hands the command to cmd.exe /c rather than a
+ * POSIX shell, since there is no /bin/sh on NT -- that divergence is
+ * real and not tested here (the *string* handed to the interpreter is
+ * cmd syntax, not sh syntax).  Everything else the spec promises about
+ * the *stream* and *pclose()*'s return, though, is plain fd/process
+ * plumbing that does not depend on which interpreter runs the command,
+ * and src/stdio/misc.c implements all of it -- so it is asserted for
+ * real below rather than waved off as "no POSIX shell". */
+/* popen() spawns cmd.exe (via %ComSpec%, per src/stdio/misc.c) as a real
+ * child process. Under Wine (the normal `make check` target) that is a
+ * real, present binary. Under this project's native-ASan harness there
+ * is no cmd.exe at all -- __spawn's ability to reach *this test binary*
+ * again under a special-cased argv (as test/posix-strings.c's spawn
+ * helper does) does not extend to an arbitrary Windows executable path,
+ * so popen() legitimately fails to spawn there. That is an environment
+ * limitation, not a popen()/pclose() bug, so each block below degrades
+ * to a note instead of a hard failure when popen() itself returns NULL;
+ * every assertion still runs for real wherever cmd.exe is actually
+ * reachable. */
+static void test_popen(void)
+{
+	FILE *f;
+	int st;
+	char buf[256];
+
+	/* popen.html DESCRIPTION, mode 'r': "the file descriptor
+	 * fileno(stream) in the calling process ... shall be the readable
+	 * end of the pipe" -- reading actually returns the child's output,
+	 * and writing to it fails (not the writable end). */
+	f = popen("echo hello", "r");
+	if (!f) {
+		printf("note: popen() could not spawn a command interpreter in this environment (errno %d); popen/pclose \"r\" checks skipped\n", errno);
+	} else {
+		CHECK(fgets(buf, sizeof buf, f) != 0);
+		CHECK(strstr(buf, "hello") != 0);
+		errno = 0;
+		CHECK(fputc('x', f) == EOF && errno == EBADF);
+		/* pclose.html RETURN VALUE: "Upon successful return, pclose()
+		 * shall return the termination status of the command language
+		 * interpreter" -- cmd.exe /c "echo hello" exits 0. */
+		st = pclose(f);
+		CHECK(st != -1);
+		CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+	}
+
+	/* mode 'w': "STDIN_FILENO shall be the readable end of the pipe,
+	 * and ... fileno(stream) in the calling process ... shall be the
+	 * writable end" -- writing succeeds, reading fails.  cmd.exe /c
+	 * "exit 7" doesn't touch stdin at all, so what it does with the
+	 * bytes written is unobserved here; what IS observed is that
+	 * pclose() reports the exact exit status the interpreter used,
+	 * which is the concrete, checkable form of "termination status of
+	 * the command language interpreter" for this mode. */
+	f = popen("exit 7", "w");
+	if (!f) {
+		printf("note: popen() could not spawn a command interpreter in this environment (errno %d); popen/pclose \"w\" checks skipped\n", errno);
+	} else {
+		CHECK(fputs("ignored\n", f) >= 0);
+		errno = 0;
+		CHECK(fgetc(f) == EOF && errno == EBADF);
+		st = pclose(f);
+		CHECK(st != -1);
+		CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 7);
+	}
+
+	/* popen.html ERRORS ("may fail"): "[EINVAL] The mode argument is
+	 * invalid." src/stdio/misc.c rejects any mode[0] other than 'r'/
+	 * 'w' outright, before ever trying to spawn anything, so this one
+	 * holds regardless of whether cmd.exe is reachable. */
+	errno = 0;
+	CHECK(popen("echo hi", "x") == 0 && errno == EINVAL);
+
+	/* pclose.html ERRORS: "[ECHILD] The status of the child process
+	 * could not be obtained" -- a legitimate way this happens without
+	 * touching any ntlibc-internal state: the application itself reaps
+	 * the popen'd child (e.g. via a wait()/waitpid(-1, ...) loop that
+	 * doesn't know or care it came from popen(), which POSIX permits),
+	 * so by the time pclose() calls waitpid() on that same pid there is
+	 * nothing left to wait for. */
+	f = popen("exit 0", "w");
+	if (!f) {
+		printf("note: popen() could not spawn a command interpreter in this environment (errno %d); pclose() ECHILD check skipped\n", errno);
+	} else {
+		CHECK(waitpid(-1, &st, 0) > 0); /* reaps popen()'s own child first */
+		errno = 0;
+		CHECK(pclose(f) == -1 && errno == ECHILD);
+	}
+}
+
+#if 0 /* N/A: popen.html ERRORS "shall fail" clause: "[EMFILE]
+       * {STREAM_MAX} streams are currently open in the calling
+       * process." Driving the process to STREAM_MAX (FOPEN_MAX) open
+       * FILE*s purely to observe one more popen() call fail is not a
+       * popen()-specific behaviour -- every *fopen()-family function
+       * hits the same wall the same way, and ntlibc has no
+       * STREAM_MAX-specific logic in popen() to distinguish from the
+       * generic "out of fd table / out of memory" paths fopen() itself
+       * already exercises; doing it here would just be an expensive,
+       * redundant repeat of that generic exhaustion test under a
+       * different function name. */
+static void test_popen_emfile(void)
+{
+	FILE *fs[8192];
+	int i, n = 0;
+
+	for (i = 0; i < 8192; i++) {
+		fs[i] = popen("exit 0", "r");
+		if (!fs[i]) break;
+		n++;
+	}
+	CHECK(fs[n] == 0 && errno == EMFILE);
+	for (i = 0; i < n; i++) pclose(fs[i]);
+}
+#endif
+
 int main(void)
 {
 	char *name = make_tmp("posix-stdio-XXXXXX");
@@ -243,6 +449,8 @@ int main(void)
 		free(name);
 	}
 	test_printf_positional_divergence();
+	test_perror();
+	test_popen();
 
 	if (fails) printf("%d check(s) failed\n", fails);
 	else printf("all checks passed\n");

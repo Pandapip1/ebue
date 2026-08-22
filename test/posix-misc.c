@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 static int fails;
 static void wr(const char *s) { const char *e = s; while (*e) e++; write(2, s, e - s); }
@@ -100,7 +101,22 @@ static void test_dirent(void)
 	 * "." onward.  (Whether a file added or removed *after* opendir()/
 	 * rewinddir() shows up is explicitly left unspecified by
 	 * readdir.html DESCRIPTION, so that is not asserted here -- see
-	 * test/posix-coverage/misc.md for what was observed when trying.) */
+	 * test/posix-coverage/misc.md for what was observed when trying.
+	 * That observation -- rewinddir()+readdir() on the same handle not
+	 * seeing a file created since the last opendir()/rewinddir(), even
+	 * though a *fresh* opendir() on the same path does -- was only ever
+	 * run under Wine's NtQueryDirectoryFile, not real Windows. Since
+	 * POSIX leaves this unspecified either way it is not a bug however
+	 * it comes out; confirming it is genuine NT directory-handle
+	 * enumeration-cache behaviour, rather than an artifact of Wine's own
+	 * reimplementation of NtQueryDirectoryFile, needs this exact
+	 * sequence -- opendir(dir); readdir() to exhaust it; create a new
+	 * file in dir from a second handle/process; rewinddir(); readdir()
+	 * again and check whether the new name appears -- run on this
+	 * test's actual x86_64-win32 .exe under real Windows (any version;
+	 * this is NTFS/NTDLL-level behaviour, not Wine-specific
+	 * emulation), which no environment available to this suite
+	 * provides.) */
 	rewinddir(dp);
 	n = 0;
 	{
@@ -174,6 +190,121 @@ static void test_dirent(void)
 	strcpy(path, dir); strcat(path, "/a"); unlink(path);
 	rmdir(dir);
 }
+
+/* d_type / DT_* are NOT in POSIX.1-2017: opendir.html/readdir.html only
+ * mandate d_ino and d_name in "struct dirent" -- verified by reading
+ * both pages end to end, neither mentions d_type or any DT_* constant.
+ * It is a BSD/GNU extension (include/dirent.h gates DT_* and
+ * _DIRENT_HAVE_D_TYPE the same way glibc does), documented e.g. at
+ * https://man7.org/linux/man-pages/man3/readdir.3.html under "d_type":
+ * "not specified in POSIX.1... available on most BSD systems... on
+ * Linux". Tested here as an extension against its own documented
+ * contract, not folded into the POSIX table above. ntlibc's
+ * src/dirent/dirent_internal.h's __dirent_dtype() only ever returns
+ * DT_LNK (reparse points), DT_DIR or DT_REG -- DT_FIFO/DT_CHR/DT_BLK/
+ * DT_SOCK/DT_WHT/DT_UNKNOWN are simply unreachable through NTFS
+ * directory enumeration, so only DT_REG/DT_DIR are checked below. */
+static void test_dtype(void)
+{
+	char tmpl[] = "posix_misc_dtype.XXXXXX";
+	char *dir, path[128], subpath[160];
+	DIR *dp;
+	struct dirent *d;
+	int reg_ok = 0, dir_ok = 0;
+
+	dir = mkdtemp(tmpl);
+	CHECK(dir != NULL);
+	if (!dir) return;
+
+	strcpy(path, dir); strcat(path, "/f");
+	touch(path);
+	strcpy(subpath, dir); strcat(subpath, "/d");
+	CHECK(mkdir(subpath, 0755) == 0);
+
+	dp = opendir(dir);
+	CHECK(dp != NULL);
+	if (dp) {
+		while ((d = readdir(dp))) {
+			if (!strcmp(d->d_name, "f")) {
+				CHECK(d->d_type == DT_REG);
+				reg_ok = 1;
+			} else if (!strcmp(d->d_name, "d")) {
+				CHECK(d->d_type == DT_DIR);
+				dir_ok = 1;
+			} else {
+				/* "." and ".." are directories too. */
+				CHECK(d->d_type == DT_DIR);
+			}
+		}
+		closedir(dp);
+	}
+	CHECK(reg_ok && dir_ok);
+
+	unlink(path);
+	rmdir(subpath);
+	rmdir(dir);
+}
+
+#if 0 /* N/A: readdir.html/readdir_r.html ERRORS, the "shall fail"
+       * (mandatory-when-triggered, not optional) list: "[EOVERFLOW]
+       * One of the values in the structure to be returned cannot be
+       * represented correctly." Checked against the live spec page
+       * (not the ledger, which lumped this in with the optional "may
+       * fail" list -- it is not): ino_t and off_t are both 64-bit here
+       * (include/bits/alltypes.h), and src/dirent/readdir.c's
+       * make_real() fills d_ino straight from NT's 64-bit FileId
+       * (FILE_ID_BOTH_DIR_INFORMATION.FileId) and d_off from an
+       * in-process dp->tell counter incremented once per entry -- both
+       * are 64-bit already, so neither can ever hold a value a 64-bit
+       * ino_t/off_t cannot represent. The triggering condition itself
+       * is therefore unreachable without first overflowing a 64-bit
+       * counter (billions of entries read through one DIR*), which is
+       * not a test that can run in this suite. */
+static void test_readdir_eoverflow(void)
+{
+	DIR *dp = opendir(".");
+	struct dirent *d;
+
+	CHECK(dp != NULL);
+	if (!dp) return;
+	errno = 0;
+	d = readdir(dp);
+	/* what the clause requires, once a value truly does not fit: */
+	CHECK(d == NULL && errno == EOVERFLOW);
+	closedir(dp);
+}
+#endif
+
+#if 0 /* N/A: readdir.html/readdir_r.html ERRORS, the "may fail"
+       * (optional) list: "[ENOENT] The current position of the
+       * directory stream is invalid." POSIX "may fail" conditions are
+       * explicitly optional -- a conformant implementation need not
+       * detect or report them at all (base definitions, "may fail"
+       * introductory text: these are conditions an implementation MAY
+       * support detecting, not conditions it must). ntlibc's
+       * seekdir()/telldir() positions are plain dp->tell values fed
+       * back into a linear NtQueryDirectoryFile restart-scan count
+       * (src/dirent/seekdir.c); there is no encoding of "invalid"
+       * distinct from "past the current end", which readdir() already
+       * handles as ordinary end-of-directory (NULL, errno unchanged)
+       * per the DESCRIPTION -- not ENOENT. Implementing ENOENT
+       * detection here would mean inventing an out-of-band "invalid"
+       * marker with no NT concept behind it, purely to satisfy an
+       * optional clause; not done. */
+static void test_readdir_enoent_position(void)
+{
+	DIR *dp = opendir(".");
+	struct dirent *d;
+
+	CHECK(dp != NULL);
+	if (!dp) return;
+	seekdir(dp, 999999L); /* an invalid/unreachable position */
+	errno = 0;
+	d = readdir(dp);
+	CHECK(d == NULL && errno == ENOENT);
+	closedir(dp);
+}
+#endif
 
 /* ------------------------------------------------------------------ *
  * ctype.h
@@ -438,6 +569,7 @@ static void test_getopt(void)
 int main(void)
 {
 	test_dirent();
+	test_dtype();
 	test_ctype();
 	test_locale();
 	test_libgen();
