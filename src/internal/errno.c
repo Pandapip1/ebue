@@ -5,7 +5,34 @@
  */
 #include "libc.h"
 
-int errno;
+/* errno must be a per-thread, modifiable lvalue (C11 7.5p2, POSIX XSH 2.3).
+ * ntlibc has no threads of its own, but the NT programs it links into do,
+ * and this shape is part of the library's ABI -- getting it right now is
+ * far cheaper than changing it after the fact.
+ *
+ * Storage is real Windows implicit ("static") thread-local storage: a
+ * __thread variable, backed by the PE TLS directory and the per-thread
+ * array the loader hangs off TEB.ThreadLocalStoragePointer (gs:0x58 on
+ * x86_64, fs:0x2c on i386).  tcc's PE backend (tccpe.c: pe_build_tls();
+ * x86_64-gen.c and i386-gen.c: the TCC_TARGET_PE arm of gen_modrm) emits
+ * exactly that access pattern, so this works with the bootstrap compiler,
+ * not just clang.  The NT loader always processes the TLS directory of the
+ * main executable image at process start (confirmed against Wine's
+ * dlls/ntdll/loader.c: build_main_module() -> alloc_tls_slot()), which is
+ * the only image ntlibc programs are -- no DLL involvement required.
+ *
+ * Natively (the ASan/TSan builds under fuzz/ntstubs.c, where there is no
+ * real TEB) a plain __thread still works: clang supports it directly on
+ * Linux, and __errno_location() just returns the calling thread's copy.
+ * Those builds are effectively single-threaded except for tools/tsan-probe.sh,
+ * which specifically wants per-thread storage here -- so __thread is
+ * correct there too, not merely tolerated. */
+static __thread int __errno_val;
+
+int *__errno_location(void)
+{
+	return &__errno_val;
+}
 
 int __errno_from_status(NTSTATUS st)
 {
