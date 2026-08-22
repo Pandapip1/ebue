@@ -24,6 +24,7 @@
 #        NTLIBC_ASAN_EXTRA (extra CFLAGS, e.g. -fsanitize=fuzzer-no-link),
 #        NTLIBC_LEAKS (default 1; set 0 to switch LeakSanitizer off)
 #        NTLIBC_ASAN_CONVERSION=1 (see CONVSAN below)
+#        NTLIBC_CFI=1 (add cfi-icall and LTO; `make cfi` sets it)
 #        ASAN_JOBS (default: nproc) -- how many src/*.c compiles and how
 #          many test links to run at once.  The test *runs* are always
 #          serial; see the comment above the link phase for why that is
@@ -153,10 +154,25 @@ ubsan)
 	exit 2
 	;;
 esac
+
+# cfi-icall needs whole-program type information, hence LTO.  Keep it out
+# of the normal ASan loop because every test link then repeats LTO codegen.
+# It is an ASan-mode extension, not a meaningful addition to the reduced
+# UBSan-only fallback used on strict-overcommit hosts.
+LTOFLAGS=
+if [ "${NTLIBC_CFI:-0}" = 1 ]; then
+	if [ "$SAN_MODE" != asan ]; then
+		echo "asan-build: NTLIBC_CFI=1 requires NTLIBC_SAN_MODE=asan" >&2
+		exit 2
+	fi
+	SAN="$SAN -fsanitize=cfi-icall"
+	LTOFLAGS="-flto -fno-sanitize-trap=cfi-icall"
+fi
 # The tag every message below carries, so a log says which mode produced
 # it.  In the default mode it is the string those messages have always
 # had, so nothing that reads this output changes.
 TAG=$SAN_MODE
+[ "${NTLIBC_CFI:-0}" = 1 ] && TAG=cfi
 RTDIR=$($CC -print-file-name=$SAN_RT)
 RTDIR=$(dirname "$RTDIR")
 LINKFLAGS="-Wl,-rpath,$RTDIR"
@@ -248,7 +264,7 @@ INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
 # would then fail for every *other* test too.  They used to infer it from
 # AddressSanitizer being active; see the long comment in
 # src/internal/rpath.c for why that proxy had to go.
-CFLAGS="$SAN $CONVSAN $INTSAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
+CFLAGS="$SAN $CONVSAN $INTSAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
         -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC $EXTRA"
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
@@ -672,9 +688,9 @@ mkdir -p "$lpar" || exit 1
 link_one() {
 	l_idx=$1 l_n=$2 l_t=$3
 	l_exe="$OBJ/test/$l_n"
-	# $SAN/$TINC/$LINKFLAGS/$LIBOBJS are flag and object lists: word-split.
+	# $SAN/$LTOFLAGS/$TINC/$LINKFLAGS/$LIBOBJS are flag and object lists.
 	# shellcheck disable=SC2086
-	if $CC $SAN -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
+	if $CC $SAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
 	     $TINC $LINKFLAGS "$srcdir/$l_t" "$OBJ/ntstubs.o" $LIBOBJS -o "$l_exe" \
 	     2> "$l_exe.link.err"; then
 		echo ok > "$lpar/$l_idx.rc"

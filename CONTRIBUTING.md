@@ -173,6 +173,9 @@ make lint          # warnings, analyzers and source-level policy checks
 make hygiene       # public-header isolation
 make linkcheck     # declarations, definitions and PE import/header checks
 make asan          # native AddressSanitizer and UBSan suite
+make cfi           # ASan/UBSan plus indirect-call CFI and LTO
+make hwasan        # HWASan build; N/A without the tagged-address ABI
+make tsan          # opt-in native data-race probe
 make fuzz          # native libFuzzer harnesses, 60 seconds each
 make libc-test     # musl libc-test corpus under Wine
 make posix-optsrun # Open POSIX suite through the shared policy
@@ -322,6 +325,15 @@ tools/fuzz.sh --repro /absolute/path/to/crash-input strtod
 developer invocation; CI sets it to the runner's CPU count. A finding exits
 non-zero and leaves its input under the harness's `crashes/` directory.
 Promote durable reproducers into the matching `test/*.c` file.
+
+Three additional opt-in detectors sit beyond the default loop. `make cfi`
+adds clang's `cfi-icall` check and LTO to the ASan/UBSan build; it is separate
+because LTO materially increases every test link. `make hwasan` builds the
+native sources under HWAddressSanitizer and reports N/A unless the host has
+the tagged-address ABI its runtime requires. `make tsan` drives selected
+library calls from two host threads and fails on unsuppressed races. These
+are detectors, not shipping hardening flags; SafeStack and ShadowCallStack
+remain out of scope because they mitigate corruption without reporting it.
 
 ## CI structure
 

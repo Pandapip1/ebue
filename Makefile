@@ -16,6 +16,10 @@
 #   check     build test/*.c against the result and run them under wine
 #   linkcheck prove every publicly declared function actually links
 #   asan      build src/*.c natively under ASan+UBSan and run what applies
+#   cfi       like asan, plus -fsanitize=cfi-icall (own target: -flto cost)
+#   hwasan    build src/*.c natively under HWAddressSanitizer (arm64-only
+#             runtime; reports "not applicable" elsewhere -- see the target)
+#   tsan      opt-in ThreadSanitizer probe (see tools/tsan-probe.sh)
 #   fuzz      build and run the libFuzzer harnesses in fuzz/
 #   clean     remove build output
 #
@@ -729,7 +733,32 @@ FUZZ_TIME ?= 60
 fuzz: $(GENH)
 	@$(srcdir)/tools/fuzz.sh $(FUZZ_TIME)
 
-.PHONY: asan fuzz
+# cfi: the same native ASan+UBSan build as `asan`, plus
+# -fsanitize=cfi-icall (Control Flow Integrity's indirect-call check) and
+# the -flto it needs.  A separate target rather than folded into `asan`
+# by default: LTO measurably slows the link (see tools/asan-build.sh and
+# CONTRIBUTING.md for the measured delta), and `asan` is meant to stay the
+# fast, always-safe-to-run loop.  Gates on zero cfi-icall traps across
+# every applicable test/*.c.
+cfi: $(GENH)
+	@NTLIBC_CFI=1 $(srcdir)/tools/asan-build.sh
+
+# hwasan: a native HWAddressSanitizer build, staged for a future
+# arch/aarch64 target -- see tools/hwasan-build.sh.  Its runtime requires
+# Linux's arm64 tagged-address ABI, so on every host without it (x86_64
+# today, or an arm64 kernel that has not opted in) this reports "not
+# applicable" rather than pretending to have tested anything.
+hwasan: $(GENH)
+	@$(srcdir)/tools/hwasan-build.sh
+
+# tsan: opt-in ThreadSanitizer probe (tools/tsan-probe.sh) driving ntlibc
+# from two host pthreads.  Gated: fails on the known-open aligned_list
+# finding or anything unclassified, and treats strtok/localtime-family
+# races as suppressed (spec-permitted static storage).  See CONTRIBUTING.md.
+tsan: $(GENH)
+	@$(srcdir)/tools/tsan-probe.sh
+
+.PHONY: asan fuzz cfi hwasan tsan
 
 clean:
 	rm -rf obj lib

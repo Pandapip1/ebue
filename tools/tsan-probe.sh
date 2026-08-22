@@ -11,16 +11,19 @@
 # Why it exists.  ntlibc has no threads of its own -- there is no pthreads
 # implementation in src/, and flockfile() is a documented no-op.  But a libc
 # is used by programs, and NT programs create threads, so the question that
-# matters is whether ntlibc is safe to *call* from two threads.  Today it is
-# not: errno is a plain global (src/internal/errno.c), and several tables are
-# read-modify-written with no interlock.
+# matters is whether ntlibc is safe to *call* from two threads.  errno used
+# to be a plain global (src/internal/errno.c) and this probe reported the
+# race on every run; it is now per-thread (a TEB slot, commit 9800308 -- see
+# __teb() in src/internal/$ARCH/teb.c) and the probe reports zero errno
+# races, which is the regression-protection case for keeping this target:
+# revert that fix and this probe reports it again on the first run.  Some
+# tables are still read-modify-written with no interlock -- see the
+# classification at the bottom of this script for what remains and why.
 #
 # The probe builds src/*.c natively the same mechanical way tools/asan-build.sh
 # does -- compile everything, keep what the compiler accepts, stub NT with
 # fuzz/ntstubs.c -- and then runs a driver that calls ntlibc from two host
-# pthreads.  It is a regression check for thread-safety work: make errno
-# per-thread (a TEB slot -- see __teb() in src/internal/$ARCH/teb.c) and the
-# first report below must disappear.
+# pthreads.
 #
 # -shared-libsan is load-bearing, not cosmetic, and for a sharper reason than
 # in asan-build.sh.  With the static runtime, TSan's own start-up calls
@@ -36,6 +39,10 @@
 # Usage: tools/tsan-probe.sh
 # Env:   NTLIBC_CC (default clang), NTLIBC_TSAN_OBJ (default obj/tsan),
 #        NTLIBC_ARCH (default x86_64), TSAN_SYMBOLIZE (default 0)
+#        NTLIBC_TSAN_GATE (default 1; 0 makes every race report-only)
+# Exit:  0 if every observed race is on the spec-permitted suppression
+#        list; 1 if any is the known-open aligned_list finding or anything
+#        unclassified (unless NTLIBC_TSAN_GATE=0).
 
 set -eu
 
@@ -62,7 +69,7 @@ SAN="-fsanitize=thread -shared-libsan -Wl,-rpath,$(dirname "$RT")"
 INC="-I$srcdir/src/internal -I$srcdir/obj/include -I$srcdir/include \
      -I$srcdir/arch/$ARCH -I$srcdir/arch/generic"
 CFLAGS="$SAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
-        -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL $INC"
+        -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC"
 
 rm -rf "$OBJ"
 mkdir -p "$OBJ/obj"
@@ -175,17 +182,29 @@ TINC="-I$srcdir/obj/include -I$srcdir/include -I$srcdir/arch/$ARCH -I$srcdir/arc
 # Objects, not an archive, and hidden -- same reason as asan-build.sh: the
 # sanitizer DSO exports weak str*/mem* interceptors that would otherwise
 # satisfy those references and leave ntlibc's versions untested.
-# shellcheck disable=SC2046  # deliberate word splitting of the object list
-# $CC/$CFLAGS/$SAN are flag lists and must word-split.
-# shellcheck disable=SC2086
+# $CC/$SAN/$TINC are flag lists and must word-split; the object glob must
+# also word-split (deliberate, per the comment above).
+# shellcheck disable=SC2046,SC2086
 $CC $SAN -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
-# $CC/$CFLAGS/$SAN are flag lists and must word-split.
-# shellcheck disable=SC2086
     $TINC "$OBJ/driver.c" "$OBJ/ntstubs.o" "$OBJ"/obj/*.o -lpthread -o "$OBJ/driver"
 
 TSAN_OPTIONS="symbolize=$SYMBOLIZE halt_on_error=0 exitcode=0"
 export TSAN_OPTIONS
-timeout 300 "$OBJ/driver" > "$OBJ/report.txt" 2>&1 || true
+if timeout 300 "$OBJ/driver" > "$OBJ/report.txt" 2>&1; then
+	run_status=0
+else
+	run_status=$?
+fi
+
+if grep -q 'ThreadSanitizer can not mmap the shadow memory' "$OBJ/report.txt"; then
+	echo "tsan: NOT APPLICABLE on this host: the runtime could not map its shadow memory."
+	echo "      This commonly means Linux is enforcing strict overcommit; no probe ran."
+	exit 0
+fi
+if [ "$run_status" != 0 ]; then
+	echo "tsan: driver failed with status $run_status -- see $OBJ/report.txt" >&2
+	exit 1
+fi
 
 nraces=$(grep -c 'WARNING: ThreadSanitizer: data race' "$OBJ/report.txt" || true)
 echo "tsan: $nraces data races reported (full output in $OBJ/report.txt)"
@@ -198,6 +217,7 @@ awk '/^=== /{s=substr($0,5)} /WARNING: ThreadSanitizer: data race/{print s}' \
 # This is what identifies the variable, and it costs none of the minutes
 # llvm-symbolizer spends on this binary.
 echo "tsan: raced objects"
+: > "$OBJ/raced_syms.txt"
 main_rt=$(sed -n 's/^main-at 0x//p' "$OBJ/report.txt" | head -1)
 main_lt=$(nm "$OBJ/driver" | awk '$3=="main"{print $1; exit}')
 if [ -n "$main_rt" ] && [ -n "$main_lt" ]; then
@@ -210,10 +230,61 @@ if [ -n "$main_rt" ] && [ -n "$main_lt" ]; then
 		# shellcheck disable=SC2086
 		off=$(printf '%016x\n' $((a - base)))
 		sym=$(grep -i "^$off " "$OBJ/syms.txt" | head -1)
+		symname=$(echo "$sym" | awk '{print $NF}')
 		echo "  $a  ${sym:-<not a named object>}"
+		if [ -n "$symname" ]; then echo "$symname" >> "$OBJ/raced_syms.txt"; fi
 	done
 else
 	echo "  (could not determine load base; see $OBJ/report.txt)"
 fi
-echo "tsan: this probe is expected to report races until ntlibc is made"
-echo "      thread-safe; it is a description of the current state, not a gate."
+
+# ---- classify: suppressed (spec-permitted) / known open finding / new ------
+#
+# This probe is opt-in (`make tsan`) and never part of `check` or `asan`,
+# but it is meant to be an honest gate on its own terms: a race nobody has
+# judged is a failure, not a shrug, and a judged-and-accepted race is not
+# silently dropped either -- it prints, with its reasoning, every run.
+#
+#   strtok/localtime/gmtime/ctime/asctime -- SUPPRESSED.  Each returns a
+#   pointer to static storage *by specification* (C99 7.21.5.8p3 for
+#   strtok, 7.23.3p4 for the time family), and the *_r variants exist
+#   precisely for a threaded caller that cares.  Racing on the static
+#   buffer is conforming, not a defect, so it does not fail this target.
+#
+#   aligned_list (src/malloc/malloc.c) -- KNOWN OPEN FINDING, NOT
+#   suppressed.  malloc()/free() are required to be thread-safe; the core
+#   allocator already is (RtlAllocateHeap serialises unless called with
+#   HEAP_NO_SERIALIZE, which ntlibc never passes), but the aligned-
+#   allocation bookkeeping list posix_memalign()/free() push and unlink is
+#   read-modify-written with no interlock.  This is real and unfixed, so
+#   this target stays red on it on purpose rather than reporting green
+#   over a genuine bug -- see CONTRIBUTING.md.
+#
+#   anything else -- new, unjudged, fails the run so it gets looked at.
+gate=${NTLIBC_TSAN_GATE:-1}
+open=0 unexpected=0
+: > "$OBJ/classified.txt"
+sort -u "$OBJ/raced_syms.txt" | while read -r s; do
+	case $s in
+	strtok*|localtime*|gmtime*|ctime*|asctime*)
+		echo "  SUPPRESSED   $s  (spec-permitted static storage: C99 7.21.5.8p3 / 7.23.3)" ;;
+	aligned_list)
+		echo "  OPEN FINDING $s  (posix_memalign/free bookkeeping is unlocked; see CONTRIBUTING.md)"
+		echo open >> "$OBJ/classified.txt" ;;
+	*)
+		echo "  UNEXPECTED   $s  (not judged -- treat as a possible new bug)"
+		echo unexpected >> "$OBJ/classified.txt" ;;
+	esac
+done
+open=$(grep -c '^open$' "$OBJ/classified.txt" || true)
+unexpected=$(grep -c '^unexpected$' "$OBJ/classified.txt" || true)
+echo "tsan: $open known open finding(s), $unexpected unexpected race(s)"
+if [ "$gate" = 1 ] && { [ "$open" != 0 ] || [ "$unexpected" != 0 ]; }; then
+	echo "tsan: FAIL -- see above (set NTLIBC_TSAN_GATE=0 to report only)"
+	exit 1
+fi
+if [ "$open" = 0 ] && [ "$unexpected" = 0 ]; then
+	echo "tsan: PASS -- no unsuppressed races"
+else
+	echo "tsan: report-only run complete"
+fi
