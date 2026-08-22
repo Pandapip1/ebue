@@ -280,13 +280,6 @@ static char **build_argv(const char *self, const char *role)
 	return v;
 }
 
-#if 0 /* BUG: execvp/execvpe (src/process/exec.c:45) call __find_program,
-       * which src/internal/libc.h:117 declares but no source file
-       * defines.  Because execv/execve/execvp all live in exec.o, any
-       * reference to *any* exec function pulls the whole object out of
-       * libc.a and the link fails with "unresolved reference to
-       * '__find_program'" -- the entire exec family is unusable until it
-       * is defined.  Re-enable this block (and its call in main) then. */
 /* execve never returns on success: it runs the program as a child and
  * exits with its status.  So exec from a forked child and read the
  * result back through that child's exit code. */
@@ -356,7 +349,6 @@ static void test_exec(const char *self)
 	CHECK(execv("./no-such-program-here.exe", build_argv(self, "--argv")) == -1);
 	CHECK(errno == ENOENT);
 }
-#endif
 
 /* More children than the child table's static seed holds, none reaped
  * until all exist: the table has to grow, and every child stays reapable
@@ -402,10 +394,7 @@ int main(int argc, char **argv)
 	test_wait_semantics();
 	test_wait_rusage();
 	test_prefork_handle();
-#if 0 /* BUG: see test_exec */
 	test_exec(argv[0]);
-#endif
-	(void)argv;
 	test_child_table_growth();
 
 	if (!fails) printf("process: all tests passed\n");
