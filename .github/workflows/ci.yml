@@ -215,6 +215,7 @@ jobs:
   #
   # Independent of the tcc jobs: it never builds with tcc, so no `needs:`.
   lint:
+    needs: build-toolchain
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -228,6 +229,24 @@ jobs:
       # obj/include/bits/alltypes.h is just a concatenation of committed
       # .h.gen files, so this needs no compiler -- but ./configure is what
       # sets ARCH, and lint.sh reads it.
+      - name: Restore tinycc toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      - name: Restore tinycc toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
       - name: Configure
         run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
 
@@ -243,6 +262,7 @@ jobs:
   #
   # Also expected to be RED for now. Not relaxed.
   asan:
+    needs: build-toolchain
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
