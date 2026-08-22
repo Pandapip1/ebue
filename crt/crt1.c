@@ -20,7 +20,40 @@
 #include "libc.h"
 #include "rtlib.h"
 
-int main();
+/* main is always called below with the full three arguments, whichever of
+ * the three standard forms -- int main(void), int main(int, char **),
+ * int main(int, char **, char **) -- the program actually defined.
+ *
+ * The traditional way to write this, and what musl's crt1.c still does, is
+ * the unprototyped `int main();', which promises nothing about the
+ * parameter list and so is compatible with all three definitions.  C23
+ * removes that construct: a `()' parameter list now means `(void)', so the
+ * old declaration would silently turn into a promise that main takes no
+ * arguments at all and the call below would stop compiling.
+ *
+ * So declare the widest form instead, the way mingw-w64's own startup code
+ * does (mingw-w64-crt/include/internal.h: `int __CRTDECL main(int _Argc,
+ * char **_Argv, char **_Env);').  This is a proper prototype, valid in
+ * every version of C including C23.
+ *
+ * When the program's main is one of the narrower forms this declaration
+ * does not match its definition -- but the two are in different translation
+ * units, so no compiler can see the mismatch, and passing the extra
+ * arguments is harmless under both calling conventions ntlibc targets:
+ *
+ *   - i386 __cdecl: arguments are pushed on the stack and *the caller*
+ *     removes them, so a callee that reads fewer than were pushed leaves
+ *     the stack correctly balanced;
+ *   - x86_64 Microsoft x64: the first four arguments travel in RCX, RDX,
+ *     R8 and R9, and the caller both allocates and reclaims the 32-byte
+ *     shadow space, so again a callee reading fewer registers costs
+ *     nothing.
+ *
+ * In both cases a narrower main simply ignores the trailing arguments.
+ * This is the same bargain every hosted C implementation makes -- the
+ * standard itself only requires main to be *callable*, and leaves the
+ * mechanism to the implementation (C99 5.1.2.2.1). */
+int main(int, char **, char **);
 
 PPEB __peb;
 char **environ;

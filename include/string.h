@@ -97,9 +97,14 @@ char *strcasestr(const char *, const char *);
 void *memmem(const void *, size_t, const void *, size_t);
 void *memrchr(const void *, int, size_t);
 void *mempcpy(void *, const void *, size_t);
-#ifndef __cplusplus
-char *basename();
-#endif
+/* No basename here.  glibc's <string.h> declares a GNU basename that takes
+ * a const char * and never modifies it, distinct from the POSIX basename in
+ * <libgen.h>; musl used to paper over the difference with an unprototyped
+ * `char *basename();', which is compatible with both.  C23 turns that into
+ * `(void)', which conflicts with <libgen.h>'s real prototype, so musl
+ * dropped the declaration in 1.2.5 ("string.h no longer provides
+ * (C23-incompat) non-prototype decl of basename").  ntlibc follows: only
+ * the POSIX basename exists, declared in <libgen.h>. */
 #endif
 
 #ifdef __cplusplus
