@@ -661,6 +661,12 @@ static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap)
 	mf.mem_buf = (unsigned char *)s;
 	mf.mem_size = cap;
 	r = __vfprintf(&mf, fmt, ap);
+	/* __fwrite gives even an unbuffered memory FILE a one-byte staging
+	 * buffer through __ensure_buf, and this FILE is a local that never
+	 * sees fclose, so releasing it is ours to do -- otherwise every
+	 * sprintf/snprintf that writes anything leaks that byte.  Same
+	 * ownership rule as vsscanf_impl in scanf.c. */
+	free(mf.buf);
 	if (cap) {
 		size_t pos = mf.mem_len;
 		if (pos >= cap) pos = cap - 1;
