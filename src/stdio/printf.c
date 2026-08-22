@@ -14,20 +14,42 @@
  * simpler and, for every ordinary magnitude, indistinguishable from
  * correct; it can be a unit or two off in the last digit for values
  * that sit exactly on a rounding boundary, and loses precision well
- * before 10^18.  %a/%A (hex float) and positional (%n$) arguments are
- * not implemented; nothing in this tree uses either.
+ * before 10^18.  %a/%A are exact instead: a double's significand is
+ * already 13 hex digits, so they are read straight out of the bits.
+ * Positional (%n$) arguments are not implemented; nothing in this tree
+ * uses them.
+ *
+ * No conversion sizes anything from the caller's precision, which C99
+ * 7.19.6.1 leaves unbounded -- see PREC_MAX below.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <limits.h>
 #include <math.h>
 #include <errno.h>
 #include "stdio_impl.h"
 
 enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
+
+/* A precision is an int and C99 7.19.6.1 puts no bound on it, so no
+ * buffer may be sized from one.  PREC_MAX is the largest precision
+ * fmt_f/fmt_e ever write out in full: dtoa yields at most 34 digits and
+ * pads the rest with zeros, and the leading zeros of even the smallest
+ * denormal stop at the 323rd fractional place, so every place past
+ * PREC_MAX is a zero no matter what the value is.  emit_float formats
+ * with the precision clamped to PREC_MAX and streams the dropped zeros
+ * straight out, which makes the body length independent of the
+ * caller's precision. */
+#define PREC_MAX 512
+/* Worst-case body: 309 integer digits (DBL_MAX at %f), a point, and up
+ * to PREC_MAX+4 fractional digits (%g hands fmt_f a precision of
+ * P-1-decexp, and decexp >= -4 on that path), or a mantissa plus a
+ * five-byte exponent -- 826 bytes, rounded up. */
+#define BODYMAX 1024
 
 /* Write n bytes to f, tracking the logical (untruncated) total in
  * *count.  A short write is a real error unless f is a fixed memory
@@ -132,23 +154,28 @@ static int fmt_f(char *buf, double v, int prec, int alt)
 		 * decexp+1+prec significant digits would clamp away the digit
 		 * that decides how the last shown place rounds (e.g. 0.0005 at
 		 * ".3f"): round the whole value to prec fractional digits
-		 * directly instead. */
-		double scale = 1.0;
+		 * directly instead.  v * 10^prec is below 1 on this path, so
+		 * scaling by one factor of ten at a time stays in range,
+		 * where forming 10^prec first would not: prec reaches 323
+		 * here for a denormal, and 1e323 is an infinity. */
+		double x = v;
 		unsigned long long r;
-		char tmp[40]; int tn = 0;
-		for (i = 0; i < prec; i++) scale *= 10.0;
-		r = round_int(v * scale, prec == 0);
+		char tmp[24]; int tn = 0;
+		for (i = 0; i < prec; i++) x *= 10.0;
+		r = round_int(x, prec == 0);
 		if (prec == 0) {
 			/* v < 1 rounded to an integer: 0 or 1 */
 			buf[n++] = (char)('0' + (int)r);
 			if (alt) buf[n++] = '.';
 			return n;
 		}
+		/* r is 0 or 1 -- v is below half of the last place shown --
+		 * but bound the loop anyway rather than trust the estimate. */
+		if (r == 0) tmp[tn++] = '0';
+		while (r && tn < (int)sizeof tmp) { tmp[tn++] = (char)('0' + (int)(r % 10)); r /= 10; }
 		buf[n++] = '0';
 		buf[n++] = '.';
-		if (r == 0) tmp[tn++] = '0';
-		while (r) { tmp[tn++] = (char)('0' + (int)(r % 10)); r /= 10; }
-		while (tn < prec) tmp[tn++] = '0';
+		for (i = tn; i < prec; i++) buf[n++] = '0';
 		for (i = tn - 1; i >= 0; i--) buf[n++] = tmp[i];
 		return n;
 	}
@@ -168,7 +195,10 @@ static int fmt_f(char *buf, double v, int prec, int alt)
 	return n;
 }
 
-static int fmt_e(char *buf, double v, int prec, int alt, int upper)
+/* %e-style body (no sign).  *epos receives the offset of the 'e', the
+ * point at which emit_float splices in any zeros a clamped precision
+ * left out of the mantissa. */
+static int fmt_e(char *buf, double v, int prec, int alt, int upper, int *epos)
 {
 	char digits[40];
 	int decexp, i, n = 0;
@@ -183,6 +213,7 @@ static int fmt_e(char *buf, double v, int prec, int alt, int upper)
 		buf[n++] = '.';
 		for (i = 1; i <= prec; i++) buf[n++] = i < ndigits ? digits[i] : '0';
 	}
+	*epos = n;
 	buf[n++] = upper ? 'E' : 'e';
 	buf[n++] = decexp < 0 ? '-' : '+';
 	{
@@ -211,43 +242,151 @@ static int strip_g(char *buf, int n, int has_exp)
 	return n - (mant_end - i);
 }
 
+/* %a-style body: the hex significand and the binary exponent in
+ * decimal, without the sign and without the "0x" -- emit_float carries
+ * those in the prefix, so that a '0' flag pads between them the way
+ * C99 7.19.6.1p6 asks.  *epos receives the offset of the 'p', where
+ * the zeros of a precision clamped to PREC_MAX belong.
+ *
+ * The 52 mantissa bits of a double are exactly 13 hex digits, so every
+ * digit past the 13th is a zero whatever the value; a precision below
+ * 13 rounds to nearest with ties to even, like the arithmetic itself. */
+static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos)
+{
+	const char *hex = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+	union { double f; uint64_t i; } u;
+	uint64_t man;
+	int e, nd, i, n = 0;
+	char lead;
+
+	u.f = v;
+	e = (int)(u.i >> 52 & 0x7ff);
+	man = u.i & 0xfffffffffffffULL;
+	if (!e) { lead = '0'; e = man ? -1022 : 0; }   /* subnormal, or zero */
+	else { lead = '1'; e -= 1023; }
+
+	if (prec < 0) {
+		/* no precision given: exactly the digits the value needs */
+		nd = 13;
+		while (nd > 0 && !(man >> (52 - 4 * nd) & 0xf)) nd--;
+	} else if (prec < 13) {
+		int shift = (13 - prec) * 4;
+		uint64_t rem = man & (((uint64_t)1 << shift) - 1);
+		uint64_t half = (uint64_t)1 << (shift - 1);
+		man >>= shift;
+		/* a tie goes to even, where at a precision of 0 the digit
+		 * that has to end up even is the leading one */
+		if (rem > half || (rem == half && ((prec ? man : (uint64_t)(lead - '0')) & 1))) man++;
+		if (man >> (4 * prec)) { man = 0; lead++; }   /* carried out of the digits */
+		man <<= shift;
+		nd = prec;
+	} else nd = 13;   /* the caller's extra digits are zeros; see PREC_MAX */
+
+	buf[n++] = lead;
+	if (nd > 0 || alt) buf[n++] = '.';
+	for (i = 0; i < nd; i++) buf[n++] = hex[man >> (48 - 4 * i) & 0xf];
+	if (prec > 13) for (i = 13; i < prec; i++) buf[n++] = '0';
+	*epos = n;
+	buf[n++] = upper ? 'P' : 'p';
+	buf[n++] = e < 0 ? '-' : '+';
+	{
+		int ax = e < 0 ? -e : e;
+		char eb[8]; int ei = 0;
+		if (ax == 0) eb[ei++] = '0';
+		while (ax) { eb[ei++] = (char)('0' + ax % 10); ax /= 10; }
+		while (ei--) buf[n++] = eb[ei];
+	}
+	return n;
+}
+
+/* Write a body of n bytes with `zeros` further '0' spliced in at offset
+ * zpos (the end of the mantissa), which is where a precision clamped to
+ * PREC_MAX left off. */
+static void out_body(FILE *f, const char *body, int n, int zpos, long zeros, long *count, int *bad)
+{
+	out(f, body, (size_t)zpos, count, bad);
+	pad(f, '0', (size_t)zeros, count, bad);
+	out(f, body + zpos, (size_t)(n - zpos), count, bad);
+}
+
 static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags, int width, long *count, int *bad)
 {
-	char body[256];
+	char body[BODYMAX];
+	char pfx[3];
 	int n, neg = signbit(v);
-	int upper = conv == 'F' || conv == 'E' || conv == 'G';
+	int upper = conv == 'F' || conv == 'E' || conv == 'G' || conv == 'A';
 	char sign = neg ? '-' : (flags & 1 ? '+' : (flags & 2 ? ' ' : 0));
-	char av = (char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' : conv);
-	size_t prefixlen = sign ? 1 : 0;
+	char av = (char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' :
+	                 conv == 'A' ? 'a' : conv);
+	int prefixlen = 0;
+	long zeros = 0;   /* mantissa places past PREC_MAX, all of them zeros */
+	int zpos = 0;     /* where in body they belong */
+	int total, special = 0;
 
 	v = fabs(v);
-	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; if (!neg) sign = 0; }
-	else if (isinf(v)) { memcpy(body, upper ? "INF" : "inf", 3); n = 3; }
-	else if (av == 'f') n = fmt_f(body, v, prec < 0 ? 6 : prec, alt);
-	else if (av == 'e') n = fmt_e(body, v, prec < 0 ? 6 : prec, alt, upper);
-	else { /* g/G */
-		int P = prec < 0 ? 6 : (prec == 0 ? 1 : prec);
-		char tmp[40]; int decexp;
-		if (v == 0) decexp = 0; else dtoa(v, P, tmp, &decexp);
-		if (decexp < -4 || decexp >= P) { n = fmt_e(body, v, P - 1, alt, upper); if (!alt) n = strip_g(body, n, 1); }
-		else { n = fmt_f(body, v, P - 1 - decexp, alt); if (!alt) n = strip_g(body, n, 0); }
+	if (isnan(v)) { memcpy(body, upper ? "NAN" : "nan", 3); n = 3; if (!neg) sign = 0; special = 1; }
+	else if (isinf(v)) { memcpy(body, upper ? "INF" : "inf", 3); n = 3; special = 1; }
+	else if (av == 'a') {
+		int pu = prec > PREC_MAX ? PREC_MAX : prec;
+		zeros = prec > PREC_MAX ? (long)prec - pu : 0;
+		n = fmt_a(body, v, pu, alt, upper, &zpos);
 	}
+	else if (av == 'f' || av == 'e') {
+		int p = prec < 0 ? 6 : prec;
+		int pu = p > PREC_MAX ? PREC_MAX : p;
+		zeros = (long)p - pu;
+		if (av == 'f') { n = fmt_f(body, v, pu, alt); zpos = n; }
+		else n = fmt_e(body, v, pu, alt, upper, &zpos);
+	} else { /* g/G */
+		int P = prec < 0 ? 6 : (prec == 0 ? 1 : prec);
+		int PU = P > PREC_MAX ? PREC_MAX : P;
+		char tmp[40]; int decexp;
+		if (v == 0) decexp = 0; else dtoa(v, PU, tmp, &decexp);
+		/* without '#' the zeros a clamped precision drops are exactly
+		 * the ones strip_g would take off again, so they never go out */
+		zeros = alt ? (long)P - PU : 0;
+		/* decexp is at most 308, so the form is the same whether the
+		 * unclamped or the clamped precision picks it */
+		if (decexp < -4 || decexp >= P) {
+			n = fmt_e(body, v, PU - 1, alt, upper, &zpos);
+			if (!alt) n = strip_g(body, n, 1);
+		} else {
+			n = fmt_f(body, v, PU - 1 - decexp, alt);
+			zpos = n;
+			if (!alt) n = strip_g(body, n, 0);
+		}
+	}
+	if (zeros <= 0 || zpos > n) { zeros = 0; zpos = n; }
+
+	if (sign) pfx[prefixlen++] = sign;
+	if (av == 'a' && !special) { pfx[prefixlen++] = '0'; pfx[prefixlen++] = upper ? 'X' : 'x'; }
+
+	/* C99 7.19.6.1p3: the count printf returns is an int, so refuse a
+	 * conversion whose zero run alone would not fit in one rather than
+	 * spend an age emitting a result that cannot be reported. */
+	if (zeros > (long)(INT_MAX - n - prefixlen)) {
+		errno = EOVERFLOW;
+		f->err = 1;
+		*bad = 1;
+		return;
+	}
+	total = n + (int)zeros + prefixlen;
 
 	{
-		int pad_n = width - (int)n - (int)prefixlen;
+		int pad_n = width - total;
 		if (pad_n < 0) pad_n = 0;
 		if (flags & 4) { /* left */
-			if (sign) out(f, &sign, 1, count, bad);
-			out(f, body, (size_t)n, count, bad);
+			out(f, pfx, (size_t)prefixlen, count, bad);
+			out_body(f, body, n, zpos, zeros, count, bad);
 			pad(f, ' ', (size_t)pad_n, count, bad);
-		} else if ((flags & 8) && !isnan(v)) { /* zero pad, not for nan */
-			if (sign) out(f, &sign, 1, count, bad);
+		} else if ((flags & 8) && !special) { /* zero pad, never for inf/nan */
+			out(f, pfx, (size_t)prefixlen, count, bad);
 			pad(f, '0', (size_t)pad_n, count, bad);
-			out(f, body, (size_t)n, count, bad);
+			out_body(f, body, n, zpos, zeros, count, bad);
 		} else {
 			pad(f, ' ', (size_t)pad_n, count, bad);
-			if (sign) out(f, &sign, 1, count, bad);
-			out(f, body, (size_t)n, count, bad);
+			out(f, pfx, (size_t)prefixlen, count, bad);
+			out_body(f, body, n, zpos, zeros, count, bad);
 		}
 	}
 }
@@ -309,7 +448,7 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				int issigned = *p == 'd' || *p == 'i';
 				int neg = 0;
 				unsigned long long uv;
-				char digbuf[32]; int dn = 0;
+				char digbuf[32]; int dn = 0, zpad;
 				char prefix[3]; int pn = 0;
 
 				if (issigned) {
@@ -340,30 +479,40 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 					unsigned long long t = uv;
 					do { digbuf[dn++] = "0123456789abcdef"[t % (unsigned)base] ; if (upper && digbuf[dn-1] > '9') digbuf[dn-1] -= 32; t /= (unsigned)base; } while (t);
 				}
-				while (dn < prec && dn < (int)sizeof digbuf) digbuf[dn++] = '0';
+				/* A precision is a minimum digit count with no upper
+				 * bound (C99 7.19.6.1p5), so the leading zeros it
+				 * calls for are padded out to the stream rather than
+				 * stored: digbuf holds only the digits a value can
+				 * actually have. */
+				zpad = prec > dn ? prec - dn : 0;
 
 				if (neg) prefix[pn++] = '-';
 				else if (issigned && (flags & 1)) prefix[pn++] = '+';
 				else if (issigned && (flags & 2)) prefix[pn++] = ' ';
-				if ((flags & 16) && base == 8 && (dn == 0 || digbuf[dn-1] != '0')) digbuf[dn++] = '0';
+				/* '#' octal needs a leading zero only if the precision
+				 * has not already put one there */
+				if ((flags & 16) && base == 8 && !zpad && (dn == 0 || digbuf[dn-1] != '0')) digbuf[dn++] = '0';
 				if ((flags & 16) && base == 16 && uv != 0) { prefix[pn++] = '0'; prefix[pn++] = upper ? 'X' : 'x'; }
 
+				if (zpad > INT_MAX - dn - pn) { errno = EOVERFLOW; f->err = 1; bad = 1; break; }
 				{
-					int total = dn + pn;
+					int total = dn + pn + zpad;
 					int padn = width - total; if (padn < 0) padn = 0;
 					int zero = (flags & 8) && !(flags & 4) && prec < 0;
 					if (flags & 4) {
 						out(f, prefix, (size_t)pn, &count, &bad);
-						{ char rev[32]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
+						pad(f, '0', (size_t)zpad, &count, &bad);
+						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
 						pad(f, ' ', (size_t)padn, &count, &bad);
 					} else if (zero) {
 						out(f, prefix, (size_t)pn, &count, &bad);
 						pad(f, '0', (size_t)padn, &count, &bad);
-						{ char rev[32]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
+						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
 					} else {
 						pad(f, ' ', (size_t)padn, &count, &bad);
 						out(f, prefix, (size_t)pn, &count, &bad);
-						{ char rev[32]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
+						pad(f, '0', (size_t)zpad, &count, &bad);
+						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
 					}
 				}
 				break;
@@ -423,7 +572,8 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				}
 				break;
 			}
-			case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
+			case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':
+			case 'a': case 'A': {
 				double v = va_arg(ap, double);
 				emit_float(f, v, *p, prec, flags & 16, flags, width, &count, &bad);
 				break;

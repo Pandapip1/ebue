@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <limits.h>
+#include <float.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -256,8 +257,205 @@ static void test_printf(void)
 	FMT("   inf", "%6f", 1.0 / 0.0);
 	FMT("+inf", "%+f", 1.0 / 0.0);
 
+	/* %a/%A: exact, since a double's significand is 13 hex digits */
+	FMT("0x1p+0", "%a", 1.0);
+	FMT("0x0p+0", "%a", 0.0);
+	FMT("-0x0p+0", "%a", -0.0);
+	FMT("0x1p-1", "%a", 0.5);
+	FMT("0x1p+1", "%a", 2.0);
+	FMT("0x1.8p+0", "%a", 1.5);
+	FMT("0x1.fep+7", "%a", 255.0);
+	FMT("0x1.921f9f01b866ep+1", "%a", 3.14159);
+	FMT("0X1.921F9F01B866EP+1", "%A", 3.14159);
+	FMT("0x1.fffffffffffffp+1023", "%a", DBL_MAX);
+	FMT("0x1p-1022", "%a", DBL_MIN);
+	FMT("0x0.0000000000001p-1022", "%a", 5e-324);   /* subnormal: leading 0 */
+	FMT("inf", "%a", 1.0 / 0.0);
+	FMT("-INF", "%A", -1.0 / 0.0);
+	/* an explicit precision rounds to nearest, ties to even -- at
+	 * precision 0 that is the leading digit's parity */
+	FMT("0x1p+0", "%.0a", 1.0);
+	FMT("0x2p+0", "%.0a", 1.5);
+	FMT("0x1p+1", "%.0a", 2.5);
+	FMT("0x2p+1", "%.0a", 3.0);
+	FMT("0x1p+0", "%.0a", 1.0625);
+	FMT("0x1.0p+0", "%.1a", 1.03125);
+	FMT("0x1.2p+0", "%.1a", 1.09375);
+	FMT("0x1.8p+0", "%.1a", 1.5);
+	FMT("0x1.00p+0", "%.2a", 1.0);
+	FMT("0x1.922p+1", "%.3a", 3.14159);
+	FMT("0x1.921f9f01b867p+1", "%.12a", 3.14159);
+	FMT("0x1.921f9f01b866e0p+1", "%.14a", 3.14159);
+	FMT("0x1p-1022", "%.0a", 2.2250738585072009e-308);
+	FMT("0x0p-1022", "%.0a", 5e-324);
+	FMT("0x1.p+0", "%#.0a", 1.0);
+	FMT("0x0.0000p+0", "%.4a", 0.0);
+	FMT("+0x1p+0", "%+a", 1.0);
+	FMT("              0x1p+0", "%20a", 1.0);
+	FMT("0x1p+0              ", "%-20a", 1.0);
+	FMT("0x000000000000001p+0", "%020a", 1.0);   /* the 0 pads after "0x" */
+	FMT("-0x00000000000001p+0", "%020a", -1.0);
+	FMT("       inf", "%010a", 1.0 / 0.0);       /* ... but never for inf */
+	FMT("       inf", "%010f", 1.0 / 0.0);
+	FMT("      -inf", "%010e", -1.0 / 0.0);
+
 	/* mixed */
 	FMT("x=1, y=-2, s=abc, c=Z, 50%", "x=%d, y=%d, s=%s, c=%c, %d%%", 1, -2, "abc", 'Z', 50);
+}
+
+/* Conversions far larger than any fixed buffer.  C99 7.19.6.1 puts no
+ * bound on a precision, and DBL_MAX at "%f" alone runs to 316 bytes, so
+ * none of these may be formatted through a buffer sized from a guess.
+ * The lengths and return values below are what glibc produces; the
+ * digits past the 19 significant ones this printf computes are zeros
+ * where glibc has the exact expansion, so only the cases whose exact
+ * expansion is short are compared in full. */
+static char hbuf[4096], hexp[4096];
+
+/* "<head><n zeros><tail>", the shape every case here has */
+static char *zstr(const char *head, int n, const char *tail)
+{
+	char *p = hexp;
+	strcpy(p, head); p += strlen(head);
+	memset(p, '0', (size_t)n); p += n;
+	strcpy(p, tail);
+	return hexp;
+}
+#define HUGE_FMT(head, nz, tail, ...) do { \
+	int r_ = snprintf(hbuf, sizeof hbuf, __VA_ARGS__); \
+	const char *e_ = zstr(head, nz, tail); \
+	if (strcmp(hbuf, e_) != 0 || r_ != (int)strlen(e_)) { \
+		fails++; \
+		printf("FAIL %s:%d: snprintf(%s) -> %d bytes \"%.32s...\", want %d\n", \
+		       __FILE__, __LINE__, #__VA_ARGS__, r_, hbuf, (int)strlen(e_)); \
+	} \
+} while (0)
+
+static int allof(const char *s, int n, char c)
+{
+	int i;
+	for (i = 0; i < n; i++) if (s[i] != c) return 0;
+	return 1;
+}
+
+/* length, return value and the two ends, for values whose middle digits
+ * this printf does not carry */
+static void huge_ends(int line, const char *what, int r, int len, const char *head, const char *tail)
+{
+	int l = (int)strlen(hbuf), tl = (int)strlen(tail);
+	if (r != len || l != len || strncmp(hbuf, head, strlen(head)) != 0 ||
+	    l < tl || strcmp(hbuf + l - tl, tail) != 0) {
+		fails++;
+		printf("FAIL %s:%d: snprintf(%s) -> %d/%d bytes \"%.32s...\", want %d\n",
+		       __FILE__, line, what, r, l, hbuf, len);
+	}
+}
+#define HUGE_ENDS(len, head, tail, ...) do { \
+	int r_ = snprintf(hbuf, sizeof hbuf, __VA_ARGS__); \
+	huge_ends(__LINE__, #__VA_ARGS__, r_, len, head, tail); \
+} while (0)
+
+static void test_printf_huge(void)
+{
+	char small[8];
+	char *p;
+	int dp, sign, r;
+
+	/* DBL_MAX has 309 integer digits: "%f" of it is 316 bytes */
+	HUGE_ENDS(316, "17976931348623", ".000000", "%f", DBL_MAX);
+	HUGE_ENDS(317, "-17976931348623", ".000000", "%f", -DBL_MAX);
+	HUGE_ENDS(309, "17976931348623", "0000", "%.0f", DBL_MAX);
+	HUGE_ENDS(910, "17976931348623", "0000", "%.600f", DBL_MAX);
+	HUGE_ENDS(330, "              1797693134", ".000000", "%330f", DBL_MAX);
+	HUGE_ENDS(330, "+000000000000000000001797", "0000", "%+0330.0f", DBL_MAX);
+	/* the short conversions of the same value still fit */
+	FMT("1.797693e+308", "%e", DBL_MAX);
+	FMT("1.79769e+308", "%g", DBL_MAX);
+
+	/* a precision way past anything a double can carry: the tail is
+	 * zeros, and the length is exactly what was asked for */
+	HUGE_FMT("1.", 300, "", "%.300f", 1.0);
+	HUGE_FMT("0.", 300, "", "%.300f", 0.0);
+	HUGE_FMT("1.", 400, "e+00", "%.400e", 1.0);
+	HUGE_FMT("0.", 400, "e+00", "%.400e", 0.0);
+	HUGE_FMT("0.5", 399, "", "%.400f", 0.5);
+	HUGE_FMT("1", 0, "", "%.400g", 1.0);          /* %g strips them all */
+	HUGE_FMT("1.", 399, "", "%#.400g", 1.0);      /* ... unless '#' */
+	HUGE_FMT("1.5", 999, "", "%.1000f", 1.5);
+	HUGE_FMT("1.5", 999, "e+00", "%.1000e", 1.5);
+	HUGE_FMT("1.5", 998, "", "%#.1000g", 1.5);
+	HUGE_FMT("-0.", 1000, "", "%.1000f", -0.0);
+	HUGE_FMT("0x1.", 400, "p+0", "%.400a", 1.0);
+	HUGE_FMT("0x1.921f9f01b866e", 587, "p+1", "%.600a", 3.14159);
+	/* either side of the point where the formatting switches to a
+	 * streamed run of zeros */
+	HUGE_FMT("1.5", 510, "", "%.511f", 1.5);
+	HUGE_FMT("1.5", 511, "", "%.512f", 1.5);
+	HUGE_FMT("1.5", 512, "", "%.513f", 1.5);
+	HUGE_FMT("1.5", 513, "", "%.514f", 1.5);
+	HUGE_FMT("1.5", 512, "e+00", "%.513e", 1.5);
+	HUGE_FMT("1.5", 511, "", "%#.513g", 1.5);
+	/* a runtime precision, including one that is no precision at all */
+	HUGE_FMT("1.5", 699, "", "%.*f", 700, 1.5);
+	HUGE_FMT("1.500000", 0, "", "%.*f", -3, 1.5);
+
+	/* denormals: their leading zeros reach the 323rd place */
+	HUGE_FMT("0.", 100, "", "%.100f", 5e-324);
+	HUGE_ENDS(332, "0.00000000000000000000", "4940656", "%.330f", 5e-324);
+	HUGE_ENDS(352, "0.00000000000000000000", "0000", "%.350f", 5e-324);
+	HUGE_ENDS(337, "4.94065645841246", "e-324", "%.330e", 5e-324);
+	HUGE_ENDS(332, "0.00000000000000000000", "0000", "%.330f", DBL_MIN);
+	FMT("0", "%.0f", 5e-324);
+	FMT("0.000000", "%f", DBL_MIN);
+
+	/* width and a huge precision together, in each alignment */
+	CHECK(snprintf(hbuf, sizeof hbuf, "%1200.1000f", 1.5) == 1200);
+	CHECK(strlen(hbuf) == 1200 && allof(hbuf, 198, ' ') &&
+	      !strncmp(hbuf + 198, "1.5", 3) && allof(hbuf + 201, 999, '0'));
+	CHECK(snprintf(hbuf, sizeof hbuf, "%-1200.1000f", 1.5) == 1200);
+	CHECK(strlen(hbuf) == 1200 && !strncmp(hbuf, "1.5", 3) &&
+	      allof(hbuf + 3, 999, '0') && allof(hbuf + 1002, 198, ' '));
+	CHECK(snprintf(hbuf, sizeof hbuf, "%+01200.1000f", 1.5) == 1200);
+	CHECK(strlen(hbuf) == 1200 && hbuf[0] == '+' && allof(hbuf + 1, 197, '0') &&
+	      !strncmp(hbuf + 198, "1.5", 3) && allof(hbuf + 201, 999, '0'));
+
+	/* an integer precision is a minimum digit count, also unbounded */
+	FMT("0000000000000000000000000000000000000001", "%.40d", 1);
+	FMT("-0000000000000000000000000000000000000007", "%.40d", -7);
+	FMT("0x00000000000000000000000000000000000000ff", "%#.40x", 255);
+	FMT("0000000000000000000000000000000000000010", "%#.40o", 8);
+	FMT("0000000000000000000018446744073709551615", "%.40llu", ULLONG_MAX);
+	FMT("0000000000000000000000000000000000000003            ", "%-52.40d", 3);
+	FMT("0", "%#.0o", 0);
+	FMT("010", "%#o", 8);
+	FMT("", "%.0d", 0);
+
+	/* snprintf must truncate into the caller's buffer, not overrun it,
+	 * and still report the length the whole conversion would have */
+	memset(small, '@', sizeof small);
+	r = snprintf(small, sizeof small, "%.400f", 1.0);
+	CHECK(r == 402 && !strcmp(small, "1.00000"));
+	r = snprintf(small, sizeof small, "%f", DBL_MAX);
+	CHECK(r == 316 && !strcmp(small, "1797693"));
+	r = snprintf(small, 1, "%f", DBL_MAX);
+	CHECK(r == 316 && small[0] == 0);
+	small[0] = '@';
+	r = snprintf(small, 0, "%.300e", 1.0);
+	CHECK(r == 306 && small[0] == '@');   /* nothing written at all */
+	r = snprintf(small, sizeof small, "%.400a", 1.0);
+	CHECK(r == 407 && !strcmp(small, "0x1.000"));
+
+	/* ecvt/fcvt/gcvt run on the same formatter */
+	p = fcvt(DBL_MAX, 5, &dp, &sign);
+	CHECK(p && dp == 309 && sign == 0 && strlen(p) > 0 && !strchr(p, '.'));
+	p = fcvt(-DBL_MAX, 5, &dp, &sign);
+	CHECK(p && dp == 309 && sign == 1);
+	p = fcvt(5e-324, 40, &dp, &sign);
+	CHECK(p && sign == 0 && strlen(p) <= 60);
+	p = ecvt(DBL_MAX, 17, &dp, &sign);
+	CHECK(p && dp == 309 && sign == 0 && strlen(p) == 17);
+	gcvt(1234.5678, 8, hbuf);
+	CHECK(!strcmp(hbuf, "1234.5678"));
 }
 
 static void test_scanf(void)
@@ -1117,6 +1315,7 @@ int main(int argc, char **argv)
 	if (argc > 1 && !strcmp(argv[1], "--tmpnam-child")) return test_tmpnam_child();
 
 	test_printf();
+	test_printf_huge();
 	test_scanf();
 	test_file_io();
 	test_tmpfile();
