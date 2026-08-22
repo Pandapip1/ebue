@@ -98,6 +98,31 @@ INC="-I$srcdir/src/internal -I$srcdir/obj/include -I$srcdir/include \
 # truncation checks above, and library-only: never test/*.c or ntstubs.c.
 INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
  -fno-sanitize-recover=unsigned-integer-overflow,unsigned-shift-base"
+
+# NTLIBC_USE_KERNEL32 is deliberately never defined here, unlike the real
+# tcc/config.mak build (see the Makefile's CFLAGS_ALL). This build has no
+# real kernel32 -- ntstubs.c stands in for ntdll, not for kernel32 on top
+# of it -- and crt1.c calls __signal_init() unconditionally, so turning
+# the define on would require this file to answer LdrLoadDll() (loading
+# "kernel32.dll") and LdrGetProcedureAddress() (resolving
+# "SetConsoleCtrlHandler" specifically) for *every* test and fuzz binary,
+# not just ones that care about it -- crt1.c is linked into all of them.
+# That part is a bounded, ~30-line addition (a fake module handle from
+# LdrLoadDll, a name comparison and a stub SetConsoleCtrlHandler from
+# LdrGetProcedureAddress) and would be worth doing the day something
+# here actually needs to drive src/signal/signal.c's ctrl_handler().
+# Nothing does yet: none of fuzz/fuzz_*.c touch signal handling, and even
+# with the stubs in place there would be no way to *invoke*
+# ctrl_handler() from here -- a native Linux process cannot receive a
+# real console control event, and libFuzzer's byte-stream inputs have no
+# natural mapping onto one either. So the stubs would only buy coverage
+# of install_ctrl_handler()'s two Ldr* calls succeeding, not of the
+# handler logic they install, which is the actual point of the guarded
+# code. That handler logic already gets run for real -- against genuine
+# kernel32.dll, under Wine and on real Windows -- by `make check` and CI's
+# windows-test job on an --enable-kernel32 build (see
+# .github/workflows/ci.yml); that is the right place for it, not a
+# simulation here.
 CFLAGS="$SAN $CONVSAN $INTSAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
         -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL $INC $EXTRA"
 

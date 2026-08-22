@@ -23,6 +23,22 @@ name: CI
 #     compiles anything, it only executes the binaries the Linux job
 #     already built.
 #
+# `test`'s matrix has three legs, not a full 2x2 of arch x kernel32: both
+# arches at the default `--disable-kernel32` (the configuration the
+# project actually recommends, per CONTRIBUTING.md's "NTDLL first,
+# kernel32 only as a last resort" -- that has to stay the best-covered
+# build, not lose coverage to the guarded one), plus one extra x86_64 leg
+# at `--enable-kernel32` so the code behind every `#ifdef
+# NTLIBC_USE_KERNEL32` (currently src/signal/signal.c's console
+# Ctrl-C/Ctrl-Break handler, installed via kernel32's
+# SetConsoleCtrlHandler) actually gets compiled, run under Wine, and then
+# re-run on real Windows by `windows-test` below. A full 2x2 would double
+# the job instead of adding one leg to it; kernel32 support itself isn't
+# arch-specific -- it's a single kernel32 call reached the same way on
+# both targets -- so one arch is enough to exercise it, the same
+# reasoning the "Regenerate generated files" step below already uses to
+# run on only one leg.
+#
 # The only non-standard piece of the build itself is the compiler: ntlibc
 # is built with a win32-cross-targeting tinycc (upstream tinycc's own
 # `./configure --enable-cross` produces both the i386-win32-tcc and
@@ -102,9 +118,18 @@ jobs:
           - arch: i386
             host: i386-win32
             cc: i386-win32-tcc
+            kernel32: false
+            name: i386
           - arch: x86_64
             host: x86_64-win32
             cc: x86_64-win32-tcc
+            kernel32: false
+            name: x86_64
+          - arch: x86_64
+            host: x86_64-win32
+            cc: x86_64-win32-tcc
+            kernel32: true
+            name: x86_64-kernel32
     steps:
       - uses: actions/checkout@v7
 
@@ -127,7 +152,9 @@ jobs:
           sudo apt-get install -y wine wine32:i386 wine64
 
       - name: Configure
-        run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }}
+        run: |
+          ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} \
+            --${{ matrix.kernel32 && 'enable' || 'disable' }}-kernel32
 
       - name: Build
         run: make -j"$(nproc)"
@@ -139,11 +166,14 @@ jobs:
       # which includes the *-win.c ones the `check` step above
       # deliberately doesn't run under Wine -- see the Makefile's
       # TEST_RUN comment) so the windows-test job below can execute them
-      # on a real Windows runner.
+      # on a real Windows runner. Named per matrix leg (not just per arch)
+      # now that x86_64 produces two builds -- a kernel32-enabled test
+      # binary and a kernel32-disabled one behave differently (only the
+      # former installs a Ctrl-C handler), so they can't share a name.
       - name: Upload test binaries
         uses: actions/upload-artifact@v7
         with:
-          name: test-exes-${{ matrix.arch }}
+          name: test-exes-${{ matrix.name }}
           path: obj/test/*.exe
           if-no-files-found: error
 
@@ -155,8 +185,20 @@ jobs:
       # source files are added/removed/renamed. See CONTRIBUTING.md's "kaem
       # bootstrap build path" section, and .githooks/pre-commit, which runs
       # the same two checks locally.
+      #
+      # Deliberately pinned to the kernel32-disabled x86_64 leg, not just
+      # "x86_64": KERNEL32 feeds CFLAGS_ALL (Makefile), so gen-kaem.sh's
+      # dry-run bakes -DNTLIBC_USE_KERNEL32 into every compile line of
+      # boot/kaem/build-*.kaem when it's run against a tree configured
+      # with --enable-kernel32 -- confirmed locally: every recipe line
+      # differs. The committed kaem scripts have to reflect one
+      # configuration consistently rather than whichever leg happened to
+      # regenerate them last, and it has to be --disable-kernel32: the
+      # kaem/mescc-tools bootstrap path is pure-ntdll by nature (it is
+      # building the compiler itself, long before kernel32 is even a
+      # concept there's a use for), matching this project's own default.
       - name: Regenerate generated files and check for drift
-        if: matrix.arch == 'x86_64'
+        if: matrix.name == 'x86_64'
         run: |
           make generated
           git diff --exit-code -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'
@@ -175,13 +217,19 @@ jobs:
     runs-on: windows-latest
     strategy:
       fail-fast: false
+      # Mirrors the `test` job's three legs exactly (by artifact name, not
+      # just by arch) so a kernel32-enabled build gets proven against real
+      # Windows too, rather than only ever running under Wine's emulation
+      # of kernel32 -- Wine doesn't implement everything ntlibc might call
+      # (see the TEST_RUN comment in the Makefile), so this is the leg
+      # that actually matters for the Ctrl-C handler path.
       matrix:
-        arch: [i386, x86_64]
+        name: [i386, x86_64, x86_64-kernel32]
     steps:
       - name: Download test binaries
         uses: actions/download-artifact@v8
         with:
-          name: test-exes-${{ matrix.arch }}
+          name: test-exes-${{ matrix.name }}
           path: test-exes
 
       - name: Run test binaries on real Windows
@@ -243,6 +291,19 @@ jobs:
         env:
           CLANG_TIDY: clang-tidy-18
         run: make lint
+
+      # The stages write their findings to obj/lint/*.log and print only a
+      # count, so a red job otherwise says "1 finding" without saying what.
+      # Tool versions differ between here and a developer's machine, so the
+      # findings genuinely can differ -- these logs are the only way to see
+      # which.
+      - name: Upload the lint logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-logs
+          path: obj/lint/
+          if-no-files-found: warn
 
   # A second, native (Linux/ELF) build of the same src/*.c under
   # AddressSanitizer and UBSan, running the test/*.c that do not need

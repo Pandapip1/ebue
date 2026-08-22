@@ -232,6 +232,39 @@ check: $(TEST_EXES)
 	@$(srcdir)/tools/runtests.sh "$(WINE)" $(TEST_RUN)
 
 #
+# check-kernel32: convenience wrapper for a developer who already has a
+# normal tree configured (TARGET/CC come from the config.mak that is
+# already there) and wants to know, in one command, whether the
+# --enable-kernel32 build still passes -- without having to remember the
+# `./configure --enable-kernel32 && make clean && make && make check`
+# sequence by hand every time. `make clean` in the middle is required,
+# not cosmetic: KERNEL32 feeds CFLAGS_ALL above, and object files have no
+# dependency on config.mak's *contents* (only a `-include`, which make
+# does not treat as a rebuild trigger the way a prerequisite would), so a
+# same-tree `./configure --enable-kernel32` followed straight by `make`
+# would relink a still-kernel32-disabled lib/libc.a instead of rebuilding
+# it -- confirmed locally: nm kept reporting install_ctrl_handler/
+# ctrl_handler as present in the archive after a --disable-kernel32
+# reconfigure with no intervening `make clean`.
+#
+# Restores the tree to its original KERNEL32 setting (captured from
+# config.mak before this target's own ./configure runs, since $(KERNEL32)
+# is resolved at parse time) and rebuilds once more, so the tree is left
+# the way a plain `make` would have found it, not switched over to
+# --enable-kernel32 permanently.
+#
+check-kernel32: config.mak
+	./configure --host=$(TARGET) CC=$(CC) --enable-kernel32
+	$(MAKE) clean
+	$(MAKE)
+	$(MAKE) check
+	./configure --host=$(TARGET) CC=$(CC) --$(if $(filter yes,$(KERNEL32)),enable,disable)-kernel32
+	$(MAKE) clean
+	$(MAKE)
+
+.PHONY: check-kernel32
+
+#
 # lint: opt-in static checking (gcc/clang strict warnings, the clang static
 # analyzer, cppcheck, shellcheck).  Never a prerequisite of anything: the
 # library is built with tcc, and tools/lint.sh only reports.  It skips any

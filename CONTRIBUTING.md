@@ -51,13 +51,31 @@ etc.), it does, and it needs a real ntdll-only fallback path too.
   make -j4
   make -j4 check   # builds test/*.c and runs them under wine
   ```
+  If you've touched anything behind `#ifdef NTLIBC_USE_KERNEL32`, also run
+  `make check-kernel32` — it reconfigures the already-configured tree with
+  `--enable-kernel32`, rebuilds from clean (required: `KERNEL32` feeds
+  `CFLAGS_ALL`, and object files don't depend on `config.mak`'s contents,
+  so a same-tree reconfigure without a clean silently keeps linking the
+  old objects), runs `make check`, and then puts the tree back the way it
+  found it.
 - CI (`.github/workflows/ci.yml`) runs this loop under Wine on Linux
-  runners for both `i386-win32` and `x86_64-win32`, for fast feedback.
-  It also cross-builds the same `test/*.c` binaries on Linux and then
-  runs them on a real `windows-latest` runner (including the `*-win.c`
-  tests that Wine can't run) — that job is the one that actually proves
-  fork()/WOW64 behavior and kernel32 code paths against real Windows
-  rather than Wine's emulation of it.
+  runners for `i386-win32` and `x86_64-win32`, both built the default
+  `--disable-kernel32` way, plus a third leg that builds `x86_64-win32`
+  with `--enable-kernel32` so the guarded code actually gets compiled,
+  run under Wine, and (via `windows-test`) re-run on real Windows — not
+  a full arch × kernel32 matrix, since kernel32 support isn't itself
+  arch-specific. It also cross-builds the same `test/*.c` binaries on
+  Linux and then runs them on a real `windows-latest` runner (including
+  the `*-win.c` tests that Wine can't run) — that job is the one that
+  actually proves fork()/WOW64 behavior and kernel32 code paths against
+  real Windows rather than Wine's emulation of it.
+- `make asan`/`make fuzz` (native, Linux/ELF, see `tools/asan-build.sh`)
+  never define `NTLIBC_USE_KERNEL32`: crt1.c calls `__signal_init()`
+  unconditionally, so turning it on there would require `fuzz/ntstubs.c`
+  to answer `LdrLoadDll`/`LdrGetProcedureAddress` for every test and fuzz
+  binary, and even then nothing native can synthesize a real console
+  control event to drive the handler it would install — that coverage
+  comes from the Wine/Windows legs above instead.
 
 ## Dependency updates (Renovate)
 
