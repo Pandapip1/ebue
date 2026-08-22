@@ -621,6 +621,155 @@ static void test_scanf(void)
 		r = sscanf("0x1f 0777 99", "%i %i %i", &a, &b, &c);
 		CHECK(r == 3 && a == 31 && b == 0777 && c == 99);
 	}
+
+	/* Long numeric fields.  A numeric item has no length limit: every
+	 * character of it must be consumed, and every digit of it must
+	 * reach the conversion (a fixed staging buffer used to truncate
+	 * both, which corrupted the value *and* left the rest of the call
+	 * parsing the leftovers). */
+	{
+		static char big[512];
+		int i;
+
+		big[0] = '1';
+		for (i = 1; i <= 70; i++) big[i] = '0';
+		strcpy(big + 71, " tail");
+		str[0] = 0; a = -1;
+		CHECK(sscanf(big, "%lf%s%n", &d, str, &a) == 2);
+		CHECK(d == strtod("1e70", 0) && strcmp(str, "tail") == 0 && a == 76);
+
+		/* 200 digits: consumed in full, and saturated rather than
+		 * wrapped or truncated. */
+		for (i = 0; i < 200; i++) big[i] = '9';
+		big[200] = 0;
+		a = -1; b = 0;
+		CHECK(sscanf(big, "%d%n", &b, &a) == 1 && a == 200 && b == -1);
+		a = -1; ll = 0;
+		CHECK(sscanf(big, "%lld%n", &ll, &a) == 1 && a == 200 && ll == LLONG_MAX);
+		CHECK(sscanf(big, "%llu", &ull) == 1 && ull == ULLONG_MAX);
+		CHECK(sscanf(big, "%u", &u) == 1 && u == UINT_MAX);
+		big[0] = '-';
+		strcpy(big + 200, " z");
+		str[0] = 0;
+		CHECK(sscanf(big, "%d%s", &b, str) == 2 && b == 0 && strcmp(str, "z") == 0);
+
+		/* 100 leading zeros say nothing about the value and still all
+		 * have to be consumed. */
+		for (i = 0; i < 100; i++) big[i] = '0';
+		strcpy(big + 100, "1.5e1x");
+		str[0] = 0;
+		CHECK(sscanf(big, "%lf%s", &d, str) == 2 && d == 15.0 && strcmp(str, "x") == 0);
+		strcpy(big, "0.");
+		for (i = 2; i < 102; i++) big[i] = '0';
+		big[102] = 0;
+		a = -1;
+		CHECK(sscanf(big, "%lf%n", &d, &a) == 1 && d == 0.0 && a == 102);
+
+		/* Every digit reaches a correctly rounded strtod: this
+		 * 55-digit decimal is the exact value of the double 0.1. */
+		CHECK(sscanf("0.1000000000000000055511151231257827021181583404541015625",
+		             "%lf", &d) == 1 && d == 0.1);
+	}
+
+	/* inf/nan: the longest spelling that is there, case-insensitively,
+	 * and the cursor exactly where that spelling ended. */
+	a = -1;
+	CHECK(sscanf("infinity", "%lf%n", &d, &a) == 1 && d > 1e300 && a == 8);
+	a = -1;
+	CHECK(sscanf("INF", "%lf%n", &d, &a) == 1 && d > 1e300 && a == 3);
+	a = -1;
+	CHECK(sscanf("-InFiNiTy!", "%lf%n", &d, &a) == 1 && d < -1e300 && a == 9);
+	a = -1;
+	CHECK(sscanf("nan(123)x", "%lf%n", &d, &a) == 1 && d != d && a == 8);
+	/* An unterminated n-char-sequence is not part of any matching
+	 * sequence: the item is the "nan" and the rest goes back. */
+	str[0] = 0;
+	CHECK(sscanf("nan(12", "%lf%s", &d, str) == 2 && d != d && strcmp(str, "(12") == 0);
+	/* Half an "infinity" falls back to the "inf" that is there
+	 * (C99 7.19.6.2p12; glibc instead keeps the half and fails). */
+	str[0] = 0;
+	CHECK(sscanf("infi", "%lf%s", &d, str) == 2 && d > 1e300 && strcmp(str, "i") == 0);
+	str[0] = 0;
+	CHECK(sscanf("infinit", "%lf%s", &d, str) == 2 && d > 1e300 && strcmp(str, "init") == 0);
+	CHECK(sscanf("nax", "%lf", &d) == 0);
+	CHECK(sscanf("ix", "%lf", &d) == 0);
+
+	/* hex floats, and the "0x" that turns out to be just a "0" */
+	CHECK(sscanf("0x1p+3", "%lf", &d) == 1 && d == 8.0);
+	str[0] = 0;
+	CHECK(sscanf("0x1p+3zz", "%lf%s", &d, str) == 2 && d == 8.0 && strcmp(str, "zz") == 0);
+	str[0] = 0;
+	CHECK(sscanf("0x000.8p1x", "%lf%s", &d, str) == 2 && d == 1.0 && strcmp(str, "x") == 0);
+	str[0] = 0;
+	CHECK(sscanf("0x", "%lf%s", &d, str) == 2 && d == 0.0 && strcmp(str, "x") == 0);
+	str[0] = 0;
+	CHECK(sscanf("1e", "%lf%s", &d, str) == 2 && d == 1.0 && strcmp(str, "e") == 0);
+	str[0] = 0;
+	CHECK(sscanf("0xz", "%x%s", &u, str) == 2 && u == 0 && strcmp(str, "xz") == 0);
+
+	/* A field width caps the item exactly, and it counts every
+	 * character of it -- the sign and the "0x" included. */
+	str[0] = 0;
+	CHECK(sscanf("123456789.5", "%5lf%s", &d, str) == 2 && d == 12345.0 &&
+	      strcmp(str, "6789.5") == 0);
+	str[0] = 0;
+	CHECK(sscanf("infinity", "%5lf%s", &d, str) == 2 && d > 1e300 &&
+	      strcmp(str, "inity") == 0);
+	str[0] = 0;
+	CHECK(sscanf("-12345", "%3d%s", &a, str) == 2 && a == -12 && strcmp(str, "345") == 0);
+	a = -1;
+	CHECK(sscanf("0x10", "%3i%n", &b, &a) == 1 && b == 1 && a == 3);
+	a = -1;
+	CHECK(sscanf("0.0000", "%3lf%n", &d, &a) == 1 && d == 0.0 && a == 3);
+
+	/* %f converts in float precision rather than through a double: the
+	 * decimal below is just above the midpoint between 1.0f and the
+	 * next float, which a double would land exactly on and tie to
+	 * even. */
+	fl = 0;
+	CHECK(sscanf("1.00000005960464477539062500000000000001", "%f", &fl) == 1);
+	CHECK(fl > 1.0f);
+
+	/* The same fields through a real FILE: fscanf pushes its look-ahead
+	 * back through the stream's buffer rather than a memory block. */
+	{
+		char *name = make_tmp("scanftest-XXXXXX");
+		FILE *sf;
+		CHECK(name != 0);
+		if (name) {
+			sf = fopen(name, "w");
+			CHECK(sf != 0);
+			if (sf) {
+				int i;
+				fputc('1', sf);
+				for (i = 0; i < 70; i++) fputc('0', sf);
+				fputs(" tail\n", sf);
+				fputs("infinity nan(7)Q\n", sf);
+				for (i = 0; i < 200; i++) fputc('9', sf);
+				fputs("\ninfi 0x1p+3zz\n", sf);
+				CHECK(fclose(sf) == 0);
+			}
+			sf = fopen(name, "r");
+			CHECK(sf != 0);
+			if (sf) {
+				str[0] = str2[0] = 0;
+				CHECK(fscanf(sf, "%lf%s", &d, str) == 2);
+				CHECK(d == strtod("1e70", 0) && strcmp(str, "tail") == 0);
+				a = -1;
+				CHECK(fscanf(sf, "%lf %lf%n%s", &d, &d, &a, str) == 3);
+				CHECK(d != d && a == 16 && strcmp(str, "Q") == 0);
+				a = -1;
+				CHECK(fscanf(sf, "%lld%n", &ll, &a) == 1 && ll == LLONG_MAX && a == 201);
+				str[0] = str2[0] = 0; fl = 0;
+				CHECK(fscanf(sf, "%lf%s %f%s", &d, str, &fl, str2) == 4);
+				CHECK(d > 1e300 && strcmp(str, "i") == 0 &&
+				      fl == 8.0f && strcmp(str2, "zz") == 0);
+				CHECK(fclose(sf) == 0);
+			}
+			unlink(name);
+			free(name);
+		}
+	}
 }
 
 static void test_file_io(void)
