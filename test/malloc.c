@@ -6,6 +6,30 @@
 #include <stdint.h>
 #include <errno.h>
 
+/* This test asserts that malloc() returns NULL, with errno == ENOMEM, for a
+ * request that cannot possibly be satisfied -- exactly what C99 7.20.3.3p3
+ * requires of malloc().  AddressSanitizer's default
+ * allocator_may_return_null=0 makes ASan's own allocator abort the process
+ * on such a request, so the behaviour under test is never reached.  Setting
+ * the option weakens nothing: it tells ASan to act like a conforming
+ * allocator and hand back NULL, which is the thing being checked.  There is
+ * no per-call-site control -- the abort is inside ASan's malloc interceptor,
+ * not in instrumented code -- so a flag is the narrowest tool there is, and
+ * this hook keeps it to this one test.
+ *
+ * ASan reads this weak hook at start-up, so the option travels with the
+ * binary.  It is ignored with the *dynamic* runtime (-shared-libasan, which
+ * tools/asan-build.sh needs for unrelated reasons): libclang_rt.asan.so
+ * carries its own weak definition and does not let ours preempt it.  That
+ * script therefore also passes the option in the environment, for this test
+ * alone.  The hook still earns its place in a static-runtime build, where it
+ * is what makes the test self-contained.  Inert in the tcc/Wine build.  */
+#if defined(__SANITIZE_ADDRESS__) || \
+    (defined(__has_feature) && __has_feature(address_sanitizer))
+const char *__asan_default_options(void);
+const char *__asan_default_options(void) { return "allocator_may_return_null=1"; }
+#endif
+
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 

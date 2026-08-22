@@ -152,7 +152,19 @@ for t in $(cd "$srcdir" && ls test/*.c | sort); do
 	     $TINC $LINKFLAGS "$srcdir/$t" "$OBJ/ntstubs.o" $LIBOBJS -o "$exe" \
 	     2> "$exe.link.err"; then
 		ran=$((ran + 1))
-		if ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+		# test/malloc asserts that malloc() returns NULL with ENOMEM for a
+		# request that cannot be satisfied -- what C99 7.20.3.3p3 requires.
+		# ASan's default allocator_may_return_null=0 aborts inside its own
+		# allocator on such a request, so that path is never reached; the
+		# option makes ASan behave like a conforming allocator instead, so
+		# it permits the behaviour under test rather than relaxing a check.
+		# test/malloc.c defines __asan_default_options() to the same effect,
+		# but the dynamic runtime this script needs (-shared-libasan) never
+		# lets a program's definition preempt its own, so it is set here too
+		# -- for that one test, so every other test keeps the strict default.
+		aopts=detect_leaks=0
+		[ "$n" = malloc ] && aopts=$aopts,allocator_may_return_null=1
+		if ASAN_OPTIONS=$aopts UBSAN_OPTIONS=print_stacktrace=1 \
 		   timeout 120 "$exe" > "$exe.out" 2>&1 < /dev/null; then
 			passed=$((passed + 1))
 			[ "$mode" = "--quiet" ] || echo "  PASS $n"

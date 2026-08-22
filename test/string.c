@@ -116,7 +116,7 @@ int main(void)
 	strcpy(buf, "hello"); CHECK(index(buf, 'l') == buf + 2 && rindex(buf, 'l') == buf + 3);
 	CHECK(ffs(0) == 0 && ffs(1) == 1 && ffs(0x80) == 8 && ffs(-1) == 1 && ffs(0x80000000) == 32);
 	CHECK(ffsl(0) == 0 && ffsl(0x100) == 9 && ffsl(-1L) == 1);
-	CHECK(ffsll(0) == 0 && ffsll(1LL << 40) == 41 && ffsll(-1LL) == 1 && ffsll(1LL << 63) == 64);
+	CHECK(ffsll(0) == 0 && ffsll(1LL << 40) == 41 && ffsll(-1LL) == 1 && ffsll((long long)(1ULL << 63)) == 64);
 
 	/* errors and signals */
 	CHECK(streq(strerror(0), "No error information"));
