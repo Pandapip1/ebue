@@ -57,14 +57,7 @@ static void test_fflush_read_stream(const char *name)
 		CHECK((c = fgetc(f)) == 'b');
 		CHECK(ungetc(c, f) == 'b');
 		CHECK(fflush(f) == 0);
-#if 0 /* BUG: fflush.html DESCRIPTION -- for a readable stream backed by
-       * a real fd, fflush() must discard any not-yet-reread ungetc()
-       * byte. __fflush_locked (src/stdio/buf.c) returns immediately
-       * for a non-writable stream ("if (!f->writable || !f->wpos)
-       * return 0"), so f->nunget is never cleared: the pushed-back 'b'
-       * is still delivered by the next fgetc() instead of 'c'. */
 		CHECK((c = fgetc(f)) == 'c');
-#endif
 		CHECK(fclose(f) == 0);
 	}
 
@@ -80,16 +73,7 @@ static void test_fflush_read_stream(const char *name)
 		CHECK((c = fgetc(f)) == 'b');
 		CHECK(fflush(f) == 0);
 		raw = read(fileno(f), rawbuf, 1);
-#if 0 /* BUG: fflush.html DESCRIPTION -- same clause as above: the fd
-       * offset must be set to the stream's position ('c', offset 2) on
-       * fflush() of a readable stream. Since __fflush_locked never
-       * touches a read-only FILE, the fd is left wherever the internal
-       * read-ahead (__fill, src/stdio/buf.c) advanced it -- past the
-       * whole file, since bufsz was set to 4096 above -- so this raw
-       * read() sees EOF (0) instead of 'c'. */
 		CHECK(raw == 1 && rawbuf[0] == 'c');
-#endif
-		(void)raw;
 		CHECK(fclose(f) == 0);
 	}
 }
@@ -157,14 +141,7 @@ static void test_setvbuf(const char *name)
 	f = fopen(name, "w");
 	CHECK(f != 0);
 	if (f) {
-#if 0 /* BUG: setvbuf.html RETURN VALUE -- "Otherwise, it shall return a
-       * non-zero value if an invalid value is given for type ... ".
-       * setvbuf() (src/stdio/buf.c) only special-cases _IONBF; any other
-       * mode, valid or not, falls through to
-       * "f->bufmode = (unsigned char)mode;" with no check that it is
-       * one of _IOFBF/_IOLBF/_IONBF, and always returns 0. */
 		CHECK(setvbuf(f, 0, 12345, 0) != 0);
-#endif
 		CHECK(fclose(f) == 0);
 	}
 

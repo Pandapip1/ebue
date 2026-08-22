@@ -92,13 +92,34 @@ void __ensure_buf(FILE *f)
 int __fflush_locked(FILE *f)
 {
 	size_t off = 0;
-	if (!f->writable || !f->wpos) { f->wpos = 0; return 0; }
-	while (off < f->wpos) {
-		ssize_t n = __file_write(f, f->buf + off, f->wpos - off);
-		if (n <= 0) { f->err = 1; f->wpos = 0; return -1; }
-		off += (size_t)n;
+
+	if (f->writable && f->wpos) {
+		while (off < f->wpos) {
+			ssize_t n = __file_write(f, f->buf + off, f->wpos - off);
+			if (n <= 0) { f->err = 1; f->wpos = 0; return -1; }
+			off += (size_t)n;
+		}
 	}
 	f->wpos = 0;
+
+	/* fflush.html DESCRIPTION: for a stream open for reading, "the file
+	 * offset of the underlying open file description shall be set to
+	 * the file position of the stream, and any [ungetc()] characters
+	 * ... that have not subsequently been read from the stream shall be
+	 * discarded (without further changing the file offset)." __fill()
+	 * may have read ahead of where the caller has actually consumed, so
+	 * the fd has to be seeked back by exactly that much. A memory-backed
+	 * stream (fmemopen/open_memstream) has no separate fd offset -- its
+	 * "position" is mem_pos, which read-ahead never moves apart from the
+	 * stream's own view -- so there is nothing to resync there. */
+	if (f->readable) {
+		long long ahead = (long long)(f->rend - f->rpos);
+		f->nunget = 0;
+		if (ahead && !f->is_mem) {
+			if (__file_seek(f, -ahead, SEEK_CUR) < 0) { f->err = 1; return -1; }
+		}
+		f->rpos = f->rend = 0;
+	}
 	return 0;
 }
 
@@ -148,6 +169,15 @@ int fflush_unlocked(FILE *f) { return fflush(f); }
 
 int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size)
 {
+	/* setvbuf.html RETURN VALUE: "Otherwise, it shall return a non-zero
+	 * value if an invalid value is given for type ...".  _IOLBF is a
+	 * real mode here, not a synonym for full buffering -- rw.c flushes
+	 * on '\n' when bufmode == _IOLBF -- so all three of _IOFBF/_IOLBF/
+	 * _IONBF are genuinely honored and anything else is rejected. */
+	if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) {
+		errno = EINVAL;
+		return -1;
+	}
 	fflush(f);
 	if (f->buf && !f->user_buf) free(f->buf);
 	f->buf = 0;

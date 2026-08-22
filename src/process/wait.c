@@ -130,6 +130,13 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
 	NTSTATUS st;
 	PROCESS_BASIC_INFORMATION pbi;
 
+	/* wait.html ERRORS (waitpid() only): "[EINVAL] The value of the
+	 * options argument is not valid."  wait()/wait3()/wait4() always
+	 * pass a value of their own choosing (0, or a caller-supplied
+	 * options through wait3/wait4, which share this same contract), so
+	 * checking here covers all of them uniformly. */
+	if (options & ~(WNOHANG | WUNTRACED | WCONTINUED)) { errno = EINVAL; return -1; }
+
 	if (pid == -1 || pid == 0) {
 		/* Any child.  With one table, scan for a done one, or wait on
 		 * all live handles.  Simple approach: find the first not-yet

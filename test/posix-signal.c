@@ -202,16 +202,7 @@ static void test_sa_resethand(void)
 	CHECK(resethand_calls == 1);   /* handler ran once */
 
 	CHECK(raise(SIGWINCH) == 0);   /* disposition should now be SIG_DFL (ignore) */
-#if 0 /* BUG: sigaction.html DESCRIPTION, SA_RESETHAND: "the disposition
-       * of the signal shall be reset to SIG_DFL ... on entry to the
-       * signal handler." src/signal/signal.c's sigaction() only ever
-       * copies act->sa_handler into the handlers[] table
-       * (`if (act) handlers[sig] = act->sa_handler;`); sa_flags is read
-       * nowhere in the file, so SA_RESETHAND is silently a no-op and the
-       * handler stays installed forever. Confirmed: resethand_calls is
-       * 2 here, not 1. */
 	CHECK(resethand_calls == 1);
-#endif
 	signal(SIGWINCH, SIG_DFL);
 }
 
@@ -237,19 +228,7 @@ static void test_sigaction_implicit_mask(void)
 
 	nodefer_self_was_blocked = -1;
 	CHECK(raise(SIGWINCH) == 0);
-#if 0 /* BUG: sigaction.html DESCRIPTION: without SA_NODEFER, "the signal
-       * being delivered ... shall be added to [the thread's signal
-       * mask]" for the duration of the handler. src/signal/signal.c's
-       * sigaction() never reads act->sa_mask or act->sa_flags at all
-       * (only sa_handler), and __raise_internal() never touches the
-       * `blocked` set around calling h(sig) either -- so a signal is
-       * never blocked against re-entering its own handler, regardless
-       * of SA_NODEFER. Confirmed: nodefer_self_was_blocked is 0, not 1.
-       * (sa_mask -- blocking a *different* signal for the duration of
-       * the handler -- has the same root cause and is not separately
-       * tested here.) */
 	CHECK(nodefer_self_was_blocked == 1);
-#endif
 	signal(SIGWINCH, SIG_DFL);
 }
 
@@ -500,15 +479,7 @@ static void test_waitpid_einval_options(void)
 	if (pid <= 0) { printf("note: cannot spawn self (errno %d); EINVAL-options test skipped\n", errno); return; }
 
 	errno = 0;
-#if 0 /* BUG: wait.html ERRORS (waitpid() only): "[EINVAL] The value of
-       * the options argument is not valid." src/process/wait.c's
-       * do_waitpid() only ever tests `options & WNOHANG`; any other bit
-       * pattern, including one with none of WNOHANG/WUNTRACED/WCONTINUED
-       * set, is accepted silently and the wait proceeds as if options
-       * were 0. Confirmed: waitpid() actually reaps the child and
-       * returns its pid instead of -1/EINVAL here. */
 	CHECK(waitpid(pid, &status, 0xdead0000) == -1 && errno == EINVAL);
-#endif
 	waitpid(pid, &status, 0);   /* reap it regardless, so it is not left a zombie */
 }
 
