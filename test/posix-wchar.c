@@ -16,10 +16,40 @@
  * and mirrored in test/posix-coverage/wchar.md; nothing is silently
  * skipped.
  *
- * wchar.h in this library declares no wcsnlen, no wcpcpy/wcpncpy, and
- * there is no wctype.h at all (no isw*()/towupper() etc): grep confirms
- * they are simply absent from include/, so they are N/A here as "not
- * implemented" rather than tested.
+ * Below the implemented-function tests, every wchar.h-synopsis function
+ * (per https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/wchar.h.html)
+ * that grep confirms is absent from include/wchar.h and unimplemented in
+ * src/string or src/stdlib gets its own #if 0-fenced test carrying real
+ * assertions, per the project's "every specified behaviour needs a test,
+ * even one that cannot pass" standard.  Three fence tags are used:
+ *   BUG:     a real spec violation in an *implemented* function.
+ *   N/A:     genuinely impossible under a 16-bit wchar_t -- reserved for
+ *            clauses that structurally require a single wchar_t to carry
+ *            one whole character.  None of the missing functions below
+ *            are unconditionally impossible; wcwidth()/wcswidth() are
+ *            the one case where a clause is impossible for non-BMP input
+ *            specifically while remaining fully testable/implementable
+ *            for U+0000-U+FFFF, so that block splits UNIMPL (BMP) from
+ *            N/A (the true column width of a character split across a
+ *            surrogate pair, since wcwidth() is only ever handed one
+ *            code unit at a time and can never see its partner).
+ *   UNIMPL:  absent, but nothing about UTF-16 prevents implementing it.
+ * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib,
+ * 2026-08-22): fgetwc, fgetws, fputwc, fputws, fwide, getwc, getwchar,
+ * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
+ * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
+ * wscanf, open_wmemstream, iswalnum/iswalpha/iswcntrl/iswdigit/iswgraph/
+ * iswlower/iswprint/iswpunct/iswspace/iswupper/iswxdigit, iswctype,
+ * wctype, towlower, towupper, wcwidth, wcswidth, wcsstr, wcspbrk,
+ * wcscspn, wcsspn, wcstok, wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp,
+ * wcscasecmp_l, wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul,
+ * wcstoull, wcstod, wcstof, wcstold, wcscoll, wcscoll_l, wcsxfrm,
+ * wcsxfrm_l, wcsftime, mbsnrtowcs, wcsnrtombs.  Confirmed *present*
+ * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
+ * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
+ * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
+ * wcsrtombs, plus the stdlib.h mbtowc/wctomb/mblen/mbstowcs/wcstombs and
+ * inttypes.h wcstoimax/wcstoumax already covered.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -746,6 +776,583 @@ static void test_wcstoimax(void)
 	CHECK(wcstoimax(W("0x1A"), 0, 0) == 26);
 	CHECK(wcstoimax(W("017"), 0, 0) == 15);
 }
+
+/* =======================================================================
+ * Below: every wchar.h-synopsis function absent from include/wchar.h and
+ * unimplemented in src/, each with a real #if 0-fenced test.  None of
+ * these are called from main(): they cannot compile against the current
+ * header, which is the point -- absence itself is what is being tested
+ * for by grep in the block comment above, and the fenced body is the
+ * transcription of what a real implementation would have to satisfy.
+ * ======================================================================= */
+
+/* ---------------------------------------------------------------------
+ * fgetwc / getwc / getwchar -- fgetwc.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fgetwc()/getwc()/getwchar() -- fgetwc.html DESCRIPTION,
+       * RETURN VALUE.  Implementable: reads one converted wide character
+       * per call, no per-call knowledge of surrogate pairing is needed
+       * (a caller assembling a supplementary character just calls twice,
+       * exactly like the existing mbrtowc()-based UTF-8 decoder does). */
+static void test_fgetwc(void)
+{
+	FILE *f = fopen("test.tmp", "w+");
+	wint_t c;
+	fputs("AB", f);
+	rewind(f);
+	/* "obtain the next character ... convert that to the corresponding
+	 * wide-character code" */
+	c = fgetwc(f);
+	CHECK(c == L'A');
+	CHECK(getwc(f) == L'B');
+	/* "the end-of-file indicator for the stream shall be set and
+	 * fgetwc() shall return WEOF." */
+	CHECK(fgetwc(f) == WEOF);
+	CHECK(feof(f));
+	fclose(f);
+	remove("test.tmp");
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * fputwc / putwc / putwchar -- fputwc.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fputwc()/putwc()/putwchar() -- fputwc.html DESCRIPTION,
+       * RETURN VALUE, ERRORS.  Implementable per code unit; a caller
+       * writing a supplementary character just calls it twice with the
+       * two surrogate halves, same shape as wcrtomb()'s existing
+       * pending-high-surrogate state machine. */
+static void test_fputwc(void)
+{
+	FILE *f = fopen("test.tmp", "w+");
+	/* "Upon successful completion, fputwc() shall return wc." */
+	CHECK(fputwc(L'A', f) == L'A');
+	CHECK(putwc(L'B', f) == L'B');
+	rewind(f);
+	CHECK(fgetc(f) == 'A');
+	CHECK(fgetc(f) == 'B');
+	fclose(f);
+	remove("test.tmp");
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * fgetws -- fgetws.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fgetws() -- fgetws.html DESCRIPTION, RETURN VALUE.
+       * Implementable: reads code units (not codepoints) up to n-1,
+       * newline, or EOF, and NUL-terminates -- exactly wcsncpy's unit
+       * granularity, no surrogate awareness required. */
+static void test_fgetws(void)
+{
+	FILE *f = fopen("test.tmp", "w+");
+	wchar_t buf[8];
+	fputs("abc\ndef\n", f);
+	rewind(f);
+	/* "read characters ... until n-1 characters are read, or a
+	 * <newline> is read ... The wide-character string ... shall then
+	 * be terminated with a null wide-character code." */
+	CHECK(fgetws(buf, 8, f) == buf);
+	CHECK(!wcscmp(buf, W("abc\n")));
+	/* "the end-of-file indicator ... shall be set and fgetws() shall
+	 * return a null pointer" once at EOF with nothing read. */
+	fseek(f, 0, SEEK_END);
+	CHECK(fgetws(buf, 8, f) == 0);
+	fclose(f);
+	remove("test.tmp");
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * fputws -- fputws.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fputws() -- fputws.html DESCRIPTION, RETURN VALUE.
+       * Implementable per code unit, terminating NUL not written. */
+static void test_fputws(void)
+{
+	FILE *f = fopen("test.tmp", "w+");
+	/* "Upon successful completion, fputws() shall return a
+	 * non-negative number." */
+	CHECK(fputws(W("abc"), f) >= 0);
+	rewind(f);
+	CHECK(fgetc(f) == 'a' && fgetc(f) == 'b' && fgetc(f) == 'c');
+	CHECK(fgetc(f) == EOF);	/* no terminating NUL byte written */
+	fclose(f);
+	remove("test.tmp");
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * ungetwc -- ungetwc.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: ungetwc() -- ungetwc.html DESCRIPTION, RETURN VALUE.
+       * Implementable as a one-wchar_t pushback slot per stream, same
+       * granularity as fgetwc(); pushing back one half of a surrogate
+       * pair is no different from pushing back any other code unit. */
+static void test_ungetwc(void)
+{
+	FILE *f = fopen("test.tmp", "w+");
+	fputs("A", f);
+	rewind(f);
+	CHECK(fgetwc(f) == L'A');
+	/* "ungetwc() shall return the wide-character code corresponding
+	 * to the pushed-back character." */
+	CHECK(ungetwc(L'A', f) == L'A');
+	CHECK(fgetwc(f) == L'A');
+	/* "If wc is WEOF, the operation shall fail and the input stream
+	 * shall be left unchanged." */
+	CHECK(ungetwc(WEOF, f) == WEOF);
+	fclose(f);
+	remove("test.tmp");
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * fwide -- fwide.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fwide() -- fwide.html DESCRIPTION, RETURN VALUE.
+       * Implementable as one extra int per FILE; no wchar_t-width
+       * dependency at all. */
+static void test_fwide(void)
+{
+	FILE *f = fopen("test.tmp", "w+");
+	/* mode > 0 requests wide orientation */
+	CHECK(fwide(f, 1) > 0);
+	/* "If the orientation of the stream has already been determined,
+	 * fwide() shall not change it." -- a later negative request must
+	 * still report wide. */
+	CHECK(fwide(f, -1) > 0);
+	fclose(f);
+	remove("test.tmp");
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * fwprintf / wprintf / swprintf (+ v-variants) -- fwprintf.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fwprintf()/wprintf()/swprintf()/vfwprintf()/vwprintf()/
+       * vswprintf() -- fwprintf.html DESCRIPTION, RETURN VALUE.
+       * Implementable: format-directive processing is over ASCII
+       * conversion characters, argument values go through the same
+       * printf core already used by the byte-string family; no
+       * surrogate-pair barrier since %lc/%ls just copy wchar_t units. */
+static void test_fwprintf(void)
+{
+	wchar_t buf[8];
+	/* "the count of wide characters transmitted (excluding swprintf's
+	 * terminating null)." */
+	CHECK(swprintf(buf, 8, W("%d"), 12) == 2);
+	CHECK(!wcscmp(buf, W("12")));
+	/* "If n or more wide characters were requested to be written,
+	 * swprintf() shall return a negative value, and set errno." */
+	CHECK(swprintf(buf, 2, W("%d"), 12345) < 0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * fwscanf / wscanf / swscanf (+ v-variants) -- fwscanf.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: fwscanf()/wscanf()/swscanf()/vfwscanf()/vwscanf()/
+       * vswscanf() -- fwscanf.html DESCRIPTION, RETURN VALUE.
+       * Implementable on the same scanf core as the byte-string family;
+       * %lc/%ls just move wchar_t units. */
+static void test_fwscanf(void)
+{
+	int n = 0;
+	/* "the number of successfully matched and assigned input items." */
+	CHECK(swscanf(W("42"), W("%d"), &n) == 1);
+	CHECK(n == 42);
+	/* EOF before any conversion. */
+	CHECK(swscanf(W(""), W("%d"), &n) == WEOF);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * open_wmemstream -- open_wmemstream.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: open_wmemstream() -- open_wmemstream.html DESCRIPTION,
+       * RETURN VALUE, ERRORS.  Implementable: a growable wchar_t buffer
+       * behind a FILE*, no per-codepoint reasoning involved. */
+static void test_open_wmemstream(void)
+{
+	wchar_t *buf;
+	size_t len;
+	FILE *f = open_wmemstream(&buf, &len);
+	/* "Upon successful completion ... a pointer to the object
+	 * controlling the stream." */
+	CHECK(f != 0);
+	fputws(W("hi"), f);
+	fflush(f);
+	/* "*bufp shall point to a wchar_t array ... and sizep shall
+	 * point to the number of wide characters ... at the file
+	 * position." */
+	CHECK(len == 2);
+	CHECK(!wcscmp(buf, W("hi")));
+	fclose(f);
+	free(buf);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * isw*() classification family -- iswalpha.html
+ * The wint_t argument's domain is "a valid character ... or WEOF"; a
+ * lone surrogate half is outside that domain by the caller's contract
+ * (same as passing an arbitrary garbage int to isalpha()), so this is
+ * an UNIMPL absence, not a structural N/A -- nothing stops classifying
+ * every BMP code unit correctly.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: iswalnum/iswalpha/iswcntrl/iswdigit/iswgraph/iswlower/
+       * iswprint/iswpunct/iswspace/iswupper/iswxdigit -- iswalpha.html
+       * DESCRIPTION, RETURN VALUE.  No wctype.h exists in this library
+       * at all (no wctype_t either), so these are absent as a block,
+       * not individually -- but each is fully implementable for BMP
+       * code units via the same tables ctype.h's is*() already use for
+       * the POSIX/C locale's 7-bit range. */
+static void test_iswalpha_family(void)
+{
+	/* "shall return non-zero if wc is [class]; otherwise ... 0." */
+	CHECK(iswalpha(L'a') != 0);
+	CHECK(iswalpha(L'1') == 0);
+	CHECK(iswdigit(L'1') != 0);
+	CHECK(iswdigit(L'a') == 0);
+	CHECK(iswspace(L' ') != 0);
+	CHECK(iswupper(L'A') != 0);
+	CHECK(iswlower(L'a') != 0);
+	CHECK(iswpunct(L'.') != 0);
+	CHECK(iswcntrl(L'\n') != 0);
+	CHECK(iswxdigit(L'F') != 0);
+	CHECK(iswgraph(L'a') != 0);
+	CHECK(iswprint(L' ') != 0);
+	/* "the application shall ensure ... WEOF" is an accepted value */
+	CHECK(iswalpha(WEOF) == 0);
+}
+#endif
+
+#if 0 /* UNIMPL: iswctype()/wctype() -- iswctype.html DESCRIPTION,
+       * RETURN VALUE.  Requires adding a wctype_t typedef (none exists
+       * today); implementable once that's done, same table lookup as
+       * the isw*() family above. */
+static void test_iswctype(void)
+{
+	wctype_t digit = wctype("digit");
+	/* "returning true or false" per charclass */
+	CHECK(iswctype(L'5', digit) != 0);
+	CHECK(iswctype(L'x', digit) == 0);
+	/* "An invalid character class name" -> wctype() returns
+	 * (wctype_t)0, and iswctype() with that class returns 0. */
+	CHECK(wctype("not-a-real-class") == (wctype_t)0);
+	CHECK(iswctype(L'5', (wctype_t)0) == 0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * towlower / towupper -- towlower.html
+ * Same domain-restriction reasoning as isw*(): "All other arguments in
+ * the domain are returned unchanged" -- a lone surrogate is simply not
+ * an uppercase/lowercase letter, so it is returned unchanged like any
+ * other non-cased BMP code unit.  UNIMPL, not N/A.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: towlower()/towupper() -- towlower.html DESCRIPTION,
+       * RETURN VALUE. */
+static void test_towlower(void)
+{
+	CHECK(towlower(L'A') == L'a');
+	CHECK(towupper(L'a') == L'A');
+	/* "All other arguments in the domain are returned unchanged." */
+	CHECK(towlower(L'1') == L'1');
+	CHECK(towupper(L'.') == L'.');
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcwidth / wcswidth -- wcwidth.html
+ * wcwidth(wchar_t) takes exactly one code unit, so for a BMP character
+ * (one wchar_t == one codepoint) column width is fully computable and
+ * this is a plain UNIMPL absence.  For a supplementary-plane character
+ * represented as a surrogate pair, wcwidth() is only ever handed one
+ * half at a time and structurally cannot see its partner, so it can
+ * never report the *composed* character's true display width (e.g. 2
+ * columns for most emoji) -- that clause is N/A, not merely unwritten.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcwidth()/wcswidth() -- wcwidth.html DESCRIPTION,
+       * RETURN VALUE, for the BMP subset (one wchar_t == one
+       * character): fully computable, implementable via the same
+       * printable-range tables iswprint() would use. */
+static void test_wcwidth_bmp(void)
+{
+	/* "0 for the null wide-character code" */
+	CHECK(wcwidth(0) == 0);
+	/* printable ASCII -> 1 column */
+	CHECK(wcwidth(L'A') == 1);
+	/* "-1 ... does not correspond to a printable wide-character code" */
+	CHECK(wcwidth(0x01) == -1);
+	CHECK(wcswidth(W("AB"), 2) == 2);
+}
+#endif
+
+#if 0 /* N/A: wcwidth() -- wcwidth.html DESCRIPTION -- cannot report the
+       * true column width of a non-BMP character.  Such a character is
+       * two wchar_t (a UTF-16 surrogate pair, e.g. U+1F600 GRINNING
+       * FACE = 0xd83d 0xde00); wcwidth() takes a single wchar_t, so it
+       * is handed one surrogate half at a time and has no way to see
+       * that a partner unit exists, let alone which codepoint the pair
+       * encodes.  The best any implementation can do is a fixed,
+       * partner-blind answer for the whole 0xd800-0xdfff surrogate
+       * range (commonly -1, treating the lone unit as unprintable),
+       * which is wrong for a real 2-column composed character and
+       * right by accident for nothing -- the per-half return value can
+       * never equal the composed character's actual width. */
+static void test_wcwidth_non_bmp(void)
+{
+	/* U+1F600 (a genuinely 2-column glyph in terminals) split into
+	 * surrogates. */
+	CHECK(wcwidth(0xd83d) == 2);	/* cannot be satisfied: high half
+					 * alone carries no width info */
+	CHECK(wcwidth(0xde00) == 2);	/* likewise for the low half */
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcsstr / wcspbrk / wcscspn / wcsspn -- wcsstr.html and family
+ * Pure code-unit sequence search, exactly like the implemented
+ * wcschr()/wcsrchr(): a surrogate pair is just two opaque units to
+ * match, so these are fully implementable.  UNIMPL.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcsstr() -- wcsstr.html DESCRIPTION, RETURN VALUE. */
+static void test_wcsstr(void)
+{
+	const wchar_t *hay = W("abcdef");
+	CHECK(wcsstr(hay, W("cd")) == hay + 2);
+	CHECK(wcsstr(hay, W("zz")) == 0);
+	/* "If ws2 points to a wide-character string with zero length,
+	 * the function shall return ws1." */
+	CHECK(wcsstr(hay, W("")) == hay);
+}
+#endif
+
+#if 0 /* UNIMPL: wcspbrk()/wcscspn()/wcsspn() -- wcspbrk.html,
+       * wcscspn.html, wcsspn.html DESCRIPTION, RETURN VALUE (mirrors
+       * the byte-string strpbrk/strcspn/strspn contracts). */
+static void test_wcspbrk_family(void)
+{
+	const wchar_t *s = W("abc123");
+	/* wcspbrk: pointer to first char in s that is also in the
+	 * breakset, or null if none. */
+	CHECK(wcspbrk(s, W("31")) == s + 3);
+	CHECK(wcspbrk(s, W("xyz")) == 0);
+	/* wcscspn: length of initial segment with NO chars from reject. */
+	CHECK(wcscspn(s, W("321")) == 3);
+	/* wcsspn: length of initial segment consisting ONLY of chars
+	 * from accept. */
+	CHECK(wcsspn(s, W("abc")) == 3);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcstok -- wcstok.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcstok() -- wcstok.html DESCRIPTION, RETURN VALUE. */
+static void test_wcstok(void)
+{
+	wchar_t buf[16];
+	wchar_t *save;
+	wchar_t *tok;
+	wcscpy(buf, W("ab,cd"));
+	/* "a pointer to the first wide-character code of a token." */
+	tok = wcstok(buf, W(","), &save);
+	CHECK(tok == buf && !wcscmp(tok, W("ab")));
+	tok = wcstok(0, W(","), &save);
+	CHECK(!wcscmp(tok, W("cd")));
+	/* "If there are no non-separator characters remaining ... a null
+	 * pointer shall be returned." */
+	CHECK(wcstok(0, W(","), &save) == 0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcsdup / wcsnlen / wcpcpy / wcpncpy
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcsdup() -- wcsdup.html DESCRIPTION, RETURN VALUE. */
+static void test_wcsdup(void)
+{
+	wchar_t *d = wcsdup(W("abc"));
+	/* "a pointer to the newly allocated wide-character string." */
+	CHECK(d != 0 && !wcscmp(d, W("abc")));
+	free(d);
+}
+#endif
+
+#if 0 /* UNIMPL: wcsnlen() -- POSIX Issue 7 TC2, mirrors strnlen.html
+       * DESCRIPTION, RETURN VALUE: "the number of wide characters
+       * preceding the first null wide character, if ws contains a
+       * null wide character within the first maxlen ... ; otherwise
+       * maxlen." */
+static void test_wcsnlen(void)
+{
+	CHECK(wcsnlen(W("abc"), 10) == 3);
+	CHECK(wcsnlen(W("abcdef"), 3) == 3);
+}
+#endif
+
+#if 0 /* UNIMPL: wcpcpy()/wcpncpy() -- GNU/Issue 8 extension mirroring
+       * stpcpy/stpncpy: copies like wcscpy()/wcsncpy() but "return[s] a
+       * pointer to the terminating null wide character" (wcpcpy) or to
+       * the last-written unit (wcpncpy) instead of the destination. */
+static void test_wcpcpy(void)
+{
+	wchar_t buf[8];
+	wchar_t *end = wcpcpy(buf, W("abc"));
+	CHECK(end == buf + 3 && *end == 0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcscasecmp / wcsncasecmp (+ _l) -- wcscasecmp.html
+ * Case-folding a lone surrogate half is identity (it is not a cased
+ * letter), the same domain restriction as towlower() above, so this is
+ * fully implementable for the whole wchar_t domain.  UNIMPL.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcscasecmp()/wcscasecmp_l()/wcsncasecmp()/
+       * wcsncasecmp_l() -- wcscasecmp.html DESCRIPTION, RETURN VALUE. */
+static void test_wcscasecmp(void)
+{
+	/* "an integer greater than, equal to, or less than 0" ignoring
+	 * case. */
+	CHECK(wcscasecmp(W("ABC"), W("abc")) == 0);
+	CHECK(wcscasecmp(W("abd"), W("abc")) > 0);
+	CHECK(wcsncasecmp(W("ABCxyz"), W("abcqqq"), 3) == 0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcstol / wcstoll / wcstoul / wcstoull -- wcstol.html
+ * Pure ASCII-digit parsing (same subject-sequence grammar wcstoimax()
+ * already implements above); no surrogate involvement.  UNIMPL.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcstol()/wcstoll()/wcstoul()/wcstoull() -- wcstol.html
+       * DESCRIPTION, RETURN VALUE, ERRORS. */
+static void test_wcstol_family(void)
+{
+	wchar_t *end;
+	CHECK(wcstol(W("123"), &end, 10) == 123);
+	CHECK(*end == 0);
+	/* out of range -> LONG_MAX/LONG_MIN + ERANGE */
+	errno = 0;
+	CHECK(wcstol(W("99999999999999999999"), 0, 10) == LONG_MAX);
+	CHECK(errno == ERANGE);
+	CHECK(wcstoul(W("42"), 0, 10) == 42UL);
+	CHECK(wcstoll(W("42"), 0, 10) == 42LL);
+	CHECK(wcstoull(W("42"), 0, 10) == 42ULL);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcstod / wcstof / wcstold -- wcstod.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcstod()/wcstof()/wcstold() -- wcstod.html DESCRIPTION,
+       * RETURN VALUE, ERRORS. */
+static void test_wcstod_family(void)
+{
+	wchar_t *end;
+	CHECK(wcstod(W("1.5"), &end) == 1.5);
+	CHECK(*end == 0);
+	/* "If no conversion could be performed, 0 shall be returned." */
+	end = 0;
+	CHECK(wcstod(W("xyz"), &end) == 0.0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcscoll / wcscoll_l / wcsxfrm / wcsxfrm_l -- wcscoll.html,
+ * wcsxfrm.html.  This library only meaningfully supports the C/POSIX
+ * (UTF-8) locale (see the btowc()/LC_CTYPE divergence note above), so
+ * both are implementable as a byte-order (memcmp-equivalent) collation,
+ * same as strcoll()/strxfrm() presumably already do.  UNIMPL.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcscoll()/wcscoll_l() -- wcscoll.html DESCRIPTION,
+       * RETURN VALUE. */
+static void test_wcscoll(void)
+{
+	/* C/POSIX locale collation == code-unit order, like wcscmp(). */
+	CHECK(wcscoll(W("abc"), W("abc")) == 0);
+	CHECK(wcscoll(W("abd"), W("abc")) > 0);
+}
+#endif
+
+#if 0 /* UNIMPL: wcsxfrm()/wcsxfrm_l() -- wcsxfrm.html DESCRIPTION,
+       * RETURN VALUE. */
+static void test_wcsxfrm(void)
+{
+	wchar_t buf[8];
+	size_t n = wcsxfrm(buf, W("abc"), 8);
+	/* "the length of the transformed wide-character string (not
+	 * including the terminating null)." In the C locale the
+	 * transformed form is the string itself. */
+	CHECK(n == 3);
+	CHECK(!wcscmp(buf, W("abc")));
+	/* querying required length with n == 0 must not touch ws1 */
+	CHECK(wcsxfrm(0, W("abc"), 0) == 3);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * wcsftime -- wcsftime.html
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: wcsftime() -- wcsftime.html DESCRIPTION, RETURN VALUE.
+       * Formats only ASCII digits/letters into wchar_t units, same
+       * granularity as strftime(); no surrogate involvement. */
+static void test_wcsftime(void)
+{
+	wchar_t buf[32];
+	struct tm tm;
+	size_t n;
+	memset(&tm, 0, sizeof(tm));
+	tm.tm_year = 100; tm.tm_mon = 0; tm.tm_mday = 2;
+	/* "the number of wide-character codes placed into the array
+	 * ... not including the terminating null." */
+	n = wcsftime(buf, 32, W("%Y-%m-%d"), &tm);
+	CHECK(n == 10);
+	CHECK(!wcscmp(buf, W("2000-01-02")));
+	/* "If the total number of resulting characters ... is not more
+	 * than maxsize, [...] Otherwise, zero is returned." */
+	CHECK(wcsftime(buf, 4, W("%Y-%m-%d"), &tm) == 0);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * mbsnrtowcs / wcsnrtombs -- mbsnrtowcs.html
+ * Bounded-input variants of mbsrtowcs()/wcsrtombs(), both implemented
+ * above; the extra nmc/nwc parameter is a plain length cap, no
+ * surrogate-specific behavior beyond what those two already have.
+ * ------------------------------------------------------------------- */
+#if 0 /* UNIMPL: mbsnrtowcs() -- mbsnrtowcs.html DESCRIPTION, RETURN
+       * VALUE (adds an nmc byte-count bound over mbsrtowcs()). */
+static void test_mbsnrtowcs(void)
+{
+	wchar_t dst[8];
+	const char *src = "abcdef";
+	mbstate_t st;
+	memset(&st, 0, sizeof(st));
+	/* only 3 of the 6 source bytes may be consumed */
+	CHECK(mbsnrtowcs(dst, &src, 3, 8, &st) == 3);
+	CHECK(!wcscmp(dst, W("abc")));
+}
+#endif
+
+#if 0 /* UNIMPL: wcsnrtombs() -- mbsnrtowcs.html DESCRIPTION, RETURN
+       * VALUE (adds an nwc wchar_t-count bound over wcsrtombs()). */
+static void test_wcsnrtombs(void)
+{
+	char dst[8];
+	const wchar_t *src = W("abcdef");
+	mbstate_t st;
+	memset(&st, 0, sizeof(st));
+	/* only 3 of the 6 source wchar_t may be consumed */
+	CHECK(wcsnrtombs(dst, &src, 3, 8, &st) == 3);
+	CHECK(!memcmp(dst, "abc", 3));
+}
+#endif
+
 
 int main(void)
 {
