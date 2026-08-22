@@ -90,6 +90,70 @@ Deliberately absent: any formatting enforcement. The house style here is
 musl's, applied by hand; a reformat would be enormous churn for no
 correctness gain and would wreck `git blame`.
 
+## Sanitizers and fuzzing (`make asan`, `make fuzz`)
+
+Wine runs the real library but sees only what the program itself notices.
+A second, **native** build of the same `src/*.c` — Linux/ELF, clang,
+AddressSanitizer + UBSan, and libFuzzer — sees the rest. It is not a
+substitute for `make check`; it is a different instrument, and it needs no
+cross toolchain.
+
+```
+make               # once, for obj/include/bits/alltypes.h
+make asan          # native ASan+UBSan build, runs the applicable test/*.c
+make fuzz          # builds fuzz/*, runs each harness for 60s
+tools/fuzz.sh 300 strtod printf     # longer, selected harnesses
+```
+
+Three rules keep the results worth anything.
+
+**The harnesses compile the real `src/*.c`.** Never copy library code into
+a harness. A harness that tests a transcription of `printf.c` stops
+testing `printf.c` the moment somebody edits `printf.c` — and a
+transcription that models a bigger scratch buffer than the real one cannot
+reproduce the real overflow.
+
+**The file list is derived, not written down.** `tools/asan-build.sh`
+compiles every `src/**/*.c` and keeps the ones clang accepts (202 of 205
+today; the three are other-architecture files and the TEB accessor, listed
+with reasons in `obj/asan/skipped.txt`). Add a source file and it is
+covered without touching this tooling.
+
+**The ntdll side is a stub, and the stubs are graded.** `fuzz/ntstubs.c`
+stands in for ntdll, which is the one thing a native build cannot have.
+Some of it is real (the heap, on ASan's allocator, so ntlibc's heap use is
+redzone-checked; read/write; the clocks), some is plausible, and the rest
+answers `STATUS_NOT_IMPLEMENTED`. Nothing in `src/` is modified or
+conditionally compiled for it. Tests that need what the stubs do not
+provide are skipped **by name with a reason** in `tools/asan-build.sh`, as
+are the two that assert the LLP64 target ABI (`long` is 4 bytes there and 8
+here). Everything else must pass: a genuine ASan or UBSan report fails the
+run.
+
+A sanitizer only sees corruption, so the harnesses that can also check for
+*wrong answers* do. `fuzz/fuzz_strtod.c` parses every input a second time
+with glibc's `strtod` and compares bit patterns —
+`strtod("1e442")` returning NaN instead of infinity is a real defect that
+no sanitizer would ever flag. `fuzz/host_oracle.c` is the only file built
+against the host headers; it reaches glibc through `dlsym` (ntlibc's own
+definitions are linked hidden, so they are not in the dynamic symbol table
+and cannot be found that way) and does its own reporting, because
+formatting a printf bug with the printf under test proves nothing.
+
+Two consequences of linking a libc against a libc, worth knowing before
+you debug them:
+
+- The library objects are built `-fvisibility=hidden` and the sanitizer
+  runtime is the **shared** one. Otherwise ntlibc's `malloc` and `sysconf`
+  end up in the executable's dynamic symbol table, and ld.so and ASan's own
+  start-up call into an NT libc that has not been initialised yet.
+- libFuzzer's corpus and crash-artefact files go through ntlibc's
+  `open`/`stat`/`readdir`, which are stubs here, so the fuzzers run without
+  an on-disk corpus. Each harness prints the input that failed, and
+  libFuzzer prints the crashing unit as Base64. A reproducer worth keeping
+  belongs in `test/` as a case in the matching `test/*.c`, not in a corpus
+  directory.
+
 ## The kaem bootstrap build path (`boot/kaem/`)
 
 `boot/kaem/build-x86_64.kaem` (and `build-i386.kaem`) is a second, alternate

@@ -4,3 +4,12 @@
 /config.mak
 /obj/
 /lib/
+
+# Sanitizer and fuzzer output.  /obj/ already covers obj/asan, obj/fuzzlib
+# and obj/fuzz, which is where `make asan` and `make fuzz` put everything;
+# these catch corpora or crash artefacts written by hand elsewhere.
+/fuzz/corpus/
+crash-*
+leak-*
+timeout-*
+oom-*

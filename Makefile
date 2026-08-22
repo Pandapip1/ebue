@@ -13,6 +13,8 @@
 #   all       build lib/libc.a, lib/crt1.o, lib/ntdll.def (and the wrapper)
 #   install   install headers, libraries and the wrapper under $(prefix)
 #   check     build test/*.c against the result and run them under wine
+#   asan      build src/*.c natively under ASan+UBSan and run what applies
+#   fuzz      build and run the libFuzzer harnesses in fuzz/
 #   clean     remove build output
 #
 # Configuration is read from config.mak, written by ./configure.
@@ -240,6 +242,23 @@ lint:
 	./tools/lint.sh
 
 .PHONY: lint
+
+# asan/fuzz: a second, native (Linux/ELF) build of the same src/*.c under
+# AddressSanitizer, UBSan and libFuzzer.  This is not a substitute for
+# `make check` -- it cannot be, since a native build has no ntdll -- but a
+# sanitizer sees things Wine cannot, and it needs no cross toolchain.  See
+# CONTRIBUTING.md and the comments in tools/asan-build.sh.
+#
+# Deliberately not part of `all` or `check`: they build the real thing with
+# $(CC), and this builds something else with clang.
+#
+asan: $(GENH)
+	@$(srcdir)/tools/asan-build.sh
+
+fuzz: $(GENH)
+	@$(srcdir)/tools/fuzz.sh $(FUZZ_TIME)
+
+.PHONY: asan fuzz
 
 clean:
 	rm -rf obj lib
