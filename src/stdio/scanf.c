@@ -6,25 +6,34 @@
  * mem.c/fmemopen) instead of duplicating the character-at-a-time logic
  * against a plain string.
  *
- * C99 7.19.6.2p12 makes an input item "the longest sequence of input
- * characters ... which is an initial subsequence of a matching
- * sequence", and a matching sequence for %f has no length limit worth
- * naming: leading zeros, fraction digits and an exponent can run on
- * forever, and a correctly rounded result needs every one of them.  So
- * the float conversions walk the strtod grammar a character at a time,
- * staging the text of the field in a buffer that starts inside this
- * frame and moves to the heap when a field outgrows it, then hand the
- * finished (and by construction complete) subject sequence to
- * strtof/strtod/strtold, which round it exactly.  The integer
- * conversions need no buffer at all: they accumulate as they read, and
- * saturate rather than wrap when the digits run past the widest type.
+ * C99 7.19.6.2p12 and POSIX fscanf make an input item "the longest
+ * sequence of input bytes (up to any specified maximum field width)
+ * which is an initial subsequence of a matching sequence", and then:
+ * "If the input item is not a matching sequence, the execution of the
+ * conversion specification fails; this condition is a matching
+ * failure."  Note *initial subsequence*, not *matching sequence*: a
+ * half-spelled "infi", a "0x" with no hex digit behind it and a "1e"
+ * with no exponent behind it are all input items, all consumed in full,
+ * and all matching failures.  Only "the offending input" -- the single
+ * byte that could not extend the item -- is left unread.
  *
- * Walking the grammar rather than grabbing a charset and letting strtod
- * say where it stopped also bounds the look-ahead: the parser only ever
- * gives back a trailing "e+" or a half-spelled "infinity", never a whole
- * field.  What it does give back can still be more than the one
- * character C99 promises ungetc will take, so struct sc keeps a stack of
- * its own behind the stream's (see unrd below).
+ * A matching sequence for %f has no length limit worth naming: leading
+ * zeros, fraction digits and an exponent can run on forever, and a
+ * correctly rounded result needs every one of them.  So the float
+ * conversions walk the strtod grammar a character at a time, staging
+ * the text of the field in a buffer that starts inside this frame and
+ * moves to the heap when a field outgrows it.  A field that ends on a
+ * matching sequence is handed to strtof/strtod/strtold, which round it
+ * exactly; one that ends mid-spelling is a matching failure and is
+ * simply dropped, its bytes already spent.  The integer conversions
+ * need no buffer at all: they accumulate as they read, and saturate
+ * rather than wrap when the digits run past the widest type.
+ *
+ * Because the item is never given back, the look-ahead is one byte
+ * everywhere.  That one byte normally goes to the stream's own ungetc,
+ * which C99 only promises for a single character and which can still
+ * refuse it, so struct sc keeps a small stack behind it (see unrd
+ * below) and seeks back whatever is left over at the end.
  *
  * %[...] scansets and the usual conversions are implemented; positional
  * arguments and vector-of-float %a/%A input conversions are not, since
@@ -48,12 +57,11 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
  * nread, and every look-ahead character pushed back takes it off again,
  * so nread is exactly what %n has to report.
  *
- * A pushed-back character normally goes to the stream, but a conversion
- * can have to give back more look-ahead than ungetc will take (an
- * unterminated "nan(" spelling is unbounded), so unrd falls back to a
- * stack of its own that rd drains before touching the stream again.
- * Anything still on it when the whole scanf is over is returned to the
- * stream by seeking, the only way left to return it. */
+ * A pushed-back character normally goes to the stream, but ungetc is
+ * only guaranteed for one character and may refuse even that, so unrd
+ * falls back to a stack of its own that rd drains before touching the
+ * stream again.  Anything still on it when the whole scanf is over is
+ * returned to the stream by seeking, the only way left to return it. */
 struct sc {
 	FILE *f;
 	int nread;
@@ -197,15 +205,6 @@ static void fld_unget(struct fld *fl, int c)
 	if (fl->left >= 0) fl->left++;
 }
 
-/* Give back everything staged past mark: the tail that turned out not
- * to be part of a matching sequence after all.  Every call site rewinds
- * to a point after any character the staging dropped, so what goes back
- * is what was read. */
-static void fld_rewind(struct fld *fl, struct nbuf *b, int mark)
-{
-	while (b->len > mark) fld_unget(fl, (unsigned char)b->p[--b->len]);
-}
-
 static int hexval(int c)
 {
 	if (c >= '0' && c <= '9') return c - '0';
@@ -216,50 +215,45 @@ static int hexval(int c)
 
 /* Match one of the spellings of a named value, case-insensitively:
  * least characters make the short spelling ("inf"), the whole word the
- * long one ("infinity"), and anything in between falls back to the
- * short one with the rest handed back.  1 if a spelling matched, 0 if
- * not, -1 out of memory.  c is the first character, already read. */
+ * long one ("infinity").  Every character that keeps the item an
+ * initial subsequence of one of them is consumed, so a spelling that
+ * stops in between ("infi") is consumed in full and is a matching
+ * failure.  1 if a spelling matched, 0 if not, -1 out of memory.  c is
+ * the first character, already read. */
 static int scanword(struct fld *fl, struct nbuf *b, const char *word, int least, int c)
 {
-	int i = 0, mark = b->len, ok = 0;
+	int i = 0, ok = 0;
 	for (;;) {
 		if (c == EOF || tolower(c) != word[i]) break;
 		if (!nb_put(b, c)) return -1;
 		i++;
-		if (i == least || !word[i]) { mark = b->len; ok = 1; }
+		ok = i == least || !word[i];
 		if (!word[i]) { c = EOF; break; }
 		c = fld_get(fl);
 	}
 	fld_unget(fl, c);
-	fld_rewind(fl, b, mark);
 	return ok;
 }
 
 /* "nan", optionally followed by a parenthesised character sequence.
- * An unterminated "nan(..." is not part of any matching sequence, so
- * only the "nan" is kept however long the tail was. */
+ * "nan(" and everything after it is an initial subsequence of a
+ * "nan(n-char-sequence)", so an unterminated one is consumed in full
+ * and is a matching failure rather than a bare "nan". */
 static int scannan(struct fld *fl, struct nbuf *b, int c)
 {
-	int r = scanword(fl, b, "nan", 3, c), mark;
+	int r = scanword(fl, b, "nan", 3, c);
 	if (r <= 0) return r;
-	mark = b->len;
 	c = fld_get(fl);
 	if (c != '(') { fld_unget(fl, c); return 1; }
 	if (!nb_put(b, c)) return -1;
 	for (;;) {
 		c = fld_get(fl);
-		if (c == ')') {
-			if (!nb_put(b, c)) return -1;
-			mark = b->len;
-			c = EOF;
-			break;
-		}
+		if (c == ')') return nb_put(b, c) ? 1 : -1;
 		if (c == EOF || !(isalnum(c) || c == '_')) break;
 		if (!nb_put(b, c)) return -1;
 	}
 	fld_unget(fl, c);
-	fld_rewind(fl, b, mark);
-	return 1;
+	return 0;
 }
 
 /* The digits of a mantissa, decimal or hexadecimal, with at most one
@@ -292,38 +286,40 @@ static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp)
 }
 
 /* An exponent, if one is there in full: "e" or "p", an optional sign,
- * and at least one decimal digit.  A half-written one ("1.5e+x") is not
- * part of any matching sequence, so it is handed back and the mantissa
- * stands alone.  Returns the terminating character in *cp. */
-static int scanexp(struct fld *fl, struct nbuf *b, int mark, int *cp)
+ * and at least one decimal digit.  A half-written one ("1.5e+") is
+ * still an initial subsequence of a matching sequence, so it stays
+ * consumed and makes the item as a whole a matching failure.  1 for a
+ * complete exponent, 0 for a half-written one, -1 out of memory; the
+ * terminating character comes back in *cp. */
+static int scanexp(struct fld *fl, struct nbuf *b, int *cp)
 {
-	int c = *cp;
+	int c = *cp, ok = 0;
 	if (!nb_put(b, c)) return -1;
 	c = fld_get(fl);
 	if (c == '+' || c == '-') {
 		if (!nb_put(b, c)) return -1;
 		c = fld_get(fl);
 	}
-	if (c != EOF && isdigit(c)) {
-		do {
-			if (!nb_put(b, c)) return -1;
-			c = fld_get(fl);
-		} while (c != EOF && isdigit(c));
-		mark = b->len;
+	while (c != EOF && isdigit(c)) {
+		ok = 1;
+		if (!nb_put(b, c)) return -1;
+		c = fld_get(fl);
 	}
 	*cp = c;
-	return mark;
+	return ok;
 }
 
-/* One floating-point field: the longest prefix of the input that is a
- * strtod subject sequence, staged in b as the text to convert.  1 on a
- * match, 0 on a matching failure (with everything read handed back),
- * -1 out of memory.  Whatever the outcome, only characters that could
- * not belong to a matching sequence are handed back, so the stream
- * position and %n agree with C99. */
+/* One floating-point field.  Consumes the whole input item -- the
+ * longest prefix of the input that is an initial subsequence of a
+ * strtod subject sequence, capped by the field width -- and returns 1
+ * if that item is itself a subject sequence, with its text staged in b
+ * ready to convert; 0 if it is not, which is a matching failure with
+ * the item's bytes spent; -1 out of memory.  The one character handed
+ * back is the offending input that ended the item, which POSIX leaves
+ * unread. */
 static int scanfloat(struct fld *fl, struct nbuf *b)
 {
-	int c, mark, any;
+	int c, ok, any;
 
 	c = fld_get(fl);
 	if (c == '+' || c == '-') {
@@ -336,47 +332,39 @@ static int scanfloat(struct fld *fl, struct nbuf *b)
 	if (c == '0') {
 		int c2 = fld_get(fl);
 		if (c2 == 'x' || c2 == 'X') {
-			/* Past the prefix there must be a hex digit; if there
-			 * is not, the item is just the "0" and the "x" goes
-			 * back, so mark stays behind the "x" until one turns
-			 * up. */
+			/* Past the prefix there must be a hex digit.  A "0x"
+			 * with none behind it is still an initial subsequence
+			 * of "0x1", so it is the item and a matching failure;
+			 * it is not a "0" with the "x" handed back. */
 			if (!nb_put(b, c)) return -1;
-			mark = b->len;
 			if (!nb_put(b, c2)) return -1;
 			c = fld_get(fl);
 			any = scandigits(fl, b, 16, &c);
 			if (any < 0) return -1;
-			if (any) {
-				mark = b->len;
-				if (c == 'p' || c == 'P') {
-					mark = scanexp(fl, b, mark, &c);
-					if (mark < 0) return -1;
-				}
+			ok = any != 0;
+			if (ok && (c == 'p' || c == 'P')) {
+				ok = scanexp(fl, b, &c);
+				if (ok < 0) return -1;
 			}
 			fld_unget(fl, c);
-			fld_rewind(fl, b, mark);
-			return 1;
+			return ok;
 		}
 		fld_unget(fl, c2);
 	}
 
 	any = scandigits(fl, b, 10, &c);
 	if (any < 0) return -1;
-	if (!any) {
-		/* Not even a digit: hand back the sign and the radix point
-		 * too, so a failed %f leaves the input where it found it. */
-		fld_unget(fl, c);
-		fld_rewind(fl, b, 0);
-		return 0;
-	}
-	mark = b->len;
+	/* Not even a digit: a lone sign or radix point is an initial
+	 * subsequence of a matching sequence and stays consumed, and if
+	 * nothing at all was staged then nothing was consumed either. */
+	if (!any) { fld_unget(fl, c); return 0; }
+	ok = 1;
 	if (c == 'e' || c == 'E') {
-		mark = scanexp(fl, b, mark, &c);
-		if (mark < 0) return -1;
+		ok = scanexp(fl, b, &c);
+		if (ok < 0) return -1;
 	}
 	fld_unget(fl, c);
-	fld_rewind(fl, b, mark);
-	return 1;
+	return ok;
 }
 
 /* Out of memory staging a field.  scanf has no channel for ENOMEM, so
@@ -454,12 +442,18 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				if (c == '+' || c == '-') { neg = c == '-'; c = fld_get(&fl); }
 				if ((autodetect || base == 16) && c == '0') {
 					int c2 = fld_get(&fl);
-					any = 1;   /* the "0" is already a complete item */
 					if (c2 == 'x' || c2 == 'X') {
 						int c3 = fld_get(&fl);
-						if (hexval(c3) >= 0) { base = 16; c = c3; }
-						else { fld_unget(&fl, c3); fld_unget(&fl, c2); c = EOF; }
+						/* "0x" with no hex digit behind it is an
+						 * initial subsequence of "0x1" and nothing
+						 * shorter, so the item is the whole "0x" and
+						 * it is a matching failure -- not a "0" with
+						 * the "x" handed back. */
+						if (hexval(c3) < 0) { fld_unget(&fl, c3); goto done; }
+						base = 16;
+						c = c3;
 					} else {
+						any = 1;   /* the "0" is already a complete item */
 						if (autodetect) base = 8;
 						c = c2;
 					}

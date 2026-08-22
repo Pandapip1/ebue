@@ -465,9 +465,30 @@ static void test_printf_huge(void)
 	CHECK(!strcmp(hbuf, "1234.5678"));
 }
 
+/* Scan one conversion out of s through a memory FILE and report where
+ * the input item ended as well as what scanf returned.  POSIX fscanf
+ * makes an input item "the longest sequence of input bytes (up to any
+ * specified maximum field width) which is an initial subsequence of a
+ * matching sequence", and a matching failure spends those bytes all the
+ * same -- only "the offending input", the one byte that could not
+ * extend the item, "is left unread in the input".  sscanf on its own
+ * cannot show that, because a failed conversion never reaches a %n. */
+static int scan1(const char *s, const char *fmt, void *dst, long *pos)
+{
+	FILE *f = fmemopen((void *)(uintptr_t)s, strlen(s), "r");
+	int r;
+	*pos = -1;
+	if (!f) return -99;
+	r = fscanf(f, fmt, dst);
+	*pos = ftell(f);
+	fclose(f);
+	return r;
+}
+
 static void test_scanf(void)
 {
 	int a, b, c, r;
+	long pos;
 	unsigned u;
 	long l;
 	long long ll;
@@ -589,7 +610,13 @@ static void test_scanf(void)
 	a = -1;
 	CHECK(sscanf("0x1fz", "%i%n", &b, &a) == 1 && b == 0x1f && a == 4);
 	a = -1;
-	CHECK(sscanf("1.5e+x", "%lf%n", &d, &a) == 1 && d == 1.5 && a == 3);
+	CHECK(sscanf("1.5e-1x", "%lf%n", &d, &a) == 1 && d == 0.15 && a == 6);
+	/* Bytes consumed by an item that turned out not to be a matching
+	 * sequence are consumed all the same, so %n after the failure is
+	 * never reached at all -- see the scan1 cases below for where the
+	 * stream ends up. */
+	a = -1;
+	CHECK(sscanf("1.5e+x", "%lf%n", &d, &a) == 0 && a == -1);
 	/* %n at the very start, and after a literal match */
 	a = -1;
 	CHECK(sscanf("xyz", "%n", &a) == 0 && a == 0);
@@ -681,40 +708,95 @@ static void test_scanf(void)
 	CHECK(sscanf("-InFiNiTy!", "%lf%n", &d, &a) == 1 && d < -1e300 && a == 9);
 	a = -1;
 	CHECK(sscanf("nan(123)x", "%lf%n", &d, &a) == 1 && d != d && a == 8);
-	/* An unterminated n-char-sequence is not part of any matching
-	 * sequence: the item is the "nan" and the rest goes back. */
+	CHECK(sscanf("nan()", "%lf%n", &d, &a) == 1 && d != d && a == 5);
 	str[0] = 0;
-	CHECK(sscanf("nan(12", "%lf%s", &d, str) == 2 && d != d && strcmp(str, "(12") == 0);
-	/* Half an "infinity" falls back to the "inf" that is there
-	 * (C99 7.19.6.2p12; glibc instead keeps the half and fails). */
-	str[0] = 0;
-	CHECK(sscanf("infi", "%lf%s", &d, str) == 2 && d > 1e300 && strcmp(str, "i") == 0);
-	str[0] = 0;
-	CHECK(sscanf("infinit", "%lf%s", &d, str) == 2 && d > 1e300 && strcmp(str, "init") == 0);
-	CHECK(sscanf("nax", "%lf", &d) == 0);
-	CHECK(sscanf("ix", "%lf", &d) == 0);
+	CHECK(sscanf("nanx", "%lf%s", &d, str) == 2 && d != d && strcmp(str, "x") == 0);
 
-	/* hex floats, and the "0x" that turns out to be just a "0" */
+	/* Partial numeric spellings.  POSIX fscanf: the input item is "the
+	 * longest sequence of input bytes ... which is an initial
+	 * subsequence of a matching sequence", and "if the input item is
+	 * not a matching sequence ... this condition is a matching
+	 * failure" -- so a half-spelled item is consumed in full and the
+	 * conversion still fails.  Only the one offending byte that could
+	 * not extend the item is left unread.  (glibc departs from this in
+	 * both directions: it consumes the offending byte after a partial
+	 * "inf"/"nan", and it reports success for a half-written exponent
+	 * or a "0x" with no digits, converting the mantissa it did get.) */
+	CHECK(scan1("infi", "%lf", &d, &pos) == 0 && pos == 4);
+	CHECK(scan1("infinit", "%lf", &d, &pos) == 0 && pos == 7);
+	CHECK(scan1("in", "%lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("-infi", "%lf", &d, &pos) == 0 && pos == 5);
+	/* ...and the offending byte, and only it, stays unread. */
+	CHECK(scan1("ix", "%lf", &d, &pos) == 0 && pos == 1);
+	CHECK(scan1("nax", "%lf", &d, &pos) == 0 && pos == 2);
+	/* An unterminated n-char-sequence is an initial subsequence of
+	 * "nan(...)", so the whole of it is the item. */
+	CHECK(scan1("nan(", "%lf", &d, &pos) == 0 && pos == 4);
+	CHECK(scan1("nan(12", "%lf", &d, &pos) == 0 && pos == 6);
+	CHECK(scan1("nan(1-2)", "%lf", &d, &pos) == 0 && pos == 5);
+	/* A half-written exponent, decimal or binary. */
+	CHECK(scan1("1e", "%lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("1e+", "%lf", &d, &pos) == 0 && pos == 3);
+	CHECK(scan1("1e+x", "%lf", &d, &pos) == 0 && pos == 3);
+	CHECK(scan1("1.5e+x", "%lf", &d, &pos) == 0 && pos == 5);
+	CHECK(scan1("1.e", "%lf", &d, &pos) == 0 && pos == 3);
+	CHECK(scan1("0x1p", "%lf", &d, &pos) == 0 && pos == 4);
+	CHECK(scan1("0x1p+", "%lf", &d, &pos) == 0 && pos == 5);
+	/* A "0x" with no hex digit behind it: an initial subsequence of
+	 * "0x1" and nothing shorter, so not a "0" with the "x" given back. */
+	CHECK(scan1("0x", "%lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("0X", "%lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("-0x", "%lf", &d, &pos) == 0 && pos == 3);
+	CHECK(scan1("0xz", "%lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("0x.", "%lf", &d, &pos) == 0 && pos == 3);
+	CHECK(scan1("0x.p1", "%lf", &d, &pos) == 0 && pos == 3);
+	/* A lone sign or radix point, likewise -- and a byte that could
+	 * not start an item at all is not consumed. */
+	CHECK(scan1(".", "%lf", &d, &pos) == 0 && pos == 1);
+	CHECK(scan1("-", "%lf", &d, &pos) == 0 && pos == 1);
+	CHECK(scan1("+", "%lf", &d, &pos) == 0 && pos == 1);
+	CHECK(scan1("-.", "%lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1(".e1", "%lf", &d, &pos) == 0 && pos == 1);
+	CHECK(scan1("abc", "%lf", &d, &pos) == 0 && pos == 0);
+	CHECK(scan1("-", "%d", &a, &pos) == 0 && pos == 1);
+	CHECK(scan1("+", "%d", &a, &pos) == 0 && pos == 1);
+	CHECK(scan1("-x", "%d", &a, &pos) == 0 && pos == 1);
+	/* The integer conversions read the same rule: "0x" is an initial
+	 * subsequence of a strtol/strtoul subject sequence but is not one. */
+	CHECK(scan1("0x", "%i", &a, &pos) == 0 && pos == 2);
+	CHECK(scan1("0xz", "%i", &a, &pos) == 0 && pos == 2);
+	CHECK(scan1("-0x", "%i", &a, &pos) == 0 && pos == 3);
+	CHECK(scan1("0x", "%x", &u, &pos) == 0 && pos == 2);
+	CHECK(scan1("0xz", "%x", &u, &pos) == 0 && pos == 2);
+	CHECK(scan1("0x", "%p", &p, &pos) == 0 && pos == 2);
+	/* "08" is not an initial subsequence of anything longer, so the
+	 * item is the "0" and the conversion succeeds. */
+	CHECK(scan1("08", "%i", &a, &pos) == 1 && a == 0 && pos == 1);
+	CHECK(scan1("0x1fz", "%i", &a, &pos) == 1 && a == 0x1f && pos == 4);
+
+	/* hex floats */
 	CHECK(sscanf("0x1p+3", "%lf", &d) == 1 && d == 8.0);
 	str[0] = 0;
 	CHECK(sscanf("0x1p+3zz", "%lf%s", &d, str) == 2 && d == 8.0 && strcmp(str, "zz") == 0);
 	str[0] = 0;
 	CHECK(sscanf("0x000.8p1x", "%lf%s", &d, str) == 2 && d == 1.0 && strcmp(str, "x") == 0);
-	str[0] = 0;
-	CHECK(sscanf("0x", "%lf%s", &d, str) == 2 && d == 0.0 && strcmp(str, "x") == 0);
-	str[0] = 0;
-	CHECK(sscanf("1e", "%lf%s", &d, str) == 2 && d == 1.0 && strcmp(str, "e") == 0);
-	str[0] = 0;
-	CHECK(sscanf("0xz", "%x%s", &u, str) == 2 && u == 0 && strcmp(str, "xz") == 0);
+	CHECK(sscanf("0x1", "%lf%n", &d, &a) == 1 && d == 1.0 && a == 3);
 
 	/* A field width caps the item exactly, and it counts every
-	 * character of it -- the sign and the "0x" included. */
+	 * character of it -- the sign and the "0x" included.  An item the
+	 * width cuts short is a matching failure like any other. */
 	str[0] = 0;
 	CHECK(sscanf("123456789.5", "%5lf%s", &d, str) == 2 && d == 12345.0 &&
 	      strcmp(str, "6789.5") == 0);
-	str[0] = 0;
-	CHECK(sscanf("infinity", "%5lf%s", &d, str) == 2 && d > 1e300 &&
-	      strcmp(str, "inity") == 0);
+	CHECK(scan1("infinity", "%5lf", &d, &pos) == 0 && pos == 5);
+	CHECK(scan1("infinity", "%4lf", &d, &pos) == 0 && pos == 4);
+	CHECK(scan1("infinity", "%3lf", &d, &pos) == 1 && d > 1e300 && pos == 3);
+	CHECK(scan1("inf", "%2lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("0x1", "%2lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("1e5", "%2lf", &d, &pos) == 0 && pos == 2);
+	CHECK(scan1("nan(1)", "%4lf", &d, &pos) == 0 && pos == 4);
+	CHECK(scan1("0x1p3", "%3lf", &d, &pos) == 1 && d == 1.0 && pos == 3);
+	CHECK(scan1("0x10", "%2i", &a, &pos) == 0 && pos == 2);
 	str[0] = 0;
 	CHECK(sscanf("-12345", "%3d%s", &a, str) == 2 && a == -12 && strcmp(str, "345") == 0);
 	a = -1;
@@ -760,10 +842,16 @@ static void test_scanf(void)
 				CHECK(d != d && a == 16 && strcmp(str, "Q") == 0);
 				a = -1;
 				CHECK(fscanf(sf, "%lld%n", &ll, &a) == 1 && ll == LLONG_MAX && a == 201);
+				/* A matching failure through a real FILE spends
+				 * the item's bytes and pushes back only the
+				 * offending one, so the next call picks up
+				 * immediately after the half-spelled "infi". */
 				str[0] = str2[0] = 0; fl = 0;
-				CHECK(fscanf(sf, "%lf%s %f%s", &d, str, &fl, str2) == 4);
-				CHECK(d > 1e300 && strcmp(str, "i") == 0 &&
-				      fl == 8.0f && strcmp(str2, "zz") == 0);
+				pos = ftell(sf);
+				CHECK(fscanf(sf, "%lf", &d) == 0);
+				CHECK(ftell(sf) == pos + 5);   /* "\ninfi" */
+				CHECK(fscanf(sf, "%f%s", &fl, str) == 2);
+				CHECK(fl == 8.0f && strcmp(str, "zz") == 0);
 				CHECK(fclose(sf) == 0);
 			}
 			unlink(name);
