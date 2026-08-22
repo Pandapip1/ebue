@@ -13,3 +13,10 @@ crash-*
 leak-*
 timeout-*
 oom-*
+
+# Backup copies left by configure re-runs and by patch/merge tools.
+*.orig
+*.rej
+
+# Scratch output from test/misc.c's exit-flush check.
+/misc-exit-flush.tmp

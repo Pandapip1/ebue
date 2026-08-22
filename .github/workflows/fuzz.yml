@@ -43,10 +43,6 @@ concurrency:
   group: fuzz-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  # Must match ci.yml's pin: the cache below is the one that job fills.
-  TINYCC_SHA: 2ba12e83b3599ca8f5d50c179fe5138fe956f0c9
-
 jobs:
   fuzz:
     runs-on: ubuntu-24.04
@@ -57,51 +53,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Restore-only: ci.yml's build-toolchain job populates this. If it
-      # misses (cache evicted, or this ran before any CI run on a new
-      # pin), build it here rather than failing the nightly.
-      - name: Restore tinycc toolchain
-        id: cache-tinycc
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Build tinycc if the cache missed
-        if: steps.cache-tinycc.outputs.cache-hit != 'true'
-        run: |
-          git clone https://github.com/TinyCC/tinycc.git tinycc
-          git -C tinycc checkout "$TINYCC_SHA"
-          cd tinycc
-          ./configure --enable-cross --prefix="$HOME/tinycc-install"
-          make -j"$(nproc)"
-          make install
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
       - name: Install clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
 
-      # The harnesses need obj/include/bits/alltypes.h, which `make`
-      # produces; they compile src/*.c themselves with clang afterwards.
-      - name: Configure and build
-        run: |
-          ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
-          make -j"$(nproc)"
+      # The harnesses need obj/include/bits/alltypes.h, which is just a
+      # concatenation of committed .h.gen files -- no compiler involved,
+      # and ARCH comes from the command line. They build src/*.c
+      # themselves with clang afterwards, so tcc is never needed here.
+      - name: Generate bits/alltypes.h
+        run: make ARCH=x86_64 obj/include/bits/alltypes.h
 
+      # `... | tee` would hand the step tee's exit status, and steps run
+      # under `bash -e` without pipefail -- so a finding would leave the
+      # job green and the log unuploaded. `shell: bash` adds -o pipefail.
+      # Inputs go through env rather than ${{ }} interpolation so they
+      # cannot be spliced into the command.
       - name: Fuzz
+        shell: bash
+        env:
+          SECONDS_PER: ${{ github.event.inputs.seconds || '300' }}
+          HARNESSES: ${{ github.event.inputs.harnesses || '' }}
         run: |
-          tools/fuzz.sh ${{ github.event.inputs.seconds || '300' }} \
-                        ${{ github.event.inputs.harnesses || '' }} \
-            2>&1 | tee fuzz.log
+          tools/fuzz.sh "$SECONDS_PER" $HARNESSES 2>&1 | tee fuzz.log
 
       # tools/fuzz.sh exits non-zero when a harness finds something, so
       # this only runs on a finding -- and the log is the reproducer.
-      - name: Upload the log when something was found
-        if: failure()
+      - name: Upload the log
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-log-${{ github.run_id }}

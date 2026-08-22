@@ -215,7 +215,6 @@ jobs:
   #
   # Independent of the tcc jobs: it never builds with tcc, so no `needs:`.
   lint:
-    needs: build-toolchain
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -229,27 +228,8 @@ jobs:
       # obj/include/bits/alltypes.h is just a concatenation of committed
       # .h.gen files, so this needs no compiler -- but ./configure is what
       # sets ARCH, and lint.sh reads it.
-      - name: Restore tinycc toolchain
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
-      - name: Restore tinycc toolchain
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
-      - name: Configure
-        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
-
+      # tools/lint.sh reads neither config.mak nor ARCH: it derives the
+      # arch list from arch/*/ and builds its own alltypes.h.
       - name: make lint
         run: make lint
 
@@ -262,7 +242,6 @@ jobs:
   #
   # Also expected to be RED for now. Not relaxed.
   asan:
-    needs: build-toolchain
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -272,11 +251,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang
 
-      - name: Configure
-        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc
-
+      # $(GENH) is a concatenation of committed .h.gen files, so this
+      # needs no compiler -- only ARCH, which make takes on the command
+      # line. asan builds everything else natively with clang.
       - name: make asan
-        run: make asan
+        run: make ARCH=x86_64 asan
 
       - name: Upload the failing test output
         if: failure()
