@@ -88,10 +88,20 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		w = dos_from_posix(path, &n);
 		if (!w) return -1;
 		if (n == 1 && w[0] == '.') { w[0] = 0; n = 0; }
+		/* UNICODE_STRING.Length is a USHORT count of bytes and
+		 * MaximumLength has to hold one more code unit, so a name past
+		 * 32766 code units cannot be described -- and narrowing it would
+		 * wrap rather than truncate, naming some prefix of the caller's
+		 * path instead of failing. */
+		if (n > (size_t)((0xffffu - sizeof(WCHAR)) / sizeof(WCHAR))) {
+			__free(w);
+			errno = ENAMETOOLONG;
+			return -1;
+		}
 		memset(out, 0, sizeof *out);
 		out->nt.Buffer = w;
 		out->nt.Length = (USHORT)(n * sizeof(WCHAR));
-		out->nt.MaximumLength = out->nt.Length + sizeof(WCHAR);
+		out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
 		out->buf = 0;      /* w is freed as dos */
 		out->dos = w;
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, f->h, 0);

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 
 extern char **environ;
@@ -48,6 +49,23 @@ static const char *const tricky[] = {
 #define RC_ARGV_MISMATCH 7
 #define RC_ENV_MISMATCH 8
 #define RC_EXEC_RETURNED 99
+#define RC_OK 0
+
+/* argv[0] values that must survive the trip through spawn.c's command
+ * line builder and back out of crt1.c's program-name parser unchanged.
+ * The program name is read by different rules from every other argument
+ * -- backslashes in it are literal and never escape anything -- so these
+ * are the cases that catch it being quoted as if it were an ordinary
+ * argument. */
+static const char *const argv0_cases[] = {
+	"plain",
+	"a b\\",             /* a space *and* a trailing backslash */
+	"a\\\\b",
+	"c:\\dir\\prog.exe",
+	"has space",
+	"",
+	0
+};
 
 static char **build_argv(const char *self, const char *role)
 {
@@ -84,6 +102,42 @@ static int argv_child(int argc, char **argv)
 		if (getenv("NTLIBC_TEST_ABSENT")) return RC_ENV_MISMATCH;
 	}
 	return 0;
+}
+
+/* Spawned with a deliberately odd argv[0]; argv[2] says what it should
+ * have come out as. */
+static int argv0_child(int argc, char **argv)
+{
+	if (argc != 3) { printf("child: argc %d, wanted 3\n", argc); return RC_ARGV_MISMATCH; }
+	if (strcmp(argv[0], argv[2])) {
+		printf("child: argv[0] = \"%s\", wanted \"%s\"\n", argv[0], argv[2]);
+		return RC_ARGV_MISMATCH;
+	}
+	return RC_OK;
+}
+
+/* Spawned with an envp that contains an empty entry: everything after it
+ * must still have arrived. */
+static int envblock_child(void)
+{
+	static const char *const want[][2] = {
+		{ "NTLIBC_EMPTY_A", "1" },
+		{ "NTLIBC_EMPTY_B", "2" },
+		{ "NTLIBC_EMPTY_C", "3" },
+		{ 0, 0 }
+	};
+	int i;
+	for (i = 0; want[i][0]; i++) {
+		const char *v = getenv(want[i][0]);
+		if (!v || strcmp(v, want[i][1])) {
+			printf("child: %s = %s, wanted %s\n", want[i][0], v ? v : "(unset)", want[i][1]);
+			return RC_ENV_MISMATCH;
+		}
+	}
+	/* An entry with no '=' is passed through the way execve does on
+	 * Linux; it simply names no variable. */
+	if (getenv("NTLIBC_EMPTY_NOEQ")) return RC_ENV_MISMATCH;
+	return RC_OK;
 }
 
 /* The intermediate child: exec self in an --argv role. */
@@ -133,9 +187,137 @@ static int run_role(const char *self, const char *role)
 	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+static int spawn_status(const char *self, char *const av[], char *const ev[])
+{
+	int pid, status = -1;
+	fflush(stdout);
+	pid = __spawn(self, av, ev);
+	if (pid <= 0) return -1;
+	if (waitpid(pid, &status, 0) != pid) return -1;
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* A command line longer than a UNICODE_STRING can describe must be
+ * refused, not silently cut down to whatever its length wrapped to. */
+static void test_cmdline_limit(const char *self)
+{
+	static const size_t sizes[] = { 1000, 16000, 32000 };
+	char *big, lenbuf[32];
+	char *av[5];
+	size_t i;
+
+	/* Sizes that fit still round trip exactly. */
+	for (i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+		big = malloc(sizes[i] + 1);
+		CHECK(big != 0);
+		if (!big) return;
+		memset(big, 'x', sizes[i]);
+		big[sizes[i]] = 0;
+		snprintf(lenbuf, sizeof lenbuf, "%lu", (unsigned long)sizes[i]);
+		av[0] = (char *)self; av[1] = (char *)"--arglen";
+		av[2] = lenbuf; av[3] = big; av[4] = 0;
+		CHECK(spawn_status(self, av, environ) == RC_OK);
+		free(big);
+	}
+
+	/* Past the limit: a clean E2BIG, and no process started. */
+	big = malloc(40001);
+	CHECK(big != 0);
+	if (!big) return;
+	memset(big, 'x', 40000);
+	big[40000] = 0;
+	snprintf(lenbuf, sizeof lenbuf, "40000");
+	av[0] = (char *)self; av[1] = (char *)"--arglen";
+	av[2] = lenbuf; av[3] = big; av[4] = 0;
+	errno = 0;
+	CHECK(__spawn(self, av, environ) == -1);
+	CHECK(errno == E2BIG);
+	errno = 0;
+	CHECK(execv(self, av) == -1);
+	CHECK(errno == E2BIG);
+	free(big);
+}
+
+/* An empty envp entry must not cut the environment block short. */
+static void test_empty_env_entry(const char *self)
+{
+	char sysroot[512];
+	const char *sr = getenv("SystemRoot");
+	char *ev[7];
+	char *av[3];
+	int n = 0;
+
+	if (sr) snprintf(sysroot, sizeof sysroot, "SystemRoot=%s", sr);
+	else snprintf(sysroot, sizeof sysroot, "SystemRoot=C:\\Windows");
+	ev[n++] = (char *)"NTLIBC_EMPTY_A=1";
+	ev[n++] = (char *)"";                    /* used to terminate the block */
+	ev[n++] = (char *)"NTLIBC_EMPTY_B=2";
+	ev[n++] = (char *)"NTLIBC_EMPTY_NOEQ";   /* no '=': passed on, names nothing */
+	ev[n++] = (char *)"NTLIBC_EMPTY_C=3";
+	ev[n++] = sysroot;
+	ev[n] = 0;
+	av[0] = (char *)self; av[1] = (char *)"--envblock"; av[2] = 0;
+	CHECK(spawn_status(self, av, ev) == RC_OK);
+}
+
+/* A failed exec must leave the process image alone -- including the
+ * close-on-exec descriptors, which stay the caller's until exec
+ * succeeds. */
+static void test_failed_exec_keeps_cloexec(const char *self)
+{
+	char buf[4];
+	char *av[2];
+	int fd = open(self, O_RDONLY | O_CLOEXEC);
+
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(read(fd, buf, 2) == 2);
+	CHECK(lseek(fd, 0, SEEK_SET) == 0);
+
+	av[0] = (char *)"./no-such-program-xyz.exe"; av[1] = 0;
+	errno = 0;
+	CHECK(execv("./no-such-program-xyz.exe", av) == -1);
+	CHECK(errno == ENOENT);
+
+	errno = 0;
+	CHECK(read(fd, buf, 2) == 2);   /* EBADF before the fix */
+	CHECK(errno != EBADF);
+	close(fd);
+}
+
+/* argv[0] is quoted by the program-name rules, so it comes back byte for
+ * byte; the values those rules cannot express are refused outright. */
+static void test_argv0_roundtrip(const char *self)
+{
+	char *av[4];
+	int i;
+
+	for (i = 0; argv0_cases[i]; i++) {
+		av[0] = (char *)argv0_cases[i];
+		av[1] = (char *)"--argv0";
+		av[2] = (char *)argv0_cases[i];
+		av[3] = 0;
+		if (spawn_status(self, av, environ) != RC_OK) {
+			fails++;
+			printf("FAIL %s:%d: argv[0] \"%s\" did not round trip\n",
+			       __FILE__, __LINE__, argv0_cases[i]);
+		}
+	}
+
+	/* A quote in the program name has no encoding: fail, do not mangle. */
+	av[0] = (char *)"a\"b"; av[1] = (char *)"--argv0"; av[2] = av[0]; av[3] = 0;
+	errno = 0;
+	CHECK(__spawn(self, av, environ) == -1);
+	CHECK(errno == EINVAL);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--exit")) return atoi(argv[2]);
+	if (argc > 1 && !strcmp(argv[1], "--argv0")) return argv0_child(argc, argv);
+	if (argc > 1 && !strcmp(argv[1], "--envblock")) return envblock_child();
+	if (argc > 1 && !strcmp(argv[1], "--arglen"))
+		return argc == 4 && strlen(argv[3]) == (size_t)atol(argv[2]) ? RC_OK : RC_ARGV_MISMATCH;
 	if (argc > 1 && (!strcmp(argv[1], "--argv") || !strcmp(argv[1], "--argv-env")))
 		return argv_child(argc, argv);
 	if (argc > 1 && !strncmp(argv[1], "--exec-", 7)) return exec_child(argv[0], argv[1]);
@@ -147,6 +329,14 @@ int main(int argc, char **argv)
 	CHECK(run_role(argv[0], "--exec-exit") == 200);
 	/* a missing program fails with ENOENT and exec returns */
 	CHECK(run_role(argv[0], "--exec-missing") == 0);
+
+	test_empty_env_entry(argv[0]);
+	test_failed_exec_keeps_cloexec(argv[0]);
+	test_argv0_roundtrip(argv[0]);
+	/* Last: an execv() that is *meant* to fail with E2BIG will, if the
+	 * length check is ever lost, succeed instead -- and a successful
+	 * execv never comes back, so anything after it would not run. */
+	test_cmdline_limit(argv[0]);
 
 	if (!fails) printf("exec: all tests passed\n");
 	return fails != 0;

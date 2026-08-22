@@ -34,6 +34,10 @@
 #include <fcntl.h>
 #include "libc.h"
 
+/* The longest string a UNICODE_STRING can describe: Length counts bytes
+ * in a USHORT, and MaximumLength has to hold Length plus a terminating
+ * NUL, so 65535 bytes minus that NUL -- 32766 UTF-16 code units. */
+#define __US_MAX_WCHARS ((size_t)((0xffffu - sizeof(WCHAR)) / sizeof(WCHAR)))
 
 /* Append one argument to a UTF-16 command-line buffer, quoting it if it
  * contains whitespace, a quote, or is empty. */
@@ -47,7 +51,7 @@ static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 	if (*len + 2 * n + 4 >= *cap) {
 		size_t nc = (*cap + 2 * n + 16) * 2;
 		WCHAR *nb = realloc(*buf, nc * sizeof(WCHAR));
-		if (!nb) return -1;
+		if (!nb) { errno = ENOMEM; return -1; }
 		*buf = nb; *cap = nc;
 	}
 	if (*len) (*buf)[(*len)++] = ' ';
@@ -75,6 +79,44 @@ static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 	return 0;
 }
 
+/* Append argv[0].  The program name is *not* read back by the rules
+ * append_arg encodes for: every parser -- Wine's CommandLineToArgvW
+ * (dlls/shcore/main.c, "The executable path ends at the next quote, no
+ * matter what"), the Microsoft C runtimes, and this library's own
+ * crt1.c split_cmdline -- treats it specially.  Backslashes in it are
+ * always literal and never escape anything; a quote only turns the
+ * "whitespace is literal" state on and off and is otherwise dropped.
+ *
+ * So the encoding is: emit the name as it stands, wrapped in one pair of
+ * quotes if it is empty or contains a space or a tab.  Doubling
+ * backslashes, which append_arg would do, would arrive doubled.
+ *
+ * A name containing a quote has no encoding at all under these rules --
+ * the quote it would need to protect itself is the same character that
+ * ends the name -- so that is refused with EINVAL rather than passed on
+ * to be silently mangled into a different name and a stray argument. */
+static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
+{
+	size_t n, i;
+	int need_quote = arg[0] == 0;
+	for (i = 0; arg[i]; i++) {
+		if (arg[i] == '"') { errno = EINVAL; return -1; }
+		if (arg[i] == ' ' || arg[i] == '\t') need_quote = 1;
+	}
+	n = i;
+	if (*len + n + 4 >= *cap) {
+		size_t nc = (*cap + n + 16) * 2;
+		WCHAR *nb = realloc(*buf, nc * sizeof(WCHAR));
+		if (!nb) { errno = ENOMEM; return -1; }
+		*buf = nb; *cap = nc;
+	}
+	if (need_quote) (*buf)[(*len)++] = '"';
+	memcpy(*buf + *len, arg, n * sizeof(WCHAR));
+	*len += n;
+	if (need_quote) (*buf)[(*len)++] = '"';
+	return 0;
+}
+
 static WCHAR *build_cmdline(char *const argv[])
 {
 	WCHAR *buf = 0;
@@ -84,12 +126,17 @@ static WCHAR *build_cmdline(char *const argv[])
 		size_t wl;
 		WCHAR *w = __utf8_to_utf16(argv[i], &wl);
 		int rc;
-		if (!w) { free(buf); return 0; }
-		rc = append_arg(&buf, &len, &cap, w);
+		if (!w) { errno = ENOMEM; free(buf); return 0; }
+		rc = i ? append_arg(&buf, &len, &cap, w) : append_prog(&buf, &len, &cap, w);
 		__free(w);
-		if (rc < 0) { free(buf); return 0; }
+		if (rc < 0) { free(buf); return 0; }   /* errno set by the appender */
 	}
-	if (!buf) { buf = malloc(sizeof(WCHAR)); if (buf) buf[0] = 0; return buf; }
+	if (!buf) {
+		buf = malloc(sizeof(WCHAR));
+		if (!buf) { errno = ENOMEM; return 0; }
+		buf[0] = 0;
+		return buf;
+	}
 	buf[len] = 0;
 	return buf;
 }
@@ -103,7 +150,21 @@ static WCHAR *build_env_block(char *const envp[])
 	if (!blk) return 0;
 	for (i = 0; envp && envp[i]; i++) {
 		size_t wl;
-		WCHAR *w = __utf8_to_utf16(envp[i], &wl);
+		WCHAR *w;
+		/* A zero-length entry would be written as an empty string, which
+		 * is exactly the block's terminator, so everything after it would
+		 * be invisible to the child.  There is no environment variable an
+		 * empty entry could name, so drop it.
+		 *
+		 * Entries with no '=' are *not* dropped: execve on Linux passes
+		 * envp to the kernel verbatim and neither glibc nor musl filters
+		 * it, so a program that puts one there sees it again in the
+		 * child's environ.  crt1.c's build_environ hands them back
+		 * unchanged, so the round trip already matches; and Windows uses
+		 * the same shape for its own "=C:=C:\dir" per-drive entries,
+		 * which must survive for the same reason. */
+		if (!envp[i][0]) continue;
+		w = __utf8_to_utf16(envp[i], &wl);
 		if (!w) { free(blk); return 0; }
 		if (len + wl + 2 >= cap) {
 			WCHAR *nb;
@@ -134,20 +195,35 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	NTSTATUS st;
 	int pid = -1, i;
 	ULONG curlen;
+	size_t cmdlen;
 
 	if (__ntpath(path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 
 	wimage = __utf8_to_utf16(path, 0);
-	{ size_t k; if (wimage) for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; }
+	if (!wimage) { errno = ENOMEM; goto out; }
+	{ size_t k; for (k = 0; wimage[k]; k++) if (wimage[k] == '/') wimage[k] = '\\'; }
 	wcmd = build_cmdline(argv);
+	if (!wcmd) goto out;   /* errno set by build_cmdline */
 	wenv = build_env_block(envp ? envp : __environ);
-	if (!wimage || !wcmd || !wenv) { errno = ENOMEM; goto out; }
+	if (!wenv) { errno = ENOMEM; goto out; }
+
+	/* Everything below goes into a UNICODE_STRING, whose Length is a
+	 * USHORT counting *bytes*.  A longer string does not truncate, it
+	 * wraps: the child would be handed a random prefix of its own
+	 * command line and split that.  So each length is checked against
+	 * what the field can hold before it is narrowed. */
+	cmdlen = wcslen_(wcmd);
+	if (cmdlen > __US_MAX_WCHARS) { errno = E2BIG; goto out; }
 
 	RtlInitUnicodeString(&imageDos, wimage);
 	cmdLine.Buffer = wcmd;
-	cmdLine.Length = (USHORT)(wcslen_(wcmd) * sizeof(WCHAR));
-	cmdLine.MaximumLength = cmdLine.Length + sizeof(WCHAR);
+	cmdLine.Length = (USHORT)(cmdlen * sizeof(WCHAR));
+	cmdLine.MaximumLength = (USHORT)(cmdLine.Length + sizeof(WCHAR));
 	curlen = RtlGetCurrentDirectory_U(sizeof curbuf, curbuf);
+	/* RtlGetCurrentDirectory_U reports the size it needed when the buffer
+	 * was too small, so a long enough directory would leave curlen past
+	 * the end of curbuf as well as past a USHORT. */
+	if (curlen > sizeof curbuf - sizeof(WCHAR)) { errno = ENAMETOOLONG; goto out; }
 	cur.Buffer = curbuf;
 	cur.Length = (USHORT)curlen;
 	cur.MaximumLength = sizeof curbuf;
@@ -161,13 +237,22 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	{
 		struct __fd *f0 = __fd_get(0), *f1 = __fd_get(1), *f2 = __fd_get(2);
 		errno = 0;
+		/* A close-on-exec standard descriptor is not the child's to have,
+		 * and its handle is not inheritable anyway, so pass nothing. */
+		if (f0 && (f0->flags & O_CLOEXEC)) f0 = 0;
+		if (f1 && (f1->flags & O_CLOEXEC)) f1 = 0;
+		if (f2 && (f2->flags & O_CLOEXEC)) f2 = 0;
 		pp->StandardInput = f0 ? f0->h : 0;
 		pp->StandardOutput = f1 ? f1->h : 0;
 		pp->StandardError = f2 ? f2->h : 0;
 		pp->WindowFlags |= STARTF_USESTDHANDLES;
 	}
 	if (runtime && runtime_len) {
-		/* RuntimeData points into the block; the child copies it. */
+		/* RuntimeData points into the block; the child copies it.  Its
+		 * length is bounded by the descriptor table -- at most
+		 * sizeof(int) + FD_MAX * (1 + sizeof(HANDLE)) bytes, an order of
+		 * magnitude below what a USHORT holds -- so unlike the command
+		 * line this narrowing cannot wrap. */
 		pp->RuntimeData.Buffer = (PWSTR)runtime;
 		pp->RuntimeData.Length = (USHORT)runtime_len;
 		pp->RuntimeData.MaximumLength = (USHORT)runtime_len;

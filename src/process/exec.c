@@ -25,9 +25,26 @@
 int execve(const char *path, char *const argv[], char *const envp[])
 {
 	int pid, status;
-	__fd_close_all_cloexec();
 	pid = __spawn(path, argv, envp);
 	if (pid < 0) return -1;
+	/* Past this point exec has "succeeded": the new program is running
+	 * and this process only stands in for it until it ends.  Only now may
+	 * the close-on-exec descriptors go.  Closing them before the spawn --
+	 * which is what this used to do -- broke the one thing POSIX promises
+	 * about a *failed* exec, that the process image is unchanged: a
+	 * caller whose execv() returned ENOENT got back a process whose
+	 * cloexec fds had already been closed under it.
+	 *
+	 * Nothing about the child needs them closed first.  A cloexec
+	 * descriptor's handle is created without OBJ_INHERIT (src/fcntl/open.c,
+	 * src/unistd/dup.c, src/unistd/pipe.c, src/fcntl/fcntl.c), so
+	 * RtlCreateUserProcess does not copy it however the flag is set here,
+	 * and __fd_runtime_data (src/internal/fd.c) leaves cloexec entries out
+	 * of the table the child reads back.  The close is still done, rather
+	 * than dropped, because this process outlives the spawn: holding a
+	 * file open for the child's whole run would keep a lock or a pending
+	 * delete alive that a real exec would have released. */
+	__fd_close_all_cloexec();
 	if (waitpid(pid, &status, 0) < 0) return -1;
 	if (WIFEXITED(status)) exit(WEXITSTATUS(status));
 	/* The child died by a signal; this process is standing in for it, so
