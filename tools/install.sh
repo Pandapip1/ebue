@@ -27,7 +27,7 @@ m) mode=$OPTARG ;;
 ?) usage ;;
 esac
 done
-shift $(($OPTIND - 1))
+shift $((OPTIND - 1))
 
 test "$#" -eq 2 || usage
 src=$1
@@ -35,7 +35,7 @@ dst=$2
 tmp="$dst.tmp.$$"
 
 case "$dst" in
-*/) printf "%s: %s ends in /\n", "$0" "$dst" 1>&2 ; exit 1 ;;
+*/) printf "%s: %s ends in /\n" "$0" "$dst" 1>&2 ; exit 1 ;;
 esac
 
 set -C
@@ -53,9 +53,9 @@ trap 'rm -f "$tmp"' EXIT INT QUIT TERM HUP
 umask 077
 
 if test "$symlink" ; then
-ln -s "$1" "$tmp"
+ln -s "$src" "$tmp"
 else
-cat < "$1" > "$tmp"
+cat < "$src" > "$tmp"
 chmod "$mode" "$tmp"
 fi
 

@@ -62,6 +62,8 @@ while eval "fnmatch '*/' \"\${$1}\"" ; do eval "$1=\${$1%/}" ; done
 tryflag () {
 printf "checking whether compiler accepts %s... " "$2"
 echo "typedef int x;" > "$tmpc"
+# CC and the flag lists must word-split; that is what they are.
+# shellcheck disable=SC2086
 if $CC $CFLAGS_TRY $2 -c -o /dev/null "$tmpc" >/dev/null 2>&1 ; then
 printf "yes\n"
 eval "$1=\"\${$1} \$2\""
@@ -78,11 +80,16 @@ CFLAGS_AUTO=
 CFLAGS_TRY=
 srcdir=
 prefix=/usr/local/ntlibc
+# These four are literal make variable references, written verbatim into
+# config.mak for make to expand; the shell must not expand them here.
+# shellcheck disable=SC2016
 exec_prefix='$(prefix)'
+# shellcheck disable=SC2016
 bindir='$(exec_prefix)/bin'
+# shellcheck disable=SC2016
 libdir='$(prefix)/lib'
+# shellcheck disable=SC2016
 includedir='$(prefix)/include'
-syslibdir=
 target=
 debug=no
 warnings=yes
@@ -98,7 +105,7 @@ case "$arg" in
 --bindir=*) bindir=${arg#*=} ;;
 --libdir=*) libdir=${arg#*=} ;;
 --includedir=*) includedir=${arg#*=} ;;
---syslibdir=*) syslibdir=${arg#*=} ;;
+--syslibdir=*) ;;
 --host=*|--target=*) target=${arg#*=} ;;
 --build=*) ;;
 --enable-debug|--enable-debug=yes) debug=yes ;;
@@ -135,7 +142,7 @@ srcdir="${0%/configure}"
 stripdir srcdir
 fi
 abs_builddir="$(pwd)" || fail "$0: cannot determine working directory"
-abs_srcdir="$(cd $srcdir && pwd)" || fail "$0: invalid source directory $srcdir"
+abs_srcdir="$(cd "$srcdir" && pwd)" || fail "$0: invalid source directory $srcdir"
 test "$abs_srcdir" = "$abs_builddir" && srcdir=.
 test "$srcdir" != "." && test -f Makefile && test ! -h Makefile && fail "$0: Makefile already exists in the working directory"
 
@@ -144,8 +151,9 @@ test "$srcdir" != "." && test -f Makefile && test ! -h Makefile && fail "$0: Mak
 #
 i=0
 set -C
-while : ; do i=$(($i+1))
+while : ; do i=$((i+1))
 tmpc="./conf$$-$PPID-$i.c"
+# shellcheck disable=SC2188
 2>|/dev/null > "$tmpc" && break
 test "$i" -gt 50 && fail "$0: cannot create temporary file $tmpc"
 done
@@ -169,15 +177,16 @@ cat > "$tmpc" <<'EOC'
 #endif
 typedef int x;
 EOC
+# shellcheck disable=SC2086
 "$1" $CPPFLAGS $CFLAGS -c -o /dev/null "$tmpc" >/dev/null 2>&1 && CC=$1
 }
 case "$target" in
-i386*|i486*|i586*|i686*|x86) tryccwin ${CROSS_COMPILE}tcc ; tryccwin i386-win32-tcc ; tryccwin i686-w64-mingw32-gcc ;;
-x86_64*|amd64*) tryccwin ${CROSS_COMPILE}tcc ; tryccwin x86_64-win32-tcc ; tryccwin x86_64-w64-mingw32-gcc ;;
+i386*|i486*|i586*|i686*|x86) tryccwin "${CROSS_COMPILE}tcc" ; tryccwin i386-win32-tcc ; tryccwin i686-w64-mingw32-gcc ;;
+x86_64*|amd64*) tryccwin "${CROSS_COMPILE}tcc" ; tryccwin x86_64-win32-tcc ; tryccwin x86_64-w64-mingw32-gcc ;;
 esac
-tryccwin ${CROSS_COMPILE}tcc
-tryccwin ${CROSS_COMPILE}cc
-tryccwin ${CROSS_COMPILE}gcc
+tryccwin "${CROSS_COMPILE}tcc"
+tryccwin "${CROSS_COMPILE}cc"
+tryccwin "${CROSS_COMPILE}gcc"
 test -z "$target" && tryccwin i386-win32-tcc
 test -z "$target" && tryccwin x86_64-win32-tcc
 printf "%s\n" "$CC"
@@ -185,6 +194,7 @@ test -n "$CC" || { echo "$0: cannot find a C compiler targeting Windows (try CC=
 
 printf "checking whether C compiler works... "
 echo "typedef int x;" > "$tmpc"
+# shellcheck disable=SC2086
 if output=$($CC $CPPFLAGS $CFLAGS -c -o /dev/null "$tmpc" 2>&1) ; then
 printf "yes\n"
 else
@@ -206,6 +216,7 @@ i386-win32
 unknown
 #endif
 EOC
+# shellcheck disable=SC2086
 target=$($CC $CPPFLAGS -E "$tmpc" 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$' | tail -n1 | tr -d '[:space:]')
 printf "%s\n" "$target"
 fi
@@ -226,6 +237,7 @@ cat > "$tmpc" <<'EOC'
 #endif
 typedef int x;
 EOC
+# shellcheck disable=SC2086
 if $CC $CPPFLAGS $CFLAGS -c -o /dev/null "$tmpc" >/dev/null 2>&1 ; then
 printf "yes\n"
 else
@@ -240,9 +252,11 @@ if test -z "$AR" ; then
 printf "checking for archiver... "
 if $CC -ar 2>&1 | grep -qi 'usage\|tcc' ; then
 AR="$CC -ar"
-elif cmdexists ${CROSS_COMPILE}ar ; then
+elif cmdexists "${CROSS_COMPILE}ar" ; then
 AR=${CROSS_COMPILE}ar
 else
+# A command name to put in config.mak, not the output of running ar.
+# shellcheck disable=SC2209
 AR=ar
 fi
 printf "%s\n" "$AR"
@@ -254,7 +268,7 @@ fi
 if test -z "$WINE" ; then
 case "$ARCH" in
 x86_64) for w in wine64 /usr/lib/wine/wine64 wine ; do cmdexists "$w" && { WINE=$w ; break ; } ; done ;;
-*) for w in wine ; do cmdexists "$w" && { WINE=$w ; break ; } ; done ;;
+*) cmdexists wine && WINE=wine ;;
 esac
 fi
 
@@ -265,11 +279,11 @@ tryflag CFLAGS_C99FSE -std=c99
 tryflag CFLAGS_C99FSE -nostdinc
 tryflag CFLAGS_C99FSE -fno-builtin
 
-if test "x$debug" = xyes ; then
+if test "$debug" = yes ; then
 CFLAGS_AUTO=-g
 fi
 
-if test "x$warnings" = xyes ; then
+if test "$warnings" = yes ; then
 tryflag CFLAGS_AUTO -Wall
 tryflag CFLAGS_AUTO -Wno-unused-function
 fi
@@ -307,7 +321,7 @@ KERNEL32 = $kernel32
 EOM
 exec 1>&3 3>&-
 
-test "$srcdir" = "." || ln -sf $srcdir/Makefile .
+test "$srcdir" = "." || ln -sf "$srcdir/Makefile" .
 
 #
 # Enable the tracked pre-commit hook (regenerates boot/kaem/ and blocks

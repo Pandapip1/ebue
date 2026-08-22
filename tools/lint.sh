@@ -42,6 +42,8 @@
 
 set -u
 
+# `CDPATH=` is an assignment prefixing the `cd`, not a botched assignment.
+# shellcheck disable=SC1007
 srcdir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$srcdir" || exit 1
 
@@ -191,7 +193,8 @@ stage_analyze() {
 		for f in $(sources_for "$arch"); do
 			if [ -n "$tidy" ]; then
 				# .clang-tidy at the tree root supplies the check list.
-				# shellcheck disable=SC2086
+				# pick_target prints either nothing or one flag.
+				# shellcheck disable=SC2046,SC2086
 				"$tidy" --quiet "$f" -- $(pick_target "$arch") $flags \
 					>> "$out" 2>/dev/null
 			else

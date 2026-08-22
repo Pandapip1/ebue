@@ -86,6 +86,8 @@ for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
 		echo "$f  (built UBSan-only: aligned word-at-a-time scan)" >> "$OBJ/partial.txt" ;;
 	esac
 	o="$OBJ/obj/$(echo "$f" | tr / _).o"
+	# $xcflags is a flag list and must word-split.
+	# shellcheck disable=SC2086
 	if $CC -c $xcflags -w "$srcdir/$f" -o "$o" 2> "$o.err"; then
 		echo "$f" >> "$OBJ/compiled.txt"
 	else
@@ -94,6 +96,7 @@ for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
 	fi
 done
 
+# shellcheck disable=SC2086
 $CC -c $CFLAGS -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
 
 # An archive would be wrong here.  libclang_rt.asan.so exports weak
@@ -102,7 +105,10 @@ $CC -c $CFLAGS -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
 # from the DSO and the matching archive member never pulled -- i.e. the
 # tests would be exercising glibc, not ntlibc.  Linking the objects
 # unconditionally, hidden, makes ntlibc's definitions the ones that bind.
-LIBOBJS=$(ls "$OBJ"/obj/*.o | tr '\n' ' ')
+# Object names are generated above from source paths with `tr / _`, so the
+# glob can never produce a name needing quoting.  LIBOBJS is expanded
+# unquoted below, as a list of link inputs.
+LIBOBJS=$(echo "$OBJ"/obj/*.o)
 
 if [ "$mode" = "--objects-only" ]; then
 	echo "asan: $(wc -l < "$OBJ/compiled.txt") src/*.c objects in $OBJ/obj"
@@ -139,7 +145,7 @@ not_native()
 TINC="-I$srcdir/obj/include -I$srcdir/include -I$srcdir/arch/$ARCH -I$srcdir/arch/generic"
 ran=0 passed=0 nolink=0 skipped=0
 : > "$OBJ/unlinkable.txt"
-for t in $(cd "$srcdir" && ls test/*.c | sort); do
+for t in $(cd "$srcdir" && echo test/*.c); do
 	n=$(basename "$t" .c)
 	exe="$OBJ/test/$n"
 	why=$(not_native "$n")
@@ -148,6 +154,8 @@ for t in $(cd "$srcdir" && ls test/*.c | sort); do
 		[ "$mode" = "--quiet" ] || echo "  SKIP $n  ($why)"
 		continue
 	fi
+	# $SAN/$TINC/$LINKFLAGS/$LIBOBJS are flag and object lists: word-split.
+	# shellcheck disable=SC2086
 	if $CC $SAN -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
 	     $TINC $LINKFLAGS "$srcdir/$t" "$OBJ/ntstubs.o" $LIBOBJS -o "$exe" \
 	     2> "$exe.link.err"; then

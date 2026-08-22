@@ -31,3 +31,42 @@ uninitvar:src/setjmp/*
 # Reported when a suppression above happens not to match on some arch or
 # cppcheck version; not itself a finding about the code.
 unmatchedSuppression
+
+# We build with -nostdinc against our own <stdarg.h>, which defines
+# va_start/va_arg/va_end as the __builtin_* forms the compilers actually
+# implement.  cppcheck's va_list checker only recognises the names it
+# expects from a system stdarg.h, so after preprocessing it sees a va_list
+# that is never started and reports every use of it.  Applies to every
+# variadic function in the tree, not to any particular one.
+va_list_usedBeforeStarted
+
+# printf.c reverses a digit buffer into a local (`rev`, `b2`) and emits
+# exactly as many bytes as it wrote.  The digit count comes from a
+# do/while, so it is >= 1, but cppcheck's value flow drops that lower
+# bound, assumes the copy loop runs zero times, and calls the local
+# uninitialised.  The length passed to out() is the same count, so a
+# zero-length case would read nothing either way.
+uninitvar:src/stdio/printf.c
+
+# SIG_DFL/SIG_IGN/SIG_ERR are (void (*)(int))0/1/-1 by definition -- the
+# integer-literal-to-pointer casts C requires of <signal.h>, not a
+# portability hazard we can write our way out of.
+intToPointerCast:src/signal/signal.c
+
+# CLIENT_ID.UniqueProcess/UniqueThread are declared HANDLE by NT but hold
+# small integer ids, which is what a pid_t is; the cast back is the
+# documented way to read them.  Nothing is truncated: pid_t and the id
+# space are both 32-bit on either win32 target.
+CastAddressToIntegerAtReturn:src/unistd/getpid.c
+
+# memmove's overlap test is musl's: the unsigned wrap in `- 2*n` is the
+# point of it, computing the "distance is at least n in either direction"
+# predicate in one comparison.
+signConversion:src/string/memmove.c
+
+# `(int)hi >> 31` in __ashrdi3 is an arithmetic right shift of a 32-bit
+# signed value by 31, which is implementation-defined (C99 6.5.7p5), not
+# undefined -- only a count >= the width would be.  cppcheck applies its
+# left-shift rule to `>>` as well and misreports it; verified against
+# cppcheck 2.21.1 with a two-line test case.
+shiftTooManyBitsSigned:arch/*/src/int64.c
