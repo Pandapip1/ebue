@@ -59,6 +59,37 @@ etc.), it does, and it needs a real ntdll-only fallback path too.
   fork()/WOW64 behavior and kernel32 code paths against real Windows
   rather than Wine's emulation of it.
 
+## Dependency updates (Renovate)
+
+`renovate.json5` configures [Renovate](https://docs.renovatebot.com/) to open
+PRs when a pinned dependency moves. It manages two things:
+
+- **GitHub Actions versions** in `.github/workflows/*.yml`. Non-major bumps
+  are grouped into one weekly PR; majors get a PR each. Majors are the ones
+  that bite: `actions/*` v4 moved to the deprecated Node 20 runtime, and a
+  `cache/restore@v4` cannot read an entry written by `cache@v6` — it just
+  misses silently and the job fails later, somewhere unrelated. When bumping
+  a pair (`upload-artifact`/`download-artifact`, `cache`/`cache/restore`),
+  bump every leg in lockstep.
+- **The pinned tinycc commit**, `TINYCC_SHA`, tracked against the `mob`
+  branch of TinyCC's repo via a `customManagers` regex rule (Renovate has no
+  built-in manager for a bare SHA in an `env:` block). Checked monthly.
+
+Nothing auto-merges, deliberately — every bump here can change build
+behaviour. Before merging a **tinycc** bump specifically:
+
+- `make -j4 check` is 15/15 for *both* `i386-win32` and `x86_64-win32`;
+- `make generated` leaves no drift;
+- the real-Windows CI leg passes, not just the Wine one;
+- `TINYCC_SHA` ends up identical in `ci.yml` and `fuzz.yml` — fuzz.yml reads
+  the toolchain cache entry ci.yml writes, keyed on that value, so a mismatch
+  silently rebuilds tinycc from scratch every night;
+- tinycc's own log between the old and new commit has no codegen or
+  PE-output change that ntlibc would need to adapt to.
+
+Renovate only runs once the GitHub App is enabled on the repository; the
+config file alone does nothing.
+
 ## Linting (`make lint`)
 
 The library is built with tcc, which is far more permissive than gcc or

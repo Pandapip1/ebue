@@ -1,0 +1,102 @@
+// SPDX-FileCopyrightText: (C) 2026 Gavin John
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Renovate keeps this repo's pinned dependencies from going stale silently.
+// It only does anything once the Renovate GitHub App is enabled on the
+// repository -- this file on its own is inert.
+//
+// Nothing here auto-merges, on purpose. Every dependency this repo pins can
+// change build behaviour: a GitHub Actions major can swap the Node runtime
+// underneath a step, and the tinycc pin *is* the compiler ntlibc is built
+// and tested with. Renovate's job here is to open a PR that says "this moved",
+// and CI plus a human decide whether it is safe.
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    // Commit subjects in this repo are plain "area: what changed", not
+    // Conventional Commits; keep Renovate's matching that style.
+    ":semanticCommitsDisabled"
+  ],
+
+  "timezone": "UTC",
+  // One batch a week, early Monday. Enough to catch a deprecation warning
+  // long before it becomes a broken run, without a PR every time an action
+  // cuts a patch release.
+  "schedule": ["* 0-6 * * 1"],
+
+  // A dashboard issue is the low-noise half of this: everything Renovate
+  // knows about is listed there even when it is not opening a PR.
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+
+  // Solo project: never merge anything without a human looking at CI.
+  "automerge": false,
+
+  "packageRules": [
+    {
+      "description": "Non-major Actions bumps ride together in one PR.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "groupName": "GitHub Actions (non-major)",
+      "automerge": false
+    },
+    {
+      "description": [
+        "Action majors get their own PR each. These are the ones that",
+        "actually break: v4 -> v6/v7 moved cache/artifact off Node 20, and a",
+        "v4 cache restore silently cannot read an entry written by cache@v6,",
+        "so a half-updated tree loses its toolchain and fails elsewhere.",
+        "Bump every actions/* leg of a pair in lockstep."
+      ],
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "automerge": false
+    },
+    {
+      "description": [
+        "The tinycc toolchain pin. Deliberately pinned (see the comment above",
+        "TINYCC_SHA in .github/workflows/ci.yml): it must be bumped only after",
+        "re-validating ntlibc against the new commit. Never grouped, never",
+        "merged on green alone, and checked monthly rather than weekly since",
+        "tinycc's mob branch moves whenever it moves."
+      ],
+      "matchDepNames": ["tinycc"],
+      "schedule": ["* 0-6 1 * *"],
+      "groupName": null,
+      "automerge": false,
+      "commitMessageTopic": "the pinned tinycc toolchain commit",
+      "prBodyNotes": [
+        "**Do not merge on a green CI run alone.** This changes the compiler",
+        "ntlibc is built with. Re-validate before merging: `make -j4 check`",
+        "must be 15/15 for both i386-win32 and x86_64-win32, `make generated`",
+        "must stay drift-free, and the real-Windows leg (not just Wine) must",
+        "pass. Check tinycc's log between the old and new commit for codegen",
+        "or PE-output changes.",
+        "",
+        "`TINYCC_SHA` is duplicated in `ci.yml` and `fuzz.yml` and both must",
+        "end up identical -- fuzz.yml reads the cache entry ci.yml writes,",
+        "keyed on this value."
+      ]
+    }
+  ],
+
+  "customManagers": [
+    {
+      // TINYCC_SHA is a bare 40-hex commit in an `env:` block, which no
+      // built-in manager understands. The git-refs datasource takes the
+      // named ref in currentValue and reports the digest it currently points
+      // at, so Renovate can offer "mob has moved to <sha>" as a PR.
+      // tinycc's default branch is `mob` (git ls-remote --symref HEAD).
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["TINYCC_SHA:\\s*(?<currentDigest>[0-9a-f]{40})"],
+      "currentValueTemplate": "mob",
+      "depNameTemplate": "tinycc",
+      "packageNameTemplate": "https://github.com/TinyCC/tinycc.git",
+      "datasourceTemplate": "git-refs"
+    }
+  ]
+}
