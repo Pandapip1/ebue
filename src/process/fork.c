@@ -167,10 +167,9 @@ pid_t fork(void)
 	if (__child_add(pid, info.Process) < 0) {
 		/* The table grows on demand, so this only happens when it could
 		 * not be grown -- the heap is exhausted.  Degrade rather than
-		 * fail the fork: the child still runs, and waitpid(pid) can
-		 * reopen it by pid while it is alive (src/process/wait.c), but
-		 * once it exits it is unreapable and waitpid(-1)/wait() never
-		 * see it at all -- the same tradeoff __spawn makes. */
+		 * fail the fork: the child still runs, but it is unwaitable --
+		 * waitpid() only ever consults the table (src/process/wait.c) --
+		 * the same tradeoff __spawn makes. */
 		NtClose(info.Process);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,

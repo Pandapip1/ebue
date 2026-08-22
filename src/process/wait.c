@@ -168,39 +168,28 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
 	if (pid < 0) pid = -pid;   /* process groups are single processes here */
 	c = __child_find(pid);
 	if (!c) {
-		/* Not in the table.  Almost always that means it is simply not
-		 * our child: the table grows on demand now (children.c), so the
-		 * only way a real child misses it is an allocation failure in
-		 * __child_add, whereupon __spawn/fork close the handle.  Reopen
-		 * the process by pid and check that it really is ours: its
-		 * InheritedFromUniqueProcessId must be us.  This can only work
-		 * while the child is still running -- once it exits and nobody
-		 * holds a handle, the process object is gone and the pid cannot
-		 * be opened at all -- and waitpid(-1)/wait() cannot see such
-		 * children either, since they only scan the table. */
-		OBJECT_ATTRIBUTES oa;
-		CLIENT_ID cid;
-		HANDLE h;
-		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-		cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid;
-		cid.UniqueThread = 0;
-		st = NtOpenProcess(&h, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
-		if (!NT_SUCCESS(st)) { errno = ECHILD; return -1; }
-		st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
-		if (!NT_SUCCESS(st) || (pid_t)pbi.InheritedFromUniqueProcessId != getpid()) {
-			NtClose(h);
-			errno = ECHILD;
-			return -1;
-		}
-		st = NtWaitForSingleObject(h, 0, options & WNOHANG ? &zero : 0);
-		if (st == STATUS_TIMEOUT) { NtClose(h); return 0; }
-		if (!NT_SUCCESS(st)) { NtClose(h); return __set_errno_status(st); }
-		st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
-		if (status) *status = NT_SUCCESS(st) ? __wait_encode_status((int)pbi.ExitStatus) : 0;
-		if (ru) fill_child_rusage(h, ru);
-		else { struct rusage tmp; fill_child_rusage(h, &tmp); }
-		NtClose(h);
-		return pid;
+		/* Not in the table means not waitable, full stop.
+		 *
+		 * There used to be a fallback here that reopened the pid with
+		 * NtOpenProcess and accepted the process if its
+		 * InheritedFromUniqueProcessId was us, to cover a child lost to an
+		 * allocation failure in __child_add.  It rested on the assumption
+		 * that an exited process with no handles left to it cannot be
+		 * opened at all -- true under Wine, false on Windows, where the
+		 * kernel process object outlives the last handle.  So on real
+		 * Windows waitpid() reopened an already-reaped child and handed
+		 * back its pid and exit status a second time, where POSIX requires
+		 * ECHILD: a reaped child has ceased to exist and is no longer a
+		 * child of this process (wait.html DESCRIPTION/ERRORS).
+		 * test/waitpid-overflow.c:143 caught it on the real-Windows CI leg
+		 * once wineserver was taught to keep exited pids openable too.
+		 *
+		 * A child that never made it into the table is therefore
+		 * unwaitable, which is the honest outcome: __child_add failing is
+		 * already a hard error at spawn time, and waitpid(-1)/wait() could
+		 * never see such a child either, since they only scan the table. */
+		errno = ECHILD;
+		return -1;
 	}
 	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); __child_remove(c); return pid; }
 

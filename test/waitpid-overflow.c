@@ -10,9 +10,9 @@
  * The children exit immediately rather than sleeping first.  With 260
  * spawns ahead of the first wait they are all long gone by the time
  * waitpid runs, so this only passes if the parent still holds a process
- * handle for each: an exited process whose last handle was closed cannot
- * be reopened by pid at all.  That makes it a direct test of the table
- * keeping every handle instead of dropping the ones that did not fit.
+ * handle for each -- waitpid() consults nothing but the child table.
+ * That makes it a direct test of the table keeping every handle instead
+ * of dropping the ones that did not fit.
  *
  * Also checks the wait status encoding itself: every exit code in 0..255
  * must come back as WIFEXITED with that exact code (129..192 used to be
@@ -137,9 +137,12 @@ int main(int argc, char **argv)
 			printf("  child %d pid %d status %#x\n", i, (int)pids[i], status);
 	}
 
-	/* Already reaped: a second wait on a tracked child is ECHILD.  (An
-	 * untracked one may still be openable until NT tears the process
-	 * object down, so the reopen path cannot promise the same.) */
+	/* Already reaped: a second wait is ECHILD, because a reaped child has
+	 * ceased to exist and is no longer a child of this process.  This
+	 * used to pass under Wine and fail on real Windows, where the kernel
+	 * process object outlives the last handle and waitpid()'s old
+	 * reopen-by-pid fallback resurrected the corpse; that fallback is
+	 * gone (src/process/wait.c). */
 	errno = 0; CHECK(waitpid(pids[0], &status, 0) == -1 && errno == ECHILD);
 
 	/* A bogus pid, and a live process that is not our child. */

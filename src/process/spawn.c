@@ -289,10 +289,10 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	if (__child_add(pid, info.Process) < 0) {
 		/* The table grows on demand (src/process/children.c), so this
 		 * only happens when the heap is exhausted.  Degrade rather than
-		 * fail the spawn: the process still runs, and waitpid(pid) can
-		 * reopen it by pid while it is alive (src/process/wait.c), but
-		 * once it exits it is unreapable and waitpid(-1)/wait() never
-		 * see it. */
+		 * fail the spawn: the process still runs, but it is unwaitable
+		 * -- waitpid() only ever consults the table (src/process/wait.c
+		 * used to reopen the pid instead, which was wrong; see the
+		 * comment there). */
 		NtClose(info.Process);
 	}
 
