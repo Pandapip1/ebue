@@ -29,6 +29,14 @@
 set -eu
 srcdir=$(cd "$(dirname "$0")/.." && pwd)
 
+# Leak detection on, for the reason given in tools/asan-build.sh: ntlibc's
+# heap is ASan's heap here, so LSan can account for every block.  A fuzzer
+# is where a leak per call shows up fastest -- libFuzzer checks after each
+# input, so one leaking format string is reported in seconds rather than
+# waiting for an absurd RSS to be noticed.  It found the sprintf/snprintf
+# one-byte-per-call leak the moment it was switched on.
+LEAKS=${NTLIBC_LEAKS:-1}
+
 # The harnesses use the shared ASan runtime (see tools/asan-build.sh for
 # why), and libFuzzer drags in libstdc++, which the linker puts ahead of
 # it.  ASan refuses to start unless its runtime is first in the library
@@ -50,7 +58,7 @@ if [ "${1:-}" = "--repro" ]; then
 	name=${2:-$(basename "$(dirname "$art")")}
 	make -C "$srcdir/fuzz" "$srcdir/obj/fuzz/fuzz_$name" >/dev/null
 	exec env LD_PRELOAD="$ASAN_SO" \
-	     ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	     ASAN_OPTIONS=detect_leaks=$LEAKS UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$name" "$art"
 fi
 
@@ -68,7 +76,7 @@ rc=0
 for h in $harnesses; do
 	echo "== fuzz_$h (${time}s)"
 	if ! LD_PRELOAD="$ASAN_SO" \
-	     ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	     ASAN_OPTIONS=detect_leaks=$LEAKS UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$h" \
 	     -max_total_time="$time" -max_len=256 -print_funcs=0 -print_final_stats=1; then
 		echo "   fuzz_$h FOUND SOMETHING (input shown above)"

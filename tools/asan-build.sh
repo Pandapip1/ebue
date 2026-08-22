@@ -17,7 +17,8 @@
 #                   by fuzz/Makefile so the fuzzers and this script share
 #                   one mechanically derived file list.
 # Env:   NTLIBC_CC (default clang), NTLIBC_ASAN_OBJ (default obj/asan),
-#        NTLIBC_ASAN_EXTRA (extra CFLAGS, e.g. -fsanitize=fuzzer-no-link)
+#        NTLIBC_ASAN_EXTRA (extra CFLAGS, e.g. -fsanitize=fuzzer-no-link),
+#        NTLIBC_LEAKS (default 1; set 0 to switch LeakSanitizer off)
 
 set -eu
 
@@ -27,6 +28,17 @@ OBJ=${NTLIBC_ASAN_OBJ:-$srcdir/obj/asan}
 ARCH=${NTLIBC_ARCH:-x86_64}
 mode=${1:-}
 EXTRA=${NTLIBC_ASAN_EXTRA:-}
+
+# LeakSanitizer is on, and that is the point.  ntlibc's malloc is
+# RtlAllocateHeap, which fuzz/ntstubs.c answers with ASan's own allocator,
+# so LSan sees every ntlibc allocation with a full ntlibc stack -- there is
+# nothing here it cannot account for and no suppression file is needed.  It
+# used to be off for no better reason than that it was off by default in
+# the fuzzers this was modelled on, and that cost real bugs: sscanf leaked
+# a BUFSIZ block per call from the first commit until 64ea74e, through a
+# green `make check` the whole time, and LSan reports it in one run.  Set
+# NTLIBC_LEAKS=0 only to isolate some other failure.
+LEAKS=${NTLIBC_LEAKS:-1}
 
 # -shared-libasan is not cosmetic either: with the static runtime, ASan's
 # own calls to sysconf()/malloc() bind at link time to ntlibc's versions,
@@ -170,7 +182,7 @@ for t in $(cd "$srcdir" && echo test/*.c); do
 		# but the dynamic runtime this script needs (-shared-libasan) never
 		# lets a program's definition preempt its own, so it is set here too
 		# -- for that one test, so every other test keeps the strict default.
-		aopts=detect_leaks=0
+		aopts=detect_leaks=$LEAKS
 		[ "$n" = malloc ] && aopts=$aopts,allocator_may_return_null=1
 		if ASAN_OPTIONS=$aopts UBSAN_OPTIONS=print_stacktrace=1 \
 		   timeout 120 "$exe" > "$exe.out" 2>&1 < /dev/null; then

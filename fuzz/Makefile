@@ -100,11 +100,14 @@ $(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR
 	  $(ASAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o \
 	  $(LIBDIR)/obj/*.o -ldl -lm -o $@
 
+# Leak detection on; see tools/asan-build.sh for why it can be trusted here.
+LEAKS ?= 1
+
 run: all
 	@rc=0; \
 	for h in $(HARNESSES); do \
 	   echo "== fuzz_$$h ($(FUZZ_TIME)s)"; \
-	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS) UBSAN_OPTIONS=print_stacktrace=1 \
 	   $(OUT)/fuzz_$$h -max_total_time=$(FUZZ_TIME) -max_len=256 \
 	     -print_funcs=0 -print_final_stats=1 \
 	   || { echo "   fuzz_$$h FOUND SOMETHING"; rc=1; }; \

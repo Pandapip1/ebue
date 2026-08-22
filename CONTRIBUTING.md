@@ -171,6 +171,38 @@ definitions are linked hidden, so they are not in the dynamic symbol table
 and cannot be found that way) and does its own reporting, because
 formatting a printf bug with the printf under test proves nothing.
 
+**Leaks are checked, and the fuzzers are where that pays.** `make asan`
+and `make fuzz` run with `detect_leaks=1`. Nothing needs suppressing:
+ntlibc's `malloc` is `RtlAllocateHeap`, which `fuzz/ntstubs.c` answers with
+ASan's own allocator, so LeakSanitizer sees every ntlibc block with a full
+ntlibc stack. Set `NTLIBC_LEAKS=0` (make variable `LEAKS=0` for
+`make -C fuzz run`) only to isolate some other failure.
+
+This was off until it was measured, and the measurement is worth recording.
+`sscanf` leaked a `BUFSIZ` block per call from the initial commit until
+64ea74e, through a green `make check` the whole time; it was noticed only
+because a fuzzer's peak RSS reached 28 GB. Rebuilt with the pre-fix
+`src/stdio/scanf.c` and `detect_leaks=1`, LSan reports it on the first
+`sscanf` call, naming `rd` → `vsscanf_impl` → `sscanf`. Switching it on
+immediately found the same defect in the sibling function: `vxprintf_mem`
+never freed the one-byte staging buffer `__ensure_buf` hands the throwaway
+memory `FILE`, so every `sprintf`/`snprintf` leaked a byte.
+
+Note *which* instrument found it. `make asan`'s native tests never
+reported that leak: LSan runs from the at-exit hook, and the one native
+test that uses `sprintf` heavily (`test/stdio`) aborts on a UBSan report
+before it gets there. The fuzzers found it in seconds, because libFuzzer
+checks for leaks after every input rather than once at exit. Prefer a
+harness over a test when the question is "does this leak".
+
+Valgrind was considered here and deliberately not added. It cannot see the
+PE/Wine side either, so it would be a second native approximation; it does
+not coexist with ASan, so it would need a third build of `src/*.c`; and the
+one thing it offers that this tooling does not — uninitialised-read
+tracking — is exactly the check that a `-nostdinc` libc linked against a
+sanitizer runtime makes noisiest. If that check is wanted, MSan on this
+same native build is the cheaper route, and it is still unbuilt work.
+
 Two consequences of linking a libc against a libc, worth knowing before
 you debug them:
 
