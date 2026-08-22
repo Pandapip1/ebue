@@ -35,7 +35,14 @@
 #define IOV_MAX 1024
 #define SYMLOOP_MAX 40
 #define WORD_BIT 32
-#define SSIZE_MAX LONG_MAX
+/* SSIZE_MAX: "Maximum value for an object of type ssize_t" -- ssize_t is
+ * typedef'd from the arch's pointer-width _Addr (int on i386, long long
+ * on x86_64; see arch/{i386,x86_64}/bits/alltypes.h.in), so its actual maximum is
+ * arch-specific and is defined in bits/limits.h alongside LONG_MAX,
+ * *not* derived from LONG_MAX here (long stays 32-bit on both arches
+ * under this target's LLP64 model, so LONG_MAX would silently truncate
+ * SSIZE_MAX to 2^31-1 on x86_64, where ssize_t is actually 64 bits --
+ * see test/posix-limits.c). */
 #define TZNAME_MAX 6
 #define TTY_NAME_MAX 32
 #define HOST_NAME_MAX 255
