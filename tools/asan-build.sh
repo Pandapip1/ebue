@@ -19,6 +19,7 @@
 # Env:   NTLIBC_CC (default clang), NTLIBC_ASAN_OBJ (default obj/asan),
 #        NTLIBC_ASAN_EXTRA (extra CFLAGS, e.g. -fsanitize=fuzzer-no-link),
 #        NTLIBC_LEAKS (default 1; set 0 to switch LeakSanitizer off)
+#        NTLIBC_ASAN_CONVERSION=1 (see CONVSAN below)
 
 set -eu
 
@@ -48,6 +49,39 @@ SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined -shared-libasa
 RTDIR=$($CC -print-file-name=libclang_rt.asan-x86_64.so)
 RTDIR=$(dirname "$RTDIR")
 LINKFLAGS="-Wl,-rpath,$RTDIR"
+
+# -fsanitize=implicit-conversion is NOT part of the -fsanitize=undefined
+# group; it is a separate group of three checks, and they have very
+# different signal in this codebase.  Measured over the native test run
+# plus a 4x90s libFuzzer run of fuzz/ (~6.5M execs per harness):
+#
+#   implicit-{un,}signed-integer-truncation
+#       0 findings.  A libc narrows constantly -- `unsigned char` in the
+#       ctype and string code, int->char in the digit paths -- but UBSan
+#       reports only when the value actually *changes*, and none of those
+#       ever do.  So it costs nothing today and it is the class that would
+#       catch a real narrowing bug: on by default, and made fatal below so
+#       one fails the run rather than scrolling past.
+#
+#   implicit-integer-sign-change
+#       6 sites, every one a deliberate idiom and none a bug: memmove.c's
+#       `-2*n` overlap test, the `unsigned u = i` in ffs/ffsl/ffsll,
+#       time_impl.h's `mp + (mp < 10 ? 3 : -9)` month wrap, and open.c's
+#       `~FILE_WRITE_DATA` mask.  Off by default and report-only when on,
+#       the way tools/lint.sh treats LINT_CONVERSION: worth a periodic
+#       read, not worth a gate.  NTLIBC_ASAN_CONVERSION=1 enables it.
+#
+# Neither catches an *explicit* cast -- `(USHORT)v` is silent under all
+# three -- so this is not a substitute for reading narrowing casts.
+#
+# CONVSAN applies to the library only, never to test/*.c or ntstubs.c:
+# a narrowing in test code is not a finding about ntlibc.
+CONVSAN="-fsanitize=implicit-signed-integer-truncation,implicit-unsigned-integer-truncation \
+ -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-unsigned-integer-truncation"
+if [ "${NTLIBC_ASAN_CONVERSION:-0}" = 1 ]; then
+	CONVSAN="$CONVSAN -fsanitize=implicit-integer-sign-change"
+fi
+
 INC="-I$srcdir/src/internal -I$srcdir/obj/include -I$srcdir/include \
      -I$srcdir/arch/$ARCH -I$srcdir/arch/generic"
 # -fvisibility=hidden matters: without it ntlibc's own malloc() lands in
@@ -55,7 +89,7 @@ INC="-I$srcdir/src/internal -I$srcdir/obj/include -I$srcdir/include \
 # ASan's own start-up allocate through RtlAllocateHeap before the shim's
 # constructor has run.  Hidden keeps ntlibc's definitions for ntlibc (and
 # the tests, which are in the same module) and out of everyone else's way.
-CFLAGS="$SAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
+CFLAGS="$SAN $CONVSAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
         -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL $INC $EXTRA"
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
@@ -200,4 +234,14 @@ for t in $(cd "$srcdir" && echo test/*.c); do
 done
 
 echo "asan: $passed/$ran tests passed, $skipped not applicable natively, $nolink unlinkable"
+
+# implicit-integer-sign-change is recoverable, so a test that reports one
+# still passes and the report scrolls by unread.  Collect the distinct
+# sites and say how many there were.  (The truncation checks are fatal, so
+# they turn up as a FAIL above and need no summary.)
+if [ "${NTLIBC_ASAN_CONVERSION:-0}" = 1 ]; then
+	nconv=$(grep -h 'runtime error: implicit conversion' "$OBJ"/test/*.out 2>/dev/null \
+		| sed 's/: runtime error.*//' | sort -u | tee "$OBJ/conversion.txt" | wc -l)
+	echo "asan: $nconv implicit-conversion site(s) -> $OBJ/conversion.txt (report-only)"
+fi
 [ "$passed" = "$ran" ]
