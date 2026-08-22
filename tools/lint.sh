@@ -299,6 +299,7 @@ for s in $stages; do
 	cppcheck) stage_cppcheck || findings=1 ;;
 	shell)    stage_shell    || findings=1 ;;
 	ushort)   tools/lint-ushort.sh || findings=1 ;;
+	undefined) tools/lint-undefined.sh || findings=1 ;;
 	*) note "unknown stage: $s"; exit 2 ;;
 	esac
 done

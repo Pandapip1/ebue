@@ -73,6 +73,32 @@ static void test_env(void)
 	CHECK(!env_has("NTLIBC_PUTENV="));
 }
 
+/* ---- system() ---- */
+static void test_system(void)
+{
+	int status;
+
+	/* A command processor must be available on any Windows host this
+	 * runs on (cmd.exe always exists); see src/stdlib/system.c. */
+	CHECK(system(NULL) != 0);
+
+	status = system("exit 3");
+	CHECK(WIFEXITED(status));
+	CHECK(WEXITSTATUS(status) == 3);
+
+	status = system("exit 0");
+	CHECK(WIFEXITED(status));
+	CHECK(WEXITSTATUS(status) == 0);
+
+	/* A command containing a space exercises append_arg's quoting of
+	 * the "/c" argument -- see the design comment in system.c for why
+	 * this, and not an embedded quote or trailing backslash, is the
+	 * case this is expected to round-trip through cmd.exe correctly. */
+	status = system("cmd /c exit 7");
+	CHECK(WIFEXITED(status));
+	CHECK(WEXITSTATUS(status) == 7);
+}
+
 /* ---- setjmp/longjmp ---- */
 static jmp_buf jb_outer, jb_inner;
 
@@ -329,6 +355,7 @@ int main(int argc, char **argv)
 
 	unlink("misc-exit-flush.tmp");
 	test_env();
+	test_system();
 	test_setjmp();
 	test_signal();
 	test_libgen();

@@ -117,13 +117,17 @@ void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);
 char *setstate (char *);
 int putenv (char *);
-int posix_openpt (int);
-int grantpt (int);
-int unlockpt (int);
-char *ptsname (int);
+int posix_openpt (int);  /* undefined-ok: Unix98 pseudo-terminal allocation
+	has no NT counterpart (NT's console/pipe model is a different shape
+	entirely); grantpt/unlockpt/ptsname[_r] below are the rest of the
+	same PTY API and share this reason */
+int grantpt (int);  /* undefined-ok: see posix_openpt */
+int unlockpt (int);  /* undefined-ok: see posix_openpt */
+char *ptsname (int);  /* undefined-ok: see posix_openpt */
 char *l64a (long);
 long a64l (const char *);
-void setkey (const char *);
+void setkey (const char *);  /* undefined-ok: DES-based, like crypt()/
+	encrypt() in unistd.h -- not reimplemented from scratch */
 double drand48 (void);
 double erand48 (unsigned short [3]);
 long int lrand48 (void);
@@ -152,7 +156,8 @@ void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *
 #endif
 
 #ifdef _GNU_SOURCE
-int ptsname_r(int, char *, size_t);
+int ptsname_r(int, char *, size_t);  /* undefined-ok: see posix_openpt in
+	the _XOPEN_SOURCE block above */
 char *ecvt(double, int, int *, int *);
 char *fcvt(double, int, int *, int *);
 char *gcvt(double, int, char *);

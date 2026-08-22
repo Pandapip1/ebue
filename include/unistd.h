@@ -139,60 +139,92 @@ size_t confstr(int, char *, size_t);
 #define F_TEST  3
 int setreuid(uid_t, uid_t);
 int setregid(gid_t, gid_t);
-int lockf(int, int, off_t);
-long gethostid(void);
+int lockf(int, int, off_t);  /* undefined-ok: F_SETLK/F_SETLKW are themselves
+	permanent no-op stubs (src/fcntl/fcntl.c: "Advisory locks are not
+	implemented; report success"), so a lockf() built on them would only
+	look like real locking without providing any -- worse than absent */
+long gethostid(void);  /* undefined-ok: BSD host-id concept, no NT analogue */
 int nice(int);
 void sync(void);
 pid_t setpgrp(void);
-char *crypt(const char *, const char *);
-void encrypt(char *, int);
+char *crypt(const char *, const char *);  /* undefined-ok: DES password
+	hashing is not something this library implements from scratch */
+void encrypt(char *, int);  /* undefined-ok: same DES machinery as crypt() */
 void swab(const void *__restrict, void *__restrict, ssize_t);
 #endif
 
 #if (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE+0 < 700) \
  || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int usleep(unsigned);
-unsigned ualarm(unsigned, unsigned);
+unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm() itself is
+	already a stub returning 0 (src/unistd/sleep.c) -- there is no
+	SIGALRM delivery to build a microsecond-resolution version on top of */
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 #define L_SET 0
 #define L_INCR 1
 #define L_XTND 2
-int brk(void *);
-void *sbrk(intptr_t);
+int brk(void *);  /* undefined-ok: this library's allocator is NT's private
+	heap (RtlAllocateHeap, src/malloc/malloc.c), not a single growable
+	brk-style arena; there is no NT primitive shaped like brk() */
+void *sbrk(intptr_t);  /* undefined-ok: same brk-heap mismatch as brk() */
 pid_t vfork(void);
-int vhangup(void);
+int vhangup(void);  /* undefined-ok: hangs up a Unix controlling terminal,
+	a session/tty concept this library does not model */
 int chroot(const char *);
 int getpagesize(void);
 int getdtablesize(void);
-int sethostname(const char *, size_t);
-int getdomainname(char *, size_t);
-int setdomainname(const char *, size_t);
+int sethostname(const char *, size_t);  /* undefined-ok: setting the
+	computer name is a privileged, persistent OS-configuration change
+	with no ntdll-level equivalent */
+int getdomainname(char *, size_t);  /* undefined-ok: NIS/YP domain name,
+	not an NT concept */
+int setdomainname(const char *, size_t);  /* undefined-ok: see getdomainname */
 int setgroups(size_t, const gid_t *);
-char *getpass(const char *);
-int daemon(int, int);
-void setusershell(void);
-void endusershell(void);
-char *getusershell(void);
-int acct(const char *);
-long syscall(long, ...);
+char *getpass(const char *);  /* undefined-ok: needs echo-off terminal
+	input; this library has no termios-style tty control */
+int daemon(int, int);  /* undefined-ok: the fork()+setsid() BSD idiom, on
+	top of a fork() that already needs a patched Wine to run at all
+	(see CONTRIBUTING.md); not a foundation to build another function on */
+void setusershell(void);  /* undefined-ok: /etc/shells enumeration, no
+	such file or concept on NT */
+void endusershell(void);  /* undefined-ok: see setusershell */
+char *getusershell(void);  /* undefined-ok: see setusershell */
+int acct(const char *);  /* undefined-ok: Unix process accounting is a
+	kernel facility NT has no equivalent of */
+long syscall(long, ...);  /* undefined-ok: NT has no stable, numbered
+	raw-syscall ABI exposed to user mode the way this presumes; the Nt*
+	entry points this library calls directly are the closest analogue */
 int execvpe(const char *, char *const [], char *const []);
 int issetugid(void);
-int getentropy(void *, size_t);
+int getentropy(void *, size_t);  /* undefined-ok: no entropy source is
+	exported by ntdll; a real source (BCryptGenRandom, RtlGenRandom)
+	lives in bcrypt.dll/advapi32, which this library treats as an
+	exception to load, not a routine dependency (see
+	src/signal/signal.c's header comment on NTLIBC_USE_KERNEL32) */
 extern int optreset;
 #endif
 
 #ifdef _GNU_SOURCE
 extern char **environ;
-int setresuid(uid_t, uid_t, uid_t);
-int setresgid(gid_t, gid_t, gid_t);
-int getresuid(uid_t *, uid_t *, uid_t *);
-int getresgid(gid_t *, gid_t *, gid_t *);
+int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/saved
+	IDs are a Linux-specific refinement of Unix credentials; this
+	library's getuid()/geteuid() (src/unistd/ids.c) already report a
+	single fixed identity, so there is nothing for the triple to select
+	between */
+int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
+int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
+int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
 char *get_current_dir_name(void);
-int syncfs(int);
-int euidaccess(const char *, int);
-int eaccess(const char *, int);
+int syncfs(int);  /* undefined-ok: syncs an entire filesystem by fd; NT has
+	no per-volume sync primitive this library wires up, and fsync()
+	(src/unistd/fsync.c) already covers the per-descriptor case */
+int euidaccess(const char *, int);  /* undefined-ok: distinguishes real
+	from effective uid the same way access() does not need to here --
+	see setresuid on why this library's uid/euid are not distinct */
+int eaccess(const char *, int);  /* undefined-ok: glibc alias of
+	euidaccess(); see euidaccess */
 ssize_t copy_file_range(int, off_t *, int, off_t *, size_t, unsigned);
 pid_t gettid(void);
 #endif
