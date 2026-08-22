@@ -30,7 +30,8 @@ name: CI
 # targets we don't need here). That's a completely ordinary,
 # from-scratch-buildable-in-CI toolchain -- nothing like the kaem/mescc-tools
 # bootstrap path under boot/kaem/, which is unrelated to CI and is not
-# exercised here except for the drift check in the `kaem` step below.
+# exercised here except for the drift check in the "Regenerate generated
+# files" step below.
 
 on:
   push:
@@ -146,14 +147,19 @@ jobs:
           path: obj/test/*.exe
           if-no-files-found: error
 
-      # Only needs to run once, not once per matrix leg: catches
-      # boot/kaem/build-$(ARCH).kaem drifting out of sync with the real
-      # Makefile build recipe as source files are added/removed/renamed.
-      # See CONTRIBUTING.md's "kaem bootstrap build path" section.
-      - name: Regenerate kaem bootstrap scripts and check for drift
+      # Only needs to run once, not once per matrix leg (both generators
+      # cover every arch themselves): catches either kind of generated-and-
+      # committed file drifting out of sync with its source -- the expanded
+      # bits/*.h.gen headers vs. their *.h.in DSL sources, and
+      # boot/kaem/build-$(ARCH).kaem vs. the real Makefile build recipe as
+      # source files are added/removed/renamed. See CONTRIBUTING.md's "kaem
+      # bootstrap build path" section, and .githooks/pre-commit, which runs
+      # the same two checks locally.
+      - name: Regenerate generated files and check for drift
         if: matrix.arch == 'x86_64'
         run: |
-          make kaem
+          make generated
+          git diff --exit-code -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'
           git diff --exit-code -- boot/kaem/
 
   # Runs the exact same PE binaries the `test` job built and (for the

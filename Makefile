@@ -84,8 +84,20 @@ $(ALL_LIBS) $(ALL_TOOLS) $(ALL_OBJS) $(ALL_OBJS:%.o=%.lo) $(GENH): | $(OBJ_DIRS)
 $(OBJ_DIRS):
 	mkdir -p $@
 
-obj/include/bits/%.h: $(srcdir)/arch/$(ARCH)/bits/%.h.in $(srcdir)/include/%.h.in $(srcdir)/tools/mkalltypes.sed
-	sed -f $(srcdir)/tools/mkalltypes.sed $(srcdir)/arch/$(ARCH)/bits/$(*F).h.in $(srcdir)/include/$(*F).h.in > $@
+# bits/alltypes.h is the per-arch half followed by the generic half.  Both
+# halves are written in the compact TYPEDEF/STRUCT/UNION DSL in their .h.in
+# form and are expanded through tools/mkalltypes.sed by
+# tools/gen-alltypes.sh, at development time, into committed .h.gen files
+# (`make alltypes`).  This build therefore only has to concatenate them.
+#
+# That split exists for the kaem bootstrap path: boot/kaem/ has to build
+# this same header with nothing but mescc-tools-extra's tools, which
+# include no sed and nothing else that can do mkalltypes.sed's capture-group
+# rewrite -- but do include `catm`, which concatenates.  Keeping the normal
+# build on the same pre-expanded files means one expansion and one source of
+# truth, not sed-for-make and catm-for-kaem.  See tools/gen-alltypes.sh.
+obj/include/bits/%.h: $(srcdir)/arch/$(ARCH)/bits/%.h.gen $(srcdir)/include/%.h.gen
+	cat $(srcdir)/arch/$(ARCH)/bits/$(*F).h.gen $(srcdir)/include/$(*F).h.gen > $@
 
 $(ALL_OBJS): $(GENH) $(IMPH)
 
@@ -173,7 +185,27 @@ install: install-libs install-headers install-tools
 kaem:
 	./tools/gen-kaem.sh
 
-.PHONY: kaem
+#
+# alltypes: re-expand every bits/*.h.in through tools/mkalltypes.sed into
+# the committed *.h.gen files that both this Makefile and the kaem
+# bootstrap consume.  Same deal as `kaem` above: generated, committed, and
+# regenerated unconditionally rather than on mtimes.
+#
+alltypes:
+	./tools/gen-alltypes.sh
+
+#
+# generated: everything that is generated *and* committed, which is what
+# .githooks/pre-commit and CI regenerate before checking for drift.  One
+# recipe rather than two prerequisites so the order is fixed even under
+# `make -j`: gen-kaem.sh dry-runs this Makefile, whose alltypes.h rule
+# names the very files gen-alltypes.sh writes.
+#
+generated:
+	./tools/gen-alltypes.sh
+	./tools/gen-kaem.sh
+
+.PHONY: kaem alltypes generated
 
 #
 # Tests: every test/*.c is built into a PE and run under wine.  A test

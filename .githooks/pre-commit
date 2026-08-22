@@ -2,12 +2,14 @@
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Regenerates boot/kaem/build-$(ARCH).kaem and blocks the commit if that
-# changes anything, so a source-file add/remove/rename (or anything else
-# that shifts the Makefile's build recipe) can never be committed with a
-# stale kaem bootstrap script sitting alongside it -- see CONTRIBUTING.md's
-# "kaem bootstrap build path" section. This mirrors the "Regenerate kaem
-# bootstrap scripts and check for drift" step in .github/workflows/ci.yml.
+# Regenerates everything in this tree that is generated *and* committed --
+# the expanded bits/*.h.gen headers and boot/kaem/build-$(ARCH).kaem -- and
+# blocks the commit if that changes anything, so an edit to a bits/*.h.in
+# DSL source, or a source-file add/remove/rename (or anything else that
+# shifts the Makefile's build recipe), can never be committed with a stale
+# generated file sitting alongside it. See CONTRIBUTING.md's "kaem
+# bootstrap build path" section. This mirrors the "Regenerate generated
+# files and check for drift" step in .github/workflows/ci.yml.
 #
 # Enabled automatically by ./configure; to enable by hand:
 #   git config core.hooksPath .githooks
@@ -16,9 +18,21 @@ set -e
 
 cd "$(git rev-parse --show-toplevel)"
 
+# tools/gen-alltypes.sh is a pure function of the source tree (no CC, no
+# ARCH, no config.mak), so this half always runs, configured or not.
+./tools/gen-alltypes.sh >/dev/null 2>&1
+
+if ! git diff --quiet -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'; then
+	echo "pre-commit: the expanded bits/*.h.gen headers are out of sync" >&2
+	echo "pre-commit: with their *.h.in sources. 'make alltypes'" >&2
+	echo "pre-commit: regenerated them -- review the diff, then 'git add'" >&2
+	echo "pre-commit: them and commit again." >&2
+	exit 1
+fi
+
 if [ ! -f config.mak ]; then
 	# Nothing configured yet, so there is no CC/ARCH to hand gen-kaem.sh;
-	# nothing to check without it.
+	# nothing more to check without it.
 	exit 0
 fi
 

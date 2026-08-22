@@ -29,9 +29,12 @@
 #     re-builds over a dirty tree, coreutils rm is not assumed to be on
 #     PATH at this bootstrap stage, and the generated script assumes (and
 #     documents) a clean tree.
-#   - everything else (the sed alltypes.h generation, every compile
-#     command, the crt1.o copy, and the final tcc -ar archiving step) is
-#     carried through close to verbatim, with only whitespace normalized.
+#   - the `cat A B > obj/include/bits/alltypes.h` step becomes a single
+#     `catm obj/include/bits/alltypes.h A B` (mescc-tools-extra's
+#     concatenator), since kaem has no `>` redirection.
+#   - everything else (every compile command, the crt1.o copy, and the
+#     final tcc -ar archiving step) is carried through close to verbatim,
+#     with only whitespace normalized.
 #
 # Usage:
 #   ./configure --host=x86_64-win32 CC=x86_64-win32-tcc   # if not already done
@@ -148,18 +151,18 @@ awk -v cc="$CC" '
 	function norm(s) { gsub(/  +/, " ", s); sub(/^ +/, "", s); sub(/ +$/, "", s); return s }
 	/^mkdir -p /      { next }
 	/^rm -f lib\/libc\.a$/ { next }
-	/^sed -f / {
+	/^cat / {
 		# kaem has no shell redirection (`>` is just another argument
-		# token, not a redirect), so this can not be emitted as-is --
-		# see the SED handling below main(). Expected shape:
-		#   sed -f SCRIPT IN1 IN2 > OUT
+		# token, not a redirect), so this becomes a catm invocation
+		# (from mescc-tools-extra) below. Expected shape:
+		#   cat IN1 IN2 > OUT
 		line = norm($0)
 		n = split(line, a, " ")
-		if (n != 7 || a[6] != ">") {
+		if (n != 5 || a[4] != ">") {
 			print "OTHER\t" $0
 			next
 		}
-		print "SED\t" a[3] "\t" a[4] "\t" a[5] "\t" a[7]
+		print "CATM\t" a[5] "\t" a[2] "\t" a[3]
 		next
 	}
 	/^cp obj\/crt\//  { print "CRTCOPY\t" norm($0); next }
@@ -188,18 +191,18 @@ fi
 
 field() { grep "^$1"$'\t' "${DRYRUN}.classified" | cut -f2-; }
 
-SED_ROW=$(grep '^SED'$'\t' "${DRYRUN}.classified" || true)
-SED_SCRIPT=$(printf '%s' "$SED_ROW" | cut -f2)
-SED_IN1=$(printf '%s' "$SED_ROW" | cut -f3)
-SED_IN2=$(printf '%s' "$SED_ROW" | cut -f4)
-SED_OUT=$(printf '%s' "$SED_ROW" | cut -f5)
+CATM_ROW=$(grep '^CATM'$'\t' "${DRYRUN}.classified" || true)
+CATM_OUT=$(printf '%s' "$CATM_ROW" | cut -f2)
+CATM_IN1=$(printf '%s' "$CATM_ROW" | cut -f3)
+CATM_IN2=$(printf '%s' "$CATM_ROW" | cut -f4)
 CRT_CC=$(field CRTCC)
 CRT_COPY=$(field CRTCOPY)
 AR_LINE=$(field AR)
 
-if [ -z "$SED_SCRIPT" ] || [ -z "$CRT_CC" ] || [ -z "$CRT_COPY" ] || [ -z "$AR_LINE" ]; then
+if [ -z "$CATM_OUT" ] || [ -z "$CRT_CC" ] || [ -z "$CRT_COPY" ] || [ -z "$AR_LINE" ]; then
 	echo "gen-kaem.sh: dry run is missing one of the expected single-shot" >&2
-	echo "steps (alltypes.h sed, crt1.o compile, crt1.o copy, libc.a ar)." >&2
+	echo "steps (alltypes.h concatenation, crt1.o compile, crt1.o copy," >&2
+	echo "libc.a ar)." >&2
 	exit 1
 fi
 
@@ -230,11 +233,19 @@ fi
 #     acting as both compiler and archiver (tcc -ar rcs, no external ar/
 #     ranlib needed -- this mirrors what the real Makefile does via
 #     \$(AR) = \$(CC) -ar)
-#   - mkdir, cp, sed
+#   - mkdir, cp and catm, all three from mescc-tools-extra -- the
+#     companion package to mescc-tools (kaem's own home), so it is already
+#     on hand wherever kaem is. \`catm OUT IN...\` is its minimal
+#     concatenator; it stands in for the shell's \`cat IN... > OUT\`, which
+#     kaem cannot express because it has no redirection. Of the fifteen
+#     programs mescc-tools-extra ships (catm, chmod, cp, match, mkdir,
+#     replace, rm, sha256sum, sha3sum, unbz2, ungz, untar, unxz, wrap)
+#     this script uses exactly three.
 #   - kaem's own builtins (cd, set, echo, if/then/else/fi, etc. -- unused
 #     here)
-# Notably NOT assumed: make, a POSIX shell, coreutils rm, or a standalone
-# binutils ar.
+# Notably NOT assumed: make, a POSIX shell, sed or awk (mescc-tools-extra
+# has neither, and nothing else in it can do a capture-group rewrite),
+# coreutils rm, or a standalone binutils ar.
 #
 # Run from the repository root, e.g.:
 #   PATH=/path/to/win32-cross-tcc/bin:\$PATH kaem --strict --file boot/kaem/build-${ARCH}.kaem
@@ -270,51 +281,41 @@ fi
 #
 HEADER
 	sed 's/^/mkdir /' "$MKDIRS"
-	SED_IN1_LINES=$(wc -l <"$SED_IN1")
-	if [ -z "$SED_IN1_LINES" ] || [ "$SED_IN1_LINES" -le 0 ]; then
-		echo "gen-kaem.sh: could not get a usable line count for $SED_IN1" >&2
-		exit 1
-	fi
-	if [ "$(tail -c1 "$SED_IN1" | wc -l)" -ne 1 ]; then
-		echo "gen-kaem.sh: $SED_IN1 does not end with a newline -- the" >&2
-		echo "'insert after last line' trick below needs an exact line" >&2
-		echo "count from wc -l, which undercounts a missing final newline." >&2
-		exit 1
-	fi
 	cat <<MID1
 
 #
-# Generate obj/include/bits/alltypes.h. The Makefile does this with one
-# \`sed -f $SED_SCRIPT $SED_IN1 $SED_IN2 > $SED_OUT\`
-# invocation, but kaem can't run it as-is for two independent reasons:
-#   - kaem has no shell redirection (\`>\` is just another plain argument,
-#     not an operator), so there is nowhere for sed's stdout to go; and
-#   - kaem's variable expander treats every literal '\$' in any token
-#     (quoted or not) as the start of a \${...}/\$@ substitution and aborts
-#     otherwise, so sed's own '\$r file' ("after the last line, read
-#     file") address can't be spelled at all here.
-# Both are worked around at once, using only cp and sed -i (both in the
-# assumed toolset) and a fixed line number computed when this script was
-# *generated*, not a live '\$':
-#   1. seed the output file with a raw copy of the first input;
-#   2. use sed's 'Nr file' (read-file after line N) command, via -i, with
-#      N hardcoded to $SED_IN1's line count at generation time ($SED_IN1_LINES), to
-#      append the raw second input after it -- equivalent to '\$r' here
-#      only because N is exactly the first input's last line;
-#   3. run the real mkalltypes.sed over the now-combined file in place.
-# This is only correct because mkalltypes.sed's substitutions are all
-# purely per-line (no multi-line hold-space state, no line-range address),
-# so "transform the concatenation of the two inputs" and "concatenate the
-# already-independently-transformed halves" give the same bytes -- verified
-# byte-for-byte identical to the Makefile's own output for this exact input
-# pair as part of generating this script. If $SED_IN1 ever gains or loses
-# lines, or stops ending in a newline, rerun \`make kaem\` to pick up the
-# new line count -- do not hand-edit the number below.
+# Assemble obj/include/bits/alltypes.h out of two pre-expanded halves.
+#
+# The Makefile builds this header with one
+#   cat $CATM_IN1 $CATM_IN2 > $CATM_OUT
+# which kaem cannot run as-is: \`>\` is just another plain argument token to
+# kaem, not a redirection operator, so there is nowhere for cat's stdout to
+# go. mescc-tools-extra's \`catm\` exists for exactly this situation -- it
+# takes the output file as its first argument and concatenates the rest
+# into it (catm.c opens argv[1] with O_TRUNC|O_CREAT and copies argv[2..]
+# through) -- so the whole step is one catm invocation and no redirection.
+#
+# Both inputs are *.h.gen files: the committed, already-expanded form of
+# the compact TYPEDEF/STRUCT/UNION DSL in the matching *.h.in. The
+# expansion is done at development time by tools/gen-alltypes.sh (\`make
+# alltypes\`) rather than here, because it needs a capture-group rewrite
+# (\`TYPEDEF unsigned _Addr size_t;\` -> a four-line __NEED_/__DEFINED_
+# guarded block) that nothing available at this bootstrap point can do:
+# there is no sed and no awk, and mescc-tools-extra's \`replace\` does
+# literal substring substitution only. Compiling a helper on the spot is no
+# way out either -- the tcc on PATH here is a *cross* compiler emitting
+# win32 PE, so anything it builds will not run on the build host.
+#
+# Splitting the expansion from the concatenation is only sound because
+# mkalltypes.sed's rules are all purely per-line (no hold space, no range
+# addresses), so expanding each half separately and concatenating gives the
+# same bytes as concatenating and then expanding -- verified byte-for-byte
+# against the old single-sed output for both arches. The *.h.gen files are
+# kept honest by the same regenerate-and-diff check that keeps this script
+# honest (\`make generated\`, plus .githooks/pre-commit and CI).
 #
 MID1
-	printf 'cp %s %s\n' "$SED_IN1" "$SED_OUT"
-	printf 'sed -i "%sr %s" %s\n' "$SED_IN1_LINES" "$SED_IN2" "$SED_OUT"
-	printf 'sed -i -f %s %s\n' "$SED_SCRIPT" "$SED_OUT"
+	printf 'catm %s %s %s\n' "$CATM_OUT" "$CATM_IN1" "$CATM_IN2"
 	cat <<'MID2'
 
 #

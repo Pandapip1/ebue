@@ -23,11 +23,19 @@
 #     acting as both compiler and archiver (tcc -ar rcs, no external ar/
 #     ranlib needed -- this mirrors what the real Makefile does via
 #     $(AR) = $(CC) -ar)
-#   - mkdir, cp, sed
+#   - mkdir, cp and catm, all three from mescc-tools-extra -- the
+#     companion package to mescc-tools (kaem's own home), so it is already
+#     on hand wherever kaem is. `catm OUT IN...` is its minimal
+#     concatenator; it stands in for the shell's `cat IN... > OUT`, which
+#     kaem cannot express because it has no redirection. Of the fifteen
+#     programs mescc-tools-extra ships (catm, chmod, cp, match, mkdir,
+#     replace, rm, sha256sum, sha3sum, unbz2, ungz, untar, unxz, wrap)
+#     this script uses exactly three.
 #   - kaem's own builtins (cd, set, echo, if/then/else/fi, etc. -- unused
 #     here)
-# Notably NOT assumed: make, a POSIX shell, coreutils rm, or a standalone
-# binutils ar.
+# Notably NOT assumed: make, a POSIX shell, sed or awk (mescc-tools-extra
+# has neither, and nothing else in it can do a capture-group rewrite),
+# coreutils rm, or a standalone binutils ar.
 #
 # Run from the repository root, e.g.:
 #   PATH=/path/to/win32-cross-tcc/bin:$PATH kaem --strict --file boot/kaem/build-x86_64.kaem
@@ -92,36 +100,37 @@ mkdir obj/src/time
 mkdir obj/src/unistd
 
 #
-# Generate obj/include/bits/alltypes.h. The Makefile does this with one
-# `sed -f ./tools/mkalltypes.sed ./arch/x86_64/bits/alltypes.h.in ./include/alltypes.h.in > obj/include/bits/alltypes.h`
-# invocation, but kaem can't run it as-is for two independent reasons:
-#   - kaem has no shell redirection (`>` is just another plain argument,
-#     not an operator), so there is nowhere for sed's stdout to go; and
-#   - kaem's variable expander treats every literal '$' in any token
-#     (quoted or not) as the start of a ${...}/$@ substitution and aborts
-#     otherwise, so sed's own '$r file' ("after the last line, read
-#     file") address can't be spelled at all here.
-# Both are worked around at once, using only cp and sed -i (both in the
-# assumed toolset) and a fixed line number computed when this script was
-# *generated*, not a live '$':
-#   1. seed the output file with a raw copy of the first input;
-#   2. use sed's 'Nr file' (read-file after line N) command, via -i, with
-#      N hardcoded to ./arch/x86_64/bits/alltypes.h.in's line count at generation time (19), to
-#      append the raw second input after it -- equivalent to '$r' here
-#      only because N is exactly the first input's last line;
-#   3. run the real mkalltypes.sed over the now-combined file in place.
-# This is only correct because mkalltypes.sed's substitutions are all
-# purely per-line (no multi-line hold-space state, no line-range address),
-# so "transform the concatenation of the two inputs" and "concatenate the
-# already-independently-transformed halves" give the same bytes -- verified
-# byte-for-byte identical to the Makefile's own output for this exact input
-# pair as part of generating this script. If ./arch/x86_64/bits/alltypes.h.in ever gains or loses
-# lines, or stops ending in a newline, rerun `make kaem` to pick up the
-# new line count -- do not hand-edit the number below.
+# Assemble obj/include/bits/alltypes.h out of two pre-expanded halves.
 #
-cp ./arch/x86_64/bits/alltypes.h.in obj/include/bits/alltypes.h
-sed -i "19r ./include/alltypes.h.in" obj/include/bits/alltypes.h
-sed -i -f ./tools/mkalltypes.sed obj/include/bits/alltypes.h
+# The Makefile builds this header with one
+#   cat ./arch/x86_64/bits/alltypes.h.gen ./include/alltypes.h.gen > obj/include/bits/alltypes.h
+# which kaem cannot run as-is: `>` is just another plain argument token to
+# kaem, not a redirection operator, so there is nowhere for cat's stdout to
+# go. mescc-tools-extra's `catm` exists for exactly this situation -- it
+# takes the output file as its first argument and concatenates the rest
+# into it (catm.c opens argv[1] with O_TRUNC|O_CREAT and copies argv[2..]
+# through) -- so the whole step is one catm invocation and no redirection.
+#
+# Both inputs are *.h.gen files: the committed, already-expanded form of
+# the compact TYPEDEF/STRUCT/UNION DSL in the matching *.h.in. The
+# expansion is done at development time by tools/gen-alltypes.sh (`make
+# alltypes`) rather than here, because it needs a capture-group rewrite
+# (`TYPEDEF unsigned _Addr size_t;` -> a four-line __NEED_/__DEFINED_
+# guarded block) that nothing available at this bootstrap point can do:
+# there is no sed and no awk, and mescc-tools-extra's `replace` does
+# literal substring substitution only. Compiling a helper on the spot is no
+# way out either -- the tcc on PATH here is a *cross* compiler emitting
+# win32 PE, so anything it builds will not run on the build host.
+#
+# Splitting the expansion from the concatenation is only sound because
+# mkalltypes.sed's rules are all purely per-line (no hold space, no range
+# addresses), so expanding each half separately and concatenating gives the
+# same bytes as concatenating and then expanding -- verified byte-for-byte
+# against the old single-sed output for both arches. The *.h.gen files are
+# kept honest by the same regenerate-and-diff check that keeps this script
+# honest (`make generated`, plus .githooks/pre-commit and CI).
+#
+catm obj/include/bits/alltypes.h ./arch/x86_64/bits/alltypes.h.gen ./include/alltypes.h.gen
 
 #
 # crt1.o: compiled like any other object, then copied into lib/ under its

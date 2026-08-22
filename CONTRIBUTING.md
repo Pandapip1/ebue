@@ -89,7 +89,15 @@ regular development, CI, and for building ntlibc at any later point in a
 bootstrap chain once `make`/`bash` are available (or on any regular Windows
 or cross-compilation host). Reach for `boot/kaem/` only when driving ntlibc
 through kaem itself, with nothing else on PATH but a win32-cross `tcc`,
-`mkdir`, `cp`, `sed`, and kaem's own builtins.
+`mkdir`, `cp`, `catm`, and kaem's own builtins. Those last three all come
+from
+[mescc-tools-extra](https://github.com/oriansj/mescc-tools-extra), the
+companion package to mescc-tools (where kaem itself lives), so they are
+already on hand wherever kaem is; `catm OUT IN...` is its minimal
+concatenator, standing in for a shell's `cat IN... > OUT`. Nothing outside
+that set is assumed -- in particular there is no `sed` and no `awk` at this
+point in the chain, which is why the `bits/*.h.gen` pre-expansion described
+below exists.
 
 **Do not hand-edit `boot/kaem/build-*.kaem`.** It is a generated file,
 regenerated straight from this Makefile's own build recipe so it cannot
@@ -106,17 +114,51 @@ expands every `mkdir -p DIR` into the full chain of bare, parent-before-
 child `mkdir` commands (kaem's assumed toolset may not have a `-p`-capable
 `mkdir`; see the comments at the top of the generated file for the full
 reasoning, including what mescc-tools-extra's own `mkdir` actually
-supports), and it replaces the single `sed ... > obj/include/bits/
-alltypes.h` step with an equivalent `cp` + two `sed -i` invocations, since
-kaem can neither redirect stdout to a file nor pass a literal `$` (as in
-sed's `$r` "last line" address) through its argument parser. Everything
-else -- every compile command and the final `tcc -ar` archiving step -- is
-carried through close to verbatim. See `tools/gen-kaem.sh`'s own comments
-for the details of each workaround.
+supports), and it rewrites the `cat A B > obj/include/bits/alltypes.h`
+step into a single `catm obj/include/bits/alltypes.h A B`, since kaem has
+no `>` redirection. Everything else -- every compile command and the final
+`tcc -ar` archiving step -- is carried through close to verbatim. See
+`tools/gen-kaem.sh`'s own comments for the details of each workaround.
+
+### `bits/alltypes.h` and the `*.h.gen` files
+
+`bits/alltypes.h` is the one header the build has to *generate* rather than
+copy. Its two halves -- the per-arch `arch/$(ARCH)/bits/alltypes.h.in` and
+the shared `include/alltypes.h.in` -- are written in a compact
+`TYPEDEF`/`STRUCT`/`UNION` DSL that `tools/mkalltypes.sed` expands into
+`__NEED_`/`__DEFINED_`-guarded blocks. That expansion is a capture-group
+rewrite, and *nothing* in the bootstrap toolset can perform one: there is
+no `sed` and no `awk`, and mescc-tools-extra's `replace` does literal
+substring substitution only. Compiling a helper on the spot is no escape
+either, since the `tcc` on PATH there is a cross compiler emitting win32
+PE, so whatever it builds cannot run on the build host.
+
+So the expansion happens once, at development time, in
+`tools/gen-alltypes.sh` (`make alltypes`), which writes a committed
+`*.h.gen` next to each `*.h.in`. The bootstrap then only has to
+concatenate the two halves, which is exactly what `catm` does. The normal
+`make` build reads the same `*.h.gen` files (`cat A B > $@`), so there is
+one expansion and one source of truth rather than sed-for-make and
+catm-for-kaem.
+
+**`*.h.in` is the file you edit; `*.h.gen` is generated -- do not hand-edit
+it either.** The split is safe because `mkalltypes.sed`'s rules are all
+purely per-line (no hold space, no range addresses), so expanding the
+halves separately and concatenating is byte-identical to concatenating and
+then expanding.
+
+### Keeping the generated files honest
 
 `./configure` enables a tracked pre-commit hook (`.githooks/pre-commit`,
-via `git config core.hooksPath .githooks`) that runs `make kaem` and
-blocks the commit if it changes anything, so this can't drift silently
-into a commit. If you're committing without having run `./configure` in
-this checkout, enable it by hand with the same `git config` line, or just
-run `make kaem` yourself before committing.
+via `git config core.hooksPath .githooks`) that regenerates both kinds of
+generated-and-committed file and blocks the commit if anything changes, so
+neither can drift silently into a commit. `make generated` does the same
+two regenerations by hand:
+```
+make generated   # == make alltypes + make kaem
+```
+CI runs the same pair and `git diff --exit-code`s the results (the
+"Regenerate generated files and check for drift" step). If you're
+committing without having run `./configure` in this checkout, enable the
+hook by hand with the same `git config` line, or just run `make generated`
+yourself before committing.
