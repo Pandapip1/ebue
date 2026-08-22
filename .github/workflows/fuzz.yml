@@ -62,7 +62,7 @@ jobs:
       # pin), build it here rather than failing the nightly.
       - name: Restore tinycc toolchain
         id: cache-tinycc
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/tinycc-install
           key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
@@ -102,7 +102,7 @@ jobs:
       # this only runs on a finding -- and the log is the reproducer.
       - name: Upload the log when something was found
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-log-${{ github.run_id }}
           path: fuzz.log

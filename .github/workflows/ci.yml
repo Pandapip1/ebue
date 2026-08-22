@@ -230,7 +230,7 @@ jobs:
       # .h.gen files, so this needs no compiler -- but ./configure is what
       # sets ARCH, and lint.sh reads it.
       - name: Restore tinycc toolchain
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/tinycc-install
           key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
@@ -239,7 +239,7 @@ jobs:
         run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
 
       - name: Restore tinycc toolchain
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/tinycc-install
           key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
@@ -280,7 +280,7 @@ jobs:
 
       - name: Upload the failing test output
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: asan-output
           path: obj/asan/test/*.out
