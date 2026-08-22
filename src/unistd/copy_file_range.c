@@ -4,7 +4,7 @@
  * copy_file_range(): a Linux/glibc extension, not POSIX, so there is no
  * single normative spec to cite -- glibc's own manual page describes it
  * as copying up to `len` bytes from fd_in to fd_out, using and advancing
- * *off_in/*off_out when given or the descriptor's own file position
+ * *off_in and *off_out when given, or the descriptor's own file position
  * otherwise, and returning the number of bytes actually copied (which
  * may be less than len, including 0 at EOF).
  *

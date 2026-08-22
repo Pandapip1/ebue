@@ -52,6 +52,9 @@ uninitvar:src/stdio/printf.c
 # integer-literal-to-pointer casts C requires of <signal.h>, not a
 # portability hazard we can write our way out of.
 intToPointerCast:src/signal/signal.c
+# system() passes SIG_IGN to signal() while it runs the child, same
+# integer-literal-to-pointer cast as above.
+intToPointerCast:src/stdlib/system.c
 
 # CLIENT_ID.UniqueProcess/UniqueThread are declared HANDLE by NT but hold
 # small integer ids, which is what a pid_t is; the cast back is the
