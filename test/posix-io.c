@@ -78,27 +78,6 @@ static void test_read_write(void)
 	CHECK(write(fd, "hello", 5) == 5);
 	CHECK(close(fd) == 0);
 
-#if 0 /* BUG: read()/write() on an fd open for the wrong direction report
-       * EACCES, not EBADF.
-       * POSIX read.html ERRORS: "[EBADF] The fildes argument is not a
-       * valid file descriptor open for reading."  Symmetrically,
-       * write.html requires EBADF for a fildes not open for writing.
-       * src/unistd/read.c and src/unistd/write.c do not check the
-       * access mode the fd was opened with; they call NtReadFile/
-       * NtWriteFile directly and let whatever NTSTATUS comes back go
-       * through __set_errno_status().  The handle genuinely lacks
-       * FILE_READ_DATA/FILE_WRITE_DATA (src/fcntl/open.c only grants
-       * the access bits for the requested O_ACCMODE), so NT correctly
-       * returns STATUS_ACCESS_DENIED, which src/internal/errno.c maps
-       * to EACCES -- this is real NT behaviour, not a Wine artifact
-       * (Wine's dlls/ntdll/unix/file.c enforces the same FILE_READ_DATA/
-       * FILE_WRITE_DATA check via server_get_unix_fd()).  Confirmed by
-       * execution under Wine:
-       *   read on O_WRONLY fd:  n=-1 errno=13 (EACCES, want EBADF=9)
-       *   write on O_RDONLY fd: n=-1 errno=13 (EACCES, want EBADF=9)
-       * Fix belongs in read()/write(): check f->flags & O_ACCMODE
-       * against the requested direction before issuing the I/O and set
-       * EBADF directly, the way lseek.c already checks f->type. */
 	fd = open("t-rw.txt", O_WRONLY);
 	errno = 0;
 	CHECK(read(fd, buf, sizeof buf) == -1 && errno == EBADF);
@@ -107,7 +86,7 @@ static void test_read_write(void)
 	fd = open("t-rw.txt", O_RDONLY);
 	errno = 0;
 	CHECK(write(fd, "x", 1) == -1 && errno == EBADF);
-#endif
+
 	fd = open("t-rw.txt", O_RDONLY);
 
 	/* read.html: "In the absence of errors ... read() function shall
@@ -250,27 +229,10 @@ static void test_dup_fcntl(void)
 	errno = 0;
 	CHECK(fcntl(fd, 999999) == -1 && errno == EINVAL);
 
-#if 0 /* BUG: fcntl(fd, F_DUPFD, arg) does not validate arg.
-       * POSIX fcntl.html ERRORS: "[EINVAL] The cmd argument is F_DUPFD
-       * or F_DUPFD_CLOEXEC and arg is negative or greater than or equal
-       * to {OPEN_MAX}."  src/fcntl/fcntl.c's F_DUPFD/F_DUPFD_CLOEXEC arm
-       * calls __fd_alloc((int)arg) directly; src/internal/fd.c's
-       * __fd_alloc() clamps a negative `lowest` to 0 instead of failing,
-       * so fcntl(fd, F_DUPFD, -5) silently succeeds and hands back some
-       * unrelated low fd instead of EINVAL.  A too-large arg (>= FD_MAX)
-       * falls through to __fd_alloc's own "no free slot" path and
-       * returns EMFILE, not EINVAL.  Confirmed by execution under Wine:
-       *   F_DUPFD(-5): r=4 errno=0
-       *   F_DUPFD(999999): r=-1 errno=24 (EMFILE, want EINVAL=22)
-       * Fix belongs in src/fcntl/fcntl.c (validate arg before calling
-       * __fd_alloc) rather than in __fd_alloc itself, since __fd_alloc's
-       * "clamp negative `lowest`" behaviour is relied on elsewhere
-       * (dup()'s internal use with lowest==0). */
 	errno = 0;
 	CHECK(fcntl(fd, F_DUPFD, -5) == -1 && errno == EINVAL);
 	errno = 0;
 	CHECK(fcntl(fd, F_DUPFD, 999999) == -1 && errno == EINVAL);
-#endif
 	close(fd);
 }
 

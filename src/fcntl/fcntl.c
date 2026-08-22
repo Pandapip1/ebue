@@ -21,9 +21,11 @@ int fcntl(int fd, int cmd, ...)
 	switch (cmd) {
 	case F_DUPFD:
 	case F_DUPFD_CLOEXEC: {
-		int nfd = __fd_alloc((int)arg);
+		int nfd;
 		HANDLE h;
 		NTSTATUS st;
+		if (arg < 0 || arg >= FD_MAX) { errno = EINVAL; return -1; }
+		nfd = __fd_alloc((int)arg);
 		if (nfd < 0) return -1;
 		st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
 		                       cmd == F_DUPFD_CLOEXEC ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);

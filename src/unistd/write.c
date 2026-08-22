@@ -14,6 +14,7 @@ ssize_t write(int fd, const void *buf, size_t count)
 	NTSTATUS st;
 
 	if (!f) return -1;
+	if ((f->flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (f->type == __FD_DIR) { errno = EISDIR; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
 	if (!count) return 0;
@@ -43,6 +44,7 @@ ssize_t pwrite(int fd, const void *buf, size_t count, off_t off)
 	NTSTATUS st;
 
 	if (!f) return -1;
+	if ((f->flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
 	/* NT moves a synchronous handle's position to the end of a positioned
