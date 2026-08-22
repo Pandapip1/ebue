@@ -4,12 +4,18 @@
 #include <stdint.h>
 #include "x87.h"
 
+/* Rather than shift the sign/exponent bits off the top -- which is
+ * exactly the "does this discard set bits" pattern
+ * -fsanitize=unsigned-shift-base exists to flag, even though it is
+ * well-defined modular arithmetic in C -- mask them off instead.  Same
+ * bits examined, same result, and nothing here looks like an overflow
+ * to begin with. */
 int __fpclassify(double x)
 {
 	union { double f; uint64_t i; } u = { x };
 	int e = (int)(u.i >> 52 & 0x7ff);
-	if (!e) return u.i << 1 ? FP_SUBNORMAL : FP_ZERO;
-	if (e == 0x7ff) return u.i << 12 ? FP_NAN : FP_INFINITE;
+	if (!e) return u.i & 0x7fffffffffffffffULL ? FP_SUBNORMAL : FP_ZERO;
+	if (e == 0x7ff) return u.i & 0xfffffffffffffULL ? FP_NAN : FP_INFINITE;
 	return FP_NORMAL;
 }
 
@@ -17,8 +23,8 @@ int __fpclassifyf(float x)
 {
 	union { float f; uint32_t i; } u = { x };
 	int e = (int)(u.i >> 23 & 0xff);
-	if (!e) return u.i << 1 ? FP_SUBNORMAL : FP_ZERO;
-	if (e == 0xff) return u.i << 9 ? FP_NAN : FP_INFINITE;
+	if (!e) return u.i & 0x7fffffffUL ? FP_SUBNORMAL : FP_ZERO;
+	if (e == 0xff) return u.i & 0x7fffffUL ? FP_NAN : FP_INFINITE;
 	return FP_NORMAL;
 }
 
@@ -47,14 +53,14 @@ int __fpclassifyl(long double x)
 	int e = u.i.se & 0x7fff;
 	int msb = (int)(u.i.m >> 63);
 	if (!e && !msb) return u.i.m ? FP_SUBNORMAL : FP_ZERO;
-	if (e == 0x7fff) return (u.i.m << 1) ? FP_NAN : (msb ? FP_INFINITE : FP_NAN);
+	if (e == 0x7fff) return (u.i.m & 0x7fffffffffffffffULL) ? FP_NAN : (msb ? FP_INFINITE : FP_NAN);
 	if (!msb) return FP_NAN;
 	return FP_NORMAL;
 #else
 	union { long double f; uint64_t i; } u = { x };
 	int e = (int)(u.i >> 52 & 0x7ff);
-	if (!e) return u.i << 1 ? FP_SUBNORMAL : FP_ZERO;
-	if (e == 0x7ff) return u.i << 12 ? FP_NAN : FP_INFINITE;
+	if (!e) return u.i & 0x7fffffffffffffffULL ? FP_SUBNORMAL : FP_ZERO;
+	if (e == 0x7ff) return u.i & 0xfffffffffffffULL ? FP_NAN : FP_INFINITE;
 	return FP_NORMAL;
 #endif
 }

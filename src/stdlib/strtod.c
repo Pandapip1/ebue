@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <math.h>
 #include <float.h>
+#include <features.h>
 
 /* Significant decimal digits kept exactly; see the note above for why
  * this bound makes the conversion exact rather than merely close. */
@@ -92,7 +93,10 @@ static int bn_bits(const bn_t *a)
 	return b;
 }
 
-static void bn_shl(bn_t *a, int k)
+/* v << b deliberately shifts bits off the top of each limb -- that is
+ * the carry into the next one -- so this is the standard shift-with-
+ * carry idiom for a multi-limb shift, not an accidental overflow. */
+__wraps static void bn_shl(bn_t *a, int k)
 {
 	int w = k / 32, b = k % 32, i;
 
@@ -114,7 +118,11 @@ static void bn_shl(bn_t *a, int k)
 	}
 }
 
-static void bn_shr1(bn_t *a)
+/* a->d[i+1] << 31 carries the bottom bit of the next limb up into the
+ * top of this one -- the same shift-with-carry idiom as bn_shl, just
+ * shifting the other way -- and is meant to discard the rest of that
+ * limb, not to overflow by accident. */
+__wraps static void bn_shr1(bn_t *a)
 {
 	int i;
 
@@ -135,8 +143,11 @@ static int bn_cmp(const bn_t *a, const bn_t *b)
 	return 0;
 }
 
-/* a -= b; the caller guarantees a >= b. */
-static void bn_sub(bn_t *a, const bn_t *b)
+/* a -= b; the caller guarantees a >= b.  Each limb subtraction is
+ * deliberately allowed to go negative (wrap) in the uint64_t: bit 32 of
+ * the wrapped result is exactly the borrow into the next limb, the
+ * standard subtract-with-borrow idiom for multi-limb subtraction. */
+__wraps static void bn_sub(bn_t *a, const bn_t *b)
 {
 	uint64_t borrow = 0;
 	int i;

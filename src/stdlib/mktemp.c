@@ -9,10 +9,13 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <stdint.h>
+#include <features.h>
 
 static uint32_t rnd_state;
 
-static uint32_t rnd(void)
+/* xorshift32: every shift here is deliberately allowed to lose bits off
+ * the top -- that is the whole mixing step -- not an overflow bug. */
+__wraps static uint32_t rnd(void)
 {
 	uint32_t x = rnd_state;
 	if (!x) {

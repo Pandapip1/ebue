@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <ctype.h>
 
-int islower(int c)
+__wraps int islower(int c)
 {
 	return (unsigned)c-'a' < 26;
 }

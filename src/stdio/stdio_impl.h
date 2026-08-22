@@ -88,6 +88,20 @@ extern FILE *__stdio_files;
 int __vfprintf(FILE *f, const char *fmt, va_list ap);
 int __vfscanf(FILE *f, const char *fmt, va_list ap);
 
+/* The magnitude of a signed value that might be LLONG_MIN, whose
+ * positive counterpart does not fit in any signed type.  -(unsigned long
+ * long)sv is undefined for LLONG_MIN when written as a plain unary
+ * minus on a signed operand, but is exactly the wanted bit pattern when
+ * done on the unsigned value instead: C99 6.2.5p9 makes unsigned
+ * negation wrap modulo 2**64.  A one-line __wraps helper keeps that
+ * deliberate wraparound to this one expression, rather than blinding
+ * every other overflow -fsanitize=unsigned-integer-overflow could catch
+ * in the ~250-line callers around it (__vfprintf, __vfscanf). */
+__wraps static inline unsigned long long __neg_mag(unsigned long long uv)
+{
+	return -uv;
+}
+
 /* fread/fwrite/fgetc/fputc without the (nonexistent) locking; the public
  * fread etc are these under a name that matches. */
 size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f);

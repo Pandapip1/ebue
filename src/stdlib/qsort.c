@@ -37,7 +37,7 @@ void qsort_r(void *b, size_t n, size_t sz, cmp_r cmp, void *arg)
 	size_t i;
 
 	if (n < 2 || !sz) return;
-	for (i = n / 2; i-- > 0;) sift(base, n, i, sz, cmp, arg);
+	for (i = n / 2; i > 0;) { i--; sift(base, n, i, sz, cmp, arg); }
 	for (i = n - 1; i > 0; i--) {
 		swap(base, base + i * sz, sz);
 		sift(base, i, 0, sz, cmp, arg);

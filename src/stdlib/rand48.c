@@ -4,12 +4,18 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <features.h>
 
 static unsigned short xsubi_default[3] = { 0x330e, 0, 0 };
 static unsigned short a_[3] = { 0xe66d, 0xdeec, 0x5 };
 static unsigned short c_ = 0xb;
 
-static uint64_t step(unsigned short xi[3])
+/* a and x are only guaranteed < 2**48 (lcong48 lets a caller widen a_[2]
+ * up to 0xffff), so a*x can in principle overflow uint64_t.  That is
+ * harmless: only the low 48 bits, masked out below, are ever used, and
+ * modular arithmetic guarantees those are the same whether or not the
+ * 64-bit multiply itself wrapped first (48 <= 64). */
+__wraps static uint64_t step(unsigned short xi[3])
 {
 	uint64_t x = (uint64_t)xi[0] | ((uint64_t)xi[1] << 16) | ((uint64_t)xi[2] << 32);
 	uint64_t a = (uint64_t)a_[0] | ((uint64_t)a_[1] << 16) | ((uint64_t)a_[2] << 32);

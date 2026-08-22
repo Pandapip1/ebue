@@ -6,13 +6,17 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <features.h>
 
 static uint32_t init_state[32];   /* 31 words of state + 1 slot */
 static uint32_t *x = init_state + 1;
 static int n = 31, i = 3, j = 0;
 
-static uint32_t lcg31(uint32_t v) { return (1103515245u * v + 12345u) & 0x7fffffff; }
-static uint64_t lcg64(uint64_t v) { return 6364136223846793005ULL * v + 1; }
+/* Both LCGs are meant to overflow -- that is the generator, taken
+ * modulo 2**32/2**64 by construction, used only to seed the additive
+ * generator below. */
+__wraps static uint32_t lcg31(uint32_t v) { return (1103515245u * v + 12345u) & 0x7fffffff; }
+__wraps static uint64_t lcg64(uint64_t v) { return 6364136223846793005ULL * v + 1; }
 
 static void seed_state(unsigned s)
 {
@@ -68,7 +72,11 @@ char *setstate(char *state)
 	return old;
 }
 
-long random(void)
+/* x[i] += x[j] is the additive feedback generator itself (x[i] =
+ * x[i-3] + x[i-31] mod 2**32) -- the overflow is the point, not a bug,
+ * and matches glibc/musl's sequence exactly because they rely on the
+ * same wraparound. */
+__wraps long random(void)
 {
 	uint32_t k;
 	ensure_init();

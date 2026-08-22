@@ -485,7 +485,7 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				 * LLONG_MIN, whose magnitude a long long cannot hold,
 				 * while unsigned negation wraps modulo 2**64 (C99
 				 * 6.2.5p9) to exactly the bits wanted. */
-				else if (neg) uv = -uv;
+				else if (neg) uv = __neg_mag(uv);
 				if (assign) {
 					switch (lm) {
 					case LM_hh: *(unsigned char *)va_arg(ap, void *) = (unsigned char)uv; break;

@@ -444,7 +444,7 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 	}
 }
 
-__wraps int __vfprintf(FILE *f, const char *fmt, va_list ap)
+int __vfprintf(FILE *f, const char *fmt, va_list ap)
 {
 	long count = 0;
 	int bad = 0;
@@ -521,7 +521,7 @@ __wraps int __vfprintf(FILE *f, const char *fmt, va_list ap)
 					 * and negating the unsigned value is well defined
 					 * (C99 6.3.1.3p2: it wraps modulo 2**64, which is
 					 * exactly the magnitude wanted). */
-					uv = neg ? -(unsigned long long)sv : (unsigned long long)sv;
+					uv = neg ? __neg_mag((unsigned long long)sv) : (unsigned long long)sv;
 				} else {
 					switch (lm) {
 					case LM_hh: uv = (unsigned char)va_arg(ap, unsigned int); break;

@@ -89,7 +89,16 @@ INC="-I$srcdir/src/internal -I$srcdir/obj/include -I$srcdir/include \
 # ASan's own start-up allocate through RtlAllocateHeap before the shim's
 # constructor has run.  Hidden keeps ntlibc's definitions for ntlibc (and
 # the tests, which are in the same module) and out of everyone else's way.
-CFLAGS="$SAN $CONVSAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
+# -fsanitize=unsigned-integer-overflow,unsigned-shift-base (the "integer"
+# group's checks beyond -fsanitize=undefined) are not undefined behaviour
+# -- unsigned wraparound is modular arithmetic, C99 6.2.5p9 -- so the
+# point of enabling them is not finding UB but forcing every deliberate
+# wraparound in the library to say so via __wraps (include/features.h),
+# leaving an unmarked one visible as a real finding.  Fatal, like the
+# truncation checks above, and library-only: never test/*.c or ntstubs.c.
+INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
+ -fno-sanitize-recover=unsigned-integer-overflow,unsigned-shift-base"
+CFLAGS="$SAN $CONVSAN $INTSAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
         -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL $INC $EXTRA"
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
@@ -142,8 +151,11 @@ for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
 	fi
 done
 
+# ntstubs.c is test-support code, not part of the library, so it does not
+# get the intentional-wraparound scrutiny below: build it without INTSAN.
+stubcflags="$(echo "$CFLAGS" | sed "s!$INTSAN!!")"
 # shellcheck disable=SC2086
-$CC -c $CFLAGS -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
+$CC -c $stubcflags -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
 
 # An archive would be wrong here.  libclang_rt.asan.so exports weak
 # strcmp/strlen/strxfrm/memcpy/... interceptors and the driver puts it

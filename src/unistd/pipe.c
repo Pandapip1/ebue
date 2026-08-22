@@ -30,10 +30,10 @@ int pipe2(int fds[2], int flags)
 
 	for (; pfx[i]; i++) name[i] = (unsigned char)pfx[i];
 	/* "<pid>.<serial>" in hex */
-	for (n = 8; n-- > 0;) name[i++] = (unsigned char)"0123456789abcdef"[(pid >> (n * 4)) & 15];
+	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(pid >> (n * 4)) & 15]; }
 	name[i++] = '.';
 	serial++;
-	for (n = 8; n-- > 0;) name[i++] = (unsigned char)"0123456789abcdef"[(serial >> (n * 4)) & 15];
+	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(serial >> (n * 4)) & 15]; }
 	name[i] = 0;
 	us.Buffer = name;
 	/* Nothing here is caller-supplied: the name is the 25-character

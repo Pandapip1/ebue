@@ -53,13 +53,22 @@
  * names, and warns under -Wattributes (which tools/lint.sh turns on), so
  * the __clang__ test is the one that earns its keep.
  *
- * Internal to the library: programs including <ctype.h> never see it. */
+ * Internal to the library: programs including <ctype.h> never see it.
+ *
+ * __has_attribute gets a fallback definition rather than a bare
+ * `defined(__has_attribute)` guard: a compiler old enough to lack the
+ * builtin cannot be asked whether it has it either, so the fallback
+ * just answers 0.  This also keeps cppcheck's --force preprocessor
+ * (which explores every #ifdef configuration, including one with
+ * __clang__ defined) from hitting __has_attribute(...) as a directive
+ * it cannot evaluate at all. */
 #ifdef _NTLIBC_INTERNAL
-#if defined(__clang__) && defined(__has_attribute)
-#if __has_attribute(no_sanitize)
+#ifndef __has_attribute
+#define __has_attribute(x) 0
+#endif
+#if defined(__clang__) && __has_attribute(no_sanitize)
 #define __wraps __attribute__((no_sanitize("unsigned-integer-overflow", \
                                            "unsigned-shift-base")))
-#endif
 #endif
 #ifndef __wraps
 #define __wraps

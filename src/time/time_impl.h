@@ -12,14 +12,22 @@
 #define _NTLIBC_TIME_IMPL_H
 
 #include <time.h>
+#include <features.h>
 
 /* Howard Hinnant's days_from_civil/civil_from_days
  * (http://howardhinnant.github.io/date_algorithms.html), which turn a
  * proleptic-Gregorian y/m/d (m in 1..12) into a day count relative to
  * 1970-01-01 and back, correctly and branchlessly for any year an int
  * can hold (including negative ones, via the usual "add 400 years"
- * trick to keep the truncating divisions well-behaved). */
-static inline long long __days_from_civil(long long y, unsigned m, unsigned d)
+ * trick to keep the truncating divisions well-behaved).
+ *
+ * Both functions add an unsigned constant like -3u/-9u to fold a
+ * "subtract, then wrap the month index into 0..11" into one unsigned
+ * addition (see the implicit-integer-sign-change note in
+ * tools/asan-build.sh for the same expression's other half): the
+ * addition itself wraps modulo 2**32, on purpose, to land back at
+ * mp - 3 / mp - 9. */
+static inline __wraps long long __days_from_civil(long long y, unsigned m, unsigned d)
 {
 	y -= m <= 2;
 	long long era = (y >= 0 ? y : y - 399) / 400;
@@ -30,7 +38,7 @@ static inline long long __days_from_civil(long long y, unsigned m, unsigned d)
 	return era * 146097 + (long long)doe - 719468;
 }
 
-static inline void __civil_from_days(long long z, long long *y, unsigned *m, unsigned *d)
+static inline __wraps void __civil_from_days(long long z, long long *y, unsigned *m, unsigned *d)
 {
 	z += 719468;
 	long long era = (z >= 0 ? z : z - 146096) / 146097;

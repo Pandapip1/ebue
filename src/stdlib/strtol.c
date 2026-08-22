@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <ctype.h>
 #include <errno.h>
+#include <features.h>
 
 /* Parse into *out.  Returns 1 on overflow (out = UINTMAX_MAX), 0 else.
  * *neg is set from the sign.  *end is the first unparsed character, or
@@ -52,7 +53,13 @@ static int parse(const char *nptr, const char **end, int base, int *neg, uintmax
 	return ovf;
 }
 
-static uintmax_t strtox(const char *nptr, char **endptr, int base, uintmax_t lim)
+/* Every "0 - x" below is deliberate: C99 7.20.1.4p6 defines a negative
+ * result as its two's-complement bit pattern in the unsigned return
+ * type, which unary minus on an unsigned operand produces directly by
+ * wrapping modulo 2**N (C99 6.2.5p9) -- including for x == 0 - (lim+1),
+ * the one negative magnitude (e.g. LONG_MIN) a signed destination type
+ * cannot represent positively. */
+__wraps static uintmax_t strtox(const char *nptr, char **endptr, int base, uintmax_t lim)
 {
 	const char *end;
 	uintmax_t v;

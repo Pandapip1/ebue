@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <ctype.h>
 
-int isprint(int c)
+__wraps int isprint(int c)
 {
 	return (unsigned)c-0x20 < 0x5f;
 }
