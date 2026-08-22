@@ -251,7 +251,8 @@ static void install_ctrl_handler(void)
 
 	procname.Buffer = "SetConsoleCtrlHandler";
 	/* A 21-byte string literal, not anything a caller supplies, so this
-	 * narrowing to the ANSI_STRING's USHORT lengths cannot wrap. */
+	 * narrowing to the ANSI_STRING's USHORT lengths cannot wrap.
+	 * USHORT-safe: 21-byte string literal. */
 	procname.Length = procname.MaximumLength = (USHORT)strlen(procname.Buffer);
 	if (!NT_SUCCESS(LdrGetProcedureAddress(kernel32, &procname, 0, &proc))) return;
 
