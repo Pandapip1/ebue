@@ -188,6 +188,27 @@ $CC -c $stubcflags -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
 # from the DSO and the matching archive member never pulled -- i.e. the
 # tests would be exercising glibc, not ntlibc.  Linking the objects
 # unconditionally, hidden, makes ntlibc's definitions the ones that bind.
+#
+# One consequence of that is worth stating, because it cost a long
+# debugging session: the precompiled runtime linked in here (libFuzzer,
+# compiler-rt, libstdc++) does not only get preempted, it also *calls*
+# some of these libc-named functions -- and it was compiled against the
+# host's headers, so it stack-allocates the host's struct sizes.  ntlibc's
+# definition wins the call, so an ntlibc struct that is *larger* than the
+# host's, for one of the functions that runtime calls, makes the callee
+# write past the caller's frame.  struct rusage did exactly that: a stray
+# `long __reserved[16]` made it 272 bytes against the host's 144, and
+# getrusage()'s memset(ru, 0, sizeof *ru) smashed the return address of
+# libFuzzer's GetPeakRSSMb() -- every harness died at execution #2 with a
+# jump to address 0, for as long as the harnesses had existed.
+#
+# This is a constraint on *this build*, not on ntlibc's ABI.  ntlibc's
+# headers are the ones its users compile against, and matching glibc's
+# layouts is explicitly not a goal.  It binds only the handful of
+# functions the precompiled runtime itself calls, and only in the
+# direction of "must not be bigger than the host's": a struct that is
+# smaller (struct stat, for one) is harmless here, since the host-ABI
+# caller simply over-allocates.
 # Object names are generated above from source paths with `tr / _`, so the
 # glob can never produce a name needing quoting.  LIBOBJS is expanded
 # unquoted below, as a list of link inputs.

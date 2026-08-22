@@ -20,23 +20,12 @@ struct rlimit {
 	rlim_t rlim_max;
 };
 
-/* No trailing reserved padding: this struct's size (144 bytes on
- * x86_64) deliberately matches glibc's. On the native/ASan/fuzz build
- * (tools/asan-build.sh, fuzz/Makefile) this getrusage() is linked
- * statically alongside precompiled runtime code (libFuzzer, compiler-rt,
- * libstdc++) that was itself compiled against glibc's struct rusage and
- * stack-allocates it by that size; because ntlibc's getrusage() (hidden
- * visibility or not) still wins the intra-executable link for any call
- * to the symbol "getrusage", a larger ntlibc struct here means its
- * memset(ru, 0, sizeof *ru) (src/misc/resource.c) overflows that
- * caller's smaller stack slot -- which is exactly what a stray
- * `long __reserved[16]` here once did: it smashed the return address of
- * libFuzzer's GetPeakRSSMb() and crashed every harness at execution #2,
- * on any machine where the linker's -fvisibility=hidden objects still
- * take priority over -lc at static link time. Keep this layout equal to
- * glibc's; if a new field is ever needed here, add it to
- * src/misc/resource.c's fill logic without growing the struct beyond
- * what NT actually reports. */
+/* No trailing reserved padding: this reports what NT can actually tell
+ * us (src/misc/resource.c) and nothing more.  A `long __reserved[16]`
+ * tail lived here for a while; nothing ever read it, and it made the
+ * struct far larger than any caller had reason to expect.  See the
+ * symbol-preemption note in tools/asan-build.sh for why an oversized
+ * struct here is actively dangerous in the native test build. */
 struct rusage {
 	struct timeval ru_utime;
 	struct timeval ru_stime;
