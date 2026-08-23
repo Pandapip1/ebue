@@ -1026,35 +1026,13 @@ static void test_regex_regerror(void)
  * functions/tsearch.html, functions/lsearch.html, functions/insque.html
  *
  * Pure in-memory data structures throughout: no OS dependency, so
- * everything below is UNIMPL and nothing is N/A (see file header).
+ * everything below was UNIMPL and nothing was N/A (see file header).
+ * Now implemented (src/search/), so this section #includes the real
+ * header instead of declaring ENTRY/ACTION/VISIT/prototypes locally.
  * =================================================================== */
-typedef struct entry {
-	char *key;
-	void *data;
-} ENTRY;
+#include <search.h>
 
-typedef enum { FIND, ENTER } ACTION;
-typedef enum { preorder, postorder, endorder, leaf } VISIT;
-
-int hcreate(size_t nel);
-void hdestroy(void);
-ENTRY *hsearch(ENTRY item, ACTION action);
-
-void *tsearch(const void *key, void **rootp, int (*compar)(const void *, const void *));
-void *tfind(const void *key, void *const *rootp, int (*compar)(const void *, const void *));
-void *tdelete(const void *__restrict key, void **__restrict rootp,
-	       int (*compar)(const void *, const void *));
-void twalk(const void *root, void (*action)(const void *nodep, VISIT which, int depth));
-
-void *lsearch(const void *key, void *base, size_t *nelp, size_t width,
-	       int (*compar)(const void *, const void *));
-void *lfind(const void *key, const void *base, size_t *nelp, size_t width,
-	     int (*compar)(const void *, const void *));
-
-void insque(void *element, void *pred);
-void remque(void *element);
-
-/* UNIMPL: hcreate.html/hsearch.html DESCRIPTION -- hcreate() "shall
+/* hcreate.html/hsearch.html DESCRIPTION -- hcreate() "shall
  * allocate sufficient space for the table" from nel, "an estimate of
  * the maximum number of entries" (may be adjusted upward), returning
  * non-zero on success, 0 if it "cannot allocate sufficient space".
@@ -1064,7 +1042,6 @@ void remque(void *element);
  * "no entry should be made" and returns NULL if item.key is absent.
  * hdestroy() frees the table; "may be followed by another call to
  * hcreate()." */
-#if 0 /* UNIMPL: hcreate.html/hsearch.html/hdestroy.html, see above */
 static void test_search_hsearch_roundtrip(void)
 {
 	ENTRY e, *r;
@@ -1093,14 +1070,12 @@ static void test_search_hsearch_roundtrip(void)
 	CHECK(hcreate(4) != 0);
 	hdestroy();
 }
-#endif
 
 /* UNIMPL: tsearch.html/tfind.html DESCRIPTION -- tsearch(): found ->
  * "a pointer to this found node shall be returned"; not found -> "the
  * value pointed to by key shall be inserted ... and a pointer to this
  * [new] node returned", and *rootp updated when the tree started
  * empty. tfind() never inserts; returns NULL if not found. */
-#if 0 /* UNIMPL: tsearch.html/tfind.html, see above */
 static int cmp_int_ptr(const void *a, const void *b)
 {
 	int x = *(const int *)a, y = *(const int *)b;
@@ -1123,7 +1098,11 @@ static void test_search_tsearch_tfind(void)
 
 	found = tsearch(&a2, &root, cmp_int_ptr);	/* key "5" already present */
 	CHECK(found != NULL && *(int *)*found == 5);
-	CHECK(*found == *tfind(&a, &root, cmp_int_ptr));	/* same node both times */
+	CHECK(*found == *(void **)tfind(&a, &root, cmp_int_ptr));	/* same node both times.
+		 * (void **) cast: tfind() returns void * per tfind.html's synopsis, and *(void *)
+		 * is a constraint violation (indirection through pointer to an incomplete type) --
+		 * a plain temporary-free `*tfind(...)` cannot type-check under strict C99, so the
+		 * cast makes the comparison syntactically legal without changing what it checks. */
 
 	CHECK(tfind(&b, &root, cmp_int_ptr) != NULL);
 	{
@@ -1131,7 +1110,6 @@ static void test_search_tsearch_tfind(void)
 		CHECK(tfind(&missing, &root, cmp_int_ptr) == NULL);
 	}
 }
-#endif
 
 /* UNIMPL: tdelete.html DESCRIPTION -- return "a pointer to the parent
  * of the deleted node, or an unspecified non-null pointer if the
@@ -1139,7 +1117,6 @@ static void test_search_tsearch_tfind(void)
  * found." "The variable pointed to by rootp shall be changed if the
  * deleted node was the root ... If the deleted node was the root ...
  * and had no children, ... rootp shall be set to a null pointer." */
-#if 0 /* UNIMPL: tdelete.html, see above */
 static void test_search_tdelete(void)
 {
 	void *root = NULL;
@@ -1155,7 +1132,6 @@ static void test_search_tdelete(void)
 		CHECK(tdelete(&missing, &root, cmp_int_ptr) == NULL);
 	}
 }
-#endif
 
 /* UNIMPL: twalk.html DESCRIPTION -- depth-first, left-to-right;
  * action() is called with VISIT preorder/postorder/endorder for an
@@ -1163,7 +1139,6 @@ static void test_search_tdelete(void)
  * VISIT leaf for a node with no children (exactly once). "The third
  * argument shall be the level of the node in the tree, with the root
  * being level 0." */
-#if 0 /* UNIMPL: twalk.html, see above */
 static int walk_leaf_count, walk_root_seen_at_level0;
 static void walk_action(const void *nodep, VISIT which, int depth)
 {
@@ -1184,13 +1159,11 @@ static void test_search_twalk(void)
 	CHECK(walk_leaf_count == 2);	/* 3 and 8 are leaves under root 5 */
 	CHECK(walk_root_seen_at_level0 == 1);
 }
-#endif
 
 /* UNIMPL: lsearch.html/lfind.html DESCRIPTION -- lfind() is read-only,
  * returns NULL on a miss without touching *nelp. lsearch() appends a
  * missing key to the end of the array and increments *nelp; on a hit,
  * neither function modifies the table. */
-#if 0 /* UNIMPL: lsearch.html/lfind.html, see above */
 static int cmp_int_arr(const void *a, const void *b)
 {
 	return *(const int *)a != *(const int *)b;
@@ -1216,7 +1189,6 @@ static void test_search_lsearch_lfind(void)
 	r = lsearch(&key, base, &nel, sizeof(int), cmp_int_arr);
 	CHECK(r == &base[3] && nel == 4);	/* now present: no second append */
 }
-#endif
 
 /* UNIMPL: insque.html/remque.html DESCRIPTION -- "the first two
  * members of the structure are pointers to the same type of structure"
@@ -1226,7 +1198,6 @@ static void test_search_lsearch_lfind(void)
  * the application must self-link the first element's forward and
  * backward pointers to its own address before use. remque() removes an
  * element from either kind of queue. */
-#if 0 /* UNIMPL: insque.html/remque.html, see above */
 struct qnode { struct qnode *fwd, *bwd; int v; };
 static void test_search_insque_remque(void)
 {
@@ -1250,7 +1221,6 @@ static void test_search_insque_remque(void)
 	insque(&b, &a);
 	CHECK(a.fwd == &b && b.bwd == &a && b.fwd == &a && a.bwd == &b);
 }
-#endif
 
 /* ===================================================================
  * ftw.h -- functions/ftw.html, functions/nftw.html
@@ -1412,7 +1382,14 @@ int main(void)
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
 
+	test_search_hsearch_roundtrip();
+	test_search_tsearch_tfind();
+	test_search_tdelete();
+	test_search_twalk();
+	test_search_lsearch_lfind();
+	test_search_insque_remque();
+
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
-	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h implemented, unfenced above; regex.h/search.h/ftw.h still absent, every clause fenced -- see file header)\n");
+	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h/search.h implemented, unfenced above; regex.h/ftw.h still absent, every clause fenced -- see file header)\n");
 	return 0;
 }

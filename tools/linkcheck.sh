@@ -326,10 +326,24 @@ reason_for() {
 # not read that array itself) -- a generated single-call TU for any of
 # these six hits the identical missing-`__rpath` link failure, for a
 # reason that has nothing to do with whether the function itself works.
+#
+# hsearch() (include/search.h, src/search/hsearch.c) is a different
+# shape of the same "the generator, not the symbol, is the problem"
+# story: basedefs/search.h.html's ENTRY is passed *by value*
+# (`ENTRY hsearch(ENTRY item, ACTION action)` -- ACTION is an enum, so
+# its own `0` argument is fine), and this script's call-site generator
+# (see "method" above) always fills every argument slot with the
+# literal `0`. `0` does not implicitly convert to a struct type in C,
+# so the generated `hsearch(0, 0)` fails to compile -- not because
+# hsearch is unlinkable (test/posix-glob.c calls it with a real ENTRY
+# literal and it works), but because a bare `0` can never stand in for
+# a byval struct argument no matter what the callee does with it.
 linkcheck_exception() {
 	case $1 in
 	ntlibc_rpath_load|ntlibc_rpath_sym|ntlibc_rpath_error|ntlibc_rpath_fail|ntlibc_delayLoadHelper2|ntlibc_rpath_unload|ntlibc_rpath_error_seq|dlopen|dlsym|dlclose|dlerror)
 		echo "resolves __rpath (include/ntlibc/rpath.h), an extern array the *calling program* is documented to define (see test/rpath.c) -- not a libc symbol, so no standalone TU can supply it" ;;
+	hsearch)
+		echo "takes ENTRY by value (basedefs/search.h.html); this script's generated call site fills every argument with a literal 0, which cannot convert to a struct type -- a generator limitation, not an unlinkable symbol (see test/posix-glob.c's real ENTRY-literal call)" ;;
 	*) echo "" ;;
 	esac
 }
