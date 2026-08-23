@@ -2474,6 +2474,28 @@ NTSTATUS NTAPI NtQueryInformationProcess(HANDLE h, PROCESSINFOCLASS cls, PVOID b
 	}
 }
 
+/* src/misc/resource.c's setpriority() sets its own (and, for a process
+ * this library itself spawned, that child's) NT-visible priority class
+ * via this, then checks the return -- unlike NtCreateJobObject/friends
+ * above, a real STATUS_SUCCESS is needed here for the native asan build
+ * of test/posix-sysmisc.c to see the same round trip 'make check' does
+ * under Wine. Nothing is actually done with the class (this host process
+ * really changing its own OS scheduling priority would be a surprising
+ * side effect of running a test suite), which is fine: ntlibc's own
+ * cached nice value, not a requery of this, is what getpriority() reads
+ * back for the process's own priority (see include/sys/resource.h). */
+NTSTATUS NTAPI NtSetInformationProcess(HANDLE h, PROCESSINFOCLASS cls, PVOID buf, ULONG len)
+{
+	(void)h;
+	switch (cls) {
+	case ProcessPriorityClass:
+		if (len != sizeof(PROCESS_PRIORITY_CLASS)) return STATUS_INFO_LENGTH_MISMATCH;
+		return STATUS_SUCCESS;
+	default:
+		return STATUS_NOT_IMPLEMENTED;
+	}
+}
+
 NTSTATUS NTAPI NtTerminateProcess(HANDLE h, NTSTATUS code)
 {
 	struct ofile *f = h && h != NtCurrentProcess() ? of_get(h) : 0;
@@ -2774,6 +2796,13 @@ NOTIMPL(NtOpenSymbolicLinkObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES 
 NOTIMPL(NtQuerySymbolicLinkObject, (HANDLE a, PUNICODE_STRING b, PULONG c))
 NOTIMPL(NtQuerySystemInformation, (SYSTEM_INFORMATION_CLASS a, PVOID b, ULONG c, PULONG d))
 NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
+/* src/misc/resource.c's setrlimit(): the job-object route it takes for
+ * RLIMIT_NPROC/CPU/AS/DATA is best-effort (its own soft/hard state is
+ * what getrlimit() actually reads back), so a real host process never
+ * needing job objects at all is fine leaving these NOTIMPL. */
+NOTIMPL(NtCreateJobObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
+NOTIMPL(NtAssignProcessToJobObject, (HANDLE a, HANDLE b))
+NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULONG d))
 
 PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HANDLER h)
 {

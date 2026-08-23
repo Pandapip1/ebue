@@ -787,6 +787,18 @@ typedef enum _PROCESSINFOCLASS {
 	ProcessImageInformation = 37
 } PROCESSINFOCLASS;
 
+typedef struct _PROCESS_PRIORITY_CLASS {
+	UCHAR Foreground;
+	UCHAR PriorityClass;
+} PROCESS_PRIORITY_CLASS;
+
+#define PROCESS_PRIOCLASS_IDLE          1
+#define PROCESS_PRIOCLASS_NORMAL        2
+#define PROCESS_PRIOCLASS_HIGH          3
+#define PROCESS_PRIOCLASS_REALTIME      4
+#define PROCESS_PRIOCLASS_BELOW_NORMAL  5
+#define PROCESS_PRIOCLASS_ABOVE_NORMAL  6
+
 typedef struct _PROCESS_BASIC_INFORMATION {
 	NTSTATUS ExitStatus;
 	PPEB PebBaseAddress;

@@ -49,6 +49,9 @@
  * times, since this library has no per-thread accounting (the same
  * approximation src/time/clock_gettime.c's cputime_get() already makes
  * for CLOCK_THREAD_CPUTIME_ID).
+ *
+ * getpriority()/setpriority(): see include/sys/resource.h for the full
+ * nice<->NT-base-priority mapping this uses and why it round-trips.
  */
 #include <sys/resource.h>
 #include <unistd.h>
@@ -215,4 +218,142 @@ int getrusage(int who, struct rusage *ru)
 	ru->ru_utime.tv_sec = (time_t)(kt.UserTime / 10000000LL);
 	ru->ru_utime.tv_usec = (suseconds_t)((kt.UserTime % 10000000LL) / 10);
 	return 0;
+}
+
+/* ---- getpriority()/setpriority() ----------------------------------------
+ * See include/sys/resource.h for the full writeup of why this maps nice
+ * values onto ProcessPriorityClass (3 classes actually reachable from an
+ * unprivileged caller) rather than the finer-grained ProcessBasePriority:
+ * the latter is STATUS_NOT_IMPLEMENTED on the Wine build this project's
+ * own CI runs against, confirmed directly --
+ *
+ *   NtSetInformationProcess(NtCurrentProcess(), ProcessBasePriority,
+ *                            &bp, sizeof bp)
+ *
+ * returns STATUS_NOT_IMPLEMENTED (-> ENOSYS) on that Wine even though
+ * NtQueryInformationProcess(ProcessBasicInformation) happily reports
+ * BasePriority back -- support for *setting* it was only added to Wine
+ * in commit b9dd7d114 ("ntdll: Implement ProcessBasePriority class in
+ * NtSetInformationProcess."), first released in wine-10.7, well after
+ * the wine-9.0 this project's own CI environment ships. */
+static UCHAR priorityclass_from_nice(int nice)
+{
+	if (nice <= 0) return PROCESS_PRIOCLASS_NORMAL;
+	if (nice < 10) return PROCESS_PRIOCLASS_BELOW_NORMAL;
+	return PROCESS_PRIOCLASS_IDLE;
+}
+
+static int nice_from_baseprio(int bp)
+{
+	int nice = 8 - bp;
+	if (nice < -NZERO) nice = -NZERO;
+	if (nice > NZERO - 1) nice = NZERO - 1;
+	return nice;
+}
+
+/* This process's own nice value: the authoritative source getpriority()
+ * reads back for PRIO_PROCESS on self, so that set-then-get is always
+ * exact for this process regardless of where the mapping above is lossy
+ * (see include/sys/resource.h). Starts at the POSIX default, 0. */
+static int self_nice;
+
+int getpriority(int which, id_t who)
+{
+	int self;
+	struct __child *c;
+	HANDLE h;
+	NTSTATUS st;
+	OBJECT_ATTRIBUTES oa;
+	CLIENT_ID cid;
+	PROCESS_BASIC_INFORMATION pbi;
+
+	switch (which) {
+	case PRIO_PROCESS: self = (who == 0 || who == (id_t)getpid()); break;
+	case PRIO_PGRP:     self = (who == 0 || who == (id_t)getpgrp()); break;
+	case PRIO_USER:     self = (who == 0 || who == (id_t)geteuid()); break;
+	default: errno = EINVAL; return -1;
+	}
+
+	if (self) return self_nice;
+
+	/* Not self: ntlibc tracks no group/user directory, so only a
+	 * foreign PRIO_PROCESS pid can possibly be found. */
+	if (which != PRIO_PROCESS) { errno = ESRCH; return -1; }
+
+	c = __child_find((int)who);
+	if (c) {
+		h = c->h;
+	} else {
+		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+		cid.UniqueProcess = (HANDLE)(ULONG_PTR)who;
+		cid.UniqueThread = 0;
+		st = NtOpenProcess(&h, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
+		if (!NT_SUCCESS(st)) { errno = ESRCH; return -1; }
+	}
+	st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
+	if (!c) NtClose(h);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return nice_from_baseprio((int)pbi.BasePriority);
+}
+
+int setpriority(int which, id_t who, int value)
+{
+	int self;
+	struct __child *c;
+	HANDLE h;
+	NTSTATUS st;
+	OBJECT_ATTRIBUTES oa;
+	CLIENT_ID cid;
+	PROCESS_PRIORITY_CLASS pc;
+
+	switch (which) {
+	case PRIO_PROCESS: self = (who == 0 || who == (id_t)getpid()); break;
+	case PRIO_PGRP:     self = (who == 0 || who == (id_t)getpgrp()); break;
+	case PRIO_USER:     self = (who == 0 || who == (id_t)geteuid()); break;
+	default: errno = EINVAL; return -1;
+	}
+
+	if (value < -NZERO) value = -NZERO;
+	if (value > NZERO - 1) value = NZERO - 1;
+
+	if (self) {
+		/* "Only a process with appropriate privileges can lower its
+		 * nice value" -- this library's one user is always
+		 * unprivileged, so any value below the POSIX default (0) is
+		 * always refused; anywhere in [0, NZERO-1], including back
+		 * down to a value this process held a moment ago, is always
+		 * allowed. */
+		if (value < 0) { errno = EACCES; return -1; }
+		pc.Foreground = 0;
+		pc.PriorityClass = priorityclass_from_nice(value);
+		st = NtSetInformationProcess(NtCurrentProcess(), ProcessPriorityClass, &pc, sizeof pc);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		self_nice = value;
+		return 0;
+	}
+
+	if (which != PRIO_PROCESS) { errno = ESRCH; return -1; }
+
+	c = __child_find((int)who);
+	if (c) {
+		pc.Foreground = 0;
+		pc.PriorityClass = priorityclass_from_nice(value);
+		st = NtSetInformationProcess(c->h, ProcessPriorityClass, &pc, sizeof pc);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		return 0;
+	}
+
+	/* A process exists but this library did not spawn it: "the real
+	 * [or] effective user ID of the executing process [does not]
+	 * match the effective user ID of the process whose nice value is
+	 * being changed" is the only way that can be true here, since
+	 * ntlibc's one-user model has nothing else to check. */
+	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+	cid.UniqueProcess = (HANDLE)(ULONG_PTR)who;
+	cid.UniqueThread = 0;
+	st = NtOpenProcess(&h, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
+	if (!NT_SUCCESS(st)) { errno = ESRCH; return -1; }
+	NtClose(h);
+	errno = EPERM;
+	return -1;
 }

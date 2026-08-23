@@ -9,7 +9,9 @@
  * (for the two non-POSIX pieces) the GNU/BSD documentation cited
  * inline.
  *
- * Three genuine implementation gaps live in this area.  Per the
+ * Three genuine implementation gaps were originally found in this area;
+ * two are now closed (setrlimit()'s enforceable half, and getpriority()/
+ * setpriority() entirely -- both in src/misc/resource.c). Per the
  * project's current standard, a gap is no longer just recorded in
  * prose and left untested -- every specified clause gets a real test
  * in this file, fenced off with one of three conventions so the
@@ -25,25 +27,26 @@
  *
  * The three gaps:
  *
- *   - setrlimit() is *declared* in include/sys/resource.h but has no
- *     definition anywhere in src/ (grep confirms) -- calling it is a
- *     link error, not a runtime ENOSYS.  Fenced UNIMPL below for the
- *     RLIMIT_* resources NT *can* enforce (RLIMIT_NPROC, RLIMIT_CPU,
- *     RLIMIT_AS/RLIMIT_DATA -- job objects give a real primitive);
- *     fenced N/A for the ones it cannot (RLIMIT_NOFILE, RLIMIT_STACK,
- *     RLIMIT_FSIZE, RLIMIT_CORE, RLIMIT_RSS, RLIMIT_MEMLOCK -- no NT
- *     mechanism reaches these after process start).
+ *   - setrlimit() was *declared* in include/sys/resource.h but had no
+ *     definition anywhere in src/ -- calling it was a link error, not a
+ *     runtime ENOSYS. Now defined (src/misc/resource.c, unfenced below)
+ *     for the RLIMIT_* resources NT *can* enforce (RLIMIT_NPROC,
+ *     RLIMIT_CPU, RLIMIT_AS/RLIMIT_DATA -- job objects give a real
+ *     primitive); still fenced N/A for the ones it cannot (RLIMIT_NOFILE,
+ *     RLIMIT_STACK, RLIMIT_FSIZE, RLIMIT_CORE, RLIMIT_RSS,
+ *     RLIMIT_MEMLOCK -- no NT mechanism reaches these after process
+ *     start, re-verified rather than just inherited).
  *
  *   - getpriority()/setpriority() are POSIX.1-2017 base functions
- *     (moved from XSI to BASE in Issue 5 -- getpriority.html) declared
- *     by <sys/resource.h>, but ntlibc does not declare or define them
- *     at all.  This *is* implementable on NT (SetPriorityClass, or
- *     NtQueryInformationProcess()/NtSetInformationProcess() with
- *     ProcessBasePriority under ntdll, mapped through the nice-value
- *     range) -- a real gap, not a platform limitation.  Fenced UNIMPL
- *     below, with local prototypes/macros since none exist to include.
+ *     (moved from XSI to BASE in Issue 5 -- getpriority.html). Now
+ *     declared by <sys/resource.h> and defined in src/misc/resource.c
+ *     (unfenced below), via NtQueryInformationProcess()/
+ *     NtSetInformationProcess() with ProcessBasePriority under ntdll,
+ *     mapped through the nice-value range -- see that header for the
+ *     mapping writeup.
  *
- *   - select()/pselect(): select() is declared but, per
+ *   - select()/pselect(): still an open gap, out of scope for this
+ *     pass. select() is declared but, per
  *     include/sys/select.h's own undefined-ok comment, not defined
  *     anywhere in src/ (grep confirms no `int select(` in any .c).
  *     pselect() is not even declared. Both are implementable (the
@@ -288,27 +291,14 @@ static void test_getrusage(const char *self)
 }
 
 /* getpriority()/setpriority(): POSIX.1-2017 base functions (moved from
- * XSI to BASE in Issue 5, getpriority.html "Standards Status") that
- * <sys/resource.h> does not even declare. Local prototypes/macros
- * below, since nothing in include/ has them -- these are exactly what
- * a real implementation would add to sys/resource.h, not to this
- * test file. NZERO (musl/glibc value 20) is likewise undeclared here;
- * "the default nice value is {NZERO}" (getpriority.html DESCRIPTION). */
-#if 0 /* UNIMPL: getpriority.html DESCRIPTION/RETURN VALUE/ERRORS --
-	getpriority()/setpriority() are not declared or defined
-	anywhere in ntlibc. NT mechanism: SetPriorityClass()/
-	GetPriorityClass() (kernel32) or, staying on pure ntdll like
-	the rest of this library, NtSetInformationProcess()/
-	NtQueryInformationProcess() with ProcessBasePriority (declared
-	in src/internal/nt.h already), with the NT base-priority scale
-	mapped onto POSIX's [0, NZERO*2-1] nice range. */
-#define NZERO 20
-#define PRIO_PROCESS 0
-#define PRIO_PGRP 1
-#define PRIO_USER 2
-int getpriority(int, id_t);
-int setpriority(int, id_t, int);
-
+ * XSI to BASE in Issue 5, getpriority.html "Standards Status"), now
+ * declared by <sys/resource.h> and defined in src/misc/resource.c --
+ * NZERO/PRIO_PROCESS/PRIO_PGRP/PRIO_USER come from there too; see that
+ * header for the full nice<->NT-base-priority mapping writeup. NT
+ * mechanism: NtSetInformationProcess()/NtQueryInformationProcess() with
+ * ProcessBasePriority, staying on pure ntdll like the rest of this
+ * library. "the default nice value is {NZERO}" (getpriority.html
+ * DESCRIPTION). */
 static void test_getpriority_setpriority(void)
 {
 	int p;
@@ -389,7 +379,6 @@ static void test_getpriority_setpriority(void)
 		CHECK(setpriority(PRIO_PROCESS, getpid(), p - 1) == -1 && errno == EACCES);
 	}
 }
-#endif
 
 /* ===================== sys/select.h ===================== */
 
@@ -940,6 +929,7 @@ int main(int argc, char **argv)
 	test_getrlimit();
 	test_setrlimit_enforceable();
 	test_getrusage(argv[0]);
+	test_getpriority_setpriority();
 	test_fd_macros();
 	test_sys_param();
 	test_getopt_long_abbrev();

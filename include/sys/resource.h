@@ -58,6 +58,60 @@ int getrlimit (int, struct rlimit *);
 int setrlimit (int, const struct rlimit *);
 int getrusage (int, struct rusage *);
 
+/* getpriority()/setpriority(): POSIX.1-2017 base functions (moved from XSI
+ * to BASE in Issue 5, getpriority.html "Standards Status"). NZERO is the
+ * default nice value; the valid *returned* nice range is
+ * [-NZERO, NZERO-1].
+ *
+ * Mapping onto NT: this process's own nice value is tracked directly (the
+ * authoritative source getpriority() reads back for PRIO_PROCESS on
+ * itself), and mirrored onto NtSetInformationProcess(ProcessPriorityClass)
+ * as best-effort real NT-visible effect. NtSetInformationProcess's other
+ * plausible route, the finer-grained ProcessBasePriority class, turns out
+ * not to be implemented by every NT workalike this library's test suite
+ * runs against (confirmed: STATUS_NOT_IMPLEMENTED from the Wine build
+ * this project's own CI uses, even though a newer Wine tree does
+ * implement it -- src/misc/resource.c has the detail); ProcessPriorityClass
+ * is the coarser but far more portable mechanism (it is what kernel32's
+ * SetPriorityClass() has always been built on), so that is what is used:
+ *     nice == 0         -> PROCESS_PRIOCLASS_NORMAL
+ *     0  < nice < 10     -> PROCESS_PRIOCLASS_BELOW_NORMAL
+ *     10 <= nice <= 19   -> PROCESS_PRIOCLASS_IDLE
+ * (each successive class is less favorable to the process, matching the
+ * POSIX direction of higher nice meaning friendlier to other processes).
+ * Since an unprivileged caller may never set a negative nice value at all
+ * (see EACCES below), the classes above NORMAL are never reached from
+ * this process's own setpriority() calls, and are listed here only for
+ * completeness (src/internal/nt.h). This maps 20 nice values onto 3
+ * classes -- badly lossy -- but every setpriority() this process issues
+ * against itself is remembered verbatim in a small piece of process-local
+ * state, so getpriority() on one's own process always reads back exactly
+ * what was last set, regardless of how coarse the NT-visible side effect
+ * is. A *foreign* process's nice value (queried, never cached) is derived
+ * from PROCESS_BASIC_INFORMATION.BasePriority via
+ * nice = clamp(8 - bp, -20, 19), best-effort in two ways: ntlibc has no
+ * cache for a priority it did not itself set, and that BasePriority field
+ * is not reliably populated for a 32-bit process running under WOW64 on
+ * at least the Wine build this project tests against (its own test
+ * suite, dlls/ntdll/tests/info.c, marks exactly that field `todo_wine`
+ * under is_wow64 after a priority change) -- both honestly approximate,
+ * not exact, for a process this one did not set the priority of itself.
+ *
+ * PRIO_PGRP/PRIO_USER: ntlibc models exactly one process group (this
+ * process is always its own and only member -- getpgrp() is a hardcoded
+ * 1) and exactly one user (geteuid() is a hardcoded 1000), so who==0,
+ * who==getpgrp(), or who==geteuid() all honestly denote "this process,
+ * the sole member of its own group and the sole process running as this
+ * uid" and behave exactly like PRIO_PROCESS on self. Any other who value
+ * cannot name a group or user this library tracks, so it is ESRCH -- no
+ * group/user directory exists to search. */
+#define NZERO 20
+#define PRIO_PROCESS 0
+#define PRIO_PGRP 1
+#define PRIO_USER 2
+int getpriority (int, id_t);
+int setpriority (int, id_t, int);
+
 #define RUSAGE_SELF 0
 #define RUSAGE_CHILDREN (-1)
 #define RUSAGE_THREAD 1
