@@ -225,7 +225,7 @@ TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
 	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
 
-# test/rpath-win.c delay-loads this DLL from its own directory ($ORIGIN)
+# test/rpath.c delay-loads this DLL from its own directory ($ORIGIN)
 # to exercise the real resolution path -- it links against nothing of
 # ntlibc's, so it is built directly with $(CC), no crt1.o/libc.a
 # involved, same as any other freestanding DLL. Kept as a plain
@@ -236,7 +236,7 @@ obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
 obj/test/rpath-plugin.dll: $(srcdir)/test/rpath-plugin-src/rpath-plugin.c | obj/test
 	$(CC) -shared -o $@ $<
 
-obj/test/rpath-win.exe: obj/test/rpath-plugin.dll
+obj/test/rpath.exe: obj/test/rpath-plugin.dll
 
 obj/test:
 	mkdir -p $@
