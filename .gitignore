@@ -20,3 +20,16 @@ oom-*
 
 # Scratch output from test/misc.c's exit-flush check.
 /misc-exit-flush.tmp
+
+# Fixtures that tests create in the working directory.  `make check` runs
+# the test binaries from the source tree, so a test that builds a scratch
+# tree leaves it here.  Tests are expected to tear their own fixtures down
+# (see ftw_fixture_teardown() in test/posix-glob.c); these entries are the
+# backstop for a run that dies before cleanup, so a crashed test cannot
+# turn into a committed directory -- or, worse, into a fixture that is
+# already present on the next run and makes a test pass for the wrong
+# reason.
+/root/
+/tmp-*/
+/test-*.tmp
+*.tmp

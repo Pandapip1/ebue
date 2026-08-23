@@ -30,6 +30,32 @@ if ! git diff --quiet -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'; then
 	exit 1
 fi
 
+# Refuse a commit that contains conflict markers.  This is not
+# hypothetical: markers have been committed into boot/kaem/*.kaem and into
+# test sources more than once here, each time by resolving a cherry-pick in
+# a hurry and staging before re-reading.  Left in a generated bootstrap
+# script they are especially nasty, because nothing compiles them until a
+# from-scratch bootstrap runs.
+#
+# Only staged content is scanned, and only the added side, so a file that
+# legitimately *discusses* markers (this hook, a doc) is not blocked --
+# and note the "=======" form is deliberately not matched on its own,
+# since section separators like /* ===== foo ===== */ are common here.
+conflicted=$(git diff --cached --name-only --diff-filter=ACM |
+	while IFS= read -r f; do
+		if git show ":$f" 2>/dev/null |
+		   grep -qE '^(<<<<<<< |>>>>>>> |\|\|\|\|\|\|\| )'; then
+			printf '%s\n' "$f"
+		fi
+	done)
+if [ -n "$conflicted" ]; then
+	echo "pre-commit: conflict markers in staged content:" >&2
+	printf '%s\n' "$conflicted" | sed 's/^/pre-commit:   /' >&2
+	echo "pre-commit: finish the resolution, re-read the file, then stage" >&2
+	echo "pre-commit: it again.  Never 'git add' straight after a resolve." >&2
+	exit 1
+fi
+
 if [ ! -f config.mak ]; then
 	# Nothing configured yet, so there is no CC/ARCH to hand gen-kaem.sh;
 	# nothing more to check without it.
