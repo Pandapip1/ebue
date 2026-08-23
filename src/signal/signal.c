@@ -43,6 +43,16 @@ static int act_flags[_NSIG];
 
 static int sig_valid(int sig) { return sig > 0 && sig < _NSIG; }
 
+/* Set only by exception_handler(), immediately around its call into
+ * __raise_internal(), so a SIGSEGV/SIGBUS/SIGILL/SIGFPE handler
+ * installed with SA_SIGINFO can be told this delivery came from a
+ * hardware fault rather than kill()/raise() -- see the siginfo_t
+ * construction in __raise_internal() below. No locking, same as every
+ * other global here (this file's header comment: no threading support
+ * to speak of, and delivery is synchronous). */
+static int fault_active;
+static void *fault_addr;
+
 void (*signal(int sig, void (*h)(int)))(int)
 {
 	void (*old)(int);
@@ -154,7 +164,60 @@ int __raise_internal(int sig)
 		sigdelset(&blocked, SIGKILL);
 		sigdelset(&blocked, SIGSTOP);
 
-		h(sig);
+		/* sigaction.html DESCRIPTION: "If SA_SIGINFO is set ...
+		 * sa_sigaction ... specif[ies] a signal-catching function" that
+		 * takes (int, siginfo_t *, void *) instead of (int). sigaction()
+		 * stores act->sa_handler into handlers[sig] (above), which reads
+		 * the same bits as act->sa_sigaction -- both are members of the
+		 * same union slot in struct sigaction (include/signal.h) -- so
+		 * h already holds the right function pointer; it is only cast
+		 * back to its real, three-argument type here. */
+		if (flags & SA_SIGINFO) {
+			void (*hsi)(int, siginfo_t *, void *) =
+				(void (*)(int, siginfo_t *, void *))(void *)h;
+			siginfo_t si;
+
+			memset(&si, 0, sizeof si);
+			si.si_signo = sig;
+			si.si_errno = 0;
+			if (fault_active) {
+				/* signal.h.html siginfo_t DESCRIPTION: si_addr is
+				 * defined for a hardware-fault signal
+				 * (SIGILL/SIGFPE/SIGSEGV/SIGBUS); exception_handler()
+				 * below sets fault_addr from the NT EXCEPTION_RECORD
+				 * for the exception codes that actually carry a
+				 * faulting address.
+				 *
+				 * si_code is honest but coarse: NT's
+				 * EXCEPTION_RECORD gives ExceptionInformation[0] (was
+				 * the access a read/write/execute) but nothing that
+				 * says whether the page was unmapped or merely
+				 * protected, so there is no reliable way to choose
+				 * between e.g. SEGV_MAPERR and SEGV_ACCERR -- and
+				 * this library does not even declare those macros
+				 * (grep include/signal.h). SI_KERNEL ("Sent by the
+				 * kernel", already declared) is used instead: it
+				 * correctly says "not from kill()/raise()" without
+				 * fabricating a fault subcode nobody checked. */
+				si.si_code = SI_KERNEL;
+				si.si_addr = fault_addr;
+			} else {
+				/* raise.html: raise() "shall be equivalent to calling
+				 * kill(getpid(), sig)"; kill()'s self-delivery path
+				 * (src/signal/signal.c's kill()) and the SIGPIPE/
+				 * SIGINT deliveries elsewhere in this file all funnel
+				 * through here the same way, none of them hardware
+				 * faults, so SI_USER ("signal sent by kill()",
+				 * signal.h.html) plus the sender's own pid/uid is
+				 * correct for every one of them. */
+				si.si_code = SI_USER;
+				si.si_pid = getpid();
+				si.si_uid = getuid();
+			}
+			hsi(sig, &si, NULL);
+		} else {
+			h(sig);
+		}
 
 		blocked = saved;
 	}
@@ -281,7 +344,19 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 		if (sig != SIGINT && sig != SIGTRAP) __nt_exit(__NT_SIGNAL_EXIT(sig));
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}
+	/* Tell __raise_internal() this delivery is not a kill()/raise() --
+	 * see the siginfo_t construction there. si_addr (signal.h.html) is
+	 * only meaningful for the access-violation-shaped exceptions, whose
+	 * EXCEPTION_RECORD documents ExceptionInformation[1] as the
+	 * faulting address (src/internal/nt.h); the others (misalignment,
+	 * illegal instruction, arithmetic traps, breakpoints, Ctrl-C) carry
+	 * no such address, so fault_addr stays NULL for them. */
+	fault_active = 1;
+	fault_addr = (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+	              ep->ExceptionRecord->ExceptionCode == EXCEPTION_IN_PAGE_ERROR)
+	           ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL;
 	__raise_internal(sig);
+	fault_active = 0;
 	/* A handler that returns from a fault re-executes the instruction,
 	 * as on Unix; for SIGINT/SIGTRAP continuing is the right thing. */
 	return EXCEPTION_CONTINUE_EXECUTION;

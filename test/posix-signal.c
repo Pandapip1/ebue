@@ -436,28 +436,6 @@ static void test_psiginfo(void)
  * sigaction.html: SA_SIGINFO / sa_sigaction / siginfo_t
  * ================================================================== */
 
-#if 0 /* UNIMPL: sigaction.html DESCRIPTION: "If SA_SIGINFO is set ...
- * sa_sigaction ... specif[ies] a signal-catching function." The
- * three-argument form must be invoked instead of sa_handler, and (per
- * signal.h.html's siginfo_t description) si_signo, si_code, and --
- * "generated ... as a result of ... kill()" -- si_pid/si_uid must be
- * populated.
- *
- * struct sigaction already has an sa_sigaction member (include/signal.h,
- * aliased onto the same union slot as sa_handler), so this compiles and
- * assigns cleanly -- the gap is entirely in src/signal/signal.c:
- * sigaction() copies the union blindly into handlers[sig] as a plain
- * `void (*)(int)`, and __raise_internal()/exception_handler() only ever
- * call it that way (`h(sig)`), so an SA_SIGINFO handler installed this
- * way is invoked with sig correct but si_code/si_pid/si_addr fed by
- * whatever garbage register the ABI would put there for the argument
- * that was never passed at all.  This is a small, well-scoped addition,
- * not a new subsystem: __raise_internal() already threads sig_valid,
- * act_flags[sig] and a stack-local path through the handler call (the
- * SA_RESETHAND/SA_NODEFER/sa_mask work from commit 99474ee is exactly
- * that shape), so branching on `act_flags[sig] & SA_SIGINFO` there to
- * build a siginfo_t and call the sa_sigaction cast instead of h(sig)
- * would be a few lines, reusing machinery that already exists. */
 static volatile int sainfo_signo, sainfo_code, sainfo_pid_ok;
 static void sainfo_handler(int sig, siginfo_t *si, void *uctx)
 {
@@ -514,9 +492,16 @@ static void test_sa_siginfo_fault_child(const char *self)
 	pid = __spawn(self, argv, environ);
 	if (pid < 0) { printf("note: cannot spawn \"%s\"; SA_SIGINFO si_addr child test skipped\n", self); return; }
 	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	/* Same root cause as test_fault_sigsegv() below: there is no real
+	 * NT-exception bridge under a native ASan build, so the child (see
+	 * "--fault-segv-siginfo" in main()) does not attempt the fault at
+	 * all rather than take an uncontrolled wild SEGV. */
+	printf("note: native ASan build cannot provoke or forward a real SIGSEGV; SA_SIGINFO si_addr check skipped\n");
+#else
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 44);   /* si_addr was non-NULL */
-}
 #endif
+}
 
 /* ================================================================== *
  * Hardware-fault signals: SIGSEGV / SIGFPE / SIGILL / SIGBUS, via the
@@ -868,6 +853,36 @@ int main(int argc, char **argv)
 		*p = 1;
 		_Exit(90);   /* must not be reached */
 	}
+	if (argc > 1 && !strcmp(argv[1], "--fault-segv-siginfo")) {
+#ifdef NATIVE_NO_FAULT_BRIDGE
+		/* Unlike --fault-segv's literal NULL write, this address is
+		 * only known bad at run time, not a compile-time-recognized
+		 * null pointer -- so UBSan's null-pointer-store check (which
+		 * intercepts *p=1 for a literal NULL before the real page
+		 * fault, see test_fault_sigsegv()) does not catch it, and the
+		 * write would reach real hardware and take an uncontrolled
+		 * SEGV that ASan's signal handler aborts the whole child on.
+		 * There is no NT-exception bridge in this build to test
+		 * against anyway (top of file), so skip the write entirely. */
+		_Exit(45);
+#else
+		struct sigaction sa;
+		/* A nonzero bad address, unlike --fault-segv's NULL write --
+		 * si_addr would be legitimately NULL for a null-pointer fault,
+		 * which would make "si_addr != NULL" pass for the wrong
+		 * reason. This address is chosen small and unmapped on both
+		 * arches this library targets, never reachable from a normal
+		 * allocation. */
+		int *p = (int *)(size_t)8;
+
+		memset(&sa, 0, sizeof sa);
+		sa.sa_sigaction = sainfo_fault_handler;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGSEGV, &sa, NULL);
+		*p = 1;
+		_Exit(90);   /* must not be reached */
+#endif
+	}
 	if (argc > 1 && !strcmp(argv[1], "--fault-ill")) {
 #if defined(__i386__) || defined(__x86_64__)
 		__asm__ volatile("ud2");
@@ -898,6 +913,9 @@ int main(int argc, char **argv)
 	test_sigpending();
 	test_sigsuspend_stub();
 	test_abort_overrides(argv[0]);
+	test_psiginfo();
+	test_sa_siginfo_raise();
+	test_sa_siginfo_fault_child(argv[0]);
 	test_fault_sigsegv(argv[0]);
 	test_fault_sigill(argv[0]);
 	test_fault_sigfpe(argv[0]);
