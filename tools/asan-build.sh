@@ -27,6 +27,32 @@ srcdir=$(cd "$(dirname "$0")/.." && pwd)
 CC=${NTLIBC_CC:-clang}
 OBJ=${NTLIBC_ASAN_OBJ:-$srcdir/obj/asan}
 ARCH=${NTLIBC_ARCH:-x86_64}
+
+# This build compiles src/*.c *natively* (64-bit ELF) but includes
+# obj/include/bits/alltypes.h, which `make` generates from
+# arch/$(ARCH)/bits/alltypes.h.in and which therefore follows whatever
+# arch configure was last run for.  Configure for i386, run `make asan`,
+# and a 64-bit build silently picks up 32-bit size_t/ssize_t/intptr_t:
+# snprintf("%zd", (ssize_t)-5) prints 4294967291, SIZE_MAX != (size_t)-1,
+# and stdio/fcntl fault outright.  Those look exactly like library bugs
+# and were reported as such, repeatedly, before anyone noticed the build
+# was simply mismatched.
+#
+# Refuse instead of producing that.  config.mak is the record of what the
+# tree is configured for; if it disagrees with the arch this script is
+# building for, stop and say how to fix it.
+if [ -f "$srcdir/config.mak" ]; then
+	cfg_arch=$(sed -n 's/^ARCH *= *//p' "$srcdir/config.mak" | head -1)
+	if [ -n "$cfg_arch" ] && [ "$cfg_arch" != "$ARCH" ]; then
+		echo "asan: tree is configured for ARCH=$cfg_arch but this build is $ARCH." >&2
+		echo "asan: obj/include/bits/alltypes.h would give a $cfg_arch-width" >&2
+		echo "asan: size_t/ssize_t to a native $ARCH build -- wrong, and it" >&2
+		echo "asan: fails in ways that look like library bugs." >&2
+		echo "asan: reconfigure first (./configure --target=$ARCH-win32 CC=$ARCH-win32-tcc)," >&2
+		echo "asan: or set NTLIBC_ARCH=$cfg_arch if you really meant that." >&2
+		exit 2
+	fi
+fi
 mode=${1:-}
 EXTRA=${NTLIBC_ASAN_EXTRA:-}
 
