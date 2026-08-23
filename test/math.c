@@ -8,6 +8,20 @@
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
+/* src/math/x87.h's own NTLIBC_LDBL_EXTENDED test, reused here rather
+ * than <float.h>'s LDBL_MANT_DIG: this tcc's bundled <float.h>
+ * unconditionally reports LDBL_MANT_DIG==64 (extended) on i386/x86_64
+ * even though tcc's own "long double" is really just a 64-bit double in
+ * PE mode -- x87.h's comment above NTLIBC_LDBL_EXTENDED has the full
+ * story. __SIZEOF_LONG_DOUBLE__ is the one both compilers get right:
+ * this tcc never predefines it (confirmed empirically), gcc/mingw/clang
+ * predefine it to the true sizeof (8 here, 12 or 16 there). */
+#if defined(__SIZEOF_LONG_DOUBLE__) && __SIZEOF_LONG_DOUBLE__ > 8
+#define TEST_LDBL_EXTENDED 1
+#else
+#define TEST_LDBL_EXTENDED 0
+#endif
+
 static int near(double a, double b, double tol)
 {
 	if (a == b) return 1;
@@ -78,7 +92,15 @@ int main(void)
 	CHECK(scalbn(1, -1074) == 5e-324);
 	CHECK(scalbn(1.5, 1000) == 1.5 * 0x1p1000);
 	CHECK(scalbnf(1.0f, -149) > 0);
-	CHECK(ldexpl(1.0L, -16400) == 0.0L);
+	/* -16400 used to be the exponent here: correctly a deep underflow to
+	 * 0 for a 64-bit long double (subnormal floor around -1074), but
+	 * *not* deep enough for a genuine 80-bit extended long double
+	 * (subnormal floor around -16445) -- natively that computes a tiny
+	 * nonzero subnormal instead of 0, so the check was quietly wrong for
+	 * that width rather than merely inapplicable. -100000 is well past
+	 * either format's subnormal floor, so this holds at both widths
+	 * without needing TEST_LDBL_EXTENDED at all. */
+	CHECK(ldexpl(1.0L, -100000) == 0.0L);
 	{
 		double ip, fr = modf(3.75, &ip);
 		CHECK(ip == 3 && fr == 0.75);
@@ -100,7 +122,26 @@ int main(void)
 	NEAR(atan2(-1, -1), -3 * M_PI / 4);
 	CHECK(atan2(0, 1) == 0);
 	NEAR(atan2(1, 0), M_PI / 2);
-	NEAR(sin(1e19), sin(fmod(1e19, 2 * M_PI)));  /* huge-arg path is self-consistent */
+#if !TEST_LDBL_EXTENDED
+	/* huge-arg path is self-consistent -- but only a check of sin()'s
+	 * own internal precision against *this test's* reference, and that
+	 * reference is itself only as good as 2*M_PI computed in double
+	 * precision, which is nowhere near enough digits to reduce an
+	 * argument the size of 1e19 accurately (the true value of pi needs
+	 * ~19-20 digits to matter at this magnitude; M_PI the macro has
+	 * them, but naming it in a `double` expression rounds it down to
+	 * ~16 first).  With a 64-bit long double (the NT target under tcc),
+	 * sin()'s own range reduction is *also* only double precision, so
+	 * it matches this equally-imprecise reference by construction.
+	 * With a genuine 80-bit extended long double, sin()'s internal
+	 * reduce() (src/math/trig.c) is actually more accurate than this
+	 * reference is, and the two now legitimately disagree past 1e-14 --
+	 * a sign the library got *better*, not a bug, but not something
+	 * this test's own reference can confirm.  Skipped rather than
+	 * loosened: loosening the tolerance would hide a real regression in
+	 * the non-extended case instead. */
+	NEAR(sin(1e19), sin(fmod(1e19, 2 * M_PI)));
+#endif
 	{ double d = sin(HUGE_VAL); CHECK(d != d); }
 	/* sinf returns a float, so it can only ever match the true double
 	 * value to float precision (~1.2e-7 relative) - the shared 1e-14
