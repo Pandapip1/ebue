@@ -123,6 +123,27 @@ fi
 # header above.  Silence shellcheck's unused-variable warning for them.
 : "$ancestor" "$other"
 
+# gen-kaem.sh reads the source tree straight off disk (a `make -n -B`
+# dry run, and BASE_SRCS/ARCH_SRCS are `$(wildcard ...)`s over the real
+# directory contents) -- not out of git's index. But at the point git
+# invokes a per-path merge driver, a sibling path that merged cleanly
+# (e.g. a source file added on the other side of this same
+# merge/rebase/cherry-pick) is only guaranteed to be *recorded* in the
+# index; git does not guarantee it has already been *written to the
+# working tree* before this driver runs for a different, conflicted
+# path. Observed in practice: without this, a cherry-pick that adds one
+# source file while this path independently conflicts can regenerate
+# from a tree that is still missing that new file, producing a
+# resolution that looks clean (no markers, driver exits 0) but is
+# quietly wrong -- exactly the "plausible but wrong" failure mode this
+# driver exists to avoid. `git checkout-index -a -f` forces every path
+# the index already has resolved (stage 0) onto disk, matching what the
+# final working tree will contain once the whole operation finishes;
+# unmerged paths (staged >0, i.e. still-conflicted paths other than this
+# one) are left alone, and there are none of those for the two files
+# this driver ever handles.
+git checkout-index -a -f
+
 if ! ./tools/gen-kaem.sh --arch="$arch" "$current"; then
 	echo "merge-kaem.sh: ./tools/gen-kaem.sh --arch=$arch failed; leaving" >&2
 	echo "merge-kaem.sh: '$path' conflicted." >&2
