@@ -2803,6 +2803,13 @@ NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
 NOTIMPL(NtCreateJobObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
 NOTIMPL(NtAssignProcessToJobObject, (HANDLE a, HANDLE b))
 NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULONG d))
+/* src/signal/signal.c's segv_code() calls this to tell SEGV_MAPERR from
+ * SEGV_ACCERR, but only from inside exception_handler(), which this
+ * file's RtlAddVectoredExceptionHandler() (below) never actually
+ * invokes -- a native build has no real NT exception to forward (see
+ * this file's header comment and test/posix-signal.c's
+ * NATIVE_NO_FAULT_BRIDGE). Needed only so the link succeeds. */
+NOTIMPL(NtQueryVirtualMemory, (HANDLE a, PVOID b, MEMORY_INFORMATION_CLASS c, PVOID d, SIZE_T e, SIZE_T *f))
 
 PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HANDLER h)
 {

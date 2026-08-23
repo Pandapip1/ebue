@@ -56,6 +56,37 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
 int __wait_encode_status(int);
 #define NT_SIGNAL_EXIT(sig) ((int)(0xE0DE0000u | ((unsigned)(sig) & 0x7fu)))
 
+/* NtAllocateVirtualMemory()/NtProtectVirtualMemory(), used below to
+ * provoke a SIGSEGV on a page that genuinely exists (MEM_COMMIT) but is
+ * PAGE_NOACCESS -- the SEGV_ACCERR half of src/signal/signal.c's
+ * segv_code(); the existing --fault-segv-siginfo child already covers
+ * the SEGV_MAPERR half with a plain unmapped address. Hand-declared,
+ * same reasoning as __wait_encode_status()/__errno_from_status() above
+ * (test/posix-errno.c) -- test/ is not on the -I path for
+ * src/internal/nt.h, and these two calls need real ntdll prototypes,
+ * types and constants that are not part of any public <...> header. */
+typedef int NTSTATUS;
+typedef void *HANDLE;
+typedef unsigned long ULONG;
+#ifdef __i386__
+#define NTAPI __attribute__((stdcall))
+#else
+#define NTAPI
+#endif
+#if defined(_WIN64) || defined(__x86_64__)
+typedef unsigned long long SIZE_T;
+#else
+typedef unsigned long SIZE_T;
+#endif
+#define NT_SUCCESS(s) ((NTSTATUS)(s) >= 0)
+#define NtCurrentProcess() ((HANDLE)(size_t)-1)   /* pointer-sized, unlike plain long under LLP64 */
+#define MEM_COMMIT   0x00001000
+#define MEM_RESERVE  0x00002000
+#define PAGE_NOACCESS  0x01
+#define PAGE_READWRITE 0x04
+NTSTATUS NTAPI NtAllocateVirtualMemory(HANDLE, void **, unsigned long, SIZE_T *, ULONG, ULONG);
+NTSTATUS NTAPI NtProtectVirtualMemory(HANDLE, void **, SIZE_T *, ULONG, ULONG *);
+
 extern char **environ;
 static char *self;   /* argv[0], set in main(); used to re-spawn ourselves */
 
@@ -609,6 +640,17 @@ static void test_fault_sigfpe(const char *self)
 static volatile int fpe_caught_sig;
 static void fpe_caught_handler(int s) { fpe_caught_sig = s; _Exit(66); }
 
+/* Exits with si_code as the process's own exit status, so the parent
+ * can read the fault subcode straight back out of waitpid()'s status --
+ * see the si_code test block below. Every code these tests provoke
+ * (SEGV_MAPERR/SEGV_ACCERR/FPE_INTDIV/ILL_ILLOPC) is a small positive
+ * int, well inside the 0..255 an exit status can carry. */
+static void code_exit_handler(int sig, siginfo_t *si, void *uctx)
+{
+	(void)sig; (void)uctx;
+	_Exit(si->si_code);
+}
+
 static void test_fault_sigfpe_caught(const char *self)
 {
 	char *argv[3];
@@ -627,6 +669,112 @@ static void test_fault_sigfpe_caught(const char *self)
 	printf("note: native ASan build cannot provoke or forward a real SIGFPE; caught-signal check skipped\n");
 #else
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 66);   /* handler ran and chose to exit cleanly */
+#endif
+}
+
+/* ================================================================== *
+ * si_code for the hardware-fault signals (signal.h.html siginfo_t
+ * DESCRIPTION: si_code is "sigaction.html-specific ... SEGV_MAPERR,
+ * SEGV_ACCERR" and friends for SIGSEGV/SIGBUS/SIGILL/SIGFPE) --
+ * src/signal/signal.c's exception_handler()/segv_code() now derive a
+ * real one instead of the previous blanket SI_KERNEL. Every case here
+ * runs the fault-provoking child with a SA_SIGINFO handler that exits
+ * with si_code itself as its exit status (valid codes are all small
+ * positive integers, well inside 0..255), so the parent's check is
+ * just WEXITSTATUS(status) == the expected macro.
+ * ================================================================== */
+
+/* SEGV_MAPERR: EXCEPTION_ACCESS_VIOLATION on an address nothing has
+ * ever mapped -- same address test_sa_siginfo_fault_child() already
+ * uses and already documents as reliably unmapped on both arches. */
+static void test_fault_sigsegv_maperr(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	int status;
+
+	argv[0] = (char *)self; argv[1] = (char *)"--fault-segv-maperr"; argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid < 0) { printf("note: cannot spawn \"%s\"; SEGV_MAPERR child test skipped\n", self); return; }
+	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	printf("note: native ASan build cannot provoke or forward a real SIGSEGV; SEGV_MAPERR check skipped\n");
+#else
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == SEGV_MAPERR);
+#endif
+}
+
+/* SEGV_ACCERR: EXCEPTION_ACCESS_VIOLATION on a page that genuinely
+ * exists (NtAllocateVirtualMemory(MEM_COMMIT)) but whose protection was
+ * then set to PAGE_NOACCESS -- src/signal/signal.c's segv_code() must
+ * read this back as MEM_COMMIT and answer SEGV_ACCERR, not SEGV_MAPERR. */
+static void test_fault_sigsegv_accerr(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	int status;
+
+	argv[0] = (char *)self; argv[1] = (char *)"--fault-segv-accerr"; argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid < 0) { printf("note: cannot spawn \"%s\"; SEGV_ACCERR child test skipped\n", self); return; }
+	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	printf("note: native ASan build cannot provoke or forward a real SIGSEGV; SEGV_ACCERR check skipped\n");
+#else
+	/* exit code 93 would mean the child's own NtAllocateVirtualMemory/
+	 * NtProtectVirtualMemory setup failed, not that segv_code() got the
+	 * wrong answer -- the WEXITSTATUS(status) == SEGV_ACCERR check below
+	 * already fails in either case, since SEGV_ACCERR (2) != 93. */
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == SEGV_ACCERR);
+#endif
+}
+
+/* FPE_INTDIV: EXCEPTION_INT_DIVIDE_BY_ZERO, same fault test_fault_sigfpe()
+ * already provokes, checked for si_code this time instead of just the
+ * signal identity. */
+static void test_fault_sigfpe_code(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	int status;
+
+	argv[0] = (char *)self; argv[1] = (char *)"--fault-fpe-code"; argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid < 0) { printf("note: cannot spawn \"%s\"; FPE_INTDIV child test skipped\n", self); return; }
+	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	printf("note: native ASan build cannot provoke or forward a real SIGFPE; FPE_INTDIV check skipped\n");
+#else
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == FPE_INTDIV);
+#endif
+}
+
+/* ILL_ILLOPC: EXCEPTION_ILLEGAL_INSTRUCTION, same ud2
+ * test_fault_sigill() already provokes. Unlike that test, this one
+ * needs src/signal/signal.c's own exception_handler() to actually run
+ * (it is what computes si_code) -- under NATIVE_NO_FAULT_BRIDGE the
+ * child's ud2 still traps for real (nothing dangerous about that, same
+ * as test_fault_sigill()), but the *host* kernel delivers the SIGILL
+ * directly and simply kills the process, since fuzz/ntstubs.c's
+ * RtlAddVectoredExceptionHandler() never forwards anything to
+ * exception_handler() (this file's top-of-file comment); si_code is
+ * therefore never computed at all, so only the WIFSIGNALED/WTERMSIG
+ * shape -- not si_code -- can be checked in that build. */
+static void test_fault_sigill_code(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	int status;
+
+	argv[0] = (char *)self; argv[1] = (char *)"--fault-ill-code"; argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid < 0) { printf("note: cannot spawn \"%s\"; ILL_ILLOPC child test skipped\n", self); return; }
+	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGILL);
+	printf("note: native ASan build cannot provoke or forward a real SIGILL through exception_handler(); ILL_ILLOPC check skipped\n");
+#else
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == ILL_ILLOPC);
 #endif
 }
 
@@ -900,6 +1048,75 @@ int main(int argc, char **argv)
 		a = a / b;
 		_Exit(91);   /* only reached if the handler did NOT run/exit */
 	}
+	if (argc > 1 && !strcmp(argv[1], "--fault-segv-maperr")) {
+#ifdef NATIVE_NO_FAULT_BRIDGE
+		_Exit(45);   /* arbitrary: parent skips the check under this build */
+#else
+		struct sigaction sa;
+		/* Same reliably-unmapped address --fault-segv-siginfo uses above. */
+		int *p = (int *)(size_t)8;
+
+		memset(&sa, 0, sizeof sa);
+		sa.sa_sigaction = code_exit_handler;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGSEGV, &sa, NULL);
+		*p = 1;
+		_Exit(90);   /* must not be reached */
+#endif
+	}
+	if (argc > 1 && !strcmp(argv[1], "--fault-segv-accerr")) {
+#ifdef NATIVE_NO_FAULT_BRIDGE
+		_Exit(45);
+#else
+		struct sigaction sa;
+		void *base = NULL;
+		SIZE_T size = 4096;
+		ULONG oldprot = 0;
+		NTSTATUS st;
+
+		memset(&sa, 0, sizeof sa);
+		sa.sa_sigaction = code_exit_handler;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGSEGV, &sa, NULL);
+
+		/* A real, committed page -- then immediately made PAGE_NOACCESS,
+		 * so the write below faults on memory that genuinely exists
+		 * (segv_code()'s NtQueryVirtualMemory() must see MEM_COMMIT). */
+		st = NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (!NT_SUCCESS(st) || !base) _Exit(93);   /* setup failed; not what this test checks */
+		st = NtProtectVirtualMemory(NtCurrentProcess(), &base, &size, PAGE_NOACCESS, &oldprot);
+		if (!NT_SUCCESS(st)) _Exit(93);
+		*(volatile int *)base = 1;
+		_Exit(90);   /* must not be reached */
+#endif
+	}
+	if (argc > 1 && !strcmp(argv[1], "--fault-fpe-code")) {
+#ifdef NATIVE_NO_FAULT_BRIDGE
+		_Exit(45);
+#else
+		volatile int a = 1, b = 0;
+		struct sigaction sa;
+
+		memset(&sa, 0, sizeof sa);
+		sa.sa_sigaction = code_exit_handler;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGFPE, &sa, NULL);
+		a = a / b;
+		_Exit(91);   /* only reached if the handler did NOT run/exit */
+#endif
+	}
+	if (argc > 1 && !strcmp(argv[1], "--fault-ill-code")) {
+		struct sigaction sa;
+
+		memset(&sa, 0, sizeof sa);
+		sa.sa_sigaction = code_exit_handler;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGILL, &sa, NULL);
+#if defined(__i386__) || defined(__x86_64__)
+		__asm__ volatile("ud2");
+#endif
+		_Exit(90);   /* must not be reached */
+	}
 
 	test_signal_sigstop();
 	test_sig_atomic_t();
@@ -920,6 +1137,10 @@ int main(int argc, char **argv)
 	test_fault_sigill(argv[0]);
 	test_fault_sigfpe(argv[0]);
 	test_fault_sigfpe_caught(argv[0]);
+	test_fault_sigsegv_maperr(argv[0]);
+	test_fault_sigsegv_accerr(argv[0]);
+	test_fault_sigfpe_code(argv[0]);
+	test_fault_sigill_code(argv[0]);
 	test_strsignal();
 	test_waitpid_wnohang_running();
 	test_waitpid_einval_options();

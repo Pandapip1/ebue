@@ -948,6 +948,34 @@ typedef struct _JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
 #define PAGE_EXECUTE_READ           0x20
 #define PAGE_EXECUTE_READWRITE      0x40
 
+/* NtQueryVirtualMemory()'s MemoryBasicInformation class (used by
+ * src/signal/signal.c to tell SEGV_MAPERR from SEGV_ACCERR after an
+ * access violation: State == MEM_FREE/MEM_RESERVE means nothing was
+ * ever mapped there, State == MEM_COMMIT means a real page exists and
+ * Protect is what actually denied the access). Field layout matches
+ * winnt.h's MEMORY_BASIC_INFORMATION exactly (verified against
+ * mingw-w64 and Wine's copies) -- BaseAddress/AllocationBase are
+ * pointer-sized and RegionSize is SIZE_T, so this struct is naturally
+ * 28 bytes on a 32-bit build and 48 bytes on a 64-bit one (4 bytes of
+ * compiler-inserted padding before RegionSize, to keep it 8-byte
+ * aligned) without needing an explicit padding member either way --
+ * the same convention every other PVOID/SIZE_T-mixing struct in this
+ * file already relies on (e.g. JOBOBJECT_BASIC_LIMIT_INFORMATION
+ * above). */
+typedef enum _MEMORY_INFORMATION_CLASS {
+	MemoryBasicInformation = 0
+} MEMORY_INFORMATION_CLASS;
+
+typedef struct _MEMORY_BASIC_INFORMATION {
+	PVOID BaseAddress;
+	PVOID AllocationBase;
+	ULONG AllocationProtect;
+	SIZE_T RegionSize;
+	ULONG State;
+	ULONG Protect;
+	ULONG Type;
+} MEMORY_BASIC_INFORMATION;
+
 #define HEAP_NO_SERIALIZE           0x00000001
 #define HEAP_GROWABLE               0x00000002
 #define HEAP_GENERATE_EXCEPTIONS    0x00000004
@@ -1079,6 +1107,21 @@ typedef LONG (NTAPI *PVECTORED_EXCEPTION_HANDLER)(EXCEPTION_POINTERS *);
 #define EXCEPTION_PRIV_INSTRUCTION          0xC0000096
 #define EXCEPTION_IN_PAGE_ERROR             0xC0000006
 #define EXCEPTION_DATATYPE_MISALIGNMENT     0x80000002
+/* Values per winnt.h's STATUS_FLOAT_* (verified against mingw-w64 and
+ * Wine's copies); EXCEPTION_FLT_DIVIDE_BY_ZERO/INVALID_OPERATION/
+ * OVERFLOW above are the same family, just already present. */
+#define EXCEPTION_FLT_DENORMAL_OPERAND      0xC000008D
+#define EXCEPTION_FLT_INEXACT_RESULT        0xC000008F
+#define EXCEPTION_FLT_UNDERFLOW             0xC0000093
+/* Not an access violation (0xC0000005): raised on touching a page an
+ * explicit PAGE_GUARD protection was set on (winnt.h's
+ * STATUS_GUARD_PAGE_VIOLATION), most commonly by something outside
+ * ntlibc probing a thread stack's guard region -- this library never
+ * sets PAGE_GUARD itself, there is no PAGE_GUARD bit among the PAGE_*
+ * constants above. src/signal/signal.c's exception_handler() names
+ * this explicitly so it is provably not folded into the
+ * EXCEPTION_ACCESS_VIOLATION case despite the similar shape. */
+#define STATUS_GUARD_PAGE_VIOLATION         0x80000001
 #define DBG_CONTROL_C                       0x40010005
 #define DBG_CONTROL_BREAK                   0x40010008
 
@@ -1120,6 +1163,7 @@ NTSTATUS NTAPI NtWriteVirtualMemory(HANDLE, PVOID, const void *, SIZE_T, SIZE_T 
 NTSTATUS NTAPI NtAllocateVirtualMemory(HANDLE, PVOID *, ULONG_PTR, SIZE_T *, ULONG, ULONG);
 NTSTATUS NTAPI NtFreeVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG);
 NTSTATUS NTAPI NtProtectVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG, PULONG);
+NTSTATUS NTAPI NtQueryVirtualMemory(HANDLE, PVOID, MEMORY_INFORMATION_CLASS, PVOID, SIZE_T, SIZE_T *);
 NTSTATUS NTAPI NtQuerySystemTime(LARGE_INTEGER *);
 NTSTATUS NTAPI NtSetSystemTime(LARGE_INTEGER *, LARGE_INTEGER *);
 NTSTATUS NTAPI NtQueryPerformanceCounter(LARGE_INTEGER *, LARGE_INTEGER *);

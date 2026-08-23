@@ -44,6 +44,39 @@ extern "C" {
 #define SI_USER 0
 #define SI_KERNEL 128
 
+/* si_code values for the hardware-fault signals (SIGILL/SIGFPE/SIGSEGV/
+ * SIGBUS), populated by src/signal/signal.c's exception_handler() from
+ * the NT EXCEPTION_RECORD -- see the derivation comments there for how
+ * each is actually computed. Numeric values match musl/glibc's
+ * bits/signal.h so a program that hardcodes these numbers instead of
+ * the names still behaves the same as on Linux; POSIX itself only
+ * requires the names, not particular values.
+ *
+ * Only macros this library can genuinely fill are declared here. The
+ * ones glibc/musl also define that ntlibc leaves out -- ILL_ILLOPN,
+ * ILL_ILLADR, ILL_ILLTRP, ILL_PRVREG, ILL_COPROC, ILL_BADSTK,
+ * FPE_FLTSUB, SEGV_BNDERR, SEGV_PKUERR, SEGV_MTEAERR, SEGV_MTESERR,
+ * BUS_ADRERR, BUS_OBJERR, BUS_MCEERR_AR, BUS_MCEERR_AO -- have no NT
+ * exception that reliably maps onto them, so declaring them would
+ * promise a fault subcode this library can never actually produce. */
+#define ILL_ILLOPC 1   /* EXCEPTION_ILLEGAL_INSTRUCTION */
+#define ILL_PRVOPC 5   /* EXCEPTION_PRIV_INSTRUCTION */
+
+#define FPE_INTDIV 1   /* EXCEPTION_INT_DIVIDE_BY_ZERO */
+#define FPE_INTOVF 2   /* EXCEPTION_INT_OVERFLOW */
+#define FPE_FLTDIV 3   /* EXCEPTION_FLT_DIVIDE_BY_ZERO */
+#define FPE_FLTOVF 4   /* EXCEPTION_FLT_OVERFLOW */
+#define FPE_FLTUND 5   /* EXCEPTION_FLT_UNDERFLOW */
+#define FPE_FLTRES 6   /* EXCEPTION_FLT_INEXACT_RESULT */
+#define FPE_FLTINV 7   /* EXCEPTION_FLT_INVALID_OPERATION */
+
+#define SEGV_MAPERR 1  /* EXCEPTION_ACCESS_VIOLATION/EXCEPTION_IN_PAGE_ERROR
+                         * on unmapped/reserved-but-uncommitted memory */
+#define SEGV_ACCERR 2  /* same, but on a committed page whose protection
+                         * denied the access */
+
+#define BUS_ADRALN 1   /* EXCEPTION_DATATYPE_MISALIGNMENT */
+
 typedef struct sigaltstack stack_t;
 
 #define SA_NOCLDSTOP  1
