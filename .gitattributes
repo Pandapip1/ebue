@@ -12,6 +12,7 @@
 # The driver command itself is per-clone config (git does not read
 # merge.*.driver from the repository) -- see ./configure, which sets it up
 # the same way it sets core.hooksPath for .githooks, and CONTRIBUTING.md's
-# "Keeping the generated files honest" section for the manual fallback.
+# "Merging/rebasing/cherry-picking across a source-file add" section for
+# how it actually resolves a conflict and the manual fallback.
 boot/kaem/build-i386.kaem merge=ntlibc-kaem
 boot/kaem/build-x86_64.kaem merge=ntlibc-kaem

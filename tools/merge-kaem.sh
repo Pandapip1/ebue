@@ -6,87 +6,105 @@
 #
 # boot/kaem/build-i386.kaem and build-x86_64.kaem are generated (by
 # tools/gen-kaem.sh, driven by `make kaem`) from the Makefile's own source
-# file list, and committed. That means any two branches that each add a
-# source file conflict textually in these two files -- a three-way merge
-# has no way to know that the "right" result is neither side verbatim but
-# a fresh regeneration containing *both* additions. Left to git's default
-# text merge, this either produces a conflict a human resolves by hand
-# (always the same way: pick a side, `make kaem`, `git add`) or, worse,
-# gets resolved in a hurry with conflict markers accidentally committed
-# straight into the generated bootstrap script -- which then sits broken
-# until a from-scratch kaem bootstrap actually runs it. See
-# CONTRIBUTING.md and .githooks/pre-commit (which now refuses staged
-# conflict markers for exactly this reason).
+# file list, and committed. Any two branches that each add a source file
+# therefore conflict textually in these two files: the compile-command
+# list gets a new line inserted at the same point from both sides (an
+# add/add hunk plain diff3 cannot order), and the single `${CC} -ar rcs
+# lib/libc.a ...` line -- every object in one line -- is rewritten
+# differently by each side, so it conflicts every time either side
+# changes at all. Left to git's default text merge, a human resolves this
+# by hand, always the same mechanical way (pick a side, `make kaem`,
+# `git add`) -- and twice that resolution has gone wrong badly enough to
+# leave conflict markers committed straight into a generated bootstrap
+# script, which then sits broken until a from-scratch kaem bootstrap
+# actually runs it. See CONTRIBUTING.md and .githooks/pre-commit (which
+# now refuses staged conflict markers for exactly this reason).
 #
-# This driver replaces the text merge for these two files with: regenerate
-# from the merged tree, and let the regenerated content stand in as the
-# resolution. It is registered as a git merge driver (see below for how to
-# enable it) and applies during `git merge`, `git rebase` and
-# `git cherry-pick` alike -- anywhere git performs a three-way content
-# merge on a path matched by .gitattributes.
+# WHY THIS DOES NOT JUST CALL tools/gen-kaem.sh
+# ----------------------------------------------
+# The obvious design -- regenerate from the live worktree via gen-kaem.sh,
+# then copy the right arch's output to %A -- was the first thing tried
+# here, and it does not work. gen-kaem.sh reads the source tree straight
+# off disk (a real `make -n -B` dry run over `$(wildcard ...)` globs), not
+# out of git's index. Testing it against a real cherry-pick conflict --
+# two branches each adding a different src/ file, cherry-picked into each
+# other -- showed that git's default merge backend (`ort`, used by
+# `merge`, `rebase` and `cherry-pick` alike since it became the default)
+# computes the *entire* merge in memory and does not write anything to
+# the real index or working tree -- not even the sibling paths that
+# merged with no conflict at all -- until every path's merge, including
+# every custom driver invocation, has finished. `git checkout-index -a -f`
+# right before regenerating does not help either: the sibling path is not
+# even in the index yet at that point, only inside ort's in-memory result.
+# So a live regeneration silently drops whatever the *other* side of the
+# same merge added -- it exits 0, leaves no conflict markers, and is
+# simply wrong. That is exactly the "plausible but wrong" failure this
+# driver exists to avoid, and it is not a rare timing fluke: since ort
+# defers every write until the whole operation completes, it reproduces
+# on every conflict that also touches a sibling path, every time.
 #
-# git invokes a merge driver as:
-#   driver %O %A %B %P
-# with %O/%A/%B temp files holding the ancestor/current/other blobs (%A is
-# also where the resolved result must end up) and %P the real path being
-# merged (boot/kaem/build-i386.kaem or build-x86_64.kaem, worktree-
-# relative). We don't need %O or %B at all: the whole point is that the
-# correct output is a pure function of the *current worktree tree* (which
-# by the time the driver runs already has every other file's conflicts
-# resolved or merged, and %A/%B/%O's siblings checked out), not of any
-# textual combination of the three kaem blobs. So the driver ignores its
-# content entirely and asks tools/gen-kaem.sh to regenerate from scratch.
+# Worse, there is no safety net downstream for a cherry-pick that
+# resolves without any manual conflict: git does not run the pre-commit
+# hook for the commit an auto-resolved `cherry-pick`/`merge` makes on its
+# own (hooks only fire when `git commit` is actually invoked, which
+# happens only if a human has to finish resolving something by hand) --
+# confirmed here by pointing core.hooksPath at a wrapper that logs before
+# calling the real hook, and watching it never fire across a clean
+# driver-resolved cherry-pick. So .githooks/pre-commit's own `make kaem`
+# drift check, despite doing the same live regeneration, could not have
+# caught this either: the two live-tree approaches share the exact same
+# blind spot, and it goes uncaught all the way into the commit.
 #
-# gen-kaem.sh, by design, always writes straight to
-# boot/kaem/build-$ARCH.kaem in the worktree (see its own header for why:
-# the committed script must be a pure function of the source tree, not of
-# whatever config.mak last had). It has no way to target an arbitrary
-# output path... except that it does, via its optional second positional
-# argument (`gen-kaem.sh --arch=ARCH [out]`). We use that to write directly
-# to %A, so nothing here ever touches the real boot/kaem/build-*.kaem path
-# except through git's own checkout of the merge result -- there is no
-# window where a half-regenerated file sits at its real path.
+# THE ACTUAL APPROACH: a textual 3-way merge, using only %O/%A/%B
+# -----------------------------------------------------------------
+# git guarantees the three blob contents it hands this driver (the
+# ancestor, current and other versions of *this one file*) regardless of
+# what stage the rest of the merge is at -- unlike any sibling path, they
+# are never in-flight. So instead of asking the live tree what the
+# answer should be, this driver reruns `git merge-file` (plain diff3) on
+# those three blobs to get git's own conflict hunks, and then resolves
+# each hunk using what is known about gen-kaem.sh's output shape:
 #
-# The arch comes from %P, not from any of %O/%A/%B's content (which this
-# driver never reads) and not by re-deriving it from config.mak (which has
-# only one ARCH, not one per file): boot/kaem/build-i386.kaem must become
-# `--arch=i386`, build-x86_64.kaem must become `--arch=x86_64`, and mixing
-# that mapping up -- writing i386's output into the x86_64 slot or vice
-# versa -- would be silently wrong, not loudly wrong: both are valid kaem
-# scripts, just for the other CPU. %P is matched with a glob anchored to
-# the exact committed filename shape (boot/kaem/build-ARCH.kaem) precisely
-# so a rename or a new unrelated file under boot/kaem/ fails loudly here
-# instead of being regenerated as whatever arch happens to fall out of a
-# looser pattern.
+#   - a hunk that is exactly one line added on each side, neither of
+#     which is the `${CC} -ar rcs lib/libc.a ...` line, is a plain add/add
+#     ambiguity from two independent single-line insertions (a new
+#     compile command, or a new `mkdir` line) at the same point in an
+#     already-sorted list. Emitting both lines, ordered against each
+#     other the same way the file as a whole is already sorted, is
+#     exactly what a fresh gen-kaem.sh run would have produced.
+#   - a hunk that is exactly one line on each side and *both* lines match
+#     the archive command is the one genuinely special case: rather than
+#     text-merge that single monster line, split each side's object list
+#     into tokens, do the token-level three-way union (present unless
+#     removed by a side that had it and the other side didn't add it
+#     back), and rebuild the one archive line with a byte-sorted
+#     (LC_ALL=C, matching GNU Make's `$(sort ...)`, which is what
+#     produced the token order in the first place) object list.
+#   - anything else -- multi-line sides, a hunk this driver cannot
+#     confidently classify, anything at all outside those two known
+#     shapes -- is left as git's own conflict-marker output and the
+#     driver exits non-zero. Guessing at an unfamiliar hunk shape is
+#     exactly the "plausible but wrong" mistake this driver exists to
+#     rule out; a shape it does not recognize is a real conflict for a
+#     human, the same as if this driver were not registered at all.
 #
-# `make kaem` (and hence gen-kaem.sh with no --arch) regenerates *every*
-# arch in one run, so a conflict touching both build-i386.kaem and
-# build-x86_64.kaem invokes this driver twice, once per path -- each
-# invocation still only regenerates its own single arch (via --arch=ARCH),
-# so the two runs can't race or half-write each other's output; the only
-# cost is gen-kaem.sh's `make -n -B` dry run running twice instead of
-# being shared.
+# This needs no source tree, no compiler, and no config.mak: it is a
+# pure function of the three blobs git already handed it, so it cannot
+# be fooled by the live tree's state, and it produces the identical
+# output a correct fresh regeneration would, without ever needing one.
 #
-# gen-kaem.sh requires config.mak (for CFLAGS_C99FSE/CFLAGS_AUTO/KERNEL32 --
-# see its own header for why the compiler name itself is not read from
-# there). A checkout that has never run ./configure has no config.mak, and
-# in that state this driver has no way to regenerate anything: rather than
-# guess or emit something plausible, it fails (non-zero exit) and leaves
-# the path conflicted, exactly like git's default text merge would, so a
-# human resolves it by hand (configure the tree, then `make kaem`).
-#
-# Exit status is how git knows what happened: 0 means %A now holds the
-# resolved content and the path is clean; non-zero leaves the path
-# conflicted for a human, same as if no driver were registered at all. A
-# driver that silently wrote a wrong or stale bootstrap script on failure
-# would be worse than no driver.
+# %P is only used to sanity-check that this driver is only ever being
+# asked about the two files it knows how to reason about (.gitattributes
+# should never route anything else here); the regenerated content itself
+# does not depend on the arch at all, since the merge operates purely on
+# the three files' own text.
 #
 # This script alone does nothing -- git does not read merge driver
 # *behavior* from the repository, only the .gitattributes *association*
 # between a path pattern and a driver name. The actual
 # `merge.<name>.driver` command line is per-clone config, same as
 # core.hooksPath for .githooks: see ./configure, which sets both with one
-# `git config` block.  To enable by hand in an already-configured clone:
+# `git config` block. To enable by hand in an already-configured clone:
 #   git config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
 
 set -eu
@@ -96,58 +114,118 @@ current=$2
 other=$3
 path=$4
 
-cd "$(git rev-parse --show-toplevel)"
-
 case $path in
-	boot/kaem/build-i386.kaem)   arch=i386 ;;
-	boot/kaem/build-x86_64.kaem) arch=x86_64 ;;
+	boot/kaem/build-i386.kaem | boot/kaem/build-x86_64.kaem) ;;
 	*)
-		echo "merge-kaem.sh: don't know how to derive an arch from '$path'" >&2
+		echo "merge-kaem.sh: registered for an unexpected path '$path'" >&2
 		echo "merge-kaem.sh: (.gitattributes should only ever route" >&2
 		echo "merge-kaem.sh: boot/kaem/build-i386.kaem and build-x86_64.kaem here)" >&2
 		exit 1
 		;;
 esac
 
-if [ ! -f config.mak ]; then
-	echo "merge-kaem.sh: config.mak not found -- can't regenerate" >&2
-	echo "merge-kaem.sh: boot/kaem/build-$arch.kaem without CC/ARCH." >&2
-	echo "merge-kaem.sh: run ./configure first, e.g.:" >&2
-	echo "merge-kaem.sh:   ./configure --host=$arch-win32 CC=$arch-win32-tcc" >&2
-	echo "merge-kaem.sh: then re-run the merge/rebase/cherry-pick, or" >&2
-	echo "merge-kaem.sh: resolve '$path' by hand and 'git add' it." >&2
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# Plain (non-diff3) 3-way merge: %A becomes "<<<<<<< ... ======= ... >>>>>>>"
+# hunks on conflict, or the clean merge outright if there is one (a hunk
+# that touches only one of the two files, or edits that land on disjoint
+# lines, can merge with no conflict at all -- nothing below needs to run
+# in that case). Exit status is the conflict count, not pass/fail, so it
+# is captured rather than trusted directly.
+mfec=0
+git merge-file -p "$current" "$ancestor" "$other" >"$work/merged" 2>"$work/stderr" || mfec=$?
+
+if [ "$mfec" -eq 0 ]; then
+	cp "$work/merged" "$current"
+	echo "merge-kaem.sh: $path merged cleanly (no add/add ambiguity)" >&2
+	exit 0
+fi
+
+if [ "$mfec" -lt 0 ]; then
+	echo "merge-kaem.sh: git merge-file itself failed on '$path':" >&2
+	cat "$work/stderr" >&2
 	exit 1
 fi
 
-# %O and %B (ancestor and current) are deliberately unused -- see the
-# header above.  Silence shellcheck's unused-variable warning for them.
-: "$ancestor" "$other"
+# Resolve each conflict hunk against the two known shapes gen-kaem.sh's
+# output can produce a conflict in (see the header above). Anything else
+# is left alone -- ok is cleared and the original marked-up hunk is
+# copied straight through, so a shape this driver does not recognize
+# still ends up in %A exactly as git's own merge would have left it: a
+# normal conflict, for a human, not a guess.
+awk -v tokfile="$work/artoks" -v sortfile="$work/artoks.sorted" '
+	function is_ar(line) { return line ~ /^\$\{CC\} -ar rcs lib\/libc\.a /}
+	function flush_hunk(   a, b, i, seen, tok, merged, prefix, line, first) {
+		if (ours_n == 1 && theirs_n == 1) {
+			a = ours[1]; b = theirs[1]
+			if (a == b) {
+				print a
+				return
+			}
+			if (is_ar(a) && is_ar(b)) {
+				prefix = "${CC} -ar rcs lib/libc.a "
+				split(substr(a, length(prefix) + 1), tok, " ")
+				for (i in tok) if (tok[i] != "") seen[tok[i]] = 1
+				delete tok
+				split(substr(b, length(prefix) + 1), tok, " ")
+				for (i in tok) if (tok[i] != "") seen[tok[i]] = 1
+				# One token per line into a scratch file, sorted externally
+				# with LC_ALL=C (the same byte-sort GNU Make'"'"'s
+				# $(sort ...) used to order the tokens in the first place),
+				# then read back and rebuilt into one line. Deliberately a
+				# real file rather than `print | cmd` / `cmd | getline` on
+				# the same command string: those are two unrelated pipes
+				# in POSIX awk, not one bidirectional stream, so a sort
+				# fed that way never reaches the getline side at all.
+				for (i in seen) print i > tokfile
+				close(tokfile)
+				system("LC_ALL=C sort -u " tokfile " > " sortfile)
+				merged = prefix
+				first = 1
+				while ((getline line < sortfile) > 0) {
+					merged = merged (first ? "" : " ") line
+					first = 0
+				}
+				close(sortfile)
+				print merged
+				return
+			}
+			# Two independent single-line insertions at the same point
+			# (a new compile command or mkdir line): both belong in the
+			# output, ordered the same way the surrounding list already
+			# is.
+			if (a < b) { print a; print b } else { print b; print a }
+			return
+		}
+		# Not a shape this driver recognizes -- pass the original
+		# conflict hunk through untouched and flag it.
+		ok = 0
+		print "<<<<<<< " ours_label
+		for (i = 1; i <= ours_n; i++) print ours[i]
+		print "======="
+		for (i = 1; i <= theirs_n; i++) print theirs[i]
+		print ">>>>>>> " theirs_label
+	}
+	BEGIN { state = "normal"; ok = 1 }
+	/^<<<<<<< / { state = "ours"; ours_n = 0; theirs_n = 0; ours_label = substr($0, 9); next }
+	state == "ours" && /^=======$/ { state = "theirs"; next }
+	state == "theirs" && /^>>>>>>> / { theirs_label = substr($0, 9); flush_hunk(); state = "normal"; next }
+	state == "ours" { ours[++ours_n] = $0; next }
+	state == "theirs" { theirs[++theirs_n] = $0; next }
+	{ print }
+	END { exit ok ? 0 : 1 }
+' "$work/merged" >"$work/resolved" 2>"$work/awk-stderr" && resolve_status=0 || resolve_status=$?
 
-# gen-kaem.sh reads the source tree straight off disk (a `make -n -B`
-# dry run, and BASE_SRCS/ARCH_SRCS are `$(wildcard ...)`s over the real
-# directory contents) -- not out of git's index. But at the point git
-# invokes a per-path merge driver, a sibling path that merged cleanly
-# (e.g. a source file added on the other side of this same
-# merge/rebase/cherry-pick) is only guaranteed to be *recorded* in the
-# index; git does not guarantee it has already been *written to the
-# working tree* before this driver runs for a different, conflicted
-# path. Observed in practice: without this, a cherry-pick that adds one
-# source file while this path independently conflicts can regenerate
-# from a tree that is still missing that new file, producing a
-# resolution that looks clean (no markers, driver exits 0) but is
-# quietly wrong -- exactly the "plausible but wrong" failure mode this
-# driver exists to avoid. `git checkout-index -a -f` forces every path
-# the index already has resolved (stage 0) onto disk, matching what the
-# final working tree will contain once the whole operation finishes;
-# unmerged paths (staged >0, i.e. still-conflicted paths other than this
-# one) are left alone, and there are none of those for the two files
-# this driver ever handles.
-git checkout-index -a -f
-
-if ! ./tools/gen-kaem.sh --arch="$arch" "$current"; then
-	echo "merge-kaem.sh: ./tools/gen-kaem.sh --arch=$arch failed; leaving" >&2
-	echo "merge-kaem.sh: '$path' conflicted." >&2
+if [ "$resolve_status" -ne 0 ] || [ -s "$work/awk-stderr" ]; then
+	cat "$work/awk-stderr" >&2 2>/dev/null || true
+	echo "merge-kaem.sh: '$path' has a conflict hunk this driver does not" >&2
+	echo "merge-kaem.sh: recognize (something other than two independent" >&2
+	echo "merge-kaem.sh: single-line insertions, or the archive command" >&2
+	echo "merge-kaem.sh: line) -- leaving it conflicted for a human." >&2
+	cp "$work/merged" "$current"
 	exit 1
 fi
 
-echo "merge-kaem.sh: regenerated $path from the merged tree" >&2
+cp "$work/resolved" "$current"
+echo "merge-kaem.sh: resolved $path (add/add hunks reconciled from \$O/\$A/\$B)" >&2

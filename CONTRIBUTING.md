@@ -381,15 +381,47 @@ compiles them until a from-scratch kaem bootstrap actually runs (see
 
 `./configure` also registers a `git` merge driver
 (`tools/merge-kaem.sh`, wired up via `.gitattributes`) that resolves a
-conflict on either `.kaem` file by regenerating it from the merged tree
-instead of attempting a text merge -- during `git merge`, `git rebase`,
-*and* `git cherry-pick` alike, since this project's own workflow uses
-cherry-pick the most. It needs `config.mak` (for `CC`/`ARCH`, same as
-`make kaem` itself); in a checkout that has never run `./configure`, it
-fails loudly and leaves the conflict for you to resolve by hand rather
-than guessing. If you're merging without having run `./configure` in this
-checkout, enable the driver by hand with the same `git config` line
-`./configure` uses:
+conflict on either `.kaem` file instead of leaving a text-merge conflict
+-- during `git merge`, `git rebase`, *and* `git cherry-pick` alike, since
+this project's own workflow uses cherry-pick the most.
+
+It does **not** work by calling `tools/gen-kaem.sh` against the live
+worktree, even though that was the first thing tried: git's default merge
+backend (`ort`) computes an entire `merge`/`rebase`/`cherry-pick` in
+memory and does not write *any* path -- not even one that merged with no
+conflict at all -- to the real index or working tree until every path,
+including every custom merge driver's own invocation, has finished. A
+sibling source-file addition from the other side of the same operation is
+therefore never actually on disk yet when this driver runs, so a live
+regeneration silently drops it: no conflict markers, exit 0, and a wrong
+`boot/kaem/*.kaem` -- exactly the "plausible but wrong" failure this
+driver exists to prevent, and not a rare timing fluke, since it reproduces
+on every conflict that also touches a sibling path. It also is not caught
+downstream: git does not run `.githooks/pre-commit` for a commit that
+`cherry-pick`/`merge` makes on its own without a human needing to resolve
+anything by hand, so the hook's own `make kaem` drift check -- which has
+exactly the same live-tree blind spot anyway -- never even gets a chance
+to run.
+
+Instead, `tools/merge-kaem.sh` reruns `git merge-file` on the three
+versions of the conflicting file git already hands it (the only inputs a
+merge driver is ever guaranteed to have, regardless of what stage the
+rest of the operation is at) and resolves each resulting hunk using what
+is known about the file's own structure: an independent single-line
+insertion from each side (a new compile command or `mkdir` line, at the
+same point in an already-sorted list) is reordered and kept; the one
+`${CC} -ar rcs lib/libc.a ...` line -- which is rewritten differently by
+each side on *every* source-file add, since it lists every object on one
+line -- is resolved with a token-level three-way union instead of a text
+merge. Anything else is left as a normal conflict for a human; this
+driver never guesses at a hunk shape it does not recognize. See
+`tools/merge-kaem.sh`'s own header for the full story (including how this
+was confirmed empirically) and the exact two shapes it handles.
+
+This needs no source tree, no compiler, and no `config.mak` -- it is a
+pure function of the three blobs git already passed it. If you're merging
+without having run `./configure` in this checkout, enable the driver by
+hand with the same `git config` line `./configure` uses:
 ```
 git config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
 ```
