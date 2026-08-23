@@ -179,6 +179,8 @@ int sigqueue(pid_t, int, union sigval);  /* undefined-ok: needs the same
 
 int sigaltstack(const stack_t *__restrict, stack_t *__restrict);
 
+void psiginfo(const siginfo_t *, const char *);
+
 #endif
 
 #if defined(_XOPEN_SOURCE) || defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
@@ -205,6 +207,7 @@ void (*sigset(int, void (*)(int)))(int);
 #if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
 typedef void (*sighandler_t)(int);
 void (*bsd_signal(int, void (*)(int)))(int);
+void psignal(int, const char *);
 int sigisemptyset(const sigset_t *);
 int sigorset (sigset_t *, const sigset_t *, const sigset_t *);
 int sigandset(sigset_t *, const sigset_t *, const sigset_t *);
