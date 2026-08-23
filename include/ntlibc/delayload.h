@@ -1,6 +1,28 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
+ * ---- Superseded as the documented interface -----------------------------
+ *
+ * A tcc built from the -Wl,--delay-all fork this project now targets
+ * *can* emit a real, linker-built delay import (see crt/delayload2.c's
+ * __delayLoadHelper2 and its header comment) -- which the "Can tcc emit
+ * a real (linker-built) delay import? No." heading right below answered
+ * as of when this file was the only mechanism there was. That answer is
+ * now file-scoped history, not current guidance: a *new* program that
+ * wants $ORIGIN-relative delay loading should declare an ordinary
+ * `extern` function, call it normally, and build with -Wl,--delay-all
+ * -- nothing below is needed at the call site at all. See test/delayall.c
+ * for that path end to end, and include/ntlibc/rpath.h for the $ORIGIN
+ * search both mechanisms share.
+ *
+ * The macros below still work (NTLIBC_DELAY_DLL/_STUB/_NAME,
+ * ntlibc_delayLoadHelper2, the whole hand-rolled descriptor/IAT/INT
+ * shape this file's header comment describes) and remain here for a tcc
+ * without --delay-all, or an existing caller already written against
+ * them -- keeping them working cost nothing once the underlying
+ * $ORIGIN search (rpath.c) already had to exist for the linker-driven
+ * path too. New code should not reach for them.
+ *
  * A real delay-load mechanism, hand-authored: a delay-import descriptor,
  * a delay IAT, a delay import-name-table (INT), per-function thunks that
  * read through the IAT, and a helper (ntlibc_delayLoadHelper2, matching

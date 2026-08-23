@@ -273,6 +273,35 @@ esac
 fi
 
 #
+# -Wl,--delay-all: only a patched tinycc (not the stock TinyCC checked out
+# by CI's build-toolchain job as of this writing) implements this; a
+# stock tcc rejects it outright ("unsupported linker option '--delay-all'"
+# -- confirmed against an unpatched build). test/delayall.c and its
+# Makefile rules are gated on this, and skipped (not silently dropped --
+# see tools/runtests.sh's SKIP line) when it is absent, so CI stays green
+# until $CC is repointed at a toolchain that has the flag.
+#
+# The probe is a bare freestanding program with no imports at all
+# (nothing here pulls in crt1.o/libc.a, on purpose): with zero delay
+# imports tccpe.c's pe_build_delay_imports() never references
+# __delayLoadHelper2, so this checks only whether the *flag* is
+# recognised, not whether the whole delay-load runtime link-succeeds --
+# that part is exercised for real by the actual test build.
+#
+printf "checking whether linker accepts -Wl,--delay-all... "
+echo "void _start(void) {}" > "$tmpc"
+tmpexe="$tmpc.exe"
+# shellcheck disable=SC2086
+if $CC $CPPFLAGS $CFLAGS -Wl,--delay-all -nostdlib -o "$tmpexe" "$tmpc" >/dev/null 2>&1 ; then
+printf "yes\n"
+delay_all=yes
+else
+printf "no\n"
+delay_all=no
+fi
+rm -f "$tmpexe"
+
+#
 # Flags.
 #
 tryflag CFLAGS_C99FSE -std=c99
@@ -318,6 +347,7 @@ CROSS_COMPILE = $CROSS_COMPILE
 WINE = $WINE
 WRAPPER = $wrapper
 KERNEL32 = $kernel32
+DELAY_ALL = $delay_all
 EOM
 exec 1>&3 3>&-
 

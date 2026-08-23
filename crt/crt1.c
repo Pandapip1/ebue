@@ -167,12 +167,20 @@ static char **build_environ(const WCHAR *env)
 	return ev;
 }
 
-void __libc_start_main(void)
+void __libc_start_main(void *peb)
 {
 	PRTL_USER_PROCESS_PARAMETERS pp;
 	int rc;
 
-	__peb = RtlGetCurrentPeb();
+	/* RtlUserThreadStart already handed _start the PEB directly (see
+	 * this file's header comment) -- use that, rather than an
+	 * RtlGetCurrentPeb() call, which is itself an ntdll import and so,
+	 * under -Wl,--delay-all, would be a delay-load stub whose very
+	 * first resolution needs __peb to already be set (delayload2.c's
+	 * __delayLoadHelper2 computes every RVA off __peb->ImageBaseAddress)
+	 * -- a chicken-and-egg deadlock this avoids entirely by never
+	 * making an ntdll call before __peb exists. */
+	__peb = (PPEB)peb;
 	pp = __peb->ProcessParameters;
 
 	__argc = split_cmdline(pp->CommandLine.Buffer, pp->CommandLine.Length / sizeof(WCHAR), &__argv);
@@ -189,8 +197,7 @@ void __libc_start_main(void)
 	exit(rc);
 }
 
-void _start(void *peb_unused)
+void _start(void *peb)
 {
-	(void)peb_unused;
-	__libc_start_main();
+	__libc_start_main(peb);
 }

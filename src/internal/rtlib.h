@@ -51,7 +51,14 @@ long double __floatundixf(unsigned long long);
 /* ntdll's RtlUserThreadStart calls _start with the PEB as its argument,
  * and tcc's PE linker picks _start up as the image entry point by name.
  * Neither of these is ever called from C. */
-void __libc_start_main(void);
+void __libc_start_main(void *peb);
 void _start(void *peb);
+
+/* ---- delay-load helper (crt/delayload2.c) ------------------------------ */
+/* Looked up by this exact name and called by the linker-generated
+ * per-DLL tail-merge stub a -Wl,--delay-all build emits (tinycc's
+ * pe_emit_delay_tailmerge(), tccpe.c) -- never by name from any C
+ * source file, the same as _start/__libc_start_main above. */
+void *__delayLoadHelper2(void *descr, void **piat);
 
 #endif

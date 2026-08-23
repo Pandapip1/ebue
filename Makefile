@@ -218,7 +218,15 @@ generated:
 # passes if it exits 0.  tests named *-win.c are built but not run: they
 # need something wine does not implement (RtlCloneUserProcess, say).
 #
-TEST_SRCS = $(sort $(wildcard $(srcdir)/test/*.c))
+# test/delayall.c needs a different recipe (-Wl,--delay-all, plus
+# lib/delayload2.o -- see crt/delayload2.c's header comment for why
+# that object is not just part of -lc) and only builds at all when
+# $(CC) has the flag (DELAY_ALL, from configure's probe): excluded from
+# the generic glob/pattern-rule pair below for the same reason
+# rpath-plugin.c is kept out of it (see the comment by
+# obj/test/rpath-plugin.dll), even though delayall.c, unlike that file,
+# does have a main and is otherwise an ordinary test.
+TEST_SRCS = $(filter-out $(srcdir)/test/delayall.c,$(sort $(wildcard $(srcdir)/test/*.c)))
 TEST_EXES = $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
 TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 
@@ -238,10 +246,42 @@ obj/test/rpath-plugin.dll: $(srcdir)/test/rpath-plugin-src/rpath-plugin.c | obj/
 
 obj/test/rpath.exe: obj/test/rpath-plugin.dll
 
+# test/delayall.c and its plugin DLL: proof that an *unmodified* program
+# (plain extern, ordinary call, no ntlibc-specific macro at the call
+# site) gets $ORIGIN delay loading through -Wl,--delay-all and
+# __delayLoadHelper2 (crt/delayload2.c) rather than through
+# include/ntlibc/delayload.h's hand-authored stubs. Only defined/built
+# when DELAY_ALL is yes -- see the "delayall (skipped)" branch of
+# `check` below for what happens otherwise, and configure's "checking
+# whether linker accepts -Wl,--delay-all" for the probe that sets it.
+ifeq ($(DELAY_ALL),yes)
+obj/test/delayall-plugin.dll: $(srcdir)/test/delayall-plugin-src/delayall-plugin.c | obj/test
+	$(CC) -shared -o $@ $<
+
+# delayload2.o must come *before* -lc/-lntdll on the command line, not
+# after: tcc resolves each archive's undefined symbols in a single pass
+# as it reaches that archive on the command line, so an object placed
+# after -lc that itself needs symbols out of libc.a (delayload2.o needs
+# ntlibc_rpath_load()/_fail() and ntlibc_pe_find_export()/_dll_range())
+# would already be too late (confirmed empirically -- swapping the
+# order is what turns "unresolved reference to ntlibc_rpath_load" etc.
+# into a clean link).
+obj/test/delayall.exe: $(srcdir)/test/delayall.c $(ALL_LIBS) obj/test/delayall-plugin.dll | obj/test
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -Wl,--delay-all -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< obj/test/delayall-plugin.dll lib/delayload2.o -Llib -lc -lntdll
+
+TEST_EXES += obj/test/delayall.exe
+# TEST_RUN is a recursively-expanded (`=`) variable, so it re-reads
+# TEST_EXES -- now including delayall.exe -- every time it is expanded;
+# no separate `+=` needed here, and one would double it up.
+endif
+
 obj/test:
 	mkdir -p $@
 
 check: $(TEST_EXES)
+ifneq ($(DELAY_ALL),yes)
+	@echo "SKIP delayall.exe (this \$$(CC) has no -Wl,--delay-all support -- see configure's probe)"
+endif
 	@$(srcdir)/tools/runtests.sh "$(WINE)" $(TEST_RUN)
 
 #

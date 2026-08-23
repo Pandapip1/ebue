@@ -2,10 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * $ORIGIN-relative DLL search: the half of the RPATH-equivalent mechanism
- * that decides *where* a delay-loaded DLL comes from. See
- * include/ntlibc/delayload.h for the other half -- the actual PE
- * delay-load descriptor/IAT/helper machinery that calls into this file
- * the first time a delay-imported function is used.
+ * that decides *where* a delay-loaded DLL comes from. Two things call
+ * into this file the first time a delay-imported function is used:
+ * __delayLoadHelper2 (crt/delayload2.c), the documented interface -- a
+ * plain `extern` declaration, an ordinary call, built with
+ * -Wl,--delay-all, no macro at the call site -- and
+ * include/ntlibc/delayload.h's hand-authored, macro-based
+ * NTLIBC_DELAY_DLL/_STUB machinery, kept for a tcc without that flag
+ * (see that header's own note on why it is no longer what new code
+ * should reach for). __rpath, below, is the one thing a program using
+ * either mechanism still declares itself.
  *
  * ---- Where the search path lives -----------------------------------
  *

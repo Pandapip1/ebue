@@ -9,4 +9,20 @@ lib="@LIBDIR@"
 case "$*" in
 *-c*|*-E*|*-S*) exec $cc -nostdinc -I"$inc" "$@" ;;
 esac
-exec $cc -nostdinc -nostdlib -I"$inc" "$lib/crt1.o" "$@" -L"$lib" -lc -lntdll
+# -Wl,--delay-all needs __delayLoadHelper2 (crt/delayload2.c ->
+# lib/delayload2.o), which is not part of -lc -- see that file's header
+# comment for why (tcc invents the "__delayLoadHelper2" undefined
+# reference only while writing the PE image, too late for -lc's own
+# archive-symbol lookup to ever find it there). Detected by a plain
+# substring match on the command line, the same thing configure's own
+# --delay-all probe cares about; a program built through this wrapper
+# with that flag needs nothing extra itself. It must come *before*
+# -lc/-lntdll on the command line -- tcc resolves each archive in one
+# pass as it reaches it, so an object placed after -lc that still needs
+# libc.a symbols (delayload2.o needs ntlibc_rpath_load()/_fail() and
+# ntlibc_pe_find_export()/_dll_range()) is already too late.
+delayobj=
+case "$*" in
+*delay-all*) delayobj="$lib/delayload2.o" ;;
+esac
+exec $cc -nostdinc -nostdlib -I"$inc" "$lib/crt1.o" "$@" $delayobj -L"$lib" -lc -lntdll

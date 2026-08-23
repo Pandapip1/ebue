@@ -258,6 +258,8 @@ not_native()
 	case $1 in
 	rpath)
 		echo "exercises the delay-load/\$ORIGIN machinery in src/internal/{rpath,delayload}.c, which is PE-only (LdrLoadDll/LdrGetProcedureAddress against a real NT image) and is therefore not compiled into this build at all -- see obj/asan/skipped.txt. Covered by 'make check' under Wine instead" ;;
+	delayall)
+		echo "proof of the -Wl,--delay-all path (crt/delayload2.c, PE-only, same reason as rpath/delayload.c above) against a plugin DLL built with a real PE tcc -- neither the delay-load runtime nor a matching delayall_check() exists for this native build to link against. Covered by 'make check' under Wine instead, on both arches" ;;
 	posix-misc)
 		echo "uses sigsetjmp, whose src/setjmp/x86_64/setjmp.S is genuinely Win64-ABI machine code (first arg in %rcx, xmm6-15 treated as callee-saved) -- not merely unbuilt, but wrong if assembled for a SysV caller: %rcx is not this ABI's first-argument register and its xmm6-15 are caller-saved scratch, so jmp_buf would be silently corrupted rather than just fail to link" ;;
 	*)  echo "" ;;
