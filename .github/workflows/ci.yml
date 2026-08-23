@@ -174,7 +174,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: test-exes-${{ matrix.name }}
-          path: obj/test/*.exe
+          # The .dll matters: test/rpath.c delay-loads obj/test/rpath-plugin.dll
+          # from its own directory ($ORIGIN). Uploading only *.exe left the
+          # plugin behind, so on the real-Windows runner the search correctly
+          # found nothing and the helper aborted -- a red leg caused by a
+          # missing artefact, not by the code under test.
+          path: |
+            obj/test/*.exe
+            obj/test/*.dll
           if-no-files-found: error
 
       # Only needs to run once, not once per matrix leg (both generators
