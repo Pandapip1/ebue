@@ -282,6 +282,8 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 not_native()
 {
 	case $1 in
+	posix-dl)
+		echo "calls ntlibc_rpath_load/_sym/_error to demonstrate how much of dlfcn.h already exists; those live in src/internal/rpath.c, which is NT-only (LdrLoadDll/LdrGetProcedureAddress against a real NT image) and so is excluded from this build -- see obj/asan/skipped.txt. Its dlfcn/mman/termios/spawn clauses are fenced UNIMPL/N-A anyway; the live parts run under 'make check'" ;;
 	rpath)
 		echo "exercises the delay-load/\$ORIGIN machinery in src/internal/{rpath,delayload}.c, which is PE-only (LdrLoadDll/LdrGetProcedureAddress against a real NT image) and is therefore not compiled into this build at all -- see obj/asan/skipped.txt. Covered by 'make check' under Wine instead" ;;
 	delayall)
