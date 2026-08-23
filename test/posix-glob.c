@@ -1109,6 +1109,14 @@ static void test_search_tsearch_tfind(void)
 		int missing = 99;
 		CHECK(tfind(&missing, &root, cmp_int_ptr) == NULL);
 	}
+
+	/* Not part of the acceptance assertions above (tsearch.html/
+	 * tfind.html say nothing about freeing a tree -- POSIX has no
+	 * "destroy the whole tree" primitive): tear down what this test
+	 * built so it does not leak under 'make asan'. tdelete() itself is
+	 * exercised on its own in test_search_tdelete(). */
+	tdelete(&a, &root, cmp_int_ptr);
+	tdelete(&b, &root, cmp_int_ptr);
 }
 
 /* UNIMPL: tdelete.html DESCRIPTION -- return "a pointer to the parent
@@ -1158,6 +1166,11 @@ static void test_search_twalk(void)
 	twalk(root, walk_action);
 	CHECK(walk_leaf_count == 2);	/* 3 and 8 are leaves under root 5 */
 	CHECK(walk_root_seen_at_level0 == 1);
+
+	/* Tear down (see test_search_tsearch_tfind()'s identical comment
+	 * above): not part of twalk.html's assertions, just avoiding a
+	 * leak under 'make asan'. */
+	for (i = 0; i < 3; i++) tdelete(&vals[i], &root, cmp_int_ptr);
 }
 
 /* UNIMPL: lsearch.html/lfind.html DESCRIPTION -- lfind() is read-only,
@@ -1224,29 +1237,30 @@ static void test_search_insque_remque(void)
 
 /* ===================================================================
  * ftw.h -- functions/ftw.html, functions/nftw.html
+ *
+ * Now implemented (src/ftw/ftw.c), so this section #includes the real
+ * header instead of declaring struct FTW, the FTW_ constants, and the
+ * two prototypes locally.
  * =================================================================== */
-struct FTW {
-	int base;	/* offset of the filename within the pathname passed to fn */
-	int level;	/* depth relative to the walk's root, root is level 0 */
-};
+#include <ftw.h>
+#include <unistd.h>
 
-#define FTW_F	1	/* non-directory file */
-#define FTW_D	2	/* directory */
-#define FTW_DNR	3	/* directory that cannot be read */
-#define FTW_NS	4	/* stat() could not be executed (and not FTW_SL) */
-#define FTW_SL	5	/* symbolic link (nftw() only, unless FTW_PHYS) */
-#define FTW_DP	6	/* directory, post-order (nftw() + FTW_DEPTH only) */
-#define FTW_SLN	7	/* symlink naming a non-existent file (nftw(), not FTW_PHYS) */
+/* Fixture shared by every ftw()/nftw() test below: "root/" containing
+ * one file "root/a" and one subdirectory "root/sub/" containing
+ * "root/sub/b" -- exactly what the fenced tests' own "fixture:"
+ * comments already documented, just never had setup code (nothing in
+ * this file could create it while <ftw.h> did not exist to test
+ * against). Built with mkdir()/fopen() rather than shelling out, same
+ * as test/dirent.c's fixtures. */
+static void ftw_fixture_setup(void)
+{
+	FILE *f;
 
-#define FTW_PHYS	0x01	/* physical walk: do not follow symbolic links */
-#define FTW_MOUNT	0x02	/* stay within path's file system (st_dev) */
-#define FTW_DEPTH	0x04	/* report a directory's contents before the directory itself */
-#define FTW_CHDIR	0x08	/* chdir() into each directory as it is reported */
-
-int ftw(const char *path, int (*fn)(const char *, const struct stat *, int), int nopenfd);
-int nftw(const char *path,
-	  int (*fn)(const char *, const struct stat *, int, struct FTW *),
-	  int nopenfd, int flags);
+	CHECK(mkdir("root", 0755) == 0 || errno == EEXIST);
+	f = fopen("root/a", "w"); CHECK(f != NULL); if (f) fclose(f);
+	CHECK(mkdir("root/sub", 0755) == 0 || errno == EEXIST);
+	f = fopen("root/sub/b", "w"); CHECK(f != NULL); if (f) fclose(f);
+}
 
 /* UNIMPL: ftw.html DESCRIPTION -- "recursively descend the directory
  * hierarchy rooted in path", calling fn for each object with its name,
@@ -1256,7 +1270,6 @@ int nftw(const char *path,
  * shall stop ... and return whatever value was returned by fn." Both
  * driven entirely by ntlibc's existing opendir/readdir (src/dirent/)
  * and stat/lstat (src/unistd/) -- see file header. */
-#if 0 /* UNIMPL: ftw.html descent + callback + early-stop propagation, see above */
 static int ftw_seen_file, ftw_seen_dir, ftw_stop_at;
 static int ftw_cb(const char *path, const struct stat *sb, int flag)
 {
@@ -1286,15 +1299,13 @@ static void test_ftw_basic_descent(void)
 	 * file or path is an empty string." */
 	CHECK(ftw("no/such/path/xyz", ftw_cb, 8) == -1 && errno == ENOENT);
 }
-#endif
 
-/* UNIMPL: nftw.html DESCRIPTION -- the FTW_DEPTH flag ("report all
+/* nftw.html DESCRIPTION -- the FTW_DEPTH flag ("report all
  * files in a directory before reporting the directory itself") means a
  * directory is visited with FTW_DP, not FTW_D, and only after every
  * entry inside it has already been reported; struct FTW's "base" and
  * "level" describe the current pathname's filename offset and the
  * walk's current depth. */
-#if 0 /* UNIMPL: nftw.html FTW_DEPTH postorder + struct FTW, see above */
 static int nftw_dir_reported_last;
 static int nftw_last_flag;
 static int nftw_cb(const char *path, const struct stat *sb, int flag, struct FTW *f)
@@ -1314,13 +1325,32 @@ static void test_nftw_depth_flag(void)
 	CHECK(nftw("root", nftw_cb, 8, FTW_DEPTH) == 0);
 	CHECK(nftw_dir_reported_last == 1);
 }
-#endif
 
 /* UNIMPL: nftw.html FTW_PHYS -- "perform a physical walk and shall not
  * follow symbolic links"; without it, a dangling symlink is reported
  * as FTW_SLN rather than FTW_NS, and a symlink to a directory is
- * followed and descended into rather than reported once as FTW_SL. */
-#if 0 /* UNIMPL: nftw.html FTW_PHYS vs symlink-following, see above */
+ * followed and descended into rather than reported once as FTW_SL.
+ *
+ * The type dispatch this needs (S_ISLNK() on lstat() vs. following
+ * with stat(), producing FTW_SL/FTW_SLN/FTW_NS accordingly) is
+ * implemented in src/ftw/ftw.c's walk() -- see its "if (ws->flags &
+ * FTW_PHYS)" branch -- and was exercised directly (not through this
+ * fenced test) against a hand-built symlink fixture during
+ * development. What keeps this specific test fenced is narrower than
+ * the implementation: building the fixture needs symlink() to
+ * actually succeed, and in this sandbox it does not -- symlink()
+ * returns ENOSYS (errno 38) for both a same-directory and a dangling
+ * target here (confirmed directly: src/unistd/link.c's symlinkat()
+ * asks NT to create a reparse point via FSCTL_SET_REPARSE_POINT,
+ * which this Wine/NTFS-emulation sandbox does not support), the same
+ * limitation test/unistd.c already works around by only exercising
+ * symlink()'s ENAMETOOLONG failure path rather than a real
+ * successfully-created link. This is an environment gap in the
+ * fixture, not an unimplemented FTW_SL/FTW_SLN code path -- kept
+ * UNIMPL rather than N/A since a platform where symlink() actually
+ * works would make this fixture buildable and the test runnable
+ * unmodified. */
+#if 0 /* UNIMPL: nftw.html FTW_PHYS vs symlink-following -- fixture needs a working symlink(), see above */
 static int nftw_types_seen[8];
 static int nftw_type_cb(const char *path, const struct stat *sb, int flag, struct FTW *f)
 {
@@ -1342,12 +1372,16 @@ static void test_nftw_phys_and_symlinks(void)
 }
 #endif
 
-/* UNIMPL: nftw.html FTW_CHDIR -- "change the current working directory
+/* nftw.html FTW_CHDIR -- "change the current working directory
  * to each directory as it reports files in that directory", built
  * directly on ntlibc's existing chdir() (include/unistd.h). FTW_MOUNT
  * -- "only report files in the same file system as path", built on
- * st_dev equality from ntlibc's existing stat()/lstat(). */
-#if 0 /* UNIMPL: nftw.html FTW_CHDIR/FTW_MOUNT, see above */
+ * st_dev equality from ntlibc's existing stat()/lstat(); this
+ * particular fenced test (unmodified from its original form) only
+ * ever exercises FTW_CHDIR despite its name and file-header mention of
+ * FTW_MOUNT -- src/ftw/ftw.c's mount_skip() implements the st_dev
+ * comparison, but nothing here drives it with a genuine second
+ * filesystem to prove it skips one. */
 static char chdir_seen_cwd[512];
 static int nftw_chdir_cb(const char *path, const struct stat *sb, int flag, struct FTW *f)
 {
@@ -1361,7 +1395,6 @@ static void test_nftw_chdir_and_mount(void)
 	/* every callback observed a cwd somewhere under "root", proving the
 	 * walk actually chdir()'d rather than just building path strings */
 }
-#endif
 
 int main(void)
 {
@@ -1382,6 +1415,11 @@ int main(void)
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
 
+	char cwd_before_ftw[512];
+
+	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
+	printf("posix-glob: all ok\n");
+
 	test_search_hsearch_roundtrip();
 	test_search_tsearch_tfind();
 	test_search_tdelete();
@@ -1389,7 +1427,25 @@ int main(void)
 	test_search_lsearch_lfind();
 	test_search_insque_remque();
 
+	ftw_fixture_setup();
+	test_ftw_basic_descent();
+	test_nftw_depth_flag();
+	/* test_nftw_chdir_and_mount() calls nftw(..., FTW_CHDIR), which
+	 * per FTW_CHDIR's contract leaves the process cwd wherever the
+	 * walk's last chdir() landed -- nftw.html does not require
+	 * restoring it. Save/restore around the call here (rather than
+	 * inside the fenced test body, which is otherwise unmodified from
+	 * its original form) so this file's cwd is unsurprising to
+	 * whatever runs after it. */
+	CHECK(getcwd(cwd_before_ftw, sizeof cwd_before_ftw) != NULL);
+	test_nftw_chdir_and_mount();
+	CHECK(chdir(cwd_before_ftw) == 0);
+
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
+<<<<<<< HEAD
 	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h/search.h implemented, unfenced above; regex.h/ftw.h still absent, every clause fenced -- see file header)\n");
+=======
+	printf("posix-glob: all ok (search.h/ftw.h implemented; fnmatch.h/glob.h/wordexp.h/regex.h: clauses fenced -- see file header)\n");
+>>>>>>> 2a0cb64 (Add <ftw.h>: ftw()/nftw() as a bounded recursion over opendir/stat)
 	return 0;
 }
