@@ -38,9 +38,7 @@
  * 2026-08-22): fgetwc, fgetws, fputwc, fputws, fwide, getwc, getwchar,
  * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, open_wmemstream, iswalnum/iswalpha/iswcntrl/iswdigit/iswgraph/
- * iswlower/iswprint/iswpunct/iswspace/iswupper/iswxdigit, iswctype,
- * wctype, towlower, towupper, wcwidth, wcswidth, wcsstr, wcspbrk,
+ * wscanf, open_wmemstream, wcwidth, wcswidth, wcsstr, wcspbrk,
  * wcscspn, wcsspn, wcstok, wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp,
  * wcscasecmp_l, wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul,
  * wcstoull, wcstod, wcstof, wcstold, wcscoll, wcscoll_l, wcsxfrm,
@@ -49,12 +47,17 @@
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
  * wcsrtombs, plus the stdlib.h mbtowc/wctomb/mblen/mbstowcs/wcstombs and
- * inttypes.h wcstoimax/wcstoumax already covered.
+ * inttypes.h wcstoimax/wcstoumax already covered.  Also now present, as
+ * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
+ * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
+ * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
+ * towctrans.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <wctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <inttypes.h>
@@ -995,19 +998,17 @@ static void test_open_wmemstream(void)
 
 /* ---------------------------------------------------------------------
  * isw*() classification family -- iswalpha.html
- * The wint_t argument's domain is "a valid character ... or WEOF"; a
- * lone surrogate half is outside that domain by the caller's contract
- * (same as passing an arbitrary garbage int to isalpha()), so this is
- * an UNIMPL absence, not a structural N/A -- nothing stops classifying
- * every BMP code unit correctly.
+ * <wctype.h> now exists (include/wctype.h). Classification is ASCII-only
+ * in the C locale, mirroring ctype.h's is*() family exactly (see that
+ * header's comment for why): every BMP code unit above 0x7f answers
+ * false for every class, with no special-casing needed for a lone
+ * surrogate half (0xd800-0xdfff) or WEOF -- both simply fall outside
+ * every ASCII range test the same way any other out-of-range value
+ * does. iswalpha.html DESCRIPTION restricts the domain to "a valid
+ * wide-character code, or ... WEOF" and calls anything else undefined;
+ * ntlibc answers false for a lone surrogate rather than leaving it
+ * undefined.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: iswalnum/iswalpha/iswcntrl/iswdigit/iswgraph/iswlower/
-       * iswprint/iswpunct/iswspace/iswupper/iswxdigit -- iswalpha.html
-       * DESCRIPTION, RETURN VALUE.  No wctype.h exists in this library
-       * at all (no wctype_t either), so these are absent as a block,
-       * not individually -- but each is fully implementable for BMP
-       * code units via the same tables ctype.h's is*() already use for
-       * the POSIX/C locale's 7-bit range. */
 static void test_iswalpha_family(void)
 {
 	/* "shall return non-zero if wc is [class]; otherwise ... 0." */
@@ -1026,12 +1027,22 @@ static void test_iswalpha_family(void)
 	/* "the application shall ensure ... WEOF" is an accepted value */
 	CHECK(iswalpha(WEOF) == 0);
 }
-#endif
 
-#if 0 /* UNIMPL: iswctype()/wctype() -- iswctype.html DESCRIPTION,
-       * RETURN VALUE.  Requires adding a wctype_t typedef (none exists
-       * today); implementable once that's done, same table lookup as
-       * the isw*() family above. */
+/* A lone surrogate half is not a valid character (it can never appear
+ * alone in well-formed UTF-16), so it is outside every class in the C
+ * locale -- same defined-but-false answer WEOF gets above, for the
+ * same reason: it fails every ASCII range check. 0xd800 is the first
+ * high surrogate, 0xdfff the last low surrogate. */
+static void test_iswalpha_family_surrogate(void)
+{
+	CHECK(iswalpha(0xd800) == 0);
+	CHECK(iswalnum(0xd800) == 0);
+	CHECK(iswspace(0xd800) == 0);
+	CHECK(iswcntrl(0xd800) == 0);
+	CHECK(iswprint(0xd800) == 0);
+	CHECK(iswalpha(0xdfff) == 0);
+}
+
 static void test_iswctype(void)
 {
 	wctype_t digit = wctype("digit");
@@ -1042,18 +1053,29 @@ static void test_iswctype(void)
 	 * (wctype_t)0, and iswctype() with that class returns 0. */
 	CHECK(wctype("not-a-real-class") == (wctype_t)0);
 	CHECK(iswctype(L'5', (wctype_t)0) == 0);
+	/* every required class name (iswctype.html) is accepted */
+	CHECK(wctype("alnum") != (wctype_t)0);
+	CHECK(wctype("alpha") != (wctype_t)0);
+	CHECK(wctype("blank") != (wctype_t)0);
+	CHECK(wctype("cntrl") != (wctype_t)0);
+	CHECK(wctype("graph") != (wctype_t)0);
+	CHECK(wctype("lower") != (wctype_t)0);
+	CHECK(wctype("print") != (wctype_t)0);
+	CHECK(wctype("punct") != (wctype_t)0);
+	CHECK(wctype("space") != (wctype_t)0);
+	CHECK(wctype("upper") != (wctype_t)0);
+	CHECK(wctype("xdigit") != (wctype_t)0);
+	/* a lone surrogate is outside every class here too */
+	CHECK(iswctype(0xd800, digit) == 0);
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * towlower / towupper -- towlower.html
  * Same domain-restriction reasoning as isw*(): "All other arguments in
  * the domain are returned unchanged" -- a lone surrogate is simply not
  * an uppercase/lowercase letter, so it is returned unchanged like any
- * other non-cased BMP code unit.  UNIMPL, not N/A.
+ * other non-cased BMP code unit.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: towlower()/towupper() -- towlower.html DESCRIPTION,
-       * RETURN VALUE. */
 static void test_towlower(void)
 {
 	CHECK(towlower(L'A') == L'a');
@@ -1061,8 +1083,33 @@ static void test_towlower(void)
 	/* "All other arguments in the domain are returned unchanged." */
 	CHECK(towlower(L'1') == L'1');
 	CHECK(towupper(L'.') == L'.');
+	/* WEOF and a lone surrogate are both outside the cased domain */
+	CHECK(towlower(WEOF) == (wint_t)WEOF);
+	CHECK(towupper(0xd800) == 0xd800);
 }
-#endif
+
+/* ---------------------------------------------------------------------
+ * wctrans / towctrans -- wctrans.html, towctrans.html
+ * "tolower" and "toupper" are "defined in all locales" (wctrans.html);
+ * ntlibc's C locale defines no others.  towctrans() with the resulting
+ * wctrans_t is just towlower()/towupper() by another name.
+ * ------------------------------------------------------------------- */
+static void test_wctrans(void)
+{
+	wctrans_t lower = wctrans("tolower");
+	wctrans_t upper = wctrans("toupper");
+
+	CHECK(lower != (wctrans_t)0);
+	CHECK(upper != (wctrans_t)0);
+	CHECK(wctrans("not-a-real-mapping") == (wctrans_t)0);
+
+	CHECK(towctrans(L'A', lower) == L'a');
+	CHECK(towctrans(L'a', upper) == L'A');
+	/* outside the mapping's domain: returned unchanged, same as
+	 * towlower()/towupper() */
+	CHECK(towctrans(L'1', lower) == L'1');
+	CHECK(towctrans(0xd800, upper) == 0xd800);
+}
 
 /* ---------------------------------------------------------------------
  * wcwidth / wcswidth -- wcwidth.html
@@ -1393,6 +1440,12 @@ int main(void)
 	test_wctob();
 
 	test_wcstoimax();
+
+	test_iswalpha_family();
+	test_iswalpha_family_surrogate();
+	test_iswctype();
+	test_towlower();
+	test_wctrans();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");
