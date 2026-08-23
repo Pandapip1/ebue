@@ -8,14 +8,18 @@
  * include/ntlibc/rpath.h for the $ORIGIN search this uses to find the
  * DLL.
  *
- * NT-only, for the same reason and by the same mechanism as
- * src/internal/rpath.c (see the comment there): this calls into that
- * file, which is itself excluded from a native ASan/UBSan build by
- * failing to compile outside _WIN32, so this file has to fail the same
- * way rather than leave a dangling reference to ntlibc_rpath_load() et
- * al. in that build's unconditional link.
+ * NT-only, for the same reason and by the same (ASan-gated, not a bare
+ * _WIN32 check -- see src/internal/rpath.c's longer comment for why) as
+ * src/internal/rpath.c: this calls into that file, which is itself
+ * excluded from a native ASan/UBSan build's compile, so this file has
+ * to fail the same way rather than leave a dangling reference to
+ * ntlibc_rpath_load() et al. in that build's unconditional link. A
+ * plain native -fsyntax-only pass is unaffected, same as there.
  */
-#ifndef _WIN32
+#ifndef __has_feature
+#define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
+#endif
+#if !defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
 #error "delayload.c is NT-only (calls into rpath.c, which is NT-only); see the comment above and src/internal/rpath.c"
 #endif
 #include "libc.h"

@@ -22,25 +22,39 @@
  * own search order -- which does include the current working directory
  * on many configurations -- is never invoked by this file.
  *
- * NT-only, deliberately: LdrLoadDll()/LdrGetProcedureAddress() have no
- * native (non-Windows) counterpart, so unlike most of src/*.c this file
- * cannot be given a stand-in for tools/asan-build.sh's native run --
- * fuzz/ntstubs.c answers RtlAllocateHeap and the like precisely because
- * every native ASan/UBSan build links every compiled src/*.c object
- * into every test unconditionally (see that script's own comment on
- * why an archive would be wrong there), so a stray undefined Ldr* here
- * would break every *other* test's native link too, not just this
- * facility's own. tcc predefines _WIN32 for both win32 targets this
- * library builds for (confirmed for i386-win32-tcc and x86_64-win32-tcc
- * alike); a native clang build defines neither, so the #error below
- * fails *compilation*, which is exactly the signal
- * tools/asan-build.sh's mechanical "compile every src/*.c and keep
+ * NT-only, deliberately, but *only* refused at the point something would
+ * actually try to link and run it natively: LdrLoadDll()/
+ * LdrGetProcedureAddress() have no native (non-Windows) counterpart, so
+ * unlike most other files under src/, this one cannot be given a
+ * stand-in for tools/asan-build.sh's native run -- fuzz/ntstubs.c
+ * answers RtlAllocateHeap and the like precisely because every native
+ * ASan/UBSan build links every compiled source file's object into every
+ * test unconditionally (see that script's own comment on why an archive
+ * would be wrong there), so a stray undefined Ldr* here would break
+ * every *other* test's native link too, not just this facility's own.
+ * The #error below fires only when both are true: not building for NT
+ * (tcc predefines _WIN32 for both win32 targets this library builds
+ * for -- confirmed for i386-win32-tcc and x86_64-win32-tcc alike), *and*
+ * AddressSanitizer is active (__SANITIZE_ADDRESS__ for gcc,
+ * __has_feature(address_sanitizer) for clang -- asan-build.sh always
+ * passes -fsanitize=address) -- i.e. specifically
+ * tools/asan-build.sh's/fuzz/'s real native compile-and-link, which is
+ * the one situation this file cannot survive. A plain native
+ * -fsyntax-only pass (tools/lint.sh's fallback when no mingw-w64 cross
+ * compiler is installed) defines neither and is unaffected: nothing in
+ * this file needs an actual Ldr* definition to type-check, only to
+ * link, so there is nothing to protect there. Where the #error does
+ * fire, it fails *compilation*, which is exactly the signal
+ * tools/asan-build.sh's mechanical "compile every source file and keep
  * whichever compiles" step already treats as "skip this one" -- the
  * same outcome src/internal/$ARCH/teb.c gets for reading gs:0x30
  * natively, reached here without needing that script (which is out of
  * this change's scope) to name this file specifically.
  */
-#ifndef _WIN32
+#ifndef __has_feature
+#define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
+#endif
+#if !defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
 #error "rpath.c is NT-only (LdrLoadDll/LdrGetProcedureAddress have no native stand-in); see the comment above"
 #endif
 #include <string.h>
