@@ -377,35 +377,50 @@ static void test_mkostemp(void)
  * src/stdlib/mktemp.c actually requests: mkostemps() calls
  * open(tmpl, flags|O_CREAT|O_EXCL|O_RDWR, 0600).
  *
- * UNIMPL: NT genuinely has the security-descriptor machinery to make
- * "owner-only, no group/other access" real (a DACL granting access only
- * to the creating SID), so this is implementable on this platform, just
- * not attempted here -- src/stat/stat.c's header comment documents the
- * actual design: "Mode bits are made up the way every Unix layer on
- * Windows makes them up: a directory is 0755, a file 0644 (0444 when
- * read-only)".  mode_from_attrs() hard-codes `S_IFREG | (exe ? 0755 :
- * 0644)` before clearing the write bits for FILE_ATTRIBUTE_READONLY --
- * group/other read bits are unconditional and completely independent of
- * whatever mode open()/mkstemp() was asked to create the file with, so
- * stat() can never report 0600 for any file, no matter what was
- * requested at creation.  Confirmed live under Wine: mkstemp() followed
- * by fstat() reports mode 0644, not 0600, for a file created with the
- * literal open(..., 0600) call above.  This is not a Wine quirk in the
- * usual "differs from real NT" sense flagged elsewhere in this suite --
- * the 0644 is a compile-time constant in stat.c, so it would read
- * exactly the same way on real Windows NT (Wine and this codebase share
- * the same synthesis logic; nothing here queries the NT security
- * descriptor at all) -- but flagged as a risk in the ledger because a
- * fix would need to be verified against real ACL behaviour, which only
- * a real NT box (not Wine) could confirm. */
+ * N/A: not merely unattempted but unrepresentable by this library's
+ * permission model, which is confirmed (not speculated) by reading both
+ * ends of it.  src/fcntl/open.c's own header comment for the O_CREAT
+ * path says it outright: "NTFS has no room for the rest of the mode
+ * bits ... umask's only observable effect here, like mode's, is whether
+ * the write bits survive to decide FILE_ATTRIBUTE_READONLY" -- i.e. of
+ * every bit in the mode argument, exactly one boolean (writable or not)
+ * is ever written down anywhere, as FILE_ATTRIBUTE_READONLY.  Reading it
+ * back is symmetric: src/stat/stat.c's mode_from_attrs() hard-codes
+ * `S_IFREG | (exe ? 0755 : 0644)` and only ever clears the write bits
+ * (`m &= ~0222`) for FILE_ATTRIBUTE_READONLY -- the read bits for
+ * user/group/other are compile-time constants, not derived from
+ * anything mkstemp() requested.  So S_IRUSR|S_IWUSR-only is not a
+ * missing feature with a code path waiting to be filled in: there is no
+ * storage location in this design, anywhere between open()'s mode
+ * argument and stat()'s st_mode, that a "readable by owner only" bit
+ * could round-trip through.  Confirmed live under Wine: mkstemp()
+ * followed by fstat() reports mode 0644, not 0600, for a file created
+ * with the literal open(..., 0600) call above, and it would read
+ * exactly the same on real Windows NT since nothing here queries an NT
+ * security descriptor at all.
+ *
+ * The only way to make this real would be to stop using file attributes
+ * for permissions altogether and start writing/reading an actual NT
+ * DACL (a discretionary access-control list naming the creating SID) --
+ * NT does have that machinery, but no code in this tree touches it, and
+ * adding it would be a new permission model for open()/stat()/chmod()
+ * collectively, not a one-line fix to stat.c's synthesis function.
+ * That is out of scope here (this change touches src/stat/stat.c only)
+ * and, per the ledger, would need verification against real ACL
+ * behaviour that only a real NT box (not Wine) could confirm -- so it
+ * is left as a real, well-understood gap rather than attempted
+ * half-way. */
 static void test_mkstemp_permission_bits(void)
 {
-#if 0 /* UNIMPL: mkstemp.html DESCRIPTION -- file created with mode
-       * S_IRUSR|S_IWUSR only (0600); src/stat/stat.c's mode synthesis
-       * (mode_from_attrs()) hard-codes 0644 for every non-executable
-       * regular file regardless of the mode given to open(), so this
-       * can never observe anything but 0644 until stat()/open() are
-       * taught to read/write a real NT DACL. */
+#if 0 /* N/A: mkstemp.html DESCRIPTION -- file created with mode
+       * S_IRUSR|S_IWUSR only (0600).  Unrepresentable, not merely
+       * unimplemented: this library's only real, storable permission
+       * bit is FILE_ATTRIBUTE_READONLY (the write bits); the read bits
+       * for owner/group/other are compile-time constants in
+       * mode_from_attrs() with no connection to what open()/mkstemp()
+       * requested, so "owner-only readable" can never be observed
+       * without adding real NT DACL storage, which no code in this tree
+       * has. */
 	char t[] = "mkperm-XXXXXX";
 	int fd = mkstemp(t);
 	struct stat st;
@@ -417,10 +432,13 @@ static void test_mkstemp_permission_bits(void)
 		unlink(t);
 	}
 #endif
-	printf("note: mkstemp() permission bits (S_IRUSR|S_IWUSR only) not "
-	       "checked live -- ntlibc's stat() always synthesizes 0644 for "
-	       "a non-executable regular file (src/stat/stat.c), so the "
-	       "assertion above is fenced UNIMPL rather than run\n");
+	printf("note: mkstemp() permission bits (S_IRUSR|S_IWUSR only) are "
+	       "N/A, not just unchecked -- ntlibc's only real, storable "
+	       "permission bit is FILE_ATTRIBUTE_READONLY (src/fcntl/open.c, "
+	       "src/stat/stat.c); the read bits stat() reports are "
+	       "compile-time constants with no NT DACL behind them, so "
+	       "\"owner-only readable\" cannot round-trip through this "
+	       "library's permission model at all\n");
 }
 
 /* ---- realpath.html: caller-supplied (non-NULL) resolved_name buffer. ---- */
