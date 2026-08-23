@@ -7,6 +7,7 @@ EXPORTS
 LdrGetDllHandle
 LdrGetProcedureAddress
 LdrLoadDll
+LdrUnloadDll
 NtAllocateVirtualMemory
 NtCancelIoFile
 NtClose

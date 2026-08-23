@@ -43,6 +43,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <dlfcn.h>
 #include "ntlibc/rpath.h"
 
 static int fails;
@@ -62,22 +63,20 @@ const char *const __rpath[] = { 0 };
 /* ============================================================
  * <dlfcn.h> -- dlopen/dlsym/dlclose/dlerror
  *
- * ntlibc already has the loading primitive dlopen() would sit on top
- * of: ntlibc_rpath_load()/ntlibc_rpath_sym()/ntlibc_rpath_error()
+ * ntlibc already had the loading primitive dlopen() sits on top of:
+ * ntlibc_rpath_load()/ntlibc_rpath_sym()/ntlibc_rpath_error()
  * (include/ntlibc/rpath.h, implemented in src/internal/rpath.c) wrap
  * exactly the two ntdll entry points a real dlopen()/dlsym() would
- * also use -- LdrLoadDll()/LdrGetProcedureAddress() -- and
- * ntlibc_rpath_error() already behaves like a per-call (not
- * thread-local, since ntlibc has no threads) sticky error string, the
- * same shape dlerror() needs. The two real differences from a
- * finished dlfcn.h are: (1) no RTLD_* mode/scope semantics are
- * threaded through -- LdrLoadDll always resolves everything the
- * loader would resolve for an ordinary import, there is no lazy path
- * to opt into and no way to keep a module's exports out of later
- * lookups; (2) dlerror()'s specific "NULL on the second consecutive
- * call for the same error" contract (dlerror.html) is not
- * implemented -- ntlibc_rpath_error() is unconditionally sticky and
- * returns the same string every time until the next failure.
+ * also use -- LdrLoadDll()/LdrGetProcedureAddress(). <dlfcn.h> and
+ * src/dlfcn/dlfcn.c (a sibling agent's later pass) now exist and are
+ * exercised directly below, unfenced, alongside this original
+ * lower-level demonstration -- see dlfcn.c's own header comment for
+ * how RTLD_* mode/scope semantics, dlclose()'s refcounting, and
+ * dlerror()'s single-shot contract were each resolved on top of these
+ * same rpath.c primitives, and include/dlfcn.h for the fuller design
+ * rationale (RTLD_LOCAL's genuine N/A status, the $ORIGIN-vs-plain-
+ * search decision for a bare filename, and dlopen(NULL, ...)'s limits
+ * on a -nostdlib image).
  * ==============================================================
  */
 
@@ -124,24 +123,25 @@ static void test_dl_underlying_mechanism(void)
 	 * assertion above already exercised the failure path fully. */
 }
 
-/* ---- the dlfcn.h surface itself: not implemented ---- */
+/* ---- the dlfcn.h surface itself ----
+ *
+ * RTLD_LAZY/RTLD_NOW/RTLD_GLOBAL/RTLD_LOCAL now come from <dlfcn.h>
+ * itself (included above) rather than being redeclared locally the way
+ * the other three not-implemented-at-all headers in this file still
+ * do -- dlopen()/dlsym()/dlclose()/dlerror() are real now, so this is
+ * no longer "declared locally, never included from include/" the way
+ * this file's own header comment describes for the other sections. */
 
-#define RTLD_LAZY   1
-#define RTLD_NOW    2
-#define RTLD_GLOBAL 4
-#define RTLD_LOCAL  8
-
-#if 0 /* UNIMPL: dlopen.html DESCRIPTION -- dlopen(path, RTLD_NOW)
-	must load `path` and make its symbols available to dlsym().
-	NT mechanism: ntlibc_rpath_load() already *is* this, modulo the
-	mode argument -- LdrLoadDll() resolves the target's own import
-	table eagerly regardless of mode, so RTLD_NOW is trivially
-	satisfiable today (dlopen always behaves as if RTLD_NOW was
-	given) and RTLD_LAZY can only ever be honoured as a no-op alias
-	for it: ntdll has no per-import lazy-binding stub mechanism to
-	defer to (unlike this project's own delay-load machinery in
-	crt/delayload2.c, which is opt-in per import and not something
-	LdrLoadDll's ordinary resolution path uses). */
+/* dlopen.html DESCRIPTION -- dlopen(path, RTLD_NOW) must load `path`
+ * and make its symbols available to dlsym(). NT mechanism:
+ * ntlibc_rpath_load() already *is* this, modulo the mode argument --
+ * LdrLoadDll() resolves the target's own import table eagerly
+ * regardless of mode, so RTLD_NOW is trivially satisfiable (dlopen
+ * always behaves as if RTLD_NOW was given) and RTLD_LAZY can only ever
+ * be honoured as a no-op alias for it: ntdll has no per-import
+ * lazy-binding stub mechanism to defer to (unlike this project's own
+ * delay-load machinery in crt/delayload2.c, which is opt-in per import
+ * and not something LdrLoadDll's ordinary resolution path uses). */
 static void test_dlopen_now_lazy(void)
 {
 	void *h1 = dlopen("C:\\Windows\\System32\\ntdll.dll", RTLD_NOW);
@@ -151,7 +151,6 @@ static void test_dlopen_now_lazy(void)
 	if (h1) dlclose(h1);
 	if (h2) dlclose(h2);
 }
-#endif
 
 #if 0 /* N/A: dlopen.html DESCRIPTION -- RTLD_LOCAL: "symbols ... are
 	not made available to resolve references in subsequently
@@ -184,16 +183,14 @@ static void test_dlopen_rtld_local_scoping(void)
 }
 #endif
 
-#if 0 /* UNIMPL: dlclose.html DESCRIPTION -- "decrements the
-	reference count ... If the reference count drops to 0 ... the
-	object is unloaded." NT mechanism: LdrUnloadDll() (declared
-	nowhere in src/internal/nt.h today, but a documented ntdll
-	export with exactly this reference-counted-unload contract --
-	the loader data table entry LdrLoadDll() creates already
-	carries a LoadCount field the way this clause requires). This
-	needs one new nt.h prototype and one new rpath.c/rpath.h entry
-	point (ntlibc_rpath_unload(), symmetrical with _load()); nothing
-	else in this loader stands in the way of it. */
+/* dlclose.html DESCRIPTION -- "decrements the reference count ... If
+ * the reference count drops to 0 ... the object is unloaded." NT
+ * mechanism: LdrUnloadDll() (src/internal/nt.h) against the loader
+ * data table entry's own LoadCount field, which LdrLoadDll() already
+ * maintains -- see ntlibc_rpath_unload()'s own comment
+ * (src/internal/rpath.c) for the Wine-source confirmation that
+ * LdrLoadDll()/LdrUnloadDll() refcount this without any help from
+ * ntlibc. */
 static void test_dlclose_refcounts(void)
 {
 	void *h1 = dlopen("C:\\Windows\\System32\\ntdll.dll", RTLD_NOW);
@@ -207,20 +204,17 @@ static void test_dlclose_refcounts(void)
 	CHECK(dlsym(h2, "RtlAllocateHeap") != 0);
 	CHECK(dlclose(h2) == 0);
 }
-#endif
 
-#if 0 /* UNIMPL: dlerror.html DESCRIPTION -- "If a call ... to
-	dlerror() ... returns non-NULL, then a subsequent call ... shall
-	return NULL, unless an intervening call to dlopen() or dlsym()
-	returned NULL and set the error condition." This is the
-	single-shot-consumption contract implementations most often
-	get wrong -- and it is exactly the one clause
-	ntlibc_rpath_error() (src/internal/rpath.c) does NOT implement:
-	that function is unconditionally sticky, so a naive dlerror()
-	built directly on top of it would fail this test today. Fully
-	implementable with one extra "already consumed" bit next to
-	rpath.c's existing `last_err` struct -- no new NT primitive
-	needed, purely a bookkeeping fix in the wrapper. */
+/* dlerror.html DESCRIPTION -- "If a call ... to dlerror() ... returns
+ * non-NULL, then a subsequent call ... shall return NULL, unless an
+ * intervening call to dlopen() or dlsym() returned NULL and set the
+ * error condition." This is the single-shot-consumption contract
+ * implementations most often get wrong -- and it is exactly the one
+ * clause ntlibc_rpath_error() (src/internal/rpath.c) deliberately does
+ * NOT implement (see test_dl_underlying_mechanism() above, which
+ * relies on it staying sticky). src/dlfcn/dlfcn.c's dlerror() layers
+ * the single-shot contract on top using ntlibc_rpath_error_seq()
+ * instead, without changing ntlibc_rpath_error() itself. */
 static void test_dlerror_consumed_once(void)
 {
 	void *h = dlopen("C:\\this-does-not-exist.dll", RTLD_NOW);
@@ -229,7 +223,6 @@ static void test_dlerror_consumed_once(void)
 	CHECK(dlerror() == 0);     /* second consecutive call: NULL */
 	CHECK(dlerror() == 0);     /* still NULL -- no error is pending, not "half-consumed" */
 }
-#endif
 
 /* ============================================================
  * <sys/mman.h> -- mmap/munmap/mprotect/msync/mlock
@@ -835,6 +828,9 @@ int main(int argc, char **argv)
 	}
 
 	test_dl_underlying_mechanism();
+	test_dlopen_now_lazy();
+	test_dlclose_refcounts();
+	test_dlerror_consumed_once();
 	test_termios_isatty_prerequisite();
 	test_spawn_fd_remap_via_existing_inheritance(argv[0]);
 	test_spawn_usevfork_trivially_satisfied();

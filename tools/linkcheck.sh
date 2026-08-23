@@ -315,9 +315,20 @@ reason_for() {
 # the way every other symbol here is checked, would always be missing
 # that array and would misreport a real, working library entry point as
 # broken.
+#
+# dlopen()/dlsym()/dlclose()/dlerror() (include/dlfcn.h, src/dlfcn/
+# dlfcn.c) and ntlibc_rpath_unload()/ntlibc_rpath_error_seq()
+# (include/ntlibc/rpath.h, src/internal/rpath.c) join the list for the
+# same reason at one remove: dlopen()/dlsym()/dlclose() call straight
+# into ntlibc_rpath_load()/_sym()/_unload(), and dlerror() into
+# ntlibc_rpath_error_seq() (which shares rpath.c's one translation unit
+# and so pulls in the same unresolved `__rpath`, even though it does
+# not read that array itself) -- a generated single-call TU for any of
+# these six hits the identical missing-`__rpath` link failure, for a
+# reason that has nothing to do with whether the function itself works.
 linkcheck_exception() {
 	case $1 in
-	ntlibc_rpath_load|ntlibc_rpath_sym|ntlibc_rpath_error|ntlibc_rpath_fail|ntlibc_delayLoadHelper2)
+	ntlibc_rpath_load|ntlibc_rpath_sym|ntlibc_rpath_error|ntlibc_rpath_fail|ntlibc_delayLoadHelper2|ntlibc_rpath_unload|ntlibc_rpath_error_seq|dlopen|dlsym|dlclose|dlerror)
 		echo "resolves __rpath (include/ntlibc/rpath.h), an extern array the *calling program* is documented to define (see test/rpath.c) -- not a libc symbol, so no standalone TU can supply it" ;;
 	*) echo "" ;;
 	esac

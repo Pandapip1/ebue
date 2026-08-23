@@ -133,13 +133,30 @@ static struct {
 	int valid;
 	NTSTATUS status;
 	char what[1024];
+	unsigned long seq; /* bumped on every set_err(); see ntlibc_rpath_error_seq() */
 } last_err;
 
 static void set_err(NTSTATUS st, const char *what)
 {
 	last_err.valid = 1;
 	last_err.status = st;
+	last_err.seq++;
 	snprintf(last_err.what, sizeof last_err.what, "%s", what);
+}
+
+/* Monotonic counter, bumped once per set_err() (i.e. once per failure
+ * recorded here), 0 until the first failure ever happens. This exists
+ * purely so a caller layered on top -- dlerror() (src/dlfcn/dlfcn.c) is
+ * the only one today -- can tell "this is the same failure I already
+ * reported" from "a new failure has happened since", by remembering the
+ * seq value it last consumed, without this file's own sticky
+ * ntlibc_rpath_error() (which intentionally keeps returning the same
+ * string on repeated calls, per its own doc comment and
+ * test/posix-dl.c's test_dl_underlying_mechanism()) having to change
+ * shape or ever go quiet on its own callers. */
+unsigned long ntlibc_rpath_error_seq(void)
+{
+	return last_err.seq;
 }
 
 const char *ntlibc_rpath_error(void)
@@ -269,6 +286,29 @@ void *ntlibc_rpath_sym(ntlibc_dll_t *dll, const char *symbol)
 	st = LdrGetProcedureAddress(dll, &name, 0, &proc);
 	if (!NT_SUCCESS(st)) { set_err(st, symbol); return 0; }
 	return proc;
+}
+
+/* Symmetrical with ntlibc_rpath_load(): decrements the loader's own
+ * LoadCount for `dll` and unloads it once that count reaches zero.
+ * LdrUnloadDll() (src/internal/nt.h) already does both the decrement
+ * and the conditional unload itself -- confirmed against Wine's
+ * dlls/ntdll/loader.c, where LdrLoadDll's callees increment
+ * WINE_MODREF.ldr.LoadCount on every load of an already-mapped module
+ * (e.g. the `if (LoadCount != -1) LoadCount++` sites around
+ * import_dll()/load_dll()) and LdrUnloadDll() itself decrements that
+ * same field and only calls free_modref() when it hits zero -- so
+ * nothing here needs its own refcount; this is a thin call-and-
+ * translate wrapper, the same shape as ntlibc_rpath_sym(). Returns 0
+ * on success; on failure returns nonzero and ntlibc_rpath_error()
+ * describes why. */
+int ntlibc_rpath_unload(ntlibc_dll_t *dll)
+{
+	NTSTATUS st;
+
+	if (!dll) { set_err(STATUS_INVALID_PARAMETER, ""); return -1; }
+	st = LdrUnloadDll(dll);
+	if (!NT_SUCCESS(st)) { set_err(st, ""); return -1; }
+	return 0;
 }
 
 _Noreturn void ntlibc_rpath_fail(const char *dllfile, const char *symbol)

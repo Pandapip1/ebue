@@ -126,11 +126,33 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname);
  * and sets the diagnosable error on failure. */
 void *ntlibc_rpath_sym(ntlibc_dll_t *dll, const char *symbol);
 
+/* Symmetrical with ntlibc_rpath_load(): releases one reference on `dll`
+ * (LdrUnloadDll's own LoadCount, not tracked separately here -- see
+ * src/internal/rpath.c's comment on ntlibc_rpath_unload() for why
+ * nothing more is needed), unloading it once the count reaches zero.
+ * Returns 0 on success; on failure returns nonzero and
+ * ntlibc_rpath_error() describes why. */
+int ntlibc_rpath_unload(ntlibc_dll_t *dll);
+
 /* Describes the most recent failure from ntlibc_rpath_load()/
- * ntlibc_rpath_sym() on this process. Valid only right after such a
- * call returned failure; there is no thread-local version because
- * ntlibc has no thread support to make one meaningful. */
+ * ntlibc_rpath_sym()/ntlibc_rpath_unload() on this process. Valid only
+ * right after such a call returned failure; there is no thread-local
+ * version because ntlibc has no thread support to make one meaningful.
+ * Deliberately sticky across repeated calls -- see this function's own
+ * implementation comment -- unlike POSIX dlerror()'s single-shot
+ * contract; src/dlfcn/dlfcn.c's dlerror() layers that contract on top
+ * using ntlibc_rpath_error_seq() below rather than changing this
+ * function's own behaviour, which callers other than dlerror() already
+ * rely on. */
 const char *ntlibc_rpath_error(void);
+
+/* Monotonic counter, bumped once per failure recorded by
+ * ntlibc_rpath_load()/_sym()/_unload(), 0 until the first ever failure.
+ * Lets a caller distinguish "the same failure I already saw" from "a
+ * new failure happened since" without ntlibc_rpath_error() itself
+ * needing to stop being sticky. Only meaningful use today is
+ * src/dlfcn/dlfcn.c's dlerror(). */
+unsigned long ntlibc_rpath_error_seq(void);
 
 /* Prints the diagnosis for a failed resolution of dllfile!symbol to
  * stderr and aborts the process. Used by delayload.h's generated stubs
