@@ -70,6 +70,7 @@ extern size_t __sanitizer_get_allocated_size(const void *);
 #define SYS_close 3
 #define SYS_ftruncate 77
 #define SYS_memfd_create 319
+#define SYS_ioctl 16
 
 /* Handles are (fd + 1), so that 0 stays "no handle". */
 #define H2FD(h) ((int)(long)(h) - 1)
@@ -1354,6 +1355,31 @@ NTSTATUS NTAPI NtQueryInformationFile(HANDLE h, PIO_STATUS_BLOCK io, PVOID buf,
 
 	if (!f) return STATUS_INVALID_HANDLE;
 	if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; }
+	/* src/select/select.c's __fd_probe() polls a pipe's readability via
+	 * this class; answer it from the real host pipe fd (FIONREAD) so
+	 * that path -- and thus test/posix-sysmisc.c's select()/poll() pipe
+	 * tests -- runs for real here too, not just under Wine. */
+	if (f->kind == OF_PIPE && cls == FilePipeLocalInformation) {
+		struct vpipe *p = f->pipe;
+		FILE_PIPE_LOCAL_INFORMATION *pli = buf;
+		int avail = 0;
+
+		if (len < sizeof *pli) return STATUS_INFO_LENGTH_MISMATCH;
+		memset(pli, 0, sizeof *pli);
+		/* Both ends still open on this process's view: p->readers/
+		 * writers is exactly right in the common, unforked case that
+		 * every select()/poll() test here exercises (see NtWriteFile's
+		 * own comment on this same field for the cross-process
+		 * caveat). */
+		pli->NamedPipeState = (p->readers && p->writers) ? FILE_PIPE_CONNECTED_STATE : 0;
+		if (!f->writer && p->rfd >= 0) syscall(SYS_ioctl, p->rfd, 0x541B /* FIONREAD */, &avail);
+		pli->ReadDataAvailable = (ULONG)avail;
+		/* WriteQuotaAvailable is deliberately left 0: the real
+		 * select.c never reads it (see its own comment on why), so
+		 * there is nothing here that depends on a faithful value. */
+		if (io) io->Information = sizeof *pli;
+		return STATUS_SUCCESS;
+	}
 	if (f->kind != OF_VFS) {
 		/* A console, a pipe or the null device: NT answers the position
 		 * and size classes with STATUS_INVALID_DEVICE_REQUEST rather than
@@ -2427,6 +2453,29 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE h, BOOLEAN alertable, LARGE_INTEGER 
 	if (r > 0) return STATUS_WAIT_0;
 	if (r == 0) return STATUS_TIMEOUT;
 	return STATUS_INVALID_HANDLE;   /* not actually waitable from here; see proc_poll */
+}
+
+/* src/select/select.c is the only caller here, and only for its
+ * console-wait path -- which nothing in this native ASan build can ever
+ * reach: consoles aren't fuzzed/tested here (no OF_CONSOLE kind exists in
+ * this shim), so this exists purely to satisfy the linker, not to be a
+ * faithful WaitAny.  A real implementation would need a genuine
+ * multi-object blocking wait, which this Linux-hosted shim has no
+ * primitive for (same limitation NtWaitForSingleObject's own comment
+ * above notes) -- so this only ever peeks each handle non-blockingly via
+ * NtWaitForSingleObject(..., 0-timeout) and reports STATUS_TIMEOUT
+ * instead of truly blocking when nothing is ready. */
+NTSTATUS NTAPI NtWaitForMultipleObjects(ULONG count, HANDLE *handles, ULONG waittype, BOOLEAN alertable, LARGE_INTEGER *timeout)
+{
+	LARGE_INTEGER zero = 0;
+	ULONG i;
+	(void)waittype;
+	for (i = 0; i < count; i++) {
+		NTSTATUS st = NtWaitForSingleObject(handles[i], alertable, &zero);
+		if (st == STATUS_WAIT_0) return (NTSTATUS)(STATUS_WAIT_0 + i);
+	}
+	(void)timeout;
+	return STATUS_TIMEOUT;
 }
 
 NTSTATUS NTAPI NtQueryInformationProcess(HANDLE h, PROCESSINFOCLASS cls, PVOID buf,

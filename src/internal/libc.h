@@ -140,6 +140,37 @@ void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from Ru
  * *len receives its size.  NULL with errno on failure. */
 void *__fd_runtime_data(size_t *len);
 
+/* ---- select()/pselect()/poll() shared readiness core (src/select/) ----
+ * A per-descriptor-type, non-blocking readiness probe plus a "wait on
+ * what is waitable, sleep the rest" primitive that select.c and poll.c
+ * both build their own (differently shaped) polling loop around -- see
+ * src/select/select.c's file banner for the design writeup. */
+
+/* Non-blocking, instantaneous readiness check for one already-open
+ * descriptor.  Never blocks and never touches f->h's console-input wait
+ * state.  *canread and *canwrite are set to 0 or 1; *hup is set to 1 when the
+ * peer end of a pipe is gone (broken/disconnected), which also forces
+ * *canread and *canwrite to 1 -- a read or write on it would return
+ * immediately (with 0/EOF or an error), so it counts as "ready" the same
+ * way select(2) treats a hung-up descriptor.  __FD_CONSOLE's read side is
+ * deliberately left as *canread = 0 here: a console input handle is a
+ * real NT wait object, so the caller waits on f->h directly instead of
+ * polling it (see __fd_wait_or_delay below).
+ *
+ * Socket hook: this is where an __FD_SOCKET case belongs once ntlibc has
+ * sockets (test/networking-audit.md sec 3 -- probe via a non-blocking
+ * IOCTL_AFD_POLL, same "instantaneous, no wait" shape as the pipe case
+ * below).  Unreachable today: nothing can install an __FD_SOCKET
+ * descriptor, so no case is needed yet. */
+void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup);
+
+/* The "wait" half: block for up to wait_ticks 100ns units (relative),
+ * waking early if any of the `ncons` console handles becomes signalled,
+ * or indefinitely if `infinite` is non-zero (wait_ticks is then
+ * ignored).  Used as the sleep between __fd_probe() polls of pipes --
+ * see the caller for how the interval is chosen. */
+void __fd_wait_or_delay(HANDLE *console_handles, int ncons, long long wait_ticks, int infinite);
+
 /* ---- children ---------------------------------------------------------- */
 /* The size of the statically allocated part of the child table.  It is
  * not a limit: the table grows onto the heap past this point rather than

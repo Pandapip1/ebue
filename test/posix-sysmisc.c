@@ -2,16 +2,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Clause-by-clause audit of the last never-audited corners:
- * <sys/resource.h>, <sys/select.h>, <sys/param.h>, and the GNU
- * getopt_long()/getopt_long_only() extensions.  Each assertion cites
- * the clause of https://pubs.opengroup.org/onlinepubs/9699919799/
- * functions/<name>.html or .../basedefs/<header>.html it checks, or
- * (for the two non-POSIX pieces) the GNU/BSD documentation cited
- * inline.
+ * <sys/resource.h>, <sys/select.h>, <poll.h>, <sys/param.h>, and the
+ * GNU getopt_long()/getopt_long_only() extensions.  Each assertion
+ * cites the clause of https://pubs.opengroup.org/onlinepubs/
+ * 9699919799/functions/<name>.html or .../basedefs/<header>.html it
+ * checks, or (for the two non-POSIX pieces) the GNU/BSD documentation
+ * cited inline.
  *
- * Three genuine implementation gaps were originally found in this area;
- * two are now closed (setrlimit()'s enforceable half, and getpriority()/
- * setpriority() entirely -- both in src/misc/resource.c). Per the
+ * Three genuine implementation gaps were originally found in this area.
+ * All three are now closed: setrlimit()'s enforceable half and
+ * getpriority()/setpriority() entirely (src/misc/resource.c), and
+ * select()/pselect()/poll() (src/select/). Per the
  * project's current standard, a gap is no longer just recorded in
  * prose and left untested -- every specified clause gets a real test
  * in this file, fenced off with one of three conventions so the
@@ -25,7 +26,7 @@
  *   implemented here, but implementable; the fence comment also
  *   names the NT mechanism that would implement it.
  *
- * The three gaps:
+ * The two remaining gaps:
  *
  *   - setrlimit() was *declared* in include/sys/resource.h but had no
  *     definition anywhere in src/ -- calling it was a link error, not a
@@ -45,18 +46,12 @@
  *     mapped through the nice-value range -- see that header for the
  *     mapping writeup.
  *
- *   - select()/pselect(): still an open gap, out of scope for this
- *     pass. select() is declared but, per
- *     include/sys/select.h's own undefined-ok comment, not defined
- *     anywhere in src/ (grep confirms no `int select(` in any .c).
- *     pselect() is not even declared. Both are implementable (the
- *     header's own comment sketches exactly how -- NtWaitForMultiple
- *     Objects for console/regular files, a FilePipeLocalInformation
- *     poll loop for pipes) -- a real gap, not a platform limitation.
- *     Fenced UNIMPL below. What *is* implemented and testable
- *     independent of select() ever existing is the fd_set
- *     bit-manipulation macro family, which is audited exhaustively
- *     below (unfenced).
+ * select()/pselect() and poll() are no longer a gap: both are now
+ * implemented (src/select/select.c, src/select/poll.c -- see that
+ * first file's banner for the wait-vs-poll design over this library's
+ * pipe/console/regular-file descriptor shapes) and exercised below,
+ * unfenced, alongside the fd_set bit-manipulation macro family that
+ * was already tested independent of select() ever existing.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -66,8 +61,10 @@
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <sys/select.h>
+#include <poll.h>
 #include <sys/param.h>
 #include <getopt.h>
+#include <signal.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -383,25 +380,9 @@ static void test_getpriority_setpriority(void)
 /* ===================== sys/select.h ===================== */
 
 /* select()/pselect(): select.html DESCRIPTION/RETURN VALUE/ERRORS.
- * select() is declared in include/sys/select.h but not defined
- * anywhere in src/ (grep confirms) -- a link error, not ENOSYS.
- * pselect() is not even declared; local prototype below, plus the
- * sigset_t it needs (already pulled in via __NEED_sigset_t at the top
- * of this header). */
-#if 0 /* UNIMPL: select.html RETURN VALUE: "the total number of bits
-	set in the bit masks" -- with two known-ready pipe ends (one
-	readable, one writable) and no others requested, select() must
-	return exactly the count of ready descriptors and modify only
-	the sets actually passed in, leaving the untouched ones alone
-	per DESCRIPTION's "shall modify the objects pointed to by the
-	readfds, writefds, and errorfds arguments to indicate which
-	file descriptors are ready". NT mechanism: see this header's
-	own banner comment above FD_SETSIZE -- NtWaitForMultipleObjects
-	for the signalled shapes (console, regular files/dirs, always
-	ready) merged with an NtQueryInformationFile(
-	FilePipeLocalInformation) polling loop for pipes, which are not
-	signalled on data arrival in NT. */
-int pselect(int, fd_set *__restrict, fd_set *__restrict, fd_set *__restrict, const struct timespec *__restrict, const sigset_t *__restrict);
+ * Both are now implemented in src/select/select.c (see that file's
+ * banner for the design) and declared by include/sys/select.h, whose
+ * own undefined-ok marker for select() has been removed accordingly. */
 
 static void test_select_ready_count(void)
 {
@@ -458,14 +439,21 @@ static void test_select_errors(void)
 	fd_set rfds;
 	struct timeval tv;
 
+	/* "[EBADF] One or more of the file descriptor sets specified a
+	 * file descriptor that is not a valid open file descriptor." --
+	 * fd 100 is comfortably inside FD_SETSIZE (1024) but nothing in
+	 * this test program opens it. (Not fd 999999: FD_SETSIZE is
+	 * 1024, so FD_SET() on a bit that far out of range is an
+	 * out-of-bounds write on the fd_set itself -- undefined
+	 * behaviour before select() is even called, on any FD_SETSIZE=
+	 * 1024 implementation, not something select() can be asked to
+	 * survive.) */
 	FD_ZERO(&rfds);
-	FD_SET(999999, &rfds);  /* not a valid open fd */
+	FD_SET(100, &rfds);
 	tv.tv_sec = 0;
 	tv.tv_usec = 0;
-	/* "[EBADF] One or more of the file descriptor sets specified a
-	 * file descriptor that is not a valid open file descriptor." */
 	errno = 0;
-	CHECK(select(1000000, &rfds, 0, 0, &tv) == -1 && errno == EBADF);
+	CHECK(select(101, &rfds, 0, 0, &tv) == -1 && errno == EBADF);
 
 	/* "[EINVAL] The nfds argument is less than 0 or greater than
 	 * FD_SETSIZE." */
@@ -518,11 +506,79 @@ static void test_pselect_timespec_and_mask(void)
 	close(fds[0]);
 	close(fds[1]);
 }
-#endif
+
+/* ===================== poll.h ===================== */
+
+/* poll(): poll.html RETURN VALUE/DESCRIPTION event bits.  Mirrors
+ * test_select_ready_count() over the same pipe shape: POLLIN on the
+ * read end (data queued), POLLOUT on the write end (room in the
+ * pipe's buffer), and the return value is the count of pollfd entries
+ * with nonzero revents, per "a positive value ... indicates the total
+ * number of pollfd structures that have selected events". */
+static void test_poll_ready_count(void)
+{
+	int fds[2];
+	struct pollfd pfd[2];
+	int n;
+
+	CHECK(pipe(fds) == 0);
+	CHECK(write(fds[1], "x", 1) == 1);
+
+	pfd[0].fd = fds[0]; pfd[0].events = POLLIN; pfd[0].revents = -1;
+	pfd[1].fd = fds[1]; pfd[1].events = POLLOUT; pfd[1].revents = -1;
+
+	n = poll(pfd, 2, 1000);
+	CHECK(n == 2);
+	CHECK(pfd[0].revents == POLLIN);
+	CHECK(pfd[1].revents == POLLOUT);
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+/* poll.html DESCRIPTION timeout semantics: "the value 0 ... the poll()
+ * function shall return immediately" -- and RETURN VALUE: "0 ... time
+ * limit expired" with revents left clear for anything not ready. */
+static void test_poll_zero_timeout_polls(void)
+{
+	int fds[2];
+	struct pollfd pfd;
+
+	CHECK(pipe(fds) == 0);
+	pfd.fd = fds[0]; pfd.events = POLLIN; pfd.revents = -1;
+	/* nothing written to fds[1] -- read end is not ready */
+	CHECK(poll(&pfd, 1, 0) == 0);
+	CHECK(pfd.revents == 0);  /* cleared: not one of the "selected events" */
+	close(fds[0]);
+	close(fds[1]);
+}
+
+/* poll.html DESCRIPTION: "If the value of fd is less than 0, events
+ * shall be ignored, and revents shall be set to 0 ... this indicates
+ * to poll() that this entry ... is currently not being used." A
+ * negative-fd entry must not count toward the return value either. */
+static void test_poll_negative_fd_ignored(void)
+{
+	struct pollfd pfd;
+	pfd.fd = -1; pfd.events = POLLIN; pfd.revents = -1;
+	CHECK(poll(&pfd, 1, 0) == 0);
+	CHECK(pfd.revents == 0);
+}
+
+/* poll.html DESCRIPTION: "POLLNVAL ... The specified fd value is
+ * invalid ... This flag is only valid in the revents member" -- an fd
+ * that is not open must be reported this way (and, per RETURN VALUE,
+ * counted -- POLLNVAL is a "selected event" like any other). */
+static void test_poll_nval(void)
+{
+	struct pollfd pfd;
+	pfd.fd = 12345; pfd.events = POLLIN; pfd.revents = 0;
+	CHECK(poll(&pfd, 1, 0) == 1);
+	CHECK(pfd.revents == POLLNVAL);
+}
 
 /* sys_select.h.html basedefs: FD_ZERO/FD_SET/FD_CLR/FD_ISSET, exercised
- * as pure bit manipulation -- testable in full even though select()
- * itself is not implemented (see the file banner comment above).
+ * as pure bit manipulation.
  *
  * "FD_ISSET() shall return a non-zero value if the bit for the file
  * descriptor fd is set ... and 0 otherwise." FD_SET/FD_CLR/FD_ZERO
@@ -930,6 +986,14 @@ int main(int argc, char **argv)
 	test_setrlimit_enforceable();
 	test_getrusage(argv[0]);
 	test_getpriority_setpriority();
+	test_select_ready_count();
+	test_select_zero_timeout_polls();
+	test_select_errors();
+	test_pselect_timespec_and_mask();
+	test_poll_ready_count();
+	test_poll_zero_timeout_polls();
+	test_poll_negative_fd_ignored();
+	test_poll_nval();
 	test_fd_macros();
 	test_sys_param();
 	test_getopt_long_abbrev();
