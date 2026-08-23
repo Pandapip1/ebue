@@ -97,7 +97,13 @@ without a real Windows box, and no ReactOS-independent Microsoft
 documentation of the AFD wire format exists to check against — real AFD
 is not a published interface.
 
-### Recommendation: layer on `ws2_32.dll`, loaded the way kernel32 already is
+### The audit's original recommendation: layer on `ws2_32.dll`
+
+> **Superseded.** This section is kept because its trade-off analysis is
+> still accurate and one of its objections still stands (DNS, below), but
+> the recommendation itself was overruled. See
+> [Decision](#decision-drive-afd-directly-through-ntdll) at the end of
+> this section for what is actually being built and why.
 
 ntlibc already has a precedent for "kernel32 is allowed where necessary":
 `src/internal/kernel32.h`'s header comment, and `src/signal/signal.c`'s
@@ -160,6 +166,66 @@ ntlibc's "ntdll first" ethos intact in spirit — `ws2_32` becomes exactly
 as optional and load-time-only as kernel32 already is — while accepting
 that sockets are one of the "genuinely kernel32-or-above" cases
 `CONTRIBUTING.md:10-13` already carves out room for.
+
+### Decision: drive AFD directly through ntdll
+
+**ntlibc will talk to `\Device\Afd` directly with `NtCreateFile` +
+`NtDeviceIoControlFile`. It will not layer on `ws2_32.dll`.** Where Wine's
+AFD diverges from the real interface, Wine gets fixed — which is already
+an established pattern here: `~/Projects/wine` carries local commits from
+this project for `RtlCloneUserProcess` and for keeping exited PIDs
+openable, both written to make ntlibc's behaviour testable.
+
+The rationale above rested on one premise that turned out to be wrong:
+that the real AFD ioctls are "only known via third-party reverse
+engineering" with "no way to check the result against real Windows
+locally". There are in fact **two independent reimplementations**, and
+they agree numerically.
+
+ReactOS defines the interface in
+`sdk/include/reactos/drivers/afd/shared.h`:
+
+```c
+#define FSCTL_AFD_BASE  FILE_DEVICE_NETWORK          /* 0x12 */
+#define _AFD_CONTROL_CODE(Op,Method) ((FSCTL_AFD_BASE)<<12 | (Op<<2) | Method)
+#define AFD_BIND 0   AFD_CONNECT 1   AFD_START_LISTEN 2   AFD_RECV 5   AFD_SELECT 9
+```
+
+Wine writes the same thing as `CTL_CODE(FILE_DEVICE_BEEP, 0x800+Op,
+Method, FILE_ANY_ACCESS)` (`include/wine/afd.h`). Those are the same
+numbers: `(1<<16) | (0x800<<2)` and `(0x12<<12)` are both `0x12000`, and
+Wine's BIND/LISTEN/RECV/POLL at 0x800/0x802/0x805/0x809 line up exactly
+with ReactOS's operations 0/2/5/9. Two projects that reverse-engineered
+NT independently arrived at the same encoding, which is much stronger
+evidence than either alone.
+
+That also makes the gap specific rather than diffuse. ReactOS defines
+`AFD_CONNECT` (operation 1, i.e. `0x12004`) and implements the driver
+side in `drivers/network/afd/afd/connect.c`, with the user-mode caller in
+`dll/win32/msafd/misc/dllmain.c`. Wine simply does not implement that
+ioctl and substituted its own `IOCTL_AFD_WINE_CONNECT`. So "fix Wine"
+means teaching it the real connect ioctl *alongside* the invented one —
+a contained change against a documented-by-two-sources interface, not
+open-ended reverse engineering.
+
+What the original analysis got right and still stands:
+
+- **DNS is the real cost.** `gethostbyname`/`getaddrinfo` have no
+  ntdll-level equivalent; resolution genuinely is a kernel32-and-above
+  facility. Direct AFD does not avoid that, it defers it. `netdb.h` will
+  need either a resolver of its own or a narrowly-scoped use of a higher
+  DLL, and that should be decided on its own merits rather than dragging
+  the whole socket layer up a level.
+- **An `NTSTATUS`→`errno` table is needed either way**, extended for
+  AFD-specific statuses; `__set_errno_status()` already exists to build
+  on.
+
+ReactOS is a reimplementation, not an authority: where it and Wine agree,
+confidence is high; where only one has something, that needs saying
+rather than assuming. A spike is validating the encoding table, the
+request/response structure layouts, and an end-to-end
+bind/listen/recv/connect path under Wine before any of this lands in
+`src/`.
 
 ## 2. Sockets as file descriptors
 
