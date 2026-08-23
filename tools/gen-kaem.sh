@@ -423,6 +423,12 @@ MID5
 #
 # As with srcdir, an unset one of these substitutes to nothing and the
 # resulting command is malformed rather than plausible.
+# The ${...} here are deliberately single-quoted: they are literal text
+# emitted *into* the generated kaem file, for kaem to expand at bootstrap
+# time, not values for this script to expand now. shellcheck 0.9 flags all
+# six as SC2016 ("expressions don't expand in single quotes"); 0.11 does
+# not, which is why this only showed up in CI.
+# shellcheck disable=SC2016
 sed -e 's,-I\./,-I${srcdir}/,g' \
     -e 's,\([ \t]\)\./,\1${srcdir}/,g' \
     -e 's,\([ \t]\)\(src/\|crt/\|arch/\),\1${srcdir}/\2,g' \

@@ -25,6 +25,19 @@
 #   tools/lint.sh                 run every stage
 #   tools/lint.sh warn analyze    run only the named stages
 #
+# Tool versions matter, and have caught this project out three times: a
+# green local run is not a green CI run if the versions differ.  CI (see
+# .github/workflows/ci.yml) installs clang-tidy-18 and shellcheck 0.9 from
+# ubuntu-24.04's apt; a newer local pair may report neither cppcheck's
+# suppression-file syntax complaints, nor clang-analyzer findings that 18
+# reports and 21 does not, nor SC2016 in tools/gen-kaem.sh's sed.  To
+# reproduce CI's exact toolchain locally:
+#
+#   nix-shell -p llvmPackages_18.clang-tools \
+#     --run 'CLANG_TIDY=clang-tidy tools/lint.sh analyze'
+#   nix-shell -I nixpkgs=channel:nixos-23.11 -p shellcheck \
+#     --run 'tools/lint.sh shell'
+#
 # Environment:
 #   LINT_ARCHS=...        arches to check (default: every dir under arch/
 #                         except `generic`)
