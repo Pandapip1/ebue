@@ -164,15 +164,32 @@ static void test_setrlimit_enforceable(void)
 
 	/* RLIMIT_CPU, RLIMIT_AS, RLIMIT_DATA: same enforceable-soft-limit
 	 * round trip, each via its own job-object/process-quota field. */
-	rl.rlim_cur = 1;
-	rl.rlim_max = 60;
+	rl.rlim_cur = 3600;
+	rl.rlim_max = 7200;
 	CHECK(setrlimit(RLIMIT_CPU, &rl) == 0);
-	CHECK(getrlimit(RLIMIT_CPU, &rl2) == 0 && rl2.rlim_cur == 1 && rl2.rlim_max == 60);
+	CHECK(getrlimit(RLIMIT_CPU, &rl2) == 0 && rl2.rlim_cur == 3600 && rl2.rlim_max == 7200);
 
-	rl.rlim_cur = 1 << 20;
-	rl.rlim_max = 1 << 24;
+	/* Deliberately generous values.  POSIX limits are inherited across
+	 * fork/exec, and this library implements them with a job object the
+	 * child is enrolled in, so a small cap here is not confined to this
+	 * process -- it applies to everything spawned afterwards, including
+	 * test_getrusage()'s child below.  A 1 MiB RLIMIT_AS killed that
+	 * child outright on real Windows while passing under Wine, whose
+	 * job objects enforce nothing: the three windows-test CI legs went
+	 * red and the divergence was invisible locally.
+	 *
+	 * That inheritance is correct, not a bug -- setting RLIMIT_AS to
+	 * 1 MiB before fork/exec would break a child on any POSIX system
+	 * too -- so the fix belongs here, not in setrlimit().  These values
+	 * still exercise every clause below (round-trip, EINVAL when soft
+	 * exceeds hard, EPERM when raising the hard limit) without leaving
+	 * the process unable to spawn.  Note the hard limit cannot be
+	 * raised again unprivileged, so whatever is set here is this
+	 * process's ceiling for the rest of the run. */
+	rl.rlim_cur = (rlim_t)256 << 20;
+	rl.rlim_max = (rlim_t)512 << 20;
 	CHECK(setrlimit(RLIMIT_AS, &rl) == 0);
-	CHECK(getrlimit(RLIMIT_AS, &rl2) == 0 && rl2.rlim_cur == (rlim_t)(1 << 20));
+	CHECK(getrlimit(RLIMIT_AS, &rl2) == 0 && rl2.rlim_cur == ((rlim_t)256 << 20));
 }
 
 /* N/A: setrlimit.html DESCRIPTION obliges the limit to actually
