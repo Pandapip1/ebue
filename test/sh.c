@@ -1,19 +1,26 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Stage 1 conformance tests for the in-process shell's lexer/parser --
- * see test/sh-design.md for why this exists at all, and src/sh/sh.h
- * for the AST and the two deliberate lexical simplifications it makes.
- * No execution is implemented yet (later stages), so every test here
- * either inspects the parsed AST directly or exercises the "testable
- * on its own: parse-and-print" requirement by round-tripping through
- * __sh_print_list() and reparsing.
+ * Conformance tests for the in-process shell -- see test/sh-design.md
+ * for why this exists at all, and src/sh/sh.h for the AST, the two
+ * deliberate lexical simplifications the lexer makes, and the -1
+ * "not implemented at this stage" convention __sh_exec_*() use.
  *
- * The internal entry points (__sh_parse/__sh_print_list/__sh_list_free)
- * are not part of any installed header -- src/sh/sh.h is reached with a
- * plain relative #include, matching how the rest of this test suite
- * (test/misc.c's __spawn, test/posix-*.c's local prototypes) declares
- * internal-but-linked symbols itself rather than exposing them publicly.
+ * Stage 1 (lexer/parser, no execution) tests either inspect the parsed
+ * AST directly or exercise the "testable on its own: parse-and-print"
+ * requirement by round-tripping through __sh_print_list() and
+ * reparsing. Stage 2 (execution of simple commands) tests actually
+ * run processes: they re-exec this binary itself as the command,
+ * matching test/misc.c's test_abort_child() pattern -- argv[1] ==
+ * "--exit-child" makes main() below exit(atoi(argv[2])) immediately
+ * rather than run the test suite.
+ *
+ * The internal entry points (__sh_parse/__sh_print_list/__sh_list_free/
+ * __sh_exec_*) are not part of any installed header -- src/sh/sh.h is
+ * reached with a plain relative #include, matching how the rest of
+ * this test suite (test/misc.c's __spawn, test/posix-*.c's local
+ * prototypes) declares internal-but-linked symbols itself rather than
+ * exposing them publicly.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/
  * utilities/V3_chap02.html):
@@ -24,6 +31,7 @@
  *   2.10.2 Shell Grammar Rules
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../src/sh/sh.h"
 
@@ -456,8 +464,145 @@ static void test_roundtrip(void)
 	check_roundtrip("echo `a | b; c`suffix");
 }
 
-int main(void)
+/* ---- stage 2: execution of simple commands -----------------------------
+ *
+ * These re-exec this very binary (matching test/misc.c's
+ * test_abort_child() pattern) as the command a parsed sh_list runs, so
+ * a real __find_program()+__spawn()+waitpid() round trip happens --
+ * argv[1] == "--exit-child" makes main() below exit(atoi(argv[2]))
+ * immediately instead of running the test suite. `self` is wrapped in
+ * single quotes in the source text since a Windows path's backslashes
+ * must stay completely literal (single-quote quoting, not double, so
+ * wordexp()'s expansion pass can't try to interpret one as an escape).
+ */
+static int run(const char *src, int *status)
 {
+	struct sh_list *l = must_parse(src);
+	int rc;
+	if (!l) return -1;
+	rc = __sh_exec_list(l, status);
+	__sh_list_free(l);
+	return rc;
+}
+
+static void test_exec_simple_command_status(const char *self)
+{
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --exit-child 7", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 7);
+
+	snprintf(src, sizeof src, "'%s' --exit-child 0", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* command-not-found matches system()'s documented exit-127 clause
+ * (src/stdlib/system.c), which stage 5 must not regress. */
+static void test_exec_command_not_found(void)
+{
+	int status;
+	CHECK(run("this-program-genuinely-does-not-exist-xyz", &status) == 0);
+	CHECK(status == 127);
+}
+
+/* 2.9.2: "!" inverts the pipeline's exit status. */
+static void test_exec_bang_negation(const char *self)
+{
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "! '%s' --exit-child 0", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 1);
+
+	snprintf(src, sizeof src, "! '%s' --exit-child 5", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* 2.9.3: "&&"/"||" short-circuit on the previous command's status. */
+static void test_exec_andor_short_circuit(const char *self)
+{
+	char src[512];
+	int status;
+
+	snprintf(src, sizeof src, "'%s' --exit-child 0 && '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 9); /* left succeeded, right ran and its status wins */
+
+	snprintf(src, sizeof src, "'%s' --exit-child 3 && '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 3); /* left failed, right never ran -- status is still the left's */
+
+	snprintf(src, sizeof src, "'%s' --exit-child 0 || '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0); /* left succeeded, right never ran */
+}
+
+/* 2.9.1: an assignment-only simple command (no cmd_word) affects the
+ * *current* execution environment, not a child's. */
+static void test_exec_assignment_only_affects_shell_env(void)
+{
+	int status;
+	unsetenv("SH_TEST_ASSIGN_ONLY");
+	CHECK(run("SH_TEST_ASSIGN_ONLY=hello", &status) == 0);
+	CHECK(status == 0);
+	{
+		const char *v = getenv("SH_TEST_ASSIGN_ONLY");
+		CHECK(v && strcmp(v, "hello") == 0);
+	}
+	unsetenv("SH_TEST_ASSIGN_ONLY");
+}
+
+/* An assignment prefixed to a command with a cmd_word is scoped to
+ * that command's own execution environment (build_child_envp() in
+ * exec.c copies environ rather than mutating it) -- the shell's own
+ * environment must come out unchanged, which is exactly what
+ * test/sh-design.md means by "must never clobber the caller's ...
+ * environ". */
+static void test_exec_assignment_prefix_does_not_leak(const char *self)
+{
+	char src[512];
+	int status;
+	unsetenv("SH_TEST_ASSIGN_SCOPED");
+	snprintf(src, sizeof src, "SH_TEST_ASSIGN_SCOPED=childonly '%s' --exit-child 0", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	CHECK(getenv("SH_TEST_ASSIGN_SCOPED") == 0);
+}
+
+/* Proves word realization actually goes through wordexp() (rather than
+ * some from-scratch reimplementation): an unquoted $VAR in a command
+ * word is expanded before argv reaches __spawn(). */
+static void test_exec_reuses_wordexp_param_expansion(const char *self)
+{
+	char src[512];
+	int status;
+	setenv("SH_TEST_EXIT_CODE", "42", 1);
+	snprintf(src, sizeof src, "'%s' --exit-child $SH_TEST_EXIT_CODE", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 42);
+	unsetenv("SH_TEST_EXIT_CODE");
+}
+
+/* Constructs this stage do not implement are reported as -1 ("cannot
+ * execute this AST node yet"), never silently misexecuted -- see
+ * sh.h's __sh_exec_*() comment. */
+static void test_exec_reports_unimplemented_constructs(void)
+{
+	int status;
+	CHECK(run("true | false", &status) == -1);       /* stage 3: pipelines */
+	CHECK(run("echo hi > /tmp/x", &status) == -1);    /* stage 3: redirection */
+	CHECK(run("(echo hi)", &status) == -1);           /* stage 4: subshells */
+	CHECK(run("{ echo hi; }", &status) == -1);        /* stage 4: brace groups */
+}
+
+int main(int argc, char **argv)
+{
+	if (argc > 2 && strcmp(argv[1], "--exit-child") == 0)
+		return atoi(argv[2]);
+
 	test_simple_command_words();
 	test_assignment_prefix();
 	test_assignment_only_command();
@@ -489,7 +634,16 @@ int main(void)
 
 	test_roundtrip();
 
+	test_exec_simple_command_status(argv[0]);
+	test_exec_command_not_found();
+	test_exec_bang_negation(argv[0]);
+	test_exec_andor_short_circuit(argv[0]);
+	test_exec_assignment_only_affects_shell_env();
+	test_exec_assignment_prefix_does_not_leak(argv[0]);
+	test_exec_reuses_wordexp_param_expansion(argv[0]);
+	test_exec_reports_unimplemented_constructs();
+
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 1: lexer + parser, no execution yet -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 2: lexer + parser + execution of simple commands -- see test/sh-design.md)\n");
 	return 0;
 }

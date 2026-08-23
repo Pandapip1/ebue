@@ -136,4 +136,16 @@ void __sh_free_command_contents(struct sh_command *c);
  * `f` it always terminates. */
 void __sh_print_list(FILE *f, const struct sh_list *list);
 
+/* ---- execution (stage 2 on -- see src/sh/exec.c) --------------------
+ *
+ * Each of these returns 0 and writes an exit status through `status`
+ * on success, or -1 (status left untouched) for a construct this
+ * stage's executor does not implement yet -- see exec.c's header
+ * comment for exactly which. Callers must not treat -1 as "exit status
+ * -1"; it means "cannot execute this AST node at all right now". */
+int __sh_exec_command(const struct sh_command *cmd, int *status);
+int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status);
+int __sh_exec_andor(const struct sh_andor *a, int *status);
+int __sh_exec_list(const struct sh_list *list, int *status);
+
 #endif
