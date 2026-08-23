@@ -867,6 +867,58 @@ typedef struct _RTL_USER_PROCESS_INFORMATION {
 #define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
 #define PROCESS_ALL_ACCESS          (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0xFFFF)
 
+/* ---- job objects (src/misc/resource.c: setrlimit()'s NT analogue for
+ * RLIMIT_NPROC/RLIMIT_CPU/RLIMIT_AS/RLIMIT_DATA) --------------------------
+ * Field/flag layout and JOBOBJECTINFOCLASS ordinals per winnt.h; this
+ * library only ever uses JobObjectBasicLimitInformation and
+ * JobObjectExtendedLimitInformation, so nothing past those two is
+ * declared here. */
+#define JOB_OBJECT_ASSIGN_PROCESS   0x0001
+#define JOB_OBJECT_SET_ATTRIBUTES   0x0002
+#define JOB_OBJECT_QUERY            0x0004
+#define JOB_OBJECT_TERMINATE        0x0008
+#define JOB_OBJECT_ALL_ACCESS       (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0x3f)
+
+typedef enum _JOBOBJECTINFOCLASS {
+	JobObjectBasicAccountingInformation = 1,
+	JobObjectBasicLimitInformation = 2,
+	JobObjectExtendedLimitInformation = 9
+} JOBOBJECTINFOCLASS;
+
+typedef struct _IO_COUNTERS {
+	ULONGLONG ReadOperationCount;
+	ULONGLONG WriteOperationCount;
+	ULONGLONG OtherOperationCount;
+	ULONGLONG ReadTransferCount;
+	ULONGLONG WriteTransferCount;
+	ULONGLONG OtherTransferCount;
+} IO_COUNTERS;
+
+typedef struct _JOBOBJECT_BASIC_LIMIT_INFORMATION {
+	LARGE_INTEGER PerProcessUserTimeLimit;
+	LARGE_INTEGER PerJobUserTimeLimit;
+	ULONG LimitFlags;
+	SIZE_T MinimumWorkingSetSize;
+	SIZE_T MaximumWorkingSetSize;
+	ULONG ActiveProcessLimit;
+	ULONG_PTR Affinity;
+	ULONG PriorityClass;
+	ULONG SchedulingClass;
+} JOBOBJECT_BASIC_LIMIT_INFORMATION;
+
+typedef struct _JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+	JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+	IO_COUNTERS IoInfo;
+	SIZE_T ProcessMemoryLimit;
+	SIZE_T JobMemoryLimit;
+	SIZE_T PeakProcessMemoryUsed;
+	SIZE_T PeakJobMemoryUsed;
+} JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+
+#define JOB_OBJECT_LIMIT_PROCESS_TIME    0x00000002
+#define JOB_OBJECT_LIMIT_ACTIVE_PROCESS  0x00000008
+#define JOB_OBJECT_LIMIT_PROCESS_MEMORY  0x00000100
+
 #define DUPLICATE_CLOSE_SOURCE      0x00000001
 #define DUPLICATE_SAME_ACCESS       0x00000002
 #define DUPLICATE_SAME_ATTRIBUTES   0x00000004
@@ -1065,6 +1117,9 @@ NTSTATUS NTAPI NtQuerySystemInformation(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, 
 NTSTATUS NTAPI NtCreateEvent(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, ULONG, BOOLEAN);
 NTSTATUS NTAPI NtSetEvent(HANDLE, LONG *);
 NTSTATUS NTAPI NtRaiseHardError(NTSTATUS, ULONG, ULONG, ULONG_PTR *, ULONG, PULONG);
+NTSTATUS NTAPI NtCreateJobObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+NTSTATUS NTAPI NtAssignProcessToJobObject(HANDLE, HANDLE);
+NTSTATUS NTAPI NtSetInformationJobObject(HANDLE, JOBOBJECTINFOCLASS, PVOID, ULONG);
 NTSTATUS NTAPI NtWow64QueryInformationProcess64(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtWow64ReadVirtualMemory64(HANDLE, ULONGLONG, PVOID, ULONGLONG, ULONGLONG *);
 

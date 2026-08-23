@@ -117,30 +117,23 @@ static void test_getrlimit(void)
 	CHECK(getrlimit(999, &rl) == -1 && errno == EINVAL);
 }
 
-/* setrlimit.html DESCRIPTION/RETURN VALUE/ERRORS.  setrlimit() is
- * declared in include/sys/resource.h but has no definition anywhere
- * in src/ (grep confirms) -- calling it is a link error, so this
- * whole function is fenced.  Split into two halves: RLIMIT_* values
- * NT has a real enforcement primitive for (fenced UNIMPL -- the
- * function could be written), and RLIMIT_* values it does not
- * (fenced N/A -- no fence-lifting implementation could ever make
- * these actually constrain anything on NT). Local prototype since
- * nothing links against the header's declaration. */
-#if 0 /* UNIMPL: setrlimit.html DESCRIPTION: "changes ... take effect
-	immediately" and RETURN VALUE: "Upon successful completion,
-	... shall return 0" -- setting a soft limit within the hard
-	limit for RLIMIT_NPROC must succeed and be readable back via
-	getrlimit(). NT mechanism: place this process in a job object
-	it creates and owns (NtCreateJobObject + NtAssignProcessToJobObject,
-	both absent from src/internal/nt.h today) and set
-	JOBOBJECT_BASIC_LIMIT_INFORMATION.ActiveProcessLimit via
-	NtSetInformationJobObject(JobObjectBasicLimitInformation) --
-	the kernel then refuses further child creation past the limit,
-	a real enforced cap unlike RLIMIT_NOFILE's compile-time array
-	bound. RLIMIT_CPU maps the same way via
-	Per{Process,Job}UserTimeLimit; RLIMIT_AS/RLIMIT_DATA via
-	JOBOBJECT_EXTENDED_LIMIT_INFORMATION.ProcessMemoryLimit or
-	NtSetInformationProcess(ProcessQuotaLimits). */
+/* setrlimit.html DESCRIPTION/RETURN VALUE/ERRORS, for the RLIMIT_*
+ * values NT has a real enforcement primitive for. setrlimit.html
+ * DESCRIPTION: "changes ... take effect immediately" and RETURN VALUE:
+ * "Upon successful completion, ... shall return 0" -- setting a soft
+ * limit within the hard limit for RLIMIT_NPROC must succeed and be
+ * readable back via getrlimit(). NT mechanism (src/misc/resource.c):
+ * this process is placed in a job object it creates and owns
+ * (NtCreateJobObject + NtAssignProcessToJobObject, src/internal/nt.h)
+ * and JOBOBJECT_EXTENDED_LIMIT_INFORMATION.BasicLimitInformation.
+ * ActiveProcessLimit is set via
+ * NtSetInformationJobObject(JobObjectExtendedLimitInformation).
+ * RLIMIT_CPU maps the same way via PerProcessUserTimeLimit;
+ * RLIMIT_AS/RLIMIT_DATA via ProcessMemoryLimit. The job-object call is
+ * best-effort (see src/misc/resource.c) -- what this test actually
+ * verifies is that setrlimit() then getrlimit() round-trip correctly
+ * and enforce the soft<=hard/EPERM-on-raising-hard rules, which does
+ * not depend on the job object accepting the value. */
 static void test_setrlimit_enforceable(void)
 {
 	struct rlimit rl, rl2;
@@ -181,7 +174,6 @@ static void test_setrlimit_enforceable(void)
 	CHECK(setrlimit(RLIMIT_AS, &rl) == 0);
 	CHECK(getrlimit(RLIMIT_AS, &rl2) == 0 && rl2.rlim_cur == (rlim_t)(1 << 20));
 }
-#endif
 
 /* N/A: setrlimit.html DESCRIPTION obliges the limit to actually
  * "restrict the amount of [the] resource" once set. RLIMIT_NOFILE's
@@ -946,6 +938,7 @@ int main(int argc, char **argv)
 	}
 
 	test_getrlimit();
+	test_setrlimit_enforceable();
 	test_getrusage(argv[0]);
 	test_fd_macros();
 	test_sys_param();

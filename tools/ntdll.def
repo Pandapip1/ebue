@@ -9,10 +9,12 @@ LdrGetProcedureAddress
 LdrLoadDll
 LdrUnloadDll
 NtAllocateVirtualMemory
+NtAssignProcessToJobObject
 NtCancelIoFile
 NtClose
 NtCreateEvent
 NtCreateFile
+NtCreateJobObject
 NtCreateNamedPipeFile
 NtCreateSection
 NtDelayExecution
@@ -49,6 +51,7 @@ NtResumeThread
 NtSetContextThread
 NtSetEvent
 NtSetInformationFile
+NtSetInformationJobObject
 NtSetInformationProcess
 NtSetInformationThread
 NtSetSystemTime

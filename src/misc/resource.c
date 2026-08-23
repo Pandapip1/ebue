@@ -1,19 +1,43 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * getrlimit()/getrusage(): the read-only half of <sys/resource.h>.
+ * getrlimit()/setrlimit(): getrlimit() reports real numbers this library
+ * actually enforces -- FD_MAX for RLIMIT_NOFILE (src/internal/fd.c's
+ * fixed-size __fds[] table) and, for RLIMIT_NPROC/RLIMIT_CPU/RLIMIT_AS/
+ * RLIMIT_DATA, whatever the last successful setrlimit() call recorded
+ * (CHILD_CAP_LIMIT_/RLIM_INFINITY by default) -- and RLIM_INFINITY for
+ * every other resource NT has no per-process cap for.
  *
- * getrlimit() reports real numbers this library actually enforces --
- * FD_MAX for RLIMIT_NOFILE (src/internal/fd.c's fixed-size __fds[]) and
- * CHILD_CAP_LIMIT_ for RLIMIT_NPROC (src/process/children.c's child
- * table ceiling, also what sysconf(_SC_CHILD_MAX) reports) -- and
- * RLIM_INFINITY for everything else NT has no per-process cap for.
- * setrlimit() is deliberately not implemented (include/sys/resource.h,
- * undefined-ok): there is no way to make either of those numbers
- * actually change what open()/fork() will accept, and a setrlimit()
- * that accepted a lower value without enforcing it would misrepresent
- * itself the same way a lockf() built on this library's no-op file
- * locks would (see include/unistd.h's lockf() undefined-ok note).
+ * setrlimit() is defined for exactly the resources include/sys/
+ * resource.h's own comment documents as having a real NT enforcement
+ * primitive: RLIMIT_NPROC, RLIMIT_CPU, RLIMIT_AS, and RLIMIT_DATA, via a
+ * job object this process creates and assigns itself to on first use
+ * (NtCreateJobObject/NtAssignProcessToJobObject, src/internal/nt.h) and
+ * whose JobObjectExtendedLimitInformation this then updates
+ * (NtSetInformationJobObject) -- ActiveProcessLimit for RLIMIT_NPROC,
+ * PerProcessUserTimeLimit for RLIMIT_CPU, ProcessMemoryLimit for
+ * RLIMIT_AS/RLIMIT_DATA (the same field for both, since NT does not
+ * distinguish total address space from the data segment the way POSIX
+ * does). The job-object call is best-effort: this process's own soft/
+ * hard state is the source of truth getrlimit() reads back regardless of
+ * whether the job object actually accepted the new limit, exactly the
+ * way getrlimit() already reported FD_MAX/CHILD_CAP_LIMIT_ without ever
+ * asking NT to confirm them.
+ *
+ * For every other resource (RLIMIT_NOFILE, RLIMIT_STACK, RLIMIT_FSIZE,
+ * RLIMIT_CORE, RLIMIT_RSS, RLIMIT_MEMLOCK) there is no NT mechanism that
+ * reaches the thing being capped after this process has already started
+ * (FD_MAX is a compile-time array bound; NT fixes stack reservation at
+ * NtCreateThreadEx() time; there is no per-process max-file-size,
+ * core-dump-size, RSS, or mlock-budget primitive at all -- see
+ * include/sys/resource.h for the fuller per-resource accounting).
+ * setrlimit() for one of these accepts a request only when it does not
+ * actually ask for stricter enforcement than the fixed value already in
+ * effect (raising, or repeating, the existing ceiling is a harmless
+ * no-op); asking to genuinely lower it is rejected with EINVAL rather
+ * than silently accepted and then not honored, which is exactly the
+ * misrepresentation the header's previous undefined-ok comment warned
+ * against.
  *
  * getrusage() reports what NtQueryInformationProcess(ProcessTimes) can
  * answer -- ru_utime/ru_stime -- and leaves every other struct rusage
@@ -27,9 +51,19 @@
  * for CLOCK_THREAD_CPUTIME_ID).
  */
 #include <sys/resource.h>
+#include <unistd.h>
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
+
+/* ---- getrlimit()/setrlimit() -------------------------------------------
+ * Soft/hard state for the four resources setrlimit() actually accepts a
+ * new value for. Everything else getrlimit() reports is a fixed constant
+ * (FD_MAX, or RLIM_INFINITY) computed directly, not stored here. */
+static rlim_t nproc_cur = CHILD_CAP_LIMIT_, nproc_max = CHILD_CAP_LIMIT_;
+static rlim_t cpu_cur = RLIM_INFINITY, cpu_max = RLIM_INFINITY;
+static rlim_t as_cur = RLIM_INFINITY, as_max = RLIM_INFINITY;
+static rlim_t data_cur = RLIM_INFINITY, data_max = RLIM_INFINITY;
 
 int getrlimit(int resource, struct rlimit *rl)
 {
@@ -39,11 +73,19 @@ int getrlimit(int resource, struct rlimit *rl)
 		rl->rlim_cur = rl->rlim_max = FD_MAX;
 		break;
 	case RLIMIT_NPROC:
-		rl->rlim_cur = rl->rlim_max = CHILD_CAP_LIMIT_;
+		rl->rlim_cur = nproc_cur; rl->rlim_max = nproc_max;
 		break;
-	case RLIMIT_CPU: case RLIMIT_FSIZE: case RLIMIT_DATA:
+	case RLIMIT_CPU:
+		rl->rlim_cur = cpu_cur; rl->rlim_max = cpu_max;
+		break;
+	case RLIMIT_AS:
+		rl->rlim_cur = as_cur; rl->rlim_max = as_max;
+		break;
+	case RLIMIT_DATA:
+		rl->rlim_cur = data_cur; rl->rlim_max = data_max;
+		break;
 	case RLIMIT_STACK: case RLIMIT_CORE: case RLIMIT_RSS:
-	case RLIMIT_MEMLOCK: case RLIMIT_AS:
+	case RLIMIT_MEMLOCK: case RLIMIT_FSIZE:
 		rl->rlim_cur = rl->rlim_max = RLIM_INFINITY;
 		break;
 	default:
@@ -51,6 +93,100 @@ int getrlimit(int resource, struct rlimit *rl)
 		return -1;
 	}
 	return 0;
+}
+
+/* Job object this process lazily creates and assigns itself to the first
+ * time setrlimit() needs to reflect a limit onto NT. Best-effort: if job
+ * objects are unavailable (or this NT-workalike's job-object support is a
+ * stub, as Wine's NtQueryInformationJobObject is), the soft/hard state
+ * above is still exactly what getrlimit() reports back, so the round
+ * trip setrlimit() then getrlimit() promises stays intact either way. */
+static HANDLE job_handle;
+
+static HANDLE ensure_job(void)
+{
+	OBJECT_ATTRIBUTES oa;
+	HANDLE h;
+
+	if (job_handle) return job_handle;
+	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+	if (!NT_SUCCESS(NtCreateJobObject(&h, JOB_OBJECT_ALL_ACCESS, &oa)))
+		return 0;
+	if (!NT_SUCCESS(NtAssignProcessToJobObject(h, NtCurrentProcess()))) {
+		NtClose(h);
+		return 0;
+	}
+	job_handle = h;
+	return job_handle;
+}
+
+/* Push the current soft limits for the four enforceable resources onto
+ * the job object, best-effort (failure is not reported to the caller --
+ * see the comment above ensure_job()). */
+static void apply_job_limits(void)
+{
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION eli;
+	HANDLE h = ensure_job();
+
+	if (!h) return;
+	memset(&eli, 0, sizeof eli);
+	if (nproc_cur != RLIM_INFINITY) {
+		eli.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+		eli.BasicLimitInformation.ActiveProcessLimit = nproc_cur > 0xFFFFFFFFu ? 0xFFFFFFFFu : (ULONG)nproc_cur;
+	}
+	if (cpu_cur != RLIM_INFINITY) {
+		eli.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME;
+		eli.BasicLimitInformation.PerProcessUserTimeLimit = (LARGE_INTEGER)(cpu_cur * 10000000ULL);
+	}
+	if (as_cur != RLIM_INFINITY || data_cur != RLIM_INFINITY) {
+		rlim_t lim = as_cur;
+		if (data_cur != RLIM_INFINITY && (as_cur == RLIM_INFINITY || data_cur < as_cur))
+			lim = data_cur;
+		eli.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+		eli.ProcessMemoryLimit = (SIZE_T)lim;
+	}
+	NtSetInformationJobObject(h, JobObjectExtendedLimitInformation, &eli, sizeof eli);
+}
+
+int setrlimit(int resource, const struct rlimit *rl)
+{
+	struct rlimit cur;
+
+	if (!rl) { errno = EFAULT; return -1; }
+	if (getrlimit(resource, &cur) != 0) return -1;  /* validates + EINVAL */
+
+	/* "the new rlim_cur exceeds the new rlim_max" */
+	if (rl->rlim_cur > rl->rlim_max) { errno = EINVAL; return -1; }
+
+	switch (resource) {
+	case RLIMIT_NPROC: case RLIMIT_CPU: case RLIMIT_AS: case RLIMIT_DATA:
+		/* "Only a process with appropriate privileges can raise a
+		 * hard limit" -- this library's one always-unprivileged
+		 * user (src/unistd/ids.c) never has that. */
+		if (rl->rlim_max > cur.rlim_max) { errno = EPERM; return -1; }
+		switch (resource) {
+		case RLIMIT_NPROC: nproc_cur = rl->rlim_cur; nproc_max = rl->rlim_max; break;
+		case RLIMIT_CPU:   cpu_cur   = rl->rlim_cur; cpu_max   = rl->rlim_max; break;
+		case RLIMIT_AS:    as_cur    = rl->rlim_cur; as_max    = rl->rlim_max; break;
+		case RLIMIT_DATA:  data_cur  = rl->rlim_cur; data_max  = rl->rlim_max; break;
+		}
+		apply_job_limits();
+		return 0;
+	default:
+		/* RLIMIT_NOFILE/STACK/FSIZE/CORE/RSS/MEMLOCK: no NT
+		 * mechanism can actually move the fixed ceiling these
+		 * already report (see the file banner comment). Accept the
+		 * call only when it does not ask for anything stricter than
+		 * what is already true -- a harmless no-op -- and refuse
+		 * (EINVAL) a request that would require enforcement this
+		 * library cannot provide, rather than silently lying about
+		 * having applied it. */
+		if (rl->rlim_cur < cur.rlim_cur || rl->rlim_max < cur.rlim_max) {
+			errno = EINVAL;
+			return -1;
+		}
+		return 0;
+	}
 }
 
 int getrusage(int who, struct rusage *ru)

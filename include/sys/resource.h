@@ -35,15 +35,27 @@ struct rusage {
 };
 
 int getrlimit (int, struct rlimit *);
-int setrlimit (int, const struct rlimit *);  /* undefined-ok: getrlimit()
-	(src/misc/resource.c) reports real numbers this library enforces
-	(FD_MAX, CHILD_CAP_LIMIT_) or RLIM_INFINITY, but nothing here can make
-	open()/fork() actually honor a *lower* value -- FD_MAX is a
-	compile-time array bound, not a runtime ceiling. A setrlimit() that
-	accepted a request without enforcing it would misrepresent itself the
-	same way a lockf() built on this library's no-op advisory locks would
-	(see lockf() below): it would look like real resource limiting while
-	providing none */
+
+/* setrlimit(): src/misc/resource.c defines it for the resources NT has a
+ * real enforcement primitive for -- RLIMIT_NPROC, RLIMIT_CPU, RLIMIT_AS,
+ * RLIMIT_DATA, via a job object this process creates and assigns itself to
+ * (NtCreateJobObject/NtAssignProcessToJobObject/NtSetInformationJobObject,
+ * src/internal/nt.h) -- and tracks the soft/hard pair itself for every
+ * other RLIMIT_* (including the ones below that NT genuinely cannot
+ * enforce past process start) so getrlimit() always reports back exactly
+ * what the last successful setrlimit() call recorded. RLIMIT_NOFILE,
+ * RLIMIT_STACK, RLIMIT_FSIZE, RLIMIT_CORE, RLIMIT_RSS, RLIMIT_MEMLOCK
+ * still have no NT mechanism that can shrink what they actually cap after
+ * this process has started (FD_MAX is a compile-time array bound, not a
+ * runtime ceiling; NT fixes stack reservation at NtCreateThreadEx() time;
+ * there is no per-process max-file-size, core-dump-size, RSS, or
+ * mlock-budget primitive at all) -- setrlimit() accordingly only accepts
+ * a request for one of these that does not ask for stricter enforcement
+ * than the fixed value it already reports (asking to raise, or to repeat,
+ * the existing ceiling is a harmless no-op; asking to lower it would be
+ * exactly the misrepresentation this comment used to warn about, so that
+ * is rejected with EINVAL instead of silently accepted). */
+int setrlimit (int, const struct rlimit *);
 int getrusage (int, struct rusage *);
 
 #define RUSAGE_SELF 0
