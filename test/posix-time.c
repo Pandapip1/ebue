@@ -506,10 +506,19 @@ static void test_getdate(void)
 {
 	struct tm *tm;
 
-	/* what src/time/getdate.c does with $DATEMSK unset: one of its
-	 * built-in templates ("%Y-%m-%d %H:%M:%S") matches and mktime()
-	 * normalizes tm_wday/tm_yday -- getdate.html RETURN VALUE: "a
-	 * pointer to a struct tm" on success. */
+	/* DELIBERATE DEVIATION, not conformance -- do not read the citation
+	 * below as sanctioning this.  getdate.html ERRORS code 1 is "The
+	 * DATEMSK environment variable is null or undefined", i.e. with
+	 * $DATEMSK unset getdate() must *fail*.  src/time/getdate.c instead
+	 * falls back to a built-in template list, and its header comment
+	 * argues why: a target with no established $DATEMSK convention or
+	 * shipped template files would otherwise make getdate()
+	 * unconditionally useless.  That argument is accepted, but this is a
+	 * documented deviation from the standard, not an implementation of
+	 * it -- the requirement itself is fenced immediately below so the
+	 * gap stays visible.  What is asserted here is only that the
+	 * fallback behaves sanely: a built-in template matches and mktime()
+	 * normalizes tm_wday/tm_yday. */
 	unsetenv("DATEMSK");
 	tm = getdate("2000-01-02 03:04:05");
 	CHECK(tm != 0);
@@ -518,6 +527,25 @@ static void test_getdate(void)
 		CHECK(tm->tm_hour == 3 && tm->tm_min == 4 && tm->tm_sec == 5);
 		CHECK(tm->tm_wday == 0); /* 2000-01-02 was a Sunday */
 	}
+
+#if 0 /* UNIMPL: getdate.html ERRORS code 1 -- "The DATEMSK environment
+       * variable is null or undefined".  Not N/A: nothing about NT
+       * prevents this, it is a deliberate design choice in
+       * src/time/getdate.c to fall back to built-in templates instead
+       * (see its header comment, and the deviation note above).
+       * Implementing it is a two-line change; what makes it non-trivial
+       * is that test/time.c's getdate coverage calls getdate() with no
+       * $DATEMSK set and expects success, so honouring this clause means
+       * updating that file to export a template file first.  Left
+       * fenced rather than silently dropped. */
+static void test_getdate_no_datemsk_must_fail(void)
+{
+	unsetenv("DATEMSK");
+	getdate_err = 0;
+	CHECK(getdate("2000-01-02 03:04:05") == 0);
+	CHECK(getdate_err == 1);
+}
+#endif
 
 	/* getdate.html error table, code 7: "No line in the template file
 	 * matches the input date/time specification" -- reused correctly
