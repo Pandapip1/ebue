@@ -830,52 +830,20 @@ static void test_wordexp_cmdsub_needs_a_shell(void)
 
 /* ===================================================================
  * regex.h -- functions/regcomp.html, basedefs/regex.h.html
+ *
+ * Now implemented (src/regex/regex.c -- see that file's own header for
+ * the implemented subset, the backtracking-VM algorithm, and what is
+ * deliberately left out: backreferences, multi-character collating
+ * symbols/equivalence classes, and full leftmost-longest matching).
+ * #includes the real header instead of declaring regex_t, regmatch_t,
+ * the REG_ constants, and the prototypes locally.
  * =================================================================== */
-typedef long regoff_t;	/* signed, holds the larger of ptrdiff_t/ssize_t */
+#include <regex.h>
 
-typedef struct {
-	size_t re_nsub;		/* number of parenthesized subexpressions */
-	void *__opaque;		/* implementation-private compiled form */
-} regex_t;
-
-typedef struct {
-	regoff_t rm_so;		/* byte offset of the start of the match */
-	regoff_t rm_eo;		/* byte offset one past the end of the match */
-} regmatch_t;
-
-#define REG_EXTENDED	0x01
-#define REG_ICASE	0x02
-#define REG_NOSUB	0x04
-#define REG_NEWLINE	0x08
-
-#define REG_NOTBOL	0x01
-#define REG_NOTEOL	0x02
-
-#define REG_NOMATCH	1
-#define REG_BADPAT	2
-#define REG_ECOLLATE	3
-#define REG_ECTYPE	4
-#define REG_EESCAPE	5
-#define REG_ESUBREG	6
-#define REG_EBRACK	7
-#define REG_EPAREN	8
-#define REG_EBRACE	9
-#define REG_BADBR	10
-#define REG_ERANGE	11
-#define REG_ESPACE	12
-#define REG_BADRPT	13
-
-int regcomp(regex_t *__restrict preg, const char *__restrict pattern, int cflags);
-int regexec(const regex_t *__restrict preg, const char *__restrict string,
-	     size_t nmatch, regmatch_t pmatch[__restrict], int eflags);
-size_t regerror(int errcode, const regex_t *__restrict preg, char *__restrict errbuf, size_t errbuf_size);
-void regfree(regex_t *preg);
-
-/* UNIMPL: regcomp.html DESCRIPTION -- "The default regular expression
+/* regcomp.html DESCRIPTION -- "The default regular expression
  * type ... is a Basic Regular Expression (BRE)"; BRE groups with
  * "\(" ... "\)", ERE (REG_EXTENDED) groups with plain "(" ... ")". A
  * literal, unescaped "(" in a BRE is an ordinary character. */
-#if 0 /* UNIMPL: regcomp.html BRE vs ERE grouping syntax, see above */
 static void test_regex_bre_vs_ere_grouping(void)
 {
 	regex_t re;
@@ -896,13 +864,11 @@ static void test_regex_bre_vs_ere_grouping(void)
 	CHECK(regexec(&re, "abc", 0, NULL, 0) == 0);
 	regfree(&re);
 }
-#endif
 
 /* UNIMPL: regcomp.html cflags -- REG_ICASE "ignore case in match" and
  * REG_NOSUB "report only success or failure in regexec()": with
  * REG_NOSUB set, regexec()'s nmatch/pmatch arguments are ignored, no
  * subexpression offsets are ever written. */
-#if 0 /* UNIMPL: regcomp.html REG_ICASE/REG_NOSUB, see above */
 static void test_regex_icase_and_nosub(void)
 {
 	regex_t re;
@@ -920,13 +886,11 @@ static void test_regex_icase_and_nosub(void)
 	CHECK(regexec(&re, "abc", 0, NULL, 0) == 0);	/* only success/fail, no capture buffer needed */
 	regfree(&re);
 }
-#endif
 
 /* UNIMPL: regcomp.html cflags -- REG_NEWLINE "changes the handling of
  * <newline> characters" (per the DESCRIPTION: '.' and non-matching
  * bracket expressions do not match <newline>, and '^'/'$' additionally
  * match immediately after/before an embedded <newline>). */
-#if 0 /* UNIMPL: regcomp.html REG_NEWLINE, see above */
 static void test_regex_newline_flag(void)
 {
 	regex_t re;
@@ -943,14 +907,12 @@ static void test_regex_newline_flag(void)
 	CHECK(regexec(&re, "a\nb", 0, NULL, 0) == 0);	/* '^' matches right after the embedded newline */
 	regfree(&re);
 }
-#endif
 
 /* UNIMPL: regcomp.html/regex.h.html -- regmatch_t: "rm_so: Byte offset
  * from start of string to start of substring. rm_eo: Byte offset from
  * start of string of the first character after the end of substring."
  * pmatch[0] is the whole match; pmatch[1..re_nsub] are the
  * parenthesized subexpressions in order of their opening parenthesis. */
-#if 0 /* UNIMPL: regcomp.html subexpression capture, see above */
 static void test_regex_subexpression_capture(void)
 {
 	regex_t re;
@@ -964,12 +926,10 @@ static void test_regex_subexpression_capture(void)
 	CHECK(m[2].rm_so == 5 && m[2].rm_eo == 8);	/* "bbb" */
 	regfree(&re);
 }
-#endif
 
 /* UNIMPL: regexec.html eflags -- REG_NOTBOL "the first character of
  * the string is not the beginning of the line, so '^' shall not match
  * before it"; REG_NOTEOL is the '$' analog at the end. */
-#if 0 /* UNIMPL: regexec.html REG_NOTBOL/REG_NOTEOL, see above */
 static void test_regex_notbol_noteol(void)
 {
 	regex_t re;
@@ -984,13 +944,11 @@ static void test_regex_notbol_noteol(void)
 	CHECK(regexec(&re, "abc", 0, NULL, REG_NOTEOL) == REG_NOMATCH);
 	regfree(&re);
 }
-#endif
 
 /* UNIMPL: regcomp.html ERRORS -- a representative subset of the error
  * codes (not exhaustive, per the file header's stated scope): REG_
  * BADPAT for a malformed bracket expression, REG_BADRPT for a repeat
  * operator with nothing to repeat, REG_EPAREN for unbalanced groups. */
-#if 0 /* UNIMPL: regcomp.html REG_BADPAT/REG_BADRPT/REG_EPAREN, see above */
 static void test_regex_error_codes(void)
 {
 	regex_t re;
@@ -999,14 +957,12 @@ static void test_regex_error_codes(void)
 	CHECK(regcomp(&re, "*abc", REG_EXTENDED) == REG_BADRPT);
 	CHECK(regcomp(&re, "(abc", REG_EXTENDED) == REG_EPAREN);
 }
-#endif
 
 /* UNIMPL: regerror.html DESCRIPTION -- "If errbuf_size is not 0,
  * regerror() shall copy ... a null-terminated string. ... regerror()
  * shall return the size of buffer needed to hold the ... message
  * string" -- the standard "call once with size 0 to learn the length"
  * idiom, same as snprintf()'s. */
-#if 0 /* UNIMPL: regerror.html size-query idiom, see above */
 static void test_regex_regerror(void)
 {
 	regex_t re;
@@ -1019,7 +975,6 @@ static void test_regex_regerror(void)
 	CHECK(regerror(REG_EBRACK, &re, buf, sizeof buf) == need);
 	CHECK(strlen(buf) + 1 == need);
 }
-#endif
 
 /* ===================================================================
  * search.h -- basedefs/search.h.html, functions/hcreate.html,
@@ -1252,6 +1207,18 @@ static void test_search_insque_remque(void)
  * this file could create it while <ftw.h> did not exist to test
  * against). Built with mkdir()/fopen() rather than shelling out, same
  * as test/dirent.c's fixtures. */
+/* Leave nothing behind: these fixtures are created relative to the
+ * working directory, which for `make check` is the source tree itself.
+ * A test that litters the repo is a test that will eventually be run
+ * with the litter already present and pass for the wrong reason. */
+static void ftw_fixture_teardown(void)
+{
+	unlink("root/sub/b");
+	unlink("root/a");
+	rmdir("root/sub");
+	rmdir("root");
+}
+
 static void ftw_fixture_setup(void)
 {
 	FILE *f;
@@ -1394,6 +1361,10 @@ static void test_nftw_chdir_and_mount(void)
 	CHECK(nftw("root", nftw_chdir_cb, 8, FTW_CHDIR) == 0);
 	/* every callback observed a cwd somewhere under "root", proving the
 	 * walk actually chdir()'d rather than just building path strings */
+
+	/* Last user of the shared "root" fixture -- tear it down here, not
+	 * in the first ftw() test, which several later walks still need. */
+	ftw_fixture_teardown();
 }
 
 int main(void)
@@ -1417,9 +1388,6 @@ int main(void)
 
 	char cwd_before_ftw[512];
 
-	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
-	printf("posix-glob: all ok\n");
-
 	test_search_hsearch_roundtrip();
 	test_search_tsearch_tfind();
 	test_search_tdelete();
@@ -1441,11 +1409,15 @@ int main(void)
 	test_nftw_chdir_and_mount();
 	CHECK(chdir(cwd_before_ftw) == 0);
 
+	test_regex_bre_vs_ere_grouping();
+	test_regex_icase_and_nosub();
+	test_regex_newline_flag();
+	test_regex_subexpression_capture();
+	test_regex_notbol_noteol();
+	test_regex_error_codes();
+	test_regex_regerror();
+
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
-<<<<<<< HEAD
-	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h/search.h implemented, unfenced above; regex.h/ftw.h still absent, every clause fenced -- see file header)\n");
-=======
-	printf("posix-glob: all ok (search.h/ftw.h implemented; fnmatch.h/glob.h/wordexp.h/regex.h: clauses fenced -- see file header)\n");
->>>>>>> 2a0cb64 (Add <ftw.h>: ftw()/nftw() as a bounded recursion over opendir/stat)
+	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");
 	return 0;
 }
