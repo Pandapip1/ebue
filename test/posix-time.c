@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <time.h>
+#include <unistd.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -497,20 +498,18 @@ static void test_strftime_week_number_family(void)
 /* ---- getdate.html: real getdate() reads the file named by $DATEMSK, a
  * newline-separated list of strptime templates, tries each against the
  * argument, and defaults any field a matched template didn't set to
- * "today"'s corresponding value.  src/time/getdate.c is an explicitly
- * documented stand-in: it ignores $DATEMSK entirely and tries a fixed,
- * hard-coded list of templates instead; unset fields default to zero
- * (1900-01-00) rather than today.  Confirm what *is* implemented as a
- * real, unfenced test, then fence each documented gap with the real
- * spec-required assertion. */
+ * "today"'s corresponding value.  src/time/getdate.c now implements
+ * $DATEMSK (when set) and today-defaulting and ERRORS code 8; its
+ * header comment records the one clause deliberately left as a
+ * documented deviation ($DATEMSK-unset must fail with code 1) and why. */
 static void test_getdate(void)
 {
 	struct tm *tm;
 
-	/* what src/time/getdate.c actually does: one of its own hard-coded
-	 * templates ("%Y-%m-%d %H:%M:%S") matches and mktime() normalizes
-	 * tm_wday/tm_yday -- getdate.html RETURN VALUE: "a pointer to a
-	 * struct tm" on success. */
+	/* what src/time/getdate.c does with $DATEMSK unset: one of its
+	 * built-in templates ("%Y-%m-%d %H:%M:%S") matches and mktime()
+	 * normalizes tm_wday/tm_yday -- getdate.html RETURN VALUE: "a
+	 * pointer to a struct tm" on success. */
 	unsetenv("DATEMSK");
 	tm = getdate("2000-01-02 03:04:05");
 	CHECK(tm != 0);
@@ -528,62 +527,91 @@ static void test_getdate(void)
 	tm = getdate("not a date at all, definitely no template matches this");
 	CHECK(tm == 0 && getdate_err == 7);
 
-#if 0 /* UNIMPL: getdate.html DESCRIPTION -- getdate() must read
-       * templates from the file named by $DATEMSK, not a hard-coded
-       * list; ERRORS code 1: "The DATEMSK environment variable is
-       * null or undefined."  src/time/getdate.c never looks at
-       * $DATEMSK at all (confirmed by inspection: no getenv() call in
-       * the file), so neither half of this is true here.  Confirmed
-       * live: with $DATEMSK unset, a call that should fail with
-       * getdate_err==1 per POSIX instead succeeds via the built-in
-       * template list. */
-	unsetenv("DATEMSK");
-	tm = getdate("2000-01-02 03:04:05");
-	CHECK(tm == 0 && getdate_err == 1);
-
-	/* ERRORS code 2: "The template file specified by DATEMSK cannot be
-	 * opened for reading." -- $DATEMSK naming a nonexistent file must
-	 * fail with getdate_err==2; instead it is silently ignored and the
-	 * built-in template list is used, so this still succeeds. */
+	/* N/A: getdate.html ERRORS code 1, "The DATEMSK environment
+	 * variable is null or undefined" -- src/time/getdate.c's header
+	 * comment names the mechanism: getdate_err==1 is already claimed
+	 * for this design's "no usable input" case (!s || !*s), which
+	 * test/time.c pins live (getdate("") and getdate(NULL), both
+	 * getdate_err==1, outside this change's scope to touch) with no
+	 * $DATEMSK set up at all; test/time.c's other getdate() calls also
+	 * run with $DATEMSK unset and expect success via the built-in
+	 * template list. Making $DATEMSK-unset a hard failure, as this
+	 * clause literally requires, is therefore not a targeted fix here
+	 * but a breaking change to behavior this suite already treats as
+	 * load-bearing elsewhere -- so it is kept as a deliberate,
+	 * documented fallback instead:
+	 *
+	 *   unsetenv("DATEMSK");
+	 *   tm = getdate("2000-01-02 03:04:05");
+	 *   CHECK(tm == 0 && getdate_err == 1);   -- would fail: succeeds
+	 *
+	 * getdate.html ERRORS code 2, "The template file ... cannot be
+	 * opened for reading", by contrast, is fully implementable without
+	 * touching the unset case at all, and now is. */
 	CHECK(setenv("DATEMSK", "/nonexistent/path/that/does/not/exist", 1) == 0);
 	tm = getdate("2000-01-02 03:04:05");
 	CHECK(tm == 0 && getdate_err == 2);
 	unsetenv("DATEMSK");
-#endif
 
-#if 0 /* UNIMPL: getdate.html DESCRIPTION: "elements of the [struct tm]
-       * that are not specified by the [matched] template ... shall be
-       * set the same as their equivalents in the current time and
-       * date."  src/time/getdate.c instead memset()s the whole struct
-       * tm to zero before trying each template, so any field the
-       * matched template doesn't set is left at its zero value
-       * (1900-01-00) rather than defaulted to today.  Confirmed live:
-       * a time-only template match ("13:45") comes back dated
-       * 1900-01-01, not the day the test actually ran. */
-	time_t now = time(0);
-	struct tm today;
-	CHECK(gmtime_r(&now, &today) != 0);
-	tm = getdate("13:45");
-	CHECK(tm != 0);
-	if (tm) {
-		CHECK(tm->tm_hour == 13 && tm->tm_min == 45);
-		CHECK(tm->tm_year == today.tm_year && tm->tm_mon == today.tm_mon && tm->tm_mday == today.tm_mday);
+	/* $DATEMSK naming a real template file: getdate.html DESCRIPTION,
+	 * "getdate() shall use the value of the DATEMSK environment
+	 * variable to locate a template file" -- templates are read from
+	 * the file, one per line, tried in order exactly like the
+	 * built-in list, and a format that only the DATEMSK file (not the
+	 * built-in list) knows about must still work. */
+	{
+		char t[] = "datemsk-XXXXXX";
+		int fd = mkstemp(t);
+		CHECK(fd >= 0);
+		if (fd >= 0) {
+			static const char tpl[] = "%Y/%m/%d %H:%M\n";
+			CHECK(write(fd, tpl, sizeof tpl - 1) == (ssize_t)(sizeof tpl - 1));
+			CHECK(close(fd) == 0);
+			CHECK(setenv("DATEMSK", t, 1) == 0);
+
+			tm = getdate("2000/01/02 03:04");
+			CHECK(tm != 0);
+			if (tm) {
+				CHECK(tm->tm_year == 100 && tm->tm_mon == 0 && tm->tm_mday == 2);
+				CHECK(tm->tm_hour == 3 && tm->tm_min == 4);
+			}
+
+			/* the built-in-only format no longer matches once
+			 * $DATEMSK is set: only its file's templates apply. */
+			tm = getdate("2000-01-02 03:04:05");
+			CHECK(tm == 0 && getdate_err == 7);
+
+			unsetenv("DATEMSK");
+			unlink(t);
+		}
 	}
-#endif
 
-#if 0 /* UNIMPL: getdate.html ERRORS code 8: "The input date is not
-       * valid, but ... syntactically correct" (the page's own example
-       * is exactly this: February 31).  src/time/getdate.c parses the
-       * fields with strptime() (which does not range-check tm_mday
-       * against the actual days in tm_mon) and then calls mktime(),
-       * which normalizes out-of-range fields instead of rejecting
-       * them, so no getdate_err==8 case is ever produced. Confirmed
-       * live: getdate("2000-02-31") returns a non-NULL struct tm dated
-       * 2000-03-02 (mktime()'s normalization of the 2 excess days),
-       * not NULL with getdate_err==8. */
+	/* getdate.html DESCRIPTION: "elements of the [struct tm] that are
+	 * not specified by the [matched] template ... shall be set the
+	 * same as their equivalents in the current time and date." --
+	 * src/time/getdate.c now seeds the working struct tm from
+	 * localtime_r()'s "now" before running strptime(), so a time-only
+	 * template leaves the date fields at today's values. */
+	{
+		time_t now = time(0);
+		struct tm today;
+		CHECK(gmtime_r(&now, &today) != 0);
+		tm = getdate("13:45");
+		CHECK(tm != 0);
+		if (tm) {
+			CHECK(tm->tm_hour == 13 && tm->tm_min == 45);
+			CHECK(tm->tm_year == today.tm_year && tm->tm_mon == today.tm_mon && tm->tm_mday == today.tm_mday);
+		}
+	}
+
+	/* getdate.html ERRORS code 8: "The input date is not valid, but
+	 * ... syntactically correct" (the page's own example is exactly
+	 * this: February 31).  src/time/getdate.c now range-checks
+	 * tm_mday against the actual days in tm_mon (time_impl.h's civil-
+	 * calendar arithmetic) before mktime() gets a chance to normalize
+	 * it forward. */
 	tm = getdate("2000-02-31");
 	CHECK(tm == 0 && getdate_err == 8);
-#endif
 }
 
 /* ---- nanosleep.html: audited under unistd.h, not here.  Confirmed by
