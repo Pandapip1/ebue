@@ -431,14 +431,9 @@ static void test_timespec_get_matches_realtime(void)
 }
 
 /* ---- strftime.html conversion-specifier table: %U, %W, %V, %G, %g
- * (the ISO-8601 week-number family).  src/time/strftime.c's own header
- * comment documents these as intentionally unimplemented: "this target
- * has only the 'C' locale and no week-numbering rules were worth the
- * extra code"; an unrecognized %<letter> passes through literally
- * rather than being eaten (test/time.c already pins that pass-through
- * for one fixed date).  Written here as the real assertions the spec
- * table requires, per this session's new "fence it, don't drop it"
- * rule, rather than only re-checking the pass-through behaviour.
+ * (the ISO-8601 week-number family), now implemented in
+ * src/time/strftime.c using the ISO-week arithmetic in
+ * src/time/time_impl.h (__iso_week()/__iso_weeks_in_year()).
  *
  * Definitions (quoted from strftime.html's conversion table):
  *   %U: "week number of the year as a decimal number [00,53]. The
@@ -460,13 +455,6 @@ static void test_timespec_get_matches_realtime(void)
  * not derived from ntlibc or from memory. */
 static void test_strftime_week_number_family(void)
 {
-#if 0 /* UNIMPL: strftime.html conversion table, %U/%W/%V/%G/%g --
-       * src/time/strftime.c's switch has no case for any of these
-       * five specifiers, so the `default:` branch (`PUT_CH('%');
-       * PUT_CH(*f);`) passes the two source characters through
-       * literally instead of computing a week number. Confirmed live:
-       * strftime(..., "%U", &tm) for 2000-02-29 currently yields the
-       * 2-byte string "%U", not "09". */
 	struct tm tm;
 	time_t t;
 	char buf[16];
@@ -504,10 +492,6 @@ static void test_strftime_week_number_family(void)
 	CHECK(strftime(buf, sizeof buf, "%U", &tm) == 2 && !strcmp(buf, "01"));
 	CHECK(strftime(buf, sizeof buf, "%W", &tm) == 2 && !strcmp(buf, "02"));
 	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "02"));
-#endif
-	printf("note: strftime() %%U/%%W/%%V/%%G/%%g (ISO-8601 week-number "
-	       "family) are unimplemented; an unrecognized conversion passes "
-	       "through literally instead (src/time/strftime.c)\n");
 }
 
 /* ---- getdate.html: real getdate() reads the file named by $DATEMSK, a

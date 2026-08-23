@@ -59,6 +59,69 @@ static inline int __wday_from_days(long long z)
 	return (int)((z % 7 + 11) % 7);
 }
 
+/* Floor (not truncating) division/modulus: C's / and % truncate toward
+ * zero, which is wrong for the "always round toward negative infinity"
+ * arithmetic the ISO week-number formulas below assume when they run on
+ * a year before 1 CE.  Both __days_from_civil/__civil_from_days above
+ * dodge the same problem a different way (the "+ 719468"/era trick);
+ * these are kept separate and simple because the ISO week formulas are
+ * the standard textbook ones (Wikipedia, "ISO week date", "Calculating
+ * the week number from a month and day of the month or ordinal day of
+ * the year") and are easiest to check against that source written the
+ * way the source writes them. */
+static inline long long __floordiv(long long a, long long b)
+{
+	long long q = a / b;
+	if (a % b != 0 && ((a < 0) != (b < 0))) q--;
+	return q;
+}
+
+static inline long long __floormod(long long a, long long b)
+{
+	long long r = a % b;
+	if (r != 0 && ((r < 0) != (b < 0))) r += b;
+	return r;
+}
+
+/* Long years (ISO 8601's term for a week-based year with 53 Monday-
+ * Sunday weeks instead of 52): true iff 1 January of the year falls on
+ * a Thursday, or the year is a leap year and 1 January falls on a
+ * Wednesday.  Expressed the standard way, via P(y) = (y + floor(y/4) -
+ * floor(y/100) + floor(y/400)) mod 7 -- P(y)==4 or P(y-1)==3. */
+static inline int __iso_weeks_in_year(long long y)
+{
+	long long p = __floormod(y + __floordiv(y, 4) - __floordiv(y, 100) + __floordiv(y, 400), 7);
+	long long pp = __floormod((y - 1) + __floordiv(y - 1, 4) - __floordiv(y - 1, 100) + __floordiv(y - 1, 400), 7);
+	return (p == 4 || pp == 3) ? 53 : 52;
+}
+
+/* The ISO 8601 week-based year and week number (strftime's %G and %V)
+ * for a given full calendar year, 0-based day-of-year and 0-based
+ * Sunday=0 weekday -- exactly what struct tm's tm_year+1900/tm_yday/
+ * tm_wday already carry, so callers pass those straight through.
+ * "Both January 4th and the first Thursday of January are always in
+ * week 1" (strftime.html's %V entry) is the defining property; the
+ * `week` expression below is the standard ISO-week-from-ordinal-date
+ * formula (same source as __iso_weeks_in_year's comment), and a result
+ * outside [1, weeks in that year] means the date belongs to the last
+ * week of the previous week-based year or week 1 of the next one. */
+static inline void __iso_week(long long year, int yday, int wday, long long *out_year, int *out_week)
+{
+	int isodow = wday == 0 ? 7 : wday;             /* Monday=1..Sunday=7 */
+	long long week = (yday - isodow + 10) / 7;      /* always > 0: yday>=0, isodow<=7 */
+
+	if (week < 1) {
+		*out_year = year - 1;
+		*out_week = __iso_weeks_in_year(year - 1);
+	} else if (week > __iso_weeks_in_year(year)) {
+		*out_year = year + 1;
+		*out_week = 1;
+	} else {
+		*out_year = year;
+		*out_week = (int)week;
+	}
+}
+
 extern const char *const __ntlibc_day_name[7];
 extern const char *const __ntlibc_day_name_abbr[7];
 extern const char *const __ntlibc_month_name[12];

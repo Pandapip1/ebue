@@ -3,13 +3,16 @@
  *
  * Covers the conversion specifiers programs actually use in practice
  * (%Y %m %d %H %M %S %A %a %B %b %j %p %Z %z %% plus the common
- * composites %c %x %X %D %F %T %R %r and the odds and ends %C %e %I %n
- * %t %u %w %y).  Not implemented: the week-number family (%U %W %V %G
- * %g), %s, and the locale-alternate %E/%O modifiers -- this target has
- * only the "C" locale and no week-numbering rules were worth the extra
- * code for a from-scratch libc.  An unrecognized %<letter> is passed
- * through literally, which is what several other libcs do rather than
- * silently eating input.
+ * composites %c %x %X %D %F %T %R %r, the odds and ends %C %e %I %n %t
+ * %u %w %y, and the week-number family %U %W %V %G %g -- the last three
+ * of those are ISO 8601 week-based year/week, computed by
+ * time_impl.h's __iso_week()/__iso_weeks_in_year()).  Not implemented:
+ * %s and the locale-alternate %E/%O modifiers -- this target has only
+ * the "C" locale, and %E/%O are defined to fall back to their
+ * non-alternate form in the C locale anyway, so there is nothing an
+ * alternate form could do here that the base specifier doesn't already.
+ * An unrecognized %<letter> is passed through literally, which is what
+ * several other libcs do rather than silently eating input.
  *
  * POSIX strftime returns 0 (buffer contents unspecified) if the result
  * including the NUL wouldn't fit in max bytes, rather than truncating
@@ -93,7 +96,18 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			PUT_NUM(tm->tm_sec, 2, '0');
 			break;
 		case 'u': PUT_NUM(wday ? wday : 7, 1, '0'); break;
+		case 'U': PUT_NUM((tm->tm_yday + 7 - wday) / 7, 2, '0'); break;
+		case 'V': case 'G': case 'g': {
+			long long iso_year;
+			int iso_week;
+			__iso_week(tm->tm_year + 1900, tm->tm_yday, wday, &iso_year, &iso_week);
+			if (*f == 'V') PUT_NUM(iso_week, 2, '0');
+			else if (*f == 'G') PUT_NUM(iso_year, 4, '0');
+			else PUT_NUM(__floormod(iso_year, 100), 2, '0');
+			break;
+		}
 		case 'w': PUT_NUM(wday, 1, '0'); break;
+		case 'W': PUT_NUM((tm->tm_yday + 7 - (wday ? wday - 1 : 6)) / 7, 2, '0'); break;
 		case 'x':
 			PUT_NUM(tm->tm_mon + 1, 2, '0'); PUT_CH('/');
 			PUT_NUM(tm->tm_mday, 2, '0'); PUT_CH('/');
