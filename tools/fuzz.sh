@@ -64,7 +64,7 @@ fi
 
 time=${1:-60}
 if [ $# -gt 0 ]; then shift; fi
-harnesses=${*:-"strtod printf scanf utf"}
+harnesses=${*:-"strtod printf scanf utf path strptime strtol strftime"}
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
 	echo "fuzz: run 'make' first (obj/include/bits/alltypes.h is missing)" >&2

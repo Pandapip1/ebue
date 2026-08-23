@@ -42,7 +42,7 @@ RPATH   = -Wl,-rpath,$(dir $(ASAN_SO))
 # start ("ASan runtime does not come first in initial library list").  The
 # driver appends it after -ldl/-lm, which is too late.
 
-HARNESSES = strtod printf scanf utf
+HARNESSES = strtod printf scanf utf path strptime strtol strftime
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 
 # What the instrumented library is built from.  Derived with find, never

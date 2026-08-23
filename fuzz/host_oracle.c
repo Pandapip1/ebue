@@ -39,6 +39,7 @@
 typedef double (*strtod_fn)(const char *, char **);
 typedef float (*strtof_fn)(const char *, char **);
 typedef long long (*strtoll_fn)(const char *, char **, int);
+typedef unsigned long long (*strtoull_fn)(const char *, char **, int);
 typedef int *(*errno_loc_fn)(void);
 
 static void *libc(void)
@@ -99,6 +100,19 @@ long long host_strtoll(const char *s, size_t *endoff, int base, int *err)
 	char *e;
 	long long r;
 	if (!f) f = (strtoll_fn)sym("strtoll");
+	*host_errno_loc() = 0;
+	r = f(s, &e, base);
+	*err = *host_errno_loc();
+	*endoff = (size_t)(e - s);
+	return r;
+}
+
+unsigned long long host_strtoull(const char *s, size_t *endoff, int base, int *err)
+{
+	static strtoull_fn f;
+	char *e;
+	unsigned long long r;
+	if (!f) f = (strtoull_fn)sym("strtoull");
 	*host_errno_loc() = 0;
 	r = f(s, &e, base);
 	*err = *host_errno_loc();
