@@ -67,7 +67,15 @@ env:
   # and don't shift underneath us if tinycc lands a regression or a
   # behavior change. Bump this deliberately (and re-validate ntlibc
   # against the new commit) rather than tracking upstream automatically.
-  TINYCC_SHA: 2ba12e83b3599ca8f5d50c179fe5138fe956f0c9
+  # Pandapip1/tinycc, branch ntlibc-toolchain: upstream mob (2ba12e83) plus
+  # two things ntlibc needs. An inline-asm operand fix ("=m"/"m" on an array
+  # struct member reached through a pointer, which src/math/fenv.c hits), and
+  # -Wl,--delay-all, which test/delayall.c requires -- configure probes for
+  # it and skips that test where it is missing, so an upstream toolchain
+  # still builds everything else. Pinned by SHA, not by branch name, so a
+  # push to the fork cannot silently change what CI compiles with.
+  TINYCC_REPO: https://github.com/Pandapip1/tinycc.git
+  TINYCC_SHA: 69eed4d346f31dea12d61b99f60298d2f59f66be
 
 jobs:
   reuse:
@@ -92,7 +100,7 @@ jobs:
       - name: Clone tinycc
         if: steps.cache-tinycc.outputs.cache-hit != 'true'
         run: |
-          git clone https://github.com/TinyCC/tinycc.git tinycc
+          git clone "$TINYCC_REPO" tinycc
           git -C tinycc checkout "$TINYCC_SHA"
 
       - name: Build and install tinycc (--enable-cross)
