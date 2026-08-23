@@ -83,5 +83,10 @@ shiftTooManyBitsSigned:arch/*/src/int64.c
 # arches (see its header comment): a 5-bit FE_ALL_EXCEPT with no
 # FE_DENORM, since FE_DENORM is not part of the C99 exception set this
 # project claims. Calling any of these three with FE_ALL_EXCEPT is
-# exactly correct for *our* <fenv.h>, not a bug.
+# exactly correct for *our* <fenv.h>, not a bug. The same stale range
+# annotation also misfires on a lone FE_INEXACT (0x20 == 32, still
+# outside the bogus '1:31' the annotation allows) -- nearbyint.c's
+# snapshot-then-clear-just-FE_INEXACT pattern is the one other caller
+# in this tree that passes a single-bit argument outside FE_ALL_EXCEPT.
 invalidFunctionArg:src/math/fenv.c
+invalidFunctionArg:src/math/nearbyint.c

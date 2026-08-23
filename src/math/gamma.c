@@ -95,7 +95,7 @@ long double tgammal(long double x)
 	if (cls == FP_INFINITE) {
 		if (x > 0.0L) return HUGE_VALL;
 		feraiseexcept(FE_INVALID);
-		return (x - x) / (x - x);                     /* nan */
+		return (x - x) / (x - x);                     /* nan */ // NOLINT(misc-redundant-expression) -- deliberate 0/0
 	}
 	if (x == 0.0L) {
 		feraiseexcept(FE_DIVBYZERO);
@@ -103,7 +103,7 @@ long double tgammal(long double x)
 	}
 	if (x < 0.0L && x == floorl(x)) {
 		feraiseexcept(FE_INVALID);                     /* negative integer */
-		return (x - x) / (x - x);                      /* nan */
+		return (x - x) / (x - x);                      /* nan */ // NOLINT(misc-redundant-expression) -- deliberate 0/0
 	}
 	if (x > 0.0L) {
 		r = tgamma_pos(x);

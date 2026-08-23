@@ -16,7 +16,7 @@ double nearbyint(double x)
 {
 	int had = fetestexcept(FE_INEXACT);
 	double r = (double)__x87_rndint(x, -1);
-	if (!had && fetestexcept(FE_INEXACT)) feclearexcept(FE_INEXACT);
+	if (!had && fetestexcept(FE_INEXACT)) (void)feclearexcept(FE_INEXACT);
 	return r;
 }
 
@@ -24,7 +24,7 @@ float nearbyintf(float x)
 {
 	int had = fetestexcept(FE_INEXACT);
 	float r = (float)__x87_rndint(x, -1);
-	if (!had && fetestexcept(FE_INEXACT)) feclearexcept(FE_INEXACT);
+	if (!had && fetestexcept(FE_INEXACT)) (void)feclearexcept(FE_INEXACT);
 	return r;
 }
 
@@ -32,6 +32,6 @@ long double nearbyintl(long double x)
 {
 	int had = fetestexcept(FE_INEXACT);
 	long double r = __x87_rndint(x, -1);
-	if (!had && fetestexcept(FE_INEXACT)) feclearexcept(FE_INEXACT);
+	if (!had && fetestexcept(FE_INEXACT)) (void)feclearexcept(FE_INEXACT);
 	return r;
 }
