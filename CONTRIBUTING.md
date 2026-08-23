@@ -30,6 +30,32 @@ belongs behind `NTLIBC_USE_KERNEL32`: if it's an `Nt*`/`Rtl*`/other-ntdll
 call, it doesn't need the guard. If it's anything else (kernel32, advapi32,
 etc.), it does, and it needs a real ntdll-only fallback path too.
 
+## Why a shell lives in a libc repo
+
+The first section above says ntlibc's whole reason to exist is to be a C
+*library*, not a collection of userland programs — so `src/sh/` (the
+parser/executor) and the `sh/` binary built on top of it need to justify
+being here rather than in a separate project.
+
+The justification is that `sh` isn't really a new feature: it's the fix
+for three POSIX interfaces this library already ships and already gets
+wrong. `system()` (`src/stdlib/system.c`), `popen()` (`src/stdio/misc.c`)
+and `wordexp()` (`src/wordexp/wordexp.c`) are all specified in terms of
+the Shell Command Language, and all three are degraded on this platform
+for the same reason — there is no POSIX shell here, so the first two
+hand the command to `cmd.exe` (a different, incompatible grammar) and the
+third refuses command substitution outright. See `test/sh-design.md` for
+the full design note, but the load-bearing decision is: the shell is
+internal functions compiled into `libc.a`, `wordexp`/`system`/`popen`
+call those functions directly instead of spawning an external
+interpreter (which would mean trusting whatever `sh.exe` happens to be
+first on a caller's `PATH`), and the `sh` binary is a thin `main()` over
+the same code every other caller uses. It ships as its own source
+directory and its own binary specifically so it stays visibly separate
+from the ntdll-facing library code the rest of this file is about —
+`src/sh/` is a self-contained command-language layer, not something
+blurred into `src/stdlib/` or `src/wordexp/`.
+
 ## Other conventions
 
 - SPDX header on every new file (this project is
