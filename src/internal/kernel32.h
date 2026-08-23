@@ -47,9 +47,24 @@ typedef BOOL (NTAPI *PHANDLER_ROUTINE)(DWORD CtrlType);
 #define ENABLE_LINE_INPUT      0x0002
 #define ENABLE_ECHO_INPUT      0x0004
 
-/* GetConsoleMode()/SetConsoleMode()/FlushConsoleInputBuffer() themselves
- * are not declared here, same reasoning as SetConsoleCtrlHandler()
- * above: each is reached at runtime through LdrLoadDll()/
- * LdrGetProcedureAddress() by the .c file that needs it. */
+/* GetConsoleScreenBufferInfo() output, used by src/ioctl/ioctl.c for
+ * TIOCGWINSZ.  Layout is the documented Win32 one (wincon.h); declared
+ * here rather than pulled from windows.h for the same reason as
+ * everything else in this file -- see the file banner. */
+typedef struct _COORD { short X, Y; } COORD;
+typedef struct _SMALL_RECT { short Left, Top, Right, Bottom; } SMALL_RECT;
+typedef struct _CONSOLE_SCREEN_BUFFER_INFO {
+	COORD dwSize;
+	COORD dwCursorPosition;
+	unsigned short wAttributes;
+	SMALL_RECT srWindow;
+	COORD dwMaximumWindowSize;
+} CONSOLE_SCREEN_BUFFER_INFO;
+
+/* GetConsoleMode()/SetConsoleMode()/FlushConsoleInputBuffer()/
+ * GetConsoleScreenBufferInfo() themselves are not declared here, same
+ * reasoning as SetConsoleCtrlHandler() above: each is reached at
+ * runtime through LdrLoadDll()/LdrGetProcedureAddress() by the .c file
+ * that needs it. */
 
 #endif
