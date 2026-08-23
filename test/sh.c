@@ -139,6 +139,44 @@ static void test_quoting_suppresses_operators(void)
 	__sh_list_free(l);
 }
 
+/* 2.6.3 Command Substitution / 2.6.2 Parameter Expansion: the '(' after
+ * an unquoted "$(", the '{' after an unquoted "${", and the matching
+ * old-form backtick pair are part of the *word*, not operator/break
+ * characters -- even though '(' '{' '`' are otherwise always
+ * lexer-level operators/word-enders in this implementation (see
+ * sh.h). Actually running the substituted command is stage 5's job;
+ * this only proves the word boundary comes out right, including
+ * nested parens/braces and an embedded pipe/semicolon that must not
+ * be mistaken for real operators. */
+static void test_dollar_paren_and_brace_word_boundary(void)
+{
+	struct sh_list *l = must_parse("echo $(a | b; c) ${FOO} $((1+2))");
+	struct sh_command *c;
+	struct sh_word *w;
+	if (!l) return;
+	c = only_command(l);
+	CHECK(c != 0);
+	if (!c) { __sh_list_free(l); return; }
+	w = c->words;
+	CHECK(w && strcmp(w->text, "echo") == 0); w = w ? w->next : 0;
+	CHECK(w && strcmp(w->text, "$(a | b; c)") == 0); w = w ? w->next : 0;
+	CHECK(w && strcmp(w->text, "${FOO}") == 0); w = w ? w->next : 0;
+	CHECK(w && strcmp(w->text, "$((1+2))") == 0); w = w ? w->next : 0;
+	CHECK(w == 0);
+	__sh_list_free(l);
+}
+
+static void test_backtick_word_boundary(void)
+{
+	struct sh_list *l = must_parse("echo `a | b; c`suffix");
+	struct sh_command *c;
+	if (!l) return;
+	c = only_command(l);
+	CHECK(c && c->words && c->words->next && strcmp(c->words->next->text, "`a | b; c`suffix") == 0);
+	CHECK(c && c->words && c->words->next && c->words->next->next == 0);
+	__sh_list_free(l);
+}
+
 /* rule 9: '#' starts a comment only when it begins a new word, and it
  * runs to (not including) the next newline. */
 static void test_comment(void)
@@ -414,6 +452,8 @@ static void test_roundtrip(void)
 	check_roundtrip("cat <<EOF\nhello\nworld\nEOF\n");
 	check_roundtrip("cat <<-END\n\thi\n\tEND\n");
 	check_roundtrip("echo \"a;b\" 'c|d'");
+	check_roundtrip("echo $(a | b; c) ${FOO} $((1+2))");
+	check_roundtrip("echo `a | b; c`suffix");
 }
 
 int main(void)
@@ -423,6 +463,8 @@ int main(void)
 	test_assignment_only_command();
 
 	test_quoting_suppresses_operators();
+	test_dollar_paren_and_brace_word_boundary();
+	test_backtick_word_boundary();
 	test_comment();
 	test_empty_and_comment_only();
 

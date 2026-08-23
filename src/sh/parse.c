@@ -83,6 +83,96 @@ static char *xstrdup(const char *s)
 	return p;
 }
 
+/* ---- word-boundary handling for $(...), ${...} and `...` -------------
+ *
+ * '(' '{' '`' are otherwise always break/operator characters (see
+ * scan_word below), which is wrong the moment they follow an unquoted
+ * '$' (command substitution / parameter expansion) or stand alone
+ * (old-form command substitution): 2.6.3/2.6.2 make the whole
+ * delimited region part of the *word*, not a place token scanning
+ * stops. These helpers copy such a region verbatim (still raw,
+ * unexpanded -- actually running a substituted command is stage 5's
+ * job) into the word buffer, balancing nested delimiters of the same
+ * kind and skipping over quoted text inside so an embedded quote
+ * containing '(' '{' '`' etc. can't desync the count. Known, accepted
+ * gap: a *double*-quoted region inside one of these (e.g. the classic
+ * "$(echo "hi")") is not specially handled, since scan_word's Q_DOUBLE
+ * state has no matching awareness of command substitution either --
+ * out of scope for this bounded fix, same as the double-quote branch's
+ * other limits. */
+static int copy_squoted(const char **pp, struct gbuf *b)
+{
+	const char *p = *pp;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	while (*p && *p != '\'') { if (gbuf_push(b, *p)) return -1; p++; }
+	if (!*p) return -1;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	*pp = p;
+	return 0;
+}
+
+static int copy_dquoted(const char **pp, struct gbuf *b)
+{
+	const char *p = *pp;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	while (*p && *p != '"') {
+		if (*p == '\\' && p[1]) { if (gbuf_push(b, *p) || gbuf_push(b, p[1])) return -1; p += 2; continue; }
+		if (gbuf_push(b, *p)) return -1;
+		p++;
+	}
+	if (!*p) return -1;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	*pp = p;
+	return 0;
+}
+
+/* *pp points at `open` ('(' or '{'). Copies through the matching
+ * `close`, tracking nesting depth and skipping quoted regions, into b
+ * (both delimiters included). */
+static int copy_balanced(const char **pp, struct gbuf *b, char open, char close)
+{
+	const char *p = *pp;
+	int depth = 1;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	while (depth > 0) {
+		char c = *p;
+		if (!c) return -1;
+		if (c == '\\' && p[1]) { if (gbuf_push(b, c) || gbuf_push(b, p[1])) return -1; p += 2; continue; }
+		if (c == '\'') { if (copy_squoted(&p, b)) return -1; continue; }
+		if (c == '"') { if (copy_dquoted(&p, b)) return -1; continue; }
+		if (c == open) depth++;
+		else if (c == close) depth--;
+		if (gbuf_push(b, c)) return -1;
+		p++;
+	}
+	*pp = p;
+	return 0;
+}
+
+/* *pp points at the opening '`'. Copies through the matching closing
+ * '`' (old-form command substitution does not nest), into b. */
+static int copy_backquoted(const char **pp, struct gbuf *b)
+{
+	const char *p = *pp;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	while (*p && *p != '`') {
+		if (*p == '\\' && p[1]) { if (gbuf_push(b, *p) || gbuf_push(b, p[1])) return -1; p += 2; continue; }
+		if (gbuf_push(b, *p)) return -1;
+		p++;
+	}
+	if (!*p) return -1;
+	if (gbuf_push(b, *p)) return -1;
+	p++;
+	*pp = p;
+	return 0;
+}
+
 /* ---- tokens --------------------------------------------------------------*/
 enum tok_type {
 	T_WORD, T_IONUM,
@@ -246,6 +336,20 @@ static char *scan_word(struct lexer *lx)
 			}
 			if (c == '\'') { if (gbuf_push(&b, c)) goto oom; q = Q_SINGLE; p++; continue; }
 			if (c == '"') { if (gbuf_push(&b, c)) goto oom; q = Q_DOUBLE; p++; continue; }
+			if (c == '$' && (p[1] == '(' || p[1] == '{')) {
+				char open = p[1], close = (open == '(') ? ')' : '}';
+				if (gbuf_push(&b, '$')) goto oom;
+				p++;
+				if (copy_balanced(&p, &b, open, close)) {
+					lex_errf(lx, open == '(' ? "unterminated $(...)" : "unterminated ${...}");
+					goto fail;
+				}
+				continue;
+			}
+			if (c == '`') {
+				if (copy_backquoted(&p, &b)) { lex_errf(lx, "unterminated `...`"); goto fail; }
+				continue;
+			}
 			if (gbuf_push(&b, c)) goto oom;
 			p++;
 		} else if (q == Q_SINGLE) {
