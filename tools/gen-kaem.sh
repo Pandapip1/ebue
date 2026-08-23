@@ -35,6 +35,12 @@
 #   - everything else (every compile command, the crt1.o copy, and the
 #     final tcc -ar archiving step) is carried through close to verbatim,
 #     with only whitespace normalized.
+#   - a final pass then puts ${srcdir}/ in front of every path read from the
+#     source tree, and replaces every command *name* with a variable
+#     (${bin_mkdir}, ${bin_cp}, ${bin_catm}, ${CC}) so the caller supplies
+#     absolute paths: kaem does no PATH lookup when it is itself a win32
+#     PE32 binary, and does not append the .exe the tools are installed
+#     with. See the comments on that pass, and the header it emits.
 #
 # Usage:
 #   ./configure --host=x86_64-win32 CC=x86_64-win32-tcc   # if not already done
@@ -228,13 +234,17 @@ fi
 # (from mescc-tools) and make/bash do not exist yet. See CONTRIBUTING.md
 # for the full rationale and the analogy to Guix's gzip-mesboot0.
 #
-# Assumed available tools, and nothing else:
-#   - the win32-cross tcc that this script's PATH points at (${CC})
-#     acting as both compiler and archiver (tcc -ar rcs, no external ar/
-#     ranlib needed -- this mirrors what the real Makefile does via
-#     \$(AR) = \$(CC) -ar)
-#   - mkdir, cp and catm, all three from mescc-tools-extra -- the
-#     companion package to mescc-tools (kaem's own home), so it is already
+# Assumed available tools, and nothing else -- each named by a variable this
+# script's caller must set to the tool's path (see "must be set" below):
+#   - \${CC}, a win32-cross tcc for ${ARCH} (${CC}), acting as both
+#     compiler and archiver (tcc -ar rcs, no external ar/ranlib needed --
+#     this mirrors what the real Makefile does via \$(AR) = \$(CC) -ar).
+#     It must be the compiler alone, with no flags appended: tcc requires
+#     \`-ar' to be its very first argument, and rejects it anywhere else
+#     with "cannot parse -ar here".
+#   - \${bin_mkdir}, \${bin_cp} and \${bin_catm}, all three from
+#     mescc-tools-extra -- the companion package to mescc-tools (kaem's own
+#     home), so it is already
 #     on hand wherever kaem is. \`catm OUT IN...\` is its minimal
 #     concatenator; it stands in for the shell's \`cat IN... > OUT\`, which
 #     kaem cannot express because it has no redirection. Of the fifteen
@@ -247,23 +257,37 @@ fi
 # has neither, and nothing else in it can do a capture-group rewrite),
 # coreutils rm, or a standalone binutils ar.
 #
-# Every path this reads from the source tree is \${srcdir}-relative; every
-# path it writes is relative to the working directory.  So srcdir must be
-# set, and the working directory must be writable.  From the repository
-# root, in place:
-#   srcdir=. PATH=/path/to/win32-cross-tcc/bin:\$PATH kaem --strict --file boot/kaem/build-${ARCH}.kaem
+# Five variables must be set, and the working directory must be writable:
+#   srcdir     the source tree.  Every path this reads from the tree is
+#              \${srcdir}-relative; every path it writes is relative to the
+#              working directory.
+#   CC         the ${CC} above
+#   bin_mkdir  \\
+#   bin_cp      >  the three mescc-tools-extra programs above
+#   bin_catm   /
+# The four tool variables hold paths, not names to look up.  kaem does no
+# PATH search of its own when it is itself a win32 PE32 binary -- the form it
+# has at the bootstrap point this script exists for -- so a bare \`mkdir'
+# there is \`Subprocess error -1', and it does not append the \`.exe' the
+# tools are installed with either.  Give absolute paths and neither matters.
+#
+# From the repository root, in place, with the tools in one directory:
+#   srcdir=. CC=/path/to/${CC}.exe bin_mkdir=/path/to/mkdir.exe bin_cp=/path/to/cp.exe bin_catm=/path/to/catm.exe kaem --strict --file boot/kaem/build-${ARCH}.kaem
 # Or with the sources read-only somewhere else, which is the case a
 # from-scratch bootstrap actually has -- an unpacked tarball or a store path
 # it may not write to, and no recursive copy at this stage to stage it with:
 #   cd /some/empty/writable/dir
-#   srcdir=/path/to/ntlibc PATH=... kaem --strict --file .../build-${ARCH}.kaem
+#   srcdir=/path/to/ntlibc CC=... bin_mkdir=... bin_cp=... bin_catm=... kaem --strict --file .../build-${ARCH}.kaem
+# (On a developer machine with a POSIX shell the tools are unsuffixed and
+# \`command -v' fills these in, e.g. bin_cp=\$(command -v cp).)
 #
 # kaem substitutes an unset variable as nothing, so a forgotten srcdir fails
-# on /src/... rather than quietly reading something it should not.
+# on /src/... and a forgotten tool leaves a command whose name is its own
+# first argument -- either way a loud failure, never a quiet wrong one.
 #
 # This script assumes a clean tree (no pre-existing obj/ or lib/): every
-# directory below is created with a single bare \`mkdir\`, not \`mkdir -p\`,
-# in strict parent-before-child order. Two reasons for that, both explained
+# directory below is created with a single bare \`\${bin_mkdir} DIR\`, never
+# with -p, in strict parent-before-child order. Two reasons for that, both explained
 # in CONTRIBUTING.md:
 #   1. \`mkdir -p\` is not guaranteed to exist at this bootstrap point -- the
 #      handwritten early-stage tools favor minimality, and depending on -p
@@ -276,10 +300,10 @@ fi
 # (For what it's worth: mescc-tools-extra's own \`mkdir\` *does* implement
 # --parents/-p, in a way that tolerates an already-existing directory
 # without erroring -- see mescc-tools-extra/mkdir.c's create_dir(). So
-# \`mkdir -p\` would probably also work here if that's the mkdir on PATH.
-# This script still doesn't rely on it, since a minimal mkdir providing
-# only bare POSIX mkdir(1) semantics is not ruled out at this stage, and
-# the parent-first plain-mkdir list costs nothing extra to emit.)
+# \`\${bin_mkdir} -p\` would probably also work here if that's the mkdir
+# pointed at. This script still doesn't rely on it, since a minimal mkdir
+# providing only bare POSIX mkdir(1) semantics is not ruled out at this
+# stage, and the parent-first plain-mkdir list costs nothing extra to emit.)
 #
 # For the same reason (clean-tree assumption, no coreutils rm assumed to be
 # on PATH), this script does not \`rm -f lib/libc.a\` before archiving,
@@ -379,9 +403,33 @@ MID5
 # srcdir must be set.  From the repository root that is `srcdir=.`; kaem
 # substitutes an unset variable as nothing, so a forgotten one fails loudly
 # on /src/... rather than quietly reading something else.
+#
+# The same pass turns every command name into a variable: ${bin_mkdir},
+# ${bin_cp}, ${bin_catm} for the three mescc-tools-extra programs, and ${CC}
+# for the cross tcc that is both compiler and archiver.  A bare name needs
+# the running shell to search PATH, and kaem does not: built as a win32 PE32
+# binary -- which is what it is at the point this script exists for -- it
+# execs the command name as given, so `mkdir` is `Subprocess error -1' and
+# only an absolute path runs.  The tools are also installed with a .exe
+# suffix there, which kaem does not append either, so even a PATH-searching
+# kaem would miss them.  Naming them by variable lets the build driver hand
+# over the absolute, suffixed path it already knows.
+#
+# Anchoring each substitution at the start of the line is what keeps it from
+# touching prose: every command in the emitted script begins its line, and
+# every comment begins with `#'.  Only the command name is replaced, so ${CC}
+# expands to the program alone and `-ar' stays tcc's *first* argument, which
+# it insists on ("cannot parse -ar here" otherwise).
+#
+# As with srcdir, an unset one of these substitutes to nothing and the
+# resulting command is malformed rather than plausible.
 sed -e 's,-I\./,-I${srcdir}/,g' \
     -e 's,\([ \t]\)\./,\1${srcdir}/,g' \
     -e 's,\([ \t]\)\(src/\|crt/\|arch/\),\1${srcdir}/\2,g' \
+    -e 's,^mkdir ,${bin_mkdir} ,' \
+    -e 's,^cp ,${bin_cp} ,' \
+    -e 's,^catm ,${bin_catm} ,' \
+    -e "s,^${CC} ,\${CC} ," \
     "$OUT.tmp" >"$OUT"
 rm -f "$OUT.tmp"
 
