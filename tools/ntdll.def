@@ -25,6 +25,7 @@ NtFlushBuffersFile
 NtFreeVirtualMemory
 NtFsControlFile
 NtGetContextThread
+NtLockFile
 NtMapViewOfSection
 NtOpenFile
 NtOpenProcess
@@ -58,6 +59,7 @@ NtSetSystemTime
 NtSuspendThread
 NtTerminateProcess
 NtTerminateThread
+NtUnlockFile
 NtUnmapViewOfSection
 NtWaitForMultipleObjects
 NtWaitForSingleObject

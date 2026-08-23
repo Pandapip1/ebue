@@ -2859,6 +2859,19 @@ NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULO
  * this file's header comment and test/posix-signal.c's
  * NATIVE_NO_FAULT_BRIDGE). Needed only so the link succeeds. */
 NOTIMPL(NtQueryVirtualMemory, (HANDLE a, PVOID b, MEMORY_INFORMATION_CLASS c, PVOID d, SIZE_T e, SIZE_T *f))
+/* src/file/flock.c's NtLockFile()/NtUnlockFile() pair: no simulated
+ * byte-range lock table exists over the in-memory volume this file's
+ * NtCreateFile() stub above serves, so there is nothing genuine to
+ * grant or release here. flock()'s own tracking (lockstate[] there)
+ * never calls NtUnlockFile() unless an earlier NtLockFile() reported
+ * success, so a lock request that always refuses leaves that side
+ * consistent too -- test/posix-termios.c's flock() coverage already
+ * tolerates a failing lock/unlock as a note rather than a hard
+ * assertion for exactly this kind of environment gap (see that file
+ * and src/file/flock.c's own banners). */
+NOTIMPL(NtLockFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
+                     LARGE_INTEGER *f, LARGE_INTEGER *g, PULONG h, BOOLEAN i, BOOLEAN j))
+NOTIMPL(NtUnlockFile, (HANDLE a, PIO_STATUS_BLOCK b, LARGE_INTEGER *c, LARGE_INTEGER *d, PULONG e))
 
 PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HANDLER h)
 {
