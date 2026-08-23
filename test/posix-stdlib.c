@@ -485,18 +485,13 @@ static void test_system(void)
 	 * image, so the shell "cannot be executed" once ntlibc actually
 	 * tries to launch it.
 	 *
-	 * BUG: src/stdlib/system.c's find_shell() finds this file (it
-	 * passes the access() check), but __spawn() then fails outright
-	 * (NT process creation is atomic: an invalid image never produces
-	 * a process at all, unlike POSIX's fork()-then-exec() where the
-	 * child already exists when exec() discovers the image is bad).
-	 * system() takes the `pid < 0` branch and returns -1 with errno set
-	 * (confirmed live under Wine: errno comes back ENOEXEC), not a
-	 * WIFEXITED status with WEXITSTATUS()==127 as this clause requires.
-	 * A conforming fix would have system() synthesize a (127<<8)-shaped
-	 * status when __spawn() itself fails, the same way a real
-	 * fork()+execve() failure is turned into exit(127) by other libcs'
-	 * system() implementations. */
+	 * src/stdlib/system.c's find_shell() finds this file (it passes the
+	 * access() check), but __spawn() then fails outright (NT process
+	 * creation is atomic: an invalid image never produces a process at
+	 * all, unlike POSIX's fork()-then-exec() where the child already
+	 * exists when exec() discovers the image is bad).  system() now
+	 * synthesizes a (127<<8)-shaped status for that `pid < 0` case, so
+	 * WIFEXITED(st) && WEXITSTATUS(st)==127 as this clause requires. */
 	{
 		char t[] = "sysbad-XXXXXX.exe";
 		int fd = mkstemps(t, 4);
@@ -505,18 +500,8 @@ static void test_system(void)
 			CHECK(write(fd, "not a valid PE image\n", 22) == 22);
 			CHECK(close(fd) == 0);
 			CHECK(setenv("ComSpec", t, 1) == 0);
-#if 0 /* BUG: system.html RETURN VALUE -- "the value returned by system()
-       * shall be as if the command interpreter terminated using
-       * exit(127)" when the shell cannot be executed.  Live result is
-       * system()==-1/errno==ENOEXEC instead of a WIFEXITED/127 status;
-       * see the comment above. */
 			st = system("exit 0");
 			CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 127);
-#endif
-			/* what actually happens today, pinned so a future fix to
-			 * the BUG above is forced to update this too */
-			errno = 0;
-			CHECK(system("exit 0") == -1);
 			unsetenv("ComSpec");
 			unlink(t);
 		}

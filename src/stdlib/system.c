@@ -87,6 +87,21 @@
  *     than hidden; the alternative (hand-building the raw command line)
  *     needs a raw-cmdline entry point into __spawn that does not exist
  *     and is not this change's to add.
+ *
+ *   - "If a shell could not be executed, the child process shall exit
+ *     with a status as if the command interpreter terminated using
+ *     exit(127)."  On NT, process creation is atomic -- an invalid or
+ *     missing image never produces a process at all, unlike POSIX's
+ *     fork()-then-exec() where the child already exists when exec()
+ *     discovers the image is bad -- so __spawn() itself fails with
+ *     pid < 0 rather than a child later exiting 127.  That failure is
+ *     synthesized here into the (127<<8)-shaped wait status this clause
+ *     requires (WIFEXITED true, WEXITSTATUS()==127), the same way a real
+ *     fork()+execve() failure is turned into exit(127) by other libcs'
+ *     system() implementations.  No errno is preserved for this case:
+ *     the clause's contract is a wait status, not -1/errno, so there is
+ *     no defined errno to leave behind once the synthesized status takes
+ *     that branch.
  */
 #include <stdlib.h>
 #include <unistd.h>
@@ -143,8 +158,9 @@ int system(const char *command)
 
 		pid = __spawn(shell, argv, 0);
 		if (pid < 0) {
-			saved_errno = errno;
-			status = -1;
+			/* "as if the command interpreter terminated using
+			 * exit(127)" -- see the header comment. */
+			status = 127 << 8;
 		} else if (waitpid(pid, &status, 0) < 0) {
 			saved_errno = errno;
 			status = -1;
