@@ -128,6 +128,24 @@ PTEB __teb(void)
 
 PPEB NTAPI RtlGetCurrentPeb(void) { return &shim_peb; }
 
+/* RtlGetVersion (src/misc/uname.c's uname()): "plausible" grade -- a
+ * native Linux run has no real NT version to report, but the real
+ * function is documented to always succeed and never leaves its
+ * output unfilled, so a NOTIMPL/STATUS_NOT_IMPLEMENTED stub would be
+ * dishonest about the one thing every real caller can rely on (that
+ * the struct comes back filled in). A fixed, clearly-a-placeholder
+ * Windows 10 version number is closer to a real answer than either
+ * leaving the struct zeroed or refusing outright. */
+NTSTATUS NTAPI RtlGetVersion(RTL_OSVERSIONINFOW *vi)
+{
+	vi->dwMajorVersion = 10;
+	vi->dwMinorVersion = 0;
+	vi->dwBuildNumber = 19045;
+	vi->dwPlatformId = 2;   /* VER_PLATFORM_WIN32_NT */
+	vi->szCSDVersion[0] = 0;
+	return STATUS_SUCCESS;
+}
+
 /*
  * Natively there is no crt1.o: glibc's startup calls main() directly, so
  * the parts of __libc_start_main() that ntlibc code depends on have to
