@@ -109,6 +109,92 @@ static const struct { const char *s; uint64_t bits; } rt[] = {
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
+/* An L"..." literal's element type is the *compiler's own* wchar_t, not
+ * include/wchar.h's typedef -- 4-byte int on the native host asan builds
+ * against, vs. this header's `unsigned short` (matching the NT target).
+ * wcstoimax()/wcstoumax() below are compiled against the header's, so an
+ * L"..." argument is a silent type mismatch natively: every other unit
+ * reads as the high half of a 4-byte int. Same fix, same reasoning, as
+ * test/posix-wchar.c's W() -- see its longer comment -- kept as its own
+ * copy rather than a shared header for one static helper two files use. */
+static const wchar_t *W(const char *s)
+{
+	static wchar_t pool[4][24];
+	static int slot;
+	wchar_t *b = pool[slot++ % 4];
+	size_t i;
+	for (i = 0; s[i] && i < 23; i++) b[i] = (wchar_t)(unsigned char)s[i];
+	b[i] = 0;
+	return b;
+}
+
+/* `long` is 32-bit (LLP64) on both PE arches this library targets, but
+ * 64-bit under the native ASan build's host ABI -- see
+ * test/posix-limits.c's own header for the same fact about this file's
+ * neighbour.  The "one past the boundary" strings below used to be
+ * hardcoded assuming the 32-bit width, which made every one of these
+ * checks silently wrong (not just skipped) once compiled with a 64-bit
+ * long: strtol("2147483648",...) no longer overflows a 64-bit long at
+ * all, so what should be an ERANGE clamping test would instead just
+ * parse the number.  Deriving "boundary +/- 1" from LONG_MAX/LONG_MIN/
+ * ULONG_MAX themselves, the way test/posix-limits.c derives its own
+ * checks from sizeof(long), makes the test correct at either width
+ * instead of merely not-wrong-looking.
+ *
+ * A decimal-digit-string increment, rather than integer arithmetic, is
+ * required here specifically because "one past the boundary" is by
+ * definition not representable in *any* fixed-width integer type the
+ * boundary itself came from: on a 64-bit long, LONG_MAX+1 does not fit
+ * in a long, and does not reliably fit in intmax_t/uintmax_t either
+ * (they are the same 64-bit width here), so computing it with arithmetic
+ * would itself be exactly the overflow this test is trying to provoke
+ * safely, in the string domain instead. */
+static void incr_digits(char *out, size_t outsz, const char *digits)
+{
+	char tmp[24];
+	size_t n = strlen(digits);
+	int i, len, carry = 1;
+
+	if (n >= sizeof tmp) n = sizeof tmp - 1;         /* not reachable at 64-bit widths */
+	for (i = 0; i < (int)n; i++) tmp[i] = digits[n - 1 - (size_t)i];
+	/* Every digit above the lowest has to be copied through even once
+	 * the carry stops propagating -- only the loop bound was the bug
+	 * here, not the arithmetic: len (the real digit count) must stay at
+	 * n regardless of where the carry loop itself stops. */
+	for (i = 0; i < (int)n && carry; i++) {
+		int d = (tmp[i] - '0') + carry;
+		tmp[i] = (char)('0' + d % 10);
+		carry = d / 10;
+	}
+	len = (int)n;
+	if (carry) tmp[len++] = (char)('0' + carry);
+	if ((size_t)len >= outsz) len = (int)outsz - 1;
+	{
+		int j;
+		for (j = 0; j < len; j++) out[j] = tmp[len - 1 - j];
+		out[len] = 0;
+	}
+}
+
+/* "one more negative than LONG_MIN", as a decimal string: LONG_MIN's own
+ * magnitude does not fit in a positive long (two's complement), so this
+ * works on the "-" plus the *digits* of %ld's own output, never negating
+ * LONG_MIN as an integer. */
+static void one_below(char *out, size_t outsz, long v)
+{
+	char buf[24];
+	snprintf(buf, sizeof buf, "%ld", v);
+	out[0] = '-';
+	incr_digits(out + 1, outsz - 1, buf[0] == '-' ? buf + 1 : buf);
+}
+
+static void one_above_ul(char *out, size_t outsz, unsigned long v)
+{
+	char buf[24];
+	snprintf(buf, sizeof buf, "%lu", v);
+	incr_digits(out, outsz, buf);
+}
+
 static int near(double a, double b, double rel)
 {
 	if (a == b) return 1;
@@ -136,14 +222,27 @@ int main(void)
 	{ const char *s = "0x"; CHECK(strtol(s, &end, 16) == 0 && end == (char *)s + 1); }
 	{ const char *s = "  +"; CHECK(strtol(s, &end, 10) == 0 && end == (char *)s); }
 
-	/* clamping: long is 32-bit on both our arches */
-	CHECK(sizeof(long) == 4);
-	errno = 0; CHECK(strtol("2147483648", 0, 10) == LONG_MAX && errno == ERANGE);
-	errno = 0; CHECK(strtol("-2147483649", 0, 10) == LONG_MIN && errno == ERANGE);
-	errno = 0; CHECK(strtol("2147483647", 0, 10) == LONG_MAX && errno == 0);
-	errno = 0; CHECK(strtol("-2147483648", 0, 10) == LONG_MIN && errno == 0);
-	errno = 0; CHECK(strtoul("4294967295", 0, 10) == ULONG_MAX && errno == 0);
-	errno = 0; CHECK(strtoul("4294967296", 0, 10) == ULONG_MAX && errno == ERANGE);
+	/* clamping at LONG_MIN/LONG_MAX/ULONG_MAX and one past each --
+	 * derived from the actual width of `long` here (32-bit LLP64 on the
+	 * PE targets, 64-bit under the native ASan build), not hardcoded to
+	 * either; see incr_digits()'s comment above. */
+	{
+		char lmax[24], lmax1[25], lmin1[26], ulmax[24], ulmax1[25];
+
+		snprintf(lmax, sizeof lmax, "%ld", LONG_MAX);
+		incr_digits(lmax1, sizeof lmax1, lmax);
+		one_below(lmin1, sizeof lmin1, LONG_MIN);
+		snprintf(ulmax, sizeof ulmax, "%lu", ULONG_MAX);
+		one_above_ul(ulmax1, sizeof ulmax1, ULONG_MAX);
+
+		errno = 0; CHECK(strtol(lmax1, 0, 10) == LONG_MAX && errno == ERANGE);
+		errno = 0; CHECK(strtol(lmin1, 0, 10) == LONG_MIN && errno == ERANGE);
+		errno = 0; CHECK(strtol(lmax, 0, 10) == LONG_MAX && errno == 0);
+		errno = 0; { char lmin[26]; snprintf(lmin, sizeof lmin, "%ld", LONG_MIN);
+		             CHECK(strtol(lmin, 0, 10) == LONG_MIN && errno == 0); }
+		errno = 0; CHECK(strtoul(ulmax, 0, 10) == ULONG_MAX && errno == 0);
+		errno = 0; CHECK(strtoul(ulmax1, 0, 10) == ULONG_MAX && errno == ERANGE);
+	}
 	CHECK(strtoul("-1", 0, 10) == ULONG_MAX);
 	errno = 0; CHECK(strtoll("9223372036854775807", 0, 10) == LLONG_MAX && errno == 0);
 	errno = 0; CHECK(strtoll("9223372036854775808", 0, 10) == LLONG_MAX && errno == ERANGE);
@@ -157,14 +256,14 @@ int main(void)
 	/* wcstoimax/wcstoumax: the wide mirror of strtoimax/strtoumax */
 	{
 		wchar_t *wend;
-		CHECK(wcstoimax(L"-42", 0, 0) == -42);
-		CHECK(wcstoumax(L"0xff", 0, 0) == 255);
-		CHECK(wcstoimax(L"  +123abc", &wend, 10) == 123 && *wend == L'a');
+		CHECK(wcstoimax(W("-42"), 0, 0) == -42);
+		CHECK(wcstoumax(W("0xff"), 0, 0) == 255);
+		CHECK(wcstoimax(W("  +123abc"), &wend, 10) == 123 && *wend == L'a');
 		errno = 0;
-		CHECK(wcstoimax(L"9223372036854775808", 0, 10) == INTMAX_MAX && errno == ERANGE);
+		CHECK(wcstoimax(W("9223372036854775808"), 0, 10) == INTMAX_MAX && errno == ERANGE);
 		errno = 0;
-		CHECK(wcstoumax(L"-1", 0, 10) == UINTMAX_MAX && errno == 0);
-		CHECK(wcstoimax(L"777", &wend, 8) == 511 && *wend == 0);
+		CHECK(wcstoumax(W("-1"), 0, 10) == UINTMAX_MAX && errno == 0);
+		CHECK(wcstoimax(W("777"), &wend, 8) == 511 && *wend == 0);
 	}
 
 	/* atoi family */
