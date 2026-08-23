@@ -7,7 +7,17 @@
  * they are not byte-for-byte MSVC's ImgDelayDescr, and
  * include/ntlibc/rpath.h for the $ORIGIN search this uses to find the
  * DLL.
+ *
+ * NT-only, for the same reason and by the same mechanism as
+ * src/internal/rpath.c (see the comment there): this calls into that
+ * file, which is itself excluded from a native ASan/UBSan build by
+ * failing to compile outside _WIN32, so this file has to fail the same
+ * way rather than leave a dangling reference to ntlibc_rpath_load() et
+ * al. in that build's unconditional link.
  */
+#ifndef _WIN32
+#error "delayload.c is NT-only (calls into rpath.c, which is NT-only); see the comment above and src/internal/rpath.c"
+#endif
 #include "libc.h"
 #include "ntlibc/delayload.h"
 

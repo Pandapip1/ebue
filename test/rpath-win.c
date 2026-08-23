@@ -29,7 +29,17 @@
  *     one, and is checked separately: `nm obj/test/misc.exe` (a test
  *     that never mentions this API) has no ntlibc_rpath_... or
  *     ntlibc_delayLoadHelper2 symbols.)
+ *
+ * NT-only, like src/internal/rpath.c and src/internal/delayload.c that
+ * this exercises: under tools/asan-build.sh's native run this fails to
+ * compile (see the #error below) rather than fail to link with a
+ * confusing "undefined reference to ntlibc_rpath_load" -- those two
+ * files are excluded from that build for the same reason, so nothing
+ * this test calls would exist there regardless.
  */
+#ifndef _WIN32
+#error "rpath-win.c is NT-only (exercises rpath.c/delayload.c, both NT-only); see src/internal/rpath.c"
+#endif
 #include <stdio.h>
 #include <string.h>
 #include "ntlibc/delayload.h"

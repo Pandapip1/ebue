@@ -21,7 +21,28 @@
  * directory or an explicit absolute __rpath entry), so the NT loader's
  * own search order -- which does include the current working directory
  * on many configurations -- is never invoked by this file.
+ *
+ * NT-only, deliberately: LdrLoadDll()/LdrGetProcedureAddress() have no
+ * native (non-Windows) counterpart, so unlike most of src/*.c this file
+ * cannot be given a stand-in for tools/asan-build.sh's native run --
+ * fuzz/ntstubs.c answers RtlAllocateHeap and the like precisely because
+ * every native ASan/UBSan build links every compiled src/*.c object
+ * into every test unconditionally (see that script's own comment on
+ * why an archive would be wrong there), so a stray undefined Ldr* here
+ * would break every *other* test's native link too, not just this
+ * facility's own. tcc predefines _WIN32 for both win32 targets this
+ * library builds for (confirmed for i386-win32-tcc and x86_64-win32-tcc
+ * alike); a native clang build defines neither, so the #error below
+ * fails *compilation*, which is exactly the signal
+ * tools/asan-build.sh's mechanical "compile every src/*.c and keep
+ * whichever compiles" step already treats as "skip this one" -- the
+ * same outcome src/internal/$ARCH/teb.c gets for reading gs:0x30
+ * natively, reached here without needing that script (which is out of
+ * this change's scope) to name this file specifically.
  */
+#ifndef _WIN32
+#error "rpath.c is NT-only (LdrLoadDll/LdrGetProcedureAddress have no native stand-in); see the comment above"
+#endif
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
