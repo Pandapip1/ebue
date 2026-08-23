@@ -95,6 +95,14 @@
 #ifndef NTLIBC_RPATH_H
 #define NTLIBC_RPATH_H
 
+/* For _Noreturn (used below): gcc/clang accept the bare keyword as an
+ * extension in C regardless of -std=, but C++ does not, so without this
+ * include a solo `#include <ntlibc/rpath.h>` in a C++ TU fails with
+ * "'_Noreturn' does not name a type" -- found by tools/hdr-hygiene.sh's
+ * cxx stage, which is exactly the case this header's own extern "C"
+ * block promises to support. */
+#include <features.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

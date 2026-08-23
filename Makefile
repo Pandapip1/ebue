@@ -367,6 +367,33 @@ linkcheck: $(ALL_LIBS)
 		$(srcdir)/tools/linkcheck.sh
 
 .PHONY: linkcheck
+#
+# hygiene: every header under include/ (plus the generated obj/include/
+# bits/alltypes.h) compiled entirely on its own, twice in one TU (include
+# guard), and as C++ where it promises extern "C" -- for both arches,
+# under -std=c99 -nostdinc with no feature-test macro set, i.e. exactly
+# what a program gets from #include <whatever.h> and nothing else. See
+# tools/hdr-hygiene.sh's header comment for the bug class this exists to
+# catch (ntlibc shipping no <pwd.h> at all, unnoticed because nothing
+# in-tree ever included a header ntlibc does not have -- this script is
+# the "header exists but isn't independently usable" half of that class).
+#
+# A separate gate rather than a tools/lint.sh stage: lint.sh is
+# explicitly report-only static analysis over src/*.c (warnings, the
+# analyzer, cppcheck) and is documented as never a build dependency,
+# where this is a pass/fail correctness check over include/*.h with its
+# own exit status -- closer in kind to `make asan`/`make check` than to
+# a linter, and folding it into lint.sh's stage list would let
+# LINT_STRICT=0/report-only framing quietly cover a class of bug that
+# should instead just fail the gate.
+#
+# Deliberately depends on $(GENH), like asan below, so a bare `make
+# hygiene` in a fresh tree also has obj/include/bits/alltypes.h.
+#
+hygiene: $(GENH)
+	./tools/hdr-hygiene.sh
+
+.PHONY: hygiene
 
 # asan/fuzz: a second, native (Linux/ELF) build of the same src/*.c under
 # AddressSanitizer, UBSan and libFuzzer.  This is not a substitute for
