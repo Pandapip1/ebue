@@ -16,7 +16,9 @@
  *              simulated volume in memory, described above NtCreateFile
  *              below, with the paths, handles, directories, pipes and
  *              information classes ntlibc actually uses; process
- *              creation, which fork+execve really performs; the clocks;
+ *              creation, which fork+execve really performs; process
+ *              cloning (RtlCloneUserProcess, so fork()), which a real
+ *              host fork(2) performs, described above it; the clocks;
  *              RtlUTF8ToUnicodeN/RtlUnicodeToUTF8N (a from-spec
  *              conversion; see the note above them), RtlInitUnicodeString.
  *   plausible  NtQueryVolumeInformationFile for descriptors 0-2, which a
@@ -24,9 +26,8 @@
  *   refusing   everything else: STATUS_NOT_IMPLEMENTED.  Any ntlibc code
  *              path that reaches one of those is simply not covered by
  *              the native build, and will report an error rather than
- *              pretend to work.  What is left is chiefly process cloning
- *              (RtlCloneUserProcess, so fork()), the object-manager
- *              symbolic links, and NtFsControlFile.
+ *              pretend to work.  What is left is chiefly the
+ *              object-manager symbolic links and NtFsControlFile.
  *
  * Host services are reached through syscall(2) rather than through
  * write()/read()/malloc(), because those names belong to ntlibc in this
@@ -60,11 +61,15 @@ extern size_t __sanitizer_get_allocated_size(const void *);
 
 #define SYS_read  0
 #define SYS_write 1
+#define SYS_mmap  9
 #define SYS_exit_group 231
 #define SYS_clock_gettime 228
 #define SYS_nanosleep 35
 #define SYS_getpid 39
 #define SYS_getppid 110
+#define SYS_close 3
+#define SYS_ftruncate 77
+#define SYS_memfd_create 319
 
 /* Handles are (fd + 1), so that 0 stays "no handle". */
 #define H2FD(h) ((int)(long)(h) - 1)
@@ -153,6 +158,76 @@ static char *shim_argv[2] = { (char *)"ntlibc-native", 0 };
  * builds: filtered out below. */
 #define XCHILD_MARK "_NTLIBC_XCHILD=1"
 
+/*
+ * The exit code a host wait4() reports is 8 bits (WEXITSTATUS); the exit
+ * code this file's own NtTerminateProcess is asked for can be a full NT
+ * status -- in particular __NT_SIGNAL_EXIT(sig) = 0xE0DE0000 | sig, which
+ * a plain _exit(status) low-byte-truncates down to just `sig`, indistin-
+ * guishable on the host from a process that legitimately called
+ * exit(sig).  That is the whole reason waitpid-overflow and posix-signal
+ * are skipped natively (see not_native() in tools/asan-build.sh) -- but
+ * the fix does not have to live in src/*.c, which already gets this
+ * right for the real NT target; it only has to get the *full* code from
+ * the dying process to the one that reaps it, out of band from the
+ * host's own 8-bit accounting.
+ *
+ * A small table in an anonymous, memfd-backed MAP_SHARED page does that:
+ * whichever process ends another (NtTerminateProcess, self or via a
+ * handle) records {pid, code} in it before the host-visible exit/kill
+ * happens, and proc_poll() below prefers that record over the
+ * host-status heuristic whenever one matches the pid it just reaped.
+ * The mapping needs no extra plumbing to reach a child: RtlCloneUserProcess's
+ * real fork(2) shares it automatically (fork does not unmap anything),
+ * and RtlCreateUserProcess's real fork+execve passes the *fd number* to
+ * the child via envp (XSTATUS_FD_MARK below), the same trick XCHILD_MARK
+ * already uses for "was this execve'd by this file" -- the fd itself
+ * survives execve (memfd_create() does not set FD_CLOEXEC here), so the
+ * child's own __ntshim_init() just re-mmaps the fd it inherited instead
+ * of creating a fresh, unrelated table. */
+#define XSTATUS_FD_PREFIX "_NTLIBC_XSTATUS_FD="
+#define XSTATUS_N 4096
+struct xstatus_ent { int pid; int code; };
+static struct xstatus_ent *xstatus_tab;
+static int xstatus_fd = -1;
+
+static void xstatus_init(char **envp)
+{
+	int i, fd = -1;
+	size_t bytes = sizeof(struct xstatus_ent) * (size_t)XSTATUS_N;
+
+	if (envp) for (i = 0; envp[i]; i++)
+		if (!strncmp(envp[i], XSTATUS_FD_PREFIX, sizeof(XSTATUS_FD_PREFIX) - 1)) {
+			/* No <stdlib.h> here (this file only pulls in <stdio.h> and
+			 * <string.h>, ntlibc's own -- atoi() would either be
+			 * undeclared or, worse, ntlibc's own not-yet-initialised
+			 * one), so a minimal digit parse in place of it. */
+			const char *s = envp[i] + sizeof(XSTATUS_FD_PREFIX) - 1;
+			fd = 0;
+			while (*s >= '0' && *s <= '9') fd = fd * 10 + (*s++ - '0');
+			break;
+		}
+	if (fd < 0) {
+		fd = (int)syscall(SYS_memfd_create, "ntlibc-xstatus", 0);
+		if (fd < 0) return;                     /* degrade to the host-status heuristic */
+		if (syscall(SYS_ftruncate, fd, (long)bytes) < 0) { syscall(SYS_close, fd); return; }
+	}
+	xstatus_tab = (struct xstatus_ent *)syscall(SYS_mmap, 0, (long)bytes,
+	                                            3 /*PROT_READ|PROT_WRITE*/, 1 /*MAP_SHARED*/, fd, 0);
+	if (xstatus_tab == (void *)-1) { xstatus_tab = 0; return; }
+	xstatus_fd = fd;
+}
+
+/* Record the full code a process is about to end with, so proc_poll() on
+ * the reaping side can recover it despite the host's 8-bit wait status.
+ * A no-op if this process never got a table (memfd_create/mmap failed --
+ * proc_poll()'s heuristic fallback is all that's left in that case). */
+static void xstatus_record(int pid, int code)
+{
+	if (!xstatus_tab) return;
+	xstatus_tab[(unsigned)pid % XSTATUS_N].pid = pid;
+	xstatus_tab[(unsigned)pid % XSTATUS_N].code = code;
+}
+
 static void vfs_init(void);            /* the simulated file system, below */
 static void materialize_argv0(const char *host);  /* below, once nodes exist */
 
@@ -192,6 +267,7 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 			environ = __interceptor_malloc(sizeof(char *) * (size_t)n);
 			for (i = 0; i < n; i++) {
 				if (!strcmp(envp[i], XCHILD_MARK)) continue;
+				if (!strncmp(envp[i], XSTATUS_FD_PREFIX, sizeof(XSTATUS_FD_PREFIX) - 1)) continue;
 				environ[j] = __interceptor_malloc(strlen(envp[i]) + 1);
 				if (environ[j]) strcpy(environ[j], envp[i]);
 				j++;
@@ -203,6 +279,7 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 		}
 	}
 	__fd_init();
+	xstatus_init(envp);
 
 	/* One more thing a real execve() gives a child and a constructor
 	 * cannot fabricate: a file at its own on-disk path.  Without this, a
@@ -332,8 +409,30 @@ struct vpipe {
 	struct vpipe *next;
 	WCHAR *name;
 	size_t namelen;
-	unsigned char *data;
-	size_t len, cap;
+	/* Backed by a real host pipe(2), not a heap buffer: RtlCloneUserProcess
+	 * below makes a real fork(2) child, and a heap-backed queue would be
+	 * ordinary process memory -- private to whichever side's copy wrote to
+	 * it, invisible to the other, exactly the "handle value that means
+	 * nothing in the child" problem fork.c's own header describes for a
+	 * table entry that wasn't marked inheritable.  A real pipe does not
+	 * have that problem: the host kernel duplicates the fd table across a
+	 * real fork(2) (or a real fork+execve -- RtlCreateUserProcess above),
+	 * both ends keep pointing at the same kernel pipe object, and a write
+	 * from one process is readable from the other, same as two ends of an
+	 * anonymous pipe are meant to behave.
+	 *
+	 * Deliberately *blocking*, unlike the old heap-backed version: NT's
+	 * NtReadFile on a synchronous pipe handle genuinely blocks until data
+	 * arrives, and now that a real, possibly cross-process writer can
+	 * exist, letting the host kernel do that blocking is both the more
+	 * faithful simulation and the only way it can work at all -- an
+	 * immediate STATUS_PIPE_EMPTY can't wait for a sibling process the
+	 * way this stub cannot loop on the caller's behalf without one.  Every
+	 * test that reads from a pipe already writes to it first from the
+	 * same process (so the read never actually waits) or arranges for
+	 * every writer to be closed before reading (so it gets EOF, not a
+	 * hang) -- see NtReadFile. */
+	int rfd, wfd;
 	int readers, writers;
 };
 
@@ -508,7 +607,7 @@ static void dir_remove(struct vnode *dir, struct vent *victim)
 }
 
 #define SYS_openat 257
-#define SYS_close  3
+#define SYS_pipe2  293
 
 /* Put a copy of a real host file into the volume, at the same place
  * src/internal/path.c's dos_from_posix() would put it: an absolute path
@@ -648,12 +747,16 @@ static void of_drop(struct ofile *f)
 	if (f->kind == OF_STD) { f->refs = 1; return; }   /* static, never freed */
 	if (f->kind == OF_PIPE) {
 		struct vpipe *p = f->pipe, **pp;
-		if (f->writer) p->writers--; else p->readers--;
+		/* Close each real end exactly once, when its last handle drops
+		 * (across every process sharing the vpipe, not just this one --
+		 * see the fd table note above): that is what lets the other side
+		 * see EOF/EPIPE the way a real pipe's peer would. */
+		if (f->writer) { if (--p->writers == 0 && p->wfd >= 0) { syscall(SYS_close, p->wfd); p->wfd = -1; } }
+		else            { if (--p->readers == 0 && p->rfd >= 0) { syscall(SYS_close, p->rfd); p->rfd = -1; } }
 		if (!p->readers && !p->writers) {
 			for (pp = &vpipes; *pp; pp = &(*pp)->next)
 				if (*pp == p) { *pp = p->next; break; }
 			vfree(p->name);
-			vfree(p->data);
 			vfree(p);
 		}
 	}
@@ -992,12 +1095,18 @@ NTSTATUS NTAPI NtCreateNamedPipeFile(PHANDLE out, ULONG access, POBJECT_ATTRIBUT
 			break;
 		}
 	if (!p) {
+		int fds[2];
 		p = vmalloc(sizeof *p);
 		if (!p) return STATUS_NO_MEMORY;
 		memset(p, 0, sizeof *p);
 		p->name = wdup(vp.pipename, vp.pipelen);
 		p->namelen = vp.pipelen;
 		if (!p->name) { vfree(p); return STATUS_NO_MEMORY; }
+		if (syscall(SYS_pipe2, fds, 0) < 0) {
+			vfree(p->name); vfree(p); return STATUS_INSUFFICIENT_RESOURCES;
+		}
+		p->rfd = fds[0];
+		p->wfd = fds[1];
 		p->next = vpipes;
 		vpipes = p;
 	}
@@ -1066,19 +1175,20 @@ NTSTATUS NTAPI NtWriteFile(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID ctx,
 	if (f->kind == OF_PIPE) {
 		struct vpipe *p = f->pipe;
 		if (!f->writer) return STATUS_ACCESS_DENIED;
+		/* p->readers is this process's own view -- exactly right in the
+		 * common, unforked case, and a fast local check even when it
+		 * isn't -- but a clone's copy of the object can go stale
+		 * relative to another process sharing the same underlying pipe,
+		 * so the real write() below, whose EPIPE the kernel derives from
+		 * the fd table it actually shares, is the authoritative check. */
 		if (!p->readers) return STATUS_PIPE_BROKEN;
 		if (len) {
-			if (p->len + len > p->cap) {
-				size_t want = p->len + len + 4096;
-				unsigned char *nb = __interceptor_realloc(p->data, want);
-				if (!nb) return STATUS_NO_MEMORY;
-				p->data = nb;
-				p->cap = want;
-			}
-			memcpy(p->data + p->len, buf, len);
-			p->len += len;
+			long n = syscall(SYS_write, p->wfd, buf, (size_t)len);
+			if (n < 0) return STATUS_PIPE_BROKEN;
+			if (io) { io->Status = STATUS_SUCCESS; io->Information = (ULONG_PTR)n; }
+			return STATUS_SUCCESS;
 		}
-		if (io) { io->Status = STATUS_SUCCESS; io->Information = len; }
+		if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; }
 		return STATUS_SUCCESS;
 	}
 	v = f->node;
@@ -1133,25 +1243,26 @@ NTSTATUS NTAPI NtReadFile(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID ctx,
 	}
 	if (f->kind == OF_PIPE) {
 		struct vpipe *p = f->pipe;
-		ULONG take;
+		long r;
 		if (f->writer) return STATUS_ACCESS_DENIED;
-		if (!p->len) {
-			/* Empty: NT blocks a synchronous read until a writer
-			 * supplies data, which a single-threaded native build
-			 * cannot do -- it would deadlock.  With every write end
-			 * closed the answer is the real one, STATUS_PIPE_BROKEN
-			 * (end of file); otherwise the closest NT status for
-			 * "nothing to read right now" is returned rather than
-			 * hanging. */
-			if (!p->writers) return STATUS_PIPE_BROKEN;
-			return STATUS_PIPE_EMPTY;
-		}
-		take = (ULONG)(p->len < (size_t)len ? p->len : (size_t)len);
-		memcpy(buf, p->data, take);
-		memmove(p->data, p->data + take, p->len - take);
-		p->len -= take;
-		if (io) { io->Status = STATUS_SUCCESS; io->Information = take; }
-		return STATUS_SUCCESS;
+		if (!len) { if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; } return STATUS_SUCCESS; }
+		/* The host fd blocks (see struct vpipe): this genuinely waits
+		 * for a writer, the way a real synchronous NT read would, rather
+		 * than reporting STATUS_PIPE_EMPTY for "nothing yet" -- there is
+		 * no way to loop back to the caller and try again later the way
+		 * an overlapped/async caller could.  0 is the kernel's own
+		 * end-of-file: authoritative for "every writer, in every process
+		 * sharing this pipe, is gone", which this process's own
+		 * p->writers count cannot be once a clone is involved (see
+		 * NtWriteFile's note).  STATUS_PIPE_EMPTY is dead code below in
+		 * this build -- the host fd this file hands out is never put in
+		 * non-blocking mode -- but it is left as the return for a
+		 * negative read() rather than asserted away, since it remains
+		 * the correct NT status for that case if that ever changes. */
+		r = syscall(SYS_read, p->rfd, buf, (size_t)len);
+		if (r > 0) { if (io) { io->Status = STATUS_SUCCESS; io->Information = (ULONG_PTR)r; } return STATUS_SUCCESS; }
+		if (r == 0) return STATUS_PIPE_BROKEN;
+		return STATUS_PIPE_EMPTY;
 	}
 	v = f->node;
 	if (v->isdir) return STATUS_INVALID_DEVICE_REQUEST;
@@ -2150,6 +2261,7 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 {
 	char *host;
 	char **argv, **envp, **xenvp = 0;
+	char *xstatus_entry = 0;
 	struct ofile *f;
 	NTSTATUS st;
 	long pid;
@@ -2177,15 +2289,28 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 
 	/* envp plus the marker __ntshim_init() looks for -- see XCHILD_MARK's
 	 * definition -- so the child knows to rebuild environ from what
-	 * execve() actually gave it rather than resetting it to empty. xenvp
-	 * wraps envp's entries in a new array; the strings themselves are
-	 * still envp's to free below. */
+	 * execve() actually gave it rather than resetting it to empty, and
+	 * (if this process has one) the fd of the shared exit-status table --
+	 * see XSTATUS_FD_PREFIX's definition -- so the child records into the
+	 * same table this process's own waitpid() will read from, rather than
+	 * a fresh one of its own that nothing else can see. xenvp wraps
+	 * envp's entries in a new array; the strings themselves are still
+	 * envp's to free below. */
 	for (n = 0; envp[n]; n++) ;
-	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 2));
+	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 3));
 	if (xenvp) {
+		int m = n;
 		memcpy(xenvp, envp, sizeof(char *) * (size_t)n);
-		xenvp[n] = (char *)XCHILD_MARK;
-		xenvp[n + 1] = 0;
+		xenvp[m++] = (char *)XCHILD_MARK;
+		if (xstatus_fd >= 0) {
+			xstatus_entry = vmalloc(sizeof(XSTATUS_FD_PREFIX) + 10);
+			if (xstatus_entry) {
+				snprintf(xstatus_entry, sizeof(XSTATUS_FD_PREFIX) + 10, "%s%d",
+				         XSTATUS_FD_PREFIX, xstatus_fd);
+				xenvp[m++] = xstatus_entry;
+			}
+		}
+		xenvp[m] = 0;
 	}
 
 	pid = syscall(SYS_fork);
@@ -2209,7 +2334,8 @@ out:
 	vfree(host);
 	free_strv(argv);
 	free_strv(envp);
-	vfree(xenvp);           /* the wrapper array only; its strings are envp's */
+	vfree(xenvp);           /* the wrapper array only; envp's own strings are envp's */
+	vfree(xstatus_entry);
 	return st;
 }
 
@@ -2222,23 +2348,53 @@ NTSTATUS NTAPI NtResumeThread(HANDLE h, PULONG count)
 	return STATUS_SUCCESS;
 }
 
-/* Reap the child if it has finished; 1 = it has, 0 = still running. */
+/* Reap the child if it has finished: 1 = reaped, 0 = still running (only
+ * possible for nohang), -1 = the host wait4() itself failed.
+ *
+ * That last case is not hypothetical: RtlCloneUserProcess below makes a
+ * clone with a real host fork(), and a process handle for a *third*
+ * process -- one that existed before that fork and travelled into the
+ * clone as plain memory in __children, exactly as fork.c's header
+ * describes -- names a pid that is the host's child of the original
+ * process, not of the clone.  The host kernel enforces real parentage:
+ * wait4() on a pid that is not the caller's child fails with ECHILD
+ * regardless of WNOHANG, immediately rather than by timing out.  That is
+ * reported back as STATUS_INVALID_HANDLE (-> EBADF), one of the outcomes
+ * test/fork-handles-win.c and test/process-win.c's test_prefork_handle
+ * already treat as an acceptable, honest failure -- never a fabricated
+ * status and never a hang. */
 static int proc_poll(struct ofile *f, int nohang)
 {
 	int status = 0;
 	long r;
 	if (f->exited) return 1;
 	r = syscall(SYS_wait4, (long)f->pid, &status, (long)(nohang ? 1 /*WNOHANG*/ : 0), 0);
-	if (r != f->pid) return 0;
-	f->exited = 1;
-	if ((status & 0x7f) == 0) f->exitcode = (status >> 8) & 0xff;
-	else f->exitcode = __NT_SIGNAL_EXIT(status & 0x7f);   /* killed by a signal */
-	return 1;
+	if (r == f->pid) {
+		f->exited = 1;
+		/* Prefer the out-of-band table (see its comment above): it has
+		 * the real, full-width code NtTerminateProcess was asked to end
+		 * this pid with, where the host's own wait status only carries
+		 * 8 bits of it.  Fall back to the host-status heuristic when
+		 * there is no matching entry -- a process that died some other
+		 * way than through this file's own NtTerminateProcess, chiefly
+		 * a genuine crash (a real ASan/UBSan finding, or a real signal)
+		 * that this stub never got a chance to intercept. */
+		if (xstatus_tab && xstatus_tab[(unsigned)f->pid % XSTATUS_N].pid == f->pid) {
+			f->exitcode = xstatus_tab[(unsigned)f->pid % XSTATUS_N].code;
+			xstatus_tab[(unsigned)f->pid % XSTATUS_N].pid = 0;   /* consumed; shrink the pid-reuse window */
+		}
+		else if ((status & 0x7f) == 0) f->exitcode = (status >> 8) & 0xff;
+		else f->exitcode = __NT_SIGNAL_EXIT(status & 0x7f);   /* killed by a real host signal */
+		return 1;
+	}
+	if (r < 0) return -1;
+	return 0;
 }
 
 NTSTATUS NTAPI NtWaitForSingleObject(HANDLE h, BOOLEAN alertable, LARGE_INTEGER *timeout)
 {
 	struct ofile *f = of_get(h);
+	int r;
 	(void)alertable;
 	if (!f) return STATUS_INVALID_HANDLE;
 	if (f->kind != OF_PROC) {
@@ -2249,8 +2405,10 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE h, BOOLEAN alertable, LARGE_INTEGER 
 	/* Only "wait forever" and "do not wait" are distinguished: a real
 	 * timeout would need a timed wait4, which Linux has no equivalent of.
 	 * src/process/wait.c uses exactly those two. */
-	if (proc_poll(f, timeout && *timeout == 0)) return STATUS_WAIT_0;
-	return STATUS_TIMEOUT;
+	r = proc_poll(f, timeout && *timeout == 0);
+	if (r > 0) return STATUS_WAIT_0;
+	if (r == 0) return STATUS_TIMEOUT;
+	return STATUS_INVALID_HANDLE;   /* not actually waitable from here; see proc_poll */
 }
 
 NTSTATUS NTAPI NtQueryInformationProcess(HANDLE h, PROCESSINFOCLASS cls, PVOID buf,
@@ -2302,10 +2460,117 @@ NTSTATUS NTAPI NtTerminateProcess(HANDLE h, NTSTATUS code)
 {
 	struct ofile *f = h && h != NtCurrentProcess() ? of_get(h) : 0;
 	if (f && f->kind == OF_PROC) {
+		/* Record the code *this process* asked to end f->pid with before
+		 * actually killing it: proc_poll()'s reaper wants the real code
+		 * (e.g. kill()'s __NT_SIGNAL_EXIT(sig)), not just "SIGKILL",
+		 * which is the only signal a raw host kill can reliably promise
+		 * delivery of.  See xstatus_record()'s comment. */
+		xstatus_record(f->pid, (int)code);
 		if (syscall(SYS_kill, (long)f->pid, 9 /*SIGKILL*/) < 0) return STATUS_ACCESS_DENIED;
 		return STATUS_SUCCESS;
 	}
+	xstatus_record((int)syscall(SYS_getpid), (int)code);
 	syscall(SYS_exit_group, (long)(int)code);
+	return STATUS_SUCCESS;
+}
+
+/*
+ * RtlCloneUserProcess -- src/process/fork.c's one real dependency, and so
+ * fork()'s.
+ *
+ * Unlike RtlCreateUserProcess above, there is no second image to start:
+ * the whole point of a clone is that the child resumes *this* call, with
+ * a copy of this process's own address space.  A host fork(2) is exactly
+ * that primitive, so it is used directly rather than reconstructed from
+ * pieces the way RtlCreateUserProcess reconstructs "start a new image"
+ * from fork+execve.  Every simulated NT object this file keeps -- vroot,
+ * vcwd, vpipes, vhandles, the ofile structs themselves -- is ordinary
+ * process memory, so the host's fork() carries all of it into the child
+ * automatically, the same "it's just memory" property fork.c's own
+ * header comment claims for __fds and the ntlibc heap.
+ *
+ * What real NT's INHERIT_HANDLES flag would selectively copy, plain
+ * fork() copies unconditionally -- there is no per-handle OBJ_INHERIT
+ * bookkeeping in this file's object table for it to consult even if it
+ * wanted to be selective (NtDuplicateObject's attrs argument is already
+ * ignored, above). That is not a gap that matters here: it makes every
+ * handle "inherit", which is a superset of real NT's behaviour, and the
+ * one place a test distinguishes the two -- a process handle for a
+ * *third* process that predates the fork, reaching the clone only as a
+ * plain-memory table entry (test/fork-handles-win.c, test/process-win.c's
+ * test_prefork_handle) -- still gets a real, principled failure: the
+ * clone is the host's *sibling* of that third process, not its parent,
+ * so proc_poll's wait4() on it fails on its own, honestly, without any
+ * handle-table trickery needed to produce that outcome.
+ *
+ * RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED asks for the new thread to
+ * start suspended, to be released by a later NtResumeThread.  A host
+ * fork() child starts running immediately, at the same point in this
+ * very function -- but that is fine: nothing between here and fork.c's
+ * NtResumeThread(info.Thread, 0) call runs in the child at all (the
+ * child returns STATUS_PROCESS_CLONED right below and takes the
+ * `if (st == STATUS_PROCESS_CLONED)` branch, which never touches the
+ * thread handle), and NtResumeThread on this file's OF_PROC objects is
+ * already a documented no-op for the same reason RtlCreateUserProcess's
+ * fork+execve needs it to be one.
+ */
+NTSTATUS NTAPI RtlCloneUserProcess(ULONG flags, PVOID psd, PVOID tsd, HANDLE debug,
+                                   RTL_USER_PROCESS_INFORMATION *info)
+{
+	struct ofile *f;
+	NTSTATUS st;
+	long pid;
+	(void)flags; (void)psd; (void)tsd; (void)debug;
+
+	if (!info) return STATUS_INVALID_PARAMETER;
+	memset(info, 0, sizeof *info);
+
+	pid = syscall(SYS_fork);
+	if (pid < 0) return STATUS_INSUFFICIENT_RESOURCES;
+	if (pid == 0) {
+		/* The child: this call is returning for the second time, in a
+		 * process that is a copy of the caller's.  info is never filled
+		 * in on this path on real NT either -- the child tells itself
+		 * apart from the parent by this return value alone.
+		 *
+		 * On real NT the kernel gives the clone a genuinely new PID/TID
+		 * and the TEB the child wakes up in already reflects that --
+		 * nothing in fork() itself has to ask for it.  A host fork(2)
+		 * child instead wakes up inside a byte-for-byte copy of the
+		 * parent's address space, __ntshim_init()'s shim_teb included,
+		 * so getpid()/gettid() (which just read TEB.ClientId, same as
+		 * the real ones) would otherwise keep reporting the *parent's*
+		 * ids forever.  __ntshim_init() itself cannot fix this: it is a
+		 * constructor, and constructors do not run again across a raw
+		 * fork(2).  So this is done here instead, in the one place a
+		 * clone's identity actually changes. */
+		{
+			PTEB tb = (PTEB)shim_teb;
+			long me = syscall(SYS_getpid);
+			tb->ClientId.UniqueProcess = (HANDLE)me;
+			tb->ClientId.UniqueThread = (HANDLE)me;
+		}
+		return STATUS_PROCESS_CLONED;
+	}
+
+	/* The parent: track the new process exactly like a spawned one, so
+	 * waitpid() on it goes through the same NtWaitForSingleObject /
+	 * NtQueryInformationProcess path as every other child. */
+	f = vmalloc(sizeof *f);
+	if (!f) return STATUS_NO_MEMORY;
+	memset(f, 0, sizeof *f);
+	f->kind = OF_PROC;
+	f->exitcode = STATUS_PENDING;
+	f->pid = (int)pid;
+
+	st = of_install(f, &info->Process);
+	if (!NT_SUCCESS(st)) { vfree(f); return st; }
+	/* One thread, and it is the process; a second reference to the same
+	 * object, same as RtlCreateUserProcess above. */
+	st = of_install(f, &info->Thread);
+	if (!NT_SUCCESS(st)) { NtClose(info->Process); return st; }
+	info->ClientId.UniqueProcess = (HANDLE)(LONG_PTR)pid;
+	info->ClientId.UniqueThread = (HANDLE)(LONG_PTR)pid;
 	return STATUS_SUCCESS;
 }
 
@@ -2491,8 +2756,6 @@ NOTIMPL(NtOpenSymbolicLinkObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES 
 NOTIMPL(NtQuerySymbolicLinkObject, (HANDLE a, PUNICODE_STRING b, PULONG c))
 NOTIMPL(NtQuerySystemInformation, (SYSTEM_INFORMATION_CLASS a, PVOID b, ULONG c, PULONG d))
 NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
-NOTIMPL(RtlCloneUserProcess, (ULONG a, PVOID b, PVOID c, HANDLE d,
-                              RTL_USER_PROCESS_INFORMATION *e))
 
 PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HANDLER h)
 {

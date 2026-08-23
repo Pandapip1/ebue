@@ -226,26 +226,22 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 # ---- 2. run the tests that a native build can say anything about -----------
 #
 # A test is run unless it is on this list, and each entry says why it is
-# not.  Three kinds: those that need NT services fuzz/ntstubs.c does not
-# provide (process cloning, a file system that survives execve); those
-# that assert the target ABI, which a native compiler does not have; and
-# those whose subject is an error path, which the native build cannot
-# reach at all while NTSTATUS is a 64-bit long (see the head of
-# fuzz/ntstubs.c).  Nothing else is excused -- in particular a genuine
-# ASan or UBSan finding in ntlibc must fail here.
+# not.  Two kinds left: those that assert the target ABI, which a native
+# compiler does not have (math's 80- vs 64-bit long double; strto used
+# to be here too, see test/strto.c, now fixed instead of skipped); and
+# posix-misc, blocked on an actual architecture mismatch, not a build-
+# system one (see its entry below).  Process cloning (fork()) is not on
+# this list any more: fuzz/ntstubs.c's RtlCloneUserProcess is a real host
+# fork(2), not a stub.  Neither is the wait-status pair (waitpid-overflow,
+# posix-signal): fuzz/ntstubs.c now carries a dying process's full exit
+# code to its reaper out of band, alongside the host's own 8-bit one (see
+# xstatus_record()/xstatus_init() there).  Nothing else is excused -- in
+# particular a genuine ASan or UBSan finding in ntlibc must fail here.
 not_native()
 {
 	case $1 in
-	waitpid-overflow|posix-signal)
-		echo "a host wait status carries 8 bits of exit code, too few for the 0xE0DE00xx a signal death uses" ;;
-	fork-win|fork-handles-win|process-win)
-		echo "needs NT process cloning: RtlCloneUserProcess is a stub" ;;
 	posix-misc)
-		echo "uses sigsetjmp, which lives in src/setjmp/*/setjmp.S; this build compiles only src/*.c" ;;
-	math)
-		echo "long double is 64-bit on the NT target and 80-bit here" ;;
-	strto)
-		echo "asserts sizeof(long)==4 (LLP64); a native long is 8" ;;
+		echo "uses sigsetjmp, whose src/setjmp/x86_64/setjmp.S is genuinely Win64-ABI machine code (first arg in %rcx, xmm6-15 treated as callee-saved) -- not merely unbuilt, but wrong if assembled for a SysV caller: %rcx is not this ABI's first-argument register and its xmm6-15 are caller-saved scratch, so jmp_buf would be silently corrupted rather than just fail to link" ;;
 	*)  echo "" ;;
 	esac
 }
