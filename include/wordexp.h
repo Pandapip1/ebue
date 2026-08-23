@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <wordexp.h>: shell word expansion, minus the parts that genuinely
- * need a POSIX shell interpreter this platform does not have.  See
+ * <wordexp.h>: shell word expansion, minus the one part that genuinely
+ * needs a POSIX shell interpreter this platform does not have.  See
  * src/wordexp/wordexp.c for the parser/expander and its own extensive
  * header comment; the short version, repeated here because it is the
  * one thing this file's design hinges on:
@@ -12,10 +12,16 @@
  * Shell Command Language.  This platform has no such shell (see
  * src/stdio/misc.c's popen(), which hands shell work to cmd.exe /c
  * specifically because there is no /bin/sh, and cmd.exe cannot parse
- * $(...) or $((...)) at all -- a different, incompatible grammar).
- * Command substitution ($(cmd)/`cmd`) and arithmetic expansion
- * ($((expr))) both require running an embedded, arbitrarily complex
- * *command list*, which is genuinely out of a libc function's reach.
+ * $(...) at all -- a different, incompatible grammar).  Command
+ * substitution ($(cmd)/`cmd`) requires running an embedded, arbitrarily
+ * complex *command list*, which is genuinely out of a libc function's
+ * reach.  Arithmetic expansion ($((expr))), despite the superficially
+ * similar "$((" spelling, is NOT the same kind of gap: XBD 2.6.4
+ * defines it as evaluating a self-contained, C-like expression already
+ * reduced to text -- no command execution anywhere in it -- so
+ * src/wordexp/arith.c implements it natively; see that file's header
+ * for the operator set and how "shell variable" maps onto this
+ * implementation's only such notion (getenv()/setenv()).
  *
  * WHAT WORDEXP() RETURNS FOR A CONSTRUCT IT CANNOT PERFORM: the spec
  * defines WRDE_CMDSUB for exactly one case -- "command substitution
@@ -29,23 +35,30 @@
  * fabricating output, both of which are wrong answers dressed up as
  * success. WRDE_CMDSUB is the closest honest fit ("a command
  * substitution was requested and refused"), so this implementation
- * returns WRDE_CMDSUB for *any* unquoted $(...), `...`, or $((...))
- * it encounters, unconditionally -- not only when WRDE_NOCMD is set.
- * WRDE_NOCMD therefore has no observable effect here beyond what
- * happens anyway; it is accepted so callers that pass it (the common,
- * safety-conscious case) are not rejected outright.
+ * returns WRDE_CMDSUB for *any* unquoted $(...) or `...` it
+ * encounters (once ruled out as the start of a $((...)) arithmetic
+ * expansion instead -- XBD 2.6.4 itself documents that "$((" is
+ * ambiguous between the two and resolves it exactly this way:
+ * "arithmetic expansion has precedence"), unconditionally -- not only
+ * when WRDE_NOCMD is set. WRDE_NOCMD therefore has no observable
+ * effect here beyond what happens anyway; it is accepted so callers
+ * that pass it (the common, safety-conscious case) are not rejected
+ * outright, and it never affects arithmetic expansion, which is not
+ * command substitution and which XBD 2.6.4 does not gate behind it.
  *
  * Genuine gaps implemented: tilde expansion (~ and ~user, via
  * getenv("HOME") and include/pwd.h's getpwnam()), parameter expansion
- * of bare $VAR and ${VAR} against environ, pathname expansion
- * (delegates to <glob.h>), quote removal, and the WRDE_DOOFFS/
- * WRDE_APPEND/WRDE_REUSE bookkeeping flags -- including the field
- * splitting that bookkeeping needs (splitting literal, already-in-
- * memory text on unquoted IFS whitespace is the "trivial by itself"
- * half of XBD 2.6.5 this file's own commentary calls out; it is only
- * the *general* case -- tracking split boundaries through a dynamic,
- * command-substitution-produced result -- that is N/A here, and that
- * case cannot arise because command substitution always fails first).
+ * of bare $VAR and ${VAR} against environ, arithmetic expansion
+ * ($((expr)), src/wordexp/arith.c), pathname expansion (delegates to
+ * <glob.h>), quote removal, and the WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE
+ * bookkeeping flags -- including the field splitting that bookkeeping
+ * needs (splitting literal, already-in-memory text -- which is exactly
+ * what an arithmetic expansion's decimal result is too -- on unquoted
+ * IFS whitespace is the "trivial by itself" half of XBD 2.6.5 this
+ * file's own commentary calls out; it is only the *general* case --
+ * tracking split boundaries through a dynamic, command-substitution-
+ * produced result -- that is N/A here, and that case cannot arise
+ * because command substitution always fails first).
  *
  * wordexp_t layout and the WRDE_* flags plus WRDE_BADCHAR through
  * WRDE_SYNTAX values are fixed at test/posix-glob.c's choices (that file predates this

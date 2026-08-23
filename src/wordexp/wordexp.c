@@ -4,8 +4,12 @@
  * wordexp(): the genuine, shell-free subset of XCU Word Expansions --
  * see include/wordexp.h's header comment for which pieces those are
  * and, in particular, the reasoning for what this returns when it
- * meets a construct (command substitution / arithmetic expansion)
- * that genuinely needs a POSIX shell this platform does not have.
+ * meets command substitution, the one construct that genuinely needs
+ * a POSIX shell this platform does not have. Arithmetic expansion
+ * ($((expr))) is NOT one of those constructs -- it needs no shell at
+ * all, so it is implemented for real (src/wordexp/arith.c, called from
+ * expand_arith() below); see that file's header for the evaluator
+ * itself.
  *
  * One left-to-right scan of `words` does almost everything at once,
  * because the pieces are not actually separable: whether a character
@@ -35,6 +39,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include "internal.h"
 #include "libc.h"
 
 /* ---- growable byte buffer: the field being built, plus a parallel
@@ -223,6 +228,79 @@ static int expand_tilde(const char **pp, struct fbuf *b)
 	return fbuf_push_str(b, home, 1) ? WRDE_NOSPACE : 0;
 }
 
+/* Pushes v's decimal representation onto b as live bytes (unquoted,
+ * matching expand_param()'s treatment of a substituted $VAR value --
+ * see this file's own header comment on why live vs. quoted never
+ * actually matters here: a decimal integer never contains a glob
+ * metacharacter or IFS whitespace). */
+static int fbuf_push_long(struct fbuf *b, long v)
+{
+	char buf[32];	/* sign + up to 20 digits (64-bit LONG_MIN) + NUL */
+	int n = 0, i, j;
+	unsigned long u = v < 0 ? (unsigned long)(-(v + 1)) + 1UL : (unsigned long)v;
+
+	if (u == 0) buf[n++] = '0';
+	while (u) { buf[n++] = (char)('0' + (u % 10)); u /= 10; }
+	if (v < 0) buf[n++] = '-';
+	for (i = 0, j = n - 1; i < j; i++, j--) { char t = buf[i]; buf[i] = buf[j]; buf[j] = t; }
+	buf[n] = 0;
+	return fbuf_push_str(b, buf, 0);
+}
+
+/* Reads $((expr)) starting at *pp (pointing at the '$'; callers have
+ * already confirmed p[1]=='(' && p[2]=='('). Advances *pp past the
+ * matching "))". Appends the decimal result to b. Returns 0, or a
+ * WRDE_* error code.
+ *
+ * Finding the matching "))": the expression's own parentheses (from
+ * grouping, e.g. "$((1+(2*3)))") must balance out to net zero before
+ * the terminating "))" is recognized -- tracked here with a simple
+ * depth counter over '('/')' bytes, not quote-aware (arithmetic
+ * expressions have no quoting construct of their own; see
+ * src/wordexp/arith.c's header for what this grammar does and does
+ * not include). This is XBD 2.6.4's own documented ambiguity ("$((" is
+ * also a valid start of a command substitution beginning with a
+ * subshell) resolved the way 2.6.4 says every conforming shell must:
+ * "the shell shall first determine whether it can parse the expansion
+ * as an arithmetic expansion" -- arithmetic wins whenever the text
+ * parses as one, which is exactly what wordexp.c's caller already
+ * guarantees by only reaching here when p[1]/p[2] are both '('. */
+static int expand_arith(const char **pp, struct fbuf *b, int flags)
+{
+	const char *p = *pp + 3;
+	const char *start = p;
+	const char *end;
+	int depth = 0;
+	char *expr;
+	size_t len;
+	long result;
+	int rc;
+
+	for (;;) {
+		if (!*p) return WRDE_SYNTAX;	/* unterminated $(( */
+		if (*p == '(') { depth++; p++; continue; }
+		if (*p == ')') {
+			if (depth > 0) { depth--; p++; continue; }
+			if (p[1] == ')') { end = p; p += 2; break; }
+			return WRDE_SYNTAX;	/* a single ')' where "))" was expected */
+		}
+		p++;
+	}
+
+	len = (size_t)(end - start);
+	expr = __malloc(len + 1);
+	if (!expr) return WRDE_NOSPACE;
+	memcpy(expr, start, len);
+	expr[len] = 0;
+
+	rc = __wordexp_arith(expr, &result, flags);
+	__free(expr);
+	if (rc) return rc;
+
+	*pp = p;
+	return fbuf_push_long(b, result) ? WRDE_NOSPACE : 0;
+}
+
 /* Turns one already-expanded field (b->data[0..n), with b->lit[i] true
  * for bytes that must stay literal) into one or more output words,
  * pushing them onto out. Live '*'/'?'/'[' bytes trigger glob(); no live
@@ -334,6 +412,12 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 				p += 2;
 				continue;
 			}
+			if (c == '$' && p[1] == '(' && p[2] == '(') {
+				active = 1;
+				rc = expand_arith(&p, &field, flags);
+				if (rc) goto fail;
+				continue;
+			}
 			if (c == '$' && p[1] == '(') { rc = WRDE_CMDSUB; goto fail; }
 			if (c == '`') { rc = WRDE_CMDSUB; goto fail; }
 			if (c == '$') {
@@ -365,6 +449,11 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 			if (c == '\\' && p[1] && strchr("\"\\$`\n", p[1])) {
 				if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; }
 				p += 2;
+				continue;
+			}
+			if (c == '$' && p[1] == '(' && p[2] == '(') {
+				rc = expand_arith(&p, &field, flags);
+				if (rc) goto fail;
 				continue;
 			}
 			if (c == '$' && p[1] == '(') { rc = WRDE_CMDSUB; goto fail; }

@@ -69,28 +69,37 @@
  * below at GLOB_TILDE rather than assumed either way, since GLOB_TILDE
  * is not itself a POSIX.1-2017 base requirement.
  *
- * wordexp.h -- split.  wordexp() is defined as performing shell word
- * expansion "as described in XCU Word Expansions" (wordexp.html
- * DESCRIPTION), i.e. as if by the shell described in XBD Shell Command
- * Language.  This platform has no such shell: src/stdio/misc.c's
- * popen() already documents that ntlibc hands shell work to cmd.exe
- * /c, an entirely different, non-POSIX grammar, precisely *because*
- * there is no /bin/sh to hand it to.  Command substitution ($(...) or
- * `...`) and arithmetic expansion ($((...))) require executing an
+ * wordexp.h -- split, and less split than it used to be.  wordexp() is
+ * defined as performing shell word expansion "as described in XCU Word
+ * Expansions" (wordexp.html DESCRIPTION), i.e. as if by the shell
+ * described in XBD Shell Command Language.  This platform has no such
+ * shell: src/stdio/misc.c's popen() already documents that ntlibc
+ * hands shell work to cmd.exe /c, an entirely different, non-POSIX
+ * grammar, precisely *because* there is no /bin/sh to hand it to.
+ * Command substitution ($(...) or `...`) requires executing an
  * embedded, arbitrarily complex command *list* per that grammar --
  * genuinely N/A short of porting a real POSIX shell binary, which is
- * out of a libc's scope.  Field splitting is N/A too, but for a subtler
- * reason: POSIX defines it (XBD 2.6.5) as operating on the *results* of
- * the other expansions with quote-context carried through them, so a
- * correct splitter cannot be cut loose from the command/arithmetic
- * substitution it must track the boundaries of, even though splitting
- * a literal string on IFS bytes is trivial by itself.  WRDE_BADCHAR's
- * "unquoted ... inappropriate context" check and WRDE_CMDSUB are the
- * same dependency by construction. Genuine gaps, independent of a
- * shell: tilde expansion (~ and ~user -- same HOME/getpwnam mechanism
- * as GLOB_TILDE above), parameter expansion of bare $VAR/${VAR} against
- * environ, pathname expansion (delegates straight to glob(), itself a
- * gap above), quote removal, and the WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE
+ * out of a libc's scope.  Arithmetic expansion ($((...))), despite
+ * looking like the same kind of gap, is not: XBD 2.6.4 defines it as
+ * evaluating a self-contained C-like expression already reduced to
+ * text (no command execution involved at all -- see src/wordexp/
+ * arith.c's own header), so a follow-up agent implemented it directly;
+ * every assertion below that exercises it is live. Field splitting of
+ * a command substitution's *result* remains N/A, for a subtler reason:
+ * POSIX defines it (XBD 2.6.5) as operating on the *results* of the
+ * other expansions with quote-context carried through them, so a
+ * correct splitter cannot be cut loose from the command substitution
+ * it must track the boundaries of, even though splitting a literal
+ * string (or an arithmetic expansion's decimal result, which is
+ * exactly that) on IFS bytes is trivial by itself and already covered
+ * by test_wordexp_bookkeeping_flags().  WRDE_BADCHAR's "unquoted ...
+ * inappropriate context" check and WRDE_CMDSUB remain tied to the
+ * still-fenced command-substitution test below. Genuine gaps,
+ * independent of a shell: tilde expansion (~ and ~user -- same HOME/
+ * getpwnam mechanism as GLOB_TILDE above), parameter expansion of bare
+ * $VAR/${VAR} against environ, pathname expansion (delegates straight
+ * to glob(), itself a gap above), quote removal, arithmetic expansion
+ * (as of this update), and the WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE
  * bookkeeping flags, none of which need a command interpreter.
  *
  * regex.h -- genuine gap.  A BRE/ERE compiler and matcher is pure
@@ -630,33 +639,178 @@ static void test_wordexp_bookkeeping_flags(void)
 	wordfree(&we);
 }
 
+/* UNIMPL: wordexp.html DESCRIPTION -- arithmetic expansion ($((expr))),
+ * unlike command substitution below, is not actually a shell feature
+ * this platform lacks. XBD 2.6.4 Arithmetic Expansion says the
+ * expression (after parameter expansion of its tokens) "shall be
+ * processed according to the rules given in [XBD 1.1.2] Arithmetic
+ * Precision and Operations": signed long arithmetic, ISO C's
+ * expression grammar/operators (1.1.2: "The evaluation of arithmetic
+ * expressions shall be equivalent to that described in Section 6.5,
+ * Expressions, of the ISO C standard"), minus sizeof()/++/--/control-
+ * flow, which 2.6.4 explicitly drops. None of that needs a command
+ * interpreter -- it is a self-contained expression evaluator over text
+ * already in memory, so src/wordexp/arith.c implements it directly;
+ * see that file's own header for the full operator set, the "shell
+ * variable" == getenv()/setenv() mapping, and exactly which WRDE_*
+ * code each failure mode reports (there is no dedicated one, so
+ * WRDE_SYNTAX/WRDE_BADVAL do double duty -- also explained there). */
+static void test_wordexp_arith(void)
+{
+	wordexp_t we;
+
+	/* precedence, parentheses, division/modulus (ISO C 6.5, via 1.1.2) */
+	CHECK(wordexp("$((1+2))", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "3") == 0);
+	wordfree(&we);
+
+	CHECK(wordexp("$((2+3*4))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "14") == 0);
+	wordfree(&we);
+
+	CHECK(wordexp("$(( (2+3)*4 ))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "20") == 0);
+	wordfree(&we);
+
+	CHECK(wordexp("$((7/2)) $((7%2))", &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	CHECK(strcmp(we.we_wordv[0], "3") == 0 && strcmp(we.we_wordv[1], "1") == 0);
+	wordfree(&we);
+
+	/* unary +/-/~/! */
+	CHECK(wordexp("$((-5+3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "-2") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((~0)) $((!0)) $((!5))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "-1") == 0);
+	CHECK(strcmp(we.we_wordv[1], "1") == 0);
+	CHECK(strcmp(we.we_wordv[2], "0") == 0);
+	wordfree(&we);
+
+	/* bitwise and shift */
+	CHECK(wordexp("$((6&3)) $((6|1)) $((6^3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "2") == 0);
+	CHECK(strcmp(we.we_wordv[1], "7") == 0);
+	CHECK(strcmp(we.we_wordv[2], "5") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((1<<4)) $((256>>4))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "16") == 0 && strcmp(we.we_wordv[1], "16") == 0);
+	wordfree(&we);
+
+	/* relational, equality, logical, ternary */
+	CHECK(wordexp("$((3<5)) $((3>5)) $((3==3)) $((3!=3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "1") == 0);
+	CHECK(strcmp(we.we_wordv[1], "0") == 0);
+	CHECK(strcmp(we.we_wordv[2], "1") == 0);
+	CHECK(strcmp(we.we_wordv[3], "0") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((1&&0)) $((0||1))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "0") == 0 && strcmp(we.we_wordv[1], "1") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((1?2:3)) $((0?2:3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "2") == 0 && strcmp(we.we_wordv[1], "3") == 0);
+	wordfree(&we);
+
+	/* short-circuiting: the untaken side's division-by-zero/assignment
+	 * must not fire -- see arith.c's header on `live` */
+	unsetenv("WORDEXP_ARITH_SC");
+	CHECK(wordexp("$((0 && (1/0))) $((1 || (1/0)))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "0") == 0 && strcmp(we.we_wordv[1], "1") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((0 && (WORDEXP_ARITH_SC=99)))", &we, 0) == 0);
+	CHECK(getenv("WORDEXP_ARITH_SC") == 0);
+	wordfree(&we);
+
+	/* "shell variable": 2.6.4 -- "if the shell variable x contains a
+	 * value that forms a valid integer constant ... $((x)) and
+	 * $(($x)) shall return the same value" */
+	setenv("WORDEXP_ARITH_N", "5", 1);
+	CHECK(wordexp("$((WORDEXP_ARITH_N+1)) $(($WORDEXP_ARITH_N+1))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "6") == 0 && strcmp(we.we_wordv[1], "6") == 0);
+	wordfree(&we);
+
+	/* "All changes to variables in an arithmetic expression shall be
+	 * in effect after the arithmetic expansion" -- plain and compound
+	 * assignment both persist past the wordexp() call */
+	unsetenv("WORDEXP_ARITH_X");
+	CHECK(wordexp("$((WORDEXP_ARITH_X=5))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "5") == 0);
+	CHECK(getenv("WORDEXP_ARITH_X") != 0 && strcmp(getenv("WORDEXP_ARITH_X"), "5") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((WORDEXP_ARITH_X+=3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "8") == 0);
+	CHECK(strcmp(getenv("WORDEXP_ARITH_X"), "8") == 0);
+	wordfree(&we);
+
+	/* an undefined variable is 0 unless WRDE_UNDEF is set, in which
+	 * case it is WRDE_BADVAL ("[r]eference to undefined shell variable
+	 * when WRDE_UNDEF is set in flags"), same as plain $VAR elsewhere
+	 * in this module */
+	unsetenv("WORDEXP_ARITH_UNSET");
+	CHECK(wordexp("$((WORDEXP_ARITH_UNSET+1))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "1") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((WORDEXP_ARITH_UNSET+1))", &we, WRDE_UNDEF) == WRDE_BADVAL);
+
+	/* malformed expression, trailing garbage, and division/modulus by
+	 * zero are all reported WRDE_SYNTAX -- arith.c's header explains
+	 * why no more specific WRDE_* code exists for any of these */
+	CHECK(wordexp("$((1+))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((1 2))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((1/0))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((1%0))", &we, 0) == WRDE_SYNTAX);
+
+	/* WRDE_NOCMD ("[f]ail if command substitution ... is requested")
+	 * names command substitution specifically; arithmetic expansion is
+	 * a different construct entirely and is unaffected by it */
+	CHECK(wordexp("$((1+2))", &we, WRDE_NOCMD) == 0);
+	CHECK(strcmp(we.we_wordv[0], "3") == 0);
+	wordfree(&we);
+
+	/* quoted: the result is still substituted, just not re-glob-scanned
+	 * (moot for a decimal integer, but the field itself still comes
+	 * through as one quoted word) */
+	CHECK(wordexp("\"$((1+2))\"", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "3") == 0);
+	wordfree(&we);
+
+	/* 2.6.4's own documented ambiguity ("$((" can start either an
+	 * arithmetic expansion or a command substitution beginning with a
+	 * subshell) is resolved the way 2.6.4 requires: "the shell shall
+	 * first determine whether it can parse the expansion as an
+	 * arithmetic expansion" -- so a balanced, valid arithmetic
+	 * expression inside is always read as one, even though "((" also
+	 * reads as two nested subshell parens in the command-substitution
+	 * grammar. */
+	CHECK(wordexp("$(( (1) ))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "1") == 0);
+	wordfree(&we);
+}
+
 /* N/A: wordexp.html DESCRIPTION says wordexp() performs expansion "as
  * described in XCU Word Expansions", i.e. as if by the POSIX shell
  * described in XBD Shell Command Language. Command substitution
- * ($(cmd) / `cmd`) and arithmetic expansion ($((expr))) both require
- * running an embedded, arbitrarily complex *command list* through that
- * grammar -- loops, conditionals, further substitutions -- which is
- * asking for a real shell interpreter, not a libc function. This
- * platform has none: src/stdio/misc.c's popen() documents that ntlibc
- * hands shell work to cmd.exe /c specifically *because* there is no
- * /bin/sh, and cmd.exe's batch grammar cannot parse $(...) or
- * arithmetic expansion syntax at all -- it is a different, incompatible
- * language, not a drop-in substitute. Field splitting is N/A for the
- * reason the file header gives (it must track quote/substitution
- * boundaries it cannot be separated from); WRDE_BADCHAR's "unquoted
- * ... inappropriate context" check and WRDE_CMDSUB are the same
- * dependency by construction. */
-#if 0 /* N/A: wordexp.html command/arithmetic substitution + field splitting, see file header */
-static void test_wordexp_needs_a_shell(void)
+ * ($(cmd) / `cmd`) requires running an embedded, arbitrarily complex
+ * *command list* through that grammar -- loops, conditionals, further
+ * substitutions -- which is asking for a real shell interpreter, not a
+ * libc function. This platform has none: src/stdio/misc.c's popen()
+ * documents that ntlibc hands shell work to cmd.exe /c specifically
+ * *because* there is no /bin/sh, and cmd.exe's batch grammar cannot
+ * parse $(...) at all -- it is a different, incompatible language, not
+ * a drop-in substitute. Field splitting of a command substitution's
+ * *result* is N/A for the same reason the file header gives (it must
+ * track quote/substitution boundaries it cannot be separated from --
+ * field splitting of already-in-memory literal text, unlike this, is
+ * genuinely implemented and covered by test_wordexp_bookkeeping_flags()
+ * above); WRDE_BADCHAR's "unquoted ... inappropriate context" check and
+ * WRDE_CMDSUB are the same dependency by construction. */
+#if 0 /* N/A: wordexp.html command substitution + field splitting, see file header */
+static void test_wordexp_cmdsub_needs_a_shell(void)
 {
 	wordexp_t we;
 
 	CHECK(wordexp("$(echo hi)", &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "hi") == 0);
-	wordfree(&we);
-
-	CHECK(wordexp("$((1+2))", &we, 0) == 0);
-	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "3") == 0);
 	wordfree(&we);
 
 	/* field splitting: one word containing spaces becomes two words */
@@ -1256,6 +1410,7 @@ int main(void)
 	test_wordexp_tilde_and_param();
 	test_wordexp_glob_and_quotes();
 	test_wordexp_bookkeeping_flags();
+	test_wordexp_arith();
 
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
 	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h implemented, unfenced above; regex.h/search.h/ftw.h still absent, every clause fenced -- see file header)\n");
