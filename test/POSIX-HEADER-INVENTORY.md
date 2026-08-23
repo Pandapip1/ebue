@@ -25,7 +25,7 @@ The `pwd.h` bug that motivated this audit was exactly the second kind:
 implementable, just absent, and nothing in-tree noticed because nothing
 in-tree includes a header ntlibc does not have.
 
-## Present (43)
+## Present (44)
 
 `assert.h`, `ctype.h`, `dirent.h`, `errno.h`, `fcntl.h`, `fenv.h`,
 `float.h`, `fnmatch.h`, `glob.h`, `inttypes.h`, `iso646.h`, `libgen.h`,
@@ -33,9 +33,9 @@ in-tree includes a header ntlibc does not have.
 `stdbool.h`, `stddef.h`, `stdint.h`, `stdio.h`, `stdlib.h`, `string.h`,
 `strings.h`, `sys/resource.h`, `sys/select.h`, `sys/stat.h`,
 `sys/time.h`, `sys/types.h`, `sys/wait.h`, `time.h`, `unistd.h`,
-`utime.h`, `wchar.h`.
+`utime.h`, `wchar.h`, `wordexp.h`.
 
-`fnmatch.h`/`glob.h` were added after this audit (see
+`fnmatch.h`/`glob.h`/`wordexp.h` were added after this audit (see
 `test/posix-glob.c`'s file header for the clause-by-clause spec work);
 moved up from the gap table below rather than rewriting this file's
 narrative around them.
@@ -84,7 +84,6 @@ Ordered roughly by how directly the existing NTDLL-only machinery in
 | `sched.h` | `NtSetInformationThread`/`NtQueryInformationThread` give priority get/set directly; the `sched_setscheduler`-style policy calls have no real NT equivalent and would need to be stubbed, same as several `pthread.h` calls below. |
 | `sys/uio.h` | No true NT scatter/gather for arbitrary regular-file I/O without page alignment constraints (`NtReadFileScatter`/`NtWriteFileGather` are page-granular); `readv`/`writev` are still implementable as a loop over `NtReadFile`/`NtWriteFile`, just not natively vectored. |
 | `termios.h` | NT's console model (classic console API, or the newer ConDrv/pseudoconsole device) does not map onto termios line-discipline settings the way a Unix tty driver does; `unistd/isatty.c` already establishes some console awareness, so this is bounded, real work (translating raw/cooked mode, echo, and the `c_cc[]` special characters onto console mode flags) rather than a blocked concept -- unlike `sys/socket.h` below, nothing here requires a non-NTDLL DLL. |
-| `wordexp.h` | Needs a shell to do the expansion; `src/process/exec.c`'s existing spawn/exec machinery could shell out to `cmd.exe` (or a bundled `sh`), but the semantics (`$IFS`-free tokenizing per POSIX) are real work layered on top. |
 | `ulimit.h` | Formally obsolescent in POSIX (superseded by `getrlimit`/`setrlimit`, both already present via `sys/resource.h`); implementable as a one-line wrapper if source compatibility with old code is ever needed, but not a priority. |
 | `syslog.h` | No NTDLL-only equivalent (Event Log is a `kernel32`/`advapi32` API, `ReportEventW`); could stub to writing formatted lines to `stderr` under `--enable-kernel32`-style opt-in, or unconditionally as a degraded local-only implementation. |
 | `pthread.h` | NT threads are pure-NTDLL (`NtCreateThreadEx` even undocumented aside, `RtlCreateUserThread` is the documented one) and `libpthread.a` already exists as an intentionally *empty* stub archive (`Makefile`'s `EMPTY_LIB_NAMES`), i.e. the project has reserved the slot but not built it. Real, substantial gap, not a design N/A. |

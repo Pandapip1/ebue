@@ -121,6 +121,20 @@
  * CHDIR needs chdir(), already implemented (include/unistd.h). No piece
  * of this header hits an NT wall the way, say, RLIMIT_NOFILE does in
  * test/posix-sysmisc.c -- it is unimplemented, not unimplementable.
+ *
+ * ==================== Update: fnmatch.h/glob.h/wordexp.h closed =========
+ *
+ * A follow-up agent implemented all three (include/fnmatch.h,
+ * include/glob.h, include/wordexp.h + src/fnmatch/, src/glob/,
+ * src/wordexp/) and unfenced every UNIMPL clause below that its
+ * implementation satisfies unmodified -- see each clause's own comment
+ * for which stayed fenced and why (a couple turned out to need a
+ * fixture this platform's filesystem/permission model cannot build,
+ * not a further implementation gap). The two paragraphs above and the
+ * "since none of these six headers exist" claim below are
+ * intentionally left as written for regex.h/search.h/ftw.h, which are
+ * still absent; they are simply no longer true of the three that got
+ * closed.
  */
 #include <stdio.h>
 #include <string.h>
@@ -548,12 +562,13 @@ void wordfree(wordexp_t *pwordexp);
  * ($VAR / ${VAR} against environ) do not require executing a command
  * interpreter, just a lookup + a small parser -- see the file header
  * comment's genuine-gap-vs-N/A discussion. */
-#if 0 /* UNIMPL: wordexp.html tilde + parameter expansion, see file header */
 static void test_wordexp_tilde_and_param(void)
 {
 	wordexp_t we;
 
 	/* HOME=/home/x set by the test fixture beforehand */
+	setenv("HOME", "/home/x", 1);
+
 	CHECK(wordexp("~", &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "/home/x") == 0);
 	wordfree(&we);
@@ -564,19 +579,21 @@ static void test_wordexp_tilde_and_param(void)
 
 	/* WRDE_UNDEF: "Report error on an attempt to expand an undefined
 	 * shell variable" */
+	unsetenv("NO_SUCH_VAR_XYZ");
 	CHECK(wordexp("$NO_SUCH_VAR_XYZ", &we, WRDE_UNDEF) == WRDE_BADVAL);
 }
-#endif
 
 /* UNIMPL: wordexp.html DESCRIPTION -- pathname expansion delegates
  * directly to glob() (itself a gap above); quote removal is pure
  * string parsing of the already-expanded text. */
-#if 0 /* UNIMPL: wordexp.html pathname expansion + quote removal, see file header */
 static void test_wordexp_glob_and_quotes(void)
 {
 	wordexp_t we;
 
 	/* two files a.txt, b.txt exist */
+	close(creat("a.txt", 0644));
+	close(creat("b.txt", 0644));
+
 	CHECK(wordexp("*.txt", &we, 0) == 0);
 	CHECK(we.we_wordc == 2);
 	wordfree(&we);
@@ -585,13 +602,17 @@ static void test_wordexp_glob_and_quotes(void)
 	CHECK(wordexp("'*.txt'", &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "*.txt") == 0);
 	wordfree(&we);
+
+	unlink("a.txt");
+	unlink("b.txt");
 }
-#endif
 
 /* UNIMPL: wordexp.html WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE -- pure
  * memory bookkeeping around we_wordv, same contract as glob.h's
- * GLOB_DOOFFS/GLOB_APPEND above, no shell dependency. */
-#if 0 /* UNIMPL: wordexp.html WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE, see file header */
+ * GLOB_DOOFFS/GLOB_APPEND above, no shell dependency. This also relies
+ * on splitting "a b"/"c d" into separate words on unquoted whitespace,
+ * which -- unlike the general case -- needs no command-substitution
+ * result to track the boundaries of; see include/wordexp.h. */
 static void test_wordexp_bookkeeping_flags(void)
 {
 	wordexp_t we;
@@ -608,7 +629,6 @@ static void test_wordexp_bookkeeping_flags(void)
 	CHECK(we.we_wordc == 4);
 	wordfree(&we);
 }
-#endif
 
 /* N/A: wordexp.html DESCRIPTION says wordexp() performs expansion "as
  * described in XCU Word Expansions", i.e. as if by the POSIX shell
@@ -1233,7 +1253,11 @@ int main(void)
 	test_glob_mark();
 	test_glob_nospace_and_free();
 
-	if (fails) { printf("FAIL posix-glob: %d\n", fails); return 1; }
-	printf("posix-glob: all ok (fnmatch.h/glob.h implemented, unfenced above; wordexp.h/regex.h/search.h/ftw.h: 4 headers absent, every clause fenced -- see file header)\n");
+	test_wordexp_tilde_and_param();
+	test_wordexp_glob_and_quotes();
+	test_wordexp_bookkeeping_flags();
+
+	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
+	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h implemented, unfenced above; regex.h/search.h/ftw.h still absent, every clause fenced -- see file header)\n");
 	return 0;
 }
