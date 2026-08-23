@@ -156,7 +156,6 @@ int fnmatch(const char *pattern, const char *string, int flags);
  * NOT enclosed), including a '-'-separated range and a named character
  * class like [:alpha:]. RETURN VALUE: 0 if string matches, FNM_NOMATCH
  * if it does not. */
-#if 0 /* UNIMPL: see block comment above */
 static void test_fnmatch_basic_grammar(void)
 {
 	/* literal */
@@ -194,13 +193,11 @@ static void test_fnmatch_basic_grammar(void)
 	CHECK(fnmatch("[[:digit:]]", "x", 0) == FNM_NOMATCH);
 	CHECK(fnmatch("[[:alpha:]][[:digit:]]", "a1", 0) == 0);
 }
-#endif
 
 /* UNIMPL: fnmatch.html FNM_PATHNAME -- "'/' character in string shall
  * be explicitly matched by a '/' in pattern; it shall not be matched
  * by either the '*' or '?' special characters, nor by a bracket
  * expression." Without the flag, '/' is an ordinary character. */
-#if 0 /* UNIMPL: fnmatch.html FNM_PATHNAME, see block comment above */
 static void test_fnmatch_pathname_flag(void)
 {
 	/* without FNM_PATHNAME, '*' freely crosses '/' */
@@ -215,7 +212,6 @@ static void test_fnmatch_pathname_flag(void)
 	CHECK(fnmatch("a/b/c", "a/b/c", FNM_PATHNAME) == 0);
 	CHECK(fnmatch("a/*/c", "a/b/c", FNM_PATHNAME) == 0);
 }
-#endif
 
 /* UNIMPL: fnmatch.html FNM_NOESCAPE / default escaping -- "If this
  * flag [FNM_NOESCAPE] is not set, a <backslash> character in pattern
@@ -223,7 +219,6 @@ static void test_fnmatch_pathname_flag(void)
  * ... If a <backslash> is the last character in pattern, ... fnmatch()
  * shall return a non-zero value." With FNM_NOESCAPE, backslash is
  * ordinary. */
-#if 0 /* UNIMPL: fnmatch.html FNM_NOESCAPE, see block comment above */
 static void test_fnmatch_escape(void)
 {
 	/* default: backslash escapes the next char to a literal */
@@ -236,14 +231,12 @@ static void test_fnmatch_escape(void)
 	CHECK(fnmatch("a\\*c", "a\\*c", FNM_NOESCAPE) == 0);
 	CHECK(fnmatch("a\\*c", "a*c", FNM_NOESCAPE) == FNM_NOMATCH);
 }
-#endif
 
 /* UNIMPL: fnmatch.html FNM_PERIOD -- "A <period> ('.') ... is treated
  * specially if this flag is set. A <period> shall be matched only ...
  * if it is the first character of string, or ... immediately follows a
  * '/' [and FNM_PATHNAME is set]." Without the flag, no special
  * treatment. */
-#if 0 /* UNIMPL: fnmatch.html FNM_PERIOD, see block comment above */
 static void test_fnmatch_period(void)
 {
 	/* without FNM_PERIOD, '*' matches a leading '.' like anything else */
@@ -262,7 +255,6 @@ static void test_fnmatch_period(void)
 	CHECK(fnmatch("a/*", "a/.b", FNM_PATHNAME | FNM_PERIOD) == FNM_NOMATCH);
 	CHECK(fnmatch("a/.*", "a/.b", FNM_PATHNAME | FNM_PERIOD) == 0);
 }
-#endif
 
 /* ===================================================================
  * glob.h -- functions/glob.html, basedefs/glob.h.html
@@ -1181,7 +1173,12 @@ static void test_nftw_chdir_and_mount(void)
 
 int main(void)
 {
-	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
-	printf("posix-glob: all ok (fnmatch.h/glob.h/wordexp.h/regex.h/search.h/ftw.h: 6 headers absent, every clause fenced -- see file header)\n");
+	test_fnmatch_basic_grammar();
+	test_fnmatch_pathname_flag();
+	test_fnmatch_escape();
+	test_fnmatch_period();
+
+	if (fails) { printf("FAIL posix-glob: %d\n", fails); return 1; }
+	printf("posix-glob: all ok (fnmatch.h implemented, unfenced above; glob.h/wordexp.h/regex.h/search.h/ftw.h: 5 headers absent, every clause fenced -- see file header)\n");
 	return 0;
 }

@@ -25,14 +25,19 @@ The `pwd.h` bug that motivated this audit was exactly the second kind:
 implementable, just absent, and nothing in-tree noticed because nothing
 in-tree includes a header ntlibc does not have.
 
-## Present (41)
+## Present (42)
 
 `assert.h`, `ctype.h`, `dirent.h`, `errno.h`, `fcntl.h`, `fenv.h`,
-`float.h`, `inttypes.h`, `iso646.h`, `libgen.h`, `limits.h`, `locale.h`,
-`math.h`, `setjmp.h`, `signal.h`, `stdarg.h`, `stdbool.h`, `stddef.h`,
-`stdint.h`, `stdio.h`, `stdlib.h`, `string.h`, `strings.h`,
-`sys/resource.h`, `sys/select.h`, `sys/stat.h`, `sys/time.h`,
-`sys/types.h`, `sys/wait.h`, `time.h`, `unistd.h`, `utime.h`, `wchar.h`.
+`float.h`, `fnmatch.h`, `inttypes.h`, `iso646.h`, `libgen.h`,
+`limits.h`, `locale.h`, `math.h`, `setjmp.h`, `signal.h`, `stdarg.h`,
+`stdbool.h`, `stddef.h`, `stdint.h`, `stdio.h`, `stdlib.h`, `string.h`,
+`strings.h`, `sys/resource.h`, `sys/select.h`, `sys/stat.h`,
+`sys/time.h`, `sys/types.h`, `sys/wait.h`, `time.h`, `unistd.h`,
+`utime.h`, `wchar.h`.
+
+`fnmatch.h` was added after this audit (see `test/posix-glob.c`'s file
+header for the clause-by-clause spec work); moved up from the gap
+table below rather than rewriting this file's narrative around it.
 
 Also present but **not** POSIX headers (extensions/generated, not part
 of the 82 above, listed for completeness of `include/`): `alloca.h`,
@@ -55,8 +60,7 @@ Ordered roughly by how directly the existing NTDLL-only machinery in
 | Header | Why it's a real gap |
 |---|---|
 | `grp.h` | Same shape as `pwd.h`: NT has no `/etc/group`, but a minimal synthetic single-entry database (as `pwd.h` is presumably doing) is exactly as implementable here as `pwd.h` was. Needed alongside `pwd.h` by the same class of source (anything that does `getpwuid()`+`getgrgid()` together). |
-| `glob.h` | The other half of the bug report that started this audit: gnulib's `glob.c` needs both `pwd.h` and its own `glob.h`. Pure algorithm over `dirent.h`/`fnmatch.h`, both either present or gap-not-N/A; no OS blocker. |
-| `fnmatch.h` | Pure pattern-matching algorithm, zero OS dependency, and `glob.h` above needs it. |
+| `glob.h` | The other half of the bug report that started this audit: gnulib's `glob.c` needs both `pwd.h` and its own `glob.h`. Pure algorithm over `dirent.h`/`fnmatch.h` (fnmatch.h now present); no OS blocker. |
 | `ftw.h` | `ftw`/`nftw` are a pure algorithm over `dirent.h`+`sys/stat.h`, both already present; no OS dependency beyond what this tree already has. |
 | `wctype.h` | Wide-character classification, the direct analogue of the `ctype.h` this tree already has; `wchar.h` (present) is the only prerequisite. |
 | `spawn.h` | `posix_spawn` is explicitly the public name for the internal `__spawn` (`src/internal/libc.h:177`, `src/process/spawn.c`) that `execve`/`fork` already build on. The machinery exists; only the public `spawn.h` declarations and the `posix_spawn`/`posix_spawn_file_actions_*` wrapper surface are missing. |

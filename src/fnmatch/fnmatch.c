@@ -1,0 +1,153 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * fnmatch(): the XBD 9.13 "Pattern Matching Notation" grammar --
+ * literal characters, '?' (exactly one character), '*' (zero or more),
+ * and bracket expressions -- against two strings already in memory.
+ * No OS dependency whatsoever, so this is pure recursive-descent
+ * matching with backtracking on '*'.
+ *
+ * Bracket expressions are handled in full: a plain set ("[abc]"), a
+ * '-'-separated range ("[a-z]"), negation with either the POSIX '!' or
+ * the historical '^' spelling ("[!a-z]"/"[^a-z]"), and named character
+ * classes ("[[:digit:]]"), any mix of which may appear together in one
+ * expression.  A ']' as the very first member (right after '[' or the
+ * negation marker) is a literal ']', per fnmatch.html's cross-reference
+ * to the shell pattern matching notation.
+ *
+ * FNM_PATHNAME and FNM_PERIOD are both implemented by tracking, at
+ * every position in `string`, whether that position is "leading" --
+ * the true start of the string, or (only when FNM_PATHNAME is set)
+ * immediately after a '/' -- since that is the only thing '*', '?',
+ * and bracket expressions need to refuse under FNM_PERIOD; an explicit
+ * literal in the pattern (e.g. the '.' in ".*") is never restricted.
+ */
+#include <fnmatch.h>
+#include <ctype.h>
+#include <string.h>
+
+static int class_match(const char *name, size_t len, unsigned char c)
+{
+#define CLS(s) (len == sizeof(s) - 1 && !memcmp(name, s, len))
+	if (CLS("alpha")) return isalpha(c) != 0;
+	if (CLS("digit")) return isdigit(c) != 0;
+	if (CLS("alnum")) return isalnum(c) != 0;
+	if (CLS("upper")) return isupper(c) != 0;
+	if (CLS("lower")) return islower(c) != 0;
+	if (CLS("space")) return isspace(c) != 0;
+	if (CLS("blank")) return isblank(c) != 0;
+	if (CLS("cntrl")) return iscntrl(c) != 0;
+	if (CLS("print")) return isprint(c) != 0;
+	if (CLS("graph")) return isgraph(c) != 0;
+	if (CLS("punct")) return ispunct(c) != 0;
+	if (CLS("xdigit")) return isxdigit(c) != 0;
+#undef CLS
+	return 0;
+}
+
+/* *pp points at the '[' that opens the bracket expression; advanced past
+ * the matching ']' on return.  Returns 1 if c is a member (after
+ * applying negation), 0 otherwise. */
+static int bracket_match(const char **pp, unsigned char c, int flags)
+{
+	const char *p = *pp + 1;
+	int neg = 0, matched = 0, first = 1;
+
+	if (*p == '!' || *p == '^') {
+		neg = 1;
+		p++;
+	}
+	while (*p && (first || *p != ']')) {
+		first = 0;
+		if (p[0] == '[' && p[1] == ':') {
+			const char *q = strstr(p + 2, ":]");
+			if (q) {
+				if (class_match(p + 2, (size_t)(q - (p + 2)), c))
+					matched = 1;
+				p = q + 2;
+				continue;
+			}
+		}
+		{
+			unsigned char lo = (unsigned char)*p;
+			if (!(flags & FNM_NOESCAPE) && lo == '\\' && p[1]) {
+				p++;
+				lo = (unsigned char)*p;
+			}
+			p++;
+			if (*p == '-' && p[1] && p[1] != ']') {
+				unsigned char hi;
+				p++;
+				hi = (unsigned char)*p;
+				if (!(flags & FNM_NOESCAPE) && hi == '\\' && p[1]) {
+					p++;
+					hi = (unsigned char)*p;
+				}
+				p++;
+				if (c >= lo && c <= hi) matched = 1;
+			} else {
+				if (c == lo) matched = 1;
+			}
+		}
+	}
+	if (*p == ']') p++;
+	*pp = p;
+	return neg ? !matched : matched;
+}
+
+static int leading(const char *start, const char *s, int flags)
+{
+	if (s == start) return 1;
+	if ((flags & FNM_PATHNAME) && s[-1] == '/') return 1;
+	return 0;
+}
+
+static int fnm_match(const char *pat, const char *s, const char *start, int flags)
+{
+	while (*pat) {
+		if (*pat == '*') {
+			while (*pat == '*') pat++;
+			if (!*pat) {
+				if ((flags & FNM_PATHNAME) && strchr(s, '/')) return FNM_NOMATCH;
+				if ((flags & FNM_PERIOD) && *s == '.' && leading(start, s, flags)) return FNM_NOMATCH;
+				return 0;
+			}
+			for (;;) {
+				if (fnm_match(pat, s, start, flags) == 0) return 0;
+				if (!*s) return FNM_NOMATCH;
+				if ((flags & FNM_PATHNAME) && *s == '/') return FNM_NOMATCH;
+				if ((flags & FNM_PERIOD) && *s == '.' && leading(start, s, flags)) return FNM_NOMATCH;
+				s++;
+			}
+		} else if (*pat == '?') {
+			if (!*s) return FNM_NOMATCH;
+			if ((flags & FNM_PATHNAME) && *s == '/') return FNM_NOMATCH;
+			if ((flags & FNM_PERIOD) && *s == '.' && leading(start, s, flags)) return FNM_NOMATCH;
+			pat++;
+			s++;
+		} else if (*pat == '[') {
+			unsigned char c = (unsigned char)*s;
+			if (!*s) return FNM_NOMATCH;
+			if ((flags & FNM_PATHNAME) && c == '/') return FNM_NOMATCH;
+			if ((flags & FNM_PERIOD) && c == '.' && leading(start, s, flags)) return FNM_NOMATCH;
+			if (!bracket_match(&pat, c, flags)) return FNM_NOMATCH;
+			s++;
+		} else if (*pat == '\\' && !(flags & FNM_NOESCAPE)) {
+			if (!pat[1]) return FNM_NOMATCH; /* trailing unescaped backslash: malformed */
+			pat++;
+			if (*pat != *s) return FNM_NOMATCH;
+			pat++;
+			s++;
+		} else {
+			if (*pat != *s) return FNM_NOMATCH;
+			pat++;
+			s++;
+		}
+	}
+	return *s ? FNM_NOMATCH : 0;
+}
+
+int fnmatch(const char *pattern, const char *string, int flags)
+{
+	return fnm_match(pattern, string, string, flags);
+}
