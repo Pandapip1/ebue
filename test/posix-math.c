@@ -601,8 +601,8 @@ static void test_float_ld_variants(void)
 /* ---- lround.html/llround.html/lrint.html/llrint.html/rint.html:
  * clause-by-clause (not just the round-trip spot checks test/math.c
  * already has). No f/l-suffixed variants (lroundf/lroundl/lrintf/
- * lrintl/llroundf/llroundl/llrintf/llrintl/rintf/rintl) are declared
- * by include/math.h at all -- see the UNIMPL block further down. ---- */
+ * lrintl/llroundf/llroundl/llrintf/llrintl/rintf/rintl) are audited
+ * separately below, in test_lround_lrint_variants(). ---- */
 static void test_lround_lrint(void)
 {
 	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
@@ -709,17 +709,17 @@ static void test_lround_lrint(void)
 	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
 }
 
-/* ---- Functions src/math/ does not implement at all: include/math.h
- * declares none of these, so every clause below is fenced UNIMPL
- * rather than run. Each assertion is written exactly as it would run
- * if the function existed, cited to its own spec page, so this file
- * stays a complete transcription of math.h rather than a silent
- * omission. ---- */
+/* ---- Functions src/math/ did not implement until now: asin/acos,
+ * sinh/cosh/tanh, asinh/acosh/atanh, cbrt, expm1/log1p, erf/erfc,
+ * lgamma/tgamma, the Bessel functions, remainder/remquo,
+ * nextafter/nexttoward, fdim, fma, ilogb/logb, nearbyint, scalbln, and
+ * the f/l-suffixed lround/lrint family below. Each assertion is cited
+ * to its own spec page. ---- */
 
-#if 0 /* UNIMPL: asin.html/acos.html RETURN VALUE/ERRORS -- NaN->NaN;
-       * ±0->x (asin only; acos(+1)->+0); finite |x|>1 -> domain error,
-       * NaN; ±Inf -> domain error, NaN (both). asin/acos are not
-       * declared by include/math.h at all. */
+/* asin.html/acos.html RETURN VALUE/ERRORS -- NaN->NaN;
+ * ±0->x (asin only; acos(+1)->+0); finite |x|>1 -> domain error,
+ * NaN; ±Inf -> domain error, NaN (both). asin/acos are not
+ * declared by include/math.h at all. */
 static void test_asin_acos(void)
 {
 	CHECK(isnan(asin(NAN)) && isnan(acos(NAN)));
@@ -731,12 +731,11 @@ static void test_asin_acos(void)
 	CHECK(isnan(acos(HUGE_VAL)) && isnan(acos(-HUGE_VAL)));
 	CHECK(asin(1.0) == M_PI / 2 && asin(-1.0) == -M_PI / 2);
 }
-#endif
 
-#if 0 /* UNIMPL: sinh.html/cosh.html/tanh.html RETURN VALUE/ERRORS --
-       * NaN->NaN; sinh/tanh: ±0/±Inf->x; cosh: ±0->1, ±Inf->+Inf;
-       * sinh/cosh overflow -> range error, ±HUGE_VAL. Not declared by
-       * include/math.h. */
+/* sinh.html/cosh.html/tanh.html RETURN VALUE/ERRORS --
+ * NaN->NaN; sinh/tanh: ±0/±Inf->x; cosh: ±0->1, ±Inf->+Inf;
+ * sinh/cosh overflow -> range error, ±HUGE_VAL. Not declared by
+ * include/math.h. */
 static void test_hyperbolic(void)
 {
 	CHECK(isnan(sinh(NAN)) && isnan(cosh(NAN)) && isnan(tanh(NAN)));
@@ -749,13 +748,12 @@ static void test_hyperbolic(void)
 	CHECK(sinh(1000.0) == HUGE_VAL);    /* overflow -> range error, HUGE_VAL */
 	CHECK(cosh(1000.0) == HUGE_VAL);
 }
-#endif
 
-#if 0 /* UNIMPL: asinh.html/acosh.html/atanh.html RETURN VALUE/ERRORS --
-       * NaN->NaN; asinh: ±0/±Inf->x; acosh: x==1->+0, x==+Inf->+Inf,
-       * x<1 or x==-Inf -> domain error, NaN; atanh: ±0->x, ±1 -> pole
-       * error ±HUGE_VAL, finite |x|>1 or ±Inf -> domain error, NaN.
-       * Not declared by include/math.h. */
+/* asinh.html/acosh.html/atanh.html RETURN VALUE/ERRORS --
+ * NaN->NaN; asinh: ±0/±Inf->x; acosh: x==1->+0, x==+Inf->+Inf,
+ * x<1 or x==-Inf -> domain error, NaN; atanh: ±0->x, ±1 -> pole
+ * error ±HUGE_VAL, finite |x|>1 or ±Inf -> domain error, NaN.
+ * Not declared by include/math.h. */
 static void test_inverse_hyperbolic(void)
 {
 	CHECK(isnan(asinh(NAN)) && isnan(acosh(NAN)) && isnan(atanh(NAN)));
@@ -769,10 +767,9 @@ static void test_inverse_hyperbolic(void)
 	CHECK(isnan(atanh(1.5)) && isnan(atanh(-1.5)));               /* finite |x|>1 */
 	CHECK(isnan(atanh(HUGE_VAL)) && isnan(atanh(-HUGE_VAL)));     /* ±Inf domain error */
 }
-#endif
 
-#if 0 /* UNIMPL: cbrt.html RETURN VALUE -- "No errors are defined."
-       * NaN->NaN, ±0/±Inf->x. Not declared by include/math.h. */
+/* cbrt.html RETURN VALUE -- "No errors are defined."
+ * NaN->NaN, ±0/±Inf->x. Not declared by include/math.h. */
 static void test_cbrt(void)
 {
 	CHECK(isnan(cbrt(NAN)));
@@ -780,13 +777,12 @@ static void test_cbrt(void)
 	CHECK(cbrt(HUGE_VAL) == HUGE_VAL && cbrt(-HUGE_VAL) == -HUGE_VAL);
 	CHECK(cbrt(27.0) == 3.0 && cbrt(-27.0) == -3.0);
 }
-#endif
 
-#if 0 /* UNIMPL: expm1.html/log1p.html RETURN VALUE/ERRORS -- expm1:
-       * NaN->NaN, ±0->±0, -Inf->-1, +Inf->x, overflow -> range error,
-       * HUGE_VAL. log1p: NaN->NaN, ±0/+Inf->x, x==-1 -> pole error,
-       * -HUGE_VAL, x<-1 or x==-Inf -> domain error, NaN. Not declared
-       * by include/math.h. */
+/* expm1.html/log1p.html RETURN VALUE/ERRORS -- expm1:
+ * NaN->NaN, ±0->±0, -Inf->-1, +Inf->x, overflow -> range error,
+ * HUGE_VAL. log1p: NaN->NaN, ±0/+Inf->x, x==-1 -> pole error,
+ * -HUGE_VAL, x<-1 or x==-Inf -> domain error, NaN. Not declared
+ * by include/math.h. */
 static void test_expm1_log1p(void)
 {
 	CHECK(isnan(expm1(NAN)) && isnan(log1p(NAN)));
@@ -799,11 +795,10 @@ static void test_expm1_log1p(void)
 	CHECK(log1p(-1.0) == -HUGE_VAL);    /* pole error */
 	CHECK(isnan(log1p(-2.0)) && isnan(log1p(-HUGE_VAL)));   /* domain error */
 }
-#endif
 
-#if 0 /* UNIMPL: erf.html/erfc.html RETURN VALUE/ERRORS -- erf: NaN->
-       * NaN, ±0->±0, ±Inf->±1; erfc: NaN->NaN, +Inf->+0, -Inf->2.
-       * Not declared by include/math.h. */
+/* erf.html/erfc.html RETURN VALUE/ERRORS -- erf: NaN->
+ * NaN, ±0->±0, ±Inf->±1; erfc: NaN->NaN, +Inf->+0, -Inf->2.
+ * Not declared by include/math.h. */
 static void test_erf_erfc(void)
 {
 	CHECK(isnan(erf(NAN)) && isnan(erfc(NAN)));
@@ -812,16 +807,15 @@ static void test_erf_erfc(void)
 	CHECK(poszero(erfc(HUGE_VAL)));
 	CHECK(erfc(-HUGE_VAL) == 2.0);
 }
-#endif
 
-#if 0 /* UNIMPL: lgamma.html/tgamma.html RETURN VALUE/ERRORS -- lgamma:
-       * non-positive integer -> pole error, +HUGE_VAL; overflow ->
-       * range error, ±HUGE_VAL; NaN->NaN; x==1 or 2 -> +0; ±Inf ->
-       * +Inf. tgamma (IEC 60559 branch, which math_errhandling==2
-       * commits ntlibc to): negative integer -> domain error, NaN;
-       * ±0 -> pole error, ±HUGE_VAL; overflow -> range error,
-       * ±HUGE_VAL; NaN->NaN; +Inf->+Inf; -Inf -> domain error, NaN.
-       * Not declared by include/math.h. */
+/* lgamma.html/tgamma.html RETURN VALUE/ERRORS -- lgamma:
+ * non-positive integer -> pole error, +HUGE_VAL; overflow ->
+ * range error, ±HUGE_VAL; NaN->NaN; x==1 or 2 -> +0; ±Inf ->
+ * +Inf. tgamma (IEC 60559 branch, which math_errhandling==2
+ * commits ntlibc to): negative integer -> domain error, NaN;
+ * ±0 -> pole error, ±HUGE_VAL; overflow -> range error,
+ * ±HUGE_VAL; NaN->NaN; +Inf->+Inf; -Inf -> domain error, NaN.
+ * Not declared by include/math.h. */
 static void test_gamma(void)
 {
 	CHECK(isnan(lgamma(NAN)) && isnan(tgamma(NAN)));
@@ -834,15 +828,14 @@ static void test_gamma(void)
 	CHECK(tgamma(0.0) == HUGE_VAL);             /* +0: pole error, sign of x */
 	CHECK(tgamma(-0.0) == -HUGE_VAL);           /* -0: pole error, sign of x */
 }
-#endif
 
-#if 0 /* UNIMPL: j0.html/j1.html/jn.html (Bessel, first kind) and
-       * y0.html/y1.html/yn.html (second kind) RETURN VALUE/ERRORS --
-       * NaN->NaN for all six; j-family: |x| too large or underflow ->
-       * 0, range error may occur; y-family: x<0 -> -HUGE_VAL or NaN,
-       * domain error may occur; x==0 -> -HUGE_VAL, pole error may
-       * occur; overflow -> -HUGE_VAL or 0, range error may occur.
-       * None of the six are declared by include/math.h. */
+/* j0.html/j1.html/jn.html (Bessel, first kind) and
+ * y0.html/y1.html/yn.html (second kind) RETURN VALUE/ERRORS --
+ * NaN->NaN for all six; j-family: |x| too large or underflow ->
+ * 0, range error may occur; y-family: x<0 -> -HUGE_VAL or NaN,
+ * domain error may occur; x==0 -> -HUGE_VAL, pole error may
+ * occur; overflow -> -HUGE_VAL or 0, range error may occur.
+ * None of the six are declared by include/math.h. */
 static void test_bessel(void)
 {
 	CHECK(isnan(j0(NAN)) && isnan(j1(NAN)) && isnan(jn(2, NAN)));
@@ -851,16 +844,15 @@ static void test_bessel(void)
 	CHECK(y0(0.0) == -HUGE_VAL);           /* x==0: pole error */
 	CHECK(isnan(y0(-1.0)) || y0(-1.0) == -HUGE_VAL);   /* x<0: domain error, either return permitted */
 }
-#endif
 
-#if 0 /* UNIMPL: remainder.html RETURN VALUE/ERRORS -- x REM y (IEEE
-       * remainder, round-to-nearest quotient, unlike fmod's
-       * round-toward-zero quotient); x or y NaN -> NaN; x==±Inf or
-       * y==±0 (other non-NaN) -> domain error, NaN.
-       * remquo.html: same remainder value plus *quo set to a value
-       * congruent to the true quotient mod 2^n, n>=3, sign of x/y;
-       * *quo unspecified when y==0. Neither declared by
-       * include/math.h. */
+/* remainder.html RETURN VALUE/ERRORS -- x REM y (IEEE
+ * remainder, round-to-nearest quotient, unlike fmod's
+ * round-toward-zero quotient); x or y NaN -> NaN; x==±Inf or
+ * y==±0 (other non-NaN) -> domain error, NaN.
+ * remquo.html: same remainder value plus *quo set to a value
+ * congruent to the true quotient mod 2^n, n>=3, sign of x/y;
+ * *quo unspecified when y==0. Neither declared by
+ * include/math.h. */
 static void test_remainder_remquo(void)
 {
 	int quo;
@@ -873,13 +865,12 @@ static void test_remainder_remquo(void)
 	CHECK(isnan(remquo(2.0, 0.0, &quo)));
 	CHECK(remquo(5.5, 2.0, &quo) == -0.5 && (quo & 7) == 3);  /* quotient congruent mod 8 (n>=3) */
 }
-#endif
 
-#if 0 /* UNIMPL: nextafter.html/nexttoward.html RETURN VALUE/ERRORS --
-       * x==y -> y (converted to type of x); x or y NaN -> NaN; finite
-       * x, correct value overflows -> range error, ±HUGE_VAL same
-       * sign as x; correct value subnormal/underflows -> range error,
-       * correct value or 0.0. Neither declared by include/math.h. */
+/* nextafter.html/nexttoward.html RETURN VALUE/ERRORS --
+ * x==y -> y (converted to type of x); x or y NaN -> NaN; finite
+ * x, correct value overflows -> range error, ±HUGE_VAL same
+ * sign as x; correct value subnormal/underflows -> range error,
+ * correct value or 0.0. Neither declared by include/math.h. */
 static void test_nextafter(void)
 {
 	CHECK(nextafter(1.0, 1.0) == 1.0);
@@ -891,12 +882,11 @@ static void test_nextafter(void)
 	CHECK(nexttoward(1.0, 2.0L) > 1.0);
 	CHECK(isnan(nexttoward(NAN, 1.0L)));
 }
-#endif
 
-#if 0 /* UNIMPL: fdim.html RETURN VALUE/ERRORS -- "the positive
-       * difference" max(x-y,+0); NaN if either argument is NaN;
-       * overflow of a positive difference -> range error, HUGE_VAL.
-       * Not declared by include/math.h. */
+/* fdim.html RETURN VALUE/ERRORS -- "the positive
+ * difference" max(x-y,+0); NaN if either argument is NaN;
+ * overflow of a positive difference -> range error, HUGE_VAL.
+ * Not declared by include/math.h. */
 static void test_fdim(void)
 {
 	CHECK(fdim(5.0, 3.0) == 2.0);
@@ -904,14 +894,13 @@ static void test_fdim(void)
 	CHECK(isnan(fdim(NAN, 1.0)) && isnan(fdim(1.0, NAN)));
 	CHECK(fdim(DBL_MAX, -DBL_MAX) == HUGE_VAL);   /* overflow -> range error */
 }
-#endif
 
-#if 0 /* UNIMPL: fma.html RETURN VALUE/ERRORS -- (x*y)+z rounded once;
-       * x or y NaN -> NaN; x*y==0*Inf-shape (exact 0 times exact Inf)
-       * with z non-NaN -> domain error, NaN; x*y exact Inf and z an
-       * oppositely-signed Inf -> domain error, NaN; x*y finite and z
-       * NaN (and x*y not the 0*Inf shape) -> NaN. Not declared by
-       * include/math.h. */
+/* fma.html RETURN VALUE/ERRORS -- (x*y)+z rounded once;
+ * x or y NaN -> NaN; x*y==0*Inf-shape (exact 0 times exact Inf)
+ * with z non-NaN -> domain error, NaN; x*y exact Inf and z an
+ * oppositely-signed Inf -> domain error, NaN; x*y finite and z
+ * NaN (and x*y not the 0*Inf shape) -> NaN. Not declared by
+ * include/math.h. */
 static void test_fma(void)
 {
 	CHECK(fma(2.0, 3.0, 4.0) == 10.0);
@@ -920,15 +909,14 @@ static void test_fma(void)
 	CHECK(isnan(fma(HUGE_VAL, 1.0, -HUGE_VAL)));         /* x*y==+Inf, z==-Inf: domain error */
 	CHECK(isnan(fma(2.0, 3.0, NAN)));                    /* x*y finite, z NaN */
 }
-#endif
 
-#if 0 /* UNIMPL: ilogb.html/logb.html RETURN VALUE/ERRORS -- logb:
-       * x==±0 -> pole error, -HUGE_VAL; NaN->NaN; ±Inf->+Inf. ilogb:
-       * equivalent to (int)logb(x) with three reserved out-of-band
-       * results for the cases an int cannot hold logb's answer:
-       * x==0 -> FP_ILOGB0 (domain error, XSI); NaN -> FP_ILOGBNAN
-       * (domain error, XSI); ±Inf -> INT_MAX (domain error, XSI).
-       * Neither declared by include/math.h. */
+/* ilogb.html/logb.html RETURN VALUE/ERRORS -- logb:
+ * x==±0 -> pole error, -HUGE_VAL; NaN->NaN; ±Inf->+Inf. ilogb:
+ * equivalent to (int)logb(x) with three reserved out-of-band
+ * results for the cases an int cannot hold logb's answer:
+ * x==0 -> FP_ILOGB0 (domain error, XSI); NaN -> FP_ILOGBNAN
+ * (domain error, XSI); ±Inf -> INT_MAX (domain error, XSI).
+ * Neither declared by include/math.h. */
 static void test_ilogb_logb(void)
 {
 	CHECK(isnan(logb(NAN)));
@@ -940,14 +928,13 @@ static void test_ilogb_logb(void)
 	CHECK(ilogb(HUGE_VAL) == INT_MAX);
 	CHECK(ilogb(8.0) == 3);
 }
-#endif
 
-#if 0 /* UNIMPL: nearbyint.html RETURN VALUE/ERRORS -- "No errors are
-       * defined." Rounds using the current rounding direction like
-       * rint(), but explicitly "without raising the inexact
-       * floating-point exception" -- the one clause that
-       * distinguishes it from rint(), directly testable via <fenv.h>.
-       * Not declared by include/math.h. */
+/* nearbyint.html RETURN VALUE/ERRORS -- "No errors are
+ * defined." Rounds using the current rounding direction like
+ * rint(), but explicitly "without raising the inexact
+ * floating-point exception" -- the one clause that
+ * distinguishes it from rint(), directly testable via <fenv.h>.
+ * Not declared by include/math.h. */
 static void test_nearbyint(void)
 {
 	CHECK(isnan(nearbyint(NAN)));
@@ -957,12 +944,11 @@ static void test_nearbyint(void)
 	CHECK(nearbyint(2.5) == 2.0);
 	CHECK(fetestexcept(FE_INEXACT) == 0);   /* the distinguishing clause vs. rint() */
 }
-#endif
 
-#if 0 /* UNIMPL: scalbln.html RETURN VALUE/ERRORS -- x * FLT_RADIX^n;
-       * NaN->NaN; ±0/±Inf->x; n==0->x; overflow -> range error,
-       * ±HUGE_VAL; underflow -> range error, 0.0 or correct value.
-       * Not declared by include/math.h. */
+/* scalbln.html RETURN VALUE/ERRORS -- x * FLT_RADIX^n;
+ * NaN->NaN; ±0/±Inf->x; n==0->x; overflow -> range error,
+ * ±HUGE_VAL; underflow -> range error, 0.0 or correct value.
+ * Not declared by include/math.h. */
 static void test_scalbln(void)
 {
 	CHECK(isnan(scalbln(NAN, 5)));
@@ -972,14 +958,13 @@ static void test_scalbln(void)
 	CHECK(scalbln(1.0, 2000L) == HUGE_VAL && scalbln(-1.0, 2000L) == -HUGE_VAL);   /* overflow */
 	CHECK(poszero(scalbln(1.0, -2000L)));   /* underflow */
 }
-#endif
 
-#if 0 /* UNIMPL: rint.html/lround.html/lrint.html f/l-suffixed variants
-       * -- rintf/rintl, lroundf/lroundl, lrintf/lrintl, llroundf/
-       * llroundl, llrintf/llrintl -- carry the same clauses audited
-       * for the double forms in test_lround_lrint() above. None of
-       * the ten are declared by include/math.h: only the plain
-       * `double`-argument rint/lround/llround/lrint/llrint exist. */
+/* rint.html/lround.html/lrint.html f/l-suffixed variants
+ * -- rintf/rintl, lroundf/lroundl, lrintf/lrintl, llroundf/
+ * llroundl, llrintf/llrintl -- carry the same clauses audited
+ * for the double forms in test_lround_lrint() above. None of
+ * the ten are declared by include/math.h: only the plain
+ * `double`-argument rint/lround/llround/lrint/llrint exist. */
 static void test_lround_lrint_variants(void)
 {
 	CHECK(isnan(rintf(NAN)) && isnan(rintl(NAN)));
@@ -989,7 +974,6 @@ static void test_lround_lrint_variants(void)
 	CHECK(llroundf(2.5f) == 3 && llroundl(2.5L) == 3);
 	CHECK(llrintf(2.5f) == 2 && llrintl(2.5L) == 2);
 }
-#endif
 
 int main(void)
 {
@@ -1011,13 +995,6 @@ int main(void)
 	test_errhandling();
 	test_float_ld_variants();
 	test_lround_lrint();
-#if 0 /* UNIMPL: see the fenced test_* functions above -- none of
-       * asin/acos, sinh/cosh/tanh, asinh/acosh/atanh, cbrt,
-       * expm1/log1p, erf/erfc, lgamma/tgamma, the Bessel functions,
-       * remainder/remquo, nextafter/nexttoward, fdim, fma,
-       * ilogb/logb, nearbyint, scalbln, or the f/l-suffixed
-       * lround/lrint family are declared by include/math.h, so none
-       * of these calls compile yet. */
 	test_asin_acos();
 	test_hyperbolic();
 	test_inverse_hyperbolic();
@@ -1034,7 +1011,6 @@ int main(void)
 	test_nearbyint();
 	test_scalbln();
 	test_lround_lrint_variants();
-#endif
 
 	if (!fails) printf("posix-math: all tests passed\n");
 	return fails != 0;
