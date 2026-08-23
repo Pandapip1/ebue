@@ -30,6 +30,16 @@
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
+/* Native ASan build (tools/asan-build.sh): fuzz/ntstubs.c's
+ * RtlAddVectoredExceptionHandler stores nothing and forwards no real
+ * hardware fault to it, on purpose -- see the SIGSEGV/SIGFPE tests below
+ * for why bridging one in would cost more than it buys here. Reused
+ * verbatim from test/malloc.c / test/posix-alloc.c's ASan detection. */
+#if defined(__SANITIZE_ADDRESS__) || \
+    (defined(__has_feature) && __has_feature(address_sanitizer))
+#define NATIVE_NO_FAULT_BRIDGE 1
+#endif
+
 /* Internal: spawn a program as a child, return its pid (see
  * src/process/spawn.c). fork() needs RtlCloneUserProcess, which Wine
  * lacks, so __spawn is used for every child-process test here, same as
@@ -551,8 +561,27 @@ static void test_fault_sigsegv(const char *self)
 	pid = __spawn(self, argv, environ);
 	if (pid < 0) { printf("note: cannot spawn \"%s\"; SIGSEGV fault child test skipped\n", self); return; }
 	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	/* UBSan's own null-pointer-store check reports "*p = 1" as UB and
+	 * aborts (a real SIGABRT-shaped death) before the CPU's own page
+	 * fault would ever happen, so this child never reaches a genuine
+	 * SIGSEGV to test the vectored exception handler against. Bridging
+	 * one in even for the cases that would reach real hardware -- some
+	 * other test's wild pointer, not this deliberately-provoked one --
+	 * would need this file's own global sigaction(SIGSEGV, ...); since
+	 * exception_handler() (src/signal/signal.c) always ends the process
+	 * one way or another for a SIGSEGV it sees, that would just as
+	 * surely swallow a *genuine* ASan-caught memory bug's real SIGSEGV
+	 * and turn it into a plain signal-death exit instead of ASan's own
+	 * diagnostic report -- the opposite of this build's whole point.
+	 * Not attempted; only the spawn/wait mechanics above are exercised
+	 * here. This is exercised for real by "make check" under Wine and
+	 * CI's windows-test job, where no sanitizer stands in the way. */
+	printf("note: native ASan build cannot provoke or forward a real SIGSEGV; signal-identity checks skipped\n");
+#else
 	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
 	CHECK(WCOREDUMP(status));   /* src/process/wait.c sig_status(): SIGSEGV is core-dumping */
+#endif
 }
 
 /* EXCEPTION_ILLEGAL_INSTRUCTION -> SIGILL, via an actual illegal
@@ -584,8 +613,15 @@ static void test_fault_sigfpe(const char *self)
 	pid = __spawn(self, argv, environ);
 	if (pid < 0) { printf("note: cannot spawn \"%s\"; SIGFPE fault child test skipped\n", self); return; }
 	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	/* Same root cause as test_fault_sigsegv() above: UBSan's own
+	 * integer-divide-by-zero check intercepts "a / b" before it ever
+	 * traps for real. */
+	printf("note: native ASan build cannot provoke or forward a real SIGFPE; signal-identity checks skipped\n");
+#else
 	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGFPE);
 	CHECK(WCOREDUMP(status));
+#endif
 }
 
 /* sigaction.html DESCRIPTION applies to hardware-generated signals same
@@ -612,7 +648,15 @@ static void test_fault_sigfpe_caught(const char *self)
 	pid = __spawn(self, argv, environ);
 	if (pid < 0) { printf("note: cannot spawn \"%s\"; caught-SIGFPE fault child test skipped\n", self); return; }
 	CHECK(waitpid(pid, &status, 0) == pid);
+#ifdef NATIVE_NO_FAULT_BRIDGE
+	/* Same root cause again, plus: even setting UBSan's divide check
+	 * aside, catching this needs exception_handler() to actually run,
+	 * which needs a real fault forwarded to it in the first place --
+	 * the same bridge test_fault_sigsegv() explains not building. */
+	printf("note: native ASan build cannot provoke or forward a real SIGFPE; caught-signal check skipped\n");
+#else
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 66);   /* handler ran and chose to exit cleanly */
+#endif
 }
 
 #if 0 /* N/A: signal.h.html basedefs / sigaction.html default-disposition
