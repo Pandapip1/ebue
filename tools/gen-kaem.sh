@@ -247,8 +247,19 @@ fi
 # has neither, and nothing else in it can do a capture-group rewrite),
 # coreutils rm, or a standalone binutils ar.
 #
-# Run from the repository root, e.g.:
-#   PATH=/path/to/win32-cross-tcc/bin:\$PATH kaem --strict --file boot/kaem/build-${ARCH}.kaem
+# Every path this reads from the source tree is \${srcdir}-relative; every
+# path it writes is relative to the working directory.  So srcdir must be
+# set, and the working directory must be writable.  From the repository
+# root, in place:
+#   srcdir=. PATH=/path/to/win32-cross-tcc/bin:\$PATH kaem --strict --file boot/kaem/build-${ARCH}.kaem
+# Or with the sources read-only somewhere else, which is the case a
+# from-scratch bootstrap actually has -- an unpacked tarball or a store path
+# it may not write to, and no recursive copy at this stage to stage it with:
+#   cd /some/empty/writable/dir
+#   srcdir=/path/to/ntlibc PATH=... kaem --strict --file .../build-${ARCH}.kaem
+#
+# kaem substitutes an unset variable as nothing, so a forgotten srcdir fails
+# on /src/... rather than quietly reading something it should not.
 #
 # This script assumes a clean tree (no pre-existing obj/ or lib/): every
 # directory below is created with a single bare \`mkdir\`, not \`mkdir -p\`,
@@ -350,7 +361,29 @@ MID4
 #
 MID5
 	printf '%s\n' "$AR_LINE"
-} >"$OUT"
+} >"$OUT.tmp"
+
+# Source paths become ${srcdir}-relative; output paths stay relative to the
+# working directory.  The two are already distinguishable in what make -n
+# printed: everything the build *writes* is under obj/ or lib/, and
+# everything it *reads* from the tree is ./arch, ./include, src/ or crt/.
+#
+# Without this the script can only run with the working directory set to the
+# source tree, which is the one thing a from-scratch bootstrap cannot
+# arrange: the sources arrive read-only (a nix store path, an unpacked
+# tarball owned by the build driver), and nothing at this stage has a
+# recursive copy to stage them with -- mescc-tools-extra's cp takes files,
+# one at a time, and there is no shell to loop in.  With it, kaem runs in a
+# writable empty directory and reads the tree wherever it is.
+#
+# srcdir must be set.  From the repository root that is `srcdir=.`; kaem
+# substitutes an unset variable as nothing, so a forgotten one fails loudly
+# on /src/... rather than quietly reading something else.
+sed -e 's,-I\./,-I${srcdir}/,g' \
+    -e 's,\([ \t]\)\./,\1${srcdir}/,g' \
+    -e 's,\([ \t]\)\(src/\|crt/\|arch/\),\1${srcdir}/\2,g' \
+    "$OUT.tmp" >"$OUT"
+rm -f "$OUT.tmp"
 
 rm -f "${DRYRUN}.classified"
 
