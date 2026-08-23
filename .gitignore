@@ -33,3 +33,11 @@ oom-*
 /tmp-*/
 /test-*.tmp
 *.tmp
+
+# Agent worktrees and session state. These are ignored locally on the
+# machine this was developed on (a global ignore or .git/info/exclude),
+# which is exactly why the omission here went unnoticed -- a fresh clone,
+# or anyone else's checkout, would see .claude/worktrees/ as a pile of
+# untracked trees. Ignore it in the repo so it does not depend on one
+# machine's configuration.
+/.claude/
