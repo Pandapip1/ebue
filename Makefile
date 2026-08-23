@@ -13,6 +13,7 @@
 #   all       build lib/libc.a, lib/crt1.o, lib/ntdll.def (and the wrapper)
 #   install   install headers, libraries and the wrapper under $(prefix)
 #   check     build test/*.c against the result and run them under wine
+#   linkcheck prove every publicly declared function actually links
 #   asan      build src/*.c natively under ASan+UBSan and run what applies
 #   fuzz      build and run the libFuzzer harnesses in fuzz/
 #   clean     remove build output
@@ -328,6 +329,27 @@ lint:
 	./tools/lint.sh
 
 .PHONY: lint
+
+# linkcheck: prove every function a public header declares can actually be
+# linked against by a real program, using the real $(CC) and this arch's
+# freshly built lib/crt1.o + lib/libc.a + lib/ntdll.def -- the same inputs
+# `make check`'s test binaries link against.  This is deliberately NOT a
+# stage of `make lint`: lint.sh's tools (gcc/clang/cppcheck/shellcheck)
+# never touch $(CC) or produce a real PE link, so they cannot see a macro
+# that silently retargets a call to a name tcc cannot resolve -- exactly
+# how include/alloca.h's `#define alloca __builtin_alloca` shipped (see
+# tools/linkcheck.sh's header for the full story). Catching that needs an
+# actual per-arch compile-and-link with the real toolchain, which makes
+# this the same shape of gate as `check`/`asan`, not `lint`: a build-and-
+# run step keyed to $(CC)/$(ARCH), not a report-only static pass. Like
+# `check`, it only ever sees the arch config.mak currently names -- run it
+# again after reconfiguring for the other arch (arch/ is not shared,
+# include/ is).
+linkcheck: $(ALL_LIBS)
+	@CC="$(CC)" ARCH="$(ARCH)" CFLAGS_C99FSE="$(CFLAGS_C99FSE)" CFLAGS_AUTO="$(CFLAGS_AUTO)" \
+		$(srcdir)/tools/linkcheck.sh
+
+.PHONY: linkcheck
 
 # asan/fuzz: a second, native (Linux/ELF) build of the same src/*.c under
 # AddressSanitizer, UBSan and libFuzzer.  This is not a substitute for
