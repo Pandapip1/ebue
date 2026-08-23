@@ -501,15 +501,6 @@ static void test_chmod_group_other_write_aliases_owner(void)
  * return -1; }" -- pid == -1 never reaches the self-check, so this
  * fails with ESRCH unconditionally, on both Wine and real NT (the
  * branch never touches NT at all). */
-#if 0 /* BUG: kill.html DESCRIPTION pid==-1 must reach at least the
-       * caller itself, since "the process has permission to send [a
-       * signal] to itself" always holds; ERRORS "[ESRCH] No process or
-       * process group can be found corresponding to that specified by
-       * pid" is being reported for a pid that unambiguously does name
-       * one such process (the caller).  Fix: src/signal/signal.c's
-       * kill() should treat pid == -1 as reaching self before (or as
-       * part of) the "pid < 0" ESRCH catch-all, the same way it
-       * already treats pid == 0 that way. */
 static void test_kill_neg1_reaches_self(void)
 {
 	got_sig = 0;
@@ -519,7 +510,6 @@ static void test_kill_neg1_reaches_self(void)
 	CHECK(got_sig == 1);
 	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
 }
-#endif
 
 /* kill.html DESCRIPTION: "If pid is 0 ... sig shall be sent to all
  * processes ... whose process group ID is equal to the process group
@@ -642,6 +632,7 @@ int main(void)
 	test_pipe_ends_independent();
 	test_ttyname_r_erange();
 	test_stat_dir_size_is_zero();
+	test_kill_neg1_reaches_self();
 	test_kill_zero_is_own_group_of_one();
 	test_kill_eperm_protected_process();
 	test_access_real_effective_uid_identical();

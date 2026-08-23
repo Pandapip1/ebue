@@ -170,7 +170,23 @@ int kill(pid_t pid, int sig)
 	OBJECT_ATTRIBUTES oa;
 	CLIENT_ID cid;
 
-	if (pid == getpid() || pid == 0) {
+	/* kill.html DESCRIPTION: pid == 0 reaches "all processes ... whose
+	 * process group ID is equal to the process group ID of the
+	 * sender", and pid == -1 reaches "all processes ... for which the
+	 * process has permission to send that signal" -- both defined in
+	 * terms of a set of processes ntlibc has no way to enumerate (see
+	 * src/unistd/ids.c: every process is its own group of one here, and
+	 * this library tracks no process list beyond its own children).
+	 * What both sets provably contain, on any POSIX system, is the
+	 * caller itself: a process always has permission to signal itself,
+	 * and is always a member of its own process group. Under the
+	 * group-of-one model that is also *all* either set can ever
+	 * contain, so "send to every process in {caller}" is not a
+	 * degenerate stand-in for the real thing -- it is the real thing,
+	 * fully enumerated. -1 is folded in here, alongside the existing
+	 * 0 case, rather than falling into the general "pid < 0 -> process
+	 * group, ESRCH" catch-all below. */
+	if (pid == getpid() || pid == 0 || pid == -1) {
 		if (!sig) return 0;
 		return raise(sig);
 	}
