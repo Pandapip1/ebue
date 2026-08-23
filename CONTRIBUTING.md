@@ -364,3 +364,32 @@ CI runs the same pair and `git diff --exit-code`s the results (the
 committing without having run `./configure` in this checkout, enable the
 hook by hand with the same `git config` line, or just run `make generated`
 yourself before committing.
+
+### Merging/rebasing/cherry-picking across a source-file add
+
+`boot/kaem/build-i386.kaem` and `build-x86_64.kaem` are generated from the
+Makefile's own list of source files (see above), so two branches that each
+add a *different* source file conflict textually in these two files even
+though there is nothing really in conflict -- the right result is neither
+side, but a fresh `make kaem` against the merged tree. Resolving that by
+hand, the same mechanical way every time (take either side, `make kaem`,
+`git add boot/kaem/`), is exactly the kind of resolution most likely to go
+wrong under pressure: conflict markers have twice ended up committed
+straight into these files, which is particularly nasty since nothing
+compiles them until a from-scratch kaem bootstrap actually runs (see
+`.githooks/pre-commit`'s conflict-marker check, added for that reason).
+
+`./configure` also registers a `git` merge driver
+(`tools/merge-kaem.sh`, wired up via `.gitattributes`) that resolves a
+conflict on either `.kaem` file by regenerating it from the merged tree
+instead of attempting a text merge -- during `git merge`, `git rebase`,
+*and* `git cherry-pick` alike, since this project's own workflow uses
+cherry-pick the most. It needs `config.mak` (for `CC`/`ARCH`, same as
+`make kaem` itself); in a checkout that has never run `./configure`, it
+fails loudly and leaves the conflict for you to resolve by hand rather
+than guessing. If you're merging without having run `./configure` in this
+checkout, enable the driver by hand with the same `git config` line
+`./configure` uses:
+```
+git config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
+```

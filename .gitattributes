@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# boot/kaem/build-*.kaem is generated from the Makefile's own source file
+# list (tools/gen-kaem.sh, `make kaem`) -- a three-way text merge of it is
+# never the right resolution, since two branches that each add a source
+# file conflict here textually even though the "right" merge is just
+# regenerating from the merged tree. Route both files through the
+# ntlibc-kaem merge driver (tools/merge-kaem.sh) instead of git's default
+# text merge, during `merge`, `rebase` and `cherry-pick` alike.
+#
+# The driver command itself is per-clone config (git does not read
+# merge.*.driver from the repository) -- see ./configure, which sets it up
+# the same way it sets core.hooksPath for .githooks, and CONTRIBUTING.md's
+# "Keeping the generated files honest" section for the manual fallback.
+boot/kaem/build-i386.kaem merge=ntlibc-kaem
+boot/kaem/build-x86_64.kaem merge=ntlibc-kaem

@@ -355,11 +355,18 @@ test "$srcdir" = "." || ln -sf "$srcdir/Makefile" .
 
 #
 # Enable the tracked pre-commit hook (regenerates boot/kaem/ and blocks
-# the commit on drift -- see .githooks/pre-commit) for anyone who builds
-# from a git checkout. No-op outside one.
+# the commit on drift -- see .githooks/pre-commit), and the boot/kaem/
+# merge driver (regenerates instead of leaving conflict markers in a
+# generated bootstrap script -- see .gitattributes and
+# tools/merge-kaem.sh), for anyone who builds from a git checkout.
+# Neither is read from the repository itself (core.hooksPath and
+# merge.*.driver are both per-clone config git deliberately does not
+# track), so both are set here, the same way, in one place. No-op outside
+# a git checkout.
 #
 if git -C "$abs_srcdir" rev-parse --git-dir >/dev/null 2>&1 ; then
 git -C "$abs_srcdir" config core.hooksPath .githooks
+git -C "$abs_srcdir" config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
 fi
 
 printf "done\n"
