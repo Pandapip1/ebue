@@ -1,0 +1,338 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * termios(3) against an NT console (the only "terminal" this platform
+ * has -- __FD_CONSOLE, see src/internal/libc.h and src/unistd/isatty.c,
+ * which already gates every one of these the same way a real
+ * tcgetattr() would: termios.html ERRORS "[ENOTTY] The file associated
+ * with fildes is not a terminal.").
+ *
+ * What is real, clause by clause:
+ *
+ *   - c_lflag's ISIG/ICANON/ECHO: real, direct console-mode bits.
+ *     ENABLE_PROCESSED_INPUT (ISIG: does Ctrl-C/Ctrl-Break generate a
+ *     signal at all -- src/signal/signal.c's ctrl_handler() is exactly
+ *     what this gates), ENABLE_LINE_INPUT (ICANON: does a read wait for
+ *     a full line or return per-keystroke), ENABLE_ECHO_INPUT (ECHO:
+ *     are typed characters echoed) are reached via kernel32's
+ *     GetConsoleMode()/SetConsoleMode() -- there is no ntdll path to
+ *     console mode at all (CONTRIBUTING.md), so this is
+ *     NTLIBC_USE_KERNEL32-only, same as SetConsoleCtrlHandler().
+ *   - tcflush()'s input side (TCIFLUSH/TCIOFLUSH): real, via kernel32's
+ *     FlushConsoleInputBuffer() -- tcflush.html DESCRIPTION "discard[s]
+ *     data received but not read" is exactly what that call does.
+ *   - tcgetsid(): real in the same sense src/unistd/ttyname.c's
+ *     tcgetpgrp() already is -- this platform has exactly one, fixed
+ *     session (src/unistd/ids.c's getsid()/setsid() always report
+ *     session 1), so tcgetsid() reduces to that same fixed answer,
+ *     gated by the same ENOTTY check as everything else here.
+ *
+ * What is honestly accepted-and-stored, never applied (round-trips
+ * through tcgetattr()/tcsetattr() correctly, changes nothing real):
+ * c_iflag and c_oflag in full (no line discipline sits between
+ * ReadConsole()/WriteConsole() and the screen buffer for INLCR/OPOST/
+ * etc. to hook), and c_lflag's ECHOE/ECHOK/ECHONL/NOFLSH/TOSTOP/IEXTEN
+ * (no per-feature console-mode bit for any of these -- only
+ * ISIG/ICANON/ECHO, above, have one). c_cc[]: none of the 16 slots are
+ * independently reprogrammable through any console API -- VINTR's
+ * Ctrl-C and VEOF's Ctrl-Z are fixed keys the console recognises on its
+ * own (ENABLE_PROCESSED_INPUT only turns Ctrl-C handling on or off
+ * wholesale, and canonical-mode Ctrl-Z-as-EOF is likewise not
+ * retargetable), and the rest (VQUIT, VERASE, VKILL, VEOL, VEOL2,
+ * VMIN, VTIME, VSTART, VSTOP, VSUSP, VREPRINT, VDISCARD, VWERASE,
+ * VLNEXT) have no console concept whatsoever -- so the whole array is
+ * stored-only, same as c_iflag/c_oflag.
+ *
+ * What is genuinely N/A, not merely unimplemented -- a console has no
+ * serial line under it for these to describe, so they are honest
+ * no-ops rather than faked:
+ *
+ *   - c_cflag in full (CSIZE/CS5-8, PARENB/PARODD, CSTOPB, CRTSCTS):
+ *     wire-encoding properties of a physical line. Stored, never
+ *     applied.
+ *   - cfgetispeed()/cfsetispeed()/cfgetospeed()/cfsetospeed(): baud
+ *     rate is a serial clocking property; a console session has none.
+ *     These round-trip a value through struct termios's c_ispeed/
+ *     c_ospeed (added the *BSD way, since POSIX itself does not
+ *     mandate the storage shape -- termios.h.html) and nothing else on
+ *     this platform ever reads it.
+ *   - tcflush()'s output side (TCOFLUSH, and the output half of
+ *     TCIOFLUSH): "discard[s] data written ... but not transmitted"
+ *     (tcflush.html) presumes a transmit queue sitting between the
+ *     write and the wire; WriteConsole() completes only once the
+ *     characters are already in the screen buffer, so there is nothing
+ *     to discard. Legal no-op.
+ *   - tcdrain(): "wait until all output written ... has been
+ *     transmitted" (tcdrain.html) -- same reasoning: a console write is
+ *     synchronously complete by the time it returns, so there is never
+ *     anything still in flight to wait out. Legal no-op that returns
+ *     immediately.
+ *   - tcflow(): TCOOFF/TCOON/TCIOFF/TCION (tcflow.html) all describe
+ *     suspending/resuming a serial data stream, or sending XOFF/XON
+ *     characters "to the terminal device" -- no such stream or wire
+ *     exists for a console. Legal no-op (POSIX default is "neither
+ *     input nor output is suspended"; this platform can never make
+ *     either true).
+ *   - tcsendbreak(): "If the terminal is not using asynchronous serial
+ *     data transmission, it is implementation-defined whether
+ *     tcsendbreak() sends data ... or returns without taking any
+ *     action" (tcsendbreak.html) -- a console is squarely that case.
+ *     Legal, spec-permitted no-op.
+ *
+ * Storage for the accepted-but-not-applied fields is a single
+ * process-global shadow, not per-fd: ntlibc has exactly one console
+ * session reachable at a time in practice (no multi-console support
+ * anywhere else in this library either -- see src/unistd/ttyname.c's
+ * fixed "CON" answer), so a global is the honest amount of state to
+ * keep, not an arbitrary simplification hiding a real per-fd need.
+ */
+#include <termios.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include "libc.h"
+#ifdef NTLIBC_USE_KERNEL32
+#include "kernel32.h"
+#endif
+
+/* ---- the shadow: c_iflag/c_oflag/c_cflag/c_cc[]/speeds, plus (only
+ * when NTLIBC_USE_KERNEL32 is not defined) c_lflag in full, since
+ * there is then no real console mode to read ISIG/ICANON/ECHO from
+ * at all. */
+static struct {
+	int inited;
+	tcflag_t iflag, oflag, cflag, lflag;
+	cc_t cc[NCCS];
+	speed_t ispeed, ospeed;
+} shadow;
+
+static void shadow_init(void)
+{
+	if (shadow.inited) return;
+	shadow.inited = 1;
+	shadow.iflag = ICRNL | IXON;
+	shadow.oflag = OPOST | ONLCR;
+	shadow.cflag = CS8 | CREAD | HUPCL;
+	shadow.lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
+	/* Conventional POSIX defaults (the values stty -a shows on most
+	 * systems); nothing on this platform enforces them, they are
+	 * simply sane data for tcgetattr() to hand back before any
+	 * tcsetattr() call. */
+	shadow.cc[VINTR] = 3;    /* ^C */
+	shadow.cc[VQUIT] = 28;   /* ^\ */
+	shadow.cc[VERASE] = 127;
+	shadow.cc[VKILL] = 21;   /* ^U */
+	shadow.cc[VEOF] = 4;     /* ^D */
+	shadow.cc[VTIME] = 0;
+	shadow.cc[VMIN] = 1;
+	shadow.cc[VSTART] = 17;  /* ^Q */
+	shadow.cc[VSTOP] = 19;   /* ^S */
+	shadow.cc[VSUSP] = 26;   /* ^Z */
+	shadow.cc[VEOL] = 0;
+	shadow.cc[VREPRINT] = 18; /* ^R */
+	shadow.cc[VDISCARD] = 15; /* ^O */
+	shadow.cc[VWERASE] = 23;  /* ^W */
+	shadow.cc[VLNEXT] = 22;   /* ^V */
+	shadow.cc[VEOL2] = 0;
+}
+
+/* termios.html ERRORS / isatty.html: gate every function here the same
+ * way src/unistd/isatty.c already gates isatty() itself. */
+static struct __fd *get_console(int fd)
+{
+	struct __fd *f = __fd_get(fd);
+	if (!f) return 0;               /* EBADF, already set */
+	if (f->type != __FD_CONSOLE) { errno = ENOTTY; return 0; }
+	return f;
+}
+
+#ifdef NTLIBC_USE_KERNEL32
+/* Same LdrLoadDll()/LdrGetProcedureAddress() dance as
+ * src/signal/signal.c's install_ctrl_handler(), generalised to more
+ * than one proc and cached across calls (a console-heavy program may
+ * call tcgetattr()/tcsetattr() often; there is no reason to repeat the
+ * loader work every time). */
+static PVOID k32_dll(void)
+{
+	static PVOID dll;
+	static int tried;
+	UNICODE_STRING dllname;
+
+	if (tried) return dll;
+	tried = 1;
+	RtlInitUnicodeString(&dllname, L"kernel32.dll");
+	if (!NT_SUCCESS(LdrLoadDll(0, 0, &dllname, &dll))) dll = 0;
+	return dll;
+}
+
+static PVOID k32_proc(const char *name)
+{
+	PVOID dll = k32_dll(), proc;
+	ANSI_STRING procname;
+
+	if (!dll) return 0;
+	procname.Buffer = (char *)name;
+	procname.Length = procname.MaximumLength = (USHORT)strlen(name);
+	if (!NT_SUCCESS(LdrGetProcedureAddress(dll, &procname, 0, &proc))) return 0;
+	return proc;
+}
+
+typedef BOOL (NTAPI *fn_GetConsoleMode)(HANDLE, ULONG *);
+typedef BOOL (NTAPI *fn_SetConsoleMode)(HANDLE, ULONG);
+typedef BOOL (NTAPI *fn_FlushConsoleInputBuffer)(HANDLE);
+#endif
+
+int tcgetattr(int fd, struct termios *t)
+{
+	struct __fd *f = get_console(fd);
+	if (!f) return -1;
+	shadow_init();
+	t->c_iflag = shadow.iflag;
+	t->c_oflag = shadow.oflag;
+	t->c_cflag = shadow.cflag;
+	t->c_lflag = shadow.lflag;
+	memcpy(t->c_cc, shadow.cc, sizeof shadow.cc);
+	t->c_ispeed = shadow.ispeed;
+	t->c_ospeed = shadow.ospeed;
+#ifdef NTLIBC_USE_KERNEL32
+	{
+		fn_GetConsoleMode fn = (fn_GetConsoleMode)k32_proc("GetConsoleMode");
+		ULONG mode;
+		if (fn && fn(f->h, &mode)) {
+			t->c_lflag = (shadow.lflag & ~(ISIG | ICANON | ECHO))
+				| (mode & ENABLE_PROCESSED_INPUT ? ISIG : 0)
+				| (mode & ENABLE_LINE_INPUT ? ICANON : 0)
+				| (mode & ENABLE_ECHO_INPUT ? ECHO : 0);
+		}
+		/* fn == NULL or the call failed (e.g. no real console under
+		 * this process, as under `make check`'s Wine runner -- see
+		 * test/posix-termios.c): fall back to the shadow's own
+		 * c_lflag, same as the non-kernel32 build below. Not an
+		 * error -- ENOTTY was already the honest answer for "no
+		 * terminal at all" and get_console() already ruled that out;
+		 * this is "a terminal exists but its mode is unreadable",
+		 * which the shadow's last-known/default value covers. */
+	}
+#else
+	/* No ntdll path to console mode exists (CONTRIBUTING.md); ISIG/
+	 * ICANON/ECHO round-trip through the shadow like every other
+	 * field, but never reflect or change real console behaviour.
+	 * NTLIBC_USE_KERNEL32 is required for that. */
+#endif
+	return 0;
+}
+
+int tcsetattr(int fd, int act, const struct termios *t)
+{
+	struct __fd *f = get_console(fd);
+	if (!f) return -1;
+	if (act != TCSANOW && act != TCSADRAIN && act != TCSAFLUSH) { errno = EINVAL; return -1; }
+	shadow_init();
+
+#ifdef NTLIBC_USE_KERNEL32
+	{
+		fn_GetConsoleMode getfn = (fn_GetConsoleMode)k32_proc("GetConsoleMode");
+		fn_SetConsoleMode setfn = (fn_SetConsoleMode)k32_proc("SetConsoleMode");
+		ULONG mode;
+		if (getfn && setfn && getfn(f->h, &mode)) {
+			mode = (mode & ~(ULONG)(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
+				| (t->c_lflag & ISIG ? ENABLE_PROCESSED_INPUT : 0)
+				| (t->c_lflag & ICANON ? ENABLE_LINE_INPUT : 0)
+				| (t->c_lflag & ECHO ? ENABLE_ECHO_INPUT : 0);
+			/* TCSAFLUSH: "all input so far received but not read
+			 * shall be discarded" (tcsetattr.html) -- do this before
+			 * installing the new mode, same ordering a real
+			 * implementation uses. TCSADRAIN differs from TCSANOW
+			 * only in output-drain timing, which is a no-op here
+			 * anyway (tcdrain() below) -- both are treated as
+			 * TCSANOW. */
+			if (act == TCSAFLUSH) {
+				fn_FlushConsoleInputBuffer flushfn = (fn_FlushConsoleInputBuffer)k32_proc("FlushConsoleInputBuffer");
+				if (flushfn) flushfn(f->h);
+			}
+			setfn(f->h, mode);
+			/* Whether or not SetConsoleMode() actually succeeded,
+			 * tcsetattr() "shall return successful completion if
+			 * ... able to perform any of the requested actions"
+			 * (tcsetattr.html) -- the shadow update below always
+			 * happens, so the store side of the contract is always
+			 * honoured even when this build/environment cannot
+			 * reach a real console mode to change. */
+		}
+	}
+#else
+	/* No ntdll path to console mode exists; ISIG/ICANON/ECHO are
+	 * accepted and stored below like every other field, with no real
+	 * effect. See tcgetattr()'s #else arm above. */
+#endif
+	shadow.iflag = t->c_iflag;
+	shadow.oflag = t->c_oflag;
+	shadow.cflag = t->c_cflag;
+	shadow.lflag = t->c_lflag;
+	memcpy(shadow.cc, t->c_cc, sizeof shadow.cc);
+	shadow.ispeed = t->c_ispeed;
+	shadow.ospeed = t->c_ospeed;
+	return 0;
+}
+
+speed_t cfgetispeed(const struct termios *t) { return t->c_ispeed; }
+speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed; }
+
+int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
+int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
+
+int tcflush(int fd, int queue)
+{
+	struct __fd *f = get_console(fd);
+	if (!f) return -1;
+	if (queue != TCIFLUSH && queue != TCOFLUSH && queue != TCIOFLUSH) { errno = EINVAL; return -1; }
+	if (queue == TCOFLUSH) return 0;   /* N/A: no transmit queue, see file banner */
+#ifdef NTLIBC_USE_KERNEL32
+	{
+		fn_FlushConsoleInputBuffer fn = (fn_FlushConsoleInputBuffer)k32_proc("FlushConsoleInputBuffer");
+		if (fn) fn(f->h);
+	}
+#endif
+	/* Without kernel32, or if the real call above was unreachable:
+	 * honest no-op, not a fabricated success -- there is no ntdll
+	 * path to flushing a console's input buffer (CONTRIBUTING.md).
+	 * Still returns 0: tcflush() has no ENOTSUP-shaped error for "I
+	 * accepted the request but could not act on it", and returning
+	 * -1 here would be indistinguishable from the genuine failures
+	 * (EBADF/EINVAL/ENOTTY) already checked above. */
+	return 0;
+}
+
+int tcdrain(int fd)
+{
+	struct __fd *f = get_console(fd);
+	if (!f) return -1;
+	return 0;   /* N/A: no transmit queue to wait out, see file banner */
+}
+
+int tcflow(int fd, int action)
+{
+	struct __fd *f = get_console(fd);
+	if (!f) return -1;
+	if (action != TCOOFF && action != TCOON && action != TCIOFF && action != TCION) { errno = EINVAL; return -1; }
+	return 0;   /* N/A: no serial data stream to suspend/resume, see file banner */
+}
+
+int tcsendbreak(int fd, int duration)
+{
+	struct __fd *f = get_console(fd);
+	(void)duration;
+	if (!f) return -1;
+	return 0;   /* spec-permitted no-op for a terminal with no break condition, see file banner */
+}
+
+pid_t tcgetsid(int fd)
+{
+	struct __fd *f = get_console(fd);
+	if (!f) return -1;
+	/* This platform has exactly one, fixed session -- src/unistd/
+	 * ids.c's getsid()/setsid() always answer 1, same as
+	 * src/unistd/ttyname.c's tcgetpgrp() already does for the
+	 * process-group equivalent. */
+	return getsid(0);
+}
