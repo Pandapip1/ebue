@@ -131,6 +131,22 @@ if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
 	exit 1
 fi
 
+# Two concurrent runs share $OBJ and clobber each other: the `rm -rf`
+# below deletes objects the other run is still compiling into and linking
+# against.  The build then fails in ways that look nothing like the real
+# cause and everything like a bug elsewhere in the library -- a SEGV
+# inside memcpy, or a test that appears to have been broken all along.
+# That misdiagnosis is expensive and has happened more than once, so this
+# is enforced rather than documented.  mkdir is atomic, so it is both the
+# check and the lock; a run killed with SIGKILL leaves the directory
+# behind, which is what the second message below is for.
+if ! mkdir "$OBJ.lock" 2>/dev/null; then
+	echo "asan: another build is using $OBJ ($OBJ.lock exists)." >&2
+	echo "asan: wait for it, or remove the lock if no build is running." >&2
+	exit 1
+fi
+trap 'rmdir "$OBJ.lock" 2>/dev/null || :' EXIT INT TERM
+
 rm -rf "$OBJ"
 mkdir -p "$OBJ/obj" "$OBJ/test"
 
