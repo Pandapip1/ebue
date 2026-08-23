@@ -11,17 +11,20 @@
 #include <math.h>
 #include "x87.h"
 
-double hypot(double x, double y)
+long double hypotl(long double x, long double y)
 {
 	long double ax = fabsl(x), ay = fabsl(y), r;
 	/* hypot.html RETURN VALUE: "If x or y is +-Inf, +Inf shall be
 	 * returned even if one of x or y is a NaN" -- an infinity outranks
 	 * a NaN, so that check must run first, unconditionally, not only
 	 * inside the x!=x||y!=y branch below. */
-	if (fabs(x) == HUGE_VAL || fabs(y) == HUGE_VAL) return HUGE_VAL;
+	if (ax == HUGE_VALL || ay == HUGE_VALL) return HUGE_VALL;
 	if (x != x || y != y) return x + y;
 	if (ax < ay) { long double t = ax; ax = ay; ay = t; }
 	if (ax == 0) return 0;
 	r = ay / ax;
-	return (double)(ax * __x87_sqrt(1.0L + r * r));
+	return ax * __x87_sqrt(1.0L + r * r);
 }
+
+double hypot(double x, double y) { return (double)hypotl(x, y); }
+float hypotf(float x, float y) { return (float)hypotl(x, y); }

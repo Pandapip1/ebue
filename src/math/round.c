@@ -85,3 +85,94 @@ long long llrint(double x)
 	}
 	return (long long)r;
 }
+
+/* lroundf/lroundl/llroundf/llroundl/lrintf/lrintl/llrintf/llrintl: the
+ * f/l suffix here changes the ARGUMENT type (float/long double), not
+ * the return type -- lround()/llround() above already cover the
+ * "l"/"ll" return-type prefix for a `double` argument. Same exact
+ * pattern as above in every other respect: an explicit range check
+ * before the cast (never a raw `(long)x`/`(long long)x` on a NaN or
+ * out-of-range value, which is undefined behaviour and, worse,
+ * inconsistent about raising FE_INVALID across arches -- see the big
+ * comment above), built on roundl()/__x87_rndint() which already take
+ * a long double, so a float or long double argument needs no extra
+ * promotion dance. */
+long lroundf(float x)
+{
+	long double r = roundl(x);
+	if (!(r == r) || r >= 2147483648.0L || r < -2147483648.0L) {
+		feraiseexcept(FE_INVALID);
+		return LONG_MIN;
+	}
+	return (long)r;
+}
+
+long lroundl(long double x)
+{
+	long double r = roundl(x);
+	if (!(r == r) || r >= 2147483648.0L || r < -2147483648.0L) {
+		feraiseexcept(FE_INVALID);
+		return LONG_MIN;
+	}
+	return (long)r;
+}
+
+long long llroundf(float x)
+{
+	long double r = roundl(x);
+	if (!(r == r) || r >= 9223372036854775808.0L || r < -9223372036854775808.0L) {
+		feraiseexcept(FE_INVALID);
+		return LLONG_MIN;
+	}
+	return (long long)r;
+}
+
+long long llroundl(long double x)
+{
+	long double r = roundl(x);
+	if (!(r == r) || r >= 9223372036854775808.0L || r < -9223372036854775808.0L) {
+		feraiseexcept(FE_INVALID);
+		return LLONG_MIN;
+	}
+	return (long long)r;
+}
+
+long lrintf(float x)
+{
+	long double r = __x87_rndint(x, -1);
+	if (!(r == r) || r >= 2147483648.0L || r < -2147483648.0L) {
+		feraiseexcept(FE_INVALID);
+		return LONG_MIN;
+	}
+	return (long)r;
+}
+
+long lrintl(long double x)
+{
+	long double r = __x87_rndint(x, -1);
+	if (!(r == r) || r >= 2147483648.0L || r < -2147483648.0L) {
+		feraiseexcept(FE_INVALID);
+		return LONG_MIN;
+	}
+	return (long)r;
+}
+
+long long llrintf(float x)
+{
+	long double r = __x87_rndint(x, -1);
+	if (!(r == r) || r >= 9223372036854775808.0L || r < -9223372036854775808.0L) {
+		feraiseexcept(FE_INVALID);
+		return LLONG_MIN;
+	}
+	return (long long)r;
+}
+
+long long llrintl(long double x)
+{
+	long double r = __x87_rndint(x, -1);
+	if (!(r == r) || r >= 9223372036854775808.0L || r < -9223372036854775808.0L) {
+		feraiseexcept(FE_INVALID);
+		return LLONG_MIN;
+	}
+	return (long long)r;
+}

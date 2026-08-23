@@ -16,3 +16,5 @@ float truncf(float x) { return (float)__x87_rndint(x, 3); }
 long double truncl(long double x) { return __x87_rndint(x, 3); }
 
 double rint(double x) { return (double)__x87_rndint(x, -1); }
+float rintf(float x) { return (float)__x87_rndint(x, -1); }
+long double rintl(long double x) { return __x87_rndint(x, -1); }
