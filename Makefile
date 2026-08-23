@@ -319,6 +319,23 @@ check-kernel32: config.mak
 .PHONY: check-kernel32
 
 #
+# install-check: prove that `make install` produces something an outside
+# program can actually build and run against, rather than something only
+# in-tree gates (which never leave -I./include -I./arch/$(ARCH)
+# -Iobj/include -Llib) can see. Configures and builds a second, throwaway
+# copy of the tree out-of-tree, installs it into a temporary prefix, and
+# builds/runs test programs against *only* that prefix through the
+# installed tools/ntlibc-tcc wrapper -- no source-tree path anywhere on
+# the compile line. See tools/install-check.sh for the full rationale and
+# what it checks. Requires config.mak (same as `check`): run it once per
+# configured arch, the same way `make check` is.
+#
+install-check: config.mak
+	./tools/install-check.sh
+
+.PHONY: install-check
+
+#
 # lint: opt-in static checking (gcc/clang strict warnings, the clang static
 # analyzer, cppcheck, shellcheck).  Never a prerequisite of anything: the
 # library is built with tcc, and tools/lint.sh only reports.  It skips any
