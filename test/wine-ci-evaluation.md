@@ -16,11 +16,13 @@ measurably more permissive than real Windows. We maintain a patched Wine
 locally that fixes both. Should CI use it, what would it cost, and where would
 the patched Wine come from?
 
-**Short answer: yes, and it is much cheaper than expected — but as an
-*additional* leg, not a replacement, and only after the patch series is pushed
-to a fetchable remote.** The provenance problem, which looked like the
-deciding constraint, turns out to be already half-solved: a `Pandapip1/wine`
-fork exists and five of the thirteen patches are already on it.
+**Short answer: yes — but as an *additional* leg, not a replacement, and
+only after the patch series is pushed to a fetchable remote.** The provenance
+problem, which looked like the deciding constraint, turns out to be already
+half-solved: a `Pandapip1/wine` fork exists and five of the thirteen patches
+are already on it. The build is not cheap — measured at ~50 minutes on a
+4-vCPU runner — but it is paid only when the pin is bumped, and only on a job
+nothing else waits for.
 
 ## Summary of findings
 
@@ -29,7 +31,7 @@ fork exists and five of the thirteen patches are already on it.
 | Does patched Wine unlock the `*-win.c` tests? | **Yes.** All four pass under it; all four abort under stock Wine. |
 | Does patched Wine turn currently-green tests red? | **No.** Measured: 47 passed, 0 failed, versus 43/0 on stock Wine — a strict superset. |
 | Where does patched Wine come from? | `github.com/Pandapip1/wine`, pinned by SHA, exactly like `TINYCC_SHA`. The fork already exists. |
-| What does the build cost? | See [Cost](#2-cost-what-a-wine-build-actually-costs). |
+| What does the build cost? | ~50 min on a 4-vCPU runner on a cache *miss*; a 457 MiB restore otherwise. See [Cost](#2-cost-what-a-wine-build-actually-costs). |
 | Should it replace stock Wine? | **No** — add a fourth `test` leg. Stock Wine is itself a signal worth keeping. |
 
 ## 1. What stock Wine cannot do
@@ -85,7 +87,55 @@ attempt was validated in an environment that could not see it.
 
 ## 2. Cost: what a Wine build actually costs
 
-*(measured below)*
+Measured, not estimated. The patched tree (`8da89f8` "Release 11.16" plus the
+thirteen local commits) was configured and built from scratch with exactly the
+`configure` line [Appendix A](#appendix-a-the-proposed-diff) proposes, on this
+machine — a 24-thread i9-12900K — with `make -j24`:
+
+| Step | Wall clock | CPU time |
+| --- | --- | --- |
+| `configure` | 11 s | 11 s |
+| `make -j24` | **9 m 44 s** | **10,680 s** (2 h 58 m, 1829% CPU) |
+| `make install` | ~2 m | — |
+
+and what it produces:
+
+| Artefact | Size |
+| --- | --- |
+| Installed prefix (what CI would cache) | 1.7 GB — **457 MiB** zstd-compressed |
+| Build tree (discarded after `make install`) | 5.8 GB |
+
+The number that matters for CI is the **CPU time**, not the wall clock: a
+GitHub-hosted `ubuntu-24.04` runner has 4 vCPUs, not 24. 10,680 CPU-seconds
+across 4 cores is roughly **45 minutes of compile**, call it **~50 minutes**
+for the whole job with `configure`, `make install` and the apt step. That is
+not cheap, and the recommendation below is shaped around it rather than
+around a hope that it would be.
+
+Three things make ~50 minutes acceptable anyway:
+
+- **It is paid on a cache *miss* only.** Keyed on `WINE_SHA`, the job compiles
+  when the pin is deliberately bumped and is a ~457 MiB cache restore — seconds
+  — every other time. This is exactly `build-toolchain`'s existing bargain.
+- **457 MiB fits.** GitHub gives a repository 10 GB of Actions cache total, so
+  the Wine entry sits comfortably alongside tinycc's.
+  ([Caching dependencies — usage limits](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/cache-dependencies#usage-limits-and-eviction-policy))
+- **It is off the critical path.** Only the new `test-patched-wine` leg has
+  `needs: build-wine`; `windows-test`'s `needs: test` is untouched, so a Wine
+  compile never delays the real-NT evidence.
+
+The honest caveat is that same eviction policy: a cache entry unused for **7
+days** is evicted (same source), so a repository quiet for a week re-pays the
+~50 minutes on its next run even with no pin bump. That is a slow extra leg on
+an occasional run, not a blocked pipeline — but it is the reason the prebuilt
+tarball fallback below is kept in reserve rather than dismissed.
+
+One transferability note, so the figure is not read as better than it is: the
+measured build had the same `i686-w64-mingw32-gcc` / `x86_64-w64-mingw32-gcc`
+cross compilers the appendix's apt line installs, and skipped the same
+C++17-only PE modules (`configure` reports "PE compiler supporting C++17 not
+found") in both cases. CI's build is therefore the same build, only on fewer
+cores.
 
 ## 3. Provenance: where the patched Wine comes from
 
@@ -155,9 +205,10 @@ Wine rebase blocks every push — the failure mode is strictly worse than the
 fork's, where a stale pin simply keeps working. Third, it is more work than
 `git push`, and the fork already exists.
 
-**Publishing a prebuilt tarball (a GitHub release asset on the fork).** This
-is the right answer *if* the in-CI build turns out to be expensive — see
-[Cost](#2-cost-what-a-wine-build-actually-costs). It removes the build from CI
+**Publishing a prebuilt tarball (a GitHub release asset on the fork).** The
+in-CI build *is* expensive — ~50 minutes on a cache miss, see
+[Cost](#2-cost-what-a-wine-build-actually-costs) — so this stays a live
+option rather than a theoretical one. It removes the build from CI
 entirely and makes the leg as fast as the current ones. Its cost is a manual
 publish step per patch bump and an artefact whose provenance is "whatever was
 on the maintainer's machine that day", which is exactly the reproducibility
@@ -229,7 +280,8 @@ If the patched-Wine leg is the only Wine leg, then a missing package, an
 upstream build break after a pin bump, or a transient apt failure takes down
 `test` — and because `windows-test` has `needs: test`, it takes down the
 real-Windows legs with it. Every leg of the pipeline would then be gated on a
-30-minute compile of a 700-file C project we do not maintain. As an added
+~50-minute compile (measured; see [Cost](#2-cost-what-a-wine-build-actually-costs))
+of a project we do not maintain. As an added
 leg with the stock-Wine legs left in place, the same failure costs one red
 job on a board that still reports everything else honestly.
 
@@ -319,8 +371,8 @@ In order:
    `TINYCC_REPO`/`TINYCC_SHA` and for the same stated reason.
 
 3. **Build it in a cached job**, `build-wine`, keyed on the pinned SHA — the
-   same shape as `build-toolchain`. See [Cost](#2-cost-what-a-wine-build-actually-costs)
-   for the cache-hit and cache-miss numbers that make this viable.
+   same shape as `build-toolchain`. ~50 minutes on a miss, seconds on a hit;
+   see [Cost](#2-cost-what-a-wine-build-actually-costs).
 
 4. **Add one `test-patched-wine` leg**, x86_64, `--disable-kernel32`, running
    the full `TEST_EXES` set rather than `TEST_RUN`.
@@ -352,11 +404,13 @@ behaviour, and the comment explaining it, untouched.
 
 ### If the cost turns out to be unacceptable
 
-Fall back to publishing a prebuilt Wine tarball as a release asset on the fork
-and having CI download it. That trades reproducibility for speed, and it is
-the wrong default, but it is a working answer if the cached build proves too
-slow or too large — and it can be adopted later without changing anything else
-about the shape above.
+The measured cost is ~50 minutes per cache miss, and cache entries are evicted
+after 7 days unused, so a quiet repository pays it more often than "only on a
+pin bump" suggests. If that proves unacceptable in practice, fall back to
+publishing a prebuilt Wine tarball as a release asset on the fork and having
+CI download it. That trades reproducibility for speed, and it is the wrong
+default, but it is a working answer — and it can be adopted later without
+changing anything else about the shape above.
 
 ## Appendix A: the proposed diff
 
