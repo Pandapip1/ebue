@@ -154,10 +154,28 @@
  * ready.  test/posix-select-socket.c is the regression assertion:
  * an idle socket must not be reported ready, which is the one claim
  * the old code could not make.
+ *
+ * That routing change then exposed a second way to report a socket
+ * always-ready, this time on the *success* path: the ioctl was issued
+ * with one buffer as both input and output, and the reply was read as
+ * Handles[0].PollEvents with no reference to the reply's own
+ * NumberOfHandles.  AfdPoll() reports "nothing is ready" by setting
+ * NumberOfHandles to zero and completing with
+ * IoStatus.Information == 16 -- the header alone -- and
+ * IOCTL_AFD_SELECT is METHOD_BUFFERED, so nothing past +16 is copied
+ * back into the caller's buffer.  Aliased with the request, that slot
+ * still held the *requested* mask, so every idle probe read back as
+ * "everything fired".  The __FD_SOCKET case below now uses a separate,
+ * zeroed reply buffer and reads it through __afd_poll_events_for(),
+ * which bounds by the reply's count and matches on the handle; see
+ * src/internal/afd.h's poll banner for the driver source behind each
+ * of those, and test/posix-socket-poll.c's check_reply() for the
+ * device-free negative control.
  */
 #include <sys/select.h>
 #include <signal.h>
 #include <errno.h>
+#include <string.h>
 #include "libc.h"
 #include "afd.h"
 
@@ -228,18 +246,42 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		 * Handles at +24 on x86_64, where the AFD driver's own
 		 * source, phnt, wepoll and libuv all put it at +16; see
 		 * that header's poll banner. */
-		AFD_POLL_INFO pi;
+		/* Separate request and reply buffers, deliberately -- see
+		 * below and afd.h's poll banner.  They were once one
+		 * buffer, which is what made the reply unreadable. */
+		AFD_POLL_INFO req, rep;
 		unsigned long len = __afd_poll_request_size(1);
 		uint32_t events;
 		NTSTATUS st;
 
 		/* Timeout 0: never wait, just sample. */
-		__afd_build_poll_request(&pi, 0, 1);
-		__afd_poll_set_handle(&pi, 0, f->h, AFD_POLL_READ_BITS | AFD_POLL_WRITE_BITS);
+		__afd_build_poll_request(&req, 0, 1);
+		__afd_poll_set_handle(&req, 0, f->h, AFD_POLL_READ_BITS | AFD_POLL_WRITE_BITS);
 
-		/* __afd_poll_request_size(1), not sizeof(pi), which rounds
+		/* The reply buffer is zeroed before the call, and is *not*
+		 * the request buffer.  IOCTL_AFD_SELECT is METHOD_BUFFERED,
+		 * so afd.sys works on a kernel copy and the I/O manager
+		 * copies back only IoStatus.Information bytes -- 16, the
+		 * header alone, whenever no event fired.  Anything past +16
+		 * therefore keeps whatever the caller left there.  Aliasing
+		 * the request into the output buffer meant "nothing fired"
+		 * read back as the requested mask, i.e. as everything fired;
+		 * zeroing a separate buffer makes the same silence read back
+		 * as zero, which fails closed.
+		 *
+		 * The obvious check clears the buggy code, so state it here:
+		 * the driver *does* zero Handles[0].PollEvents, at the top of
+		 * every iteration of its scan -- but into the kernel's copy,
+		 * which is not the copy that comes back.  "Does the driver
+		 * clear it?" answers yes and is the wrong question.
+		 *
+		 * The request's own event mask cannot be zeroed instead: it
+		 * *is* the request the driver is about to read.
+		 *
+		 * __afd_poll_request_size(1), not sizeof(...), which rounds
 		 * the tail up for Timeout's alignment. */
-		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &pi, (ULONG)len, &pi, (ULONG)len, 0);
+		memset(&rep, 0, sizeof rep);
+		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &req, (ULONG)len, &rep, (ULONG)len, 0);
 		if (!NT_SUCCESS(st)) {
 			/* No honest answer available: the driver refused to
 			 * tell us.  Report ready-and-hung-up, exactly as the
@@ -266,7 +308,15 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 			break;
 		}
 
-		events = __afd_poll_get_events(&pi, 0);
+		/* Bounded by the reply's own NumberOfHandles and matched
+		 * on the handle, never read as slot 0 unconditionally: the
+		 * driver zeroes that count before its readiness scan and
+		 * writes -- compacted -- only the handles that actually
+		 * fired.  A socket the reply does not name has no event
+		 * pending, which is a real "not ready" answer and must not
+		 * take the ready-and-hung-up path above; that path is for a
+		 * probe that could not be taken at all. */
+		events = __afd_poll_events_for(&rep, 1, f->h);
 		*canread = (events & AFD_POLL_READ_BITS) != 0;
 		*canwrite = (events & AFD_POLL_WRITE_BITS) != 0;
 		if (events & (AFD_EVENT_CLOSE | AFD_EVENT_ABORT | AFD_EVENT_DISCONNECT)) {
