@@ -282,7 +282,16 @@ void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandl
 	 * it BOOLEAN Unique, wepoll and libuv call it ULONG Exclusive;
 	 * they disagree about the type but not about the four bytes
 	 * before an 8-aligned Handles, and zero is zero either way --
-	 * see afd.h's poll banner. */
+	 * see afd.h's poll banner.
+	 *
+	 * It must *stay* zero, and not merely because this project has
+	 * no use for it: AfdPoll() reads it as Unique, and a non-zero
+	 * Unique makes the request supersede any existing unique poll on
+	 * the same first file object, cancelling that other IRP with
+	 * STATUS_CANCELLED (the driver's poll.c walks AfdPollListHead
+	 * and cancels the match).  A __fd_probe()-shaped poll setting it
+	 * would silently break another thread's concurrent
+	 * select()/poll() on the same socket. */
 	memcpy(p + AFD_POLL_REQ_OFF_EXCLUSIVE, &exclusive, sizeof(exclusive));
 }
 
@@ -306,6 +315,60 @@ uint32_t __afd_poll_get_events(const void *buf, unsigned long i)
 
 	memcpy(&events, e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
 	return events;
+}
+
+/* See afd.h.  The reply's own count -- the *only* thing that says how
+ * many of the Handles[] slots afd.sys actually wrote. */
+uint32_t __afd_poll_get_handle_count(const void *buf)
+{
+	uint32_t count;
+
+	memcpy(&count, (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLE_COUNT, sizeof(count));
+	return count;
+}
+
+/* See afd.h.  Matching on the handle rather than indexing by request
+ * position is not defensive padding: AfdPoll() *compacts* its output.
+ * poll.c walks the requested endpoints and does
+ *
+ *     if ( found ) {
+ *         pollInfo->NumberOfHandles++;
+ *         pollHandleInfo++;
+ *     }
+ *
+ * -- the output pointer advances only for an endpoint that fired, so
+ * the entries that did fire are packed to the front of the array and
+ * output slot i has nothing to do with request slot i.  With today's
+ * single-handle probe the two coincide; written as an indexed read it
+ * would silently become wrong the first time src/select/poll.c batches
+ * several sockets into one ioctl. */
+uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE h)
+{
+	uint32_t count = __afd_poll_get_handle_count(buf);
+	unsigned long i;
+
+	/* The reply cannot name more handles than were asked about; a
+	 * count that says otherwise is not a reply this code understands,
+	 * and reading past the buffer on its say-so would be worse than
+	 * reporting nothing. */
+	if ((unsigned long long)count > (unsigned long long)nrequested)
+		count = (uint32_t)nrequested;
+
+	for (i = 0; i < (unsigned long)count; i++) {
+		const unsigned char *e = (const unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLES
+		                       + (size_t)i * AFD_POLL_H_SIZE;
+		HANDLE eh;
+
+		memcpy(&eh, e + AFD_POLL_H_OFF_HANDLE, sizeof(eh));
+		if (eh == h) {
+			uint32_t events;
+			memcpy(&events, e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
+			return events;
+		}
+	}
+	/* Not named in the reply: no event fired on it.  That is a real
+	 * answer -- "nothing is ready" -- not a failure to obtain one. */
+	return 0;
 }
 
 /* See afd.h. */

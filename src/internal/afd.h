@@ -620,6 +620,14 @@ typedef struct _AFD_DISCONNECT_INFO {
  * padding the caller must still zero, which is what a ULONG at +12
  * amounts to).  The disagreement is recorded, not hidden.
  *
+ * Zero there is not just "the value we happen to send": AfdPoll()
+ * reads that field as Unique, and a non-zero Unique makes the incoming
+ * poll supersede any existing unique poll on the same first file
+ * object, cancelling that other IRP with STATUS_CANCELLED.  A probe
+ * that set it would silently cancel another thread's concurrent
+ * select()/poll() on the same socket.  Whatever the field is called,
+ * this project must keep sending zero.
+ *
  * Unlike connect's, these header offsets are the *same* on both ABIs;
  * it is the element size of the Handles array that is pointer-sized
  * (AFD_HANDLE: HANDLE, then two 32-bit fields -- 16 bytes on x86_64,
@@ -751,17 +759,66 @@ int __afd_build_connect_request(void *buf, const struct sockaddr *addr, unsigned
  * count for n handles; __afd_build_poll_request() zeroes that many
  * bytes at `buf` and fills Timeout/HandleCount/Exclusive;
  * __afd_poll_set_handle() fills one array element;
- * __afd_poll_get_events()/__afd_poll_get_status() read one back after
- * the ioctl (IOCTL_AFD_SELECT is METHOD_BUFFERED, so afd.sys writes
- * its answer into the same buffer).  `buf` must be pointer-aligned and
- * at least __afd_poll_request_size(n) bytes.
+ * __afd_poll_get_events()/__afd_poll_get_status() read array slot i
+ * back raw, and __afd_poll_get_handle_count() reads the reply's own
+ * NumberOfHandles.  `buf` must be pointer-aligned and at least
+ * __afd_poll_request_size(n) bytes.
  * test/posix-socket-poll.c re-parses the result by offset with no
- * reference to this header, and runs with no \Device\Afd at all. */
+ * reference to this header, and runs with no \Device\Afd at all.
+ *
+ * *** Reading the reply: use __afd_poll_events_for(), not
+ * __afd_poll_get_events(0). ***
+ *
+ * The raw slot accessors are for the layout test.  A caller
+ * interpreting an actual reply must go through
+ * __afd_poll_events_for(), which reads NumberOfHandles first and only
+ * looks at slots the driver says it wrote, matching on the handle.
+ * Two separate properties of AfdPoll() make the indexed read wrong:
+ *
+ *   - It reports *nothing* by writing nothing.  poll.c sets
+ *     `pollInfo->NumberOfHandles = 0;` before its readiness scan and
+ *     completes with `Irp->IoStatus.Information = (ULONG)pollHandleInfo
+ *     - (ULONG)pollInfo;`, which on a zero-event poll is the 16 bytes
+ *     of header alone.  IOCTL_AFD_SELECT is METHOD_BUFFERED, so the
+ *     I/O manager copies back exactly those Information bytes -- the
+ *     caller's Handles[] is never overwritten and still holds whatever
+ *     the caller put there.  If input and output are the same buffer,
+ *     that is the *requested* event mask, and reading it back as a
+ *     result reports every requested bit as fired.  An idle socket then
+ *     looks readable and writable, on the success path, forever.
+ *
+ *     The obvious check gives the wrong answer here, so read it
+ *     carefully: AfdPoll() *does* clear the field.  At the top of
+ *     every iteration of its scan, before any event is tested, it
+ *     does `pollHandleInfo->PollEvents = 0;` and
+ *     `pollHandleInfo->Status = STATUS_SUCCESS;`, and for a
+ *     one-handle poll pollHandleInfo is still pollInfo->Handles.
+ *     "The driver leaves the field alone" is therefore false at
+ *     the driver level, and an auditor who checks only that would
+ *     clear this code.  The clear is real -- it just happens in
+ *     the kernel's Irp->AssociatedIrp.SystemBuffer and does not
+ *     survive the Information-bounded copy-back into the caller's
+ *     buffer (ReactOS ntoskrnl/io/iomgr/irp.c: RtlCopyMemory of
+ *     IoStatus.Information bytes into Irp->UserBuffer).
+ *   - It compacts what it does write: the output pointer advances only
+ *     for endpoints that fired, so output slot i is not request slot i.
+ *
+ * Both are read off the AFD driver's own poll.c (Copyright (c) 1992
+ * Microsoft Corporation).  Every working consumer bounds by the count
+ * the same way -- Wine's ws2_32 loops to params->count, wepoll and
+ * libuv both reject NumberOfHandles < 1.
+ *
+ * Callers should also hand the ioctl a *separate*, zeroed output
+ * buffer rather than aliasing the request, so that a reply the driver
+ * declines to write reads back as zero rather than as the request; see
+ * src/select/select.c's __FD_SOCKET case. */
 unsigned long __afd_poll_request_size(unsigned long nhandles);
 void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandles);
 void __afd_poll_set_handle(void *buf, unsigned long i, HANDLE h, uint32_t events);
 uint32_t __afd_poll_get_events(const void *buf, unsigned long i);
 NTSTATUS __afd_poll_get_status(const void *buf, unsigned long i);
+uint32_t __afd_poll_get_handle_count(const void *buf);
+uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE h);
 /* Issue one AFD ioctl on socket handle h and wait for it to finish --
  * every AFD request (src/socket/ (every .c there)) goes through this.  STATUS_PENDING
  * is waited out on the handle itself (see __afd_open()'s comment on why
