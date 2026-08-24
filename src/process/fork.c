@@ -241,6 +241,22 @@ pid_t fork(void)
 	return pid;
 }
 
+/* _Fork(): kept deliberately, and no test references it -- so it will
+ * keep surfacing on tools/lint-unreferenced.sh's list.  It is not an
+ * unspecified extension.  POSIX.1-2024 specifies it
+ * (`https://pubs.opengroup.org/onlinepubs/9799919799/functions/_Fork.html`,
+ * CHANGE HISTORY: "Austin Group Defects 62, 1361, and 1383 are applied,
+ * adding the _Fork() function and removing the requirement for fork() to
+ * be async-signal-safe"), so this is an interface the project has early,
+ * not one it invented; deleting it means re-adding it when the project
+ * moves editions.  Same reasoning as posix_close().
+ *
+ * What POSIX asks of it beyond fork() is that it be async-signal-safe
+ * and not run pthread_atfork() handlers.  Neither distinguishes it here:
+ * there is no libpthread (see flockfile in src/stdio/file.c), so there
+ * are no atfork handlers to skip, and fork() registers no handlers of
+ * its own.  So it forwards, and will need revisiting only if this
+ * library ever grows real threads. */
 pid_t _Fork(void)
 {
 	return fork();
