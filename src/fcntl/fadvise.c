@@ -61,7 +61,47 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	if (!NT_SUCCESS(st)) return __errno_from_status(st);
 	if (si.Directory) return EBADF;   /* not a regular file */
 
-	if (want > si.AllocationSize) {
+	/* The second half of this guard is a data-loss interlock, not an
+	 * optimisation.  ZwSetInformationFile(FileAllocationInformation) is
+	 * documented (ntifs.h FILE_ALLOCATION_INFORMATION, "Remarks") as: "If
+	 * the allocation size is set to a value that is less than the
+	 * end-of-file position, the end-of-file position is automatically
+	 * adjusted to match the allocation size."  The requested size is also
+	 * rounded up to the filesystem's cluster size first, so the value that
+	 * is compared against EndOfFile is not the one passed in.
+	 *
+	 * `want > si.AllocationSize` alone is safe only while AllocationSize
+	 * >= EndOfFile, which is the ordinary NTFS case but is exactly what a
+	 * sparse or compressed file breaks: such a file's allocation is
+	 * deliberately smaller than its size.  On one -- EndOfFile 16384,
+	 * AllocationSize 0 -- posix_fallocate(fd, 0, 100) would have passed
+	 * the guard, requested an allocation of 100, had it rounded to one
+	 * cluster, and had the file truncated to that cluster.  POSIX
+	 * (posix_fallocate) never shrinks a file: "If the offset+len is beyond
+	 * the current file size, then posix_fallocate() shall adjust the file
+	 * size"; below that it changes no size at all.  So requesting an
+	 * allocation smaller than the current EndOfFile is never something
+	 * this function may do.
+	 *
+	 * Skipping the call is preferred to clamping the request up to
+	 * si.EndOfFile.  Clamping would satisfy the allocation guarantee for
+	 * the requested range, but it would also de-sparsify the entire file:
+	 * posix_fallocate(fd, 0, 1) on a terabyte-sized sparse file would ask
+	 * for a terabyte of clusters and most likely return ENOSPC.  Turning a
+	 * hundred-byte request into a whole-file materialisation -- or into a
+	 * hard failure -- is a worse outcome than under-delivering an
+	 * allocation guarantee on a file shape whose whole purpose is to not
+	 * have that allocation.  Nothing is destroyed either way.
+	 *
+	 * Not reproduced here: this environment cannot produce a file with
+	 * AllocationSize < EndOfFile.  FSCTL_SET_SPARSE succeeds under Wine
+	 * but FSCTL_SET_ZERO_DATA returns STATUS_NOT_SUPPORTED, so the shape
+	 * is unreachable under the emulator.  The interlock rests on the
+	 * documented FileAllocationInformation rule above, and costs nothing
+	 * on a file where AllocationSize >= EndOfFile -- there, want >
+	 * AllocationSize already implies want > EndOfFile and the added
+	 * conjunct is always true. */
+	if (want > si.AllocationSize && want >= si.EndOfFile) {
 		ai.AllocationSize = want;
 		st = NtSetInformationFile(f->h, &io, &ai, sizeof ai, FileAllocationInformation);
 		/* Real Windows honours this; Wine's ntdll does not implement
