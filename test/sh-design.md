@@ -18,11 +18,16 @@ shell on this platform:
   i.e. `cmd.exe`, whose grammar is not the Shell Command Language.
 - **`popen()`** (`src/stdio/misc.c`) does the same, and its header comment
   documents the substitution.
-- **`wordexp()`** (`src/wordexp/wordexp.c`) refuses command substitution
+- **`wordexp()`** (`src/wordexp/wordexp.c`) refused command substitution
   outright with `WRDE_CMDSUB`, because `cmd.exe` cannot parse `$(...)`.
+  **Fixed as of stage 5** — it calls `__sh_cmdsub()`
+  (`src/internal/libc.h`, implemented in `src/sh/exec.c`) and runs the
+  substitution for real. `WRDE_NOCMD` is now the only thing that
+  produces `WRDE_CMDSUB`, which is what the standard says it is for.
 
 That is one missing component, not three problems. Building it fixes all
-three at the source rather than accumulating three accommodations.
+three at the source rather than accumulating three accommodations. One
+of the three is fixed; `system()` and `popen()` are item 5 below.
 
 ## The reuse rule, which is the whole point
 
@@ -110,34 +115,55 @@ unchanged in the meantime.
 
 ## Status and what remains before a usable `sh.exe`
 
-As of stage 4 (`src/sh/exec.c`), the executor covers: simple commands
+As of stage 5 (`src/sh/exec.c`), the executor covers: simple commands
 with real PATH lookup and `$?` (stage 2); assignments, `&&`/`||`/`!`,
 and all nine redirection operators including here-documents, plus
-pipelines of arbitrary length (stage 3); and subshells `( list )` and
+pipelines of arbitrary length (stage 3); subshells `( list )` and
 brace groups `{ list; }`, including as pipeline stages, plus a minimal
-`cd` builtin (stage 4). `src/sh/parse.c` already parses more than the
-executor runs: `if`/`while`/`for`/`case`, functions and aliases parse
-as ordinary reserved words today only insofar as the lexer treats them
-as WORD tokens (sh.h's banner) — the grammar for them does not exist
-yet either, parser or executor.
+`cd` builtin (stage 4); and command substitution in both the `$(...)`
+and the `` `...` `` form (stage 5). `src/sh/parse.c` already parses more
+than the executor runs: `if`/`while`/`for`/`case`, functions and aliases
+parse as ordinary reserved words today only insofar as the lexer treats
+them as WORD tokens (sh.h's banner) — the grammar for them does not
+exist yet either, parser or executor.
 
 What is still missing, in the order it would need to be tackled (later
 items depend on earlier ones being real, not on each other's specific
 implementation):
 
-1. **Command substitution** (`$(...)`/`` `...` ``) — the one gap that
-   already runs through every layer as a named, tested "not yet"
-   (`WRDE_CMDSUB` from `wordexp()`, this file's -1 convention). Needed
-   before `wordexp()` can stop refusing it, which is one of this
-   project's three stated motivations. Mechanically: wire
-   `wordexp()`'s command-substitution call-out to `__sh_exec_list()`,
-   capturing that list's stdout into a buffer instead of an fd a real
-   process would inherit — the same "subshell environment" 2.12
-   requires for `( list )` (this file's own text above), so
-   `exec_group()`'s save/restore machinery is *reused*, not
-   reinvented, plus a way to capture output without a real pipe (a
-   temp file, per this file's existing here-document reasoning, or an
-   in-memory sink if one gets built first).
+1. ~~**Command substitution** (`$(...)`/`` `...` ``)~~ — **done, stage
+   5.** It went exactly the way this item predicted: `wordexp()`'s
+   command-substitution call-out is wired to `__sh_exec_list()` via
+   `__sh_cmdsub()` (`src/sh/exec.c`), and `exec_group()`'s
+   environ/cwd save-and-restore is *reused* for the "subshell
+   environment" 2.6.3/2.12 require rather than reinvented.
+
+   The one thing this item left open was how to capture output
+   without a real pipe. **A temporary file**, per this file's own
+   here-document reasoning, and for the identical reason: an
+   in-memory sink is not available to a *spawned* child (the
+   substituted commands are separate NT processes that inherit an fd,
+   not a buffer), and a pipe would deadlock, because
+   `__sh_exec_list()` runs to completion in this process before
+   anything reads — so a substitution larger than one 64KiB pipe
+   buffer would wedge the shell against itself, silently. Concurrency
+   would fix that and is exactly what `exec.c` deliberately does not
+   have (no fork: stock Wine has no `RtlCloneUserProcess`; no
+   threads). `tmpfile()` is seekable, so writers finish first and the
+   read happens after.
+
+   Trade-off accepted: a substitution's output round-trips through
+   `%TEMP%`, so it needs a writable temp directory (everything else
+   in `exec.c` needs only a writable cwd) — the same dependency
+   here-documents already have — and the result is not available
+   incrementally, which costs nothing because 2.6.3's result is the
+   complete output by definition.
+
+   Both forms are first class. The backquoted one is not a footnote
+   to `$(...)`: an autoconf-generated `configure` uses it roughly 14×
+   as often, so 2.6.3's "first unquoted non-escaped backquote" search,
+   its backslash removal (`\$`, `` \` ``, `\\`), and nesting
+   *through* that removal have their own scanner and their own tests.
 2. **Control-flow reserved words** (`if`/`while`/`for`/`case`) —
    currently an explicit non-goal (sh.h's banner, this note's opening
    paragraph). A `sh -c` that cannot run a real script needs at least
@@ -179,17 +205,67 @@ implementation):
    ("a shell that is subtly wrong ... is worse than no shell, because
    callers cannot tell"). Each of (1), (2) and (3) landing shortens
    the refusal list rather than changing the binary's shape.
-5. **Wiring `system()`/`popen()`/`wordexp()` over to it** — the actual
-   payoff (see "Why a libc project is growing a shell" above). Once
-   (1) exists, `wordexp()`'s own `WRDE_CMDSUB` refusal can be replaced
-   outright. `system()` and `popen()` currently hand their command
-   string to `%ComSpec%`/`cmd.exe` (`src/stdlib/system.c`,
-   `src/stdio/misc.c`); switching them to `__sh_parse()` +
-   `__sh_exec_list()` needs (4) settled for the entry-point shape but
-   not the binary itself, since both already call into libc-internal
-   code rather than spawning a separate process today.
+5. **Wiring `system()`/`popen()` over to it** — the actual payoff (see
+   "Why a libc project is growing a shell" above). `wordexp()`'s half
+   of this is done: its `WRDE_CMDSUB` refusal is gone (stage 5).
+   `system()` and `popen()` still hand their command string to
+   `%ComSpec%`/`cmd.exe` (`src/stdlib/system.c`, `src/stdio/misc.c`).
+   Stage 5 investigated the switch rather than making it. **Do not
+   switch yet**, and in particular do not switch on the strength of a
+   parse-failure fallback: measured against this executor, that
+   fallback does not fire where it would need to.
 
-None of the above blocks anything already shipped: stages 2-4 are a
+   What was measured (a probe running each string through both
+   `__sh_parse()`+`__sh_exec_list()` and today's `system()`, under
+   Wine):
+
+   - **Today, cmd.exe already fails on most POSIX-shaped strings.**
+     `prog 'single quoted arg'`, `( a; b )`, a here-document, `$(...)`,
+     `` `...` ``, `if`, `for` — all rejected by cmd's own lexer or
+     mangled. So the *upside* of switching is real and large.
+   - **cmd.exe's internal commands are the regression surface, and
+     they are bigger than control flow.** `dir`, `echo`, `copy`,
+     `del`, `set`, `type`, `mkdir`, `rmdir` are cmd built-ins with no
+     `.exe` anywhere; every one of them works through `system()`
+     today and returns **127** through this executor, which has
+     exactly one builtin (`cd`). Windows-targeted code calling
+     `system("del file")` or `system("echo x > y")` is not exotic;
+     it is the normal way that code is written.
+   - **A fallback keyed on *parse failure* does not catch control
+     flow.** This lexer treats reserved words as ordinary WORD tokens
+     (sh.h's banner), so `for f in a b; do echo $f; done`,
+     `if true; then echo y; fi` and `while ...; do ...; done` all
+     **parse successfully** and then run a program called `for`/`if`/
+     `while` — exit 127, no parse error, nothing for a fallback to
+     trigger on. Only `case ...` and a function definition are
+     actually rejected by the parser. A fallback keyed on parse
+     failure would therefore protect precisely the two constructs
+     nobody writes and miss the three everybody does. (`sh/main.c`'s
+     own refusal check catches them; the parser does not, and
+     `system()` would be calling the parser.)
+
+   Half the missing detector already exists, in (4): `sh/main.c`
+   refuses, up front and by name, exactly the constructs the engine
+   would otherwise misread — control-flow reserved words, unimplemented
+   built-ins, positional/special parameters, `&`. That refusal, lifted
+   out of `main()` into something `system()` could call, is what would
+   make "our shell cannot handle this string" a *detectable* condition
+   instead of a silent 127, and is the precondition a fallback needs.
+
+   So the sequence is: (2) first — or, at minimum, factor
+   `sh/main.c`'s refusal check into a reusable "can this engine run
+   this program?" predicate — plus a decision about cmd built-ins
+   (implement the handful that matter as real builtins, or accept the
+   regression, or keep the fallback permanently). Only then is a
+   fallback switch defensible, and even then its cost is that the
+   *language* `system()` speaks becomes "POSIX sh, or cmd.exe batch,
+   depending on which one this build happens to accept" —
+   undiagnosable from the outside, and silently different for a string
+   valid in both (`echo a > b` is not the same program in the two
+   languages). Treat it as a transition strategy with a removal
+   condition, not a design.
+
+None of the above blocks anything already shipped: stages 2-5 are a
 complete, correctly-scoped subset on their own, tested against the
 XCU clauses they implement, and (4) above now exposes exactly that
 subset as a real program.
