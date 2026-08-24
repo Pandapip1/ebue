@@ -231,6 +231,30 @@ Every implemented name was grepped against the concatenation of all
 - `setjmp.h` (2): `_setjmp _longjmp`
 - `string.h` (1): `strcoll_l`
 
+#### One bug, found by closing part of that list
+
+Adding assertions for the never-asserted `<stdio.h>` names (see "Tests
+added" below) turned up a real defect immediately: **`vdprintf()` — and
+therefore `dprintf()` — leaked its stream buffer on every call.**
+
+`src/stdio/printf.c`'s `vdprintf()` wraps the raw fd in a stack `FILE`
+with `bufmode = _IONBF`; `__ensure_buf()` then `malloc()`s that FILE's
+buffer (one byte, for `_IONBF`) on the first write, and nothing ever
+freed it — the FILE never reaches `fclose()`, and `fflush()` drains a
+buffer without releasing it. One byte per call, unbounded.
+
+Nothing in the tree had ever called `dprintf()` or `vdprintf()`, which
+is exactly why it survived: `tools/asan-build.sh` runs every test under
+LeakSanitizer and would have failed on the first call. Fixed in the same
+commit as the test (`if (f.buf && !f.user_buf) free(f.buf);`, guarded
+the same way `__fclose_locked()` and `setvbuf()` guard buffer
+ownership), not fenced as a `BUG`, because it is a leak rather than a
+spec-violating observable behaviour and the fix is two lines.
+
+The general lesson for whoever works the rest of the 134: "exists and
+links" is a much weaker statement than it looks, and the cheapest
+assertion is often enough to find out.
+
 Twelve of those 134 (`killpg`, `sigaltstack`, `fseeko`, `ftello`,
 `getchar`, `putc`, `putchar`, `strcoll_l`, `utimes`, `fpathconf`,
 `readlink`, `unlinkat`) *do* appear in a `test/POSIX-COVERAGE.md` table
@@ -541,6 +565,27 @@ all, another 22 are `netdb.h`'s flat-file databases (also no blocker),
 and 10 more are the locale/message-catalogue group. That is 69 of 120
 closeable without touching NT.
 
+## Tests added alongside this accounting
+
+Small and deliberately not a clause audit — these close part of the
+"implemented, but no assertion anywhere" list rather than starting a new
+ledger section. All three files run on **real Windows in CI** as well as
+under Wine, and nothing added here depends on Wine-specific behaviour.
+
+- `test/posix-stdio.c`: `test_putc_family` (`putc`, `putc_unlocked`),
+  `test_putchar_return` (`putchar`, `putchar_unlocked`), `test_getchar`
+  (`getchar`, `getchar_unlocked`, against a `freopen`'d stdin rather
+  than whatever stdin happens to be), `test_fseeko_ftello`,
+  `test_flockfile` (`flockfile`, `ftrylockfile`, `funlockfile`), and
+  `test_v_forms` (`vfprintf`, `vsnprintf`, `vsprintf`, `vsscanf`,
+  `vfscanf`, `dprintf`, `vdprintf`, each reached through a real
+  `va_list`). 18 previously-unasserted names.
+- `test/posix-string.c`: `test_strcoll_l`.
+- `test/posix-signal.c`: `test_killpg`, `test_sigaltstack_disabled`.
+
+That is 21 of the 134. The remaining 113 — 70 of them the `math.h`
+`f`/`l` tail — are left for the successor; see below.
+
 ## Where this stopped, and what is next
 
 **Reached and individually noted:** every one of the 1177 interfaces is
@@ -559,9 +604,11 @@ finer-grained than the note it would carry.
 
 **Not yet reached — the next successor's queue, in order:**
 
-1. **The 134 implemented-but-unasserted functions** listed above. Not an
-   accounting gap but a test gap, and the cheapest work in this file.
-   Start with the twelve that a ledger row already claims by name.
+1. **The remaining 113 implemented-but-unasserted functions.** Not an
+   accounting gap but a test gap, and the cheapest work in this file —
+   and it already paid for itself once (the `vdprintf` leak above).
+   Start with the twelve that a ledger row already claims by name, of
+   which this session closed seven.
 2. **A clause audit of `termios.h`** (11 functions, `test/posix-termios.c`
    exists, no ledger section) and of `search.h`, `regex.h`, `glob.h`/
    `fnmatch.h`/`wordexp.h`, `ftw.h`, `pwd.h`/`grp.h`, `fenv.h`,
