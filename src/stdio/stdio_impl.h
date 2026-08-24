@@ -25,7 +25,7 @@ struct _IO_FILE {
 	unsigned char eof;
 	unsigned char err;
 	unsigned char bufmode;   /* _IOFBF, _IOLBF, _IONBF */
-	unsigned char user_buf;  /* the buffer was given by setvbuf/setbuffer: don't free it */
+	unsigned char user_buf;  /* the buffer was given by setvbuf: don't free it */
 	unsigned char readable;
 	unsigned char writable;
 	unsigned char is_mem;    /* fmemopen/open_memstream */

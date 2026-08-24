@@ -221,27 +221,3 @@ ssize_t getline(char **__restrict buf, size_t *__restrict n, FILE *__restrict f)
 {
 	return getdelim(buf, n, '\n', f);
 }
-
-/* fgetln: a line, owned by the stream, valid until the next call on any
- * stream.  Kept as one process-wide buffer, which is what every other
- * implementation of this BSDism amounts to since nothing frees it either. */
-char *fgetln(FILE *f, size_t *lenp)
-{
-	static char *buf;
-	static size_t cap;
-	ssize_t n = getdelim(&buf, &cap, '\n', f);
-	if (n < 0) return 0;
-	if (lenp) *lenp = (size_t)n;
-	return buf;
-}
-
-int getw(FILE *f)
-{
-	int v;
-	if (__fread(&v, sizeof v, 1, f) != 1) return EOF;
-	return v;
-}
-int putw(int w, FILE *f)
-{
-	return __fwrite(&w, sizeof w, 1, f) == 1 ? 0 : EOF;
-}

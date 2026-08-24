@@ -201,11 +201,6 @@ void setbuf(FILE *__restrict f, char *__restrict buf)
 	setvbuf(f, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
 }
 
-void setbuffer(FILE *f, char *buf, size_t size)
-{
-	setvbuf(f, buf, buf ? _IOFBF : _IONBF, size);
-}
-
 void setlinebuf(FILE *f)
 {
 	setvbuf(f, 0, _IOLBF, 0);

@@ -163,13 +163,7 @@ char *tempnam(const char *, const char *);
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
-#define L_cuserid 20
-char *cuserid(char *);
 void setlinebuf(FILE *);
-void setbuffer(FILE *, char *, size_t);
-int getw(FILE *);
-int putw(int, FILE *);
-char *fgetln(FILE *, size_t *);
 int asprintf(char **, const char *, ...);
 int vasprintf(char **, const char *, __isoc_va_list);
 #endif

@@ -192,13 +192,6 @@ char *ctermid(char *s)
 	return buf;
 }
 
-char *cuserid(char *s)
-{
-	static char buf[L_cuserid] = "user";
-	if (s) { strcpy(s, buf); return s; }
-	return buf;
-}
-
 FILE *popen(const char *cmd, const char *mode)
 {
 	int rw = mode[0] == 'w';
