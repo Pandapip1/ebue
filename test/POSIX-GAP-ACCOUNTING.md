@@ -718,12 +718,25 @@ finer-grained than the note it would carry.
    | `arpa/inet.h` | 8 | `test/posix-socket.c` |
    | `pwd.h` | 7 | `test/pwd.c` |
    | `grp.h` | 7 | `test/posix-grp.c` |
-   | `regex.h` | 4 | `test/posix-parse.c` |
+   | `regex.h` | 4 | `test/posix-glob.c` |
    | `dlfcn.h` | 4 | `test/posix-dl.c` |
    | `glob.h`/`fnmatch.h`/`wordexp.h` | 5 | `test/posix-glob.c` |
    | `ftw.h` | 2 | `test/posix-io.c` |
    | `sys/uio.h` | 2 | `test/posix-io.c` |
    | `sys/utsname.h`/`sys/times.h`/`sys/time.h`/`stropts.h` | 4 | `test/posix-sysmisc.c` |
+
+   **Status:** all of these except `arpa/inet.h`, `ftw.h`,
+   `sys/uio.h` and the `sys/utsname.h`/`sys/times.h`/`sys/time.h`/
+   `stropts.h` row have since been clause-audited; see
+   `test/POSIX-COVERAGE.md`'s "successor-queue item 2" sections
+   (groups A-G) for the rows, the bugs found, and the per-header
+   statement of which oracle applies. `arpa/inet.h` was deliberately
+   left alone in that pass because the socket subsystem was under
+   concurrent modification. Two of the "test file today" entries above
+   were wrong and are corrected in place: `fenv.h`'s coverage is in
+   `test/posix-math.c`, not `test/math.c` (which asserts nothing about
+   that header at all), and `regex.h`'s is in `test/posix-glob.c`, not
+   `test/posix-parse.c` (which contains no regex).
 
    That is the ledger's priority order continued; this file did not
    audit any clause of any of them and does not claim to. `termios.h`
