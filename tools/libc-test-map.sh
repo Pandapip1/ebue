@@ -67,10 +67,44 @@
 # the generated report states BOTH denominators and leads with the
 # smaller fraction.
 #
+# THE TWO HALVES, AND THE DATA BLOCK
+#
+# The expensive half of this script is classify(): it compiles all 146
+# tests, so it needs the libc-test submodule, a config.mak, a built
+# lib/libc.a and a working compiler.  Everything the report PRINTS is a
+# pure function of classify()'s rows plus a handful of scalars, and that
+# cheap half -- emit() and lever_table/closure/class_b_table/divergence/
+# iface_count/pct -- needs none of those four things.
+#
+# So the report CARRIES the rows it was rendered from, in an HTML comment
+# at its end (see DATA_BEGIN below), and `--render` reproduces the whole
+# file from them byte for byte, compiling nothing.  That is what makes a
+# three-way merge of this file resolvable: a merge driver can merge the
+# rows and re-render the tables without a tree, a suite or a compiler,
+# none of which git guarantees are on disk while a merge is in flight
+# (see tools/merge-kaem.sh's header for the empirical story behind that
+# constraint).  It is also what lets a reviewer with a bare clone read
+# the numbers back out mechanically.
+#
+# The rows live INSIDE the report rather than in a second checked-in file
+# because two files that must agree are a staleness bug waiting to
+# happen, and this project has spent enough time on those.  One file
+# cannot drift from itself.
+#
+# What --render deliberately does NOT do is re-derive anything.  It runs
+# the SAME derivation and rendering code as --generate -- there is no
+# second copy to drift -- and it runs the SAME invariants, because a
+# cheap path that skipped them would be a way to launder a broken
+# measurement past them.  Only `--check` re-derives from scratch, and
+# only `--check` can catch a data block that has gone stale; that is why
+# it, and not --render, is what the gate runs.
+#
 # Usage:
 #   tools/libc-test-map.sh              regenerate test/LIBC-TEST-MAP.generated.md
 #   tools/libc-test-map.sh --check      verify the checked-in report (the gate stage)
 #   tools/libc-test-map.sh --print      write the report to stdout, touch nothing
+#   tools/libc-test-map.sh --render     rewrite the report from its own data block:
+#                                       no submodule, no config.mak, no compiler
 #
 # Env:
 #   LIBC_TEST_MAP_GITREPO  the git repository to ask for SHAs and ancestry
@@ -93,8 +127,8 @@ set -u
 # en_US.UTF-8 (compare `schedgetparam` with `schedgetprioritymax`) and
 # AFTER it under C (`_` is 0x5F, `p` is 0x70).  In this corpus the same
 # rule reorders `pthread-robust-detach` against
-# `pthread_condattr_setclock`, `regexec-nosub` against `regex-*`, and
-# `iconv-roundtrips` against `iconv_*`.
+# `pthread_condattr_setclock`, `regexec-nosub` against the `regex-*`
+# tests, and `iconv-roundtrips` against `iconv_open`.
 #
 # This report is CHECKED IN, so that difference is not cosmetic: a
 # developer's locale and CI's disagree permanently, --check goes red on a
@@ -242,6 +276,37 @@ count_c() { find "$1" -maxdepth 1 -name '*.c' 2>/dev/null | wc -l | tr -d ' '; }
 # either escaping games or a GNU-only \x60.
 BQ='`'
 
+# ------------------------------------------------------------------
+# the data block
+# ------------------------------------------------------------------
+#
+# The rows the report was rendered from, carried in an HTML comment at
+# its end so that --render can reproduce the file without the submodule,
+# a config.mak or a compiler.  See "THE TWO HALVES, AND THE DATA BLOCK"
+# in the header for why it lives inside the report rather than beside it.
+#
+# Format: tab-separated, one leading single-letter section tag per row,
+# every section sorted under LC_ALL=C so a regeneration diffs as a line
+# diff and a merge of two branches' rows is a line merge.
+#
+#   s  scalar           s  KEY  VALUE
+#   h  absent include   h  TEST  HEADER      (one row per pair; class A only)
+#   t  classified test  t  NAME  CORPUS  CLASS  SUBCLASS  KEY  DETAIL
+#
+# The `t` row is exactly a line of classify()'s $W/rows, and the `h` rows
+# are exactly absent_includes()'s answer for each class A test, which is
+# why the derivations cannot tell which mode produced them.
+DATA_BEGIN='<!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.'
+DATA_END='END ntlibc-generated-data -->'
+
+read_data_block() {
+	awk -v e="$DATA_END" '
+		/^<!-- BEGIN ntlibc-generated-data v1/ { inb = 1; next }
+		$0 == e { inb = 0; next }
+		inb && /^[sht]\t/ { print }
+	' "$1"
+}
+
 g() { git -C "$GITREPO" "$@"; }
 
 # Every SHA and every ancestry question goes through here, and a failure
@@ -348,12 +413,99 @@ classify() {
 
 	# Sorted by test name before anything else reads it.  The loop above
 	# walks two globs -- functional, then regression -- and pathname
-	# expansion is collation-ordered, so this file's line order was a
-	# property of the caller's locale rather than of the data.  The
-	# LC_ALL=C above already fixes that; sorting as well makes the order
-	# a stated property of the file instead of an emergent one, so a
-	# later reader does not have to know that a glob was involved.
+	# expansion is collation-ordered, so the file's line order was a
+	# property of the locale rather than of the data.  Nothing in the
+	# report depends on that order any more (see class_b_table's
+	# representative rule), but --render rebuilds this same file from a
+	# C-sorted data block, and the two halves must agree line for line or
+	# they are not two halves of one thing.
 	sort -o "$W/rows" "$W/rows"
+}
+
+# absent_sets WORKDIR -- $W/needs: one line per class A test, TAB, the
+# C-sorted absent-header set as a space-separated list.  Split out of
+# emit() because it is the last thing in the rendering path that read the
+# suite off disk; it lives on the analysis side, and --render reads the
+# identical file back out of the data block.
+#
+# The line ORDER here is the order of class A tests in $W/rows, i.e. C
+# order by test name.  Nothing downstream depends on it -- lever_table,
+# closure and divergence all count rather than index -- but it is fixed
+# anyway so that the two paths produce identical intermediates.
+absent_sets() {
+	w=$1
+	: > "$w/needs"
+	awk -F'\t' '$3=="A"{print $1}' "$w/rows" | while IFS= read -r n; do
+		f="$SUITE/src/functional/$n.c"; [ -f "$f" ] || f="$SUITE/src/regression/$n.c"
+		printf '%s\t%s\n' "$n" "$(absent_includes "$f" | sort -u | tr '\n' ' ')" >> "$w/needs"
+	done
+}
+
+# load_data WORKDIR -- the --render half of classify()+absent_sets().
+#
+# Rebuilds $W/rows and $W/needs, and the scalars emit() interpolates,
+# from the data block the report carries.  Every failure here is loud and
+# names `make libc-test-map`, and specifically the row count is checked
+# against the census the block itself recorded: a TRUNCATED data block
+# would render a smaller population, and a smaller population sails past
+# both floors reading as a closed gap.  That is the one failure this
+# whole instrument is built around, and it must not be reachable by way
+# of the cheap path.
+load_data() {
+	w=$1
+	read_data_block "$REPORT" > "$w/data"
+	[ -s "$w/data" ] || {
+		echo "libc-test-map: $REPORT carries no ntlibc-generated-data block," >&2
+		echo "  so there is nothing to re-render it from.  Either it predates" >&2
+		echo "  the block or it was edited by hand.  Regenerate it:" >&2
+		echo "      make libc-test-map" >&2
+		exit 1; }
+
+	sc() { awk -F'\t' -v k="$2" '$1=="s" && $2==k { print $3; exit }' "$1"; }
+	nt_sha=$(sc "$w/data" ntlibc)
+	lc_sha=$(sc "$w/data" libctest)
+	CC=$(sc "$w/data" cc)
+	n_functional=$(sc "$w/data" functional)
+	n_regression=$(sc "$w/data" regression)
+	n_rows=$(sc "$w/data" tests)
+	# Named as `VARIABLE=key`, and the message quotes the KEY: a reader
+	# told a scalar is missing has to go and look for it in the block,
+	# and `n_rows` is not a string that appears there.
+	for vk in nt_sha=ntlibc lc_sha=libctest CC=cc n_functional=functional \
+	          n_regression=regression n_rows=tests; do
+		v=${vk%%=*}; k=${vk#*=}
+		eval "_x=\${$v}"
+		[ -n "$_x" ] || {
+			echo "libc-test-map: the data block in $REPORT is missing the" >&2
+			echo "  '$k' scalar, so it is truncated or corrupt.  A partial" >&2
+			echo "  block renders a partial population, which reads as a gap" >&2
+			echo "  that has closed.  Regenerate it:" >&2
+			echo "      make libc-test-map" >&2
+			exit 1; }
+	done
+
+	# Back into exactly the intermediates the derivations read, so those
+	# derivations cannot tell which mode produced them.  The `h` rows
+	# precede the `t` rows in the block (C order on the tag), which is
+	# what lets this be one pass.
+	awk -F'\t' '$1=="t"' "$w/data" | cut -f2- > "$w/rows"
+	awk -F'\t' '
+		$1=="h" { need[$2] = need[$2] $3 " "; next }
+		$1=="t" && $4=="A" { n++; a[n] = $2 }
+		END { for (i = 1; i <= n; i++) printf "%s\t%s\n", a[i], need[a[i]] }
+	' "$w/data" > "$w/needs"
+
+	got=$(wc -l < "$w/rows" | tr -d ' ')
+	if [ "$got" -ne "$n_rows" ]; then
+		echo "libc-test-map: the data block in $REPORT claims $n_rows tests but" >&2
+		echo "  carries $got rows, so it is truncated.  A short block would" >&2
+		echo "  render a smaller population, and a smaller population sails" >&2
+		echo "  past both floors looking like a gap that has closed -- the" >&2
+		echo "  exact failure this instrument exists to make impossible." >&2
+		echo "  Regenerate it:" >&2
+		echo "      make libc-test-map" >&2
+		exit 1
+	fi
 }
 
 # bucket_one NAME CORPUS SRC WORKDIR -> one tab-separated row:
@@ -535,23 +687,20 @@ absent_includes() {
 # ------------------------------------------------------------------
 # emit the report
 # ------------------------------------------------------------------
+#
+# Pure: it reads $W/rows, $W/needs and the five scalars ($nt_sha,
+# $lc_sha, $CC, $n_functional, $n_regression), and nothing else off the
+# disk.  That is the property --render depends on, so keep it: anything
+# added here that stats a file, shells out to git or asks the compiler a
+# question belongs on the analysis side, with a scalar carried across.
 emit() {
 	W=$1
-	nt_sha=$(g rev-parse HEAD) || die "cannot determine the ntlibc SHA."
-	lc_sha=$(suite_sha)
 
 	nA=$(awk -F'\t' '$3=="A"' "$W/rows" | wc -l | tr -d ' ')
 	nB=$(awk -F'\t' '$3=="B"' "$W/rows" | wc -l | tr -d ' ')
 	nC=$(awk -F'\t' '$3=="C"' "$W/rows" | wc -l | tr -d ' ')
 	nTot=$(wc -l < "$W/rows" | tr -d ' ')
 	nBlocked=$((nA + nB))
-
-	# per-blocked-test absent-header sets, for the closure
-	: > "$W/needs"
-	awk -F'\t' '$3=="A"{print $1}' "$W/rows" | while IFS= read -r n; do
-		f="$SUITE/src/functional/$n.c"; [ -f "$f" ] || f="$SUITE/src/regression/$n.c"
-		printf '%s\t%s\n' "$n" "$(absent_includes "$f" | sort -u | tr '\n' ' ')" >> "$W/needs"
-	done
 
 	cat <<EOF
 <!--
@@ -724,7 +873,7 @@ is good news, which is the most dangerous shape a bug can take.
 
 | # | invariant | pinned | measured |
 |---|---|---|---|
-| 1 | **Census** — files discovered under \`src/functional\` + \`src/regression\` | $CENSUS_FUNCTIONAL + $CENSUS_REGRESSION = $CENSUS | $(count_c "$SUITE/src/functional") + $(count_c "$SUITE/src/regression") = $nTot |
+| 1 | **Census** — files discovered under \`src/functional\` + \`src/regression\` | $CENSUS_FUNCTIONAL + $CENSUS_REGRESSION = $CENSUS | $n_functional + $n_regression = $nTot |
 | 2 | **Partition** — \`A + B + C\` must equal the census exactly | $CENSUS | $nA + $nB + $nC = $nTot |
 | 3a | **Upper floor** — \`C\` (builds) ≥ pin. Catches "the compiler stopped finding \`libc.a\`" | ≥ $FLOOR_BUILDS | $nC |
 | 3b | **Lower floor** — \`A + B\` (blocked) ≥ pin. **The one that matters**: catches an \`-I\` pointing at a host libc, which makes everything link and the gap read as *zero* | ≥ $FLOOR_BLOCKED | $nBlocked |
@@ -793,6 +942,36 @@ material that makes the rest reviewable.
 $(sort -t"$(printf '\t')" -k3,3 -k4,4 -k1,1 "$W/rows" |
   awk -F'\t' '{printf "| `%s` | %s | %s | %s | `%s` | %s |\n", $1,$2,$3,$4,($5==""?"-":$5),$6}')
 EOF
+
+	# ------------------------------------------------- the data block
+	#
+	# Emitted last, and identically in --generate and --render: the
+	# rendered half above is a pure function of these rows, so a
+	# re-render must reproduce the whole file byte for byte or the two
+	# halves have come apart.  Sorted so that a regeneration diffs as a
+	# line diff and so that merging two branches' rows is a line merge
+	# rather than a reshuffle.
+	#
+	# The `t` rows carry every test, not merely the blocked ones: the
+	# census, the partition and the upper floor are all statements about
+	# the whole population, and they have to be checkable from the block
+	# alone.  Class C rows end in two empty fields (no key, no detail),
+	# which is why the trailing tabs are there and are not noise.
+	printf '\n%s\n' "$DATA_BEGIN"
+	printf '%s\n' 'Do not edit by hand -- see "the data block" in tools/libc-test-map.sh.'
+	printf '\n'
+	printf 's\tntlibc\t%s\n'     "$nt_sha"
+	printf 's\tlibctest\t%s\n'   "$lc_sha"
+	printf 's\tcc\t%s\n'         "$CC"
+	printf 's\tfunctional\t%s\n' "$n_functional"
+	printf 's\tregression\t%s\n' "$n_regression"
+	printf 's\ttests\t%s\n'      "$nTot"
+	awk -F'\t' '{
+		n = split($2, a, " ")
+		for (i = 1; i <= n; i++) if (a[i] != "") printf "h\t%s\t%s\n", $1, a[i]
+	}' "$W/needs" | sort
+	awk '{ print "t\t" $0 }' "$W/rows" | sort
+	printf '%s\n' "$DATA_END"
 }
 
 pct() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f%%", (b?a*100/b:0)}'; }
@@ -945,11 +1124,17 @@ EOT
 # ------------------------------------------------------------------
 # invariants
 # ------------------------------------------------------------------
+# check_invariants WORKDIR FUNCTIONAL-COUNT REGRESSION-COUNT
+#
+# All four run on BOTH paths.  --generate counts the corpus on disk;
+# --render is handed the counts the report recorded, and checks those
+# against the same pins.  The counts are arguments rather than read from
+# $SUITE here for exactly that reason: --render has no $SUITE, and an
+# invariant that quietly did not run on the cheap path would make the
+# cheap path a way to launder a broken measurement past all four.
 check_invariants() {
-	W=$1; rc=0
+	W=$1; f=$2; r=$3; rc=0
 
-	f=$(count_c "$SUITE/src/functional")
-	r=$(count_c "$SUITE/src/regression")
 	if [ "$f" -ne "$CENSUS_FUNCTIONAL" ] || [ "$r" -ne "$CENSUS_REGRESSION" ]; then
 		echo "INVARIANT 1 (census) FAILED: pinned $CENSUS_FUNCTIONAL functional + $CENSUS_REGRESSION regression, found $f + $r." >&2
 		echo "  the corpus moved under the map.  Every number in this report is" >&2
@@ -1053,6 +1238,10 @@ check_iface_counts() {
 	return $bad
 }
 
+# The two places the recorded ntlibc SHA appears, dropped together.
+# Written with a literal tab in the second pattern (POSIX sed has no \t).
+strip_shas() { sed -e '/^| ntlibc | `/d' -e '/^s	ntlibc	/d' "$1"; }
+
 check_sha() {
 	[ -f "$REPORT" ] || { echo "--check: $REPORT is missing.  Run tools/libc-test-map.sh." >&2; return 1; }
 	# shellcheck disable=SC2016  # markdown backticks in a sed pattern
@@ -1072,27 +1261,48 @@ check_sha() {
 main() {
 	mode=${1:---generate}
 	case "$mode" in
-	--generate|--print|--check) ;;
-	*) sed -n '2,90p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+	--generate|--print|--check|--render) ;;
+	*) sed -n '2,118p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 	esac
 
-	require_suite
-	require_git
 	W=$(mktemp -d "${TMPDIR:-/tmp}/ntlibc-lctmap.XXXXXX") || exit 1
 	trap 'rm -rf "$W"' EXIT
 
-	classify "$W"
-
 	rc=0
-	check_invariants "$W" || rc=1
-	check_deletions || rc=1
-	check_iface_counts || rc=1
+	if [ "$mode" = --render ]; then
+		# The cheap half.  No suite, no config.mak, no build, no git:
+		# every fact comes out of the block the report carries.  The
+		# invariants below still run on it.
+		load_data "$W"
+	else
+		require_suite
+		require_git
+		nt_sha=$(g rev-parse HEAD) || die "cannot determine the ntlibc SHA."
+		lc_sha=$(suite_sha)
+		n_functional=$(count_c "$SUITE/src/functional")
+		n_regression=$(count_c "$SUITE/src/regression")
+		classify "$W"
+		absent_sets "$W"
+		# Both of these interrogate history and another checked-in
+		# document, not the rows: check_deletions asks git whether the
+		# commit a section 4 annotation names really removed that symbol,
+		# and check_iface_counts asks POSIX-GAP-ACCOUNTING.md whether
+		# section 3's quoted interface counts are still what it says.
+		# Neither is a statement about the population, so neither is
+		# reproducible from the data block, and neither belongs on the
+		# --render path -- which is why --check, not --render, is what
+		# the gate runs.
+		check_deletions || rc=1
+		check_iface_counts || rc=1
+	fi
+
+	check_invariants "$W" "$n_functional" "$n_regression" || rc=1
 
 	case "$mode" in
 	--print)
 		[ "$rc" -eq 0 ] || exit 1
 		emit "$W" ;;
-	--generate)
+	--generate|--render)
 		[ "$rc" -eq 0 ] || { echo "libc-test-map: refusing to write a report whose own invariants fail." >&2; exit 1; }
 		emit "$W" > "$REPORT.tmp" && mv "$REPORT.tmp" "$REPORT"
 		echo "libc-test-map: wrote $REPORT" ;;
@@ -1100,13 +1310,16 @@ main() {
 		check_sha || rc=1
 		if [ "$rc" -eq 0 ]; then
 			emit "$W" > "$W/fresh.md"
-			# The recorded SHA legitimately trails HEAD between
-			# regenerations, so compare everything EXCEPT that row --
+			# The recorded ntlibc SHA legitimately trails HEAD between
+			# regenerations, so compare everything EXCEPT it --
 			# otherwise every commit would make this stage red and the
 			# stage would be turned off, which is the failure mode this
-			# whole file is about.
-			grep -v '^| ntlibc | `' "$REPORT" > "$W/have.md"
-			grep -v '^| ntlibc | `' "$W/fresh.md" > "$W/want.md"
+			# whole file is about.  It now appears TWICE, once in the
+			# header table and once as an `s` row in the data block, and
+			# both have to go for the same reason; check_sha above is
+			# what actually enforces the SHA.
+			strip_shas "$REPORT" > "$W/have.md"
+			strip_shas "$W/fresh.md" > "$W/want.md"
 			if ! diff -u "$W/have.md" "$W/want.md" > "$W/diff"; then
 				echo "--check FAILED: $REPORT is stale." >&2
 				echo "  the coverage map no longer describes this tree.  Regenerate:" >&2
