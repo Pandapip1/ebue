@@ -436,6 +436,7 @@ pe_header_check() {
 		return 1 ;;
 	esac
 
+	# shellcheck disable=SC2046
 	set -- $(pe_u8_list "$img" 0 2)
 	if [ "${1:-0}" -ne 77 ] || [ "${2:-0}" -ne 90 ]; then
 		echo "$img: no MZ signature at offset 0 -- not a PE image"
@@ -443,6 +444,7 @@ pe_header_check() {
 	fi
 
 	pe_off=$(pe_le "$img" 60 4)
+	# shellcheck disable=SC2046
 	set -- $(pe_u8_list "$img" "$pe_off" 4)
 	if [ "${1:-0}" -ne 80 ] || [ "${2:-0}" -ne 69 ] || [ "${3:-0}" -ne 0 ] || [ "${4:-0}" -ne 0 ]; then
 		echo "$img: no PE signature at e_lfanew offset $pe_off"
