@@ -929,30 +929,78 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * simply what *not* writing through `status` until the subshell's own
  * final status is known already gives, for free.
  *
- * ---- As one stage of a multi-command pipeline: fork() *is* used ---------
+ * ---- As one stage of a multi-command pipeline: still no fork() ---------
  *
- * __sh_exec_pipeline() below is the one place stage 4 does reach for
- * fork(), and for a reason specific to pipelines, not to subshells in
- * general: every other stage in a multi-command pipeline is, by this
- * file's stage-3 design, a real concurrently-running OS process
+ * An earlier version of this file forked here: every other stage in a
+ * multi-command pipeline is a real concurrently-running OS process
  * connected through a real (64KiB-buffered) pipe, precisely so that no
- * stage's output has to fit in memory and no stage can stall another.
- * Running a compound-command stage's body *in this process*, the way
- * the standalone case above does, would mean this process is the one
- * synchronously draining/filling that stage's pipe ends while the
- * *rest of the pipeline is still being wired up* -- so a body that
- * writes more than one pipe buffer before the next real stage has even
- * been spawned to drain it would block forever, the exact
+ * stage's output has to fit in memory and no stage can stall another,
+ * and running a compound-command stage's body *in this process* while
+ * the rest of the pipeline is still being wired up risked exactly the
  * self-inflicted hang this file's header comment already warns a
- * heredoc-via-pipe would risk, just reached a different way. A forked
- * child sidesteps that completely: it runs concurrently with its
- * siblings exactly like a spawned simple command already does, and
- * 2.12 explicitly permits this regardless of which grouping form is
- * used -- "each command of a multi-command pipeline is in a subshell
- * environment" is not qualified by "(...)" vs "{...}", so running a
- * brace-group pipeline stage in a forked child, discarding its
- * environment/cwd changes same as a subshell would, is spec-conforming
- * too, not just convenient.
+ * heredoc-via-pipe would risk. fork() sidestepped that -- but on this
+ * platform fork() means src/process/fork.c's RtlCloneUserProcess
+ * wrapper, which stock Wine (the interpreter CI's `test` legs actually
+ * run under -- see .github/workflows/ci.yml) does not implement at
+ * all: it is not a slow path or a missing edge case, it is `wine: Call
+ * to unimplemented function ntdll.dll.RtlCloneUserProcess, aborting`,
+ * which takes the whole process down. sh.exe is not one of this
+ * project's `*-win.c` tests (the ones the Makefile's TEST_RUN already
+ * excludes from every Wine leg for exactly this reason -- see
+ * test/fork-win.c) precisely because it was never expected to fork;
+ * stage 4's fork_group_stage() broke that quietly, and every `test`
+ * leg in CI run 32700969420 failed as a result.
+ *
+ * The fix is to never fork here either, by not running a
+ * compound-command stage's body *while the rest of the pipeline is
+ * still being wired up* in the first place. __sh_exec_pipeline() below
+ * now spawns every real (SH_CMD_SIMPLE) stage first, exactly as stage
+ * 3 already did, and only *afterward* -- once every real process in
+ * the pipeline already exists and is concurrently draining/filling its
+ * own pipe ends -- runs each compound-command stage's body in this
+ * process, left to right, via exec_group_stage_inline() below. By the
+ * time any deferred stage's body runs, whichever neighbor stage
+ * produces its input or consumes its output is either a real spawned
+ * process (already running concurrently, so blocking past one pipe
+ * buffer is fine -- the real process on the other end keeps draining/
+ * filling it) or a deferred stage strictly to its own left, which (by
+ * the same left-to-right order) has therefore already finished and
+ * closed its end before this one starts reading. Either way there is
+ * always something already able to make progress on the other end of
+ * every pipe a deferred stage touches, so no fixed-size pipe buffer
+ * can wedge this process against itself.
+ *
+ * That reasoning has exactly one hole: two (or more) compound-command
+ * stages *directly adjacent* in the same pipeline, with no real
+ * spawned stage between them (e.g. "{ a; } | { b; }"). Both sides are
+ * deferred; whichever runs first is, by definition, not yet running
+ * concurrently with the other, so if it writes (or waits to read) more
+ * than one pipe buffer before its neighbor's turn comes, it blocks
+ * forever with nothing on the other end to unblock it -- silently,
+ * with no unimplemented-function trap to report it. Genuine
+ * concurrency (another process, another thread) is the only fix, and
+ * this file deliberately has neither available to it here. Rather than
+ * risk that hang, __sh_exec_pipeline() below detects two adjacent
+ * non-simple stages up front and refuses the whole pipeline via the
+ * same "not yet supported" -1 convention as an unexpanded command
+ * substitution (this file's own header comment above) -- a clean,
+ * documented failure a caller can report, never a hang or a Wine
+ * abort. "( a ) | { b; }" and its permutations are therefore not yet
+ * supported by this shell; every other placement of "( ... )"/"{ ...
+ * }" in a pipeline, including any number of them separated by at least
+ * one ordinary command, works exactly as before.
+ *
+ * 2.12's "each command of a multi-command pipeline is in a subshell
+ * environment" is not qualified by "(...)" vs "{...}", so a deferred
+ * brace-group pipeline stage still needs the same environ/cwd
+ * save-and-restore this file's standalone-subshell case above uses --
+ * exec_group_stage_inline() applies it unconditionally (unlike
+ * exec_group()'s is_subshell-gated version), same as the fork() this
+ * replaces used to give every pipeline stage for free by virtue of
+ * being a different process. See test_exec_group_pipeline_stage() in
+ * test/sh.c, which checks specifically that a brace group's assignment
+ * does not leak out when used as a pipeline stage even though a
+ * standalone brace group's does.
  */
 
 /* Snapshot of every name=value pair currently in `environ`, deep-copied
@@ -1081,53 +1129,73 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
 
 /* ==== Pipelines of any length (XCU 2.9.2) =============================== */
 
-/* Forks a child to run a compound-command pipeline stage's body -- see
- * exec_group()'s header comment above ("As one stage of a multi-command
- * pipeline: fork() *is* used") for why this specific case needs a real
- * process rather than the save-and-restore this file otherwise prefers.
- * The caller (the loop below) has already dup2()'d this stage's pipe
- * ends onto fd 0/1 and applied `cmd`'s own redirections to *this*
- * process's descriptor table -- exactly the state a plain __spawn()'d
- * simple-command stage would inherit -- so the forked child already has
- * the right fd 0/1/2 without redoing any of that. What it does have to
- * do that a simple command's __spawn() does not: shed every *other*
- * stage's pipe descriptors first. __spawn() never carries those into a
- * new program because they are O_CLOEXEC and exec drops close-on-exec
- * descriptors; fork() is not exec, and correctly (src/process/fork.c's
- * header comment, and 4a37d08's fix) hands the child every open
- * descriptor, close-on-exec ones included. Left uncleaned, this child
- * would sit holding pipe write ends meant for stages spawned after it --
- * exactly the "leaked write end ... this process included" hang this
- * file's stage-3 header comment already warns about, just reached
- * through fork() instead of a bug in one. Returns 0 with *out set to a
- * real pid (a forked child never returns from this function itself, see
- * _exit() below), or -1 on a fork() failure -- the caller folds that
- * into the same abort_unsupported path a spawn_stage() OOM would take,
- * since there is no ordinary command-failure status for "the process
- * that would run this could not even be created". */
-static int fork_group_stage(const struct sh_command *cmd, int (*pipes)[2], size_t n, struct stage_result *out)
+/* Runs a compound-command pipeline stage's body in this process, once
+ * every real (SH_CMD_SIMPLE) stage in the pipeline has already been
+ * spawned -- see exec_group()'s header comment above ("As one stage of
+ * a multi-command pipeline: still no fork()") for why that ordering is
+ * what makes doing this in-process safe here. The caller has already
+ * dup2()'d this stage's pipe ends onto fd 0/1 for it, exactly as it
+ * does for a spawned simple-command stage; this function applies
+ * `cmd`'s own redirections on top of that (same left-to-right ordering
+ * apply_redirs() always gives), runs the body with environ/cwd
+ * save-and-restore around it (2.12 applies subshell-environment
+ * semantics to every pipeline stage regardless of "(...)" vs "{...}",
+ * unlike the standalone case exec_group() handles), and restores this
+ * process's fds and environ/cwd before returning -- there being no
+ * child process whose exit already discarded all of that for free.
+ * Returns 0 with *status set to the body's own exit status (the
+ * pipeline loop's existing per-stage struct stage_result is not needed
+ * here: this always finishes before returning, unlike a spawned stage,
+ * so there is no pid to wait for later), or -1 if `cmd`'s own
+ * redirections fail to apply (the caller folds that into the same
+ * abort_unsupported path a spawn_stage() OOM would take) or if the
+ * body itself hits something this shell cannot execute yet (stage 5's
+ * still-unimplemented command substitution, propagated the same way
+ * __sh_exec_command()'s other callers already propagate it). */
+static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 {
-	pid_t pid = fork();
+	struct redir_state rs;
+	int failed = 0;
+	struct env_snapshot es;
+	char *oldcwd;
+	int rc;
 
-	if (pid < 0) return -1;
-	if (pid == 0) {
-		size_t j;
-		int st;
-		for (j = 0; j + 1 < n; j++) { close(pipes[j][0]); close(pipes[j][1]); }
-		/* A nested construct this stage's executor still refuses (-1)
-		 * cannot be propagated across a process boundary as itself --
-		 * there is no "exit code -1 means try again in the parent".
-		 * 125 (git's convention for "could not even test this commit")
-		 * is used here for the same reason: deliberately distinct from
-		 * any ordinary command status and from this file's other
-		 * synthesized 126/127. Narrow and rare -- only reachable via
-		 * stage 5's still-unimplemented command substitution appearing
-		 * inside a group that is itself a pipeline stage. */
-		if (__sh_exec_list(cmd->body, &st)) st = 125;
-		_exit(st);
+	rs.saves = 0; rs.n = rs.cap = 0;
+	if (apply_redirs(cmd->redirs, &rs, &failed)) { restore_fds(&rs); return -1; }
+	if (failed) { restore_fds(&rs); *status = 1; return 0; }
+
+	oldcwd = getcwd(0, 0);
+	if (env_snapshot_take(&es)) { __free(oldcwd); restore_fds(&rs); return -1; }
+
+	rc = __sh_exec_list(cmd->body, status);
+
+	env_snapshot_restore(&es);
+	free_env_snapshot(&es);
+	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+	restore_fds(&rs);
+	return rc;
+}
+
+/* Wires this stage's fd 0/1 onto its neighboring pipe ends exactly as
+ * 2.9.2 requires (see __sh_exec_pipeline()'s inline comment at its
+ * call sites below), save_fd()-protected so the caller's restore_fds()
+ * undoes just this. Returns -1 (nothing left half-wired: save_fd()
+ * either fully recorded a slot before failing or didn't touch `rs` at
+ * all) on OOM, 0 otherwise. Split out because both pass 1 (a
+ * SH_CMD_SIMPLE stage, wired and spawned immediately) and pass 2 (a
+ * deferred compound-command stage, wired again once it is finally its
+ * turn to run -- see exec_group()'s header comment above) need
+ * identical wiring, just at different times. */
+static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, size_t i)
+{
+	if (i > 0) {
+		if (save_fd(rs, 0)) return -1;
+		dup2(pipes[i - 1][0], 0);
 	}
-	out->pid = pid;
-	out->status = 0;
+	if (i + 1 < n) {
+		if (save_fd(rs, 1)) return -1;
+		dup2(pipes[i][1], 1);
+	}
 	return 0;
 }
 
@@ -1137,6 +1205,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	int (*pipes)[2] = 0;
 	pid_t *pids = 0;
 	int *statuses = 0;
+	unsigned char *deferred = 0; /* 1 iff commands[i] is a compound
+	                                command still waiting for pass 2 */
 	int abort_unsupported = 0;
 	int rc;
 
@@ -1160,13 +1230,31 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		return 0;
 	}
 
+	/* Two compound-command stages directly adjacent, with no real
+	 * spawned stage between them, is the one case this file's header
+	 * comment above ("still no fork()") cannot make safe: neither side
+	 * can run concurrently with the other without a fork() this file
+	 * deliberately no longer uses, so whichever runs first could block
+	 * forever on more than one pipe buffer with nothing on the other
+	 * end to drain or fill it. Refused up front, before anything is
+	 * allocated or spawned, via the same -1 "not yet supported"
+	 * convention as an unexpanded command substitution -- a clean,
+	 * reported failure instead of a silent hang. Every other placement
+	 * of "(...)"/"{...}" in a pipeline is unaffected. */
+	for (i = 0; i + 1 < n; i++) {
+		if (pl->commands[i].kind != SH_CMD_SIMPLE && pl->commands[i + 1].kind != SH_CMD_SIMPLE)
+			return -1;
+	}
+
 	pids = __malloc(n * sizeof *pids);
 	statuses = __malloc(n * sizeof *statuses);
 	pipes = __malloc((n - 1) * sizeof *pipes);
-	if (!pids || !statuses || !pipes) {
-		__free(pids); __free(statuses); __free(pipes);
+	deferred = __malloc(n * sizeof *deferred);
+	if (!pids || !statuses || !pipes || !deferred) {
+		__free(pids); __free(statuses); __free(pipes); __free(deferred);
 		return -1;
 	}
+	memset(deferred, 0, n * sizeof *deferred);
 
 	/* Every pipe is created up front, O_CLOEXEC (see this file's
 	 * header comment on why): if creation fails partway through, only
@@ -1176,11 +1264,19 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		if (pipe2(pipes[i], O_CLOEXEC) < 0) {
 			size_t j;
 			for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); }
-			__free(pids); __free(statuses); __free(pipes);
+			__free(pids); __free(statuses); __free(pipes); __free(deferred);
 			return -1;
 		}
 	}
 
+	/* Pass 1: spawn every real (SH_CMD_SIMPLE) stage, in order, so
+	 * that by the time pass 2 below runs any compound-command stage's
+	 * body, every stage that could possibly be on the other end of one
+	 * of its pipes already exists and is running concurrently. A
+	 * compound-command stage is left entirely untouched here -- no
+	 * fd 0/1 wiring, no redirections, no closing of its neighboring
+	 * pipe ends -- because it is not this process's turn to use them
+	 * yet; pass 2 below does all of that when it finally is. */
 	for (i = 0; i < n; i++) {
 		struct redir_state rs;
 		struct stage_result sr;
@@ -1188,43 +1284,35 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 
 		sr.pid = -1;
 		sr.status = 0;
-		rs.saves = 0; rs.n = rs.cap = 0;
 
+		if (pl->commands[i].kind != SH_CMD_SIMPLE) {
+			deferred[i] = 1;
+			continue;
+		}
+
+		rs.saves = 0; rs.n = rs.cap = 0;
 		if (!abort_unsupported) {
 			/* "For each command but the last, the shell shall connect
 			 * the standard output of the command to the standard
-			 * input of the next command" (2.9.2). This is just two
-			 * more save_fd()-protected redirections, applied *before*
+			 * input of the next command" (2.9.2), applied *before*
 			 * the command's own redirs list so that e.g. "cmd 2>&1 |
 			 * next" merges cmd's stderr into the pipe (2.7's
 			 * left-to-right ordering then makes the explicit "2>&1"
 			 * apply on top of this implicit hookup, which is what
 			 * makes that merge happen at all). */
-			if (i > 0) {
-				if (save_fd(&rs, 0)) abort_unsupported = 1;
-				else dup2(pipes[i - 1][0], 0);
-			}
-			if (!abort_unsupported && i + 1 < n) {
-				if (save_fd(&rs, 1)) abort_unsupported = 1;
-				else dup2(pipes[i][1], 1);
-			}
-
-			if (!abort_unsupported) {
-				if (apply_redirs(pl->commands[i].redirs, &rs, &failed)) {
-					abort_unsupported = 1;
-				} else if (failed) {
-					/* 2.8.1: this stage fails without running, same
-					 * as a lone command's redirection error -- but
-					 * the rest of the pipeline still runs normally
-					 * (its reader just sees an immediate EOF from
-					 * this stage's never-written pipe end). */
-					sr.status = 1;
-				} else if (pl->commands[i].kind != SH_CMD_SIMPLE) {
-					if (fork_group_stage(&pl->commands[i], pipes, n, &sr))
-						abort_unsupported = 1;
-				} else if (run_stage(&pl->commands[i], &sr, 0)) {
-					abort_unsupported = 1;
-				}
+			if (wire_stage_stdio(&rs, pipes, n, i)) {
+				abort_unsupported = 1;
+			} else if (apply_redirs(pl->commands[i].redirs, &rs, &failed)) {
+				abort_unsupported = 1;
+			} else if (failed) {
+				/* 2.8.1: this stage fails without running, same
+				 * as a lone command's redirection error -- but
+				 * the rest of the pipeline still runs normally
+				 * (its reader just sees an immediate EOF from
+				 * this stage's never-written pipe end). */
+				sr.status = 1;
+			} else if (run_stage(&pl->commands[i], &sr, 0)) {
+				abort_unsupported = 1;
 			}
 			restore_fds(&rs);
 		}
@@ -1237,7 +1325,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		 * stage actually ran -- an aborted or a redirection-failed
 		 * stage must free these exactly like a successful one, or the
 		 * pipeline hangs (this file's header comment's "leaked write
-		 * end" case) or leaks (a never-closed read end) regardless. */
+		 * end" case) or leaks (a never-closed read end) regardless. A
+		 * deferred stage's own neighboring ends are deliberately left
+		 * open here (and skipped entirely, via the `continue` above,
+		 * before ever reaching this point) -- pass 2 below still needs
+		 * them. */
 		if (i > 0) close(pipes[i - 1][0]);
 		if (i + 1 < n) close(pipes[i][1]);
 
@@ -1245,8 +1337,38 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		statuses[i] = sr.status;
 	}
 
-	/* Every pipe end in this process has been closed by the loop
-	 * above; what remains open is only each spawned child's own
+	/* Pass 2: run every compound-command stage's body, left to right,
+	 * now that pass 1 has spawned every real stage in the pipeline.
+	 * See this file's header comment above for why left-to-right order
+	 * is what keeps this safe: whichever neighbor produces a deferred
+	 * stage's input or consumes its output is by now either a real,
+	 * already-running process, or an earlier deferred stage that (by
+	 * this same order) has already finished and closed its end. */
+	for (i = 0; i < n; i++) {
+		struct redir_state rs;
+		int st = 0;
+
+		if (!deferred[i]) continue;
+
+		if (!abort_unsupported) {
+			rs.saves = 0; rs.n = rs.cap = 0;
+			if (wire_stage_stdio(&rs, pipes, n, i)) {
+				abort_unsupported = 1;
+			} else if (exec_group_stage_inline(&pl->commands[i], &st)) {
+				abort_unsupported = 1;
+			}
+			restore_fds(&rs);
+		}
+
+		if (i > 0) close(pipes[i - 1][0]);
+		if (i + 1 < n) close(pipes[i][1]);
+
+		pids[i] = -1;
+		statuses[i] = st;
+	}
+
+	/* Every pipe end in this process has been closed by the two
+	 * passes above; what remains open is only each spawned child's own
 	 * inherited copy, which is exactly what lets a downstream reader
 	 * see EOF once its writers actually finish. */
 	for (i = 0; i < n; i++) {
@@ -1263,6 +1385,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	__free(pids);
 	__free(statuses);
 	__free(pipes);
+	__free(deferred);
 
 	if (abort_unsupported) return -1; /* *status left untouched, per this file's convention */
 
