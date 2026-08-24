@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 | | |
 |---|---|
-| ntlibc | `7e56a7bffa15cd2c55502afdedce5b21d5053290` |
+| ntlibc | `82c77f35d59c7fbca494f20c39108015c43c9fb8` |
 | LTP (`third_party/ltp`) | `4c0cfb849f19beed68175de9fb7d02df55987084` |
 | suite | `testcases/open_posix_testsuite/conformance/interfaces/` |
 | census | 1610 tests in 190 directories (189 interfaces + `testfrmw`) |
@@ -427,3 +427,1837 @@ headers all resolve, the first symbol/macro/type that does not.
 | `timer_getoverrun` | 7 | 0 | 6 | 1 | no | no | `timer_create` |
 | `timer_gettime` | 10 | 0 | 10 | 0 | no | no | `timer_create` |
 | `timer_settime` | 20 | 0 | 20 | 0 | no | no | `timer_create` |
+
+<!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.
+Do not edit by hand -- see "the data block" in tools/posix-gapmap.sh.
+
+s	ntlibc	82c77f35d59c7fbca494f20c39108015c43c9fb8
+s	ltp	4c0cfb849f19beed68175de9fb7d02df55987084
+s	cc	x86_64-win32-tcc
+s	tests	1610
+s	dirs	190
+t	aio_cancel/1-1.c	A	aio.h 		
+t	aio_cancel/10-1.c	A	aio.h 		
+t	aio_cancel/2-1.c	A	aio.h 		
+t	aio_cancel/2-2.c	A	aio.h 		
+t	aio_cancel/3-1.c	A	aio.h 		
+t	aio_cancel/4-1.c	A	aio.h 		
+t	aio_cancel/5-1.c	A	aio.h 		
+t	aio_cancel/6-1.c	A	aio.h 		
+t	aio_cancel/7-1.c	A	aio.h 		
+t	aio_cancel/8-1.c	A	aio.h 		
+t	aio_cancel/9-1.c	A	aio.h 		
+t	aio_error/1-1.c	A	aio.h 		
+t	aio_error/2-1.c	A	aio.h 		
+t	aio_error/3-1.c	A	aio.h 		
+t	aio_fsync/12-1.c	A	aio.h 		
+t	aio_fsync/14-1.c	A	aio.h 		
+t	aio_fsync/2-1.c	A	aio.h 		
+t	aio_fsync/3-1.c	A	aio.h 		
+t	aio_fsync/4-1.c	A	aio.h 		
+t	aio_fsync/5-1.c	A	aio.h 		
+t	aio_fsync/8-1.c	A	aio.h 		
+t	aio_fsync/8-2.c	A	aio.h 		
+t	aio_fsync/8-3.c	A	aio.h 		
+t	aio_fsync/8-4.c	A	aio.h 		
+t	aio_fsync/9-1.c	A	aio.h 		
+t	aio_read/1-1.c	A	aio.h 		
+t	aio_read/10-1.c	A	aio.h 		
+t	aio_read/11-1.c	A	aio.h 		
+t	aio_read/11-2.c	A	aio.h 		
+t	aio_read/3-1.c	A	aio.h 		
+t	aio_read/3-2.c	A	aio.h 		
+t	aio_read/4-1.c	A	aio.h 		
+t	aio_read/5-1.c	A	aio.h 		
+t	aio_read/7-1.c	A	aio.h 		
+t	aio_read/8-1.c	A	aio.h 		
+t	aio_read/9-1.c	A	aio.h 		
+t	aio_return/1-1.c	A	aio.h 		
+t	aio_return/2-1.c	A	aio.h 		
+t	aio_return/3-1.c	A	aio.h 		
+t	aio_return/3-2.c	A	aio.h 		
+t	aio_return/4-1.c	A	aio.h 		
+t	aio_suspend/1-1.c	A	aio.h 		
+t	aio_suspend/3-1.c	A	aio.h 		
+t	aio_suspend/4-1.c	A	aio.h 		
+t	aio_suspend/5-1.c	B		macro	_SC_ASYNCHRONOUS_IO
+t	aio_suspend/9-1.c	A	aio.h 		
+t	aio_write/1-1.c	A	aio.h 		
+t	aio_write/1-2.c	A	aio.h 		
+t	aio_write/2-1.c	A	aio.h 		
+t	aio_write/3-1.c	A	aio.h 		
+t	aio_write/5-1.c	A	aio.h 		
+t	aio_write/6-1.c	A	aio.h 		
+t	aio_write/7-1.c	A	aio.h 		
+t	aio_write/8-1.c	A	aio.h 		
+t	aio_write/8-2.c	A	aio.h 		
+t	aio_write/9-1.c	A	aio.h 		
+t	aio_write/9-2.c	A	aio.h 		
+t	asctime/1-1.c	C			
+t	clock/1-1.c	C			
+t	clock/2-1.c	C			
+t	clock_getcpuclockid/1-1.c	C			
+t	clock_getcpuclockid/1-2.c	C			
+t	clock_getcpuclockid/2-1.c	C			
+t	clock_getcpuclockid/5-1.c	C			
+t	clock_getcpuclockid/6-1.c	C			
+t	clock_getres/1-1.c	C			
+t	clock_getres/3-1.c	C			
+t	clock_getres/5-1.c	C			
+t	clock_getres/6-1.c	C			
+t	clock_getres/6-2.c	C			
+t	clock_getres/7-1.c	B		macro	_SC_CPUTIME
+t	clock_getres/8-1.c	B		macro	_SC_THREAD_CPUTIME
+t	clock_gettime/1-1.c	C			
+t	clock_gettime/1-2.c	C			
+t	clock_gettime/2-1.c	C			
+t	clock_gettime/3-1.c	B		macro	_SC_MONOTONIC_CLOCK
+t	clock_gettime/4-1.c	B		macro	_SC_CPUTIME
+t	clock_gettime/7-1.c	C			
+t	clock_gettime/8-1.c	C			
+t	clock_gettime/8-2.c	C			
+t	clock_nanosleep/1-1.c	C			
+t	clock_nanosleep/1-3.c	C			
+t	clock_nanosleep/1-4.c	C			
+t	clock_nanosleep/1-5.c	C			
+t	clock_nanosleep/10-1.c	C			
+t	clock_nanosleep/11-1.c	C			
+t	clock_nanosleep/13-1.c	C			
+t	clock_nanosleep/2-1.c	C			
+t	clock_nanosleep/2-2.c	C			
+t	clock_nanosleep/2-3.c	C			
+t	clock_nanosleep/3-1.c	C			
+t	clock_nanosleep/9-1.c	C			
+t	clock_settime/1-1.c	C			
+t	clock_settime/17-1.c	C			
+t	clock_settime/17-2.c	C			
+t	clock_settime/19-1.c	C			
+t	clock_settime/20-1.c	C			
+t	clock_settime/4-1.c	B		link	timer_create
+t	clock_settime/4-2.c	B		link	timer_create
+t	clock_settime/5-1.c	B		link	timer_create
+t	clock_settime/5-2.c	B		link	timer_create
+t	clock_settime/6-1.c	C			
+t	clock_settime/7-1.c	C			
+t	clock_settime/7-2.c	C			
+t	clock_settime/8-1.c	C			
+t	clock_settime/speculative/4-3.c	B		link	timer_create
+t	clock_settime/speculative/4-4.c	B		link	timer_create
+t	ctime/1-1.c	C			
+t	difftime/1-1.c	C			
+t	fork/1-1.c	A	pthread.h semaphore.h 		
+t	fork/11-1.c	C			
+t	fork/12-1.c	A	pthread.h 		
+t	fork/13-1.c	A	pthread.h 		
+t	fork/14-1.c	A	pthread.h semaphore.h 		
+t	fork/16-1.c	A	pthread.h sys/mman.h 		
+t	fork/17-1.c	A	pthread.h 		
+t	fork/17-2.c	A	pthread.h 		
+t	fork/18-1.c	A	pthread.h 		
+t	fork/19-1.c	A	mqueue.h pthread.h 		
+t	fork/2-1.c	A	pthread.h 		
+t	fork/21-1.c	A	pthread.h semaphore.h 		
+t	fork/22-1.c	A	pthread.h 		
+t	fork/3-1.c	A	pthread.h 		
+t	fork/4-1.c	A	pthread.h 		
+t	fork/6-1.c	A	pthread.h 		
+t	fork/7-1.c	A	nl_types.h pthread.h 		
+t	fork/8-1.c	A	pthread.h 		
+t	fork/9-1.c	A	pthread.h 		
+t	fsync/4-1.c	A	sys/mman.h 		
+t	fsync/5-1.c	A	sys/mman.h 		
+t	fsync/7-1.c	A	sys/mman.h 		
+t	getpid/1-1.c	A	pthread.h sys/mman.h 		
+t	gmtime/1-1.c	C			
+t	gmtime/2-1.c	C			
+t	kill/1-1.c	C			
+t	kill/1-2.c	C			
+t	kill/2-1.c	C			
+t	kill/2-2.c	C			
+t	kill/3-1.c	C			
+t	killpg/1-1.c	C			
+t	killpg/1-2.c	B		link	sigignore
+t	killpg/2-1.c	C			
+t	killpg/4-1.c	C			
+t	killpg/5-1.c	C			
+t	killpg/6-1.c	C			
+t	killpg/8-1.c	C			
+t	lio_listio/1-1.c	A	aio.h 		
+t	lio_listio/10-1.c	A	aio.h 		
+t	lio_listio/12-1.c	A	aio.h 		
+t	lio_listio/13-1.c	A	aio.h 		
+t	lio_listio/14-1.c	A	aio.h 		
+t	lio_listio/15-1.c	A	aio.h 		
+t	lio_listio/18-1.c	A	aio.h 		
+t	lio_listio/2-1.c	A	aio.h 		
+t	lio_listio/3-1.c	A	aio.h 		
+t	lio_listio/4-1.c	A	aio.h 		
+t	lio_listio/5-1.c	A	aio.h 		
+t	lio_listio/6-1.c	A	aio.h 		
+t	lio_listio/7-1.c	A	aio.h 		
+t	lio_listio/8-1.c	A	aio.h 		
+t	lio_listio/9-1.c	A	aio.h 		
+t	localtime/1-1.c	C			
+t	mktime/1-1.c	C			
+t	mlock/10-1.c	A	sys/mman.h 		
+t	mlock/12-1.c	A	sys/mman.h 		
+t	mlock/5-1.c	A	sys/mman.h 		
+t	mlock/8-1.c	A	sys/mman.h 		
+t	mlock/speculative/12-1.c	A	sys/mman.h 		
+t	mlockall/13-1.c	A	sys/mman.h 		
+t	mlockall/13-2.c	A	sys/mman.h 		
+t	mlockall/15-1.c	A	sys/mman.h 		
+t	mlockall/3-6.c	A	sys/mman.h 		
+t	mlockall/3-7.c	A	sys/mman.h 		
+t	mlockall/8-1.c	A	sys/mman.h 		
+t	mlockall/speculative/15-1.c	A	sys/mman.h 		
+t	mmap/1-1.c	A	sys/mman.h 		
+t	mmap/1-2.c	A	sys/mman.h 		
+t	mmap/10-1.c	A	sys/mman.h 		
+t	mmap/11-1.c	A	sys/mman.h 		
+t	mmap/11-2.c	A	sys/mman.h 		
+t	mmap/11-3.c	A	sys/mman.h 		
+t	mmap/11-4.c	A	sys/mman.h sys/vfs.h 		
+t	mmap/11-5.c	A	sys/mman.h 		
+t	mmap/11-6.c	A	sys/mman.h 		
+t	mmap/12-1.c	A	sys/mman.h 		
+t	mmap/13-1.c	A	mntent.h sys/mman.h sys/mount.h 		
+t	mmap/14-1.c	A	sys/mman.h 		
+t	mmap/18-1.c	A	sys/mman.h 		
+t	mmap/19-1.c	A	sys/mman.h 		
+t	mmap/21-1.c	A	sys/mman.h 		
+t	mmap/23-1.c	A	sys/mman.h 		
+t	mmap/24-1.c	A	sys/mman.h 		
+t	mmap/24-2.c	A	sys/mman.h 		
+t	mmap/27-1.c	A	sys/mman.h 		
+t	mmap/3-1.c	A	sys/mman.h 		
+t	mmap/31-1.c	A	sys/mman.h 		
+t	mmap/32-1.c	A	sys/mman.h 		
+t	mmap/5-1.c	A	sys/mman.h 		
+t	mmap/6-1.c	A	sys/mman.h 		
+t	mmap/6-2.c	A	sys/mman.h 		
+t	mmap/6-3.c	A	sys/mman.h 		
+t	mmap/6-4.c	A	sys/mman.h 		
+t	mmap/6-5.c	A	sys/mman.h 		
+t	mmap/6-6.c	A	sys/mman.h 		
+t	mmap/7-1.c	A	sys/mman.h 		
+t	mmap/7-2.c	A	sys/mman.h 		
+t	mmap/7-3.c	A	sys/mman.h 		
+t	mmap/7-4.c	A	sys/mman.h 		
+t	mmap/9-1.c	A	sys/mman.h 		
+t	mq_close/1-1.c	A	mqueue.h 		
+t	mq_close/2-1.c	A	mqueue.h 		
+t	mq_close/3-1.c	A	mqueue.h 		
+t	mq_close/3-2.c	A	mqueue.h 		
+t	mq_close/3-3.c	A	mqueue.h 		
+t	mq_close/4-1.c	A	mqueue.h 		
+t	mq_getattr/2-1.c	A	mqueue.h 		
+t	mq_getattr/2-2.c	A	mqueue.h 		
+t	mq_getattr/3-1.c	A	mqueue.h 		
+t	mq_getattr/4-1.c	A	mqueue.h 		
+t	mq_getattr/speculative/7-1.c	A	mqueue.h 		
+t	mq_notify/1-1.c	A	mqueue.h 		
+t	mq_notify/2-1.c	A	mqueue.h 		
+t	mq_notify/3-1.c	A	mqueue.h 		
+t	mq_notify/4-1.c	A	mqueue.h 		
+t	mq_notify/5-1.c	A	mqueue.h 		
+t	mq_notify/8-1.c	A	mqueue.h 		
+t	mq_notify/9-1.c	A	mqueue.h 		
+t	mq_open/1-1.c	A	mqueue.h 		
+t	mq_open/11-1.c	A	mqueue.h 		
+t	mq_open/12-1.c	A	mqueue.h 		
+t	mq_open/13-1.c	A	mqueue.h 		
+t	mq_open/15-1.c	A	mqueue.h 		
+t	mq_open/16-1.c	A	mqueue.h sys/mman.h 		
+t	mq_open/18-1.c	A	mqueue.h 		
+t	mq_open/19-1.c	A	mqueue.h 		
+t	mq_open/2-1.c	A	mqueue.h 		
+t	mq_open/20-1.c	A	mqueue.h 		
+t	mq_open/21-1.c	A	mqueue.h 		
+t	mq_open/23-1.c	A	mqueue.h 		
+t	mq_open/25-2.c	A	mqueue.h 		
+t	mq_open/27-1.c	A	mqueue.h 		
+t	mq_open/27-2.c	A	mqueue.h 		
+t	mq_open/29-1.c	A	mqueue.h 		
+t	mq_open/3-1.c	A	mqueue.h 		
+t	mq_open/7-1.c	A	mqueue.h 		
+t	mq_open/7-2.c	A	mqueue.h 		
+t	mq_open/7-3.c	A	mqueue.h 		
+t	mq_open/8-1.c	A	mqueue.h 		
+t	mq_open/8-2.c	A	mqueue.h 		
+t	mq_open/9-1.c	A	mqueue.h 		
+t	mq_open/9-2.c	A	mqueue.h 		
+t	mq_open/speculative/2-2.c	A	mqueue.h 		
+t	mq_open/speculative/2-3.c	A	mqueue.h 		
+t	mq_open/speculative/26-1.c	A	mqueue.h 		
+t	mq_open/speculative/6-1.c	A	mqueue.h 		
+t	mq_receive/1-1.c	A	mqueue.h 		
+t	mq_receive/10-1.c	A	mqueue.h 		
+t	mq_receive/11-1.c	A	mqueue.h 		
+t	mq_receive/11-2.c	A	mqueue.h 		
+t	mq_receive/12-1.c	A	mqueue.h 		
+t	mq_receive/13-1.c	A	mqueue.h 		
+t	mq_receive/2-1.c	A	mqueue.h 		
+t	mq_receive/5-1.c	A	mqueue.h 		
+t	mq_receive/7-1.c	A	mqueue.h 		
+t	mq_receive/8-1.c	A	mqueue.h 		
+t	mq_send/1-1.c	A	mqueue.h 		
+t	mq_send/10-1.c	A	mqueue.h 		
+t	mq_send/11-1.c	A	mqueue.h 		
+t	mq_send/11-2.c	A	mqueue.h 		
+t	mq_send/12-1.c	A	mqueue.h 		
+t	mq_send/13-1.c	A	mqueue.h 		
+t	mq_send/14-1.c	A	mqueue.h 		
+t	mq_send/2-1.c	A	mqueue.h 		
+t	mq_send/3-1.c	A	mqueue.h 		
+t	mq_send/3-2.c	A	mqueue.h 		
+t	mq_send/4-1.c	A	mqueue.h 		
+t	mq_send/4-2.c	A	mqueue.h 		
+t	mq_send/4-3.c	A	mqueue.h 		
+t	mq_send/5-1.c	A	mqueue.h 		
+t	mq_send/5-2.c	A	mqueue.h 		
+t	mq_send/7-1.c	A	mqueue.h 		
+t	mq_send/8-1.c	A	mqueue.h 		
+t	mq_send/9-1.c	A	mqueue.h 		
+t	mq_setattr/1-1.c	A	mqueue.h 		
+t	mq_setattr/1-2.c	A	mqueue.h 		
+t	mq_setattr/2-1.c	A	mqueue.h 		
+t	mq_setattr/5-1.c	A	mqueue.h 		
+t	mq_timedreceive/1-1.c	A	mqueue.h 		
+t	mq_timedreceive/10-1.c	A	mqueue.h 		
+t	mq_timedreceive/10-2.c	A	mqueue.h 		
+t	mq_timedreceive/11-1.c	A	mqueue.h 		
+t	mq_timedreceive/13-1.c	A	mqueue.h 		
+t	mq_timedreceive/14-1.c	A	mqueue.h 		
+t	mq_timedreceive/15-1.c	A	mqueue.h 		
+t	mq_timedreceive/17-1.c	A	mqueue.h 		
+t	mq_timedreceive/17-2.c	A	mqueue.h 		
+t	mq_timedreceive/17-3.c	A	mqueue.h 		
+t	mq_timedreceive/18-1.c	A	mqueue.h 		
+t	mq_timedreceive/18-2.c	A	mqueue.h 		
+t	mq_timedreceive/2-1.c	A	mqueue.h 		
+t	mq_timedreceive/5-1.c	A	mqueue.h 		
+t	mq_timedreceive/5-2.c	A	mqueue.h 		
+t	mq_timedreceive/5-3.c	A	mqueue.h 		
+t	mq_timedreceive/7-1.c	A	mqueue.h 		
+t	mq_timedreceive/8-1.c	A	mqueue.h 		
+t	mq_timedreceive/speculative/10-2.c	A	mqueue.h 		
+t	mq_timedsend/1-1.c	A	mqueue.h 		
+t	mq_timedsend/10-1.c	A	mqueue.h 		
+t	mq_timedsend/11-1.c	A	mqueue.h 		
+t	mq_timedsend/11-2.c	A	mqueue.h 		
+t	mq_timedsend/12-1.c	A	mqueue.h pthread.h 		
+t	mq_timedsend/13-1.c	A	mqueue.h 		
+t	mq_timedsend/14-1.c	A	mqueue.h 		
+t	mq_timedsend/15-1.c	A	mqueue.h 		
+t	mq_timedsend/16-1.c	A	mqueue.h 		
+t	mq_timedsend/18-1.c	A	mqueue.h 		
+t	mq_timedsend/19-1.c	A	mqueue.h 		
+t	mq_timedsend/2-1.c	A	mqueue.h 		
+t	mq_timedsend/20-1.c	A	mqueue.h 		
+t	mq_timedsend/3-1.c	A	mqueue.h 		
+t	mq_timedsend/3-2.c	A	mqueue.h 		
+t	mq_timedsend/4-1.c	A	mqueue.h 		
+t	mq_timedsend/4-2.c	A	mqueue.h 		
+t	mq_timedsend/4-3.c	A	mqueue.h 		
+t	mq_timedsend/5-1.c	A	mqueue.h 		
+t	mq_timedsend/5-2.c	A	mqueue.h 		
+t	mq_timedsend/5-3.c	A	mqueue.h 		
+t	mq_timedsend/7-1.c	A	mqueue.h 		
+t	mq_timedsend/8-1.c	A	mqueue.h 		
+t	mq_timedsend/9-1.c	A	mqueue.h 		
+t	mq_timedsend/speculative/18-2.c	A	mqueue.h 		
+t	mq_unlink/1-1.c	A	mqueue.h 		
+t	mq_unlink/2-1.c	A	mqueue.h 		
+t	mq_unlink/2-2.c	A	mqueue.h 		
+t	mq_unlink/7-1.c	A	mqueue.h 		
+t	mq_unlink/speculative/7-2.c	A	mqueue.h 		
+t	munlock/10-1.c	A	sys/mman.h 		
+t	munlock/11-1.c	A	sys/mman.h 		
+t	munlock/7-1.c	A	sys/mman.h 		
+t	munlockall/5-1.c	A	sys/mman.h 		
+t	munmap/1-1.c	A	pthread.h sys/mman.h 		
+t	munmap/1-2.c	A	pthread.h sys/mman.h 		
+t	munmap/2-1.c	A	pthread.h sys/mman.h 		
+t	munmap/3-1.c	A	pthread.h sys/mman.h 		
+t	munmap/4-1.c	A	pthread.h sys/mman.h 		
+t	munmap/8-1.c	A	pthread.h sys/mman.h 		
+t	munmap/9-1.c	A	pthread.h sys/mman.h 		
+t	nanosleep/1-1.c	C			
+t	nanosleep/1-2.c	C			
+t	nanosleep/1-3.c	C			
+t	nanosleep/10000-1.c	C			
+t	nanosleep/2-1.c	C			
+t	nanosleep/3-1.c	C			
+t	nanosleep/3-2.c	C			
+t	nanosleep/5-1.c	C			
+t	nanosleep/5-2.c	C			
+t	nanosleep/6-1.c	C			
+t	nanosleep/7-1.c	C			
+t	nanosleep/7-2.c	C			
+t	pthread_atfork/1-1.c	A	pthread.h 		
+t	pthread_atfork/1-2.c	A	pthread.h 		
+t	pthread_atfork/2-1.c	A	pthread.h 		
+t	pthread_atfork/2-2.c	A	pthread.h 		
+t	pthread_atfork/3-2.c	A	pthread.h 		
+t	pthread_atfork/3-3.c	A	pthread.h semaphore.h 		
+t	pthread_atfork/4-1.c	A	pthread.h 		
+t	pthread_attr_destroy/1-1.c	A	pthread.h 		
+t	pthread_attr_destroy/2-1.c	A	pthread.h 		
+t	pthread_attr_destroy/3-1.c	A	pthread.h 		
+t	pthread_attr_getdetachstate/1-1.c	A	pthread.h 		
+t	pthread_attr_getdetachstate/1-2.c	A	pthread.h 		
+t	pthread_attr_getinheritsched/1-1.c	A	pthread.h 		
+t	pthread_attr_getschedparam/1-1.c	A	pthread.h 		
+t	pthread_attr_getschedpolicy/2-1.c	A	pthread.h 		
+t	pthread_attr_getscope/1-1.c	A	pthread.h 		
+t	pthread_attr_getstack/1-1.c	A	pthread.h 		
+t	pthread_attr_getstacksize/1-1.c	A	pthread.h 		
+t	pthread_attr_init/1-1.c	A	pthread.h 		
+t	pthread_attr_init/2-1.c	A	pthread.h 		
+t	pthread_attr_init/3-1.c	A	pthread.h 		
+t	pthread_attr_init/4-1.c	A	pthread.h 		
+t	pthread_attr_setdetachstate/1-1.c	A	pthread.h 		
+t	pthread_attr_setdetachstate/1-2.c	A	pthread.h 		
+t	pthread_attr_setdetachstate/2-1.c	A	pthread.h 		
+t	pthread_attr_setdetachstate/4-1.c	A	pthread.h 		
+t	pthread_attr_setinheritsched/1-1.c	A	pthread.h 		
+t	pthread_attr_setinheritsched/2-1.c	A	pthread.h 		
+t	pthread_attr_setinheritsched/2-2.c	A	pthread.h 		
+t	pthread_attr_setinheritsched/2-3.c	A	pthread.h 		
+t	pthread_attr_setinheritsched/2-4.c	A	pthread.h 		
+t	pthread_attr_setinheritsched/4-1.c	A	pthread.h 		
+t	pthread_attr_setschedparam/1-1.c	A	pthread.h 		
+t	pthread_attr_setschedparam/1-2.c	A	pthread.h 		
+t	pthread_attr_setschedparam/1-3.c	A	pthread.h 		
+t	pthread_attr_setschedparam/1-4.c	A	pthread.h 		
+t	pthread_attr_setschedparam/speculative/3-1.c	A	pthread.h 		
+t	pthread_attr_setschedparam/speculative/3-2.c	A	pthread.h 		
+t	pthread_attr_setschedpolicy/1-1.c	A	pthread.h 		
+t	pthread_attr_setschedpolicy/1-2.c	A	pthread.h 		
+t	pthread_attr_setschedpolicy/1-3.c	A	pthread.h 		
+t	pthread_attr_setschedpolicy/2-1.c	A	pthread.h 		
+t	pthread_attr_setschedpolicy/4-1.c	A	pthread.h 		
+t	pthread_attr_setschedpolicy/5-1.c	A	pthread.h 		
+t	pthread_attr_setscope/1-1.c	A	pthread.h 		
+t	pthread_attr_setscope/4-1.c	A	pthread.h 		
+t	pthread_attr_setscope/5-1.c	A	pthread.h 		
+t	pthread_attr_setstack/1-1.c	A	pthread.h 		
+t	pthread_attr_setstack/2-1.c	A	pthread.h 		
+t	pthread_attr_setstack/4-1.c	A	pthread.h 		
+t	pthread_attr_setstack/6-1.c	A	pthread.h 		
+t	pthread_attr_setstack/7-1.c	A	pthread.h 		
+t	pthread_attr_setstacksize/1-1.c	A	pthread.h 		
+t	pthread_attr_setstacksize/2-1.c	A	pthread.h 		
+t	pthread_attr_setstacksize/4-1.c	A	pthread.h 		
+t	pthread_barrier_destroy/1-1.c	A	pthread.h 		
+t	pthread_barrier_destroy/2-1.c	A	pthread.h 		
+t	pthread_barrier_init/1-1.c	A	pthread.h 		
+t	pthread_barrier_init/3-1.c	A	pthread.h 		
+t	pthread_barrier_init/4-1.c	A	pthread.h 		
+t	pthread_barrier_wait/1-1.c	A	pthread.h 		
+t	pthread_barrier_wait/2-1.c	A	pthread.h 		
+t	pthread_barrier_wait/3-1.c	A	pthread.h 		
+t	pthread_barrier_wait/3-2.c	A	pthread.h 		
+t	pthread_barrierattr_destroy/1-1.c	A	pthread.h 		
+t	pthread_barrierattr_getpshared/1-1.c	A	pthread.h 		
+t	pthread_barrierattr_getpshared/2-1.c	A	pthread.h sys/mman.h 		
+t	pthread_barrierattr_init/1-1.c	A	pthread.h 		
+t	pthread_barrierattr_init/2-1.c	A	pthread.h 		
+t	pthread_barrierattr_setpshared/1-1.c	A	pthread.h 		
+t	pthread_barrierattr_setpshared/2-1.c	A	pthread.h 		
+t	pthread_cancel/1-1.c	A	pthread.h 		
+t	pthread_cancel/1-2.c	A	pthread.h 		
+t	pthread_cancel/1-3.c	A	pthread.h 		
+t	pthread_cancel/2-1.c	A	pthread.h 		
+t	pthread_cancel/2-2.c	A	pthread.h 		
+t	pthread_cancel/2-3.c	A	pthread.h 		
+t	pthread_cancel/3-1.c	A	pthread.h semaphore.h 		
+t	pthread_cancel/4-1.c	A	pthread.h 		
+t	pthread_cancel/5-1.c	A	pthread.h 		
+t	pthread_cleanup_pop/1-1.c	A	pthread.h 		
+t	pthread_cleanup_pop/1-2.c	A	pthread.h 		
+t	pthread_cleanup_pop/1-3.c	A	pthread.h 		
+t	pthread_cleanup_push/1-1.c	A	pthread.h 		
+t	pthread_cleanup_push/1-2.c	A	pthread.h 		
+t	pthread_cleanup_push/1-3.c	A	pthread.h 		
+t	pthread_cond_broadcast/1-1.c	A	pthread.h 		
+t	pthread_cond_broadcast/1-2.c	A	pthread.h semaphore.h sys/mman.h sys/sysinfo.h 		
+t	pthread_cond_broadcast/2-1.c	A	pthread.h 		
+t	pthread_cond_broadcast/2-2.c	A	pthread.h 		
+t	pthread_cond_broadcast/2-3.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_broadcast/4-1.c	A	pthread.h 		
+t	pthread_cond_broadcast/4-2.c	A	pthread.h semaphore.h 		
+t	pthread_cond_destroy/1-1.c	A	pthread.h 		
+t	pthread_cond_destroy/2-1.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_destroy/3-1.c	A	pthread.h 		
+t	pthread_cond_destroy/speculative/4-1.c	A	pthread.h 		
+t	pthread_cond_init/1-1.c	A	pthread.h 		
+t	pthread_cond_init/2-1.c	A	pthread.h 		
+t	pthread_cond_init/3-1.c	A	pthread.h 		
+t	pthread_cond_init/4-1.c	A	pthread.h 		
+t	pthread_cond_init/4-3.c	A	pthread.h 		
+t	pthread_cond_signal/1-1.c	A	pthread.h 		
+t	pthread_cond_signal/1-2.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_signal/2-1.c	A	pthread.h 		
+t	pthread_cond_signal/2-2.c	A	pthread.h 		
+t	pthread_cond_signal/4-1.c	A	pthread.h 		
+t	pthread_cond_signal/4-2.c	A	pthread.h semaphore.h 		
+t	pthread_cond_timedwait/1-1.c	A	pthread.h 		
+t	pthread_cond_timedwait/2-1.c	A	pthread.h 		
+t	pthread_cond_timedwait/2-2.c	A	pthread.h 		
+t	pthread_cond_timedwait/2-3.c	A	pthread.h 		
+t	pthread_cond_timedwait/2-4.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_timedwait/2-5.c	A	pthread.h 		
+t	pthread_cond_timedwait/2-6.c	A	pthread.h semaphore.h 		
+t	pthread_cond_timedwait/2-7.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_timedwait/3-1.c	A	pthread.h 		
+t	pthread_cond_timedwait/4-1.c	A	pthread.h 		
+t	pthread_cond_timedwait/4-2.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_timedwait/4-3.c	A	pthread.h semaphore.h 		
+t	pthread_cond_wait/1-1.c	A	pthread.h 		
+t	pthread_cond_wait/2-1.c	A	pthread.h 		
+t	pthread_cond_wait/2-2.c	A	pthread.h sys/mman.h 		
+t	pthread_cond_wait/2-3.c	A	pthread.h semaphore.h 		
+t	pthread_cond_wait/3-1.c	A	pthread.h 		
+t	pthread_cond_wait/4-1.c	A	pthread.h semaphore.h 		
+t	pthread_condattr_destroy/1-1.c	A	pthread.h 		
+t	pthread_condattr_destroy/2-1.c	A	pthread.h 		
+t	pthread_condattr_destroy/3-1.c	A	pthread.h 		
+t	pthread_condattr_destroy/4-1.c	A	pthread.h 		
+t	pthread_condattr_getclock/1-1.c	A	pthread.h 		
+t	pthread_condattr_getclock/1-2.c	A	pthread.h 		
+t	pthread_condattr_getpshared/1-1.c	A	pthread.h 		
+t	pthread_condattr_getpshared/1-2.c	A	pthread.h 		
+t	pthread_condattr_getpshared/2-1.c	A	pthread.h 		
+t	pthread_condattr_init/1-1.c	A	pthread.h 		
+t	pthread_condattr_init/3-1.c	A	pthread.h 		
+t	pthread_condattr_setclock/1-1.c	A	pthread.h 		
+t	pthread_condattr_setclock/1-2.c	A	pthread.h 		
+t	pthread_condattr_setclock/1-3.c	A	pthread.h 		
+t	pthread_condattr_setclock/2-1.c	A	pthread.h 		
+t	pthread_condattr_setpshared/1-1.c	A	pthread.h 		
+t	pthread_condattr_setpshared/1-2.c	A	pthread.h 		
+t	pthread_condattr_setpshared/2-1.c	A	pthread.h 		
+t	pthread_create/1-1.c	A	pthread.h 		
+t	pthread_create/1-2.c	A	pthread.h 		
+t	pthread_create/1-3.c	A	pthread.h 		
+t	pthread_create/1-5.c	A	pthread.h semaphore.h 		
+t	pthread_create/1-6.c	A	pthread.h sys/pstat.h sys/sysctl.h 		
+t	pthread_create/11-1.c	A	pthread.h 		
+t	pthread_create/12-1.c	A	pthread.h 		
+t	pthread_create/14-1.c	A	pthread.h semaphore.h 		
+t	pthread_create/15-1.c	A	pthread.h semaphore.h 		
+t	pthread_create/2-1.c	A	pthread.h 		
+t	pthread_create/3-1.c	A	pthread.h 		
+t	pthread_create/3-2.c	A	pthread.h semaphore.h 		
+t	pthread_create/4-1.c	A	pthread.h 		
+t	pthread_create/5-1.c	A	pthread.h 		
+t	pthread_create/8-1.c	A	pthread.h 		
+t	pthread_detach/1-1.c	A	pthread.h 		
+t	pthread_detach/2-1.c	A	pthread.h 		
+t	pthread_detach/2-2.c	A	pthread.h semaphore.h 		
+t	pthread_detach/3-1.c	A	pthread.h 		
+t	pthread_detach/4-1.c	A	pthread.h 		
+t	pthread_detach/4-2.c	A	pthread.h 		
+t	pthread_detach/4-3.c	A	pthread.h semaphore.h 		
+t	pthread_equal/1-1.c	A	pthread.h 		
+t	pthread_equal/1-2.c	A	pthread.h 		
+t	pthread_equal/2-1.c	A	pthread.h semaphore.h 		
+t	pthread_exit/1-1.c	A	pthread.h 		
+t	pthread_exit/1-2.c	A	pthread.h semaphore.h 		
+t	pthread_exit/2-1.c	A	pthread.h 		
+t	pthread_exit/2-2.c	A	pthread.h semaphore.h 		
+t	pthread_exit/3-1.c	A	pthread.h 		
+t	pthread_exit/3-2.c	A	pthread.h semaphore.h 		
+t	pthread_exit/4-1.c	A	pthread.h semaphore.h 		
+t	pthread_exit/5-1.c	A	pthread.h semaphore.h 		
+t	pthread_exit/6-1.c	A	pthread.h semaphore.h sys/mman.h 		
+t	pthread_exit/6-2.c	A	pthread.h semaphore.h 		
+t	pthread_getcpuclockid/1-1.c	A	pthread.h 		
+t	pthread_getcpuclockid/speculative/3-1.c	A	pthread.h 		
+t	pthread_getschedparam/1-1.c	A	pthread.h 		
+t	pthread_getschedparam/1-2.c	A	pthread.h 		
+t	pthread_getschedparam/1-3.c	A	pthread.h 		
+t	pthread_getspecific/1-1.c	A	pthread.h 		
+t	pthread_getspecific/3-1.c	A	pthread.h 		
+t	pthread_join/1-1.c	A	pthread.h 		
+t	pthread_join/1-2.c	A	pthread.h semaphore.h 		
+t	pthread_join/2-1.c	A	pthread.h 		
+t	pthread_join/3-1.c	A	pthread.h 		
+t	pthread_join/4-1.c	A	pthread.h semaphore.h 		
+t	pthread_join/5-1.c	A	pthread.h 		
+t	pthread_join/6-2.c	A	pthread.h 		
+t	pthread_join/6-3.c	A	pthread.h semaphore.h 		
+t	pthread_join/speculative/6-1.c	A	pthread.h 		
+t	pthread_key_create/1-1.c	A	pthread.h 		
+t	pthread_key_create/1-2.c	A	pthread.h 		
+t	pthread_key_create/2-1.c	A	pthread.h 		
+t	pthread_key_create/3-1.c	A	pthread.h 		
+t	pthread_key_create/speculative/5-1.c	A	pthread.h 		
+t	pthread_key_delete/1-1.c	A	pthread.h 		
+t	pthread_key_delete/1-2.c	A	pthread.h 		
+t	pthread_key_delete/2-1.c	A	pthread.h 		
+t	pthread_kill/1-1.c	A	pthread.h 		
+t	pthread_kill/1-2.c	A	pthread.h 		
+t	pthread_kill/2-1.c	A	pthread.h 		
+t	pthread_kill/3-1.c	A	pthread.h 		
+t	pthread_kill/7-1.c	A	pthread.h 		
+t	pthread_kill/8-1.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_destroy/1-1.c	A	pthread.h 		
+t	pthread_mutex_destroy/2-1.c	A	pthread.h 		
+t	pthread_mutex_destroy/2-2.c	A	pthread.h 		
+t	pthread_mutex_destroy/3-1.c	A	pthread.h 		
+t	pthread_mutex_destroy/5-1.c	A	pthread.h 		
+t	pthread_mutex_destroy/5-2.c	A	pthread.h 		
+t	pthread_mutex_destroy/speculative/4-2.c	A	pthread.h 		
+t	pthread_mutex_getprioceiling/1-1.c	A	pthread.h 		
+t	pthread_mutex_getprioceiling/3-1.c	A	pthread.h 		
+t	pthread_mutex_getprioceiling/3-2.c	A	pthread.h 		
+t	pthread_mutex_getprioceiling/3-3.c	A	pthread.h 		
+t	pthread_mutex_init/1-1.c	A	pthread.h 		
+t	pthread_mutex_init/1-2.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_init/2-1.c	A	pthread.h 		
+t	pthread_mutex_init/3-1.c	A	pthread.h 		
+t	pthread_mutex_init/3-2.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_init/4-1.c	A	pthread.h 		
+t	pthread_mutex_init/5-1.c	A	pthread.h 		
+t	pthread_mutex_init/speculative/5-2.c	A	pthread.h 		
+t	pthread_mutex_lock/1-1.c	A	pthread.h 		
+t	pthread_mutex_lock/2-1.c	A	pthread.h 		
+t	pthread_mutex_lock/3-1.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_lock/4-1.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_lock/5-1.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_setprioceiling/1-1.c	A	pthread.h 		
+t	pthread_mutex_timedlock/1-1.c	A	pthread.h 		
+t	pthread_mutex_timedlock/2-1.c	A	pthread.h 		
+t	pthread_mutex_timedlock/4-1.c	A	pthread.h 		
+t	pthread_mutex_timedlock/5-1.c	A	pthread.h 		
+t	pthread_mutex_timedlock/5-2.c	A	pthread.h 		
+t	pthread_mutex_timedlock/5-3.c	A	pthread.h 		
+t	pthread_mutex_trylock/1-1.c	A	pthread.h 		
+t	pthread_mutex_trylock/1-2.c	A	pthread.h sys/mman.h 		
+t	pthread_mutex_trylock/2-1.c	A	pthread.h sys/mman.h 		
+t	pthread_mutex_trylock/3-1.c	A	pthread.h 		
+t	pthread_mutex_trylock/4-1.c	A	pthread.h 		
+t	pthread_mutex_trylock/4-2.c	A	pthread.h sys/mman.h 		
+t	pthread_mutex_trylock/4-3.c	A	pthread.h semaphore.h 		
+t	pthread_mutex_unlock/1-1.c	A	pthread.h 		
+t	pthread_mutex_unlock/2-1.c	A	pthread.h 		
+t	pthread_mutex_unlock/3-1.c	A	pthread.h 		
+t	pthread_mutex_unlock/5-1.c	A	pthread.h 		
+t	pthread_mutex_unlock/5-2.c	A	pthread.h 		
+t	pthread_mutexattr_destroy/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_destroy/2-1.c	A	pthread.h 		
+t	pthread_mutexattr_destroy/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_destroy/4-1.c	A	pthread.h 		
+t	pthread_mutexattr_getprioceiling/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_getprioceiling/1-2.c	A	pthread.h 		
+t	pthread_mutexattr_getprioceiling/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_getprotocol/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_getprotocol/1-2.c	A	pthread.h 		
+t	pthread_mutexattr_getpshared/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_getpshared/1-2.c	A	pthread.h 		
+t	pthread_mutexattr_getpshared/1-3.c	A	pthread.h 		
+t	pthread_mutexattr_getpshared/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_gettype/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_gettype/1-2.c	A	pthread.h 		
+t	pthread_mutexattr_gettype/1-3.c	A	pthread.h 		
+t	pthread_mutexattr_gettype/1-4.c	A	pthread.h 		
+t	pthread_mutexattr_gettype/1-5.c	A	pthread.h 		
+t	pthread_mutexattr_gettype/speculative/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_init/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_init/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_setprioceiling/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_setprioceiling/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_setprioceiling/3-2.c	A	pthread.h 		
+t	pthread_mutexattr_setprotocol/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_setprotocol/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_setprotocol/3-2.c	A	pthread.h 		
+t	pthread_mutexattr_setpshared/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_setpshared/1-2.c	A	pthread.h 		
+t	pthread_mutexattr_setpshared/2-1.c	A	pthread.h 		
+t	pthread_mutexattr_setpshared/2-2.c	A	pthread.h 		
+t	pthread_mutexattr_setpshared/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_setpshared/3-2.c	A	pthread.h 		
+t	pthread_mutexattr_settype/1-1.c	A	pthread.h 		
+t	pthread_mutexattr_settype/2-1.c	A	pthread.h 		
+t	pthread_mutexattr_settype/3-1.c	A	pthread.h 		
+t	pthread_mutexattr_settype/3-2.c	A	pthread.h 		
+t	pthread_mutexattr_settype/3-3.c	A	pthread.h 		
+t	pthread_mutexattr_settype/3-4.c	A	pthread.h 		
+t	pthread_mutexattr_settype/7-1.c	A	pthread.h 		
+t	pthread_once/1-1.c	A	pthread.h 		
+t	pthread_once/1-2.c	A	pthread.h 		
+t	pthread_once/1-3.c	A	pthread.h 		
+t	pthread_once/2-1.c	A	pthread.h 		
+t	pthread_once/3-1.c	A	pthread.h 		
+t	pthread_once/4-1-buildonly.c	A	pthread.h 		
+t	pthread_once/6-1.c	A	pthread.h semaphore.h 		
+t	pthread_rwlock_destroy/1-1.c	A	pthread.h 		
+t	pthread_rwlock_destroy/3-1.c	A	pthread.h 		
+t	pthread_rwlock_init/1-1.c	A	pthread.h 		
+t	pthread_rwlock_init/2-1.c	A	pthread.h 		
+t	pthread_rwlock_init/3-1.c	A	pthread.h 		
+t	pthread_rwlock_init/6-1.c	A	pthread.h 		
+t	pthread_rwlock_rdlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_rdlock/2-1.c	A	pthread.h 		
+t	pthread_rwlock_rdlock/2-2.c	A	pthread.h 		
+t	pthread_rwlock_rdlock/2-3.c	A	pthread.h 		
+t	pthread_rwlock_rdlock/4-1.c	A	pthread.h 		
+t	pthread_rwlock_rdlock/5-1.c	A	pthread.h 		
+t	pthread_rwlock_timedrdlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_timedrdlock/2-1.c	A	pthread.h 		
+t	pthread_rwlock_timedrdlock/3-1.c	A	pthread.h 		
+t	pthread_rwlock_timedrdlock/5-1.c	A	pthread.h 		
+t	pthread_rwlock_timedrdlock/6-1.c	A	pthread.h 		
+t	pthread_rwlock_timedrdlock/6-2.c	A	pthread.h 		
+t	pthread_rwlock_timedwrlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_timedwrlock/2-1.c	A	pthread.h 		
+t	pthread_rwlock_timedwrlock/3-1.c	A	pthread.h 		
+t	pthread_rwlock_timedwrlock/5-1.c	A	pthread.h 		
+t	pthread_rwlock_timedwrlock/6-1.c	A	pthread.h 		
+t	pthread_rwlock_timedwrlock/6-2.c	A	pthread.h 		
+t	pthread_rwlock_tryrdlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_trywrlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_trywrlock/speculative/3-1.c	A	pthread.h 		
+t	pthread_rwlock_unlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_unlock/2-1.c	A	pthread.h 		
+t	pthread_rwlock_unlock/3-1.c	A	pthread.h 		
+t	pthread_rwlock_unlock/4-1.c	A	pthread.h 		
+t	pthread_rwlock_unlock/4-2.c	A	pthread.h 		
+t	pthread_rwlock_wrlock/1-1.c	A	pthread.h 		
+t	pthread_rwlock_wrlock/2-1.c	A	pthread.h 		
+t	pthread_rwlock_wrlock/3-1.c	A	pthread.h 		
+t	pthread_rwlockattr_destroy/1-1.c	A	pthread.h 		
+t	pthread_rwlockattr_destroy/2-1.c	A	pthread.h 		
+t	pthread_rwlockattr_getpshared/1-1.c	A	pthread.h 		
+t	pthread_rwlockattr_getpshared/2-1.c	A	pthread.h sys/mman.h 		
+t	pthread_rwlockattr_getpshared/4-1.c	A	pthread.h 		
+t	pthread_rwlockattr_init/1-1.c	A	pthread.h 		
+t	pthread_rwlockattr_init/2-1.c	A	pthread.h 		
+t	pthread_rwlockattr_setpshared/1-1.c	A	pthread.h 		
+t	pthread_self/1-1.c	A	pthread.h 		
+t	pthread_setcancelstate/1-1.c	A	pthread.h 		
+t	pthread_setcancelstate/1-2.c	A	pthread.h 		
+t	pthread_setcancelstate/2-1.c	A	pthread.h 		
+t	pthread_setcancelstate/3-1.c	A	pthread.h 		
+t	pthread_setcanceltype/1-1.c	A	pthread.h 		
+t	pthread_setcanceltype/1-2.c	A	pthread.h 		
+t	pthread_setcanceltype/2-1.c	A	pthread.h 		
+t	pthread_setschedparam/1-1.c	A	pthread.h 		
+t	pthread_setschedparam/1-2.c	A	pthread.h 		
+t	pthread_setschedparam/4-1.c	A	pthread.h 		
+t	pthread_setschedparam/5-1.c	A	pthread.h semaphore.h 		
+t	pthread_setschedprio/1-1.c	A	pthread.h 		
+t	pthread_setspecific/1-1.c	A	pthread.h 		
+t	pthread_setspecific/1-2.c	A	pthread.h 		
+t	pthread_sigmask/10-1.c	A	pthread.h 		
+t	pthread_sigmask/12-1.c	A	pthread.h 		
+t	pthread_sigmask/14-1.c	A	pthread.h 		
+t	pthread_sigmask/15-1.c	B		link	pthread_sigmask
+t	pthread_sigmask/16-1.c	A	pthread.h 		
+t	pthread_sigmask/18-1.c	A	pthread.h semaphore.h 		
+t	pthread_sigmask/4-1.c	A	pthread.h 		
+t	pthread_sigmask/5-1.c	A	pthread.h 		
+t	pthread_sigmask/6-1.c	A	pthread.h 		
+t	pthread_sigmask/7-1.c	A	pthread.h 		
+t	pthread_sigmask/8-1.c	A	pthread.h 		
+t	pthread_sigmask/8-2.c	A	pthread.h 		
+t	pthread_sigmask/8-3.c	A	pthread.h 		
+t	pthread_sigmask/9-1.c	A	pthread.h 		
+t	pthread_spin_destroy/1-1.c	A	pthread.h 		
+t	pthread_spin_destroy/3-1.c	A	pthread.h 		
+t	pthread_spin_init/1-1.c	A	pthread.h 		
+t	pthread_spin_init/2-1.c	A	pthread.h sys/mman.h 		
+t	pthread_spin_init/2-2.c	A	pthread.h sys/mman.h 		
+t	pthread_spin_init/4-1.c	A	pthread.h 		
+t	pthread_spin_lock/1-1.c	A	pthread.h 		
+t	pthread_spin_lock/1-2.c	A	pthread.h 		
+t	pthread_spin_lock/3-1.c	A	pthread.h 		
+t	pthread_spin_lock/3-2.c	A	pthread.h 		
+t	pthread_spin_trylock/1-1.c	A	pthread.h 		
+t	pthread_spin_trylock/4-1.c	A	pthread.h 		
+t	pthread_spin_unlock/1-1.c	A	pthread.h 		
+t	pthread_spin_unlock/1-2.c	A	pthread.h 		
+t	pthread_spin_unlock/3-1.c	A	pthread.h 		
+t	pthread_testcancel/1-1.c	A	pthread.h 		
+t	pthread_testcancel/2-1.c	A	pthread.h 		
+t	raise/1-1.c	C			
+t	raise/1-2.c	C			
+t	raise/10000-1.c	C			
+t	raise/2-1.c	C			
+t	raise/4-1.c	C			
+t	raise/6-1.c	C			
+t	raise/7-1.c	C			
+t	sched_get_priority_max/1-1.c	B		macro	SCHED_RR
+t	sched_get_priority_max/1-2.c	B		macro	SCHED_FIFO
+t	sched_get_priority_max/1-3.c	C			
+t	sched_get_priority_max/1-4.c	B		macro	SCHED_OTHER
+t	sched_get_priority_max/2-1.c	B		link	sched_get_priority_max
+t	sched_get_priority_min/1-1.c	B		macro	SCHED_RR
+t	sched_get_priority_min/1-2.c	B		macro	SCHED_FIFO
+t	sched_get_priority_min/1-3.c	C			
+t	sched_get_priority_min/1-4.c	B		macro	SCHED_OTHER
+t	sched_get_priority_min/2-1.c	B		link	sched_get_priority_min
+t	sched_getparam/1-1.c	B		type	struct sched_param
+t	sched_getparam/2-1.c	B		type	struct sched_param
+t	sched_getparam/3-1.c	B		type	struct sched_param
+t	sched_getparam/4-1.c	B		type	struct sched_param
+t	sched_getparam/6-1.c	B		type	struct sched_param
+t	sched_getparam/speculative/7-1.c	B		link	sched_getparam
+t	sched_getscheduler/1-1.c	B		link	sched_getscheduler
+t	sched_getscheduler/3-1.c	B		link	sched_getscheduler
+t	sched_getscheduler/4-1.c	B		link	sched_getscheduler
+t	sched_getscheduler/5-1.c	B		link	sched_getscheduler
+t	sched_getscheduler/7-1.c	B		link	sched_getscheduler
+t	sched_rr_get_interval/1-1.c	B		type	struct sched_param
+t	sched_rr_get_interval/2-1.c	B		type	struct sched_param
+t	sched_rr_get_interval/3-1.c	B		type	struct sched_param
+t	sched_rr_get_interval/speculative/5-1.c	B		link	sched_rr_get_interval
+t	sched_setparam/1-1.c	B		type	struct sched_param
+t	sched_setparam/2-1.c	B	sys/pstat.h sys/sysctl.h 	type	struct sched_param
+t	sched_setparam/2-2.c	B	sys/pstat.h sys/sysctl.h 	type	struct sched_param
+t	sched_setparam/20-1.c	A	pthread.h 		
+t	sched_setparam/21-1.c	A	pthread.h 		
+t	sched_setparam/21-2.c	A	pthread.h 		
+t	sched_setparam/22-1.c	B		type	struct sched_param
+t	sched_setparam/23-1.c	B		type	struct sched_param
+t	sched_setparam/23-2.c	C			
+t	sched_setparam/23-3.c	C			
+t	sched_setparam/23-4.c	C			
+t	sched_setparam/23-5.c	C			
+t	sched_setparam/23-6.c	B		type	struct sched_param
+t	sched_setparam/23-7.c	B		type	struct sched_param
+t	sched_setparam/25-1.c	B		type	struct sched_param
+t	sched_setparam/25-2.c	B		optprobe	_POSIX_SPORADIC_SERVER support not defined
+t	sched_setparam/25-3.c	B		optprobe	_POSIX_SPORADIC_SERVER not defined correctly
+t	sched_setparam/25-4.c	B		optprobe	_POSIX_SPORADIC_SERVER not defined properly
+t	sched_setparam/26-1.c	B		type	struct sched_param
+t	sched_setparam/27-1.c	B		type	struct sched_param
+t	sched_setparam/5-1.c	B		type	struct sched_param
+t	sched_setparam/9-1.c	A	sys/ipc.h sys/pstat.h sys/shm.h sys/sysctl.h 		
+t	sched_setscheduler/1-1.c	B		macro	SCHED_FIFO
+t	sched_setscheduler/15-1.c	A	pthread.h 		
+t	sched_setscheduler/15-2.c	A	pthread.h 		
+t	sched_setscheduler/16-1.c	B		type	struct sched_param
+t	sched_setscheduler/17-1.c	B		macro	SCHED_FIFO
+t	sched_setscheduler/17-2.c	C			
+t	sched_setscheduler/17-3.c	C			
+t	sched_setscheduler/17-4.c	C			
+t	sched_setscheduler/17-5.c	B		type	struct sched_param
+t	sched_setscheduler/17-6.c	B		type	struct sched_param
+t	sched_setscheduler/17-7.c	B		type	struct sched_param
+t	sched_setscheduler/19-1.c	B		macro	SCHED_FIFO
+t	sched_setscheduler/19-2.c	C			
+t	sched_setscheduler/19-3.c	C			
+t	sched_setscheduler/19-4.c	C			
+t	sched_setscheduler/19-5.c	B		type	struct sched_param
+t	sched_setscheduler/20-1.c	B		type	struct sched_param
+t	sched_setscheduler/21-1.c	B		type	struct sched_param
+t	sched_setscheduler/22-1.c	A	pthread.h 		
+t	sched_setscheduler/22-2.c	A	pthread.h 		
+t	sched_setscheduler/4-1.c	B		type	struct sched_param
+t	sched_yield/1-1.c	A	pthread.h 		
+t	sched_yield/2-1.c	C			
+t	sem_close/1-1.c	A	semaphore.h 		
+t	sem_close/2-1.c	A	semaphore.h 		
+t	sem_close/3-1.c	A	semaphore.h 		
+t	sem_close/3-2.c	A	pthread.h semaphore.h 		
+t	sem_destroy/3-1.c	A	pthread.h semaphore.h 		
+t	sem_destroy/4-1.c	A	semaphore.h 		
+t	sem_getvalue/1-1.c	A	semaphore.h 		
+t	sem_getvalue/2-1.c	A	semaphore.h 		
+t	sem_getvalue/2-2.c	A	pthread.h semaphore.h 		
+t	sem_getvalue/4-1.c	A	semaphore.h 		
+t	sem_getvalue/5-1.c	A	semaphore.h 		
+t	sem_init/1-1.c	A	semaphore.h 		
+t	sem_init/2-1.c	A	semaphore.h 		
+t	sem_init/2-2.c	A	semaphore.h 		
+t	sem_init/3-1.c	A	pthread.h semaphore.h 		
+t	sem_init/3-2.c	A	pthread.h semaphore.h sys/mman.h 		
+t	sem_init/3-3.c	A	pthread.h semaphore.h sys/mman.h 		
+t	sem_init/5-1.c	A	semaphore.h 		
+t	sem_init/5-2.c	A	semaphore.h 		
+t	sem_init/6-1.c	A	semaphore.h 		
+t	sem_init/7-1.c	A	pthread.h semaphore.h 		
+t	sem_open/1-1.c	A	semaphore.h 		
+t	sem_open/1-2.c	A	semaphore.h 		
+t	sem_open/1-3.c	A	semaphore.h 		
+t	sem_open/1-4.c	A	semaphore.h 		
+t	sem_open/10-1.c	A	semaphore.h 		
+t	sem_open/15-1.c	A	pthread.h semaphore.h 		
+t	sem_open/2-1.c	A	semaphore.h 		
+t	sem_open/2-2.c	A	semaphore.h 		
+t	sem_open/3-1.c	A	semaphore.h 		
+t	sem_open/4-1.c	A	semaphore.h 		
+t	sem_open/5-1.c	A	semaphore.h 		
+t	sem_open/6-1.c	A	semaphore.h 		
+t	sem_post/1-1.c	A	semaphore.h 		
+t	sem_post/1-2.c	A	semaphore.h 		
+t	sem_post/2-1.c	A	semaphore.h 		
+t	sem_post/4-1.c	A	semaphore.h 		
+t	sem_post/5-1.c	A	semaphore.h 		
+t	sem_post/6-1.c	A	semaphore.h 		
+t	sem_post/8-1.c	A	semaphore.h 		
+t	sem_timedwait/1-1.c	A	semaphore.h 		
+t	sem_timedwait/10-1.c	A	semaphore.h 		
+t	sem_timedwait/11-1.c	A	semaphore.h 		
+t	sem_timedwait/2-1.c	A	semaphore.h sys/mman.h 		
+t	sem_timedwait/2-2.c	A	semaphore.h 		
+t	sem_timedwait/3-1.c	A	semaphore.h 		
+t	sem_timedwait/4-1.c	A	semaphore.h 		
+t	sem_timedwait/6-1.c	A	semaphore.h 		
+t	sem_timedwait/6-2.c	A	semaphore.h 		
+t	sem_timedwait/7-1.c	A	semaphore.h 		
+t	sem_timedwait/9-1.c	A	semaphore.h 		
+t	sem_unlink/1-1.c	A	semaphore.h 		
+t	sem_unlink/2-1.c	A	semaphore.h 		
+t	sem_unlink/2-2.c	A	pthread.h semaphore.h 		
+t	sem_unlink/3-1.c	A	pthread.h semaphore.h 		
+t	sem_unlink/4-1.c	A	semaphore.h 		
+t	sem_unlink/4-2.c	A	pthread.h semaphore.h 		
+t	sem_unlink/5-1.c	A	pthread.h semaphore.h 		
+t	sem_unlink/6-1.c	A	pthread.h semaphore.h 		
+t	sem_unlink/7-1.c	A	pthread.h semaphore.h 		
+t	sem_unlink/9-1.c	A	pthread.h semaphore.h 		
+t	sem_wait/1-1.c	A	semaphore.h 		
+t	sem_wait/1-2.c	A	semaphore.h 		
+t	sem_wait/11-1.c	A	semaphore.h 		
+t	sem_wait/12-1.c	A	semaphore.h 		
+t	sem_wait/13-1.c	A	pthread.h semaphore.h 		
+t	sem_wait/3-1.c	A	semaphore.h 		
+t	sem_wait/5-1.c	A	semaphore.h 		
+t	sem_wait/7-1.c	A	semaphore.h 		
+t	shm_open/1-1.c	A	sys/mman.h 		
+t	shm_open/11-1.c	A	sys/mman.h 		
+t	shm_open/13-1.c	A	sys/mman.h 		
+t	shm_open/14-2.c	A	sys/mman.h 		
+t	shm_open/15-1.c	A	sys/mman.h 		
+t	shm_open/16-1.c	A	sys/mman.h 		
+t	shm_open/17-1.c	A	sys/mman.h 		
+t	shm_open/18-1.c	A	sys/mman.h 		
+t	shm_open/20-1.c	A	sys/mman.h 		
+t	shm_open/20-2.c	A	sys/mman.h 		
+t	shm_open/20-3.c	A	sys/mman.h 		
+t	shm_open/21-1.c	A	sys/mman.h 		
+t	shm_open/22-1.c	A	sys/mman.h 		
+t	shm_open/23-1.c	A	semaphore.h sys/mman.h 		
+t	shm_open/25-1.c	A	sys/mman.h 		
+t	shm_open/26-1.c	A	sys/mman.h 		
+t	shm_open/26-2.c	A	sys/mman.h 		
+t	shm_open/28-1.c	A	sys/mman.h 		
+t	shm_open/28-2.c	A	sys/mman.h 		
+t	shm_open/28-3.c	A	sys/mman.h 		
+t	shm_open/32-1.c	A	sys/mman.h 		
+t	shm_open/34-1.c	A	sys/mman.h 		
+t	shm_open/37-1.c	A	sys/mman.h 		
+t	shm_open/38-1.c	A	sys/mman.h 		
+t	shm_open/39-1.c	A	sys/mman.h 		
+t	shm_open/39-2.c	A	sys/mman.h 		
+t	shm_open/41-1.c	A	sys/mman.h 		
+t	shm_open/5-1.c	A	sys/mman.h 		
+t	shm_open/8-1.c	A	sys/mman.h 		
+t	shm_unlink/1-1.c	A	sys/mman.h 		
+t	shm_unlink/10-1.c	A	sys/mman.h 		
+t	shm_unlink/10-2.c	A	sys/mman.h 		
+t	shm_unlink/11-1.c	A	sys/mman.h 		
+t	shm_unlink/2-1.c	A	sys/mman.h 		
+t	shm_unlink/3-1.c	A	sys/mman.h 		
+t	shm_unlink/5-1.c	A	sys/mman.h 		
+t	shm_unlink/6-1.c	A	sys/mman.h 		
+t	shm_unlink/8-1.c	A	sys/mman.h 		
+t	shm_unlink/9-1.c	A	sys/mman.h 		
+t	sigaction/1-1.c	C			
+t	sigaction/1-10.c	C			
+t	sigaction/1-11.c	C			
+t	sigaction/1-12.c	C			
+t	sigaction/1-13.c	C			
+t	sigaction/1-14.c	C			
+t	sigaction/1-15.c	C			
+t	sigaction/1-16.c	C			
+t	sigaction/1-17.c	C			
+t	sigaction/1-18.c	C			
+t	sigaction/1-19.c	C			
+t	sigaction/1-2.c	C			
+t	sigaction/1-20.c	C			
+t	sigaction/1-21.c	C			
+t	sigaction/1-22.c	C			
+t	sigaction/1-23.c	C			
+t	sigaction/1-24.c	C			
+t	sigaction/1-25.c	C			
+t	sigaction/1-26.c	C			
+t	sigaction/1-3.c	C			
+t	sigaction/1-4.c	C			
+t	sigaction/1-5.c	C			
+t	sigaction/1-6.c	C			
+t	sigaction/1-7.c	C			
+t	sigaction/1-8.c	C			
+t	sigaction/1-9.c	C			
+t	sigaction/10-1.c	C			
+t	sigaction/11-1.c	C			
+t	sigaction/12-1.c	C			
+t	sigaction/12-10.c	C			
+t	sigaction/12-11.c	C			
+t	sigaction/12-12.c	C			
+t	sigaction/12-13.c	C			
+t	sigaction/12-14.c	C			
+t	sigaction/12-15.c	C			
+t	sigaction/12-16.c	C			
+t	sigaction/12-17.c	C			
+t	sigaction/12-18.c	C			
+t	sigaction/12-19.c	C			
+t	sigaction/12-2.c	C			
+t	sigaction/12-20.c	C			
+t	sigaction/12-21.c	C			
+t	sigaction/12-22.c	C			
+t	sigaction/12-23.c	C			
+t	sigaction/12-24.c	C			
+t	sigaction/12-25.c	C			
+t	sigaction/12-26.c	C			
+t	sigaction/12-27.c	C			
+t	sigaction/12-28.c	C			
+t	sigaction/12-29.c	C			
+t	sigaction/12-3.c	C			
+t	sigaction/12-30.c	C			
+t	sigaction/12-31.c	C			
+t	sigaction/12-32.c	C			
+t	sigaction/12-33.c	C			
+t	sigaction/12-34.c	C			
+t	sigaction/12-35.c	C			
+t	sigaction/12-36.c	C			
+t	sigaction/12-37.c	C			
+t	sigaction/12-38.c	C			
+t	sigaction/12-39.c	C			
+t	sigaction/12-4.c	C			
+t	sigaction/12-40.c	C			
+t	sigaction/12-41.c	C			
+t	sigaction/12-42.c	C			
+t	sigaction/12-43.c	C			
+t	sigaction/12-44.c	C			
+t	sigaction/12-45.c	C			
+t	sigaction/12-46.c	C			
+t	sigaction/12-47.c	C			
+t	sigaction/12-48.c	C			
+t	sigaction/12-49.c	C			
+t	sigaction/12-5.c	C			
+t	sigaction/12-50.c	C			
+t	sigaction/12-51.c	C			
+t	sigaction/12-52.c	C			
+t	sigaction/12-6.c	C			
+t	sigaction/12-7.c	C			
+t	sigaction/12-8.c	C			
+t	sigaction/12-9.c	C			
+t	sigaction/13-1.c	C			
+t	sigaction/13-10.c	C			
+t	sigaction/13-11.c	C			
+t	sigaction/13-12.c	C			
+t	sigaction/13-13.c	C			
+t	sigaction/13-14.c	C			
+t	sigaction/13-15.c	C			
+t	sigaction/13-16.c	C			
+t	sigaction/13-17.c	C			
+t	sigaction/13-18.c	C			
+t	sigaction/13-19.c	C			
+t	sigaction/13-2.c	C			
+t	sigaction/13-20.c	C			
+t	sigaction/13-21.c	C			
+t	sigaction/13-22.c	C			
+t	sigaction/13-23.c	C			
+t	sigaction/13-24.c	C			
+t	sigaction/13-25.c	C			
+t	sigaction/13-26.c	C			
+t	sigaction/13-3.c	C			
+t	sigaction/13-4.c	C			
+t	sigaction/13-5.c	C			
+t	sigaction/13-6.c	C			
+t	sigaction/13-7.c	C			
+t	sigaction/13-8.c	C			
+t	sigaction/13-9.c	C			
+t	sigaction/16-1.c	A	pthread.h semaphore.h 		
+t	sigaction/17-1.c	C			
+t	sigaction/17-10.c	C			
+t	sigaction/17-11.c	C			
+t	sigaction/17-12.c	C			
+t	sigaction/17-13.c	C			
+t	sigaction/17-14.c	C			
+t	sigaction/17-15.c	C			
+t	sigaction/17-16.c	C			
+t	sigaction/17-17.c	C			
+t	sigaction/17-18.c	C			
+t	sigaction/17-19.c	C			
+t	sigaction/17-2.c	C			
+t	sigaction/17-20.c	C			
+t	sigaction/17-21.c	C			
+t	sigaction/17-22.c	C			
+t	sigaction/17-23.c	C			
+t	sigaction/17-24.c	C			
+t	sigaction/17-25.c	C			
+t	sigaction/17-26.c	C			
+t	sigaction/17-3.c	C			
+t	sigaction/17-4.c	C			
+t	sigaction/17-5.c	C			
+t	sigaction/17-6.c	C			
+t	sigaction/17-7.c	C			
+t	sigaction/17-8.c	C			
+t	sigaction/17-9.c	C			
+t	sigaction/18-1.c	A	pthread.h 		
+t	sigaction/18-10.c	A	pthread.h 		
+t	sigaction/18-11.c	A	pthread.h 		
+t	sigaction/18-12.c	A	pthread.h 		
+t	sigaction/18-13.c	A	pthread.h 		
+t	sigaction/18-14.c	A	pthread.h 		
+t	sigaction/18-15.c	A	pthread.h 		
+t	sigaction/18-16.c	A	pthread.h 		
+t	sigaction/18-17.c	A	pthread.h 		
+t	sigaction/18-18.c	A	pthread.h 		
+t	sigaction/18-19.c	A	pthread.h 		
+t	sigaction/18-2.c	A	pthread.h 		
+t	sigaction/18-20.c	A	pthread.h 		
+t	sigaction/18-21.c	A	pthread.h 		
+t	sigaction/18-22.c	A	pthread.h 		
+t	sigaction/18-23.c	A	pthread.h 		
+t	sigaction/18-24.c	A	pthread.h 		
+t	sigaction/18-25.c	A	pthread.h 		
+t	sigaction/18-26.c	A	pthread.h 		
+t	sigaction/18-3.c	A	pthread.h 		
+t	sigaction/18-4.c	A	pthread.h 		
+t	sigaction/18-5.c	A	pthread.h 		
+t	sigaction/18-6.c	A	pthread.h 		
+t	sigaction/18-7.c	A	pthread.h 		
+t	sigaction/18-8.c	A	pthread.h 		
+t	sigaction/18-9.c	A	pthread.h 		
+t	sigaction/19-1.c	A	pthread.h 		
+t	sigaction/19-10.c	A	pthread.h 		
+t	sigaction/19-11.c	A	pthread.h 		
+t	sigaction/19-12.c	A	pthread.h 		
+t	sigaction/19-13.c	A	pthread.h 		
+t	sigaction/19-14.c	A	pthread.h 		
+t	sigaction/19-15.c	A	pthread.h 		
+t	sigaction/19-16.c	A	pthread.h 		
+t	sigaction/19-17.c	A	pthread.h 		
+t	sigaction/19-18.c	A	pthread.h 		
+t	sigaction/19-19.c	A	pthread.h 		
+t	sigaction/19-2.c	A	pthread.h 		
+t	sigaction/19-20.c	A	pthread.h 		
+t	sigaction/19-21.c	A	pthread.h 		
+t	sigaction/19-22.c	A	pthread.h 		
+t	sigaction/19-23.c	A	pthread.h 		
+t	sigaction/19-24.c	A	pthread.h 		
+t	sigaction/19-25.c	A	pthread.h 		
+t	sigaction/19-26.c	A	pthread.h 		
+t	sigaction/19-3.c	A	pthread.h 		
+t	sigaction/19-4.c	A	pthread.h 		
+t	sigaction/19-5.c	A	pthread.h 		
+t	sigaction/19-6.c	A	pthread.h 		
+t	sigaction/19-7.c	A	pthread.h 		
+t	sigaction/19-8.c	A	pthread.h 		
+t	sigaction/19-9.c	A	pthread.h 		
+t	sigaction/2-1.c	C			
+t	sigaction/2-10.c	C			
+t	sigaction/2-11.c	C			
+t	sigaction/2-12.c	C			
+t	sigaction/2-13.c	C			
+t	sigaction/2-14.c	C			
+t	sigaction/2-15.c	C			
+t	sigaction/2-16.c	C			
+t	sigaction/2-17.c	C			
+t	sigaction/2-18.c	C			
+t	sigaction/2-19.c	C			
+t	sigaction/2-2.c	C			
+t	sigaction/2-20.c	C			
+t	sigaction/2-21.c	C			
+t	sigaction/2-22.c	C			
+t	sigaction/2-23.c	C			
+t	sigaction/2-24.c	C			
+t	sigaction/2-25.c	C			
+t	sigaction/2-26.c	C			
+t	sigaction/2-3.c	C			
+t	sigaction/2-4.c	C			
+t	sigaction/2-5.c	C			
+t	sigaction/2-6.c	C			
+t	sigaction/2-7.c	C			
+t	sigaction/2-8.c	C			
+t	sigaction/2-9.c	C			
+t	sigaction/21-1.c	C			
+t	sigaction/22-1.c	C			
+t	sigaction/22-10.c	C			
+t	sigaction/22-11.c	C			
+t	sigaction/22-12.c	C			
+t	sigaction/22-13.c	C			
+t	sigaction/22-14.c	C			
+t	sigaction/22-15.c	C			
+t	sigaction/22-16.c	C			
+t	sigaction/22-17.c	C			
+t	sigaction/22-18.c	C			
+t	sigaction/22-19.c	C			
+t	sigaction/22-2.c	C			
+t	sigaction/22-20.c	C			
+t	sigaction/22-21.c	C			
+t	sigaction/22-22.c	C			
+t	sigaction/22-23.c	C			
+t	sigaction/22-24.c	C			
+t	sigaction/22-25.c	C			
+t	sigaction/22-26.c	C			
+t	sigaction/22-3.c	C			
+t	sigaction/22-4.c	C			
+t	sigaction/22-5.c	C			
+t	sigaction/22-6.c	C			
+t	sigaction/22-7.c	C			
+t	sigaction/22-8.c	C			
+t	sigaction/22-9.c	C			
+t	sigaction/23-1.c	A	pthread.h 		
+t	sigaction/23-10.c	A	pthread.h 		
+t	sigaction/23-11.c	A	pthread.h 		
+t	sigaction/23-12.c	A	pthread.h 		
+t	sigaction/23-13.c	A	pthread.h 		
+t	sigaction/23-14.c	A	pthread.h 		
+t	sigaction/23-15.c	A	pthread.h 		
+t	sigaction/23-16.c	A	pthread.h 		
+t	sigaction/23-17.c	A	pthread.h 		
+t	sigaction/23-18.c	A	pthread.h 		
+t	sigaction/23-19.c	A	pthread.h 		
+t	sigaction/23-2.c	A	pthread.h 		
+t	sigaction/23-20.c	A	pthread.h 		
+t	sigaction/23-21.c	A	pthread.h 		
+t	sigaction/23-22.c	A	pthread.h 		
+t	sigaction/23-23.c	A	pthread.h 		
+t	sigaction/23-24.c	A	pthread.h 		
+t	sigaction/23-25.c	A	pthread.h 		
+t	sigaction/23-26.c	A	pthread.h 		
+t	sigaction/23-3.c	A	pthread.h 		
+t	sigaction/23-4.c	A	pthread.h 		
+t	sigaction/23-5.c	A	pthread.h 		
+t	sigaction/23-6.c	A	pthread.h 		
+t	sigaction/23-7.c	A	pthread.h 		
+t	sigaction/23-8.c	A	pthread.h 		
+t	sigaction/23-9.c	A	pthread.h 		
+t	sigaction/25-1.c	C			
+t	sigaction/25-10.c	C			
+t	sigaction/25-11.c	C			
+t	sigaction/25-12.c	C			
+t	sigaction/25-13.c	C			
+t	sigaction/25-14.c	C			
+t	sigaction/25-15.c	C			
+t	sigaction/25-16.c	C			
+t	sigaction/25-17.c	C			
+t	sigaction/25-18.c	C			
+t	sigaction/25-19.c	C			
+t	sigaction/25-2.c	C			
+t	sigaction/25-20.c	C			
+t	sigaction/25-21.c	C			
+t	sigaction/25-22.c	C			
+t	sigaction/25-23.c	C			
+t	sigaction/25-24.c	C			
+t	sigaction/25-25.c	C			
+t	sigaction/25-26.c	C			
+t	sigaction/25-3.c	C			
+t	sigaction/25-4.c	C			
+t	sigaction/25-5.c	C			
+t	sigaction/25-6.c	C			
+t	sigaction/25-7.c	C			
+t	sigaction/25-8.c	C			
+t	sigaction/25-9.c	C			
+t	sigaction/28-1.c	C			
+t	sigaction/28-10.c	C			
+t	sigaction/28-11.c	C			
+t	sigaction/28-12.c	C			
+t	sigaction/28-13.c	C			
+t	sigaction/28-14.c	C			
+t	sigaction/28-15.c	C			
+t	sigaction/28-16.c	C			
+t	sigaction/28-17.c	C			
+t	sigaction/28-18.c	C			
+t	sigaction/28-19.c	C			
+t	sigaction/28-2.c	C			
+t	sigaction/28-20.c	C			
+t	sigaction/28-21.c	C			
+t	sigaction/28-22.c	C			
+t	sigaction/28-23.c	C			
+t	sigaction/28-24.c	C			
+t	sigaction/28-25.c	C			
+t	sigaction/28-26.c	C			
+t	sigaction/28-3.c	C			
+t	sigaction/28-4.c	C			
+t	sigaction/28-5.c	C			
+t	sigaction/28-6.c	C			
+t	sigaction/28-7.c	C			
+t	sigaction/28-8.c	C			
+t	sigaction/28-9.c	C			
+t	sigaction/29-1.c	A	pthread.h 		
+t	sigaction/3-1.c	C			
+t	sigaction/3-10.c	C			
+t	sigaction/3-11.c	C			
+t	sigaction/3-12.c	C			
+t	sigaction/3-13.c	C			
+t	sigaction/3-14.c	C			
+t	sigaction/3-15.c	C			
+t	sigaction/3-16.c	C			
+t	sigaction/3-17.c	C			
+t	sigaction/3-18.c	C			
+t	sigaction/3-19.c	C			
+t	sigaction/3-2.c	C			
+t	sigaction/3-20.c	C			
+t	sigaction/3-21.c	C			
+t	sigaction/3-22.c	C			
+t	sigaction/3-23.c	C			
+t	sigaction/3-24.c	C			
+t	sigaction/3-25.c	C			
+t	sigaction/3-26.c	C			
+t	sigaction/3-3.c	C			
+t	sigaction/3-4.c	C			
+t	sigaction/3-5.c	C			
+t	sigaction/3-6.c	C			
+t	sigaction/3-7.c	C			
+t	sigaction/3-8.c	C			
+t	sigaction/3-9.c	C			
+t	sigaction/30-1.c	A	pthread.h 		
+t	sigaction/4-1.c	C			
+t	sigaction/4-10.c	C			
+t	sigaction/4-100.c	C			
+t	sigaction/4-101.c	C			
+t	sigaction/4-102.c	C			
+t	sigaction/4-103.c	C			
+t	sigaction/4-104.c	C			
+t	sigaction/4-11.c	C			
+t	sigaction/4-12.c	C			
+t	sigaction/4-13.c	C			
+t	sigaction/4-14.c	C			
+t	sigaction/4-15.c	C			
+t	sigaction/4-16.c	C			
+t	sigaction/4-17.c	C			
+t	sigaction/4-18.c	C			
+t	sigaction/4-19.c	C			
+t	sigaction/4-2.c	C			
+t	sigaction/4-20.c	C			
+t	sigaction/4-21.c	C			
+t	sigaction/4-22.c	C			
+t	sigaction/4-23.c	C			
+t	sigaction/4-24.c	C			
+t	sigaction/4-25.c	C			
+t	sigaction/4-26.c	C			
+t	sigaction/4-27.c	C			
+t	sigaction/4-28.c	C			
+t	sigaction/4-29.c	C			
+t	sigaction/4-3.c	C			
+t	sigaction/4-30.c	C			
+t	sigaction/4-31.c	C			
+t	sigaction/4-32.c	C			
+t	sigaction/4-33.c	C			
+t	sigaction/4-34.c	C			
+t	sigaction/4-35.c	C			
+t	sigaction/4-36.c	C			
+t	sigaction/4-37.c	C			
+t	sigaction/4-38.c	C			
+t	sigaction/4-39.c	C			
+t	sigaction/4-4.c	C			
+t	sigaction/4-40.c	C			
+t	sigaction/4-41.c	C			
+t	sigaction/4-42.c	C			
+t	sigaction/4-43.c	C			
+t	sigaction/4-44.c	C			
+t	sigaction/4-45.c	C			
+t	sigaction/4-46.c	C			
+t	sigaction/4-47.c	C			
+t	sigaction/4-48.c	C			
+t	sigaction/4-49.c	C			
+t	sigaction/4-5.c	C			
+t	sigaction/4-50.c	C			
+t	sigaction/4-51.c	C			
+t	sigaction/4-52.c	C			
+t	sigaction/4-53.c	C			
+t	sigaction/4-54.c	C			
+t	sigaction/4-55.c	C			
+t	sigaction/4-56.c	C			
+t	sigaction/4-57.c	C			
+t	sigaction/4-58.c	C			
+t	sigaction/4-59.c	C			
+t	sigaction/4-6.c	C			
+t	sigaction/4-60.c	C			
+t	sigaction/4-61.c	C			
+t	sigaction/4-62.c	C			
+t	sigaction/4-63.c	C			
+t	sigaction/4-64.c	C			
+t	sigaction/4-65.c	C			
+t	sigaction/4-66.c	C			
+t	sigaction/4-67.c	C			
+t	sigaction/4-68.c	C			
+t	sigaction/4-69.c	C			
+t	sigaction/4-7.c	C			
+t	sigaction/4-70.c	C			
+t	sigaction/4-71.c	C			
+t	sigaction/4-72.c	C			
+t	sigaction/4-73.c	C			
+t	sigaction/4-74.c	C			
+t	sigaction/4-75.c	C			
+t	sigaction/4-76.c	C			
+t	sigaction/4-77.c	C			
+t	sigaction/4-78.c	C			
+t	sigaction/4-79.c	C			
+t	sigaction/4-8.c	C			
+t	sigaction/4-80.c	C			
+t	sigaction/4-81.c	C			
+t	sigaction/4-82.c	C			
+t	sigaction/4-83.c	C			
+t	sigaction/4-84.c	C			
+t	sigaction/4-85.c	C			
+t	sigaction/4-86.c	C			
+t	sigaction/4-87.c	C			
+t	sigaction/4-88.c	C			
+t	sigaction/4-89.c	C			
+t	sigaction/4-9.c	C			
+t	sigaction/4-90.c	C			
+t	sigaction/4-91.c	C			
+t	sigaction/4-92.c	C			
+t	sigaction/4-93.c	C			
+t	sigaction/4-94.c	C			
+t	sigaction/4-95.c	C			
+t	sigaction/4-96.c	C			
+t	sigaction/4-97.c	C			
+t	sigaction/4-98.c	C			
+t	sigaction/4-99.c	C			
+t	sigaction/6-1.c	C			
+t	sigaction/6-10.c	C			
+t	sigaction/6-11.c	C			
+t	sigaction/6-12.c	C			
+t	sigaction/6-13.c	C			
+t	sigaction/6-14.c	C			
+t	sigaction/6-15.c	C			
+t	sigaction/6-16.c	C			
+t	sigaction/6-17.c	C			
+t	sigaction/6-18.c	C			
+t	sigaction/6-19.c	C			
+t	sigaction/6-2.c	C			
+t	sigaction/6-20.c	C			
+t	sigaction/6-21.c	C			
+t	sigaction/6-22.c	C			
+t	sigaction/6-23.c	C			
+t	sigaction/6-24.c	C			
+t	sigaction/6-25.c	C			
+t	sigaction/6-26.c	C			
+t	sigaction/6-3.c	C			
+t	sigaction/6-4.c	C			
+t	sigaction/6-5.c	C			
+t	sigaction/6-6.c	C			
+t	sigaction/6-7.c	C			
+t	sigaction/6-8.c	C			
+t	sigaction/6-9.c	C			
+t	sigaction/8-1.c	C			
+t	sigaction/8-10.c	C			
+t	sigaction/8-11.c	C			
+t	sigaction/8-12.c	C			
+t	sigaction/8-13.c	C			
+t	sigaction/8-14.c	C			
+t	sigaction/8-15.c	C			
+t	sigaction/8-16.c	C			
+t	sigaction/8-17.c	C			
+t	sigaction/8-18.c	C			
+t	sigaction/8-19.c	C			
+t	sigaction/8-2.c	C			
+t	sigaction/8-20.c	C			
+t	sigaction/8-21.c	C			
+t	sigaction/8-22.c	C			
+t	sigaction/8-23.c	C			
+t	sigaction/8-24.c	C			
+t	sigaction/8-25.c	C			
+t	sigaction/8-26.c	C			
+t	sigaction/8-3.c	C			
+t	sigaction/8-4.c	C			
+t	sigaction/8-5.c	C			
+t	sigaction/8-6.c	C			
+t	sigaction/8-7.c	C			
+t	sigaction/8-8.c	C			
+t	sigaction/8-9.c	C			
+t	sigaction/9-1.c	C			
+t	sigaddset/1-1.c	C			
+t	sigaddset/1-2.c	C			
+t	sigaddset/1-3.c	C			
+t	sigaddset/2-1.c	C			
+t	sigaddset/4-1.c	C			
+t	sigaltstack/1-1.c	C			
+t	sigaltstack/10-1.c	C			
+t	sigaltstack/11-1.c	C			
+t	sigaltstack/12-1.c	C			
+t	sigaltstack/2-1.c	C			
+t	sigaltstack/3-1.c	C			
+t	sigaltstack/5-1.c	C			
+t	sigaltstack/6-1.c	C			
+t	sigaltstack/7-1.c	C			
+t	sigaltstack/8-1.c	C			
+t	sigaltstack/9-1.c	C			
+t	sigdelset/1-1.c	C			
+t	sigdelset/1-2.c	C			
+t	sigdelset/1-3.c	C			
+t	sigdelset/1-4.c	C			
+t	sigdelset/4-1.c	C			
+t	sigemptyset/1-1.c	C			
+t	sigemptyset/2-1.c	C			
+t	sigfillset/1-1.c	C			
+t	sigfillset/2-1.c	C			
+t	sighold/1-1.c	C			
+t	sighold/2-1.c	C			
+t	sighold/3-1.c	C			
+t	sigignore/1-1.c	B		link	sigignore
+t	sigignore/4-1.c	B		link	sigignore
+t	sigignore/5-1.c	B		link	sigignore
+t	sigignore/6-1.c	B		link	sigignore
+t	sigignore/6-2.c	B		link	sigignore
+t	sigismember/3-1.c	C			
+t	sigismember/4-1.c	C			
+t	sigismember/5-1.c	C			
+t	signal/1-1.c	C			
+t	signal/2-1.c	C			
+t	signal/3-1.c	C			
+t	signal/5-1.c	C			
+t	signal/6-1.c	C			
+t	signal/7-1.c	C			
+t	sigpause/1-1.c	A	pthread.h 		
+t	sigpause/1-2.c	A	pthread.h 		
+t	sigpause/2-1.c	A	pthread.h 		
+t	sigpause/3-1.c	A	pthread.h 		
+t	sigpause/4-1.c	A	pthread.h 		
+t	sigpending/1-1.c	C			
+t	sigpending/1-2.c	C			
+t	sigpending/1-3.c	C			
+t	sigpending/2-1.c	C			
+t	sigprocmask/10-1.c	C			
+t	sigprocmask/12-1.c	C			
+t	sigprocmask/15-1.c	C			
+t	sigprocmask/17-1.c	C			
+t	sigprocmask/4-1.c	C			
+t	sigprocmask/5-1.c	C			
+t	sigprocmask/6-1.c	C			
+t	sigprocmask/7-1.c	C			
+t	sigprocmask/8-1.c	C			
+t	sigprocmask/8-2.c	C			
+t	sigprocmask/8-3.c	C			
+t	sigprocmask/9-1.c	C			
+t	sigqueue/1-1.c	B		link	sigqueue
+t	sigqueue/10-1.c	B		link	sigqueue
+t	sigqueue/11-1.c	B		link	sigqueue
+t	sigqueue/12-1.c	B		link	sigqueue
+t	sigqueue/2-1.c	B		link	sigqueue
+t	sigqueue/2-2.c	B		link	sigqueue
+t	sigqueue/3-1.c	B		link	sigqueue
+t	sigqueue/4-1.c	B		link	sigqueue
+t	sigqueue/5-1.c	B		link	sigqueue
+t	sigqueue/6-1.c	B		link	sigqueue
+t	sigqueue/7-1.c	B		link	sigqueue
+t	sigqueue/8-1.c	B		link	sigqueue
+t	sigqueue/9-1.c	B		macro	_SC_SIGQUEUE_MAX
+t	sigrelse/1-1.c	C			
+t	sigrelse/2-1.c	C			
+t	sigrelse/3-1.c	C			
+t	sigset/1-1.c	C			
+t	sigset/10-1.c	C			
+t	sigset/2-1.c	C			
+t	sigset/3-1.c	C			
+t	sigset/4-1.c	C			
+t	sigset/5-1.c	C			
+t	sigset/6-1.c	B		macro	SIG_HOLD
+t	sigset/7-1.c	B		macro	SIG_HOLD
+t	sigset/8-1.c	B		macro	SIG_HOLD
+t	sigset/9-1.c	C			
+t	sigsuspend/1-1.c	C			
+t	sigsuspend/3-1.c	C			
+t	sigsuspend/4-1.c	C			
+t	sigsuspend/6-1.c	C			
+t	sigtimedwait/1-1.c	B		link	sigtimedwait
+t	sigtimedwait/2-1.c	B		link	sigtimedwait
+t	sigtimedwait/4-1.c	B		link	sigtimedwait
+t	sigtimedwait/5-1.c	B		link	sigtimedwait
+t	sigtimedwait/6-1.c	B		link	sigtimedwait
+t	sigwait/1-1.c	C			
+t	sigwait/2-1.c	C			
+t	sigwait/3-1.c	C			
+t	sigwait/4-1.c	C			
+t	sigwait/6-1.c	A	pthread.h 		
+t	sigwait/6-2.c	A	pthread.h 		
+t	sigwait/7-1.c	A	pthread.h 		
+t	sigwait/8-1.c	C			
+t	sigwaitinfo/1-1.c	B		link	sigwaitinfo
+t	sigwaitinfo/2-1.c	B		link	sigqueue
+t	sigwaitinfo/3-1.c	B		link	sigwaitinfo
+t	sigwaitinfo/5-1.c	B		link	sigwaitinfo
+t	sigwaitinfo/6-1.c	B		link	sigwaitinfo
+t	sigwaitinfo/7-1.c	B		link	sigqueue
+t	sigwaitinfo/8-1.c	B		link	sigqueue
+t	sigwaitinfo/9-1.c	B		link	sigwaitinfo
+t	strchr/1-1.c	C			
+t	strcpy/1-1.c	C			
+t	strftime/1-1.c	A	langinfo.h 		
+t	strftime/2-1.c	A	langinfo.h 		
+t	strftime/3-1.c	C			
+t	strlen/1-1.c	C			
+t	strncpy/1-1.c	C			
+t	strncpy/2-1.c	C			
+t	testfrmw/testfrmw.c	A	pthread.h 		
+t	testfrmw/threads_scenarii.c	B		other	error: ';' expected (got 'pthread_attr_t')
+t	time/1-1.c	C			
+t	timer_create/1-1.c	B		link	timer_create
+t	timer_create/10-1.c	B		macro	_SC_CPUTIME
+t	timer_create/11-1.c	B		macro	_SC_THREAD_CPUTIME
+t	timer_create/16-1.c	B		link	timer_create
+t	timer_create/3-1.c	B		link	timer_create
+t	timer_create/7-1.c	B		macro	_SC_MONOTONIC_CLOCK
+t	timer_create/8-1.c	B		link	timer_create
+t	timer_create/9-1.c	B		link	timer_create
+t	timer_create/speculative/15-1.c	C			
+t	timer_create/speculative/2-1.c	B		link	timer_create
+t	timer_create/speculative/5-1.c	B		link	timer_create
+t	timer_delete/1-1.c	B		link	timer_create
+t	timer_delete/1-2.c	B		link	timer_create
+t	timer_delete/speculative/5-1.c	B		link	timer_delete
+t	timer_delete/speculative/5-2.c	B		link	timer_create
+t	timer_getoverrun/1-1.c	B		link	timer_create
+t	timer_getoverrun/2-1.c	B		link	timer_create
+t	timer_getoverrun/2-2.c	B		link	timer_create
+t	timer_getoverrun/2-3.c	C			
+t	timer_getoverrun/speculative/6-1.c	B		link	timer_getoverrun
+t	timer_getoverrun/speculative/6-2.c	B		link	timer_create
+t	timer_getoverrun/speculative/6-3.c	B		link	timer_create
+t	timer_gettime/1-1.c	B		link	timer_create
+t	timer_gettime/1-2.c	B		link	timer_create
+t	timer_gettime/1-3.c	B		link	timer_create
+t	timer_gettime/1-4.c	B		link	timer_create
+t	timer_gettime/2-1.c	B		link	timer_create
+t	timer_gettime/2-2.c	B		link	timer_create
+t	timer_gettime/3-1.c	B		link	timer_create
+t	timer_gettime/speculative/6-1.c	B		link	timer_gettime
+t	timer_gettime/speculative/6-2.c	B		link	timer_create
+t	timer_gettime/speculative/6-3.c	B		link	timer_create
+t	timer_settime/1-1.c	B		link	timer_create
+t	timer_settime/1-2.c	B		link	timer_create
+t	timer_settime/13-1.c	B		link	timer_create
+t	timer_settime/2-1.c	B		link	timer_create
+t	timer_settime/3-1.c	B		link	timer_create
+t	timer_settime/3-2.c	B		link	timer_create
+t	timer_settime/3-3.c	B		link	timer_create
+t	timer_settime/5-1.c	B		link	timer_create
+t	timer_settime/5-2.c	B		link	timer_create
+t	timer_settime/5-3.c	B		link	timer_create
+t	timer_settime/6-1.c	B		link	timer_create
+t	timer_settime/8-1.c	B		link	timer_create
+t	timer_settime/8-2.c	B		link	timer_create
+t	timer_settime/8-3.c	B		link	timer_create
+t	timer_settime/8-4.c	B		link	timer_create
+t	timer_settime/9-1.c	B		link	timer_create
+t	timer_settime/9-2.c	B		link	timer_create
+t	timer_settime/speculative/12-1.c	B		link	timer_settime
+t	timer_settime/speculative/12-2.c	B		link	timer_create
+t	timer_settime/speculative/12-3.c	B		link	timer_create
+d	access	yes	yes	no
+d	aio_cancel	no	no	no
+d	aio_error	no	no	no
+d	aio_fsync	no	no	no
+d	aio_read	no	no	no
+d	aio_return	no	no	no
+d	aio_suspend	no	no	no
+d	aio_write	no	no	no
+d	asctime	yes	yes	no
+d	clock	yes	yes	no
+d	clock_getcpuclockid	yes	yes	no
+d	clock_getres	yes	yes	no
+d	clock_gettime	yes	yes	no
+d	clock_nanosleep	yes	yes	no
+d	clock_settime	yes	yes	no
+d	ctime	yes	yes	no
+d	difftime	yes	yes	no
+d	fork	yes	yes	no
+d	fsync	yes	yes	no
+d	getpid	yes	yes	no
+d	gmtime	yes	yes	no
+d	kill	yes	yes	no
+d	killpg	yes	yes	no
+d	lio_listio	no	no	no
+d	localtime	yes	yes	no
+d	mktime	yes	yes	no
+d	mlock	no	no	no
+d	mlockall	no	no	no
+d	mmap	no	no	no
+d	mq_close	no	no	no
+d	mq_getattr	no	no	no
+d	mq_notify	no	no	no
+d	mq_open	no	no	no
+d	mq_receive	no	no	no
+d	mq_send	no	no	no
+d	mq_setattr	no	no	no
+d	mq_timedreceive	no	no	no
+d	mq_timedsend	no	no	no
+d	mq_unlink	no	no	no
+d	munlock	no	no	no
+d	munlockall	no	no	no
+d	munmap	no	no	no
+d	nanosleep	yes	yes	no
+d	pthread_atfork	no	no	no
+d	pthread_attr_destroy	no	no	no
+d	pthread_attr_getdetachstate	no	no	no
+d	pthread_attr_getinheritsched	no	no	no
+d	pthread_attr_getschedparam	no	no	no
+d	pthread_attr_getschedpolicy	no	no	no
+d	pthread_attr_getscope	no	no	no
+d	pthread_attr_getstack	no	no	no
+d	pthread_attr_getstacksize	no	no	no
+d	pthread_attr_init	no	no	no
+d	pthread_attr_setdetachstate	no	no	no
+d	pthread_attr_setinheritsched	no	no	no
+d	pthread_attr_setschedparam	no	no	no
+d	pthread_attr_setschedpolicy	no	no	no
+d	pthread_attr_setscope	no	no	no
+d	pthread_attr_setstack	no	no	no
+d	pthread_attr_setstacksize	no	no	no
+d	pthread_barrier_destroy	no	no	no
+d	pthread_barrier_init	no	no	no
+d	pthread_barrier_wait	no	no	no
+d	pthread_barrierattr_destroy	no	no	no
+d	pthread_barrierattr_getpshared	no	no	no
+d	pthread_barrierattr_init	no	no	no
+d	pthread_barrierattr_setpshared	no	no	no
+d	pthread_cancel	no	no	no
+d	pthread_cleanup_pop	no	no	no
+d	pthread_cleanup_push	no	no	no
+d	pthread_cond_broadcast	no	no	no
+d	pthread_cond_destroy	no	no	no
+d	pthread_cond_init	no	no	no
+d	pthread_cond_signal	no	no	no
+d	pthread_cond_timedwait	no	no	no
+d	pthread_cond_wait	no	no	no
+d	pthread_condattr_destroy	no	no	no
+d	pthread_condattr_getclock	no	no	no
+d	pthread_condattr_getpshared	no	no	no
+d	pthread_condattr_init	no	no	no
+d	pthread_condattr_setclock	no	no	no
+d	pthread_condattr_setpshared	no	no	no
+d	pthread_create	no	no	no
+d	pthread_detach	no	no	no
+d	pthread_equal	no	no	no
+d	pthread_exit	no	no	no
+d	pthread_getcpuclockid	no	no	no
+d	pthread_getschedparam	no	no	no
+d	pthread_getspecific	no	no	no
+d	pthread_join	no	no	no
+d	pthread_key_create	no	no	no
+d	pthread_key_delete	no	no	no
+d	pthread_kill	no	no	no
+d	pthread_mutex_destroy	no	no	no
+d	pthread_mutex_getprioceiling	no	no	no
+d	pthread_mutex_init	no	no	no
+d	pthread_mutex_lock	no	no	no
+d	pthread_mutex_setprioceiling	no	no	no
+d	pthread_mutex_timedlock	no	no	no
+d	pthread_mutex_trylock	no	no	no
+d	pthread_mutex_unlock	no	no	no
+d	pthread_mutexattr_destroy	no	no	no
+d	pthread_mutexattr_getprioceiling	no	no	no
+d	pthread_mutexattr_getprotocol	no	no	no
+d	pthread_mutexattr_getpshared	no	no	no
+d	pthread_mutexattr_gettype	no	no	no
+d	pthread_mutexattr_init	no	no	no
+d	pthread_mutexattr_setprioceiling	no	no	no
+d	pthread_mutexattr_setprotocol	no	no	no
+d	pthread_mutexattr_setpshared	no	no	no
+d	pthread_mutexattr_settype	no	no	no
+d	pthread_once	no	no	no
+d	pthread_rwlock_destroy	no	no	no
+d	pthread_rwlock_init	no	no	no
+d	pthread_rwlock_rdlock	no	no	no
+d	pthread_rwlock_timedrdlock	no	no	no
+d	pthread_rwlock_timedwrlock	no	no	no
+d	pthread_rwlock_tryrdlock	no	no	no
+d	pthread_rwlock_trywrlock	no	no	no
+d	pthread_rwlock_unlock	no	no	no
+d	pthread_rwlock_wrlock	no	no	no
+d	pthread_rwlockattr_destroy	no	no	no
+d	pthread_rwlockattr_getpshared	no	no	no
+d	pthread_rwlockattr_init	no	no	no
+d	pthread_rwlockattr_setpshared	no	no	no
+d	pthread_self	no	no	no
+d	pthread_setcancelstate	no	no	no
+d	pthread_setcanceltype	no	no	no
+d	pthread_setschedparam	no	no	no
+d	pthread_setschedprio	no	no	no
+d	pthread_setspecific	no	no	no
+d	pthread_sigmask	no	no	no
+d	pthread_spin_destroy	no	no	no
+d	pthread_spin_init	no	no	no
+d	pthread_spin_lock	no	no	no
+d	pthread_spin_trylock	no	no	no
+d	pthread_spin_unlock	no	no	no
+d	pthread_testcancel	no	no	no
+d	raise	yes	yes	no
+d	sched_get_priority_max	no	no	no
+d	sched_get_priority_min	no	no	no
+d	sched_getparam	no	no	no
+d	sched_getscheduler	no	no	no
+d	sched_rr_get_interval	no	no	no
+d	sched_setparam	no	no	no
+d	sched_setscheduler	no	no	no
+d	sched_yield	yes	yes	no
+d	sem_close	no	no	no
+d	sem_destroy	no	no	no
+d	sem_getvalue	no	no	no
+d	sem_init	no	no	no
+d	sem_open	no	no	no
+d	sem_post	no	no	no
+d	sem_timedwait	no	no	no
+d	sem_unlink	no	no	no
+d	sem_wait	no	no	no
+d	shm_open	no	no	no
+d	shm_unlink	no	no	no
+d	sigaction	yes	yes	no
+d	sigaddset	yes	yes	no
+d	sigaltstack	yes	yes	no
+d	sigdelset	yes	yes	no
+d	sigemptyset	yes	yes	no
+d	sigfillset	yes	yes	no
+d	sighold	yes	yes	no
+d	sigignore	no	no	no
+d	sigismember	yes	yes	no
+d	signal	yes	yes	no
+d	sigpause	yes	yes	no
+d	sigpending	yes	yes	no
+d	sigprocmask	yes	yes	no
+d	sigqueue	yes	no	yes
+d	sigrelse	yes	yes	no
+d	sigset	yes	yes	no
+d	sigsuspend	yes	yes	no
+d	sigtimedwait	yes	no	yes
+d	sigwait	yes	yes	no
+d	sigwaitinfo	yes	no	yes
+d	strchr	yes	yes	no
+d	strcpy	yes	yes	no
+d	strftime	yes	yes	no
+d	strlen	yes	yes	no
+d	strncpy	yes	yes	no
+d	time	yes	yes	no
+d	timer_create	no	no	no
+d	timer_delete	no	no	no
+d	timer_getoverrun	no	no	no
+d	timer_gettime	no	no	no
+d	timer_settime	no	no	no
+n	SCHED_FIFO	no	no
+n	SCHED_OTHER	no	no
+n	SCHED_RR	no	no
+n	SIG_HOLD	no	no
+n	_SC_ASYNCHRONOUS_IO	no	no
+n	_SC_CPUTIME	no	no
+n	_SC_MONOTONIC_CLOCK	no	no
+n	_SC_SIGQUEUE_MAX	no	no
+n	_SC_THREAD_CPUTIME	no	no
+n	pthread_sigmask	no	no
+n	sched_get_priority_max	no	no
+n	sched_get_priority_min	no	no
+n	sched_getparam	no	no
+n	sched_getscheduler	no	no
+n	sched_rr_get_interval	no	no
+n	sigignore	no	no
+n	sigqueue	yes	yes
+n	sigtimedwait	yes	yes
+n	sigwaitinfo	yes	yes
+n	struct sched_param	no	no
+n	timer_create	no	no
+n	timer_delete	no	no
+n	timer_getoverrun	no	no
+n	timer_gettime	no	no
+n	timer_settime	no	no
+END ntlibc-generated-data -->

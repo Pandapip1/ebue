@@ -86,6 +86,11 @@
 #   tools/posix-gapmap.sh              regenerate test/POSIX-GAP-MAP.generated.md
 #   tools/posix-gapmap.sh --check      verify the checked-in report + all
 #                                      four invariants; write nothing
+#   tools/posix-gapmap.sh --render     re-render the report from the data
+#                                      block it already carries: no suite,
+#                                      no build, no config.mak, no compile
+#   tools/posix-gapmap.sh --render F   the same, in place, on F instead of
+#                                      on the checked-in report
 #   tools/posix-gapmap.sh --selftest   prove the invariants above still fire
 #
 # Env:
@@ -191,28 +196,47 @@ require_suite() {
 
 mode=${1:---generate}
 case "$mode" in
---generate|--check|--selftest) ;;
+--generate|--check|--selftest|--render) ;;
 -h|--help) usage; exit 0 ;;
 *) usage >&2; exit 2 ;;
 esac
 
+# --render takes an optional second argument: re-render THAT file in
+# place, rather than the checked-in report.  Same device as
+# tools/gen-kaem.sh's optional output path and for the same reason --
+# tools/merge-gendata.sh has to render git's temporary %A file, and must
+# never touch the real report path, which git's merge machinery owns
+# until the whole merge/rebase/cherry-pick has finished.
+if [ "$mode" = --render ] && [ $# -ge 2 ]; then
+	REPORT=$2
+fi
+
 # --selftest exercises the invariant checks themselves against synthetic
-# inputs; it needs no suite and no build.
-if [ "$mode" != --selftest ]; then
+# inputs; it needs no suite and no build.  --render re-derives the report
+# from the data block already embedded in it (see "the data block" below):
+# it compiles nothing, so it needs neither the suite nor a build either.
+if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
 	require_suite
 fi
 
 # ------------------------------------------------------------------ config
 
-[ -f "$srcdir/config.mak" ] || {
-	echo "posix-gapmap: no config.mak; run ./configure first." >&2; exit 2; }
-cfg() { sed -n "s/^$1 *= *//p" "$srcdir/config.mak" | tail -1; }
+# --render works entirely from the report's own data block, so it needs
+# no compiler, no ARCH and no config.mak.  That is the point of the
+# split: the cheap half has to run in a clone that has never been
+# configured and whose submodules were never checked out, because that is
+# what a pre-commit hook has to cope with.
+if [ "$mode" != --render ]; then
+	[ -f "$srcdir/config.mak" ] || {
+		echo "posix-gapmap: no config.mak; run ./configure first." >&2; exit 2; }
+fi
+cfg() { [ -f "$srcdir/config.mak" ] || return 0; sed -n "s/^$1 *= *//p" "$srcdir/config.mak" | tail -1; }
 CC=$(cfg CC); ARCH=$(cfg ARCH)
 CFLAGS_C99FSE=$(cfg CFLAGS_C99FSE); CFLAGS_AUTO=$(cfg CFLAGS_AUTO)
 : "${GAPMAP_JOBS:=$(nproc 2>/dev/null || echo 1)}"
 : "${GAPMAP_GITDIR:=$srcdir}"
 
-if [ "$mode" != --selftest ]; then
+if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
 	[ -n "$CC" ] || { echo "posix-gapmap: config.mak has no CC." >&2; exit 2; }
 	[ -f "$srcdir/lib/libc.a" ] || {
 		echo "posix-gapmap: lib/libc.a is missing; run make first." >&2
@@ -235,6 +259,43 @@ fi
 
 W=$(mktemp -d "${TMPDIR:-/tmp}/ntlibc-gapmap.XXXXXX") || exit 1
 trap 'rm -rf "$W"' EXIT
+
+# ------------------------------------------------------- the data block
+#
+# The report carries, in an HTML comment at its end, the facts it was
+# rendered from: one row per conformance test (class, absent-header set,
+# class B subclass and detail), one per interface directory, one per
+# class B name, and five scalars.  Everything printed above it -- every
+# table, every count, the greedy closure, the reconciliation -- is a pure
+# function of those rows.
+#
+# WHY IT IS IN THE REPORT AND NOT IN A SECOND FILE
+#
+# Two checked-in files that must agree are a staleness bug waiting to
+# happen, and the whole reason this file exists is that a stale
+# checked-in report is worse than no report.  One file cannot drift from
+# itself.
+#
+# It is also what makes a merge driver possible here.  A three-way TEXT
+# merge of a rendered table is meaningless -- two branches that each land
+# a header change every count in it, and the right answer is neither
+# side's text -- but the rows are structured, keyed and independent, so
+# merging THOSE and re-rendering is a real resolution.  Doing that needs
+# the data of all three versions of one path, which is exactly what git
+# hands a merge driver, and nothing else: not the tree, not the suite,
+# not a compiler, none of which git guarantees are on disk while a merge
+# is in flight.  See tools/merge-gendata.sh, and tools/merge-kaem.sh's
+# header for the empirical story behind that constraint.
+DATA_BEGIN='<!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.'
+DATA_END='END ntlibc-generated-data -->'
+
+read_data_block() {
+	awk -v e="$DATA_END" '
+		/^<!-- BEGIN ntlibc-generated-data v1/ { inb = 1; next }
+		$0 == e { inb = 0; next }
+		inb && /^[stdn]\t/ { print }
+	' "$1"
+}
 
 # ---------------------------------------------------- the include resolver
 #
@@ -472,6 +533,81 @@ if [ "$mode" = --selftest ]; then
 	exit 0
 fi
 
+# ------------------------------------------------ the analysis, or not
+#
+# Everything between here and "the derivations" is the EXPENSIVE half: it
+# compiles all 1610 conformance tests, parses their build logs, and scans
+# this tree's headers and lib/libc.a.  It is also the only half that
+# needs the LTP submodule, a config.mak and a build.
+#
+# --render skips all of it and reads the same facts straight out of the
+# data block embedded in the checked-in report.  Everything below "the
+# derivations" is a pure function of those facts and runs identically in
+# both modes -- which is what makes the cheap half trustworthy: there is
+# no second copy of the derivation logic to drift, and no invariant that
+# only one path enforces.
+if [ "$mode" = --render ]; then
+	[ -f "$REPORT" ] || {
+		echo "posix-gapmap: $REPORT does not exist, so there is nothing to" >&2
+		echo "posix-gapmap:   re-render.  Generate it with: make posix-gapmap" >&2
+		exit 1; }
+	read_data_block "$REPORT" > "$W/data"
+	[ -s "$W/data" ] || {
+		echo "posix-gapmap: $REPORT carries no ntlibc-generated-data block," >&2
+		echo "posix-gapmap:   so there is nothing to re-render it from.  It" >&2
+		echo "posix-gapmap:   predates the block, or was edited by hand." >&2
+		echo "posix-gapmap:   Regenerate with: make posix-gapmap" >&2
+		exit 1; }
+
+	sc() { awk -F'\t' -v k="$2" '$1=="s" && $2==k { print $3; exit }' "$1"; }
+	NTLIBC_SHA=$(sc "$W/data" ntlibc)
+	LTP_SHA=$(sc "$W/data" ltp)
+	CC=$(sc "$W/data" cc)
+	n_tests=$(sc "$W/data" tests)
+	n_dirs=$(sc "$W/data" dirs)
+	# Named as `VARIABLE=key`, and the message quotes the KEY: a reader
+	# told a scalar is missing has to go and find it in the block, and
+	# `NTLIBC_SHA` is not a string that appears there.
+	for _vk in NTLIBC_SHA=ntlibc LTP_SHA=ltp CC=cc n_tests=tests n_dirs=dirs; do
+		_v=${_vk%%=*}; _k=${_vk#*=}
+		eval "_x=\$$_v"
+		[ -n "$_x" ] || {
+			echo "posix-gapmap: the data block in $REPORT has no '$_k' scalar." >&2
+			echo "posix-gapmap:   It is truncated or corrupt -- a half-written" >&2
+			echo "posix-gapmap:   block must never render as a smaller gap." >&2
+			echo "posix-gapmap:   Regenerate with: make posix-gapmap" >&2
+			exit 1; }
+	done
+
+	# Back into exactly the intermediate files the derivations read, so
+	# those derivations cannot tell which mode produced them.
+	awk -F'\t' '$1=="t" { printf "%s\t%s\n", $3, $2 }' "$W/data" |
+		sort -t"$(printf '\t')" -k2,2 > "$W/class.tsv"
+	awk -F'\t' '$1=="t" && ($3=="A" || $3=="B") { printf "%s\t%s\n", $2, $4 }' "$W/data" |
+		sort > "$W/sets.tsv"
+	awk -F'\t' '$1=="t" && $5 != "" { printf "%s\t%s\t%s\n", $5, $6, $2 }' "$W/data" > "$W/bdetail.tsv"
+	awk -F'\t' '$1=="d" { print $2 }' "$W/data" | sort > "$W/dirs.txt"
+	{ awk -F'\t' '$1=="d" && $3=="yes" { print $2 }' "$W/data"
+	  awk -F'\t' '$1=="n" && $3=="yes" { print $2 }' "$W/data"; } | sort -u > "$W/declared.txt"
+	awk -F'\t' '$1=="d" && $4=="yes" { print $2 }' "$W/data" | sort -u > "$W/defined.txt"
+	{ awk -F'\t' '$1=="d" && $5=="yes" { print $2 }' "$W/data"
+	  awk -F'\t' '$1=="n" && $4=="yes" { print $2 }' "$W/data"; } | sort -u > "$W/undefok.txt"
+
+	# The one thing a rendered file cannot tell you about itself: whether
+	# the block it was rendered from is all there.  A truncated block
+	# would render a smaller population, and a smaller population is a
+	# SMALLER GAP -- good news, which is the exact shape of failure this
+	# script is built around.  The census invariant below would catch it
+	# too; this catches it first and says why.
+	_rows=$(awk -F'\t' '$1=="t"' "$W/data" | wc -l | tr -d ' ')
+	if [ "$_rows" -ne "$n_tests" ]; then
+		echo "posix-gapmap: the data block records $n_tests tests but carries" >&2
+		echo "posix-gapmap:   $_rows rows -- it is truncated.  Rendering it" >&2
+		echo "posix-gapmap:   would report a smaller gap than was measured." >&2
+		echo "posix-gapmap:   Regenerate with: make posix-gapmap" >&2
+		exit 1
+	fi
+else
 # ------------------------------------------------------------- the census
 #
 # Counted before anything is compiled, so that a suite the glob cannot
@@ -500,6 +636,13 @@ check_census "$n_tests" "$n_dirs" || exit 1
 # so the report would describe a version of the suite nobody else has,
 # under a SHA that says otherwise.  That is the one failure here that
 # would silently produce plausible, wrong, permanent numbers.
+# The interface-directory list, written out rather than re-globbed at the
+# ledger below, because --render has no suite to glob and must supply the
+# identical list from the data block.  testfrmw is suite infrastructure,
+# not an interface, and is excluded here once instead of at every use.
+find "$IFACES" -mindepth 1 -maxdepth 1 -type d |
+	sed 's|.*/||' | grep -vx testfrmw | sort > "$W/dirs.txt"
+
 ltp_head=$(git -C "$SUITE" rev-parse HEAD 2>/dev/null || true)
 ltp_link=$(git -C "$GAPMAP_GITDIR" rev-parse "HEAD:third_party/ltp" 2>/dev/null || true)
 if [ -n "$ltp_head" ] && [ -n "$ltp_link" ] && [ "$ltp_head" != "$ltp_link" ]; then
@@ -582,17 +725,6 @@ echo "posix-gapmap: compiling $n_tests conformance tests with $CC ..." >&2
 	| xargs -P "$GAPMAP_JOBS" -n1 "$W/one.sh" \
 	| sort -t"$(printf '\t')" -k2,2 > "$W/class.tsv"
 
-n_A=$(awk -F'\t' '$1=="A"' "$W/class.tsv" | wc -l | tr -d ' ')
-n_B=$(awk -F'\t' '$1=="B"' "$W/class.tsv" | wc -l | tr -d ' ')
-n_C=$(awk -F'\t' '$1=="C"' "$W/class.tsv" | wc -l | tr -d ' ')
-n_blocked=$((n_A + n_B))
-
-check_partition "$n_A" "$n_B" "$n_C" "$n_tests" || exit 1
-check_floors "$n_C" "$n_blocked" || exit 1
-
-cls_of() { awk -F'\t' -v f="$1" '$2==f{print $1; found=1} END{if(!found) print MISSING}' MISSING=MISSING "$W/class.tsv"; }
-check_canaries "$(cls_of "$CANARY_A")" "$(cls_of "$CANARY_C")" || exit 1
-
 # -------------------------------------------------- section 1: the levers
 #
 # For every blocked test, the set of headers that resolve nowhere.  Then
@@ -608,56 +740,6 @@ while read -r f; do
 		-f "$W/absent.awk" | sort | tr '\n' ' ')
 	printf '%s\t%s\n' "$f" "$a" >> "$W/sets.tsv"
 done < "$W/blocked.txt"
-
-n_hdr_blocked=$(awk -F'\t' '$2 ~ /[^ ]/' "$W/sets.tsv" | wc -l | tr -d ' ')
-
-# Greedy closure.  Recomputed from scratch at every step rather than
-# sorted once by "unblocked alone", because the two orders differ: a
-# header's value rises as its co-blockers are added.
-awk -F'\t' '$2 ~ /[^ ]/{print $2}' "$W/sets.tsv" > "$W/sets.txt"
-awk '
-{
-	nrows++
-	len[nrows] = split($0, a, " ")
-	for (i = 1; i <= len[nrows]; i++) { mem[nrows, i] = a[i]; hdrs[a[i]] = 1 }
-}
-END {
-	# "tests naming it" and "unblocked by it alone", for the table.
-	for (r = 1; r <= nrows; r++) {
-		for (i = 1; i <= len[r]; i++) naming[mem[r, i]]++
-		if (len[r] == 1) alone[mem[r, 1]]++
-	}
-	remaining = nrows
-	step = 0
-	while (1) {
-		best = ""; bestc = 0
-		for (h in hdrs) {
-			if (h in got) continue
-			c = 0
-			for (r = 1; r <= nrows; r++) {
-				if (dead[r]) continue
-				ok = 1
-				for (i = 1; i <= len[r]; i++)
-					if (!((mem[r, i]) in got) && mem[r, i] != h) { ok = 0; break }
-				if (ok) c++
-			}
-			if (c > bestc || (c == bestc && c > 0 && h < best)) { bestc = c; best = h }
-		}
-		if (bestc == 0) break
-		got[best] = 1
-		for (r = 1; r <= nrows; r++) {
-			if (dead[r]) continue
-			ok = 1
-			for (i = 1; i <= len[r]; i++) if (!((mem[r, i]) in got)) { ok = 0; break }
-			if (ok) { dead[r] = 1; remaining-- }
-		}
-		step++
-		printf "%d\t%s\t%d\t%d\t%d\t%d\n", step, best, naming[best], alone[best], bestc, remaining
-	}
-	# Headers that never take a turn (every test naming them is also
-	# blocked by something else that is itself never worth adding).
-	for (h in hdrs) if (!(h in got)) printf "%d\t%s\t%d\t%d\t%d\t%d\n", 0, h, naming[h], alone[h], 0, remaining
-}' "$W/sets.txt" | sort -k1,1n -k2,2 > "$W/closure.tsv"
 
 # ---------------------------------------------- section 2: class B detail
 #
@@ -737,6 +819,80 @@ nm -g --defined-only "$srcdir/lib/libc.a" 2>/dev/null |
 	awk '$2 ~ /^[TDBRW]$/ { print $3 }' |
 	sed 's/^_//' | sort -u > "$W/defined.txt"
 
+fi
+
+# ------------------------------------------------------ the derivations
+#
+# From here down nothing reads the suite, the tree or a build log: every
+# number is computed from class.tsv, sets.tsv, bdetail.tsv and the three
+# membership lists, which is what lets --render reproduce this file byte
+# for byte from the data block alone.
+#
+# The four invariants live HERE rather than in the analysis half on
+# purpose.  They have to fire on the cheap path too -- otherwise
+# --render, and the pre-commit hook that calls it, would be a way to
+# launder a broken or truncated measurement past every one of them.
+check_census "$n_tests" "$n_dirs" || exit 1
+
+n_hdr_blocked=$(awk -F'\t' '$2 ~ /[^ ]/' "$W/sets.tsv" | wc -l | tr -d ' ')
+
+n_A=$(awk -F'\t' '$1=="A"' "$W/class.tsv" | wc -l | tr -d ' ')
+n_B=$(awk -F'\t' '$1=="B"' "$W/class.tsv" | wc -l | tr -d ' ')
+n_C=$(awk -F'\t' '$1=="C"' "$W/class.tsv" | wc -l | tr -d ' ')
+n_blocked=$((n_A + n_B))
+
+check_partition "$n_A" "$n_B" "$n_C" "$n_tests" || exit 1
+check_floors "$n_C" "$n_blocked" || exit 1
+
+cls_of() { awk -F'\t' -v f="$1" '$2==f{print $1; found=1} END{if(!found) print MISSING}' MISSING=MISSING "$W/class.tsv"; }
+check_canaries "$(cls_of "$CANARY_A")" "$(cls_of "$CANARY_C")" || exit 1
+# Greedy closure.  Recomputed from scratch at every step rather than
+# sorted once by "unblocked alone", because the two orders differ: a
+# header's value rises as its co-blockers are added.
+awk -F'\t' '$2 ~ /[^ ]/{print $2}' "$W/sets.tsv" > "$W/sets.txt"
+awk '
+{
+	nrows++
+	len[nrows] = split($0, a, " ")
+	for (i = 1; i <= len[nrows]; i++) { mem[nrows, i] = a[i]; hdrs[a[i]] = 1 }
+}
+END {
+	# "tests naming it" and "unblocked by it alone", for the table.
+	for (r = 1; r <= nrows; r++) {
+		for (i = 1; i <= len[r]; i++) naming[mem[r, i]]++
+		if (len[r] == 1) alone[mem[r, 1]]++
+	}
+	remaining = nrows
+	step = 0
+	while (1) {
+		best = ""; bestc = 0
+		for (h in hdrs) {
+			if (h in got) continue
+			c = 0
+			for (r = 1; r <= nrows; r++) {
+				if (dead[r]) continue
+				ok = 1
+				for (i = 1; i <= len[r]; i++)
+					if (!((mem[r, i]) in got) && mem[r, i] != h) { ok = 0; break }
+				if (ok) c++
+			}
+			if (c > bestc || (c == bestc && c > 0 && h < best)) { bestc = c; best = h }
+		}
+		if (bestc == 0) break
+		got[best] = 1
+		for (r = 1; r <= nrows; r++) {
+			if (dead[r]) continue
+			ok = 1
+			for (i = 1; i <= len[r]; i++) if (!((mem[r, i]) in got)) { ok = 0; break }
+			if (ok) { dead[r] = 1; remaining-- }
+		}
+		step++
+		printf "%d\t%s\t%d\t%d\t%d\t%d\n", step, best, naming[best], alone[best], bestc, remaining
+	}
+	# Headers that never take a turn (every test naming them is also
+	# blocked by something else that is itself never worth adding).
+	for (h in hdrs) if (!(h in got)) printf "%d\t%s\t%d\t%d\t%d\t%d\n", 0, h, naming[h], alone[h], 0, remaining
+}' "$W/sets.txt" | sort -k1,1n -k2,2 > "$W/closure.tsv"
 # ----------------------------------------- section 3/4: the per-directory
 #
 # One row per interface directory (testfrmw excluded -- it is suite
@@ -745,10 +901,8 @@ nm -g --defined-only "$srcdir/lib/libc.a" 2>/dev/null |
 # value of the reconciliation: a check that read POSIX-GAP-ACCOUNTING.md
 # to decide what POSIX-GAP-ACCOUNTING.md should say would be a mirror.
 : > "$W/ledger.tsv"
-for p in "$IFACES"/*/; do
-	d=$(basename "$p")
-	[ "$d" = testfrmw ] && continue
-	tests=$(find "$p" -name '*.c' | wc -l | tr -d ' ')
+while read -r d; do
+	tests=$(awk -F'\t' -v d="$d/" 'index($2, d)==1' "$W/class.tsv" | wc -l | tr -d ' ')
 	links=$(awk -F'\t' -v d="$d/" '$1=="C" && index($2, d)==1' "$W/class.tsv" | wc -l | tr -d ' ')
 	nA=$(awk -F'\t' -v d="$d/" '$1=="A" && index($2, d)==1' "$W/class.tsv" | wc -l | tr -d ' ')
 	nB=$(awk -F'\t' -v d="$d/" '$1=="B" && index($2, d)==1' "$W/class.tsv" | wc -l | tr -d ' ')
@@ -791,7 +945,7 @@ for p in "$IFACES"/*/; do
 	[ -n "$why" ] || why='-'
 	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"$d" "$tests" "$nA" "$nB" "$links" "$dec" "$def" "$why" >> "$W/ledger.tsv"
-done
+done < "$W/dirs.txt"
 
 n_iface_dirs=$(wc -l < "$W/ledger.tsv" | tr -d ' ')
 if [ "$n_iface_dirs" -ne "$CENSUS_IFACE_DIRS" ]; then
@@ -1093,9 +1247,59 @@ headers all resolve, the first symbol/macro/type that does not.
 EOF
 	sort "$W/ledger.tsv" |
 		awk -F'\t' '{ printf "| `%s` | %s | %s | %s | %s | %s | %s | `%s` |\n", $1, $2, $3, $4, $5, $6, $7, $8 }'
+
+	# ------------------------------------------------- the data block
+	#
+	# Emitted last, and identically in --generate and --render: every
+	# table above is a pure function of these rows, so a re-render has
+	# to reproduce the whole file byte for byte.  Sorted, so that the
+	# diff of a regeneration stays readable and so that two branches'
+	# rows merge as lines rather than as a reshuffle.
+	printf '\n%s\n' "$DATA_BEGIN"
+	printf '%s\n' 'Do not edit by hand -- see "the data block" in tools/posix-gapmap.sh.'
+	printf '\n'
+	printf 's\tntlibc\t%s\n' "$NTLIBC_SHA"
+	printf 's\tltp\t%s\n'    "$LTP_SHA"
+	printf 's\tcc\t%s\n'     "$CC"
+	printf 's\ttests\t%s\n'  "$n_tests"
+	printf 's\tdirs\t%s\n'   "$n_dirs"
+	# One row per test: class, the absent-header set, and the class B
+	# subclass/detail where there is one.  Keyed on the test path, which
+	# is what makes two branches' rows mergeable.
+	awk -F'\t' '
+		FILENAME == ARGV[1] { cls[$2] = $1; next }
+		FILENAME == ARGV[2] { abs[$1] = $2; next }
+		{ bsub[$3] = $1; bwhat[$3] = $2 }
+		END {
+			for (t in cls)
+				printf "t\t%s\t%s\t%s\t%s\t%s\n", \
+				       t, cls[t], abs[t], bsub[t], bwhat[t]
+		}
+	' "$W/class.tsv" "$W/sets.tsv" "$W/bdetail.tsv" | sort
+	# One row per interface directory: the three membership answers the
+	# reconciliation needs, which come from nm and from scanning this
+	# tree's headers and so cannot be recomputed without it.
+	while read -r _d; do
+		grep -qx "$_d" "$W/declared.txt" && _dec=yes || _dec=no
+		grep -qx "$_d" "$W/defined.txt"  && _def=yes || _def=no
+		grep -qx "$_d" "$W/undefok.txt"  && _uok=yes || _uok=no
+		printf 'd\t%s\t%s\t%s\t%s\n' "$_d" "$_dec" "$_def" "$_uok"
+	done < "$W/dirs.txt"
+	# And one per class B name, for the declared?/marker columns.  Only
+	# the subclasses that name a C identifier: a `#error` string is not a
+	# symbol and cannot carry an `undefined-ok:` marker.
+	awk -F'\t' '$1=="link" || $1=="macro" || $1=="type" { print $2 }' "$W/bdetail.tsv" |
+		sort -u |
+		while IFS= read -r _n; do
+			[ -n "$_n" ] || continue
+			grep -qx "$_n" "$W/declared.txt" && _dec=yes || _dec=no
+			grep -qx "$_n" "$W/undefok.txt"  && _uok=yes || _uok=no
+			printf 'n\t%s\t%s\t%s\n' "$_n" "$_dec" "$_uok"
+		done
+	printf '%s\n' "$DATA_END"
 }
 
-if [ "$mode" = --generate ]; then
+if [ "$mode" = --generate ] || [ "$mode" = --render ]; then
 	emit > "$REPORT.tmp" || { rm -f "$REPORT.tmp"; exit 1; }
 	mv "$REPORT.tmp" "$REPORT"
 	echo "posix-gapmap: wrote $REPORT"
@@ -1120,7 +1324,12 @@ recorded=$(sed -n 's/^| ntlibc | `\(.*\)` |$/\1/p' "$REPORT" | head -1)
 check_ancestry "$recorded" || exit 1
 
 emit > "$W/new.md" || exit 1
-strip_shas() { sed -e '/^| ntlibc | `/d' "$1"; }
+# The recorded ntlibc SHA appears twice now -- in the header table and as
+# an `s` row -- and neither is compared, for the same reason: it changes
+# on every commit, check_ancestry above is what actually enforces it, and
+# diffing it here would make this stage red for a reason that has nothing
+# to do with the gap.
+strip_shas() { sed -e '/^| ntlibc | `/d' -e '/^s	ntlibc	/d' "$1"; }
 strip_shas "$REPORT" > "$W/a.md"
 strip_shas "$W/new.md" > "$W/b.md"
 if diff -u "$W/a.md" "$W/b.md" > "$W/report.diff"; then
