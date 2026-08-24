@@ -187,26 +187,43 @@ fi
 # driver reports failure and a human sees a normal conflict; it never
 # guesses at an unfamiliar shape.
 awk '
+	# emit() is flush_hunk'"'"'s only way to produce a line: when the hunk
+	# sits inside an exploded archive-line region (inar), a resolved
+	# object token has to feed back into `arline` like any other object
+	# line rather than being printed standalone, or the recollapse at
+	# ##ARLINE-END## would emit a truncated line and leave the resolved
+	# tokens sitting outside it as bare, invalid extra lines.
+	function emit(line) {
+		if (inar) arline = arline (arline == arprefix ? "" : " ") line
+		else print line
+	}
 	function flush_hunk(   a, b, i) {
 		if (ours_n == 1 && theirs_n == 1) {
 			a = ours[1]; b = theirs[1]
-			if (a == b) { print a; return }
+			if (a == b) { emit(a); return }
 			# Two independent single-line insertions landing at the same
 			# point in an already-sorted list (a new compile command, a
 			# new mkdir line, or -- inside an exploded archive line -- a
 			# new object): keep both, ordered against each other the same
 			# way the surrounding list already is.
-			if (a < b) { print a; print b } else { print b; print a }
+			if (a < b) { emit(a); emit(b) } else { emit(b); emit(a) }
 			return
 		}
 		ok = 0
+		# An unrecognized hunk always prints its raw marker lines
+		# directly, even inside an exploded region: folding conflict
+		# markers into a single collapsed line would just be a second,
+		# differently-broken guess. The driver has already failed at
+		# this point (ok = 0), so this hunk'"'"'s surrounding archive line
+		# ends up split around it rather than perfectly collapsed --
+		# cosmetic only, since a human resolves this file, not a build.
 		print "<<<<<<< " ours_label
 		for (i = 1; i <= ours_n; i++) print ours[i]
 		print "======="
 		for (i = 1; i <= theirs_n; i++) print theirs[i]
 		print ">>>>>>> " theirs_label
 	}
-	BEGIN { state = "normal"; ok = 1; inar = 0; arline = "" }
+	BEGIN { state = "normal"; ok = 1; inar = 0; arline = ""; arprefix = "${CC} -ar rcs lib/libc.a " }
 	/^<<<<<<< / { state = "ours"; ours_n = 0; theirs_n = 0; ours_label = substr($0, 9); next }
 	state == "ours" && /^=======$/ { state = "theirs"; next }
 	state == "theirs" && /^>>>>>>> / { theirs_label = substr($0, 9); flush_hunk(); state = "normal"; next }
@@ -214,9 +231,9 @@ awk '
 	state == "theirs" { theirs[++theirs_n] = $0; next }
 	# Recollapse: only reachable in state=="normal", so never interferes
 	# with hunk collection above.
-	/^##ARLINE-BEGIN##$/ { inar = 1; arline = "${CC} -ar rcs lib/libc.a "; next }
+	/^##ARLINE-BEGIN##$/ { inar = 1; arline = arprefix; next }
 	/^##ARLINE-END##$/ { print arline; inar = 0; next }
-	inar { arline = arline (arline == "${CC} -ar rcs lib/libc.a " ? "" : " ") $0; next }
+	inar { arline = arline (arline == arprefix ? "" : " ") $0; next }
 	{ print }
 	END { exit ok ? 0 : 1 }
 ' "$work/merged" >"$work/resolved" 2>"$work/awk-stderr" && resolve_status=0 || resolve_status=$?
