@@ -53,7 +53,11 @@ it has that this ledger has no row for. Read it for "what is missing";
 read this file for "how conformant is what exists". It also names the
 headers this file's priority order never reached at all (`termios.h`,
 `search.h`, `fenv.h`, `pwd.h`/`grp.h`, `regex.h`, `dlfcn.h`, the
-glob/fnmatch/wordexp group, `ftw.h`, `sys/uio.h`, `arpa/inet.h`) and the
+glob/fnmatch/wordexp group, `ftw.h`, `sys/uio.h`, `arpa/inet.h`).
+**Eight of those have since been clause-audited here** — see the
+"successor-queue item 2, group A"-through-"group G" sections at the end
+of this file; `ftw.h`, `sys/uio.h` and `arpa/inet.h` remain unreached.
+It also names the
 four rows here whose second slash-joined name (`utimes`, `fpathconf`,
 `readlink`, `unlinkat`) was called by no test. **Those four are now
 closed**: each has been split onto a row of its own above and given a
@@ -98,6 +102,16 @@ Not yet reached:
 Nothing in the original priority list remains. Every header and
 function group named in the task brief now has a clause-cited row
 below, an explicit **N/A** with a stated reason, or a fenced **BUG**.
+
+Beyond that list, the sections headed **"successor-queue item 2, group
+A"** through **"group G"** at the end of this file audit eight headers
+the priority order never named at all — `termios.h`, `search.h`,
+`fenv.h`, `pwd.h`/`grp.h`, `regex.h`, `dlfcn.h` and the
+`glob.h`/`fnmatch.h`/`wordexp.h` group — following item 2 of
+`test/POSIX-GAP-ACCOUNTING.md`'s successor queue rather than the
+brief's own numbering. `arpa/inet.h`, `ftw.h` and `sys/uio.h` are the
+part of that queue item still open.
+
 The residual gaps are the per-section "Not reached" lists, which record
 individual *clauses* (not whole functions) that cannot be exercised on
 this platform — malloc-exhaustion ENOMEM paths, a second security

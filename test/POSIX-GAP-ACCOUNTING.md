@@ -738,14 +738,15 @@ finer-grained than the note it would carry.
    that header at all), and `regex.h`'s is in `test/posix-glob.c`, not
    `test/posix-parse.c` (which contains no regex).
 
-   That is the ledger's priority order continued; this file did not
-   audit any clause of any of them and does not claim to. `termios.h`
-   is the one to start with — `src/termios/termios.c`'s banner already
-   argues, function by function, which calls are spec-permitted no-ops,
-   and that argument has never been checked against the spec pages by
-   anyone but its author.
+   That is the ledger's priority order continued; *this* file audits
+   no clause of any of them and does not claim to — the clauses live in
+   `test/POSIX-COVERAGE.md`, which now carries groups A-G. The four
+   rows the Status note lists as still open are what remains of this
+   item; `ftw.h` and `sys/uio.h` are the cheapest of them, and
+   `arpa/inet.h` should wait for the socket subsystem to settle.
 3. **The `math.h` `f`/`l` tail** (150 implemented, 70 with no assertion
-   at all). Bulk, low risk, mechanical.
+   at all). Bulk, low risk, mechanical. **Done** — see "Closed: the
+   `math.h` `f`/`l` tail (70)" under "Successor session" below.
 4. **Re-verify this file's `impl` vs `audited` split** after (2). The
    split here was derived by tokenising the ledger's first column; it is
    exact for a ledger row that names a function, and conservative for
@@ -996,9 +997,18 @@ itself called low-risk. Two things are worth recording anyway:
 closed: all 112 names now have a first-ever assertion, with the single
 exception of `pause()`, which cannot be *called* from a test at all
 without deadlocking the run (see above) and is recorded as N/A with that
-reason. Item 1 and item 3 of the successor queue are both done; item 2
-(a clause audit of the twelve headers the ledger's priority order never
-named) and item 4 are untouched and remain the queue.
+reason. Item 1 and item 3 of the successor queue are both done.
+
+(Item 2 was untouched when this sweep was written. It no longer is: a
+concurrent session clause-audited eight of its twelve header rows —
+`termios.h`, `search.h`, `fenv.h`, `pwd.h`/`grp.h`, `regex.h`,
+`dlfcn.h` and the `glob.h`/`fnmatch.h`/`wordexp.h` group — landing as
+groups A-G of `test/POSIX-COVERAGE.md`. See the Status note under item
+2 above, and "Changes since the clause audit of groups A-G" below.
+`arpa/inet.h`, `ftw.h`, `sys/uio.h` and the
+`sys/utsname.h`/`sys/times.h`/`sys/time.h`/`stropts.h` row are what is
+left of item 2; item 4 is still untouched and, now that most of item 2
+has landed, is the next thing due.)
 
 **Score for the sweep: 111 of 112 names given a first-ever assertion,
 and six bugs found** — `unlinkat()` masking undefined `flag` bits,
@@ -1013,3 +1023,50 @@ platform-facing headers — four of the six non-`math.h` headers had one,
 and `math.h`'s 70 names had none — which is worth remembering when
 prioritising the next sweep. "Exists and links" remains a much weaker
 statement than it looks.
+
+## Changes since the clause audit of groups A-G
+
+Dated note, 2026-08-24, added rather than folded into the headline
+table for the reason the "Headline counts" section states: those
+numbers are a mechanical snapshot of `04edec2` and are deliberately not
+hand-edited. Item 4 of the successor queue — re-verify the `impl` vs
+`audited` split after item 2 — is the thing that folds this in, and it
+has not been run. Re-running it means re-running the whole pipeline in
+"How this was produced", including re-fetching the 1191
+`pubs.opengroup.org` index pages, which is not something a hand edit
+can substitute for.
+
+What moved: groups A-G of `test/POSIX-COVERAGE.md` audit eight of the
+twelve headers in item 2's table — `termios.h` (11), `search.h` (11),
+`fenv.h` (11), `pwd.h`/`grp.h` (7+7), `regex.h` (4), `dlfcn.h` (4) and
+`glob.h`/`fnmatch.h`/`wordexp.h` (5): **60 interfaces**, every one of
+which this file currently classifies under "Implemented, not
+clause-audited (357)". Reading the frozen tables, subtract those from
+357 and add them to *implemented + clause-audited*.
+
+Two cautions on that 60, both instances of the caveat item 4 already
+records — the split is derived by tokenising the ledger's **first
+column**, which is exact for a row that names a function and
+conservative for a row that describes a group in prose:
+
+- Step 3 of "How this was produced", run against the new sections, sees
+  **58** names, not 60. `hdestroy` and `wordfree` are audited (see
+  `test/posix-glob.c`, which calls both and cites their pages) but are
+  named only in the surrounding prose and in a sibling's clause column,
+  never in a first column of their own. The pipeline would undercount
+  them by exactly the mechanism item 4 warns about.
+- Nothing else in this batch collides with an existing row. Every
+  first-column identifier in groups A-G was checked against every
+  first-column identifier earlier in the ledger; the intersection is
+  empty, so no interface is claimed twice and no status contradicts
+  another.
+- Three parentheticals in the "Implemented, not clause-audited (357)"
+  table are superseded by this note and were left standing rather than
+  hand-edited, for the same frozen-snapshot reason: `termios.h`'s
+  "`test/posix-termios.c` exists but the ledger has no section for it",
+  `glob.h`'s "no ledger section", and `dlfcn.h`'s "(`test/posix-dl.c`
+  exists)". All three headers now have a ledger section.
+
+The bug counts elsewhere in this file are unaffected: the never-asserted
+sweep's six bugs and groups A-G's finds are disjoint sets of functions,
+in disjoint "Bugs found" sections of the ledger.
