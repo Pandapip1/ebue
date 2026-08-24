@@ -222,6 +222,11 @@ void __child_remove(struct __child *);
  * (src/misc/resource.c). */
 struct rusage;
 void __rusage_children(struct rusage *);
+/* Zero that running total.  fork()'s child-side only: fork.html
+ * requires the child's tms_cutime/tms_cstime be 0, and the clone
+ * arrives with the parent's accumulators in its copied address
+ * space. */
+void __rusage_children_reset(void);
 
 /* Start a program: the equivalent of posix_spawn.  Returns the child pid
  * (tracked in __children) or -1 with errno. */

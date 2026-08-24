@@ -197,14 +197,24 @@ pid_t fork(void)
 	if (st == STATUS_PROCESS_CLONED) {
 		/* The child: this call is returning for the second time, in a
 		 * thread the kernel built by copying the one that called it, in
-		 * a process that is a copy of this one.  Nothing else to set up
-		 * -- __peb, __teb(), the fd table, the heap are all just memory,
-		 * and all of it is already here.  The sibling handles in
+		 * a process that is a copy of this one.  Almost nothing needs
+		 * setting up -- __peb, __teb(), the fd table, the heap are all
+		 * just memory, and all of it is already here.  What does need
+		 * setting up is exactly the state POSIX says the child must
+		 * *not* inherit, since the address-space copy is indifferent
+		 * to that distinction.  The sibling handles in
 		 * __children made the trip; stop them travelling any further,
 		 * and put the close-on-exec descriptors back to non-inheritable
 		 * now that they have arrived. */
 		mark_children_inheritable(0);
 		unmark_cloexec_fds();
+		/* ...except the reaped-children time accounting, which is
+		 * memory and therefore did make the trip, and must not have.
+		 * fork.html: the child's tms_cutime/tms_cstime "shall be set
+		 * to 0" -- it has waited for no children of its own.  Nothing
+		 * in the kernel holds this figure (see wait.c), so this call
+		 * is the only thing that can. */
+		__rusage_children_reset();
 		return 0;
 	}
 

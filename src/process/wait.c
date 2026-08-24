@@ -100,6 +100,24 @@ void __rusage_children(struct rusage *ru)
 	ticks_to_timeval(children_utime100ns, &ru->ru_utime);
 }
 
+/* These two are ordinary process-lifetime globals, and
+ * RtlCloneUserProcess copies the address space that holds them -- so a
+ * fork()ed child would otherwise start life reporting the *parent's*
+ * reaped-children times as its own, through both
+ * getrusage(RUSAGE_CHILDREN) and times()'s tms_cutime/tms_cstime.
+ * fork.html: "The child process values of tms_utime, tms_stime,
+ * tms_cutime, and tms_cstime shall be set to 0."  The first two come
+ * from the child's own NT process object, which really is fresh (its
+ * KERNEL_USER_TIMES has its own CreateTime and zeroed Kernel/User
+ * time); these two have no kernel source at all -- KERNEL_USER_TIMES
+ * has no child-time fields -- so nothing but this resets them.
+ * src/process/fork.c calls it on the STATUS_PROCESS_CLONED arm. */
+void __rusage_children_reset(void)
+{
+	children_ktime100ns = 0;
+	children_utime100ns = 0;
+}
+
 /* Fill *ru with the resource usage of one child, from its still-open
  * process handle -- the ru argument to wait3()/wait4() is documented as
  * "resource usage of the terminated child", not the RUSAGE_CHILDREN
