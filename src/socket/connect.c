@@ -39,13 +39,19 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 		if (bind(fd, (struct sockaddr *)&wild, sizeof(wild)) < 0) return -1;
 	}
 
+	/* Built through src/internal/afd.h's AFD_CONNECT_REQ_OFF_*, not
+	 * through AFD_CONNECT_INFO's members: see that header's connect
+	 * banner for why the address's offset is pointer-sized, and why
+	 * ReactOS's AFD_CONNECT_INFO puts it 12 bytes too early on
+	 * x86_64.  `ci` is only the (correctly aligned, large enough)
+	 * storage. */
 	memset(&ci, 0, sizeof(ci));
-	ci.UseSAN = 0;
-	ci.Root = 0;
-	ci.Unknown = 0;
-	if (__afd_addr_from_sockaddr(addr, len, &ci.RemoteAddress) < 0) return -1;
+	if (__afd_build_connect_request(&ci, addr, len) < 0) return -1;
 
-	st = __afd_ioctl(f->h, IOCTL_AFD_CONNECT, &ci, sizeof(ci), 0, 0, 0);
+	/* __afd_connect_request_size(), not sizeof(ci): IOCTL_AFD_CONNECT
+	 * is METHOD_NEITHER, so the declared length is what afd.sys
+	 * bounds its read of the address by, and sizeof() rounds up. */
+	st = __afd_ioctl(f->h, IOCTL_AFD_CONNECT, &ci, (ULONG)__afd_connect_request_size(), 0, 0, 0);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	f->pad |= AFD_ST_CONNECTED;

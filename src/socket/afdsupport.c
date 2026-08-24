@@ -202,6 +202,53 @@ int __afd_build_bind_request(void *buf, unsigned long share_type,
 	return 0;
 }
 
+/* See afd.h.  46 on x86_64, 34 on i386 -- and in neither case
+ * sizeof(AFD_CONNECT_INFO), which rounds the tail up for
+ * TAAddressCount's alignment and would declare bytes the request does
+ * not describe.  IOCTL_AFD_CONNECT is METHOD_NEITHER, so this is the
+ * only bound afd.sys has on its read of the address. */
+unsigned long __afd_connect_request_size(void)
+{
+	return (unsigned long)AFD_CONNECT_REQ_SIZE;
+}
+
+/* See afd.h.  Written through the AFD_CONNECT_REQ_OFF_* byte offsets
+ * rather than through AFD_CONNECT_INFO's members, for the reason the
+ * header's connect banner gives: the position of RemoteAddress is the
+ * one thing this project's two reference sources disagree about, it
+ * differs only on x86_64, and expressing it as arithmetic on
+ * sizeof(HANDLE) keeps the disagreement visible instead of hiding it
+ * inside a compiler's padding rules.
+ *
+ * SanActive, RootEndpoint and ConnectEndpoint are all zero for an
+ * ordinary connect(): no Winsock SAN provider, and no multipoint
+ * root/leaf endpoints (those are what WSAJoinLeaf fills in -- phnt
+ * ntafd.h shares this structure between AFD_CONNECT and
+ * AFD_JOIN_LEAF).  ReactOS's WSPConnect (dll/win32/msafd/misc/
+ * dllmain.c) likewise sets UseSAN/Root/Unknown to 0/0/0. */
+int __afd_build_connect_request(void *buf, const struct sockaddr *addr, socklen_t len)
+{
+	unsigned char *p = (unsigned char *)buf;
+	TRANSPORT_ADDRESS ta;
+
+	/* Validate before writing anything, so a rejected address leaves
+	 * the caller's buffer untouched. */
+	if (__afd_addr_from_sockaddr(addr, len, &ta) < 0) return -1;
+
+	memset(p, 0, (size_t)AFD_CONNECT_REQ_SIZE);
+	/* SanActive / RootEndpoint / ConnectEndpoint: already zero. */
+	{
+		uint32_t count = (uint32_t)ta.TAAddressCount;
+		unsigned short l = ta.Address[0].AddressLength;
+		unsigned short t = ta.Address[0].AddressType;
+		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR_COUNT, &count, sizeof(count));
+		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR_LENGTH, &l, sizeof(l));
+		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR_TYPE, &t, sizeof(t));
+		memcpy(p + AFD_CONNECT_REQ_OFF_ADDR, ta.Address[0].Address, TDI_ADDRESS_LENGTH_IP);
+	}
+	return 0;
+}
+
 /* TA_ADDRESS -> sockaddr_in, truncating into *addr and *len the way
  * accept.html specifies ("If...address_len is not large enough...
  * stored address shall be truncated").  Reads the same packed offsets

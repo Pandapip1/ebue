@@ -400,13 +400,101 @@ typedef struct _AFD_ACCEPT_DATA {
 	HANDLE ListenHandle; /* the *new* socket handle the connection lands on */
 } AFD_ACCEPT_DATA;
 
-/* ---- connect (shared.h: AFD_CONNECT_INFO) ---------------------------- */
+/* ---- connect ---------------------------------------------------------
+ *
+ * *** The two sources disagree, and only on 64-bit. ***
+ *
+ * ReactOS sdk/include/reactos/drivers/afd/shared.h, AFD_CONNECT_INFO:
+ *
+ *      BOOLEAN           UseSAN;
+ *      ULONG             Root;
+ *      ULONG             Unknown;
+ *      TRANSPORT_ADDRESS RemoteAddress;
+ *
+ * System Informer phnt, ntafd.h, AFD_CONNECT_JOIN_INFO (the structure
+ * its AFD_CONNECT comment names: "in: AFD_CONNECT_JOIN_INFO_TL or
+ * AFD_CONNECT_JOIN_INFO (depending on transport mode)"):
+ *
+ *      BOOLEAN           SanActive;
+ *      HANDLE            RootEndpoint;
+ *      HANDLE            ConnectEndpoint;
+ *      TRANSPORT_ADDRESS RemoteAddress;
+ *
+ * The first field agrees.  The middle two do not: ReactOS has two
+ * ULONGs where phnt has two HANDLEs.  On i386 a HANDLE is 4 bytes and
+ * the two layouts are byte-for-byte identical -- RemoteAddress at +12
+ * either way.  On x86_64 a HANDLE is 8 and carries 8-byte alignment,
+ * so phnt puts RootEndpoint at +8, ConnectEndpoint at +16 and
+ * RemoteAddress at +24, where ReactOS puts RemoteAddress at +12.
+ * Measured, not assumed: both declarations compiled for both ABIs.
+ *
+ * phnt is followed here, for the same reason (and with the same
+ * evidence shape) as the 24-byte AFD_OPEN_PACKET above:
+ *
+ *   - ReactOS's structure is what ReactOS's *own* afd.sys parses.  It
+ *     is self-consistent for ReactOS and says nothing about the driver
+ *     Windows ships; this project has now found four places where the
+ *     two differ (sub-page SectionAlignment, the open packet, a
+ *     FileBasicInformation access rule, and afd.sys's create-packet
+ *     parsing), and in every case real-Windows CI sided against
+ *     ReactOS.
+ *   - phnt's names are the giveaway: `RootEndpoint` and
+ *     `ConnectEndpoint` are endpoint *handles* -- the multipoint
+ *     root/leaf handles WSAJoinLeaf passes, which is why the same
+ *     structure serves AFD_CONNECT and AFD_JOIN_LEAF (phnt ntafd.h,
+ *     opcodes 1 and 46).  A handle cannot be a ULONG on Win64.
+ *     ReactOS's own field names -- `Root` and a literal `Unknown` --
+ *     record that its authors did not know what the fields were.
+ *   - The failing leg is x86_64, which is exactly and only where the
+ *     two layouts differ; i386, where they agree, gets past connect().
+ *
+ * With ReactOS's layout on x86_64 the whole TRANSPORT_ADDRESS lands 12
+ * bytes early, so afd.sys reads TAAddressCount out of the tail of
+ * ConnectEndpoint and the address out of the middle of the caller's
+ * TAAddressCount/AddressLength/AddressType.
+ *
+ * The request is therefore written through named byte offsets, exactly
+ * as the bind request above is, so that no compiler's padding rules
+ * enter into it.  Unlike bind's, these offsets are pointer-sized
+ * rather than absolute -- that is the whole point of the disagreement
+ * -- so they are expressed in terms of sizeof(HANDLE):
+ *
+ *  i386 (HANDLE == 4)                x86_64 (HANDLE == 8)
+ *      +0   BOOLEAN SanActive            +0   BOOLEAN SanActive
+ *      +4   HANDLE  RootEndpoint         +8   HANDLE  RootEndpoint
+ *      +8   HANDLE  ConnectEndpoint     +16   HANDLE  ConnectEndpoint
+ *     +12   LONG    TAAddressCount      +24   LONG    TAAddressCount
+ *     +16   USHORT  AddressLength       +28   USHORT  AddressLength
+ *     +18   USHORT  AddressType         +30   USHORT  AddressType
+ *     +20   UCHAR   Address[14]         +32   UCHAR   Address[14]
+ *     == 34                             == 46
+ *
+ * As with bind, everything from AddressType on is byte-for-byte a
+ * `struct sockaddr_in` (phnt's AFD_ADDRESS diagram), and the 14
+ * address bytes are the packed TDI_ADDRESS_IP of the TDI banner above.
+ *
+ * IOCTL_AFD_CONNECT is METHOD_NEITHER (phnt ntafd.h: 0x12007), so the
+ * declared input length is the only bound afd.sys has on how far into
+ * the buffer it reads -- hence __afd_connect_request_size() rather
+ * than sizeof(AFD_CONNECT_INFO), which rounds up for alignment. */
 typedef struct _AFD_CONNECT_INFO {
-	unsigned char UseSAN;
-	uint32_t Root;
-	uint32_t Unknown;
+	unsigned char SanActive;
+	HANDLE RootEndpoint;
+	HANDLE ConnectEndpoint;
 	TRANSPORT_ADDRESS RemoteAddress;
 } AFD_CONNECT_INFO;
+
+/* Spelled with sizeof(HANDLE), not a literal, because the value
+ * legitimately differs between this project's two target ABIs; see the
+ * table above.  Not usable in #if, and deliberately not needed there. */
+#define AFD_CONNECT_REQ_OFF_SAN_ACTIVE  0UL
+#define AFD_CONNECT_REQ_OFF_ROOT_EP     ((unsigned long)sizeof(HANDLE))
+#define AFD_CONNECT_REQ_OFF_CONNECT_EP  (2UL * (unsigned long)sizeof(HANDLE))
+#define AFD_CONNECT_REQ_OFF_ADDR_COUNT  (3UL * (unsigned long)sizeof(HANDLE))
+#define AFD_CONNECT_REQ_OFF_ADDR_LENGTH (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 4UL)
+#define AFD_CONNECT_REQ_OFF_ADDR_TYPE   (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 6UL)
+#define AFD_CONNECT_REQ_OFF_ADDR        (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 8UL)
+#define AFD_CONNECT_REQ_SIZE            (AFD_CONNECT_REQ_OFF_ADDR + TDI_ADDRESS_LENGTH_IP)
 
 /* ---- send / recv (shared.h: AFD_WSABUF, AFD_RECV_INFO, AFD_SEND_INFO,
  * AFD_SKIP_FIO/AFD_OVERLAPPED/AFD_IMMEDIATE; tdi.h: TDI_RECEIVE_*) ----- */
@@ -512,6 +600,20 @@ void __afd_build_open_ea(void *buf);
 unsigned long __afd_bind_request_size(void);
 int __afd_build_bind_request(void *buf, unsigned long share_type,
                              const struct sockaddr *addr, unsigned len);
+/* The IOCTL_AFD_CONNECT request body, split out and inspected exactly
+ * the same way, and for a sharper reason: its layout is the one place
+ * ReactOS and phnt disagree, and they disagree only on x86_64, so no
+ * amount of i386 testing can catch a regression here.
+ * __afd_connect_request_size() returns the byte count the ioctl
+ * declares (46 on x86_64, 34 on i386 -- not sizeof(AFD_CONNECT_INFO),
+ * which rounds up), and __afd_build_connect_request() fills that many
+ * bytes at `buf` from a sockaddr, returning 0, or -1 with
+ * errno=EINVAL/EAFNOSUPPORT.  buf must be pointer-aligned and at least
+ * sizeof(AFD_CONNECT_INFO) bytes.  test/posix-socket-connect.c
+ * re-parses the result by offset with no reference to this header, and
+ * runs with no \Device\Afd at all. */
+unsigned long __afd_connect_request_size(void);
+int __afd_build_connect_request(void *buf, const struct sockaddr *addr, unsigned len);
 /* Issue one AFD ioctl on socket handle h and wait for it to finish --
  * every AFD request (src/socket/ (every .c there)) goes through this.  STATUS_PENDING
  * is waited out on the handle itself (see __afd_open()'s comment on why
