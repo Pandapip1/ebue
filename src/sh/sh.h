@@ -5,22 +5,27 @@
  * test/sh-design.md for why this exists and how it links).  Nothing in
  * here is a public interface: it is linked into libc.a and consumed by
  * the other files in this directory, the sh/ binary's main()
- * (sh/main.c), and (from stage 5 on) wordexp()/system()/popen().  All
- * names begin with __sh_ or SH_.
+ * (sh/main.c), and -- as of stage 5, through the single __sh_cmdsub()
+ * call-out declared in src/internal/libc.h -- wordexp()'s command
+ * substitution.  system() and popen() still hand their command string
+ * to %ComSpec%/cmd.exe and are test/sh-design.md's item 5, not this
+ * stage's.  All names begin with __sh_ or SH_.
  *
  * Grammar coverage is the subset test/sh-design.md scopes in: simple
  * commands (including leading NAME=value assignments), pipelines,
  * '&&'/'||'/';'/newline lists, '&' as an asynchronous separator,
- * subshells '( list )' and brace groups '{ list ; }', and redirections
- * including here-documents.  Control-flow reserved words (if/while/for/
- * case), functions, aliases and job control are deliberately out of
- * scope -- see the design note and the top-level task report.  Because
- * every one of those lexes as an ordinary WORD here, a program using
- * one would otherwise be *executed* as something else entirely (an
- * external command called "if"); sh/main.c refuses such a program up
- * front, with a diagnostic naming what is unsupported, rather than
- * letting it run -- see that file's header for the full list and why
- * refusing beats a misleading "command not found".
+ * subshells '( list )' and brace groups '{ list ; }', redirections
+ * including here-documents, and (stage 5) command substitution in both
+ * the '$(...)' and the '`...`' form.  Control-flow reserved words
+ * (if/while/for/case), functions, aliases and job control are
+ * deliberately out of scope -- see the design note and the top-level
+ * task report.  Because every one of those lexes as an ordinary WORD
+ * here, a program using one would otherwise be *executed* as something
+ * else entirely (an external command called "if"); sh/main.c refuses
+ * such a program up front, with a diagnostic naming what is
+ * unsupported, rather than letting it run -- see that file's header for
+ * the full list and why refusing beats a misleading "command not
+ * found".
  *
  * '!' pipeline negation is parsed as a reserved word (a bare, unquoted
  * WORD token whose text is exactly "!"/"{"/"}"), recognised only where
@@ -148,7 +153,12 @@ void __sh_print_list(FILE *f, const struct sh_list *list);
  * on success, or -1 (status left untouched) for a construct this
  * stage's executor does not implement yet -- see exec.c's header
  * comment for exactly which. Callers must not treat -1 as "exit status
- * -1"; it means "cannot execute this AST node at all right now". */
+ * -1"; it means "cannot execute this AST node at all right now".
+ *
+ * The command-substitution entry point wordexp() calls is deliberately
+ * NOT here: it is declared in src/internal/libc.h, which is where a
+ * declaration shared between source directories belongs. See
+ * __sh_cmdsub() there and its implementation in exec.c. */
 int __sh_exec_command(const struct sh_command *cmd, int *status);
 int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status);
 int __sh_exec_andor(const struct sh_andor *a, int *status);

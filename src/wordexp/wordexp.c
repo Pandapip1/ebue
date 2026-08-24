@@ -1,15 +1,22 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * wordexp(): the genuine, shell-free subset of XCU Word Expansions --
- * see include/wordexp.h's header comment for which pieces those are
- * and, in particular, the reasoning for what this returns when it
- * meets command substitution, the one construct that genuinely needs
- * a POSIX shell this platform does not have. Arithmetic expansion
- * ($((expr))) is NOT one of those constructs -- it needs no shell at
- * all, so it is implemented for real (src/wordexp/arith.c, called from
- * expand_arith() below); see that file's header for the evaluator
- * itself.
+ * wordexp(): XCU Word Expansions -- see include/wordexp.h's header
+ * comment for which pieces are implemented and which are not.
+ * Arithmetic expansion ($((expr))) is implemented for real
+ * (src/wordexp/arith.c, called from expand_arith() below); see that
+ * file's header for the evaluator itself.
+ *
+ * Command substitution used to be the one construct refused outright,
+ * for want of a POSIX shell on this platform. There is one now
+ * (src/sh/, see test/sh-design.md), linked into the same libc.a rather
+ * than spawned as a separate interpreter image, so "$(...)" and
+ * "`...`" are performed for real via the __sh_cmdsub() call-out
+ * declared in src/internal/libc.h -- see run_cmdsub() below and its
+ * neighbours for the extent-finding and quoting rules, which stay
+ * here because they are part of this file's own left-to-right scan.
+ * WRDE_NOCMD, which previously had no observable effect, is now what
+ * makes wordexp() refuse one with WRDE_CMDSUB.
  *
  * One left-to-right scan of `words` does almost everything at once,
  * because the pieces are not actually separable: whether a character
@@ -301,6 +308,157 @@ static int expand_arith(const char **pp, struct fbuf *b, int flags)
 	return fbuf_push_long(b, result) ? WRDE_NOSPACE : 0;
 }
 
+/* ---- command substitution (XCU 2.6.3) --------------------------------
+ *
+ * The extent-finding half lives here rather than in src/sh/: deciding
+ * where a "$(...)" or "`...`" *ends* is part of the same left-to-right,
+ * quote-state-aware scan this file already performs (it is what lets
+ * the scan resume at the right byte afterwards), and src/sh/parse.c's
+ * lexer already has its own copy of the same rules for the same reason
+ * -- it must find the end to know where the *word* ends. The
+ * *execution* half is the shell's, reached through the single
+ * __sh_cmdsub() call-out declared in src/internal/libc.h.
+ *
+ * The two forms are genuinely different languages here, not one with a
+ * spelling variant, and the backquoted one is not the lesser case: it
+ * is what autoconf-generated `configure` scripts overwhelmingly use.
+ *
+ *   "$(command)": "all characters following the open parenthesis to the
+ *   matching closing parenthesis constitute the command" (2.6.3) -- the
+ *   text is the command *verbatim*, nothing is unescaped, and nesting
+ *   falls out of matching parentheses. Quoted regions inside are
+ *   skipped while matching so a ')' inside 'a)b' cannot close it.
+ *
+ *   "`command`": "The search for the matching backquote shall be
+ *   satisfied by the first unquoted non-escaped backquote" (2.6.3), and
+ *   "<backslash> shall retain its literal meaning, except when followed
+ *   by: '$', '`', or <backslash>" -- so the delimited text is *not* the
+ *   command: it has to have exactly those three escapes removed first,
+ *   and every other backslash left standing. That is also the entire
+ *   mechanism by which the backquoted form nests: 2.6.3, "To specify
+ *   nesting within the backquoted version, the application shall
+ *   precede the inner backquotes with <backslash> characters" -- an
+ *   inner \` survives the outer scan as an escaped byte and becomes a
+ *   real ` in the command text, which the shell's own lexer then reads
+ *   as a nested substitution. Nesting therefore needs no special case
+ *   at all beyond getting the unescaping exactly right.
+ */
+
+/* *pp points at the '$' of "$(". Advances it past the matching ')' and
+ * returns the command text between them, freshly __malloc'd, or NULL on
+ * an unterminated substitution or OOM (*syntax distinguishes the two).
+ */
+static char *cmdsub_dollar_text(const char **pp, int *syntax)
+{
+	const char *p = *pp + 2;
+	const char *start = p;
+	int depth = 1;
+	char *r;
+	size_t len;
+
+	*syntax = 0;
+	while (depth > 0) {
+		char c = *p;
+		if (!c) { *syntax = 1; return 0; }
+		if (c == '\\' && p[1]) { p += 2; continue; }
+		if (c == '\'') {
+			p++;
+			while (*p && *p != '\'') p++;
+			if (!*p) { *syntax = 1; return 0; }
+			p++;
+			continue;
+		}
+		if (c == '"') {
+			p++;
+			while (*p && *p != '"') { if (*p == '\\' && p[1]) p++; p++; }
+			if (!*p) { *syntax = 1; return 0; }
+			p++;
+			continue;
+		}
+		if (c == '(') depth++;
+		else if (c == ')') { depth--; if (!depth) break; }
+		p++;
+	}
+	len = (size_t)(p - start);
+	r = __malloc(len + 1);
+	if (!r) return 0;
+	memcpy(r, start, len);
+	r[len] = 0;
+	*pp = p + 1;	/* past the ')' */
+	return r;
+}
+
+/* *pp points at the opening '`'. Advances it past the matching closing
+ * '`' and returns the command text with 2.6.3's backquote escapes
+ * removed (\$ -> $, \` -> `, \\ -> \; every other backslash kept, and
+ * kept together with the character it precedes), freshly __malloc'd, or
+ * NULL on an unterminated substitution or OOM (*syntax distinguishes
+ * the two). */
+static char *cmdsub_backquote_text(const char **pp, int *syntax)
+{
+	const char *p = *pp + 1;
+	const char *start = p;
+	char *r;
+	size_t o = 0;
+
+	*syntax = 0;
+	while (*p && *p != '`') {
+		if (*p == '\\' && p[1]) { p += 2; continue; }
+		p++;
+	}
+	if (!*p) { *syntax = 1; return 0; }
+
+	r = __malloc((size_t)(p - start) + 1);
+	if (!r) return 0;
+	for (; start < p; start++) {
+		if (*start == '\\' && start + 1 < p &&
+		    (start[1] == '$' || start[1] == '`' || start[1] == '\\')) {
+			r[o++] = start[1];
+			start++;
+			continue;
+		}
+		r[o++] = *start;
+	}
+	r[o] = 0;
+	*pp = p + 1;	/* past the closing '`' */
+	return r;
+}
+
+/* Runs the command substitution starting at *pp (pointing at the '$' of
+ * "$(" or at a '`'), advancing *pp past it, and hands back its captured
+ * standard output (trailing newlines already stripped by __sh_cmdsub()
+ * per 2.6.3) in *out, __malloc'd and owned by the caller. Returns 0, or
+ * a WRDE_* code. */
+static int run_cmdsub(const char **pp, int flags, char **out)
+{
+	char *program;
+	int syntax = 0, status = 0;
+
+	*out = 0;
+	/* WRDE_NOCMD is finally load-bearing: "[f]ail if command
+	 * substitution is requested" (wordexp.html) is now a refusal of
+	 * something this implementation could otherwise do, rather than a
+	 * flag with no observable effect. */
+	if (flags & WRDE_NOCMD) return WRDE_CMDSUB;
+
+	program = (**pp == '`') ? cmdsub_backquote_text(pp, &syntax)
+	                        : cmdsub_dollar_text(pp, &syntax);
+	if (!program) return syntax ? WRDE_SYNTAX : WRDE_NOSPACE;
+
+	if (__sh_cmdsub(program, out, &status)) {
+		__free(program);
+		/* The shell could not parse or could not execute it. There is
+		 * no WRDE_* code for "the embedded command was bad" -- and
+		 * WRDE_CMDSUB would be a lie, since the substitution was
+		 * neither refused nor unsupported -- so WRDE_SYNTAX does the
+		 * same double duty src/wordexp/arith.c's header already
+		 * documents it doing for a malformed arithmetic expression. */
+		return WRDE_SYNTAX;
+	}
+	__free(program);
+	return 0;
+}
+
 /* Turns one already-expanded field (b->data[0..n), with b->lit[i] true
  * for bytes that must stay literal) into one or more output words,
  * pushing them onto out. Live '*'/'?'/'[' bytes trigger glob(); no live
@@ -418,8 +576,35 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 				if (rc) goto fail;
 				continue;
 			}
-			if (c == '$' && p[1] == '(') { rc = WRDE_CMDSUB; goto fail; }
-			if (c == '`') { rc = WRDE_CMDSUB; goto fail; }
+			if ((c == '$' && p[1] == '(') || c == '`') {
+				/* 2.6.3 unquoted: the result *is* subject to field
+				 * splitting and pathname expansion (only the
+				 * double-quoted case below is exempted), so each byte
+				 * goes in live and an IFS byte ends the field right
+				 * here -- this is field splitting of a substitution
+				 * result, tracked through the same scan that produced
+				 * it, which is precisely what cannot be done by a
+				 * splitter bolted on afterwards. */
+				char *o;
+				size_t i;
+				rc = run_cmdsub(&p, flags, &o);
+				if (rc) goto fail;
+				for (i = 0; o[i]; i++) {
+					if (is_ifs(o[i])) {
+						if (active) {
+							rc = emit_field(&field, &out);
+							fbuf_free(&field);
+							active = 0;
+							if (rc) { __free(o); goto fail; }
+						}
+						continue;
+					}
+					if (fbuf_push(&field, o[i], 0)) { __free(o); rc = WRDE_NOSPACE; goto fail; }
+					active = 1;
+				}
+				__free(o);
+				continue;
+			}
 			if (c == '$') {
 				active = 1;
 				rc = expand_param(&p, &field, flags);
@@ -456,8 +641,21 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 				if (rc) goto fail;
 				continue;
 			}
-			if (c == '$' && p[1] == '(') { rc = WRDE_CMDSUB; goto fail; }
-			if (c == '`') { rc = WRDE_CMDSUB; goto fail; }
+			if ((c == '$' && p[1] == '(') || c == '`') {
+				/* 2.6.3: "If a command substitution occurs inside
+				 * double-quotes, field splitting and pathname
+				 * expansion shall not be performed on the results of
+				 * the substitution" -- so the whole capture goes in as
+				 * one run of quoted bytes: no FLUSH on an IFS byte, and
+				 * a '*' in the output stays a literal '*'. */
+				char *o;
+				rc = run_cmdsub(&p, flags, &o);
+				if (rc) goto fail;
+				rc = fbuf_push_str(&field, o, 1) ? WRDE_NOSPACE : 0;
+				__free(o);
+				if (rc) goto fail;
+				continue;
+			}
 			if (c == '$') {
 				rc = expand_param(&p, &field, flags);
 				if (rc) goto fail;

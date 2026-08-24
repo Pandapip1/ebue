@@ -5,7 +5,9 @@
  * stage 2's simple-command execution; stage 4 (see exec_group()'s
  * header comment further down) adds subshells "( list )" and brace
  * groups "{ list; }", plus the minimal `cd` builtin needed to exercise
- * them. PATH lookup goes through the existing
+ * them; stage 5 (see __sh_cmdsub()'s header comment further down) adds
+ * command substitution, which is what finally lets wordexp() stop
+ * refusing "$(...)"/"`...`" with WRDE_CMDSUB. PATH lookup goes through the existing
  * __find_program() (src/process/find_program.c); starting a process
  * goes through the existing __spawn()/waitpid() (src/process/spawn.c,
  * src/process/wait.c).
@@ -21,12 +23,13 @@
  * free, correctly (an unquoted "$FOO" containing spaces splits into
  * several argv entries, a glob expands, etc.) -- something a from-
  * scratch reimplementation here would either have to duplicate or get
- * subtly wrong. A word containing command substitution ($(...) or
- * `...`, real syntax since parse.c's word-boundary fix) surfaces as
- * WRDE_CMDSUB here and is reported as "not yet supported": stage 5 is
- * what wires wordexp's command-substitution call-out to this module's
- * own list execution, which is exactly what turns that error into a
- * result.
+ * subtly wrong. That reuse is now bidirectional: a word containing
+ * command substitution ($(...) or `...`) makes wordexp() call straight
+ * back into this file's __sh_cmdsub() (declared in src/internal/libc.h,
+ * the only entry point into src/sh/ anything outside it uses), so a
+ * substituted command is executed by this same executor, in the same
+ * process, with no second interpreter anywhere -- which is the whole
+ * point test/sh-design.md's "reuse rule" makes.
  *
  * ---- Redirections (XCU 2.7) -----------------------------------------
  *
@@ -108,9 +111,11 @@
  * ordering requirement.
  *
  * ---- Deliberately NOT implemented yet, later stages -------------------
- *   - command substitution inside any word, redirection target, or
- *     unquoted here-document body (stage 5) -- reported via wordexp()'s
- *     WRDE_CMDSUB, same as stage 2
+ *   - control-flow reserved words (if/while/for/case), functions and
+ *     aliases: no grammar for them exists, parser or executor, so they
+ *     never reach this file at all -- a word like "if" is an ordinary
+ *     WORD token, looked up on PATH like any other command name
+ *     (test/sh-design.md item 2)
  *   - '&' actually backgrounding rather than running synchronously
  *     (job control is out of scope for this project entirely -- see
  *     test/sh-design.md -- but *not waiting* for an async list item
@@ -137,6 +142,19 @@ static char *xstrdup(const char *s)
 	return p;
 }
 
+/* The "last command substitution performed" 2.9.1 needs (see
+ * __sh_cmdsub() near the end of this file, and exec_simple()'s use of
+ * these): its exit status, plus a monotonically increasing counter so a
+ * caller can tell "a substitution ran and exited 0" from "no
+ * substitution ran at all" without either being able to masquerade as
+ * the other. File-scope rather than threaded through every expansion
+ * helper's signature because the substitution happens *inside*
+ * wordexp() (src/wordexp/wordexp.c), several frames below any of them,
+ * with no wordexp_t field to carry it back out -- and 2.9.1 asks only
+ * for the *last* one, which is exactly what a single slot records. */
+static int cmdsub_status;
+static unsigned long cmdsub_generation;
+
 static void free_strv(char **v, size_t n)
 {
 	size_t i;
@@ -153,13 +171,13 @@ static void free_strv(char **v, size_t n)
  * expansion -- but wordexp() does not expose that narrower mode, so
  * this takes its first resulting word and accepts the (documented,
  * rare-in-practice) over-permissiveness of an unquoted glob/multi-word
- * $var in a value expanding more than a strict implementation would;
- * tightening this is exactly the sort of thing stage 5's extraction of
- * wordexp's inlined quote-scan (see test/sh-design.md's stage-5 notes)
- * is for. If expansion fails (most commonly WRDE_CMDSUB -- command
- * substitution in an assignment is not yet supported either), the
- * value falls back to its literal raw text rather than the assignment
- * being silently dropped. On success, *name and *val are __malloc'd
+ * $var in a value expanding more than a strict implementation would.
+ * Command substitution in an assignment's value *does* run (2.9.1 step
+ * 4 lists it among the expansions an assignment gets), and its status
+ * is what 2.9.1's "no command name" rule reports -- see
+ * cmdsub_status_rule() below. If expansion fails outright, the value
+ * falls back to its literal raw text rather than the assignment being
+ * silently dropped. On success, *name and *val are __malloc'd
  * and owned by the caller; returns 0, or -1 on a malformed assignment word
  * (should not happen given is_assignment_word) or OOM.
  */
@@ -261,8 +279,12 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 /* 2.9.1: a simple command with no cmd_word at all -- only variable
  * assignments -- is still valid, and those assignments affect the
  * *current* execution environment (this process's real environment),
- * not a child's. Always "succeeds" (status 0): 2.9.1 gives no failure
- * mode for a bare assignment. */
+ * not a child's. Always "succeeds" (status 0) as far as this function
+ * is concerned: 2.9.1 gives no failure mode for a bare assignment. Its
+ * caller may still overwrite that with the status of a command
+ * substitution performed while expanding one of the values -- see
+ * cmdsub_status_rule() below, which is where 2.9.1's "no command name,
+ * but the command contained a command substitution" rule lives. */
 static int exec_assignment_only(const struct sh_command *cmd, int *status)
 {
 	const struct sh_word *a;
@@ -403,8 +425,10 @@ static char *expand_redir_word(const char *raw, int *unsupported)
  * backslash runs included, is passed through unchanged -- whatever
  * wordexp()'s double-quote backslash handling does with them is
  * exactly the behavior 2.7.4 asks for. A $(...) or `...` inside the
- * body correctly comes back as this file's usual WRDE_CMDSUB "not yet
- * supported" (stage 5). Returns NULL and sets *unsupported on failure. */
+ * body -- which 2.7.4 requires to be expanded, and which is the one
+ * place a heredoc can run a command at all -- therefore runs for real,
+ * through the same wordexp() call-out as any other double-quoted
+ * word. Returns NULL and sets *unsupported on failure. */
 static char *expand_heredoc(const char *body, int *unsupported)
 {
 	size_t n = strlen(body), i;
@@ -602,6 +626,9 @@ static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, i
 struct stage_result {
 	pid_t pid;   /* >= 0: a real process was spawned; caller must waitpid() it */
 	int status;  /* meaningful only when pid < 0: the result is already final */
+	int had_name; /* 2.9.1 step 2 actually produced a command name (so the
+	               * "no command name, but the command contained a command
+	               * substitution" status rule below does not apply) */
 };
 
 /* ==== A minimal `cd` builtin ============================================
@@ -637,6 +664,7 @@ static int exec_builtin_cd(const struct sh_command *cmd, struct stage_result *ou
 	char *oldcwd, *newcwd;
 
 	out->pid = -1;
+	out->had_name = 1;
 
 	/* run_stage() never calls this with cmd->words == NULL (it only
 	 * dispatches here after checking cmd->words->text itself), but that
@@ -651,7 +679,9 @@ static int exec_builtin_cd(const struct sh_command *cmd, struct stage_result *ou
 		rc = wordexp(w->text, &we, first ? 0 : WRDE_APPEND);
 		if (rc) {
 			if (!first) wordfree(&we);
-			return -1; /* most commonly WRDE_CMDSUB -- stage 5 */
+			return -1; /* WRDE_SYNTAX, WRDE_BADCHAR, a command
+			            * substitution the shell could not run, ... --
+			            * see sh.h for this file's -1 convention */
 		}
 		first = 0;
 	}
@@ -700,6 +730,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out)
 	size_t envn = 0;
 
 	out->pid = -1;
+	out->had_name = 0;
 
 	/* run_stage() never calls this with cmd->words == NULL (that is
 	 * exactly the assignment-only case it handles itself), but a
@@ -713,11 +744,13 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out)
 		rc = wordexp(w->text, &we, first ? 0 : WRDE_APPEND);
 		if (rc) {
 			if (!first) wordfree(&we);
-			return -1; /* most commonly WRDE_CMDSUB -- stage 5 */
+			return -1; /* see exec_builtin_cd() above on what a nonzero
+			            * wordexp() means here */
 		}
 		first = 0;
 	}
-	if (we.we_wordc == 0) { wordfree(&we); out->status = 0; return 0; } /* every word expanded away */
+	if (we.we_wordc == 0) { wordfree(&we); out->status = 0; return 0; } /* every word expanded away -- 2.9.1: "no command name results" */
+	out->had_name = 1;
 
 	if (cmd->assigns) {
 		envp = build_child_envp(cmd->assigns, &envn);
@@ -763,6 +796,7 @@ static int run_stage(const struct sh_command *cmd, struct stage_result *out, int
 {
 	if (!cmd->words) {
 		out->pid = -1;
+		out->had_name = 0;
 		if (env_mutate) exec_assignment_only(cmd, &out->status);
 		else out->status = 0;
 		return 0;
@@ -785,6 +819,7 @@ static int run_stage(const struct sh_command *cmd, struct stage_result *out, int
 		return exec_builtin_cd(cmd, out);
 	if (!env_mutate && cmd->words->text && !strcmp(cmd->words->text, "cd")) {
 		out->pid = -1;
+		out->had_name = 1;
 		out->status = 0;
 		return 0;
 	}
@@ -800,12 +835,32 @@ static int wait_status(pid_t pid)
 
 /* ==== A single simple command, including its own redirections ========== */
 
+/* XCU 2.9.1: "If there is a command name, execution shall continue as
+ * described in Command Search and Execution. If there is no command
+ * name, but the command contained a command substitution, the command
+ * shall complete with the exit status of the last command substitution
+ * performed. Otherwise, the command shall complete with a zero exit
+ * status."
+ *
+ * `gen0` is cmdsub_generation as it stood *before* any of this
+ * command's expansions ran -- which has to include the redirection
+ * words (apply_redirs() expands those, and "> $(...)" is a command with
+ * no command name that "contained a command substitution" just as much
+ * as "$(...)" alone is), so every caller samples it before its own
+ * apply_redirs(), not just before run_stage(). */
+static int cmdsub_status_rule(const struct stage_result *sr, unsigned long gen0)
+{
+	if (!sr->had_name && cmdsub_generation != gen0) return cmdsub_status;
+	return sr->status;
+}
+
 static int exec_simple(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
 	int failed = 0;
 	struct stage_result sr;
 	int st;
+	unsigned long gen0 = cmdsub_generation;
 
 	rs.saves = 0; rs.n = rs.cap = 0;
 
@@ -824,7 +879,7 @@ static int exec_simple(const struct sh_command *cmd, int *status)
 	if (run_stage(cmd, &sr, 1)) { restore_fds(&rs); return -1; }
 	restore_fds(&rs);
 
-	if (sr.pid < 0) { *status = sr.status; return 0; }
+	if (sr.pid < 0) { *status = cmdsub_status_rule(&sr, gen0); return 0; }
 	st = wait_status(sr.pid);
 	if (st < 0) return -1;
 	*status = st;
@@ -876,8 +931,9 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  *     finishes -- there is no job control, no backgrounding that
  *     actually backgrounds (SH_SEP_AMP still runs synchronously, see
  *     __sh_exec_list()'s comment), and no command substitution reading
- *     its output concurrently (that is stage 5, and even there the
- *     reader only starts once __sh_exec_list() here returns). So
+ *     its output concurrently (command substitution captures to a
+ *     seekable temporary file precisely so that the reader only starts
+ *     once __sh_exec_list() here returns -- see __sh_cmdsub() below). So
  *     nothing else in this process ever needs to run *while* the
  *     subshell's body runs, which is the one thing save-and-restore
  *     cannot give you and a real child process can.
@@ -982,8 +1038,8 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * this file deliberately has neither available to it here. Rather than
  * risk that hang, __sh_exec_pipeline() below detects two adjacent
  * non-simple stages up front and refuses the whole pipeline via the
- * same "not yet supported" -1 convention as an unexpanded command
- * substitution (this file's own header comment above) -- a clean,
+ * same "not yet supported" -1 convention this file's own header
+ * comment above describes -- a clean,
  * documented failure a caller can report, never a hang or a Wine
  * abort. "( a ) | { b; }" and its permutations are therefore not yet
  * supported by this shell; every other placement of "( ... )"/"{ ...
@@ -1121,6 +1177,174 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	return rc;
 }
 
+/* ==== Command substitution (XCU 2.6.3) =================================
+ *
+ * "The shell shall expand the command substitution by executing
+ * command in a subshell environment (see Shell Execution Environment)
+ * and replacing the command substitution (the text of command plus the
+ * enclosing "$()" or backquotes) with the standard output of the
+ * command, removing sequences of one or more <newline> characters at
+ * the end of the substitution." (2.6.3)
+ *
+ * Two halves, and both of them already exist in this file:
+ *
+ *  - "in a subshell environment" is the *same* environment 2.12
+ *    requires for "( list )", which exec_group() above already
+ *    implements as environ/cwd snapshot-and-restore plus the ordinary
+ *    redir_state bracketing (see that function group's header comment
+ *    for why save-and-restore rather than fork(), and for the exact
+ *    intersection of 2.12's object list with what this shell's language
+ *    can actually change). This function reuses env_snapshot_take()/
+ *    env_snapshot_restore()/save_fd()/restore_fds() unchanged rather
+ *    than growing a second, subtly different notion of isolation.
+ *
+ *  - "with the standard output of the command" is the one genuinely new
+ *    piece: the list's stdout has to end up somewhere this process can
+ *    read back, rather than at an fd a spawned child would inherit
+ *    unchanged.
+ *
+ * ---- Why a temporary file and not a pipe -----------------------------
+ *
+ * A pipe is the obvious capture, and it is wrong here for exactly the
+ * reason this file's here-document comment already gives for the
+ * mirror-image case: __sh_exec_list() runs to completion *in this
+ * process* before this function ever gets control back, so there is
+ * nobody to drain a pipe while the substituted commands are filling it.
+ * A substitution producing more than one pipe buffer (65536 bytes --
+ * src/unistd/pipe.c) would wedge this process against itself forever,
+ * silently. Draining it concurrently needs a second thread or a fork(),
+ * and this file's stage-4 header comment records at length why fork()
+ * is deliberately not used anywhere in this executor (stock Wine, which
+ * CI's `test` legs run under, aborts on ntdll.RtlCloneUserProcess).
+ *
+ * tmpfile() (src/stdio/misc.c) has neither problem: it is seekable, so
+ * the writers finish first and the read happens after, with no ordering
+ * requirement and no size limit beyond the filesystem's; and it is
+ * created-then-unlinked, so the capture is gone the moment the last
+ * handle to it closes even if this process dies mid-substitution.
+ *
+ * The trade-off accepted: the substituted command's output makes a
+ * round trip through %TEMP% rather than staying in memory, so a
+ * substitution needs a writable temp directory (everything else in this
+ * file needs only a writable cwd), and the output is not visible to
+ * anything until the whole list finishes. The latter costs nothing --
+ * 2.6.3's result is the *complete* output, so it could not be produced
+ * incrementally anyway -- and the former is the same dependency
+ * here-documents already have.
+ *
+ * ---- What is NOT isolated -------------------------------------------
+ *
+ * fd 2 is deliberately left alone: 2.6.3 replaces the substitution with
+ * the command's *standard output*, and every shell lets a substituted
+ * command's stderr through to the shell's own, which is what makes a
+ * failing "$(...)" say why.
+ */
+
+/* Reads everything left in `fd` into a freshly __malloc'd,
+ * NUL-terminated buffer. Returns NULL on OOM or a read error. A capture
+ * containing null bytes comes back truncated at the first one as far as
+ * any string caller can see -- 2.6.3: "If the output contains any null
+ * bytes, the behavior is unspecified." */
+static char *slurp_fd(int fd)
+{
+	char *buf = 0;
+	size_t len = 0, cap = 0;
+
+	for (;;) {
+		ssize_t n;
+		if (len + 4096 + 1 > cap) {
+			size_t nc = cap ? cap * 2 : 8192;
+			char *nb;
+			while (len + 4096 + 1 > nc) nc *= 2;
+			nb = __malloc(nc);
+			if (!nb) { __free(buf); return 0; }
+			if (buf) memcpy(nb, buf, len);
+			__free(buf);
+			buf = nb;
+			cap = nc;
+		}
+		n = read(fd, buf + len, 4096);
+		if (n < 0) { __free(buf); return 0; }
+		if (n == 0) break;
+		len += (size_t)n;
+	}
+	if (!buf) { buf = __malloc(1); if (!buf) return 0; }
+	buf[len] = 0;
+	return buf;
+}
+
+int __sh_cmdsub(const char *program, char **out, int *status)
+{
+	struct sh_list *list;
+	struct redir_state rs;
+	struct env_snapshot es;
+	char *oldcwd;
+	char *buf;
+	FILE *tf;
+	int tfd, rc, st = 0;
+	size_t len;
+
+	*out = 0;
+	list = __sh_parse(program, 0, 0);
+	if (!list) return -1;
+
+	tf = tmpfile();
+	if (!tf) { __sh_list_free(list); return -1; }
+	tfd = fileno(tf);
+	if (tfd < 0) { fclose(tf); __sh_list_free(list); return -1; }
+
+	/* Anything this process has buffered for its own stdout belongs on
+	 * the *real* stdout, not in the capture -- fd 1 is about to point
+	 * somewhere else, and stdio's buffer does not know that. */
+	fflush(stdout);
+
+	rs.saves = 0; rs.n = rs.cap = 0;
+	if (save_fd(&rs, 1) || dup2(tfd, 1) < 0) {
+		restore_fds(&rs);
+		fclose(tf);
+		__sh_list_free(list);
+		return -1;
+	}
+
+	oldcwd = getcwd(0, 0);
+	if (env_snapshot_take(&es)) {
+		__free(oldcwd);
+		restore_fds(&rs);
+		fclose(tf);
+		__sh_list_free(list);
+		return -1;
+	}
+
+	rc = __sh_exec_list(list, &st);
+
+	env_snapshot_restore(&es);
+	free_env_snapshot(&es);
+	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+	fflush(stdout);	/* while fd 1 is still the capture */
+	restore_fds(&rs);
+	__sh_list_free(list);
+
+	if (rc) { fclose(tf); return -1; }
+
+	if (lseek(tfd, 0, SEEK_SET) < 0) { fclose(tf); return -1; }
+	buf = slurp_fd(tfd);
+	fclose(tf);
+	if (!buf) return -1;
+
+	/* 2.6.3: "removing sequences of one or more <newline> characters at
+	 * the end of the substitution. Embedded <newline> characters before
+	 * the end of the output shall not be removed". */
+	len = strlen(buf);
+	while (len && buf[len - 1] == '\n') len--;
+	buf[len] = 0;
+
+	*out = buf;
+	*status = st;
+	cmdsub_status = st;
+	cmdsub_generation++;
+	return 0;
+}
+
 int __sh_exec_command(const struct sh_command *cmd, int *status)
 {
 	if (cmd->kind == SH_CMD_SIMPLE) return exec_simple(cmd, status);
@@ -1149,9 +1373,8 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
  * so there is no pid to wait for later), or -1 if `cmd`'s own
  * redirections fail to apply (the caller folds that into the same
  * abort_unsupported path a spawn_stage() OOM would take) or if the
- * body itself hits something this shell cannot execute yet (stage 5's
- * still-unimplemented command substitution, propagated the same way
- * __sh_exec_command()'s other callers already propagate it). */
+ * body itself hits something this shell cannot execute (propagated the
+ * same way __sh_exec_command()'s other callers already propagate it). */
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1281,9 +1504,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		struct redir_state rs;
 		struct stage_result sr;
 		int failed = 0;
+		unsigned long gen0 = cmdsub_generation;
 
 		sr.pid = -1;
 		sr.status = 0;
+		sr.had_name = 1;
 
 		if (pl->commands[i].kind != SH_CMD_SIMPLE) {
 			deferred[i] = 1;
@@ -1334,7 +1559,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		if (i + 1 < n) close(pipes[i][1]);
 
 		pids[i] = sr.pid;
-		statuses[i] = sr.status;
+		statuses[i] = sr.pid < 0 ? cmdsub_status_rule(&sr, gen0) : sr.status;
 	}
 
 	/* Pass 2: run every compound-command stage's body, left to right,

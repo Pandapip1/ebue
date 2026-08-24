@@ -230,6 +230,33 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
  * suffix Windows wants.  Returns a malloc'd absolute path or NULL. */
 char *__find_program(const char *name, int use_path);
 
+/* ---- the in-process shell (src/sh/, see test/sh-design.md) -------------
+ *
+ * The one entry point outside src/sh/ that reaches into the shell:
+ * src/wordexp/wordexp.c's command-substitution call-out.  Everything
+ * else in src/sh/ is declared in src/sh/sh.h, which is private to that
+ * directory (plus test/sh.c's relative #include) -- this is here rather
+ * than there because libc.h is where a declaration shared *between*
+ * source directories belongs (see src/wordexp/internal.h's own header
+ * comment saying exactly that).
+ *
+ * Runs `program` (the text between a "$(" and its matching ')', or the
+ * escape-processed text between a matching pair of backquotes -- the
+ * caller has already found the extent and, for the backquoted form,
+ * applied XCU 2.6.3's backslash rule) as a complete_command in a
+ * subshell environment, and hands back its standard output with
+ * trailing <newline> sequences removed, exactly as XCU 2.6.3 requires.
+ *
+ * On success returns 0 with *out a __malloc'd, NUL-terminated capture
+ * the caller owns and *status the command's exit status (2.9.1's "the
+ * exit status of the last command substitution performed").  Returns -1
+ * with *out NULL and *status untouched for a syntax error in `program`,
+ * for a construct src/sh/exec.c still cannot execute (its own -1
+ * convention -- see sh.h), or on resource failure; there is no way to
+ * distinguish those here and no caller that would act differently.
+ */
+int __sh_cmdsub(const char *program, char **out, int *status);
+
 /* ---- heap -------------------------------------------------------------- */
 void *__malloc(size_t);
 void __free(void *);
