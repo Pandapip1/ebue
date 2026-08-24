@@ -60,7 +60,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -101,7 +101,8 @@ note() { printf '%s\n' "$*" >&2; }
 # not just HEAD) into $GATE_JOBS_DIR/trees/$1, excluding build output and
 # per-arch config so each stage configures its own.
 #
-# third_party/ is excluded from every copy EXCEPT libc-test's. It holds
+# third_party/ is excluded from every copy EXCEPT libc-test's and
+# libc-test-map's. It holds
 # one git submodule -- musl's libc-test, ~940 files and 11 MB -- and only
 # that one stage reads it, so every other copy would be paying 11 MB of
 # rsync for nothing.
@@ -128,10 +129,18 @@ note() { printf '%s\n' "$*" >&2; }
 # The libc-test stage does get the copy, .git-file and all: the plain
 # files survive rsync, which is all tools/libc-test.sh needs.
 #
+# libc-test-map needs the same corpus, and one thing more: rsync strips
+# .git from every copy, so a stage that has to answer "is the SHA this
+# report records an ancestor of HEAD?" cannot answer it from inside the
+# copy. It is handed LIBC_TEST_MAP_GITREPO pointing back at the real
+# tree instead. Note what it must NOT do: degrade to "no .git, so skip
+# the ancestry check". A staleness check that silently stops checking
+# staleness is precisely the vacuous stage this gate has been pruning.
+#
 make_tree() {
 	dest="$GATE_JOBS_DIR/trees/$1"
 	mkdir -p "$dest"
-	if [ "$1" = libc-test ]; then
+	if [ "$1" = libc-test ] || [ "$1" = libc-test-map ]; then
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
 			--exclude='*.tmp' \
@@ -197,6 +206,7 @@ fi
 # the source tree, so every copy sees the same (post-generated) state.
 for pair in \
 	"check-i386:check-i386" "check-x86_64:check-x86_64" "libc-test:libc-test" \
+	"libc-test-map:libc-test-map" \
 	"asan:asan" "linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
 	"hygiene:hygiene" "lint-plain:lint-plain" \
 	"lint-analyze-pinned:lint-analyze-pinned" "lint-shell-pinned:lint-shell-pinned" \
@@ -238,6 +248,25 @@ fi
 if want libc-test; then
 	t="$GATE_JOBS_DIR/trees/libc-test"
 	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" && make libc-test"
+fi
+
+# libc-test-map: the STALENESS-AND-HONESTY check over the checked-in
+# coverage map (test/LIBC-TEST-MAP.generated.md), not the map itself.
+#
+# The map is a distribution, and a gate stage over a distribution needs a
+# threshold nobody can justify -- which is the "number nobody reads"
+# failure mode by another route.  So the map is regenerated on demand
+# (`make libc-test-map`) and nightly, and what runs here is `--check`:
+# the checked-in file must still describe THIS tree, its recorded ntlibc
+# SHA must be an ancestor of HEAD, and its four invariants must hold.
+# Those all have honest yes/no answers.
+#
+# No WINE: this stage compiles and links the corpus to classify it and
+# never runs a test.  It measures ~9 s, against a critical path set by
+# asan (~198 s), so it costs the gate nothing.
+if want libc-test-map; then
+	t="$GATE_JOBS_DIR/trees/libc-test-map"
+	run_stage libc-test-map "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && LIBC_TEST_MAP_GITREPO='$srcdir' make libc-test-map-check"
 fi
 
 if want asan; then

@@ -382,6 +382,31 @@ libc-test: $(ALL_LIBS)
 .PHONY: libc-test
 
 #
+# libc-test-map / libc-test-map-check: the coverage map for that same
+# corpus (test/LIBC-TEST-MAP.generated.md, checked in).
+#
+# `libc-test` above answers yes/no and ends its summary with a bare count
+# of unbuildable tests.  This pair takes that count apart -- which header,
+# which symbol, and which single addition would unblock the most.  It is
+# deliberately NOT a pass/fail stage: its output is a distribution, and a
+# gate stage over a distribution would need a threshold nobody can
+# justify.  What the gate runs is `libc-test-map-check`, which is a
+# staleness-and-honesty check over the checked-in file and does have a
+# yes/no answer.
+#
+# Same $(ALL_LIBS) dependency and the same reason: it links 146 PEs
+# against lib/libc.a to classify them.  Unlike `libc-test` it never runs
+# any of them, so it needs no WINE.
+#
+libc-test-map: $(ALL_LIBS)
+	@$(srcdir)/tools/libc-test-map.sh
+
+libc-test-map-check: $(ALL_LIBS)
+	@LIBC_TEST_MAP_GITREPO="$(LIBC_TEST_MAP_GITREPO)" $(srcdir)/tools/libc-test-map.sh --check
+
+.PHONY: libc-test-map libc-test-map-check
+
+#
 # check-kernel32: convenience wrapper for a developer who already has a
 # normal tree configured (TARGET/CC come from the config.mak that is
 # already there) and wants to know, in one command, whether the
