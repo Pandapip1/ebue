@@ -94,6 +94,11 @@ env:
 jobs:
   reuse:
     runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: fsfe/reuse-action@v5
@@ -103,6 +108,11 @@ jobs:
   # instead of rebuilding a whole cross-compiler from scratch every time.
   build-toolchain:
     runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 30
     steps:
       - name: Cache tinycc toolchain
         id: cache-tinycc
@@ -159,6 +169,11 @@ jobs:
   build-test-exes:
     needs: build-toolchain
     runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -249,6 +264,11 @@ jobs:
   test:
     needs: build-toolchain
     runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -340,6 +360,11 @@ jobs:
   windows-test:
     needs: build-test-exes
     runs-on: windows-latest
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       # Mirrors the `build-test-exes` legs exactly (by artifact name, not
@@ -412,6 +437,11 @@ jobs:
   # lint failures take several rounds to work through.
   lint:
     runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -475,6 +505,11 @@ jobs:
   # Also expected to be RED for now. Not relaxed.
   asan:
     runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
