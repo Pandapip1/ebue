@@ -151,7 +151,7 @@ implementation):
    ("the libc needs none of them"); functions and aliases are not
    ruled out forever, just not yet decided.
 4. **A `main()` with `-c` and script-file handling** — there is
-   currently no `sh` binary at all, only `test/sh.c`'s test harness
+   currently no `sh` binary at all, only `test/sh-engine.c`'s test harness
    (which re-execs itself for child roles, not a general-purpose
    entry point). This needs (1) and a scope decision on (2) to be
    worth shipping as a real `sh -c "..."`/`sh script` a user would

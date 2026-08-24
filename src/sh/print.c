@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Canonical reprint of the AST sh.h declares. Exists for stage 1's
- * "testable on its own: parse-and-print" requirement -- test/sh.c
+ * "testable on its own: parse-and-print" requirement -- test/sh-engine.c
  * round-trips parse() -> print() -> parse() -> print() and checks the
  * second print is a fixed point, which exercises every AST field
  * without needing a second, hand-written AST-equality walk.

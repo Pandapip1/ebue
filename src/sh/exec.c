@@ -612,7 +612,7 @@ struct stage_result {
  * header comment below) needs something inside the shell language that
  * can actually change the working directory, and nothing on this
  * platform is a standalone "cd" program the way a Unix PATH might have
- * one (this file's sibling comment on test/sh.c's --produce/--cat/etc.
+ * one (this file's sibling comment on test/sh-engine.c's --produce/--cat/etc.
  * roles makes the same point about `echo`/`cat`/`true`). `cd` is a
  * regular (non-special) built-in utility (XCU 1.6/2.14) whose whole
  * documented job (XCU cd(1p)) is exactly the thing 2.12 calls out by
@@ -998,7 +998,7 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * exec_group()'s is_subshell-gated version), same as the fork() this
  * replaces used to give every pipeline stage for free by virtue of
  * being a different process. See test_exec_group_pipeline_stage() in
- * test/sh.c, which checks specifically that a brace group's assignment
+ * test/sh-engine.c, which checks specifically that a brace group's assignment
  * does not leak out when used as a pipeline stage even though a
  * standalone brace group's does.
  */

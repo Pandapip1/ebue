@@ -1,10 +1,22 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Conformance tests for the in-process shell -- see test/sh-design.md
- * for why this exists at all, and src/sh/sh.h for the AST, the two
- * deliberate lexical simplifications the lexer makes, and the -1
- * "not implemented at this stage" convention __sh_exec_*() use.
+ * Conformance tests for the in-process shell *engine* -- see
+ * test/sh-design.md for why this exists at all, and src/sh/sh.h for the
+ * AST, the two deliberate lexical simplifications the lexer makes, and
+ * the -1 "not implemented at this stage" convention __sh_exec_*() use.
+ *
+ * Named sh-engine.c, not sh.c: every test/%.c builds to obj/test/%.exe,
+ * and the real shell binary (sh/main.c -> obj/sh/sh.exe) owns the name
+ * sh.exe.  Two different sh.exe's would be indistinguishable in a build
+ * log, and CI's real-Windows legs download every test executable into
+ * one flat directory -- where one would silently shadow the other and
+ * the leg would still go green.  The name also says what this file
+ * actually covers: the engine linked out of libc.a, driven in-process
+ * through __sh_parse()/__sh_exec_*(), never a second image.  The black-
+ * box tests of the *program* -- argument handling, exit status, the
+ * diagnostics -- live in test/sh-main.c and spawn obj/sh/sh.exe for
+ * real.
  *
  * Stage 1 (lexer/parser, no execution) tests either inspect the parsed
  * AST directly or exercise the "testable on its own: parse-and-print"
