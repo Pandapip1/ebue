@@ -12,23 +12,29 @@
 static int set_times_handle(HANDLE h, const struct timespec ts[2])
 {
 	IO_STATUS_BLOCK io;
-	FILE_BASIC_INFORMATION bi, cur;
+	FILE_BASIC_INFORMATION bi;
 	LARGE_INTEGER now;
 	NTSTATUS st;
 
 	/* utime.html DESCRIPTION says only the access/modification times
 	 * change -- the mode must survive untouched.  FILE_BASIC_INFORMATION
-	 * documents FileAttributes==0 as "leave the attributes alone", but
-	 * Wine's server does not honor that: it was observed clearing
-	 * FILE_ATTRIBUTE_READONLY (silently turning a 0444 file writable)
-	 * on every timestamp-only NtSetInformationFile call.  Query the
-	 * current attributes and pass them back explicitly instead of
-	 * relying on the "0 means unchanged" convention. */
-	st = NtQueryInformationFile(h, &io, &cur, sizeof cur, FileBasicInformation);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-
+	 * documents FileAttributes==0 as "leave the attributes alone"; real NT
+	 * honors that, so rely on it directly rather than round-tripping
+	 * through NtQueryInformationFile first.  A prior version of this
+	 * function queried the current attributes and passed them back
+	 * explicitly to work around a Wine bug (NtSetInformationFile there
+	 * did not honor FileAttributes==0 and silently cleared
+	 * FILE_ATTRIBUTE_READONLY on every timestamp-only call).  That query
+	 * required FILE_READ_ATTRIBUTES on the handle, which utimensat()'s
+	 * open below never requests -- Wine does not enforce the access
+	 * check on FileBasicInformation queries, but real NT does, so the
+	 * query failed with STATUS_ACCESS_DENIED on every ordinary file on
+	 * real Windows. The Wine bug is now fixed at the source (Wine
+	 * honors FileAttributes==0), so the workaround is no longer needed
+	 * here; see wine commit "ntdll: Honor FileAttributes==0 (\"leave
+	 * unchanged\") in NtSetInformationFile." */
 	bi.CreationTime = bi.LastAccessTime = bi.LastWriteTime = bi.ChangeTime = 0;
-	bi.FileAttributes = cur.FileAttributes;
+	bi.FileAttributes = 0;
 	NtQuerySystemTime(&now);
 	if (!ts) { bi.LastAccessTime = bi.LastWriteTime = now; }
 	else {
