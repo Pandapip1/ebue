@@ -18,23 +18,23 @@ static int set_times_handle(HANDLE h, const struct timespec ts[2])
 
 	/* utime.html DESCRIPTION says only the access/modification times
 	 * change -- the mode must survive untouched.  FILE_BASIC_INFORMATION
-	 * documents FileAttributes==0 as "leave the attributes alone"; real NT
-	 * honors that, so rely on it directly rather than round-tripping
-	 * through NtQueryInformationFile first.  A prior version of this
-	 * function queried the current attributes and passed them back
-	 * explicitly to work around a Wine bug (NtSetInformationFile there
-	 * did not honor FileAttributes==0 and silently cleared
-	 * FILE_ATTRIBUTE_READONLY on every timestamp-only call).  That query
-	 * required FILE_READ_ATTRIBUTES on the handle, which utimensat()'s
-	 * open below never requests -- Wine does not enforce the access
-	 * check on FileBasicInformation queries, but real NT does, so the
-	 * query failed with STATUS_ACCESS_DENIED on every ordinary file on
-	 * real Windows. The Wine bug is now fixed at the source (Wine
-	 * honors FileAttributes==0), so the workaround is no longer needed
-	 * here; see wine commit "ntdll: Honor FileAttributes==0 (\"leave
-	 * unchanged\") in NtSetInformationFile." */
+	 * documents FileAttributes==0 as "leave the attributes alone", and
+	 * real NT does honor that -- but stock Wine (the Wine CI actually
+	 * runs) does NOT: its NtSetInformationFile silently clears
+	 * FILE_ATTRIBUTE_READONLY on every timestamp-only call regardless of
+	 * what FileAttributes says.  We carry a local, unpushed Wine patch
+	 * that fixes this, but that patch exists only on this machine -- it
+	 * is not upstream and it is not what CI installs from apt.  "We
+	 * fixed it in our Wine" is therefore never sufficient justification
+	 * for relying on FileAttributes==0 here; test against an unpatched
+	 * Wine, not just the local one, before ever touching this again.  So
+	 * always query the current attributes and pass them back explicitly,
+	 * on every Wine and on real NT alike.  This round-trip needs
+	 * FILE_READ_ATTRIBUTES on the handle, which utimensat()'s primary
+	 * open below requests specifically for this; see the comment there. */
+	st = NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	bi.CreationTime = bi.LastAccessTime = bi.LastWriteTime = bi.ChangeTime = 0;
-	bi.FileAttributes = 0;
 	NtQuerySystemTime(&now);
 	if (!ts) { bi.LastAccessTime = bi.LastWriteTime = now; }
 	else {
@@ -65,7 +65,16 @@ int utimensat(int dirfd, const char *path, const struct timespec ts[2], int flag
 	int r;
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
-	st = NtOpenFile(&h, FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	/* FILE_READ_ATTRIBUTES is requested alongside FILE_WRITE_ATTRIBUTES
+	 * because set_times_handle() below round-trips the current
+	 * attributes through NtQueryInformationFile before writing them
+	 * back (see the comment there for why that round-trip must stay).
+	 * NtQueryInformationFile(FileBasicInformation) requires
+	 * FILE_READ_ATTRIBUTES on real NT -- Wine doesn't enforce that
+	 * check, but real NT does, and omitting it here is exactly what
+	 * turned every ordinary utimensat() into STATUS_ACCESS_DENIED on
+	 * real Windows before. */
+	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	if (st == STATUS_ACCESS_DENIED) {
 		/* utime.html DESCRIPTION: only write permission on the file
 		 * OR ownership is required, never "the file's own mode
@@ -77,7 +86,14 @@ int utimensat(int dirfd, const char *path, const struct timespec ts[2], int flag
 		 * test/posix-unistd.c's test_open_umask_bug()).  Fall back
 		 * to a read-attributes-only handle: Wine's
 		 * NtSetInformationFile does not itself require
-		 * FILE_WRITE_ATTRIBUTES on the handle. */
+		 * FILE_WRITE_ATTRIBUTES on the handle, and this path is only
+		 * ever reached on Wine in the first place -- real NT never
+		 * denies the FILE_WRITE_ATTRIBUTES open above on a read-only
+		 * file, so real NT never falls back to this handle.  The
+		 * fallback handle keeps FILE_READ_ATTRIBUTES, which is all
+		 * set_times_handle()'s query needs; it does not need
+		 * FILE_WRITE_ATTRIBUTES again because that's precisely the
+		 * access Wine already told us the file cannot grant. */
 		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	}
 	__ntpath_free(&np);
