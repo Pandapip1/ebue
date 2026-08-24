@@ -1071,6 +1071,42 @@ The bug counts elsewhere in this file are unaffected: the never-asserted
 sweep's six bugs and groups A-G's finds are disjoint sets of functions,
 in disjoint "Bugs found" sections of the ledger.
 
+## Changes since the clause audit of groups H-J
+
+Dated note, 2026-08-24. Same route as the "Changes since the clause
+audit of groups A-G" note above, and for the same stated reason: the
+headline counts are a mechanical snapshot of `04edec2` and are
+**deliberately not hand-edited**. Item 4 of the successor queue is what
+folds these in; it has not been run, and re-running it means re-running
+the whole pipeline in "How this was produced", including re-fetching
+the 1191 `pubs.opengroup.org` index pages. A hand edit cannot
+substitute for that.
+
+What moved: groups H-J of `test/POSIX-COVERAGE.md` audit three more
+rows of the "Implemented, not clause-audited (357)" table.
+
+**Group H — `ctype.h` (12).** `isalnum isalpha isblank iscntrl isdigit
+isgraph islower isprint ispunct isspace isupper isxdigit`, in the new
+`test/posix-ctype.c`. All twelve conformant; no BUGs. The row's own
+note was accurate: priority 4's `is*` audit was a group consistency
+test whose oracle shared its idiom with the implementation, and it
+never opened the twelve individual pages. Subtract 12 from 357.
+
+Checked against every earlier row, by the same first-column
+tokenisation caution the A-G note records:
+
+- All twelve names appear as first-column identifiers of their own in
+  group H's table, so step 3 of "How this was produced" would see all
+  twelve — no undercount of the `hdestroy`/`wordfree` kind here.
+- No collision with any earlier first-column identifier. Priority 4's
+  `ctype.h` row cites `isascii`/`toascii`/`tolower`/`toupper`/
+  `_tolower`/`_toupper`; group H cites the disjoint twelve. Nothing is
+  claimed twice and no status contradicts another.
+- The `_l` variants of all twelve (`isalnum_l` and friends, `CX`) are
+  declared nowhere in `include/` and defined nowhere in `src/`. They
+  stay in this file's missing-interface accounting; group H does not
+  touch them.
+
 ## Changes since the clause audit of the stdio.h and stdarg.h rows
 
 Dated note, 2026-08-24, added rather than folded into the headline

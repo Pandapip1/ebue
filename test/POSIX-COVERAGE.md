@@ -2225,6 +2225,113 @@ substitution (no shell), and the unquoted-`<newline>` question, which
 is left unasserted because the spec itself is ambiguous rather than
 because this platform cannot reach it.
 
+## ctype.h, the twelve `is*` pages (successor-queue item 2, group H)
+
+`test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not clause-audited"
+table names twelve `<ctype.h>` functions — `isalnum isalpha isblank
+iscntrl isdigit isgraph islower isprint ispunct isspace isupper
+isxdigit` — with the note that priority 4 above "audited the `is*`
+family as a group and cites `isascii`/`toascii`/`tolower`/`toupper`/
+`_tolower`/`_toupper` by name; these twelve are the individual pages it
+does not". That is exactly right, and worth spelling out, because it is
+the shape of gap this ledger keeps rediscovering.
+
+**What the earlier group audit actually covered.** `test/ctype.c` (the
+file priority 4 leans on) is a *consistency* test: it builds a single
+oracle out of C range expressions — `c >= 'A' && c <= 'Z'`,
+`c >= 0x20 && c < 0x7f`, `(unsigned)c-'\t' < 5`-shaped reasoning — and
+checks all sixteen `<ctype.h>` entry points against it in one loop over
+`-1..255`. It is a good test and it passes. But its oracle is written
+in the same idiom as `src/ctype/*.c`'s implementations, so a
+misremembered range would have to be misremembered *identically* in two
+places to be caught, and it never opens the twelve individual spec
+pages: nothing in it cites a clause, and nothing in it asserts the
+DESCRIPTION domain sentence, the "non-zero, not 1" wording of RETURN
+VALUE, or the ERRORS section.
+
+**What this pass adds** (`test/posix-ctype.c`, new file):
+
+- Every oracle is an *enumeration* of the characters XBD 7.3.1
+  `LC_CTYPE` puts in that class in the POSIX locale, written out
+  character by character as a string literal, sharing no arithmetic with
+  `src/ctype/*.c`. The one class that cannot be written as a C string
+  literal — `cntrl`, because it contains NUL — gets an explicit closed
+  numeric range instead.
+- The domain sentence is asserted as a domain: all 257 values of
+  `{EOF} U [0, UCHAR_MAX]` are swept through each function, with `EOF`
+  and both `unsigned char` edges also called out individually.
+- RETURN VALUE's "non-zero" is respected literally: every true-side
+  assertion is `!!f(c) == 1`-shaped, never `f(c) == 1`, so an
+  implementation returning any other true value still passes. The
+  false side is asserted exactly, because 0 is specified exactly.
+- ERRORS ("No errors are defined." on all twelve pages) gets its own
+  assertion: a sentinel `errno`, the whole domain swept through all
+  twelve functions, and the sentinel must survive.
+- An explicitly non-asserting out-of-domain probe, for ASan. See below.
+
+No BUGs. All twelve are conformant over the whole domain.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| isalpha | DESCRIPTION "class alpha in the current locale" vs the XBD 7.3.1 POSIX-locale enumeration; RETURN VALUE non-zero/0; domain `{EOF} U [0,UCHAR_MAX]` | covered | test/posix-ctype.c (`test_isalpha`) |
+| isupper | DESCRIPTION "class upper"; same three clauses | covered | test/posix-ctype.c (`test_isupper`) |
+| islower | DESCRIPTION "class lower"; same three clauses | covered | test/posix-ctype.c (`test_islower`) |
+| isdigit | DESCRIPTION "class digit" — the one class XBD 7.3.1 fixes in *every* locale as exactly `0`-`9`; `'0'-1` and `'9'+1` asserted as the adjacent non-members | covered | test/posix-ctype.c (`test_isdigit`) |
+| isalnum | DESCRIPTION "class alpha **or** digit" — asserted both as an enumeration and as that stated union, over the whole domain | covered | test/posix-ctype.c (`test_isalnum`) |
+| isxdigit | DESCRIPTION "a hexadecimal digit"; `'g'`/`'G'` asserted as the adjacent non-members | covered | test/posix-ctype.c (`test_isxdigit`) |
+| isspace | DESCRIPTION "class space" — XBD 7.3.1's six characters, each asserted by name, plus the two control characters bracketing the `\t`-`\r` run | covered | test/posix-ctype.c (`test_isspace`) |
+| isblank | DESCRIPTION "class blank" — `<space>` and `<tab>` only; the strict-subset relation to `space` asserted via `\n` | covered | test/posix-ctype.c (`test_isblank`) |
+| iscntrl | DESCRIPTION "class cntrl"; NUL asserted separately (no string literal can carry it); XBD 7.3.1's cntrl/print disjointness asserted over the whole domain | covered | test/posix-ctype.c (`test_iscntrl`) |
+| isprint | DESCRIPTION "class print" — `alnum + punct + <space>`, i.e. `0x20`-`0x7e`; `0x7f` and `0x1f` asserted as the adjacent non-members | covered | test/posix-ctype.c (`test_isprint`) |
+| isgraph | DESCRIPTION "class graph" — asserted as an enumeration *and* as "print minus `<space>`" over the whole domain | covered | test/posix-ctype.c (`test_isgraph`) |
+| ispunct | DESCRIPTION "class punct" — enumerated from XBD 7.3.1 rather than derived, so a defect in `isgraph()`/`isalnum()` cannot cancel against a matching one here; the derived relation asserted separately as a cross-check | covered | test/posix-ctype.c (`test_ispunct`) |
+| all twelve | ERRORS: "No errors are defined." | covered | test/posix-ctype.c (`test_no_errors_defined`) |
+| all twelve | DESCRIPTION: "If the argument has any other value, the behavior is undefined" | N/A — undefined by the spec, so nothing may be asserted about the *result*. Repurposed as an ASan assertion instead; see below | test/posix-ctype.c (`test_out_of_domain_probe`) |
+
+### Observed behaviour where POSIX permits latitude (ctype.h)
+
+- **Every byte in `0x80`-`0xff` is in every function's domain and in no
+  class.** These values are "representable as an `unsigned char`", so
+  the domain sentence puts them squarely *inside* the defined domain —
+  they are not the undefined case. XBD 7.3.1 defines the POSIX locale's
+  classes only over the portable character set, so the required answer
+  is 0 for all twelve functions across all 128 of them. `src/ctype/*.c`
+  answers 0, and the sweep asserts it for each. Worth recording because
+  it is the half of the domain most easily mistaken for "undefined".
+- **`src/ctype/*.c` are pure arithmetic on `(unsigned)c`, with no
+  lookup table anywhere.** That is why the out-of-domain probe passes
+  today and why it is worth keeping: the classic implementation of this
+  family is a 257-entry table indexed by `c + 1`, and the classic bug
+  is an out-of-domain argument indexing outside it — a silent
+  buffer overflow no return-value assertion can see, because the
+  return value is undefined for exactly those arguments.
+  `test_out_of_domain_probe()` calls all twelve across `INT_MIN`,
+  `INT_MAX`, `EOF - 1` and `UCHAR_MAX + 1` and **deliberately asserts
+  nothing about the results**; under `make asan` (tools/asan-build.sh
+  runs every test that links natively) it is ASan, not the assertion
+  count, that does the checking. Verified out-of-band that ASan does
+  catch the shape: a stand-in `static const unsigned char tbl[257]`
+  indexed by `c + 1` and handed this same probe's argument list dies
+  with `AddressSanitizer: SEGV` on the first out-of-domain value.
+- `isalnum()`, `ispunct()` and `isxdigit()` are the three that are
+  *implemented* in terms of their siblings (`isalpha||isdigit`,
+  `isgraph&&!isalnum`, `isdigit||...`). POSIX permits this — the
+  APPLICATION USAGE tables even state the equivalences — but it is
+  precisely why their oracles here are independent enumerations rather
+  than the same composition.
+
+### Not reached (ctype.h)
+
+Nothing. All three clause sections of all twelve pages are asserted
+over the entire defined domain; the only unasserted clause is the
+undefined-behaviour sentence, which cannot be asserted by construction
+and is covered as an ASan probe instead.
+
+The `_l` variants (`isalnum_l` and the other eleven, all `CX`) are
+declared by neither `include/ctype.h` nor any `src/` file, so they are
+a `POSIX-GAP-ACCOUNTING.md` matter (missing interfaces), not a row
+here.
+
 ## stdio.h, the "implemented, not clause-audited" row (group K)
 
 The two rows `test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not
