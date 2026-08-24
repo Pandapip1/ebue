@@ -3,7 +3,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Run each test executable under wine; report pass/fail; exit nonzero on
-# any failure.
+# any failure. A test that exits 77 is reported as its own third bucket,
+# "unverified", rather than counted as either PASS or FAIL: it ran and
+# everything it actually checked passed, but it also declined to check
+# something because of an environment gap it detected at run time (e.g.
+# test/posix-socket.c's network-capability probe) -- not a pass, because
+# nothing was verified about the part that mattered, and not a failure,
+# because nothing checked came out wrong either. This does not affect the
+# exit status below: an unverified run does not turn the overall run red.
 #
 # Most tests run concurrently, each in its own private working directory
 # (a fresh mktemp -d, removed afterwards) rather than the shared
@@ -142,7 +149,7 @@ wait "$serial_pid"
 
 # --- consolidated report, in the exact order tests were passed in ---
 
-pass=0 fail=0
+pass=0 fail=0 unverified=0
 for t in "$@"; do
 	name=${t##*/}
 	rc=$(cat "$rundir/$name.rc" 2>/dev/null || echo 1)
@@ -150,10 +157,21 @@ for t in "$@"; do
 		echo "SKIP $name (no wine)"
 	elif [ "$rc" = 0 ]; then
 		pass=$((pass + 1)); echo "PASS $name"
+	elif [ "$rc" = 77 ]; then
+		# 77: this test ran and everything it actually checked passed,
+		# but it also declined to check something (an environment gap it
+		# detected at run time, e.g. test/posix-socket.c's network probe)
+		# -- distinct from both PASS (nothing left unverified) and FAIL
+		# (something checked came out wrong). Reported in its own bucket,
+		# not counted as either, so a green summary here can't be hiding
+		# a feature that was never actually exercised. See the test's own
+		# SKIP line(s) in the log below for what and why.
+		unverified=$((unverified + 1)); echo "UNVERIFIED $name (rc=77)"
+		tail -n 40 "$rundir/$name.log" 2>/dev/null | sed 's/^/    /'
 	else
 		fail=$((fail + 1)); echo "FAIL $name (rc=$rc)"
 		tail -n 40 "$rundir/$name.log" 2>/dev/null | sed 's/^/    /'
 	fi
 done
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed, $unverified unverified"
 test "$fail" -eq 0

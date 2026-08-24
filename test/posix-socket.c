@@ -49,14 +49,22 @@
  * runtime capability probe, socket()+bind()+listen() against a fixed
  * loopback port, gates every assertion downstream of "AFD ioctls
  * actually work."  If the probe fails, this prints one SKIP line
- * naming the mechanism and observed errno and returns 0 (a pass, not a
- * failure) rather than either silently skipping or failing the whole
- * suite -- `make check`'s runner (tools/runtests.sh) only knows PASS/
- * FAIL by exit code, so this is the in-test equivalent of
- * delayall.exe's build-time skip.  On real Windows (untestable here,
- * reasoned about only) the probe is expected to succeed, since the
- * whole point of following ReactOS instead of Wine was to match what
- * real Windows' AFD actually expects.
+ * naming the mechanism and observed errno and returns exit code 77
+ * (a distinct "ran, but verified nothing new" outcome, not a plain
+ * pass and not a FAIL either) rather than either silently skipping or
+ * failing the whole suite.  tools/runtests.sh recognizes 77 and reports
+ * it as its own bucket in the run summary, separate from both PASS and
+ * FAIL -- the same shape asan-build.sh already uses for its "N not
+ * applicable natively" bucket, just decided at run time here instead of
+ * build time (this environment's Wine, unlike a native asan build,
+ * *looks* capable right up until the first real ioctl).  A silent
+ * `return 0` here would report PASS for a feature nothing was actually
+ * checked to work, on every platform, indefinitely -- the failure mode
+ * this file exists to avoid.  On real Windows (untestable here, reasoned
+ * about only) the probe is expected to succeed, since the whole point of
+ * following ReactOS instead of Wine was to match what real Windows' AFD
+ * actually expects; there, this test exits 0 with every assertion having
+ * actually run.
  */
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -68,6 +76,11 @@
 #include <signal.h>
 
 static int fails;
+/* Counts each SKIP line below: an assertion group this run did not
+ * actually exercise (network stack unavailable here), as opposed to
+ * `fails`, which counts assertions that ran and got the wrong answer.
+ * See main()'s tail for why these are reported, and exit, differently. */
+static int unverified;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 /* htonl.html: "convert values between host and network byte order";
@@ -178,6 +191,7 @@ static void test_sockopt_no_network(void)
 	s = socket(AF_INET, SOCK_STREAM, 0);
 	if (s < 0) {
 		printf("SKIP posix-socket sockopt tests (socket() failed, errno=%d)\n", errno);
+		unverified++;
 		return;
 	}
 
@@ -239,6 +253,7 @@ static int network_probe(void)
 	s = socket(AF_INET, SOCK_STREAM, 0);
 	if (s < 0) {
 		printf("SKIP posix-socket network tests (socket() failed, errno=%d)\n", errno);
+		unverified++;
 		return -1;
 	}
 	if (bind(s, (struct sockaddr *)&addr, make_loopback_addr(&addr)) < 0) {
@@ -247,11 +262,13 @@ static int network_probe(void)
 		       "handle opened the portable NtCreateFile+EA way; see this file's "
 		       "banner and test/networking-audit.md sec 1)\n", errno);
 		close(s);
+		unverified++;
 		return -1;
 	}
 	if (listen(s, 1) < 0) {
 		printf("SKIP posix-socket network tests (listen() failed, errno=%d)\n", errno);
 		close(s);
+		unverified++;
 		return -1;
 	}
 	return s;
@@ -414,6 +431,17 @@ int main(void)
 #endif
 
 	if (fails) { printf("posix-socket: failures: %d\n", fails); return 1; }
+	if (unverified) {
+		/* Everything that ran passed, but that is not the same claim as
+		 * "all ok" -- see the file banner and the SKIP line(s) above for
+		 * which assertion groups never ran at all. Exit 77 rather than 0
+		 * so tools/runtests.sh reports this run in its own bucket instead
+		 * of silently counting it as a pass. */
+		printf("posix-socket: %d assertion group(s) unverified in this "
+		       "environment (see SKIP lines above); no failures in what "
+		       "did run\n", unverified);
+		return 77;
+	}
 	printf("posix-socket: all ok\n");
 	return 0;
 }
