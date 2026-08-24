@@ -273,23 +273,52 @@ static void test_locks_not_inherited(void)
  * "The child process values of tms_utime, tms_stime, tms_cutime, and
  *  tms_cstime shall be set to 0."
  * ============================================================ */
+
+/* What the child saw, carried back to the parent over a pipe so that a
+ * failure names its own cause.  The exit status alone cannot: RC_TIMES
+ * and RC_PENDING and a wait_child() failure all print the same line,
+ * and this file only ever runs on the windows-test legs (see the "-win"
+ * banner above), where nobody can attach a debugger and re-run it.  The
+ * numbers below are what makes the next CI log say what happened. */
+struct child_state {
+	int wrote;             /* the child got far enough to send this */
+	int pending_sig;       /* signal found pending, 0 if none */
+	int times_failed;      /* times() returned (clock_t)-1 */
+	long long tms[4];      /* utime, stime, cutime, cstime */
+};
+
 static void test_child_state_reset(void)
 {
 	pid_t pid;
+	int fd[2];
+	struct child_state cs;
+	int rc;
+
+	memset(&cs, 0, sizeof cs);
+	CHECK(pipe(fd) == 0);
 
 	pid = fork();
 	CHECK(pid >= 0);
 	if (pid == 0) {
 		sigset_t pending;
 		struct tms t;
-		int rc = RC_OK;
+		struct child_state r;
+		int rcc = RC_OK;
+
+		memset(&r, 0, sizeof r);
+		r.wrote = 1;
+		close(fd[0]);
 
 		/* pending signals: the empty set */
 		sigemptyset(&pending);
 		if (sigpending(&pending) == 0) {
 			int i;
 			for (i = 1; i < 32; i++)
-				if (sigismember(&pending, i) == 1) { rc = RC_PENDING; break; }
+				if (sigismember(&pending, i) == 1) {
+					rcc = RC_PENDING;
+					r.pending_sig = i;
+					break;
+				}
 		}
 
 		/* tms_cutime/tms_cstime are the two the clause can be held to
@@ -299,13 +328,43 @@ static void test_child_state_reset(void)
 		 * checked only for being non-negative -- "set to 0" is the
 		 * requirement, but any nonzero value could equally be time
 		 * this child itself has since spent. */
-		if (rc == RC_OK && times(&t) != (clock_t)-1) {
-			if (t.tms_cutime != 0 || t.tms_cstime != 0) rc = RC_TIMES;
-			else if (t.tms_utime < 0 || t.tms_stime < 0) rc = RC_TIMES;
+		memset(&t, 0, sizeof t);
+		if (times(&t) == (clock_t)-1) {
+			r.times_failed = 1;
+		} else {
+			r.tms[0] = (long long)t.tms_utime;
+			r.tms[1] = (long long)t.tms_stime;
+			r.tms[2] = (long long)t.tms_cutime;
+			r.tms[3] = (long long)t.tms_cstime;
+			if (rcc == RC_OK) {
+				if (t.tms_cutime != 0 || t.tms_cstime != 0) rcc = RC_TIMES;
+				else
+				if (t.tms_utime < 0 || t.tms_stime < 0) rcc = RC_TIMES;
+			}
 		}
-		_exit(rc);
+
+		(void)write(fd[1], &r, sizeof r);
+		close(fd[1]);
+		_exit(rcc);
 	}
-	CHECK(wait_child(pid) == RC_OK);
+	close(fd[1]);
+	(void)read(fd[0], &cs, sizeof cs);
+	close(fd[0]);
+
+	rc = wait_child(pid);
+	if (rc != RC_OK) {
+		printf("    child_state_reset: rc=%d (RC_PENDING=%d RC_TIMES=%d, -1=wait_child failed)\n",
+		       rc, RC_PENDING, RC_TIMES);
+		if (!cs.wrote)
+			printf("    child sent no report (died before times())\n");
+		else if (cs.times_failed)
+			printf("    times() returned (clock_t)-1\n");
+		else
+			printf("    tms_utime=%lld tms_stime=%lld tms_cutime=%lld tms_cstime=%lld\n",
+			       cs.tms[0], cs.tms[1], cs.tms[2], cs.tms[3]);
+		printf("    pending signal in child: %d (0 = none)\n", cs.pending_sig);
+	}
+	CHECK(rc == RC_OK);
 }
 
 /* ============================================================
