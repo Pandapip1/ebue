@@ -15,14 +15,16 @@
 
 #include <spawn.h>
 
-/* __SPAWN_CLOSE and __SPAWN_OPEN join this when addclose()/addopen()
- * do. */
-enum { __SPAWN_DUP2 = 1 };
+enum { __SPAWN_CLOSE = 1, __SPAWN_DUP2, __SPAWN_OPEN };
 
 struct __spawn_action {
 	int kind;
-	int fd;         /* __SPAWN_DUP2: the *source*, POSIX's `fildes` */
+	int fd;         /* __SPAWN_CLOSE/__SPAWN_OPEN: the descriptor acted on.
+	                   __SPAWN_DUP2: the *source*, POSIX's `fildes` */
 	int newfd;      /* __SPAWN_DUP2: fd is duplicated onto newfd */
+	int oflag;      /* __SPAWN_OPEN */
+	mode_t mode;    /* __SPAWN_OPEN */
+	char *path;     /* __SPAWN_OPEN, malloc'd copy owned by the object */
 };
 
 #endif

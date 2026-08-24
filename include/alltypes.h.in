@@ -41,6 +41,16 @@ TYPEDEF _Int64 clock_t;
 STRUCT timeval { time_t tv_sec; suseconds_t tv_usec; };
 STRUCT timespec { time_t tv_sec; long tv_nsec; };
 
+/* POSIX puts struct sched_param in <sched.h>; ntlibc's <sched.h>
+ * deliberately declares nothing from the _POSIX_PRIORITY_SCHEDULING
+ * option group, so the only header that defines it today is <spawn.h>,
+ * whose posix_spawnattr_getschedparam()/_setschedparam() take one.  It
+ * lives here rather than in spawn.h so that <sched.h> can start
+ * defining it -- through the same __NEED_struct_sched_param guard --
+ * the day that option group is claimed, without a redefinition.
+ * sched_priority is the only member POSIX requires. */
+STRUCT sched_param { int sched_priority; };
+
 TYPEDEF int pid_t;
 TYPEDEF unsigned id_t;
 TYPEDEF unsigned uid_t;

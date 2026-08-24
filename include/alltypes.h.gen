@@ -181,6 +181,20 @@ struct timespec { time_t tv_sec; long tv_nsec; };
 #endif
 
 
+/* POSIX puts struct sched_param in <sched.h>; ntlibc's <sched.h>
+ * deliberately declares nothing from the _POSIX_PRIORITY_SCHEDULING
+ * option group, so the only header that defines it today is <spawn.h>,
+ * whose posix_spawnattr_getschedparam()/_setschedparam() take one.  It
+ * lives here rather than in spawn.h so that <sched.h> can start
+ * defining it -- through the same __NEED_struct_sched_param guard --
+ * the day that option group is claimed, without a redefinition.
+ * sched_priority is the only member POSIX requires. */
+#if defined(__NEED_struct_sched_param) && !defined(__DEFINED_struct_sched_param)
+struct sched_param { int sched_priority; };
+#define __DEFINED_struct_sched_param
+#endif
+
+
 #if defined(__NEED_pid_t) && !defined(__DEFINED_pid_t)
 typedef int pid_t;
 #define __DEFINED_pid_t

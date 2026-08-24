@@ -1,13 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * posix_spawn() -- see
+ * posix_spawn() and posix_spawnp() -- see
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawn.html
- *
- * This is the first instalment: posix_spawn() itself, over
- * posix_spawn_file_actions_adddup2() and the spawn-flags/spawn-sigmask
- * attributes.  posix_spawnp()'s PATH search and the open/close file
- * actions follow.
  *
  * Almost all of this is already done by __spawn() (src/process/spawn.c),
  * which is what execve(), fork() and system() are built on.  Two things
@@ -112,14 +107,17 @@
  *     records this as N/A with that mechanism), so the postcondition
  *     is unconditionally true and there is nothing to reset.
  *
- *   POSIX_SPAWN_SETPGROUP -- refused with EINVAL.  There is no
- *     spawn-pgroup accessor yet, and no NT object that plays a POSIX
- *     process group's role either (a job object groups for resource
- *     limits, not for job-control signal delivery); src/unistd/ids.c
- *     answers getpgrp()/getpgid() with a fixed 1 for every process.
- *     ERRORS routes this flag to setpgid(), whose "[EINVAL] The value
- *     of the pgid argument ... is not a value supported by the
- *     implementation" is exactly the case.
+ *   POSIX_SPAWN_SETPGROUP -- honoured only for the one process group
+ *     this platform has.  src/unistd/ids.c answers getpgrp() and
+ *     getpgid() with a fixed 1 for every process; there is no NT object
+ *     that plays a POSIX process group's role (a job object groups for
+ *     resource limits, not for job-control signal delivery).  So a
+ *     spawn-pgroup of that same group is already true of the child, and
+ *     anything else -- including 0, "put the child in a new group of
+ *     its own" -- is refused with EINVAL, which is what ERRORS routes
+ *     here ("an error value shall be returned as described by
+ *     setpgid()", whose "[EINVAL] The value of the pgid argument ... is
+ *     not a value supported by the implementation" is exactly this).
  *
  *   POSIX_SPAWN_SETSCHEDPARAM / POSIX_SPAWN_SETSCHEDULER -- refused,
  *     always, with EINVAL.  ERRORS sends these to sched_setparam() and
@@ -145,7 +143,7 @@
  * errno
  * -----
  *
- * "Upon successful completion, posix_spawn() ... shall
+ * "Upon successful completion, posix_spawn() and posix_spawnp() shall
  * return the process ID of the child process to the parent process, in
  * the variable pointed to by a non-NULL pid argument, and shall return
  * zero as the function return value.  Otherwise, no child process shall
@@ -161,6 +159,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <signal.h>
 #include "libc.h"
 #include "spawn_internal.h"
@@ -222,6 +221,17 @@ static void restore_slots(struct saved_slot *sv, int nsv)
 static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int *nsv, int cap)
 {
 	switch (a->kind) {
+	case __SPAWN_CLOSE:
+		/* "as if close(fildes) had been called".  A close of a
+		 * descriptor that is already closed is left as a success
+		 * rather than reported as EBADF: the action's whole purpose
+		 * is the child's *post*condition ("fildes is not open"), that
+		 * postcondition already holds, and a caller that lists every
+		 * descriptor it wants shut has no way to know which of them
+		 * happen to be open.  glibc's posix_spawn does the same. */
+		if (take_slot(sv, nsv, cap, a->fd) < 0) return ENOMEM;
+		return 0;
+
 	case __SPAWN_DUP2: {
 		/* The duplicate is made before the target slot is vacated,
 		 * not after, because adddup2(fd, fd) names one slot as both
@@ -250,6 +260,23 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		__fd_install_at(a->newfd, h, flags, type);
 		return 0;
 	}
+
+	case __SPAWN_OPEN: {
+		/* "as if open() had been called ... and the returned file
+		 * descriptor, if not fildes, had been changed to fildes"
+		 * (posix_spawn_file_actions_addopen.html DESCRIPTION).  open()
+		 * hands back the lowest free slot, which may or may not be
+		 * fildes; the slot has just been vacated, so it often is. */
+		int t;
+		if (take_slot(sv, nsv, cap, a->fd) < 0) return ENOMEM;
+		t = open(a->path, a->oflag, a->mode);
+		if (t < 0) return errno;
+		if (t != a->fd) {
+			if (dup2(t, a->fd) < 0) { int e = errno; close(t); return e; }
+			close(t);
+		}
+		return 0;
+	}
 	}
 	return EINVAL;
 }
@@ -266,16 +293,16 @@ static int check_attr(const posix_spawnattr_t *at)
 	                 | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSCHEDPARAM
 	                 | POSIX_SPAWN_SETSCHEDULER | POSIX_SPAWN_USEVFORK))
 		return EINVAL;
-	if (f & (POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER | POSIX_SPAWN_SETPGROUP))
-		return EINVAL;
+	if (f & (POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER)) return EINVAL;
 	if ((f & POSIX_SPAWN_SETSIGMASK) && !sigisemptyset(&at->__sigmask)) return EINVAL;
+	if ((f & POSIX_SPAWN_SETPGROUP) && at->__pgroup != getpgrp()) return EINVAL;
 	return 0;
 }
 
-int posix_spawn(pid_t *__restrict pid, const char *__restrict path,
-                const posix_spawn_file_actions_t *fa,
-                const posix_spawnattr_t *__restrict at,
-                char *const *__restrict argv, char *const *__restrict envp)
+static int spawn_common(pid_t *pid, const char *path,
+                        const posix_spawn_file_actions_t *fa,
+                        const posix_spawnattr_t *at,
+                        char *const argv[], char *const envp[], int use_path)
 {
 	struct saved_slot *sv = 0;
 	int nsv = 0, cap = 0;
@@ -285,15 +312,16 @@ int posix_spawn(pid_t *__restrict pid, const char *__restrict path,
 	rc = check_attr(at);
 	if (rc) goto out;
 
-	/* posix_spawn() never does a path search -- that is posix_spawnp()'s
-	 * job, and it does not exist yet.  __find_program(name, 0) is
-	 * exactly the no-search case: a malloc'd copy of the name, taken
-	 * as-is.  It can only fail out of memory here (the ENOENT it
-	 * reports for an exhausted PATH needs a search to have happened),
-	 * and a name that does not resolve becomes __spawn()'s ENOENT
-	 * below. */
-	full = __find_program(path, 0);
-	if (!full) { rc = ENOMEM; goto out; }
+	/* posix_spawnp() "shall do a path search" for a file argument with
+	 * no slash; posix_spawn() never does one.  __find_program() takes
+	 * that as its second argument and applies the same has-a-directory
+	 * test execvp() uses, plus the ".exe" suffix an NT image wants. */
+	errno = 0;
+	full = __find_program(path, use_path);
+	/* __find_program() sets ENOENT when a PATH search came up empty and
+	 * leaves errno alone when its malloc() failed, so a cleared errno is
+	 * how the second case is told from the first. */
+	if (!full) { rc = errno ? errno : ENOMEM; goto out; }
 
 	if (fa && fa->__len) {
 		cap = fa->__len;
@@ -317,3 +345,18 @@ out:
 	return rc;
 }
 
+int posix_spawn(pid_t *__restrict pid, const char *__restrict path,
+                const posix_spawn_file_actions_t *fa,
+                const posix_spawnattr_t *__restrict at,
+                char *const *__restrict argv, char *const *__restrict envp)
+{
+	return spawn_common(pid, path, fa, at, argv, envp, 0);
+}
+
+int posix_spawnp(pid_t *__restrict pid, const char *__restrict file,
+                 const posix_spawn_file_actions_t *fa,
+                 const posix_spawnattr_t *__restrict at,
+                 char *const *__restrict argv, char *const *__restrict envp)
+{
+	return spawn_common(pid, file, fa, at, argv, envp, 1);
+}

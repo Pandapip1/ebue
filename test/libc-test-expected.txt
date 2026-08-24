@@ -59,7 +59,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=61 xfail=23 unclassified=4 unbuildable=58
+# COUNTS pass=61 xfail=24 unclassified=4 unbuildable=57
 #
 argv                              pass
 basename                          pass
@@ -162,7 +162,7 @@ sigprocmask-internal              xfail:documented  design difference, not a def
 sigreturn                         pass
 snprintf                          pass
 socket                            unbuildable  socket.c:38: error: 'SOCK_CLOEXEC' undeclared
-spawn                             unbuildable  spawn.c:9: error: include file 'spawn.h' not found
+spawn                             xfail:documented  <spawn.h> now exists and everything in this test but one line passes; it spawns the program "echo", and NT has no echo executable -- echo is a cmd.exe builtin, not an image on PATH, so posix_spawnp() answers ENOENT (2) and the waitpid()/read() lines cascade from it. src/process/find_program.c searches PATH for a real image, which is what POSIX specifies. ntlibc's own posix_spawnp() coverage is test/posix-spawn.c test_spawnp_path_search, which resolves a name that does exist
 sscanf                            xfail:defect  not covered; "%8c%8c" on 13 bytes returns 2 fields, POSIX says 1
 sscanf-eof                        pass
 sscanf_long                       unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_setrlim stubbed; the test needs an enforced RLIMIT_STACK), so it never reaches adjudication here.

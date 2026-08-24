@@ -3942,15 +3942,14 @@ a genuine, detectable break by another test in the same suite, so
   audits found and this one confirms: the defects are in the `ERRORS`
   lists, not in the common case.
 
-## spawn.h — the `_POSIX_SPAWN` option (group S), instalment 1 of 2
+## spawn.h — the `_POSIX_SPAWN` option (group S)
 
 New header (`include/spawn.h`), new sources (`src/process/posix_spawn.c`,
 `spawn_file_actions.c`, `spawnattr.c`, `spawn_internal.h`) and a new
-audit file (`test/posix-spawn.c`). This instalment lands the eight
-interfaces a real consumer needs first — GNU make's `USE_POSIX_SPAWN`
-path (`src/job.c` `child_execute_job`) calls exactly these and nothing
-else. `posix_spawnp`, `posix_spawn_file_actions_addopen`/`_addclose`
-and the remaining ten attribute accessors follow in instalment 2.
+audit file (`test/posix-spawn.c`). All 21 interfaces
+`basedefs/spawn.h.html` lists are declared and defined; the header
+landed in two instalments, the first being the eight GNU make's
+`USE_POSIX_SPAWN` path calls (`src/job.c` `child_execute_job`).
 
 The mechanism is `__spawn()` (`src/process/spawn.c`), which `execve()`,
 `fork()` and `system()` already share. There is no child to replay file
@@ -3965,21 +3964,28 @@ this closes.
 |---|---|---|---|
 | posix_spawn | DESCRIPTION steps 1–4, RETURN VALUE ("shall return the process ID ... in the variable pointed to by a non-NULL *pid* ... and shall return zero as the function return value"; on failure "an error number shall be returned as the function value" — **not** errno), ERRORS `[EINVAL]` on *attrp*, and the `close()`/`dup2()`/`open()`, `fork()`/exec pass-through clauses | covered | test/posix-spawn.c `test_adddup2_stdout`, `test_adddup2_stderr`, `test_order_two_targets`, `test_order_chained`, `test_adddup2_self`, `test_adddup2_badfd`, `test_parent_table_restored`, `test_enoent_and_errno`, `test_null_actions_and_argv` |
 | posix_spawn_file_actions_init / _destroy | RETURN VALUE, and reuse after destroy | covered | `test_file_actions_object` |
+| posix_spawnp | DESCRIPTION — "shall be equivalent to `posix_spawn()` except that ... the *file* parameter shall be used to construct a pathname ... using the `PATH` environment variable"; a *file* with a directory part is not searched for | covered — over `__find_program()` (`src/process/find_program.c`), the same resolver `execvp()` uses, including its `;` PATH separator and `.exe` suffix. The discriminating assertion is that the *same* bare name resolves through `posix_spawnp()` and fails `ENOENT` through `posix_spawn()` | `test_spawnp_path_search` |
 | posix_spawn_file_actions_adddup2 | DESCRIPTION ("as if `dup2(fildes, newfildes)` had been called"), ERRORS `[EBADF]` ("negative or greater than or equal to {OPEN_MAX}"), and posix_spawn.html's "performed in the order in which they were added" | covered | `test_file_actions_object`, `test_order_two_targets`, `test_order_chained`, `test_adddup2_self` |
+| posix_spawn_file_actions_addclose | DESCRIPTION ("as if `close(fildes)` had been called"), ERRORS `[EBADF]` | covered. Closing a descriptor that is already closed is a success here, not `EBADF`: the action's postcondition already holds, and glibc agrees. The fd 0 case exercises `src/process/spawn.c`'s `closed_placeholder()` end to end — a closed standard descriptor cannot be handed over as NULL or -1 (both measured on real Windows to arrive open), so a rejected-but-real handle is passed and the child's `install_std()` refuses it | `test_addclose` |
+| posix_spawn_file_actions_addopen | DESCRIPTION ("as if `open()` had been called ... and the returned file descriptor, if not *fildes*, had been changed to *fildes*"; "The string described by *path* shall be copied"), ERRORS `[EBADF]`, and posix_spawn.html's `open()` pass-through | covered, both directions, including the path copy (the caller's buffer is clobbered after the add and the right file still opens) and a failing open failing the whole call with `ENOENT` and no child created | `test_addopen`, `test_addopen_copies_path` |
 | posix_spawnattr_init / _destroy | DESCRIPTION — "the resulting spawn attributes object ... contains ... the default values", i.e. no flag set | covered | `test_attr_flags_acted_on` (a default-initialised object spawns) |
-| posix_spawnattr_setflags | DESCRIPTION, and each flag's own clause in posix_spawn.html | covered | `test_attr_flags_acted_on` |
-| posix_spawnattr_setsigmask | DESCRIPTION ("set the spawn-sigmask attribute") | covered as storage; `posix_spawn()` acts on it only for an empty mask (see below) | `test_attr_flags_acted_on` |
+| posix_spawnattr_getflags / _setflags | DESCRIPTION, and each flag's own clause in posix_spawn.html | covered | `test_attr_roundtrip`, `test_attr_flags_acted_on` |
+| posix_spawnattr_getsigmask / _setsigmask | DESCRIPTION ("get/set the spawn-sigmask attribute") | covered as storage; `posix_spawn()` acts on it only for an empty mask (see below) | `test_attr_roundtrip`, `test_attr_flags_acted_on` |
+| posix_spawnattr_getsigdefault / _setsigdefault | DESCRIPTION ("get/set the spawn-sigdefault attribute") | covered as storage | `test_attr_roundtrip` |
+| posix_spawnattr_getpgroup / _setpgroup | DESCRIPTION ("get/set the spawn-pgroup attribute") | covered as storage; `posix_spawn()` accepts only the one process group this platform has (see below) | `test_attr_roundtrip`, `test_attr_flags_acted_on` |
+| posix_spawnattr_getschedparam / _setschedparam / getschedpolicy / _setschedpolicy | DESCRIPTION ("get/set the spawn-schedparam / spawn-schedpolicy attribute") | covered as storage, deliberately. These four are pure attribute storage and that is a promise this platform *can* keep, so it keeps it; POSIX gives the setters no error to refuse a value with, and refusing would break a caller that only reads the value back. `posix_spawn()` acting on the corresponding flags is the part that cannot be done, and it fails loudly rather than dropping them (see below). `struct sched_param` comes from `bits/alltypes.h` under `__NEED_struct_sched_param` rather than from `<sched.h>`, which still claims no `_POSIX_PRIORITY_SCHEDULING` interface | `test_attr_roundtrip` |
 | `POSIX_SPAWN_SETSIGDEF` | "the signals ... shall be set to their default actions in the child" | covered — satisfied by construction. A fresh NT process runs its own crt1 before `main()`, and `src/signal/signal.c`'s `handlers[]` is a static, so every signal in every child is already `SIG_DFL` | `test_attr_flags_acted_on` |
 | `POSIX_SPAWN_SETSIGMASK`, empty mask | "the child process shall have the signal mask specified" | covered — satisfied by construction (`blocked` in signal.c is a static). This is the case GNU make uses: `sigemptyset()` then `posix_spawnattr_setsigmask()` | `test_attr_flags_acted_on` |
 | `POSIX_SPAWN_SETSIGMASK`, non-empty mask | as above | **UNIMPL**, and `posix_spawn()` fails with `[EINVAL]` rather than accepting the flag and dropping it. The mechanism to carry state to a not-yet-running child *does* exist — `RTL_USER_PROCESS_PARAMETERS`' `RuntimeData`, which already carries the descriptor table and is exercised by `test/spawn-runtimedata-stress.c` — so `test/posix-dl.c`'s "no channel to hand a chosen initial mask ... to a child" is **expired**. What is missing is a format and a reader: the block's layout is msvcrt's inherited-descriptor table on purpose, so a mask would be an ntlibc-only trailer, reaching an ntlibc-built child and silently nothing else. Fenced with that mechanism named | `test/posix-spawn.c` fence `test_setsigmask_nonempty_is_delivered` |
 | `POSIX_SPAWN_RESETIDS` | "reset the effective user ID ... to the real user ID" | **N/A** — an NT access token has no real/effective/saved-set-id triple, so the postcondition is unconditionally true. Already fenced on this mechanism in `test/posix-dl.c`; accepted by `posix_spawn()` because there is nothing to do, not because it is ignored | `test_attr_flags_acted_on` (accepted), fence `test_resetids` |
-| `POSIX_SPAWN_SETPGROUP` | "set the process group ID of the new process ... as if by `setpgid()`" | **N/A** on the mechanism (no NT process-group object; a job object groups for resource limits, not job-control signal delivery, and `src/unistd/ids.c` answers `getpgrp()`/`getpgid()` with a fixed 1). Refused with `[EINVAL]`, which is what ERRORS routes here via `setpgid()`'s "not a value supported by the implementation" | `test_attr_flags_acted_on` |
+| `POSIX_SPAWN_SETPGROUP` | "set the process group ID of the new process ... as if by `setpgid()`" | **N/A** on the mechanism (no NT process-group object; a job object groups for resource limits, not job-control signal delivery, and `src/unistd/ids.c` answers `getpgrp()`/`getpgid()` with a fixed 1 for every process). A spawn-pgroup naming that one group is accepted, because it is already true of the child; anything else — 0 included, which asks for a *new* group — is refused with `[EINVAL]`, which is what ERRORS routes here via `setpgid()`'s "not a value supported by the implementation" | `test_attr_flags_acted_on`, fence `test_setpgroup_other_group` |
 | `POSIX_SPAWN_SETSCHEDPARAM` / `POSIX_SPAWN_SETSCHEDULER` | "the child ... shall be as specified in the spawn-schedparam / spawn-schedpolicy attribute" | **UNIMPL**, refused with `[EINVAL]` — ERRORS routes these to `sched_setparam()`/`sched_setscheduler()`, whose "[EINVAL] The value of the policy parameter is invalid" is accurate where no POSIX policy exists (Issue 6 removed `[ENOSYS]` from `sched_setscheduler()` precisely because stubs need not be provided). The unused hook is real — `__spawn()` already creates the process suspended — but the POSIX *shape* does not survive: `<sched.h>` deliberately does not claim `_POSIX_PRIORITY_SCHEDULING` | `test_attr_flags_acted_on` |
 | `POSIX_SPAWN_USEVFORK` | not POSIX; a GNU extension GNU make sets whenever the macro exists | covered — satisfied by construction: `__spawn()` never copies the parent's address space | `test_attr_flags_acted_on` |
 
 ### Not reached (group S)
 
 `[ENOMEM]` on `posix_spawn_file_actions_adddup2()` and on
+`posix_spawn_file_actions_addopen()`, and on
 `posix_spawn()`'s own save array (allocator exhaustion, unforceable
 here as elsewhere in this ledger). `[EINVAL]` "the value specified by
 *file_actions* ... is invalid" is a *may fail* this implementation does

@@ -1,8 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * posix_spawn_file_actions_t: the recorded dup2 list (open and close
- * join it with posix_spawn_file_actions_addopen()/_addclose()).
+ * posix_spawn_file_actions_t: the recorded open/close/dup2 list.
  *
  * This file is only the *recording* half -- a growable array of actions
  * in the order they were added, which is the order posix_spawn() is
@@ -16,10 +15,10 @@
  * Every function here returns an error number and does not set errno,
  * per each function's own RETURN VALUE section ("Upon successful
  * completion, ... shall return zero; otherwise, an error number shall
- * be returned to indicate the error").  malloc() and free() are the
- * only calls made, and only malloc() can fail, so preserving the
- * caller's errno is a matter of not clobbering it: fa_push() saves and
- * restores it around the allocation.
+ * be returned to indicate the error").  malloc()/free()/strlen() are
+ * the only calls made, and only malloc() can fail, so preserving the
+ * caller's errno is a matter of not clobbering it: __spawn_fa_grow()
+ * saves and restores it around the allocation.
  */
 #include <spawn.h>
 #include <stdlib.h>
@@ -70,11 +69,23 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa)
 
 int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa)
 {
-	int e = errno;
+	int i, e = errno;
+	for (i = 0; i < fa->__len; i++) free(fa->__actions[i].path);
 	free(fa->__actions);
 	fa->__actions = 0;
 	fa->__len = fa->__cap = 0;
 	errno = e;
+	return 0;
+}
+
+int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *fa, int fd)
+{
+	struct __spawn_action *a;
+	if (!fd_ok(fd)) return EBADF;
+	a = fa_push(fa);
+	if (!a) return ENOMEM;
+	a->kind = __SPAWN_CLOSE;
+	a->fd = fd;
 	return 0;
 }
 
@@ -87,5 +98,32 @@ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int fd, int
 	a->kind = __SPAWN_DUP2;
 	a->fd = fd;
 	a->newfd = newfd;
+	return 0;
+}
+
+int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict fa,
+                                     int fd, const char *__restrict path, int oflag, mode_t mode)
+{
+	struct __spawn_action *a;
+	char *copy;
+	size_t n;
+	int e = errno;
+	if (!fd_ok(fd)) return EBADF;
+	/* posix_spawn_file_actions_addopen.html DESCRIPTION: "The string
+	 * described by path shall be copied by the
+	 * posix_spawn_file_actions_addopen() function." -- so the caller
+	 * may free or reuse its buffer the moment this returns. */
+	n = strlen(path) + 1;
+	copy = malloc(n);
+	if (!copy) { errno = e; return ENOMEM; }
+	memcpy(copy, path, n);
+	a = fa_push(fa);
+	if (!a) { free(copy); errno = e; return ENOMEM; }
+	a->kind = __SPAWN_OPEN;
+	a->fd = fd;
+	a->path = copy;
+	a->oflag = oflag;
+	a->mode = mode;
+	errno = e;
 	return 0;
 }
