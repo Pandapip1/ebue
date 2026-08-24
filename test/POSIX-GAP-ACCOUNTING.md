@@ -1070,3 +1070,66 @@ conservative for a row that describes a group in prose:
 The bug counts elsewhere in this file are unaffected: the never-asserted
 sweep's six bugs and groups A-G's finds are disjoint sets of functions,
 in disjoint "Bugs found" sections of the ledger.
+
+## Changes since the clause audit of the stdio.h and stdarg.h rows
+
+Dated note, 2026-08-24, added rather than folded into the headline
+table for the same reason the note above states and the "Headline
+counts" section states before it: those numbers are a mechanical
+snapshot of `04edec2` and are deliberately not hand-edited. Item 4 of
+the successor queue is what folds this in, and it still has not been
+run.
+
+What moved: groups **K** and **L** of `test/POSIX-COVERAGE.md`
+clause-audit the two rows this file's "Implemented, not clause-audited
+(357)" table names as `stdio.h` (16) and `stdarg.h` (12) — **28
+interfaces**, all 28 of which that table currently classifies as
+implemented-but-unaudited.
+
+**But the honest movement is 22, not 28, and the reason is worth
+recording** — it is the same tokeniser hazard the note above warns
+about, running in the opposite direction. Six of the 28 already had a
+clause-cited first-column row in `test/POSIX-COVERAGE.md`'s priority-5
+"stdio.h streams" section at `04edec2`: `tempnam`, `getc_unlocked`,
+`vprintf`, `vscanf`, `va_arg` and `va_copy`. They were audited in the
+very session that produced the snapshot — this file's "Implemented, but
+no assertion anywhere" section says so in as many words ("`stdio.h`
+(0): both (`getc_unlocked tempnam`) closed"; "`stdarg.h` (0): all four
+(`va_arg va_copy vprintf vscanf`) closed") — but the 16/12 rows of the
+frozen table were never updated to match, so those six are currently
+counted in **both** places. Reading the frozen tables, subtract 28 from
+357 and add **22** to *implemented + clause-audited*; the other six
+were already there.
+
+Two further cautions, both checked rather than assumed:
+
+- Step 3 of "How this was produced", run against groups K and L, sees
+  **27** first-column names, not 28. The one it does not see is
+  `tempnam`, which groups K/L deliberately do not re-row (its
+  priority-5 row already covers it and re-rowing it would be the
+  double-count above, made worse). The remaining 27 each have a
+  first-column row of their own, so no name in this batch depends on
+  being mentioned only in prose or in a sibling's clause column — the
+  failure mode that cost `hdestroy` and `wordfree` a count last time.
+- Every first-column identifier in groups K and L was checked against
+  every first-column identifier earlier in the ledger. The intersection
+  is exactly the five re-rowed names named above (`getc_unlocked`,
+  `va_arg`, `va_copy`, `vprintf`, `vscanf`), each of which is marked in
+  its group K/L row as "pre-existing row under priority 5" so that a
+  reader and a re-run of the pipeline reach the same total. Nothing
+  else collides, and no status contradicts another: the group K/L rows
+  extend the priority-5 ones (boundary and ERRORS clauses) rather than
+  restating or overturning them.
+
+Bug counts: groups K and L add **two BUGs** (`snprintf`'s missing
+`[EOVERFLOW]` for `n > INT_MAX`, and the unrecognised `[CX]`
+`<apostrophe>` flag in the `fprintf` family) and **one UNIMPL** (the
+`[CX]` `'m'` assignment-allocation character in the `fscanf` family),
+in their own "Bugs found (groups K/L)" and "UNIMPL found (groups K/L)"
+sections. Disjoint from the never-asserted sweep's six and from groups
+A-G's finds. Three further defects are recorded there under "Observed
+behaviour" rather than fenced, because no assertion this suite can
+write reaches them: `fscanf`'s `[ENOMEM]` (which `src/stdio/scanf.c`'s
+own banner admits has "no channel"), `gets()`'s read-error-after-partial
+-line return, and the standing caveat that `flockfile`'s no-ops are
+N/A only for as long as `lib/libpthread.a` stays empty.

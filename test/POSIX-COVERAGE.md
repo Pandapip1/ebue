@@ -112,6 +112,13 @@ the priority order never named at all — `termios.h`, `search.h`,
 brief's own numbering. `arpa/inet.h`, `ftw.h` and `sys/uio.h` are the
 part of that queue item still open.
 
+Beyond those, the sections headed **"group K"** and **"group L"** at the
+end of this file audit the two rows `test/POSIX-GAP-ACCOUNTING.md`'s
+"Implemented, not clause-audited" table names as `stdio.h` (16) and
+`stdarg.h` (12) — 28 interfaces the priority order reached only in
+passing. See that file's second "Changes since" note for how the count
+moves (22, not 28: six of them already had a row here).
+
 The residual gaps are the per-section "Not reached" lists, which record
 individual *clauses* (not whole functions) that cannot be exercised on
 this platform — malloc-exhaustion ENOMEM paths, a second security
@@ -2217,3 +2224,210 @@ allocation failure), `GLOB_NOSORT` (unspecified order), command
 substitution (no shell), and the unquoted-`<newline>` question, which
 is left unasserted because the spec itself is ambiguous rather than
 because this platform cannot reach it.
+
+## stdio.h, the "implemented, not clause-audited" row (group K)
+
+The two rows `test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not
+clause-audited (357)" table names as `stdio.h` (16) and `stdarg.h` (12).
+Distinct from the priority-5 "stdio.h streams" section above, which
+audited the stream machinery (`fopen`/`fread`/`fseek`/`setvbuf`/...) and
+reached only four of these 28 names in passing: `tempnam`,
+`getc_unlocked`, `vprintf`/`vscanf` and the `va_arg`/`va_copy` pair each
+already have a first-column row up there and are **not** re-rowed here.
+
+**What the earlier session's eight `<stdarg.h>` "first assertions"
+actually covered, checked before assuming anything.** The ledger's
+`stdarg.h` row says "eight of the twelve gained their first assertion in
+this session's `test/posix-stdio.c` additions". The eight are
+`vfprintf`, `vsnprintf`, `vsprintf`, `vsscanf`, `vfscanf`, `vdprintf`
+(the six v-forms `test_v_forms()` reaches through its `via_*` wrappers)
+and `va_start`/`va_end`, which those wrappers use. Read against the
+pages, that is one happy-path call each and nothing more:
+`via_vsnprintf` is the only one with a second case (the truncation
+return, `n == 3` on a 4-byte result), `via_vsscanf` scans one integer,
+`via_vdprintf` writes five bytes to an already-open fd, and
+`va_start`/`va_end` are never the subject of an assertion at all —
+they are used, incidentally, six times. No ERRORS clause, no boundary,
+no zero/one-byte case, no error-indicator check anywhere in the eight.
+First assertion, exactly as advertised; not a clause audit. Everything
+in the `<stdarg.h>` block below is therefore new coverage, not a
+re-statement.
+
+**Oracle.** The formatted-output and formatted-input families are pure C
+over memory or over an already-open fd, so Wine is a sound oracle for
+almost all of it. Three rows are not: the `[EPIPE]` output-error row
+goes through NT named pipes, `dprintf`'s file-offset row through the
+real fd layer, and `tempnam`'s existing row through the temp directory —
+real-Windows CI is the authority for those three.
+
+Three defects fenced (two BUG, one UNIMPL), and one N/A-by-mechanism
+verdict recorded with its evidence (`flockfile`).
+
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| snprintf | `fprintf.html` DESCRIPTION: "output bytes beyond the n-1st shall be discarded ... and a null byte is written at the end of the bytes actually written"; RETURN VALUE: "the number of bytes that would be written to s had n been sufficiently large excluding the terminating null byte" — exact fit, one short, `n == 1`, and a sentinel one byte past the buffer in each case | covered | test/posix-stdio.c `test_snprintf_boundaries` |
+| snprintf | RETURN VALUE: "If the value of n is zero ... nothing shall be written, the number of bytes that would have been written ... shall be returned, and s may be a null pointer" — both the non-null-`s` and null-`s` forms | covered | test/posix-stdio.c `test_snprintf_boundaries` |
+| snprintf | ERRORS: "[EOVERFLOW] The value of n is greater than {INT_MAX}" — a **shall fail**, not a may-fail | **BUG (fenced)** — no bound is checked at all; see below | test/posix-stdio.c `test_snprintf_eoverflow` |
+| sprintf | DESCRIPTION: "shall place output followed by the null byte"; RETURN VALUE: "the number of bytes written to s, excluding the terminating null byte" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
+| fprintf / printf / dprintf | DESCRIPTION: "If the format is exhausted while arguments remain, the excess arguments shall be evaluated but are otherwise ignored" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
+| fprintf family | the flag table's `'` (`<apostrophe>`) entry: "The integer portion of the result of a decimal conversion ... shall be formatted with thousands' grouping characters" — a `[CX]` flag, i.e. base POSIX, and in the POSIX locale a no-op that must still be *accepted* | **BUG (fenced)** — `"%'d"` is emitted literally; see below | test/posix-stdio.c `test_printf_apostrophe_flag` |
+| fprintf family | DESCRIPTION: "A negative field width is taken as a `'-'` flag followed by a positive field width. A negative precision is taken as if the precision were omitted" | covered | test/posix-stdio.c `test_printf_width_precision` |
+| fprintf family | the flag table's `#`, `+` and `<space>` entries, and the precision rules for `d`, `f`, `e`, `g` and `s`, including "The result of converting a zero value with a precision of 0 shall be no characters" | covered | test/posix-stdio.c `test_printf_width_precision` |
+| fprintf family | the precision clause out to the widest a `double` has: `%.1074f` of the smallest subnormal, whose exact expansion's last non-zero fractional digit is the 1074th | covered — and deliberately deep: a formatter that clamped its internal expansion short would still get the length and the leading digits right, so nothing shallower catches it | test/posix-stdio.c `test_printf_width_precision` |
+| fprintf family | field widths and precisions far past any internal buffer (`%5000d`, `%.5000d`, `%.5000f`, `%.5000e`, `%.5000g`, `%.5000s`) | covered — and run under `tools/asan-build.sh`'s LeakSanitizer/AddressSanitizer, which is the net that matters here: a fixed-size body buffer has been a real defect in this tree before | test/posix-stdio.c `test_printf_width_precision` |
+| fprintf | RETURN VALUE: "If an output error was encountered, these functions shall return a negative value and set errno"; ERRORS "refer to fputc" → `fputc.html` [EBADF] and [EPIPE], plus fputc's "shall set the error indicator for the stream" | covered — [EBADF] by closing the fd under the stream, [EPIPE] by writing to a pipe whose read end is closed (with SIGPIPE ignored first; without the ignore the process dies of the signal, which is the clause's other half and is what this measured before the ignore was added) | test/posix-stdio.c `test_printf_output_error` |
+| fprintf family | ERRORS: "[EOVERFLOW] The value to be returned is greater than {INT_MAX}" | N/A — needs a single call to transmit more than 2 GiB, which this suite cannot afford to do | — |
+| fprintf family | ERRORS: "[EILSEQ] A wide-character code that does not correspond to a valid character" | N/A (already recorded under priority 5) — the formatter is POSIX-locale-only, with no wide-character encoding step to fail | — |
+| fprintf family | ERRORS: "[ENOMEM] Insufficient storage space is available" (a *may fail*) | N/A — allocator exhaustion, which this suite has no way to induce | — |
+| dprintf / vdprintf | DESCRIPTION: "shall write output to the file associated with the file descriptor specified by the fildes argument rather than place output on a stream" — i.e. to the open file *description*, offset and all: a raw `write()` interleaved between two `dprintf()`s must land between them, and the fd must be left advanced | covered — the half a `FILE*`-shaped implementation can get wrong, and `src/stdio/printf.c`'s `vdprintf()` does wrap the raw fd in a stack `FILE` | test/posix-stdio.c `test_dprintf_fd_path` |
+| dprintf / vdprintf | ERRORS: "[EBADF] The fildes argument is not a valid file descriptor" (a *may fail* for `dprintf`, but the write is an output error either way, so RETURN VALUE's negative-return-and-errno is required) | covered | test/posix-stdio.c `test_printf_output_error` |
+| sscanf | `fscanf.html` RETURN VALUE: "this number can be zero in the event of an early matching failure"; "If the input ends before the first conversion (if any) has completed, and without a matching failure having occurred, EOF shall be returned" — and the complement, input ending *after* a completed conversion | covered | test/posix-stdio.c `test_sscanf_clauses` |
+| sscanf | DESCRIPTION: the white-space directive ("reading input until ... the first byte which is not a white-space character"), the ordinary-character directive, `%%`, `%*` assignment suppression, the maximum field width, and the `%n` rule that its count is not counted toward the return value | covered — including the two worked examples from `fscanf.html` EXAMPLES verbatim | test/posix-stdio.c `test_sscanf_clauses` |
+| sscanf | DESCRIPTION: "An input item shall be defined as the longest sequence of input bytes ... which is an initial subsequence of a matching sequence" — for a 400-digit fraction with an exponent, far past any staging buffer | covered — a fixed-size numeric staging buffer has been a real defect here before; `src/stdio/scanf.c`'s `struct nbuf` moves to the heap when a field outgrows its 128-byte `init[]`, and this exercises that | test/posix-stdio.c `test_sscanf_clauses` |
+| fscanf | DESCRIPTION: "if the comparison shows that they are not equivalent, the directive shall fail, and the differing and subsequent bytes shall remain unread" | covered — only a real stream can show this; `sscanf()` has no observable read position afterwards | test/posix-stdio.c `test_fscanf_stream_clauses` |
+| fscanf | RETURN VALUE: "If an error occurs before the first conversion (if any) has completed ... EOF shall be returned and errno shall be set to indicate the error. If a read error occurs, the error indicator for the stream shall be set" | covered — read error manufactured by scanning a stream not open for reading (`fgetc.html` [EBADF]) | test/posix-stdio.c `test_fscanf_stream_clauses` |
+| fscanf family | DESCRIPTION, `[CX]`: "The %c, %s, and %[ conversion specifiers shall accept an optional assignment-allocation character 'm', which shall cause a memory buffer to be allocated" | **UNIMPL (fenced)** — the directive parser does not recognise `'m'` at all; see below | test/posix-stdio.c `test_scanf_m_modifier` |
+| fscanf family | ERRORS: "[ENOMEM] Insufficient storage space is available" — a **shall fail** | N/A to assert (allocator exhaustion), but a defect on this path is visible by inspection; see "Observed behaviour" below | — |
+| fscanf family | ERRORS: "[EINVAL] There are insufficient arguments" (a *may fail*) | N/A — a may-fail, and there is no conforming way for a variadic callee to detect the condition | — |
+| fscanf family | ERRORS: "[EILSEQ] Input byte sequence does not form a valid character" | N/A — POSIX-locale-only parser, no encoding step to fail | — |
+| gets | `gets.html` DESCRIPTION: "shall read bytes from ... stdin ... until a `<newline>` is read or an end-of-file condition is encountered. Any `<newline>` shall be discarded and a null byte shall be placed immediately after the last byte read into the array" | covered — both the newline-terminated and the EOF-terminated line | test/posix-stdio.c `test_gets` |
+| gets | RETURN VALUE: "Upon successful completion, gets() shall return s. If the end-of-file indicator for the stream is set, or if the stream is at end-of-file, the end-of-file indicator for the stream shall be set and gets() shall return a null pointer" — both halves, including a second call with the indicator already set | covered | test/posix-stdio.c `test_gets` |
+| gets | RETURN VALUE: "If a read error occurs, the error indicator for the stream shall be set, gets() shall return a null pointer, and set errno to indicate the error" — for an error with **no** bytes read yet | covered | test/posix-stdio.c `test_gets` |
+| gets | the same clause for an error **after** some bytes have been read into the array | not reached — see "Not reached" below; `src/stdio/rw.c` returns `s` rather than a null pointer on that path, found by inspection, but no fixture here can make a stream fail part-way through a line | — |
+| gets | APPLICATION USAGE: "Reading a line that overflows the array pointed to by s results in undefined behavior" | N/A — undefined behaviour, with no conforming way to exercise it. Status, stated rather than editorialised: `gets()` was removed from the C standard by C11, and POSIX.1-2017 marks it `[OB]` with a FUTURE DIRECTIONS saying it "may be removed in a future version" — but it is still normatively specified in the edition this audit is against, so it is audited. ntlibc does implement it: `src/stdio/rw.c` guards the definition with `#if __STDC_VERSION__ < 201112L` and this tree builds at `-std=c99`, so the guard is satisfied; `include/stdio.h` declares it unconditionally | — |
+| ctermid | `ctermid.html` RETURN VALUE: "The symbolic constant L_ctermid ... shall have a value greater than 0"; "If s is not a null pointer ... the string is placed in this array and the value of s shall be returned"; "If s is a null pointer, the string shall be generated in an area that may be static, the address of which shall be returned" | covered — including that the string fits in the `L_ctermid` bytes the caller was told to supply, since a too-small `L_ctermid` behind `src/stdio/misc.c`'s `strcpy()` would be an overflow of the *caller's* array | test/posix-stdio.c `test_ctermid` |
+| ctermid | RETURN VALUE: "shall return an empty string if the pathname that would refer to the controlling terminal cannot be determined, or if the function is unsuccessful" | covered (the complement) — ntlibc always determines one (`"/dev/tty"`), so the empty-string branch is not taken; the measured behaviour is pinned instead. Deliberately **not** asserted: that the pathname can be opened. The DESCRIPTION says outright "If ctermid() returns a pathname, access to the file is not guaranteed", so a fixed `"/dev/tty"` on a platform with no such path is conforming | test/posix-stdio.c `test_ctermid` |
+| ctermid | ERRORS: "No errors are defined" | covered trivially — nothing to assert, recorded so the page is not left half-read | — |
+| ctermid | DESCRIPTION: "need not be thread-safe if called with a NULL parameter" | N/A — same mechanism as `flockfile` below: no threads on this platform | — |
+| flockfile / funlockfile | `flockfile.html` DESCRIPTION, the lock count: "if the count is zero or if the count is positive and the caller owns the (FILE *) object, the count shall be incremented ... Each call to funlockfile() shall decrement the count. This allows matching calls ... to be nested"; and "All functions that reference (FILE *) objects, except those with names ending in `_unlocked`, shall behave as if they use flockfile() and funlockfile() internally" | covered — nesting, and that ordinary (locking) stdio calls still serve the owner inside a held lock, which is where a no-op that had accidentally become a self-deadlocking real lock would hang | test/posix-stdio.c `test_flockfile_nesting` |
+| ftrylockfile | RETURN VALUE: "shall return zero for success" — on an unlocked stream and on a nested acquisition by the owner | covered | test/posix-stdio.c `test_flockfile_nesting` |
+| flockfile family | every clause that distinguishes a real lock from a no-op: "Otherwise, the calling thread shall be suspended, waiting for the count to return to zero"; "When the count is positive, a single thread owns the (FILE *) object"; ftrylockfile's "non-zero to indicate that the lock cannot be acquired"; "The behavior is undefined if a thread other than the current owner calls funlockfile()" | **N/A — mechanism: this libc has exactly one thread of control.** There is no `<pthread.h>` in `include/` (`test/POSIX-GAP-ACCOUNTING.md` lists all 102 pthread interfaces under Absent) and `lib/libpthread.a` is an 8-byte empty archive — the `!<arch>\n` magic and nothing else — built only so that `-lpthread` links. With one thread the count can only ever be incremented by its owner, so the suspension branch is unreachable and `ftrylockfile()` can never fail; `src/stdio/file.c`'s no-ops are indistinguishable from a correct recursive mutex by any conforming program. N/A rather than UNIMPL because nothing was declined: the distinguishing observation does not exist here. See the caveat in "Observed behaviour" below | — |
+| ftrylockfile / flockfile / funlockfile | ERRORS: "No errors are defined" | covered trivially | — |
+| getc_unlocked / getchar_unlocked / putc_unlocked / putchar_unlocked | `getc_unlocked.html`: "functionally equivalent to the original versions", used inside a `flockfile()`/`funlockfile()` scope — which `flockfile.html` RATIONALE calls the only case where the locking functions are *required* | covered (`getc_unlocked` and `putc_unlocked`/`putchar_unlocked`/`getchar_unlocked` rows already exist under priority 5; what is new here is exercising them inside the scope the RATIONALE names) | test/posix-stdio.c `test_flockfile_nesting`, `test_putc_family`, `test_getchar` |
+
+## stdarg.h, the "implemented, not clause-audited" row (group L)
+
+Audited alongside group K and sharing its test file, because eleven of
+the twelve names are the v-form of a `<stdio.h>` function and are
+specified only by reference to it (`vfprintf.html`: "shall be equivalent
+to ... except that instead of being called with a variable number of
+arguments, they are called with an argument list"). The boundary and
+ERRORS coverage the v-forms gained is in group K's rows above, where the
+clause text lives; what follows is the `<stdarg.h>` machinery itself,
+from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| va_start / va_arg / va_end | XBD `<stdarg.h>` DESCRIPTION: "va_start() ... is invoked to initialize ap to the beginning of the list before any calls to va_arg()"; "The va_arg() macro shall return the next argument in the list ... Each invocation of va_arg() modifies ap so that the values of successive arguments are returned in turn"; "Different types can be mixed" — a six-argument walk over `int`, `double`, `char *`, `long long`, `unsigned` and `void *` | covered — the mixed-width walk is the point: a same-width walk never leaves the x86-64 register save area, so it cannot show a hand-off bug | test/posix-stdio.c `stdarg_mixed` |
+| va_arg | XBD `<stdarg.h>`, the two explicitly-permitted type mismatches: "One type is a signed integer type, the other type is the corresponding unsigned integer type, and the value is representable in both types", and "One type is a pointer to void and the other is a pointer to a character type" | covered — both, in the same walk | test/posix-stdio.c `stdarg_mixed` |
+| va_start / va_end | XBD `<stdarg.h>`: "Multiple traversals, each bracketed by va_start() ... va_end(), are possible", and "Each invocation of the va_start() and va_copy() macros shall be matched by a corresponding invocation of the va_end() macro in the same function" | covered — a second traversal after the first is ended | test/posix-stdio.c `stdarg_mixed` |
+| va_end | XBD `<stdarg.h>`: "it invalidates ap for use (unless va_start() or va_copy() is invoked again)" | N/A — the post-`va_end` state is by definition not observable; the only conforming use is the re-initialisation the row above covers | — |
+| va_copy | XBD `<stdarg.h>`: "initializes dest as a copy of src, as if the va_start() macro had been applied to dest followed by the same sequence of uses of the va_arg() macro as had previously been used to reach the present state of src" | covered (pre-existing row under priority 5) | test/posix-stdio.c `va_copy_sees_same` |
+| va_copy | XBD `<stdarg.h>`: "Neither the va_copy() nor va_start() macro shall be invoked to reinitialize dest without an intervening invocation of the va_end() macro for the same dest" | N/A — a constraint on the caller, whose violation is undefined behaviour | — |
+| vfprintf / vprintf / vsnprintf / vsprintf / vdprintf / vfscanf / vscanf / vsscanf | XBD `<stdarg.h>`: "The object ap may be passed as an argument to another function; if that function invokes the va_arg() macro with parameter ap, the value of ap in the calling function is unspecified", and `vfprintf.html`/`vfscanf.html`: "These functions shall not invoke the va_end macro. As these functions invoke the va_arg macro, the value of ap after the return is unspecified" — the testable half being that a **partially consumed** `ap` handed to a v-form continues from where the caller left off, not from the beginning | covered — new; the pre-existing eight all handed over a freshly-`va_start`ed list, which cannot tell the two apart | test/posix-stdio.c `stdarg_handoff` |
+| vsnprintf / vsprintf | `vfprintf.html`: "shall be equivalent to ... snprintf() and sprintf() ... respectively"; RETURN VALUE "Refer to fprintf" — the same exact-fit / one-short / `n == 0` / null-`s` boundary set as the non-`v` forms | covered — new; the pre-existing coverage was one exact case and one truncation case for `vsnprintf`, none for `vsprintf` | test/posix-stdio.c `test_snprintf_boundaries` |
+| vdprintf | `vfprintf.html` equivalence to `dprintf()`: the fd path, the file offset, and the [EBADF] output error | covered — new | test/posix-stdio.c `test_dprintf_fd_path`, `test_printf_output_error` |
+| vfscanf / vsscanf | `vfscanf.html` equivalence to `fscanf()`/`sscanf()`; RETURN VALUE "Refer to fscanf" — the unread-byte clause and the long-field item | covered — new | test/posix-stdio.c `test_fscanf_stream_clauses`, `test_sscanf_clauses` |
+| vprintf / vscanf | `vfprintf.html`/`vfscanf.html` equivalence to `printf()`/`scanf()` | covered (pre-existing row under priority 5) | test/posix-stdio.c `test_vprintf_vscanf` |
+| all v-forms | the `%n$` positional form, which `vfprintf.html` inherits from `fprintf.html` | N/A (documented divergence, already recorded under priority 5) — not implemented; `"%1$d"` parses as width 1 plus an unrecognised `$` | test/posix-stdio.c `test_printf_positional_divergence` |
+
+### Bugs found (groups K/L)
+
+1. **`snprintf()` does not fail with `[EOVERFLOW]` when `n` is greater
+   than `{INT_MAX}`.** `fprintf.html` ERRORS: "The snprintf() function
+   shall fail if: [EOVERFLOW] The value of n is greater than
+   {INT_MAX}." That is a *shall fail*, not a may-fail, so the call has
+   to return a negative value and set `errno` (RETURN VALUE: "If an
+   output error was encountered, these functions shall return a
+   negative value and set errno") rather than format.
+   `src/stdio/printf.c`'s `vxprintf_mem()` takes `n` straight to the
+   throwaway memory `FILE`'s `mem_size` and never compares it to
+   anything. Measured: `snprintf(b, (size_t)INT_MAX + 1, "z")` returns
+   1, leaves `errno` at 0, and writes `"z"`. The clause exists because
+   the return type is `int`: a buffer that large makes the promised
+   return value unrepresentable, so the standard makes the call fail up
+   front instead.
+
+2. **The `[CX]` `<apostrophe>` flag is not recognised; `"%'d"` is
+   emitted literally.** `fprintf.html`'s flag table lists `'` as a
+   `[CX]` flag — base POSIX, not XSI — requiring the integer portion of
+   a decimal conversion to be "formatted with thousands' grouping
+   characters", using "the non-monetary grouping character". In the
+   POSIX locale there is no grouping, so the *output* a conforming
+   implementation produces for `"%'d"` is byte-for-byte what `"%d"`
+   produces; what it may not do is fail to recognise the flag.
+   `src/stdio/printf.c`'s flag loop accepts only `-`, `+`, `<space>`,
+   `0` and `#`, so a `'` terminates the flag scan and then falls out of
+   the conversion switch's default arm, which emits the two bytes
+   verbatim. Measured: `snprintf(b, n, "%'d", 1234567)` yields `"%'d"`,
+   3 bytes, and the argument is never converted at all — so every
+   later conversion in the same format reads the wrong argument.
+
+### UNIMPL found (groups K/L)
+
+1. **The `[CX]` assignment-allocation character `'m'` is not
+   implemented for `%c`, `%s` or `%[`.** `fscanf.html` DESCRIPTION:
+   "The %c, %s, and %[ conversion specifiers shall accept an optional
+   assignment-allocation character 'm', which shall cause a memory
+   buffer to be allocated to hold the string converted including a
+   terminating null character ... The application shall be responsible
+   for freeing the memory after usage." `src/stdio/scanf.c`'s directive
+   parser recognises `'*'`, a width and the length modifiers, and
+   nothing else; an `'m'` falls through the conversion switch's default
+   arm, so no argument is consumed and every remaining directive is
+   then matched against the wrong input. Measured:
+   `sscanf("abc", "%ms", &p)` returns 0 and leaves `p` untouched.
+   UNIMPL rather than BUG: the feature is absent, not wrong.
+
+### Observed behaviour where POSIX permits latitude (groups K/L)
+
+- **`%n` inside a truncated `snprintf()` reports the untruncated
+  count.** `fprintf.html`'s `n` conversion writes "the number of bytes
+  written to the output so far by this call", and for `snprintf()` the
+  standard does not say whether "the output" means the notional full
+  output or the bytes that reached the array. Measured:
+  `snprintf(b, 3, "abcdef%n", &nn)` sets `nn` to 6, matching the
+  function's own return value. Recorded rather than asserted, and
+  deliberately not fenced: the reading is genuinely ambiguous and
+  pinning either answer would be inventing a requirement.
+
+- **`fscanf()` has no channel for `[ENOMEM]`, which the page makes a
+  *shall fail*.** `fscanf.html` ERRORS: "In addition, the fscanf()
+  function shall fail if: ... [ENOMEM] Insufficient storage space is
+  available." `src/stdio/scanf.c` says so itself, in the banner over
+  `scandrain()`: "scanf has no channel for ENOMEM, so this becomes a
+  matching failure". A conforming caller therefore cannot distinguish
+  a malformed field from an exhausted allocator. Found by inspection
+  and recorded here rather than fenced, for the same reason the
+  `glob.h` section records its `GLOB_NOSPACE` finding this way: no
+  assertion this suite can write reaches the path, so there is nothing
+  to un-fence when it is fixed.
+
+- **`gets()` returns `s`, not a null pointer, if a read error strikes
+  after some bytes are already in the array.** `gets.html` RETURN
+  VALUE requires a null pointer on any read error. `src/stdio/rw.c`'s
+  loop breaks out on `EOF` and only returns 0 when `i == 0`, so the
+  error and the ordinary end-of-line-at-EOF case are indistinguishable
+  once a byte has been read. Same disposition as the `[ENOMEM]` item:
+  inspection only, no fixture here can make a stream fail part-way
+  through a line.
+
+- **The `flockfile` no-ops are N/A only for as long as
+  `lib/libpthread.a` stays empty.** Recorded explicitly because the
+  verdict above is a judgement call: a no-op lock is *correct* in a
+  libc with one thread of control and *wrong* the day a second one
+  exists. If `<pthread.h>` ever lands, every clause marked N/A in the
+  `flockfile` row above becomes reachable and `src/stdio/file.c`'s
+  three functions become BUGs without a line of them changing.
+
+### Not reached (groups K/L)
+
+`[EOVERFLOW]` on a return value greater than `{INT_MAX}` (needs a
+single call transmitting more than 2 GiB). `[ENOMEM]` on the
+printf and scanf families (allocator exhaustion). `[EILSEQ]` on both
+families (POSIX-locale-only, no encoding step). `fscanf`'s `[EINVAL]`
+may-fail. `gets()`'s read-error-after-partial-line path, and
+`fscanf()`'s `[ENOMEM]` path — both recorded under "Observed
+behaviour" above as inspection findings that no assertion here can
+reach. Every clause of `flockfile.html` that needs a second thread.
