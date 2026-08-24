@@ -190,7 +190,26 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
 	char *b;
 	int c;
 
-	/* getdelim.html ERRORS: "[EINVAL] lineptr or n is a null pointer."
+	/* clang-analyzer-unix.Malloc (clang-tidy 21 only; the pinned 18 does
+ * not do this) reports four findings across getdelim() and getline()
+ * that its own trace contradicts.  Every one begins with the same two
+ * notes on the *same* source location -- getline()'s `return
+ * getdelim(...)`: "Memory is released", and then "Calling 'getdelim'".
+ * The analyzer applies its conservative summary of the call, in which
+ * the callee may free `*buf`, and then *also* inlines that same call
+ * and walks the body -- so the one realloc that legitimately frees the
+ * caller's block is counted twice, and everything downstream of it is
+ * use-after-free.  One call cannot release `*buf` twice.
+ *
+ * It is visible here and not on main only because removing fgetln()
+ * from this translation unit changed what the analyzer had budget to
+ * explore; the code below is unchanged in that respect.  Suppressed per
+ * site rather than over a NOLINTBEGIN region, so unix.Malloc still
+ * checks the rest of this function -- it is the check most likely to
+ * catch a real defect in it.
+ */
+
+/* getdelim.html ERRORS: "[EINVAL] lineptr or n is a null pointer."
 	 * The rest of this function stores through both unconditionally, so
 	 * the check has to come first rather than being half-applied. */
 	if (!buf || !n) { errno = EINVAL; return -1; }
@@ -198,10 +217,15 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
 	b = *buf;
 
 	if (!f->readable) { errno = EBADF; f->err = 1; return -1; }
+	/* realloc, not malloc: `*buf` non-null with `*n` zero is a legal
+	 * caller state, and malloc'ing over it would overwrite -- and so
+	 * leak -- the buffer the caller handed us.  realloc(0, n) is
+	 * malloc(n), and a failing realloc leaves the caller's block intact,
+	 * which is exactly what `*buf` still points at on the error return. */
 	if (!b || cap == 0) {
-		cap = 128;
-		b = malloc(cap);
-		if (!b) { errno = ENOMEM; return -1; }
+		char *nb = realloc(b, 128); // NOLINT(clang-analyzer-unix.Malloc) -- see the note above getdelim()
+		if (!nb) { errno = ENOMEM; return -1; }
+		b = nb; cap = 128;
 	}
 	for (;;) {
 		c = __fgetc(f);
@@ -211,11 +235,11 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
 		}
 		if (len + 1 >= cap) {
 			size_t nc = cap * 2;
-			char *nb = realloc(b, nc);
+			char *nb = realloc(b, nc); // NOLINT(clang-analyzer-unix.Malloc) -- see the note above getdelim()
 			if (!nb) { *buf = b; *n = cap; errno = ENOMEM; return -1; }
 			b = nb; cap = nc;
 		}
-		b[len++] = (char)c;
+		b[len++] = (char)c; // NOLINT(clang-analyzer-unix.Malloc) -- see the note above getdelim()
 		if (c == delim) break;
 	}
 	b[len] = 0;
@@ -226,5 +250,5 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
 
 ssize_t getline(char **__restrict buf, size_t *__restrict n, FILE *__restrict f)
 {
-	return getdelim(buf, n, '\n', f);
+	return getdelim(buf, n, '\n', f); // NOLINT(clang-analyzer-unix.Malloc) -- see the note above getdelim()
 }
