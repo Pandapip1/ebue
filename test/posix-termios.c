@@ -65,11 +65,188 @@ static void test_termios_gating(const char *self)
 	errno = 0; CHECK(tcsendbreak(fd, 0) == -1 && errno == ENOTTY);
 	errno = 0; CHECK(tcgetsid(fd) == -1 && errno == ENOTTY);
 
+	/* [EBADF] is a "shall fail" on all seven of the fd-taking
+	 * functions, not just the two that were checked here before:
+	 * tcsetattr.html, tcflush.html, tcflow.html, tcdrain.html,
+	 * tcsendbreak.html and tcgetsid.html each list
+	 * "[EBADF] The fildes argument is not a valid file descriptor."
+	 * verbatim. tcgetsid() returns pid_t rather than int, so its
+	 * -1 is spelled (pid_t)-1 here. */
 	errno = 0; CHECK(tcgetattr(1000, &t) == -1 && errno == EBADF);
 	errno = 0; CHECK(tcsetattr(1000, TCSANOW, &t) == -1 && errno == EBADF);
+	errno = 0; CHECK(tcflush(1000, TCIFLUSH) == -1 && errno == EBADF);
+	errno = 0; CHECK(tcflow(1000, TCOON) == -1 && errno == EBADF);
+	errno = 0; CHECK(tcdrain(1000) == -1 && errno == EBADF);
+	errno = 0; CHECK(tcsendbreak(1000, 0) == -1 && errno == EBADF);
+	errno = 0; CHECK(tcgetsid(1000) == (pid_t)-1 && errno == EBADF);
 
 	close(fd);
 }
+
+/* Same [ENOTTY] clause, against the other two descriptor shapes this
+ * platform can produce that are definitely not consoles -- a pipe
+ * (__FD_PIPE) and a directory. A regular file is already covered
+ * above; the point of repeating it is that src/termios/termios.c's
+ * get_console() gates on `f->type != __FD_CONSOLE` rather than on any
+ * per-shape test, so every non-console shape must land in the same
+ * place, and nothing but a console may ever get through. */
+static void test_termios_gating_other_shapes(void)
+{
+	struct termios t;
+	int p[2];
+	int dfd;
+
+	CHECK(pipe(p) == 0);
+	if (p[0] >= 0) {
+		errno = 0; CHECK(tcgetattr(p[0], &t) == -1 && errno == ENOTTY);
+		errno = 0; CHECK(tcgetattr(p[1], &t) == -1 && errno == ENOTTY);
+		errno = 0; CHECK(tcflush(p[0], TCIFLUSH) == -1 && errno == ENOTTY);
+		errno = 0; CHECK(tcgetsid(p[0]) == (pid_t)-1 && errno == ENOTTY);
+		/* isatty() must agree with the termios gate: they are the same
+		 * __FD_CONSOLE test (src/unistd/isatty.c), and a divergence
+		 * between them would mean tcgetattr() and isatty() disagree
+		 * about what a terminal is. */
+		CHECK(isatty(p[0]) == 0);
+		close(p[0]); close(p[1]);
+	}
+
+	dfd = open(".", O_RDONLY | O_DIRECTORY);
+	CHECK(dfd >= 0);
+	if (dfd >= 0) {
+		errno = 0; CHECK(tcgetattr(dfd, &t) == -1 && errno == ENOTTY);
+		errno = 0; CHECK(tcdrain(dfd) == -1 && errno == ENOTTY);
+		CHECK(isatty(dfd) == 0);
+		close(dfd);
+	}
+}
+
+/* termios.h.html, the tables of symbolic constants. Each group must be
+ * usable the way the header's own struct requires -- the c_cc
+ * subscripts index one array, and the c_iflag/c_oflag/c_cflag/c_lflag
+ * names are OR-ed together into one tcflag_t each -- so within a group
+ * they have to be distinct and (for the flag words) non-overlapping.
+ * termios.h.html states this outright for the subscripts: "Subscript
+ * values shall be suitable for use in #if preprocessing directives and
+ * shall be distinct, except that the VMIN and VTIME subscripts may
+ * have the same values as the VEOF and VEOL subscripts, respectively."
+ * Nothing in this file checked any of it before; it is exactly the
+ * kind of thing a hand-written header gets subtly wrong (a duplicated
+ * octal constant reads as plausible), and it is checkable with no
+ * terminal, no console and no fd at all. */
+static void check_distinct(const char *what, const unsigned long *v, int n)
+{
+	int i, j;
+	for (i = 0; i < n; i++)
+		for (j = i + 1; j < n; j++)
+			if (v[i] == v[j]) { fails++; printf("FAIL %s: entries %d and %d are both %lu\n", what, i, j, v[i]); }
+}
+
+static void check_disjoint(const char *what, const unsigned long *v, int n)
+{
+	int i, j;
+	for (i = 0; i < n; i++) {
+		if (v[i] == 0) { fails++; printf("FAIL %s: entry %d is zero, so it cannot be OR-ed in or tested for\n", what, i); }
+		for (j = i + 1; j < n; j++)
+			if (v[i] & v[j]) { fails++; printf("FAIL %s: entries %d (%lu) and %d (%lu) overlap\n", what, i, v[i], j, v[j]); }
+	}
+}
+
+static void test_termios_header_constants(void)
+{
+	/* c_cc[] subscripts. POSIX.1-2017 requires eleven of these
+	 * (VEOF, VEOL, VERASE, VINTR, VKILL, VMIN, VQUIT, VSTART, VSTOP,
+	 * VSUSP, VTIME); include/termios.h adds the five common
+	 * extensions (VREPRINT/VDISCARD/VWERASE/VLNEXT/VEOL2), which must
+	 * not collide with the required eleven either, since they share
+	 * the one array. */
+	static const unsigned long cc[] = {
+		VEOF, VEOL, VERASE, VINTR, VKILL, VMIN, VQUIT, VSTART, VSTOP,
+		VSUSP, VTIME, VREPRINT, VDISCARD, VWERASE, VLNEXT, VEOL2
+	};
+	/* Input Modes, all twelve base POSIX. */
+	static const unsigned long iflag[] = {
+		BRKINT, ICRNL, IGNBRK, IGNCR, IGNPAR, INLCR, INPCK, ISTRIP,
+		IXANY, IXOFF, IXON, PARMRK
+	};
+	/* Output Modes: OPOST is base, the rest are [XSI] and this build
+	 * is compiled -D_XOPEN_SOURCE=700, so they are in scope here. */
+	static const unsigned long oflag[] = {
+		OPOST, ONLCR, OCRNL, ONOCR, ONLRET, OFDEL, OFILL
+	};
+	/* Local Modes, all nine base POSIX. */
+	static const unsigned long lflag[] = {
+		ECHO, ECHOE, ECHOK, ECHONL, ICANON, IEXTEN, ISIG, NOFLSH, TOSTOP
+	};
+	/* Control Modes other than the CSIZE field, which is a mask over
+	 * its own sub-field and so is checked separately below. */
+	static const unsigned long cflag[] = {
+		CSTOPB, CREAD, PARENB, PARODD, HUPCL, CLOCAL
+	};
+	/* Baud Rate Selection, all sixteen base POSIX. B0 is legitimately
+	 * zero ("hang up"), so this group is checked for distinctness
+	 * only, not for being non-zero and disjoint. */
+	static const unsigned long baud[] = {
+		B0, B50, B75, B110, B134, B150, B200, B300, B600, B1200,
+		B1800, B2400, B4800, B9600, B19200, B38400
+	};
+	/* Attribute Selection (tcsetattr) and Line Control (tcflush,
+	 * tcflow): plain distinct selector values, not bit masks --
+	 * src/termios/termios.c compares them with == , and TCSANOW,
+	 * TCIFLUSH and TCOOFF are all legitimately 0. */
+	static const unsigned long tcsa[] = { TCSANOW, TCSADRAIN, TCSAFLUSH };
+	static const unsigned long tcqs[] = { TCIFLUSH, TCIOFLUSH, TCOFLUSH };
+	static const unsigned long tcfl[] = { TCOOFF, TCOON, TCIOFF, TCION };
+	static const unsigned long csz[] = { CS5, CS6, CS7, CS8 };
+	int i;
+
+	check_distinct("c_cc subscripts", cc, (int)(sizeof cc / sizeof *cc));
+	for (i = 0; i < (int)(sizeof cc / sizeof *cc); i++)
+		CHECK(cc[i] < NCCS);   /* every subscript must index c_cc[NCCS] */
+
+	check_disjoint("c_iflag", iflag, (int)(sizeof iflag / sizeof *iflag));
+	check_disjoint("c_oflag", oflag, (int)(sizeof oflag / sizeof *oflag));
+	check_disjoint("c_lflag", lflag, (int)(sizeof lflag / sizeof *lflag));
+	check_disjoint("c_cflag (non-CSIZE)", cflag, (int)(sizeof cflag / sizeof *cflag));
+	check_distinct("baud rates", baud, (int)(sizeof baud / sizeof *baud));
+	check_distinct("tcsetattr optional_actions", tcsa, 3);
+	check_distinct("tcflush queue_selector", tcqs, 3);
+	check_distinct("tcflow action", tcfl, 4);
+
+	/* CSIZE is a field mask, not a flag: termios.h.html lists CSIZE
+	 * with "CS5/CS6/CS7/CS8" as its values, so each value must lie
+	 * inside the mask and the four must be distinct from each other.
+	 * (CS5 is legitimately 0, which is why check_disjoint() is the
+	 * wrong test here.) */
+	check_distinct("CSIZE values", csz, 4);
+	for (i = 0; i < 4; i++)
+		CHECK((csz[i] & ~(unsigned long)CSIZE) == 0);
+	/* ... and the mask must not collide with any other control-mode
+	 * bit, or setting a character size would clobber parity. */
+	for (i = 0; i < (int)(sizeof cflag / sizeof *cflag); i++)
+		CHECK((cflag[i] & (unsigned long)CSIZE) == 0);
+}
+
+#if 0 /* UNIMPL: termios.h.html's Output Modes table marks the delay
+	masks [XSI] alongside ONLCR/OCRNL/ONOCR/ONLRET/OFILL/OFDEL --
+	NLDLY (NL0, NL1), CRDLY (CR0..CR3), TABDLY (TAB0..TAB3), BSDLY
+	(BS0, BS1), VTDLY (VT0, VT1), FFDLY (FF0, FF1). ntlibc compiles
+	-D_XOPEN_SOURCE=700 and defines the other six [XSI] output-mode
+	names, but not one of the delay names, so this group is an
+	incomplete header rather than a platform impossibility: the
+	values are pure c_oflag bits, and c_oflag is already accepted
+	and stored wholesale (src/termios/termios.c's shadow), so
+	defining them would cost nothing and they would round-trip like
+	every other c_oflag bit. Not N/A -- "no console applies output
+	delays" is equally true of ONLCR, which *is* defined. This is
+	the "I chose not to" case. */
+static void test_termios_oflag_delay_masks(void)
+{
+	static const unsigned long dly[] = { NLDLY, CRDLY, TABDLY, BSDLY, VTDLY, FFDLY };
+	check_disjoint("c_oflag delay masks", dly, 6);
+	CHECK((NL0 & ~(unsigned long)NLDLY) == 0 && (NL1 & ~(unsigned long)NLDLY) == 0);
+	CHECK((TAB3 & ~(unsigned long)TABDLY) == 0);
+}
+#endif
 
 /* cfgetispeed.html/cfsetispeed.html DESCRIPTION: "store ... in the
  * termios structure" / "obtain ... from the termios structure". This
@@ -86,6 +263,71 @@ static void test_cfsetispeed_cfgetispeed_roundtrip(void)
 	CHECK(cfsetospeed(&t, B19200) == 0);
 	CHECK(cfgetispeed(&t) == B9600);
 	CHECK(cfgetospeed(&t) == B19200);
+}
+
+/* cfgetispeed.html DESCRIPTION, the clause that makes this checkable
+ * without a terminal at all: "This function shall return exactly the
+ * value in the termios data structure, without interpretation."
+ * Poked straight into the structure rather than through cfsetispeed(),
+ * so what is being tested is the *retrieval* side on its own -- a
+ * value that is not any of the B* constants must come back byte for
+ * byte, not normalised, clamped or mapped to a nearest supported rate.
+ * cfgetospeed.html carries the identical sentence for the output
+ * side. */
+static void test_cf_speed_no_interpretation(void)
+{
+	struct termios t;
+	memset(&t, 0, sizeof t);
+	t.c_ispeed = (speed_t)123456;
+	t.c_ospeed = (speed_t)654321;
+	CHECK(cfgetispeed(&t) == (speed_t)123456);
+	CHECK(cfgetospeed(&t) == (speed_t)654321);
+}
+
+/* cfsetispeed.html/cfsetospeed.html DESCRIPTION: each "shall set the
+ * input [output] baud rate stored in the structure pointed to by
+ * termios_p to speed" -- so all sixteen of termios.h.html's Baud Rate
+ * Selection values must survive a set/get pair, and, just as
+ * importantly, setting one direction must not disturb the other or any
+ * other member of the structure. The second half is what catches a
+ * cfsetispeed() that writes the wrong field, which a single-value
+ * round trip on a zeroed structure cannot see. */
+static void test_cf_speed_all_rates_and_isolation(void)
+{
+	static const speed_t rates[] = {
+		B0, B50, B75, B110, B134, B150, B200, B300, B600, B1200,
+		B1800, B2400, B4800, B9600, B19200, B38400
+	};
+	struct termios t;
+	unsigned i;
+
+	for (i = 0; i < sizeof rates / sizeof *rates; i++) {
+		memset(&t, 0, sizeof t);
+		CHECK(cfsetispeed(&t, rates[i]) == 0);
+		CHECK(cfgetispeed(&t) == rates[i]);
+		memset(&t, 0, sizeof t);
+		CHECK(cfsetospeed(&t, rates[i]) == 0);
+		CHECK(cfgetospeed(&t) == rates[i]);
+	}
+
+	/* Isolation: neither setter may touch the other direction or any
+	 * of the four mode words or c_cc[]. */
+	memset(&t, 0, sizeof t);
+	t.c_iflag = ICRNL | IXON;
+	t.c_oflag = OPOST;
+	t.c_cflag = CS8 | CREAD;
+	t.c_lflag = ISIG | ICANON | ECHO;
+	t.c_cc[VMIN] = 7;
+	t.c_cc[VTIME] = 9;
+	CHECK(cfsetospeed(&t, B38400) == 0);
+	CHECK(cfgetispeed(&t) == B0);          /* untouched by the *o* setter */
+	CHECK(cfsetispeed(&t, B1200) == 0);
+	CHECK(cfgetospeed(&t) == B38400);      /* untouched by the *i* setter */
+	CHECK(t.c_iflag == (tcflag_t)(ICRNL | IXON));
+	CHECK(t.c_oflag == (tcflag_t)OPOST);
+	CHECK(t.c_cflag == (tcflag_t)(CS8 | CREAD));
+	CHECK(t.c_lflag == (tcflag_t)(ISIG | ICANON | ECHO));
+	CHECK(t.c_cc[VMIN] == 7 && t.c_cc[VTIME] == 9);
 }
 
 /* tcflush.html ERRORS: "[EINVAL] The queue_selector argument is not a
@@ -129,6 +371,164 @@ static void test_termios_lflag_roundtrip(int consolefd)
 	t.c_lflag = before;
 	CHECK(tcsetattr(consolefd, TCSANOW, &t) == 0);
 }
+
+/* tcsetattr.html DESCRIPTION + tcgetattr.html DESCRIPTION, the pair of
+ * clauses that src/termios/termios.c's file banner leans on hardest
+ * and that nothing has ever checked: the fields it describes as
+ * "honestly accepted-and-stored, never applied" must genuinely
+ * "round-trip through tcgetattr()/tcsetattr() correctly". tcgetattr()
+ * "shall get the parameters associated with the terminal ... and store
+ * them in the termios structure"; tcsetattr() "shall set the
+ * parameters associated with the terminal ... from the termios
+ * structure". A field that is silently dropped, masked, or reset to a
+ * default by the shadow would satisfy neither -- and would be exactly
+ * the "stub that ignores its argument" shape, not a legal no-op.
+ *
+ * This needs a real console, because every function here is gated on
+ * __FD_CONSOLE first (see test_termios_gating() above); see main() for
+ * how one is looked for and why `make check` normally has none. */
+static void test_termios_stored_roundtrip(int consolefd)
+{
+	struct termios saved, t, back;
+	int i;
+
+	if (consolefd < 0) {
+		printf("note: no console attached to this test run -- skipping the c_iflag/c_oflag/c_cflag/c_cc[] store-and-retrieve round trip (every termios function is gated on __FD_CONSOLE, so there is nothing to assert against)\n");
+		return;
+	}
+	CHECK(tcgetattr(consolefd, &saved) == 0);
+
+	t = saved;
+	/* Values deliberately unlike the shadow's own defaults
+	 * (src/termios/termios.c's shadow_init()), so "the default came
+	 * back" cannot masquerade as "the value round-tripped". */
+	t.c_iflag = IGNBRK | PARMRK | INLCR | IXOFF;
+	t.c_oflag = OCRNL | ONOCR | OFDEL;
+	t.c_cflag = CS7 | CSTOPB | PARENB | PARODD | CLOCAL;
+	for (i = 0; i < NCCS; i++) t.c_cc[i] = (cc_t)(i + 1);
+
+	CHECK(tcsetattr(consolefd, TCSANOW, &t) == 0);
+	memset(&back, 0, sizeof back);
+	CHECK(tcgetattr(consolefd, &back) == 0);
+	CHECK(back.c_iflag == t.c_iflag);
+	CHECK(back.c_oflag == t.c_oflag);
+	CHECK(back.c_cflag == t.c_cflag);
+	for (i = 0; i < NCCS; i++) CHECK(back.c_cc[i] == (cc_t)(i + 1));
+
+	/* tcsetattr.html DESCRIPTION: "shall not change the values found
+	 * in the termios structure" -- the argument is const, so this is
+	 * checking that the implementation honours it in fact as well as
+	 * in the prototype. */
+	CHECK(t.c_iflag == (tcflag_t)(IGNBRK | PARMRK | INLCR | IXOFF));
+	CHECK(t.c_cc[VMIN] == (cc_t)(VMIN + 1));
+
+	/* tcsetattr.html: all three optional_actions values are valid and
+	 * must be accepted on a terminal. TCSADRAIN and TCSAFLUSH differ
+	 * from TCSANOW only in output-drain/input-discard timing, both of
+	 * which are no-ops here (see this file's N/A fences below), but
+	 * "not a supported value" is the *only* thing [EINVAL] is defined
+	 * for, so none of the three may be rejected. */
+	CHECK(tcsetattr(consolefd, TCSADRAIN, &saved) == 0);
+	CHECK(tcsetattr(consolefd, TCSAFLUSH, &saved) == 0);
+	CHECK(tcsetattr(consolefd, TCSANOW, &saved) == 0);
+}
+
+/* tcgetsid.html DESCRIPTION: "shall obtain the process group ID of the
+ * session for which the terminal specified by fildes is the
+ * controlling terminal", RETURN VALUE: "shall return the process group
+ * ID of the session associated with the terminal". On this platform
+ * there is exactly one, fixed session (src/unistd/ids.c's getsid()/
+ * setsid() always answer 1), so the checkable content of the clause is
+ * that tcgetsid() agrees with getsid() rather than inventing its own
+ * answer -- and that it is positive, since a session ID is a process
+ * group ID and (pid_t)-1 is reserved for the error return. */
+static void test_tcgetsid(int consolefd)
+{
+	if (consolefd < 0) {
+		printf("note: no console attached -- skipping tcgetsid()'s success path (only its EBADF/ENOTTY paths are reachable without one)\n");
+		return;
+	}
+	CHECK(tcgetsid(consolefd) == getsid(0));
+	CHECK(tcgetsid(consolefd) > 0);
+}
+
+/* tcdrain.html/tcflow.html/tcflush.html: the three functions
+ * src/termios/termios.c implements as honest no-ops returning 0. Their
+ * *return value* and their [EBADF]/[EINVAL]/[ENOTTY] paths are checked
+ * for real above; what cannot be checked is whether the requested
+ * effect happened, and these fences record precisely which clause each
+ * one is standing in for.
+ *
+ * Note the asymmetry with tcsendbreak(), which is not fenced here:
+ * tcsendbreak.html grants the no-op explicitly ("If the terminal is
+ * not using asynchronous serial data transmission, it is
+ * implementation-defined whether tcsendbreak() sends data to generate
+ * a break condition or returns without taking any action"), so for
+ * that one function returning 0 without acting *is* the specified
+ * behaviour, not an untested claim. tcdrain.html, tcflow.html and
+ * tcflush.html contain no such escape clause -- their no-op status
+ * here rests on the platform argument in src/termios/termios.c's
+ * banner (a console write is complete when WriteConsole() returns, so
+ * no transmit queue exists to drain, suspend or discard), which is
+ * sound but is a platform fact rather than a spec permission. */
+
+#if 0 /* N/A: tcdrain.html DESCRIPTION "shall block until all output
+	written to the object referred to by fildes is transmitted."
+	Observing this requires output that is still in flight after
+	write() returns; NT console output is already in the screen
+	buffer by the time WriteConsole() returns, so there is no state
+	in which tcdrain() could be seen to block, and no way to
+	distinguish a correct immediate return from a stub. */
+static void test_tcdrain_blocks_until_transmitted(int consolefd)
+{
+	CHECK(write(consolefd, "x", 1) == 1);
+	CHECK(tcdrain(consolefd) == 0);
+	/* A serial line would have had to finish shifting the byte out
+	 * before this returns; nothing here can observe that. */
+}
+#endif
+
+#if 0 /* N/A: tcflow.html DESCRIPTION -- TCOOFF "output shall be
+	suspended", TCOON "suspended output shall be restarted", TCIOFF/
+	TCION "the system shall transmit a STOP [START] character".
+	Unlike tcsendbreak(), this page grants no implementation-defined
+	escape for a terminal with no serial line, so ntlibc's
+	unconditional 0 return is a platform-argument no-op rather than
+	a spec-sanctioned one (see the note above this fence). It is
+	nevertheless unobservable here: there is no console API to
+	suspend a screen-buffer write, and no wire for a STOP/START
+	character to be transmitted onto, so a conforming implementation
+	and a stub are indistinguishable from inside the process. */
+static void test_tcflow_suspends_output(int consolefd)
+{
+	CHECK(tcflow(consolefd, TCOOFF) == 0);
+	/* A subsequent write() would now have to block or buffer until
+	 * TCOON; on a console it completes immediately either way. */
+	CHECK(write(consolefd, "x", 1) == 1);
+	CHECK(tcflow(consolefd, TCOON) == 0);
+}
+#endif
+
+#if 0 /* N/A: tcflush.html DESCRIPTION "shall discard data written to
+	the object referred to by fildes ... but not transmitted, or
+	data received but not read, depending on the value of
+	queue_selector."
+	The input half (TCIFLUSH/TCIOFLUSH) is genuinely implemented via
+	kernel32's FlushConsoleInputBuffer(), but observing it requires
+	typed-ahead keystrokes sitting unread in a real interactive
+	console's input buffer -- there is no way to inject input into
+	one's own console input queue from inside the process without
+	kernel32's WriteConsoleInput(), which ntlibc does not wrap. The
+	output half (TCOFLUSH) is unobservable for the same reason
+	tcdrain() is. */
+static void test_tcflush_discards_input(int consolefd)
+{
+	char c;
+	/* would need: type-ahead injected here */
+	CHECK(tcflush(consolefd, TCIFLUSH) == 0);
+	CHECK(read(consolefd, &c, 1) == -1);   /* nothing left to read */
+}
+#endif
 
 #if 0 /* N/A: termios.html struct termios DESCRIPTION -- c_cflag's
 	CS5/CS6/CS7/CS8, PARENB/PARODD, CSTOPB, CRTSCTS all describe a
@@ -404,6 +804,7 @@ static void test_flock_conflict(const char *path)
 int main(int argc, char **argv)
 {
 	int consolefd;
+	int console_borrowed = 0;
 	/* Fixed relative name in the current directory, not a path derived
 	 * from argv[0]: tools/runtests.sh gives every test its own private
 	 * working directory (see that script's header comment), so a plain
@@ -422,7 +823,11 @@ int main(int argc, char **argv)
 	(void)argc;
 
 	test_termios_gating(argv[0]);
+	test_termios_gating_other_shapes();
+	test_termios_header_constants();
 	test_cfsetispeed_cfgetispeed_roundtrip();
+	test_cf_speed_no_interpretation();
+	test_cf_speed_all_rates_and_isolation();
 
 	/* /dev/tty (src/internal/path.c: maps to "CON") -- a real console
 	 * open attempt independent of fd 0/1/2's redirection under
@@ -437,8 +842,31 @@ int main(int argc, char **argv)
 	 * same as every other consolefd<0 branch below. */
 	consolefd = open("/dev/tty", O_RDWR);
 	if (consolefd >= 0 && !isatty(consolefd)) { close(consolefd); consolefd = -1; }
+	/* Second chance, and the one that actually fires: open("/dev/tty")
+	 * turns out never to succeed on this platform even when a console
+	 * *is* attached. src/internal/path.c:29 rewrites "/dev/tty" to
+	 * "CON", which RtlDosPathNameToNtPathName_U turns into \??\CON --
+	 * a name NtCreateFile does not resolve here (measured: EBADF with
+	 * no console, EINVAL with one), so the console half of this file
+	 * was unreachable in every environment, not just under `make
+	 * check`'s runner. Whichever of fds 0/1/2 isatty() calls a
+	 * console is a genuine __FD_CONSOLE descriptor and works for every
+	 * function in this file, so fall back to that: under `make check`
+	 * none of the three qualifies (tools/runtests.sh redirects stdin
+	 * from /dev/null and captures stdout/stderr through a pipe) and
+	 * the detect-and-note branches below still fire, but in an
+	 * interactive run the console-dependent clauses now actually run
+	 * instead of silently skipping. Borrowed, not owned: fds 0/1/2
+	 * must not be closed at the end. */
+	if (consolefd < 0) {
+		int i;
+		for (i = 0; i < 3; i++)
+			if (isatty(i)) { consolefd = i; console_borrowed = 1; break; }
+	}
 	test_termios_einval(consolefd);
 	test_termios_lflag_roundtrip(consolefd);
+	test_termios_stored_roundtrip(consolefd);
+	test_tcgetsid(consolefd);
 
 	test_ioctl_fionread_pipe();
 	test_ioctl_fionread_file(argv[0]);
@@ -447,7 +875,7 @@ int main(int argc, char **argv)
 	test_ioctl_unknown_request();
 	test_ioctl_tiocgwinsz(consolefd);
 	test_ioctl_tiocgwinsz_non_tty(argv[0]);
-	if (consolefd >= 0) close(consolefd);
+	if (consolefd >= 0 && !console_borrowed) close(consolefd);
 
 	test_flock_basic(path);
 	test_flock_conflict(path);

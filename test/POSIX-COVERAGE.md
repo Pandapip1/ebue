@@ -1288,3 +1288,128 @@ mechanism ruled out one at a time); `pselect()`'s sigmask atomicity
 (vacuous without asynchronous signal delivery). Real (non-Wine) Windows
 remains the authority for all of the above — the CI `windows-test` legs,
 not a Wine run, are the verdict.
+
+## termios.h (successor-queue item 2, group A)
+
+The first of the twelve headers `test/POSIX-GAP-ACCOUNTING.md`'s
+successor queue names as never having been given a single ledger row
+here. `src/termios/termios.c`'s file banner argues, function by
+function, which calls are spec-permitted no-ops; that argument had
+never been checked against the spec pages by anyone but its author,
+which is why this header was the one to start with.
+
+New clause-cited audit: `test/posix-termios.c` (this session), which
+already existed for `<sys/ioctl.h>`/`<sys/file.h>` and now carries the
+`<termios.h>` rows below.
+
+**Oracle: NT-behaviour territory, and Wine is weak evidence.** Every
+function in this header is gated on `__FD_CONSOLE` and the three
+load-bearing `c_lflag` bits go through kernel32's
+`GetConsoleMode()`/`SetConsoleMode()`. A green Wine run proves the
+gating, the header constants and the `cf*` struct accessors — all of
+which are pure ntlibc code — and nothing about console mode. The
+`windows-test` CI legs are the authority for the rest.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| tcgetattr | "[EBADF] The fildes argument is not a valid file descriptor." | covered | test/posix-termios.c (`test_termios_gating`) |
+| tcgetattr | "[ENOTTY] The file associated with fildes is not a terminal." — on a regular file, a pipe (both ends) and a directory | covered | test/posix-termios.c (`test_termios_gating`, `test_termios_gating_other_shapes`) |
+| tcgetattr | tcgetattr.html DESCRIPTION "shall get the parameters associated with the terminal ... and store them in the termios structure" — c_iflag/c_oflag/c_cflag/c_cc[] retrieved as stored | covered *(console only)* | test/posix-termios.c (`test_termios_stored_roundtrip`) |
+| tcgetattr | the same, for c_lflag's ISIG/ICANON/ECHO via `GetConsoleMode()` | covered *(console only, and real-NT-only for the console-mode half)* | test/posix-termios.c (`test_termios_lflag_roundtrip`) |
+| tcsetattr | "[EBADF]" / "[ENOTTY]" | covered | test/posix-termios.c (`test_termios_gating`) |
+| tcsetattr | "[EINVAL] The optional_actions argument is not a supported value" | covered *(console only — on a non-terminal the [ENOTTY] gate is reached first, and POSIX fixes no order between them)* | test/posix-termios.c (`test_termios_einval`) |
+| tcsetattr | TCSANOW / TCSADRAIN / TCSAFLUSH are all supported values and none may be rejected | covered *(console only)* | test/posix-termios.c (`test_termios_stored_roundtrip`) |
+| tcsetattr | "shall not change the values found in the termios structure" | covered *(console only)* | test/posix-termios.c (`test_termios_stored_roundtrip`) |
+| tcsetattr | tcsetattr.html DESCRIPTION, TCSAFLUSH "all input so far received but not read shall be discarded" | N/A — needs type-ahead sitting unread in a real interactive console's input queue; ntlibc wraps no `WriteConsoleInput()`, so a process cannot inject into its own console input buffer to observe the discard | fenced, `test_tcflush_discards_input` |
+| tcsetattr | "the modem control lines shall no longer be asserted" when the output baud rate is B0 | N/A — a console handle has no modem control lines; nothing on this platform reads `c_ospeed` back (src/termios/termios.c banner) | — |
+| tcsetattr / tcflush / tcflow / tcdrain / tcsendbreak | "[EIO] The process group of the writing process is orphaned ..." and the background-process-group SIGTTOU clauses | N/A — this platform has exactly one, fixed session and one process group (src/unistd/ids.c's `getsid()`/`setsid()` always answer 1, src/unistd/ttyname.c's `tcgetpgrp()` likewise), so no process can ever be in a *background* process group of its controlling terminal, and the orphaned-group precondition is unconstructible | — |
+| tcsetattr / tcdrain | "[EINTR] A signal interrupted ..." | N/A — neither call blocks on this platform (tcsetattr's console-mode write is synchronous, tcdrain returns immediately, see below), so there is no window for a signal to interrupt | — |
+| cfgetispeed | "shall return exactly the value in the termios data structure, without interpretation" | covered | test/posix-termios.c (`test_cf_speed_no_interpretation`) |
+| cfgetospeed | the same clause, output side | covered | test/posix-termios.c (`test_cf_speed_no_interpretation`) |
+| cfsetispeed | "shall set the input baud rate stored in the structure pointed to by termios_p to speed" — all sixteen POSIX baud values, and no other member of the structure disturbed | covered | test/posix-termios.c (`test_cf_speed_all_rates_and_isolation`) |
+| cfsetospeed | the same clause, output side | covered | test/posix-termios.c (`test_cf_speed_all_rates_and_isolation`) |
+| cfsetispeed / cfsetospeed | "[EINVAL] The speed value is not a valid baud rate" | N/A — a *may fail*, not a *shall fail*; ntlibc has no serial line whose supported-rate set could make any value invalid, so it accepts every one, which the clause permits | — |
+| tcflush | "[EBADF]" / "[ENOTTY]" | covered | test/posix-termios.c (`test_termios_gating`, `test_termios_gating_other_shapes`) |
+| tcflush | "[EINVAL] The queue_selector argument is not a supported value" | covered *(console only)* | test/posix-termios.c (`test_termios_einval`) |
+| tcflush | "shall discard data written ... but not transmitted, or data received but not read" | N/A — see the tcsetattr TCSAFLUSH row; the input half is genuinely implemented (`FlushConsoleInputBuffer()`) but unobservable from inside the process, the output half has no transmit queue to discard | fenced, `test_tcflush_discards_input` |
+| tcdrain | "[EBADF]" / "[ENOTTY]" | covered | test/posix-termios.c (`test_termios_gating`, `test_termios_gating_other_shapes`) |
+| tcdrain | "shall block until all output written to the object referred to by fildes is transmitted" | N/A — console output is already in the screen buffer when `WriteConsole()` returns, so no state exists in which tcdrain() could be seen to block, and a correct immediate return is indistinguishable from a stub | fenced, `test_tcdrain_blocks_until_transmitted` |
+| tcflow | "[EBADF]" / "[ENOTTY]" | covered | test/posix-termios.c (`test_termios_gating`) |
+| tcflow | "[EINVAL] The action argument is not a supported value" | covered *(console only)* | test/posix-termios.c (`test_termios_einval`) |
+| tcflow | TCOOFF "output shall be suspended" / TCOON / TCIOFF / TCION STOP-START transmission | N/A — no console API suspends a screen-buffer write and no wire exists for a STOP/START character. **Recorded with a caveat**: unlike tcsendbreak.html, tcflow.html grants *no* implementation-defined escape for a terminal with no serial line, so the unconditional `return 0` rests on a platform argument rather than a spec permission. See "Observed behaviour where POSIX permits latitude" below. | fenced, `test_tcflow_suspends_output` |
+| tcsendbreak | "[EBADF]" / "[ENOTTY]" | covered | test/posix-termios.c (`test_termios_gating`) |
+| tcsendbreak | "If the terminal is not using asynchronous serial data transmission, it is implementation-defined whether tcsendbreak() sends data ... or returns without taking any action" | covered — the no-op *is* the specified behaviour here, so the return value is the whole testable content of the clause | test/posix-termios.c (`test_termios_gating`) |
+| tcgetsid | "[EBADF]" / "[ENOTTY]" | covered | test/posix-termios.c (`test_termios_gating`, `test_termios_gating_other_shapes`) |
+| tcgetsid | "shall return the process group ID of the session associated with the terminal" | covered *(console only)* — agrees with `getsid(0)` rather than inventing an answer, and is positive, `(pid_t)-1` being reserved for the error return | test/posix-termios.c (`test_tcgetsid`) |
+| `<termios.h>` | termios.h.html "Subscript values shall be ... distinct", and the c_iflag/c_oflag/c_cflag/c_lflag names must be OR-able into one `tcflag_t` each, so within a group they must not overlap; CSIZE's CS5..CS8 must lie inside the CSIZE mask and not collide with any other control-mode bit | covered | test/posix-termios.c (`test_termios_header_constants`) |
+| `<termios.h>` | the [XSI] Output Modes delay masks — NLDLY (NL0, NL1), CRDLY (CR0..CR3), TABDLY (TAB0..TAB3), BSDLY (BS0, BS1), VTDLY (VT0, VT1), FFDLY (FF0, FF1) | **UNIMPL** — see below | fenced, `test_termios_oflag_delay_masks` |
+
+### UNIMPL found (termios.h)
+
+1. **The [XSI] `c_oflag` delay masks are not defined.**
+   `termios.h.html`'s Output Modes table marks `NLDLY`/`NL0`/`NL1`,
+   `CRDLY`/`CR0`..`CR3`, `TABDLY`/`TAB0`..`TAB3`, `BSDLY`/`BS0`/`BS1`,
+   `VTDLY`/`VT0`/`VT1` and `FFDLY`/`FF0`/`FF1` [XSI], in the same table
+   and with the same marking as `ONLCR`, `OCRNL`, `ONOCR`, `ONLRET`,
+   `OFILL` and `OFDEL`. ntlibc compiles `-D_XOPEN_SOURCE=700` and
+   defines those six; it defines none of the delay names.
+
+   Classified **UNIMPL, not N/A**, on the project's own rule that "I
+   chose not to" is UNIMPL. The N/A argument would have to be "no
+   console applies output delays" — but that is equally true of
+   `ONLCR`, which *is* defined, and `c_oflag` is already accepted and
+   stored wholesale by `src/termios/termios.c`'s shadow, so the delay
+   bits would round-trip like every other output-mode bit at no cost.
+   A header gap, not a platform impossibility.
+
+   Test (fenced): `test_termios_oflag_delay_masks`.
+
+### Observed behaviour where POSIX permits latitude (termios.h)
+
+- `tcdrain()`, `tcflow()` and `tcflush()`'s output half return 0
+  without acting. For `tcsendbreak()` this is explicitly sanctioned
+  (`tcsendbreak.html`: "it is implementation-defined whether
+  tcsendbreak() sends data to generate a break condition or returns
+  without taking any action"); the other three pages carry no such
+  clause, so their no-op status rests on the platform argument in
+  `src/termios/termios.c`'s banner — a console write is complete when
+  `WriteConsole()` returns, so there is no transmit queue to drain,
+  suspend or discard. That argument is sound and the alternative
+  (returning -1) would be worse: none of the three has an
+  ENOTSUP-shaped error, so a failure return would be indistinguishable
+  from the genuine [EBADF]/[EINVAL]/[ENOTTY] cases. Recorded here
+  rather than as a BUG because the requested effect is *unobservable*
+  on this platform, not because it is permitted — a fenced test names
+  each clause so the distinction is not lost.
+
+- `speed_t` values are the literal bps number rather than opaque
+  constants, and `c_ispeed`/`c_ospeed` are struct members added the
+  *BSD way. POSIX mandates neither the encoding nor the storage shape
+  (`termios.h.html` requires only the `cf*` accessors), so both are
+  latitude, and `test_cf_speed_no_interpretation` pins the one clause
+  that does constrain them ("without interpretation").
+
+### Not reached (termios.h)
+
+Everything marked *(console only)* above needs a descriptor that
+`isatty()` calls a terminal. `make check` has none: `tools/runtests.sh`
+redirects stdin from `/dev/null` and captures stdout/stderr through a
+pipe, so fds 0/1/2 are not consoles there. `test/posix-termios.c` now
+looks for one in two places rather than one and notes what it found;
+under an interactive run (a pty attached, so fds 0/1/2 *are*
+`__FD_CONSOLE`) every one of those rows was verified green, which is
+how they are recorded as covered rather than not reached.
+
+Side finding, outside this header's clauses and therefore not a row
+above: **`open("/dev/tty")` never succeeds on this platform, even when
+a console is attached.** `src/internal/path.c:29` rewrites `/dev/tty`
+to `CON`, which `RtlDosPathNameToNtPathName_U` turns into `\??\CON`, a
+name `NtCreateFile` does not resolve here — measured EBADF with no
+console attached and EINVAL with one. That was this file's *only*
+console-detection path before this session, so the whole
+console-dependent half of it skipped unconditionally in every
+environment, not just under `make check`'s runner. The fix here is to
+the test (fall back to whichever of fds 0/1/2 `isatty()` accepts); the
+`/dev/tty` mapping itself is untouched and remains open. POSIX
+specifies `/dev/tty` in XBD 10.1 Directory Structure and Devices, not
+in any function page audited here.
