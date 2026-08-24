@@ -371,7 +371,7 @@ cat > "$runner" <<'EOF'
 #!/bin/sh
 n=$(basename "$1" .exe)
 d=$(mktemp -d "$W/work.XXXXXX") || { echo 1 > "$W/out/$n.rc"; exit 0; }
-# 120s, not the 25s this started with: the gate runs twelve stages
+# 120s, not the 25s this started with: the gate runs every stage
 # at once and Wine process startup under that contention was measured
 # at 40x its idle cost, which timed 14 trivial tests out and reported
 # them as behavioural failures.  The genuine hang risk here is

@@ -103,8 +103,17 @@ note() { printf '%s\n' "$*" >&2; }
 #
 # third_party/ is excluded from every copy EXCEPT libc-test's. It holds
 # one git submodule -- musl's libc-test, ~940 files and 11 MB -- and only
-# that one stage reads it, so ten of the eleven copies would be paying
-# 11 MB of rsync for nothing.
+# that one stage reads it, so every other copy would be paying 11 MB of
+# rsync for nothing.
+#
+# The count that used to be here ("ten of the eleven copies") was right
+# when written and is right today -- ALL_STAGES lists twelve stages,
+# `generated` takes no copy because it runs in the real tree, and one of
+# the remaining eleven is libc-test's. It is removed anyway: it is a
+# hand-maintained number describing a list two screens further down, it
+# goes stale the moment a stage is added, and the sentence does not need
+# it. Same class as tools/asan-build.sh's "four harnesses" when there
+# were eight.
 #
 # The saving is the lesser reason. The real one is the `reuse` stage.
 # rsync strips the .git that tells the `reuse` tool those files belong to
