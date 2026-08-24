@@ -69,38 +69,48 @@
  * below at GLOB_TILDE rather than assumed either way, since GLOB_TILDE
  * is not itself a POSIX.1-2017 base requirement.
  *
- * wordexp.h -- split, and less split than it used to be.  wordexp() is
- * defined as performing shell word expansion "as described in XCU Word
+ * wordexp.h -- no longer split at all.  wordexp() is defined as
+ * performing shell word expansion "as described in XCU Word
  * Expansions" (wordexp.html DESCRIPTION), i.e. as if by the shell
- * described in XBD Shell Command Language.  This platform has no such
- * shell: src/stdio/misc.c's popen() already documents that ntlibc
- * hands shell work to cmd.exe /c, an entirely different, non-POSIX
- * grammar, precisely *because* there is no /bin/sh to hand it to.
- * Command substitution ($(...) or `...`) requires executing an
- * embedded, arbitrarily complex command *list* per that grammar --
- * genuinely N/A short of porting a real POSIX shell binary, which is
- * out of a libc's scope.  Arithmetic expansion ($((...))), despite
- * looking like the same kind of gap, is not: XBD 2.6.4 defines it as
- * evaluating a self-contained C-like expression already reduced to
- * text (no command execution involved at all -- see src/wordexp/
- * arith.c's own header), so a follow-up agent implemented it directly;
- * every assertion below that exercises it is live. Field splitting of
- * a command substitution's *result* remains N/A, for a subtler reason:
- * POSIX defines it (XBD 2.6.5) as operating on the *results* of the
- * other expansions with quote-context carried through them, so a
- * correct splitter cannot be cut loose from the command substitution
- * it must track the boundaries of, even though splitting a literal
- * string (or an arithmetic expansion's decimal result, which is
- * exactly that) on IFS bytes is trivial by itself and already covered
- * by test_wordexp_bookkeeping_flags().  WRDE_BADCHAR's "unquoted ...
- * inappropriate context" check and WRDE_CMDSUB remain tied to the
- * still-fenced command-substitution test below. Genuine gaps,
- * independent of a shell: tilde expansion (~ and ~user -- same HOME/
- * getpwnam mechanism as GLOB_TILDE above), parameter expansion of bare
- * $VAR/${VAR} against environ, pathname expansion (delegates straight
- * to glob(), itself a gap above), quote removal, arithmetic expansion
- * (as of this update), and the WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE
- * bookkeeping flags, none of which need a command interpreter.
+ * described in XBD Shell Command Language.  This paragraph used to
+ * record, correctly at the time, that this platform had no such shell
+ * -- src/stdio/misc.c's popen() hands shell work to cmd.exe /c, an
+ * entirely different, non-POSIX grammar, precisely *because* there is
+ * no /bin/sh -- and that command substitution ($(...) or `...`), which
+ * needs an embedded, arbitrarily complex command *list* executed per
+ * that grammar, was therefore N/A short of porting a real POSIX shell
+ * binary.
+ *
+ * ntlibc has one now: src/sh/, an in-process shell compiled into the
+ * same libc.a rather than a separate interpreter image (see
+ * test/sh-design.md for why a C library grew one, and why linkage
+ * rather than PATH discovery).  wordexp() calls into it, so command
+ * substitution is live below, and with it the thing the old note called
+ * out as tied to it by construction: field splitting of a command
+ * substitution's *result*.  That one was N/A for a subtler reason worth
+ * keeping on the record -- XBD 2.6.5 defines field splitting as
+ * operating on the *results* of the other expansions with quote context
+ * carried through them, so a correct splitter cannot be cut loose from
+ * the command substitution whose boundaries it must track, which is
+ * exactly why it is done inside the same scan and not bolted on
+ * afterwards.  Splitting a literal string (or an arithmetic
+ * expansion's decimal result, which is exactly that) on IFS bytes is
+ * the trivial half and is covered separately.
+ *
+ * Two field-splitting gaps do remain, neither about command
+ * substitution: an unquoted parameter expansion's result is not split,
+ * and IFS itself is never consulted (space/tab/newline are hard-coded).
+ * Arithmetic expansion ($((...))) was never the same kind of gap as
+ * command substitution -- XBD 2.6.4 defines it as evaluating a
+ * self-contained C-like expression already reduced to text, with no
+ * command execution anywhere in it (see src/wordexp/arith.c's own
+ * header) -- and has been live since an earlier update.  The rest, none
+ * of which ever needed a command interpreter: tilde expansion (~ and
+ * ~user -- same HOME/getpwnam mechanism as GLOB_TILDE above),
+ * parameter expansion of bare $VAR/${VAR} against environ, pathname
+ * expansion (delegates straight to glob(), itself a gap above), quote
+ * removal, and the WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE bookkeeping
+ * flags.
  *
  * regex.h -- genuine gap.  A BRE/ERE compiler and matcher is pure
  * string/automaton code with no NT dependency; large, so this file
@@ -787,46 +797,140 @@ static void test_wordexp_arith(void)
 	wordfree(&we);
 }
 
-/* N/A: wordexp.html DESCRIPTION says wordexp() performs expansion "as
- * described in XCU Word Expansions", i.e. as if by the POSIX shell
- * described in XBD Shell Command Language. Command substitution
- * ($(cmd) / `cmd`) requires running an embedded, arbitrarily complex
- * *command list* through that grammar -- loops, conditionals, further
- * substitutions -- which is asking for a real shell interpreter, not a
- * libc function. This platform has none: src/stdio/misc.c's popen()
- * documents that ntlibc hands shell work to cmd.exe /c specifically
- * *because* there is no /bin/sh, and cmd.exe's batch grammar cannot
- * parse $(...) at all -- it is a different, incompatible language, not
- * a drop-in substitute. Field splitting of a command substitution's
- * *result* is N/A for the same reason the file header gives (it must
- * track quote/substitution boundaries it cannot be separated from --
- * field splitting of already-in-memory literal text, unlike this, is
- * genuinely implemented and covered by test_wordexp_bookkeeping_flags()
- * above); WRDE_BADCHAR's "unquoted ... inappropriate context" check and
- * WRDE_CMDSUB are the same dependency by construction. */
-#if 0 /* N/A: wordexp.html DESCRIPTION -- performing command
-	substitution requires a shell to run the command in, and this
-	platform has none that understands "$(...)" (src/stdio/misc.c
-	hands shell work to cmd.exe, which cannot parse it). See this
-	file's header.
+/* Was N/A, and is not any more -- the one entry in this file that
+ * changed category rather than just getting implemented. The fence used
+ * to read, correctly at the time, that command substitution needs "a
+ * real shell interpreter, not a libc function", that this platform had
+ * none, and that src/stdio/misc.c's popen() hands shell work to cmd.exe
+ * /c precisely because there is no /bin/sh -- cmd.exe's batch grammar
+ * cannot parse $(...) at all. A previous session had already narrowed
+ * it to just the substitution itself, moving the three assertions that
+ * only shared a function with it into
+ * test_wordexp_badchar_nocmd_and_literal_splitting() below; this
+ * removes what was left.
+ *
+ * ntlibc grew a shell (src/sh/, see test/sh-design.md for why a C
+ * library did that and how it links): internal functions in the same
+ * libc.a, not an interpreter image discovered on PATH. wordexp() calls
+ * into it directly, so a substitution's command list is parsed and run
+ * in-process. That also settles what the old fence and this file's
+ * header called the subtler half -- field splitting of a
+ * substitution's *result*, which XBD 2.6.5 defines in terms of quote
+ * context carried through the other expansions, so a splitter cannot be
+ * cut loose from the substitution whose boundaries it must track. It is
+ * not cut loose here: the splitting happens inside the same
+ * left-to-right scan that performed the substitution, which is what
+ * makes it possible at all.
+ *
+ * The command run below is this test binary re-execing itself in a
+ * "--produce" role, the pattern test/sh.c's header comment documents
+ * and test/misc.c's test_abort_child() established: there is no
+ * standalone `echo` on this platform to substitute, and depending on
+ * one would be exactly the external dependency test/sh-design.md's
+ * reuse rule exists to avoid. (That is also why
+ * test_wordexp_badchar_nocmd_and_literal_splitting()'s WRDE_NOCMD
+ * assertions, which name `echo`, keep working unchanged: WRDE_NOCMD
+ * refuses the substitution before anything is looked up. The ones here
+ * are the complementary case -- refusing one that would otherwise
+ * genuinely run.)
+ *
+ * Live, not fenced. */
+/* Whether a command substitution can capture anything at all here.
+ * src/sh/exec.c captures a substituted command's output by pointing
+ * this process's own fd 1 at a temporary file before spawning it, which
+ * a real child inherits -- true under Wine and on real Windows, and NOT
+ * true under tools/asan-build.sh's native harness, whose
+ * RtlCreateUserProcess stub (fuzz/ntstubs.c) is a host fork()+execve()
+ * that never reads pp->StandardOutput, so the child keeps the
+ * harness's original fd 1 and the capture comes back empty. Detected
+ * by trying it once rather than assumed from a macro -- the same
+ * discipline test/sh.c's file_redir_supported() uses for the same
+ * environment gap, and for the same reason: this keeps working
+ * unattended if that stub's process model changes. Only the assertions
+ * that need captured *text* are skipped; WRDE_NOCMD below refuses the
+ * substitution before anything is spawned and is checked either way. */
+static int cmdsub_capture_works(const char *self)
+{
+	static int cached = -1;
+	wordexp_t we;
+	char w[512];
 
-	Narrowed this session: the other three assertions that used to
-	sit inside this fence -- field splitting of literal input,
-	WRDE_NOCMD returning WRDE_CMDSUB, and WRDE_BADCHAR -- are all
-	implemented and passing today, and were fenced only because they
-	shared a function with the one clause that genuinely needs a
-	shell. They now live, unfenced, in
-	test_wordexp_badchar_nocmd_and_literal_splitting(). Only the
-	substitution itself remains N/A. */
-static void test_wordexp_cmdsub_needs_a_shell(void)
+	if (cached >= 0) return cached;
+	cached = 0;
+	snprintf(w, sizeof w, "$('%s' --produce probe)", self);
+	if (wordexp(w, &we, 0) == 0) {
+		if (we.we_wordc == 1 && strcmp(we.we_wordv[0], "probe") == 0) cached = 1;
+		wordfree(&we);
+	}
+	if (!cached)
+		printf("  note: a spawned child cannot see this process's redirected"
+		       " stdout in this environment (native ASan stub?) -- skipping"
+		       " the command-substitution capture checks\n");
+	return cached;
+}
+
+static void test_wordexp_cmdsub(const char *self)
 {
 	wordexp_t we;
+	char w[512];
 
-	CHECK(wordexp("$(echo hi)", &we, 0) == 0);
+	if (!cmdsub_capture_works(self)) goto nocmd_only;
+
+	/* wordexp.html DESCRIPTION: expansion "as described in XCU Word
+	 * Expansions". XCU 2.6.3: the substitution is replaced with the
+	 * standard output of the command, "removing sequences of one or
+	 * more <newline> characters at the end of the substitution" -- so
+	 * a --produce role's "hi\n" arrives as "hi". */
+	snprintf(w, sizeof w, "$('%s' --produce hi)", self);
+	CHECK(wordexp(w, &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "hi") == 0);
 	wordfree(&we);
+
+	/* Both forms 2.6.3 defines, not just the modern one. */
+	snprintf(w, sizeof w, "`'%s' --produce hi`", self);
+	CHECK(wordexp(w, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "hi") == 0);
+	wordfree(&we);
+
+	/* Field splitting of a *substitution's result* containing spaces --
+	 * the half that needed the substitution to be real (XBD 2.6.5
+	 * applied to the results of 2.6.3). Splitting literal input text,
+	 * the half that never did, is
+	 * test_wordexp_badchar_nocmd_and_literal_splitting()'s. */
+	snprintf(w, sizeof w, "$('%s' --produce 'a b')", self);
+	CHECK(wordexp(w, &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	CHECK(we.we_wordc == 2 && strcmp(we.we_wordv[0], "a") == 0 &&
+	      strcmp(we.we_wordv[1], "b") == 0);
+	wordfree(&we);
+
+	snprintf(w, sizeof w, "`'%s' --produce 'a b'`", self);
+	CHECK(wordexp(w, &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	wordfree(&we);
+
+	/* 2.6.3: "If a command substitution occurs inside double-quotes,
+	 * field splitting and pathname expansion shall not be performed on
+	 * the results of the substitution." */
+	snprintf(w, sizeof w, "\"$('%s' --produce 'a b')\"", self);
+	CHECK(wordexp(w, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "a b") == 0);
+	wordfree(&we);
+
+	snprintf(w, sizeof w, "\"`'%s' --produce 'a b'`\"", self);
+	CHECK(wordexp(w, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "a b") == 0);
+	wordfree(&we);
+
+nocmd_only:
+	/* WRDE_NOCMD refusing a substitution that would otherwise really
+	 * run -- see this function's header comment. Reached whether or
+	 * not the capture works: nothing is spawned on this path. */
+	snprintf(w, sizeof w, "$('%s' --produce hi)", self);
+	CHECK(wordexp(w, &we, WRDE_NOCMD) == WRDE_CMDSUB);
+	snprintf(w, sizeof w, "`'%s' --produce hi`", self);
+	CHECK(wordexp(w, &we, WRDE_NOCMD) == WRDE_CMDSUB);
 }
-#endif
 
 
 /* ==== clauses the successor-queue glob/fnmatch/wordexp audit added ======= */
@@ -2728,8 +2832,18 @@ static void test_nftw_chdir_and_mount(void)
 	ftw_fixture_teardown();
 }
 
-int main(void)
+/* Re-exec role, dispatched on argv[1] before any test runs: writes
+ * argv[2] plus a newline to stdout and exits 0. test_wordexp_cmdsub()
+ * needs a real command to substitute and this platform has no
+ * standalone `echo`; test/sh.c's header comment explains the pattern
+ * (and test/misc.c's test_abort_child() established it). */
+int main(int argc, char **argv)
 {
+	if (argc > 2 && !strcmp(argv[1], "--produce")) {
+		printf("%s\n", argv[2]);
+		return 0;
+	}
+
 	test_fnmatch_basic_grammar();
 	test_fnmatch_pathname_flag();
 	test_fnmatch_escape();
@@ -2746,6 +2860,7 @@ int main(void)
 	test_wordexp_glob_and_quotes();
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
+	test_wordexp_cmdsub(argv[0]);
 	test_wordexp_badchar_nocmd_and_literal_splitting();
 	test_wordexp_syntax_errors();
 	test_wordexp_reuse_and_append_order();
