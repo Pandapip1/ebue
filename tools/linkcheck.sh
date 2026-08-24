@@ -338,19 +338,145 @@ reason_for() {
 # hsearch is unlinkable (test/posix-glob.c calls it with a real ENTRY
 # literal and it works), but because a bare `0` can never stand in for
 # a byval struct argument no matter what the callee does with it.
+#
+# inet_ntoa() (include/arpa/inet.h, src/socket/inet.c) is the identical
+# by-value-struct shape: `char *inet_ntoa(struct in_addr)` takes its
+# only argument by value, so the generated `inet_ntoa(0)` hits the same
+# "0 cannot convert to a struct type" compile failure, not a real link
+# problem (test/posix-socket.c calls it with a real struct in_addr and
+# it works).
 linkcheck_exception() {
 	case $1 in
 	ntlibc_rpath_load|ntlibc_rpath_sym|ntlibc_rpath_error|ntlibc_rpath_fail|ntlibc_delayLoadHelper2|ntlibc_rpath_unload|ntlibc_rpath_error_seq|dlopen|dlsym|dlclose|dlerror)
 		echo "resolves __rpath (include/ntlibc/rpath.h), an extern array the *calling program* is documented to define (see test/rpath.c) -- not a libc symbol, so no standalone TU can supply it" ;;
 	hsearch)
 		echo "takes ENTRY by value (basedefs/search.h.html); this script's generated call site fills every argument with a literal 0, which cannot convert to a struct type -- a generator limitation, not an unlinkable symbol (see test/posix-glob.c's real ENTRY-literal call)" ;;
+	inet_ntoa)
+		echo "takes struct in_addr by value (include/arpa/inet.h); this script's generated call site fills every argument with a literal 0, which cannot convert to a struct type -- a generator limitation, not an unlinkable symbol (see test/posix-socket.c's real struct in_addr call)" ;;
 	*) echo "" ;;
 	esac
+}
+
+# ---------------------------------------------------------------------
+# PE header sanity check.
+#
+# Wine's PE loader and the real Windows NT loader disagree about which
+# header fields they actually enforce -- measured directly on real
+# Windows 11 Pro 22621 by building header variants of the same program
+# and launching each on the true NT loader (see the commit that added
+# this check for the full transcript):
+#
+#   - SectionAlignment below the page size (0x1000), *even with
+#     FileAlignment set to match it* -- a combination the PE/COFF spec
+#     (section "Optional Header Windows-Specific Fields", the
+#     SectionAlignment entry) explicitly permits -- makes the real NT
+#     loader reject the image outright with ERROR_BAD_EXE_FORMAT (193),
+#     "is not a valid Win32 application". Wine loads the identical image
+#     without complaint.
+#   - SectionAlignment == 0x1000 loads and runs on real Windows even
+#     when SizeOfRawData is not a multiple of FileAlignment, which the
+#     spec says it MUST be -- ReactOS's ntoskrnl/mm/section.c documents
+#     deliberately disabling that exact check, with a comment noting
+#     real-world images violate it and the loader copes. So that field
+#     is a confirmed non-hazard on the "spec MUST but nobody enforces
+#     it" side and is deliberately NOT asserted here.
+#
+# Every test this project runs, runs under Wine (tools/runtests.sh);
+# none of them would ever notice a SectionAlignment regression. This
+# check exists so a static header inspection catches it instead, on
+# every .exe tools/linkcheck.sh builds.
+#
+# Read with `od`, not objdump/readelf or a PE-parsing library: this
+# script has no dependency today beyond awk/sh/the target $CC, od is a
+# POSIX utility (IEEE Std 1003.1-2017), and the three fields needed
+# (Magic, SectionAlignment, FileAlignment) sit at fixed byte offsets
+# from e_lfanew, so a handful of `od -j/-N` reads is simpler and more
+# portable than adding a new tool dependency for three integers this
+# script's own build-and-link recipe already produced. This stays out
+# of the boot/kaem/ bootstrap path entirely -- that path never invokes
+# `make linkcheck`, only tcc + mkdir/cp/catm (see gen-kaem.sh).
+#
+# Bytes are combined explicitly as little-endian (PE's byte order,
+# always) rather than via `od`'s native-endian numeric types, so this
+# is correct even run on a big-endian host.
+#
+# Standard fields before the Windows-specific fields are 28 bytes long
+# in a PE32 optional header (through BaseOfData) and 24 bytes in PE32+
+# (no BaseOfData), but ImageBase is 4 bytes in PE32 and 8 in PE32+, so
+# the two differences exactly cancel: SectionAlignment lands at
+# optional-header offset 32, and FileAlignment at offset 36, in both
+# PE32 and PE32+ alike.
+# ---------------------------------------------------------------------
+pe_u8_list() {
+	# pe_u8_list FILE OFFSET COUNT -- COUNT decimal byte values, one per line.
+	od -An -tu1 -j "$2" -N "$3" "$1" | tr -s ' \t' '\n' | sed '/^$/d'
+}
+
+pe_le() {
+	# pe_le FILE OFFSET COUNT -- little-endian unsigned integer built
+	# from COUNT bytes (COUNT <= 4) read at OFFSET in FILE.
+	pe_le_val=0 pe_le_mul=1
+	for pe_le_byte in $(pe_u8_list "$1" "$2" "$3"); do
+		pe_le_val=$((pe_le_val + pe_le_byte * pe_le_mul))
+		pe_le_mul=$((pe_le_mul * 256))
+	done
+	echo "$pe_le_val"
+}
+
+pe_header_check() {
+	# pe_header_check EXE -- prints nothing and returns 0 if EXE's PE
+	# header passes every check above; otherwise prints one line per
+	# violation (to stdout -- callers redirect) and returns nonzero.
+	img=$1
+	case $ARCH in
+	x86_64) pe_want_magic=$((0x20b)); pe_want_name="PE32+" ;;
+	i386)   pe_want_magic=$((0x10b)); pe_want_name="PE32" ;;
+	*)
+		echo "linkcheck: ARCH='$ARCH' has no known expected PE Magic -- add it to pe_header_check() in tools/linkcheck.sh"
+		return 1 ;;
+	esac
+
+	set -- $(pe_u8_list "$img" 0 2)
+	if [ "${1:-0}" -ne 77 ] || [ "${2:-0}" -ne 90 ]; then
+		echo "$img: no MZ signature at offset 0 -- not a PE image"
+		return 1
+	fi
+
+	pe_off=$(pe_le "$img" 60 4)
+	set -- $(pe_u8_list "$img" "$pe_off" 4)
+	if [ "${1:-0}" -ne 80 ] || [ "${2:-0}" -ne 69 ] || [ "${3:-0}" -ne 0 ] || [ "${4:-0}" -ne 0 ]; then
+		echo "$img: no PE signature at e_lfanew offset $pe_off"
+		return 1
+	fi
+
+	opt_off=$((pe_off + 4 + 20))
+	pe_magic=$(pe_le "$img" "$opt_off" 2)
+	pe_sec_align=$(pe_le "$img" $((opt_off + 32)) 4)
+	pe_file_align=$(pe_le "$img" $((opt_off + 36)) 4)
+
+	pe_ok=1
+	if [ "$pe_magic" -ne "$pe_want_magic" ]; then
+		printf '%s: Magic 0x%x, expected 0x%x (%s, for ARCH=%s)\n' \
+			"$img" "$pe_magic" "$pe_want_magic" "$pe_want_name" "$ARCH"
+		pe_ok=0
+	fi
+	if [ "$pe_sec_align" -lt 4096 ]; then
+		printf '%s: SectionAlignment 0x%x is below the page size (0x1000). The real NT loader rejects this outright with ERROR_BAD_EXE_FORMAT (193), "is not a valid Win32 application" -- even when FileAlignment is set to match it, which the PE/COFF spec explicitly permits. Measured on real Windows 11 Pro 22621; Wine loads such an image fine, so this project'"'"'s Wine-based test suite can never catch it (see the comment above pe_header_check() in tools/linkcheck.sh).\n' \
+			"$img" "$pe_sec_align"
+		pe_ok=0
+	fi
+	if [ "$pe_sec_align" -lt "$pe_file_align" ]; then
+		printf '%s: SectionAlignment 0x%x is less than FileAlignment 0x%x; the PE/COFF spec requires SectionAlignment >= FileAlignment unconditionally.\n' \
+			"$img" "$pe_sec_align" "$pe_file_align"
+		pe_ok=0
+	fi
+	[ "$pe_ok" -eq 1 ]
 }
 
 total=0 checked=0 excepted=0 failed=0
 : > "$builddir/failures"
 : > "$builddir/exceptions"
+: > "$builddir/pe-seen"
 
 while IFS="$(printf '\t')" read -r nm hdr argc marked; do
 	[ -z "$nm" ] && continue
@@ -400,6 +526,30 @@ while IFS="$(printf '\t')" read -r nm hdr argc marked; do
 			printf '%s (%s, %s args) -- LINK FAILED:\n' "$nm" "$hdr" "$argc"
 			sed 's/^/    /' "$exe.err"
 		} >> "$builddir/failures"
+		continue
+	fi
+
+	if ! pehdr=$(pe_header_check "$exe" 2>&1); then
+		failed=$((failed + 1))
+		# Every .exe built this run shares the same $CC/$CFLAGS/link
+		# recipe, so a PE header regression is not per-symbol -- it is
+		# the same header field, wrong the same way, in every failing
+		# .exe. Print the full reason once per distinct message (keyed
+		# on the text with this file's own path stripped out) and fold
+		# repeats into a one-line pointer, so a real regression's
+		# report stays readable instead of repeating the same
+		# paragraph once per declared symbol (hundreds of times).
+		pe_key=$(printf '%s\n' "$pehdr" | sed "s#$exe#<exe>#g")
+		if grep -qxF "$pe_key" "$builddir/pe-seen" 2>/dev/null; then
+			printf '%s (%s, %s args) -- PE HEADER CHECK FAILED: %s (same reason as the first instance above; see %s)\n' \
+				"$nm" "$hdr" "$argc" "$(printf '%s\n' "$pehdr" | head -1)" "$exe" >> "$builddir/failures"
+		else
+			printf '%s\n' "$pe_key" >> "$builddir/pe-seen"
+			{
+				printf '%s (%s, %s args) -- PE HEADER CHECK FAILED:\n' "$nm" "$hdr" "$argc"
+				printf '%s\n' "$pehdr" | sed 's/^/    /'
+			} >> "$builddir/failures"
+		fi
 	fi
 done < "$declfile"
 
