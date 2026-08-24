@@ -17,38 +17,96 @@
  *     is what __fd_runtime_data does), and the numbers are written into
  *     the RuntimeData block the child's crt1 reads back.
  *
- *   - The child's own startup would overwrite StandardInput/Output/Error
- *     in its process parameters with fresh console handles unless
- *     STARTF_USESTDHANDLES is set in WindowFlags.  RtlCreateUserProcess
- *     offers no way to set it, so it is written into the parameter block
- *     directly.  (This is the same decision ReactOS's kernel32
- *     SetUpHandles makes; it was measured to be necessary on Windows 11.)
+ *   - STARTF_USESTDHANDLES has to be set in WindowFlags or the standard
+ *     handles written below do not reach the child intact -- measured to
+ *     be necessary on Windows 11.  RtlCreateUserProcess offers no way to
+ *     set it, so it is written into the parameter block directly.
+ *     (ReactOS's kernel32 SetUpHandles sets the same flag, which is why
+ *     it was picked; but that is a *parent-side kernel32* function this
+ *     code never calls, so treat it as precedent for the value, not as
+ *     an account of what consumes the flag here.  See the next bullet:
+ *     kernel32 is not in the picture on this path at all.)
  *
  *   - A *closed* standard descriptor cannot be represented by writing 0
  *     (NULL) *or* (HANDLE)(LONG_PTR)-1 (INVALID_HANDLE_VALUE) into the
- *     field -- both were tried, and both were measured to still come up
- *     as a live, open handle in the child on real Windows (all three
- *     real-Windows CI legs; Wine does not reproduce either failure,
- *     because this code never goes through kernel32's CreateProcess,
- *     the only place documented to give either value special meaning --
- *     rprichard/win32-console-docs, README.md, "CreateProcess (modern)"
- *     rule 1 and the "AllocConsole, AttachConsole (modern)" NULL-backfill
- *     rule are both *that function's* rules, evaluated on the parent
- *     side before RtlCreateUserProcess/NtCreateUserProcess is ever
- *     called; a raw ntdll caller like this one never runs them, and gets
- *     whatever the *child's own* kernelbase.dll console/std-handle
- *     bring-up -- which every CUI-subsystem process still goes through
- *     at its own startup, independent of who created it -- does with an
- *     unprocessed field it was never designed to see).  What *does*
- *     survive, verified against this file's own probe under Wine's
- *     faithful NtQueryVolumeInformationFile type-checking (which matches
- *     documented NT object-manager behaviour, not a Wine quirk): a real,
+ *     field.  Something between the write here and the child's first
+ *     instruction replaces it.  What is known about that something,
+ *     sorted by how well it is known:
+ *
+ *     Measured.  NULL fails on real Windows.  -1 fails on real Windows
+ *     as well (CI run 32703368816, the first real-Windows run to include
+ *     the -1 attempt): in both cases the child came up with a live, open
+ *     descriptor on all three windows-test legs.  A real-but-rejected
+ *     handle works (run 32725836191, all three legs green).  Two
+ *     unrelated sentinels failing identically is the useful part: the
+ *     fix-up is *value-blind*.  It replaces whatever the caller wrote
+ *     without inspecting it, which is why looking for a third magic
+ *     value would not have worked either.
+ *
+ *     Ruled out.  Every kernel32/kernelbase mechanism, on the flat
+ *     ground that neither DLL is in these processes.  tools/
+ *     linkcheck.sh:525 and the Makefile's test rule both link
+ *     `-nostdlib ... -lc -lntdll`, ntdll only; a built artifact agrees
+ *     (the test executables import ntdll.dll and nothing else,
+ *     Subsystem 3 = CUI); configure defaults kernel32=no, and the one
+ *     CI leg built --enable-kernel32 still reaches kernel32 by
+ *     LdrLoadDll at signal-setup time (src/signal/signal.c), not by import.  So at the
+ *     moment __fd_init (src/internal/fd.c) reads StandardInput,
+ *     kernelbase has never been mapped into the child.  That disposes of
+ *     ConDllInitialize, BasepInitConsole, SetUpHandles, the CSRSS/ConSrv
+ *     handoff, AllocConsole's NULL-backfill and lazy GetStdHandle alike
+ *     -- and of the earlier revisions of this comment, which blamed "the
+ *     child's own kernelbase.dll console/std-handle bring-up, which
+ *     every CUI-subsystem process still goes through".  That code never
+ *     ran here.  (The rprichard/win32-console-docs "CreateProcess
+ *     (modern)" and "AllocConsole, AttachConsole (modern)" rule sets
+ *     that earlier revisions leaned on are accurate; they are just rules
+ *     about kernel32 functions this file does not call.)
+ *
+ *     Unknown.  Which actor actually does it.  Three remain: ntdll on
+ *     the parent side, ntdll on the child side (LdrpInitializeProcess),
+ *     or the kernel inside NtCreateUserProcess.  Nothing measured so far
+ *     separates them, and this comment deliberately does not guess.
+ *     test/spawn-stdhandle-attr.c is the probe built to separate them;
+ *     it prints the raw values rather than asserting anything about
+ *     them.
+ *
+ *     Leading candidate -- inference, not a finding.
+ *     PS_ATTRIBUTE_STD_HANDLE_INFO / PsAttributeStdHandleInfo (phnt,
+ *     ntpsapi.h:3232, structure and states at :3364-3390).  Its
+ *     PsAlwaysDuplicate state duplicates the standard handles
+ *     unconditionally -- value-blind -- and it is consumed during
+ *     process creation, before the child runs an instruction.  Both
+ *     properties match the measurement.  The tension against it: a
+ *     zeroed attribute means PsNeverDuplicate, which is enumerator 0,
+ *     and that predicts *no* fix-up, contradicting what was measured.
+ *     For the candidate to survive, either ntdll supplies the attribute
+ *     explicitly with a non-zero state, or the kernel's default in the
+ *     attribute's absence is not the zero enumerator.  Neither has been
+ *     shown.
+ *
+ *     What does work, and is what this file does: hand the field a real,
  *     valid, non-NULL, non-pseudo HANDLE that is not a file, console or
- *     pipe.  closed_placeholder() below hands out exactly that (a
- *     duplicate of the current-process pseudohandle), and the receiving
- *     side already refuses to install anything __handle_type() cannot
- *     identify (src/internal/fd.c install_std), so the descriptor comes
- *     up closed in the child either way.
+ *     pipe, so that a value-blind fix-up has nothing to fix up and a
+ *     value-*sensitive* one has no sentinel to recognise.
+ *     closed_placeholder() below duplicates the current-process
+ *     pseudohandle for this.  The receiving side still refuses to
+ *     install it, because __handle_type() cannot identify it
+ *     (src/internal/fd.c install_std; NtQueryVolumeInformationFile
+ *     answers STATUS_OBJECT_TYPE_MISMATCH for a process handle --
+ *     verified directly with a standalone probe, not assumed), so the
+ *     descriptor comes up closed in the child either way.
+ *
+ *     Wine not reproducing any of this is consistent with the above
+ *     rather than evidence about it.  Nothing in the Wine tree reads
+ *     PsAttributeStdHandleInfo -- include/winternl.h:4131 and :4167
+ *     define the enumerator and the PS_ATTRIBUTE_STD_HANDLE_INFO macro
+ *     and that is the entirety of the hits -- and
+ *     dlls/ntdll/unix/env.c's create_startup_info copies hStdInput/
+ *     hStdOutput/hStdError through by value for a process created with
+ *     PROCESS_CREATE_FLAGS_INHERIT_HANDLES, which is exactly what
+ *     RtlCreateUserProcess(inherit=TRUE) asks for.  So under Wine the
+ *     caller's value survives verbatim, whatever it is.
  *
  * The command line is built by the quoting rules CommandLineToArgvW and
  * every Windows C runtime agree on, so that an argument with spaces,
@@ -356,24 +414,20 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 		if (f0 && (f0->flags & O_CLOEXEC)) f0 = 0;
 		if (f1 && (f1->flags & O_CLOEXEC)) f1 = 0;
 		if (f2 && (f2->flags & O_CLOEXEC)) f2 = 0;
-		/* Not 0, and not -1 either: see the file comment.  Both are
-		 * "unspecified" as far as a real, unprocessed
-		 * RTL_USER_PROCESS_PARAMETERS field goes -- this code never
-		 * goes through kernel32's CreateProcess, which is what
-		 * normally turns a caller's intent into one of the small
-		 * number of values (a real handle, or one of a handful of
-		 * documented sentinels) that its own child-side console/std-
-		 * handle bring-up (kernelbase.dll, run in the *child* at its
-		 * own startup, independent of whoever created it) knows how
-		 * to leave alone.  Measured on real Windows: both 0 and -1
-		 * still come up as a live, open descriptor in the child.
-		 * closed_placeholder() below hands out a real, ordinary,
-		 * inheritable, non-NULL, non-pseudo HANDLE instead -- a
-		 * process handle, which cannot be mistaken for "unspecified"
-		 * by anything upstream, and which install_std() (src/
-		 * internal/fd.c) already refuses on the receiving end because
-		 * __handle_type() rejects it (STATUS_OBJECT_TYPE_MISMATCH out
-		 * of NtQueryVolumeInformationFile: verified directly, not
+		/* Not 0, and not -1 either.  Both were measured on real
+		 * Windows to come back to the child as a live, open handle;
+		 * two different sentinels failing the same way is what says
+		 * the fix-up is value-blind rather than sentinel-aware.
+		 * Which actor performs it is still open -- see the file
+		 * comment for the full accounting, and
+		 * test/spawn-stdhandle-attr.c for the probe.  What is handed
+		 * over instead is a real, ordinary, inheritable, non-NULL,
+		 * non-pseudo HANDLE (a process handle), which no such fix-up
+		 * has any reason to replace and which install_std()
+		 * (src/internal/fd.c) already refuses on the receiving end
+		 * because __handle_type() rejects it
+		 * (STATUS_OBJECT_TYPE_MISMATCH out of
+		 * NtQueryVolumeInformationFile: verified directly, not
 		 * assumed -- a process handle is not a file, console or
 		 * pipe). */
 		pp->StandardInput = f0 ? f0->h : closed_placeholder(&ph[0]);

@@ -111,11 +111,24 @@ HANDLE __fd_handle(int fd)
 	return f ? f->h : 0;
 }
 
+/* Descriptors 0-2, from the process parameters the creator left behind.
+ *
+ * Both guards below are load-bearing, and the second one is doing more
+ * work than it looks like.  A parent cannot reliably say "this one is
+ * closed" by writing 0 or -1 here: on real Windows both were measured to
+ * arrive as a live, open handle instead (see the long accounting in
+ * src/process/spawn.c, and test/spawn-stdhandle-attr.c, which prints the
+ * raw arriving value).  Which actor rewrites the field is not known --
+ * it is not kernel32 or kernelbase, neither of which is loaded in these
+ * ntdll-only processes -- but it is value-blind, so the only thing the
+ * receiving side can do is check what actually turned up.  That is what
+ * __handle_type() is for here: whatever cannot be identified as a file,
+ * console or pipe is not installed, which covers a dead-but-inheritable
+ * handle, a duplicated pseudohandle, and the deliberate placeholder
+ * __spawn writes for a closed standard descriptor. */
 static void install_std(int fd, HANDLE h)
 {
 	if (!h || h == (HANDLE)(LONG_PTR)-1) return;
-	/* A handle can be marked inheritable but dead (the parent closed
-	 * stdin, say). Asking its type catches that. */
 	if (__handle_type(h) == __FD_UNKNOWN) return;
 	__fd_install_at(fd, h, fd == 0 ? O_RDONLY : O_WRONLY, 0);
 }
