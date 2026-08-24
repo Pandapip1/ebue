@@ -394,6 +394,53 @@ typedef struct _AFD_RECEIVED_ACCEPT_DATA {
 	TRANSPORT_ADDRESS Address;
 } AFD_RECEIVED_ACCEPT_DATA;
 
+/* The IOCTL_AFD_WAIT_FOR_LISTEN *reply* as it appears on the wire, by
+ * offset -- the same TRANSPORT_ADDRESS shape as the bind request above,
+ * behind a ULONG sequence number instead of a ULONG share type:
+ *
+ *      +0   ULONG  SequenceNumber
+ *      +4   LONG   TAAddressCount    == 1 for the one peer address
+ *      +8   USHORT AddressLength     == TDI_ADDRESS_LENGTH_IP == 14
+ *      +10  USHORT AddressType       == TDI_ADDRESS_TYPE_IP == AF_INET == 2
+ *      +12  UCHAR  Address[14]       packed TDI_ADDRESS_IP; see the TDI banner
+ *      == 26
+ *
+ * Named separately from sizeof(AFD_RECEIVED_ACCEPT_DATA) for the reason
+ * AFD_BIND_REQ_SIZE is: the sizeof() is 28, two bytes more than the 26
+ * the reply occupies, because TAAddressCount's alignment rounds the tail
+ * up.  As with bind, everything from +10 on is byte-for-byte a
+ * `struct sockaddr_in`.
+ *
+ * 26 is also exactly what the driver declares written.  AfdWaitForListen()
+ * (the AFD driver's own listen.c, Copyright (c) 1989 Microsoft
+ * Corporation) completes with
+ *
+ *     Irp->IoStatus.Information =
+ *         sizeof(*listenResponse) - sizeof(TRANSPORT_ADDRESS) +
+ *             connection->RemoteAddressLength;
+ *
+ * i.e. sizeof(SequenceNumber) plus however many bytes of TDI address the
+ * transport handed it -- 4 + 22 for one AF_INET address.  It moves in
+ * exactly RemoteAddressLength bytes and nothing else.
+ *
+ * *** IOCTL_AFD_WAIT_FOR_LISTEN is METHOD_BUFFERED, and unlike
+ * IOCTL_AFD_SELECT its buffer is out-only. ***
+ *
+ * The I/O manager copies back exactly Information bytes and does not
+ * touch the rest of the caller's buffer.  For the aliased SELECT buffer
+ * an unwritten tail read back as the caller's own request (see
+ * __afd_poll_events_for()); here there is no request to read back, so an
+ * unwritten tail is whatever the caller left there -- uninitialised
+ * stack, handed out as a peer address.  The reply buffer is therefore
+ * zeroed before the call and interpreted only through
+ * __afd_accept_reply_addr(), never by indexing Address[0] directly. */
+#define AFD_ACCEPT_RSP_OFF_SEQUENCE    ((size_t)0)
+#define AFD_ACCEPT_RSP_OFF_ADDR_COUNT  ((size_t)4)
+#define AFD_ACCEPT_RSP_OFF_ADDR_LENGTH ((size_t)8)
+#define AFD_ACCEPT_RSP_OFF_ADDR_TYPE   ((size_t)10)
+#define AFD_ACCEPT_RSP_OFF_ADDR        ((size_t)12)
+#define AFD_ACCEPT_RSP_SIZE (AFD_ACCEPT_RSP_OFF_ADDR + TDI_ADDRESS_LENGTH_IP)
+
 typedef struct _AFD_ACCEPT_DATA {
 	uint32_t UseSAN;
 	uint32_t SequenceNumber;
@@ -834,6 +881,15 @@ int __afd_addr_from_sockaddr(const struct sockaddr *addr, unsigned len, TRANSPOR
  * truncating into *addr and *len the way accept()/recvfrom() are specified
  * to. */
 void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, unsigned *len);
+/* Interpret an IOCTL_AFD_WAIT_FOR_LISTEN reply: check that it actually
+ * carries a peer address, and, if addr is not NULL, convert it in.
+ * Returns 0, or -1 for a reply that does not describe one address --
+ * which, over a buffer zeroed before the ioctl, is also what a
+ * short Information-bounded copy-back looks like.  Reads the reply
+ * through AFD_ACCEPT_RSP_OFF_*, so it takes the raw buffer rather than
+ * an AFD_RECEIVED_ACCEPT_DATA and needs no particular alignment.
+ * Sets no errno; the caller decides what the failure means. */
+int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, unsigned *len);
 
 /* Per-socket state bits, stashed in struct __fd's otherwise-unused `pad`
  * byte for __FD_SOCKET descriptors only (test/networking-audit.md sec 2:

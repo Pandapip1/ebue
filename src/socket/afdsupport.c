@@ -401,3 +401,50 @@ void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, socklen
 	memcpy(addr, &sin, n);
 	*len = sizeof(sin);
 }
+
+/* See afd.h.  Two fields are checked, and each one is load-bearing.
+ *
+ * TAAddressCount is the only field in the reply that says how many
+ * addresses are present.  accept.c read Address[0] without consulting
+ * it, which is the same defect __afd_poll_events_for() exists to fix --
+ * except that this buffer is out-only, so an unwritten Address[0] is
+ * not the caller's own request read back but uninitialised stack.
+ *
+ * AddressLength stands in for a length check on IoStatus.Information.
+ * The driver writes it as part of the TDI address it moves in, so over
+ * a buffer zeroed before the ioctl a copy-back that stopped short of
+ * the address leaves it zero, and rejecting zero rejects that reply --
+ * with no arithmetic against Information, and no second source of truth
+ * about how big the reply "should" be.  AfdWaitForListen() always
+ * declares the whole address written or fails the IRP outright
+ * (STATUS_BUFFER_TOO_SMALL), so a well-formed reply always passes.
+ *
+ * AddressType is deliberately not checked: it is the field that overlays
+ * sa_family, and socket() admits AF_INET alone, so a connection accepted
+ * on one of this library's listeners has no other family to be.  It
+ * carries no information AddressLength has not already given. */
+int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, socklen_t *len)
+{
+	const unsigned char *p = (const unsigned char *)reply;
+	TA_ADDRESS ta;
+	int32_t count;
+	unsigned short alen;
+
+	memcpy(&count, p + AFD_ACCEPT_RSP_OFF_ADDR_COUNT, sizeof(count));
+	if (count < 1) return -1;
+
+	memcpy(&alen, p + AFD_ACCEPT_RSP_OFF_ADDR_LENGTH, sizeof(alen));
+	if (alen < TDI_ADDRESS_LENGTH_IP) return -1;
+
+	if (!addr || !len) return 0;
+
+	/* Copied out by byte count rather than read through a
+	 * TA_ADDRESS * aimed into the buffer: the caller's buffer need
+	 * not be aligned for one, and this file's own tests hand it a
+	 * plain unsigned char image. */
+	memset(&ta, 0, sizeof(ta));
+	memcpy(&ta, p + AFD_ACCEPT_RSP_OFF_ADDR_LENGTH,
+	       AFD_ACCEPT_RSP_SIZE - AFD_ACCEPT_RSP_OFF_ADDR_LENGTH);
+	__afd_addr_to_sockaddr(&ta, addr, len);
+	return 0;
+}
