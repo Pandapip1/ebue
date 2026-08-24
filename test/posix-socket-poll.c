@@ -1,0 +1,401 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Structural invariants of the IOCTL_AFD_SELECT request/reply buffer
+ * src/socket/afdsupport.c's __afd_build_poll_request() family builds
+ * and reads back on behalf of src/select/select.c's __fd_probe() --
+ * i.e. on behalf of every select() and poll() this library performs on
+ * a socket.
+ *
+ * The fourth of the sibling set (test/posix-socket-ea.c, -bind.c,
+ * -connect.c), built the same way and for the same reason: it opens no
+ * socket and touches no device, so it runs identically on a host with
+ * no \Device\Afd, under Wine, under `make asan` natively, and on CI's
+ * real-Windows legs.  Its siblings pass on real Windows.
+ *
+ * *** The defect this is the regression assertion for. ***
+ *
+ * ReactOS sdk/include/reactos/drivers/afd/shared.h declares
+ *
+ *      LARGE_INTEGER Timeout;      +0
+ *      ULONG         HandleCount;  +8
+ *      ULONG_PTR     Exclusive;    +12 on i386, +16 on x86_64
+ *      AFD_HANDLE    Handles[1];   +16 on i386, +24 on x86_64
+ *
+ * and ntlibc followed it.  Three independent sources say that middle
+ * field is four bytes wide, not pointer-sized, which puts Handles at
+ * +16 on *both* ABIs:
+ *
+ *   - System Informer phnt, ntafd.h, AFD_POLL_INFO:
+ *       LARGE_INTEGER Timeout; ULONG NumberOfHandles; BOOLEAN Unique;
+ *       AFD_POLL_HANDLE_INFO Handles[ANYSIZE_ARRAY];
+ *   - wepoll (github.com/piscisaureus/wepoll v1.5.8, wepoll.c):
+ *       LARGE_INTEGER Timeout; ULONG NumberOfHandles; ULONG Exclusive;
+ *       AFD_POLL_HANDLE_INFO Handles[1];
+ *     with IOCTL_AFD_POLL spelled as the literal 0x00012024.
+ *   - libuv, include/uv/win.h, _AFD_POLL_INFO: identical to wepoll's.
+ *
+ * The last two are not transcriptions of a header -- they are working
+ * code driving the shipping afd.sys on x86 and x64 at very large
+ * volume (libuv is Node.js's event loop).  A Handles array 8 bytes out
+ * of place on x64 would not survive that.
+ *
+ * phnt and wepoll/libuv still disagree about that field's *type*
+ * (BOOLEAN Unique vs ULONG Exclusive).  This test does not resolve
+ * that and does not need to: all three agree it occupies four bytes at
+ * +12, and ntlibc always sends zero there, which is the same four zero
+ * bytes either way.  What is asserted is the four bytes and the zero.
+ *
+ * With ReactOS's layout on x86_64 the Handles array starts 8 bytes
+ * late, so afd.sys reads the socket HANDLE out of the caller's
+ * Exclusive/padding and the requested event mask out of the handle's
+ * low half -- and select()/poll() on a socket silently reports
+ * nothing ready.  main()'s negative control reproduces that image and
+ * proves these assertions reject it.
+ *
+ * test/*.c is built with -Iarch/$(ARCH) -Iarch/generic -Iobj/include
+ * -Iinclude only (see Makefile) -- src/internal/ is NOT on the include
+ * path -- so the prototypes and every expected constant are declared
+ * locally, exactly as the siblings do.  A layout test that included
+ * the header it is checking would agree with it by construction.
+ *
+ * Further references: the AFD_POLL_* event bits asserted below are
+ * phnt ntafd.h's AFD_POLL_RECEIVE/SEND/DISCONNECT/ABORT/LOCAL_CLOSE/
+ * CONNECT/ACCEPT/CONNECT_FAIL, which equal ReactOS shared.h's
+ * AFD_EVENT_* and wepoll's/libuv's AFD_POLL_* -- all four sources
+ * agree on those, unlike the structure around them.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <errno.h>
+
+static int fails;
+#define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+#define CHECK_EQ(got, want, what) do { \
+	unsigned long long g_ = (unsigned long long)(got), w_ = (unsigned long long)(want); \
+	if (g_ != w_) { fails++; \
+		printf("FAIL %s:%d: %s = %llu (0x%llx), want %llu (0x%llx)\n", \
+		       __FILE__, __LINE__, (what), g_, g_, w_, w_); } \
+} while (0)
+
+/* src/internal/afd.h; see the banner for why they are re-declared.
+ * HANDLE is a PVOID (winnt.h), spelled void * here so this file needs
+ * nothing from src/internal/. */
+unsigned long __afd_poll_request_size(unsigned long nhandles);
+void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandles);
+void __afd_poll_set_handle(void *buf, unsigned long i, void *h, uint32_t events);
+uint32_t __afd_poll_get_events(const void *buf, unsigned long i);
+int32_t __afd_poll_get_status(const void *buf, unsigned long i);
+
+/* --- constants, from the references named in the banner --- */
+
+/* sizeof(HANDLE) == sizeof(PVOID): 4 on i386, 8 on x86_64.  Only the
+ * Handles *element* size depends on it here; the header offsets below
+ * are the same on both ABIs, which is what makes ReactOS's
+ * pointer-sized Exclusive the anomaly. */
+#define HSZ ((unsigned long)sizeof(void *))
+
+#define REQ_TIMEOUT       0UL
+#define REQ_HANDLE_COUNT  8UL
+#define REQ_EXCLUSIVE    12UL
+#define REQ_HANDLES      16UL
+
+#define H_HANDLE  0UL
+#define H_EVENTS  HSZ
+#define H_STATUS  (HSZ + 4UL)
+#define H_SIZE    (HSZ + 8UL)   /* 16 on x86_64, 12 on i386 */
+
+#define REQ_SIZE(n) (REQ_HANDLES + (unsigned long)(n) * H_SIZE)
+
+/* ReactOS's layout, for the negative control: Exclusive is ULONG_PTR,
+ * so it is pointer-aligned and pointer-sized. */
+#define ROS_EXCLUSIVE  ((HSZ == 8UL) ? 16UL : 12UL)
+#define ROS_HANDLES    ((HSZ == 8UL) ? 24UL : 16UL)
+#define ROS_SIZE(n)    (ROS_HANDLES + (unsigned long)(n) * H_SIZE)
+
+/* The event bits all four sources agree on (phnt AFD_POLL_*, ReactOS
+ * AFD_EVENT_*, wepoll/libuv AFD_POLL_*). */
+#define EV_RECEIVE      0x0001u
+#define EV_OOB_RECEIVE  0x0002u
+#define EV_SEND         0x0004u
+#define EV_DISCONNECT   0x0008u
+#define EV_ABORT        0x0010u
+#define EV_LOCAL_CLOSE  0x0020u
+#define EV_CONNECT      0x0040u
+#define EV_ACCEPT       0x0080u
+#define EV_CONNECT_FAIL 0x0100u
+
+/* Little-endian readers: the buffer is a byte image of an NT structure,
+ * so it is decoded as one rather than cast to a struct (which would
+ * assume the very layout under test). */
+static unsigned long rd32(const unsigned char *p)
+{
+	return (unsigned long)p[0] | ((unsigned long)p[1] << 8)
+	     | ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
+}
+static unsigned long long rd64(const unsigned char *p)
+{
+	return (unsigned long long)rd32(p) | ((unsigned long long)rd32(p + 4) << 32);
+}
+/* A pointer read back byte-wise, so no assumption is made about where
+ * within the element the compiler would have put it. */
+static unsigned long long rdptr(const unsigned char *p)
+{
+	return HSZ == 8UL ? rd64(p) : (unsigned long long)rd32(p);
+}
+
+#define GUARD 16u
+#define GUARD_BYTE 0xABu
+
+/* Distinct, recognisable fake handles.  Never dereferenced -- this
+ * file touches no device -- but chosen so a byte landing at the wrong
+ * offset is obvious in a failure message. */
+static void *fake_handle(unsigned i)
+{
+	return (void *)(uintptr_t)(0x11110000UL + (i + 1) * 0x101UL);
+}
+
+/* Every offset assertion, factored out so main() can run the identical
+ * battery against a deliberately-wrong image and count how many fire.
+ * `report` selects whether a failure is printed and charged to the
+ * global count (the real image) or merely counted (the control).  The
+ * two callers must be indistinguishable to this function -- that is
+ * what makes the negative control mean anything. */
+static int verify_image(const unsigned char *buf, unsigned long size,
+                        unsigned long n, long long timeout, int report)
+{
+	int local = 0;
+	unsigned long i, j;
+
+#define V(cond, what) do { \
+	if (!(cond)) { local++; \
+		if (report) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, (what)); } } \
+} while (0)
+#define V_EQ(got, want, what) do { \
+	unsigned long long g_ = (unsigned long long)(got), w_ = (unsigned long long)(want); \
+	if (g_ != w_) { local++; \
+		if (report) { fails++; \
+			printf("FAIL %s:%d: %s = %llu (0x%llx), want %llu (0x%llx)\n", \
+			       __FILE__, __LINE__, (what), g_, g_, w_, w_); } } \
+} while (0)
+
+	/* --- 1. size ------------------------------------------------- *
+	 * 16 + n * (sizeof(HANDLE) + 8).  Not sizeof(AFD_POLL_INFO),
+	 * which rounds the tail up for Timeout's 8-byte alignment. */
+	V_EQ(size, REQ_SIZE(n), "request size");
+
+	/* --- 2. the AFD_POLL_INFO header ----------------------------- *
+	 * The whole disagreement lives between +8 and +16. */
+	V_EQ(rd64(buf + REQ_TIMEOUT), (unsigned long long)timeout, "Timeout");
+	V_EQ(rd32(buf + REQ_HANDLE_COUNT), n, "HandleCount");
+	/* Exclusive/Unique: four bytes at +12, always zero.  Asserting
+	 * the four bytes is the assertion; the type is what phnt and
+	 * wepoll/libuv still disagree about (see the banner). */
+	V_EQ(rd32(buf + REQ_EXCLUSIVE), 0u, "Exclusive/Unique");
+	/* ...and this is the assertion the file exists for: the array
+	 * begins at +16 on both ABIs, NOT at ReactOS's +24 on x86_64. */
+	V_EQ(REQ_HANDLES, 16u, "Handles offset");
+	V_EQ(REQ_HANDLES, REQ_EXCLUSIVE + 4u, "Handles vs Exclusive + 4");
+
+	/* --- 3. the AFD_HANDLE array --------------------------------- *
+	 * HANDLE, then two 32-bit fields; 16 bytes per element on
+	 * x86_64 and 12 on i386.  Every element is checked, so a stride
+	 * error shows up as well as a base error. */
+	V_EQ(H_SIZE, HSZ + 8u, "AFD_HANDLE size");
+	V_EQ(H_EVENTS, HSZ, "AFD_HANDLE.Events offset");
+	V_EQ(H_STATUS, HSZ + 4u, "AFD_HANDLE.Status offset");
+	for (i = 0; i < n; i++) {
+		const unsigned char *e = buf + REQ_HANDLES + i * H_SIZE;
+		V_EQ(rdptr(e + H_HANDLE), (unsigned long long)(uintptr_t)fake_handle((unsigned)i),
+		     "AFD_HANDLE.Handle");
+		V_EQ(rd32(e + H_EVENTS), EV_RECEIVE | EV_SEND | (unsigned)(i + 1),
+		     "AFD_HANDLE.Events");
+		V_EQ(rd32(e + H_STATUS), 0u, "AFD_HANDLE.Status");
+		/* The accessors must agree with the raw bytes -- if they
+		 * did not, the ioctl's reply would be read from somewhere
+		 * other than where the request was written. */
+		V_EQ(__afd_poll_get_events(buf, i), rd32(e + H_EVENTS), "get_events vs raw");
+		V_EQ((unsigned long)(uint32_t)__afd_poll_get_status(buf, i), rd32(e + H_STATUS),
+		     "get_status vs raw");
+		/* Elements must not overlap and must be contiguous. */
+		if (i + 1 < n)
+			V_EQ((unsigned long)((buf + REQ_HANDLES + (i + 1) * H_SIZE) - e), H_SIZE,
+			     "stride between elements");
+	}
+	/* The last element must end exactly on the declared size. */
+	if (n > 0)
+		V_EQ(REQ_HANDLES + (n - 1) * H_SIZE + H_SIZE, size, "last element ends at size");
+
+	/* --- 4. alignment -------------------------------------------- *
+	 * The HANDLE at +16 must be naturally aligned for a
+	 * pointer-aligned buffer, which is what the driver's kernel copy
+	 * of a METHOD_BUFFERED request gets. */
+	V_EQ(REQ_HANDLES % HSZ, 0u, "Handles offset % sizeof(HANDLE)");
+	V_EQ(REQ_TIMEOUT % 8u, 0u, "Timeout offset % 8");
+	V_EQ(REQ_HANDLE_COUNT % 4u, 0u, "HandleCount offset % 4");
+	for (j = 0; j < n; j++)
+		V_EQ((REQ_HANDLES + j * H_SIZE) % HSZ, 0u, "element offset % sizeof(HANDLE)");
+
+	/* --- 5. the absolute numbers, per ABI ------------------------ */
+	if (HSZ == 8UL) {
+		V_EQ(H_SIZE, 16u, "x86_64: AFD_HANDLE size");
+		V_EQ(size, 16u + n * 16u, "x86_64: request size");
+	} else {
+		V_EQ(HSZ, 4u, "sizeof(HANDLE) is 4 or 8");
+		V_EQ(H_SIZE, 12u, "i386: AFD_HANDLE size");
+		V_EQ(size, 16u + n * 12u, "i386: request size");
+	}
+#undef V
+#undef V_EQ
+	return local;
+}
+
+/* The image ReactOS's AFD_POLL_INFO would have produced, built here by
+ * hand so the control does not depend on ntlibc ever having contained
+ * it: ULONG_PTR Exclusive, hence Handles at +24 on x86_64. */
+static void build_reactos_image(unsigned char *buf, long long timeout, unsigned long n)
+{
+	uint32_t count = (uint32_t)n;
+	unsigned long i;
+
+	memset(buf, 0, (size_t)ROS_SIZE(n));
+	memcpy(buf + REQ_TIMEOUT, &timeout, sizeof(timeout));
+	memcpy(buf + REQ_HANDLE_COUNT, &count, sizeof(count));
+	/* Exclusive: pointer-sized, zero. */
+	for (i = 0; i < n; i++) {
+		unsigned char *e = buf + ROS_HANDLES + i * H_SIZE;
+		void *h = fake_handle((unsigned)i);
+		uint32_t ev = (uint32_t)(EV_RECEIVE | EV_SEND | (unsigned)(i + 1));
+		uint32_t zero = 0;
+		memcpy(e + H_HANDLE, &h, sizeof(h));
+		memcpy(e + H_EVENTS, &ev, sizeof(ev));
+		memcpy(e + H_STATUS, &zero, sizeof(zero));
+	}
+}
+
+/* Build one request for n handles and check every offset in it. */
+static void check_n(unsigned long n, long long timeout)
+{
+	unsigned char *alloc, *buf;
+	unsigned long size, slop;
+	unsigned i;
+
+	size = __afd_poll_request_size(n);
+	/* The tail sizeof(AFD_POLL_INFO) rounds up to is allowed to be
+	 * touched; 8 covers it on either ABI. */
+	slop = 8;
+	alloc = malloc((size_t)(size + slop + GUARD));
+	if (!alloc) { printf("FAIL %s: out of memory\n", __FILE__); fails++; return; }
+	memset(alloc, GUARD_BYTE, (size_t)(size + slop + GUARD));
+	buf = alloc;
+
+	__afd_build_poll_request(buf, timeout, n);
+	for (i = 0; i < n; i++)
+		__afd_poll_set_handle(buf, i, fake_handle(i), (uint32_t)(EV_RECEIVE | EV_SEND | (i + 1)));
+
+	CHECK_EQ((unsigned long)((size_t)buf % sizeof(void *)), 0u, "request address % sizeof(HANDLE)");
+	(void)verify_image(buf, size, n, timeout, 1);
+
+	/* Nothing written past the declared length. */
+	for (i = 0; i < GUARD; i++)
+		CHECK_EQ(alloc[size + slop + i], GUARD_BYTE, "guard byte past the request");
+
+	/* Deterministic, and the builder zeroes what it does not set --
+	 * it must not leak whatever was in the caller's buffer into a
+	 * field afd.sys reads. */
+	{
+		unsigned char *again = malloc((size_t)(size + slop));
+		if (!again) { printf("FAIL %s: out of memory\n", __FILE__); fails++; free(alloc); return; }
+		memset(again, 0x5A, (size_t)(size + slop));
+		__afd_build_poll_request(again, timeout, n);
+		for (i = 0; i < n; i++)
+			__afd_poll_set_handle(again, i, fake_handle(i), (uint32_t)(EV_RECEIVE | EV_SEND | (i + 1)));
+		CHECK(memcmp(again, buf, (size_t)size) == 0);
+		free(again);
+	}
+
+	free(alloc);
+}
+
+int main(void)
+{
+	/* One handle is what src/select/select.c's __fd_probe() actually
+	 * sends; the larger counts pin the array stride, which a base
+	 * offset alone would not. */
+	check_n(1, 0);
+	check_n(1, -10000000LL); /* a relative NT timeout, i.e. negative */
+	check_n(2, 0);
+	check_n(5, 0x7FFFFFFFFFFFFFFFLL);
+
+	/* --- the negative control ------------------------------------ *
+	 * Build the image ReactOS's AFD_POLL_INFO describes and run the
+	 * identical battery over it, requiring rejection on x86_64.
+	 * On i386 the two layouts coincide (ULONG_PTR is 4 bytes there),
+	 * so the battery must accept it and the images must compare
+	 * equal -- which is precisely why only the x86_64 leg could ever
+	 * have caught this, and why a later reader must not "fix" an
+	 * i386 non-failure. */
+	{
+		unsigned char real[128], ros[128];
+		unsigned long n = 3, size = __afd_poll_request_size(n);
+		int rejected;
+		unsigned i;
+
+		__afd_build_poll_request(real, 0, n);
+		for (i = 0; i < n; i++)
+			__afd_poll_set_handle(real, i, fake_handle(i), (uint32_t)(EV_RECEIVE | EV_SEND | (i + 1)));
+		memset(ros, 0, sizeof ros);
+		build_reactos_image(ros, 0, n);
+
+		rejected = verify_image(ros, ROS_SIZE(n), n, 0, 0);
+		if (HSZ == 8UL) {
+			CHECK(rejected > 0);
+			CHECK(size != ROS_SIZE(n));
+			CHECK(memcmp(real, ros, (size_t)size) != 0);
+			/* Concretely: ReactOS's +24 lands in the *middle* of
+			 * the real Handles[0] -- 8 bytes in, on its Events and
+			 * Status pair.  afd.sys following ReactOS's layout on
+			 * x86_64 would therefore take the socket handle to be
+			 * (Status << 32) | Events, i.e. the literal event mask
+			 * 0x5 here, and then read the requested event mask out
+			 * of Handles[1]'s handle.  Nothing about that fails
+			 * loudly: the ioctl returns and reports no events, so
+			 * select()/poll() on a socket just says "not ready",
+			 * forever. */
+			CHECK_EQ(ROS_HANDLES, REQ_HANDLES + 8u,
+			         "x86_64: ReactOS's Handles lands mid-element");
+			CHECK_EQ(rdptr(real + ROS_HANDLES),
+			         (unsigned long long)(EV_RECEIVE | EV_SEND | 1u),
+			         "x86_64: what sits where ReactOS put Handles[0]");
+			CHECK_EQ(rdptr(real + REQ_HANDLES),
+			         (unsigned long long)(uintptr_t)fake_handle(0),
+			         "x86_64: Handles[0] at +16");
+		} else {
+			CHECK_EQ(rejected, 0, "i386: ReactOS's layout is the same layout");
+			CHECK_EQ(size, ROS_SIZE(n), "i386: request size matches ReactOS's");
+			CHECK(memcmp(real, ros, (size_t)size) == 0);
+		}
+		/* The control is a control: the battery accepts the real image. */
+		CHECK_EQ(verify_image(real, size, n, 0, 0), 0, "battery accepts the real image");
+	}
+
+	/* --- the event bits all four sources agree on ----------------- *
+	 * Asserted here because select.c's readable/writable masks are
+	 * built from them, and a shifted bit would be as silent as a
+	 * shifted field. */
+	CHECK_EQ(EV_RECEIVE, 1u << 0, "AFD_POLL_RECEIVE");
+	CHECK_EQ(EV_OOB_RECEIVE, 1u << 1, "AFD_POLL_RECEIVE_EXPEDITED");
+	CHECK_EQ(EV_SEND, 1u << 2, "AFD_POLL_SEND");
+	CHECK_EQ(EV_DISCONNECT, 1u << 3, "AFD_POLL_DISCONNECT");
+	CHECK_EQ(EV_ABORT, 1u << 4, "AFD_POLL_ABORT");
+	CHECK_EQ(EV_LOCAL_CLOSE, 1u << 5, "AFD_POLL_LOCAL_CLOSE");
+	CHECK_EQ(EV_CONNECT, 1u << 6, "AFD_POLL_CONNECT");
+	CHECK_EQ(EV_ACCEPT, 1u << 7, "AFD_POLL_ACCEPT");
+	CHECK_EQ(EV_CONNECT_FAIL, 1u << 8, "AFD_POLL_CONNECT_FAIL");
+
+	if (!fails) printf("posix-socket-poll: all tests passed\n");
+	return fails != 0;
+}

@@ -553,6 +553,61 @@ typedef struct _AFD_DISCONNECT_INFO {
 /* writefds: a send, or an in-progress connect() finishing, would not block. */
 #define AFD_POLL_WRITE_BITS (AFD_EVENT_SEND | AFD_EVENT_CONNECT | AFD_EVENT_CONNECT_FAIL)
 
+/* *** The same disagreement as AFD_CONNECT_INFO above, in the same
+ * place, and again only on x86_64 -- but with a wider jury. ***
+ *
+ * ReactOS sdk/include/reactos/drivers/afd/shared.h, AFD_POLL_INFO:
+ *
+ *      LARGE_INTEGER Timeout;
+ *      ULONG         HandleCount;
+ *      ULONG_PTR     Exclusive;      <- pointer-sized
+ *      AFD_HANDLE    Handles[1];
+ *
+ * Three independent sources say that middle field is four bytes, not
+ * pointer-sized, which moves Handles from +24 to +16 on x86_64 (on
+ * i386 all four agree: +16):
+ *
+ *   - System Informer phnt, ntafd.h, AFD_POLL_INFO:
+ *       LARGE_INTEGER Timeout; ULONG NumberOfHandles; BOOLEAN Unique;
+ *       AFD_POLL_HANDLE_INFO Handles[ANYSIZE_ARRAY];
+ *   - wepoll (github.com/piscisaureus/wepoll, v1.5.8, wepoll.c around
+ *     its AFD block): LARGE_INTEGER Timeout; ULONG NumberOfHandles;
+ *     ULONG Exclusive; AFD_POLL_HANDLE_INFO Handles[1];  -- and
+ *     IOCTL_AFD_POLL spelled as the literal 0x00012024, which is
+ *     exactly _AFD_CONTROL_CODE(AFD_SELECT, METHOD_BUFFERED) above.
+ *   - libuv, include/uv/win.h, _AFD_POLL_INFO: identical to wepoll's.
+ *
+ * That last pair matters more than a header agreeing with a header:
+ * wepoll and libuv are not transcriptions of anything, they are
+ * working code that drives the shipping afd.sys on x86 *and* x64 at
+ * enormous volume (libuv is Node.js's event loop).  A Handles array 8
+ * bytes out of place on x64 would not survive that.  ReactOS is alone
+ * at +24, and this project has now found five places where ReactOS's
+ * headers and real Windows differ.
+ *
+ * phnt and wepoll/libuv still disagree with each other about that
+ * field's *type* -- BOOLEAN Unique versus ULONG Exclusive -- and this
+ * header does not resolve that, because it cannot be resolved from
+ * here and does not need to be: all three agree it occupies four bytes
+ * at +12, and this project always sends zero in it, which is the same
+ * four zero bytes either way.  The disagreement is recorded, not hidden.
+ *
+ * Unlike connect's, these header offsets are the *same* on both ABIs;
+ * it is the element size of the Handles array that is pointer-sized
+ * (AFD_HANDLE: HANDLE, then two 32-bit fields -- 16 bytes on x86_64,
+ * 12 on i386).
+ *
+ *      +0   LARGE_INTEGER Timeout        (both ABIs)
+ *      +8   ULONG         HandleCount
+ *     +12   ULONG         Exclusive      <- NOT ULONG_PTR
+ *     +16   AFD_HANDLE    Handles[]
+ *
+ * IOCTL_AFD_SELECT is METHOD_BUFFERED (0x12024), so afd.sys reads a
+ * kernel copy of this buffer and writes the results back into it --
+ * which is why there are readers below as well as builders.
+ *
+ * This one is not socket-only: src/select/select.c's __fd_probe()
+ * drives it for every select() and poll() on a socket. */
 typedef struct _AFD_HANDLE {
 	HANDLE Handle;
 	uint32_t Events;
@@ -562,9 +617,20 @@ typedef struct _AFD_HANDLE {
 typedef struct _AFD_POLL_INFO {
 	LARGE_INTEGER Timeout;
 	uint32_t HandleCount;
-	ULONG_PTR Exclusive;
+	uint32_t Exclusive; /* four bytes, not ULONG_PTR -- see above */
 	AFD_HANDLE Handles[1];
 } AFD_POLL_INFO;
+
+#define AFD_POLL_REQ_OFF_TIMEOUT      0UL
+#define AFD_POLL_REQ_OFF_HANDLE_COUNT 8UL
+#define AFD_POLL_REQ_OFF_EXCLUSIVE    12UL
+#define AFD_POLL_REQ_OFF_HANDLES      16UL
+/* One AFD_HANDLE on the wire: HANDLE, ULONG Events, NTSTATUS Status. */
+#define AFD_POLL_H_OFF_HANDLE 0UL
+#define AFD_POLL_H_OFF_EVENTS ((unsigned long)sizeof(HANDLE))
+#define AFD_POLL_H_OFF_STATUS ((unsigned long)sizeof(HANDLE) + 4UL)
+#define AFD_POLL_H_SIZE       ((unsigned long)sizeof(HANDLE) + 8UL)
+#define AFD_POLL_REQ_SIZE(n)  (AFD_POLL_REQ_OFF_HANDLES + (unsigned long)(n) * AFD_POLL_H_SIZE)
 
 /* ---- helpers shared by src/socket/ (every .c there) (src/socket/afdsupport.c) ------ */
 /* socklen_t is `unsigned` (include/alltypes.h.in) -- spelled that way
@@ -614,6 +680,24 @@ int __afd_build_bind_request(void *buf, unsigned long share_type,
  * runs with no \Device\Afd at all. */
 unsigned long __afd_connect_request_size(void);
 int __afd_build_connect_request(void *buf, const struct sockaddr *addr, unsigned len);
+/* The IOCTL_AFD_SELECT request body, built and read back through the
+ * AFD_POLL_REQ_OFF_* and AFD_POLL_H_OFF_* offsets for the reason that
+ * header section gives: ReactOS's ULONG_PTR Exclusive puts Handles at
+ * +24 on x86_64 where phnt, wepoll and libuv all put it at +16.
+ * __afd_poll_request_size(n) is the byte count for n handles;
+ * __afd_build_poll_request() zeroes that many bytes at `buf` and fills
+ * Timeout/HandleCount/Exclusive; __afd_poll_set_handle() fills one
+ * array element; __afd_poll_get_events()/__afd_poll_get_status() read
+ * one back after the ioctl (IOCTL_AFD_SELECT is METHOD_BUFFERED, so
+ * afd.sys writes its answer into the same buffer).  `buf` must be
+ * pointer-aligned and at least __afd_poll_request_size(n) bytes.
+ * test/posix-socket-poll.c re-parses the result by offset with no
+ * reference to this header, and runs with no \Device\Afd at all. */
+unsigned long __afd_poll_request_size(unsigned long nhandles);
+void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandles);
+void __afd_poll_set_handle(void *buf, unsigned long i, HANDLE h, uint32_t events);
+uint32_t __afd_poll_get_events(const void *buf, unsigned long i);
+NTSTATUS __afd_poll_get_status(const void *buf, unsigned long i);
 /* Issue one AFD ioctl on socket handle h and wait for it to finish --
  * every AFD request (src/socket/ (every .c there)) goes through this.  STATUS_PENDING
  * is waited out on the handle itself (see __afd_open()'s comment on why
