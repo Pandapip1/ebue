@@ -600,12 +600,25 @@ int main(void)
 		CHECK(getcwd(cwd2, sizeof cwd2) == cwd2 && !strcmp(cwd2, origcwd));
 		CHECK(chdir(cwd) == 0);
 		CHECK(getcwd(cwd2, sizeof cwd2) == cwd2 && !strcmp(cwd2, cwd));
+		/* chdir.html ERRORS: [ENOTDIR] when a component of the path
+		 * prefix -- or the name itself -- is an existing non-directory,
+		 * [ENOENT] when it simply is not there.  NT reports the two
+		 * prefix cases identically (STATUS_OBJECT_PATH_NOT_FOUND for
+		 * both, measured on Windows 11 Pro 22621 / NTFS), so these four
+		 * mirror that probe exactly: they are what tells us if a
+		 * different Windows build ever disagrees. */
 		errno = 0;
 		CHECK(chdir("nope") == -1 && errno == ENOENT);
 		errno = 0;
 		CHECK(chdir("a.txt") == -1 && errno == ENOTDIR);
 		errno = 0;
+		CHECK(chdir("a.txt/below") == -1 && errno == ENOTDIR);
+		errno = 0;
+		CHECK(chdir("nope/below") == -1 && errno == ENOENT);
+		errno = 0;
 		CHECK(chdir("") == -1 && errno == ENOENT);
+		/* and a plain success still succeeds after all of that */
+		CHECK(chdir(".") == 0);
 		CHECK(getcwd(cwd2, sizeof cwd2) == cwd2 && !strcmp(cwd2, cwd));
 		/* fchdir */
 		fd = open("cd", O_RDONLY | O_DIRECTORY);

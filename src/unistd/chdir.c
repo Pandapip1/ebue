@@ -25,6 +25,28 @@ int chdir(const char *path)
 	us.Length = (USHORT)(n * sizeof(WCHAR));
 	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
 	st = RtlSetCurrentDirectory_U(&us);
+	/* chdir.html ERRORS [ENOTDIR]: "A component of the path prefix names
+	 * an existing file that is neither a directory nor a symbolic link to
+	 * a directory."  RtlSetCurrentDirectory_U passes NtOpenFile's status
+	 * through, so a non-directory *last* component already arrives as
+	 * STATUS_NOT_A_DIRECTORY and needs nothing here; but a non-directory
+	 * *prefix* component and a missing one are byte-identical --
+	 * STATUS_OBJECT_PATH_NOT_FOUND for both, measured on Windows 11 Pro
+	 * 22621 on NTFS -- so no status remap can tell them apart and the
+	 * prefix has to be walked.  Only that one status is disambiguated, so
+	 * a successful chdir() is still the one call it always was.
+	 *
+	 * The walk wants an NT path, which this function does not otherwise
+	 * build (RtlSetCurrentDirectory_U takes the DOS form), so it is
+	 * converted here, on a path that has already failed. */
+	if (st == STATUS_OBJECT_PATH_NOT_FOUND) {
+		UNICODE_STRING nt;
+		if (NT_SUCCESS(RtlDosPathNameToNtPathName_U_WithStatus(w, &nt, 0, 0))) {
+			int notdir = __nt_prefix_not_dir(&nt, 0);
+			RtlFreeHeap(__process_heap(), 0, nt.Buffer);
+			if (notdir) { __free(w); errno = ENOTDIR; return -1; }
+		}
+	}
 	__free(w);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
