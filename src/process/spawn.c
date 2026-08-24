@@ -24,23 +24,31 @@
  *     directly.  (This is the same decision ReactOS's kernel32
  *     SetUpHandles makes; it was measured to be necessary on Windows 11.)
  *
- *   - A *closed* standard descriptor has to be written as
- *     (HANDLE)(LONG_PTR)-1 (INVALID_HANDLE_VALUE), not 0.  With
- *     STARTF_USESTDHANDLES set, ReactOS's dll/win32/kernel32/client/proc.c
- *     CreateProcessInternalW, and the documented CreateProcess "modern"
- *     rules in rprichard/win32-console-docs (README.md, "CreateProcess
- *     (modern)"), only treat a *non-NULL* StartupInfo/StandardXxx field as
- *     an explicit value to use as-is, unvalidated; a NULL field falls
- *     through to the same auto-provisioning rules AllocConsole/
- *     AttachConsole use ("modern", rule 4 there: "Windows opens a console
- *     handle for each standard handle that is currently NULL"), which is
- *     exactly what was measured happening on real Windows: a spawned
- *     child saw a *live, open* handle on a descriptor this code had just
- *     asked to leave closed by passing 0.  -1 is not NULL, so it is taken
- *     verbatim and never auto-provisioned; the receiving side already
- *     treats it as "nothing here" (src/internal/fd.c install_std: `if
- *     (!h || h == (HANDLE)(LONG_PTR)-1) return;`), so the descriptor comes
- *     up closed in the child, matching what was asked for.
+ *   - A *closed* standard descriptor cannot be represented by writing 0
+ *     (NULL) *or* (HANDLE)(LONG_PTR)-1 (INVALID_HANDLE_VALUE) into the
+ *     field -- both were tried, and both were measured to still come up
+ *     as a live, open handle in the child on real Windows (all three
+ *     real-Windows CI legs; Wine does not reproduce either failure,
+ *     because this code never goes through kernel32's CreateProcess,
+ *     the only place documented to give either value special meaning --
+ *     rprichard/win32-console-docs, README.md, "CreateProcess (modern)"
+ *     rule 1 and the "AllocConsole, AttachConsole (modern)" NULL-backfill
+ *     rule are both *that function's* rules, evaluated on the parent
+ *     side before RtlCreateUserProcess/NtCreateUserProcess is ever
+ *     called; a raw ntdll caller like this one never runs them, and gets
+ *     whatever the *child's own* kernelbase.dll console/std-handle
+ *     bring-up -- which every CUI-subsystem process still goes through
+ *     at its own startup, independent of who created it -- does with an
+ *     unprocessed field it was never designed to see).  What *does*
+ *     survive, verified against this file's own probe under Wine's
+ *     faithful NtQueryVolumeInformationFile type-checking (which matches
+ *     documented NT object-manager behaviour, not a Wine quirk): a real,
+ *     valid, non-NULL, non-pseudo HANDLE that is not a file, console or
+ *     pipe.  closed_placeholder() below hands out exactly that (a
+ *     duplicate of the current-process pseudohandle), and the receiving
+ *     side already refuses to install anything __handle_type() cannot
+ *     identify (src/internal/fd.c install_std), so the descriptor comes
+ *     up closed in the child either way.
  *
  * The command line is built by the quoting rules CommandLineToArgvW and
  * every Windows C runtime agree on, so that an argument with spaces,
@@ -215,6 +223,35 @@ static WCHAR *build_env_block(char *const envp[])
 	return blk;
 }
 
+/* Hands back a real, valid, inheritable, non-NULL, non-pseudo HANDLE to
+ * stand in for a *closed* standard descriptor -- see the comment where
+ * this is used, in __spawn, for why plain 0 and (HANDLE)(LONG_PTR)-1
+ * both measurably fail to come up closed in the child on real Windows.
+ * A duplicate of the current-process pseudohandle is a convenient real
+ * object for this: cheap to create, and already proven (this file's own
+ * probe, and src/internal/fd.c install_std -> __handle_type) to be
+ * rejected on the receiving end as "not a file, console or pipe"
+ * (NtQueryVolumeInformationFile fails it with
+ * STATUS_OBJECT_TYPE_MISMATCH), so it comes up closed rather than being
+ * mistaken for something real to read or write.
+ *
+ * *out receives this process's own copy of the duplicate, which the
+ * caller must NtClose() once RtlCreateUserProcess is done with the
+ * parameter block -- it is marked OBJ_INHERIT so it crosses into the
+ * child, but it must not linger open (and inheritable) in *this*
+ * process past that point, or the next spawn would hand it to some
+ * other child by accident. On failure (this process is nearly out of
+ * handles) *out is left 0 and NULL is returned; nothing about a spawn
+ * that can't even duplicate one handle is likely to succeed regardless. */
+static HANDLE closed_placeholder(HANDLE *out)
+{
+	HANDLE h = 0;
+	NTSTATUS st = NtDuplicateObject(NtCurrentProcess(), NtCurrentProcess(), NtCurrentProcess(),
+	                                &h, 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
+	*out = NT_SUCCESS(st) ? h : 0;
+	return *out;
+}
+
 int __spawn(const char *path, char *const argv[], char *const envp[])
 {
 	struct __ntpath np;
@@ -225,6 +262,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	WCHAR curbuf[4096];
 	void *runtime = 0;
 	size_t runtime_len = 0;
+	HANDLE ph[3] = { 0, 0, 0 };
 	NTSTATUS st;
 	int pid = -1, i;
 	ULONG curlen;
@@ -318,19 +356,44 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 		if (f0 && (f0->flags & O_CLOEXEC)) f0 = 0;
 		if (f1 && (f1->flags & O_CLOEXEC)) f1 = 0;
 		if (f2 && (f2->flags & O_CLOEXEC)) f2 = 0;
-		/* Not 0: see the file comment.  0/NULL is "unspecified" and
-		 * gets a fresh console handle auto-provisioned on real NT;
-		 * -1/INVALID_HANDLE_VALUE is the explicit "no handle" value
-		 * that is taken as-is. */
-		pp->StandardInput = f0 ? f0->h : (HANDLE)(LONG_PTR)-1;
-		pp->StandardOutput = f1 ? f1->h : (HANDLE)(LONG_PTR)-1;
-		pp->StandardError = f2 ? f2->h : (HANDLE)(LONG_PTR)-1;
+		/* Not 0, and not -1 either: see the file comment.  Both are
+		 * "unspecified" as far as a real, unprocessed
+		 * RTL_USER_PROCESS_PARAMETERS field goes -- this code never
+		 * goes through kernel32's CreateProcess, which is what
+		 * normally turns a caller's intent into one of the small
+		 * number of values (a real handle, or one of a handful of
+		 * documented sentinels) that its own child-side console/std-
+		 * handle bring-up (kernelbase.dll, run in the *child* at its
+		 * own startup, independent of whoever created it) knows how
+		 * to leave alone.  Measured on real Windows: both 0 and -1
+		 * still come up as a live, open descriptor in the child.
+		 * closed_placeholder() below hands out a real, ordinary,
+		 * inheritable, non-NULL, non-pseudo HANDLE instead -- a
+		 * process handle, which cannot be mistaken for "unspecified"
+		 * by anything upstream, and which install_std() (src/
+		 * internal/fd.c) already refuses on the receiving end because
+		 * __handle_type() rejects it (STATUS_OBJECT_TYPE_MISMATCH out
+		 * of NtQueryVolumeInformationFile: verified directly, not
+		 * assumed -- a process handle is not a file, console or
+		 * pipe). */
+		pp->StandardInput = f0 ? f0->h : closed_placeholder(&ph[0]);
+		pp->StandardOutput = f1 ? f1->h : closed_placeholder(&ph[1]);
+		pp->StandardError = f2 ? f2->h : closed_placeholder(&ph[2]);
 		pp->WindowFlags |= STARTF_USESTDHANDLES;
 	}
 
 	memset(&info, 0, sizeof info);
 	info.Length = sizeof info;
 	st = RtlCreateUserProcess(&np.nt, OBJ_CASE_INSENSITIVE, pp, 0, 0, 0, TRUE, 0, 0, &info);
+	/* Whatever closed_placeholder() duplicated was only ever needed to
+	 * get a real, non-NULL handle value into *this* process's copy of
+	 * the parameter block for RtlCreateUserProcess to copy onward (and,
+	 * for the ones RtlCreateUserProcess's own std-handle duplication
+	 * step also duplicates into the child, a second, independent
+	 * reference there) -- this process's own reference is never used
+	 * for anything and must not linger as an inheritable handle for the
+	 * *next* spawn to pick up by accident. */
+	for (i = 0; i < 3; i++) if (ph[i]) NtClose(ph[i]);
 	if (!NT_SUCCESS(st)) {
 		if (st == STATUS_OBJECT_NAME_NOT_FOUND || st == STATUS_OBJECT_PATH_NOT_FOUND) errno = ENOENT;
 		else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ) errno = ENOEXEC;
@@ -358,6 +421,5 @@ out:
 	if (wcmd) free(wcmd);
 	if (wenv) free(wenv);
 	if (runtime) __free(runtime);
-	(void)i;
 	return pid;
 }
