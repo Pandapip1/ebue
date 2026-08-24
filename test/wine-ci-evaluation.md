@@ -217,19 +217,13 @@ property the `TINYCC_SHA` pin exists to protect. Keep it in reserve.
 ## 4. What it would unlock: measured, not estimated
 
 The claim "patched Wine would let the `*-win.c` tests run" is checkable, so it
-was checked rather than argued. Method: build ntlibc at `0041753` for
-`x86_64-win32` with the pinned tinycc, then run **every** binary in
+was checked rather than argued. Method: build ntlibc for `x86_64-win32` with
+the pinned tinycc at `--disable-kernel32`, then run **every** binary in
 `obj/test/` — not just `TEST_RUN` — under each Wine.
 
-Stock Wine (`/usr/lib/wine/wine64`, wine-9.0, the closest available match to
-what CI installs), via `make check`, i.e. with the `*-win.exe` filter applied:
-
-```
-43 passed, 0 failed, 1 unverified
-```
-
-Patched Wine (`~/Projects/wine/build-wow64/loader/wine`, all thirteen commits,
-binary rebuilt after the last of them), with the filter **removed**:
+Patched Wine (`~/Projects/wine/build-wow64/loader/wine`, all thirteen commits
+on `8da89f8`, binary rebuilt after the last of them), with the `*-win.exe`
+filter **removed** — `make check WINE=… 'TEST_RUN=$(TEST_EXES)'`:
 
 ```
 47 passed, 0 failed, 1 unverified
@@ -238,6 +232,25 @@ binary rebuilt after the last of them), with the filter **removed**:
     PASS fork-win.exe
     PASS process-win.exe
 ```
+
+Stock Wine (`/usr/lib/wine/wine64`, wine-9.0 — the `wine` 9.0~repack apt
+package, the closest available match to what CI installs on `ubuntu-24.04`),
+via plain `make check`, i.e. with the filter applied:
+
+```
+43 passed, 0 failed, 1 unverified
+```
+
+**Provenance of these two numbers, since they are not from the same day.** The
+patched-Wine run was re-measured at current `main` (`bb5aa84`, `waitid`), and
+is unchanged: 47 passed, 0 failed, 1 unverified, the one unverified being
+`posix-socket.exe` skipping its network group. The stock-Wine run is from the
+earlier tree (`0041753`) and has **not** been re-run since; it is quoted as it
+was measured. Nothing landed in between that would plausibly move it — the
+intervening commits (`sched_yield`, `statvfs`, `waitid`, the `fmax`/`exp2`
+variants, an AFD connect fix) added no new test binary, and removing the four
+`*-win.exe` results from the current patched run leaves exactly the 43 the
+stock figure reports.
 
 Two things follow, and they are the core of the recommendation.
 
