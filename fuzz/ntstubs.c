@@ -318,12 +318,18 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 	 * environ, which the loop above has just emptied. */
 	mirror_init(envp);
 
-	/* Nothing calls ntlibc's exit() in a native build -- glibc's start-up
-	 * calls main() and glibc's exit() ends it -- so __stdio_exit() never
-	 * runs and anything left in a FILE buffer is lost.  libFuzzer's own
-	 * diagnostics go through these two (its fprintf/stderr references bind
-	 * to ntlibc's, which are the definitions in this executable), so they
-	 * would vanish.  Unbuffered costs nothing here and loses nothing. */
+	/* A native *test* binary never calls ntlibc's exit(): glibc's
+	 * start-up calls main(), main() returns, and glibc's exit() ends the
+	 * process, so __stdio_exit() does not run and anything left in a FILE
+	 * buffer is lost.  A libFuzzer harness is the other case -- measured
+	 * under gdb, libFuzzer's FuzzerDriver ends a timed run with exit(0),
+	 * which binds to ntlibc's definition in this executable, so there
+	 * __funcs_on_exit() and __stdio_exit() do run -- but only on the
+	 * orderly path; a crash, an abort or a sanitizer report skips them,
+	 * and those are exactly the runs whose output matters.  libFuzzer's
+	 * own diagnostics go through this stdout/stderr (its fprintf/stderr
+	 * references bind to ntlibc's, likewise the definitions here), so
+	 * they would vanish.  Unbuffered costs nothing and loses nothing. */
 	setvbuf(stdout, 0, _IONBF, 0);
 	setvbuf(stderr, 0, _IONBF, 0);
 }

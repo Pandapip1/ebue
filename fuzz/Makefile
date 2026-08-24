@@ -143,10 +143,100 @@ run: all
 	   echo "   corpus $$before -> $$(ls -1 $(CORPUS)/$$h/corpus | wc -l)"; \
 	 done; exit $$rc
 
-clean:
-	rm -rf $(OUT) $(LIBDIR)
+# ------------------------------------------------------------- coverage
+#
+#   make -C fuzz coverage                 every harness, per-file table
+#   make -C fuzz coverage HARNESSES=path  one harness
+#   make -C fuzz coverage FUNCS=1         per-function, not per-file
+#   make -C fuzz coverage MODULE=src/regex  restrict to one module
+#   make -C fuzz coverage ALL=1           list the 0.00% files too
+#
+# What this answers: "which src/*.c did harness X actually enter?"  A
+# harness that compiles, runs and reports no crashes without ever
+# reaching the module it names is a vacuous pass, and until this target
+# existed there was no way to tell one from a real one.
+#
+# Why a second library build rather than adding the flags to the fuzzing
+# one: -fprofile-instr-generate on the hot path costs throughput, and
+# `make run` is a throughput job.  The two object trees are independent
+# (COVLIB vs LIBDIR), so neither invalidates the other's stamp.
+#
+# THE PART THAT IS NOT OBVIOUS -- why a bare -fprofile-instr-generate
+# writes nothing here, measured rather than assumed:
+#
+#   1. LLVM's profile runtime picks its output path in an .init_array
+#      constructor, from getenv("LLVM_PROFILE_FILE").  getenv() in this
+#      link is *ntlibc's*, reading ntlibc's `environ`, which ntstubs.c's
+#      own constructor deliberately replaces with an empty one (see the
+#      comment above that loop: a native test must not inherit the
+#      harness's real environment).  So LLVM_PROFILE_FILE is invisible
+#      no matter how it is set, and the runtime falls back to its
+#      built-in default name, "default.profraw".
+#   2. It then opens that name with fopen() -- again ntlibc's, which
+#      goes to NtCreateFile in ntstubs.c, i.e. into the *simulated*
+#      volume, which is ordinary process memory and evaporates on exit.
+#      The profile is written every time; it is written into a file
+#      system that does not outlive the process.
+#
+# Both are fixed here without touching src/ or the harnesses:
+#
+#   -fprofile-instr-generate=<path> bakes the output path into the
+#   binary (__llvm_profile_filename), so no getenv is needed; and the
+#   path is put inside NTLIBC_FUZZ_MIRROR, the seam ntstubs.c already
+#   provides for exactly this -- one host directory made visible in the
+#   simulated volume so libFuzzer's own file I/O can reach the host.
+#
+# What this deliberately does NOT do: it does not stop the harness
+# linking src/exit/exit.c, and does not intercept NtTerminateProcess.
+# ntlibc's exit() is entered (measured: libFuzzer's FuzzerDriver calls
+# exit(0), not _Exit()), runs __funcs_on_exit(), and the profile
+# runtime's atexit handler fires from there.  exit(), atexit() and
+# __stdio_exit() stay under test, unchanged, in the coverage build as
+# in the fuzzing one.
+COVLIB   = $(srcdir)/obj/fuzzcovlib
+COVOUT   = $(srcdir)/obj/fuzzcov
+COVDATA  = $(srcdir)/obj/fuzzcovdata
+COV_TIME ?= 20
+PROF      = -fprofile-instr-generate -fcoverage-mapping
+COVEXES   = $(HARNESSES:%=$(COVOUT)/fuzz_%)
 
-.PHONY: all run clean
+$(COVLIB)/.built: $(LIBDEP)
+	NTLIBC_ASAN_OBJ=$(abspath $(COVLIB)) \
+	NTLIBC_ASAN_EXTRA='-fsanitize=fuzzer-no-link $(PROF)' \
+	$(srcdir)/tools/asan-build.sh --objects-only
+	touch $@
+
+$(COVOUT):
+	mkdir -p $(COVOUT)
+
+$(COVOUT)/host_oracle.o: host_oracle.c statshim.h | $(COVOUT)
+	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
+
+$(COVOUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(COVLIB)/.built | $(COVOUT)
+	$(CC) $(CFLAGS_HARNESS) $(PROF) -DNTLIBC_FUZZ_STATWRAP -c $< -o $@
+
+# The baked-in profile path is per harness and lives under COVDATA/<h>,
+# which coverage.sh hands to NTLIBC_FUZZ_MIRROR as that run's mirror
+# root.  A per-harness subdirectory, not one shared one: ntstubs.c
+# imports the whole mirror directory into the volume at start-up, so a
+# shared one would make every run slurp in every other run's profraw.
+$(COVOUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVOUT)/ntstubs.o $(COVLIB)/.built | $(COVOUT)
+	$(CC) $(CFLAGS_HARNESS) $(PROF) \
+	  -fprofile-instr-generate=$(abspath $(COVDATA))/$*/fuzz_$*.profraw \
+	  -shared-libasan $(RPATH) $(WRAP) \
+	  $(ASAN_SO) $< $(COVOUT)/ntstubs.o $(COVOUT)/host_oracle.o \
+	  $(COVLIB)/obj/*.o -ldl -lm -o $@
+
+coverage: $(COVEXES)
+	@COV_TIME=$(COV_TIME) FUNCS=$(FUNCS) MODULE=$(MODULE) ALL=$(ALL) \
+	 ASAN_SO=$(ASAN_SO) COVOUT=$(abspath $(COVOUT)) \
+	 COVDATA=$(abspath $(COVDATA)) SRCDIR=$(abspath $(srcdir)) \
+	 ./coverage.sh $(HARNESSES)
+
+clean:
+	rm -rf $(OUT) $(LIBDIR) $(COVOUT) $(COVLIB) $(COVDATA)
+
+.PHONY: all run clean coverage
 
 # A half-written object or executable left behind by a failed compile is
 # newer than its sources, so make would consider it up to date next time.
