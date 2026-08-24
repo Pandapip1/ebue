@@ -298,7 +298,7 @@ not_native()
 
 
 TINC="-I$srcdir/obj/include -I$srcdir/include -I$srcdir/arch/$ARCH -I$srcdir/arch/generic"
-ran=0 passed=0 nolink=0 skipped=0
+ran=0 passed=0 nolink=0 skipped=0 unverified=0
 : > "$OBJ/unlinkable.txt"
 for t in $(cd "$srcdir" && echo test/*.c); do
 	n=$(basename "$t" .c)
@@ -336,8 +336,22 @@ for t in $(cd "$srcdir" && echo test/*.c); do
 			passed=$((passed + 1))
 			[ "$mode" = "--quiet" ] || echo "  PASS $n"
 		else
-			echo "  FAIL $n  (output in $exe.out)"
-			[ "$mode" = "--quiet" ] || sed -n '1,25p' "$exe.out" | sed 's/^/        /'
+			rc=$?
+			if [ "$rc" = 77 ]; then
+				# Same "ran, but declined to verify something it detected
+				# at run time" outcome tools/runtests.sh's own rc=77
+				# bucket reports (test/posix-socket.c's network probe,
+				# specifically: this build's fuzz/ntstubs.c stub volume
+				# has no \Device\Afd node, so socket() itself fails
+				# here). Not a pass -- nothing was verified -- and not a
+				# FAIL either, since nothing that ran gave a wrong
+				# answer.
+				unverified=$((unverified + 1))
+				[ "$mode" = "--quiet" ] || echo "  UNVERIFIED $n  (output in $exe.out)"
+			else
+				echo "  FAIL $n  (output in $exe.out)"
+				[ "$mode" = "--quiet" ] || sed -n '1,25p' "$exe.out" | sed 's/^/        /'
+			fi
 		fi
 	else
 		nolink=$((nolink + 1))
@@ -346,7 +360,7 @@ for t in $(cd "$srcdir" && echo test/*.c); do
 	fi
 done
 
-echo "asan: $passed/$ran tests passed, $skipped not applicable natively, $nolink unlinkable"
+echo "asan: $passed/$ran tests passed, $unverified unverified, $skipped not applicable natively, $nolink unlinkable"
 
 # implicit-integer-sign-change is recoverable, so a test that reports one
 # still passes and the report scrolls by unread.  Collect the distinct
@@ -357,4 +371,4 @@ if [ "${NTLIBC_ASAN_CONVERSION:-0}" = 1 ]; then
 		| sed 's/: runtime error.*//' | sort -u | tee "$OBJ/conversion.txt" | wc -l)
 	echo "asan: $nconv implicit-conversion site(s) -> $OBJ/conversion.txt (report-only)"
 fi
-[ "$passed" = "$ran" ]
+[ "$((passed + unverified))" = "$ran" ]
