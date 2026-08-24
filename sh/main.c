@@ -130,13 +130,18 @@ static const char *const reserved[] = {
  * environment (XCU 2.12) and which therefore *cannot* be a program
  * found on PATH: every XCU 2.14 special built-in plus the regular
  * built-ins from XCU 2.9.1's "Command Search and Execution" note that
- * are equally intrinsic. `cd` is not here -- src/sh/exec.c implements
- * it. Anything not on this list (echo, test, kill, printf, ...) is a
- * genuine external utility on a POSIX system, so letting PATH lookup
- * fail with an honest "command not found" is the right answer for it,
- * not a refusal from here. */
+ * are equally intrinsic.
+ *
+ * A name comes off this list exactly when src/sh/builtin.c grows a real
+ * implementation of it, never before. `cd`, `:` and `exit` are already
+ * gone (stage 6a's dispatcher); `test`, `[`, `true` and `false` were
+ * never on it, because on a POSIX system they are genuine external
+ * utilities and letting PATH lookup fail honestly was the right answer
+ * -- except that this platform has no /bin at all, which is why stage
+ * 6a built them in too (see src/sh/builtin.c's header).  Anything still
+ * on this list is refused, up front, by name. */
 static const char *const unimplemented_builtins[] = {
-	":", ".", "break", "continue", "eval", "exec", "exit", "export",
+	".", "break", "continue", "eval", "exec", "export",
 	"readonly", "return", "set", "shift", "times", "trap", "unset",
 	"alias", "unalias", "bg", "fg", "jobs", "command", "getopts",
 	"hash", "read", "ulimit", "umask", "wait",

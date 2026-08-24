@@ -266,17 +266,28 @@ static void test_refuses_reserved_words(void)
 
 static void test_refuses_unimplemented_builtins(void)
 {
-	CHECK(run_c("exit 3", 0) == 2);
-	CHECK(err_contains("exit"));
-
 	/* The dangerous one: `export` as an external command would fail
 	 * with 127 while the variable silently stayed unexported. */
 	CHECK(run_c("export X=1", 0) == 2);
 	CHECK(err_contains("export"));
 
-	/* `cd` *is* implemented (src/sh/exec.c), so it must not be caught
-	 * by the refusal list. */
+	CHECK(run_c("shift", 0) == 2);
+	CHECK(err_contains("shift"));
+
+	/* A name comes off sh/main.c's refusal list exactly when
+	 * src/sh/builtin.c grows a real implementation of it, and each one
+	 * that has must *not* be caught by the list any more.  `exit 3`
+	 * was refused with 2 until stage 6a; asserting it exits 3 now is
+	 * the difference between "the list shrank" and "the list shrank
+	 * and the utility works". */
 	CHECK(run_c("cd .", 0) == 0);
+	CHECK(run_c("exit 3", 0) == 3);
+	CHECK(run_c(":", 0) == 0);
+	CHECK(run_c("true", 0) == 0);
+	CHECK(run_c("false", 0) == 1);
+	CHECK(run_c("test 1 -eq 1", 0) == 0);
+	CHECK(run_c("test 1 -eq 2", 0) == 1);
+	CHECK(run_c("[ -d . ]", 0) == 0);
 }
 
 static void test_refuses_special_parameters(void)

@@ -155,6 +155,48 @@ static char *xstrdup(const char *s)
 static int cmdsub_status;
 static unsigned long cmdsub_generation;
 
+/* ---- shell-wide control flow, and $? ---------------------------------
+ *
+ * XCU 2.8.2: "the exit status of the last command executed".  Every
+ * status this executor produces funnels through __sh_exec_pipeline(),
+ * so recording it there is enough to give `exit` with no operand the
+ * value 2.14 says it must use.  File-scope for the same reason
+ * cmdsub_status above is: the built-in that reads it runs several
+ * frames below the loop that sets it, and only the *last* value is
+ * ever wanted.
+ *
+ * `flow_exit_pending` is the unwind sh.h documents: `exit` sets it, and
+ * every list/and-or loop stops iterating while it is set rather than
+ * running the rest of the program.  It is deliberately *not* a longjmp:
+ * the redirection, environ and cwd save-and-restore this file is built
+ * around all live in ordinary function epilogues, and jumping past them
+ * would leave the shell's own fd table and environ permanently wrong
+ * for the exit path -- which for `sh -c` is the path that runs the
+ * atexit handlers and flushes stdout. */
+static int sh_last_status;
+static int flow_exit_pending;
+
+void __sh_flow_exit(int status)
+{
+	flow_exit_pending = 1;
+	sh_last_status = status;
+}
+
+int __sh_flow_pending(void)
+{
+	return flow_exit_pending;
+}
+
+void __sh_flow_clear(void)
+{
+	flow_exit_pending = 0;
+}
+
+int __sh_last_status(void)
+{
+	return sh_last_status;
+}
+
 static void free_strv(char **v, size_t n)
 {
 	size_t i;
@@ -631,86 +673,28 @@ struct stage_result {
 	               * substitution" status rule below does not apply) */
 };
 
-/* ==== A minimal `cd` builtin ============================================
+/* ==== Built-in utilities: dispatch, not a strcmp chain =================
  *
- * Added in stage 4 purely as load-bearing test infrastructure: proving
- * that "( ... )" does *not* leak a working-directory change to the
- * shell while "{ ... }" *does* (2.9.4/2.12, see this file's stage-4
- * header comment below) needs something inside the shell language that
- * can actually change the working directory, and nothing on this
- * platform is a standalone "cd" program the way a Unix PATH might have
- * one (this file's sibling comment on test/sh-engine.c's --produce/--cat/etc.
- * roles makes the same point about `echo`/`cat`/`true`). `cd` is a
- * regular (non-special) built-in utility (XCU 1.6/2.14) whose whole
- * documented job (XCU cd(1p)) is exactly the thing 2.12 calls out by
- * name -- "Working directory as set by cd" is part of the shell
- * execution environment -- so it has to run in this process, never a
- * spawned one, or it could never do its job at all.
+ * Stage 4's `cd` was matched here with a raw strcmp() on the
+ * *unexpanded* first word, and this comment used to say why that was
+ * deliberately narrow ("this builtin exists to make stage 4's
+ * subshell/brace tests exercisable, not to be a general-purpose builtin
+ * dispatcher").  Stage 6a builds the dispatcher: src/sh/builtin.c owns
+ * the table (`cd` included) and every implementation, and this file
+ * consults it from spawn_stage() below -- after wordexp() has produced
+ * the argv, which is the only string XCU 2.9.1 ("Command Search and
+ * Execution") ever names as the command name.  So `c=cd; $c /tmp` and
+ * `'cd' /tmp` are both a `cd` now, as 2.9.1 requires and as the raw
+ * match could not express.
  *
- * This is deliberately not a general implementation of cd(1p): no
- * CDPATH search, no PWD-based logical/physical (-L/-P) distinction, no
- * "cd -" to OLDPWD, no bare "cd" special-casing an unset HOME beyond
- * just failing. PWD and OLDPWD are still updated (2.12 lists shell
- * variables as part of the environment cd is specified to affect) so a
- * later $PWD/$OLDPWD read is not silently stale. Extending this to the
- * real thing is future work outside stage 4's scope (subshells/braces),
- * same as every other builtin -- see sh.h's banner. */
-static int exec_builtin_cd(const struct sh_command *cmd, struct stage_result *out)
-{
-	wordexp_t we;
-	const struct sh_word *w;
-	int first = 1, rc;
-	const char *target;
-	char *oldcwd, *newcwd;
-
-	out->pid = -1;
-	out->had_name = 1;
-
-	/* run_stage() never calls this with cmd->words == NULL (it only
-	 * dispatches here after checking cmd->words->text itself), but that
-	 * invariant is invisible across the call boundary to a static
-	 * analyzer, which then flags `we` as possibly read uninitialized on
-	 * a hypothetical zero-iteration loop below -- see spawn_stage()'s
-	 * identical guard/comment above for the same fix to the same class
-	 * of finding. */
-	if (!cmd->words) { out->status = 1; return 0; }
-
-	for (w = cmd->words; w; w = w->next) {
-		rc = wordexp(w->text, &we, first ? 0 : WRDE_APPEND);
-		if (rc) {
-			if (!first) wordfree(&we);
-			return -1; /* WRDE_SYNTAX, WRDE_BADCHAR, a command
-			            * substitution the shell could not run, ... --
-			            * see sh.h for this file's -1 convention */
-		}
-		first = 0;
-	}
-
-	target = we.we_wordc > 1 ? we.we_wordv[1] : getenv("HOME");
-	if (!target || !*target) {
-		/* cd(1p): "If ... HOME is unset or null, the results are
-		 * unspecified" -- failing the command is a conforming choice. */
-		wordfree(&we);
-		out->status = 1;
-		return 0;
-	}
-
-	oldcwd = getcwd(0, 0);
-	if (chdir(target) < 0) {
-		__free(oldcwd);
-		wordfree(&we);
-		out->status = 1;
-		return 0;
-	}
-	newcwd = getcwd(0, 0);
-	if (oldcwd) setenv("OLDPWD", oldcwd, 1);
-	if (newcwd) setenv("PWD", newcwd, 1);
-	__free(oldcwd);
-	__free(newcwd);
-	wordfree(&we);
-	out->status = 0;
-	return 0;
-}
+ * `env_mutate` still gates the same thing it always did, just via the
+ * table's `env_effect` column instead of a name: a built-in that
+ * changes the shell execution environment (XCU 2.12) must not actually
+ * do so when this invocation is one stage of a multi-command pipeline,
+ * which 2.12 places in a subshell environment.  See run_stage()'s
+ * comment below, which already argued this at length for `cd` and now
+ * argues it for a column.
+ */
 
 /* Finds and starts the program named by cmd->words (which must be
  * non-NULL -- the assignment-only case is handled by the caller, see
@@ -720,7 +704,7 @@ static int exec_builtin_cd(const struct sh_command *cmd, struct stage_result *ou
  * immediately afterward instead. Returns -1 ("cannot execute this
  * yet") for a word that needs command substitution or on OOM, exactly
  * as stage 2 did; otherwise 0 with *out filled in. */
-static int spawn_stage(const struct sh_command *cmd, struct stage_result *out)
+static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, int env_mutate)
 {
 	wordexp_t we;
 	const struct sh_word *w;
@@ -728,6 +712,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out)
 	char *resolved;
 	char **envp = 0;
 	size_t envn = 0;
+	const struct sh_builtin *bi;
 
 	out->pid = -1;
 	out->had_name = 0;
@@ -751,6 +736,46 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out)
 	}
 	if (we.we_wordc == 0) { wordfree(&we); out->status = 0; return 0; } /* every word expanded away -- 2.9.1: "no command name results" */
 	out->had_name = 1;
+
+	/* 2.9.1 step 1d: "If the command name matches the name of a
+	 * utility listed in ... special built-in utilities, that special
+	 * built-in utility shall be invoked", and step 1e does the same
+	 * for a regular built-in, both *before* any PATH search.  So this
+	 * lookup goes here, above __find_program(), not beside it.
+	 *
+	 * An assignment prefix on a built-in is not applied: 2.9.1 says
+	 * such assignments "shall affect the current execution
+	 * environment" for special built-ins and are unspecified for
+	 * regular ones, and this shell's only variable store is the real
+	 * `environ` -- so applying them would leak into the shell for a
+	 * regular built-in with no way to undo it.  Refusing to run the
+	 * command at all (the -1 convention) is the honest answer, since
+	 * a silently-unapplied assignment is exactly the class of silent
+	 * wrongness sh/main.c's refusal list exists to prevent. */
+	bi = __sh_builtin_lookup(we.we_wordv[0]);
+	if (bi) {
+		struct sh_builtin_ctx ctx;
+		if (cmd->assigns) { wordfree(&we); return -1; }
+		if (!env_mutate && bi->env_effect) {
+			/* A pipeline stage's `cd` would change *this* process's
+			 * working directory with nothing to put it back; 2.12
+			 * puts that stage in a subshell environment, so not
+			 * doing it is indistinguishable from doing it in a
+			 * subshell that is then discarded. */
+			out->status = 0;
+			wordfree(&we);
+			return 0;
+		}
+		ctx.argc = (int)we.we_wordc;
+		ctx.argv = we.we_wordv;
+		ctx.env_mutate = env_mutate;
+		ctx.last_status = sh_last_status;
+		ctx.status = 0;
+		rc = bi->fn(&ctx);
+		out->status = ctx.status;
+		wordfree(&we);
+		return rc;
+	}
 
 	if (cmd->assigns) {
 		envp = build_child_envp(cmd->assigns, &envn);
@@ -801,29 +826,7 @@ static int run_stage(const struct sh_command *cmd, struct stage_result *out, int
 		else out->status = 0;
 		return 0;
 	}
-	/* Matching exec_assignment_only()'s own env_mutate gate just above:
-	 * `cd` mutates this process's own state (the working directory) the
-	 * same way an assignment mutates its environment, so a pipeline
-	 * stage that is not the whole command (env_mutate == 0) must not
-	 * actually run it in-process either -- see that function's comment
-	 * for why silently no-op'ing here is indistinguishable from running
-	 * it in a subshell that is then discarded, which is what a
-	 * non-final pipeline stage's `cd` would be doing anyway (2.12: "each
-	 * command of a multi-command pipeline is in a subshell
-	 * environment"). Checking the raw, unexpanded word ("cd" typed
-	 * literally, not e.g. a quoted "'cd'" or an expansion producing it)
-	 * is a deliberately narrow match: this builtin exists to make
-	 * stage 4's subshell/brace tests exercisable, not to be a
-	 * general-purpose builtin dispatcher. */
-	if (env_mutate && cmd->words->text && !strcmp(cmd->words->text, "cd"))
-		return exec_builtin_cd(cmd, out);
-	if (!env_mutate && cmd->words->text && !strcmp(cmd->words->text, "cd")) {
-		out->pid = -1;
-		out->had_name = 1;
-		out->status = 0;
-		return 0;
-	}
-	return spawn_stage(cmd, out);
+	return spawn_stage(cmd, out, env_mutate);
 }
 
 static int wait_status(pid_t pid)
@@ -1169,6 +1172,15 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	rc = __sh_exec_list(cmd->body, status);
 
 	if (is_subshell) {
+		/* "( exit 3 )" exits *the subshell*, not the shell (2.9.4
+		 * runs the compound-list in a subshell environment, 2.14's
+		 * `exit` exits "the shell" it is running in).  The status is
+		 * already in *status; consuming the pending unwind here is
+		 * what keeps the rest of the caller's program running -- and
+		 * a brace group deliberately does not do this, because
+		 * "{ exit 3; }" runs "in the current process environment"
+		 * (2.9.4) and really is the shell exiting. */
+		if (__sh_flow_pending()) __sh_flow_clear();
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
 		if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1317,6 +1329,10 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 
 	rc = __sh_exec_list(list, &st);
 
+	/* 2.6.3 runs the substituted command "in a subshell environment",
+	 * so "$(exit 3)" is a substitution whose status is 3, never the
+	 * calling shell exiting. */
+	if (__sh_flow_pending()) __sh_flow_clear();
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1392,6 +1408,12 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 
 	rc = __sh_exec_list(cmd->body, status);
 
+	/* 2.12 puts every stage of a multi-command pipeline in a subshell
+	 * environment regardless of "(...)" vs "{...}", so an `exit` in
+	 * this stage's body exits that subshell only -- unlike the
+	 * standalone brace group exec_group() above deliberately lets
+	 * through. */
+	if (__sh_flow_pending()) __sh_flow_clear();
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1450,6 +1472,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		rc = __sh_exec_command(&pl->commands[0], status);
 		if (rc) return rc;
 		if (pl->bang) *status = (*status == 0);
+		sh_last_status = *status;
 		return 0;
 	}
 
@@ -1615,6 +1638,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	if (abort_unsupported) return -1; /* *status left untouched, per this file's convention */
 
 	*status = pl->bang ? (rc == 0) : rc;
+	sh_last_status = *status;
 	return 0;
 }
 
@@ -1623,6 +1647,11 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
 	if (rc) return rc;
 	for (a = a->next; a; a = a->next) {
+		/* An `exit` anywhere in the and-or list ends it, whatever the
+		 * status would have selected next -- see sh.h's control-flow
+		 * comment.  Checked before the short-circuit tests so that
+		 * "exit 0 && cmd" runs no cmd. */
+		if (flow_exit_pending) return 0;
 		if (a->op == SH_AO_AND && *status != 0) continue;
 		if (a->op == SH_AO_OR && *status == 0) continue;
 		rc = __sh_exec_pipeline(&a->pipeline, status);
@@ -1631,17 +1660,31 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
 	return 0;
 }
 
+/* Nesting depth of __sh_exec_list().  A pending `exit` must survive
+ * every *inner* return -- that is the whole point of the unwind -- but
+ * must not survive the outermost one, or the next program this process
+ * runs (a later system()/wordexp() command substitution, or a second
+ * __sh_exec_list() in a test) would find the flag still set and execute
+ * nothing at all, silently.  Clearing it exactly where the unwind has
+ * nowhere left to unwind to is what makes the flag a control-flow
+ * signal rather than a latch. */
+static unsigned exec_list_depth;
+
 int __sh_exec_list(const struct sh_list *list, int *status)
 {
 	const struct sh_list_item *it;
+	int rc = 0;
 	*status = 0;
 	if (!list) return 0;
+	exec_list_depth++;
 	for (it = list->items; it; it = it->next) {
-		int rc = __sh_exec_andor(it->andor, status);
-		if (rc) return rc;
+		rc = __sh_exec_andor(it->andor, status);
+		if (rc) break;
+		if (flow_exit_pending) break;
 		/* SH_SEP_AMP: true backgrounding is future work -- see this
 		 * file's header comment -- so an async item still just runs
 		 * synchronously for now, exactly like SH_SEP_SEQ/SH_SEP_END. */
 	}
-	return 0;
+	if (--exec_list_depth == 0) flow_exit_pending = 0;
+	return rc;
 }

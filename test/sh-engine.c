@@ -52,6 +52,10 @@
  *   2.2.2 Single-Quotes  2.2.3 Double-Quotes
  *   2.6.3 Command Substitution  2.6.5 Field Splitting
  *   2.12 Shell Execution Environment
+ *   2.14 Special Built-In Utilities
+ * and, for stage 6a's built-ins, the utility pages themselves:
+ *   utilities/test.html (OPERANDS, EXTENDED DESCRIPTION, EXIT STATUS)
+ *   utilities/true.html  utilities/false.html  utilities/cd.html
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1885,6 +1889,403 @@ static char *read_all_stdin(size_t *out_len)
 	return buf;
 }
 
+
+/* ---- stage 6a: the built-in dispatcher and its utilities --------------
+ *
+ * Spec pages: XCU 2.9.1 "Command Search and Execution", XCU 2.14
+ * "Special Built-In Utilities", XCU test(1p) (OPERANDS + EXTENDED
+ * DESCRIPTION + EXIT STATUS), XCU true(1p)/false(1p), XCU cd(1p).
+ */
+
+/* 2.9.1 step 1: the command name a built-in is matched against is the
+ * one that exists *after* the word expansions, not the raw source text
+ * -- which is precisely what src/sh/exec.c's old raw strcmp("cd") could
+ * not express.  Both a quoted 'cd' and a $VAR expanding to "cd" have to
+ * reach the built-in. */
+static void test_builtin_dispatch_uses_expanded_name(void)
+{
+	char *saved = save_cwd();
+	char *now;
+	int status;
+
+	CHECK(mkdir("shtst_disp_dir", 0755) == 0 || errno == EEXIST);
+
+	CHECK(run("'cd' shtst_disp_dir", &status) == 0);
+	CHECK(status == 0);
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) != 0);
+	free(now);
+	CHECK(chdir(saved) == 0);
+
+	CHECK(run("SHT_CDNAME=cd; $SHT_CDNAME shtst_disp_dir", &status) == 0);
+	CHECK(status == 0);
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) != 0);
+	free(now);
+
+	unsetenv("SHT_CDNAME");
+	restore_cwd(saved);
+	rmdir("shtst_disp_dir");
+}
+
+/* 2.14 ":" -- "This utility shall only expand command arguments... EXIT
+ * STATUS: Zero."  true(1p): "shall return with exit code zero";
+ * false(1p): "shall return with a non-zero exit code". */
+static void test_builtin_colon_true_false(void)
+{
+	int status;
+
+	CHECK(run(":", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run(": ignored arguments here", &status) == 0);
+	CHECK(status == 0);
+
+	CHECK(run("true", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run("false", &status) == 0);
+	CHECK(status != 0);
+
+	/* Regular utilities on a POSIX system, but there is no true.exe on
+	 * this platform, so before stage 6a every one of these was a
+	 * "command not found" 127 -- the value that must never come back. */
+	CHECK(run("true", &status) == 0 && status != 127);
+	CHECK(run("test x = x", &status) == 0 && status != 127);
+}
+
+/* 2.14 "exit [n]": "shall cause the shell to exit with the exit status
+ * specified by the unsigned decimal integer n... If n is not specified,
+ * the exit status shall be that of the last command executed."  The
+ * "cause the shell to exit" half is observable here as the rest of the
+ * list not running. */
+static void test_builtin_exit(const char *self)
+{
+	char src[512];
+	int status;
+
+	CHECK(run("exit 7", &status) == 0);
+	CHECK(status == 7);
+
+	/* Everything after it must not run: the marker file would exist if
+	 * the second list item had executed. */
+	unlink("shtst_exit_marker.txt");
+	snprintf(src, sizeof src, "exit 4; '%s' --produce x > shtst_exit_marker.txt", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 4);
+	CHECK(access("shtst_exit_marker.txt", F_OK) != 0);
+
+	/* ... including across "&&"/"||", where the status would otherwise
+	 * have selected the next pipeline. */
+	snprintf(src, sizeof src, "exit 0 && '%s' --produce x > shtst_exit_marker.txt", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	CHECK(access("shtst_exit_marker.txt", F_OK) != 0);
+
+	/* "If n is not specified, the exit status shall be that of the
+	 * last command executed" (2.14, and 2.8.2 for what that means). */
+	snprintf(src, sizeof src, "'%s' --exit-child 6; exit", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 6);
+	snprintf(src, sizeof src, "'%s' --exit-child 0; exit", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	/* 2.9.4/2.12: "( ... )" runs in a subshell environment, so an
+	 * `exit` inside it exits that subshell only -- the list continues,
+	 * and its status is the *later* command's. */
+	snprintf(src, sizeof src, "( exit 3 ); '%s' --exit-child 5", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 5);
+
+	/* And a command substitution is a subshell environment too
+	 * (2.6.3), so "$(exit 3)" must not take the shell down with it. */
+	snprintf(src, sizeof src, "SHT_X=$(exit 3); '%s' --exit-child 5", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 5);
+	unsetenv("SHT_X");
+
+	/* A brace group is *not* a subshell (2.9.4: "in the current
+	 * process environment"), so this one really does end the program. */
+	unlink("shtst_exit_marker.txt");
+	snprintf(src, sizeof src, "{ exit 2; }; '%s' --produce x > shtst_exit_marker.txt", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 2);
+	CHECK(access("shtst_exit_marker.txt", F_OK) != 0);
+
+	/* The unwind must not latch: a second program in the same process
+	 * has to run normally afterwards. */
+	CHECK(run("true", &status) == 0);
+	CHECK(status == 0);
+}
+
+/* test(1p) EXTENDED DESCRIPTION: "The algorithm for determining the
+ * precedence of the operators and the return value that shall be
+ * generated is based on the number of arguments presented to test."
+ * These are the 0-, 1-, 2-, 3- and 4-argument rules taken one at a
+ * time; each is a case a "tokenise and evaluate" implementation gets
+ * wrong. */
+static void test_builtin_test_argc_rules(void)
+{
+	int status;
+
+	/* "0 arguments: Exit false (1)." */
+	CHECK(run("test", &status) == 0);
+	CHECK(status == 1);
+
+	/* "1 argument: Exit true (0) if $1 is not null; otherwise, exit
+	 * false." -- note "-f" alone is a *string*, hence true. */
+	CHECK(run("test x", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run("test ''", &status) == 0);
+	CHECK(status == 1);
+	CHECK(run("test -f", &status) == 0);
+	CHECK(status == 0);
+
+	/* "2 arguments: If $1 is '!', exit true if $2 is null, false if $2
+	 * is not null." -- a string test of $2, not a negated evaluation
+	 * of it, so "! -f" is false because "-f" is a non-null string. */
+	CHECK(run("test ! ''", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run("test ! x", &status) == 0);
+	CHECK(status == 1);
+	CHECK(run("test ! -f", &status) == 0);
+	CHECK(status == 1);
+	/* "If $1 is a unary primary, exit true if the unary test is
+	 * true" */
+	CHECK(run("test -d .", &status) == 0);
+	CHECK(status == 0);
+
+	/* "3 arguments: If $2 is a binary primary, perform the binary test
+	 * of $1 and $3." -- checked *before* the '('/')' rule, which is
+	 * what makes this a string comparison rather than a group. */
+	CHECK(run("test '(' = ')'", &status) == 0);
+	CHECK(status == 1);
+	CHECK(run("test '(' = '('", &status) == 0);
+	CHECK(status == 0);
+	/* "If $1 is '!', negate the two-argument test of $2 and $3." */
+	CHECK(run("test ! -d .", &status) == 0);
+	CHECK(status == 1);
+	CHECK(run("test ! -d shtst_no_such_dir", &status) == 0);
+	CHECK(status == 0);
+	/* XSI: "If $1 is '(' and $3 is ')', perform the unary test of
+	 * $2" -- i.e. the one-argument non-null-string test. */
+	CHECK(run("test '(' x ')'", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run("test '(' '' ')'", &status) == 0);
+	CHECK(status == 1);
+
+	/* "4 arguments: If $1 is '!', negate the three-argument test of
+	 * $2, $3, and $4." */
+	CHECK(run("test ! a = a", &status) == 0);
+	CHECK(status == 1);
+	CHECK(run("test ! a = b", &status) == 0);
+	CHECK(status == 0);
+	/* XSI: "If $1 is '(' and $4 is ')', perform the two-argument test
+	 * of $2 and $3." */
+	CHECK(run("test '(' -d . ')'", &status) == 0);
+	CHECK(status == 0);
+}
+
+/* test(1p) OPERANDS, the file-system primaries. */
+static void test_builtin_test_file_primaries(void)
+{
+	int status;
+	FILE *f;
+
+	unlink("shtst_t_file.txt");
+	unlink("shtst_t_empty.txt");
+	rmdir("shtst_t_dir");
+	CHECK(mkdir("shtst_t_dir", 0755) == 0 || errno == EEXIST);
+	f = fopen("shtst_t_file.txt", "wb");
+	CHECK(f != 0);
+	if (f) { fputs("data", f); fclose(f); }
+	f = fopen("shtst_t_empty.txt", "wb");
+	CHECK(f != 0);
+	if (f) fclose(f);
+
+	/* "-e pathname: True if pathname resolves to an existing directory
+	 * entry.  False if pathname cannot be resolved." */
+	CHECK(run("test -e shtst_t_file.txt", &status) == 0 && status == 0);
+	CHECK(run("test -e shtst_t_dir", &status) == 0 && status == 0);
+	CHECK(run("test -e shtst_t_nothing", &status) == 0 && status == 1);
+
+	/* "-f ... for a regular file" / "-d ... for a directory" -- the
+	 * two must disagree about the same two operands, which a
+	 * -e-for-everything implementation would fail. */
+	CHECK(run("test -f shtst_t_file.txt", &status) == 0 && status == 0);
+	CHECK(run("test -f shtst_t_dir", &status) == 0 && status == 1);
+	CHECK(run("test -d shtst_t_dir", &status) == 0 && status == 0);
+	CHECK(run("test -d shtst_t_file.txt", &status) == 0 && status == 1);
+	CHECK(run("test -f shtst_t_nothing", &status) == 0 && status == 1);
+	CHECK(run("test -d shtst_t_nothing", &status) == 0 && status == 1);
+
+	/* "-s ... a file that has a size greater than zero" */
+	CHECK(run("test -s shtst_t_file.txt", &status) == 0 && status == 0);
+	CHECK(run("test -s shtst_t_empty.txt", &status) == 0 && status == 1);
+	CHECK(run("test -s shtst_t_nothing", &status) == 0 && status == 1);
+
+	/* "-r ... permission to read from the file will be granted" /
+	 * "-w ... permission to write" -- and both false for a pathname
+	 * that "cannot be resolved". */
+	CHECK(run("test -r shtst_t_file.txt", &status) == 0 && status == 0);
+	CHECK(run("test -w shtst_t_file.txt", &status) == 0 && status == 0);
+	CHECK(run("test -r shtst_t_nothing", &status) == 0 && status == 1);
+	CHECK(run("test -w shtst_t_nothing", &status) == 0 && status == 1);
+
+	/* "-x ... permission to execute the file (or search it, if it is a
+	 * directory) will be granted" -- a directory this process just
+	 * created and can chdir() into is searchable. */
+	CHECK(run("test -x shtst_t_dir", &status) == 0 && status == 0);
+	CHECK(run("test -x shtst_t_nothing", &status) == 0 && status == 1);
+
+	/* "-z string: True if the length of string string is zero" /
+	 * "-n string: True if the length of string is non-zero". */
+	CHECK(run("test -z ''", &status) == 0 && status == 0);
+	CHECK(run("test -z x", &status) == 0 && status == 1);
+	CHECK(run("test -n ''", &status) == 0 && status == 1);
+	CHECK(run("test -n x", &status) == 0 && status == 0);
+
+	unlink("shtst_t_file.txt");
+	unlink("shtst_t_empty.txt");
+	rmdir("shtst_t_dir");
+}
+
+/* test(1p) OPERANDS: the string and arithmetic binary primaries, and
+ * EXIT STATUS: ">1  An error occurred" for an operand of an arithmetic
+ * primary that is not an integer.  A malformed expression must not
+ * quietly become "false" -- 1 and 2 are different answers. */
+static void test_builtin_test_binary_primaries(void)
+{
+	int status;
+
+	CHECK(run("test abc = abc", &status) == 0 && status == 0);
+	CHECK(run("test abc = abd", &status) == 0 && status == 1);
+	CHECK(run("test abc != abd", &status) == 0 && status == 0);
+	CHECK(run("test abc != abc", &status) == 0 && status == 1);
+
+	CHECK(run("test 1 -eq 1", &status) == 0 && status == 0);
+	CHECK(run("test 1 -eq 2", &status) == 0 && status == 1);
+	CHECK(run("test 1 -ne 2", &status) == 0 && status == 0);
+	CHECK(run("test 1 -lt 2", &status) == 0 && status == 0);
+	CHECK(run("test 2 -lt 1", &status) == 0 && status == 1);
+	CHECK(run("test 2 -le 2", &status) == 0 && status == 0);
+	CHECK(run("test 3 -gt 2", &status) == 0 && status == 0);
+	CHECK(run("test 2 -gt 3", &status) == 0 && status == 1);
+	CHECK(run("test 3 -ge 3", &status) == 0 && status == 0);
+	CHECK(run("test 2 -ge 3", &status) == 0 && status == 1);
+	/* "algebraically" -- a negative integer is a valid operand, and a
+	 * string comparison of "-1" and "1" would get this backwards. */
+	CHECK(run("test -1 -lt 1", &status) == 0 && status == 0);
+
+	/* An arithmetic primary whose operand is not an integer is an
+	 * error (>1), not false.  The diagnostic goes to stderr, which is
+	 * redirected here so a passing run stays quiet -- and doing that
+	 * through the shell's own "2>" is one more thing being tested. */
+	CHECK(run("test 1 -eq x 2>shtst_t_err.txt", &status) == 0);
+	CHECK(status > 1);
+	CHECK(run("test x -eq 1 2>shtst_t_err.txt", &status) == 0);
+	CHECK(status > 1);
+	/* A missing operator is equally an error, not false. */
+	CHECK(run("test -d 2>shtst_t_err.txt", &status) == 0 && status == 0); /* 1 arg: non-null string */
+	CHECK(run("test a b 2>shtst_t_err.txt", &status) == 0 && status > 1);
+	unlink("shtst_t_err.txt");
+}
+
+/* test(1p) OPERANDS: "!", "-a", "-o" and "( expression )", plus the XSI
+ * paragraph under ">4 arguments" that fixes their precedence -- "-a ...
+ * has a higher precedence than -o", both left associative, and "the
+ * string comparison binary primaries '=' and '!=' shall have a higher
+ * precedence than any unary primary". */
+static void test_builtin_test_grammar(void)
+{
+	int status;
+
+	CHECK(run("test -n a -a -n b", &status) == 0 && status == 0);
+	CHECK(run("test -n a -a -z b", &status) == 0 && status == 1);
+	CHECK(run("test -z a -o -n b", &status) == 0 && status == 0);
+	CHECK(run("test -z a -o -z b", &status) == 0 && status == 1);
+
+	/* "-a ... has a higher precedence than -o": "false -a false -o
+	 * true" is "(false -a false) -o true" = true.  Read the other way
+	 * round it would be "false -a (false -o true)" = false. */
+	CHECK(run("test -z a -a -z b -o -n c", &status) == 0 && status == 0);
+	/* and "true -o true -a false" is "true -o (true -a false)" = true;
+	 * left-to-right without precedence would give false. */
+	CHECK(run("test -n a -o -n b -a -z c", &status) == 0 && status == 0);
+
+	/* "( expression ): ... The parentheses can be used to alter the
+	 * normal precedence and associativity." */
+	CHECK(run("test '(' -z a -o -n b ')' -a -n c", &status) == 0 && status == 0);
+	CHECK(run("test '(' -n a -o -n b ')' -a -z c", &status) == 0 && status == 1);
+
+	/* "! expression: True if expression is false." */
+	CHECK(run("test ! -n a -a -n b", &status) == 0 && status == 1);
+	CHECK(run("test ! -z a -a -n b", &status) == 0 && status == 0);
+
+	/* The XSI '='-binds-tighter-than-a-unary-primary rule: with the
+	 * checks the other way round, "-n" would be taken as a unary
+	 * primary applied to "=" and the "-n" on the right would never be
+	 * seen as its operand. */
+	CHECK(run("test -n = -n -o -z x", &status) == 0 && status == 0);
+	CHECK(run("test -n = -z -o -z x", &status) == 0 && status == 1);
+
+	/* An unbalanced group is an error (>1), not false. */
+	CHECK(run("test '(' -n a -a -n b 2>shtst_t_err.txt", &status) == 0 && status > 1);
+	unlink("shtst_t_err.txt");
+}
+
+/* test(1p) DESCRIPTION: "In the second form of the utility, where the
+ * utility name used is [ rather than test, the application shall ensure
+ * that the closing square bracket is a separate argument", and
+ * EXTENDED DESCRIPTION: "when using the '[...]' form, the
+ * <right-square-bracket> final argument shall not be counted in this
+ * algorithm". */
+static void test_builtin_bracket(void)
+{
+	int status;
+
+	CHECK(run("[ -d . ]", &status) == 0 && status == 0);
+	CHECK(run("[ -d shtst_no_such_dir ]", &status) == 0 && status == 1);
+	CHECK(run("[ ]", &status) == 0 && status == 1);         /* 0 arguments after ']' is dropped */
+	CHECK(run("[ x ]", &status) == 0 && status == 0);
+	CHECK(run("[ '(' = ')' ]", &status) == 0 && status == 1); /* still the 3-argument rule */
+
+	/* Missing ']' is an error, not a silent evaluation of the rest. */
+	CHECK(run("[ -d . 2>shtst_t_err.txt", &status) == 0 && status > 1);
+	unlink("shtst_t_err.txt");
+}
+
+/* 2.9.1: a built-in must be reachable from every place a command is,
+ * not just as a whole program -- as a pipeline stage, inside a group,
+ * and as an and-or term.  2.12 additionally puts each stage of a
+ * multi-command pipeline in a subshell environment, so a `cd` there
+ * must not move the *shell*. */
+static void test_builtin_in_compound_contexts(const char *self)
+{
+	char src[512];
+	char *saved = save_cwd();
+	char *now;
+	int status;
+
+	CHECK(run("{ true; }", &status) == 0 && status == 0);
+	CHECK(run("( false )", &status) == 0 && status == 1);
+	CHECK(run("true && test 1 -eq 1", &status) == 0 && status == 0);
+	CHECK(run("false || test 1 -eq 1", &status) == 0 && status == 0);
+	CHECK(run("! true", &status) == 0 && status == 1);
+
+	snprintf(src, sizeof src, "'%s' --produce hi | test -n x", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	CHECK(mkdir("shtst_pipe_dir", 0755) == 0 || errno == EEXIST);
+	snprintf(src, sizeof src, "cd shtst_pipe_dir | '%s' --exit-child 0", self);
+	CHECK(run(src, &status) == 0);
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) == 0); /* the shell did not move */
+	free(now);
+	restore_cwd(saved);
+	rmdir("shtst_pipe_dir");
+}
+
 /* Every self-exec role stage 2/3's tests use, dispatched on argv[1].
  * Returns the process's exit code for a recognised role, or -1 if
  * argv[1] is not one of them (so main() falls through to running the
@@ -2088,7 +2489,17 @@ int main(int argc, char **argv)
 	test_exec_cmdsub_in_redirections(argv[0]);
 	test_exec_cmdsub_propagates_unimplemented(argv[0]);
 
+	test_builtin_dispatch_uses_expanded_name();
+	test_builtin_colon_true_false();
+	test_builtin_exit(argv[0]);
+	test_builtin_test_argc_rules();
+	test_builtin_test_file_primaries();
+	test_builtin_test_binary_primaries();
+	test_builtin_test_grammar();
+	test_builtin_bracket();
+	test_builtin_in_compound_contexts(argv[0]);
+
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 5: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, and command substitution -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 6a: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, and the built-in dispatcher with test/[/:/true/false/exit/cd -- see test/sh-design.md)\n");
 	return 0;
 }

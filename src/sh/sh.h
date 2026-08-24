@@ -159,6 +159,56 @@ void __sh_print_list(FILE *f, const struct sh_list *list);
  * NOT here: it is declared in src/internal/libc.h, which is where a
  * declaration shared between source directories belongs. See
  * __sh_cmdsub() there and its implementation in exec.c. */
+/* ---- built-in utilities (XCU 1.6, 2.9.1, 2.14) ----------------------
+ *
+ * src/sh/builtin.c owns the table and every implementation; exec.c
+ * consults it from the one place XCU 2.9.1 says a command name is
+ * decided -- after the word expansions, on the expanded argv, before
+ * any PATH search.  See builtin.c's header comment for why `test`,
+ * `:`, `true`, `false` and `exit` are built in here rather than left to
+ * an honest "command not found". */
+struct sh_builtin_ctx {
+	int argc;             /* expanded argv count, argv[0] is the name */
+	char **argv;
+	int env_mutate;       /* 0: this invocation's effect on the shell
+	                       * execution environment (XCU 2.12) is going
+	                       * to be discarded -- e.g. one stage of a
+	                       * multi-command pipeline */
+	int last_status;      /* the status of the last command executed,
+	                       * i.e. what `exit` with no operand uses */
+	int status;           /* out: the utility's exit status */
+};
+
+struct sh_builtin {
+	const char *name;
+	int special;          /* XCU 2.14 special built-in (2.8.1 hangs
+	                       * error consequences off this) */
+	int env_effect;       /* changes something XCU 2.12 lists as part
+	                       * of the shell execution environment */
+	int (*fn)(struct sh_builtin_ctx *ctx);
+};
+
+const struct sh_builtin *__sh_builtin_lookup(const char *name);
+
+/* ---- shell-wide control flow ----------------------------------------
+ *
+ * `exit` (XCU 2.14) has to unwind out of however many nested lists,
+ * and-or terms and pipelines it is buried in, without any of them
+ * mistaking the unwind for a command that failed.  A single pending
+ * flag, checked by __sh_exec_list()/__sh_exec_andor() between items,
+ * does that: they stop iterating and return normally with the status
+ * already in *status.  A subshell environment (a "( list )", a command
+ * substitution, or a pipeline stage) consumes the pending exit instead
+ * of propagating it, because that is what exiting *that* subshell
+ * means.  Implemented in exec.c, which is what drives execution. */
+void __sh_flow_exit(int status);
+int __sh_flow_pending(void);
+void __sh_flow_clear(void);
+
+/* The status of the last command executed (XCU 2.8.2), maintained by
+ * exec.c and read by `exit` with no operand. */
+int __sh_last_status(void);
+
 int __sh_exec_command(const struct sh_command *cmd, int *status);
 int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status);
 int __sh_exec_andor(const struct sh_andor *a, int *status);
