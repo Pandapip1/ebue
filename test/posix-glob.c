@@ -986,6 +986,7 @@ static void test_regex_regerror(void)
  * header instead of declaring ENTRY/ACTION/VISIT/prototypes locally.
  * =================================================================== */
 #include <search.h>
+#include <stdint.h>	/* SIZE_MAX, for hcreate()'s overflow row below */
 
 /* hcreate.html/hsearch.html DESCRIPTION -- hcreate() "shall
  * allocate sufficient space for the table" from nel, "an estimate of
@@ -1190,6 +1191,298 @@ static void test_search_insque_remque(void)
 	CHECK(a.fwd == &b && b.bwd == &a && b.fwd == &a && a.bwd == &b);
 }
 
+/* basedefs/search.h.html: the header "shall define the ENTRY type for
+ * structure entry" with members "char *key" and "void *data", "the
+ * ACTION type ... FIND, ENTER" and "the VISIT type ... preorder,
+ * postorder, endorder, leaf". The enumerators are what hsearch() and
+ * twalk() are steered by, so within each enumeration they must be
+ * distinct -- a duplicated enumerator would silently turn ENTER into
+ * FIND, or make twalk()'s three internal-node visits indistinguishable
+ * from each other. Not checked anywhere before. */
+static void test_search_header_types(void)
+{
+	ENTRY e;
+	char k[] = "k";
+	int d = 1;
+
+	e.key = k;		/* must be char *, not const char * */
+	e.data = &d;		/* must be void * */
+	CHECK(e.key == k && e.data == &d);
+
+	CHECK(FIND != ENTER);
+	CHECK(preorder != postorder && preorder != endorder && preorder != leaf);
+	CHECK(postorder != endorder && postorder != leaf);
+	CHECK(endorder != leaf);
+}
+
+/* hcreate.html RETURN VALUE: "The hsearch() function shall return a
+ * null pointer if either the action is FIND and the item could not be
+ * found or the action is ENTER and the table is full." The FIND half
+ * is covered by test_search_hsearch_roundtrip() above; the ENTER-on-a-
+ * full-table half was not, and it is the half that says something
+ * about how large "sufficient space for the table" actually is. */
+static void test_search_hsearch_table_full(void)
+{
+	static char keys[64][8];
+	ENTRY e, *r;
+	int i, entered = 0;
+
+	/* nel == 0: the smallest table hcreate() will build. POSIX allows
+	 * the count to be "adjusted upward by the algorithm", so the exact
+	 * capacity is not pinned here -- only that the table is finite,
+	 * that ENTER eventually reports NULL rather than silently
+	 * overwriting or running off the end, and that the entries it did
+	 * accept are all still findable afterwards. */
+	CHECK(hcreate(0) != 0);
+	for (i = 0; i < 64; i++) {
+		sprintf(keys[i], "k%d", i);
+		e.key = keys[i];
+		e.data = keys[i];
+		r = hsearch(e, ENTER);
+		if (!r) break;
+		CHECK(r->data == keys[i]);
+		entered++;
+	}
+	CHECK(i < 64);			/* the table really is finite */
+	CHECK(entered > 0);		/* ... but not degenerately empty */
+	/* Everything accepted before the table filled must still be there:
+	 * "It shall return a pointer into a hash table indicating the
+	 * location at which an entry can be found." */
+	for (i = 0; i < entered; i++) {
+		e.key = keys[i];
+		e.data = NULL;
+		r = hsearch(e, FIND);
+		CHECK(r != NULL && r->data == keys[i]);
+	}
+	hdestroy();
+}
+
+#if 0 /* BUG: hcreate.html RETURN VALUE -- "The hcreate() function
+	shall return 0 if it cannot allocate sufficient space for the
+	table; otherwise, it shall return non-zero."
+
+	src/search/hsearch.c:45 computes the capacity as
+
+		cap = nel + nel / 2 + 8;
+
+	in size_t, with no overflow check, so a large enough nel wraps
+	to a tiny capacity that calloc() then satisfies easily.
+	hcreate() reports success for a table that cannot come close to
+	holding nel entries -- which is precisely the case the RETURN
+	VALUE clause exists to report.
+
+	nel = (SIZE_MAX / 3) * 2 + 2 is the wrapping value on any
+	two's-complement size_t whose width is even, which covers both
+	arches this library builds for: SIZE_MAX is 3q for q = SIZE_MAX/3
+	(2^32-1 and 2^64-1 are both divisible by 3), so nel = 2q + 2,
+	nel/2 = q + 1, and nel + nel/2 = 3q + 3 = SIZE_MAX + 3, which is
+	2 modulo the size_t width. cap therefore comes out as 10 on both.
+
+	Measured on x86_64: hcreate((SIZE_MAX/3)*2 + 2) returns 1, and
+	the 11th ENTER then returns NULL -- a table of ten slots
+	reported as sufficient space for 1.2e19 entries.
+
+	Fenced rather than fixed, per this project's standing rule. The
+	fix is a range check before the multiply-and-add, e.g. refusing
+	any nel > (SIZE_MAX - 8) / 3 * 2. */
+static void test_search_hcreate_overflow(void)
+{
+	CHECK(hcreate((size_t)(SIZE_MAX / 3) * 2 + 2) == 0);
+	hdestroy();
+}
+#endif
+
+/* tsearch.html DESCRIPTION: "A null pointer shall be returned by
+ * tdelete(), tfind(), and tsearch() if rootp is a null pointer on
+ * entry." Note this is rootp itself being null -- distinct from *rootp
+ * being null, which "denotes an empty tree" and is a perfectly ordinary
+ * starting state (already covered by test_search_tsearch_tfind()). */
+static void test_search_null_rootp(void)
+{
+	int a = 5;
+
+	CHECK(tsearch(&a, NULL, cmp_int_ptr) == NULL);
+	CHECK(tfind(&a, NULL, cmp_int_ptr) == NULL);
+	CHECK(tdelete(&a, NULL, cmp_int_ptr) == NULL);
+}
+
+/* tsearch.html DESCRIPTION: "it shall be possible to cast a
+ * pointer-to-node into a pointer-to-pointer-to-element to access the
+ * element stored in the node." That is the only guarantee POSIX gives
+ * about a node's layout, and it has to hold for every function that
+ * hands one back -- tsearch(), tfind(), and (for a non-root delete)
+ * tdelete()'s parent pointer. test_search_tsearch_tfind() leans on it
+ * for the first two; this pins it as a clause in its own right, and
+ * extends it to tdelete()'s return.
+ *
+ * tsearch.html RETURN VALUE: "The tdelete() function shall return a
+ * pointer to the parent of the deleted node, or an unspecified
+ * non-null pointer if the deleted node was the root node, or a null
+ * pointer if the node is not found." The root and not-found cases are
+ * covered by test_search_tdelete() above; the parent case -- the only
+ * one whose value POSIX actually specifies -- was not. */
+static void test_search_tdelete_parent(void)
+{
+	void *root = NULL;
+	int five = 5, three = 3, eight = 8;
+	void *p;
+
+	/* 5 at the root, 3 and 8 its children. */
+	CHECK(tsearch(&five, &root, cmp_int_ptr) != NULL);
+	CHECK(tsearch(&three, &root, cmp_int_ptr) != NULL);
+	CHECK(tsearch(&eight, &root, cmp_int_ptr) != NULL);
+
+	p = tdelete(&three, &root, cmp_int_ptr);
+	CHECK(p != NULL);
+	/* "a pointer to the parent of the deleted node" -- 3's parent is
+	 * the root, holding 5. Read through the pointer-to-pointer-to-
+	 * element cast the clause above guarantees. */
+	if (p) CHECK(*(int *)*(void **)p == 5);
+	CHECK(tfind(&three, &root, cmp_int_ptr) == NULL);	/* really gone */
+	CHECK(tfind(&eight, &root, cmp_int_ptr) != NULL);	/* sibling intact */
+
+	/* Deleting an interior node with one remaining child: 8 is now
+	 * the root's only child, so the root is still its parent. */
+	p = tdelete(&eight, &root, cmp_int_ptr);
+	CHECK(p != NULL);
+	if (p) CHECK(*(int *)*(void **)p == 5);
+
+	CHECK(tdelete(&five, &root, cmp_int_ptr) != NULL);	/* root, no children */
+	CHECK(root == NULL);
+}
+
+/* twalk.html DESCRIPTION: the action is called "with ... preorder,
+ * postorder, endorder, or leaf depending on whether this is the first,
+ * second, or third time that the node is visited (during a depth-first,
+ * left-to-right traversal), or whether the node is a leaf", and "the
+ * third argument shall be the level of the node in the tree, with the
+ * root being level 0."
+ *
+ * test_search_twalk() above counts leaves and checks the root's level;
+ * that cannot tell a depth-first left-to-right walk from any other
+ * order, nor a correct three-visit sequence from one that fires
+ * postorder twice. This records the whole sequence and compares it
+ * against what the clause requires for a known tree shape:
+ *
+ *          5              preorder(5,0)
+ *         / \             leaf(3,1)
+ *        3   8            postorder(5,0)
+ *             \           preorder(8,1)
+ *              9          postorder(8,1)   -- 8 has one child, so it is
+ *                         leaf(9,2)           an internal node, visited
+ *                         endorder(8,1)       three times, not a leaf
+ *                         endorder(5,0)
+ */
+static char walk_log[256];
+static size_t walk_log_len;
+static void walk_record(const void *nodep, VISIT which, int depth)
+{
+	static const char *names[] = { "pre", "post", "end", "leaf" };
+	int v = *(int *)*(void **)nodep;	/* the guaranteed node cast */
+	const char *n = which == preorder ? names[0]
+		: which == postorder ? names[1]
+		: which == endorder ? names[2] : names[3];
+	if (walk_log_len < sizeof walk_log - 32)
+		walk_log_len += (size_t)sprintf(walk_log + walk_log_len, "%s(%d,%d) ", n, v, depth);
+}
+static void test_search_twalk_order_and_levels(void)
+{
+	void *root = NULL;
+	int five = 5, three = 3, eight = 8, nine = 9;
+
+	CHECK(tsearch(&five, &root, cmp_int_ptr) != NULL);
+	CHECK(tsearch(&three, &root, cmp_int_ptr) != NULL);
+	CHECK(tsearch(&eight, &root, cmp_int_ptr) != NULL);
+	CHECK(tsearch(&nine, &root, cmp_int_ptr) != NULL);
+
+	walk_log[0] = 0;
+	walk_log_len = 0;
+	twalk(root, walk_record);
+	CHECK(strcmp(walk_log,
+		"pre(5,0) leaf(3,1) post(5,0) pre(8,1) post(8,1) leaf(9,2) end(8,1) end(5,0) ") == 0);
+	if (strcmp(walk_log, "pre(5,0) leaf(3,1) post(5,0) pre(8,1) post(8,1) leaf(9,2) end(8,1) end(5,0) ") != 0)
+		printf("note: twalk order was: %s\n", walk_log);
+
+	/* twalk.html: "If root is a null pointer, no operation shall be
+	 * performed." */
+	walk_log[0] = 0;
+	walk_log_len = 0;
+	twalk(NULL, walk_record);
+	CHECK(walk_log[0] == 0);
+
+	tdelete(&three, &root, cmp_int_ptr);
+	tdelete(&nine, &root, cmp_int_ptr);
+	tdelete(&eight, &root, cmp_int_ptr);
+	tdelete(&five, &root, cmp_int_ptr);
+}
+
+/* insque.html DESCRIPTION: "The remque() function shall remove the
+ * element pointed to by element from a queue." test_search_insque_
+ * remque() above removes a middle element of a linear list; the two
+ * cases it does not reach are removing from a *circular* list (where
+ * both neighbours are non-null and may be the same node) and removing
+ * the sole element of a one-element circular list (where both
+ * neighbours are the element itself). Both are ordinary uses of the
+ * circular form the page describes, and both are where a
+ * remque() that forgets to guard one side goes wrong. */
+static void test_search_remque_circular(void)
+{
+	struct qnode a, b, c;
+
+	a.v = 1; b.v = 2; c.v = 3;
+
+	a.fwd = &a; a.bwd = &a;
+	insque(&b, &a);
+	insque(&c, &b);
+	CHECK(a.fwd == &b && b.fwd == &c && c.fwd == &a);
+	CHECK(a.bwd == &c && c.bwd == &b && b.bwd == &a);
+
+	remque(&b);
+	CHECK(a.fwd == &c && c.bwd == &a && c.fwd == &a && a.bwd == &c);
+
+	remque(&c);
+	CHECK(a.fwd == &a && a.bwd == &a);	/* back to a one-element ring */
+
+	/* The sole element of a one-element circular list: both its
+	 * pointers name itself, so this must be a well-defined no-op
+	 * rather than a self-corrupting write. */
+	remque(&a);
+	CHECK(a.fwd == &a && a.bwd == &a);
+}
+
+/* lsearch.html DESCRIPTION: "the pointer to the key" is the first
+ * argument to the comparison function and "the pointer to the array
+ * element" the second, and lsearch() "shall return a pointer into a
+ * table indicating where a datum may be found. If the datum does not
+ * occur, it shall be added at the end of the table." test_search_
+ * lsearch_lfind() above covers the add and the no-double-add; what it
+ * does not pin is *which* pointer is which in the comparison, and that
+ * a hit returns a pointer to the matching element rather than to the
+ * key the caller passed in. Both are silently wrong-able. */
+static const void *lcmp_saw_key;
+static const void *lcmp_saw_elem;
+static int cmp_int_arr_recording(const void *a, const void *b)
+{
+	lcmp_saw_key = a;
+	lcmp_saw_elem = b;
+	return *(const int *)a != *(const int *)b;
+}
+static void test_search_lsearch_argument_order(void)
+{
+	int base[4] = { 1, 2, 3 };
+	size_t nel = 3;
+	int key = 1;
+	void *r;
+
+	lcmp_saw_key = lcmp_saw_elem = NULL;
+	r = lfind(&key, base, &nel, sizeof(int), cmp_int_arr_recording);
+	CHECK(lcmp_saw_key == &key);		/* first argument is the key ... */
+	CHECK(lcmp_saw_elem == &base[0]);	/* ... second is the array element */
+	CHECK(r == &base[0]);			/* into the table, not the key */
+	CHECK(r != (void *)&key);
+	CHECK(nel == 3);
+}
+
 /* ===================================================================
  * ftw.h -- functions/ftw.html, functions/nftw.html
  *
@@ -1388,12 +1681,19 @@ int main(void)
 
 	char cwd_before_ftw[512];
 
+	test_search_header_types();
 	test_search_hsearch_roundtrip();
+	test_search_hsearch_table_full();
 	test_search_tsearch_tfind();
+	test_search_null_rootp();
 	test_search_tdelete();
+	test_search_tdelete_parent();
 	test_search_twalk();
+	test_search_twalk_order_and_levels();
 	test_search_lsearch_lfind();
+	test_search_lsearch_argument_order();
 	test_search_insque_remque();
+	test_search_remque_circular();
 
 	ftw_fixture_setup();
 	test_ftw_basic_descent();

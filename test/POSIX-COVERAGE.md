@@ -1413,3 +1413,102 @@ the test (fall back to whichever of fds 0/1/2 `isatty()` accepts); the
 `/dev/tty` mapping itself is untouched and remains open. POSIX
 specifies `/dev/tty` in XBD 10.1 Directory Structure and Devices, not
 in any function page audited here.
+
+## search.h (successor-queue item 2, group B)
+
+Second of the twelve. `test/posix-glob.c` already carried a
+`<search.h>` section (added when the header was implemented) covering
+the common path of all eleven functions; this pass audited the spec
+pages clause by clause against it and filled the gaps.
+
+**Oracle: pure C library, so Wine is a sound oracle.** Not one of
+these eleven functions makes an NT call — `hcreate`/`tsearch` reach
+`malloc`/`free` and nothing else. A green Wine run is as good as a
+green run anywhere.
+
+Rows below are the clauses this pass *added*; the ones
+`test_search_hsearch_roundtrip`, `test_search_tsearch_tfind`,
+`test_search_tdelete`, `test_search_twalk`,
+`test_search_lsearch_lfind` and `test_search_insque_remque` already
+covered are not repeated.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| hcreate | "shall return 0 if it cannot allocate sufficient space for the table; otherwise, it shall return non-zero" | **BUG (fenced)** — see below | test/posix-glob.c (`test_search_hcreate_overflow`) |
+| hcreate | "The nel argument is an estimate of the maximum number of entries ... This number may be adjusted upward" | covered — the capacity is not pinned, only that it is finite and non-degenerate | test/posix-glob.c (`test_search_hsearch_table_full`) |
+| hsearch | "shall return a null pointer if ... the action is ENTER and the table is full" | covered | test/posix-glob.c (`test_search_hsearch_table_full`) |
+| hsearch | "It shall return a pointer into a hash table indicating the location at which an entry can be found" — every entry accepted before the table filled is still findable | covered | test/posix-glob.c (`test_search_hsearch_table_full`) |
+| hcreate / hsearch | "may fail if: [ENOMEM] Insufficient storage space is available" | N/A — a *may fail*; neither function sets errno, which the clause permits, and a genuine allocation failure is unforceable here (the same malloc-exhaustion limit this ledger records for every other header) | — |
+| `<search.h>` | basedefs/search.h.html: `ENTRY` with `char *key` / `void *data`; `ACTION` with FIND and ENTER; `VISIT` with preorder, postorder, endorder, leaf — the enumerators steer `hsearch()` and `twalk()`, so within each enumeration they must be distinct | covered | test/posix-glob.c (`test_search_header_types`) |
+| tsearch / tfind / tdelete | "A null pointer shall be returned by tdelete(), tfind(), and tsearch() if rootp is a null pointer on entry" — distinct from `*rootp` being null, which denotes an empty tree | covered | test/posix-glob.c (`test_search_null_rootp`) |
+| tdelete | "shall return a pointer to the parent of the deleted node" — the only one of the three return cases whose *value* POSIX specifies; the root and not-found cases were already covered | covered | test/posix-glob.c (`test_search_tdelete_parent`) |
+| tsearch / tfind / tdelete / twalk | "it shall be possible to cast a pointer-to-node into a pointer-to-pointer-to-element to access the element stored in the node" — applied to tdelete()'s parent return and to twalk()'s node argument, not just tsearch()/tfind() | covered | test/posix-glob.c (`test_search_tdelete_parent`, `test_search_twalk_order_and_levels`) |
+| twalk | "preorder, postorder, endorder, or leaf depending on whether this is the first, second, or third time that the node is visited (during a depth-first, left-to-right traversal), or whether the node is a leaf", and "the level of the node in the tree, with the root being level 0" | covered — the whole visit sequence is recorded and compared against what the clause requires for a known tree shape, which a leaf-count plus a root-level check cannot distinguish from a wrong order | test/posix-glob.c (`test_search_twalk_order_and_levels`) |
+| twalk | "If root is a null pointer, no operation shall be performed" | covered | test/posix-glob.c (`test_search_twalk_order_and_levels`) |
+| lsearch / lfind | the comparison function is called with the key first and the array element second, and a hit returns a pointer *into the table* rather than the caller's key | covered | test/posix-glob.c (`test_search_lsearch_argument_order`) |
+| remque | "shall remove the element pointed to by element from a queue" — the circular form, including removing the sole element of a one-element ring where both neighbour pointers name the element itself | covered | test/posix-glob.c (`test_search_remque_circular`) |
+| insque / remque | "No errors are defined." / both return void | N/A — vacuous | — |
+
+### Bugs found (search.h)
+
+1. **`hcreate()` reports success for a table it could not size.**
+   `hcreate.html` RETURN VALUE: "The hcreate() function shall return 0
+   if it cannot allocate sufficient space for the table; otherwise, it
+   shall return non-zero."
+
+   Mechanism: `src/search/hsearch.c` computes the capacity as
+   `cap = nel + nel / 2 + 8` in `size_t`, with no overflow check, so a
+   large enough `nel` wraps to a tiny capacity that `calloc()` then
+   satisfies trivially. `hcreate()` returns non-zero for a table that
+   cannot come close to holding `nel` entries — which is exactly the
+   case the RETURN VALUE clause exists to report.
+
+   `nel = (SIZE_MAX / 3) * 2 + 2` is the wrapping value on both arches
+   this library builds for: `SIZE_MAX` is `3q` for `q = SIZE_MAX/3`
+   (2^32-1 and 2^64-1 are both divisible by 3), so `nel + nel/2` comes
+   to `SIZE_MAX + 3`, i.e. 2 modulo the `size_t` width, and `cap` ends
+   up 10 either way. Measured on x86_64: `hcreate()` returns 1 and the
+   11th `ENTER` then returns NULL — ten slots reported as sufficient
+   space for 1.2e19 entries.
+
+   Fix shape (not applied, per the standing rule): a range check
+   before the multiply-and-add, refusing any `nel` above
+   `(SIZE_MAX - 8) / 3 * 2`.
+
+   Test (fenced): `test_search_hcreate_overflow`.
+
+### Observed behaviour where POSIX permits latitude (search.h)
+
+- `src/search/hsearch.c`'s banner attributes the sentence *"Only one
+  hash table may be active at a time."* to `hcreate.html`. **That
+  sentence is not on the page** — the fetched POSIX.1-2017 text
+  contains no clause limiting the number of active tables at all; the
+  wording is from the Linux `hsearch(3)` man page. The *behaviour*
+  (a second `hcreate()` silently destroys the first table) is
+  therefore in unspecified territory rather than in violation, so no
+  row above claims it either way. Recorded here because a fabricated
+  spec citation is the kind of thing this ledger exists to catch, and
+  because it is the only place in the header where the source's own
+  reasoning does not survive checking.
+
+- `hsearch()` returns `(ENTRY *)&table[i]`, casting a `struct slot *`
+  to `ENTRY *`. The two share a prefix layout (`char *key`,
+  `void *data`), so it works in practice, but it is a strict-aliasing
+  violation rather than a guaranteed one. No POSIX clause is broken —
+  the returned pointer does behave as the spec requires — so this is
+  a latent-miscompile note, not a BUG row, and no assertion can
+  distinguish it.
+
+- On `ENTER` for a key already present, ntlibc leaves the existing
+  entry's `data` alone. `hcreate.html` describes `action` only as
+  "indicating the disposition of the entry **if it cannot be found**",
+  so which of the two survives is unspecified; the existing test
+  documents the choice.
+
+### Not reached (search.h)
+
+`hcreate()`/`hsearch()`'s optional `[ENOMEM]` and `tsearch()`'s "shall
+return a null pointer if there is not enough space available to create
+a new node" both need a real allocation failure, which this ledger
+already records as unforceable for every other header. Nothing else in
+this header is out of reach: it has no OS dependency at all.
