@@ -9,6 +9,13 @@
 # and obj/fuzz, which is where `make asan` and `make fuzz` put everything;
 # these catch corpora or crash artefacts written by hand elsewhere.
 /fuzz/corpus/
+# The Fuzz workflow's driver writes this at the top of the tree, and so
+# does anyone who extracts that step's body and runs it locally -- which
+# is the only way to verify it, since Actions cannot be run by hand. The
+# `reuse` gate stage rsyncs the working tree and fails on any file
+# without an SPDX header, so an untracked fuzz.log turns the gate red for
+# a reason that has nothing to do with the change under test.
+/fuzz.log
 crash-*
 leak-*
 timeout-*

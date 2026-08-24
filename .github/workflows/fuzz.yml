@@ -4,16 +4,31 @@
 name: Fuzz
 
 # Deliberately a separate workflow from ci.yml rather than another job in
-# it. Fuzzing is nondeterministic and time-boxed: it is not a gate on a
-# push, and a failure here means "this input is worth looking at", not
-# "this branch is broken". Keeping it separate also means adding a
-# schedule here does not start running ci.yml's jobs -- including the
-# Windows-runner leg -- once a night as a side effect.
+# it. Fuzzing is nondeterministic and time-boxed: a failure here means
+# "this input is worth looking at", not "this branch is broken". Keeping
+# it separate also means the schedule and the push trigger here do not
+# start running ci.yml's jobs -- including the Windows-runner leg -- as a
+# side effect.
+#
+# Two triggers, doing two different jobs:
+#
+#   schedule  the search. 300 s a harness, and it is the only writer of
+#             the corpus cache.
+#   push      a regression net on main. A few seconds a harness, starting
+#             from the corpus the nightly built, so it starts warm. It
+#             restores that cache and never saves it: a push run's job is
+#             to notice that a commit made a known-shaped input crash
+#             again, not to search, and a dozen pushes an hour each
+#             writing a new corpus key would churn the cache and evict
+#             the thing the nightly spent 40 minutes accumulating.
+#
+# Both run the harnesses in parallel, one process per core -- see the
+# "Fuzz" step, which is the driver.
 #
 # The corpus persists between runs, and that is the whole point of the
-# schedule: eight harnesses at 300 s is forty minutes of search a night,
-# and until fuzz/ntstubs.c grew NTLIBC_FUZZ_MIRROR every one of those
-# nights threw its findings away and started again from random bytes.
+# schedule: twelve harnesses at 300 s is an hour of search a night, and
+# until fuzz/ntstubs.c grew NTLIBC_FUZZ_MIRROR every one of those nights
+# threw its findings away and started again from random bytes.
 # What used to be here said a corpus was impossible because libFuzzer's
 # file I/O goes through ntlibc to NtCreateFile "and friends that a native
 # build does not have". That was not the reason -- ntstubs.c implements
@@ -30,17 +45,48 @@ name: Fuzz
 # How a finding reaches a human, which is the part a persisted corpus does
 # not give you for free:
 #
-#   1. tools/fuzz.sh exits non-zero, so the job goes red.
+#   1. A worker's tools/fuzz.sh exits non-zero, the driver reads that
+#      status back out of the worker's result *file*, and the job goes
+#      red. Not out of `wait`, which does not carry it -- see the
+#      judgement block in the "Fuzz" step.
 #   2. The crashing input is a *file* now, under obj/fuzzcorpus/<h>/crashes,
 #      and the "Upload the artefacts" step below uploads that directory
-#      alongside the log. `tools/fuzz.sh --repro <file> <harness>` replays
-#      it. Before this, the run log's Base64 blob was the only copy.
+#      alongside the log. `tools/fuzz.sh --repro <abs-file> <harness>`
+#      replays it. Before this, the run log's Base64 blob was the only
+#      copy.
 #   3. The "Open an issue" step files one against the repository, with the
 #      run URL and the harness name in the title. A red scheduled workflow
 #      is easy not to notice; an issue is not. It is reopened rather than
-#      duplicated if one is already open for the same harness.
+#      duplicated if one is already open for the same harness. It fires on
+#      a push run too, and says there which of the two it was, because a
+#      push run does not save the corpus and its artefact is therefore the
+#      only copy of the input.
+#
+# And the guards that stop this run reporting a clean bill it did not
+# earn -- a fuzz run's failure mode is silence, so each is a countable
+# artefact rather than an exit status:
+#
+#   * every worker left a result file behind (one killed outright leaves
+#     none, which a bare `wait` reports as success);
+#   * every harness asked for actually started, so a run that fuzzed
+#     nothing fails instead of passing vacuously;
+#   * a cold start -- nothing restored from the cache -- is annotated on
+#     the run and written into the step summary, not passed over.
 
 on:
+  push:
+    branches: [main]
+    # Only what can change what the harnesses fuzz. A README edit should
+    # not spend three minutes of runner time proving printf still works.
+    paths:
+      - 'src/**'
+      - 'fuzz/**'
+      - 'include/**'
+      - 'arch/**'
+      - 'tools/fuzz.sh'
+      - 'tools/asan-build.sh'
+      - 'Makefile'
+      - '.github/workflows/fuzz.yml'
   schedule:
     # 07:00 UTC daily. Any fixed time is arbitrary; this one is chosen to
     # be off the hour, since GitHub delays scheduled runs at popular
@@ -66,17 +112,37 @@ permissions:
   # For the issue the "Open an issue" step files on a finding.
   issues: write
 
+# The event name is in the group, so the two triggers never contend: a
+# push must not be able to cancel or queue behind the nightly search.
+#
+#   push      cancel-in-progress. main saw a dozen pushes in an hour on
+#             2026-08-24; queueing three-minute runs behind each other
+#             makes the net report on a commit that is already history.
+#             Superseding is what you want -- the newest commit is the
+#             one whose regressions matter.
+#   schedule  never cancelled, as before. It is the search, and it is the
+#             only writer of the corpus cache.
+#
+# Cancelling a push run is safe *because* of that last line, not on the
+# assumption that a cancelled run flushes its cache cleanly. A push run
+# uses actions/cache/restore, so it has no save step to interrupt and
+# cannot leave a half-written corpus entry behind for the nightly to
+# restore. What a cancelled push run loses is its own findings, and its
+# artefact upload -- which is the correct thing to lose, since a newer
+# run on a newer commit is already starting.
 concurrency:
-  group: fuzz-${{ github.ref }}
-  cancel-in-progress: false
+  group: fuzz-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   fuzz:
     runs-on: ubuntu-24.04
-    # Eight harnesses at 300s is ~40 min of fuzzing plus a ~200-object
-    # build; the cap is generous so a slow runner reports rather than
-    # being killed mid-run.
-    timeout-minutes: 90
+    # Worst case is the nightly: ceil(harnesses / 4) * 300 s, which is
+    # 15 min at twelve harnesses and 25 min at twenty, plus a ~200-object
+    # build (measured at ~1 min: the 2026-08-24 nightly took 41m8s for
+    # 8 x 300 s of fuzzing). The cap stays generous so a slow runner
+    # reports rather than being killed mid-run.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -96,14 +162,66 @@ jobs:
       # -- the finding is a standing regression until someone deals with
       # it -- and it is why the dispatch input above exists: run the
       # workflow by hand with reset_corpus=yes to start clean.
-      - name: Restore the corpus
-        if: ${{ github.event.inputs.reset_corpus != 'yes' }}
+      # Two steps, one path, mutually exclusive `if`s. The schedule (and
+      # a manual dispatch) gets the full action, which restores AND saves;
+      # a push gets restore-only. See the concurrency comment above for
+      # why the nightly is the sole writer.
+      - name: Restore and save the corpus (schedule / dispatch)
+        id: corpus_rw
+        if: ${{ github.event_name != 'push' && github.event.inputs.reset_corpus != 'yes' }}
         uses: actions/cache@v6
         with:
           path: obj/fuzzcorpus
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: |
             fuzz-corpus-
+
+      - name: Restore the corpus (push)
+        id: corpus_ro
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/cache/restore@v6
+        with:
+          path: obj/fuzzcorpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+
+      # A cold start must not be silent. It is not necessarily wrong --
+      # the first run ever has no cache, and reset_corpus=yes asks for one
+      # on purpose -- but it changes what every number below means, from
+      # "resumed a search" to "started from random bytes", and a run that
+      # quietly did the second while the log implies the first is exactly
+      # the sort of vacuous pass this tree keeps finding.
+      #
+      # The file count is the authority, not the action's `cache-hit`
+      # output. cache-hit is documented as true only on an exact match of
+      # the primary key, and the primary key here is
+      # fuzz-corpus-<run_id>, which by construction never existed before
+      # this run -- so cache-hit is false on every single run, hit or
+      # miss, and asserting on it would be asserting on a constant. What
+      # was actually restored is on disk.
+      - name: Check the corpus restored
+        shell: bash
+        run: |
+          matched='${{ steps.corpus_rw.outputs.cache-matched-key }}${{ steps.corpus_ro.outputs.cache-matched-key }}'
+          # mkdir first, and not for tidiness: on a cold start the
+          # directory does not exist, find exits 1, and -o pipefail hands
+          # that to the assignment, where -e kills the step -- the same
+          # shape as the Summarize bug fixed in the commit before this
+          # one, in the step whose whole job is to make a cold start
+          # visible. Found by extracting this body and running it.
+          mkdir -p obj/fuzzcorpus
+          n=$(find obj/fuzzcorpus -type f | wc -l)
+          echo "corpus: $n file(s) restored from key '${matched:-<none>}'"
+          {
+            echo '## Corpus restore'
+            echo "- key matched: \`${matched:-<none>}\`"
+            echo "- files on disk: $n"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -eq 0 ]; then
+            echo "::warning title=Cold start::No corpus was restored (matched key: '${matched:-<none>}'). Every harness starts from random bytes, so the coverage and corpus numbers in this run are not comparable with a warm one."
+            echo '- **COLD START** -- no corpus restored; this run searches from random bytes.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # The harnesses need obj/include/bits/alltypes.h, which is just a
       # concatenation of committed .h.gen files -- no compiler involved,
@@ -112,19 +230,163 @@ jobs:
       - name: Generate bits/alltypes.h
         run: make ARCH=x86_64 obj/include/bits/alltypes.h
 
-      # `... | tee` would hand the step tee's exit status, and steps run
-      # under `bash -e` without pipefail -- so a finding would leave the
-      # job green and the log unuploaded. `shell: bash` adds -o pipefail.
-      # Inputs go through env rather than ${{ }} interpolation so they
-      # cannot be spliced into the command.
+      # ------------------------------------------------------- the driver
+      #
+      # `shell: bash` for mapfile and arrays. It also brings -o pipefail,
+      # which is why the one pipeline whose grep is expected to match
+      # nothing carries `|| true` (see the Summarize step).
+      #
+      # Dispatch inputs go through env rather than ${{ }} interpolation so
+      # they cannot be spliced into a command. `read -ra` splits
+      # HARNESSES instead of leaving it unquoted; that also retires the
+      # SC2086 actionlint used to report on this step, which was
+      # deliberate word-splitting and was never a bug.
       - name: Fuzz
         id: fuzz
         shell: bash
         env:
-          SECONDS_PER: ${{ github.event.inputs.seconds || '300' }}
+          # push wants a few minutes end to end; schedule is the search
+          # and keeps its 300 s. An explicit dispatch input beats both.
+          SECONDS_PER: ${{ github.event.inputs.seconds || (github.event_name == 'push' && '20') || '300' }}
           HARNESSES: ${{ github.event.inputs.harnesses || '' }}
         run: |
-          tools/fuzz.sh "$SECONDS_PER" $HARNESSES 2>&1 | tee fuzz.log
+          run=obj/fuzzrun
+          rm -rf "$run"; mkdir -p "$run"
+          # Exists from here on, however this step ends: the Summarize and
+          # upload steps below are `if: always()` and read it.
+          : > fuzz.log
+
+          # The harness list is read off the filesystem. tools/fuzz.sh and
+          # fuzz/Makefile each already keep a hand-written copy of it; a
+          # third copy here would be the one that quietly stops fuzzing
+          # whatever harness somebody adds next.
+          if [ -n "$HARNESSES" ]; then
+            read -ra want <<< "$HARNESSES"
+          else
+            mapfile -t want < <(find fuzz -maxdepth 1 -name 'fuzz_*.c' -printf '%f\n' \
+                                | sed 's/^fuzz_//; s/\.c$//' | sort)
+          fi
+          [ "${#want[@]}" -gt 0 ] || {
+            echo "::error title=No harnesses::fuzz/fuzz_*.c matched nothing."
+            exit 1
+          }
+
+          # PARALLELISM IS DERIVED FROM THE MACHINE, NOT THE HARNESS COUNT.
+          #
+          # libFuzzer runs one input at a time in one thread, and
+          # -max_total_time is wall clock, not CPU time. So the search a
+          # run buys is (cores x wall seconds) however it is sliced.
+          # Twelve processes on the four vCPUs of a standard ubuntu-24.04
+          # runner would not fuzz three times as much; it would give each
+          # harness a third of a core for the same 300 s and add
+          # scheduler and cache-contention overhead on top. Serial -- what
+          # this was -- is the same mistake from the other end: one
+          # process, three cores idle, an hour of wall time for a quarter
+          # of the machine.
+          #
+          # So: one worker per core, harnesses sharded round-robin, each
+          # worker running its shard serially the way tools/fuzz.sh
+          # already does. Twelve harnesses on four cores is three rounds:
+          # 60 s on a push, 15 min for the nightly, and the nightly's
+          # 300 s per harness -- its depth -- is untouched. Honest caveat:
+          # four ASan processes do contend for memory bandwidth and L3, so
+          # a harness gets slightly fewer executions in its 300 s than it
+          # did with the machine to itself. Fewer than it lost to three
+          # idle cores.
+          workers=$(nproc)
+          if [ "$workers" -gt "${#want[@]}" ]; then workers=${#want[@]}; fi
+
+          i=0
+          for h in "${want[@]}"; do
+            echo "$h" >> "$run/shard.$(( i % workers ))"
+            i=$(( i + 1 ))
+          done
+          echo "harnesses: ${#want[@]}  workers: $workers (nproc=$(nproc))  seconds each: $SECONDS_PER"
+          for f in "$run"/shard.*; do
+            echo "  worker ${f##*.}: $(tr '\n' ' ' < "$f")"
+          done
+
+          # Built once, here. Four copies of tools/fuzz.sh starting at the
+          # same moment would otherwise race fuzz/Makefile's $(LIBDIR)/.built
+          # stamp and the 202 objects under it. After this, each worker's
+          # own `make -C fuzz all` finds nothing to do.
+          make -C fuzz all
+
+          for f in "$run"/shard.*; do
+            n=${f##*.}
+            mapfile -t mine < "$f"
+            (
+              # `set +e` first, and it is the whole point of the subshell.
+              # A step's shell has -e, a subshell inherits it, and a
+              # worker whose tools/fuzz.sh exits non-zero -- which is what
+              # a finding IS -- would be killed on that line and never
+              # reach its `echo $?`. Its rc file would then be missing,
+              # and guard 1 below would report every real finding as a
+              # dead worker. Caught by running this body against a fake
+              # tools/fuzz.sh before it was ever committed.
+              set +e
+              tools/fuzz.sh "$SECONDS_PER" "${mine[@]}" > "$run/log.$n" 2>&1
+              echo $? > "$run/rc.$n"
+            ) &
+          done
+          wait
+
+          cat "$run"/log.* > fuzz.log
+          cat fuzz.log
+
+          # ---- judgement. A WORKER'S EXIT STATUS IS NOT EVIDENCE. ----
+          #
+          # `wait` with no operands does not propagate: `( exit 3 ) & wait`
+          # returns 0, under `set -e`, identically in sh, bash and dash.
+          # Measured 2026-08-24 and written up as N7 in
+          # test/verification-measures-2.md. A driver that judged its
+          # workers by the status of that bare `wait` would report success
+          # no matter what they did -- which is why tools/gate.sh, lint.sh,
+          # linkcheck.sh and asan-build.sh all count result files instead,
+          # and why this counts three things that are on disk.
+          #
+          # 1. One rc file per shard. A worker killed outright (the OOM
+          #    killer, or a cancelled run) never reaches its `echo $?`, so
+          #    its file is simply absent -- the case a bare `wait` reports
+          #    as success.
+          shards=$(find "$run" -name 'shard.*' | wc -l)
+          rcs=$(find "$run" -name 'rc.*' | wc -l)
+          if [ "$rcs" -ne "$shards" ]; then
+            for f in "$run"/shard.*; do
+              [ -f "$run/rc.${f##*.}" ] || echo "worker ${f##*.} produced no result file: $(tr '\n' ' ' < "$f")"
+            done
+            echo "::error title=Worker died::$rcs of $shards workers produced a result file. A worker was killed before it could record one -- OOM, or the run was cancelled. Treat this run as having proved nothing."
+            exit 1
+          fi
+
+          # 2. Every harness asked for actually started. Catches the
+          #    vacuous run (zero started, which must be a failure and not
+          #    a green tick) and the truncated one. tools/fuzz.sh keeps
+          #    going after a finding, so this count is unaffected by
+          #    whether anything crashed.
+          ran=$(grep -c '^== fuzz_' fuzz.log || true)
+          echo "fuzzed $ran of ${#want[@]} harnesses, ${SECONDS_PER}s each, across $shards worker(s)"
+          {
+            echo '## Run'
+            echo "- $ran of ${#want[@]} harnesses fuzzed, ${SECONDS_PER}s each, across $shards worker(s) on $(nproc) cores"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ran" -ne "${#want[@]}" ]; then
+            echo "::error title=Harnesses missing::$ran of ${#want[@]} harnesses started. A run that fuzzed nothing, or only part of the set, has not shown that anything is clean."
+            exit 1
+          fi
+
+          # 3. Only now, the statuses -- read back from the files, not
+          #    inherited from `wait`.
+          bad=0
+          for f in "$run"/rc.*; do
+            rc=$(cat "$f")
+            case "$rc" in
+              0) ;;
+              ''|*[!0-9]*) echo "worker ${f##*.} recorded a malformed status: '$rc'"; bad=1 ;;
+              *)           echo "worker ${f##*.} exited $rc (see the FOUND SOMETHING lines above)"; bad=1 ;;
+            esac
+          done
+          exit "$bad"
 
       # Which harnesses found something, for the issue title and body.
       # Runs even when the fuzz step passed, so the summary is always
@@ -134,6 +396,9 @@ jobs:
         if: always()
         shell: bash
         run: |
+          # The driver creates fuzz.log before it can fail; this covers
+          # the case where the step before it never ran at all.
+          touch fuzz.log
           {
             echo '## Corpus'
             grep -E '^   corpus [0-9]+ -> [0-9]+$' fuzz.log || echo '(none reported)'
@@ -190,6 +455,18 @@ jobs:
           FOUND: ${{ steps.summary.outputs.found }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Which of the two triggers found it changes what survives the
+          # run, and the issue has to say so rather than promise a
+          # persistence a push run does not have.
+          if [ '${{ github.event_name }}' = push ]; then
+            PERSIST="This was a push run, which restores the corpus but does not save it -- so
+          the artefact above is the only copy of this input. Download it before the
+          run's artefacts expire."
+          else
+            PERSIST="The nightly saves the corpus, so this input will be replayed at start-up
+          every night until it is dealt with. \`reset_corpus=yes\` on a manual dispatch
+          starts clean."
+          fi
           for h in $FOUND; do
             title="fuzz: fuzz_$h found something"
             existing=$(gh issue list --state all --search "$title in:title" \
@@ -201,15 +478,21 @@ jobs:
               "Run: $RUN_URL" \
               "" \
               "The crashing input is in the run's \`fuzz-${{ github.run_id }}\` artefact," \
-              "under \`obj/fuzzcorpus/$h/crashes/\`. To replay it:" \
+              "under \`obj/fuzzcorpus/$h/crashes/\`. To replay it -- with an" \
+              "*absolute* path, which is what tools/fuzz.sh's own \"reproduce:\" line" \
+              "prints: the artefact is made visible to the harness through" \
+              "NTLIBC_FUZZ_MIRROR, and a relative one does not resolve inside" \
+              "fuzz/ntstubs.c's simulated volume:" \
               "" \
               '```' \
               "tools/fuzz.sh --repro <artefact> $h" \
               '```' \
               "" \
-              "The corpus is cached between runs, so this input will be replayed" \
-              "at start-up every night until it is dealt with. A reproducer worth" \
-              "keeping belongs in \`test/\` as a case in the matching \`test/*.c\`.")
+              "$PERSIST" \
+              "" \
+              "A reproducer worth keeping belongs in \`test/\` as a case in the" \
+              "matching \`test/*.c\`; the corpus is search state, not a regression" \
+              "suite.")
             if [ -n "$existing" ]; then
               gh issue reopen "$existing" 2>/dev/null || true
               gh issue comment "$existing" --body "$body"
