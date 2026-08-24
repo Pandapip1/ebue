@@ -347,6 +347,76 @@ static void test_assert_message_and_death(const char *self)
 	      strstr(q + strlen("expected-line:") + strlen(linebuf), linebuf) != 0);
 }
 
+/* basedefs/assert.h.html DESCRIPTION: "The assert() macro shall be
+ * implemented as a macro, not as a function.  If the macro definition
+ * is suppressed in order to access an actual function, the behavior is
+ * undefined."  A compile-time requirement, so it is checked at compile
+ * time -- there is no runtime observation that can distinguish the two
+ * once the translation unit is built.  This sits after the NDEBUG
+ * toggling above deliberately: the final state of that sequence is
+ * "NDEBUG undefined, <assert.h> re-included", so this also pins that
+ * the last re-include really did put the macro back. */
+#ifndef assert
+#error "assert() must be a macro (basedefs/assert.h.html DESCRIPTION)"
+#endif
+
+/* basedefs/assert.h.html lists exactly one thing the header "shall
+ * define": the assert() macro.  static_assert is *not* in it -- it is
+ * an ISO C11 addition (N1570 7.2p3), and POSIX.1-2017's <assert.h> is
+ * aligned with C99, whose __STDC_VERSION__ is 199901L.  ntlibc gates
+ * `#define static_assert _Static_assert` on
+ * `__STDC_VERSION__ >= 201112L` (include/assert.h), so under this
+ * project's own build flags (-std=c99, configure's CFLAGS_C99FSE) the
+ * macro must be absent: defining it anyway would put a non-reserved
+ * identifier into the user's namespace that neither C99 nor
+ * POSIX.1-2017 permits this header to claim.  Checked at compile time
+ * for the same reason as the assert()-is-a-macro check above; the
+ * runtime function below asserts the same condition through the
+ * preprocessor so the check is visible in the pass/fail count too. */
+static void test_assert_h_defines_only_assert(void)
+{
+#if __STDC_VERSION__ >= 201112L
+	/* C11 or later: static_assert is required, and must be usable
+	 * both at block scope and with the _Static_assert semantics. */
+	CHECK(1);
+	static_assert(sizeof(char) == 1, "C11 static_assert must work when the header defines it");
+#else
+	/* C99 (this project's build): the header must not define it. */
+#	ifdef static_assert
+	CHECK(!"static_assert must not be defined under -std=c99 (basedefs/assert.h.html defines only assert())");
+#	else
+	CHECK(1);
+#	endif
+#endif
+}
+
+/* assert.html DESCRIPTION: assert() "shall expand to a void
+ * expression" -- an *expression*, not a statement, so it must be
+ * usable anywhere a void expression is (as a comma operand, as a
+ * for-loop clause, as the second/third operand of ?:), and its value
+ * must be of type void, so casting it to (void) has to compile.  Both
+ * the active and the NDEBUG-suppressed forms have to satisfy this;
+ * NDEBUG is undefined at this point in the TU, so this exercises the
+ * active form, and test_assert_inactive_under_ndebug() above already
+ * evaluated the `(void)0` form as an expression in the same position.
+ * Nothing here can fail at runtime if it compiled at all -- that is
+ * the point; the CHECK() records that the shapes were accepted. */
+static void test_assert_is_a_void_expression(void)
+{
+	int n = 0;
+	/* as a comma operand */
+	(void)(assert(1), 0);
+	/* explicitly cast to void: only valid if it has type void */
+	(void)assert(1);
+	/* as a for-loop expression clause */
+	for (n = 0; n < 3; assert(n >= 0), n++)
+		;
+	CHECK(n == 3);
+	/* as an operand of ?: alongside another void expression */
+	n ? assert(1) : (void)0;
+	CHECK(n == 3);
+}
+
 /* ============================== utime.h ============================== */
 
 /* utime.html DESCRIPTION/RETURN VALUE: full happy-path round trip via
@@ -383,6 +453,252 @@ static void test_utime_return_value(void)
 
 	unlink(UTIME_FILE);
 }
+
+/* utime.html DESCRIPTION: "If times is a null pointer, the access and
+ * modification times of the file shall be set to the current time."
+ * test_utime_return_value() above only checks that call's return
+ * value; test/unistd.c's "back to roughly now" case exercises the
+ * current-time side effect through utimensat(..., NULL, 0), not
+ * through utime(path, NULL), which is a separate entry point
+ * (src/stat/utimensat.c's utime() forwards its own NULL, it does not
+ * synthesize a timespec pair).  Checked here directly: set both times
+ * to a value far in the past, then let utime(path, NULL) reset them,
+ * and require *both* to land in a window around the current time. */
+static void test_utime_null_sets_current_time(void)
+{
+	struct utimbuf ub;
+	struct stat st;
+	time_t before, after;
+	int fd;
+
+	unlink(UTIME_FILE);
+	fd = open(UTIME_FILE, O_CREAT | O_WRONLY, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	close(fd);
+
+	ub.actime = 1000000000;   /* 2001-09-09 */
+	ub.modtime = 1000000000;
+	CHECK(utime(UTIME_FILE, &ub) == 0);
+	CHECK(stat(UTIME_FILE, &st) == 0);
+	CHECK(st.st_atime == 1000000000 && st.st_mtime == 1000000000);
+
+	before = time(0);
+	CHECK(utime(UTIME_FILE, 0) == 0);
+	after = time(0);
+	CHECK(stat(UTIME_FILE, &st) == 0);
+	/* "the current time" -- bracketed by readings taken either side of
+	 * the call, with a second of slack each way for the coarse
+	 * (~15.6ms tick, but 1s-resolution time_t) NT clock and for the
+	 * two clocks not being read at the same instant. */
+	CHECK(st.st_atime >= before - 1 && st.st_atime <= after + 1);
+	CHECK(st.st_mtime >= before - 1 && st.st_mtime <= after + 1);
+
+	unlink(UTIME_FILE);
+}
+
+/* utime.html DESCRIPTION: "Upon successful completion, utime() shall
+ * mark the last file status change timestamp for update."  That is the
+ * st_ctime/st_ctim field (sys_stat.h.html), which ntlibc reads from
+ * FILE_BASIC_INFORMATION.ChangeTime (src/stat/stat.c).  Distinct from
+ * the access/modification times the call is setting: setting those to
+ * a 2001 value must *not* drag the status-change time backwards with
+ * them, and the status-change time must actually advance across the
+ * call.  Compared at full struct-timespec resolution after a short
+ * sleep, so this needs no whole-second tick to pass; 100ms is well
+ * past NT's ~15.6ms system clock granularity. */
+static void test_utime_marks_ctime(void)
+{
+	struct utimbuf ub;
+	struct stat before, after;
+	struct timespec nap;
+	int fd;
+
+	unlink(UTIME_FILE);
+	fd = open(UTIME_FILE, O_CREAT | O_WRONLY, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	close(fd);
+
+	CHECK(stat(UTIME_FILE, &before) == 0);
+
+	nap.tv_sec = 0;
+	nap.tv_nsec = 100000000L;	/* 100ms */
+	nanosleep(&nap, 0);
+
+	ub.actime = 1000000000;
+	ub.modtime = 1000000000;
+	CHECK(utime(UTIME_FILE, &ub) == 0);
+	CHECK(stat(UTIME_FILE, &after) == 0);
+
+	/* the times utime() was asked to set did land ... */
+	CHECK(after.st_atime == 1000000000 && after.st_mtime == 1000000000);
+	/* ... and the status-change time was marked for update, i.e. it
+	 * moved forward rather than following them into 2001 */
+	CHECK(after.st_ctim.tv_sec > before.st_ctim.tv_sec
+	   || (after.st_ctim.tv_sec == before.st_ctim.tv_sec
+	    && after.st_ctim.tv_nsec > before.st_ctim.tv_nsec));
+
+	unlink(UTIME_FILE);
+}
+
+/* utime.html ERRORS.  Of the seven "shall fail" codes, three are
+ * observable here and four are not:
+ *
+ *   [ENOENT] "A component of path does not name an existing file or
+ *   path is an empty string."  The missing-file half is already
+ *   checked in test_utime_return_value() above; the empty-string half
+ *   is checked below.
+ *
+ *   [ENOTDIR] has two halves.  The trailing-slash half ("the path
+ *   argument contains at least one non-<slash> character and ends
+ *   with one or more trailing <slash> characters and the last
+ *   pathname component names an existing file that is neither a
+ *   directory nor a symbolic link to a directory") passes: it goes
+ *   through reject_if_not_dir() in src/internal/path.c, the shared
+ *   re-check added for test/posix-unistd.c's
+ *   test_access_trailing_slash_enotdir().  The path-prefix half does
+ *   not -- see the fenced BUG below.
+ *
+ *   [ENAMETOOLONG] -- see the fenced BUG below.
+ *
+ * Not observable, and not fenced as separate no-op tests because the
+ * reason is a property of the platform rather than of utime():
+ * [EACCES] and [EPERM] both need a second security principal to be
+ * denied *as* -- ntlibc models exactly one user (geteuid() is a
+ * hardcoded 1000, see include/sys/resource.h's PRIO_USER note), so
+ * every caller is always the owner with full access; [EROFS] needs a
+ * read-only file system, which the test harness has no way to mount;
+ * [ELOOP] needs a symbolic-link loop, and creating any symlink at all
+ * on NT requires SeCreateSymbolicLinkPrivilege, which the CI accounts
+ * do not hold (test/posix-glob.c documents the same limitation). */
+static void test_utime_errors(void)
+{
+	struct utimbuf ub;
+	int fd;
+
+	ub.actime = 1000000000;
+	ub.modtime = 1000000000;
+
+	unlink(UTIME_FILE);
+	fd = open(UTIME_FILE, O_CREAT | O_WRONLY, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) close(fd);
+
+	/* [ENOTDIR], trailing-slash half: passes */
+	errno = 0;
+	CHECK(utime(UTIME_FILE "/", &ub) == -1);
+	CHECK(errno == ENOTDIR);
+
+	/* [ENOENT]: "path is an empty string" */
+	errno = 0;
+	CHECK(utime("", &ub) == -1);
+	CHECK(errno == ENOENT);
+
+	unlink(UTIME_FILE);
+}
+
+/* utime.html ERRORS [ENOTDIR] (shall fail): "A component of the path
+ * prefix names an existing file that is neither a directory nor a
+ * symbolic link to a directory."
+ *
+ * ntlibc reports ENOENT here, not ENOTDIR.  Not specific to utime():
+ * probed on this tree, open(), stat(), access(), unlink(), mkdir(),
+ * chdir() and utimensat() all return ENOENT for the identical shape
+ * ("<existing regular file>/below"), so this is one defect in the
+ * shared path layer (src/internal/path.c), not seven.
+ *
+ * Mechanism: NT's object manager does not distinguish "a directory in
+ * the path prefix does not exist" from "a component of the path
+ * prefix exists but is a file" -- it answers both with
+ * STATUS_OBJECT_PATH_NOT_FOUND, which src/internal/errno.c:52 maps to
+ * ENOENT (correctly, for the first of those two cases).  POSIX
+ * requires the two to be told apart.  src/internal/path.c's
+ * reject_if_not_dir() already does exactly this kind of extra
+ * NtQueryAttributesFile() disambiguation for the *trailing-slash*
+ * half of the same [ENOTDIR] clause; the path-prefix half would need
+ * the same treatment applied to each prefix component (or, cheaper,
+ * only on the STATUS_OBJECT_PATH_NOT_FOUND error path, which is the
+ * shape src/stdio/misc.c's renameat() already uses to disambiguate
+ * STATUS_ACCESS_DENIED into EISDIR/ENOTEMPTY -- see commit 3c606a7).
+ * So this is implementable, not an NT limitation.
+ *
+ * Not fixed here: this audit's remit is to record violations, and a
+ * fix touches the path layer every file-system call in the library
+ * shares.  Left as a fenced, unmodified, should-pass-once-fixed test. */
+#if 0 /* BUG: utime.html ERRORS [ENOTDIR] -- a path prefix component that
+	names an existing regular file must fail with ENOTDIR; ntlibc's
+	shared path layer reports ENOENT (see the comment above). */
+static void test_utime_enotdir_path_prefix(void)
+{
+	struct utimbuf ub;
+	int fd;
+
+	ub.actime = 1000000000;
+	ub.modtime = 1000000000;
+
+	unlink(UTIME_FILE);
+	fd = open(UTIME_FILE, O_CREAT | O_WRONLY, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) close(fd);
+
+	errno = 0;
+	CHECK(utime(UTIME_FILE "/below", &ub) == -1);
+	CHECK(errno == ENOTDIR);
+
+	unlink(UTIME_FILE);
+}
+#endif
+
+/* utime.html ERRORS [ENAMETOOLONG] (shall fail): "The length of a
+ * component of a pathname is longer than {NAME_MAX}."  (The
+ * {PATH_MAX} form of the same code is only "may fail"; the 40000-byte
+ * single component below is longer than either, so the *shall*-fail
+ * clause is the one that applies.)
+ *
+ * ntlibc reports ENOENT.  Again not specific to utime(): probed on
+ * this tree, open(), stat(), access(), unlink(), mkdir() and
+ * utimensat() all give ENOENT for a 40000-character name.  chdir() is
+ * the sole exception, and it is the exception precisely because it
+ * does not rely on the shared layer for this -- src/unistd/chdir.c:23
+ * carries its own explicit `n > __US_MAX_WCHARS -> ENAMETOOLONG`
+ * check, and reports ENAMETOOLONG correctly.  test/unistd.c already
+ * pins that chdir() (and symlink()) behaviour, which is why the gap
+ * in every other caller went unnoticed.
+ *
+ * Mechanism: src/internal/path.c's __ntpath() funnels every
+ * RtlDosPathNameToNtPathName_U_WithStatus() failure other than
+ * STATUS_NO_MEMORY into a single `errno = ENOENT`.  The very same
+ * length test chdir.c performs *does* exist in path.c -- but only in
+ * the relative-to-a-dirfd branch of __ntpath_at() (the `n >
+ * __US_MAX_WCHARS` check), which an AT_FDCWD or absolute path never
+ * reaches, since __ntpath_at() forwards both straight to __ntpath().
+ * Hoisting that check into __ntpath() would fix every caller at once.
+ * Implementable, not an NT limitation.
+ *
+ * Not fixed here, for the same reason as the [ENOTDIR] BUG above. */
+#if 0 /* BUG: utime.html ERRORS [ENAMETOOLONG] -- a pathname component
+	longer than {NAME_MAX} must fail with ENAMETOOLONG; ntlibc's
+	__ntpath() collapses it to ENOENT (see the comment above). */
+static void test_utime_enametoolong(void)
+{
+	struct utimbuf ub;
+	char *big;
+
+	ub.actime = 1000000000;
+	ub.modtime = 1000000000;
+
+	big = malloc(40001);
+	CHECK(big != 0);
+	if (!big) return;
+	memset(big, 'x', 40000);
+	big[40000] = 0;
+	errno = 0;
+	CHECK(utime(big, &ub) == -1);
+	CHECK(errno == ENAMETOOLONG);
+	free(big);
+}
+#endif
 
 /* ============================== endian.h ============================== */
 
@@ -428,7 +744,12 @@ int main(int argc, char **argv)
 	test_assert_inactive_under_ndebug();
 	test_assert_active_after_ndebug_undef();
 	test_assert_message_and_death(argv[0]);
+	test_assert_h_defines_only_assert();
+	test_assert_is_a_void_expression();
 	test_utime_return_value();
+	test_utime_null_sets_current_time();
+	test_utime_marks_ctime();
+	test_utime_errors();
 	test_endian_internal_consistency();
 
 	if (!fails) printf("posix-strings: all tests passed\n");
