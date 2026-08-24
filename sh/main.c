@@ -419,11 +419,15 @@ int main(int argc, char **argv)
 	}
 	if (__sh_exec_list(list, &status)) {
 		/* src/sh/sh.h: -1 is "cannot execute this AST node at all",
-		 * with no status written. The commonest cause by far is a word
-		 * containing a command substitution, which src/sh/exec.c
-		 * surfaces from wordexp() as WRDE_CMDSUB. */
-		diag("cannot execute: an unsupported construct (most often "
-		     "command substitution, `$(...)'/backticks) -- see "
+		 * with no status written. This used to say the commonest cause
+		 * was a word containing a command substitution; stage 5
+		 * implements those, so what is left is narrower and not worth
+		 * guessing at in the message -- two directly adjacent compound
+		 * commands in one pipeline ("( a ) | { b; }", which exec.c
+		 * refuses rather than deadlock without a fork()), a command
+		 * substitution whose own command hits one of these, and
+		 * resource failures. */
+		diag("cannot execute: an unsupported construct -- see "
 		     "test/sh-design.md");
 		__sh_list_free(list);
 		free(text);
