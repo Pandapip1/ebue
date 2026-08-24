@@ -894,6 +894,29 @@ family is the identity on this little-endian-only target; and the
 `htobe*`/`be*toh` pairs are inverses. (`test/posix-strings.c`
 `test_endian_internal_consistency`.)
 
+## sys/statvfs.h (priority 15)
+
+New header (`include/sys/statvfs.h`), new implementation
+(`src/stat/statvfs.c`), new audit rows in `test/posix-sysmisc.c`. All of
+it is `NtQueryVolumeInformationFile`, which works on any open handle on
+the volume, so `statvfs()` and `fstatvfs()` share one filler and differ
+only in how they obtain a handle — the same split `stat()`/`fstat()`
+already use next door.
+
+| function / member | clause checked | status | test |
+|---|---|---|---|
+| statvfs / fstatvfs | RETURN VALUE 0 and a filled `struct statvfs`; a path and a descriptor naming the same file system agree on every non-live field | covered | test/posix-sysmisc.c `test_statvfs` |
+| f_bsize / f_frsize | the cluster size (`SectorsPerAllocationUnit * BytesPerSector`). NT's allocation unit *is* its fundamental block — every volume size NT reports is counted in them — so the two are equal here, which is permitted, not required | covered | test/posix-sysmisc.c (nonzero, power of two, equal) |
+| f_blocks / f_bfree / f_bavail | `FileFsFullSizeInformation`'s TotalAllocationUnits / ActualAvailableAllocationUnits / CallerAvailableAllocationUnits. That class exists to separate "free on the volume" from "free to this caller after quota", which is POSIX's f_bfree/f_bavail split exactly. Falls back to `FileFsSizeInformation` where unsupported, which reports only the caller-visible figure — f_bfree is then set *equal to* f_bavail rather than guessed at | covered | test/posix-sysmisc.c (the spec's own bounds: both ≤ f_blocks, f_bavail ≤ f_bfree) |
+| f_files / f_ffree / f_favail | "Total number of file serial numbers" and the two free counts | **documented zero, not a stub.** NT exposes no file-serial-number pool: a POSIX file system allocates inodes from a fixed table and can say how many remain, NTFS grows its MFT on demand and no `FileFs*` class reports a record count. `fstatvfs.html` DESCRIPTION covers this — "It is unspecified whether all members of the **statvfs** structure have meaningful values on all file systems". Any nonzero value would be fabricated and would be believed by a caller doing capacity arithmetic | test/posix-sysmisc.c asserts the zeros, so a later change that starts inventing an inode count fails the suite rather than being trusted |
+| f_fsid | `FileFsVolumeInformation`'s VolumeSerialNumber — the same value `src/stat/stat.c` puts in `st_dev`, so the two agree about what "the same file system" means, which is the only property POSIX gives f_fsid | covered | test/posix-sysmisc.c (asserted equal to `fstat()`'s `st_dev` for a real file) |
+| f_namemax | `FileFsAttributeInformation`'s MaximumComponentNameLength (255 on NTFS) | covered | test/posix-sysmisc.c (asserts POSIX's `_POSIX_NAME_MAX` floor of 14, not 255 — an unexpected volume should report a real problem, not a surprise) |
+| f_flag ST_RDONLY | `FILE_READ_ONLY_VOLUME` in FileSystemAttributes (a read-only mount) **or** `FILE_READ_ONLY_DEVICE` in `FileFsDeviceInformation`'s Characteristics (read-only media — a CD-ROM is read-only without the file system saying so). Both are checked; they are different conditions | covered (mapped) | not asserted: whether the CI volume is read-only is not the test's business, and the test writes its own temp file |
+| f_flag ST_NOSUID | "does not support the semantics of the ST_ISUID and ST_ISGID file mode bits" — set unconditionally, which is a *real* mapping rather than a default: no NT file system supports those bits, `src/stat/stat.c`'s `mode_from_attrs` never produces them, and the exec family never honours them. Omitting the bit would be the inaccurate choice | covered | test/posix-sysmisc.c (asserted always set) |
+| statvfs ERRORS | [ENOENT] (missing component, and the empty path), [ENOTDIR] (a regular file used as a path prefix — resolved by `src/internal/path.c`'s `reject_if_prefix_not_dir()`, since NT's object manager answers both cases with STATUS_OBJECT_PATH_NOT_FOUND) | covered | test/posix-sysmisc.c `test_statvfs_errors` |
+| fstatvfs ERRORS | [EBADF] "The fildes argument is not an open file descriptor" | covered | test/posix-sysmisc.c `test_statvfs_errors` (negative and out-of-range fd) |
+| statvfs / fstatvfs ERRORS | [EOVERFLOW] "One of the values to be returned cannot be represented correctly in the structure pointed to by buf" | covered (guarded) — the only field that can overflow is `f_bsize`/`f_frsize`: `unsigned long` is 32-bit under this target's LLP64 model while the cluster size is a product of two ULONGs. The block counts cannot: `fsblkcnt_t` is unsigned 64-bit and the NT counters are signed 64-bit LARGE_INTEGERs | not reachable from a test — no NT volume has a >4GB cluster; the guard is asserted by inspection only |
+
 ## sched.h (priority 14)
 
 New header (`include/sched.h`) and new audit rows in

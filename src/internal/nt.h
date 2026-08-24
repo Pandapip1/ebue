@@ -482,6 +482,10 @@ typedef struct _TEB {
 #define FILE_REMOTE_DEVICE              0x00000010
 #define FILE_DEVICE_IS_MOUNTED          0x00000020
 
+/* FILE_FS_ATTRIBUTE_INFORMATION.FileSystemAttributes; only the one bit
+ * src/stat/statvfs.c needs.  The volume is mounted read-only. */
+#define FILE_READ_ONLY_VOLUME           0x00080000
+
 typedef enum _FILE_INFORMATION_CLASS {
 	FileDirectoryInformation = 1,
 	FileFullDirectoryInformation,
@@ -733,6 +737,29 @@ typedef struct _FILE_FS_SIZE_INFORMATION {
 	ULONG SectorsPerAllocationUnit;
 	ULONG BytesPerSector;
 } FILE_FS_SIZE_INFORMATION;
+
+/* FileFsFullSizeInformation.  The distinction from FILE_FS_SIZE_INFORMATION
+ * above is quota: CallerAvailableAllocationUnits is what *this* caller may
+ * still allocate (quota applied), ActualAvailableAllocationUnits is what
+ * is free on the volume regardless of quota.  That is exactly POSIX's
+ * f_bavail/f_bfree split, which is why statvfs prefers this class. */
+typedef struct _FILE_FS_FULL_SIZE_INFORMATION {
+	LARGE_INTEGER TotalAllocationUnits;
+	LARGE_INTEGER CallerAvailableAllocationUnits;
+	LARGE_INTEGER ActualAvailableAllocationUnits;
+	ULONG SectorsPerAllocationUnit;
+	ULONG BytesPerSector;
+} FILE_FS_FULL_SIZE_INFORMATION;
+
+/* FileFsAttributeInformation.  FileSystemName is variable-length, so a
+ * caller wanting it must over-allocate; src/stat/statvfs.c wants only
+ * FileSystemAttributes and MaximumComponentNameLength, both fixed. */
+typedef struct _FILE_FS_ATTRIBUTE_INFORMATION {
+	ULONG FileSystemAttributes;
+	LONG MaximumComponentNameLength;
+	ULONG FileSystemNameLength;
+	WCHAR FileSystemName[1];
+} FILE_FS_ATTRIBUTE_INFORMATION;
 
 typedef struct _FILE_PIPE_LOCAL_INFORMATION {
 	ULONG NamedPipeType;

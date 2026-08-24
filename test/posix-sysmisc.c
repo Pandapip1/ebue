@@ -66,6 +66,10 @@
 #include <getopt.h>
 #include <signal.h>
 #include <sched.h>
+#include <sys/statvfs.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdlib.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1034,6 +1038,142 @@ static void test_sched_yield(void)
 	CHECK(sched_yield() == 0 && errno == 0);
 }
 
+/* ---- fstatvfs.html / basedefs/sys_statvfs.h.html ----
+ * statvfs()/fstatvfs() "shall obtain information about the file system
+ * containing the file named by path" / "referenced by fildes".
+ * RETURN VALUE -- 0, or -1 with errno.
+ *
+ * The DESCRIPTION carries its own escape clause -- "It is unspecified
+ * whether all members of the statvfs structure have meaningful values
+ * on all file systems" -- which is what covers f_files/f_ffree/
+ * f_favail being 0 here: NT exposes no file-serial-number pool, NTFS
+ * grows its MFT on demand, and none of the FileFs* classes reports a
+ * record count.  That zero is asserted rather than skipped, precisely
+ * so that a later change that starts fabricating a plausible-looking
+ * inode count fails this test instead of being believed.
+ *
+ * Everything else is checked as an invariant the spec's own member
+ * definitions require (f_blocks is a total, so the two free counts
+ * cannot exceed it; f_bavail is "available to a non-privileged
+ * process", so it cannot exceed the unrestricted f_bfree), not as a
+ * fixed number -- the numbers are whatever the CI runner's volume
+ * happens to hold. */
+static void test_statvfs(void)
+{
+	struct statvfs a, b;
+	struct stat st;
+	int fd;
+
+	CHECK(statvfs(".", &a) == 0);
+
+	/* f_frsize is the unit f_blocks counts in, f_bsize the block size;
+	 * both must be nonzero for any of the counts to mean anything */
+	CHECK(a.f_frsize > 0 && a.f_bsize > 0);
+	/* NT's allocation unit is sectors*bytes-per-sector, always a power
+	 * of two, and src/stat/statvfs.c uses it for both fields */
+	CHECK((a.f_bsize & (a.f_bsize - 1)) == 0);
+	CHECK(a.f_frsize == a.f_bsize);
+
+	/* "Total number of blocks" bounds both free counts, and the
+	 * non-privileged figure cannot exceed the unrestricted one */
+	CHECK(a.f_blocks > 0);
+	CHECK(a.f_bfree <= a.f_blocks);
+	CHECK(a.f_bavail <= a.f_bfree);
+
+	/* documented zeros -- see this block's banner and
+	 * src/stat/statvfs.c's */
+	CHECK(a.f_files == 0 && a.f_ffree == 0 && a.f_favail == 0);
+
+	/* f_namemax: FileFsAttributeInformation's
+	 * MaximumComponentNameLength.  POSIX's own floor for a filename is
+	 * _POSIX_NAME_MAX (14); every NT file system that can host this
+	 * test reports far more (255 on NTFS and on FAT with long names),
+	 * but the assertion is the spec's floor rather than 255, so a run
+	 * on an unexpected volume reports a real problem and not a
+	 * surprise. */
+	CHECK(a.f_namemax >= 14);
+
+	/* f_flag: ST_NOSUID is "does not support the semantics of the
+	 * ST_ISUID and ST_ISGID file mode bits", which is true of every NT
+	 * file system -- src/stat/stat.c never produces those bits and the
+	 * exec family never honours them.  So it is always set here.  Not
+	 * asserting anything about ST_RDONLY: whether the volume the test
+	 * runs on is read-only is not this test's business, and the test
+	 * could not write its own temp file below if it were. */
+	CHECK((a.f_flag & ST_NOSUID) != 0);
+
+	/* f_fsid is the volume serial number, the same value stat() puts
+	 * in st_dev -- the two must agree about what "the same file
+	 * system" means, which is the only property POSIX gives f_fsid.
+	 * Checked against a real file rather than "." so the st_dev is a
+	 * genuine volume serial and not one of stat.c's synthetic ones. */
+	fd = open("statvfs-probe.tmp", O_RDWR | O_CREAT | O_TRUNC, 0600);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(fstat(fd, &st) == 0);
+		CHECK(fstatvfs(fd, &b) == 0);
+		CHECK(b.f_fsid == (unsigned long)st.st_dev);
+
+		/* statvfs(path) and fstatvfs(fd) name the same file system, so
+		 * every field must match.  The free counts are excluded: they
+		 * are live figures and another process on the CI runner may
+		 * legitimately change them between the two calls. */
+		CHECK(a.f_bsize == b.f_bsize && a.f_frsize == b.f_frsize);
+		CHECK(a.f_blocks == b.f_blocks);
+		CHECK(a.f_files == b.f_files && a.f_ffree == b.f_ffree && a.f_favail == b.f_favail);
+		CHECK(a.f_fsid == b.f_fsid);
+		CHECK(a.f_flag == b.f_flag);
+		CHECK(a.f_namemax == b.f_namemax);
+
+		close(fd);
+	}
+
+	/* a directory is as good a handle on the volume as a file */
+	CHECK(statvfs("..", &b) == 0 && b.f_fsid == a.f_fsid);
+
+	unlink("statvfs-probe.tmp");
+}
+
+/* ---- fstatvfs.html ERRORS ----
+ * statvfs(): [ENOENT] "A component of path does not name an existing
+ * file or path is an empty string"; [ENOTDIR] "A component of the path
+ * prefix of path names an existing file that is neither a directory
+ * nor a symbolic link to a directory".
+ * fstatvfs(): [EBADF] "The fildes argument is not an open file
+ * descriptor." */
+static void test_statvfs_errors(void)
+{
+	struct statvfs b;
+	int fd;
+
+	errno = 0;
+	CHECK(statvfs("no-such-directory-here/no-such-file", &b) == -1);
+	CHECK(errno == ENOENT);
+
+	errno = 0;
+	CHECK(statvfs("", &b) == -1);
+	CHECK(errno == ENOENT);
+
+	/* ENOTDIR: a regular file used as a path prefix */
+	fd = open("statvfs-notdir.tmp", O_RDWR | O_CREAT | O_TRUNC, 0600);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		close(fd);
+		errno = 0;
+		CHECK(statvfs("statvfs-notdir.tmp/x", &b) == -1);
+		CHECK(errno == ENOTDIR);
+		unlink("statvfs-notdir.tmp");
+	}
+
+	errno = 0;
+	CHECK(fstatvfs(-1, &b) == -1);
+	CHECK(errno == EBADF);
+
+	errno = 0;
+	CHECK(fstatvfs(4096, &b) == -1);
+	CHECK(errno == EBADF);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--rusage-child")) {
@@ -1060,6 +1200,8 @@ int main(int argc, char **argv)
 	test_fd_macros();
 	test_sys_param();
 	test_sched_yield();
+	test_statvfs();
+	test_statvfs_errors();
 	test_getopt_long_abbrev();
 	test_getopt_long_arg_forms();
 	test_getopt_long_flag();

@@ -108,12 +108,14 @@ reading the tables below.
 | `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_fmaxmin_variants`) |
 | `exp2` `exp2f` `exp2l` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_exp2`) |
 | `sched_yield` | `sched.h` (new) | base | implemented + clause-audited | `test/posix-sysmisc.c` (`test_sched_yield`) |
+| `statvfs` `fstatvfs` | `sys/statvfs.h` (new) | base | implemented + clause-audited | `test/posix-sysmisc.c` (`test_statvfs`, `test_statvfs_errors`) |
 
-Running adjustment: **8 base interfaces closed**; absent 473 -> 465
-(base 256 -> 248), implemented + clause-audited 333 -> 341.  `math.h`'s
-7 base absences and `sched.h`'s 1 are now 0.  The other 7 `sched.h`
-entries stay absent and stay `PS`-optional -- `include/sched.h`'s banner
-records why declaring them would be worse than not having them.
+Running adjustment: **10 base interfaces closed**; absent 473 -> 463
+(base 256 -> 246), implemented + clause-audited 333 -> 343.  `math.h`'s
+7 base absences, `sched.h`'s 1 and `sys/statvfs.h`'s 2 are now 0.  The
+other 7 `sched.h` entries stay absent and stay `PS`-optional --
+`include/sched.h`'s banner records why declaring them would be worse
+than not having them.
 
 The 1177 excludes the 14 entries in POSIX's function index that are
 external *variables*, not functions (`environ`, `errno`, `optarg`,
@@ -583,7 +585,7 @@ closed by accident in an afternoon.
 | `exp2` `exp2f` `exp2l` | `math.h` | base | **closed** (see "Changes since `04edec2`") -- added to `src/math/exp.c` over the `__x87_exp2` helper `exp()`/`pow()` already use, which computes 2^x directly, so exp2 needs no argument reduction at all |
 | `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | **closed** (see "Changes since `04edec2`") -- `src/math/fmax.c` defined only the `double` forms; the `f`/`l` suffixes exist for essentially every other `math.h` entry in the tree, so this was an oversight rather than a decision |
 | `waitid` | `sys/wait.h` | base | `src/process/wait.c` implements `wait`/`waitpid`/`wait3`/`wait4` over the child table in `src/process/children.c`; `waitid`'s `siginfo_t`-returning form and its `WNOWAIT` flag (leave the child waitable) are the only new behaviour needed |
-| `statvfs` `fstatvfs` | `sys/statvfs.h` | base | `NtQueryVolumeInformationFile` (`FileFsSizeInformation`, `FileFsAttributeInformation`) is pure NTDLL and covers every field. `src/stat/stat.c` already opens handles the right way. Small and self-contained |
+| `statvfs` `fstatvfs` | `sys/statvfs.h` | base | **closed** (see "Changes since `04edec2`") -- `src/stat/statvfs.c`, over `FileFsFullSizeInformation`/`FileFsSizeInformation`/`FileFsAttributeInformation`/`FileFsDeviceInformation`/`FileFsVolumeInformation`. The claim that these classes "cover every field" turned out to be wrong: `f_files`/`f_ffree`/`f_favail` have no NT source at all and are documented zeros, not fabricated counts |
 | `sigignore` | `signal.h` | `OB XSI` | one line over `sigaction`; obsolescent, and its four siblings (`sighold`/`sigrelse`/`sigset`/`sigpause`) are already present |
 | `getdate` | — | XSI | *not* absent — `src/time/getdate.c` exists; listed here only because `POSIX-HEADER-INVENTORY.md` implies otherwise |
 
