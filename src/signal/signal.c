@@ -277,7 +277,6 @@ int sigdelset(sigset_t *s, int sig) { if (!sig_valid(sig)) { errno = EINVAL; ret
 int sigismember(const sigset_t *s, int sig) { if (!sig_valid(sig)) { errno = EINVAL; return -1; } return !!(s->__bits[sig / (8 * sizeof(long))] & (1UL << (sig % (8 * sizeof(long))))); }
 int sigisemptyset(const sigset_t *s) { size_t i; for (i = 0; i < sizeof s->__bits / sizeof s->__bits[0]; i++) if (s->__bits[i]) return 0; return 1; }
 int sigorset(sigset_t *d, const sigset_t *a, const sigset_t *b) { size_t i; for (i = 0; i < sizeof d->__bits / sizeof d->__bits[0]; i++) d->__bits[i] = a->__bits[i] | b->__bits[i]; return 0; }
-int sigandset(sigset_t *d, const sigset_t *a, const sigset_t *b) { size_t i; for (i = 0; i < sizeof d->__bits / sizeof d->__bits[0]; i++) d->__bits[i] = a->__bits[i] & b->__bits[i]; return 0; }
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 {
