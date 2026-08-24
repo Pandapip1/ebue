@@ -623,6 +623,14 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out)
 
 	out->pid = -1;
 
+	/* run_stage() never calls this with cmd->words == NULL (that is
+	 * exactly the assignment-only case it handles itself), but a
+	 * static analyzer cannot see across the call boundary and flags
+	 * `we` as read uninitialized on a hypothetical zero-iteration
+	 * loop below -- so this makes the invariant an explicit, checked
+	 * fact rather than something only a comment promises. */
+	if (!cmd->words) { out->status = 0; return 0; }
+
 	for (w = cmd->words; w; w = w->next) {
 		rc = wordexp(w->text, &we, first ? 0 : WRDE_APPEND);
 		if (rc) {
@@ -740,6 +748,16 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	int *statuses = 0;
 	int abort_unsupported = 0;
 	int rc;
+
+	/* The grammar (sh.h's sh_pipeline comment, XCU 2.10.2's pipeline
+	 * production) never produces an empty pipeline -- a pipe_sequence
+	 * is always one command at minimum -- so this cannot happen via
+	 * __sh_parse(). It is still checked explicitly, rather than left
+	 * as an unstated invariant: every allocation and index below is
+	 * sized off n or n-1, and a static analyzer (rightly) cannot see
+	 * the parser's guarantee across this function's own boundary --
+	 * only that an unchecked n==0 would underflow n-1 to SIZE_MAX. */
+	if (n == 0) return -1;
 
 	if (n == 1) {
 		/* Routes back through __sh_exec_command so a lone subshell or
