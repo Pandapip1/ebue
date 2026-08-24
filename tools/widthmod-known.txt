@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Known, fenced instances of the defect tools/lint-widthmod.sh checks for.
+# Reported on every run and not counted as findings; a NEW site fails.
+#
+# One entry per line: FILE<TAB>the exact source line (leading and trailing
+# whitespace trimmed)<TAB>the reason and where the fence is.
+#
+# Keyed on the line TEXT, not its number, because a number goes stale on
+# any edit above it and a stale key stops matching silently.  An entry
+# that matches nothing is a hard failure -- see that script for why.
+#
+# DELETE AN ENTRY IN THE SAME COMMIT THAT FIXES ITS SITE, and unfence the
+# test that records it.  That is the whole point of keeping this where a
+# machine reads it.
+#
+src/stdio/printf.c	case LM_z: case LM_t: sv = va_arg(ap, long); break;	signed %zd/%td read as 32-bit long under LLP64; fenced as test_printf_z_modifier_width in test/posix-stdio.c (f9f1937)
+src/stdio/printf.c	case LM_z: case LM_t: uv = va_arg(ap, unsigned long); break;	unsigned %zu/%tu read as 32-bit unsigned long under LLP64; same fence
+src/stdio/printf.c	case LM_z: case LM_t: *(long *)ptr = (long)count; break;	%zn/%tn writes four bytes into an eight-byte object, corrupting the caller; same fence

@@ -26,6 +26,10 @@
 #             tools/lint-unreferenced.sh: a function a public header
 #             declares, this library implements, and no test/*.c
 #             references.  Needs a native C compiler and nm.
+#   widthmod  tools/lint-widthmod.sh: printf/scanf's `z` and `t` length
+#             modifiers read or written as `long`, which is 32 bits on
+#             this LLP64 target while size_t and ptrdiff_t are 64.  No
+#             tool needed.
 #   ushort    tools/lint-ushort.sh: unguarded (USHORT) narrowing casts,
 #             the class of the chdir()/UNICODE_STRING.Length bug that
 #             script was written for (4f02ef3).  No tool needed.  It was
@@ -587,7 +591,7 @@ stage_shell() {
 	return 1
 }
 
-stages=${*:-warn analyze cppcheck shell undefined ushort unreferenced}
+stages=${*:-warn analyze cppcheck shell undefined ushort unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
@@ -614,6 +618,7 @@ for s in $stages; do
 		cppcheck)  stage_cppcheck ;;
 		shell)     stage_shell ;;
 		ushort)    tools/lint-ushort.sh ;;
+		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
 		*) note "unknown stage: $s"; exit 2 ;;

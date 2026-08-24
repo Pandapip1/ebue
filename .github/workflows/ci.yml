@@ -532,6 +532,15 @@ jobs:
           # the same reason the warn stage installs it).
           - stage: unreferenced
             packages: clang
+          # printf/scanf's z and t length modifiers read as long, which
+          # is 32-bit on this LLP64 target.  Text-only, needs no tool
+          # beyond a shell.  Green: printf.c's three sites are real and
+          # unfixed, but they are recorded in tools/widthmod-known.txt
+          # and reported every run rather than counted -- the same
+          # posture as a #if 0 fence.  A NEW site fails, and so does a
+          # known-list entry that outlives its defect.
+          - stage: widthmod
+            packages: ""
     name: lint (${{ matrix.stage }})
     steps:
       - uses: actions/checkout@v7
