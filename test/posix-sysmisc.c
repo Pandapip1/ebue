@@ -1174,8 +1174,236 @@ static void test_statvfs_errors(void)
 	CHECK(errno == EBADF);
 }
 
+/* ---- waitid.html ----
+ *
+ * Every child below is this same executable re-exec'd through
+ * __spawn() with a mode argument, the pattern test_getrusage() above
+ * already uses: fork() needs RtlCloneUserProcess, which stock Wine
+ * lacks, so a spawn is the portable way to get a child here.
+ *
+ * self is argv[0]; a spawn failure is reported and the check skipped
+ * rather than failed, exactly as test_getrusage() does, because an
+ * environment that cannot spawn is not an environment where waitid is
+ * broken. */
+static const char *waitid_self;
+
+static pid_t waitid_spawn(const char *mode)
+{
+	char *argv[3];
+	pid_t pid;
+
+	argv[0] = (char *)waitid_self;
+	argv[1] = (char *)mode;
+	argv[2] = 0;
+	pid = __spawn(waitid_self, argv, environ);
+	if (pid < 0) printf("note: cannot spawn \"%s %s\" (errno %d); check skipped\n", waitid_self, mode, errno);
+	return pid;
+}
+
+/* waitid.html DESCRIPTION: "the si_signo member shall be set equal to
+ * SIGCHLD"; si_code distinguishes CLD_EXITED from the death-by-signal
+ * codes, and si_status carries the exit status in the first case and
+ * the signal number in the others.  P_PID: "wait for the child with a
+ * process ID equal to (pid_t)id". */
+static void test_waitid_exited(void)
+{
+	siginfo_t si;
+	pid_t pid = waitid_spawn("--waitid-exit7");
+
+	if (pid < 0) return;
+
+	memset(&si, 0xa5, sizeof si);   /* poison: every field below must be written */
+	CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == 0);
+	CHECK(si.si_signo == SIGCHLD);
+	CHECK(si.si_code == CLD_EXITED);
+	CHECK(si.si_status == 7);
+	CHECK(si.si_pid == pid);
+	CHECK(si.si_uid == getuid());
+
+	/* the child has been collected: it is no longer an existing
+	 * unwaited-for child, so a second wait for it is [ECHILD] */
+	errno = 0;
+	CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == -1);
+	CHECK(errno == ECHILD);
+}
+
+/* Death by signal: si_code is CLD_KILLED, or CLD_DUMPED for a signal
+ * whose default action on a Unix system dumps core, and si_status is
+ * the signal number rather than an exit status.  Both codes are
+ * exercised because src/process/wait.c derives them from the same
+ * wait status waitpid() produces -- SIGTERM is not in that file's
+ * core-dumping set, SIGABRT is. */
+static void test_waitid_signalled(void)
+{
+	siginfo_t si;
+	pid_t pid;
+
+	pid = waitid_spawn("--waitid-sigterm");
+	if (pid >= 0) {
+		CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == 0);
+		CHECK(si.si_signo == SIGCHLD);
+		CHECK(si.si_code == CLD_KILLED);
+		CHECK(si.si_status == SIGTERM);
+		CHECK(si.si_pid == pid);
+	}
+
+	pid = waitid_spawn("--waitid-sigabrt");
+	if (pid >= 0) {
+		CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == 0);
+		CHECK(si.si_code == CLD_DUMPED);
+		CHECK(si.si_status == SIGABRT);
+	}
+}
+
+/* WNOWAIT: "Keep the process whose status is returned in infop in a
+ * waitable state."
+ *
+ * The P_ALL half of this is a regression test with a specific target.
+ * A WNOWAIT reap leaves a child-table entry with pid != 0 && done == 1
+ * (src/process/wait.c), a state unreachable before waitid() existed --
+ * every other path calls __child_remove() immediately after setting
+ * done, which zeroes pid.  do_waitpid()'s any-child scan used to open
+ * with `if (!__children[i].pid || __children[i].done) continue;`, i.e.
+ * it skipped done entries; with such an entry present and no other
+ * children, the wait() below would have found nothing to wait on and
+ * reported ECHILD instead of handing the status back.  This test fails
+ * without that scan fix. */
+static void test_waitid_wnowait(void)
+{
+	siginfo_t si, si2;
+	int status = 0;
+	pid_t pid, got;
+
+	pid = waitid_spawn("--waitid-exit3");
+	if (pid >= 0) {
+		CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT) == 0);
+		CHECK(si.si_code == CLD_EXITED && si.si_status == 3 && si.si_pid == pid);
+
+		/* still waitable: the identical status again, not ECHILD */
+		CHECK(waitid(P_PID, (id_t)pid, &si2, WEXITED | WNOWAIT) == 0);
+		CHECK(si2.si_code == si.si_code && si2.si_status == si.si_status && si2.si_pid == si.si_pid);
+
+		/* and a real reap still collects it exactly once */
+		CHECK(waitid(P_PID, (id_t)pid, &si2, WEXITED) == 0);
+		CHECK(si2.si_status == 3);
+		errno = 0;
+		CHECK(waitid(P_PID, (id_t)pid, &si2, WEXITED) == -1 && errno == ECHILD);
+	}
+
+	/* the any-child path: WNOWAIT through P_ALL, then a plain wait() */
+	pid = waitid_spawn("--waitid-exit5");
+	if (pid >= 0) {
+		CHECK(waitid(P_ALL, 0, &si, WEXITED | WNOWAIT) == 0);
+		CHECK(si.si_pid == pid && si.si_code == CLD_EXITED && si.si_status == 5);
+
+		got = wait(&status);
+		CHECK(got == pid);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 5);
+
+		/* now genuinely reaped */
+		errno = 0;
+		CHECK(wait(&status) == -1 && errno == ECHILD);
+	}
+}
+
+/* waitid.html ERRORS: "[EINVAL] An invalid value was specified for
+ * options", and the DESCRIPTION's "Applications shall specify at least
+ * one of the flags WEXITED, WSTOPPED, or WCONTINUED."  [ECHILD] "The
+ * calling process has no existing unwaited-for child processes."
+ *
+ * These run last, after every child spawned above has been collected,
+ * so "no existing unwaited-for child processes" is actually true. */
+static void test_waitid_errors(void)
+{
+	siginfo_t si;
+
+	/* none of WEXITED/WSTOPPED/WCONTINUED */
+	errno = 0;
+	CHECK(waitid(P_ALL, 0, &si, 0) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(waitid(P_ALL, 0, &si, WNOHANG) == -1 && errno == EINVAL);
+
+	/* a bit that is not an option at all */
+	errno = 0;
+	CHECK(waitid(P_ALL, 0, &si, WEXITED | 0x40000000) == -1 && errno == EINVAL);
+
+	/* P_PIDFD is a Linux extension, not a POSIX idtype, and there are
+	 * no pidfds here */
+	errno = 0;
+	CHECK(waitid(P_PIDFD, 0, &si, WEXITED) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(waitid((idtype_t)99, 0, &si, WEXITED) == -1 && errno == EINVAL);
+
+	/* no children left */
+	errno = 0;
+	CHECK(waitid(P_ALL, 0, &si, WEXITED) == -1 && errno == ECHILD);
+	errno = 0;
+	CHECK(waitid(P_ALL, 0, &si, WEXITED | WNOHANG) == -1 && errno == ECHILD);
+
+	/* a pid that is not a child of this process */
+	errno = 0;
+	CHECK(waitid(P_PID, (id_t)getpid(), &si, WEXITED) == -1 && errno == ECHILD);
+}
+
+#if 0 /* N/A: waitid.html DESCRIPTION -- WSTOPPED ("Status shall be
+       * returned for any child that has stopped upon receipt of a
+       * signal") and WCONTINUED ("Status shall be returned for any
+       * continued child process") require a child that can be stopped
+       * and continued.  No child on this platform can be:
+       *
+       *   - kill(pid, SIGSTOP) here is NtTerminateProcess(h,
+       *     __NT_SIGNAL_EXIT(SIGSTOP)) (src/signal/signal.c's kill()).
+       *     It ends the child rather than suspending it, NT having no
+       *     job control and no signal delivery to suspend into.
+       *   - even a process suspended by some other means could not be
+       *     reported.  An NT process object transitions to signalled
+       *     exactly once, on termination; there is no waitable stop or
+       *     continue transition for NtWaitForSingleObject to return,
+       *     and NtSuspendProcess is not part of the surface
+       *     src/internal/nt.h declares.
+       *
+       * So this is a platform impossibility, not unfinished work:
+       * there is no NT mechanism that would implement it.  waitid()
+       * accepts both flags and simply never has such a status to
+       * report, which is correct behaviour on a system where children
+       * never stop -- and CLD_STOPPED/CLD_CONTINUED, though defined by
+       * <signal.h> for source compatibility, are never produced.
+       *
+       * Written out as the real assertions it would need, so that if NT
+       * ever grows the notion, the test is here rather than needing to
+       * be invented. */
+static void test_waitid_stopped_continued(void)
+{
+	siginfo_t si;
+	pid_t pid = waitid_spawn("--waitid-sleep");
+
+	if (pid < 0) return;
+
+	CHECK(kill(pid, SIGSTOP) == 0);
+	CHECK(waitid(P_PID, (id_t)pid, &si, WSTOPPED) == 0);
+	CHECK(si.si_signo == SIGCHLD);
+	CHECK(si.si_code == CLD_STOPPED);
+	CHECK(si.si_status == SIGSTOP);
+	CHECK(si.si_pid == pid);
+
+	CHECK(kill(pid, SIGCONT) == 0);
+	CHECK(waitid(P_PID, (id_t)pid, &si, WCONTINUED) == 0);
+	CHECK(si.si_code == CLD_CONTINUED);
+	CHECK(si.si_pid == pid);
+
+	CHECK(kill(pid, SIGKILL) == 0);
+	CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == 0);
+	CHECK(si.si_code == CLD_KILLED);
+}
+#endif
+
 int main(int argc, char **argv)
 {
+	if (argc > 1 && !strcmp(argv[1], "--waitid-exit7")) return 7;
+	if (argc > 1 && !strcmp(argv[1], "--waitid-exit5")) return 5;
+	if (argc > 1 && !strcmp(argv[1], "--waitid-exit3")) return 3;
+	if (argc > 1 && !strcmp(argv[1], "--waitid-sigterm")) { kill(getpid(), SIGTERM); return 111; }
+	if (argc > 1 && !strcmp(argv[1], "--waitid-sigabrt")) { kill(getpid(), SIGABRT); return 111; }
 	if (argc > 1 && !strcmp(argv[1], "--rusage-child")) {
 		/* burn a little real CPU so RUSAGE_CHILDREN has something
 		 * non-trivial to accumulate; kept short since correctness
@@ -1202,6 +1430,11 @@ int main(int argc, char **argv)
 	test_sched_yield();
 	test_statvfs();
 	test_statvfs_errors();
+	waitid_self = argv[0];
+	test_waitid_exited();
+	test_waitid_signalled();
+	test_waitid_wnowait();
+	test_waitid_errors();
 	test_getopt_long_abbrev();
 	test_getopt_long_arg_forms();
 	test_getopt_long_flag();

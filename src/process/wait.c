@@ -259,6 +259,147 @@ pid_t wait(int *status)
 	return do_waitpid(-1, status, 0, 0, 0);
 }
 
+/* waitid --
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/waitid.html
+ *
+ * The reaping itself is do_waitpid() above, unchanged: waitid() differs
+ * from waitpid() only in how the caller names the child (idtype/id
+ * rather than a signed pid) and in how the result is reported (a
+ * siginfo_t rather than a packed int).  Both are translations, so
+ * neither the child-table walk nor the exit-status decoding is
+ * duplicated here.
+ *
+ * idtype:
+ *   P_ALL   "wait for any children and id is ignored" -- do_waitpid's
+ *           pid == -1.
+ *   P_PID   "wait for the child with a process ID equal to (pid_t)id".
+ *   P_PGID  "wait for any child with a process group ID equal to
+ *           (pid_t)id".  Every process is its own process group of one
+ *           on this platform (src/unistd/ids.c, and kill()'s own
+ *           writeup in src/signal/signal.c makes the same argument),
+ *           so a process group id *is* a process id here and this is
+ *           the P_PID case with the same number -- not an
+ *           approximation of it.
+ *   P_PIDFD is a Linux extension, not in POSIX, and there are no pidfds
+ *           here; it is rejected with EINVAL along with any other
+ *           value.
+ *
+ * options: "Applications shall specify at least one of the flags
+ * WEXITED, WSTOPPED, or WCONTINUED" (DESCRIPTION), so a call naming
+ * none of them is [EINVAL].
+ *
+ * WSTOPPED and WCONTINUED are accepted and can never fire, and that is
+ * a property of NT rather than of this implementation:
+ *
+ *   - a child cannot be stopped.  kill(pid, SIGSTOP) here is
+ *     NtTerminateProcess(h, __NT_SIGNAL_EXIT(SIGSTOP)) (see kill() in
+ *     src/signal/signal.c) -- it ends the child rather than suspending
+ *     it, because NT has no job control and no signal delivery to
+ *     suspend into.
+ *   - even a process suspended by other means could not be reported.
+ *     An NT process object transitions to signalled exactly once, on
+ *     termination; there is no waitable stop or continue transition
+ *     for NtWaitForSingleObject to return, and NtSuspendProcess is not
+ *     part of the surface this library declares.
+ *
+ * So the two flags are honoured to the letter -- a caller that passes
+ * WSTOPPED|WEXITED gets exit notifications and no stop notifications,
+ * which is exactly correct on a system where children never stop --
+ * and CLD_STOPPED/CLD_CONTINUED are never produced.  See
+ * test/posix-sysmisc.c for the fenced tests that state what a
+ * stop/continue notification would have to look like.
+ *
+ * WNOWAIT is real, not accepted-and-ignored: it maps onto do_waitpid's
+ * `nowait`, which records the status in the child table without
+ * releasing the entry, so the child remains waitable and a following
+ * wait/waitpid/waitid returns the same status again.
+ */
+int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options)
+{
+	int status = 0;
+	pid_t pid, want;
+
+	if (options & ~(WEXITED | WSTOPPED | WCONTINUED | WNOHANG | WNOWAIT)) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (!(options & (WEXITED | WSTOPPED | WCONTINUED))) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	switch (idtype) {
+	case P_ALL:  want = -1; break;
+	case P_PID:
+	case P_PGID: want = (pid_t)id; break;
+	default:     errno = EINVAL; return -1;
+	}
+	/* do_waitpid reads pid == 0 as "any child" and pid < 0 as a process
+	 * group; P_PID/P_PGID with an id of 0 must not silently become
+	 * P_ALL, and a negative id is not a process id at all. */
+	if (idtype != P_ALL && want <= 0) { errno = ECHILD; return -1; }
+
+	/* WEXITED is the only one of the three that this platform can ever
+	 * satisfy (see the banner), so a call asking *only* for stop or
+	 * continue notifications can never have one available.  With
+	 * WNOHANG that is "no status available", which waitid.html says is
+	 * a 0 return; without it, POSIX would have this block forever
+	 * waiting for a transition that cannot occur, and reporting ECHILD
+	 * is both terminating and true -- there is no child that can ever
+	 * satisfy this request. */
+	if (!(options & WEXITED)) {
+		if (infop) memset(infop, 0, sizeof *infop);
+		if (options & WNOHANG) return 0;
+		errno = ECHILD;
+		return -1;
+	}
+
+	pid = do_waitpid(want, &status, options & WNOHANG, 0, options & WNOWAIT ? 1 : 0);
+	if (pid < 0) return -1;
+
+	/* "If WNOHANG was specified and status is not available, 0 shall be
+	 * returned" (RETURN VALUE).  DESCRIPTION also requires infop to be
+	 * distinguishable in that case; POSIX.1-2017 leaves it
+	 * implementation-defined whether infop is written, and zeroing it
+	 * (si_signo == 0, si_pid == 0) is what makes "nothing happened"
+	 * detectable by a caller that only has the 0 return to go on. */
+	if (pid == 0) {
+		if (infop) memset(infop, 0, sizeof *infop);
+		return 0;
+	}
+
+	if (infop) {
+		memset(infop, 0, sizeof *infop);
+		/* "the si_signo member shall be set equal to SIGCHLD"
+		 * (DESCRIPTION). */
+		infop->si_signo = SIGCHLD;
+		infop->si_pid = pid;
+		/* The child inherited this process's credentials -- NT has no
+		 * per-process uid at all and src/unistd/ids.c reports one
+		 * fixed value for everything -- so the child's real user id is
+		 * this process's. */
+		infop->si_uid = getuid();
+		if (WIFEXITED(status)) {
+			infop->si_code = CLD_EXITED;
+			/* For CLD_EXITED, si_status is the exit status the child
+			 * passed to _exit(); for the two death-by-signal codes it
+			 * is the signal number.  Both come straight out of the
+			 * wait status __wait_encode_status() already produced, so
+			 * waitid and waitpid can never disagree about a child. */
+			infop->si_status = WEXITSTATUS(status);
+		} else {
+			infop->si_code = WCOREDUMP(status) ? CLD_DUMPED : CLD_KILLED;
+			infop->si_status = WTERMSIG(status);
+		}
+		/* si_utime/si_stime are not POSIX members of the SIGCHLD
+		 * siginfo (waitid.html names only si_pid, si_uid, si_signo,
+		 * si_status and si_code); they are left zero here rather than
+		 * filled, and wait3()/wait4()'s struct rusage is the supported
+		 * way to get a reaped child's times. */
+	}
+	return 0;
+}
+
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 pid_t wait3(int *status, int options, struct rusage *ru)
 {

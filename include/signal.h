@@ -77,6 +77,39 @@ extern "C" {
 
 #define BUS_ADRALN 1   /* EXCEPTION_DATATYPE_MISALIGNMENT */
 
+/* si_code values for SIGCHLD (waitid.html, basedefs/signal.h.html).
+ * Unlike the fault subcodes above, all six are defined even though
+ * ntlibc produces only three of them, and the distinction is not
+ * arbitrary: a fault subcode is asked for by a handler already doing
+ * platform-specific fault analysis, whereas CLD_* is the ordinary
+ * vocabulary of wait-family status reporting, which any portable
+ * SIGCHLD handler may switch over without doing anything
+ * platform-specific.  A `switch (si_code)` covering all six is
+ * guaranteed to compile by POSIX, and breaking that is a hard build
+ * failure, not a graceful fallback.  Defining a value promises only
+ * that it is a value si_code may hold, never that this system produces
+ * it -- the same way defining EROFS promises no errno will ever be it.
+ *
+ * waitid() produces CLD_EXITED, CLD_KILLED and CLD_DUMPED.
+ *
+ * CLD_TRAPPED, CLD_STOPPED and CLD_CONTINUED are defined for source
+ * compatibility and are never produced here, because no child on this
+ * platform can be stopped or continued: kill(pid, SIGSTOP) is
+ * NtTerminateProcess(h, __NT_SIGNAL_EXIT(SIGSTOP)) (src/signal/signal.c)
+ * -- it ends the child rather than suspending it, NT having no job
+ * control to suspend into -- and even a process suspended by other
+ * means could not be reported, since an NT process object transitions
+ * to signalled exactly once, on termination: there is no waitable stop
+ * or continue transition for NtWaitForSingleObject to return, and
+ * NtSuspendProcess is not part of the surface this library declares.
+ * Numeric values match musl/glibc, as above. */
+#define CLD_EXITED    1
+#define CLD_KILLED    2
+#define CLD_DUMPED    3
+#define CLD_TRAPPED   4
+#define CLD_STOPPED   5
+#define CLD_CONTINUED 6
+
 typedef struct sigaltstack stack_t;
 
 #define SA_NOCLDSTOP  1
