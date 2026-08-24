@@ -46,7 +46,8 @@ WRAP    = -Wl,--wrap=stat
 # start ("ASan runtime does not come first in initial library list").  The
 # driver appends it after -ldl/-lm, which is too late.
 
-HARNESSES = strtod printf scanf utf path strptime strtol strftime
+HARNESSES = strtod printf scanf utf path strptime strtol strftime \
+            fnmatch regex glob wordexp
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 
 # What the instrumented library is built from.  Derived with find, never

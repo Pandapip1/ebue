@@ -797,6 +797,89 @@ static void test_wordexp_arith(void)
 	wordfree(&we);
 }
 
+#if 0 /* BUG: XBD 2.6.4 Arithmetic Expansion -- the expression "shall be
+	processed according to the rules given in [XBD 1.1.2] Arithmetic
+	Precision and Operations", and 1.1.2 says evaluation "shall be
+	equivalent to that described in Section 6.5, Expressions, of the
+	ISO C standard". ISO C 6.5.7p3 makes a shift whose right operand
+	is negative, or is greater than or equal to the width of the
+	promoted left operand, *undefined behaviour* -- so an
+	implementation of 2.6.4 may not simply perform it.
+
+	src/wordexp/arith.c's apply_binop() does:
+
+	    case 'L': return cur << rhs;    ("<<=" / "<<")
+	    case 'R': return cur >> rhs;    (">>=" / ">>")
+
+	with no bound on rhs at all (arith.c:216-217), and the '/' and
+	'%' cases immediately above it show the author knew to guard the
+	other operand-dependent UB in the same switch. A left shift that
+	overflows the sign bit (1 << 63 on a 64-bit long, 1 << 31 on the
+	32-bit long this library targets) is undefined for the same
+	reason and is equally unguarded.
+
+	Found by fuzz/fuzz_wordexp.c, which drives __wordexp_arith()
+	directly; the first sixty-second run reported it. Reduced from
+	the fuzzer's "J\237\013<<+~+~" to the five cases below, each
+	verified one-per-process against the instrumented build:
+
+	  $((1<<-1))   arith.c:216 shift exponent -1 is negative
+	  $((1>>-1))   arith.c:217 shift exponent -1 is negative
+	  $((1<<64))   arith.c:216 shift exponent 64 is too large
+	  $((1>>64))   arith.c:217 shift exponent 64 is too large
+	  $((1<<63))   arith.c:216 left shift of 1 by 63 places cannot
+	               be represented in type 'long'
+
+	Under UndefinedBehaviorSanitizer (tools/asan-build.sh builds with
+	-fsanitize=undefined -fno-sanitize-recover) every one of them
+	terminates the process, which is why the whole test is fenced
+	rather than only its assertions: an unfenced case here would take
+	this file's entire binary down.
+
+	The expected results below are the ones 1.1.2 implies by way of
+	6.5: there is no correct value for an undefined operation, so the
+	only defensible behaviour is to refuse the expression, and
+	WRDE_SYNTAX is the code arith.c already uses for the sibling
+	guard (division and modulus by zero, tested unfenced above).
+	bash, dash and ksh all reject a negative shift count; glibc's
+	wordexp does not implement $(()) at all, so it is not an oracle
+	here.
+
+	The last case is target-dependent and stated for the target this
+	library is built for, not for the native sanitizer build: `long`
+	is 32 bits under LLP64 (arch/x86_64/bits/limits.h, LONG_MAX
+	0x7fffffffL), so 1<<31 is the overflowing shift there and 1<<63
+	is merely an over-wide one. Both are undefined; the test asks
+	only that the shift count be rejected when it is not less than
+	the width, which is the same requirement either way. */
+static void test_wordexp_arith_shift_bounds(void)
+{
+	wordexp_t we;
+
+	/* a negative shift count is undefined in 6.5.7p3, both directions */
+	CHECK(wordexp("$((1<<-1))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((1>>-1))", &we, 0) == WRDE_SYNTAX);
+
+	/* a shift count at or past the width of the promoted left operand
+	 * is undefined for the same clause */
+	CHECK(wordexp("$((1<<64))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((1>>64))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((1<<32))", &we, 0) == WRDE_SYNTAX);
+
+	/* the compound-assignment spellings reach the same switch arms */
+	unsetenv("WORDEXP_ARITH_SH");
+	CHECK(wordexp("$((WORDEXP_ARITH_SH=1, WORDEXP_ARITH_SH<<=-1))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH=1, WORDEXP_ARITH_SH>>=64))", &we, 0) == WRDE_SYNTAX);
+
+	/* a well-formed shift still works, so the guard must bound the
+	 * count rather than reject the operator */
+	CHECK(wordexp("$((1<<4)) $((256>>4))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "16") == 0 && strcmp(we.we_wordv[1], "16") == 0);
+	wordfree(&we);
+}
+#endif
+
+
 /* Was N/A, and is not any more -- the one entry in this file that
  * changed category rather than just getting implemented. The fence used
  * to read, correctly at the time, that command substitution needs "a

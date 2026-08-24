@@ -3366,6 +3366,48 @@ PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HAND
 
 int __real_stat(const char *path, struct stat *st);
 
+/* ASan's own query: the address of the first byte in [beg, beg+size)
+ * that is poisoned, or NULL if the whole region is addressable. */
+void *__asan_region_is_poisoned(void *beg, unsigned long size);
+
+/* -Wl,--wrap=stat is a *link-wide* rename: it redirects every undefined
+ * reference named `stat` in the link, not just libFuzzer's.  ntlibc's own
+ * objects are in the same link and four of them call stat() internally --
+ * src/glob/glob.c (four call sites), src/ftw/ftw.c, src/stdlib/mktemp.c --
+ * each passing an ntlibc `struct stat`, which is 120 bytes against the
+ * host's 144.  Writing the host layout through one of those overruns it
+ * by 24 bytes and, worse, scrambles the fields the caller then reads
+ * (st_mode and st_nlink are transposed between the two layouts), so glob
+ * with GLOB_MARK stops marking directories.
+ *
+ * Measured: fuzz_glob's first thirty-second run reported
+ * "stack-buffer-overflow ... WRITE of size 144" from src/glob/glob.c.
+ * Before fuzz_glob and fuzz_ftw existed no harness reached an internal
+ * stat() call, so the seam had never been exercised from that side.
+ *
+ * There is no symbol-level way to tell the two callers apart -- that is
+ * what makes --wrap link-wide.  The buffer itself can be asked, though:
+ * every ntlibc caller's `struct stat` is a 120-byte stack or heap object,
+ * and under ASan (which every fuzz build uses, and which is the only
+ * configuration this file is ever compiled into) the 24 bytes past its
+ * end are a redzone.  libFuzzer's buffer is a real 144-byte host struct
+ * stat and is addressable to the end.  So: probe the far end, and answer
+ * in ntlibc's own layout when the caller plainly cannot hold the host's.
+ *
+ * The probe is a heuristic in principle -- an ntlibc-layout buffer that
+ * happened to be embedded 24 bytes before other live data would be
+ * misread as a host one -- but not in practice: all six call sites pass
+ * the address of a bare `struct stat` local.  If a caller ever appears
+ * for which this is wrong, the durable fix is to stop using --wrap and
+ * rename the symbol in the library objects instead (objcopy
+ * --redefine-sym stat=__real_stat over $(LIBDIR), with ntstubs.c
+ * providing the host-layout `stat`), which is a build-rule change. */
+static int caller_wants_ntlibc_layout(void *hostbuf)
+{
+	return __asan_region_is_poisoned(hostbuf,
+	                                 (unsigned long)__ntfuzz_host_stat_size()) != 0;
+}
+
 int __wrap_stat(const char *path, void *hostbuf)
 {
 	struct stat st;
@@ -3375,6 +3417,8 @@ int __wrap_stat(const char *path, void *hostbuf)
 	/* The caller's buffer is a *host* struct stat, which is larger than
 	 * ntlibc's; never write through it directly. */
 	if (!hostbuf) return __real_stat(path, 0);
+	if (caller_wants_ntlibc_layout(hostbuf))
+		return __real_stat(path, (struct stat *)hostbuf);
 	r = __real_stat(path, &st);
 	if (r != 0) return r;
 	s.dev = st.st_dev;   s.ino = st.st_ino;   s.rdev = st.st_rdev;
