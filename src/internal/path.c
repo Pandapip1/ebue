@@ -65,6 +65,21 @@ static int reject_if_not_dir(struct __ntpath *out)
 	return 0;
 }
 
+/* Where __nt_prefix_not_dir() may start truncating an NT path.  A
+ * drive path ("\??\C:\...") may lose everything below "\??\C:\"; a name
+ * that is not of that shape -- "\??\NUL", a UNC name ("\??\UNC\server\
+ * share\..."), whose leading components are not files at all -- has no
+ * prefix this can say anything about, and is reported as having none. */
+static size_t nt_prefix_root(const UNICODE_STRING *nt)
+{
+	const WCHAR *b = nt->Buffer;
+	size_t n = nt->Length / sizeof(WCHAR);
+
+	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n;
+	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n;
+	return 7;
+}
+
 /* open.html (and stat, access, unlink, mkdir, utime, ... -- the clause is
  * boilerplate across the file-system surface) ERRORS [ENOTDIR]: "A
  * component of the path prefix names an existing file that is neither a
@@ -89,10 +104,21 @@ static int reject_if_not_dir(struct __ntpath *out)
  * prefix to speak of -- is left to the real operation, exactly as
  * reject_if_not_dir() leaves it.
  *
- * root is the index of the first character that may be truncated at: for
- * an NT path "\??\C:\a\b" everything up to and including the drive's
- * backslash is fixed, and for a name relative to a RootDirectory handle
- * nothing is.
+ * The walk is exposed rather than kept private to __ntpath() because
+ * chdir() needs the same verdict but does not come through this file's
+ * path builder: it hand-builds a UNICODE_STRING for
+ * RtlSetCurrentDirectory_U(), so it reaches the walk with an NT path it
+ * built itself.  Hence the arguments are the NT path and the
+ * RootDirectory handle it is relative to (0 for an absolute one) rather
+ * than a struct __ntpath.
+ *
+ * Where truncation may start follows from that handle: an NT path with
+ * no root handle ("\??\C:\a\b") keeps everything up to and including
+ * the drive's backslash, while every component of a name relative to a
+ * RootDirectory handle is a prefix component and may be cut.
+ *
+ * Returns 1 when a component of the path prefix positively exists and is
+ * not a directory, 0 otherwise; errno is not touched.
  *
  * A caveat for anyone testing this under Wine rather than on NT: Wine's
  * NtQueryAttributesFile (dlls/ntdll/unix/file.c) passes the Unix name
@@ -106,43 +132,36 @@ static int reject_if_not_dir(struct __ntpath *out)
  * ObOpenObjectByName is handed the whole OBJECT_ATTRIBUTES, root handle
  * included -- so the dirfd-relative half of both checks is a
  * real-Windows question, not a Wine one. */
-static int reject_if_prefix_not_dir(struct __ntpath *out, size_t root)
+int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 {
 	FILE_BASIC_INFORMATION bi;
-	USHORT full = out->nt.Length;
-	size_t i = full / sizeof(WCHAR);
+	UNICODE_STRING cut = *nt;
+	OBJECT_ATTRIBUTES oa;
+	size_t floor = root ? 0 : nt_prefix_root(nt);
+	size_t i = nt->Length / sizeof(WCHAR);
 
-	while (i > root) {
+	InitializeObjectAttributes(&oa, &cut, OBJ_CASE_INSENSITIVE, root, 0);
+	while (i > floor) {
 		NTSTATUS st;
-		if (out->nt.Buffer[--i] != '\\') continue;
-		out->nt.Length = (USHORT)(i * sizeof(WCHAR));
-		st = NtQueryAttributesFile(&out->oa, &bi);
-		out->nt.Length = full;
-		if (NT_SUCCESS(st)) {
-			if (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) return 0;
-			__ntpath_free(out);
-			errno = ENOTDIR;
-			return -1;
-		}
+		if (nt->Buffer[--i] != '\\') continue;
+		cut.Length = (USHORT)(i * sizeof(WCHAR));
+		st = NtQueryAttributesFile(&oa, &bi);
+		if (NT_SUCCESS(st))
+			return !(bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY);
 		if (st != STATUS_OBJECT_NAME_NOT_FOUND && st != STATUS_OBJECT_PATH_NOT_FOUND)
 			return 0;
 	}
 	return 0;
 }
 
-/* Where reject_if_prefix_not_dir() may start truncating an NT path.  A
- * drive path ("\??\C:\...") may lose everything below "\??\C:\"; a name
- * that is not of that shape -- "\??\NUL", a UNC name ("\??\UNC\server\
- * share\..."), whose leading components are not files at all -- has no
- * prefix this can say anything about, and is reported as having none. */
-static size_t nt_prefix_root(const UNICODE_STRING *nt)
+/* The __ntpath-side wrapper: the same verdict, but freeing the path and
+ * reporting it the way the rest of this file reports a failure. */
+static int reject_if_prefix_not_dir(struct __ntpath *out, HANDLE root)
 {
-	const WCHAR *b = nt->Buffer;
-	size_t n = nt->Length / sizeof(WCHAR);
-
-	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n;
-	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n;
-	return 7;
+	if (!__nt_prefix_not_dir(&out->nt, root)) return 0;
+	__ntpath_free(out);
+	errno = ENOTDIR;
+	return -1;
 }
 
 int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
@@ -182,7 +201,7 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 	out->dos = dos;
 	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	if (trailing && reject_if_not_dir(out)) return -1;
-	if (reject_if_prefix_not_dir(out, nt_prefix_root(&out->nt))) return -1;
+	if (reject_if_prefix_not_dir(out, 0)) return -1;
 	return 0;
 }
 
@@ -229,7 +248,7 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		if (trailing && reject_if_not_dir(out)) return -1;
 		/* Relative to RootDirectory: every component of this name is a
 		 * path prefix component, so the walk may truncate anywhere. */
-		if (reject_if_prefix_not_dir(out, 0)) return -1;
+		if (reject_if_prefix_not_dir(out, f->h)) return -1;
 		return 0;
 	}
 }

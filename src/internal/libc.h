@@ -76,6 +76,15 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes);
  * refers to (AT_FDCWD for the current directory). */
 int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attributes);
 void __ntpath_free(struct __ntpath *);
+/* POSIX's [ENOTDIR] for a path prefix component that exists and is not a
+ * directory, which NT reports identically to a prefix that is not there
+ * (STATUS_OBJECT_PATH_NOT_FOUND for both).  Walks the prefix of an
+ * already-built NT path with handle-less queries; root is the
+ * RootDirectory the path is relative to, or 0.  Returns 1 for the
+ * ENOTDIR case, 0 otherwise, and leaves errno alone.  __ntpath() and
+ * __ntpath_at() apply it themselves; chdir(), which builds its own NT
+ * path, calls it directly. */
+int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root);
 /* The DOS-form absolute path of a handle, UTF-8, malloc'd. */
 char *__handle_path(HANDLE);
 
