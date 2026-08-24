@@ -1067,6 +1067,526 @@ static void test_fmaxmin_variants(void)
 	CHECK(fmaxl(LDBL_MIN, 0.0L) == LDBL_MIN && fminl(LDBL_MAX, HUGE_VALL) == LDBL_MAX);
 }
 
+/* ---------------------------------------------------------------------
+ * The math.h f/l tail: the 70 names test/POSIX-GAP-ACCOUNTING.md lists
+ * as implemented with no assertion anywhere in test/*.c.  Item 3 of that
+ * file's successor queue, and the last of the original 112.
+ *
+ * Every one of these shares a manual page with the double form audited
+ * above -- POSIX gives acos(), acosf() and acosl() one page and one
+ * RETURN VALUE/ERRORS table, the f/l entries differing only in argument
+ * and return type -- so each block below cites the same
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html
+ * page as its double counterpart and asserts the same clauses at the
+ * other two types.  What is genuinely new here is not the clause but the
+ * type: a special-value table can be right for `double` and wrong for
+ * `float` (a wrong-width constant, a promotion that quietly routes the
+ * f-form through the double body and back, a HUGE_VALF vs HUGE_VAL mixup)
+ * and nothing in this tree had ever looked.
+ *
+ * `long double` is the same width as `double` on this NT target (see the
+ * file banner and src/math/x87.h), so the l-forms are expected to agree
+ * exactly with the doubles here; on the native `make asan` build they
+ * need not, which is why nothing below compares an l-result against a
+ * double-typed constant that would lose bits.
+ *
+ * Pure computation with no platform component: Wine is a fully sound
+ * oracle for this entire section.
+ * ------------------------------------------------------------------ */
+
+/* asin.html/acos.html at float and long double. */
+static void test_asin_acos_variants(void)
+{
+	CHECK(isnan(asinf(NAN)) && isnan(acosf(NAN)));
+	CHECK(isnan(asinl(NAN)) && isnan(acosl(NAN)));
+	CHECK(poszerof(asinf(0.0f)) && negzerof(asinf(-0.0f)));
+	CHECK(poszerol(asinl(0.0L)) && negzerol(asinl(-0.0L)));
+	CHECK(poszerof(acosf(1.0f)) && poszerol(acosl(1.0L)));
+	/* finite |x| > 1: domain error -> NaN */
+	CHECK(isnan(asinf(1.5f)) && isnan(asinf(-1.5f)));
+	CHECK(isnan(asinl(1.5L)) && isnan(asinl(-1.5L)));
+	CHECK(isnan(acosf(1.5f)) && isnan(acosf(-1.5f)));
+	CHECK(isnan(acosl(1.5L)) && isnan(acosl(-1.5L)));
+	CHECK(isnan(asinf(HUGE_VALF)) && isnan(acosf(-HUGE_VALF)));
+	CHECK(isnan(asinl(HUGE_VALL)) && isnan(acosl(-HUGE_VALL)));
+	/* asin(±1) == ±pi/2; see the M_PI-precision note in
+	 * test_float_ld_variants() for why the l-form uses a tolerance. */
+	CHECK(asinf(1.0f) == (float)(M_PI / 2) && asinf(-1.0f) == (float)(-M_PI / 2));
+	CHECK(fabsl(asinl(1.0L) - (long double)M_PI / 2) < 1e-9L);
+}
+
+/* sinh.html/cosh.html/tanh.html at float and long double. */
+static void test_hyperbolic_variants(void)
+{
+	CHECK(isnan(sinhf(NAN)) && isnan(coshf(NAN)) && isnan(tanhf(NAN)));
+	CHECK(isnan(sinhl(NAN)) && isnan(coshl(NAN)) && isnan(tanhl(NAN)));
+	CHECK(poszerof(sinhf(0.0f)) && negzerof(sinhf(-0.0f)));
+	CHECK(poszerol(sinhl(0.0L)) && negzerol(sinhl(-0.0L)));
+	CHECK(coshf(0.0f) == 1.0f && coshf(-0.0f) == 1.0f);
+	CHECK(coshl(0.0L) == 1.0L && coshl(-0.0L) == 1.0L);
+	CHECK(poszerof(tanhf(0.0f)) && negzerof(tanhf(-0.0f)));
+	CHECK(poszerol(tanhl(0.0L)) && negzerol(tanhl(-0.0L)));
+	CHECK(sinhf(HUGE_VALF) == HUGE_VALF && sinhf(-HUGE_VALF) == -HUGE_VALF);
+	CHECK(sinhl(HUGE_VALL) == HUGE_VALL && sinhl(-HUGE_VALL) == -HUGE_VALL);
+	CHECK(coshf(HUGE_VALF) == HUGE_VALF && coshf(-HUGE_VALF) == HUGE_VALF);
+	CHECK(coshl(HUGE_VALL) == HUGE_VALL && coshl(-HUGE_VALL) == HUGE_VALL);
+	CHECK(tanhf(HUGE_VALF) == 1.0f && tanhf(-HUGE_VALF) == -1.0f);
+	CHECK(tanhl(HUGE_VALL) == 1.0L && tanhl(-HUGE_VALL) == -1.0L);
+	/* overflow -> range error, ±HUGE_VAL{F,L}.  The float threshold is
+	 * far lower than the double one, which is exactly the sort of thing
+	 * a shared-body f-wrapper can get wrong: 200 overflows a float but
+	 * is nowhere near overflowing a double. */
+	CHECK(sinhf(200.0f) == HUGE_VALF && coshf(200.0f) == HUGE_VALF);
+	CHECK(sinhl(100000.0L) == HUGE_VALL && coshl(100000.0L) == HUGE_VALL);
+}
+
+/* asinh.html/acosh.html/atanh.html at float and long double. */
+static void test_inverse_hyperbolic_variants(void)
+{
+	CHECK(isnan(asinhf(NAN)) && isnan(acoshf(NAN)) && isnan(atanhf(NAN)));
+	CHECK(isnan(asinhl(NAN)) && isnan(acoshl(NAN)) && isnan(atanhl(NAN)));
+	CHECK(poszerof(asinhf(0.0f)) && negzerof(asinhf(-0.0f)));
+	CHECK(poszerol(asinhl(0.0L)) && negzerol(asinhl(-0.0L)));
+	CHECK(asinhf(HUGE_VALF) == HUGE_VALF && asinhf(-HUGE_VALF) == -HUGE_VALF);
+	CHECK(asinhl(HUGE_VALL) == HUGE_VALL && asinhl(-HUGE_VALL) == -HUGE_VALL);
+	CHECK(poszerof(acoshf(1.0f)) && poszerol(acoshl(1.0L)));
+	CHECK(acoshf(HUGE_VALF) == HUGE_VALF && acoshl(HUGE_VALL) == HUGE_VALL);
+	CHECK(isnan(acoshf(0.5f)) && isnan(acoshf(-HUGE_VALF)));
+	CHECK(isnan(acoshl(0.5L)) && isnan(acoshl(-HUGE_VALL)));
+	CHECK(poszerof(atanhf(0.0f)) && negzerof(atanhf(-0.0f)));
+	CHECK(poszerol(atanhl(0.0L)) && negzerol(atanhl(-0.0L)));
+	/* x == ±1: pole error -> ±HUGE_VAL{F,L} */
+	CHECK(atanhf(1.0f) == HUGE_VALF && atanhf(-1.0f) == -HUGE_VALF);
+	CHECK(atanhl(1.0L) == HUGE_VALL && atanhl(-1.0L) == -HUGE_VALL);
+	CHECK(isnan(atanhf(1.5f)) && isnan(atanhf(-1.5f)));
+	CHECK(isnan(atanhl(1.5L)) && isnan(atanhl(-1.5L)));
+	CHECK(isnan(atanhf(HUGE_VALF)) && isnan(atanhl(-HUGE_VALL)));
+}
+
+/* cbrt.html at float and long double: "No errors are defined";
+ * NaN->NaN, ±0/±Inf->x. */
+static void test_cbrt_variants(void)
+{
+	CHECK(isnan(cbrtf(NAN)) && isnan(cbrtl(NAN)));
+	CHECK(poszerof(cbrtf(0.0f)) && negzerof(cbrtf(-0.0f)));
+	CHECK(poszerol(cbrtl(0.0L)) && negzerol(cbrtl(-0.0L)));
+	CHECK(cbrtf(HUGE_VALF) == HUGE_VALF && cbrtf(-HUGE_VALF) == -HUGE_VALF);
+	CHECK(cbrtl(HUGE_VALL) == HUGE_VALL && cbrtl(-HUGE_VALL) == -HUGE_VALL);
+	CHECK(cbrtf(27.0f) == 3.0f && cbrtf(-27.0f) == -3.0f);
+	CHECK(cbrtl(27.0L) == 3.0L && cbrtl(-27.0L) == -3.0L);
+}
+
+/* expm1.html/log1p.html at float and long double. */
+static void test_expm1_log1p_variants(void)
+{
+	CHECK(isnan(expm1f(NAN)) && isnan(log1pf(NAN)));
+	CHECK(isnan(expm1l(NAN)) && isnan(log1pl(NAN)));
+	CHECK(poszerof(expm1f(0.0f)) && negzerof(expm1f(-0.0f)));
+	CHECK(poszerol(expm1l(0.0L)) && negzerol(expm1l(-0.0L)));
+	CHECK(expm1f(-HUGE_VALF) == -1.0f && expm1l(-HUGE_VALL) == -1.0L);
+	CHECK(expm1f(HUGE_VALF) == HUGE_VALF && expm1l(HUGE_VALL) == HUGE_VALL);
+	CHECK(expm1f(200.0f) == HUGE_VALF);		/* overflow at float width */
+	CHECK(expm1l(100000.0L) == HUGE_VALL);
+	CHECK(poszerof(log1pf(0.0f)) && negzerof(log1pf(-0.0f)));
+	CHECK(poszerol(log1pl(0.0L)) && negzerol(log1pl(-0.0L)));
+	CHECK(log1pf(HUGE_VALF) == HUGE_VALF && log1pl(HUGE_VALL) == HUGE_VALL);
+	CHECK(log1pf(-1.0f) == -HUGE_VALF && log1pl(-1.0L) == -HUGE_VALL);   /* pole error */
+	CHECK(isnan(log1pf(-2.0f)) && isnan(log1pf(-HUGE_VALF)));
+	CHECK(isnan(log1pl(-2.0L)) && isnan(log1pl(-HUGE_VALL)));
+}
+
+/* erf.html/erfc.html at float and long double. */
+static void test_erf_erfc_variants(void)
+{
+	CHECK(isnan(erff(NAN)) && isnan(erfcf(NAN)));
+	CHECK(isnan(erfl(NAN)) && isnan(erfcl(NAN)));
+	CHECK(poszerof(erff(0.0f)) && negzerof(erff(-0.0f)));
+	CHECK(poszerol(erfl(0.0L)) && negzerol(erfl(-0.0L)));
+	CHECK(erff(HUGE_VALF) == 1.0f && erff(-HUGE_VALF) == -1.0f);
+	CHECK(erfl(HUGE_VALL) == 1.0L && erfl(-HUGE_VALL) == -1.0L);
+	CHECK(poszerof(erfcf(HUGE_VALF)) && poszerol(erfcl(HUGE_VALL)));
+	CHECK(erfcf(-HUGE_VALF) == 2.0f && erfcl(-HUGE_VALL) == 2.0L);
+	/* Informational, never a CHECK: erfc(0) is exactly 1 mathematically,
+	 * but POSIX mandates no accuracy for it (this file's banner), and
+	 * src/math/erf.c's approximation returns 0.9999999990 at double and
+	 * long-double width while the float form rounds to exactly 1.0f.
+	 * Asserting == 1.0 here would be asserting an accuracy coincidence,
+	 * not a clause -- and would have "failed" for the wrong reason. */
+	printf("info: erfcf(0)=%.9g erfcl(0)=%.20Lg (POSIX mandates no accuracy)\n",
+	       (double)erfcf(0.0f), erfcl(0.0L));
+}
+
+/* lgamma.html/tgamma.html at float and long double. */
+static void test_gamma_variants(void)
+{
+	CHECK(isnan(lgammaf(NAN)) && isnan(tgammaf(NAN)));
+	CHECK(isnan(lgammal(NAN)) && isnan(tgammal(NAN)));
+	CHECK(lgammaf(0.0f) == HUGE_VALF && lgammaf(-1.0f) == HUGE_VALF);   /* pole error */
+	CHECK(lgammal(0.0L) == HUGE_VALL && lgammal(-1.0L) == HUGE_VALL);
+	CHECK(poszerof(lgammaf(1.0f)) && poszerof(lgammaf(2.0f)));
+	CHECK(poszerol(lgammal(1.0L)) && poszerol(lgammal(2.0L)));
+	CHECK(lgammaf(HUGE_VALF) == HUGE_VALF && lgammal(HUGE_VALL) == HUGE_VALL);
+	CHECK(tgammaf(HUGE_VALF) == HUGE_VALF && tgammal(HUGE_VALL) == HUGE_VALL);
+	CHECK(isnan(tgammaf(-HUGE_VALF)) && isnan(tgammal(-HUGE_VALL)));    /* domain error */
+	CHECK(isnan(tgammaf(-2.0f)) && isnan(tgammal(-2.0L)));              /* negative integer */
+	/* ±0 -> pole error, ±HUGE_VAL with the sign of x */
+	CHECK(tgammaf(0.0f) == HUGE_VALF && tgammaf(-0.0f) == -HUGE_VALF);
+	CHECK(tgammal(0.0L) == HUGE_VALL && tgammal(-0.0L) == -HUGE_VALL);
+	/* tgamma(n) == (n-1)! for a small integer n.  Checked with a
+	 * tolerance, not ==, for the same reason as erfc above: POSIX
+	 * mandates no accuracy, and src/math/gamma.c's approximation lands a
+	 * few ulp short of 24 at double/long-double width.  The tolerance is
+	 * far tighter than any real defect could hide under, and its point
+	 * is to catch an f/l form that dropped a conversion or routed
+	 * through the wrong body -- not to pin the last bit. */
+	CHECK(fabsf(tgammaf(5.0f) - 24.0f) < 1e-4f);
+	CHECK(fabsl(tgammal(5.0L) - 24.0L) < 1e-6L);
+}
+
+/* fmod.html at long double (fmodf is already reached by test_fmod()'s
+ * float half above).  RETURN VALUE/ERRORS: x REM y with a
+ * round-toward-zero quotient; ±0 with y!=0 -> ±0; y==±0 with x non-NaN
+ * -> domain error, NaN; x==±Inf -> domain error, NaN; y==±Inf with x
+ * finite -> x. */
+static void test_fmod_variants(void)
+{
+	CHECK(isnan(fmodl(NAN, 2.0L)) && isnan(fmodl(2.0L, NAN)));
+	CHECK(poszerol(fmodl(0.0L, 2.0L)) && negzerol(fmodl(-0.0L, 2.0L)));
+	CHECK(isnan(fmodl(2.0L, 0.0L)) && isnan(fmodl(2.0L, -0.0L)));    /* y==±0 */
+	CHECK(isnan(fmodl(HUGE_VALL, 2.0L)) && isnan(fmodl(-HUGE_VALL, 2.0L)));
+	CHECK(fmodl(2.5L, HUGE_VALL) == 2.5L);                            /* y==±Inf, x finite */
+	/* round-toward-zero quotient, unlike remainderl()'s round-to-nearest */
+	CHECK(fmodl(5.5L, 2.0L) == 1.5L);
+	CHECK(fmodl(-5.5L, 2.0L) == -1.5L);				/* sign of x */
+}
+
+/* frexp.html/ldexp.html/modf.html at float and long double.
+ * frexp.html: the result is in [0.5, 1) and value == result * 2^*exp;
+ * "If value is 0, 0 shall be returned and 0 stored in *exp"; ±Inf/NaN
+ * are returned unchanged with *exp unspecified.  ldexp.html: x * 2^exp;
+ * NaN->NaN, ±0/±Inf->x, exp==0->x, overflow -> range error ±HUGE_VAL.
+ * modf.html: the signed fractional part, with the integral part stored
+ * through iptr; ±0 -> ±0 with ±0 stored; ±Inf -> ±0 with ±Inf stored. */
+static void test_frexp_ldexp_modf_variants(void)
+{
+	int e;
+	float ff, fi;
+	long double lf, li;
+
+	e = 12345;
+	ff = frexpf(8.0f, &e);
+	CHECK(ff == 0.5f && e == 4);
+	CHECK(ff >= 0.5f && ff < 1.0f);
+	e = 12345;
+	lf = frexpl(8.0L, &e);
+	CHECK(lf == 0.5L && e == 4);
+	/* "If value is 0, 0 shall be returned and 0 stored in *exp" -- and
+	 * the sign of the zero is preserved. */
+	e = 12345;
+	CHECK(poszerof(frexpf(0.0f, &e)) && e == 0);
+	e = 12345;
+	CHECK(negzerof(frexpf(-0.0f, &e)) && e == 0);
+	e = 12345;
+	CHECK(poszerol(frexpl(0.0L, &e)) && e == 0);
+	e = 12345;
+	CHECK(negzerol(frexpl(-0.0L, &e)) && e == 0);
+	/* ±Inf and NaN come back unchanged (*exp unspecified, so unchecked) */
+	CHECK(frexpf(HUGE_VALF, &e) == HUGE_VALF);
+	CHECK(isnan(frexpf(NAN, &e)));
+	CHECK(frexpl(-HUGE_VALL, &e) == -HUGE_VALL);
+	CHECK(isnan(frexpl(NAN, &e)));
+	/* round trip: value == frexp result * 2^exp */
+	ff = frexpf(-3.75f, &e);
+	CHECK(ldexpf(ff, e) == -3.75f);
+
+	CHECK(isnan(ldexpf(NAN, 3)));
+	CHECK(poszerof(ldexpf(0.0f, 3)) && negzerof(ldexpf(-0.0f, 3)));
+	CHECK(ldexpf(HUGE_VALF, 3) == HUGE_VALF && ldexpf(-HUGE_VALF, 3) == -HUGE_VALF);
+	CHECK(ldexpf(3.75f, 0) == 3.75f);
+	CHECK(ldexpf(1.0f, 2) == 4.0f && ldexpf(1.0f, -2) == 0.25f);
+	/* overflow at *float* width, not double width */
+	CHECK(ldexpf(1.0f, 200) == HUGE_VALF && ldexpf(-1.0f, 200) == -HUGE_VALF);
+
+	fi = 12345.0f;
+	ff = modff(3.75f, &fi);
+	CHECK(ff == 0.75f && fi == 3.0f);
+	ff = modff(-3.75f, &fi);
+	CHECK(ff == -0.75f && fi == -3.0f);		/* fraction carries x's sign */
+	li = 12345.0L;
+	lf = modfl(-3.75L, &li);
+	CHECK(lf == -0.75L && li == -3.0L);
+	/* ±0 -> ±0, with ±0 stored */
+	CHECK(poszerof(modff(0.0f, &fi)) && poszerof(fi));
+	CHECK(negzerof(modff(-0.0f, &fi)) && negzerof(fi));
+	CHECK(poszerol(modfl(0.0L, &li)) && poszerol(li));
+	CHECK(negzerol(modfl(-0.0L, &li)) && negzerol(li));
+	/* ±Inf -> ±0, with ±Inf stored */
+	CHECK(poszerof(modff(HUGE_VALF, &fi)) && fi == HUGE_VALF);
+	CHECK(negzerof(modff(-HUGE_VALF, &fi)) && fi == -HUGE_VALF);
+	CHECK(poszerol(modfl(HUGE_VALL, &li)) && li == HUGE_VALL);
+	/* NaN -> NaN, with NaN stored */
+	CHECK(isnan(modff(NAN, &fi)) && isnan(fi));
+	CHECK(isnan(modfl(NAN, &li)) && isnan(li));
+}
+
+/* ceil.html/floor.html/round.html/trunc.html at the widths whose
+ * variants nothing had called: ceilf, floorl, roundf, truncf, truncl.
+ * All four pages define no errors and specify the rounding direction;
+ * round() breaks halfway cases away from zero, unlike rint(). */
+static void test_rounding_variants(void)
+{
+	CHECK(isnan(ceilf(NAN)) && isnan(floorl(NAN)));
+	CHECK(isnan(roundf(NAN)) && isnan(truncf(NAN)) && isnan(truncl(NAN)));
+	CHECK(poszerof(ceilf(0.0f)) && negzerof(ceilf(-0.0f)));
+	CHECK(poszerol(floorl(0.0L)) && negzerol(floorl(-0.0L)));
+	CHECK(poszerof(roundf(0.0f)) && negzerof(roundf(-0.0f)));
+	CHECK(poszerof(truncf(0.0f)) && negzerof(truncf(-0.0f)));
+	CHECK(poszerol(truncl(0.0L)) && negzerol(truncl(-0.0L)));
+	CHECK(ceilf(HUGE_VALF) == HUGE_VALF && ceilf(-HUGE_VALF) == -HUGE_VALF);
+	CHECK(floorl(HUGE_VALL) == HUGE_VALL && floorl(-HUGE_VALL) == -HUGE_VALL);
+	CHECK(roundf(HUGE_VALF) == HUGE_VALF && truncl(-HUGE_VALL) == -HUGE_VALL);
+
+	CHECK(ceilf(1.1f) == 2.0f && ceilf(-1.1f) == -1.0f);
+	CHECK(floorl(1.9L) == 1.0L && floorl(-1.1L) == -2.0L);
+	CHECK(truncf(1.9f) == 1.0f && truncf(-1.9f) == -1.0f);
+	CHECK(truncl(1.9L) == 1.0L && truncl(-1.9L) == -1.0L);
+	/* "rounding halfway cases away from zero" -- the clause that makes
+	 * round() different from rint()/nearbyint(), which round to even */
+	CHECK(roundf(0.5f) == 1.0f && roundf(-0.5f) == -1.0f);
+	CHECK(roundf(1.5f) == 2.0f && roundf(2.5f) == 3.0f);
+	/* a negative result that rounds to zero must keep the sign */
+	CHECK(negzerof(roundf(-0.4f)) && negzerof(truncf(-0.4f)));
+	CHECK(negzerol(truncl(-0.4L)) && negzerol(floorl(-0.0L)));
+}
+
+/* hypot.html at float and long double.  The clause worth the trip is the
+ * NaN/Inf ordering: "If x or y is ±Inf, +Inf shall be returned even if
+ * one of x or y is NaN." */
+static void test_hypot_variants(void)
+{
+	CHECK(hypotf(3.0f, 4.0f) == 5.0f);
+	CHECK(hypotl(3.0L, 4.0L) == 5.0L);
+	CHECK(hypotf(HUGE_VALF, NAN) == HUGE_VALF && hypotf(NAN, -HUGE_VALF) == HUGE_VALF);
+	CHECK(hypotl(HUGE_VALL, NAN) == HUGE_VALL && hypotl(NAN, -HUGE_VALL) == HUGE_VALL);
+	CHECK(isnan(hypotf(NAN, 1.0f)) && isnan(hypotf(1.0f, NAN)));
+	CHECK(isnan(hypotl(NAN, 1.0L)) && isnan(hypotl(1.0L, NAN)));
+	CHECK(hypotf(0.0f, -3.0f) == 3.0f && hypotl(-0.0L, 3.0L) == 3.0L);
+	/* overflow -> range error, HUGE_VAL{F,L}, at each type's own width */
+	CHECK(hypotf(FLT_MAX, FLT_MAX) == HUGE_VALF);
+}
+
+/* ilogb.html/logb.html at float and long double.  ilogb's three
+ * out-of-band results (FP_ILOGB0, FP_ILOGBNAN, INT_MAX) are the same
+ * int-typed constants at every width, which is exactly what makes a
+ * per-width check worth having. */
+static void test_ilogb_logb_variants(void)
+{
+	CHECK(isnan(logbf(NAN)) && isnan(logbl(NAN)));
+	CHECK(logbf(0.0f) == -HUGE_VALF && logbf(-0.0f) == -HUGE_VALF);   /* pole error */
+	CHECK(logbl(0.0L) == -HUGE_VALL && logbl(-0.0L) == -HUGE_VALL);
+	CHECK(logbf(HUGE_VALF) == HUGE_VALF && logbf(-HUGE_VALF) == HUGE_VALF);
+	CHECK(logbl(HUGE_VALL) == HUGE_VALL && logbl(-HUGE_VALL) == HUGE_VALL);
+	CHECK(logbf(8.0f) == 3.0f && logbl(8.0L) == 3.0L);
+	CHECK(logbf(0.5f) == -1.0f && logbl(0.5L) == -1.0L);
+
+	CHECK(ilogbf(0.0f) == FP_ILOGB0 && ilogbl(0.0L) == FP_ILOGB0);
+	CHECK(ilogbf(NAN) == FP_ILOGBNAN && ilogbl(NAN) == FP_ILOGBNAN);
+	CHECK(ilogbf(HUGE_VALF) == INT_MAX && ilogbl(HUGE_VALL) == INT_MAX);
+	CHECK(ilogbf(8.0f) == 3 && ilogbl(8.0L) == 3);
+	/* "equivalent to (int)logb(x)" for the in-range cases */
+	CHECK(ilogbf(0.5f) == (int)logbf(0.5f));
+	CHECK(ilogbl(0.5L) == (int)logbl(0.5L));
+}
+
+/* nearbyint.html at float and long double, including the clause that
+ * distinguishes it from rint(): "without raising the inexact
+ * floating-point exception". */
+static void test_nearbyint_variants(void)
+{
+	CHECK(isnan(nearbyintf(NAN)) && isnan(nearbyintl(NAN)));
+	CHECK(poszerof(nearbyintf(0.0f)) && negzerof(nearbyintf(-0.0f)));
+	CHECK(poszerol(nearbyintl(0.0L)) && negzerol(nearbyintl(-0.0L)));
+	CHECK(nearbyintf(HUGE_VALF) == HUGE_VALF && nearbyintf(-HUGE_VALF) == -HUGE_VALF);
+	CHECK(nearbyintl(HUGE_VALL) == HUGE_VALL && nearbyintl(-HUGE_VALL) == -HUGE_VALL);
+	CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
+	CHECK(nearbyintf(2.5f) == 2.0f);		/* default rounding: to even */
+	CHECK(nearbyintl(2.5L) == 2.0L);
+	CHECK(fetestexcept(FE_INEXACT) == 0);
+}
+
+/* nextafter.html/nexttoward.html at float and long double.  nexttoward's
+ * second argument is `long double` at every width, which is the shape
+ * most likely to be got wrong by a mechanical f-wrapper. */
+static void test_nextafter_variants(void)
+{
+	CHECK(nextafterf(1.0f, 1.0f) == 1.0f);
+	CHECK(nextafterl(1.0L, 1.0L) == 1.0L);
+	CHECK(isnan(nextafterf(NAN, 1.0f)) && isnan(nextafterf(1.0f, NAN)));
+	CHECK(isnan(nextafterl(NAN, 1.0L)) && isnan(nextafterl(1.0L, NAN)));
+	CHECK(nextafterf(1.0f, 2.0f) > 1.0f && nextafterf(1.0f, 0.0f) < 1.0f);
+	CHECK(nextafterl(1.0L, 2.0L) > 1.0L && nextafterl(1.0L, 0.0L) < 1.0L);
+	/* one step and back is the identity */
+	CHECK(nextafterf(nextafterf(1.0f, 2.0f), 0.0f) == 1.0f);
+	CHECK(nextafterl(nextafterl(1.0L, 2.0L), 0.0L) == 1.0L);
+	/* overflow -> range error, ±HUGE_VALF at *float* width */
+	CHECK(nextafterf(FLT_MAX, HUGE_VALF) == HUGE_VALF);
+	CHECK(nextafterf(-FLT_MAX, -HUGE_VALF) == -HUGE_VALF);
+	/* underflow: "the correct value (if representable) or 0.0" */
+	CHECK(poszerof(nextafterf(FLT_MIN, 0.0f)) || nextafterf(FLT_MIN, 0.0f) > 0.0f);
+
+	CHECK(nexttowardf(1.0f, 1.0L) == 1.0f);		/* x == y -> y, in x's type */
+	CHECK(isnan(nexttowardf(NAN, 1.0L)) && isnan(nexttowardf(1.0f, NAN)));
+	CHECK(nexttowardf(1.0f, 2.0L) > 1.0f && nexttowardf(1.0f, 0.0L) < 1.0f);
+	CHECK(nexttowardf(FLT_MAX, HUGE_VALL) == HUGE_VALF);
+	CHECK(nexttowardl(1.0L, 1.0L) == 1.0L);
+	CHECK(isnan(nexttowardl(NAN, 1.0L)) && isnan(nexttowardl(1.0L, NAN)));
+	CHECK(nexttowardl(1.0L, 2.0L) > 1.0L && nexttowardl(1.0L, 0.0L) < 1.0L);
+	/* nexttowardf and nextafterf must agree where both are defined */
+	CHECK(nexttowardf(1.0f, 2.0L) == nextafterf(1.0f, 2.0f));
+}
+
+/* remainder.html/remquo.html at float and long double. */
+static void test_remainder_remquo_variants(void)
+{
+	int quo;
+
+	CHECK(isnan(remainderf(NAN, 2.0f)) && isnan(remainderf(2.0f, NAN)));
+	CHECK(isnan(remainderl(NAN, 2.0L)) && isnan(remainderl(2.0L, NAN)));
+	CHECK(isnan(remainderf(HUGE_VALF, 2.0f)) && isnan(remainderl(HUGE_VALL, 2.0L)));
+	CHECK(isnan(remainderf(2.0f, 0.0f)) && isnan(remainderl(2.0L, 0.0L)));
+	/* round-to-nearest quotient (3), unlike fmodf(5.5,2.0)==1.5 */
+	CHECK(remainderf(5.5f, 2.0f) == -0.5f);
+	CHECK(remainderl(5.5L, 2.0L) == -0.5L);
+
+	quo = 12345;
+	CHECK(isnan(remquof(NAN, 2.0f, &quo)) && isnan(remquof(2.0f, NAN, &quo)));
+	CHECK(isnan(remquol(NAN, 2.0L, &quo)) && isnan(remquol(2.0L, NAN, &quo)));
+	CHECK(isnan(remquof(HUGE_VALF, 2.0f, &quo)) && isnan(remquol(HUGE_VALL, 2.0L, &quo)));
+	CHECK(isnan(remquof(2.0f, 0.0f, &quo)) && isnan(remquol(2.0L, 0.0L, &quo)));
+	/* "a value whose sign is the sign of x/y and whose magnitude is
+	 * congruent modulo 2^n to the magnitude of the integral quotient",
+	 * n >= 3 */
+	CHECK(remquof(5.5f, 2.0f, &quo) == -0.5f && (quo & 7) == 3);
+	CHECK(remquol(5.5L, 2.0L, &quo) == -0.5L && (quo & 7) == 3);
+	CHECK(remquof(-5.5f, 2.0f, &quo) == 0.5f && quo < 0);	/* sign of x/y */
+	CHECK(remquof(5.5f, -2.0f, &quo) == -0.5f && quo < 0);
+	/* the remainder agrees with remainderf's, as the page requires */
+	CHECK(remquof(5.5f, 2.0f, &quo) == remainderf(5.5f, 2.0f));
+	CHECK(remquol(5.5L, 2.0L, &quo) == remainderl(5.5L, 2.0L));
+}
+
+/* fdim.html and fma.html at float and long double. */
+static void test_fdim_fma_variants(void)
+{
+	CHECK(fdimf(5.0f, 3.0f) == 2.0f && fdiml(5.0L, 3.0L) == 2.0L);
+	CHECK(poszerof(fdimf(3.0f, 5.0f)) && poszerol(fdiml(3.0L, 5.0L)));
+	CHECK(isnan(fdimf(NAN, 1.0f)) && isnan(fdimf(1.0f, NAN)));
+	CHECK(isnan(fdiml(NAN, 1.0L)) && isnan(fdiml(1.0L, NAN)));
+	/* overflow -> range error, HUGE_VAL{F,L}, at each type's own width */
+	CHECK(fdimf(FLT_MAX, -FLT_MAX) == HUGE_VALF);
+
+	CHECK(fmaf(2.0f, 3.0f, 4.0f) == 10.0f && fmal(2.0L, 3.0L, 4.0L) == 10.0L);
+	CHECK(isnan(fmaf(NAN, 1.0f, 1.0f)) && isnan(fmaf(1.0f, NAN, 1.0f)));
+	CHECK(isnan(fmal(NAN, 1.0L, 1.0L)) && isnan(fmal(1.0L, NAN, 1.0L)));
+	CHECK(isnan(fmaf(0.0f, HUGE_VALF, 1.0f)));			/* 0*Inf, z non-NaN */
+	CHECK(isnan(fmal(0.0L, HUGE_VALL, 1.0L)));
+	CHECK(isnan(fmaf(HUGE_VALF, 1.0f, -HUGE_VALF)));		/* +Inf + -Inf */
+	CHECK(isnan(fmal(HUGE_VALL, 1.0L, -HUGE_VALL)));
+	CHECK(isnan(fmaf(2.0f, 3.0f, NAN)) && isnan(fmal(2.0L, 3.0L, NAN)));
+	CHECK(poszerof(fmaf(0.0f, 1.0f, 0.0f)) && negzerof(fmaf(-0.0f, 1.0f, -0.0f)));
+}
+
+/* scalbn.html/scalbln.html at the widths whose variants nothing had
+ * called: scalbnl, scalblnf, scalblnl.  x * FLT_RADIX^n; NaN->NaN;
+ * ±0/±Inf->x; n==0->x; overflow -> range error ±HUGE_VAL; underflow ->
+ * range error, 0.0 or the correct value. */
+static void test_scalb_variants(void)
+{
+	CHECK(isnan(scalbnl(NAN, 5)) && isnan(scalblnf(NAN, 5L)) && isnan(scalblnl(NAN, 5L)));
+	CHECK(poszerol(scalbnl(0.0L, 5)) && negzerol(scalbnl(-0.0L, 5)));
+	CHECK(poszerof(scalblnf(0.0f, 5L)) && negzerof(scalblnf(-0.0f, 5L)));
+	CHECK(poszerol(scalblnl(0.0L, 5L)) && negzerol(scalblnl(-0.0L, 5L)));
+	CHECK(scalbnl(HUGE_VALL, 5) == HUGE_VALL && scalbnl(-HUGE_VALL, 5) == -HUGE_VALL);
+	CHECK(scalblnf(HUGE_VALF, 5L) == HUGE_VALF && scalblnl(-HUGE_VALL, 5L) == -HUGE_VALL);
+	CHECK(scalbnl(3.75L, 0) == 3.75L && scalblnf(3.75f, 0L) == 3.75f && scalblnl(3.75L, 0L) == 3.75L);
+	CHECK(scalbnl(1.0L, 2) == 4.0L && scalblnf(1.0f, 2L) == 4.0f && scalblnl(1.0L, -2L) == 0.25L);
+	/* overflow at each type's own width: 200 overflows a float and does
+	 * not come close to overflowing a long double */
+	CHECK(scalblnf(1.0f, 200L) == HUGE_VALF && scalblnf(-1.0f, 200L) == -HUGE_VALF);
+	CHECK(scalbnl(1.0L, 20000) == HUGE_VALL && scalblnl(-1.0L, 20000L) == -HUGE_VALL);
+	/* underflow -> 0.0 or the correct value */
+	CHECK(poszerof(scalblnf(1.0f, -200L)) || scalblnf(1.0f, -200L) > 0.0f);
+	CHECK(poszerol(scalbnl(1.0L, -20000)) || scalbnl(1.0L, -20000) > 0.0L);
+}
+
+/* isgreater.html and its five siblings (isgreaterequal.html,
+ * isless.html, islessequal.html, islessgreater.html,
+ * isunordered.html).  These are the six names in the never-asserted
+ * math.h list that are not f/l variants of anything: they are macros,
+ * defined in include/math.h.
+ *
+ * DESCRIPTION: "unlike (x) > (y), isgreater(x, y) shall not raise the
+ * invalid floating-point exception when x and y are unordered" -- the
+ * whole reason the macros exist, and directly testable through <fenv.h>.
+ * RETURN VALUE: "the value of (x) > (y).  If x or y is NaN, 0 shall be
+ * returned."  isunordered() returns "1 if its arguments are unordered, 0
+ * otherwise".  ERRORS: "No errors are defined." */
+static void test_compare_macros(void)
+{
+	CHECK(isgreater(2.0, 1.0) == 1 && isgreater(1.0, 2.0) == 0 && isgreater(1.0, 1.0) == 0);
+	CHECK(isgreaterequal(2.0, 1.0) == 1 && isgreaterequal(1.0, 1.0) == 1 && isgreaterequal(1.0, 2.0) == 0);
+	CHECK(isless(1.0, 2.0) == 1 && isless(2.0, 1.0) == 0 && isless(1.0, 1.0) == 0);
+	CHECK(islessequal(1.0, 2.0) == 1 && islessequal(1.0, 1.0) == 1 && islessequal(2.0, 1.0) == 0);
+	CHECK(islessgreater(1.0, 2.0) == 1 && islessgreater(2.0, 1.0) == 1 && islessgreater(1.0, 1.0) == 0);
+	CHECK(isunordered(1.0, 2.0) == 0);
+
+	/* "If x or y is NaN, 0 shall be returned" -- for all five ordered
+	 * macros, in both argument positions.  islessgreater() is the one
+	 * that must not be confused with !=, which is true for NaN. */
+	CHECK(isgreater(NAN, 1.0) == 0 && isgreater(1.0, NAN) == 0);
+	CHECK(isgreaterequal(NAN, 1.0) == 0 && isgreaterequal(1.0, NAN) == 0);
+	CHECK(isless(NAN, 1.0) == 0 && isless(1.0, NAN) == 0);
+	CHECK(islessequal(NAN, 1.0) == 0 && islessequal(1.0, NAN) == 0);
+	CHECK(islessgreater(NAN, 1.0) == 0 && islessgreater(1.0, NAN) == 0);
+	CHECK(islessgreater(NAN, NAN) == 0);
+	/* isunordered: 1 when either (or both) is NaN */
+	CHECK(isunordered(NAN, 1.0) == 1 && isunordered(1.0, NAN) == 1 && isunordered(NAN, NAN) == 1);
+
+	/* ±Inf is ordered against everything but NaN */
+	CHECK(isgreater(HUGE_VAL, 1.0) == 1 && isless(-HUGE_VAL, 1.0) == 1);
+	CHECK(isunordered(HUGE_VAL, -HUGE_VAL) == 0);
+
+	/* The distinguishing clause: no FE_INVALID for unordered operands,
+	 * where a plain > would raise it.
+	 *
+	 * The NaN is hoisted into a volatile *before* the flags are cleared
+	 * on purpose.  include/math.h defines NAN as (0.0f/0.0f), and that
+	 * division is itself what raises FE_INVALID here -- evaluating the
+	 * macro inside the guarded region sets the very flag being measured
+	 * and would fail this test for a reason that has nothing to do with
+	 * the comparison macros.  (C99 wants NAN to be a constant
+	 * expression, which would be folded and raise nothing; it is not
+	 * folded on this toolchain.  That is a header/codegen matter, not a
+	 * POSIX conformance clause about these macros, so it is noted here
+	 * rather than fenced.)  `one` is volatile for the same reason: to
+	 * keep the whole comparison out of the constant folder. */
+	{
+		volatile double qnan = NAN, one = 1.0;
+		CHECK(feclearexcept(FE_ALL_EXCEPT) == 0);
+		CHECK(isgreater(qnan, one) == 0);
+		CHECK(isgreaterequal(qnan, one) == 0);
+		CHECK(isless(qnan, one) == 0);
+		CHECK(islessequal(qnan, one) == 0);
+		CHECK(islessgreater(qnan, one) == 0);
+		CHECK(isunordered(qnan, one) == 1);
+		CHECK(fetestexcept(FE_INVALID) == 0);
+	}
+
+	/* they work at float and long double too, not just double */
+	CHECK(isgreater(2.0f, 1.0f) == 1 && isunordered((float)NAN, 1.0f) == 1);
+	CHECK(isless(1.0L, 2.0L) == 1 && isunordered((long double)NAN, 1.0L) == 1);
+}
+
 int main(void)
 {
 	test_fabs();
@@ -1105,6 +1625,24 @@ int main(void)
 	test_nearbyint();
 	test_scalbln();
 	test_lround_lrint_variants();
+	test_asin_acos_variants();
+	test_hyperbolic_variants();
+	test_inverse_hyperbolic_variants();
+	test_cbrt_variants();
+	test_expm1_log1p_variants();
+	test_erf_erfc_variants();
+	test_gamma_variants();
+	test_fmod_variants();
+	test_frexp_ldexp_modf_variants();
+	test_rounding_variants();
+	test_hypot_variants();
+	test_ilogb_logb_variants();
+	test_nearbyint_variants();
+	test_nextafter_variants();
+	test_remainder_remquo_variants();
+	test_fdim_fma_variants();
+	test_scalb_variants();
+	test_compare_macros();
 
 	if (!fails) printf("posix-math: all tests passed\n");
 	return fails != 0;

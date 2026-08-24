@@ -744,13 +744,54 @@ table rows below.
 | nan | "a quiet NaN, if available" | covered | test/math.c, test/posix-math.c |
 | math_errhandling / MATH_ERRNO / MATH_ERREXCEPT | required macro values; the conditional `<fenv.h>` requirement | **covered (bug fixed)** — `include/math.h` unconditionally defines `math_errhandling` as `MATH_ERREXCEPT` (2), which per basedefs/math.h.html obligated the implementation to provide `<fenv.h>`'s `FE_DIVBYZERO`/`FE_INVALID`/`FE_OVERFLOW`, but `include/fenv.h` did not exist. Fixed by adding a real `include/fenv.h` + `src/math/fenv.c`: the full C99 set (`feclearexcept`/`feraiseexcept`/`fetestexcept`/`fe{get,set}exceptflag`/`fe{get,set}round`/`fe{get,set}env`/`feholdexcept`/`feupdateenv`) against real hardware, aggregating the x87 status word and (on x86_64 only, `#ifndef __i386__`) MXCSR, since tcc/i386 compiles `double` arithmetic to x87 and tcc/x86_64 to SSE2 (confirmed by disassembling a trivial `double` function under both cross tcc targets) while `src/math/x87.h`'s helpers are x87 on both arches | test/posix-math.c `test_errhandling` (real hardware exceptions from both `src/math/*.c` helpers and plain compiler-emitted arithmetic, plus round-trips of every new function) |
 
+### The `f`/`l` tail (never-asserted sweep)
+
+POSIX gives `acos()`, `acosf()` and `acosl()` one page and one
+RETURN VALUE/ERRORS table, the `f`/`l` entries differing only in argument
+and return type, so each block below cites the same page as its `double`
+counterpart above and asserts the same clauses at the other two widths.
+What is new is not the clause but the *type*: a special-value table can
+be right for `double` and wrong for `float` (a wrong-width constant, a
+promotion that routes the `f`-form through the `double` body and back, a
+`HUGE_VALF`/`HUGE_VAL` mixup), and nothing in the tree had looked.
+70 names, all previously with no assertion anywhere in `test/*.c`.
+
+| group | clause checked | status | test |
+|---|---|---|---|
+| acosf/acosl/asinf/asinl | NaN, ±0, acos(1)==+0, finite \|x\|>1 and ±Inf domain errors, asin(±1)==±pi/2 | covered | test/posix-math.c `test_asin_acos_variants` |
+| sinhf/sinhl/coshf/coshl/tanhf/tanhl | NaN, ±0, ±Inf, and overflow **at each type's own width** (200 overflows a float and is nowhere near overflowing a double) | covered | `test_hyperbolic_variants` |
+| asinhf/asinhl/acoshf/acoshl/atanhf/atanhl | NaN, ±0/±Inf, acosh(1)==+0 and x<1 domain error, atanh(±1) pole error, \|x\|>1 and ±Inf domain errors | covered | `test_inverse_hyperbolic_variants` |
+| cbrtf/cbrtl | NaN, ±0, ±Inf, exact cube roots | covered | `test_cbrt_variants` |
+| expm1f/expm1l/log1pf/log1pl | NaN, ±0, ∓Inf, per-width overflow, log1p(-1) pole error, x<-1 domain error | covered | `test_expm1_log1p_variants` |
+| erff/erfl/erfcf/erfcl | NaN, ±0, ±Inf → ±1, erfc(+Inf)==+0, erfc(-Inf)==2 | covered; `erfc(0)==1` printed as **informational**, never a CHECK — POSIX mandates no accuracy and `src/math/erf.c` lands ~1e-9 short | `test_erf_erfc_variants` |
+| lgammaf/lgammal/tgammaf/tgammal | NaN, lgamma pole errors, lgamma(1)/(2)==+0, tgamma negative-integer and -Inf domain errors, tgamma(±0) pole error with the sign of x | covered; the `tgamma(5)==24` factorial check uses a tolerance, for the same accuracy reason | `test_gamma_variants` |
+| fmodl | NaN, ±0 with y≠0, y==±0 and x==±Inf domain errors, y==±Inf with finite x, round-toward-zero quotient and the sign of x | covered | `test_fmod_variants` |
+| frexpf/frexpl/ldexpf/modff/modfl | result in [0.5,1) and `value == r * 2^*exp`; `value == 0` → 0 with `*exp` 0 **and the sign of the zero kept**; ±Inf/NaN returned unchanged; ldexp round-trip and per-width overflow; modf's signed fraction, ±0→±0 with ±0 stored, ±Inf→±0 with ±Inf stored, NaN→NaN with NaN stored | covered | `test_frexp_ldexp_modf_variants` |
+| ceilf/floorl/roundf/truncf/truncl | NaN, ±0 (sign kept), ±Inf, direction of rounding, round()'s halfway-away-from-zero rule (vs rint/nearbyint's to-even), and a negative result rounding to **−0** | covered | `test_rounding_variants` |
+| hypotf/hypotl | 3-4-5, "±Inf → +Inf **even if the other argument is NaN**", NaN otherwise, ±0, per-width overflow | covered | `test_hypot_variants` |
+| ilogbf/ilogbl/logbf/logbl | logb pole error at ±0, NaN, ±Inf→+Inf, exact exponents; ilogb's three out-of-band results FP_ILOGB0 / FP_ILOGBNAN / INT_MAX, and equivalence to `(int)logb(x)` in range | covered | `test_ilogb_logb_variants` |
+| nearbyintf/nearbyintl | NaN, ±0, ±Inf, and the clause that distinguishes it from rint(): **no FE_INEXACT**, checked through `<fenv.h>` | covered | `test_nearbyint_variants` |
+| nextafterf/nextafterl/nexttowardf/nexttowardl | x==y→y in x's type, NaN, direction, step-and-back identity, per-width overflow to ±HUGE_VALF, underflow ("correct value or 0.0"), and `nexttowardf` agreeing with `nextafterf` — nexttoward's second argument is `long double` at every width, the shape a mechanical `f`-wrapper is likeliest to get wrong | covered | `test_nextafter_variants` |
+| remainderf/remainderl/remquof/remquol | NaN, x==±Inf and y==±0 domain errors, round-to-nearest quotient (vs fmod's toward-zero), `*quo` congruent mod 2^n with the sign of x/y, and remquo's remainder agreeing with remainder's | covered | `test_remainder_remquo_variants` |
+| fdimf/fdiml/fmaf/fmal | positive difference, x<y→+0, NaN, per-width overflow; fma's single rounding, the 0×Inf and Inf−Inf domain errors, NaN z, and ±0 results | covered | `test_fdim_fma_variants` |
+| scalbnl/scalblnf/scalblnl | NaN, ±0, ±Inf, n==0, per-width overflow and underflow | covered | `test_scalb_variants` |
+| isgreater / isgreaterequal / isless / islessequal / islessgreater / isunordered | the ordered results; **0 for a NaN operand in either position** (islessgreater is the one not to confuse with `!=`); isunordered's 1; ±Inf ordered against everything but NaN; and the whole reason the macros exist — **no FE_INVALID for unordered operands**, checked through `<fenv.h>` | covered | `test_compare_macros` |
+
+No bugs found. One test-authoring trap worth recording: `include/math.h`
+defines `NAN` as `(0.0f/0.0f)`, and on this toolchain that division is
+*not* constant-folded — evaluating the macro inside an `feclearexcept()`
+guarded region sets FE_INVALID itself and fails the measurement for a
+reason unrelated to the code under test. `test_compare_macros` hoists
+the NaN into a `volatile` before clearing. C99 wants `NAN` to be a
+constant expression; that is a header/codegen matter rather than a POSIX
+clause about these macros, so it is noted, not fenced.
+
 ### Not reached (math.h)
 
-The `l`/`f` variants of the trig functions beyond spot checks;
-`lround`/`llround`/`lrint`/`llrint`/`rint` (implemented, basic behaviour
-covered by test/math.c, not independently re-audited clause-by-clause);
-no fuzzing/property-based cross-check against glibc beyond test/math.c's
-existing `NEAR()` spot checks.
+`lround`/`llround`/`lrint`/`llrint`/`rint` and their `f`/`l` forms
+(implemented, basic behaviour covered by test/math.c, not independently
+re-audited clause-by-clause); no fuzzing/property-based cross-check
+against glibc beyond test/math.c's existing `NEAR()` spot checks.
 
 ## limits.h / float.h / stdint.h / inttypes.h (priority 10)
 

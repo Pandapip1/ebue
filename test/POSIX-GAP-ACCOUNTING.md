@@ -184,7 +184,8 @@ found something:
   "deliberately unimplemented" — classifying them off the marker alone
   would have been wrong six times.
 - Every implemented name was checked for a mention anywhere in
-  `test/*.c`. 134 had none at all when this audit began; 112 still do,
+  `test/*.c`. 134 had none at all when this audit began; the successor
+  session closed all of them but `pause()`,
   and they are listed below.
 
 ## Implemented + clause-audited (333)
@@ -265,14 +266,17 @@ the same as size:
 | `stropts.h` | 1 | `ioctl` (`OB XSR`) — `src/ioctl/ioctl.c` implements the name, not the STREAMS semantics POSIX attaches to it |
 | `math.h` | 150 | the `f`/`l` suffixed variants and the long tail; the ledger's priority-9 section audited 32 double-precision entry points |
 
-### Implemented, but no assertion anywhere in `test/*.c` (112)
+### Implemented, but no assertion anywhere in `test/*.c` (0)
 
 Every implemented name was grepped against the concatenation of all
 `test/*.c`. 134 were never named when this audit started; 22 gained
-their first assertion in this session (see "Tests added" below). These
-112 are still never named:
+their first assertion in this session (see "Tests added" below), and
+**the successor session closed the remaining 112** — see "Successor
+session" at the end of this file, which also records how the list was
+re-derived and verified still accurate before any of it was worked. The
+per-header lines below are kept as the record of what the list *was*:
 
-- `math.h` (70): `acosf acoshf acoshl acosl asinf asinhf asinhl asinl atanhf atanhl cbrtf cbrtl ceilf coshf coshl erfcf erfcl erff erfl expm1f expm1l fdimf fdiml floorl fmaf fmal fmodl frexpf frexpl hypotf hypotl ilogbf ilogbl isgreater isgreaterequal isless islessequal islessgreater isunordered ldexpf lgammaf lgammal log1pf log1pl logbf logbl modff modfl nearbyintf nearbyintl nextafterf nextafterl nexttowardf nexttowardl remainderf remainderl remquof remquol roundf scalblnf scalblnl scalbnl sinhf sinhl tanhf tanhl tgammaf tgammal truncf truncl`
+- `math.h` (0): all 70 (the `f`/`l` variants plus the six comparison macros) closed, see "Successor session" below
 - `unistd.h` (0): all 23 closed, see "Successor session" below (`pause` is the one that could not be *called* — see there for why)
 - `sys/stat.h` (0): all six (`mkdirat mkfifo mkfifoat mknod mknodat utimes`) closed, see "Successor session" below
 - `signal.h` (0): all five (`sighold siginterrupt sigpause sigrelse sigset`) closed, see "Successor session" below
@@ -924,19 +928,75 @@ Both are written up in `test/POSIX-COVERAGE.md`'s "Bugs found
   nothing past `nbytes` was touched, and deliberately does not pin
   `src/unistd/swab.c`'s own documented choice.
 
+### Closed: the `math.h` `f`/`l` tail (70)
+
+Item 3 of the queue above, taken after the rest rather than left for a
+successor. All 70 are in `test/posix-math.c`, in eighteen new
+`*_variants` functions plus `test_compare_macros`; the ledger's
+math.h section carries the per-group table.
+
+POSIX gives `acos()`, `acosf()` and `acosl()` **one page and one
+RETURN VALUE/ERRORS table**, the `f`/`l` entries differing only in
+argument and return type, so each block cites the same page as its
+`double` counterpart and asserts the same clauses at the other two
+widths. That makes this batch mechanical, as the queue predicted — but
+not empty: what is new is the *type*, and a special-value table can be
+right for `double` and wrong for `float` (a wrong-width constant, a
+promotion that routes the `f`-form through the `double` body and back, a
+`HUGE_VALF`/`HUGE_VAL` mixup). The per-width overflow thresholds are
+where that would show, so they are asserted at each type's own width
+rather than at the `double` one: `sinhf(200.0f)`, `ldexpf(1.0f, 200)`,
+`nextafterf(FLT_MAX, HUGE_VALF)`, `scalblnf(1.0f, 200L)`.
+
+Six of the 70 are not `f`/`l` variants of anything: `isgreater`,
+`isgreaterequal`, `isless`, `islessequal`, `islessgreater` and
+`isunordered` are macros in `include/math.h`, and their whole reason for
+existing — "shall not raise the invalid floating-point exception when x
+and y are unordered" — is directly checkable through `<fenv.h>` and is
+checked.
+
+**No bugs found**, which is the honest result for a batch the queue
+itself called low-risk. Two things are worth recording anyway:
+
+- **Two accuracy assertions were written and then withdrawn**, not
+  weakened silently: `erfc(0) == 1` and `tgamma(5) == 24` are exact
+  mathematically but land ~1e-9 short in `src/math/erf.c` and
+  `src/math/gamma.c`. POSIX mandates no accuracy for these (this file's
+  and `test/posix-math.c`'s banners both say so), so asserting `==`
+  would have been asserting an accuracy coincidence rather than a
+  clause. The first is now printed as informational, the second checked
+  with a tolerance loose enough to be about *routing* rather than about
+  the last bit.
+- **A test-authoring trap:** `include/math.h` defines `NAN` as
+  `(0.0f/0.0f)`, and on this toolchain that division is *not*
+  constant-folded — evaluating the macro inside an `feclearexcept()`
+  guarded region sets FE_INVALID itself and fails the measurement for a
+  reason unrelated to the code under test. `test_compare_macros` hoists
+  the NaN into a `volatile` first. C99 wants `NAN` to be a constant
+  expression; that is a header/codegen matter rather than a POSIX clause
+  about these macros, so it is noted rather than fenced. Anyone adding
+  `<fenv.h>` assertions elsewhere will hit it.
+
 ### Remaining after this session
 
-The `math.h` `f`/`l` tail (70 names) — item 3 of the queue above — is
-all that is left of the original 112. Every non-`math.h` name in the
-"Implemented, but no assertion anywhere" section now has an assertion,
-with the single exception of `pause()`, which cannot be called from a
-test at all (see above).
+**Nothing.** The "Implemented, but no assertion anywhere" list is
+closed: all 112 names now have a first-ever assertion, with the single
+exception of `pause()`, which cannot be *called* from a test at all
+without deadlocking the run (see above) and is recorded as N/A with that
+reason. Item 1 and item 3 of the successor queue are both done; item 2
+(a clause audit of the twelve headers the ledger's priority order never
+named) and item 4 are untouched and remain the queue.
 
-**Score for the sweep: 41 of the 42 non-`math.h` names given a
-first-ever assertion, and six bugs found** — one in `unlinkat()`, two
-more in `confstr()` and `tcgetpgrp`/`tcsetpgrp`, and three in the XSI
-signal names. The predecessor's lesson holds and then some: of the six
-headers swept, four contained a defect, and every defect was a
-*shall-fail* error clause that no caller had ever been in a position to
-notice. "Exists and links" remains a much weaker statement than it
-looks.
+**Score for the sweep: 111 of 112 names given a first-ever assertion,
+and six bugs found** — `unlinkat()` masking undefined `flag` bits,
+`confstr()` never reporting `[EINVAL]`, `tcgetpgrp`/`tcsetpgrp` never
+reporting `[EBADF]`, `sighold`/`sigrelse` never reporting `[EINVAL]`,
+`sigset()` unable to report `SIG_HOLD` (which `<signal.h>` does not even
+define), and `siginterrupt()` never validating `sig`. The predecessor's
+lesson holds and then some: **every one of the six is a *shall-fail*
+error clause**, and every one survived because no caller had ever been
+in a position to notice. The defects clustered entirely in the
+platform-facing headers — four of the six non-`math.h` headers had one,
+and `math.h`'s 70 names had none — which is worth remembering when
+prioritising the next sweep. "Exists and links" remains a much weaker
+statement than it looks.
