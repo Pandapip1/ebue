@@ -1134,6 +1134,23 @@ Checked against every earlier row:
 - The `_l` variants of all sixteen stay in the missing-interface
   accounting.
 
+**Group J — the long tail (19), in three subsections.** J1 covers
+`locale.h`'s locale-object API: `newlocale duplocale freelocale
+uselocale`, in the new `test/posix-locale.c`. **Two BUGs fenced**
+(`newlocale()` never validates `category_mask`, a *shall fail*
+[EINVAL]; `uselocale()` never returns `LC_GLOBAL_LOCALE`, so
+`uselocale(0) == LC_GLOBAL_LOCALE` — the documented way to ask "am I on
+the global locale?" — is always false when the truth is always true).
+Two N/A by mechanism (`freelocale()` has nothing allocated to release;
+`duplocale()`'s aliasing of a single immutable stateless object is
+unobservable). Subtract 4 from 357.
+
+Checked against every earlier row: all four appear as first-column
+identifiers of their own in J1's table. `setlocale`/`localeconv`, the
+`locale.h` row priority 4 already audited, are deliberately not
+re-cited, so the "Audited" table's existing `locale.h` count of 2 and
+J1's 4 are disjoint and neither double-counts.
+
 ## Changes since the clause audit of the stdio.h and stdarg.h rows
 
 Dated note, 2026-08-24, added rather than folded into the headline

@@ -2440,6 +2440,137 @@ The `_l` variants (`iswalnum_l` and the other fifteen, all `CX`) are
 declared by neither `include/wctype.h` nor any `src/` file, so they are
 a `POSIX-GAP-ACCOUNTING.md` matter, not a row here.
 
+## The long tail of small headers (successor-queue item 2, group J)
+
+`test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not clause-audited"
+table has a tail of one- and two-function headers that no priority in
+the list above ever reached: `locale.h`'s locale-object API,
+`sys/uio.h`, `ftw.h`, two `fcntl.h` advisory functions, `setjmp.h`'s
+`OB XSI` pair, `string.h`'s `strlen`/`strnlen`, `sys/times.h`,
+`sys/utsname.h`, `sys/time.h`'s `gettimeofday`, `stdlib.h`'s `srand48`,
+and `stropts.h`'s `ioctl`. Nineteen functions across eleven headers.
+They are audited here as one group, in three subsections, because they
+share nothing but their size — and two of them carry a judgement call
+big enough to want its own heading.
+
+### J1: locale.h -- the locale-object API
+
+`newlocale`, `duplocale`, `freelocale`, `uselocale`
+(`test/posix-locale.c`, new file). `setlocale`/`localeconv`, the other
+two `<locale.h>` names, were audited in priority 4 and are untouched.
+
+`src/misc/locale.c`'s whole locale-object half is one immutable,
+stateless, file-scope `struct __locale_struct` handed out for
+everything, with `newlocale()` ignoring `category_mask` and `base`,
+`uselocale()` ignoring its argument, `duplocale()` returning that same
+static, and `freelocale()` a no-op. ntlibc is C/POSIX-locale-only
+(`setlocale()` in the same file accepts no other name), so that shape
+is not obviously wrong — and the whole point of this subsection is that
+**the four functions do not get the same verdict.** Two are correct for
+such a libc by a real mechanism; two are unimplemented contract, and
+one of those actively misleads a caller.
+
+**Two BUGs fenced, both verified to pass once fixed** (see "Bugs found"
+below for the proof procedure).
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| newlocale | DESCRIPTION: `"C"`, `"POSIX"` and `""` "are defined for all settings of category_mask"; RETURN VALUE: a handle usable "on subsequent calls to duplocale(), freelocale()" | covered — asserted for `LC_ALL_MASK`, a single category mask, a two-category mask and mask 0 | test/posix-locale.c (`test_newlocale_accepts_the_preset_names`) |
+| newlocale | ERRORS, *shall fail*: "[ENOENT] For any of the categories in category_mask, the locale data is not available" — including that the name comparison is exact (`"c"` is not `"C"`) | covered | test/posix-locale.c (`test_newlocale_enoent`) |
+| newlocale | DESCRIPTION: "If the function call fails and the base argument is not (locale_t)0, the contents of base shall remain valid and unchanged" | covered — vacuous in the implementation (`base` is never read), but the observable half, that `base` is still a usable handle after a failed call, is asserted | test/posix-locale.c (`test_newlocale_base_unchanged_on_failure`) |
+| newlocale | ERRORS, *shall fail*: "[EINVAL] The category_mask contains a bit that does not correspond to a valid category" | **BUG (fenced)** | test/posix-locale.c (`test_newlocale_einval_on_invalid_mask`) |
+| newlocale | ERRORS, *may fail*: "[EINVAL] The locale argument is not a valid string pointer" | N/A — *may* fail, so not implementing it conforms. ntlibc accepts a null `name` and treats it as `"C"`; not asserted either way | — |
+| duplocale | DESCRIPTION "shall create a duplicate copy of the locale object"; RETURN VALUE "a handle for a new locale object", usable wherever a `newlocale()` handle is | **N/A (single immutable stateless locale object)** — see below | test/posix-locale.c (`test_duplocale`) |
+| duplocale | DESCRIPTION: "If the locobj argument is LC_GLOBAL_LOCALE, duplocale() shall create a new locale object containing a copy of the global locale determined by the setlocale() function" | covered — and separately correct: the global locale is unconditionally `"C"` here, asserted through `setlocale(LC_ALL, NULL)` | test/posix-locale.c (`test_duplocale`) |
+| freelocale | DESCRIPTION "shall cause the resources allocated for a locale object ... to be released"; RETURN VALUE "None"; ERRORS "None" | **N/A (nothing is ever allocated)** — see below | test/posix-locale.c (`test_freelocale`) |
+| freelocale | "Any use of a locale object that has been freed results in undefined behavior" | N/A — undefined, so nothing may be required. It is also what makes `duplocale()`'s aliasing harmless rather than dangerous here | — |
+| uselocale | DESCRIPTION: "If the newloc argument is (locale_t)0, the current locale shall not be changed; this value can be used to query the current locale setting" | covered | test/posix-locale.c (`test_uselocale_query_does_not_change`) |
+| uselocale | DESCRIPTION: installing a locale object as the thread-local locale, and `LC_GLOBAL_LOCALE` uninstalling it | covered | test/posix-locale.c (`test_uselocale_install_and_uninstall`) |
+| uselocale | RETURN VALUE: "... or LC_GLOBAL_LOCALE if no thread-local locale was in use" | **BUG (fenced)** | test/posix-locale.c (`test_uselocale_reports_lc_global_locale`) |
+| uselocale | ERRORS, *may fail*: "[EINVAL] newloc is not a valid locale object and is not (locale_t)0" | N/A — *may* fail. Recorded explicitly so its absence is not mistaken for the *shall*-fail gap in `newlocale()` above | — |
+| newlocale, duplocale | ERRORS, *shall fail*: "[ENOMEM]" | N/A — needs a real allocation failure, and neither function allocates anything to begin with. Same limit `glob()`'s `GLOB_NOSPACE` row records | — |
+
+### Bugs found (locale.h)
+
+1. **`newlocale()` never validates `category_mask`.**
+   `newlocale.html` ERRORS, *shall fail* (not *may*): "[EINVAL] The
+   category_mask contains a bit that does not correspond to a valid
+   category." DESCRIPTION defines the valid bits as the six named
+   `LC_*_MASK` constants "or any of the implementation-defined mask
+   values defined in `<locale.h>`"; `include/locale.h` defines those
+   six plus `LC_ALL_MASK` (`0x7fffffff`), so bit 31 corresponds to no
+   category under any reading. `src/misc/locale.c`'s `newlocale()`
+   opens with `(void)mask;` and never looks at it again. Measured:
+   `newlocale(0x40000000|(1<<31), "C", 0)` returns a non-null handle
+   with `errno` untouched. **Not excused by being C-locale-only** —
+   validating a bitmask needs no locale data, and a *shall fail* clause
+   is what a caller relies on to detect its own bad argument. Same
+   defect class as the six unimplemented shall-fail argument checks the
+   never-asserted-name sweep found.
+
+2. **`uselocale()` cannot report "no thread-local locale is in use",
+   so the one question the interface exists to answer cannot be
+   answered.** `uselocale.html` RETURN VALUE: "shall return a handle
+   for the thread-local locale that was in use ... **or
+   LC_GLOBAL_LOCALE if no thread-local locale was in use**." ntlibc
+   never installs a thread-local locale and stores nothing, so that
+   condition is true on entry to every call ever made and
+   `LC_GLOBAL_LOCALE` is the required answer every time; it returns
+   `&__c_locale` instead. Measured: `uselocale((locale_t)0)` returns
+   `0x41d7c8` while `LC_GLOBAL_LOCALE` is `(locale_t)-1`.
+
+   **Why this is a BUG where `freelocale()`'s no-op is N/A.** The
+   failure is not "an unused constant came back wrong".
+   `uselocale(0) == LC_GLOBAL_LOCALE` is the documented way for a
+   program to ask *am I on the global locale?*, and here that question
+   always answers "no" when the truth is always "yes". The standard
+   save/restore idiom — `old = uselocale(loc); ...; uselocale(old);` —
+   therefore cannot distinguish "put me back on the global locale"
+   from "put me back on that locale object", and silently does the
+   wrong one rather than failing. A caller is misled; that is the line
+   this audit draws between BUG and N/A for a C-locale-only libc.
+
+   A correct fix is small but is **not** "return `LC_GLOBAL_LOCALE`
+   unconditionally": once `uselocale(loc)` has been called a
+   thread-local locale *is* in use and a later query must report it,
+   which the live `test_uselocale_install_and_uninstall` already
+   asserts. One word of state (`static locale_t current =
+   LC_GLOBAL_LOCALE;`, assigned when the argument is non-zero)
+   satisfies both.
+
+**Both fences were verified to pass once fixed**, not merely asserted
+to. The two fixes above were applied to `src/misc/locale.c`, both
+blocks un-fenced, and the file rebuilt and rerun: green. Restoring the
+original implementation with the tests still un-fenced turns exactly
+the seven expected assertions red (four `newlocale`, three
+`uselocale`), after which both were re-fenced and `src/misc/locale.c`
+reverted. Nothing in `src/` is modified by this commit.
+
+### Observed behaviour where POSIX permits latitude (locale.h)
+
+- **The two N/A verdicts are mechanism arguments, not convenience
+  ones,** which is the bar this ledger sets. `freelocale()`: no
+  resource is ever allocated for a locale object — both constructors
+  return the address of one file-scope static — so there is nothing to
+  release and a no-op is the complete implementation of the clause
+  rather than a placeholder for one. `duplocale()`: the object is
+  immutable and carries no per-object state (`struct
+  __locale_struct { int dummy; };`), so a "duplicate copy" is
+  indistinguishable from the original by every means POSIX defines —
+  no field to read, none to change on one copy and observe on the
+  other — and freeing the copy cannot damage the original because
+  freeing releases nothing. POSIX never promises two handles compare
+  unequal, so returning the same pointer is the same object, correctly.
+- **`LC_ALL_MASK` is `0x7fffffff`,** not the union of the six defined
+  category masks (`0x3f`). That is `<locale.h>`'s own choice and POSIX
+  permits "implementation-defined mask values defined in `<locale.h>`",
+  so it is conforming — but it does mean bits 6-30 are nominally valid
+  categories with nothing behind them, and it narrows the [EINVAL]
+  clause above to bit 31 alone. Recorded because a stricter
+  `LC_ALL_MASK` would widen that clause considerably, and whoever fixes
+  BUG 1 should decide deliberately which of the two they are
+  implementing.
+
 ## stdio.h, the "implemented, not clause-audited" row (group K)
 
 The two rows `test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not
