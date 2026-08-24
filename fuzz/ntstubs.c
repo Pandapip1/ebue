@@ -1540,7 +1540,7 @@ NTSTATUS NTAPI NtQueryAttributesFile(POBJECT_ATTRIBUTES oa, FILE_BASIC_INFORMATI
 /* ObjectNameInformation: the full NT name of an open handle.  Wine
  * reports drive paths in exactly this \??\C:\... form and
  * src/internal/path.c has a fast path for it. */
-NTSTATUS NTAPI NtQueryObject(HANDLE h, ULONG cls, PVOID buf, ULONG len, PULONG ret)
+NTSTATUS NTAPI NtQueryObject(HANDLE h, OBJECT_INFORMATION_CLASS cls, PVOID buf, ULONG len, PULONG ret)
 {
 	struct { UNICODE_STRING Name; WCHAR Buffer[1]; } *oni = buf;
 	struct ofile *f = of_get(h);
@@ -1548,7 +1548,7 @@ NTSTATUS NTAPI NtQueryObject(HANDLE h, ULONG cls, PVOID buf, ULONG len, PULONG r
 	size_t plen, need;
 
 	if (!f) return STATUS_INVALID_HANDLE;
-	if (cls != 1) return STATUS_INVALID_INFO_CLASS;
+	if (cls != ObjectNameInformation) return STATUS_INVALID_INFO_CLASS;
 	if (f->kind != OF_VFS) return STATUS_OBJECT_TYPE_MISMATCH;
 	path = node_path(f->dir, f->name, f->namelen, &plen);
 	if (!path) return STATUS_NO_MEMORY;

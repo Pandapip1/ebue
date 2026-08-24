@@ -99,7 +99,7 @@ static ino_t __fstat_synthetic_ino(HANDLE h)
 	if (NT_SUCCESS(s) && ii.IndexNumber != 0) return (ino_t)ii.IndexNumber;
 
 	{
-		char buf[512];
+		char buf[512] = { 0 };
 		ULONG ret = 0;
 		OBJECT_NAME_INFORMATION *ni = (OBJECT_NAME_INFORMATION *)buf;
 		s = NtQueryObject(h, ObjectNameInformation, buf, sizeof buf, &ret);
