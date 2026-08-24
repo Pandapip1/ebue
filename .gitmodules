@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# See third_party/README.md for the pin, its provenance, and why the
+# corpus is a submodule rather than a vendored copy.
+[submodule "libc-test"]
+	path = third_party/libc-test
+	url = https://github.com/Pandapip1/libc-test.git

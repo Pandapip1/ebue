@@ -60,7 +60,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -100,13 +100,39 @@ note() { printf '%s\n' "$*" >&2; }
 # uncommitted changes included -- this gates what you're about to push,
 # not just HEAD) into $GATE_JOBS_DIR/trees/$1, excluding build output and
 # per-arch config so each stage configures its own.
+#
+# third_party/ is excluded from every copy EXCEPT libc-test's. It holds
+# one git submodule -- musl's libc-test, ~940 files and 11 MB -- and only
+# that one stage reads it, so ten of the eleven copies would be paying
+# 11 MB of rsync for nothing.
+#
+# The saving is the lesser reason. The real one is the `reuse` stage.
+# rsync strips the .git that tells the `reuse` tool those files belong to
+# another project, so a copy that includes them turns ~940 foreign files
+# into ~940 files of ours with no SPDX headers, and `reuse lint` fails on
+# every one. CI's reuse job checks out without submodules and therefore
+# never sees them -- so a naive copy here makes the local tool and CI
+# disagree, which is the exact failure mode that cost this project a
+# round trip earlier today. Excluding third_party/ makes the gate lint
+# precisely the file set CI lints.
+#
+# The libc-test stage does get the copy, .git-file and all: the plain
+# files survive rsync, which is all tools/libc-test.sh needs.
+#
 make_tree() {
 	dest="$GATE_JOBS_DIR/trees/$1"
 	mkdir -p "$dest"
-	rsync -a --delete \
-		--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
-		--exclude='*.tmp' \
-		"$srcdir/" "$dest/"
+	if [ "$1" = libc-test ]; then
+		rsync -a --delete \
+			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
+			--exclude='*.tmp' \
+			"$srcdir/" "$dest/"
+	else
+		rsync -a --delete \
+			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
+			--exclude='*.tmp' --exclude=/third_party/ \
+			"$srcdir/" "$dest/"
+	fi
 }
 
 # run_stage NAME CMD...  -- run CMD (a single sh -c string) in the
@@ -161,7 +187,7 @@ fi
 # config.mak. Taken now, after "generated" has already finished mutating
 # the source tree, so every copy sees the same (post-generated) state.
 for pair in \
-	"check-i386:check-i386" "check-x86_64:check-x86_64" \
+	"check-i386:check-i386" "check-x86_64:check-x86_64" "libc-test:libc-test" \
 	"asan:asan" "linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
 	"hygiene:hygiene" "lint-plain:lint-plain" \
 	"lint-analyze-pinned:lint-analyze-pinned" "lint-shell-pinned:lint-shell-pinned" \
@@ -192,6 +218,17 @@ fi
 if want check-x86_64; then
 	t="$GATE_JOBS_DIR/trees/check-x86_64"
 	run_stage check-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" check"
+fi
+
+# libc-test: musl's regression corpus, adjudicated against
+# test/libc-test-expected.txt.  Belongs beside check-x86_64 rather than
+# after it: build + 146 Wine runs measure ~1.5 s wall, against a critical
+# path set by asan (~198 s), so it costs the gate nothing.  Only the
+# x86_64 arch -- the corpus is arch-independent C and running it twice
+# would double the ledger's maintenance for no new evidence.
+if want libc-test; then
+	t="$GATE_JOBS_DIR/trees/libc-test"
+	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" && make libc-test"
 fi
 
 if want asan; then

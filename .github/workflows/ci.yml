@@ -100,6 +100,17 @@ jobs:
     # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 10
     steps:
+      # Deliberately WITHOUT `submodules:`. third_party/libc-test is a
+      # submodule, and its ~940 files are not this repository's files for
+      # REUSE purposes -- they belong to musl's libc-test, which ships its
+      # own COPYRIGHT, and their licences are not uniform (src/math/ucb
+      # and src/math/crlibm are BSD and GPL, not MIT). Checking them out
+      # here would make this job lint another project's tree and demand
+      # SPDX headers we have no right to add. The local `reuse` tool skips
+      # submodules on its own when .git is present, so leaving them out
+      # here is what keeps the two in agreement; tools/gate.sh's reuse
+      # stage excludes third_party/ from its tree copy for the same
+      # reason. See third_party/README.md.
       - uses: actions/checkout@v7
       - uses: fsfe/reuse-action@v5
 
@@ -289,7 +300,14 @@ jobs:
             kernel32: true
             name: x86_64-kernel32
     steps:
+      # submodules: recursive -- the "libc-test corpus" step below needs
+      # third_party/libc-test, which is a submodule. Without this the
+      # directory is empty and tools/libc-test.sh exits 2 by design
+      # rather than skipping, so this is load-bearing rather than
+      # decorative. See third_party/README.md.
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Restore tinycc toolchain
         uses: actions/cache@v6
@@ -319,6 +337,22 @@ jobs:
 
       - name: Check
         run: make -j"$(nproc)" check
+
+      # musl's libc-test corpus, adjudicated against
+      # test/libc-test-expected.txt. Pinned to one leg for the same reason
+      # tools/gate.sh runs it on x86_64 only: the corpus is
+      # arch-independent C, so a second arch doubles the ledger's
+      # maintenance for no new evidence.
+      #
+      # This runs against the stock apt Wine installed above, which
+      # predates RtlCloneUserProcess -- so the tests that fork report
+      # rc=77 (UNVERIFIED) here rather than a verdict. That is detected
+      # from each test's own output at run time, never from a static
+      # list, precisely so the number is visible and moves on its own
+      # when Wine gains the call. See tools/libc-test.sh's header.
+      - name: libc-test corpus
+        if: matrix.name == 'x86_64'
+        run: make libc-test
 
       # Only needs to run once, not once per matrix leg (both generators
       # cover every arch themselves): catches either kind of generated-and-

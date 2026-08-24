@@ -360,6 +360,28 @@ endif
 	@$(srcdir)/tools/runtests.sh "$(WINE)" $(TEST_RUN)
 
 #
+# libc-test: musl's own regression corpus (third_party/libc-test,
+# a git submodule pinned at a SHA -- see third_party/README.md),
+# adjudicated against test/libc-test-expected.txt.
+#
+# A separate target from `check`, not extra entries in TEST_SRCS: these
+# are not this project's tests.  They are somebody else's, 39% of them
+# do not compile here, 27 of the rest fail, and every one of those
+# outcomes has to be adjudicated against a ledger rather than reduced to
+# a single exit status.  tools/libc-test.sh does that; see its header for
+# the rc contract and for why the expected-failure ledger cannot grow
+# without saying so.
+#
+# Depends on $(ALL_LIBS) like linkcheck does: it links 146 PEs against
+# lib/libc.a and needs it to exist, and, like `check`, it only ever sees
+# the arch config.mak currently names.
+#
+libc-test: $(ALL_LIBS)
+	@WINE="$(WINE)" $(srcdir)/tools/libc-test.sh
+
+.PHONY: libc-test
+
+#
 # check-kernel32: convenience wrapper for a developer who already has a
 # normal tree configured (TARGET/CC come from the config.mak that is
 # already there) and wants to know, in one command, whether the
