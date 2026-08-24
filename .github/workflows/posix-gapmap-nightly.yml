@@ -45,9 +45,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      # submodules: true, not recursive, and fetch-depth: 0 -- see the
-      # identically-shaped step in ci.yml's posix-gapmap job for both
-      # reasons.
+      # submodules: true, deliberately NOT `recursive`, and
+      # fetch-depth: 0. LTP carries four nested submodules of its own,
+      # two of them on git.kernel.org, and the Open POSIX Test Suite
+      # reads none of them; a shallow clone cannot answer the report's
+      # SHA-ancestry invariant. See the identically-shaped step in
+      # ci.yml's posix-gapmap job.
       - uses: actions/checkout@v7
         with:
           submodules: true

@@ -565,13 +565,17 @@ jobs:
     # so nothing cancels it either.
     timeout-minutes: 20
     steps:
-      # submodules: true, NOT recursive. third_party/ltp IS the suite this
-      # job measures, so the flag is load-bearing -- without it the
-      # directory is empty and tools/posix-gapmap.sh exits 2 by design.
-      # But LTP carries four nested submodules of its own, two of them on
-      # git.kernel.org, and this job reads none of them. A job that
-      # fetches exactly what it uses has one fewer way to fail for a
-      # reason unrelated to what it is testing. See third_party/README.md.
+      # submodules: true, and deliberately NOT `recursive` -- do not
+      # "helpfully" change it. third_party/ltp IS the suite this job
+      # measures, so the flag is load-bearing: without it the directory
+      # is empty and tools/posix-gapmap.sh exits 2 by design. But LTP
+      # carries four nested submodules of its own -- testcases/kernel/
+      # mce-test and tools/sparse/sparse-src on **git.kernel.org**, plus
+      # ltx and kirk -- and the Open POSIX Test Suite reads none of the
+      # four. `recursive` would make this job's success depend on a host
+      # outside GitHub for content it never opens. A job that fetches
+      # exactly what it uses has one fewer way to fail for a reason
+      # unrelated to what it is testing. See third_party/README.md.
       #
       # fetch-depth: 0 because one of the invariants is that the SHA the
       # report records is an ancestor of HEAD, and a shallow clone cannot

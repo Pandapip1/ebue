@@ -80,8 +80,18 @@ at `https://sourceforge.net/projects/posixtest/`.
 |---|---|
 | licence | `testcases/open_posix_testsuite/COPYING` l.1-2: *"All sourcecode generated from scratch by Ngie Cooper is BSD 2-clause licensed. All legacy openposix test suite code is GPLv2+ licensed."* `README` §1: *"All code is distributed under the GNU General Public License v2."* |
 | size | 14 MB; 1610 `.c` under `conformance/`, 15 under `functional/`, 50 under `stress/` |
-| shape | 191 directories under `conformance/interfaces/`, **one per POSIX interface**, plus an `assertions.xml` per directory tying each test file to a numbered assertion of that interface's specification page |
+| shape | **190** directories under `conformance/interfaces/` — **189 of them one per POSIX interface**, plus `testfrmw`, which is suite infrastructure — with an `assertions.xml` per directory tying each test file to a numbered assertion of that interface's specification page |
 | harness | essentially none. `include/posixtest.h` is `PTS_*` return-code and attribute macros; `lib/common.c` is **12 lines** — a `main()` calling `test_main()`. Each test is one self-contained `.c`. |
+
+The directory count above was **191** when this document was first
+written, and is wrong: `ls conformance/interfaces` returns 191 entries
+because one of them is a `Makefile`. The measured figure from
+`find … -type d` is 190, of which `testfrmw` is one — so 189 interface
+directories. The reconciliation table further down was always computed
+from the interface directories and has always summed to 189, which is how
+the discrepancy was caught; it is corrected here rather than in one place
+so the document stops contradicting `tools/posix-gapmap.sh`, whose
+`CENSUS_DIRS` invariant pins the same 190.
 
 Two properties make it usable as a gap instrument specifically:
 
@@ -282,7 +292,33 @@ Greedy closure — add headers best-first, and watch the residue:
 +aio.h         unblocks  71    still blocked:  16
 ```
 
-**Five headers account for 855 of the 1019 blocked tests (84%).** That
+`tools/posix-gapmap.sh` implements this closure and reports slightly
+different figures — 445 / 127 / 113 / 109 / 71, over **875** rather than
+871 header-blocked tests, leaving a residue of 10:
+
+```
++pthread.h     unblocks 445    still blocked: 430
++mqueue.h      unblocks 127    still blocked: 303
++sys/mman.h    unblocks 113    still blocked: 190
++semaphore.h   unblocks 109    still blocked:  81
++aio.h         unblocks  71    still blocked:  10
+```
+
+**Both sets of numbers are stated rather than one silently replacing the
+other, because the conclusions are identical and the difference is
+heuristic, not a correction.** The two differ only in how an `#include`
+set is resolved — the *compiler's* verdict is identical to the test
+(873/146/591, and the class B sub-classes 94/27/21/3/1, reproduce exactly)
+— and the block above is the reproducible one, since a checked-in script
+produced it and `--check` re-derives it on every push, whereas the table
+above came from a one-off probe whose resolver's exact conditional and
+recursion handling was not recorded. Ranking, magnitudes and the
+five-header conclusion are the same either way; the tool's figures put
+five headers at 865 of 1019 (85%) instead of 855 (84%).
+
+**Five headers account for the great majority of the 1019 blocked tests
+— 855 (84%) by the original probe, 865 (85%) by `tools/posix-gapmap.sh`.**
+That
 is the single most decision-useful number in this document, and it is
 not derivable from `POSIX-GAP-ACCOUNTING.md`, which reports the same
 five clusters as *102 + 10 + 14 + 9 + 8 = 143 interfaces* — a ranking
@@ -303,7 +339,7 @@ for prioritising a header, and the wrong one for predicting a pass rate.
 ### Reconciliation against `POSIX-GAP-ACCOUNTING.md`
 
 The independent check the ledger cannot perform on itself. Each of the
-190 interface directories (excluding `testfrmw`, which is suite
+189 interface directories (excluding `testfrmw`, which is suite
 infrastructure) was classified from the **build artifacts**, not from
 the ledger's prose: *declared* = a prototype in `include/` or
 `obj/include/` with comments stripped; *defined* = a `T`/`D`/`B`/`R`/`W`
@@ -328,7 +364,7 @@ calls present.
 That is a null result, and it is worth having. It is the first
 externally-authored check on a 1177-row classification that was built by
 reading the specification, and it says the classification survives
-contact with an independent index over the 190 interfaces where the two
+contact with an independent index over the 189 interfaces where the two
 overlap. Recording a null result is the point of running the check;
 had it come out any other way it would have been the most important
 finding in this document.
@@ -414,8 +450,8 @@ gate, any of which failing is a hard error rather than a warning:
 
 1. **Census.** The number of `.c` files discovered under
    `conformance/interfaces/` must equal a pinned constant (1610) and the
-   number of directories must equal 190 + `testfrmw`. If the vendored
-   tree moves or the glob breaks, this fires before anything else
+   number of directories must equal 189 + `testfrmw` = 190. If the
+   submodule moves or the glob breaks, this fires before anything else
    reports a number. Bumping the constant is a deliberate commit,
    reviewed alongside the suite SHA — same discipline as
    `test/verification-measures.md`'s M6 ("pin the check *list*, not just
