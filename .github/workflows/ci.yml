@@ -252,16 +252,28 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $failed = $false
+          $unverified = 0
           Get-ChildItem -Path test-exes -Filter *.exe | Sort-Object Name | ForEach-Object {
             Write-Host "Running $($_.Name)"
             & $_.FullName
             $rc = $LASTEXITCODE
             if ($rc -eq 0) {
               Write-Host "PASS $($_.Name)"
+            } elseif ($rc -eq 77) {
+              # Same third outcome tools/runtests.sh and tools/asan-build.sh
+              # already recognise: the binary ran and nothing it could check
+              # failed, but some assertion group could not be verified in this
+              # environment (it printed SKIP lines saying which). Distinct from
+              # a pass, and deliberately not a failure.
+              Write-Host "UNVERIFIED $($_.Name) (rc=77)"
+              $unverified += 1
             } else {
               Write-Host "FAIL $($_.Name) (rc=$rc)"
               $failed = $true
             }
+          }
+          if ($unverified -gt 0) {
+            Write-Host "$unverified test binary/binaries reported unverified (rc=77)"
           }
           if ($failed) {
             Write-Host "One or more test binaries failed"
