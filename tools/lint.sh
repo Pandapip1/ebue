@@ -339,9 +339,11 @@ stage_analyze() {
 	: "${CLANG_TIDY:=clang-tidy}"
 	require_tool "$CLANG_TIDY" || [ "$LINT_ALLOW_MISSING" = 1 ] || return 1
 	tidy=$(command -v "$CLANG_TIDY" 2>/dev/null || true)
+	analyzed=0
 	for arch in $LINT_ARCHS; do
-		gen_alltypes "$arch" || continue
+		gen_alltypes "$arch" || { note "cannot generate alltypes for $arch"; any=1; continue; }
 		flags=$(cppflags_for "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
 		out=$builddir/$arch.analyze.log
 		: > "$out"
 		target=$(pick_target "$arch")
@@ -376,13 +378,33 @@ stage_analyze() {
 			note "note: clang-tidy not installed; using \`clang --analyze\`," \
 				"which runs clang-analyzer-* but none of the bugprone-*/cert-* checks"
 		fi
+		# Same floor as stage_warn's, for the same reason and the same
+		# line of code: one log per source file is written regardless of
+		# whether that file had a finding, so "no logs" and "no findings"
+		# produced identical output and the old `ls ... && cat` treated
+		# both as a pass.  Count the logs against the source list before
+		# $pardir goes away.
+		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
 		ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"
 		rm -rf "$pardir"
+		if [ "$nsrc" -eq 0 ] || [ "$nlog" -ne "$nsrc" ]; then
+			note "analyzer [$arch]: FAILED -- $nlog of $nsrc source file(s) were analyzed."
+			note "  the analyzer did not cover the source set, so a clean result here"
+			note "  would mean nothing.  This is not a findings count of zero."
+			any=1
+			continue
+		fi
+		analyzed=$((analyzed + 1))
 		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 			| tee "$out.uniq" | wc -l)
-		note "analyzer [$arch]: $n unique finding(s) -> $out.uniq"
+		note "analyzer [$arch]: $nsrc file(s), $n unique finding(s) -> $out.uniq"
 		[ "$n" -gt 0 ] && any=1
 	done
+	if [ "$analyzed" -eq 0 ] && [ "$LINT_ALLOW_MISSING" != 1 ]; then
+		note "analyze: FAILED -- no arch was analyzed at all; this stage examined"
+		note "  nothing and therefore found nothing."
+		any=1
+	fi
 	return $any
 }
 
