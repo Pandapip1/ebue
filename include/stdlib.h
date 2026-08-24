@@ -148,7 +148,6 @@ void *valloc (size_t);
 void *memalign(size_t, size_t);
 size_t malloc_usable_size(void *);
 int getloadavg(double *, int);
-int clearenv(void);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
 void *reallocarray (void *, size_t, size_t);
@@ -161,7 +160,6 @@ int ptsname_r(int, char *, size_t);  /* undefined-ok: see posix_openpt in
 char *ecvt(double, int, int *, int *);
 char *fcvt(double, int, int *, int *);
 char *gcvt(double, int, char *);
-char *secure_getenv(const char *);
 #endif
 
 #ifdef __cplusplus

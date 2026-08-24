@@ -38,4 +38,3 @@ char *getenv(const char *name)
 	return e ? *e + l + 1 : 0;
 }
 
-char *secure_getenv(const char *name) { return getenv(name); }

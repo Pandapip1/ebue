@@ -85,13 +85,3 @@ int unsetenv(const char *name)
 	}
 	return 0;
 }
-
-int clearenv(void)
-{
-	char **e;
-	if (__environ) {
-		for (e = __environ; *e; e++) if (!is_putenv(*e)) free(*e);
-		__environ[0] = 0;
-	}
-	return 0;
-}
