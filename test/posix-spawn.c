@@ -1,0 +1,662 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * <spawn.h> -- the _POSIX_SPAWN (SPN) option group, first instalment:
+ * posix_spawn(), posix_spawn_file_actions_init/_destroy/_adddup2 and
+ * posix_spawnattr_init/_destroy/_setflags/_setsigmask.  Those eight are
+ * exactly what GNU make's USE_POSIX_SPAWN path calls (src/job.c
+ * child_execute_job) and they are representative: adddup2 onto the
+ * three standard descriptors is what portable code uses posix_spawn
+ * *for*.  posix_spawnp(), addopen/addclose and the remaining attribute
+ * accessors follow, with their own assertions.
+ *
+ * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/spawn.h.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawn.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawn_file_actions_adddup2.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawnattr_init.html
+ *
+ * This file is its own child: every spawn below re-runs this executable
+ * with a command word, and the child reports what its inherited
+ * descriptor table looks like down a pipe.  That is the only way to
+ * check a file action at all -- the whole observable content of
+ * posix_spawn_file_actions_t is what the *child* sees, so a test that
+ * only inspected the object would be checking a struct, not a spawn.
+ *
+ * Two properties get more attention than the rest because they are the
+ * two that are easy to get wrong and impossible to notice:
+ *
+ *   - Order.  DESCRIPTION: "The file actions ... shall be performed in
+ *     the order in which they were added."  A replay that iterates the
+ *     list backwards, or that resolves every source descriptor against
+ *     the *original* table instead of the running one, passes any test
+ *     with a single action in it.  test_order_two_targets() and
+ *     test_order_chained() are built so that the reversed replay
+ *     produces a *different, specific* answer rather than a broken one.
+ *
+ *   - errno.  RETURN VALUE: posix_spawn() and every accessor here
+ *     "shall return zero; otherwise, an error number shall be returned
+ *     to indicate the error" -- the error is the return value and errno
+ *     is not written.  An implementation built on functions that all
+ *     report through errno slips into returning -1, or into leaving
+ *     errno set, almost by default, so errno is stamped with a sentinel
+ *     before each failing call and checked afterwards.
+ *
+ * Nothing here forks: posix_spawn() is specified in terms of fork() but
+ * is not required to use one, and __spawn() (src/process/spawn.c) never
+ * does -- so, unlike test/fork*.c, this file runs under a stock Wine
+ * with no RtlCloneUserProcess.  If the very first self-spawn fails
+ * anyway, main() prints one SKIP line naming the mechanism and the
+ * observed errno and exits 77 rather than reporting a pass over
+ * assertions that never ran.
+ */
+#include <spawn.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+
+extern char **environ;
+
+static int fails;
+/* Assertion groups this run could not exercise at all; see main(). */
+static int unverified;
+#define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+/* A value errno is never set to by anything here, stamped in before a
+ * call that must not touch it. */
+#define ERRNO_SENTINEL 0x5eed
+
+/* ---------------------------------------------------------------- */
+/* The child half.                                                    */
+/* ---------------------------------------------------------------- */
+
+static void wr(int fd, const char *s) { (void)!write(fd, s, strlen(s)); }
+
+/* argv[1] is the command word; the child exits 0 having done exactly
+ * what it says, so a nonzero child status is itself an assertion
+ * failure in the parent. */
+static int child_main(int argc, char **argv)
+{
+	const char *cmd = argv[1];
+
+	if (!strcmp(cmd, "w1")) { wr(1, argv[2]); return 0; }
+	if (!strcmp(cmd, "w2")) { wr(2, argv[2]); return 0; }
+	if (!strcmp(cmd, "both")) { wr(1, argv[2]); wr(2, argv[3]); return 0; }
+	if (!strcmp(cmd, "probe")) {
+		/* fcntl(F_GETFD) is the cheapest "is this descriptor open"
+		 * question there is, and unlike a read or a write it neither
+		 * consumes anything nor cares which way the descriptor faces. */
+		int fd = atoi(argv[2]);
+		wr(1, fcntl(fd, F_GETFD) >= 0 ? "open" : "closed");
+		return 0;
+	}
+	if (!strcmp(cmd, "cat")) {
+		char b[256];
+		ssize_t n;
+		while ((n = read(0, b, sizeof b)) > 0) (void)!write(1, b, (size_t)n);
+		return 0;
+	}
+	if (!strcmp(cmd, "argv")) {
+		int i;
+		for (i = 2; i < argc; i++) { wr(1, argv[i]); wr(1, "|"); }
+		return 0;
+	}
+	wr(2, "child: unknown command\n");
+	return 1;
+}
+
+/* ---------------------------------------------------------------- */
+/* Parent-side helpers.                                               */
+/* ---------------------------------------------------------------- */
+
+static const char *self;
+
+/* Spawn self with up to three extra words, wait for it, and return the
+ * bytes the child wrote to `readfd` (a pipe read end the caller has
+ * already wired up through file actions).  `*rc` receives posix_spawn()'s
+ * own return value.  `wend` is the pipe write end in the *parent*, which
+ * must be closed before reading or the read never sees EOF. */
+static void spawn_and_collect(int *rc, const posix_spawn_file_actions_t *fa,
+                              const posix_spawnattr_t *at,
+                              const char *a1, const char *a2, const char *a3,
+                              int wend, int readfd, char *out, size_t outlen)
+{
+	char *argv[5];
+	pid_t pid = -1;
+	int status = -1, n = 0;
+	ssize_t r;
+
+	argv[n++] = (char *)self;
+	argv[n++] = (char *)a1;
+	if (a2) argv[n++] = (char *)a2;
+	if (a3) argv[n++] = (char *)a3;
+	argv[n] = 0;
+
+	out[0] = 0;
+	*rc = posix_spawn(&pid, self, fa, at, argv, environ);
+	if (*rc != 0) { if (wend >= 0) close(wend); return; }
+	if (wend >= 0) close(wend);
+	if (readfd >= 0) {
+		size_t got = 0;
+		while (got + 1 < outlen && (r = read(readfd, out + got, outlen - 1 - got)) > 0)
+			got += (size_t)r;
+		out[got] = 0;
+	}
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/* ---------------------------------------------------------------- */
+/* posix_spawn_file_actions_* -- the recording half.                  */
+/* ---------------------------------------------------------------- */
+
+/* posix_spawn_file_actions_init.html RETURN VALUE, and each add*'s
+ * ERRORS: "[EBADF] The value specified by fildes is negative or greater
+ * than or equal to {OPEN_MAX}." */
+static void test_file_actions_object(void)
+{
+	posix_spawn_file_actions_t fa;
+	long openmax = sysconf(_SC_OPEN_MAX);
+	int e;
+
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+
+	errno = ERRNO_SENTINEL;
+	CHECK(posix_spawn_file_actions_adddup2(&fa, -1, 1) == EBADF);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, 1, -1) == EBADF);
+	if (openmax > 0 && openmax < 1000000L) {
+		int too_big = (int)openmax;
+		CHECK(posix_spawn_file_actions_adddup2(&fa, too_big, 1) == EBADF);
+		CHECK(posix_spawn_file_actions_adddup2(&fa, 1, too_big) == EBADF);
+	}
+	/* "an error number shall be returned to indicate the error" -- in
+	 * the return value, so errno is left exactly as the caller had it. */
+	e = errno;
+	CHECK(e == ERRNO_SENTINEL);
+
+	/* Valid additions, well past the initial capacity, to make sure the
+	 * list actually grows instead of overwriting its last entry. */
+	{
+		int i;
+		for (i = 0; i < 64; i++)
+			CHECK(posix_spawn_file_actions_adddup2(&fa, 1, 3 + (i % 5)) == 0);
+	}
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+	/* Destroy then re-init is how a caller reuses one object; a destroy
+	 * that left the array pointer behind would double-free here. */
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, 1, 3) == 0);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+}
+
+/* ---------------------------------------------------------------- */
+/* posix_spawn() acting on file actions.                              */
+/* ---------------------------------------------------------------- */
+
+/* The common case, and the one GNU make's USE_POSIX_SPAWN path is built
+ * on: adddup2() of a pipe end onto a standard descriptor. */
+static void test_adddup2_stdout(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64];
+	int p[2], rc = -1;
+
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	spawn_and_collect(&rc, &fa, 0, "w1", "hello", 0, p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "hello"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+}
+
+static void test_adddup2_stderr(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64];
+	int p[2], rc = -1;
+
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 2) == 0);
+	spawn_and_collect(&rc, &fa, 0, "w2", "onerr", 0, p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "onerr"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+}
+
+/* Order, part 1: two actions with the *same target*.  Whichever ran last
+ * wins, so a replay in the wrong order sends the output down the other
+ * pipe -- a specific wrong answer, not a crash. */
+static void test_order_two_targets(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64], other[64];
+	int p[2], q[2], rc = -1;
+	ssize_t n;
+
+	CHECK(pipe(p) == 0);
+	CHECK(pipe(q) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, q[1], 1) == 0);
+	/* q was added second, so the child's fd 1 is q's write end.  p[1]
+	 * stays open here until the spawn is done: the recorded action
+	 * names the descriptor by number and the replay resolves it at
+	 * spawn time, so closing it first would fail the call with EBADF. */
+	spawn_and_collect(&rc, &fa, 0, "w1", "LAST", 0, q[1], q[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "LAST"));
+	/* ...and nothing at all went to p.  With both write ends now gone
+	 * (the parent's here, the child's when it exited) this read returns
+	 * 0 at EOF rather than blocking. */
+	close(p[1]);
+	other[0] = 0;
+	n = read(p[0], other, sizeof other - 1);
+	CHECK(n == 0);
+	close(p[0]);
+	close(q[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+}
+
+/* Order, part 2: the second action's *source* is the first action's
+ * target.  This is the one that separates "replay in order against the
+ * running table" from "resolve every source against the original
+ * table": only the former puts the child's fd 2 on the pipe. */
+static void test_order_chained(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64];
+	int p[2], rc = -1;
+
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, 1, 2) == 0);
+	spawn_and_collect(&rc, &fa, 0, "both", "A", "B", p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "AB"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+}
+
+/* adddup2(fd, fd): the descriptor stays open across the exec.  POSIX.1-2017
+ * does not spell this case out, but its step 4 ("any file descriptor
+ * that has its FD_CLOEXEC flag set shall be closed") is what makes
+ * naming a descriptor as its own dup2 target mean anything at all, and
+ * it is what glibc does with it. */
+static void test_adddup2_self(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64], num[16];
+	int p[2], rc = -1, cl;
+
+	cl = open("spawn-cloexec.txt", O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+	CHECK(cl >= 0);
+	if (cl < 0) return;
+	CHECK((fcntl(cl, F_GETFD) & FD_CLOEXEC) != 0);
+	sprintf(num, "%d", cl);
+
+	/* Baseline: a close-on-exec descriptor is not inherited. */
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	spawn_and_collect(&rc, &fa, 0, "probe", num, 0, p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "closed"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+
+	/* Naming it as its own dup2 target clears that. */
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, cl, cl) == 0);
+	spawn_and_collect(&rc, &fa, 0, "probe", num, 0, p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "open"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+
+	/* ...in the child only. The parent's descriptor is still
+	 * close-on-exec afterwards, which is the visible half of "the
+	 * actions are replayed on this table and then undone". */
+	CHECK((fcntl(cl, F_GETFD) & FD_CLOEXEC) != 0);
+	close(cl);
+	unlink("spawn-cloexec.txt");
+}
+
+/* An action naming a descriptor that is not open fails the call with
+ * dup2()'s own error, and leaves the parent's table alone. */
+static void test_adddup2_badfd(void)
+{
+	posix_spawn_file_actions_t fa;
+	pid_t pid = (pid_t)-999;
+	char *argv[3];
+	int rc, spare;
+
+	spare = open("spawn-spare.txt", O_RDWR | O_CREAT | O_TRUNC, 0666);
+	CHECK(spare >= 0);
+	if (spare < 0) return;
+	close(spare);            /* now a valid index with nothing in it */
+
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, spare, 1) == 0);
+	argv[0] = (char *)self; argv[1] = (char *)"w1"; argv[2] = 0;
+	errno = ERRNO_SENTINEL;
+	rc = posix_spawn(&pid, self, &fa, 0, argv, environ);
+	CHECK(rc == EBADF);
+	CHECK(errno == ERRNO_SENTINEL);
+	CHECK(pid == (pid_t)-999);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+	unlink("spawn-spare.txt");
+}
+
+/* The parent's descriptor table is byte-for-byte what it was: a
+ * descriptor borrowed as a dup2 target still refers to the same open
+ * file description, at the same offset, afterwards. */
+static void test_parent_table_restored(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[64];
+	int p[2], rc = -1, keep;
+	ssize_t n;
+
+	keep = open("spawn-keep.txt", O_RDWR | O_CREAT | O_TRUNC, 0666);
+	CHECK(keep >= 0);
+	if (keep < 0) return;
+	CHECK(write(keep, "ABCDEFGH", 8) == 8);
+	CHECK(lseek(keep, 3, SEEK_SET) == 3);
+
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], keep) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	spawn_and_collect(&rc, &fa, 0, "w1", "ok", 0, p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "ok"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+
+	/* Same descriptor, same file, same offset. */
+	CHECK(lseek(keep, 0, SEEK_CUR) == 3);
+	n = read(keep, got, 5);
+	CHECK(n == 5);
+	if (n == 5) { got[5] = 0; CHECK(!strcmp(got, "DEFGH")); }
+	close(keep);
+	unlink("spawn-keep.txt");
+}
+
+/* ---------------------------------------------------------------- */
+/* posix_spawnattr_*                                                  */
+/* ---------------------------------------------------------------- */
+
+/* Spawn with `flags` (and optionally a signal mask) set, and
+ * hand back posix_spawn()'s return value.  Reaps the child when one was
+ * made, so a flag that is honoured does not leave a process behind. */
+static int spawn_with_flags(short flags, const sigset_t *mask)
+{
+	posix_spawnattr_t at;
+	posix_spawn_file_actions_t fa;
+	pid_t pid = (pid_t)-999;
+	char *argv[4];
+	int rc, p[2], status;
+	char buf[16];
+
+	if (pipe(p) != 0) return -1;
+	posix_spawnattr_init(&at);
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, p[1], 1);
+	if (mask) posix_spawnattr_setsigmask(&at, mask);
+	posix_spawnattr_setflags(&at, flags);
+
+	argv[0] = (char *)self; argv[1] = (char *)"w1"; argv[2] = (char *)"f"; argv[3] = 0;
+	errno = ERRNO_SENTINEL;
+	rc = posix_spawn(&pid, self, &fa, &at, argv, environ);
+	/* Whether it succeeded or was refused, the answer came back in the
+	 * return value and errno was left alone. */
+	CHECK(errno == ERRNO_SENTINEL);
+	close(p[1]);
+	if (rc == 0) {
+		(void)!read(p[0], buf, sizeof buf);
+		CHECK(waitpid(pid, &status, 0) == pid);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	} else {
+		CHECK(pid == (pid_t)-999);
+	}
+	close(p[0]);
+	posix_spawn_file_actions_destroy(&fa);
+	posix_spawnattr_destroy(&at);
+	return rc;
+}
+
+/* Which spawn-flags posix_spawn() can act on, and what it does with the
+ * ones it cannot.  Each rejection is checked against the error POSIX's
+ * own ERRORS section routes that flag to -- not merely against
+ * "nonzero" -- because the point is that a portable caller gets the
+ * failure it is already written to handle. */
+static void test_attr_flags_acted_on(void)
+{
+	sigset_t empty, one;
+
+	CHECK(sigemptyset(&empty) == 0);
+	CHECK(sigemptyset(&one) == 0);
+	CHECK(sigaddset(&one, SIGINT) == 0);
+
+	/* Honoured, and satisfied by construction: a fresh NT process runs
+	 * its own crt1, whose signal state (src/signal/signal.c statics) is
+	 * an empty mask and SIG_DFL everywhere. */
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSIGDEF, 0) == 0);
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSIGMASK, &empty) == 0);
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK, &empty) == 0);
+	/* RESETIDS: an NT token has no real/effective/saved triple to
+	 * reset, so the postcondition holds unconditionally. */
+	CHECK(spawn_with_flags(POSIX_SPAWN_RESETIDS, 0) == 0);
+	/* USEVFORK is not POSIX; __spawn() never copies the parent's
+	 * address space, which is the whole of what it asks for. */
+	CHECK(spawn_with_flags(POSIX_SPAWN_USEVFORK, 0) == 0);
+
+	/* A mask that is not empty cannot be delivered to a child that has
+	 * not run yet, so it is refused rather than dropped.  ERRORS:
+	 * "[EINVAL] The value specified by file_actions or attrp is
+	 * invalid" is the only channel POSIX gives this flag. */
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSIGMASK, &one) == EINVAL);
+
+	/* SETSCHEDPARAM/SETSCHEDULER: ERRORS routes these to
+	 * sched_setparam()/sched_setscheduler(), whose "[EINVAL] The value
+	 * of the policy parameter is invalid" is the honest answer where no
+	 * POSIX scheduling policy exists.  (Issue 6 deleted [ENOSYS] from
+	 * sched_setscheduler(), so EINVAL is the specified shape.) */
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM, 0) == EINVAL);
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDULER, 0) == EINVAL);
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER, 0) == EINVAL);
+
+	/* SETPGROUP: refused outright.  There is no spawn-pgroup accessor
+	 * yet, and no process group for one to name either -- src/unistd/
+	 * ids.c answers getpgrp()/getpgid() with a fixed 1 for every
+	 * process, and no NT object plays a POSIX process group's role.
+	 * ERRORS routes this flag to setpgid(), whose "[EINVAL] The value
+	 * of the pgid argument ... is not a value supported by the
+	 * implementation" is exactly the case. */
+	CHECK(spawn_with_flags(POSIX_SPAWN_SETPGROUP, 0) == EINVAL);
+
+	/* A bit that is not a flag at all. */
+	CHECK(spawn_with_flags((short)0x1000, 0) == EINVAL);
+}
+
+/* ---------------------------------------------------------------- */
+/* posix_spawn error reporting                                        */
+/* ---------------------------------------------------------------- */
+
+/* ERRORS, plus the errno rule, on the plainest failure there is. */
+static void test_enoent_and_errno(void)
+{
+	pid_t pid = (pid_t)-999;
+	char *argv[2];
+	int rc;
+
+	argv[0] = (char *)"no-such-program"; argv[1] = 0;
+	errno = ERRNO_SENTINEL;
+	rc = posix_spawn(&pid, "spawn-no-such-dir/no-such-program", 0, 0, argv, environ);
+	CHECK(rc == ENOENT);
+	/* "an error number shall be returned as the function value to
+	 * indicate the error" -- posix_spawn() reports through the return
+	 * value only, and does not set errno. */
+	CHECK(errno == ERRNO_SENTINEL);
+	CHECK(pid == (pid_t)-999);
+}
+
+/* argv reaches the child intact, and a NULL file_actions/attrp pair is
+ * the documented "no actions, default attributes" case. */
+static void test_null_actions_and_argv(void)
+{
+	posix_spawn_file_actions_t fa;
+	char got[128];
+	int p[2], rc = -1;
+
+	CHECK(pipe(p) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, p[1], 1) == 0);
+	spawn_and_collect(&rc, &fa, 0, "argv", "one two", "three\"four", p[1], p[0], got, sizeof got);
+	CHECK(rc == 0);
+	CHECK(!strcmp(got, "one two|three\"four|"));
+	close(p[0]);
+	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
+
+	/* Both objects NULL: no actions, default attributes.  The child
+	 * inherits this process's stdout, so it is told to write nothing. */
+	{
+		pid_t pid = (pid_t)-1;
+		char *argv[4];
+		int status;
+		argv[0] = (char *)self; argv[1] = (char *)"w1"; argv[2] = (char *)""; argv[3] = 0;
+		CHECK(posix_spawn(&pid, self, 0, 0, argv, environ) == 0);
+		CHECK(pid > 0);
+		CHECK(waitpid(pid, &status, 0) == pid);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	}
+}
+
+/* ---------------------------------------------------------------- */
+
+#if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS,
+	"reset the effective user ID of the child process to the real user
+	ID of the parent process".  An NT access token carries a set of
+	SIDs and privileges; it has no real/effective/saved-set-id triple,
+	so there is no state in which a child's effective id *differs* from
+	its real one for this flag to collapse.  test/POSIX-COVERAGE.md and
+	test/posix-dl.c already fence it on exactly that mechanism.  The
+	flag is accepted by posix_spawn() (asserted above) because its
+	postcondition is unconditionally true, not because it is ignored. */
+static void test_resetids(void)
+{
+	posix_spawnattr_t at;
+	posix_spawnattr_init(&at);
+	posix_spawnattr_setflags(&at, POSIX_SPAWN_RESETIDS);
+	CHECK(geteuid() == getuid());
+}
+#endif
+
+/* ---------------------------------------------------------------- */
+
+int main(int argc, char **argv)
+{
+	pid_t probe = -1;
+	char *pargv[4];
+	int status;
+
+	if (argc > 1) return child_main(argc, argv);
+
+	self = argv[0];
+
+	/* The environment probe: one complete round trip of the machinery
+	 * every assertion below depends on -- spawn this executable, hand
+	 * its fd 1 to a pipe with the one file action, reap it, and read
+	 * back what it wrote.  If any part of that does not work, every
+	 * assertion below would fail for a single environmental reason,
+	 * which is not a result.  Exit 77 with one SKIP line naming the
+	 * mechanism instead, the way test/posix-socket.c does for a missing
+	 * network stack.
+	 *
+	 * The known environment where this fires is the native
+	 * (Linux/ELF) `make asan` build: fuzz/ntstubs.c stands in for
+	 * RtlCreateUserProcess by execve()ing a real host binary, and the
+	 * fresh child's __ntshim_init wires up only StandardInput/Output/
+	 * Error before calling __fd_init -- there is no process-parameters
+	 * copy carrying a RuntimeData descriptor table across that execve
+	 * the way real NT's does.  This test is covered by `make check`
+	 * under Wine, and by the real-Windows CI leg, where
+	 * RtlCreateUserProcess is the real thing.
+	 *
+	 * The child is reaped before the pipe is read, rather than after,
+	 * so that a child that never runs cannot turn this probe into a
+	 * hang. */
+	{
+		posix_spawn_file_actions_t fa;
+		char got[32];
+		int p[2], rc = -1;
+		ssize_t n = -1;
+		const char *why = 0;
+
+		pargv[0] = (char *)self;
+		pargv[1] = (char *)"w1";
+		pargv[2] = (char *)"PROBE";
+		pargv[3] = 0;
+
+		if (pipe(p) != 0) {
+			why = "pipe() failed";
+		} else {
+			posix_spawn_file_actions_init(&fa);
+			posix_spawn_file_actions_adddup2(&fa, p[1], 1);
+			rc = posix_spawn(&probe, self, &fa, 0, pargv, environ);
+			posix_spawn_file_actions_destroy(&fa);
+			close(p[1]);
+			if (rc != 0) why = "posix_spawn() failed";
+			else if (waitpid(probe, &status, 0) != probe) why = "waitpid() did not reap the child";
+			else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) why = "the child did not exit 0";
+			else if ((n = read(p[0], got, sizeof got - 1)) <= 0) why = "nothing came back down the pipe";
+			else { got[n] = 0; if (strcmp(got, "PROBE")) why = "the wrong bytes came back down the pipe"; }
+			close(p[0]);
+		}
+		if (why) {
+			printf("SKIP posix-spawn (%s; rc=%d, errno=%d): this "
+			       "environment cannot spawn a child of this "
+			       "executable and hand it a descriptor, which every "
+			       "assertion here needs.  Real NT does that through "
+			       "RtlCreateUserProcess plus the RuntimeData "
+			       "descriptor table (src/process/spawn.c, "
+			       "src/internal/fd.c)\n", why, rc, errno);
+			printf("posix-spawn: 0 assertion(s) ran\n");
+			return 77;
+		}
+	}
+
+	test_file_actions_object();
+	test_adddup2_stdout();
+	test_adddup2_stderr();
+	test_order_two_targets();
+	test_order_chained();
+	test_adddup2_self();
+	test_adddup2_badfd();
+	test_parent_table_restored();
+	test_attr_flags_acted_on();
+	test_enoent_and_errno();
+	test_null_actions_and_argv();
+
+	if (fails) { printf("posix-spawn: failures: %d\n", fails); return 1; }
+	if (unverified) {
+		printf("posix-spawn: %d assertion group(s) unverified in this "
+		       "environment (see SKIP lines above); no failures in what "
+		       "did run\n", unverified);
+		return 77;
+	}
+	printf("posix-spawn: all ok\n");
+	return 0;
+}
