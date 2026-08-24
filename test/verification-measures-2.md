@@ -13,9 +13,15 @@ corpus: the tagged `#if 0` fences in `test/`, each one a confirmed,
 reproduced, unfixed defect with a written description and a citation.
 
 The nine measures ranked there are taken as given and not re-derived.
-Everything below was measured on a fresh clone of `origin/main` at
-`06f3203`, x86_64, clang 18.1.3 / gcc 13, tcc cross to `x86_64-win32`,
-Wine for the PE legs. Numbers are quoted as measured.
+Everything below was measured on a fresh clone of `origin/main`,
+x86_64, clang 18.1.3 / gcc 13, tcc cross to `x86_64-win32`, Wine for
+the PE legs. Numbers are quoted as measured. Measurement started at
+`06f3203` and `main` moved seven times during the writing; every count
+was re-taken at `d36b07c` and the fence counts, the grep hit counts and
+the 66-function list are unchanged. Two claims did **not** survive, and
+the corrections are more useful than the originals were -- see
+[N4](#n4-assert-the-layouts-the-differing-leg-gets-wrong) and
+[Live findings](#live-findings).
 
 ## Contents
 
@@ -221,9 +227,12 @@ below on measurement.
 N1's `wordexp` finding, and it names `symlinkat` -- the live
 heap-buffer-overflow -- without being told about it.**
 
-The first document's M2 asks which implemented functions no test
-*references*. The finer and more productive question is which functions
-no test ever makes **fail**. Both sets are already computable from files
+The first document's M2 -- which implemented functions no test
+*references* -- landed at `d36b07c` while this was being written. The
+finer and more productive question is the one behind it: which functions
+no test ever makes **fail**. It is a different set, computed from
+different inputs, and it does not subsume or duplicate the shipped
+check. Both sets are already computable from files
 in the tree:
 
 - a function's own body assigns `errno` or calls `__set_errno_status`
@@ -257,12 +266,14 @@ The 66:
 The list is worth reading closely, because three defects found by three
 independent routes are all on it and none of them was used to build it.
 `newlocale` is the clause audit's `(void)mask; (void)base;` finding.
-`wordexp` is N1's shift. `symlinkat` is the live ASan
-heap-buffer-overflow at `src/unistd/link.c:186` -- and the reason that
-overflow survived is visible in the list: `test/posix-unistd.c:928`
+`wordexp` is N1's shift. `symlinkat` was the ASan heap-buffer-overflow
+at `src/unistd/link.c:186`, live when this list was computed and fixed
+at `a54b53a` while this document was being written -- and the reason
+that overflow survived is visible in the list: `test/posix-unistd.c:928`
 calls `symlink()` inside `if (symlink(...) == 0)`, so the *failure* of
 symlink is never asserted and its *success* path is skipped everywhere
-except the one build where it runs.
+except the one build where it runs. The list was computed before either
+fix landed and named the function without being told about it.
 
 **Cost.** 0.93 s, once, in a stage that runs concurrently. ~25 lines
 plus a committed baseline count so the number can only go down. Ship it
@@ -333,54 +344,82 @@ order, or a bitmask whose meaning is defined in a header and decoded by
 arithmetic. It is cheap enough that being narrow is acceptable, but it
 is narrow.
 
-### N4: a committed expected-result set per leg
+### N4: assert the layouts the differing leg gets wrong
 
-**Catches: the class of "an assertion that is true only in the
-configuration its author ran". Two of the two failures on `main`'s
-`asan` leg today are in this class or adjacent to it.**
+**Catches: two defects that were live on `06f3203` when this document
+was started and were fixed at `a54b53a` and `8874d38` while it was being
+written. Both were visible on exactly one leg, and that leg is the one
+whose configuration differs.**
 
-The `nextafterl`/`nexttowardl` case is the pattern. `make asan` on
-`06f3203` reports:
+This measure was drafted as something else and the evidence changed it.
+The brief called the class "assertions that are configuration-dependent
+and pass in the configuration their author ran", with
+`nextafterl`/`nexttowardl` failing only under ASan as the instance. That
+framing is wrong, and the way it is wrong is the useful part.
+
+At `06f3203`, `make check` under Wine was 46/46 and `make asan` had two
+failures:
 
 ```
 FAIL test/posix-math.c:1427: nextafterl(1.0L, 2.0L) > 1.0L && nextafterl(1.0L, 0.0L) < 1.0L
-FAIL test/posix-math.c:1443: nexttowardl(1.0L, 2.0L) > 1.0L && nexttowardl(1.0L, 0.0L) < 1.0L
+ERROR: AddressSanitizer: heap-buffer-overflow, WRITE of size 1, symlinkat at src/unistd/link.c:186
 ```
 
-and `make check` under Wine reports 46/46. Both are right. The native
-ASan build has an 80-bit `long double` (measured: `sizeof 16`,
-`LDBL_MANT_DIG 64`); the shipped `--host=x86_64-win32` tcc build has a
-64-bit one, and `arch/x86_64/bits/float.h:21` already switches on
-`__SIZEOF_LONG_DOUBLE__` to say so. The *header* handles the axis
-correctly. The *assertions* at `test/posix-math.c:1423-1443` carry no
-guard at all, while `test/math.c:19` and `test/posix-limits.c:346`
-define `TEST_LDBL_EXTENDED` from the identical test. Four `#if`s in
-`test/` mention `__SIZEOF_LONG_DOUBLE__`; none of them is in the file
-that fails.
+Both look like configuration artefacts and both had a ready explanation
+-- the native build has an 80-bit `long double` where the shipped one
+has 64, and the native build is not NT. **Neither explanation was
+right.** `8874d38` shows `nextafterl`'s 80-bit arm treated the x87
+significand as if its leading bit were implied, so `nextafterl(1.0L,
+0.0L)` produced an unnormal and the assertion was simply true;
+`a54b53a` shows `symlinkat` sized its allocation from the *on-the-wire*
+`REPARSE_DATA_BUFFER` header rather than the one the compiler laid out,
+which agree only while `ULONG` is 32 bits.
 
-Nothing here needs a new instrument. What is missing is a place to say
-"this test is expected to fail on this leg, for this reason", and a
-check that an expectation which stops being true is an error. Concretely:
-one committed file per leg listing test-and-line expected failures with
-a reason, consulted by `tools/asan-build.sh`, `tools/runtests.sh` and
-the CI PowerShell leg; an unlisted failure fails the leg, and a **listed
-failure that passes also fails the leg**. The second half is what stops
-the list becoming the graveyard that such lists usually become -- it is
-the same self-evaluating idea the first document proposes in M8 for the
-findings record, applied to the per-leg result set.
+So the class is not a bad assertion. It is: **a leg whose configuration
+differs is the only leg that can see a whole class of defect, and its
+failures are exactly the ones easiest to wave away.** That inverts the
+obvious measure. An XFAIL ledger -- one committed line saying
+"`posix-math.c:1427` is expected to fail on `asan`, `long double` width
+differs" -- would have been written in good faith and would have buried
+a real bug permanently. **Do not build the XFAIL ledger.**
 
-**Cost.** Zero wall clock. One file, three consumers, roughly 30 lines
-each. The three consumers are the same three that already had to be
-taught `rc=77` independently, so this belongs with the first document's
-M5 rather than beside it.
+What to build instead is the check that makes the configuration axis
+itself assertable, because the axis is measurable and nothing measures
+it. `src/internal/nt.h:36` is `typedef unsigned long ULONG`, which is
+**4 bytes on the LLP64 target and 8 bytes in the native build**
+(confirmed by a negative-array-size probe). Measured on `d36b07c`:
 
-**Honest limit.** This does not *find* the configuration-dependent
-assertion. It stops one from being explained away, which is what
-happened here: a red `asan` leg with a plausible one-line reason is
-indistinguishable from a red `asan` leg with a real bug in it -- and on
-`06f3203` that leg is red for *both* reasons at once, one
-configuration-dependent assertion and one genuine heap-buffer-overflow,
-reported side by side.
+```
+typedef structs in src/internal/nt.h                     56
+  ... containing a bare ULONG or LONG field              36
+compile-time layout assertions on any of them, anywhere   0
+```
+
+Thirty-six NT structures have a different layout in the ASan and fuzz
+builds than in the shipped one, and nothing anywhere says so. That is
+simultaneously why the native build found both bugs and why its results
+about NT layouts cannot be trusted -- including the device-free
+structural tests, whose whole claim is that they check a byte image.
+
+The measure: a `_Static_assert` per NT structure giving its **target**
+size and the offset of every field a wire format depends on, written
+against the target widths, so that the native build fails to compile
+rather than silently testing a different struct. Where a structure
+genuinely must differ, the assertion is written per-arch and the
+difference is stated. `src/unistd/link.c` already reaches for `offsetof`
+in the fix; this generalises it from one site to thirty-six.
+
+**Cost.** Zero wall clock -- these are compile-time. Roughly 36
+assertions plus the offsets, written once, from `src/internal/nt.h`
+itself. It is the same "make it unrepresentable" preference as
+[N3](#n3-index-a-table-by-its-constant-not-by-its-position).
+
+**Honest limit.** This catches layout divergence, which is one of the
+two defects above. It would not have caught `nextafterl`: nothing about
+that is a struct. The measure for that one is the leg itself -- run the
+build whose `long double` is 80 bits, and treat its failures as findings
+until a mechanism is demonstrated. That is a process rule, and I am
+stating it as one rather than dressing it in a script.
 
 ### N5: pin the reference, and probe the target
 
@@ -689,7 +728,7 @@ By expected defects caught per unit of cost, with what each misses.
 | 2 | **N1** fuzz regex/glob/fnmatch/wordexp | 0 gate s; 300 s nightly per harness; ~30 lines each | F6's `regexec` crash (6/6 seeds); found a live `arith.c` shift UB in 120 s | all 13 F4 semantic fences -- a wrong answer is still an answer |
 | 3 | **N3** designated initialisers for constant-indexed tables | 0.04 s scan; 2 sites | a demonstrated latent transposition in `iswctype`/`wctype` and `strsignal` | any pairing not shaped as an integer ladder or a positional string table |
 | 4 | oracle declaration + aborting-stub link | seconds, concurrent | the device-free/device-touching confusion that nearly retracted a Wine patch | nothing about correctness; it labels oracles, it does not check them |
-| 5 | **N4** committed expected-result set per leg | 0 s, ~30 lines × 3 | the `nextafterl` configuration-dependent assertion being explained away | it does not *find* such an assertion |
+| 5 | **N4** target-layout `_Static_assert`s on the 36 width-sensitive NT structs | 0 s, compile-time | the `symlinkat` overflow (`a54b53a`), and the 36 structs the native build silently reshapes | anything that is not a struct layout -- notably `nextafterl` |
 | 6 | **N5** pin the reference (lint half) | 0.05 s + 217 annotations | nothing directly; makes F3 and the ReactOS class diagnosable | the wrong value itself |
 | 7 | **N5** probe the target (probe half) | per-constant, Server 2025 leg only | F3's `0x037F`, and the ReactOS layout errors | only the constants somebody thought to probe |
 | -- | 66 bounded ERRORS sections | an afternoon | the specific missing errnos behind N2's 66 | it is work, not a check |
@@ -749,8 +788,9 @@ these are proposals, and none of them is fenced.
    unobservable and says nothing about the argument being unchecked.
    Every one of these sites is `(void)p; return 0;`, and every one is in
    [N2](#n2-assert-that-a-function-can-fail)'s list of functions no test
-   makes fail. Not fenced -- fencing them is somebody else's commit, per
-   the brief this document was written under.
+   makes fail. Re-run at `d36b07c`; unchanged. Not fenced -- fencing
+   them is somebody else's commit, per the brief this document was
+   written under.
 
 3. **Two entries of `src/ctype/iswctype.c`'s case ladder and two of
    `src/string/strsignal.c`'s `__sigmsgs[]` can be transposed and the
@@ -759,19 +799,26 @@ these are proposals, and none of them is fenced.
    [N3](#n3-index-a-table-by-its-constant-not-by-its-position), run and
    reverted.
 
-4. **`test/posix-math.c:1423-1443` asserts `nextafterl`/`nexttowardl`
-   with no `long double` width guard**, while `test/math.c:19` and
-   `test/posix-limits.c:346` both define one from the identical
-   `__SIZEOF_LONG_DOUBLE__` test. This is one of the two failures on
-   `main`'s `asan` leg.
+4. **`ULONG` is 4 bytes on the target and 8 bytes in the native build,
+   36 of `src/internal/nt.h`'s 56 structures contain one, and nothing
+   asserts any of their layouts.** `src/internal/nt.h:36` is `typedef
+   unsigned long ULONG`. A negative-array-size probe compiled with the
+   ASan build's own flags confirms `sizeof(ULONG) != 4` there. Grep for
+   `_Static_assert` across `src/` and `test/` returns two hits, both in
+   `test/posix-strings.c` and both about `<assert.h>` itself. This is
+   what `a54b53a` fixed at one site out of thirty-six.
 
-5. **`test/posix-unistd.c:928` calls `symlink()` inside
-   `if (symlink(...) == 0)`**, so on every leg where `symlink()` is
-   unsupported the whole readlink success path is skipped silently --
-   `note: symlink() not supported here (errno 38)` in the Wine output --
-   and the live heap-buffer-overflow at `src/unistd/link.c:186` is
-   reachable only on the one leg where it does work. I did not
-   root-cause the overflow; it is being worked elsewhere.
+5. **Two findings I recorded as live were fixed while this was being
+   written, and both corrections matter.** `test/posix-math.c:1427`'s
+   `nextafterl` failure and `src/unistd/link.c:186`'s heap-buffer-
+   overflow were the two `asan` failures at `06f3203`; `make asan` at
+   `d36b07c` is `45/47 passed, 2 unverified, 7 not applicable natively,
+   0 unlinkable` and exits 0. I had both filed as configuration
+   artefacts of the native leg, which is what they look like and what
+   `8874d38` and `a54b53a` prove they were not. The rewritten
+   [N4](#n4-assert-the-layouts-the-differing-leg-gets-wrong) is the
+   result, and its recommendation is the opposite of the one I would
+   have written from the original framing.
 
 ## Backlog rather than gate
 
@@ -789,6 +836,9 @@ Things found while measuring that are work, not checks.
   by `Exxx`, and `src/ctype/iswctype.c`'s ladder should be deleted in
   favour of `src/ctype/wctype.c`'s table -- `src/regex/regex.c:146`
   shows the shape.
+- **36 target-layout `_Static_assert`s for `src/internal/nt.h`,** so the
+  native and fuzz builds fail to compile rather than testing a struct
+  the target does not have.
 - **ASan's stack-overflow report costs 90 s** on `src/regex`'s recursion
   because it unwinds every frame. Anything that bounds the recursion
   bounds the report too; until then a fuzz run that finds it spends most
