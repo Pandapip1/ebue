@@ -1324,3 +1324,75 @@ write reaches them: `fscanf`'s `[ENOMEM]` (which `src/stdio/scanf.c`'s
 own banner admits has "no channel"), `gets()`'s read-error-after-partial
 -line return, and the standing caveat that `flockfile`'s no-ops are
 N/A only for as long as `lib/libpthread.a` stays empty.
+
+## Changes since the clause audit of the `unistd.h` row (group M)
+
+Dated note, 2026-08-24, added rather than folded into the headline
+table for the reason the "Headline counts" section states: those
+numbers are a mechanical snapshot of `04edec2` and are deliberately not
+hand-edited. This follows the precedent of "Changes since the clause
+audit of groups A-G" immediately above; item 4 of the successor queue
+is still the thing that folds both in, and it has not been run.
+
+What moved: `test/POSIX-COVERAGE.md`'s new section **"unistd.h
+identity, process group, session, scheduling (successor-queue item 2,
+group M)"** clause-audits **25** of the 43 interfaces in the
+"Implemented, not clause-audited (357)" table's `unistd.h` row:
+
+`alarm chown fchown fchownat getegid geteuid getgid getgroups
+gethostname getpgid getpgrp getsid getuid lchown nice pause setegid
+seteuid setgid setpgid setpgrp setregid setreuid setsid setuid`
+
+Reading the frozen tables, subtract those 25 from 357 and add them to
+*implemented + clause-audited*; the `unistd.h` row of that table drops
+from 43 to 18.
+
+**Six bugs and three UNIMPLs**, every bug a *shall-fail* error clause:
+`getgroups()` accepting a negative `gidsetsize`; the six `set*id()`
+stubs reporting success for `setuid(0)` and for an unsupported id;
+`getpgid()`/`getsid()` answering for a nonexistent pid; `setpgid()`
+accepting a negative `pgid` and an unrelated `pid`; the four `chown`
+stubs reporting success for a nonexistent path, the empty string, a
+non-directory prefix and an unopened descriptor; and `gethostname()`
+reporting `-1`/`ENAMETOOLONG` for a truncation `gethostname.html`
+specifies as a successful completion. The UNIMPLs are `alarm()` (no
+timer at all), `nice()` (ignores `incr`, and `<limits.h>` defines no
+`{NZERO}`) and `setsid()`/`setpgrp()` (never enter the state their
+pages describe).
+
+That is the same shape as the never-asserted sweep's six and as the
+three headers a concurrent auditor reported the same day (`newlocale`
+ignoring `category_mask`, `posix_fadvise` ignoring `offset`/`len`,
+`posix_fallocate` returning the wrong errno for a directory):
+**unvalidated arguments in functions no caller had ever been in a
+position to check.** This file's degenerate-stub table
+("Permanent degenerate stubs") is where these 25 were previously
+recorded, and it stays accurate about the *effects*; what group M adds
+is that "the effect is unobservable" was being used to excuse
+"the argument is unread", which is a separate and fixable defect.
+
+**Two cautions on the 25, both instances of the caveat item 4 already
+records.** The split is derived by tokenising the ledger's first
+column, which is exact for a row naming one function and conservative
+for a row describing several:
+
+- Several rows above name four functions at once
+  (`chown / fchown / lchown / fchownat`,
+  `setuid / seteuid / setgid / setegid / setreuid / setregid`), so a
+  tokeniser that splits on the first column will see them; but
+  `pause` appears in a first column of its own only once and is
+  otherwise discussed in prose, which is the undercount mechanism
+  `hdestroy`/`wordfree` already demonstrated.
+- Every first-column identifier in group M was checked against every
+  first-column identifier earlier in the ledger. **The intersection is
+  not empty**, and this is worth stating rather than forcing:
+  `test/POSIX-COVERAGE.md`'s priority-6 section ("unistd.h, fcntl.h,
+  sys/stat.h") already carries rows naming `chown`, `getuid`,
+  `geteuid`, `getgid`, `getegid` and `setuid` in passing, as
+  *supporting* facts for `access()`/`chmod()`/`stat()` rows rather
+  than as audits of those pages. A first-column tokeniser will
+  therefore **double-count** those six. That is the opposite-direction
+  error a concurrent auditor hit the same day; the arithmetic above
+  (43 -> 18) is stated in terms of *pages audited*, which is the
+  number that is actually true, and the tokeniser's answer will differ.
+  Do not reconcile them by editing either.

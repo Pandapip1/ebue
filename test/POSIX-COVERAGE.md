@@ -3148,3 +3148,212 @@ may-fail. `gets()`'s read-error-after-partial-line path, and
 `fscanf()`'s `[ENOMEM]` path — both recorded under "Observed
 behaviour" above as inspection findings that no assertion here can
 reach. Every clause of `flockfile.html` that needs a second thread.
+
+## unistd.h identity, process group, session, scheduling (successor-queue item 2, group M)
+
+The first of four groups clause-auditing `test/POSIX-GAP-ACCOUNTING.md`'s
+**"Implemented, not clause-audited (357)"** table's *first* row —
+`unistd.h`, 43 functions, which that table explicitly orders first "by
+how much a clause audit would plausibly find". This group takes the
+`src/unistd/ids.c` family plus `alarm`/`pause`/`nice`/`gethostname`;
+groups N, O and P take the `*at()` link calls, the `exec` family and
+`fork` respectively.
+
+New clause-cited audit: `test/posix-unistd-ids.c` (this session).
+
+**These 23 names were not unvisited** — `test/POSIX-GAP-ACCOUNTING.md`'s
+never-asserted sweep gave every one of them (except `pause`) a *first
+assertion* in `test/posix-unistd.c`'s `test_id_session_stubs()` and
+`test/unistd.c`. What that sweep asserted was the **return values** and
+the **cross-getter consistency**, and it recorded the *effects* as N/A
+on the ground that this library models one user and one session. This
+audit accepts that N/A for the effects and rejects it for everything
+else, on one distinction the sweep did not draw:
+
+> A degenerate identity model makes an **effect** unobservable. It does
+> not make an **argument check** unobservable.
+
+Every page below carries shall-fail `[EINVAL]`/`[EPERM]`/`[EBADF]`/
+`[ESRCH]` clauses that constrain what the call may do with a bad
+argument no matter how many users the platform has. Six of them are
+answered "success". That is the same defect shape the never-asserted
+sweep's own six finds had — *every one a shall-fail error clause that
+survived because no caller was ever in a position to notice* — and it
+is why this row was worth working before the other 42.
+
+**Oracle: Wine is sound for nearly all of this.** Not one function in
+`src/unistd/ids.c` makes an NT call; they are 30 lines of one-line C
+returning constants. `gethostname()` reads `%COMPUTERNAME%` and
+`pause()` calls `NtDelayExecution`. What is being measured is ntlibc's
+own C, so a green Wine run is strong evidence here in a way it is not
+for the filesystem or console groups.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| getuid / geteuid / getgid / getegid | getuid.html RETURN VALUE "shall always be successful and no return value is reserved to indicate the error"; ERRORS "No errors are defined." | covered | test/posix-unistd-ids.c (`test_getid_always_successful`) |
+| getuid / geteuid / getgid / getegid | the returned id is a real id, not the `(uid_t)-1` chown.html reserves, and is stable across calls | covered | test/posix-unistd-ids.c (`test_getid_always_successful`) |
+| geteuid / getegid | geteuid.html's real-vs-effective distinction | N/A — NT has no set-user-ID bit and no saved set-user-ID; a process token is not switched by executing a file, so nothing on this platform can make the effective id differ from the real one. The agreement *is* asserted (test/posix-unistd.c's `test_access_real_effective_uid_identical` already leans on it) | — |
+| getgroups | "If gidsetsize is 0, getgroups() shall return the number of group IDs that it would otherwise return without modifying the array" | covered | test/posix-unistd-ids.c (`test_getgroups`) |
+| getgroups | "the value returned shall always be greater than or equal to one and less than or equal to the value of {NGROUPS_MAX}+1"; "The actual number of group IDs stored in the array shall be returned" — same count with room for all of them, and the first *n* entries actually written | covered | test/posix-unistd-ids.c (`test_getgroups`) |
+| getgroups | "[EINVAL] The gidsetsize argument is non-zero and less than the number of group IDs that would have been returned" — for a **negative** gidsetsize | **BUG** — see below | fenced, `test_getgroups` |
+| getgroups | the same [EINVAL] for a *positive* gidsetsize | N/A — unconstructible rather than unimplemented: the count is 1 and the smallest positive gidsetsize is 1, so no positive value is ever less than it. A one-group process cannot exhibit that error on any implementation | — |
+| setuid / seteuid / setgid / setegid / setreuid / setregid | setuid.html RETURN VALUE "Upon successful completion, 0 shall be returned" for the request this platform can honestly grant (the id already in force), and setreuid.html's `(uid_t)-1` "left unchanged" form | covered | test/posix-unistd-ids.c (`test_setid_family`) |
+| setuid / setgid | "The setuid() function shall not affect the supplementary group list in any way" / "Any supplementary group IDs of the calling process shall remain unchanged" — observed through getgroups() | covered | test/posix-unistd-ids.c (`test_setid_family`) |
+| setuid / seteuid / setgid / setegid / setreuid / setregid | "[EPERM] The process does not have appropriate privileges and uid does not match the real user ID or the saved set-user-ID" (shall-fail, all six pages) | **BUG** — see below | fenced, `test_setid_family` |
+| setuid / setgid | "[EINVAL] The value of the uid argument is invalid and not supported by the implementation" (shall-fail) | **BUG** — same fence group | fenced, `test_setid_family` |
+| setuid / setgid | the *effect* ("shall set the real user ID, effective user ID, and the saved set-user-ID") | N/A — one fixed identity (src/unistd/ids.c's banner), and `sysconf(_SC_SAVED_IDS)` is -1, so there is no second id to move to | — |
+| getpgrp | getpgrp.html RETURN VALUE "shall always be successful and no return value is reserved to indicate an error"; ERRORS "No errors are defined" | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
+| getpgid | "If pid is equal to 0, getpgid() shall return the process group ID of the calling process" — agrees with getpgrp() and with getpgid(getpid()) | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
+| getsid | "If pid is (pid_t)0, it specifies the calling process"; `(pid_t)-1` reserved for the error return | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
+| getpgid / getsid | "[ESRCH] There is no process with a process ID equal to pid" (shall-fail, both pages) | **BUG** — see below | fenced, `test_process_group_and_session` |
+| getpgid / getsid | "[EPERM] ... not in the same session as the calling process" | N/A — one fixed session for every process, and NT has no session or process-group object for src/process/spawn.c to put a child in a different one of (a Job object has no leader, no session and no controlling-terminal relationship) | — |
+| setpgid | "if pid is 0, the process ID of the calling process shall be used. Also, if pgid is 0, the process ID of the indicated process shall be used"; RETURN VALUE 0 on success | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
+| setpgid | "[EINVAL] The value of the pgid argument is less than 0" and "[ESRCH] The value of the pid argument does not match the process ID of the calling process or of a child process" (both shall-fail) | **BUG** — see below | fenced, `test_process_group_and_session` |
+| setpgid | its [EACCES] and remaining two [EPERM] clauses | N/A — each presupposes a second process in a different session or process group; see the getpgid [EPERM] row | — |
+| setpgrp | setpgrp.html RETURN VALUE "Upon completion, setpgrp() shall return the process group ID"; ERRORS "No errors are defined" — self-consistent with getpgrp() | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
+| setpgrp | "If the calling process is not already a session leader, setpgrp() sets the process group ID of the calling process to the process ID of the calling process" | **UNIMPL** — see below | fenced, `test_process_group_and_session` |
+| setsid | RETURN VALUE "the value of the new process group ID of the calling process" — agrees with getpgrp() and getsid(0) | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
+| setsid | the DESCRIPTION/[EPERM] state machine: the first call leaves the process a group leader, so the second "shall fail ... [EPERM] The calling process is already a process group leader" | **UNIMPL** — see below | fenced, `test_process_group_and_session` |
+| chown / fchown / lchown / fchownat | chown.html RETURN VALUE "these functions shall return 0"; "If owner or group is specified as (uid_t)-1 ... the corresponding ID of the file shall not be changed" — st_uid/st_gid unmoved across all four spellings | covered | test/posix-unistd-ids.c (`test_chown_family`) |
+| chown | "the set-user-ID (S_ISUID) and set-group-ID (S_ISGID) bits of the file mode shall be cleared upon successful return" | N/A — NTFS has no set-user-ID or set-group-ID bit and src/stat/chmod.c stores no shadow for one; st_mode can never come back with S_ISUID set, so there is nothing to clear. Asserted in the only observable direction (absent before and after) | test/posix-unistd-ids.c (`test_chown_family`) |
+| chown / lchown | "[ENOENT] A component of path does not name an existing file or path is an empty string" and "[ENOTDIR] A component of the path prefix names an existing file that is neither a directory nor a symbolic link to a directory" (both shall-fail) | **BUG** — see below | fenced, `test_chown_family` |
+| fchown | "[EBADF] The fildes argument is not an open file descriptor" (shall-fail) | **BUG** — same fence group | fenced, `test_chown_family` |
+| fchownat | "[EBADF] The path argument does not specify an absolute path and the fd argument is neither AT_FDCWD nor a valid file descriptor" and its [ENOENT] (both shall-fail) | **BUG** — same fence group | fenced, `test_chown_family` |
+| fchownat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, so accepting an undefined flag bit is permitted; not fenced, unlike unlinkat()'s masking (unlinkat.html makes its [EINVAL] shall-fail, and there the accepted bit changes what the call does — fchownat() does nothing either way) | test/posix-unistd-ids.c (`test_chown_family`) |
+| chown family | [EACCES], [EPERM], [EROFS], [ELOOP], [EIO], [EINTR] | N/A — each needs a second security principal, a read-only mount, a symlink cycle handed to NT's own resolver, or is a may-fail. Unreachable *even if the four functions were fully implemented*, which is what separates them from the fenced rows above | — |
+| alarm | alarm.html ERRORS "The alarm() function is always successful, and no return value is reserved to indicate an error"; RETURN VALUE "Otherwise, alarm() shall return 0" with no request outstanding | covered | test/posix-unistd-ids.c (`test_alarm`) |
+| alarm | "shall cause the system to generate a SIGALRM signal ... after the number of realtime seconds specified"; "If there is a previous alarm() request with time remaining, alarm() shall return a non-zero value that is the number of seconds until the previous request would have generated a SIGALRM" | **UNIMPL** — see below | fenced, `test_alarm` |
+| pause | every clause on pause.html (the suspend, the -1 return, "[EINTR] A signal is caught by the calling process") | N/A — **not callable from this suite at all**: src/unistd/sleep.c implements it as an alertable `NtDelayExecution` with a maximal timeout and this platform has no asynchronous signal delivery to end it, so a call deadlocks the run rather than failing it. The one name in test/POSIX-GAP-ACCOUNTING.md's original never-asserted 112 that cannot be given any assertion | fenced, `test_alarm` |
+| nice | nice.html RETURN VALUE, checked in the errno-0 form the page's own APPLICATION USAGE prescribes ("As -1 is a permissible return value in a successful situation ..."); "A maximum nice value of 2*{NZERO}-1 and a minimum nice value of 0 shall be imposed by the system" | covered | test/posix-unistd-ids.c (`test_nice`) |
+| nice | "shall add the value of incr to the nice value of the calling process"; "shall return the new nice value -{NZERO}"; and XBD `<limits.h>`'s `{NZERO}` | **UNIMPL** — see below | fenced, `test_nice` |
+| nice | "[EPERM] The incr argument is negative and the calling process does not have appropriate privileges" | folded into the UNIMPL above — with `incr` ignored there is no negative-incr path to reject, so the clause and the DESCRIPTION gap are one defect | fenced, `test_nice` |
+| gethostname | "shall return the standard host name for the current machine"; "The returned name shall be null-terminated"; "Host names are limited to {HOST_NAME_MAX} bytes"; RETURN VALUE 0; ERRORS "No errors are defined"; and the exactly-fits boundary (namelen == strlen+1) | covered | test/posix-unistd-ids.c (`test_gethostname`) |
+| gethostname | "if namelen is an insufficient length to hold the host name, then the returned name shall be truncated" — the truncation itself | covered (the bytes are there) | test/posix-unistd-ids.c (`test_gethostname`) |
+| gethostname | ... and is a *successful completion*, so "Upon successful completion, 0 shall be returned" applies to it | **BUG** — see below | fenced, `test_gethostname` |
+
+### Bugs found (unistd.h identity group)
+
+Six, all shall-fail error clauses, all probed on this tree rather than
+inferred, none fixed here.
+
+1. **`getgroups()` succeeds for a negative `gidsetsize`.**
+   `getgroups.html` ERRORS: "[EINVAL] The gidsetsize argument is
+   non-zero and less than the number of group IDs that would have been
+   returned." -1 is non-zero and less than the 1 this implementation
+   returns. `src/unistd/ids.c:20` uses `n` only to decide whether to
+   *store*, never whether to *fail*, so `getgroups(-1, list)` reports
+   "1 group ID stored" into an array it did not write and a caller that
+   trusts the return reads uninitialised memory.
+
+2. **The whole `set*id` family reports success for requests it did not
+   carry out, including ones POSIX requires it to refuse.**
+   `setuid.html` ERRORS: "[EPERM] The process does not have appropriate
+   privileges and uid does not match the real user ID or the saved
+   set-user-ID"; `sysconf(_SC_SAVED_IDS)` is -1 here, so there is no
+   saved id to match either and uid 0 is not the real uid (1000) — the
+   precondition holds exactly. `src/unistd/ids.c:12-19` are six
+   `(void)u; return 0;` stubs. Also `[EINVAL]` for an unsupported id.
+
+   This is the one classification in the group worth arguing, and the
+   argument is: *"one user, so the effect is unobservable"* is a sound
+   N/A for the **success** path and this ledger keeps it there. It is
+   not an argument for answering 0 to `setuid(0)`. That answer is a
+   claim the caller acts on — every privilege-dropping idiom in Unix
+   software is `if (setuid(pw->pw_uid) != 0) abort();`, and a stub that
+   says 0 turns "refuse to run unprivileged" into "run believing the
+   drop happened". Returning -1/`[EPERM]` for any id that is not the
+   current one is both what the page requires and what the
+   single-identity model actually means.
+
+3. **`getpgid()`/`getsid()` answer for a process that does not exist.**
+   Both pages: "[ESRCH] There is no process with a process ID equal to
+   pid", shall-fail. `src/unistd/ids.c:21,25` discard `pid`. This needs
+   no session model to get right: `src/process/children.c` already
+   tracks every process this one created and `src/process/wait.c`
+   already distinguishes a live child from an unknown pid.
+
+4. **`setpgid()` accepts a negative `pgid` and an unrelated `pid`.**
+   `setpgid.html`: "[EINVAL] The value of the pgid argument is less
+   than 0" and "[ESRCH] The value of the pid argument does not match
+   the process ID of the calling process or of a child process", both
+   shall-fail. `src/unistd/ids.c:22` looks at neither argument. The
+   `[EINVAL]` half is a pure range check on a signed value.
+
+5. **The `chown` family reports success for a path that does not exist,
+   for the empty string, for a prefix that is a regular file, and for a
+   descriptor that was never opened.** `chown.html`: "[ENOENT] ... or
+   path is an empty string", "[ENOTDIR] A component of the path prefix
+   names an existing file that is neither a directory ...";
+   `fchown.html`: "[EBADF] The fildes argument is not an open file
+   descriptor"; `chown.html`'s `fchownat()` section repeats both. All
+   shall-fail. `src/unistd/ids.c:26-29` are four stubs that touch
+   neither `__ntpath_at()` nor `__fd_get()`.
+
+   Same distinction as (2): the degenerate-stub argument is about
+   *ownership*, and this is about *path resolution*.
+   `chown("does-not-exist", ...)` returning 0 is not a statement about
+   ownership, it is a statement that the file exists, and it is false.
+   An installer that chowns a list of files it has just laid down loses
+   its only report that one of them is missing.
+
+6. **`gethostname()` reports a failure POSIX does not define.**
+   `gethostname.html` DESCRIPTION makes truncation the *specified*
+   behaviour for a short `namelen` ("the returned name shall be
+   truncated and it is unspecified whether the returned name is
+   null-terminated") and ERRORS says "No errors are defined", so a
+   short buffer is a successful completion and "Upon successful
+   completion, 0 shall be returned" applies. `src/unistd/gethostname.c:15`
+   performs the required truncation and then reports it as
+   -1/`ENAMETOOLONG`. **Whoever fixes this must change
+   `test/unistd.c:723` in the same commit** — that assertion currently
+   pins the present behaviour. Several other libcs return
+   -1/`ENAMETOOLONG` here too; that is historical divergence, not a
+   licence in this page.
+
+### UNIMPL found (unistd.h identity group)
+
+1. **`alarm()` never schedules anything.** `alarm.html`: "shall cause
+   the system to generate a SIGALRM signal for the process after the
+   number of realtime seconds specified", and RETURN VALUE requires the
+   remaining time of a previous request. `src/unistd/sleep.c:41` is
+   `unsigned alarm(unsigned s) { (void)s; return 0; }`.
+   `test/POSIX-GAP-ACCOUNTING.md`'s degenerate-stub table already calls
+   this "a genuine gap, and the root of the
+   `getitimer`/`setitimer`/`ualarm` `undefined-ok:` chain". UNIMPL, not
+   N/A: NT has the mechanism (a waitable timer plus the APC delivery
+   `src/signal/signal.c` would need anyway).
+
+2. **`nice()` ignores `incr`, and `<limits.h>` defines no `{NZERO}`.**
+   Two gaps, one fence because neither is testable without the other:
+   `src/unistd/ids.c:30` discards `incr`, so two calls asking for
+   different priorities report the same answer; and XBD `<limits.h>`
+   lists `{NZERO}` ("Default process priority. Minimum Acceptable
+   Value: 20") while `include/limits.h` does not define it, leaving
+   `nice()`'s return — specified purely in terms of `{NZERO}` — with
+   nothing to interpret it against. UNIMPL, not N/A: NT has process
+   priority (`NtSetInformationProcess(ProcessBasePriority)`) and
+   `src/misc/resource.c` already wraps the query side for
+   `getpriority()`.
+
+3. **`setsid()`/`setpgrp()` never enter the state their pages
+   describe.** `setsid.html`'s DESCRIPTION and `[EPERM]` together make
+   a testable transition — the first call leaves the process a group
+   leader, so the second must fail — and `src/unistd/ids.c:23-24`
+   always answer 1, never setting the process group ID to `getpid()`.
+   `setpgrp.html` is starker: "No errors are defined", so there is not
+   even a failure return to hide behind; the call has exactly one
+   specified effect and it does not happen. UNIMPL rather than N/A
+   because the one-fixed-session model is a *chosen* fiction
+   (`src/unistd/ids.c`'s and `src/termios/termios.c`'s banners), and
+   "I chose not to" is UNIMPL by this project's rule. UNIMPL rather
+   than BUG because, unlike the `set*id` fences, no single call's
+   answer is a lie in isolation — only a transition that never happens.
+
+### Not reached (unistd.h identity group)
+
+`pause()` in its entirety (fenced N/A above — enabling it hangs
+`make check` until the job timeout); every clause needing a second
+security principal, a second session or process group, a read-only
+mount, or a symbolic-link cycle. `exec.html`'s `[EINVAL]`
+("recognized executable binary format, but the system does not support
+execution of a file with this format") belongs to group J, not here.
