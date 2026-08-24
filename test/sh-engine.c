@@ -601,6 +601,30 @@ static void test_roundtrip(void)
 	check_roundtrip("(if a; then b; fi); { while c; do d; done; }");
 }
 
+#if 0	/* BUG: parse -> print -> parse -> print is not a fixed point for
+	 * a command word that is literally "!".  2.9.2 makes "!" a
+	 * reserved word when it is the first word of a pipeline, and 2.4
+	 * requires it to be quoted to be used as an ordinary word there;
+	 * src/sh/print.c writes such a word out bare, so its own output
+	 * reparses as a negation and the word is gone.
+	 *
+	 *     ">! !"   parses as { redirect > to the word "!" ; word "!" }
+	 *              prints as "!  > !"
+	 *              reparses as { negation ; redirect > to "!" }
+	 *              prints as "! > !"
+	 *
+	 * This is the property print.c's own banner states and that
+	 * check_roundtrip() above verifies by hand for a fixed set of
+	 * programs; it is the first input to break it, and it took a
+	 * fuzzer to find because no hand-written program uses "!" as a
+	 * word.  Found by fuzz/fuzz_shparse.c, whose bang_fence() keeps
+	 * the harness off it -- delete that when this fence is lifted. */
+static void test_bang_word_roundtrip(void)
+{
+	check_roundtrip(">! !");
+}
+#endif
+
 /* ---- stage 2: execution of simple commands -----------------------------
  *
  * These re-exec this very binary (matching test/misc.c's

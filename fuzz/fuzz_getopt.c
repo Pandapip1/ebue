@@ -173,21 +173,40 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 			 * here does. */
 			oracle_mismatch_i("returned 0 with no flag-bearing longopt", optstring, 0, 1);
 		} else if (c == 1 && optstring[0] == '-') {
-			/* Not a defect, and not an option character.  An optstring
-			 * beginning with '-' selects the mode in which every
-			 * non-option argument is returned, in argument order, as
-			 * option character 1: src/misc/getopt.c:50 implements it
-			 * deliberately, and optarg names the argument.  The first
-			 * version of this harness asserted strchr(optstring, c)
-			 * unconditionally and reported "-:\x08\x82" as a finding
-			 * within twenty seconds -- it was the harness that was
-			 * wrong.  Excused positively rather than merely skipped:
-			 * in this mode optarg must be set, because the returned 1
-			 * carries no other information about which argument it
-			 * stood for. */
-			if (!optarg)
-				oracle_mismatch_i("leading-'-' mode returned 1 without setting optarg",
-				                  optstring, 0, 1);
+			/* Not a defect, and not necessarily an option character.
+			 * An optstring beginning with '-' selects the mode in
+			 * which every non-option argument is returned, in
+			 * argument order, as option character 1:
+			 * src/misc/getopt.c:50 implements it deliberately, and
+			 * sets optarg to the argument.  The first version of this
+			 * harness asserted strchr(optstring, c) unconditionally
+			 * and reported "-:\x08\x82" as a finding within twenty
+			 * seconds -- it was the harness that was wrong.
+			 *
+			 * The second version tried to excuse it positively, by
+			 * requiring optarg to be set, and was wrong in the other
+			 * direction: a fuzzer puts the byte 0x01 IN the optstring,
+			 * and then a return of 1 is an ordinary option character
+			 * with no argument.  The two cases are indistinguishable
+			 * from outside -- getopt has exactly one channel for the
+			 * value -- so the two must be excused together, and that
+			 * is all this branch may assert: EITHER the mode set
+			 * optarg, OR the byte really is an option character the
+			 * optstring offered.  src/misc/getopt.c has exactly two
+			 * ways to return 1 -- the non-option path at :50, which
+			 * assigns optarg before returning, and the ordinary match
+			 * loop, which cannot match a character the optstring does
+			 * not contain -- and it is the only one of the three entry
+			 * points that can produce a 1 at all, because every longopt
+			 * this harness builds has val 0x100 or more.  The
+			 * disjunction is therefore exactly the set of legal
+			 * outcomes.  Asserting nothing here instead would have been
+			 * the easy way out and would have left a blind spot the
+			 * size of the whole leading-'-' mode. */
+			if (!optarg && strchr(optstring, c) == 0)
+				oracle_mismatch_i("returned 1 that is neither a non-option"
+				                  " argument nor an option character",
+				                  optstring, c, 0);
 		} else {
 			if (strchr(optstring, c) == 0)
 				oracle_mismatch_i("returned an option character not in the optstring",
