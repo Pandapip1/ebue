@@ -298,9 +298,208 @@ static void test_tilde_expansion_current_user(void)
 	CHECK(S_ISDIR(st.st_mode));
 }
 
+
+/* ==== clauses the successor-queue <pwd.h> audit added ==================== */
+
+/* getpwuid.html DESCRIPTION: "The getpwuid() function shall search the
+ * user database for an entry with a matching uid." RETURN VALUE: "A
+ * null pointer shall be returned if the requested entry is not found
+ * ... If the requested entry was not found, errno shall not be
+ * changed."
+ *
+ * The existing not-found tests use getuid()+1, which is adjacent to the
+ * one uid that does exist. This uses a uid that could not plausibly be
+ * anything on any system, to pin that the answer is a real lookup
+ * rather than a fabricated entry handed out for any argument -- the
+ * failure mode a degenerate one-entry database is most at risk of. */
+static void test_getpwuid_absurd_uid(void)
+{
+	errno = 12345;
+	CHECK(getpwuid((uid_t)0x7ffffffe) == NULL);
+	CHECK(errno == 12345);
+	errno = 12345;
+	CHECK(getpwnam("no-such-user-could-ever-be-called-this") == NULL);
+	CHECK(errno == 12345);
+}
+
+/* getpwnam.html RETURN VALUE: "The getpwnam_r() function shall return
+ * zero on success or if the requested entry was not found and no error
+ * has occurred", with "a null pointer ... at the location pointed to
+ * by result". Not-found is *not* an error for the _r form -- returning
+ * non-zero for it would be the defect. Checked here on a uid that
+ * certainly does not exist, complementing the existing getuid()+1
+ * test. */
+static void test_getpwuid_r_absurd_uid(void)
+{
+	struct passwd pw;
+	struct passwd *result = (struct passwd *)0x1;	/* poisoned sentinel */
+	char buf[512];
+
+	CHECK(getpwuid_r((uid_t)0x7ffffffe, &pw, buf, sizeof buf, &result) == 0);
+	CHECK(result == NULL);
+	result = (struct passwd *)0x1;
+	CHECK(getpwnam_r("no-such-user-could-ever-be-called-this", &pw, buf, sizeof buf, &result) == 0);
+	CHECK(result == NULL);
+}
+
+/* setpwent.html DESCRIPTION: "The setpwent() function shall rewind the
+ * user database so that the next getpwent() call returns the first
+ * entry"; endpwent.html: "The endpwent() function shall close the user
+ * database." getpwent.html: "If the database is not already open,
+ * getpwent() shall open it and return ... the first entry."
+ *
+ * So endpwent() followed by getpwent() must re-yield the first entry,
+ * not stay at end-of-file. test_getpwent_one_entry_then_eof() calls
+ * endpwent() only as its last statement and never reads after it, so
+ * this path was never exercised.
+ *
+ * setpwent.html/endpwent.html also both say the function "shall not
+ * change the setting of errno if successful", which nothing checked. */
+static void test_pwent_reopen_and_errno(void)
+{
+	struct passwd *pw;
+
+	setpwent();
+	(void)getpwent();
+	(void)getpwent();		/* at end-of-file now */
+	CHECK(getpwent() == NULL);
+
+	endpwent();			/* closes the database ... */
+	pw = getpwent();		/* ... so this must reopen it */
+	CHECK((pw != NULL) == have_user());
+
+	errno = 12345;
+	setpwent();
+	CHECK(errno == 12345);
+	errno = 12345;
+	endpwent();
+	CHECK(errno == 12345);
+}
+
+/* getpwnam.html ERRORS, [ERANGE]: "Insufficient storage was supplied
+ * via buffer and bufsize to contain the data to be referenced by the
+ * resulting passwd structure." The existing ERANGE tests use a
+ * one-byte buffer, which cannot tell a correct size computation from
+ * one that simply rejects anything small. This pins the boundary: a
+ * buffer one byte short of what the record needs must fail, and one of
+ * exactly that size must succeed. The needed size is derived the same
+ * way src/misc/pwd.c does -- the three strings plus their terminators
+ * -- rather than guessed. */
+static void test_getpwuid_r_erange_boundary(void)
+{
+	struct passwd pw;
+	struct passwd *result;
+	char buf[9000];
+	size_t need;
+	const char *dir, *shell;
+
+	if (!have_user()) {
+		printf("note: no user name knowable -- skipping the ERANGE boundary (getpwuid_r() answers \"not found\" before it ever sizes a buffer)\n");
+		return;
+	}
+	result = NULL;
+	CHECK(getpwuid_r(getuid(), &pw, buf, sizeof buf, &result) == 0);
+	CHECK(result == &pw);
+	if (result != &pw) return;
+	dir = pw.pw_dir;
+	shell = pw.pw_shell;
+	need = strlen(pw.pw_name) + 1 + strlen(dir) + 1 + strlen(shell) + 1;
+
+	result = (struct passwd *)0x1;
+	CHECK(getpwuid_r(getuid(), &pw, buf, need - 1, &result) == ERANGE);
+	CHECK(result == NULL);
+	result = NULL;
+	CHECK(getpwuid_r(getuid(), &pw, buf, need, &result) == 0);
+	CHECK(result == &pw);
+}
+
+/* pwd.h.html: "The <pwd.h> header shall define the struct passwd
+ * structure ... pw_name, pw_uid, pw_gid, pw_dir, pw_shell." Note the
+ * fetched POSIX.1-2017 text lists exactly those five -- pw_passwd and
+ * pw_gecos are *not* required, so omitting them is conformant rather
+ * than a gap. The existing tests read all five; this records the
+ * cross-function consistency the header implies, and that pw_name
+ * agrees with getlogin(), which src/misc/pwd.c's current_name() is a
+ * private copy of. */
+static void test_pw_name_matches_getlogin(void)
+{
+	struct passwd *pw;
+	char *login;
+
+	if (!have_user()) return;
+	pw = getpwuid(getuid());
+	CHECK(pw != NULL);
+	login = getlogin();
+	CHECK(login != NULL);
+	if (pw && login) CHECK(strcmp(pw->pw_name, login) == 0);
+}
+
+#if 0 /* BUG: getpwuid.html/getpwnam.html ERRORS list, for the
+	non-_r forms, exactly [EIO], [EINTR], [EMFILE] and [ENFILE], all
+	"may fail". [ERANGE] is listed only for getpwuid_r()/
+	getpwnam_r(), where it means "insufficient storage was supplied
+	via buffer and bufsize" -- an argument the non-_r forms do not
+	have. RETURN VALUE adds: "If the requested entry was not found,
+	errno shall not be changed."
+
+	src/misc/pwd.c's getpwnam() and getpwuid() both do
+
+		r = fill_current(&g_pw, g_pwbuf, sizeof g_pwbuf);
+		if (r == ERANGE) { errno = ERANGE; return 0; }
+
+	on their *internal* static buffer, so they can set an errno POSIX
+	does not permit them to set. g_pwbuf is 256 + 2*4096 bytes, so
+	the path is reached whenever %USERNAME% plus %USERPROFILE% plus
+	%ComSpec% exceed that -- reachable by any program that sets those
+	environment variables, which is all it takes, no unusual NT
+	configuration required.
+
+	getpwent() inherits it: src/misc/pwd.c's getpwent() delegates to
+	getpwuid(), whose ERRORS list is likewise [EIO]/[EINTR]/[EMFILE]/
+	[ENFILE] only.
+
+	This is the "stub returning an errno that is not in its POSIX
+	list" shape, not a platform N/A -- the same class as mkfifo()
+	answering ENOSYS. Fenced rather than fixed, per the standing
+	rule; the fix is to treat an internal-buffer overflow as "not
+	found" (NULL with errno untouched), or to size the static buffer
+	so the case is unreachable and say so.
+
+	src/misc/grp.c has the identical defect with a much smaller
+	buffer (256 + sizeof g_grmem, i.e. 272 bytes) -- see
+	test/posix-grp.c's matching fence. */
+static void test_getpwuid_erange_not_in_its_errno_list(void)
+{
+	static char big[9000];
+	char *saved_username = getenv("USERNAME");
+	char *saved_user = getenv("USER");
+	char keep_username[256], keep_user[256];
+	int had_username = saved_username != NULL, had_user = saved_user != NULL;
+
+	if (had_username) { strncpy(keep_username, saved_username, sizeof keep_username - 1); keep_username[sizeof keep_username - 1] = 0; }
+	if (had_user) { strncpy(keep_user, saved_user, sizeof keep_user - 1); keep_user[sizeof keep_user - 1] = 0; }
+
+	memset(big, 'x', sizeof big - 1);
+	big[sizeof big - 1] = 0;
+	CHECK(setenv("USERNAME", big, 1) == 0);
+
+	errno = 0;
+	CHECK(getpwuid(getuid()) == NULL);
+	CHECK(errno != ERANGE);		/* fails today: errno == ERANGE */
+
+	if (had_username) setenv("USERNAME", keep_username, 1); else unsetenv("USERNAME");
+	if (had_user) setenv("USER", keep_user, 1); else unsetenv("USER");
+}
+#endif
+
 int main(void)
 {
 	printf("note: have_user() = %s\n", have_user() ? "true" : "false");
+	test_getpwuid_absurd_uid();
+	test_getpwuid_r_absurd_uid();
+	test_pwent_reopen_and_errno();
+	test_getpwuid_r_erange_boundary();
+	test_pw_name_matches_getlogin();
 
 	test_getpwuid_current();
 	test_getpwuid_other_not_found();

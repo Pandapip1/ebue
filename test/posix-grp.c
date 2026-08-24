@@ -300,6 +300,176 @@ static void test_consistency(void)
  * <sys/utsname.h>: uname.html, sys_utsname.h.html.
  * ================================================================== */
 
+
+/* ==== clauses the successor-queue <grp.h> audit added ==================== */
+
+/* getgrgid.html RETURN VALUE: "A null pointer shall be returned if the
+ * requested entry is not found ... If the requested entry was not
+ * found, errno shall not be changed." The existing not-found tests use
+ * getgid()+1, adjacent to the one gid that does exist; this uses a gid
+ * that could not plausibly be anything, to pin that the answer is a
+ * real lookup rather than an entry fabricated for any argument. */
+static void test_getgrgid_absurd_gid(void)
+{
+	errno = 12345;
+	CHECK(getgrgid((gid_t)0x7ffffffe) == NULL);
+	CHECK(errno == 12345);
+	errno = 12345;
+	CHECK(getgrnam("no-such-group-could-ever-be-called-this") == NULL);
+	CHECK(errno == 12345);
+}
+
+/* getgrnam.html RETURN VALUE: "The getgrnam_r() function shall return
+ * zero on success or if the requested entry was not found and no error
+ * has occurred", with a null pointer stored through result. Not-found
+ * is not an error for the _r form. */
+static void test_getgrgid_r_absurd_gid(void)
+{
+	struct group gr;
+	struct group *result = (struct group *)0x1;
+	char buf[512];
+
+	CHECK(getgrgid_r((gid_t)0x7ffffffe, &gr, buf, sizeof buf, &result) == 0);
+	CHECK(result == NULL);
+	result = (struct group *)0x1;
+	CHECK(getgrnam_r("no-such-group-could-ever-be-called-this", &gr, buf, sizeof buf, &result) == 0);
+	CHECK(result == NULL);
+}
+
+/* setgrent.html: "shall rewind the group database"; endgrent.html:
+ * "shall close the group database"; getgrent.html: "If the database is
+ * not already open, getgrent() shall open it and return ... the first
+ * entry." So endgrent() followed by getgrent() must re-yield the first
+ * entry rather than stay at end-of-file --
+ * test_getgrent_one_entry_then_eof() calls endgrent() only as its last
+ * statement and never reads after it. Both pages also state the
+ * function "shall not change the setting of errno if successful". */
+static void test_grent_reopen_and_errno(void)
+{
+	struct group *gr;
+
+	setgrent();
+	(void)getgrent();
+	(void)getgrent();
+	CHECK(getgrent() == NULL);
+
+	endgrent();
+	gr = getgrent();
+	CHECK((gr != NULL) == have_group());
+
+	errno = 12345;
+	setgrent();
+	CHECK(errno == 12345);
+	errno = 12345;
+	endgrent();
+	CHECK(errno == 12345);
+}
+
+/* grp.h.html: struct group's gr_mem is a "Pointer to a null-terminated
+ * array of character pointers to member names". The array lives inside
+ * the caller's buffer for the _r forms, so it has to be carved out at a
+ * correctly aligned offset -- src/misc/grp.c pads for that, and the
+ * padding is charged to the size it demands, but nothing ever handed it
+ * a deliberately misaligned buffer to prove either half. Also pins
+ * ERANGE's boundary (one byte short must fail, exactly enough must
+ * succeed) rather than only the one-byte case the existing test uses,
+ * which cannot tell a correct size computation from a blanket refusal. */
+static void test_getgrgid_r_alignment_and_erange_boundary(void)
+{
+	static char raw[512];
+	char *misaligned = raw + 1;
+	struct group gr;
+	struct group *result;
+
+	result = (struct group *)0x1;
+	CHECK(getgrgid_r(getgid(), &gr, misaligned, sizeof raw - 1, &result) == 0);
+	if (!have_group()) {
+		CHECK(result == NULL);
+		printf("note: no group name knowable -- gr_mem alignment and the ERANGE boundary are unreachable (getgrgid_r() answers \"not found\" before it sizes anything)\n");
+		return;
+	}
+	CHECK(result == &gr);
+	if (result != &gr) return;
+	/* "a null-terminated array of character pointers", correctly
+	 * aligned even though the buffer it was carved from was not. */
+	CHECK(((size_t)(char *)gr.gr_mem % sizeof(char *)) == 0);
+	CHECK(gr.gr_mem[0] != NULL);
+	CHECK(gr.gr_mem[1] == NULL);
+
+	/* ERANGE boundary. Walk the size down until it stops fitting,
+	 * rather than recomputing src/misc/grp.c's packing here: what the
+	 * clause requires is that there *is* a boundary and that one more
+	 * byte is enough, not any particular number. */
+	{
+		size_t hi = sizeof raw - 1, lo;
+		while (hi > 1) {
+			result = (struct group *)0x1;
+			if (getgrgid_r(getgid(), &gr, misaligned, hi - 1, &result) == ERANGE) break;
+			hi--;
+		}
+		CHECK(hi > 1);			/* a boundary exists */
+		lo = hi - 1;
+		result = (struct group *)0x1;
+		CHECK(getgrgid_r(getgid(), &gr, misaligned, lo, &result) == ERANGE);
+		CHECK(result == NULL);		/* "*result shall be a null pointer ... on error" */
+		result = NULL;
+		CHECK(getgrgid_r(getgid(), &gr, misaligned, hi, &result) == 0);
+		CHECK(result == &gr);		/* one more byte is enough */
+	}
+}
+
+#if 0 /* BUG: getgrgid.html/getgrnam.html ERRORS list, for the non-_r
+	forms, exactly [EIO], [EINTR], [EMFILE] and [ENFILE], all "may
+	fail". [ERANGE] is listed only for getgrgid_r()/getgrnam_r(),
+	where it means "insufficient storage was supplied via buffer and
+	bufsize" -- an argument the non-_r forms do not have. RETURN
+	VALUE adds: "If the requested entry was not found, errno shall
+	not be changed."
+
+	src/misc/grp.c's getgrnam() and getgrgid() both do
+
+		r = fill_current(&g_gr, g_grmem, g_grbuf, sizeof g_grbuf);
+		if (r == ERANGE) { errno = ERANGE; return 0; }
+
+	on their *internal* static buffer, setting an errno POSIX does
+	not permit them to set. g_grbuf is only 256 + sizeof g_grmem =
+	272 bytes, so any %USERNAME% longer than that reaches it -- well
+	inside what a program can set for itself, no unusual NT
+	configuration needed.
+
+	getgrent() inherits it, delegating to getgrgid(), whose ERRORS
+	list is likewise [EIO]/[EINTR]/[EMFILE]/[ENFILE] only.
+
+	This is the "stub returning an errno that is not in its POSIX
+	list" shape, not a platform N/A. Fenced rather than fixed, per
+	the standing rule; the fix is to treat an internal-buffer
+	overflow as "not found" (NULL, errno untouched), or to size the
+	static buffer so the case is unreachable. src/misc/pwd.c has the
+	identical defect -- see test/pwd.c's matching fence. */
+static void test_getgrgid_erange_not_in_its_errno_list(void)
+{
+	static char big[400];
+	char *saved_username = getenv("USERNAME");
+	char *saved_user = getenv("USER");
+	char keep_username[256], keep_user[256];
+	int had_username = saved_username != NULL, had_user = saved_user != NULL;
+
+	if (had_username) { strncpy(keep_username, saved_username, sizeof keep_username - 1); keep_username[sizeof keep_username - 1] = 0; }
+	if (had_user) { strncpy(keep_user, saved_user, sizeof keep_user - 1); keep_user[sizeof keep_user - 1] = 0; }
+
+	memset(big, 'x', sizeof big - 1);
+	big[sizeof big - 1] = 0;
+	CHECK(setenv("USERNAME", big, 1) == 0);
+
+	errno = 0;
+	CHECK(getgrgid(getgid()) == NULL);
+	CHECK(errno != ERANGE);		/* fails today: errno == ERANGE */
+
+	if (had_username) setenv("USERNAME", keep_username, 1); else unsetenv("USERNAME");
+	if (had_user) setenv("USER", keep_user, 1); else unsetenv("USER");
+}
+#endif
+
 static void test_uname(void)
 {
 	struct utsname u;
@@ -651,6 +821,10 @@ int main(int argc, char **argv)
 	test_getgrnam_r_erange();
 	test_getgrent_one_entry_then_eof();
 	test_consistency();
+	test_getgrgid_absurd_gid();
+	test_getgrgid_r_absurd_gid();
+	test_grent_reopen_and_errno();
+	test_getgrgid_r_alignment_and_erange_boundary();
 
 	test_uname();
 

@@ -1656,3 +1656,80 @@ sets" guarantees of `fesetexceptflag()`/`fesetenv()`, all need an
 does not manage mask state at all, so there is no supported way to
 reach that state through the header. Every remaining clause is
 covered.
+
+## pwd.h / grp.h (successor-queue item 2, group D)
+
+Fourth and fifth of the twelve. `test/pwd.c` and `test/posix-grp.c`
+already covered these fairly thoroughly — the `_r` contract in
+particular is implemented correctly and was already tested (0 with
+`*result == NULL` for not-found, never -1, never via `errno`, `ERANGE`
+for a short buffer). This pass read the ten spec pages against them and
+found one defect plus a set of unasserted clauses.
+
+**Oracle: NT-behaviour territory, but only weakly.** There is no POSIX
+user database on this platform: both files synthesise a single record
+from `%USERNAME%`/`%USERPROFILE%`/`%ComSpec%` and `getuid()`/
+`getgid()`. So what Wine could diverge on is only what those
+environment variables hold, which the tests do not depend on (every
+assertion is gated on `have_user()`/`have_group()`, and both branches
+are genuinely exercised — the native ASan harness starts with an empty
+environ). The clause logic itself is pure ntlibc code.
+
+Note from the fetched `pwd.h.html`: POSIX.1-2017 requires exactly
+`pw_name`, `pw_uid`, `pw_gid`, `pw_dir`, `pw_shell`. `pw_passwd` and
+`pw_gecos` are **not** required, so omitting them is conformant, not a
+gap.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| getpwuid / getpwnam / getgrgid / getgrnam | ERRORS lists exactly [EIO], [EINTR], [EMFILE], [ENFILE] for the non-`_r` forms; [ERANGE] is listed **only** for the `_r` forms | **BUG (fenced)** — see below | test/pwd.c (`test_getpwuid_erange_not_in_its_errno_list`), test/posix-grp.c (`test_getgrgid_erange_not_in_its_errno_list`) |
+| getpwuid / getgrgid / getpwnam / getgrnam | "A null pointer shall be returned if the requested entry is not found" — on an id that could not plausibly exist, not merely the adjacent one, so a fabricated-entry-for-any-argument failure would be caught | covered | test/pwd.c (`test_getpwuid_absurd_uid`), test/posix-grp.c (`test_getgrgid_absurd_gid`) |
+| getpwuid_r / getgrgid_r / getpwnam_r / getgrnam_r | "shall return zero on success **or if the requested entry was not found and no error has occurred**" — on the same absurd id | covered | test/pwd.c (`test_getpwuid_r_absurd_uid`), test/posix-grp.c (`test_getgrgid_r_absurd_gid`) |
+| getpwent / getgrent | "If the database is not already open, getpwent() shall open it and return ... the first entry" — so `endpwent()` then `getpwent()` must re-yield entry one rather than stay at end-of-file | covered — the existing tests call `end*ent()` only as their last statement and never read after it | test/pwd.c (`test_pwent_reopen_and_errno`), test/posix-grp.c (`test_grent_reopen_and_errno`) |
+| setpwent / endpwent / setgrent / endgrent | "shall not change the setting of errno if successful" | covered | same two tests |
+| getpwuid_r / getgrgid_r | "[ERANGE] Insufficient storage was supplied via buffer and bufsize" — at the *boundary*: one byte short must fail, exactly enough must succeed | covered — the existing tests use a one-byte buffer, which cannot tell a correct size computation from a blanket refusal | test/pwd.c (`test_getpwuid_r_erange_boundary`), test/posix-grp.c (`test_getgrgid_r_alignment_and_erange_boundary`) |
+| getgrgid_r / getgrnam_r | grp.h.html: `gr_mem` is "a null-terminated array of character pointers to member names" — carved out of the *caller's* buffer, so it must be correctly aligned even when that buffer is not | covered — nothing had ever passed a deliberately misaligned buffer | test/posix-grp.c (`test_getgrgid_r_alignment_and_erange_boundary`) |
+| getpwuid | `pw_name` agrees with `getlogin()` — `src/misc/pwd.c`'s `current_name()` is a private copy of `getlogin()`'s lookup, so the two can drift | covered | test/pwd.c (`test_pw_name_matches_getlogin`) |
+| all fourteen | [EIO], [EINTR], [EMFILE], [ENFILE] | N/A — all four describe failures of *opening and reading a database file*; no file is ever opened, the record is built from environment variables, so no descriptor is consumed and no I/O can fail or be interrupted | — |
+| getpwent / getgrent | the multi-entry enumeration a real database would have | N/A — NT has no POSIX user/group database; the degenerate one-entry enumeration is the honest whole of it, and the existing tests already pin that it terminates rather than looping | — |
+| all fourteen | POSIX permits the returned pointer to be static storage a later call overwrites | covered (pre-existing) — the tests snapshot names rather than relying on it | test/pwd.c, test/posix-grp.c |
+
+### Bugs found (pwd.h / grp.h)
+
+1. **The non-`_r` lookups can set `[ERANGE]`, which POSIX lists only
+   for the `_r` forms.** `getpwuid.html`/`getpwnam.html`/
+   `getgrgid.html`/`getgrnam.html` list exactly [EIO], [EINTR],
+   [EMFILE] and [ENFILE] for the non-`_r` forms; [ERANGE] appears only
+   under the `_r` variants, where it means "insufficient storage was
+   supplied via *buffer* and *bufsize*" — arguments the non-`_r` forms
+   do not have.
+
+   Mechanism: `src/misc/pwd.c`'s `getpwnam()`/`getpwuid()` and
+   `src/misc/grp.c`'s `getgrnam()`/`getgrgid()` all pack into an
+   *internal* static buffer and forward its overflow verbatim:
+   `if (r == ERANGE) { errno = ERANGE; return 0; }`. `g_grbuf` is only
+   256 + `sizeof g_grmem` = 272 bytes and `g_pwbuf` is 256 + 2*4096, so
+   both are reachable by a program that sets its own `%USERNAME%` —
+   no unusual NT configuration required. `getpwent()`/`getgrent()`
+   inherit it, since they delegate to `getpwuid()`/`getgrgid()`, whose
+   ERRORS lists are equally short.
+
+   This is the "stub returning an errno that is not in its POSIX list"
+   shape — the same class as `mkfifo()` answering `ENOSYS` — not a
+   platform N/A. Fix shape (not applied): treat an internal-buffer
+   overflow as "not found" (NULL, errno untouched), or size the static
+   buffer so the case is unreachable and say so. One fix closes all
+   six functions.
+
+   Tests (fenced): `test_getpwuid_erange_not_in_its_errno_list`,
+   `test_getgrgid_erange_not_in_its_errno_list`.
+
+### Not reached (pwd.h / grp.h)
+
+Nothing, beyond the four database-I/O errno values marked N/A above:
+this platform has no user database to make them reachable, and no
+second security principal to enumerate. Cross-binary agreement between
+`src/misc/pwd.c`'s and `src/misc/grp.c`'s two independent private
+copies of `current_name()` is likewise not asserted — the two tests are
+separate binaries — though both now agree with `getlogin()`, which
+constrains them jointly.
