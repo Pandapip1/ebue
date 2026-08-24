@@ -234,12 +234,28 @@ overall_end=$(date +%s)
 
 fail=0
 missing=0
+reported=0
 echo
 echo "=== gate summary (wall clock: $((overall_end - overall_start))s) ==="
 for s in $ALL_STAGES; do
 	want "$s" || continue
 	rcfile="$GATE_JOBS_DIR/logs/$s.rc"
-	[ -f "$rcfile" ] || continue
+	# A wanted stage with no .rc file never reported a result: run_stage's
+	# subshell was killed before it could write one, or the `if want ...`
+	# block that launches it was never reached (a stage listed in
+	# ALL_STAGES but never wired up, a typo in the pair list above).  This
+	# used to `continue` -- the stage simply vanished from the summary and
+	# left $fail untouched, so `gate PASSED (all stages)` could be printed
+	# over a stage that produced nothing at all.  It is the same defect the
+	# gate's own stages have been taught to reject one level down, and the
+	# coordinator is the worst place to keep it: it is what every other
+	# floor reports *through*.
+	if [ ! -f "$rcfile" ]; then
+		echo "MISSING  $s (never reported a result -- no $s.rc was written)"
+		fail=1
+		continue
+	fi
+	reported=$((reported + 1))
 	rc=$(cat "$rcfile")
 	t=$(cat "$GATE_JOBS_DIR/logs/$s.time" 2>/dev/null || echo '?')
 	if [ "$rc" = skip ]; then
@@ -252,6 +268,15 @@ for s in $ALL_STAGES; do
 		fail=1
 	fi
 done
+
+# And the whole-run floor: `tools/gate.sh <name>` with a name that
+# matches no stage selects nothing, runs nothing, and would otherwise
+# print an empty summary followed by "gate PASSED (all stages)".
+if [ "$reported" -eq 0 ]; then
+	echo "MISSING  -- no stage reported a result at all; this gate run verified nothing."
+	echo "  (requested: $STAGES; known stages: $ALL_STAGES)"
+	fail=1
+fi
 
 echo
 for s in $ALL_STAGES; do
