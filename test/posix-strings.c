@@ -602,33 +602,22 @@ static void test_utime_errors(void)
  * prefix names an existing file that is neither a directory nor a
  * symbolic link to a directory."
  *
- * ntlibc reports ENOENT here, not ENOTDIR.  Not specific to utime():
- * probed on this tree, open(), stat(), access(), unlink(), mkdir(),
- * chdir() and utimensat() all return ENOENT for the identical shape
- * ("<existing regular file>/below"), so this is one defect in the
- * shared path layer (src/internal/path.c), not seven.
+ * ntlibc used to report ENOENT here, not ENOTDIR, and not only from
+ * utime(): open(), stat(), access(), unlink(), mkdir() and
+ * utimensat() all gave ENOENT for the identical shape ("<existing
+ * regular file>/below"), because this is one defect in the shared
+ * path layer (src/internal/path.c), not seven.
  *
  * Mechanism: NT's object manager does not distinguish "a directory in
  * the path prefix does not exist" from "a component of the path
  * prefix exists but is a file" -- it answers both with
- * STATUS_OBJECT_PATH_NOT_FOUND, which src/internal/errno.c:52 maps to
+ * STATUS_OBJECT_PATH_NOT_FOUND, which src/internal/errno.c maps to
  * ENOENT (correctly, for the first of those two cases).  POSIX
- * requires the two to be told apart.  src/internal/path.c's
- * reject_if_not_dir() already does exactly this kind of extra
- * NtQueryAttributesFile() disambiguation for the *trailing-slash*
- * half of the same [ENOTDIR] clause; the path-prefix half would need
- * the same treatment applied to each prefix component (or, cheaper,
- * only on the STATUS_OBJECT_PATH_NOT_FOUND error path, which is the
- * shape src/stdio/misc.c's renameat() already uses to disambiguate
- * STATUS_ACCESS_DENIED into EISDIR/ENOTEMPTY -- see commit 3c606a7).
- * So this is implementable, not an NT limitation.
- *
- * Not fixed here: this audit's remit is to record violations, and a
- * fix touches the path layer every file-system call in the library
- * shares.  Left as a fenced, unmodified, should-pass-once-fixed test. */
-#if 0 /* BUG: utime.html ERRORS [ENOTDIR] -- a path prefix component that
-	names an existing regular file must fail with ENOTDIR; ntlibc's
-	shared path layer reports ENOENT (see the comment above). */
+ * requires the two to be told apart, so src/internal/path.c's
+ * reject_if_prefix_not_dir() tells them apart itself, with the same
+ * handle-less NtQueryAttributesFile() disambiguation that
+ * reject_if_not_dir() next to it already did for the
+ * *trailing-slash* half of the same [ENOTDIR] clause. */
 static void test_utime_enotdir_path_prefix(void)
 {
 	struct utimbuf ub;
@@ -648,7 +637,6 @@ static void test_utime_enotdir_path_prefix(void)
 
 	unlink(UTIME_FILE);
 }
-#endif
 
 /* utime.html ERRORS [ENAMETOOLONG] (shall fail): "The length of a
  * component of a pathname is longer than {NAME_MAX}."  (The
@@ -656,30 +644,26 @@ static void test_utime_enotdir_path_prefix(void)
  * single component below is longer than either, so the *shall*-fail
  * clause is the one that applies.)
  *
- * ntlibc reports ENOENT.  Again not specific to utime(): probed on
- * this tree, open(), stat(), access(), unlink(), mkdir() and
- * utimensat() all give ENOENT for a 40000-character name.  chdir() is
- * the sole exception, and it is the exception precisely because it
- * does not rely on the shared layer for this -- src/unistd/chdir.c:23
- * carries its own explicit `n > __US_MAX_WCHARS -> ENAMETOOLONG`
- * check, and reports ENAMETOOLONG correctly.  test/unistd.c already
- * pins that chdir() (and symlink()) behaviour, which is why the gap
- * in every other caller went unnoticed.
+ * ntlibc used to report ENOENT: open(), stat(), access(), unlink(),
+ * mkdir() and utimensat() all gave ENOENT for a 40000-character name.
+ * chdir() was the sole exception, and it was the exception precisely
+ * because it does not rely on the shared layer for this --
+ * src/unistd/chdir.c hands its own hand-built UNICODE_STRING to
+ * RtlSetCurrentDirectory_U() and carries its own explicit `n >
+ * __US_MAX_WCHARS -> ENAMETOOLONG` check (still needed there for that
+ * reason, and still pinned by test/unistd.c).  Coverage of that one
+ * caller is why the gap in every other caller went unnoticed.
  *
- * Mechanism: src/internal/path.c's __ntpath() funnels every
+ * Mechanism: src/internal/path.c's __ntpath() used to funnel every
  * RtlDosPathNameToNtPathName_U_WithStatus() failure other than
  * STATUS_NO_MEMORY into a single `errno = ENOENT`.  The very same
- * length test chdir.c performs *does* exist in path.c -- but only in
+ * length test chdir.c performs existed in path.c too -- but only in
  * the relative-to-a-dirfd branch of __ntpath_at() (the `n >
  * __US_MAX_WCHARS` check), which an AT_FDCWD or absolute path never
  * reaches, since __ntpath_at() forwards both straight to __ntpath().
- * Hoisting that check into __ntpath() would fix every caller at once.
- * Implementable, not an NT limitation.
- *
- * Not fixed here, for the same reason as the [ENOTDIR] BUG above. */
-#if 0 /* BUG: utime.html ERRORS [ENAMETOOLONG] -- a pathname component
-	longer than {NAME_MAX} must fail with ENAMETOOLONG; ntlibc's
-	__ntpath() collapses it to ENOENT (see the comment above). */
+ * It is now in __ntpath() as well, which fixes every caller at once,
+ * alongside a STATUS_NAME_TOO_LONG -> ENAMETOOLONG mapping for the
+ * name that only overflows once resolved against the cwd. */
 static void test_utime_enametoolong(void)
 {
 	struct utimbuf ub;
@@ -698,7 +682,6 @@ static void test_utime_enametoolong(void)
 	CHECK(errno == ENAMETOOLONG);
 	free(big);
 }
-#endif
 
 /* ============================== endian.h ============================== */
 
@@ -750,6 +733,8 @@ int main(int argc, char **argv)
 	test_utime_null_sets_current_time();
 	test_utime_marks_ctime();
 	test_utime_errors();
+	test_utime_enotdir_path_prefix();
+	test_utime_enametoolong();
 	test_endian_internal_consistency();
 
 	if (!fails) printf("posix-strings: all tests passed\n");

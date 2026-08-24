@@ -65,6 +65,86 @@ static int reject_if_not_dir(struct __ntpath *out)
 	return 0;
 }
 
+/* open.html (and stat, access, unlink, mkdir, utime, ... -- the clause is
+ * boilerplate across the file-system surface) ERRORS [ENOTDIR]: "A
+ * component of the path prefix names an existing file that is neither a
+ * directory nor a symbolic link to a directory."
+ *
+ * NT gives no way to tell that apart from a prefix that simply is not
+ * there: the object manager answers both with
+ * STATUS_OBJECT_PATH_NOT_FOUND, which maps to ENOENT (right for the
+ * second case, wrong for the first).  So the prefix is checked here, the
+ * same way reject_if_not_dir() checks the last component for the
+ * trailing-slash half of the very same clause: a handle-less attribute
+ * query, and a verdict only when the answer is positive.
+ *
+ * Cost is one query for a path that has a prefix at all; the deeper
+ * ancestors are only ever looked at once a nearer one has come back
+ * missing, i.e. on a path that was going to fail regardless.  The walk
+ * runs from the nearest ancestor outwards, so the first one that exists
+ * decides: if it is a directory the whole prefix is a directory chain (a
+ * directory's own parents cannot be anything else) and there is nothing
+ * to report; if it is not, that is the POSIX ENOTDIR case.  Anything
+ * else -- a query that fails for some other reason, a name with no
+ * prefix to speak of -- is left to the real operation, exactly as
+ * reject_if_not_dir() leaves it.
+ *
+ * root is the index of the first character that may be truncated at: for
+ * an NT path "\??\C:\a\b" everything up to and including the drive's
+ * backslash is fixed, and for a name relative to a RootDirectory handle
+ * nothing is.
+ *
+ * A caveat for anyone testing this under Wine rather than on NT: Wine's
+ * NtQueryAttributesFile (dlls/ntdll/unix/file.c) passes the Unix name
+ * lookup_unix_name() built relative to the root handle straight to
+ * get_file_info(), i.e. to a plain stat() against the *process* working
+ * directory, so a RootDirectory-relative query answers about the wrong
+ * file -- "not found", or positively about a same-named file in the cwd
+ * if one happens to exist.  That hits the pre-existing
+ * reject_if_not_dir() the same way (under Wine, openat(dirfd, "file/",
+ * ...) is not rejected either), and NT resolves such a name properly --
+ * ObOpenObjectByName is handed the whole OBJECT_ATTRIBUTES, root handle
+ * included -- so the dirfd-relative half of both checks is a
+ * real-Windows question, not a Wine one. */
+static int reject_if_prefix_not_dir(struct __ntpath *out, size_t root)
+{
+	FILE_BASIC_INFORMATION bi;
+	USHORT full = out->nt.Length;
+	size_t i = full / sizeof(WCHAR);
+
+	while (i > root) {
+		NTSTATUS st;
+		if (out->nt.Buffer[--i] != '\\') continue;
+		out->nt.Length = (USHORT)(i * sizeof(WCHAR));
+		st = NtQueryAttributesFile(&out->oa, &bi);
+		out->nt.Length = full;
+		if (NT_SUCCESS(st)) {
+			if (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) return 0;
+			__ntpath_free(out);
+			errno = ENOTDIR;
+			return -1;
+		}
+		if (st != STATUS_OBJECT_NAME_NOT_FOUND && st != STATUS_OBJECT_PATH_NOT_FOUND)
+			return 0;
+	}
+	return 0;
+}
+
+/* Where reject_if_prefix_not_dir() may start truncating an NT path.  A
+ * drive path ("\??\C:\...") may lose everything below "\??\C:\"; a name
+ * that is not of that shape -- "\??\NUL", a UNC name ("\??\UNC\server\
+ * share\..."), whose leading components are not files at all -- has no
+ * prefix this can say anything about, and is reported as having none. */
+static size_t nt_prefix_root(const UNICODE_STRING *nt)
+{
+	const WCHAR *b = nt->Buffer;
+	size_t n = nt->Length / sizeof(WCHAR);
+
+	if (n < 7 || b[0] != '\\' || b[1] != '?' || b[2] != '?' || b[3] != '\\') return n;
+	if (!(((b[4] | 0x20) >= 'a' && (b[4] | 0x20) <= 'z') && b[5] == ':' && b[6] == '\\')) return n;
+	return 7;
+}
+
 int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 {
 	WCHAR *dos;
@@ -78,17 +158,31 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 	dos = dos_from_posix(path, &n, &trailing);
 	if (!dos) return -1;
 
+	/* Same ceiling, and the same reason, as the hand-built UNICODE_STRING
+	 * in __ntpath_at() below: a name past __US_MAX_WCHARS code units
+	 * cannot be described by one at all.  POSIX wants ENAMETOOLONG for an
+	 * over-long name, and reporting it here rather than letting the Rtl's
+	 * failure fall into the catch-all ENOENT below is what makes every
+	 * caller of this layer agree with chdir(), which has always checked
+	 * its own hand-built string (src/unistd/chdir.c). */
+	if (n > __US_MAX_WCHARS) { __free(dos); errno = ENAMETOOLONG; return -1; }
+
 	memset(out, 0, sizeof *out);
 	st = RtlDosPathNameToNtPathName_U_WithStatus(dos, &out->nt, 0, 0);
 	if (!NT_SUCCESS(st)) {
 		__free(dos);
-		errno = st == STATUS_NO_MEMORY ? ENOMEM : ENOENT;
+		/* A relative name that fits on its own can still overflow once it
+		 * is resolved against the current directory; the Rtl says so with
+		 * STATUS_NAME_TOO_LONG, which is the same ENAMETOOLONG case. */
+		errno = st == STATUS_NO_MEMORY ? ENOMEM :
+			st == STATUS_NAME_TOO_LONG ? ENAMETOOLONG : ENOENT;
 		return -1;
 	}
 	out->buf = out->nt.Buffer;
 	out->dos = dos;
 	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	if (trailing && reject_if_not_dir(out)) return -1;
+	if (reject_if_prefix_not_dir(out, nt_prefix_root(&out->nt))) return -1;
 	return 0;
 }
 
@@ -133,6 +227,9 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		out->dos = w;
 		InitializeObjectAttributes(&out->oa, &out->nt, attributes, f->h, 0);
 		if (trailing && reject_if_not_dir(out)) return -1;
+		/* Relative to RootDirectory: every component of this name is a
+		 * path prefix component, so the walk may truncate anywhere. */
+		if (reject_if_prefix_not_dir(out, 0)) return -1;
 		return 0;
 	}
 }
