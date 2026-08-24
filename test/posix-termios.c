@@ -404,7 +404,20 @@ static void test_flock_conflict(const char *path)
 int main(int argc, char **argv)
 {
 	int consolefd;
-	char path[64];
+	/* Fixed relative name in the current directory, not a path derived
+	 * from argv[0]: tools/runtests.sh gives every test its own private
+	 * working directory (see that script's header comment), so a plain
+	 * relative filename is collision-free here. Earlier versions built
+	 * this by snprintf()-ing "%s.flocktest" onto argv[0] into a fixed
+	 * 64-byte buffer; argv[0] under Wine is an absolute "Z:\..." path,
+	 * and once that path (plus the test's own build/clone directory
+	 * name) got long enough, snprintf() silently truncated the
+	 * ".flocktest" suffix -- at ~63-64 input characters the suffix
+	 * vanished entirely and `path` became the *running test binary's
+	 * own path*, which open(..., O_CREAT) on then fails under NT/Wine,
+	 * producing two spurious flock() assertion failures below with no
+	 * indication that the path itself was wrong. */
+	static const char path[] = "posix-termios.flocktest";
 
 	(void)argc;
 
@@ -436,7 +449,6 @@ int main(int argc, char **argv)
 	test_ioctl_tiocgwinsz_non_tty(argv[0]);
 	if (consolefd >= 0) close(consolefd);
 
-	snprintf(path, sizeof path, "%s.flocktest", argv[0]);
 	test_flock_basic(path);
 	test_flock_conflict(path);
 	unlink(path);
