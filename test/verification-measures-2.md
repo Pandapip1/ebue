@@ -26,6 +26,7 @@ Wine for the PE legs. Numbers are quoted as measured.
 - [The oracle-classification design](#the-oracle-classification-design)
 - [Ranking](#ranking)
 - [Live findings](#live-findings)
+- [Backlog rather than gate](#backlog-rather-than-gate)
 
 ## The fence corpus
 
@@ -567,3 +568,228 @@ measured it and it was slow.
 
 Evaluated at length in the next section, because the drafted design is
 worth more than a one-line rejection.
+
+## The oracle-classification design
+
+The problem is real and the near-miss was expensive: a device-free
+structural test and a device-touching test both print `PASS`, only one
+of them is an oracle, and a correct Wine patch was nearly retracted
+because a CI log could not tell them apart.
+
+The drafted design has three parts: every test declares **device-free**
+or **device-touching**; a lint checks the declaration against the
+source; and -- the strong check -- device-free tests must produce
+byte-identical output across the Wine legs and the Server 2025 leg. The
+draft already identifies two limits: it cannot validate
+`device-touching`, and raw stdout is not byte-identical across legs, so
+normalisation is needed first.
+
+I measured both halves. **The verdict is that the normalisation worry is
+misplaced, that the byte-identity check should not be built for a
+different and worse reason, and that the lint should be built but not as
+a grep.**
+
+### Is normalisation tractable? Yes -- and that is the problem
+
+Measured directly. Every non-`*-win` test executable was run twice under
+Wine, once from `/tmp/.../aaa` and once from a working directory with a
+37-character name, and the outputs compared byte for byte:
+
+```
+identical 48   differ 0   empty output 0
+```
+
+Not one byte of difference. There are no pointer values, no handle
+numbers and no temp paths in the output, because the tests do not print
+any: **31 of the 48 print a single line**, and that line is
+`<name>: all tests passed`. The entire vocabulary of the suite's output,
+with digits collapsed, is about thirty distinct line shapes.
+
+So normalisation is not where the design dies. Nothing needs
+normalising. But the same measurement kills the check, for the reason
+underneath it: **a passing device-free test and a passing
+device-touching test emit the same bytes, because the bytes are
+`all tests passed`.** Byte-identity across legs is therefore satisfied
+by any test that passes on both legs, which is the normal case for the
+whole suite. The check does not validate the `device-free` label; it
+merely fails to contradict it. That is exactly the objection the draft
+already accepts for the `device-touching` direction, and it applies with
+equal force to the `device-free` one.
+
+Making identity informative would mean making the tests *print what they
+observed* rather than whether they agreed with it -- converting an
+assertion suite into a golden-output suite. That is a large change in
+the wrong direction for a project whose tests are written to clause
+citations, and golden outputs are the artefact people regenerate when
+they go red.
+
+There is one genuine signal in the output, and it is the opposite of the
+one the design looks for. Eight of the 48 tests print an environment-
+conditional `note:` line -- `note: /dev/tty not openable here`,
+`note: pid 4 is not a protected process here (Wine has no "System"
+process)`, `note: symlink() not supported here (errno 38)`,
+`note: flock(...) failed ... under concurrent Wine load`. A test that
+can print such a line is *by construction* not environment-invariant.
+That is a cheap, real check -- **a test declared device-free must not
+contain an environment-conditional branch** -- and it needs one leg, not
+two.
+
+### Is the lint tractable? Not as a grep
+
+I built the obvious version: classify a test as device-touching if its
+source calls any of a 40-name list (`open`, `socket`, `stat`, `glob`,
+`spawn`, `fork`, `NtCreateFile`, ...). Measured on `06f3203`: **19
+device-free, 30 device-touching**, in 0.04 s.
+
+Then I read the 19. Three are wrong, all in the dangerous direction:
+`test/rpath.c` and `test/delayall.c` reach the NT loader through
+`LdrLoadDll`/`LdrGetProcedureAddress`, and
+`test/spawn-cmdline-manyargs.c` creates processes through `__spawn`.
+A 40-name list misses every device reached by a name not on it, and
+`src/` has plenty (`LdrLoadDll`, `RtlCreateUserProcess`,
+`NtCreateUserProcess`, `__afd_ioctl`). A 16% false-`device-free` rate on
+the first attempt is not a floor that will improve much, because the
+failure mode is open-ended.
+
+**The check that does work is a link, not a grep**, and the machinery is
+already in the tree. `fuzz/ntstubs.c` exists precisely to stand in for
+NT in a native build, and `tools/asan-build.sh` already links every test
+against it. A test declared `device-free` can be linked against a
+variant stub set in which `NtCreateFile`, `NtDeviceIoControlFile`,
+`NtFsControlFile`, `NtOpenFile`, `Ldr*` and `Rtl*CreateUserProcess` all
+`abort()`, and required to pass. That is decidable, complete, and
+impossible to satisfy by accident: a test that touches a device dies,
+and one that does not cannot. It costs one extra link and run per
+declared-device-free test -- for the 16 that survive the read above,
+seconds -- and it is a stage that runs concurrently.
+
+### Verdict
+
+| Part | Verdict |
+|------|---------|
+| the declaration | **build it.** It is the thing that was missing when the Wine patch was nearly retracted, and it costs one comment per test |
+| the lint, as a grep | **do not build.** 16% false-`device-free` on 19 files, failing open |
+| the lint, as an aborting-stub link | **build it.** Decidable, complete, reuses `fuzz/ntstubs.c`, seconds |
+| byte-identity across legs | **do not build.** Normalisation is unnecessary -- 48/48 already identical across working directories -- and that is why the check carries no information: `all tests passed` is identical whether or not the test is an oracle |
+| no environment-conditional branch in a device-free test | **build it**, as the cheap companion to the declaration. 8 of 48 tests print such a line today |
+
+And the draft's own warning is the decisive argument against the
+byte-identity half: *a check people disable is worse than no check*. A
+check whose green result carries no information is the same thing one
+step earlier -- nobody disables it, and nobody learns anything from it
+either.
+
+## Ranking
+
+By expected defects caught per unit of cost, with what each misses.
+
+| Rank | Measure | Cost | Would have caught | Would **not** catch |
+|------|---------|------|-------------------|---------------------|
+| 1 | **N2** functions never asserted to fail | 0.93 s, ~25 lines | the F1 shape (6 fences), `newlocale`, `posix_fadvise`, `posix_fallocate`; names `symlinkat` and `wordexp` unprompted | *which* errno is missing -- only that none is asserted |
+| 2 | **N1** fuzz regex/glob/fnmatch/wordexp | 0 gate s; 300 s nightly per harness; ~30 lines each | F6's `regexec` crash (6/6 seeds); found a live `arith.c` shift UB in 120 s | all 13 F4 semantic fences -- a wrong answer is still an answer |
+| 3 | **N3** designated initialisers for constant-indexed tables | 0.04 s scan; 2 sites | a demonstrated latent transposition in `iswctype`/`wctype` and `strsignal` | any pairing not shaped as an integer ladder or a positional string table |
+| 4 | oracle declaration + aborting-stub link | seconds, concurrent | the device-free/device-touching confusion that nearly retracted a Wine patch | nothing about correctness; it labels oracles, it does not check them |
+| 5 | **N4** committed expected-result set per leg | 0 s, ~30 lines × 3 | the `nextafterl` configuration-dependent assertion being explained away | it does not *find* such an assertion |
+| 6 | **N5** pin the reference (lint half) | 0.05 s + 217 annotations | nothing directly; makes F3 and the ReactOS class diagnosable | the wrong value itself |
+| 7 | **N5** probe the target (probe half) | per-constant, Server 2025 leg only | F3's `0x037F`, and the ReactOS layout errors | only the constants somebody thought to probe |
+| -- | 66 bounded ERRORS sections | an afternoon | the specific missing errnos behind N2's 66 | it is work, not a check |
+| -- | **N6** compare what arrived | -- | folds into the first document's M4 and M9 |  |
+| -- | differential regex oracle, POSIX-wide ERRORS scrape, property-based F4 testing, byte-identity across legs, the grep-shaped device lint | -- | rejected above, each on a measurement |
+
+**If only one is adopted, adopt N2.** It is 0.93 s and 25 lines, it
+aims at the shape that both this classification and the clause audit
+independently found to be dominant, and its output list contains three
+defects found by three unrelated routes, none of which was used to
+construct it. That is the closest thing to a validated detector in
+either document.
+
+**If two, add N1**, on the strength of the only measurement here that
+produced a new defect rather than confirming an old one.
+
+One cost note, inherited and worth repeating because it still holds.
+`tools/gate.sh` runs stages concurrently, so the question for any
+addition is "is it slower than `linkcheck`", not "how many seconds does
+it add". Every measure ranked above is under a second. `linkcheck`
+remains strictly serial, and parallelising it would still buy more
+headroom than everything in both documents spends.
+
+## Live findings
+
+Verified against a fresh clone of `origin/main` at `06f3203`. None of
+these are proposals, and none of them is fenced.
+
+1. **`wordexp("$((1>>-1))")` is undefined behaviour.** UBSan, through
+   the throwaway `fnmatch`/`glob`/`wordexp` harness, 120 s, second seed:
+   `src/wordexp/arith.c:217:23: runtime error: shift exponent -1 is
+   negative`. Minimised to a single call. `arith.c:216-217` are
+   `case 'L': return cur << rhs;` and `case 'R': return cur >> rhs;`;
+   the `/` and `%` cases three lines above do guard their operand. Both
+   a negative and an over-wide count reach the shift. Reachable from a
+   public API with caller-controlled input.
+
+2. **Seven shall-fail clauses discarded in `src/unistd/ids.c`.** Built
+   `--host=x86_64-win32` and run under Wine on `06f3203`:
+
+   ```
+   chown("/no/such/path/x", ...)      = 0   errno=0
+   lchown("/no/such/path/x", ...)     = 0   errno=0
+   fchown(-1, ...)                    = 0   errno=0
+   fchownat(-1, "/no/such/path/x",...)= 0   errno=0
+   getpgid(999999)                    = 1   errno=0
+   getsid(999999)                     = 1   errno=0
+   setpgid(999999, 999999)            = 0   errno=0
+   access("/no/such/path/x", 0)       = -1  errno=2   <- control
+   ```
+
+   `chown.html` lists `[ENOENT]` as *shall* fail; `fchown.html` lists
+   `[EBADF]`; `getpgid.html`, `getsid.html` and `setpgid.html` list
+   `[ESRCH]`. `test/POSIX-COVERAGE.md:498` records this family as
+   "covered for the returns; the *effects* N/A -- one user and one fixed
+   session". The N/A argument is correct about the effect being
+   unobservable and says nothing about the argument being unchecked.
+   Every one of these sites is `(void)p; return 0;`, and every one is in
+   [N2](#n2-assert-that-a-function-can-fail)'s list of functions no test
+   makes fail. Not fenced -- fencing them is somebody else's commit, per
+   the brief this document was written under.
+
+3. **Two entries of `src/ctype/iswctype.c`'s case ladder and two of
+   `src/string/strsignal.c`'s `__sigmsgs[]` can be transposed and the
+   suite stays green** -- 46 passed, 0 failed. Nothing is transposed
+   today; this is the negative control for
+   [N3](#n3-index-a-table-by-its-constant-not-by-its-position), run and
+   reverted.
+
+4. **`test/posix-math.c:1423-1443` asserts `nextafterl`/`nexttowardl`
+   with no `long double` width guard**, while `test/math.c:19` and
+   `test/posix-limits.c:346` both define one from the identical
+   `__SIZEOF_LONG_DOUBLE__` test. This is one of the two failures on
+   `main`'s `asan` leg.
+
+5. **`test/posix-unistd.c:928` calls `symlink()` inside
+   `if (symlink(...) == 0)`**, so on every leg where `symlink()` is
+   unsupported the whole readlink success path is skipped silently --
+   `note: symlink() not supported here (errno 38)` in the Wine output --
+   and the live heap-buffer-overflow at `src/unistd/link.c:186` is
+   reachable only on the one leg where it does work. I did not
+   root-cause the overflow; it is being worked elsewhere.
+
+## Backlog rather than gate
+
+Things found while measuring that are work, not checks.
+
+- **`fuzz/` has no harness for the four modules holding half the fence
+  corpus.** Two prototypes exist and were thrown away; the numbers are
+  in [N1](#n1-fuzz-the-four-pattern-matching-modules).
+- **66 ERRORS sections, read once, turned into 66 assertions.** The
+  bounded version of the table this document rejects.
+- **217 reference citations in `src/` with one revision between them.**
+  Annotate incrementally against a baseline count.
+- **`src/string/strsignal.c`'s `__sigmsgs[]` should be designated by
+  `SIGxxx`,** the way `src/string/strerror.c`'s `__errmsgs[]` already is
+  by `Exxx`, and `src/ctype/iswctype.c`'s ladder should be deleted in
+  favour of `src/ctype/wctype.c`'s table -- `src/regex/regex.c:146`
+  shows the shape.
+- **ASan's stack-overflow report costs 90 s** on `src/regex`'s recursion
+  because it unwinds every frame. Anything that bounds the recursion
+  bounds the report too; until then a fuzz run that finds it spends most
+  of its budget printing.
