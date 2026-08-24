@@ -138,8 +138,29 @@ jobs:
             echo '## Corpus'
             grep -E '^   corpus [0-9]+ -> [0-9]+$' fuzz.log || echo '(none reported)'
           } >> "$GITHUB_STEP_SUMMARY"
+          # The `|| true` is load-bearing. `shell: bash` above is
+          # `bash --noprofile --norc -eo pipefail`, and the -o pipefail is
+          # the whole reason that key is there (see the Fuzz step). With
+          # pipefail a CLEAN run inverts the two outcomes: grep matches
+          # nothing, exits 1, the pipeline inherits it, the assignment
+          # inherits that, and -e kills the step -- so the good outcome
+          # goes red with nothing in the run saying why, `found` is never
+          # written, and the "Open an issue" step cannot fire. The run that
+          # DOES find something exits 0 here, because grep matches.
+          #
+          # Established by extracting this step's body and running it under
+          # GitHub's exact shell line against two fixture logs: clean ->
+          # exit 1, $GITHUB_OUTPUT never written; one "FOUND SOMETHING"
+          # line -> exit 0, found=strtod. With `|| true` both exit 0 and
+          # the finding still comes through.
+          #
+          # Never observed in a run: this step landed in f0c6e51 today, and
+          # `gh run list --workflow=fuzz.yml` shows the three nightlies so
+          # far (08-22, 08-23, 08-24) all green and all predating it -- the
+          # 08-24 run's step list has no Summarize step at all. Tomorrow's
+          # 07:17 UTC nightly would have been the first to go red.
           found=$(grep -oE '^   fuzz_[a-z]+ FOUND SOMETHING' fuzz.log \
-                  | awk '{print $1}' | sed 's/^fuzz_//' | sort -u | tr '\n' ' ')
+                  | awk '{print $1}' | sed 's/^fuzz_//' | sort -u | tr '\n' ' ' || true)
           echo "found=${found% }" >> "$GITHUB_OUTPUT"
 
       # Always: the corpus counts in the log are the evidence that the
