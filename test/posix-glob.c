@@ -976,6 +976,516 @@ static void test_regex_regerror(void)
 	CHECK(strlen(buf) + 1 == need);
 }
 
+
+/* ==== clauses the successor-queue <regex.h> audit added ==================
+ *
+ * The seven test_regex_* functions above cover the header's common
+ * path. What follows are the clauses of regcomp.html and of XBD chapter
+ * 9 (Regular Expressions) that nothing checked -- test/POSIX-GAP-
+ * ACCOUNTING.md lists <regex.h> as one of the headers
+ * test/POSIX-COVERAGE.md's priority order never named -- plus six
+ * fenced defects. */
+
+/* regcomp.html DESCRIPTION, pmatch: "The offsets ... in pmatch[0] shall
+ * identify the substring that corresponds to the entire string. The
+ * remaining ... shall identify the substrings that correspond to
+ * parenthesized subexpressions" and "Any unused elements of pmatch up
+ * to pmatch[nmatch-1] shall be filled with -1." Also: "If a
+ * subexpression does not participate in the match, the corresponding
+ * offsets shall be -1" -- which is distinct from a subexpression that
+ * participates and matches the empty string, whose offsets are a real
+ * (equal) pair. test_regex_subexpression_capture() checks a plain
+ * two-group capture; none of this was reached. */
+static void test_regex_pmatch_fill_and_nonparticipating(void)
+{
+	regex_t re;
+	regmatch_t m[5];
+	int i;
+
+	CHECK(regcomp(&re, "(a)", REG_EXTENDED) == 0);
+	for (i = 0; i < 5; i++) m[i].rm_so = m[i].rm_eo = -77;
+	CHECK(regexec(&re, "a", 5, m, 0) == 0);
+	CHECK(m[0].rm_so == 0 && m[0].rm_eo == 1);
+	CHECK(m[1].rm_so == 0 && m[1].rm_eo == 1);
+	/* nmatch is larger than re_nsub + 1: the excess must be -1, not
+	 * left as the caller's -77 and not left uninitialised. */
+	for (i = 2; i < 5; i++) CHECK(m[i].rm_so == -1 && m[i].rm_eo == -1);
+	regfree(&re);
+
+	/* A subexpression that does not participate at all. */
+	CHECK(regcomp(&re, "(a)|(b)", REG_EXTENDED) == 0);
+	CHECK(re.re_nsub == 2);
+	CHECK(regexec(&re, "b", 3, m, 0) == 0);
+	CHECK(m[1].rm_so == -1 && m[1].rm_eo == -1);
+	CHECK(m[2].rm_so == 0 && m[2].rm_eo == 1);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "(a)*b", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "b", 2, m, 0) == 0);
+	CHECK(m[1].rm_so == -1 && m[1].rm_eo == -1);
+	regfree(&re);
+
+	/* ... versus one that *does* participate and matches empty: a
+	 * real, equal pair of offsets, not -1. */
+	CHECK(regcomp(&re, "(a*)b", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "b", 2, m, 0) == 0);
+	CHECK(m[1].rm_so == 0 && m[1].rm_eo == 0);
+	regfree(&re);
+}
+
+/* regcomp.html DESCRIPTION, REG_NOSUB: "Report only success or failure
+ * in regexec()." RETURN VALUE/DESCRIPTION: "If REG_NOSUB was set ...
+ * the nmatch and pmatch arguments to regexec() are ignored." So an
+ * oversized nmatch must leave the caller's array untouched --
+ * test_regex_icase_and_nosub() passes nmatch == 0, which cannot
+ * distinguish "ignored" from "there was nothing to fill". */
+static void test_regex_nosub_ignores_pmatch(void)
+{
+	regex_t re;
+	regmatch_t m[3];
+	int i;
+
+	CHECK(regcomp(&re, "(a)(b)", REG_EXTENDED | REG_NOSUB) == 0);
+	for (i = 0; i < 3; i++) m[i].rm_so = m[i].rm_eo = -77;
+	CHECK(regexec(&re, "ab", 3, m, 0) == 0);
+	for (i = 0; i < 3; i++) CHECK(m[i].rm_so == -77 && m[i].rm_eo == -77);
+	regfree(&re);
+}
+
+/* regcomp.html DESCRIPTION, REG_NEWLINE -- four separate requirements.
+ * test_regex_newline_flag() covers the first and third; the second and
+ * fourth, and the "regardless of" clauses on both anchors, are new:
+ *
+ *   "A <newline> in string shall not be matched by a <period> outside a
+ *    bracket expression or by any form of a non-matching list"
+ *   "A <circumflex> ... shall match the zero-length string immediately
+ *    after a <newline> in string, regardless of the setting of
+ *    REG_NOTBOL"
+ *   "A <dollar-sign> ... shall match the zero-length string immediately
+ *    before a <newline> in string, regardless of the setting of
+ *    REG_NOTEOL" */
+static void test_regex_newline_full(void)
+{
+	regex_t re;
+	regmatch_t m[1];
+
+	/* "or by any form of a non-matching list" */
+	CHECK(regcomp(&re, "a[^x]b", REG_EXTENDED | REG_NEWLINE) == 0);
+	CHECK(regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+	CHECK(regcomp(&re, "a[^x]b", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+	regfree(&re);
+
+	/* "regardless of the setting of REG_NOTBOL" */
+	CHECK(regcomp(&re, "^b", REG_EXTENDED | REG_NEWLINE) == 0);
+	CHECK(regexec(&re, "a\nb", 1, m, REG_NOTBOL) == 0);
+	CHECK(m[0].rm_so == 2 && m[0].rm_eo == 3);
+	regfree(&re);
+
+	/* ... but REG_NOTBOL still suppresses the real start of string. */
+	CHECK(regcomp(&re, "^a", REG_EXTENDED | REG_NEWLINE) == 0);
+	CHECK(regexec(&re, "a", 0, NULL, REG_NOTBOL) == REG_NOMATCH);
+	regfree(&re);
+
+	/* "A <dollar-sign> ... immediately before a <newline> ...
+	 * regardless of the setting of REG_NOTEOL" -- wholly untested
+	 * before. */
+	CHECK(regcomp(&re, "a$", REG_EXTENDED | REG_NEWLINE) == 0);
+	CHECK(regexec(&re, "a\nb", 1, m, REG_NOTEOL) == 0);
+	CHECK(m[0].rm_so == 0 && m[0].rm_eo == 1);
+	regfree(&re);
+	CHECK(regcomp(&re, "a$", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+}
+
+/* XBD 9.3.5 RE Bracket Expression, the syntactic edge cases: a
+ * <right-square-bracket> "shall lose its special meaning ... if it
+ * occurs first in the list (after an initial <circumflex>, if any)";
+ * a <hyphen> "shall be treated as itself" if it is first or last in the
+ * list; and the error codes regex.h.html names for the malformed
+ * cases -- REG_ERANGE "Invalid endpoint in range expression",
+ * REG_ECTYPE "Invalid character class name", REG_ECOLLATE "Invalid
+ * collating element referenced", REG_EBRACK "'[]' imbalance". None of
+ * this was checked; test_regex_error_codes() reaches REG_EBRACK only
+ * via the truncated "[a-". */
+static void test_regex_bracket_edges(void)
+{
+	regex_t re;
+
+	CHECK(regcomp(&re, "[]a]", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "]", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "a", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "b", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "[^]a]", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "b", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "]", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "[-a]", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "-", 0, NULL, 0) == 0);
+	regfree(&re);
+	CHECK(regcomp(&re, "[a-]", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "-", 0, NULL, 0) == 0);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "[z-a]", REG_EXTENDED) == REG_ERANGE);
+	CHECK(regcomp(&re, "[[:foo:]]", REG_EXTENDED) == REG_ECTYPE);
+	CHECK(regcomp(&re, "[[.ab.]]", REG_EXTENDED) == REG_ECOLLATE);
+	/* An unmatched '[' is "'[]' imbalance" for an RE -- unlike
+	 * fnmatch(), where XCU 2.13.1 makes it a literal '['. The two
+	 * pattern languages genuinely differ here. */
+	CHECK(regcomp(&re, "[abc", REG_EXTENDED) == REG_EBRACK);
+}
+
+/* XBD 9.3.6/9.4.6 Intervals -- "\{m\}", "\{m,\}", "\{m,n\}" in a BRE
+ * and "{m}", "{m,}", "{m,n}" in an ERE, "match a repetition of the
+ * single-character BRE [ERE] immediately preceding it". Wholly
+ * untested; the file's own banner lists "interval expressions'
+ * boundary counts" as unaudited.
+ *
+ * Also XBD 9.3.2: in a BRE, '{' and '}' are ordinary characters unless
+ * escaped, so an ERE-style "a{3,2}" is a five-character literal, not an
+ * invalid interval. */
+static void test_regex_intervals(void)
+{
+	regex_t re;
+	regmatch_t m[2];
+
+	CHECK(regcomp(&re, "a{2,3}", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "aaaa", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+	regfree(&re);
+	CHECK(regcomp(&re, "a{2}", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "aaa", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 2);
+	regfree(&re);
+	CHECK(regcomp(&re, "a{0,}", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "aaa", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+	regfree(&re);
+	CHECK(regcomp(&re, "(ab){2,}", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "ababab", 2, m, 0) == 0);
+	CHECK(m[0].rm_so == 0 && m[0].rm_eo == 6);
+	CHECK(m[1].rm_so == 4 && m[1].rm_eo == 6);
+	regfree(&re);
+
+	/* BRE form. */
+	CHECK(regcomp(&re, "a\\{2,3\\}", 0) == 0);
+	CHECK(regexec(&re, "aaaa", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+	regfree(&re);
+
+	/* regex.h.html REG_BADBR: "Content of '\{\}' invalid: not a
+	 * number, number too large, more than two numbers, first larger
+	 * than second." */
+	CHECK(regcomp(&re, "a{3,2}", REG_EXTENDED) == REG_BADBR);
+	/* ... and the same text in a BRE is just literal characters. */
+	CHECK(regcomp(&re, "a{3,2}", 0) == 0);
+	CHECK(regexec(&re, "a{3,2}", 0, NULL, 0) == 0);
+	regfree(&re);
+}
+
+/* XBD 9.3.3/9.3.8: in a BRE, a <circumflex> is an anchor only "when
+ * used as the first character of an entire BRE" and a <dollar-sign>
+ * only "when used as the last character"; anywhere else each is an
+ * ordinary character. In an ERE (9.4.9) both are always special. This
+ * is the single most-often-got-wrong difference between the two
+ * grammars and nothing checked it. */
+static void test_regex_bre_anchor_vs_literal(void)
+{
+	regex_t re;
+
+	CHECK(regcomp(&re, "a^b", 0) == 0);
+	CHECK(regexec(&re, "a^b", 0, NULL, 0) == 0);
+	regfree(&re);
+	CHECK(regcomp(&re, "a$b", 0) == 0);
+	CHECK(regexec(&re, "a$b", 0, NULL, 0) == 0);
+	regfree(&re);
+
+	/* ERE: '^' is an anchor wherever it appears, so "a^b" can never
+	 * match anything. */
+	CHECK(regcomp(&re, "a^b", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "a^b", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+}
+
+/* regcomp.html RETURN VALUE for regerror(): "shall return the size of
+ * the buffer needed to hold the entire generated string", and
+ * DESCRIPTION: "regerror() shall place the generated string into the
+ * buffer ... If the string ... cannot fit entirely within the buffer,
+ * it shall be truncated and null-terminated" and "If errbuf_size is 0,
+ * regerror() ignores the errbuf argument, and returns the size of the
+ * buffer needed to hold the entire generated string."
+ *
+ * test_regex_regerror() covers the two-call size query; the truncation
+ * and errbuf_size==0 halves -- where an off-by-one would live -- did
+ * not. */
+static void test_regex_regerror_truncation(void)
+{
+	regex_t re;
+	char big[256], small[8], guard[4];
+	size_t need;
+
+	CHECK(regcomp(&re, "[abc", REG_EXTENDED) == REG_EBRACK);
+	need = regerror(REG_EBRACK, &re, big, sizeof big);
+	CHECK(need == strlen(big) + 1);		/* includes the terminator */
+	CHECK(need > sizeof small);		/* so the next call really truncates */
+
+	memset(small, 'X', sizeof small);
+	CHECK(regerror(REG_EBRACK, &re, small, sizeof small) == need);	/* the *needed* size, not the written size */
+	CHECK(strlen(small) == sizeof small - 1);			/* truncated ... */
+	CHECK(small[sizeof small - 1] == '\0');				/* ... and null-terminated */
+	CHECK(memcmp(small, big, sizeof small - 1) == 0);		/* a prefix of the full string */
+
+	/* "If errbuf_size is 0, regerror() ignores the errbuf argument" */
+	memset(guard, 'X', sizeof guard);
+	CHECK(regerror(REG_EBRACK, &re, guard, 0) == need);
+	CHECK(guard[0] == 'X');
+}
+
+/* regcomp.html: regfree() "shall free any memory allocated by
+ * regcomp() associated with preg". POSIX leaves preg's state undefined
+ * after a *failed* regcomp(), so a regfree() on one is not required to
+ * work -- src/regex/regex.c nevertheless nulls the compiled form on
+ * every failure path, so it does. Recorded as an extension this
+ * library provides beyond the spec, not as a conformance row, because
+ * a caller relying on it is relying on undefined behaviour elsewhere. */
+static void test_regex_regfree_after_failed_regcomp(void)
+{
+	regex_t re;
+
+	CHECK(regcomp(&re, "[", REG_EXTENDED) == REG_EBRACK);
+	regfree(&re);		/* must not crash or double-free */
+	CHECK(regcomp(&re, "a", REG_EXTENDED) == 0);
+	regfree(&re);
+}
+
+#if 0 /* BUG: regcomp.html RETURN VALUE -- "If regexec() finds a match,
+	it shall return zero; otherwise, it shall return non-zero
+	indicating either no match or an error." Neither outcome is
+	"terminate the process".
+
+	src/regex/regex.c's run() recurses once per I_SPLIT and once per
+	I_SAVE. When a repeat's body can match the empty string, the
+	SPLIT/JMP loop the compiler emits makes no input progress, so the
+	recursion is unbounded. The MAX_STEPS guard in the same function
+	counts *steps*, not depth, so two million nested run() frames
+	exhaust the C stack long before the counter trips.
+
+	Measured under Wine: each of the three regexec() calls below
+	kills the process outright. They are not exotic patterns -- any
+	program that hands a user-supplied pattern to regcomp() (a
+	config file, a grep-alike, ntlibc's own src/sh/) can be crashed
+	by them. glibc, musl and the BSDs all return normally for all
+	three.
+
+	The whole test is fenced, not merely its assertions: an unfenced
+	crash here would take test/posix-glob.c's entire binary down and
+	report as a `make check` failure with no indication of which
+	clause was at fault.
+
+	Two independent defects: run() has no recursion-depth bound, and
+	the compiler emits a progress-free loop rather than breaking it.
+	Either fix alone would stop the crash.
+
+	The third pattern is also the symptom of the BUG in the next
+	fence -- see there for why "^*a" reaches this path at all. */
+static void test_regex_nullable_repeat_does_not_crash(void)
+{
+	regex_t re;
+	regmatch_t m[2];
+
+	CHECK(regcomp(&re, "(a*)*b", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, m, 0) == REG_NOMATCH);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "()*a", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "a", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 1);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "^*a", 0) == 0);
+	CHECK(regexec(&re, "*a", 1, m, 0) == 0);
+	regfree(&re);
+}
+#endif
+
+#if 0 /* BUG: XBD 9.3.3 -- the <asterisk> "shall be special except when
+	used ... As the first character of an entire BRE (after an
+	initial '^', if any)". regcomp.html quotes the same rule, and
+	src/regex/regex.c's own comment above the offending line quotes
+	the parenthetical verbatim -- but the code only suppresses the
+	repeat when the first *atom* is itself the '*'. In "^*a" the
+	first atom is the '^' anchor, so the '*' is applied to it as a
+	repeat operator, starring a zero-width assertion.
+
+	Two consequences: the wrong parse (POSIX requires the '*' here to
+	be an ordinary character, so "^*a" matches a literal "*a" at the
+	start of the string and does not match "a"), and, because
+	starring a zero-width atom builds a progress-free loop, the
+	crash recorded in the previous fence.
+
+	The related case "\(*a\)" -- '*' first inside a subexpression --
+	is handled correctly, so this is specifically the "after an
+	initial '^'" half of the rule. */
+static void test_regex_bre_star_after_leading_circumflex(void)
+{
+	regex_t re;
+	regmatch_t m[1];
+
+	CHECK(regcomp(&re, "^*a", 0) == 0);
+	CHECK(regexec(&re, "*a", 1, m, 0) == 0);
+	CHECK(m[0].rm_so == 0 && m[0].rm_eo == 2);	/* the '*' is literal ... */
+	CHECK(regexec(&re, "a", 0, NULL, 0) == REG_NOMATCH);	/* ... and required */
+	regfree(&re);
+}
+#endif
+
+#if 0 /* BUG: regcomp.html DESCRIPTION -- REG_ICASE, "Ignore case in
+	match". XBD 9.3.5 makes no exception for character classes: a
+	bracket expression under REG_ICASE has to match either case.
+
+	src/regex/regex.c folds asymmetrically. Its set-bit helper folds
+	to lowercase when REG_ICASE is on, and its test-bit helper always
+	folds the subject byte to lowercase -- but emit_class() calls the
+	set-bit helper with the fold forced *off*, on the argument that
+	"classes are their own fold". That argument holds for alpha,
+	alnum, print, graph and xdigit, which contain both cases. It is
+	false for [:upper:] and [:lower:]: [[:upper:]] sets only the bits
+	for 'A'..'Z', which the always-folding test helper can never
+	consult.
+
+	Measured under Wine, all four wrong:
+	  [[:upper:]]   REG_ICASE vs "H"  -> REG_NOMATCH  (must match)
+	  [[:upper:]]   REG_ICASE vs "h"  -> REG_NOMATCH  (must match)
+	  [^[:upper:]]  REG_ICASE vs "H"  -> match        (must not)
+	  [[:upper:]]   no ICASE  vs "H"  -> match        (correct)
+
+	So under REG_ICASE, [[:upper:]] matches *nothing at all* and its
+	negation matches everything -- a silent wrong answer rather than
+	an error, which is the worst shape for this kind of defect.
+	[:lower:] survives only by accident, because the test helper
+	folds down into it. */
+static void test_regex_icase_inside_character_class(void)
+{
+	regex_t re;
+
+	CHECK(regcomp(&re, "[[:upper:]]", REG_EXTENDED | REG_ICASE) == 0);
+	CHECK(regexec(&re, "H", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "h", 0, NULL, 0) == 0);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "[^[:upper:]]", REG_EXTENDED | REG_ICASE) == 0);
+	CHECK(regexec(&re, "H", 0, NULL, 0) == REG_NOMATCH);
+	CHECK(regexec(&re, "h", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+}
+#endif
+
+#if 0 /* BUG: regex.h.html's error-code table -- REG_EESCAPE is
+	"Trailing <backslash> character in pattern"; REG_EPAREN is
+	"'\(\)' imbalance". A BRE ending in an unescaped backslash is the
+	first, not the second.
+
+	src/regex/regex.c's BRE branch parser treats a trailing backslash
+	as end-of-branch and returns without consuming it; regcomp() then
+	sees leftover input and attributes it to parentheses. The ERE
+	path gets this right, so the two grammars disagree about the same
+	malformed pattern.
+
+	Measured: BRE "a\" -> 8 (REG_EPAREN); ERE "a\" -> 5
+	(REG_EESCAPE). */
+static void test_regex_bre_trailing_backslash_code(void)
+{
+	regex_t re;
+
+	CHECK(regcomp(&re, "a\\", 0) == REG_EESCAPE);		/* gives REG_EPAREN today */
+	CHECK(regcomp(&re, "a\\", REG_EXTENDED) == REG_EESCAPE);	/* already correct */
+}
+#endif
+
+#if 0 /* BUG: regex.h.html's error-code table -- REG_EBRACE is "'\{\}'
+	imbalance"; REG_BADBR is "Content of '\{\}' invalid: not a
+	number, number too large, more than two numbers, first larger
+	than second". A missing closing brace is an imbalance, not bad
+	content.
+
+	src/regex/regex.c never assigns REG_EBRACE anywhere -- the
+	constant appears only in the error-message table -- so the code
+	the spec names for this case is unreachable, and both the BRE and
+	the ERE missing-brace checks answer REG_BADBR instead.
+
+	Measured: BRE "a\{2" -> 10, ERE "a{2" -> 10, both REG_BADBR;
+	"a{3,2}" -> 10 as well, which is the one case where REG_BADBR is
+	correct, so the two conditions are indistinguishable to a
+	caller. */
+static void test_regex_ebrace_vs_badbr(void)
+{
+	regex_t re;
+
+	CHECK(regcomp(&re, "a\\{2", 0) == REG_EBRACE);		/* gives REG_BADBR today */
+	CHECK(regcomp(&re, "a{2", REG_EXTENDED) == REG_EBRACE);	/* gives REG_BADBR today */
+	CHECK(regcomp(&re, "a{3,2}", REG_EXTENDED) == REG_BADBR);	/* already correct */
+}
+#endif
+
+#if 0 /* BUG (self-documented in src/regex/regex.c's banner): XBD 9.1 --
+	"the search is for the longest of the leftmost matches" and
+	"Consistent with the whole match being the longest of the
+	leftmost matches, each subpattern, from left to right, shall
+	match the longest possible string."
+
+	src/regex/regex.c compiles alternation to a SPLIT whose first
+	branch is tried first, and its matcher returns on the first
+	branch that reaches a match -- so alternation is leftmost-first,
+	not leftmost-longest. Measured: "a|ab" against "ab" reports a
+	match of 0,1; POSIX requires 0,2.
+
+	Narrower than the banner implies, which is worth recording:
+	greedy give-back, nested subexpression lengths and the classic
+	"(wee|week)(knights|nights)" case were all measured correct. It
+	is specifically the top-level alternation choice that does not
+	back off to try a longer branch. */
+static void test_regex_leftmost_longest_alternation(void)
+{
+	regex_t re;
+	regmatch_t m[1];
+
+	CHECK(regcomp(&re, "a|ab", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "ab", 1, m, 0) == 0);
+	CHECK(m[0].rm_so == 0 && m[0].rm_eo == 2);	/* rm_eo is 1 today */
+	regfree(&re);
+}
+#endif
+
+#if 0 /* UNIMPL: XBD 9.3.6 -- "The back-reference expression '\n' shall
+	match the same (possibly empty) string of characters as was
+	matched by a subexpression enclosed between '\(' and '\)'
+	preceding the '\n'. The character 'n' shall be a digit from 1
+	through 9."
+
+	src/regex/regex.c rejects \1..\9 in a BRE outright with
+	REG_ESUBREG, with a documented rationale. Classified UNIMPL
+	rather than BUG because the header's own comments say plainly
+	that it is not implemented -- but note the chosen error code is
+	itself inapt: regex.h.html defines REG_ESUBREG as "Number in
+	'\digit' invalid or in error", and "\1" after a real "\(...\)" is
+	a perfectly valid back-reference, merely an unsupported one.
+
+	EREs are unaffected: XBD 9.4 gives them no back-reference
+	production at all, so ntlibc treating ERE "\1" as a literal '1'
+	is conforming. */
+static void test_regex_bre_backreference(void)
+{
+	regex_t re;
+	regmatch_t m[2];
+
+	CHECK(regcomp(&re, "\\(a*\\)b\\1", 0) == 0);
+	CHECK(regexec(&re, "aabaa", 2, m, 0) == 0);
+	CHECK(m[0].rm_so == 0 && m[0].rm_eo == 5);
+	regfree(&re);
+}
+#endif
+
 /* ===================================================================
  * search.h -- basedefs/search.h.html, functions/hcreate.html,
  * functions/tsearch.html, functions/lsearch.html, functions/insque.html
@@ -1716,6 +2226,14 @@ int main(void)
 	test_regex_notbol_noteol();
 	test_regex_error_codes();
 	test_regex_regerror();
+	test_regex_pmatch_fill_and_nonparticipating();
+	test_regex_nosub_ignores_pmatch();
+	test_regex_newline_full();
+	test_regex_bracket_edges();
+	test_regex_intervals();
+	test_regex_bre_anchor_vs_literal();
+	test_regex_regerror_truncation();
+	test_regex_regfree_after_failed_regcomp();
 
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");

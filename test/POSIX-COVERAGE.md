@@ -1733,3 +1733,163 @@ second security principal to enumerate. Cross-binary agreement between
 copies of `current_name()` is likewise not asserted — the two tests are
 separate binaries — though both now agree with `getlogin()`, which
 constrains them jointly.
+
+## regex.h (successor-queue item 2, group E)
+
+Sixth of the twelve, and by a wide margin the one with the most
+defects. `test/POSIX-GAP-ACCOUNTING.md` names `test/posix-parse.c` as
+this header's test file; that is wrong — `test/posix-parse.c` is
+`strtol`/`mktime`/`strftime` boundary tests and contains no regex at
+all. The `<regex.h>` section lives in `test/posix-glob.c`, whose own
+banner already listed back-references, collating symbols, interval
+boundary counts and locale-dependent bracket expressions as unaudited.
+
+**Oracle: pure C library, so Wine is a sound oracle.** `src/regex/`
+makes no NT call; everything below was measured under Wine and would
+measure identically anywhere.
+
+Six BUGs and one UNIMPL, all fenced. The first is the serious one: a
+`regexec()` that terminates the process.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| regexec | "If regexec() finds a match, it shall return zero; otherwise, it shall return non-zero" — on a repeat whose body can match empty | **BUG (fenced)** — crashes the process | test/posix-glob.c (`test_regex_nullable_repeat_does_not_crash`) |
+| regcomp | XBD 9.3.3: the asterisk is ordinary "As the first character of an entire BRE (after an initial `^`, if any)" | **BUG (fenced)** | test/posix-glob.c (`test_regex_bre_star_after_leading_circumflex`) |
+| regcomp | REG_ICASE, "Ignore case in match" — inside a bracket expression's character classes | **BUG (fenced)** | test/posix-glob.c (`test_regex_icase_inside_character_class`) |
+| regcomp | regex.h.html: REG_EESCAPE is "Trailing `<backslash>` character in pattern" | **BUG (fenced)** — a BRE gives REG_EPAREN | test/posix-glob.c (`test_regex_bre_trailing_backslash_code`) |
+| regcomp | regex.h.html: REG_EBRACE is "`'\{\}'` imbalance", distinct from REG_BADBR's "Content of `'\{\}'` invalid" | **BUG (fenced)** — REG_EBRACE is never produced at all | test/posix-glob.c (`test_regex_ebrace_vs_badbr`) |
+| regexec | XBD 9.1: "the search is for the longest of the leftmost matches" | **BUG (fenced)**, self-documented in `src/regex/regex.c`'s banner | test/posix-glob.c (`test_regex_leftmost_longest_alternation`) |
+| regcomp | XBD 9.3.6 back-references `\1`..`\9` in a BRE | **UNIMPL (fenced)** — deliberately rejected, with a documented rationale | test/posix-glob.c (`test_regex_bre_backreference`) |
+| regexec | pmatch[0] is the whole match; "Any unused elements of pmatch up to pmatch[nmatch-1] shall be filled with -1"; a non-participating subexpression gets -1, while one that participates and matches empty gets a real equal pair | covered | test/posix-glob.c (`test_regex_pmatch_fill_and_nonparticipating`) |
+| regcomp / regexec | REG_NOSUB: "the nmatch and pmatch arguments to regexec() are ignored" — with an *oversized* nmatch, which `nmatch == 0` cannot distinguish from "nothing to fill" | covered | test/posix-glob.c (`test_regex_nosub_ignores_pmatch`) |
+| regcomp | REG_NEWLINE's second and fourth requirements — "or by any form of a non-matching list", and the `$`-before-newline anchor — plus both anchors' "regardless of the setting of REG_NOTBOL/REG_NOTEOL" | covered — the existing test covered only the first and third | test/posix-glob.c (`test_regex_newline_full`) |
+| regcomp | XBD 9.3.5 bracket-expression syntax: `]` first is literal, `-` first or last is literal, and the REG_ERANGE / REG_ECTYPE / REG_ECOLLATE / REG_EBRACK codes | covered | test/posix-glob.c (`test_regex_bracket_edges`) |
+| regcomp | XBD 9.3.6/9.4.6 intervals in both grammars, including `{m}`, `{m,}`, `{m,n}`, a group with an interval, and BRE `{`/`}` being ordinary characters | covered | test/posix-glob.c (`test_regex_intervals`) |
+| regcomp | XBD 9.3.3/9.3.8 vs 9.4.9: `^` and `$` are anchors only at the ends of a BRE but always special in an ERE | covered | test/posix-glob.c (`test_regex_bre_anchor_vs_literal`) |
+| regerror | "shall return the size of the buffer needed to hold the entire generated string"; truncation must still null-terminate; "If errbuf_size is 0, regerror() ignores the errbuf argument" | covered — the existing test covers only the two-call size query, where an off-by-one would not show | test/posix-glob.c (`test_regex_regerror_truncation`) |
+| regfree | after a *failed* regcomp | N/A — POSIX leaves `preg`'s state undefined after a regcomp failure, so this is an extension `src/regex/regex.c` provides rather than a requirement; asserted anyway, and recorded as an extension | test/posix-glob.c (`test_regex_regfree_after_failed_regcomp`) |
+| regcomp | multi-character collating symbols `[.ch.]` and real equivalence classes `[=a=]` | N/A — `src/misc/locale.c` is C/POSIX-locale-only, and in the C locale every collating element is a single character, so there is no multi-character element for the syntax to name | — |
+| regcomp / regexec | REG_ESPACE ("Out of memory") | N/A — needs a real allocation failure, unforceable here, as elsewhere in this ledger | — |
+
+### Bugs found (regex.h)
+
+1. **`regexec()` terminates the process on a repeat whose body can
+   match the empty string.** `src/regex/regex.c`'s matcher recurses per
+   alternation-split and per capture-save; a repeat body that consumes
+   nothing produces a loop that makes no input progress, so the
+   recursion is unbounded. The function's own `MAX_STEPS` guard counts
+   *steps*, not depth, so the C stack is exhausted long before the
+   counter trips. Measured under Wine: `(a*)*b` against a run of `a`s,
+   `()*a` against `"a"`, and (via BUG 2) `^*a` against `"*a"` each kill
+   the process. glibc, musl and the BSDs return normally for all three.
+
+   This is reachable by any program that hands a user-supplied pattern
+   to `regcomp()`, `src/sh/` included. Two independent defects — no
+   depth bound in the matcher, and a progress-free loop from the
+   compiler — and either fix alone stops the crash.
+
+   The whole test is fenced, not merely its assertions: an unfenced
+   crash would take `test/posix-glob.c`'s entire binary down and report
+   with no indication of which clause was at fault.
+
+   Test (fenced): `test_regex_nullable_repeat_does_not_crash`.
+
+2. **BRE `*` immediately after a leading `^` is treated as a repeat
+   operator.** XBD 9.3.3 makes the asterisk ordinary "As the first
+   character of an entire BRE (after an initial `^`, if any)". The
+   parenthetical is quoted verbatim in the comment directly above the
+   line that gets it wrong: the suppression fires only when the first
+   *atom* is itself the `*`, and in `^*a` the first atom is the anchor.
+   Wrong parse (`^*a` must match a literal `"*a"` and must not match
+   `"a"`), and — because starring a zero-width assertion builds a
+   progress-free loop — the crash in BUG 1. The related `\(*a\)` case,
+   `*` first inside a subexpression, is handled correctly.
+
+   Test (fenced): `test_regex_bre_star_after_leading_circumflex`.
+
+3. **`REG_ICASE` makes `[[:upper:]]` match nothing and `[^[:upper:]]`
+   match everything.** The set-bit helper folds to lowercase under
+   REG_ICASE and the test-bit helper always folds the subject byte, but
+   the class emitter forces the fold *off* on the argument that
+   "classes are their own fold". That holds for `alpha`, `alnum`,
+   `print`, `graph` and `xdigit`, which contain both cases; it is false
+   for `upper` and `lower`. `[[:upper:]]` therefore sets only the
+   `'A'`..`'Z'` bits, which the always-folding test helper can never
+   consult. `[:lower:]` survives by accident. Measured: `[[:upper:]]`
+   under REG_ICASE gives REG_NOMATCH for both `"H"` and `"h"`, and its
+   negation matches `"H"`. A silent wrong answer, which is the worst
+   shape for this class of defect.
+
+   Test (fenced): `test_regex_icase_inside_character_class`.
+
+4. **A BRE ending in an unescaped backslash reports REG_EPAREN, not
+   REG_EESCAPE.** The BRE branch parser treats a trailing backslash as
+   end-of-branch without consuming it, and `regcomp()` then attributes
+   the leftover input to parentheses. The ERE path is correct, so the
+   two grammars disagree about the same malformed pattern. Measured:
+   BRE `"a\"` → REG_EPAREN, ERE `"a\"` → REG_EESCAPE.
+
+   Test (fenced): `test_regex_bre_trailing_backslash_code`.
+
+5. **REG_EBRACE is unreachable; brace imbalance reports REG_BADBR.**
+   `regex.h.html` distinguishes REG_EBRACE ("`'\{\}'` imbalance") from
+   REG_BADBR ("Content of `'\{\}'` invalid: not a number, number too
+   large, more than two numbers, first larger than second").
+   `src/regex/regex.c` never assigns REG_EBRACE anywhere — the constant
+   appears only in the error-message table — and both grammars' missing-
+   closing-brace checks answer REG_BADBR. Measured: BRE `"a\{2"` and
+   ERE `"a{2"` both give REG_BADBR, indistinguishable from `"a{3,2}"`,
+   which is the one case where REG_BADBR is right.
+
+   Test (fenced): `test_regex_ebrace_vs_badbr`.
+
+6. **Alternation is leftmost-first, not leftmost-longest.** XBD 9.1:
+   "the search is for the longest of the leftmost matches". The
+   matcher returns on the first alternative that reaches a match.
+   Measured: `"a|ab"` against `"ab"` reports 0,1 where POSIX requires
+   0,2. Already documented in `src/regex/regex.c`'s own banner, which
+   predicts this exact failure — so it is a known gap rather than a
+   surprise, but it is a spec violation and gets a fenced test like the
+   rest. Narrower than the banner implies, which is worth recording:
+   greedy give-back, nested subexpression lengths and the classic
+   `(wee|week)(knights|nights)` case were all measured correct; it is
+   specifically the top-level alternation choice that does not back off
+   to try a longer branch.
+
+   Test (fenced): `test_regex_leftmost_longest_alternation`.
+
+### UNIMPL found (regex.h)
+
+1. **BRE back-references `\1`..`\9`.** XBD 9.3.6 specifies them;
+   `src/regex/regex.c` rejects them outright with a documented
+   rationale, which makes this UNIMPL rather than BUG on this
+   project's own rule. Note the chosen error code is itself inapt:
+   `regex.h.html` defines REG_ESUBREG as "Number in `'\digit'` invalid
+   or in error", and `\1` after a real `\(...\)` is a valid
+   back-reference, merely an unsupported one. EREs are unaffected —
+   XBD 9.4 gives them no back-reference production, so treating ERE
+   `"\1"` as a literal `1` is conforming.
+
+   Test (fenced): `test_regex_bre_backreference`.
+
+### Observed behaviour where POSIX permits latitude (regex.h)
+
+- `src/regex/regex.c` accepts bare `+` and `?` as BRE repeat
+  operators. XBD 9.3 makes them ordinary characters in a BRE, so this
+  is a GNU-style leniency rather than conformance; it is documented
+  in-code and one existing test depends on it. Not fenced, because
+  writing the strict form as a failing test would also require
+  rewriting that test's pattern — recorded here instead.
+- `src/regex/regex.c`'s `MAX_STEPS` cap can in principle convert a
+  legal match into REG_NOMATCH, for which no clause gives licence
+  (`regexec()` may answer REG_ESPACE, but not a false REG_NOMATCH). No
+  benign pattern reaching it was constructed, so there is no test; and
+  per BUG 1 it does not in fact protect against the recursion blowup it
+  was written to cap.
+
+### Not reached (regex.h)
+
+REG_ESPACE, and multi-character collating elements/equivalence classes
+— both N/A above, for a malloc-exhaustion reason and a C-locale reason
+respectively. Everything else in `regcomp.html` and XBD chapter 9 that
+applies to this implementation now has a row.
