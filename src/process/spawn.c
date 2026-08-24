@@ -97,6 +97,36 @@
  *     verified directly with a standalone probe, not assumed), so the
  *     descriptor comes up closed in the child either way.
  *
+ *     That this survives is measured, not inferred, and the measurement
+ *     matters because the OS does rewrite std handle slots in one case.
+ *     The rule (Windows 11 Pro 22621): if the child *inherits* the
+ *     parent's console, a NULL std slot stays NULL; if a console is
+ *     *allocated* for the child -- because the parent had none, or
+ *     CREATE_NEW_CONSOLE, or CREATE_NO_WINDOW -- each NULL slot is
+ *     filled per-slot, and non-NULL slots are left exactly as passed.
+ *     A process handle in a std slot was then measured on both routes
+ *     specifically, since every earlier cell had used a file handle:
+ *     it is preserved unchanged either way.
+ *
+ *     So this file is immune to the fill path by construction, and not
+ *     by luck: it never passes NULL, and non-NULL is never touched.
+ *     The reason to state it as a rule rather than a result is that a
+ *     bootstrap build, a CI runner or any detached process has no
+ *     console, so its children take the *allocating* route -- the one
+ *     that rewrites slots -- rather than the interactive inheriting
+ *     one.  Code that reasons "we passed NULL, so the child sees NULL"
+ *     would be correct only in the interactive case.  Representing a
+ *     closed descriptor as something the child will reject, rather than
+ *     as absence, is what makes the two routes agree: absence is what
+ *     the OS feels entitled to fill in.
+ *
+ *     Not measured: a session-0 / service-context parent.  A detached
+ *     interactive-user parent is not the same thing, and CI cannot
+ *     close the gap -- GitHub's runner is an interactive user, so its
+ *     legs re-measure the detached shape rather than a service.  If a
+ *     service parent turns out not to get a console allocated for its
+ *     children, the fill would not happen there.
+ *
  *     Wine not reproducing any of this is consistent with the above
  *     rather than evidence about it.  Nothing in the Wine tree reads
  *     PsAttributeStdHandleInfo -- include/winternl.h:4131 and :4167
