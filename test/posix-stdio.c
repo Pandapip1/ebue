@@ -18,6 +18,8 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <limits.h>
+#include <signal.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -913,6 +915,336 @@ static void test_vprintf_vscanf(const char *name)
 	CHECK(via_vscanf("%d", &got) == EOF);
 }
 
+/* ------------------------------------------------------------------ *
+ * Clause audit of the <stdio.h> (16) and <stdarg.h> (12) rows of
+ * test/POSIX-GAP-ACCOUNTING.md's "Implemented, not clause-audited"
+ * table.  Everything below cites
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html
+ * (or basedefs/stdarg.h.html) by section.
+ * ------------------------------------------------------------------ */
+
+/* fprintf.html DESCRIPTION: "The snprintf() function shall be
+ * equivalent to sprintf(), with the addition of the n argument which
+ * states the size of the buffer referred to by s.  If n is zero,
+ * nothing shall be written and s may be a null pointer.  Otherwise,
+ * output bytes beyond the n-1st shall be discarded instead of being
+ * written to the array, and a null byte is written at the end of the
+ * bytes actually written into the array."
+ *
+ * fprintf.html RETURN VALUE: "Upon successful completion, the
+ * snprintf() function shall return the number of bytes that would be
+ * written to s had n been sufficiently large excluding the terminating
+ * null byte", and "If the value of n is zero on a call to snprintf(),
+ * nothing shall be written, the number of bytes that would have been
+ * written had n been sufficiently large excluding the terminating null
+ * shall be returned, and s may be a null pointer."
+ *
+ * fprintf.html RETURN VALUE, sprintf: "the number of bytes written to
+ * s, excluding the terminating null byte"; DESCRIPTION: sprintf "shall
+ * place output followed by the null byte".
+ *
+ * The exact-fit / one-short / one-byte / zero-byte cases are walked
+ * individually, and each writes a sentinel past the buffer end first so
+ * that a formatter that scribbled one byte too far would be caught here
+ * rather than only under asan.  Pure library code over memory: Wine is
+ * a sound oracle. */
+static void test_snprintf_boundaries(void)
+{
+	char b[16];
+	int r;
+
+	/* exact fit: n == strlen + 1 */
+	memset(b, '#', sizeof b);
+	r = snprintf(b, 5, "abcd");
+	CHECK(r == 4);
+	CHECK(!strcmp(b, "abcd"));
+	CHECK(b[5] == '#');          /* nothing past the n-1st byte's NUL */
+
+	/* one short: the 4th byte is discarded, a NUL goes at b[3] */
+	memset(b, '#', sizeof b);
+	r = snprintf(b, 4, "abcd");
+	CHECK(r == 4);               /* what *would* have been written */
+	CHECK(!strcmp(b, "abc"));
+	CHECK(b[4] == '#');
+
+	/* n == 1: only the null byte fits */
+	memset(b, '#', sizeof b);
+	r = snprintf(b, 1, "abcd");
+	CHECK(r == 4);
+	CHECK(b[0] == 0);
+	CHECK(b[1] == '#');
+
+	/* n == 0: "nothing shall be written" -- not even the NUL */
+	memset(b, '#', sizeof b);
+	r = snprintf(b, 0, "abcd");
+	CHECK(r == 4);
+	CHECK(b[0] == '#');
+
+	/* n == 0 and "s may be a null pointer" */
+	CHECK(snprintf(NULL, 0, "abcd%d", 7) == 5);
+
+	/* the same three shapes through the v-form (vfprintf.html:
+	 * "equivalent to ... snprintf()") */
+	memset(b, '#', sizeof b);
+	CHECK(via_vsnprintf(b, 5, "abcd") == 4);
+	CHECK(!strcmp(b, "abcd") && b[5] == '#');
+	memset(b, '#', sizeof b);
+	CHECK(via_vsnprintf(b, 4, "abcd") == 4);
+	CHECK(!strcmp(b, "abc") && b[4] == '#');
+	CHECK(via_vsnprintf(NULL, 0, "abcd") == 4);
+
+	/* sprintf: bytes written excluding the NUL, and the NUL is there */
+	memset(b, '#', sizeof b);
+	r = sprintf(b, "%s%d", "x", 42);
+	CHECK(r == 3);
+	CHECK(!strcmp(b, "x42"));
+	CHECK(b[4] == '#');
+	memset(b, '#', sizeof b);
+	CHECK(via_vsprintf(b, "%s%d", "x", 42) == 3);
+	CHECK(!strcmp(b, "x42"));
+
+	/* DESCRIPTION: "If the format is exhausted while arguments remain,
+	 * the excess arguments shall be evaluated but are otherwise
+	 * ignored." */
+	memset(b, '#', sizeof b);
+	CHECK(snprintf(b, sizeof b, "x", 1, 2) == 1);
+	CHECK(!strcmp(b, "x"));
+}
+
+/* fprintf.html ERRORS: "The snprintf() function shall fail if:
+ * [EOVERFLOW] The value of n is greater than {INT_MAX}."  Note the
+ * "shall": unlike the [EBADF] under dprintf() this is not a "may fail",
+ * so a conforming snprintf() has to reject the call, return a negative
+ * value (RETURN VALUE: "If an output error was encountered, these
+ * functions shall return a negative value and set errno") and never
+ * touch s.
+ *
+ * src/stdio/printf.c's vxprintf_mem() takes n straight to the throwaway
+ * memory FILE's mem_size and never compares it to INT_MAX, so the call
+ * succeeds and formats normally.  Measured: returns 1 with errno left
+ * at 0 and "z" in the buffer. */
+#if 0 /* BUG: snprintf() does not fail with [EOVERFLOW] when n > INT_MAX; POSIX fprintf.html ERRORS makes that a "shall fail" for snprintf, so the call must return a negative value and set errno, not format into the (unreachably large) buffer */
+static void test_snprintf_eoverflow(void)
+{
+	char b[8];
+	int r;
+
+	memset(b, '#', sizeof b);
+	errno = 0;
+	r = snprintf(b, (size_t)INT_MAX + 1, "z");
+	CHECK(r < 0);
+	CHECK(errno == EOVERFLOW);
+	CHECK(b[0] == '#');
+}
+#endif
+
+/* fprintf.html, the flag characters: "'  [CX] (The <apostrophe>.)  The
+ * integer portion of the result of a decimal conversion ( %i, %d, %u,
+ * %f, %F, %g, or %G ) shall be formatted with thousands' grouping
+ * characters.  ...  The non-monetary grouping character is used."
+ *
+ * This is a [CX] flag, i.e. base POSIX, not XSI.  In the POSIX locale
+ * the non-monetary grouping is empty (XBD 7.3.4 LC_NUMERIC: the POSIX
+ * locale's `grouping` is unspecified-length/no grouping, and
+ * localeconv()'s POSIX-locale `grouping` is ""), so a conforming
+ * implementation must accept the flag and produce exactly what the
+ * unflagged conversion produces.  ntlibc's flag loop in
+ * src/stdio/printf.c recognises only '-', '+', ' ', '0' and '#', so a
+ * <apostrophe> ends the flag scan and then falls out of the conversion
+ * switch's default arm, which emits the two bytes literally.  Measured:
+ * snprintf("%'d", 1234567) yields "%'d", 3 bytes. */
+#if 0 /* BUG: the [CX] <apostrophe> flag is not recognised; "%'d" is emitted literally instead of formatting the argument (in the POSIX locale, identically to "%d") */
+static void test_printf_apostrophe_flag(void)
+{
+	char grouped[32], plain[32];
+
+	CHECK(snprintf(plain, sizeof plain, "%d", 1234567) == 7);
+	CHECK(snprintf(grouped, sizeof grouped, "%'d", 1234567) == 7);
+	CHECK(!strcmp(grouped, plain));
+}
+#endif
+
+/* fprintf.html DESCRIPTION, field width and precision: "A negative
+ * field width is taken as a '-' flag followed by a positive field
+ * width.  A negative precision is taken as if the precision were
+ * omitted."  Also the flag table's '#', '+' and <space> entries, the
+ * "null digit string is treated as zero" precision rule, and the
+ * length modifiers.
+ *
+ * The wide-field/wide-precision cases exist because this formatter
+ * sizes nothing from the caller's precision on purpose (see PREC_MAX
+ * and BODYMAX in src/stdio/printf.c) and a fixed-size body buffer here
+ * has been a real defect before: every one of these writes far more
+ * bytes than any internal buffer, and runs under asan in
+ * tools/asan-build.sh. */
+static void test_printf_width_precision(void)
+{
+	static char big[8192];
+	char b[64];
+
+	/* "A negative precision is taken as if the precision were omitted" */
+	CHECK(snprintf(b, sizeof b, "%.*d", -3, 42) == 2);
+	CHECK(!strcmp(b, "42"));
+	/* "A negative field width is taken as a '-' flag followed by a
+	 * positive field width" */
+	CHECK(snprintf(b, sizeof b, "%*d|", -5, 42) == 6);
+	CHECK(!strcmp(b, "42   |"));
+	/* '#' for o and x; '+' and <space> for signed conversions; '#' for
+	 * f ("the result shall always contain a radix character") */
+	CHECK(snprintf(b, sizeof b, "%#o|%#x|%+d|% d|%#.0f", 8, 255, 3, 3, 1.0) == 17);
+	CHECK(!strcmp(b, "010|0xff|+3| 3|1."));
+	/* precision 0 with a zero d value prints nothing: "The result of
+	 * converting a zero value with a precision of 0 shall be no
+	 * characters." */
+	CHECK(snprintf(b, sizeof b, "[%.0d][%.0d]", 0, 5) == 5);
+	CHECK(!strcmp(b, "[][5]"));
+	/* length modifiers narrow the argument before conversion */
+	CHECK(snprintf(b, sizeof b, "%hhd|%hd", 300, 70000) == 7);
+	CHECK(!strcmp(b, "44|4464"));
+
+	/* widths and precisions far past any internal buffer */
+	CHECK(snprintf(big, sizeof big, "%5000d", 7) == 5000);
+	CHECK(strlen(big) == 5000);
+	CHECK(big[4999] == '7' && big[0] == ' ');
+	CHECK(snprintf(big, sizeof big, "%.5000d", 7) == 5000);
+	CHECK(strlen(big) == 5000);
+	CHECK(snprintf(big, sizeof big, "%.5000f", 1.0 / 3.0) == 5002);
+	CHECK(strlen(big) == 5002);
+	CHECK(!strncmp(big, "0.3333333333", 12));
+	CHECK(snprintf(big, sizeof big, "%.5000e", 1.0 / 3.0) == 5006);
+	CHECK(strlen(big) == 5006);
+	/* "%g: the maximum number of significant digits" -- trailing zeros
+	 * are removed, so a huge precision does not make a huge result */
+	CHECK(snprintf(big, sizeof big, "%.5000g", 1.0 / 3.0) == 56);
+	/* "the number of digits to appear after the radix character for the
+	 * a, A, e, E, f, and F conversion specifiers" -- every one of them,
+	 * exactly, out to the last place a double has: the smallest
+	 * subnormal is 2^-1074, so its exact expansion's last non-zero
+	 * fractional digit is the 1074th and it is a '5' (the whole tail is
+	 * "...265625", 2^-1074 being 5^1074 * 10^-1074).  A formatter that
+	 * clamped its internal expansion short would still get the length
+	 * right and the leading digits right, and only this would catch it. */
+	CHECK(snprintf(big, sizeof big, "%.1074f", 4.9406564584124654e-324) == 1076);
+	CHECK(strlen(big) == 1076);
+	CHECK(!strcmp(big + 1070, "265625"));
+
+	/* "the maximum number of bytes to be printed from a string" */
+	CHECK(snprintf(big, sizeof big, "%.5000s", "abc") == 3);
+	CHECK(snprintf(big, sizeof big, "%.3s", "abcdef") == 3);
+	CHECK(!strcmp(big, "abc"));
+}
+
+/* fprintf.html RETURN VALUE: "If an output error was encountered, these
+ * functions shall return a negative value and set errno to indicate the
+ * error", and ERRORS: "For the conditions under which dprintf(),
+ * fprintf(), and printf() fail and may fail, refer to fputc" --
+ * fputc.html ERRORS lists [EBADF] "The file descriptor underlying
+ * stream is not a valid file descriptor open for writing" and [EPIPE]
+ * "An attempt is made to write to a pipe or FIFO that is not open for
+ * reading by any process.  A SIGPIPE signal shall also be sent to the
+ * thread."
+ *
+ * fputc.html also requires the stream's error indicator to be set
+ * ("shall set the error indicator for the stream"), which ferror()
+ * observes.  The EPIPE case ignores SIGPIPE first, precisely because
+ * the signal is the default outcome: without the SIG_IGN the process
+ * dies of it, which is itself the clause's other half and is what this
+ * measured before adding the ignore.
+ *
+ * Wine is a sound oracle for the EBADF path (pure fd bookkeeping);
+ * the EPIPE path goes through NT named pipes, so real-Windows CI is
+ * the authority there. */
+static void test_printf_output_error(const char *name)
+{
+	FILE *f;
+	int fds[2], r;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(setvbuf(f, 0, _IONBF, 0) == 0);
+	CHECK(close(fileno(f)) == 0);
+	errno = 0;
+	r = fprintf(f, "hello");
+	CHECK(r < 0);
+	CHECK(errno == EBADF);
+	CHECK(ferror(f) != 0);
+	clearerr(f);
+	fclose(f);
+
+	/* dprintf.html/fprintf.html ERRORS: "[EBADF] The fildes argument is
+	 * not a valid file descriptor" (a "may fail" for dprintf, but the
+	 * write is an output error either way, so the negative return and
+	 * the errno are required by RETURN VALUE). */
+	errno = 0;
+	CHECK(dprintf(-1, "x") < 0);
+	CHECK(errno == EBADF);
+	errno = 0;
+	CHECK(via_vdprintf(-1, "x") < 0);
+	CHECK(errno == EBADF);
+
+	signal(SIGPIPE, SIG_IGN);
+	if (pipe(fds) == 0) {
+		CHECK(close(fds[0]) == 0);
+		f = fdopen(fds[1], "wb");
+		CHECK(f != 0);
+		if (f) {
+			CHECK(setvbuf(f, 0, _IONBF, 0) == 0);
+			errno = 0;
+			r = fprintf(f, "hello");
+			CHECK(r < 0);
+			CHECK(errno == EPIPE);
+			CHECK(ferror(f) != 0);
+			clearerr(f);
+			fclose(f);
+		} else {
+			close(fds[1]);
+		}
+	} else {
+		CHECK(0);
+	}
+	signal(SIGPIPE, SIG_DFL);
+}
+
+/* fprintf.html DESCRIPTION: "The dprintf() function shall be equivalent
+ * to the fprintf() function, except that dprintf() shall write output
+ * to the file associated with the file descriptor specified by the
+ * fildes argument rather than place output on a stream."
+ *
+ * "The file associated with the file descriptor" means the open file
+ * description, offset and all: a dprintf() has to land where the fd is
+ * positioned and leave the fd advanced past what it wrote, so that a
+ * raw write() in between interleaves rather than overwrites.  That is
+ * the half of the clause a FILE*-shaped implementation could get wrong,
+ * and src/stdio/printf.c's vdprintf() does wrap the raw fd in a stack
+ * FILE -- so this checks that the wrapper writes through rather than
+ * buffering somewhere of its own.  Filesystem-adjacent, so real-Windows
+ * CI is the authority. */
+static void test_dprintf_fd_path(const char *name)
+{
+	FILE *f;
+	char buf[32];
+	int fd;
+
+	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(dprintf(fd, "%s", "AA") == 2);
+	CHECK(write(fd, "-", 1) == 1);
+	CHECK(via_vdprintf(fd, "%s", "BB") == 2);
+	CHECK(lseek(fd, 0, SEEK_CUR) == (off_t)5);
+	CHECK(close(fd) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	memset(buf, 0, sizeof buf);
+	CHECK(fread(buf, 1, sizeof buf - 1, f) == 5);
+	CHECK(!strcmp(buf, "AA-BB"));
+	CHECK(fclose(f) == 0);
+}
+
+
 int main(void)
 {
 	char *name = make_tmp("posix-stdio-XXXXXX");
@@ -931,6 +1263,9 @@ int main(void)
 	test_perror();
 	test_popen();
 
+	test_snprintf_boundaries();
+	test_printf_width_precision();
+
 	name = make_tmp("posix-stdio2-XXXXXX");
 	CHECK(name != 0);
 	if (name) {
@@ -940,6 +1275,8 @@ int main(void)
 		test_v_forms(name);
 		test_getc_unlocked(name);
 		test_tempnam();
+		test_printf_output_error(name);
+		test_dprintf_fd_path(name);
 		/* these two repoint stdin at the temp file and leave it there */
 		test_vprintf_vscanf(name);
 		test_getchar(name);
