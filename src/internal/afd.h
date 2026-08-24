@@ -85,25 +85,112 @@
  * ULONG there silently shifts every offset after it and misaligns the
  * next struct -- confirmed the hard way, as a real UBSan misaligned-
  * access finding under `make asan` before this fix. */
-/* ---- TDI address structures (tdi.h) --------------------------------- */
+/* ---- TDI address structures (tdi.h) ---------------------------------
+ *
+ * tdi.h declares TA_ADDRESS and TRANSPORT_ADDRESS at default alignment:
+ *
+ *      typedef struct _TA_ADDRESS {
+ *        USHORT AddressLength;   +0
+ *        USHORT AddressType;     +2
+ *        UCHAR  Address[1];      +4
+ *      } TA_ADDRESS;
+ *      typedef struct _TRANSPORT_ADDRESS {
+ *        LONG       TAAddressCount;  +0
+ *        TA_ADDRESS Address[1];      +4
+ *      } TRANSPORT_ADDRESS;
+ *
+ * so the address bytes of the first (and here only) TA_ADDRESS begin at
+ * +12 of an AFD_BIND_DATA and are TDI_ADDRESS_LENGTH_IP long.
+ *
+ * *** TDI_ADDRESS_IP is deliberately NOT declared as a struct here. ***
+ *
+ * In tdi.h it sits inside `#include "pshpack1.h"` ... `#include
+ * "poppack.h"` -- /usr/share/mingw-w64/include/tdi.h lines 388 and 582
+ * bracket it -- so it is packed to 1 and
+ * TDI_ADDRESS_LENGTH_IP == sizeof(TDI_ADDRESS_IP) == 14:
+ *
+ *      USHORT sin_port;     +0
+ *      ULONG  in_addr;      +2   <- unaligned; only pack(1) puts it here
+ *      UCHAR  sin_zero[8];  +6
+ *
+ * Transcribing those three fields as an ordinary C struct (which this
+ * header did until this commit) makes the compiler insert two bytes of
+ * padding after sin_port to align in_addr, giving in_addr at +4,
+ * sin_zero at +8 and sizeof() == 16.  Every byte from +2 on is then
+ * wrong on the wire, and AddressLength is declared as 16 rather than
+ * 14.  That is the same defect class as the 12-vs-24-byte open packet
+ * this header carried one commit ago, and it is what bind() was
+ * tripping over -- see the AFD_BIND_DATA banner below.
+ *
+ * Rather than re-introduce the struct with an __attribute__((packed))
+ * that four different compilers (mingw gcc, tcc, and the native gcc and
+ * clang of `make lint`/`make asan`) would each have to honour, the
+ * address payload is written and read through named byte offsets, the
+ * way this header already handles the EA buffer.  That is also what
+ * both reference clients do: neither ReactOS's WSPBind
+ * (dll/win32/msafd/misc/dllmain.c) nor the layout phnt documents ever
+ * instantiates a TDI_ADDRESS_IP -- they copy the 14 bytes of
+ * `sockaddr.sa_data` verbatim.
+ *
+ * The rule they both encode, and which the offsets below implement:
+ * TA_ADDRESS.AddressType overlays sockaddr.sa_family and
+ * TA_ADDRESS.Address overlays sockaddr.sa_data, so
+ *
+ *      AddressLength == sockaddr length - sizeof(sa_family) == 14
+ *
+ * for a sockaddr_in.  Sources, in agreement for once:
+ *
+ *   - ReactOS dll/win32/msafd/misc/dllmain.c, WSPBind():
+ *       BindData->Address.Address[0].AddressLength =
+ *           SocketAddressLength - sizeof(SocketAddress->sa_family);
+ *       BindData->Address.Address[0].AddressType = SocketAddress->sa_family;
+ *       RtlCopyMemory(BindData->Address.Address[0].Address,
+ *                     SocketAddress->sa_data, ...);
+ *   - System Informer phnt, ntafd.h, the AFD_ADDRESS union: its
+ *     `TdiAddressUnpacked` arm is `UCHAR Padding[10]` followed by a
+ *     SOCKADDR_STORAGE, with the comment
+ *     "RTL_SIZEOF_THROUGH_FIELD(TDI_ADDRESS_INFO, Address.Address[0].AddressLength)"
+ *     and an ASCII diagram showing SOCKADDR's sa_family sitting exactly
+ *     on TA_ADDRESS's AddressType.  10 == 4 (ActivityCount) + 4
+ *     (TAAddressCount) + 2 (AddressLength), i.e. the embedded sockaddr
+ *     starts at AddressType.
+ *   - mingw-w64 tdi.h, for the pack(1) that makes the count 14.
+ */
 #define TDI_ADDRESS_TYPE_IP 2
 
-typedef struct _TDI_ADDRESS_IP {
-	unsigned short sin_port;
-	uint32_t in_addr;
-	unsigned char sin_zero[8];
-} TDI_ADDRESS_IP;
+/* sizeof(TDI_ADDRESS_IP) with tdi.h's pack(1) in force, which is what
+ * TA_ADDRESS.AddressLength must carry for an AF_INET address -- and,
+ * equivalently, sizeof(struct sockaddr_in) - sizeof(sa_family_t). */
+#define TDI_ADDRESS_LENGTH_IP 14
+
+/* Field offsets within those 14 bytes.  Network byte order throughout;
+ * they are copied out of sockaddr_in unchanged. */
+#define TDI_IP_OFF_PORT 0
+#define TDI_IP_OFF_ADDR 2
+#define TDI_IP_OFF_ZERO 6
+#define TDI_IP_ZERO_LEN 8
 
 typedef struct _TA_ADDRESS {
 	unsigned short AddressLength;
 	unsigned short AddressType;
-	unsigned char Address[14]; /* big enough for one TDI_ADDRESS_IP */
+	unsigned char Address[TDI_ADDRESS_LENGTH_IP]; /* exactly one packed TDI_ADDRESS_IP */
 } TA_ADDRESS;
 
 typedef struct _TRANSPORT_ADDRESS {
 	int32_t TAAddressCount;
 	TA_ADDRESS Address[1];
 } TRANSPORT_ADDRESS;
+
+/* TDI_ADDRESS_INFO (tdi.h): what IOCTL_AFD_BIND writes *back* in TDI
+ * mode -- a ULONG ActivityCount followed by a TRANSPORT_ADDRESS.  For
+ * one AF_INET address that is 4 + 4 + 2 + 2 + 14 == 26 bytes, which is
+ * two bytes *more* than sizeof(AFD_BIND_DATA)'s TRANSPORT_ADDRESS
+ * payload, so the reply cannot be read back into the request buffer the
+ * way ReactOS does it (its
+ * FIELD_OFFSET(AFD_BIND_DATA, Address.Address[SocketAddressLength])
+ * indexes the TA_ADDRESS *array*, wildly over-allocating and hiding the
+ * question).  src/socket/bind.c gives the reply its own buffer. */
+#define AFD_TDI_ADDRESS_INFO_SIZE_IP (4 + 4 + 2 + 2 + TDI_ADDRESS_LENGTH_IP)
 
 /* ---- the EA buffer NtCreateFile takes (a generic NT structure, not
  * AFD-specific, but this is the only place ntlibc needs it -- field
@@ -263,6 +350,38 @@ typedef struct _AFD_BIND_DATA {
 	TRANSPORT_ADDRESS Address;
 } AFD_BIND_DATA;
 
+/* The IOCTL_AFD_BIND *request* as it appears on the wire, by offset.
+ * Named separately from AFD_BIND_DATA for the same reason
+ * AFD_EA_HEADER_SIZE is named separately from
+ * sizeof(FILE_FULL_EA_INFORMATION): sizeof(AFD_BIND_DATA) is 28, two
+ * bytes more than the 26 the request actually occupies, because
+ * TAAddressCount's 4-byte alignment rounds the tail up.  Declaring 28
+ * would declare two bytes the request does not describe.
+ *
+ *      +0   ULONG  ShareType         AFD_SHARE_*
+ *      +4   LONG   TAAddressCount    == 1
+ *      +8   USHORT AddressLength     == TDI_ADDRESS_LENGTH_IP == 14
+ *      +10  USHORT AddressType       == TDI_ADDRESS_TYPE_IP == AF_INET == 2
+ *      +12  USHORT sin_port          network order
+ *      +14  ULONG  in_addr           network order  <- NOT +16; see the
+ *      +18  UCHAR  sin_zero[8]                         TDI banner above
+ *      == 26
+ *
+ * Note +10 onwards is byte-for-byte a `struct sockaddr_in`: AddressType
+ * is its sa_family and the 14 address bytes are its sa_data.  That is
+ * the invariant phnt's AFD_ADDRESS diagram draws and the one
+ * test/posix-socket-bind.c asserts.
+ *
+ * IOCTL_AFD_BIND is METHOD_NEITHER (phnt ntafd.h: 0x12003), so afd.sys
+ * sees the caller's buffer and its declared length directly; the length
+ * is the only thing bounding how much of the address it reads. */
+#define AFD_BIND_REQ_OFF_SHARE_TYPE   0
+#define AFD_BIND_REQ_OFF_ADDR_COUNT   4
+#define AFD_BIND_REQ_OFF_ADDR_LENGTH  8
+#define AFD_BIND_REQ_OFF_ADDR_TYPE   10
+#define AFD_BIND_REQ_OFF_ADDR        12
+#define AFD_BIND_REQ_SIZE (AFD_BIND_REQ_OFF_ADDR + TDI_ADDRESS_LENGTH_IP)
+
 /* ---- listen / accept -------------------------------------------------- */
 typedef struct _AFD_LISTEN_DATA {
 	unsigned char UseSAN;
@@ -360,6 +479,11 @@ typedef struct _AFD_POLL_INFO {
 } AFD_POLL_INFO;
 
 /* ---- helpers shared by src/socket/ (every .c there) (src/socket/afdsupport.c) ------ */
+/* socklen_t is `unsigned` (include/alltypes.h.in) -- spelled that way
+ * here, not with <sys/socket.h>'s typedef, so this header (pulled into
+ * src/select/select.c, which has no reason to include <sys/socket.h>)
+ * stays self-contained. */
+struct sockaddr;
 /* Open a fresh AFD endpoint handle for AF_INET/SOCK_STREAM: the guts of
  * socket() and of the new handle accept() installs for an incoming
  * connection.  Returns 0, or -1 with errno. */
@@ -375,6 +499,19 @@ int __afd_open(HANDLE *out);
  * \Device\Afd at all. */
 unsigned long __afd_open_ea_size(void);
 void __afd_build_open_ea(void *buf);
+/* The IOCTL_AFD_BIND request body, split out for exactly the same
+ * reason and inspected exactly the same way: __afd_bind_request_size()
+ * returns the byte count the ioctl declares (26, not
+ * sizeof(AFD_BIND_DATA)), and __afd_build_bind_request() fills that
+ * many bytes at `buf` from a sockaddr, returning 0, or -1 with
+ * errno=EINVAL/EAFNOSUPPORT for an address this project cannot express.
+ * buf must be 4-byte aligned and at least sizeof(AFD_BIND_DATA) bytes
+ * (the two bytes of tail slack are not written).
+ * test/posix-socket-bind.c re-parses the result by offset with no
+ * reference to this header, and runs with no \Device\Afd at all. */
+unsigned long __afd_bind_request_size(void);
+int __afd_build_bind_request(void *buf, unsigned long share_type,
+                             const struct sockaddr *addr, unsigned len);
 /* Issue one AFD ioctl on socket handle h and wait for it to finish --
  * every AFD request (src/socket/ (every .c there)) goes through this.  STATUS_PENDING
  * is waited out on the handle itself (see __afd_open()'s comment on why
@@ -385,11 +522,6 @@ void __afd_build_open_ea(void *buf);
 NTSTATUS __afd_ioctl(HANDLE h, ULONG code, void *in, ULONG inlen, void *out, ULONG outlen, IO_STATUS_BLOCK *io_out);
 /* sockaddr_in -> TRANSPORT_ADDRESS, validating family/length.  Returns
  * 0, or -1 with errno=EINVAL/EAFNOSUPPORT. */
-/* socklen_t is `unsigned` (include/alltypes.h.in) -- spelled that way
- * here, not with <sys/socket.h>'s typedef, so this header (pulled into
- * src/select/select.c, which has no reason to include <sys/socket.h>)
- * stays self-contained. */
-struct sockaddr;
 int __afd_addr_from_sockaddr(const struct sockaddr *addr, unsigned len, TRANSPORT_ADDRESS *out);
 /* TA_ADDRESS (as embedded in a TRANSPORT_ADDRESS) -> sockaddr_in,
  * truncating into *addr and *len the way accept()/recvfrom() are specified

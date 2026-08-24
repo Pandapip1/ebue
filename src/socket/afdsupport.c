@@ -153,39 +153,69 @@ NTSTATUS __afd_ioctl(HANDLE h, ULONG code, void *in, ULONG inlen, void *out, ULO
 
 /* sockaddr_in -> TRANSPORT_ADDRESS.  bind.html/connect.html both take
  * (address, address_len); AF_INET/SOCK_STREAM is this project's only
- * supported pair, so anything else is EAFNOSUPPORT. */
+ * supported pair, so anything else is EAFNOSUPPORT.
+ *
+ * The 14 address bytes are written through src/internal/afd.h's
+ * TDI_IP_OFF_* offsets rather than through a TDI_ADDRESS_IP struct.
+ * tdi.h packs that struct to 1 (it sits between pshpack1.h and
+ * poppack.h), so in_addr is at +2, not at the +4 an ordinary C struct
+ * would put it; see the TDI banner in afd.h.  ReactOS's WSPBind
+ * (dll/win32/msafd/misc/dllmain.c) writes the same 14 bytes as a plain
+ * RtlCopyMemory of sockaddr.sa_data, which is the identical image. */
 int __afd_addr_from_sockaddr(const struct sockaddr *addr, socklen_t len, TRANSPORT_ADDRESS *out)
 {
 	const struct sockaddr_in *sin;
-	TDI_ADDRESS_IP *ip;
+	unsigned char *a;
 
 	if (!addr || len < (socklen_t)sizeof(struct sockaddr_in)) { errno = EINVAL; return -1; }
 	if (addr->sa_family != AF_INET) { errno = EAFNOSUPPORT; return -1; }
 
-	sin = (const struct sockaddr_in *)addr;
+	sin = (const struct sockaddr_in *)(const void *)addr;
 	out->TAAddressCount = 1;
-	out->Address[0].AddressLength = sizeof(TDI_ADDRESS_IP);
+	/* Length of the *address*, i.e. the sockaddr minus its family --
+	 * 14 for sockaddr_in, never sizeof() of a padded struct. */
+	out->Address[0].AddressLength = TDI_ADDRESS_LENGTH_IP;
+	/* AddressType overlays sa_family, and AF_INET == TDI_ADDRESS_TYPE_IP == 2. */
 	out->Address[0].AddressType = TDI_ADDRESS_TYPE_IP;
-	ip = (TDI_ADDRESS_IP *)out->Address[0].Address;
-	ip->sin_port = sin->sin_port;
-	ip->in_addr = sin->sin_addr.s_addr;
-	memset(ip->sin_zero, 0, sizeof(ip->sin_zero));
+	a = out->Address[0].Address;
+	memset(a, 0, TDI_ADDRESS_LENGTH_IP);
+	memcpy(a + TDI_IP_OFF_PORT, &sin->sin_port, sizeof(sin->sin_port));
+	memcpy(a + TDI_IP_OFF_ADDR, &sin->sin_addr.s_addr, sizeof(sin->sin_addr.s_addr));
+	/* sin_zero is already zeroed by the memset above. */
+	return 0;
+}
+
+/* See afd.h.  26, not sizeof(AFD_BIND_DATA) (28). */
+unsigned long __afd_bind_request_size(void)
+{
+	return (unsigned long)AFD_BIND_REQ_SIZE;
+}
+
+/* See afd.h. */
+int __afd_build_bind_request(void *buf, unsigned long share_type,
+                             const struct sockaddr *addr, socklen_t len)
+{
+	AFD_BIND_DATA *bd = (AFD_BIND_DATA *)buf;
+
+	if (__afd_addr_from_sockaddr(addr, len, &bd->Address) < 0) return -1;
+	bd->ShareType = (uint32_t)share_type;
 	return 0;
 }
 
 /* TA_ADDRESS -> sockaddr_in, truncating into *addr and *len the way
  * accept.html specifies ("If...address_len is not large enough...
- * stored address shall be truncated"). */
+ * stored address shall be truncated").  Reads the same packed offsets
+ * __afd_addr_from_sockaddr() writes. */
 void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, socklen_t *len)
 {
 	struct sockaddr_in sin;
-	const TDI_ADDRESS_IP *ip = (const TDI_ADDRESS_IP *)ta->Address;
+	const unsigned char *a = ta->Address;
 	socklen_t n;
 
 	memset(&sin, 0, sizeof(sin));
 	sin.sin_family = AF_INET;
-	sin.sin_port = ip->sin_port;
-	sin.sin_addr.s_addr = ip->in_addr;
+	memcpy(&sin.sin_port, a + TDI_IP_OFF_PORT, sizeof(sin.sin_port));
+	memcpy(&sin.sin_addr.s_addr, a + TDI_IP_OFF_ADDR, sizeof(sin.sin_addr.s_addr));
 
 	if (!addr || !len) return;
 	n = *len < (socklen_t)sizeof(sin) ? *len : (socklen_t)sizeof(sin);

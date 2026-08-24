@@ -25,16 +25,27 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	struct __fd *f = __fd_get(fd);
 	AFD_BIND_DATA bd;
+	/* IOCTL_AFD_BIND replies with a TDI_ADDRESS_INFO (phnt ntafd.h,
+	 * AFD_BIND: "out: TDI_ADDRESS_INFO"), which is 26 bytes for one
+	 * AF_INET address -- two bytes *more* than the request's 24-byte
+	 * TRANSPORT_ADDRESS payload, so it does not fit back into `bd`.
+	 * Spelled as uint32_t[] to get 4-byte alignment without an
+	 * alignment attribute. */
+	uint32_t reply[(AFD_TDI_ADDRESS_INFO_SIZE_IP + 3) / 4];
 	NTSTATUS st;
 
 	if (!f) return -1;
 	if (f->type != __FD_SOCKET) { errno = ENOTSOCK; return -1; }
 	if (f->pad & (AFD_ST_BOUND | AFD_ST_CONNECTED | AFD_ST_LISTENING)) { errno = EINVAL; return -1; }
-	if (__afd_addr_from_sockaddr(addr, len, &bd.Address) < 0) return -1;
+	if (__afd_build_bind_request(&bd, (f->pad & AFD_ST_REUSEADDR) ? AFD_SHARE_REUSE : AFD_SHARE_UNIQUE,
+	                             addr, len) < 0) return -1;
 
-	bd.ShareType = (f->pad & AFD_ST_REUSEADDR) ? AFD_SHARE_REUSE : AFD_SHARE_UNIQUE;
-
-	st = __afd_ioctl(f->h, IOCTL_AFD_BIND, &bd, sizeof(bd), &bd, sizeof(bd), 0);
+	/* __afd_bind_request_size(), not sizeof(bd): the request is 26
+	 * bytes and sizeof(AFD_BIND_DATA) is 28.  IOCTL_AFD_BIND is
+	 * METHOD_NEITHER, so the declared length is what afd.sys bounds
+	 * its read of the address by. */
+	st = __afd_ioctl(f->h, IOCTL_AFD_BIND, &bd, (ULONG)__afd_bind_request_size(),
+	                 reply, (ULONG)sizeof(reply), 0);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	f->pad |= AFD_ST_BOUND;
