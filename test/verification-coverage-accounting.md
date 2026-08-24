@@ -215,30 +215,92 @@ solved here. Its cost is real: `fuzz_printf` reached 31 features and
 the format-string harnesses are exactly the ones that need a seeded
 corpus to get past the first `%`.
 
-**Per-module fuzz coverage cannot currently be measured at all.** This
-was prototyped and abandoned, and the reason is worth writing down:
+**Per-module fuzz coverage is now measurable: `make -C fuzz
+coverage`.** It was not when this section was first written, and the
+account given here of *why* was wrong in its second half. Both halves
+are restated below as measured, because the wrong one blamed a piece of
+`src/` that turns out to be innocent.
 
-- `-print_coverage=1` is **not cumulative**. libFuzzer clears the
-  8-bit counters between inputs to collect per-input features, so the
-  `COVERED_FUNC` list describes the *last* input only. Measured:
-  `fuzz_printf -max_total_time=15 -print_coverage=1` reports
-  `LLVMFuzzerTestOneInput hits: 2` and lists nine covered functions,
-  none of them in `src/stdio` -- for a harness that had just executed
-  `snprintf` tens of thousands of times.
-- `-fprofile-instr-generate -fcoverage-mapping` **never writes a
-  `.profraw`**. The harnesses link the real `src/*.c`, which includes
-  `src/exit/exit.c`, whose `exit()` ends the process with
-  `NtTerminateProcess` rather than returning through the host runtime
-  (its file banner explains why: `RtlExitUserProcess` cannot be
-  survived by a forked child). The LLVM profile runtime's flush is an
-  `atexit` handler on the *host* runtime, and it never runs. Verified:
-  a rebuilt, coverage-instrumented harness run with `-runs=20000`
-  produces an empty profile directory.
+- `-print_coverage=1` is **not cumulative**, and this stands.
+  libFuzzer clears the 8-bit counters between inputs to collect
+  per-input features, so what survives to the end describes the *last*
+  input. Re-measured on `e382f97`: `fuzz_printf -max_total_time=15
+  -print_coverage=1` emits 1104 `*COVERED_FUNC` lines of which exactly
+  **6** are `COVERED_FUNC` and **none** is in `src/stdio` -- for a
+  harness that had just executed `snprintf` about 100000 times. It also
+  calls `RtlAllocateHeap` uncovered, which is plainly false. Not
+  fixable from outside libFuzzer, and now moot: the profile route below
+  answers the same question correctly.
+- `-fprofile-instr-generate -fcoverage-mapping` **did not write a
+  `.profraw`, but not for the reason given here.** The original claim
+  was that `src/exit/exit.c`'s `exit()` ends the process with
+  `NtTerminateProcess` and so bypasses the host `atexit` chain that
+  flushes the profile. Measured under gdb, every step of that is
+  wrong:
 
-So the table above is derived from the harnesses' *named entry points*,
-which is honest but coarse. Getting a real number needs a harness-side
-`__llvm_profile_write_file()` call, which is a change to `fuzz/` and
-belongs to whoever owns that directory.
+  - libFuzzer ends a timed run with `exit(0)`, not `_Exit(0)`, and
+    that call binds to **ntlibc's** `exit()` (`FuzzerDriver` ->
+    `exit` at `src/exit/exit.c:49` -> `__nt_exit`).
+  - The profile runtime registers its flush with plain `atexit`
+    (`nm libclang_rt.profile-x86_64.a` shows `U atexit` and no
+    `__cxa_atexit`), which likewise binds to ntlibc's. Registration
+    succeeds: at `__funcs_on_exit()` the handler count is 2, well
+    under `ATEXIT_MAX`, and `writeFileWithoutReturn` is entered.
+  - So the flush **does run**. `__llvm_profile_write_file` reaches
+    `writeFile("default.profraw")`, which calls `fopen`.
+
+  The two real causes are both about *where the bytes go*, and both
+  live in `fuzz/ntstubs.c`, not in `src/`:
+
+  1. The runtime picks its output path in an `.init_array`
+     constructor from `getenv("LLVM_PROFILE_FILE")`. That `getenv` is
+     ntlibc's, reading ntlibc's `environ`, which `ntstubs.c`'s own
+     constructor deliberately replaces with an empty one so a native
+     test does not inherit the harness's real environment. So
+     `LLVM_PROFILE_FILE` is invisible however it is set and the
+     runtime falls back to `default.profraw`.
+  2. That `fopen` is also ntlibc's, so it goes to `NtCreateFile` in
+     `ntstubs.c` -- into the **simulated in-memory volume**, which is
+     ordinary process memory and vanishes when the process exits. The
+     profile was written every time, into a file system that does not
+     outlive the run.
+
+  **ntlibc has no defect here.** `exit()`, `atexit()` and
+  `__funcs_on_exit()` behave correctly and are left untouched;
+  `src/exit/exit.c` shows 36% region coverage in every harness's
+  report, i.e. it is still code under test.
+
+The fix is entirely in `fuzz/`: `-fprofile-instr-generate=<path>` bakes
+the output path into the binary (so no `getenv`), and the path is put
+inside `NTLIBC_FUZZ_MIRROR`, the seam `ntstubs.c` already provides for
+making one host directory visible in the simulated volume. See the
+block comment above `coverage:` in `fuzz/Makefile`.
+
+```sh
+make -C fuzz coverage                        # every harness, per file
+make -C fuzz coverage HARNESSES=printf FUNCS=1 MODULE=src/stdio
+```
+
+Measured on `e382f97`, 10s per harness, cold (no corpus):
+
+| Harness | Its own module | A sibling's | An unfuzzed module |
+|---------|---------------:|------------:|-------------------:|
+| `fuzz_printf` | `src/stdio/printf.c` **87.9%** | `src/stdio/scanf.c` 0.0% | `src/regex/regex.c` 0.0% |
+| `fuzz_scanf` | `src/stdio/scanf.c` **65.1%** | `src/stdio/printf.c` 25.0% | `src/regex/regex.c` 0.0% |
+| `fuzz_strftime` | `src/time/strftime.c` **91.9%** | `src/time/strptime.c` 0.0% | `src/regex/regex.c` 0.0% |
+| `fuzz_utf` | `src/internal/utf.c` **86.7%** | -- | `src/regex/regex.c` 0.0% |
+
+The number discriminates, which is the point: a harness that never
+enters the module it names reads 0.0%, indistinguishable from not
+existing. **Anyone adding a harness should run this and check for a
+non-zero figure against the file they meant to fuzz** -- a harness that
+compiles, runs and reports no crashes without entering its module is a
+vacuous pass, and this table is the only thing that tells the two
+apart.
+
+The module table above is still derived from the harnesses' *named
+entry points* rather than from these numbers; regenerating it from
+`make -C fuzz coverage` is left to whoever next touches it.
 
 ## 2. Verified only on Server 2025
 
