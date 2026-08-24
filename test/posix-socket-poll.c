@@ -115,6 +115,8 @@ void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandl
 void __afd_poll_set_handle(void *buf, unsigned long i, void *h, uint32_t events);
 uint32_t __afd_poll_get_events(const void *buf, unsigned long i);
 int32_t __afd_poll_get_status(const void *buf, unsigned long i);
+uint32_t __afd_poll_get_handle_count(const void *buf);
+uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, void *h);
 
 /* --- constants, from the references named in the banner --- */
 
@@ -349,6 +351,171 @@ static void check_n(size_t n, long long timeout)
 	free(alloc);
 }
 
+/* --- the reply side ---------------------------------------------------
+ *
+ * Everything above is about the request.  These are about reading the
+ * answer back, and they are the device-free negative control for a
+ * distinct defect that shipped in src/select/select.c's __FD_SOCKET
+ * case: it passed one buffer as both the ioctl's input and its output
+ * and then read Handles[0].PollEvents unconditionally.
+ *
+ * Why that is wrong, from the AFD driver's own source (poll.c,
+ * Copyright (c) 1992 Microsoft Corporation):
+ *
+ *   - AfdPoll() sets `Irp->IoStatus.Information = 0;` on entry and
+ *     `pollInfo->NumberOfHandles = 0;` immediately before its readiness
+ *     scan, then completes with
+ *     `Irp->IoStatus.Information = (ULONG)pollHandleInfo -
+ *     (ULONG)pollInfo;` -- with no events that is the 16-byte header
+ *     alone.
+ *   - IOCTL_AFD_SELECT is METHOD_BUFFERED, so the driver works on a
+ *     kernel copy and the I/O manager copies back exactly those
+ *     Information bytes (ReactOS ntoskrnl/io/iomgr/irp.c does the
+ *     RtlCopyMemory of Information bytes into Irp->UserBuffer;
+ *     Microsoft documents the hazard class as "Failure to
+ *     Initialize Output Buffers").  The caller's Handles[] is
+ *     left untouched.
+ *     Aliased with the request, it still holds the *requested* mask,
+ *     so an idle socket reads back as every requested bit fired --
+ *     readable and writable, on the success path, forever.
+ *
+ *     The trap in that: AfdPoll() *does* clear the field, at
+ *     `pollHandleInfo->PollEvents = 0;` on every iteration of its
+ *     scan, and for a one-handle poll that slot is Handles[0].
+ *     So checking "does the driver clear it?" answers yes and
+ *     clears the buggy code.  The clear happens in the kernel's
+ *     SystemBuffer and dies at the Information-bounded copy-back.
+ *   - AfdPoll() also *compacts*: `if ( found ) {
+ *     pollInfo->NumberOfHandles++; pollHandleInfo++; }`, so the output
+ *     pointer advances only for endpoints that fired and output slot i
+ *     is not request slot i.
+ *
+ * The composition of those three facts is inference rather than
+ * something asserted anywhere in a first-party document, and it is
+ * only checkable against a live driver.  What *is* checkable with no
+ * device is that the interpreter refuses to be fooled by such an
+ * image, which is what these cases assert.
+ *
+ * The fix is __afd_poll_events_for(): read the reply's own
+ * NumberOfHandles, clamp it to what was asked about, and match on the
+ * handle.  wepoll and libuv both reject NumberOfHandles < 1 and Wine's
+ * ws2_32 loops to params->count -- three independent implementations
+ * with the same shape.
+ */
+static void build_reply_header(unsigned char *buf, uint32_t count)
+{
+	/* Exactly what METHOD_BUFFERED copies back when nothing fired:
+	 * the first 16 bytes, and nothing else. */
+	long long timeout = 0;
+	uint32_t unique = 0;
+	memcpy(buf + REQ_TIMEOUT, &timeout, sizeof(timeout));
+	memcpy(buf + REQ_HANDLE_COUNT, &count, sizeof(count));
+	memcpy(buf + REQ_EXCLUSIVE, &unique, sizeof(unique));
+}
+
+static void put_reply_entry(unsigned char *buf, size_t slot, void *h, uint32_t events, uint32_t status)
+{
+	unsigned char *e = buf + REQ_HANDLES + slot * H_SIZE;
+	memcpy(e + H_HANDLE, &h, sizeof(h));
+	memcpy(e + H_EVENTS, &events, sizeof(events));
+	memcpy(e + H_STATUS, &status, sizeof(status));
+}
+
+static void check_reply(void)
+{
+	unsigned char buf[256];
+	size_t size1 = __afd_poll_request_size(1);
+	size_t size3 = __afd_poll_request_size(3);
+	unsigned i;
+
+	/* --- 1. THE defect: a zero-event reply over an aliased request.
+	 * Build the request src/select/select.c sends, then overwrite
+	 * only the 16 header bytes with NumberOfHandles = 0, which is
+	 * bit-for-bit what the I/O manager leaves behind when the driver
+	 * reports Information == 16 into the same buffer.  Handles[0]
+	 * still holds the requested mask -- every readable and writable
+	 * bit set.  The interpreter must report nothing ready. */
+	memset(buf, 0, sizeof buf);
+	__afd_build_poll_request(buf, 0, 1);
+	__afd_poll_set_handle(buf, 0, fake_handle(0), 0x1FFu); /* every bit AFD defines */
+	build_reply_header(buf, 0);
+	CHECK_EQ(rd32(buf + REQ_HANDLE_COUNT), 0u, "stale image: NumberOfHandles");
+	CHECK_EQ(rd32(buf + REQ_HANDLES + H_EVENTS), 0x1FFu, "stale image: Handles[0] still holds the request");
+	CHECK_EQ(__afd_poll_get_handle_count(buf), 0u, "get_handle_count on a zero-event reply");
+	/* The raw accessor still sees the stale bytes -- that is what it
+	 * is for, and why it must not be what a caller uses. */
+	CHECK_EQ(__afd_poll_get_events(buf, 0), 0x1FFu, "raw get_events reads the stale slot");
+	/* ...and this is the assertion the whole thing exists for. */
+	CHECK_EQ(__afd_poll_events_for(buf, 1, fake_handle(0)), 0u,
+	         "zero-event reply must report nothing ready, not the requested mask");
+
+	/* --- 2. A reply the driver actually wrote is still read. */
+	memset(buf, 0, sizeof buf);
+	build_reply_header(buf, 1);
+	put_reply_entry(buf, 0, fake_handle(0), EV_RECEIVE | EV_SEND, 0);
+	CHECK_EQ(__afd_poll_get_handle_count(buf), 1u, "get_handle_count on a one-event reply");
+	CHECK_EQ(__afd_poll_events_for(buf, 1, fake_handle(0)), EV_RECEIVE | EV_SEND,
+	         "a reply that names the handle is read");
+
+	/* --- 3. Fail closed: an all-zero output buffer (what a caller
+	 * that does not alias the request hands the ioctl, and what it
+	 * still holds if the driver writes nothing at all) reports
+	 * nothing ready rather than anything ready. */
+	memset(buf, 0, sizeof buf);
+	CHECK_EQ(__afd_poll_get_handle_count(buf), 0u, "zeroed buffer: count");
+	CHECK_EQ(__afd_poll_events_for(buf, 1, fake_handle(0)), 0u, "zeroed buffer: nothing ready");
+
+	/* --- 4. Compaction: the driver advances its write pointer only
+	 * for handles that fired, so output slot 0 can belong to request
+	 * slot 2.  An indexed read would hand handle 0 handle 2's
+	 * events; matching on the handle must not. */
+	memset(buf, 0, sizeof buf);
+	build_reply_header(buf, 1);
+	put_reply_entry(buf, 0, fake_handle(2), EV_RECEIVE, 0);
+	CHECK_EQ(__afd_poll_events_for(buf, 3, fake_handle(2)), EV_RECEIVE,
+	         "compacted reply: the handle that fired");
+	CHECK_EQ(__afd_poll_events_for(buf, 3, fake_handle(0)), 0u,
+	         "compacted reply: request slot 0 did not fire");
+	CHECK_EQ(__afd_poll_events_for(buf, 3, fake_handle(1)), 0u,
+	         "compacted reply: request slot 1 did not fire");
+	/* The indexed accessor is what would have got this wrong. */
+	CHECK_EQ(__afd_poll_get_events(buf, 0), EV_RECEIVE, "indexed read sees slot 0 regardless of whose it is");
+
+	/* --- 5. A handle named in a slot the count does not cover is
+	 * not read: only the first `count` slots were written. */
+	memset(buf, 0, sizeof buf);
+	build_reply_header(buf, 1);
+	put_reply_entry(buf, 0, fake_handle(0), EV_SEND, 0);
+	put_reply_entry(buf, 1, fake_handle(1), 0x1FFu, 0); /* stale, beyond the count */
+	CHECK_EQ(__afd_poll_events_for(buf, 3, fake_handle(0)), EV_SEND, "in-count slot is read");
+	CHECK_EQ(__afd_poll_events_for(buf, 3, fake_handle(1)), 0u, "slot past the count is not read");
+
+	/* --- 6. A nonsense count from the device is clamped to what was
+	 * asked about, so it cannot walk off the buffer.  Guard bytes
+	 * past the one-handle request must be untouched, and the answer
+	 * must still be the honest one. */
+	memset(buf, 0, sizeof buf);
+	memset(buf + size1, GUARD_BYTE, sizeof buf - size1);
+	build_reply_header(buf, 0xFFFFFFFFu);
+	put_reply_entry(buf, 0, fake_handle(0), EV_RECEIVE, 0);
+	CHECK_EQ(__afd_poll_events_for(buf, 1, fake_handle(0)), EV_RECEIVE,
+	         "absurd count is clamped, not believed");
+	CHECK_EQ(__afd_poll_events_for(buf, 1, fake_handle(7)), 0u,
+	         "absurd count does not manufacture a match");
+	for (i = 0; (size_t)i < sizeof buf - size1; i++)
+		CHECK_EQ(buf[size1 + i], GUARD_BYTE, "absurd count read past the request");
+
+	/* --- 7. get_handle_count reads the same four bytes at +8 the
+	 * builder writes as HandleCount -- request and reply share the
+	 * field, which is exactly why the reply's value has to be read
+	 * rather than assumed. */
+	memset(buf, 0, sizeof buf);
+	__afd_build_poll_request(buf, 0, 3);
+	CHECK_EQ(__afd_poll_get_handle_count(buf), 3u, "get_handle_count vs builder");
+	CHECK_EQ(__afd_poll_get_handle_count(buf), rd32(buf + REQ_HANDLE_COUNT), "get_handle_count vs raw");
+	CHECK(size3 > size1);
+}
+
 int main(void)
 {
 	/* One handle is what src/select/select.c's __fd_probe() actually
@@ -428,6 +595,8 @@ int main(void)
 	CHECK_EQ(EV_CONNECT, 1u << 6, "AFD_POLL_CONNECT");
 	CHECK_EQ(EV_ACCEPT, 1u << 7, "AFD_POLL_ACCEPT");
 	CHECK_EQ(EV_CONNECT_FAIL, 1u << 8, "AFD_POLL_CONNECT_FAIL");
+
+	check_reply();
 
 	if (!fails) printf("posix-socket-poll: all tests passed\n");
 	return fails != 0;
