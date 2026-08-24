@@ -1187,6 +1187,65 @@ absent header), and the STREAMS command set as N/A — vacuous rather
 than violated, because NT has no STREAMS subsystem and `fildes` can
 never refer to a STREAMS device.
 
+**J3 — the remaining fourteen (14).** `readv writev` (`sys/uio.h`),
+`ftw nftw` (`ftw.h`), `posix_fadvise posix_fallocate` (`fcntl.h`),
+`_setjmp _longjmp` (`setjmp.h`), `strlen strnlen` (`string.h`),
+`times` (`sys/times.h`), `uname` (`sys/utsname.h`), `gettimeofday`
+(`sys/time.h`) and `srand48` (`stdlib.h`), in the new
+`test/posix-tail.c`. **Five BUGs fenced**, all five verified to pass
+once fixed: `nftw()` with `FTW_CHDIR` reporting every entry below the
+root as `FTW_NS` and returning 0; `nftw()` with no
+descendant-of-itself protection; `posix_fadvise()` missing the
+negative-`len` half of its `[EINVAL]` and the whole of its `[ESPIPE]`;
+`posix_fallocate()` returning `[EBADF]` where `[ENODEV]` is required
+and never checking write permission. **A sixth was found by the gate
+itself**: `posix_fallocate()`'s `[EFBIG]` check is signed-integer
+overflow — UndefinedBehaviorSanitizer caught it under `make asan` when
+the first draft asserted that error live — and it is the only way that
+error can be produced, so a compiler may delete the check. Subtract 14
+from 357.
+
+**This is where the count stops reconciling cleanly, and it is said
+rather than forced.** Three separate reasons, all instances of the
+caveat item 4 already records:
+
+- `strlen` and `strnlen` are in the "Implemented, not clause-audited"
+  table's `string.h` row, but `test/POSIX-COVERAGE.md`'s priority-1
+  section ("string.h / strings.h") audited that header as a group. Its
+  rows do not name `strlen` in a first column, so the tokeniser has
+  never counted it either way — it is neither cleanly in the 357 nor
+  cleanly in the audited set today. J3 gives both names first-column
+  rows of their own, which the pipeline *will* count; whether that
+  creates a double-count depends on whether item 4's re-run reads
+  priority 1 as having covered them. Flagged rather than decided.
+- `drand48`/`erand48`/`lrand48`/`mrand48`/`seed48`/`lcong48` are
+  audited under priority 2 ("the random family"); only `srand48` is in
+  the 357. J3's `srand48` rows necessarily *call* the other six as the
+  observation channel, and their names appear in J3's clause column.
+  That is exactly the sibling-column shape that undercounted
+  `hdestroy`/`wordfree` before — except here the direction is the
+  other one, since those six are already audited. Neither table should
+  move for them.
+- `ioctl` (J2) belongs in the absent accounting, not the 357 — a move
+  between tables rather than a subtraction, and one the mechanical
+  pipeline cannot infer, since `ioctl` does link.
+
+Given that this file has now been hit in both directions on the same
+day — an undercount (`hdestroy`, `wordfree`) and, per the concurrent
+`stdio`/`stdarg` audit, an overcount of six names that already had
+priority-5 rows — the honest statement is that **the counting method,
+not any one auditor's arithmetic, is what needs item 4's re-run.**
+Nothing above has been hand-fitted to make 357 come out even, and the
+frozen `04edec2` headline counts are untouched.
+
+Group totals for this session: H = 12, I = 16, J1 = 4, J2 = 1
+(reclassified, not subtracted), J3 = 14. **46 interfaces given a
+first-ever clause-cited row; 10 BUGs fenced; 2 assertion groups left
+`rc=77` unverified** (`nftw()`'s symbolic-link clauses where
+`symlink()` is unavailable, and `posix_fallocate()`'s allocation
+clauses on i386, where WOW64 answers the documented "underlying file
+system does not support this operation").
+
 ## Changes since the clause audit of the stdio.h and stdarg.h rows
 
 Dated note, 2026-08-24, added rather than folded into the headline

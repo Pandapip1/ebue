@@ -2644,6 +2644,268 @@ STREAMS interface, so there is no partial implementation to grade.
   a test that cannot construct a STREAMS device cannot assert anything
   about one, even fenced.
 
+### J3: sys/uio.h, ftw.h, fcntl.h advisory, setjmp.h OB XSI, string.h, sys/times.h, sys/utsname.h, sys/time.h, stdlib.h srand48
+
+Fourteen functions across nine headers, in `test/posix-tail.c` (new
+file). **Five BUGs fenced** — one in `nftw()` that is severe, one more
+in `nftw()` found by inspection, and three more *shall fail* error
+clauses that are simply absent. **One assertion group comes out
+`rc=77` unverified** here.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| readv | "shall place the input data into the iovcnt buffers … shall always fill an area completely before proceeding to the next" — asserted on the exact iov boundaries, not just the total | covered | test/posix-tail.c (`test_readv`) |
+| readv | "Refer to read" — 0 at end-of-file; a short transfer reporting the bytes that really moved and leaving later areas untouched; zero-length areas skipped rather than read as EOF | covered | test/posix-tail.c (`test_readv`) |
+| readv, writev | *may fail* "[EINVAL] The iovcnt argument was less than or equal to 0, or greater than {IOV_MAX}" — and the *upper edge accepted*: `iovcnt == IOV_MAX` must succeed, not be rejected off by one | covered | test/posix-tail.c (`test_readv_writev_iovcnt`) |
+| readv, writev | *shall fail* "[EINVAL] The sum of the iov_len values … overflowed an ssize_t", and writev's "the operation shall fail and no data shall be transferred" (asserted through `st_size`) | covered | test/posix-tail.c (`test_writev`) |
+| writev | "shall gather output data from the iovcnt buffers … iov[0], iov[1], …" in order; "If fildes refers to a regular file and all of the iov_len members … are 0, writev() shall return 0 and have no other effect" | covered | test/posix-tail.c (`test_writev`) |
+| readv, writev | "Refer to read"/"Refer to write" `[EBADF]` | covered | test/posix-tail.c (`test_writev`) |
+| readv, writev | XBD 2.9.7's atomicity requirement against other `read`/`write`/`readv`/`writev` on a regular file | N/A — `src/misc/uio.c`'s banner documents this as a deliberate, argued divergence (NT's `NtReadFileScatter`/`NtWriteFileGather` are page-granular and cannot take arbitrary iovecs). No test: ntlibc has no threads to race with | — |
+| ftw | "shall recursively descend the directory hierarchy rooted in path. For each object … shall call the function pointed to by fn"; FTW_D/FTW_F; "shall visit a directory before visiting any of its descendants"; a real `stat` buffer (checked through `st_size`) | covered | test/posix-tail.c (`test_ftw`) |
+| ftw | "If the function pointed to by fn returns a non-zero value, ftw() shall stop its tree traversal and return whatever value was returned" — asserted for a positive and a negative value, with the entry count | covered | test/posix-tail.c (`test_ftw`) |
+| ftw | "The ndirs argument shall specify the maximum number of directory streams or file descriptors … available" — a two-level walk with `ndirs == 1` must still complete (exercises `src/ftw/ftw.c`'s LRU close/`telldir`/`seekdir` replay) | covered | test/posix-tail.c (`test_ftw`) |
+| ftw, nftw | *shall fail* "[ENOENT] A component of path does not name an existing file or path is an empty string"; "[ENOTDIR] A component of path names an existing file that is neither a directory nor a symbolic link to a directory" | covered | test/posix-tail.c (`test_ftw`, `test_nftw`) |
+| nftw | `struct FTW`: "base is the offset of the object's filename in the pathname passed as the first argument to fn"; "level indicates depth relative to the root of the walk, where the root level is 0" — every entry, exact values, and `path + base` compared against the filename | covered | test/posix-tail.c (`test_nftw`) |
+| nftw | "FTW_DEPTH: If set, nftw() shall report all files in a directory before reporting the directory itself", and FTW_DP "shall only occur if the FTW_DEPTH flag is included in flags" — both directions asserted | covered | test/posix-tail.c (`test_nftw`) |
+| nftw | "FTW_MOUNT: If set, nftw() shall only report files in the same file system as path" — a real test here, since `src/stat/stat.c` fills `st_dev` from the NT volume serial number | covered | test/posix-tail.c (`test_nftw`) |
+| nftw | "FTW_CHDIR: … If clear, nftw() shall not change the current working directory" | covered | test/posix-tail.c (`test_nftw`) |
+| nftw | "FTW_CHDIR: If set, nftw() shall change the current working directory to each directory as it reports files in that directory" — together with "shall recursively descend the directory hierarchy rooted in path" | **BUG (fenced)** — the severe one; see below | test/posix-tail.c (`test_nftw_chdir`) |
+| nftw | "If FTW_PHYS is clear … nftw() shall follow links instead of reporting them, but shall not report the contents of any directory that would be a descendant of itself" (and the FTW_DEPTH variant) | **BUG (fenced)** | test/posix-tail.c (`test_nftw_symlink_loop`) |
+| nftw, ftw | FTW_PHYS's FTW_SL, FTW_SLN, and link-following | **unverified (rc=77)** — needs a real symbolic link; `symlink()` fails `ENOSYS` under Wine and `EPERM` on real Windows without `SeCreateSymbolicLinkPrivilege`. Probed at run time, one SKIP line naming the mechanism and errno | test/posix-tail.c (`test_nftw_symlinks`) |
+| ftw, nftw | FTW_DNR (an unreadable directory), FTW_NS (an unstattable object), `[EACCES]`, `[ELOOP]`, `[ENAMETOOLONG]`, `[EOVERFLOW]`, `[EMFILE]`/`[ENFILE]` | N/A — the same permission-model limit `glob()`'s `GLOB_ERR` row already records: `chmod 0` does not revoke owner access on this platform, so a directory that cannot be read or an object that cannot be stat'd cannot be built | — |
+| ftw | *may fail* "[EINVAL] The value of the ndirs argument is invalid" | N/A — *may* fail; ntlibc does not validate `ndirs` and is conforming not to | — |
+| posix_fadvise | DESCRIPTION: every advice value is advisory and "shall have no effect on the semantics of other operations" (asserted by reading the file back after `POSIX_FADV_DONTNEED`); "The specified range need not currently exist in the file"; "If len is zero, all data following offset is specified"; RETURN VALUE returns the error number, not `-1`/`errno` | covered — all six `POSIX_FADV_*` values | test/posix-tail.c (`test_posix_fadvise`) |
+| posix_fadvise | *shall fail* "[EBADF] The fd argument is not a valid file descriptor"; the advice half of "[EINVAL] The value of advice is invalid" | covered | test/posix-tail.c (`test_posix_fadvise`) |
+| posix_fadvise | the other half of the same clause: "…or the value of len is less than zero" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_einval_negative_len`) |
+| posix_fadvise | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_espipe`) |
+| posix_fallocate | "If the offset+len is beyond the current file size, then posix_fallocate() shall adjust the file size to offset+len. Otherwise, the file size shall not be changed"; the range is really writable and readable back; "Space allocated … shall be freed by a successful call to creat() or open() that truncates the size of the file" | covered | test/posix-tail.c (`test_posix_fallocate`) |
+| posix_fallocate | *shall fail* `[EBADF]` (invalid fd), `[EINVAL]` (negative `offset` or `len`), `[ESPIPE]` (pipe/FIFO); *may fail* `[EINVAL]` for `len == 0` (asserted permissively, since it is optional) | covered | test/posix-tail.c (`test_posix_fallocate`) |
+| posix_fallocate | *shall fail* "[EFBIG] The value of offset+len is greater than the maximum file size" | **BUG (fenced)** — the only way the implementation can produce it is by signed-integer overflow, which is undefined behaviour; see below | test/posix-tail.c (`test_posix_fallocate_efbig`) |
+| posix_fallocate | the DESCRIPTION file-size and storage-reservation clauses | covered on x86_64; **unverified (rc=77) on i386** — see below | test/posix-tail.c (`test_posix_fallocate`) |
+| posix_fallocate | *shall fail* "[ENODEV] The fd argument does not refer to a regular file" | **BUG (fenced)** — fenced on a *writable character device*, not a directory; see below | test/posix-tail.c (`test_posix_fallocate_enodev`) |
+| posix_fallocate | *shall fail* "[EBADF] The fd argument references a file that was opened without write permission" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fallocate_ebadf_readonly`) |
+| _setjmp, _longjmp | "shall be equivalent to longjmp() and setjmp()" — `_setjmp()` returns 0 directly, `_longjmp(env, v)` makes it return `v`, and `_longjmp(env, 0)` makes it return 1 (a negative `v` is returned as given: only 0 is special) | covered | test/posix-tail.c (`test__setjmp_return_values`) |
+| _setjmp, _longjmp | **the entire difference from `setjmp`/`longjmp`**: "with the additional restriction that _longjmp() and _setjmp() shall not manipulate the signal mask" | covered — and genuinely, not vacuously: `src/signal/signal.c` keeps a real `blocked` set that `sigprocmask()` reads and writes, so the test blocks `SIGUSR1`, `_setjmp()`s, unblocks it, `_longjmp()`s, and asserts the mask is still the *unblocked* one rather than the one in effect at the `_setjmp()` | test/posix-tail.c (`test__longjmp_does_not_manipulate_the_signal_mask`) |
+| _longjmp | "If _longjmp() is called even though env was never initialized … or when the last such call was in a function that has since returned, the results are undefined" | N/A — undefined, so nothing may be asserted | — |
+| strlen | "shall compute the number of bytes in the string … not including the terminating NUL character"; "no return value shall be reserved to indicate an error" | covered — including a sweep of every (start offset, length) pair below three machine words, which is what actually exercises `src/string/strlen.c`'s three phases (byte prologue to alignment, word-at-a-time SWAR, byte epilogue) | test/posix-tail.c (`test_strlen`) |
+| strnlen | "the number of bytes preceding the first null byte … if s contains a null byte within the first maxlen bytes; otherwise … maxlen" | covered | test/posix-tail.c (`test_strnlen`) |
+| strnlen | "shall never examine more than maxlen bytes of the array pointed to by s" | covered — as an **ASan assertion**, not a return-value one: heap blocks of exactly `n` bytes with no NUL, for `n` in 1…40. Both a conforming and an over-reading implementation return `n`, so only ASan can tell them apart. Verified out-of-band that ASan catches it (see below) | test/posix-tail.c (`test_strnlen`) |
+| times | "shall fill the tms structure … All times are measured in terms of the number of clock ticks used"; RETURN VALUE "the elapsed real time, in clock ticks, since an arbitrary point in the past … This point does not change from one invocation … to another" (asserted as non-decreasing across two calls with CPU burned between); cumulative CPU totals non-decreasing; `sysconf(_SC_CLK_TCK) > 0` | covered | test/posix-tail.c (`test_times`) |
+| times | *shall fail* "[EOVERFLOW] The return value would overflow the range of clock_t" | N/A — needs an uptime long enough to overflow `clock_t`, which no test can arrange | — |
+| times | the *magnitude* of `tms_utime`, or that it grows across a busy loop | N/A — deliberately not asserted. NT's `ProcessTimes` is quantised (coarser still under Wine) and the tick here is 1/100 s, so a loop short enough to keep the suite fast is not guaranteed to cross a tick boundary. Asserting growth would be a flake, not a conformance test | — |
+| uname | "shall store information identifying the current system"; "Upon successful completion, a non-negative value shall be returned" (non-negative, not specifically 0); every member NUL-terminated within its array and non-empty; two calls in one process agree; `nodename` matches `gethostname()` | covered | test/posix-tail.c (`test_uname`) |
+| uname | the content of each member | N/A — "The format of each member is implementation-defined", so nothing may be asserted about the values. `src/misc/uname.c`'s banner documents where each comes from | — |
+| gettimeofday | "shall obtain the current time, expressed as seconds and microseconds since the Epoch"; RETURN VALUE "shall return 0 and no value shall be reserved to indicate an error"; ERRORS "No errors are defined"; `tv_usec` in [0, 1000000); `tv_sec` agrees with `time()` and is past a sanity floor; two consecutive calls do not go backwards | covered | test/posix-tail.c (`test_gettimeofday`) |
+| gettimeofday | "If tzp is not a null pointer, the behavior is unspecified"; "The resolution of the system clock is unspecified" | N/A — unspecified. Passing a `struct timezone` is exercised for survivability only, with nothing asserted about the result | test/posix-tail.c (`test_gettimeofday`) |
+| srand48 | "sets the high-order 32 bits of Xi to the low-order 32 bits contained in its argument. The low-order 16 bits of Xi are set to the arbitrary value 330E" — asserted for six seeds against an **arithmetic oracle**, not a golden vector: X₁ and X₂ are recomputed here from `drand48.html`'s own `Xn+1 = (aXn + c) mod 2^48` with a = 0x5DEECE66D, c = 0xB, and compared against `drand48()` (exactly `Xi / 2^48`, exact in a double), `lrand48()` (`Xi >> 17`) and `mrand48()` (`Xi >> 16` as signed 32-bit) | covered | test/posix-tail.c (`test_srand48`) |
+| srand48 | "After lcong48() is called, a subsequent call to either srand48() or seed48() shall restore the standard multiplier and addend values, a and c" | covered — `lcong48()` with a = 3, c = 7, then `srand48(42)` must reproduce the pre-`lcong48()` sequence exactly | test/posix-tail.c (`test_srand48`) |
+| srand48 | "the sequence of numbers in each stream shall not depend upon how many times the routines are called to generate numbers for the other streams" | covered — `srand48()` must not disturb an `erand48()` caller's own `xsubi` | test/posix-tail.c (`test_srand48`) |
+
+### Bugs found (group J3)
+
+1. **`nftw()` with `FTW_CHDIR` walks nothing below the root.** Every
+   entry of every directory is reported as `FTW_NS`, no directory below
+   the root is ever descended into, and the walk returns 0 as though
+   the tree had been exhausted. This is the most severe defect in the
+   group: a caller gets a *successful* return and a silently truncated
+   walk.
+
+   `nftw.html`: "shall recursively descend the directory hierarchy
+   rooted in path", and "FTW_CHDIR: If set, nftw() shall change the
+   current working directory to each directory as it reports files in
+   that directory." `FTW_NS` is specified as "The stat() function
+   failed on the object because of lack of appropriate permission" —
+   not "the implementation looked in the wrong place".
+
+   Mechanism: `src/ftw/ftw.c`'s `walk()` opens the directory, calls
+   `chdir_absolute(ws, path)`, and then builds each child path by
+   appending `"/name"` to `path` — which is relative to the walk's
+   *original* working directory. `chdir_absolute()` is careful to
+   resolve its own argument against the cwd captured before the first
+   `chdir()` (its comment diagnoses exactly this hazard), but nothing
+   does the same for the child paths handed to the recursive
+   `walk()`'s `lstat()`/`stat()`/`opendir()`. Once the process has
+   `chdir`'d into `tailtree`, looking up `tailtree/f1` resolves to
+   `tailtree/tailtree/f1`.
+
+   Measured under Wine on this file's own fixture: `t4` → `FTW_D`;
+   `t4/f1` → `FTW_NS`; `t4/sub` → `FTW_NS`; `t4/sub/f2` never reported
+   at all; `rc = 0`. Without `FTW_CHDIR` the identical walk reports all
+   four objects with the right types, so this is `FTW_CHDIR` alone. Not
+   the "results are unspecified if the application-supplied fn function
+   does not preserve the current working directory" escape clause: the
+   test's callback changes nothing.
+
+2. **`nftw()` has no protection against a directory that is a
+   descendant of itself.** `nftw.html` requires, when `FTW_PHYS` is
+   clear, that it "shall not report any directory that would be a
+   descendant of itself" (with `FTW_DEPTH` set) or "shall not report
+   the contents of any directory that would be a descendant of itself"
+   (with it clear). `struct walkstate` carries `nopenfd`,
+   `open_count`, `flags`, `legacy`, `root_dev` and the two callback
+   pointers and nothing else — there is no state in which "would be a
+   descendant of itself" could be computed, so a symbolic link back up
+   the tree recurses until the stack or the path length gives out.
+   Found by inspection; the fenced assertions need a symbolic link, so
+   they stay fenced until both the fix lands and a platform that can
+   create one runs them. Fix shape: keep the `(st_dev, st_ino)` of
+   every ancestor on the recursion path — `src/stat/stat.c` fills both
+   with real values here, and `FTW_MOUNT` already relies on `st_dev`.
+
+3. **`posix_fadvise()` never looks at `len`.** `posix_fadvise.html`
+   *shall fail*: "[EINVAL] The value of advice is invalid, **or the
+   value of len is less than zero**." `src/fcntl/fadvise.c` opens
+   `(void)offset; (void)len;` and switches on `advice` alone. Measured:
+   `posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL)` returns 0. The
+   *advice* half of the same clause is implemented and passes, which
+   makes this a half-implemented shall-fail check rather than an
+   unimplemented function.
+
+4. **`posix_fadvise()` returns 0 for a pipe or FIFO instead of
+   `[ESPIPE]`.** *Shall fail*: "[ESPIPE] The fd argument is associated
+   with a pipe or FIFO." The mechanism is already present one function
+   away in the same file — `posix_fallocate()` does `if (f->type ==
+   __FD_PIPE) return ESPIPE;`.
+
+5. **`posix_fallocate()` reports `[EBADF]` where `[ENODEV]` is
+   required, and never checks write permission.** Two clauses, one
+   fence each:
+   - "[ENODEV] The fd argument does not refer to a regular file."
+     `src/fcntl/fadvise.c` has `if (si.Directory) return EBADF;
+     /* not a regular file */` — the comment names the right condition
+     and the code returns the wrong errno for it. **The fence uses a
+     writable character device (`/dev/null`, NT's `NUL`), not a
+     directory, and that choice is the point:** a directory descriptor
+     is simultaneously "not a regular file" *and* "opened without write
+     permission", so both `[ENODEV]` and `[EBADF]` conform for one and
+     it cannot distinguish the clauses. The directory case is asserted
+     *live*, permissively, as `ENODEV || EBADF` — never success.
+     Measured: `open("NUL", O_WRONLY)` gives a valid, writable,
+     `S_ISCHR` descriptor and `posix_fallocate()` on it returns 9
+     (`EBADF`) where 19 (`ENODEV`) is required.
+   - "[EBADF] The fd argument references a file that was opened without
+     write permission." Never checked. Measured: with an 11-byte file
+     open `O_RDONLY`, `posix_fallocate(fd, 0, 5)` — a range already
+     inside the file, so no NT call is reached at all — returns 0,
+     reporting success for an allocation the caller can never write
+     into. (`posix_fallocate(fd, 0, 100)` on the same descriptor
+     happens to come back 9 too, but only as a side effect of how the
+     failing `NtSetInformationFile` status maps; that is not the
+     required check and is environment-dependent. The within-EOF call
+     is the decisive one.) Fix shape: `f->flags` already records the
+     open flags, so `(f->flags & O_ACCMODE) == O_RDONLY` is the whole
+     test.
+
+6. **`posix_fallocate()`'s `[EFBIG]` check is signed-integer overflow,
+   and that is the only way it can fire.** `src/fcntl/fadvise.c`
+   computes `want = (long long)offset + (long long)len;` and then tests
+   `if (want < 0) return EFBIG;` — which relies on the sum having
+   already wrapped. Signed overflow is undefined in C, so a compiler is
+   entitled to delete the `want < 0` test as unreachable, and any
+   argument pair whose sum *does* fit never sets it: there is no
+   argument pair that reaches `[EFBIG]` defined-ly. Found by
+   UndefinedBehaviorSanitizer under `make asan`, from this file's own
+   first draft, which asserted `[EFBIG]` live: `src/fcntl/fadvise.c:57:
+   27: runtime error: signed integer overflow: 4611686018427387904 +
+   4611686018427387904 cannot be represented in type 'long long'`. The
+   live assertion was **removed rather than kept** — a test that
+   provokes undefined behaviour in the library is not a conformance
+   test — and the assertion moved into a fence, written against
+   arguments that do not overflow `off_t`. Fix shape: compare before
+   adding (`if (offset > MAXFILESIZE - len) return EFBIG;`), with the
+   platform's real limit rather than `LLONG_MAX`, since the clause is
+   about "the maximum file size", not about what fits in an `off_t`.
+
+**All five*** *(now six)* **fences were verified to pass once fixed.** Fixes for all
+five were applied to `src/fcntl/fadvise.c` and `src/ftw/ftw.c`, all
+five blocks un-fenced, and the file rebuilt and rerun: green (rc=77,
+from the symlink group, with zero failures). Restoring the original
+implementations with the tests still un-fenced turns exactly twelve
+assertions red across the five groups. Everything was then re-fenced
+and both files reverted; nothing in `src/` is modified by this commit.
+
+### Observed behaviour where POSIX permits latitude (group J3)
+
+- **Two mutations that this file deliberately does *not* claim to
+  catch,** recorded so a successor does not read the coverage as wider
+  than it is. (a) `src/misc/uio.c`'s `break` when one area comes back
+  short is unobservable for a regular file — the next `read()` at
+  end-of-file returns 0 and the total is identical either way — and for
+  a pipe ntlibc's `read()` answers `EAGAIN` on empty, which the loop
+  also treats as "stop and report what moved". Removing the `break`
+  outright changes no result this file can see. (b) `ftw()`/`nftw()`
+  each carry an explicit empty-path check, but removing it changes
+  nothing observable: `lstat("")` fails `ENOENT` and the walk root's
+  failure is returned as `-1` with that errno anyway. Both assertions
+  are written against the *clause*, which holds either way — not
+  against the redundant check.
+- **`strnlen()`'s "shall never examine more than maxlen bytes" is an
+  ASan assertion, like `test/posix-ctype.c`'s out-of-domain probe.**
+  Both a conforming implementation and one that scans past `maxlen`
+  return the same number, so no return-value check can separate them.
+  Verified out-of-band that ASan catches the shape given exactly this
+  test's fixture (heap blocks of 1…40 bytes, no NUL): a stand-in
+  `memchr(s, 0, n + 1)` dies with `AddressSanitizer:
+  heap-buffer-overflow`.
+- **`posix_fallocate()` fails `[EINVAL]` on i386 (WOW64) for a
+  zero-length file, and that is a conforming answer.**
+  `posix_fallocate.html`'s *shall fail* `[EINVAL]` reads "The len
+  argument is less than zero, or the offset argument is less than zero,
+  **or the underlying file system does not support this operation**",
+  so an implementation whose storage layer cannot reserve blocks is
+  entitled to return it. Measured with the same source built both ways:
+  every form of the call succeeds on x86_64, while on i386
+  `NtSetInformationFile(FileAllocationInformation)` comes back
+  `STATUS_INVALID_PARAMETER` for a zero-length file.
+  `src/fcntl/fadvise.c`'s own comment records that Wine answers
+  `STATUS_NOT_IMPLEMENTED` for this class and that it falls through on
+  `ENOSYS` *specifically*; the WOW64 path returns a different status,
+  which that fallback does not cover. A non-empty file skips the call
+  entirely (its `AllocationSize` is already a whole cluster), which is
+  why `test/unistd.c`'s pre-existing `posix_fallocate(fd, 0, 4096)`,
+  made on a five-byte file, passes on both arches and this file's
+  zero-length one does not. The test therefore **probes once and
+  reports the allocation group `rc=77` unverified** rather than
+  asserting an environment: asserting success unconditionally would be
+  asserting the platform, not the clause. Worth reporting upstream
+  under this project's Wine-divergence rule — real NT implements
+  `FileAllocationInformation` on both arches — but that is a Wine
+  change, not an ntlibc one, and nothing here was adjusted to hide it.
+- **`posix_fadvise()` doing nothing is conforming.** The page says the
+  function "shall have no effect on the semantics of other operations
+  on the specified data, although it may affect the performance", so a
+  validate-and-no-op implementation is correct and `src/fcntl/
+  fadvise.c`'s banner argues that case honestly. The two BUGs above are
+  about its *argument validation*, not its inaction.
+- **`readv()`/`writev()` are not atomic with respect to other
+  `read`/`write` calls (XBD 2.9.7).** `src/misc/uio.c`'s banner
+  documents this as a deliberate, argued divergence rather than an
+  oversight: NT's `NtReadFileScatter`/`NtWriteFileGather` are
+  page-granular and cannot take arbitrary iovecs, and restricting the
+  interface to page-aligned buffers would reject every real caller. No
+  assertion here, since ntlibc has no threads to race with — recorded
+  so the divergence is visible from the ledger and not only from the
+  source.
+- **`times()`'s `tms_utime` magnitude and `gettimeofday()`'s resolution
+  are both deliberately unasserted**, for the reasons in their rows
+  above. Both would be flakes rather than conformance tests.
+
+### Not reached (group J)
+
+`FTW_DNR`, `FTW_NS`, `[EACCES]`, `[ELOOP]`, `[ENAMETOOLONG]`,
+`[EOVERFLOW]` and `[EMFILE]`/`[ENFILE]` for `ftw`/`nftw` (this
+platform's permission model cannot build an unreadable directory or an
+unstattable object — the same limit `glob()`'s `GLOB_ERR` row records);
+`times()`'s `[EOVERFLOW]`; `posix_fallocate()`'s allocation clauses on
+i386 (unverified, not unreachable — see above); `[ENOMEM]` for `newlocale`/`duplocale` (no
+allocation-failure injection hook, and neither allocates); the STREAMS
+half of `ioctl.html` (no STREAMS subsystem exists to enter); and the
+`FTW_PHYS`/`FTW_SL`/`FTW_SLN` group, which is the one thing in this
+group that is **unverified rather than unreachable** — it needs only a
+platform that can create a symbolic link, and reports itself as
+`rc=77` with a SKIP line naming the mechanism and errno when it cannot
+get one.
+
 ## stdio.h, the "implemented, not clause-audited" row (group K)
 
 The two rows `test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not
