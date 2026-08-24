@@ -186,9 +186,16 @@ int puts(const char *s)
 
 ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *__restrict f)
 {
-	size_t cap = buf && *buf ? *n : 0, len = 0;
-	char *b = buf ? *buf : 0;
+	size_t cap, len = 0;
+	char *b;
 	int c;
+
+	/* getdelim.html ERRORS: "[EINVAL] lineptr or n is a null pointer."
+	 * The rest of this function stores through both unconditionally, so
+	 * the check has to come first rather than being half-applied. */
+	if (!buf || !n) { errno = EINVAL; return -1; }
+	cap = *buf ? *n : 0;
+	b = *buf;
 
 	if (!f->readable) { errno = EBADF; f->err = 1; return -1; }
 	if (!b || cap == 0) {
