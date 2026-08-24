@@ -256,9 +256,28 @@ jobs:
           # plugin behind, so on the real-Windows runner the search correctly
           # found nothing and the helper aborted -- a red leg caused by a
           # missing artefact, not by the code under test.
+          #
+          # obj/sh/sh.exe matters for the same reason and was missing for
+          # the same one: test/sh-main.c spawns the sh binary and finds it
+          # by walking two components up from its own argv[0] and back down
+          # to sh/sh.exe (see that file's header). With only obj/test/ in
+          # the artefact there was no sh/ to walk down to, so sh-main.exe
+          # exited 77 on this leg *every run* -- the black-box tests of the
+          # sh utility were verified under Wine and nowhere else.
+          #
+          # Note what adding it does to the artefact's shape.
+          # actions/upload-artifact roots the artefact at the least common
+          # ancestor of the search paths; with obj/test/* alone that was
+          # obj/test, and the files landed at the artefact root. With
+          # obj/sh/sh.exe alongside it the ancestor becomes obj/, so the
+          # artefact now contains test/ and sh/ subdirectories. That is
+          # deliberate -- it reproduces the obj/{test,sh} layout find_sh()
+          # already knows how to walk -- and windows-test below reads
+          # test-exes/test, not test-exes, because of it.
           path: |
             obj/test/*.exe
             obj/test/*.dll
+            obj/sh/sh.exe
           # Guards against a silently empty upload: an empty artifact would
           # make windows-test's PowerShell loop iterate zero times and exit
           # 0 -- a green job that tested nothing.
@@ -557,7 +576,25 @@ jobs:
           $failed = $false
           $unverified = 0
           $ran = 0
-          Get-ChildItem -Path test-exes -Filter *.exe | Sort-Object Name | ForEach-Object {
+          # The artefact is rooted at obj/, so the test binaries are under
+          # test-exes/test and obj/sh/sh.exe arrives as test-exes/sh/sh.exe
+          # -- which is exactly the layout test/sh-main.c's find_sh() walks
+          # (up two from argv[0], down to sh\sh.exe). Checked rather than
+          # assumed: if a future upload-artifact changes how it picks the
+          # artefact root, the loop below would find no .exe and the $ran
+          # floor would report "this job verified nothing", which is true
+          # but says nothing about why. This says why.
+          foreach ($p in @("test-exes/test", "test-exes/sh/sh.exe")) {
+            if (-not (Test-Path $p)) {
+              Write-Host "FAILED: expected $p in the downloaded artefact; its layout has changed"
+              Write-Host "Downloaded tree:"
+              Get-ChildItem -Path test-exes -Recurse -Name | ForEach-Object { Write-Host "  $_" }
+              exit 1
+            }
+          }
+          # Not -Recurse: sh.exe is a *fixture* for sh-main.exe, not a test.
+          # Running it as one would leave it reading this job's stdin.
+          Get-ChildItem -Path test-exes/test -Filter *.exe | Sort-Object Name | ForEach-Object {
             $ran += 1
             Write-Host "Running $($_.Name)"
             & $_.FullName
@@ -592,7 +629,7 @@ jobs:
           # could see.
           Write-Host "$ran test binary/binaries ran"
           if ($ran -eq 0) {
-            Write-Host "FAILED: no test binaries were found under test-exes/; this job verified nothing"
+            Write-Host "FAILED: no test binaries were found under test-exes/test/; this job verified nothing"
             exit 1
           }
           if ($unverified -gt 0) {
