@@ -3363,10 +3363,12 @@ PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HAND
 
 /* ------------------------------------------------- the struct stat seam
  *
- * Only compiled into the libFuzzer harnesses (fuzz/Makefile links them
- * with -Wl,--wrap=stat); tools/asan-build.sh's test binaries do not use
- * it, and see ntlibc's stat() unchanged.  fuzz/statshim.h has the whole
- * story and the measured offsets.
+ * Only compiled into the libFuzzer harnesses (fuzz/Makefile renames
+ * `stat` to __real_stat in the library objects with objcopy, and this
+ * file supplies the host-layout `stat` those objects no longer answer
+ * to); tools/asan-build.sh's test binaries do not use it, and see
+ * ntlibc's stat() unchanged.  fuzz/statshim.h has the whole story and
+ * the measured offsets.
  */
 #ifdef NTLIBC_FUZZ_STATWRAP
 #include <sys/stat.h>
@@ -3374,49 +3376,39 @@ PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HAND
 
 int __real_stat(const char *path, struct stat *st);
 
-/* ASan's own query: the address of the first byte in [beg, beg+size)
- * that is poisoned, or NULL if the whole region is addressable. */
-void *__asan_region_is_poisoned(void *beg, unsigned long size);
-
-/* -Wl,--wrap=stat is a *link-wide* rename: it redirects every undefined
- * reference named `stat` in the link, not just libFuzzer's.  ntlibc's own
- * objects are in the same link and four of them call stat() internally --
- * src/glob/glob.c (four call sites), src/ftw/ftw.c, src/stdlib/mktemp.c --
- * each passing an ntlibc `struct stat`, which is 120 bytes against the
- * host's 144.  Writing the host layout through one of those overruns it
- * by 24 bytes and, worse, scrambles the fields the caller then reads
- * (st_mode and st_nlink are transposed between the two layouts), so glob
- * with GLOB_MARK stops marking directories.
+/* This IS `stat` in the harness link, and __real_stat is ntlibc's own.
  *
- * Measured: fuzz_glob's first thirty-second run reported
- * "stack-buffer-overflow ... WRITE of size 144" from src/glob/glob.c.
- * Before fuzz_glob and fuzz_ftw existed no harness reached an internal
- * stat() call, so the seam had never been exercised from that side.
+ * fuzz/Makefile renames `stat` to __real_stat throughout the library
+ * objects with objcopy, definition and internal references together, so
+ * ntlibc's own callers -- src/glob/glob.c, src/ftw/ftw.c,
+ * src/stdlib/mktemp.c -- reach ntlibc's stat() with ntlibc's struct
+ * stat, and nothing can come between them.  What is left holding the
+ * name `stat` is this function, which answers in the *host's* layout,
+ * and the only caller that can still reach it is the compiler runtime:
+ * libFuzzer, compiled long ago against the host headers, calling stat()
+ * to decide whether its corpus path is a directory.  See fuzz/statshim.h
+ * for the measured field offsets and the whole story.
  *
- * There is no symbol-level way to tell the two callers apart -- that is
- * what makes --wrap link-wide.  The buffer itself can be asked, though:
- * every ntlibc caller's `struct stat` is a 120-byte stack or heap object,
- * and under ASan (which every fuzz build uses, and which is the only
- * configuration this file is ever compiled into) the 24 bytes past its
- * end are a redzone.  libFuzzer's buffer is a real 144-byte host struct
- * stat and is addressable to the end.  So: probe the far end, and answer
- * in ntlibc's own layout when the caller plainly cannot hold the host's.
+ * The predecessor of this function was __wrap_stat, under
+ * -Wl,--wrap=stat.  That was wrong: --wrap is a link-wide rename, so
+ * every one of ntlibc's six internal stat() call sites was getting a
+ * 144-byte host struct stat written into its 120-byte ntlibc one.  The
+ * shim had been reviewed and its blast radius stated as "confined to
+ * fuzz/"; it was not, and nothing noticed until fuzz_glob became the
+ * first harness ever to reach an internal stat() call.
  *
- * The probe is a heuristic in principle -- an ntlibc-layout buffer that
- * happened to be embedded 24 bytes before other live data would be
- * misread as a host one -- but not in practice: all six call sites pass
- * the address of a bare `struct stat` local.  If a caller ever appears
- * for which this is wrong, the durable fix is to stop using --wrap and
- * rename the symbol in the library objects instead (objcopy
- * --redefine-sym stat=__real_stat over $(LIBDIR), with ntstubs.c
- * providing the host-layout `stat`), which is a build-rule change. */
-static int caller_wants_ntlibc_layout(void *hostbuf)
-{
-	return __asan_region_is_poisoned(hostbuf,
-	                                 (unsigned long)__ntfuzz_host_stat_size()) != 0;
-}
-
-int __wrap_stat(const char *path, void *hostbuf)
+ * A harness is NOT part of the renamed set -- it is compiled from
+ * fuzz_*.c against ntlibc's headers and linked as-is -- so a plain
+ * stat() call in a harness lands here and overruns its buffer the same
+ * way.  Harnesses must call __real_stat(); fuzz/fuzz_glob.c does.
+ *
+ * Defined under a private name and aliased to `stat` in assembly,
+ * because <sys/stat.h> -- included just above, so that `struct stat` and
+ * __real_stat's prototype are ntlibc's -- already declares stat() with
+ * ntlibc's own signature, and this one deliberately takes a void * that
+ * is a host struct stat.  A C definition would be a conflicting
+ * redeclaration; the alias is the same symbol either way. */
+static int host_layout_stat(const char *path, void *hostbuf)
 {
 	struct stat st;
 	struct ntfuzz_stat s;
@@ -3425,8 +3417,6 @@ int __wrap_stat(const char *path, void *hostbuf)
 	/* The caller's buffer is a *host* struct stat, which is larger than
 	 * ntlibc's; never write through it directly. */
 	if (!hostbuf) return __real_stat(path, 0);
-	if (caller_wants_ntlibc_layout(hostbuf))
-		return __real_stat(path, (struct stat *)hostbuf);
 	r = __real_stat(path, &st);
 	if (r != 0) return r;
 	s.dev = st.st_dev;   s.ino = st.st_ino;   s.rdev = st.st_rdev;
@@ -3439,4 +3429,5 @@ int __wrap_stat(const char *path, void *hostbuf)
 	__ntfuzz_pack_stat(hostbuf, &s);
 	return 0;
 }
+__asm__(".globl stat\n\t.set stat, host_layout_stat");
 #endif

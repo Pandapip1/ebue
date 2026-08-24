@@ -26,12 +26,28 @@
  * on x86_64 both use the kernel's order.  Neither is wrong; they are just
  * different, and a native build puts both in one address space.
  *
- * The harnesses are therefore linked with -Wl,--wrap=stat: libFuzzer's
- * stat() calls land in __wrap_stat (ntstubs.c), which asks ntlibc's real
- * stat() and hands the answer to __ntfuzz_pack_stat (host_oracle.c, the
- * one file here built against the host headers) to write out in the
- * host's layout.  Neither file has to hand-transcribe the other's struct;
- * this one, which uses no libc types at all, is what they share.
+ * The seam: fuzz/Makefile runs objcopy over the *library* objects,
+ * renaming `stat` to __real_stat -- the definition in src/stat/stat.o and
+ * every internal reference to it move together, so ntlibc's own callers
+ * reach ntlibc's stat() with ntlibc's struct stat and nothing comes
+ * between them.  The name `stat` is then left to ntstubs.c, which
+ * answers in the host's layout by asking __real_stat and handing the
+ * result to __ntfuzz_pack_stat (host_oracle.c, the one file here built
+ * against the host headers).  Neither file has to hand-transcribe the
+ * other's struct; this one, which uses no libc types at all, is what
+ * they share.
+ *
+ * It was -Wl,--wrap=stat until fuzz_glob was written.  --wrap is a
+ * LINK-WIDE rename, so ntlibc's six internal stat() call sites
+ * (src/glob/glob.c ×4, src/ftw/ftw.c, src/stdlib/mktemp.c) were each
+ * being handed a 144-byte host struct stat in their 120-byte ntlibc
+ * one.  A 24-byte overrun, and st_mode read out of st_nlink's slot, so
+ * glob() stopped recognising directories.  Nothing noticed because no
+ * harness had ever reached an internal stat() call.
+ *
+ * A harness is not in the renamed set, so a plain stat() call from
+ * fuzz_*.c still reaches the host-layout definition.  Harnesses must
+ * call __real_stat(); fuzz/fuzz_glob.c declares it and explains why.
  *
  * Confined to fuzz/ on purpose.  Reordering ntlibc's own struct stat to
  * match glibc's would fix this and several latent siblings, but it is a

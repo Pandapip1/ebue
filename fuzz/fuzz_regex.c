@@ -95,6 +95,14 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
  * match the empty string.  See the file banner: this exists solely to
  * keep the harness off test/posix-glob.c:1925's fenced process kill.
  *
+ * Every uncertainty is resolved as "not safe", and that rule was earned:
+ * the first version answered "safe" for a pattern whose bracket
+ * expression or backslash escape ran off the end of the string, on the
+ * reasoning that regcomp would reject such a pattern anyway.  It does
+ * not always -- the ERE "[!].\331**\\..." compiled cleanly and then
+ * killed the process -- and a filter that models the parser's grammar
+ * approximately must never lean on the parser agreeing with it.
+ *
  * `prev` is 1 when the last thing scanned was an ordinary atom -- the
  * only kind of item that provably cannot match empty -- and 0
  * otherwise (start of pattern, after '(' / ')' / '|' / '^' / '$', and
@@ -107,7 +115,7 @@ static int safe_to_exec(const char *p, int ere)
 		char c = *p;
 
 		if (c == '\\') {
-			if (!p[1]) return 1;            /* trailing backslash: regcomp rejects it */
+			if (!p[1]) return 0;            /* trailing backslash: assume nothing */
 			if (!ere && p[1] == '(') { prev = 0; p += 2; continue; }
 			if (!ere && p[1] == ')') { prev = 0; p += 2; continue; }
 			if (!ere && p[1] == '{') {      /* BRE interval */
@@ -142,7 +150,7 @@ static int safe_to_exec(const char *p, int ere)
 				}
 				q++;
 			}
-			if (!*q) return 1;              /* unterminated: regcomp rejects it */
+			if (!*q) return 0;              /* unterminated: assume nothing */
 			p = q + 1;
 			prev = 1;
 			continue;

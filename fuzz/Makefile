@@ -39,8 +39,34 @@ ASAN_SO = $(shell $(CC) -print-file-name=libclang_rt.asan-$(ARCH).so)
 RPATH   = -Wl,-rpath,$(dir $(ASAN_SO))
 # libFuzzer calls stat() to decide whether the corpus path is a directory,
 # and it was compiled against the host's struct stat, which is not ntlibc's.
-# See fuzz/statshim.h -- without this every corpus directory looks absent.
-WRAP    = -Wl,--wrap=stat
+# See fuzz/statshim.h -- without the seam every corpus directory looks absent.
+#
+# The seam used to be -Wl,--wrap=stat.  It is not any more, and the reason
+# is a measured defect, not a preference: --wrap is a LINK-WIDE rename.  It
+# redirects every undefined reference named `stat` in the link, and ntlibc's
+# own objects are in that link -- src/glob/glob.c calls stat() at four
+# sites, src/ftw/ftw.c and src/stdlib/mktemp.c at one each.  Each was being
+# handed a 144-byte host `struct stat` in the 120-byte ntlibc one it had on
+# its stack: a 24-byte overrun, with st_mode and st_nlink transposed, so
+# glob() silently stopped recognising directories.  fuzz_glob reported it as
+# "stack-buffer-overflow ... WRITE of size 144" on its first run; no harness
+# had ever reached an internal stat() before, which is why a reviewed,
+# reasoned-about shim had been wrong since it was written.
+#
+# STATRENAME fixes the cause instead.  objcopy renames `stat` to
+# __real_stat throughout the *library* objects only -- the definition in
+# src/stat/stat.o and every internal reference to it move together, so
+# ntlibc's callers reach ntlibc's stat() directly and no rename can come
+# between them.  The compiler runtime's objects are untouched, so
+# libFuzzer's `stat` still binds to the host-layout shim ntstubs.c defines
+# under that name.
+#
+# ONE RULE FOR HARNESS AUTHORS, because this cannot be enforced by the
+# build: a harness is compiled against ntlibc's headers but is NOT part of
+# the renamed set, so a plain stat() call from fuzz_*.c reaches the
+# host-layout shim and overruns the caller's buffer exactly as glob did.
+# Call __real_stat() instead; fuzz/fuzz_glob.c declares it and says so.
+STATRENAME = stat=__real_stat
 # $(ASAN_SO) is named explicitly, and first: the shared ASan runtime has to
 # be the first entry in the executable's library list or it refuses to
 # start ("ASan runtime does not come first in initial library list").  The
@@ -85,6 +111,7 @@ $(LIBDIR)/.built: $(LIBDEP)
 	NTLIBC_ASAN_OBJ=$(abspath $(LIBDIR)) \
 	NTLIBC_ASAN_EXTRA=-fsanitize=fuzzer-no-link \
 	$(srcdir)/tools/asan-build.sh --objects-only
+	for o in $(LIBDIR)/obj/*.o; do objcopy --redefine-sym $(STATRENAME) "$$o"; done
 	touch $@
 
 $(OUT):
@@ -104,7 +131,7 @@ $(OUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(LIBDIR)/.built | $(OUT)
 # the stamp rule refilled it, and an empty expansion links a harness with
 # no ntlibc in it at all.
 $(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT)
-	$(CC) $(CFLAGS_HARNESS) -shared-libasan $(RPATH) $(WRAP) \
+	$(CC) $(CFLAGS_HARNESS) -shared-libasan $(RPATH) \
 	  $(ASAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o \
 	  $(LIBDIR)/obj/*.o -ldl -lm -o $@
 
@@ -210,6 +237,7 @@ $(COVLIB)/.built: $(LIBDEP)
 	NTLIBC_ASAN_OBJ=$(abspath $(COVLIB)) \
 	NTLIBC_ASAN_EXTRA='-fsanitize=fuzzer-no-link $(PROF)' \
 	$(srcdir)/tools/asan-build.sh --objects-only
+	for o in $(COVLIB)/obj/*.o; do objcopy --redefine-sym $(STATRENAME) "$$o"; done
 	touch $@
 
 $(COVOUT):
@@ -229,7 +257,7 @@ $(COVOUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(COVLIB)/.built | $(COVOUT)
 $(COVOUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVOUT)/ntstubs.o $(COVLIB)/.built | $(COVOUT)
 	$(CC) $(CFLAGS_HARNESS) $(PROF) \
 	  -fprofile-instr-generate=$(abspath $(COVDATA))/$*/fuzz_$*.profraw \
-	  -shared-libasan $(RPATH) $(WRAP) \
+	  -shared-libasan $(RPATH) \
 	  $(ASAN_SO) $< $(COVOUT)/ntstubs.o $(COVOUT)/host_oracle.o \
 	  $(COVLIB)/obj/*.o -ldl -lm -o $@
 
