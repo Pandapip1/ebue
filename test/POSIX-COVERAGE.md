@@ -12,6 +12,24 @@ has gotten against what ntlibc actually implements (`src/`, declared in
 else, pick up at the first "not yet reached" group in the priority
 order below, and update this file as they go.
 
+**Status as of the priority-13 pass: nothing in the priority list is
+"not yet reached" any more.** Every header and function group it named
+now has a clause-cited row, an explicit N/A with a stated reason, or a
+fenced BUG. What is left is per-section "Not reached" lists of
+individual *clauses* that cannot be exercised on this platform, and the
+two open BUGs recorded under priority 12/13. A successor's job is
+therefore no longer "pick up the next group" but one of: close an open
+BUG, re-audit against real Windows rather than Wine, or audit something
+newly implemented. Two habits from this pass are worth keeping: check
+the tests before trusting a row (several groups were audited in the
+tree long before this file recorded it), and remember that coverage of
+one caller of a shared layer is not coverage of the layer — see BUG 2
+under priority 12/13 for what that cost.
+
+Scope note: this file tracks functions ntlibc **implements**. POSIX
+functions it lacks entirely are tracked separately, in
+`test/POSIX-GAP-ACCOUNTING.md`.
+
 Status values:
 - **covered** — every testable DESCRIPTION/RETURN VALUE/ERRORS clause has
   an assertion, either pre-existing or added.
@@ -32,9 +50,9 @@ Done (clause-by-clause audited, see the per-header sections below):
 2. `stdlib.h` conversions, `qsort`/`bsearch`, `getenv`/`setenv`/random family
 3. `time.h` calendar and clock functions
 4. `dirent.h`, plus the smaller headers audited alongside it this round:
-   `ctype.h` (base `is*`/`to*` family; the XSI `isascii`/`toascii` pair is
-   not re-audited, see below), `locale.h`, `libgen.h`, `setjmp.h`,
-   `getopt()`
+   `ctype.h` (base `is*`/`to*` family; the XSI `isascii`/`toascii` pair
+   is audited separately, see group 12), `locale.h`, `libgen.h`,
+   `setjmp.h`, `getopt()`
 5. `stdio.h` streams
 6. `unistd.h` process/file ops, `fcntl.h`, `sys/stat.h`
 7. `signal.h`, `sys/wait.h`
@@ -45,24 +63,32 @@ Done (clause-by-clause audited, see the per-header sections below):
 11. `malloc`/`calloc`/`realloc`/`free`/`posix_memalign` and friends,
     `exit`/`_Exit`/`abort`/`atexit`/`assert`,
     `getenv`/`setenv`/`unsetenv`/`putenv`/`environ`
+12. `strings.h`, the XSI additions to `ctype.h`
+    (`isascii`/`toascii`/`_tolower`/`_toupper`), `assert.h`, `utime.h`,
+    and `endian.h` — `test/posix-strings.c`
+13. `sys/resource.h` (`getrlimit`/`setrlimit`/`getrusage`/
+    `getpriority`/`setpriority`), `sys/select.h` (`select`/`pselect` +
+    the `fd_set` macro family), `poll.h`, `sys/param.h`, and the
+    GNU `getopt_long`/`getopt_long_only` extensions —
+    `test/posix-sysmisc.c`
+14. `quick_exit`/`at_quick_exit` (`test/posix-stdlib.c`) and `perror`
+    (`test/posix-stdio.c`) — the two loose ends groups 2 and 5 left
+    open; both now closed, see those sections.
 
 Not yet reached:
 
-- `ctype.h`'s XSI `isascii`/`toascii` pair (base `is*`/`to*` is done,
-  see above)
-- `strings.h` is fully covered (folded into the string.h table above)
-- `utime.h` (`utime()`)
-- `endian.h` (mostly macros; not clause-audited)
-- `assert.h` (`assert()`/`__assert_fail`/`static_assert`)
-- `sys/select.h` — `select()` is declared but not implemented
-  (see `include/sys/select.h`'s own `undefined-ok` comment explaining
-  why); nothing to audit until it exists
-- `sys/resource.h` (`getrlimit`/`setrlimit`/`getrusage`) — only ad-hoc
-  sanity coverage exists (`test/time.c`), no clause audit
-- `sys/param.h` (BSD macros only, no functions)
-- `getopt_long`/`getopt_long_only` (GNU extensions, no POSIX page) and
-  anything else in `libgen.h`/`getopt.h` beyond what the dirent-group
-  audit above covers
+Nothing in the original priority list remains. Every header and
+function group named in the task brief now has a clause-cited row
+below, an explicit **N/A** with a stated reason, or a fenced **BUG**.
+The residual gaps are the per-section "Not reached" lists, which record
+individual *clauses* (not whole functions) that cannot be exercised on
+this platform — malloc-exhaustion ENOMEM paths, a second security
+principal to be denied as, a read-only file system, symbolic-link
+loops, and the like.
+
+For POSIX functions ntlibc does not implement **at all** (as opposed to
+implements-but-unaudited, which is what this file tracks), see
+`test/POSIX-GAP-ACCOUNTING.md`.
 
 ## string.h / strings.h
 
@@ -119,7 +145,7 @@ function, not clause-cited). New clause-cited audit: `test/posix-string.c`
 | explicit_bzero | not POSIX (glibc/BSD extension) | N/A (not POSIX.1-2017) | test/string.c (sanity only) |
 | ffs | XSI option group in strings.h | covered (sanity) — not re-audited clause-by-clause this session | test/string.c |
 | ffsl / ffsll | not POSIX (GNU extension, `ffs` widened) | N/A (not POSIX.1-2017) | test/string.c (sanity only) |
-| wcs*/wmem* (declared via string.h/wchar.h) | — | not yet reached | test/string.c (sanity only); defer clause audit to the wchar.h pass |
+| wcs*/wmem* (declared via string.h/wchar.h) | full clause audit deferred to the wchar.h pass — **that pass covered them**: `wcslen`/`wcscpy`/`wcsncpy`/`wcscat`/`wcsncat`/`wcscmp`/`wcsncmp`/`wcschr`/`wcsrchr` and `wmemchr`/`wmemcmp`/`wmemcpy`/`wmemmove`/`wmemset` all have clause-cited assertions there; the rest of the `wcs*` surface (`wcscoll`, `wcsxfrm`, `wcsdup`, `wcstok`, `wcsstr`, `wcspbrk`, `wcsspn`, `wcscspn`, `wcsnlen`, `wcpcpy`, `wcpncpy`, `wcscasecmp`, `wcsncasecmp`, `wcsftime`, `wcswidth`, the `wcstol` family, `mbsnrtowcs`, `wcsnrtombs`) is not implemented by this libc at all | covered / N/A (not implemented) — see the wchar.h section (priority 8) | test/posix-wchar.c; test/string.c (sanity only) |
 
 ### Bugs found this session
 
@@ -174,7 +200,7 @@ Pre-existing coverage checked against the spec rather than duplicated:
 | environ | reflects live additions | covered (sanity) | test/posix-stdlib.c |
 | clearenv / secure_getenv | not POSIX.1-2017 base (XSI legacy / GNU respectively) | N/A (not POSIX.1-2017 base) | — |
 | atexit / exit / _Exit / abort / quick_exit / at_quick_exit | LIFO order, abort()-under-SIGABRT-ignored still terminates, exit()/_Exit() exit-code propagation | covered elsewhere | test/misc.c |
-| quick_exit / at_quick_exit | no child-process test written | not yet reached | — |
+| quick_exit / at_quick_exit | N1570 7.22.4.7/7.22.4.3 (no POSIX.1-2017 page exists — `quick_exit.html`/`at_quick_exit.html` both 404; they are a C11 addition POSIX.1-2017 does not carry): at_quick_exit registers, quick_exit runs the registered functions in reverse order of registration and then passes control to `_Exit(status)`; at least 32 registrations must succeed; `atexit`-registered functions must **not** run | covered — child-process test now written, re-execing via `__spawn()` (the same pattern test/misc.c and test/posix-alloc.c use, since stock Wine has no `RtlCloneUserProcess` for `fork()`) | test/posix-stdlib.c `test_quick_exit` |
 | mkstemp / mkstemps / mkdtemp | template validation (EINVAL for no XXXXXX), successful creation, uniqueness | covered | test/stdlib.c |
 | mkstemp family | EINVAL for fewer than six trailing X's | covered | test/posix-stdlib.c |
 | mkostemp / mkostemps | DESCRIPTION: created "as if" by open() with O_RDWR forced regardless of access-mode bits in flags | covered | test/posix-stdlib.c |
@@ -182,7 +208,7 @@ Pre-existing coverage checked against the spec rather than duplicated:
 | realpath | NULL resolved_name allocates and returns a heap pointer; ENOENT for a missing path; drive-letter-absolute, forward-slash-normalized result | covered | test/stdlib.c |
 | realpath | RETURN VALUE: with a caller-supplied buffer, returns that same pointer | covered | test/posix-stdlib.c |
 | system | RETURN VALUE: system(NULL) always non-zero when a shell is available; wait-status decoded through WIFEXITED/WEXITSTATUS | covered | test/posix-stdlib.c |
-| system | "as if exit(127)" when the shell itself cannot be executed | not independently triggerable | test/posix-stdlib.c (comment only) |
+| system | RETURN VALUE: "as if exit(127)" when the command interpreter itself cannot be executed | covered — was recorded here as "not independently triggerable"; it **is** triggerable, and was a BUG (`__spawn()` failing outright surfaced as `system()==-1`/`ENOEXEC` rather than a `WIFEXITED`/127 status). **Fixed in 182ec5e**: the `pid < 0` branch now synthesizes a `127<<8` status | test/posix-stdlib.c |
 | a64l | RETURN VALUE 0L for empty string; digit mapping ('.'=0..'z'=63); first char is least-significant digit; only first six chars used | covered | test/stdlib.c, test/posix-stdlib.c |
 | l64a | RETURN VALUE: pointer to an empty string for 0L | covered | test/stdlib.c, test/posix-stdlib.c |
 | getsubopt | DESCRIPTION: does not modify keylistp; single-suboption case leaves \*optionp at the terminating NUL; return codes for not-matched/matched-no-value/matched-with-value | covered | test/stdlib.c, test/posix-stdlib.c |
@@ -195,9 +221,12 @@ No bugs found in stdlib.h this session; every clause checked matched
 
 ### Not reached (stdlib.h)
 
-`quick_exit`/`at_quick_exit` (implemented, no child-spawn test written);
-`system()`'s exit(127)-on-exec-failure clause (not independently
-triggerable); mkstemp/mkostemp permission bits (Wine oracle risk). The
+`system()`'s exit(127)-on-exec-failure clause (originally listed here as
+not independently triggerable; since **fixed and covered** — commit
+182ec5e makes `system()` synthesize a `127<<8` status when the shell
+cannot be executed); mkstemp/mkostemp permission bits (Wine oracle
+risk). `quick_exit`/`at_quick_exit` are no longer a gap — see their row
+above. The
 `malloc`/`calloc`/... family is covered separately, see the "Memory
 allocation, process termination, and environment" section below.
 
@@ -286,7 +315,10 @@ does. Not asserted either way since POSIX permits both.
 |---|---|---|---|
 | is*/to* family | argument must be representable as unsigned char or equal EOF; UB otherwise | covered | test/ctype.c (full 0..255 + EOF table), test/posix-misc.c (confirms plain `char` is signed here, EOF-returns-false-for-every-classifier, EOF-unchanged-by-to*()) |
 | toupper / tolower | value with no case mapping (incl. EOF) is returned unchanged | covered | test/ctype.c, test/posix-misc.c |
-| isascii / toascii | XSI extension (`_XOPEN_SOURCE`/`_GNU_SOURCE`/`_BSD_SOURCE`-gated in include/ctype.h), not POSIX.1-2017 base | not yet reached | -- |
+| isascii | `isascii.html` DESCRIPTION: "defined on all integer values" — unlike the base `is*` family, whose argument is UB outside unsigned-char/EOF; RETURN VALUE: non-zero iff `0 <= c <= 0177` | covered | test/ctype.c (-1..255 sweep), test/posix-strings.c (`test_isascii_toascii_defined_for_all_ints`: 128, 255, 256, 65536, -129, -1000, INT_MAX, INT_MIN) |
+| toascii | `toascii.html` RETURN VALUE: "shall return the value (c & 0x7f)", exactly, for every `int` including negative ones | covered | test/ctype.c, test/posix-strings.c |
+| isascii / toascii | Standards Status: **OB XSI** — obsolescent XSI extension in Issue 7 ("may be removed in a future version"), not POSIX.1-2017 base; correctly gated behind `_XOPEN_SOURCE`/`_GNU_SOURCE`/`_BSD_SOURCE` in include/ctype.h | N/A as a *base* requirement (recorded, not skipped — the clauses above are asserted anyway) | test/posix-strings.c |
+| _tolower / _toupper | `_toupper.html`: equivalent to `toupper()`/`tolower()` "except that the application shall ensure that the argument c is a lowercase [uppercase] letter" — only the in-contract inputs asserted, since behaviour outside them is unspecified by the contract itself, not by ntlibc | covered | test/posix-strings.c (`test_underscore_tolower_toupper`) |
 
 No bugs found: ntlibc's ctype tables are branch-computed, not indexed by
 a raw (possibly negative) `int`, so there is no out-of-bounds read for a
@@ -373,7 +405,7 @@ coverage: `test/stdio.c` (~430 checks).
 | scanf family | conversion table, field width, %n, assignment suppression | covered (pre-existing, ~250 lines) | test/stdio.c |
 | remove / rename | success, ENOENT | covered | test/stdio.c |
 | tmpfile / tmpnam | uniqueness, L_tmpnam buffer sizing, removed-on-close semantics | covered | test/stdio.c |
-| perror | thin wrapper (`strerror(errno)` to stderr) | not yet reached | -- |
+| perror | `perror.html` DESCRIPTION: writes `s` then ": " then the `strerror()` text then a newline to stderr, but writes no prefix when `s` is NULL or empty; messages identical to `strerror()`'s; must not change `errno` on success | covered | test/posix-stdio.c `test_perror` (stderr captured through a redirected fd: prefixed, NULL-`s`, and empty-`s` forms, plus the errno-preserved case) |
 | fileno | returns the underlying fd | covered | test/stdio.c |
 | fmemopen / open_memstream | buffer growth, NUL-termination, mode parsing | covered | test/stdio.c |
 | popen / pclose | no reachable POSIX shell semantics beyond src/stdio/misc.c's documented cmd.exe substitution | N/A (platform has no POSIX shell; divergence documented in src/stdio/misc.c) | -- |
@@ -388,8 +420,8 @@ synonym for full buffering.
 
 ### Not reached (stdio.h)
 
-`perror` (thin, low-risk wrapper); `popen`/`pclose` (N/A, no POSIX
-shell on this platform).
+`popen`/`pclose` (N/A, no POSIX shell on this platform). `perror` is no
+longer a gap — see its row above.
 
 ## unistd.h, fcntl.h, sys/stat.h (priority 6)
 
@@ -789,3 +821,213 @@ section above); the signal-catching form of `abort()`'s "unless
 SIGABRT is being caught and the handler does not return" clause (a
 real handler that `longjmp()`s out of `abort()`) — only the
 ignore-and-block override paths were exercised.
+
+## strings.h, ctype.h (XSI), assert.h, utime.h, endian.h (priority 12)
+
+New clause-cited audit: `test/posix-strings.c`. `strings.h`'s
+`strcasecmp`/`strncasecmp`/`ffs` rows live in the string.h table at the
+top of this file; this section records the four small headers audited
+alongside them. The XSI `ctype.h` rows are in the ctype.h table under
+priority 4, next to the base `is*`/`to*` family they belong with.
+
+### assert.h
+
+| function / requirement | clause checked | status | test |
+|---|---|---|---|
+| assert | `assert.html` DESCRIPTION: a false expression writes information about the failing call to stderr and calls `abort()`; the information "shall include the text of the argument, the name of the source file, the source file line number, and the name of the enclosing function" | covered | test/posix-strings.c `test_assert_message_and_death` (child re-exec'd via `__spawn()` with its stderr redirected through a real pipe; the parent reads the pipe back and checks all four elements are present, and that the child died SIGABRT-shaped). The line number is cross-checked against an independent `__LINE__` expansion at the *same* source position, so no manually-counted offset can drift. |
+| assert | `assert.html` DESCRIPTION: "shall expand to a void expression" | covered | test/posix-strings.c `test_assert_is_a_void_expression` (comma operand, explicit `(void)` cast, `for`-loop clause, `?:` operand) |
+| assert / NDEBUG | `basedefs/assert.h.html` DESCRIPTION: with NDEBUG defined before inclusion, `assert()` is `((void)0)`; "the `assert()` macro shall be redefined according to the current state of NDEBUG **each time** `<assert.h>` is included" | covered | test/posix-strings.c (`test_assert_active_before_ndebug` / `test_assert_inactive_under_ndebug` / `test_assert_active_after_ndebug_undef`: one TU toggles NDEBUG and re-includes twice, proving active → inactive → active, via a side effect *inside* the asserted expression — a suppressed `assert()` must not evaluate its argument) |
+| assert | `basedefs/assert.h.html` DESCRIPTION: "shall be implemented as a macro, not as a function" | covered (compile-time) | test/posix-strings.c (`#ifndef assert` / `#error`, placed after the NDEBUG toggling so it also pins that the final re-include restored the macro) |
+| static_assert | **Not a POSIX.1-2017 requirement**: `basedefs/assert.h.html` names exactly one thing the header shall define, `assert()`. `static_assert` is ISO C11 (N1570 7.2p3). include/assert.h gates it on `__STDC_VERSION__ >= 201112L`, so under this project's `-std=c99` build it is correctly absent rather than leaking a non-reserved identifier | N/A (C11, not POSIX.1-2017) — asserted anyway, in both directions | test/posix-strings.c `test_assert_h_defines_only_assert` |
+| __assert_fail | ntlibc-internal (the out-of-line target `assert()` expands to); no POSIX page. Its observable contract is `assert()`'s, and is covered by the row above | N/A (internal, not POSIX) | test/posix-strings.c (exercised through `assert()`) |
+
+### utime.h
+
+| function / requirement | clause checked | status | test |
+|---|---|---|---|
+| `struct utimbuf` | `basedefs/utime.h.html`: `time_t actime`, `time_t modtime`, "measured in seconds since the Epoch" | covered | test/unistd.c (both members set to distinct known values and read back through `stat()` as `st_atime`/`st_mtime`) |
+| utime | DESCRIPTION: sets the access and modification times of the named file | covered | test/unistd.c |
+| utime | DESCRIPTION: "If times is a null pointer, the access and modification times of the file shall be set to the current time" | covered | test/posix-strings.c `test_utime_null_sets_current_time` (both times first driven to 2001, then bracketed against `time(0)` readings taken either side of the call — checked through `utime()` itself, not inferred from `utimensat(..., NULL, 0)`, which is a separate entry point) |
+| utime | DESCRIPTION: "shall mark the last file status change timestamp for update" | covered | test/posix-strings.c `test_utime_marks_ctime` (`st_ctim` must advance across the call at full timespec resolution, and must *not* follow the 2001 access/modification times backwards) |
+| utime | RETURN VALUE: 0 on success, -1 with errno on failure | covered | test/posix-strings.c `test_utime_return_value` |
+| utime | ERRORS [ENOENT]: "A component of path does not name an existing file **or path is an empty string**" | covered (both halves) | test/posix-strings.c |
+| utime | ERRORS [ENOTDIR], trailing-slash half | covered | test/posix-strings.c (goes through `reject_if_not_dir()` in src/internal/path.c) |
+| utime | ERRORS [ENOTDIR], path-prefix half | **BUG (fenced)** — see "Bugs found" below | test/posix-strings.c `test_utime_enotdir_path_prefix` |
+| utime | ERRORS [ENAMETOOLONG] (shall-fail, component longer than {NAME_MAX}) | **BUG (fenced)** — see "Bugs found" below | test/posix-strings.c `test_utime_enametoolong` |
+| utime | ERRORS [EACCES], [EPERM] | N/A — both need a second security principal to be denied *as*; ntlibc models exactly one user (`geteuid()` is a hardcoded 1000) | -- |
+| utime | ERRORS [EROFS] | N/A — needs a read-only file system the harness cannot mount | -- |
+| utime | ERRORS [ELOOP] (both the shall-fail and may-fail forms) | N/A — needs a symbolic-link loop, and creating any symlink on NT requires `SeCreateSymbolicLinkPrivilege`, which the CI accounts do not hold (same limitation test/posix-glob.c documents) | -- |
+| utime / `<utime.h>` | Standards Status: the function and the whole header are marked **obsolescent** in Issue 7 ("may be removed in a future version"); `utimensat()` is the replacement, and is audited under the unistd.h group | recorded, not a testable clause | -- |
+
+### endian.h
+
+**N/A as a whole — `endian.h` is not a POSIX header.** Verified rather
+than assumed: it is absent from the POSIX.1-2017 base-definitions
+header index (`idx/head.html`, 91 headers), and neither
+`basedefs/endian.h.html` nor `functions/endian.h.html` exists. It is a
+glibc/BSD extension ntlibc ships for source compatibility, correctly
+gated behind `_GNU_SOURCE`/`_BSD_SOURCE` in include/endian.h. There is
+therefore no clause to audit — a clause-by-clause pass here would be
+inventing requirements, which is exactly the inflation this ledger is
+supposed to avoid.
+
+Tested for internal self-consistency instead, which is the only honest
+thing to assert: `__BYTE_ORDER` names a real endianness and `BYTE_ORDER`
+agrees with it; `htobe16`/`htobe32`/`htobe64` actually swap; the `htole*`
+family is the identity on this little-endian-only target; and the
+`htobe*`/`be*toh` pairs are inverses. (`test/posix-strings.c`
+`test_endian_internal_consistency`.)
+
+## sys/resource.h, sys/select.h, poll.h, sys/param.h, getopt_long (priority 13)
+
+New clause-cited audit: `test/posix-sysmisc.c` (1026 lines). This
+section supersedes the stale "not yet reached" entries this file used to
+carry for all five.
+
+**The `sys/select.h` entry was stale.** It said `select()` was "declared
+but not implemented ... nothing to audit until it exists". `select()`
+and `pselect()` are both implemented (`src/select/select.c`, which
+carries the design writeup), `poll()` too (`src/select/poll.c`), and
+include/sys/select.h's own `undefined-ok` marker was removed when they
+landed. All three are audited below.
+
+### sys/resource.h
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| getrlimit | RETURN VALUE 0 + a filled `struct rlimit`; the resources NT can genuinely report (RLIMIT_NOFILE, RLIMIT_NPROC) report real values, the rest `RLIM_INFINITY` — which `getrlimit.html` explicitly permits for a resource with no limit | covered | test/posix-sysmisc.c `test_getrlimit` |
+| getrlimit | ERRORS [EINVAL] for an unrecognized `resource` | covered | test/posix-sysmisc.c |
+| setrlimit | DESCRIPTION/RETURN VALUE for the resources NT has a real enforcement primitive for — RLIMIT_NPROC, RLIMIT_CPU, RLIMIT_AS, RLIMIT_DATA, via a job object the process creates and assigns itself to. Round-trips through `getrlimit()` | covered — was a gap (declared in the header, **defined nowhere in `src/`**: calling it was a link error, not a runtime ENOSYS). Now defined, `src/misc/resource.c`, commit ec25e54 | test/posix-sysmisc.c `test_setrlimit_enforceable` |
+| setrlimit | ERRORS [EINVAL] (`rlim_cur` exceeds `rlim_max`), [EPERM] (raising the hard limit without privilege) | covered | test/posix-sysmisc.c |
+| setrlimit | DESCRIPTION for RLIMIT_NOFILE / RLIMIT_STACK / RLIMIT_FSIZE / RLIMIT_CORE / RLIMIT_RSS / RLIMIT_MEMLOCK — the new limit must actually *constrain* resource use | N/A (fenced, with the NT mechanism ruled out one resource at a time: FD_MAX is a compile-time array bound, NT fixes stack reservation at `NtCreateThreadEx()` time, there is no per-process max-file-size / core-dump / RSS / mlock-budget primitive at all). `setrlimit()` accordingly **rejects** a request to lower one of these with EINVAL rather than accepting it and silently not enforcing it | test/posix-sysmisc.c `test_setrlimit_unenforceable` (fenced `#if 0 /* N/A: ... */`) |
+| getrusage | RETURN VALUE 0; `ru_utime`/`ru_stime` are real `struct timeval`s (`tv_usec` in [0,1e6)), read from `NtQueryInformationProcess(ProcessTimes)` | covered | test/posix-sysmisc.c `test_getrusage` |
+| getrusage | ERRORS [EINVAL] for an invalid `who` | covered | test/posix-sysmisc.c |
+| getrusage | RUSAGE_CHILDREN: "resources used by ... terminated and waited-for child processes" — a real accumulator, not a hardcoded zero | covered | test/posix-sysmisc.c (re-execs a short-lived child via `__spawn()`, reaps it, requires the running total to be non-decreasing across it); also test/exec.c, test/posix-grp.c, test/process-win.c |
+| getrusage | RUSAGE_THREAD | N/A (Linux/BSD extension, not POSIX.1-2017) — treated as an alias for RUSAGE_SELF since NT gives ntlibc no per-thread accounting; asserted only not to error | test/posix-sysmisc.c |
+| getpriority / setpriority | POSIX.1-2017 **base** functions (moved from XSI to BASE in Issue 5, `getpriority.html` "Standards Status"). Nice range `[-NZERO, NZERO-1]`; PRIO_PROCESS / PRIO_PGRP / PRIO_USER; the "set errno to 0 first, since -1 is a legal return" protocol; a `setpriority()` raise round-trips through `getpriority()` | covered — were entirely absent before commit 11426a7; now `src/misc/resource.c`, mapped onto `NtSetInformationProcess(ProcessPriorityClass)` | test/posix-sysmisc.c `test_getpriority_setpriority` |
+| getpriority / setpriority | ERRORS [ESRCH] (no such process), [EINVAL] (unrecognized `which`), [EACCES] (unprivileged request to *lower* the nice value) | covered | test/posix-sysmisc.c |
+| setpriority | ERRORS [EPERM] (a process the caller does not own) | N/A — needs a second security principal; ntlibc models one user and one process group (see include/sys/resource.h's PRIO_PGRP/PRIO_USER note) | test/posix-sysmisc.c (recorded in a comment, not asserted) |
+
+The nice↔NT mapping is lossy (20 nice values onto 3 priority classes),
+and `getpriority()` on a *foreign* process is explicitly approximate —
+both documented at length in include/sys/resource.h rather than papered
+over. Every `setpriority()` this process issues against itself is
+remembered verbatim, so the self round-trip above is exact.
+
+### sys/select.h and poll.h
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| select | RETURN VALUE: "the total number of bits set in the bit masks" | covered | test/posix-sysmisc.c `test_select_ready_count` |
+| select | DESCRIPTION: a zero-valued timeout polls and returns immediately | covered | test/posix-sysmisc.c `test_select_zero_timeout_polls` |
+| select | ERRORS [EBADF] (a set contains a descriptor that is not open), [EINVAL] (`nfds` negative or > FD_SETSIZE, invalid timeout) | covered | test/posix-sysmisc.c `test_select_errors` |
+| pselect | DESCRIPTION: differs from `select()` only in the `struct timespec` timeout and the `sigmask` argument | covered | test/posix-sysmisc.c `test_pselect_timespec_and_mask` |
+| pselect | the atomic sigmask swap's *observable* difference from a `sigprocmask()`+`select()` pair | N/A — there is no asynchronous signal delivery on this platform (every signal is delivered synchronously, `src/signal/signal.c`), so the atomicity the clause exists to guarantee is vacuous here | test/posix-sysmisc.c (comment) |
+| FD_ZERO / FD_SET / FD_CLR / FD_ISSET / FD_SETSIZE | `basedefs/sys_select.h.html` macro semantics | covered | test/posix-sysmisc.c `test_fd_macros` (pre-dates `select()` existing) |
+| poll | RETURN VALUE: "the number of pollfd structures that have selected events"; POLLIN/POLLOUT event bits | covered | test/posix-sysmisc.c `test_poll_ready_count` |
+| poll | DESCRIPTION: zero timeout polls; a negative `fd` is ignored (and `revents` zeroed); POLLNVAL for an invalid open descriptor | covered | test/posix-sysmisc.c `test_poll_zero_timeout_polls`, `test_poll_negative_fd_ignored`, `test_poll_nval` |
+
+`src/select/select.c`'s banner carries the design rationale — the
+wait-vs-poll split across this library's three descriptor shapes
+(pipe / console / regular file), the latency-vs-CPU trade-off of the
+20ms pipe-poll interval, and exact timeout semantics. `poll()` shares
+that file's readiness-probe and wait primitives.
+
+### sys/param.h
+
+**N/A — BSD macros only, no functions, and not a POSIX header.**
+Exercised for internal consistency only (`test/posix-sysmisc.c`
+`test_sys_param`), the same treatment `endian.h` gets above and for the
+same reason.
+
+### getopt_long / getopt_long_only
+
+**N/A — GNU extensions, no POSIX page.** Recorded explicitly here so
+nobody re-derives it: `getopt.html` specifies `getopt()`, `optarg`,
+`opterr`, `optind` and `optopt` and nothing else; there is no
+`functions/getopt_long.html`, and `<getopt.h>` is not in the
+POSIX.1-2017 header index at all. The POSIX-conformance status of these
+two is therefore settled and needs no further work.
+
+They are nevertheless implemented (`src/misc/getopt_long.c`) and heavily
+used, so `test/posix-sysmisc.c` audits them against the GNU
+documentation cited inline instead of against POSIX: unambiguous
+abbreviation matching (`test_getopt_long_abbrev`), all three argument
+forms — `--opt=arg`, `--opt arg`, and an optional argument's
+attached-only rule (`test_getopt_long_arg_forms`), the `flag`/`val`
+indirection (`test_getopt_long_flag`), `getopt_long_only`'s single-dash
+long-option acceptance (`test_getopt_long_only`), `longindex`
+(`test_getopt_long_index`), and rescanning after an `optind` reset
+(`test_getopt_long_reset`).
+
+### Bugs found (priority 12/13 groups)
+
+Two, both found while auditing `utime.html`'s ERRORS list, both fenced
+in `test/posix-strings.c` and **neither fixed** — a fix belongs in a
+change of its own, not in an audit pass.
+
+Neither is specific to `utime()`. Both were probed across the library
+before being written up, and `open()`, `stat()`, `access()`, `unlink()`,
+`mkdir()` and `utimensat()` reproduce both; so each is **one** defect in
+the shared path layer (`src/internal/path.c`), not seven.
+
+1. **A path prefix component that names an existing regular file gives
+   `ENOENT`, not `ENOTDIR`.** `utime.html` (and `open.html`,
+   `stat.html`, `access.html`, `unlink.html`, `mkdir.html`,
+   `chdir.html`, … — the clause is boilerplate across the whole
+   file-system surface) lists as *shall fail*: "[ENOTDIR] A component of
+   the path prefix names an existing file that is neither a directory
+   nor a symbolic link to a directory."
+
+   Mechanism: NT's object manager does not distinguish "a directory in
+   the path prefix does not exist" from "a component of the path prefix
+   exists but is a file" — it answers both with
+   `STATUS_OBJECT_PATH_NOT_FOUND`, which `src/internal/errno.c` maps to
+   `ENOENT` (correctly, for the first of the two). POSIX requires them
+   told apart.
+
+   Implementable, not an NT limitation: `src/internal/path.c`'s
+   `reject_if_not_dir()` already does exactly this kind of extra
+   `NtQueryAttributesFile()` disambiguation for the *trailing-slash*
+   half of the very same [ENOTDIR] clause (which is why that half
+   passes). The path-prefix half needs the same treatment — cheapest on
+   the `STATUS_OBJECT_PATH_NOT_FOUND` error path only, which is the
+   shape `renameat()` already uses to disambiguate
+   `STATUS_ACCESS_DENIED` into EISDIR/ENOTEMPTY (commit 3c606a7).
+
+   Fenced test: `test_utime_enotdir_path_prefix`.
+
+2. **An over-long pathname gives `ENOENT`, not `ENAMETOOLONG`.**
+   `utime.html` lists as *shall fail*: "[ENAMETOOLONG] The length of a
+   component of a pathname is longer than {NAME_MAX}." (The {PATH_MAX}
+   form is only *may fail*; the 40000-byte single component the test
+   uses exceeds both, so the shall-fail clause is the one that applies.)
+
+   Mechanism: `src/internal/path.c`'s `__ntpath()` funnels every
+   `RtlDosPathNameToNtPathName_U_WithStatus()` failure other than
+   `STATUS_NO_MEMORY` into a single `errno = ENOENT`. The correct check
+   exists in the same file — but only in `__ntpath_at()`'s
+   relative-to-a-dirfd branch (`n > __US_MAX_WCHARS`), which an
+   `AT_FDCWD` or absolute path never reaches, because `__ntpath_at()`
+   forwards both straight to `__ntpath()`. Hoisting that check into
+   `__ntpath()` fixes every caller at once.
+
+   `chdir()` is the **one** caller that reports this correctly, and only
+   because `src/unistd/chdir.c` carries its own copy of the length
+   check. `test/unistd.c` pins `chdir()` and `symlink()` — which is
+   precisely why the gap in every other caller went unnoticed for so
+   long. A cautionary case for this ledger: coverage of one caller of a
+   shared layer is not coverage of the layer.
+
+   Fenced test: `test_utime_enametoolong`.
+
+### Not reached (priority 12/13 groups)
+
+`utime()`'s [EACCES]/[EPERM]/[EROFS]/[ELOOP] paths and
+`setpriority()`'s [EPERM] path (all need a second security principal, a
+read-only mount, or symlink-creation privilege — see the rows above);
+`setrlimit()`'s six unenforceable resources (fenced N/A, with the NT
+mechanism ruled out one at a time); `pselect()`'s sigmask atomicity
+(vacuous without asynchronous signal delivery). Real (non-Wine) Windows
+remains the authority for all of the above — the CI `windows-test` legs,
+not a Wine run, are the verdict.
