@@ -1033,6 +1033,191 @@ static void test_sigaltstack_disabled(void)
 	CHECK((oss.ss_flags & SS_DISABLE) != 0);
 }
 
+/* sigset.html (XSI, obsolescent) and siginterrupt.html (XSI,
+ * obsolescent) -- the five <signal.h> names test/POSIX-GAP-ACCOUNTING.md
+ * lists as never asserted anywhere in test/*.c.
+ *
+ * Pure library bookkeeping over this file's own signal-mask tables, so
+ * Wine is a sound oracle for all of it; nothing here touches the
+ * filesystem, a process or a handle.
+ *
+ * sigset.html RETURN VALUE: sighold()/sigrelse() "shall return 0 upon
+ * successful completion; otherwise, -1 shall be returned and errno set";
+ * sigset() returns "SIG_HOLD if the signal had been blocked and the
+ * signal's previous disposition if it had not been blocked", or SIG_ERR
+ * on failure; sigpause() "shall suspend execution of the thread until a
+ * signal is received, whereupon it shall return -1 and set errno to
+ * [EINTR]".  ERRORS [EINVAL]: "The sig argument is an illegal signal
+ * number", for all of them.
+ *
+ * N/A, with the reason: sigpause()'s "suspend execution ... until a
+ * signal is received" half.  src/signal/signal.c's header comment is the
+ * governing fact -- there is no asynchronous delivery on this platform,
+ * so a call that genuinely suspended could only ever hang.  ntlibc
+ * returns the -1/[EINTR] the page requires *of the wakeup* immediately;
+ * the suspension itself has nothing that could ever end it, so there is
+ * nothing to observe and nothing a test could assert without deadlocking
+ * the suite.  Same reasoning the file header already gives for
+ * sigwait()/sigtimedwait()/sigsuspend(). */
+static void hold_handler(int sig) { (void)sig; }
+
+static void test_sighold_sigrelse(void)
+{
+	sigset_t cur;
+
+	/* start from a known state */
+	sigemptyset(&cur);
+	CHECK(sigprocmask(SIG_SETMASK, &cur, NULL) == 0);
+
+	CHECK(sighold(SIGUSR1) == 0);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 1);
+	/* only that one signal, not the whole mask */
+	CHECK(sigismember(&cur, SIGUSR2) == 0);
+
+	/* idempotent: holding an already-held signal still succeeds */
+	CHECK(sighold(SIGUSR1) == 0);
+
+	CHECK(sigrelse(SIGUSR1) == 0);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 0);
+	/* releasing an already-released signal still succeeds */
+	CHECK(sigrelse(SIGUSR1) == 0);
+
+#if 0	/* BUG: sighold()/sigrelse() report success for an illegal signal
+	 * number.  sigset.html ERRORS lists as shall-fail: "[EINVAL] The sig
+	 * argument is an illegal signal number."
+	 *
+	 * Mechanism: src/signal/signal.c:309-310 are
+	 *     int sighold(int sig)  { sigset_t s; sigemptyset(&s);
+	 *         sigaddset(&s, sig); return sigprocmask(SIG_BLOCK, &s, 0); }
+	 *     int sigrelse(int sig) { ... sigprocmask(SIG_UNBLOCK, &s, 0); }
+	 * -- and sigaddset() *does* validate (line 275: "if (!sig_valid(sig))
+	 * { errno = EINVAL; return -1; }"), but neither wrapper looks at its
+	 * return value.  The bad bit is simply never set in the local set,
+	 * sigprocmask() is then handed an empty mask, succeeds, and returns
+	 * 0 -- so the caller is told the signal was held when nothing
+	 * happened at all, which is the worst of the three possible
+	 * outcomes.  Probed on this tree: sighold(-1) and sighold(NSIG) both
+	 * return 0.  Re-enable when both wrappers propagate sigaddset()'s
+	 * failure. */
+	errno = 0;
+	CHECK(sighold(-1) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(sighold(NSIG) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(sigrelse(-1) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(sigrelse(NSIG) == -1 && errno == EINVAL);
+#endif
+}
+
+static void test_sigset(void)
+{
+	void (*prev)(int);
+	sigset_t cur;
+
+	sigemptyset(&cur);
+	CHECK(sigprocmask(SIG_SETMASK, &cur, NULL) == 0);
+	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
+
+	/* "the signal's previous disposition if it had not been blocked" */
+	prev = sigset(SIGUSR1, hold_handler);
+	CHECK(prev == SIG_DFL);
+	prev = sigset(SIGUSR1, SIG_IGN);
+	CHECK(prev == hold_handler);
+	prev = sigset(SIGUSR1, SIG_DFL);
+	CHECK(prev == SIG_IGN);
+
+	/* the disposition really is installed: signal() reads it back */
+	CHECK(sigset(SIGUSR1, hold_handler) == SIG_DFL);
+	CHECK(signal(SIGUSR1, SIG_DFL) == hold_handler);
+
+	/* [EINVAL] "The sig argument is an illegal signal number", and
+	 * "an attempt is made to catch a signal that cannot be caught". */
+	errno = 0;
+	CHECK(sigset(-1, hold_handler) == SIG_ERR && errno == EINVAL);
+	errno = 0;
+	CHECK(sigset(NSIG, hold_handler) == SIG_ERR && errno == EINVAL);
+	errno = 0;
+	CHECK(sigset(SIGKILL, hold_handler) == SIG_ERR && errno == EINVAL);
+	errno = 0;
+	CHECK(sigset(SIGSTOP, hold_handler) == SIG_ERR && errno == EINVAL);
+
+#if 0	/* BUG: sigset() cannot report SIG_HOLD, and <signal.h> does not
+	 * even define it.  sigset.html RETURN VALUE: "Upon successful
+	 * completion, sigset() shall return SIG_HOLD if the signal had been
+	 * blocked and the signal's previous disposition if it had not been
+	 * blocked."  It also says the call "shall remove sig from the
+	 * calling process' signal mask" -- the SIG_HOLD return is how a
+	 * caller learns that just happened.
+	 *
+	 * Two linked defects, one mechanism.  include/signal.h declares
+	 * sigset() (line 260) but never defines SIG_HOLD, which
+	 * basedefs/signal.h.html requires alongside it -- so the constant
+	 * this clause is written in terms of does not exist, and no
+	 * conforming caller can even spell the comparison.  And
+	 * src/signal/signal.c's body is
+	 *     void (*sigset(int sig, void (*h)(int)))(int)
+	 *     { return signal(sig, h); }
+	 * which neither consults the mask nor unblocks sig, so it returns
+	 * the previous disposition in the blocked case too -- indis-
+	 * tinguishable, to the caller, from the signal never having been
+	 * held.  Re-enable once <signal.h> defines SIG_HOLD and sigset()
+	 * unblocks sig and returns SIG_HOLD when it was blocked. */
+	CHECK(sighold(SIGUSR1) == 0);
+	CHECK(sigset(SIGUSR1, hold_handler) == SIG_HOLD);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 0);	/* "shall remove sig from ... mask" */
+#endif
+
+	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
+}
+
+static void test_sigpause(void)
+{
+	/* "whereupon it shall return -1 and set errno to [EINTR]".  See the
+	 * banner above for why only the wakeup half is observable here. */
+	errno = 0;
+	CHECK(sigpause(SIGUSR1) == -1 && errno == EINTR);
+}
+
+static void test_siginterrupt(void)
+{
+	/* siginterrupt.html RETURN VALUE: "Upon successful completion,
+	 * siginterrupt() shall return 0".  Both flag values are accepted
+	 * for a valid signal. */
+	CHECK(siginterrupt(SIGUSR1, 0) == 0);
+	CHECK(siginterrupt(SIGUSR1, 1) == 0);
+	CHECK(siginterrupt(SIGINT, 1) == 0);
+
+	/* The effect siginterrupt() names -- clearing/setting SA_RESTART --
+	 * is N/A here and this file's header already says why: ntlibc never
+	 * suspends a thread mid-call waiting on a signal, so there is no
+	 * restart-vs-EINTR decision for the flag to steer.  What is *not*
+	 * N/A is the argument check below. */
+
+#if 0	/* BUG: siginterrupt() accepts any signal number, valid or not.
+	 * siginterrupt.html ERRORS lists as shall-fail: "[EINVAL] The sig
+	 * argument is not a valid signal number."
+	 *
+	 * Mechanism: src/signal/signal.c:305 is
+	 *     int siginterrupt(int sig, int flag)
+	 *     { (void)sig; (void)flag; return 0; }
+	 * -- it discards sig without ever passing it through this file's own
+	 * sig_valid() (which signal(), sigaction(), sighold() and sigrelse()
+	 * all do use), so an out-of-range signal number reports success.
+	 * That the flag itself is a documented no-op here does not excuse
+	 * the argument check: [EINVAL] is a shall-fail clause about the
+	 * argument, not about the effect.  Re-enable when siginterrupt()
+	 * validates sig. */
+	errno = 0;
+	CHECK(siginterrupt(-1, 1) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(siginterrupt(NSIG, 1) == -1 && errno == EINVAL);
+#endif
+}
+
 int main(int argc, char **argv)
 {
 	self = argv[0];
@@ -1203,6 +1388,10 @@ int main(int argc, char **argv)
 	test_wait4_sanity();
 	test_killpg();
 	test_sigaltstack_disabled();
+	test_sighold_sigrelse();
+	test_sigset();
+	test_sigpause();
+	test_siginterrupt();
 
 	if (!fails) printf("posix-signal: all tests passed\n");
 	return fails != 0;

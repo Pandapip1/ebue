@@ -16,6 +16,7 @@
 #include <locale.h>
 #include <libgen.h>
 #include <setjmp.h>
+#include <signal.h>
 #include <getopt.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -521,6 +522,53 @@ static void test_setjmp(void)
 	r = sigsetjmp(sjb, 0);
 	if (r == 0) siglongjmp(sjb, 0);
 	CHECK(r == 1);
+
+	/* _setjmp/_longjmp (XSI, obsolescent).
+	 * https://pubs.opengroup.org/onlinepubs/9699919799/functions/_longjmp.html
+	 * DESCRIPTION: they "shall be equivalent to longjmp() and setjmp(),
+	 * respectively, with the additional restriction that _longjmp() and
+	 * _setjmp() shall not manipulate the signal mask"; RETURN VALUE
+	 * defers to longjmp/setjmp; ERRORS: "No errors are defined."  These
+	 * two had no assertion anywhere in test/*.c before this
+	 * (test/POSIX-GAP-ACCOUNTING.md's <setjmp.h> pair), even though
+	 * src/setjmp/{i386,x86_64}/setjmp.S and longjmp.S both export the
+	 * underscored names as aliases of the plain ones.
+	 *
+	 * The mask-restriction clause is N/A here for the same reason
+	 * sigsetjmp()'s savemask is just above: nothing in
+	 * src/setjmp (either arch) saves or restores a signal mask at all, so
+	 * "does not manipulate the mask" is trivially and unobservably true
+	 * -- there is no manipulation anywhere to be absent.  What is
+	 * observable is the value contract, asserted the same way. */
+	for (i = 1; i <= 5; i++) {
+		r = _setjmp(jb);
+		if (r == 0) _longjmp(jb, i);
+		CHECK(r == i);
+	}
+	r = _setjmp(jb);
+	if (r == 0) _longjmp(jb, 0);
+	CHECK(r == 1);
+
+	/* the mask really is untouched across the pair (vacuously so, per
+	 * the N/A above, but a regression net if a mask is ever added) */
+	{
+		sigset_t before, after;
+		sigemptyset(&before);
+		sigaddset(&before, SIGUSR1);
+		CHECK(sigprocmask(SIG_SETMASK, &before, NULL) == 0);
+		r = _setjmp(jb);
+		if (r == 0) {
+			sigset_t none;
+			sigemptyset(&none);
+			CHECK(sigprocmask(SIG_SETMASK, &none, NULL) == 0);
+			_longjmp(jb, 3);
+		}
+		CHECK(r == 3);
+		CHECK(sigprocmask(SIG_BLOCK, NULL, &after) == 0);
+		CHECK(sigismember(&after, SIGUSR1) == 0);
+		sigemptyset(&before);
+		CHECK(sigprocmask(SIG_SETMASK, &before, NULL) == 0);
+	}
 }
 
 /* ------------------------------------------------------------------ *

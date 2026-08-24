@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -675,6 +676,243 @@ static void test_v_forms(const char *name)
 	CHECK(fclose(f) == 0);
 }
 
+/* getc_unlocked.html.  DESCRIPTION: the _unlocked forms "shall be
+ * functionally equivalent to the original versions, with the exception
+ * that they are not required to be implemented in a fully thread-safe
+ * manner", and "shall be thread-safe when used within a scope protected
+ * by flockfile() ... and funlockfile()".  RETURN VALUE and ERRORS both
+ * defer to getc()/getchar()/putc()/putchar().
+ *
+ * test_putc_family() and test_getchar() above already reach
+ * putc_unlocked, putchar_unlocked and getchar_unlocked; getc_unlocked
+ * was the one name in the family nothing in the tree had ever called
+ * (test/POSIX-GAP-ACCOUNTING.md's <stdio.h> pair).  Asserted against
+ * getc() on the same stream, inside a flockfile()/funlockfile() scope as
+ * the page prescribes.  Pure library behaviour: Wine is a sound oracle.
+ *
+ * N/A, with the reason: the thread-safety clause itself.  ntlibc has no
+ * threading to speak of (src/signal/signal.c's banner and the FILE
+ * locking in src/stdio/file.c say as much), so "not required to be
+ * thread-safe" and "thread-safe under flockfile()" have no observable
+ * difference to test between. */
+static void test_getc_unlocked(const char *name)
+{
+	FILE *f = fopen(name, "wb");
+	int c;
+
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fwrite("Ab\200", 1, 3, f) == 3);
+	CHECK(fclose(f) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	flockfile(f);
+	CHECK(getc_unlocked(f) == 'A');
+	/* functionally equivalent to getc(): same stream, same position */
+	CHECK(getc(f) == 'b');
+	/* unsigned-char conversion, not sign extension */
+	CHECK(getc_unlocked(f) == 0x80);
+	c = getc_unlocked(f);
+	CHECK(c == EOF);
+	CHECK(feof(f));
+	funlockfile(f);
+	CHECK(fclose(f) == 0);
+}
+
+/* tempnam.html (XSI, obsolescent).  DESCRIPTION: "shall generate a
+ * pathname that may be used for a temporary file"; if dir "is a null
+ * pointer or points to a string which is not a pathname for an
+ * appropriate directory, the path prefix defined as P_tmpdir in the
+ * <stdio.h> header shall be used"; pfx is "a string of up to five bytes
+ * to be used as the beginning of the filename".  RETURN VALUE: "Upon
+ * successful completion, tempnam() shall allocate space for a string,
+ * put the generated pathname in that space, and return a pointer to it.
+ * The pointer shall be suitable for use in a subsequent call to
+ * free()."  ERRORS: "[ENOMEM] Insufficient storage space is available."
+ *
+ * That the result must be free()-able is the clause with teeth here, and
+ * it is checked for real: tools/asan-build.sh runs every test under
+ * LeakSanitizer, so a returned pointer that is not a live malloc block
+ * fails the asan gate rather than passing quietly.  This is the same
+ * mechanism that caught the vdprintf() leak the last never-asserted
+ * sweep turned up.
+ *
+ * N/A, with the reason: [ENOMEM].  Reaching it needs allocator
+ * exhaustion, which this suite has no way to induce -- the ledger
+ * already treats malloc-exhaustion paths that way throughout.
+ *
+ * Filesystem-adjacent (it names a path under the temp directory and
+ * src/stdio/misc.c reaches mkstemp() to pick one), so real-Windows CI
+ * is the authority; Wine agreeing is weak evidence. */
+static void test_tempnam(void)
+{
+	char *a, *b;
+	struct stat st;
+
+	a = tempnam(".", "tn");
+	CHECK(a != 0);
+	if (a) {
+		/* honours dir and pfx */
+		CHECK(!strncmp(a, "./tn", 4));
+		/* "a pathname that may be used for a temporary file": the name
+		 * must not already be taken, or the caller's create races. */
+		CHECK(stat(a, &st) == -1);
+		/* usable as promised */
+		{
+			FILE *f = fopen(a, "wb");
+			CHECK(f != 0);
+			if (f) {
+				CHECK(fputs("x", f) != EOF);
+				CHECK(fclose(f) == 0);
+				CHECK(stat(a, &st) == 0);
+				CHECK(remove(a) == 0);
+			}
+		}
+	}
+
+	b = tempnam(".", "tn");
+	CHECK(b != 0);
+	/* two calls must not hand out the same name */
+	if (a && b) CHECK(strcmp(a, b) != 0);
+	if (b) CHECK(stat(b, &st) == -1);
+
+	/* a null dir falls back to P_tmpdir (or an implementation-defined
+	 * directory); only that a pathname comes back at all is portable. */
+	free(a);
+	free(b);
+	a = tempnam(NULL, "tn");
+	CHECK(a != 0);
+	if (a) {
+		CHECK(strlen(a) > 0);
+		CHECK(stat(a, &st) == -1);
+	}
+	/* "suitable for use in a subsequent call to free()" -- and under
+	 * tools/asan-build.sh's LeakSanitizer, not freeing would fail. */
+	free(a);
+
+	/* a null pfx is allowed too */
+	b = tempnam(".", NULL);
+	CHECK(b != 0);
+	if (b) CHECK(stat(b, &st) == -1);
+	free(b);
+}
+
+/* vprintf.html / vscanf.html, and the <stdarg.h> machinery they are
+ * defined in terms of:
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/vprintf.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/vscanf.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/va_arg.html
+ *
+ * vprintf.html DESCRIPTION: the v-forms "shall be equivalent to
+ * printf() ... respectively, except that instead of being called with a
+ * variable number of arguments, they are called with an argument list";
+ * RETURN VALUE: "the number of bytes transmitted".  vscanf.html: the
+ * same equivalence to scanf(), returning "the number of successfully
+ * matched and assigned input items".  va_arg.html DESCRIPTION: va_copy
+ * "initializes dest as a copy of src, as if the va_start() macro had
+ * been applied to dest followed by the same sequence of uses of the
+ * va_arg() macro as had previously been used to reach the present state
+ * of src".
+ *
+ * test_v_forms() above already reaches vfprintf/vsnprintf/vsprintf/
+ * vsscanf/vfscanf/vdprintf and, through them, va_start/va_end.  vprintf,
+ * vscanf, va_arg and va_copy were the four names left with no assertion
+ * anywhere (test/POSIX-GAP-ACCOUNTING.md's <stdarg.h> group).  vprintf
+ * and vscanf are the stdout/stdin forms, so they need those two streams
+ * redirected -- fd-level for stdout (dup/dup2 around the call, so the
+ * stream object survives), freopen() for stdin, the same way
+ * test_getchar() does it.
+ *
+ * Pure C library over a redirected fd: Wine is a sound oracle. */
+static int via_vprintf(const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vprintf(fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static int via_vscanf(const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vscanf(fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+/* Walks ap with va_arg, then walks a va_copy of it from the same point
+ * and checks the copy yields the identical sequence -- the whole of what
+ * va_copy promises.  The original is consumed first so that, if va_copy
+ * silently aliased rather than copied, the second walk would read past
+ * the end instead of repeating. */
+static int va_copy_sees_same(int n, ...)
+{
+	va_list ap, ap2;
+	int first[8], second[8], i, ok = 1;
+
+	if (n > 8) return 0;
+	va_start(ap, n);
+	va_copy(ap2, ap);
+	for (i = 0; i < n; i++) first[i] = va_arg(ap, int);
+	va_end(ap);
+	for (i = 0; i < n; i++) second[i] = va_arg(ap2, int);
+	va_end(ap2);
+	for (i = 0; i < n; i++) if (first[i] != second[i]) ok = 0;
+	for (i = 0; i < n; i++) if (first[i] != i * 11 + 1) ok = 0;
+	return ok;
+}
+
+static void test_vprintf_vscanf(const char *name)
+{
+	char buf[64];
+	int saved, fd, got = 0, r;
+	FILE *f;
+
+	/* va_arg/va_copy first: no I/O involved. */
+	CHECK(va_copy_sees_same(5, 1, 12, 23, 34, 45));
+	CHECK(va_copy_sees_same(1, 1));
+	CHECK(va_copy_sees_same(0));
+
+	/* vprintf: redirect fd 1 at the temp file for the duration. */
+	saved = dup(1);
+	CHECK(saved >= 0);
+	fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (saved < 0 || fd < 0) return;
+	CHECK(fflush(stdout) == 0);
+	CHECK(dup2(fd, 1) == 1);
+	CHECK(close(fd) == 0);
+	r = via_vprintf("%s=%d\n", "vp", 17);
+	CHECK(fflush(stdout) == 0);
+	CHECK(dup2(saved, 1) == 1);
+	CHECK(close(saved) == 0);
+	/* "the number of bytes transmitted": "vp=17\n" */
+	CHECK(r == 6);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (f) {
+		memset(buf, 0, sizeof buf);
+		CHECK(fread(buf, 1, sizeof buf - 1, f) == 6);
+		CHECK(!strcmp(buf, "vp=17\n"));
+		CHECK(fclose(f) == 0);
+	}
+
+	/* vscanf: same file, now as stdin. */
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(via_vscanf("vp=%d", &got) == 1);
+	CHECK(got == 17);
+	/* "the number of successfully matched and assigned input items" is
+	 * EOF once the input is exhausted before any conversion. */
+	CHECK(via_vscanf("%d", &got) == EOF);
+}
+
 int main(void)
 {
 	char *name = make_tmp("posix-stdio-XXXXXX");
@@ -700,7 +938,10 @@ int main(void)
 		test_fseeko_ftello(name);
 		test_flockfile(name);
 		test_v_forms(name);
-		/* last: repoints stdin at the temp file and leaves it there */
+		test_getc_unlocked(name);
+		test_tempnam();
+		/* these two repoint stdin at the temp file and leave it there */
+		test_vprintf_vscanf(name);
 		test_getchar(name);
 		remove(name);
 		free(name);

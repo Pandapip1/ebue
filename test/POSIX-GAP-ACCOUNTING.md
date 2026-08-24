@@ -275,10 +275,10 @@ their first assertion in this session (see "Tests added" below). These
 - `math.h` (70): `acosf acoshf acoshl acosl asinf asinhf asinhl asinl atanhf atanhl cbrtf cbrtl ceilf coshf coshl erfcf erfcl erff erfl expm1f expm1l fdimf fdiml floorl fmaf fmal fmodl frexpf frexpl hypotf hypotl ilogbf ilogbl isgreater isgreaterequal isless islessequal islessgreater isunordered ldexpf lgammaf lgammal log1pf log1pl logbf logbl modff modfl nearbyintf nearbyintl nextafterf nextafterl nexttowardf nexttowardl remainderf remainderl remquof remquol roundf scalblnf scalblnl scalbnl sinhf sinhl tanhf tanhl tgammaf tgammal truncf truncl`
 - `unistd.h` (18): `confstr execl execle execlp fchown fchownat fexecve getlogin getlogin_r lchown linkat pause setpgrp setregid setsid swab sync tcgetpgrp tcsetpgrp` — `fpathconf`, `readlink`, `readlinkat` and `unlinkat` closed, see "Successor session" below
 - `sys/stat.h` (0): all six (`mkdirat mkfifo mkfifoat mknod mknodat utimes`) closed, see "Successor session" below
-- `signal.h` (5): `sighold siginterrupt sigpause sigrelse sigset`
-- `stdarg.h` (4): `va_arg va_copy vprintf vscanf`
-- `setjmp.h` (2): `_setjmp _longjmp`
-- `stdio.h` (2): `getc_unlocked tempnam`
+- `signal.h` (0): all five (`sighold siginterrupt sigpause sigrelse sigset`) closed, see "Successor session" below
+- `stdarg.h` (0): all four (`va_arg va_copy vprintf vscanf`) closed, see "Successor session" below
+- `setjmp.h` (0): both (`_setjmp _longjmp`) closed, see "Successor session" below
+- `stdio.h` (0): both (`getc_unlocked tempnam`) closed, see "Successor session" below
 
 #### One bug, found by closing part of that list
 
@@ -814,3 +814,54 @@ Also N/A: `mkdirat()`'s `mode`. This ledger already records directory
 mode bits as implementation-defined, and `src/stat/mkdir.c` discards
 `mode` by design, so the "permission bits ... initialized from mode"
 clause has nothing observable behind it.
+
+### Closed: `signal.h`, `stdarg.h`, `setjmp.h`, `stdio.h` (11 names)
+
+The rest of the non-`math.h` list, in `test/posix-signal.c`,
+`test/posix-misc.c` and `test/posix-stdio.c`, each block citing its page.
+
+- **`signal.h` (5)** — `test_sighold_sigrelse`, `test_sigset`,
+  `test_sigpause`, `test_siginterrupt`, against `sigset.html` and
+  `siginterrupt.html`. **Three bugs**, all fenced, all probed rather than
+  inferred: `sighold`/`sigrelse` report success for an illegal signal
+  number (they discard `sigaddset()`'s failure); `sigset()` cannot report
+  `SIG_HOLD` and `<signal.h>` does not define the constant at all; and
+  `siginterrupt()` never validates `sig`. Written up in
+  `test/POSIX-COVERAGE.md`'s "Bugs found (never-asserted sweep, signal.h
+  group)". **N/A:** `sigpause()`'s "suspend until a signal is received"
+  half and `siginterrupt()`'s SA_RESTART effect — both for the reason
+  that file's banner already gives for `sigsuspend()`/`sigwait()`.
+- **`stdarg.h` (4)** — `vprintf` and `vscanf` reached with stdout
+  redirected at fd level and stdin through `freopen()`; `va_arg`/`va_copy`
+  through a helper that walks a list, then walks a `va_copy` of it from
+  the same point and checks the sequences match. No defect.
+- **`setjmp.h` (2)** — `_setjmp`/`_longjmp` folded into
+  `test/posix-misc.c`'s existing `test_setjmp`. No defect. **N/A:** the
+  "shall not manipulate the signal mask" clause is vacuous here, since
+  nothing in `src/setjmp` touches a mask on either arch; the test checks
+  it across the pair anyway as a regression net.
+- **`stdio.h` (2)** — `getc_unlocked` against `getc()` on the same
+  stream inside a `flockfile()` scope, and `tempnam` for `dir`/`pfx`
+  handling, non-collision, usability and `free()`-ability. No defect.
+  **N/A:** `tempnam`'s `[ENOMEM]` (needs allocator exhaustion) and the
+  `_unlocked` family's thread-safety distinction (no threading here).
+
+**A caveat on `make asan` that this session had to establish.** The
+`vdprintf` leak above was caught by `tools/asan-build.sh`'s
+LeakSanitizer, so `tempnam()`'s "suitable for use in a subsequent call
+to `free()`" was written expecting the same net. It does not exist in
+this environment: `tools/asan-build.sh` reports **`0/0 tests passed, 47
+unlinkable`** here, every test failing to link with `undefined reference
+to 'NtYieldExecution'` (absent from `fuzz/ntstubs.c`). That was verified
+on an unmodified `0e3aefa` checkout as well, so it is pre-existing and
+not caused by anything in this sweep — but it means the asan stage of
+`tools/gate.sh` currently passes **vacuously**, and any leak these new
+tests would have caught is unverified locally. Worth fixing before the
+next never-asserted batch, since leak-on-first-call is precisely the
+defect shape this queue keeps turning up.
+
+### Remaining after this session
+
+The `math.h` `f`/`l` tail (70 names) — item 3 of the queue above — is
+all that is left of the original 112. Every non-`math.h` name in the
+"Implemented, but no assertion anywhere" section now has one.

@@ -369,6 +369,8 @@ itself; not asserted either way.
 | setjmp / longjmp | 0 direct return, nonzero via longjmp for several values, longjmp(env,0) yields 1 | covered | test/misc.c, test/posix-misc.c |
 | longjmp | volatile automatic locals changed between setjmp/longjmp are preserved | covered | test/misc.c, test/posix-misc.c |
 | sigsetjmp / siglongjmp | same value contract as setjmp/longjmp | covered | test/posix-misc.c |
+| _setjmp / _longjmp (XSI, obsolescent) | same value contract as setjmp/longjmp, incl. `_longjmp(env,0)` yielding 1 | covered | test/posix-misc.c `test_setjmp` |
+| _longjmp | "shall not manipulate the signal mask" | N/A — vacuous: nothing in `src/setjmp` saves or restores a mask on either arch, so there is no manipulation to be absent. The test still checks the mask across the pair as a regression net | test/posix-misc.c |
 
 No bugs found. NT has no real signal mask, so `sigsetjmp`/`siglongjmp`
 share the plain `setjmp`/`longjmp` assembly body — the "restore the
@@ -423,6 +425,12 @@ coverage: `test/stdio.c` (~430 checks).
 | scanf family | conversion table, field width, %n, assignment suppression | covered (pre-existing, ~250 lines) | test/stdio.c |
 | remove / rename | success, ENOENT | covered | test/stdio.c |
 | tmpfile / tmpnam | uniqueness, L_tmpnam buffer sizing, removed-on-close semantics | covered | test/stdio.c |
+| tempnam (XSI, obsolescent) | honours `dir` and `pfx`, null `dir` falls back to P_tmpdir, null `pfx` accepted, the generated name does not already exist and is usable, two calls differ, the result is free()-able | covered | test/posix-stdio.c `test_tempnam` |
+| tempnam | [ENOMEM] | N/A — needs allocator exhaustion, which this suite cannot induce | -- |
+| getc_unlocked | functionally equivalent to getc() on the same stream inside a flockfile()/funlockfile() scope; unsigned-char return; EOF at end | covered | test/posix-stdio.c `test_getc_unlocked` |
+| getc_unlocked family | the thread-safety distinction itself ("not required to be ... fully thread-safe" vs "thread-safe within a flockfile() scope") | N/A — no threading on this platform, so the two have no observable difference | -- |
+| vprintf / vscanf | equivalent to printf()/scanf() with an argument list; bytes transmitted / items assigned; EOF from vscanf on exhausted input | covered — stdout redirected at fd level, stdin via freopen() | test/posix-stdio.c `test_vprintf_vscanf` |
+| va_arg / va_copy (`<stdarg.h>`) | va_copy'd list yields the identical argument sequence from the same point, including after the original is exhausted | covered | test/posix-stdio.c `va_copy_sees_same` |
 | perror | `perror.html` DESCRIPTION: writes `s` then ": " then the `strerror()` text then a newline to stderr, but writes no prefix when `s` is NULL or empty; messages identical to `strerror()`'s; must not change `errno` on success | covered | test/posix-stdio.c `test_perror` (stderr captured through a redirected fd: prefixed, NULL-`s`, and empty-`s` forms, plus the errno-preserved case) |
 | fileno | returns the underlying fd | covered | test/stdio.c |
 | fmemopen / open_memstream | buffer growth, NUL-termination, mode parsing | covered | test/stdio.c |
@@ -540,6 +548,12 @@ entries below.
 | sigsuspend | return value -1/EINTR (the only return this stub can produce) | covered | test/posix-signal.c |
 | sigsuspend | DESCRIPTION: replace the mask, actually suspend until a signal is delivered | N/A — documented permanent stub (`{ errno = EINTR; return -1; }`); no per-thread wait primitive exists to build a real one on | -- |
 | sigwait / sigtimedwait / sigqueue / sigaltstack | require per-process queued-signal-with-payload or alt-stack facilities this platform has none of | N/A — documented stubs (see include/signal.h) | -- |
+| sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()` | covered; **BUG (fenced)** for [EINVAL] — both wrappers ignore `sigaddset()`'s failure and report success for an illegal signal number | test/posix-signal.c `test_sighold_sigrelse` |
+| sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP | covered; **BUG (fenced)** for the SIG_HOLD return and the "shall remove sig from the mask" clause — `<signal.h>` does not define SIG_HOLD at all and `sigset()` is a bare alias of `signal()` | test/posix-signal.c `test_sigset` |
+| sigpause (XSI, obsolescent) | returns -1 with EINTR | covered | test/posix-signal.c `test_sigpause` |
+| sigpause | DESCRIPTION: suspend until a signal is received | N/A — same reason as `sigsuspend()` above: no asynchronous delivery exists, so a call that genuinely suspended could only hang | -- |
+| siginterrupt (XSI, obsolescent) | returns 0 for a valid signal, both flag values | covered; **BUG (fenced)** for [EINVAL] — `sig` is discarded without validation | test/posix-signal.c `test_siginterrupt` |
+| siginterrupt | the SA_RESTART effect it names | N/A — same reason as `sigaction`'s SA_RESTART row above | -- |
 | abort | never returns; overrides SIG_IGN and SIG_BLOCK; a caught SIGABRT whose handler returns normally still terminates | covered | test/misc.c, test/posix-signal.c |
 | abort | "may" attempt fclose() on open streams | N/A — MAY, not SHALL | -- |
 | strsignal | see the string.h table above (correction: base function, not XSI) | covered | test/string.c, test/posix-signal.c |
@@ -571,6 +585,43 @@ can mean anything given synchronous-only delivery. `SA_RESTART`,
 they round-trip through the old-disposition output, but are documented
 no-ops rather than silently dropped. `src/process/wait.c` now validates
 `options` for wait/waitpid/wait3/wait4.
+
+### Bugs found (never-asserted sweep, signal.h group)
+
+Three, all fenced in `test/posix-signal.c`, all found by the first calls
+anything in this tree has ever made to these five XSI names. All three
+were probed on this tree, not inferred from source.
+
+1. **`sighold()`/`sigrelse()` report success for an illegal signal
+   number.** `sigset.html` ERRORS, shall-fail: "[EINVAL] The sig
+   argument is an illegal signal number." `src/signal/signal.c:309-310`
+   build a one-signal set and hand it to `sigprocmask()`, but never look
+   at `sigaddset()`'s return — and `sigaddset()` *does* validate
+   (line 275). The invalid bit is simply never set, `sigprocmask()` gets
+   an empty mask and succeeds, and the caller is told the signal was
+   held when nothing happened: the worst of the three possible outcomes.
+   `sighold(-1)` and `sighold(NSIG)` both return 0.
+
+2. **`sigset()` cannot report SIG_HOLD, and `<signal.h>` does not define
+   it.** `sigset.html` RETURN VALUE: "shall return SIG_HOLD if the
+   signal had been blocked and the signal's previous disposition if it
+   had not been blocked", and the call "shall remove sig from the calling
+   process' signal mask". `include/signal.h:260` declares `sigset()` but
+   never defines `SIG_HOLD`, which `basedefs/signal.h.html` requires
+   alongside it, so no conforming caller can even spell the comparison;
+   and `src/signal/signal.c:311` is `{ return signal(sig, h); }`, which
+   neither consults nor clears the mask. Probed: with SIGUSR1 held,
+   `sigset()` returns SIG_DFL and SIGUSR1 stays blocked.
+
+3. **`siginterrupt()` accepts any signal number.** `siginterrupt.html`
+   ERRORS, shall-fail: "[EINVAL] The sig argument is not a valid signal
+   number." `src/signal/signal.c:305` is
+   `{ (void)sig; (void)flag; return 0; }` — `sig` never reaches this
+   file's own `sig_valid()`, which `signal()`, `sigaction()`, `sighold()`
+   and `sigrelse()` all use. Probed: `siginterrupt(-1, 1)` and
+   `siginterrupt(NSIG, 1)` both return 0 with errno untouched. That the
+   `flag` effect is a documented no-op here does not excuse the argument
+   check: [EINVAL] is a clause about the argument, not the effect.
 
 ### Not reached (signal.h group)
 
