@@ -804,7 +804,20 @@ static void test_wordexp_arith(void)
  * genuinely implemented and covered by test_wordexp_bookkeeping_flags()
  * above); WRDE_BADCHAR's "unquoted ... inappropriate context" check and
  * WRDE_CMDSUB are the same dependency by construction. */
-#if 0 /* N/A: wordexp.html command substitution + field splitting, see file header */
+#if 0 /* N/A: wordexp.html DESCRIPTION -- performing command
+	substitution requires a shell to run the command in, and this
+	platform has none that understands "$(...)" (src/stdio/misc.c
+	hands shell work to cmd.exe, which cannot parse it). See this
+	file's header.
+
+	Narrowed this session: the other three assertions that used to
+	sit inside this fence -- field splitting of literal input,
+	WRDE_NOCMD returning WRDE_CMDSUB, and WRDE_BADCHAR -- are all
+	implemented and passing today, and were fenced only because they
+	shared a function with the one clause that genuinely needs a
+	shell. They now live, unfenced, in
+	test_wordexp_badchar_nocmd_and_literal_splitting(). Only the
+	substitution itself remains N/A. */
 static void test_wordexp_cmdsub_needs_a_shell(void)
 {
 	wordexp_t we;
@@ -812,19 +825,564 @@ static void test_wordexp_cmdsub_needs_a_shell(void)
 	CHECK(wordexp("$(echo hi)", &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "hi") == 0);
 	wordfree(&we);
+}
+#endif
 
-	/* field splitting: one word containing spaces becomes two words */
+
+/* ==== clauses the successor-queue glob/fnmatch/wordexp audit added ======= */
+
+/* XCU 2.13.1 Patterns Matching a Single Character -- the clause
+ * fnmatch.html incorporates by reference: "If an open bracket
+ * introduces a bracket expression as in XBD RE Bracket Expression ...
+ * Otherwise, the <left-square-bracket> shall match the character
+ * itself."  A pattern whose '[' is never closed does not introduce a
+ * bracket expression, so the bracket is an ordinary character.
+ *
+ * Recorded from the fetched text, because the two pattern languages
+ * genuinely differ and it would be easy to carry one over to the
+ * other: for a *regular expression*, an unmatched '[' is an error
+ * (REG_EBRACK, see test_regex_bracket_edges()); for a *pattern*, it is
+ * a literal.  See the fence below for what ntlibc does. */
+
+/* XCU 2.13.3, the leading-period rule, in the two forms the existing
+ * test_fnmatch_period() does not reach: without FNM_PATHNAME, only the
+ * very first character of the string counts as leading (so a period
+ * after a slash is ordinary), and a leading period may not be matched
+ * by a non-matching list or a character class either, not just by '*'
+ * and '?'. */
+static void test_fnmatch_period_forms(void)
+{
+	/* FNM_PERIOD alone: "leading" means the first character of
+	 * string, full stop -- the '.' in "a/.b" is not leading. */
+	CHECK(fnmatch("a/*", "a/.b", FNM_PERIOD) == 0);
+	/* ... which is exactly what adding FNM_PATHNAME changes. */
+	CHECK(fnmatch("a/*", "a/.b", FNM_PERIOD | FNM_PATHNAME) == FNM_NOMATCH);
+
+	/* "The leading <period> shall not be matched by ... a bracket
+	 * expression containing a non-matching list ... a range
+	 * expression ... or a character class expression." */
+	CHECK(fnmatch("[!a]", ".", FNM_PERIOD) == FNM_NOMATCH);
+	CHECK(fnmatch("[[:punct:]]", ".", FNM_PERIOD) == FNM_NOMATCH);
+	CHECK(fnmatch("[!-/]", ".", FNM_PERIOD) == FNM_NOMATCH);
+	/* ... but an explicit leading period in the pattern matches. */
+	CHECK(fnmatch(".[a-z]", ".b", FNM_PERIOD) == 0);
+}
+
+/* XBD 9.3.5 RE Bracket Expression, which XCU 2.13.1 incorporates: a
+ * <right-square-bracket> "shall lose its special meaning ... if it
+ * occurs first in the list (after an initial <circumflex>, if any)",
+ * and a <hyphen> "shall be treated as itself" if first or last.
+ * test_fnmatch_basic_grammar() covers ordinary sets, ranges,
+ * negation and classes but none of the syntactic edges.
+ *
+ * Also recorded from the fetched text, because it is a common
+ * misremembering in the other direction: neither XCU 2.13 nor
+ * fnmatch.html places any restriction on a <newline> in a bracket
+ * expression -- that rule belongs to REG_NEWLINE, which is a
+ * <regex.h> flag with no fnmatch counterpart. */
+static void test_fnmatch_bracket_edges(void)
+{
+	CHECK(fnmatch("[]]", "]", 0) == 0);
+	CHECK(fnmatch("[!]]", "a", 0) == 0);
+	CHECK(fnmatch("[!]]", "]", 0) == FNM_NOMATCH);
+	CHECK(fnmatch("[-a]", "-", 0) == 0);
+	CHECK(fnmatch("[a-]", "-", 0) == 0);
+	CHECK(fnmatch("[]-]", "-", 0) == 0);
+	CHECK(fnmatch("[]-]", "]", 0) == 0);
+	CHECK(fnmatch("[\n]", "\n", 0) == 0);
+}
+
+#if 0 /* BUG: XCU 2.13.1 -- "Otherwise, the <left-square-bracket> shall
+	match the character itself."
+
+	src/fnmatch/fnmatch.c's bracket scanner walks to the end of the
+	pattern looking for a closing ']' and, not finding one, returns
+	the accumulated match state anyway -- so a pattern with an
+	unterminated '[' is consumed as if it had been a bracket
+	expression, instead of the '[' being demoted to an ordinary
+	character.
+
+	Measured: fnmatch("[abc", "[abc", 0), fnmatch("a[b", "a[b", 0)
+	and fnmatch("[", "[", 0) all give FNM_NOMATCH; POSIX requires 0
+	for each. glibc, musl and the BSDs all match.
+
+	Note this differs deliberately from the regular-expression
+	grammar, where the same input is an error -- see
+	test_regex_bracket_edges(), which asserts REG_EBRACK for
+	regcomp("[abc"). The two pattern languages are not the same
+	language, and this is one of the places they part company.
+
+	Fixing this also un-masks the glob() bracket/slash gap fenced as
+	test_glob_bracket_containing_slash() below -- the two should be
+	fixed together. */
+static void test_fnmatch_unmatched_bracket_is_literal(void)
+{
+	CHECK(fnmatch("[abc", "[abc", 0) == 0);
+	CHECK(fnmatch("a[b", "a[b", 0) == 0);
+	CHECK(fnmatch("[", "[", 0) == 0);
+	CHECK(fnmatch("[]", "[]", 0) == 0);
+}
+#endif
+
+/* glob.html DESCRIPTION: "If a filename begins with a <period>, the
+ * <period> shall be explicitly matched by using a <period> as the
+ * first character of the pattern or immediately following a <slash>
+ * character." Untested before. */
+static void test_glob_leading_period(void)
+{
+	glob_t g;
+	size_t i;
+	int saw_hidden = 0;
+
+	close(creat(".hidden-glob-test", 0644));
+	close(creat("visible-glob-test", 0644));
+	CHECK(glob("*", 0, NULL, &g) == 0);
+	for (i = 0; i < g.gl_pathc; i++)
+		if (strcmp(g.gl_pathv[i], ".hidden-glob-test") == 0) saw_hidden = 1;
+	CHECK(!saw_hidden);
+	globfree(&g);
+
+	CHECK(glob(".hid*", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], ".hidden-glob-test") == 0);
+	globfree(&g);
+}
+
+/* glob.html DESCRIPTION: "globfree() shall free any space associated
+ * with pglob from a previous call to glob()", and "shall not return a
+ * value". test_glob_nospace_and_free() calls it once after a
+ * successful glob; that it leaves the structure in a state a second
+ * call can safely see was not checked. */
+static void test_globfree_idempotent(void)
+{
+	glob_t g;
+
+	close(creat("gfi1.gfitxt", 0644));
+	CHECK(glob("*.gfitxt", 0, NULL, &g) == 0);
+	globfree(&g);
+	globfree(&g);		/* must be a no-op, not a double free */
+	CHECK(g.gl_pathv == NULL);
+	CHECK(g.gl_pathc == 0);
+}
+
+#if 0 /* BUG: glob.html APPLICATION USAGE -- "The new pathnames
+	generated by a subsequent call with GLOB_APPEND are not sorted
+	together with the previous pathnames."
+
+	src/glob/glob.c sorts the *whole* vector at the end of every
+	call, including the entries carried over from a previous one, so
+	a GLOB_APPEND call re-sorts its predecessor's results into its
+	own. Measured over a directory holding a.txt, b.txt and d.log:
+	glob("*.log", 0) then glob("*.txt", GLOB_APPEND) yields
+	"a.txt b.txt d.log"; POSIX requires "d.log a.txt b.txt".
+
+	test_glob_append() checks only gl_pathc, which is correct, so
+	the ordering half went unnoticed.
+
+	Fix shape: sort only the range this call added, i.e. from the
+	carried-over count onwards. */
+static void test_glob_append_does_not_resort(void)
+{
+	glob_t g;
+
+	close(creat("app-a.apptxt", 0644));
+	close(creat("app-b.apptxt", 0644));
+	close(creat("app-d.applog", 0644));
+	memset(&g, 0, sizeof g);
+	CHECK(glob("*.applog", 0, NULL, &g) == 0);
+	CHECK(glob("*.apptxt", GLOB_APPEND, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 3);
+	if (g.gl_pathc == 3) {
+		CHECK(strcmp(g.gl_pathv[0], "app-d.applog") == 0);
+		CHECK(strcmp(g.gl_pathv[1], "app-a.apptxt") == 0);
+		CHECK(strcmp(g.gl_pathv[2], "app-b.apptxt") == 0);
+	}
+	globfree(&g);
+}
+#endif
+
+#if 0 /* BUG: glob.html RETURN VALUE -- "[GLOB_NOMATCH] The pattern
+	does not match any existing pathname, and GLOB_NOCHECK was not
+	set."
+
+	An empty pattern names no pathname, so it matches nothing. But
+	src/glob/glob.c's pattern-exhausted branch assumes it was reached
+	part-way through a recursion, after a directory prefix had
+	already been confirmed, and synthesises "." when the prefix is
+	empty. Measured: glob("", 0, NULL, &g) returns 0 with
+	gl_pathc == 1 and gl_pathv[0] == ".".
+
+	That is a pathname the caller never asked about, handed back as
+	a successful match. */
+static void test_glob_empty_pattern(void)
+{
+	glob_t g;
+
+	memset(&g, 0, sizeof g);
+	CHECK(glob("", 0, NULL, &g) == GLOB_NOMATCH);
+}
+#endif
+
+#if 0 /* BUG: glob.html DESCRIPTION -- "GLOB_MARK: Each pathname that
+	is a directory that matches pattern shall have a <slash>
+	appended."
+
+	The clause is about what the pathname *is*, not about how the
+	pattern named it, so a pattern that ends in a slash and matches a
+	directory must still come back with the slash appended. In
+	src/glob/glob.c a pattern with a trailing slash exits through the
+	pattern-exhausted branch, which strips the trailing slash and
+	never consults GLOB_MARK at all.
+
+	Measured with "subdir" a real directory: glob("subdir/",
+	GLOB_MARK, NULL, &g) returns 0 with gl_pathv[0] == "subdir".
+	It matched, it is a directory, so the slash is mandatory.
+
+	test_glob_mark() covers only the wildcard path ("s*"), which
+	goes through a different branch and is correct. */
+static void test_glob_mark_trailing_slash_pattern(void)
+{
+	glob_t g;
+
+	CHECK(mkdir("globmarkdir", 0755) == 0 || errno == EEXIST);
+	memset(&g, 0, sizeof g);
+	CHECK(glob("globmarkdir/", GLOB_MARK, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "globmarkdir/") == 0);
+	globfree(&g);
+}
+#endif
+
+#if 0 /* BUG (latent): glob.html DESCRIPTION -- "glob() is a pathname
+	generator that shall implement the rules defined in XCU Pattern
+	Matching Notation", which includes 2.13.3: "If a <slash>
+	character is found following an unescaped <left-square-bracket>
+	before a corresponding <right-square-bracket> is found, the open
+	bracket shall be treated as an ordinary character. For example,
+	the pattern "a[b/c]d" ... only matches a pathname of literally
+	a[b/c]d."
+
+	Note this is a glob() requirement and *not* an fnmatch() one:
+	fnmatch.html incorporates only 2.13.1 and 2.13.2, and its own
+	FNM_PATHNAME text says merely that a <slash> "shall not be
+	matched ... by a bracket expression", which ntlibc honours.
+
+	src/glob/glob.c splits the pattern into path components on every
+	'/' with no bracket awareness, so "a[b/c]d" becomes the
+	components "a[b" and "c]d". Today that happens to produce the
+	right answer -- GLOB_NOMATCH -- but for the wrong reason: the
+	component "a[b" fails to match because of the unmatched-bracket
+	BUG fenced as test_fnmatch_unmatched_bracket_is_literal() above.
+	Fix that one alone and this pattern starts wrongly matching a
+	directory named "a[b" containing a file named "c]d". The two must
+	be fixed together, and this test is the regression guard for the
+	pair.
+
+	Since no POSIX filename may contain a <slash>, the correct answer
+	is that this pattern matches nothing at all. */
+static void test_glob_bracket_containing_slash(void)
+{
+	glob_t g;
+
+	CHECK(mkdir("a[b", 0755) == 0 || errno == EEXIST);
+	close(creat("a[b/c]d", 0644));
+	memset(&g, 0, sizeof g);
+	CHECK(glob("a[b/c]d", 0, NULL, &g) == GLOB_NOMATCH);
+}
+#endif
+
+/* wordexp.html DESCRIPTION, the three clauses the fence below this one
+ * used to bury. All three are implemented and passing today; they were
+ * fenced only because they sat in the same function as the command
+ * substitution that genuinely does need a shell. Split out so the
+ * coverage is real rather than notional:
+ *
+ *   - field splitting of literal input whitespace,
+ *   - WRDE_NOCMD, "Fail if command substitution is requested" ->
+ *     WRDE_CMDSUB,
+ *   - WRDE_BADCHAR, "One of the unquoted characters - <newline>, '|',
+ *     '&', ';', '<', '>', '(', ')', '{', '}' - appears in words in an
+ *     inappropriate context." */
+static void test_wordexp_badchar_nocmd_and_literal_splitting(void)
+{
+	wordexp_t we;
+
 	CHECK(wordexp("a b", &we, 0) == 0);
 	CHECK(we.we_wordc == 2);
-	CHECK(strcmp(we.we_wordv[0], "a") == 0 && strcmp(we.we_wordv[1], "b") == 0);
+	if (we.we_wordc == 2) {
+		CHECK(strcmp(we.we_wordv[0], "a") == 0);
+		CHECK(strcmp(we.we_wordv[1], "b") == 0);
+	}
+	/* "The first pointer after the last word pointer shall be a null
+	 * pointer." */
+	CHECK(we.we_wordv[we.we_wordc] == NULL);
 	wordfree(&we);
 
-	/* WRDE_NOCMD: "fail if command substitution ... is requested" */
 	CHECK(wordexp("$(echo hi)", &we, WRDE_NOCMD) == WRDE_CMDSUB);
+	CHECK(wordexp("`echo hi`", &we, WRDE_NOCMD) == WRDE_CMDSUB);
+	/* A *quoted* command substitution is not "requested". */
+	CHECK(wordexp("'$(echo hi)'", &we, WRDE_NOCMD) == 0);
+	wordfree(&we);
 
-	/* WRDE_BADCHAR: an unquoted shell metacharacter in an inappropriate
-	 * context */
 	CHECK(wordexp("a | b", &we, 0) == WRDE_BADCHAR);
+	CHECK(wordexp("a & b", &we, 0) == WRDE_BADCHAR);
+	CHECK(wordexp("a ; b", &we, 0) == WRDE_BADCHAR);
+	CHECK(wordexp("a < b", &we, 0) == WRDE_BADCHAR);
+	CHECK(wordexp("a > b", &we, 0) == WRDE_BADCHAR);
+	CHECK(wordexp("a ( b", &we, 0) == WRDE_BADCHAR);
+	/* ... and quoting them makes the context appropriate again. */
+	CHECK(wordexp("'a | b'", &we, 0) == 0);
+	CHECK(we.we_wordc == 1);
+	wordfree(&we);
+}
+
+/* wordexp.html RETURN VALUE: "[WRDE_SYNTAX] Shell syntax error, such
+ * as unbalanced parentheses or unterminated string." Nothing asserted
+ * any of the five paths src/wordexp/ produces it from. */
+static void test_wordexp_syntax_errors(void)
+{
+	wordexp_t we;
+
+	CHECK(wordexp("\"abc", &we, 0) == WRDE_SYNTAX);		/* unterminated string */
+	CHECK(wordexp("'abc", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("a\\", &we, 0) == WRDE_SYNTAX);		/* trailing backslash */
+	CHECK(wordexp("${abc", &we, 0) == WRDE_SYNTAX);		/* unterminated ${ } */
+	CHECK(wordexp("$((1+", &we, 0) == WRDE_SYNTAX);		/* unbalanced parentheses */
+	CHECK(wordexp("$((1/0))", &we, 0) == WRDE_SYNTAX);	/* arithmetic error */
+}
+
+/* wordexp.html DESCRIPTION: "WRDE_REUSE: The pwordexp argument was
+ * passed to a previous successful call to wordexp(), and has not been
+ * passed to wordfree(). The result shall be the same as if the
+ * application had called wordfree() and then called wordexp() without
+ * WRDE_REUSE." And, for WRDE_APPEND: "Pointers to the words that were
+ * in the list before the call, in the same order as before" --
+ * test_wordexp_bookkeeping_flags() checks the total count but not the
+ * order, which is the half glob() gets wrong (see
+ * test_glob_append_does_not_resort()). */
+static void test_wordexp_reuse_and_append_order(void)
+{
+	wordexp_t we;
+
+	CHECK(wordexp("a b", &we, 0) == 0);
+	CHECK(wordexp("c d", &we, WRDE_APPEND) == 0);
+	CHECK(we.we_wordc == 4);
+	if (we.we_wordc == 4) {
+		CHECK(strcmp(we.we_wordv[0], "a") == 0);
+		CHECK(strcmp(we.we_wordv[1], "b") == 0);
+		CHECK(strcmp(we.we_wordv[2], "c") == 0);
+		CHECK(strcmp(we.we_wordv[3], "d") == 0);
+	}
+	CHECK(we.we_wordv[4] == NULL);
+
+	CHECK(wordexp("x", &we, WRDE_REUSE) == 0);
+	CHECK(we.we_wordc == 1);
+	if (we.we_wordc == 1) CHECK(strcmp(we.we_wordv[0], "x") == 0);
+	wordfree(&we);
+
+	/* wordfree() must leave the structure safe to free again. */
+	CHECK(wordexp("a b", &we, 0) == 0);
+	wordfree(&we);
+	wordfree(&we);
+	CHECK(we.we_wordv == NULL);
+	CHECK(we.we_wordc == 0);
+}
+
+/* wordexp.html RETURN VALUE: "In other error cases, if the
+ * WRDE_APPEND flag was specified, we_wordc and we_wordv shall not be
+ * modified." The complement of the WRDE_BADCHAR clause fenced below --
+ * they are not contradictory, they cover the two flag states. */
+static void test_wordexp_append_preserved_on_error(void)
+{
+	wordexp_t we;
+
+	CHECK(wordexp("a b", &we, 0) == 0);
+	CHECK(wordexp("c | d", &we, WRDE_APPEND) == WRDE_BADCHAR);
+	CHECK(we.we_wordc == 2);
+	if (we.we_wordc == 2) {
+		CHECK(strcmp(we.we_wordv[0], "a") == 0);
+		CHECK(strcmp(we.we_wordv[1], "b") == 0);
+	}
+	wordfree(&we);
+}
+
+/* wordexp.html DESCRIPTION: "WRDE_UNDEF: Report error on an attempt to
+ * expand an undefined shell variable" -> WRDE_BADVAL.
+ * test_wordexp_tilde_and_param() covers the plain parameter path; the
+ * arithmetic path, where an undefined name is also an expansion, was
+ * not covered -- nor was the complement, that without WRDE_UNDEF an
+ * undefined name in arithmetic is zero. */
+static void test_wordexp_undef_in_arithmetic(void)
+{
+	wordexp_t we;
+
+	CHECK(wordexp("$((NO_SUCH_VAR_XYZ+1))", &we, WRDE_UNDEF) == WRDE_BADVAL);
+	CHECK(wordexp("$((NO_SUCH_VAR_XYZ+1))", &we, 0) == 0);
+	CHECK(we.we_wordc == 1);
+	if (we.we_wordc == 1) CHECK(strcmp(we.we_wordv[0], "1") == 0);
+	wordfree(&we);
+}
+
+#if 0 /* BUG: XCU 2.6 Word Expansions, step 2 -- "Field splitting ...
+	shall be performed on the portions of the fields generated by
+	step 1", and 2.6.5: "the shell shall scan the results of
+	expansions and substitutions that did not occur in double-quotes
+	for field splitting". wordexp.html: "Each individual field
+	created during field splitting ... shall be a separate word."
+
+	src/wordexp/wordexp.c splits the *input text*, not the result of
+	an expansion: it flushes a field when it sees an IFS byte in the
+	unquoted input, and a parameter's value is appended into the
+	field buffer at a point the scanner has already walked past.
+
+	Measured with V="a b": wordexp("$V", &we, 0) gives we_wordc == 1
+	and we_wordv[0] == "a b"; POSIX requires two words "a" and "b".
+	The quoted form "\"$V\"" correctly gives one word, so the quoting
+	half of the rule is right and only the splitting half is missing.
+
+	include/wordexp.h currently describes IFS field splitting as
+	implemented, which is what made this worth checking.
+
+	test_wordexp_bookkeeping_flags() and the newly unfenced
+	test_wordexp_badchar_nocmd_and_literal_splitting() both split
+	*literal* input whitespace, which works and is a different code
+	path. */
+static void test_wordexp_field_splits_expansion_result(void)
+{
+	wordexp_t we;
+
+	CHECK(setenv("WORDEXP_SPLIT_V", "a b", 1) == 0);
+	CHECK(wordexp("$WORDEXP_SPLIT_V", &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	if (we.we_wordc == 2) {
+		CHECK(strcmp(we.we_wordv[0], "a") == 0);
+		CHECK(strcmp(we.we_wordv[1], "b") == 0);
+	}
+	wordfree(&we);
+
+	/* ... and a double-quoted expansion must not split. */
+	CHECK(wordexp("\"$WORDEXP_SPLIT_V\"", &we, 0) == 0);
+	CHECK(we.we_wordc == 1);
+	wordfree(&we);
+	unsetenv("WORDEXP_SPLIT_V");
+}
+#endif
+
+#if 0 /* BUG: XCU 2.6.5 Field Splitting -- "the shell shall treat each
+	character of the IFS as a delimiter and use the delimiters as
+	field terminators", and "If the value of IFS is null, no field
+	splitting shall be performed."
+
+	src/wordexp/wordexp.c hardcodes space, tab and newline as the
+	field delimiters and never reads IFS at all, so neither half of
+	the clause holds: a custom IFS does not split, and a null IFS
+	does not suppress splitting.
+
+	Measured with IFS=":" and W="a:b": wordexp("$W", &we, 0) gives
+	one word "a:b".
+
+	Recorded as BUG rather than UNIMPL because include/wordexp.h
+	presents IFS field splitting as implemented; if the decision is
+	to leave it out, that is a legitimate UNIMPL but the header has
+	to say so. Note this is a strictly harder problem than the
+	previous fence and subsumes it -- fixing IFS handling without
+	fixing where splitting is applied would still get "$V" wrong. */
+static void test_wordexp_honours_ifs(void)
+{
+	wordexp_t we;
+
+	CHECK(setenv("IFS", ":", 1) == 0);
+	CHECK(setenv("WORDEXP_IFS_W", "a:b", 1) == 0);
+	CHECK(wordexp("$WORDEXP_IFS_W", &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	wordfree(&we);
+
+	CHECK(setenv("IFS", "", 1) == 0);
+	CHECK(setenv("WORDEXP_IFS_W", "a b", 1) == 0);
+	CHECK(wordexp("$WORDEXP_IFS_W", &we, 0) == 0);
+	CHECK(we.we_wordc == 1);	/* null IFS: no splitting at all */
+	wordfree(&we);
+
+	unsetenv("IFS");
+	unsetenv("WORDEXP_IFS_W");
+}
+#endif
+
+#if 0 /* BUG: XCU 2.6 Word Expansions -- "If the complete expansion
+	appropriate for a word results in an empty field, that empty
+	field shall be deleted from the list of fields ... unless the
+	original word contained single-quote or double-quote
+	characters."
+
+	src/wordexp/wordexp.c marks a word active before expanding the
+	parameter, so a word whose entire expansion is empty still emits
+	an empty word.
+
+	Measured: wordexp("$UNSET", &we, 0) gives we_wordc == 1 with an
+	empty first word, where POSIX requires zero words; and
+	wordexp("x $UNSET y", &we, 0) gives three words -- "x", "", "y"
+	-- where POSIX requires two.
+
+	The quoted forms are handled correctly: "\"$UNSET\"" gives one
+	empty word, which is exactly what the "unless the original word
+	contained ... quote characters" exception requires. So the
+	exception is implemented and the rule it is an exception to is
+	not. */
+static void test_wordexp_empty_field_deleted(void)
+{
+	wordexp_t we;
+
+	unsetenv("NO_SUCH_WORDEXP_VAR_XYZ");
+
+	CHECK(wordexp("$NO_SUCH_WORDEXP_VAR_XYZ", &we, 0) == 0);
+	CHECK(we.we_wordc == 0);
+	wordfree(&we);
+
+	CHECK(wordexp("x $NO_SUCH_WORDEXP_VAR_XYZ y", &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	if (we.we_wordc == 2) {
+		CHECK(strcmp(we.we_wordv[0], "x") == 0);
+		CHECK(strcmp(we.we_wordv[1], "y") == 0);
+	}
+	wordfree(&we);
+
+	/* The exception, which already works: a quoted empty expansion
+	 * survives as an empty word. */
+	CHECK(wordexp("\"$NO_SUCH_WORDEXP_VAR_XYZ\"", &we, 0) == 0);
+	CHECK(we.we_wordc == 1);
+	if (we.we_wordc == 1) CHECK(we.we_wordv[0][0] == '\0');
+	wordfree(&we);
+}
+#endif
+
+#if 0 /* BUG: wordexp.html DESCRIPTION -- "if words contains an
+	unquoted character - <newline>, '|', '&', ';', '<', '>', '(',
+	')', '{', '}' - in an inappropriate context, wordexp() shall
+	fail, and the number of expanded words shall be 0."
+
+	src/wordexp/wordexp.c returns WRDE_CMDSUB/WRDE_BADCHAR correctly
+	(see test_wordexp_badchar_nocmd_and_literal_splitting(), now
+	unfenced) but its failure path deliberately leaves the caller's
+	wordexp_t untouched for every error other than WRDE_NOSPACE, so
+	we_wordc is never set to 0.
+
+	The RETURN VALUE section's "shall not be modified" caveat is
+	explicitly conditioned on WRDE_APPEND having been specified, so
+	for a non-APPEND call the DESCRIPTION's "shall be 0" is the
+	governing clause. The APPEND case is separately covered, and
+	passes, in test_wordexp_append_preserved_on_error() above -- the
+	two clauses are complementary, not contradictory.
+
+	Measured: with we_wordc pre-set to 999, wordexp("a|b", &we, 0)
+	returns WRDE_BADCHAR and leaves we_wordc at 999. */
+static void test_wordexp_wordc_zero_on_badchar(void)
+{
+	wordexp_t we;
+
+	memset(&we, 0, sizeof we);
+	we.we_wordc = 999;
+	CHECK(wordexp("a|b", &we, 0) == WRDE_BADCHAR);
+	CHECK(we.we_wordc == 0);
 }
 #endif
 
@@ -2188,6 +2746,16 @@ int main(void)
 	test_wordexp_glob_and_quotes();
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
+	test_wordexp_badchar_nocmd_and_literal_splitting();
+	test_wordexp_syntax_errors();
+	test_wordexp_reuse_and_append_order();
+	test_wordexp_append_preserved_on_error();
+	test_wordexp_undef_in_arithmetic();
+
+	test_fnmatch_period_forms();
+	test_fnmatch_bracket_edges();
+	test_glob_leading_period();
+	test_globfree_idempotent();
 
 	char cwd_before_ftw[512];
 
