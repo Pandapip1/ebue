@@ -1018,10 +1018,21 @@ static void test_snprintf_boundaries(void)
  * functions shall return a negative value and set errno") and never
  * touch s.
  *
+ * Why POSIX makes it a shall-fail rather than leaving it alone: the
+ * return type is int, and the return value is defined as the number of
+ * bytes that *would* have been written had n been sufficiently large.
+ * For n > INT_MAX that promised value is not representable in the
+ * return type at all, so the standard makes the call fail up front
+ * instead of returning something that cannot be right.
+ *
  * src/stdio/printf.c's vxprintf_mem() takes n straight to the throwaway
  * memory FILE's mem_size and never compares it to INT_MAX, so the call
  * succeeds and formats normally.  Measured: returns 1 with errno left
- * at 0 and "z" in the buffer. */
+ * at 0 and "z" in the buffer.
+ *
+ * This is the same shape as several other defects in this tree: an
+ * ERRORS "shall fail" argument check that was simply never written.
+ * See the ledger. */
 #if 0 /* BUG: snprintf() does not fail with [EOVERFLOW] when n > INT_MAX; POSIX fprintf.html ERRORS makes that a "shall fail" for snprintf, so the call must return a negative value and set errno, not format into the (unreachably large) buffer */
 static void test_snprintf_eoverflow(void)
 {
@@ -1051,8 +1062,28 @@ static void test_snprintf_eoverflow(void)
  * src/stdio/printf.c recognises only '-', '+', ' ', '0' and '#', so a
  * <apostrophe> ends the flag scan and then falls out of the conversion
  * switch's default arm, which emits the two bytes literally.  Measured:
- * snprintf("%'d", 1234567) yields "%'d", 3 bytes. */
-#if 0 /* BUG: the [CX] <apostrophe> flag is not recognised; "%'d" is emitted literally instead of formatting the argument (in the POSIX locale, identically to "%d") */
+ * snprintf("%'d", 1234567) yields "%'d", 3 bytes.
+ *
+ * SEVERITY -- read this before filing it as cosmetic.  The default arm
+ * emits the bytes and does *not* consume an argument, so the failure is
+ * not "the number comes out unformatted": it is a silent
+ * argument-stream desync for the whole rest of the format string.
+ * Every conversion after the %' reads the argument meant for the one
+ * before it.  In
+ *
+ *     printf("%'d %s\n", total, name);
+ *
+ * the %s is handed `total` and dereferences an integer as a char * --
+ * a crash, or a garbage string, in code that reads as obviously
+ * correct, with the %'d as the only clue anything is wrong.
+ *
+ * The POSIX locale makes this worse rather than better.  There is no
+ * thousands grouping in that locale, so the *correct* output for %'d
+ * is byte-for-byte the output of %d: an author who tries %'d, sees no
+ * separators, and concludes "not supported here, harmless" has no
+ * reason to suspect that the rest of their format is now misaligned.
+ * The one visible symptom is the one that looks least alarming. */
+#if 0 /* BUG: the [CX] <apostrophe> flag is not recognised; "%'d" is emitted literally instead of formatting the argument (in the POSIX locale, identically to "%d") -- and no argument is consumed, so every later conversion in the same format reads the wrong one: a silent argument-stream desync, not a cosmetic defect */
 static void test_printf_apostrophe_flag(void)
 {
 	char grouped[32], plain[32];
@@ -1596,9 +1627,21 @@ static void test_ctermid(void)
  * (FILE *) objects, except those with names ending in _unlocked, shall
  * behave as if they use flockfile() and funlockfile() internally")
  * really do -- a no-op that had accidentally become a self-deadlocking
- * real lock would hang exactly here.  A separate note for the record:
- * this is a no-op that would be *wrong* the day threads arrive, so it
- * is N/A only for as long as the empty libpthread.a stays empty. */
+ * real lock would hang exactly here, and a hang is a CI job timeout
+ * rather than a clean failure.
+ *
+ * EXPIRY CONDITION, written down because this N/A can stop being one.
+ * Every clause marked N/A above is N/A *only* for as long as
+ * lib/libpthread.a stays an empty archive and include/ has no
+ * <pthread.h>.  This is a no-op that is correct today and would be
+ * wrong the day a second thread of control exists.  If <pthread.h>
+ * ever lands, all of those clauses become reachable at once and
+ * src/stdio/file.c's three functions become BUGs without a single line
+ * of them changing -- which is exactly the kind of regression nobody
+ * goes looking for, because no diff introduces it.  Whoever adds
+ * threading to this libc has to come back here.  The same condition is
+ * recorded in test/POSIX-COVERAGE.md's group K rows, so it is not
+ * carried by this comment alone. */
 static void test_flockfile_nesting(const char *name)
 {
 	FILE *f;

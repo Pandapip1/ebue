@@ -2302,7 +2302,7 @@ verdict recorded with its evidence (`flockfile`).
 | ctermid | DESCRIPTION: "need not be thread-safe if called with a NULL parameter" | N/A — same mechanism as `flockfile` below: no threads on this platform | — |
 | flockfile / funlockfile | `flockfile.html` DESCRIPTION, the lock count: "if the count is zero or if the count is positive and the caller owns the (FILE *) object, the count shall be incremented ... Each call to funlockfile() shall decrement the count. This allows matching calls ... to be nested"; and "All functions that reference (FILE *) objects, except those with names ending in `_unlocked`, shall behave as if they use flockfile() and funlockfile() internally" | covered — nesting, and that ordinary (locking) stdio calls still serve the owner inside a held lock, which is where a no-op that had accidentally become a self-deadlocking real lock would hang | test/posix-stdio.c `test_flockfile_nesting` |
 | ftrylockfile | RETURN VALUE: "shall return zero for success" — on an unlocked stream and on a nested acquisition by the owner | covered | test/posix-stdio.c `test_flockfile_nesting` |
-| flockfile family | every clause that distinguishes a real lock from a no-op: "Otherwise, the calling thread shall be suspended, waiting for the count to return to zero"; "When the count is positive, a single thread owns the (FILE *) object"; ftrylockfile's "non-zero to indicate that the lock cannot be acquired"; "The behavior is undefined if a thread other than the current owner calls funlockfile()" | **N/A — mechanism: this libc has exactly one thread of control.** There is no `<pthread.h>` in `include/` (`test/POSIX-GAP-ACCOUNTING.md` lists all 102 pthread interfaces under Absent) and `lib/libpthread.a` is an 8-byte empty archive — the `!<arch>\n` magic and nothing else — built only so that `-lpthread` links. With one thread the count can only ever be incremented by its owner, so the suspension branch is unreachable and `ftrylockfile()` can never fail; `src/stdio/file.c`'s no-ops are indistinguishable from a correct recursive mutex by any conforming program. N/A rather than UNIMPL because nothing was declined: the distinguishing observation does not exist here. See the caveat in "Observed behaviour" below | — |
+| flockfile family | every clause that distinguishes a real lock from a no-op: "Otherwise, the calling thread shall be suspended, waiting for the count to return to zero"; "When the count is positive, a single thread owns the (FILE *) object"; ftrylockfile's "non-zero to indicate that the lock cannot be acquired"; "The behavior is undefined if a thread other than the current owner calls funlockfile()" | **N/A (conditional — see the expiry condition below) — mechanism: this libc has exactly one thread of control.** There is no `<pthread.h>` in `include/` (`test/POSIX-GAP-ACCOUNTING.md` lists all 102 pthread interfaces under Absent) and `lib/libpthread.a` is an 8-byte empty archive — the `!<arch>\n` magic and nothing else — built only so that `-lpthread` links. With one thread the count can only ever be incremented by its owner, so the suspension branch is unreachable and `ftrylockfile()` can never fail; `src/stdio/file.c`'s no-ops are indistinguishable from a correct recursive mutex by any conforming program. N/A rather than UNIMPL because nothing was declined: the distinguishing observation does not exist here. See the caveat in "Observed behaviour" below | — |
 | ftrylockfile / flockfile / funlockfile | ERRORS: "No errors are defined" | covered trivially | — |
 | getc_unlocked / getchar_unlocked / putc_unlocked / putchar_unlocked | `getc_unlocked.html`: "functionally equivalent to the original versions", used inside a `flockfile()`/`funlockfile()` scope — which `flockfile.html` RATIONALE calls the only case where the locking functions are *required* | covered (`getc_unlocked` and `putc_unlocked`/`putchar_unlocked`/`getchar_unlocked` rows already exist under priority 5; what is new here is exercising them inside the scope the RATIONALE names) | test/posix-stdio.c `test_flockfile_nesting`, `test_putc_family`, `test_getchar` |
 
@@ -2345,9 +2345,21 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
    throwaway memory `FILE`'s `mem_size` and never compares it to
    anything. Measured: `snprintf(b, (size_t)INT_MAX + 1, "z")` returns
    1, leaves `errno` at 0, and writes `"z"`. The clause exists because
-   the return type is `int`: a buffer that large makes the promised
-   return value unrepresentable, so the standard makes the call fail up
-   front instead.
+   the return type is `int`: the return value is defined as the number
+   of bytes that *would* have been written had `n` been sufficiently
+   large, and for `n > INT_MAX` that value is not representable in the
+   return type at all — so the standard makes the call fail up front
+   instead of returning something that cannot be right.
+
+   Worth naming the class rather than just the instance: this is an
+   ERRORS "shall fail" argument check that was simply never written,
+   which is by now the most common defect shape found in this tree.
+   The never-asserted sweep found six of it; the concurrent
+   `ctype`/`wctype` pass found three more the same day (`newlocale`
+   ignoring `category_mask`, `posix_fadvise` ignoring `len`/`offset`,
+   `posix_fallocate`'s wrong errno for a directory). Enumerating a
+   page's "shall fail" list explicitly, and checking each entry, finds
+   more here than auditing return values or happy paths does.
 
 2. **The `[CX]` `<apostrophe>` flag is not recognised; `"%'d"` is
    emitted literally.** `fprintf.html`'s flag table lists `'` as a
@@ -2361,8 +2373,22 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
    `0` and `#`, so a `'` terminates the flag scan and then falls out of
    the conversion switch's default arm, which emits the two bytes
    verbatim. Measured: `snprintf(b, n, "%'d", 1234567)` yields `"%'d"`,
-   3 bytes, and the argument is never converted at all — so every
-   later conversion in the same format reads the wrong argument.
+   3 bytes.
+
+   **Severity: this is a silent argument-stream desync, not a
+   formatting defect.** The default arm emits the two bytes and does
+   *not* consume an argument, so every conversion after the `%'` in the
+   same format string reads the argument meant for the one before it.
+   In `printf("%'d %s\n", total, name)` the `%s` is handed `total` and
+   dereferences an integer as a `char *` — a crash, or a garbage
+   string, in code that reads as obviously correct.
+
+   The POSIX locale makes this worse rather than better. There is no
+   thousands grouping there, so the *correct* output of `%'d` is
+   byte-for-byte the output of `%d`; an author who tries `%'d`, sees no
+   separators and concludes "not supported here, harmless" has no
+   reason to suspect the rest of the format is now misaligned. The one
+   visible symptom is the one that looks least alarming.
 
 ### UNIMPL found (groups K/L)
 
@@ -2413,13 +2439,23 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
   inspection only, no fixture here can make a stream fail part-way
   through a line.
 
-- **The `flockfile` no-ops are N/A only for as long as
-  `lib/libpthread.a` stays empty.** Recorded explicitly because the
-  verdict above is a judgement call: a no-op lock is *correct* in a
-  libc with one thread of control and *wrong* the day a second one
-  exists. If `<pthread.h>` ever lands, every clause marked N/A in the
-  `flockfile` row above becomes reachable and `src/stdio/file.c`'s
-  three functions become BUGs without a line of them changing.
+### Expiry condition on the `flockfile` N/A (groups K/L)
+
+Recorded under its own heading rather than as a bullet, because it is
+an **N/A that can stop being one** and nothing else in this ledger
+carries that property.
+
+The `flockfile`/`ftrylockfile`/`funlockfile` clauses marked N/A above
+are N/A **only for as long as `lib/libpthread.a` stays an empty archive
+and `include/` has no `<pthread.h>`**. A no-op lock is *correct* in a
+libc with one thread of control and *wrong* the day a second one
+exists. If `<pthread.h>` ever lands, every one of those clauses becomes
+reachable at once and `src/stdio/file.c`'s three functions become BUGs
+without a single line of them changing — a regression no diff
+introduces and nobody goes looking for. Whoever adds threading to this
+libc has to come back to that row. The same condition is stated in
+`test/posix-stdio.c`'s `test_flockfile_nesting` banner, so it is not
+carried by this file alone.
 
 ### Not reached (groups K/L)
 

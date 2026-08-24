@@ -1101,6 +1101,22 @@ counted in **both** places. Reading the frozen tables, subtract 28 from
 357 and add **22** to *implemented + clause-audited*; the other six
 were already there.
 
+**The wider point, which is not about this batch's arithmetic.** The
+note above this one records the tokeniser *undercounting*, because
+`hdestroy` and `wordfree` appeared only in prose and in a sibling row's
+clause column. This note records it *overcounting*, because six names
+carry a row in two sections at once. Two auditors, working the same day
+on different headers, each hit a counting problem in the opposite
+direction — which says plainly that **the ledger's counting method is
+itself unreliable, not that either pass miscounted**. First-column
+tokenisation cannot tell "audited twice" from "audited once" and cannot
+see an audit that a row describes in prose, and no amount of care by an
+individual auditor fixes either. Item 4 of the successor queue should be
+read as "re-derive the split with a method that does not have these two
+failure modes", not as "re-run the same pipeline and trust the answer".
+This is the sort of thing that is only visible when several people touch
+one document in a single day, and it will be invisible again next week.
+
 Two further cautions, both checked rather than assumed:
 
 - Step 3 of "How this was produced", run against groups K and L, sees
