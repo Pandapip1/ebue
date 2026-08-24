@@ -43,6 +43,8 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include "../src/sh/sh.h"
 
 static int fails;
@@ -596,24 +598,21 @@ static void test_exec_reuses_wordexp_param_expansion(const char *self)
 	unsetenv("SH_TEST_EXIT_CODE");
 }
 
-/* Constructs this stage do not implement are reported as -1 ("cannot
+/* Constructs no stage yet implements are reported as -1 ("cannot
  * execute this AST node yet"), never silently misexecuted -- see
- * sh.h's __sh_exec_*() comment. Pipelines and redirection are stage 3,
- * implemented as of this file (see the tests below); subshells and
- * brace groups remain stage 4. */
+ * sh.h's __sh_exec_*() comment. Pipelines and redirection (stage 3) and
+ * subshells/brace groups (stage 4) are implemented as of this file --
+ * see the tests below; command substitution remains stage 5. */
 static void test_exec_reports_unimplemented_constructs(void)
 {
 	int status;
-	CHECK(run("(echo hi)", &status) == -1);           /* stage 4: subshells */
-	CHECK(run("{ echo hi; }", &status) == -1);        /* stage 4: brace groups */
-	/* A pipeline stage that is itself a subshell/brace group is stage
-	 * 4 too, even though the pipeline machinery itself is stage 3. */
-	CHECK(run("(echo hi) | cat", &status) == -1);
-	CHECK(run("cat | { echo hi; }", &status) == -1);
 	/* Command substitution stays stage 5 in every position this stage
 	 * newly touches: a redirection target word and an unquoted
-	 * here-document body. */
+	 * here-document body, including when the redirection/heredoc
+	 * belongs to a stage-4 group rather than a simple command. */
 	CHECK(run("echo hi > $(echo out)", &status) == -1);
+	CHECK(run("(echo hi) > $(echo out)", &status) == -1);
+	CHECK(run("{ echo hi > $(echo out); }", &status) == -1);
 	{
 		char err[256];
 		struct sh_list *l = __sh_parse("cat <<EOF\n$(echo x)\nEOF\n", err, sizeof err);
@@ -1095,6 +1094,235 @@ static void test_exec_pipeline_stage_redir_overrides_pipe(const char *self)
 	free(tmp);
 }
 
+/* ---- stage 4: subshells and brace groups (XCU 2.9.4, 2.12) -------------
+ *
+ * These build on run()/must_parse()/file_redir_supported()/make_tmp()/
+ * slurp() from stages 2/3 above, plus self-exec roles already defined
+ * there (--exit-child/--produce/--stdin-eq). The environment and
+ * working-directory checks below inspect *this test process's own*
+ * getenv()/getcwd() directly, rather than needing a child role, because
+ * run() executes the parsed AST in this very process (exec_group() in
+ * src/sh/exec.c does not fork for a standalone group -- see its header
+ * comment for why); a group used as a pipeline stage does fork, and
+ * test_exec_group_pipeline_stage() below checks specifically that even
+ * then nothing leaks back into this process.
+ */
+
+/* Returns a malloc'd copy of the current working directory (never
+ * NULL on success), for a test to restore afterward -- every test
+ * below that changes the working directory (proving a subshell's `cd`
+ * does not survive it, or a brace group's does) must put it back, or
+ * later tests using cwd-relative temp files (make_tmp()) would break. */
+static char *save_cwd(void)
+{
+	char *p = getcwd(0, 0);
+	CHECK(p != 0);
+	return p;
+}
+
+static void restore_cwd(char *saved)
+{
+	if (saved) { CHECK(chdir(saved) == 0); free(saved); }
+}
+
+/* 2.9.4: "{ compound-list ; }" executes "in the current process
+ * environment" -- both a variable assignment and a `cd` inside it must
+ * still be visible afterward. */
+static void test_exec_brace_persists_assignment_and_cd(void)
+{
+	char *saved = save_cwd();
+	char *now;
+	int status;
+
+	CHECK(mkdir("shtst_brace_dir", 0755) == 0 || errno == EEXIST);
+	unsetenv("SH_TEST_BRACE_VAR");
+
+	CHECK(run("{ SH_TEST_BRACE_VAR=hello; cd shtst_brace_dir; }", &status) == 0);
+	CHECK(status == 0);
+
+	{
+		const char *v = getenv("SH_TEST_BRACE_VAR");
+		CHECK(v && strcmp(v, "hello") == 0);
+	}
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) != 0); /* cd actually moved us */
+	free(now);
+
+	unsetenv("SH_TEST_BRACE_VAR");
+	restore_cwd(saved);
+	rmdir("shtst_brace_dir");
+}
+
+/* 2.9.4/2.12: "( compound-list )" executes in a subshell environment
+ * that is a duplicate of the shell's; "changes made to the subshell
+ * environment shall not affect the shell environment" -- the same
+ * assignment and `cd` that persisted through a brace group above must
+ * both vanish once the subshell finishes. */
+static void test_exec_subshell_does_not_persist_assignment_and_cd(void)
+{
+	char *saved = save_cwd();
+	char *now;
+	int status;
+
+	CHECK(mkdir("shtst_sub_dir", 0755) == 0 || errno == EEXIST);
+	unsetenv("SH_TEST_SUB_VAR");
+
+	CHECK(run("(SH_TEST_SUB_VAR=hello; cd shtst_sub_dir)", &status) == 0);
+	CHECK(status == 0);
+
+	CHECK(getenv("SH_TEST_SUB_VAR") == 0);
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) == 0); /* still where we started */
+	free(now);
+
+	restore_cwd(saved);
+	rmdir("shtst_sub_dir");
+}
+
+/* 2.9.4 Exit Status: "The exit status of a grouping command shall be
+ * the exit status of compound-list" -- i.e. of the last command run in
+ * it, for both forms. */
+static void test_exec_group_exit_status(const char *self)
+{
+	char src[512];
+	int status;
+
+	snprintf(src, sizeof src, "{ '%s' --exit-child 3; '%s' --exit-child 9; }", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 9);
+
+	snprintf(src, sizeof src, "( '%s' --exit-child 3; '%s' --exit-child 9 )", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 9);
+}
+
+/* A group's exit status feeds "!" negation and "&&"/"||" short-circuit
+ * exactly like a pipeline's does (2.9.2/2.9.3 apply uniformly to
+ * whatever kind of command produced the status) -- this is what "$?
+ * propagates correctly out of each form" means operationally, since
+ * this shell has no $? parameter expansion yet (sh.h's banner): the
+ * *status* __sh_exec_*() threads through by reference is the only
+ * observable stand-in for it, and these are the constructs that
+ * consume it. */
+static void test_exec_group_bang_and_status_propagation(const char *self)
+{
+	char src[512];
+	int status;
+
+	snprintf(src, sizeof src, "! ( '%s' --exit-child 0 )", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 1);
+
+	snprintf(src, sizeof src, "! { '%s' --exit-child 5; }", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	snprintf(src, sizeof src, "( '%s' --exit-child 0 ) && '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 9); /* left (the subshell) succeeded, right ran */
+
+	snprintf(src, sizeof src, "( '%s' --exit-child 3 ) && '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 3); /* left failed, right never ran -- status is still the left's */
+
+	snprintf(src, sizeof src, "{ '%s' --exit-child 0; } || '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0); /* left succeeded, right never ran */
+}
+
+/* 2.9.4: "each [may be followed by] redirections ... shall apply to all
+ * the commands within the compound command" -- a single "> file" after
+ * the group affects every command inside it, not just the last one
+ * (which would instead be what redirecting *that one command* looks
+ * like). */
+static void test_exec_group_redir_whole(const char *self)
+{
+	char src[512], *tmp, *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+	tmp = make_tmp();
+	CHECK(tmp != 0);
+	if (!tmp) return;
+
+	snprintf(src, sizeof src, "{ '%s' --produce one; '%s' --produce two; } > %s", self, self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "one\ntwo\n") == 0);
+	free(got);
+
+	snprintf(src, sizeof src, "( '%s' --produce three; '%s' --produce four ) > %s", self, self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "three\nfour\n") == 0);
+	free(got);
+
+	remove(tmp);
+	free(tmp);
+}
+
+/* Nesting: a brace group's assignment is visible inside a subshell that
+ * contains it (it is still "the current process environment" as far as
+ * that subshell's own copy is concerned) but the outer subshell still
+ * discards it on the way out; a subshell nested inside a brace group
+ * never lets its assignment escape even that innermost boundary. */
+static void test_exec_group_nesting(const char *self)
+{
+	char src[512];
+	int status;
+
+	unsetenv("SH_TEST_NEST_VAR");
+
+	snprintf(src, sizeof src, "( { SH_TEST_NEST_VAR=inner; '%s' --exit-child 4; } )", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 4);
+	CHECK(getenv("SH_TEST_NEST_VAR") == 0);
+
+	snprintf(src, sizeof src, "{ (SH_TEST_NEST_VAR=inner2); '%s' --exit-child 6; }", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 6);
+	CHECK(getenv("SH_TEST_NEST_VAR") == 0);
+}
+
+/* A group used as one stage of a multi-command pipeline: its stdout
+ * must reach the next stage exactly like a simple command's would
+ * (src/sh/exec.c's fork_group_stage()), and -- per 2.12's "each command
+ * of a multi-command pipeline is in a subshell environment", which
+ * applies regardless of "(...)" vs "{...}" -- an assignment inside a
+ * *brace* group used this way must still not leak into the real shell,
+ * even though a standalone brace group (tested above) does not isolate
+ * at all. */
+static void test_exec_group_pipeline_stage(const char *self)
+{
+	char src[512];
+	int status;
+
+	if (!file_redir_supported(self)) return;
+
+	snprintf(src, sizeof src, "( '%s' --produce hi ) | '%s' --stdin-eq hi", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	snprintf(src, sizeof src, "{ '%s' --produce hi; } | '%s' --stdin-eq hi", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	/* pipeline status is still the *last* stage's, whether that stage
+	 * is a group or a simple command (2.9.2). */
+	snprintf(src, sizeof src, "'%s' --produce hi | ( '%s' --stdin-eq hi; '%s' --exit-child 7 )", self, self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 7);
+
+	unsetenv("SH_TEST_PIPE_VAR");
+	snprintf(src, sizeof src, "{ SH_TEST_PIPE_VAR=leaked; '%s' --exit-child 0; } | '%s' --exit-child 0", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	CHECK(getenv("SH_TEST_PIPE_VAR") == 0);
+	unsetenv("SH_TEST_PIPE_VAR");
+}
+
 /* Reads every remaining byte of stdin into a growable buffer.
  * *out_len receives the byte count (never counting a NUL this doesn't
  * add). Returns a malloc'd buffer (possibly zero-length, never NULL on
@@ -1267,7 +1495,15 @@ int main(int argc, char **argv)
 	test_exec_pipeline_bang(argv[0]);
 	test_exec_pipeline_stage_redir_overrides_pipe(argv[0]);
 
+	test_exec_brace_persists_assignment_and_cd();
+	test_exec_subshell_does_not_persist_assignment_and_cd();
+	test_exec_group_exit_status(argv[0]);
+	test_exec_group_bang_and_status_propagation(argv[0]);
+	test_exec_group_redir_whole(argv[0]);
+	test_exec_group_nesting(argv[0]);
+	test_exec_group_pipeline_stage(argv[0]);
+
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 3: lexer + parser + execution of simple commands, redirections and pipelines -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 4: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups -- see test/sh-design.md)\n");
 	return 0;
 }

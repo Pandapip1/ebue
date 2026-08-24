@@ -107,3 +107,66 @@ because there is no shell at that stage. A working `sh` eventually means
 ordinary shell scripts could replace some of that machinery — but it is
 downstream of the shell being trustworthy, and kaem must keep working
 unchanged in the meantime.
+
+## Status and what remains before a usable `sh.exe`
+
+As of stage 4 (`src/sh/exec.c`), the executor covers: simple commands
+with real PATH lookup and `$?` (stage 2); assignments, `&&`/`||`/`!`,
+and all nine redirection operators including here-documents, plus
+pipelines of arbitrary length (stage 3); and subshells `( list )` and
+brace groups `{ list; }`, including as pipeline stages, plus a minimal
+`cd` builtin (stage 4). `src/sh/parse.c` already parses more than the
+executor runs: `if`/`while`/`for`/`case`, functions and aliases parse
+as ordinary reserved words today only insofar as the lexer treats them
+as WORD tokens (sh.h's banner) — the grammar for them does not exist
+yet either, parser or executor.
+
+What is still missing, in the order it would need to be tackled (later
+items depend on earlier ones being real, not on each other's specific
+implementation):
+
+1. **Command substitution** (`$(...)`/`` `...` ``) — the one gap that
+   already runs through every layer as a named, tested "not yet"
+   (`WRDE_CMDSUB` from `wordexp()`, this file's -1 convention). Needed
+   before `wordexp()` can stop refusing it, which is one of this
+   project's three stated motivations. Mechanically: wire
+   `wordexp()`'s command-substitution call-out to `__sh_exec_list()`,
+   capturing that list's stdout into a buffer instead of an fd a real
+   process would inherit — the same "subshell environment" 2.12
+   requires for `( list )` (this file's own text above), so
+   `exec_group()`'s save/restore machinery is *reused*, not
+   reinvented, plus a way to capture output without a real pipe (a
+   temp file, per this file's existing here-document reasoning, or an
+   in-memory sink if one gets built first).
+2. **Control-flow reserved words** (`if`/`while`/`for`/`case`) —
+   currently an explicit non-goal (sh.h's banner, this note's opening
+   paragraph). A `sh -c` that cannot run a real script needs at least
+   `if`/`for` to be worth calling a shell rather than a command
+   splitter; this is a scope decision for whoever picks this up next,
+   not a foregone conclusion — the design note's original scope
+   ("simple commands, pipelines, `&&`/`||`/`;` lists, redirections...
+   quoting, and the expansions") deliberately left it out.
+3. **Functions, aliases, job control** — also explicit non-goals today.
+   Job control in particular is called out as permanently out of scope
+   ("the libc needs none of them"); functions and aliases are not
+   ruled out forever, just not yet decided.
+4. **A `main()` with `-c` and script-file handling** — there is
+   currently no `sh` binary at all, only `test/sh.c`'s test harness
+   (which re-execs itself for child roles, not a general-purpose
+   entry point). This needs (1) and a scope decision on (2) to be
+   worth shipping as a real `sh -c "..."`/`sh script` a user would
+   actually invoke, per "Placement and gates" above (its own source
+   directory and binary, not blurred into `src/`).
+5. **Wiring `system()`/`popen()`/`wordexp()` over to it** — the actual
+   payoff (see "Why a libc project is growing a shell" above). Once
+   (1) exists, `wordexp()`'s own `WRDE_CMDSUB` refusal can be replaced
+   outright. `system()` and `popen()` currently hand their command
+   string to `%ComSpec%`/`cmd.exe` (`src/stdlib/system.c`,
+   `src/stdio/misc.c`); switching them to `__sh_parse()` +
+   `__sh_exec_list()` needs (4) settled for the entry-point shape but
+   not the binary itself, since both already call into libc-internal
+   code rather than spawning a separate process today.
+
+None of the above blocks anything already shipped: stages 2-4 are a
+complete, correctly-scoped subset on their own, tested against the
+XCU clauses they implement.
