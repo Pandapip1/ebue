@@ -20,6 +20,11 @@
 #        NTLIBC_ASAN_EXTRA (extra CFLAGS, e.g. -fsanitize=fuzzer-no-link),
 #        NTLIBC_LEAKS (default 1; set 0 to switch LeakSanitizer off)
 #        NTLIBC_ASAN_CONVERSION=1 (see CONVSAN below)
+#        ASAN_JOBS (default: nproc) -- how many src/*.c compiles and how
+#          many test links to run at once.  The test *runs* are always
+#          serial; see the comment above the link phase for why that is
+#          a correctness constraint and not a tuning decision.  Output is
+#          byte-identical at any value.
 
 set -eu
 
@@ -190,38 +195,150 @@ mkdir -p "$OBJ/obj" "$OBJ/test"
 : > "$OBJ/compiled.txt"
 : > "$OBJ/skipped.txt"
 : > "$OBJ/partial.txt"
+
+# How many compiles and links to run at once.  These are 282 independent
+# clang invocations followed by 54 independent links; each reads the
+# source tree and writes only files named after its own input, so this
+# parallelises with no change to what is built.  ASAN_JOBS=1 restores
+# the fully serial behaviour, and is the safe fallback when neither
+# nproc nor getconf exists.
+: "${ASAN_JOBS:=}"
+if [ -z "$ASAN_JOBS" ]; then
+	ASAN_JOBS=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+fi
+
+# Phase 1a, serial and process-free: decide what happens to each source.
+# The worklist line is "index<TAB>file<TAB>mode<TAB>reason", where mode
+# is `skip`, `full` or `ubsan`.
+#
+# The index is what keeps this reproducible.  Nothing below appends to
+# compiled.txt/skipped.txt/partial.txt from a worker, and NOTHING appends
+# to them from this pass either: every line of all three manifests is
+# written by the serial merge in phase 1c, in source order, exactly as
+# the single serial loop this replaces wrote them.  Concurrent appends to
+# a shared file are not guaranteed atomic once a write exceeds a pipe
+# buffer, and even when they are, the *order* would depend on scheduling
+# -- so the manifests this script's own report points a reader at would
+# differ run to run on an unchanged tree.  Deciding early and emitting
+# late costs one extra field in the worklist and buys byte-identical
+# output.
+cwork="$OBJ/compile-worklist"
+: > "$cwork"
+cidx=0
 for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
+	cidx=$((cidx + 1))
 	# src/<area>/<arch>/<file>.c overrides src/<area>/<file>.c; keep only ours
 	sub=$(echo "$f" | awk -F/ 'NF==4{print $3}')
 	if [ -n "$sub" ] && [ "$sub" != "$ARCH" ]; then
-		echo "$f  (other architecture)" >> "$OBJ/skipped.txt"
+		printf '%06d\t%s\tskip\t(other architecture)\n' "$cidx" "$f" >> "$cwork"
 		continue
 	fi
 	case $f in
-	*/teb.c) echo "$f  (reads gs:0x30; __teb() comes from ntstubs.c)" >> "$OBJ/skipped.txt"
-	         continue ;;
+	*/teb.c)
+		printf '%06d\t%s\tskip\t(reads gs:0x30; __teb() comes from ntstubs.c)\n' \
+			"$cidx" "$f" >> "$cwork"
+		continue ;;
 	esac
 	# A few files use the musl aligned-word scan: align to sizeof(size_t),
 	# then read whole words.  Such a read can go past the end of the string
 	# object but never past the end of its page, so it is safe in fact --
 	# ASan tracks objects, not pages, and reports every call.  Build those
 	# with UBSan only, and say so, rather than drown the run in noise.
-	xcflags=$CFLAGS
 	case $f in
 	src/string/strlen.c)
-		xcflags="$(echo "$CFLAGS" | sed 's/-fsanitize=address,undefined/-fsanitize=undefined/')"
-		echo "$f  (built UBSan-only: aligned word-at-a-time scan)" >> "$OBJ/partial.txt" ;;
+		printf '%06d\t%s\tubsan\t(built UBSan-only: aligned word-at-a-time scan)\n' \
+			"$cidx" "$f" >> "$cwork" ;;
+	*)
+		printf '%06d\t%s\tfull\t-\n' "$cidx" "$f" >> "$cwork" ;;
 	esac
-	o="$OBJ/obj/$(echo "$f" | tr / _).o"
-	# $xcflags is a flag list and must word-split.
+done
+
+# Phase 1b, parallel.  compile_one INDEX FILE MODE always writes
+# $cpar/INDEX.rc -- `ok` or `fail` -- including on success, because the
+# merge below counts those files.  A worker that dies without reporting
+# is then a hard failure rather than a source file that quietly stops
+# being compiled: dropping objects here would shrink the library the
+# tests link against, which is precisely how `make asan` once reported
+# success having verified nothing.
+UBSAN_ONLY_CFLAGS=$(echo "$CFLAGS" | sed 's/-fsanitize=address,undefined/-fsanitize=undefined/')
+cpar="$OBJ/cpar"
+mkdir -p "$cpar" || exit 1
+compile_one() {
+	c_idx=$1 c_f=$2 c_mode=$3
+	case $c_mode in
+	ubsan) c_flags=$UBSAN_ONLY_CFLAGS ;;
+	*)     c_flags=$CFLAGS ;;
+	esac
+	c_o="$OBJ/obj/$(echo "$c_f" | tr / _).o"
+	# $c_flags is a flag list and must word-split.
 	# shellcheck disable=SC2086
-	if $CC -c $xcflags -w "$srcdir/$f" -o "$o" 2> "$o.err"; then
+	if $CC -c $c_flags -w "$srcdir/$c_f" -o "$c_o" 2> "$c_o.err"; then
+		echo ok > "$cpar/$c_idx.rc"
+	else
+		rm -f "$c_o"
+		echo fail > "$cpar/$c_idx.rc"
+	fi
+}
+
+cshard=0
+while [ "$cshard" -lt "$ASAN_JOBS" ]; do
+	(
+		awk -v n="$ASAN_JOBS" -v k="$cshard" 'NR % n == k' "$cwork" \
+		| while IFS="$(printf '\t')" read -r idx f cmode creason; do
+			[ -z "$idx" ] && continue
+			[ "$cmode" = skip ] && continue
+			compile_one "$idx" "$f" "$cmode"
+		done
+		# Explicit, because the alternative is worse than it looks.
+		# A shard whose last loop iteration ends on a `[ ... ] &&
+		# continue` that evaluates false exits 1 -- for no reason but
+		# which files happened to land in which shard.  Measured, in
+		# this shell: `wait` with no operands then returns 0 ANYWAY,
+		# even for `( exit 3 ) &`, and even under `set -e`.  So the
+		# failure would not have aborted the run; it would have been
+		# swallowed.  That cuts both ways and the second way is the one
+		# that matters: A REWRITE THAT JUDGED ITS WORKERS BY `wait`
+		# WOULD REPORT SUCCESS NO MATTER WHAT THEY DID.  This design
+		# never asks.  A worker succeeded if and only if it wrote its
+		# result file, and the merge below counts those.  `exit 0` says
+		# that the shard's own status is deliberately meaningless rather
+		# than accidentally so.
+		exit 0
+	) &
+	cshard=$((cshard + 1))
+done
+wait
+
+# Phase 1c, serial merge in source order.  This is where all three
+# manifests are written, so their contents and their order are what the
+# serial loop produced, whatever ASAN_JOBS was.
+cmissing=0
+while IFS="$(printf '\t')" read -r idx f cmode creason; do
+	[ -z "$idx" ] && continue
+	if [ "$cmode" = skip ]; then
+		echo "$f  $creason" >> "$OBJ/skipped.txt"
+		continue
+	fi
+	[ "$cmode" = ubsan ] && echo "$f  $creason" >> "$OBJ/partial.txt"
+	o="$OBJ/obj/$(echo "$f" | tr / _).o"
+	if [ ! -f "$cpar/$idx.rc" ]; then
+		cmissing=$((cmissing + 1))
+		echo "$f  (NO RESULT: the compile worker for this file never reported)" >> "$OBJ/skipped.txt"
+		rm -f "$o"
+		continue
+	fi
+	if [ "$(cat "$cpar/$idx.rc")" = ok ]; then
 		echo "$f" >> "$OBJ/compiled.txt"
 	else
 		echo "$f  (see $o.err)" >> "$OBJ/skipped.txt"
-		rm -f "$o"
 	fi
-done
+done < "$cwork"
+if [ "$cmissing" -ne 0 ]; then
+	echo "asan: FAILED -- $cmissing compile worker(s) never reported a result, so those" >&2
+	echo "asan: source files were never built.  A parallel phase that loses work must fail," >&2
+	echo "asan: not link a smaller library and call the run a pass." >&2
+	exit 1
+fi
 
 # ntstubs.c is test-support code, not part of the library, so it does not
 # get the intentional-wraparound scrutiny below: build it without INTSAN.
@@ -309,8 +426,80 @@ not_native()
 TINC="-I$srcdir/obj/include -I$srcdir/include -I$srcdir/arch/$ARCH -I$srcdir/arch/generic"
 ran=0 passed=0 nolink=0 skipped=0 unverified=0
 : > "$OBJ/unlinkable.txt"
+
+# ---- 2a. link every test, in parallel --------------------------------------
+#
+# The link and the run used to be one loop body.  They are separated
+# because only ONE of the two halves is safe to run concurrently, and
+# saying which is the whole point of the split:
+#
+#   The links are.  54 independent $CC invocations, each reading the same
+#   read-only $LIBOBJS and writing one output named after its own test.
+#   They are the same shape as the 282 compiles above and are the second
+#   half of this script's build cost.
+#
+#   The RUNS ARE NOT, and they are deliberately left serial.  Every test
+#   executes with this script's own working directory -- the source tree
+#   root -- and several write fixed-name files into it: .hidden-glob-test,
+#   cap1.txt..cap4.txt, script1.sh, script2.sh, sh-main-out.txt,
+#   gfi1.gfitxt (that is what .gitignore's eleven entries are, ae93540).
+#   test/posix-glob.c additionally *globs* that directory, so it does not
+#   merely need its own names, it needs nothing else creating files
+#   beside it while it looks.  Running these concurrently in one shared
+#   directory would produce failures that depend on timing, in a
+#   sanitizer build whose entire purpose is to make failures
+#   deterministic.  Giving each test a private mktemp -d cwd -- what
+#   tools/runtests.sh already does -- would fix that and is worth doing,
+#   but it is a behavioural change to how every test sees the world and
+#   belongs in its own commit with its own evidence, not smuggled in
+#   behind a speedup.
+#
+# link_one INDEX NAME TESTSRC always writes $lpar/INDEX.rc, for the same
+# reason compile_one does.
+lwork="$OBJ/link-worklist"
+: > "$lwork"
+lidx=0
 for t in $(cd "$srcdir" && echo test/*.c); do
+	lidx=$((lidx + 1))
 	n=$(basename "$t" .c)
+	printf '%06d\t%s\t%s\n' "$lidx" "$n" "$t" >> "$lwork"
+done
+
+lpar="$OBJ/lpar"
+mkdir -p "$lpar" || exit 1
+link_one() {
+	l_idx=$1 l_n=$2 l_t=$3
+	l_exe="$OBJ/test/$l_n"
+	# $SAN/$TINC/$LINKFLAGS/$LIBOBJS are flag and object lists: word-split.
+	# shellcheck disable=SC2086
+	if $CC $SAN -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
+	     $TINC $LINKFLAGS "$srcdir/$l_t" "$OBJ/ntstubs.o" $LIBOBJS -o "$l_exe" \
+	     2> "$l_exe.link.err"; then
+		echo ok > "$lpar/$l_idx.rc"
+	else
+		echo fail > "$lpar/$l_idx.rc"
+	fi
+}
+
+lshard=0
+while [ "$lshard" -lt "$ASAN_JOBS" ]; do
+	(
+		awk -v n="$ASAN_JOBS" -v k="$lshard" 'NR % n == k' "$lwork" \
+		| while IFS="$(printf '\t')" read -r idx n t; do
+			[ -z "$idx" ] && continue
+			[ -n "$(not_native "$n")" ] && continue
+			link_one "$idx" "$n" "$t"
+		done
+		# See the compile shard's `exit 0` above for why this is here.
+		exit 0
+	) &
+	lshard=$((lshard + 1))
+done
+wait
+
+# ---- 2b. run them, serially, in the original order -------------------------
+while IFS="$(printf '\t')" read -r idx n t; do
+	[ -z "$idx" ] && continue
 	exe="$OBJ/test/$n"
 	why=$(not_native "$n")
 	if [ -n "$why" ]; then
@@ -318,11 +507,17 @@ for t in $(cd "$srcdir" && echo test/*.c); do
 		[ "$mode" = "--quiet" ] || echo "  SKIP $n  ($why)"
 		continue
 	fi
-	# $SAN/$TINC/$LINKFLAGS/$LIBOBJS are flag and object lists: word-split.
-	# shellcheck disable=SC2086
-	if $CC $SAN -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
-	     $TINC $LINKFLAGS "$srcdir/$t" "$OBJ/ntstubs.o" $LIBOBJS -o "$exe" \
-	     2> "$exe.link.err"; then
+	if [ ! -f "$lpar/$idx.rc" ]; then
+		# See 2a: a link worker that never reported.  Counted as
+		# unlinkable rather than dropped, so the `nolink` floor below
+		# catches it -- a test that silently stops being linked is
+		# exactly the shape of defect 1.
+		nolink=$((nolink + 1))
+		echo "$n: NO RESULT -- the link worker for this test never reported" \
+			>> "$OBJ/unlinkable.txt"
+		continue
+	fi
+	if [ "$(cat "$lpar/$idx.rc")" = ok ]; then
 		ran=$((ran + 1))
 		# test/malloc and test/posix-alloc assert that malloc()/calloc()/
 		# realloc() return NULL with ENOMEM for a request that cannot be
@@ -367,7 +562,7 @@ for t in $(cd "$srcdir" && echo test/*.c); do
 		echo "$n: $(grep -o 'undefined reference to .*' "$exe.link.err" | sort -u | tr '\n' ' ')" \
 			>> "$OBJ/unlinkable.txt"
 	fi
-done
+done < "$lwork"
 
 echo "asan: $passed/$ran tests passed, $unverified unverified, $skipped not applicable natively, $nolink unlinkable"
 
