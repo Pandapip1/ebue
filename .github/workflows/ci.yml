@@ -6,11 +6,19 @@ name: CI
 # Builds ntlibc and runs its test suite for both supported targets,
 # i386-win32 and x86_64-win32, two ways:
 #
-#   - `test` (Linux + Wine): cross-builds with tinycc and runs the tests
-#     under Wine. Fast, but Wine emulates ntdll/kernel32 rather than being
-#     real Windows, so it can pass (or fail) differently than the real
-#     thing -- notably it doesn't implement everything (see the Makefile's
-#     TEST_RUN comment on the `*-win.c` tests it can't run at all).
+#   - `ntlibc-suite` (Linux + Wine): cross-builds with tinycc and runs
+#     this project's own test/*.c under Wine. Fast, but Wine emulates
+#     ntdll/kernel32 rather than being real Windows, so it can pass (or
+#     fail) differently than the real thing -- notably it doesn't
+#     implement everything (see the Makefile's TEST_RUN comment on the
+#     `*-win.c` tests it can't run at all).
+#   - `libc-test` (Linux + Wine): the same build, but running musl's
+#     imported regression corpus (third_party/libc-test) against it,
+#     adjudicated line by line against test/libc-test-expected.txt. A
+#     separate job from `ntlibc-suite` because it is a separate claim
+#     about the library, made against a foreign suite and its own
+#     ledger; sharing a job reported either failure against the same
+#     leg. x86_64-only -- see that job's comment.
 #   - `windows-test` (real `windows-latest` runner): downloads the very
 #     same test/*.exe the `build-test-exes` job compiled (including the
 #     `*-win.c` ones Wine skips) and runs them directly on real Windows.
@@ -24,7 +32,7 @@ name: CI
 #     compiles anything, it only executes the binaries the Linux job
 #     already built.
 #
-# `test`'s matrix has three legs, not a full 2x2 of arch x kernel32: both
+# `ntlibc-suite`'s matrix (mirrored by `build-test-exes`) has three legs, not a full 2x2 of arch x kernel32: both
 # arches at the default `--disable-kernel32` (the configuration the
 # project actually recommends, per CONTRIBUTING.md's "NTDLL first,
 # kernel32 only as a last resort" -- that has to stay the best-covered
@@ -155,11 +163,11 @@ jobs:
   #
   # This job exists purely to get `windows-test` off the critical path of
   # the Wine run, and it is not a redundant build -- please don't fold it
-  # back into `test`. The real-Windows legs consume exactly one thing from
+  # back into `ntlibc-suite`. The real-Windows legs consume exactly one thing from
   # the Linux side: the `test-exes-*` artifact. Those .exe files are
   # finished the moment they are *compiled*; nothing the Wine run does
   # afterwards changes a byte of them. While the upload lived at the end
-  # of `test`, the real-Windows legs waited for the whole leg anyway --
+  # of the old combined Wine job, the real-Windows legs waited for the whole leg anyway --
   # measured on a real run, ~62s installing Wine (which they never use)
   # plus a ~75s `make check` that is almost entirely Wine process startup,
   # so roughly 140s of waiting for artefacts that were ready in the first
@@ -170,12 +178,15 @@ jobs:
   # Deliberately no Wine here: installing it is the single largest step in
   # the old serial path and this job has nothing to run.
   #
-  # Only `windows-test` depends on this job. The Wine leg below runs
-  # alongside it and builds its own tree -- see the comment on `test`.
+  # Only `windows-test` depends on this job. The two Wine jobs below run
+  # alongside it and build their own trees -- see the comment on
+  # `ntlibc-suite`, which sets out at length why they rebuild rather than
+  # consuming this job's artifact, and why that is the safer of the two
+  # hand-offs rather than merely the cheaper one.
   #
-  # The matrix mirrors `test`'s three legs exactly, because the artifact
-  # names (`test-exes-${{ matrix.name }}`) are what `windows-test`
-  # indexes by -- see the comment on `test`'s matrix for why there are
+  # The matrix mirrors `ntlibc-suite`'s three legs exactly, because the
+  # artifact names (`test-exes-${{ matrix.name }}`) are what
+  # `windows-test` indexes by -- see the header comment for why there are
   # three legs and not a full 2x2.
   build-test-exes:
     needs: build-toolchain
@@ -229,7 +240,7 @@ jobs:
         run: make -j"$(nproc)" test-exes
 
       # Publish the built PE test binaries (everything under obj/test/,
-      # which includes the *-win.c ones the `test` job's `check` step
+      # which includes the *-win.c ones the `ntlibc-suite` job's `check` step
       # deliberately doesn't run under Wine -- see the Makefile's
       # TEST_RUN comment) so the windows-test job below can execute them
       # on a real Windows runner. Named per matrix leg (not just per arch)
@@ -253,26 +264,60 @@ jobs:
           # 0 -- a green job that tested nothing.
           if-no-files-found: error
 
-  # The Wine leg. A *sibling* of build-test-exes, not a consumer of it --
-  # deliberately, and please don't "tidy" the two into a chain. The
-  # obvious-looking simplification is to have both legs share
-  # build-test-exes as their one dependency, but the two consumers want
-  # different things: `windows-test` wants only the artifact, while this
-  # job wants a configured tree it builds itself, in under a second.
-  # Gating it on build-test-exes would therefore buy it nothing and cost
-  # it that job's entire startup latency -- runner allocation, checkout,
-  # cache restore, ~25-30s it does not pay today -- to wait on a job whose
-  # real work is sub-second. Kept as siblings, total wall clock is
-  # max(this leg, build-test-exes + windows-test) instead of a serial
-  # 25-30s added to both.
+  # ntlibc's OWN test suite (`make check`) under Wine.
   #
-  # Rebuilds rather than downloading the artifact above for the same
-  # reason: `make check` needs a configured tree with lib/libc.a present
-  # anyway (every test .exe lists it as a prerequisite), and the
-  # cross-compile is under a second with tcc against a restored toolchain
-  # cache -- so downloading would save nothing measurable and would add a
-  # dependence on artefact timestamps to keep make from rebuilding them.
-  test:
+  # This job and `libc-test` below were one job until the two suites were
+  # split apart. They are separate now because they are separate claims:
+  # `make check` is this project's own test/*.c, and `libc-test` is
+  # musl's imported corpus adjudicated against a ledger. Sharing a job
+  # made either failure report against the same leg, and -- worse -- the
+  # corpus step was an `if: matrix.name == 'x86_64'` inside a three-leg
+  # matrix, so on two of the three legs it rendered as a *skipped step*
+  # nobody could tell apart from a stage that had been quietly disabled.
+  # Its arch pinning is now a property of the job (see `libc-test`), so
+  # the board shows exactly one libc-test leg and it either ran or it
+  # did not.
+  #
+  # A *sibling* of build-test-exes, not a consumer of it -- deliberately,
+  # and please don't "tidy" the two into a chain. The obvious-looking
+  # simplification is to have every leg share build-test-exes as its one
+  # dependency, but the consumers want different things: `windows-test`
+  # wants only the artifact, while this job wants a configured tree it
+  # builds itself, in under a second. Gating it on build-test-exes would
+  # therefore buy it nothing and cost it that job's entire startup
+  # latency -- runner allocation, checkout, cache restore, ~25-30s it
+  # does not pay today -- to wait on a job whose real work is sub-second.
+  # Kept as siblings, total wall clock is max(this leg, build-test-exes +
+  # windows-test) instead of a serial 25-30s added to both.
+  #
+  # Rebuilds rather than downloading the artifact above, and that is the
+  # deliberate answer to "the test jobs should consume what the build job
+  # produced". Three reasons, in order of weight:
+  #
+  #   1. It would not work. `make check` needs a configured tree with
+  #      lib/libc.a present (every test .exe lists it as a prerequisite),
+  #      and a consuming job checks the sources out fresh -- so every
+  #      *.c is newer than any downloaded *.exe and make rebuilds the lot
+  #      regardless. The download would be pure cost.
+  #   2. Worse than not working, it would hide a bad hand-off. Because
+  #      make would rebuild anyway, an artifact that arrived empty,
+  #      renamed or wrongly shaped would produce a *green* job -- the
+  #      exact failure fe327e4 had to fix on the windows-test side, only
+  #      this time invisible, because the rebuild would paper over it.
+  #      An artifact hand-off is only safe where the consumer cannot
+  #      substitute for it; `windows-test` genuinely cannot (no
+  #      toolchain, and it is the whole reason build-test-exes exists),
+  #      and these two jobs trivially can.
+  #   3. The cross-compile is under a second with tcc against a restored
+  #      toolchain cache, next to ~62s of installing Wine in this same
+  #      job. There is no measurable saving to buy.
+  #
+  # What this job does have to defend against is running nothing at all,
+  # and that guard lives in tools/runtests.sh: it counts what actually
+  # ran and fails when the count is zero, rather than concluding "no
+  # failures" from an empty loop. Same floor, same reason as
+  # windows-test's `$ran -eq 0`.
+  ntlibc-suite:
     needs: build-toolchain
     runs-on: ubuntu-24.04
     # A hung job otherwise occupies a runner until GitHub's 360-minute
@@ -300,14 +345,15 @@ jobs:
             kernel32: true
             name: x86_64-kernel32
     steps:
-      # submodules: recursive -- the "libc-test corpus" step below needs
-      # third_party/libc-test, which is a submodule. Without this the
-      # directory is empty and tools/libc-test.sh exits 2 by design
-      # rather than skipping, so this is load-bearing rather than
-      # decorative. See third_party/README.md.
+      # Deliberately WITHOUT `submodules:`. The only thing in this
+      # repository that needs one is third_party/libc-test, and that is
+      # the `libc-test` job's business, not this one's -- ~940 files and
+      # 11 MB this job would never open, on every one of three legs. It
+      # is also what keeps the flag load-bearing where it does appear:
+      # if every checkout said `submodules: recursive` out of habit,
+      # nobody could tell which job would actually break without it.
+      # See third_party/README.md.
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Restore tinycc toolchain
         uses: actions/cache@v6
@@ -338,22 +384,6 @@ jobs:
       - name: Check
         run: make -j"$(nproc)" check
 
-      # musl's libc-test corpus, adjudicated against
-      # test/libc-test-expected.txt. Pinned to one leg for the same reason
-      # tools/gate.sh runs it on x86_64 only: the corpus is
-      # arch-independent C, so a second arch doubles the ledger's
-      # maintenance for no new evidence.
-      #
-      # This runs against the stock apt Wine installed above, which
-      # predates RtlCloneUserProcess -- so the tests that fork report
-      # rc=77 (UNVERIFIED) here rather than a verdict. That is detected
-      # from each test's own output at run time, never from a static
-      # list, precisely so the number is visible and moves on its own
-      # when Wine gains the call. See tools/libc-test.sh's header.
-      - name: libc-test corpus
-        if: matrix.name == 'x86_64'
-        run: make libc-test
-
       # Only needs to run once, not once per matrix leg (both generators
       # cover every arch themselves): catches either kind of generated-and-
       # committed file drifting out of sync with its source -- the expanded
@@ -374,6 +404,14 @@ jobs:
       # kaem/mescc-tools bootstrap path is pure-ntdll by nature (it is
       # building the compiler itself, long before kernel32 is even a
       # concept there's a use for), matching this project's own default.
+      #
+      # This one stays an `if:` on a step rather than becoming its own
+      # job, unlike the libc-test split below, and the difference is not
+      # inconsistency: a skipped *test suite* is a claim about the code
+      # that silently was not made, which is what had to stop, whereas
+      # this is a drift check whose whole nature is "run once, in one
+      # configuration" -- there is no per-leg verdict for it to be
+      # missing.
       - name: Regenerate generated files and check for drift
         if: matrix.name == 'x86_64'
         run: |
@@ -381,8 +419,104 @@ jobs:
           git diff --exit-code -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'
           git diff --exit-code -- boot/kaem/
 
+  # musl's libc-test corpus, adjudicated against
+  # test/libc-test-expected.txt. Its own job, a sibling of
+  # `ntlibc-suite` above and of build-test-exes -- see `ntlibc-suite`'s
+  # comment for why nothing here is chained and why this rebuilds
+  # instead of downloading an artifact.
+  #
+  # x86_64-only, and single-legged on purpose. tools/gate.sh pins the
+  # same stage to x86_64 for the same reason: the corpus is
+  # arch-independent C, so a second arch doubles test/libc-test-expected.txt's
+  # maintenance for no new evidence. What changed is *where* the pin
+  # lives. It used to be `if: matrix.name == 'x86_64'` on a step inside a
+  # three-leg matrix, which rendered on the board as a step that was
+  # skipped twice -- indistinguishable from a stage somebody had turned
+  # off. As a job with no matrix at all, there is exactly one leg, it is
+  # named for what it runs, and it is either green or red.
+  #
+  # This runs against the stock apt Wine installed below, which predates
+  # RtlCloneUserProcess -- so the tests that fork report rc=77
+  # (UNVERIFIED) here rather than a verdict. That is detected from each
+  # test's own output at run time, never from a static list, precisely
+  # so the number is visible and moves on its own when Wine gains the
+  # call. See tools/libc-test.sh's header.
+  libc-test:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either -- a test that hangs rather than fails
+    # blocked main for 25 minutes before being cancelled by hand.
+    timeout-minutes: 20
+    steps:
+      # submodules: recursive -- third_party/libc-test IS the corpus this
+      # job runs, and it is a submodule. Without this the directory is
+      # empty and tools/libc-test.sh exits 2 by design rather than
+      # skipping, so the flag is load-bearing here and nowhere else in
+      # this workflow. See third_party/README.md.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The corpus is this job's input the way the test-exes artifact is
+      # windows-test's, so it gets the same treatment: arriving empty is
+      # a hard error with a message naming the cause, not a skip and not
+      # a pass. tools/libc-test.sh already exits 2 on an empty
+      # third_party/libc-test, and its VERIFIED_FLOOR then refuses to
+      # call a run that adjudicated almost nothing a success; this check
+      # is in front of both so that a checkout that did not bring the
+      # submodule says so in one line instead of being diagnosed from a
+      # build error 40 lines into another script.
+      - name: Assert the libc-test corpus actually arrived
+        run: |
+          if [ ! -f third_party/libc-test/COPYRIGHT ]; then
+            echo "FAILED: third_party/libc-test is empty -- the corpus this job exists to run did not arrive." >&2
+            echo "The checkout step above must keep 'submodules: recursive'." >&2
+            git submodule status || true
+            exit 1
+          fi
+          n=$(find third_party/libc-test/src -name '*.c' | wc -l)
+          echo "$n corpus source file(s) present"
+          if [ "$n" -eq 0 ]; then
+            echo "FAILED: third_party/libc-test/src holds no *.c; this job would verify nothing." >&2
+            exit 1
+          fi
+
+      - name: Restore tinycc toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      - name: Install Wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y wine wine32:i386 wine64
+
+      # --disable-kernel32, matching both the default build and
+      # tools/gate.sh's libc-test stage: the corpus exercises libc
+      # behaviour, not the console Ctrl-C handler that is the only thing
+      # behind NTLIBC_USE_KERNEL32.
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+
+      # `make libc-test` depends on $(ALL_LIBS), so this is not strictly
+      # required -- it is spelled out for the same reason tools/gate.sh's
+      # libc-test stage spells it out: a library build failure reads as a
+      # library build failure rather than as a corpus failure.
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: libc-test corpus
+        run: make libc-test
+
   # Runs the exact same PE binaries `build-test-exes` compiled and that
-  # the `test` job (for the non-*-win.c ones) runs under Wine -- the two
+  # the `ntlibc-suite` job (for the non-*-win.c ones) runs under Wine -- the two
   # legs consume the same artifact and run concurrently, so this one does
   # not wait on the Wine verdict. This time on a real
   # Windows machine. windows-latest is an x86_64 host; a plain i386 PE
