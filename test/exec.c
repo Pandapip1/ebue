@@ -179,6 +179,36 @@ static int envblock_child(void)
 	return RC_OK;
 }
 
+/* The exec'd image for the l-forms.  execl()/execle()/execlp() take a
+ * literal, fixed argument list rather than a built array, so they get
+ * their own small fixed expectation instead of tricky[].
+ *
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/exec.html
+ * DESCRIPTION: the l-forms' "arguments ... are pointers to
+ * null-terminated character strings ... The list of argument strings is
+ * terminated by a null pointer." */
+#define ARGVL_1 "a"
+#define ARGVL_2 "b c"
+
+static int argvl_child(int argc, char **argv)
+{
+	if (argc != 4) { printf("child: argc %d, wanted 4\n", argc); return RC_ARGV_MISMATCH; }
+	if (strcmp(argv[2], ARGVL_1) || strcmp(argv[3], ARGVL_2)) {
+		printf("child: argv = \"%s\" \"%s\"\n", argv[2], argv[3]);
+		return RC_ARGV_MISMATCH;
+	}
+	if (!strcmp(argv[1], "--argvl-env")) {
+		const char *v = getenv("NTLIBC_TEST_ENV");
+		if (!v || strcmp(v, "hello world")) {
+			printf("child: NTLIBC_TEST_ENV = %s\n", v ? v : "(unset)");
+			return RC_ENV_MISMATCH;
+		}
+		/* execle()'s envp replaces the environment outright */
+		if (getenv("NTLIBC_TEST_ABSENT")) return RC_ENV_MISMATCH;
+	}
+	return RC_OK;
+}
+
 /* The intermediate child: exec self in an --argv role. */
 static int exec_child(const char *self, const char *role)
 {
@@ -205,6 +235,45 @@ static int exec_child(const char *self, const char *role)
 		errno = 0;
 		if (execv("./no-such-program-here.exe", build_argv(self, "--argv")) != -1) return 1;
 		return errno == ENOENT ? 0 : 2;
+	} else if (!strcmp(role, "--exec-l")) {
+		execl(self, self, "--argvl", ARGVL_1, ARGVL_2, (char *)0);
+	} else if (!strcmp(role, "--exec-le")) {
+		char *envp[3];
+		char sysroot[512];
+		const char *sr = getenv("SystemRoot");
+		envp[0] = (char *)"NTLIBC_TEST_ENV=hello world";
+		if (sr) { snprintf(sysroot, sizeof sysroot, "SystemRoot=%s", sr); envp[1] = sysroot; }
+		else envp[1] = (char *)"SystemRoot=C:\\Windows";
+		envp[2] = 0;
+		setenv("NTLIBC_TEST_ABSENT", "1", 1);   /* must not leak past an explicit envp */
+		execle(self, self, "--argvl-env", ARGVL_1, ARGVL_2, (char *)0, envp);
+	} else if (!strcmp(role, "--exec-lp")) {
+		/* self contains a slash or is an absolute path: used as-is,
+		 * no PATH search -- exec.html only searches "when the file
+		 * argument lacks a slash character". */
+		execlp(self, self, "--argvl", ARGVL_1, ARGVL_2, (char *)0);
+	} else if (!strcmp(role, "--exec-l-exit")) {
+		execl(self, self, "--exit", "201", (char *)0);
+	} else if (!strcmp(role, "--exec-l-missing")) {
+		errno = 0;
+		if (execl("./no-such-program-here.exe", "x", (char *)0) != -1) return 1;
+		return errno == ENOENT ? 0 : 2;
+	} else if (!strcmp(role, "--exec-lp-missing")) {
+		errno = 0;
+		if (execlp("no-such-program-on-path-xyz", "x", (char *)0) != -1) return 1;
+		return errno == ENOENT ? 0 : 2;
+	} else if (!strcmp(role, "--exec-f")) {
+		/* fexecve.html (folded into exec.html): "the file to be
+		 * executed is determined by the file descriptor fd". */
+		int fd = open(self, O_RDONLY);
+		if (fd < 0) return 3;
+		fexecve(fd, build_argv(self, "--argv"), environ);
+	} else if (!strcmp(role, "--exec-f-badfd")) {
+		/* [EBADF] "The fd argument is not a valid file descriptor
+		 * open for executing." */
+		errno = 0;
+		if (fexecve(4096, build_argv(self, "--argv"), environ) != -1) return 1;
+		return errno == EBADF ? 0 : 2;
 	}
 	printf("child: exec returned, errno %d\n", errno);
 	return RC_EXEC_RETURNED;
@@ -483,6 +552,8 @@ int main(int argc, char **argv)
 		return argc == 4 && strlen(argv[3]) == (size_t)atol(argv[2]) ? RC_OK : RC_ARGV_MISMATCH;
 	if (argc > 1 && (!strcmp(argv[1], "--argv") || !strcmp(argv[1], "--argv-env")))
 		return argv_child(argc, argv);
+	if (argc > 1 && (!strcmp(argv[1], "--argvl") || !strcmp(argv[1], "--argvl-env")))
+		return argvl_child(argc, argv);
 	if (argc > 1 && !strncmp(argv[1], "--exec-", 7)) return exec_child(argv[0], argv[1]);
 
 	CHECK(run_role(argv[0], "--exec-v") == 0);
@@ -492,6 +563,34 @@ int main(int argc, char **argv)
 	CHECK(run_role(argv[0], "--exec-exit") == 200);
 	/* a missing program fails with ENOENT and exec returns */
 	CHECK(run_role(argv[0], "--exec-missing") == 0);
+
+	/* exec.html, the l-forms and fexecve -- four names
+	 * test/POSIX-GAP-ACCOUNTING.md listed as implemented but never
+	 * called from anywhere in test/*.c, plus fexecve.  Same shape as
+	 * the v-forms above: the intermediate child execs itself in an
+	 * --argvl role and the exec'd image checks what it received.
+	 *
+	 * RETURN VALUE: "If one of the exec functions returns to the
+	 * calling process image, an error has occurred; the return value
+	 * shall be -1, and errno shall be set" -- so a role that reaches
+	 * the end of exec_child() reports RC_EXEC_RETURNED and fails here.
+	 * DESCRIPTION: "If execution fails, the calling process image
+	 * remains unchanged" -- which is what the --*-missing roles below
+	 * check, by continuing to run and reporting an errno afterwards. */
+	CHECK(run_role(argv[0], "--exec-l") == 0);
+	CHECK(run_role(argv[0], "--exec-le") == 0);
+	CHECK(run_role(argv[0], "--exec-lp") == 0);
+	CHECK(run_role(argv[0], "--exec-f") == 0);
+	/* the exec'd image's exit code is what the l-form's caller exits
+	 * with, same as for execv above */
+	CHECK(run_role(argv[0], "--exec-l-exit") == 201);
+	/* [ENOENT] "A component of path or file does not name an existing
+	 * file", for both the direct and the PATH-searching l-form */
+	CHECK(run_role(argv[0], "--exec-l-missing") == 0);
+	CHECK(run_role(argv[0], "--exec-lp-missing") == 0);
+	/* [EBADF] "The fd argument is not a valid file descriptor open for
+	 * executing." */
+	CHECK(run_role(argv[0], "--exec-f-badfd") == 0);
 
 	test_empty_env_entry(argv[0]);
 	test_failed_exec_keeps_cloexec(argv[0]);

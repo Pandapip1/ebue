@@ -273,7 +273,7 @@ their first assertion in this session (see "Tests added" below). These
 112 are still never named:
 
 - `math.h` (70): `acosf acoshf acoshl acosl asinf asinhf asinhl asinl atanhf atanhl cbrtf cbrtl ceilf coshf coshl erfcf erfcl erff erfl expm1f expm1l fdimf fdiml floorl fmaf fmal fmodl frexpf frexpl hypotf hypotl ilogbf ilogbl isgreater isgreaterequal isless islessequal islessgreater isunordered ldexpf lgammaf lgammal log1pf log1pl logbf logbl modff modfl nearbyintf nearbyintl nextafterf nextafterl nexttowardf nexttowardl remainderf remainderl remquof remquol roundf scalblnf scalblnl scalbnl sinhf sinhl tanhf tanhl tgammaf tgammal truncf truncl`
-- `unistd.h` (18): `confstr execl execle execlp fchown fchownat fexecve getlogin getlogin_r lchown linkat pause setpgrp setregid setsid swab sync tcgetpgrp tcsetpgrp` — `fpathconf`, `readlink`, `readlinkat` and `unlinkat` closed, see "Successor session" below
+- `unistd.h` (0): all 23 closed, see "Successor session" below (`pause` is the one that could not be *called* — see there for why)
 - `sys/stat.h` (0): all six (`mkdirat mkfifo mkfifoat mknod mknodat utimes`) closed, see "Successor session" below
 - `signal.h` (0): all five (`sighold siginterrupt sigpause sigrelse sigset`) closed, see "Successor session" below
 - `stdarg.h` (0): all four (`va_arg va_copy vprintf vscanf`) closed, see "Successor session" below
@@ -860,8 +860,83 @@ tests would have caught is unverified locally. Worth fixing before the
 next never-asserted batch, since leak-on-first-call is precisely the
 defect shape this queue keeps turning up.
 
+### Closed: the remaining `unistd.h` 18
+
+`test/exec.c` for the four exec names, `test/posix-unistd.c` for the
+rest.
+
+- **`execl`, `execle`, `execlp`, `fexecve`** (`test/exec.c`, new
+  `--exec-l`/`--exec-le`/`--exec-lp`/`--exec-f` roles). That file's
+  existing harness is exactly what these need and needs no `fork()`: the
+  parent `__spawn()`s itself in a role, that child execs itself in an
+  `--argvl` role, and the exec'd image checks what it received. Also
+  covered: the exec'd image's exit status becoming the caller's,
+  `[ENOENT]` for both the direct and the PATH-searching l-form,
+  `[EBADF]` for `fexecve()` on a closed descriptor, and the "if
+  execution fails, the calling process image remains unchanged" clause
+  (the failing roles keep running and report an errno afterwards). No
+  defect.
+- **`confstr`, `swab`, `sync`, `getlogin`, `getlogin_r`, `linkat`, and
+  the identity/session stubs `fchown`/`fchownat`/`lchown`/`setregid`/
+  `setpgrp`/`setsid`/`tcgetpgrp`/`tcsetpgrp`** (`test/posix-unistd.c`).
+
+**Two more bugs**, both fenced, both probed:
+
+- **`confstr()` reports success for an invalid name** — returns 1 with
+  errno untouched where `confstr.html` requires 0 with `[EINVAL]`, and
+  neither of POSIX's two zero-returning cases is reachable for any
+  input.
+- **`tcgetpgrp()`/`tcsetpgrp()` never produce the shall-fail `[EBADF]`**
+  — `fd` is discarded without reaching `__fd_get()`. Separable from the
+  deliberate single-session design: a fixed process group for a *valid*
+  descriptor is that design; succeeding for fd 4096 is a missing
+  argument check.
+
+Both are written up in `test/POSIX-COVERAGE.md`'s "Bugs found
+(never-asserted sweep, unistd.h group)", now three entries.
+
+**N/A, with reasons:**
+
+- **`pause()` — not callable from this suite at all.**
+  `src/unistd/sleep.c` implements it as `NtDelayExecution` with a
+  maximal timeout, and this platform has no asynchronous delivery to end
+  it. A call hangs forever; a test would *deadlock the run* rather than
+  fail it, which is worse than no test. This is the one name in the
+  original 112 that cannot be given an assertion at all, and the reason
+  is a platform impossibility rather than an omission.
+- **The identity/session stubs' effects.** One user, one fixed session
+  (`src/unistd/ids.c` and `src/termios/termios.c` both say so), so "the
+  file's user ID shall be set", "shall become a session leader" and
+  "shall set the foreground process group" have nothing observable
+  behind them. The return values and cross-getter consistency
+  (`setpgrp() == getpgrp()`, `setsid() == getsid(0)`,
+  `tcgetpgrp(0) == getpgrp()`) *are* asserted.
+- **`linkat()`'s `AT_SYMLINK_FOLLOW`.** `src/unistd/link.c` opens with
+  `FILE_OPEN_REPARSE_POINT` unconditionally and ignores `flag`, so it
+  always implements the flag-clear branch; distinguishing the two needs
+  a symbolic link, which needs `SeCreateSymbolicLinkPrivilege` and is
+  not available on the CI images this suite is the authority on.
+- **`sync()`'s scheduling.** POSIX permits `sync()` to be undetectable
+  by any conforming observation; `fsync()` is the call with a completion
+  guarantee, and `test/unistd.c` already covers it.
+- **`swab()`'s odd-`nbytes` last byte.** "The disposition of the last
+  byte is unspecified", so the test asserts the swapped prefix and that
+  nothing past `nbytes` was touched, and deliberately does not pin
+  `src/unistd/swab.c`'s own documented choice.
+
 ### Remaining after this session
 
 The `math.h` `f`/`l` tail (70 names) — item 3 of the queue above — is
 all that is left of the original 112. Every non-`math.h` name in the
-"Implemented, but no assertion anywhere" section now has one.
+"Implemented, but no assertion anywhere" section now has an assertion,
+with the single exception of `pause()`, which cannot be called from a
+test at all (see above).
+
+**Score for the sweep: 41 of the 42 non-`math.h` names given a
+first-ever assertion, and six bugs found** — one in `unlinkat()`, two
+more in `confstr()` and `tcgetpgrp`/`tcsetpgrp`, and three in the XSI
+signal names. The predecessor's lesson holds and then some: of the six
+headers swept, four contained a defect, and every defect was a
+*shall-fail* error clause that no caller had ever been in a position to
+notice. "Exists and links" remains a much weaker statement than it
+looks.

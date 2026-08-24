@@ -1197,6 +1197,369 @@ static void test_mkfifo_mknod_stubs(void)
 	CHECK(stat("mndf", &st) == -1);
 }
 
+/* ---------------------------------------------------------------------
+ * The rest of test/POSIX-GAP-ACCOUNTING.md's never-asserted <unistd.h>
+ * list.  The exec family (execl/execle/execlp/fexecve) is in
+ * test/exec.c, which already has the spawn-a-role harness they need.
+ * ------------------------------------------------------------------ */
+
+/* confstr.html.  DESCRIPTION: "If len is not 0 ... if the string to be
+ * returned is longer than len bytes, including the terminating null,
+ * then the string shall be truncated"; "If len is 0 and buf is a null
+ * pointer, then confstr() shall still return the integer value as
+ * defined below, but shall not return a string."  RETURN VALUE: for a
+ * valid name with a value, "the size of buffer that would be needed to
+ * hold the entire configuration-defined value including the terminating
+ * null"; for an invalid name, "confstr() shall return 0 and set errno to
+ * indicate the error".  ERRORS: "[EINVAL] The value of the name argument
+ * is invalid."  Pure library string handling: Wine is a sound oracle. */
+static void test_confstr(void)
+{
+	char buf[64];
+	size_t n;
+
+	/* _CS_PATH is the only name include/unistd.h defines. */
+	n = confstr(_CS_PATH, buf, sizeof buf);
+	CHECK(n > 1);
+	CHECK(n == strlen(buf) + 1);
+
+	/* "len is 0 and buf is a null pointer": the size is still returned
+	 * and nothing is written. */
+	CHECK(confstr(_CS_PATH, NULL, 0) == n);
+
+	/* truncation to len-1 bytes plus the null, with the full size still
+	 * returned so the caller can size a second buffer. */
+	memset(buf, '@', sizeof buf);
+	CHECK(confstr(_CS_PATH, buf, 4) == n);
+	CHECK(strlen(buf) == 3);
+	CHECK(buf[3] == 0);
+
+	/* len 1: nothing but the terminator fits */
+	memset(buf, '@', sizeof buf);
+	CHECK(confstr(_CS_PATH, buf, 1) == n);
+	CHECK(buf[0] == 0);
+
+#if 0	/* BUG: confstr() reports success for an invalid name.
+	 * confstr.html RETURN VALUE: "If the value of the name argument is
+	 * invalid, confstr() shall return 0 and set errno to indicate the
+	 * error", and ERRORS lists "[EINVAL] The value of the name argument
+	 * is invalid" as its only, shall-fail, entry.
+	 *
+	 * Mechanism: src/unistd/sysconf.c's confstr() starts from
+	 * `const char *s = "";` and only replaces it when
+	 * `name == _CS_PATH`.  An unrecognized name therefore falls through
+	 * the same path a genuine empty value would: it writes a lone NUL
+	 * into the caller's buffer and returns `i + 1` == 1.  A caller
+	 * cannot tell an invalid name from a valid one whose value happens
+	 * to be empty, and the mandated 0-plus-EINVAL never happens for any
+	 * input.  (POSIX does distinguish those two cases: a valid name with
+	 * no configuration-defined value returns 0 with errno *unchanged*,
+	 * which is also unreachable here.)  Probed on this tree: both calls
+	 * below return 1 with errno untouched.  Re-enable when confstr()
+	 * rejects unknown names. */
+	errno = 0;
+	CHECK(confstr(-1, buf, sizeof buf) == 0 && errno == EINVAL);
+	errno = 0;
+	CHECK(confstr(12345, buf, sizeof buf) == 0 && errno == EINVAL);
+#endif
+}
+
+/* swab.html.  DESCRIPTION: "shall copy nbytes bytes, which are pointed
+ * to by src, to the object pointed to by dest, exchanging adjacent
+ * bytes"; "If nbytes is odd, swab() copies and exchanges nbytes-1 bytes
+ * and the disposition of the last byte is unspecified"; "If copying
+ * takes place between objects that overlap, the behavior is undefined";
+ * "If nbytes is negative, swab() does nothing."  RETURN VALUE: none.
+ * ERRORS: no errors are defined.
+ *
+ * Pure byte shuffling with no platform component at all, so Wine is a
+ * fully sound oracle -- this is the one function in this batch where a
+ * Wine pass is strong evidence. */
+static void test_swab(void)
+{
+	char dst[16];
+
+	memset(dst, '@', sizeof dst);
+	swab("abcdef", dst, 6);
+	CHECK(!memcmp(dst, "badcfe", 6));
+	CHECK(dst[6] == '@');		/* nothing written past nbytes */
+
+	/* nbytes == 0 copies nothing */
+	memset(dst, '@', sizeof dst);
+	swab("abcdef", dst, 0);
+	CHECK(dst[0] == '@');
+
+	/* "If nbytes is negative, swab() does nothing." */
+	memset(dst, '@', sizeof dst);
+	swab("abcdef", dst, -4);
+	CHECK(dst[0] == '@');
+
+	/* Odd nbytes: the first nbytes-1 bytes are exchanged, and the last
+	 * byte's disposition is unspecified -- so only the swapped prefix is
+	 * asserted, and only that nothing beyond nbytes was touched.
+	 * src/unistd/swab.c documents its own choice (copy it through
+	 * unswapped); this test deliberately does not pin that, because
+	 * POSIX leaves it open and a future change to it would not be a
+	 * regression. */
+	memset(dst, '@', sizeof dst);
+	swab("abcde", dst, 5);
+	CHECK(!memcmp(dst, "badc", 4));
+	CHECK(dst[5] == '@');
+
+	/* an exchange really is an exchange: doing it twice is identity */
+	swab("abcdef", dst, 6);
+	swab(dst, dst + 8, 6);
+	CHECK(!memcmp(dst + 8, "abcdef", 6));
+}
+
+/* sync.html.  DESCRIPTION: "The sync() function shall cause all
+ * information in memory that updates file systems to be scheduled for
+ * writing out to all file systems"; "The writing, although scheduled,
+ * is not necessarily complete upon return from sync()."  RETURN VALUE:
+ * "The sync() function shall not return a value."  ERRORS: "No errors
+ * are defined."
+ *
+ * There is nothing observable to assert beyond "it exists, it is
+ * callable, it returns, and it is not allowed to fail" -- the page
+ * defines no return value and no error, and explicitly disclaims that
+ * the writing has completed.  What the test can and does check is that
+ * a call does not disturb errno or the data around it, since
+ * src/unistd/fsync.c implements it as `void sync(void) {}`.
+ *
+ * N/A, with the reason: the scheduling itself.  POSIX permits sync() to
+ * be a no-op in every way an application can detect (fsync() is the call
+ * with a completion guarantee, and test/unistd.c already covers it), so
+ * there is no conforming observation that could distinguish this
+ * implementation from any other. */
+static void test_sync(void)
+{
+	int fd = open("sy.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	struct stat st;
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(write(fd, "data", 4) == 4);
+	errno = 0;
+	sync();
+	CHECK(errno == 0);		/* "No errors are defined." */
+	CHECK(close(fd) == 0);
+	sync();
+	CHECK(stat("sy.txt", &st) == 0 && st.st_size == 4);
+	CHECK(unlink("sy.txt") == 0);
+}
+
+/* getlogin.html.  RETURN VALUE: getlogin() "shall return a pointer to
+ * the login name or a null pointer if the user's login name cannot be
+ * found"; getlogin_r() "shall return zero" on success, "otherwise, an
+ * error number shall be returned to indicate the error" -- an errno
+ * *value*, not -1, which is the clause most likely to be got wrong.
+ * ERRORS: "[ERANGE] The value of namesize is smaller than the length of
+ * the string to be returned including the terminating null character."
+ *
+ * The name comes from %USERNAME%/%USER% (src/unistd/ids.c), so this is
+ * environment-dependent rather than pure: both are tested against each
+ * other rather than against any fixed string. */
+static void test_getlogin(void)
+{
+	char *l = getlogin();
+	char buf[256];
+	int r;
+
+	if (!l) {
+		/* permitted: "a null pointer if the user's login name cannot
+		 * be found".  getlogin_r() must then agree by failing too. */
+		CHECK(getlogin_r(buf, sizeof buf) != 0);
+		printf("note: getlogin() found no login name here, _r path checked against that\n");
+		return;
+	}
+	CHECK(strlen(l) > 0);
+
+	/* getlogin_r() puts the same name in the caller's buffer, and
+	 * returns 0 -- not the length, and not -1. */
+	memset(buf, '@', sizeof buf);
+	r = getlogin_r(buf, sizeof buf);
+	CHECK(r == 0);
+	CHECK(!strcmp(buf, l));
+
+	/* exactly-fits is a success, not an ERANGE */
+	memset(buf, '@', sizeof buf);
+	CHECK(getlogin_r(buf, strlen(l) + 1) == 0);
+	CHECK(!strcmp(buf, l));
+
+	/* [ERANGE], returned as a value rather than set in errno */
+	CHECK(getlogin_r(buf, strlen(l)) == ERANGE);
+}
+
+/* Identity and session stubs: fchown, fchownat, lchown, setregid,
+ * setpgrp, setsid, tcgetpgrp, tcsetpgrp.  src/unistd/ids.c's banner is
+ * the governing statement -- "There is one user as far as this library
+ * is concerned" -- and src/termios/termios.c's says the same for
+ * sessions: exactly one, fixed.
+ *
+ * chown.html RETURN VALUE: "Upon successful completion, these functions
+ * shall return 0"; setpgid.html/setsid.html: setsid() "shall return the
+ * value of the new process group ID"; tcgetpgrp.html RETURN VALUE: "the
+ * value of the process group ID of the foreground process associated
+ * with the terminal"; tcsetpgrp.html: 0 on success.
+ *
+ * N/A, with the reason, for the *effects* rather than the returns: NT
+ * has no uid/gid to set and this library models exactly one user and one
+ * session, so "the file's user ID shall be set", "the process shall
+ * become a session leader" and "the foreground process group shall be
+ * set" have nothing that could ever be observed to change.  This ledger
+ * already records the same for chown/getuid/setuid/getpgrp; these eight
+ * names are the never-called members of the same family.  What *is*
+ * asserted is the part that is still a real contract: the return values,
+ * and internal consistency with the non-stub members of the family that
+ * test/unistd.c already covers. */
+static void test_id_session_stubs(void)
+{
+	struct stat before, after;
+	int fd = open("idst.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(stat("idst.txt", &before) == 0);
+
+	/* chown.html: 0 on success, for every spelling. */
+	CHECK(fchown(fd, getuid(), getgid()) == 0);
+	CHECK(lchown("idst.txt", getuid(), getgid()) == 0);
+	CHECK(fchownat(AT_FDCWD, "idst.txt", getuid(), getgid(), 0) == 0);
+	CHECK(fchownat(AT_FDCWD, "idst.txt", getuid(), getgid(), AT_SYMLINK_NOFOLLOW) == 0);
+	/* -1 for either id means "do not change it", and here nothing
+	 * changes for any value: the ids reported must be unmoved. */
+	CHECK(fchown(fd, (uid_t)-1, (gid_t)-1) == 0);
+	CHECK(stat("idst.txt", &after) == 0);
+	CHECK(after.st_uid == before.st_uid && after.st_gid == before.st_gid);
+	CHECK(after.st_uid == getuid() && after.st_gid == getgid());
+	CHECK(close(fd) == 0);
+	CHECK(unlink("idst.txt") == 0);
+
+	/* setregid(): 0 on success; the ids are unchanged because there is
+	 * only one. */
+	CHECK(setregid(getgid(), getegid()) == 0);
+	CHECK(setregid((gid_t)-1, (gid_t)-1) == 0);
+	CHECK(getgid() == getegid());
+
+	/* setpgrp()/setsid(): both report the single process group/session
+	 * this platform has, and must agree with the getters test/unistd.c
+	 * already covers. */
+	CHECK(setpgrp() == getpgrp());
+	CHECK(setsid() == getsid(0));
+	CHECK(setsid() == getpgrp());
+
+	/* tcgetpgrp()/tcsetpgrp() on the one foreground group there is.
+	 * tcgetpgrp() must agree with getpgrp() rather than be some third
+	 * answer, and tcsetpgrp() must accept what tcgetpgrp() just said. */
+	CHECK(tcgetpgrp(0) == getpgrp());
+	CHECK(tcsetpgrp(0, tcgetpgrp(0)) == 0);
+
+#if 0	/* BUG: tcgetpgrp()/tcsetpgrp() never fail, not even on a
+	 * descriptor that is not open.  tcgetpgrp.html ERRORS: "The
+	 * tcgetpgrp() function *shall* fail if: [EBADF] The fildes argument
+	 * is not a valid file descriptor" -- shall-fail, not may-fail, and
+	 * tcsetpgrp.html carries the identical clause.
+	 *
+	 * Mechanism: src/unistd/ttyname.c:23-24 are
+	 *     pid_t tcgetpgrp(int fd) { (void)fd; return 1; }
+	 *     int tcsetpgrp(int fd, pid_t p) { (void)fd; (void)p; return 0; }
+	 * -- fd is discarded without ever reaching __fd_get(), which is what
+	 * every other fd-taking call in the library uses to produce EBADF.
+	 * This is separable from the deliberate single-session design the
+	 * src/termios/termios.c banner argues for: returning a fixed process
+	 * group for a *valid* terminal descriptor is that design, but
+	 * answering successfully for fd 4096 is an argument check that was
+	 * simply never written.  Probed on this tree: both calls below
+	 * succeed.  Re-enable when both validate fildes. */
+	errno = 0;
+	CHECK(tcgetpgrp(4096) == -1 && errno == EBADF);
+	errno = 0;
+	CHECK(tcsetpgrp(4096, getpgrp()) == -1 && errno == EBADF);
+#endif
+}
+
+/* link.html (the linkat half).  DESCRIPTION: linkat() resolves a
+ * relative path1/path2 against fd1/fd2, and "if linkat() is passed the
+ * special value AT_FDCWD ... the current working directory shall be
+ * used".  link() "shall atomically create a new link for the existing
+ * file and the link count of the file shall be incremented by one".
+ * ERRORS [EEXIST] "The path2 argument resolves to an existing directory
+ * entry", [ENOENT] "the file named by path1 does not exist; or path1 or
+ * path2 points to an empty string", [EBADF] for a relative path against
+ * a descriptor that is neither AT_FDCWD nor valid.
+ *
+ * Filesystem behaviour -- real-Windows CI is the authority; hard links
+ * also need a filesystem that has them, so the success half is
+ * conditional the same way test/unistd.c's link() checks are. */
+static void test_linkat(void)
+{
+	struct stat st;
+	int fd = open("la-src.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && write(fd, "abc", 3) == 3 && close(fd) == 0);
+
+	if (linkat(AT_FDCWD, "la-src.txt", AT_FDCWD, "la-dst.txt", 0) == 0) {
+		struct stat s2;
+		/* "the link count of the file shall be incremented by one",
+		 * and both names are the same file. */
+		CHECK(stat("la-src.txt", &st) == 0);
+		CHECK(stat("la-dst.txt", &s2) == 0);
+		CHECK(st.st_nlink == 2);
+		CHECK(st.st_ino == s2.st_ino);
+
+		/* [EEXIST] path2 resolves to an existing directory entry */
+		errno = 0;
+		CHECK(linkat(AT_FDCWD, "la-src.txt", AT_FDCWD, "la-dst.txt", 0) == -1 && errno == EEXIST);
+		CHECK(unlink("la-dst.txt") == 0);
+
+		/* relative to real directory descriptors on both sides */
+		CHECK(mkdir("ladir", 0755) == 0);
+		{
+			int dfd = open("ladir", O_RDONLY | O_DIRECTORY);
+			int cfd = open(".", O_RDONLY | O_DIRECTORY);
+			CHECK(dfd >= 0 && cfd >= 0);
+			if (dfd >= 0 && cfd >= 0) {
+				CHECK(linkat(cfd, "la-src.txt", dfd, "inner.txt", 0) == 0);
+				CHECK(stat("ladir/inner.txt", &s2) == 0);
+				CHECK(s2.st_ino == st.st_ino);
+				CHECK(unlink("ladir/inner.txt") == 0);
+			}
+			if (dfd >= 0) CHECK(close(dfd) == 0);
+			if (cfd >= 0) CHECK(close(cfd) == 0);
+		}
+		CHECK(rmdir("ladir") == 0);
+	} else {
+		printf("note: linkat() not supported here (errno %d), success path skipped\n", errno);
+	}
+
+	/* [ENOENT] for a missing path1 and for the empty string */
+	errno = 0;
+	CHECK(linkat(AT_FDCWD, "la-nope", AT_FDCWD, "la-dst2.txt", 0) == -1 && errno == ENOENT);
+	errno = 0;
+	CHECK(linkat(AT_FDCWD, "", AT_FDCWD, "la-dst2.txt", 0) == -1 && errno == ENOENT);
+
+	/* [EBADF] a relative path against a descriptor that is not open */
+	errno = 0;
+	CHECK(linkat(4096, "la-src.txt", AT_FDCWD, "la-dst3.txt", 0) == -1 && errno == EBADF);
+	CHECK(stat("la-dst3.txt", &st) == -1);
+	errno = 0;
+	CHECK(linkat(AT_FDCWD, "la-src.txt", 4096, "la-dst3.txt", 0) == -1 && errno == EBADF);
+
+	CHECK(unlink("la-src.txt") == 0);
+
+	/* N/A, with the reason: AT_SYMLINK_FOLLOW.  src/unistd/link.c's
+	 * linkat() opens path1 with FILE_OPEN_REPARSE_POINT unconditionally
+	 * and ignores flags outright, so it always implements the
+	 * flag-clear behaviour ("a new link is created for the symbolic
+	 * link path1 and not its target").  Distinguishing the two needs a
+	 * symbolic link to exist in the first place, which needs
+	 * SeCreateSymbolicLinkPrivilege or developer mode and is not
+	 * available on the CI images this suite is the authority on -- so
+	 * the clause cannot be exercised here either way, and asserting the
+	 * flag-clear branch alone would claim coverage this test does not
+	 * have.  The [EINVAL] for an invalid flag value is the same
+	 * unvalidated-flags defect already fenced in test_unlinkat() above
+	 * (linkat() likewise masks nothing and validates nothing); it is
+	 * recorded there rather than duplicated here. */
+}
+
 int main(void)
 {
 	char tmpl[] = "posixunistd-XXXXXX";
@@ -1242,6 +1605,12 @@ int main(void)
 	test_unlinkat();
 	test_mkdirat();
 	test_mkfifo_mknod_stubs();
+	test_confstr();
+	test_swab();
+	test_sync();
+	test_getlogin();
+	test_id_session_stubs();
+	test_linkat();
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);

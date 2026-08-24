@@ -474,6 +474,15 @@ not every clause line, to keep this section a manageable size):
 | rename EISDIR (new is a dir, old isn't) | **fixed**, commit 3c606a7 (`renameat()` in `src/stdio/misc.c` now disambiguates NT's `STATUS_ACCESS_DENIED` by querying old/new's types, giving EISDIR instead of EACCES) | test/posix-unistd.c `test_rename_new_dir_old_file_eisdir` |
 | rename ENOTEMPTY/EEXIST (new is a non-empty dir) | **fixed**, commit 3c606a7 (same fix, gives ENOTEMPTY instead of EACCES) | test/posix-unistd.c `test_rename_onto_nonempty_dir` |
 | link / symlink | covered | test/unistd.c |
+| linkat (AT_FDCWD == link, dirfd-relative on both sides, st_nlink incremented, same st_ino, EEXIST, ENOENT, EBADF) | covered | test/posix-unistd.c `test_linkat` |
+| linkat | AT_SYMLINK_FOLLOW | N/A — `src/unistd/link.c` always opens with FILE_OPEN_REPARSE_POINT and ignores `flag`, so it always implements the flag-clear branch; telling the two apart needs a symlink, which needs SeCreateSymbolicLinkPrivilege and is not available on the CI images this suite is the authority on | -- |
+| execl / execle / execlp / fexecve | argv and envp delivered to the exec'd image; the exec'd image's exit status becomes the caller's; ENOENT for a missing file (direct and PATH-searching forms); EBADF for fexecve on a closed descriptor; a failed exec returns and leaves the process image running | covered | test/exec.c (`--exec-l`, `--exec-le`, `--exec-lp`, `--exec-f` roles) |
+| confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1` | covered; **BUG (fenced)** for [EINVAL] — an unrecognized name returns 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
+| swab | adjacent-byte exchange, nothing written past nbytes, nbytes 0 and negative do nothing, odd nbytes exchanges nbytes-1, double swab is identity | covered (pure byte shuffling — the one call in this group for which a Wine pass is strong evidence) | test/posix-unistd.c `test_swab` |
+| sync | callable, returns no value, defines no error | covered as far as POSIX allows; the scheduling itself N/A — POSIX permits `sync()` to be undetectable by any conforming observation (`fsync()` is the call with a completion guarantee) | test/posix-unistd.c `test_sync` |
+| getlogin / getlogin_r | same name from both; getlogin_r returns 0 (not a length, not -1) on success and the errno *value* ERANGE on a short buffer; exactly-fits is a success | covered | test/posix-unistd.c `test_getlogin` |
+| fchown / fchownat / lchown / setregid / setpgrp / setsid / tcgetpgrp / tcsetpgrp | return values, and agreement with the getters (`setpgrp() == getpgrp()`, `setsid() == getsid(0)`, `tcgetpgrp(0) == getpgrp()`) | covered for the returns; the *effects* N/A — one user and one fixed session, per `src/unistd/ids.c`'s and `src/termios/termios.c`'s banners, so nothing could be observed to change. **BUG (fenced)**: `tcgetpgrp`/`tcsetpgrp` never produce the shall-fail [EBADF] | test/posix-unistd.c `test_id_session_stubs` |
+| pause | DESCRIPTION: suspend until a signal is delivered; RETURN VALUE -1 with EINTR | N/A — **not callable from this suite at all**: `src/unistd/sleep.c`'s `pause()` is `NtDelayExecution` with a maximal timeout, and no asynchronous delivery exists to end it, so a call hangs forever rather than returning. A test would deadlock the run, not fail it | -- |
 | readlink / readlinkat (byte count, no NUL, bufsize truncation, EINVAL on a non-link, ENOENT, AT_FDCWD, dirfd-relative) | covered | test/unistd.c, test/posix-unistd.c `test_readlink` |
 | access / faccessat (F_OK/R_OK/W_OK/X_OK, ENOENT, EACCES) | covered | test/unistd.c |
 | access/stat/open/unlink/rename trailing-slash-on-non-directory ENOTDIR | **fixed**, commit 3c606a7 (`__ntpath()`/`__ntpath_at()` in `src/internal/path.c` now re-check the resolved object's type after stripping a trailing slash — a shared-path-layer fix, so it covers all of these, not just access()) | test/posix-unistd.c `test_access_trailing_slash_enotdir` |
@@ -495,7 +504,7 @@ EISDIR/ENOTEMPTY") and the corresponding fenced tests in
 
 ### Bugs found (never-asserted sweep, unistd.h group)
 
-One, fenced in `test/posix-unistd.c`'s `test_unlinkat()`.
+Three, all fenced in `test/posix-unistd.c`, all probed on this tree.
 
 1. **`unlinkat()` masks off undefined `flag` bits instead of rejecting
    them.** `unlink.html` ERRORS lists as *shall fail*: "[EINVAL]
@@ -512,6 +521,35 @@ One, fenced in `test/posix-unistd.c`'s `test_unlinkat()`.
    constant gets destruction rather than a diagnostic. The fix is a
    `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }` guard,
    but a fix belongs in a change of its own, not in an audit pass.
+
+2. **`confstr()` reports success for an invalid name.** `confstr.html`
+   RETURN VALUE: "If the value of the name argument is invalid,
+   confstr() shall return 0 and set errno to indicate the error";
+   ERRORS lists "[EINVAL] ... the name argument is invalid" as its only,
+   shall-fail, entry.
+
+   Mechanism: `src/unistd/sysconf.c`'s `confstr()` starts from
+   `const char *s = "";` and replaces it only when `name == _CS_PATH`.
+   An unrecognized name falls through the same path a genuine empty
+   value would — a lone NUL into the caller's buffer, and `i + 1` == 1
+   returned. Probed: `confstr(-1, buf, n)` and `confstr(12345, buf, n)`
+   both return 1 with errno untouched. A caller cannot tell an invalid
+   name from a valid one with an empty value, and neither of POSIX's two
+   zero-returning cases is reachable for any input.
+
+3. **`tcgetpgrp()`/`tcsetpgrp()` never fail, not even on a descriptor
+   that is not open.** `tcgetpgrp.html`: "The tcgetpgrp() function
+   *shall* fail if: [EBADF] The fildes argument is not a valid file
+   descriptor", and `tcsetpgrp.html` carries the identical clause.
+
+   Mechanism: `src/unistd/ttyname.c:23-24` discard `fd` without ever
+   reaching `__fd_get()`, which is what every other fd-taking call in
+   the library uses to produce EBADF. Probed: `tcgetpgrp(4096)` returns
+   1 and `tcsetpgrp(4096, 1)` returns 0, both with errno untouched. This
+   is separable from the deliberate single-session design
+   `src/termios/termios.c`'s banner argues for: a fixed process group
+   for a *valid* terminal descriptor is that design; answering
+   successfully for fd 4096 is an argument check that was never written.
 
 ### Not reached (unistd.h group)
 
