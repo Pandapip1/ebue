@@ -12,8 +12,9 @@ name: CI
 #     thing -- notably it doesn't implement everything (see the Makefile's
 #     TEST_RUN comment on the `*-win.c` tests it can't run at all).
 #   - `windows-test` (real `windows-latest` runner): downloads the very
-#     same test/*.exe built by the `test` job (including the `*-win.c`
-#     ones Wine skips) and runs them directly on real Windows. This is
+#     same test/*.exe the `build-test-exes` job compiled (including the
+#     `*-win.c` ones Wine skips) and runs them directly on real Windows.
+#     This is
 #     the job that actually proves fork()/WOW64 behavior and any
 #     kernel32 (Ctrl-C handler) code paths, rather than relying on Wine's
 #     emulation of them. GitHub-hosted Windows runners are free and
@@ -129,8 +130,108 @@ jobs:
           test -x "$HOME/tinycc-install/bin/i386-win32-tcc"
           test -x "$HOME/tinycc-install/bin/x86_64-win32-tcc"
 
-  test:
+  # Compile the test PEs and publish them, without running anything.
+  #
+  # This job exists purely to get `windows-test` off the critical path of
+  # the Wine run, and it is not a redundant build -- please don't fold it
+  # back into `test`. The real-Windows legs consume exactly one thing from
+  # the Linux side: the `test-exes-*` artifact. Those .exe files are
+  # finished the moment they are *compiled*; nothing the Wine run does
+  # afterwards changes a byte of them. While the upload lived at the end
+  # of `test`, the real-Windows legs waited for the whole leg anyway --
+  # measured on a real run, ~62s installing Wine (which they never use)
+  # plus a ~75s `make check` that is almost entirely Wine process startup,
+  # so roughly 140s of waiting for artefacts that were ready in the first
+  # second of it. The cross-compile itself is well under a second with
+  # tcc, so this job is essentially runner startup, a cache restore and an
+  # upload.
+  #
+  # Deliberately no Wine here: installing it is the single largest step in
+  # the old serial path and this job has nothing to run.
+  #
+  # The matrix mirrors `test`'s three legs exactly, because the artifact
+  # names (`test-exes-${{ matrix.name }}`) are what `windows-test`
+  # indexes by -- see the comment on `test`'s matrix for why there are
+  # three legs and not a full 2x2.
+  build-test-exes:
     needs: build-toolchain
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i386
+            host: i386-win32
+            cc: i386-win32-tcc
+            kernel32: false
+            name: i386
+          - arch: x86_64
+            host: x86_64-win32
+            cc: x86_64-win32-tcc
+            kernel32: false
+            name: x86_64
+          - arch: x86_64
+            host: x86_64-win32
+            cc: x86_64-win32-tcc
+            kernel32: true
+            name: x86_64-kernel32
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore tinycc toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} \
+            --${{ matrix.kernel32 && 'enable' || 'disable' }}-kernel32
+
+      # `test-exes` (Makefile) is `check` without the runtests.sh line:
+      # it builds every test PE -- including the *-win.c ones Wine cannot
+      # run, and the plugin DLLs that are prerequisites of the tests that
+      # load them -- and runs none of them.
+      - name: Build the test binaries
+        run: make -j"$(nproc)" test-exes
+
+      # Publish the built PE test binaries (everything under obj/test/,
+      # which includes the *-win.c ones the `test` job's `check` step
+      # deliberately doesn't run under Wine -- see the Makefile's
+      # TEST_RUN comment) so the windows-test job below can execute them
+      # on a real Windows runner. Named per matrix leg (not just per arch)
+      # because x86_64 produces two builds -- a kernel32-enabled test
+      # binary and a kernel32-disabled one behave differently (only the
+      # former installs a Ctrl-C handler), so they can't share a name.
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-exes-${{ matrix.name }}
+          # The .dll matters: test/rpath.c delay-loads obj/test/rpath-plugin.dll
+          # from its own directory ($ORIGIN). Uploading only *.exe left the
+          # plugin behind, so on the real-Windows runner the search correctly
+          # found nothing and the helper aborted -- a red leg caused by a
+          # missing artefact, not by the code under test.
+          path: |
+            obj/test/*.exe
+            obj/test/*.dll
+          # Guards against a silently empty upload: an empty artifact would
+          # make windows-test's PowerShell loop iterate zero times and exit
+          # 0 -- a green job that tested nothing.
+          if-no-files-found: error
+
+  # The Wine leg. Rebuilds rather than downloading the artifact above:
+  # `make check` needs a configured tree with lib/libc.a present anyway
+  # (every test .exe lists it as a prerequisite), and the cross-compile is
+  # under a second with tcc against a restored toolchain cache -- so
+  # downloading the artifact would save nothing measurable and would add a
+  # dependence on artefact timestamps to keep make from rebuilding them.
+  test:
+    needs: build-test-exes
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -183,28 +284,6 @@ jobs:
       - name: Check
         run: make -j"$(nproc)" check
 
-      # Publish the built PE test binaries (everything under obj/test/,
-      # which includes the *-win.c ones the `check` step above
-      # deliberately doesn't run under Wine -- see the Makefile's
-      # TEST_RUN comment) so the windows-test job below can execute them
-      # on a real Windows runner. Named per matrix leg (not just per arch)
-      # now that x86_64 produces two builds -- a kernel32-enabled test
-      # binary and a kernel32-disabled one behave differently (only the
-      # former installs a Ctrl-C handler), so they can't share a name.
-      - name: Upload test binaries
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-exes-${{ matrix.name }}
-          # The .dll matters: test/rpath.c delay-loads obj/test/rpath-plugin.dll
-          # from its own directory ($ORIGIN). Uploading only *.exe left the
-          # plugin behind, so on the real-Windows runner the search correctly
-          # found nothing and the helper aborted -- a red leg caused by a
-          # missing artefact, not by the code under test.
-          path: |
-            obj/test/*.exe
-            obj/test/*.dll
-          if-no-files-found: error
-
       # Only needs to run once, not once per matrix leg (both generators
       # cover every arch themselves): catches either kind of generated-and-
       # committed file drifting out of sync with its source -- the expanded
@@ -232,8 +311,10 @@ jobs:
           git diff --exit-code -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'
           git diff --exit-code -- boot/kaem/
 
-  # Runs the exact same PE binaries the `test` job built and (for the
-  # non-*-win.c ones) already ran under Wine, but this time on a real
+  # Runs the exact same PE binaries `build-test-exes` compiled and that
+  # the `test` job (for the non-*-win.c ones) runs under Wine -- the two
+  # legs consume the same artifact and run concurrently, so this one does
+  # not wait on the Wine verdict. This time on a real
   # Windows machine. windows-latest is an x86_64 host; a plain i386 PE
   # .exe runs on it transparently through WOW64 with no special setup --
   # WOW64 is Windows' built-in compatibility layer specifically for
@@ -241,11 +322,11 @@ jobs:
   # Microsoft's "WOW64 Implementation Details":
   # https://learn.microsoft.com/en-us/windows/win32/winprog64/wow64-implementation-details).
   windows-test:
-    needs: test
+    needs: build-test-exes
     runs-on: windows-latest
     strategy:
       fail-fast: false
-      # Mirrors the `test` job's three legs exactly (by artifact name, not
+      # Mirrors the `build-test-exes` legs exactly (by artifact name, not
       # just by arch) so a kernel32-enabled build gets proven against real
       # Windows too, rather than only ever running under Wine's emulation
       # of kernel32 -- Wine doesn't implement everything ntlibc might call
