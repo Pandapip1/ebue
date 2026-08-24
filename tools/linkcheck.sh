@@ -268,11 +268,36 @@ scan() {
 }
 
 headers=$(find include obj/include -type f -name '*.h' 2>/dev/null | sort)
+nheaders=$(printf '%s\n' "$headers" | grep -c . || true)
 
 declfile="$builddir/declared"
+# An empty $headers is checked *before* scan(), not after: scan() is an
+# awk program, and awk with no file operands reads standard input --
+# so `scan` on an empty list does not return an empty result, it blocks
+# forever on the terminal `make linkcheck` was run from.  A hang is a
+# worse failure than a false pass, and this is the only place the list
+# can go empty.
+if [ -z "$headers" ]; then
+	echo "linkcheck: FAILED -- no headers found under include/ or obj/include/." >&2
+	echo "linkcheck: there is nothing to check, so this run cannot report success." >&2
+	echo "linkcheck: (obj/include/ is generated -- run 'make' first.)" >&2
+	exit 1
+fi
 # $headers is a list of file names and must word-split.
 # shellcheck disable=SC2086
-scan $headers > "$declfile"
+scan $headers > "$declfile" </dev/null || {
+	echo "linkcheck: FAILED -- the header scanner exited nonzero; the declared-symbol" >&2
+	echo "linkcheck: list is incomplete or empty, so nothing below can be trusted." >&2
+	exit 1
+}
+if [ ! -s "$declfile" ]; then
+	echo "linkcheck: FAILED -- no declared symbols were found in any header." >&2
+	echo "linkcheck: $nheaders header(s) were scanned; either the find above" >&2
+	echo "linkcheck: matched nothing (run 'make' first, so obj/include exists) or scan()" >&2
+	echo "linkcheck: stopped recognising declarations.  Either way this run checked" >&2
+	echo "linkcheck: nothing." >&2
+	exit 1
+fi
 
 # undefined-ok reason, for the report: the marker's own comment line(s),
 # collapsed to one line.  Mirrors tools/lint-undefined.sh's own
@@ -556,6 +581,32 @@ while IFS="$(printf '\t')" read -r nm hdr argc marked; do
 done < "$declfile"
 
 echo "linkcheck [$ARCH]: $checked symbol(s) checked, $excepted excepted (undefined-ok), $failed unlinkable, out of $total declared"
+
+# ---- did this run check anything at all? ---------------------------------
+#
+# The exit status below is a function of $failed alone, and $failed can
+# only rise for a symbol that was actually compiled and linked -- so a run
+# that checked zero symbols reports "no findings" and exits 0.  Same shape
+# as tools/asan-build.sh's `0 = 0` (855fdb2): the printed line is honest,
+# nothing consumed it.
+#
+# The floor goes on $checked, not on $total, and that placement is the
+# point.  Every declared name is either checked or excepted, and
+# excepting is the *deliberate* path: linkcheck_exception() and the
+# `undefined-ok:` header marker both carry a written reason, and both are
+# reported above.  A run in which every symbol took that path would still
+# have verified nothing linkable, which is why the floor is on the
+# symbols that were really compiled and linked rather than on the size of
+# the input.
+if [ "$checked" -eq 0 ]; then
+	echo "" >&2
+	echo "linkcheck [$ARCH]: FAILED -- 0 symbols were actually compiled and linked" >&2
+	echo "linkcheck [$ARCH]: ($total declared, $excepted excepted).  This run verified nothing." >&2
+	echo "linkcheck [$ARCH]: a symbol that genuinely cannot be call-site-generated belongs in" >&2
+	echo "linkcheck [$ARCH]: linkcheck_exception() or behind an 'undefined-ok:' marker, with a" >&2
+	echo "linkcheck [$ARCH]: reason -- not dropped from the run." >&2
+	exit 1
+fi
 
 if [ "$excepted" -gt 0 ]; then
 	echo ""
