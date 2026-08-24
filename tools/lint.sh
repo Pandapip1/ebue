@@ -105,13 +105,21 @@ hdr() { printf '\n=== %s ===\n' "$*"; }
 # run".  CI has all of them, so a green local run has to mean the same
 # thing CI means.  LINT_ALLOW_MISSING=1 restores the old behaviour for
 # anyone who genuinely cannot install one.
-require_tool() {
-	command -v "$1" >/dev/null 2>&1 && return 0
+# report_missing DESCRIPTION -- the "a tool this stage needs is not here"
+# path, factored out of require_tool so a stage whose tool is not a
+# single `command -v`-able name can take it too.  stage_warn's compiler
+# is picked by pick_cc(), which may answer with a mingw-w64 cross gcc, a
+# `clang --target=` invocation, or the native compiler with -m32/-m64 --
+# no one name to test -- and before this it simply printed "SKIP" and
+# carried on, which meant a machine with no C compiler at all passed the
+# warning stage *at the default LINT_ALLOW_MISSING=0*.  Always returns 1,
+# so callers can `report_missing ... || continue`.
+report_missing() {
 	if [ "$LINT_ALLOW_MISSING" = 1 ]; then
-		note "SKIP: $1 not installed (LINT_ALLOW_MISSING=1)"
+		note "SKIP: $1 (LINT_ALLOW_MISSING=1)"
 		return 1
 	fi
-	note "MISSING: $1 is not installed, so this stage cannot run."
+	note "MISSING: $1"
 	note "  install it, or set LINT_ALLOW_MISSING=1 to skip it and accept"
 	note "  that this run checks less than CI does."
 	missing=1
@@ -123,6 +131,11 @@ require_tool() {
 	# via $$) the parent checks after `wait` instead.
 	[ -n "${LINT_MISSING_MARKER:-}" ] && : > "$LINT_MISSING_MARKER.$$"
 	return 1
+}
+
+require_tool() {
+	command -v "$1" >/dev/null 2>&1 && return 0
+	report_missing "$1 is not installed, so this stage cannot run."
 }
 
 #
@@ -226,13 +239,22 @@ pick_cc() {
 stage_warn() {
 	hdr "warning build"
 	any=0
+	# How many (arch, compiler) passes actually happened.  Checked at the
+	# bottom: a warning stage that ran none of them has diagnosed nothing,
+	# and must not report success just because nothing complained.
+	passes=0
 	for arch in $LINT_ARCHS; do
-		gen_alltypes "$arch" || { note "cannot generate alltypes for $arch"; continue; }
+		gen_alltypes "$arch" || { note "cannot generate alltypes for $arch"; any=1; continue; }
 		flags=$(cppflags_for "$arch")
 		srcs=$(sources_for "$arch")
+		nsrc=$(printf '%s\n' "$srcs" | grep -c . || true)
 		for base in gcc clang; do
 			cc=$(pick_cc "$base" "$arch")
-			[ -n "$cc" ] || { note "SKIP $base ($arch): not installed"; continue; }
+			# Absent tool, not "nothing to do": this used to print SKIP
+			# and continue with $any still 0, so a machine with neither
+			# gcc nor clang passed this stage outright.  Route it through
+			# the same LINT_ALLOW_MISSING decision every other stage uses.
+			[ -n "$cc" ] || { report_missing "no usable $base for $arch (tried a mingw-w64 $base, clang --target=, and plain $base)"; continue; }
 			case $cc in
 			*-w64-mingw32*) ;;
 			*) note "note: $cc targets the host, not $arch-win32;" \
@@ -269,16 +291,40 @@ stage_warn() {
 				"$prog" $extra -fsyntax-only "$@" "$f" \
 					> "'"$pardir"'/$id.log" 2>&1
 			' _ {} "$cc_prog" "$cc_extra" $flags $WARN_FLAGS
+			# One log per source file, whether or not that file had
+			# anything to say -- so counting them is how this stage knows
+			# a compile was really attempted for every source.  Without
+			# it, "no diagnostics" and "no compiles" are the same output:
+			# an xargs whose input went empty (sources_for matching
+			# nothing after a directory rename, say) leaves $n at 0 and
+			# the old code called that a pass.  The count is taken before
+			# $pardir is removed, and compared against the source list
+			# rather than merely against zero, so a partial run -- some
+			# files reached, some not -- fails too.
+			nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
 			ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"
 			rm -rf "$pardir"
+			if [ "$nsrc" -eq 0 ] || [ "$nlog" -ne "$nsrc" ]; then
+				note "$cc [$arch]: FAILED -- $nlog of $nsrc source file(s) were compiled."
+				note "  the warning build did not cover the source set, so a clean result"
+				note "  here would mean nothing.  This is not a findings count of zero."
+				any=1
+				continue
+			fi
+			passes=$((passes + 1))
 			# Header diagnostics repeat once per translation unit; collapse
 			# them, and drop the source-quote/caret lines gcc interleaves.
 			n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 				| tee "$out.uniq" | wc -l)
-			note "$cc [$arch]: $n unique diagnostic(s) -> $out.uniq"
+			note "$cc [$arch]: $nsrc file(s), $n unique diagnostic(s) -> $out.uniq"
 			[ "$n" -gt 0 ] && any=1
 		done
 	done
+	if [ "$passes" -eq 0 ] && [ "$LINT_ALLOW_MISSING" != 1 ]; then
+		note "warn: FAILED -- no (arch, compiler) pass ran at all; this stage"
+		note "  compiled nothing and therefore diagnosed nothing."
+		any=1
+	fi
 	return $any
 }
 
