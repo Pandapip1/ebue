@@ -303,7 +303,12 @@ static int preflight(const struct sh_list *list)
 /* ---- reading the program text --------------------------------------- */
 
 /* Reads all of `f` into a freshly malloc'd, NUL-terminated buffer.
- * Returns 0 on success. */
+ * Returns 0 on success (and never leaves *out set on failure).
+ *
+ * The buffer is grown *before* each read rather than after, so `room`
+ * is never zero and fread() is never called with nothing to read into;
+ * and the loop stops on the first short read, so it is never called
+ * again on a stream that already hit EOF or an error. */
 static int slurp(FILE *f, char **out)
 {
 	size_t cap = 4096, len = 0;
@@ -311,15 +316,21 @@ static int slurp(FILE *f, char **out)
 
 	if (!buf) return -1;
 	for (;;) {
-		size_t n = fread(buf + len, 1, cap - len - 1, f);
-		len += n;
-		if (n == 0) break;
-		if (len + 1 >= cap) {
-			char *nb = realloc(buf, cap * 2);
+		size_t room, n;
+
+		if (cap - len < 2) {
+			char *nb;
+			if (cap > (size_t)-1 / 2) { free(buf); return -1; }
+			nb = realloc(buf, cap * 2);
 			if (!nb) { free(buf); return -1; }
 			buf = nb;
 			cap *= 2;
 		}
+		room = cap - len - 1;
+		n = fread(buf + len, 1, room, f);
+		if (n > room) { free(buf); return -1; }   /* cannot happen; keeps the bound checked, not assumed */
+		len += n;
+		if (n < room) break;                       /* EOF or error: nothing more is coming */
 	}
 	if (ferror(f)) { free(buf); return -1; }
 	buf[len] = 0;
