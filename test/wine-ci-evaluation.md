@@ -449,9 +449,25 @@ changing anything else about the shape above.
 pipeline; nothing here is applied. It is written out so the decision is about
 a concrete artefact rather than a description of one.
 
-It also **cannot be applied yet**: `WINE_SHA` below is a placeholder, because
-the branch it would name does not exist until step 1 of the recommendation
-(pushing the series to `github.com/Pandapip1/wine`) has happened.
+It also **cannot be applied yet, and must not be.** `WINE_SHA` below is an
+all-zeros placeholder, because the branch it names does not exist: as of this
+writing `git ls-remote https://github.com/Pandapip1/wine.git` lists `master`,
+`stable`, `oldstable`, `rtlcloneuserprocess-and-pid-retention` and
+`wine-fix-job-limits` — no `ntlibc-testing`. Applying this before step 1 of
+the recommendation (pushing the reconciled series to that fork) gives a
+`build-wine` job that fails at `git checkout` on every run. Step 1 first, then
+replace the placeholder with the real commit, then apply.
+
+**Validated, to the extent a proposal can be.** Both hunks apply cleanly to
+`.github/workflows/ci.yml` at `bb5aa84`, and the result is `actionlint`-clean
+(v1.7.12, shellcheck integration enabled) — as is the file without them. Two
+notes on that: the diff adds jobs only, it deletes nothing, so it does not
+interact with the `concurrency:` block that `89336d3` removed from this
+workflow; and the `TEST_RUN` override needs an explicit `# shellcheck
+disable=SC2016` in the script body, because shellcheck otherwise flags the
+single quotes that are the entire point of it. A YAML comment above `run:` is
+not enough — the directive has to be inside the script, which is why that step
+uses a block scalar.
 
 ```diff
 --- a/.github/workflows/ci.yml
@@ -606,7 +622,11 @@ the branch it would name does not exist until step 1 of the recommendation
 +      # entire fork/waitpid/exec/spawn surface, and this is the only
 +      # place besides `windows-test` that runs them at all.
 +      - name: Check, including the *-win.c tests stock Wine cannot run
-+        run: make -j"$(nproc)" check 'TEST_RUN=$(TEST_EXES)'
++        run: |
++          # $(TEST_EXES) is make's variable, not the shell's -- the single
++          # quotes are the point, so shellcheck's SC2016 is a false positive.
++          # shellcheck disable=SC2016
++          make -j"$(nproc)" check 'TEST_RUN=$(TEST_EXES)'
 ```
 
 Two things deliberately **not** in this diff. `Makefile:232` is untouched —
