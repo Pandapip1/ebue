@@ -59,7 +59,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=62 xfail=23 unclassified=4 unbuildable=57
+# COUNTS pass=61 xfail=23 unclassified=4 unbuildable=58
 #
 argv                              pass
 basename                          pass
@@ -72,7 +72,7 @@ dlopen                            unbuildable  tcc: error: unresolved reference 
 dlopen_dso                        unbuildable  tcc: error: unresolved reference to 'main'
 dn_expand-empty                   unbuildable  dn_expand-empty.c:4: error: include file 'resolv.h' not found
 dn_expand-ptr-0                   unbuildable  dn_expand-ptr-0.c:4: error: include file 'resolv.h' not found
-env                               pass
+env                               unbuildable  tcc: error: unresolved reference to 'clearenv' (dropped as an unused non-POSIX extension in 49b8099)
 execle-env                        xfail:env  no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
 fcntl                             unclassified  NOT-YET-TRIAGED -- F_SETLK across fork(): "lock failed to work" and the child does not see the parent's lock. Real record-locking exists (src/file/flock.c, NT byte-range locks); whether this is a defect, a Wine artefact, or a fork()-inheritance question is undecided.
 fdopen                            pass

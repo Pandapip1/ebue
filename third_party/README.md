@@ -76,6 +76,25 @@ test in the corpus must have exactly one row in
 `test/libc-test-expected.txt`, and new upstream tests arrive with none.
 That is deliberate — see `tools/libc-test.sh`'s header.
 
+### Deleting a public symbol? Re-run `make libc-test`
+
+The ledger encodes, per test, whether that test *links* against this
+library — so removing any public symbol can turn a `pass` row into an
+`unbuildable` one, and the stage goes red in CI rather than on the branch
+that did the removing. `tools/lint-unreferenced.sh` does not catch this:
+it scans `test/*.c`, and this corpus is not ours.
+
+That happened once already. `clearenv()` was dropped in `49b8099` as an
+unused non-POSIX extension — correctly, on a downstream survey that found
+no consumer — but musl provides it, so `src/functional/env.c` calls it,
+and `env`'s row had to become `unbuildable`. The removal was right; only
+the ledger was stale.
+
+**So: any commit that removes a public symbol must re-run `make
+libc-test` before it is pushed.** No tooling enforces this, deliberately
+— the check is one command, and a mechanism nobody maintains would be
+worth less than this paragraph.
+
 ### Why a submodule and not a vendored copy
 
 An earlier attempt vendored 173 files (792 KB) of this corpus directly
