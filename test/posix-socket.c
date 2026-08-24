@@ -263,8 +263,15 @@ static int network_probe(void)
 	if (bind(s, (struct sockaddr *)&addr, make_loopback_addr(&addr)) < 0) {
 		/* Report the call and its errno and stop there.  This message
 		 * used to blame Wine's AFD, which was true of the environment
-		 * it was written in and is false on the real-Windows CI legs,
-		 * where socket() now succeeds and the same line prints.  A
+		 * it was written in.  It is also wrong to say the same line
+		 * prints on the real-Windows CI legs: measured 2026-08-24 on
+		 * the windows-test (x86_64) job, this file prints
+		 * "posix-socket: all ok" and exits 0 there -- exit 0 means the
+		 * unverified counter is zero, so bind() and everything after
+		 * it DID run.  The SKIP path below is reached under Wine only.
+		 * That matters for reading a green run: the network group is
+		 * verified, but on exactly one leg, so a red or absent
+		 * windows-test leg takes all of it with it.  A
 		 * failing bind() cannot tell the two apart from here: the
 		 * ioctl either was not understood or was understood and the
 		 * address rejected, and only the errno distinguishes them.
