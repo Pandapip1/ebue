@@ -61,8 +61,19 @@
 #     shortfall, exactly as tools/lint.sh's warn/analyze stages compare
 #     their per-file log count against the source list.
 #
+# What is NOT a cast.  `sizeof(USHORT)` contains the token `(USHORT)`
+# and is a type name inside sizeof, not a conversion of anything --
+# crt/delayload2.c:239 skips a PE hint field with it.  Marking such a
+# line USHORT-safe would document a narrowing that is not happening, and
+# would then be indistinguishable from the 22 markers that document real
+# ones; that is how a lint's findings stop meaning anything.  So the
+# scanner is taught the rule instead: `sizeof (USHORT)` is stripped from
+# a line before it is examined.  The textual floor below strips it the
+# same way, from the same rule, so the scanner and the population it is
+# measured against cannot disagree about what a cast is.
+#
 # Usage:
-#   tools/lint-ushort.sh [path ...]     default: src
+#   tools/lint-ushort.sh [path ...]     default: src crt sh
 #
 # Environment:
 #   LINT_STRICT=0      always exit 0 (report only).  Does not relax the
@@ -80,7 +91,13 @@ cd "$srcdir" || exit 1
 
 : "${LINT_STRICT:=1}"
 
-paths=${*:-src}
+# Every directory whose .c files this library builds: src/, the C
+# runtime startup and delay-load helpers in crt/, and the sh(1p) binary
+# in sh/.  crt/ and sh/ were outside this script's reach until now for no
+# reason but that `src` was the first thing typed; crt/delayload2.c has a
+# `(USHORT)` token in it, and a check that does not look at a directory
+# reports the same "no findings" as one that looked and found nothing.
+paths=${*:-src crt sh}
 
 # $paths is a deliberately unquoted, space-separated list of CLI arguments
 # (default: "src"); word-splitting it is the point.
@@ -96,8 +113,10 @@ for f in $files; do
 	# The textual population this file contributes, counted independently
 	# of the scanner it is about to be compared against.  grep counts
 	# *lines* containing the token and the awk below pushes once per such
-	# line too, so the two are the same unit.
-	ntf=$(grep -c -F '(USHORT)' "$f" || true)
+	# line too, so the two are the same unit -- and both strip
+	# `sizeof (USHORT)` first, by the same rule, so they cannot disagree
+	# about what a cast is.
+	ntf=$(sed 's/sizeof[ \t]*(USHORT)//g' "$f" | grep -c -F '(USHORT)' || true)
 	ntext=$((ntext + ntf))
 	out=$(awk '
 		function flush(    i) {
@@ -126,7 +145,11 @@ for f in $files; do
 				    index(low, "65535") > 0 ||
 				    index(low, "ushrt_max") > 0) guarded = 1
 
-				if (index(line, "(USHORT)") > 0) {
+				# See "What is NOT a cast" in the header: a
+				# type name inside sizeof is not a conversion.
+				casttext = line
+				gsub(/sizeof[ \t]*\(USHORT\)/, "", casttext)
+				if (index(casttext, "(USHORT)") > 0) {
 					marked = (index(line, "USHORT-safe") > 0) || (index(prevline, "USHORT-safe") > 0)
 					castln[ncasts] = FNR
 					castmarked[ncasts] = marked
