@@ -3357,3 +3357,124 @@ security principal, a second session or process group, a read-only
 mount, or a symbolic-link cycle. `exec.html`'s `[EINVAL]`
 ("recognized executable binary format, but the system does not support
 execution of a file with this format") belongs to group J, not here.
+
+## unistd.h: the `*at()` link calls (successor-queue item 2, group N)
+
+Second of four groups working the `unistd.h` row of
+`test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not clause-audited
+(357)" table (group M took the identity family). `linkat`,
+`readlinkat` and `symlinkat`, against `link.html`, `readlink.html` and
+`symlink.html`.
+
+New clause-cited audit: `test/posix-unistd-links.c` (this session).
+`test/posix-unistd.c`'s `test_linkat()` and `test_readlink()` already
+covered part of this ground and are cited below where they do; this
+file adds what they do not reach, and gives `symlinkat()` its first
+assertions of any kind — `test/posix-glob.c` merely *calls* it while
+building a fixture.
+
+**Environment gate, and the third outcome.** A symbolic link on NT is
+a reparse point and creating one needs `SeCreateSymbolicLinkPrivilege`
+or Developer Mode (`src/unistd/link.c`'s banner). Every clause needing
+a link to exist first sits behind one trial `symlinkat()`; if that
+fails, those groups print a `SKIP` line naming the mechanism and the
+observed errno and the process exits **77 (unverified)** —
+`test/posix-socket.c`'s model, honoured by `tools/runtests.sh`,
+`tools/asan-build.sh` and CI's PowerShell loop. Never a silent skip and
+never a reported pass for something that did not run. Under the locally
+patched Wine used to develop this, reparse points *are* creatable
+without the privilege, which is how the privileged half was exercised
+at all.
+
+**Oracle: NT filesystem behaviour, so the `windows-test` legs are the
+authority.** Both findings below are readable straight out of
+`src/unistd/link.c` and do not depend on which of Wine or NTFS is
+underneath.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| symlinkat | "[EEXIST] The path2 argument names an existing file" — for a regular file and a directory — plus "If the symlink() function fails for any reason other than [EIO], any file named by path2 shall be unaffected" | covered | test/posix-unistd-links.c (`test_symlinkat_errors`) |
+| symlinkat | "[ENOENT] A component of the path prefix of path2 does not name an existing file or path2 is an empty string" | covered | test/posix-unistd-links.c (`test_symlinkat_errors`) |
+| symlinkat | "[ENOTDIR] A component of the path prefix of path2 names an existing file that is neither a directory nor a symbolic link to a directory" | covered | test/posix-unistd-links.c (`test_symlinkat_errors`) |
+| symlinkat | "[EBADF] The path2 argument does not specify an absolute path and the fd argument is neither AT_FDCWD nor a valid file descriptor open for reading or searching" — and nothing created | covered | test/posix-unistd-links.c (`test_symlinkat_errors`) |
+| symlinkat | "[ENOTDIR] The path2 argument is not an absolute path and fd is a file descriptor associated with a non-directory file" | covered | test/posix-unistd-links.c (`test_symlinkat_errors`) |
+| symlinkat | "[ENAMETOOLONG] ... the length of the path1 argument is longer than {SYMLINK_MAX}" — the failure, and that it leaves no debris | covered — `src/unistd/link.c` bounds path1 by what a `REPARSE_DATA_BUFFER`'s `USHORT` lengths can describe, a *larger* limit than the page's `_POSIX_SYMLINK_MAX` minimum, which still conforms; `test/unistd.c:375` already pins the case itself | test/posix-unistd-links.c (`test_symlinkat_errors`) |
+| symlinkat | "shall create a symbolic link called path2 that contains the string pointed to by path1"; "The string pointed to by path1 shall be treated only as a string and shall not be validated as a pathname" — asserted with a target that does not exist and never will | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_symlinkat_creates`) |
+| symlinkat | "All interfaces ... shall behave as if the contents of symbolic links can always be read, except that the value of the file mode bits ... is unspecified" — `S_ISLNK()` required, permission bits not | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_symlinkat_creates`) |
+| symlinkat | both target shapes `src/unistd/link.c` builds differently — relative (`SYMLINK_FLAG_RELATIVE`) and absolute (the `\??\` prefix) — round-trip losslessly through `readlink()` | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_symlinkat_creates`) |
+| symlinkat | "the symbolic link is created relative to the directory associated with the file descriptor fd" — created *there* and not in the current directory | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_symlinkat_creates`) |
+| symlinkat | "If symlinkat() is passed the special value AT_FDCWD ... the behavior shall be identical to a call to symlink()" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_symlinkat_creates`) |
+| symlinkat | "If path2 names a symbolic link, symlink() shall fail and set errno to [EEXIST]" — the DESCRIPTION's separate statement, which must hold even for a *dangling* link that names nothing existing | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_symlinkat_creates`) |
+| symlinkat | "The symbolic link's user ID shall be set to the process' effective user ID. The symbolic link's group ID shall be set to the group ID of the parent directory or to the effective group ID" | N/A — `src/stat/stat.c` reports one fixed uid/gid for every file (the single identity of `src/unistd/ids.c`), so both halves are true by construction and neither can be observed otherwise | — |
+| symlinkat | "shall mark for update the last data access, last data modification, and last file status change timestamps of the symbolic link" | N/A — a reparse point's own timestamps are not reachable through this library: `lstat()` reports the link, but there is no second call that would update them for a comparison | — |
+| symlinkat | [EACCES], [EROFS], [ENOSPC], [EIO], [ELOOP] | N/A — a second security principal, a read-only mount, a full filesystem, a hardware error, or a symlink cycle handed to NT's own resolver. Unreachable even with a fully general `symlinkat()` | — |
+| readlinkat | "[EBADF] The path argument does not specify an absolute path and the fd argument is neither AT_FDCWD nor a valid file descriptor" | covered | test/posix-unistd-links.c (`test_readlinkat_dirfd`) |
+| readlinkat | "[ENOTDIR] The path argument is not an absolute path and fd is a file descriptor associated with a non-directory file" | covered | test/posix-unistd-links.c (`test_readlinkat_dirfd`) |
+| readlinkat | "[ENOTDIR] A component of the path prefix names an existing file that is neither a directory ..." | covered | test/posix-unistd-links.c (`test_readlinkat_dirfd`) |
+| readlinkat | an **absolute** path is resolved without consulting `fd` at all — the precondition of both clauses above is "does not specify an absolute path", so `readlinkat(4096, "/abs/path", ...)` must not report [EBADF] | covered | test/posix-unistd-links.c (`test_readlinkat_dirfd`) |
+| readlinkat | "[EINVAL] The path argument names a file that is not a symbolic link" — for a **directory**, the other shape `FSCTL_GET_REPARSE_POINT` can be handed (`test/posix-unistd.c` covers the regular-file case) | covered | test/posix-unistd-links.c (`test_readlinkat_dirfd`) |
+| readlinkat | RETURN VALUE "Otherwise, these functions shall return a value of -1, **leave the buffer unchanged**, and set errno" — checked on every failure above | covered | test/posix-unistd-links.c (`test_readlinkat_dirfd`) |
+| readlink / readlinkat | "shall place the contents of the symbolic link ... in the buffer"; "If the buf argument is not large enough ... the first bufsize bytes shall be placed in buf"; RETURN VALUE "the count of bytes placed in the buffer"; [EINVAL] on a regular file; [ENOENT]; AT_FDCWD equivalence; dirfd-relative resolution | covered — pre-existing | test/posix-unistd.c (`test_readlink`) |
+| readlink | "If the value of bufsize is greater than {SSIZE_MAX}, the result is implementation-defined" | N/A — explicitly latitude, and nothing here can allocate a buffer that large | — |
+| linkat | "[ENOTDIR] A component of either path prefix names an existing file that is neither a directory ..." — for **both** path1 and path2 | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
+| linkat | "[ENOTDIR] The path1 or path2 argument is not an absolute path and fd1 or fd2, respectively, is a file descriptor associated with a non-directory file" — both sides | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
+| linkat | "[ENOENT] A component of either path prefix does not exist ... or path1 or path2 points to an empty string" — the **path2** side (`test/posix-unistd.c` covers path1) | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
+| linkat | "[EEXIST] The path2 argument resolves to an existing directory entry" — when path2 is path1, and when it is a directory | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
+| linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | **BUG** — see below | fenced, `test_linkat_remaining`; the *failure itself* and the absence of debris are asserted unfenced |
+| linkat | "If path1 names a symbolic link ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for the symbolic link path1 and not its target" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_linkat_remaining`) |
+| linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | **BUG** — see below; supersedes this ledger's earlier N/A for the clause | fenced, `test_linkat_remaining` |
+| linkat | "shall atomically create a new link for the existing file and the link count of the file shall be incremented by one"; [EEXIST]; [ENOENT] for path1 and the empty string; [EBADF] on either side; dirfd-relative creation | covered — pre-existing | test/posix-unistd.c (`test_linkat`) |
+| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail; recorded with the `unlinkat()` flag-masking fence in test/posix-unistd.c rather than duplicated | — |
+| linkat | [EMLINK], [EXDEV], [ENOSPC], [EROFS], [EACCES], [ELOOP] | N/A — {LINK_MAX} is 1023 here so [EMLINK] means creating a thousand entries per run for a limit the platform rather than this code enforces; [EXDEV] needs two filesystems a CI image is not guaranteed to have; the rest as for symlinkat | — |
+
+### Bugs found (unistd.h `*at()` link group)
+
+1. **`linkat()` on a directory reports `EISDIR`, an errno `link.html`
+   does not list.** The page's shall-fail list has "[EPERM] The file
+   named by path1 is a directory and either the calling process does
+   not have appropriate privileges or the implementation prohibits
+   using link() on directories" — NTFS does prohibit it, so that
+   clause applies exactly. `EISDIR` appears nowhere in `link.html`'s
+   ERRORS. `src/unistd/link.c`'s `linkat()` has no directory case at
+   all: it lets `NtSetInformationFile` fail with
+   `STATUS_FILE_IS_A_DIRECTORY` and hands that to
+   `__set_errno_status()`, whose table maps it to `EISDIR`. That
+   mapping is right for `open()` and `rename()`, where `EISDIR` *is* a
+   specified errno; it is this call site that needs to translate.
+
+2. **`linkat()` ignores `flags`, so `AT_SYMLINK_FOLLOW` does nothing.**
+   `link.html` distinguishes two behaviours by that flag; `src/unistd/
+   link.c:27` is `(void)flags;` and line 31 opens with
+   `FILE_OPEN_REPARSE_POINT` unconditionally, which is precisely the
+   flag-*clear* branch. Measured: the entry created with
+   `AT_SYMLINK_FOLLOW` is itself a symbolic link, where the clause
+   requires a hard link to the target.
+
+   **This supersedes an earlier N/A.**
+   `test/POSIX-GAP-ACCOUNTING.md`'s successor-session notes record this
+   clause as N/A because distinguishing the branches "needs a symbolic
+   link, which needs `SeCreateSymbolicLinkPrivilege` and is not
+   available on the CI images this suite is the authority on". That is
+   an accurate statement about the *test environment*, and it is why
+   the fence sits behind the privilege probe — but it is not a reason
+   to call the clause inapplicable. The defect is visible in the source
+   without running anything, and it is reachable in any environment
+   that can create a symbolic link at all. N/A is for "a real NT
+   mechanism makes the clause inapplicable", not for "this CI image
+   cannot reach it".
+
+### Not reached (unistd.h `*at()` link group)
+
+Everything marked *(needs the privilege)* above, in an environment
+without `SeCreateSymbolicLinkPrivilege` or Developer Mode — reported as
+`SKIP` plus rc=77, not as a pass. Also: `[EMLINK]`, `[EXDEV]`, and
+every clause needing a second security principal, a read-only mount, a
+full filesystem or a symbolic-link cycle.
+
+One thing a mutation could **not** reach, recorded so the coverage is
+not overstated: forcing `symlinkat()` to set `SYMLINK_FLAG_RELATIVE`
+on an absolute target is *not* caught by this file. `readlinkat()`
+strips a `\??\` prefix only when one is present, so the
+create/read pair stays lossless either way, and POSIX specifies
+nothing about the NT flag. The round trip is the clause; the flag is
+not.

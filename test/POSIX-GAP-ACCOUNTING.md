@@ -1396,3 +1396,39 @@ for a row describing several:
   (43 -> 18) is stated in terms of *pages audited*, which is the
   number that is actually true, and the tokeniser's answer will differ.
   Do not reconcile them by editing either.
+
+## Changes since the clause audit of the `unistd.h` row (group N)
+
+Dated note, 2026-08-24, same route and same reason as group M's note
+above: appended, not folded into the frozen `04edec2` headline table.
+
+`test/POSIX-COVERAGE.md`'s new section **"unistd.h: the `*at()` link
+calls (successor-queue item 2, group N)"** clause-audits **3** more of
+the `unistd.h` row's 43: `linkat readlinkat symlinkat`. That row drops
+from 18 (after group M) to 15.
+
+`symlinkat` is the one of the three with no prior assertion of any
+kind — `test/posix-glob.c` calls it to build a fixture and checks
+nothing about it.
+
+**Two bugs, both in `linkat()`**: a directory `path1` reports `EISDIR`,
+which `link.html`'s ERRORS list does not contain (it requires
+`[EPERM]`); and `flags` is discarded outright (`src/unistd/link.c:27`
+is `(void)flags;`), so `AT_SYMLINK_FOLLOW` silently does nothing.
+
+**One N/A in this file is superseded.** The "Closed: the remaining
+`unistd.h` 18" section above records `linkat()`'s `AT_SYMLINK_FOLLOW`
+as N/A on the grounds that distinguishing the two branches needs a
+symbolic link and therefore `SeCreateSymbolicLinkPrivilege`. That is
+true of the CI images and is why group N's fence sits behind a
+privilege probe — but the defect is readable in the source without
+running anything, so the clause is *unreached in some environments*,
+not *inapplicable*. Group N reclassifies it as a fenced BUG. The
+earlier text is left standing rather than edited, per this file's
+frozen-snapshot rule; this note is the correction.
+
+`symlinkat()`'s creation clauses are the first thing in this suite to
+use the **rc=77 "unverified"** route for a *privilege* rather than a
+network: without `SeCreateSymbolicLinkPrivilege` the dependent groups
+print a `SKIP` naming the mechanism and the run exits 77 rather than
+reporting a pass.
