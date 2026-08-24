@@ -60,44 +60,58 @@
 # git guarantees the three blob contents it hands this driver (the
 # ancestor, current and other versions of *this one file*) regardless of
 # what stage the rest of the merge is at -- unlike any sibling path, they
-# are never in-flight. So instead of asking the live tree what the
-# answer should be, this driver reruns `git merge-file` (plain diff3) on
-# those three blobs to get git's own conflict hunks, and then resolves
-# each hunk using what is known about gen-kaem.sh's output shape:
+# are never in-flight. So instead of asking the live tree what the answer
+# should be, this driver reruns `git merge-file` (plain diff3) on those
+# three blobs to get git's own conflict hunks, and resolves each one
+# using what is known about gen-kaem.sh's output shape.
 #
-#   - a hunk that is exactly one line added on each side, neither of
-#     which is the `${CC} -ar rcs lib/libc.a ...` line, is a plain add/add
-#     ambiguity from two independent single-line insertions (a new
-#     compile command, or a new `mkdir` line) at the same point in an
-#     already-sorted list. Emitting both lines, ordered against each
-#     other the same way the file as a whole is already sorted, is
-#     exactly what a fresh gen-kaem.sh run would have produced.
-#   - a hunk that is exactly one line on each side and *both* lines match
-#     the archive command is the one genuinely special case: rather than
-#     text-merge that single monster line, split each side's object list
-#     into tokens, do the token-level three-way union (present unless
-#     removed by a side that had it and the other side didn't add it
-#     back), and rebuild the one archive line with a byte-sorted
-#     (LC_ALL=C, matching GNU Make's `$(sort ...)`, which is what
-#     produced the token order in the first place) object list.
-#   - anything else -- multi-line sides, a hunk this driver cannot
-#     confidently classify, anything at all outside those two known
-#     shapes -- is left as git's own conflict-marker output and the
-#     driver exits non-zero. Guessing at an unfamiliar hunk shape is
-#     exactly the "plausible but wrong" mistake this driver exists to
-#     rule out; a shape it does not recognize is a real conflict for a
-#     human, the same as if this driver were not registered at all.
+# The compile-command/mkdir lines need nothing special: a hunk that is
+# exactly one line added on each side is a plain add/add ambiguity from
+# two independent single-line insertions landing at the same point in an
+# already-sorted list, and emitting both lines -- ordered against each
+# other the same way the surrounding list already is -- is exactly what a
+# fresh gen-kaem.sh run would have produced.
 #
-# This needs no source tree, no compiler, and no config.mak: it is a
-# pure function of the three blobs git already handed it, so it cannot
-# be fooled by the live tree's state, and it produces the identical
-# output a correct fresh regeneration would, without ever needing one.
+# The one `${CC} -ar rcs lib/libc.a ...` line needs more care, because it
+# is not sorted by a single plain rule: the Makefile builds it as
+# `$(filter obj/src/%,$(ALL_OBJS)) $(filter obj/arch/%,$(ALL_OBJS))` --
+# every obj/src/ object (itself globally sorted, and this is where a
+# per-file arch override under src/$dir/$(ARCH)/ ends up too) followed by
+# every obj/arch/ object (from arch/$(ARCH)/src/, also sorted) -- not one
+# flat sort of the whole line. Reimplementing that grouping rule by hand
+# here would just be a second, independent copy of Makefile logic to keep
+# in sync by hand -- exactly the kind of drift this whole mechanism exists
+# to prevent. So instead of text-merging that single monster line (or
+# hand-sorting its tokens), this driver explodes it into one object per
+# line -- in all three of %O/%A/%B, before the merge, not after -- so the
+# *same* add/add single-line-insertion handling above resolves a
+# coincident object insertion too, landing each new object exactly where
+# gen-kaem.sh would have put it: diff3 only ever produces a conflicting
+# hunk where both sides' edits land at the *same* point relative to
+# unchanged context, so a new object token surfaces in a hunk immediately
+# next to the (unchanged, already-correctly-grouped-and-sorted) tokens
+# around it -- never merged across the obj/src/ vs obj/arch/ boundary,
+# since that boundary is unchanged context no add/add hunk crosses. The
+# line is reassembled after the merge.
+#
+# Anything else -- multi-line sides, a hunk this driver cannot confidently
+# classify as one of the two shapes above -- is left as git's own
+# conflict-marker output and the driver exits non-zero. Guessing at an
+# unfamiliar hunk shape is exactly the "plausible but wrong" mistake this
+# driver exists to rule out; a shape it does not recognize is a real
+# conflict for a human, the same as if this driver were not registered at
+# all.
+#
+# This needs no source tree, no compiler, and no config.mak: it is a pure
+# function of the three blobs git already handed it, so it cannot be
+# fooled by the live tree's state, and it produces the identical output a
+# correct fresh regeneration would, without ever needing one.
 #
 # %P is only used to sanity-check that this driver is only ever being
 # asked about the two files it knows how to reason about (.gitattributes
-# should never route anything else here); the regenerated content itself
-# does not depend on the arch at all, since the merge operates purely on
-# the three files' own text.
+# should never route anything else here); the merge itself does not
+# depend on the arch at all, since it operates purely on the three files'
+# own text.
 #
 # This script alone does nothing -- git does not read merge driver
 # *behavior* from the repository, only the .gitattributes *association*
@@ -127,20 +141,37 @@ esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Plain (non-diff3) 3-way merge: %A becomes "<<<<<<< ... ======= ... >>>>>>>"
-# hunks on conflict, or the clean merge outright if there is one (a hunk
-# that touches only one of the two files, or edits that land on disjoint
-# lines, can merge with no conflict at all -- nothing below needs to run
-# in that case). Exit status is the conflict count, not pass/fail, so it
-# is captured rather than trusted directly.
-mfec=0
-git merge-file -p "$current" "$ancestor" "$other" >"$work/merged" 2>"$work/stderr" || mfec=$?
+# Explode the single archive-command line into one object per line, framed
+# by sentinels, in all three inputs -- see the header above for why. The
+# sentinels are identical, constant text in every input, so they are never
+# themselves part of a conflict hunk; only the object lines between them
+# can be.
+explode() {
+	awk '
+		BEGIN { prefix = "${CC} -ar rcs lib/libc.a " }
+		index($0, prefix) == 1 {
+			print "##ARLINE-BEGIN##"
+			n = split(substr($0, length(prefix) + 1), tok, " ")
+			for (i = 1; i <= n; i++) if (tok[i] != "") print tok[i]
+			print "##ARLINE-END##"
+			next
+		}
+		{ print }
+	' "$1" >"$2"
+}
+explode "$ancestor" "$work/O"
+explode "$current" "$work/A"
+explode "$other" "$work/B"
 
-if [ "$mfec" -eq 0 ]; then
-	cp "$work/merged" "$current"
-	echo "merge-kaem.sh: $path merged cleanly (no add/add ambiguity)" >&2
-	exit 0
-fi
+# Plain (non-diff3) 3-way merge: on conflict this leaves
+# "<<<<<<< ... ======= ... >>>>>>>" hunks in the output; on a clean merge
+# (a change that touches only one side, or edits landing on disjoint
+# lines) there is nothing left for the awk pass below to do. Exit status
+# is the conflict count, not pass/fail, so it is captured rather than
+# trusted directly.
+mfec=0
+git merge-file -p -L "current ($path)" -L "ancestor" -L "other" \
+	"$work/A" "$work/O" "$work/B" >"$work/merged" 2>"$work/stderr" || mfec=$?
 
 if [ "$mfec" -lt 0 ]; then
 	echo "merge-kaem.sh: git merge-file itself failed on '$path':" >&2
@@ -148,58 +179,26 @@ if [ "$mfec" -lt 0 ]; then
 	exit 1
 fi
 
-# Resolve each conflict hunk against the two known shapes gen-kaem.sh's
-# output can produce a conflict in (see the header above). Anything else
-# is left alone -- ok is cleared and the original marked-up hunk is
-# copied straight through, so a shape this driver does not recognize
-# still ends up in %A exactly as git's own merge would have left it: a
-# normal conflict, for a human, not a guess.
-awk -v tokfile="$work/artoks" -v sortfile="$work/artoks.sorted" '
-	function is_ar(line) { return line ~ /^\$\{CC\} -ar rcs lib\/libc\.a /}
-	function flush_hunk(   a, b, i, seen, tok, merged, prefix, line, first) {
+# Resolve every remaining hunk (there is nothing to do here at all if
+# mfec was already 0) and recollapse the exploded archive line back into
+# a single line, in one pass. A hunk this driver does not recognize --
+# anything other than exactly one line added on each side -- is passed
+# through as git's own conflict-marker text and clears `ok`, so the
+# driver reports failure and a human sees a normal conflict; it never
+# guesses at an unfamiliar shape.
+awk '
+	function flush_hunk(   a, b, i) {
 		if (ours_n == 1 && theirs_n == 1) {
 			a = ours[1]; b = theirs[1]
-			if (a == b) {
-				print a
-				return
-			}
-			if (is_ar(a) && is_ar(b)) {
-				prefix = "${CC} -ar rcs lib/libc.a "
-				split(substr(a, length(prefix) + 1), tok, " ")
-				for (i in tok) if (tok[i] != "") seen[tok[i]] = 1
-				delete tok
-				split(substr(b, length(prefix) + 1), tok, " ")
-				for (i in tok) if (tok[i] != "") seen[tok[i]] = 1
-				# One token per line into a scratch file, sorted externally
-				# with LC_ALL=C (the same byte-sort GNU Make'"'"'s
-				# $(sort ...) used to order the tokens in the first place),
-				# then read back and rebuilt into one line. Deliberately a
-				# real file rather than `print | cmd` / `cmd | getline` on
-				# the same command string: those are two unrelated pipes
-				# in POSIX awk, not one bidirectional stream, so a sort
-				# fed that way never reaches the getline side at all.
-				for (i in seen) print i > tokfile
-				close(tokfile)
-				system("LC_ALL=C sort -u " tokfile " > " sortfile)
-				merged = prefix
-				first = 1
-				while ((getline line < sortfile) > 0) {
-					merged = merged (first ? "" : " ") line
-					first = 0
-				}
-				close(sortfile)
-				print merged
-				return
-			}
-			# Two independent single-line insertions at the same point
-			# (a new compile command or mkdir line): both belong in the
-			# output, ordered the same way the surrounding list already
-			# is.
+			if (a == b) { print a; return }
+			# Two independent single-line insertions landing at the same
+			# point in an already-sorted list (a new compile command, a
+			# new mkdir line, or -- inside an exploded archive line -- a
+			# new object): keep both, ordered against each other the same
+			# way the surrounding list already is.
 			if (a < b) { print a; print b } else { print b; print a }
 			return
 		}
-		# Not a shape this driver recognizes -- pass the original
-		# conflict hunk through untouched and flag it.
 		ok = 0
 		print "<<<<<<< " ours_label
 		for (i = 1; i <= ours_n; i++) print ours[i]
@@ -207,25 +206,35 @@ awk -v tokfile="$work/artoks" -v sortfile="$work/artoks.sorted" '
 		for (i = 1; i <= theirs_n; i++) print theirs[i]
 		print ">>>>>>> " theirs_label
 	}
-	BEGIN { state = "normal"; ok = 1 }
+	BEGIN { state = "normal"; ok = 1; inar = 0; arline = "" }
 	/^<<<<<<< / { state = "ours"; ours_n = 0; theirs_n = 0; ours_label = substr($0, 9); next }
 	state == "ours" && /^=======$/ { state = "theirs"; next }
 	state == "theirs" && /^>>>>>>> / { theirs_label = substr($0, 9); flush_hunk(); state = "normal"; next }
 	state == "ours" { ours[++ours_n] = $0; next }
 	state == "theirs" { theirs[++theirs_n] = $0; next }
+	# Recollapse: only reachable in state=="normal", so never interferes
+	# with hunk collection above.
+	/^##ARLINE-BEGIN##$/ { inar = 1; arline = "${CC} -ar rcs lib/libc.a "; next }
+	/^##ARLINE-END##$/ { print arline; inar = 0; next }
+	inar { arline = arline (arline == "${CC} -ar rcs lib/libc.a " ? "" : " ") $0; next }
 	{ print }
 	END { exit ok ? 0 : 1 }
 ' "$work/merged" >"$work/resolved" 2>"$work/awk-stderr" && resolve_status=0 || resolve_status=$?
+
+# $work/resolved is written unconditionally above (the exit status only
+# says whether every hunk was a recognized shape), and it already has any
+# unrecognized hunk's original marker text passed straight through and
+# the archive line recollapsed around it -- there is nothing more to
+# reconstruct on failure, just report it and copy the same file.
+cp "$work/resolved" "$current"
 
 if [ "$resolve_status" -ne 0 ] || [ -s "$work/awk-stderr" ]; then
 	cat "$work/awk-stderr" >&2 2>/dev/null || true
 	echo "merge-kaem.sh: '$path' has a conflict hunk this driver does not" >&2
 	echo "merge-kaem.sh: recognize (something other than two independent" >&2
-	echo "merge-kaem.sh: single-line insertions, or the archive command" >&2
-	echo "merge-kaem.sh: line) -- leaving it conflicted for a human." >&2
-	cp "$work/merged" "$current"
+	echo "merge-kaem.sh: single-line insertions) -- leaving it conflicted" >&2
+	echo "merge-kaem.sh: for a human." >&2
 	exit 1
 fi
 
-cp "$work/resolved" "$current"
 echo "merge-kaem.sh: resolved $path (add/add hunks reconciled from \$O/\$A/\$B)" >&2
