@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Every file authored in this tree carries its own SPDX header; this file
+# exists for exactly one thing, and should stay that way.
+#
+# third_party/libc-test/ is musl's libc-test, vendored verbatim at a
+# pinned SHA (see third_party/libc-test/VENDORING.md). Upstream ships a
+# single top-level COPYRIGHT rather than per-file headers, and the whole
+# point of vendoring it is that `git diff` against upstream is empty --
+# so adding SPDX headers to 173 upstream files, or 173 .license
+# sidecars, would both defeat that check and misattribute the files.
+# One stanza states the same fact once, where it can be reviewed.
+version = 1
+
+[[annotations]]
+path = "third_party/libc-test/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2005-2013 libc-test AUTHORS"
+SPDX-License-Identifier = "MIT"

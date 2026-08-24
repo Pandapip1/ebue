@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# test/libc-test-expected.txt -- the adjudication ledger for
+# third_party/libc-test, read by tools/libc-test.sh.
+#
+# One line per test in the vendored corpus, all 146 of them:
+#
+#     <name>  <status>  <reason>
+#
+# and every test must have exactly one.  A vendored test with no line
+# here is a hard failure, not a default-to-ignored: a test nobody has
+# decided about must look undecided.
+#
+# STATUSES
+#
+#   pass             must exit 0.  If it does not, that is a regression
+#                    and the stage goes red.
+#   xfail:defect     a real behavioural defect of THIS LIBRARY, triaged,
+#                    with the ledger row (or its absence) named in the
+#                    reason.  Not fixed here -- this project fences
+#                    confirmed defects rather than fixing them in the
+#                    same pass; this file is the fence for the ones that
+#                    live in an external suite.
+#   xfail:documented a divergence the tree already documents and stands
+#                    behind (a deliberate stub, a design difference, a
+#                    platform primitive that does not exist).
+#   xfail:env        blocked by the target environment, not by this
+#                    library, in a way that is NOT detectable from the
+#                    test's own output at run time.  Anything that IS
+#                    detectable -- Wine's RtlCloneUserProcess abort, a
+#                    stubbed shim helper -- is reported as unverified
+#                    (rc=77) by tools/libc-test.sh instead and never
+#                    reaches this file.  Keep this category small.
+#   unclassified     IT FAILS AND NOBODY HAS LOOKED AT IT.  Reason must
+#                    begin with NOT-YET-TRIAGED.  This is deliberately a
+#                    different word from xfail: an unexamined failure
+#                    recorded as "expected" looks decided, and is worse
+#                    than one recorded as undecided.
+#   unbuildable      does not compile or link.  Reason is the compiler's
+#                    own first error, verbatim.  NEVER a pass: 57 of
+#                    146 tests die at #include, which is the gap
+#                    accounting restated as a build error and is
+#                    evidence of nothing about behaviour.
+#
+# WHY THIS FILE CANNOT GROW SILENTLY
+#
+# The COUNTS line below is checked by tools/libc-test.sh against the
+# rows in this file.  pass, xfail and unbuildable must match EXACTLY;
+# unclassified is a CEILING that may only come down.  So a commit that
+# adds a known failure necessarily also contains the line saying the
+# number of known failures went up -- which is the thing a reviewer
+# needs to see, and the thing an append-only exception list never shows
+# anyone.  A test that is expected to fail and starts passing is also a
+# hard failure: a fixed defect must force this file to be updated.
+#
+# Baseline: ntlibc 661c577, libc-test 68edb8b, x86_64-win32-tcc, under
+# the project's patched Wine (which implements RtlCloneUserProcess, so
+# nothing here is Wine-fork-blocked; on stock Wine several of these
+# become unverified at run time instead, by design).
+#
+# COUNTS pass=62 xfail=23 unclassified=4 unbuildable=57
+#
+argv                              pass
+basename                          pass
+clocale_mbfuncs                   unbuildable  clocale_mbfuncs.c:7: error: include file 'langinfo.h' not found
+clock_gettime                     pass
+crypt                             unbuildable  crypt.c:2: error: include file 'crypt.h' not found
+daemon-failure                    unbuildable  tcc: error: unresolved reference to 'daemon'
+dirname                           pass
+dlopen                            unbuildable  tcc: error: unresolved reference to '__rpath'
+dlopen_dso                        unbuildable  tcc: error: unresolved reference to 'main'
+dn_expand-empty                   unbuildable  dn_expand-empty.c:4: error: include file 'resolv.h' not found
+dn_expand-ptr-0                   unbuildable  dn_expand-ptr-0.c:4: error: include file 'resolv.h' not found
+env                               pass
+execle-env                        xfail:env  no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
+fcntl                             unclassified  NOT-YET-TRIAGED -- F_SETLK across fork(): "lock failed to work" and the child does not see the parent's lock. Real record-locking exists (src/file/flock.c, NT byte-range locks); whether this is a defect, a Wine artefact, or a fork()-inheritance question is undecided.
+fdopen                            pass
+fflush-exit                       pass
+fgets-eof                         pass
+fgetwc-buffering                  unbuildable  tcc: error: unresolved reference to 'fgetwc'
+flockfile-list                    unbuildable  lib/libc.a: error: link symbol 'malloc' defined twice
+fnmatch                           xfail:defect  GAP-ACCOUNTING.md:264 lists fnmatch as implemented-but-not-clause-audited; 5 pattern failures incl. [[?*\] and a bare backslash
+fpclassify-invalid-ld80           pass
+fscanf                            pass
+ftello-unflushed-append           xfail:defect  COVERAGE.md has ftello rows but not this case; ftello on an unflushed append stream reports 3, want 7
+fwscanf                           unbuildable  tcc: error: unresolved reference to 'fwscanf'
+getpwnam_r-crash                  pass
+getpwnam_r-errno                  pass
+iconv_open                        unbuildable  iconv_open.c:3: error: include file 'iconv.h' not found
+iconv-roundtrips                  unbuildable  iconv-roundtrips.c:3: error: include file 'iconv.h' not found
+inet_ntop-v4mapped                xfail:defect  GAP-ACCOUNTING.md:242; inet_pton(AF_INET6,"::ffff:1.2.3.4") fails outright
+inet_pton                         xfail:defect  GAP-ACCOUNTING.md:242 arpa/inet.h not clause-audited; leading zero accepted, embedded space accepted, AF_INET6 "::" rejected
+inet_pton-empty-last-field        xfail:defect  GAP-ACCOUNTING.md:242; "1:2:3:4:5:6:7::" mis-parsed and an over-long address accepted
+ipc_msg                           unbuildable  ipc_msg.c:9: error: include file 'sys/msg.h' not found
+ipc_sem                           unbuildable  ipc_sem.c:9: error: include file 'sys/sem.h' not found
+ipc_shm                           unbuildable  ipc_shm.c:9: error: include file 'sys/shm.h' not found
+iswspace-null                     pass
+lrand48-signextend                xfail:defect  COVERAGE.md:221 asserts only the [0,2^31) range; POSIX fixes the 48-bit LCG, so the three values are specified and ours diverge
+lseek-large                       pass
+malloc-0                          pass
+malloc-brk-fail                   unbuildable  malloc-brk-fail.c:6: error: include file 'sys/mman.h' not found
+malloc-oom                        unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here; on real Windows it will.
+mbc                               unbuildable  mbc.c:6: error: include file 'langinfo.h' not found
+mbsrtowcs-overflow                pass
+memmem-oob                        pass
+memmem-oob-read                   pass
+memstream                         xfail:defect  no clause row; fseek(SEEK_CUR) past end of an open_memstream buffer mis-tracks ftell and content
+mkdtemp-failure                   pass
+mkstemp-failure                   pass
+mntent                            unbuildable  mntent.c:5: error: include file 'mntent.h' not found
+popen                             xfail:env  no /bin/sh on the target -- the shell script reaches cmd.exe, which rejects it (external-suites.md, build assumption 3)
+printf-1e9-oob                    pass
+printf-fmt-g-round                pass
+printf-fmt-g-zeros                pass
+printf-fmt-n                      xfail:defect  NOT in external-suites.md's 22 -- found by this run: the z length modifier is 32-bit in printf, so %zn stores 4 bytes of 8 and %zd of 0xdeadbeef00000000 prints 0; %lln is correct
+pthread_atfork-errno-clobber      unbuildable  pthread_atfork-errno-clobber.c:2: error: include file 'pthread.h' not found
+pthread_cancel                    unbuildable  pthread_cancel.c:1: error: include file 'pthread.h' not found
+pthread_cancel-points             unbuildable  pthread_cancel-points.c:3: error: include file 'pthread.h' not found
+pthread_cancel-sem_wait           unbuildable  pthread_cancel-sem_wait.c:2: error: include file 'pthread.h' not found
+pthread_cond                      unbuildable  pthread_cond.c:1: error: include file 'pthread.h' not found
+pthread_condattr_setclock         unbuildable  pthread_condattr_setclock.c:3: error: include file 'pthread.h' not found
+pthread_cond-smasher              unbuildable  pthread_cond-smasher.c:12: error: include file 'pthread.h' not found
+pthread_cond_wait-cancel_ignored  unbuildable  pthread_cond_wait-cancel_ignored.c:4: error: include file 'pthread.h' not found
+pthread_create-oom                unbuildable  pthread_create-oom.c:3: error: include file 'pthread.h' not found
+pthread_exit-cancel               unbuildable  pthread_exit-cancel.c:3: error: include file 'pthread.h' not found
+pthread_exit-dtor                 unbuildable  pthread_exit-dtor.c:6: error: include file 'pthread.h' not found
+pthread_mutex                     unbuildable  pthread_mutex.c:2: error: include file 'pthread.h' not found
+pthread_mutex_pi                  unbuildable  pthread_mutex_pi.c:2: error: include file 'pthread.h' not found
+pthread_once-deadlock             unbuildable  pthread_once-deadlock.c:3: error: include file 'pthread.h' not found
+pthread_robust                    unbuildable  pthread_robust.c:1: error: include file 'pthread.h' not found
+pthread-robust-detach             unbuildable  pthread-robust-detach.c:3: error: include file 'pthread.h' not found
+pthread_rwlock-ebusy              unbuildable  pthread_rwlock-ebusy.c:3: error: include file 'pthread.h' not found
+pthread_tsd                       unbuildable  pthread_tsd.c:1: error: include file 'pthread.h' not found
+putenv-doublefree                 pass
+qsort                             pass
+raise-race                        unbuildable  raise-race.c:4: error: include file 'pthread.h' not found
+random                            xfail:defect  COVERAGE.md:227 asserts setstate()'s return value only, not that the restored state reproduces the stream; it does not
+regex-backref-0                   pass
+regex-bracket-icase               pass
+regexec-nosub                     pass
+regex-ere-backref                 pass
+regex-escaped-high-byte           xfail:defect  REG_BADPAT appears nowhere in either ledger or any test/*.c; regcomp("\\\xfc") returns 0
+regex-negated-range               pass
+rewind-clear-error                pass
+rlimit-open-files                 xfail:documented  src/misc/resource.c header + include/sys/resource.h: lowering RLIMIT_NOFILE is refused with EINVAL by design rather than accepted and not honoured (FD_MAX is a compile-time array bound)
+scanf-bytes-consumed              pass
+scanf-match-literal-eof           pass
+scanf-nullbyte-char               pass
+search_hsearch                    pass
+search_insque                     pass
+search_lsearch                    pass
+search_tsearch                    pass
+sem_close-unmap                   unbuildable  sem_close-unmap.c:5: error: include file 'semaphore.h' not found
+sem_init                          unbuildable  sem_init.c:2: error: include file 'pthread.h' not found
+sem_open                          unbuildable  sem_open.c:6: error: include file 'semaphore.h' not found
+setenv-oom                        unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here.
+setjmp                            xfail:defect  not covered; siglongjmp does not restore the signal mask
+setvbuf-unget                     pass
+sigaltstack                       xfail:documented  GAP-ACCOUNTING.md:439 -- sigaltstack is a deliberate degenerate stub (src/signal/signal.c:306), COVERAGE.md:602 marks it N/A
+sigprocmask-internal              xfail:documented  design difference, not a defect: __libc_current_sigrtmin() is 35 here, so signals 32-34 are not reserved and are blockable
+sigreturn                         pass
+snprintf                          pass
+socket                            unbuildable  socket.c:38: error: 'SOCK_CLOEXEC' undeclared
+spawn                             unbuildable  spawn.c:9: error: include file 'spawn.h' not found
+sscanf                            xfail:defect  not covered; "%8c%8c" on 13 bytes returns 2 fields, POSIX says 1
+sscanf-eof                        pass
+sscanf_long                       unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_setrlim stubbed; the test needs an enforced RLIMIT_STACK), so it never reaches adjudication here.
+stat                              pass
+statvfs                           xfail:defect  ledger mentions f_files; "/" reports 0 file nodes
+strftime                          xfail:defect  COVERAGE.md:286-287 covers %U %W %V %G %g pass-through only; flags and field width (%03C %+3C %012F) are unimplemented and emitted literally
+string                            pass
+string_memcpy                     pass
+string_memmem                     pass
+string_memset                     pass
+string_strchr                     pass
+string_strcspn                    pass
+string_strstr                     pass
+strptime                          xfail:defect  not covered; %C alone yields 1800 not 1856, %s unparsed
+strtod                            pass
+strtod_long                       pass
+strtod_simple                     pass
+strtof                            pass
+strtol                            pass
+strtold                           pass
+strverscmp                        pass
+swprintf                          unbuildable  swprintf.c:11: error: include file 'langinfo.h' not found
+syscall-sign-extend               unbuildable  syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found
+tgmath                            unbuildable  tgmath.c:1: error: include file 'tgmath.h' not found
+time                              pass
+tls_align                         unbuildable  tcc: error: unresolved reference to 't'
+tls_align_dlopen                  unbuildable  tcc: error: unresolved reference to '__rpath'
+tls_align_dso                     unbuildable  tcc: error: unresolved reference to 'main'
+tls_get_new-dtv                   unbuildable  tls_get_new-dtv.c:2: error: include file 'pthread.h' not found
+tls_get_new-dtv_dso               unbuildable  tcc: error: unresolved reference to 'main'
+tls_init                          unbuildable  tls_init.c:1: error: include file 'pthread.h' not found
+tls_init_dlopen                   unbuildable  tcc: error: unresolved reference to '__rpath'
+tls_init_dso                      unbuildable  tcc: error: unresolved reference to 'main'
+tls_local_exec                    unbuildable  tls_local_exec.c:3: error: include file 'pthread.h' not found
+udiv                              pass
+ungetc                            pass
+uselocale-0                       pass
+utime                             xfail:defect  not covered; utimensat on "/dev/null/invalid" gives ENOENT where POSIX specifies ENOTDIR
+vfork                             xfail:env  no /bin/sh on the target; the second half execl()s "/bin/sh -c"
+wcsncpy-read-overflow             pass
+wcsstr                            unbuildable  tcc: error: unresolved reference to 'wcsstr'
+wcsstr-false-negative             unbuildable  tcc: error: unresolved reference to 'wcsstr'
+wcstol                            unbuildable  tcc: error: unresolved reference to 'wcstol'
+wordexp                           xfail:defect  overlaps the field-splitting work already fenced at test/posix-glob.c:1226,1271; $FOO="bar baz" yields one word, and ${X:-d}/${X-d}/${X:+y} give WRDE_SYNTAX
