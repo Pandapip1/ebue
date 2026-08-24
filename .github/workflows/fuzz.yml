@@ -10,14 +10,35 @@ name: Fuzz
 # schedule here does not start running ci.yml's jobs -- including the
 # Windows-runner leg -- once a night as a side effect.
 #
-# There is no corpus to cache. tools/fuzz.sh explains why at length:
-# libFuzzer reads a corpus and writes crash artefacts through the C
-# library it is linked against, which here is ntlibc, whose open/readdir
-# reach NtCreateFile and friends that a native build does not have. So
-# every run starts cold, and a reproducer worth keeping is meant to land
-# in test/*.c as a regression case rather than in a corpus directory.
-# That also means the run log *is* the artefact: harnesses print the
-# offending input, and libFuzzer prints the crashing unit as Base64.
+# The corpus persists between runs, and that is the whole point of the
+# schedule: eight harnesses at 300 s is forty minutes of search a night,
+# and until fuzz/ntstubs.c grew NTLIBC_FUZZ_MIRROR every one of those
+# nights threw its findings away and started again from random bytes.
+# What used to be here said a corpus was impossible because libFuzzer's
+# file I/O goes through ntlibc to NtCreateFile "and friends that a native
+# build does not have". That was not the reason -- ntstubs.c implements
+# the whole volume; the corpus directory was merely never in it. See the
+# block comment above mirror_init() in fuzz/ntstubs.c.
+#
+# Measured, three consecutive 15 s runs on one machine, coverage libFuzzer
+# reports at INITED (before it has fuzzed anything):
+#
+#   fuzz_scanf     24 -> 494 -> 593
+#   fuzz_strftime  24 -> 631 -> 646
+#   fuzz_strtod    81 -> 314 -> 329
+#
+# How a finding reaches a human, which is the part a persisted corpus does
+# not give you for free:
+#
+#   1. tools/fuzz.sh exits non-zero, so the job goes red.
+#   2. The crashing input is a *file* now, under obj/fuzzcorpus/<h>/crashes,
+#      and the "Upload the artefacts" step below uploads that directory
+#      alongside the log. `tools/fuzz.sh --repro <file> <harness>` replays
+#      it. Before this, the run log's Base64 blob was the only copy.
+#   3. The "Open an issue" step files one against the repository, with the
+#      run URL and the harness name in the title. A red scheduled workflow
+#      is easy not to notice; an issue is not. It is reopened rather than
+#      duplicated if one is already open for the same harness.
 
 on:
   schedule:
@@ -35,9 +56,15 @@ on:
         description: 'Which harnesses (blank = all)'
         required: false
         default: ''
+      reset_corpus:
+        description: 'Start from an empty corpus (yes/no)'
+        required: false
+        default: 'no'
 
 permissions:
   contents: read
+  # For the issue the "Open an issue" step files on a finding.
+  issues: write
 
 concurrency:
   group: fuzz-${{ github.ref }}
@@ -46,10 +73,10 @@ concurrency:
 jobs:
   fuzz:
     runs-on: ubuntu-24.04
-    # Four harnesses at 300s is ~20 min of fuzzing plus a ~200-object
+    # Eight harnesses at 300s is ~40 min of fuzzing plus a ~200-object
     # build; the cap is generous so a slow runner reports rather than
     # being killed mid-run.
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -57,6 +84,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
+
+      # A new key every run, restored from the most recent previous one:
+      # a cache entry is immutable, so accumulating means writing a new
+      # key each night and reading back the newest match. The prefix
+      # restore also keeps the entry alive against the 7-day idle
+      # eviction, since it is read and rewritten every night.
+      #
+      # A crashing input that libFuzzer keeps in the corpus will crash the
+      # *next* run at start-up, before it fuzzes anything. That is correct
+      # -- the finding is a standing regression until someone deals with
+      # it -- and it is why the dispatch input above exists: run the
+      # workflow by hand with reset_corpus=yes to start clean.
+      - name: Restore the corpus
+        if: ${{ github.event.inputs.reset_corpus != 'yes' }}
+        uses: actions/cache@v6
+        with:
+          path: obj/fuzzcorpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
 
       # The harnesses need obj/include/bits/alltypes.h, which is just a
       # concatenation of committed .h.gen files -- no compiler involved,
@@ -71,6 +118,7 @@ jobs:
       # Inputs go through env rather than ${{ }} interpolation so they
       # cannot be spliced into the command.
       - name: Fuzz
+        id: fuzz
         shell: bash
         env:
           SECONDS_PER: ${{ github.event.inputs.seconds || '300' }}
@@ -78,12 +126,74 @@ jobs:
         run: |
           tools/fuzz.sh "$SECONDS_PER" $HARNESSES 2>&1 | tee fuzz.log
 
-      # tools/fuzz.sh exits non-zero when a harness finds something, so
-      # this only runs on a finding -- and the log is the reproducer.
-      - name: Upload the log
+      # Which harnesses found something, for the issue title and body.
+      # Runs even when the fuzz step passed, so the summary is always
+      # written; `found` is empty on a clean run.
+      - name: Summarize
+        id: summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Corpus'
+            grep -E '^   corpus [0-9]+ -> [0-9]+$' fuzz.log || echo '(none reported)'
+          } >> "$GITHUB_STEP_SUMMARY"
+          found=$(grep -oE '^   fuzz_[a-z]+ FOUND SOMETHING' fuzz.log \
+                  | awk '{print $1}' | sed 's/^fuzz_//' | sort -u | tr '\n' ' ')
+          echo "found=${found% }" >> "$GITHUB_OUTPUT"
+
+      # Always: the corpus counts in the log are the evidence that the
+      # mirror is still working, and they are worth having on a green run
+      # too. On a finding this carries the reproducer file itself.
+      - name: Upload the artefacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-log-${{ github.run_id }}
-          path: fuzz.log
+          name: fuzz-${{ github.run_id }}
+          path: |
+            fuzz.log
+            obj/fuzzcorpus/*/crashes
           if-no-files-found: warn
+
+      # The step that makes a finding reach a person. A red scheduled run
+      # notifies whoever owns the schedule and nobody else; an issue is
+      # visible, assignable, and stays open until someone closes it.
+      # Deliberately one issue per harness, reopened rather than
+      # duplicated, so a harness that keeps crashing on the same corpus
+      # entry does not file an issue every night.
+      - name: Open an issue
+        if: ${{ failure() && steps.summary.outputs.found != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUND: ${{ steps.summary.outputs.found }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          for h in $FOUND; do
+            title="fuzz: fuzz_$h found something"
+            existing=$(gh issue list --state all --search "$title in:title" \
+                       --json number,title,state \
+                       --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+            body=$(printf '%s\n' \
+              "\`tools/fuzz.sh\` reported a finding in \`fuzz_$h\`." \
+              "" \
+              "Run: $RUN_URL" \
+              "" \
+              "The crashing input is in the run's \`fuzz-${{ github.run_id }}\` artefact," \
+              "under \`obj/fuzzcorpus/$h/crashes/\`. To replay it:" \
+              "" \
+              '```' \
+              "tools/fuzz.sh --repro <artefact> $h" \
+              '```' \
+              "" \
+              "The corpus is cached between runs, so this input will be replayed" \
+              "at start-up every night until it is dealt with. A reproducer worth" \
+              "keeping belongs in \`test/\` as a case in the matching \`test/*.c\`.")
+            if [ -n "$existing" ]; then
+              gh issue reopen "$existing" 2>/dev/null || true
+              gh issue comment "$existing" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body" --label fuzz 2>/dev/null \
+                || gh issue create --title "$title" --body "$body"
+            fi
+          done
