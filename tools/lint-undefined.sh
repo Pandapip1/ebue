@@ -97,6 +97,11 @@ headers=${*:-}
 if [ -z "$headers" ]; then
 	headers=$(find include -type f -name '*.h' | sort)
 fi
+# How many headers this run is responsible for, for the floor near the
+# report below.  $headers is a whitespace-separated list and is meant to
+# word-split here, exactly as it does at every `for h in $headers` below.
+# shellcheck disable=SC2086
+nheaders=$(printf '%s\n' $headers | grep -c . || true)
 
 workdir=$(mktemp -d) || exit 1
 trap 'rm -rf "$workdir"' EXIT INT TERM
@@ -283,6 +288,31 @@ if [ -f tools/ntdll.def ]; then
 	sort -u -o "$definedfile" "$definedfile"
 fi
 
+# ---- floors: did this run have anything to compare? ----------------------
+#
+# The exit status below is a function of $findings alone, and $findings can
+# only rise for a name that appears in $declfile.  So an empty $declfile --
+# no headers found, or scan() stopping recognising prototypes -- prints
+# "no findings" and exits 0, which is the same `0 = 0` defect
+# tools/asan-build.sh had (855fdb2).  An empty $definedfile is the mirror
+# image: every declared name would then look undefined, which is loud
+# rather than silent, but it means the definition scan broke and the
+# report is meaningless either way.
+ndecl=$(grep -c . "$declfile" || true)
+ndef=$(grep -c . "$definedfile" || true)
+if [ "$ndecl" -eq 0 ]; then
+	printf 'lint-undefined: FAILED -- no declarations were found in %s header(s).\n' \
+		"$nheaders" >&2
+	printf 'lint-undefined: nothing was compared, so this run verified nothing.\n' >&2
+	exit 1
+fi
+if [ "$ndef" -eq 0 ]; then
+	printf 'lint-undefined: FAILED -- no definitions were found in src/, arch/, crt/ or\n' >&2
+	printf 'lint-undefined: tools/ntdll.def, so every one of the %s declared name(s) would\n' "$ndecl" >&2
+	printf 'lint-undefined: be reported undefined.  The definition scan is broken, not the tree.\n' >&2
+	exit 1
+fi
+
 # ---- report ---------------------------------------------------------------
 sort -u -t "$(printf '\t')" -k1,1 "$declfile" | while IFS="$(printf '\t')" read -r nm loc; do
 	[ -z "$nm" ] && continue
@@ -295,7 +325,8 @@ cat "$workdir/report"
 findings=$(grep -c . "$workdir/report")
 
 if [ "$findings" -eq 0 ]; then
-	printf 'lint-undefined: no findings\n'
+	printf 'lint-undefined: no findings (%s declared name(s) checked against %s definition(s))\n' \
+		"$ndecl" "$ndef"
 	exit 0
 fi
 printf 'lint-undefined: %d finding(s)\n' "$findings"
