@@ -118,6 +118,10 @@ int ioctl(int fd, unsigned long req, ...)
 			RtlInitUnicodeString(&dllname, L"kernel32.dll");
 			if (!NT_SUCCESS(LdrLoadDll(0, 0, &dllname, &dll))) { errno = ENOTTY; return -1; }
 			procname.Buffer = "GetConsoleScreenBufferInfo";
+			/* A 26-byte string literal assigned on the line above, not
+			 * anything a caller supplies, so this narrowing to the
+			 * ANSI_STRING's USHORT lengths cannot wrap.
+			 * USHORT-safe: 26-byte string literal. */
 			procname.Length = procname.MaximumLength = (USHORT)strlen(procname.Buffer);
 			if (!NT_SUCCESS(LdrGetProcedureAddress(dll, &procname, 0, &proc))) { errno = ENOTTY; return -1; }
 			if (!((BOOL (NTAPI *)(HANDLE, CONSOLE_SCREEN_BUFFER_INFO *))proc)(f->h, &info)) { errno = ENOTTY; return -1; }

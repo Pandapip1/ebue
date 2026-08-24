@@ -20,6 +20,15 @@
 #             uninitialised-value and leak paths rather than style nits.
 #   cppcheck  cppcheck --enable=warning,portability, if installed.
 #   shell     shellcheck over configure, the git hooks and tools/*.sh.
+#   undefined tools/lint-undefined.sh: a public header declaring a
+#             function nothing defines.  No tool needed.
+#   ushort    tools/lint-ushort.sh: unguarded (USHORT) narrowing casts,
+#             the class of the chdir()/UNICODE_STRING.Length bug that
+#             script was written for (4f02ef3).  No tool needed.  It was
+#             dispatchable here from the day it was added and named in
+#             none of the default stage list, tools/gate.sh's ALL_STAGES
+#             or ci.yml's lint matrix, so in ~a year it never once ran in
+#             a gate -- a bug hunt's own detector, left unwired.
 #
 # Usage:
 #   tools/lint.sh                 run every stage
@@ -74,7 +83,7 @@ missing=0
 
 # How many files/stages to run at once. warn/analyze run one process per
 # source file (the actual work, e.g. clang-tidy on one TU, dwarfs process
-# startup), and the five top-level stages are themselves independent, so
+# startup), and the top-level stages are themselves independent, so
 # both parallelise for free. LINT_JOBS=1 restores the old fully serial
 # behaviour, which is also the safe fallback if nproc/getconf are both
 # missing.
@@ -158,7 +167,7 @@ WARN_FLAGS="-Wall -Wextra -Wno-unused-function \
 # bits/alltypes.h for an arch, assembled exactly as the Makefile does it, so
 # lint can check an arch the tree is not currently configured for.
 #
-# Idempotent and safe under concurrent callers: with the five top-level
+# Idempotent and safe under concurrent callers: with the top-level
 # stages now able to run at once (see the dispatch loop below), more than
 # one of them can ask to generate the same arch's header at nearly the
 # same moment. Skipping when the destination already exists avoids
@@ -462,7 +471,7 @@ stage_shell() {
 	return 1
 }
 
-stages=${*:-warn analyze cppcheck shell undefined}
+stages=${*:-warn analyze cppcheck shell undefined ushort}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
@@ -470,12 +479,12 @@ mkdir -p "$builddir" || exit 1
 # matters once stages run concurrently.
 for arch in $LINT_ARCHS; do gen_alltypes "$arch" || note "cannot generate alltypes for $arch"; done
 
-# The five stages read only from the source tree and each other's-own
+# The stages read only from the source tree and each other's-own
 # obj/lint/* output files (never one another's), so they are independent
 # and run concurrently, each buffered to its own log and printed as one
 # unit afterwards -- exactly the same reasoning as the per-file
 # parallelism inside stage_warn/stage_analyze above, one level up. A
-# single `tools/lint.sh` invocation with all five default stages was the
+# single `tools/lint.sh` invocation with all of the default stages was the
 # dominant cost of a full local verification pass (it does not itself
 # fork off separate toolchains the way the two pinned CI-reproduction
 # nix-shell invocations do); this is what cuts that down.
@@ -499,12 +508,34 @@ for s in $stages; do
 done
 wait
 
+# Same floor tools/gate.sh:266-322 keeps one level up, for the same
+# reason: a stage whose subshell was killed before it could write its
+# .rc used to default to rc=0 here and count as a pass, so a run in
+# which nothing ran at all reported "no findings".  A stage that did not
+# report a result is a failure, and it has to be named -- otherwise the
+# only evidence of what went missing is that the output is short.
+reported=0
+absent=""
 for s in $stages; do
 	cat "$rundir/$s.out"
-	rc=0
-	[ -f "$rundir/$s.rc" ] && rc=$(cat "$rundir/$s.rc")
+	if [ ! -f "$rundir/$s.rc" ]; then
+		note "MISSING: stage '$s' never reported a result (no $s.rc was written)"
+		absent="$absent $s"
+		findings=1
+		continue
+	fi
+	reported=$((reported + 1))
+	rc=$(cat "$rundir/$s.rc")
 	[ "$rc" != 0 ] && findings=1
 done
+# $stages is a whitespace-separated list and is meant to word-split here,
+# exactly as it does at every `for s in $stages` above.
+# shellcheck disable=SC2086
+nstages=$(printf '%s\n' $stages | grep -c . || true)
+if [ "$reported" -ne "$nstages" ]; then
+	note "lint: $reported of $nstages stage(s) reported a result; never reported:$absent"
+	findings=1
+fi
 ls "$LINT_MISSING_MARKER".* >/dev/null 2>&1 && missing=1
 rm -rf "$rundir"
 

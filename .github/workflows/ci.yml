@@ -484,6 +484,13 @@ jobs:
           # somewhere; needs no tool beyond a shell.
           - stage: undefined
             packages: ""
+          # Unguarded (USHORT) narrowing casts -- the UNICODE_STRING.Length
+          # wrap class tools/lint-ushort.sh was written for.  Text-only,
+          # needs no tool beyond a shell, and takes half a second; it was
+          # simply never listed here, so the detector written to stop that
+          # bug recurring had never run in CI at all.
+          - stage: ushort
+            packages: ""
     name: lint (${{ matrix.stage }})
     steps:
       - uses: actions/checkout@v7

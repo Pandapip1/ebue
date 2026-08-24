@@ -37,13 +37,40 @@
 #
 #   x.Length = (USHORT)n;  /* USHORT-safe: n <= FD_MAX, far under 65535 */
 #
+# The floors.  "No findings" and "the scanner saw nothing to have findings
+# about" print the same line and used to exit the same way, which is the
+# `0 = 0` shape tools/asan-build.sh had (855fdb2) and that the rest of this
+# tree has since been taught to reject.  Three things are therefore counted
+# and checked before any result is reported:
+#
+#   * how many .c files were scanned -- zero means the path list matched
+#     nothing (a directory rename, a bad argument), not a clean tree;
+#   * how many lines textually contain `(USHORT)`, by grep, over exactly
+#     the files that were scanned -- zero means there is nothing of this
+#     shape left in the tree at all, at which point a "clean" result from
+#     this script is true but empty and somebody should know;
+#   * how many of those lines the awk state machine below actually
+#     *classified* (guarded, marked, or reported).  This is the one that
+#     matters.  The scanner only looks at casts inside a function body it
+#     has recognised, and it recognises one by a signature line followed by
+#     a lone `{`; a source file written in some other brace style, or a
+#     function whose braces it fails to balance, leaves its casts unseen
+#     and unclassified -- and the script's output for "I did not look at
+#     this cast" is identical to its output for "this cast is fine".
+#     Comparing the two counts turns that into a failure that names the
+#     shortfall, exactly as tools/lint.sh's warn/analyze stages compare
+#     their per-file log count against the source list.
+#
 # Usage:
 #   tools/lint-ushort.sh [path ...]     default: src
 #
 # Environment:
-#   LINT_STRICT=0      always exit 0 (report only)
+#   LINT_STRICT=0      always exit 0 (report only).  Does not relax the
+#                      floors: a scanner that examined nothing is a broken
+#                      scanner, not a report of zero findings.
 #
-# Exit status is 1 if any finding was reported (unless LINT_STRICT=0).
+# Exit status is 1 if any finding was reported (unless LINT_STRICT=0), or
+# if any floor above was not met (always).
 
 set -u
 
@@ -61,10 +88,27 @@ paths=${*:-src}
 files=$(find $paths -type f -name '*.c' 2>/dev/null)
 
 findings=0
+nfiles=0
+nseen=0
+ntext=0
 for f in $files; do
+	nfiles=$((nfiles + 1))
+	# The textual population this file contributes, counted independently
+	# of the scanner it is about to be compared against.  grep counts
+	# *lines* containing the token and the awk below pushes once per such
+	# line too, so the two are the same unit.
+	ntf=$(grep -c -F '(USHORT)' "$f" || true)
+	ntext=$((ntext + ntf))
 	out=$(awk '
 		function flush(    i) {
 			for (i = 0; i < ncasts; i++) {
+				# Counted here rather than where the cast is pushed:
+				# "classified" means the enclosing function was closed
+				# and a verdict reached.  A cast pushed inside a
+				# function whose braces never balance is dropped
+				# silently, and that silent drop is what the
+				# seen-vs-textual comparison in the caller catches.
+				classified++
 				if (guarded) continue
 				if (castmarked[i]) continue
 				printf "%s:%d: unguarded (USHORT) truncation -- no __US_MAX_WCHARS/0xffff/65535/USHRT_MAX check in this function and no USHORT-safe marker\n", FILENAME, castln[i]
@@ -106,7 +150,11 @@ for f in $files; do
 			}
 			prevline = $0
 		}
+		END { printf "@classified\t%d\n", classified }
 	' "$f")
+	seen=$(printf '%s\n' "$out" | sed -n 's/^@classified\t//p')
+	nseen=$((nseen + ${seen:-0}))
+	out=$(printf '%s\n' "$out" | grep -v '^@classified	' || true)
 	if [ -n "$out" ]; then
 		printf '%s\n' "$out"
 		n=$(printf '%s\n' "$out" | grep -c .)
@@ -114,10 +162,38 @@ for f in $files; do
 	fi
 done
 
+# ---- floors: did this run examine anything? -------------------------------
+floor_failed=0
+if [ "$nfiles" -eq 0 ]; then
+	printf 'lint-ushort: FAILED -- no .c file was scanned under: %s\n' "$paths" >&2
+	printf 'lint-ushort: nothing was examined, so this run checked nothing.\n' >&2
+	floor_failed=1
+fi
+if [ "$nfiles" -gt 0 ] && [ "$ntext" -eq 0 ]; then
+	printf 'lint-ushort: FAILED -- %d file(s) scanned and not one line contains\n' "$nfiles" >&2
+	printf 'lint-ushort: the token (USHORT).  A clean result over an empty population says\n' >&2
+	printf 'lint-ushort: nothing about the bug class this script exists for.  If the\n' >&2
+	printf 'lint-ushort: casts really are all gone, retire the script in the same\n' >&2
+	printf 'lint-ushort: commit rather than letting it report success over nothing.\n' >&2
+	floor_failed=1
+fi
+if [ "$nseen" -ne "$ntext" ]; then
+	printf 'lint-ushort: FAILED -- %d line(s) contain the token (USHORT) but the scanner\n' "$ntext" >&2
+	printf 'lint-ushort: classified only %d of them.  The remaining %d sit outside any\n' \
+		"$nseen" "$((ntext - nseen))" >&2
+	printf 'lint-ushort: function body this scanner recognised, so it never reached a\n' >&2
+	printf 'lint-ushort: verdict on them.  Without this floor, "I did not look at this\n' >&2
+	printf 'lint-ushort: cast" and "this cast is fine" are the same output.\n' >&2
+	floor_failed=1
+fi
+[ "$floor_failed" -ne 0 ] && exit 1
+
 if [ "$findings" -eq 0 ]; then
-	printf 'lint-ushort: no findings\n'
+	printf 'lint-ushort: no findings (%d cast site(s) classified in %d file(s))\n' \
+		"$nseen" "$nfiles"
 	exit 0
 fi
-printf 'lint-ushort: %d finding(s)\n' "$findings"
+printf 'lint-ushort: %d finding(s) (%d cast site(s) classified in %d file(s))\n' \
+	"$findings" "$nseen" "$nfiles"
 [ "$LINT_STRICT" = 0 ] && exit 0
 exit 1

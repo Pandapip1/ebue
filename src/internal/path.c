@@ -144,6 +144,12 @@ int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 	while (i > floor) {
 		NTSTATUS st;
 		if (nt->Buffer[--i] != '\\') continue;
+		/* `i` starts at nt->Length / sizeof(WCHAR) and only ever
+		 * decreases, so i * sizeof(WCHAR) <= nt->Length, and nt->Length
+		 * is itself a USHORT the caller already fits.  This narrowing
+		 * re-narrows a value that arrived as a USHORT, so it cannot
+		 * wrap.
+		 * USHORT-safe: bounded by the source string's own Length. */
 		cut.Length = (USHORT)(i * sizeof(WCHAR));
 		st = NtQueryAttributesFile(&oa, &bi);
 		if (NT_SUCCESS(st))
