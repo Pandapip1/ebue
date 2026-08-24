@@ -740,6 +740,16 @@ int vdprintf(int fd, const char *__restrict fmt, __isoc_va_list ap)
 	f.bufmode = _IONBF;
 	r = __vfprintf(&f, fmt, ap);
 	fflush(&f);
+	/* __ensure_buf() allocated f.buf on the first write (one byte, for
+	 * _IONBF) and nothing else will ever free it: this FILE is a stack
+	 * object that never reaches fclose(), and fflush() only drains the
+	 * buffer, it does not release it.  Without this, every dprintf()/
+	 * vdprintf() call leaks -- caught by ASan under tools/asan-build.sh
+	 * once test/posix-stdio.c started calling them at all.  Guarded on
+	 * user_buf the same way __fclose_locked() and setvbuf() are, even
+	 * though nothing can have handed this FILE a user buffer, so the
+	 * ownership rule stays stated in one form everywhere. */
+	if (f.buf && !f.user_buf) free(f.buf);
 	return r;
 }
 int dprintf(int fd, const char *__restrict fmt, ...)
