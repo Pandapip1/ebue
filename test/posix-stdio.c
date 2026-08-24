@@ -438,7 +438,6 @@ static void test_popen_emfile(void)
 }
 #endif
 
-
 /* Everything below exists in src/ and links, but was named by no
  * assertion anywhere in test/*.c before this (see
  * test/POSIX-GAP-ACCOUNTING.md's "implemented, but no assertion
@@ -1244,7 +1243,6 @@ static void test_dprintf_fd_path(const char *name)
 	CHECK(fclose(f) == 0);
 }
 
-
 /* fscanf.html RETURN VALUE: "these functions shall return the number of
  * successfully matched and assigned input items; this number can be
  * zero in the event of an early matching failure.  If the input ends
@@ -1420,7 +1418,6 @@ static void test_scanf_m_modifier(void)
 	}
 }
 #endif
-
 
 /* gets.html.  DESCRIPTION: "shall read bytes from the standard input
  * stream, stdin, into the array pointed to by s, until a <newline> is
@@ -1645,6 +1642,103 @@ static void test_flockfile_nesting(const char *name)
 	CHECK(fclose(f) == 0);
 }
 
+/* XBD <stdarg.h> (basedefs/stdarg.h.html), the whole DESCRIPTION.
+ *
+ * "The va_start() macro is invoked to initialize ap to the beginning of
+ * the list before any calls to va_arg()."  "The va_arg() macro shall
+ * return the next argument in the list pointed to by ap.  Each
+ * invocation of va_arg() modifies ap so that the values of successive
+ * arguments are returned in turn."  "Different types can be mixed, but
+ * it is up to the routine to know what type of argument is expected."
+ * "The va_end() macro is used to clean up; it invalidates ap for use
+ * (unless va_start() or va_copy() is invoked again)."  "Multiple
+ * traversals, each bracketed by va_start() ... va_end(), are possible."
+ *
+ * And the two explicitly-permitted type mismatches, which are clauses in
+ * their own right and are the reason a naive implementation can look
+ * correct on a narrower test:
+ *   "One type is a signed integer type, the other type is the
+ *    corresponding unsigned integer type, and the value is
+ *    representable in both types."
+ *   "One type is a pointer to void and the other is a pointer to a
+ *    character type."
+ *
+ * va_copy is already covered by va_copy_sees_same() above; what is new
+ * here is the mixed-type walk (which exercises the x86-64 register/
+ * stack hand-off that a same-width walk never leaves), the two
+ * permitted mismatches, and the repeat traversal. */
+static int stdarg_mixed(int n, ...)
+{
+	va_list ap;
+	int i, ok = 1;
+	double d;
+	char *s;
+	long long ll;
+	unsigned u;
+	void *v;
+
+	(void)n;
+	va_start(ap, n);
+	i = va_arg(ap, int);
+	d = va_arg(ap, double);
+	s = va_arg(ap, char *);
+	ll = va_arg(ap, long long);
+	/* signed passed, unsigned read: "the value is representable in
+	 * both types" */
+	u = va_arg(ap, unsigned);
+	/* char * passed, void * read */
+	v = va_arg(ap, void *);
+	va_end(ap);
+
+	if (i != 7) ok = 0;
+	if (!(d > 2.49 && d < 2.51)) ok = 0;
+	if (!s || strcmp(s, "str")) ok = 0;
+	if (ll != 1234567890123LL) ok = 0;
+	if (u != 99u) ok = 0;
+	if (!v || strcmp((char *)v, "vp")) ok = 0;
+
+	/* "Multiple traversals, each bracketed by va_start() ... va_end(),
+	 * are possible." */
+	va_start(ap, n);
+	if (va_arg(ap, int) != 7) ok = 0;
+	va_end(ap);
+	return ok;
+}
+
+/* XBD <stdarg.h>: "The object ap may be passed as an argument to another
+ * function; if that function invokes the va_arg() macro with parameter
+ * ap, the value of ap in the calling function is unspecified and shall
+ * be passed to the va_end() macro prior to any further reference to ap."
+ *
+ * That is exactly the contract every v-form relies on, and vfprintf.html
+ * spells out the other half of it: "These functions shall not invoke the
+ * va_end macro.  As these functions invoke the va_arg macro, the value
+ * of ap after the return is unspecified."  So the testable statement is
+ * that a *partially consumed* ap handed to a v-form continues from where
+ * the caller left off -- not from the beginning -- and that the caller
+ * may then va_end() it. */
+static int stdarg_handoff(char *out, size_t outsz, const char *fmt, ...)
+{
+	va_list ap;
+	int first, r;
+
+	va_start(ap, fmt);
+	first = va_arg(ap, int);
+	r = vsnprintf(out, outsz, fmt, ap);
+	va_end(ap);
+	return first == 11 ? r : -1;
+}
+
+static void test_stdarg(void)
+{
+	char b[64];
+
+	CHECK(stdarg_mixed(6, 7, 2.5, "str", 1234567890123LL, 99, (void *)"vp"));
+
+	memset(b, 0, sizeof b);
+	CHECK(stdarg_handoff(b, sizeof b, "%d-%s", 11, 22, "zz") == 5);
+	CHECK(!strcmp(b, "22-zz"));
+}
 
 int main(void)
 {
@@ -1668,6 +1762,7 @@ int main(void)
 	test_printf_width_precision();
 	test_sscanf_clauses();
 	test_ctermid();
+	test_stdarg();
 
 	name = make_tmp("posix-stdio2-XXXXXX");
 	CHECK(name != 0);
