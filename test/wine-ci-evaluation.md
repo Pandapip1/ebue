@@ -316,8 +316,26 @@ CI step that invokes Wine outside `runtests.sh` must do the same, and a
 freshly built Wine is the *most* exposed case, because first-run `WINEPREFIX`
 initialisation is when Wine is likeliest to raise something. Two consequences
 for the proposal: set both variables at the job level rather than relying on
-each call site, and give the new leg an explicit `timeout-minutes` so a hang
+each call site, and give both new jobs an explicit `timeout-minutes` so a hang
 is bounded by minutes rather than hours.
+
+This is not hypothetical, and it is worth stating as a flat rule because it
+cost this investigation real time locally: **every** invocation of our Wine
+fork — `wineboot`, a one-off `wine foo.exe`, a sanity check, `make check` —
+must run with
+
+```sh
+export WINEDEBUG=-all
+export WINEDLLOVERRIDES=winedbg.exe=d
+```
+
+Miss it once and an unimplemented-function stub or an unhandled exception
+launches `winedbg --auto`, which sits waiting for input. Interactively that is
+an annoyance; in CI it is a job that produces no output and no failure until
+its timeout expires. The patched fork is *more* exposed than stock Wine here,
+not less: it is a freshly built tree, its first run initialises a new
+`WINEPREFIX`, and its strictness patches exist precisely to raise statuses
+upstream Wine does not.
 
 **Drift between the local tree and whatever CI uses.** This is already real
 and already biting, before any CI change. The fork's branch and
@@ -480,6 +498,10 @@ the branch it would name does not exist until step 1 of the recommendation
 +  # savings, not a behavioural change to anything ntlibc exercises.
 +  build-wine:
 +    runs-on: ubuntu-24.04
++    # ~50 minutes measured on 4 vCPUs for a cache miss; seconds on a hit.
++    # Bounded well above that so a wedged build fails in an hour rather
++    # than burning to the six-hour job default.
++    timeout-minutes: 90
 +    steps:
 +      - name: Cache patched Wine
 +        id: cache-wine
