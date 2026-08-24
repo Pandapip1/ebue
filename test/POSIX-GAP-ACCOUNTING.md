@@ -107,10 +107,13 @@ reading the tables below.
 |---|---|---|---|---|
 | `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_fmaxmin_variants`) |
 | `exp2` `exp2f` `exp2l` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_exp2`) |
+| `sched_yield` | `sched.h` (new) | base | implemented + clause-audited | `test/posix-sysmisc.c` (`test_sched_yield`) |
 
-Running adjustment: **7 base interfaces closed**; absent 473 -> 466
-(base 256 -> 249), implemented + clause-audited 333 -> 340.  `math.h`'s
-7 base absences are now 0.
+Running adjustment: **8 base interfaces closed**; absent 473 -> 465
+(base 256 -> 248), implemented + clause-audited 333 -> 341.  `math.h`'s
+7 base absences and `sched.h`'s 1 are now 0.  The other 7 `sched.h`
+entries stay absent and stay `PS`-optional -- `include/sched.h`'s banner
+records why declaring them would be worse than not having them.
 
 The 1177 excludes the 14 entries in POSIX's function index that are
 external *variables*, not functions (`environ`, `errno`, `optarg`,
@@ -535,7 +538,7 @@ clause-audited (ledger priority 8).
 
 | group | count | option | note |
 |---|---|---|---|
-| `sched_yield` | 1 | base | `NtYieldExecution`. One line. The only base-POSIX interface in this whole cluster and trivially closeable |
+| `sched_yield` | 1 | base | **closed** (see "Changes since `04edec2`") -- `NtYieldExecution` in new `include/sched.h` + `src/misc/sched.c`. Was the only base-POSIX interface in this cluster |
 | `sched_get_priority_max` `sched_get_priority_min` `sched_getparam` `sched_getscheduler` `sched_rr_get_interval` `sched_setparam` `sched_setscheduler` | 7 | PS | `NtSetInformationThread`/`NtQueryInformationThread` give priority get/set; NT has no `SCHED_FIFO`/`SCHED_RR`/`SCHED_OTHER` policy distinction, so the policy calls would be `ENOTSUP` stubs. Also mostly meaningless before `pthread.h` |
 | `timer_create` `timer_delete` `timer_getoverrun` `timer_gettime` `timer_settime` | 5 | CX | per-process interval timers. Same missing machinery as `alarm()`'s stub and the `getitimer`/`setitimer` `undefined-ok:` pair: needs a timer thread (`NtCreateTimer` + `NtSetTimer` exist and are pure NTDLL) delivering to the signal layer. Gated on threads, or on a dedicated helper thread |
 

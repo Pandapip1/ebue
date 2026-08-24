@@ -894,6 +894,21 @@ family is the identity on this little-endian-only target; and the
 `htobe*`/`be*toh` pairs are inverses. (`test/posix-strings.c`
 `test_endian_internal_consistency`.)
 
+## sched.h (priority 14)
+
+New header (`include/sched.h`) and new audit rows in
+`test/posix-sysmisc.c`. Only `sched_yield()` is provided; the rest of
+what `sched.h` is specified to declare is the `_POSIX_PRIORITY_SCHEDULING`
+option group, which ntlibc does not claim and NT cannot honestly support
+(NT thread scheduling has priorities but no policy distinction, so
+`SCHED_FIFO` and `SCHED_RR` would be one thing under two names) — see
+that header's banner.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| sched_yield | RETURN VALUE — "shall return 0 if it completes successfully". ERRORS — "No errors are defined", so the `NtYieldExecution` status is deliberately not forwarded: `STATUS_NO_YIELD_PERFORMED` (0x40000024, what kernel32's `SwitchToThread()` turns into FALSE, and what Wine returns routinely) is an informational code meaning the scheduler had no other runnable thread, which is not a POSIX failure and has no errno that could describe it | covered | test/posix-sysmisc.c `test_sched_yield` (1000-iteration loop, i.e. the no-other-thread path, plus errno untouched) |
+| sched_getparam / sched_setparam / sched_getscheduler / sched_setscheduler / sched_get_priority_max / sched_get_priority_min / sched_rr_get_interval | the `_POSIX_PRIORITY_SCHEDULING` option group | N/A — not declared, deliberately. `NtSetInformationThread`/`NtQueryInformationThread` would give priority get/set, but NT has no `SCHED_FIFO`/`SCHED_RR`/`SCHED_OTHER` distinction, so `sched_setscheduler()` could only ever report ENOTSUP; declaring it would make a configure probe conclude the option group is present. POSIX puts these declarations inside its own `[PS]` margin markers, which permits exactly this | — (nothing to test; the option is not claimed) |
+
 ## sys/resource.h, sys/select.h, poll.h, sys/param.h, getopt_long (priority 13)
 
 New clause-cited audit: `test/posix-sysmisc.c` (1026 lines). This

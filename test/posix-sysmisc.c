@@ -65,6 +65,7 @@
 #include <sys/param.h>
 #include <getopt.h>
 #include <signal.h>
+#include <sched.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -988,6 +989,51 @@ static void test_getopt_long_reset(void)
 	optind = 1; optreset = 0; opterr = 1;  /* leave defaults for later tests */
 }
 
+/* ---- sched_yield.html ----
+ * "The sched_yield() function shall force the running thread to
+ * relinquish the processor until it again becomes the head of its
+ * thread list."  RETURN VALUE -- "shall return 0 if it completes
+ * successfully, or ... -1 and set errno to indicate the error."
+ * ERRORS -- "No errors are defined."
+ *
+ * With no errors defined and no observable side effect a
+ * single-threaded program can see (the scheduler is free to hand the
+ * processor straight back -- NtYieldExecution reports exactly that as
+ * STATUS_NO_YIELD_PERFORMED, and Wine returns it routinely), the only
+ * thing the spec makes testable here is the return value, and that it
+ * stays 0 no matter how often it is called and whether or not another
+ * thread was available.  That is asserted rather than skipped: a
+ * sched_yield() that forwarded NtYieldExecution's status would return
+ * nonzero on precisely the no-other-thread path this loop exercises,
+ * which is the realistic way to get this wrong.
+ *
+ * errno is checked to be untouched on success: POSIX permits a
+ * successful call to modify errno in general, but since no error is
+ * defined for sched_yield at all, a nonzero errno appearing here would
+ * mean the implementation took a failure path that does not exist. */
+static void test_sched_yield(void)
+{
+	int i;
+
+	errno = 0;
+	CHECK(sched_yield() == 0);
+	CHECK(errno == 0);
+
+	/* repeated calls in a tight loop: on a single-threaded process
+	 * with nothing else runnable on this CPU, every one of these is
+	 * the "no yield performed" case, and every one must still be 0 */
+	for (i = 0; i < 1000; i++) {
+		if (sched_yield() != 0) { fails++; printf("FAIL %s:%d: sched_yield() nonzero at i=%d\n", __FILE__, __LINE__, i); break; }
+	}
+
+	/* the call must return, i.e. it is a yield and not a sleep: this
+	 * whole loop is bounded by nothing but the scheduler, so a
+	 * sched_yield() that blocked would hang the test rather than fail
+	 * it -- which is itself the diagnosis. */
+	errno = 0;
+	CHECK(sched_yield() == 0 && errno == 0);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--rusage-child")) {
@@ -1013,6 +1059,7 @@ int main(int argc, char **argv)
 	test_poll_nval();
 	test_fd_macros();
 	test_sys_param();
+	test_sched_yield();
 	test_getopt_long_abbrev();
 	test_getopt_long_arg_forms();
 	test_getopt_long_flag();
