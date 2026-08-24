@@ -511,9 +511,18 @@ jobs:
       # tools/lint.sh reads neither config.mak nor ARCH: it derives the
       # arch list from arch/*/ and builds its own alltypes.h, so no
       # ./configure and no cross toolchain are needed here.
+      # LINT_TIDY_EXACT=1 applies only to the analyze stage (the other
+      # stages ignore it): the point of pinning clang-tidy-18 here is
+      # that this job runs one known analysis, and .clang-tidy selects
+      # checks by wildcard, so without an equality assertion against
+      # tools/clang-tidy-checks.txt an image bump silently changes what
+      # "0 findings" means.  A tool offering more is drift the pin exists
+      # to prevent; a tool offering fewer is a weaker analysis reporting
+      # the same green.
       - name: tools/lint.sh ${{ matrix.stage }}
         env:
           CLANG_TIDY: clang-tidy-18
+          LINT_TIDY_EXACT: "1"
         run: tools/lint.sh ${{ matrix.stage }}
 
       # Each stage writes its findings to obj/lint/*.log and prints only a

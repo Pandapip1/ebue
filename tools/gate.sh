@@ -234,7 +234,16 @@ fi
 
 if want lint-analyze-pinned; then
 	t="$GATE_JOBS_DIR/trees/lint-analyze-pinned"
-	run_stage lint-analyze-pinned "cd '$t' && nix-shell -p llvmPackages_18.clang-tools --run 'CLANG_TIDY=clang-tidy tools/lint.sh analyze'"
+	# LINT_TIDY_EXACT=1: this stage's whole purpose is to reproduce CI's
+	# exact clang-tidy, so its enabled check set must equal
+	# tools/clang-tidy-checks.txt exactly, not merely cover it.  A
+	# difference here means the pin has stopped pinning, which is
+	# otherwise invisible -- .clang-tidy selects by wildcard, so a
+	# different tool silently runs a different analysis and reports the
+	# same "0 findings".  lint-plain deliberately does NOT set it: it
+	# runs whatever is installed, and requiring LLVM 18.1.8 of it would
+	# make it unrunnable on a current machine.
+	run_stage lint-analyze-pinned "cd '$t' && nix-shell -p llvmPackages_18.clang-tools --run 'CLANG_TIDY=clang-tidy LINT_TIDY_EXACT=1 tools/lint.sh analyze'"
 fi
 
 if want lint-shell-pinned; then

@@ -1,0 +1,308 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The clang-tidy checks tools/lint.sh's `analyze` stage requires to be
+# present, one per line.  Compared against `clang-tidy --list-checks` at
+# the start of every run of that stage; a check on this list that the
+# running binary does not offer is a failure that names it.
+#
+# Why this file exists.  .clang-tidy at the tree root selects checks by
+# wildcard -- bugprone-*, cert-*, clang-analyzer-*, misc-* -- and a
+# wildcard resolves to whatever the tool in $PATH happens to implement.
+# That makes "the analyze stage passed" a statement about the machine,
+# not about the code, in two distinct ways that this file separates:
+#
+#   1. `clang --analyze` offers NONE of these.  tools/lint.sh degrades to
+#      it when clang-tidy is absent and LINT_ALLOW_MISSING=1, and it runs
+#      the clang-analyzer engine only -- the whole bugprone-*, cert-* and
+#      misc-* families are absent by construction.  Measured, on the
+#      canonical probe `long long widen(int a, int b) { return a * b; }`:
+#      clang-tidy 18 with this tree's .clang-tidy reports
+#      bugprone-implicit-widening-of-multiplication-result; `clang
+#      --analyze` on the same file, same target, reports nothing.  That
+#      is the class of defect 5 (3UL * sizeof(HANDLE) multiplied in 32
+#      bits and widened afterwards, LLP64), and the fallback could never
+#      have caught it whatever version was installed.
+#   2. Version drift, in the direction that loses checks.  Measured
+#      against this list: LLVM 18.1.8 enables 225 checks here, LLVM
+#      21.1.8 enables 254 -- 32 new (the intended drift .github/
+#      workflows/ci.yml:422-427 pins against) and three GONE.  A tool
+#      offering more is fine and expected.  A tool offering fewer is a
+#      silently weaker analysis reporting the same "0 findings".
+#
+# Generated with the pinned tool, from the tree root so .clang-tidy
+# applies:
+#
+#   nix-shell -p llvmPackages_18.clang-tools \
+#     --run 'clang-tidy --list-checks' | sed -n 's/^    //p'
+#
+# Regenerate it when .clang-tidy's enable/disable lists change, in the
+# same commit, and say in the message which checks moved.
+#
+# Two modes, because the two stages that run this ask different
+# questions.  Default: the running tool must offer every REQUIRED check
+# below -- a superset is fine and is the intended drift.  With
+# LINT_TIDY_EXACT=1: the offered set must equal required + exempt
+# exactly.  tools/gate.sh's lint-analyze-pinned stage and ci.yml's
+# analyze leg both set it, because their whole purpose is to reproduce
+# one exact toolchain, and an exact-equality assertion there is how you
+# find out the pin has stopped pinning.  tools/gate.sh's lint-plain
+# stage deliberately does not: it runs whatever is installed, and
+# demanding LLVM 18.1.8 of it would make it unrunnable on any current
+# machine and collapse the distinction between the two stages.
+#
+# A line beginning with `-` is a check the pinned tool offers that is
+# deliberately NOT required of a newer tool.  There are three, all
+# removed upstream between LLVM 18.1.8 and 21.1.8, and all excluded for
+# ONE reason, stated as a condition rather than a verdict because the
+# condition can change:
+#
+#   THIS TREE COMPILES NO C++ THROUGH CLANG-TIDY.  tools/lint.sh's
+#   analyze stage feeds it exactly the source set the Makefile builds --
+#   .c files -- so a C++-only check has nothing to fire on and its
+#   absence costs nothing.  That is a fact about today's source set, not
+#   a property of the checks, and it is asserted mechanically: if the
+#   analyze stage is ever handed a .cc/.cpp/.cxx/.C file it fails and
+#   says these three exemptions must be re-justified.  (tools/hdr-
+#   hygiene.sh has a `cxx` stage that compiles headers as C++, but it
+#   uses g++/clang++ directly and never reaches clang-tidy, so it does
+#   not invalidate this.)  If C++ ever enters the analyze stage, delete
+#   these three lines and deal with the consequences; do not copy them
+#   forward.
+#
+-cert-dcl21-cpp
+#   Present in 18.1.8, absent in 21.1.8.  Checks the return type of
+#   postfix operator++/--.  C++-only.
+-clang-analyzer-cplusplus.VirtualCallModeling
+#   Present in 18.1.8, absent in 21.1.8.  Models virtual calls during
+#   construction and destruction.  C++-only.
+-clang-analyzer-nullability.NullabilityBase
+#   Present in 18.1.8, absent in 21.1.8.  An internal base checker,
+#   never user-facing.  The user-facing clang-analyzer-nullability.*
+#   checks that sit on top of it are still required below, so nothing a
+#   C translation unit can trip is lost.
+#
+# The required list follows.
+#
+bugprone-argument-comment
+bugprone-assert-side-effect
+bugprone-bad-signal-to-kill-thread
+bugprone-bool-pointer-implicit-conversion
+bugprone-chained-comparison
+bugprone-compare-pointer-to-member-virtual-function
+bugprone-copy-constructor-init
+bugprone-dangling-handle
+bugprone-dynamic-static-initializers
+bugprone-empty-catch
+bugprone-exception-escape
+bugprone-fold-init-type
+bugprone-forward-declaration-namespace
+bugprone-forwarding-reference-overload
+bugprone-implicit-widening-of-multiplication-result
+bugprone-inaccurate-erase
+bugprone-inc-dec-in-conditions
+bugprone-incorrect-enable-if
+bugprone-incorrect-roundings
+bugprone-infinite-loop
+bugprone-integer-division
+bugprone-lambda-function-name
+bugprone-macro-repeated-side-effects
+bugprone-misplaced-operator-in-strlen-in-alloc
+bugprone-misplaced-pointer-arithmetic-in-alloc
+bugprone-misplaced-widening-cast
+bugprone-move-forwarding-reference
+bugprone-multiple-new-in-one-expression
+bugprone-multiple-statement-macro
+bugprone-no-escape
+bugprone-non-zero-enum-to-bool-conversion
+bugprone-not-null-terminated-result
+bugprone-optional-value-conversion
+bugprone-parent-virtual-call
+bugprone-posix-return
+bugprone-redundant-branch-condition
+bugprone-shared-ptr-array-mismatch
+bugprone-signal-handler
+bugprone-sizeof-container
+bugprone-sizeof-expression
+bugprone-spuriously-wake-up-functions
+bugprone-standalone-empty
+bugprone-string-constructor
+bugprone-string-integer-assignment
+bugprone-string-literal-with-embedded-nul
+bugprone-stringview-nullptr
+bugprone-suspicious-enum-usage
+bugprone-suspicious-memory-comparison
+bugprone-suspicious-memset-usage
+bugprone-suspicious-missing-comma
+bugprone-suspicious-realloc-usage
+bugprone-suspicious-semicolon
+bugprone-swapped-arguments
+bugprone-terminating-continue
+bugprone-throw-keyword-missing
+bugprone-too-small-loop-variable
+bugprone-unchecked-optional-access
+bugprone-undefined-memory-manipulation
+bugprone-undelegated-constructor
+bugprone-unhandled-exception-at-new
+bugprone-unhandled-self-assignment
+bugprone-unique-ptr-array-mismatch
+bugprone-unused-local-non-trivial-variable
+bugprone-unused-raii
+bugprone-unused-return-value
+bugprone-use-after-move
+bugprone-virtual-near-miss
+cert-con36-c
+cert-con54-cpp
+cert-dcl03-c
+cert-dcl50-cpp
+cert-dcl54-cpp
+cert-dcl58-cpp
+cert-dcl59-cpp
+cert-err09-cpp
+cert-err34-c
+cert-err52-cpp
+cert-err58-cpp
+cert-err60-cpp
+cert-err61-cpp
+cert-exp42-c
+cert-flp30-c
+cert-flp37-c
+cert-mem57-cpp
+cert-msc54-cpp
+cert-oop11-cpp
+cert-oop54-cpp
+cert-oop57-cpp
+cert-oop58-cpp
+cert-pos44-c
+cert-pos47-c
+cert-sig30-c
+cert-str34-c
+clang-analyzer-apiModeling.Errno
+clang-analyzer-apiModeling.google.GTest
+clang-analyzer-apiModeling.llvm.CastValue
+clang-analyzer-apiModeling.llvm.ReturnValue
+clang-analyzer-apiModeling.TrustNonnull
+clang-analyzer-apiModeling.TrustReturnsNonnull
+clang-analyzer-core.BitwiseShift
+clang-analyzer-core.builtin.BuiltinFunctions
+clang-analyzer-core.builtin.NoReturnFunctions
+clang-analyzer-core.CallAndMessage
+clang-analyzer-core.CallAndMessageModeling
+clang-analyzer-core.DivideZero
+clang-analyzer-core.DynamicTypePropagation
+clang-analyzer-core.NonnilStringConstants
+clang-analyzer-core.NonNullParamChecker
+clang-analyzer-core.NullDereference
+clang-analyzer-core.StackAddrEscapeBase
+clang-analyzer-core.StackAddressEscape
+clang-analyzer-core.UndefinedBinaryOperatorResult
+clang-analyzer-core.uninitialized.ArraySubscript
+clang-analyzer-core.uninitialized.Assign
+clang-analyzer-core.uninitialized.Branch
+clang-analyzer-core.uninitialized.CapturedBlockVariable
+clang-analyzer-core.uninitialized.NewArraySize
+clang-analyzer-core.uninitialized.UndefReturn
+clang-analyzer-core.VLASize
+clang-analyzer-cplusplus.InnerPointer
+clang-analyzer-cplusplus.Move
+clang-analyzer-cplusplus.NewDelete
+clang-analyzer-cplusplus.NewDeleteLeaks
+clang-analyzer-cplusplus.PlacementNew
+clang-analyzer-cplusplus.PureVirtualCall
+clang-analyzer-cplusplus.SelfAssignment
+clang-analyzer-cplusplus.SmartPtrModeling
+clang-analyzer-cplusplus.StringChecker
+clang-analyzer-deadcode.DeadStores
+clang-analyzer-fuchsia.HandleChecker
+clang-analyzer-nullability.NullableDereferenced
+clang-analyzer-nullability.NullablePassedToNonnull
+clang-analyzer-nullability.NullableReturnedFromNonnull
+clang-analyzer-nullability.NullPassedToNonnull
+clang-analyzer-nullability.NullReturnedFromNonnull
+clang-analyzer-optin.core.EnumCastOutOfRange
+clang-analyzer-optin.cplusplus.UninitializedObject
+clang-analyzer-optin.cplusplus.VirtualCall
+clang-analyzer-optin.mpi.MPI-Checker
+clang-analyzer-optin.osx.cocoa.localizability.EmptyLocalizationContextChecker
+clang-analyzer-optin.osx.cocoa.localizability.NonLocalizedStringChecker
+clang-analyzer-optin.osx.OSObjectCStyleCast
+clang-analyzer-optin.performance.GCDAntipattern
+clang-analyzer-optin.performance.Padding
+clang-analyzer-optin.portability.UnixAPI
+clang-analyzer-osx.API
+clang-analyzer-osx.cocoa.AtSync
+clang-analyzer-osx.cocoa.AutoreleaseWrite
+clang-analyzer-osx.cocoa.ClassRelease
+clang-analyzer-osx.cocoa.Dealloc
+clang-analyzer-osx.cocoa.IncompatibleMethodTypes
+clang-analyzer-osx.cocoa.Loops
+clang-analyzer-osx.cocoa.MissingSuperCall
+clang-analyzer-osx.cocoa.NilArg
+clang-analyzer-osx.cocoa.NonNilReturnValue
+clang-analyzer-osx.cocoa.NSAutoreleasePool
+clang-analyzer-osx.cocoa.NSError
+clang-analyzer-osx.cocoa.ObjCGenerics
+clang-analyzer-osx.cocoa.RetainCount
+clang-analyzer-osx.cocoa.RetainCountBase
+clang-analyzer-osx.cocoa.RunLoopAutoreleaseLeak
+clang-analyzer-osx.cocoa.SelfInit
+clang-analyzer-osx.cocoa.SuperDealloc
+clang-analyzer-osx.cocoa.UnusedIvars
+clang-analyzer-osx.cocoa.VariadicMethodTypes
+clang-analyzer-osx.coreFoundation.CFError
+clang-analyzer-osx.coreFoundation.CFNumber
+clang-analyzer-osx.coreFoundation.CFRetainRelease
+clang-analyzer-osx.coreFoundation.containers.OutOfBounds
+clang-analyzer-osx.coreFoundation.containers.PointerSizedValues
+clang-analyzer-osx.MIG
+clang-analyzer-osx.NSOrCFErrorDerefChecker
+clang-analyzer-osx.NumberObjectConversion
+clang-analyzer-osx.ObjCProperty
+clang-analyzer-osx.OSObjectRetainCount
+clang-analyzer-osx.SecKeychainAPI
+clang-analyzer-security.cert.env.InvalidPtr
+clang-analyzer-security.FloatLoopCounter
+clang-analyzer-security.insecureAPI.bcmp
+clang-analyzer-security.insecureAPI.bcopy
+clang-analyzer-security.insecureAPI.bzero
+clang-analyzer-security.insecureAPI.decodeValueOfObjCType
+clang-analyzer-security.insecureAPI.getpw
+clang-analyzer-security.insecureAPI.gets
+clang-analyzer-security.insecureAPI.mkstemp
+clang-analyzer-security.insecureAPI.mktemp
+clang-analyzer-security.insecureAPI.SecuritySyntaxChecker
+clang-analyzer-security.insecureAPI.UncheckedReturn
+clang-analyzer-security.insecureAPI.vfork
+clang-analyzer-unix.API
+clang-analyzer-unix.cstring.BadSizeArg
+clang-analyzer-unix.cstring.CStringModeling
+clang-analyzer-unix.cstring.NullArg
+clang-analyzer-unix.DynamicMemoryModeling
+clang-analyzer-unix.Errno
+clang-analyzer-unix.Malloc
+clang-analyzer-unix.MallocSizeof
+clang-analyzer-unix.MismatchedDeallocator
+clang-analyzer-unix.StdCLibraryFunctions
+clang-analyzer-unix.Vfork
+clang-analyzer-valist.CopyToSelf
+clang-analyzer-valist.Unterminated
+clang-analyzer-valist.ValistBase
+clang-analyzer-webkit.NoUncountedMemberChecker
+clang-analyzer-webkit.RefCntblBaseVirtualDtor
+clang-analyzer-webkit.UncountedLambdaCapturesChecker
+misc-confusable-identifiers
+misc-const-correctness
+misc-coroutine-hostile-raii
+misc-definitions-in-headers
+misc-misleading-bidirectional
+misc-misleading-identifier
+misc-misplaced-const
+misc-new-delete-overloads
+misc-non-private-member-variables-in-classes
+misc-redundant-expression
+misc-throw-by-value-catch-by-reference
+misc-unconventional-assign-operator
+misc-uniqueptr-reset-release
+misc-unused-alias-decls
+misc-unused-using-decls
+misc-use-anonymous-namespace

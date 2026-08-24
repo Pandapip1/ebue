@@ -60,6 +60,13 @@
 #                         and NT-type narrowings this code is written around.
 #                         Worth a periodic read, not worth a gate.
 #   LINT_STRICT=0         always exit 0 (report only)
+#   LINT_TIDY_EXACT=1     require the running clang-tidy's enabled check
+#                         set to equal tools/clang-tidy-checks.txt
+#                         exactly, rather than merely to be a superset of
+#                         its required list.  Set by the two stages whose
+#                         purpose is to reproduce one pinned toolchain
+#                         (tools/gate.sh's lint-analyze-pinned and
+#                         ci.yml's analyze leg); see that file's header.
 #   LINT_ALLOW_MISSING=1  skip a stage whose tool is absent instead of
 #                         failing.  Off by default: a stage that cannot
 #                         run is a failure, because a silent skip makes a
@@ -346,6 +353,80 @@ stage_warn() {
 	return $any
 }
 
+# check_list_ok TIDY -- assert that the clang-tidy binary $1 offers the
+# checks tools/clang-tidy-checks.txt says it must.
+#
+# .clang-tidy at the tree root selects by wildcard (bugprone-*, cert-*,
+# clang-analyzer-*, misc-*), and a wildcard resolves to whatever the tool
+# in $PATH implements.  So "analyze found 0 findings" is a statement
+# about the machine as much as about the code, and the two ways it goes
+# wrong are both invisible in that sentence: a tool that offers fewer
+# checks than the pin, and the `clang --analyze` fallback below, which
+# offers none of them at all.  Measured on the canonical probe
+# `long long widen(int a, int b) { return a * b; }`: clang-tidy 18 with
+# this tree's .clang-tidy reports bugprone-implicit-widening-of-
+# multiplication-result; `clang --analyze` on the same file and target
+# reports nothing.  That is defect 5's class.
+#
+# Run once per stage, not per arch: --list-checks reads .clang-tidy from
+# the working directory, which is $srcdir either way.
+check_list_ok() {
+	tidy=$1
+	listfile=tools/clang-tidy-checks.txt
+	if [ ! -f "$listfile" ]; then
+		note "analyze: FAILED -- $listfile is missing, so there is nothing to hold"
+		note "  the running clang-tidy to.  A wildcard check list with no committed"
+		note "  expectation is not a check; it is whatever the machine has."
+		return 1
+	fi
+	req=$(mktemp "$builddir/checks.req.XXXXXX") || return 1
+	exempt=$(mktemp "$builddir/checks.exempt.XXXXXX") || return 1
+	got=$(mktemp "$builddir/checks.got.XXXXXX") || return 1
+	sed -e 's/[[:space:]]*$//' "$listfile" \
+		| grep -v -e '^#' -e '^[[:space:]]*$' > "$req.all"
+	grep -v '^-' "$req.all" | sort -u > "$req"
+	sed -n 's/^-//p' "$req.all" | sort -u > "$exempt"
+	rm -f "$req.all"
+	"$tidy" --list-checks 2>/dev/null | sed -n 's/^    //p' | sort -u > "$got"
+
+	nreq=$(grep -c . "$req" || true)
+	ngot=$(grep -c . "$got" || true)
+	if [ "$nreq" -eq 0 ]; then
+		note "analyze: FAILED -- $listfile names no required checks."
+		note "  An empty expectation is satisfied by any tool, including one that"
+		note "  offers nothing at all."
+		rm -f "$req" "$exempt" "$got"
+		return 1
+	fi
+	rc=0
+	nmiss=$(comm -23 "$req" "$got" | grep -c . || true)
+	if [ "$nmiss" -ne 0 ]; then
+		note "analyze: FAILED -- $tidy offers $ngot check(s) and is missing $nmiss that"
+		note "  $listfile requires:"
+		comm -23 "$req" "$got" | sed 's/^/    /'
+		note "  A tool that offers fewer checks reports the same '0 findings' as one"
+		note "  that offers all of them.  Install the pinned clang-tidy, or move the"
+		note "  check to the exempt list in $listfile with the reason, in this commit."
+		rc=1
+	fi
+	nextra=$(comm -13 "$req" "$got" | grep -vxF -f "$exempt" 2>/dev/null | grep -c . || true)
+	if [ "${LINT_TIDY_EXACT:-0}" = 1 ]; then
+		nmissex=$(comm -23 "$exempt" "$got" | grep -c . || true)
+		if [ "$nextra" -ne 0 ] || [ "$nmissex" -ne 0 ]; then
+			note "analyze: FAILED -- LINT_TIDY_EXACT=1, but $tidy's enabled set is not"
+			note "  exactly what $listfile records.  This stage exists to reproduce one"
+			note "  pinned toolchain; a difference here means the pin is not pinning."
+			comm -13 "$req" "$got" | grep -vxF -f "$exempt" 2>/dev/null \
+				| sed 's/^/    only in the tool: /'
+			comm -23 "$exempt" "$got" | sed 's/^/    only in the file: /'
+			rc=1
+		fi
+	fi
+	[ "$rc" -eq 0 ] && note "analyze: $tidy offers $ngot check(s); all $nreq required present ($nextra newer than the pin)."
+	rm -f "$req" "$exempt" "$got"
+	return $rc
+}
+
 stage_analyze() {
 	hdr "static analyzer"
 	require_tool clang || return $missing
@@ -357,6 +438,37 @@ stage_analyze() {
 	: "${CLANG_TIDY:=clang-tidy}"
 	require_tool "$CLANG_TIDY" || [ "$LINT_ALLOW_MISSING" = 1 ] || return 1
 	tidy=$(command -v "$CLANG_TIDY" 2>/dev/null || true)
+	if [ -n "$tidy" ]; then
+		check_list_ok "$tidy" || any=1
+	else
+		# The fallback is no longer allowed to be silent about what it
+		# is not running.  It cannot reach here at all unless
+		# LINT_ALLOW_MISSING=1 (see require_tool above), so this is a
+		# run whose caller has accepted a weaker check -- but "weaker"
+		# has to be a number, not an adjective.
+		nreq=$(grep -v -e '^#' -e '^-' -e '^[[:space:]]*$' \
+			tools/clang-tidy-checks.txt 2>/dev/null | grep -c . || true)
+		note "analyze: clang --analyze offers 0 of the $nreq check(s)"
+		note "  tools/clang-tidy-checks.txt requires: it runs the clang-analyzer"
+		note "  engine only, and none of bugprone-*, cert-* or misc-*.  This run"
+		note "  cannot catch anything those families catch, whatever it reports."
+	fi
+	# The three exemptions in tools/clang-tidy-checks.txt are excused on
+	# one condition -- that this stage compiles no C++ -- and a condition
+	# that is only written down is a condition that stops being true
+	# quietly.  Assert it against the source set actually being fed in.
+	for arch in $LINT_ARCHS; do
+		cxx=$(sources_for "$arch" | grep -E '\.(cc|cpp|cxx|C)$' || true)
+		if [ -n "$cxx" ]; then
+			note "analyze: FAILED -- this stage is being handed C++ sources:"
+			printf '%s\n' "$cxx" | sed 's/^/    /'
+			note "  The three exemptions in tools/clang-tidy-checks.txt are excused"
+			note "  solely because no C++ reaches clang-tidy here.  That is no longer"
+			note "  true, so they must be re-justified or removed before this passes."
+			any=1
+		fi
+		break
+	done
 	analyzed=0
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || { note "cannot generate alltypes for $arch"; any=1; continue; }
