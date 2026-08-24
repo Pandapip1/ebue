@@ -3591,28 +3591,42 @@ is rc=77 unverified, for the reason its banner gives.
 
 ## unistd.h: the seven already-audited names (successor-queue item 2, group Q)
 
-Bookkeeping, not new work. Seven of the `unistd.h` row's 43 were
-**already** audited clause by clause — by the never-asserted sweep,
-which cited each page in `test/posix-unistd.c` — but were never given a
-row here, so this ledger's own count still classified them as
-unaudited. Rows added so the arithmetic reflects what the tests
-actually check. No new assertions and no new findings; the two fences
-named below are the sweep's, not this session's.
+Bookkeeping, and deliberately **not** a table.
 
-| function | clause checked | status | test |
-|---|---|---|---|
-| confstr | confstr.html DESCRIPTION: the `_CS_PATH` value; "If len is 0 and buf is a null pointer ... shall still return the integer value ... but shall not return a string"; truncation "to len-1 bytes and null-terminate the result" with the full size still returned; `len == 1` | covered | test/posix-unistd.c (`test_confstr`) |
-| confstr | "If name is invalid, confstr() shall return 0 and set errno"; "[EINVAL] The value of the name argument is invalid" | **BUG** (the sweep's) — returns 1 with errno untouched for any name; neither of POSIX's two zero-returning cases is reachable | fenced, `test_confstr` |
-| swab | swab.html "shall copy nbytes bytes ... exchanging adjacent bytes"; "If nbytes is negative, swab() does nothing"; nothing written past `nbytes`; no errors defined | covered | test/posix-unistd.c (`test_swab`) |
-| swab | "If nbytes is odd ... the disposition of the last byte is unspecified" | N/A — explicitly unspecified, so `src/unistd/swab.c`'s own documented choice is deliberately not pinned | — |
-| sync | sync.html RETURN VALUE (none) and ERRORS "No errors are defined" — errno undisturbed, and data written before it is still there afterwards | covered | test/posix-unistd.c (`test_sync`) |
-| sync | "shall cause all information in memory that updates file systems to be scheduled for writing out" | N/A — POSIX permits `sync()` to be undetectable by any conforming observation; `fsync()` is the call with a completion guarantee and `test/unistd.c` covers it | — |
-| getlogin | "shall return a pointer to the login name or a null pointer if the user's login name cannot be found" | covered | test/posix-unistd.c (`test_getlogin`) |
-| getlogin_r | "shall return zero" on success — an errno *value*, not -1, on failure; "[ERANGE] The value of namesize is smaller than the length of the string to be returned including the terminating null"; the exactly-fits boundary | covered | test/posix-unistd.c (`test_getlogin`) |
-| tcgetpgrp | tcgetpgrp.html RETURN VALUE "the value of the process group ID of the foreground process associated with the terminal" — agrees with `getpgrp()` rather than inventing a third answer | covered | test/posix-unistd.c (`test_id_session_stubs`) |
-| tcsetpgrp | tcsetpgrp.html RETURN VALUE 0 on success, for the group `tcgetpgrp()` just reported | covered | test/posix-unistd.c (`test_id_session_stubs`) |
-| tcgetpgrp / tcsetpgrp | "[EBADF] The fildes argument is not a valid file descriptor" (shall-fail on both pages) | **BUG** (the sweep's) — `fd` is discarded without reaching `__fd_get()`; `src/unistd/ttyname.c:23-24` | fenced, `test_id_session_stubs` |
-| tcgetpgrp / tcsetpgrp | their `[ENOTTY]`, `[EIO]`, `[EPERM]`, `[EINVAL]`, and the SIGTTOU clauses | N/A — one fixed session and one process group (`src/unistd/ids.c`, `src/termios/termios.c`), so no process can be in a *background* process group of its controlling terminal and no second group exists to be refused; the same argument the termios.h group (A) already makes for the whole header | — |
+Seven of the `unistd.h` row's 43 — `confstr`, `getlogin`,
+`getlogin_r`, `swab`, `sync`, `tcgetpgrp`, `tcsetpgrp` — were already
+audited clause by clause by the never-asserted sweep, which cited each
+page in `test/posix-unistd.c` **and** added first-column rows for them
+to the priority-6 section ("unistd.h, fcntl.h, sys/stat.h") above:
+
+- `confstr` — one row, plus the fenced `[EINVAL]` BUG
+- `swab` — one row
+- `sync` — one row
+- `getlogin / getlogin_r` — one row
+- `fchown / fchownat / lchown / setregid / setpgrp / setsid /
+  tcgetpgrp / tcsetpgrp` — one row, plus the fenced `[EBADF]` BUG for
+  the last two
+
+So this ledger already carries them and **restating them here as rows
+of their own would double-count every one**. What is stale is
+`test/POSIX-GAP-ACCOUNTING.md`, whose `unistd.h` row of 43 is a
+mechanical snapshot of `04edec2` and predates those rows; its own
+"Changes since" notes are where that is corrected, and this section
+exists only to name the seven so the correction can be checked.
+
+The same caution applies to the other three groups, and is stated once
+here rather than three times: **groups M, N and O also overlap the
+priority-6 section's first columns** — M shares `fchown`, `fchownat`,
+`lchown`, `setregid`, `setpgrp`, `setsid` and `pause`; N shares
+`linkat` and `readlinkat`; O shares `execl`, `execle`, `execlp` and
+`fexecve`. In every case the priority-6 row records the never-asserted
+sweep's *first assertion* (a return value, a stub's consistency) and
+the group M/N/O row records the *page's clause list*, which is what
+this session added. A first-column tokeniser cannot tell those apart
+and will count each name twice. That is the double-count a concurrent
+auditor hit on six names the same day, and it is why the arithmetic in
+`test/POSIX-GAP-ACCOUNTING.md`'s notes is stated in terms of **pages
+audited** rather than in terms of what a tokeniser would report.
 
 ## unistd.h: fork() (successor-queue item 2, group P)
 

@@ -1387,15 +1387,18 @@ for a row describing several:
   first-column identifier earlier in the ledger. **The intersection is
   not empty**, and this is worth stating rather than forcing:
   `test/POSIX-COVERAGE.md`'s priority-6 section ("unistd.h, fcntl.h,
-  sys/stat.h") already carries rows naming `chown`, `getuid`,
-  `geteuid`, `getgid`, `getegid` and `setuid` in passing, as
-  *supporting* facts for `access()`/`chmod()`/`stat()` rows rather
-  than as audits of those pages. A first-column tokeniser will
-  therefore **double-count** those six. That is the opposite-direction
-  error a concurrent auditor hit the same day; the arithmetic above
-  (43 -> 18) is stated in terms of *pages audited*, which is the
-  number that is actually true, and the tokeniser's answer will differ.
-  Do not reconcile them by editing either.
+  sys/stat.h") already has first-column rows for `fchown`,
+  `fchownat`, `lchown`, `setregid`, `setpgrp`, `setsid` and `pause` —
+  added by the never-asserted sweep, recording that sweep's *first
+  assertion* rather than an audit of those pages. Group M's rows
+  record the pages' clause lists. A first-column tokeniser cannot tell
+  the two apart and will **double-count** those seven. That is the
+  opposite-direction error a concurrent auditor hit the same day; the
+  arithmetic above (43 -> 18) is stated in terms of *pages audited*,
+  which is the number that is actually true, and the tokeniser's
+  answer will differ. Do not reconcile them by editing either.
+  `test/POSIX-COVERAGE.md`'s group Q section lists the same overlap
+  for groups N, O and Q.
 
 ## Changes since the clause audit of the `unistd.h` row (group N)
 
@@ -1443,14 +1446,17 @@ ERRORS" section — clause-audits **7** more of the `unistd.h` row's 43:
 `execl execle execlp execv execve execvp fexecve`.
 
 **Group Q** — "unistd.h: the seven already-audited names" — is
-bookkeeping rather than new work. `confstr getlogin getlogin_r swab
-sync tcgetpgrp tcsetpgrp` were **already** audited clause by clause by
-the never-asserted sweep recorded further up this file, with each page
-cited in `test/posix-unistd.c`; they simply never got a ledger row, so
-the count still called them unaudited. Rows added, no new assertions,
-no new findings — the `confstr()` `[EINVAL]` and
-`tcgetpgrp()`/`tcsetpgrp()` `[EBADF]` fences those rows point at are
-the sweep's own.
+bookkeeping rather than new work, and deliberately adds **no rows**.
+`confstr getlogin getlogin_r swab sync tcgetpgrp tcsetpgrp` were
+already audited clause by clause by the never-asserted sweep recorded
+further up this file, with each page cited in `test/posix-unistd.c`
+*and* first-column rows added to `test/POSIX-COVERAGE.md`'s priority-6
+section. Restating them as rows of their own would double-count every
+one. What is stale is **this file**: its `unistd.h` row of 43 is a
+mechanical snapshot of `04edec2` and predates those rows. Group Q
+names the seven so the correction can be checked; the `confstr()`
+`[EINVAL]` and `tcgetpgrp()`/`tcsetpgrp()` `[EBADF]` fences are the
+sweep's own.
 
 Together with groups M (25) and N (3), that is **42 of the row's 43**;
 `fork` is the remainder and is group P. The `unistd.h` row of the
@@ -1499,10 +1505,11 @@ subtract all 43 from 357 and add them to *implemented +
 clause-audited*; `unistd.h`'s "not clause-audited" count is 0, and its
 "implemented + clause-audited" pointer row (34) rises by 43 to 77.
 
-Split across the four groups: M 25, N 3, O 7, P 1, plus Q's 6
-bookkeeping rows for names the never-asserted sweep had already
-audited without giving them a row. (25+3+7+1+6 = 42, and `swab` is the
-43rd, also in group Q — Q covers seven names.)
+Split across the four groups: M 25, N 3, O 7, P 1 — 36 pages
+clause-audited this session — plus Q's 7, which needed no work at all
+because the never-asserted sweep had already audited them and already
+rowed them in `test/POSIX-COVERAGE.md`'s priority-6 section. 36 + 7 =
+43.
 
 Group P's finding is a single **UNIMPL**, and it is the same gap group
 M records against `alarm.html`, recorded twice on purpose: `fork.html`
@@ -1534,7 +1541,7 @@ own `src/process/fork.c` notes record what breaks without it. The
 | N — `linkat`/`readlinkat`/`symlinkat` | 3 | 2 | 0 |
 | O — the `exec` family's ERRORS | 7 | 2 | 1 |
 | P — `fork` | 1 | 0 | 1 |
-| Q — bookkeeping rows for names already audited | 7 | (2 pre-existing) | 0 |
+| Q — already audited by the never-asserted sweep; no new rows | 7 | (2 pre-existing) | 0 |
 | **total** | **43** | **10** | **5** |
 
 **Every one of the ten is a shall-fail error clause or a specified
