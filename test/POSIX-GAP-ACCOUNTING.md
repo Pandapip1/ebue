@@ -1151,6 +1151,42 @@ identifiers of their own in J1's table. `setlocale`/`localeconv`, the
 re-cited, so the "Audited" table's existing `locale.h` count of 2 and
 J1's 4 are disjoint and neither double-counts.
 
+**J2 — `stropts.h` (1): a correction to this file, not a subtraction
+from it.** The `stropts.h` row's own parenthetical — "`src/ioctl/
+ioctl.c` implements the name, not the STREAMS semantics POSIX attaches
+to it" — turns out to be the accurate statement and the row it sits in
+the inaccurate one. Reading `ioctl.html` against the tree:
+
+- POSIX's `ioctl()` is declared in `<stropts.h>` as `int ioctl(int
+  fildes, int request, ...)`. ntlibc has no `<stropts.h>` (nor any of
+  the eight structures, the `I_*`/`S_*` constants, `FMNAMESZ`, or
+  `isastream`/`getmsg`/`getpmsg`/`putmsg`/`putpmsg` that
+  `basedefs/stropts.h.html` requires), and declares `int ioctl(int,
+  unsigned long, ...)` in `<sys/ioctl.h>`, which is not a POSIX header.
+- The two functions share a name, an `fd` parameter and nothing else:
+  disjoint headers, disjoint signatures, disjoint command sets. POSIX
+  says of everything ntlibc's version does that "for non-STREAMS
+  devices, the functions performed by this call are unspecified", and
+  `include/sys/ioctl.h`'s own banner opens "ioctl(): NOT a POSIX
+  interface".
+
+**So `ioctl` should be counted as absent, not as implemented-but-
+unaudited.** That is a move *between* this file's two tables rather
+than a subtraction from 357 — and, like every other count here, it is
+recorded in this dated note rather than hand-edited into the frozen
+`04edec2` snapshot. Item 4 of the successor queue is what folds it in;
+whoever runs it should note that the pipeline derives "implemented"
+from what links, and `ioctl` does link — the name is real, the
+interface is not — so this is one row the mechanical pipeline cannot
+get right on its own and that item 4 must special-case.
+
+Group J2's ledger section records the clause detail: one covered row
+(`[EBADF]`, the only general-condition clause not predicated on a
+STREAMS device, which ntlibc does honour), one fenced UNIMPL (the
+absent header), and the STREAMS command set as N/A — vacuous rather
+than violated, because NT has no STREAMS subsystem and `fildes` can
+never refer to a STREAMS device.
+
 ## Changes since the clause audit of the stdio.h and stdarg.h rows
 
 Dated note, 2026-08-24, added rather than folded into the headline

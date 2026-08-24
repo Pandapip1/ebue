@@ -2571,6 +2571,79 @@ reverted. Nothing in `src/` is modified by this commit.
   BUG 1 should decide deliberately which of the two they are
   implementing.
 
+### J2: stropts.h -- ioctl(), and a ledger row that should not exist
+
+`test/POSIX-GAP-ACCOUNTING.md` lists `ioctl` (`OB XSR`) under
+"Implemented, not clause-audited", with the note "`src/ioctl/ioctl.c`
+implements the name, not the STREAMS semantics POSIX attaches to it".
+**Reading `ioctl.html` shows the note is right and the row it sits in
+is wrong.**
+
+POSIX's `ioctl()` is not implemented here at all. A different function
+that shares its name is:
+
+| | POSIX `<stropts.h>` | ntlibc `<sys/ioctl.h>` |
+|---|---|---|
+| header | `stropts.h` — absent here | `sys/ioctl.h` — not a POSIX header |
+| signature | `int ioctl(int, int, ...)` | `int ioctl(int, unsigned long, ...)` |
+| specified over | STREAMS devices | NT file/pipe/console handles |
+| command set | `I_PUSH I_POP I_LOOK I_FLUSH I_SETSIG I_FIND I_PEEK …` | `FIONREAD TIOCGWINSZ FIONBIO` |
+
+They share a name, an `fd` parameter, and nothing else — disjoint
+headers, disjoint command sets, and POSIX's own text says of everything
+ntlibc's version does that "for non-STREAMS devices, the functions
+performed by this call are unspecified". `include/sys/ioctl.h`'s banner
+opens by saying so itself: "ioctl(): NOT a POSIX interface — POSIX
+deliberately specifies termios(3) … instead of a general ioctl(2)".
+
+**Verdict: reclassify, do not fence.** `ioctl` belongs in
+`POSIX-GAP-ACCOUNTING.md`'s *absent* accounting, next to the other
+headers ntlibc does not have, rather than in "Implemented, not
+clause-audited". Fencing an UNIMPL inside a row that should not exist
+would have recorded the symptom and preserved the miscategorisation.
+This was checked against the alternative framing (that ntlibc
+implements POSIX's `ioctl` with the wrong header and parameter type)
+and rejected: nothing in `src/ioctl/ioctl.c` is an attempt at the
+STREAMS interface, so there is no partial implementation to grade.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| ioctl | ERRORS, general conditions: "[EBADF] The fildes argument is not a valid open file descriptor" — the one clause on the page **not** conditioned on `fildes` referring to a STREAMS device | covered — asserted for `-1`, an out-of-range descriptor, and a descriptor that was open and has been closed | test/posix-stropts.c (`test_ebadf`) |
+| ioctl | SYNOPSIS: `#include <stropts.h>`, `int ioctl(int fildes, int request, ...)` — and the whole of `basedefs/stropts.h.html` (the eight structures, the `I_*`/`S_*`/`FLUSH*` constants, `FMNAMESZ`, and `isastream`/`getmsg`/`getpmsg`/`putmsg`/`putpmsg`) | **UNIMPL (fenced)** — `grep` over `include/` and `src/` finds no `stropts.h`, no `I_PUSH`, no `FMNAMESZ`, no `isastream`. A strictly conforming application does not compile. Deliberately UNIMPL, not N/A: nothing about NT prevents shipping a header of constants and structures | test/posix-stropts.c (`test_stropts_header_exists`) |
+| ioctl | the STREAMS command set (`I_PUSH` … `I_PUNLINK`) and every per-command `[EINVAL]`/`[ENXIO]`/`[EAGAIN]`/`[ENOSR]`, plus the general `[EINTR]`, `[EIO]`, `[ENOTTY]`, `[ENXIO]`, `[ENODEV]` and the "linked downstream from a multiplexer" `[EINVAL]` | **N/A: NT has no STREAMS subsystem, so `fildes` can never refer to a STREAMS device** — see below | — |
+
+### Observed behaviour where POSIX permits latitude (stropts.h)
+
+- **The STREAMS N/A is a scope that cannot be entered, not "NT is
+  different".** `ioctl.html` DESCRIPTION opens "The ioctl() function
+  shall perform a variety of control functions on STREAMS devices" and
+  immediately adds "For non-STREAMS devices, the functions performed by
+  this call are unspecified." Every clause below that sentence is
+  conditioned on `fildes` referring to a STREAMS device, or on a STREAM
+  linked downstream from a multiplexer. NT has no STREAMS driver, no
+  way to open a device as a STREAM, and no module to push onto one — so
+  those clauses are **vacuous rather than violated**, and everything
+  ntlibc's `ioctl()` does (`FIONREAD`/`TIOCGWINSZ`/`FIONBIO` on
+  ordinary NT handles) falls squarely in the region POSIX explicitly
+  leaves unspecified. Emulating STREAMS in user space would not make
+  the clauses apply either: they are about the STREAM a *device driver*
+  provides, and a userspace shim over NT handles would be one more
+  non-STREAMS device.
+- **The BSD `ioctl()` ntlibc does ship is deliberately not audited
+  against `ioctl.html` beyond `[EBADF]`.** It is not the function the
+  page specifies, and asserting whatever the code happens to do would
+  be exactly the "audit the implementation instead of the spec" failure
+  this ledger exists to avoid. Its own behaviour — which three requests
+  are real, what `FIONREAD` answers for a pipe versus a regular file,
+  and that an unrecognised request fails `EINVAL` rather than silently
+  succeeding — is documented in `src/ioctl/ioctl.c`'s banner. Giving
+  *that* function real tests of its own is a separate, non-POSIX job
+  and is not done here.
+- The STREAMS N/A is recorded as a comment in `test/posix-stropts.c`
+  rather than as a fenced test, because there is no assertion to write:
+  a test that cannot construct a STREAMS device cannot assert anything
+  about one, even fenced.
+
 ## stdio.h, the "implemented, not clause-audited" row (group K)
 
 The two rows `test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not
