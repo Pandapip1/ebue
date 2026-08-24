@@ -108,17 +108,19 @@ jobs:
     # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 10
     steps:
-      # Deliberately WITHOUT `submodules:`. third_party/libc-test is a
-      # submodule, and its ~940 files are not this repository's files for
-      # REUSE purposes -- they belong to musl's libc-test, which ships its
-      # own COPYRIGHT, and their licences are not uniform (src/math/ucb
-      # and src/math/crlibm are BSD and GPL, not MIT). Checking them out
-      # here would make this job lint another project's tree and demand
-      # SPDX headers we have no right to add. The local `reuse` tool skips
-      # submodules on its own when .git is present, so leaving them out
-      # here is what keeps the two in agreement; tools/gate.sh's reuse
-      # stage excludes third_party/ from its tree copy for the same
-      # reason. See third_party/README.md.
+      # Deliberately WITHOUT `submodules:`. third_party/ holds two --
+      # musl's libc-test and the Linux Test Project -- and neither's files
+      # are this repository's files for REUSE purposes. They belong to
+      # their own projects, which ship their own COPYRIGHT/COPYING, and
+      # neither is uniformly licensed (libc-test's src/math/ucb and
+      # src/math/crlibm are BSD and GPL, not MIT; LTP's open_posix_testsuite
+      # is GPLv2+ with some BSD-2 files). Checking them out here would make
+      # this job lint another project's tree and demand SPDX headers we
+      # have no right to add. The local `reuse` tool skips submodules on
+      # its own when .git is present, so leaving them out here is what
+      # keeps the two in agreement; tools/gate.sh's reuse stage excludes
+      # third_party/ from its tree copy for the same reason. See
+      # third_party/README.md.
       - uses: actions/checkout@v7
       - uses: fsfe/reuse-action@v5
 
@@ -533,6 +535,102 @@ jobs:
 
       - name: libc-test corpus
         run: make libc-test
+
+  # The Open POSIX Test Suite gap report's staleness-and-honesty check.
+  #
+  # NOT a pass/fail run of that suite. OPTS is a GAP oracle here, not a
+  # correctness one -- test/external-suites.md measured it catching zero
+  # of the five defects this project's own audits fenced -- and its
+  # output is a distribution, not a verdict. The 1019 tests that fail to
+  # compile are the product. A threshold on that distribution would be a
+  # number nobody could justify, so there is none.
+  #
+  # What this job asserts instead is narrow and checkable: that the
+  # checked-in test/POSIX-GAP-MAP.generated.md still matches the tree,
+  # and that the measurement behind it still discriminates -- census,
+  # partition, floors in BOTH directions, and two canaries. The lower
+  # floor is the one that matters: an -I that stopped pointing at the
+  # suite makes everything link and the gap read as CLOSED, which is good
+  # news shaped like a broken instrument. See tools/posix-gapmap.sh.
+  #
+  # A separate job from `libc-test` for the same reason `libc-test` is
+  # separate from `ntlibc-suite`: it is a different claim, about a
+  # different foreign suite, with a different meaning of failure.
+  # No Wine: nothing here is executed, only compiled and linked.
+  posix-gapmap:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    # A hung job otherwise occupies a runner until GitHub's 360-minute
+    # default. There is deliberately no `concurrency:` block (see above),
+    # so nothing cancels it either.
+    timeout-minutes: 20
+    steps:
+      # submodules: true, NOT recursive. third_party/ltp IS the suite this
+      # job measures, so the flag is load-bearing -- without it the
+      # directory is empty and tools/posix-gapmap.sh exits 2 by design.
+      # But LTP carries four nested submodules of its own, two of them on
+      # git.kernel.org, and this job reads none of them. A job that
+      # fetches exactly what it uses has one fewer way to fail for a
+      # reason unrelated to what it is testing. See third_party/README.md.
+      #
+      # fetch-depth: 0 because one of the invariants is that the SHA the
+      # report records is an ancestor of HEAD, and a shallow clone cannot
+      # answer that. tools/posix-gapmap.sh fails rather than skips when it
+      # cannot check -- "I could not check" and "it checks out" are
+      # different claims -- so a default checkout would turn this job red
+      # for the wrong reason.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      # The suite is this job's input the way the corpus is libc-test's,
+      # and gets the same treatment: arriving empty is a hard error with a
+      # message naming the cause, not a skip and not a pass. This matters
+      # more here than anywhere else in the workflow, because an absent
+      # suite does not produce an obviously-broken result -- it produces
+      # "0 blocked tests", which is indistinguishable from every gap
+      # having closed and is strictly more dangerous, being good news.
+      - name: Assert the OPTS suite actually arrived
+        run: |
+          d=third_party/ltp/testcases/open_posix_testsuite
+          if [ ! -f "$d/include/posixtest.h" ]; then
+            echo "FAILED: third_party/ltp is empty -- the suite this job exists to measure did not arrive." >&2
+            echo "The checkout step above must keep 'submodules: true'." >&2
+            git submodule status || true
+            exit 1
+          fi
+          n=$(find "$d/conformance/interfaces" -name '*.c' | wc -l)
+          echo "$n conformance test source file(s) present"
+          if [ "$n" -eq 0 ]; then
+            echo "FAILED: the suite holds no conformance tests; this job would measure nothing." >&2
+            exit 1
+          fi
+
+      - name: Restore tinycc toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      # x86_64 only. The report is about which headers and interfaces
+      # exist, which is arch-independent here; running it twice would
+      # double the runtime and produce the same file.
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+
+      # Spelled out rather than left to the target's $(ALL_LIBS)
+      # prerequisite, for the same reason libc-test spells it out: a
+      # library build failure should read as a library build failure and
+      # not as the gap having grown to 1610.
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: POSIX gap map is current and still discriminating
+        run: make posix-gapmap-check
 
   # Runs the exact same PE binaries `build-test-exes` compiled and that
   # the `ntlibc-suite` job (for the non-*-win.c ones) runs under Wine -- the two

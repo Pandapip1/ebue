@@ -406,6 +406,32 @@ libc-test-map-check: $(ALL_LIBS)
 
 .PHONY: libc-test-map libc-test-map-check
 
+# posix-gapmap: how much of the Open POSIX Test Suite (third_party/ltp's
+# testcases/open_posix_testsuite/, a git submodule pinned at a SHA -- see
+# third_party/README.md) can be compiled against this library at all.
+#
+# Deliberately NOT part of `check` and NOT a pass/fail suite.  Its output
+# is a distribution -- 873 tests whose #include fails, 146 that die at
+# link, 591 that build -- and a threshold on a distribution is a number
+# nobody can justify.  So `posix-gapmap` WRITES the report
+# (test/POSIX-GAP-MAP.generated.md, checked in, because the value of a
+# gap measurement is its diff) and `posix-gapmap-check` is what the gate
+# runs: the report is current, and the measurement behind it still
+# discriminates.  See tools/posix-gapmap.sh's header for the four
+# invariants that make the second claim mean something.
+#
+# Depends on $(ALL_LIBS) for the same reason libc-test does: it links
+# 1610 PEs against lib/libc.a, and a missing library would make every one
+# of them fail and the gap read as total.
+#
+posix-gapmap: $(ALL_LIBS)
+	@$(srcdir)/tools/posix-gapmap.sh
+
+posix-gapmap-check: $(ALL_LIBS)
+	@$(srcdir)/tools/posix-gapmap.sh --check
+
+.PHONY: posix-gapmap posix-gapmap-check
+
 #
 # check-kernel32: convenience wrapper for a developer who already has a
 # normal tree configured (TARGET/CC come from the config.mak that is

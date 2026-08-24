@@ -6,3 +6,6 @@
 [submodule "libc-test"]
 	path = third_party/libc-test
 	url = https://github.com/Pandapip1/libc-test.git
+[submodule "ltp"]
+	path = third_party/ltp
+	url = https://github.com/Pandapip1/ltp.git

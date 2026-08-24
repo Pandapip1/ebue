@@ -60,7 +60,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map posix-gapmap asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -101,33 +101,31 @@ note() { printf '%s\n' "$*" >&2; }
 # not just HEAD) into $GATE_JOBS_DIR/trees/$1, excluding build output and
 # per-arch config so each stage configures its own.
 #
-# third_party/ is excluded from every copy EXCEPT libc-test's and
-# libc-test-map's. It holds
-# one git submodule -- musl's libc-test, ~940 files and 11 MB -- and only
-# that one stage reads it, so every other copy would be paying 11 MB of
-# rsync for nothing.
+# third_party/ is excluded from every copy EXCEPT the stages that read a
+# submodule. It holds two -- musl's libc-test (~940 files, 11 MB), read
+# by `libc-test` and `libc-test-map`, and the Linux Test Project (~47 MB,
+# of which this project reads only testcases/open_posix_testsuite/), read
+# by `posix-gapmap`. Every other copy would be paying ~58 MB of rsync for
+# nothing, and each copy that does get one takes only the submodule it
+# actually reads.
 #
-# The count that used to be here ("ten of the eleven copies") was right
-# when written and is right today -- ALL_STAGES lists twelve stages,
-# `generated` takes no copy because it runs in the real tree, and one of
-# the remaining eleven is libc-test's. It is removed anyway: it is a
-# hand-maintained number describing a list two screens further down, it
-# goes stale the moment a stage is added, and the sentence does not need
-# it. Same class as tools/asan-build.sh's "four harnesses" when there
-# were eight.
+# Deliberately no count of how many copies that is: it would be a
+# hand-maintained number describing a list two screens further down, and
+# it goes stale the moment a stage is added. Same class as
+# tools/asan-build.sh's "four harnesses" when there were eight.
 #
 # The saving is the lesser reason. The real one is the `reuse` stage.
 # rsync strips the .git that tells the `reuse` tool those files belong to
-# another project, so a copy that includes them turns ~940 foreign files
-# into ~940 files of ours with no SPDX headers, and `reuse lint` fails on
-# every one. CI's reuse job checks out without submodules and therefore
-# never sees them -- so a naive copy here makes the local tool and CI
-# disagree, which is the exact failure mode that cost this project a
-# round trip earlier today. Excluding third_party/ makes the gate lint
-# precisely the file set CI lints.
+# another project, so a copy that includes them turns thousands of
+# foreign files into thousands of files of ours with no SPDX headers, and
+# `reuse lint` fails on every one. CI's reuse job checks out without
+# submodules and therefore never sees them -- so a naive copy here makes
+# the local tool and CI disagree, which is the exact failure mode that
+# cost this project a round trip. Excluding third_party/ makes the gate
+# lint precisely the file set CI lints.
 #
-# The libc-test stage does get the copy, .git-file and all: the plain
-# files survive rsync, which is all tools/libc-test.sh needs.
+# The two suite stages do get their copy, .git-file and all: the plain
+# files survive rsync, which is all their drivers need.
 #
 # libc-test-map needs the same corpus, and one thing more: rsync strips
 # .git from every copy, so a stage that has to answer "is the SHA this
@@ -140,17 +138,26 @@ note() { printf '%s\n' "$*" >&2; }
 make_tree() {
 	dest="$GATE_JOBS_DIR/trees/$1"
 	mkdir -p "$dest"
-	if [ "$1" = libc-test ] || [ "$1" = libc-test-map ]; then
+	case "$1" in
+	libc-test|libc-test-map)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
-			--exclude='*.tmp' \
+			--exclude='*.tmp' --exclude=/third_party/ltp/ \
 			"$srcdir/" "$dest/"
-	else
+		;;
+	posix-gapmap)
+		rsync -a --delete \
+			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
+			--exclude='*.tmp' --exclude=/third_party/libc-test/ \
+			"$srcdir/" "$dest/"
+		;;
+	*)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
 			--exclude='*.tmp' --exclude=/third_party/ \
 			"$srcdir/" "$dest/"
-	fi
+		;;
+	esac
 }
 
 # run_stage NAME CMD...  -- run CMD (a single sh -c string) in the
@@ -206,7 +213,7 @@ fi
 # the source tree, so every copy sees the same (post-generated) state.
 for pair in \
 	"check-i386:check-i386" "check-x86_64:check-x86_64" "libc-test:libc-test" \
-	"libc-test-map:libc-test-map" \
+	"libc-test-map:libc-test-map" "posix-gapmap:posix-gapmap" \
 	"asan:asan" "linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
 	"hygiene:hygiene" "lint-plain:lint-plain" \
 	"lint-analyze-pinned:lint-analyze-pinned" "lint-shell-pinned:lint-shell-pinned" \
@@ -267,6 +274,31 @@ fi
 if want libc-test-map; then
 	t="$GATE_JOBS_DIR/trees/libc-test-map"
 	run_stage libc-test-map "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && LIBC_TEST_MAP_GITREPO='$srcdir' make libc-test-map-check"
+fi
+
+# posix-gapmap: the staleness-and-honesty check on
+# test/POSIX-GAP-MAP.generated.md, the Open POSIX Test Suite gap report.
+#
+# NOT a pass/fail run of that suite, and deliberately so: the report's
+# output is a distribution, and a threshold on a distribution is a number
+# nobody can justify -- which is the "number nobody reads" failure mode
+# by another route. What this stage asserts is narrower and checkable:
+# the checked-in report matches the tree, and the measurement that
+# produced it still discriminates (census, partition, floors in BOTH
+# directions, and two canaries). See tools/posix-gapmap.sh's header.
+#
+# ~20 s: 1610 tcc compile-and-links at -Pnproc, no Wine at all. Sits
+# beside libc-test, far under the critical path asan sets.
+#
+# GAPMAP_GITDIR points back at the real tree because this copy has no
+# .git of its own, and one of the invariants is that the SHA the report
+# records is an ancestor of HEAD. The script FAILS rather than skips when
+# it cannot reach a repository -- "I could not check" and "it checks out"
+# are different claims -- so the variable is load-bearing, not a
+# convenience.
+if want posix-gapmap; then
+	t="$GATE_JOBS_DIR/trees/posix-gapmap"
+	run_stage posix-gapmap "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && GAPMAP_GITDIR='$srcdir' make posix-gapmap-check"
 fi
 
 if want asan; then

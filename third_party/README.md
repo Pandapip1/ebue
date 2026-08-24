@@ -166,3 +166,145 @@ Point 3 is the part that would have been easy to get wrong by inertia:
 carrying the old `third_party/libc-test/** = MIT` stanza forward would
 have asserted MIT over BSD- and GPL-licensed vectors that the previous
 arrangement had been careful to keep out of the tree entirely.
+
+## `ltp` — the Linux Test Project, for its Open POSIX Test Suite
+
+| | |
+|---|---|
+| submodule remote | `https://github.com/Pandapip1/ltp.git` |
+| pinned SHA | **`4c0cfb849f19beed68175de9fb7d02df55987084`** (`starvation: honor -t instead of calibrating`) |
+| upstream | `https://github.com/linux-test-project/ltp` |
+| what this project reads | `testcases/open_posix_testsuite/conformance/interfaces/` — 1610 tests in 190 directories |
+| licence | GPLv2+, with some BSD-2 files — see below |
+| driver | `tools/posix-gapmap.sh`, report `test/POSIX-GAP-MAP.generated.md` |
+
+### Provenance of the remote
+
+Unlike `libc-test`, this one **is** an ordinary GitHub fork:
+upstream lives on GitHub, so there was a fork button to press, and
+pressing it gives the pin upstream's own history with no push and no
+storage cost. The pin's ancestry is checkable in one line, which is the
+property the whole arrangement exists for:
+
+```sh
+git -C ~/Projects/ltp merge-base --is-ancestor 4c0cfb8 origin/master
+```
+
+The canonical working clone is `~/Projects/ltp`, with `origin` pointing
+at `linux-test-project/ltp` and `ghfork` at the fork — the same
+`origin`/`ghfork` split this machine uses for `~/Projects/wine` and
+`~/Projects/libc-test`. **The fork exists so the pin cannot vanish**, not
+because anything in it is patched. Nothing is, and it should stay that
+way until there is a reason.
+
+### One subdirectory of a large repository
+
+This is the genuinely awkward part and it is stated rather than glossed.
+Measured:
+
+| | |
+|---|---|
+| full clone, git objects | **77 MB** over **18 370** commits |
+| working tree at `4c0cfb8` | 47 MB |
+| what `tools/posix-gapmap.sh` reads | `testcases/open_posix_testsuite/`, **14 MB** |
+| `git submodule update --init --recursive` from a fresh clone | **5.5 s**, +7 MB for LTP's own four nested submodules |
+
+So the arrangement fetches roughly nine times what it uses. Three ways
+out were considered:
+
+1. **A sparse checkout.** Rejected, for the same reason it was rejected
+   for `libc-test`: `.gitmodules` has no field that makes `git clone
+   --recurse-submodules` or `git submodule update --init` apply a sparse
+   pattern, so enforcing one needs a bespoke init step, and anybody
+   typing the standard incantation gets the full tree anyway. *A rule the
+   documented command does not obey is not a rule; it is a comment that
+   lies.*
+
+2. **A filtered fork** carrying only `testcases/open_posix_testsuite/`.
+   Rejected because it destroys exactly what the fork is for: a rewritten
+   history means `4c0cfb8` is no longer a genuine ancestor of upstream's
+   own commits, `git diff upstream/master` stops being meaningful, and a
+   future patch could not be rebased onto a newer LTP.
+
+3. **`shallow = true` in `.gitmodules`.** This one deserved a
+   measurement rather than the same one-line dismissal, because unlike a
+   sparse pattern it *is* a field the documented command obeys — which is
+   precisely the objection that sank option 1. Measured: it works, it
+   checks out the pinned SHA correctly, and it takes the submodule's git
+   objects from 78 MB to **32 MB**.
+
+   **Rejected anyway**, and on the same ground as option 2 rather than on
+   cost: a depth-1 clone cannot answer `merge-base --is-ancestor`, so the
+   pin becomes unverifiable from the checkout that uses it. Trading the
+   one property the fork exists to provide for 46 MB is the wrong way
+   round. 46 MB is not a problem; an unverifiable pin is.
+
+What actually keeps the cost off this repository is the same thing as for
+`libc-test`: **what is committed here is a 20-byte gitlink.** Cloning
+ntlibc without `--recurse-submodules` fetches zero bytes of LTP. The 77 MB
+is paid once, on a developer's disk, by whoever runs the gap report.
+
+### LTP's own submodules
+
+`4c0cfb8` carries four nested gitlinks — `testcases/kernel/mce-test` and
+`tools/sparse/sparse-src` (both on `git.kernel.org`), `tools/ltx/ltx-src`
+and `tools/kirk/kirk-src`. `git submodule update --init --recursive`
+recurses into all four; measured above at 5.5 s and 7 MB, so it is not
+worth working around locally.
+
+CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-gapmap` job
+checks out with `submodules: true`, not `recursive`, because OPTS needs
+none of the four and two of them live on a host outside GitHub. A job
+that fetches exactly what it reads has one fewer way to fail for a reason
+unrelated to what it is testing.
+
+### Nothing here is compiled into anything shipped
+
+`tools/posix-gapmap.sh` compiles the 1610 conformance tests to
+throwaway PEs in a `mktemp -d` and deletes them; nothing under
+`third_party/ltp/` is linked into `lib/`, installed, or shipped. LTP
+proper — the 1396 kernel syscall tests — is never touched at all: its
+framework reads `/proc` in 19 places and wants root, mounts and cgroups,
+which `test/external-suites.md` records as the reason LTP itself is
+unusable here even though the suite inside it is not.
+
+### Licence, and why there is no `REUSE.toml` stanza
+
+The suite is GPLv2-or-later with some BSD-2-clause files
+(`testcases/open_posix_testsuite/COPYING`: *"All sourcecode generated
+from scratch by Ngie Cooper is BSD 2-clause licensed. All legacy
+openposix test suite code is GPLv2+ licensed."*). Both are compatible
+with this tree's GPL-3.0-or-later.
+
+**They are not this repository's files for REUSE purposes**, and no
+stanza claims them. Submodule contents belong to the submodule's own
+project, which ships its own `COPYING`; asserting a licence over them
+here would be a false claim, and a single aggregate stanza would be
+*actively wrong* over the BSD-2 files. This is the same position taken
+for `libc-test`'s `src/math/ucb/` and `src/math/crlibm/` vectors.
+
+Two mechanical consequences, both already handled and both easy to
+reintroduce by inertia:
+
+* `tools/gate.sh`'s `make_tree()` excludes `/third_party/` from every
+  stage copy except the two that read a submodule, because rsync strips
+  the `.git` that tells `reuse` those files are somebody else's. A naive
+  copy turns thousands of foreign files into thousands of unlicensed
+  files of ours, failing locally while CI — which checks out without
+  submodules — passes.
+* `.gitmodules` is itself a file this repository owns, and needs its own
+  SPDX header. It has one.
+
+### Moving the pin
+
+```sh
+cd third_party/ltp
+git fetch origin && git checkout <new-sha>
+cd ../.. && git add third_party/ltp
+make posix-gapmap                      # regenerate the report
+```
+
+Expect `tools/posix-gapmap.sh`'s census invariant to fire if the new
+revision adds or removes tests: `CENSUS_TESTS` and `CENSUS_DIRS` are
+pinned constants and moving them is a deliberate edit, reviewed in the
+same commit as the SHA. That is the point — see that script's header.
