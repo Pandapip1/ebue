@@ -9,7 +9,17 @@
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
+#include <stddef.h>
 #include "libc.h"
+
+/* Offset of the union inside a REPARSE_DATA_BUFFER (8 on the wire, the
+ * ReparseTag/ReparseDataLength/Reserved header that ReparseDataLength
+ * does not count), and the offset of the symlink variant's PathBuffer
+ * from the start of that union (12 on the wire).  Both are taken from
+ * the struct as the compiler laid it out, because that is what the
+ * writes below go through. */
+#define RDB_HDR offsetof(REPARSE_DATA_BUFFER, SymbolicLinkReparseBuffer)
+#define SL_HDR  (offsetof(REPARSE_DATA_BUFFER, SymbolicLinkReparseBuffer.PathBuffer) - RDB_HDR)
 
 typedef struct _FILE_LINK_INFORMATION {
 	BOOLEAN ReplaceIfExists;
@@ -162,8 +172,17 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 	 * twice, once as the substitute name and once as the print name.  A
 	 * target long enough to overflow it would wrap rather than truncate,
 	 * and the link would be created pointing somewhere else entirely, so
-	 * the bound is checked before any of them is narrowed. */
-	if (12 + (off + 2 * tl) * sizeof(WCHAR) > 0xffffu) {
+	 * the bound is checked before any of them is narrowed.
+	 *
+	 * SL_HDR/RDB_HDR come from offsetof rather than from the wire
+	 * layout's 12 and 8: PathBuffer's distance from the start of the
+	 * struct is whatever the compiler in use puts it at, and writing
+	 * through the struct needs the allocation sized to that, not to the
+	 * on-the-wire figure.  They agree on the NT target (ULONG is 32-bit
+	 * there, so RDB_HDR is 8 and SL_HDR is 12); where ULONG is wider
+	 * the wire figures are too small and the second memcpy below ran a
+	 * WCHAR past the end of the buffer. */
+	if (SL_HDR + (off + 2 * tl) * sizeof(WCHAR) > 0xffffu) {
 		FILE_DISPOSITION_INFORMATION d = { 1 };
 		NtSetInformationFile(h, &io, &d, sizeof d, FileDispositionInformation);
 		NtClose(h);
@@ -171,7 +190,7 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 		errno = ENAMETOOLONG;
 		return -1;
 	}
-	sz = 8 + 12 + (off + 2 * tl) * sizeof(WCHAR);
+	sz = RDB_HDR + SL_HDR + (off + 2 * tl) * sizeof(WCHAR);
 	r = __malloc(sz);
 	if (!r) { __free(wt); NtClose(h); return -1; }
 	memset(r, 0, sz);
@@ -186,9 +205,9 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 		memcpy(pb + off + tl, wt, tl * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameOffset = (USHORT)((off + tl) * sizeof(WCHAR));
 		r->SymbolicLinkReparseBuffer.PrintNameLength = (USHORT)(tl * sizeof(WCHAR));
-		r->ReparseDataLength = (USHORT)(12 + (off + 2 * tl) * sizeof(WCHAR));
+		r->ReparseDataLength = (USHORT)(SL_HDR + (off + 2 * tl) * sizeof(WCHAR));
 	}
-	st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_REPARSE_POINT, r, r->ReparseDataLength + 8, 0, 0);
+	st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_REPARSE_POINT, r, r->ReparseDataLength + (ULONG)RDB_HDR, 0, 0);
 	__free(r);
 	__free(wt);
 	if (!NT_SUCCESS(st)) {
