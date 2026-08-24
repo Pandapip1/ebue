@@ -398,6 +398,28 @@ static void test_stdin_script(void)
 	}
 }
 
+/* Every fixture and capture file this suite creates, removed on the way
+ * out.  tools/runtests.sh gives each test its own mktemp -d working
+ * directory, so leaving them behind costs that path nothing -- but a
+ * developer running obj/test/sh-main.exe straight out of the checkout
+ * (which is how it gets debugged) drops eight untracked files into the
+ * repository root, and the gate's `reuse` stage then fails the whole
+ * tree for files with no SPDX header.  A test that turns an unrelated
+ * gate stage red depending on where it was run from is a test that
+ * cannot be trusted to mean what it says, so it cleans up after itself
+ * rather than relying on the directory it happens to be in. */
+static void cleanup_artifacts(void)
+{
+	static const char *const files[] = {
+		OUTFILE, ERRFILE,
+		"cap1.txt", "cap2.txt", "cap3.txt", "cap4.txt",
+		"preflight.txt", "script1.sh", "script2.sh",
+		0
+	};
+	size_t i;
+	for (i = 0; files[i]; i++) unlink(files[i]);
+}
+
 /* ---- child roles ------------------------------------------------------
  *
  * argv[1] selects a role, in which case main() below does that instead
@@ -453,6 +475,8 @@ int main(int argc, char **argv)
 	test_command_name_becomes_dollar_zero();
 	test_script_file();
 	test_stdin_script();
+
+	cleanup_artifacts();
 
 	if (fails) { printf("sh-main: failures: %d\n", fails); return 1; }
 	printf("sh-main: all ok (the sh binary: -c, script file, stdin, exit status, diagnostics)\n");
