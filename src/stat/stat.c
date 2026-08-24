@@ -9,12 +9,106 @@
  * as does any file starting with "#!" or "MZ" when that is cheap to
  * check, which it is not here, so only the name is consulted.  The inode
  * is the NTFS file reference number, the device the volume serial.
+ *
+ * Pipes, consoles, character devices and the "couldn't classify it"
+ * fallback get a synthetic st_dev/st_ino instead: stat.html's DESCRIPTION
+ * requires "[st_ino] together with [st_dev] uniquely identify the file
+ * within the system" (see also <sys/stat.h>'s own text to that effect),
+ * and the universal same-file idiom (`a.st_dev==b.st_dev &&
+ * a.st_ino==b.st_ino`) depends on it -- see __fstat_synthetic_ino below
+ * for how that identity is derived and __STAT_DEV_PIPE/__STAT_DEV_CHAR
+ * for why the device half of it can never collide with a real volume
+ * serial number.
  */
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+
+/* A real st_dev (below) is always vi.VolumeSerialNumber, a plain ULONG
+ * assigned straight into the 64-bit dev_t -- so its top 32 bits are
+ * always zero.  Setting all of ours gives values no real volume serial
+ * number can ever equal, while still keeping __STAT_DEV_PIPE and
+ * __STAT_DEV_CHAR distinct from each other -- so a pipe can never be
+ * mistaken for a console/char device, or either for a real file. */
+#define __STAT_DEV_PIPE ((dev_t)0xFFFFFFFF00000001ULL)
+#define __STAT_DEV_CHAR ((dev_t)0xFFFFFFFF00000002ULL)
+
+/* FNV-1a, a well-known 64-bit hash (offset basis and prime from the
+ * canonical spec, http://www.isthe.com/chongo/tech/comp/fnv/), used
+ * below to fold a variable-length NT object name into a fixed 64-bit
+ * st_ino. */
+static ino_t fnv1a64(const void *data, size_t n)
+{
+	const unsigned char *p = data;
+	ino_t h = 0xcbf29ce484222325ULL;
+	size_t i;
+	for (i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ULL; }
+	return h;
+}
+
+/* The identity source for a pipe/console/char/unknown handle, in order
+ * of preference -- each candidate was checked, not assumed (see the
+ * commit message for the empirical results and citations):
+ *
+ * 1. FileInternalInformation, the same NTFS-style file reference number
+ *    the regular-file path below uses.  NPFS (the named-pipe file
+ *    system) does not support it -- confirmed both under Wine (it
+ *    answers STATUS_NOT_IMPLEMENTED) and by
+ *    <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle>,
+ *    whose kernel32 GetFileInformationByHandle is built from this same
+ *    query and whose docs say outright "This handle should not be a
+ *    pipe handle" -- but a real ConDrv console handle answers it with a
+ *    real, distinct-per-handle value (confirmed under Wine: stdin and
+ *    stdout come back with two different nonzero IndexNumbers), so it
+ *    is tried first and used whenever it succeeds with a nonzero value.
+ *
+ * 2. NtQueryObject's ObjectNameInformation, hashed.  A console handle
+ *    has no name (confirmed under Wine: empty every time), but a pipe
+ *    does -- and, for this library's own pipe2() (src/unistd/pipe.c),
+ *    the read and write ends of the *same* pipe are opens of the *same*
+ *    NT path, so they hash to the same st_ino while a second pipe2()
+ *    call (a different path) hashes to a different one.  That means
+ *    stat()/fstat() on the two ends of one pipe report it as "the same
+ *    file" by the st_dev/st_ino test -- defensible, since they are two
+ *    handles to the same underlying NPFS file object, and the
+ *    alternative (handle value) would make even the *same* end of the
+ *    same pipe stop matching itself across dup() (see 3 below), which
+ *    is the worse failure mode for the callers this matters to (see
+ *    same_file()-shaped code, e.g. GNU diffutils).  An inherited or
+ *    foreign anonymous pipe not created by pipe2() still has an NT path
+ *    (kernel32's CreatePipe names them too) so this still applies to
+ *    handles this library did not create itself.
+ *
+ * 3. The handle value itself, when neither of the above produced
+ *    anything: unique within this process and stable for the handle's
+ *    own lifetime, but NOT stable across dup() (a dup'd fd is a
+ *    different NT handle to the same object) -- so two ends of the
+ *    "same" file reached only through this fallback can wrongly compare
+ *    as different files.  This only happens when both a
+ *    FileInternalInformation query and an object-name query find
+ *    nothing to work with, which nothing observed so far exercises. */
+static ino_t __fstat_synthetic_ino(HANDLE h)
+{
+	IO_STATUS_BLOCK io;
+	FILE_INTERNAL_INFORMATION ii;
+	NTSTATUS s;
+
+	s = NtQueryInformationFile(h, &io, &ii, sizeof ii, FileInternalInformation);
+	if (NT_SUCCESS(s) && ii.IndexNumber != 0) return (ino_t)ii.IndexNumber;
+
+	{
+		char buf[512];
+		ULONG ret = 0;
+		OBJECT_NAME_INFORMATION *ni = (OBJECT_NAME_INFORMATION *)buf;
+		s = NtQueryObject(h, ObjectNameInformation, buf, sizeof buf, &ret);
+		if (NT_SUCCESS(s) && ni->Name.Length > 0)
+			return fnv1a64(ni->Name.Buffer, ni->Name.Length);
+	}
+
+	return (ino_t)(ULONG_PTR)h;
+}
 
 static int has_exe_suffix(const WCHAR *name, size_t n)
 {
@@ -58,8 +152,16 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	int exe = 0;
 
 	memset(st, 0, sizeof *st);
-	if (type == __FD_PIPE) { st->st_mode = S_IFIFO | 0600; st->st_nlink = 1; st->st_blksize = 4096; return 0; }
-	if (type == __FD_CONSOLE || type == __FD_CHAR || type == __FD_UNKNOWN) { st->st_mode = S_IFCHR | 0600; st->st_nlink = 1; st->st_blksize = 4096; return 0; }
+	if (type == __FD_PIPE) {
+		st->st_dev = __STAT_DEV_PIPE;
+		st->st_ino = __fstat_synthetic_ino(h);
+		st->st_mode = S_IFIFO | 0600; st->st_nlink = 1; st->st_blksize = 4096; return 0;
+	}
+	if (type == __FD_CONSOLE || type == __FD_CHAR || type == __FD_UNKNOWN) {
+		st->st_dev = __STAT_DEV_CHAR;
+		st->st_ino = __fstat_synthetic_ino(h);
+		st->st_mode = S_IFCHR | 0600; st->st_nlink = 1; st->st_blksize = 4096; return 0;
+	}
 
 	s = NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
 	if (!NT_SUCCESS(s)) return __set_errno_status(s);

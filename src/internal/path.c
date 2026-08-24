@@ -151,8 +151,6 @@ void __ntpath_free(struct __ntpath *p)
  * NtQueryObject's ObjectNameInformation gives the full NT name
  * (\Device\HarddiskVolume3\dir\file), and the drive is found by asking
  * each of A: through Z: for its target.  Returns a malloc'd UTF-8 path. */
-typedef struct { UNICODE_STRING Name; WCHAR Buffer[1]; } OBJECT_NAME_INFORMATION;
-NTSTATUS NTAPI NtQueryObject(HANDLE, ULONG, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtOpenSymbolicLinkObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 NTSTATUS NTAPI NtQuerySymbolicLinkObject(HANDLE, PUNICODE_STRING, PULONG);
 
@@ -168,7 +166,7 @@ char *__handle_path(HANDLE h)
 	OBJECT_ATTRIBUTES oa;
 	int c;
 
-	st = NtQueryObject(h, 1 /* ObjectNameInformation */, oni, sizeof buf, &len);
+	st = NtQueryObject(h, ObjectNameInformation, oni, sizeof buf, &len);
 	if (!NT_SUCCESS(st)) { __set_errno_status(st); return 0; }
 
 	/* Under Wine (and in some other cases) ObjectNameInformation comes

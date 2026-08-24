@@ -416,6 +416,55 @@ static void test_stat_ino_distinct(void)
 	unlink("t-i2.txt");
 }
 
+/* stat.html DESCRIPTION, again: the same st_dev/st_ino uniqueness
+ * requirement, but for the src/stat/stat.c early-return path that used
+ * to skip both fields entirely for pipes/consoles/char devices (leaving
+ * them zeroed), which made the universal same-file idiom
+ * (a.st_dev==b.st_dev && a.st_ino==b.st_ino) wrongly report every pair
+ * of pipes -- and every pair of console handles -- as one file.  Two
+ * distinct pipe2() calls must not collide, and S_ISFIFO must still hold
+ * (mode bits were already correct; only the identity fields were the
+ * bug, so this also guards against a regression there). */
+static void test_stat_pipe_ino_distinct(void)
+{
+	int p1[2], p2[2];
+	struct stat a, b;
+	CHECK(pipe(p1) == 0);
+	CHECK(pipe(p2) == 0);
+	CHECK(fstat(p1[0], &a) == 0 && S_ISFIFO(a.st_mode));
+	CHECK(fstat(p2[0], &b) == 0 && S_ISFIFO(b.st_mode));
+	CHECK(!(a.st_ino == b.st_ino && a.st_dev == b.st_dev));
+	CHECK(close(p1[0]) == 0 && close(p1[1]) == 0);
+	CHECK(close(p2[0]) == 0 && close(p2[1]) == 0);
+}
+
+/* stat.html DESCRIPTION, again: a pipe and a console are different
+ * files and must not collide either, even though both used to report
+ * st_dev==0 && st_ino==0 before this fix.  /dev/tty (src/internal/path.c
+ * maps it straight to "CON") gets an independent, always-openable
+ * console handle regardless of what's on fd 0/1/2, so this works the
+ * same whether or not the test runner attached a console to us there --
+ * but NtCreateFile on CON can still fail outright with no console
+ * subsystem present at all (some CI/service contexts), so, like
+ * test_ttyname_r_erange above, detect and skip rather than asserting
+ * either shape. */
+static void test_stat_pipe_vs_console_distinct(void)
+{
+	int p[2];
+	int cfd = open("/dev/tty", O_RDWR);
+	struct stat a, b;
+	if (cfd < 0) {
+		printf("note: /dev/tty not openable here, pipe-vs-console skipped\n");
+		return;
+	}
+	CHECK(pipe(p) == 0);
+	CHECK(fstat(p[0], &a) == 0 && S_ISFIFO(a.st_mode));
+	CHECK(fstat(cfd, &b) == 0 && S_ISCHR(b.st_mode));
+	CHECK(!(a.st_ino == b.st_ino && a.st_dev == b.st_dev));
+	CHECK(close(p[0]) == 0 && close(p[1]) == 0);
+	CHECK(close(cfd) == 0);
+}
+
 /* stat.html: st_mtime tracks data writes; st_atime is not required to
  * track reads on every implementation (POSIX permits an atime update to
  * be deferred/omitted), so only mtime-after-write is asserted here. */
@@ -744,6 +793,8 @@ int main(void)
 	test_lseek_seek_cur_negative();
 	test_getcwd_off_by_one();
 	test_stat_ino_distinct();
+	test_stat_pipe_ino_distinct();
+	test_stat_pipe_vs_console_distinct();
 	test_stat_mtime_after_write();
 	test_sysconf_child_max();
 	test_pipe_ends_independent();

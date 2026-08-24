@@ -596,6 +596,24 @@ typedef struct _FILE_INTERNAL_INFORMATION {
 	LARGE_INTEGER IndexNumber;
 } FILE_INTERNAL_INFORMATION;
 
+/* NtQueryObject's ObjectNameInformation, used by __fstat_handle (src/stat/stat.c)
+ * as a fallback identity source for pipes/consoles/char devices, for which
+ * FileInternalInformation is not universally supported (NPFS answers
+ * STATUS_NOT_IMPLEMENTED for it -- confirmed both empirically and by
+ * <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle>'s
+ * "This handle should not be a pipe handle" for the kernel32 call built on
+ * the same two NT queries). Layout and class value per
+ * <https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryobject>. */
+typedef enum _OBJECT_INFORMATION_CLASS {
+	ObjectBasicInformation = 0,
+	ObjectNameInformation = 1,
+	ObjectTypeInformation = 2
+} OBJECT_INFORMATION_CLASS;
+
+typedef struct _OBJECT_NAME_INFORMATION {
+	UNICODE_STRING Name;
+} OBJECT_NAME_INFORMATION;
+
 typedef struct _FILE_POSITION_INFORMATION {
 	LARGE_INTEGER CurrentByteOffset;
 } FILE_POSITION_INFORMATION;
@@ -1165,6 +1183,7 @@ NTSTATUS NTAPI NtWriteFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BL
 NTSTATUS NTAPI NtQueryInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
 NTSTATUS NTAPI NtSetInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
 NTSTATUS NTAPI NtQueryVolumeInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FS_INFORMATION_CLASS);
+NTSTATUS NTAPI NtQueryObject(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtQueryDirectoryFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS, BOOLEAN, PUNICODE_STRING, BOOLEAN);
 NTSTATUS NTAPI NtQueryFullAttributesFile(POBJECT_ATTRIBUTES, FILE_NETWORK_OPEN_INFORMATION *);
 NTSTATUS NTAPI NtQueryAttributesFile(POBJECT_ATTRIBUTES, FILE_BASIC_INFORMATION *);
