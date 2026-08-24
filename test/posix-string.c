@@ -10,6 +10,7 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
+#include <locale.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -105,6 +106,43 @@ static void test_strcasecmp_ordering(void)
 	CHECK(strncasecmp("APPLE", "banana", 5) < 0);
 }
 
+
+/* strcoll.html: "strcoll_l() ... shall be equivalent to strcoll(),
+ * except that the locale data used is from the locale represented by
+ * locale."  ntlibc supports only the POSIX locale, in which collation
+ * order is byte order (strcoll.html APPLICATION USAGE), so strcoll_l()
+ * through both LC_GLOBAL_LOCALE and a freshly created "C" locale must
+ * agree with strcoll() and with the sign of strcmp().  Asserted here
+ * because strcoll_l() exists in src/string/strcoll.c and links, but was
+ * named by no assertion anywhere in test/*.c (see
+ * test/POSIX-GAP-ACCOUNTING.md).  Runs on real Windows in CI too;
+ * nothing here touches the OS. */
+static void test_strcoll_l(void)
+{
+	locale_t loc;
+
+	CHECK(strcoll_l("abc", "abc", LC_GLOBAL_LOCALE) == 0);
+	CHECK(strcoll_l("abc", "abd", LC_GLOBAL_LOCALE) < 0);
+	CHECK(strcoll_l("abd", "abc", LC_GLOBAL_LOCALE) > 0);
+	/* agrees with the non-_l form on every case above */
+	CHECK((strcoll_l("abc", "abd", LC_GLOBAL_LOCALE) < 0)
+	      == (strcoll("abc", "abd") < 0));
+	/* POSIX locale collation is byte order, so it agrees with strcmp */
+	CHECK((strcoll_l("A", "a", LC_GLOBAL_LOCALE) < 0)
+	      == (strcmp("A", "a") < 0));
+	/* the empty string sorts before any non-empty one */
+	CHECK(strcoll_l("", "a", LC_GLOBAL_LOCALE) < 0);
+	CHECK(strcoll_l("", "", LC_GLOBAL_LOCALE) == 0);
+
+	loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	CHECK(loc != (locale_t)0);
+	if (loc) {
+		CHECK(strcoll_l("abc", "abd", loc) < 0);
+		CHECK(strcoll_l("abc", "abc", loc) == 0);
+		freelocale(loc);
+	}
+}
+
 int main(void)
 {
 	test_stpncpy_no_nul_return();
@@ -115,6 +153,7 @@ int main(void)
 	test_memccpy_zero_length();
 	test_strspn_strcspn_single_byte();
 	test_strcasecmp_ordering();
+	test_strcoll_l();
 
 	if (!fails)
 		printf("posix-string: all tests passed\n");

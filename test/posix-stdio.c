@@ -10,6 +10,7 @@
  * assertion. Run headless under Wine, same as test/stdio.c.
  */
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -434,6 +435,246 @@ static void test_popen_emfile(void)
 }
 #endif
 
+
+/* Everything below exists in src/ and links, but was named by no
+ * assertion anywhere in test/*.c before this (see
+ * test/POSIX-GAP-ACCOUNTING.md's "implemented, but no assertion
+ * anywhere in test/*.c" list, which this closes for <stdio.h>).  These
+ * are deliberately the cheap RETURN VALUE / DESCRIPTION clauses, not a
+ * clause-by-clause audit -- the ledger's stdio.h section stays the
+ * authority for that.  They run on real Windows in CI too, which is the
+ * only authority for real-NT behaviour; nothing here depends on any
+ * Wine-specific behaviour. */
+
+/* putc.html RETURN VALUE: "shall return the value written"; putc() and
+ * fputc() are equivalent except that putc() may be a macro evaluating
+ * its stream argument more than once.  putc_unlocked.html: "versions of
+ * ... putc() ... that ... may be safely used only within a scope
+ * protected by flockfile()"; behaviour is otherwise identical. */
+static void test_putc_family(const char *name)
+{
+	FILE *f;
+	char buf[8];
+	size_t n;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(putc('a', f) == 'a');
+	CHECK(putc_unlocked('b', f) == 'b');
+	/* putc.html: the value is written "as an unsigned char converted
+	 * to an int", so a byte above 0x7f comes back positive, not
+	 * sign-extended. */
+	CHECK(putc((int)(unsigned char)0xfe, f) == 0xfe);
+	CHECK(fclose(f) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	n = fread(buf, 1, sizeof buf, f);
+	CHECK(n == 3);
+	CHECK(buf[0] == 'a');
+	CHECK(buf[1] == 'b');
+	CHECK((unsigned char)buf[2] == 0xfe);
+	CHECK(fclose(f) == 0);
+}
+
+/* putchar.html: "equivalent to putc(c, stdout)", RETURN VALUE "the
+ * value written".  Asserted without redirecting stdout: the only
+ * observable effect is one extra newline in this test's own output,
+ * which no harness parses. */
+static void test_putchar_return(void)
+{
+	CHECK(putchar('\n') == '\n');
+	CHECK(putchar_unlocked('\n') == '\n');
+}
+
+/* getchar.html: "equivalent to getc(stdin)"; RETURN VALUE "the next
+ * byte ... as an unsigned char converted to an int", or EOF at
+ * end-of-file.  stdin is repointed at a known file rather than trusted
+ * to be anything in particular -- the gate runs with stdin from
+ * /dev/null, CI on real Windows does not necessarily. */
+static void test_getchar(const char *name)
+{
+	FILE *f;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fputc('X', f) == 'X');
+	CHECK(fputc((int)(unsigned char)0x80, f) == 0x80);
+	CHECK(fclose(f) == 0);
+
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(getchar() == 'X');
+	/* unsigned-char conversion, not sign extension */
+	CHECK(getchar_unlocked() == 0x80);
+	CHECK(getchar() == EOF);
+	CHECK(feof(stdin));
+}
+
+/* ftell.html/fseek.html, off_t forms: "ftello() ... shall obtain the
+ * current value of the file-position indicator"; fseeko() returns 0 on
+ * success.  Same contract as ftell()/fseek(), which test/stdio.c
+ * already covers -- what is new here is only that the off_t-typed
+ * spellings exist and agree with them. */
+static void test_fseeko_ftello(const char *name)
+{
+	FILE *f;
+	off_t pos;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fwrite("0123456789", 1, 10, f) == 10);
+	pos = ftello(f);
+	CHECK(pos == (off_t)10);
+	CHECK(fseeko(f, (off_t)3, SEEK_SET) == 0);
+	CHECK(ftello(f) == (off_t)3);
+	CHECK(fseeko(f, (off_t)2, SEEK_CUR) == 0);
+	CHECK(ftello(f) == (off_t)5);
+	CHECK(fseeko(f, (off_t)0, SEEK_END) == 0);
+	CHECK(ftello(f) == (off_t)10);
+	CHECK(ftell(f) == 10L);
+	CHECK(fclose(f) == 0);
+}
+
+/* flockfile.html: ftrylockfile() "shall return zero for success", and
+ * the lock is recursive ("the lock count ... shall be incremented"), so
+ * a nested acquisition must also succeed and needs a matching
+ * funlockfile().  ntlibc is single-threaded today and src/stdio/file.c
+ * implements all three as no-ops; the clause these assert is the
+ * RETURN VALUE, which a no-op still has to get right. */
+static void test_flockfile(const char *name)
+{
+	FILE *f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	flockfile(f);
+	CHECK(ftrylockfile(f) == 0);
+	funlockfile(f);
+	funlockfile(f);
+	CHECK(fclose(f) == 0);
+}
+
+/* vfprintf.html: the v-forms are "equivalent to ... with the variable
+ * argument list replaced by arg", and return the same byte count.
+ * Wrapped here so each one is reached through a real va_list. */
+static int via_vfprintf(FILE *f, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vfprintf(f, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static int via_vsnprintf(char *b, size_t n, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vsnprintf(b, n, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static int via_vsprintf(char *b, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vsprintf(b, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static int via_vsscanf(const char *src, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vsscanf(src, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static int via_vfscanf(FILE *f, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vfscanf(f, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static int via_vdprintf(int fd, const char *fmt, ...)
+{
+	int r;
+	va_list ap;
+	va_start(ap, fmt);
+	r = vdprintf(fd, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+static void test_v_forms(const char *name)
+{
+	FILE *f;
+	char buf[64];
+	int fd, got;
+
+	CHECK(via_vsnprintf(buf, sizeof buf, "%s-%d", "ab", 7) == 4);
+	CHECK(strcmp(buf, "ab-7") == 0);
+	/* vsnprintf.html RETURN VALUE: "the number of bytes that would
+	 * have been written ... had n been sufficiently large", not the
+	 * number actually written. */
+	CHECK(via_vsnprintf(buf, 3, "%s-%d", "ab", 7) == 4);
+	CHECK(strcmp(buf, "ab") == 0);
+
+	memset(buf, 0, sizeof buf);
+	CHECK(via_vsprintf(buf, "%d/%c", 42, 'z') == 4);
+	CHECK(strcmp(buf, "42/z") == 0);
+
+	got = 0;
+	CHECK(via_vsscanf("  91x", "%d", &got) == 1);
+	CHECK(got == 91);
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(via_vfprintf(f, "%s=%d\n", "k", 5) == 4);
+	CHECK(fclose(f) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	got = 0;
+	CHECK(via_vfscanf(f, "k=%d", &got) == 1);
+	CHECK(got == 5);
+	CHECK(fclose(f) == 0);
+
+	/* dprintf.html: "equivalent to fprintf(), except that dprintf()
+	 * shall write output to the file associated with the file
+	 * descriptor fildes rather than ... a stream". */
+	fd = open(name, O_WRONLY | O_TRUNC);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(dprintf(fd, "%s", "abcd") == 4);
+	CHECK(via_vdprintf(fd, "%d", 12345) == 5);
+	CHECK(close(fd) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	memset(buf, 0, sizeof buf);
+	CHECK(fread(buf, 1, sizeof buf - 1, f) == 9);
+	CHECK(strcmp(buf, "abcd12345") == 0);
+	CHECK(fclose(f) == 0);
+}
+
 int main(void)
 {
 	char *name = make_tmp("posix-stdio-XXXXXX");
@@ -451,6 +692,20 @@ int main(void)
 	test_printf_positional_divergence();
 	test_perror();
 	test_popen();
+
+	name = make_tmp("posix-stdio2-XXXXXX");
+	CHECK(name != 0);
+	if (name) {
+		test_putc_family(name);
+		test_fseeko_ftello(name);
+		test_flockfile(name);
+		test_v_forms(name);
+		/* last: repoints stdin at the temp file and leaves it there */
+		test_getchar(name);
+		remove(name);
+		free(name);
+	}
+	test_putchar_return();
 
 	if (fails) printf("%d check(s) failed\n", fails);
 	else printf("all checks passed\n");

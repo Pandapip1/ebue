@@ -978,6 +978,61 @@ static void test_wait4_sanity(void)
 	CHECK(memcmp(&ru, "\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa", 8) != 0 || sizeof ru <= 8);
 }
 
+
+/* killpg.html: "If pgrp is greater than 1, killpg(pgrp, sig) shall be
+ * equivalent to kill(-pgrp, sig)"; a pgrp of 0 addresses "the process
+ * group of the sender".  Under this library's group-of-one model
+ * (src/unistd/ids.c, and kill()'s own comment in src/signal/signal.c)
+ * the caller is the entire content of its own process group, so
+ * killpg(0, 0) is a permission/existence check against the caller and
+ * must succeed without delivering anything.  RETURN VALUE / ERRORS:
+ * "[EINVAL] The value of the sig argument is an invalid or unsupported
+ * signal number."
+ *
+ * killpg() and sigaltstack() both exist in src/signal/signal.c and link,
+ * but were named by no assertion anywhere in test/*.c before this (see
+ * test/POSIX-GAP-ACCOUNTING.md's "implemented, but no assertion
+ * anywhere" list).  These run on real Windows in CI too; neither
+ * depends on Wine-specific behaviour. */
+static void test_killpg(void)
+{
+	/* sig == 0: "error checking is performed but no signal is
+	 * actually sent" (kill.html DESCRIPTION). */
+	CHECK(killpg(0, 0) == 0);
+	errno = 0;
+	CHECK(killpg(0, -1) == -1);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(killpg(0, NSIG + 100) == -1);
+	CHECK(errno == EINVAL);
+}
+
+/* sigaltstack.html: "If ss is a null pointer, the current alternate
+ * signal stack shall remain unchanged"; oss, when non-null, receives
+ * the current state, whose ss_flags "shall contain SS_DISABLE" when no
+ * alternate stack is currently established.  ntlibc establishes none
+ * (there is no alternate-stack delivery on this platform, see this
+ * file's banner), so SS_DISABLE is the permanent, correct answer --
+ * asserted as such rather than as an aspiration. */
+static void test_sigaltstack_disabled(void)
+{
+	stack_t oss;
+
+	CHECK(sigaltstack(NULL, NULL) == 0);
+
+	memset(&oss, 0xa5, sizeof oss);
+	CHECK(sigaltstack(NULL, &oss) == 0);
+	CHECK((oss.ss_flags & SS_DISABLE) != 0);
+	/* SS_ONSTACK and SS_DISABLE are mutually exclusive states. */
+	CHECK((oss.ss_flags & SS_ONSTACK) == 0);
+
+	/* Querying twice must be idempotent -- the first query must not
+	 * have established anything. */
+	memset(&oss, 0, sizeof oss);
+	CHECK(sigaltstack(NULL, &oss) == 0);
+	CHECK((oss.ss_flags & SS_DISABLE) != 0);
+}
+
 int main(int argc, char **argv)
 {
 	self = argv[0];
@@ -1146,6 +1201,8 @@ int main(int argc, char **argv)
 	test_waitpid_einval_options();
 	test_wait_encode_status();
 	test_wait4_sanity();
+	test_killpg();
+	test_sigaltstack_disabled();
 
 	if (!fails) printf("posix-signal: all tests passed\n");
 	return fails != 0;
