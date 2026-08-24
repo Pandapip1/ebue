@@ -123,7 +123,25 @@ static void fill_child_rusage(HANDLE h, struct rusage *ru)
 	children_utime100ns += (unsigned long long)kt.UserTime;
 }
 
-static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
+/* One reaping engine for wait/waitpid/wait3/wait4/waitid.
+ *
+ * `nowait` is waitid()'s WNOWAIT: "Keep the process whose status is
+ * returned in infop in a waitable state" (waitid.html DESCRIPTION).
+ * It is expressible here because reaping is two separable steps -- the
+ * status is recorded in the table entry (c->done/c->status), and
+ * __child_remove() is what closes the handle and frees the slot.  A
+ * WNOWAIT call does the first and skips the second, so the child is
+ * genuinely still waitable afterwards rather than merely reported as
+ * such.
+ *
+ * That leaves a table entry with pid != 0 && done == 1, a state no
+ * caller could reach before waitid existed (every other path calls
+ * __child_remove immediately after setting done, and __child_add
+ * clears it).  The any-child scan below therefore has to look for
+ * already-known statuses first; without that it would skip such an
+ * entry and report ECHILD for a child whose status POSIX requires it
+ * to hand back again. */
+static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, int nowait)
 {
 	struct __child *c;
 	LARGE_INTEGER zero = 0;
@@ -142,6 +160,18 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
 		 * all live handles.  Simple approach: find the first not-yet
 		 * reaped child; if WNOHANG, poll each; else wait on the first. */
 		int i, any = 0;
+		/* An entry left done-but-unreaped by an earlier WNOWAIT: its
+		 * status is already known, so it is available right now and
+		 * needs no wait at all. */
+		for (i = 0; i < __child_cap; i++)
+			if (__children[i].pid && __children[i].done) {
+				c = &__children[i];
+				if (status) *status = c->status;
+				pid = c->pid;
+				if (ru) memset(ru, 0, sizeof *ru);
+				if (!nowait) __child_remove(c);
+				return pid;
+			}
 		for (i = 0; i < __child_cap; i++) {
 			if (!__children[i].pid || __children[i].done) continue;
 			any = 1;
@@ -191,7 +221,7 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru)
 		errno = ECHILD;
 		return -1;
 	}
-	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); __child_remove(c); return pid; }
+	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); if (!nowait) __child_remove(c); return pid; }
 
 	st = NtWaitForSingleObject(c->h, 0, options & WNOHANG ? &zero : 0);
 	if (st == STATUS_TIMEOUT) return 0;
@@ -209,28 +239,34 @@ reap:
 	pid = c->pid;
 	if (ru) fill_child_rusage(c->h, ru);
 	else { struct rusage tmp; fill_child_rusage(c->h, &tmp); }
-	__child_remove(c);
+	/* fill_child_rusage() has already folded this child's times into the
+	 * RUSAGE_CHILDREN running total, so a WNOWAIT call must not leave the
+	 * entry in a state where a later real reap folds them in a second
+	 * time.  It does not: c->done is set above, and every path that sees
+	 * done == 1 returns the recorded status without touching the handle
+	 * again. */
+	if (!nowait) __child_remove(c);
 	return pid;
 }
 
 pid_t waitpid(pid_t pid, int *status, int options)
 {
-	return do_waitpid(pid, status, options, 0);
+	return do_waitpid(pid, status, options, 0, 0);
 }
 
 pid_t wait(int *status)
 {
-	return do_waitpid(-1, status, 0, 0);
+	return do_waitpid(-1, status, 0, 0, 0);
 }
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 pid_t wait3(int *status, int options, struct rusage *ru)
 {
-	return do_waitpid(-1, status, options, ru);
+	return do_waitpid(-1, status, options, ru, 0);
 }
 
 pid_t wait4(pid_t pid, int *status, int options, struct rusage *ru)
 {
-	return do_waitpid(pid, status, options, ru);
+	return do_waitpid(pid, status, options, ru, 0);
 }
 #endif
