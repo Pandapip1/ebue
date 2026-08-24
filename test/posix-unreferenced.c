@@ -1,0 +1,1540 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Clause-by-clause POSIX.1-2017 audit of the POSIX-specified functions
+ * that tools/lint-unreferenced.sh found no test/*.c even calls.  At the
+ * commit that landed that check the list was 56 names long; seven of
+ * them are POSIX interfaces with a specification page to hold them to:
+ *
+ *   puts, scanf, renameat, fchmodat, sigwait, psignal, roundl
+ *
+ * Two of those -- puts() and scanf() -- are core C interfaces that this
+ * library has always implemented and that no test had ever called.  The
+ * rest are the "at"/long-double/obscure ends of families whose principal
+ * member is tested (rename, chmod, round, psiginfo).
+ *
+ * Every assertion below cites the clause of
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html
+ * it checks, including each entry of that page's ERRORS list.  Where the
+ * ERRORS list names an error this implementation never produces, the
+ * assertion is still written out in full and fenced, using the three
+ * conventions the rest of this tree uses (greppable by the tag right
+ * after "#if 0 /* "):
+ *
+ *   BUG:    a confirmed, real spec violation (should pass once fixed)
+ *   N/A:    genuinely impossible on this platform, with the mechanism
+ *   UNIMPL: not implemented at all here, but implementable
+ *
+ * A fenced block always contains the real assertions the cited clause
+ * requires, written as if it would run -- never a hand-wave.
+ *
+ * Runs headless under Wine like every other test here.  The three
+ * functions that write to a standard stream (puts, scanf, psignal) get
+ * that stream redirected at the fd level (dup/dup2 around the call, so
+ * the FILE object survives) or with freopen(), the same way
+ * test/posix-stdio.c's test_vprintf_vscanf() does.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <math.h>
+#include <fenv.h>
+#include <float.h>
+#include <limits.h>
+#include <sys/stat.h>
+
+static int fails;
+#define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+static char *make_tmp(const char *tmpl)
+{
+	char *t = strdup(tmpl);
+	int fd = mkstemp(t);
+	if (fd < 0) { free(t); return 0; }
+	close(fd);
+	return t;
+}
+
+/* Read a whole file into buf, NUL-terminated; returns the byte count or
+ * -1.  Used to inspect what puts()/psignal() actually wrote. */
+static long slurp(const char *name, char *buf, size_t cap)
+{
+	FILE *f = fopen(name, "rb");
+	size_t n;
+	if (!f) return -1;
+	n = fread(buf, 1, cap - 1, f);
+	buf[n] = 0;
+	fclose(f);
+	return (long)n;
+}
+
+static int write_file(const char *name, const char *text)
+{
+	FILE *f = fopen(name, "wb");
+	if (!f) return -1;
+	if (text && *text) fwrite(text, 1, strlen(text), f);
+	return fclose(f);
+}
+
+/* ================================================================= */
+/* puts.html                                                          */
+/* ================================================================= */
+
+/* puts.html DESCRIPTION: "The puts() function shall write the string
+ * pointed to by s, followed by a <newline>, to the standard output
+ * stream stdout.  The terminating null byte shall not be written."
+ * RETURN VALUE: "Upon successful completion, puts() shall return a
+ * non-negative number."
+ *
+ * fd 1 is pointed at a scratch file for the duration; stdout the FILE
+ * object is untouched, so its buffering state survives. */
+static void test_puts_success(const char *name)
+{
+	char buf[64];
+	int saved, fd, r1, r2;
+
+	saved = dup(1);
+	CHECK(saved >= 0);
+	if (saved < 0) return;
+	fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) { close(saved); return; }
+	CHECK(fflush(stdout) == 0);
+	CHECK(dup2(fd, 1) == 1);
+	CHECK(close(fd) == 0);
+
+	r1 = puts("alpha");
+	/* an empty string is still followed by the <newline> */
+	r2 = puts("");
+
+	CHECK(fflush(stdout) == 0);
+	CHECK(dup2(saved, 1) == 1);
+	CHECK(close(saved) == 0);
+
+	CHECK(r1 >= 0);
+	CHECK(r2 >= 0);
+	memset(buf, 0, sizeof buf);
+	/* "alpha\n" then "\n" -- 7 bytes exactly.  A count of 7 is itself
+	 * the assertion that the terminating null byte was not written:
+	 * "alpha\0\n\0\n" would be 9. */
+	CHECK(slurp(name, buf, sizeof buf) == 7);
+	CHECK(!memcmp(buf, "alpha\n\n", 7));
+}
+
+/* puts.html ERRORS: "Refer to fputc()."  fputc.html ERRORS, shall fail:
+ * "[EBADF] The file descriptor underlying stream is not a valid file
+ * descriptor open for writing."  puts.html RETURN VALUE: "Otherwise, it
+ * shall return EOF, shall set an error indicator for the stream, and
+ * errno shall be set to indicate the error."
+ *
+ * stdout is the only stream puts() can name, so this reopens stdout
+ * itself read-only and puts it back afterwards.  Results are captured
+ * into locals and only CHECKed once stdout is a console again, because
+ * CHECK's own diagnostic goes to stdout. */
+static void test_puts_ebadf(const char *roname, const char *scratch)
+{
+	int saved, r = 0, e = 0, ferr = 0, reopened = 0, restored = 0;
+
+	saved = dup(1);
+	CHECK(saved >= 0);
+	if (saved < 0) return;
+	CHECK(fflush(stdout) == 0);
+	if (freopen(roname, "rb", stdout)) {
+		reopened = 1;
+		errno = 0;
+		r = puts("never written");
+		e = errno;
+		ferr = ferror(stdout);
+		clearerr(stdout);
+	}
+	/* Put stdout back: reopen it writable (which takes fd 1 again, the
+	 * lowest free descriptor, since freopen closed it), then point that
+	 * descriptor back at the saved original. */
+	if (freopen(scratch, "wb", stdout)) restored = 1;
+	if (restored) {
+		restored = dup2(saved, fileno(stdout)) == fileno(stdout);
+		setvbuf(stdout, 0, _IOLBF, 0);
+	}
+	close(saved);
+
+	CHECK(reopened);
+	CHECK(restored);
+	if (reopened) {
+		CHECK(r == EOF);
+		CHECK(e == EBADF);
+		CHECK(ferr != 0);
+	}
+}
+
+/* fputc.html ERRORS, shall fail: "[EPIPE] An attempt is made to write to
+ * a pipe or FIFO that is not open for reading by any process.  A SIGPIPE
+ * signal shall also be sent to the thread."
+ *
+ * Reachable for puts() by pointing fd 1 at the write end of a pipe whose
+ * read end is closed.  stdout is made unbuffered first so the write
+ * happens inside puts() rather than at the next flush.  SIGPIPE is
+ * ignored around the call -- the clause requires it to be *sent*, and
+ * the default disposition would take the process down before puts()
+ * could return anything to check. */
+static void test_puts_epipe(void)
+{
+	int saved, fds[2], r = 0, e = 0, ferr = 0, ok = 0;
+	void (*old)(int);
+
+	if (pipe(fds) != 0) {
+		printf("note: pipe() unavailable in this environment (errno %d); puts EPIPE check skipped\n", errno);
+		return;
+	}
+	saved = dup(1);
+	CHECK(saved >= 0);
+	if (saved < 0) { close(fds[0]); close(fds[1]); return; }
+	old = signal(SIGPIPE, SIG_IGN);
+	CHECK(close(fds[0]) == 0);
+	CHECK(fflush(stdout) == 0);
+	if (dup2(fds[1], 1) == 1) {
+		ok = 1;
+		setvbuf(stdout, 0, _IONBF, 0);
+		errno = 0;
+		r = puts("into a broken pipe");
+		e = errno;
+		ferr = ferror(stdout);
+		clearerr(stdout);
+	}
+	CHECK(dup2(saved, 1) == 1);
+	setvbuf(stdout, 0, _IOLBF, 0);
+	close(saved);
+	close(fds[1]);
+	signal(SIGPIPE, old);
+
+	if (ok) {
+		CHECK(r == EOF);
+		CHECK(e == EPIPE);
+		CHECK(ferr != 0);
+	}
+}
+
+/* The rest of fputc.html's ERRORS list, for the record.  Each is written
+ * as the assertion the clause requires; none is reachable for puts()
+ * here, and each fence says why.
+ *
+ * [EAGAIN] "The O_NONBLOCK flag is set for the file descriptor
+ * underlying stream and the thread would be delayed in the write
+ * operation." */
+#if 0 /* N/A: this library has no O_NONBLOCK for a file descriptor at
+       * all -- include/fcntl.h defines O_NONBLOCK, but src/unistd/write.c
+       * issues an unconditional NtWriteFile and waits out STATUS_PENDING
+       * itself, and NT has no per-handle non-blocking mode for the
+       * synchronous file I/O this maps onto (FILE_SYNCHRONOUS_IO_NONALERT
+       * is set on every handle __ntpath opens).  There is no state a test
+       * could put fd 1 into that would make this clause apply. */
+static void test_puts_eagain(int fd1)
+{
+	errno = 0;
+	CHECK(fcntl(fd1, F_SETFL, fcntl(fd1, F_GETFL, 0) | O_NONBLOCK) == 0);
+	CHECK(puts("would block") == EOF);
+	CHECK(errno == EAGAIN);
+	CHECK(ferror(stdout) != 0);
+}
+#endif
+
+/* [EFBIG] "An attempt was made to write to a file that exceeds the
+ * maximum file size", "...the file size limit of the process", or "The
+ * file is a regular file and an attempt was made to write at or beyond
+ * the offset maximum." */
+#if 0 /* UNIMPL: src/unistd/write.c maps NTSTATUS through
+       * __set_errno_status() and nothing there produces EFBIG; NT's
+       * STATUS_DISK_FULL becomes ENOSPC and there is no per-process file
+       * size limit (no setrlimit(RLIMIT_FSIZE) here) to exceed.  A write
+       * at or beyond the off_t offset maximum is implementable -- seek to
+       * OFF_MAX and write -- and would today return whatever NT says
+       * rather than EFBIG. */
+static void test_puts_efbig(void)
+{
+	CHECK(lseek(1, OFF_MAX, SEEK_SET) == OFF_MAX);
+	errno = 0;
+	CHECK(puts("past the offset maximum") == EOF);
+	CHECK(errno == EFBIG);
+	CHECK(ferror(stdout) != 0);
+}
+#endif
+
+/* [EINTR] "The write operation was terminated due to the receipt of a
+ * signal, and no data was transferred." */
+#if 0 /* N/A: signals here are not asynchronous with respect to a blocked
+       * NT wait -- src/signal/signal.c delivers a signal by running the
+       * handler from the raising thread (__raise_internal), and nothing
+       * interrupts NtWriteFile, which this library always issues on a
+       * FILE_SYNCHRONOUS_IO_NONALERT handle (a *non-alertable* wait, so
+       * not even an APC can break it).  A partial write terminated by a
+       * signal cannot be produced. */
+static void test_puts_eintr(void)
+{
+	errno = 0;
+	CHECK(puts("interrupted") == EOF);
+	CHECK(errno == EINTR);
+	CHECK(ferror(stdout) != 0);
+}
+#endif
+
+/* [EIO] "A physical I/O error has occurred, or the process is a member
+ * of a background process group attempting to write to its controlling
+ * terminal, TOSTOP is set..." */
+#if 0 /* N/A: NT has no controlling terminal, no process groups with a
+       * foreground/background distinction, and no TOSTOP (see
+       * src/termios/, whose tcsetpgrp is a stub) -- the second half of
+       * the clause has no mechanism.  The first half, a genuine physical
+       * I/O error, is not something a test can provoke on demand. */
+static void test_puts_eio(void)
+{
+	errno = 0;
+	CHECK(puts("physical I/O error") == EOF);
+	CHECK(errno == EIO);
+	CHECK(ferror(stdout) != 0);
+}
+#endif
+
+/* [ENOSPC] "There was no free space remaining on the device containing
+ * the file." */
+#if 0 /* N/A: reachable only by filling the volume the scratch file lives
+       * on.  src/internal/errno.c does map STATUS_DISK_FULL to ENOSPC,
+       * so the path exists; a test that fills a disk to prove it is not
+       * one this suite can run. */
+static void test_puts_enospc(void)
+{
+	errno = 0;
+	CHECK(puts("no space") == EOF);
+	CHECK(errno == ENOSPC);
+	CHECK(ferror(stdout) != 0);
+}
+#endif
+
+/* fputc.html ERRORS, may fail: "[ENOMEM] Insufficient storage space is
+ * available."  and "[ENXIO] A request was made of a nonexistent device,
+ * or the request was outside the capabilities of the device." */
+#if 0 /* N/A: both are "may fail", and neither is producible on demand --
+       * ENOMEM would need the buffer allocation in __ensure_buf() to
+       * fail, and ENXIO a device that answers STATUS_NO_SUCH_DEVICE to a
+       * write on an already-open handle. */
+static void test_puts_may_fail(void)
+{
+	errno = 0;
+	CHECK(puts("out of memory") == EOF);
+	CHECK(errno == ENOMEM || errno == ENXIO);
+	CHECK(ferror(stdout) != 0);
+}
+#endif
+
+/* ================================================================= */
+/* scanf.html (fscanf page)                                           */
+/* ================================================================= */
+
+/* scanf.html DESCRIPTION: "The scanf() function shall be equivalent to
+ * fscanf() with the argument stdin interposed before the arguments to
+ * scanf()."  Every assertion here therefore drives stdin, redirected
+ * with freopen() at the file the caller staged. */
+static void test_scanf_basics(const char *name)
+{
+	int a = 0, b = 0, n = -1;
+	char s[32];
+	double d = 0;
+
+	CHECK(write_file(name, "12 34 hello 2.5xy\n") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+
+	/* RETURN VALUE: "the number of successfully matched and assigned
+	 * input items". */
+	CHECK(scanf("%d %d", &a, &b) == 2);
+	CHECK(a == 12 && b == 34);
+
+	CHECK(scanf("%31s", s) == 1);
+	CHECK(!strcmp(s, "hello"));
+
+	/* "%n ... No input is consumed", and it never counts toward the
+	 * return value -- one item assigned, not two. */
+	CHECK(scanf("%lf%n", &d, &n) == 1);
+	CHECK(d == 2.5);
+	/* nine bytes consumed so far this call: " 2.5" is four, and the
+	 * leading white space the %lf directive skipped is part of what
+	 * "the number of bytes read from the input so far by this call"
+	 * counts.  Assert only that %n was written and is the length of
+	 * what this call actually took. */
+	CHECK(n == 4);
+}
+
+/* RETURN VALUE: "this number can be zero in the event of an early
+ * matching failure", and "If the input ends before the first conversion
+ * (if any) has completed, and without a matching failure having
+ * occurred, EOF shall be returned." */
+static void test_scanf_returns(const char *name)
+{
+	int a = -1, b = -1;
+
+	CHECK(write_file(name, "zzz") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	/* matching failure on the very first conversion -> 0, not EOF */
+	CHECK(scanf("%d", &a) == 0);
+	CHECK(a == -1);
+
+	CHECK(write_file(name, "") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	/* input ends before the first conversion completes -> EOF */
+	CHECK(scanf("%d", &a) == EOF);
+
+	CHECK(write_file(name, "7") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	/* the first conversion completed, so the second one hitting EOF
+	 * does not turn the result into EOF */
+	CHECK(scanf("%d %d", &a, &b) == 1);
+	CHECK(a == 7);
+
+	/* the assignment-suppressing '*': "the conversion ... is not
+	 * assigned to any argument" and such an item is not counted */
+	CHECK(write_file(name, "8 9") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%*d %d", &b) == 1);
+	CHECK(b == 9);
+
+	/* a directive that is ordinary text must match itself, and a
+	 * mismatch is a matching failure that stops the whole call */
+	CHECK(write_file(name, "k=5") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	a = -1;
+	CHECK(scanf("j=%d", &a) == 0);
+	CHECK(a == -1);
+}
+
+/* scanf.html ERRORS: "For the conditions under which the fscanf()
+ * functions fail and may fail, refer to fgetc()."  fgetc.html ERRORS,
+ * shall fail: "[EBADF] The file descriptor underlying stream is not a
+ * valid file descriptor open for reading."  RETURN VALUE: an input
+ * failure before any conversion completes is EOF. */
+static void test_scanf_ebadf(const char *name)
+{
+	int a = -1;
+
+	if (!freopen(name, "wb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%d", &a) == EOF);
+	CHECK(errno == EBADF);
+	CHECK(ferror(stdin) != 0);
+	clearerr(stdin);
+}
+
+/* scanf.html ERRORS, shall fail: "[ENOMEM] Insufficient storage space is
+ * available."  The only conversion that allocates is the 'm'
+ * assignment-allocation character, which this implementation does not
+ * have; src/stdio/scanf.c's scandrain() comment states the position
+ * outright -- "scanf has no channel for ENOMEM, so this becomes a
+ * matching failure". */
+#if 0 /* BUG: fscanf.html's conversion syntax includes the optional
+       * assignment-allocation character 'm' for the s, c and [
+       * conversions -- "the corresponding argument shall be of type
+       * char ** ... the function shall allocate a buffer" -- and
+       * src/stdio/scanf.c does not implement it: 'm' is not one of the
+       * length modifiers its parser accepts, so "%ms" falls through
+       * switch(*p) to `default: break`, silently consuming nothing,
+       * assigning nothing, and reporting neither a matching failure nor
+       * an error.  With no allocating conversion there is also no
+       * situation in which the required [ENOMEM] can be reported. */
+static void test_scanf_enomem(const char *name)
+{
+	char *p = 0;
+	CHECK(write_file(name, "allocated") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%ms", &p) == 1);
+	CHECK(p != 0 && !strcmp(p, "allocated"));
+	free(p);
+}
+#endif
+
+/* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does not
+ * form a valid character." */
+#if 0 /* BUG: the l (ell) length modifier is parsed but then ignored by
+       * the s, c and [ conversions -- src/stdio/scanf.c's `case 's':`
+       * does `char *s = va_arg(ap, char *)` and stores raw bytes
+       * regardless of lm, so "%ls" writes bytes into a wchar_t buffer
+       * instead of converting the multibyte sequence.  fscanf.html
+       * requires "%ls" to convert the input to a sequence of wide
+       * characters "as if by repeated calls to mbrtowc()", and it is
+       * exactly that conversion failing that raises [EILSEQ]; with no
+       * conversion at all, the error can never be produced. */
+static void test_scanf_eilseq(const char *name)
+{
+	wchar_t w[8];
+	/* a lone 0x80 continuation byte is not a valid character in any
+	 * multibyte encoding this library supports */
+	CHECK(write_file(name, "\x80\x80") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%7ls", w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(ferror(stdin) != 0);
+}
+#endif
+
+/* scanf.html ERRORS, may fail: "[EINVAL] There are insufficient
+ * arguments." */
+#if 0 /* N/A: "may fail", and undetectable in principle here -- a
+       * variadic callee cannot count the arguments it was handed, and
+       * this implementation reads each one with va_arg() as the format
+       * demands it.  Passing too few is undefined behaviour at the call
+       * site; the assertion below is what a checking implementation
+       * would have to make true, and no C implementation on this target
+       * can. */
+static void test_scanf_einval(const char *name)
+{
+	int a;
+	CHECK(write_file(name, "1 2") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%d %d", &a) == EOF);
+	CHECK(errno == EINVAL);
+}
+#endif
+
+/* fgetc.html ERRORS, shall fail: "[EOVERFLOW] The file is a regular file
+ * and an attempt was made to read at or beyond the offset maximum
+ * associated with the corresponding stream."  Also [EAGAIN], [EINTR],
+ * [EIO], and may-fail [ENOMEM]/[ENXIO] -- the same list, and for the
+ * same reasons, as the puts() fences above. */
+#if 0 /* N/A: same mechanisms as the fputc fences above -- no
+       * O_NONBLOCK on a file descriptor (EAGAIN), no signal that can
+       * interrupt a non-alertable NtReadFile (EINTR), no controlling
+       * terminal (EIO), and no way to demand ENOMEM/ENXIO.  EOVERFLOW is
+       * the one with a real mechanism (seek stdin past the off_t
+       * maximum), and it is UNIMPL rather than N/A: src/unistd/read.c
+       * has no offset-maximum check, so the read would report whatever
+       * NT says instead. */
+static void test_scanf_stream_errors(void)
+{
+	int a;
+	CHECK(lseek(0, OFF_MAX, SEEK_SET) == OFF_MAX);
+	errno = 0;
+	CHECK(scanf("%d", &a) == EOF);
+	CHECK(errno == EOVERFLOW);
+	CHECK(ferror(stdin) != 0);
+}
+#endif
+
+/* ================================================================= */
+/* renameat.html (rename page)                                        */
+/* ================================================================= */
+
+static int exists(const char *p)
+{
+	struct stat st;
+	return stat(p, &st) == 0;
+}
+
+/* renameat.html DESCRIPTION: "The renameat() function shall be
+ * equivalent to the rename() function except in the case where either
+ * old or new specifies a relative path.  If old is a relative path, the
+ * file to be renamed is located relative to the directory associated
+ * with the file descriptor oldfd... If renameat() is passed the special
+ * value AT_FDCWD in the oldfd or newfd parameter, the current working
+ * directory shall be used."  RETURN VALUE: "Upon successful completion,
+ * [it] shall return 0.  Otherwise, it shall return -1". */
+static void test_renameat_success(void)
+{
+	int dfd;
+
+	CHECK(mkdir("ren.d", 0755) == 0);
+	CHECK(write_file("ren.d/a", "one") == 0);
+
+	/* AT_FDCWD in both positions is plain rename() */
+	CHECK(renameat(AT_FDCWD, "ren.d/a", AT_FDCWD, "ren.d/b") == 0);
+	CHECK(!exists("ren.d/a"));
+	CHECK(exists("ren.d/b"));
+
+	dfd = open("ren.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd >= 0) {
+		/* old relative to the descriptor, new relative to the cwd --
+		 * the two base directories are independent */
+		CHECK(renameat(dfd, "b", AT_FDCWD, "ren.d/e") == 0);
+		CHECK(!exists("ren.d/b"));
+		CHECK(exists("ren.d/e"));
+		CHECK(close(dfd) == 0);
+	}
+
+	/* DESCRIPTION: "If the link named by the new argument exists, it
+	 * shall be removed and old renamed to new." */
+	CHECK(write_file("ren.d/f", "victim") == 0);
+	CHECK(renameat(AT_FDCWD, "ren.d/e", AT_FDCWD, "ren.d/f") == 0);
+	CHECK(!exists("ren.d/e"));
+	{
+		char buf[16];
+		CHECK(slurp("ren.d/f", buf, sizeof buf) == 3);
+		CHECK(!strcmp(buf, "one"));
+	}
+
+	CHECK(unlink("ren.d/f") == 0);
+}
+
+/* rename.html DESCRIPTION, the directory case: "If the directory named
+ * by the new argument exists, it shall be removed and old renamed to
+ * new... The new argument shall not name any directory other than an
+ * empty directory." -- an EMPTY directory at new must be removed and
+ * replaced, not refused. */
+#if 0 /* BUG, on two counts.  NT's FileRenameInformation[Ex] will not
+       * replace an existing directory even with
+       * FILE_RENAME_REPLACE_IF_EXISTS, so the call comes back
+       * STATUS_ACCESS_DENIED; src/stdio/misc.c then reaches its
+       * EISDIR/ENOTEMPTY disambiguation, sees that new is a directory
+       * and that old is one too, and reports ENOTEMPTY -- without ever
+       * asking whether new is in fact empty.  So (a) the rename fails
+       * where rename.html requires it to succeed, and (b) the errno it
+       * fails with names a condition ("that is not an empty directory")
+       * that is not the one present.  Observed: -1 / ENOTEMPTY against
+       * a freshly created, empty ren.d/h.  Implementable: enumerate new
+       * and, if it is empty, remove it and retry the rename. */
+static void test_renameat_dir_over_empty_dir(void)
+{
+	CHECK(mkdir("ren.d/g", 0755) == 0);
+	CHECK(mkdir("ren.d/h", 0755) == 0);
+	CHECK(renameat(AT_FDCWD, "ren.d/g", AT_FDCWD, "ren.d/h") == 0);
+	CHECK(!exists("ren.d/g"));
+	CHECK(exists("ren.d/h"));
+	CHECK(rmdir("ren.d/h") == 0);
+}
+#endif
+
+/* renameat.html ERRORS, shall fail. */
+static void test_renameat_errors(void)
+{
+	int dfd, ffd;
+
+	CHECK(write_file("ren.d/x", "x") == 0);
+
+	/* "[EBADF] The old argument does not specify an absolute path and
+	 * the oldfd argument is ... neither AT_FDCWD nor a valid file
+	 * descriptor open for reading or searching, [or the same for new /
+	 * newfd]." */
+	errno = 0;
+	CHECK(renameat(9999, "x", AT_FDCWD, "ren.d/y") == -1);
+	CHECK(errno == EBADF);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x", 9999, "y") == -1);
+	CHECK(errno == EBADF);
+	CHECK(exists("ren.d/x"));
+
+	/* "[ENOTDIR] ... the old argument is not an absolute path and oldfd
+	 * is a file descriptor associated with a non-directory file", and
+	 * the same for new/newfd. */
+	ffd = open("ren.d/x", O_RDONLY);
+	CHECK(ffd >= 0);
+	if (ffd >= 0) {
+		errno = 0;
+		CHECK(renameat(ffd, "x", AT_FDCWD, "ren.d/y") == -1);
+		CHECK(errno == ENOTDIR);
+		errno = 0;
+		CHECK(renameat(AT_FDCWD, "ren.d/x", ffd, "y") == -1);
+		CHECK(errno == ENOTDIR);
+		CHECK(close(ffd) == 0);
+	}
+
+	/* "[ENOENT] The link named by the old argument does not name an
+	 * existing file, [or] a component of the path prefix of new does
+	 * not exist..." */
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/nope", AT_FDCWD, "ren.d/y") == -1);
+	CHECK(errno == ENOENT);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x", AT_FDCWD, "ren.d/nodir/y") == -1);
+	CHECK(errno == ENOENT);
+
+	/* "[ENOTDIR] ... a component of either path prefix is not a
+	 * directory". */
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x/under", AT_FDCWD, "ren.d/y") == -1);
+	CHECK(errno == ENOTDIR);
+
+	/* "[EISDIR] The new argument names an existing directory, [and] old
+	 * names a file that is not a directory." */
+	CHECK(mkdir("ren.d/dir", 0755) == 0);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x", AT_FDCWD, "ren.d/dir") == -1);
+	CHECK(errno == EISDIR);
+	CHECK(exists("ren.d/x"));
+
+	/* "[EEXIST] or [ENOTEMPTY] The link named by new is a directory
+	 * that is not an empty directory." */
+	CHECK(mkdir("ren.d/src", 0755) == 0);
+	CHECK(write_file("ren.d/dir/inhabitant", "z") == 0);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/src", AT_FDCWD, "ren.d/dir") == -1);
+	CHECK(errno == ENOTEMPTY || errno == EEXIST);
+	CHECK(exists("ren.d/src"));
+	CHECK(unlink("ren.d/dir/inhabitant") == 0);
+	CHECK(rmdir("ren.d/dir") == 0);
+	CHECK(rmdir("ren.d/src") == 0);
+
+	/* "[ENOENT] ... or either old or new points to an empty string."
+	 * (the AT_FDCWD half; see the fence below for a real dirfd) */
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "", AT_FDCWD, "ren.d/y") == -1);
+	CHECK(errno == ENOENT);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x", AT_FDCWD, "") == -1);
+	CHECK(errno == ENOENT);
+	CHECK(exists("ren.d/x"));
+
+	dfd = open("ren.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd >= 0) CHECK(close(dfd) == 0);
+	CHECK(unlink("ren.d/x") == 0);
+}
+
+/* "[ENOTDIR] ... or the old argument names a directory and the new
+ * argument names a non-directory file." */
+#if 0 /* BUG -- SILENT DATA LOSS.  This is the most serious defect this
+       * audit found, and it is worth stating in those words: a fully
+       * conforming rename() / renameat() call that POSIX requires to
+       * FAIL instead SUCCEEDS and destroys the caller's file, with no
+       * error, no diagnostic and no way for the caller to know.
+       *
+       * NT's FileRenameInformationEx with FILE_RENAME_REPLACE_IF_EXISTS
+       * happily renames a directory over an existing regular file, and
+       * src/stdio/misc.c never checks the two objects' types against
+       * each other.  The call returns 0, the regular file is gone, and
+       * the name now refers to the directory.
+       *
+       * rename.html ERRORS requires [ENOTDIR] for exactly this case
+       * ("the old argument names a directory and the new argument names
+       * a non-directory file"), and RETURN VALUE requires that when the
+       * call fails "neither the file named by old nor the file named by
+       * new shall be changed or created".  Both are violated: the wrong
+       * status AND the destruction.
+       *
+       * Verified against this tree at the commit that added this file:
+       * the rename returned 0, and stat() on the victim's name then
+       * reported S_ISDIR.
+       *
+       * The fix belongs in src/stdio/misc.c's renameat(), which already
+       * queries FileBasicInformation on both objects for its
+       * EISDIR/ENOTEMPTY disambiguation -- it needs the same query
+       * BEFORE the rename, not only after a STATUS_ACCESS_DENIED, and
+       * must reject old_isdir && !new_isdir with ENOTDIR.
+       *
+       * Note the mirror case, a non-directory onto an existing
+       * directory, IS handled -- test_renameat_errors() asserts the
+       * [EISDIR] for it unfenced.  Only this direction is unguarded. */
+static void test_renameat_enotdir_dir_over_file(void)
+{
+	struct stat st;
+	CHECK(mkdir("ren.d/sd", 0755) == 0);
+	CHECK(write_file("ren.d/victim", "v") == 0);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/sd", AT_FDCWD, "ren.d/victim") == -1);
+	CHECK(errno == ENOTDIR);
+	CHECK(exists("ren.d/sd"));
+	CHECK(stat("ren.d/victim", &st) == 0 && !S_ISDIR(st.st_mode));
+	CHECK(rmdir("ren.d/sd") == 0);
+	CHECK(unlink("ren.d/victim") == 0);
+}
+#endif
+
+/* renameat.html DESCRIPTION: "If new is a relative path, the file is
+ * located relative to the directory associated with the file descriptor
+ * newfd instead of the current working directory." */
+#if 0 /* BUG: renameat() ignores newfd ENTIRELY.  Half of what
+       * distinguishes renameat() from rename() does not work at all --
+       * not an edge case, the principal feature.
+       *
+       * src/stdio/misc.c builds the FILE_RENAME_INFORMATION for the
+       * destination with `ri->RootDirectory = 0` unconditionally, while
+       * __ntpath_at(newdirfd, ...) returns a name that is *relative* to
+       * that descriptor's handle (it puts the handle in
+       * out->oa.RootDirectory and leaves the name unqualified).  NT then
+       * resolves the bare relative name against nothing, so every
+       * renameat() whose new path is relative to a real descriptor fails
+       * with STATUS_OBJECT_NAME_NOT_FOUND -> ENOENT, whatever the
+       * destination directory contains.  Only the old side of
+       * renameat() honours its descriptor today.
+       *
+       * A consequence worth knowing when reading the unfenced
+       * [EBADF]/[ENOTDIR] assertions for newfd in
+       * test_renameat_errors(): those pass for the right reason
+       * (__ntpath_at rejects a bad descriptor before the rename is
+       * attempted) but they cannot distinguish this defect, because a
+       * GOOD descriptor is then thrown away.
+       *
+       * THE FIX IS ONE LINE, in src/stdio/misc.c's renameat(), right
+       * where ri->RootDirectory is assigned:
+       *
+       *     ri->RootDirectory = np.oa.RootDirectory;
+       *
+       * (np.oa.RootDirectory is 0 for an absolute or AT_FDCWD path, so
+       * this is strictly a superset of today's behaviour.)  Left as a
+       * fence rather than applied because a fix needs its own review;
+       * the remedy is recorded here so it does not have to be
+       * rediscovered. */
+static void test_renameat_new_relative_to_dirfd(void)
+{
+	int dfd;
+	CHECK(mkdir("ren.d/nd", 0755) == 0);
+	CHECK(write_file("ren.d/nd/a", "one") == 0);
+	dfd = open("ren.d/nd", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd < 0) return;
+	/* new relative to the descriptor, old relative to the cwd */
+	CHECK(renameat(AT_FDCWD, "ren.d/nd/a", dfd, "b") == 0);
+	CHECK(exists("ren.d/nd/b"));
+	/* both relative to the descriptor */
+	CHECK(renameat(dfd, "b", dfd, "c") == 0);
+	CHECK(!exists("ren.d/nd/b"));
+	CHECK(exists("ren.d/nd/c"));
+	CHECK(close(dfd) == 0);
+	CHECK(unlink("ren.d/nd/c") == 0);
+	CHECK(rmdir("ren.d/nd") == 0);
+}
+#endif
+
+/* "[ENOENT] ... or either old or new points to an empty string." --
+ * the AT_FDCWD form of this holds and is asserted unfenced above; the
+ * form with a real directory descriptor does not. */
+#if 0 /* BUG: src/internal/path.c's __ntpath_at() treats an empty
+       * relative name as naming the descriptor's directory itself ("An
+       * empty name (\"\") opens the directory itself"), so
+       * renameat(dfd, "", ...) tries to rename that directory rather
+       * than failing.  Observed: it comes back EINVAL from NT, not the
+       * [ENOENT] rename.html requires. */
+static void test_renameat_empty_at_dirfd(void)
+{
+	int dfd;
+	CHECK(write_file("ren.d/x", "x") == 0);
+	dfd = open("ren.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd < 0) return;
+	errno = 0;
+	CHECK(renameat(dfd, "", AT_FDCWD, "ren.d/y") == -1);
+	CHECK(errno == ENOENT);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x", dfd, "") == -1);
+	CHECK(errno == ENOENT);
+	CHECK(close(dfd) == 0);
+	CHECK(unlink("ren.d/x") == 0);
+}
+#endif
+
+/* "[EINVAL] The old pathname names an ancestor directory of the new
+ * pathname, or either pathname argument contains a final component that
+ * is dot or dot-dot." */
+#if 0 /* BUG: neither clause is checked.  src/stdio/misc.c's renameat()
+       * hands both paths straight to __ntpath_at() and then to
+       * NtSetInformationFile(FileRenameInformationEx); nothing anywhere
+       * inspects the final component for "." or "..", and nothing tests
+       * whether old is a prefix of new.  NT answers the ancestor case
+       * with STATUS_ACCESS_DENIED or STATUS_SHARING_VIOLATION, which
+       * __set_errno_status maps to EACCES/EBUSY, and the dot case with
+       * whatever the object manager makes of it -- never EINVAL. */
+static void test_renameat_einval(void)
+{
+	CHECK(mkdir("ren.d/anc", 0755) == 0);
+	CHECK(mkdir("ren.d/anc/inner", 0755) == 0);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/anc", AT_FDCWD, "ren.d/anc/inner/deep") == -1);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/anc/.", AT_FDCWD, "ren.d/other") == -1);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/anc/inner/..", AT_FDCWD, "ren.d/other") == -1);
+	CHECK(errno == EINVAL);
+	CHECK(rmdir("ren.d/anc/inner") == 0);
+	CHECK(rmdir("ren.d/anc") == 0);
+}
+#endif
+
+/* "[EACCES] A component of either path prefix denies search permission;
+ * or one of the directories containing old or new denies write
+ * permissions", "[EPERM] or [EACCES] The S_ISVTX flag is set on the
+ * directory containing the file...", and "[EROFS] The requested
+ * operation requires writing in a directory on a read-only file
+ * system." */
+#if 0 /* N/A: this library has no POSIX permission model to deny with --
+       * src/stat/chmod.c states it outright ("chmod can only express one
+       * thing on NTFS: whether the file is read-only"), there is no
+       * S_ISVTX behaviour anywhere, and mounting a read-only volume is
+       * not something the test suite can arrange.  A directory's NTFS
+       * read-only attribute does not stop renames within it. */
+static void test_renameat_eacces(void)
+{
+	CHECK(mkdir("ren.d/ro", 0755) == 0);
+	CHECK(write_file("ren.d/ro/f", "f") == 0);
+	CHECK(chmod("ren.d/ro", 0500) == 0);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/ro/f", AT_FDCWD, "ren.d/ro/g") == -1);
+	CHECK(errno == EACCES || errno == EPERM || errno == EROFS);
+}
+#endif
+
+/* "[EBUSY] The directory named by old or new is currently in use by the
+ * system or another process, and the implementation considers this an
+ * error." */
+#if 0 /* N/A: NT does report a rename of a directory that is some
+       * process's current directory as STATUS_ACCESS_DENIED /
+       * STATUS_SHARING_VIOLATION rather than anything that maps to
+       * EBUSY, and the clause is conditioned on "the implementation
+       * considers this an error" -- it is optional even where the
+       * mechanism exists. */
+static void test_renameat_ebusy(void)
+{
+	CHECK(mkdir("ren.d/busy", 0755) == 0);
+	CHECK(chdir("ren.d/busy") == 0);
+	CHECK(chdir("..") == 0);
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "busy", AT_FDCWD, "moved") == -1);
+	CHECK(errno == EBUSY);
+}
+#endif
+
+/* "[EIO] A physical I/O error has occurred", "[EMLINK] The file named by
+ * old is a directory, and the link count of the parent directory of new
+ * would exceed {LINK_MAX}", "[ENAMETOOLONG] The length of a component of
+ * a pathname is longer than {NAME_MAX}", "[ENOSPC] The directory that
+ * would contain new cannot be extended", "[ELOOP] A loop exists in
+ * symbolic links...", "[EXDEV] The links named by new and old are on
+ * different file systems..." */
+#if 0 /* N/A / UNIMPL mix, one line each:
+       * EIO   -- not provocable on demand (N/A).
+       * EMLINK -- NTFS directories have no link count that renames
+       *           increment; there is no {LINK_MAX} to exceed (N/A).
+       * ENOSPC -- would require filling the volume (N/A).
+       * ELOOP  -- NT resolves reparse points itself and answers
+       *           STATUS_REPARSE_POINT_NOT_RESOLVED, which
+       *           src/internal/errno.c does map to ELOOP; building a
+       *           symlink loop needs SeCreateSymbolicLinkPrivilege,
+       *           which the test environment does not have (N/A here).
+       * ENAMETOOLONG -- reachable and mapped: __ntpath_at() returns it
+       *           for a name past __US_MAX_WCHARS.  Left fenced only
+       *           because the clause is about a single *component*
+       *           exceeding {NAME_MAX}, and this implementation's check
+       *           is on the whole path's length instead (UNIMPL).
+       * EXDEV  -- src/stdio/misc.c does translate STATUS_NOT_SAME_DEVICE
+       *           to EXDEV; a second writable volume is not something
+       *           this suite can assume (N/A here). */
+static void test_renameat_misc_errors(void)
+{
+	char big[8192];
+	memset(big, 'n', sizeof big - 1);
+	big[sizeof big - 1] = 0;
+	errno = 0;
+	CHECK(renameat(AT_FDCWD, "ren.d/x", AT_FDCWD, big) == -1);
+	CHECK(errno == ENAMETOOLONG);
+}
+#endif
+
+/* ================================================================= */
+/* fchmodat.html (chmod page)                                         */
+/* ================================================================= */
+
+static mode_t mode_of(const char *p)
+{
+	struct stat st;
+	if (stat(p, &st) != 0) return (mode_t)-1;
+	return st.st_mode & 0777;
+}
+
+/* fchmodat.html DESCRIPTION: "The fchmodat() function shall be
+ * equivalent to the chmod() function except in the case where path
+ * specifies a relative path... If fchmodat() is passed the special value
+ * AT_FDCWD in the fd parameter, the current working directory shall be
+ * used and, if flag is zero, the behavior shall be identical to a call
+ * to chmod()."  RETURN VALUE: 0 on success, otherwise -1 "and no change
+ * to the file mode occurs".
+ *
+ * NTFS carries one bit of what POSIX calls a mode -- read-only or not
+ * (src/stat/chmod.c) -- so the observable contract is the write bits.
+ * Everything asserted here is about those. */
+static void test_fchmodat_success(void)
+{
+	int dfd;
+
+	CHECK(mkdir("chm.d", 0755) == 0);
+	CHECK(write_file("chm.d/f", "f") == 0);
+
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0444, 0) == 0);
+	CHECK(!(mode_of("chm.d/f") & 0222));
+	/* identical to chmod() for AT_FDCWD with a zero flag */
+	CHECK(chmod("chm.d/f", 0644) == 0);
+	CHECK(mode_of("chm.d/f") & 0222);
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, 0) == 0);
+	CHECK(mode_of("chm.d/f") & 0222);
+
+	dfd = open("chm.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd >= 0) {
+		/* relative to the descriptor */
+		CHECK(fchmodat(dfd, "f", 0444, 0) == 0);
+		CHECK(!(mode_of("chm.d/f") & 0222));
+		CHECK(fchmodat(dfd, "f", 0644, 0) == 0);
+		CHECK(mode_of("chm.d/f") & 0222);
+		CHECK(close(dfd) == 0);
+	}
+
+	/* AT_SYMLINK_NOFOLLOW on something that is not a symbolic link is
+	 * simply the file itself -- "If path names a symbolic link, then
+	 * the mode of the symbolic link is changed" says nothing else
+	 * about a regular file. */
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0444, AT_SYMLINK_NOFOLLOW) == 0);
+	CHECK(!(mode_of("chm.d/f") & 0222));
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, AT_SYMLINK_NOFOLLOW) == 0);
+	CHECK(mode_of("chm.d/f") & 0222);
+
+	/* a directory is a legal target too */
+	CHECK(fchmodat(AT_FDCWD, "chm.d", 0555, 0) == 0);
+	CHECK(fchmodat(AT_FDCWD, "chm.d", 0755, 0) == 0);
+	CHECK(mode_of("chm.d") & 0222);
+}
+
+/* fchmodat.html ERRORS, shall fail. */
+static void test_fchmodat_errors(void)
+{
+	int ffd;
+	mode_t before;
+
+	/* "[EBADF] The path argument does not specify an absolute path and
+	 * the fd argument is neither AT_FDCWD nor a valid file descriptor
+	 * open for reading or searching." */
+	before = mode_of("chm.d/f");
+	errno = 0;
+	CHECK(fchmodat(9999, "f", 0444, 0) == -1);
+	CHECK(errno == EBADF);
+	/* "If -1 is returned, no change to the file mode occurs." */
+	CHECK(mode_of("chm.d/f") == before);
+
+	/* "[ENOTDIR] The path argument is not an absolute path and fd is a
+	 * file descriptor associated with a non-directory file." */
+	ffd = open("chm.d/f", O_RDONLY);
+	CHECK(ffd >= 0);
+	if (ffd >= 0) {
+		errno = 0;
+		CHECK(fchmodat(ffd, "f", 0444, 0) == -1);
+		CHECK(errno == ENOTDIR);
+		CHECK(close(ffd) == 0);
+	}
+
+	/* "[ENOENT] A component of path does not name an existing file or
+	 * path is an empty string." (the non-empty half; see the fence
+	 * below for the empty string) */
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "chm.d/absent", 0444, 0) == -1);
+	CHECK(errno == ENOENT);
+
+	/* "[ENOTDIR] A component of the path prefix names an existing file
+	 * that is neither a directory nor a symbolic link to a directory."
+	 */
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f/under", 0444, 0) == -1);
+	CHECK(errno == ENOTDIR);
+
+	CHECK(mode_of("chm.d/f") == before);
+}
+
+/* "[ENOENT] A component of path does not name an existing file or path
+ * is an empty string." -- the AT_FDCWD form holds. */
+static void test_fchmodat_empty(void)
+{
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "", 0444, 0) == -1);
+	CHECK(errno == ENOENT);
+}
+
+/* The same clause, with a real directory descriptor. */
+#if 0 /* BUG: __ntpath_at() documents an empty relative name as "opens
+       * the directory itself", so fchmodat(dfd, "", mode, 0) silently
+       * changes the mode of the descriptor's own directory and returns
+       * 0 where chmod.html requires [ENOENT].  Observed against this
+       * tree: return 0, errno untouched. */
+static void test_fchmodat_empty_at_dirfd(void)
+{
+	int dfd = open("chm.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd < 0) return;
+	errno = 0;
+	CHECK(fchmodat(dfd, "", 0444, 0) == -1);
+	CHECK(errno == ENOENT);
+	CHECK(close(dfd) == 0);
+}
+#endif
+
+/* XBD 4.13 Pathname Resolution, which chmod.html's DESCRIPTION invokes
+ * for path: a component of "dot" "refers to the directory specified by
+ * its predecessor".  A relative path containing one, resolved against a
+ * directory descriptor, must therefore work. */
+#if 0 /* BUG -- IN SHARED PATH MACHINERY, NOT IN fchmodat().  This one
+       * defect reaches EVERY *at() entry point this library ships.  It
+       * is fenced once, here, to avoid a dozen identical copies; the
+       * affected functions are named in full so that a reader arriving
+       * from any of them finds it:
+       *
+       *     openat (via __open_handle), faccessat (via fstatat),
+       *     fstatat, unlinkat and rmdir (via __unlink_at), linkat,
+       *     symlinkat, readlinkat, mkdirat, renameat, fchmodat,
+       *     utimensat, and nftw()'s directory walk
+       *
+       * -- every caller of __ntpath_at() in src/, checked by grep at
+       * the commit that added this file.  (fchownat and mknodat/
+       * mkfifoat are stubs that never build a path, so they are not
+       * affected.)  See
+       * test/POSIX-COVERAGE.md group R, "Observed behaviour worth
+       * recording", which carries the same list so it is discoverable
+       * from the ledger rather than only from this file.
+       *
+       * src/internal/path.c's __ntpath_at() special-cases a path that is
+       * exactly "." (n == 1 && w[0] == '.') and otherwise hands the name
+       * to the NT object manager unchanged.  The object manager does not
+       * implement dot components in a RootDirectory-relative name, so
+       * fchmodat(dfd, "./f", ...) fails with ENOENT while
+       * fchmodat(dfd, "f", ...) on the same file succeeds.  XBD 4.13
+       * Pathname Resolution, which every one of those pages invokes,
+       * requires the two to be identical.
+       *
+       * Note that this affects only the RootDirectory-relative branch:
+       * an AT_FDCWD or absolute path goes through __ntpath(), which does
+       * the DOS->NT conversion and handles dot components correctly.
+       * That asymmetry is why it survives -- the common case works. */
+static void test_fchmodat_dot_component(void)
+{
+	int dfd = open("chm.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd < 0) return;
+	CHECK(fchmodat(dfd, "./f", 0444, 0) == 0);
+	CHECK(!(mode_of("chm.d/f") & 0222));
+	CHECK(fchmodat(dfd, "./f", 0644, 0) == 0);
+	CHECK(mode_of("chm.d/f") & 0222);
+	CHECK(close(dfd) == 0);
+}
+#endif
+
+/* "[EPERM] The effective user ID does not match the owner of the file
+ * and the process does not have appropriate privileges", "[EACCES] Search
+ * permission is denied on a component of the path prefix", "[EROFS] The
+ * named file resides on a read-only file system." */
+#if 0 /* N/A: there is no POSIX ownership or permission model here to
+       * violate.  src/stat/chmod.c goes out of its way in the other
+       * direction -- it retries the open with FILE_READ_ATTRIBUTES alone
+       * when Wine denies FILE_WRITE_ATTRIBUTES on an already-read-only
+       * file, precisely so that "the owner of a file may always change
+       * the permission of the file" holds.  A read-only volume is not
+       * arrangeable from the suite. */
+static void test_fchmodat_eperm(void)
+{
+	CHECK(mkdir("chm.d/noexec", 0755) == 0);
+	CHECK(write_file("chm.d/noexec/g", "g") == 0);
+	CHECK(chmod("chm.d/noexec", 0000) == 0);
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "chm.d/noexec/g", 0444, 0) == -1);
+	CHECK(errno == EACCES || errno == EPERM || errno == EROFS);
+}
+#endif
+
+/* "[ELOOP] A loop exists in symbolic links encountered during
+ * resolution of the path argument", and may fail "[ELOOP] More than
+ * {SYMLOOP_MAX} symbolic links were encountered during resolution of the
+ * path argument." */
+#if 0 /* N/A: creating a symbolic link on NT needs
+       * SeCreateSymbolicLinkPrivilege, which this suite's environment
+       * does not hold (and Wine's default prefix does not grant), so no
+       * loop can be built to resolve.  src/internal/errno.c does map
+       * STATUS_REPARSE_POINT_NOT_RESOLVED to ELOOP, so the report path
+       * exists. */
+static void test_fchmodat_eloop(void)
+{
+	CHECK(symlink("l2", "chm.d/l1") == 0);
+	CHECK(symlink("l1", "chm.d/l2") == 0);
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "chm.d/l1", 0444, 0) == -1);
+	CHECK(errno == ELOOP);
+}
+#endif
+
+/* "[ENAMETOOLONG] The length of a component of a pathname is longer than
+ * {NAME_MAX}." */
+#if 0 /* UNIMPL: __ntpath_at() does report ENAMETOOLONG, but for the
+       * whole path exceeding __US_MAX_WCHARS -- the length UNICODE_STRING
+       * can describe -- not for a single component exceeding {NAME_MAX}.
+       * A 300-byte component inside a short path is passed straight to
+       * NT, which answers STATUS_OBJECT_NAME_INVALID and comes back as
+       * something other than ENAMETOOLONG. */
+static void test_fchmodat_enametoolong(void)
+{
+	char comp[300];
+	memset(comp, 'c', sizeof comp - 1);
+	comp[sizeof comp - 1] = 0;
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, comp, 0444, 0) == -1);
+	CHECK(errno == ENAMETOOLONG);
+}
+#endif
+
+/* ERRORS, may fail: "[EINTR] A signal was caught during execution of the
+ * function", "[EINVAL] The value of the mode argument is invalid",
+ * "[EINVAL] The value of the flag argument is invalid." */
+#if 0 /* UNIMPL: all three are "may fail", so none of them is a spec
+       * violation as things stand -- but the flag one is worth naming.
+       * src/stat/chmod.c tests `flags & AT_SYMLINK_NOFOLLOW` and ignores
+       * every other bit, so fchmodat(fd, path, mode, 0x4000) silently
+       * succeeds where glibc reports EINVAL.  Implementable in one line;
+       * fenced rather than asserted because POSIX permits the current
+       * behaviour. */
+static void test_fchmodat_einval(void)
+{
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, 0x4000) == -1);
+	CHECK(errno == EINVAL);
+}
+#endif
+
+/* ================================================================= */
+/* sigwait.html                                                       */
+/* ================================================================= */
+
+/* sigwait.html is recorded in test/POSIX-GAP-ACCOUNTING.md under
+ * "Permanent degenerate stubs": src/signal/signal.c implements it as
+ *
+ *     int sigwait(const sigset_t *s, int *sig)
+ *     { (void)s; (void)sig; errno = EINVAL; return EINVAL; }
+ *
+ * This pins that down as the observed behaviour, so a change to it is
+ * visible, and states what the specification actually requires in the
+ * fenced block below.  Note that returning the error number AND setting
+ * errno is itself outside the contract -- RETURN VALUE: "Upon successful
+ * completion, sigwait() shall store the signal number of the received
+ * signal at the location referenced by sig and return zero.  Otherwise,
+ * an error number shall be returned to indicate the error" -- sigwait()
+ * reports through its return value, not through errno. */
+static void test_sigwait_stub(void)
+{
+	sigset_t set;
+	int sig = -1;
+
+	CHECK(sigemptyset(&set) == 0);
+	CHECK(sigaddset(&set, SIGUSR1) == 0);
+	/* Degenerate stub: fails for every argument, including a set that
+	 * is perfectly valid, and never stores a signal number. */
+	CHECK(sigwait(&set, &sig) == EINVAL);
+	CHECK(sig == -1);
+	/* and again with the set it would be entitled to reject */
+	CHECK(sigemptyset(&set) == 0);
+	CHECK(sigwait(&set, &sig) == EINVAL);
+}
+
+/* sigwait.html DESCRIPTION: "The sigwait() function shall select a
+ * pending signal from set, atomically clear it from the system's set of
+ * pending signals, and return that signal number in the location
+ * referenced by sig.  If prior to the call to sigwait() there are
+ * multiple pending instances of a single signal number, it is
+ * implementation-defined whether upon successful return there are any
+ * remaining pending signals for that signal number.  ... If no signal in
+ * set is pending at the time of the call, the thread shall be suspended
+ * until one or more becomes pending."  ERRORS, shall fail: "[EINVAL] The
+ * set argument contains an invalid or unsupported signal number." */
+#if 0 /* UNIMPL: src/signal/signal.c's sigwait() is a one-line stub that
+       * returns EINVAL unconditionally.  Nothing about selecting a
+       * pending signal, clearing it, or suspending the thread is
+       * implemented, and the mechanism to implement it does exist here
+       * -- sigpending() already reports the pending set and
+       * sigprocmask() already delivers on unblock (both in the same
+       * file), so a sigwait() that consults `pending` and clears the
+       * chosen bit is writable.  This is a genuine gap, not a platform
+       * limitation. */
+static void test_sigwait_spec(void)
+{
+	sigset_t set, old, bad;
+	int sig = -1;
+
+	CHECK(sigemptyset(&set) == 0);
+	CHECK(sigaddset(&set, SIGUSR1) == 0);
+	/* "the signals ... shall have been blocked" is the application's
+	 * obligation; block SIGUSR1 so raising it leaves it pending */
+	CHECK(sigprocmask(SIG_BLOCK, &set, &old) == 0);
+	CHECK(raise(SIGUSR1) == 0);
+	/* selects the pending signal, returns zero, stores the number */
+	CHECK(sigwait(&set, &sig) == 0);
+	CHECK(sig == SIGUSR1);
+	/* "atomically clear it from the system's set of pending signals" */
+	CHECK(sigpending(&bad) == 0);
+	CHECK(sigismember(&bad, SIGUSR1) == 0);
+	CHECK(sigprocmask(SIG_SETMASK, &old, 0) == 0);
+
+	/* "[EINVAL] The set argument contains an invalid or unsupported
+	 * signal number." -- reported through the return value, with errno
+	 * left alone. */
+	CHECK(sigemptyset(&bad) == 0);
+	bad.__bits[0] = ~0UL;   /* every bit, valid signal numbers or not */
+	errno = 0;
+	CHECK(sigwait(&bad, &sig) == EINVAL);
+	CHECK(errno == 0);
+}
+#endif
+
+/* ================================================================= */
+/* psignal.html                                                       */
+/* ================================================================= */
+
+/* psignal.html DESCRIPTION: "The psiginfo() and psignal() functions
+ * shall write a language-dependent message associated with a signal
+ * number to the standard error stream... If the argument message is not
+ * a null pointer and is not the empty string, ... the message ...
+ * followed by a <colon> and a <space>... [then] the signal description
+ * string ... followed by a <newline>."  RETURN VALUE: "These functions
+ * shall not return a value."  It "shall not change the setting of errno"
+ * on success.
+ *
+ * fd 2 is redirected the same way test_puts_success() redirects fd 1. */
+static void psignal_capture(int sig, const char *msg, const char *name,
+                            char *out, size_t cap, int *errno_moved)
+{
+	int saved = dup(2), fd;
+
+	out[0] = 0;
+	*errno_moved = -1;
+	if (saved < 0) return;
+	fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) { close(saved); return; }
+	fflush(stderr);
+	if (dup2(fd, 2) == 2) {
+		close(fd);
+		errno = 0;
+		psignal(sig, msg);
+		*errno_moved = errno != 0;
+		fflush(stderr);
+	} else {
+		close(fd);
+	}
+	dup2(saved, 2);
+	close(saved);
+	slurp(name, out, cap);
+}
+
+static void test_psignal(const char *name)
+{
+	char buf[128];
+	int moved;
+
+	/* strsignal.html is the cited source of the description text, and
+	 * src/string/strsignal.c is what psignal() calls, so the expected
+	 * strings are taken from strsignal() itself rather than hardcoded
+	 * -- what is being asserted here is psignal()'s framing. */
+	psignal_capture(SIGINT, "prefix", name, buf, sizeof buf, &moved);
+	{
+		char want[128];
+		sprintf(want, "prefix: %s\n", strsignal(SIGINT));
+		CHECK(!strcmp(buf, want));
+	}
+	/* "shall not change the setting of errno" on success */
+	CHECK(moved == 0);
+
+	/* "If the argument message is a null pointer or points to an empty
+	 * string, the message shall consist only of the signal description
+	 * string [and a <newline>]" -- no colon, no space. */
+	psignal_capture(SIGTERM, 0, name, buf, sizeof buf, &moved);
+	{
+		char want[128];
+		sprintf(want, "%s\n", strsignal(SIGTERM));
+		CHECK(!strcmp(buf, want));
+		CHECK(strchr(buf, ':') == 0);
+	}
+	CHECK(moved == 0);
+
+	psignal_capture(SIGUSR1, "", name, buf, sizeof buf, &moved);
+	{
+		char want[128];
+		sprintf(want, "%s\n", strsignal(SIGUSR1));
+		CHECK(!strcmp(buf, want));
+	}
+
+	/* an unknown signal number still produces a description string and
+	 * the same framing -- strsignal() answers "Unknown signal" */
+	psignal_capture(12345, "odd", name, buf, sizeof buf, &moved);
+	CHECK(strncmp(buf, "odd: ", 5) == 0);
+	CHECK(buf[strlen(buf) - 1] == '\n');
+
+	/* psiginfo() is "as if generated by strsignal()" off si_signo --
+	 * asserted here only to show psignal() and psiginfo() agree, since
+	 * src/signal/signal.c implements the former in terms of the latter's
+	 * message shape. */
+	{
+		siginfo_t si;
+		char via_psignal[128];
+		int m2;
+		memset(&si, 0, sizeof si);
+		si.si_signo = SIGINT;
+		psignal_capture(SIGINT, "same", name, via_psignal, sizeof via_psignal, &m2);
+		{
+			int saved = dup(2), fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			buf[0] = 0;
+			if (saved >= 0 && fd >= 0) {
+				fflush(stderr);
+				if (dup2(fd, 2) == 2) { psiginfo(&si, "same"); fflush(stderr); }
+				close(fd);
+				dup2(saved, 2);
+				close(saved);
+				slurp(name, buf, sizeof buf);
+			} else { if (fd >= 0) close(fd); if (saved >= 0) close(saved); }
+		}
+		CHECK(!strcmp(buf, via_psignal));
+	}
+}
+
+/* psignal.html ERRORS: "Refer to fputc()."  Since these functions return
+ * nothing, the clause the application can act on is the one about
+ * detecting the failure: "no indication of an error shall be returned",
+ * so the caller sets errno to zero beforehand and checks it, or uses
+ * ferror(stderr). */
+#if 0 /* N/A: identical to the puts() fences above -- EBADF is the one
+       * fputc error a test can actually arrange (reopen stderr
+       * read-only), and doing so here would only re-prove what
+       * test_puts_ebadf() already proves about the shared __fwrite()
+       * path.  The rest (EAGAIN/EFBIG/EINTR/EIO/ENOSPC/ENOMEM/ENXIO)
+       * have the same unavailable mechanisms.  Recorded so the ERRORS
+       * list has an entry rather than a silence. */
+static void test_psignal_ebadf(const char *roname)
+{
+	CHECK(freopen(roname, "rb", stderr) != 0);
+	errno = 0;
+	psignal(SIGINT, "doomed");
+	CHECK(errno == EBADF);
+	CHECK(ferror(stderr) != 0);
+}
+#endif
+
+/* ================================================================= */
+/* round.html (roundl)                                                */
+/* ================================================================= */
+
+static int negzerol(long double x) { return x == 0.0L && signbit(x); }
+static int poszerol(long double x) { return x == 0.0L && !signbit(x); }
+
+/* round.html DESCRIPTION: "These functions shall round their argument to
+ * the nearest integer value in floating-point format, rounding halfway
+ * cases away from zero, regardless of the current rounding direction."
+ * RETURN VALUE: "Upon successful completion, these functions shall
+ * return the rounded integer value... If x is NaN, a NaN shall be
+ * returned.  If x is +-0, x shall be returned.  If x is +-Inf, x shall be
+ * returned."  ERRORS: "No errors are defined." */
+static void test_roundl(void)
+{
+	int r;
+
+	/* nearest integer, halfway away from zero */
+	CHECK(roundl(2.3L) == 2.0L);
+	CHECK(roundl(2.5L) == 3.0L);
+	CHECK(roundl(2.7L) == 3.0L);
+	CHECK(roundl(-2.3L) == -2.0L);
+	CHECK(roundl(-2.5L) == -3.0L);
+	CHECK(roundl(-2.7L) == -3.0L);
+	CHECK(roundl(0.5L) == 1.0L);
+	CHECK(roundl(-0.5L) == -1.0L);
+	/* an even integer's halfway case still goes away from zero, which
+	 * is what distinguishes round() from rint()/nearbyint() */
+	CHECK(roundl(0.5L) != 0.0L);
+	CHECK(roundl(1.5L) == 2.0L);
+	CHECK(roundl(-1.5L) == -2.0L);
+	/* an already-integral value is unchanged */
+	CHECK(roundl(3.0L) == 3.0L);
+	CHECK(roundl(-3.0L) == -3.0L);
+	/* large magnitudes, where every value is already an integer */
+	CHECK(roundl(1e18L) == 1e18L);
+	CHECK(roundl(-1e18L) == -1e18L);
+
+	/* "If x is NaN, a NaN shall be returned." */
+	CHECK(isnan(roundl((long double)NAN)));
+	/* "If x is +-0, x shall be returned" -- including the sign, which
+	 * == cannot see. */
+	CHECK(poszerol(roundl(0.0L)));
+	CHECK(negzerol(roundl(-0.0L)));
+	/* a value that rounds to zero keeps its sign too: round.html's
+	 * RETURN VALUE says the result "shall have the same sign as x" */
+	CHECK(negzerol(roundl(-0.25L)));
+	CHECK(poszerol(roundl(0.25L)));
+	/* "If x is +-Inf, x shall be returned." */
+	CHECK(roundl((long double)INFINITY) == (long double)INFINITY);
+	CHECK(roundl(-(long double)INFINITY) == -(long double)INFINITY);
+
+	/* "regardless of the current rounding direction" -- the same
+	 * answers under every rounding mode fenv.h offers. */
+	r = fegetround();
+	if (fesetround(FE_DOWNWARD) == 0) {
+		CHECK(roundl(2.5L) == 3.0L);
+		CHECK(roundl(-2.5L) == -3.0L);
+		CHECK(roundl(2.3L) == 2.0L);
+	}
+	if (fesetround(FE_UPWARD) == 0) {
+		CHECK(roundl(2.5L) == 3.0L);
+		CHECK(roundl(-2.5L) == -3.0L);
+		CHECK(roundl(-2.3L) == -2.0L);
+	}
+	if (fesetround(FE_TOWARDZERO) == 0) {
+		CHECK(roundl(2.5L) == 3.0L);
+		CHECK(roundl(-2.5L) == -3.0L);
+		CHECK(roundl(2.7L) == 3.0L);
+	}
+	CHECK(fesetround(r) == 0);
+
+	/* ERRORS: "No errors are defined." -- errno is not touched, for
+	 * any argument including the special ones. */
+	errno = 0;
+	(void)roundl(2.5L);
+	(void)roundl((long double)NAN);
+	(void)roundl((long double)INFINITY);
+	(void)roundl(-0.0L);
+	CHECK(errno == 0);
+
+	/* round()/roundf() are the same function narrowed (src/math/round.c
+	 * defines both in terms of roundl), so agreement between them is
+	 * the cheapest check that roundl's own long-double path is the one
+	 * being exercised rather than a double one. */
+	CHECK(roundl(2.5L) == (long double)round(2.5));
+	CHECK(roundl(-2.5L) == (long double)roundf(-2.5f));
+}
+
+/* ================================================================= */
+
+int main(void)
+{
+	char *name = make_tmp("posix-unref-XXXXXX");
+	char *ro = make_tmp("posix-unref-ro-XXXXXX");
+	char *scratch = make_tmp("posix-unref-sc-XXXXXX");
+
+	CHECK(name != 0);
+	CHECK(ro != 0);
+	CHECK(scratch != 0);
+	if (!name || !ro || !scratch) return 1;
+
+	test_roundl();
+	test_sigwait_stub();
+	test_psignal(name);
+
+	test_renameat_success();
+	test_renameat_errors();
+	test_fchmodat_success();
+	test_fchmodat_errors();
+	test_fchmodat_empty();
+
+	test_scanf_basics(name);
+	test_scanf_returns(name);
+	test_scanf_ebadf(name);
+
+	test_puts_success(name);
+	test_puts_epipe();
+	test_puts_ebadf(ro, scratch);
+
+	remove(name); free(name);
+	remove(ro); free(ro);
+	remove(scratch); free(scratch);
+	/* leave nothing behind: runtests.sh gives each test a private
+	 * directory, but the tree copies gate.sh takes are not private */
+	unlink("chm.d/f"); rmdir("chm.d");
+	rmdir("ren.d");
+
+	if (fails) printf("%d check(s) failed\n", fails);
+	else printf("all checks passed\n");
+	return fails != 0;
+}

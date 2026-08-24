@@ -3754,3 +3754,164 @@ above are verified *as clauses* here and are only verified *as a test
 of the marking step* on the `windows-test` legs. Two other mutations —
 `getppid()` answering `getpid()`, and `times()` reporting a nonzero
 `tms_cutime` — were both caught.
+## puts / scanf / renameat / fchmodat / sigwait / psignal / roundl (unreferenced-function sweep, group R)
+
+`tools/lint-unreferenced.sh` landed at `d36b07c` and reported **56**
+declared-and-implemented functions that no natively compiled `test/*.c`
+carries an undefined-symbol relocation for — no test so much as calls
+them. Seven of those 56 are POSIX interfaces with a specification page
+to hold them to, and this group audits all seven, clause by clause,
+against
+`https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html`.
+Every entry of every one of those pages' `ERRORS` lists gets an
+assertion or a fence; `puts` and `psignal` inherit `fputc.html`'s list
+and `scanf` inherits `fgetc.html`'s, so those are audited too.
+
+Two of the seven are the striking ones: **`puts()` and `scanf()` are
+core C interfaces this library has always implemented and that no test
+had ever called.** Both turned out to be correct on the happy path.
+`scanf()`'s `ERRORS` list is where its gaps are, which is this
+codebase's dominant defect shape.
+
+**Oracle: mixed.** `puts`, `scanf`, `psignal` and `roundl` are pure C
+library over redirected descriptors, so Wine is a sound oracle for
+them. `renameat` and `fchmodat` go through `NtSetInformationFile` /
+`NtOpenFile` on real paths; every defect fenced below was reasoned from
+the NT semantics in `src/stdio/misc.c` and `src/internal/path.c` as
+well as observed under Wine, and the CI leg that runs this suite on
+Server 2025 is the real-NT check on them.
+
+**Eight BUGs fenced, one UNIMPL fenced, and the whole of `sigwait()`
+recorded as the degenerate stub it is.** All in
+`test/posix-unreferenced.c`. Three of the eight are not ordinary
+per-function defects and are called out first, because severity is what
+decides whether anyone acts:
+
+1. **`renameat()` of a directory over an existing regular file succeeds
+   and destroys the file — silent data loss from a conforming call.**
+   `rename.html` requires `[ENOTDIR]` *and* that neither file is
+   changed. The call returns 0, the regular file is gone, and the name
+   now refers to the directory. Nothing tells the caller.
+2. **`__ntpath_at()` does not resolve a `dot` component in a
+   `RootDirectory`-relative name.** One defect in shared path machinery,
+   reaching **every** `*at()` entry point this library ships: `openat`
+   (via `__open_handle`), `faccessat` (via `fstatat`), `fstatat`,
+   `unlinkat` and `rmdir` (via `__unlink_at`), `linkat`, `symlinkat`,
+   `readlinkat`, `mkdirat`, `renameat`, `fchmodat`, `utimensat`, and
+   `nftw()`'s directory walk. Fenced once, in `fchmodat`'s section of
+   `test/posix-unreferenced.c`, to avoid a dozen identical copies —
+   this list is repeated here and in the fence itself so it is
+   discoverable from either end.
+3. **`renameat()` ignores `newfd` entirely** — half of what
+   distinguishes `renameat()` from `rename()` does not work at all. The
+   one-line fix is recorded in the fence: `ri->RootDirectory =
+   np.oa.RootDirectory` in `src/stdio/misc.c`. Not applied; a fix needs
+   its own review.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| puts | DESCRIPTION: "shall write the string pointed to by `s`, followed by a `<newline>` ... The terminating null byte shall not be written"; RETURN VALUE "a non-negative number" | covered | `test_puts_success` |
+| puts | RETURN VALUE: "Otherwise, it shall return EOF, shall set an error indicator for the stream, and `errno` shall be set" — with `fputc.html`'s `[EBADF]` | covered | `test_puts_ebadf` |
+| puts | `fputc.html` `[EPIPE]` "An attempt is made to write to a pipe or FIFO that is not open for reading by any process" | covered | `test_puts_epipe` |
+| puts | `fputc.html` `[EAGAIN]`, `[EINTR]`, `[EIO]`, `[ENOSPC]`, may-fail `[ENOMEM]`/`[ENXIO]` | N/A (fenced), one mechanism given per error — no `O_NONBLOCK` on a file descriptor, no signal that can interrupt a non-alertable `NtWriteFile`, no controlling terminal, no fillable volume | `test_puts_eagain` etc. |
+| puts | `fputc.html` `[EFBIG]` | **UNIMPL (fenced)** — `src/unistd/write.c` has no offset-maximum check and nothing in `__set_errno_status` produces `EFBIG` | `test_puts_efbig` |
+| scanf | DESCRIPTION: "equivalent to `fscanf()` with the argument `stdin` interposed"; `%n` consuming no input and never counting toward the return value; the assignment-suppressing `*` | covered | `test_scanf_basics`, `test_scanf_returns` |
+| scanf | RETURN VALUE: "the number of successfully matched and assigned input items", "can be zero in the event of an early matching failure", and "If the input ends before the first conversion ... has completed ... EOF shall be returned" — all three, plus the case where a *later* conversion hits EOF and the result is therefore not EOF | covered | `test_scanf_returns` |
+| scanf | `fgetc.html` `[EBADF]` — `scanf()` on a `stdin` reopened write-only | covered | `test_scanf_ebadf` |
+| scanf | `ERRORS`, shall fail: `[ENOMEM]` "Insufficient storage space is available" | **BUG (fenced)** — the `m` assignment-allocation character is not implemented at all; `%ms` falls through `switch(*p)` to `default: break`, assigning nothing and reporting neither a matching failure nor an error. With no allocating conversion there is no situation in which `[ENOMEM]` can arise | `test_scanf_enomem` |
+| scanf | `ERRORS`, shall fail: `[EILSEQ]` "Input byte sequence does not form a valid character" | **BUG (fenced)** — the `l` length modifier is parsed and then ignored by the `s`, `c` and `[` conversions, so `%ls` stores raw bytes into a `wchar_t` buffer instead of converting "as if by repeated calls to `mbrtowc()`". It is that conversion failing that raises `[EILSEQ]` | `test_scanf_eilseq` |
+| scanf | `ERRORS`, may fail: `[EINVAL]` "There are insufficient arguments" | N/A (fenced) — a variadic callee cannot count its arguments; undefined behaviour at the call site | `test_scanf_einval` |
+| scanf | `fgetc.html` `[EOVERFLOW]`, `[EAGAIN]`, `[EINTR]`, `[EIO]`, `[ENOMEM]`, `[ENXIO]` | N/A / UNIMPL (fenced), same mechanisms as the `puts` row | `test_scanf_stream_errors` |
+| renameat | DESCRIPTION: relative `old` resolved against `oldfd`, `AT_FDCWD` meaning the cwd, and "If the link named by the `new` argument exists, it shall be removed and `old` renamed to `new`" | covered | `test_renameat_success` |
+| renameat | DESCRIPTION: "If `new` is a relative path, the file is located relative to the directory associated with the file descriptor `newfd`" | **BUG (fenced)** — `src/stdio/misc.c` sets `ri->RootDirectory = 0` unconditionally while `__ntpath_at(newdirfd, …)` returns a name that is relative to that descriptor's handle, so *every* `renameat()` with a relative `new` and a real `newfd` fails `ENOENT`. Only the `old` side honours its descriptor today. One-line fix: `ri->RootDirectory = np.oa.RootDirectory` | `test_renameat_new_relative_to_dirfd` |
+| renameat | DESCRIPTION, directory case: "If the directory named by the `new` argument exists, it shall be removed and `old` renamed to `new`" for an **empty** directory | **BUG (fenced)**, on two counts — NT will not replace a directory, and the `EISDIR`/`ENOTEMPTY` disambiguation in `src/stdio/misc.c` then reports `ENOTEMPTY` without ever asking whether `new` is empty. Observed: `-1`/`ENOTEMPTY` against a freshly created empty directory | `test_renameat_dir_over_empty_dir` |
+| renameat | `[ENOTDIR]` "the `old` argument names a directory and the `new` argument names a non-directory file" | **BUG (fenced), destructive** — the rename succeeds, the regular file is gone, and the name now refers to the directory. RETURN VALUE's "neither the file named by `old` nor the file named by `new` shall be changed or created" is violated too. The mirror case (`[EISDIR]`, non-directory onto a directory) **is** handled and is asserted unfenced | `test_renameat_enotdir_dir_over_file` |
+| renameat | `[EBADF]`, `[ENOTDIR]` (descriptor for a non-directory file), `[ENOENT]` (non-existent `old`, missing prefix of `new`, and the empty string under `AT_FDCWD`), `[ENOTDIR]` (prefix component not a directory), `[EISDIR]`, `[EEXIST]`/`[ENOTEMPTY]` | covered — both descriptor positions checked for `[EBADF]` and `[ENOTDIR]` | `test_renameat_errors` |
+| renameat | `[ENOENT]` "either `old` or `new` points to an empty string" — with a real directory descriptor | **BUG (fenced)** — `__ntpath_at()` treats an empty relative name as naming the descriptor's directory itself; observed `EINVAL`, not `ENOENT` | `test_renameat_empty_at_dirfd` |
+| renameat | `[EINVAL]` "The `old` pathname names an ancestor directory of the `new` pathname, or either pathname argument contains a final component that is dot or dot-dot" | **BUG (fenced)** — neither clause is checked anywhere; observed, a rename of `dir/.` **succeeded** | `test_renameat_einval` |
+| renameat | `[EACCES]`, `[EPERM]` (S_ISVTX), `[EROFS]`, `[EBUSY]`, `[EIO]`, `[EMLINK]`, `[ENOSPC]`, `[ELOOP]`, `[EXDEV]`, `[ENAMETOOLONG]` | N/A (fenced) with one mechanism each — no POSIX permission model, no `S_ISVTX`, no second writable volume, no symlink privilege. `[ENAMETOOLONG]` is UNIMPL rather than N/A: `__ntpath_at()` reports it for the whole path exceeding `__US_MAX_WCHARS`, never for one component exceeding `{NAME_MAX}` | `test_renameat_eacces`, `test_renameat_ebusy`, `test_renameat_misc_errors` |
+| fchmodat | DESCRIPTION: "equivalent to `chmod()` ... If `fchmodat()` is passed the special value `AT_FDCWD` in the `fd` parameter ... and, if `flag` is zero, the behavior shall be identical to a call to `chmod()`"; relative resolution against a real descriptor; `AT_SYMLINK_NOFOLLOW` on a non-link; a directory as the target | covered — the observable contract on NTFS is the write bits (`src/stat/chmod.c`: "chmod can only express one thing on NTFS") | `test_fchmodat_success` |
+| fchmodat | `[EBADF]`, `[ENOTDIR]` (descriptor for a non-directory), `[ENOENT]` (absent component **and** the empty string under `AT_FDCWD`), `[ENOTDIR]` (prefix component not a directory), and RETURN VALUE's "If -1 is returned, no change to the file mode occurs" | covered | `test_fchmodat_errors`, `test_fchmodat_empty` |
+| fchmodat | `[ENOENT]` for the empty string — with a real directory descriptor | **BUG (fenced)** — `fchmodat(dfd, "", mode, 0)` silently changes the mode of the descriptor's own directory and returns 0 | `test_fchmodat_empty_at_dirfd` |
+| fchmodat | XBD 4.13 Pathname Resolution, which `chmod.html` invokes for `path`: a `dot` component "refers to the directory specified by its predecessor" | **BUG (fenced)** — `__ntpath_at()` special-cases a path that is exactly `"."` and hands everything else to the NT object manager, which does not implement dot components in a `RootDirectory`-relative name. `fchmodat(dfd, "./f", …)` fails `ENOENT` while `fchmodat(dfd, "f", …)` on the same file succeeds. **This affects every `*at()` function that goes through `__ntpath_at()`**, not just this one; recorded here because this is the audit that found it | `test_fchmodat_dot_component` |
+| fchmodat | `[EPERM]`, `[EACCES]`, `[EROFS]`, `[ELOOP]` (both forms), `[ENAMETOOLONG]` | N/A / UNIMPL (fenced) — no ownership model to violate, no symlink privilege to build a loop with; `[ENAMETOOLONG]` is the same whole-path-vs-component mismatch as `renameat`'s | `test_fchmodat_eperm`, `test_fchmodat_eloop`, `test_fchmodat_enametoolong` |
+| fchmodat | may fail: `[EINTR]`, `[EINVAL]` (invalid `mode`), `[EINVAL]` (invalid `flag`) | **UNIMPL (fenced)**, and conforming — all three are "may fail", so the current behaviour is legal. Worth naming anyway: `src/stat/chmod.c` tests `flags & AT_SYMLINK_NOFOLLOW` and ignores every other bit, so `fchmodat(fd, path, mode, 0x4000)` silently **succeeds** where glibc reports `EINVAL`. Observed | `test_fchmodat_einval` |
+| sigwait | DESCRIPTION: "shall select a pending signal from `set`, atomically clear it from the system's set of pending signals, and return that signal number in the location referenced by `sig`"; "If no signal in `set` is pending ... the thread shall be suspended"; RETURN VALUE "shall ... return zero"; `[EINVAL]` | **UNIMPL (fenced)** — `src/signal/signal.c`'s `sigwait()` is `{ errno = EINVAL; return EINVAL; }`, already recorded in `test/POSIX-GAP-ACCOUNTING.md` under "Permanent degenerate stubs". A genuine gap, not a platform limitation: `sigpending()` already reports the pending set and `sigprocmask()` already delivers on unblock, both in the same file, so a real `sigwait()` is writable here | `test_sigwait_spec` |
+| sigwait | the behaviour that is actually there, pinned unfenced so a change to it is visible — including that it sets `errno` as well as returning the number, which RETURN VALUE does not provide for (`sigwait()` reports through its return value alone) | covered | `test_sigwait_stub` |
+| psignal | DESCRIPTION: message, then `<colon>` and `<space>`, then the signal description, then a `<newline>`, on **stderr**; "If the argument `message` is a null pointer or points to the null string, the ... message shall consist only of" the description and the newline; "shall not change the setting of `errno`" on success; RETURN VALUE "shall not return a value" | covered, for a non-null message, a null message, an empty-string message, and an out-of-range signal number; agreement with `psiginfo()` checked too | `test_psignal` |
+| psignal | `ERRORS`: "Refer to `fputc()`" | N/A (fenced) — `[EBADF]` is the one arrangeable member and doing it here would only re-prove what `test_puts_ebadf` proves about the shared `__fwrite()` path; the rest have the same unavailable mechanisms as the `puts` row | `test_psignal_ebadf` |
+| roundl | DESCRIPTION: "round their argument to the nearest integer value in floating-point format, rounding halfway cases away from zero, **regardless of the current rounding direction**" — the last clause checked under `FE_DOWNWARD`, `FE_UPWARD` and `FE_TOWARDZERO` as well as the default | covered | `test_roundl` |
+| roundl | RETURN VALUE: NaN → NaN; ±0 → x, sign included (`signbit`, which `==` cannot see); ±Inf → x; and the sign of a value that rounds *to* zero | covered | `test_roundl` |
+| roundl | `ERRORS`: "No errors are defined" — `errno` untouched for every argument including the special ones | covered | `test_roundl` |
+
+### Mutation proofs (group R)
+
+Every unfenced assertion group in `test/posix-unreferenced.c` was shown
+capable of failing, by deliberately breaking the implementation,
+confirming the assertion caught it, and restoring. Thirteen mutations,
+twelve caught, **one honest miss**, plus two negative controls.
+
+| # | mutation | result |
+|---|---|---|
+| M1 | `puts()`: drop the trailing `<newline>` | caught — byte count and content |
+| M2 | `fputs()`: write the terminating null byte too | caught — byte count and content |
+| M3 | `__fputc`/`__fwrite`: report `EINVAL` instead of `EBADF` on a non-writable stream | caught |
+| M4 | `__fputc`: stop setting the stream error indicator | **SURVIVED** — see below |
+| M4b | `__fwrite`: stop setting the stream error indicator | caught — `ferror(stdout)` |
+| M5 | `scanf`: count a `%n` toward the return value | caught |
+| M6 | `scanf`: return `0` instead of `EOF` when input ends before the first conversion | caught, twice |
+| M7 | `roundl`: round halfway cases to even instead of away from zero | caught, three assertions |
+| M8 | `roundl`: lose the sign of a negative-zero result | caught — via `signbit`, which `==` cannot see |
+| M9 | `psignal`: emit the `<colon>` even for a null/empty message | caught, three assertions |
+| M10 | `sigwait`: return `0` instead of `EINVAL` | caught — the degenerate-stub pin works |
+| M11 | `fchmodat`: derive the read-only attribute from the read bits instead of the write bits | caught, three assertions |
+| M12 | `renameat`: report `EACCES` instead of `EISDIR` for new-names-a-directory | caught |
+| M13 | `__ntpath_at`: drop the `ENOTDIR` check on a non-directory descriptor | caught, three assertions — two `renameat` positions and `fchmodat` |
+| NC1 | `cbrt`: return the argument unchanged | **survived, as required** — `test/posix-unreferenced.c` stayed green. Verified to be a real break: `test/posix-math.c` catches it (`cbrt(27.0) == 3.0`) |
+| NC2 | `a64l`: always return 0 | **survived, as required** — stayed green |
+
+**The honest miss, M4.** Deleting `f->err = 1` from `__fputc`'s
+non-writable-stream branch did *not* fail the suite, and the reason is
+worth recording rather than papering over: `puts()` reaches the error
+through `fputs()` → `__fwrite()`, not through `__fputc()`, so
+`__fputc`'s copy of that line is never on the path
+`test_puts_ebadf` exercises — the first character never gets that far
+because `fputs()` has already returned `EOF`. The mutation was
+mis-aimed, not the assertion weak; M4b, aimed at `__fwrite`'s copy of
+the same line, is caught immediately. The assertion `ferror(stdout) != 0`
+is real and does its job. What M4 actually demonstrates is that
+`__fputc`'s `f->err = 1` on that branch has **no test anywhere** — a
+separate, smaller gap, recorded here rather than fixed by widening this
+file's scope.
+
+**The negative controls are the part that makes the rest
+trustworthy.** Both broke functions this file does not touch; both left
+`test/posix-unreferenced.c` green. NC1 was additionally confirmed to be
+a genuine, detectable break by another test in the same suite, so
+"stayed green" means "correctly indifferent", not "does not run".
+
+### Observed behaviour worth recording (group R)
+
+- **The `__ntpath_at()` dot-component defect is not `fchmodat`'s.** It
+  is in `src/internal/path.c` and reaches every caller of
+  `__ntpath_at()` in `src/`, checked by grep: `openat` (via
+  `__open_handle`), `faccessat` (via `fstatat`), `fstatat`, `unlinkat`
+  and `rmdir` (via `__unlink_at`), `linkat`, `symlinkat`, `readlinkat`,
+  `mkdirat`, `renameat`, `fchmodat`, `utimensat`, and `nftw()`'s
+  directory walk. `fchownat`, `mknodat` and `mkfifoat` are stubs that
+  never build a path and are not affected. Only one fence was written
+  for it, in `test_fchmodat_dot_component`. **A reader arriving at any
+  of those twelve functions should be pointed here**; none of them is
+  unaudited on this clause merely because the fence lives elsewhere.
+  Note the asymmetry that lets it survive: an `AT_FDCWD` or absolute
+  path goes through `__ntpath()`, which handles dot components
+  correctly, so the common case works.
+- **`renameat`'s `new`-side descriptor is ignored entirely.** The same
+  `RootDirectory = 0` line makes the `[EBADF]`/`[ENOTDIR]` assertions
+  for `newfd` pass for the wrong reason: `__ntpath_at()` rejects the
+  bad descriptor before the rename is ever attempted, which is
+  correct, but a *good* descriptor is then thrown away.
+- **`puts()` and `scanf()` had no test at all, and both happy paths
+  were already right.** That is the pattern this project's earlier
+  audits found and this one confirms: the defects are in the `ERRORS`
+  lists, not in the common case.
