@@ -3754,26 +3754,36 @@ above are verified *as clauses* here and are only verified *as a test
 of the marking step* on the `windows-test` legs. Two other mutations —
 `getppid()` answering `getpid()`, and `times()` reporting a nonzero
 `tms_cutime` — were both caught.
-## puts / scanf / renameat / fchmodat / sigwait / psignal / roundl (unreferenced-function sweep, group R)
+
+## puts / scanf / renameat / fchmodat / sigwait / psignal / roundl / strxfrm_l (unreferenced-function sweep, group R)
 
 `tools/lint-unreferenced.sh` landed at `d36b07c` and reported **56**
 declared-and-implemented functions that no natively compiled `test/*.c`
 carries an undefined-symbol relocation for — no test so much as calls
-them. Seven of those 56 are POSIX interfaces with a specification page
-to hold them to, and this group audits all seven, clause by clause,
+them. Eight of those 56 are POSIX interfaces with a specification page
+to hold them to, and this group audits all of them, clause by clause,
 against
 `https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html`.
 Every entry of every one of those pages' `ERRORS` lists gets an
 assertion or a fence; `puts` and `psignal` inherit `fputc.html`'s list
 and `scanf` inherits `fgetc.html`'s, so those are audited too.
 
-Two of the seven are the striking ones: **`puts()` and `scanf()` are
+**An eighth turned out to be POSIX after all: `strxfrm_l()`.** It was
+filed with the glibc-only `*_l` names (`strtod_l`, `strtof_l`,
+`strtold_l`, which genuinely have no POSIX page), but POSIX.1-2017
+specifies it on `strxfrm.html` alongside `strxfrm()`. It is audited
+here rather than deferred. `test/posix-string.c` already cites
+`strxfrm.html` and names `strxfrm_l` in a comment while never calling
+it — exactly the "mentioned is not referenced" distinction
+`tools/lint-unreferenced.sh` was built to draw.
+
+Two of them are the striking ones: **`puts()` and `scanf()` are
 core C interfaces this library has always implemented and that no test
 had ever called.** Both turned out to be correct on the happy path.
 `scanf()`'s `ERRORS` list is where its gaps are, which is this
 codebase's dominant defect shape.
 
-**Oracle: mixed.** `puts`, `scanf`, `psignal` and `roundl` are pure C
+**Oracle: mixed.** `puts`, `scanf`, `psignal`, `roundl` and `strxfrm_l` are pure C
 library over redirected descriptors, so Wine is a sound oracle for
 them. `renameat` and `fchmodat` go through `NtSetInformationFile` /
 `NtOpenFile` on real paths; every defect fenced below was reasoned from
@@ -3843,13 +3853,17 @@ decides whether anyone acts:
 | roundl | DESCRIPTION: "round their argument to the nearest integer value in floating-point format, rounding halfway cases away from zero, **regardless of the current rounding direction**" — the last clause checked under `FE_DOWNWARD`, `FE_UPWARD` and `FE_TOWARDZERO` as well as the default | covered | `test_roundl` |
 | roundl | RETURN VALUE: NaN → NaN; ±0 → x, sign included (`signbit`, which `==` cannot see); ±Inf → x; and the sign of a value that rounds *to* zero | covered | `test_roundl` |
 | roundl | `ERRORS`: "No errors are defined" — `errno` untouched for every argument including the special ones | covered | `test_roundl` |
+| strxfrm_l | DESCRIPTION: the transform, "No more than `n` bytes ... including the terminating NUL character", "If `n` is 0, `s1` is permitted to be a null pointer", "shall not change the setting of `errno` if successful", and "equivalent to `strxfrm()`, except that the locale data used is from the locale represented by `locale`" — checked with a null `locale_t`, a real one from `newlocale()`, and `LC_GLOBAL_LOCALE` | covered | `test_strxfrm_l` |
+| strxfrm_l | DESCRIPTION: "if `strcmp()` is applied to two transformed strings, it shall return a value greater than, equal to, or less than 0, corresponding to the result of `strcoll()` applied to the same two original strings" — all three directions | covered | `test_strxfrm_l` |
+| strxfrm_l | RETURN VALUE: "the length of the transformed string (not including the terminating NUL character)"; "If the value returned is `n` or more, the contents of the array ... are unspecified" — so the return value is asserted and the truncated contents deliberately are not, only that nothing past `n` was touched | covered | `test_strxfrm_l` |
+| strxfrm_l | `ERRORS`, may fail: `[EINVAL]` "The string pointed to by the `s2` argument contains characters outside the domain of the collating sequence" | N/A (fenced) — the C locale's collating sequence covers every value a `char` can hold, so no input is outside its domain. No reachable case, rather than an unimplemented one | `test_strxfrm_l_einval` |
 
 ### Mutation proofs (group R)
 
 Every unfenced assertion group in `test/posix-unreferenced.c` was shown
 capable of failing, by deliberately breaking the implementation,
-confirming the assertion caught it, and restoring. Thirteen mutations,
-twelve caught, **one honest miss**, plus two negative controls.
+confirming the assertion caught it, and restoring. Fifteen mutations,
+fourteen caught, **one honest miss**, plus two negative controls.
 
 | # | mutation | result |
 |---|---|---|
@@ -3867,6 +3881,8 @@ twelve caught, **one honest miss**, plus two negative controls.
 | M11 | `fchmodat`: derive the read-only attribute from the read bits instead of the write bits | caught, three assertions |
 | M12 | `renameat`: report `EACCES` instead of `EISDIR` for new-names-a-directory | caught |
 | M13 | `__ntpath_at`: drop the `ENOTDIR` check on a non-directory descriptor | caught, three assertions — two `renameat` positions and `fchmodat` |
+| M14 | `strxfrm`: return the truncated length instead of the source length | caught, twice |
+| M15 | `strxfrm`: write `n` bytes without room for the terminating NUL (overrun by one) | caught — the "nothing past `n` was touched" assertion |
 | NC1 | `cbrt`: return the argument unchanged | **survived, as required** — `test/posix-unreferenced.c` stayed green. Verified to be a real break: `test/posix-math.c` catches it (`cbrt(27.0) == 3.0`) |
 | NC2 | `a64l`: always return 0 | **survived, as required** — stayed green |
 

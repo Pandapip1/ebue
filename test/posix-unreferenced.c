@@ -3,10 +3,16 @@
  *
  * Clause-by-clause POSIX.1-2017 audit of the POSIX-specified functions
  * that tools/lint-unreferenced.sh found no test/*.c even calls.  At the
- * commit that landed that check the list was 56 names long; seven of
+ * commit that landed that check the list was 56 names long; eight of
  * them are POSIX interfaces with a specification page to hold them to:
  *
- *   puts, scanf, renameat, fchmodat, sigwait, psignal, roundl
+ *   puts, scanf, renameat, fchmodat, sigwait, psignal, roundl,
+ *   strxfrm_l
+ *
+ * strxfrm_l() is the eighth because it was mis-filed: it looks like one
+ * of the glibc-only *_l names (strtod_l/strtof_l/strtold_l, which have
+ * no POSIX page at all), but POSIX.1-2017 specifies it on
+ * strxfrm.html alongside strxfrm().
  *
  * Two of those -- puts() and scanf() -- are core C interfaces that this
  * library has always implemented and that no test had ever called.  The
@@ -46,6 +52,7 @@
 #include <float.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <locale.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1496,6 +1503,110 @@ static void test_roundl(void)
 }
 
 /* ================================================================= */
+/* strxfrm.html (strxfrm_l)                                           */
+/* ================================================================= */
+
+/* strxfrm_l() is on POSIX.1-2017's strxfrm.html alongside strxfrm(), so
+ * it belongs with the seven above rather than with the glibc-only *_l
+ * names (strtod_l/strtof_l/strtold_l, which have no POSIX page).
+ * test/posix-string.c already cites strxfrm.html and even names
+ * strxfrm_l in a comment -- but never calls it, which is precisely the
+ * "mentioned is not referenced" case tools/lint-unreferenced.sh exists
+ * to separate.
+ *
+ * DESCRIPTION: "The strxfrm() and strxfrm_l() functions shall transform
+ * the string pointed to by s2 and place the resulting string into the
+ * array pointed to by s1.  The transformation shall be such that if
+ * strcmp() is applied to two transformed strings, it shall return a
+ * value greater than, equal to, or less than 0, corresponding to the
+ * result of strcoll() applied to the same two original strings.  No
+ * more than n bytes are placed into the resulting array pointed to by
+ * s1, including the terminating NUL character.  If n is 0, s1 is
+ * permitted to be a null pointer... The strxfrm_l() function shall be
+ * equivalent to strxfrm(), except that the locale data used is from the
+ * locale represented by locale."  It "shall not change the setting of
+ * errno if successful."  RETURN VALUE: "the length of the transformed
+ * string (not including the terminating NUL character).  If the value
+ * returned is n or more, the contents of the array pointed to by s1 are
+ * unspecified." */
+static void test_strxfrm_l(void)
+{
+	char a[32], b[32];
+	locale_t loc;
+	size_t r;
+
+	/* the length of the transformed string, and the transform itself */
+	errno = 0;
+	r = strxfrm_l(a, "hello", sizeof a, (locale_t)0);
+	CHECK(r == 5);
+	CHECK(!strcmp(a, "hello"));
+	/* "shall not change the setting of errno if successful" */
+	CHECK(errno == 0);
+
+	/* "If n is 0, s1 is permitted to be a null pointer" -- and the
+	 * return value is still the transformed length, which is how the
+	 * two-call sizing idiom works. */
+	CHECK(strxfrm_l(0, "hello", 0, (locale_t)0) == 5);
+
+	/* "No more than n bytes are placed into the resulting array ...
+	 * including the terminating NUL character", and "If the value
+	 * returned is n or more, the contents ... are unspecified" -- so
+	 * the return value is asserted and the contents are not. */
+	memset(a, 'Z', sizeof a);
+	CHECK(strxfrm_l(a, "hello", 3, (locale_t)0) == 5);
+	CHECK(a[3] == 'Z');   /* nothing past n was touched */
+
+	/* "if strcmp() is applied to two transformed strings, it shall
+	 * return a value greater than, equal to, or less than 0,
+	 * corresponding to the result of strcoll() applied to the same two
+	 * original strings" -- checked in all three directions. */
+	CHECK(strxfrm_l(a, "abc", sizeof a, (locale_t)0) < sizeof a);
+	CHECK(strxfrm_l(b, "abd", sizeof b, (locale_t)0) < sizeof b);
+	CHECK((strcmp(a, b) < 0) == (strcoll("abc", "abd") < 0));
+	CHECK(strxfrm_l(b, "abb", sizeof b, (locale_t)0) < sizeof b);
+	CHECK((strcmp(a, b) > 0) == (strcoll("abc", "abb") > 0));
+	CHECK(strxfrm_l(b, "abc", sizeof b, (locale_t)0) < sizeof b);
+	CHECK((strcmp(a, b) == 0) == (strcoll("abc", "abc") == 0));
+
+	/* "except that the locale data used is from the locale represented
+	 * by locale" -- with a real locale object, not just a null one.
+	 * This library has one locale ("C"), so the requirement that bites
+	 * is that a valid locale_t is accepted and gives the same answer. */
+	loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	if (loc) {
+		CHECK(strxfrm_l(a, "hello", sizeof a, loc) == 5);
+		CHECK(!strcmp(a, "hello"));
+		CHECK(strxfrm_l(b, "hello", sizeof b, LC_GLOBAL_LOCALE) == 5);
+		CHECK(!strcmp(a, b));
+		freelocale(loc);
+	} else {
+		printf("note: newlocale(LC_ALL_MASK, \"C\", 0) failed (errno %d); the real-locale_t half of strxfrm_l is skipped\n", errno);
+	}
+
+	/* and it agrees with strxfrm(), which is what "equivalent to" means
+	 * for a library with exactly one locale */
+	CHECK(strxfrm_l(a, "collate", sizeof a, (locale_t)0) == strxfrm(b, "collate", sizeof b));
+	CHECK(!strcmp(a, b));
+}
+
+/* strxfrm.html ERRORS, may fail: "[EINVAL] The string pointed to by the
+ * s2 argument contains characters outside the domain of the collating
+ * sequence." */
+#if 0 /* N/A: "may fail", and there is no such string.  This library's
+       * collating sequence is the C locale's, whose domain is every
+       * value a char can hold (src/string/strxfrm.c transforms by
+       * copying), so no input is outside it.  The clause has no
+       * reachable case here rather than an unimplemented one. */
+static void test_strxfrm_l_einval(void)
+{
+	char a[32];
+	errno = 0;
+	CHECK(strxfrm_l(a, "\xff\xfe", sizeof a, (locale_t)0) == (size_t)-1);
+	CHECK(errno == EINVAL);
+}
+#endif
+
+/* ================================================================= */
 
 int main(void)
 {
@@ -1509,6 +1620,7 @@ int main(void)
 	if (!name || !ro || !scratch) return 1;
 
 	test_roundl();
+	test_strxfrm_l();
 	test_sigwait_stub();
 	test_psignal(name);
 
