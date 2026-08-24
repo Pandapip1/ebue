@@ -198,30 +198,22 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		 * counts as both readable and writable and as hup, the same
 		 * way a broken pipe does above -- a read or write on it
 		 * would return immediately rather than block. */
-		/* `pi` is storage only -- correctly aligned and large
-		 * enough.  Every field is written and read through
-		 * src/internal/afd.h's AFD_POLL_REQ_OFF_* and AFD_POLL_H_OFF_*
-		 * offsets, because ReactOS's ULONG_PTR Exclusive puts
-		 * Handles at +24 on x86_64 where phnt, wepoll and libuv
-		 * all put it at +16; see that header's poll banner. */
 		AFD_POLL_INFO pi;
-		unsigned long len = __afd_poll_request_size(1);
-		uint32_t events;
 		NTSTATUS st;
 
-		/* Timeout 0: never wait, just sample. */
-		__afd_build_poll_request(&pi, 0, 1);
-		__afd_poll_set_handle(&pi, 0, f->h, AFD_POLL_READ_BITS | AFD_POLL_WRITE_BITS);
+		pi.Timeout = 0; /* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h), no .QuadPart */
+		pi.HandleCount = 1;
+		pi.Exclusive = 0;
+		pi.Handles[0].Handle = f->h;
+		pi.Handles[0].Events = AFD_POLL_READ_BITS | AFD_POLL_WRITE_BITS;
+		pi.Handles[0].Status = 0;
 
-		/* __afd_poll_request_size(1), not sizeof(pi), which rounds
-		 * the tail up for Timeout's alignment. */
-		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &pi, (ULONG)len, &pi, (ULONG)len, 0);
+		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &pi, sizeof(pi), &pi, sizeof(pi), 0);
 		if (!NT_SUCCESS(st)) { *canread = 0; *canwrite = 0; break; }
 
-		events = __afd_poll_get_events(&pi, 0);
-		*canread = (events & AFD_POLL_READ_BITS) != 0;
-		*canwrite = (events & AFD_POLL_WRITE_BITS) != 0;
-		if (events & (AFD_EVENT_CLOSE | AFD_EVENT_ABORT | AFD_EVENT_DISCONNECT)) {
+		*canread = (pi.Handles[0].Events & AFD_POLL_READ_BITS) != 0;
+		*canwrite = (pi.Handles[0].Events & AFD_POLL_WRITE_BITS) != 0;
+		if (pi.Handles[0].Events & (AFD_EVENT_CLOSE | AFD_EVENT_ABORT | AFD_EVENT_DISCONNECT)) {
 			*canread = 1; *canwrite = 1; *hup = 1;
 		}
 		break;
