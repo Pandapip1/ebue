@@ -167,14 +167,10 @@ int fileno(FILE *f)
 	if (f->is_mem || f->fd < 0) { errno = EBADF; return -1; }
 	return f->fd;
 }
-int fileno_unlocked(FILE *f) { return fileno(f); }
 
 int feof(FILE *f) { return f->eof != 0; }
-int feof_unlocked(FILE *f) { return feof(f); }
 int ferror(FILE *f) { return f->err != 0; }
-int ferror_unlocked(FILE *f) { return ferror(f); }
 void clearerr(FILE *f) { f->eof = f->err = 0; }
-void clearerr_unlocked(FILE *f) { clearerr(f); }
 
 /* flockfile/funlockfile: there is no threading here (libpthread.a is an
  * empty placeholder archive), so a FILE needs no real lock -- these exist

@@ -165,7 +165,6 @@ int fflush(FILE *f)
 	}
 	return __fflush_locked(f) < 0 ? EOF : 0;
 }
-int fflush_unlocked(FILE *f) { return fflush(f); }
 
 int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size)
 {

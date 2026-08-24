@@ -51,14 +51,12 @@ int __fputc(int c, FILE *f)
 int fgetc(FILE *f) { return __fgetc(f); }
 int getc(FILE *f) { return __fgetc(f); }
 int getchar(void) { return __fgetc(stdin); }
-int fgetc_unlocked(FILE *f) { return __fgetc(f); }
 int getc_unlocked(FILE *f) { return __fgetc(f); }
 int getchar_unlocked(void) { return __fgetc(stdin); }
 
 int fputc(int c, FILE *f) { return __fputc(c, f); }
 int putc(int c, FILE *f) { return __fputc(c, f); }
 int putchar(int c) { return __fputc(c, stdout); }
-int fputc_unlocked(int c, FILE *f) { return __fputc(c, f); }
 int putc_unlocked(int c, FILE *f) { return __fputc(c, f); }
 int putchar_unlocked(int c) { return __fputc(c, stdout); }
 
@@ -142,8 +140,6 @@ size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 
 size_t fread(void *__restrict ptr, size_t size, size_t nmemb, FILE *__restrict f) { return __fread(ptr, size, nmemb, f); }
 size_t fwrite(const void *__restrict ptr, size_t size, size_t nmemb, FILE *__restrict f) { return __fwrite(ptr, size, nmemb, f); }
-size_t fread_unlocked(void *ptr, size_t size, size_t nmemb, FILE *f) { return __fread(ptr, size, nmemb, f); }
-size_t fwrite_unlocked(const void *ptr, size_t size, size_t nmemb, FILE *f) { return __fwrite(ptr, size, nmemb, f); }
 
 char *fgets(char *__restrict s, int n, FILE *__restrict f)
 {
@@ -159,7 +155,6 @@ char *fgets(char *__restrict s, int n, FILE *__restrict f)
 	s[i] = 0;
 	return s;
 }
-char *fgets_unlocked(char *s, int n, FILE *f) { return fgets(s, n, f); }
 
 #if __STDC_VERSION__ < 201112L
 char *gets(char *s)
@@ -181,7 +176,6 @@ int fputs(const char *__restrict s, FILE *__restrict f)
 	size_t n = strlen(s);
 	return __fwrite(s, 1, n, f) == n ? 0 : EOF;
 }
-int fputs_unlocked(const char *s, FILE *f) { return fputs(s, f); }
 
 int puts(const char *s)
 {
