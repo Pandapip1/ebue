@@ -46,6 +46,15 @@ Status values:
 - **not yet reached** — nobody has checked the spec page against the
   tests yet.
 
+**Companion file:** `test/POSIX-GAP-ACCOUNTING.md` accounts for the
+other half of the picture — every one of POSIX.1-2017's 1177 function
+interfaces, including the 473 ntlibc does not have at all, and the 371
+it has that this ledger has no row for. Read it for "what is missing";
+read this file for "how conformant is what exists". It also flags two
+rows here that are now out of date (`select()` is implemented as of
+`bd9982c`) and the twelve slash-joined rows whose second name has no
+assertion.
+
 ## Priority order (per the task brief)
 
 Done (clause-by-clause audited, see the per-header sections below):
