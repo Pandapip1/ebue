@@ -747,10 +747,18 @@ finer-grained than the note it would carry.
 3. **The `math.h` `f`/`l` tail** (150 implemented, 70 with no assertion
    at all). Bulk, low risk, mechanical. **Done** — see "Closed: the
    `math.h` `f`/`l` tail (70)" under "Successor session" below.
-4. **Re-verify this file's `impl` vs `audited` split** after (2). The
-   split here was derived by tokenising the ledger's first column; it is
-   exact for a ledger row that names a function, and conservative for
-   one that describes a group in prose.
+4. **Re-derive this file's `impl` vs `audited` split with a method that
+   does not have these failure modes**, after (2). The split here was
+   derived by tokenising the ledger's first column; it is exact for a
+   ledger row that names a function, and conservative for one that
+   describes a group in prose. That is not the whole of it: four
+   later audits each hit the method independently, in both directions
+   and in three ways that are not counting errors at all. See "The
+   counting method is what item 4 has to replace" at the end of this
+   file for the five failure modes, the evidence, and the
+   pages-audited counting convention that follows from them. Re-running
+   the existing pipeline unchanged reproduces all five, so this item is
+   a re-derivation, not a re-run.
 
 **Explicitly unverified, and why:**
 
@@ -1230,13 +1238,12 @@ caveat item 4 already records:
   between tables rather than a subtraction, and one the mechanical
   pipeline cannot infer, since `ioctl` does link.
 
-Given that this file has now been hit in both directions on the same
-day — an undercount (`hdestroy`, `wordfree`) and, per the concurrent
-`stdio`/`stdarg` audit, an overcount of six names that already had
-priority-5 rows — the honest statement is that **the counting method,
-not any one auditor's arithmetic, is what needs item 4's re-run.**
 Nothing above has been hand-fitted to make 357 come out even, and the
-frozen `04edec2` headline counts are untouched.
+frozen `04edec2` headline counts are untouched. These four cases —
+`strlen`/`strnlen`, the `drand48` family, `ioctl`, and `wctype`/
+`wctrans` under group I — are collected with the other audits' as
+evidence in "The counting method is what item 4 has to replace" below,
+which is where the conclusion they point at is drawn.
 
 Group totals for this session: H = 12, I = 16, J1 = 4, J2 = 1
 (reclassified, not subtracted), J3 = 14. **46 interfaces given a
@@ -1276,21 +1283,11 @@ counted in **both** places. Reading the frozen tables, subtract 28 from
 357 and add **22** to *implemented + clause-audited*; the other six
 were already there.
 
-**The wider point, which is not about this batch's arithmetic.** The
-note above this one records the tokeniser *undercounting*, because
-`hdestroy` and `wordfree` appeared only in prose and in a sibling row's
-clause column. This note records it *overcounting*, because six names
-carry a row in two sections at once. Two auditors, working the same day
-on different headers, each hit a counting problem in the opposite
-direction — which says plainly that **the ledger's counting method is
-itself unreliable, not that either pass miscounted**. First-column
-tokenisation cannot tell "audited twice" from "audited once" and cannot
-see an audit that a row describes in prose, and no amount of care by an
-individual auditor fixes either. Item 4 of the successor queue should be
-read as "re-derive the split with a method that does not have these two
-failure modes", not as "re-run the same pipeline and trust the answer".
-This is the sort of thing that is only visible when several people touch
-one document in a single day, and it will be invisible again next week.
+These six are the *overcount* case of the counting problem the section
+"The counting method is what item 4 has to replace" below sets out. That
+section is where the general conclusion is drawn, once, for all four
+audits; this note records only what groups K/L contribute to it, and
+its 22-of-28 is a count of pages audited, not of first-column tokens.
 
 Two further cautions, both checked rather than assumed:
 
@@ -1385,20 +1382,19 @@ for a row describing several:
   `hdestroy`/`wordfree` already demonstrated.
 - Every first-column identifier in group M was checked against every
   first-column identifier earlier in the ledger. **The intersection is
-  not empty**, and this is worth stating rather than forcing:
-  `test/POSIX-COVERAGE.md`'s priority-6 section ("unistd.h, fcntl.h,
-  sys/stat.h") already has first-column rows for `fchown`,
-  `fchownat`, `lchown`, `setregid`, `setpgrp`, `setsid` and `pause` —
-  added by the never-asserted sweep, recording that sweep's *first
-  assertion* rather than an audit of those pages. Group M's rows
-  record the pages' clause lists. A first-column tokeniser cannot tell
-  the two apart and will **double-count** those seven. That is the
-  opposite-direction error a concurrent auditor hit the same day; the
-  arithmetic above (43 -> 18) is stated in terms of *pages audited*,
-  which is the number that is actually true, and the tokeniser's
-  answer will differ. Do not reconcile them by editing either.
-  `test/POSIX-COVERAGE.md`'s group Q section lists the same overlap
-  for groups N, O and Q.
+  not empty**: `test/POSIX-COVERAGE.md`'s priority-6 section
+  ("unistd.h, fcntl.h, sys/stat.h") already has first-column rows for
+  `fchown`, `fchownat`, `lchown`, `setregid`, `setpgrp`, `setsid` and
+  `pause` — added by the never-asserted sweep, recording that sweep's
+  *first assertion* rather than an audit of those pages, where group
+  M's rows record the pages' clause lists. Both rows are true and a
+  tokeniser counts each name twice. Do not reconcile them by editing
+  either. This is failure mode 2 of "The counting method is what item 4
+  has to replace" at the end of this file, which is where the general
+  conclusion is drawn for all four audits; the arithmetic above
+  (43 -> 18) is in *pages audited*, per the convention that section
+  sets out. `test/POSIX-COVERAGE.md`'s group Q section lists the same
+  overlap for groups N, O and Q.
 
 ## Changes since the clause audit of the `unistd.h` row (group N)
 
@@ -1481,14 +1477,15 @@ frozen "Implemented, not clause-audited (357)" table therefore drops
   entry is scoped "except for execlp() and execvp()". Now that this
   tree has `src/sh/` and an `sh` binary, `<shell path>` exists.
 
-**Counting caution, continued.** Group Q's seven are the clearest case
-yet of the undercount mechanism item 4 warns about running the other
-way: they were audited at `0e3aefa`, are cited page-by-page in
-`test/posix-unistd.c`, and were *still* counted as unaudited here,
-purely because no first-column row named them. Whoever re-runs the
-pipeline should expect its answer to differ from the prose in all three
-of these notes, and should trust the prose about *which pages have been
-audited* over any tokeniser's total.
+**Counting caution, continued.** Group Q's seven are the sharpest case
+in the file of the count and the work disagreeing: they were audited at
+`0e3aefa` and are cited page-by-page in `test/posix-unistd.c`, yet were
+still carried here as unaudited, purely because no first-column row
+named them — and they now carry priority-6 rows that a tokeniser would
+add to group M/N/O's, counting them twice in the other direction. Both
+halves are failure mode 2 below; see "The counting method is what item 4
+has to replace" at the end of this file. Trust these notes' prose about
+*which pages have been audited* over any tokeniser's total.
 
 ## Changes since the clause audit of the `unistd.h` row (group P) — row closed
 
@@ -1551,3 +1548,128 @@ auditor's `newlocale`/`posix_fadvise`/`posix_fallocate`/`snprintf`
 finds, and these ten. "Exists and links" remains a much weaker
 statement than it looks, and so, this row shows, does "has a first
 assertion": all but one of these 43 already had one.
+
+## The counting method is what item 4 has to replace
+
+Written once, here, because **four** separate audits reached it
+independently and this file should not read as four people discovering
+the same thing in four places. Groups A-G, groups H-J, groups K/L and
+groups M-Q were assigned disjoint headers by letter and did not collide
+on any interface; they collided only on this. The conclusion is not that
+any of them miscounted:
+
+**The `impl` vs `audited` split in this file is derived by tokenising
+the first column of `test/POSIX-COVERAGE.md`. That method fails in five
+distinct ways, in both directions, and no amount of care by an
+individual auditor fixes any of them.** Item 4 of the successor queue is
+therefore "re-derive the split with a method that does not have these
+failure modes", not "re-run the same pipeline and trust the answer".
+Re-running the pipeline unchanged reproduces every one of them.
+
+**The convention that follows from this, adopted from groups M-Q and
+applied to all four notes: count in *pages audited*, not in what a
+tokeniser would report.** A page is audited when its clause list has
+been read against the tree and rowed; that is a fact about the work and
+does not change when a name happens to carry two rows or none. The
+tokeniser's answer is a proxy for it, and the five failures below are
+all places where the proxy and the fact disagree. Where a note states
+both — group M's `unistd.h` row going 43 -> 18, groups K/L's 22 of 28 —
+the pages-audited number is the one that is true.
+
+**The four audits' movement, in pages audited, collected here so the
+total is in one place.** None of it is folded into the frozen headline
+counts; this is what item 4 has to fold in.
+
+| batch | pages audited | effect on the "Implemented, not clause-audited (357)" table |
+|---|---|---|
+| groups A-G | 60 | eight headers' rows cleared (`termios.h` 11, `search.h` 11, `fenv.h` 11, `pwd.h` 7, `grp.h` 7, `regex.h` 4, `dlfcn.h` 4, `glob.h`/`fnmatch.h`/`wordexp.h` 5) |
+| groups H-J | 46 | `ctype.h` 12, `wctype.h` 16, `locale.h` 4, `stropts.h` 1 (reclassified to *absent*, not subtracted), and J3's long tail of 14 |
+| groups K/L | 22 (of 28 named) | `stdio.h` 16 and `stdarg.h` 12, less the six already carrying priority-5 rows at `04edec2` |
+| groups M-Q | 43 | the `unistd.h` row closed outright, 43 -> 0: M 25, N 3, O 7, P 1 newly audited, plus Q's 7 the never-asserted sweep had already audited and already rowed |
+
+A tokeniser run over the same sections will not reproduce these
+numbers, and that is the point: it double-counts the six of K/L, the
+21 priority-6 names M/N/O/Q re-row, and `wctype`/`wctrans`; it misses
+`hdestroy`, `wordfree`, `pause` and the `drand48` family; it has no
+answer for `strlen`/`strnlen`; and it puts `ioctl` in the wrong table.
+
+The evidence, each case recorded in the note that found it:
+
+1. **Undercount — audited, but never in a first column.** `hdestroy`
+   and `wordfree` are audited by `test/posix-glob.c`, which calls both
+   and cites their pages, but they are named only in surrounding prose
+   and in a sibling row's clause column. Step 3 sees 58 names where
+   groups A-G audited 60. The `drand48`/`erand48`/`lrand48`/`mrand48`/
+   `seed48`/`lcong48` family is the same shape from group J3: audited
+   under priority 2, appearing in J3 only in a clause column. So is
+   `pause` in group M, which carries one first-column row and is
+   otherwise discussed in prose. (Groups A-G note; groups H-J note,
+   third bullet of the J3 cautions; group M note, first caution.)
+2. **Overcount — audited once, rowed twice.** `tempnam`,
+   `getc_unlocked`, `vprintf`, `vscanf`, `va_arg` and `va_copy` already
+   had clause-cited priority-5 rows at `04edec2`, and the frozen
+   `stdio.h` (16) / `stdarg.h` (12) rows were never updated to match, so
+   groups K/L move 22 pages, not 28. Groups M-Q hit the same shape at
+   larger scale and from the other direction in time: the never-asserted
+   sweep had already given priority-6 first-column rows to `fchown
+   fchownat lchown setregid setpgrp setsid pause linkat readlink
+   readlinkat execl execle execlp fexecve confstr swab sync getlogin
+   getlogin_r tcgetpgrp tcsetpgrp`, recording that sweep's *first
+   assertion*; groups M, N, O and Q row the same names again for their
+   *pages' clause lists*. Both rows are true and neither supersedes the
+   other, and a tokeniser counts every one of those names twice. Group I
+   is a third instance: `wctype` and `wctrans` carry first-column rows
+   there while the "Audited" table already credits them from priority 8.
+   (Groups K/L note; group M note, second caution, and
+   `test/POSIX-COVERAGE.md`'s group Q section, which states the overlap
+   for M, N, O and Q in one place rather than four; groups H-J note,
+   group I cautions.)
+3. **Neither in nor out — covered by a group audit with no rows.**
+   `strlen` and `strnlen` sit in the 357's `string.h` row, but
+   priority 1 audited that header as a group and names neither in a
+   first column, so the tokeniser has never counted them on either
+   side. Group J3 gives them rows, which the pipeline *will* count;
+   whether that is a new count or a double count depends on how item 4
+   reads priority 1. Flagged, deliberately not decided here. (Groups
+   H-J note, first bullet of the J3 cautions.)
+4. **Wrong table entirely — a row that should not exist.** `ioctl`
+   belongs in the absent accounting, not in "implemented, not
+   clause-audited": POSIX's is `<stropts.h>`'s `int ioctl(int, int,
+   ...)` over STREAMS devices, ntlibc's is `<sys/ioctl.h>`'s `int
+   ioctl(int, unsigned long, ...)` over NT handles — two functions
+   sharing a name. This is a move *between* tables rather than a
+   subtraction from 357, and the mechanical pipeline cannot infer it,
+   because it derives "implemented" from what links and `ioctl` does
+   link: the name is real, the interface is not. Item 4 has to
+   special-case it. (Groups H-J note, group J2.)
+5. **A row made false by a later commit rather than by a later audit,
+   with nothing to re-check it.** Merging these audits surfaced three
+   in `test/POSIX-COVERAGE.md`, all flagged in place there and none
+   hand-deleted. Priority 8's `<wctype.h>` row says the header "does not
+   exist in this library at all" (N/A) — `include/wctype.h` landed
+   2026-08-23 and group I audits all sixteen functions as covered.
+   Priority 4's `_longjmp` row calls "shall not manipulate the signal
+   mask" vacuous for want of any mask machinery — group J3 asserts it
+   as covered against the real `blocked` set in `src/signal/signal.c`.
+   Priority 6's `linkat` row calls `AT_SYMLINK_FOLLOW` N/A because
+   telling the flag's two branches apart needs a symbolic link and so
+   `SeCreateSymbolicLinkPrivilege` — group N reclassifies it a **BUG**,
+   correctly: `src/unistd/link.c:27` is `(void)flags;`, which is
+   readable without running anything, so the clause is *unreached in
+   some environments*, not *inapplicable*. In all three cases the
+   *tests* agree and all pass; it is the rows' prose that contradicts,
+   and a tokeniser reading them counts one interface as both N/A and
+   audited. (Group N's note states its own; the other two are noted at
+   the rows.)
+
+Cases 1 and 2 are the two directions of the same defect: first-column
+tokenisation cannot tell "audited twice" from "audited once", and cannot
+see an audit a row describes in prose. Cases 3, 4 and 5 are not counting
+errors at all — they are questions the method has no way to ask: what a
+group audit covers, whether a linkable symbol is the interface POSIX
+specifies, and whether a row is still true.
+
+None of the five has been folded into the headline counts. Those numbers
+are a mechanically-derived snapshot of `04edec2` and are deliberately
+not hand-edited; each note above records its movement in prose for item
+4 to fold in, and every one of them respects that rule.

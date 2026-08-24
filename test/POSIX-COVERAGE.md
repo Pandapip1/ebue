@@ -397,6 +397,20 @@ No bugs found. NT has no real signal mask, so `sigsetjmp`/`siglongjmp`
 share the plain `setjmp`/`longjmp` assembly body — the "restore the
 signal mask" half of the contract is vacuously satisfied.
 
+**Superseded, and left standing rather than rewritten.** The
+`_longjmp` "shall not manipulate the signal mask" row above is marked
+N/A on the grounds that there is no mask machinery for it to be absent
+from. Group J3 below asserts the same clause as **covered**, and its
+reasoning is the one that holds today: `src/signal/signal.c` does keep a
+real `blocked` set that `sigprocmask()` reads and writes, so the clause
+is observable and is observed. The two rows contradict on status and on
+reason; group J3's is later, evidenced against the tree, and asserted by
+`test/posix-tail.c`. Both tests pass and neither assertion contradicts
+the other — only the two rows' prose does. Flagged here rather than
+edited, because whichever row is deleted the deletion is a hand-edit of
+someone else's audit; successor-queue item 4 in
+`test/POSIX-GAP-ACCOUNTING.md` is where it gets reconciled.
+
 ### getopt() (unistd.h / getopt.h)
 
 | function | clause checked | status | test |
@@ -722,6 +736,17 @@ ABI), listed below.
 No bugs found this session (the two divergences above are deliberate
 design choices documented in `src/stdlib/mbrtowc.c`, not spec
 violations to fence).
+
+**Superseded, and left standing rather than rewritten.** The
+`<wctype.h>` row above — "header does not exist in this library at all",
+N/A — was true when priority 8 was written and is not true now:
+`include/wctype.h` landed on 2026-08-23, and group I below clause-audits
+all sixteen of its `isw*`/`tow*` functions as covered, plus `wctype()`
+and `wctrans()`. The row is the stalest kind of ledger entry — one made
+false by a later commit rather than by a later audit — and it is the
+one place in this file where an old N/A directly contradicts a new
+"covered". Flagged here rather than deleted, for the same reason as the
+`_longjmp` note under priority 4.
 
 ### Not reached (wchar.h)
 
