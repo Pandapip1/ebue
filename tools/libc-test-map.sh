@@ -85,6 +85,37 @@
 
 set -u
 
+# ------------------------------------------------------------ determinism
+#
+# Every `sort` below must order BYTES, not words.  glibc's UTF-8
+# collations ignore punctuation at the first comparison level, so
+# `sched_getparam` sorts BEFORE `sched_get_priority_max` under
+# en_US.UTF-8 (compare `schedgetparam` with `schedgetprioritymax`) and
+# AFTER it under C (`_` is 0x5F, `p` is 0x70).  In this corpus the same
+# rule reorders `pthread-robust-detach` against
+# `pthread_condattr_setclock`, `regexec-nosub` against `regex-*`, and
+# `iconv-roundtrips` against `iconv_*`.
+#
+# This report is CHECKED IN, so that difference is not cosmetic: a
+# developer's locale and CI's disagree permanently, --check goes red on a
+# regeneration that changed nothing, and the diff -- the entire reason
+# the file is checked in -- stops being readable.  tools/posix-gapmap.sh
+# had exactly this bug and CI was red on it, and this file was written in
+# parallel with it from the same design, so it shipped the same defect.
+#
+# Not a latent one, either: the report as committed was itself generated
+# under a UTF-8 locale, so regenerating under C reordered eight rows of
+# section 5's appendix.  Anyone running --check under C was already
+# getting a red stage for a reason that had nothing to do with the gap.
+#
+# Set once and exported rather than sprinkled per `sort` invocation:
+# pathname expansion (the `src/functional/*.c` glob that feeds the row
+# order), awk string comparison (the greedy closure's tie-break), and
+# `grep`/`tr` ranges are all locale-sensitive too, and one setting is one
+# thing to reason about instead of an audit of every pipeline.
+LC_ALL=C
+export LC_ALL
+
 # shellcheck disable=SC1007
 srcdir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$srcdir" || exit 1
@@ -314,6 +345,15 @@ classify() {
 		fi
 		bucket_one "$n" "$corp" "$f" "$W" >> "$W/rows"
 	done
+
+	# Sorted by test name before anything else reads it.  The loop above
+	# walks two globs -- functional, then regression -- and pathname
+	# expansion is collation-ordered, so this file's line order was a
+	# property of the caller's locale rather than of the data.  The
+	# LC_ALL=C above already fixes that; sorting as well makes the order
+	# a stated property of the file instead of an emergent one, so a
+	# later reader does not have to know that a glob was involved.
+	sort -o "$W/rows" "$W/rows"
 }
 
 # bucket_one NAME CORPUS SRC WORKDIR -> one tab-separated row:
@@ -846,7 +886,22 @@ class_b_table() {
 		cnt=$(awk -F'\t' -v s="$sc" '$3=="B"&&$4==s' "$w/rows" | wc -l | tr -d ' ')
 		keys=$(awk -F'\t' -v s="$sc" '$3=="B"&&$4==s{print $5}' "$w/rows" | tr ' ' '\n' |
 		       grep -v '^$' | sort -u | sed "s/^/$BQ/;s/\$/$BQ/" | tr '\n' ' ')
-		det=$(awk -F'\t' -v s="$sc" '$3=="B"&&$4==s{print $6; exit}' "$w/rows")
+		# ONE representative detail for a sub-class whose rows may each
+		# carry their own.  The rule has to be total and stated, because
+		# a reviewer looking at the row cannot reconstruct why that
+		# wording won.  It used to be "whichever row came first in
+		# $W/rows", which is an arbitrary element of a set: that file's
+		# order was the order two `*.c` globs expanded in, i.e. a
+		# property of the caller's collation, so `harness-companion`
+		# ("provided by tls_align_dso.so") and `other` (the raw first
+		# diagnostic) could each change wording between two runs of an
+		# unchanged tree.
+		#
+		# The rule now: the detail belonging to the sub-class's
+		# C-first test NAME.  Sorting on the name rather than on the
+		# detail keeps the column tied to an identifiable row.
+		det=$(awk -F'\t' -v s="$sc" '$3=="B"&&$4==s{printf "%s\t%s\n", $1, $6}' "$w/rows" |
+		      sort | head -1 | cut -f2-)
 		printf '| **%s** | %s | %s | %s |\n' "$sc" "$cnt" "$keys" "$det"
 	done
 	echo
