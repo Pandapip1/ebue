@@ -462,7 +462,46 @@ n_tests=$(find "$IFACES" -name '*.c' | wc -l | tr -d ' ')
 n_dirs=$(find "$IFACES" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
 check_census "$n_tests" "$n_dirs" || exit 1
 
-LTP_SHA=$(git -C "$SUITE" rev-parse HEAD 2>/dev/null || echo unknown)
+# The LTP pin.  Two independent sources, because neither alone is always
+# available and they answer subtly different questions:
+#
+#   the submodule's own HEAD   what is actually on disk and being measured
+#   the gitlink at HEAD        what this repository says should be there
+#
+# tools/gate.sh's stage copies are rsync'd with --exclude=.git, which
+# strips third_party/ltp's .git FILE along with the top-level directory,
+# so inside a stage copy the first source is simply not there -- the
+# report came out saying `unknown`, which is how this fallback exists.
+# The second is read out of GAPMAP_GITDIR, the same repository the
+# ancestry invariant uses.
+#
+# When both are available and DISAGREE, that is a hard error rather than
+# a preference for one of them: the checkout has been moved off the pin,
+# so the report would describe a version of the suite nobody else has,
+# under a SHA that says otherwise.  That is the one failure here that
+# would silently produce plausible, wrong, permanent numbers.
+ltp_head=$(git -C "$SUITE" rev-parse HEAD 2>/dev/null || true)
+ltp_link=$(git -C "$GAPMAP_GITDIR" rev-parse "HEAD:third_party/ltp" 2>/dev/null || true)
+if [ -n "$ltp_head" ] && [ -n "$ltp_link" ] && [ "$ltp_head" != "$ltp_link" ]; then
+	echo "posix-gapmap: PIN FAILED -- third_party/ltp is checked out at" >&2
+	echo "posix-gapmap:   $ltp_head" >&2
+	echo "posix-gapmap: but this repository pins" >&2
+	echo "posix-gapmap:   $ltp_link" >&2
+	echo "posix-gapmap: The report would be measured against one suite and" >&2
+	echo "posix-gapmap:   labelled with another.  Either restore the pin" >&2
+	echo "posix-gapmap:   (git submodule update --init) or commit the move." >&2
+	exit 1
+fi
+LTP_SHA=${ltp_head:-$ltp_link}
+if [ -z "$LTP_SHA" ]; then
+	echo "posix-gapmap: could not determine which LTP revision is checked" >&2
+	echo "posix-gapmap:   out at $SUITE, from either the submodule itself or" >&2
+	echo "posix-gapmap:   the gitlink in $GAPMAP_GITDIR." >&2
+	echo "posix-gapmap: The report's whole claim is 'these numbers came from" >&2
+	echo "posix-gapmap:   THIS suite at THIS revision'; without the revision" >&2
+	echo "posix-gapmap:   it is a table of numbers from nowhere." >&2
+	exit 2
+fi
 NTLIBC_SHA=$(git -C "$GAPMAP_GITDIR" rev-parse HEAD 2>/dev/null || echo unknown)
 
 # ---------------------------------------------------------- classification
