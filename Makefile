@@ -423,6 +423,20 @@ hygiene: $(GENH)
 asan: $(GENH)
 	@$(srcdir)/tools/asan-build.sh
 
+# Wall-clock seconds per harness, matching tools/fuzz.sh's own `${1:-60}`
+# default so the two cannot drift.  It was referenced here and defined
+# nowhere, which read as a configured knob and was not one: a `make fuzz`
+# passed an empty argument and the real default lived, undocumented, in
+# the script.  `?=` so a command-line or environment FUZZ_TIME still
+# wins, which is how it was always meant to be used:
+#
+#   make fuzz FUZZ_TIME=300
+#
+# Deliberately unquoted below: this is a plain number, and quoting it
+# would turn an explicitly empty FUZZ_TIME= into an empty first argument
+# (-max_total_time= with nothing after it) instead of no argument at all.
+FUZZ_TIME ?= 60
+
 fuzz: $(GENH)
 	@$(srcdir)/tools/fuzz.sh $(FUZZ_TIME)
 
