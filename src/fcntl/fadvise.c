@@ -65,16 +65,35 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 		ai.AllocationSize = want;
 		st = NtSetInformationFile(f->h, &io, &ai, sizeof ai, FileAllocationInformation);
 		/* Real Windows honours this; Wine's ntdll does not implement
-		 * FileAllocationInformation at all (STATUS_NOT_IMPLEMENTED,
-		 * measured against wine-10.x) and every other failure short of
+		 * FileAllocationInformation at all (it appears only in the
+		 * set-info size table in dlls/ntdll/unix/file.c and falls
+		 * through to the default arm) and every other failure short of
 		 * that is a real error worth reporting (e.g. ENOSPC). Falling
-		 * through on ENOSYS specifically still leaves the EndOfFile
-		 * extension below to grow the file -- a strict reading of
-		 * posix_fallocate() loses the "no later write can ENOSPC"
-		 * guarantee on such a system, but the alternative is failing a
-		 * real Windows-capable call every time it merely runs under
-		 * Wine, which is worse than the degraded guarantee. */
-		if (!NT_SUCCESS(st) && __errno_from_status(st) != ENOSYS) return __errno_from_status(st);
+		 * through on "no such information class here" still leaves the
+		 * EndOfFile extension below to grow the file -- a strict
+		 * reading of posix_fallocate() loses the "no later write can
+		 * ENOSPC" guarantee on such a system, but the alternative is
+		 * failing a real Windows-capable call every time it merely runs
+		 * under Wine, which is worse than the degraded guarantee.
+		 *
+		 * Branch on the *status*, not on __errno_from_status().  The
+		 * errno mapping is a lossy projection: it folds many distinct
+		 * statuses onto one value, so a test against it silently
+		 * widens.  Concretely, Wine reports the same missing set-info
+		 * case as STATUS_NOT_IMPLEMENTED natively but as
+		 * STATUS_INVALID_INFO_CLASS under WOW64; the latter maps to
+		 * EINVAL, so an ENOSYS test tolerated the gap on x86_64 and
+		 * rejected it on i386.  Widening the test to EINVAL would be
+		 * worse still -- EINVAL also carries STATUS_INVALID_PARAMETER,
+		 * STATUS_INFO_LENGTH_MISMATCH and STATUS_DATATYPE_MISALIGNMENT,
+		 * turning this fallback into a bug-hider.  Whenever the status
+		 * is in hand, decide from it. */
+		if (!NT_SUCCESS(st)
+		    && st != STATUS_NOT_IMPLEMENTED
+		    && st != STATUS_NOT_SUPPORTED
+		    && st != STATUS_INVALID_DEVICE_REQUEST
+		    && st != STATUS_INVALID_INFO_CLASS)
+			return __errno_from_status(st);
 	}
 	if (want > si.EndOfFile) {
 		eof.EndOfFile = want;
