@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <utime.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -48,11 +49,13 @@ static void test_open_umask_bug(void)
 	 * unlink a read-only file (real NT does not -- see test/unistd.c's
 	 * "a file created read-only via the mode argument" case for the
 	 * same quirk), so clear the attribute first when that happens.
-	 * Wine also refuses a plain chmod() back from read-only (it maps
-	 * FILE_WRITE_ATTRIBUTES to a Unix O_WRONLY open, which a read-only
-	 * file's Unix mode 0444 does not permit); test/unistd.c's "chmod
-	 * back" case works around that with fchmod on an O_RDONLY
-	 * descriptor, which Wine's NtSetInformationFile does accept. */
+	 * Plain chmod() back from read-only used to fail the same way
+	 * here (Wine denies a bare FILE_WRITE_ATTRIBUTES open once
+	 * FILE_ATTRIBUTE_READONLY is set); src/stat/chmod.c's fchmodat()
+	 * now retries with a read-attributes-only handle when that
+	 * happens (see test_chmod_owner_can_always_chmod_readonly()
+	 * above), so the chmod() branch below is dead on a fixed build
+	 * and kept only as a defensive fallback / regression net. */
 	if (unlink("um.txt") == -1) {
 		CHECK(errno == EACCES);
 		if (chmod("um.txt", 0644) == -1) {
@@ -64,6 +67,117 @@ static void test_open_umask_bug(void)
 		}
 		CHECK(unlink("um.txt") == 0);
 	}
+}
+
+/* chmod.html DESCRIPTION: "The application shall ensure that the
+ * effective user ID of the process matches the owner of the file or
+ * the process has appropriate privileges" in order to change the
+ * file's permission bits -- nothing there conditions permission to
+ * chmod() on the file's *own* current mode.  A file with no
+ * owner-write bit (0444) must still be chmod()-able by its owner.
+ * BUG (fixed): src/fcntl/open.c sets FILE_ATTRIBUTE_READONLY for a
+ * no-write-bits mode; src/stat/chmod.c's fchmodat() used to open every
+ * target with FILE_WRITE_ATTRIBUTES unconditionally, and Wine's
+ * server denies that open outright once FILE_ATTRIBUTE_READONLY is
+ * already set (real NT does not -- see test_open_umask_bug() above),
+ * so chmod() on a 0444 file was permanently EACCES.  This is what
+ * broke GNU tar extraction downstream: tar creates most files 0444,
+ * then chmod()s/utimensat()s them. */
+static void test_chmod_owner_can_always_chmod_readonly(void)
+{
+	struct stat st;
+	int fd = open("t-chmod-ro.txt", O_CREAT | O_WRONLY | O_TRUNC, 0444);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(stat("t-chmod-ro.txt", &st) == 0 && (st.st_mode & 0777) == 0444);
+
+	errno = 0;
+	CHECK(chmod("t-chmod-ro.txt", 0644) == 0);	/* would fail: EACCES before the fix */
+	CHECK(stat("t-chmod-ro.txt", &st) == 0 && (st.st_mode & 0777) == 0644);
+
+	/* round trip back down to 0444 and confirm it sticks */
+	CHECK(chmod("t-chmod-ro.txt", 0444) == 0);
+	CHECK(stat("t-chmod-ro.txt", &st) == 0 && (st.st_mode & 0777) == 0444);
+
+	/* unlink() of a read-only file is Wine's other unfixed
+	 * WA-open-denied quirk (test_open_umask_bug()'s comment above);
+	 * clear the attribute first so cleanup does not itself fail. */
+	CHECK(chmod("t-chmod-ro.txt", 0644) == 0);
+	unlink("t-chmod-ro.txt");
+}
+
+/* utime.html DESCRIPTION: with a non-null times argument "a process
+ * must have write permission for the file, or be the owner of the
+ * file, or be a process with appropriate privileges"; with a null
+ * times argument, "the effective user ID of the process shall match
+ * the owner of the file, or the process has write permission to the
+ * file or has appropriate privileges".  Neither clause conditions
+ * permission to utime()/utimensat() on the file's own *current* mode
+ * bits.  Same BUG (fixed) as chmod above: src/stat/utimensat.c's
+ * utimensat() opened with FILE_WRITE_ATTRIBUTES unconditionally, so a
+ * 0444 file's own read-only attribute made every utimensat()/utime()
+ * call on it EACCES under Wine -- the other half of what broke tar. */
+static void test_utimensat_owner_can_touch_readonly(void)
+{
+	struct stat st;
+	struct timespec ts[2];
+	int fd = open("t-utime-ro.txt", O_CREAT | O_WRONLY | O_TRUNC, 0444);
+	CHECK(fd >= 0 && close(fd) == 0);
+
+	ts[0].tv_sec = ts[1].tv_sec = 1000000;
+	ts[0].tv_nsec = ts[1].tv_nsec = 0;
+	errno = 0;
+	CHECK(utimensat(AT_FDCWD, "t-utime-ro.txt", ts, 0) == 0);	/* would fail: EACCES before the fix */
+	CHECK(stat("t-utime-ro.txt", &st) == 0);
+	CHECK(st.st_mtim.tv_sec == 1000000);
+
+	/* utime.html: only the times change -- mode must survive
+	 * untouched.  BUG (fixed): FILE_BASIC_INFORMATION's
+	 * FileAttributes==0 is documented as "leave unchanged", but
+	 * Wine's NtSetInformationFile was observed clearing
+	 * FILE_ATTRIBUTE_READONLY on every timestamp-only call, silently
+	 * turning the file writable even though the call "succeeded". */
+	CHECK((st.st_mode & 0777) == 0444);	/* would fail: mode clobbered to 0644 before the fix */
+
+	CHECK(utime("t-utime-ro.txt", 0) == 0);
+	CHECK(stat("t-utime-ro.txt", &st) == 0 && (st.st_mode & 0777) == 0444);
+
+	/* see test_chmod_owner_can_always_chmod_readonly()'s cleanup comment */
+	CHECK(chmod("t-utime-ro.txt", 0644) == 0);
+	unlink("t-utime-ro.txt");
+}
+
+/* Combined round trip + failure-path check: FILE_ATTRIBUTE_READONLY
+ * must be left exactly as the last successful chmod()/utimensat()
+ * call set it -- neither call may corrupt it, on the success path or
+ * on an unrelated induced-failure path (chmod()/utimensat() of a
+ * nonexistent name, which must fail before ever touching the real
+ * file's handle). */
+static void test_chmod_utimensat_attr_state_after_failure(void)
+{
+	struct stat st;
+	struct timespec ts[2];
+	int fd = open("t-attr-state.txt", O_CREAT | O_WRONLY | O_TRUNC, 0444);
+	CHECK(fd >= 0 && close(fd) == 0);
+
+	CHECK(chmod("t-attr-state.txt", 0444) == 0);	/* no-op set; still exercises the WA-denied-open path */
+	CHECK(stat("t-attr-state.txt", &st) == 0 && (st.st_mode & 0777) == 0444);
+
+	ts[0].tv_sec = ts[1].tv_sec = 2000000;
+	ts[0].tv_nsec = ts[1].tv_nsec = 0;
+	CHECK(utimensat(AT_FDCWD, "t-attr-state.txt", ts, 0) == 0);
+	CHECK(stat("t-attr-state.txt", &st) == 0 && (st.st_mode & 0777) == 0444);
+
+	/* induced failure: a nonexistent path must fail before opening
+	 * the real file at all, and must not leave it half-changed. */
+	errno = 0;
+	CHECK(chmod("t-attr-state-nonexistent.txt", 0644) == -1 && errno == ENOENT);
+	errno = 0;
+	CHECK(utimensat(AT_FDCWD, "t-attr-state-nonexistent.txt", ts, 0) == -1 && errno == ENOENT);
+	CHECK(stat("t-attr-state.txt", &st) == 0 && (st.st_mode & 0777) == 0444);	/* untouched */
+
+	/* see test_chmod_owner_can_always_chmod_readonly()'s cleanup comment */
+	CHECK(chmod("t-attr-state.txt", 0644) == 0);
+	unlink("t-attr-state.txt");
 }
 
 /* dup.html DESCRIPTION (dup2()): "If fildes is equal to fildes2, ...
@@ -614,6 +728,9 @@ int main(void)
 	CHECK(chdir(dir) == 0);
 
 	test_open_umask_bug();
+	test_chmod_owner_can_always_chmod_readonly();
+	test_utimensat_owner_can_touch_readonly();
+	test_chmod_utimensat_attr_state_after_failure();
 	test_dup2_self_preserves_cloexec();
 	test_fcntl_dupfd_lowest();
 	test_fcntl_setfl_ignores_accmode();

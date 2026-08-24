@@ -443,9 +443,19 @@ int main(void)
 		CHECK(stat("ro.txt", &st) == 0 && !(st.st_mode & 0222));
 		errno = 0;
 		CHECK(open("ro.txt", O_WRONLY) == -1 && errno == EACCES);
-		if (!wine_ro_quirk) {
-			CHECK(unlink("ro.txt") == 0);   /* unlink clears the attribute itself */
-		} else {
+		/* unlink() of a read-only file is a separate Wine quirk from
+		 * the chmod-by-path one wine_ro_quirk above detects (that one
+		 * is fixed in src/stat/chmod.c's fchmodat() -- see
+		 * test/posix-unistd.c's test_chmod_owner_can_always_chmod_readonly()
+		 * -- but src/unistd/unlink.c still opens with
+		 * FILE_WRITE_ATTRIBUTES unconditionally, so it still hits
+		 * Wine's WA-open-denied-on-read-only-attribute refusal; real
+		 * NT does not).  Detect unlink's own failure independently
+		 * rather than reusing wine_ro_quirk, which no longer implies
+		 * this one now that chmod is fixed. */
+		errno = 0;
+		if (unlink("ro.txt") == -1) {
+			CHECK(errno == EACCES);
 			fd = open("ro.txt", O_RDONLY);
 			CHECK(fd >= 0 && fchmod(fd, 0644) == 0 && close(fd) == 0);
 			CHECK(unlink("ro.txt") == 0);

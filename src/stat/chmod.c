@@ -39,10 +39,26 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS st;
+	ULONG options;
 	int r;
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
-	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
+	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
+	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	if (st == STATUS_ACCESS_DENIED) {
+		/* chmod.html DESCRIPTION: the owner of a file "may always
+		 * change the permission of the file" -- a file's own mode
+		 * must never itself forbid chmod().  Wine's server denies
+		 * a FILE_WRITE_ATTRIBUTES open outright when the file
+		 * already carries FILE_ATTRIBUTE_READONLY (real NT does
+		 * not; see test/posix-unistd.c's test_open_umask_bug()),
+		 * which would otherwise make a 0444 file permanently
+		 * un-chmod-able by path.  Fall back to a handle that only
+		 * asks to read attributes -- Wine's NtSetInformationFile
+		 * does not itself require FILE_WRITE_ATTRIBUTES on the
+		 * handle, the same workaround test/unistd.c already applies
+		 * by hand via fchmod() on an O_RDONLY descriptor. */
+		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	}
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	r = chmod_handle(h, mode);
