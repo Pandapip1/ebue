@@ -73,7 +73,8 @@ STATRENAME = stat=__real_stat
 # driver appends it after -ldl/-lm, which is too late.
 
 HARNESSES = strtod printf scanf utf path strptime strtol strftime \
-            fnmatch regex glob wordexp
+            fnmatch regex glob wordexp \
+            shparse inet string search getopt env
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 
 # What the instrumented library is built from.  Derived with find, never

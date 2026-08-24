@@ -122,6 +122,26 @@ unsigned long long host_strtoull(const char *s, size_t *endoff, int base, int *e
 }
 
 /* The printf harness's oracle: glibc's snprintf, one argument at a time. */
+/* inet_pton(AF_INET), the host's.  A differential oracle is only worth
+ * having where the two implementations are answering the same question,
+ * and here they are: inet_pton.html specifies the strict dotted-quad
+ * grammar with no short forms and no octal or hex parts, and glibc and
+ * src/socket/inet.c both implement exactly that.  (inet_addr is
+ * deliberately NOT oracled -- ntlibc's goes through strtoul with base 0,
+ * which accepts leading whitespace and a sign that glibc's own parser
+ * does not, so the comparison would be a stream of disagreements about
+ * an under-specified corner rather than about defects.)
+ *
+ * Returns the host's return value; on success *out receives the four
+ * network-order bytes. */
+typedef int (*inet_pton_fn)(int, const char *, void *);
+int host_inet_pton4(const char *s, unsigned char out[4])
+{
+	static inet_pton_fn f;
+	if (!f) f = (inet_pton_fn)sym("inet_pton");
+	return f(2 /* AF_INET, and it is 2 on both sides */, s, out);
+}
+
 typedef int (*snprintf_fn)(char *, size_t, const char *, ...);
 static snprintf_fn hsnp(void)
 {
