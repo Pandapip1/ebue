@@ -487,13 +487,21 @@ typedef struct _AFD_CONNECT_INFO {
 /* Spelled with sizeof(HANDLE), not a literal, because the value
  * legitimately differs between this project's two target ABIs; see the
  * table above.  Not usable in #if, and deliberately not needed there. */
-#define AFD_CONNECT_REQ_OFF_SAN_ACTIVE  0UL
-#define AFD_CONNECT_REQ_OFF_ROOT_EP     ((unsigned long)sizeof(HANDLE))
-#define AFD_CONNECT_REQ_OFF_CONNECT_EP  (2UL * (unsigned long)sizeof(HANDLE))
-#define AFD_CONNECT_REQ_OFF_ADDR_COUNT  (3UL * (unsigned long)sizeof(HANDLE))
-#define AFD_CONNECT_REQ_OFF_ADDR_LENGTH (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 4UL)
-#define AFD_CONNECT_REQ_OFF_ADDR_TYPE   (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 6UL)
-#define AFD_CONNECT_REQ_OFF_ADDR        (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 8UL)
+/* Spelled in size_t, not unsigned long: under LLP64 `unsigned long` is 32
+ * bits while size_t is 64, so `3UL * sizeof(HANDLE)` would multiply in 32
+ * bits and only then widen for the pointer arithmetic it feeds.  Nothing
+ * here comes near overflowing -- the largest product is 3*8 -- but doing
+ * the arithmetic in the type the result is used as makes that true by
+ * construction rather than by the values happening to be small.  clang-tidy
+ * 18's bugprone-implicit-widening-of-multiplication-result flags the other
+ * spelling in the pinned lint stage, and it is right to. */
+#define AFD_CONNECT_REQ_OFF_SAN_ACTIVE  ((size_t)0)
+#define AFD_CONNECT_REQ_OFF_ROOT_EP     (sizeof(HANDLE))
+#define AFD_CONNECT_REQ_OFF_CONNECT_EP  ((size_t)2 * sizeof(HANDLE))
+#define AFD_CONNECT_REQ_OFF_ADDR_COUNT  ((size_t)3 * sizeof(HANDLE))
+#define AFD_CONNECT_REQ_OFF_ADDR_LENGTH (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 4)
+#define AFD_CONNECT_REQ_OFF_ADDR_TYPE   (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 6)
+#define AFD_CONNECT_REQ_OFF_ADDR        (AFD_CONNECT_REQ_OFF_ADDR_COUNT + 8)
 #define AFD_CONNECT_REQ_SIZE            (AFD_CONNECT_REQ_OFF_ADDR + TDI_ADDRESS_LENGTH_IP)
 
 /* ---- send / recv (shared.h: AFD_WSABUF, AFD_RECV_INFO, AFD_SEND_INFO,
