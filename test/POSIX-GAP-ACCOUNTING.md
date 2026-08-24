@@ -437,7 +437,7 @@ expectation.
 | `sigsuspend`, `sigpause` | `src/signal/signal.c:303,312` | `errno = EINTR; return -1` | genuine gap, same family |
 | `siginterrupt` | `src/signal/signal.c:305` | `return 0` | ntlibc has no restartable syscalls to interrupt; arguably correct |
 | `sigaltstack` | `src/signal/signal.c:306` | reports `SS_DISABLE`, ignores `ss` | XSI; honest "no alternate stack" answer |
-| `setuid`, `seteuid`, `setgid`, `setegid`, `setreuid`, `setregid`, `setgroups` | `src/unistd/ids.c:12-19` | `return 0` | single-identity model; `src/misc/pwd.c` and `src/misc/grp.c` are built on this being true |
+| `setuid`, `seteuid`, `setgid`, `setegid`, `setreuid`, `setregid` | `src/unistd/ids.c:12-17` | `return 0` | single-identity model; `src/misc/pwd.c` and `src/misc/grp.c` are built on this being true |
 | `chown`, `fchown`, `lchown`, `fchownat` | `src/unistd/ids.c:26-29` | `return 0` | same |
 | `getpgid`, `getsid` | `src/unistd/ids.c:21,25` | `return 1` | NT has no process groups or sessions |
 | `setpgid`, `nice` | `src/unistd/ids.c:22,30` | `return 0` | same |

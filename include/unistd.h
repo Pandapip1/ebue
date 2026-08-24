@@ -181,7 +181,6 @@ int sethostname(const char *, size_t);  /* undefined-ok: setting the
 int getdomainname(char *, size_t);  /* undefined-ok: NIS/YP domain name,
 	not an NT concept */
 int setdomainname(const char *, size_t);  /* undefined-ok: see getdomainname */
-int setgroups(size_t, const gid_t *);
 char *getpass(const char *);  /* undefined-ok: needs echo-off terminal
 	input; this library has no termios-style tty control */
 int daemon(int, int);  /* undefined-ok: the fork()+setsid() BSD idiom, on

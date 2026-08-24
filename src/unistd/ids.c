@@ -16,7 +16,6 @@ int setegid(gid_t g) { (void)g; return 0; }
 int setreuid(uid_t r, uid_t e) { (void)r; (void)e; return 0; }
 int setregid(gid_t r, gid_t e) { (void)r; (void)e; return 0; }
 int getgroups(int n, gid_t *g) { if (n > 0) g[0] = 1000; return 1; }
-int setgroups(size_t n, const gid_t *g) { (void)n; (void)g; return 0; }
 pid_t getpgrp(void) { return 1; }
 pid_t getpgid(pid_t p) { (void)p; return 1; }
 int setpgid(pid_t a, pid_t b) { (void)a; (void)b; return 0; }
