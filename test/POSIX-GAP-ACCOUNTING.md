@@ -1432,3 +1432,54 @@ use the **rc=77 "unverified"** route for a *privilege* rather than a
 network: without `SeCreateSymbolicLinkPrivilege` the dependent groups
 print a `SKIP` naming the mechanism and the run exits 77 rather than
 reporting a pass.
+
+## Changes since the clause audit of the `unistd.h` row (groups O and Q)
+
+Dated note, 2026-08-24, same route and reason as the group M and N
+notes above.
+
+**Group O** — `test/POSIX-COVERAGE.md`'s "unistd.h: the exec family's
+ERRORS" section — clause-audits **7** more of the `unistd.h` row's 43:
+`execl execle execlp execv execve execvp fexecve`.
+
+**Group Q** — "unistd.h: the seven already-audited names" — is
+bookkeeping rather than new work. `confstr getlogin getlogin_r swab
+sync tcgetpgrp tcsetpgrp` were **already** audited clause by clause by
+the never-asserted sweep recorded further up this file, with each page
+cited in `test/posix-unistd.c`; they simply never got a ledger row, so
+the count still called them unaudited. Rows added, no new assertions,
+no new findings — the `confstr()` `[EINVAL]` and
+`tcgetpgrp()`/`tcsetpgrp()` `[EBADF]` fences those rows point at are
+the sweep's own.
+
+Together with groups M (25) and N (3), that is **42 of the row's 43**;
+`fork` is the remainder and is group P. The `unistd.h` row of the
+frozen "Implemented, not clause-audited (357)" table therefore drops
+43 -> 1 -> 0 once group P lands, and 42 (then 43) move to
+*implemented + clause-audited*.
+
+**Two bugs and one UNIMPL in group O**, all in
+`src/process/exec.c`/`find_program.c`, none fixed:
+
+- `execvp("")`/`execlp("")` report `[EBADF]` where `exec.html` requires
+  `[ENOENT]` for an empty `file`. `__find_program("", 1)` runs the PATH
+  search with an empty name and `try_dir()` accepts `<PATH entry>\`
+  because `access(dir, X_OK)` succeeds on a directory — so `execvp("")`
+  resolves to the first PATH directory and tries to execute it.
+- executing a directory reports `[EBADF]`, an errno `exec.html` allows
+  only `fexecve()` to produce and only about its descriptor; the page
+  requires `[EACCES]` for a non-regular process image file.
+- **UNIMPL:** `execvp()`/`execlp()` do not fall back to a command
+  interpreter for a file that would otherwise be `[ENOEXEC]`, which
+  `exec.html` DESCRIPTION requires and which is why the `[ENOEXEC]`
+  entry is scoped "except for execlp() and execvp()". Now that this
+  tree has `src/sh/` and an `sh` binary, `<shell path>` exists.
+
+**Counting caution, continued.** Group Q's seven are the clearest case
+yet of the undercount mechanism item 4 warns about running the other
+way: they were audited at `0e3aefa`, are cited page-by-page in
+`test/posix-unistd.c`, and were *still* counted as unaudited here,
+purely because no first-column row named them. Whoever re-runs the
+pipeline should expect its answer to differ from the prose in all three
+of these notes, and should trust the prose about *which pages have been
+audited* over any tokeniser's total.

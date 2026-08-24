@@ -3478,3 +3478,138 @@ strips a `\??\` prefix only when one is present, so the
 create/read pair stays lossless either way, and POSIX specifies
 nothing about the NT flag. The round trip is the clause; the flag is
 not.
+
+## unistd.h: the exec family's ERRORS (successor-queue item 2, group O)
+
+Third of four groups working the `unistd.h` row. `execl`, `execle`,
+`execlp`, `execv`, `execve`, `execvp` and `fexecve` — all seven share
+one page,
+`https://pubs.opengroup.org/onlinepubs/9699919799/functions/exec.html`.
+
+New clause-cited audit: `test/posix-unistd-exec.c` (this session).
+
+**Division of labour with `test/exec.c`, which is not duplicated.**
+That file already covers the *success* path — argv/envp round trips
+through `src/process/spawn.c`'s command-line builder and back out of
+`crt1.c`, the exec'd image's exit status becoming the caller's,
+`[E2BIG]`, `[ENOENT]` for a missing program, `[EBADF]` for `fexecve()`
+on a closed descriptor — and needs a spawn/role harness to do it,
+because a successful exec never returns. What was left was the rest of
+the ERRORS list, and that half needs no harness at all: every call is
+one POSIX requires to **fail**, so `exec.html`'s "If execution fails,
+the calling process image remains unchanged" is precisely what makes an
+in-process test possible, and is itself asserted by the file continuing
+to run. A counter pins the number of calls that returned, so an exec
+which started *succeeding* — and therefore never returned — cannot be
+mistaken for a shorter run that passed.
+
+**No `fork()` anywhere in the file, deliberately**, so it runs under
+`make check`'s Wine leg like any ordinary test and needs no `-win`
+suffix. Under `tools/asan-build.sh`'s native build it exits **77
+(unverified)** with a `SKIP` line: `fuzz/ntstubs.c`'s
+`RtlCreateUserProcess` is a host `execve(2)`, so there is no NT process
+creation for these clauses to be about and a green run there would be
+evidence about glibc.
+
+**Oracle: mixed.** The empty-string and directory cases are decided
+inside ntlibc (`src/process/find_program.c`, `src/process/spawn.c`), so
+Wine is sound for them; the `[ENOEXEC]` answer comes from
+`RtlCreateUserProcess` refusing a non-PE image, which the
+`windows-test` legs are the authority on.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| execv / execve / execl / execle / fexecve | "[ENOEXEC] The new process image file has the appropriate access permission but has an unrecognized format" — a plain-text file with the executable bit set | covered | test/posix-unistd-exec.c (`test_enoexec`) |
+| execvp / execlp | the *inverse* of that clause: "In the cases where the other members of the exec family of functions would fail and set errno to [ENOEXEC], the execlp() and execvp() functions shall execute a command interpreter ... `execl(<shell path>, arg0, file, arg1, ..., (char *)0)`" — which is why [ENOEXEC]'s entry reads "except for execlp() and execvp()" | **UNIMPL** — see below | fenced, `test_enoexec` |
+| all seven | "[EINVAL] The new process image file has appropriate privileges and has a recognized executable binary format, but the system does not support execution of a file with this format" | N/A — the [ENOEXEC]/[EINVAL] split is "unrecognized" vs "recognized but unsupported", so reaching it means a PE image for a machine type this host cannot run. `src/internal/pe.c` can parse one but nothing here can build one at test time, and this suite carries no checked-in foreign binary | — |
+| execv / execve | "[ENOENT] A component of path or file does not name an existing file or path or file is an empty string" — a missing program and the empty string | covered | test/posix-unistd-exec.c (`test_path_errors`) |
+| execl / execle | the same [ENOENT], through the l-forms' `va_list` argument builder | covered | test/posix-unistd-exec.c (`test_path_errors`) |
+| execvp / execlp | the same [ENOENT], for a name in no PATH directory ("Otherwise, the path prefix for this file is obtained by a search of the directories passed as the environment variable PATH") | covered | test/posix-unistd-exec.c (`test_path_errors`) |
+| execvp / execlp | ... and for the **empty string** | **BUG** — see below | fenced, `test_path_errors` |
+| execv / execl | "[ENOTDIR] A component of the new process image file's path prefix names an existing file that is neither a directory nor a symbolic link to a directory ..." | covered | test/posix-unistd-exec.c (`test_path_errors`) |
+| execv / execve | "The new image shall be constructed from a regular, executable file" — a directory is not one, so the call must fail and leave the caller running | covered | test/posix-unistd-exec.c (`test_not_a_regular_file`) |
+| execv / execve | "[EACCES] The new process image file is not a regular file and the implementation does not support execution of files of its type" — the *errno* for that case | **BUG** — see below | fenced, `test_not_a_regular_file` |
+| fexecve | "[EBADF] The fd argument is not a valid file descriptor open for executing" — for a descriptor open on a **directory**, which is the one place on this page where EBADF is the right answer. Asserted rather than fenced, to pin the distinction the [EACCES] fence draws | covered | test/posix-unistd-exec.c (`test_not_a_regular_file`) |
+| all seven | "[EACCES] Search permission is denied for a directory listed in the new process image file's path prefix, or the new process image file denies execution permission" | N/A — `src/unistd/access.c`'s `X_OK` is satisfied by the file merely existing (NTFS has no execute bit this library maps a mode onto — `src/stat/chmod.c`'s banner), and one fixed identity cannot construct an unsearchable directory. Neither branch is reachable | — |
+| all seven | RETURN VALUE "If one of the exec functions returns to the calling process image, an error has occurred; the return value shall be -1, and errno shall be set" — every call in the file, 19 of them | covered | test/posix-unistd-exec.c (all four functions, counted in `main`) |
+| execve | "If execution fails, the calling process image remains unchanged" — in the form that once bit this tree: an open **FD_CLOEXEC** descriptor must survive a failed exec and still be readable at its old offset. `src/process/exec.c`'s banner records the regression (`__fd_close_all_cloexec()` used to run *before* the spawn, so a failed `execv()` handed back a process whose cloexec fds were already shut) | covered | test/posix-unistd-exec.c (`test_failed_exec_leaves_image_unchanged`) |
+| execve | ... and the environment a *failed* `execve()` was asked to install does not take effect on the caller: "the environment for the new process image shall be taken from the external variable environ in the calling process" | covered | test/posix-unistd-exec.c (`test_failed_exec_leaves_image_unchanged`) |
+| all seven | "[ELOOP]", "[ENAMETOOLONG]", "[ETXTBSY]", "[ENOMEM]" | N/A — a symlink cycle handed to NT's own resolver; `[ETXTBSY]`/`[ENOMEM]` are may-fail. `[ENAMETOOLONG]` is a shall-fail that this tree answers `ENOENT` to, but that is a library-wide path-resolution property already fenced against `utime()` in `test/posix-strings.c`, not an exec defect, and is not re-opened here | — |
+| execl / execle / execlp / execv / execve / execvp / fexecve | argv/envp round trip, exit-status propagation, `[E2BIG]`, `[ENOENT]`, `fexecve` `[EBADF]` on a closed fd, "the calling process image remains unchanged" | covered — pre-existing | test/exec.c |
+
+### Bugs found (unistd.h exec group)
+
+1. **`execvp()`/`execlp()` report `[EBADF]` for an empty `file`
+   argument, where `exec.html` requires `[ENOENT]`.** The v/l forms get
+   this right; the p-forms do not. `src/process/exec.c:62` computes
+   `use_path = !strchr(file, '/') && !strchr(file, '\\')`, which is
+   true for `""`, so `__find_program("", 1)` runs the PATH search with
+   an empty name. `try_dir()` then builds `<PATH entry>\` — a directory
+   name with nothing appended — and **accepts it**, because
+   `access(p, X_OK)` succeeds on a directory. `execvp("")` therefore
+   resolves to the first directory in `PATH` and tries to execute it.
+   The empty string is a case `__find_program()` has to reject before
+   the loop.
+
+2. **Executing a directory reports `[EBADF]`, which is not an errno
+   `exec.html` allows the path-taking forms to produce.** The page's
+   shall-fail list gives `[EACCES]` for "not a regular file and the
+   implementation does not support execution of files of its type".
+   `[EBADF]` appears on the page only under "The fexecve() function
+   shall fail if", about the *descriptor* argument — so a caller
+   distinguishing "I passed a bad fd" from "that path is not
+   executable" is misled. `src/process/spawn.c` hands the path to
+   `RtlCreateUserProcess` without checking `S_ISREG` first;
+   `src/stat/stat.c` already provides the check the clause asks for.
+
+### UNIMPL found (unistd.h exec group)
+
+1. **`execvp()`/`execlp()` do not fall back to a command interpreter.**
+   `exec.html` DESCRIPTION requires that where the other members would
+   fail with `[ENOEXEC]`, these two "shall execute a command
+   interpreter", as if by
+   `execl(<shell path>, arg0, file, arg1, ..., (char *)0)`. That is
+   why the `[ENOEXEC]` ERRORS entry is scoped "except for execlp() and
+   execvp()". `src/process/exec.c` has no `ENOEXEC` branch anywhere:
+   `execvpe()` resolves the name and hands it straight to `execve()`,
+   so `RtlCreateUserProcess`'s status for a non-PE image reaches the
+   caller unaltered.
+
+   UNIMPL, not N/A: this tree now *has* a shell (`src/sh/` and the `sh`
+   binary), so `<shell path>` exists and the fallback is a re-exec of
+   it. Re-enabling the fenced assertion needs `test/exec.c`'s role
+   harness rather than an in-process call, since a working fallback
+   does not return; what is fenced here is the observation that
+   identifies the gap.
+
+### Not reached (unistd.h exec group)
+
+`[EINVAL]` (needs a foreign-architecture PE), `[EACCES]` in either of
+its two forms (no execute bit, one identity), `[ELOOP]`, `[ETXTBSY]`,
+`[ENOMEM]`. Under `tools/asan-build.sh`'s native build the whole file
+is rc=77 unverified, for the reason its banner gives.
+
+## unistd.h: the seven already-audited names (successor-queue item 2, group Q)
+
+Bookkeeping, not new work. Seven of the `unistd.h` row's 43 were
+**already** audited clause by clause — by the never-asserted sweep,
+which cited each page in `test/posix-unistd.c` — but were never given a
+row here, so this ledger's own count still classified them as
+unaudited. Rows added so the arithmetic reflects what the tests
+actually check. No new assertions and no new findings; the two fences
+named below are the sweep's, not this session's.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| confstr | confstr.html DESCRIPTION: the `_CS_PATH` value; "If len is 0 and buf is a null pointer ... shall still return the integer value ... but shall not return a string"; truncation "to len-1 bytes and null-terminate the result" with the full size still returned; `len == 1` | covered | test/posix-unistd.c (`test_confstr`) |
+| confstr | "If name is invalid, confstr() shall return 0 and set errno"; "[EINVAL] The value of the name argument is invalid" | **BUG** (the sweep's) — returns 1 with errno untouched for any name; neither of POSIX's two zero-returning cases is reachable | fenced, `test_confstr` |
+| swab | swab.html "shall copy nbytes bytes ... exchanging adjacent bytes"; "If nbytes is negative, swab() does nothing"; nothing written past `nbytes`; no errors defined | covered | test/posix-unistd.c (`test_swab`) |
+| swab | "If nbytes is odd ... the disposition of the last byte is unspecified" | N/A — explicitly unspecified, so `src/unistd/swab.c`'s own documented choice is deliberately not pinned | — |
+| sync | sync.html RETURN VALUE (none) and ERRORS "No errors are defined" — errno undisturbed, and data written before it is still there afterwards | covered | test/posix-unistd.c (`test_sync`) |
+| sync | "shall cause all information in memory that updates file systems to be scheduled for writing out" | N/A — POSIX permits `sync()` to be undetectable by any conforming observation; `fsync()` is the call with a completion guarantee and `test/unistd.c` covers it | — |
+| getlogin | "shall return a pointer to the login name or a null pointer if the user's login name cannot be found" | covered | test/posix-unistd.c (`test_getlogin`) |
+| getlogin_r | "shall return zero" on success — an errno *value*, not -1, on failure; "[ERANGE] The value of namesize is smaller than the length of the string to be returned including the terminating null"; the exactly-fits boundary | covered | test/posix-unistd.c (`test_getlogin`) |
+| tcgetpgrp | tcgetpgrp.html RETURN VALUE "the value of the process group ID of the foreground process associated with the terminal" — agrees with `getpgrp()` rather than inventing a third answer | covered | test/posix-unistd.c (`test_id_session_stubs`) |
+| tcsetpgrp | tcsetpgrp.html RETURN VALUE 0 on success, for the group `tcgetpgrp()` just reported | covered | test/posix-unistd.c (`test_id_session_stubs`) |
+| tcgetpgrp / tcsetpgrp | "[EBADF] The fildes argument is not a valid file descriptor" (shall-fail on both pages) | **BUG** (the sweep's) — `fd` is discarded without reaching `__fd_get()`; `src/unistd/ttyname.c:23-24` | fenced, `test_id_session_stubs` |
+| tcgetpgrp / tcsetpgrp | their `[ENOTTY]`, `[EIO]`, `[EPERM]`, `[EINVAL]`, and the SIGTTOU clauses | N/A — one fixed session and one process group (`src/unistd/ids.c`, `src/termios/termios.c`), so no process can be in a *background* process group of its controlling terminal and no second group exists to be refused; the same argument the termios.h group (A) already makes for the whole header | — |
