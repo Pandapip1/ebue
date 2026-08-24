@@ -104,6 +104,12 @@
 # Environment (all normally supplied by `make linkcheck`):
 #   CC, ARCH, CFLAGS_C99FSE, CFLAGS_AUTO   as in config.mak
 #   LINKCHECK_STRICT=0   always exit 0 (report only)
+#   LINKCHECK_JOBS=N     how many symbols to compile and link at once
+#                        (default: nproc).  1 restores the fully serial
+#                        behaviour, and is also the safe fallback when
+#                        neither nproc nor getconf exists.  The report is
+#                        byte-identical at any value -- see phase 1's
+#                        comment on why.
 
 set -u
 
@@ -505,6 +511,22 @@ total=0 checked=0 excepted=0 failed=0
 : > "$builddir/exceptions"
 : > "$builddir/pe-seen"
 
+# ---------------------------------------------------------------------
+# Phase 1, serial: split the declared list into "excepted" (reported and
+# skipped) and a worklist of symbols that really get compiled and linked.
+# Cheap -- no processes -- and it has to be serial anyway, because both
+# exception paths carry a written reason that is reported in declaration
+# order.
+#
+# The worklist line is "index<TAB>name<TAB>header<TAB>argc"; the index is
+# what makes the parallel phase below reproducible.  Two runs of this
+# script produce byte-identical reports regardless of how the workers
+# were scheduled, because nothing is appended to a shared file by a
+# worker: each writes its own result file named by that index, and the
+# merge reads them back in index order.
+# ---------------------------------------------------------------------
+worklist="$builddir/worklist"
+: > "$worklist"
 while IFS="$(printf '\t')" read -r nm hdr argc marked; do
 	[ -z "$nm" ] && continue
 	total=$((total + 1))
@@ -520,44 +542,134 @@ while IFS="$(printf '\t')" read -r nm hdr argc marked; do
 		continue
 	fi
 	checked=$((checked + 1))
+	printf '%06d\t%s\t%s\t%s\n' "$checked" "$nm" "$hdr" "$argc" >> "$worklist"
+done < "$declfile"
 
-	args=""
-	i=0
-	while [ "$i" -lt "$argc" ]; do
-		args="$args${args:+, }0"
-		i=$((i + 1))
+# ---------------------------------------------------------------------
+# Phase 2, parallel: two $CC invocations and a handful of `od` reads per
+# symbol, several hundred symbols.  Every one is independent -- it reads
+# the source tree and lib/, and writes only files named after its own
+# symbol -- so this is embarrassingly parallel, and it was the dominant
+# cost of `make linkcheck`.
+#
+# Sharded across LINKCHECK_JOBS subshells of *this* shell, rather than
+# the `xargs -P ... sh -c` pattern tools/lint.sh and tools/runtests.sh
+# use.  The reason is specific and not a preference: the per-symbol work
+# calls pe_header_check(), which calls pe_le(), which calls
+# pe_u8_list().  A `sh -c` child does not inherit shell functions, so the
+# xargs shape would need those three either duplicated into a generated
+# helper or re-derived in the child -- a second copy of the PE-header
+# rules, which is exactly the hazard tools/lint-decls.awk was extracted
+# to remove.  A subshell inherits them.  The cost of the choice is static
+# round-robin instead of xargs's dynamic scheduling; the per-symbol cost
+# here is near-uniform (the same two compiles of a three-line TU), so the
+# imbalance is negligible.
+#
+# check_one INDEX NAME HEADER ARGC -- writes $pardir/INDEX.out, whose
+# first line is "OK", or "FAIL COMPILE"/"FAIL LINK"/"FAIL PE" followed by
+# the detail.  ALWAYS writes the file, including on success: the merge
+# below counts them, so a worker that dies without reporting is a
+# failure rather than a symbol that quietly stops being checked.  That is
+# the failure mode of this rewrite -- losing a child's non-zero exit
+# turns the whole stage into a vacuous pass -- and it is the one thing
+# here that is guarded rather than reasoned about.
+check_one() {
+	co_idx=$1 co_nm=$2 co_hdr=$3 co_argc=$4
+	co_args=""
+	co_i=0
+	while [ "$co_i" -lt "$co_argc" ]; do
+		co_args="$co_args${co_args:+, }0"
+		co_i=$((co_i + 1))
 	done
 
-	src="$builddir/$nm.c"
-	obj="$builddir/$nm.o"
-	exe="$builddir/$nm.exe"
+	co_src="$builddir/$co_nm.c"
+	co_obj="$builddir/$co_nm.o"
+	co_exe="$builddir/$co_nm.exe"
+	co_out="$pardir/$co_idx.out"
 	{
-		printf '#include <%s>\n' "${hdr#include/}"
-		printf 'void __linkcheck_%s(void) { (void)%s(%s); }\n' "$nm" "$nm" "$args"
+		printf '#include <%s>\n' "${co_hdr#include/}"
+		printf 'void __linkcheck_%s(void) { (void)%s(%s); }\n' "$co_nm" "$co_nm" "$co_args"
 		printf 'int main(void) { return 0; }\n'
-	} > "$src"
+	} > "$co_src"
 
 	# shellcheck disable=SC2086
-	if ! $CC $CFLAGS -c -o "$obj" "$src" 2> "$obj.err"; then
+	if ! $CC $CFLAGS -c -o "$co_obj" "$co_src" 2> "$co_obj.err"; then
+		{ echo "FAIL COMPILE"; sed 's/^/    /' "$co_obj.err"; } > "$co_out"
+		return 0
+	fi
+	# shellcheck disable=SC2086
+	if ! $CC $CFLAGS -nostdlib -o "$co_exe" lib/crt1.o "$co_obj" -Llib -lc -lntdll 2> "$co_exe.err"; then
+		{ echo "FAIL LINK"; sed 's/^/    /' "$co_exe.err"; } > "$co_out"
+		return 0
+	fi
+	if ! co_pe=$(pe_header_check "$co_exe" 2>&1); then
+		{ echo "FAIL PE"; printf '%s\n' "$co_pe"; } > "$co_out"
+		return 0
+	fi
+	echo OK > "$co_out"
+}
+
+: "${LINKCHECK_JOBS:=}"
+if [ -z "$LINKCHECK_JOBS" ]; then
+	LINKCHECK_JOBS=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+fi
+pardir="$builddir/par"
+mkdir -p "$pardir" || exit 1
+
+shard=0
+while [ "$shard" -lt "$LINKCHECK_JOBS" ]; do
+	(
+		awk -v n="$LINKCHECK_JOBS" -v k="$shard" 'NR % n == k' "$worklist" \
+		| while IFS="$(printf '\t')" read -r idx nm hdr argc; do
+			[ -z "$idx" ] && continue
+			check_one "$idx" "$nm" "$hdr" "$argc"
+		done
+	) &
+	shard=$((shard + 1))
+done
+wait
+
+# ---------------------------------------------------------------------
+# Phase 3, serial: merge the per-symbol results back in declaration
+# order.  The PE-header de-duplication lives here rather than in the
+# worker, which is not merely convenient: a shared "have I already
+# printed this reason" file written from N concurrent workers would make
+# which instance got the full paragraph depend on scheduling, and the
+# report would differ run to run for an unchanged tree.
+# ---------------------------------------------------------------------
+nreported=0
+while IFS="$(printf '\t')" read -r idx nm hdr argc; do
+	[ -z "$idx" ] && continue
+	res="$pardir/$idx.out"
+	if [ ! -f "$res" ]; then
+		# See check_one's comment: this is the vacuous-pass hole this
+		# rewrite could have opened, so it is a hard failure rather
+		# than a symbol silently dropped from the count.
+		failed=$((failed + 1))
+		printf '%s (%s, %s args) -- NO RESULT: the worker for this symbol never wrote one, so it was never checked.\n' \
+			"$nm" "$hdr" "$argc" >> "$builddir/failures"
+		continue
+	fi
+	nreported=$((nreported + 1))
+	kind=$(head -n 1 "$res")
+	case $kind in
+	OK) continue ;;
+	"FAIL COMPILE")
 		failed=$((failed + 1))
 		{
 			printf '%s (%s, %s args) -- COMPILE FAILED:\n' "$nm" "$hdr" "$argc"
-			sed 's/^/    /' "$obj.err"
-		} >> "$builddir/failures"
-		continue
-	fi
-	# shellcheck disable=SC2086
-	if ! $CC $CFLAGS -nostdlib -o "$exe" lib/crt1.o "$obj" -Llib -lc -lntdll 2> "$exe.err"; then
+			tail -n +2 "$res"
+		} >> "$builddir/failures" ;;
+	"FAIL LINK")
 		failed=$((failed + 1))
 		{
 			printf '%s (%s, %s args) -- LINK FAILED:\n' "$nm" "$hdr" "$argc"
-			sed 's/^/    /' "$exe.err"
-		} >> "$builddir/failures"
-		continue
-	fi
-
-	if ! pehdr=$(pe_header_check "$exe" 2>&1); then
+			tail -n +2 "$res"
+		} >> "$builddir/failures" ;;
+	"FAIL PE")
 		failed=$((failed + 1))
+		exe="$builddir/$nm.exe"
+		pehdr=$(tail -n +2 "$res")
 		# Every .exe built this run shares the same $CC/$CFLAGS/link
 		# recipe, so a PE header regression is not per-symbol -- it is
 		# the same header field, wrong the same way, in every failing
@@ -576,9 +688,28 @@ while IFS="$(printf '\t')" read -r nm hdr argc marked; do
 				printf '%s (%s, %s args) -- PE HEADER CHECK FAILED:\n' "$nm" "$hdr" "$argc"
 				printf '%s\n' "$pehdr" | sed 's/^/    /'
 			} >> "$builddir/failures"
-		fi
-	fi
-done < "$declfile"
+		fi ;;
+	*)
+		failed=$((failed + 1))
+		printf '%s (%s, %s args) -- UNPARSEABLE RESULT: %s\n' \
+			"$nm" "$hdr" "$argc" "$kind" >> "$builddir/failures" ;;
+	esac
+done < "$worklist"
+
+# The floor on the parallel phase itself, counted rather than inferred.
+# $failed already rose once per missing result above; this says how many,
+# in one line, so a scheduling or fork failure that lost a whole shard is
+# legible instead of appearing as a wall of individual NO RESULT lines.
+if [ "$nreported" -ne "$checked" ]; then
+	echo "" >&2
+	echo "linkcheck [$ARCH]: FAILED -- $nreported of $checked symbol(s) reported a result." >&2
+	echo "linkcheck [$ARCH]: $((checked - nreported)) worker result(s) are missing, so those symbols" >&2
+	echo "linkcheck [$ARCH]: were never compiled or linked.  A parallel phase that loses work must" >&2
+	echo "linkcheck [$ARCH]: fail, not report a smaller number of checks as a pass." >&2
+	# $failed already rose once per missing result in the loop above, so
+	# the exit status is already non-zero; this block exists to say how
+	# many in one line rather than to change the verdict.
+fi
 
 echo "linkcheck [$ARCH]: $checked symbol(s) checked, $excepted excepted (undefined-ok), $failed unlinkable, out of $total declared"
 

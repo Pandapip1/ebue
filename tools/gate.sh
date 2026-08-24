@@ -199,14 +199,24 @@ if want asan; then
 	run_stage asan "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make asan"
 fi
 
+# -j for consistency with check-i386/check-x86_64 above, which have
+# always passed it: these two stages build the whole library before
+# linkcheck.sh can check a single symbol, and were the only
+# build-and-run stages doing it serially.  Worth 0.3s of a 9.9s stage
+# on an idle machine, measured -- the tcc build is that fast.  Recorded
+# with the real number because the first measurement said 73s -> 21s,
+# which was seven other jobs on the machine and not this flag at all;
+# every wall-clock figure taken on a loaded box is a measurement of the
+# box.  The stage's real cost is inside linkcheck.sh, and that is where
+# it was fixed.
 if want linkcheck-i386; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-i386"
-	run_stage linkcheck-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc >/dev/null && make linkcheck"
+	run_stage linkcheck-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc >/dev/null && make -j\"\$(nproc)\" linkcheck"
 fi
 
 if want linkcheck-x86_64; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-x86_64"
-	run_stage linkcheck-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make linkcheck"
+	run_stage linkcheck-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" linkcheck"
 fi
 
 if want hygiene; then
