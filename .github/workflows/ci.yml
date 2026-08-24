@@ -56,9 +56,45 @@ on:
 permissions:
   contents: read
 
+# Superseding runs is only ever right where a later commit makes an
+# earlier one uninteresting -- a feature branch or a PR being iterated on,
+# where the question is "is the tip good?". It is exactly wrong for main:
+# every commit that lands there is a released state of the tree and needs
+# its own verdict, and a cancelled run reports as a *failure*, so cancelling
+# does not merely lose the answer, it records a red one that was never
+# earned and leaves the history lying about which commits were tested.
+#
+# What is lost is specifically the signal nothing else provides. The
+# `windows-test` legs on a real Windows runner are this project's only
+# oracle for real-NT behaviour -- Wine emulates ntdll/kernel32 and has
+# passed things real Windows fails (and vice versa), so several bugs were
+# only ever visible there. During a rapid stream of small pushes to main,
+# `cancel-in-progress: true` threw away that leg's result for every commit
+# but the last: run 32746727999 (the IOCTL_AFD_BIND layout fix) was killed
+# mid-flight having already shown bind()/listen() newly passing with the
+# failure moved on to connect(), and still shows as failed. Do not "tidy"
+# this back to an unconditional true.
+#
+# The condition, per trigger this workflow declares:
+#   - push to main            -> github.ref is refs/heads/main -> false: never
+#                                cancelled, every commit gets a complete run.
+#   - push to any other branch/tag -> true: a rapid series supersedes itself.
+#   - pull_request            -> github.ref is refs/pull/N/merge -> true: a
+#                                new commit on the PR cancels the stale run.
+# Because those refs differ, a push run and a PR run for the same branch are
+# already in separate groups and never cancel each other; `github.workflow`
+# keeps this distinct from fuzz.yml's group, which is repo-wide.
+#
+# Grouping per-`github.sha` instead was considered and rejected: it would
+# stop collisions everywhere, including on PRs, which is where superseding
+# is the useful behaviour. Never cancelling costs runner *concurrency*, not
+# money -- GitHub-hosted runners are free and unlimited for public
+# repositories -- so a burst of pushes just queues 14 jobs per commit for
+# the ~5-7 minutes a run takes, which is a trade this project should make
+# every time against losing a real-Windows verdict.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # Pinned to a specific upstream tinycc commit (rather than always
