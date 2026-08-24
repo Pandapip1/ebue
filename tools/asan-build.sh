@@ -79,7 +79,12 @@ LINKFLAGS="-Wl,-rpath,$RTDIR"
 # -fsanitize=implicit-conversion is NOT part of the -fsanitize=undefined
 # group; it is a separate group of three checks, and they have very
 # different signal in this codebase.  Measured over the native test run
-# plus a 4x90s libFuzzer run of fuzz/ (~6.5M execs per harness):
+# plus a 4x90s libFuzzer run of fuzz/ (~6.5M execs per harness).  That
+# measurement was taken when fuzz/ held four harnesses; it now holds
+# eight (path, printf, scanf, strftime, strptime, strtod, strtol, utf).
+# The four added since have NOT been measured for implicit-conversion
+# findings, so the counts below describe the four that were -- they are
+# not a claim about the current set:
 #
 #   implicit-{un,}signed-integer-truncation
 #       0 findings.  A libc narrows constantly -- `unsigned char` in the
