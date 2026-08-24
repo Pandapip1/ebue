@@ -157,11 +157,20 @@ void *__fd_runtime_data(size_t *len);
  * real NT wait object, so the caller waits on f->h directly instead of
  * polling it (see __fd_wait_or_delay below).
  *
- * Socket hook: this is where an __FD_SOCKET case belongs once ntlibc has
- * sockets (test/networking-audit.md sec 3 -- probe via a non-blocking
- * IOCTL_AFD_POLL, same "instantaneous, no wait" shape as the pipe case
- * below).  Unreachable today: nothing can install an __FD_SOCKET
- * descriptor, so no case is needed yet. */
+ * __FD_SOCKET is probed the same "instantaneous, no wait" way, by a
+ * single zero-timeout IOCTL_AFD_SELECT (test/networking-audit.md sec
+ * 3); *hup is set for an AFD close/abort/disconnect exactly as it is
+ * for a broken pipe, and also when the probe ioctl itself fails, which
+ * is reported ready-and-hung-up rather than never-ready so that an
+ * unprobeable socket cannot hang an infinite-timeout select()/poll().
+ *
+ * The shapes with no probe at all -- __FD_FILE/__FD_DIR/__FD_CHAR/
+ * __FD_UNKNOWN -- report always ready, which is what select.html
+ * requires for regular files and the only honest answer for the rest:
+ * nothing in this library blocks a read or write to them past the
+ * syscall itself.  Callers must route by *probeability*, not by a
+ * single named type: routing only __FD_PIPE here once left sockets
+ * silently reporting ready unconditionally. */
 void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup);
 
 /* The "wait" half: block for up to wait_ticks 100ns units (relative),

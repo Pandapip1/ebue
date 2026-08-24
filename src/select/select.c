@@ -23,12 +23,22 @@
  *     Wine (the environment `make check` runs in) whether or not the
  *     pipe actually has room, so it is not used -- see __fd_probe()'s
  *     comment for the fallback this forces.
- *   - __FD_FILE/__FD_DIR/__FD_CHAR: "File descriptors associated with
- *     regular files shall always select true for ready to read, ready
- *     to write" (select.html DESCRIPTION) -- applied here to __FD_CHAR
- *     too (NUL, COM, ...) for the same reason POSIX gives regular
- *     files a free pass: nothing in this library ever blocks a read or
- *     write to one of these shapes past the syscall itself.
+ *   - __FD_SOCKET: like a pipe, the handle itself is not a waitable
+ *     NT object for this purpose, so it is polled -- by a single
+ *     zero-timeout IOCTL_AFD_SELECT per pass (see __fd_probe() below).
+ *     Unlike every other shape here, a socket has an honest answer for
+ *     *both* directions: AFD reports send-side room as well as
+ *     receive-side data.
+ *   - __FD_FILE/__FD_DIR/__FD_CHAR/__FD_UNKNOWN: "File descriptors
+ *     associated with regular files shall always select true for ready
+ *     to read, ready to write" (select.html DESCRIPTION) -- applied
+ *     here to __FD_CHAR too (NUL, COM, ...) for the same reason POSIX
+ *     gives regular files a free pass: nothing in this library ever
+ *     blocks a read or write to one of these shapes past the syscall
+ *     itself.  __FD_UNKNOWN joins them because there is no probe that
+ *     could apply to a handle __handle_type() could not classify.
+ *     These are the only shapes for which "always ready" is a real
+ *     answer rather than an absence of one.
  *
  * The wait-vs-poll design: each pass first probes everything that can
  * be checked without blocking (__fd_probe(): an instant
@@ -131,6 +141,19 @@
  * a socket is always resolved in the same probe pass as everything
  * else, never added to console_h/console_fd. See
  * test/networking-audit.md sec 3 for the design writeup this followed.
+ *
+ * That __FD_SOCKET case was, for a while, dead code: poll_pass() below
+ * and poll.c's loop both routed *only* __FD_PIPE to __fd_probe() and
+ * dropped everything else -- sockets included -- into the "always
+ * ready" branch that only __FD_FILE/__FD_DIR/__FD_CHAR earn.  Every
+ * socket therefore reported readable and writable unconditionally, and
+ * __fd_probe()'s socket path was never reached to contradict it.  The
+ * routing is now by what can actually be probed (pipes and sockets),
+ * not by a single named type, and the "always ready" branch is reached
+ * only by the shapes POSIX and this platform genuinely make always
+ * ready.  test/posix-select-socket.c is the regression assertion:
+ * an idle socket must not be reported ready, which is the one claim
+ * the old code could not make.
  */
 #include <sys/select.h>
 #include <signal.h>
@@ -204,8 +227,7 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		 * offsets, because ReactOS's ULONG_PTR Exclusive puts
 		 * Handles at +24 on x86_64, where the AFD driver's own
 		 * source, phnt, wepoll and libuv all put it at +16; see
-		 * that header's poll banner, which also records that
-		 * nothing reaches this case yet. */
+		 * that header's poll banner. */
 		AFD_POLL_INFO pi;
 		unsigned long len = __afd_poll_request_size(1);
 		uint32_t events;
@@ -218,7 +240,31 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		/* __afd_poll_request_size(1), not sizeof(pi), which rounds
 		 * the tail up for Timeout's alignment. */
 		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &pi, (ULONG)len, &pi, (ULONG)len, 0);
-		if (!NT_SUCCESS(st)) { *canread = 0; *canwrite = 0; break; }
+		if (!NT_SUCCESS(st)) {
+			/* No honest answer available: the driver refused to
+			 * tell us.  Report ready-and-hung-up, exactly as the
+			 * __FD_PIPE case above does when its
+			 * NtQueryInformationFile fails, and for the same
+			 * reason -- a descriptor whose state cannot be
+			 * sampled must not be reported *never* ready, or an
+			 * infinite-timeout select()/poll() on it hangs for
+			 * good with no diagnostic.  Reported ready, the
+			 * caller's next read()/write() runs immediately and
+			 * surfaces the real error through errno, which is
+			 * where a caller can actually see it.  This is the
+			 * same over-eager-not-under-eager stance this file
+			 * already takes for a pipe's unavailable
+			 * WriteQuotaAvailable and for exceptfds.
+			 *
+			 * This is a failure path, not the normal one: a
+			 * probe that silently starts failing would show up
+			 * as test/posix-select-socket.c's "an idle socket is
+			 * not readable" assertions failing on the
+			 * real-Windows legs, since ready-on-failure is
+			 * exactly what those reject. */
+			*canread = 1; *canwrite = 1; *hup = 1;
+			break;
+		}
 
 		events = __afd_poll_get_events(&pi, 0);
 		*canread = (events & AFD_POLL_READ_BITS) != 0;
@@ -231,10 +277,24 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 	case __FD_FILE:
 	case __FD_DIR:
 	case __FD_CHAR:
+	case __FD_UNKNOWN:
 	default:
 		/* select.html DESCRIPTION: "File descriptors associated
 		 * with regular files shall always select true for ready to
-		 * read, ready to write". Applied here to __FD_CHAR too. */
+		 * read, ready to write". Applied here to __FD_CHAR too
+		 * (NUL, COM, ...): nothing in this library ever blocks a
+		 * read or write to one past the syscall itself, so "always
+		 * ready" is the *correct* answer for these shapes, not a
+		 * fallback for an answer that could not be obtained.
+		 *
+		 * __FD_UNKNOWN is spelled out rather than left to
+		 * `default` to record that it was decided, not forgotten:
+		 * it is a handle __handle_type() could not classify, so by
+		 * construction there is no probe that would apply to it,
+		 * and no evidence it would ever block either.  Always
+		 * ready is the only non-arbitrary answer available, and it
+		 * errs the same way everything else here does when there
+		 * is no honest signal -- over-eager rather than hanging. */
 		*canread = 1;
 		*canwrite = 1;
 		break;
@@ -275,11 +335,13 @@ void __fd_wait_or_delay(HANDLE *console_handles, int ncons, long long wait_ticks
  * for this pass).  Descriptors requested for read on a console are not
  * resolved here except via a zero-timeout peek; still-pending ones are
  * left in console_h/console_fd (up to *ncons of them) for the caller to
- * wait on.  *have_pipe is set when any requested pipe is still
- * outstanding, telling the caller whether it may sleep the full
- * remaining timeout or must cap it at POLL_INTERVAL_TICKS. */
+ * wait on.  *have_poll is set when any requested pipe *or socket* is
+ * still outstanding, telling the caller whether it may sleep the full
+ * remaining timeout or must cap it at POLL_INTERVAL_TICKS -- neither
+ * shape has a waitable NT object behind it, so both are re-probed on
+ * that timer rather than waited on. */
 static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_set *in_e,
-                      fd_set *out_r, fd_set *out_w, int *have_pipe,
+                      fd_set *out_r, fd_set *out_w, int *have_poll,
                       HANDLE *console_h, int *console_fd, int *ncons)
 {
 	int d, total = 0, n = 0, hp = 0;
@@ -296,7 +358,12 @@ static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_
 		if (!wantr && !wantw && !wante) continue;
 		f = __fd_get(d);  /* already known open: validated before the loop */
 
-		if (f->type == __FD_PIPE) {
+		if (f->type == __FD_PIPE || f->type == __FD_SOCKET) {
+			/* The two shapes __fd_probe() has a real, instantaneous
+			 * answer for: a pipe's ReadDataAvailable and a socket's
+			 * IOCTL_AFD_SELECT.  Neither handle is an NT wait object
+			 * that becomes signalled on its own (unlike a console),
+			 * so both must be re-probed on a timer -- hence hp. */
 			if (wantr || wantw) hp = 1;
 			__fd_probe(f, &cr, &cw, &hup);
 			if (wantr && cr) { FD_SET(d, out_r); total++; }
@@ -305,7 +372,10 @@ static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_
 			if (wantw) { FD_SET(d, out_w); total++; }
 			if (wantr) { console_h[n] = f->h; console_fd[n] = d; n++; }
 		} else {
-			/* __FD_FILE/__FD_DIR/__FD_CHAR: always ready */
+			/* __FD_FILE/__FD_DIR/__FD_CHAR/__FD_UNKNOWN: always
+			 * ready.  Not a fallback for "we could not check" --
+			 * it is the right answer for these shapes.  See the
+			 * file banner and __fd_probe()'s default case. */
 			if (wantr) { FD_SET(d, out_r); total++; }
 			if (wantw) { FD_SET(d, out_w); total++; }
 		}
@@ -324,7 +394,7 @@ static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_
 			}
 	}
 
-	*have_pipe = hp;
+	*have_poll = hp;
 	*ncons = n;
 	return total;
 }
@@ -341,7 +411,7 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 	fd_set in_r, in_w, in_e, out_r, out_w;
 	HANDLE console_h[FD_SETSIZE];
 	int console_fd[FD_SETSIZE];
-	int d, total, have_pipe, ncons;
+	int d, total, have_poll, ncons;
 
 	FD_ZERO(&in_r); FD_ZERO(&in_w); FD_ZERO(&in_e);
 	if (rfds) in_r = *rfds;
@@ -356,7 +426,7 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 
 	for (;;) {
 		total = poll_pass(nfds, rfds ? &in_r : 0, wfds ? &in_w : 0, efds ? &in_e : 0,
-		                   &out_r, &out_w, &have_pipe, console_h, console_fd, &ncons);
+		                   &out_r, &out_w, &have_poll, console_h, console_fd, &ncons);
 		if (total > 0) break;
 		if (!infinite && *remaining == 0) break;  /* "to effect a poll": return promptly, nothing ready */
 
@@ -365,11 +435,11 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 			int wait_infinite;
 
 			if (infinite) {
-				wait_infinite = !have_pipe;
-				wait_ticks = have_pipe ? POLL_INTERVAL_TICKS : 0;
+				wait_infinite = !have_poll;
+				wait_ticks = have_poll ? POLL_INTERVAL_TICKS : 0;
 			} else {
 				wait_infinite = 0;
-				wait_ticks = have_pipe && *remaining > POLL_INTERVAL_TICKS ? POLL_INTERVAL_TICKS : *remaining;
+				wait_ticks = have_poll && *remaining > POLL_INTERVAL_TICKS ? POLL_INTERVAL_TICKS : *remaining;
 			}
 			__fd_wait_or_delay(console_h, ncons, wait_ticks, wait_infinite);
 			if (!infinite) *remaining -= wait_ticks;

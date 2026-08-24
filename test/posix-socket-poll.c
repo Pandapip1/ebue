@@ -5,10 +5,14 @@
  * src/socket/afdsupport.c's __afd_build_poll_request() family builds
  * and reads back on behalf of src/select/select.c's __fd_probe().
  *
- * That __FD_SOCKET case is not reachable yet -- both callers of
- * __fd_probe() only route pipes to it today -- so this file is what
- * holds the wire format correct in the meantime, with no socket and no
- * device needed to do it.
+ * That __FD_SOCKET case was not reachable when this file was written
+ * -- both callers of __fd_probe() routed only pipes to it -- so this
+ * file was what held the wire format correct in the meantime, with no
+ * socket and no device needed to do it.  Both callers now route
+ * sockets there too (see src/select/select.c's banner), and
+ * test/posix-select-socket.c exercises the live path where a real AFD
+ * endpoint exists; this file keeps its value regardless, since it is
+ * the only check of this layout that runs where no device does.
  *
  * The fourth of the sibling set (test/posix-socket-ea.c, -bind.c,
  * -connect.c), built the same way and for the same reason: it opens no
@@ -69,7 +73,9 @@
  * low half.  Observed rather than reasoned: issuing the ioctl that way
  * on a real AFD endpoint returns STATUS_INVALID_HANDLE (0xC0000008)
  * where the +16 form returns STATUS_SUCCESS, and __fd_probe() maps a
- * failed ioctl to "neither readable nor writable".  main()'s negative
+ * failed ioctl to "ready, and hung up" -- deliberately, so that a
+ * socket whose state cannot be sampled cannot hang an infinite-timeout
+ * select()/poll(); see that function's comment.  main()'s negative
  * control reproduces that byte image and proves these assertions
  * reject it.
  *
@@ -385,9 +391,13 @@ int main(void)
 			 * (Status << 32) | Events, i.e. the literal event mask
 			 * 0x5 here, and then read the requested event mask out
 			 * of Handles[1]'s handle.  Nothing about that fails
-			 * loudly: the ioctl returns and reports no events, so
-			 * select()/poll() on a socket just says "not ready",
-			 * forever. */
+			 * loudly: the ioctl fails with STATUS_INVALID_HANDLE
+			 * and __fd_probe() falls back to "ready, and hung
+			 * up", so select()/poll() on a socket just says
+			 * "ready", always -- which is exactly what
+			 * test/posix-select-socket.c's idle-socket
+			 * assertions reject on a machine with a working
+			 * AFD. */
 			CHECK_EQ(ROS_HANDLES, REQ_HANDLES + 8u,
 			         "x86_64: ReactOS's Handles lands mid-element");
 			CHECK_EQ(rdptr(real + ROS_HANDLES),

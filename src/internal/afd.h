@@ -635,24 +635,26 @@ typedef struct _AFD_DISCONNECT_INFO {
  * which is why there are readers below as well as builders.
  *
  * Reach, stated exactly: src/select/select.c's __fd_probe() has a
- * __FD_SOCKET case that sends this request, but nothing reaches it
- * today -- both callers (poll_pass() in the same file and the loop in
- * src/select/poll.c) only call __fd_probe() for f->type == __FD_PIPE
- * and treat every other type, sockets included, as unconditionally
- * ready.  So this is a latent defect, not an observed live one: it
- * would become live the moment those two loops route sockets to
- * __fd_probe(), which is the obvious next step for select()/poll() on
- * sockets.  Getting the wire format right first means that routing
- * change lands on something that works.
+ * __FD_SOCKET case that sends this request, and both callers
+ * (poll_pass() in the same file and the loop in src/select/poll.c) now
+ * route sockets to it.  They did not always: each once called
+ * __fd_probe() only for f->type == __FD_PIPE and treated every other
+ * type, sockets included, as unconditionally ready -- which is why the
+ * layout defect below was latent rather than observed, and why the
+ * wire format was worth getting right before the routing landed on it.
  *
  * Observed, not merely reasoned: issuing this ioctl on a real AFD
  * endpoint with Handles at +24 returns STATUS_INVALID_HANDLE
  * (0xC0000008) -- the driver reads the handle from the wrong offset
  * and finds the zero bytes the caller left there -- where the same
  * request with Handles at +16 returns STATUS_SUCCESS.  __fd_probe()
- * maps a failed ioctl to "neither readable nor writable", so the
- * symptom, once that path is reachable, is a socket that select() and
- * poll() report as never ready, with no error surfaced anywhere. */
+ * maps a failed ioctl to "ready, and hung up" (never-ready would let
+ * an unprobeable socket hang an infinite-timeout select()), so the
+ * symptom of getting this layout wrong is a socket that select() and
+ * poll() report ready when it is not, with no error surfaced anywhere
+ * -- caught by test/posix-select-socket.c, whose idle-socket
+ * assertions reject exactly that, and by test/posix-socket-poll.c,
+ * which asserts this layout with no device at all. */
 typedef struct _AFD_HANDLE {
 	HANDLE Handle;
 	uint32_t Events;
