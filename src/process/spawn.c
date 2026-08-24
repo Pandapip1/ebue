@@ -24,6 +24,24 @@
  *     directly.  (This is the same decision ReactOS's kernel32
  *     SetUpHandles makes; it was measured to be necessary on Windows 11.)
  *
+ *   - A *closed* standard descriptor has to be written as
+ *     (HANDLE)(LONG_PTR)-1 (INVALID_HANDLE_VALUE), not 0.  With
+ *     STARTF_USESTDHANDLES set, ReactOS's dll/win32/kernel32/client/proc.c
+ *     CreateProcessInternalW, and the documented CreateProcess "modern"
+ *     rules in rprichard/win32-console-docs (README.md, "CreateProcess
+ *     (modern)"), only treat a *non-NULL* StartupInfo/StandardXxx field as
+ *     an explicit value to use as-is, unvalidated; a NULL field falls
+ *     through to the same auto-provisioning rules AllocConsole/
+ *     AttachConsole use ("modern", rule 4 there: "Windows opens a console
+ *     handle for each standard handle that is currently NULL"), which is
+ *     exactly what was measured happening on real Windows: a spawned
+ *     child saw a *live, open* handle on a descriptor this code had just
+ *     asked to leave closed by passing 0.  -1 is not NULL, so it is taken
+ *     verbatim and never auto-provisioned; the receiving side already
+ *     treats it as "nothing here" (src/internal/fd.c install_std: `if
+ *     (!h || h == (HANDLE)(LONG_PTR)-1) return;`), so the descriptor comes
+ *     up closed in the child, matching what was asked for.
+ *
  * The command line is built by the quoting rules CommandLineToArgvW and
  * every Windows C runtime agree on, so that an argument with spaces,
  * quotes or backslashes survives the round trip into the child's argv.
@@ -300,9 +318,13 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 		if (f0 && (f0->flags & O_CLOEXEC)) f0 = 0;
 		if (f1 && (f1->flags & O_CLOEXEC)) f1 = 0;
 		if (f2 && (f2->flags & O_CLOEXEC)) f2 = 0;
-		pp->StandardInput = f0 ? f0->h : 0;
-		pp->StandardOutput = f1 ? f1->h : 0;
-		pp->StandardError = f2 ? f2->h : 0;
+		/* Not 0: see the file comment.  0/NULL is "unspecified" and
+		 * gets a fresh console handle auto-provisioned on real NT;
+		 * -1/INVALID_HANDLE_VALUE is the explicit "no handle" value
+		 * that is taken as-is. */
+		pp->StandardInput = f0 ? f0->h : (HANDLE)(LONG_PTR)-1;
+		pp->StandardOutput = f1 ? f1->h : (HANDLE)(LONG_PTR)-1;
+		pp->StandardError = f2 ? f2->h : (HANDLE)(LONG_PTR)-1;
 		pp->WindowFlags |= STARTF_USESTDHANDLES;
 	}
 
