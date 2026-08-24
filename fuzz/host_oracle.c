@@ -35,6 +35,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 typedef double (*strtod_fn)(const char *, char **);
 typedef float (*strtof_fn)(const char *, char **);
@@ -216,4 +217,34 @@ void oracle_mismatch_s(const char *what, const char *in, const char *got, const 
 	addf("\n");
 	emit();
 	host_abort();
+}
+
+/* ------------------------------------------------- the struct stat seam
+ *
+ * See fuzz/statshim.h for why this is here.  This file is the only one in
+ * fuzz/ compiled against the host headers, so it is the only one that can
+ * write a host `struct stat` without transcribing its layout by hand.
+ */
+#include <sys/stat.h>
+#include "statshim.h"
+
+unsigned long __ntfuzz_host_stat_size(void) { return (unsigned long)sizeof(struct stat); }
+
+void __ntfuzz_pack_stat(void *hostbuf, const struct ntfuzz_stat *s)
+{
+	struct stat *st = (struct stat *)hostbuf;
+	memset(st, 0, sizeof *st);
+	st->st_dev     = (dev_t)s->dev;
+	st->st_ino     = (ino_t)s->ino;
+	st->st_rdev    = (dev_t)s->rdev;
+	st->st_nlink   = (nlink_t)s->nlink;
+	st->st_mode    = (mode_t)s->mode;
+	st->st_uid     = (uid_t)s->uid;
+	st->st_gid     = (gid_t)s->gid;
+	st->st_size    = (off_t)s->size;
+	st->st_blksize = (blksize_t)s->blksize;
+	st->st_blocks  = (blkcnt_t)s->blocks;
+	st->st_atim.tv_sec  = (time_t)s->atim_sec;  st->st_atim.tv_nsec = (long)s->atim_nsec;
+	st->st_mtim.tv_sec  = (time_t)s->mtim_sec;  st->st_mtim.tv_nsec = (long)s->mtim_nsec;
+	st->st_ctim.tv_sec  = (time_t)s->ctim_sec;  st->st_ctim.tv_nsec = (long)s->ctim_nsec;
 }

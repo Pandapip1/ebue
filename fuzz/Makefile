@@ -37,6 +37,10 @@ CFLAGS_HARNESS = $(SAN) -g -O1 -std=c99 -nostdinc -fno-builtin -w \
 CFLAGS_ORACLE  = -fsanitize=address,undefined -g -O1 -w
 ASAN_SO = $(shell $(CC) -print-file-name=libclang_rt.asan-$(ARCH).so)
 RPATH   = -Wl,-rpath,$(dir $(ASAN_SO))
+# libFuzzer calls stat() to decide whether the corpus path is a directory,
+# and it was compiled against the host's struct stat, which is not ntlibc's.
+# See fuzz/statshim.h -- without this every corpus directory looks absent.
+WRAP    = -Wl,--wrap=stat
 # $(ASAN_SO) is named explicitly, and first: the shared ASan runtime has to
 # be the first entry in the executable's library list or it refuses to
 # start ("ASan runtime does not come first in initial library list").  The
@@ -85,32 +89,54 @@ $(LIBDIR)/.built: $(LIBDEP)
 $(OUT):
 	mkdir -p $(OUT)
 
-$(OUT)/host_oracle.o: host_oracle.c | $(OUT)
+$(OUT)/host_oracle.o: host_oracle.c statshim.h | $(OUT)
 	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
 
-$(OUT)/ntstubs.o: ntstubs.c $(LIBHDR) $(LIBDIR)/.built | $(OUT)
-	$(CC) $(CFLAGS_HARNESS) -c $< -o $@
+# -DNTLIBC_FUZZ_STATWRAP turns on the struct stat seam (fuzz/statshim.h).
+# Only here: tools/asan-build.sh compiles its own copy of ntstubs.c for the
+# test binaries, and those must keep seeing ntlibc's stat() as it is.
+$(OUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(LIBDIR)/.built | $(OUT)
+	$(CC) $(CFLAGS_HARNESS) -DNTLIBC_FUZZ_STATWRAP -c $< -o $@
 
 # The library objects are globbed by the shell, at recipe time.  $(wildcard)
 # would be expanded by make against a directory it may have cached before
 # the stamp rule refilled it, and an empty expansion links a harness with
 # no ntlibc in it at all.
 $(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT)
-	$(CC) $(CFLAGS_HARNESS) -shared-libasan $(RPATH) \
+	$(CC) $(CFLAGS_HARNESS) -shared-libasan $(RPATH) $(WRAP) \
 	  $(ASAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o \
 	  $(LIBDIR)/obj/*.o -ldl -lm -o $@
 
 # Leak detection on; see tools/asan-build.sh for why it can be trusted here.
 LEAKS ?= 1
 
+# Where a run's findings live between runs.  One subtree per harness:
+#
+#   $(CORPUS)/<h>/corpus    libFuzzer's minimized corpus, re-read next run
+#   $(CORPUS)/<h>/crashes   crash-<sha1> / leak-<sha1>, feedable to --repro
+#
+# NTLIBC_FUZZ_MIRROR makes that subtree, and only that subtree, visible in
+# ntstubs.c's simulated volume, so libFuzzer's own file I/O -- which goes
+# through ntlibc, not the host -- can see and add to it.  See the block
+# comment above mirror_init() in ntstubs.c.  Point CORPUS somewhere
+# persistent (or let CI cache it) and each night resumes where the last
+# one stopped instead of starting from random bytes.
+CORPUS ?= $(abspath $(srcdir)/obj/fuzzcorpus)
+
 run: all
 	@rc=0; \
 	for h in $(HARNESSES); do \
-	   echo "== fuzz_$$h ($(FUZZ_TIME)s)"; \
+	   mkdir -p $(CORPUS)/$$h/corpus $(CORPUS)/$$h/crashes; \
+	   before=$$(ls -1 $(CORPUS)/$$h/corpus | wc -l); \
+	   echo "== fuzz_$$h ($(FUZZ_TIME)s, corpus $$before)"; \
+	   NTLIBC_FUZZ_MIRROR=$(CORPUS)/$$h \
 	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS) UBSAN_OPTIONS=print_stacktrace=1 \
 	   $(OUT)/fuzz_$$h -max_total_time=$(FUZZ_TIME) -max_len=256 \
 	     -print_funcs=0 -print_final_stats=1 \
+	     -artifact_prefix=$(CORPUS)/$$h/crashes/ \
+	     $(CORPUS)/$$h/corpus \
 	   || { echo "   fuzz_$$h FOUND SOMETHING"; rc=1; }; \
+	   echo "   corpus $$before -> $$(ls -1 $(CORPUS)/$$h/corpus | wc -l)"; \
 	 done; exit $$rc
 
 clean:

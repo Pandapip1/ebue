@@ -249,6 +249,7 @@ static void xstatus_record(int pid, int code)
 
 static void vfs_init(void);            /* the simulated file system, below */
 static void materialize_argv0(const char *host);  /* below, once nodes exist */
+static void mirror_init(char **envp);             /* the corpus mirror, below */
 
 __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char **envp)
 {
@@ -310,6 +311,12 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 	 * comment below): it only ever reads, never shadows a path a test
 	 * itself populates, and only for this one path. */
 	if (argc > 0 && argv) materialize_argv0(argv[0]);
+
+	/* NTLIBC_FUZZ_MIRROR: make one host directory visible in the volume,
+	 * so libFuzzer can find a corpus directory and write back to it.  See
+	 * the block comment above mirror_init().  Reads envp rather than
+	 * environ, which the loop above has just emptied. */
+	mirror_init(envp);
 
 	/* Nothing calls ntlibc's exit() in a native build -- glibc's start-up
 	 * calls main() and glibc's exit() ends it -- so __stdio_exit() never
@@ -713,6 +720,328 @@ static void materialize_argv0(const char *host)
 	}
 }
 
+/* ---- the corpus mirror ------------------------------------------------
+ *
+ * Why this exists.  libFuzzer's corpus is a *directory*: it stats it,
+ * lists it, reads every file in it at start-up, and writes each newly
+ * interesting input back into it as a file named after the input's SHA1.
+ * It does all of that through the C library it is linked against, which
+ * in this executable is ntlibc -- so its stat/opendir/open land in the
+ * volume above, which starts out holding only C:\work and C:\tmp.  The
+ * corpus directory is simply not in it, and libFuzzer refuses to start:
+ *
+ *     ERROR: The required directory "/x/corpus" does not exist
+ *
+ * That is the whole of the "no corpus survives a run" problem, and it is
+ * worth being precise about it because the comment this replaces was
+ * not: NtCreateFile is *not* unimplemented here and does not answer
+ * STATUS_NOT_IMPLEMENTED.  It is fully implemented, against the in-memory
+ * volume; stat() of the corpus directory fails with a plain ENOENT
+ * because nothing ever put that directory in the volume.  The gap is a
+ * missing directory, not a missing syscall.
+ *
+ * NTLIBC_FUZZ_MIRROR=<host directory> closes it.  At start-up the named
+ * host directory tree is copied into the volume at the same path --
+ * src/internal/path.c's dos_from_posix() maps "/a/b" onto "\??\C:\a\b",
+ * so a host absolute path names the same node here with no translation
+ * -- and a file inside that subtree is written back to the host when the
+ * last handle that was opened for writing is closed.
+ *
+ * Write-through on close rather than a flush at exit, deliberately: the
+ * artefact that matters most is the one libFuzzer writes on a crash, and
+ * it writes that and then calls _Exit(), which runs no atexit handler.
+ * A close hook catches the crash artefact and the corpus unit alike.
+ *
+ * Deletions are mirrored too, and they have to be.  libFuzzer's
+ * -reduce_inputs (on by default) unlinks a corpus file the moment a
+ * smaller input reaches the same coverage, so its live corpus stays
+ * minimal -- 1326 files on disk against 374 it was actually using, after
+ * two 15s runs of fuzz_strtod.  Without mirrored deletes the host
+ * directory keeps every input any run ever wrote and grows without bound,
+ * which for a nightly cron is a cache that eventually costs more to load
+ * than the fuzzing is worth.  With them, the host directory *is*
+ * libFuzzer's minimized corpus.
+ *
+ * libFuzzer's own answer to this, `-merge=1`, does not work here and was
+ * measured not to: merge re-execs the harness once per input
+ * (MERGE-OUTER: attempt N) so that a crashing input cannot lose the whole
+ * merge, and those child processes go through ntstubs' RtlCreateUserProcess
+ * rather than a real fork of a real binary.  A 1326-file merge produced
+ * "0 new files with 0 new features added".
+ *
+ * The unlink is fenced hard: only a path that resolves inside the
+ * mirrored subtree, only a regular file, never a directory.  A directory
+ * this file created on the host is left there.
+ *
+ * Unset, none of this runs and the volume behaves exactly as before, so
+ * `make asan` and every native test see no change at all.
+ */
+
+#define SYS_mkdirat    258
+#define SYS_unlinkat   263
+#define SYS_getdents64 217
+
+#define MIRROR_MAX_FILE   (16u * 1024u * 1024u)
+#define MIRROR_MAX_DEPTH  16
+#define MIRROR_PATH_MAX   3072
+
+static struct vnode *mirror_root;          /* the mirrored dir in the volume */
+static char mirror_host[MIRROR_PATH_MAX];  /* its host path, no trailing / */
+static size_t mirror_hostlen;
+
+/* getdents64's record, spelled out because this file has no host headers. */
+struct mdirent64 {
+	unsigned long long d_ino;
+	long long d_off;
+	unsigned short d_reclen;
+	unsigned char d_type;
+	char d_name[1];
+};
+#define MDT_DIR 4
+#define MDT_REG 8
+
+/* Slurp a host file into a fresh vnode.  Returns 0 on any failure, and
+ * on failure has created nothing: a half-read corpus entry is worse than
+ * a missing one, since libFuzzer would keep it and treat it as input. */
+static struct vnode *mirror_slurp(const char *host)
+{
+	unsigned char *data = 0;
+	size_t cap = 0, len = 0;
+	struct vnode *nf;
+	long fd = syscall(SYS_openat, -100 /*AT_FDCWD*/, host, 0 /*O_RDONLY*/, 0);
+
+	if (fd < 0) return 0;
+	for (;;) {
+		unsigned char buf[65536];
+		long n = syscall(SYS_read, fd, buf, sizeof buf);
+		if (n < 0) { syscall(SYS_close, fd); vfree(data); return 0; }
+		if (n == 0) break;
+		if (len + (size_t)n > MIRROR_MAX_FILE) { syscall(SYS_close, fd); vfree(data); return 0; }
+		if (len + (size_t)n > cap) {
+			size_t want = (len + (size_t)n) * 2 + 4096;
+			unsigned char *nd = __interceptor_realloc(data, want);
+			if (!nd) { syscall(SYS_close, fd); vfree(data); return 0; }
+			data = nd; cap = want;
+		}
+		memcpy(data + len, buf, (size_t)n);
+		len += (size_t)n;
+	}
+	syscall(SYS_close, fd);
+	nf = node_new(0);
+	if (!nf) { vfree(data); return 0; }
+	nf->data = data;
+	nf->size = (long long)len;
+	nf->cap = cap;
+	return nf;
+}
+
+/* Copy one host directory's contents into `dir`.  Additive: a name the
+ * volume already carries is left alone, so this can never clobber
+ * something a harness created first.  Symlinks and every other file type
+ * are skipped -- getdents64's d_type says DT_LNK for them and nothing
+ * here follows one, so a symlinked corpus entry pointing at /etc/shadow
+ * is ignored rather than read. */
+static void mirror_import(struct vnode *dir, char *host, size_t hostlen, int depth)
+{
+	char buf[32768];
+	long fd;
+
+	if (depth > MIRROR_MAX_DEPTH) return;
+	fd = syscall(SYS_openat, -100, host, 0x10000 /*O_RDONLY|O_DIRECTORY*/, 0);
+	if (fd < 0) return;
+	for (;;) {
+		long n = syscall(SYS_getdents64, fd, buf, sizeof buf);
+		long off;
+		if (n <= 0) break;
+		for (off = 0; off < n; ) {
+			struct mdirent64 *de = (struct mdirent64 *)(buf + off);
+			const char *nm = de->d_name;
+			size_t nl = strlen(nm), i;
+			WCHAR wname[256];
+			off += de->d_reclen;
+			if (!nl || nl > 255) continue;
+			if (nm[0] == '.' && (nl == 1 || (nl == 2 && nm[1] == '.'))) continue;
+			if (de->d_type != MDT_DIR && de->d_type != MDT_REG) continue;
+			if (hostlen + 1 + nl >= MIRROR_PATH_MAX) continue;
+			for (i = 0; i < nl; i++) {
+				if ((unsigned char)nm[i] > 127) break;
+				wname[i] = (WCHAR)(unsigned char)nm[i];
+			}
+			if (i != nl) continue;             /* non-ASCII: not ours to fold */
+			host[hostlen] = '/';
+			memcpy(host + hostlen + 1, nm, nl + 1);
+			if (de->d_type == MDT_DIR) {
+				struct vent *e = dir_find(dir, wname, nl);
+				struct vnode *nd;
+				if (e) { if (e->node->isdir) mirror_import(e->node, host, hostlen + 1 + nl, depth + 1); }
+				else if ((nd = node_new(1)) != 0) {
+					if (dir_add(dir, wname, nl, nd)) mirror_import(nd, host, hostlen + 1 + nl, depth + 1);
+					else { nd->nlink = 0; node_release(nd); }
+				}
+			} else if (!dir_find(dir, wname, nl)) {
+				struct vnode *nf = mirror_slurp(host);
+				if (nf && !dir_add(dir, wname, nl, nf)) { nf->nlink = 0; node_release(nf); }
+			}
+			host[hostlen] = 0;
+		}
+	}
+	syscall(SYS_close, fd);
+}
+
+/* Called from __ntshim_init() with the real envp: `environ` has been
+ * replaced by an empty one by then (see the comment there), so getenv()
+ * would find nothing. */
+static void mirror_init(char **envp)
+{
+	static const char key[] = "NTLIBC_FUZZ_MIRROR=";
+	const char *val = 0;
+	char path[MIRROR_PATH_MAX];
+	size_t len, i;
+	struct vnode *dir;
+	const char *p;
+
+	if (envp) for (i = 0; envp[i]; i++)
+		if (!strncmp(envp[i], key, sizeof key - 1)) val = envp[i] + sizeof key - 1;
+	if (!val || val[0] != '/') return;         /* unset, or not absolute: off */
+	len = strlen(val);
+	while (len > 1 && val[len - 1] == '/') len--;
+	if (len < 2 || len >= MIRROR_PATH_MAX) return;
+	memcpy(path, val, len);
+	path[len] = 0;
+
+	/* Walk the volume to that path, creating the directories on the way:
+	 * the mirror root has to exist here before libFuzzer stats it. */
+	dir = vroot;
+	p = path + 1;
+	while (*p) {
+		const char *start = p;
+		WCHAR wname[256];
+		size_t clen, j;
+		struct vent *e;
+		while (*p && *p != '/') p++;
+		clen = (size_t)(p - start);
+		if (*p) p++;
+		if (!clen || clen > 255) { if (!clen) continue; return; }
+		for (j = 0; j < clen; j++) {
+			if ((unsigned char)start[j] > 127) return;
+			wname[j] = (WCHAR)(unsigned char)start[j];
+		}
+		e = dir_find(dir, wname, clen);
+		if (e) {
+			if (!e->node->isdir) return;       /* a file sits where a dir must be */
+			dir = e->node;
+		} else {
+			struct vnode *nd = node_new(1);
+			if (!nd) return;
+			if (!dir_add(dir, wname, clen, nd)) { nd->nlink = 0; node_release(nd); return; }
+			dir = nd;
+		}
+	}
+	memcpy(mirror_host, path, len + 1);
+	mirror_hostlen = len;
+	mirror_root = dir;
+	mirror_import(dir, mirror_host, mirror_hostlen, 0);
+	mirror_host[mirror_hostlen] = 0;           /* mirror_import borrows the buffer */
+}
+
+/* The host path of (dir, leaf) if it lies inside the mirror, else -1. */
+static int mirror_relpath(struct vnode *dir, const WCHAR *leaf, size_t leaflen,
+                          char *out, size_t outsz)
+{
+	struct vnode *chain[MIRROR_MAX_DEPTH];
+	int depth = 0, i;
+	size_t len;
+
+	if (!mirror_root || !dir || !leaf || !leaflen) return -1;
+	for (; dir && dir != mirror_root; dir = dir->parent) {
+		if (depth == MIRROR_MAX_DEPTH || !dir->name) return -1;
+		chain[depth++] = dir;
+	}
+	if (dir != mirror_root) return -1;
+	len = mirror_hostlen;
+	if (len >= outsz) return -1;
+	memcpy(out, mirror_host, len);
+	for (i = depth - 1; i >= 0; i--) {
+		size_t j, n = chain[i]->namelen;
+		if (len + 1 + n >= outsz) return -1;
+		out[len++] = '/';
+		for (j = 0; j < n; j++) {
+			WCHAR c = chain[i]->name[j];
+			if (c < 32 || c > 126 || c == '/') return -1;
+			out[len++] = (char)c;
+		}
+	}
+	if (len + 1 + leaflen >= outsz) return -1;
+	out[len++] = '/';
+	for (i = 0; (size_t)i < leaflen; i++) {
+		WCHAR c = leaf[i];
+		if (c < 32 || c > 126 || c == '/') return -1;
+		out[len++] = (char)c;
+	}
+	out[len] = 0;
+	return 0;
+}
+
+/* mkdir -p over the directory part, ignoring EEXIST (and everything else:
+ * the open below is the real test of whether it worked). */
+static void mirror_mkparents(char *path)
+{
+	size_t i;
+	for (i = mirror_hostlen + 1; path[i]; i++) {
+		if (path[i] != '/') continue;
+		path[i] = 0;
+		syscall(SYS_mkdirat, -100, path, 0755);
+		path[i] = '/';
+	}
+}
+
+/* Write a mirrored file back to the host.  Called from of_drop() when the
+ * last handle onto it goes away, which is where libFuzzer's fclose of a
+ * freshly written corpus unit -- or of a crash artefact -- ends up. */
+static void mirror_flush(struct ofile *f)
+{
+	char path[MIRROR_PATH_MAX];
+	long fd;
+	long long off;
+	struct vnode *n;
+
+	if (!mirror_root || !f || f->kind != OF_VFS) return;
+	n = f->node;
+	if (!n || n->isdir || f->delete_on_close || n->delete_pending) return;
+	if (!(f->access & (FILE_WRITE_DATA | FILE_APPEND_DATA))) return;
+	/* The name may already be gone: unlink() with POSIX semantics removes
+	 * it while the handle is still open (do_dispose), and re-creating the
+	 * host file here would undo the unlink mirror_unlink just did. */
+	if (!f->dir) return;
+	{
+		struct vent *e = dir_find(f->dir, f->name, f->namelen);
+		if (!e || e->node != n) return;
+	}
+	if (mirror_relpath(f->dir, f->name, f->namelen, path, sizeof path) < 0) return;
+	mirror_mkparents(path);
+	fd = syscall(SYS_openat, -100, path, 0x241 /*O_WRONLY|O_CREAT|O_TRUNC*/, 0644);
+	if (fd < 0) return;
+	for (off = 0; off < n->size; ) {
+		long w = syscall(SYS_write, fd, n->data + off, (size_t)(n->size - off));
+		if (w <= 0) break;
+		off += w;
+	}
+	syscall(SYS_close, fd);
+}
+
+/* Remove a mirrored file from the host, when the volume has just dropped
+ * its last link to it.  Same fence as mirror_flush: nothing outside the
+ * subtree named by NTLIBC_FUZZ_MIRROR, and never a directory. */
+static void mirror_unlink(struct ofile *f)
+{
+	char path[MIRROR_PATH_MAX];
+
+	if (!mirror_root || !f || f->kind != OF_VFS) return;
+	if (!f->node || f->node->isdir) return;
+	if (mirror_relpath(f->dir, f->name, f->namelen, path, sizeof path) < 0) return;
+	syscall(SYS_unlinkat, -100 /*AT_FDCWD*/, path, 0);
+}
+
 /* The NT path of a node: "\??\C:" followed by each ancestor's name.
  * Directories carry their own name, so a renamed parent takes its whole
  * subtree with it, exactly as it does on NT. */
@@ -793,13 +1122,16 @@ static void of_drop(struct ofile *f)
 	if (f->kind == OF_VFS) {
 		struct vnode *n = f->node;
 		int unlinked = 0;
+		/* Before the node is touched: the last handle onto a mirrored
+		 * file that was opened for writing is what puts it on the host. */
+		mirror_flush(f);
 		if (f->delete_on_close && !n->delete_pending) n->delete_pending = 1;
 		n->refs--;
 		if (n->delete_pending && n->refs == 0 && f->dir) {
 			struct vent *e = dir_find(f->dir, f->name, f->namelen);
 			/* dir_remove drops the last link and releases the node with
 			 * it, so releasing again here would be a use-after-free. */
-			if (e && e->node == n) { dir_remove(f->dir, e); unlinked = 1; }
+			if (e && e->node == n) { mirror_unlink(f); dir_remove(f->dir, e); unlinked = 1; }
 		}
 		if (!unlinked) node_release(n);
 		vfree(f->name);
@@ -1753,7 +2085,7 @@ static NTSTATUS do_dispose(struct ofile *f, int del, int posix, int ignore_reado
 		/* POSIX semantics: the name goes now, the node lives until the
 		 * last handle closes. */
 		struct vent *e = f->dir ? dir_find(f->dir, f->name, f->namelen) : 0;
-		if (e && e->node == v) dir_remove(f->dir, e);
+		if (e && e->node == v) { mirror_unlink(f); dir_remove(f->dir, e); }
 		return STATUS_SUCCESS;
 	}
 	v->delete_pending = 1;       /* classic: unlinked when the last handle closes */
@@ -3014,3 +3346,39 @@ PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HAND
 	(void)first; (void)h;
 	return (PVOID)(long)1;
 }
+
+/* ------------------------------------------------- the struct stat seam
+ *
+ * Only compiled into the libFuzzer harnesses (fuzz/Makefile links them
+ * with -Wl,--wrap=stat); tools/asan-build.sh's test binaries do not use
+ * it, and see ntlibc's stat() unchanged.  fuzz/statshim.h has the whole
+ * story and the measured offsets.
+ */
+#ifdef NTLIBC_FUZZ_STATWRAP
+#include <sys/stat.h>
+#include "statshim.h"
+
+int __real_stat(const char *path, struct stat *st);
+
+int __wrap_stat(const char *path, void *hostbuf)
+{
+	struct stat st;
+	struct ntfuzz_stat s;
+	int r;
+
+	/* The caller's buffer is a *host* struct stat, which is larger than
+	 * ntlibc's; never write through it directly. */
+	if (!hostbuf) return __real_stat(path, 0);
+	r = __real_stat(path, &st);
+	if (r != 0) return r;
+	s.dev = st.st_dev;   s.ino = st.st_ino;   s.rdev = st.st_rdev;
+	s.nlink = st.st_nlink;
+	s.mode = st.st_mode; s.uid = st.st_uid;   s.gid = st.st_gid;
+	s.size = st.st_size; s.blksize = st.st_blksize; s.blocks = st.st_blocks;
+	s.atim_sec = st.st_atim.tv_sec; s.atim_nsec = st.st_atim.tv_nsec;
+	s.mtim_sec = st.st_mtim.tv_sec; s.mtim_nsec = st.st_mtim.tv_nsec;
+	s.ctim_sec = st.st_ctim.tv_sec; s.ctim_nsec = st.st_ctim.tv_nsec;
+	__ntfuzz_pack_stat(hostbuf, &s);
+	return 0;
+}
+#endif
