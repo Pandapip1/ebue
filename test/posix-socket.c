@@ -23,8 +23,12 @@
  * faithful clone of real Windows' AFD for at least socket creation and
  * connect."  Empirically, in this environment: opening a handle via
  * NtCreateFile+the AfdOpenPacketXX EA against \Device\Afd\Endpoint
- * (src/socket/afdsupport.c's __afd_open(), following ReactOS's
- * WSPSocket) *succeeds* under this environment's Wine -- Wine's server
+ * (src/socket/afdsupport.c's __afd_open(); the EA recipe follows
+ * ReactOS's WSPSocket, but the EA *value* is the real-Windows 24-byte
+ * AFD_OPEN_PACKET, not ReactOS's 12-byte AFD_CREATE_PACKET -- see
+ * src/internal/afd.h's socket-creation banner, and
+ * test/posix-socket-ea.c, which asserts that buffer's layout with no
+ * device involved) *succeeds* under this environment's Wine -- Wine's server
  * accepts the open -- but the very first real ioctl against that
  * handle, IOCTL_AFD_BIND, fails with STATUS_BAD_DEVICE_TYPE
  * (0xC00000CB): Wine's own AFD implementation only wires up a handle

@@ -117,6 +117,30 @@ typedef struct _FILE_FULL_EA_INFORMATION {
 	char EaName[1]; /* EaNameLength bytes + a NUL, then EaValueLength bytes of value */
 } FILE_FULL_EA_INFORMATION;
 
+/* The header size that matters on the wire is offsetof(..., EaName) == 8,
+ * *not* sizeof(FILE_FULL_EA_INFORMATION).  sizeof() is 12: it counts the
+ * EaName[1] placeholder byte and then rounds the whole thing up to the
+ * 4-byte alignment NextEntryOffset forces.  Sizing a buffer with sizeof()
+ * therefore overstates the entry by 3 bytes and leaves the declared total
+ * length 4-misaligned -- see __afd_open()'s comment and
+ * test/posix-socket-ea.c, which asserts the exact-fit arithmetic.
+ *
+ * The invariants NT's own validator (ReactOS ntoskrnl/io/iomgr/util.c,
+ * IoCheckEaBufferValidity(), an @implemented reimplementation of the
+ * kernel's) enforces on this buffer, transcribed here because
+ * test/posix-socket-ea.c checks each one by name:
+ *
+ *   ComputedLength = EaValueLength + EaNameLength
+ *                    + FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName) + 1
+ *
+ *   - EaLength must be >= FIELD_OFFSET(..., EaName), and >= ComputedLength;
+ *   - EaName[EaNameLength] must be ANSI_NULL -- so EaNameLength excludes
+ *     the terminator but the terminator must still be in the buffer;
+ *   - for a non-final entry, NextEntryOffset must equal
+ *     ALIGN_UP_BY(ComputedLength, sizeof(ULONG));
+ *   - for the final entry, NextEntryOffset must be 0. */
+#define AFD_EA_HEADER_SIZE 8 /* offsetof(FILE_FULL_EA_INFORMATION, EaName) */
+
 /* ---- socket creation (shared.h: AFD_CREATE_PACKET, AfdCommand;
  * dllmain.c's WSPSocket around ReactOS's own line 243/347 for the
  * NtCreateFile/EA recipe) ---------------------------------------------
@@ -126,12 +150,73 @@ typedef struct _FILE_FULL_EA_INFORMATION {
  * Hood of AFD.sys" reverse-engineering series
  * (https://leftarcode.com/posts/afd-reverse-engineering-part1/, which
  * also confirms the "\Device\Afd\Endpoint" open path and the
- * "AfdOpenPacketXX" EA name below) -- ReactOS's driver-side handler
- * (drivers/network/afd/afd/main.c) reads only EndpointFlags,
- * SizeOfTransportName and TransportName out of the EA payload, nothing
- * else, so no separate AF/type/protocol fields are needed here: which
- * protocol stack answers is selected entirely by which transport
- * device name is opened. */
+ * "AfdOpenPacketXX" EA name below).
+ *
+ * *** The two sources disagree on the EA value's own layout, and only
+ * one of them describes the driver CI actually runs against. ***
+ *
+ * ReactOS's client (dll/win32/msafd/misc/dllmain.c) fills an
+ * AFD_CREATE_PACKET (sdk/include/reactos/drivers/afd/shared.h):
+ *
+ *      +0  DWORD EndpointFlags
+ *      +4  DWORD GroupID
+ *      +8  DWORD SizeOfTransportName
+ *     +12  WCHAR TransportName[]
+ *
+ * -- a 12-byte header, no address-family/type/protocol fields, because
+ * ReactOS's *own* afd.sys (drivers/network/afd/afd/main.c, AfdCreate())
+ * reads only those three fields back out.  That is the NT4/2000-era
+ * shape, and it is self-consistent for ReactOS.
+ *
+ * Real Windows' afd.sys does not use it.  Since Vista the EA value is
+ * an AFD_OPEN_PACKET with a *24-byte* header carrying three extra LONGs
+ * between GroupID and the name length:
+ *
+ *      +0  ULONG EndpointFlags          (AFD_ENDPOINT_FLAGS)
+ *      +4  ULONG GroupID                (GROUP)
+ *      +8  LONG  AddressFamily          AF_*
+ *     +12  LONG  SocketType             SOCK_*
+ *     +16  LONG  Protocol               IPPROTO_*
+ *     +20  ULONG TransportDeviceNameLength   -- in BYTES, not characters
+ *     +24  WCHAR TransportDeviceName[]  UTF-16, not NUL-counted
+ *
+ * Two independent reverse-engineering efforts agree on that 24-byte
+ * shape, against ReactOS's 12:
+ *
+ *   - System Informer's phnt headers, ntafd.h: `AFD_OPEN_PACKET` and
+ *     the `AFD_OPEN_PACKET_FULL_EA` convenience wrapper right below it
+ *     (which also pins EaName to `CHAR EaName[sizeof(AfdOpenPacket)]`,
+ *     i.e. 16 bytes -- 15 plus the NUL -- putting the value at +24 of
+ *     the EA entry).  `TransportDeviceNameLength` is annotated
+ *     `_Field_size_bytes_opt_()`, which is what settles bytes-vs-chars.
+ *   - Lewczak's series (part 1, "AFD_OPEN_PACKET_EA"), which lists
+ *     endpointFlags, groupID, addressFamily, socketType, protocol,
+ *     sizeOfTransportName in exactly that order after a 0x10-byte
+ *     eaName.
+ *
+ * Using ReactOS's 12-byte layout against real Windows puts the UTF-16
+ * device name where afd.sys expects SocketType/Protocol/
+ * TransportDeviceNameLength.  afd.sys then reads a *name length* out of
+ * the middle of the name text -- for "\Device\Tcp" the WCHARs at +20
+ * are 'i','c', so the length reads back as 0x00630069 == 6488169
+ * (~6.2 MB) -- and walks that far past the end of a 67-byte buffer
+ * (observed directly: reintroducing the old layout makes
+ * test/posix-socket-ea.c print exactly that number).  That is the
+ * STATUS_ACCESS_VIOLATION (-> EFAULT) socket() returned on the CI
+ * windows-test legs while this header carried the ReactOS shape.  Wine
+ * cannot see it: Wine's AFD is its own implementation and never parses
+ * this packet.
+ *
+ * phnt notes that leaving TransportDeviceNameLength at 0 (no device
+ * name) selects "TLI" transport mode, in which AFD's bind/connect/
+ * accept ioctls take SOCKADDR rather than the TDI_ADDRESS_INFO /
+ * TRANSPORT_ADDRESS structures the rest of this header is built on.
+ * This code therefore keeps naming "\Device\Tcp", which selects TDI
+ * (or hybrid) mode and keeps the structures below correct.  If Server
+ * 2025 has finally retired the \Device\Tcp TDI stub, the open will
+ * fail with a name-lookup status (ENOENT) rather than EFAULT -- a
+ * distinguishable next signal, and the point at which converting the
+ * whole file to the _TL structures becomes the fix. */
 /* Spelled as WCHAR-array initializer lists, not L"..." literals: a wide
  * string literal's element type is the compiler's native wchar_t,
  * which is a 32-bit int on a non-Windows-targeting compiler (confirmed
@@ -149,12 +234,23 @@ typedef struct _FILE_FULL_EA_INFORMATION {
 #define AFD_EA_NAME "AfdOpenPacketXX"
 #define AFD_EA_NAME_LEN 15 /* strlen(AFD_EA_NAME), not counting the NUL EaName itself is stored with */
 
-typedef struct _AFD_CREATE_PACKET {
+/* Every field spelled as a fixed-width type, for the LP64-vs-LLP64
+ * reason in this header's banner: `make asan` compiles it natively. */
+typedef struct _AFD_OPEN_PACKET {
 	uint32_t EndpointFlags;
 	uint32_t GroupID;
-	uint32_t SizeOfTransportName;
-	WCHAR TransportName[1];
-} AFD_CREATE_PACKET;
+	int32_t AddressFamily;
+	int32_t SocketType;
+	int32_t Protocol;
+	uint32_t TransportDeviceNameLength; /* bytes, excluding any NUL */
+	WCHAR TransportDeviceName[1];
+} AFD_OPEN_PACKET;
+
+/* offsetof(AFD_OPEN_PACKET, TransportDeviceName).  Named separately for
+ * the same reason AFD_EA_HEADER_SIZE is: sizeof(AFD_OPEN_PACKET) is 28,
+ * not 24 -- it counts the TransportDeviceName[1] placeholder and rounds
+ * up -- so sizeof() would overstate the value by 4 bytes. */
+#define AFD_OPEN_PACKET_HEADER_SIZE 24
 
 /* ---- bind (shared.h: AFD_BIND_DATA, AFD_SHARE_*) --------------------- */
 #define AFD_SHARE_UNIQUE    0
@@ -268,6 +364,17 @@ typedef struct _AFD_POLL_INFO {
  * socket() and of the new handle accept() installs for an incoming
  * connection.  Returns 0, or -1 with errno. */
 int __afd_open(HANDLE *out);
+/* The AfdOpenPacketXX EA buffer __afd_open() hands NtCreateFile, split
+ * out so it can be inspected without a device: __afd_open_ea_size()
+ * returns the exact byte count (no slack -- see AFD_EA_HEADER_SIZE),
+ * and __afd_build_open_ea() fills that many bytes at `buf`.  buf must
+ * be at least 4-byte aligned, which is what NT's own EA validator
+ * requires of the whole entry.  test/posix-socket-ea.c re-parses the
+ * result and asserts every invariant NT checks; it is the only reason
+ * these are separate functions, and it runs on hosts with no working
+ * \Device\Afd at all. */
+unsigned long __afd_open_ea_size(void);
+void __afd_build_open_ea(void *buf);
 /* Issue one AFD ioctl on socket handle h and wait for it to finish --
  * every AFD request (src/socket/ (every .c there)) goes through this.  STATUS_PENDING
  * is waited out on the handle itself (see __afd_open()'s comment on why

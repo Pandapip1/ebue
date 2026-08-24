@@ -10,27 +10,94 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include "libc.h"
 #include "afd.h"
 
+/* The "\Device\Tcp" transport name this project's one supported socket
+ * kind (AF_INET/SOCK_STREAM) names in its open packet, and its length
+ * in *bytes* -- AFD_OPEN_PACKET.TransportDeviceNameLength is a byte
+ * count, not a character count (phnt ntafd.h annotates it
+ * _Field_size_bytes_opt_; ReactOS passes UNICODE_STRING.Length, which
+ * is also bytes).  Getting this wrong by a factor of two is the classic
+ * UTF-16 length bug, so it is computed once, here. */
+static const WCHAR afd_transport[] = AFD_TRANSPORT_TCP;
+#define AFD_TRANSPORT_WCHARS ((sizeof(afd_transport) / sizeof(WCHAR)) - 1) /* excludes the NUL */
+#define AFD_TRANSPORT_BYTES (AFD_TRANSPORT_WCHARS * sizeof(WCHAR))
+
+/* The value is the open packet: its 24-byte header (NOT
+ * sizeof(AFD_OPEN_PACKET), which is 28), the name, and the name's NUL.
+ * The NUL is not counted by TransportDeviceNameLength but is kept in
+ * the buffer, matching ReactOS's WSPSocket, which copies
+ * TransportName.Length + sizeof(WCHAR). */
+#define AFD_OPEN_PACKET_BYTES \
+	(AFD_OPEN_PACKET_HEADER_SIZE + AFD_TRANSPORT_BYTES + sizeof(WCHAR))
+
+/* See afd.h.  Exact fit, deliberately: this is
+ *
+ *     FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName)
+ *       + EaNameLength + 1 (the NUL) + EaValueLength
+ *
+ * which is exactly the `ComputedLength` NT's IoCheckEaBufferValidity()
+ * computes.  ReactOS's WSPSocket instead writes
+ * `SizeOfPacket + sizeof(FILE_FULL_EA_INFORMATION) + AFD_PACKET_COMMAND_LENGTH`,
+ * which is 3 bytes larger (sizeof() counts the EaName[1] placeholder
+ * and pads to 4) and leaves the declared total 4-misaligned.  The
+ * validator tolerates trailing slack on a final entry, but there is no
+ * reason to declare bytes the entry does not describe -- and an exact,
+ * 4-aligned total is an invariant test/posix-socket-ea.c can assert
+ * without having to special-case padding. */
+unsigned long __afd_open_ea_size(void)
+{
+	return (unsigned long)(AFD_EA_HEADER_SIZE + AFD_EA_NAME_LEN + 1 + AFD_OPEN_PACKET_BYTES);
+}
+
+/* See afd.h. */
+void __afd_build_open_ea(void *buf)
+{
+	FILE_FULL_EA_INFORMATION *ea = (FILE_FULL_EA_INFORMATION *)buf;
+	AFD_OPEN_PACKET *pkt;
+
+	memset(buf, 0, __afd_open_ea_size());
+
+	/* Single, and therefore final, entry: NextEntryOffset is 0.  A
+	 * non-zero value would have to equal ALIGN_UP(ComputedLength, 4)
+	 * *and* be followed by another entry. */
+	ea->NextEntryOffset = 0;
+	ea->Flags = 0;
+	/* EaNameLength excludes the terminator; the terminator must still
+	 * be present, because the validator checks EaName[EaNameLength]
+	 * == '\0'.  Hence AFD_EA_NAME_LEN here but +1 in the copy. */
+	ea->EaNameLength = AFD_EA_NAME_LEN;
+	memcpy(ea->EaName, AFD_EA_NAME, AFD_EA_NAME_LEN + 1);
+	ea->EaValueLength = (unsigned short)AFD_OPEN_PACKET_BYTES;
+
+	/* The value starts immediately after the name's NUL.  With a
+	 * 15-byte name that lands at offset 8 + 15 + 1 == 24, so the
+	 * packet's own uint32_t fields stay naturally aligned. */
+	pkt = (AFD_OPEN_PACKET *)(void *)(ea->EaName + AFD_EA_NAME_LEN + 1);
+	pkt->EndpointFlags = 0; /* connection-oriented: not CONNECTIONLESS/RAW/MESSAGE_ORIENTED */
+	pkt->GroupID = 0;
+	/* The three fields ReactOS's 12-byte AFD_CREATE_PACKET does not
+	 * have, and whose absence is what made real Windows read the
+	 * device name as a length -- see afd.h's socket-creation banner. */
+	pkt->AddressFamily = AF_INET;
+	pkt->SocketType = SOCK_STREAM;
+	pkt->Protocol = IPPROTO_TCP;
+	pkt->TransportDeviceNameLength = (uint32_t)AFD_TRANSPORT_BYTES;
+	memcpy(pkt->TransportDeviceName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
+}
+
 /* Open a fresh \Device\Afd\Endpoint handle carrying the AF_INET/
- * SOCK_STREAM transport ("\Device\Tcp") -- the EA-buffer recipe from
- * ReactOS's WSPSocket (dll/win32/msafd/misc/dllmain.c, around its own
- * lines 240-267 and 347): a FILE_FULL_EA_INFORMATION named
- * "AfdOpenPacketXX" whose value is an AFD_CREATE_PACKET naming the
- * transport device.  Every socket() call and every accept()ed
- * connection needs one of these; see those two files for the two call
- * sites. */
+ * SOCK_STREAM transport ("\Device\Tcp") -- a FILE_FULL_EA_INFORMATION
+ * named "AfdOpenPacketXX" whose value is an AFD_OPEN_PACKET naming the
+ * transport device.  See src/internal/afd.h's socket-creation banner
+ * for the layout and the two sources it is taken from.  Every socket()
+ * call and every accept()ed connection needs one of these. */
 int __afd_open(HANDLE *out)
 {
-	static const WCHAR transport[] = AFD_TRANSPORT_TCP;
-	enum { transport_wchars = (sizeof(transport) / sizeof(WCHAR)) - 1 }; /* not counting the NUL */
-	unsigned long transport_len_bytes = transport_wchars * sizeof(WCHAR);
-	unsigned long packet_size = transport_len_bytes + sizeof(AFD_CREATE_PACKET) + sizeof(WCHAR);
-	unsigned long ea_size = packet_size + sizeof(FILE_FULL_EA_INFORMATION) + AFD_EA_NAME_LEN;
+	unsigned long ea_size = __afd_open_ea_size();
 	char *buf;
-	FILE_FULL_EA_INFORMATION *ea;
-	AFD_CREATE_PACKET *pkt;
 	UNICODE_STRING devname;
 	OBJECT_ATTRIBUTES oa;
 	IO_STATUS_BLOCK io;
@@ -39,20 +106,7 @@ int __afd_open(HANDLE *out)
 
 	buf = malloc(ea_size);
 	if (!buf) { errno = ENOMEM; return -1; }
-	memset(buf, 0, ea_size);
-
-	ea = (FILE_FULL_EA_INFORMATION *)buf;
-	ea->NextEntryOffset = 0;
-	ea->Flags = 0;
-	ea->EaNameLength = AFD_EA_NAME_LEN;
-	memcpy(ea->EaName, AFD_EA_NAME, AFD_EA_NAME_LEN + 1); /* +1: the NUL AfdCommand's own literal carries */
-	ea->EaValueLength = (unsigned short)packet_size;
-
-	pkt = (AFD_CREATE_PACKET *)(ea->EaName + ea->EaNameLength + 1);
-	pkt->EndpointFlags = 0; /* connection-oriented, not AFD_ENDPOINT_CONNECTIONLESS: SOCK_STREAM only */
-	pkt->GroupID = 0;
-	pkt->SizeOfTransportName = transport_len_bytes;
-	memcpy(pkt->TransportName, transport, transport_len_bytes + sizeof(WCHAR));
+	__afd_build_open_ea(buf);
 
 	/* \Device\Afd\Endpoint (dllmain.c's DevName; confirmed independently
 	 * by leftarcode's reverse-engineering series -- see afd.h banner). */
