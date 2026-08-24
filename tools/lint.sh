@@ -72,6 +72,17 @@ builddir=obj/lint
 : "${LINT_ALLOW_MISSING:=0}"
 missing=0
 
+# How many files/stages to run at once. warn/analyze run one process per
+# source file (the actual work, e.g. clang-tidy on one TU, dwarfs process
+# startup), and the five top-level stages are themselves independent, so
+# both parallelise for free. LINT_JOBS=1 restores the old fully serial
+# behaviour, which is also the safe fallback if nproc/getconf are both
+# missing.
+: "${LINT_JOBS:=}"
+if [ -z "$LINT_JOBS" ]; then
+	LINT_JOBS=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+fi
+
 # Every arch/ subdirectory except the generic fallback header tree.
 if [ -z "${LINT_ARCHS:-}" ]; then
 	LINT_ARCHS=
@@ -104,6 +115,13 @@ require_tool() {
 	note "  install it, or set LINT_ALLOW_MISSING=1 to skip it and accept"
 	note "  that this run checks less than CI does."
 	missing=1
+	# When the top-level stages run in parallel (see the dispatch loop at
+	# the bottom of this file), each one runs in its own subshell, so a
+	# plain `missing=1` above only ever changes that subshell's copy --
+	# the parent shell's $missing never sees it. LINT_MISSING_MARKER, if
+	# set, names a file whose mere existence (one per offending subshell,
+	# via $$) the parent checks after `wait` instead.
+	[ -n "${LINT_MISSING_MARKER:-}" ] && : > "$LINT_MISSING_MARKER.$$"
 	return 1
 }
 
@@ -126,10 +144,25 @@ WARN_FLAGS="-Wall -Wextra -Wno-unused-function \
 
 # bits/alltypes.h for an arch, assembled exactly as the Makefile does it, so
 # lint can check an arch the tree is not currently configured for.
+#
+# Idempotent and safe under concurrent callers: with the five top-level
+# stages now able to run at once (see the dispatch loop below), more than
+# one of them can ask to generate the same arch's header at nearly the
+# same moment. Skipping when the destination already exists avoids
+# redoing the (cheap but non-zero) work every time; writing to a temp
+# file and `mv`-ing it into place, rather than redirecting straight into
+# the destination, means a compiler process that opens the header while a
+# second generator is mid-write never sees a truncated file -- `mv` on
+# the same filesystem is a single rename, not a byte-by-byte copy.
 gen_alltypes() {
+	dest=$builddir/$1/include/bits/alltypes.h
+	[ -f "$dest" ] && return 0
 	mkdir -p "$builddir/$1/include/bits" || return 1
-	cat "arch/$1/bits/alltypes.h.gen" include/alltypes.h.gen \
-		> "$builddir/$1/include/bits/alltypes.h"
+	tmp="$dest.$$.tmp"
+	cat "arch/$1/bits/alltypes.h.gen" include/alltypes.h.gen > "$tmp" || {
+		rm -f "$tmp"; return 1
+	}
+	mv -f "$tmp" "$dest"
 }
 
 cppflags_for() {
@@ -207,10 +240,37 @@ stage_warn() {
 			esac
 			out=$builddir/$arch.$base.log
 			: > "$out"
-			for f in $srcs; do
+			# One `-fsyntax-only` process per file, up to LINT_JOBS at
+			# once: each is independent (no shared state but the source
+			# tree, which this only reads), so this is embarrassingly
+			# parallel. Every worker writes its own file under $pardir
+			# (named for its source path, slashes flattened) instead of
+			# appending to $out directly -- concurrent appends from
+			# separate processes to one fd are not guaranteed atomic
+			# once a diagnostic exceeds a pipe-buffer-sized write, which
+			# would otherwise interleave two files' output mid-line.
+			# shellcheck disable=SC2086
+			set -- $cc
+			cc_prog=$1; cc_extra=${2:-}
+			pardir=$(mktemp -d "$builddir/warn.XXXXXX") || return 1
+			# $srcs and $flags/$WARN_FLAGS are meant to word-split here --
+			# one xargs input line per source file, and each flag as its
+			# own argument to the per-file sh -c below. $pardir inside the
+			# single-quoted script is the closing-quote/reopening-quote
+			# trick (not a mistake shellcheck should expand): it is
+			# spliced in by *this* shell so the child script -- which
+			# genuinely must not expand $id itself until it runs -- gets
+			# a literal path.
+			# shellcheck disable=SC2086,SC2016
+			printf '%s\n' $srcs | xargs -P "$LINT_JOBS" -I{} sh -c '
+				f=$1; prog=$2; extra=$3; shift 3
+				id=$(printf %s "$f" | tr / _)
 				# shellcheck disable=SC2086
-				$cc -fsyntax-only $flags $WARN_FLAGS "$f" 2>> "$out"
-			done
+				"$prog" $extra -fsyntax-only "$@" "$f" \
+					> "'"$pardir"'/$id.log" 2>&1
+			' _ {} "$cc_prog" "$cc_extra" $flags $WARN_FLAGS
+			ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"
+			rm -rf "$pardir"
 			# Header diagnostics repeat once per translation unit; collapse
 			# them, and drop the source-quote/caret lines gcc interleaves.
 			n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
@@ -238,23 +298,40 @@ stage_analyze() {
 		flags=$(cppflags_for "$arch")
 		out=$builddir/$arch.analyze.log
 		: > "$out"
-		for f in $(sources_for "$arch"); do
-			if [ -n "$tidy" ]; then
-				# .clang-tidy at the tree root supplies the check list.
-				# pick_target prints either nothing or one flag.
-				# shellcheck disable=SC2046,SC2086
-				"$tidy" --quiet "$f" -- $(pick_target "$arch") $flags \
-					>> "$out" 2>/dev/null
-			else
+		target=$(pick_target "$arch")
+		# One process per source file, up to LINT_JOBS at once -- this is
+		# the single most expensive stage (clang-tidy's checks dwarf
+		# process startup), so it is the one parallelising this way
+		# matters most for. Same per-worker-file-then-cat approach as
+		# stage_warn, for the same reason (no interleaved writes).
+		pardir=$(mktemp -d "$builddir/analyze.XXXXXX") || return 1
+		# See stage_warn's comment above on $flags word-splitting and the
+		# $pardir close/reopen-quote splice -- same reasoning applies here.
+		if [ -n "$tidy" ]; then
+			# .clang-tidy at the tree root supplies the check list.
+			# shellcheck disable=SC2086,SC2016
+			sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+				f=$1; tidy=$2; target=$3; shift 3
+				id=$(printf %s "$f" | tr / _)
 				# shellcheck disable=SC2086
-				# shellcheck disable=SC2046
-				clang $(pick_target "$arch") --analyze \
-					-Xanalyzer -analyzer-output=text \
-					$flags -o /dev/null "$f" >> "$out" 2>&1
-			fi
-		done
-		[ -n "$tidy" ] || note "note: clang-tidy not installed; using \`clang --analyze\`," \
-			"which runs clang-analyzer-* but none of the bugprone-*/cert-* checks"
+				"$tidy" --quiet "$f" -- $target "$@" \
+					> "'"$pardir"'/$id.log" 2>/dev/null
+			' _ {} "$tidy" "$target" $flags
+		else
+			# shellcheck disable=SC2086,SC2016
+			sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+				f=$1; target=$2; shift 2
+				id=$(printf %s "$f" | tr / _)
+				# shellcheck disable=SC2086
+				clang $target --analyze -Xanalyzer -analyzer-output=text \
+					"$@" -o /dev/null "$f" \
+					> "'"$pardir"'/$id.log" 2>&1
+			' _ {} "$target" $flags
+			note "note: clang-tidy not installed; using \`clang --analyze\`," \
+				"which runs clang-analyzer-* but none of the bugprone-*/cert-* checks"
+		fi
+		ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"
+		rm -rf "$pardir"
 		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 			| tee "$out.uniq" | wc -l)
 		note "analyzer [$arch]: $n unique finding(s) -> $out.uniq"
@@ -282,7 +359,7 @@ stage_cppcheck() {
 		# shellcheck disable=SC2046,SC2086
 		cppcheck --quiet --enable=warning,portability --std=c99 --max-configs=12 \
 			--inline-suppr --suppressions-list="$suppr" \
-			--error-exitcode=0 \
+			--error-exitcode=0 -j "$LINT_JOBS" \
 			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL \
 			-Iarch/"$arch" -Iarch/generic -I"$builddir/$arch/include" \
 			-Iinclude -Isrc/internal \
@@ -314,17 +391,49 @@ stage_shell() {
 
 stages=${*:-warn analyze cppcheck shell undefined}
 mkdir -p "$builddir" || exit 1
+
+# Generate every arch's alltypes.h once, up front, before any stage that
+# needs it can possibly run -- see gen_alltypes's own comment for why this
+# matters once stages run concurrently.
+for arch in $LINT_ARCHS; do gen_alltypes "$arch" || note "cannot generate alltypes for $arch"; done
+
+# The five stages read only from the source tree and each other's-own
+# obj/lint/* output files (never one another's), so they are independent
+# and run concurrently, each buffered to its own log and printed as one
+# unit afterwards -- exactly the same reasoning as the per-file
+# parallelism inside stage_warn/stage_analyze above, one level up. A
+# single `tools/lint.sh` invocation with all five default stages was the
+# dominant cost of a full local verification pass (it does not itself
+# fork off separate toolchains the way the two pinned CI-reproduction
+# nix-shell invocations do); this is what cuts that down.
+rundir=$(mktemp -d "$builddir/run.XXXXXX") || exit 1
+export LINT_MISSING_MARKER="$rundir/missing"
 for s in $stages; do
-	case $s in
-	warn)     stage_warn     || findings=1 ;;
-	analyze)  stage_analyze  || findings=1 ;;
-	cppcheck) stage_cppcheck || findings=1 ;;
-	shell)    stage_shell    || findings=1 ;;
-	ushort)   tools/lint-ushort.sh || findings=1 ;;
-	undefined) tools/lint-undefined.sh || findings=1 ;;
-	*) note "unknown stage: $s"; exit 2 ;;
-	esac
+	(
+		case $s in
+		warn)      stage_warn ;;
+		analyze)   stage_analyze ;;
+		cppcheck)  stage_cppcheck ;;
+		shell)     stage_shell ;;
+		ushort)    tools/lint-ushort.sh ;;
+		undefined) tools/lint-undefined.sh ;;
+		*) note "unknown stage: $s"; exit 2 ;;
+		esac
+		rc=$?
+		echo "$rc" > "$rundir/$s.rc"
+		exit "$rc"
+	) > "$rundir/$s.out" 2>&1 &
 done
+wait
+
+for s in $stages; do
+	cat "$rundir/$s.out"
+	rc=0
+	[ -f "$rundir/$s.rc" ] && rc=$(cat "$rundir/$s.rc")
+	[ "$rc" != 0 ] && findings=1
+done
+ls "$LINT_MISSING_MARKER".* >/dev/null 2>&1 && missing=1
+rm -rf "$rundir"
 
 hdr "summary"
 if [ "$missing" -ne 0 ]; then
