@@ -50,6 +50,9 @@ TYPEDEF unsigned useconds_t;
 
 TYPEDEF struct __locale_struct * locale_t;
 
+TYPEDEF unsigned socklen_t;
+TYPEDEF unsigned short sa_family_t;
+
 TYPEDEF struct _IO_FILE FILE;
 
 TYPEDEF __builtin_va_list va_list;

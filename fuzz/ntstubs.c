@@ -2840,6 +2840,23 @@ void *__memcpy_chk(void *d, const void *s, size_t n, size_t dlen)
 
 NOTIMPL(NtFsControlFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
                           ULONG f, PVOID g, ULONG h, PVOID i, ULONG j))
+/* src/socket/afdsupport.c's __afd_ioctl(): every AFD request (bind,
+ * listen, connect, accept, send, recv, select/poll, disconnect) goes
+ * through this.  No simulated \Device\Afd exists over this file's
+ * in-memory volume -- modelling a real TCP/IP stack is out of scope for
+ * this stub file -- so it always refuses, the same as NtFsControlFile
+ * above.  __afd_open() itself (NtCreateFile against \Device\Afd\Endpoint)
+ * still goes through the ordinary NtCreateFile() stub below and is not
+ * refused by this; only the ioctls past that point are.  This makes
+ * every AFD call fail the same honest way test/posix-socket.c's own
+ * runtime capability probe already handles for Wine (see that file's
+ * banner) -- bind() fails, the probe prints one SKIP line, and the
+ * network-dependent assertions are skipped rather than run against a
+ * socket that was never really wired up.  Needed only so the link
+ * succeeds; src/socket/*.c itself is fully exercised under `make check`
+ * against real ntdll/Wine. */
+NOTIMPL(NtDeviceIoControlFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
+                                ULONG f, PVOID g, ULONG h, PVOID i, ULONG j))
 NOTIMPL(NtOpenProcess, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, PCLIENT_ID d))
 NOTIMPL(NtOpenSymbolicLinkObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
 NOTIMPL(NtQuerySymbolicLinkObject, (HANDLE a, PUNICODE_STRING b, PULONG c))

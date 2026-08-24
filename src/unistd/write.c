@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -14,6 +15,9 @@ ssize_t write(int fd, const void *buf, size_t count)
 	NTSTATUS st;
 
 	if (!f) return -1;
+	/* See read.c's matching branch: a socket is IOCTL_AFD_SEND, not
+	 * NtWriteFile. */
+	if (f->type == __FD_SOCKET) return send(fd, buf, count, 0);
 	if ((f->flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (f->type == __FD_DIR) { errno = EISDIR; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;

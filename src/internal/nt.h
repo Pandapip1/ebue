@@ -126,6 +126,32 @@ typedef USHORT RTL_ATOM;
 #define STATUS_NOT_FOUND                ((NTSTATUS)0xC0000225L)
 #define STATUS_CONTROL_C_EXIT           ((NTSTATUS)0xC000013AL)
 
+/* AFD (src/socket/ (every .c there)); values confirmed against mingw-w64's vendored
+ * copy of Microsoft's own ntstatus.h (see src/internal/afd.h's banner)
+ * -- /usr/share/mingw-w64/include/ntstatus.h on the machine this was
+ * written on, the same headers this project's cross toolchain ships. */
+#define STATUS_LOCAL_DISCONNECT             ((NTSTATUS)0xC000013BL)
+#define STATUS_REMOTE_DISCONNECT            ((NTSTATUS)0xC000013CL)
+#define STATUS_INVALID_ADDRESS              ((NTSTATUS)0xC0000141L)
+#define STATUS_INVALID_ADDRESS_COMPONENT    ((NTSTATUS)0xC0000207L)
+#define STATUS_TOO_MANY_ADDRESSES           ((NTSTATUS)0xC0000209L)
+#define STATUS_ADDRESS_ALREADY_EXISTS       ((NTSTATUS)0xC000020AL)
+#define STATUS_ADDRESS_CLOSED               ((NTSTATUS)0xC000020BL)
+#define STATUS_CONNECTION_DISCONNECTED      ((NTSTATUS)0xC000020CL)
+#define STATUS_CONNECTION_RESET             ((NTSTATUS)0xC000020DL)
+#define STATUS_CONNECTION_REFUSED           ((NTSTATUS)0xC0000236L)
+#define STATUS_GRACEFUL_DISCONNECT          ((NTSTATUS)0xC0000237L)
+#define STATUS_ADDRESS_ALREADY_ASSOCIATED   ((NTSTATUS)0xC0000238L)
+#define STATUS_CONNECTION_INVALID           ((NTSTATUS)0xC000023AL)
+#define STATUS_CONNECTION_ACTIVE            ((NTSTATUS)0xC000023BL)
+#define STATUS_NETWORK_UNREACHABLE          ((NTSTATUS)0xC000023CL)
+#define STATUS_HOST_UNREACHABLE             ((NTSTATUS)0xC000023DL)
+#define STATUS_PROTOCOL_UNREACHABLE         ((NTSTATUS)0xC000023EL)
+#define STATUS_PORT_UNREACHABLE             ((NTSTATUS)0xC000023FL)
+#define STATUS_REQUEST_ABORTED              ((NTSTATUS)0xC0000240L)
+#define STATUS_CONNECTION_ABORTED           ((NTSTATUS)0xC0000241L)
+#define STATUS_PROTOCOL_NOT_SUPPORTED       ((NTSTATUS)0xC000A013L)
+
 /* ---- basic structures ------------------------------------------------ */
 typedef struct _UNICODE_STRING {
 	USHORT Length;

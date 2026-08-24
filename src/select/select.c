@@ -123,14 +123,20 @@
  * the two shapes just to share a loop would have added more code than
  * it removed.
  *
- * Socket hook: __fd_probe(), defined below, is where an __FD_SOCKET
- * case belongs once ntlibc has sockets -- see that function's comment.
- * ntlibc has no sockets yet, so none is added here.
+ * Sockets are a fourth descriptor shape, added alongside the three
+ * above once ntlibc grew sockets (src/socket/): __fd_probe()'s
+ * __FD_SOCKET case below issues a single non-blocking IOCTL_AFD_SELECT
+ * per probe, the "instantaneous, no wait" shape every other case here
+ * already has -- no change to the wait-vs-poll design above was needed,
+ * a socket is always resolved in the same probe pass as everything
+ * else, never added to console_h/console_fd. See
+ * test/networking-audit.md sec 3 for the design writeup this followed.
  */
 #include <sys/select.h>
 #include <signal.h>
 #include <errno.h>
 #include "libc.h"
+#include "afd.h"
 
 /* 20ms, in 100ns units (see file banner for why). */
 #define POLL_INTERVAL_TICKS 200000LL
@@ -182,15 +188,36 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		*canread = 0;
 		*canwrite = 1;
 		break;
-	case __FD_SOCKET:
-		/* Hook for AFD-backed readiness (test/networking-audit.md
-		 * sec 3: a non-blocking IOCTL_AFD_POLL belongs here, same
-		 * "instantaneous, no wait" shape as the pipe case above)
-		 * once ntlibc has sockets.  Unreachable today: nothing can
-		 * install an __FD_SOCKET descriptor yet. */
-		*canread = 0;
-		*canwrite = 0;
+	case __FD_SOCKET: {
+		/* test/networking-audit.md sec 3: a single non-blocking
+		 * IOCTL_AFD_SELECT (== Wine's IOCTL_AFD_POLL, same wire
+		 * request -- src/internal/afd.h) against just this one
+		 * socket, Timeout=0 so it never waits.  AFD_POLL_READ_BITS/
+		 * WRITE_BITS (afd.h) are the same fd_set-bit mapping
+		 * ReactOS's WSPSelect uses. A close/abort/disconnect event
+		 * counts as both readable and writable and as hup, the same
+		 * way a broken pipe does above -- a read or write on it
+		 * would return immediately rather than block. */
+		AFD_POLL_INFO pi;
+		NTSTATUS st;
+
+		pi.Timeout = 0; /* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h), no .QuadPart */
+		pi.HandleCount = 1;
+		pi.Exclusive = 0;
+		pi.Handles[0].Handle = f->h;
+		pi.Handles[0].Events = AFD_POLL_READ_BITS | AFD_POLL_WRITE_BITS;
+		pi.Handles[0].Status = 0;
+
+		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &pi, sizeof(pi), &pi, sizeof(pi), 0);
+		if (!NT_SUCCESS(st)) { *canread = 0; *canwrite = 0; break; }
+
+		*canread = (pi.Handles[0].Events & AFD_POLL_READ_BITS) != 0;
+		*canwrite = (pi.Handles[0].Events & AFD_POLL_WRITE_BITS) != 0;
+		if (pi.Handles[0].Events & (AFD_EVENT_CLOSE | AFD_EVENT_ABORT | AFD_EVENT_DISCONNECT)) {
+			*canread = 1; *canwrite = 1; *hup = 1;
+		}
 		break;
+	}
 	case __FD_FILE:
 	case __FD_DIR:
 	case __FD_CHAR:

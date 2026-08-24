@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -12,6 +13,13 @@ ssize_t read(int fd, void *buf, size_t count)
 	NTSTATUS st;
 
 	if (!f) return -1;
+	/* A socket goes through IOCTL_AFD_RECV (src/socket/sendrecv.c), not
+	 * NtReadFile -- test/networking-audit.md sec 2 flags plain
+	 * NtReadFile/NtWriteFile against a socket handle as unverified, and
+	 * recv()/send() already have this fd's dispatch and error mapping,
+	 * so read()/write() just forward to them rather than duplicating
+	 * either. */
+	if (f->type == __FD_SOCKET) return recv(fd, buf, count, 0);
 	if ((f->flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -1; }
 	if (f->type == __FD_DIR) { errno = EISDIR; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
