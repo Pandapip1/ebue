@@ -149,6 +149,9 @@ jobs:
   # Deliberately no Wine here: installing it is the single largest step in
   # the old serial path and this job has nothing to run.
   #
+  # Only `windows-test` depends on this job. The Wine leg below runs
+  # alongside it and builds its own tree -- see the comment on `test`.
+  #
   # The matrix mirrors `test`'s three legs exactly, because the artifact
   # names (`test-exes-${{ matrix.name }}`) are what `windows-test`
   # indexes by -- see the comment on `test`'s matrix for why there are
@@ -224,14 +227,27 @@ jobs:
           # 0 -- a green job that tested nothing.
           if-no-files-found: error
 
-  # The Wine leg. Rebuilds rather than downloading the artifact above:
-  # `make check` needs a configured tree with lib/libc.a present anyway
-  # (every test .exe lists it as a prerequisite), and the cross-compile is
-  # under a second with tcc against a restored toolchain cache -- so
-  # downloading the artifact would save nothing measurable and would add a
+  # The Wine leg. A *sibling* of build-test-exes, not a consumer of it --
+  # deliberately, and please don't "tidy" the two into a chain. The
+  # obvious-looking simplification is to have both legs share
+  # build-test-exes as their one dependency, but the two consumers want
+  # different things: `windows-test` wants only the artifact, while this
+  # job wants a configured tree it builds itself, in under a second.
+  # Gating it on build-test-exes would therefore buy it nothing and cost
+  # it that job's entire startup latency -- runner allocation, checkout,
+  # cache restore, ~25-30s it does not pay today -- to wait on a job whose
+  # real work is sub-second. Kept as siblings, total wall clock is
+  # max(this leg, build-test-exes + windows-test) instead of a serial
+  # 25-30s added to both.
+  #
+  # Rebuilds rather than downloading the artifact above for the same
+  # reason: `make check` needs a configured tree with lib/libc.a present
+  # anyway (every test .exe lists it as a prerequisite), and the
+  # cross-compile is under a second with tcc against a restored toolchain
+  # cache -- so downloading would save nothing measurable and would add a
   # dependence on artefact timestamps to keep make from rebuilding them.
   test:
-    needs: build-test-exes
+    needs: build-toolchain
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
