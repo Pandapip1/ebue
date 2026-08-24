@@ -56,9 +56,16 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
 extern char **environ;
 
 /* rpath.c requires the image to define this even when, as here, it is
- * never populated -- ntlibc_rpath_load() only consults it for a
- * dllname with no path component, and every call below gives one. */
-const char *const __rpath[] = { 0 };
+ * populated with two entries, the first deliberately nonexistent:
+ * ntlibc_rpath_load() only consults it for a dllname with no path
+ * component, and almost every call below gives one -- but
+ * test_dlerror_null_after_successful_dlopen() needs a bare name whose
+ * lookup misses an earlier entry before hitting a later one, which is
+ * the only shape that reaches rpath.c's per-entry error recording on a
+ * call that then succeeds. A directory that does not exist is the
+ * portable way to build that shape, and it changes nothing for the
+ * path-qualified loads, which never consult this array at all. */
+const char *const __rpath[] = { "no-such-rpath-dir", "C:\\Windows\\System32", 0 };
 
 /* ============================================================
  * <dlfcn.h> -- dlopen/dlsym/dlclose/dlerror
@@ -820,6 +827,280 @@ static void test_spawn_usevfork_trivially_satisfied(void)
 	CHECK(1); /* __spawn() never copies the parent's address space */
 }
 
+
+/* ==== clauses the successor-queue <dlfcn.h> audit added ================== */
+
+/* dlopen.html DESCRIPTION: "If file is a null pointer, dlopen() shall
+ * return a global symbol table handle for the currently running
+ * process image." dlclose.html: a handle that was successfully opened
+ * closes with 0. The handle half is checkable here; what dlsym() can
+ * see through it is a separate clause, fenced below. */
+static void test_dlopen_null_returns_a_handle(void)
+{
+	void *g = dlopen(NULL, RTLD_NOW | RTLD_GLOBAL);
+	CHECK(g != NULL);
+	if (g) CHECK(dlclose(g) == 0);
+}
+
+/* dlsym.html DESCRIPTION: "if the symbol named by name cannot be found
+ * ... dlsym() shall return a null pointer. More detailed diagnostic
+ * information shall be available through dlerror()", together with
+ * dlerror.html's disambiguation idiom -- clear the error, call, then
+ * check dlerror() -- which exists precisely because a NULL return is
+ * ambiguous with a symbol whose value is NULL.
+ *
+ * test_dl_underlying_mechanism() exercises this at the
+ * ntlibc_rpath_sym()/ntlibc_rpath_error() layer; nothing exercised it
+ * through the <dlfcn.h> surface, which is what an application sees. */
+static void test_dlsym_failure_through_dlfcn(void)
+{
+	void *h = dlopen("C:\\Windows\\System32\\ntdll.dll", RTLD_NOW);
+	char *e;
+
+	CHECK(h != NULL);
+	if (!h) return;
+
+	/* Success must leave nothing pending, or the idiom cannot work. */
+	(void)dlerror();
+	CHECK(dlsym(h, "RtlAllocateHeap") != NULL);
+	CHECK(dlerror() == NULL);
+
+	(void)dlerror();
+	CHECK(dlsym(h, "no_such_export_in_ntdll_at_all") == NULL);
+	e = dlerror();
+	CHECK(e != NULL);
+	if (e) CHECK(strstr(e, "no_such_export_in_ntdll_at_all") != NULL);
+	CHECK(dlerror() == NULL);		/* one-shot */
+
+	/* dlsym.html: "If handle does not refer to a valid symbol table
+	 * handle ... dlsym() shall return a null pointer." Only the NULL
+	 * handle is asserted: it is answered entirely inside ntlibc, so
+	 * it is deterministic. A synthetic non-NULL garbage base is
+	 * deliberately not tested -- what LdrGetProcedureAddress() does
+	 * with an unmapped address is not contractually specified on
+	 * either Wine or real NT. */
+	(void)dlerror();
+	CHECK(dlsym(NULL, "RtlAllocateHeap") == NULL);
+	CHECK(dlerror() != NULL);
+
+	CHECK(dlclose(h) == 0);
+}
+
+/* dlclose.html RETURN VALUE: "If handle does not refer to an open
+ * symbol table handle or if the symbol table handle could not be
+ * closed, dlclose() shall return a non-zero value. More detailed
+ * diagnostic information shall be available through dlerror()."
+ * test_dlopen_now_lazy() calls dlclose() but never checks a failure
+ * path. The NULL handle is used for the same reason as above: it is
+ * answered inside ntlibc, before any NT call. */
+static void test_dlclose_invalid_handle(void)
+{
+	(void)dlerror();
+	CHECK(dlclose(NULL) != 0);
+	CHECK(dlerror() != NULL);
+	CHECK(dlerror() == NULL);
+}
+
+/* dlerror.html DESCRIPTION: "shall return a null-terminated character
+ * string (with no trailing <newline>) that describes the last error
+ * that occurred". The no-trailing-newline requirement and the
+ * describes-the-last-error requirement were both unasserted -- the
+ * existing test_dlerror_consumed_once() only checks non-NULL then
+ * NULL. */
+static void test_dlerror_message_shape(void)
+{
+	char *e;
+	size_t n;
+
+	(void)dlerror();
+	CHECK(dlopen("C:\\no-such-dll-anywhere-xyz.dll", RTLD_NOW) == NULL);
+	e = dlerror();
+	CHECK(e != NULL);
+	if (e) {
+		n = strlen(e);
+		CHECK(n > 0);
+		CHECK(e[n - 1] != '\n');
+		CHECK(strstr(e, "no-such-dll-anywhere-xyz.dll") != NULL);
+	}
+	CHECK(dlerror() == NULL);
+}
+
+/* dlopen.html DESCRIPTION: "Only a single copy of an executable object
+ * file shall be brought into the address space, even if dlopen() is
+ * invoked multiple times in reference to the executable object file,
+ * and even if different pathnames are used to reference the executable
+ * object file."
+ *
+ * test_dlclose_refcounts() checks the identical-string case. This is
+ * the different-pathname case, using forward slashes -- which
+ * src/internal/rpath.c normalises itself, so the assertion is decided
+ * by ntlibc's own code rather than by the loader's module-identity
+ * rules. The case-insensitivity variant is deliberately not asserted:
+ * Wine's and real NT's module identity diverge there, and this file
+ * runs under both. */
+static void test_dlopen_single_copy_different_pathnames(void)
+{
+	void *a = dlopen("C:\\Windows\\System32\\ntdll.dll", RTLD_NOW);
+	void *b = dlopen("C:/Windows/System32/ntdll.dll", RTLD_NOW);
+
+	CHECK(a != NULL && b != NULL);
+	if (a && b) CHECK(a == b);
+	if (a) CHECK(dlclose(a) == 0);
+	if (b) CHECK(dlclose(b) == 0);
+}
+
+/* dlfcn.h.html: "The <dlfcn.h> header shall define the following
+ * symbolic constants for use in the construction of a dlopen() mode
+ * argument: RTLD_LAZY, RTLD_NOW, RTLD_GLOBAL, RTLD_LOCAL." They are
+ * combined with bitwise OR at every call site in the spec's own
+ * examples, so each has to be independently representable.
+ *
+ * Recorded from the fetched text, because it is easy to assume the
+ * opposite: dlopen.html defines *no* errors ("No errors are defined"),
+ * says of RTLD_GLOBAL/RTLD_LOCAL only that "the default behavior is
+ * unspecified" when neither is given, and gives no [EINVAL] for any
+ * mode at all. glibc's rejection of an invalid mode is an extension.
+ * So ntlibc accepting any mode is conforming, and no test here asserts
+ * a rejection. */
+static void test_dlfcn_header_constants(void)
+{
+	CHECK((RTLD_LAZY & RTLD_NOW) == 0);
+	CHECK((RTLD_GLOBAL & RTLD_LOCAL) == 0);
+	CHECK(RTLD_LAZY != 0 && RTLD_NOW != 0 && RTLD_GLOBAL != 0 && RTLD_LOCAL != 0);
+	CHECK((RTLD_LAZY & RTLD_GLOBAL) == 0 && (RTLD_LAZY & RTLD_LOCAL) == 0);
+	CHECK((RTLD_NOW & RTLD_GLOBAL) == 0 && (RTLD_NOW & RTLD_LOCAL) == 0);
+}
+
+#if 0 /* BUG: dlerror.html DESCRIPTION -- "If no dynamic linking errors
+	have occurred since the last invocation of dlerror(), dlerror()
+	shall return NULL."
+
+	A *successful* dlopen() of a bare name can leave a pending error
+	behind. src/internal/rpath.c walks __rpath entry by entry and
+	calls its set_err() on each miss, and set_err() bumps the
+	sequence counter src/dlfcn/dlfcn.c's dlerror() uses to decide
+	whether an error is outstanding. When an early entry misses and a
+	later one hits, dlopen() returns a valid handle with the counter
+	already bumped, and the next dlerror() reports a failure the
+	caller's dlopen() did not experience.
+
+	src/dlfcn/dlfcn.c's own comment states the opposite as its
+	correctness argument -- "A successful dlopen()/dlsym()/dlclose()
+	call never bumps that counter" -- which is what made this worth
+	checking.
+
+	Measured under Wine with this file's two-entry __rpath: a
+	bare-name dlopen("ntdll.dll", RTLD_NOW) returns a handle, and
+	dlerror() then returns
+	"...\no-such-rpath-dir\ntdll.dll: DLL not found (NTSTATUS
+	0xc0000135)". Not Wine-specific -- the failing entry is a
+	directory that exists on neither Wine nor real Windows.
+
+	This breaks the spec's own recommended disambiguation idiom for
+	every subsequent dlsym() too, since the stale error is still
+	outstanding when the caller clears-and-calls.
+
+	Fix shape: snapshot the error sequence on entry to
+	ntlibc_rpath_load() and restore it before returning a successful
+	handle, or accumulate misses without recording an error and
+	record one only once the whole search has failed. */
+static void test_dlerror_null_after_successful_dlopen(void)
+{
+	void *h;
+
+	(void)dlerror();
+	h = dlopen("ntdll.dll", RTLD_NOW);	/* __rpath[0] misses, __rpath[1] hits */
+	CHECK(h != NULL);
+	CHECK(dlerror() == NULL);		/* reports __rpath[0]'s miss today */
+	if (h) CHECK(dlclose(h) == 0);
+}
+#endif
+
+#if 0 /* BUG: dlopen.html DESCRIPTION -- "If file is a null pointer,
+	dlopen() shall return a global symbol table handle for the
+	currently running process image. This symbol table handle shall
+	provide access to the symbols from an ordered set of executable
+	object files consisting of the original program image file, any
+	executable object files loaded at program start-up as specified
+	by that process file (for example, shared libraries), and the set
+	of executable object files loaded using dlopen() operations with
+	the RTLD_GLOBAL flag." And, under RTLD_GLOBAL: "Load ordering is
+	used in dlsym() operations upon the global symbol table handle."
+
+	src/dlfcn/dlfcn.c returns the PEB's ImageBaseAddress for a NULL
+	file, and dlsym() hands that straight to
+	LdrGetProcedureAddress(), which answers only "does *this one
+	module* export this name". The start-up-loaded modules and the
+	RTLD_GLOBAL set are never searched.
+
+	Measured under Wine: dlopen(NULL, RTLD_NOW|RTLD_GLOBAL) returns a
+	handle, dlclose() on it succeeds, but
+	dlsym(g, "RtlAllocateHeap") is NULL -- and ntdll.dll is
+	unambiguously "loaded at program start-up" on both Wine and real
+	NT.
+
+	Classified BUG rather than N/A because the NT mechanism is not
+	missing: PEB_LDR_DATA, InLoadOrderModuleList and
+	LDR_DATA_TABLE_ENTRY are already declared in src/internal/nt.h,
+	and walking InLoadOrderModuleList trying LdrGetProcedureAddress
+	on each DllBase is precisely POSIX's load-order search over the
+	global handle. src/dlfcn/dlfcn.c's comments discuss only the
+	narrower point that a -nostdlib tcc EXE has an empty export
+	directory, and never address the "ordered set" requirement at
+	all.
+
+	Any such walk should stay to InLoadOrderLinks and DllBase: the
+	layout of LDR_DATA_TABLE_ENTRY past DllBase has historically
+	diverged between Wine and real NT. */
+static void test_dlopen_null_global_symbol_set(void)
+{
+	void *g = dlopen(NULL, RTLD_NOW);
+
+	CHECK(g != NULL);
+	/* ntdll.dll is loaded at program start-up in every NT process,
+	 * so its exports are part of the ordered set this handle must
+	 * provide access to. */
+	CHECK(dlsym(g, "RtlAllocateHeap") != NULL);
+	if (g) CHECK(dlclose(g) == 0);
+}
+#endif
+
+#if 0 /* BUG (knowing deviation, recorded rather than changed):
+	dlopen.html DESCRIPTION -- "If file contains a <slash>
+	character, the file argument is used as the pathname for the
+	file. Otherwise, file is used in an implementation-defined manner
+	to yield a pathname."
+
+	The implementation-defined latitude covers only the *no-slash*
+	case. A relative pathname that does contain a slash must be used
+	as the pathname, i.e. resolved against the current working
+	directory like any other. src/internal/rpath.c instead joins it
+	onto the image directory, and include/ntlibc/rpath.h says so
+	explicitly -- "never against the current working directory".
+
+	The security rationale for that (a CWD-relative load is
+	attacker-controllable in a way an $ORIGIN-relative one is not) is
+	sound and this fence is not an argument for changing the
+	behaviour. What it records is that the clause the surrounding
+	comments cite does not license the deviation: the bare-name half
+	of ntlibc's policy *is* fully conforming, because that half is
+	genuinely implementation-defined, and the slash-containing half
+	is not. A knowing deviation, not a conformance claim.
+
+	Left without a runnable assertion body on purpose: writing one
+	would mean creating a DLL under the CWD and loading it by a
+	relative path, which is exactly the operation the deviation
+	exists to refuse. */
+static void test_dlopen_relative_pathname_uses_cwd(void)
+{
+	/* would need: a DLL at "./subdir/x.dll" relative to the CWD,
+	 * loaded as dlopen("subdir/x.dll", RTLD_NOW), which POSIX
+	 * requires to resolve against the CWD and ntlibc resolves
+	 * against the image directory instead. */
+	CHECK(0);
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--spawn-fd-child")) {
@@ -831,6 +1112,12 @@ int main(int argc, char **argv)
 	test_dlopen_now_lazy();
 	test_dlclose_refcounts();
 	test_dlerror_consumed_once();
+	test_dlfcn_header_constants();
+	test_dlopen_null_returns_a_handle();
+	test_dlsym_failure_through_dlfcn();
+	test_dlclose_invalid_handle();
+	test_dlerror_message_shape();
+	test_dlopen_single_copy_different_pathnames();
 	test_termios_isatty_prerequisite();
 	test_spawn_fd_remap_via_existing_inheritance(argv[0]);
 	test_spawn_usevfork_trivially_satisfied();

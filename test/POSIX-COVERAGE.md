@@ -1893,3 +1893,138 @@ REG_ESPACE, and multi-character collating elements/equivalence classes
 — both N/A above, for a malloc-exhaustion reason and a C-locale reason
 respectively. Everything else in `regcomp.html` and XBD chapter 9 that
 applies to this implementation now has a row.
+
+## dlfcn.h (successor-queue item 2, group F)
+
+Seventh of the twelve. `test/posix-dl.c` already covered `dlopen()`'s
+two mode flags, the `dlclose()` refcount chain and `dlerror()`'s
+one-shot contract — that last one is the design most likely to be got
+wrong and it is implemented correctly. This pass read the five spec
+pages against it.
+
+**Oracle: NT-behaviour territory, and Wine is weak evidence.** Wine's
+`LdrLoadDll`/`LdrGetProcedureAddress`/`LdrUnloadDll` are an independent
+implementation of real NT's loader. Every assertion added below was
+chosen so that it is decided by *ntlibc's own code* — the `__rpath`
+search, the path-normalisation join, the error-sequence bookkeeping,
+the NULL-handle guards — rather than by loader behaviour the two could
+disagree about. Deliberately *not* asserted, and named here so the
+omission is not mistaken for an oversight: the case-insensitive
+module-identity variant of the single-copy clause, and anything
+involving a synthetic non-NULL garbage handle. The `windows-test` CI
+legs remain the authority for the pre-existing refcount rows.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| dlerror | "If no dynamic linking errors have occurred since the last invocation of dlerror(), dlerror() shall return NULL" — after a *successful* `dlopen()` | **BUG (fenced)** — see below | test/posix-dl.c (`test_dlerror_null_after_successful_dlopen`) |
+| dlopen / dlsym | "a global symbol table handle ... shall provide access to the symbols from an ordered set of executable object files consisting of the original program image file, any executable object files loaded at program start-up ..., and the set ... loaded ... with the RTLD_GLOBAL flag" | **BUG (fenced)** — see below | test/posix-dl.c (`test_dlopen_null_global_symbol_set`) |
+| dlopen | "If file contains a `<slash>` character, the file argument is used as the pathname for the file" — for a *relative* slash-containing name | **BUG (fenced)**, knowing deviation — see below | test/posix-dl.c (`test_dlopen_relative_pathname_uses_cwd`) |
+| dlopen | "If file is a null pointer, dlopen() shall return a global symbol table handle for the currently running process image" — the handle itself | covered | test/posix-dl.c (`test_dlopen_null_returns_a_handle`) |
+| dlopen | "Otherwise, file is used in an implementation-defined manner to yield a pathname" — the bare-name case | covered (this half genuinely is implementation-defined, and ntlibc's `__rpath`-only policy is conforming) | test/posix-dl.c (existing `test_dl_underlying_mechanism`, plus the new `__rpath` shape) |
+| dlopen | "Only a single copy ... shall be brought into the address space ... **even if different pathnames are used**" | covered — via forward-slash normalisation, which `src/internal/rpath.c` does itself | test/posix-dl.c (`test_dlopen_single_copy_different_pathnames`) |
+| dlsym | "if the symbol named by name cannot be found ... dlsym() shall return a null pointer. More detailed diagnostic information shall be available through dlerror()" — through the `<dlfcn.h>` surface, not the internal rpath layer | covered | test/posix-dl.c (`test_dlsym_failure_through_dlfcn`) |
+| dlsym / dlerror | the clear-then-call-then-check idiom the spec gives for disambiguating a NULL return from a symbol whose value is NULL | covered | test/posix-dl.c (`test_dlsym_failure_through_dlfcn`) |
+| dlsym | "If handle does not refer to a valid symbol table handle ... shall return a null pointer" — the NULL handle only | covered | test/posix-dl.c (`test_dlsym_failure_through_dlfcn`) |
+| dlclose | "If handle does not refer to an open symbol table handle ... dlclose() shall return a non-zero value. More detailed diagnostic information shall be available through dlerror()" | covered | test/posix-dl.c (`test_dlclose_invalid_handle`) |
+| dlerror | "shall return a null-terminated character string (with no trailing `<newline>`) that describes the last error that occurred" | covered — length, no trailing newline, and that the message names the file that failed | test/posix-dl.c (`test_dlerror_message_shape`) |
+| `<dlfcn.h>` | "shall define the following symbolic constants ...: RTLD_LAZY, RTLD_NOW, RTLD_GLOBAL, RTLD_LOCAL" — each independently representable, since the spec's own examples OR them together | covered | test/posix-dl.c (`test_dlfcn_header_constants`) |
+| dlopen | RTLD_LOCAL: "symbols shall not be made available for relocation processing of any other executable object file" | N/A — no NT loader primitive narrows a mapped module's export directory out of another module's import resolution; already fenced in the file before this pass | test/posix-dl.c (`test_dlopen_rtld_local_scoping`) |
+| dlopen | RTLD_GLOBAL's first sentence: "symbols shall be made available for relocation processing of any other executable object file" | N/A — unconditionally true on NT; there is no primitive to make it *not* so | — |
+| dlopen | mode validation | N/A — recorded because it is easy to assume the opposite: `dlopen.html` defines no errors at all ("No errors are defined"), imposes no requirement that exactly one of RTLD_LAZY/RTLD_NOW be given, and specifies no [EINVAL]. glibc's rejection of an invalid mode is an extension, so ntlibc accepting any mode is conforming and no test asserts a rejection | — |
+| dlsym | symbol-name decoration | N/A — PE export directories store undecorated names on both i386 and x86-64, unlike Mach-O's leading underscore, so no decoration layer is needed or possible to get wrong | — |
+| dlsym | using a handle after `dlclose()` | N/A — the spec constrains the *application* here, not the implementation; asserting on it would be asserting on undefined behaviour, and on real NT on a possibly-unmapped base | — |
+| dlerror | "It is implementation-defined whether or not the dlerror() function is thread-safe" | N/A — ntlibc has no threads | — |
+| `<dlfcn.h>` | RTLD_NEXT / RTLD_DEFAULT | N/A — not POSIX.1-2017 base (glibc extensions); `include/dlfcn.h` deliberately omits them, which is conforming | — |
+
+### Bugs found (dlfcn.h)
+
+1. **A successful `dlopen()` can leave a pending `dlerror()`.**
+   `src/internal/rpath.c` walks `__rpath` entry by entry and records an
+   error on each miss, bumping the sequence counter
+   `src/dlfcn/dlfcn.c`'s `dlerror()` uses to decide whether an error is
+   outstanding. When an early entry misses and a later one hits,
+   `dlopen()` returns a valid handle with the counter already bumped,
+   and the next `dlerror()` reports a failure the caller never
+   experienced. `src/dlfcn/dlfcn.c`'s own comment states the opposite
+   as its correctness argument — "A successful
+   dlopen()/dlsym()/dlclose() call never bumps that counter" — which is
+   what made it worth checking.
+
+   This also breaks the spec's recommended `dlsym()` disambiguation
+   idiom for every later call, since the stale error is still
+   outstanding when the caller clears-and-calls. Measured under Wine;
+   not Wine-specific, since the failing `__rpath` entry is a directory
+   that exists nowhere.
+
+   Test (fenced): `test_dlerror_null_after_successful_dlopen`. Note
+   this test is why `test/posix-dl.c`'s `__rpath` is now a two-entry
+   array rather than empty — it is the only shape that reaches the
+   per-entry error recording on a call that then succeeds, and it
+   changes nothing for the path-qualified loads, which never consult
+   `__rpath`.
+
+2. **`dlopen(NULL, ...)` plus `dlsym()` searches only the executable,
+   not the ordered set POSIX requires.** `src/dlfcn/dlfcn.c` returns
+   the PEB's `ImageBaseAddress`, and `dlsym()` hands that to
+   `LdrGetProcedureAddress()`, which answers only "does *this one
+   module* export this name". The start-up-loaded modules and the
+   RTLD_GLOBAL set are never searched. Measured: `dlsym(g,
+   "RtlAllocateHeap")` is NULL, and ntdll.dll is unambiguously loaded
+   at program start-up on both Wine and real NT.
+
+   Classified BUG rather than N/A because the NT mechanism is present
+   in this very tree: `PEB_LDR_DATA`, `InLoadOrderModuleList` and
+   `LDR_DATA_TABLE_ENTRY` are already declared in `src/internal/nt.h`,
+   and walking `InLoadOrderModuleList` trying `LdrGetProcedureAddress`
+   on each `DllBase` is precisely POSIX's load-order search.
+   `src/dlfcn/dlfcn.c`'s comments discuss only the narrower point that
+   a `-nostdlib` tcc EXE has an empty export directory, and never
+   address the "ordered set" requirement.
+
+   Test (fenced): `test_dlopen_null_global_symbol_set`.
+
+3. **A relative pathname containing a slash resolves against the image
+   directory, not the working directory.** `dlopen.html`'s
+   implementation-defined latitude covers only the *no-slash* case: "If
+   file contains a `<slash>` character, the file argument is used as
+   the pathname for the file." `src/internal/rpath.c` joins such a name
+   onto the image directory instead, and `include/ntlibc/rpath.h` says
+   so outright.
+
+   **The behaviour is not what should change here.** The security
+   rationale (a CWD-relative load is attacker-controllable in a way an
+   `$ORIGIN`-relative one is not) is sound. What is wrong is the
+   conformance claim: the surrounding comments cite the
+   implementation-defined clause as licensing the deviation, and it
+   does not — it licenses only the bare-name half of ntlibc's policy,
+   which genuinely is fully conforming. Recorded as a knowing
+   deviation so the ledger does not carry it as conformance.
+
+   Test (fenced, with no runnable body on purpose):
+   `test_dlopen_relative_pathname_uses_cwd`.
+
+### Observed behaviour where POSIX permits latitude (dlfcn.h)
+
+- RTLD_LAZY is honoured as RTLD_NOW. `dlopen.html` puts relocation
+  timing under RTLD_LAZY at "an implementation-defined time, ranging
+  from the time of the dlopen() call until the first reference", so
+  eager resolution is inside the specified range. Conforming.
+- `dlclose()` on the main-image handle always returns 0 without
+  unloading. `dlclose.html` says the implementation "may unload", so
+  this is permitted. Latent: a program that also `dlopen()`s its own
+  image by path increments the loader's count and never decrements it,
+  because the short-circuit fires first. Harmless (the main image is
+  not unloadable anyway) and not usefully assertable, so it has no row.
+- `dlclose(NULL)`'s `dlerror()` message renders with an empty string
+  before the colon. The spec requires only a null-terminated non-NULL
+  string, so this is conforming, just unhelpful.
+
+### Not reached (dlfcn.h)
+
+RTLD_LOCAL isolation and RTLD_GLOBAL's relocation half (both N/A on
+the NT loader), and everything Wine cannot be trusted on — the
+case-insensitive module-identity form of the single-copy clause, and
+`dlclose()`/`dlsym()` with a synthetic non-NULL handle. Those last two
+are unreached by choice, not by impossibility: they are real clauses
+that only the `windows-test` CI legs could settle, and asserting them
+here would pin Wine's answer rather than NT's.
