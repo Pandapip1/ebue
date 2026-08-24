@@ -254,7 +254,7 @@ static void probe2(void)
 	printf("PROBE2   st=0x%08lx info=%lu count=%lu events=0x%08lx\n",
 	       (unsigned long)(uint32_t)st, (unsigned long)io.Information,
 	       (unsigned long)count, (unsigned long)events);
-	printf("PROBE2 legend (st!=0 -> ioctl refused, nothing measured; expected under Wine)\n");
+	printf("PROBE2 legend (st!=0 -> the ioctl was refused and count/events mean nothing)\n");
 	printf("PROBE2   events=0x000001ff -> request bytes read back: stale-buffer concern is real\n");
 	printf("PROBE2   events=0x00000000 -> concern unfounded, only the count check is worth keeping\n");
 	close(fd);
