@@ -22,6 +22,10 @@
 #   shell     shellcheck over configure, the git hooks and tools/*.sh.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
+#   unreferenced
+#             tools/lint-unreferenced.sh: a function a public header
+#             declares, this library implements, and no test/*.c
+#             references.  Needs a native C compiler and nm.
 #   ushort    tools/lint-ushort.sh: unguarded (USHORT) narrowing casts,
 #             the class of the chdir()/UNICODE_STRING.Length bug that
 #             script was written for (4f02ef3).  No tool needed.  It was
@@ -471,7 +475,7 @@ stage_shell() {
 	return 1
 }
 
-stages=${*:-warn analyze cppcheck shell undefined ushort}
+stages=${*:-warn analyze cppcheck shell undefined ushort unreferenced}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
@@ -498,6 +502,7 @@ for s in $stages; do
 		cppcheck)  stage_cppcheck ;;
 		shell)     stage_shell ;;
 		ushort)    tools/lint-ushort.sh ;;
+		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
 		*) note "unknown stage: $s"; exit 2 ;;
 		esac

@@ -491,6 +491,13 @@ jobs:
           # bug recurring had never run in CI at all.
           - stage: ushort
             packages: ""
+          # Functions this library implements that no test/*.c even
+          # references.  Compiles every test/*.c natively and reads the
+          # undefined symbols, so it needs a native clang and nm (both
+          # already on ubuntu-24.04; clang is installed explicitly for
+          # the same reason the warn stage installs it).
+          - stage: unreferenced
+            packages: clang
     name: lint (${{ matrix.stage }})
     steps:
       - uses: actions/checkout@v7
