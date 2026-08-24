@@ -611,6 +611,7 @@ table rows below.
 | fmod | full sign/special-value table | covered | test/math.c, test/posix-math.c |
 | frexp / ldexp / scalbn / modf | special-value tables, overflow/underflow sign | covered | test/math.c, test/posix-math.c |
 | exp / log / log2 / log10 | special-value tables, pole/domain errors | covered | test/math.c, test/posix-math.c |
+| exp2 / exp2f / exp2l | RETURN VALUE table (NaN, ±0->1, +Inf, -Inf->+0), both range errors, exactness of 2^n | covered | test/posix-math.c (`test_exp2`) |
 | sin / cos / tan / atan / atan2 | special-value tables (atan2's full ~13-clause quadrant table) | covered | test/math.c, test/posix-math.c |
 | pow | full ~20-clause special-value table | covered | test/math.c (~10 sampled), test/posix-math.c (remaining ~14) |
 | fmax / fmin (+ fmaxf/fmaxl/fminf/fminl) | one-NaN-arg returns the other, both-NaN -> NaN; the f/l variants carry the identical clause | covered | test/math.c, test/posix-math.c (`test_fmaxmin`, `test_fmaxmin_variants`) |

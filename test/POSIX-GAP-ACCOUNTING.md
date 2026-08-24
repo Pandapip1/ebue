@@ -106,9 +106,11 @@ reading the tables below.
 | interface(s) | header | option | moved to | test |
 |---|---|---|---|---|
 | `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_fmaxmin_variants`) |
+| `exp2` `exp2f` `exp2l` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_exp2`) |
 
-Running adjustment: **4 base interfaces closed**; absent 473 -> 469
-(base 256 -> 252), implemented + clause-audited 333 -> 337.
+Running adjustment: **7 base interfaces closed**; absent 473 -> 466
+(base 256 -> 249), implemented + clause-audited 333 -> 340.  `math.h`'s
+7 base absences are now 0.
 
 The 1177 excludes the 14 entries in POSIX's function index that are
 external *variables*, not functions (`environ`, `errno`, `optarg`,
@@ -575,7 +577,7 @@ closed by accident in an afternoon.
 
 | function | header | option | note |
 |---|---|---|---|
-| `exp2` `exp2f` `exp2l` | `math.h` | base | genuinely missing; `src/math/exp.c` has `exp`/`exp2`-adjacent machinery (`expm1`, `ldexp`) and musl's `exp2.c` is self-contained. Base POSIX and C99 |
+| `exp2` `exp2f` `exp2l` | `math.h` | base | **closed** (see "Changes since `04edec2`") -- added to `src/math/exp.c` over the `__x87_exp2` helper `exp()`/`pow()` already use, which computes 2^x directly, so exp2 needs no argument reduction at all |
 | `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | **closed** (see "Changes since `04edec2`") -- `src/math/fmax.c` defined only the `double` forms; the `f`/`l` suffixes exist for essentially every other `math.h` entry in the tree, so this was an oversight rather than a decision |
 | `waitid` | `sys/wait.h` | base | `src/process/wait.c` implements `wait`/`waitpid`/`wait3`/`wait4` over the child table in `src/process/children.c`; `waitid`'s `siginfo_t`-returning form and its `WNOWAIT` flag (leave the child waitable) are the only new behaviour needed |
 | `statvfs` `fstatvfs` | `sys/statvfs.h` | base | `NtQueryVolumeInformationFile` (`FileFsSizeInformation`, `FileFsAttributeInformation`) is pure NTDLL and covers every field. `src/stat/stat.c` already opens handles the right way. Small and self-contained |

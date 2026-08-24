@@ -975,6 +975,57 @@ static void test_lround_lrint_variants(void)
 	CHECK(llrintf(2.5f) == 2 && llrintl(2.5L) == 2);
 }
 
+/* ---- exp2.html: RETURN VALUE -- "the base-2 exponential of x".
+ * NaN -> NaN; +-0 -> 1; +Inf -> +Inf; -Inf -> +0; overflow -> range
+ * error and +-HUGE_VAL; underflow -> range error and a value no
+ * greater than DBL_MIN.  ERRORS lists only those two range errors, so
+ * exp2 has no domain error at all: every real argument has an answer.
+ * The exact-power assertions are "shall" material, not accuracy
+ * probes: 2^n for small integer n is exactly representable in double,
+ * so an exactly-equal comparison is the right test there. ---- */
+static void test_exp2(void)
+{
+	CHECK(isnan(exp2(NAN)));
+	CHECK(exp2(0.0) == 1.0 && exp2(-0.0) == 1.0);
+	CHECK(exp2(HUGE_VAL) == HUGE_VAL);
+	CHECK(poszero(exp2(-HUGE_VAL)));
+
+	/* exact powers of two, both signs of exponent */
+	CHECK(exp2(1.0) == 2.0 && exp2(2.0) == 4.0 && exp2(10.0) == 1024.0);
+	CHECK(exp2(-1.0) == 0.5 && exp2(-2.0) == 0.25);
+	CHECK(exp2(0.5) > 1.414213 && exp2(0.5) < 1.414214);   /* sqrt(2) */
+
+	/* the largest finite and the smallest normal double are both exact
+	 * powers of two away from 1, so these pin the ends of the range
+	 * without asserting an accuracy figure */
+	CHECK(isfinite(exp2(1023.0)) && exp2(1023.0) > 0.0);
+	CHECK(exp2(1024.0) == HUGE_VAL);   /* one step past the top exponent */
+	CHECK(exp2((double)(DBL_MIN_EXP - 1)) == DBL_MIN);
+
+	/* range errors: overflow -> HUGE_VAL, underflow -> 0.0 permitted
+	 * (the IEC 60559 branch, as test_exp() records for exp()) */
+	CHECK(exp2(5000.0) == HUGE_VAL);
+	CHECK(poszero(exp2(-5000.0)));
+
+	/* subnormal results are reached by rounding at the store, not by a
+	 * special case -- 2^-1060 is subnormal but not zero */
+	CHECK(fpclassify(exp2(-1060.0)) == FP_SUBNORMAL);
+	CHECK(exp2(-1060.0) > 0.0);
+
+	/* f/l variants carry the identical clause */
+	CHECK(isnan(exp2f(NAN)) && isnan(exp2l(NAN)));
+	CHECK(exp2f(0.0f) == 1.0f && exp2l(0.0L) == 1.0L);
+	CHECK(exp2f(3.0f) == 8.0f && exp2l(3.0L) == 8.0L);
+	CHECK(exp2f(HUGE_VALF) == HUGE_VALF && exp2l(HUGE_VALL) == HUGE_VALL);
+	CHECK(poszerof(exp2f(-HUGE_VALF)) && poszerol(exp2l(-HUGE_VALL)));
+	CHECK(exp2f(200.0f) == HUGE_VALF);   /* overflows float */
+
+	/* exp2(x) and exp(x*ln2) agree: informational only, POSIX mandates
+	 * no accuracy for either, but a gross implementation error (wrong
+	 * base, missing argument reduction) would show up here */
+	CHECK(fabs(exp2(7.3) - exp(7.3 * M_LN2)) < 1e-10 * exp2(7.3));
+}
+
 /* ---- fmax.html / fmin.html, f/l variants: fmaxf/fmaxl/fminf/fminl
  * carry the same RETURN VALUE clause as the double forms -- "If just
  * one argument is a NaN, the other argument shall be returned.  If x
@@ -1032,6 +1083,7 @@ int main(void)
 	test_pow();
 	test_fmaxmin();
 	test_fmaxmin_variants();
+	test_exp2();
 	test_hypot();
 	test_nan();
 	test_errhandling();
