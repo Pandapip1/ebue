@@ -48,12 +48,14 @@ Status values:
 
 **Companion file:** `test/POSIX-GAP-ACCOUNTING.md` accounts for the
 other half of the picture — every one of POSIX.1-2017's 1177 function
-interfaces, including the 473 ntlibc does not have at all, and the 371
+interfaces, including the 473 ntlibc does not have at all, and the 357
 it has that this ledger has no row for. Read it for "what is missing";
-read this file for "how conformant is what exists". It also flags two
-rows here that are now out of date (`select()` is implemented as of
-`bd9982c`) and the twelve slash-joined rows whose second name has no
-assertion.
+read this file for "how conformant is what exists". It also names the
+headers this file's priority order never reached at all (`termios.h`,
+`search.h`, `fenv.h`, `pwd.h`/`grp.h`, `regex.h`, `dlfcn.h`, the
+glob/fnmatch/wordexp group, `ftw.h`, `sys/uio.h`, `arpa/inet.h`) and the
+four rows here whose second slash-joined name (`utimes`, `fpathconf`,
+`readlink`, `unlinkat`) is called by no test.
 
 ## Priority order (per the task brief)
 

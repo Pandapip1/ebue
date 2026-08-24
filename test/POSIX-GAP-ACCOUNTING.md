@@ -12,6 +12,11 @@ audit against
 has gotten. It says nothing about what POSIX specifies that ntlibc does
 not have at all, which is the other half of "where are we".
 
+`test/POSIX-COVERAGE.md` finished its priority list at `5a17605`/
+`04edec2`: 285 **covered**, 68 **N/A**, and no remaining **not yet
+reached** rows. Its column is therefore complete for what it covers, and
+this file cross-references it rather than duplicating it.
+
 This file is that other half. It enumerates **every function interface
 in the POSIX.1-2017 System Interfaces volume** — all 1177 of them, taken
 mechanically from POSIX's own index at
@@ -26,7 +31,7 @@ supersedes it for anything function-level: it lists `ftw.h`, `grp.h`,
 `pwd.h`, `search.h`, `regex.h`, `poll.h`, `dlfcn.h`, `termios.h`,
 `sys/uio.h`, `sys/times.h`, `sys/utsname.h`, `wctype.h`, `sys/socket.h`
 and the `netinet`/`arpa` pair as missing or blocked; every one of them
-exists in `include/` and has a body in `src/` as of `bd9982c`. Its
+exists in `include/` and has a body in `src/` as of `04edec2`. Its
 *reasoning* about what each would take is still worth reading; its
 present/missing split is not.
 
@@ -66,17 +71,17 @@ process scheduling, `SHM`/`TYM`/`ML`/`MLR`/`ADV` memory, `TSH`/`TPS`/
 synchronised I/O, `SIO`, `CPT`, `MC1`, `TCT`). An empty marker means
 POSIX base, mandatory for conformance.
 
-## Headline counts (as of `bd9982c`, x86_64)
+## Headline counts (as of `04edec2`, x86_64)
 
 | bucket | count | of which XSI | of which base (no option marker) |
 |---|---|---|---|
-| implemented + clause-audited | 319 | 29 | 229 |
-| implemented, not clause-audited | 371 | 51 | 295 |
-| declared but deliberately unimplemented (`undefined-ok:`) | 14 | 12 | 0 |
+| implemented + clause-audited | 333 | 36 | 236 |
+| implemented, not clause-audited | 357 | 45 | 293 |
+| declared but deliberately unimplemented (`undefined-ok:`) | 14 | 11 | 0 |
 | absent | 473 | 39 | 256 |
 | **total POSIX.1-2017 function interfaces** | **1177** | | |
 
-Read that as: **690 of 1177 (59%) exist and link**, of which **319 (46%
+Read that as: **690 of 1177 (59%) exist and link**, of which **333 (48%
 of what exists) have been clause-audited**. Of the 473 absent, only 256
 are POSIX base — and 216 of those 256 sit in three families
 (`pthread.h`, `complex.h`, wide-character stdio/`wchar.h`/`wctype.h`),
@@ -119,7 +124,10 @@ Reproducible end to end, no hand-listing anywhere in the classification:
      and were confirmed by hand as `#define`s in `include/`.
 3. **The audit side.** Every identifier in the first column of every
    table row in `test/POSIX-COVERAGE.md`, intersected with the POSIX
-   name list: 344 names, 319 of which are also implemented.
+   name list: 358 names, 333 of which are also implemented. (The other
+   25 are names the ledger mentions in order to mark them N/A — LEGACY
+   removals, GNU/BSD extensions — which are not POSIX.1-2017 interfaces
+   and so are not in this file's 1177 either.)
 
 Three cross-checks were run and are worth recording, because two of them
 found something:
@@ -142,40 +150,49 @@ found something:
   "deliberately unimplemented" — classifying them off the marker alone
   would have been wrong six times.
 - Every implemented name was checked for a mention anywhere in
-  `test/*.c`. 134 have none at all; they are listed below.
+  `test/*.c`. 134 had none at all when this audit began; 112 still do,
+  and they are listed below.
 
-## Implemented + clause-audited (319)
+## Implemented + clause-audited (333)
 
 Not restated here — `test/POSIX-COVERAGE.md` is authoritative. Pointer
 table only, by owning header, so this file's count reconciles:
 
 | header | audited | ledger section |
 |---|---|---|
-| `string.h` / `strings.h` | 37 | "string.h / strings.h" (priority 1) |
 | `stdlib.h` | 60 | "stdlib.h" (priority 2) + "Memory allocation, process termination, and environment" (priority 11) |
-| `time.h` | 23 | "time.h calendar and clock functions" (priority 3) |
-| `dirent.h` | 11 | "dirent.h, ctype.h, locale.h, libgen.h, setjmp.h, getopt()" (priority 4) |
-| `ctype.h` | 4 | same section (priority 4) |
-| `locale.h` | 2 | same section (priority 4) |
-| `libgen.h` | 2 | same section (priority 4) |
-| `setjmp.h` | 4 | same section (priority 4) |
 | `stdio.h` | 46 | "stdio.h streams" (priority 5) |
 | `unistd.h` | 34 | "unistd.h, fcntl.h, sys/stat.h" (priority 6) |
-| `fcntl.h` | 4 | same section (priority 6) |
-| `sys/stat.h` | 11 | same section (priority 6) |
-| `signal.h` | 17 | "signal.h, sys/wait.h" (priority 7) |
-| `sys/wait.h` | 2 | same section (priority 7) |
-| `wchar.h` | 20 | "wchar.h / multibyte conversions" (priority 8) |
-| `wctype.h` | 2 | same section (priority 8) |
+| `string.h` | 32 | "string.h / strings.h" (priority 1) |
 | `math.h` | 32 | "math.h" (priority 9) |
+| `time.h` | 23 | "time.h calendar and clock functions" (priority 3) |
+| `wchar.h` | 20 | "wchar.h / multibyte conversions" (priority 8) |
+| `signal.h` | 17 | "signal.h, sys/wait.h" (priority 7) |
+| `sys/stat.h` | 11 | "unistd.h, fcntl.h, sys/stat.h" (priority 6) |
+| `dirent.h` | 11 | "dirent.h, ctype.h, locale.h, libgen.h, setjmp.h, getopt()" (priority 4) |
+| `sys/select.h` | 6 | the closing pass (`5a17605`) — `select`/`pselect`/`FD_*`; this file's earlier draft, and the ledger's own pre-`5a17605` text, both said `select()` was declared but unimplemented, which stopped being true at `bd9982c` |
+| `ctype.h` | 6 | priority 4, plus the XSI `isascii`/`toascii` pair closed in `5a17605` |
+| `sys/resource.h` | 5 | the closing pass (`5a17605`) |
+| `strings.h` | 5 | "string.h / strings.h" (priority 1) |
+| `setjmp.h` | 4 | priority 4 |
 | `inttypes.h` | 4 | "limits.h / float.h / stdint.h / inttypes.h" (priority 10) |
-| `stddef.h`, `assert.h`, `utime.h` | 4 | scattered; see the ledger's own index |
+| `fcntl.h` | 4 | priority 6 |
+| `wctype.h` | 2 | priority 8 |
+| `sys/wait.h` | 2 | priority 7 |
+| `stddef.h` | 2 | scattered |
+| `locale.h` | 2 | priority 4 |
+| `libgen.h` | 2 | priority 4 |
+| `utime.h` | 1 | the closing pass (`5a17605`) |
+| `poll.h` | 1 | the closing pass (`5a17605`) |
+| `assert.h` | 1 | the closing pass (`5a17605`) |
 
-## Implemented, not clause-audited (371)
+## Implemented, not clause-audited (357)
 
-Exists in `src/`, links, no ledger row. This is the ledger's "not yet
-reached" list, made complete — the ledger's own version names eight
-items; the real number is 371.
+Exists in `src/`, links, no ledger row. The ledger has now closed every
+row it opened (0 **not yet reached** as of `04edec2`) — but its priority
+order never enumerated these headers at all, so "no remaining not-yet-
+reached rows" and "audited" are not the same statement. These 357 are
+the difference.
 
 Ordered by how much a clause audit would plausibly find, which is not
 the same as size:
@@ -186,20 +203,18 @@ the same as size:
 | `termios.h` | 11 | `cfgetispeed cfgetospeed cfsetispeed cfsetospeed tcdrain tcflow tcflush tcgetattr tcgetsid tcsendbreak tcsetattr` — `src/termios/termios.c` has a long banner arguing which of these are spec-permitted no-ops on a console; `test/posix-termios.c` exists but the ledger has no section for it |
 | `search.h` | 11 | `hcreate hdestroy hsearch insque lfind lsearch remque tdelete tfind tsearch twalk` (all XSI) |
 | `fenv.h` | 11 | `feclearexcept fegetenv fegetexceptflag fegetround feholdexcept feraiseexcept fesetenv fesetexceptflag fesetround fetestexcept feupdateenv` |
-| `sys/socket.h` | 10 | `accept bind connect getsockopt listen recv send setsockopt shutdown socket` — see "implemented but non-functional" below before trusting this row |
+| `sys/socket.h` | 10 | `accept bind connect getsockopt listen recv send setsockopt shutdown socket` — **read "implemented but non-functional" below before trusting this row**; this subsystem is actively moving |
 | `arpa/inet.h` | 8 | `htonl htons inet_addr inet_ntoa inet_ntop inet_pton ntohl ntohs` — unlike the row above these need no OS support and `test/posix-socket.c` does exercise them unconditionally |
 | `pwd.h` | 7 | `endpwent getpwent getpwnam getpwnam_r getpwuid getpwuid_r setpwent` |
 | `grp.h` | 7 | `endgrent getgrent getgrgid getgrgid_r getgrnam getgrnam_r setgrent` |
-| `sys/select.h` | 6 | `FD_CLR FD_ISSET FD_SET FD_ZERO pselect select` — note the ledger still says `select()` "is declared but not implemented"; that is out of date at `bd9982c`, `src/select/select.c` has a body and links |
 | `sys/stat.h` | 6 | `fchmodat mkdirat mkfifo mkfifoat mknod mknodat` — the last four are permanent stubs, see below |
-| `sys/resource.h` | 5 | `getpriority getrlimit getrusage setpriority setrlimit` (the ledger names this group in its own "not yet reached") |
 | `signal.h` | 5 | `sighold siginterrupt sigpause sigrelse sigset` (all XSI, all degenerate stubs — see below) |
 | `regex.h` | 4 | `regcomp regerror regexec regfree` |
 | `locale.h` | 4 | `duplocale freelocale newlocale uselocale` |
 | `dlfcn.h` | 4 | `dlclose dlerror dlopen dlsym` (`test/posix-dl.c` exists) |
 | `stdio.h` | 16 | `ctermid dprintf flockfile fprintf fscanf ftrylockfile funlockfile getc_unlocked getchar_unlocked gets putc_unlocked putchar_unlocked snprintf sprintf sscanf tempnam` |
-| `stdarg.h` | 12 | `va_arg va_copy va_end va_start vdprintf vfprintf vfscanf vprintf vscanf vsnprintf vsprintf vsscanf` |
-| `ctype.h` | 14 | `_tolower _toupper isalnum isalpha isblank iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit` — the ledger audited the `is*` family as a group; these are the individual pages it did not cite by name |
+| `stdarg.h` | 12 | `va_arg va_copy va_end va_start vdprintf vfprintf vfscanf vprintf vscanf vsnprintf vsprintf vsscanf` — eight of the twelve gained their first assertion in this session's `test/posix-stdio.c` additions |
+| `ctype.h` | 12 | `isalnum isalpha isblank iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit` — the ledger audited the `is*` family as a group and cites `isascii`/`toascii`/`tolower`/`toupper`/`_tolower`/`_toupper` by name; these twelve are the individual pages it does not |
 | `wctype.h` | 16 | `iswalnum iswalpha iswblank iswcntrl iswctype iswdigit iswgraph iswlower iswprint iswpunct iswspace iswupper iswxdigit towctrans towlower towupper` |
 | `sys/uio.h` | 2 | `readv writev` (XSI) |
 | `ftw.h` | 2 | `ftw nftw` |
@@ -211,25 +226,25 @@ the same as size:
 | `sys/times.h` | 1 | `times` (XSI) |
 | `sys/utsname.h` | 1 | `uname` |
 | `sys/time.h` | 1 | `gettimeofday` (`OB`) |
-| `poll.h` | 1 | `poll` |
 | `fnmatch.h` | 1 | `fnmatch` |
 | `stdlib.h` | 1 | `srand48` (XSI) |
 | `stropts.h` | 1 | `ioctl` (`OB XSR`) — `src/ioctl/ioctl.c` implements the name, not the STREAMS semantics POSIX attaches to it |
 | `math.h` | 150 | the `f`/`l` suffixed variants and the long tail; the ledger's priority-9 section audited 32 double-precision entry points |
 
-### Implemented, but no assertion anywhere in `test/*.c` (134)
+### Implemented, but no assertion anywhere in `test/*.c` (112)
 
 Every implemented name was grepped against the concatenation of all
-`test/*.c`. These 134 are never named:
+`test/*.c`. 134 were never named when this audit started; 22 gained
+their first assertion in this session (see "Tests added" below). These
+112 are still never named:
 
 - `math.h` (70): `acosf acoshf acoshl acosl asinf asinhf asinhl asinl atanhf atanhl cbrtf cbrtl ceilf coshf coshl erfcf erfcl erff erfl expm1f expm1l fdimf fdiml floorl fmaf fmal fmodl frexpf frexpl hypotf hypotl ilogbf ilogbl isgreater isgreaterequal isless islessequal islessgreater isunordered ldexpf lgammaf lgammal log1pf log1pl logbf logbl modff modfl nearbyintf nearbyintl nextafterf nextafterl nexttowardf nexttowardl remainderf remainderl remquof remquol roundf scalblnf scalblnl scalbnl sinhf sinhl tanhf tanhl tgammaf tgammal truncf truncl`
 - `unistd.h` (23): `confstr execl execle execlp fchown fchownat fexecve fpathconf getlogin getlogin_r lchown linkat pause readlink readlinkat setpgrp setregid setsid swab sync tcgetpgrp tcsetpgrp unlinkat`
-- `stdio.h` (14): `dprintf flockfile fseeko ftello ftrylockfile funlockfile getc_unlocked getchar getchar_unlocked putc putc_unlocked putchar putchar_unlocked tempnam`
-- `stdarg.h` (11): `va_arg va_copy va_end va_start vdprintf vfprintf vfscanf vprintf vscanf vsnprintf vsprintf`
-- `signal.h` (7): `killpg sigaltstack sighold siginterrupt sigpause sigrelse sigset`
 - `sys/stat.h` (6): `mkdirat mkfifo mkfifoat mknod mknodat utimes`
+- `signal.h` (5): `sighold siginterrupt sigpause sigrelse sigset`
+- `stdarg.h` (4): `va_arg va_copy vprintf vscanf`
 - `setjmp.h` (2): `_setjmp _longjmp`
-- `string.h` (1): `strcoll_l`
+- `stdio.h` (2): `getc_unlocked tempnam`
 
 #### One bug, found by closing part of that list
 
@@ -251,17 +266,18 @@ the same way `__fclose_locked()` and `setvbuf()` guard buffer
 ownership), not fenced as a `BUG`, because it is a leak rather than a
 spec-violating observable behaviour and the fix is two lines.
 
-The general lesson for whoever works the rest of the 134: "exists and
+The general lesson for whoever works the rest of the 112: "exists and
 links" is a much weaker statement than it looks, and the cheapest
 assertion is often enough to find out.
 
-Twelve of those 134 (`killpg`, `sigaltstack`, `fseeko`, `ftello`,
-`getchar`, `putc`, `putchar`, `strcoll_l`, `utimes`, `fpathconf`,
-`readlink`, `unlinkat`) *do* appear in a `test/POSIX-COVERAGE.md` table
-row — always as the second name in a slash-joined pair whose assertion
-covers only the first (`kill / killpg`, `read / readlink`, and so on).
-That is not a false claim by the ledger, but it does mean the row's
-"covered" applies to a name that is never called. Worth a sweep.
+Twelve of the original 134 *do* appear in a `test/POSIX-COVERAGE.md`
+table row — always as the second name in a slash-joined pair whose
+assertion covers only the first (`kill / killpg`, `read / readlink`, and
+so on). That is not a false claim by the ledger, but it does mean the
+row's "covered" applies to a name that is never called. Seven were
+closed this session (`killpg`, `sigaltstack`, `fseeko`, `ftello`,
+`getchar`, `putc`, `putchar`, `strcoll_l`); **four remain: `utimes`,
+`fpathconf`, `readlink`, `unlinkat`.** Worth a sweep.
 
 ## Declared but deliberately unimplemented (14)
 
@@ -286,7 +302,8 @@ undefined. Reasons are the headers' own, as reported by
 | `sigtimedwait` | `signal.h` | CX | see `sigwaitinfo` |
 | `sigqueue` | `signal.h` | CX | needs the same machinery |
 
-Twelve of fourteen are XSI, none are POSIX base. The `undefined-ok:`
+Eleven of the fourteen are XSI (two of those also `OB`), the other
+three are CX; none are POSIX base. The `undefined-ok:`
 mechanism is, on this evidence, being used exactly as intended.
 
 The other 37 `undefined-ok:` markers in the tree are on non-POSIX names
@@ -301,21 +318,36 @@ exceptions discussed above. They are outside this file's scope.
 Classified by *actual working state*, not by file presence — the point
 the `sys/socket.h` case forces.
 
-### `sys/socket.h` / `netinet/in.h` / `arpa/inet.h`: unverified
+### `sys/socket.h` / `netinet/in.h` / `arpa/inet.h`: unverified, and moving
+
+**This section is a snapshot of a subsystem under active repair; check
+`git log -- src/socket/` before trusting it.**
 
 `src/socket/` (10 `.c` files) compiles, links, and implements
 `socket`/`bind`/`listen`/`connect`/`accept`/`send`/`recv`/`shutdown`/
 `getsockopt`/`setsockopt` for `AF_INET`+`SOCK_STREAM` over the raw
-`\Device\Afd` ioctl protocol, following ReactOS. It is **not known to
-work on any platform**:
+`\Device\Afd` ioctl protocol. State as of `04edec2`:
 
-- **Under Wine**, `NtCreateFile` on `\Device\Afd\Endpoint` with the
-  `AfdOpenPacketXX` EA succeeds, but the first real ioctl
-  (`IOCTL_AFD_BIND`) fails `STATUS_BAD_DEVICE_TYPE` (`0xC00000CB`) —
-  Wine only wires up handles opened through its own invented
-  `IOCTL_AFD_WINE_CREATE`. Confirmed against both stock Wine and this
-  project's locally patched build; neither carries an AFD patch.
-- **On real Windows**, `socket()` has been observed to fail `EFAULT`.
+- **On real Windows** (CI's `windows-test` legs, the only authority for
+  real-NT behaviour): `socket()` **now works**, as of `1f2e40e` — the
+  `AfdOpenPacketXX` extended-attribute buffer had carried ReactOS's
+  12-byte `AFD_CREATE_PACKET` header where real Windows' `afd.sys` has
+  wanted a 24-byte `AFD_OPEN_PACKET` since Vista, so the driver read the
+  UTF-16 transport name text as a length (`0x00630069`) and walked ~6 MB
+  past a 67-byte buffer, hence the `EFAULT`. `bind()` still fails, so
+  the subsystem as a whole is still not working end to end there.
+- **Under Wine**: `NtCreateFile` on `\Device\Afd\Endpoint` succeeds,
+  but the first real ioctl (`IOCTL_AFD_BIND`) fails
+  `STATUS_BAD_DEVICE_TYPE` (`0xC00000CB`) — Wine only wires up handles
+  opened through its own invented `IOCTL_AFD_WINE_CREATE`, so a handle
+  opened the portable way is never routed to its AFD implementation.
+  Confirmed against both stock Wine and this project's locally patched
+  build; neither carries an AFD patch. This is a Wine limitation, and
+  following ReactOS/real-Windows rather than Wine's private control code
+  is deliberate.
+
+So the state is: `bind()` is the current frontier on real Windows, and
+nothing past `socket()` is verifiable under Wine at all.
 
 `test/posix-socket.c` handles this correctly and is the model for the
 category: byte-order and address-text conversion (`src/socket/inet.c`)
@@ -326,15 +358,27 @@ verified nothing new", which `tools/runtests.sh` reports in its own
 bucket, separate from PASS and FAIL. The gate's baseline of "41 passed
 + 1 unverified per arch" is that 77.
 
-So: the ten `sys/socket.h` and eight `arpa/inet.h` names are counted as
-implemented above, because they are; but only the eight `arpa/inet.h`
-ones plus `socket()`'s validation path are counted as *working*. The
-remaining eleven `sys/socket.h` interfaces POSIX specifies
-(`getpeername`, `getsockname`, `recvfrom`, `recvmsg`, `sendmsg`,
-`sendto`, `sockatmark`, `socketpair`, plus `netdb.h`'s `getaddrinfo`/
-`freeaddrinfo`/`getnameinfo`) are **absent** and deliberately so — see
-`include/sys/socket.h`'s scope note and `test/networking-audit.md`
-sec 6, stages 4-6.
+`test/posix-socket-ea.c` (added at `1f2e40e`) is the second half of the
+answer and worth copying wherever this shape recurs: it opens nothing.
+It asks `__afd_open_ea_size()`/`__afd_build_open_ea()` for the bytes and
+re-parses them **by offset**, against constants taken from ReactOS and
+phnt rather than from ntlibc's own headers, so a layout bug is caught
+with no device involved — on a host with no `\Device\Afd`, under Wine,
+under `make asan`, and on real Windows alike. That is how the 24-byte
+packet bug became testable at all: `socket()` reported only `EFAULT` on
+real Windows and *succeeded* under Wine, so nothing else in the suite
+could have seen it.
+
+Accounting consequence: the ten `sys/socket.h` and eight `arpa/inet.h`
+names are counted as implemented above, because they are; but only the
+eight `arpa/inet.h` ones, `socket()`'s validation path, `socket()`
+itself on real Windows, and the EA-layout invariants are counted as
+*working*. The remaining eleven `sys/socket.h` interfaces POSIX
+specifies (`getpeername`, `getsockname`, `recvfrom`, `recvmsg`,
+`sendmsg`, `sendto`, `sockatmark`, `socketpair`, plus `netdb.h`'s
+`getaddrinfo`/`freeaddrinfo`/`getnameinfo`) are **absent** and
+deliberately so — see `include/sys/socket.h`'s scope note and
+`test/networking-audit.md` sec 6, stages 4-6.
 
 ### Permanent degenerate stubs
 
@@ -579,14 +623,24 @@ under Wine, and nothing added here depends on Wine-specific behaviour.
   `test_flockfile` (`flockfile`, `ftrylockfile`, `funlockfile`), and
   `test_v_forms` (`vfprintf`, `vsnprintf`, `vsprintf`, `vsscanf`,
   `vfscanf`, `dprintf`, `vdprintf`, each reached through a real
-  `va_list`). 18 previously-unasserted names.
+  `va_list`, so `va_start`/`va_end` are reached too). 19 previously-
+  unasserted names.
 - `test/posix-string.c`: `test_strcoll_l`.
 - `test/posix-signal.c`: `test_killpg`, `test_sigaltstack_disabled`.
 
-That is 21 of the 134. The remaining 113 — 70 of them the `math.h`
-`f`/`l` tail — are left for the successor; see below.
+That is 22 of the original 134 (the 18 named above, plus `vsscanf`,
+`va_start`, `va_end` and `strcoll_l` reached along the way). The
+remaining 112 — 70 of them the `math.h` `f`/`l` tail — are left for the
+successor; see below.
 
 ## Where this stopped, and what is next
+
+**Rebased onto `04edec2`** and every count re-derived against that tree,
+not carried forward from the earlier `bd9982c` pass — the ledger closing
+out moved 14 functions from *implemented, not clause-audited* into
+*implemented + clause-audited* (`sys/select.h`, `poll.h`,
+`sys/resource.h`, `utime.h`, `assert.h`, `isascii`/`toascii`), and the
+absent set did not move at all.
 
 **Reached and individually noted:** every one of the 1177 interfaces is
 classified — the bucket assignment is complete and mechanical, and the
@@ -604,18 +658,38 @@ finer-grained than the note it would carry.
 
 **Not yet reached — the next successor's queue, in order:**
 
-1. **The remaining 113 implemented-but-unasserted functions.** Not an
+1. **The remaining 112 implemented-but-unasserted functions.** Not an
    accounting gap but a test gap, and the cheapest work in this file —
    and it already paid for itself once (the `vdprintf` leak above).
-   Start with the twelve that a ledger row already claims by name, of
-   which this session closed seven.
-2. **A clause audit of `termios.h`** (11 functions, `test/posix-termios.c`
-   exists, no ledger section) and of `search.h`, `regex.h`, `glob.h`/
-   `fnmatch.h`/`wordexp.h`, `ftw.h`, `pwd.h`/`grp.h`, `fenv.h`,
-   `sys/select.h`/`poll.h`, `dlfcn.h` — nine headers with real
-   implementations, real test files, and no ledger row between them.
-   These are the ledger's priority order continued; this file did not
-   audit any clause of any of them and does not claim to.
+   Start with the four a ledger row still claims by name while nothing
+   calls them: `utimes`, `fpathconf`, `readlink`, `unlinkat`.
+2. **A clause audit of the headers the ledger's priority order never
+   named.** The ledger closed every row it opened at `04edec2`, but its
+   eleven priority groups never covered these at all — each has a real
+   implementation, most have a real test file, and none has a single
+   ledger row:
+
+   | header | functions | test file today |
+   |---|---|---|
+   | `termios.h` | 11 | `test/posix-termios.c` |
+   | `search.h` | 11 | `test/posix-glob.c` (partly) |
+   | `fenv.h` | 11 | `test/math.c` (partly) |
+   | `arpa/inet.h` | 8 | `test/posix-socket.c` |
+   | `pwd.h` | 7 | `test/pwd.c` |
+   | `grp.h` | 7 | `test/posix-grp.c` |
+   | `regex.h` | 4 | `test/posix-parse.c` |
+   | `dlfcn.h` | 4 | `test/posix-dl.c` |
+   | `glob.h`/`fnmatch.h`/`wordexp.h` | 5 | `test/posix-glob.c` |
+   | `ftw.h` | 2 | `test/posix-io.c` |
+   | `sys/uio.h` | 2 | `test/posix-io.c` |
+   | `sys/utsname.h`/`sys/times.h`/`sys/time.h`/`stropts.h` | 4 | `test/posix-sysmisc.c` |
+
+   That is the ledger's priority order continued; this file did not
+   audit any clause of any of them and does not claim to. `termios.h`
+   is the one to start with — `src/termios/termios.c`'s banner already
+   argues, function by function, which calls are spec-permitted no-ops,
+   and that argument has never been checked against the spec pages by
+   anyone but its author.
 3. **The `math.h` `f`/`l` tail** (150 implemented, 70 with no assertion
    at all). Bulk, low risk, mechanical.
 4. **Re-verify this file's `impl` vs `audited` split** after (2). The
@@ -625,14 +699,14 @@ finer-grained than the note it would carry.
 
 **Explicitly unverified, and why:**
 
-- **The `sys/socket.h` cluster's working state.** It is classified
-  implemented-but-non-functional on the strength of `test/posix-socket.c`
-  exiting 77 under Wine and a recorded `EFAULT` from `socket()` on real
-  Windows. This file did not re-run the real-Windows leg; CI is the only
-  authority for real-NT behaviour and Wine diverges materially and
-  repeatedly. If the real-Windows `EFAULT` is ever fixed, ten
-  `sys/socket.h` entries move from non-functional to implemented and
-  this section needs rewriting, not editing.
+- **The `sys/socket.h` cluster's working state.** Classified from
+  `test/posix-socket.c` exiting 77 under Wine and from the CI results
+  quoted in `1f2e40e` (`socket()` fixed on real Windows, `bind()` still
+  failing). This file did not itself run the real-Windows leg — CI is
+  the only authority for real-NT behaviour, and Wine diverges materially
+  and repeatedly. The subsystem is under active repair, so that section
+  is a dated snapshot by construction: when `bind()` lands, it needs
+  rewriting, not editing.
 - **The `undefined-ok:` reasons** are quoted from `make linkcheck`'s
   report, which truncates each header comment at the first line break.
   The full reasoning is in the declaring header and was not
