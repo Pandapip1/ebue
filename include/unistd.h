@@ -225,7 +225,6 @@ int euidaccess(const char *, int);  /* undefined-ok: distinguishes real
 	see setresuid on why this library's uid/euid are not distinct */
 int eaccess(const char *, int);  /* undefined-ok: glibc alias of
 	euidaccess(); see euidaccess */
-ssize_t copy_file_range(int, off_t *, int, off_t *, size_t, unsigned);
 pid_t gettid(void);
 #endif
 
