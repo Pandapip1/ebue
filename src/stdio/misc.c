@@ -55,7 +55,17 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	if (__ntpath_at(newdirfd, new, &np, OBJ_CASE_INSENSITIVE) < 0) { __ntpath_free(&op); return -1; }
 
-	st = NtOpenFile(&h, DELETE | SYNCHRONIZE, &op.oa, &io, FILE_SHARE_VALID_FLAGS,
+	/* FILE_READ_ATTRIBUTES is requested alongside DELETE because the
+	 * STATUS_ACCESS_DENIED fallback below queries FileBasicInformation
+	 * on this same handle to disambiguate EISDIR from ENOTEMPTY.
+	 * NtQueryInformationFile(FileBasicInformation) requires
+	 * FILE_READ_ATTRIBUTES on real NT (same requirement as
+	 * src/stat/chmod.c's query and src/stat/utimensat.c's, see the
+	 * latter's comment); DELETE alone is enough for the rename itself
+	 * (FileRenameInformation's IopSetOperationAccess entry is DELETE),
+	 * so adding FILE_READ_ATTRIBUTES here is purely additive and cannot
+	 * newly deny the open. */
+	st = NtOpenFile(&h, DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &op.oa, &io, FILE_SHARE_VALID_FLAGS,
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
 	__ntpath_free(&op);
 	if (!NT_SUCCESS(st)) { __ntpath_free(&np); return __set_errno_status(st); }
