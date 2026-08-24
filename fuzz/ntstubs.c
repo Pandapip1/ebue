@@ -484,6 +484,17 @@ static unsigned long long next_id = 100;
 
 #define VOLUME_SERIAL 0x4e544653u
 
+/* Geometry of the simulated volume, used by NtQueryVolumeInformationFile's
+ * size classes below.  512-byte sectors, eight to an allocation unit, is
+ * the 4096-byte NTFS default cluster; the counts make a 64 GiB volume that
+ * is a little under half full, with a slightly smaller caller-available
+ * figure standing in for a quota. */
+#define VOLUME_BYTES_PER_SECTOR  512u
+#define VOLUME_SECTORS_PER_UNIT  8u
+#define VOLUME_TOTAL_UNITS       16777216LL   /* 64 GiB in 4 KiB clusters */
+#define VOLUME_FREE_UNITS        9000000LL
+#define VOLUME_AVAIL_UNITS       8000000LL
+
 /* ---- small helpers ---- */
 
 static const WCHAR w_dot[1] = { '.' };
@@ -1492,6 +1503,84 @@ NTSTATUS NTAPI NtQueryVolumeInformationFile(HANDLE h, PIO_STATUS_BLOCK io, PVOID
 		if (io) io->Information = offsetof(FILE_FS_VOLUME_INFORMATION, VolumeLabel);
 		return STATUS_SUCCESS;
 	}
+	/* The three classes src/stat/statvfs.c needs.
+	 *
+	 * These used to fall through to STATUS_INVALID_INFO_CLASS, which is
+	 * not something a real NT volume can answer: every NT file system
+	 * that can host a file -- NTFS, FAT, exFAT, even a network redirector
+	 * -- answers FileFsSizeInformation and FileFsAttributeInformation,
+	 * and NTFS answers FileFsFullSizeInformation too.  Refusing them made
+	 * statvfs(".") fail outright here, and with it every one of
+	 * test/posix-sysmisc.c's statvfs assertions, on a path that works
+	 * perfectly well against a real volume.  The stub was the wrong side
+	 * of that disagreement, not statvfs.c.
+	 *
+	 * The numbers are a synthetic volume rather than a report on the
+	 * host: this file system lives in this process's heap and has no
+	 * capacity of its own to report.  They are chosen to be the shape NT
+	 * really produces -- a power-of-two cluster built from a sector count
+	 * and a sector size, and Caller <= Actual <= Total, which is the
+	 * quota relationship FILE_FS_FULL_SIZE_INFORMATION exists to express
+	 * and which POSIX mirrors as f_bavail <= f_bfree <= f_blocks.  A test
+	 * that asserted a *particular* capacity would be asserting this stub,
+	 * so none does; what is asserted is the invariants, and those hold. */
+	case FileFsFullSizeInformation: {
+		FILE_FS_FULL_SIZE_INFORMATION *fs = buf;
+		if (len < sizeof *fs) return STATUS_INFO_LENGTH_MISMATCH;
+		if (f->kind != OF_VFS) return STATUS_INVALID_DEVICE_REQUEST;
+		fs->TotalAllocationUnits = VOLUME_TOTAL_UNITS;
+		fs->ActualAvailableAllocationUnits = VOLUME_FREE_UNITS;
+		/* strictly below the unrestricted figure, so a statvfs() that
+		 * mixed up ActualAvailable (f_bfree) and CallerAvailable
+		 * (f_bavail) would be visible rather than a tie. */
+		fs->CallerAvailableAllocationUnits = VOLUME_AVAIL_UNITS;
+		fs->SectorsPerAllocationUnit = VOLUME_SECTORS_PER_UNIT;
+		fs->BytesPerSector = VOLUME_BYTES_PER_SECTOR;
+		if (io) io->Information = sizeof *fs;
+		return STATUS_SUCCESS;
+	}
+	case FileFsSizeInformation: {
+		/* The pre-NTFS-quota class.  statvfs.c only reaches it when the
+		 * full-size class above is refused, which this stub never does --
+		 * it is here because a real volume answers it, and a stub that
+		 * answered only the class the current caller happens to prefer
+		 * would quietly stop modelling NT the moment that preference
+		 * changed.  It reports one free figure, not two: that is the
+		 * whole difference between the classes. */
+		FILE_FS_SIZE_INFORMATION *fs = buf;
+		if (len < sizeof *fs) return STATUS_INFO_LENGTH_MISMATCH;
+		if (f->kind != OF_VFS) return STATUS_INVALID_DEVICE_REQUEST;
+		fs->TotalAllocationUnits = VOLUME_TOTAL_UNITS;
+		fs->AvailableAllocationUnits = VOLUME_AVAIL_UNITS;
+		fs->SectorsPerAllocationUnit = VOLUME_SECTORS_PER_UNIT;
+		fs->BytesPerSector = VOLUME_BYTES_PER_SECTOR;
+		if (io) io->Information = sizeof *fs;
+		return STATUS_SUCCESS;
+	}
+	case FileFsAttributeInformation: {
+		/* FileSystemName is variable-length and the caller is expected
+		 * to over-allocate for it (statvfs.c does); the fixed head is
+		 * all that must fit for the call to be answerable, so a caller
+		 * that supplied only that gets the head and STATUS_SUCCESS the
+		 * way NT gives it -- not a length mismatch. */
+		FILE_FS_ATTRIBUTE_INFORMATION *at = buf;
+		static const WCHAR fsname[4] = { 'N', 'T', 'F', 'S' };
+		ULONG head = offsetof(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName);
+		if (len < head) return STATUS_INFO_LENGTH_MISMATCH;
+		if (f->kind != OF_VFS) return STATUS_INVALID_DEVICE_REQUEST;
+		/* Not FILE_READ_ONLY_VOLUME: this file system is writable, and
+		 * the tests create files on it. */
+		at->FileSystemAttributes = 0;
+		at->MaximumComponentNameLength = 255;   /* NTFS, in characters */
+		at->FileSystemNameLength = (ULONG)sizeof fsname;
+		if (len >= head + sizeof fsname) {
+			memcpy(at->FileSystemName, fsname, sizeof fsname);
+			if (io) io->Information = head + sizeof fsname;
+			return STATUS_SUCCESS;
+		}
+		if (io) io->Information = head;
+		return STATUS_BUFFER_OVERFLOW;
+	}
 	default:
 		return STATUS_INVALID_INFO_CLASS;
 	}
@@ -2058,6 +2147,36 @@ NTSTATUS NTAPI NtDelayExecution(BOOLEAN alertable, LARGE_INTEGER *t)
 	ts.nsec = (long)((ticks % 10000000LL) * 100);
 	syscall(SYS_nanosleep, &ts, (void *)0);
 	return STATUS_SUCCESS;
+}
+
+/*
+ * NtYieldExecution() -- src/misc/sched.c's sched_yield().
+ *
+ * Two things to model.  The yield itself is a real host sched_yield(2):
+ * the point of the primitive is to relinquish the processor, and a stub
+ * that returned without doing so would turn any spin-on-yield loop in
+ * ntlibc into a busy wait here rather than showing it up.
+ *
+ * The status is the interesting half.  NT returns STATUS_SUCCESS only
+ * when it actually switched to another thread, and the *informational*
+ * (high bit clear, so NT_SUCCESS() is true) STATUS_NO_YIELD_PERFORMED
+ * 0x40000024 when there was nothing else runnable -- which is what
+ * kernel32's SwitchToThread() reports as FALSE, and what Wine returns
+ * routinely.  These test binaries are single-threaded, so the honest
+ * answer for every call is the second one, and it is the answer that
+ * exercises the path test/posix-sysmisc.c's test_sched_yield() calls
+ * the realistic way to get sched_yield() wrong: an implementation that
+ * forwarded this status as a failure would return nonzero here, and its
+ * loop of a thousand calls would catch it.  Returning STATUS_SUCCESS
+ * would leave that assertion testing nothing.
+ */
+#define SYS_sched_yield 24
+#define STATUS_NO_YIELD_PERFORMED ((NTSTATUS)0x40000024L)
+
+NTSTATUS NTAPI NtYieldExecution(void)
+{
+	syscall(SYS_sched_yield);
+	return STATUS_NO_YIELD_PERFORMED;
 }
 
 /* --------------------------------------------------------------- process
