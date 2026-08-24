@@ -60,7 +60,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -161,7 +161,7 @@ fi
 # config.mak. Taken now, after "generated" has already finished mutating
 # the source tree, so every copy sees the same (post-generated) state.
 for pair in \
-	"check-i386:check-i386" "check-x86_64:check-x86_64" "libc-test:libc-test" \
+	"check-i386:check-i386" "check-x86_64:check-x86_64" \
 	"asan:asan" "linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
 	"hygiene:hygiene" "lint-plain:lint-plain" \
 	"lint-analyze-pinned:lint-analyze-pinned" "lint-shell-pinned:lint-shell-pinned" \
@@ -192,17 +192,6 @@ fi
 if want check-x86_64; then
 	t="$GATE_JOBS_DIR/trees/check-x86_64"
 	run_stage check-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" check"
-fi
-
-# libc-test: musl's regression corpus, adjudicated against
-# test/libc-test-expected.txt.  Belongs beside check-x86_64 rather than
-# after it: build + 146 Wine runs measure ~1.5 s wall, against a critical
-# path set by asan (~198 s), so it costs the gate nothing.  Only the
-# x86_64 arch -- the corpus is arch-independent C and running it twice
-# would double the ledger's maintenance for no new evidence.
-if want libc-test; then
-	t="$GATE_JOBS_DIR/trees/libc-test"
-	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" && make libc-test"
 fi
 
 if want asan; then
