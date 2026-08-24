@@ -149,12 +149,12 @@ wait "$serial_pid"
 
 # --- consolidated report, in the exact order tests were passed in ---
 
-pass=0 fail=0 unverified=0
+pass=0 fail=0 unverified=0 skipped=0
 for t in "$@"; do
 	name=${t##*/}
 	rc=$(cat "$rundir/$name.rc" 2>/dev/null || echo 1)
 	if [ "$rc" = skip ]; then
-		echo "SKIP $name (no wine)"
+		skipped=$((skipped + 1)); echo "SKIP $name (no wine)"
 	elif [ "$rc" = 0 ]; then
 		pass=$((pass + 1)); echo "PASS $name"
 	elif [ "$rc" = 77 ]; then
@@ -173,5 +173,43 @@ for t in "$@"; do
 		tail -n 40 "$rundir/$name.log" 2>/dev/null | sed 's/^/    /'
 	fi
 done
-echo "$pass passed, $fail failed, $unverified unverified"
-test "$fail" -eq 0
+echo "$pass passed, $fail failed, $unverified unverified, $skipped skipped"
+
+# ---- did this run actually launch anything? ------------------------------
+#
+# The exit condition used to be `fail -eq 0` and nothing else, which is
+# vacuously true when nothing ran.  Two routes get there, and neither one
+# is a bug in any test:
+#
+#   * $wine is empty -- ./configure found no wine on PATH, so config.mak's
+#     WINE is blank, run_one writes `skip` for every test, and `make check`
+#     prints a screen of SKIP lines and exits 0.  That is the same defect
+#     shape as tools/asan-build.sh's `0/0 tests passed` (855fdb2): the
+#     reporting is honest, nothing consumes it.
+#   * $# is empty -- TEST_RUN matched nothing, so the loop never turns.
+#
+# Both now fail, and say what was not verified rather than merely
+# returning non-zero.  There is deliberately no escape hatch: unlike
+# tools/asan-build.sh's not_native() or tools/linkcheck.sh's
+# linkcheck_exception(), a test that this target genuinely cannot run
+# already has a home -- the Makefile's TEST_RUN excludes the *-win.c
+# binaries from the Wine run by name, so they never reach this script at
+# all.  "No wine at all" is not a per-test exception, it is the whole
+# stage going empty.
+ran=$((pass + fail + unverified))
+rc=0
+if [ "$fail" -ne 0 ]; then
+	rc=1
+fi
+if [ "$skipped" -gt 0 ]; then
+	echo "runtests: FAILED -- $skipped test(s) were skipped because no wine binary" >&2
+	echo "runtests: was given; that part of the suite verified nothing." >&2
+	echo "runtests: install wine, or point ./configure at one with WINE=/path/to/wine" >&2
+	echo "runtests: (tools/gate.sh: GATE_WINE=...)." >&2
+	rc=1
+fi
+if [ "$ran" -eq 0 ]; then
+	echo "runtests: FAILED -- no test binaries ran at all; this stage verified nothing." >&2
+	rc=1
+fi
+exit $rc
