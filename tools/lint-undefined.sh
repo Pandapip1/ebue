@@ -49,7 +49,7 @@
 # not a typedef and contains an identifier immediately followed by '(':
 # the ordinary `RETTYPE NAME(params);` shape, or
 # `RETTYPE (*NAME(params))(params);` for a function returning a function
-# pointer (signal(), bsd_signal(), sigset() are the only examples here).
+# pointer (signal() and sigset() are the only examples here).
 # A statement with no such pattern (an extern variable, a struct/enum
 # tag, a macro constant) is not a function and is skipped.  The
 # `extern "C" { ... }` wrapper nearly every header has is not treated as

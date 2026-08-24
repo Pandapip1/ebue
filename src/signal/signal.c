@@ -35,9 +35,9 @@ static void (*handlers[_NSIG])(int);
 static sigset_t blocked;
 static sigset_t pending;
 
-/* Per-signal sa_mask/sa_flags, as installed by sigaction().  signal()/
- * bsd_signal()/sigset() leave these at their zero-initialized defaults
- * (empty mask, no flags), matching their simpler contract. */
+/* Per-signal sa_mask/sa_flags, as installed by sigaction().  signal()
+ * and sigset() leave these at their zero-initialized defaults (empty
+ * mask, no flags), matching their simpler contract. */
 static sigset_t act_mask[_NSIG];
 static int act_flags[_NSIG];
 
@@ -62,8 +62,6 @@ void (*signal(int sig, void (*h)(int)))(int)
 	handlers[sig] = h;
 	return old;
 }
-
-void (*bsd_signal(int sig, void (*h)(int)))(int) { return signal(sig, h); }
 
 int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 {
