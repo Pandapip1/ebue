@@ -3777,6 +3777,17 @@ here rather than deferred. `test/posix-string.c` already cites
 it — exactly the "mentioned is not referenced" distinction
 `tools/lint-unreferenced.sh` was built to draw.
 
+**The baseline this group lands on is 43, not 48.** The 56 above is the
+count at `d36b07c`, where this group was written; on the merged tree it
+is **43**, measured by re-running `tools/lint-unreferenced.sh` rather
+than carried forward. This group's eight account for eight of the
+thirteen, and the remaining five went to the `unistd.h` clause audit
+that landed alongside it: groups M-Q's new tests reference `alarm`,
+`setpgid`, `setreuid` and `symlinkat`, and one more name left the set
+between `d36b07c` and `origin/main`. `tools/unreferenced-baseline.txt`
+is set to 43 for that reason; the ratchet is one-way, so a stale 48
+would have silently permitted five regressions.
+
 Two of them are the striking ones: **`puts()` and `scanf()` are
 core C interfaces this library has always implemented and that no test
 had ever called.** Both turned out to be correct on the happy path.

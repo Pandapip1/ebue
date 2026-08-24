@@ -15,4 +15,4 @@
 #
 # The full list is written to obj/lint/unreferenced.txt on every run.
 #
-48
+43

@@ -1586,12 +1586,19 @@ counts; this is what item 4 has to fold in.
 | groups H-J | 46 | `ctype.h` 12, `wctype.h` 16, `locale.h` 4, `stropts.h` 1 (reclassified to *absent*, not subtracted), and J3's long tail of 14 |
 | groups K/L | 22 (of 28 named) | `stdio.h` 16 and `stdarg.h` 12, less the six already carrying priority-5 rows at `04edec2` |
 | groups M-Q | 43 | the `unistd.h` row closed outright, 43 -> 0: M 25, N 3, O 7, P 1 newly audited, plus Q's 7 the never-asserted sweep had already audited and already rowed |
+| group R | 8 | `sys/stat.h` 6 -> 5 (`fchmodat`); the other seven — `puts scanf renameat sigwait psignal roundl strxfrm_l` — are in **no** row of that table, because it enumerates headers the priority order never reached and these sit under headers it did. They are movement the 357 cannot show: see failure mode 3 |
 
 A tokeniser run over the same sections will not reproduce these
 numbers, and that is the point: it double-counts the six of K/L, the
 21 priority-6 names M/N/O/Q re-row, and `wctype`/`wctrans`; it misses
 `hdestroy`, `wordfree`, `pause` and the `drand48` family; it has no
 answer for `strlen`/`strnlen`; and it puts `ioctl` in the wrong table.
+Group R lands after the other four and reports no new *direction* of
+error — its eight pages are ordinary movement — but it is the batch that
+supplies the sharpest evidence for two of the five modes below, because
+`tools/lint-unreferenced.sh` gives this file, for the first time, a
+mechanical answer to "does any test even call this name?" that is
+independent of what the ledger says about it.
 
 The evidence, each case recorded in the note that found it:
 
@@ -1631,7 +1638,21 @@ The evidence, each case recorded in the note that found it:
    side. Group J3 gives them rows, which the pipeline *will* count;
    whether that is a new count or a double count depends on how item 4
    reads priority 1. Flagged, deliberately not decided here. (Groups
-   H-J note, first bullet of the J3 cautions.)
+   H-J note, first bullet of the J3 cautions.) **Group R is the
+   measured version of this mode**, and it is worse than `strlen`
+   suggested. Five of group R's eight names were already inside a
+   *grouped* first column and were therefore credited as covered:
+   `fgets / fputs / puts`, `scanf family`, `rename / renameat` and
+   `strxfrm / strxfrm_l`. `tools/lint-unreferenced.sh` then showed that
+   **no test carried a relocation against any of the five** — the
+   grouped rows are true about their other members and say nothing
+   whatever about `puts`, `scanf`, `renameat` or `strxfrm_l`. A
+   tokeniser cannot see this in either direction: split on `/` it
+   over-credits four names it has no evidence for, and left whole it
+   counts a row that is neither one interface nor the 357's. Group R
+   gives all eight their own rows and their first assertions; the eight
+   pages are new audit, not a re-row of anything, and only `fchmodat`
+   is a subtraction from the 357.
 4. **Wrong table entirely — a row that should not exist.** `ioctl`
    belongs in the absent accounting, not in "implemented, not
    clause-audited": POSIX's is `<stropts.h>`'s `int ioctl(int, int,
@@ -1660,7 +1681,17 @@ The evidence, each case recorded in the note that found it:
    *tests* agree and all pass; it is the rows' prose that contradicts,
    and a tokeniser reading them counts one interface as both N/A and
    audited. (Group N's note states its own; the other two are noted at
-   the rows.)
+   the rows.) **Group R adds a fourth, and it is the cleanest instance
+   yet**: priority 7's `psignal / psiginfo` row reads "not implemented
+   anywhere in `src/`/`include/`" and is marked N/A on that ground.
+   `src/signal/signal.c:526` defines `psignal()` and `include/signal.h`
+   declares it; group R audits the page and rows it. Unlike the other
+   three this one was not found by reading two audits against each
+   other — `tools/lint-unreferenced.sh` reported `psignal` in the set of
+   *implemented* functions no test references, which is a statement the
+   row asserts is impossible. That is the shape item 4 wants: a check
+   that contradicts a stale row mechanically instead of waiting for the
+   next auditor to read it.
 
 Cases 1 and 2 are the two directions of the same defect: first-column
 tokenisation cannot tell "audited twice" from "audited once", and cannot
