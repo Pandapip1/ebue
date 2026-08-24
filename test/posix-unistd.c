@@ -21,6 +21,9 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <utime.h>
+#include <limits.h>
+#include <time.h>
+#include <sys/time.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -765,6 +768,296 @@ static void test_access_real_effective_uid_identical(void)
 	unlink("t-reu.txt");
 }
 
+/* ---------------------------------------------------------------------
+ * The four names test/POSIX-GAP-ACCOUNTING.md flags as claimed by a
+ * ledger row while no test in the tree ever calls them: utimes,
+ * fpathconf, readlink, unlinkat.  Each block cites the page it was
+ * checked against.
+ * ------------------------------------------------------------------ */
+
+/* utimes.html (XSI; the page is shared with futimens/utimensat).
+ * DESCRIPTION: "If the times argument is a null pointer, both the access
+ * and modification timestamps shall be set to the greatest value
+ * supported by the file system that is not greater than the current
+ * time."  RETURN VALUE: "Upon successful completion, these functions
+ * shall return 0.  Otherwise, these functions shall return -1 and set
+ * errno".  ERRORS [ENOENT]: "A component of path does not name an
+ * existing file or path is an empty string."
+ *
+ * The tv_usec -> tv_nsec scaling is the part worth pinning: utimes()
+ * takes microseconds where utimensat() takes nanoseconds, and NTFS
+ * stores 100ns ticks, so a microsecond value is exactly representable
+ * and a missing *1000 would be visible.  Filesystem behaviour, so Wine
+ * is only weak evidence here; the real-Windows CI leg is the authority. */
+static void test_utimes(void)
+{
+	struct timeval tv[2];
+	struct stat st;
+	time_t before, after;
+	int fd = open("ut.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+
+	tv[0].tv_sec = 1000000000; tv[0].tv_usec = 123456;
+	tv[1].tv_sec = 1000000001; tv[1].tv_usec = 654321;
+	CHECK(utimes("ut.txt", tv) == 0);
+	CHECK(stat("ut.txt", &st) == 0);
+	CHECK(st.st_atim.tv_sec == 1000000000);
+	CHECK(st.st_mtim.tv_sec == 1000000001);
+	/* microseconds scaled to nanoseconds, not stored raw */
+	CHECK(st.st_atim.tv_nsec == 123456000L);
+	CHECK(st.st_mtim.tv_nsec == 654321000L);
+
+	/* null times: "shall be set to ... not greater than the current
+	 * time" -- so within the window the call was made in, and not the
+	 * stale 2001 stamps just written. */
+	before = time(0);
+	CHECK(utimes("ut.txt", 0) == 0);
+	after = time(0);
+	CHECK(stat("ut.txt", &st) == 0);
+	CHECK(st.st_mtim.tv_sec >= before && st.st_mtim.tv_sec <= after + 1);
+	CHECK(st.st_atim.tv_sec >= before && st.st_atim.tv_sec <= after + 1);
+
+	errno = 0;
+	CHECK(utimes("nope-utimes", tv) == -1 && errno == ENOENT);
+	errno = 0;
+	CHECK(utimes("", tv) == -1 && errno == ENOENT);
+	CHECK(unlink("ut.txt") == 0);
+}
+
+/* fpathconf.html.  DESCRIPTION: fpathconf() "shall determine the current
+ * value of a configurable limit or option (variable) that is associated
+ * with a file or directory", the fildes form taking an open descriptor.
+ * RETURN VALUE: "Otherwise, the value of the requested variable shall be
+ * returned ... without changing errno"; -1 with EINVAL "if the value of
+ * name is invalid"; and "the value returned shall not be more
+ * restrictive than the corresponding value described to the application
+ * when it was compiled with the implementation's <limits.h>".
+ *
+ * Pure C-library arithmetic over compile-time constants: Wine is a sound
+ * oracle for all of it.
+ *
+ * N/A here, deliberately: the optional [EBADF] ("The fildes argument is
+ * not a valid file descriptor").  src/unistd/sysconf.c's fpathconf()
+ * ignores fildes entirely and forwards to pathconf(), so a closed
+ * descriptor still answers -- which POSIX permits, because that error is
+ * listed under "may fail", not "shall fail".  Asserting either way would
+ * be asserting a choice the spec leaves open. */
+static void test_fpathconf(void)
+{
+	static const int names[] = {
+		_PC_LINK_MAX, _PC_MAX_CANON, _PC_MAX_INPUT, _PC_NAME_MAX,
+		_PC_PATH_MAX, _PC_PIPE_BUF, _PC_CHOWN_RESTRICTED,
+		_PC_NO_TRUNC, _PC_VDISABLE
+	};
+	size_t i;
+	int fd = open("fpc.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+
+	for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+		long a, b;
+		errno = 0;
+		a = fpathconf(fd, names[i]);
+		/* -1 is only legal for a variable with no limit, and none of
+		 * these nine is unlimited here; either way errno must not
+		 * have been touched. */
+		CHECK(errno == 0);
+		b = pathconf("fpc.txt", names[i]);
+		CHECK(a == b);
+		CHECK(a >= 0);
+	}
+
+	/* "shall not be more restrictive than" the <limits.h> minimums */
+	CHECK(fpathconf(fd, _PC_NAME_MAX) >= _POSIX_NAME_MAX);
+	CHECK(fpathconf(fd, _PC_PATH_MAX) >= _POSIX_PATH_MAX);
+	CHECK(fpathconf(fd, _PC_PIPE_BUF) >= _POSIX_PIPE_BUF);
+	CHECK(fpathconf(fd, _PC_LINK_MAX) >= _POSIX_LINK_MAX);
+	CHECK(fpathconf(fd, _PC_MAX_CANON) >= _POSIX_MAX_CANON);
+	CHECK(fpathconf(fd, _PC_MAX_INPUT) >= _POSIX_MAX_INPUT);
+
+	/* [EINVAL] "The value of the name argument is invalid." */
+	errno = 0;
+	CHECK(fpathconf(fd, -1) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(fpathconf(fd, 12345) == -1 && errno == EINVAL);
+
+	CHECK(close(fd) == 0);
+	CHECK(unlink("fpc.txt") == 0);
+}
+
+/* readlink.html.  RETURN VALUE: "Upon successful completion, these
+ * functions shall return the count of bytes placed in the buffer.
+ * Otherwise, these functions shall return a value of -1, leave the
+ * buffer unchanged, and set errno".  DESCRIPTION: "If the buf argument
+ * is not large enough to contain the link content, the first bufsize
+ * bytes shall be placed in buf" -- and APPLICATION USAGE warns the
+ * result is not null-terminated, so the byte past the returned count
+ * must be untouched.  ERRORS [EINVAL]: "The path argument names a file
+ * that is not a symbolic link."  [ENOENT]: "A component of path does not
+ * name an existing file or path is an empty string."
+ *
+ * Symbolic links need SeCreateSymbolicLinkPrivilege or developer mode
+ * (see src/unistd/link.c's banner), so the success half is conditional
+ * on symlink() working; the error half is not, and runs everywhere.
+ * Filesystem behaviour throughout -- real-Windows CI is the authority. */
+static void test_readlink(void)
+{
+	char buf[64];
+	ssize_t n;
+	int fd = open("rl-target.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && write(fd, "hello", 5) == 5 && close(fd) == 0);
+
+	/* [EINVAL] on a regular file, and the buffer is left unchanged. */
+	memset(buf, '@', sizeof buf);
+	errno = 0;
+	CHECK(readlink("rl-target.txt", buf, sizeof buf) == -1 && errno == EINVAL);
+	CHECK(buf[0] == '@');
+
+	/* [ENOENT] for a missing name and for the empty string. */
+	errno = 0;
+	CHECK(readlink("nope-readlink", buf, sizeof buf) == -1 && errno == ENOENT);
+	errno = 0;
+	CHECK(readlink("", buf, sizeof buf) == -1 && errno == ENOENT);
+
+	/* readlinkat(AT_FDCWD, ...) "shall be identical to a call to
+	 * readlink()". */
+	errno = 0;
+	CHECK(readlinkat(AT_FDCWD, "rl-target.txt", buf, sizeof buf) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(readlinkat(AT_FDCWD, "nope-readlink", buf, sizeof buf) == -1 && errno == ENOENT);
+
+	if (symlink("rl-target.txt", "rl.lnk") == 0) {
+		memset(buf, '@', sizeof buf);
+		n = readlink("rl.lnk", buf, sizeof buf);
+		CHECK(n == (ssize_t)strlen("rl-target.txt"));
+		if (n > 0) {
+			CHECK(!memcmp(buf, "rl-target.txt", (size_t)n));
+			/* not null-terminated: nothing written past n */
+			CHECK(buf[n] == '@');
+		}
+
+		/* truncation: "the first bufsize bytes shall be placed in
+		 * buf", and the return is that count, not the full length. */
+		memset(buf, '@', sizeof buf);
+		n = readlink("rl.lnk", buf, 4);
+		CHECK(n == 4);
+		CHECK(!memcmp(buf, "rl-t", 4));
+		CHECK(buf[4] == '@');
+
+		/* readlinkat relative to a directory descriptor */
+		{
+			int dfd = open(".", O_RDONLY | O_DIRECTORY);
+			CHECK(dfd >= 0);
+			if (dfd >= 0) {
+				memset(buf, '@', sizeof buf);
+				n = readlinkat(dfd, "rl.lnk", buf, sizeof buf);
+				CHECK(n == (ssize_t)strlen("rl-target.txt"));
+				if (n > 0) CHECK(!memcmp(buf, "rl-target.txt", (size_t)n));
+				CHECK(close(dfd) == 0);
+			}
+		}
+		CHECK(unlink("rl.lnk") == 0);
+	} else {
+		printf("note: symlink() not supported here (errno %d), readlink success path skipped\n", errno);
+	}
+	CHECK(unlink("rl-target.txt") == 0);
+}
+
+/* unlink.html (the unlinkat half).  DESCRIPTION: AT_REMOVEDIR means
+ * "Remove the directory entry specified by fd and path as a directory,
+ * not a normal file", and AT_FDCWD makes the call "identical to a call
+ * to unlink() or rmdir() respectively".  RETURN VALUE: 0 on success,
+ * -1 with errno otherwise.  ERRORS [ENOENT], [ENOTDIR] ("The flag
+ * parameter has the AT_REMOVEDIR bit set and path does not name a
+ * directory"), [EEXIST] or [ENOTEMPTY] ("... names a directory that is
+ * not an empty directory"), [EBADF] ("path does not specify an absolute
+ * path and the fd argument is neither AT_FDCWD nor a valid file
+ * descriptor").  Filesystem behaviour: real-Windows CI is the authority. */
+static void test_unlinkat(void)
+{
+	int fd = open("ua.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	struct stat st;
+	CHECK(fd >= 0 && close(fd) == 0);
+
+	/* AT_FDCWD without AT_REMOVEDIR == unlink() */
+	CHECK(unlinkat(AT_FDCWD, "ua.txt", 0) == 0);
+	CHECK(stat("ua.txt", &st) == -1);
+
+	/* AT_FDCWD with AT_REMOVEDIR == rmdir() */
+	CHECK(mkdir("uadir", 0755) == 0);
+	CHECK(unlinkat(AT_FDCWD, "uadir", AT_REMOVEDIR) == 0);
+	CHECK(stat("uadir", &st) == -1);
+
+	/* [ENOTDIR] AT_REMOVEDIR on something that is not a directory */
+	fd = open("ua2.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "ua2.txt", AT_REMOVEDIR) == -1 && errno == ENOTDIR);
+	CHECK(stat("ua2.txt", &st) == 0);	/* and it survived */
+
+	/* [ENOTEMPTY] or [EEXIST] on a non-empty directory */
+	CHECK(mkdir("uafull", 0755) == 0);
+	fd = open("uafull/inner.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "uafull", AT_REMOVEDIR) == -1 &&
+	      (errno == ENOTEMPTY || errno == EEXIST));
+
+	/* Without AT_REMOVEDIR, a directory is not removable.  POSIX lists
+	 * [EPERM] for this; ntlibc reports [EISDIR], as Linux does.  Both
+	 * are refusals that leave the directory in place, which is the part
+	 * the spec's DESCRIPTION actually requires ("The path argument shall
+	 * not name a directory unless ... the implementation supports using
+	 * unlink() on directories"); the exact errno is left unasserted
+	 * rather than pinned to a value POSIX does not list. */
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "uafull", 0) == -1);
+	CHECK(stat("uafull", &st) == 0 && S_ISDIR(st.st_mode));
+
+	/* relative to a real directory descriptor */
+	{
+		int dfd = open("uafull", O_RDONLY | O_DIRECTORY);
+		CHECK(dfd >= 0);
+		if (dfd >= 0) {
+			CHECK(unlinkat(dfd, "inner.txt", 0) == 0);
+			CHECK(stat("uafull/inner.txt", &st) == -1);
+			errno = 0;
+			CHECK(unlinkat(dfd, "inner.txt", 0) == -1 && errno == ENOENT);
+			CHECK(close(dfd) == 0);
+		}
+	}
+	CHECK(unlinkat(AT_FDCWD, "uafull", AT_REMOVEDIR) == 0);
+
+	/* [ENOENT] */
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "nope-unlinkat", 0) == -1 && errno == ENOENT);
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "", 0) == -1 && errno == ENOENT);
+
+	/* [EBADF] relative path against a descriptor that is not open */
+	errno = 0;
+	CHECK(unlinkat(4096, "ua2.txt", 0) == -1 && errno == EBADF);
+	CHECK(stat("ua2.txt", &st) == 0);
+
+#if 0	/* BUG: unlinkat() ignores undefined bits in flag instead of
+	 * rejecting them.  unlink.html ERRORS: "[EINVAL] (unlinkat() only)
+	 * The value of the flag argument is not valid."  AT_REMOVEDIR is
+	 * the only flag unlinkat() defines, so any other bit is invalid.
+	 * src/unistd/unlink.c is
+	 *     int unlinkat(int dirfd, const char *path, int flags)
+	 *     { return __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }
+	 * -- it masks the one bit it understands and silently discards the
+	 * rest, so unlinkat(fd, path, AT_SYMLINK_NOFOLLOW) deletes the file
+	 * rather than failing, and a caller that passes the wrong constant
+	 * gets destruction instead of a diagnostic.  Re-enable when
+	 * unlinkat() rejects flags & ~AT_REMOVEDIR with EINVAL. */
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "ua2.txt", AT_SYMLINK_NOFOLLOW) == -1 && errno == EINVAL);
+	CHECK(stat("ua2.txt", &st) == 0);
+#endif
+
+	CHECK(unlinkat(AT_FDCWD, "ua2.txt", 0) == 0);
+}
+
 int main(void)
 {
 	char tmpl[] = "posixunistd-XXXXXX";
@@ -804,6 +1097,10 @@ int main(void)
 	test_kill_zero_is_own_group_of_one();
 	test_kill_eperm_protected_process();
 	test_access_real_effective_uid_identical();
+	test_utimes();
+	test_fpathconf();
+	test_readlink();
+	test_unlinkat();
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);

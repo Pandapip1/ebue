@@ -55,7 +55,10 @@ headers this file's priority order never reached at all (`termios.h`,
 `search.h`, `fenv.h`, `pwd.h`/`grp.h`, `regex.h`, `dlfcn.h`, the
 glob/fnmatch/wordexp group, `ftw.h`, `sys/uio.h`, `arpa/inet.h`) and the
 four rows here whose second slash-joined name (`utimes`, `fpathconf`,
-`readlink`, `unlinkat`) is called by no test.
+`readlink`, `unlinkat`) was called by no test. **Those four are now
+closed**: each has been split onto a row of its own above and given a
+first-ever assertion in `test/posix-unistd.c`, which turned up one
+fenced bug (`unlinkat()`'s `flag` validation).
 
 ## Priority order (per the task brief)
 
@@ -455,19 +458,23 @@ not every clause line, to keep this section a manageable size):
 | dup / dup2 / dup3 / fcntl (F_DUPFD, F_GETFD/SETFD, F_GETFL/SETFL, F_GETLK/SETLK no-ops, EINVAL/EBADF) | covered | test/unistd.c, test/posix-unistd.c |
 | pipe / pipe2 | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | stat / fstat / lstat / fstatat / chmod / fchmod | covered | test/unistd.c, test/posix-unistd.c |
-| mkdir / rmdir / unlink / unlinkat | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
+| mkdir / rmdir / unlink | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
+| unlinkat (AT_FDCWD == unlink/rmdir, AT_REMOVEDIR, ENOTDIR, ENOTEMPTY, ENOENT, EBADF, dirfd-relative) | **BUG (fenced)** — undefined `flag` bits are masked off instead of giving EINVAL | test/posix-unistd.c `test_unlinkat` |
 | rename / renameat: success, ENOENT, same-file no-op | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | rename EISDIR (new is a dir, old isn't) | **fixed**, commit 3c606a7 (`renameat()` in `src/stdio/misc.c` now disambiguates NT's `STATUS_ACCESS_DENIED` by querying old/new's types, giving EISDIR instead of EACCES) | test/posix-unistd.c `test_rename_new_dir_old_file_eisdir` |
 | rename ENOTEMPTY/EEXIST (new is a non-empty dir) | **fixed**, commit 3c606a7 (same fix, gives ENOTEMPTY instead of EACCES) | test/posix-unistd.c `test_rename_onto_nonempty_dir` |
-| link / symlink / readlink | covered | test/unistd.c |
+| link / symlink | covered | test/unistd.c |
+| readlink / readlinkat (byte count, no NUL, bufsize truncation, EINVAL on a non-link, ENOENT, AT_FDCWD, dirfd-relative) | covered | test/unistd.c, test/posix-unistd.c `test_readlink` |
 | access / faccessat (F_OK/R_OK/W_OK/X_OK, ENOENT, EACCES) | covered | test/unistd.c |
 | access/stat/open/unlink/rename trailing-slash-on-non-directory ENOTDIR | **fixed**, commit 3c606a7 (`__ntpath()`/`__ntpath_at()` in `src/internal/path.c` now re-check the resolved object's type after stripping a trailing slash — a shared-path-layer fix, so it covers all of these, not just access()) | test/posix-unistd.c `test_access_trailing_slash_enotdir` |
 | chdir / fchdir / getcwd (incl. ERANGE off-by-one boundary) | covered | test/unistd.c, test/posix-unistd.c |
 | ftruncate / truncate | covered | test/unistd.c |
 | fsync / fdatasync | covered | test/unistd.c, test/posix-io.c |
 | isatty / ttyname / ttyname_r | covered, except ttyname_r ERANGE (only reachable from a real console fd; test detects and skips) | test/unistd.c, test/posix-unistd.c |
-| getpid / getppid / sysconf / pathconf / fpathconf / umask | covered | test/unistd.c, test/posix-unistd.c |
-| utimensat / futimens / utime / utimes / futimes / lutimes / futimesat | covered | test/unistd.c |
+| getpid / getppid / sysconf / pathconf / umask | covered | test/unistd.c, test/posix-unistd.c |
+| fpathconf (agrees with pathconf, errno untouched on success, not more restrictive than `<limits.h>` minimums, EINVAL on a bad name) | covered; optional [EBADF] N/A — `fpathconf()` ignores `fildes`, which POSIX permits because that error is "may fail" | test/posix-unistd.c `test_fpathconf` |
+| utimensat / futimens / utime / futimes / lutimes / futimesat | covered | test/unistd.c |
+| utimes (XSI; tv_usec scaled to tv_nsec, null `times` == now, ENOENT incl. the empty string) | covered | test/unistd.c, test/posix-unistd.c `test_utimes` |
 | nanosleep (`src/unistd/sleep.c`) | covered (sanity, via test/unistd.c; not separately clause-cited) | test/unistd.c |
 
 All four bugs originally found here (umask, trailing-slash ENOTDIR,
@@ -475,6 +482,26 @@ rename EISDIR, rename ENOTEMPTY) were fixed in commit `3c606a7` ("Fix
 four POSIX conformance bugs: umask, trailing-slash ENOTDIR, rename
 EISDIR/ENOTEMPTY") and the corresponding fenced tests in
 `test/posix-unistd.c` were un-fenced; none remain open.
+
+### Bugs found (never-asserted sweep, unistd.h group)
+
+One, fenced in `test/posix-unistd.c`'s `test_unlinkat()`.
+
+1. **`unlinkat()` masks off undefined `flag` bits instead of rejecting
+   them.** `unlink.html` ERRORS lists as *shall fail*: "[EINVAL]
+   (unlinkat() only) The value of the flag argument is not valid."
+   `AT_REMOVEDIR` is the only flag `unlinkat()` defines, so every other
+   bit is invalid.
+
+   Mechanism: `src/unistd/unlink.c` is
+   `int unlinkat(int dirfd, const char *path, int flags) { return
+   __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }` — it keeps the one
+   bit it understands and silently discards the rest. Probed on this
+   tree: `unlinkat(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW)` returns 0 and
+   **deletes the file**, so a caller who reaches for the wrong `AT_`
+   constant gets destruction rather than a diagnostic. The fix is a
+   `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }` guard,
+   but a fix belongs in a change of its own, not in an audit pass.
 
 ### Not reached (unistd.h group)
 

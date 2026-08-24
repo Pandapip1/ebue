@@ -273,8 +273,8 @@ their first assertion in this session (see "Tests added" below). These
 112 are still never named:
 
 - `math.h` (70): `acosf acoshf acoshl acosl asinf asinhf asinhl asinl atanhf atanhl cbrtf cbrtl ceilf coshf coshl erfcf erfcl erff erfl expm1f expm1l fdimf fdiml floorl fmaf fmal fmodl frexpf frexpl hypotf hypotl ilogbf ilogbl isgreater isgreaterequal isless islessequal islessgreater isunordered ldexpf lgammaf lgammal log1pf log1pl logbf logbl modff modfl nearbyintf nearbyintl nextafterf nextafterl nexttowardf nexttowardl remainderf remainderl remquof remquol roundf scalblnf scalblnl scalbnl sinhf sinhl tanhf tanhl tgammaf tgammal truncf truncl`
-- `unistd.h` (23): `confstr execl execle execlp fchown fchownat fexecve fpathconf getlogin getlogin_r lchown linkat pause readlink readlinkat setpgrp setregid setsid swab sync tcgetpgrp tcsetpgrp unlinkat`
-- `sys/stat.h` (6): `mkdirat mkfifo mkfifoat mknod mknodat utimes`
+- `unistd.h` (18): `confstr execl execle execlp fchown fchownat fexecve getlogin getlogin_r lchown linkat pause setpgrp setregid setsid swab sync tcgetpgrp tcsetpgrp` — `fpathconf`, `readlink`, `readlinkat` and `unlinkat` closed, see "Successor session" below
+- `sys/stat.h` (5): `mkdirat mkfifo mkfifoat mknod mknodat` — `utimes` closed, see "Successor session" below
 - `signal.h` (5): `sighold siginterrupt sigpause sigrelse sigset`
 - `stdarg.h` (4): `va_arg va_copy vprintf vscanf`
 - `setjmp.h` (2): `_setjmp _longjmp`
@@ -310,8 +310,9 @@ assertion covers only the first (`kill / killpg`, `read / readlink`, and
 so on). That is not a false claim by the ledger, but it does mean the
 row's "covered" applies to a name that is never called. Seven were
 closed this session (`killpg`, `sigaltstack`, `fseeko`, `ftello`,
-`getchar`, `putc`, `putchar`, `strcoll_l`); **four remain: `utimes`,
-`fpathconf`, `readlink`, `unlinkat`.** Worth a sweep.
+`getchar`, `putc`, `putchar`, `strcoll_l`); the remaining four —
+`utimes`, `fpathconf`, `readlink`, `unlinkat` — **were closed by the
+successor session**, see below.
 
 ## Declared but deliberately unimplemented (14)
 
@@ -692,11 +693,13 @@ finer-grained than the note it would carry.
 
 **Not yet reached — the next successor's queue, in order:**
 
-1. **The remaining 112 implemented-but-unasserted functions.** Not an
+1. **The remaining implemented-but-unasserted functions.** Not an
    accounting gap but a test gap, and the cheapest work in this file —
    and it already paid for itself once (the `vdprintf` leak above).
-   Start with the four a ledger row still claims by name while nothing
-   calls them: `utimes`, `fpathconf`, `readlink`, `unlinkat`.
+   The four a ledger row claimed by name while nothing called them
+   (`utimes`, `fpathconf`, `readlink`, `unlinkat`) are **done**; see
+   "Successor session" at the end of this file for what they cost and
+   what they found.
 2. **A clause audit of the headers the ledger's priority order never
    named.** The ledger closed every row it opened at `04edec2`, but its
    eleven priority groups never covered these at all — each has a real
@@ -751,3 +754,35 @@ finer-grained than the note it would carry.
   why). The declared set comes from `include/`, which *is* shared, so
   the classification should be arch-independent; that was not verified
   by re-running the whole pipeline against i386.
+
+## Successor session: closing the never-asserted list
+
+Item 1 of the queue above, worked in order. The list was re-derived
+mechanically rather than taken on trust: every name in the "Implemented,
+but no assertion anywhere" section was re-grepped (`grep -lw` for each,
+against `test/*.c`) at `0e3aefa`, and all 112 were confirmed still
+unnamed. Excluding the 70 `math.h` `f`/`l` variants, which item 3 covers
+separately, that leaves **42** names in six headers.
+
+### Closed: the four a ledger row claimed by name (`test/posix-unistd.c`)
+
+`test_utimes`, `test_fpathconf`, `test_readlink`, `test_unlinkat` — the
+first assertions any of these four have ever had. Each block cites its
+`pubs.opengroup.org` page in a comment, as the rest of the file does.
+Both `readlinkat` and `readlink` are reached, so five names in total
+leave the list.
+
+**One bug, immediately** — the pattern the `vdprintf` leak established
+holds: **`unlinkat()` masks undefined `flag` bits off instead of
+rejecting them with `EINVAL`**, so `unlinkat(fd, path, AT_SYMLINK_NOFOLLOW)`
+silently *deletes the file* instead of failing. Fenced in
+`test_unlinkat()` and written up in `test/POSIX-COVERAGE.md`'s "Bugs
+found (never-asserted sweep, unistd.h group)"; not fixed here, because a
+fix belongs in a change of its own.
+
+**One clause marked N/A, with the reason:** `fpathconf()`'s `[EBADF]`.
+`src/unistd/sysconf.c` ignores `fildes` entirely and forwards to
+`pathconf()`, so a closed descriptor still answers — which POSIX permits,
+since `fpathconf.html` lists `[EBADF]` under *may fail*, not *shall
+fail*. Asserting it in either direction would be asserting a choice the
+spec deliberately leaves open.
