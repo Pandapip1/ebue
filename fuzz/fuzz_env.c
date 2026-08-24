@@ -57,6 +57,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 
 extern char **environ;
@@ -94,7 +95,20 @@ static void check_environ(const char *ctx)
 	}
 }
 
-/* How many entries name `name`?  unsetenv must leave zero. */
+/* How many entries name `name`?  unsetenv must leave zero.
+ *
+ * THE COMPARISON IS CASE-INSENSITIVE, and that is not a shortcut: this
+ * is a Windows libc, and src/env/getenv.c's name_eq() folds case on
+ * purpose -- a program asking for "PATH" has to find the "Path" that
+ * Windows actually puts in the environment block.  __env_find(), and
+ * therefore getenv(), setenv() and unsetenv(), all inherit that.  A
+ * case-sensitive count here disagrees with the library about what
+ * "the same name" means, and since the fuzzer keeps one environment
+ * across every input in the process, an earlier input that set "N"
+ * makes a later getenv("n") succeed while the count says zero.  The
+ * first version of this harness did exactly that and reported
+ * "getenv returned a value for a name not in environ" on the input
+ * "@nn=" -- a harness defect, not a library one. */
 static int count_named(const char *name)
 {
 	size_t l = strlen(name);
@@ -102,7 +116,7 @@ static int count_named(const char *name)
 
 	if (!environ) return 0;
 	for (i = 0; environ[i]; i++)
-		if (!strncmp(environ[i], name, l) && environ[i][l] == '=') n++;
+		if (!strncasecmp(environ[i], name, l) && environ[i][l] == '=') n++;
 	return n;
 }
 
@@ -177,6 +191,24 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 			if (putcalls >= PUTCAP) break;
 			s = putarena[putslot];
 			putslot = (putslot + 1) % PUTARENA;
+			/* The arena is a ring, and putenv() stores the caller's
+			 * pointer rather than a copy, so a slot that is about to
+			 * be reused may still BE an environ entry.  Overwriting
+			 * it in place would rewrite that entry's text behind the
+			 * library's back -- and the first version of this harness
+			 * did exactly that, then reported "an environ entry has
+			 * no '='" for the entry it had itself just corrupted.
+			 * A harness defect, not a library one.  Retiring the name
+			 * first is enough: unsetenv() removes the entry that
+			 * points here, and is_putenv() keeps setenv.c from
+			 * free()ing a pointer it does not own. */
+			if (s[0]) {
+				char stale[REC + 1];
+				size_t sl = strcspn(s, "=");
+				memcpy(stale, s, sl);
+				stale[sl] = 0;
+				if (sl) unsetenv(stale);
+			}
 			memcpy(s, rec, len + 1);
 			putcalls++;
 			if (putenv(s) == 0) {

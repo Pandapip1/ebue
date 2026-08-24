@@ -139,6 +139,28 @@ static void test_inet_pton_ntop(void)
 	CHECK(inet_pton(AF_INET, "1.2.3.4.5", &a) == 0);
 	CHECK(inet_pton(AF_INET, "256.0.0.1", &a) == 0);   /* out of range octet */
 	CHECK(inet_pton(AF_INET, "", &a) == 0);
+#if 0	/* BUG: a part with a leading zero is accepted, and read as
+	 * decimal.  inet_ntop.html's DESCRIPTION gives inet_pton() the
+	 * strict form "ddd.ddd.ddd.ddd where 'ddd' is a one to three
+	 * digit decimal number between 0 and 255", and then says in the
+	 * same paragraph that inet_pton() "does not accept other formats
+	 * (such as the octal numbers, hexadecimal numbers, and fewer than
+	 * four numbers that inet_addr() accepts)".  "077" is precisely a
+	 * string inet_addr() reads as octal, so accepting it here -- as
+	 * decimal 77 -- makes one spelling mean two different addresses
+	 * through two functions of the same library, which is the
+	 * confusion that sentence exists to forbid.  src/socket/inet.c's
+	 * inet_pton() loop simply never looks at whether a part started
+	 * with '0'.
+	 *
+	 * Found by fuzz/fuzz_inet.c against the host's inet_pton(), which
+	 * returns 0 for every one of these.  fuzz_inet.c's
+	 * has_leading_zero_part() keeps the harness off it; delete that
+	 * function when this fence is lifted. */
+	CHECK(inet_pton(AF_INET, "0.0.0.00", &a) == 0);
+	CHECK(inet_pton(AF_INET, "7.077.0.7", &a) == 0);
+	CHECK(inet_pton(AF_INET, "01.2.3.4", &a) == 0);
+#endif
 	errno = 0;
 	CHECK(inet_pton(AF_INET6, "::1", &a) == -1);
 	CHECK(errno == EAFNOSUPPORT);

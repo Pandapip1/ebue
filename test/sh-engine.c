@@ -472,7 +472,70 @@ static void test_rejects_malformed(void)
 	must_reject("for; do a; done");       /* no name */
 	must_reject("for 9x in a; do b; done"); /* not a NAME (rule 5) */
 	must_reject("for f in a b");          /* no do_group */
+
+	/* "a <<E (" belongs here -- it is malformed and it is rejected --
+	 * but it is in the fenced case below instead: it leaks, and
+	 * test/ runs under `make asan` with leak detection on. */
 }
+
+#if 0	/* BUG: a here-document that is queued and never drained leaks
+	 * its queue entry.  parse_redir() (src/sh/parse.c:524) pushes a
+	 * `struct pending_hd` onto the lexer's pending list *before* the
+	 * advance() that would reach the newline -- deliberately, and the
+	 * comment above it explains why it has to be that order.  But
+	 * drain_heredocs() is the only thing that ever frees those
+	 * entries, and it runs only when that newline actually arrives.
+	 * A parse that fails first unwinds through __sh_parse()'s error
+	 * path, which frees the AST and returns; nothing walks
+	 * p.lx.pending_head, which parse.c:725 initialised and no code
+	 * tears down.  24 bytes per queued here-document, per failed
+	 * parse.
+	 *
+	 * Found by fuzz/fuzz_shparse.c under LeakSanitizer and reduced by
+	 * hand to the case below.  Note that "a <<E" on its own does NOT
+	 * leak -- it parses, so the queue drains -- which is why no fixed
+	 * test had reached this.  fuzz_shparse.c's heredoc_fence() keeps
+	 * the harness off it; delete that function and its calls when
+	 * this fence is lifted.
+	 *
+	 * There is no CHECK() spelling for "this allocation was not
+	 * freed", so the case is written as the smallest program that
+	 * reproduces it and is left unbuilt.  Run it under
+	 * `make asan` with detect_leaks=1 to see the report. */
+static void test_heredoc_queue_leak(void)
+{
+	CHECK(__sh_parse("a <<E (", 0, 0) == 0);   /* leaks 24 bytes */
+}
+#endif
+
+#if 0	/* BUG: the IO-number lexer overflows a signed int.  2.7 says a
+	 * redirection may be preceded by an IO_NUMBER, and 2.10.1 defines
+	 * IO_NUMBER as a token "made up solely of digits" immediately
+	 * followed by '<' or '>'; it puts no length on it, and neither
+	 * does src/sh/parse.c:433, which accumulates the value with
+	 *
+	 *     for (i = 0; i < len; i++) v = v * 10 + (w[i] - '0');
+	 *
+	 * into an `int`, unchecked.  Fifteen digits overflow it.  Signed
+	 * overflow is undefined behaviour -- UBSan stops on it -- and
+	 * where it does not trap the redirection ends up with whatever
+	 * the wrap produced, which may be negative, as its fd.  The
+	 * conservative reading of 2.10.1 is that a digit string too large
+	 * to be a file descriptor is not an IO_NUMBER at all and should
+	 * lex as an ordinary WORD.
+	 *
+	 * Found by fuzz/fuzz_shparse.c under UBSan and reduced by hand.
+	 * fuzz_shparse.c's ionum_fence() keeps the harness off it; delete
+	 * that function when this fence is lifted. */
+static void test_ionum_overflow(void)
+{
+	/* Fifteen digits: undefined behaviour at parse.c:433. */
+	must_reject("877777777777777<x");
+	/* And the value that a correct lexer has to refuse rather than
+	 * silently wrap: one past INT_MAX. */
+	must_reject("2147483648<x");
+}
+#endif
 
 /* ---- parse-and-print round trip: stage 1's other testability requirement */
 

@@ -172,6 +172,22 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 			/* Only legal when a longopt has a non-NULL flag, and none
 			 * here does. */
 			oracle_mismatch_i("returned 0 with no flag-bearing longopt", optstring, 0, 1);
+		} else if (c == 1 && optstring[0] == '-') {
+			/* Not a defect, and not an option character.  An optstring
+			 * beginning with '-' selects the mode in which every
+			 * non-option argument is returned, in argument order, as
+			 * option character 1: src/misc/getopt.c:50 implements it
+			 * deliberately, and optarg names the argument.  The first
+			 * version of this harness asserted strchr(optstring, c)
+			 * unconditionally and reported "-:\x08\x82" as a finding
+			 * within twenty seconds -- it was the harness that was
+			 * wrong.  Excused positively rather than merely skipped:
+			 * in this mode optarg must be set, because the returned 1
+			 * carries no other information about which argument it
+			 * stood for. */
+			if (!optarg)
+				oracle_mismatch_i("leading-'-' mode returned 1 without setting optarg",
+				                  optstring, 0, 1);
 		} else {
 			if (strchr(optstring, c) == 0)
 				oracle_mismatch_i("returned an option character not in the optstring",
