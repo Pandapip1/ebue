@@ -9,11 +9,15 @@
  * Stage 1 (lexer/parser, no execution) tests either inspect the parsed
  * AST directly or exercise the "testable on its own: parse-and-print"
  * requirement by round-tripping through __sh_print_list() and
- * reparsing. Stage 2 (execution of simple commands) tests actually
- * run processes: they re-exec this binary itself as the command,
- * matching test/misc.c's test_abort_child() pattern -- argv[1] ==
- * "--exit-child" makes main() below exit(atoi(argv[2])) immediately
- * rather than run the test suite.
+ * reparsing. Stage 2 (execution of simple commands) and stage 3
+ * (redirections and pipelines) tests actually run processes: they
+ * re-exec this binary itself as the command(s), matching test/misc.c's
+ * test_abort_child() pattern -- argv[1] selects a role (see
+ * child_role() below) that makes main() act as that role instead of
+ * running the test suite. "--exit-child N" is stage 2's; stage 3 adds
+ * a handful more (--produce, --cat, --stdin-eq, --produce-both,
+ * --fd-open) so redirection and pipeline tests do not depend on any
+ * external program (no /bin/cat, /bin/true, ... on this platform).
  *
  * The internal entry points (__sh_parse/__sh_print_list/__sh_list_free/
  * __sh_exec_*) are not part of any installed header -- src/sh/sh.h is
@@ -25,7 +29,11 @@
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/
  * utilities/V3_chap02.html):
  *   2.2 Quoting  2.3 Token Recognition (comments: rule 9)
- *   2.7 Redirection  2.7.4 Here-Document
+ *   2.7 Redirection  2.7.1 Redirecting Input  2.7.2 Redirecting Output
+ *   2.7.3 Appending Redirected Output  2.7.4 Here-Document
+ *   2.7.5/2.7.6 Duplicating an Input/Output File Descriptor
+ *   2.7.7 Open File Descriptors for Reading and Writing
+ *   2.8.1 Consequences of Shell Errors
  *   2.9.1 Simple Commands  2.9.2 Pipelines  2.9.3 Lists
  *   2.9.4 Compound Commands (Grouping Commands)
  *   2.10.2 Shell Grammar Rules
@@ -33,6 +41,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "../src/sh/sh.h"
 
 static int fails;
@@ -588,20 +598,612 @@ static void test_exec_reuses_wordexp_param_expansion(const char *self)
 
 /* Constructs this stage do not implement are reported as -1 ("cannot
  * execute this AST node yet"), never silently misexecuted -- see
- * sh.h's __sh_exec_*() comment. */
+ * sh.h's __sh_exec_*() comment. Pipelines and redirection are stage 3,
+ * implemented as of this file (see the tests below); subshells and
+ * brace groups remain stage 4. */
 static void test_exec_reports_unimplemented_constructs(void)
 {
 	int status;
-	CHECK(run("true | false", &status) == -1);       /* stage 3: pipelines */
-	CHECK(run("echo hi > /tmp/x", &status) == -1);    /* stage 3: redirection */
 	CHECK(run("(echo hi)", &status) == -1);           /* stage 4: subshells */
 	CHECK(run("{ echo hi; }", &status) == -1);        /* stage 4: brace groups */
+	/* A pipeline stage that is itself a subshell/brace group is stage
+	 * 4 too, even though the pipeline machinery itself is stage 3. */
+	CHECK(run("(echo hi) | cat", &status) == -1);
+	CHECK(run("cat | { echo hi; }", &status) == -1);
+	/* Command substitution stays stage 5 in every position this stage
+	 * newly touches: a redirection target word and an unquoted
+	 * here-document body. */
+	CHECK(run("echo hi > $(echo out)", &status) == -1);
+	{
+		char err[256];
+		struct sh_list *l = __sh_parse("cat <<EOF\n$(echo x)\nEOF\n", err, sizeof err);
+		CHECK(l != 0);
+		if (l) { CHECK(__sh_exec_list(l, &status) == -1); __sh_list_free(l); }
+	}
+}
+
+/* ---- stage 3: redirections and pipelines --------------------------------
+ *
+ * These reuse run()/must_parse() from stage 2 above, plus a handful of
+ * new self-exec roles (child_role() below) that stand in for the
+ * external `cat`/`true`/`echo` a Unix test suite could otherwise
+ * assume: this platform has none of those as standalone programs, and
+ * test/sh-design.md's whole point is that this shell must not depend
+ * on one either.
+ */
+
+/* A fresh, empty temp file in the current directory -- the same
+ * mkstemp()-in-cwd convention test/stdio.c's make_tmp() and
+ * test/stdlib.c use. Returns a malloc'd path (already created) the
+ * caller must remove()+free(), or NULL on failure. */
+static char *make_tmp(void)
+{
+	char tmpl[] = "shtstXXXXXX";
+	int fd = mkstemp(tmpl);
+	if (fd < 0) return 0;
+	close(fd);
+	return strdup(tmpl);
+}
+
+/* Reads a whole (small) file into a malloc'd, NUL-terminated buffer,
+ * or returns NULL if it cannot be opened. Used to inspect what a
+ * redirected command actually wrote. */
+static char *slurp(const char *path)
+{
+	FILE *f = fopen(path, "rb");
+	char *buf;
+	long len;
+	if (!f) return 0;
+	if (fseek(f, 0, SEEK_END)) { fclose(f); return 0; }
+	len = ftell(f);
+	if (len < 0 || fseek(f, 0, SEEK_SET)) { fclose(f); return 0; }
+	buf = malloc((size_t)len + 1);
+	if (!buf) { fclose(f); return 0; }
+	if (len && fread(buf, 1, (size_t)len, f) != (size_t)len) { fclose(f); free(buf); return 0; }
+	buf[len] = 0;
+	fclose(f);
+	return buf;
+}
+
+/* Whether a *spawned child* can actually observe any std-descriptor
+ * redirection its parent process performed -- true on real Windows and
+ * under Wine (this file's normal targets), but not under
+ * tools/asan-build.sh's native ASan build: that harness's
+ * RtlCreateUserProcess stub (fuzz/ntstubs.c) is a real host
+ * fork()+execve() of a real host binary that never reads
+ * pp->StandardInput/Output/Error at all, so a spawned child there
+ * always gets the *harness's original* real host fd 0/1/2, no matter
+ * what this process's own (correctly rewired) descriptor table says at
+ * the moment of the call. This applies uniformly -- an open()'d file
+ * (backed by that stub's in-memory-only vnode filesystem, with no real
+ * host fd for a separate process to inherit either way), a
+ * close()d/dup2()'d descriptor, and even a pipe (whose ends *are* real
+ * host fds, but still never reach the child, precisely because nothing
+ * ever copies them onto its fd 0/1/2) are all equally invisible to
+ * anything this process spawns there. Detected once, at runtime, by
+ * actually trying the simplest case (file redirection) rather than
+ * assumed from a compile-time macro -- the same "find the environment
+ * gap by checking, then skip only what it affects, with a note"
+ * discipline test/posix-termios.c's /dev/tty checks already use, so
+ * this keeps working unattended if that stub's process model ever
+ * changes. Every test that needs a spawned child to observe some
+ * redirection its parent made -- file-based, here-document, pipeline,
+ * or close/dup -- gates on this; test_exec_redir_dup_closed_fd_fails()
+ * is the one exception, since a redirection error keeps the command
+ * from ever spawning at all and so does not depend on this. */
+static int file_redir_supported(const char *self)
+{
+	static int cached = -1;
+	char src[512], *tmp, *got;
+	int status;
+
+	if (cached >= 0) return cached;
+	cached = 0;
+	tmp = make_tmp();
+	if (!tmp) return cached;
+	snprintf(src, sizeof src, "'%s' --produce probe > %s", self, tmp);
+	if (run(src, &status) == 0 && status == 0) {
+		got = slurp(tmp);
+		if (got && strcmp(got, "probe\n") == 0) cached = 1;
+		free(got);
+	}
+	remove(tmp);
+	free(tmp);
+	if (!cached)
+		printf("  note: a spawned child cannot see this process's file-based"
+		       " redirections in this environment (native ASan stub?) --"
+		       " skipping file/here-document redirection checks\n");
+	return cached;
+}
+
+static void test_exec_redir_output_creates_and_truncates(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *tmp = make_tmp(), *got;
+	CHECK(tmp != 0);
+	if (!tmp) return;
+
+	/* '>' creates (2.7.2) ... */
+	snprintf(src, sizeof src, "'%s' --produce first > %s", self, tmp);
+	{
+		int status;
+		CHECK(run(src, &status) == 0);
+		CHECK(status == 0);
+	}
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "first\n") == 0);
+	free(got);
+
+	/* ... and each subsequent '>' truncates rather than appending. */
+	snprintf(src, sizeof src, "'%s' --produce second > %s", self, tmp);
+	{
+		int status;
+		CHECK(run(src, &status) == 0);
+		CHECK(status == 0);
+	}
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "second\n") == 0);
+	free(got);
+
+	remove(tmp);
+	free(tmp);
+}
+
+/* 2.7.3: '>>' appends instead of truncating. */
+static void test_exec_redir_append(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *tmp = make_tmp(), *got;
+	int status;
+	CHECK(tmp != 0);
+	if (!tmp) return;
+
+	snprintf(src, sizeof src, "'%s' --produce one >> %s", self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	snprintf(src, sizeof src, "'%s' --produce two >> %s", self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "one\ntwo\n") == 0);
+	free(got);
+	remove(tmp);
+	free(tmp);
+}
+
+/* '>|' is only documented (2.7.2) to differ from '>' when the shell's
+ * noclobber option (set -C) is set; this shell has no `set` builtin at
+ * all yet (test/sh-design.md's scope), so nothing ever refuses a plain
+ * '>' in the first place and '>|' has nothing extra to override --
+ * see apply_one_redir()'s SH_R_CLOBBER case in src/sh/exec.c for the
+ * same point made where the behavior actually lives. This just checks
+ * '>|' still *works* like '>', not that it is indistinguishable in
+ * every hypothetical future (a `set -C` builtin would only need to
+ * change the SH_R_GREAT case). */
+static void test_exec_redir_clobber_like_great(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *tmp = make_tmp(), *got;
+	int status;
+	CHECK(tmp != 0);
+	if (!tmp) return;
+	snprintf(src, sizeof src, "'%s' --produce hi >| %s", self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "hi\n") == 0);
+	free(got);
+	remove(tmp);
+	free(tmp);
+}
+
+/* 2.7.1: '<' feeds a file to the command's stdin. */
+static void test_exec_redir_input(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *tmp = make_tmp();
+	int status;
+	FILE *f;
+	CHECK(tmp != 0);
+	if (!tmp) return;
+	f = fopen(tmp, "wb");
+	CHECK(f != 0);
+	if (f) { fputs("seed\n", f); fclose(f); }
+
+	snprintf(src, sizeof src, "'%s' --stdin-eq seed < %s", self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	remove(tmp);
+	free(tmp);
+}
+
+/* 2.7.7: '<>' opens for both reading and writing, without truncating
+ * (unlike '<' + '>' or '>' alone) -- the seeded content must still be
+ * there, and readable, afterward. */
+static void test_exec_redir_lessgreat_no_truncate(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *tmp = make_tmp(), *got;
+	int status;
+	FILE *f;
+	CHECK(tmp != 0);
+	if (!tmp) return;
+	f = fopen(tmp, "wb");
+	CHECK(f != 0);
+	if (f) { fputs("seed\n", f); fclose(f); }
+
+	snprintf(src, sizeof src, "'%s' --stdin-eq seed <> %s", self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "seed\n") == 0); /* untouched -- no O_TRUNC */
+	free(got);
+	remove(tmp);
+	free(tmp);
+}
+
+/* 2.7: "the order of evaluation is from beginning to end" -- so which
+ * of two redirections targeting the *same* descriptor number wins is
+ * whichever is written last. */
+static void test_exec_redir_order_last_wins(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *t1 = make_tmp(), *t2 = make_tmp(), *got;
+	int status;
+	CHECK(t1 != 0 && t2 != 0);
+	if (!t1 || !t2) { free(t1); free(t2); return; }
+
+	snprintf(src, sizeof src, "'%s' --produce hi > %s > %s", self, t1, t2);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	got = slurp(t1);
+	CHECK(got && got[0] == 0); /* opened (and truncated) but never written to */
+	free(got);
+	got = slurp(t2);
+	CHECK(got && strcmp(got, "hi\n") == 0);
+	free(got);
+
+	remove(t1); free(t1);
+	remove(t2); free(t2);
+}
+
+/* 2.7.6, and the classic ordering trap: "cmd >file 2>&1" sends both
+ * streams to file (fd 2 is duplicated from fd 1 *after* fd 1 already
+ * points at file), while "cmd 2>&1 >file" does not (fd 2 is duplicated
+ * from the *old* fd 1 first, and only then does fd 1 move to file) --
+ * this is exactly the ordering apply_redirs()/apply_one_redir() in
+ * src/sh/exec.c process left to right, never as a batch. */
+static void test_exec_redir_dup_output_ordering(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *t1 = make_tmp(), *t2 = make_tmp(), *got;
+	int status;
+	CHECK(t1 != 0 && t2 != 0);
+	if (!t1 || !t2) { free(t1); free(t2); return; }
+
+	/* stdout then stderr both land in t1: fd 2 follows fd 1 to it. */
+	snprintf(src, sizeof src, "'%s' --produce-both OUT ERR > %s 2>&1", self, t1);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	got = slurp(t1);
+	CHECK(got && strcmp(got, "OUT\nERR\n") == 0);
+	free(got);
+
+	/* fd 2 is bound to the *old* stdout first; only stdout then moves
+	 * to t2, so t2 must contain OUT but never ERR. */
+	snprintf(src, sizeof src, "'%s' --produce-both OUT ERR 2>&1 > %s", self, t2);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	got = slurp(t2);
+	CHECK(got && strcmp(got, "OUT\n") == 0);
+	free(got);
+
+	remove(t1); free(t1);
+	remove(t2); free(t2);
+}
+
+/* 2.7.6: "<&-"/">&-" close the descriptor instead of duplicating it. */
+static void test_exec_redir_close(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+
+	snprintf(src, sizeof src, "'%s' --fd-open 0", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 1); /* control: fd 0 is normally open */
+
+	snprintf(src, sizeof src, "'%s' --fd-open 0 <&-", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0); /* closed */
+
+	snprintf(src, sizeof src, "'%s' --fd-open 1 >&-", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0); /* closed */
+}
+
+/* 2.7.6: duplicating a closed/nonexistent descriptor is a redirection
+ * error -- 2.8.1 says that "shall not exit" a non-interactive shell
+ * for an ordinary utility, it just fails that one command. */
+static void test_exec_redir_dup_closed_fd_fails(const char *self)
+{
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --exit-child 0 <&9", self);
+	CHECK(run(src, &status) == 0);  /* not "-1 unimplemented" */
+	CHECK(status != 0);             /* the command failed to even start */
+}
+
+/* 2.8.1's "shall not exit" applies just as much to an outright open()
+ * failure (no such directory) as to a bad fd -- and, in a pipeline,
+ * only *that* stage is affected; the rest runs normally. */
+static void test_exec_redir_open_failure_nonabort(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+
+	snprintf(src, sizeof src, "'%s' --exit-child 0 > no-such-directory-xyz/file", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status != 0);
+
+	snprintf(src, sizeof src, "'%s' --exit-child 0 > no-such-directory-xyz/file | '%s' --exit-child 7", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 7); /* pipeline status is still the *last* command's */
+}
+
+/* 2.7.4: an unquoted heredoc delimiter gets a plain (no here-document
+ * syntax involved) round trip through the command's stdin. */
+static void test_exec_heredoc_basic(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --stdin-eq hello <<EOF\nhello\nEOF\n", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* 2.7.4: "<<-" strips leading tabs from every body line and the
+ * delimiter line -- already done by the parser (parse.c's
+ * drain_heredocs()), so this is really testing that exec.c passes the
+ * already-stripped r->heredoc straight through unmolested. */
+static void test_exec_heredoc_dash_strips_tabs(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --stdin-eq hi <<-EOF\n\t\thi\n\tEOF\n", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* 2.7.4: "If no part of word is quoted, all lines ... shall be
+ * expanded for parameter expansion" -- reusing wordexp() (see
+ * expand_heredoc() in src/sh/exec.c) rather than a second from-scratch
+ * expander. */
+static void test_exec_heredoc_unquoted_expands(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	setenv("SH_TEST_HEREDOC_VAR", "expanded", 1);
+	snprintf(src, sizeof src, "'%s' --stdin-eq expanded <<EOF\n$SH_TEST_HEREDOC_VAR\nEOF\n", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SH_TEST_HEREDOC_VAR");
+}
+
+/* 2.7.4: "If any part of word is quoted ... the here-document lines
+ * shall not be expanded" -- a quoted delimiter turns expansion off
+ * entirely, even though the body text looks exactly like the unquoted
+ * case above. */
+static void test_exec_heredoc_quoted_delimiter_no_expansion(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	setenv("SH_TEST_HEREDOC_VAR", "expanded", 1);
+	/* --stdin-eq's own operand is single-quoted so *it* is not
+	 * expanded either -- both sides stay the literal three characters
+	 * '$', 'V', ... i.e. the same unexpanded text. */
+	snprintf(src, sizeof src, "'%s' --stdin-eq '$SH_TEST_HEREDOC_VAR' <<'EOF'\n$SH_TEST_HEREDOC_VAR\nEOF\n", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SH_TEST_HEREDOC_VAR");
+}
+
+/* 2.9.2: connects each command's stdout to the next one's stdin. */
+static void test_exec_pipeline_two_stage(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --produce hi | '%s' --stdin-eq hi", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* A pipeline of more than two commands: proves this is a real loop
+ * over ncommands, not a hand-special-cased two-stage pipe. */
+static void test_exec_pipeline_three_stage(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --produce hi | '%s' --cat | '%s' --stdin-eq hi", self, self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* 2.9.2: "the exit status shall be the exit status of the last command
+ * specified in the pipeline" -- even though an earlier stage "fails". */
+static void test_exec_pipeline_status_is_last(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "'%s' --exit-child 3 | '%s' --exit-child 0", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	snprintf(src, sizeof src, "'%s' --exit-child 0 | '%s' --exit-child 9", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 9);
+}
+
+/* 2.9.2: "!" negates the exit status of the whole pipeline (i.e. of
+ * its last command), for a pipeline of more than one command too --
+ * test_pipeline_bang() (stage 1, above) only checks parsing. */
+static void test_exec_pipeline_bang(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512];
+	int status;
+	snprintf(src, sizeof src, "! '%s' --exit-child 0 | '%s' --exit-child 5", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0); /* last command's status (5) was nonzero -> negated to 0 */
+
+	snprintf(src, sizeof src, "! '%s' --exit-child 5 | '%s' --exit-child 0", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 1); /* last command's status (0) was zero -> negated to 1 */
+}
+
+/* A command's own redirections apply on top of the pipe hookup (2.7's
+ * left-to-right ordering, same rule as test_exec_redir_dup_output_ordering
+ * above): redirecting the *first* stage's stdout away from the pipe
+ * means the next stage reads nothing from it. */
+static void test_exec_pipeline_stage_redir_overrides_pipe(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	char src[512], *tmp = make_tmp(), *got;
+	int status;
+	CHECK(tmp != 0);
+	if (!tmp) return;
+
+	snprintf(src, sizeof src, "'%s' --produce hi > %s | '%s' --stdin-eq-raw ''", self, tmp, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0); /* second stage got EOF with nothing written -- empty stdin */
+
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "hi\n") == 0); /* first stage's real output went to the file */
+	free(got);
+	remove(tmp);
+	free(tmp);
+}
+
+/* Reads every remaining byte of stdin into a growable buffer.
+ * *out_len receives the byte count (never counting a NUL this doesn't
+ * add). Returns a malloc'd buffer (possibly zero-length, never NULL on
+ * success) or NULL on a real read error. */
+static char *read_all_stdin(size_t *out_len)
+{
+	size_t cap = 256, len = 0;
+	char *buf = malloc(cap);
+	if (!buf) return 0;
+	for (;;) {
+		size_t n;
+		if (len == cap) {
+			char *nb = realloc(buf, cap *= 2);
+			if (!nb) { free(buf); return 0; }
+			buf = nb;
+		}
+		n = fread(buf + len, 1, cap - len, stdin);
+		len += n;
+		if (n == 0) break;
+	}
+	*out_len = len;
+	return buf;
+}
+
+/* Every self-exec role stage 2/3's tests use, dispatched on argv[1].
+ * Returns the process's exit code for a recognised role, or -1 if
+ * argv[1] is not one of them (so main() falls through to running the
+ * actual test suite). */
+static int child_role(int argc, char **argv)
+{
+	const char *role = argv[1];
+
+	if (!strcmp(role, "--exit-child") && argc > 2)
+		return atoi(argv[2]);
+
+	/* Writes TEXT (argv[2]) plus a newline to stdout. Stands in for
+	 * `echo` (not present as a standalone program on this platform --
+	 * see this file's header comment). */
+	if (!strcmp(role, "--produce") && argc > 2) {
+		printf("%s\n", argv[2]);
+		return 0;
+	}
+
+	/* Writes OUT (argv[2]) + "\n" to stdout and ERR (argv[3]) + "\n"
+	 * to stderr, in that order -- for tests that need to distinguish
+	 * which descriptor a byte went through (2>&1 ordering). */
+	if (!strcmp(role, "--produce-both") && argc > 3) {
+		fprintf(stdout, "%s\n", argv[2]);
+		fflush(stdout);
+		fprintf(stderr, "%s\n", argv[3]);
+		fflush(stderr);
+		return 0;
+	}
+
+	/* Byte-for-byte stdin -> stdout, unbuffered assumptions aside.
+	 * Stands in for `cat`. */
+	if (!strcmp(role, "--cat")) {
+		char buf[4096];
+		size_t n;
+		while ((n = fread(buf, 1, sizeof buf, stdin)) > 0)
+			fwrite(buf, 1, n, stdout);
+		return 0;
+	}
+
+	/* Exits 0 iff stdin is exactly TEXT (argv[2]) followed by a single
+	 * newline -- the shape every --produce output and every
+	 * single-line here-document body (parse.c always appends '\n' per
+	 * line) takes. */
+	if (!strcmp(role, "--stdin-eq") && argc > 2) {
+		size_t len, wantlen = strlen(argv[2]);
+		char *got = read_all_stdin(&len);
+		int ok;
+		if (!got) return 5;
+		ok = len == wantlen + 1 && memcmp(got, argv[2], wantlen) == 0 && got[wantlen] == '\n';
+		if (!ok) fprintf(stderr, "child: stdin %.*s (%lu bytes), wanted %s\\n\n",
+		                  (int)len, got, (unsigned long)len, argv[2]);
+		free(got);
+		return ok ? 0 : 4;
+	}
+
+	/* Like --stdin-eq but an exact byte-for-byte match, no implied
+	 * trailing newline -- for asserting stdin is truly empty (0
+	 * bytes), which "TEXT + '\\n'" can never express. */
+	if (!strcmp(role, "--stdin-eq-raw") && argc > 2) {
+		size_t len, wantlen = strlen(argv[2]);
+		char *got = read_all_stdin(&len);
+		int ok;
+		if (!got) return 5;
+		ok = len == wantlen && memcmp(got, argv[2], wantlen) == 0;
+		free(got);
+		return ok ? 0 : 4;
+	}
+
+	/* Exits 1 if fd N (argv[2]) is a currently-open descriptor, 0 if
+	 * it is closed (EBADF) -- for "<&-"/">&-" tests, where the two
+	 * exit codes read backwards from what a shell test usually wants
+	 * is deliberate: 0 is easier to CHECK() against a specific
+	 * "closed" expectation without a double negative in the caller. */
+	if (!strcmp(role, "--fd-open") && argc > 2) {
+		int fd = atoi(argv[2]);
+		return fcntl(fd, F_GETFD) < 0 ? 0 : 1;
+	}
+
+	return -1;
 }
 
 int main(int argc, char **argv)
 {
-	if (argc > 2 && strcmp(argv[1], "--exit-child") == 0)
-		return atoi(argv[2]);
+	if (argc > 1) { int r = child_role(argc, argv); if (r >= 0) return r; }
 
 	test_simple_command_words();
 	test_assignment_prefix();
@@ -643,7 +1245,29 @@ int main(int argc, char **argv)
 	test_exec_reuses_wordexp_param_expansion(argv[0]);
 	test_exec_reports_unimplemented_constructs();
 
+	test_exec_redir_output_creates_and_truncates(argv[0]);
+	test_exec_redir_append(argv[0]);
+	test_exec_redir_clobber_like_great(argv[0]);
+	test_exec_redir_input(argv[0]);
+	test_exec_redir_lessgreat_no_truncate(argv[0]);
+	test_exec_redir_order_last_wins(argv[0]);
+	test_exec_redir_dup_output_ordering(argv[0]);
+	test_exec_redir_close(argv[0]);
+	test_exec_redir_dup_closed_fd_fails(argv[0]);
+	test_exec_redir_open_failure_nonabort(argv[0]);
+
+	test_exec_heredoc_basic(argv[0]);
+	test_exec_heredoc_dash_strips_tabs(argv[0]);
+	test_exec_heredoc_unquoted_expands(argv[0]);
+	test_exec_heredoc_quoted_delimiter_no_expansion(argv[0]);
+
+	test_exec_pipeline_two_stage(argv[0]);
+	test_exec_pipeline_three_stage(argv[0]);
+	test_exec_pipeline_status_is_last(argv[0]);
+	test_exec_pipeline_bang(argv[0]);
+	test_exec_pipeline_stage_redir_overrides_pipe(argv[0]);
+
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 2: lexer + parser + execution of simple commands -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 3: lexer + parser + execution of simple commands, redirections and pipelines -- see test/sh-design.md)\n");
 	return 0;
 }
