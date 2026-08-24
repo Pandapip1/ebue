@@ -88,6 +88,28 @@ are POSIX base — and 216 of those 256 sit in three families
 so the base-conformance hole is far more concentrated than the raw
 number suggests.
 
+Every count in this file, and every table below it, is a **dated
+snapshot of `04edec2`**, derived mechanically by the pipeline in "How
+this was produced" and deliberately not hand-edited afterwards: the
+whole value of the arithmetic is that no human retyped any of it.
+Functions that have since moved between buckets are therefore recorded
+in "Changes since `04edec2`" immediately below, not by editing the
+frozen numbers. Re-run the pipeline to fold them in.
+
+## Changes since `04edec2`
+
+Each row is a function interface that has moved out of **absent** since
+the snapshot, with the commit that moved it. Subtract these from the
+absent counts and add them to *implemented + clause-audited* when
+reading the tables below.
+
+| interface(s) | header | option | moved to | test |
+|---|---|---|---|---|
+| `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | implemented + clause-audited | `test/posix-math.c` (`test_fmaxmin_variants`) |
+
+Running adjustment: **4 base interfaces closed**; absent 473 -> 469
+(base 256 -> 252), implemented + clause-audited 333 -> 337.
+
 The 1177 excludes the 14 entries in POSIX's function index that are
 external *variables*, not functions (`environ`, `errno`, `optarg`,
 `opterr`, `optind`, `optopt`, `stdin`, `stdout`, `stderr`, `daylight`,
@@ -554,7 +576,7 @@ closed by accident in an afternoon.
 | function | header | option | note |
 |---|---|---|---|
 | `exp2` `exp2f` `exp2l` | `math.h` | base | genuinely missing; `src/math/exp.c` has `exp`/`exp2`-adjacent machinery (`expm1`, `ldexp`) and musl's `exp2.c` is self-contained. Base POSIX and C99 |
-| `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | `src/math/fmax.c` defines only the `double` forms. Four one-line variants; the `f`/`l` suffixes exist for essentially every other `math.h` entry in the tree, so this is an oversight rather than a decision |
+| `fmaxf` `fmaxl` `fminf` `fminl` | `math.h` | base | **closed** (see "Changes since `04edec2`") -- `src/math/fmax.c` defined only the `double` forms; the `f`/`l` suffixes exist for essentially every other `math.h` entry in the tree, so this was an oversight rather than a decision |
 | `waitid` | `sys/wait.h` | base | `src/process/wait.c` implements `wait`/`waitpid`/`wait3`/`wait4` over the child table in `src/process/children.c`; `waitid`'s `siginfo_t`-returning form and its `WNOWAIT` flag (leave the child waitable) are the only new behaviour needed |
 | `statvfs` `fstatvfs` | `sys/statvfs.h` | base | `NtQueryVolumeInformationFile` (`FileFsSizeInformation`, `FileFsAttributeInformation`) is pure NTDLL and covers every field. `src/stat/stat.c` already opens handles the right way. Small and self-contained |
 | `sigignore` | `signal.h` | `OB XSI` | one line over `sigaction`; obsolescent, and its four siblings (`sighold`/`sigrelse`/`sigset`/`sigpause`) are already present |

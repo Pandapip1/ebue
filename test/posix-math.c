@@ -975,6 +975,47 @@ static void test_lround_lrint_variants(void)
 	CHECK(llrintf(2.5f) == 2 && llrintl(2.5L) == 2);
 }
 
+/* ---- fmax.html / fmin.html, f/l variants: fmaxf/fmaxl/fminf/fminl
+ * carry the same RETURN VALUE clause as the double forms -- "If just
+ * one argument is a NaN, the other argument shall be returned.  If x
+ * and y are NaN, a NaN shall be returned."  No ERRORS are defined.
+ * The ±0 assertions below are informational in exactly the sense
+ * test_fmaxmin() records for the double forms: POSIX does not say
+ * which zero wins, so these pin down ntlibc's own permitted choice
+ * (+0 for fmax, -0 for fmin) and check that the f/l variants agree
+ * with the double one rather than each having drifted separately. ---- */
+static void test_fmaxmin_variants(void)
+{
+	CHECK(fmaxf(NAN, 3.0f) == 3.0f && fmaxf(3.0f, NAN) == 3.0f);
+	CHECK(fminf(NAN, 3.0f) == 3.0f && fminf(3.0f, NAN) == 3.0f);
+	CHECK(isnan(fmaxf(NAN, NAN)) && isnan(fminf(NAN, NAN)));
+	CHECK(fmaxf(1.0f, 2.0f) == 2.0f && fminf(1.0f, 2.0f) == 1.0f);
+	CHECK(fmaxf(-2.0f, -1.0f) == -1.0f && fminf(-2.0f, -1.0f) == -2.0f);
+
+	CHECK(fmaxl(NAN, 3.0L) == 3.0L && fmaxl(3.0L, NAN) == 3.0L);
+	CHECK(fminl(NAN, 3.0L) == 3.0L && fminl(3.0L, NAN) == 3.0L);
+	CHECK(isnan(fmaxl(NAN, NAN)) && isnan(fminl(NAN, NAN)));
+	CHECK(fmaxl(1.0L, 2.0L) == 2.0L && fminl(1.0L, 2.0L) == 1.0L);
+	CHECK(fmaxl(-2.0L, -1.0L) == -1.0L && fminl(-2.0L, -1.0L) == -2.0L);
+
+	/* infinities are ordinary operands here, not special cases */
+	CHECK(fmaxf(HUGE_VALF, 1.0f) == HUGE_VALF && fminf(-HUGE_VALF, 1.0f) == -HUGE_VALF);
+	CHECK(fmaxl(HUGE_VALL, 1.0L) == HUGE_VALL && fminl(-HUGE_VALL, 1.0L) == -HUGE_VALL);
+	CHECK(fmaxf(-HUGE_VALF, NAN) == -HUGE_VALF);
+	CHECK(fmaxl(-HUGE_VALL, NAN) == -HUGE_VALL);
+
+	CHECK(poszerof(fmaxf(0.0f, -0.0f)) && poszerof(fmaxf(-0.0f, 0.0f)));
+	CHECK(negzerof(fminf(0.0f, -0.0f)) && negzerof(fminf(-0.0f, 0.0f)));
+	CHECK(poszerol(fmaxl(0.0L, -0.0L)) && poszerol(fmaxl(-0.0L, 0.0L)));
+	CHECK(negzerol(fminl(0.0L, -0.0L)) && negzerol(fminl(-0.0L, 0.0L)));
+
+	/* a float variant must not round its result through double, and
+	 * an l variant must not round through double either: a value
+	 * exactly representable in the argument type comes back bit-equal */
+	CHECK(fmaxf(FLT_MIN, 0.0f) == FLT_MIN && fminf(FLT_MAX, HUGE_VALF) == FLT_MAX);
+	CHECK(fmaxl(LDBL_MIN, 0.0L) == LDBL_MIN && fminl(LDBL_MAX, HUGE_VALL) == LDBL_MAX);
+}
+
 int main(void)
 {
 	test_fabs();
@@ -990,6 +1031,7 @@ int main(void)
 	test_trig();
 	test_pow();
 	test_fmaxmin();
+	test_fmaxmin_variants();
 	test_hypot();
 	test_nan();
 	test_errhandling();
