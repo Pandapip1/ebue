@@ -1422,6 +1422,230 @@ static void test_scanf_m_modifier(void)
 #endif
 
 
+/* gets.html.  DESCRIPTION: "shall read bytes from the standard input
+ * stream, stdin, into the array pointed to by s, until a <newline> is
+ * read or an end-of-file condition is encountered.  Any <newline> shall
+ * be discarded and a null byte shall be placed immediately after the
+ * last byte read into the array."  RETURN VALUE: "Upon successful
+ * completion, gets() shall return s.  If the end-of-file indicator for
+ * the stream is set, or if the stream is at end-of-file, the end-of-file
+ * indicator for the stream shall be set and gets() shall return a null
+ * pointer.  If a read error occurs, the error indicator for the stream
+ * shall be set, gets() shall return a null pointer, and set errno to
+ * indicate the error."  ERRORS: "Refer to fgetc."
+ *
+ * Status, stated rather than editorialised: gets() was removed from the
+ * C standard by C11 and POSIX.1-2017 marks it [OB] (obsolescent), with
+ * a RATIONALE saying so and a FUTURE DIRECTIONS saying it "may be
+ * removed in a future version" -- but it is still normatively specified
+ * in the edition this audit is against, so it is audited.  ntlibc does
+ * implement it: src/stdio/rw.c guards the definition with
+ * `#if __STDC_VERSION__ < 201112L`, and this tree builds at -std=c99
+ * (configure's CFLAGS_C99FSE), so the guard is satisfied and the symbol
+ * is in lib/libc.a; include/stdio.h declares it unconditionally.
+ *
+ * The buffer here is far larger than any line the test itself writes,
+ * so the APPLICATION USAGE hazard ("Reading a line that overflows the
+ * array pointed to by s results in undefined behavior") is not
+ * exercised -- there is no conforming way to exercise it. */
+static void test_gets(const char *name)
+{
+	FILE *f;
+	char g[64];
+	char *p;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fputs("line1\nline2", f) == 0);
+	CHECK(fclose(f) == 0);
+
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+
+	/* a newline-terminated line: the <newline> is discarded */
+	memset(g, '#', sizeof g);
+	p = gets(g);
+	CHECK(p == g);
+	CHECK(!strcmp(g, "line1"));
+	CHECK(g[6] == '#');          /* the NUL went immediately after */
+
+	/* the last line, ended by end-of-file rather than a <newline> */
+	memset(g, '#', sizeof g);
+	p = gets(g);
+	CHECK(p == g);
+	CHECK(!strcmp(g, "line2"));
+
+	/* "if the stream is at end-of-file, the end-of-file indicator for
+	 * the stream shall be set and gets() shall return a null pointer" */
+	memset(g, '#', sizeof g);
+	p = gets(g);
+	CHECK(p == 0);
+	CHECK(feof(stdin) != 0);
+	/* "If the end-of-file indicator for the stream is set" -- a second
+	 * call with the indicator already set is a null pointer too */
+	CHECK(gets(g) == 0);
+
+	/* "If a read error occurs, the error indicator for the stream shall
+	 * be set, gets() shall return a null pointer, and set errno":
+	 * fgetc.html [EBADF], reached by pointing stdin at a stream that is
+	 * not open for reading. */
+	if (!freopen(name, "wb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	memset(g, '#', sizeof g);
+	p = gets(g);
+	CHECK(p == 0);
+	CHECK(errno == EBADF);
+	CHECK(ferror(stdin) != 0);
+	clearerr(stdin);
+}
+
+/* ctermid.html.  DESCRIPTION: "shall generate a string that, when used
+ * as a pathname, refers to the current controlling terminal for the
+ * current process.  If ctermid() returns a pathname, access to the file
+ * is not guaranteed."  RETURN VALUE: "If s is a null pointer, the
+ * string shall be generated in an area that may be static, the address
+ * of which shall be returned.  ...  If s is not a null pointer, s is
+ * assumed to point to a character array of at least L_ctermid bytes;
+ * the string is placed in this array and the value of s shall be
+ * returned.  The symbolic constant L_ctermid is defined in <stdio.h>,
+ * and shall have a value greater than 0.  The ctermid() function shall
+ * return an empty string if the pathname that would refer to the
+ * controlling terminal cannot be determined, or if the function is
+ * unsuccessful."  ERRORS: "No errors are defined."
+ *
+ * Every one of those is checkable here.  Note what is deliberately not
+ * asserted: that the returned pathname can be opened.  The DESCRIPTION
+ * says outright that "access to the file is not guaranteed", so
+ * ntlibc's fixed "/dev/tty" (src/stdio/misc.c) is conforming on a
+ * platform with no such path -- the clause it would violate is the
+ * empty-string one, and only if the pathname "cannot be determined",
+ * which is a statement about the implementation's own knowledge, not
+ * about whether open() would succeed.  The two branches are asserted to
+ * agree with each other, which is the strongest portable statement
+ * available.
+ *
+ * "The application shall not modify the string returned" is a
+ * constraint on the caller, so there is nothing to assert; it is why
+ * the NULL-argument result is only read here.  L_ctermid is 20 in
+ * include/stdio.h, comfortably above the 9 bytes the implementation
+ * copies -- checked below rather than assumed, since a too-small
+ * L_ctermid with a strcpy() behind it is a buffer overflow in the
+ * caller's array. */
+static void test_ctermid(void)
+{
+	char t[L_ctermid];
+	char *p, *q;
+
+	/* "shall have a value greater than 0" */
+	CHECK(L_ctermid > 0);
+
+	memset(t, '#', sizeof t);
+	p = ctermid(t);
+	/* "the string is placed in this array and the value of s shall be
+	 * returned" */
+	CHECK(p == t);
+	/* it must fit in the L_ctermid bytes the caller was told to supply */
+	CHECK(strnlen(t, sizeof t) < sizeof t);
+
+	/* "If s is a null pointer, the string shall be generated in an area
+	 * that may be static, the address of which shall be returned." */
+	q = ctermid(NULL);
+	CHECK(q != 0);
+	/* the two forms must describe the same terminal */
+	CHECK(q != 0 && !strcmp(q, t));
+
+	/* "shall return an empty string if the pathname ... cannot be
+	 * determined": ntlibc always determines one, so the complement is
+	 * what holds here.  Either outcome is conforming; asserting the
+	 * measured one pins the behaviour. */
+	CHECK(strlen(t) > 0);
+}
+
+/* flockfile.html, the whole page, and the verdict this audit reaches on
+ * it.
+ *
+ * DESCRIPTION: "The functions shall behave as if there is a lock count
+ * associated with each (FILE *) object.  This count is implicitly
+ * initialized to zero when the (FILE *) object is created.  The (FILE
+ * *) object is unlocked when the count is zero.  When the count is
+ * positive, a single thread owns the (FILE *) object.  When the
+ * flockfile() function is called, if the count is zero or if the count
+ * is positive and the caller owns the (FILE *) object, the count shall
+ * be incremented.  Otherwise, the calling thread shall be suspended,
+ * waiting for the count to return to zero.  Each call to funlockfile()
+ * shall decrement the count."  RETURN VALUE: "None for flockfile() and
+ * funlockfile().  The ftrylockfile() function shall return zero for
+ * success and non-zero to indicate that the lock cannot be acquired."
+ * ERRORS: "No errors are defined."
+ *
+ * N/A, with the mechanism named, for every clause that distinguishes a
+ * real lock from a no-op -- the suspension rule, the "a single thread
+ * owns" rule, and ftrylockfile()'s non-zero return.  ntlibc has no
+ * threads at all: there is no <pthread.h> in include/ (POSIX-GAP-
+ * ACCOUNTING.md lists all 102 pthread interfaces as Absent), and
+ * lib/libpthread.a is an 8-byte empty archive -- the "!<arch>\n"
+ * magic and nothing else -- built purely so that `-lpthread` links.
+ * With exactly one thread of control, the lock count can only ever be
+ * incremented by its owner, so the "Otherwise, the calling thread shall
+ * be suspended" branch is unreachable, ftrylockfile() can never fail,
+ * and src/stdio/file.c's no-ops are indistinguishable from a correct
+ * recursive mutex by any conforming program.  That is N/A by mechanism,
+ * not UNIMPL: nothing was declined, the distinguishing observation does
+ * not exist on this platform.
+ *
+ * What remains and is asserted: ftrylockfile()'s success return, that
+ * nesting is permitted, and that the intervening stdio calls the page
+ * requires to work inside a held lock ("All functions that reference
+ * (FILE *) objects, except those with names ending in _unlocked, shall
+ * behave as if they use flockfile() and funlockfile() internally")
+ * really do -- a no-op that had accidentally become a self-deadlocking
+ * real lock would hang exactly here.  A separate note for the record:
+ * this is a no-op that would be *wrong* the day threads arrive, so it
+ * is N/A only for as long as the empty libpthread.a stays empty. */
+static void test_flockfile_nesting(const char *name)
+{
+	FILE *f;
+	int c;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	/* "shall return zero for success" on an unlocked stream */
+	CHECK(ftrylockfile(f) == 0);
+	/* "if the count is positive and the caller owns the (FILE *)
+	 * object, the count shall be incremented" -- nested acquisition by
+	 * the owner, by both spellings */
+	flockfile(f);
+	CHECK(ftrylockfile(f) == 0);
+	/* a locked stream still serves ordinary (locking) stdio calls to
+	 * its owner */
+	CHECK(fputs("ab", f) == 0);
+	CHECK(fflush(f) == 0);
+	/* "Each call to funlockfile() shall decrement the count" */
+	funlockfile(f);
+	funlockfile(f);
+	funlockfile(f);
+	CHECK(fclose(f) == 0);
+
+	/* getc_unlocked.html: the _unlocked forms are "functionally
+	 * equivalent to the original versions" and are the reason the
+	 * flockfile() scope exists at all ("The only case where the use of
+	 * flockfile() and funlockfile() is required is to provide a scope
+	 * protecting uses of the *_unlocked functions/macros" --
+	 * flockfile.html RATIONALE). */
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	flockfile(f);
+	c = getc_unlocked(f);
+	CHECK(c == 'a');
+	CHECK(getc(f) == 'b');
+	CHECK(getc_unlocked(f) == EOF);
+	funlockfile(f);
+	CHECK(fclose(f) == 0);
+}
+
+
 int main(void)
 {
 	char *name = make_tmp("posix-stdio-XXXXXX");
@@ -1443,6 +1667,7 @@ int main(void)
 	test_snprintf_boundaries();
 	test_printf_width_precision();
 	test_sscanf_clauses();
+	test_ctermid();
 
 	name = make_tmp("posix-stdio2-XXXXXX");
 	CHECK(name != 0);
@@ -1450,15 +1675,17 @@ int main(void)
 		test_putc_family(name);
 		test_fseeko_ftello(name);
 		test_flockfile(name);
+		test_flockfile_nesting(name);
 		test_v_forms(name);
 		test_getc_unlocked(name);
 		test_tempnam();
 		test_printf_output_error(name);
 		test_dprintf_fd_path(name);
 		test_fscanf_stream_clauses(name);
-		/* these two repoint stdin at the temp file and leave it there */
+		/* these three repoint stdin at the temp file and leave it there */
 		test_vprintf_vscanf(name);
 		test_getchar(name);
+		test_gets(name);
 		remove(name);
 		free(name);
 	}
