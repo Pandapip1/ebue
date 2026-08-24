@@ -121,23 +121,6 @@ int utime(const char *path, const struct utimbuf *ub)
 	return utimensat(AT_FDCWD, path, ts, 0);
 }
 
-int futimes(int fd, const struct timeval tv[2])
-{
-	struct timespec ts[2];
-	if (!tv) return futimens(fd, 0);
-	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
-	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
-	return futimens(fd, ts);
-}
-int lutimes(const char *path, const struct timeval tv[2])
-{
-	struct timespec ts[2];
-	if (!tv) return utimensat(AT_FDCWD, path, 0, AT_SYMLINK_NOFOLLOW);
-	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
-	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
-	return utimensat(AT_FDCWD, path, ts, AT_SYMLINK_NOFOLLOW);
-}
-
 int futimesat(int dirfd, const char *path, const struct timeval tv[2])
 {
 	struct timespec ts[2];

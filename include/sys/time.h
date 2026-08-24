@@ -41,9 +41,7 @@ struct timezone {
 	int tz_minuteswest;
 	int tz_dsttime;
 };
-int futimes(int, const struct timeval [2]);
 int futimesat(int, const char *, const struct timeval [2]);
-int lutimes(const char *, const struct timeval [2]);
 int settimeofday(const struct timeval *, const struct timezone *);
 int adjtime (const struct timeval *, struct timeval *);  /* undefined-ok:
 	adjtime() means a *gradual* slew towards the target, applied a little

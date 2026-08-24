@@ -526,7 +526,7 @@ not every clause line, to keep this section a manageable size):
 | isatty / ttyname / ttyname_r | covered, except ttyname_r ERANGE (only reachable from a real console fd; test detects and skips) | test/unistd.c, test/posix-unistd.c |
 | getpid / getppid / sysconf / pathconf / umask | covered | test/unistd.c, test/posix-unistd.c |
 | fpathconf (agrees with pathconf, errno untouched on success, not more restrictive than `<limits.h>` minimums, EINVAL on a bad name) | covered; optional [EBADF] N/A — `fpathconf()` ignores `fildes`, which POSIX permits because that error is "may fail" | test/posix-unistd.c `test_fpathconf` |
-| utimensat / futimens / utime / futimes / lutimes / futimesat | covered | test/unistd.c |
+| utimensat / futimens / utime / futimesat | covered | test/unistd.c |
 | utimes (XSI; tv_usec scaled to tv_nsec, null `times` == now, ENOENT incl. the empty string) | covered | test/unistd.c, test/posix-unistd.c `test_utimes` |
 | nanosleep (`src/unistd/sleep.c`) | covered (sanity, via test/unistd.c; not separately clause-cited) | test/unistd.c |
 
