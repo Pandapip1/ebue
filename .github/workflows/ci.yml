@@ -388,7 +388,9 @@ jobs:
           $ErrorActionPreference = "Stop"
           $failed = $false
           $unverified = 0
+          $ran = 0
           Get-ChildItem -Path test-exes -Filter *.exe | Sort-Object Name | ForEach-Object {
+            $ran += 1
             Write-Host "Running $($_.Name)"
             & $_.FullName
             $rc = $LASTEXITCODE
@@ -406,6 +408,24 @@ jobs:
               Write-Host "FAIL $($_.Name) (rc=$rc)"
               $failed = $true
             }
+          }
+          # A floor, for the same reason tools/runtests.sh and
+          # tools/asan-build.sh have one: $failed can only become true
+          # inside the loop body, so an empty test-exes/ directory runs
+          # the body zero times, leaves $failed false, and exits 0 --
+          # this leg reporting green having executed nothing.  That is
+          # not hypothetical for a download step: a rename of the
+          # artifact, an upload that produced a differently-shaped
+          # directory, or a matrix leg whose artifact does not exist all
+          # end here.  The upload side is already guarded
+          # (if-no-files-found: error in build-test-exes); this is the
+          # download-and-run side, and it is the leg that caught the
+          # METHOD_BUFFERED IOCTL_AFD_SELECT bug, which no other leg
+          # could see.
+          Write-Host "$ran test binary/binaries ran"
+          if ($ran -eq 0) {
+            Write-Host "FAILED: no test binaries were found under test-exes/; this job verified nothing"
+            exit 1
           }
           if ($unverified -gt 0) {
             Write-Host "$unverified test binary/binaries reported unverified (rc=77)"
