@@ -261,10 +261,19 @@ static int network_probe(void)
 		return -1;
 	}
 	if (bind(s, (struct sockaddr *)&addr, make_loopback_addr(&addr)) < 0) {
-		printf("SKIP posix-socket network tests (bind() failed, errno=%d -- "
-		       "this environment's Wine does not implement AFD ioctls against a "
-		       "handle opened the portable NtCreateFile+EA way; see this file's "
-		       "banner and test/networking-audit.md sec 1)\n", errno);
+		/* Report the call and its errno and stop there.  This message
+		 * used to blame Wine's AFD, which was true of the environment
+		 * it was written in and is false on the real-Windows CI legs,
+		 * where socket() now succeeds and the same line prints.  A
+		 * failing bind() cannot tell the two apart from here: the
+		 * ioctl either was not understood or was understood and the
+		 * address rejected, and only the errno distinguishes them.
+		 * test/posix-socket-bind.c checks the request's byte layout
+		 * with no device at all, which is the part this cannot. */
+		printf("SKIP posix-socket network tests (bind() failed, errno=%d; "
+		       "IOCTL_AFD_BIND on a \\Device\\Afd\\Endpoint handle -- "
+		       "see test/posix-socket-bind.c and test/networking-audit.md sec 1)\n",
+		       errno);
 		close(s);
 		unverified++;
 		return -1;
