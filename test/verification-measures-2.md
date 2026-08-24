@@ -380,3 +380,190 @@ indistinguishable from a red `asan` leg with a real bug in it -- and on
 `06f3203` that leg is red for *both* reasons at once, one
 configuration-dependent assertion and one genuine heap-buffer-overflow,
 reported side by side.
+
+### N5: pin the reference, and probe the target
+
+**Catches: F3 (3 fences) and the class the seven ReactOS-versus-real-
+Windows errors belong to. Catches nothing else.**
+
+F3's three fences and the seven ReactOS errors are the same defect: the
+code is faithful to a reference and the reference is wrong about the
+target. `src/math/fenv.c`'s `0x037F` is musl's correct value *for
+Linux*; NT starts a thread at `0x027F`. ReactOS's sub-page
+`SectionAlignment`, its 24-byte `AFD_OPEN_PACKET`, its 12-byte AFD
+create packet, its `AFD_POLL_INFO` and `AFD_CONNECT_INFO` layouts, its
+`FileBasicInformation` access rule and its `Information` truncation were
+each correct about ReactOS.
+
+Measured on `06f3203`: `src/` cites a third-party reference **217
+times** -- Wine 84, ReactOS 61, phnt 27, mingw 21, musl 20, the Intel
+SDM 4. Exactly **one** of those citations sits next to anything
+resembling a revision. Twelve places claim a measurement on real NT.
+
+Two things follow, and they are separable.
+
+**The cheap half, which is a lint.** A citation of a reference
+implementation must name a pinned revision, because a citation of a
+branch is a citation of whatever that branch says today. This is not
+hypothetical bookkeeping: this project has three multi-writer reference
+trees under `/tmp/claude/repos/`, one of which carries six unpushed
+local commits, so "what ReactOS does" has already been quoted back from
+a local patch at least once. The check is a grep over comment blocks
+mentioning a known reference name for an accompanying `<= 40 hex`
+revision, and the fix is `git show <sha>:path` rather than a branch
+name. Cost: one grep; 217 sites to annotate once, which is real work but
+mechanical and can be done incrementally against a baseline count.
+
+**The expensive half, which is the one that actually catches the bug.**
+A constant taken from a reference must have a **probe** that measures the
+same quantity on the target, and the probe must run on the leg that has
+a real target -- `.github/workflows/ci.yml`'s Server 2025 job. The
+`fenv` fence shows both the shape and the timing: it says the NT value
+was "verified with a bare `-nostdlib` PE", which means the probe was
+written *after* the defect was found. As a standing CI check the same
+probe is the guard.
+
+**Cost.** The lint: 0.05 s and a 217-line annotation backlog. The
+probes: one small program per quantity, on the real-Windows leg only,
+seconds each. There is no local substitute -- under Wine every one of
+these probes reports Wine's answer, which is the whole problem.
+
+**Honest limit, stated plainly.** The probe half cannot be written
+generically. Somebody has to decide, per constant, what measures it on
+NT. It is a convention with a lint attached, not a check, and it will
+only ever cover the constants somebody thought to probe. Its value is
+that it moves the measurement from *after* the defect to *before* it.
+
+### N6: compare what arrived, not that something arrived
+
+**Catches: the shape shared by three defects. Mostly already covered,
+and the remainder is a review rule.**
+
+Three defects in this project's recent history are one shape: a
+transport silently dropping data the producer genuinely wrote.
+`IOCTL_AFD_SELECT`'s `METHOD_BUFFERED` reply overwrote the request;
+ReactOS truncated `Information`; `objcopy` carried an ELF relocation
+*number* into a COFF record so `R_X86_64_PC32` became `R_AMD64_DIR32`,
+turning PC-relative into absolute with no diagnostic. The `objcopy` case
+is the clearest, because the verification of it failed the same way the
+tool did: five relocations in, five relocations out, reported as
+"measured, works". Two of the five were right by coincidence.
+
+The rule -- *compare types, not counts* -- is correct and it is not a
+script. I looked for a mechanical form and the honest answer is that
+most of it is already taken. The first document's M4 (bound every read
+of an out-parameter by the returned count) and M9 (assert the PE
+header's fields, not the file's size) are the two places where this
+shape *has* a technical form, and both are proposed there.
+
+What is left that is mechanical and is not already proposed: **54 NT
+calls in `src/*.c` take an out-buffer** (`NtDeviceIoControlFile`,
+`NtFsControlFile`, `NtQueryInformationFile`,
+`NtQueryVolumeInformationFile`, `NtQueryDirectoryFile`, `NtReadFile`),
+across fifteen files, and twenty files read an `Information` field
+somewhere. Reconciling those two sets per call site -- rather than per
+file, which is all a grep gives -- is the check, and it is
+`clang-query`-shaped rather than `grep`-shaped. At three AFD sites the
+first document already proposes doing it by hand.
+
+**Verdict: fold into M4 rather than adopting separately.** Recorded here
+because the *rejection* is the useful part: "check what arrives" is a
+review rule wearing a script's clothes everywhere except the two places
+the first document already names.
+
+## Rejected, with reasons
+
+### A differential regex oracle against glibc -- rejected on measurement
+
+This is the obvious answer to F4's thirteen semantic fences, and it is
+the one candidate in this document I most wanted to work. `fuzz/
+host_oracle.c` already reaches glibc through `dlopen("libc.so.6")`
+precisely so that ntlibc's own hidden symbols cannot win the link, so
+adding `regcomp`/`regexec`/`regfree` to it is fifteen lines.
+
+Prototyped and measured. The harness compiles the same pattern with
+ntlibc and glibc under BRE, ERE and `REG_ICASE`, and compares
+accept/reject, match/no-match and the extent of match 0.
+
+*Accept/reject, 120 s, one seed:* **59 distinct mismatching patterns**,
+and every one of them falls into two buckets:
+
+- `ntlibc 0 / glibc 13` -- ntlibc accepts a repeat applied to a
+  zero-width assertion (`$+`, `$*`), glibc answers `REG_BADRPT`;
+- `ntlibc 8 / glibc 0` -- ntlibc rejects an unmatched `)` where glibc
+  accepts it as an ordinary character.
+
+The first bucket is arguably real and is a sibling of the fenced `^*a`
+defect. The second is POSIX-undefined behaviour where glibc has picked a
+lenient reading. Neither is a *finding* in the sense a gate can act on.
+
+*Match/extent, with accept/reject suppressed, 120 s:* **956 + 401
+match/no-match mismatches** and roughly 150 extent mismatches, dominated
+by BRE `\|` -- a GNU alternation extension glibc implements and POSIX
+does not have. The single largest extent-mismatch class,
+`[^Ao].*\xc3?` reporting 11 or 12 where glibc reports 3, is
+leftmost-first versus leftmost-longest: fence
+`test/posix-glob.c:1989`, correctly identified, and buried under a
+thousand results that are not defects.
+
+**Rejected.** A differential oracle is only usable when the two
+implementations agree on what they are implementing, and here they do
+not: glibc's default regex is a POSIX superset with GNU extensions, and
+POSIX leaves several of the disputed cases undefined. Making it usable
+means writing down the equivalence relation -- which patterns the two
+are required to agree on -- and that document is the specification
+reading that F4 needs anyway. The oracle would then only confirm what
+writing it taught you. **A per-clause table, not an oracle**, is the
+answer to F4, and that is what `test/POSIX-COVERAGE.md` already is.
+
+Note the asymmetry with N1: the *same* harness, with the oracle removed
+and only ASan and UBSan watching, produced two real defects and zero
+false positives. Fuzz the four modules; do not point them at glibc.
+
+### A required-errno table scraped from POSIX -- rejected on cost, for now
+
+This is the strongest candidate against the dominant defect shape, and
+it is the only one I am rejecting reluctantly.
+
+The consuming half is cheap and already measured: `test/*.c` contains
+**416** `errno == E...` assertions over **31** distinct codes, of which
+**297 (71%)** name the function on the same line, so "which errnos does
+the suite assert for this function" is a two-second grep.
+
+The producing half is the problem. There is no machine-readable source
+for "the errnos POSIX requires this function to produce, and which of
+them are *shall*-fail". I checked the obvious in-tree substitute:
+`test/POSIX-COVERAGE.md` has 585 table rows, of which only **45** name
+an `[Exxx]` code in brackets and **20** distinct codes appear at all. It
+is a clause ledger, not an ERRORS database, and building the latter
+means scraping the ERRORS section of several hundred Open Group pages
+and hand-classifying shall-versus-may -- with the classification
+re-checked whenever a page is revised, since a wrong entry produces a
+confident false finding, which is worse than no finding.
+
+**Rejected as a gate; recommended as a bounded piece of work.** The
+right size is not "all of POSIX". It is the 66 functions
+[N2](#n2-assert-that-a-function-can-fail) already names. Sixty-six
+ERRORS sections is an afternoon, the output is a table small enough to
+review, and every row of it is a test somebody should write. Do that
+first; decide about the general case afterwards, with a hit rate to
+argue from.
+
+### Property-based testing of the pattern-matching modules -- rejected
+
+The natural answer to F4 that is not a differential oracle: assert
+algebraic properties instead of results -- `fnmatch(p, s)` agrees with
+`glob` on a directory containing exactly `s`; `regexec` on `a|b` matches
+iff `regexec` on `a` or on `b` matches; `wordexp` of a fully-quoted word
+yields exactly one field. I could not construct a property that
+discriminates any of the thirteen F4 fences without restating the fence.
+Leftmost-longest is not a property of the answer, it is the definition
+of the answer. `GLOB_MARK`'s trailing slash is not derivable from
+anything else `glob` does. **No measurement supports this one, and that
+is why it is rejected**: I could not find the property, not that I
+measured it and it was slow.
+
+### A "device-free tests must be byte-identical across legs" check -- rejected, see below
+
+Evaluated at length in the next section, because the drafted design is
+worth more than a one-line rejection.
