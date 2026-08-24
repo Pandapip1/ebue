@@ -714,7 +714,7 @@ finer-grained than the note it would carry.
    |---|---|---|
    | `termios.h` | 11 | `test/posix-termios.c` |
    | `search.h` | 11 | `test/posix-glob.c` (partly) |
-   | `fenv.h` | 11 | `test/math.c` (partly) |
+   | `fenv.h` | 11 | `test/posix-math.c` (partly) |
    | `arpa/inet.h` | 8 | `test/posix-socket.c` |
    | `pwd.h` | 7 | `test/pwd.c` |
    | `grp.h` | 7 | `test/posix-grp.c` |

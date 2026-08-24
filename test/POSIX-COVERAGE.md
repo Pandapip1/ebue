@@ -1512,3 +1512,147 @@ return a null pointer if there is not enough space available to create
 a new node" both need a real allocation failure, which this ledger
 already records as unforceable for every other header. Nothing else in
 this header is out of reach: it has no OS dependency at all.
+
+## fenv.h (successor-queue item 2, group C)
+
+Third of the twelve. `test/POSIX-GAP-ACCOUNTING.md` names `test/math.c`
+as this header's test file; that is wrong — `test/math.c` asserts
+nothing about `<fenv.h>` at all (its `fe` matches are substrings of
+English prose in comments). The real coverage is in
+`test/posix-math.c`'s `test_errhandling()`, which reaches most of the
+header incidentally on its way to `math.h`'s `math_errhandling`
+contract. This pass audited the eleven functions' own spec pages
+against it.
+
+**Oracle: pure C library, so Wine is a sound oracle** — with one
+qualification worth stating, because it is the opposite of the usual
+one. Nothing here makes an NT call, so Wine cannot diverge; but the
+FPU *is* real hardware in both cases, and one row below turns on what
+NT hands a thread at startup rather than on anything ntlibc or Wine
+does. That row is written to compare against the environment the test
+captures for itself rather than a hardcoded constant, so it holds on
+real Windows too.
+
+Rows below are what this pass *added* or *found*; `test_errhandling()`'s
+existing coverage (macro values, the flags against real hardware
+exceptions, one exceptflag round trip, one round round trip,
+`feholdexcept`/`feupdateenv(&env)`) is not repeated.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| feclearexcept | "shall return zero if the excepts argument is zero" — and shall clear nothing | covered | test/posix-math.c (`test_fenv_zero_argument`) |
+| feraiseexcept | the same clause for a zero argument — and shall raise nothing | covered | test/posix-math.c (`test_fenv_zero_argument`) |
+| feraiseexcept | "shall attempt to raise the supported floating-point exceptions represented by the excepts argument" — exactly those become set | covered | test/posix-math.c (`test_fenv_raise_exact_set`) |
+| feraiseexcept | "Whether ... additionally raises the inexact ... whenever it raises the overflow or underflow ... is implementation-defined" | covered — this implementation's answer is "no", recorded rather than assumed | test/posix-math.c (`test_fenv_raise_exact_set`) |
+| feraiseexcept | "the order in which these floating-point exceptions are raised is unspecified" | N/A — unspecified, and unobservable anyway while every exception is masked (which, per BUG 3 below, is not something this library actually guarantees) | — |
+| fetestexcept | "the bitwise-inclusive OR of the ... macros corresponding to the currently set ... exceptions **included in excepts**" — the result is a subset of the argument, not the whole status word | covered | test/posix-math.c (`test_fenv_testexcept_subset`) |
+| fegetexceptflag / fesetexceptflag | "shall return zero if excepts is zero" | covered | test/posix-math.c (`test_fenv_zero_argument`) |
+| fesetexceptflag | "does not raise floating-point exceptions, but only sets the state of the flags" | N/A — `src/math/fenv.c` sets the sticky bits directly and never issues a floating-point operation, so no trap can be synthesised to observe; conforming by construction, and unobservable while BUG 3 leaves the mask state unmanaged | — |
+| fegetexceptflag / fesetexceptflag | "shall have been set by a previous call to fegetexceptflag() whose second argument represented at least those exceptions" | N/A — a caller obligation; violating it is undefined, not a testable implementation requirement | — |
+| fesetround | "If the argument is not equal to the value of a rounding direction macro, the rounding direction is not changed" | covered — all four macros, not just one; the existing test checked only that a bad value returns non-zero | test/posix-math.c (`test_fenv_round_modes`) |
+| fegetround / fesetround | basedefs/fenv.h.html: the four rounding-direction macros have "distinct non-negative values" | covered | test/posix-math.c (`test_fenv_round_modes`) |
+| fegetround / fesetround | the rounding direction is the one *arithmetic obeys* — a plain `double` division changes result across the modes | covered | test/posix-math.c (`test_fenv_round_affects_arithmetic`) |
+| fegetround | "or a negative value if there is no such rounding direction macro or the current rounding direction is not determinable" | N/A — the x87/SSE rounding-control field is two bits and all four encodings name a defined macro, so no negative return is reachable | — |
+| fegetenv / fesetenv | fesetenv "shall attempt to establish the floating-point environment represented by the object pointed to by envp" — a full round trip carrying both the rounding direction and the status flags | covered — nothing asserted `fesetenv()` directly before | test/posix-math.c (`test_fenv_env_roundtrip`) |
+| fegetenv | "shall attempt to **store** the current floating-point environment in the object pointed to by envp" — a getter must not modify what it reads | **BUG (fenced)** — see below | test/posix-math.c (`test_fenv_getenv_does_not_modify`) |
+| feholdexcept | "install a non-stop (continue on floating-point exceptions) mode, if available, for all floating-point exceptions", and "shall return zero if and only if non-stop floating-point exception handling was successfully installed" | **BUG (fenced)** — see below | test/posix-math.c (`test_fenv_holdexcept_installs_nonstop`) |
+| feupdateenv | "save the currently raised floating-point exceptions ..., install the floating-point environment ..., and then attempt to **raise the saved** floating-point exceptions" | covered — against `FE_DFL_ENV`, which carries no status flags of its own, so anything set afterwards can only have come from the re-raise; the existing `feupdateenv(&env)` test cannot distinguish that from installing an environment that already had them | test/posix-math.c (`test_fenv_updateenv_reraises`) |
+| `<fenv.h>` | "FE_DFL_ENV ... represents the default floating-point environment (that is, the one installed at program startup)" | **BUG (fenced)** — see below | test/posix-math.c (`test_fenv_dfl_env_is_startup_env`) |
+| `<fenv.h>` | FE_ALL_EXCEPT is "the bitwise-inclusive OR of all floating-point exception macros defined by the implementation" | covered (pre-existing) | test/posix-math.c (`test_errhandling`) |
+
+### Bugs found (fenv.h)
+
+1. **`FE_DFL_ENV` is not the environment installed at program startup.**
+   `basedefs/fenv.h.html` defines it as exactly that.
+   `src/math/fenv.c` hardcodes an x87 control word of `0x037F`, taken
+   from musl's Linux x86_64 fenv code where `0x037F` *is* the Linux
+   startup value. NT starts a thread with `0x027F` — verified with a
+   bare `-nostdlib` PE that does nothing but `fnstcw` at its entry
+   point, so it is the kernel-supplied initial thread state and not
+   something `crt/crt1.c` establishes (that file contains no FPU
+   initialisation at all).
+
+   The two differ in the precision-control field (bits 8-9): `0x027F`
+   is 53-bit (double) precision, `0x037F` is 64-bit (extended). Every
+   call to `fesetenv(FE_DFL_ENV)` — including the one inside
+   `feupdateenv(FE_DFL_ENV)` — therefore silently widens x87
+   precision, changing the double-rounding behaviour of every
+   `src/math/x87.h` helper on both arches and of all plain `double`
+   arithmetic on i386, where `include/fenv.h`'s own banner records
+   that tcc emits x87 rather than SSE. The MXCSR half of `FE_DFL_ENV`
+   is correct: `0x1F80` is measured to be the startup value.
+
+   Test (fenced): `test_fenv_dfl_env_is_startup_env`. It compares
+   against an environment `main()` captures for itself rather than a
+   hardcoded word, so it is equally valid on real Windows.
+
+2. **`fegetenv()` modifies the environment it is specified only to
+   store.** `fegetenv.html`: "shall attempt to **store** the current
+   floating-point environment in the object pointed to by envp."
+
+   `src/math/fenv.c`'s `fegetenv()` is a bare `FNSTENV` with no
+   restoring `FLDENV`. Per the Intel SDM's FSTENV/FNSTENV description
+   the instruction, after saving, *masks all floating-point
+   exceptions* — so `fegetenv()` silently masks every x87 exception as
+   a side effect. glibc's x86 `fegetenv()` issues an `FLDENV` of the
+   just-saved image for exactly this reason; musl's x86_64 version has
+   the same defect ntlibc inherited. Measured: control word `0x027B`
+   (divide-by-zero unmasked) before the call, `0x027F` after.
+
+   Test (fenced): `test_fenv_getenv_does_not_modify`. It uses inline
+   x86 asm, since POSIX provides no way to unmask an exception —
+   safe, because fenced code is never compiled.
+
+3. **`feholdexcept()` returns success without installing non-stop
+   mode.** `feholdexcept.html` requires it to "install a non-stop
+   (continue on floating-point exceptions) mode ... for all
+   floating-point exceptions" and to "return zero **if and only if**
+   non-stop floating-point exception handling was successfully
+   installed."
+
+   `src/math/fenv.c`'s implementation is `fegetenv()` plus
+   `feclearexcept(FE_ALL_EXCEPT)` plus an unconditional `return 0`.
+   Neither callee sets a mask bit. The x87 half is masked only by
+   accident, via BUG 2's `FNSTENV` side effect — so fixing BUG 2 makes
+   this one *worse*. MXCSR is never touched at all: `feclearexcept()`'s
+   MXCSR path clears status bits 0-5 and never the mask bits at 7-12.
+   On x86_64 that is the unit tcc emits every `double` operation into,
+   so a caller who unmasked divide-by-zero and then called
+   `feholdexcept()` expecting a non-stop region still takes a hardware
+   exception on the first `1.0/0.0` — while `feholdexcept()` reported
+   the success the RETURN VALUE clause makes conditional on precisely
+   that not happening. Measured: x87 CW `0x027F` (masked, by accident)
+   but MXCSR `0x1D80`, ZM still clear, return value 0.
+
+   Test (fenced): `test_fenv_holdexcept_installs_nonstop`, inline asm
+   for the same reason as BUG 2, and `#ifndef __i386__` because MXCSR
+   is only part of `fenv_t` on the SSE arch.
+
+### Observed behaviour where POSIX permits latitude (fenv.h)
+
+- `FE_ALL_EXCEPT` is `0x3D`, the OR of exactly the five macros
+  `include/fenv.h` defines. It therefore excludes the x86 denormal
+  flag, which `feclearexcept(FE_ALL_EXCEPT)` consequently never
+  clears. That is what the clause requires ("all floating-point
+  exception macros **defined by the implementation**"), and is
+  stricter than musl, which uses `63` and so names a bit it does not
+  declare. Not a defect; recorded so it is not "fixed".
+
+- `fegetround()` reads the x87 control word on both arches, while on
+  x86_64 `double` arithmetic obeys MXCSR. Within this header's own API
+  the two never diverge — `fesetround()` writes both and
+  `fegetenv()`/`fesetenv()` round-trip both — so no clause is broken.
+  They *can* be made to disagree by installing an `fenv_t` whose two
+  rounding-control fields differ, which only foreign code touching one
+  unit could produce. Recorded as a latitude note rather than a BUG
+  row because no sequence of calls to this header alone can construct
+  it.
+
+### Not reached (fenv.h)
+
+`feraiseexcept()`'s unspecified ordering, and the "does not raise, only
+sets" guarantees of `fesetexceptflag()`/`fesetenv()`, all need an
+*unmasked* exception to be observable — and BUG 3 means this library
+does not manage mask state at all, so there is no supported way to
+reach that state through the header. Every remaining clause is
+covered.

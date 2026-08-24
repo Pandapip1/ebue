@@ -1587,8 +1587,372 @@ static void test_compare_macros(void)
 	CHECK(isless(1.0L, 2.0L) == 1 && isunordered((long double)NAN, 1.0L) == 1);
 }
 
+
+/* ==== <fenv.h>, clause by clause ==========================================
+ *
+ * test_errhandling() above reaches most of this header incidentally, on
+ * its way to math.h's math_errhandling contract: it pins the macro
+ * values, the flags against real hardware exceptions (sqrt(-1),
+ * log(0), DBL_MAX*DBL_MAX, DBL_MIN/1e16, 1.0/3.0), one
+ * fegetexceptflag/fesetexceptflag round trip, one fegetround/fesetround
+ * round trip, and feholdexcept/feupdateenv(&env). What follows are the
+ * clauses of the eleven functions' own spec pages that nothing checked
+ * -- test/POSIX-GAP-ACCOUNTING.md lists <fenv.h> as one of the headers
+ * test/POSIX-COVERAGE.md's priority order never named at all.
+ *
+ * The environment captured at the very top of main() is used below;
+ * every one of these functions can perturb the FPU, so "the environment
+ * installed at program startup" cannot be sampled from here.
+ */
+/* Captured as the very first thing main() does; see test_fenv_dfl_env_is_startup_env(). */
+fenv_t g_startup_env;
+int g_startup_env_ok;
+
+/* The x87 control word is the first two bytes of the FSTENV image that
+ * fenv_t wraps, on both arches. Read through unsigned char rather than
+ * fenv_t's members, which are implementation-private. Rounding control
+ * (bits 10-11) is masked off: fesetround() legitimately changes it, and
+ * the clauses below are about the rest of the word. */
+static unsigned fenv_x87_cw_no_rc(const fenv_t *e)
+{
+	const unsigned char *b = (const unsigned char *)e;
+	return ((unsigned)b[1] << 8 | b[0]) & ~0x0c00u;
+}
+
+/* feclearexcept.html/feraiseexcept.html/fetestexcept.html/
+ * fegetexceptflag.html RETURN VALUE, the clause each of the five flag
+ * functions states for a zero argument:
+ *   feclearexcept: "shall return zero if ... the argument is zero"
+ *   feraiseexcept: "shall return zero if ... excepts is zero"
+ *   fesetexceptflag: "shall return zero if excepts is zero or if all
+ *     the specified exceptions were successfully set"
+ * and fetestexcept's "bitwise-inclusive OR of the ... macros
+ * corresponding to the ... exceptions included in excepts", which for
+ * an empty subset is zero. A zero argument is the degenerate case an
+ * implementation that forgot to mask its input gets wrong. */
+static void test_fenv_zero_argument(void)
+{
+	fexcept_t f;
+
+	feclearexcept(FE_ALL_EXCEPT);
+	feraiseexcept(FE_INVALID);		/* something is set, so "returns 0" is not vacuous */
+	CHECK(feclearexcept(0) == 0);
+	CHECK(fetestexcept(FE_INVALID) == FE_INVALID);	/* ... and cleared nothing */
+	CHECK(feraiseexcept(0) == 0);
+	CHECK(fetestexcept(FE_INVALID) == FE_INVALID);	/* ... and raised nothing */
+	CHECK(fetestexcept(0) == 0);
+	CHECK(fegetexceptflag(&f, 0) == 0);
+	CHECK(fesetexceptflag(&f, 0) == 0);
+	feclearexcept(FE_ALL_EXCEPT);
+}
+
+/* fetestexcept.html RETURN VALUE: "shall return the value of the
+ * bitwise-inclusive OR of the floating-point exception macros
+ * corresponding to the currently set floating-point exceptions
+ * included in excepts." The "included in excepts" half -- that the
+ * result is a *subset* of the argument, not the whole status word --
+ * is what distinguishes a correct implementation from one that ignores
+ * its argument, and it was not checked. */
+static void test_fenv_testexcept_subset(void)
+{
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(feraiseexcept(FE_INVALID | FE_OVERFLOW) == 0);
+	CHECK(fetestexcept(FE_DIVBYZERO) == 0);		/* not raised: not reported */
+	CHECK(fetestexcept(FE_INVALID) == FE_INVALID);
+	CHECK(fetestexcept(FE_INVALID | FE_DIVBYZERO) == FE_INVALID);	/* subset, not the word */
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == (FE_INVALID | FE_OVERFLOW));
+	feclearexcept(FE_ALL_EXCEPT);
+}
+
+/* feraiseexcept.html DESCRIPTION: "The feraiseexcept() function shall
+ * attempt to raise the supported floating-point exceptions represented
+ * by the excepts argument" and "Whether the feraiseexcept() function
+ * additionally raises the inexact floating-point exception whenever it
+ * raises the overflow or underflow floating-point exception is
+ * implementation-defined." Both halves recorded: exactly what was
+ * asked for becomes set, and this implementation's answer to the
+ * implementation-defined question is "no". */
+static void test_fenv_raise_exact_set(void)
+{
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(feraiseexcept(FE_OVERFLOW) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == FE_OVERFLOW);	/* no gratuitous FE_INEXACT */
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(feraiseexcept(FE_OVERFLOW | FE_INEXACT) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == (FE_OVERFLOW | FE_INEXACT));
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(feraiseexcept(FE_UNDERFLOW) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == FE_UNDERFLOW);
+	feclearexcept(FE_ALL_EXCEPT);
+}
+
+/* fegetround.html DESCRIPTION: "The fesetround() function shall
+ * establish the rounding direction represented by its argument round.
+ * If the argument is not equal to the value of a rounding direction
+ * macro, the rounding direction is not changed." test_errhandling()
+ * checks that a bad value returns non-zero; the "not changed" half --
+ * the part that matters, since a failed call that had already written
+ * a partial control word would silently corrupt the mode -- was not
+ * checked. All four macros are exercised, not just one.
+ *
+ * basedefs/fenv.h.html additionally requires the four macros to have
+ * "distinct non-negative values". */
+static void test_fenv_round_modes(void)
+{
+	static const int modes[] = { FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO };
+	int i, j;
+
+	for (i = 0; i < 4; i++) {
+		CHECK(modes[i] >= 0);
+		for (j = i + 1; j < 4; j++) CHECK(modes[i] != modes[j]);
+	}
+	for (i = 0; i < 4; i++) {
+		CHECK(fesetround(modes[i]) == 0);
+		CHECK(fegetround() == modes[i]);
+		/* "the rounding direction is not changed" */
+		CHECK(fesetround(0xdead) != 0);
+		CHECK(fegetround() == modes[i]);
+	}
+	CHECK(fesetround(FE_TONEAREST) == 0);
+}
+
+/* fegetround.html DESCRIPTION again: the rounding direction is the one
+ * arithmetic actually obeys, so the checkable content of fesetround()
+ * is not that fegetround() agrees with it -- both could read the same
+ * wrong register -- but that a plain `double` division changes result.
+ * This is the assertion that would have caught a fesetround() which
+ * programmed only the x87 control word while tcc/x86_64 emits SSE
+ * (divsd) for `double` arithmetic; include/fenv.h's own banner
+ * documents that split, and src/math/fenv.c does program MXCSR, but
+ * nothing pinned it. `volatile` defeats constant folding. */
+static void test_fenv_round_affects_arithmetic(void)
+{
+	volatile double a = 1.0, b = 3.0, nearest, up, down;
+
+	CHECK(fesetround(FE_TONEAREST) == 0);
+	nearest = a / b;
+	CHECK(fesetround(FE_UPWARD) == 0);
+	up = a / b;
+	CHECK(fesetround(FE_DOWNWARD) == 0);
+	down = a / b;
+	CHECK(fesetround(FE_TONEAREST) == 0);
+	CHECK(up > down);
+	CHECK(nearest >= down && nearest <= up);
+}
+
+/* fegetenv.html/fesetenv.html DESCRIPTION: fesetenv() "shall attempt
+ * to establish the floating-point environment represented by the
+ * object pointed to by envp", where that object "shall be set by a
+ * call to fegetenv() or feholdexcept(), or equal a floating-point
+ * environment macro"; and it "does not raise floating-point
+ * exceptions, but only installs the state of the floating-point status
+ * flags represented through its argument." Nothing asserted fesetenv()
+ * directly at all -- a full round trip, including the status flags
+ * riding along inside the environment. */
+static void test_fenv_env_roundtrip(void)
+{
+	fenv_t saved, mid, back;
+
+	CHECK(fegetenv(&saved) == 0);
+
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(fesetround(FE_DOWNWARD) == 0);
+	CHECK(feraiseexcept(FE_DIVBYZERO | FE_INEXACT) == 0);
+	CHECK(fegetenv(&mid) == 0);
+
+	/* Perturb everything the captured environment describes ... */
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(fesetround(FE_UPWARD) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == 0);
+
+	/* ... then put it back, and find both halves restored. */
+	CHECK(fesetenv(&mid) == 0);
+	CHECK(fegetround() == FE_DOWNWARD);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == (FE_DIVBYZERO | FE_INEXACT));
+
+	CHECK(fegetenv(&back) == 0);
+	CHECK(fenv_x87_cw_no_rc(&back) == fenv_x87_cw_no_rc(&mid));
+
+	CHECK(fesetenv(&saved) == 0);
+	CHECK(fesetround(FE_TONEAREST) == 0);
+	feclearexcept(FE_ALL_EXCEPT);
+}
+
+/* feupdateenv.html DESCRIPTION: "The feupdateenv() function shall
+ * attempt to save the currently raised floating-point exceptions in
+ * its automatic storage, attempt to install the floating-point
+ * environment represented by the object pointed to by envp, and then
+ * attempt to raise the saved floating-point exceptions."
+ *
+ * test_errhandling() covers feupdateenv(&env) where env was captured
+ * with feholdexcept() -- but feholdexcept() saves an environment whose
+ * status flags may already carry the exceptions being tested, so a
+ * feupdateenv() that installed the environment and forgot to re-raise
+ * could still pass. FE_DFL_ENV is the strict form: it has no status
+ * flags at all, so anything set afterwards can only have come from the
+ * re-raise. */
+static void test_fenv_updateenv_reraises(void)
+{
+	fenv_t held;
+
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(feholdexcept(&held) == 0);
+	CHECK(feraiseexcept(FE_INVALID | FE_INEXACT) == 0);
+	CHECK(feupdateenv(FE_DFL_ENV) == 0);
+	CHECK(fetestexcept(FE_ALL_EXCEPT) == (FE_INVALID | FE_INEXACT));
+	feclearexcept(FE_ALL_EXCEPT);
+	CHECK(fesetround(FE_TONEAREST) == 0);
+}
+
+#if 0 /* BUG: basedefs/fenv.h.html -- FE_DFL_ENV "represents the
+	default floating-point environment (that is, the one installed
+	at program startup) and has type pointer to const-qualified
+	fenv_t."
+
+	fesetenv(FE_DFL_ENV) does not install the environment this
+	platform starts up with. src/math/fenv.c hardcodes an x87
+	control word of 0x037F, taken from musl's Linux x86_64 fenv
+	code, where 0x037F *is* the startup value. NT starts a thread
+	with 0x027F -- verified with a bare -nostdlib PE that does
+	nothing but fnstcw at its entry point, so it is the
+	kernel-supplied initial thread state and not something crt/
+	crt1.c sets (that file contains no FPU initialisation at all).
+
+	The two differ in the precision-control field (bits 8-9):
+	0x027F is 53-bit (double) precision, 0x037F is 64-bit
+	(extended). So any call to fesetenv(FE_DFL_ENV) -- including
+	the one inside feupdateenv(FE_DFL_ENV) -- silently widens x87
+	precision, changing the double-rounding behaviour of every
+	src/math/x87.h helper on both arches and of all plain `double`
+	arithmetic on i386, where include/fenv.h's banner records that
+	tcc emits x87 rather than SSE.
+
+	The MXCSR half is correct: 0x1F80 is measured to be the startup
+	value, and matches.
+
+	This test needs no hardcoded constant and so holds on real
+	Windows as well as under Wine: it compares FE_DFL_ENV against
+	the environment main() captured before anything else ran.
+	Rounding control is masked out because fesetround() may
+	legitimately have changed it in between.
+
+	Fix shape: capture the startup environment once (in crt1, or
+	lazily on first use) and install that, with the status flags
+	cleared, instead of a hardcoded word. */
+static void test_fenv_dfl_env_is_startup_env(void)
+{
+	fenv_t dfl;
+	CHECK(g_startup_env_ok);
+	CHECK(fesetenv(FE_DFL_ENV) == 0);
+	CHECK(fegetenv(&dfl) == 0);
+	CHECK(fenv_x87_cw_no_rc(&dfl) == fenv_x87_cw_no_rc(&g_startup_env));
+}
+#endif
+
+#if 0 /* BUG: fegetenv.html DESCRIPTION -- "The fegetenv() function
+	shall attempt to store the current floating-point environment in
+	the object pointed to by envp." Storing, not modifying: a getter
+	that changes what it read leaves the caller unable to save and
+	restore an environment, which is the function's entire purpose.
+
+	src/math/fenv.c's fegetenv() is a bare FNSTENV with no restoring
+	FLDENV. Per the Intel SDM's FSTENV/FNSTENV description, the
+	instruction, after saving the environment, "mask[s] all
+	floating-point exceptions" -- so fegetenv() silently masks every
+	x87 exception as a side effect. glibc's x86 fegetenv() issues an
+	FLDENV of the just-saved image for exactly this reason; musl's
+	x86_64 version has the same defect ntlibc inherited.
+
+	Not observable through this header alone, because nothing in
+	POSIX can unmask an exception -- feholdexcept() is specified to
+	go the other way. So the test has to reach the control word
+	directly, which is why it is written with inline asm and why it
+	is x86-specific; both arches this library builds for are x86, and
+	the asm is inside the fence so it is never compiled.
+
+	Measured on x86_64: control word 0x027B (divide-by-zero
+	unmasked) before the call, 0x027F (masked again) after.
+
+	Fix shape: follow the FNSTENV with an FLDENV of the image just
+	stored. Note this also removes the accident that currently makes
+	feholdexcept() look like it masks anything -- see the next
+	fence. */
+static void test_fenv_getenv_does_not_modify(void)
+{
+	fenv_t e;
+	unsigned short cw;
+
+	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
+	cw &= (unsigned short)~0x04u;		/* unmask divide-by-zero (ZM) */
+	__asm__ __volatile__("fldcw %0" : : "m"(cw));
+
+	CHECK(fegetenv(&e) == 0);
+
+	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
+	CHECK((cw & 0x04) == 0);		/* still unmasked -- fails today */
+
+	CHECK(fesetenv(&e) == 0);
+}
+#endif
+
+#if 0 /* BUG: feholdexcept.html DESCRIPTION -- "The feholdexcept()
+	function shall save the current floating-point environment in the
+	object pointed to by envp, clear the floating-point status flags,
+	and then install a non-stop (continue on floating-point
+	exceptions) mode, if available, for all floating-point
+	exceptions." RETURN VALUE: "shall return zero if and only if
+	non-stop floating-point exception handling was successfully
+	installed."
+
+	src/math/fenv.c's feholdexcept() is fegetenv() followed by
+	feclearexcept(FE_ALL_EXCEPT) and an unconditional `return 0`.
+	Neither callee sets any mask bit. The x87 half is masked only by
+	accident, through the FNSTENV side effect the previous fence
+	describes -- so fixing that BUG makes this one worse, not better.
+	MXCSR is never touched at all: feclearexcept()'s MXCSR path
+	clears status bits 0-5 and never the mask bits at 7-12.
+
+	On x86_64 that is the unit tcc emits every `double` operation
+	into (include/fenv.h's banner), so a caller that had unmasked
+	divide-by-zero and then called feholdexcept() expecting a
+	non-stop region will still take a hardware exception on the first
+	1.0/0.0 -- while feholdexcept() reported the success the RETURN
+	VALUE clause makes conditional on exactly that not happening.
+
+	Measured on x86_64 after hand-unmasking divide-by-zero in both
+	units: x87 CW 0x027F (masked, by accident) but MXCSR 0x1D80 --
+	bit 9 (ZM) still clear -- and feholdexcept() returned 0.
+
+	Inline asm and x86-specific for the same reason as the previous
+	fence, and #ifndef __i386__ because MXCSR is only part of fenv_t
+	on the SSE arch (include/fenv.h).
+
+	Fix shape: set the six x87 mask bits explicitly rather than
+	relying on FNSTENV's side effect, OR 0x1F80 into MXCSR, and
+	return non-zero if either could not be established. */
+static void test_fenv_holdexcept_installs_nonstop(void)
+{
+#ifndef __i386__
+	fenv_t h;
+	unsigned int mx;
+
+	__asm__ __volatile__("stmxcsr %0" : "=m"(mx));
+	mx &= ~0x200u;				/* unmask divide-by-zero in SSE */
+	__asm__ __volatile__("ldmxcsr %0" : : "m"(mx));
+
+	CHECK(feholdexcept(&h) == 0);
+
+	__asm__ __volatile__("stmxcsr %0" : "=m"(mx));
+	CHECK((mx & 0x1f80u) == 0x1f80u);	/* fails today: 0x1d80 */
+
+	CHECK(fesetenv(&h) == 0);
+#endif
+}
+#endif
+
 int main(void)
 {
+	g_startup_env_ok = (fegetenv(&g_startup_env) == 0);
 	test_fabs();
 	test_copysign();
 	test_classify();
@@ -1607,6 +1971,13 @@ int main(void)
 	test_hypot();
 	test_nan();
 	test_errhandling();
+	test_fenv_zero_argument();
+	test_fenv_testexcept_subset();
+	test_fenv_raise_exact_set();
+	test_fenv_round_modes();
+	test_fenv_round_affects_arithmetic();
+	test_fenv_env_roundtrip();
+	test_fenv_updateenv_reraises();
 	test_float_ld_variants();
 	test_lround_lrint();
 	test_asin_acos();
