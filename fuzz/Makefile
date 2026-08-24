@@ -108,6 +108,9 @@ $(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR
 	  $(LIBDIR)/obj/*.o -ldl -lm -o $@
 
 # Leak detection on; see tools/asan-build.sh for why it can be trusted here.
+# handle_abort=1 is what makes a differential mismatch produce a crash
+# artefact rather than only three lines of stderr -- see tools/fuzz.sh,
+# which explains it at length.
 LEAKS ?= 1
 
 # Where a run's findings live between runs.  One subtree per harness:
@@ -130,7 +133,8 @@ run: all
 	   before=$$(ls -1 $(CORPUS)/$$h/corpus | wc -l); \
 	   echo "== fuzz_$$h ($(FUZZ_TIME)s, corpus $$before)"; \
 	   NTLIBC_FUZZ_MIRROR=$(CORPUS)/$$h \
-	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS) UBSAN_OPTIONS=print_stacktrace=1 \
+	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS):handle_abort=1 \
+	   UBSAN_OPTIONS=print_stacktrace=1 \
 	   $(OUT)/fuzz_$$h -max_total_time=$(FUZZ_TIME) -max_len=256 \
 	     -print_funcs=0 -print_final_stats=1 \
 	     -artifact_prefix=$(CORPUS)/$$h/crashes/ \
