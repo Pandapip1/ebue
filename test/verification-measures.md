@@ -494,23 +494,72 @@ a 219-line differential oracle against glibc (`fuzz/host_oracle.c`), and
 fuzzers, not the tests, are what found the `sprintf` byte leak, because
 libFuzzer checks for leaks after every input rather than once at exit.
 
-So the question is not whether to start. It is the one real gap:
-**no corpus survives a run.** `tools/fuzz.sh:13-21` explains why -- a
-corpus directory means libFuzzer doing file I/O through ntlibc's own
-`open`/`readdir`, which reach `NtCreateFile`, which `fuzz/ntstubs.c`
-answers `STATUS_NOT_IMPLEMENTED`. Every night therefore starts from
-random noise and gets 300 seconds of cold search, indefinitely. Making
-`ntstubs`' `NtCreateFile`/`NtReadFile`/`NtWriteFile` back onto the host
-filesystem well enough for corpus I/O, and caching the corpus between
-nightly runs, converts a fixed 300 s of shallow search into cumulative
-depth. That is the highest-value fuzzing change available and it is
-squarely real work, not configuration.
+So the question is not whether to start. It was the one real gap:
+**no corpus survived a run.** That has since been fixed, and the
+explanation quoted here when it was written -- taken from
+`tools/fuzz.sh:13-21`, which said a corpus directory means file I/O
+through ntlibc's `open`/`readdir`, which reach `NtCreateFile`, which
+`fuzz/ntstubs.c` answers `STATUS_NOT_IMPLEMENTED` -- was wrong, in
+`tools/fuzz.sh`, in `.github/workflows/fuzz.yml`, and therefore here.
+It is worth recording what the mechanism actually was, because this is
+the third time in this document an inherited claim about the tree turned
+out not to survive being run.
 
-Two smaller things while there: `FUZZ_TIME` is referenced at
-`Makefile:427` and defined nowhere in the top-level Makefile, so `make
-fuzz` silently uses `tools/fuzz.sh`'s own `${1:-60}`; and two comments
-still say "four harnesses" (`.github/workflows/fuzz.yml:49-51`,
-`tools/asan-build.sh:82`) where there are eight.
+`fuzz/ntstubs.c` answers no `STATUS_NOT_IMPLEMENTED`. It implements a
+complete in-memory volume -- `NtCreateFile`, `NtReadFile`,
+`NtQueryDirectoryFile`, rename, delete. Measured on a fresh clone at
+`d3c4f1f`:
+
+```
+stat("/tmp/.../corpus_strtod") = -1 errno=2   (ENOENT, not ENOSYS)
+ERROR: The required directory "/tmp/.../corpus_strtod" does not exist
+```
+
+The directory was simply never put in the volume, which starts out
+holding only `C:\work` and `C:\tmp`. And behind that sat a second,
+independent defect that would have blocked a corpus in a directory that
+did exist: libFuzzer is compiler-runtime code compiled against the
+*host* headers, and its `IsDirectory()` calls `stat()`, which resolves to
+ntlibc's. The two `struct stat`s disagree -- ntlibc puts `st_mode` at
+offset 16 and `st_nlink` at 24, glibc/x86\_64 the other way round -- so
+`S_ISDIR` is false for every directory in the volume. A host-headers
+probe reading ntlibc's answer for a directory sees `st_mode = 01`, which
+is `st_nlink`.
+
+Both are fixed in `fuzz/` only: `NTLIBC_FUZZ_MIRROR` mirrors one named
+host directory into the volume (reads, writes and unlinks), and
+`-Wl,--wrap=stat` on the harness link translates the layout through
+`fuzz/statshim.h`. Three consecutive 15 s runs, coverage libFuzzer
+reports at `INITED` -- before it has fuzzed anything:
+
+| harness | run 1 | run 2 | run 3 |
+|---------|-------|-------|-------|
+| `scanf` | 24 | 494 | 593 |
+| `strftime` | 24 | 631 | 646 |
+| `strtod` | 81 | 314 | 329 |
+| `printf` | 24 | 559 | 559 |
+
+Two further things the same work turned up, both of the vacuous-success
+shape this document is about:
+
+- **A differential mismatch produced no reproducer.** The harnesses
+  report a wrong *result*, which no sanitizer sees, and end with the
+  host's `abort()`; libFuzzer's own `SIGABRT` handler never fires,
+  because it installs one with `sigaction()`, which resolves to ntlibc's,
+  which delivers nothing natively. ASan does not handle `SIGABRT` by
+  default. So the finding these fuzzers are uniquely good at was the one
+  kind that left nothing behind. `ASAN_OPTIONS=handle_abort=1` fixes it.
+- **`tools/fuzz.sh --repro`, the documented way to replay a finding,
+  could never replay anything.** The harness reads the artefact through
+  ntlibc, and a host path was not in the volume; every artefact answered
+  `ERROR: The required directory "<file>" does not exist` and the script
+  exited without running the input. Confirmed against a pristine
+  checkout of `main`.
+
+One smaller thing left: two comments still say "four harnesses"
+(`tools/asan-build.sh:82`) where there are eight; the one in
+`.github/workflows/fuzz.yml` is fixed. `FUZZ_TIME` was fixed separately
+in `c533d9a`.
 
 ### Coverage measurement -- worth starting, report-only, not as a gate
 
@@ -560,7 +609,7 @@ By expected defects caught per unit of cost.
 | 7 | **M8** self-evaluating findings list | seconds | 9 |
 | 8 | **M9** relocations in the PE guard | 2 reads/image | 10's class |
 | 9 | **M5** one checked `rc=77` contract | ~1 s, ~80 lines | none; prevents the next 2 |
-| -- | fuzzing corpus persistence | real work | unknown, and that is the point |
+| -- | fuzzing corpus persistence | real work, done | unknown, and that is the point; it found two vacuous-success defects on the way in |
 | -- | coverage, report-only | 24 s on demand | none of the ten |
 | -- | MSan, opt-in mode only | 15 lines | none of the ten |
 | -- | `-Wconversion`, Valgrind, coverage-as-gate, snprintf grep, commit-shaped negative-control rule | -- | rejected above |
@@ -625,4 +674,4 @@ these are proposals.
    defect 4 is live.
 9. **`FUZZ_TIME` is referenced at `Makefile:427` and never defined**, so
    `make fuzz` uses `tools/fuzz.sh`'s `${1:-60}` rather than any
-   Makefile default.
+   Makefile default. *(Fixed in `c533d9a`.)*
