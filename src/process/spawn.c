@@ -202,7 +202,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	struct __ntpath np;
 	RTL_USER_PROCESS_PARAMETERS *pp = 0;
 	RTL_USER_PROCESS_INFORMATION info;
-	UNICODE_STRING imageDos, cmdLine, cur;
+	UNICODE_STRING imageDos, cmdLine, cur, runtimeUS;
 	WCHAR *wcmd = 0, *wenv = 0, *wimage = 0;
 	WCHAR curbuf[4096];
 	void *runtime = 0;
@@ -243,12 +243,55 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	cur.Length = (USHORT)curlen;
 	cur.MaximumLength = sizeof curbuf;
 
-	st = RtlCreateProcessParametersEx(&pp, &imageDos, 0, &cur, &cmdLine, wenv, 0, 0, 0, 0,
+	/* The inheritable descriptor table, built *before* the parameters
+	 * block so it can be handed to RtlCreateProcessParametersEx as the
+	 * RuntimeInfo argument and packed INTO the block, the same way
+	 * cmdLine, cur and wenv are.  RTL_USER_PROCESS_PARAMETERS crosses
+	 * into the child as an uninterpreted blob -- Windows copies the
+	 * block's own bytes, full stop, it does not chase any pointer a
+	 * field holds to fetch data from outside it (ReactOS's
+	 * RtlCreateProcessParameters/CreateProcessInternalW, which mirror
+	 * that real behaviour exactly, only ever reach memory the block
+	 * itself contains: sdk/lib/rtl/ppb.c RtlpCopyParameterString copies
+	 * each string in at creation time, and
+	 * dll/win32/kernel32/client/proc.c's CreateProcessInternalW writes
+	 * just the block, `ProcessParameters->Length` bytes, with
+	 * NtWriteVirtualMemory).  A field set *after* creation to point
+	 * outside the block -- which is what this code used to do here --
+	 * is not a "pointer" as far as that copy is concerned; it is 8
+	 * bytes of parent virtual address that the child inherits verbatim
+	 * and then dereferences as if it meant something in the child's own
+	 * address space.  It usually does, because two runs of the same
+	 * binary tend to get the same heap layout, which is exactly why
+	 * this was intermittent rather than always broken.  (Wine's
+	 * emulation of NtCreateUserProcess, dlls/ntdll/unix/env.c
+	 * create_startup_info/append_string, happens to re-marshal every
+	 * such field by value regardless of where it points, so this bug is
+	 * invisible under Wine; that is Wine filling a gap in its own
+	 * userspace reimplementation; on real Windows nothing does that.)
+	 *
+	 * Its length is bounded by the descriptor table -- at most
+	 * sizeof(int) + FD_MAX * (1 + sizeof(HANDLE)) bytes, an order of
+	 * magnitude below what a USHORT holds -- so unlike the command line
+	 * this narrowing cannot wrap. */
+	runtime = __fd_runtime_data(&runtime_len);
+	runtimeUS.Buffer = (PWSTR)runtime;
+	runtimeUS.Length = (USHORT)runtime_len;
+	runtimeUS.MaximumLength = (USHORT)runtime_len;
+
+	st = RtlCreateProcessParametersEx(&pp, &imageDos, 0, &cur, &cmdLine, wenv, 0, 0, 0,
+	                                  runtime ? &runtimeUS : 0,
 	                                  RTL_USER_PROC_PARAMS_NORMALIZED);
 	if (!NT_SUCCESS(st)) { __set_errno_status(st); goto out; }
 
-	/* Standard handles and the inheritable descriptor table. */
-	runtime = __fd_runtime_data(&runtime_len);
+	/* Standard handles: HANDLE values stored by *value* in the block,
+	 * unlike RuntimeData above.  A HANDLE crosses into the child through
+	 * NT's ordinary handle-inheritance mechanism (RtlCreateUserProcess
+	 * is called below with inherit=TRUE, and __fd_runtime_data just
+	 * marked every non-cloexec handle OBJ_INHERIT) which preserves the
+	 * numeric value in the child's own handle table; it is not an
+	 * address that has to mean the same thing in two address spaces, so
+	 * setting these fields after creation is fine. */
 	{
 		struct __fd *f0 = __fd_get(0), *f1 = __fd_get(1), *f2 = __fd_get(2);
 		errno = 0;
@@ -261,16 +304,6 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 		pp->StandardOutput = f1 ? f1->h : 0;
 		pp->StandardError = f2 ? f2->h : 0;
 		pp->WindowFlags |= STARTF_USESTDHANDLES;
-	}
-	if (runtime && runtime_len) {
-		/* RuntimeData points into the block; the child copies it.  Its
-		 * length is bounded by the descriptor table -- at most
-		 * sizeof(int) + FD_MAX * (1 + sizeof(HANDLE)) bytes, an order of
-		 * magnitude below what a USHORT holds -- so unlike the command
-		 * line this narrowing cannot wrap. */
-		pp->RuntimeData.Buffer = (PWSTR)runtime;
-		pp->RuntimeData.Length = (USHORT)runtime_len;
-		pp->RuntimeData.MaximumLength = (USHORT)runtime_len;
 	}
 
 	memset(&info, 0, sizeof info);
