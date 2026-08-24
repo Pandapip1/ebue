@@ -93,14 +93,28 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	 * allocation guarantee on a file shape whose whole purpose is to not
 	 * have that allocation.  Nothing is destroyed either way.
 	 *
-	 * Not reproduced here: this environment cannot produce a file with
-	 * AllocationSize < EndOfFile.  FSCTL_SET_SPARSE succeeds under Wine
-	 * but FSCTL_SET_ZERO_DATA returns STATUS_NOT_SUPPORTED, so the shape
-	 * is unreachable under the emulator.  The interlock rests on the
-	 * documented FileAllocationInformation rule above, and costs nothing
-	 * on a file where AllocationSize >= EndOfFile -- there, want >
-	 * AllocationSize already implies want > EndOfFile and the added
-	 * conjunct is always true. */
+	 * DO NOT DELETE THE SECOND CONJUNCT AS REDUNDANT.  It reads that way
+	 * from here -- on a file whose AllocationSize >= EndOfFile, want >
+	 * AllocationSize already implies want > EndOfFile -- and that is true
+	 * of real NTFS, where a file extended with SetEndOfFile gets real
+	 * clusters.  It is not true under Wine, which implements extension
+	 * with ftruncate(), producing a hole: st_blocks is 0, so
+	 * AllocationSize reads 0 for an ORDINARY file created the normal way,
+	 * not merely for one deliberately marked sparse.  Under Wine the
+	 * first test is therefore trivially true in the common case and this
+	 * conjunct is the only thing preventing the truncation.  Measured on
+	 * Windows 11 22621 by the Wine-divergence session: a non-sparse file
+	 * of EndOfFile 16384 reports AllocationSize 16384 on NTFS, and 0
+	 * under Wine.  (A genuinely sparse file reports 0 on both -- that
+	 * part Wine gets right.)
+	 *
+	 * Not reproduced from inside this tree: ntlibc has no FSCTL_SET_SPARSE
+	 * and Wine's FSCTL_SET_ZERO_DATA returns STATUS_NOT_SUPPORTED, so a
+	 * deliberately sparse file cannot be built here.  That negative result
+	 * is what the interlock was written without -- it rests on the
+	 * documented FileAllocationInformation rule above.  The Wine finding
+	 * arrived afterwards and says the guard is exercised in practice
+	 * anyway, by ordinary files, without anyone creating a sparse one. */
 	if (want > si.AllocationSize && want >= si.EndOfFile) {
 		ai.AllocationSize = want;
 		st = NtSetInformationFile(f->h, &io, &ai, sizeof ai, FileAllocationInformation);

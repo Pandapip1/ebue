@@ -1048,6 +1048,44 @@ static void test_snprintf_eoverflow(void)
 }
 #endif
 
+/* fprintf.html, the length modifiers: "z  Specifies that a following
+ * d, i, o, u, x, or X conversion specifier applies to a size_t or the
+ * corresponding signed integer type argument; or that a following n
+ * conversion specifier applies to a pointer to a signed integer type
+ * corresponding to a size_t argument."  t says the same for ptrdiff_t.
+ *
+ * src/stdio/printf.c reads both with va_arg(ap, long) -- lines 514 and
+ * 531 for the value conversions, 628 for %n.  On this target long is 32
+ * bits and size_t is 64 (LLP64), so the type is simply wrong.  The %n
+ * case is the worst of the three: it stores through *(long *), writing
+ * four bytes into the caller's eight-byte object and leaving the other
+ * four whatever they were.
+ *
+ * The tree already contains the correct pattern, in the file that
+ * implements the same grammar: src/stdio/scanf.c:495,496,617,618 pair
+ * LM_z with size_t and LM_t with ptrdiff_t, and has no instance of this
+ * bug.  printf.c is the only offender.
+ *
+ * Found by musl's libc-test (printf-fmt-n), not by this file's own
+ * clause audit, which read these pages closely enough to fence the
+ * <apostrophe> flag and [EOVERFLOW] and walked past this. */
+#if 0 /* BUG: printf's z and t length modifiers are read as long, which is 32-bit under LLP64; "%zd" of a value above 4G prints the low half, and "%zn" writes four bytes into an eight-byte size_t, corrupting the caller's object */
+static void test_printf_z_modifier_width(void)
+{
+	size_t big = (size_t)0xdeadbeefULL << 32;
+	size_t n = (size_t)-1;
+	char b[64];
+
+	snprintf(b, sizeof b, "%zu", big);
+	CHECK(strcmp(b, "16045690981097537536") == 0);
+
+	/* %zn must write all of a size_t, not its low half. */
+	n = (size_t)-1;
+	snprintf(b, sizeof b, "ab%zn", &n);
+	CHECK(n == 2);
+}
+#endif
+
 /* fprintf.html, the flag characters: "'  [CX] (The <apostrophe>.)  The
  * integer portion of the result of a decimal conversion ( %i, %d, %u,
  * %f, %F, %g, or %G ) shall be formatted with thousands' grouping
