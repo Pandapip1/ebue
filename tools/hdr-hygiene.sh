@@ -69,15 +69,25 @@ fail=0
 note() { printf '%s\n' "$*"; }
 hdr() { printf '\n=== %s ===\n' "$*"; }
 
-require_tool() {
-	command -v "$1" >/dev/null 2>&1 && return 0
+# report_missing DESCRIPTION -- the "a tool this stage needs is not here"
+# path, factored out of require_tool so a stage whose requirement is not
+# one `command -v`-able name can take it too.  The cxx stage needs *some*
+# C++ compiler (g++ or clang++), not a particular one; before this it
+# simply skipped whichever was absent and, when both were, counted a
+# clean pass for every header it never compiled.  Always returns 1.
+report_missing() {
 	if [ "$HYGIENE_ALLOW_MISSING" = 1 ]; then
-		note "SKIP: $1 not installed (HYGIENE_ALLOW_MISSING=1)"
+		note "SKIP: $1 (HYGIENE_ALLOW_MISSING=1)"
 		return 1
 	fi
-	note "MISSING: $1 is not installed."
+	note "MISSING: $1"
 	missing=1
 	return 1
+}
+
+require_tool() {
+	command -v "$1" >/dev/null 2>&1 && return 0
+	report_missing "$1 is not installed."
 }
 
 # Every header this gate is responsible for.  Derived with find, never
@@ -173,27 +183,59 @@ stage_run() {
 	stage=$1
 	hdr "$stage"
 	require_tool gcc || return 1
+
+	# Which compilers this stage will really use, decided once, before
+	# any header is looked at -- rather than per header, inside the loop,
+	# with a `continue` that left ok=1 behind it.  That `continue` was the
+	# bug: on a machine with neither g++ nor clang++ the cxx stage
+	# compiled nothing, incremented `pass` once per header anyway, and
+	# reported a passing C++-compatibility check over zero C++ compiles.
+	# A stage with no compiler is a missing tool, which is what
+	# HYGIENE_ALLOW_MISSING is for; it is not "nothing to do".
+	compilers=""
+	if [ "$stage" = cxx ]; then
+		for cxx in g++ clang++; do
+			command -v "$cxx" >/dev/null 2>&1 && compilers="$compilers $cxx"
+		done
+		[ -n "$compilers" ] || {
+			report_missing "no C++ compiler (tried g++ and clang++), so the cxx stage cannot check that extern \"C\" promise"
+			return 1
+		}
+	else
+		for base in gcc clang; do
+			command -v "$base" >/dev/null 2>&1 && compilers="$compilers $base"
+		done
+		[ -n "$compilers" ] || {
+			report_missing "no C compiler (tried gcc and clang), so the $stage stage cannot run"
+			return 1
+		}
+	fi
+
+	# Headers this stage actually compiled.  A stage that compiled none
+	# of them has proved nothing, whatever `pass` says.
+	checks=0
 	for arch in $HYGIENE_ARCHS; do
-		gen_alltypes "$arch" || { note "cannot generate bits/alltypes.h for $arch"; continue; }
+		gen_alltypes "$arch" || { note "cannot generate bits/alltypes.h for $arch"; findings=1; continue; }
 		for h in $(all_headers); do
 			spelling=$(incpath_for "$h")
 			[ -n "$spelling" ] || continue
 			if is_exception "$h" "$stage"; then
 				continue
 			fi
-			ok=1
+			# The cxx stage is only responsible for headers that make
+			# the extern "C" promise -- a header that makes none is not
+			# skipped work, it is out of scope, and is not counted.
 			if [ "$stage" = cxx ]; then
 				grep -q 'extern "C"' "$h" || continue
-				for cxx in g++ clang++; do
-					command -v "$cxx" >/dev/null 2>&1 || continue
-					run_one "$spelling" "$arch" cxx "$cxx" "-x c++" .cpp || ok=0
-				done
-			else
-				for base in gcc clang; do
-					command -v "$base" >/dev/null 2>&1 || continue
-					run_one "$spelling" "$arch" "$stage" "$base" "" .c || ok=0
-				done
 			fi
+			ok=1
+			for cc in $compilers; do
+				case $stage in
+				cxx) run_one "$spelling" "$arch" cxx "$cc" "-x c++" .cpp || ok=0 ;;
+				*)   run_one "$spelling" "$arch" "$stage" "$cc" "" .c || ok=0 ;;
+				esac
+			done
+			checks=$((checks + 1))
 			if [ "$ok" = 1 ]; then
 				pass=$((pass + 1))
 			else
@@ -204,6 +246,14 @@ stage_run() {
 			fi
 		done
 	done
+	if [ "$checks" -eq 0 ]; then
+		note "FAILED [$stage]: no header was compiled at all -- this stage checked nothing."
+		note "  (a header that is deliberately exempt belongs in is_exception() with a"
+		note "  reason; an empty run is not an exemption.)"
+		findings=1
+		return 1
+	fi
+	note "$stage: $checks header/arch compile(s), using$compilers"
 }
 
 stages=${*:-solo twice cxx}
