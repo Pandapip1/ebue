@@ -177,7 +177,33 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath)
 	                  FILE_SHARE_VALID_FLAGS, FILE_CREATE,
 	                  FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | (isdir ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE), 0, 0);
 	__ntpath_free(&np);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (!NT_SUCCESS(st)) {
+		/* symlink.html has one shall-fail clause for a name that is
+		 * already taken -- "[EEXIST] The path2 argument names an
+		 * existing file" -- and a directory is a file, so a directory
+		 * at linkpath has to reach it too.  FILE_CREATE over an
+		 * existing name is STATUS_OBJECT_NAME_COLLISION, which
+		 * src/internal/errno.c already maps to EEXIST; but the create
+		 * options just above also carry FILE_NON_DIRECTORY_FILE
+		 * whenever the target is not a directory *now* -- and a
+		 * symbolic link may point at something that does not exist
+		 * yet, so that is the common case -- and a filesystem is free
+		 * to report that mismatch instead of the collision.  The two
+		 * ReactOS drivers differ on exactly this ordering: fastfat
+		 * rejects the directory first
+		 * (drivers/filesystems/fastfat/create.c:1356), its NTFS driver
+		 * takes the disposition first
+		 * (drivers/filesystems/ntfs/create.c:429).
+		 *
+		 * STATUS_FILE_IS_A_DIRECTORY can only arise here from an
+		 * existing directory at linkpath -- FILE_CREATE means nothing
+		 * was opened, and a directory in the path *prefix* is not an
+		 * error -- so it proves the [EEXIST] condition exactly, and
+		 * EISDIR, which symlink.html does not list at all, would be a
+		 * report about NT's create options rather than about POSIX. */
+		if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EEXIST; return -1; }
+		return __set_errno_status(st);
+	}
 
 	wt = __utf8_to_utf16(target, &tl);
 	if (!wt) { NtClose(h); return -1; }

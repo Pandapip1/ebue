@@ -20,6 +20,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include "libc.h"
 
 int execve(const char *path, char *const argv[], char *const envp[])
@@ -131,8 +132,39 @@ int execlp(const char *file, const char *arg0, ...)
 
 int fexecve(int fd, char *const argv[], char *const envp[])
 {
-	char *p = __handle_path(__fd_handle(fd));
+	char *p;
+	struct stat st;
 	int r;
+
+	/* exec.html gives fexecve() one shall-fail clause of its own:
+	 * "[EBADF] The fd argument is not a valid file descriptor open for
+	 *  executing."
+	 * Nothing below can produce it.  fexecve() recovers a path from the
+	 * descriptor and hands it to execve(), and from there the outcome is
+	 * whatever NT makes of that path as a process image -- a directory
+	 * descriptor reaches RtlCreateUserProcess (src/process/spawn.c) and
+	 * comes back as an image-section failure, whose NTSTATUS is about
+	 * the *file* and carries nothing about the descriptor.  Measured on
+	 * Windows 11 22621, NtCreateSection(SEC_IMAGE) on a directory handle
+	 * is STATUS_INVALID_FILE_FOR_SECTION (0xc0000020), which
+	 * src/internal/errno.c does not name, so it reaches
+	 * RtlNtStatusToDosError -> ERROR_BAD_EXE_FORMAT (193) ->
+	 * __errno_from_doserror()'s default arm -> EIO.  Wine gets there by
+	 * another route and produces EBADF, which is why the windows-test
+	 * legs are red on this clause and the Wine leg is green.
+	 *
+	 * So the clause is decided here, where the descriptor still exists,
+	 * rather than left to a status that is not about it.  A descriptor
+	 * that is not open on a regular file is not "open for executing" --
+	 * exec.html's own [EACCES] clause for the path-taking members names
+	 * "not a regular file" as the condition -- and that verdict does not
+	 * depend on which of NT or Wine is underneath.  Anything else stays
+	 * with execve(): a regular file that is not an executable is still
+	 * ENOEXEC, not EBADF. */
+	if (fstat(fd, &st) < 0) { errno = EBADF; return -1; }
+	if (!S_ISREG(st.st_mode)) { errno = EBADF; return -1; }
+
+	p = __handle_path(__fd_handle(fd));
 	if (!p) return -1;
 	r = execve(p, argv, envp);
 	__free(p);
