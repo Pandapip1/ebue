@@ -1245,6 +1245,183 @@ static void test_dprintf_fd_path(const char *name)
 }
 
 
+/* fscanf.html RETURN VALUE: "these functions shall return the number of
+ * successfully matched and assigned input items; this number can be
+ * zero in the event of an early matching failure.  If the input ends
+ * before the first conversion (if any) has completed, and without a
+ * matching failure having occurred, EOF shall be returned."
+ *
+ * DESCRIPTION: "A directive composed of one or more white-space
+ * characters shall be executed by reading input until no more valid
+ * input can be read, or up to the first byte which is not a white-space
+ * character"; "A directive that is an ordinary character shall be
+ * executed as follows: the next byte shall be read from the input and
+ * compared with the byte that comprises the directive; if the
+ * comparison shows that they are not equivalent, the directive shall
+ * fail, and the differing and subsequent bytes shall remain unread";
+ * "An input item shall be defined as the longest sequence of input
+ * bytes (up to any specified maximum field width) which is an initial
+ * subsequence of a matching sequence"; and the %n rule that the count
+ * "shall not be counted" toward the return value.
+ *
+ * The long-field cases are deliberate: a fixed-size staging buffer for
+ * a numeric field has been a real defect in this tree before, and a
+ * 400-digit fraction is far past any of them.  Pure library code over a
+ * memory FILE: Wine is a sound oracle. */
+static void test_sscanf_clauses(void)
+{
+	char s1[64], fb[600];
+	int a, b, n, i, k, r;
+	double d;
+
+	/* "this number can be zero in the event of an early matching
+	 * failure" */
+	a = -1;
+	CHECK(sscanf("xyz", "%d", &a) == 0);
+	CHECK(a == -1);
+	/* "If the input ends before the first conversion (if any) has
+	 * completed ... EOF shall be returned" */
+	CHECK(sscanf("", "%d", &a) == EOF);
+	CHECK(sscanf("   ", "%d", &a) == EOF);
+	/* ... but input ending *after* a completed conversion is not EOF */
+	a = 0; b = -1;
+	CHECK(sscanf("12", "%d %d", &a, &b) == 1);
+	CHECK(a == 12 && b == -1);
+
+	/* an ordinary-character mismatch is a plain return, not EOF */
+	CHECK(sscanf("aXc", "abc") == 0);
+	/* %% matches one literal '%' */
+	a = 0;
+	CHECK(sscanf("%5", "%%%d", &a) == 1);
+	CHECK(a == 5);
+	/* a white-space directive matches zero white-space characters too */
+	a = 0; b = 0;
+	CHECK(sscanf("1x2", "%d x %d", &a, &b) == 2);
+	CHECK(a == 1 && b == 2);
+	/* maximum field width bounds the item */
+	a = 0; b = 0;
+	CHECK(sscanf("56789", "%2d%d", &a, &b) == 2);
+	CHECK(a == 56 && b == 789);
+	CHECK(sscanf("hello world", "%5s", s1) == 1);
+	CHECK(!strcmp(s1, "hello"));
+	/* the fscanf.html EXAMPLES scanset case, verbatim */
+	CHECK(sscanf("56a72", "%[0123456789]", s1) == 1);
+	CHECK(!strcmp(s1, "56"));
+	/* "%*": assignment suppression, and the item is still consumed */
+	a = 0;
+	CHECK(sscanf("1 2", "%*d %d", &a) == 1);
+	CHECK(a == 2);
+	/* %n is not counted toward the return value */
+	a = 0; n = -1;
+	CHECK(sscanf("42", "%d%n", &a, &n) == 1);
+	CHECK(a == 42 && n == 2);
+
+	/* a numeric field far longer than any staging buffer */
+	k = 0;
+	fb[k++] = '1'; fb[k++] = '.';
+	for (i = 0; i < 400; i++) fb[k++] = '3';
+	fb[k++] = 'e'; fb[k++] = '1'; fb[k] = 0;
+	d = -1;
+	CHECK(sscanf(fb, "%lf", &d) == 1);
+	CHECK(d > 13.3333333333 && d < 13.3333333334);
+	CHECK(via_vsscanf(fb, "%lf", &d) == 1);
+	CHECK(d > 13.3333333333 && d < 13.3333333334);
+
+	/* the fscanf.html EXAMPLES worked example, verbatim: "assigns 56 to
+	 * i, 789.0 to x, skips 0123, and places the string "56\0" in
+	 * name" */
+	{
+		int ii = 0; float x = 0;
+		memset(s1, 0, sizeof s1);
+		r = sscanf("56789 0123 56a72", "%2d%f%*d %[0123456789]", &ii, &x, s1);
+		CHECK(r == 3);
+		CHECK(ii == 56);
+		CHECK(x > 788.9f && x < 789.1f);
+		CHECK(!strcmp(s1, "56"));
+	}
+}
+
+/* fscanf.html DESCRIPTION: "if the comparison shows that they are not
+ * equivalent, the directive shall fail, and the differing and
+ * subsequent bytes shall remain unread."  Only a real stream can show
+ * this: sscanf() has no observable read position afterwards.  Also
+ * RETURN VALUE: "If an error occurs before the first conversion (if
+ * any) has completed, and without a matching failure having occurred,
+ * EOF shall be returned and errno shall be set to indicate the error.
+ * If a read error occurs, the error indicator for the stream shall be
+ * set."  The read error is manufactured by scanning a stream that is
+ * not open for reading (fgetc.html [EBADF]). */
+static void test_fscanf_stream_clauses(const char *name)
+{
+	FILE *f;
+	int a, r;
+
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fputs("abZq", f) == 0);
+	CHECK(fclose(f) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fscanf(f, "abc") == 0);
+	CHECK(fgetc(f) == 'Z');      /* the differing byte remained unread */
+	CHECK(fgetc(f) == 'q');
+	CHECK(fclose(f) == 0);
+
+	f = fopen(name, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	a = 0;
+	CHECK(via_vfscanf(f, "abc") == 0);
+	CHECK(fgetc(f) == 'Z');
+	CHECK(fclose(f) == 0);
+	(void)a;
+
+	/* read error before the first conversion completes */
+	f = fopen(name, "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	errno = 0;
+	r = fscanf(f, "%d", &a);
+	CHECK(r == EOF);
+	CHECK(errno == EBADF);
+	CHECK(ferror(f) != 0);
+	clearerr(f);
+	CHECK(fclose(f) == 0);
+}
+
+/* fscanf.html DESCRIPTION, the [CX] assignment-allocation character:
+ * "The %c, %s, and %[ conversion specifiers shall accept an optional
+ * assignment-allocation character 'm', which shall cause a memory
+ * buffer to be allocated to hold the string converted including a
+ * terminating null character.  In such a case, the argument
+ * corresponding to the conversion specifier should be a reference to a
+ * pointer variable that will receive a pointer to the allocated
+ * buffer."
+ *
+ * src/stdio/scanf.c's directive parser recognises '*', a width and the
+ * length modifiers, and nothing else: an 'm' falls through the
+ * conversion switch's default arm, so no argument is consumed and the
+ * remaining directives are then matched against the wrong input.
+ * Measured: sscanf("abc", "%ms", &p) returns 0 and leaves p untouched.
+ * Genuinely unimplemented rather than a wrong answer to an implemented
+ * clause, hence UNIMPL. */
+#if 0 /* UNIMPL: the [CX] 'm' assignment-allocation character is not implemented for %c/%s/%[; POSIX fscanf.html requires it to malloc() a buffer and store the pointer through the corresponding argument */
+static void test_scanf_m_modifier(void)
+{
+	char *p = 0;
+	CHECK(sscanf("abc", "%ms", &p) == 1);
+	CHECK(p != 0);
+	if (p) {
+		CHECK(!strcmp(p, "abc"));
+		free(p);
+	}
+}
+#endif
+
+
 int main(void)
 {
 	char *name = make_tmp("posix-stdio-XXXXXX");
@@ -1265,6 +1442,7 @@ int main(void)
 
 	test_snprintf_boundaries();
 	test_printf_width_precision();
+	test_sscanf_clauses();
 
 	name = make_tmp("posix-stdio2-XXXXXX");
 	CHECK(name != 0);
@@ -1277,6 +1455,7 @@ int main(void)
 		test_tempnam();
 		test_printf_output_error(name);
 		test_dprintf_fd_path(name);
+		test_fscanf_stream_clauses(name);
 		/* these two repoint stdin at the temp file and leave it there */
 		test_vprintf_vscanf(name);
 		test_getchar(name);
