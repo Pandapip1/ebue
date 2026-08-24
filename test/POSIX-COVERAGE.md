@@ -2332,6 +2332,114 @@ declared by neither `include/ctype.h` nor any `src/` file, so they are
 a `POSIX-GAP-ACCOUNTING.md` matter (missing interfaces), not a row
 here.
 
+## wctype.h, the sixteen wide-character pages (successor-queue item 2, group I)
+
+`test/POSIX-GAP-ACCOUNTING.md` lists sixteen `<wctype.h>` functions as
+implemented but never clause-audited: `iswalnum iswalpha iswblank
+iswcntrl iswctype iswdigit iswgraph iswlower iswprint iswpunct iswspace
+iswupper iswxdigit towctrans towlower towupper`.
+
+**What existed before.** `test/posix-wchar.c` gained a `<wctype.h>`
+block when that header landed (2026-08-23) and calls fourteen of the
+sixteen. It is a smoke test — a dozen single-character spot checks, plus
+`WEOF` and a lone surrogate — not a clause audit; it cites no clause per
+assertion, sweeps no domain, and its only `iswctype()` checks use one
+class name. It is left exactly as it is; the new `test/posix-wctype.c`
+does the pages. The two overlap the way a smoke test and an audit are
+meant to.
+
+**The domain, which is the clause most easily got wrong.** All thirteen
+`isw*` pages carry the same sentence: the argument "shall ... [be] a
+wide-character code corresponding to a valid character in the locale
+used by the function, or equal to the value of the macro WEOF. If the
+argument has any other value, the behavior is undefined." The locale is
+always the POSIX locale here, and XBD 7.3.1 defines that locale's
+character set as the portable character set — so the *defined* domain is
+exactly U+0000..U+007F plus `WEOF`, 129 values, and that is what the
+sweeps cover. Everything from 0x80 up, surrogate halves and values above
+`WCHAR_MAX` included, is undefined by the spec; this file asserts
+nothing about it *as a POSIX requirement*.
+
+It does assert it as an **ntlibc promise**, separately and labelled
+(`test_documented_extension`): `include/wctype.h`'s banner commits in
+writing to 0 from every classification function and the argument
+unchanged from every conversion function across that whole undefined
+region, with no special-casing of surrogate halves. A libc that promises
+its callers a defined answer for the undefined region owes them a test
+of it; what it does not owe is a claim POSIX demanded it.
+
+No BUGs. All sixteen are conformant over the defined domain, and the
+documented extension holds across every probe value.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| iswalpha | DESCRIPTION "class alpha in the current locale" vs XBD 7.3.1's POSIX-locale enumeration; domain U+0000..U+007F + `WEOF`; RETURN VALUE non-zero/0 | covered | test/posix-wctype.c (`test_iswalpha`) |
+| iswupper | DESCRIPTION "class upper"; same three clauses | covered | test/posix-wctype.c (`test_iswupper`) |
+| iswlower | DESCRIPTION "class lower"; same three clauses | covered | test/posix-wctype.c (`test_iswlower`) |
+| iswdigit | DESCRIPTION "class digit" — fixed by XBD 7.3.1 as exactly `0`-`9` in every locale; U+002F and U+003A asserted as the adjacent non-members | covered | test/posix-wctype.c (`test_iswdigit`) |
+| iswalnum | DESCRIPTION "class alpha **or** digit" — asserted as an enumeration and as that stated union, whole domain | covered | test/posix-wctype.c (`test_iswalnum`) |
+| iswxdigit | DESCRIPTION "a hexadecimal digit"; `g`/`G` asserted as the adjacent non-members | covered | test/posix-wctype.c (`test_iswxdigit`) |
+| iswspace | DESCRIPTION "class space" — XBD 7.3.1's six characters, each by name | covered | test/posix-wctype.c (`test_iswspace`) |
+| iswblank | DESCRIPTION "class blank" — `<space>`/`<tab>` only; strict-subset relation to `space` asserted | covered | test/posix-wctype.c (`test_iswblank`) |
+| iswcntrl | DESCRIPTION "class cntrl"; U+0000 asserted separately; XBD 7.3.1's cntrl/print disjointness asserted over the whole domain | covered | test/posix-wctype.c (`test_iswcntrl`) |
+| iswprint | DESCRIPTION "class print"; U+007F and U+001F asserted as the adjacent non-members | covered | test/posix-wctype.c (`test_iswprint`) |
+| iswgraph | DESCRIPTION "class graph" — asserted as an enumeration *and* as "print minus `<space>`" over the whole domain | covered | test/posix-wctype.c (`test_iswgraph`) |
+| iswpunct | DESCRIPTION "class punct" — enumerated from XBD 7.3.1, with the derived relation asserted separately as a cross-check | covered | test/posix-wctype.c (`test_iswpunct`) |
+| wctype | RETURN VALUE: a usable non-zero value for each of the twelve reserved class names, `(wctype_t)0` for an invalid name; distinct handles for distinct classes; stable across calls. Case-sensitivity and a trailing-space name asserted as invalid | covered | test/posix-wctype.c (`test_wctype`) |
+| iswctype | RETURN VALUE "non-zero (true) if and only if wc has the property described by charclass"; CX "If charclass is `(wctype_t)0`, these functions shall return 0" — asserted for a `wc` that is in every other class, so a "return the class regardless" bug cannot pass | covered | test/posix-wctype.c (`test_iswctype`) |
+| iswctype | APPLICATION USAGE's twelve-row equivalence table (`iswalnum(wc)` ≡ `iswctype(wc, wctype("alnum"))`, …) — **all twelve rows, over the whole defined domain**, against both the sibling function and XBD 7.3.1 directly | covered | test/posix-wctype.c (`test_iswctype_equivalence_table`) |
+| iswctype | "If the value of charclass is invalid … the result is unspecified" | N/A — unspecified, so no result may be asserted. The one adjacent thing that *is* specified, the `(wctype_t)0` case, is asserted above; `wctype()` returns exactly that for an invalid name | test/posix-wctype.c (`test_iswctype`) |
+| towlower | DESCRIPTION/RETURN VALUE: the corresponding lowercase code for an uppercase argument, "All other arguments in the domain are returned unchanged" — asserted for all 128 defined characters plus `WEOF`, against XBD 7.3.1's `tolower` mapping | covered | test/posix-wctype.c (`test_towlower`) |
+| towupper | the mirror image, plus round-trip inverseness on the cased range | covered | test/posix-wctype.c (`test_towupper`) |
+| wctrans | "the following character mapping names are defined in all locales: tolower toupper"; "shall return 0 … if the given character mapping name is not valid"; distinct, stable handles | covered | test/posix-wctype.c (`test_wctrans`) |
+| towctrans | RETURN VALUE "shall return the mapped value of wc using the mapping described by desc. Otherwise, they shall return wc unchanged"; APPLICATION USAGE's two equivalences, whole domain | covered | test/posix-wctype.c (`test_towctrans`) |
+| towctrans | "If the value of desc is invalid … the result is unspecified", and the *may fail* `[EINVAL]` | N/A — unspecified result, optional error. `src/ctype/towctrans.c` documents choosing "return `wc` unchanged", which is also the page's own stated fallback, so that choice is asserted; the absent `[EINVAL]` is not a defect because the error is *may fail*, not *shall fail* | test/posix-wctype.c (`test_towctrans`) |
+| all thirteen isw*, towlower, towupper | ERRORS: "No errors are defined." | covered | test/posix-wctype.c (`test_no_errors_defined`) |
+| all sixteen | the whole undefined region outside U+0000..U+007F ∪ {`WEOF`} | N/A as a POSIX clause (undefined). Asserted instead against `include/wctype.h`'s own written commitment, in its own labelled section | test/posix-wctype.c (`test_documented_extension`) |
+
+### Observed behaviour where POSIX permits latitude (wctype.h)
+
+- **The equivalence table is the assertion that matters most in this
+  header, and it had a real failure mode.** `src/ctype/wctype.c` hands
+  out a 1-based index into a twelve-entry `classes[]` array;
+  `src/ctype/iswctype.c` consumes it with a hand-written twelve-case
+  switch. Two lists, kept in step by nothing but sitting near each other
+  in the tree. Transposing any two entries in either leaves both files
+  compiling and every pre-existing assertion passing — `test/posix-
+  wchar.c`'s only `iswctype()` checks use `"digit"` — while
+  `iswctype(wc, wctype("alpha"))` quietly answers `iswblank()`.
+  Confirmed by doing it: transposing `"lower"`/`"print"` in `classes[]`,
+  and separately rewiring one case of the switch, are each caught by
+  `test_iswctype_equivalence_table()` and by nothing else in the tree.
+- **The `isw*` family is implemented by delegation to the `is*`
+  family** (`src/ctype/iswalpha.c` is `return isalpha((int)wc);`, and so
+  on for eleven others). That is sound here and worth recording as
+  deliberate: in a locale whose character set is the portable character
+  set, the two families are required to agree, and the cast is safe for
+  the whole `wint_t` range because `src/ctype/*.c` are total arithmetic
+  functions rather than table lookups. It does mean the two families
+  share a fate; that is why `test/posix-ctype.c` and this file assert
+  against independent XBD 7.3.1 enumerations rather than against each
+  other.
+- **`WEOF` is `0xffffffffU`, `wint_t` is `unsigned`, `wchar_t` is 16-bit
+  `unsigned short`.** `WEOF` is therefore not representable as a
+  `wchar_t`, which is what `towlower.html`'s domain sentence requires,
+  and `(int)WEOF` is `-1`, which is `EOF` — so the delegation above
+  lands `WEOF` on the one `is*` domain member that is also required to
+  answer 0. Correct, but by a coincidence of two independent choices
+  rather than by construction, so it is recorded here.
+
+### Not reached (wctype.h)
+
+Nothing in the defined domain. The three unasserted clauses are all
+spec-unspecified or spec-optional and are listed as N/A rows above:
+`iswctype()` with an invalid `charclass`, `towctrans()` with an invalid
+`desc`, and `towctrans()`'s *may fail* `[EINVAL]`.
+
+The `_l` variants (`iswalnum_l` and the other fifteen, all `CX`) are
+declared by neither `include/wctype.h` nor any `src/` file, so they are
+a `POSIX-GAP-ACCOUNTING.md` matter, not a row here.
+
 ## stdio.h, the "implemented, not clause-audited" row (group K)
 
 The two rows `test/POSIX-GAP-ACCOUNTING.md`'s "Implemented, not

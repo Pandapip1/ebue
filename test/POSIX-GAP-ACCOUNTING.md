@@ -1107,6 +1107,33 @@ tokenisation caution the A-G note records:
   stay in this file's missing-interface accounting; group H does not
   touch them.
 
+**Group I — `wctype.h` (16).** `iswalnum iswalpha iswblank iswcntrl
+iswctype iswdigit iswgraph iswlower iswprint iswpunct iswspace iswupper
+iswxdigit towctrans towlower towupper`, in the new
+`test/posix-wctype.c`. All sixteen conformant; no BUGs. Subtract 16
+from 357.
+
+Note that this file's *other* table — "Audited (per
+`test/POSIX-COVERAGE.md`)" — already credits `wctype.h` with 2
+interfaces from priority 8. Those two are `wctype()` and `wctrans()`,
+the constructors, which are not among the sixteen; group I audits them
+again anyway (they are inseparable from `iswctype()`/`towctrans()`) but
+claims no new count for them. The sixteen and the two are disjoint, so
+neither table double-counts.
+
+Checked against every earlier row:
+
+- All sixteen appear as first-column identifiers of their own in group
+  I's table, so step 3 of "How this was produced" would see all sixteen.
+  `wctype` and `wctrans` also appear in a first column there and would
+  be seen — hence the paragraph above, which is the one place in this
+  batch where the tokeniser would *over*count rather than under.
+- No collision otherwise. `test/posix-wchar.c` calls fourteen of the
+  sixteen but is not cited as an audit row for any of them anywhere in
+  `POSIX-COVERAGE.md`; group I is their first row.
+- The `_l` variants of all sixteen stay in the missing-interface
+  accounting.
+
 ## Changes since the clause audit of the stdio.h and stdarg.h rows
 
 Dated note, 2026-08-24, added rather than folded into the headline
