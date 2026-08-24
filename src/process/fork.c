@@ -62,12 +62,38 @@
  * The one thing that does not make the trip on its own is *handle*
  * inheritance: NT copies into the clone only the handles marked
  * OBJ_INHERIT, the same rule __spawn relies on for redirected fds across
- * exec (see spawn.c).  open() and pipe() already mark every non-O_CLOEXEC
- * handle that way, but the three standard handles this process itself
- * inherited (and anything a future fcntl/dup path might leave otherwise)
- * are not guaranteed to be, so every open, non-close-on-exec descriptor
- * is (re-)marked inheritable here before cloning, the same way
- * __fd_runtime_data does for a spawned child.
+ * exec (see spawn.c).  So every open descriptor's handle is marked
+ * inheritable here before cloning, and the close-on-exec ones are put
+ * back afterwards, in both processes.
+ *
+ * Marking *every* descriptor, close-on-exec ones included, is the whole
+ * point, and it is not what this used to do.  A close-on-exec descriptor
+ * is deliberately given a handle without OBJ_INHERIT (open.c, pipe.c,
+ * dup.c, fcntl.c) so that exec does not carry it into the new program --
+ * but fork is not exec.  POSIX fork() hands the child every descriptor
+ * the parent had, close-on-exec included; they are only closed if and
+ * when the child actually execs.  Leaving them unmarked here left the
+ * clone with an fd table -- ordinary memory, so copied whole -- naming
+ * handles that were never copied with it, and a handle number NT is not
+ * using is a handle number NT will hand straight back out.  The first
+ * thing an exec'ing child does is RtlCreateUserProcess, whose new
+ * process handle lands on exactly such a free number whenever it is the
+ * lowest one; __fd_close_all_cloexec (exec.c) then closes it "as a
+ * descriptor" and the waitpid immediately after fails with
+ * STATUS_INVALID_HANDLE.  What the caller sees is execve() returning
+ * EBADF for a program that in fact started and ran to completion -- GNU
+ * make reporting "Bad file descriptor" and exit 127 for a compile whose
+ * object file is sitting right there.  A number recycled for something
+ * other than the child process gives EFAULT (STATUS_ACCESS_VIOLATION)
+ * or an object that never signals, i.e. a waitpid that never returns,
+ * which is the same bug wearing a different hat.  It is not a race: the
+ * clone's handle table is deterministic, so the same build loses the
+ * same files every time.
+ *
+ * The price is two NtDuplicateObject calls per open descriptor per fork
+ * rather than one per non-close-on-exec descriptor, and the close-on-exec
+ * handles are inheritable only for the length of the clone call itself --
+ * no exec can happen in between, so nothing leaks into a spawned program.
  *
  * The same goes for the process handles in __children: RtlCreateUserProcess
  * in __spawn and RtlCloneUserProcess here both hand them back
@@ -93,22 +119,43 @@
 #include <errno.h>
 #include "libc.h"
 
-/* Mark every open, non-O_CLOEXEC descriptor's handle inheritable so
- * RtlCloneUserProcess's INHERIT_HANDLES flag actually carries it into
- * the child.  NtDuplicateObject onto the same handle just adds the flag
- * in place; the fd table's numeric value doesn't change. */
+/* Set (inherit != 0) or clear the OBJ_INHERIT attribute on one open
+ * descriptor's handle, in place: NtDuplicateObject with the attribute
+ * asked for, then close the old handle and keep the new one under the
+ * same fd number.  DUPLICATE_SAME_ATTRIBUTES is deliberately not used --
+ * it would copy the source handle's attributes over the ones being
+ * asked for, which is exactly backwards when the point is to change
+ * one -- for the same reason mark_children_inheritable does not use it. */
+static void set_fd_inherit(int i, int inherit)
+{
+	HANDLE dup;
+	if (!__fds[i].h) return;
+	if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __fds[i].h, NtCurrentProcess(), &dup,
+	                                 0, inherit ? OBJ_INHERIT : 0, DUPLICATE_SAME_ACCESS))) {
+		NtClose(__fds[i].h);
+		__fds[i].h = dup;
+	}
+}
+
+/* Mark every open descriptor's handle inheritable so
+ * RtlCloneUserProcess's INHERIT_HANDLES flag carries it into the child --
+ * close-on-exec descriptors included, since fork gives the child all of
+ * them and only exec drops them (see this file's header comment). */
 static void mark_fds_inheritable(void)
 {
 	int i;
-	for (i = 0; i < FD_MAX; i++) {
-		HANDLE dup;
-		if (!__fds[i].h || (__fds[i].flags & O_CLOEXEC)) continue;
-		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __fds[i].h, NtCurrentProcess(), &dup,
-		                                 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES))) {
-			NtClose(__fds[i].h);
-			__fds[i].h = dup;
-		}
-	}
+	for (i = 0; i < FD_MAX; i++) set_fd_inherit(i, 1);
+}
+
+/* Undo that for the close-on-exec descriptors, once the clone has been
+ * made.  Run in both processes, before either can reach an exec, so a
+ * close-on-exec handle is never inheritable at the moment __spawn's
+ * InheritHandles=TRUE would copy it into a new program. */
+static void unmark_cloexec_fds(void)
+{
+	int i;
+	for (i = 0; i < FD_MAX; i++)
+		if (__fds[i].flags & O_CLOEXEC) set_fd_inherit(i, 0);
 }
 
 /* Set (inherit != 0) or clear the OBJ_INHERIT attribute on every tracked
@@ -153,12 +200,16 @@ pid_t fork(void)
 		 * a process that is a copy of this one.  Nothing else to set up
 		 * -- __peb, __teb(), the fd table, the heap are all just memory,
 		 * and all of it is already here.  The sibling handles in
-		 * __children made the trip; stop them travelling any further. */
+		 * __children made the trip; stop them travelling any further,
+		 * and put the close-on-exec descriptors back to non-inheritable
+		 * now that they have arrived. */
 		mark_children_inheritable(0);
+		unmark_cloexec_fds();
 		return 0;
 	}
 
 	mark_children_inheritable(0);
+	unmark_cloexec_fds();
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	/* The parent.  The child exists, suspended; track it like any other
