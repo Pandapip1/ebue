@@ -16,15 +16,19 @@ order below, and update this file as they go.
 "not yet reached" any more.** Every header and function group it named
 now has a clause-cited row, an explicit N/A with a stated reason, or a
 fenced BUG. What is left is per-section "Not reached" lists of
-individual *clauses* that cannot be exercised on this platform, and the
-two open BUGs recorded under priority 12/13. A successor's job is
-therefore no longer "pick up the next group" but one of: close an open
-BUG, re-audit against real Windows rather than Wine, or audit something
-newly implemented. Two habits from this pass are worth keeping: check
+individual *clauses* that cannot be exercised on this platform. The two
+BUGs recorded under priority 12/13 have since been fixed in commit
+`694a098` and their tests un-fenced; the one thing left open there is
+`chdir()`'s own [ENOTDIR] path-prefix gap, which the shared-layer fix
+does not reach because `chdir()` does not use the shared layer (see BUG
+1 under priority 12/13). A successor's job is therefore no longer "pick
+up the next group" but one of: close an open BUG, re-audit against real
+Windows rather than Wine, or audit something newly implemented. Two habits from this pass are worth keeping: check
 the tests before trusting a row (several groups were audited in the
 tree long before this file recorded it), and remember that coverage of
 one caller of a shared layer is not coverage of the layer — see BUG 2
-under priority 12/13 for what that cost.
+under priority 12/13 for what that cost, and for why `chdir()`'s
+private copy of the length check was nevertheless kept.
 
 Scope note: this file tracks functions ntlibc **implements**. POSIX
 functions it lacks entirely are tracked separately, in
@@ -852,8 +856,8 @@ priority 4, next to the base `is*`/`to*` family they belong with.
 | utime | RETURN VALUE: 0 on success, -1 with errno on failure | covered | test/posix-strings.c `test_utime_return_value` |
 | utime | ERRORS [ENOENT]: "A component of path does not name an existing file **or path is an empty string**" | covered (both halves) | test/posix-strings.c |
 | utime | ERRORS [ENOTDIR], trailing-slash half | covered | test/posix-strings.c (goes through `reject_if_not_dir()` in src/internal/path.c) |
-| utime | ERRORS [ENOTDIR], path-prefix half | **BUG (fenced)** — see "Bugs found" below | test/posix-strings.c `test_utime_enotdir_path_prefix` |
-| utime | ERRORS [ENAMETOOLONG] (shall-fail, component longer than {NAME_MAX}) | **BUG (fenced)** — see "Bugs found" below | test/posix-strings.c `test_utime_enametoolong` |
+| utime | ERRORS [ENOTDIR], path-prefix half | **fixed**, commit `694a098` (`reject_if_prefix_not_dir()` in `src/internal/path.c`; shared-layer fix, so it covers open/stat/access/unlink/mkdir/rename/opendir/utimensat too) | test/posix-strings.c `test_utime_enotdir_path_prefix` |
+| utime | ERRORS [ENAMETOOLONG] (shall-fail, component longer than {NAME_MAX}) | **fixed**, commit `694a098` (`__US_MAX_WCHARS` check hoisted into `__ntpath()`, plus `STATUS_NAME_TOO_LONG` → ENAMETOOLONG; same shared-layer reach) | test/posix-strings.c `test_utime_enametoolong` |
 | utime | ERRORS [EACCES], [EPERM] | N/A — both need a second security principal to be denied *as*; ntlibc models exactly one user (`geteuid()` is a hardcoded 1000) | -- |
 | utime | ERRORS [EROFS] | N/A — needs a read-only file system the harness cannot mount | -- |
 | utime | ERRORS [ELOOP] (both the shall-fail and may-fail forms) | N/A — needs a symbolic-link loop, and creating any symlink on NT requires `SeCreateSymbolicLinkPrivilege`, which the CI accounts do not hold (same limitation test/posix-glob.c documents) | -- |
@@ -963,13 +967,15 @@ long-option acceptance (`test_getopt_long_only`), `longindex`
 ### Bugs found (priority 12/13 groups)
 
 Two, both found while auditing `utime.html`'s ERRORS list, both fenced
-in `test/posix-strings.c` and **neither fixed** — a fix belongs in a
-change of its own, not in an audit pass.
+in `test/posix-strings.c` at the time (a fix belongs in a change of its
+own, not in an audit pass) and **both since fixed** in commit `694a098`,
+where the two tests were un-fenced.
 
-Neither is specific to `utime()`. Both were probed across the library
+Neither was specific to `utime()`. Both were probed across the library
 before being written up, and `open()`, `stat()`, `access()`, `unlink()`,
-`mkdir()` and `utimensat()` reproduce both; so each is **one** defect in
-the shared path layer (`src/internal/path.c`), not seven.
+`mkdir()` and `utimensat()` reproduced both; so each was **one** defect
+in the shared path layer (`src/internal/path.c`), not seven — and one
+shared fix closed each of them everywhere at once.
 
 1. **A path prefix component that names an existing regular file gives
    `ENOENT`, not `ENOTDIR`.** `utime.html` (and `open.html`,
@@ -986,16 +992,35 @@ the shared path layer (`src/internal/path.c`), not seven.
    `ENOENT` (correctly, for the first of the two). POSIX requires them
    told apart.
 
-   Implementable, not an NT limitation: `src/internal/path.c`'s
-   `reject_if_not_dir()` already does exactly this kind of extra
+   Was implementable, not an NT limitation: `src/internal/path.c`'s
+   `reject_if_not_dir()` already did exactly this kind of extra
    `NtQueryAttributesFile()` disambiguation for the *trailing-slash*
    half of the very same [ENOTDIR] clause (which is why that half
-   passes). The path-prefix half needs the same treatment — cheapest on
-   the `STATUS_OBJECT_PATH_NOT_FOUND` error path only, which is the
-   shape `renameat()` already uses to disambiguate
-   `STATUS_ACCESS_DENIED` into EISDIR/ENOTEMPTY (commit 3c606a7).
+   passed).
 
-   Fenced test: `test_utime_enotdir_path_prefix`.
+   **Fixed** in commit `694a098`: `reject_if_prefix_not_dir()` next to
+   it applies the same query to the path prefix, walking from the
+   nearest ancestor outwards. A path whose parent is a directory costs
+   one query and stops there (a directory's own parents cannot be
+   anything but directories); a deeper ancestor is only looked at once a
+   nearer one has come back missing, i.e. on a path that was going to
+   fail regardless. ENOTDIR is reported only on a positive answer, so
+   any query that cannot be answered still leaves the verdict to the
+   real operation.
+
+   One platform caveat, recorded because Wine is not the authority here:
+   Wine's `NtQueryAttributesFile` resolves a `RootDirectory`-relative
+   name against the *process* working directory rather than the root
+   handle (`dlls/ntdll/unix/file.c`: the Unix name `lookup_unix_name()`
+   built relative to the root fd is handed to `get_file_info()`), so
+   under Wine the `openat(dirfd, "file/below", …)` form still reports
+   ENOENT — as does the pre-existing trailing-slash check on the same
+   form, which Wine has never rejected either. NT hands the whole
+   `OBJECT_ATTRIBUTES` to `ObOpenObjectByName`, root handle included, so
+   both are expected to hold there; the `windows-test` CI legs are the
+   verdict.
+
+   Test (un-fenced): `test_utime_enotdir_path_prefix`.
 
 2. **An over-long pathname gives `ENOENT`, not `ENAMETOOLONG`.**
    `utime.html` lists as *shall fail*: "[ENAMETOOLONG] The length of a
@@ -1003,23 +1028,39 @@ the shared path layer (`src/internal/path.c`), not seven.
    form is only *may fail*; the 40000-byte single component the test
    uses exceeds both, so the shall-fail clause is the one that applies.)
 
-   Mechanism: `src/internal/path.c`'s `__ntpath()` funnels every
+   Mechanism: `src/internal/path.c`'s `__ntpath()` funnelled every
    `RtlDosPathNameToNtPathName_U_WithStatus()` failure other than
    `STATUS_NO_MEMORY` into a single `errno = ENOENT`. The correct check
-   exists in the same file — but only in `__ntpath_at()`'s
+   existed in the same file — but only in `__ntpath_at()`'s
    relative-to-a-dirfd branch (`n > __US_MAX_WCHARS`), which an
    `AT_FDCWD` or absolute path never reaches, because `__ntpath_at()`
-   forwards both straight to `__ntpath()`. Hoisting that check into
-   `__ntpath()` fixes every caller at once.
+   forwards both straight to `__ntpath()`.
 
-   `chdir()` is the **one** caller that reports this correctly, and only
-   because `src/unistd/chdir.c` carries its own copy of the length
+   **Fixed** in commit `694a098`: that check is hoisted into
+   `__ntpath()`, which fixes every caller of the layer at once, and
+   `STATUS_NAME_TOO_LONG` — what the Rtl returns for a relative name
+   that only overflows once resolved against the current directory — now
+   maps to ENAMETOOLONG instead of falling into the catch-all.
+
+   `chdir()` was the **one** caller that reported this correctly, and
+   only because `src/unistd/chdir.c` carries its own copy of the length
    check. `test/unistd.c` pins `chdir()` and `symlink()` — which is
    precisely why the gap in every other caller went unnoticed for so
    long. A cautionary case for this ledger: coverage of one caller of a
    shared layer is not coverage of the layer.
 
-   Fenced test: `test_utime_enametoolong`.
+   That private copy was reviewed as part of the fix and **kept**: it is
+   not a redundant second implementation of the shared check, because
+   `chdir()` never calls `__ntpath()` at all — it hand-builds a
+   `UNICODE_STRING` for `RtlSetCurrentDirectory_U()`, and the check
+   guards that narrowing. Deleting it would regress `chdir()` to ENOENT.
+   The same asymmetry leaves `chdir()` with the [ENOTDIR] path-prefix
+   gap the shared layer no longer has (`chdir("file/below")` still gives
+   ENOENT), since the prefix check likewise lives in `__ntpath()`;
+   recorded here as open, and deliberately not patched with a third
+   private copy.
+
+   Test (un-fenced): `test_utime_enametoolong`.
 
 ### Not reached (priority 12/13 groups)
 
