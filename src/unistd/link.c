@@ -70,6 +70,7 @@ ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsz)
 	NTSTATUS st;
 	char rb[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
 	REPARSE_DATA_BUFFER *r = (REPARSE_DATA_BUFFER *)rb;
+	FILE_ATTRIBUTE_TAG_INFORMATION ti;
 	const WCHAR *name;
 	size_t nlen, i;
 	WCHAR *tmp;
@@ -80,6 +81,21 @@ ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsz)
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	/* [EINVAL] "The path argument names a file that is not a symbolic
+	 * link".  Whether it is one is a file attribute, and asking for the
+	 * attribute answers that question directly.  Deciding it from
+	 * FSCTL_GET_REPARSE_POINT's status instead only works on a volume
+	 * whose driver implements the FSCTL at all: one that does not (FAT,
+	 * and several redirectors) refuses the request outright --
+	 * STATUS_INVALID_DEVICE_REQUEST, STATUS_NOT_SUPPORTED -- rather than
+	 * with STATUS_NOT_A_REPARSE_POINT, and every plain file on such a
+	 * volume then reported that refusal's errno in place of EINVAL. */
+	st = NtQueryInformationFile(h, &io, &ti, sizeof ti, FileAttributeTagInformation);
+	if (NT_SUCCESS(st) && !(ti.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+		NtClose(h);
+		errno = EINVAL;
+		return -1;
+	}
 	st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_GET_REPARSE_POINT, 0, 0, r, sizeof rb);
 	NtClose(h);
 	if (st == STATUS_NOT_A_REPARSE_POINT) { errno = EINVAL; return -1; }
