@@ -150,13 +150,35 @@ implementation):
    Job control in particular is called out as permanently out of scope
    ("the libc needs none of them"); functions and aliases are not
    ruled out forever, just not yet decided.
-4. **A `main()` with `-c` and script-file handling** — there is
-   currently no `sh` binary at all, only `test/sh-engine.c`'s test harness
-   (which re-execs itself for child roles, not a general-purpose
-   entry point). This needs (1) and a scope decision on (2) to be
-   worth shipping as a real `sh -c "..."`/`sh script` a user would
-   actually invoke, per "Placement and gates" above (its own source
-   directory and binary, not blurred into `src/`).
+4. **A `main()` with `-c` and script-file handling** — *done*:
+   `sh/main.c`, built as `obj/sh/sh.exe` by `make sh` (and by `make
+   all`), with its own black-box tests in `test/sh-main.c`. Its own
+   source directory and binary, per "Placement and gates" above.
+   Supports `sh -c command_string [command_name [arg...]]`, `sh [-s]
+   [command_file [arg...]]`, a script on standard input, `--`/`-`,
+   and XCU 2.8.2's exit status (that of the last command executed).
+
+   It deliberately shipped *ahead* of (1) and without (2), which this
+   entry had assumed it would wait for. What made that defensible is
+   that it refuses, up front and by name, every construct the engine
+   would otherwise misread rather than diagnose: control-flow reserved
+   words and unimplemented built-ins (all of which lex as ordinary
+   WORDs today, so `if`/`export` would run as external commands and
+   fail with a *true* "command not found" about a fiction — or, for
+   `export`, fail while silently not exporting), positional and
+   special parameters (`wordexp()` expands only `$NAME`/`${NAME}`, so
+   `"$1"` reaches the command as two literal characters), and `&`
+   (which `__sh_exec_list()` currently runs synchronously). A script
+   that uses one of those stops before anything runs, with a message
+   saying which. Positional parameters are not plumbed through at all
+   and are not faked: there is nowhere to put them, since the only
+   variable store any expansion sees is the real `environ`.
+
+   That leaves an honest, narrow shell rather than a broad and subtly
+   wrong one — the property "Placement and gates" says matters most
+   ("a shell that is subtly wrong ... is worse than no shell, because
+   callers cannot tell"). Each of (1), (2) and (3) landing shortens
+   the refusal list rather than changing the binary's shape.
 5. **Wiring `system()`/`popen()`/`wordexp()` over to it** — the actual
    payoff (see "Why a libc project is growing a shell" above). Once
    (1) exists, `wordexp()`'s own `WRDE_CMDSUB` refusal can be replaced
@@ -169,4 +191,5 @@ implementation):
 
 None of the above blocks anything already shipped: stages 2-4 are a
 complete, correctly-scoped subset on their own, tested against the
-XCU clauses they implement.
+XCU clauses they implement, and (4) above now exposes exactly that
+subset as a real program.

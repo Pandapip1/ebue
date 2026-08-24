@@ -12,8 +12,8 @@
  * source directory and binary -- rather than blurring into src/", and
  * CONTRIBUTING.md's "Why a shell lives in a libc repo" says the same
  * thing in terms of what the rest of that file is about. Mechanically it
- * also matters: the Makefile builds lib/libc.a from a src/* wildcard, so
- * a main() under src/ would be archived into libc.a and could collide
+ * also matters: the Makefile builds lib/libc.a from a wildcard over src/,
+ * so a main() under src/ would be archived into libc.a and could collide
  * with the main() of every program that links it.
  *
  * ---- What this accepts (XCU sh(1p), "SYNOPSIS") ----------------------

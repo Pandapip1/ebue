@@ -56,6 +56,15 @@ from the ntdll-facing library code the rest of this file is about —
 `src/sh/` is a self-contained command-language layer, not something
 blurred into `src/stdlib/` or `src/wordexp/`.
 
+Concretely: `src/sh/` is the engine (parser, executor) and is part of
+`libc.a` like any other module; `sh/main.c` is the entry point and builds
+to `obj/sh/sh.exe` (`make sh`, or `make all`, installed into
+`$prefix/bin`). `test/sh-engine.c` tests the engine in-process;
+`test/sh-main.c` tests the binary as a process. The binary refuses, with
+a diagnostic naming what is unsupported, anything the engine would
+misread rather than report — see `sh/main.c`'s header for the list and
+`test/sh-design.md` for what is still to come.
+
 ## Other conventions
 
 - SPDX header on every new file (this project is
