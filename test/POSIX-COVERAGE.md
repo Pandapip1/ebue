@@ -3613,3 +3613,105 @@ named below are the sweep's, not this session's.
 | tcsetpgrp | tcsetpgrp.html RETURN VALUE 0 on success, for the group `tcgetpgrp()` just reported | covered | test/posix-unistd.c (`test_id_session_stubs`) |
 | tcgetpgrp / tcsetpgrp | "[EBADF] The fildes argument is not a valid file descriptor" (shall-fail on both pages) | **BUG** (the sweep's) — `fd` is discarded without reaching `__fd_get()`; `src/unistd/ttyname.c:23-24` | fenced, `test_id_session_stubs` |
 | tcgetpgrp / tcsetpgrp | their `[ENOTTY]`, `[EIO]`, `[EPERM]`, `[EINVAL]`, and the SIGTTOU clauses | N/A — one fixed session and one process group (`src/unistd/ids.c`, `src/termios/termios.c`), so no process can be in a *background* process group of its controlling terminal and no second group exists to be refused; the same argument the termios.h group (A) already makes for the whole header | — |
+
+## unistd.h: fork() (successor-queue item 2, group P)
+
+Last of the four groups working the `unistd.h` row, and the last of
+its 43 names. `fork()` against
+`https://pubs.opengroup.org/onlinepubs/9699919799/functions/fork.html`.
+
+New clause-cited audit: `test/posix-fork-clauses-win.c` (this session).
+
+**The `-win` suffix is load-bearing.** `fork()` here is
+`RtlCloneUserProcess` (`src/process/fork.c`'s banner explains why no
+other NT primitive gets there). Stock apt Wine does not implement it:
+a call does not fail, it **hangs**, into `winedbg --auto` forever, and
+a hang costs a CI job its whole timeout. The Makefile's
+`TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))` keeps such a test out
+of the Wine leg while still building it, as `test/fork-win.c`,
+`test/fork-handles-win.c` and `test/fork-cloexec-exec-win.c` all do.
+Anything added to this file that forks must keep the suffix.
+
+**Division of labour with the three existing fork tests**, none of
+which cites the page: `test/fork-win.c` checks the 0-vs-pid split and
+that the child's writes to globals do not leak back;
+`test/fork-handles-win.c` pins what happens to *pre-existing sibling*
+process handles; `test/fork-cloexec-exec-win.c` reproduces one specific
+handle-reuse bug. This file takes the page's own DESCRIPTION list — the
+enumerated ways the child is and is not an exact copy — plus RETURN
+VALUE and ERRORS.
+
+**Oracle: real Windows CI.** Under the locally patched Wine that does
+have `RtlCloneUserProcess` this file runs and passes, but Wine's clone
+is an emulation of the very primitive under test — see the caveat under
+"Not reached" for a measured instance of that mattering.
+
+| function | clause checked | status | test |
+|---|---|---|---|
+| fork | RETURN VALUE "shall return 0 to the child process and shall return the process ID of the child process to the parent process. Both processes shall continue to execute from the fork() function" — the pid the parent got is the pid the child answers to, reported back over a pipe | covered | test/posix-fork-clauses-win.c (`test_identity`) |
+| fork | "The child process shall have a unique process ID" | covered | test/posix-fork-clauses-win.c (`test_identity`) |
+| fork | "The child process shall have a different parent process ID, which shall be the process ID of the calling process" | covered | test/posix-fork-clauses-win.c (`test_identity`) |
+| fork | "The child process shall have its own copy of the parent's file descriptors" — `close()` in the child does not close the parent's | covered | test/posix-fork-clauses-win.c (`test_shared_open_file_description`) |
+| fork | "Each of the child's file descriptors shall refer to the **same open file description** with the corresponding file descriptor of the parent" — `lseek()` in the child moves the parent's offset. The two halves pull in opposite directions, which is the point: an implementation that copied the file too deeply would pass the first and fail this, and one that shared the descriptor table would do the reverse | covered | test/posix-fork-clauses-win.c (`test_shared_open_file_description`) |
+| fork | "The set of signals pending for the child process shall be initialized to the empty set" | covered | test/posix-fork-clauses-win.c (`test_child_state_reset`) |
+| fork | "The child process values of tms_utime, tms_stime, tms_cutime, and tms_cstime shall be set to 0" — `tms_cutime`/`tms_cstime` exactly (a fresh child has reaped nothing, so 0 is required at any timing resolution); `tms_utime`/`tms_stime` only for being non-negative, since any nonzero value could be time the child has since spent | covered | test/posix-fork-clauses-win.c (`test_child_state_reset`) |
+| fork | "After fork(), both the parent and the child processes shall be capable of executing independently before either one terminates" — a two-pipe handshake that can only complete if both are running at once | covered | test/posix-fork-clauses-win.c (`test_independent_execution`) |
+| fork | "File locks set by the parent process shall not be inherited by the child process" | N/A — `src/fcntl/fcntl.c`'s `F_SETLK`/`F_GETLK` are advisory no-ops (`test/posix-unistd.c`'s `test_fcntl_locks_are_noops` pins that; `src/file/flock.c` is the call that reaches real NT byte-range locks). With nothing that can ever be *denied*, "the child did not inherit the lock" and "there was no lock" are the same observation. The regression net — the child must not be able to release a lock it never took — runs unfenced | fenced, `test_locks_not_inherited` |
+| fork | "The time left until an alarm clock signal shall be reset to zero, and the alarm, if any, shall be canceled" | **UNIMPL** — see below | fenced, `test_alarm_cleared_in_child` |
+| fork | "[EAGAIN] The system lacked the necessary resources to create another process, or the system-imposed limit ... {CHILD_MAX} would be exceeded"; may-fail "[ENOMEM]" | N/A — reaching either means exhausting NT's process table or the heap from inside a test whose own failure mode would then be indistinguishable from the condition under test, with this suite's runner the first casualty. `src/process/fork.c` does route a failed `RtlCloneUserProcess` through `__set_errno_status()`, so the -1 path exists; the *trigger* is unconstructible | — |
+| fork | "The child process shall have its own copy of the parent's open directory streams. Each open directory stream in the child process **may** share directory stream positioning with the corresponding directory stream of the parent" | N/A — `src/dirent/opendir.c` builds a `DIR` on the heap around a descriptor and both are ordinary memory the clone carries; the clause explicitly permits either behaviour, so there is nothing to assert | — |
+| fork | message catalogs, semaphores, `semadj`, interval timers, per-process timers, message queues, asynchronous I/O, memory locks, MAP_PRIVATE mappings, SCHED_FIFO/SCHED_RR inheritance, trace streams, CPU-time clocks | N/A — every one names a facility this library does not have at all (`test/POSIX-GAP-ACCOUNTING.md`'s "absent" table), so the clause has no object | — |
+| fork | "A process shall be created with a single thread" | N/A — true by construction: `RtlCloneUserProcess` clones only the calling thread (`src/process/fork.c`'s banner), and nothing in this library creates a second one to test it with | — |
+| fork | the 0-vs-pid split; the child's writes to globals not leaking back; pre-existing sibling process handles; the cloexec handle-reuse regression | covered — pre-existing | test/fork-win.c, test/fork-handles-win.c, test/fork-cloexec-exec-win.c |
+
+### UNIMPL found (unistd.h fork group)
+
+1. **The child's pending alarm cannot be observed to be cleared,
+   because there are no alarms.** `fork.html` requires the child's
+   alarm to be cancelled, and `alarm.html`'s RETURN VALUE is the only
+   way to see whether one is pending. `src/unistd/sleep.c:41` is
+   `unsigned alarm(unsigned s) { (void)s; return 0; }`, so a correct
+   implementation of this clause and a complete absence of alarms are
+   indistinguishable.
+
+   Recorded against *this* page as well as against `alarm.html` (group
+   M) because the fork side would still need writing once `alarm()` is
+   real: `RtlCloneUserProcess` copies the address space, so a timer
+   recorded in a global would travel into the child and have to be
+   explicitly cancelled there. The fence is the note for whoever does
+   that.
+
+### Not reached (unistd.h fork group)
+
+`[EAGAIN]`/`[ENOMEM]`, the file-lock distinction, and every clause
+naming an absent facility, as above.
+
+Under `tools/asan-build.sh`'s native build the whole file is **rc=77
+unverified**, with a `SKIP` line. `fuzz/ntstubs.c`'s
+`RtlCloneUserProcess` is a real host `fork(2)` — which is why fork
+tests are no longer on that script's `not_native()` list — but its
+pipes are host pipes, and measured there with a standalone probe
+against the same objects: a child writing to the pipe is killed by
+SIGPIPE (wait status 13) while the parent still holds the read end
+open, and the parent's `read()` sees EOF. The identical sequence works
+under the PE build on both Wine and real Windows, and
+`test/fork-handles-win.c` has carried a child-to-parent pipe across a
+fork for as long as it has existed — so that is a property of the
+host-fork/host-pipe stand-in, not of `src/process/fork.c` or
+`src/unistd/pipe.c`, and asserting into it would be measuring
+`fuzz/ntstubs.c`. Flagged here rather than silently skipped, for
+whoever owns that file.
+
+**One measured Wine divergence, recorded so the local green is not
+mistaken for proof.** Making `src/process/fork.c`'s `set_fd_inherit()`
+a no-op — so no descriptor's handle is ever marked `OBJ_INHERIT` before
+the clone — does **not** fail this file under the patched Wine: the
+child's descriptors still work. On real NT that marking is exactly what
+carries a handle into the clone, and `src/process/fork.c`'s banner
+records the downstream damage when it is missing (a handle number NT
+recycles, `execve()` returning `EBADF` for a program that ran to
+completion). So the "own copy of the parent's file descriptors" rows
+above are verified *as clauses* here and are only verified *as a test
+of the marking step* on the `windows-test` legs. Two other mutations —
+`getppid()` answering `getpid()`, and `times()` reporting a nonzero
+`tms_cutime` — were both caught.

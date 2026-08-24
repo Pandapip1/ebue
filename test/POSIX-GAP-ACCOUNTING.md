@@ -1483,3 +1483,64 @@ purely because no first-column row named them. Whoever re-runs the
 pipeline should expect its answer to differ from the prose in all three
 of these notes, and should trust the prose about *which pages have been
 audited* over any tokeniser's total.
+
+## Changes since the clause audit of the `unistd.h` row (group P) — row closed
+
+Dated note, 2026-08-24, same route and reason as the M, N and O/Q notes
+above.
+
+`test/POSIX-COVERAGE.md`'s new section **"unistd.h: fork()
+(successor-queue item 2, group P)"** clause-audits the **last** of the
+43 interfaces in the "Implemented, not clause-audited (357)" table's
+`unistd.h` row.
+
+**That row is now closed: 43 -> 0.** Reading the frozen table,
+subtract all 43 from 357 and add them to *implemented +
+clause-audited*; `unistd.h`'s "not clause-audited" count is 0, and its
+"implemented + clause-audited" pointer row (34) rises by 43 to 77.
+
+Split across the four groups: M 25, N 3, O 7, P 1, plus Q's 6
+bookkeeping rows for names the never-asserted sweep had already
+audited without giving them a row. (25+3+7+1+6 = 42, and `swab` is the
+43rd, also in group Q — Q covers seven names.)
+
+Group P's finding is a single **UNIMPL**, and it is the same gap group
+M records against `alarm.html`, recorded twice on purpose: `fork.html`
+requires the child's pending alarm to be cancelled, and with
+`src/unistd/sleep.c:41` returning 0 unconditionally there is no alarm
+to cancel and no way to observe the clause. The fork side will still
+need writing when `alarm()` becomes real, because
+`RtlCloneUserProcess` copies the address space and a timer in a global
+would travel into the child.
+
+**`test/posix-fork-clauses-win.c` carries the `-win` suffix and must
+keep it.** Stock apt Wine has no `RtlCloneUserProcess`, so a fork does
+not fail there, it hangs; `TEST_RUN = $(filter-out %-win.exe,...)` is
+what keeps the Wine leg from paying a full job timeout for it.
+
+**A Wine divergence worth knowing before trusting a local green run.**
+Making `src/process/fork.c`'s `set_fd_inherit()` a no-op — so nothing
+is ever marked `OBJ_INHERIT` before the clone — does not fail that file
+under the patched Wine; the child's descriptors keep working. On real
+NT the marking is what carries a handle into the clone, and this file's
+own `src/process/fork.c` notes record what breaks without it. The
+`windows-test` legs are the only authority for that step.
+
+### Running total for the `unistd.h` row
+
+| group | interfaces | bugs | UNIMPL |
+|---|---|---|---|
+| M — identity, process group, session, `alarm`/`pause`/`nice`/`gethostname` | 25 | 6 | 3 |
+| N — `linkat`/`readlinkat`/`symlinkat` | 3 | 2 | 0 |
+| O — the `exec` family's ERRORS | 7 | 2 | 1 |
+| P — `fork` | 1 | 0 | 1 |
+| Q — bookkeeping rows for names already audited | 7 | (2 pre-existing) | 0 |
+| **total** | **43** | **10** | **5** |
+
+**Every one of the ten is a shall-fail error clause or a specified
+errno value**, which is now the fourth independent confirmation of that
+pattern in this codebase — the never-asserted sweep's six, a concurrent
+auditor's `newlocale`/`posix_fadvise`/`posix_fallocate`/`snprintf`
+finds, and these ten. "Exists and links" remains a much weaker
+statement than it looks, and so, this row shows, does "has a first
+assertion": all but one of these 43 already had one.
