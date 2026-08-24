@@ -49,6 +49,9 @@
  *   2.9.1 Simple Commands  2.9.2 Pipelines  2.9.3 Lists
  *   2.9.4 Compound Commands (Grouping Commands)
  *   2.10.2 Shell Grammar Rules
+ *   2.2.2 Single-Quotes  2.2.3 Double-Quotes
+ *   2.6.3 Command Substitution  2.6.5 Field Splitting
+ *   2.12 Shell Execution Environment
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -612,25 +615,27 @@ static void test_exec_reuses_wordexp_param_expansion(const char *self)
 
 /* Constructs no stage yet implements are reported as -1 ("cannot
  * execute this AST node yet"), never silently misexecuted -- see
- * sh.h's __sh_exec_*() comment. Pipelines and redirection (stage 3) and
- * subshells/brace groups (stage 4) are implemented as of this file --
- * see the tests below; command substitution remains stage 5. */
-static void test_exec_reports_unimplemented_constructs(void)
+ * sh.h's __sh_exec_*() comment.
+ *
+ * This test used to assert exactly the opposite of what it asserts now.
+ * Command substitution in a redirection target word and in an unquoted
+ * here-document body were stage 4's named, tested "not yet"; stage 5
+ * implements them, so those three -1s became results, and they are
+ * checked as results by test_exec_cmdsub_in_redirections() below. What
+ * is left here is the convention itself, which is still live and still
+ * needs a construct that genuinely reaches it: two directly adjacent
+ * compound-command stages in one pipeline, which src/sh/exec.c refuses
+ * up front rather than deadlock without a fork(). */
+static void test_exec_reports_unimplemented_constructs(const char *self)
 {
+	char src[512];
 	int status;
-	/* Command substitution stays stage 5 in every position this stage
-	 * newly touches: a redirection target word and an unquoted
-	 * here-document body, including when the redirection/heredoc
-	 * belongs to a stage-4 group rather than a simple command. */
-	CHECK(run("echo hi > $(echo out)", &status) == -1);
-	CHECK(run("(echo hi) > $(echo out)", &status) == -1);
-	CHECK(run("{ echo hi > $(echo out); }", &status) == -1);
-	{
-		char err[256];
-		struct sh_list *l = __sh_parse("cat <<EOF\n$(echo x)\nEOF\n", err, sizeof err);
-		CHECK(l != 0);
-		if (l) { CHECK(__sh_exec_list(l, &status) == -1); __sh_list_free(l); }
-	}
+
+	snprintf(src, sizeof src, "('%s' --produce a) | { '%s' --cat; }", self, self);
+	CHECK(run(src, &status) == -1);
+
+	snprintf(src, sizeof src, "{ '%s' --produce a; } | ('%s' --cat)", self, self);
+	CHECK(run(src, &status) == -1);
 }
 
 /* ---- stage 3: redirections and pipelines --------------------------------
@@ -1339,6 +1344,527 @@ static void test_exec_group_pipeline_stage(const char *self)
  * *out_len receives the byte count (never counting a NUL this doesn't
  * add). Returns a malloc'd buffer (possibly zero-length, never NULL on
  * success) or NULL on a real read error. */
+/* ---- stage 5: command substitution (XCU 2.6.3) --------------------------
+ *
+ * https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html
+ *   2.6.3 Command Substitution   2.6.5 Field Splitting
+ *   2.9.1 Simple Commands (the "no command name" exit-status rule)
+ *   2.12 Shell Execution Environment (the subshell environment 2.6.3 cites)
+ *
+ * Every one of these needs the substituted command's standard output to
+ * actually reach the capture __sh_cmdsub() sets up, which is a
+ * redirection of *this* process's fd 1 that a spawned child has to
+ * observe -- exactly what file_redir_supported() above tests for, so
+ * everything that inspects captured text gates on it. The three
+ * exit-status tests do not: a status comes back through waitpid()
+ * whatever the child's fd 1 was.
+ *
+ * Both substitution forms are covered case for case, not one covered
+ * and the other spot-checked. The backquoted form is not the awkward
+ * sibling here: an autoconf-generated `configure` -- the concrete thing
+ * a working sh on this platform would be handed -- uses backquotes
+ * about fourteen times as often as "$(...)", so its own rules (2.6.3's
+ * "first unquoted non-escaped backquote" search, its backslash removal,
+ * and nesting *through* that backslash removal rather than through
+ * matching parentheses) are the ones most likely to be exercised in
+ * anger. Note also that every backtick test below has this binary's own
+ * Windows path -- backslashes and all -- inside the backquotes, in
+ * single quotes: 2.6.3's backslash rule removes a backslash only before
+ * '$', '`' or another backslash, so "Z:\tmp\...\sh.exe" survives it
+ * intact, and a rule that over-removed would break these tests loudly.
+ */
+
+/* Runs "'self' --produce-join WORDS > tmp" and returns what the child
+ * received as argv[2..], comma-joined -- i.e. exactly the fields WORDS
+ * expanded to, in order. Returns a malloc'd string the caller frees, or
+ * NULL if the command could not be run at all; *status gets the
+ * command's exit status. */
+static char *fields_of(const char *self, const char *words, int *status)
+{
+	char src[1024], *tmp = make_tmp(), *got;
+	if (!tmp) return 0;
+	snprintf(src, sizeof src, "'%s' --produce-join %s > %s", self, words, tmp);
+	if (run(src, status) != 0) { remove(tmp); free(tmp); return 0; }
+	got = slurp(tmp);
+	remove(tmp);
+	free(tmp);
+	return got;
+}
+
+/* 2.6.3: "The shell shall expand the command substitution by executing
+ * command in a subshell environment ... and replacing the command
+ * substitution (the text of command plus the enclosing "$()" or
+ * backquotes) with the standard output of the command, removing
+ * sequences of one or more <newline> characters at the end of the
+ * substitution." */
+static void test_exec_cmdsub_basic(const char *self)
+{
+	char words[512], *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+
+	snprintf(words, sizeof words, "$('%s' --produce hi)", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "hi") == 0);	/* not "hi\n" */
+	CHECK(status == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "`'%s' --produce hi`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "hi") == 0);
+	CHECK(status == 0);
+	free(got);
+
+	/* "sequences of one or more" -- three trailing newlines all go. */
+	snprintf(words, sizeof words, "$('%s' --produce-trailing hi)", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "hi") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "`'%s' --produce-trailing hi`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "hi") == 0);
+	free(got);
+
+	/* A substitution is part of the word it appears in, not a word of
+	 * its own: text either side of it concatenates, and two of them in
+	 * one word still make one word. */
+	snprintf(words, sizeof words, "x$('%s' --produce hi)y", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "xhiy") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "x`'%s' --produce hi`y", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "xhiy") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "$('%s' --produce a)`'%s' --produce b`", self, self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "ab") == 0);
+	free(got);
+}
+
+/* 2.6.3: "Embedded <newline> characters before the end of the output
+ * shall not be removed; however, they may be treated as field
+ * delimiters and eliminated during field splitting" (2.6.5), and "If a
+ * command substitution occurs inside double-quotes, field splitting and
+ * pathname expansion shall not be performed on the results of the
+ * substitution."  So the *same* two-line output is two fields unquoted
+ * and one field (newline intact) quoted. */
+static void test_exec_cmdsub_field_splitting(const char *self)
+{
+	char words[512], *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+
+	snprintf(words, sizeof words, "$('%s' --produce-embedded a b)", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "a,b") == 0);	/* two fields */
+	free(got);
+
+	snprintf(words, sizeof words, "\"$('%s' --produce-embedded a b)\"", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "a\nb") == 0);	/* one field, newline kept */
+	free(got);
+
+	snprintf(words, sizeof words, "`'%s' --produce-embedded a b`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "a,b") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "\"`'%s' --produce-embedded a b`\"", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "a\nb") == 0);
+	free(got);
+
+	/* Spaces in the output split the same way newlines do, and a
+	 * substitution that produces nothing at all produces no field --
+	 * "x $(nothing) y" is two words, not three. */
+	snprintf(words, sizeof words, "$('%s' --produce 'p q r')", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "p,q,r") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "x $('%s' --produce-join '') y", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "x,y") == 0);
+	free(got);
+}
+
+/* 2.6.3, same clause: pathname expansion is performed on an unquoted
+ * substitution's result and not on a double-quoted one. Needs a real
+ * file to match, created here rather than assumed. */
+static void test_exec_cmdsub_pathname_expansion(const char *self)
+{
+	char words[512], *got;
+	int status;
+	FILE *f;
+
+	if (!file_redir_supported(self)) return;
+
+	f = fopen("shcsA1", "wb");
+	CHECK(f != 0);
+	if (!f) return;
+	fclose(f);
+
+	snprintf(words, sizeof words, "$('%s' --produce-join 'shcsA*')", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "shcsA1") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "\"$('%s' --produce-join 'shcsA*')\"", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "shcsA*") == 0);
+	free(got);
+
+	remove("shcsA1");
+}
+
+/* 2.6.3: "The results of command substitution shall not be processed
+ * for further tilde expansion, parameter expansion, command
+ * substitution, or arithmetic expansion." A '$NAME' in the output stays
+ * six literal bytes even with NAME set. */
+static void test_exec_cmdsub_result_not_reexpanded(const char *self)
+{
+	char words[512], *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+	setenv("SH_TEST_CMDSUB_VAR", "expanded", 1);
+
+	snprintf(words, sizeof words, "$('%s' --produce-join '$SH_TEST_CMDSUB_VAR')", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "$SH_TEST_CMDSUB_VAR") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "`'%s' --produce-join '$SH_TEST_CMDSUB_VAR'`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "$SH_TEST_CMDSUB_VAR") == 0);
+	free(got);
+
+	unsetenv("SH_TEST_CMDSUB_VAR");
+}
+
+/* 2.6.3: "Command substitution can be nested."  For "$(...)" that is
+ * just matching parentheses; for the backquoted form, "To specify
+ * nesting within the backquoted version, the application shall precede
+ * the inner backquotes with <backslash> characters" -- which works only
+ * because the same clause's backslash rule turns the escaped inner
+ * backquotes back into real ones in the command text.
+ *
+ * Also 2.6.3's own worked example of the "$((" ambiguity: "a command
+ * substitution containing a single subshell could be written as
+ * $( (command) )" -- with the space, so it is not read as an arithmetic
+ * expansion. */
+static void test_exec_cmdsub_nesting(const char *self)
+{
+	char words[512], *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+
+	snprintf(words, sizeof words, "$('%s' --produce-join $('%s' --produce inner))", self, self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "inner") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "`'%s' --produce-join \\`'%s' --produce inner\\``", self, self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "inner") == 0);
+	free(got);
+
+	/* Three deep, backquoted: the inner-inner pair needs its
+	 * backslashes escaped in turn ("\\\\`" in C is \\` in the shell
+	 * source), which is exactly the doubling real scripts write. */
+	snprintf(words, sizeof words,
+	         "`'%s' --produce-join \\`'%s' --produce-join \\\\\\`'%s' --produce deep\\\\\\`\\``",
+	         self, self, self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "deep") == 0);
+	free(got);
+
+	/* Mixed: a backquoted substitution inside a "$(...)" one, and the
+	 * reverse. Both nest without any escaping at all, since neither
+	 * form's terminator can be confused for the other's. */
+	snprintf(words, sizeof words, "$('%s' --produce-join `'%s' --produce mixed1`)", self, self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "mixed1") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "`'%s' --produce-join $('%s' --produce mixed2)`", self, self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "mixed2") == 0);
+	free(got);
+
+	/* $( (command) ) -- 2.6.3's prescribed spelling for a substitution
+	 * whose command is a subshell. */
+	snprintf(words, sizeof words, "$( ('%s' --produce sub) )", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "sub") == 0);
+	free(got);
+}
+
+/* 2.6.3: "Within the backquoted style of command substitution,
+ * <backslash> shall retain its literal meaning, except when followed
+ * by: '$', '`', or <backslash>."  Each of the three exceptions is
+ * checked by making the *unescaped* and the *not-unescaped* readings
+ * produce visibly different output -- a test that passed either way
+ * would be worth nothing. "$(...)" is checked alongside each, where the
+ * same bytes mean something else entirely because its command text is
+ * taken verbatim. */
+static void test_exec_cmdsub_backquote_backslash(const char *self)
+{
+	char words[512], *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+	setenv("SH_TEST_CMDSUB_VAR", "expanded", 1);
+
+	/* \$ -> $ : the command text gets a live '$', so the *inner*
+	 * command's word is a parameter expansion. Without the unescaping
+	 * the inner word would be "\$SH_TEST_CMDSUB_VAR", whose backslash
+	 * makes the '$' literal. */
+	snprintf(words, sizeof words, "`'%s' --produce-join \\$SH_TEST_CMDSUB_VAR`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "expanded") == 0);
+	free(got);
+
+	/* The same bytes inside "$(...)", where nothing is unescaped: the
+	 * inner word really is "\$SH_TEST_CMDSUB_VAR" and the '$' stays
+	 * literal. */
+	snprintf(words, sizeof words, "$('%s' --produce-join \\$SH_TEST_CMDSUB_VAR)", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "$SH_TEST_CMDSUB_VAR") == 0);
+	free(got);
+
+	/* \\ -> \ : the command text gets one backslash, which the inner
+	 * word's own quote removal then consumes, so "a\\b" here reaches
+	 * the child as "ab". Not unescaping would leave two backslashes,
+	 * of which quote removal eats one, giving "a\b". */
+	snprintf(words, sizeof words, "`'%s' --produce-join a\\\\b`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "ab") == 0);
+	free(got);
+
+	snprintf(words, sizeof words, "$('%s' --produce-join a\\\\b)", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "a\\b") == 0);
+	free(got);
+
+	/* A backslash before anything else keeps "its literal meaning" --
+	 * it is passed through to the command text as a backslash, still
+	 * escaping the character after it there. */
+	snprintf(words, sizeof words, "`'%s' --produce-join a\\qb`", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "aqb") == 0);
+	free(got);
+
+	unsetenv("SH_TEST_CMDSUB_VAR");
+}
+
+/* 2.2.3 Double-Quotes: "The backquote shall retain its special meaning
+ * introducing the other form of command substitution", and inside
+ * double-quotes <backslash> is special before '$', '`', '"', '\' and
+ * <newline> -- so an escaped backquote there is a literal backquote,
+ * not the start of a substitution. */
+static void test_exec_cmdsub_in_double_quotes(const char *self)
+{
+	char words[512], *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+
+	snprintf(words, sizeof words, "\"pre `'%s' --produce mid` post\"", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "pre mid post") == 0);	/* one field */
+	free(got);
+
+	snprintf(words, sizeof words, "\"pre $('%s' --produce mid) post\"", self);
+	got = fields_of(self, words, &status);
+	CHECK(got && strcmp(got, "pre mid post") == 0);
+	free(got);
+
+	/* An escaped backquote inside double-quotes is data. */
+	got = fields_of(self, "\"a\\`b\"", &status);
+	CHECK(got && strcmp(got, "a`b") == 0);
+	free(got);
+
+	/* Single quotes make both forms inert (2.2.2: "each character
+	 * within the single-quotes retains its literal value"). */
+	got = fields_of(self, "'$(echo hi)' '`echo hi`'", &status);
+	CHECK(got && strcmp(got, "$(echo hi),`echo hi`") == 0);
+	free(got);
+}
+
+/* 2.9.1: "If there is a command name, execution shall continue as
+ * described in Command Search and Execution. If there is no command
+ * name, but the command contained a command substitution, the command
+ * shall complete with the exit status of the last command substitution
+ * performed. Otherwise, the command shall complete with a zero exit
+ * status."
+ *
+ * No file_redir_supported() gate: a status comes back through
+ * waitpid() regardless of where the child's output went. */
+static void test_exec_cmdsub_exit_status(const char *self)
+{
+	char src[512];
+	int status;
+
+	/* No command name at all -- the whole command is one substitution
+	 * that produces no output, so no field survives expansion. */
+	snprintf(src, sizeof src, "$('%s' --exit-child 7)", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 7);
+
+	snprintf(src, sizeof src, "`'%s' --exit-child 6`", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 6);
+
+	/* "the *last* command substitution performed", not the first. */
+	snprintf(src, sizeof src, "$('%s' --exit-child 3)$('%s' --exit-child 5)", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 5);
+
+	/* A substitution in an assignment's value is one the command
+	 * "contained" (2.9.1 step 4 expands assignment values for command
+	 * substitution), and the assignment still takes effect. */
+	snprintf(src, sizeof src, "SH_TEST_CMDSUB_ST=$('%s' --exit-child 4)", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 4);
+	unsetenv("SH_TEST_CMDSUB_ST");
+
+	/* With a command name, the *command's* status wins outright. */
+	snprintf(src, sizeof src, "'%s' --exit-child 2 $('%s' --exit-child 9)", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 2);
+
+	/* A substitution whose command cannot be found is not an error:
+	 * it produces no output and exits 127, exactly like any other
+	 * command not found (matching test_exec_command_not_found()). */
+	CHECK(run("$(this-program-genuinely-does-not-exist-xyz)", &status) == 0);
+	CHECK(status == 127);
+}
+
+/* 2.6.3: "executing command in a subshell environment (see Shell
+ * Execution Environment)", i.e. 2.12's -- the same one "( list )" gets,
+ * which src/sh/exec.c implements by reusing exec_group()'s own
+ * save-and-restore rather than a second mechanism. So a substituted
+ * command's assignment and its `cd` must both be gone afterwards, the
+ * way test_exec_subshell_does_not_persist_assignment_and_cd() already
+ * checks for the parenthesised form. */
+static void test_exec_cmdsub_subshell_environment(const char *self)
+{
+	char src[512], *cwd_before, *cwd_after;
+	int status;
+
+	unsetenv("SH_TEST_CMDSUB_LEAK");
+	CHECK(run("$(SH_TEST_CMDSUB_LEAK=leaked)", &status) == 0);
+	CHECK(getenv("SH_TEST_CMDSUB_LEAK") == 0);
+
+	CHECK(run("`SH_TEST_CMDSUB_LEAK=leaked`", &status) == 0);
+	CHECK(getenv("SH_TEST_CMDSUB_LEAK") == 0);
+
+	cwd_before = getcwd(0, 0);
+	CHECK(cwd_before != 0);
+	CHECK(run("$(cd ..)", &status) == 0);
+	cwd_after = getcwd(0, 0);
+	CHECK(cwd_before && cwd_after && strcmp(cwd_before, cwd_after) == 0);
+	free(cwd_before);
+	free(cwd_after);
+	(void)self;
+}
+
+/* 2.7: "the word that follows the redirection operator shall be
+ * subjected to tilde expansion, parameter expansion, command
+ * substitution, arithmetic expansion, and quote removal" -- and 2.7.4,
+ * for an unquoted here-document delimiter, "all lines of the
+ * here-document shall be expanded for parameter expansion, command
+ * substitution, and arithmetic expansion". Both of these were the
+ * -1 "not implemented at this stage" cases stage 4's
+ * test_exec_reports_unimplemented_constructs() asserted. */
+static void test_exec_cmdsub_in_redirections(const char *self)
+{
+	char src[1024], *tmp, *got;
+	int status;
+
+	if (!file_redir_supported(self)) return;
+
+	tmp = make_tmp();
+	CHECK(tmp != 0);
+	if (!tmp) return;
+
+	/* The redirection target itself comes from a substitution. */
+	snprintf(src, sizeof src, "'%s' --produce hi > $('%s' --produce-join %s)", self, self, tmp);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "hi\n") == 0);
+	free(got);
+
+	snprintf(src, sizeof src, "'%s' --produce ho > `'%s' --produce-join %s`", self, self, tmp);
+	CHECK(run(src, &status) == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "ho\n") == 0);
+	free(got);
+
+	/* ... including when the redirection belongs to a compound command
+	 * rather than a simple one. */
+	snprintf(src, sizeof src, "('%s' --produce grp) > $('%s' --produce-join %s)", self, self, tmp);
+	CHECK(run(src, &status) == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "grp\n") == 0);
+	free(got);
+
+	snprintf(src, sizeof src, "{ '%s' --produce brc > $('%s' --produce-join %s); }", self, self, tmp);
+	CHECK(run(src, &status) == 0);
+	got = slurp(tmp);
+	CHECK(got && strcmp(got, "brc\n") == 0);
+	free(got);
+
+	remove(tmp);
+	free(tmp);
+
+	/* An unquoted here-document body expands substitutions (2.7.4) ... */
+	snprintf(src, sizeof src, "'%s' --stdin-eq hi <<EOF\n$('%s' --produce hi)\nEOF\n", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	snprintf(src, sizeof src, "'%s' --stdin-eq hi <<EOF\n`'%s' --produce hi`\nEOF\n", self, self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+
+	/* ... and a quoted delimiter suppresses them entirely, the body
+	 * arriving as the literal source bytes. */
+	snprintf(src, sizeof src, "'%s' --stdin-eq '$(x)' <<'EOF'\n$(x)\nEOF\n", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(status == 0);
+}
+
+/* The -1 "cannot execute this AST node at all" convention (sh.h)
+ * survives stage 5: it now means the *substituted* list used a
+ * construct this executor still refuses, not that substitution itself
+ * is unimplemented. src/sh/exec.c refuses two directly adjacent
+ * compound-command pipeline stages (it would deadlock without a
+ * fork()), which makes a usable, stable example of one. */
+static void test_exec_cmdsub_propagates_unimplemented(const char *self)
+{
+	char src[512];
+	int status;
+
+	snprintf(src, sizeof src, "'%s' --produce-join $( ('%s' --produce a) | { '%s' --cat; } )",
+	         self, self, self);
+	CHECK(run(src, &status) == -1);
+
+	/* A syntax error inside the substitution is reported the same way
+	 * (wordexp() turns it into WRDE_SYNTAX; exec.c cannot tell the two
+	 * apart and does not need to). */
+	CHECK(run("$( | )", &status) == -1);
+	CHECK(run("` | `", &status) == -1);
+}
+
 static char *read_all_stdin(size_t *out_len)
 {
 	size_t cap = 256, len = 0;
@@ -1386,6 +1912,41 @@ static int child_role(int argc, char **argv)
 		fflush(stdout);
 		fprintf(stderr, "%s\n", argv[3]);
 		fflush(stderr);
+		return 0;
+	}
+
+	/* Writes its remaining arguments (argv[2..]) to stdout joined by
+	 * <comma>, with NO trailing newline. Stage 5's workhorse: what a
+	 * command substitution expanded to is a question about *fields*
+	 * (how many, and which bytes in each), and an argv joined by a
+	 * byte that neither IFS nor any expansion can produce answers it
+	 * exactly, where "--produce hi" could only ever show one word's
+	 * worth. The missing trailing newline is what makes the captured
+	 * text an exact byte-for-byte assertion rather than one that
+	 * silently tolerates 2.6.3's newline stripping being wrong. */
+	if (!strcmp(role, "--produce-join") && argc > 2) {
+		int i;
+		for (i = 2; i < argc; i++) {
+			if (i > 2) fputc(',', stdout);
+			fputs(argv[i], stdout);
+		}
+		return 0;
+	}
+
+	/* Writes TEXT (argv[2]) followed by three newlines -- 2.6.3 strips
+	 * "sequences of one or more <newline> characters at the end of the
+	 * substitution", and one newline cannot tell a correct
+	 * implementation from one that strips exactly one. */
+	if (!strcmp(role, "--produce-trailing") && argc > 2) {
+		printf("%s\n\n\n", argv[2]);
+		return 0;
+	}
+
+	/* Writes A (argv[2]), a newline, B (argv[3]), a newline: an
+	 * *embedded* newline, which 2.6.3 says is not removed but may act
+	 * as a field delimiter, plus a trailing one, which is removed. */
+	if (!strcmp(role, "--produce-embedded") && argc > 3) {
+		printf("%s\n%s\n", argv[2], argv[3]);
 		return 0;
 	}
 
@@ -1483,7 +2044,7 @@ int main(int argc, char **argv)
 	test_exec_assignment_only_affects_shell_env();
 	test_exec_assignment_prefix_does_not_leak(argv[0]);
 	test_exec_reuses_wordexp_param_expansion(argv[0]);
-	test_exec_reports_unimplemented_constructs();
+	test_exec_reports_unimplemented_constructs(argv[0]);
 
 	test_exec_redir_output_creates_and_truncates(argv[0]);
 	test_exec_redir_append(argv[0]);
@@ -1515,7 +2076,19 @@ int main(int argc, char **argv)
 	test_exec_group_nesting(argv[0]);
 	test_exec_group_pipeline_stage(argv[0]);
 
+	test_exec_cmdsub_basic(argv[0]);
+	test_exec_cmdsub_field_splitting(argv[0]);
+	test_exec_cmdsub_pathname_expansion(argv[0]);
+	test_exec_cmdsub_result_not_reexpanded(argv[0]);
+	test_exec_cmdsub_nesting(argv[0]);
+	test_exec_cmdsub_backquote_backslash(argv[0]);
+	test_exec_cmdsub_in_double_quotes(argv[0]);
+	test_exec_cmdsub_exit_status(argv[0]);
+	test_exec_cmdsub_subshell_environment(argv[0]);
+	test_exec_cmdsub_in_redirections(argv[0]);
+	test_exec_cmdsub_propagates_unimplemented(argv[0]);
+
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 4: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 5: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, and command substitution -- see test/sh-design.md)\n");
 	return 0;
 }
