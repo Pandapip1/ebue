@@ -2012,8 +2012,18 @@ static void test_builtin_exit(const char *self)
 	CHECK(access("shtst_exit_marker.txt", F_OK) != 0);
 
 	/* The unwind must not latch: a second program in the same process
-	 * has to run normally afterwards. */
+	 * has to run normally afterwards.  This has to be a *multi-item*
+	 * list to mean anything.  __sh_exec_list() tests the pending flag
+	 * between items, after running the first one, so a one-command
+	 * program comes out right even with the flag stuck on -- it would
+	 * report the same status either way, and the assertion would be
+	 * vacuous.  With two items, a latched flag stops the list after
+	 * `true` and leaves the status 0 instead of `false`'s 1. */
 	CHECK(run("true", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run("true; false", &status) == 0);
+	CHECK(status == 1);
+	CHECK(run("false; true", &status) == 0);
 	CHECK(status == 0);
 }
 
@@ -2168,10 +2178,19 @@ static void test_builtin_test_binary_primaries(void)
 	CHECK(run("test 1 -lt 2", &status) == 0 && status == 0);
 	CHECK(run("test 2 -lt 1", &status) == 0 && status == 1);
 	CHECK(run("test 2 -le 2", &status) == 0 && status == 0);
+	CHECK(run("test 2 -le 1", &status) == 0 && status == 1);
 	CHECK(run("test 3 -gt 2", &status) == 0 && status == 0);
 	CHECK(run("test 2 -gt 3", &status) == 0 && status == 1);
 	CHECK(run("test 3 -ge 3", &status) == 0 && status == 0);
 	CHECK(run("test 2 -ge 3", &status) == 0 && status == 1);
+	/* The equal case of each strict comparison, which is the only
+	 * input that separates "-lt" from "-le" and "-gt" from "-ge":
+	 * without these, an off-by-one in either direction still gets
+	 * every unequal pair above right.  ("-eq"/"-ne" are exact by
+	 * construction and "-le"/"-ge" are pinned by the equal cases
+	 * they already have.) */
+	CHECK(run("test 2 -lt 2", &status) == 0 && status == 1);
+	CHECK(run("test 2 -gt 2", &status) == 0 && status == 1);
 	/* "algebraically" -- a negative integer is a valid operand, and a
 	 * string comparison of "-1" and "1" would get this backwards. */
 	CHECK(run("test -1 -lt 1", &status) == 0 && status == 0);
