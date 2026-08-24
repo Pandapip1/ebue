@@ -41,3 +41,26 @@ oom-*
 # untracked trees. Ignore it in the repo so it does not depend on one
 # machine's configuration.
 /.claude/
+
+# Intermediates written by test binaries run directly from the repo root.
+# `make check` never leaves these -- tools/runtests.sh gives each test a
+# private cwd -- but running obj/test/<t>.exe by hand, which is what anyone
+# iterating on a test actually does, writes them here.  Untracked droppings
+# in the root are not cosmetic: `tools/gate.sh reuse` rsyncs the working
+# tree and fails on them ("Missing copyright and licensing information"),
+# and `git add -A` sweeps them into a commit.  Both have happened.
+#
+# NEW TESTS: name scratch files with a `tmp-` prefix (covered by the last
+# pattern here) or write them under obj/, instead of extending this list.
+/.hidden-glob-test
+/visible-glob-test
+/gfi1.gfitxt
+/cap1.txt
+/cap2.txt
+/cap3.txt
+/cap4.txt
+/script1.sh
+/script2.sh
+/sh-main-out.txt
+/sh-main-err.txt
+tmp-*
