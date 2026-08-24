@@ -69,6 +69,31 @@ fi
 
 STAGES="${*:-$ALL_STAGES}"
 
+# A requested name that is not a stage would otherwise select nothing and
+# be silently ignored -- `tools/gate.sh check-x86_64 lint-plian` would run
+# one stage and still report "gate PASSED (all stages)".  Reject it before
+# anything runs, rather than discovering it in the summary.
+for s in $STAGES; do
+	case " $ALL_STAGES " in
+	*" $s "*) ;;
+	*)
+		echo "gate: unknown stage '$s'" >&2
+		echo "gate: known stages: $ALL_STAGES" >&2
+		exit 2 ;;
+	esac
+done
+
+# How many stages this run is responsible for reporting on.  The summary
+# compares against it; see the floor there.
+expected=0
+for s in $ALL_STAGES; do
+	case " $STAGES " in *" $s "*) expected=$((expected + 1)) ;; esac
+done
+if [ "$expected" -eq 0 ]; then
+	echo "gate: no stage selected; there is nothing to verify." >&2
+	exit 2
+fi
+
 note() { printf '%s\n' "$*" >&2; }
 
 # rsync a clean copy of the working tree (as it stands right now,
@@ -235,6 +260,7 @@ overall_end=$(date +%s)
 fail=0
 missing=0
 reported=0
+absent=""
 echo
 echo "=== gate summary (wall clock: $((overall_end - overall_start))s) ==="
 for s in $ALL_STAGES; do
@@ -250,8 +276,17 @@ for s in $ALL_STAGES; do
 	# gate's own stages have been taught to reject one level down, and the
 	# coordinator is the worst place to keep it: it is what every other
 	# floor reports *through*.
+	#
+	# Observed, once, and not since: a gate invocation printed
+	# "gate PASSED (all stages)" in 12 seconds with no stage lines at all
+	# -- every stage failed to launch, so the loop iterated over nothing
+	# and the run was green having verified nothing.  The trigger is still
+	# unidentified.  That is precisely why the failure below has to name
+	# the stages that did not report: the next occurrence has to leave
+	# evidence of *what* did not run, not just a non-zero exit.
 	if [ ! -f "$rcfile" ]; then
 		echo "MISSING  $s (never reported a result -- no $s.rc was written)"
+		absent="$absent $s"
 		fail=1
 		continue
 	fi
@@ -269,12 +304,20 @@ for s in $ALL_STAGES; do
 	fi
 done
 
-# And the whole-run floor: `tools/gate.sh <name>` with a name that
-# matches no stage selects nothing, runs nothing, and would otherwise
-# print an empty summary followed by "gate PASSED (all stages)".
-if [ "$reported" -eq 0 ]; then
-	echo "MISSING  -- no stage reported a result at all; this gate run verified nothing."
-	echo "  (requested: $STAGES; known stages: $ALL_STAGES)"
+# The floor on the summary loop itself: every stage this run asked for
+# must have reported a result.  Counted rather than inferred from the
+# per-stage branch above, so the arithmetic is visible in the output and
+# a future edit that adds another `continue` to that loop cannot quietly
+# reopen the hole.
+if [ "$reported" -ne "$expected" ]; then
+	echo
+	echo "gate: $reported of $expected requested stage(s) reported a result."
+	if [ "$reported" -eq 0 ]; then
+		echo "gate: NOT ONE STAGE RAN.  This run verified nothing whatsoever."
+	fi
+	echo "gate: never reported:$absent"
+	echo "gate: a stage that cannot run must fail, not disappear -- if you see this,"
+	echo "gate: the logs under $GATE_JOBS_DIR/logs/ are the only evidence of why."
 	fail=1
 fi
 
