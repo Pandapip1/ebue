@@ -8,7 +8,10 @@
  * magnitude of x -- so "one step towards +-infinity" is exactly "the
  * magnitude bits +-1", independent of exponent/mantissa boundaries
  * (each of which the +-1 carries/borrows through correctly, including
- * normal<->subnormal). x==0 is handled separately (there is no "old
+ * normal<->subnormal). That holds for the formats whose leading
+ * significand bit is implicit -- float and double here; x87 extended
+ * spells that bit out, which breaks the monotonicity and is handled
+ * explicitly in nextafterl. x==0 is handled separately (there is no "old
  * magnitude" to step from); the result is then classified by comparing
  * the old and new exponent fields for the overflow-to-infinity and
  * underflow-to-subnormal range-error cases. */
@@ -80,10 +83,34 @@ float nextafterf(float x, float y)
  * Under gcc/mingw, "long double" is the true 80-bit x87 extended
  * format: a 64-bit explicit mantissa followed by a 16-bit sign+
  * exponent half (see __fpclassifyl's comment in fpclassify.c). The
- * magnitude-monotonic +-1 step becomes a carry/borrow between those
- * two fields, handled explicitly below rather than by treating the
- * pair as one wide integer (tcc doesn't have a 96-bit integer type to
- * do that with, and it would not be portable regardless). */
+ * step is not a plain +-1 on the pair. Unlike float and double, the
+ * 80-bit format states its leading significand bit rather than
+ * implying it, so a normal number's mantissa runs over
+ * [2^63, 2^64) and never below: the pattern read as one wide integer
+ * is not monotonic in magnitude across an exponent boundary, and the
+ * step has to put the mantissa back at the right end of that range
+ * itself. Going up, the successor of (e, 2^64-1) is (e+1, 2^63);
+ * going down, the predecessor of (e, 2^63) is (e-1, 2^64-1). The one
+ * asymmetry is at the bottom: e == 0 denotes the subnormals, which
+ * share e == 1's scale, so the predecessor of (1, 2^63) is
+ * (0, 2^63-1) -- exponent down, mantissa not wrapped -- and going the
+ * other way (0, 2^63-1)'s successor is (1, 2^63).
+ *
+ * Both directions collapse to a test on the mantissa's low 63 bits
+ * (LDBL_M_LOW63 below), which are all set at exactly the two mantissas
+ * that have no successor at their own exponent -- 2^64-1, and the
+ * largest subnormal 2^63-1 -- and all clear at exactly the one that
+ * has no predecessor at its own exponent, the least normal 2^63 (m ==
+ * 0 is zero, which x == 0 has already taken). So stepping up from
+ * either of the first two gives (e+1, 2^63), and stepping down from
+ * the third gives (e-1, 2^64-1), or (0, 2^63-1) when that new exponent
+ * is 0 and the subnormal end is what is wanted. Everything else is
+ * m+-1 at a fixed exponent. It is done this way rather than by
+ * treating the pair as one wide integer because tcc has no 96-bit
+ * integer type to do that with, and it would not be portable
+ * regardless. */
+#define LDBL_M_LOW63 ((((uint64_t)1 << 63) - 1))
+
 long double nextafterl(long double x, long double y)
 {
 #if NTLIBC_LDBL_EXTENDED
@@ -104,16 +131,18 @@ long double nextafterl(long double x, long double y)
 	oldexp = ux.i.se & 0x7fff;
 	away = (x > 0.0L) ? (y > x) : (y < x);
 	if (away) {
-		ux.i.m++;
-		if (ux.i.m == 0) {
-			e = (unsigned)((ux.i.se & 0x7fff) + 1) & 0x7fff;
+		if ((ux.i.m & LDBL_M_LOW63) == LDBL_M_LOW63) {
+			e = (unsigned)(oldexp + 1) & 0x7fff;
 			ux.i.se = (uint16_t)((ux.i.se & 0x8000) | e);
+			ux.i.m = (uint64_t)1 << 63;
+		} else {
+			ux.i.m++;
 		}
 	} else {
-		if (ux.i.m == 0) {
-			e = (unsigned)((ux.i.se & 0x7fff) - 1) & 0x7fff;
+		if ((ux.i.m & LDBL_M_LOW63) == 0) {
+			e = (unsigned)(oldexp - 1) & 0x7fff;
 			ux.i.se = (uint16_t)((ux.i.se & 0x8000) | e);
-			ux.i.m = (uint64_t)-1;
+			ux.i.m = e ? (uint64_t)-1 : LDBL_M_LOW63;
 		} else {
 			ux.i.m--;
 		}
