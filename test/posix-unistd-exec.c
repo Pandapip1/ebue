@@ -300,13 +300,30 @@ static void test_not_a_regular_file(void)
 	 * than fenced, to pin the distinction the fence above draws. */
 	{
 		int dfd = open("ex-dir", O_RDONLY | O_DIRECTORY);
+		int r;
 		CHECK(dfd >= 0);
 		if (dfd >= 0) {
 			errno = 0;
-			CHECK(fexecve(dfd, av, environ) == -1 && errno == EBADF);
+			r = fexecve(dfd, av, environ);
+			printf("observed: fexecve(dirfd) = %d, errno=%d "
+			       "(want -1/%d EBADF)\n", r, errno, EBADF);
+			CHECK(r == -1 && errno == EBADF);
 			reached++;
 			CHECK(close(dfd) == 0);
 		}
+		/* Not an assertion: the fence above records execv()/execve()
+		 * over a directory as yielding EBADF, but that figure was
+		 * probed under Wine, and Wine reaches the image-section step
+		 * by a different route than NT does.  Printing it here costs
+		 * one failed spawn and tells the next real-NT log whether the
+		 * fence's premise holds there at all.  Neither call can
+		 * succeed -- a directory is not a process image -- so this
+		 * cannot replace the running process. */
+		errno = 0;
+		r = execv("./ex-dir", av);
+		printf("observed: execv(\"./ex-dir\") = %d, errno=%d "
+		       "(fence above claims %d EBADF; %d EACCES is what "
+		       "exec.html requires)\n", r, errno, EBADF, EACCES);
 	}
 
 	CHECK(rmdir("ex-dir") == 0);

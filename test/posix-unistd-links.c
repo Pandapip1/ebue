@@ -65,7 +65,7 @@ static int have_symlinks;
  * environment and are not behind the have_symlinks gate. */
 static void test_symlinkat_errors(void)
 {
-	int fd, dfd;
+	int fd, dfd, r;
 
 	fd = open("sl-plain.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
 	CHECK(fd >= 0 && close(fd) == 0);
@@ -76,13 +76,32 @@ static void test_symlinkat_errors(void)
 	 * other than [EIO], any file named by path2 shall be unaffected"
 	 * -- checked by reading the existing file's size back. */
 	errno = 0;
-	CHECK(symlinkat("whatever", AT_FDCWD, "sl-plain.txt") == -1 && errno == EEXIST);
+	r = symlinkat("whatever", AT_FDCWD, "sl-plain.txt");
+	printf("observed: symlinkat(\"whatever\", AT_FDCWD, \"sl-plain.txt\") "
+	       "[existing regular file] = %d, errno=%d (want -1/%d EEXIST)\n",
+	       r, errno, EEXIST);
+	CHECK(r == -1 && errno == EEXIST);
 	{
 		struct stat st;
 		CHECK(stat("sl-plain.txt", &st) == 0 && S_ISREG(st.st_mode));
 	}
+	/* The same clause over a directory.  It is reported next to the
+	 * regular-file case above because the two differ in exactly one
+	 * thing on the NT side: src/unistd/link.c picks FILE_DIRECTORY_FILE
+	 * or FILE_NON_DIRECTORY_FILE from whether *target* is a directory,
+	 * and "whatever" does not exist, so both calls reach NtCreateFile
+	 * with FILE_CREATE | FILE_NON_DIRECTORY_FILE -- and only the second
+	 * one aims that at an existing directory.  Which of the two
+	 * conditions the filesystem reports first is the whole question,
+	 * and only the real-NT legs can answer it, so print both. */
 	errno = 0;
-	CHECK(symlinkat("whatever", AT_FDCWD, "sl-dir") == -1 && errno == EEXIST);
+	r = symlinkat("whatever", AT_FDCWD, "sl-dir");
+	printf("observed: symlinkat(\"whatever\", AT_FDCWD, \"sl-dir\") "
+	       "[existing directory] = %d, errno=%d (want -1/%d EEXIST; "
+	       "%d EISDIR would mean NT checked FILE_NON_DIRECTORY_FILE "
+	       "before the FILE_CREATE collision)\n",
+	       r, errno, EEXIST, EISDIR);
+	CHECK(r == -1 && errno == EEXIST);
 
 	/* "[ENOENT] A component of the path prefix of path2 does not name
 	 * an existing file or path2 is an empty string." */
