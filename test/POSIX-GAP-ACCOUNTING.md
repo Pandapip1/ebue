@@ -274,7 +274,7 @@ their first assertion in this session (see "Tests added" below). These
 
 - `math.h` (70): `acosf acoshf acoshl acosl asinf asinhf asinhl asinl atanhf atanhl cbrtf cbrtl ceilf coshf coshl erfcf erfcl erff erfl expm1f expm1l fdimf fdiml floorl fmaf fmal fmodl frexpf frexpl hypotf hypotl ilogbf ilogbl isgreater isgreaterequal isless islessequal islessgreater isunordered ldexpf lgammaf lgammal log1pf log1pl logbf logbl modff modfl nearbyintf nearbyintl nextafterf nextafterl nexttowardf nexttowardl remainderf remainderl remquof remquol roundf scalblnf scalblnl scalbnl sinhf sinhl tanhf tanhl tgammaf tgammal truncf truncl`
 - `unistd.h` (18): `confstr execl execle execlp fchown fchownat fexecve getlogin getlogin_r lchown linkat pause setpgrp setregid setsid swab sync tcgetpgrp tcsetpgrp` — `fpathconf`, `readlink`, `readlinkat` and `unlinkat` closed, see "Successor session" below
-- `sys/stat.h` (5): `mkdirat mkfifo mkfifoat mknod mknodat` — `utimes` closed, see "Successor session" below
+- `sys/stat.h` (0): all six (`mkdirat mkfifo mkfifoat mknod mknodat utimes`) closed, see "Successor session" below
 - `signal.h` (5): `sighold siginterrupt sigpause sigrelse sigset`
 - `stdarg.h` (4): `va_arg va_copy vprintf vscanf`
 - `setjmp.h` (2): `_setjmp _longjmp`
@@ -786,3 +786,31 @@ fix belongs in a change of its own.
 since `fpathconf.html` lists `[EBADF]` under *may fail*, not *shall
 fail*. Asserting it in either direction would be asserting a choice the
 spec deliberately leaves open.
+
+### Closed: the `sys/stat.h` five (`test/posix-unistd.c`)
+
+`test_mkdirat` and `test_mkfifo_mknod_stubs`, checked against
+`mkdir.html`, `mkfifo.html` and `mknod.html`. `mkdirat()` turned out to
+be in better shape than its never-called status suggested: [EEXIST] on
+both a directory and a plain file, [ENOENT] for a missing prefix and for
+the empty string, [ENOTDIR] both for a regular-file prefix component and
+for an `fd` open on a non-directory, [EBADF] for an unopened descriptor,
+and dirfd-relative creation all behave as the page requires. No defect.
+
+**N/A, with the reason:** `mkfifo`/`mkfifoat`/`mknod`/`mknodat` are
+permanent stubs (the degenerate-stub table above), so every clause on
+those two pages that presupposes a call can succeed even once has
+nothing to observe. What *is* asserted is the clause a stub can still
+honour and that both pages state in identical words — "if -1 is
+returned, no FIFO shall be created" / "the new file shall not be
+created" — plus `mknod()`'s [EPERM], which is POSIX's own answer for an
+unprivileged caller and therefore exactly right. `mkfifo()`'s `ENOSYS`
+is not in `mkfifo.html`'s ERRORS list, but no errno that page *does*
+list would be truthful either; that deviation stays recorded here as a
+known stub rather than being re-opened as a new fenced bug, so the test
+pins the -1 and the absence of debris and leaves the errno to this note.
+
+Also N/A: `mkdirat()`'s `mode`. This ledger already records directory
+mode bits as implementation-defined, and `src/stat/mkdir.c` discards
+`mode` by design, so the "permission bits ... initialized from mode"
+clause has nothing observable behind it.

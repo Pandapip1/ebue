@@ -1058,6 +1058,145 @@ static void test_unlinkat(void)
 	CHECK(unlinkat(AT_FDCWD, "ua2.txt", 0) == 0);
 }
 
+/* mkdir.html (the mkdirat half).  DESCRIPTION: mkdirat() "shall be
+ * equivalent to the mkdir() function except in the case where path
+ * specifies a relative path", which is then resolved against fd; with
+ * AT_FDCWD "the behavior shall be identical to a call to mkdir()".
+ * RETURN VALUE: 0 on success, else -1 with errno.  ERRORS [EEXIST] "The
+ * named file exists", [ENOENT] "A component of the path prefix ... does
+ * not name an existing directory or path is an empty string", [ENOTDIR]
+ * for a non-directory prefix component and (mkdirat only) for an fd that
+ * is "a file descriptor associated with a non-directory file", [EBADF]
+ * "The path argument does not specify an absolute path and the fd
+ * argument is neither AT_FDCWD nor a valid file descriptor".
+ *
+ * The mode argument is deliberately not asserted: this ledger already
+ * records directory mode bits as N/A (implementation-defined on NTFS,
+ * and src/stat/mkdir.c ignores mode by design), so the clause about
+ * initialising permission bits from mode has nothing observable to check
+ * against here.  Filesystem behaviour, so Wine is weak evidence and the
+ * real-Windows CI leg is the authority. */
+static void test_mkdirat(void)
+{
+	struct stat st;
+	int dfd;
+
+	/* AT_FDCWD is identical to mkdir() */
+	CHECK(mkdirat(AT_FDCWD, "mda", 0755) == 0);
+	CHECK(stat("mda", &st) == 0 && S_ISDIR(st.st_mode));
+
+	/* [EEXIST] the named file exists -- as a directory ... */
+	errno = 0;
+	CHECK(mkdirat(AT_FDCWD, "mda", 0755) == -1 && errno == EEXIST);
+	/* ... and as a plain file */
+	{
+		int fd = open("mdf.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+		CHECK(fd >= 0 && close(fd) == 0);
+		errno = 0;
+		CHECK(mkdirat(AT_FDCWD, "mdf.txt", 0755) == -1 && errno == EEXIST);
+	}
+
+	/* [ENOENT] missing path prefix, and the empty string */
+	errno = 0;
+	CHECK(mkdirat(AT_FDCWD, "mda-nope/child", 0755) == -1 && errno == ENOENT);
+	errno = 0;
+	CHECK(mkdirat(AT_FDCWD, "", 0755) == -1 && errno == ENOENT);
+
+	/* [ENOTDIR] a prefix component that is an existing regular file */
+	errno = 0;
+	CHECK(mkdirat(AT_FDCWD, "mdf.txt/child", 0755) == -1 && errno == ENOTDIR);
+
+	/* [EBADF] relative path against a descriptor that is not open */
+	errno = 0;
+	CHECK(mkdirat(4096, "mda-bad", 0755) == -1 && errno == EBADF);
+	CHECK(stat("mda-bad", &st) == -1);
+
+	/* [ENOTDIR] fd is open on a non-directory */
+	{
+		int ffd = open("mdf.txt", O_RDONLY);
+		CHECK(ffd >= 0);
+		if (ffd >= 0) {
+			errno = 0;
+			CHECK(mkdirat(ffd, "mda-nd", 0755) == -1 && errno == ENOTDIR);
+			CHECK(close(ffd) == 0);
+		}
+	}
+
+	/* the relative-to-a-real-dirfd case that is mkdirat()'s whole point */
+	dfd = open("mda", O_RDONLY | O_DIRECTORY);
+	CHECK(dfd >= 0);
+	if (dfd >= 0) {
+		CHECK(mkdirat(dfd, "inner", 0755) == 0);
+		CHECK(stat("mda/inner", &st) == 0 && S_ISDIR(st.st_mode));
+		errno = 0;
+		CHECK(mkdirat(dfd, "inner", 0755) == -1 && errno == EEXIST);
+		/* an absolute path ignores fd entirely */
+		CHECK(close(dfd) == 0);
+		CHECK(rmdir("mda/inner") == 0);
+	}
+
+	CHECK(rmdir("mda") == 0);
+	CHECK(unlink("mdf.txt") == 0);
+}
+
+/* mkfifo.html and mknod.html.  Both are permanent stubs here -- see
+ * test/POSIX-GAP-ACCOUNTING.md's "permanent degenerate stubs" table,
+ * which records mkfifo/mkfifoat as ENOSYS (NT named pipes exist and are
+ * pure NTDLL, but nobody has mapped FIFO semantics onto them) and
+ * mknod/mknodat as EPERM.
+ *
+ * What is asserted is the one clause a stub can still honour, and which
+ * both pages state in identical words: "If -1 is returned, no FIFO shall
+ * be created" / "If -1 is returned, the new file shall not be created."
+ * A stub that left debris behind would be worse than a stub.
+ *
+ * N/A, with the reason: every other clause on both pages (mode ANDed
+ * with the file creation mask, the resulting file type, [EEXIST],
+ * [ENOTDIR], [EACCES], [EROFS], [ENOSPC], and the dirfd resolution the
+ * *at forms exist for) presupposes that the call can succeed at least
+ * once.  It cannot here, on any input, so there is nothing to observe.
+ *
+ * mknod()'s EPERM is POSIX's own answer for this situation -- "[EPERM]
+ * The invoking process does not have appropriate privileges and the file
+ * type is not FIFO-special" -- so that one is asserted exactly.
+ * mkfifo()'s ENOSYS is *not* in mkfifo.html's ERRORS list, and no errno
+ * that page does list would be truthful either; that deviation is
+ * already carried as a known permanent stub in the gap-accounting file
+ * rather than re-opened as a new bug here, so the assertion below pins
+ * the -1 and the absence of debris and leaves the errno value to that
+ * record.  Pure library behaviour: Wine is a sound oracle. */
+static void test_mkfifo_mknod_stubs(void)
+{
+	struct stat st;
+
+	errno = 0;
+	CHECK(mkfifo("mff", 0666) == -1);
+	CHECK(errno != 0);
+	CHECK(stat("mff", &st) == -1);		/* "no FIFO shall be created" */
+
+	errno = 0;
+	CHECK(mkfifoat(AT_FDCWD, "mffa", 0666) == -1);
+	CHECK(errno != 0);
+	CHECK(stat("mffa", &st) == -1);
+
+	/* mknod: "[EPERM] The invoking process does not have appropriate
+	 * privileges and the file type is not FIFO-special." */
+	errno = 0;
+	CHECK(mknod("mnd", S_IFCHR | 0666, 0) == -1 && errno == EPERM);
+	CHECK(stat("mnd", &st) == -1);		/* "the new file shall not be created" */
+
+	errno = 0;
+	CHECK(mknodat(AT_FDCWD, "mnda", S_IFCHR | 0666, 0) == -1 && errno == EPERM);
+	CHECK(stat("mnda", &st) == -1);
+
+	/* The only portable use of mknod() is S_IFIFO with dev 0; it is
+	 * refused the same way, and still leaves nothing behind. */
+	errno = 0;
+	CHECK(mknod("mndf", S_IFIFO | 0666, 0) == -1);
+	CHECK(errno != 0);
+	CHECK(stat("mndf", &st) == -1);
+}
+
 int main(void)
 {
 	char tmpl[] = "posixunistd-XXXXXX";
@@ -1101,6 +1240,8 @@ int main(void)
 	test_fpathconf();
 	test_readlink();
 	test_unlinkat();
+	test_mkdirat();
+	test_mkfifo_mknod_stubs();
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);

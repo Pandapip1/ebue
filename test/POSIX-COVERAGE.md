@@ -459,6 +459,8 @@ not every clause line, to keep this section a manageable size):
 | pipe / pipe2 | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | stat / fstat / lstat / fstatat / chmod / fchmod | covered | test/unistd.c, test/posix-unistd.c |
 | mkdir / rmdir / unlink | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
+| mkdirat (AT_FDCWD == mkdir, dirfd-relative, EEXIST on a dir and on a file, ENOENT, ENOTDIR for a file prefix component and for a non-directory `fd`, EBADF) | covered; the `mode` clause N/A — directory mode bits are implementation-defined on NTFS and `src/stat/mkdir.c` ignores `mode` by design | test/posix-unistd.c `test_mkdirat` |
+| mkfifo / mkfifoat / mknod / mknodat | N/A (permanent stubs — see `test/POSIX-GAP-ACCOUNTING.md`'s degenerate-stub table); the one clause a stub can honour, "if -1 is returned, the new file shall not be created", **is** asserted, as is `mknod`'s POSIX-listed [EPERM] | test/posix-unistd.c `test_mkfifo_mknod_stubs` |
 | unlinkat (AT_FDCWD == unlink/rmdir, AT_REMOVEDIR, ENOTDIR, ENOTEMPTY, ENOENT, EBADF, dirfd-relative) | **BUG (fenced)** — undefined `flag` bits are masked off instead of giving EINVAL | test/posix-unistd.c `test_unlinkat` |
 | rename / renameat: success, ENOENT, same-file no-op | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | rename EISDIR (new is a dir, old isn't) | **fixed**, commit 3c606a7 (`renameat()` in `src/stdio/misc.c` now disambiguates NT's `STATUS_ACCESS_DENIED` by querying old/new's types, giving EISDIR instead of EACCES) | test/posix-unistd.c `test_rename_new_dir_old_file_eisdir` |
