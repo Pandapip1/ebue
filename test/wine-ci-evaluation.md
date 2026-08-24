@@ -214,8 +214,151 @@ The point is that adopting the current series is not a disruptive event.
 
 ## 5. Risks
 
-*(to be completed)*
+**A Wine build failure blocks all CI.** This is the risk that decides the
+shape of the change, and it is why the recommendation below is an *additional*
+leg rather than a replacement. Wine's build depends on a wide set of system
+packages, and it fails loudly when one is missing — this investigation lost a
+cycle to exactly that:
+
+```
+checking for flex... no
+configure: error: no suitable flex found. Please install the 'flex' package.
+```
+
+If the patched-Wine leg is the only Wine leg, then a missing package, an
+upstream build break after a pin bump, or a transient apt failure takes down
+`test` — and because `windows-test` has `needs: test`, it takes down the
+real-Windows legs with it. Every leg of the pipeline would then be gated on a
+30-minute compile of a 700-file C project we do not maintain. As an added
+leg with the stock-Wine legs left in place, the same failure costs one red
+job on a board that still reports everything else honestly.
+
+**`winedbg --auto` hangs a CI job instead of failing it.** When a Wine process
+raises an unhandled exception or calls an unimplemented stub, Wine launches
+`winedbg --auto`, which waits for input that never comes. In CI that is not a
+crash, it is a *hang*: the job runs to the six-hour default job timeout rather
+than failing in seconds. `tools/runtests.sh:83,135` already guards against
+this correctly —
+
+```sh
+( cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES=winedbg.exe=d "$wine" "$abs" ) \
+	>"$log" 2>&1 </dev/null
+```
+
+— setting `WINEDLLOVERRIDES=winedbg.exe=d` to disable the debugger outright
+and redirecting stdin from `/dev/null` so nothing can block on a read. Any new
+CI step that invokes Wine outside `runtests.sh` must do the same, and a
+freshly built Wine is the *most* exposed case, because first-run `WINEPREFIX`
+initialisation is when Wine is likeliest to raise something. Two consequences
+for the proposal: set both variables at the job level rather than relying on
+each call site, and give the new leg an explicit `timeout-minutes` so a hang
+is bounded by minutes rather than hours.
+
+**Drift between the local tree and whatever CI uses.** This is already real
+and already biting, before any CI change. The fork's branch and
+`~/Projects/wine` have diverged in *both* directions: the fork carries two
+job-limit commits the local tree lacks, and the local tree carries eight
+commits the fork lacks. The project notes record a related incident in which
+an agent tested against a three-patch build while describing it as "this
+project's locally patched build", and drew conclusions about AFD, PE alignment
+and pid retention from a binary that contained none of those patches.
+
+Putting a pinned SHA in `ci.yml` makes drift *visible* rather than creating
+it: the pin is a written-down claim about which Wine the project tests
+against, and it can be compared against a local tree in one command. That is
+strictly better than the present situation, where the answer is whatever
+happens to be built in someone's home directory.
+
+**Rebasing eleven patches on upstream Wine.** Real, but smaller than it looks,
+and it is a cost we are already paying — the patches exist and are already
+maintained against `wine-11.16`. Pinning by SHA means upstream moving does
+*not* force a rebase: CI keeps building the pinned commit until someone
+deliberately bumps it, exactly as `TINYCC_SHA` works today. The rebase becomes
+a periodic, scheduled chore rather than a CI-blocking event. The patches are
+also small and concentrated in `server/` and `dlls/ntdll/`, not spread across
+the tree.
+
+**A more accurate Wine will eventually turn green tests red.** That is the
+purpose, but it is disruptive if it lands unannounced. Right now it does not
+apply — the measurement in §4 shows the current series changes nothing from
+green to red. The risk is about *future* pin bumps: the project's own standing
+practice is to write a Wine patch whenever a Wine/real-NT divergence is found,
+and each such patch is written specifically to surface an ntlibc bug. Bumping
+`WINE_SHA` is therefore a deliberate act that can be expected to redden the
+board, and should be treated like one — bumped on its own commit, not folded
+into an unrelated change.
+
+**The failure mode that is *not* on this list is the interesting one.** The
+project notes record a Wine patch (`25ab93939`, giving a CUI process a
+console) that was written on a hypothesis, made ntlibc's fix look correct
+under Wine, and was disproved by the real-Windows legs; it was reverted. A
+patched Wine that agrees with a broken ntlibc is worse than no patched Wine,
+because it converts a red board into misinformation. This is an argument for
+keeping the `windows-test` legs authoritative — which the proposal does not
+touch — and for keeping stock Wine as an independent third opinion, which is
+the other reason not to replace it.
 
 ## 6. Recommendation
 
+**Add a fourth `test` leg that builds and runs the patched Wine fork. Do not
+replace the stock-Wine legs. Relax `TEST_RUN`'s `*-win.exe` filter only on
+that leg.**
+
+In order:
+
+1. **Push the patch series first.** Nothing else can happen until
+   `~/Projects/wine`'s eleven effective commits are on a branch of
+   `github.com/Pandapip1/wine` — reconciled with the two job-limit commits
+   already there, since the two have diverged. Suggested branch name
+   `ntlibc-testing`, to say what it is for and to keep it distinct from the
+   existing `rtlcloneuserprocess-and-pid-retention`. This is a prerequisite,
+   not a step: CI cannot fetch from a home directory, and until the push
+   happens the rest of this document is theory.
+
+2. **Pin it by SHA in `ci.yml`**, as `WINE_REPO`/`WINE_SHA`, mirroring
+   `TINYCC_REPO`/`TINYCC_SHA` and for the same stated reason.
+
+3. **Build it in a cached job**, `build-wine`, keyed on the pinned SHA — the
+   same shape as `build-toolchain`. See [Cost](#2-cost-what-a-wine-build-actually-costs)
+   for the cache-hit and cache-miss numbers that make this viable.
+
+4. **Add one `test-patched-wine` leg**, x86_64, `--disable-kernel32`, running
+   the full `TEST_EXES` set rather than `TEST_RUN`.
+
+Why an added leg rather than a replacement, restated as the three reasons that
+actually carry the decision:
+
+- **Stock Wine is itself a signal.** It is the environment where a contributor
+  who has not built a custom Wine will run `make check`. Keeping a leg on it
+  is what keeps that experience honest, and it is what catches a new test that
+  forks without being named `*-win.c` before it reaches someone's laptop.
+- **Three environments beat two.** Stock Wine, patched Wine and real NT
+  disagree in different directions, and a change can pass two and fail the
+  third — the project has three recorded instances of exactly that. Collapsing
+  stock and patched into one loses the ability to attribute a failure to a
+  *Wine version* difference rather than a Wine-versus-Windows one.
+- **It keeps a slow, externally-dependent build off the critical path.** The
+  existing legs stay exactly as fast and as reliable as they are today, and
+  `windows-test` keeps its `needs: test` relationship to a job that does not
+  compile Wine.
+
+Why relax `TEST_RUN` only on that leg: the filter is correct for stock Wine
+and will stay correct for it. The clean way to express this is a variable the
+leg overrides rather than a second filter — `make check TEST_RUN='$(TEST_EXES)'`
+works today with no Makefile change at all, because `TEST_RUN` is a plain
+recursively-expanded variable and a command-line assignment overrides it.
+That is worth preferring over editing `Makefile:232`: it leaves the default
+behaviour, and the comment explaining it, untouched.
+
+### If the cost turns out to be unacceptable
+
+Fall back to publishing a prebuilt Wine tarball as a release asset on the fork
+and having CI download it. That trades reproducibility for speed, and it is
+the wrong default, but it is a working answer if the cached build proves too
+slow or too large — and it can be adopted later without changing anything else
+about the shape above.
+
+## Appendix A: the proposed diff
+
 *(to be completed)*
+
