@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 | | |
 |---|---|
-| ntlibc | `eb5a60771778ddaf45af4a0d5292851391ec4d08` |
+| ntlibc | `7e56a7bffa15cd2c55502afdedce5b21d5053290` |
 | LTP (`third_party/ltp`) | `4c0cfb849f19beed68175de9fb7d02df55987084` |
 | suite | `testcases/open_posix_testsuite/conformance/interfaces/` |
 | census | 1610 tests in 190 directories (189 interfaces + `testfrmw`) |
@@ -110,9 +110,9 @@ exception list, and it is the highest-signal line in this file.
 | `sigtimedwait` | 5 | yes | `undefined-ok` |
 | `sigwaitinfo` | 5 | yes | `undefined-ok` |
 | `pthread_sigmask` | 1 | no | **not-marked** |
-| `sched_getparam` | 1 | no | **not-marked** |
 | `sched_get_priority_max` | 1 | no | **not-marked** |
 | `sched_get_priority_min` | 1 | no | **not-marked** |
+| `sched_getparam` | 1 | no | **not-marked** |
 | `sched_rr_get_interval` | 1 | no | **not-marked** |
 | `timer_delete` | 1 | no | **not-marked** |
 | `timer_getoverrun` | 1 | no | **not-marked** |
@@ -124,8 +124,8 @@ exception list, and it is the highest-signal line in this file.
 | identifier | tests | declared? | marker |
 |---|---|---|---|
 | `SCHED_FIFO` | 5 | no | **not-marked** |
-| `_SC_CPUTIME` | 3 | no | **not-marked** |
 | `SIG_HOLD` | 3 | no | **not-marked** |
+| `_SC_CPUTIME` | 3 | no | **not-marked** |
 | `SCHED_OTHER` | 2 | no | **not-marked** |
 | `SCHED_RR` | 2 | no | **not-marked** |
 | `_SC_MONOTONIC_CLOCK` | 2 | no | **not-marked** |
@@ -250,7 +250,7 @@ headers all resolve, the first symbol/macro/type that does not.
 | `clock` | 2 | 0 | 0 | 2 | yes | yes | `-` |
 | `clock_getcpuclockid` | 5 | 0 | 0 | 5 | yes | yes | `-` |
 | `clock_getres` | 7 | 0 | 2 | 5 | yes | yes | `_SC_CPUTIME` |
-| `clock_gettime` | 8 | 0 | 2 | 6 | yes | yes | `_SC_MONOTONIC_CLOCK` |
+| `clock_gettime` | 8 | 0 | 2 | 6 | yes | yes | `_SC_CPUTIME` |
 | `clock_nanosleep` | 12 | 0 | 0 | 12 | yes | yes | `-` |
 | `clock_settime` | 15 | 0 | 6 | 9 | yes | yes | `timer_create` |
 | `ctime` | 1 | 0 | 0 | 1 | yes | yes | `-` |
@@ -298,28 +298,28 @@ headers all resolve, the first symbol/macro/type that does not.
 | `pthread_attr_setscope` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_attr_setstack` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_attr_setstacksize` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_barrier_destroy` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_barrier_init` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_barrier_wait` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_barrierattr_destroy` | 1 | 1 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_barrierattr_getpshared` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_barrierattr_init` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_barrierattr_setpshared` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_barrier_destroy` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_barrier_init` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_barrier_wait` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cancel` | 9 | 9 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cleanup_pop` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cleanup_push` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_condattr_destroy` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_condattr_getclock` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_condattr_getpshared` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_condattr_init` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_condattr_setclock` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_condattr_setpshared` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cond_broadcast` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cond_destroy` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cond_init` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cond_signal` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cond_timedwait` | 12 | 12 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_cond_wait` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_condattr_destroy` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_condattr_getclock` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_condattr_getpshared` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_condattr_init` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_condattr_setclock` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_condattr_setpshared` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_create` | 15 | 15 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_detach` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_equal` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
@@ -331,6 +331,14 @@ headers all resolve, the first symbol/macro/type that does not.
 | `pthread_key_create` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_key_delete` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_kill` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_destroy` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_getprioceiling` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_init` | 8 | 8 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_lock` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_setprioceiling` | 1 | 1 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_timedlock` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_trylock` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_mutex_unlock` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_mutexattr_destroy` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_mutexattr_getprioceiling` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_mutexattr_getprotocol` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
@@ -341,19 +349,7 @@ headers all resolve, the first symbol/macro/type that does not.
 | `pthread_mutexattr_setprotocol` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_mutexattr_setpshared` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_mutexattr_settype` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_destroy` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_getprioceiling` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_init` | 8 | 8 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_lock` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_setprioceiling` | 1 | 1 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_timedlock` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_trylock` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_mutex_unlock` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_once` | 7 | 7 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_rwlockattr_destroy` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_rwlockattr_getpshared` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_rwlockattr_init` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
-| `pthread_rwlockattr_setpshared` | 1 | 1 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_rwlock_destroy` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_rwlock_init` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_rwlock_rdlock` | 6 | 6 | 0 | 0 | no | no | `pthread.h` |
@@ -363,6 +359,10 @@ headers all resolve, the first symbol/macro/type that does not.
 | `pthread_rwlock_trywrlock` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_rwlock_unlock` | 5 | 5 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_rwlock_wrlock` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_rwlockattr_destroy` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_rwlockattr_getpshared` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_rwlockattr_init` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
+| `pthread_rwlockattr_setpshared` | 1 | 1 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_self` | 1 | 1 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_setcancelstate` | 4 | 4 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_setcanceltype` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
@@ -377,16 +377,16 @@ headers all resolve, the first symbol/macro/type that does not.
 | `pthread_spin_unlock` | 3 | 3 | 0 | 0 | no | no | `pthread.h` |
 | `pthread_testcancel` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
 | `raise` | 7 | 0 | 0 | 7 | yes | yes | `-` |
+| `sched_get_priority_max` | 5 | 0 | 4 | 1 | no | no | `SCHED_FIFO` |
+| `sched_get_priority_min` | 5 | 0 | 4 | 1 | no | no | `SCHED_FIFO` |
 | `sched_getparam` | 6 | 0 | 6 | 0 | no | no | `struct sched_param` |
-| `sched_get_priority_max` | 5 | 0 | 4 | 1 | no | no | `SCHED_RR` |
-| `sched_get_priority_min` | 5 | 0 | 4 | 1 | no | no | `SCHED_RR` |
 | `sched_getscheduler` | 5 | 0 | 5 | 0 | no | no | `sched_getscheduler` |
 | `sched_rr_get_interval` | 4 | 0 | 4 | 0 | no | no | `struct sched_param` |
 | `sched_setparam` | 22 | 4 | 14 | 4 | no | no | `pthread.h` |
 | `sched_setscheduler` | 21 | 4 | 11 | 6 | no | no | `pthread.h` |
 | `sched_yield` | 2 | 1 | 0 | 1 | yes | yes | `pthread.h` |
 | `sem_close` | 4 | 4 | 0 | 0 | no | no | `semaphore.h` |
-| `sem_destroy` | 2 | 2 | 0 | 0 | no | no | `pthread.h` |
+| `sem_destroy` | 2 | 2 | 0 | 0 | no | no | `semaphore.h` |
 | `sem_getvalue` | 5 | 5 | 0 | 0 | no | no | `semaphore.h` |
 | `sem_init` | 10 | 10 | 0 | 0 | no | no | `semaphore.h` |
 | `sem_open` | 12 | 12 | 0 | 0 | no | no | `semaphore.h` |
@@ -422,7 +422,7 @@ headers all resolve, the first symbol/macro/type that does not.
 | `strlen` | 1 | 0 | 0 | 1 | yes | yes | `-` |
 | `strncpy` | 2 | 0 | 0 | 2 | yes | yes | `-` |
 | `time` | 1 | 0 | 0 | 1 | yes | yes | `-` |
-| `timer_create` | 11 | 0 | 10 | 1 | no | no | `_SC_CPUTIME` |
+| `timer_create` | 11 | 0 | 10 | 1 | no | no | `timer_create` |
 | `timer_delete` | 4 | 0 | 4 | 0 | no | no | `timer_create` |
 | `timer_getoverrun` | 7 | 0 | 6 | 1 | no | no | `timer_create` |
 | `timer_gettime` | 10 | 0 | 10 | 0 | no | no | `timer_create` |

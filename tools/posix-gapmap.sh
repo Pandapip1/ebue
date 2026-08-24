@@ -97,6 +97,26 @@
 
 set -u
 
+# ------------------------------------------------------------ determinism
+#
+# Every `sort` below must order BYTES, not words.  glibc's UTF-8
+# collations ignore punctuation at the first comparison level, so
+# `sched_getparam` sorts BEFORE `sched_get_priority_max` under
+# en_US.UTF-8 (compare `schedgetparam` with `schedgetprioritymax`) and
+# AFTER it under C (`_` is 0x5F, `p` is 0x70).  The whole
+# `pthread_rwlock*` family moves for the same reason.  This report is
+# CHECKED IN, so that difference is not cosmetic: a developer's locale
+# and CI's disagree permanently, `--check` goes red on a regeneration
+# that changed nothing -- which is how this was found -- and the diff,
+# the entire reason the file is checked in, stops being readable.
+#
+# Set once and exported rather than sprinkled per `sort` invocation: awk
+# string comparison (the greedy closure's tie-break), `grep -x`, `uniq`
+# and `tr` ranges are all locale-sensitive too, and one setting is one
+# thing to reason about instead of an audit of every pipeline.
+LC_ALL=C
+export LC_ALL
+
 # shellcheck disable=SC1007
 srcdir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$srcdir" || exit 1
@@ -734,11 +754,39 @@ for p in "$IFACES"/*/; do
 	nB=$(awk -F'\t' -v d="$d/" '$1=="B" && index($2, d)==1' "$W/class.tsv" | wc -l | tr -d ' ')
 	grep -qx "$d" "$W/declared.txt" && dec=yes || dec=no
 	grep -qx "$d" "$W/defined.txt"  && def=yes || def=no
-	# The first thing standing in the way, for the diffable column.
-	why=$(awk -F'\t' -v d="$d/" 'index($1, d)==1 && $2 ~ /[^ ]/ { print $2; exit }' "$W/sets.tsv" |
-		awk '{print $1}')
+	# The `blocking` column: ONE representative for a directory whose
+	# tests are typically blocked by several different things.  The rule
+	# has to be total and written down, because a reviewer looking at a
+	# row has no way to reconstruct why that header won -- and because
+	# the implicit rule was not stable.  It used to be "the first absent
+	# header of the first blocked test in the directory", which is an
+	# arbitrary element of an unordered set twice over: the "first test"
+	# depends on the collation class.tsv was sorted under, and the "first
+	# header" on the collation each test's absent set was sorted under.
+	# That is how `sched_setparam` could keep identical counts
+	# (22|4|14|4) while its blocker flipped between `pthread.h` and
+	# `sys/pstat.h`, and `timer_create` (11|0|10|1) between `_SC_CPUTIME`
+	# and `timer_create`, between two machines measuring the same tree.
+	#
+	# The rule now: the header absent from the MOST of this directory's
+	# blocked tests, ties broken by C-collation name.  Most-frequent is
+	# also the decision-useful answer -- it is the one header that
+	# unblocks the most of this directory, where the old rule could
+	# report a 1-of-10 outlier (`_SC_CPUTIME` above; `timer_create`
+	# itself accounts for 7 of that directory's 10) -- and byte
+	# collation makes the tie-break total, so the column is a function
+	# of the measurement and of nothing else.  Where every header
+	# resolves, the same rule is applied to the class B
+	# symbols/macros/types instead.
+	why=$(awk -F'\t' -v d="$d/" 'index($1, d)==1 {
+			n = split($2, h, " ")
+			for (i = 1; i <= n; i++) if (h[i] != "") print h[i]
+		}' "$W/sets.tsv" |
+		sort | uniq -c | sort -k1,1nr -k2,2 | awk 'NR==1 { print $2 }')
 	if [ -z "$why" ]; then
-		why=$(awk -F'\t' -v d="$d/" 'index($3, d)==1 { print $2; exit }' "$W/bdetail.tsv")
+		why=$(awk -F'\t' -v d="$d/" 'index($3, d)==1 { print $2 }' "$W/bdetail.tsv" |
+			sort | uniq -c | sort -k1,1nr -k2,2 |
+			awk 'NR==1 { $1 = ""; sub(/^ +/, ""); print }')
 	fi
 	[ -n "$why" ] || why='-'
 	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
