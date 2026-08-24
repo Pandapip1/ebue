@@ -279,6 +279,22 @@ endif
 obj/test:
 	mkdir -p $@
 
+# test-exes: build every test PE, run none of them.  Same prerequisite
+# list `check` has, minus the running -- so it also drags in the plugin
+# DLLs (obj/test/rpath-plugin.dll, and delayall-plugin.dll where
+# DELAY_ALL is yes), which are prerequisites of the .exe that loads
+# them rather than members of TEST_EXES.
+#
+# Exists for CI: .github/workflows/ci.yml's `build-test-exes` job
+# produces the binaries that both the Wine leg and the real-Windows leg
+# consume, and must not run anything itself (it has no Wine installed,
+# and the point of the split is that the real-Windows leg stops waiting
+# on the Wine run).  Nothing stops a developer using it to check that
+# every test still *compiles* without sitting through the run.
+test-exes: $(TEST_EXES)
+
+.PHONY: test-exes
+
 check: $(TEST_EXES)
 ifneq ($(DELAY_ALL),yes)
 	@echo "SKIP delayall.exe (this \$$(CC) has no -Wl,--delay-all support -- see configure's probe)"
