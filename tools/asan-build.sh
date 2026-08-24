@@ -371,4 +371,48 @@ if [ "${NTLIBC_ASAN_CONVERSION:-0}" = 1 ]; then
 		| sed 's/: runtime error.*//' | sort -u | tee "$OBJ/conversion.txt" | wc -l)
 	echo "asan: $nconv implicit-conversion site(s) -> $OBJ/conversion.txt (report-only)"
 fi
-[ "$((passed + unverified))" = "$ran" ]
+# ---- 3. did this stage actually verify anything? --------------------------
+#
+# The pass condition used to be `passed + unverified == ran` and nothing
+# else, which is vacuously true when nothing ran.  That is not a
+# hypothetical: commit ad5305b added sched_yield() over NtYieldExecution()
+# without a matching fuzz/ntstubs.c stub, every test/*.c links the whole
+# instrumented library, so all 48 test binaries stopped linking at once --
+# and this stage compiled 282 files under ASan+UBSan, ran zero tests, and
+# exited 0.  A green stage that verified nothing is worse than a red one.
+#
+# So three conditions, not one.
+#
+# (a) Nothing may fail to link.  This is deliberately `> 0` and not a
+#     floor or an allowlist: unlike tools/linkcheck.sh -- whose
+#     linkcheck_exception() has to excuse symbols its *call-site
+#     generator* cannot express (hsearch/inet_ntoa take a struct by
+#     value; the __rpath group resolves a symbol the calling program
+#     defines) -- this loop has no generator limitation to excuse.  A
+#     test that a native build genuinely cannot link belongs in
+#     not_native() above, with a written reason, where it is counted as
+#     `skipped` and never reaches this counter.  So every remaining
+#     unlinkable test is a missing stub or a real regression, and the
+#     right number of those is zero.  $OBJ/unlinkable.txt names them.
+#
+# (b) Something must have run.  Belt and braces against the next variant
+#     of the same failure: if some future change empties this loop by a
+#     route that leaves nolink at 0 -- an over-broad not_native(), a glob
+#     that matches nothing, a test/ directory that moved -- the stage
+#     must not report success for it either.
+#
+# (c) Everything that ran must have passed or declined to verify, which
+#     is the original condition, kept.
+rc=0
+if [ "$nolink" -gt 0 ]; then
+	echo "asan: FAILED -- $nolink test(s) did not link; see $OBJ/unlinkable.txt" >&2
+	echo "asan: a test a native build cannot link belongs in not_native() with a reason," >&2
+	echo "asan: not silently dropped from the run." >&2
+	rc=1
+fi
+if [ "$ran" -eq 0 ]; then
+	echo "asan: FAILED -- no tests ran at all; this stage verified nothing." >&2
+	rc=1
+fi
+[ "$((passed + unverified))" = "$ran" ] || rc=1
+exit $rc
