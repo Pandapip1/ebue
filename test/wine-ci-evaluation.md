@@ -360,5 +360,169 @@ about the shape above.
 
 ## Appendix A: the proposed diff
 
-*(to be completed)*
+**This is a proposal, not a change.** `.github/workflows/ci.yml` is a gating
+pipeline; nothing here is applied. It is written out so the decision is about
+a concrete artefact rather than a description of one.
+
+It also **cannot be applied yet**: `WINE_SHA` below is a placeholder, because
+the branch it would name does not exist until step 1 of the recommendation
+(pushing the series to `github.com/Pandapip1/wine`) has happened.
+
+```diff
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@
+   TINYCC_REPO: https://github.com/Pandapip1/tinycc.git
+   TINYCC_SHA: 69eed4d346f31dea12d61b99f60298d2f59f66be
++
++  # Wine, same treatment and for the same reason. Stock apt Wine cannot
++  # run anything that forks -- it has no RtlCloneUserProcess -- and is
++  # more permissive than real Windows in several places we have since
++  # patched (the FILE_READ_ATTRIBUTES access check, FileAttributes==0,
++  # the rename status, RootDirectory resolution, sub-page
++  # SectionAlignment) and cannot open a socket the portable way at all.
++  # This fork carries those patches on top of upstream wine-11.16.
++  #
++  # Pinned by SHA, not by branch name, for the reason given above for
++  # tinycc: a push to the fork must not silently change what CI tests
++  # against. Bump this on its own commit -- these patches deliberately
++  # make Wine *stricter* than upstream in order to surface ntlibc bugs,
++  # so a bump is expected to be able to turn tests red, and that should
++  # not arrive folded into an unrelated change.
++  WINE_REPO: https://github.com/Pandapip1/wine.git
++  WINE_SHA: 0000000000000000000000000000000000000000  # branch ntlibc-testing
+ 
+ jobs:
+@@
+       - name: Sanity-check the cross compilers exist
+         run: |
+           test -x "$HOME/tinycc-install/bin/i386-win32-tcc"
+           test -x "$HOME/tinycc-install/bin/x86_64-win32-tcc"
+ 
++  # Build the patched Wine once and cache it, keyed on the pinned commit,
++  # exactly like build-toolchain above. On a cache hit this job is a
++  # no-op; it only compiles when WINE_SHA is deliberately bumped.
++  #
++  # --prefix is $HOME/wine-install and the cache restores to that same
++  # path: Wine locates its own libraries relative to the configured
++  # prefix, so this is not relocatable and the two must agree.
++  #
++  # --enable-archs=i386,x86_64 is the WoW64 build, needed because ntlibc
++  # targets both. The --without-* flags drop graphics, audio and device
++  # support the test binaries never touch; they are pure build-time
++  # savings, not a behavioural change to anything ntlibc exercises.
++  build-wine:
++    runs-on: ubuntu-24.04
++    steps:
++      - name: Cache patched Wine
++        id: cache-wine
++        uses: actions/cache@v6
++        with:
++          path: ~/wine-install
++          key: wine-${{ env.WINE_SHA }}-${{ runner.os }}-v1
++
++      - name: Install Wine build dependencies
++        if: steps.cache-wine.outputs.cache-hit != 'true'
++        run: |
++          sudo apt-get update
++          sudo apt-get install -y build-essential flex bison \
++            gcc-mingw-w64-i686 gcc-mingw-w64-x86-64
++
++      - name: Clone and build Wine
++        if: steps.cache-wine.outputs.cache-hit != 'true'
++        run: |
++          git clone "$WINE_REPO" wine
++          git -C wine checkout "$WINE_SHA"
++          mkdir wine/build
++          cd wine/build
++          ../configure --prefix="$HOME/wine-install" \
++            --enable-archs=i386,x86_64 \
++            --without-x --without-freetype --without-vulkan \
++            --without-opengl --without-gstreamer --without-sane \
++            --without-usb --without-udev --without-dbus --without-cups
++          make -j"$(nproc)"
++          make install
++
++      - name: Sanity-check the patched Wine exists and carries the patches
++        run: |
++          test -x "$HOME/wine-install/bin/wine"
++          # RtlCloneUserProcess is the patch the *-win.c tests need; if it
++          # is missing, the cache holds a stock build and the leg below
++          # would silently degrade to what we already have.
++          grep -q RtlCloneUserProcess \
++            "$HOME/wine-install/lib/wine/x86_64-unix/ntdll.so"
++
++  # The stricter Wine leg. Deliberately *additional* to the three `test`
++  # legs above rather than a replacement for them:
++  #
++  #   - stock apt Wine is what a contributor who has not built a custom
++  #     Wine actually runs `make check` against, so a leg on it is what
++  #     keeps that experience honest -- including catching a new test
++  #     that forks without being named *-win.c, which breaks stock Wine
++  #     immediately (this has happened: sh stage 4, de3e39e);
++  #   - stock Wine, patched Wine and real Windows disagree in different
++  #     directions, and a change can pass two and fail the third. Three
++  #     environments attribute a failure to a Wine *version* difference
++  #     versus a Wine-versus-Windows one; two cannot;
++  #   - `windows-test` hangs off `needs: test`, so putting a Wine compile
++  #     on that path would gate the only real-NT evidence we have behind
++  #     a build of a project we do not maintain.
++  #
++  # One leg, not three: what this adds over the existing legs is Wine
++  # accuracy, which is not arch- or kernel32-specific.
++  test-patched-wine:
++    needs: [build-toolchain, build-wine]
++    runs-on: ubuntu-24.04
++    # Bounded on purpose. Wine answers an unhandled exception by launching
++    # winedbg --auto, which waits for input CI never sends -- a hang, not
++    # a crash, which would otherwise run to the six-hour job default.
++    # tools/runtests.sh already disables winedbg and redirects stdin, so
++    # this is a backstop, not the primary guard.
++    timeout-minutes: 20
++    env:
++      WINEDEBUG: -all
++      WINEDLLOVERRIDES: winedbg.exe=d
++    steps:
++      - uses: actions/checkout@v7
++
++      - name: Restore tinycc toolchain
++        uses: actions/cache@v6
++        with:
++          path: ~/tinycc-install
++          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
++
++      - name: Restore patched Wine
++        uses: actions/cache@v6
++        with:
++          path: ~/wine-install
++          key: wine-${{ env.WINE_SHA }}-${{ runner.os }}-v1
++
++      - name: Add tinycc to PATH
++        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
++
++      - name: Configure
++        run: |
++          ./configure --host=x86_64-win32 CC=x86_64-win32-tcc \
++            --disable-kernel32 WINE="$HOME/wine-install/bin/wine"
++
++      - name: Build
++        run: make -j"$(nproc)"
++
++      # TEST_RUN, not the Makefile, is what excludes the *-win.exe tests,
++      # and it is a plain recursively-expanded variable -- so overriding
++      # it on the command line runs the full set here while leaving the
++      # default (and the comment at Makefile:232 explaining why stock
++      # Wine needs it) untouched for every other leg. These four tests --
++      # fork, fork-handles, fork-cloexec-exec and process -- are the
++      # entire fork/waitpid/exec/spawn surface, and this is the only
++      # place besides `windows-test` that runs them at all.
++      - name: Check, including the *-win.c tests stock Wine cannot run
++        run: make -j"$(nproc)" check 'TEST_RUN=$(TEST_EXES)'
+```
+
+Two things deliberately **not** in this diff. `Makefile:232` is untouched —
+the `TEST_RUN` override does the whole job from the command line. And the
+existing `test` and `windows-test` jobs are untouched, so if this leg is a
+mistake, deleting the two added jobs restores the pipeline exactly.
+
 
