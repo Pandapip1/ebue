@@ -67,7 +67,6 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 }
 
 int chmod(const char *path, mode_t mode) { return fchmodat(AT_FDCWD, path, mode, 0); }
-int lchmod(const char *path, mode_t mode) { return fchmodat(AT_FDCWD, path, mode, AT_SYMLINK_NOFOLLOW); }
 
 static mode_t umask_value = 022;
 mode_t umask(mode_t m) { mode_t o = umask_value; umask_value = m & 0777; return o; }

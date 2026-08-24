@@ -111,7 +111,6 @@ int utimensat(int, const char *, const struct timespec [2], int);
 #define S_IWRITE S_IWUSR
 #define S_IEXEC S_IXUSR
 #define S_BLKSIZE 512
-int lchmod(const char *, mode_t);
 #endif
 
 #if defined(_LARGEFILE64_SOURCE)
