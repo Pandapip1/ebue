@@ -102,26 +102,6 @@
 
 set -u
 
-# ------------------------------------------------------------ determinism
-#
-# Every `sort` below must order BYTES, not words.  glibc's UTF-8
-# collations ignore punctuation at the first comparison level, so
-# `sched_getparam` sorts BEFORE `sched_get_priority_max` under
-# en_US.UTF-8 (compare `schedgetparam` with `schedgetprioritymax`) and
-# AFTER it under C (`_` is 0x5F, `p` is 0x70).  The whole
-# `pthread_rwlock*` family moves for the same reason.  This report is
-# CHECKED IN, so that difference is not cosmetic: a developer's locale
-# and CI's disagree permanently, `--check` goes red on a regeneration
-# that changed nothing -- which is how this was found -- and the diff,
-# the entire reason the file is checked in, stops being readable.
-#
-# Set once and exported rather than sprinkled per `sort` invocation: awk
-# string comparison (the greedy closure's tie-break), `grep -x`, `uniq`
-# and `tr` ranges are all locale-sensitive too, and one setting is one
-# thing to reason about instead of an audit of every pipeline.
-LC_ALL=C
-export LC_ALL
-
 # shellcheck disable=SC1007
 srcdir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$srcdir" || exit 1
@@ -129,6 +109,24 @@ cd "$srcdir" || exit 1
 SUITE="$srcdir/third_party/ltp/testcases/open_posix_testsuite"
 IFACES="$SUITE/conformance/interfaces"
 REPORT="$srcdir/test/POSIX-GAP-MAP.generated.md"
+
+# ------------------------------------------------------------ the engine
+#
+# This file is a BACKEND.  Everything that decides what a number means --
+# LC_ALL, the refuse-to-measure guard, the compiler wrapper that enforces
+# it, the data block, the ancestry check, the greedy closure -- lives in
+# tools/suitemap-engine.sh and is shared with tools/libc-test-map.sh.
+# What is left here is the Open POSIX Test Suite itself: how to find its
+# tests, how to classify one, and what its report says.
+#
+# See the engine's header for why: these two backends were two
+# near-identical scripts, and every property established in one of them
+# was re-established worse, or not at all, in the other.
+SM_TOOL=posix-gapmap
+SM_REPORT=$REPORT
+SM_ROW_TAGS='[stdn]'
+# shellcheck source=tools/suitemap-engine.sh
+. "$srcdir/tools/suitemap-engine.sh"
 
 # ------------------------------------------------------- pinned constants
 #
@@ -220,82 +218,26 @@ if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
 fi
 
 # ------------------------------------------------------------------ config
-
+#
 # --render works entirely from the report's own data block, so it needs
 # no compiler, no ARCH and no config.mak.  That is the point of the
 # split: the cheap half has to run in a clone that has never been
 # configured and whose submodules were never checked out, because that is
 # what a pre-commit hook has to cope with.
-if [ "$mode" != --render ]; then
-	[ -f "$srcdir/config.mak" ] || {
-		echo "posix-gapmap: no config.mak; run ./configure first." >&2; exit 2; }
+#
+# The guard, the compiler identity and the CFLAGS all come from
+# sm_require_built, which is also what unlocks sm_cc.  Nothing here may
+# invoke $CC directly -- see the engine's "the guard".
+if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
+	sm_require_built
+	sm_require_nm
 fi
-cfg() { [ -f "$srcdir/config.mak" ] || return 0; sed -n "s/^$1 *= *//p" "$srcdir/config.mak" | tail -1; }
-CC=$(cfg CC); ARCH=$(cfg ARCH)
-CFLAGS_C99FSE=$(cfg CFLAGS_C99FSE); CFLAGS_AUTO=$(cfg CFLAGS_AUTO)
+CC=${CC:-$(sm_cfg CC)}; ARCH=${ARCH:-$(sm_cfg ARCH)}
 : "${GAPMAP_JOBS:=$(nproc 2>/dev/null || echo 1)}"
 : "${GAPMAP_GITDIR:=$srcdir}"
 
-if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
-	[ -n "$CC" ] || { echo "posix-gapmap: config.mak has no CC." >&2; exit 2; }
-	[ -f "$srcdir/lib/libc.a" ] || {
-		echo "posix-gapmap: lib/libc.a is missing; run make first." >&2
-		echo "posix-gapmap: without it every test would fail to link and the" >&2
-		echo "posix-gapmap: report would read as a total gap.  That is a" >&2
-		echo "posix-gapmap: build error, not a measurement." >&2
-		exit 2; }
-	# nm is how "defined" is decided in the reconciliation section.  If it
-	# is missing, that section would silently call every interface absent
-	# and the reconciliation would report 189 disagreements -- or, worse,
-	# none, because both sides would be wrong the same way.  Fail here.
-	if ! nm -g --defined-only "$srcdir/lib/libc.a" >/dev/null 2>&1; then
-		echo "posix-gapmap: 'nm -g --defined-only lib/libc.a' does not work." >&2
-		echo "posix-gapmap: binutils' nm is how this script decides which" >&2
-		echo "posix-gapmap: interfaces are DEFINED; without it the whole" >&2
-		echo "posix-gapmap: reconciliation section would be fabricated." >&2
-		exit 2
-	fi
-fi
+sm_workdir
 
-W=$(mktemp -d "${TMPDIR:-/tmp}/ntlibc-gapmap.XXXXXX") || exit 1
-trap 'rm -rf "$W"' EXIT
-
-# ------------------------------------------------------- the data block
-#
-# The report carries, in an HTML comment at its end, the facts it was
-# rendered from: one row per conformance test (class, absent-header set,
-# class B subclass and detail), one per interface directory, one per
-# class B name, and five scalars.  Everything printed above it -- every
-# table, every count, the greedy closure, the reconciliation -- is a pure
-# function of those rows.
-#
-# WHY IT IS IN THE REPORT AND NOT IN A SECOND FILE
-#
-# Two checked-in files that must agree are a staleness bug waiting to
-# happen, and the whole reason this file exists is that a stale
-# checked-in report is worse than no report.  One file cannot drift from
-# itself.
-#
-# It is also what makes a merge driver possible here.  A three-way TEXT
-# merge of a rendered table is meaningless -- two branches that each land
-# a header change every count in it, and the right answer is neither
-# side's text -- but the rows are structured, keyed and independent, so
-# merging THOSE and re-rendering is a real resolution.  Doing that needs
-# the data of all three versions of one path, which is exactly what git
-# hands a merge driver, and nothing else: not the tree, not the suite,
-# not a compiler, none of which git guarantees are on disk while a merge
-# is in flight.  See tools/merge-gendata.sh, and tools/merge-kaem.sh's
-# header for the empirical story behind that constraint.
-DATA_BEGIN='<!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.'
-DATA_END='END ntlibc-generated-data -->'
-
-read_data_block() {
-	awk -v e="$DATA_END" '
-		/^<!-- BEGIN ntlibc-generated-data v1/ { inb = 1; next }
-		$0 == e { inb = 0; next }
-		inb && /^[stdn]\t/ { print }
-	' "$1"
-}
 
 # ---------------------------------------------------- the include resolver
 #
@@ -441,39 +383,11 @@ check_canaries() {
 # GAPMAP_GITDIR exists.  Note what this does NOT do: if no repository is
 # reachable it FAILS rather than skipping.  "I could not check" and "it
 # checks out" are different claims.
-check_ancestry() {
-	_sha=$1
-	# The repository is a parameter with a default rather than read
-	# straight from the environment, so --selftest can point one call at
-	# a non-repository without a subshell to contain the override.
-	_gd=${2:-$GAPMAP_GITDIR}
-	if ! git -C "$_gd" rev-parse --git-dir >/dev/null 2>&1; then
-		echo "posix-gapmap: ANCESTRY FAILED -- $_gd is not a git" >&2
-		echo "posix-gapmap:   repository, so the report's recorded ntlibc SHA" >&2
-		echo "posix-gapmap:   cannot be checked against HEAD.  Point" >&2
-		echo "posix-gapmap:   GAPMAP_GITDIR at the real tree.  This is a failure" >&2
-		echo "posix-gapmap:   and not a skip: an unverifiable pin and a verified" >&2
-		echo "posix-gapmap:   one are different claims." >&2
-		return 1
-	fi
-	if [ -z "$_sha" ]; then
-		echo "posix-gapmap: ANCESTRY FAILED -- the report records no ntlibc SHA." >&2
-		return 1
-	fi
-	if ! git -C "$_gd" cat-file -e "$_sha^{commit}" 2>/dev/null; then
-		echo "posix-gapmap: ANCESTRY FAILED -- the report records ntlibc SHA" >&2
-		echo "posix-gapmap:   $_sha, which this repository does not have." >&2
-		return 1
-	fi
-	if ! git -C "$_gd" merge-base --is-ancestor "$_sha" HEAD 2>/dev/null; then
-		echo "posix-gapmap: ANCESTRY FAILED -- the report records ntlibc SHA" >&2
-		echo "posix-gapmap:   $_sha, which is not an ancestor of HEAD." >&2
-		echo "posix-gapmap: The report therefore describes a tree that is not" >&2
-		echo "posix-gapmap:   this one.  Regenerate it: tools/posix-gapmap.sh" >&2
-		return 1
-	fi
-	return 0
-}
+# The engine owns the ancestry check itself; this names the override
+# variable this backend has always used, for the diagnostic.
+SM_GITDIR=$GAPMAP_GITDIR
+SM_GITDIR_HINT=GAPMAP_GITDIR
+check_ancestry() { sm_check_ancestry "$@"; }
 
 # ------------------------------------------------------------- the selftest
 #
@@ -551,7 +465,7 @@ if [ "$mode" = --render ]; then
 		echo "posix-gapmap: $REPORT does not exist, so there is nothing to" >&2
 		echo "posix-gapmap:   re-render.  Generate it with: make posix-gapmap" >&2
 		exit 1; }
-	read_data_block "$REPORT" > "$W/data"
+	sm_read_data_block "$REPORT" > "$W/data"
 	[ -s "$W/data" ] || {
 		echo "posix-gapmap: $REPORT carries no ntlibc-generated-data block," >&2
 		echo "posix-gapmap:   so there is nothing to re-render it from.  It" >&2
@@ -690,8 +604,10 @@ mkdir -p "$W/log" "$W/exe"
 #
 # So A is exactly "tcc could not find a header", and B is everything else
 # that failed.  Nothing is discarded: see check_partition.
-cat > "$W/one.sh" <<'ONE_EOF'
-#!/bin/sh
+{
+printf '%s\n' '#!/bin/sh'
+printf '%s\n' "$SM_WORKER_GUARD"
+cat <<'ONE_EOF'
 f=$1
 tag=$(echo "$f" | tr '/' '_')
 log="$W/log/$tag.log"
@@ -709,6 +625,7 @@ else
 fi
 printf '%s\t%s\n' "$cls" "$f"
 ONE_EOF
+} > "$W/one.sh"
 chmod +x "$W/one.sh"
 export W CC CFLAGS_C99FSE CFLAGS_AUTO INC IFACES SUITE
 SRCDIR=$srcdir; export SRCDIR
@@ -846,53 +763,10 @@ check_floors "$n_C" "$n_blocked" || exit 1
 
 cls_of() { awk -F'\t' -v f="$1" '$2==f{print $1; found=1} END{if(!found) print MISSING}' MISSING=MISSING "$W/class.tsv"; }
 check_canaries "$(cls_of "$CANARY_A")" "$(cls_of "$CANARY_C")" || exit 1
-# Greedy closure.  Recomputed from scratch at every step rather than
-# sorted once by "unblocked alone", because the two orders differ: a
-# header's value rises as its co-blockers are added.
+# The greedy closure -- which greedy, and why it is that one rather than
+# "the most-named header", is stated once in the engine.
 awk -F'\t' '$2 ~ /[^ ]/{print $2}' "$W/sets.tsv" > "$W/sets.txt"
-awk '
-{
-	nrows++
-	len[nrows] = split($0, a, " ")
-	for (i = 1; i <= len[nrows]; i++) { mem[nrows, i] = a[i]; hdrs[a[i]] = 1 }
-}
-END {
-	# "tests naming it" and "unblocked by it alone", for the table.
-	for (r = 1; r <= nrows; r++) {
-		for (i = 1; i <= len[r]; i++) naming[mem[r, i]]++
-		if (len[r] == 1) alone[mem[r, 1]]++
-	}
-	remaining = nrows
-	step = 0
-	while (1) {
-		best = ""; bestc = 0
-		for (h in hdrs) {
-			if (h in got) continue
-			c = 0
-			for (r = 1; r <= nrows; r++) {
-				if (dead[r]) continue
-				ok = 1
-				for (i = 1; i <= len[r]; i++)
-					if (!((mem[r, i]) in got) && mem[r, i] != h) { ok = 0; break }
-				if (ok) c++
-			}
-			if (c > bestc || (c == bestc && c > 0 && h < best)) { bestc = c; best = h }
-		}
-		if (bestc == 0) break
-		got[best] = 1
-		for (r = 1; r <= nrows; r++) {
-			if (dead[r]) continue
-			ok = 1
-			for (i = 1; i <= len[r]; i++) if (!((mem[r, i]) in got)) { ok = 0; break }
-			if (ok) { dead[r] = 1; remaining-- }
-		}
-		step++
-		printf "%d\t%s\t%d\t%d\t%d\t%d\n", step, best, naming[best], alone[best], bestc, remaining
-	}
-	# Headers that never take a turn (every test naming them is also
-	# blocked by something else that is itself never worth adding).
-	for (h in hdrs) if (!(h in got)) printf "%d\t%s\t%d\t%d\t%d\t%d\n", 0, h, naming[h], alone[h], 0, remaining
-}' "$W/sets.txt" | sort -k1,1n -k2,2 > "$W/closure.tsv"
+sm_closure "$W/sets.txt" > "$W/closure.tsv"
 # ----------------------------------------- section 3/4: the per-directory
 #
 # One row per interface directory (testfrmw excluded -- it is suite
@@ -1255,7 +1129,7 @@ EOF
 	# to reproduce the whole file byte for byte.  Sorted, so that the
 	# diff of a regeneration stays readable and so that two branches'
 	# rows merge as lines rather than as a reshuffle.
-	printf '\n%s\n' "$DATA_BEGIN"
+	printf '\n%s\n' "$SM_DATA_BEGIN"
 	printf '%s\n' 'Do not edit by hand -- see "the data block" in tools/posix-gapmap.sh.'
 	printf '\n'
 	printf 's\tntlibc\t%s\n' "$NTLIBC_SHA"
@@ -1296,7 +1170,7 @@ EOF
 			grep -qx "$_n" "$W/undefok.txt"  && _uok=yes || _uok=no
 			printf 'n\t%s\t%s\t%s\n' "$_n" "$_dec" "$_uok"
 		done
-	printf '%s\n' "$DATA_END"
+	printf '%s\n' "$SM_DATA_END"
 }
 
 if [ "$mode" = --generate ] || [ "$mode" = --render ]; then
@@ -1329,9 +1203,9 @@ emit > "$W/new.md" || exit 1
 # on every commit, check_ancestry above is what actually enforces it, and
 # diffing it here would make this stage red for a reason that has nothing
 # to do with the gap.
-strip_shas() { sed -e '/^| ntlibc | `/d' -e '/^s	ntlibc	/d' "$1"; }
-strip_shas "$REPORT" > "$W/a.md"
-strip_shas "$W/new.md" > "$W/b.md"
+
+sm_strip_shas "$REPORT" > "$W/a.md"
+sm_strip_shas "$W/new.md" > "$W/b.md"
 if diff -u "$W/a.md" "$W/b.md" > "$W/report.diff"; then
 	echo "posix-gapmap: OK -- $n_tests tests, A=$n_A B=$n_B C=$n_C, $n_disagree disagreement(s)"
 	echo "posix-gapmap: OK -- test/POSIX-GAP-MAP.generated.md is current (ntlibc $recorded)"

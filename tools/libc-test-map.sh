@@ -119,37 +119,6 @@
 
 set -u
 
-# ------------------------------------------------------------ determinism
-#
-# Every `sort` below must order BYTES, not words.  glibc's UTF-8
-# collations ignore punctuation at the first comparison level, so
-# `sched_getparam` sorts BEFORE `sched_get_priority_max` under
-# en_US.UTF-8 (compare `schedgetparam` with `schedgetprioritymax`) and
-# AFTER it under C (`_` is 0x5F, `p` is 0x70).  In this corpus the same
-# rule reorders `pthread-robust-detach` against
-# `pthread_condattr_setclock`, `regexec-nosub` against the `regex-*`
-# tests, and `iconv-roundtrips` against `iconv_open`.
-#
-# This report is CHECKED IN, so that difference is not cosmetic: a
-# developer's locale and CI's disagree permanently, --check goes red on a
-# regeneration that changed nothing, and the diff -- the entire reason
-# the file is checked in -- stops being readable.  tools/posix-gapmap.sh
-# had exactly this bug and CI was red on it, and this file was written in
-# parallel with it from the same design, so it shipped the same defect.
-#
-# Not a latent one, either: the report as committed was itself generated
-# under a UTF-8 locale, so regenerating under C reordered eight rows of
-# section 5's appendix.  Anyone running --check under C was already
-# getting a red stage for a reason that had nothing to do with the gap.
-#
-# Set once and exported rather than sprinkled per `sort` invocation:
-# pathname expansion (the `src/functional/*.c` glob that feeds the row
-# order), awk string comparison (the greedy closure's tie-break), and
-# `grep`/`tr` ranges are all locale-sensitive too, and one setting is one
-# thing to reason about instead of an audit of every pipeline.
-LC_ALL=C
-export LC_ALL
-
 # shellcheck disable=SC1007
 srcdir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$srcdir" || exit 1
@@ -158,11 +127,31 @@ SUITE="${LIBC_TEST_MAP_SUITE:-$srcdir/third_party/libc-test}"
 # The git repository to ask about SHAs and ancestry.  Normally $srcdir --
 # but tools/gate.sh runs this stage inside an rsync'd tree copy that has
 # no .git at all, and points this back at the real tree.  It is NOT
-# optional: see git_repo() below for why "no .git, so skip the check" is
-# the one answer this script must never give.
+# optional: "no .git, so skip the check" is the one answer this script
+# must never give.
 GITREPO="${LIBC_TEST_MAP_GITREPO:-$srcdir}"
 REPORT="$srcdir/test/LIBC-TEST-MAP.generated.md"
 SHIM="$srcdir/test/libc-test-shim-src/libc-test-shim.c"
+
+# ------------------------------------------------------------ the engine
+#
+# This file is a BACKEND.  Everything that decides what a number means --
+# LC_ALL, the refuse-to-measure guard, the compiler wrapper that enforces
+# it, the data block, the ancestry check, the greedy closure -- lives in
+# tools/suitemap-engine.sh and is shared with tools/posix-gapmap.sh.
+# What is left here is musl's libc-test itself: how to find its tests,
+# how to classify one, and what its report says.
+#
+# See the engine's header for why.  Three properties that this file had
+# and that file had, differently, are named there; one of them was this
+# file's LC_ALL bug and one was this file's weaker greedy closure.
+SM_TOOL=libc-test-map
+SM_REPORT=$REPORT
+SM_ROW_TAGS='[sht]'
+SM_GITDIR=$GITREPO
+SM_GITDIR_HINT=LIBC_TEST_MAP_GITREPO
+# shellcheck source=tools/suitemap-engine.sh
+. "$srcdir/tools/suitemap-engine.sh"
 
 # ===================================================================
 # THE PINS
@@ -276,37 +265,6 @@ count_c() { find "$1" -maxdepth 1 -name '*.c' 2>/dev/null | wc -l | tr -d ' '; }
 # either escaping games or a GNU-only \x60.
 BQ='`'
 
-# ------------------------------------------------------------------
-# the data block
-# ------------------------------------------------------------------
-#
-# The rows the report was rendered from, carried in an HTML comment at
-# its end so that --render can reproduce the file without the submodule,
-# a config.mak or a compiler.  See "THE TWO HALVES, AND THE DATA BLOCK"
-# in the header for why it lives inside the report rather than beside it.
-#
-# Format: tab-separated, one leading single-letter section tag per row,
-# every section sorted under LC_ALL=C so a regeneration diffs as a line
-# diff and a merge of two branches' rows is a line merge.
-#
-#   s  scalar           s  KEY  VALUE
-#   h  absent include   h  TEST  HEADER      (one row per pair; class A only)
-#   t  classified test  t  NAME  CORPUS  CLASS  SUBCLASS  KEY  DETAIL
-#
-# The `t` row is exactly a line of classify()'s $W/rows, and the `h` rows
-# are exactly absent_includes()'s answer for each class A test, which is
-# why the derivations cannot tell which mode produced them.
-DATA_BEGIN='<!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.'
-DATA_END='END ntlibc-generated-data -->'
-
-read_data_block() {
-	awk -v e="$DATA_END" '
-		/^<!-- BEGIN ntlibc-generated-data v1/ { inb = 1; next }
-		$0 == e { inb = 0; next }
-		inb && /^[sht]\t/ { print }
-	' "$1"
-}
-
 g() { git -C "$GITREPO" "$@"; }
 
 # Every SHA and every ancestry question goes through here, and a failure
@@ -372,12 +330,13 @@ require_suite() {
 # both will.
 classify() {
 	W=$1
-	cfg() { sed -n "s/^$1 *= *//p" "$srcdir/config.mak" | tail -1; }
-	[ -f "$srcdir/config.mak" ] || die "no config.mak; run ./configure first."
-	[ -f "$srcdir/lib/libc.a" ] || die "lib/libc.a is missing; run make first."
-	CC=$(cfg CC); ARCH=$(cfg ARCH)
-	CFLAGS_C99FSE=$(cfg CFLAGS_C99FSE); CFLAGS_AUTO=$(cfg CFLAGS_AUTO)
-	[ -n "$CC" ] || die "config.mak has no CC."
+	# The guard, the compiler identity and the CFLAGS all come from the
+	# engine, which is also what unlocks sm_cc.  This used to be four
+	# private lines here, and the lib/libc.a test among them was a bare
+	# `die` with no reasoning -- reorder past it and the report would
+	# have read as a total gap instead of a build error.  See the
+	# engine's "the guard".
+	sm_require_built
 
 	INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -Iobj/include -I$srcdir/include -I$SUITE/src/common"
 	mkdir -p "$W/build" "$W/obj"
@@ -385,13 +344,13 @@ classify() {
 	hobjs=""
 	for h in print rand path memfill; do
 		# shellcheck disable=SC2086
-		$CC -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
+		sm_cc -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
 		    -o "$W/obj/$h.o" "$SUITE/src/common/$h.c" 2>"$W/$h.err" ||
 			die "the shared harness helper $h.c does not compile; nothing can be classified."
 		hobjs="$hobjs $W/obj/$h.o"
 	done
 	# shellcheck disable=SC2086
-	$CC -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
+	sm_cc -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
 	    -o "$W/obj/shim.o" "$SHIM" 2>"$W/shim.err" ||
 		die "test/libc-test-shim-src/libc-test-shim.c does not compile."
 	hobjs="$hobjs $W/obj/shim.o"
@@ -402,7 +361,7 @@ classify() {
 		n=$(basename "$f" .c)
 		case "$f" in *"/src/functional/"*) corp=functional ;; *) corp=regression ;; esac
 		# shellcheck disable=SC2086
-		if $CC $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC -nostdlib \
+		if sm_cc $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC -nostdlib \
 		    -o "$W/obj/$n.exe" "$srcdir/lib/crt1.o" "$f" $hobjs \
 		    -L"$srcdir/lib" -lc -lntdll > "$W/build/$n.build" 2>&1; then
 			printf '%s\t%s\tC\tbuilds\t\t\n' "$n" "$corp" >> "$W/rows"
@@ -453,7 +412,7 @@ absent_sets() {
 # of the cheap path.
 load_data() {
 	w=$1
-	read_data_block "$REPORT" > "$w/data"
+	sm_read_data_block "$REPORT" > "$w/data"
 	[ -s "$w/data" ] || {
 		echo "libc-test-map: $REPORT carries no ntlibc-generated-data block," >&2
 		echo "  so there is nothing to re-render it from.  Either it predates" >&2
@@ -957,7 +916,7 @@ EOF
 	# the whole population, and they have to be checkable from the block
 	# alone.  Class C rows end in two empty fields (no key, no detail),
 	# which is why the trailing tabs are there and are not noise.
-	printf '\n%s\n' "$DATA_BEGIN"
+	printf '\n%s\n' "$SM_DATA_BEGIN"
 	printf '%s\n' 'Do not edit by hand -- see "the data block" in tools/libc-test-map.sh.'
 	printf '\n'
 	printf 's\tntlibc\t%s\n'     "$nt_sha"
@@ -971,7 +930,7 @@ EOF
 		for (i = 1; i <= n; i++) if (a[i] != "") printf "h\t%s\t%s\n", $1, a[i]
 	}' "$W/needs" | sort
 	awk '{ print "t\t" $0 }' "$W/rows" | sort
-	printf '%s\n' "$DATA_END"
+	printf '%s\n' "$SM_DATA_END"
 }
 
 pct() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f%%", (b?a*100/b:0)}'; }
@@ -1033,28 +992,31 @@ divergence() {
 	done < "$w/o1"
 }
 
+# The closure table, rendered from the engine's sm_closure.
+#
+# This used to be a private greedy loop that picked the header NAMED by
+# the most blocked tests.  That is not the same question the section
+# heading asks: on `t1={a,b} t2={a,c} t3={d} t4={d}` it recommends `a.h`
+# first, and `a.h` alone unblocks nothing.  It also drained the residue
+# to zero, implying any gap can be closed one header at a time.  The
+# engine picks the header that fully unblocks the most tests, recomputed
+# each step, and stops when no single header unblocks anything -- see
+# sm_closure for the full reasoning.
+#
+# On this corpus both produce identical output, which is exactly why the
+# divergence survived: they agree by accident of the data (33 of the 40
+# absent-header sets are singletons), not by construction.
 closure() {
 	w=$1
-	cp "$w/needs" "$w/cl"
-	total=$(wc -l < "$w/cl" | tr -d ' ')
+	awk -F'\t' '$2 ~ /[^ ]/{print $2}' "$w/needs" > "$w/sets.txt"
+	total=$(wc -l < "$w/sets.txt" | tr -d ' ')
 	printf 'start                        blocked on an absent header: %3d\n' "$total"
-	while :; do
-		best=$(awk -F'\t' '{n=split($2,a," "); for(i=1;i<=n;i++) if(a[i]!="") cnt[a[i]]++}
-			END{m=0; for(h in cnt) if(cnt[h]>m||(cnt[h]==m&&h<b)){m=cnt[h];b=h} if(m)print b}' "$w/cl")
-		[ -n "$best" ] || break
-		gone=$(awk -F'\t' -v h="$best" '{
-			n=split($2,a," "); rest=0
-			for(i=1;i<=n;i++) if(a[i]!=""&&a[i]!=h) rest++
-			if(rest==0) c++
-		} END{print c+0}' "$w/cl")
-		awk -F'\t' -v h="$best" 'BEGIN{OFS="\t"}{
-			n=split($2,a," "); s=""
-			for(i=1;i<=n;i++) if(a[i]!=""&&a[i]!=h) s=s a[i] " "
-			if(s!="") print $1,s
-		}' "$w/cl" > "$w/cl2"; mv "$w/cl2" "$w/cl"
-		total=$(wc -l < "$w/cl" | tr -d ' ')
-		printf '+%-26s unblocks %3d    still blocked: %3d\n' "$best" "$gone" "$total"
-	done
+	# Step 0 rows are the headers that never take a turn; sm_closure sorts
+	# them first and this table does not rank them.
+	sm_closure "$w/sets.txt" |
+		awk -F'\t' '$1 != 0 {
+			printf "+%-26s unblocks %3d    still blocked: %3d\n", $2, $5, $6
+		}'
 }
 
 class_b_table() {
@@ -1238,21 +1200,16 @@ check_iface_counts() {
 	return $bad
 }
 
-# The two places the recorded ntlibc SHA appears, dropped together.
-# Written with a literal tab in the second pattern (POSIX sed has no \t).
-strip_shas() { sed -e '/^| ntlibc | `/d' -e '/^s	ntlibc	/d' "$1"; }
-
 check_sha() {
 	[ -f "$REPORT" ] || { echo "--check: $REPORT is missing.  Run tools/libc-test-map.sh." >&2; return 1; }
 	# shellcheck disable=SC2016  # markdown backticks in a sed pattern
 	sha=$(sed -n 's/^| ntlibc | `\([0-9a-f]*\)` |$/\1/p' "$REPORT" | head -1)
 	[ -n "$sha" ] || { echo "--check: $REPORT records no ntlibc SHA." >&2; return 1; }
-	if ! g merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
-		echo "--check FAILED: the report was generated at $sha, which is not an" >&2
-		echo "  ancestor of HEAD.  It describes a tree this one did not come from," >&2
-		echo "  and is therefore not evidence about this one.  Regenerate it." >&2
-		return 1
-	fi
+	# The ancestry rule itself lives in the engine, so that both reports
+	# make the same claim and fail the same way.  The wording of a
+	# failure here therefore changed with unification; what it checks
+	# did not.
+	sm_check_ancestry "$sha" || return 1
 	echo "sha ok: report generated at $sha, an ancestor of HEAD"
 	return 0
 }
@@ -1265,8 +1222,7 @@ main() {
 	*) sed -n '2,118p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 	esac
 
-	W=$(mktemp -d "${TMPDIR:-/tmp}/ntlibc-lctmap.XXXXXX") || exit 1
-	trap 'rm -rf "$W"' EXIT
+	sm_workdir
 
 	rc=0
 	if [ "$mode" = --render ]; then
@@ -1318,8 +1274,8 @@ main() {
 			# header table and once as an `s` row in the data block, and
 			# both have to go for the same reason; check_sha above is
 			# what actually enforces the SHA.
-			strip_shas "$REPORT" > "$W/have.md"
-			strip_shas "$W/fresh.md" > "$W/want.md"
+			sm_strip_shas "$REPORT" > "$W/have.md"
+			sm_strip_shas "$W/fresh.md" > "$W/want.md"
 			if ! diff -u "$W/have.md" "$W/want.md" > "$W/diff"; then
 				echo "--check FAILED: $REPORT is stale." >&2
 				echo "  the coverage map no longer describes this tree.  Regenerate:" >&2
