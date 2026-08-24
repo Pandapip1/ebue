@@ -4,9 +4,9 @@
  * Internal AST and entry points for the in-process POSIX shell (see
  * test/sh-design.md for why this exists and how it links).  Nothing in
  * here is a public interface: it is linked into libc.a and consumed by
- * the other files in this directory, the sh/ binary's main(), and (from
- * stage 5 on) wordexp()/system()/popen().  All names begin with __sh_
- * or SH_.
+ * the other files in this directory, the sh/ binary's main()
+ * (sh/main.c), and (from stage 5 on) wordexp()/system()/popen().  All
+ * names begin with __sh_ or SH_.
  *
  * Grammar coverage is the subset test/sh-design.md scopes in: simple
  * commands (including leading NAME=value assignments), pipelines,
@@ -14,7 +14,13 @@
  * subshells '( list )' and brace groups '{ list ; }', and redirections
  * including here-documents.  Control-flow reserved words (if/while/for/
  * case), functions, aliases and job control are deliberately out of
- * scope -- see the design note and the top-level task report.
+ * scope -- see the design note and the top-level task report.  Because
+ * every one of those lexes as an ordinary WORD here, a program using
+ * one would otherwise be *executed* as something else entirely (an
+ * external command called "if"); sh/main.c refuses such a program up
+ * front, with a diagnostic naming what is unsupported, rather than
+ * letting it run -- see that file's header for the full list and why
+ * refusing beats a misleading "command not found".
  *
  * '!' pipeline negation is parsed as a reserved word (a bare, unquoted
  * WORD token whose text is exactly "!"/"{"/"}"), recognised only where

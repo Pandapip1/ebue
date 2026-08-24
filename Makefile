@@ -10,7 +10,8 @@
 # arch/$(ARCH)/src/ override sources of the same name under src/.
 #
 # Targets:
-#   all       build lib/libc.a, lib/crt1.o, lib/ntdll.def (and the wrapper)
+#   all       build lib/libc.a, lib/crt1.o, lib/ntdll.def (and the wrapper),
+#             plus obj/sh/sh.exe, the sh(1p) binary over the shell engine
 #   install   install headers, libraries and the wrapper under $(prefix)
 #   check     build test/*.c against the result and run them under wine
 #   linkcheck prove every publicly declared function actually links
@@ -74,6 +75,19 @@ CRT_LIBS = $(addprefix lib/,$(notdir $(CRT_OBJS)))
 ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS) $(DEF_FILES)
 ALL_TOOLS = obj/ntlibc-tcc
 
+# sh(1p): a PE program, not part of libc.a.  Its sources live in the
+# top-level sh/ directory rather than under src/ -- test/sh-design.md's
+# "Placement and gates" ("its own source directory and binary -- rather
+# than blurring into src/") and CONTRIBUTING.md's "Why a shell lives in a
+# libc repo" both say so, and SRC_DIRS above is the mechanical reason it
+# has to be true: src/* is a wildcard, so a main() under src/ would be
+# archived into libc.a and fight with the main() of every program that
+# links it.  The command *language* stays in src/sh/ (an internal part
+# of the library, which is how wordexp/system/popen will reach it); only
+# the entry point is out here.
+SH_SRCS = $(sort $(wildcard $(srcdir)/sh/*.c))
+SH_EXE = obj/sh/sh.exe
+
 WRAPCC_TCC = $(CC)
 
 -include config.mak
@@ -82,7 +96,7 @@ ifeq ($(WRAPPER),yes)
 ALL_TOOLS_BUILT = $(ALL_TOOLS)
 endif
 
-all: $(ALL_LIBS) $(ALL_TOOLS_BUILT)
+all: $(ALL_LIBS) $(ALL_TOOLS_BUILT) $(SH_EXE)
 
 OBJ_DIRS = $(sort $(patsubst %/,%,$(dir $(ALL_LIBS) $(ALL_TOOLS) $(ALL_OBJS) $(GENH))) obj/include)
 
@@ -149,6 +163,9 @@ obj/ntlibc-tcc: $(srcdir)/tools/ntlibc-tcc.in config.mak
 $(DESTDIR)$(bindir)/%: obj/%
 	$(INSTALL) -D $< $@
 
+$(DESTDIR)$(bindir)/%: obj/sh/%
+	$(INSTALL) -D $< $@
+
 $(DESTDIR)$(libdir)/%: lib/%
 	$(INSTALL) -D -m 644 $< $@
 
@@ -170,7 +187,9 @@ install-headers: $(ALL_INCLUDES:include/%=$(DESTDIR)$(includedir)/%)
 
 install-tools: $(ALL_TOOLS_BUILT:obj/%=$(DESTDIR)$(bindir)/%)
 
-install: install-libs install-headers install-tools
+install-progs: $(DESTDIR)$(bindir)/$(notdir $(SH_EXE))
+
+install: install-libs install-headers install-tools install-progs
 
 #
 # kaem: regenerate the kaem-only bootstrap build script from this
@@ -215,6 +234,37 @@ generated:
 .PHONY: kaem alltypes generated
 
 #
+# sh: link the shell binary against this arch's freshly built crt1.o +
+# libc.a + ntdll.def, exactly the way a test PE (or any other program) is
+# linked -- there is nothing special about it, which is the point: the
+# engine it calls is already in libc.a for every caller, and this adds
+# only a main().  Built as one link straight from source (one file today)
+# rather than through obj/%.o: the generic object rule above compiles with
+# CFLAGS_ALL, i.e. -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Isrc/internal, which
+# is deliberately the *library's* compile environment and not a program's
+# (see CFLAGS_ALL's own comment).  sh/ is a program and must build with
+# what any other program gets.
+#
+# `sh` is .PHONY for a reason that bites otherwise: a directory named sh/
+# exists, so without it make considers the target already up to date and
+# does nothing.
+# obj/sh gets its own order-only directory target rather than joining
+# OBJ_DIRS: OBJ_DIRS is walked by the kaem bootstrap generator (it
+# dry-runs `make -B lib/libc.a lib/crt1.o`, whose mkdir lines come from
+# there), and boot/kaem/ builds the *library*, not this program -- an
+# obj/sh in those scripts would be a directory nothing there ever writes
+# into.  Same shape as obj/test below, for the same reason.
+obj/sh:
+	mkdir -p $@
+
+$(SH_EXE): $(SH_SRCS) $(srcdir)/src/sh/sh.h $(ALL_LIBS) | obj/sh
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $(SH_SRCS) -Llib -lc -lntdll
+
+sh: $(SH_EXE)
+
+.PHONY: sh install-progs
+
+#
 # Tests: every test/*.c is built into a PE and run under wine.  A test
 # passes if it exits 0.  tests named *-win.c are built but not run: they
 # need something wine does not implement (RtlCloneUserProcess, say).
@@ -246,6 +296,14 @@ obj/test/rpath-plugin.dll: $(srcdir)/test/rpath-plugin-src/rpath-plugin.c | obj/
 	$(CC) -shared -o $@ $<
 
 obj/test/rpath.exe: obj/test/rpath-plugin.dll
+
+# test/sh-main.c is the black-box test of the sh binary: it spawns
+# obj/sh/sh.exe as a real process (test/sh-engine.c, by contrast, links the
+# engine directly and never involves a second image).  It finds the exe
+# by walking up from its own argv[0] -- see that file's header -- so the
+# only wiring needed here is making sure the exe exists before the test
+# runs.
+obj/test/sh-main.exe: $(SH_EXE)
 
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
