@@ -39,8 +39,12 @@
  *
  *  1. `<stropts.h>` is absent, and so is every type and macro it
  *     defines.  A strictly conforming application does not compile.
- *     Fenced UNIMPL, with real assertions, per this project's
- *     convention for a gap in code that could exist.
+ *     Fenced UNIMPL, with real assertions -- and, as of 2026-08-25,
+ *     UNIMPL in the "I chose not to" sense: the header is DECLINED,
+ *     for the three reasons set out at the fence itself (POSIX deleted
+ *     it in Issue 8; shipping it moves the failure from compile time to
+ *     link time without fixing anything; and its prototype conflicts
+ *     with the ioctl() this tree already has).
  *  2. The STREAMS command set and every clause conditioned on a
  *     STREAMS device: **N/A**, and the mechanism is not "NT is
  *     different".  It is that ioctl.html scopes its clauses to STREAMS
@@ -120,27 +124,78 @@ static void test_ebadf(void)
  * grep over include/ and src/ finds none of it: no stropts.h, no
  * I_PUSH, no FMNAMESZ, no isastream.
  *
- * Fenced UNIMPL rather than N/A: a header of constants and structure
- * definitions is implementable on any platform -- what cannot be
- * implemented is the STREAMS *behaviour* behind it, which is the
- * separate N/A recorded in the file banner.  The distinction matters,
- * because a caller that merely wants to compile is blocked by the
- * first and a caller that wants to push a module is blocked by the
- * second.
+ * UNIMPL rather than N/A, because this project's rule counts "I chose
+ * not to" as UNIMPL -- and this is that case.  The fence below used to
+ * argue the opposite, that the header half was cheap and separable from
+ * the STREAMS-behaviour half; that argument is retained verbatim in the
+ * fence and answered there, because it is a reasonable thing to think
+ * and someone will think it again.
  * ------------------------------------------------------------------ */
-#if 0 /* UNIMPL: <stropts.h> does not exist.  ioctl.html SYNOPSIS:
+#if 0 /* UNIMPL (declined, 2026-08-25): <stropts.h> does not exist.
+       * ioctl.html SYNOPSIS:
        *   #include <stropts.h>
        *   int ioctl(int fildes, int request, ... );
        * ntlibc declares ioctl() in <sys/ioctl.h> -- a BSD/SVR4 header
        * POSIX does not specify -- with `unsigned long request` rather
        * than `int request`.  A strictly conforming application that
-       * writes the SYNOPSIS above does not compile.
+       * writes the SYNOPSIS above does not compile.  The assertions
+       * below are kept so the clause stays written down.
        *
-       * Deliberately UNIMPL and not N/A: nothing about NT prevents
-       * shipping the header.  Deliberately not folded into the N/A
-       * for STREAMS semantics either: they block different callers at
-       * different stages, and collapsing them would hide that the
-       * cheap half is cheap. */
+       * THIS FENCE PREVIOUSLY READ: "Deliberately UNIMPL and not N/A:
+       * nothing about NT prevents shipping the header.  Deliberately
+       * not folded into the N/A for STREAMS semantics either: they
+       * block different callers at different stages, and collapsing
+       * them would hide that the cheap half is cheap."
+       *
+       * The first sentence is true and the conclusion does not follow.
+       * Three things were checked, and each on its own would settle it:
+       *
+       * 1. POSIX DELETED IT.  <stropts.h> and ioctl() are both marked
+       *    [OB XSR] in Issue 7 -- obsolescent, and part of the XSI
+       *    STREAMS OPTION GROUP.  ioctl.html says so itself: "The
+       *    ioctl() function is marked obsolescent" and "The ioctl()
+       *    function may be removed in a future version."  It was:
+       *    basedefs/stropts.h.html and functions/ioctl.html are both
+       *    404 under Issue 8 (onlinepubs/9799919799), where they exist
+       *    under Issue 7 (9699919799).  Shipping the header now means
+       *    implementing an interface the standard has since removed.
+       *
+       * 2. SHIPPING IT MOVES THE FAILURE LATER WITHOUT FIXING IT.  The
+       *    header is nothing but STREAMS machinery -- I_PUSH, strbuf,
+       *    isastream, getmsg/putmsg -- whose BEHAVIOUR this file
+       *    already records as N/A, because NT has no STREAMS
+       *    subsystem and `fildes` can never name a STREAMS device.  A
+       *    header without the subsystem lets a program compile and
+       *    then fail at link or answer nonsense at run time, which is
+       *    strictly worse than failing to compile: the compile error
+       *    names the missing thing.
+       *
+       *    musl is the demonstration, not an analogy.  It DOES ship
+       *    include/stropts.h with the full constant and structure set
+       *    -- so "absent from musl", as POSIX-GAP-ACCOUNTING.md's row
+       *    for these functions puts it, is not quite right -- and it
+       *    implements exactly one of the seven functions:
+       *    src/legacy/isastream.c, three lines, answering "this is not
+       *    a stream" for any valid descriptor.  getmsg, putmsg,
+       *    getpmsg, putpmsg, fattach and fdetach do not exist.  An
+       *    application that compiles against that header fails at
+       *    link, which is where ntlibc's would fail too.
+       *
+       * 3. IT IS NOT FREE.  POSIX's prototype is
+       *    `int ioctl(int fildes, int request, ...)`; ntlibc's working
+       *    ioctl() is `int ioctl(int, unsigned long, ...)`.  Shipping
+       *    <stropts.h> as specified puts two conflicting declarations
+       *    of ioctl in one tree -- a program including both headers
+       *    fails to compile, which is the very failure the header was
+       *    supposed to remove -- or else means changing the signature
+       *    of a function that works today, in order to match an
+       *    interface the standard has deleted.  "The cheap half" is
+       *    not cheap; it is an API change to a working function.
+       *
+       * Re-enable this only if a consumer this tree actually
+       * bootstraps turns out to require the header, and then ship it
+       * knowing it will fail at link rather than at compile.  Nothing
+       * has asked for it. */
 static void test_stropts_header_exists(void)
 {
 	/* would be: #include <stropts.h> at the top of this file */
@@ -185,7 +240,10 @@ static void test_stropts_header_exists(void)
 int main(void)
 {
 	test_ebadf();
-#if 0 /* UNIMPL: see the fence above test_stropts_header_exists */
+#if 0 /* UNIMPL (declined): see the fence above test_stropts_header_exists.
+       * This is the same fence, not a second one: the call site has to
+       * be guarded too, because the function it calls is inside the
+       * first #if 0. */
 	test_stropts_header_exists();
 #endif
 
