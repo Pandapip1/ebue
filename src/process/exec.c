@@ -5,7 +5,7 @@
  *
  * No Windows call replaces the running image, so execve cannot do what
  * it does on Unix.  What it does instead is start the program as a child,
- * wait for it, and exit with its status -- so that to anything watching
+ * wait for it, and end with its status -- so that to anything watching
  * (a shell running `exec prog`, a parent that will waitpid) the process
  * runs prog and ends when prog ends.  The one visible difference is that
  * the pid changes; nothing else here can be helped.
@@ -47,10 +47,30 @@ int execve(const char *path, char *const argv[], char *const envp[])
 	 * delete alive that a real exec would have released. */
 	__fd_close_all_cloexec();
 	if (waitpid(pid, &status, 0) < 0) return -1;
-	if (WIFEXITED(status)) exit(WEXITSTATUS(status));
+	/* End the way _exit() does, not the way exit() does.  exec.html
+	 * DESCRIPTION: "After a successful call to any of the exec functions,
+	 * any functions previously registered by the atexit(),
+	 * at_quick_exit(), or pthread_atfork() functions are no longer
+	 * registered."  A real exec throws the address space away, so nothing
+	 * registered before it can run afterwards.  This stand-in keeps the
+	 * address space, so calling exit() here ran the *caller's* atexit
+	 * handlers at the moment the exec'd program finished.
+	 *
+	 * That is not cosmetic.  GCC's driver registers delete_temp_files()
+	 * with atexit() and then fork()s + execv()s cc1; the forked stand-in
+	 * ran that handler when cc1 exited, deleting the driver's own
+	 * intermediate .s the instant cc1 had written it, and the "as" step
+	 * that followed found nothing there.
+	 *
+	 * The stdio flush goes for the same reason.  The standard says
+	 * nothing about buffered data across exec, so glibc is the oracle:
+	 * printf() with no newline followed by execl() prints nothing
+	 * (measured, glibc 2.39), because the buffer dies with the image.
+	 * Flushing here would emit, after the exec'd program's own output,
+	 * bytes a real exec had discarded. */
+	if (WIFEXITED(status)) _exit(WEXITSTATUS(status));
 	/* The child died by a signal; this process is standing in for it, so
 	 * end the same way and let *our* parent's waitpid see WIFSIGNALED. */
-	__stdio_exit();
 	__nt_exit(__NT_SIGNAL_EXIT(WTERMSIG(status)));
 }
 

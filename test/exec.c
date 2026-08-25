@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <sys/times.h>
@@ -213,6 +214,20 @@ static int argvl_child(int argc, char **argv)
 	return RC_OK;
 }
 
+/* Markers for test_exec_drops_exit_handlers(); see there. */
+#define STDIO_MARKER   "tmp-exec-stdio-marker"
+#define CONTROL_MARKER "tmp-exec-control-marker"
+#define RC_ATEXIT_RAN 66
+
+/* Registered by the --exec-atexit role, which must never reach it.  It
+ * reports through the exit status rather than through a file because the
+ * status is the one channel that crosses a spawn in every environment
+ * this test runs in. */
+static void atexit_must_not_run(void)
+{
+	_exit(RC_ATEXIT_RAN);
+}
+
 /* The intermediate child: exec self in an --argv role. */
 static int exec_child(const char *self, const char *role)
 {
@@ -272,6 +287,20 @@ static int exec_child(const char *self, const char *role)
 		int fd = open(self, O_RDONLY);
 		if (fd < 0) return 3;
 		fexecve(fd, build_argv(self, "--argv"), environ);
+	} else if (!strcmp(role, "--exec-atexit")) {
+		/* Register an exit handler and leave a stream dirty, then
+		 * exec.  Neither may survive into the exec'd program's
+		 * lifetime; see test_exec_drops_exit_handlers(). */
+		FILE *f;
+		int fd = open(CONTROL_MARKER, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		if (fd < 0) return 4;
+		if (write(fd, "1", 1) != 1) return 4;
+		if (close(fd)) return 4;
+		f = fopen(STDIO_MARKER, "w");
+		if (!f) return 4;
+		fputs("buffered", f);           /* deliberately not flushed */
+		if (atexit(atexit_must_not_run)) return 4;
+		execl(self, self, "--exit", "0", (char *)0);
 	} else if (!strcmp(role, "--exec-f-badfd")) {
 		/* [EBADF] "The fd argument is not a valid file descriptor
 		 * open for executing." */
@@ -837,6 +866,70 @@ static void test_wait_rusage(const char *self)
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
 }
 
+/* exec.html DESCRIPTION: "After a successful call to any of the exec
+ * functions, any functions previously registered by the atexit(),
+ * at_quick_exit(), or pthread_atfork() functions are no longer
+ * registered."
+ *
+ * On NT there is no image replacement, so execve() stands in for the
+ * exec'd program: it spawns it, waits, and ends with its status.  That
+ * makes this clause a real hazard rather than a tautology -- the
+ * caller's atexit handlers are still sitting in the address space when
+ * the exec'd program finishes, and ending with exit() runs them.
+ *
+ * What that cost, concretely: GCC 4.6.4's driver registers
+ * delete_temp_files() with atexit() and then fork()s + execv()s cc1.
+ * Every `gcc -c` deleted its own intermediate .s the moment cc1 wrote
+ * it, and the "as" step that came next reported the file missing.
+ *
+ * The stdio half is glibc's rule, not the standard's -- the standard is
+ * silent on buffered data across exec.  Measured on glibc 2.39: a
+ * printf() with no newline followed by execl() prints nothing, because
+ * the buffer dies with the image.  So a stream left dirty here must
+ * still be empty on disk afterwards. */
+static void test_exec_drops_exit_handlers(const char *self)
+{
+	struct stat st;
+	int rc;
+
+	remove(CONTROL_MARKER);
+	remove(STDIO_MARKER);
+
+	rc = run_role(self, "--exec-atexit");
+	CHECK(rc == 0);
+	if (rc == RC_ATEXIT_RAN)
+		printf("FAIL: exec ran the caller's atexit handler\n");
+	if (rc != 0) { remove(CONTROL_MARKER); remove(STDIO_MARKER); return; }
+
+	/* Positive control: the role creates CONTROL_MARKER with an
+	 * ordinary open/write/close before it execs.  If that is not
+	 * visible here, files do not cross a spawn in this environment
+	 * (the native sanitizer build backs NtCreateFile with an in-process
+	 * simulated volume, fuzz/ntstubs.c) and the stdio half below cannot
+	 * be measured -- absence of STDIO_MARKER would prove nothing. */
+	if (stat(CONTROL_MARKER, &st) != 0) {
+		printf("SKIP exec dirty-stream-across-exec: a file the exec'ing "
+		       "child created before exec is not visible to its parent "
+		       "here, so an unflushed stream cannot be told apart from "
+		       "a file that never crossed the process boundary. The "
+		       "atexit half above was still measured, through the exit "
+		       "status\n");
+		unverified++;
+		return;
+	}
+
+	CHECK(stat(STDIO_MARKER, &st) == 0);
+	if (stat(STDIO_MARKER, &st) == 0) {
+		CHECK(st.st_size == 0);
+		if (st.st_size != 0)
+			printf("FAIL: exec flushed %ld byte(s) a real exec "
+			       "would have discarded\n", (long)st.st_size);
+	}
+
+	remove(CONTROL_MARKER);
+	remove(STDIO_MARKER);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--exit")) return atoi(argv[2]);
@@ -887,6 +980,7 @@ int main(int argc, char **argv)
 	 * executing." */
 	CHECK(run_role(argv[0], "--exec-f-badfd") == 0);
 
+	test_exec_drops_exit_handlers(argv[0]);
 	test_empty_env_entry(argv[0]);
 	test_failed_exec_keeps_cloexec(argv[0]);
 	test_argv0_roundtrip(argv[0]);
