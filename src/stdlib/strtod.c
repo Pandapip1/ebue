@@ -237,6 +237,22 @@ static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int em
  * the time a value reaches it the input is already digits and an
  * exponent.
  *
+ * `st` is a size_t, not an int, because it is a byte stride into a
+ * buffer and every use of it is pointer arithmetic.  Declared as int it
+ * needs a widening cast at each site that scales it by a count -- and
+ * one was missed, so `parse_hex(s + 2 * st, ...)` computed the offset
+ * in int and widened the product to ptrdiff_t afterwards (clang-tidy
+ * bugprone-implicit-widening-of-multiplication-result, which fires on
+ * 64-bit targets only: it returns early unless the index expression is
+ * narrower than ptrdiff_t, and i386's ptrdiff_t is 32 bits).  Nothing
+ * truncated -- st is only ever 1 or sizeof(wchar_t) -- but four
+ * compensating casts that exist only because the declaration was wrong,
+ * and a fifth site that needed one and did not have it, are the
+ * argument for fixing the type rather than the site.  Note that gc()
+ * being a macro means there is no parameter conversion to launder the
+ * value: the declared type of `st` is now the only thing that decides
+ * what width the arithmetic happens in.
+ *
  * Why a shared parser rather than narrowing a wide string into a buffer
  * and calling strtod() on it: a conforming subject sequence is
  * UNBOUNDED -- "1" followed by a million digits is a valid input that
@@ -270,17 +286,17 @@ static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int em
 #define gc(p, s) ((s) == 1 ? (unsigned)(unsigned char)*(p) \
                            : (unsigned)*(const wchar_t *)(const void *)(p))
 
-static int ci_prefix(const char *s, const char *word, int st)
+static int ci_prefix(const char *s, const char *word, size_t st)
 {
 	int n = 0;
 	while (*word) {
-		if (tolower((int)gc(s + (size_t)n * (size_t)st, st)) != *word) return 0;
+		if (tolower((int)gc(s + (size_t)n * st, st)) != *word) return 0;
 		n++; word++;
 	}
 	return n;
 }
 
-static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin, int st)
+static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st)
 {
 	bn_t N, D;
 	uint64_t m = 0;
@@ -322,7 +338,7 @@ static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p
 	return bn_scale_round(&N, &D, exp, 0, p, emin);
 }
 
-static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin, int st)
+static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin, size_t st)
 {
 	bn_t N, D;
 	unsigned char dig[MAXDIG];
@@ -387,7 +403,7 @@ static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p
 	return bn_scale_round(&N, &D, 0, sticky, p, emin);
 }
 
-static long double strtox(const char *s0, char **endptr, int kind, int st)
+static long double strtox(const char *s0, char **endptr, int kind, size_t st)
 {
 	const char *s = s0, *end;
 	double v;
@@ -402,11 +418,11 @@ static long double strtox(const char *s0, char **endptr, int kind, int st)
 
 	if ((n = ci_prefix(s, "inf", st))) {
 		int n2 = ci_prefix(s, "infinity", st);
-		end = s + (size_t)(n2 ? n2 : n) * (size_t)st;
+		end = s + (size_t)(n2 ? n2 : n) * st;
 		v = HUGE_VAL;
 		ok = 1; lit = 1;
 	} else if ((n = ci_prefix(s, "nan", st))) {
-		end = s + (size_t)n * (size_t)st;
+		end = s + (size_t)n * st;
 		if (gc(end, st) == '(') {
 			const char *q = end + st;
 			while (isalnum((int)(c = gc(q, st))) || c == '_') q += st;
@@ -463,7 +479,7 @@ static long double wcstox(const wchar_t *nptr, wchar_t **endptr, int kind)
 {
 	char *end = 0;
 	long double v = strtox((const char *)(const void *)nptr, &end, kind,
-	                       (int)sizeof(wchar_t));
+	                       sizeof(wchar_t));
 	if (endptr) *endptr = (wchar_t *)(void *)end;
 	return v;
 }
