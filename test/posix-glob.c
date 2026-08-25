@@ -2274,6 +2274,59 @@ static void test_regex_nullable_repeat_does_not_crash(void)
 	free(big);
 }
 
+/* regcomp.html RETURN VALUE: regcomp() "shall return an integer value
+ * indicating an error as described in <regex.h>".  Allocating until the
+ * machine gives out is not one of the values described in <regex.h>.
+ *
+ * DUP_MAX in src/regex/regex.c bounds each interval's count on its own,
+ * and until MAX_PROG was added nothing bounded their *product*.  An
+ * interval's body is unrolled into real instructions, so a repeat
+ * applied to a repeat multiplies: fuzz/fuzz_regex.c reached
+ * "out-of-memory (malloc(2684354560))" inside regcomp() -- not
+ * regexec() -- from a 24-byte ERE, through
+ * realloc -> emit -> emit_reloc -> apply_repeat.
+ *
+ * Reproducer of record, from the 150 s cold-corpus run of 2026-08-24
+ * (base64 h069YYdOrWGHTq1hezJ9ezIwMn17MjAyNH0/ezJ9ezIwMn17MjAyNH0/
+ * Li4uLi4uAysuLi4DLg==), pattern
+ * "a\207N\255a\207N\255a{2}{202}{2024}?{2}{20".  Reduced to the two
+ * refusals below, each confirmed independently of the fuzzer with a
+ * plain regcomp() probe: "a{2}{202}{2024}" compiled to 817,696
+ * instructions and 58 MB RSS, and "a{2}{202}{2024}?{2}{202}" was still
+ * allocating past 2 GB when it was killed at 60 s.
+ *
+ * The two accepted cases matter as much as the refused ones: the bound
+ * is meant to be a backstop against amplification, not a new limit on
+ * ordinary patterns, and both of these pin it from below.  Measured
+ * against glibc 2.39 the same day, which agrees on all four. */
+static void test_regex_interval_expansion_is_bounded(void)
+{
+	regex_t re;
+
+	/* Still accepted: a single DUP_MAX interval, and the nested case
+	 * that fits.  If either of these starts failing, MAX_PROG has been
+	 * tightened past what it is for. */
+	CHECK(regcomp(&re, "a{32767}", REG_EXTENDED) == 0);
+	regfree(&re);
+	CHECK(regcomp(&re, "a{2}{202}{2024}", REG_EXTENDED) == 0);
+	regfree(&re);
+
+	/* Refused, and the point of the test is that control gets here at
+	 * all rather than the process being killed by the allocator.
+	 * REG_ESPACE rather than REG_BADBR: every brace in these is
+	 * well-formed and within DUP_MAX, so what has run out is room, not
+	 * validity -- see the MAX_PROG comment in src/regex/regex.c for the
+	 * full argument and for glibc's matching choice. */
+	CHECK(regcomp(&re, "a{2}{202}{2024}?{2}{202}", REG_EXTENDED) == REG_ESPACE);
+	regfree(&re);		/* must be safe after a failed regcomp() */
+	CHECK(regcomp(&re, "a{1000}{1000}{1000}", REG_EXTENDED) == REG_ESPACE);
+	regfree(&re);
+
+	/* The BRE spelling of the same amplification. */
+	CHECK(regcomp(&re, "a\\{1000\\}\\{1000\\}\\{1000\\}", 0) == REG_ESPACE);
+	regfree(&re);
+}
+
 #if 0 /* BUG: regcomp.html RETURN VALUE -- "Upon successful completion,
 	the regexec() function shall return 0. Otherwise, it shall return
 	REG_NOMATCH to indicate no match." These three patterns are not
@@ -3276,6 +3329,7 @@ int main(int argc, char **argv)
 	test_regex_regerror_truncation();
 	test_regex_regfree_after_failed_regcomp();
 	test_regex_nullable_repeat_does_not_crash();
+	test_regex_interval_expansion_is_bounded();
 
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");

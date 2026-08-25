@@ -141,13 +141,79 @@ struct parser {
 	int ngroup;	/* next capture group number, starts at 1 */
 };
 
+/* Ceiling on the whole compiled program, in instructions -- the bound
+ * DUP_MAX is not.
+ *
+ * DUP_MAX bounds each interval's count *individually*, and nothing
+ * bounded their product: an interval's body is unrolled into real
+ * instructions, so a repeat applied to a repeat multiplies. Found by
+ * fuzz/fuzz_regex.c, which reached
+ *
+ *     ERROR: libFuzzer: out-of-memory (malloc(2684354560))
+ *       ... realloc -> emit -> emit_reloc -> apply_repeat -> regcomp
+ *
+ * from a 24-byte ERE. Measured against this file before the bound:
+ * "a{2}{202}{2024}" compiled to 817,696 instructions (58 MB RSS under
+ * ASan) and "a{2}{202}{2024}?{2}{202}" was still allocating past 2 GB
+ * when it was killed. There is no pattern length involved -- the
+ * amplification is 2 x 202 x 2024 and then again -- so no cap on the
+ * pattern could have caught it.
+ *
+ * 1M instructions is ~20 MB at the 20 bytes struct inst occupies. That
+ * is deliberately generous rather than tight, so that the bound is a
+ * backstop against amplification and not a new restriction on ordinary
+ * patterns: it admits every single DUP_MAX interval whose body is up
+ * to 32 instructions, and it agrees with glibc on all four nested
+ * cases measured on the same day ("a{2}{202}{2024}" compiles in both;
+ * "a{2}{202}{2024}?{2}{202}" and "a{1000}{1000}{1000}" are refused by
+ * both).
+ *
+ * WHY REG_ESPACE AND NOT REG_BADBR. <regex.h> offers both readings and
+ * they say different things to a caller: REG_BADBR is a statement
+ * about the pattern ("your braces are wrong"), REG_ESPACE about a
+ * resource ("there was no room"). REG_ESPACE, for three reasons.
+ *
+ * First, it is true and REG_BADBR is not: every individual brace in
+ * "a{2}{202}{2024}?{2}{202}" is well-formed and within DUP_MAX. A
+ * caller told REG_BADBR would go looking for a syntax error that is
+ * not there. What is excessive is the size of the program the pattern
+ * denotes, which is a fact about this compiler's expansion strategy --
+ * an implementation that built a counted loop instead would compile
+ * the same pattern without complaint.
+ *
+ * Second, it is what the reference implementation does: glibc returns
+ * REG_ESPACE (12, "Memory exhausted") for exactly these nested-product
+ * patterns, and reserves its brace codes for malformed braces.
+ * Measured, same day, same programme as the DUP_MAX note above.
+ *
+ * Third, it is consistent with the rest of this file: regexec()'s
+ * MAX_STEPS and MAX_BACKTRACK already report REG_ESPACE for "a budget
+ * ran out", and this is the compile-time member of that family.
+ *
+ * The cost of the choice is that REG_ESPACE here is indistinguishable
+ * from a genuine malloc() failure. That is the same trade POSIX itself
+ * makes by having no "too big" code, and it is the direction that does
+ * not require lying about the pattern. */
+#define MAX_PROG (1 << 20)
+
 static int emit(struct parser *ps, int op, int c, int set, int x, int y)
 {
 	struct rx *rx = ps->rx;
 	if (ps->err) return -1;
+	/* The ceiling, checked before the increment, so nprog is never
+	 * greater than MAX_PROG and -- MAX_PROG being four orders of
+	 * magnitude below INT_MAX -- can never overflow the int it is
+	 * stored in.  That overflow was the second half of the defect this
+	 * bound fixes: a large enough interval product wrapped nprog
+	 * negative before any allocation was big enough to fail, so the
+	 * "if (!n) REG_ESPACE" below could not have caught it.  See
+	 * MAX_PROG. */
+	if (rx->nprog >= MAX_PROG) { ps->err = REG_ESPACE; return -1; }
 	if (rx->nprog == rx->capprog) {
 		int ncap = rx->capprog ? rx->capprog * 2 : 32;
-		struct inst *n = realloc(rx->prog, (size_t)ncap * sizeof *n);
+		struct inst *n;
+		if (ncap > MAX_PROG) ncap = MAX_PROG;
+		n = realloc(rx->prog, (size_t)ncap * sizeof *n);
 		if (!n) { ps->err = REG_ESPACE; return -1; }
 		rx->prog = n;
 		rx->capprog = ncap;
@@ -263,8 +329,16 @@ static void parse_bracket(struct parser *ps)
  * that many real instructions, so an unbounded count is a compile-
  * time and run-time size bomb. glibc's RE_DUP_MAX (a non-POSIX-
  * mandated but widely followed convention) is 32767; this
- * implementation uses the same number and reports REG_BADBR past it,
- * same as glibc does. */
+ * implementation uses the same number and reports REG_BADBR past it.
+ *
+ * (An earlier version of this comment said glibc reports REG_BADBR
+ * too. Measured 2026-08-24 against glibc 2.39: regcomp("a{32768}",
+ * REG_EXTENDED) returns 15, REG_ESIZE, "Regular expression too big" --
+ * a GNU extension that is not in POSIX's <regex.h> and so not
+ * available here. REG_BADBR stays: XBD <regex.h> defines it as
+ * "Content of '\{\}' invalid: not a number, number too large, more
+ * than two numbers, first larger than second", and a single count past
+ * DUP_MAX is literally "number too large".) */
 #define DUP_MAX 32767
 
 /* Forward decls for the mutually-recursive ERE/BRE grammars. */
@@ -380,6 +454,37 @@ static void apply_repeat(struct parser *ps, int start, int had_atom)
 				}
 			}
 			if (ps->err) { free(saved); return; }
+
+			/* Refuse an expansion that would not fit BEFORE
+			 * emitting any of it.  Two reasons it is here and not
+			 * left to emit()'s own ceiling: the emit_reloc() loops
+			 * below would otherwise spin m x len times with every
+			 * call a no-op once ps->err is set (up to 32767 x
+			 * MAX_PROG iterations doing nothing), and the caller
+			 * gets the diagnosis from the operator responsible
+			 * rather than from whichever instruction happened to
+			 * be the one over the line.
+			 *
+			 * `copies` is the number of times the atom is unrolled:
+			 * n for a bounded {m,n} (m mandatory plus n-m optional),
+			 * m+1 for {m,} (m mandatory plus one repeatable tail).
+			 * `per` adds the SPLIT each optional copy carries.  The
+			 * test is a division rather than `copies * per >
+			 * room`, because that product is what overflows: m and
+			 * n reach DUP_MAX and len reaches MAX_PROG, so it does
+			 * not fit in the 32-bit unsigned long this library
+			 * targets. */
+			{
+				unsigned long copies = (n == -1) ? (unsigned long)m + 1UL
+				                                 : (unsigned long)n;
+				unsigned long per = (unsigned long)len + 1UL;
+				unsigned long room = (unsigned long)(MAX_PROG - start);
+				if (copies != 0UL && per > room / copies) {
+					ps->err = REG_ESPACE;
+					free(saved);
+					return;
+				}
+			}
 
 			if (m == 0 && n == -1) {
 				/* {0,} === * */
