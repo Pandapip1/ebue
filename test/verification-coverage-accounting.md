@@ -36,7 +36,7 @@ a week; a documented regeneration command is not.
 - [2. Verified only on Server 2025](#2-verified-only-on-server-2025)
 - [3. The `rc=77` skip matrix](#3-the-rc77-skip-matrix)
 - [4. All 32 `BUG:` fences](#4-all-32-bug-fences)
-- [5. All 44 `UNIMPL:` fences](#5-all-44-unimpl-fences)
+- [5. `UNIMPL:` fences](#5-unimpl-fences)
 - [6. All 30 `N/A:` fences: permanent versus conditional](#6-all-30-na-fences-permanent-versus-conditional)
 - [7. How each gap became invisible](#7-how-each-gap-became-invisible)
 - [8. Ranking](#8-ranking)
@@ -59,6 +59,14 @@ git grep -nE '#if 0[[:space:]]*/\*[[:space:]]*(BUG|UNIMPL|N/A)' -- '*.c' '*.h'
 | `UNIMPL:` | **44** | the function or flag does not exist yet |
 | `N/A:` | **30** | a mechanism makes the requirement unobservable |
 | | **106** | all in `test/`; none in `src/`, `include/` or `tools/` |
+
+These three counts are the `d307704` snapshot too. The `UNIMPL:` row is
+known to be stale -- the command in section 5 finds 57 today -- and the
+other two have not been re-measured; each section's own command is the
+authority. Only the `UNIMPL:` row has been checked, so only it is
+described here rather than being quietly corrected: a number somebody
+re-measured and a number nobody has looked at should not be made to look
+alike.
 
 Three ways to get a different number, all of them real:
 
@@ -578,11 +586,25 @@ harnesses target.** It survived both. That is the strongest single
 argument in this document for the differential-oracle measures in
 `verification-measures-2.md` over more harnesses.
 
-## 5. All 44 `UNIMPL:` fences
+## 5. `UNIMPL:` fences
 
 ```sh
 git grep -nE '#if 0[[:space:]]*/\*[[:space:]]*UNIMPL' -- '*.c'
 ```
+
+**The table below is a SNAPSHOT, and rows 1-20 have not been
+re-measured.** It was taken at `d307704`, when the command above found
+44 fences in 7 files; run today it finds **57 in 22 files**, because
+later clause audits fenced more than this pass resolved. Rows 21-44
+(`posix-wchar.c`) have been consolidated to the one that survives --
+see the note under the tally -- and the class counts are recomputed
+from the rows as they now stand. Everything else is as it was at
+`d307704` and its line numbers should be assumed stale.
+
+That is the failure mode this document predicted about itself in its
+own opening: "a hand-maintained list of 106 fences is wrong within a
+week; a documented regeneration command is not." The command is the
+authority; the table is a reading of it on one day.
 
 `UNIMPL` currently covers two different backlogs, and the tag does not
 distinguish them:
@@ -618,28 +640,51 @@ distinguish them:
 | 18 | `posix-stdio.c:1440` | R | `scanf` `%m` assignment-allocation for `%c`/`%s`/`%[` |
 | 19 | `posix-termios.c:229` | R | the six `[XSI]` output delay masks (`NLDLY`, `CRDLY`, `TABDLY`, `BSDLY`, `VTDLY`, `FFDLY`) -- the tree compiles `-D_XOPEN_SOURCE=700` and defines the other six `[XSI]` names |
 | 20 | `posix-time.c:531` | **D** | `getdate()` error 1 for an unset `DATEMSK` -- explicitly "not N/A: a deliberate design choice in `src/time/getdate.c`", two lines to change |
-| 21-24 | `posix-wchar.c:795,823,845,872` | R | `fgetwc`/`getwc`/`getwchar`; `fputwc`/`putwc`/`putwchar`; `fgetws`; `fputws` |
-| 25-26 | `posix-wchar.c:891,916` | R | `ungetwc`; `fwide` |
-| 27-28 | `posix-wchar.c:936,958` | R | the six `fwprintf` forms; the six `fwscanf` forms |
-| 29 | `posix-wchar.c:976` | R | `open_wmemstream` |
-| 30 | `posix-wchar.c:1124` | R | `wcwidth`/`wcswidth`, BMP subset |
-| 31-35 | `posix-wchar.c:1168,1180,1201,1222,1232` | R | `wcsstr`; `wcspbrk`/`wcscspn`/`wcsspn`; `wcstok`; `wcsdup`; `wcsnlen` |
-| 36-38 | `posix-wchar.c:1244,1262,1279` | R | `wcpcpy`/`wcpncpy`; the four `wcscasecmp` forms; `wcstol`/`wcstoll`/`wcstoul`/`wcstoull` |
-| 39-42 | `posix-wchar.c:1299,1319,1329,1348` | R | `wcstod`/`wcstof`/`wcstold`; `wcscoll`/`wcscoll_l`; `wcsxfrm`/`wcsxfrm_l`; `wcsftime` |
-| 43-44 | `posix-wchar.c:1375,1389` | R | `mbsnrtowcs`; `wcsnrtombs` |
+| 21 | `posix-wchar.c:1929` | **D** | `wcwidth`/`wcswidth` -- **declined**, not unreached: the only implementation available is one over `iswprint()`, and `include/wctype.h` records a standing decision that classification here is ASCII-only, so it would answer -1 for every code point from U+0080 up.  Providing that is worse than providing nothing, because autoconf finds it and gnulib's correct replacement stands down |
 
 | Class | Count |
 |-------|------:|
-| **R** not yet reached | 36 |
-| **D** deliberate scope decision | 5 (#13, #15, #16, #17, #20) |
+| **R** not yet reached | 12 |
+| **D** deliberate scope decision | 6 (#13, #15, #16, #17, #20, #21) |
 | **F** fixture-limited, mis-tagged | 3 (#11, #12, #14) |
 
-Two observations worth acting on:
+Counted from the rows above, not carried forward.
 
-- **24 of the 44 are `posix-wchar.c`.** That is one coherent piece of
-  work -- the wide-character stdio and string families -- not 24
-  independent gaps. It should be read as a single backlog item, and the
-  fence-count metric flatters or damns it wrongly either way.
+One retrospective and one observation still worth acting on:
+
+- **The 24 `posix-wchar.c` fences are all resolved, and the prediction
+  made about them here was wrong.** This section originally read: "24 of
+  the 44 are `posix-wchar.c`. That is one coherent piece of work -- the
+  wide-character stdio and string families -- not 24 independent gaps."
+  Twenty-three were implemented and one (`wcwidth`/`wcswidth`) was
+  declined; the work is recorded across `50b35d6`..`644e944`. It was
+  **not** one coherent piece of work, and the fence count was not the
+  thing misleading anyone. What the 24 actually were:
+
+  - **The wide stdio family (9 fences) genuinely did share machinery**,
+    and it was smaller than the fence count suggested: three fields on
+    `struct _IO_FILE` (an orientation flag, two `mbstate_t`, a wide
+    pushback slot) closed six fences at once. That is the case the
+    original observation was reaching for, and it was right about a
+    third of the set.
+  - **The `wcs*` string mirrors (7 fences) shared a naming convention
+    and nothing else.** Each is an independent transliteration of a
+    `src/string/*.c` file. Treating them as one item would have hidden
+    that `wcstok` mirrors `strtok_r` rather than `strtok`, and that
+    `wcsspn` must *not* copy `strspn`'s 256-bit stack bitset.
+  - **The remaining 8 shared nothing at all**, and one of them --
+    `wcstod` -- was the hardest item in the file, because a conforming
+    subject sequence is unbounded and the obvious "narrow it into a
+    buffer" route (which both this document's sibling
+    `POSIX-GAP-ACCOUNTING.md` and the fence itself suggested) truncates
+    a value the library already converts exactly. It needed
+    `src/stdlib/strtod.c`'s parser taught to read at a stride.
+
+  The general lesson is the one this document exists for: **a fence
+  count is a count of clauses, and clauses do not cluster the way
+  implementations do.** Grouping by file predicted the wrong shape in
+  both directions -- it over-grouped the string mirrors and it hid the
+  one item that needed a design decision.
 - **The three `F` fences are the vocabulary gap.** `posix-glob.c:451`,
   `:499` and `:2785` say nothing about `src/glob` or `src/ftw`; they
   say "this environment cannot build the fixture". That is exactly what
