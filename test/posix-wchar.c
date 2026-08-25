@@ -1117,17 +1117,46 @@ static void test_wctrans(void)
 /* ---------------------------------------------------------------------
  * wcwidth / wcswidth -- wcwidth.html
  * wcwidth(wchar_t) takes exactly one code unit, so for a BMP character
- * (one wchar_t == one codepoint) column width is fully computable and
- * this is a plain UNIMPL absence.  For a supplementary-plane character
+ * (one wchar_t == one codepoint) column width is computable in
+ * principle, and the fence below is a DECLINED implementation rather
+ * than an unattempted one.  For a supplementary-plane character
  * represented as a surrogate pair, wcwidth() is only ever handed one
  * half at a time and structurally cannot see its partner, so it can
  * never report the *composed* character's true display width (e.g. 2
  * columns for most emoji) -- that clause is N/A, not merely unwritten.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcwidth()/wcswidth() -- wcwidth.html DESCRIPTION,
-       * RETURN VALUE, for the BMP subset (one wchar_t == one
-       * character): fully computable, implementable via the same
-       * printable-range tables iswprint() would use. */
+#if 0 /* UNIMPL (declined, 2026-08-24): wcwidth()/wcswidth() --
+       * wcwidth.html DESCRIPTION, RETURN VALUE.  UNIMPL is the right
+       * tag because this project's rule counts "I chose not to" as
+       * UNIMPL; the assertions below are all satisfiable and are kept
+       * so the clause stays written down.  What was declined and why:
+       *
+       * The only wcwidth() this tree could honestly ship today is one
+       * built on iswprint(), and include/wctype.h states a deliberate,
+       * standing decision that classification here is ASCII-only --
+       * "no BMP code point past 0x7f is ever classified true", so that
+       * iswalpha() can never disagree with isalpha().  A wcwidth()
+       * over that iswprint() returns -1 ("not printable") for every
+       * code point from U+0080 to U+FFFF: every accented Latin letter,
+       * all of CJK, everything.  That answer is conforming, given the
+       * locale position the tree has already taken, and useless for
+       * the one job wcwidth() exists to do -- terminal column
+       * accounting -- since callers branch on -1 to reject or error.
+       *
+       * The decisive consideration is downstream, not local.  ntlibc
+       * is a bootstrap target: packages that need a working wcwidth()
+       * ship gnulib's replacement and use it *when the libc does not
+       * provide one*.  Providing a broken one is worse than providing
+       * none, because autoconf finds it, gnulib stands down, and the
+       * package silently gets our useless answer instead of gnulib's
+       * correct one.  Absent is the state the ecosystem already knows
+       * how to handle; present-and-wrong is not.
+       *
+       * Re-enable this when the tree gains a real Unicode width table
+       * (east-asian-width plus combining marks), which it has
+       * deliberately not taken on -- not before.  Implementing it over
+       * the existing ASCII-only iswprint() would close the fence and
+       * make the library worse. */
 static void test_wcwidth_bmp(void)
 {
 	/* "0 for the null wide-character code" */
