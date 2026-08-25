@@ -462,6 +462,38 @@ posix-gapmap-check: $(ALL_LIBS)
 
 .PHONY: posix-gapmap posix-gapmap-check
 
+# posix-optsrun: the other half of the sentence posix-gapmap starts.
+#
+# posix-gapmap answers "how much of that suite can we be COMPILED
+# against" and executes nothing -- its job comment in ci.yml says so.
+# Which meant the 591 tests it classes as C, the ones that compile and
+# link clean, had never been RUN.  Nobody knew whether they passed.
+# `posix-optsrun` runs them and writes test/POSIX-OPTS-RUN.generated.md.
+#
+# Also deliberately NOT part of `check`, and for the same reason:
+# `check` is this library's own suite and its failures are ours.  A
+# foreign conformance suite that this library fails a third of is a
+# different claim with a different meaning of failure, exactly as
+# libc-test is kept separate.
+#
+# And, like the gap map, NO PASS-COUNT THRESHOLD.  The report is checked
+# in and `posix-optsrun-check` gates on REGRESSION -- a test moving PASS
+# to anything else -- not on a number.  See tools/posix-optsrun.sh's
+# header for the three refusals and five invariants that stop a sweep
+# which executed nothing from reporting no failures.
+#
+# Depends on $(ALL_LIBS) for the same reason the gap map does, one step
+# further along: without lib/libc.a nothing links, nothing runs, and the
+# report says "no failures" about a sweep of zero tests.
+#
+posix-optsrun: $(ALL_LIBS)
+	@$(srcdir)/tools/posix-optsrun.sh
+
+posix-optsrun-check: $(ALL_LIBS)
+	@$(srcdir)/tools/posix-optsrun.sh --check
+
+.PHONY: posix-optsrun posix-optsrun-check
+
 #
 # check-kernel32: convenience wrapper for a developer who already has a
 # normal tree configured (TARGET/CC come from the config.mak that is
