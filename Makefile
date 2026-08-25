@@ -572,6 +572,15 @@ hygiene: $(GENH)
 
 .PHONY: hygiene
 
+# Ledger consistency: test/POSIX-COVERAGE.md's "(fenced)" rows against
+# the `#if 0` blocks in test/*.c, both directions.  Needs no build --
+# it is a grep over two checked-in artefacts -- so it has no
+# prerequisite and runs in a second.
+ledger:
+	./tools/lint-ledger.sh
+
+.PHONY: ledger
+
 # asan/fuzz: a second, native (Linux/ELF) build of the same src/*.c under
 # AddressSanitizer, UBSan and libFuzzer.  This is not a substitute for
 # `make check` -- it cannot be, since a native build has no ntdll -- but a

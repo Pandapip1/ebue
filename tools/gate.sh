@@ -73,7 +73,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map posix-gapmap asan linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map posix-gapmap asan linkcheck-i386 linkcheck-x86_64 hygiene ledger lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -452,6 +452,13 @@ fi
 if want linkcheck-x86_64; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-x86_64"
 	run_stage linkcheck-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
+fi
+
+# Ledger consistency (tools/lint-ledger.sh).  No tree copy and no
+# configure: it reads test/POSIX-COVERAGE.md and test/*.c straight out of
+# the source directory and builds nothing.
+if want ledger; then
+	run_stage ledger "cd '$srcdir' && ./tools/lint-ledger.sh"
 fi
 
 if want hygiene; then
