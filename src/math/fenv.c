@@ -179,10 +179,60 @@ int fesetenv(const fenv_t *envp)
 	return 0;
 }
 
+/* feholdexcept.html DESCRIPTION: "shall save the current floating-point
+ * environment in the object pointed to by envp, clear the floating-point
+ * status flags, and then install a non-stop (continue on floating-point
+ * exceptions) mode, if available, for all floating-point exceptions."
+ * RETURN VALUE: "shall return zero if and only if non-stop floating-point
+ * exception handling was successfully installed."
+ *
+ * The save and the clear were here; INSTALLING NON-STOP MODE WAS NOT.
+ * Neither fegetenv() nor feclearexcept() sets a single mask bit --
+ * feclearexcept()'s MXCSR path touches status bits 0-5 and never the
+ * mask bits at 7-12 -- and the function returned 0 unconditionally,
+ * making the very claim the RETURN VALUE clause conditions on.
+ *
+ * The x87 half used to LOOK masked, but only by accident: FNSTENV masks
+ * all x87 exceptions as a documented side effect (Intel SDM, FSTENV/
+ * FNSTENV), so fegetenv() was doing it invisibly.  That accident is
+ * being removed in fegetenv() -- it is a defect there, a getter that
+ * modifies what it reads -- so relying on it here would turn one fix
+ * into another's regression.  Both halves are therefore set EXPLICITLY
+ * below and this function no longer depends on any side effect.
+ *
+ * On x86 non-stop mode is always available: masking is a bit in each
+ * unit's control register and cannot fail.  The return is still written
+ * as a check of what was actually established rather than a bare
+ * `return 0`, because the clause makes success conditional. */
 int feholdexcept(fenv_t *envp)
 {
+	unsigned char env[28] = { 0 };
+	unsigned short cw;
+
 	(void)fegetenv(envp);
 	(void)feclearexcept(FE_ALL_EXCEPT);
+
+	/* x87: set all six exception-mask bits (control word bits 0-5). */
+	__asm__ __volatile__("fnstenv (%0)" : : "r"(env) : "memory");
+	env[0] = (unsigned char)(env[0] | 0x3f);
+	__asm__ __volatile__("fldenv (%0)" : : "r"(env) : "memory");
+	__asm__ __volatile__("fnstcw (%0)" : : "r"(&cw) : "memory");
+	if ((cw & 0x3f) != 0x3f) return -1;
+#ifndef __i386__
+	/* SSE: the six mask bits are 7-12, i.e. 0x1f80.  This is the unit
+	 * tcc compiles plain `double` arithmetic into on x86_64, so leaving
+	 * it alone meant a caller who had unmasked divide-by-zero still took
+	 * a hardware exception on the first 1.0/0.0 inside what
+	 * feholdexcept() had just reported was a non-stop region. */
+	{
+		unsigned int mxcsr = 0;
+		__asm__ __volatile__("stmxcsr (%0)" : : "r"(&mxcsr) : "memory");
+		mxcsr |= 0x1f80u;
+		__asm__ __volatile__("ldmxcsr (%0)" : : "r"(&mxcsr) : "memory");
+		__asm__ __volatile__("stmxcsr (%0)" : : "r"(&mxcsr) : "memory");
+		if ((mxcsr & 0x1f80u) != 0x1f80u) return -1;
+	}
+#endif
 	return 0;
 }
 

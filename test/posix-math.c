@@ -1895,60 +1895,36 @@ static void test_fenv_getenv_does_not_modify(void)
 }
 #endif
 
-#if 0 /* BUG: feholdexcept.html DESCRIPTION -- "The feholdexcept()
-	function shall save the current floating-point environment in the
-	object pointed to by envp, clear the floating-point status flags,
-	and then install a non-stop (continue on floating-point
-	exceptions) mode, if available, for all floating-point
-	exceptions." RETURN VALUE: "shall return zero if and only if
-	non-stop floating-point exception handling was successfully
-	installed."
-
-	src/math/fenv.c's feholdexcept() is fegetenv() followed by
-	feclearexcept(FE_ALL_EXCEPT) and an unconditional `return 0`.
-	Neither callee sets any mask bit. The x87 half is masked only by
-	accident, through the FNSTENV side effect the previous fence
-	describes -- so fixing that BUG makes this one worse, not better.
-	MXCSR is never touched at all: feclearexcept()'s MXCSR path
-	clears status bits 0-5 and never the mask bits at 7-12.
-
-	On x86_64 that is the unit tcc emits every `double` operation
-	into (include/fenv.h's banner), so a caller that had unmasked
-	divide-by-zero and then called feholdexcept() expecting a
-	non-stop region will still take a hardware exception on the first
-	1.0/0.0 -- while feholdexcept() reported the success the RETURN
-	VALUE clause makes conditional on exactly that not happening.
-
-	Measured on x86_64 after hand-unmasking divide-by-zero in both
-	units: x87 CW 0x027F (masked, by accident) but MXCSR 0x1D80 --
-	bit 9 (ZM) still clear -- and feholdexcept() returned 0.
-
-	Inline asm and x86-specific for the same reason as the previous
-	fence, and #ifndef __i386__ because MXCSR is only part of fenv_t
-	on the SSE arch (include/fenv.h).
-
-	Fix shape: set the six x87 mask bits explicitly rather than
-	relying on FNSTENV's side effect, OR 0x1F80 into MXCSR, and
-	return non-zero if either could not be established. */
 static void test_fenv_holdexcept_installs_nonstop(void)
 {
 #ifndef __i386__
 	fenv_t h;
-	unsigned int mx;
+	unsigned int mx, orig;
 
-	__asm__ __volatile__("stmxcsr %0" : "=m"(mx));
-	mx &= ~0x200u;				/* unmask divide-by-zero in SSE */
+	/* Save the ORIGINAL MXCSR, and restore it at the end rather than
+	 * relying on fesetenv(&h).
+	 *
+	 * This matters and is not defensive tidiness: `h` is captured by
+	 * feholdexcept() AFTER this test has unmasked divide-by-zero, so
+	 * restoring it puts the process back into the UNMASKED state.  Every
+	 * later test in this file then runs with SSE divide-by-zero trapping,
+	 * and the first 1.0/0.0 in any of them kills the process -- no
+	 * output, no summary, just a nonzero exit.  Exception masking is
+	 * process-global hardware state, so a test that changes it owes the
+	 * rest of the run an exact restore of what it found. */
+	__asm__ __volatile__("stmxcsr %0" : "=m"(orig));
+	mx = orig & ~0x200u;			/* unmask divide-by-zero in SSE */
 	__asm__ __volatile__("ldmxcsr %0" : : "m"(mx));
 
 	CHECK(feholdexcept(&h) == 0);
 
 	__asm__ __volatile__("stmxcsr %0" : "=m"(mx));
-	CHECK((mx & 0x1f80u) == 0x1f80u);	/* fails today: 0x1d80 */
+	CHECK((mx & 0x1f80u) == 0x1f80u);
 
 	CHECK(fesetenv(&h) == 0);
+	__asm__ __volatile__("ldmxcsr %0" : : "m"(orig));
 #endif
 }
-#endif
 
 int main(void)
 {
@@ -1978,6 +1954,7 @@ int main(void)
 	test_fenv_round_affects_arithmetic();
 	test_fenv_env_roundtrip();
 	test_fenv_updateenv_reraises();
+	test_fenv_holdexcept_installs_nonstop();
 	test_float_ld_variants();
 	test_lround_lrint();
 	test_asin_acos();
