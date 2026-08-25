@@ -43,7 +43,6 @@ B test_chmod_group_other_write_aliases_owner
 B test_dlopen_rtld_local_scoping
 B test_fault_sigbus
 B test_fwprintf
-B test_fwscanf
 B test_getdate_no_datemsk_must_fail
 B test_glob_err_callback
 B test_glob_noescape

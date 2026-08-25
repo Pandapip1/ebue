@@ -99,31 +99,6 @@ static void test_tar_h_constants(void)
 }
 
 /* ================= island: <cpio.h>, alone ======================= */
-#if 0 /* UNIMPL: cpio.h.html DESCRIPTION: "The <cpio.h> header shall
-	define the symbolic constants needed by the c_mode field of the
-	cpio archive format, with the names and values given in the
-	following table", listing the twenty C_* octal constants, followed
-	by "The <cpio.h> header shall define the following symbolic
-	constant as a string: MAGIC "070707"".  ntlibc has NO <cpio.h> at
-	all.  Triage: ABSENT (the whole header).
-
-	POSIX BASE, NOT XSI -- correcting the obvious assumption: the
-	page's own CHANGE HISTORY says "Issue 7 The <cpio.h> header is
-	moved from the XSI option to the Base."  It was XSI in Issue 6 and
-	is not any more, so its absence is a base-conformance hole and not
-	a missing option group.  That distinction is the one
-	test/POSIX-GAP-ACCOUNTING.md calls "not cosmetic", and it may
-	decide whether this header is ever worth adding.
-
-	Like <tar.h>, this header declares no functions, so it is outside
-	the 1177-interface accounting by construction; see the <tar.h>
-	fence above for why that is the whole point of group U.
-
-	ACCEPTANCE CRITERION: the header, with the values the standard
-	prints.  Pure constants; nothing in src/ would change.
-
-	Observed today: fails to COMPILE, "include file 'cpio.h' not
-	found". */
 #include <cpio.h>
 
 static void test_cpio_h_constants(void)
@@ -155,57 +130,8 @@ static void test_cpio_h_constants(void)
 	UCHECK(MAGIC[0] == '0' && MAGIC[1] == '7' && MAGIC[2] == '0');
 	UCHECK(MAGIC[3] == '7' && MAGIC[4] == '0' && MAGIC[5] == '7');
 }
-#endif
 
 /* ================= island: <sched.h>, alone ====================== */
-#if 0 /* UNIMPL: sched.h.html DESCRIPTION: "The <sched.h> header shall
-	define the sched_param structure, which shall include the
-	scheduling parameters required for implementation of each
-	supported scheduling policy.  This structure shall include at
-	least the following member: int sched_priority".  ntlibc's
-	<sched.h> declares sched_yield() and nothing else, so this
-	island's `struct sched_param` is an incomplete type.  Triage:
-	ABSENT from this header (the struct itself exists in
-	obj/include/bits/alltypes.h under __NEED_struct_sched_param, and
-	<spawn.h> reaches it that way for posix_spawnattr_setschedparam()
-	-- so the type exists and only <sched.h>'s exposure of it is
-	missing).
-
-	THIS ONE CONTRADICTS A RECORD ALREADY IN THE TREE AND IS FLAGGED
-	FOR ADJUDICATION RATHER THAN SETTLED HERE.  include/sched.h's
-	banner says: "Everything else this header is specified to declare
-	-- struct sched_param, the SCHED_FIFO/SCHED_RR/SCHED_SPORADIC/
-	SCHED_OTHER policies, and sched_getparam/... -- belongs to the
-	_POSIX_PRIORITY_SCHEDULING option group... Basedefs permits
-	exactly this -- those declarations sit inside the standard's own
-	`[PS]` margin markers."  That is true of the four policy constants
-	(the page marks them "SCHED_FIFO [ PS|TPS ]", "SCHED_RR [ PS|TPS ]",
-	"SCHED_SPORADIC [ SS|TSP ]", "SCHED_OTHER [ PS|TPS ]") and true of
-	the seven function declarations (all inside `[PS]`/`[PS|TPS]`
-	regions).  It is NOT true of the sched_param sentence: that
-	sentence carries no margin marker at all and sits outside every
-	option region on the page -- checked mechanically by counting the
-	page's own opt-start/opt-end region delimiters, which balance to
-	zero before it, and confirmed by reading the rendered text, where
-	the two sentences either side of it DO carry their markers
-	("[ PS ] ... pid_t", "[ SS|TSP ] ... time_t").  So the struct is
-	POSIX base and unconditional, while the policies and functions
-	the banner groups it with are genuinely optional.  The banner's
-	conclusion is right for eight of its nine subjects and wrong for
-	one, which is exactly how a correct-sounding blanket
-	justification hides a real gap.
-
-	ACCEPTANCE CRITERION: <sched.h> exposing the struct it is
-	specified to define -- one __NEED_struct_sched_param include, the
-	same way <spawn.h> already does it.  This fence claims NOTHING
-	about the _POSIX_PRIORITY_SCHEDULING option: not the four policy
-	constants, not the seven functions, not sched_setscheduler()'s
-	behaviour.  include/sched.h's reasoning for declining those stands
-	untouched, and this fence does not reopen it.
-
-	Observed today: fails to COMPILE, tcc reporting "initialization of
-	incomplete type" at the declaration of `sp` -- compile-time, so no
-	Wine-vs-real-NT uncertainty arises. */
 #include <sched.h>
 
 static void test_sched_h_defines_sched_param(void)
@@ -221,7 +147,6 @@ static void test_sched_h_defines_sched_param(void)
 	UCHECK(sp.sched_priority == 7);
 	UCHECK(sizeof sp >= sizeof(int));
 }
-#endif
 
 /* ============ end of the islands; anything goes below ============ */
 #include <stdio.h>
@@ -252,6 +177,8 @@ int main(void)
 
 	test_fcntl_h_defines_seek_whence();
 	test_tar_h_constants();
+	test_cpio_h_constants();
+	test_sched_h_defines_sched_param();
 
 	if (!fails) printf("posix-headers: all tests passed\n");
 	return fails != 0;
