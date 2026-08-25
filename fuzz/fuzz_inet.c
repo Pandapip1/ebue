@@ -66,26 +66,6 @@ extern void oracle_mismatch_s(const char *, const char *, const char *, const ch
 
 #define CAP 128
 
-/* Does any dotted part of `s` begin with '0' and have another digit
- * after it?  See the block below that calls this: it is the shape of
- * the one known, fenced disagreement with the host, and comparing
- * return values on it would kill the harness on its first run and
- * every run afterwards.  When the fence in test/posix-socket.c is
- * lifted, delete this function and its caller's guard. */
-static int has_leading_zero_part(const char *s)
-{
-	int start = 1;
-	size_t i;
-
-	for (i = 0; s[i]; i++) {
-		if (s[i] == '.') { start = 1; continue; }
-		if (start && s[i] == '0' && s[i + 1] >= '0' && s[i + 1] <= '9')
-			return 1;
-		start = 0;
-	}
-	return 0;
-}
-
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 {
 	char s[CAP + 1];
@@ -170,19 +150,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	memset(theirs, 0xAA, sizeof theirs);
 	r_mine = inet_pton(AF_INET, s, mine);
 	r_theirs = host_inet_pton4(s, theirs);
-	/* BUG: inet_pton() accepts a part with a leading zero and reads it
-	 * as decimal -- "0.0.0.00" is 0.0.0.0 here and is rejected by
-	 * glibc, which is what host_oracle.c reaches.  Found by this
-	 * harness
-	 * in twenty seconds; fenced in test/posix-socket.c, not fixed,
-	 * per the standing rule.  The return value is therefore not
-	 * compared on that shape: it is a difference the harness knows
-	 * about, and libFuzzer stops at the first mismatch, so leaving it
-	 * in would mean this harness reported that one input forever and
-	 * nothing else.  Everything else about such a string is still
-	 * checked, including that ntlibc's own four bytes are consistent
-	 * with what inet_addr makes of it. */
-	if (r_mine != r_theirs && !has_leading_zero_part(s))
+	if (r_mine != r_theirs)
 		oracle_mismatch_i("inet_pton return value", s, r_mine, r_theirs);
 	else if (r_mine == 1 && r_theirs == 1 && memcmp(mine, theirs, 4) != 0)
 		oracle_mismatch_i("inet_pton produced different bytes", s,
@@ -193,17 +161,13 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 
 	/* A dotted-quad inet_pton accepted is inside every reading of
 	 * inet_addr's grammar, so inet_addr must accept it and agree.
-	 *
-	 * Except on the fenced shape above, where the two functions
-	 * disagree for exactly that reason: inet_pton() reads "099" as
-	 * decimal 99, inet_addr() hands the same part to strtoul(base 0),
-	 * which reads a leading '0' as introducing octal and rejects the
-	 * '9', so inet_addr("0.3.3.099") is (in_addr_t)-1.  That is the
-	 * same defect seen from the other side, not a second one -- the
-	 * two functions of one library reading one string as two
-	 * different addresses is precisely what
-	 * test/posix-socket.c's fence describes. */
-	if (r_mine == 1 && !has_leading_zero_part(s)) {
+	 * That now holds unconditionally: inet_pton() rejects a part with
+	 * a leading zero, which is the one shape the two would otherwise
+	 * read differently -- inet_pton() would read "099" as decimal 99
+	 * while inet_addr() hands the same part to strtoul(base 0), which
+	 * takes the leading '0' as introducing octal and rejects the '9',
+	 * making inet_addr("0.3.3.099") (in_addr_t)-1. */
+	if (r_mine == 1) {
 		in_addr_t a = inet_addr(s);
 		uint32_t want;
 		memcpy(&want, mine, 4);

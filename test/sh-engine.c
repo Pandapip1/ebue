@@ -558,34 +558,55 @@ static void test_heredoc_queue_leak(void)
 }
 #endif
 
-#if 0	/* BUG: the IO-number lexer overflows a signed int.  2.7 says a
-	 * redirection may be preceded by an IO_NUMBER, and 2.10.1 defines
-	 * IO_NUMBER as a token "made up solely of digits" immediately
-	 * followed by '<' or '>'; it puts no length on it, and neither
-	 * does src/sh/parse.c:433, which accumulates the value with
-	 *
-	 *     for (i = 0; i < len; i++) v = v * 10 + (w[i] - '0');
-	 *
-	 * into an `int`, unchecked.  Fifteen digits overflow it.  Signed
-	 * overflow is undefined behaviour -- UBSan stops on it -- and
-	 * where it does not trap the redirection ends up with whatever
-	 * the wrap produced, which may be negative, as its fd.  The
-	 * conservative reading of 2.10.1 is that a digit string too large
-	 * to be a file descriptor is not an IO_NUMBER at all and should
-	 * lex as an ordinary WORD.
-	 *
-	 * Found by fuzz/fuzz_shparse.c under UBSan and reduced by hand.
-	 * fuzz_shparse.c's ionum_fence() keeps the harness off it; delete
-	 * that function when this fence is lifted. */
+/* 2.7 says a redirection may be preceded by an IO_NUMBER, and 2.10.1
+ * defines IO_NUMBER as a token "made up solely of digits" immediately
+ * followed by '<' or '>'.  The clause puts no length on that digit
+ * string, but the value has to end up in a redirection's `fd`, an int,
+ * so src/sh/parse.c guards the accumulation: a digit string that will
+ * not fit is diagnosed, not wrapped.  (It used to accumulate with an
+ * unchecked `v = v * 10 + (w[i] - '0')` into an int, so fifteen digits
+ * were signed overflow -- undefined behaviour, found here by
+ * fuzz/fuzz_shparse.c under UBSan -- and where that did not trap, the
+ * redirection was left holding whatever the wrap produced, possibly a
+ * negative fd.)
+ *
+ * Both halves are asserted, because a guard that refused every IO
+ * number would satisfy the first half alone: the out-of-range strings
+ * are rejected, and the in-range ones still lex as IO_NUMBERs and
+ * arrive at the redirection carrying the value they name. */
 static void test_ionum_overflow(void)
 {
-	/* Fifteen digits: undefined behaviour at parse.c:433. */
+	struct sh_list *l;
+	struct sh_command *c;
+	struct sh_redir *r;
+
+	/* Fifteen digits: what used to be undefined behaviour. */
 	must_reject("877777777777777<x");
-	/* And the value that a correct lexer has to refuse rather than
-	 * silently wrap: one past INT_MAX. */
+	/* One past INT_MAX: refused rather than silently wrapped. */
 	must_reject("2147483648<x");
+	/* Long enough to wrap an int several times over. */
+	must_reject("99999999999999999999999999>x");
+
+	/* Ordinary IO numbers are unaffected, value included. */
+	l = must_parse("cmd 2>out 10<in");
+	if (!l) return;
+	c = only_command(l);
+	CHECK(c != 0);
+	if (!c) { __sh_list_free(l); return; }
+	r = c->redirs;
+	CHECK(r && r->op == SH_R_GREAT && r->fd == 2 && strcmp(r->word, "out") == 0); r = r ? r->next : 0;
+	CHECK(r && r->op == SH_R_LESS && r->fd == 10 && strcmp(r->word, "in") == 0); r = r ? r->next : 0;
+	CHECK(r == 0);
+	__sh_list_free(l);
+
+	/* INT_MAX is in range by exactly one, and reaches the redirection
+	 * intact -- the boundary the two rejections above sit one past. */
+	l = must_parse("2147483647<x");
+	if (!l) return;
+	c = only_command(l);
+	CHECK(c && c->redirs && c->redirs->op == SH_R_LESS && c->redirs->fd == 2147483647);
+	__sh_list_free(l);
 }
-#endif
 
 /* ---- parse-and-print round trip: stage 1's other testability requirement */
 
@@ -4114,6 +4135,7 @@ int main(int argc, char **argv)
 	test_subshell_nested_and_redirected();
 
 	test_redirections();
+	test_ionum_overflow();
 
 	test_heredoc_basic();
 	test_heredoc_dash_strips_tabs();

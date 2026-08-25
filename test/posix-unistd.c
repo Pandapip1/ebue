@@ -1083,22 +1083,15 @@ static void test_unlinkat(void)
 	CHECK(unlinkat(4096, "ua2.txt", 0) == -1 && errno == EBADF);
 	CHECK(stat("ua2.txt", &st) == 0);
 
-#if 0	/* BUG: unlinkat() ignores undefined bits in flag instead of
-	 * rejecting them.  unlink.html ERRORS: "[EINVAL] (unlinkat() only)
-	 * The value of the flag argument is not valid."  AT_REMOVEDIR is
-	 * the only flag unlinkat() defines, so any other bit is invalid.
-	 * src/unistd/unlink.c is
-	 *     int unlinkat(int dirfd, const char *path, int flags)
-	 *     { return __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }
-	 * -- it masks the one bit it understands and silently discards the
-	 * rest, so unlinkat(fd, path, AT_SYMLINK_NOFOLLOW) deletes the file
-	 * rather than failing, and a caller that passes the wrong constant
-	 * gets destruction instead of a diagnostic.  Re-enable when
-	 * unlinkat() rejects flags & ~AT_REMOVEDIR with EINVAL. */
+	/* [EINVAL] "(unlinkat() only) The value of the flag argument is not
+	 * valid."  AT_REMOVEDIR is the only flag unlinkat() defines, so any
+	 * other bit is invalid: src/unistd/unlink.c rejects
+	 * flags & ~AT_REMOVEDIR rather than masking it off, because masking
+	 * turns a caller's wrong AT_* constant into a deletion.  The file
+	 * must still be there afterwards. */
 	errno = 0;
 	CHECK(unlinkat(AT_FDCWD, "ua2.txt", AT_SYMLINK_NOFOLLOW) == -1 && errno == EINVAL);
 	CHECK(stat("ua2.txt", &st) == 0);
-#endif
 
 	CHECK(unlinkat(AT_FDCWD, "ua2.txt", 0) == 0);
 }
@@ -1284,29 +1277,23 @@ static void test_confstr(void)
 	CHECK(confstr(_CS_PATH, buf, 1) == n);
 	CHECK(buf[0] == 0);
 
-#if 0	/* BUG: confstr() reports success for an invalid name.
-	 * confstr.html RETURN VALUE: "If the value of the name argument is
-	 * invalid, confstr() shall return 0 and set errno to indicate the
-	 * error", and ERRORS lists "[EINVAL] The value of the name argument
-	 * is invalid" as its only, shall-fail, entry.
-	 *
-	 * Mechanism: src/unistd/sysconf.c's confstr() starts from
-	 * `const char *s = "";` and only replaces it when
-	 * `name == _CS_PATH`.  An unrecognized name therefore falls through
-	 * the same path a genuine empty value would: it writes a lone NUL
-	 * into the caller's buffer and returns `i + 1` == 1.  A caller
-	 * cannot tell an invalid name from a valid one whose value happens
-	 * to be empty, and the mandated 0-plus-EINVAL never happens for any
-	 * input.  (POSIX does distinguish those two cases: a valid name with
-	 * no configuration-defined value returns 0 with errno *unchanged*,
-	 * which is also unreachable here.)  Probed on this tree: both calls
-	 * below return 1 with errno untouched.  Re-enable when confstr()
-	 * rejects unknown names. */
+	/* An invalid name is the one shall-fail entry: 0 with [EINVAL],
+	 * which is a different 0 from the "valid name, no
+	 * configuration-defined value" 0 that leaves errno alone.  Fixed:
+	 * src/unistd/sysconf.c's confstr() switches on name and rejects the
+	 * default, where it used to start from an empty value and only
+	 * replace it for _CS_PATH -- so an unrecognized name wrote a lone
+	 * null and returned 1, indistinguishable from a valid empty value.
+	 * -1 is not a _CS_* value at all; 12345 is past every name a future
+	 * <unistd.h> would plausibly assign. */
 	errno = 0;
 	CHECK(confstr(-1, buf, sizeof buf) == 0 && errno == EINVAL);
 	errno = 0;
 	CHECK(confstr(12345, buf, sizeof buf) == 0 && errno == EINVAL);
-#endif
+
+	/* ...and a valid name still answers, after a rejected one: the
+	 * switch must not have turned _CS_PATH into a casualty. */
+	CHECK(confstr(_CS_PATH, buf, sizeof buf) == n);
 }
 
 /* swab.html.  DESCRIPTION: "shall copy nbytes bytes, which are pointed
@@ -1454,8 +1441,10 @@ static void test_getlogin(void)
  * already records the same for chown/getuid/setuid/getpgrp; these eight
  * names are the never-called members of the same family.  What *is*
  * asserted is the part that is still a real contract: the return values,
- * and internal consistency with the non-stub members of the family that
- * test/unistd.c already covers. */
+ * internal consistency with the non-stub members of the family that
+ * test/unistd.c already covers, and -- for the two that take a
+ * descriptor -- the [EBADF] shall-fail, which having a fixed answer
+ * does not excuse. */
 static void test_id_session_stubs(void)
 {
 	struct stat before, after;
@@ -1497,28 +1486,47 @@ static void test_id_session_stubs(void)
 	CHECK(tcgetpgrp(0) == getpgrp());
 	CHECK(tcsetpgrp(0, tcgetpgrp(0)) == 0);
 
-#if 0	/* BUG: tcgetpgrp()/tcsetpgrp() never fail, not even on a
-	 * descriptor that is not open.  tcgetpgrp.html ERRORS: "The
-	 * tcgetpgrp() function *shall* fail if: [EBADF] The fildes argument
-	 * is not a valid file descriptor" -- shall-fail, not may-fail, and
-	 * tcsetpgrp.html carries the identical clause.
-	 *
-	 * Mechanism: src/unistd/ttyname.c:23-24 are
-	 *     pid_t tcgetpgrp(int fd) { (void)fd; return 1; }
-	 *     int tcsetpgrp(int fd, pid_t p) { (void)fd; (void)p; return 0; }
-	 * -- fd is discarded without ever reaching __fd_get(), which is what
-	 * every other fd-taking call in the library uses to produce EBADF.
-	 * This is separable from the deliberate single-session design the
-	 * src/termios/termios.c banner argues for: returning a fixed process
-	 * group for a *valid* terminal descriptor is that design, but
-	 * answering successfully for fd 4096 is an argument check that was
-	 * simply never written.  Probed on this tree: both calls below
-	 * succeed.  Re-enable when both validate fildes. */
+	/* tcgetpgrp.html ERRORS: "The tcgetpgrp() function *shall* fail if:
+	 * [EBADF] The fildes argument is not a valid file descriptor" --
+	 * shall-fail, not may-fail, and tcsetpgrp.html carries the
+	 * identical clause.  The fixed answer above is the single-session
+	 * design (src/termios/termios.c's banner); validating fildes is a
+	 * separate obligation that it does not excuse, and both calls now
+	 * run fildes through __fd_get() like the rest of the library. */
 	errno = 0;
 	CHECK(tcgetpgrp(4096) == -1 && errno == EBADF);
 	errno = 0;
 	CHECK(tcsetpgrp(4096, getpgrp()) == -1 && errno == EBADF);
-#endif
+	errno = 0;
+	CHECK(tcgetpgrp(-1) == -1 && errno == EBADF);
+	errno = 0;
+	CHECK(tcsetpgrp(-1, getpgrp()) == -1 && errno == EBADF);
+
+	/* ...and it is a *descriptor* check, not a blanket refusal: a
+	 * descriptor this process really holds still gets the fixed answer,
+	 * even though it is not a console.  That is not an accident of the
+	 * runner -- fd 0 above is already such a descriptor, since
+	 * tools/runtests.sh runs every test with stdin on /dev/null -- so
+	 * the model here answers per process, not per terminal, and
+	 * [ENOTTY] is deliberately not part of this gate (see
+	 * src/unistd/ttyname.c and test/POSIX-COVERAGE.md).  A pipe is the
+	 * other non-console shape, and closing it flips the same numbers to
+	 * [EBADF], which is what proves the check reads the descriptor
+	 * table rather than range-checking the int. */
+	{
+		int p[2];
+		CHECK(pipe(p) == 0);
+		CHECK(isatty(p[0]) == 0);
+		errno = 0;
+		CHECK(tcgetpgrp(p[0]) == getpgrp());
+		CHECK(tcsetpgrp(p[1], getpgrp()) == 0);
+		CHECK(errno == 0);
+		CHECK(close(p[0]) == 0 && close(p[1]) == 0);
+		errno = 0;
+		CHECK(tcgetpgrp(p[0]) == -1 && errno == EBADF);
+		errno = 0;
+		CHECK(tcsetpgrp(p[1], getpgrp()) == -1 && errno == EBADF);
+	}
 }
 
 /* link.html (the linkat half).  DESCRIPTION: linkat() resolves a
@@ -1600,10 +1608,10 @@ static void test_linkat(void)
 	 * FSCTL_SET_REPARSE_POINT rather than a privilege) -- so
 	 * the clause cannot be exercised here either way, and asserting the
 	 * flag-clear branch alone would claim coverage this test does not
-	 * have.  The [EINVAL] for an invalid flag value is the same
-	 * unvalidated-flags defect already fenced in test_unlinkat() above
-	 * (linkat() likewise masks nothing and validates nothing); it is
-	 * recorded there rather than duplicated here. */
+	 * have.  The [EINVAL] for an invalid flag value is left unasserted:
+	 * linkat() validates nothing, but linkat's [EINVAL] is a may-fail,
+	 * unlike the shall-fail unlinkat() now enforces in
+	 * test_unlinkat() above. */
 }
 
 /* ==================================================================

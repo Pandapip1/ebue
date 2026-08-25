@@ -148,36 +148,30 @@ static void test_getgroups(void)
 	 * and it must at least be self-consistent. */
 	if (n == 1) CHECK(list[0] == getegid());
 
-#if 0	/* BUG: getgroups() succeeds for a negative gidsetsize.
-	 * getgroups.html ERRORS: "The getgroups() function *shall* fail
+	/* getgroups.html ERRORS: "The getgroups() function *shall* fail
 	 * if: [EINVAL] The gidsetsize argument is non-zero and less than
 	 * the number of group IDs that would have been returned."  -1 is
-	 * non-zero and is less than the 1 this implementation would have
-	 * returned, so the clause applies exactly and it is a shall-fail,
-	 * not a may-fail.
-	 *
-	 * Mechanism: src/unistd/ids.c:20 is
-	 *     int getgroups(int n, gid_t *g) { if (n > 0) g[0] = 1000; return 1; }
-	 * -- n is used only to decide whether to store, never to decide
-	 * whether to fail.  A negative gidsetsize therefore reports "1
-	 * group ID stored" into an array it did not write, and a caller
-	 * that trusts the return value reads uninitialised memory.  That
-	 * is the same shape as the tcgetpgrp()/tcsetpgrp() [EBADF] defect
-	 * test/posix-unistd.c already fences: an argument check that was
-	 * never written, entirely separable from the single-identity
-	 * design (the count this implementation returns is 1 either way).
-	 * Probed on this tree: getgroups(-1, list) returns 1, errno
-	 * untouched.  Re-enable when gidsetsize is validated. */
+	 * non-zero and is less than the 1 this implementation returns, so
+	 * the clause applies exactly and it is a shall-fail, not a
+	 * may-fail.  The array must come back untouched with it: a call
+	 * that returns -1 stored no group IDs, and a caller that trusts a
+	 * "1 group ID stored" answer for a buffer nothing was written to
+	 * reads uninitialised memory. */
+	memset(list, 0x5a, sizeof list);
 	errno = 0;
 	CHECK(getgroups(-1, list) == -1 && errno == EINVAL);
-#endif
+	for (i = 0; i < (int)(sizeof list / sizeof list[0]); i++)
+		CHECK(list[i] == (gid_t)0x5a5a5a5a);
 
-	/* Not fenced, and deliberately so: [EINVAL] for a *positive*
-	 * gidsetsize smaller than the count is unconstructible here rather
-	 * than unimplemented.  The count is 1, and the smallest positive
+	/* [EINVAL] for a *positive* gidsetsize smaller than the count is
+	 * unconstructible here rather than unimplemented, so there is no
+	 * assertion for it.  The count is 1, and the smallest positive
 	 * gidsetsize is 1, so no positive value is ever "less than the
 	 * number of group IDs that would have been returned".  A one-group
-	 * process cannot exhibit that error, on any implementation. */
+	 * process cannot exhibit that error, on any implementation --
+	 * src/unistd/ids.c still spells the comparison against the count
+	 * rather than against zero, so the check does not become wrong if
+	 * that count ever grows. */
 }
 
 /* ============================================================
@@ -360,27 +354,36 @@ static void test_process_group_and_session(void)
 	CHECK(setsid() == getpgrp());
 	CHECK(getsid(0) == getpgrp());
 
-#if 0	/* BUG: getpgid() and getsid() answer for a process that does not
-	 * exist.  getpgid.html ERRORS: "The getpgid() function *shall*
-	 * fail if: ... [ESRCH] There is no process with a process ID equal
-	 * to pid."  getsid.html carries the identical shall-fail clause.
-	 *
-	 * Mechanism: src/unistd/ids.c:21,25 are
-	 *     pid_t getpgid(pid_t p) { (void)p; return 1; }
-	 *     pid_t getsid(pid_t p)  { (void)p; return 1; }
-	 * -- pid is discarded, so there is no pid for which either can
-	 * fail.  Unlike the "one session" argument, this needs no session
-	 * model at all to get right: src/process/children.c already tracks
-	 * every process this one created and src/process/wait.c already
-	 * distinguishes a live child from an unknown pid, which is exactly
-	 * the lookup [ESRCH] describes.  Probed on this tree: both return
-	 * 1 for pid 999999, errno untouched.
-	 * Re-enable when both validate pid. */
+	/* getpgid.html ERRORS: "The getpgid() function *shall* fail if:
+	 * ... [ESRCH] There is no process with a process ID equal to
+	 * pid."  getsid.html carries the identical shall-fail clause.
+	 * The clause is about the existence of a *process*, so a
+	 * one-session platform is bound by it like any other; both
+	 * getters resolve pid through src/unistd/ids.c's pid_exists()
+	 * (the child table of src/process/children.c, then an
+	 * NtOpenProcess by CLIENT_ID) rather than discarding it. */
 	errno = 0;
 	CHECK(getpgid(999999) == (pid_t)-1 && errno == ESRCH);
 	errno = 0;
 	CHECK(getsid(999999) == (pid_t)-1 && errno == ESRCH);
-#endif
+
+	/* A negative pid names no process either; kill() reports ESRCH
+	 * for one (src/signal/signal.c) and these agree. */
+	errno = 0;
+	CHECK(getpgid(-2) == (pid_t)-1 && errno == ESRCH);
+	errno = 0;
+	CHECK(getsid(-2) == (pid_t)-1 && errno == ESRCH);
+
+	/* ...and the pids that *do* name a process still answer, with
+	 * errno untouched: a check that fails everything would satisfy
+	 * the four assertions above and violate getpgid.html's "If pid is
+	 * equal to 0 ..." and RETURN VALUE, which the next four pin from
+	 * the other side. */
+	errno = 0;
+	CHECK(getpgid(0) == getpgrp() && errno == 0);
+	CHECK(getpgid(self) == getpgrp() && errno == 0);
+	CHECK(getsid(0) != (pid_t)-1 && errno == 0);
+	CHECK(getsid(self) == getsid(0) && errno == 0);
 
 #if 0	/* BUG: setpgid() accepts a negative pgid and an unrelated pid.
 	 * setpgid.html ERRORS, both shall-fail:
@@ -575,11 +578,11 @@ static void test_chown_family(void)
 	/* fchownat()'s [EINVAL] ("The value of the flag argument is not
 	 * valid") is a *may*-fail on chown.html, not a shall-fail, so
 	 * accepting an undefined flag bit is permitted here and is not
-	 * fenced -- unlike unlinkat(), whose flag masking test/
-	 * posix-unistd.c's test_unlinkat() fences, because unlinkat.html
-	 * makes its [EINVAL] a shall-fail and because there the accepted
-	 * bit changes what the call *does*.  fchownat() does nothing
-	 * either way. */
+	 * fenced -- unlike unlinkat(), whose flag masking was a bug and is
+	 * fixed (test/posix-unistd.c's test_unlinkat() asserts it), because
+	 * unlink.html makes its [EINVAL] a shall-fail and because there the
+	 * accepted bit changed what the call *did*.  fchownat() does
+	 * nothing either way. */
 	CHECK(fchownat(AT_FDCWD, "chf.txt", (uid_t)-1, (gid_t)-1, 0x9999) == 0);
 
 	CHECK(unlink("chf.txt") == 0);

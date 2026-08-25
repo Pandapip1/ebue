@@ -1032,8 +1032,33 @@ int vsprintf(char *__restrict s, const char *__restrict fmt, __isoc_va_list ap)
 {
 	return vxprintf_mem(s, (size_t)-1, fmt, ap);
 }
+/* fprintf.html ERRORS: "The snprintf() function shall fail if:
+ * [EOVERFLOW] The value of n is greater than {INT_MAX}." -- a shall-fail,
+ * so the call is refused up front: nothing is formatted, s is not
+ * touched, and the return is negative with errno set (RETURN VALUE: "If
+ * an output error was encountered, these functions shall return a
+ * negative value and set errno").  The clause exists because the return
+ * type is int and the value promised is the number of bytes that WOULD
+ * have been written had n been sufficiently large: past {INT_MAX} that
+ * number need not be representable, so there is no right answer to
+ * return and POSIX makes the call fail instead of inventing one.
+ *
+ * It belongs here rather than in vxprintf_mem() because n is the thing
+ * being checked, and only this pair of interfaces has one.  vsprintf()
+ * passes (size_t)-1 as a "no bound" sentinel and vasprintf() passes a
+ * length it computed itself; neither takes an n from the caller, so
+ * neither may be refused for the size of its cap.  vfprintf.html makes
+ * vsnprintf() "equivalent to ... snprintf()" and sends its ERRORS back
+ * to fprintf(), which is why both entry points come through here.
+ *
+ * The wide sibling swprintf() has an [EOVERFLOW] too (see
+ * vswprintf_impl below), but it is a different clause -- n or more wide
+ * characters requested -- and needs no ceiling of its own: swprintf()
+ * returns a count of what it actually wrote, never a would-have-been
+ * length, so an n past {INT_MAX} has nothing unrepresentable to report. */
 int vsnprintf(char *__restrict s, size_t n, const char *__restrict fmt, __isoc_va_list ap)
 {
+	if (n > (size_t)INT_MAX) { errno = EOVERFLOW; return -1; }
 	return vxprintf_mem(s, n, fmt, ap);
 }
 int vfprintf(FILE *__restrict f, const char *__restrict fmt, __isoc_va_list ap)

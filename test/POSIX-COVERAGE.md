@@ -40,7 +40,17 @@ Status values:
 - **N/A (reason)** — not a POSIX.1-2017 base function (GNU/BSD
   extension), or the LEGACY variant removed in Issue 7, or the clause
   cannot be triggered/observed under Wine or without real hardware
-  failure (e.g. malloc-exhaustion ENOMEM paths).
+  failure (e.g. malloc-exhaustion ENOMEM paths). That last case
+  includes the one the fence vocabulary kept getting wrong: a clause
+  whose **code exists** but whose **test fixture cannot be built here**
+  is N/A, not UNIMPL. UNIMPL's contract is "absent, but implementable,
+  and the fence names the NT mechanism"; a fence with nothing absent
+  and no mechanism to name is not making that claim. Such an N/A is
+  usually conditional rather than permanent, so it carries an expiry
+  condition naming what would make the fixture buildable — see
+  `test/verification-coverage-accounting.md` section 6 for the
+  permanent/conditional split, and section 5 for the three
+  `test/posix-glob.c` fences this rule retagged.
 - **BUG (fenced)** — a genuine spec violation found; test is in the file
   with `#if 0 /* BUG: ... */`, see "Bugs found" below.
 - **not yet reached** — nobody has checked the spec page against the
@@ -62,7 +72,7 @@ four rows here whose second slash-joined name (`utimes`, `fpathconf`,
 `readlink`, `unlinkat`) was called by no test. **Those four are now
 closed**: each has been split onto a row of its own above and given a
 first-ever assertion in `test/posix-unistd.c`, which turned up one
-fenced bug (`unlinkat()`'s `flag` validation).
+bug (`unlinkat()`'s `flag` validation), since fixed.
 
 ## Priority order (per the task brief)
 
@@ -503,7 +513,7 @@ not every clause line, to keep this section a manageable size):
 | mkdir / rmdir / unlink | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | mkdirat (AT_FDCWD == mkdir, dirfd-relative, EEXIST on a dir and on a file, ENOENT, ENOTDIR for a file prefix component and for a non-directory `fd`, EBADF) | covered; the `mode` clause N/A — directory mode bits are implementation-defined on NTFS and `src/stat/mkdir.c` ignores `mode` by design | test/posix-unistd.c `test_mkdirat` |
 | mkfifo / mkfifoat / mknod / mknodat | N/A (permanent stubs — see `test/POSIX-GAP-ACCOUNTING.md`'s degenerate-stub table); the one clause a stub can honour, "if -1 is returned, the new file shall not be created", **is** asserted, as is `mknod`'s POSIX-listed [EPERM] | test/posix-unistd.c `test_mkfifo_mknod_stubs` |
-| unlinkat (AT_FDCWD == unlink/rmdir, AT_REMOVEDIR, ENOTDIR, ENOTEMPTY, ENOENT, EBADF, dirfd-relative) | **BUG (fenced)** — undefined `flag` bits are masked off instead of giving EINVAL | test/posix-unistd.c `test_unlinkat` |
+| unlinkat (AT_FDCWD == unlink/rmdir, AT_REMOVEDIR, ENOTDIR, ENOTEMPTY, ENOENT, EBADF, dirfd-relative) | covered; the [EINVAL] clause **fixed** (`src/unistd/unlink.c`'s `unlinkat()` now rejects `flags & ~AT_REMOVEDIR` instead of masking it off) and asserted unfenced | test/posix-unistd.c `test_unlinkat` |
 | rename / renameat: success, ENOENT, same-file no-op | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | rename EISDIR (new is a dir, old isn't) | **fixed**, commit 3c606a7 (`renameat()` in `src/stdio/misc.c` now disambiguates NT's `STATUS_ACCESS_DENIED` by querying old/new's types, giving EISDIR instead of EACCES) | test/posix-unistd.c `test_rename_new_dir_old_file_eisdir` |
 | rename ENOTEMPTY/EEXIST (new is a non-empty dir) | **fixed**, commit 3c606a7 (same fix, gives ENOTEMPTY instead of EACCES) | test/posix-unistd.c `test_rename_onto_nonempty_dir` |
@@ -511,11 +521,11 @@ not every clause line, to keep this section a manageable size):
 | linkat (AT_FDCWD == link, dirfd-relative on both sides, st_nlink incremented, same st_ino, EEXIST, ENOENT, EBADF) | covered | test/posix-unistd.c `test_linkat` |
 | linkat | AT_SYMLINK_FOLLOW | N/A — `src/unistd/link.c` always opens with FILE_OPEN_REPARSE_POINT and ignores `flag`, so it always implements the flag-clear branch; telling the two apart needs a symlink, which the suite's own environment cannot create — a Wine VERSION gap, not a privilege one (measured, `ff1327e`): stock apt Wine 9.0 answers `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED`, that FSCTL having first shipped in wine-10.19, so nothing ever reaches a privilege check. On real NT the privilege (or Developer Mode) *is* the requirement, which is why the real-Windows legs are the ones that can close this | -- |
 | execl / execle / execlp / fexecve | argv and envp delivered to the exec'd image; the exec'd image's exit status becomes the caller's; ENOENT for a missing file (direct and PATH-searching forms); EBADF for fexecve on a closed descriptor; a failed exec returns and leaves the process image running | covered | test/exec.c (`--exec-l`, `--exec-le`, `--exec-lp`, `--exec-f` roles) |
-| confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1` | covered; **BUG (fenced)** for [EINVAL] — an unrecognized name returns 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
+| confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1`, [EINVAL] for an invalid name | covered — the [EINVAL] half was a **BUG, FIXED**: `src/unistd/sysconf.c`'s `confstr()` now switches on `name` and rejects the `default`, where it used to start from an empty value and only replace it for `_CS_PATH`, so an unrecognized name returned 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
 | swab | adjacent-byte exchange, nothing written past nbytes, nbytes 0 and negative do nothing, odd nbytes exchanges nbytes-1, double swab is identity | covered (pure byte shuffling — the one call in this group for which a Wine pass is strong evidence) | test/posix-unistd.c `test_swab` |
 | sync | callable, returns no value, defines no error | covered as far as POSIX allows; the scheduling itself N/A — POSIX permits `sync()` to be undetectable by any conforming observation (`fsync()` is the call with a completion guarantee) | test/posix-unistd.c `test_sync` |
 | getlogin / getlogin_r | same name from both; getlogin_r returns 0 (not a length, not -1) on success and the errno *value* ERANGE on a short buffer; exactly-fits is a success | covered | test/posix-unistd.c `test_getlogin` |
-| fchown / fchownat / lchown / setregid / setpgrp / setsid / tcgetpgrp / tcsetpgrp | return values, and agreement with the getters (`setpgrp() == getpgrp()`, `setsid() == getsid(0)`, `tcgetpgrp(0) == getpgrp()`) | covered for the returns; the *effects* N/A — one user and one fixed session, per `src/unistd/ids.c`'s and `src/termios/termios.c`'s banners, so nothing could be observed to change. **BUG (fenced)**: `tcgetpgrp`/`tcsetpgrp` never produce the shall-fail [EBADF] | test/posix-unistd.c `test_id_session_stubs` |
+| fchown / fchownat / lchown / setregid / setpgrp / setsid / tcgetpgrp / tcsetpgrp | return values, agreement with the getters (`setpgrp() == getpgrp()`, `setsid() == getsid(0)`, `tcgetpgrp(0) == getpgrp()`), and `tcgetpgrp`/`tcsetpgrp`'s shall-fail [EBADF] | covered for the returns; the *effects* N/A — one user and one fixed session, per `src/unistd/ids.c`'s and `src/termios/termios.c`'s banners, so nothing could be observed to change. The [EBADF] half was a fenced BUG — both calls discarded `fildes` — and is now **fixed**: `src/unistd/ttyname.c`'s `tcgetpgrp()`/`tcsetpgrp()` run `fildes` through `__fd_get()` before answering, and the fixed answer is `getpgrp()` rather than a second hard-coded 1. [ENOTTY] is deliberately not part of that gate — see the note under the bug list below | test/posix-unistd.c `test_id_session_stubs` |
 | pause | DESCRIPTION: suspend until a signal is delivered; RETURN VALUE -1 with EINTR | N/A — **not callable from this suite at all**: `src/unistd/sleep.c`'s `pause()` is `NtDelayExecution` with a maximal timeout, and no asynchronous delivery exists to end it, so a call hangs forever rather than returning. A test would deadlock the run, not fail it | -- |
 | readlink / readlinkat (byte count, no NUL, bufsize truncation, EINVAL on a non-link, ENOENT, AT_FDCWD, dirfd-relative) | covered | test/unistd.c, test/posix-unistd.c `test_readlink` |
 | access / faccessat (F_OK/R_OK/W_OK/X_OK, ENOENT, EACCES) | covered | test/unistd.c |
@@ -538,52 +548,83 @@ EISDIR/ENOTEMPTY") and the corresponding fenced tests in
 
 ### Bugs found (never-asserted sweep, unistd.h group)
 
-Three, all fenced in `test/posix-unistd.c`, all probed on this tree.
+Three, all found fenced in `test/posix-unistd.c`, all probed on this
+tree. All three are now **fixed** and their assertions run unfenced;
+none remain.
 
-1. **`unlinkat()` masks off undefined `flag` bits instead of rejecting
-   them.** `unlink.html` ERRORS lists as *shall fail*: "[EINVAL]
-   (unlinkat() only) The value of the flag argument is not valid."
-   `AT_REMOVEDIR` is the only flag `unlinkat()` defines, so every other
-   bit is invalid.
+1. **`unlinkat()` masked off undefined `flag` bits instead of rejecting
+   them** — **fixed**. `unlink.html` ERRORS lists as *shall fail*:
+   "[EINVAL] (unlinkat() only) The value of the flag argument is not
+   valid." `AT_REMOVEDIR` is the only flag `unlinkat()` defines, so
+   every other bit is invalid.
 
-   Mechanism: `src/unistd/unlink.c` is
+   Mechanism: `src/unistd/unlink.c` was
    `int unlinkat(int dirfd, const char *path, int flags) { return
-   __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }` — it keeps the one
-   bit it understands and silently discards the rest. Probed on this
-   tree: `unlinkat(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW)` returns 0 and
-   **deletes the file**, so a caller who reaches for the wrong `AT_`
-   constant gets destruction rather than a diagnostic. The fix is a
-   `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }` guard,
-   but a fix belongs in a change of its own, not in an audit pass.
+   __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }` — it kept the one
+   bit it understood and silently discarded the rest. Probed on this
+   tree before the fix: `unlinkat(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW)`
+   returned 0 and **deleted the file**, so a caller who reached for the
+   wrong `AT_` constant got destruction rather than a diagnostic. The
+   fix is the `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }`
+   guard in front of `__unlink_at()`; the assertion pair (EINVAL, and
+   the file still there afterwards) now runs unfenced in
+   `test_unlinkat()`.
 
-2. **`confstr()` reports success for an invalid name.** `confstr.html`
-   RETURN VALUE: "If the value of the name argument is invalid,
-   confstr() shall return 0 and set errno to indicate the error";
-   ERRORS lists "[EINVAL] ... the name argument is invalid" as its only,
-   shall-fail, entry.
+2. **`confstr()` reported success for an invalid name — FIXED.**
+   `confstr.html` RETURN VALUE: "If the value of the name argument is
+   invalid, confstr() shall return 0 and set errno to indicate the
+   error"; ERRORS lists "[EINVAL] ... the name argument is invalid" as
+   its only, shall-fail, entry.
 
-   Mechanism: `src/unistd/sysconf.c`'s `confstr()` starts from
-   `const char *s = "";` and replaces it only when `name == _CS_PATH`.
-   An unrecognized name falls through the same path a genuine empty
-   value would — a lone NUL into the caller's buffer, and `i + 1` == 1
-   returned. Probed: `confstr(-1, buf, n)` and `confstr(12345, buf, n)`
-   both return 1 with errno untouched. A caller cannot tell an invalid
-   name from a valid one with an empty value, and neither of POSIX's two
-   zero-returning cases is reachable for any input.
+   Mechanism of the defect: `src/unistd/sysconf.c`'s `confstr()` started
+   from `const char *s = "";` and replaced it only when
+   `name == _CS_PATH`. An unrecognized name fell through the same path a
+   genuine empty value would — a lone NUL into the caller's buffer, and
+   `i + 1` == 1 returned. Probed: `confstr(-1, buf, n)` and
+   `confstr(12345, buf, n)` both returned 1 with errno untouched. A
+   caller could not tell an invalid name from a valid one with an empty
+   value, and neither of POSIX's two zero-returning cases was reachable
+   for any input.
 
-3. **`tcgetpgrp()`/`tcsetpgrp()` never fail, not even on a descriptor
-   that is not open.** `tcgetpgrp.html`: "The tcgetpgrp() function
-   *shall* fail if: [EBADF] The fildes argument is not a valid file
-   descriptor", and `tcsetpgrp.html` carries the identical clause.
+   The fix closes the name set instead of defaulting it: `confstr()`
+   switches on `name`, `_CS_PATH` is the one case, and the `default` is
+   `errno = EINVAL; return 0`. `<unistd.h>` defines exactly one `_CS_*`
+   constant, so that is the whole recognized set — and a name added to
+   the header must gain a case with it, which is stated at the function.
+   POSIX's *other* zero, a valid name with no configuration-defined
+   value returning 0 with errno unchanged, still has no name to reach it
+   here.
 
-   Mechanism: `src/unistd/ttyname.c:23-24` discard `fd` without ever
-   reaching `__fd_get()`, which is what every other fd-taking call in
-   the library uses to produce EBADF. Probed: `tcgetpgrp(4096)` returns
-   1 and `tcsetpgrp(4096, 1)` returns 0, both with errno untouched. This
-   is separable from the deliberate single-session design
+3. **`tcgetpgrp()`/`tcsetpgrp()` never failed, not even on a descriptor
+   that was not open** — **fixed**, and the fence removed.
+   `tcgetpgrp.html`: "The tcgetpgrp() function *shall* fail if: [EBADF]
+   The fildes argument is not a valid file descriptor", and
+   `tcsetpgrp.html` carries the identical clause.
+
+   Mechanism: `src/unistd/ttyname.c`'s two one-line definitions
+   discarded `fd` without ever reaching `__fd_get()`, which is what
+   every other fd-taking call in the library uses to produce EBADF.
+   Probed at the time: `tcgetpgrp(4096)` returned 1 and
+   `tcsetpgrp(4096, 1)` returned 0, both with errno untouched. That was
+   separable from the deliberate single-session design
    `src/termios/termios.c`'s banner argues for: a fixed process group
-   for a *valid* terminal descriptor is that design; answering
-   successfully for fd 4096 is an argument check that was never written.
+   for a *valid* descriptor is that design; answering successfully for
+   fd 4096 was an argument check that had never been written. Both now
+   call `__fd_get()` first and return -1 with EBADF when it fails.
+
+   **Still open, deliberately: [ENOTTY] on a valid non-terminal
+   `fildes`.** Both pages also make that a shall-fail ("The calling
+   process does not have a controlling terminal, or the file is not the
+   controlling terminal"), and `src/termios/termios.c`'s `tcgetsid()` —
+   the closest sibling — *does* gate on `__FD_CONSOLE`. It was left out
+   of the fix above because it is a change to the model rather than the
+   missing argument check: this library answers one process group for
+   the whole process, not per descriptor, and the row above records
+   `tcgetpgrp(0) == getpgrp()` as covered on a fd 0 that
+   `tools/runtests.sh` redirects from `/dev/null` and that `isatty()`
+   therefore rejects. Closing it means deciding whether a process that
+   holds no console has a controlling terminal at all, and retiring that
+   covered clause — its own change, with its own fence.
 
 ### Not reached (unistd.h group)
 
@@ -620,7 +661,7 @@ entries below.
 | sigsuspend | return value -1/EINTR (the only return this stub can produce) | covered | test/posix-signal.c |
 | sigsuspend | DESCRIPTION: replace the mask, actually suspend until a signal is delivered | N/A — documented permanent stub (`{ errno = EINTR; return -1; }`); no per-thread wait primitive exists to build a real one on | -- |
 | sigwait / sigtimedwait / sigqueue / sigaltstack | require per-process queued-signal-with-payload or alt-stack facilities this platform has none of | N/A — documented stubs (see include/signal.h) | -- |
-| sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()` | covered; **BUG (fenced)** for [EINVAL] — both wrappers ignore `sigaddset()`'s failure and report success for an illegal signal number | test/posix-signal.c `test_sighold_sigrelse` |
+| sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()`; [EINVAL] for an illegal signal number | covered — [EINVAL] was a BUG (both wrappers discarded `sigaddset()`'s failure, so the bad bit was never set, `sigprocmask()` got an empty mask and returned 0); **fixed**: both now return -1 as soon as `sigaddset()` fails, leaving the process mask untouched | test/posix-signal.c `test_sighold_sigrelse` |
 | sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP | covered; **BUG (fenced)** for the SIG_HOLD return and the "shall remove sig from the mask" clause — `<signal.h>` does not define SIG_HOLD at all and `sigset()` is a bare alias of `signal()` | test/posix-signal.c `test_sigset` |
 | sigpause (XSI, obsolescent) | returns -1 with EINTR | covered | test/posix-signal.c `test_sigpause` |
 | sigpause | DESCRIPTION: suspend until a signal is received | N/A — same reason as `sigsuspend()` above: no asynchronous delivery exists, so a call that genuinely suspended could only hang | -- |
@@ -660,19 +701,30 @@ no-ops rather than silently dropped. `src/process/wait.c` now validates
 
 ### Bugs found (never-asserted sweep, signal.h group)
 
-Three, all fenced in `test/posix-signal.c`, all found by the first calls
-anything in this tree has ever made to these five XSI names. All three
-were probed on this tree, not inferred from source.
+Three, originally all fenced in `test/posix-signal.c`, all found by the
+first calls anything in this tree has ever made to these five XSI names.
+All three were probed on this tree, not inferred from source. The first
+has since been fixed and its assertions un-fenced unmodified; two remain
+fenced.
 
-1. **`sighold()`/`sigrelse()` report success for an illegal signal
-   number.** `sigset.html` ERRORS, shall-fail: "[EINVAL] The sig
-   argument is an illegal signal number." `src/signal/signal.c:309-310`
-   build a one-signal set and hand it to `sigprocmask()`, but never look
-   at `sigaddset()`'s return — and `sigaddset()` *does* validate
-   (line 275). The invalid bit is simply never set, `sigprocmask()` gets
-   an empty mask and succeeds, and the caller is told the signal was
-   held when nothing happened: the worst of the three possible outcomes.
-   `sighold(-1)` and `sighold(NSIG)` both return 0.
+1. **`sighold()`/`sigrelse()` reported success for an illegal signal
+   number.** FIXED; kept here in past tense as the record.
+   `sigset.html` ERRORS, shall-fail: "[EINVAL] The sig argument is an
+   illegal signal number." Both wrappers build a one-signal set and hand
+   it to `sigprocmask()`, but neither looked at `sigaddset()`'s return —
+   and `sigaddset()` *does* validate. The invalid bit was simply never
+   set, `sigprocmask()` got an empty mask and succeeded, and the caller
+   was told the signal was held when nothing happened: the worst of the
+   three possible outcomes. Probed then: `sighold(-1)` and
+   `sighold(NSIG)` both returned 0. Note that the failure could not have
+   degraded into a failing `sigprocmask()` instead — an empty mask is a
+   legal argument that `sigprocmask()` is required to accept — so the
+   check has nowhere else it could live. Both wrappers now return -1
+   with `errno` as `sigaddset()` set it, before touching the process
+   mask; `test_sighold_sigrelse` also pins that a rejected call leaves
+   the mask empty and that a valid `sighold()`/`sigrelse()` pair still
+   works afterwards, so the [EINVAL] arm cannot be satisfied by refusing
+   everything.
 
 2. **`sigset()` cannot report SIG_HOLD, and `<signal.h>` does not define
    it.** `sigset.html` RETURN VALUE: "shall return SIG_HOLD if the
@@ -2137,6 +2189,7 @@ because they turned out to be implemented and passing.
 | wordexp | "[WRDE_SYNTAX] Shell syntax error, such as unbalanced parentheses or unterminated string" — all five paths | covered | test/posix-glob.c (`test_wordexp_syntax_errors`) |
 | wordexp | WRDE_REUSE: "The result shall be the same as if the application had called wordfree() and then called wordexp() without WRDE_REUSE"; WRDE_APPEND's "in the same order as before"; `we_wordv` NULL-termination | covered — the existing test checks the APPEND total but not the order, which is the half `glob()` gets wrong | test/posix-glob.c (`test_wordexp_reuse_and_append_order`) |
 | wordexp | WRDE_UNDEF → WRDE_BADVAL inside an arithmetic expansion, and the complement (an undefined name is zero without the flag) | covered | test/posix-glob.c (`test_wordexp_undef_in_arithmetic`) |
+| wordexp | XBD 2.6.4 Arithmetic Expansion → XBD 1.1.2 → ISO C 6.5.7p3: a shift whose count is negative or is not less than the width of the promoted left operand is *undefined*, so 2.6.4 specifies no result and an implementation may not simply perform the shift | **covered (bug fixed)** — `src/wordexp/arith.c`'s `apply_binop()` evaluated `cur << rhs` / `cur >> rhs` with no bound on `rhs` at all, for `<<`/`>>` and for the `<<=`/`>>=` compound forms, while the `/` and `%` cases beside it already guarded their own operand-dependent UB. Found by fuzz/fuzz_wordexp.c driving `__wordexp_arith()`; UBSan (`tools/asan-build.sh`, `-fno-sanitize-recover`) aborted the process on `$((1<<-1))`, `$((1>>-1))`, `$((1<<64))` and `$((1>>64))`, which is why the test had to be fenced whole rather than per-assertion. Fixed by `shift_count_ok()`, which refuses a count outside `[0, LONG_BIT)` with WRDE_SYNTAX — the code the sibling zero-divisor guard already uses — and by routing the in-range left shift through `unsigned long` so 6.5.7p4's overflowing shift wraps like every other overflow in that file. The ceiling is `LONG_BIT` (32 on both arches) rather than `sizeof(long) * CHAR_BIT`, so it is the same in the native sanitizer build, where the host compiler's `long` is 64 bits | test/posix-glob.c (`test_wordexp_arith_shift_bounds`) — both directions, both spellings, both ends of the accepted range, and a short-circuited branch that must not reach the guard at all |
 | wordexp | performing command substitution | N/A (pre-existing fence, now narrowed to just this) — no shell on this platform parses `$(...)`; `src/stdio/misc.c` hands shell work to `cmd.exe` | test/posix-glob.c (`test_wordexp_cmdsub_needs_a_shell`) |
 | wordexp | WRDE_SHOWERR: "Do not redirect stderr to /dev/null" | N/A — there is no subprocess whose stderr could be redirected, since command substitution always fails first | — |
 | wordexp | an unquoted `<newline>` as a WRDE_BADCHAR character | N/A — **genuinely ambiguous in the spec**: the same character is required to be IFS whitespace by XCU 2.6.5 and is listed under WRDE_BADCHAR, and the qualifier is "in an *inappropriate* context". ntlibc treats it as a field separator. Deliberately not asserted either way rather than pinning one reading | — |
@@ -2736,8 +2789,8 @@ clauses that are simply absent. **One assertion group comes out
 | ftw | *may fail* "[EINVAL] The value of the ndirs argument is invalid" | N/A — *may* fail; ntlibc does not validate `ndirs` and is conforming not to | — |
 | posix_fadvise | DESCRIPTION: every advice value is advisory and "shall have no effect on the semantics of other operations" (asserted by reading the file back after `POSIX_FADV_DONTNEED`); "The specified range need not currently exist in the file"; "If len is zero, all data following offset is specified"; RETURN VALUE returns the error number, not `-1`/`errno` | covered — all six `POSIX_FADV_*` values | test/posix-tail.c (`test_posix_fadvise`) |
 | posix_fadvise | *shall fail* "[EBADF] The fd argument is not a valid file descriptor"; the advice half of "[EINVAL] The value of advice is invalid" | covered | test/posix-tail.c (`test_posix_fadvise`) |
-| posix_fadvise | the other half of the same clause: "…or the value of len is less than zero" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_einval_negative_len`) |
-| posix_fadvise | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_espipe`) |
+| posix_fadvise | the other half of the same clause: "…or the value of len is less than zero" | covered — **FIXED**; `src/fcntl/fadvise.c` guards `len < 0` ahead of the advice switch | test/posix-tail.c (`test_posix_fadvise_einval_negative_len`) |
+| posix_fadvise | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | covered — **FIXED**; `src/fcntl/fadvise.c` now ends with `if (f->type == __FD_PIPE) return ESPIPE;`, the same predicate `posix_fallocate()` uses for its identically worded clause. Asserted on both ends of a `pipe()`; a FIFO is not separately testable (`mkfifo()` is `ENOSYS` here) and would not widen the test — NT has one `FILE_DEVICE_NAMED_PIPE` for both, so `__handle_type()` maps them onto the same `__FD_PIPE` | test/posix-tail.c (`test_posix_fadvise_espipe`) |
 | posix_fallocate | "If the offset+len is beyond the current file size, then posix_fallocate() shall adjust the file size to offset+len. Otherwise, the file size shall not be changed"; the range is really writable and readable back; "Space allocated … shall be freed by a successful call to creat() or open() that truncates the size of the file" | covered | test/posix-tail.c (`test_posix_fallocate`) |
 | posix_fallocate | *shall fail* `[EBADF]` (invalid fd), `[EINVAL]` (negative `offset` or `len`), `[ESPIPE]` (pipe/FIFO); *may fail* `[EINVAL]` for `len == 0` (asserted permissively, since it is optional) | covered | test/posix-tail.c (`test_posix_fallocate`) |
 | posix_fallocate | *shall fail* "[EFBIG] The value of offset+len is greater than the maximum file size" | covered — FIXED (5222c97 defined-behaviour [EFBIG]); the fenced defect was: the only way the implementation can produce it is by signed-integer overflow, which is undefined behaviour; see below | test/posix-tail.c (`test_posix_fallocate_efbig`) |
@@ -2812,20 +2865,44 @@ clauses that are simply absent. **One assertion group comes out
    every ancestor on the recursion path — `src/stat/stat.c` fills both
    with real values here, and `FTW_MOUNT` already relies on `st_dev`.
 
-3. **`posix_fadvise()` never looks at `len`.** `posix_fadvise.html`
-   *shall fail*: "[EINVAL] The value of advice is invalid, **or the
-   value of len is less than zero**." `src/fcntl/fadvise.c` opens
-   `(void)offset; (void)len;` and switches on `advice` alone. Measured:
-   `posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL)` returns 0. The
-   *advice* half of the same clause is implemented and passes, which
-   makes this a half-implemented shall-fail check rather than an
-   unimplemented function.
+3. **`posix_fadvise()` never looked at `len` — FIXED.**
+   `posix_fadvise.html` *shall fail*: "[EINVAL] The value of advice is
+   invalid, **or the value of len is less than zero**."
+   `src/fcntl/fadvise.c` opened `(void)offset; (void)len;` and switched
+   on `advice` alone, so `posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL)`
+   returned 0. It now returns `EINVAL` for `len < 0`, ahead of the
+   advice switch; `len == 0` keeps its own documented meaning ("all
+   data following offset is specified") and `offset` stays unchecked,
+   because this page's `[EINVAL]` names advice and len only.
+   `test_posix_fadvise_einval_negative_len` is un-fenced and runs.
 
-4. **`posix_fadvise()` returns 0 for a pipe or FIFO instead of
-   `[ESPIPE]`.** *Shall fail*: "[ESPIPE] The fd argument is associated
-   with a pipe or FIFO." The mechanism is already present one function
-   away in the same file — `posix_fallocate()` does `if (f->type ==
-   __FD_PIPE) return ESPIPE;`.
+4. **`posix_fadvise()` returned 0 for a pipe or FIFO instead of
+   `[ESPIPE]` — FIXED.** *Shall fail*: "[ESPIPE] The fd argument is
+   associated with a pipe or FIFO." `src/fcntl/fadvise.c` validated
+   `fd`, `len` and `advice` and then returned 0 without ever looking at
+   *what* the descriptor was, so
+   `posix_fadvise(pipefd, 0, 0, POSIX_FADV_NORMAL)` returned 0. This
+   page's "shall have no effect on the semantics of other operations"
+   latitude does not reach the clause: it says a conforming
+   implementation may do nothing, not that it may *succeed* on a
+   descriptor the ERRORS section requires it to refuse. The mechanism
+   was already present one function away in the same file —
+   `posix_fallocate()` does `if (f->type == __FD_PIPE) return ESPIPE;`
+   — and that is now the last check in `posix_fadvise()` too.
+
+   **Ordering, since POSIX orders none of the three against each
+   other.** `[EBADF]` stays first because it is forced, not chosen:
+   `f->type` cannot be read until `__fd_get()` has produced an `f`.
+   `[ESPIPE]` is placed *after* both halves of `[EINVAL]`, so a pipe
+   given a bogus advice reports `EINVAL`. The rule is the one
+   `posix_fallocate()` already follows — validate the arguments the
+   caller passed, then the object they name — chosen so the two
+   functions in this file cannot be caught disagreeing about a
+   descriptor that fails two clauses at once. `test_posix_fadvise_
+   espipe` asserts that case permissively (`EINVAL || ESPIPE`), the way
+   `test_posix_fadvise()` already does for `[EBADF]` against an invalid
+   advice, so the *choice* is documented here rather than frozen into
+   an assertion POSIX does not license.
 
 5. **`posix_fallocate()` reports `[EBADF]` where `[ENODEV]` is
    required, and never checks write permission.** Two clauses, one
@@ -2884,6 +2961,11 @@ implementations with the tests still un-fenced turns exactly twelve
 assertions red across the five groups. Everything was then re-fenced
 and both files reverted; nothing in `src/` is modified by this commit.
 
+**Since then the `src/fcntl/fadvise.c` half has landed for real**, one
+clause per commit — items 3, 4, 5 and 6 above are all marked FIXED and
+their tests run live. The two `nftw()` fences (items 1 and 2) are the
+only ones this file still carries.
+
 ### Observed behaviour where POSIX permits latitude (group J3)
 
 - **Two mutations that this file deliberately does *not* claim to
@@ -2935,8 +3017,12 @@ and both files reverted; nothing in `src/` is modified by this commit.
   function "shall have no effect on the semantics of other operations
   on the specified data, although it may affect the performance", so a
   validate-and-no-op implementation is correct and `src/fcntl/
-  fadvise.c`'s banner argues that case honestly. The two BUGs above are
-  about its *argument validation*, not its inaction.
+  fadvise.c`'s banner argues that case honestly. The two BUGs above
+  (3 and 4, both now fixed) were never about its inaction: one was its
+  *argument* validation (`len < 0`) and the other its *descriptor*
+  validation (`[ESPIPE]`). The latitude is over what the call may
+  **do**, and it does not extend to succeeding where the ERRORS
+  section says the call shall fail.
 - **`readv()`/`writev()` are not atomic with respect to other
   `read`/`write` calls (XBD 2.9.7).** `src/misc/uio.c`'s banner
   documents this as a deliberate, argued divergence rather than an
@@ -3009,7 +3095,7 @@ verdict recorded with its evidence (`flockfile`).
 |---|---|---|---|
 | snprintf | `fprintf.html` DESCRIPTION: "output bytes beyond the n-1st shall be discarded ... and a null byte is written at the end of the bytes actually written"; RETURN VALUE: "the number of bytes that would be written to s had n been sufficiently large excluding the terminating null byte" — exact fit, one short, `n == 1`, and a sentinel one byte past the buffer in each case | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | snprintf | RETURN VALUE: "If the value of n is zero ... nothing shall be written, the number of bytes that would have been written ... shall be returned, and s may be a null pointer" — both the non-null-`s` and null-`s` forms | covered | test/posix-stdio.c `test_snprintf_boundaries` |
-| snprintf | ERRORS: "[EOVERFLOW] The value of n is greater than {INT_MAX}" — a **shall fail**, not a may-fail | **BUG (fenced)** — no bound is checked at all; see below | test/posix-stdio.c `test_snprintf_eoverflow` |
+| snprintf / vsnprintf | ERRORS: "[EOVERFLOW] The value of n is greater than {INT_MAX}" — a **shall fail**, not a may-fail | covered — FIXED (this commit); the fenced defect was: no bound was checked at all, `n` went straight to the throwaway memory `FILE`'s `mem_size` and the call formatted normally. See below | test/posix-stdio.c `test_snprintf_eoverflow` |
 | sprintf | DESCRIPTION: "shall place output followed by the null byte"; RETURN VALUE: "the number of bytes written to s, excluding the terminating null byte" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | fprintf / printf / dprintf | DESCRIPTION: "If the format is exhausted while arguments remain, the excess arguments shall be evaluated but are otherwise ignored" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | fprintf family | the flag table's `'` (`<apostrophe>`) entry: "The integer portion of the result of a decimal conversion ... shall be formatted with thousands' grouping characters" — a `[CX]` flag, i.e. base POSIX, and in the POSIX locale a no-op that must still be *accepted* | covered — was a fenced BUG (`"%'d"` emitted literally, and no argument consumed); FIXED, see below | test/posix-stdio.c `test_printf_apostrophe_flag` |
@@ -3076,22 +3162,32 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
 
 ### Bugs found (groups K/L)
 
-1. **`snprintf()` does not fail with `[EOVERFLOW]` when `n` is greater
-   than `{INT_MAX}`.** `fprintf.html` ERRORS: "The snprintf() function
-   shall fail if: [EOVERFLOW] The value of n is greater than
-   {INT_MAX}." That is a *shall fail*, not a may-fail, so the call has
+1. **`snprintf()` did not fail with `[EOVERFLOW]` when `n` is greater
+   than `{INT_MAX}`.** FIXED — `src/stdio/printf.c`'s `vsnprintf()` now
+   refuses such a call before it formats anything, which covers
+   `snprintf()` too because that is its only variadic wrapper. The
+   description below is kept in the past tense as the record; the fence
+   is gone and `test_snprintf_eoverflow` asserts the clause for real,
+   for both entry points, with a sentinel byte proving `s` is untouched
+   and an `n == {INT_MAX}` case proving the boundary itself still
+   formats.
+
+   `fprintf.html` ERRORS: "The snprintf() function shall fail if:
+   [EOVERFLOW] The value of n is greater than {INT_MAX}." That is a
+   *shall fail*, not a may-fail, so the call has
    to return a negative value and set `errno` (RETURN VALUE: "If an
    output error was encountered, these functions shall return a
    negative value and set errno") rather than format.
-   `src/stdio/printf.c`'s `vxprintf_mem()` takes `n` straight to the
-   throwaway memory `FILE`'s `mem_size` and never compares it to
-   anything. Measured: `snprintf(b, (size_t)INT_MAX + 1, "z")` returns
-   1, leaves `errno` at 0, and writes `"z"`. The clause exists because
-   the return type is `int`: the return value is defined as the number
-   of bytes that *would* have been written had `n` been sufficiently
-   large, and for `n > INT_MAX` that value is not representable in the
-   return type at all — so the standard makes the call fail up front
-   instead of returning something that cannot be right.
+   `src/stdio/printf.c`'s `vxprintf_mem()` took `n` straight to the
+   throwaway memory `FILE`'s `mem_size` and never compared it to
+   anything. Measured before the fix: `snprintf(b, (size_t)INT_MAX + 1,
+   "z")` returned 1, left `errno` at 0, and wrote `"z"`. The clause
+   exists because the return type is `int`: the return value is defined
+   as the number of bytes that *would* have been written had `n` been
+   sufficiently large, and for `n > INT_MAX` that value is not
+   representable in the return type at all — so the standard makes the
+   call fail up front instead of returning something that cannot be
+   right.
 
    Worth naming the class rather than just the instance: this is an
    ERRORS "shall fail" argument check that was simply never written,
@@ -3261,8 +3357,8 @@ for the filesystem or console groups.
 | geteuid / getegid | geteuid.html's real-vs-effective distinction | N/A — NT has no set-user-ID bit and no saved set-user-ID; a process token is not switched by executing a file, so nothing on this platform can make the effective id differ from the real one. The agreement *is* asserted (test/posix-unistd.c's `test_access_real_effective_uid_identical` already leans on it) | — |
 | getgroups | "If gidsetsize is 0, getgroups() shall return the number of group IDs that it would otherwise return without modifying the array" | covered | test/posix-unistd-ids.c (`test_getgroups`) |
 | getgroups | "the value returned shall always be greater than or equal to one and less than or equal to the value of {NGROUPS_MAX}+1"; "The actual number of group IDs stored in the array shall be returned" — same count with room for all of them, and the first *n* entries actually written | covered | test/posix-unistd-ids.c (`test_getgroups`) |
-| getgroups | "[EINVAL] The gidsetsize argument is non-zero and less than the number of group IDs that would have been returned" — for a **negative** gidsetsize | **BUG** — see below | fenced, `test_getgroups` |
-| getgroups | the same [EINVAL] for a *positive* gidsetsize | N/A — unconstructible rather than unimplemented: the count is 1 and the smallest positive gidsetsize is 1, so no positive value is ever less than it. A one-group process cannot exhibit that error on any implementation | — |
+| getgroups | "[EINVAL] The gidsetsize argument is non-zero and less than the number of group IDs that would have been returned" — for a **negative** gidsetsize | covered — was a fenced BUG (`gidsetsize` decided only whether to *store*, never whether to *fail*); FIXED, see below | test/posix-unistd-ids.c (`test_getgroups`) |
+| getgroups | the same [EINVAL] for a *positive* gidsetsize | N/A — unconstructible rather than unimplemented: the count is 1 and the smallest positive gidsetsize is 1, so no positive value is ever less than it. A one-group process cannot exhibit that error on any implementation. `src/unistd/ids.c` compares against the count rather than against zero, so the check stays right if the count ever grows | — |
 | setuid / seteuid / setgid / setegid / setreuid / setregid | setuid.html RETURN VALUE "Upon successful completion, 0 shall be returned" for the request this platform can honestly grant (the id already in force), and setreuid.html's `(uid_t)-1` "left unchanged" form | covered | test/posix-unistd-ids.c (`test_setid_family`) |
 | setuid / setgid | "The setuid() function shall not affect the supplementary group list in any way" / "Any supplementary group IDs of the calling process shall remain unchanged" — observed through getgroups() | covered | test/posix-unistd-ids.c (`test_setid_family`) |
 | setuid / seteuid / setgid / setegid / setreuid / setregid | "[EPERM] The process does not have appropriate privileges and uid does not match the real user ID or the saved set-user-ID" (shall-fail, all six pages) | **BUG** — see below | fenced, `test_setid_family` |
@@ -3271,7 +3367,7 @@ for the filesystem or console groups.
 | getpgrp | getpgrp.html RETURN VALUE "shall always be successful and no return value is reserved to indicate an error"; ERRORS "No errors are defined" | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | getpgid | "If pid is equal to 0, getpgid() shall return the process group ID of the calling process" — agrees with getpgrp() and with getpgid(getpid()) | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | getsid | "If pid is (pid_t)0, it specifies the calling process"; `(pid_t)-1` reserved for the error return | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
-| getpgid / getsid | "[ESRCH] There is no process with a process ID equal to pid" (shall-fail, both pages) | **BUG** — see below | fenced, `test_process_group_and_session` |
+| getpgid / getsid | "[ESRCH] There is no process with a process ID equal to pid" (shall-fail, both pages) | covered — was a fenced BUG (`pid` was discarded by both, so no pid could fail); FIXED, see below. Asserted for an unallocated pid and for a negative one, with the pids that *do* name a process (0, `getpid()`) pinned as still answering | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | getpgid / getsid | "[EPERM] ... not in the same session as the calling process" | N/A — one fixed session for every process, and NT has no session or process-group object for src/process/spawn.c to put a child in a different one of (a Job object has no leader, no session and no controlling-terminal relationship) | — |
 | setpgid | "if pid is 0, the process ID of the calling process shall be used. Also, if pgid is 0, the process ID of the indicated process shall be used"; RETURN VALUE 0 on success | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | setpgid | "[EINVAL] The value of the pgid argument is less than 0" and "[ESRCH] The value of the pid argument does not match the process ID of the calling process or of a child process" (both shall-fail) | **BUG** — see below | fenced, `test_process_group_and_session` |
@@ -3285,7 +3381,7 @@ for the filesystem or console groups.
 | chown / lchown | "[ENOENT] A component of path does not name an existing file or path is an empty string" and "[ENOTDIR] A component of the path prefix names an existing file that is neither a directory nor a symbolic link to a directory" (both shall-fail) | **BUG** — see below | fenced, `test_chown_family` |
 | fchown | "[EBADF] The fildes argument is not an open file descriptor" (shall-fail) | **BUG** — same fence group | fenced, `test_chown_family` |
 | fchownat | "[EBADF] The path argument does not specify an absolute path and the fd argument is neither AT_FDCWD nor a valid file descriptor" and its [ENOENT] (both shall-fail) | **BUG** — same fence group | fenced, `test_chown_family` |
-| fchownat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, so accepting an undefined flag bit is permitted; not fenced, unlike unlinkat()'s masking (unlinkat.html makes its [EINVAL] shall-fail, and there the accepted bit changes what the call does — fchownat() does nothing either way) | test/posix-unistd-ids.c (`test_chown_family`) |
+| fchownat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, so accepting an undefined flag bit is permitted; not fenced, unlike unlinkat()'s masking, which was a bug and is fixed (unlink.html makes its [EINVAL] shall-fail, and there the accepted bit changed what the call did — fchownat() does nothing either way) | test/posix-unistd-ids.c (`test_chown_family`) |
 | chown family | [EACCES], [EPERM], [EROFS], [ELOOP], [EIO], [EINTR] | N/A — each needs a second security principal, a read-only mount, a symlink cycle handed to NT's own resolver, or is a may-fail. Unreachable *even if the four functions were fully implemented*, which is what separates them from the fenced rows above | — |
 | alarm | alarm.html ERRORS "The alarm() function is always successful, and no return value is reserved to indicate an error"; RETURN VALUE "Otherwise, alarm() shall return 0" with no request outstanding | covered | test/posix-unistd-ids.c (`test_alarm`) |
 | alarm | "shall cause the system to generate a SIGALRM signal ... after the number of realtime seconds specified"; "If there is a previous alarm() request with time remaining, alarm() shall return a non-zero value that is the number of seconds until the previous request would have generated a SIGALRM" | **UNIMPL** — see below | fenced, `test_alarm` |
@@ -3300,16 +3396,22 @@ for the filesystem or console groups.
 ### Bugs found (unistd.h identity group)
 
 Six, all shall-fail error clauses, all probed on this tree rather than
-inferred, none fixed here.
+inferred, none fixed by the audit commit itself. An entry marked FIXED
+has been corrected since, and its description is kept in the past tense
+as the record; the rest still stand as found.
 
-1. **`getgroups()` succeeds for a negative `gidsetsize`.**
-   `getgroups.html` ERRORS: "[EINVAL] The gidsetsize argument is
-   non-zero and less than the number of group IDs that would have been
-   returned." -1 is non-zero and less than the 1 this implementation
-   returns. `src/unistd/ids.c:20` uses `n` only to decide whether to
-   *store*, never whether to *fail*, so `getgroups(-1, list)` reports
-   "1 group ID stored" into an array it did not write and a caller that
-   trusts the return reads uninitialised memory.
+1. **`getgroups()` succeeded for a negative `gidsetsize`.** FIXED —
+   `src/unistd/ids.c`'s `getgroups()` now compares `gidsetsize` against
+   the count it would return, and `test_getgroups` asserts the clause
+   unfenced. The description is kept in the past tense as the record of
+   what was wrong. `getgroups.html` ERRORS: "[EINVAL] The gidsetsize
+   argument is non-zero and less than the number of group IDs that
+   would have been returned." -1 is non-zero and less than the 1 this
+   implementation returns. `src/unistd/ids.c:20` used `n` only to
+   decide whether to *store*, never whether to *fail*, so
+   `getgroups(-1, list)` reported "1 group ID stored" into an array it
+   did not write and a caller that trusted the return read
+   uninitialised memory.
 
 2. **The whole `set*id` family reports success for requests it did not
    carry out, including ones POSIX requires it to refuse.**
@@ -3331,12 +3433,29 @@ inferred, none fixed here.
    current one is both what the page requires and what the
    single-identity model actually means.
 
-3. **`getpgid()`/`getsid()` answer for a process that does not exist.**
-   Both pages: "[ESRCH] There is no process with a process ID equal to
-   pid", shall-fail. `src/unistd/ids.c:21,25` discard `pid`. This needs
+3. **`getpgid()`/`getsid()` answered for a process that does not
+   exist.** FIXED — both now resolve `pid` through `pid_exists()` in
+   `src/unistd/ids.c` before answering, and `test_process_group_and_session`
+   asserts the clause unfenced. The description is kept in the past
+   tense as the record of what was wrong. Both pages: "[ESRCH] There is
+   no process with a process ID equal to pid", shall-fail.
+   `src/unistd/ids.c:21,25` were `{ (void)p; return 1; }`, discarding
+   `pid`, so there was no pid for which either could fail. This needed
    no session model to get right: `src/process/children.c` already
    tracks every process this one created and `src/process/wait.c`
-   already distinguishes a live child from an unknown pid.
+   already distinguishes a live child from an unknown pid. The fix
+   takes that lookup and the one `kill()`/`getpriority()` already use:
+   pid 0 and the caller's own pid are the caller; a pid in the child
+   table is a child, live or exited-but-unreaped (which is still a
+   process POSIX-wise, and is the case an `NtOpenProcess` probe alone
+   could get wrong, Wine and Windows disagreeing about whether an
+   exited pid is still openable — see `src/process/wait.c`);
+   anything else is put to the object manager by CLIENT_ID, where
+   STATUS_INVALID_CID means [ESRCH] and STATUS_ACCESS_DENIED means the
+   process exists and is merely not ours to open. A negative pid names
+   no process and is refused without an NT call. The answer for a pid
+   that *does* exist is unchanged — the fixed 1 of the one process
+   group and one session this platform has.
 
 4. **`setpgid()` accepts a negative `pgid` and an unrelated `pid`.**
    `setpgid.html`: "[EINVAL] The value of the pgid argument is less
@@ -3492,27 +3611,40 @@ underneath.
 | linkat | "[ENOTDIR] The path1 or path2 argument is not an absolute path and fd1 or fd2, respectively, is a file descriptor associated with a non-directory file" — both sides | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "[ENOENT] A component of either path prefix does not exist ... or path1 or path2 points to an empty string" — the **path2** side (`test/posix-unistd.c` covers path1) | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "[EEXIST] The path2 argument resolves to an existing directory entry" — when path2 is path1, and when it is a directory | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
-| linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | **BUG** — see below | fenced, `test_linkat_remaining`; the *failure itself* and the absence of debris are asserted unfenced |
+| linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | covered — was a BUG (a directory path1 reported `EISDIR`, which `link.html`'s ERRORS list does not contain); **fixed in the commit that unfenced it**: `src/unistd/link.c`'s `linkat()` reads path1's attributes off the handle it already holds and returns `EPERM` before path2 is resolved, with `STATUS_FILE_IS_A_DIRECTORY` from `NtSetInformationFile` mapped to `EPERM` at that call site as the fallback | test/posix-unistd-links.c (`test_linkat_remaining`) — the errno, the absence of debris, and a regular-file positive control (both `linkat()` and `link()` still make a real hard link) |
 | linkat | "If path1 names a symbolic link ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for the symbolic link path1 and not its target" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | **BUG** — see below; supersedes this ledger's earlier N/A for the clause | fenced, `test_linkat_remaining` |
 | linkat | "shall atomically create a new link for the existing file and the link count of the file shall be incremented by one"; [EEXIST]; [ENOENT] for path1 and the empty string; [EBADF] on either side; dirfd-relative creation | covered — pre-existing | test/posix-unistd.c (`test_linkat`) |
-| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail; recorded with the `unlinkat()` flag-masking fence in test/posix-unistd.c rather than duplicated | — |
+| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, and linkat() likewise ignores its flag argument outright; unasserted (unlike unlinkat()'s [EINVAL], which is a shall-fail and is now enforced) | — |
 | linkat | [EMLINK], [EXDEV], [ENOSPC], [EROFS], [EACCES], [ELOOP] | N/A — {LINK_MAX} is 1023 here so [EMLINK] means creating a thousand entries per run for a limit the platform rather than this code enforces; [EXDEV] needs two filesystems a CI image is not guaranteed to have; the rest as for symlinkat | — |
 
 ### Bugs found (unistd.h `*at()` link group)
 
-1. **`linkat()` on a directory reports `EISDIR`, an errno `link.html`
-   does not list.** The page's shall-fail list has "[EPERM] The file
-   named by path1 is a directory and either the calling process does
-   not have appropriate privileges or the implementation prohibits
-   using link() on directories" — NTFS does prohibit it, so that
-   clause applies exactly. `EISDIR` appears nowhere in `link.html`'s
-   ERRORS. `src/unistd/link.c`'s `linkat()` has no directory case at
-   all: it lets `NtSetInformationFile` fail with
-   `STATUS_FILE_IS_A_DIRECTORY` and hands that to
+1. **`linkat()` on a directory reported `EISDIR`, an errno
+   `link.html` does not list — fixed.** The page's shall-fail list has
+   "[EPERM] The file named by path1 is a directory and either the
+   calling process does not have appropriate privileges or the
+   implementation prohibits using link() on directories" — NTFS does
+   prohibit it, so that clause applied exactly. `EISDIR` appears
+   nowhere in `link.html`'s ERRORS. `src/unistd/link.c`'s `linkat()`
+   had no directory case at all: it let `NtSetInformationFile` fail
+   with `STATUS_FILE_IS_A_DIRECTORY` and handed that to
    `__set_errno_status()`, whose table maps it to `EISDIR`. That
    mapping is right for `open()` and `rename()`, where `EISDIR` *is* a
-   specified errno; it is this call site that needs to translate.
+   specified errno; it was this call site that had to translate.
+
+   **Fixed in the commit that unfenced it.** `linkat()` now asks the path1
+   handle it has already opened for `FileAttributeTagInformation` and
+   returns `EPERM` for a directory before path2 is resolved, so the
+   errno does not depend on which status a particular filesystem
+   chooses; a `STATUS_FILE_IS_A_DIRECTORY` that still reaches the
+   `NtSetInformationFile` call is mapped to `EPERM` there as well, for
+   the volume whose driver cannot answer the attribute query. The
+   directory predicate is `src/stdio/misc.c`'s `isdir_attrs()`, so a
+   symbolic link to a directory stays a non-directory file the way
+   POSIX, `renameat()` and `lstat()` already have it. A regular-file
+   path1 is untouched, and `test_linkat_remaining()` now pins that
+   with a positive control beside the `EPERM` assertion.
 
 2. **`linkat()` ignores `flags`, so `AT_SYMLINK_FOLLOW` does nothing.**
    `link.html` distinguishes two behaviours by that flag; `src/unistd/
@@ -3682,8 +3814,8 @@ to the priority-6 section ("unistd.h, fcntl.h, sys/stat.h") above:
 - `sync` — one row
 - `getlogin / getlogin_r` — one row
 - `fchown / fchownat / lchown / setregid / setpgrp / setsid /
-  tcgetpgrp / tcsetpgrp` — one row, plus the fenced `[EBADF]` BUG for
-  the last two
+  tcgetpgrp / tcsetpgrp` — one row, which also carries the `[EBADF]`
+  BUG the last two used to have (fixed, un-fenced)
 
 So this ledger already carries them and **restating them here as rows
 of their own would double-count every one**. What is stale is
@@ -4244,7 +4376,7 @@ self-check is the only thing that runs.
 | `fcntl.h` | `fcntl.h.html` DESCRIPTION — the file-access-mode list ("The values shall be unique, except that `O_EXEC` and `O_SEARCH` may have equal values"), plus "`O_TTY_INIT` ... can have the value zero and in this case it need not be bitwise-distinct" | **ABSENT** | **UNIMPL (fenced)** — `O_EXEC`, `O_SEARCH`, `O_TTY_INIT` are in no header in `include/`; every other `O_*` POSIX lists, including `O_DSYNC`, `O_RSYNC`, `O_DIRECTORY` and `O_NOFOLLOW`, is present. None of the three is optional, and `O_TTY_INIT`'s permission to be zero is the standard's own way of saying an implementation with nothing to do for it still defines it. The fence covers the **header constants only** — whether `open()` would then have to give `O_SEARCH` a traverse-only directory handle is a separate, larger gap it does not claim. Observed: fails to **compile**, `'O_EXEC' undeclared` | `test/posix-io.c` fence `test_fcntl_h_access_mode_constants` |
 | `unistd.h` | `unistd.h.html` DESCRIPTION — "The `<unistd.h>` header shall define the following symbolic constants for `sysconf()`:", 125 `_SC_*` names, unconditional | **ABSENT** | **UNIMPL (fenced)** — 15 of 125 defined, **110 absent**. Acceptance criterion is **both** halves, not just the `#define`: `sysconf.html` specifies `[EINVAL]` only for an *invalid* name, and every name on the list is valid by being on it, so a definition alone would leave `src/unistd/sysconf.c`'s `default: errno = EINVAL` answering "no such name" for a name `<unistd.h>` mandates — the declared-but-unimplemented trap exactly. The truthful answer for an unsupported option is `-1` with **errno unchanged**, which the test accepts. Consumer impact: autoconf/gnulib probe `_SC_SYMLOOP_MAX`, `_SC_IOV_MAX`, `_SC_GETPW_R_SIZE_MAX` routinely. Observed: fails to **compile**, `'_SC_2_CHAR_TERM' undeclared` | `test/posix-unistd.c` fence `test_unistd_sysconf_names` |
 | `unistd.h` | `unistd.h.html` DESCRIPTION — "...the following symbolic constants for `pathconf()`:", 21 `_PC_*` names | **ABSENT** | **UNIMPL (fenced)** — 9 of 21 defined, **12 absent** (`_PC_2_SYMLINKS`, `_PC_ALLOC_SIZE_MIN`, `_PC_ASYNC_IO`, `_PC_FILESIZEBITS`, `_PC_PRIO_IO`, the four `_PC_REC_*`, `_PC_SYMLINK_MAX`, `_PC_SYNC_IO`, `_PC_TIMESTAMP_RESOLUTION`). Unlike the `_SC_` list this does **not** require every name to be answerable — `fpathconf.html` makes "[EINVAL] The implementation does not support an association of the variable *name* with the specified file" a *may fail* — so the test asserts only that both entry points decide the *same* thing, extending `test_fpathconf`'s existing shape. Observed: fails to **compile**, `'_PC_2_SYMLINKS' undeclared` | `test/posix-unistd.c` fence `test_unistd_pathconf_names` |
-| `unistd.h` | `unistd.h.html` DESCRIPTION — "...the following symbolic constants for the `confstr()` function:", 31 `_CS_*` names | **ABSENT** | **UNIMPL (fenced)** — only `_CS_PATH` defined; **30 absent** (the `_CS_POSIX_V6_`/`_CS_POSIX_V7_` programming-model `CFLAGS`/`LDFLAGS`/`LIBS` triples, `_CS_POSIX_V7_THREADS_*`, both `_WIDTH_RESTRICTED_ENVS`, `_CS_V6_ENV`/`_CS_V7_ENV`). These are what a `getconf`-driven build system asks for — the bootstrap situation this libc is a target of. Acceptance criterion deliberately **the definitions only**: `confstr()`'s answers are entangled with the already-fenced `confstr()` `[EINVAL]` BUG, so while that stands no assertion can tell "recognized, empty value" from "unrecognized", and this fence will not build a claim on another agent's open defect. Observed: fails to **compile**, `'_CS_POSIX_V6_ILP32_OFF32_CFLAGS' undeclared` | `test/posix-unistd.c` fence `test_unistd_confstr_names` |
+| `unistd.h` | `unistd.h.html` DESCRIPTION — "...the following symbolic constants for the `confstr()` function:", 31 `_CS_*` names | **ABSENT** | **UNIMPL (fenced)** — only `_CS_PATH` defined; **30 absent** (the `_CS_POSIX_V6_`/`_CS_POSIX_V7_` programming-model `CFLAGS`/`LDFLAGS`/`LIBS` triples, `_CS_POSIX_V7_THREADS_*`, both `_WIDTH_RESTRICTED_ENVS`, `_CS_V6_ENV`/`_CS_V7_ENV`). These are what a `getconf`-driven build system asks for — the bootstrap situation this libc is a target of. Acceptance criterion deliberately **the definitions only**: when this was written `confstr()`'s answers were entangled with the then-open `confstr()` `[EINVAL]` BUG, so no assertion could tell "recognized, empty value" from "unrecognized". That BUG is now fixed, and the fix names the follow-on precisely — `confstr()`'s recognized set is a closed `switch` over the `_CS_*` names `<unistd.h>` defines, so each of the 30 must gain a `case` in `src/unistd/sysconf.c` as it gains its `#define`, or it will be reported `[EINVAL]`. Observed: fails to **compile**, `'_CS_POSIX_V6_ILP32_OFF32_CFLAGS' undeclared` | `test/posix-unistd.c` fence `test_unistd_confstr_names` |
 | `unistd.h` | `unistd.h.html` "Constants for Options and Option Groups" — the thirteen constants whose text reads "This symbol shall **always** be set to the value 200809L", as against the section's general "The following symbolic constants, **if defined** in `<unistd.h>`, shall have a value of -1, 0, or greater" | **ABSENT** | **UNIMPL (fenced)** — none of the thirteen is defined, and no `_POSIX_*`/`_XOPEN_*` option constant at all beyond `_POSIX_VERSION`/`_POSIX2_VERSION`. **The acceptance criterion here is not "add a `#define`"**, which is why it is a clause of its own: `200809L` is a compile-time promise the application may test with `#if` and cannot re-check at runtime. Seven of the thirteen are thread-related and the pthread family is a recorded absence — defining `_POSIX_THREADS` as `200809L` with no threads would be a false claim and strictly worse than the omission. The gap is the **option**, not the constant. What the omission costs today: `#ifdef _POSIX_TIMERS` gets the same silence from a libc that *has* `clock_gettime()`/`clock_nanosleep()` as from one that has nothing. Observed: fails to **compile**, `'_POSIX_ASYNCHRONOUS_IO' undeclared` | `test/posix-unistd.c` fence `test_unistd_mandatory_option_constants` |
 | `unistd.h` | `unistd.h.html` "Constants for Functions" — "`_POSIX_VDISABLE` This symbol shall be defined to be the value of a character that shall disable terminal special character handling... This symbol shall always be set to a value other than -1" | **ABSENT** | **UNIMPL (fenced)** — not defined anywhere in `include/`, although `pathconf(_PC_VDISABLE)` already answers `0` (`src/unistd/sysconf.c`) and `<termios.h>` is implemented and audited (group A): the value already exists inside the library, only the constant naming it is missing. Mandatory in its own right — it is not in the options section and carries no option marker. Consumer impact: coreutils' `stty` reads it at **compile** time to print and set `undef`, so its absence is a build failure, not a degraded answer. Acceptance criterion: the definition, agreeing with what `pathconf(_PC_VDISABLE)` already reports. Observed: fails to **compile**, `'_POSIX_VDISABLE' undeclared` | `test/posix-unistd.c` fence `test_unistd_posix_vdisable` |
 | `limits.h` | `limits.h.html` "Minimum Values" — "The `<limits.h>` header shall define the following symbolic constants with the values shown", for the three entries carrying **no** option-group marker | present | covered — FIXED: the three unmarked Minimum Values are defined with the standard's exact values (4/128/64). They are portable floors an application may rely on, not a claim about ntlibc, which is why defining them is safe while threads are absent | `test/posix-limits.c` fence `test_limits_minimum_values_unmarked` |
@@ -4282,18 +4414,60 @@ The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
 
+## The shell engine's IO_NUMBER lexer (XCU 2.7, 2.10.1)
+
+This ledger is organised by header and function, and the shell engine
+(`src/sh/`, tested by `test/sh-engine.c`) is neither: it implements XCU
+chapter 2, the Shell Command Language, which has no function page of
+its own. There is therefore no chapter-2 section above, and this one
+does not try to become the missing audit of the whole chapter — it
+records the one clause whose fence was lifted, so that
+`tools/lint-ledger.sh`'s two directions have something to agree with
+and a successor auditing the rest of chapter 2 has a place to start.
+
+| clause | requirement | status | test |
+| --- | --- | --- | --- |
+| XCU 2.7 Redirection, 2.10.1 Shell Grammar Lexical Conventions | "the number shall be a file descriptor number"; IO_NUMBER is a token "made up solely of digits" immediately followed by `<` or `>` — with no length limit stated on the digit string | covered — **was a fenced BUG, now FIXED**: `src/sh/parse.c` accumulated the digits into an `int` with an unguarded `v = v * 10 + (w[i] - '0')`, so fifteen digits was signed overflow (undefined behaviour, and where it did not trap the redirection kept whatever the wrap produced — possibly a negative fd) | test/sh-engine.c (`test_ionum_overflow`) |
+
+The clause puts no bound on the digit string, but the value has to
+become a redirection's `fd`, which is an `int`, so a digit string that
+does not fit one names no file descriptor that could ever be
+redirected. The lexer now guards the multiply and diagnoses such a
+string (`file descriptor number too large: ...`) instead of wrapping
+it. Demoting it to an ordinary WORD was the other candidate and was
+rejected: it would silently turn `2147483648<x` into a command *named*
+`2147483648` — a different program, accepted without a word — which is
+exactly the "subtly wrong is worse than no shell" failure
+`test/sh-design.md` says matters most here.
+
+The boundary is asserted from both sides, so the guard cannot be
+satisfied by refusing every IO number: `2147483647<x` (INT_MAX, in
+range by one) still lexes as an IO_NUMBER and reaches the redirection
+carrying that value, and `cmd 2>out 10<in` still parses with `fd` 2 and
+10.
+
+The defect was found by `fuzz/fuzz_shparse.c` under UBSan; that
+harness's `ionum_fence()` — which kept the fuzzer off any input with
+ten or more consecutive digits — has been deleted along with the fence.
+
+**Two other fences remain in `test/sh-engine.c`** — a redirection-list
+leak and a here-document queue leak. Neither is recorded here, and
+neither is this section's business; both are listed in
+`tools/ledger-baseline.txt` as class-B entries — fenced, with no row in
+this file — which is where the rest of the chapter-2 audit will have to
+start. This paragraph said *four* until the section below landed: the
+two printer round-trip bugs it counted are recorded there now, along
+with a third, and their baseline entries are gone.
 
 ## XCU 2.9.5 Function Definition Command — the parse/print fixed point (group V)
 
-Every other section of this file buckets a *System Interfaces* function.
-This one does not, and that is why the three rows below had no ledger
-entry at all until now: they are fences in `test/sh-engine.c`, which
-tests the Shell Command Language engine in `src/sh/` rather than any
-`<header.h>` interface, so no function-granular table has a place for
-them. `tools/lint-ledger.sh` reported all three as its class B ("this is
-fenced, but no table row records it as fenced") and two of them were
-parked in `tools/ledger-baseline.txt` for exactly that reason. Recording
-them here is what lets that baseline shrink.
+The section above says why the shell engine has no home in a ledger
+organised by header and function; this is the second such section, and
+it covers a different clause group. All three rows below are fences in
+`test/sh-engine.c` that `tools/lint-ledger.sh` reported as its class B
+("this is fenced, but no table row records it as fenced"), and two of
+them were parked in `tools/ledger-baseline.txt` for exactly that
+reason. Recording them here is what lets that baseline shrink.
 
 The claim under test is `src/sh/print.c`'s own banner, and it is a
 property rather than a clause: **parse -> print -> parse -> print must
@@ -4321,3 +4495,4 @@ list, so it lands inside the captured text and reprints where it was.
 The first row above is a gap in which *separator* stage 7b's cases put
 after a function definition, not a gap in whether they cover function
 definitions at all.
+

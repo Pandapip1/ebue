@@ -34,6 +34,20 @@
  *   #if 0 / * UNIMPL: <requirement + citation> * /  -- not implemented
  *   here, but implementable; the fence comment names the mechanism.
  *
+ * One boundary between the last two is worth stating outright, because
+ * three fences in this file got it wrong and
+ * test/verification-coverage-accounting.md section 5 had to find them:
+ * a clause whose CODE EXISTS but whose TEST FIXTURE cannot be built
+ * here is N/A, not UNIMPL.  UNIMPL's contract is "absent, but
+ * implementable, and here is the mechanism"; a fence with nothing
+ * absent and no mechanism to name is not making that claim.  N/A's
+ * definition in test/POSIX-COVERAGE.md already covers it -- "the
+ * clause cannot be triggered/observed under Wine" -- and such an N/A
+ * is normally conditional, so it carries an expiry condition naming
+ * what would make the fixture buildable.  The three are GLOB_ERR/
+ * errfunc, GLOB_NOESCAPE, and nftw()'s FTW_PHYS, each retagged with
+ * its reasoning at the fence.
+ *
  * Every function in this group is UNIMPL or N/A -- there are no BUGs,
  * because there is no code to be wrong yet.  Fenced bodies are written
  * as real, runnable assertions (real CHECK()s against real locally
@@ -426,7 +440,7 @@ static void test_glob_mark(void)
 	rmdir("subdir");
 }
 
-/* UNIMPL: glob.html GLOB_ERR + errfunc -- "glob() shall call
+/* N/A: glob.html GLOB_ERR + errfunc -- "glob() shall call
  * (*errfunc)(), if errfunc is not a null pointer, when it encounters a
  * directory that it cannot open or read. ... If errfunc returns
  * non-zero, or if the GLOB_ERR flag is set, glob() shall stop the scan
@@ -435,20 +449,65 @@ static void test_glob_mark(void)
  * (the failing pathname) and eerrno (the errno set by opendir(),
  * readdir(), or stat()).
  *
- * Left fenced, still: src/glob/glob.c's errfunc/GLOB_ERR plumbing is
- * implemented (opendir()/readdir() failures are routed to errfunc and
- * abort the scan exactly as below), but this test's fixture cannot be
- * built on this platform. Verified directly (mkdir + chmod(dir, 0),
- * then opendir()): under Wine, chmod() to mode 0 succeeds but does not
- * actually revoke this process's own access -- opendir() on that
- * directory still succeeds (errno stays 0), because the process token
- * that created the directory retains access regardless of the mode
- * bits chmod() writes (there is no NT ACL layer here refusing the
- * owner, the way a real EACCES fixture needs). That is an environment
- * limitation, not a glob() bug: nothing this implementation can do
- * makes opendir() fail on a directory the OS is still willing to open
- * for it. */
-#if 0 /* UNIMPL: glob.html GLOB_ERR/errfunc, fixture not constructible under Wine, see above */
+ * RETAGGED UNIMPL -> N/A, and this fence is the anchor for the group
+ * of three (GLOB_NOESCAPE below, nftw()'s FTW_PHYS at the end of this
+ * file) that share the reasoning.  UNIMPL means "absent, but
+ * implementable; the fence names the mechanism", and NEITHER half of
+ * that is true here.  src/glob/glob.c's errfunc/GLOB_ERR plumbing IS
+ * implemented -- opendir()/readdir() failures are routed to errfunc
+ * and abort the scan exactly as below -- so there is no absent code to
+ * point at and no NT mechanism left to name.  What cannot be built is
+ * the FIXTURE.  Verified directly (mkdir + chmod(dir, 0), then
+ * opendir()): chmod() to mode 0 succeeds but does not actually revoke
+ * this process's own access -- opendir() on that directory still
+ * succeeds (errno stays 0), because the process token that created the
+ * directory retains access regardless of the mode bits chmod() writes
+ * (there is no NT ACL layer here refusing the owner, the way a real
+ * EACCES fixture needs).  Nothing this implementation can do makes
+ * opendir() fail on a directory the OS is still willing to open for
+ * it, which is POSIX-COVERAGE.md's N/A case verbatim: "the clause
+ * cannot be triggered/observed under Wine".
+ *
+ * Two things in the tree already said so and the fence did not.
+ * POSIX-COVERAGE.md's row for this exact clause has read "N/A
+ * (pre-existing fence)" all along, so the fence was the odd one out
+ * rather than the ledger; and test/verification-coverage-accounting.md
+ * section 5 classes it, with its two siblings, as **F**: "mis-tagged:
+ * they describe the environment, which is what rc=77 is for, not the
+ * implementation."  That section proposed either a fifth tag or better
+ * fence text; the third option it did not consider is that N/A is
+ * already the right tag, because "cannot be observed here" is what N/A
+ * has always meant in this tree.
+ *
+ * EXPIRY CONDITION, in the style test/posix-stdio.c's flockfile group
+ * uses: this N/A is conditional, not permanent.  It expires the day a
+ * directory this process cannot open can be created -- either ntlibc's
+ * chmod() gaining real DACL storage (the deny ACE argued for in
+ * test/posix-unistd.c's chmod group), or a run on real Windows where
+ * such a directory can be made by other means.  The body below is
+ * written to run unmodified when that holds.  Whoever gets there
+ * should also assert the false-GLOB_ABORTED defect POSIX-COVERAGE.md
+ * records against this same fixture under "Observed behaviour where
+ * POSIX permits latitude": src/glob/glob.c clears errno around its
+ * readdir() loop but every continue skips the clear.
+ *
+ * HOW THE "cannot" IS HELD, and what is still owed here.  The chmod-0
+ * observation above was made by hand, and a hand-made impossibility
+ * claim in a comment is a decaying measurement: it is true when
+ * written and nothing re-checks it.  The tree already has the pattern
+ * that fixes that -- test/posix-tail.c's test_nftw_symlinks() ATTEMPTS
+ * its fixture on every run, prints a SKIP line naming the mechanism
+ * and errno when it cannot be built, and counts the group unverified
+ * (exit 77) instead of silently passing; the FTW_PHYS fence at the end
+ * of this file is covered by exactly that probe.  This clause and
+ * GLOB_NOESCAPE below have no such probe, and this file has no
+ * unverified/77 machinery at all.  Converting these two to run-time
+ * probes on that model is the natural follow-on and is deliberately
+ * not done in the same change as the retag: the assertions below would
+ * then be live, and the false-GLOB_ABORTED defect named in the
+ * previous paragraph is a known way for them to fail the day the
+ * fixture becomes buildable. */
+#if 0 /* N/A: glob.html GLOB_ERR/errfunc, fixture not constructible under this permission model, see above */
 static int glob_err_seen;
 static char glob_err_path[260];
 static int glob_err_errno;
@@ -482,21 +541,44 @@ static void test_glob_err_callback(void)
 }
 #endif
 
-/* UNIMPL: glob.html GLOB_NOESCAPE -- "backslash escaping is disabled."
+/* N/A: glob.html GLOB_NOESCAPE -- "backslash escaping is disabled."
  * Without it, backslash in pattern escapes the next character to a
  * literal, same as fnmatch()'s default (glob() "implements the rules
  * defined in XCU Pattern Matching Notation").
  *
- * Left fenced, still: the fixture this needs -- a file literally named
- * "a*b" -- cannot exist on this platform at all. NTFS reserves '*' as
- * a wildcard character in the filesystem itself and refuses to create
- * a file whose name contains one (verified: creat("a*b", ...) fails
- * ENOENT/EINVAL here, not a glob()/fnmatch() problem). This is a
- * platform fixture limitation, not a gap in the implementation above
- * it, which already handles GLOB_NOESCAPE via fnmatch()'s FNM_NOESCAPE
- * (see src/glob/glob.c and src/fnmatch/fnmatch.c's own, separately
- * unfenced FNM_NOESCAPE coverage in test_fnmatch_escape). */
-#if 0 /* UNIMPL: glob.html GLOB_NOESCAPE, unreachable fixture on NTFS, see above */
+ * RETAGGED UNIMPL -> N/A, second of the group; see the GLOB_ERR fence
+ * above for the shared reasoning.  This is the least arguable of the
+ * three, and the only one that is PERMANENT rather than conditional.
+ * The behaviour is implemented -- src/glob/glob.c routes GLOB_NOESCAPE
+ * to fnmatch()'s FNM_NOESCAPE, which src/fnmatch/fnmatch.c provides
+ * and test_fnmatch_escape covers, unfenced -- and the fixture this
+ * test needs, a file literally named "a*b", cannot exist on this
+ * platform at all.  NTFS reserves '*' as a wildcard character in the
+ * filesystem itself and refuses to create a file whose name contains
+ * one (verified: creat("a*b", ...) fails ENOENT/EINVAL here, not a
+ * glob()/fnmatch() problem).  Unlike its two siblings that is a fact
+ * about the filesystem, not about Wine or about ntlibc's chmod(), so
+ * there is no expiry condition short of running this library over a
+ * filesystem that is not NTFS -- which is outside what this port
+ * targets.
+ *
+ * What is NOT claimed: that glob()'s escape handling goes untested.
+ * It is tested, through fnmatch(), where the same pattern grammar
+ * lives and needs no file to exist (src/glob/glob.c:239 hands
+ * GLOB_NOESCAPE straight to fnmatch()'s FNM_NOESCAPE, and
+ * src/fnmatch/fnmatch.c:170 is where it is honoured).  What is
+ * unreachable is only glob()'s own end-to-end path from an escaped
+ * pattern to a matching directory ENTRY, because the entry cannot be
+ * made to exist.
+ *
+ * Same caveat as the GLOB_ERR fence above about how the "cannot" is
+ * held: the creat("a*b") observation was made by hand and nothing
+ * re-checks it on each run.  It is the sturdiest of the three -- a
+ * filesystem-level reservation rather than a permission model or a
+ * Wine version -- but sturdiest is not self-verifying, and the
+ * run-time-probe conversion that fence describes would cover this one
+ * on the same terms. */
+#if 0 /* N/A: glob.html GLOB_NOESCAPE, fixture filename unrepresentable on NTFS, see above */
 static void test_glob_noescape(void)
 {
 	glob_t g;
@@ -914,64 +996,48 @@ static void test_wordexp_arith_overflow_wraps(void)
 	wordfree(&we);
 }
 
-#if 0 /* BUG: XBD 2.6.4 Arithmetic Expansion -- the expression "shall be
-	processed according to the rules given in [XBD 1.1.2] Arithmetic
-	Precision and Operations", and 1.1.2 says evaluation "shall be
-	equivalent to that described in Section 6.5, Expressions, of the
-	ISO C standard". ISO C 6.5.7p3 makes a shift whose right operand
-	is negative, or is greater than or equal to the width of the
-	promoted left operand, *undefined behaviour* -- so an
-	implementation of 2.6.4 may not simply perform it.
-
-	src/wordexp/arith.c's apply_binop() does:
-
-	    case 'L': return cur << rhs;    ("<<=" / "<<")
-	    case 'R': return cur >> rhs;    (">>=" / ">>")
-
-	with no bound on rhs at all (arith.c:216-217), and the '/' and
-	'%' cases immediately above it show the author knew to guard the
-	other operand-dependent UB in the same switch. A left shift that
-	overflows the sign bit (1 << 63 on a 64-bit long, 1 << 31 on the
-	32-bit long this library targets) is undefined for the same
-	reason and is equally unguarded.
-
-	Found by fuzz/fuzz_wordexp.c, which drives __wordexp_arith()
-	directly; the first sixty-second run reported it. Reduced from
-	the fuzzer's "J\237\013<<+~+~" to the five cases below, each
-	verified one-per-process against the instrumented build:
-
-	  $((1<<-1))   arith.c:216 shift exponent -1 is negative
-	  $((1>>-1))   arith.c:217 shift exponent -1 is negative
-	  $((1<<64))   arith.c:216 shift exponent 64 is too large
-	  $((1>>64))   arith.c:217 shift exponent 64 is too large
-	  $((1<<63))   arith.c:216 left shift of 1 by 63 places cannot
-	               be represented in type 'long'
-
-	Under UndefinedBehaviorSanitizer (tools/asan-build.sh builds with
-	-fsanitize=undefined -fno-sanitize-recover) every one of them
-	terminates the process, which is why the whole test is fenced
-	rather than only its assertions: an unfenced case here would take
-	this file's entire binary down.
-
-	The expected results below are the ones 1.1.2 implies by way of
-	6.5: there is no correct value for an undefined operation, so the
-	only defensible behaviour is to refuse the expression, and
-	WRDE_SYNTAX is the code arith.c already uses for the sibling
-	guard (division and modulus by zero, tested unfenced above).
-	bash, dash and ksh all reject a negative shift count; glibc's
-	wordexp does not implement $(()) at all, so it is not an oracle
-	here.
-
-	The last case is target-dependent and stated for the target this
-	library is built for, not for the native sanitizer build: `long`
-	is 32 bits under LLP64 (arch/x86_64/bits/limits.h, LONG_MAX
-	0x7fffffffL), so 1<<31 is the overflowing shift there and 1<<63
-	is merely an over-wide one. Both are undefined; the test asks
-	only that the shift count be rejected when it is not less than
-	the width, which is the same requirement either way. */
+/* XBD 2.6.4 Arithmetic Expansion -- the expression "shall be processed
+ * according to the rules given in [XBD 1.1.2] Arithmetic Precision and
+ * Operations", and 1.1.2 says evaluation "shall be equivalent to that
+ * described in Section 6.5, Expressions, of the ISO C standard". ISO C
+ * 6.5.7p3 makes a shift whose right operand is negative, or is greater
+ * than or equal to the width of the promoted left operand, *undefined
+ * behaviour*: 6.5 describes no shift at all for those counts, so there
+ * is nothing for 1.1.2 to be equivalent to and an implementation of
+ * 2.6.4 may not simply perform one. There is no correct value to
+ * return, so the expansion fails, reported WRDE_SYNTAX -- the code
+ * src/wordexp/arith.c already uses for the sibling guard, division and
+ * modulus by zero, asserted unfenced in test_wordexp_arith() above.
+ * bash, dash and ksh all reject a negative shift count too; glibc's
+ * wordexp does not implement $(()) at all, so it is not an oracle here.
+ *
+ * Until this was fixed, apply_binop() evaluated `cur << rhs` and
+ * `cur >> rhs` with no bound on rhs at all, while the '/' and '%' cases
+ * immediately above it in the same switch already guarded the other
+ * operand-dependent UB. Found by fuzz/fuzz_wordexp.c, which drives
+ * __wordexp_arith() directly; the first sixty-second run reported it,
+ * reduced from the fuzzer's "J\237\013<<+~+~" to the cases below. Under
+ * UndefinedBehaviorSanitizer (tools/asan-build.sh builds with
+ * -fsanitize=undefined -fno-sanitize-recover) each of them terminated
+ * the process outright, which is why the whole test had to be fenced
+ * rather than only its assertions -- one unfenced case would have taken
+ * this file's entire binary down.
+ *
+ * The counts are written out rather than derived from sizeof(long) --
+ * unlike test_wordexp_arith_overflow_wraps() above, where the width
+ * genuinely differs between the two builds this file runs in -- because
+ * the ceiling here is deliberately NOT the compiling machine's: arith.c
+ * bounds the count by <limits.h>'s LONG_BIT, which is 32 for both of
+ * this library's targets (arch/x86_64 LLP64 and arch/i386 ILP32 both
+ * say LONG_BIT 32) and stays 32 in the native sanitizer build, where
+ * the host compiler's own long is 64 bits. What a caller of ntlibc's
+ * wordexp() may write is a property of ntlibc, not of whoever compiled
+ * it, so 32 is out of range in both builds; see arith.c's header note
+ * on shift counts. */
 static void test_wordexp_arith_shift_bounds(void)
 {
 	wordexp_t we;
+	char want[64];
 
 	/* a negative shift count is undefined in 6.5.7p3, both directions */
 	CHECK(wordexp("$((1<<-1))", &we, 0) == WRDE_SYNTAX);
@@ -983,18 +1049,76 @@ static void test_wordexp_arith_shift_bounds(void)
 	CHECK(wordexp("$((1>>64))", &we, 0) == WRDE_SYNTAX);
 	CHECK(wordexp("$((1<<32))", &we, 0) == WRDE_SYNTAX);
 
-	/* the compound-assignment spellings reach the same switch arms */
+	/* The compound-assignment spellings reach the same switch arms and
+	 * must be bounded there too -- arith_assign() routes "<<="/">>="
+	 * through the same apply_binop() 'L'/'R' cases as the plain
+	 * operators, so a guard written at the parse site rather than in
+	 * apply_binop() would leave these two wrong.
+	 *
+	 * Each is its own expansion, with the variable seeded by a separate
+	 * one, rather than the shorter "$((v=1, v<<=-1))": after a comma
+	 * arith_assign()'s lookahead starts on the blank, which is not a
+	 * name start, so that spelling never reaches match_assign_op() at
+	 * all and fails as an ordinary parse error instead. It would have
+	 * been WRDE_SYNTAX either way -- i.e. it would have asserted
+	 * nothing about the shift guard. */
 	unsetenv("WORDEXP_ARITH_SH");
-	CHECK(wordexp("$((WORDEXP_ARITH_SH=1, WORDEXP_ARITH_SH<<=-1))", &we, 0) == WRDE_SYNTAX);
-	CHECK(wordexp("$((WORDEXP_ARITH_SH=1, WORDEXP_ARITH_SH>>=64))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH=1))", &we, 0) == 0);
+	wordfree(&we);
+
+	/* first with an in-range count, so the guard cannot be "achieved"
+	 * by disabling compound shift assignment outright: both spellings
+	 * still compute and still persist their result (2.6.4: "All
+	 * changes to variables in an arithmetic expression shall be in
+	 * effect after the arithmetic expansion") */
+	CHECK(wordexp("$((WORDEXP_ARITH_SH<<=3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "8") == 0);
+	CHECK(strcmp(getenv("WORDEXP_ARITH_SH"), "8") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH>>=2))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "2") == 0);
+	CHECK(strcmp(getenv("WORDEXP_ARITH_SH"), "2") == 0);
+	wordfree(&we);
+
+	/* then out of range, in both directions */
+	CHECK(wordexp("$((WORDEXP_ARITH_SH<<=-1))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH>>=64))", &we, 0) == WRDE_SYNTAX);
 
 	/* a well-formed shift still works, so the guard must bound the
 	 * count rather than reject the operator */
 	CHECK(wordexp("$((1<<4)) $((256>>4))", &we, 0) == 0);
 	CHECK(strcmp(we.we_wordv[0], "16") == 0 && strcmp(we.we_wordv[1], "16") == 0);
 	wordfree(&we);
+
+	/* Both edges of the accepted range, so the guard cannot be
+	 * "achieved" by refusing more than 6.5.7p3 asks. A count of 0 is
+	 * the floor (a `<=` where the code needs `<` would reject it) and
+	 * LONG_BIT-1 is the last legal count (a `>` where the code needs
+	 * `>=` would let LONG_BIT itself through, which the 1<<32 case
+	 * above catches, but a `>=` written one too low would reject 31,
+	 * which only this case catches). 1<<31 is also 6.5.7p4's
+	 * overflowing left shift on a 32-bit long: in range as a *count*,
+	 * so it must produce this file's documented wraparound rather
+	 * than an expansion failure. The expected value goes through
+	 * wrapped() because that half really is the compiling machine's
+	 * width -- LONG_BIT bounds the count, sizeof(long) decides the
+	 * value -- and the two builds genuinely differ there. */
+	CHECK(wordexp("$((1<<0)) $((7>>0))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "1") == 0 && strcmp(we.we_wordv[1], "7") == 0);
+	wordfree(&we);
+
+	snprintf(want, sizeof want, "%ld", wrapped(1UL << 31));
+	CHECK(wordexp("$((1<<31)) $((-8>>1))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], want) == 0);
+	CHECK(strcmp(we.we_wordv[1], "-4") == 0);
+	wordfree(&we);
+
+	/* and a short-circuited branch never reaches the guard at all,
+	 * same as the untaken division by zero above */
+	CHECK(wordexp("$((0 && (1<<-1))) $((1 || (1>>64)))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "0") == 0 && strcmp(we.we_wordv[1], "1") == 0);
+	wordfree(&we);
 }
-#endif
 
 
 /* Was N/A, and is not any more -- the one entry in this file that
@@ -3317,31 +3441,62 @@ static void test_nftw_depth_flag(void)
 	CHECK(nftw_dir_reported_last == 1);
 }
 
-/* UNIMPL: nftw.html FTW_PHYS -- "perform a physical walk and shall not
+/* N/A: nftw.html FTW_PHYS -- "perform a physical walk and shall not
  * follow symbolic links"; without it, a dangling symlink is reported
  * as FTW_SLN rather than FTW_NS, and a symlink to a directory is
  * followed and descended into rather than reported once as FTW_SL.
  *
- * The type dispatch this needs (S_ISLNK() on lstat() vs. following
- * with stat(), producing FTW_SL/FTW_SLN/FTW_NS accordingly) is
- * implemented in src/ftw/ftw.c's walk() -- see its "if (ws->flags &
- * FTW_PHYS)" branch -- and was exercised directly (not through this
- * fenced test) against a hand-built symlink fixture during
- * development. What keeps this specific test fenced is narrower than
- * the implementation: building the fixture needs symlink() to
- * actually succeed, and in this sandbox it does not -- symlink()
+ * RETAGGED UNIMPL -> N/A, third of the group; see the GLOB_ERR fence
+ * earlier in this file for the shared reasoning.  The type dispatch
+ * this needs (S_ISLNK() on lstat() vs. following with stat(),
+ * producing FTW_SL/FTW_SLN/FTW_NS accordingly) is implemented in
+ * src/ftw/ftw.c's walk() -- see its "if (ws->flags & FTW_PHYS)"
+ * branch -- and was exercised directly (not through this fenced test)
+ * against a hand-built symlink fixture during development.  So there
+ * is no absent code and no mechanism left to name, which is what
+ * UNIMPL is for.  What is missing is the fixture: building it needs
+ * symlink() to actually succeed, and here it does not -- symlink()
  * returns ENOSYS (errno 38) for both a same-directory and a dangling
- * target here (confirmed directly: src/unistd/link.c's symlinkat()
- * asks NT to create a reparse point via FSCTL_SET_REPARSE_POINT,
- * which this Wine/NTFS-emulation sandbox does not support), the same
- * limitation test/unistd.c already works around by only exercising
- * symlink()'s ENAMETOOLONG failure path rather than a real
- * successfully-created link. This is an environment gap in the
- * fixture, not an unimplemented FTW_SL/FTW_SLN code path -- kept
- * UNIMPL rather than N/A since a platform where symlink() actually
- * works would make this fixture buildable and the test runnable
- * unmodified. */
-#if 0 /* UNIMPL: nftw.html FTW_PHYS vs symlink-following -- fixture needs a working symlink(), see above */
+ * target (confirmed directly: src/unistd/link.c's symlinkat() asks NT
+ * to create a reparse point via FSCTL_SET_REPARSE_POINT, which this
+ * Wine/NTFS-emulation sandbox does not support), the same limitation
+ * test/unistd.c already works around by only exercising symlink()'s
+ * ENAMETOOLONG failure path rather than a real successfully-created
+ * link.
+ *
+ * The old fence held UNIMPL on the grounds that "a platform where
+ * symlink() actually works would make this fixture buildable".  That
+ * is true, and it is exactly why this N/A is CONDITIONAL -- but being
+ * able to expire is not what separates the two tags in this tree.
+ * test/posix-stdio.c's flockfile group is N/A with its expiry
+ * condition written out, and test/verification-coverage-accounting.md
+ * section 6 sorts the existing N/A fences into "permanent" and
+ * "conditional" precisely because most of them can expire.  What N/A
+ * asserts is that the clause cannot be OBSERVED here, which is the
+ * case, and POSIX-COVERAGE.md already treats it that way from both
+ * sides: the ftw/nftw row for this pair reads "unverified (rc=77)",
+ * and the neighbouring row for the FTW_DNR/FTW_NS fixture clauses
+ * reads plain N/A, "the same permission-model limit glob()'s GLOB_ERR
+ * row already records".
+ *
+ * EXPIRY CONDITION: a working symlink() -- real Windows with
+ * SeCreateSymbolicLinkPrivilege held, or a Wine new enough to
+ * implement FSCTL_SET_REPARSE_POINT (POSIX-COVERAGE.md's nftw row
+ * dates stock Wine's STATUS_NOT_SUPPORTED answer to below 10.19).
+ * The body below is written to run unmodified the day that holds.
+ *
+ * Unlike the two glob fences above, this condition is MEASURED on
+ * every run rather than asserted in a comment:
+ * test/posix-tail.c's test_nftw_symlinks() attempts the symlink,
+ * prints a SKIP line naming the mechanism and the observed errno when
+ * it fails, counts the group unverified (exit 77), and runs the real
+ * FTW_SL/FTW_SLN/link-following assertions when it succeeds.  So this
+ * fence's "cannot" cannot go stale unnoticed, and the clauses it
+ * covers are already claimed by a live probe -- which is a second,
+ * independent reason the tag here is N/A rather than UNIMPL: there is
+ * no unwritten work for a successor to pick up, only an environment
+ * that has not yet allowed the existing test to run. */
+#if 0 /* N/A: nftw.html FTW_PHYS vs symlink-following -- fixture needs a working symlink(), see above */
 static int nftw_types_seen[8];
 static int nftw_type_cb(const char *path, const struct stat *sb, int flag, struct FTW *f)
 {
@@ -3420,6 +3575,7 @@ int main(int argc, char **argv)
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
 	test_wordexp_arith_overflow_wraps();
+	test_wordexp_arith_shift_bounds();
 	test_wordexp_cmdsub(argv[0]);
 	test_wordexp_badchar_nocmd_and_literal_splitting();
 	test_wordexp_syntax_errors();

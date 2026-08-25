@@ -1038,15 +1038,14 @@ static void test_snprintf_boundaries(void)
  * return type at all, so the standard makes the call fail up front
  * instead of returning something that cannot be right.
  *
- * src/stdio/printf.c's vxprintf_mem() takes n straight to the throwaway
- * memory FILE's mem_size and never compares it to INT_MAX, so the call
- * succeeds and formats normally.  Measured: returns 1 with errno left
- * at 0 and "z" in the buffer.
- *
- * This is the same shape as several other defects in this tree: an
- * ERRORS "shall fail" argument check that was simply never written.
- * See the ledger. */
-#if 0 /* BUG: snprintf() does not fail with [EOVERFLOW] when n > INT_MAX; POSIX fprintf.html ERRORS makes that a "shall fail" for snprintf, so the call must return a negative value and set errno, not format into the (unreachably large) buffer */
+ * vsnprintf() is asserted alongside it because vfprintf.html makes it
+ * "equivalent to ... snprintf()" and refers its ERRORS to fprintf(), so
+ * the ceiling has to sit where both entry points pass through it rather
+ * than in snprintf()'s own variadic wrapper.  The sentinel byte is the
+ * half that says the call was refused BEFORE formatting: an
+ * implementation that formatted first and reported the error afterwards
+ * would satisfy the return value and errno and still have written to a
+ * buffer POSIX says it may not touch. */
 static void test_snprintf_eoverflow(void)
 {
 	char b[8];
@@ -1058,8 +1057,20 @@ static void test_snprintf_eoverflow(void)
 	CHECK(r < 0);
 	CHECK(errno == EOVERFLOW);
 	CHECK(b[0] == '#');
+
+	memset(b, '#', sizeof b);
+	errno = 0;
+	r = via_vsnprintf(b, (size_t)INT_MAX + 1, "z");
+	CHECK(r < 0);
+	CHECK(errno == EOVERFLOW);
+	CHECK(b[0] == '#');
+
+	/* The boundary itself is not an error: n == {INT_MAX} is "greater
+	 * than" nothing, so it formats normally. */
+	memset(b, '#', sizeof b);
+	CHECK(snprintf(b, (size_t)INT_MAX, "z") == 1);
+	CHECK(!strcmp(b, "z"));
 }
-#endif
 
 /* fprintf.html, the length modifiers: "z  Specifies that a following
  * d, i, o, u, x, or X conversion specifier applies to a size_t or the
@@ -2136,6 +2147,7 @@ int main(void)
 	test_popen();
 
 	test_snprintf_boundaries();
+	test_snprintf_eoverflow();
 	test_printf_z_modifier_width();
 	test_printf_l_modifier();
 	test_printf_apostrophe_flag();

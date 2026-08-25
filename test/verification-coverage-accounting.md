@@ -630,10 +630,10 @@ distinguish them:
 | 8 | `posix-dl.c:562` | R | `tcflush` `TCIFLUSH` -- `FlushConsoleInputBuffer` is an exact match |
 | 9 | `posix-dl.c:707` | R | `posix_spawn_file_actions_*` -- the file demonstrates the equivalent by hand |
 | 10 | `posix-dl.c:754` | R | `POSIX_SPAWN_SETSCHEDPARAM`/`SETSCHEDULER` -- `__spawn` already creates the child suspended |
-| 11 | `posix-glob.c:451` | **F** | `GLOB_ERR`/`errfunc` -- "fixture not constructible under Wine" |
-| 12 | `posix-glob.c:499` | **F** | `GLOB_NOESCAPE` -- "unreachable fixture on NTFS" |
+| 11 | `posix-glob.c:451` | ~~**F**~~ | `GLOB_ERR`/`errfunc` -- **RESOLVED, retagged `N/A`**; no longer an `UNIMPL` fence at all, see the note under the tally |
+| 12 | `posix-glob.c:499` | ~~**F**~~ | `GLOB_NOESCAPE` -- **RESOLVED, retagged `N/A`** (permanent: NTFS cannot hold the filename), see the note under the tally |
 | 13 | `posix-glob.c:2122` | **D** | BRE back-references `\1`..`\9` -- `src/regex/regex.c` rejects them with `REG_ESUBREG` and a documented rationale |
-| 14 | `posix-glob.c:2785` | **F** | `nftw` `FTW_PHYS` -- "fixture needs a working `symlink()`" |
+| 14 | `posix-glob.c:2785` | ~~**F**~~ | `nftw` `FTW_PHYS` -- **RESOLVED, retagged `N/A`** (conditional on a working `symlink()`), see the note under the tally |
 | 15 | `posix-socket.c:413` | **D** | `sendto`/`recvfrom`/`sendmsg`/`recvmsg`/`socketpair` -- staged in `networking-audit.md` sec 6 stages 5/6/7 |
 | 16 | `posix-socket.c:425` | **D** | IPv6 (`sockaddr_in6`, `in6_addr`, `IN6_IS_ADDR_*`) -- scoped out with AF_INET/SOCK_STREAM only |
 | 17 | `posix-socket.c:435` | **D** | `getsockname`/`getpeername` -- out of this stage's declared scope; the file works around it with a fixed `TEST_PORT` |
@@ -646,9 +646,13 @@ distinguish them:
 |-------|------:|
 | **R** not yet reached | 12 |
 | **D** deliberate scope decision | 6 (#13, #15, #16, #17, #20, #21) |
-| **F** fixture-limited, mis-tagged | 3 (#11, #12, #14) |
+| **F** fixture-limited, mis-tagged | 0 -- was 3 (#11, #12, #14), all retagged `N/A` |
 
-Counted from the rows above, not carried forward.
+Counted from the rows above, not carried forward. The three **F** rows
+are struck rather than deleted because they are the finding this
+section exists to have made; the tag they carry today is `N/A`, so the
+regeneration command at the head of this section no longer returns
+them.
 
 One retrospective and one observation still worth acting on:
 
@@ -685,14 +689,45 @@ One retrospective and one observation still worth acting on:
   implementations do.** Grouping by file predicted the wrong shape in
   both directions -- it over-grouped the string mirrors and it hid the
   one item that needed a design decision.
-- **The three `F` fences are the vocabulary gap.** `posix-glob.c:451`,
-  `:499` and `:2785` say nothing about `src/glob` or `src/ftw`; they
-  say "this environment cannot build the fixture". That is exactly what
-  `rc=77` expresses at the runner level, and there is no fence-level
-  equivalent -- so the closest available tag was used. Three sites is
-  not enough to justify a fifth tag; naming the environment in the
-  fence text (two of the three already do) is enough. It is worth a
-  line in whichever file documents the tag vocabulary.
+- **The three `F` fences were the vocabulary gap. RESOLVED: they are
+  `N/A` now, and no fifth tag was needed.** `posix-glob.c:451`, `:499`
+  and `:2785` say nothing about `src/glob` or `src/ftw`; they say "this
+  environment cannot build the fixture". This section originally
+  reasoned that `rc=77` expresses that at the runner level with no
+  fence-level equivalent, and settled for better fence text. It missed
+  the option that was already there: **`N/A` is the fence-level
+  equivalent.** `test/POSIX-COVERAGE.md`'s own definition of the tag is
+  "the clause cannot be triggered/observed under Wine", which is
+  verbatim what these three say, and its row for `GLOB_ERR` had read
+  `N/A` all along -- so the ledger and the fence disagreed about the
+  same clause, in the tree, with nothing flagging it.
+
+  What made `UNIMPL` look right was reading it as "no assertion runs
+  here". Its actual contract is narrower and is stated in every file
+  that defines the vocabulary: *absent, but implementable, and the
+  fence names the NT mechanism*. All three have code --
+  `src/glob/glob.c`'s `errfunc` plumbing (lines 228 and 263), its
+  `FNM_NOESCAPE` hand-off (line 239, landing in
+  `src/fnmatch/fnmatch.c:170`), and `src/ftw/ftw.c`'s `FTW_PHYS` branch
+  (line 181) -- so there is nothing absent to implement
+  and no mechanism to name, and each fence's own text said as much
+  while carrying a tag that claimed the opposite.
+
+  The objection that held the retag up for a pass was that these can
+  expire (a real Windows run, a working `symlink()`) whereas `N/A`
+  sounds permanent. Section 6 below is the answer: it sorts the
+  existing `N/A` fences into **4 permanent and 25 conditional**, so
+  expiry is the normal case, not a disqualification. Each retagged
+  fence carries its expiry condition in the style
+  `test/posix-stdio.c`'s `flockfile` group uses -- except
+  `GLOB_NOESCAPE`, which is genuinely permanent: NTFS reserves `*` in
+  filenames, so the fixture is unrepresentable rather than merely
+  unbuildable here.
+
+  **The line this section asked for is written in two places**, since
+  the vocabulary is documented per-file rather than centrally:
+  `test/POSIX-COVERAGE.md`'s "Status values" list, and
+  `test/posix-glob.c`'s own header block.
 
 ## 6. All 30 `N/A:` fences: permanent versus conditional
 
@@ -707,6 +742,19 @@ highest-value section of this document.**
 
 Result: **4 permanent, 25 conditional** (was 5 permanent; the
 `posix-glob.c` row below was audited out -- see the note).
+
+**This tally is a snapshot too, and section 5's retag moved it.** The
+command above is the authority; it returns more fences than the 30 this
+section audited, because later clause audits added their own. Three of
+the additions come from section 5 and are classified here so they do not
+arrive unlabelled: `posix-glob.c`'s `GLOB_NOESCAPE` fence is
+**permanent** -- NTFS reserves `*` in a filename, so the fixture is
+unrepresentable rather than unbuildable, which is the same shape as the
+`wchar_t`-is-16-bits row in the permanent table below -- and its
+`GLOB_ERR`/`errfunc` and `nftw` `FTW_PHYS` fences are **conditional**,
+on real DACL storage in `chmod()` and on a working `symlink()`
+respectively. Both conditions are written into the fences themselves,
+which is what this section's central complaint asked for.
 
 **Audited out (N/A -> live assertion):** `posix-glob.c:525`, tilde
 expansion. The mechanism was stated as "out of scope for base `glob()`

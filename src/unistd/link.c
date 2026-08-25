@@ -35,6 +35,7 @@ int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
 	HANDLE h;
 	NTSTATUS st;
 	FILE_LINK_INFORMATION *li;
+	FILE_ATTRIBUTE_TAG_INFORMATION ti;
 	size_t sz;
 	(void)flags;
 
@@ -43,6 +44,36 @@ int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+
+	/* link.html ERRORS: "[EPERM] The file named by path1 is a directory
+	 * and either the calling process does not have appropriate
+	 * privileges or the implementation prohibits using link() on
+	 * directories."  NTFS prohibits them outright -- FileLinkInformation
+	 * on a directory handle is refused however privileged the caller is
+	 * -- so the clause's second branch applies to every directory and
+	 * the errno is decided here rather than left to the driver.  Asking
+	 * the open handle for its attributes settles it without depending on
+	 * which status a particular filesystem picks: left to
+	 * NtSetInformationFile, NTFS answers STATUS_FILE_IS_A_DIRECTORY,
+	 * which src/internal/errno.c maps to EISDIR -- correct where EISDIR
+	 * is a specified errno (open(), rename()), but link.html's ERRORS
+	 * list does not contain EISDIR at all.
+	 *
+	 * The predicate is src/stdio/misc.c's isdir_attrs(), so linkat(),
+	 * renameat() and lstat() agree on what counts as a directory: NT
+	 * puts FILE_ATTRIBUTE_DIRECTORY on a symbolic link to a directory,
+	 * but POSIX classifies a symbolic link as a non-directory file
+	 * whatever it points at, and with the flag clear it is the link
+	 * itself that is being linked. */
+	if (NT_SUCCESS(NtQueryInformationFile(h, &io, &ti, sizeof ti, FileAttributeTagInformation)) &&
+	    (ti.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+	    !((ti.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+	      (ti.ReparseTag == IO_REPARSE_TAG_SYMLINK || ti.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT ||
+	       ti.ReparseTag == IO_REPARSE_TAG_LX_SYMLINK))) {
+		NtClose(h);
+		errno = EPERM;
+		return -1;
+	}
 
 	if (__ntpath_at(newdirfd, newpath, &np, OBJ_CASE_INSENSITIVE) < 0) { NtClose(h); return -1; }
 	sz = sizeof *li + np.nt.Length;
@@ -56,7 +87,16 @@ int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
 	__free(li);
 	__ntpath_free(&np);
 	NtClose(h);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (!NT_SUCCESS(st)) {
+		/* The same [EPERM] clause, for the volume whose driver cannot
+		 * answer the attribute query above (the check is skipped then)
+		 * or that reports a directory reparse point this way.  An
+		 * already-taken path2 does not arrive here as this status --
+		 * ReplaceIfExists is 0, so an existing name, directory
+		 * included, is STATUS_OBJECT_NAME_COLLISION, i.e. EEXIST. */
+		if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EPERM; return -1; }
+		return __set_errno_status(st);
+	}
 	return 0;
 }
 
