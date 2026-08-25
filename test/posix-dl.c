@@ -13,23 +13,23 @@
  *   <termios.h>  terminal control
  *   <spawn.h>    posix_spawn()
  *
- * Two of those four have since landed: <dlfcn.h> (src/dlfcn/dlfcn.c,
- * exercised through the real header at the end of this file) and
+ * All four have since landed, so the list above is history and not a
+ * statement about the tree: <dlfcn.h> (src/dlfcn/dlfcn.c,
+ * exercised through the real header at the end of this file),
  * <spawn.h> (src/process/posix_spawn.c and siblings, clause-audited in
- * test/posix-spawn.c).  Their sections here are kept for the argument
- * they make about what NT can and cannot do, with the fences that the
- * implementations refuted removed rather than narrowed.
+ * test/posix-spawn.c), and <termios.h> (include/termios.h and
+ * src/termios/termios.c, clause-audited in test/posix-termios.c).
+ * Their sections here are kept for the argument they make about what
+ * NT can and cannot do, with the fences that the implementations
+ * refuted removed rather than narrowed.
  *
  * <sys/mman.h> now joins them: include/sys/mman.h and src/mman/mman.c
  * ship, clause-audited in test/posix-mman.c, so this file includes the
  * real header and its local mman scaffolding is gone, with the fences
  * the implementation refuted removed rather than narrowed.
  *
- * <termios.h> is the one still declared locally here.  The header does
- * ship, and test/posix-termios.c audits it against the real one;
- * converting this section away from its local scaffolding is a separate
- * change and is not made here.  This file does not add or modify any
- * header.
+ * Both <sys/mman.h> and <termios.h> are included like any other shipped
+ * header.  This file does not add or modify any header.
  *
  * Every specified clause gets a real test, written as if it were going
  * to run, even where it cannot possibly pass today.  Three fences, same
@@ -59,6 +59,7 @@
 #include <sys/wait.h>
 #include <dlfcn.h>
 #include <sys/mman.h>
+#include <termios.h>
 #include "ntlibc/rpath.h"
 
 static int fails;
@@ -298,13 +299,15 @@ static void test_dlerror_consumed_once(void)
  */
 
 /* ============================================================
- * <termios.h> -- the best partial mapping in this group.
+ * <termios.h> -- the best partial mapping in this group, and the one
+ * that has since been built.
  *
- * ntlibc already has isatty() (src/unistd/isatty.c), which is exactly
- * the gate a real tcgetattr() would need first (termios.html ERRORS:
- * "[ENOTTY] The file associated with fildes is not a terminal.").
- * Beyond that gate, NT consoles have a real, partial analogue via
- * kernel32's GetConsoleMode()/SetConsoleMode() (reached the same
+ * The argument this section made, when <termios.h> did not exist: ntlibc
+ * already has isatty() (src/unistd/isatty.c), which is exactly the gate
+ * a real tcgetattr() would need first (termios.html ERRORS: "[ENOTTY]
+ * The file associated with fildes is not a terminal."). Beyond that
+ * gate, NT consoles have a real, partial analogue via kernel32's
+ * GetConsoleMode()/SetConsoleMode() (reached the same
  * LdrLoadDll("kernel32.dll") way as SetConsoleCtrlHandler in
  * src/signal/signal.c) -- but the match is genuinely partial, not a
  * blanket yes or no: canonical-mode and echo control have a real
@@ -314,6 +317,24 @@ static void test_dlerror_consumed_once(void)
  * kernel32 API -- GetCommState()/SetCommState() over a COM port
  * handle -- which ntlibc's isatty() does not and should not
  * recognise as a tty in the termios sense).
+ *
+ * That argument was taken up.  include/termios.h and
+ * src/termios/termios.c ship, and they use exactly the mechanisms the
+ * two UNIMPL fences here used to name: GetConsoleMode()/SetConsoleMode()
+ * (src/termios/termios.c:191 and :231) for c_lflag's ICANON/ECHO/ISIG,
+ * and FlushConsoleInputBuffer() (:290) for tcflush()'s input side.  Both
+ * fences are therefore gone; the clauses are audited for real in
+ * test/posix-termios.c, against the shipped header, which is where a
+ * clause belongs once the header exists.
+ *
+ * What is left in this section is N/A, and shipping the header did not
+ * make any of it less N/A.  A console has no baud rate, no transmit
+ * queue, no line discipline, and no reprogrammable special-character
+ * table; "the function exists and the clause is still inapplicable" is
+ * exactly what N/A is for.  These bodies now use the real struct
+ * termios, so each one is a fence that could be lifted the day the
+ * platform grew the concept -- which is the only thing a fence is good
+ * for.
  * ==============================================================
  */
 
@@ -330,40 +351,24 @@ static void test_termios_isatty_prerequisite(void)
 	CHECK(errno == EBADF || errno == ENOTTY);
 }
 
-struct termios_local {
-	unsigned long c_iflag;
-	unsigned long c_oflag;
-	unsigned long c_cflag;
-	unsigned long c_lflag;
-	unsigned char c_cc[16];
-};
-#define ICANON  0x0002
-#define ECHO    0x0008
-#define ISIG    0x0001
-#define TCSANOW 0
-#define TCIFLUSH  0
-#define TCOFLUSH  1
-#define TCIOFLUSH 2
+/* No local scaffolding below.  struct termios_local and the local
+ * ICANON/ECHO/ISIG/TCSANOW/TC*FLUSH defines that used to stand here
+ * existed only because <termios.h> was absent; every one of them is now
+ * the shipped header's, included at the top of this file.  Keeping them
+ * would have been worse than redundant: each fenced body passed a
+ * `struct termios_local *` to `int tcgetattr(int, struct termios *)`,
+ * so un-fencing one would not have compiled. */
 
-#if NTLIBC_TEST(BUG, posix_dl_tcgetattr_tcsetattr_lflag) /* BUG (compiles and links; formerly UNIMPL):: termios.html tcgetattr()/tcsetattr() DESCRIPTION --
-	round-trip c_lflag's ICANON (canonical/line-buffered input) and
-	ECHO bits. NT mechanism: GetConsoleMode()/SetConsoleMode() on
-	the console input handle -- ENABLE_LINE_INPUT is a real,
-	directly corresponding bit for ICANON (line-at-a-time delivery
-	vs. character-at-a-time), and ENABLE_ECHO_INPUT is a real,
-	directly corresponding bit for ECHO. Both console-mode bits
-	exist today and nothing else in this codebase reaches
-	SetConsoleMode; only the wrapper is missing. */
-static void test_tcgetattr_tcsetattr_lflag(void)
-{
-	struct termios_local t;
-	CHECK(tcgetattr(0, &t) == 0);
-	t.c_lflag &= ~(unsigned long)ECHO;
-	CHECK(tcsetattr(0, TCSANOW, &t) == 0);
-	CHECK(tcgetattr(0, &t) == 0);
-	CHECK(!(t.c_lflag & ECHO));
-}
-#endif
+/* Not fenced: tcgetattr()/tcsetattr() round-tripping c_lflag's
+ * ICANON/ECHO.  This carried an UNIMPL fence naming ENABLE_LINE_INPUT
+ * and ENABLE_ECHO_INPUT as the console-mode bits that correspond to
+ * them, and saying "only the wrapper is missing".  The wrapper was
+ * written: src/termios/termios.c maps ICANON/ECHO/ISIG onto
+ * ENABLE_LINE_INPUT/ENABLE_ECHO_INPUT/ENABLE_PROCESSED_INPUT through
+ * GetConsoleMode() (:191) and SetConsoleMode() (:231).  There is no gap
+ * left to fence, and duplicating the clause here against a local struct
+ * would only make it easier to forget which copy is real --
+ * test/posix-termios.c tests it against the shipped header. */
 
 #if NTLIBC_TEST(NA, posix_dl_termios_cc_special_chars) /* N/A: termios.html struct termios DESCRIPTION -- c_cc[] special
 	characters (VINTR, VEOF, VERASE, VKILL, ...): "control
@@ -378,9 +383,9 @@ static void test_tcgetattr_tcsetattr_lflag(void)
 	not parameterise which character triggers it. */
 static void test_termios_cc_special_chars(void)
 {
-	struct termios_local t;
+	struct termios t;
 	CHECK(tcgetattr(0, &t) == 0);
-	t.c_cc[0] = 24; /* VINTR := Ctrl-X instead of the default Ctrl-C */
+	t.c_cc[VINTR] = 24; /* VINTR := Ctrl-X instead of the default Ctrl-C */
 	CHECK(tcsetattr(0, TCSANOW, &t) == 0);
 	/* A real terminal would now deliver SIGINT on Ctrl-X, not
 	 * Ctrl-C; nothing exists to observe that without a live
@@ -404,24 +409,21 @@ static void test_termios_cc_special_chars(void)
 	up yet. */
 static void test_termios_baud_rate(void)
 {
-	struct termios_local t;
+	struct termios t;
 	CHECK(tcgetattr(0, &t) == 0);
-	CHECK(cfsetispeed(&t, 9600) == 0);
-	CHECK(cfsetospeed(&t, 9600) == 0);
-	CHECK(cfgetispeed(&t) == 9600);
-	CHECK(cfgetospeed(&t) == 9600);
+	CHECK(cfsetispeed(&t, B9600) == 0);
+	CHECK(cfsetospeed(&t, B9600) == 0);
+	CHECK(cfgetispeed(&t) == B9600);
+	CHECK(cfgetospeed(&t) == B9600);
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_dl_tcflush_input) /* BUG (compiles and links; formerly UNIMPL):: tcflush.html DESCRIPTION -- TCIFLUSH: "discard[s]
-	data received but not read". NT mechanism: kernel32's
-	FlushConsoleInputBuffer() is a real, exact match for the input
-	side. */
-static void test_tcflush_input(void)
-{
-	CHECK(tcflush(0, TCIFLUSH) == 0);
-}
-#endif
+/* Not fenced: tcflush(TCIFLUSH), "discard[s] data received but not
+ * read".  The fence that stood here named FlushConsoleInputBuffer() as
+ * "a real, exact match for the input side"; src/termios/termios.c:290
+ * calls exactly that.  Implemented, not implementable.  The output side
+ * is a different clause with a different answer, and keeps its N/A
+ * fence immediately below. */
 
 #if NTLIBC_TEST(NA, posix_dl_tcflush_output) /* N/A: tcflush.html DESCRIPTION -- TCOFLUSH/TCIOFLUSH:
 	"discard[s] data written ... but not transmitted". A console
@@ -479,9 +481,9 @@ static void test_tcsendbreak_unsupported(void)
 	lines on a console handle for hardware flow control to gate. */
 static void test_termios_cflag_serial_bits(void)
 {
-	struct termios_local t;
+	struct termios t;
 	CHECK(tcgetattr(0, &t) == 0);
-	t.c_cflag |= 0 /* CS8 */;
+	t.c_cflag = (t.c_cflag & ~(tcflag_t)CSIZE) | CS8;
 	CHECK(tcsetattr(0, TCSANOW, &t) == 0);
 }
 #endif
