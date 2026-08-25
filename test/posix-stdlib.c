@@ -457,6 +457,65 @@ static void test_mkstemp_permission_bits(void)
 }
 
 /* ---- realpath.html: caller-supplied (non-NULL) resolved_name buffer. ---- */
+#if NTLIBC_TEST(BUG, posix_stdlib_realpath_errno_not_flattened) /* BUG: realpath() rewrites every open() failure except EACCES to
+	 * ENOENT, losing two shall-fail errors.  realpath.html ERRORS, "The
+	 * realpath() function shall fail if": "[ENOTDIR] A component of the
+	 * path prefix names an existing file that is neither a directory
+	 * nor a symbolic link to a directory" and "[ENAMETOOLONG] The
+	 * length of a component of a pathname is longer than {NAME_MAX}".
+	 *
+	 * Mechanism: src/stdlib/realpath.c opens the path and, on failure,
+	 * does
+	 *
+	 *     if (fd < 0) { if (errno != EACCES) errno = ENOENT; return 0; }
+	 *
+	 * open() produces both of the errnos above -- this library goes to
+	 * real trouble to synthesize them.  src/internal/path.c's
+	 * reject_if_prefix_not_dir(), called for every AT_FDCWD and
+	 * absolute path, is what sets ENOTDIR; __name_too_long() in
+	 * dos_from_posix() is what sets ENAMETOOLONG for an over-long
+	 * component.  realpath() then throws both away.
+	 *
+	 * The file's banner justifies exactly one of these: "A path that
+	 * does not exist cannot be canonicalised that way, so it is an
+	 * ENOENT like POSIX says."  That is right, and is about a path that
+	 * does not exist.  A prefix component that exists and is not a
+	 * directory, and a component longer than {NAME_MAX}, are different
+	 * conditions with their own clauses, and the blanket rewrite
+	 * flattens them into the one case the banner reasoned about.
+	 *
+	 * Re-enable when realpath() passes through the errno open() set for
+	 * the cases POSIX names. */
+static void test_realpath_errno_not_flattened(void)
+{
+	char t[] = "rperr-XXXXXX";
+	char sub[64];
+	char longc[300];
+	int fd = mkstemp(t);
+
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	close(fd);
+
+	/* a path prefix that exists and is a regular file */
+	snprintf(sub, sizeof sub, "%s/x", t);
+	errno = 0;
+	CHECK(realpath(sub, 0) == 0 && errno == ENOTDIR);
+
+	/* a single component longer than {NAME_MAX} */
+	memset(longc, 'a', 280);
+	longc[280] = 0;
+	errno = 0;
+	CHECK(realpath(longc, 0) == 0 && errno == ENAMETOOLONG);
+
+	/* and the case the banner is about must keep answering ENOENT */
+	errno = 0;
+	CHECK(realpath("no-such-file-xyz", 0) == 0 && errno == ENOENT);
+
+	unlink(t);
+}
+#endif
+
 static void test_realpath_buf(void)
 {
 	char t[] = "rpbuf-XXXXXX";
