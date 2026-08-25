@@ -39,8 +39,7 @@
  * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
  * wscanf, open_wmemstream, wcwidth, wcswidth,
- * wcstod, wcstof, wcstold, wcscoll, wcscoll_l, wcsxfrm,
- * wcsxfrm_l, wcsftime, mbsnrtowcs, wcsnrtombs.  Confirmed *present*
+ * wcstod, wcstof, wcstold, wcsftime, mbsnrtowcs, wcsnrtombs.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -50,7 +49,9 @@
  * wcsnlen.c, wcpcpy.c, wcscasecmp.c, and src/stdlib/wcstol.c), tested
  * below rather than fenced: wcsstr, wcspbrk, wcscspn, wcsspn, wcstok,
  * wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp, wcscasecmp_l,
- * wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul, wcstoull.  Also now present, as
+ * wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul, wcstoull, and
+ * (src/string/wcscoll.c, wcsxfrm.c) wcscoll, wcscoll_l, wcsxfrm,
+ * wcsxfrm_l.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1446,24 +1447,57 @@ static void test_wcstod_family(void)
  * wcscoll / wcscoll_l / wcsxfrm / wcsxfrm_l -- wcscoll.html,
  * wcsxfrm.html.  This library only meaningfully supports the C/POSIX
  * (UTF-8) locale (see the btowc()/LC_CTYPE divergence note above), so
- * both are implementable as a byte-order (memcmp-equivalent) collation,
- * same as strcoll()/strxfrm() presumably already do.  UNIMPL.
+ * both are a code-unit-order collation -- which is exactly what
+ * src/string/strcoll.c and strxfrm.c do for bytes, confirmed rather
+ * than presumed.  Implemented in src/string/wcscoll.c and wcsxfrm.c.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcscoll()/wcscoll_l() -- wcscoll.html DESCRIPTION,
-       * RETURN VALUE. */
 static void test_wcscoll(void)
 {
+	locale_t loc;
+
 	/* C/POSIX locale collation == code-unit order, like wcscmp(). */
 	CHECK(wcscoll(W("abc"), W("abc")) == 0);
 	CHECK(wcscoll(W("abd"), W("abc")) > 0);
-}
-#endif
+	CHECK(wcscoll(W("abc"), W("abd")) < 0);
+	/* the empty string collates before any non-empty one */
+	CHECK(wcscoll(W(""), W("a")) < 0);
+	CHECK(wcscoll(W(""), W("")) == 0);
+	/* a prefix collates before the longer string */
+	CHECK(wcscoll(W("ab"), W("abc")) < 0);
+	/* POSIX-locale collation is code-unit order, so it agrees with
+	 * wcscmp() in sign on every pair */
+	CHECK((wcscoll(W("A"), W("a")) < 0) == (wcscmp(W("A"), W("a")) < 0));
 
-#if 0 /* UNIMPL: wcsxfrm()/wcsxfrm_l() -- wcsxfrm.html DESCRIPTION,
-       * RETURN VALUE. */
+	/* wcscoll.html: the caller may "set errno to 0, then check errno
+	 * after the call" to detect [EINVAL]; nothing here can produce it,
+	 * so errno must be left alone on a successful comparison. */
+	errno = 0;
+	CHECK(wcscoll(W("abc"), W("abd")) < 0);
+	CHECK(errno == 0);
+
+	/* wcscoll.html: wcscoll_l() "shall be equivalent to wcscoll(),
+	 * except that the locale data used is from the locale represented
+	 * by locale."  Same shape as test/posix-string.c's strcoll_l
+	 * checks: through LC_GLOBAL_LOCALE and through a freshly created
+	 * "C" locale, both must agree with the plain form. */
+	CHECK(wcscoll_l(W("abc"), W("abc"), LC_GLOBAL_LOCALE) == 0);
+	CHECK(wcscoll_l(W("abc"), W("abd"), LC_GLOBAL_LOCALE) < 0);
+	CHECK(wcscoll_l(W("abd"), W("abc"), LC_GLOBAL_LOCALE) > 0);
+	CHECK((wcscoll_l(W("abc"), W("abd"), LC_GLOBAL_LOCALE) < 0)
+	      == (wcscoll(W("abc"), W("abd")) < 0));
+
+	loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	CHECK(loc != (locale_t)0);
+	if (loc) {
+		CHECK(wcscoll_l(W("abc"), W("abd"), loc) < 0);
+		CHECK(wcscoll_l(W("abc"), W("abc"), loc) == 0);
+		freelocale(loc);
+	}
+}
+
 static void test_wcsxfrm(void)
 {
-	wchar_t buf[8];
+	wchar_t buf[8], b2[8];
 	size_t n = wcsxfrm(buf, W("abc"), 8);
 	/* "the length of the transformed wide-character string (not
 	 * including the terminating null)." In the C locale the
@@ -1472,8 +1506,39 @@ static void test_wcsxfrm(void)
 	CHECK(!wcscmp(buf, W("abc")));
 	/* querying required length with n == 0 must not touch ws1 */
 	CHECK(wcsxfrm(0, W("abc"), 0) == 3);
+
+	/* "If the value returned is n or more, the contents of the array
+	 * pointed to by ws1 are unspecified" -- but the RETURN VALUE is
+	 * still the full transformed length, which is what makes the
+	 * two-call size query work.  Truncation must still terminate. */
+	wmemset(buf, L'Z', 8);
+	CHECK(wcsxfrm(buf, W("abcdef"), 3) == 6);
+	CHECK(wcslen(buf) < 3);
+	CHECK(buf[3] == L'Z');	/* nothing written at or past n */
+
+	/* The defining clause: "the result of wcscmp() on two transformed
+	 * wide-character strings shall be the same as the result of
+	 * wcscoll() on the two original strings." */
+	wcsxfrm(buf, W("abc"), 8);
+	wcsxfrm(b2, W("abd"), 8);
+	CHECK((wcscmp(buf, b2) < 0) == (wcscoll(W("abc"), W("abd")) < 0));
+	wcsxfrm(buf, W("abd"), 8);
+	wcsxfrm(b2, W("abc"), 8);
+	CHECK((wcscmp(buf, b2) > 0) == (wcscoll(W("abd"), W("abc")) > 0));
+
+	/* No error is possible here, so errno must survive a successful
+	 * call (the same property test/posix-string.c pins for strxfrm). */
+	errno = 0;
+	CHECK(wcsxfrm(buf, W("abc"), 8) == 3);
+	CHECK(errno == 0);
+
+	/* wcsxfrm.html: wcsxfrm_l() "shall be equivalent to wcsxfrm(),
+	 * except that the locale data used is from the locale represented
+	 * by locale." */
+	CHECK(wcsxfrm_l(0, W("abcd"), 0, LC_GLOBAL_LOCALE) == 4);
+	CHECK(wcsxfrm_l(buf, W("abcd"), 8, LC_GLOBAL_LOCALE) == 4);
+	CHECK(!wcscmp(buf, W("abcd")));
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcsftime -- wcsftime.html
@@ -1588,6 +1653,8 @@ int main(void)
 	test_wcpcpy();
 	test_wcscasecmp();
 	test_wcstol_family();
+	test_wcscoll();
+	test_wcsxfrm();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");
