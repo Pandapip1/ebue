@@ -195,17 +195,30 @@ report_measure() {
 		echo "pre-commit:     make $4" >&2
 		return 0
 	fi
-	if ! make "$4" >/dev/null 2>"$hookw/err"; then
-		echo "pre-commit: 'make $4' failed:" >&2
+	# `make $4-check`, NOT `make $4` followed by `git diff`.
+	#
+	# The recorded ntlibc SHA legitimately trails HEAD between
+	# regenerations -- a report generated during commit N records N, and
+	# is committed as part of N+1 -- so a raw `git diff` of the file sees
+	# that row move on EVERY commit and calls the report stale when
+	# nothing about the gap has changed.  That would demand a report
+	# regeneration alongside every code commit, which is churn, and a
+	# hook that is red for no reason is a hook somebody turns off.  This
+	# was not hypothetical: it blocked the commit that introduced it.
+	#
+	# --check is the comparison that already gets this right. It strips
+	# both places the SHA appears, diffs everything else, and enforces
+	# ancestry separately -- which is also what the gate stage runs, so
+	# the hook and the gate now agree by construction rather than by
+	# coincidence.  It writes nothing, so the hook no longer silently
+	# rewrites a tracked file either.
+	if ! make "$4-check" >/dev/null 2>"$hookw/err"; then
+		echo "pre-commit: $2 is stale, or its own invariants fail." >&2
 		sed 's/^/pre-commit:   /' "$hookw/err" >&2
-		return 1
-	fi
-	if ! git diff --quiet -- "$2"; then
-		echo "pre-commit: $2 is stale." >&2
-		echo "pre-commit: 'make $4' re-measured it against this tree and the" >&2
-		echo "pre-commit: numbers moved.  That diff is the changelog entry for" >&2
-		echo "pre-commit: whatever this commit changes -- review it, then" >&2
-		echo "pre-commit: 'git add $2' and commit again." >&2
+		echo "pre-commit: That diff is the changelog entry for whatever this" >&2
+		echo "pre-commit: commit changes -- review it, then:" >&2
+		echo "pre-commit:     make $4 && git add $2" >&2
+		echo "pre-commit: and commit again." >&2
 		return 1
 	fi
 	return 0

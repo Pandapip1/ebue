@@ -703,7 +703,7 @@ follow from that, and the smaller one is the true one:
 | denominator | files | adjudicated | share |
 |---|---|---|---|
 | what the gate opted into (\`src/functional\` + \`src/regression\`) | $CENSUS | $CENSUS | 100% |
-| **upstream's whole test corpus** | $UPSTREAM_TESTS | $CENSUS | **$(pct "$CENSUS" "$UPSTREAM_TESTS")** |
+| **upstream's whole test corpus** | $UPSTREAM_TESTS | $CENSUS | **$(sm_pct "$CENSUS" "$UPSTREAM_TESTS")** |
 
 The gap between those two rows is almost entirely \`src/math\`:
 **$UPSTREAM_MATH files**, on disk in the submodule, never built by
@@ -715,8 +715,8 @@ files under \`src/\`, and 9.6 MB of 10.7 MB.
 So the headline is not "we run 62 of 146". It is:
 
 > **Of the $UPSTREAM_TESTS test files musl's \`libc-test\` ships, this
-> tree adjudicates $CENSUS ($(pct "$CENSUS" "$UPSTREAM_TESTS")), builds $nC
-> ($(pct "$nC" "$UPSTREAM_TESTS") of upstream), and gets a real behavioural
+> tree adjudicates $CENSUS ($(sm_pct "$CENSUS" "$UPSTREAM_TESTS")), builds $nC
+> ($(sm_pct "$nC" "$UPSTREAM_TESTS") of upstream), and gets a real behavioural
 > verdict from fewer still.**
 
 \`tools/libc-test.sh math\` exits 2 without \`LIBC_TEST_MATH=\`, which is
@@ -742,9 +742,9 @@ of 174 linkable math tests that fail.
 
 | class | tests | share of $CENSUS | what it means |
 |---|---|---|---|
-| **A — header absent** | $nA | $(pct "$nA" "$CENSUS") | the \`#include\` fails. The honest failure: we do not claim the interface and a portable program finds out at compile time. |
-| **B — header present, interface missing** | $nB | $(pct "$nB" "$CENSUS") | the \`#include\` **succeeds**, and it dies at link. The worst of the three for a consumer, and the one the function-interface ledger cannot see. |
-| **C — builds** | $nC | $(pct "$nC" "$CENSUS") | reaches \`tools/libc-test.sh\`'s adjudication at all |
+| **A — header absent** | $nA | $(sm_pct "$nA" "$CENSUS") | the \`#include\` fails. The honest failure: we do not claim the interface and a portable program finds out at compile time. |
+| **B — header present, interface missing** | $nB | $(sm_pct "$nB" "$CENSUS") | the \`#include\` **succeeds**, and it dies at link. The worst of the three for a consumer, and the one the function-interface ledger cannot see. |
+| **C — builds** | $nC | $(sm_pct "$nC" "$CENSUS") | reaches \`tools/libc-test.sh\`'s adjudication at all |
 
 \`A + B + C = $nA + $nB + $nC = $nTot\`, and the census is $CENSUS.
 (Invariant 2, below.)
@@ -938,7 +938,6 @@ EOF
 	printf '%s\n' "$SM_DATA_END"
 }
 
-pct() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f%%", (b?a*100/b:0)}'; }
 
 # tests naming each absent header, and tests it alone would unblock
 lever_table() {
