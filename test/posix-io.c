@@ -164,6 +164,73 @@ static void test_read_write(void)
 }
 
 /* ---- lseek: lseek.html ---- */
+#if NTLIBC_TEST(BUG, posix_io_pread_pwrite_negative_offset) /* BUG: pread()/pwrite() accept a negative offset, and transfer at
+	 * the current file position instead.  read.html ERRORS, shall fail:
+	 * "The pread() function shall fail if: [EINVAL] The file offset is
+	 * negative."  write.html carries the identical clause for pwrite().
+	 * The point of the clause is that these calls are defined entirely
+	 * by their offset argument -- read.html's DESCRIPTION says pread()
+	 * "shall be equivalent to read(), except that it shall read from a
+	 * given position in the file without changing the file pointer" --
+	 * so an offset that is not a position must not be silently turned
+	 * into one.
+	 *
+	 * Mechanism: neither function checks the sign.  src/unistd/read.c
+	 * and src/unistd/write.c both do `LARGE_INTEGER pos = off;` and
+	 * hand it to NtReadFile/NtWriteFile as the ByteOffset.  pwrite()
+	 * has offset checks, but they are upper bounds against __OFF_MAX
+	 * for write.html's [EFBIG]; there is no lower bound anywhere.
+	 *
+	 * And NT gives two negative values a meaning.  src/internal/nt.h:
+	 *
+	 *     #define FILE_WRITE_TO_END_OF_FILE       (-1LL)
+	 *     #define FILE_USE_FILE_POINTER_POSITION  (-2LL)
+	 *
+	 * -- the second of which is exactly "use the handle's current
+	 * position", and the first of which is what src/unistd/write.c
+	 * itself uses to implement O_APPEND.  So off == -2 does not fail;
+	 * it reads or writes wherever the file pointer happens to be, and
+	 * reports success, while __fd_pos_save/__fd_pos_restore put the
+	 * position back so the call looks untouched.  This is the worst
+	 * shape a missing check can take on a write: the bytes land
+	 * somewhere the caller did not name, and nothing says so.
+	 *
+	 * The aliasing is not an assumption about NT -- it is this
+	 * library's own encoding, from its own header, used by its own
+	 * O_APPEND path.
+	 *
+	 * Re-enable when both functions reject a negative offset. */
+static void test_pread_pwrite_negative_offset(void)
+{
+	int fd;
+	char buf[8];
+
+	CHECK((fd = open("t-negoff.txt", O_CREAT | O_RDWR | O_TRUNC, 0644)) >= 0);
+	if (fd < 0) return;
+	CHECK(write(fd, "hello", 5) == 5);
+	CHECK(lseek(fd, 1, SEEK_SET) == 1);
+
+	memset(buf, 0, sizeof buf);
+	errno = 0;
+	CHECK(pread(fd, buf, 3, -2) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(pread(fd, buf, 3, -1) == -1 && errno == EINVAL);
+
+	errno = 0;
+	CHECK(pwrite(fd, "XYZ", 3, -2) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(pwrite(fd, "XYZ", 3, -1) == -1 && errno == EINVAL);
+
+	/* nothing may have been written by any of the above */
+	CHECK(lseek(fd, 0, SEEK_SET) == 0);
+	CHECK(read(fd, buf, 5) == 5);
+	CHECK(!memcmp(buf, "hello", 5));
+
+	CHECK(close(fd) == 0);
+	unlink("t-negoff.txt");
+}
+#endif
+
 static void test_lseek(void)
 {
 	int fd[2];
