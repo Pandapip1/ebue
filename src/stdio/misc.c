@@ -43,6 +43,18 @@ int remove(const char *path)
 	return -1;
 }
 
+/* POSIX classifies a symbolic link as a non-directory file whatever it
+ * points at; NT gives a directory symlink FILE_ATTRIBUTE_DIRECTORY on
+ * the link itself.  Same predicate as src/stat/stat.c's
+ * mode_from_attrs(), so renameat() and lstat() agree on what a link is. */
+static int isdir_attrs(ULONG attrs, ULONG tag)
+{
+	if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) &&
+	    (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT || tag == IO_REPARSE_TAG_LX_SYMLINK))
+		return 0;
+	return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 {
 	struct __ntpath op, np;
@@ -51,7 +63,7 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	HANDLE h;
 	NTSTATUS st;
 	size_t bufsz;
-	FILE_BASIC_INFORMATION obi, nbi;
+	FILE_ATTRIBUTE_TAG_INFORMATION oti, nti;
 	int old_isdir, new_exists, new_isdir;
 
 	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;
@@ -87,10 +99,20 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	 * handle-less attribute query, since new is never opened.  Both are
 	 * reused by the STATUS_ACCESS_DENIED disambiguation below, which used
 	 * to make these same two queries for itself after the fact. */
-	old_isdir = NT_SUCCESS(NtQueryInformationFile(h, &io, &obi, sizeof obi, FileBasicInformation)) &&
-	            (obi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-	new_exists = NT_SUCCESS(NtQueryAttributesFile(&np.oa, &nbi));
-	new_isdir = new_exists && (nbi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+	old_isdir = NT_SUCCESS(NtQueryInformationFile(h, &io, &oti, sizeof oti, FileAttributeTagInformation)) &&
+	            isdir_attrs(oti.FileAttributes, oti.ReparseTag);
+	{
+		HANDLE nh;
+		NTSTATUS nst = NtOpenFile(&nh, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+		                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
+		new_exists = NT_SUCCESS(nst);
+		new_isdir = 0;
+		if (new_exists) {
+			if (NT_SUCCESS(NtQueryInformationFile(nh, &io, &nti, sizeof nti, FileAttributeTagInformation)))
+				new_isdir = isdir_attrs(nti.FileAttributes, nti.ReparseTag);
+			NtClose(nh);
+		}
+	}
 	if (old_isdir && new_exists && !new_isdir) {
 		NtClose(h);
 		__ntpath_free(&np);
