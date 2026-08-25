@@ -55,34 +55,6 @@ static void test_fcntl_h_defines_seek_whence(void)
 }
 
 /* ================= island: <tar.h>, alone ======================== */
-#if 0 /* UNIMPL: tar.h.html DESCRIPTION: "The <tar.h> header shall define
-	the following symbolic constants with the indicated values",
-	listing TMAGIC "ustar" / TMAGLEN 6 / TVERSION "00" / TVERSLEN 2,
-	the nine typeflag values REGTYPE..CONTTYPE, and the twelve octal
-	mode-field bits TSUID..TOEXEC.  ntlibc has NO <tar.h> at all:
-	include/ does not contain the file.  Triage: ABSENT (the whole
-	header).  <tar.h> is POSIX base -- its SYNOPSIS box carries no
-	option-group margin marker; the only [XSI] in the page is on the
-	single constant TSVTX.
-
-	WHY THIS ONE PROVES THE SHAPE OF THE BLIND SPOT group U audits.
-	<tar.h> declares no functions whatsoever.  It is therefore outside
-	test/POSIX-GAP-ACCOUNTING.md's 1177 POSIX.1-2017 function
-	interfaces BY CONSTRUCTION rather than by oversight -- no
-	function-granular accounting, however exhaustive, can ever record
-	its absence.  Before this fence, nothing in the tree recorded that
-	ntlibc lacks a mandatory POSIX header: not the ledger, not the
-	header inventory, not a banner.  It read as "fine".
-
-	ACCEPTANCE CRITERION: the header, with the values the standard
-	prints.  Nothing more -- this is a pure constants header, there is
-	no behaviour behind it and nothing in src/ would need to change.
-	Consumer: GNU tar and pax read the ustar typeflags and magic from
-	here rather than defining their own.
-
-	Observed today: fails to COMPILE, "include file 'tar.h' not
-	found" -- a compile-time failure, so no Wine-vs-real-NT
-	uncertainty arises. */
 #include <tar.h>
 
 static void test_tar_h_constants(void)
@@ -125,7 +97,6 @@ static void test_tar_h_constants(void)
 	UCHECK(TOWRITE == 00002);
 	UCHECK(TOEXEC == 00001);
 }
-#endif
 
 /* ================= island: <cpio.h>, alone ======================= */
 #if 0 /* UNIMPL: cpio.h.html DESCRIPTION: "The <cpio.h> header shall
@@ -267,12 +238,20 @@ static void u_check(int cond, const char *expr, int line)
 
 int main(void)
 {
-	/* Every clause in this file is currently fenced.  The binary
-	 * exists so that un-fencing one is a one-line change and the
-	 * harness picks it up with no Makefile edit (test/*.c is
-	 * globbed).  u_check() is referenced by the fenced tests only,
-	 * so touch it here to keep it honest. */
+	/* Un-fencing a clause here takes TWO edits, not one: removing the
+	 * #if 0 around the test AND adding its call below.  The definition
+	 * alone compiles and never runs -- which for a header-constants
+	 * test is easy to miss, because most of what these assert is
+	 * checked by the compiler anyway and the binary still says "all
+	 * tests passed".  Found the hard way: two mutations to <tar.h>'s
+	 * values went undetected until the calls were added.
+	 *
+	 * u_check() is referenced by the still-fenced tests only, so it is
+	 * touched here to keep it honest while any remain. */
 	u_check(1, "posix-headers harness is live", __LINE__);
+
+	test_fcntl_h_defines_seek_whence();
+	test_tar_h_constants();
 
 	if (!fails) printf("posix-headers: all tests passed\n");
 	return fails != 0;
