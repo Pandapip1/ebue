@@ -246,21 +246,59 @@ static void test_dtype(void)
 	rmdir(dir);
 }
 
+/* readdir()'s [EOVERFLOW] is fenced N/A below, and the fence's premise
+ * is a set of type widths.  A width is exactly the kind of premise that
+ * can stop being true in a commit that never looks at this file, so it
+ * is asserted at compile time here rather than only described in prose:
+ * if either of these ever fails, the fence below is wrong and the build
+ * says so instead of the fence quietly lying.
+ *
+ * What has to hold, per field of struct dirent that readdir() fills
+ * (src/dirent/readdir.c's make_real()):
+ *
+ *   d_ino = (ino_t)fi->FileId.  NT's FileId in
+ *     FILE_ID_BOTH_DIR_INFORMATION is 64-bit, so ino_t must be at least
+ *     64-bit for the assignment to be exact.
+ *
+ *   d_off = dp->tell.  Note this is NOT 64-bit, contrary to what this
+ *     fence used to claim: dp->tell is declared `long`
+ *     (src/dirent/dirent_internal.h:52), which is 32 bits on BOTH
+ *     targets -- i386, and x86_64 because Windows is LLP64.  The old
+ *     text said "both are 64-bit already", which was simply wrong about
+ *     this field.  The conclusion survives because the error was in the
+ *     conservative direction: a 32-bit counter WIDENING into a 64-bit
+ *     off_t cannot overflow it.  What the assertion below pins is that
+ *     relationship -- off_t at least as wide as dp->tell -- rather than
+ *     a specific width for either. */
+/* C99 build (-std=c99), so no static_assert: the negative-array idiom
+ * instead, which fails at compile time exactly the same way. */
+typedef char eoverflow_fence_needs_64bit_ino_t[sizeof(ino_t) >= 8 ? 1 : -1];
+typedef char eoverflow_fence_needs_off_t_at_least_as_wide_as_long[sizeof(off_t) >= sizeof(long) ? 1 : -1];
+
 #if 0 /* N/A: readdir.html/readdir_r.html ERRORS, the "shall fail"
        * (mandatory-when-triggered, not optional) list: "[EOVERFLOW]
        * One of the values in the structure to be returned cannot be
        * represented correctly." Checked against the live spec page
        * (not the ledger, which lumped this in with the optional "may
-       * fail" list -- it is not): ino_t and off_t are both 64-bit here
-       * (include/bits/alltypes.h), and src/dirent/readdir.c's
-       * make_real() fills d_ino straight from NT's 64-bit FileId
-       * (FILE_ID_BOTH_DIR_INFORMATION.FileId) and d_off from an
-       * in-process dp->tell counter incremented once per entry -- both
-       * are 64-bit already, so neither can ever hold a value a 64-bit
-       * ino_t/off_t cannot represent. The triggering condition itself
-       * is therefore unreachable without first overflowing a 64-bit
-       * counter (billions of entries read through one DIR*), which is
-       * not a test that can run in this suite. */
+       * fail" list -- it is not).
+       *
+       * Neither field readdir() fills can hold a value its type cannot
+       * represent, so the triggering condition is unreachable -- not
+       * merely hard to arrange.  d_ino takes NT's 64-bit FileId into a
+       * 64-bit ino_t, exactly; d_off takes the 32-bit `long` dp->tell
+       * counter into a 64-bit off_t, a widening.  Both relationships
+       * are pinned by the static assertions above, so this fence
+       * cannot outlive its premise.
+       *
+       * Not arch-conditional, despite what
+       * test/verification-coverage-accounting.md's C5 row supposed:
+       * ino_t and off_t are not defined per-arch at all.  Both come
+       * from the SHARED include/alltypes.h.in (`TYPEDEF _Int64 off_t;`,
+       * `TYPEDEF unsigned _Int64 ino_t;`), and arch/i386 and
+       * arch/x86_64 contribute only the _Int64 macro, which both define
+       * identically as `long long`.  There is no i386-narrows-off_t
+       * path to worry about; the assertions above cover the case
+       * anyway. */
 static void test_readdir_eoverflow(void)
 {
 	DIR *dp = opendir(".");

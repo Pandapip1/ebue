@@ -741,22 +741,35 @@ read/execute bits are compile-time constants in `mode_from_attrs()`.
 | `posix-sysmisc.c:1348` | `waitid` `WSTOPPED`/`WCONTINUED` | `kill(pid, SIGSTOP)` is `NtTerminateProcess`; NT does have `NtSuspendProcess`, so this is a design choice as much as a platform fact |
 | `posix-dl.c:777` | `POSIX_SPAWN_SETSIGDEF`/`SETSIGMASK` | **arguably already expired.** The stated reason is "there is no channel to hand a chosen initial mask/disposition to a child that has not yet run its own startup". The tree has exactly such a channel: `RTL_USER_PROCESS_PARAMETERS`'s `RuntimeData`, which `test/spawn-runtimedata-stress.c` exercises, and which `src/process/spawn.c:18` already uses to hand the child a block its `crt1` reads back before `main()` |
 
-#### C4 -- "exactly one uid, 1000, and `setuid` is a no-op" (1 fence)
+#### C4 -- "exactly one uid, 1000, and `setuid` is a no-op" (0 fences -- RESOLVED)
 
-`posix-unistd.c:710` -- `kill()`'s `[EPERM]` uid-mismatch case.
-`src/unistd/ids.c` returns 1000 unconditionally. **Expires if uids are
-ever derived from the token's SIDs.**
+`posix-unistd.c:710` -- `kill()`'s `[EPERM]`. **Fence removed; the
+clause is now asserted.** The condition named here was the wrong one:
+`kill()`'s `[EPERM]` never depended on uids at all. `src/signal/signal.c`
+maps `NtOpenProcess`'s `STATUS_ACCESS_DENIED` straight to `EPERM` -- NT's
+own access check on the target process object. Measured on real Windows
+11 Pro 22621: `pid 4` denies `PROCESS_TERMINATE` even to an elevated
+token, so `kill(4, 0)` takes that branch for real. Now asserted
+unconditionally in `test/posix-kill-perm-win.c`, which runs on the
+real-Windows leg. The uid-mismatch *example* POSIX gives remains
+unasserted, but that is a separate mechanism, not this fence's.
 
 #### C5 -- one-offs (4 fences, and these are the interesting ones)
 
 | Site | Clause | Condition, and how close it is to expiring |
 |------|--------|--------------------------------------------|
 | `posix-dl.c:162` | `RTLD_LOCAL` module-scoped symbol tables | Conditional on `dlsym()` using the NT loader's process-wide export resolution. `src/internal/pe.c` already has `ntlibc_pe_find_export`, a private export walker; a `dlsym` rebuilt on it with per-handle scoping makes `RTLD_LOCAL` observable. The fence argues from what *the NT loader* cannot do, but ntlibc is not obliged to use the NT loader |
-| `posix-grp.c:788` | `readv`/`writev` atomicity vs. concurrent `read`/`write` (XBD 2.9.7) | Conditional on "NT's only scatter/gather primitives are page-granular". True, but atomicity can also be obtained by serialising -- and `2c40c74` has just added real mandatory NT byte-range locks to this tree (`src/file`). The premise is weaker than when the fence was written |
+| `posix-grp.c:788` | `readv`/`writev` atomicity vs. concurrent `read`/`write` (XSH 2.9.7) | **RESOLVED: retagged `N/A` -> `UNIMPL`.** This row was right, and understated. The fence said "there is no genuinely atomic alternative available", which `src/misc/uio.c`'s own banner contradicts -- it says the page-granular primitives were "considered and rejected" and calls the result "a deliberate, documented divergence from POSIX". A rejected alternative is not an absent one. The byte-range locks this row names are a second route the page-granularity objection does not even reach. (The fence also miscited the section as XBD; it is XSH chapter 2) |
 | `posix-signal.c:781` | `SIGBUS` default disposition from `EXCEPTION_DATATYPE_MISALIGNMENT` | Conditional on **two** facts: that `EFLAGS.AC` is never set on this target, and that the target is x86/x86_64. An AArch64 port makes unaligned scalar access trap by configuration, and the fence becomes false |
-| `posix-misc.c:249` | `readdir` `[EOVERFLOW]` (a **shall fail**) | Conditional on `ino_t` and `off_t` both being 64-bit. The fence cites `include/bits/alltypes.h`, but that file is generated per-arch from `arch/$(ARCH)/bits/alltypes.h.gen`, and **`arch/i386` exists**. If i386's `off_t` is ever narrowed the clause becomes live and the fence becomes a silent `BUG` -- exactly the failure mode this section is about. (At `d307704` both are 64-bit on both arches; the point is that nothing checks) |
+| `posix-misc.c:249` | `readdir` `[EOVERFLOW]` (a **shall fail**) | **RESOLVED: verdict confirmed, premise corrected and now enforced.** The arch worry does not apply -- `ino_t`/`off_t` are not per-arch at all. Both come from the SHARED `include/alltypes.h.in`; `arch/i386` and `arch/x86_64` contribute only the `_Int64` macro and both define it as `long long`. But the fence had a real factual error: it claimed `d_off`'s source `dp->tell` was 64-bit. It is `long` (`src/dirent/dirent_internal.h:52`), which is **32 bits on both targets** -- i386, and x86_64 because Windows is LLP64. The conclusion survives because the error was conservative (a widening cannot overflow). "Nothing checks" is now false: two compile-time assertions in `test/posix-misc.c` pin `sizeof(ino_t) >= 8` and `sizeof(off_t) >= sizeof(long)`, verified to fire by mutation |
 
-### The one that is not a mechanism argument at all
+### The one that is not a mechanism argument at all -- RESOLVED
+
+**Retagged `N/A` -> `UNIMPL`.** This section's diagnosis was correct and
+is adopted verbatim: the decision may well be right, but the tag was
+wrong. The clause is applicable (`__fd_alloc()` returns `EMFILE` and
+`popen()` reaches it like any other stream constructor), so declining to
+exercise it is `UNIMPL`, not inapplicability. Original text kept below.
 
 `posix-stdio.c:415` -- `popen()`'s `[EMFILE]` at `{STREAM_MAX}`. Read
 the fence: its reason is that driving the process to `STREAM_MAX` "would
