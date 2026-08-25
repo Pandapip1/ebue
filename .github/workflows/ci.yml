@@ -25,6 +25,31 @@ jobs:
       - uses: actions/checkout@v7
       - uses: fsfe/reuse-action@v5
 
+  # The minimum supported Windows version, checked against the import list
+  # that decides it (tools/lint-minver.sh). Its own job, and the cheapest
+  # one here: it reads README.md and tools/ntdll.def out of the checkout,
+  # builds nothing, and needs neither the cross toolchain nor Wine.
+  #
+  # It is in CI, and not only in tools/gate.sh, because it guards the one
+  # claim no other job in this file can test. `ntlibc-suite` runs under
+  # Wine, whose ntdll has no version gates at all and resolves every
+  # import regardless of vintage; `windows-test` runs on Server 2025,
+  # which is many releases past the floor. Both are green on an image
+  # that older Windows would refuse to load outright -- which is exactly
+  # how the Windows 7 floor went unrecorded for as long as it did.
+  minver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # No `submodules:` -- this reads two files from this repository and
+      # nothing else.
+      - uses: actions/checkout@v7
+      - name: Minimum supported Windows version
+        run: ./tools/lint-minver.sh
+
+  # Build the win32-cross tinycc toolchain once and cache it, keyed on the
+  # pinned commit above, so a normal CI run restores a prebuilt toolchain
+  # instead of rebuilding a whole cross-compiler from scratch every time.
   build-toolchain:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

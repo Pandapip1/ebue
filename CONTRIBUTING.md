@@ -22,6 +22,49 @@ The shell under `src/sh/` is part of libc because `system()`, `popen()` and
 `wordexp()` require shell-language behavior that `cmd.exe` cannot provide.
 `sh/main.c` is a thin executable wrapper over the same in-process engine.
 
+## Adding an ntdll import raises the minimum Windows version
+
+`tools/ntdll.def` is the complete list of what ntlibc asks of the
+operating system — ntdll is the only DLL a default build imports from at
+all (see the section above). It is therefore also the complete statement
+of which Windows versions ntlibc can run on, and adding a line to it is
+not a free action.
+
+The reason is that these are *static* imports. A static import of a name
+the running ntdll does not export does not produce a call that fails: the
+loader refuses the whole image, before any of its code runs. One import
+that is newer than the machine bricks every program built against the
+library, whether or not it ever calls the function. So the minimum
+supported version is the **maximum**, over every import, of the version
+that first exported it — and one careless line here raises it for
+everyone.
+
+That is why every export in `tools/ntdll.def` carries the NTDLL version
+it was first exported from, sourced to Geoff Chappell's per-release
+"exports added for NTDLL x.y" lists (cited page-by-page in that file's
+own header). When you add an import:
+
+1. Look the name up on those pages and annotate it. Do not guess from the
+   name, and do not infer from the fact that it exists in Wine or in
+   ReactOS — neither is evidence about Microsoft's ntdll. (Wine's ntdll
+   has no version gates at all, which is exactly why the Windows 7 floor
+   went unnoticed in this tree for as long as it did.)
+2. Run `make minver`. It fails if the annotation is missing, or if the
+   new maximum no longer matches the floor declared in `README.md`.
+3. If it does raise the floor, that is a decision, not a build error.
+   Either use an older equivalent (`RtlCreateProcessParameters` rather
+   than the Vista `...Ex`, say), or raise the README floor deliberately
+   and update the prose there.
+
+Requesting something newer than the floor at *runtime* is a different
+matter and is fine, because it can fail softly: `src/unistd/unlink.c`
+asks for `FileDispositionInformationEx` (Windows 10) and falls back to
+`FileDispositionInformation` on `STATUS_INVALID_PARAMETER` /
+`STATUS_NOT_SUPPORTED`; `src/stdio/misc.c` does the same for
+`FileRenameInformationEx`. An information class, an FSCTL or an
+`NtCreateFile` flag can be probed that way. An import cannot, which is
+the whole distinction.
+
 ## Source conventions
 
 - Add an SPDX copyright and licence header to every new file. CI runs

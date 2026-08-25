@@ -73,7 +73,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test posix-optsrun asan install-check linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test posix-optsrun asan install-check linkcheck-i386 linkcheck-x86_64 hygiene minver lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -473,6 +473,17 @@ fi
 if want linkcheck-x86_64; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-x86_64"
 	run_stage linkcheck-x86_64 "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
+fi
+
+# Minimum supported Windows version (tools/lint-minver.sh).  Same shape
+# as ledger: reads README.md and tools/ntdll.def straight out of the
+# source directory, builds nothing, needs no configure.  It is in the
+# gate rather than left to `make lint` because it guards a claim no
+# other stage can test -- neither Wine (no version gates in its ntdll)
+# nor CI's Server 2025 (far past the floor) can observe a version floor
+# at all.
+if want minver; then
+	run_stage minver "cd '$srcdir' && ./tools/lint-minver.sh"
 fi
 
 if want hygiene; then

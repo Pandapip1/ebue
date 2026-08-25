@@ -663,6 +663,20 @@ hygiene: $(GENH)
 
 .PHONY: hygiene
 
+# minver: the library's minimum supported Windows version, checked rather
+# than asserted -- tools/ntdll.def's per-export NTDLL-version annotations
+# against the floor README.md declares. Like `ledger`, a grep over two
+# checked-in artefacts with no build and no $(CC), so it has no
+# prerequisite and runs instantly. Deliberately not a `lint` stage:
+# lint.sh is report-only static analysis, and this is pass/fail. See
+# tools/lint-minver.sh's header for the bug class (a static import of a
+# name the running ntdll does not export makes the loader refuse the
+# whole image) and for why neither Wine nor CI's Server 2025 can see it.
+minver:
+	./tools/lint-minver.sh
+
+.PHONY: minver
+
 # asan/fuzz: a second, native (Linux/ELF) build of the same src/*.c under
 # AddressSanitizer, UBSan and libFuzzer.  This is not a substitute for
 # `make check` -- it cannot be, since a native build has no ntdll -- but a
