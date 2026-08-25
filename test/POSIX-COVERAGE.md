@@ -2762,7 +2762,7 @@ clauses that are simply absent. **One assertion group comes out
 | posix_fadvise | DESCRIPTION: every advice value is advisory and "shall have no effect on the semantics of other operations" (asserted by reading the file back after `POSIX_FADV_DONTNEED`); "The specified range need not currently exist in the file"; "If len is zero, all data following offset is specified"; RETURN VALUE returns the error number, not `-1`/`errno` | covered — all six `POSIX_FADV_*` values | test/posix-tail.c (`test_posix_fadvise`) |
 | posix_fadvise | *shall fail* "[EBADF] The fd argument is not a valid file descriptor"; the advice half of "[EINVAL] The value of advice is invalid" | covered | test/posix-tail.c (`test_posix_fadvise`) |
 | posix_fadvise | the other half of the same clause: "…or the value of len is less than zero" | covered — **FIXED**; `src/fcntl/fadvise.c` guards `len < 0` ahead of the advice switch | test/posix-tail.c (`test_posix_fadvise_einval_negative_len`) |
-| posix_fadvise | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_espipe`) |
+| posix_fadvise | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | covered — **FIXED**; `src/fcntl/fadvise.c` now ends with `if (f->type == __FD_PIPE) return ESPIPE;`, the same predicate `posix_fallocate()` uses for its identically worded clause. Asserted on both ends of a `pipe()`; a FIFO is not separately testable (`mkfifo()` is `ENOSYS` here) and would not widen the test — NT has one `FILE_DEVICE_NAMED_PIPE` for both, so `__handle_type()` maps them onto the same `__FD_PIPE` | test/posix-tail.c (`test_posix_fadvise_espipe`) |
 | posix_fallocate | "If the offset+len is beyond the current file size, then posix_fallocate() shall adjust the file size to offset+len. Otherwise, the file size shall not be changed"; the range is really writable and readable back; "Space allocated … shall be freed by a successful call to creat() or open() that truncates the size of the file" | covered | test/posix-tail.c (`test_posix_fallocate`) |
 | posix_fallocate | *shall fail* `[EBADF]` (invalid fd), `[EINVAL]` (negative `offset` or `len`), `[ESPIPE]` (pipe/FIFO); *may fail* `[EINVAL]` for `len == 0` (asserted permissively, since it is optional) | covered | test/posix-tail.c (`test_posix_fallocate`) |
 | posix_fallocate | *shall fail* "[EFBIG] The value of offset+len is greater than the maximum file size" | covered — FIXED (5222c97 defined-behaviour [EFBIG]); the fenced defect was: the only way the implementation can produce it is by signed-integer overflow, which is undefined behaviour; see below | test/posix-tail.c (`test_posix_fallocate_efbig`) |
@@ -2848,11 +2848,33 @@ clauses that are simply absent. **One assertion group comes out
    because this page's `[EINVAL]` names advice and len only.
    `test_posix_fadvise_einval_negative_len` is un-fenced and runs.
 
-4. **`posix_fadvise()` returns 0 for a pipe or FIFO instead of
-   `[ESPIPE]`.** *Shall fail*: "[ESPIPE] The fd argument is associated
-   with a pipe or FIFO." The mechanism is already present one function
-   away in the same file — `posix_fallocate()` does `if (f->type ==
-   __FD_PIPE) return ESPIPE;`.
+4. **`posix_fadvise()` returned 0 for a pipe or FIFO instead of
+   `[ESPIPE]` — FIXED.** *Shall fail*: "[ESPIPE] The fd argument is
+   associated with a pipe or FIFO." `src/fcntl/fadvise.c` validated
+   `fd`, `len` and `advice` and then returned 0 without ever looking at
+   *what* the descriptor was, so
+   `posix_fadvise(pipefd, 0, 0, POSIX_FADV_NORMAL)` returned 0. This
+   page's "shall have no effect on the semantics of other operations"
+   latitude does not reach the clause: it says a conforming
+   implementation may do nothing, not that it may *succeed* on a
+   descriptor the ERRORS section requires it to refuse. The mechanism
+   was already present one function away in the same file —
+   `posix_fallocate()` does `if (f->type == __FD_PIPE) return ESPIPE;`
+   — and that is now the last check in `posix_fadvise()` too.
+
+   **Ordering, since POSIX orders none of the three against each
+   other.** `[EBADF]` stays first because it is forced, not chosen:
+   `f->type` cannot be read until `__fd_get()` has produced an `f`.
+   `[ESPIPE]` is placed *after* both halves of `[EINVAL]`, so a pipe
+   given a bogus advice reports `EINVAL`. The rule is the one
+   `posix_fallocate()` already follows — validate the arguments the
+   caller passed, then the object they name — chosen so the two
+   functions in this file cannot be caught disagreeing about a
+   descriptor that fails two clauses at once. `test_posix_fadvise_
+   espipe` asserts that case permissively (`EINVAL || ESPIPE`), the way
+   `test_posix_fadvise()` already does for `[EBADF]` against an invalid
+   advice, so the *choice* is documented here rather than frozen into
+   an assertion POSIX does not license.
 
 5. **`posix_fallocate()` reports `[EBADF]` where `[ENODEV]` is
    required, and never checks write permission.** Two clauses, one
@@ -2911,6 +2933,11 @@ implementations with the tests still un-fenced turns exactly twelve
 assertions red across the five groups. Everything was then re-fenced
 and both files reverted; nothing in `src/` is modified by this commit.
 
+**Since then the `src/fcntl/fadvise.c` half has landed for real**, one
+clause per commit — items 3, 4, 5 and 6 above are all marked FIXED and
+their tests run live. The two `nftw()` fences (items 1 and 2) are the
+only ones this file still carries.
+
 ### Observed behaviour where POSIX permits latitude (group J3)
 
 - **Two mutations that this file deliberately does *not* claim to
@@ -2962,8 +2989,12 @@ and both files reverted; nothing in `src/` is modified by this commit.
   function "shall have no effect on the semantics of other operations
   on the specified data, although it may affect the performance", so a
   validate-and-no-op implementation is correct and `src/fcntl/
-  fadvise.c`'s banner argues that case honestly. The two BUGs above are
-  about its *argument validation*, not its inaction.
+  fadvise.c`'s banner argues that case honestly. The two BUGs above
+  (3 and 4, both now fixed) were never about its inaction: one was its
+  *argument* validation (`len < 0`) and the other its *descriptor*
+  validation (`[ESPIPE]`). The latitude is over what the call may
+  **do**, and it does not extend to succeeding where the ERRORS
+  section says the call shall fail.
 - **`readv()`/`writev()` are not atomic with respect to other
   `read`/`write` calls (XBD 2.9.7).** `src/misc/uio.c`'s banner
   documents this as a deliberate, argued divergence rather than an

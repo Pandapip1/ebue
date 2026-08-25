@@ -32,15 +32,12 @@
  *
  * ==================== outcomes ========================================
  *
- * One BUG fenced in the two <fcntl.h> advisory functions, a *shall
- * fail* error clause that is simply absent:
- *
- *   posix_fadvise   no [ESPIPE] for a pipe or FIFO
- *
- * Three others that were fenced here are now fixed and run live:
- * posix_fadvise's missing [EINVAL] for len < 0, posix_fallocate's
- * [ENODEV] for a non-regular file reported as [EBADF], and its missing
- * [EBADF] for a descriptor opened read-only.
+ * No BUG is fenced any longer in the two <fcntl.h> advisory
+ * functions.  Four that were fenced here are now fixed and run live:
+ * posix_fadvise's missing [ESPIPE] for a pipe or FIFO and its missing
+ * [EINVAL] for len < 0, posix_fallocate's [ENODEV] for a non-regular
+ * file reported as [EBADF], and its missing [EBADF] for a descriptor
+ * opened read-only.
  *
  * One BUG fenced in nftw(): no protection against a directory that is
  * a descendant of itself through a symbolic link, which nftw.html
@@ -824,28 +821,46 @@ static void test_posix_fadvise_einval_negative_len(void)
 	unlink("tail-fadv2.tmp");
 }
 
-#if 0 /* BUG: posix_fadvise() returns 0 for a pipe or FIFO instead of
-       * [ESPIPE].
-       *
-       * posix_fadvise.html ERRORS, *shall fail*:
-       *   "[ESPIPE] The fd argument is associated with a pipe or FIFO."
-       *
-       * src/fcntl/fadvise.c checks only __fd_get() and the advice
-       * value; it never inspects f->type, although the very next
-       * function in the same file (posix_fallocate()) does exactly
-       * that -- `if (f->type == __FD_PIPE) return ESPIPE;` -- so the
-       * mechanism is already present, one line away.  Measured under
-       * Wine: posix_fadvise(pipefd, 0, 0, POSIX_FADV_NORMAL) returns 0
-       * where ESPIPE is required. */
+/* posix_fadvise.html ERRORS, *shall fail*: "[ESPIPE] The fd argument is
+ * associated with a pipe or FIFO."  Both ends, because the clause names
+ * the descriptor's object and not its direction.
+ *
+ * A FIFO cannot be added to this: mkfifo() is ENOSYS here
+ * (src/stat/chmod.c).  It would not widen the test if it could --
+ * src/internal/fd.c's __handle_type() maps NT's one
+ * FILE_DEVICE_NAMED_PIPE onto __FD_PIPE for the anonymous and the named
+ * case alike, so a FIFO reaches the same predicate a pipe() end does. */
 static void test_posix_fadvise_espipe(void)
 {
-	int p[2];
+	int p[2], fd;
 	CHECK(pipe(p) == 0);
 	CHECK(posix_fadvise(p[0], 0, 0, POSIX_FADV_NORMAL) == ESPIPE);
 	CHECK(posix_fadvise(p[1], 0, 0, POSIX_FADV_NORMAL) == ESPIPE);
+	/* The two documented errors a pipe with an invalid advice
+	 * satisfies at once.  POSIX orders neither against the other, so
+	 * this asserts only that one of them comes back -- the same
+	 * permissive shape test_posix_fadvise() uses for [EBADF] against
+	 * an invalid advice.  (src/fcntl/fadvise.c validates the arguments
+	 * first, so it is EINVAL here.) */
+	{
+		int r = posix_fadvise(p[0], 0, 0, 999);
+		CHECK(r == EINVAL || r == ESPIPE);
+	}
 	close(p[0]); close(p[1]);
+
+	/* The other direction, so the fix cannot be "achieved" by refusing
+	 * every descriptor: a regular file is not a pipe and still gets 0.
+	 * test_posix_fadvise() asserts this at length on its own file; it
+	 * is repeated here because it is what makes the assertions above
+	 * discriminating rather than merely satisfiable. */
+	fd = open("tail-fadv3.tmp", O_RDWR | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(posix_fadvise(fd, 0, 4096, POSIX_FADV_WILLNEED) == 0);
+		close(fd);
+		unlink("tail-fadv3.tmp");
+	}
 }
-#endif
 
 static void test_posix_fallocate(void)
 {
@@ -1573,9 +1588,7 @@ int main(void)
 
 	test_posix_fadvise();
 	test_posix_fadvise_einval_negative_len();
-#if 0 /* BUG: see the fence above test_posix_fadvise_espipe */
 	test_posix_fadvise_espipe();
-#endif
 	test_posix_fallocate();
 	test_posix_fallocate_efbig();
 	test_posix_fallocate_enodev();
