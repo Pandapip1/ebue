@@ -1489,25 +1489,34 @@ static void test_siginterrupt(void)
 	 * restart-vs-EINTR decision for the flag to steer.  What is *not*
 	 * N/A is the argument check below. */
 
-#if NTLIBC_TEST(BUG, posix_signal_siginterrupt_rejects_invalid_signal) /* BUG: siginterrupt() accepts any signal number, valid or not.
-	 * siginterrupt.html ERRORS lists as shall-fail: "[EINVAL] The sig
-	 * argument is not a valid signal number."
-	 *
-	 * Mechanism: src/signal/signal.c:305 is
-	 *     int siginterrupt(int sig, int flag)
-	 *     { (void)sig; (void)flag; return 0; }
-	 * -- it discards sig without ever passing it through this file's own
-	 * sig_valid() (which signal(), sigaction(), sighold() and sigrelse()
-	 * all do use), so an out-of-range signal number reports success.
-	 * That the flag itself is a documented no-op here does not excuse
-	 * the argument check: [EINVAL] is a shall-fail clause about the
-	 * argument, not about the effect.  Re-enable when siginterrupt()
-	 * validates sig. */
+	/* siginterrupt.html ERRORS lists as shall-fail: "[EINVAL] The sig
+	 * argument is not a valid signal number."  That the flag itself is
+	 * a documented no-op here does not excuse the argument check: this
+	 * is a shall-fail clause about the argument, not about the effect,
+	 * so sig goes through src/signal/signal.c's own sig_valid() -- the
+	 * one signal(), sigaction(), sighold() and sigrelse() all use.
+	 * Both signs of "not valid" are probed, and 0 with them: it is the
+	 * one number a plain range check written as `sig < NSIG` would let
+	 * through, and kill()'s sig==0 convention gives it a meaning
+	 * elsewhere in this header that it does not have here. */
 	errno = 0;
 	CHECK(siginterrupt(-1, 1) == -1 && errno == EINVAL);
 	errno = 0;
 	CHECK(siginterrupt(NSIG, 1) == -1 && errno == EINVAL);
-#endif
+	errno = 0;
+	CHECK(siginterrupt(0, 1) == -1 && errno == EINVAL);
+
+	/* And the rejection is of the argument, not of everything: a valid
+	 * signal still succeeds afterwards, with both flag values, so the
+	 * [EINVAL] arm cannot be "achieved" by a stub that fails always.
+	 * SIGKILL and SIGSTOP are valid signal numbers and this page lists
+	 * no uncatchable-signal error, so -- unlike signal()/sigaction() --
+	 * they must be accepted rather than rejected. */
+	CHECK(siginterrupt(SIGUSR1, 1) == 0);
+	CHECK(siginterrupt(SIGUSR1, 0) == 0);
+	CHECK(siginterrupt(SIGKILL, 1) == 0);
+	CHECK(siginterrupt(SIGSTOP, 0) == 0);
+	CHECK(siginterrupt(NSIG - 1, 1) == 0);
 }
 
 /* ==================================================================

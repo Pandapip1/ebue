@@ -519,7 +519,18 @@ int sigwait(const sigset_t *s, int *sig)
 		}
 	}
 }
-int siginterrupt(int sig, int flag) { (void)sig; (void)flag; return 0; }
+/* siginterrupt.html ERRORS, shall-fail: "[EINVAL] The sig argument is not
+ * a valid signal number."  The effect the page names -- clearing or
+ * setting SA_RESTART -- is a no-op here, since nothing on this platform
+ * is ever interrupted mid-call by an asynchronously delivered signal, so
+ * there is no restart-vs-[EINTR] decision for flag to steer.  That does
+ * not excuse dropping the argument check: [EINVAL] is a clause about the
+ * argument, not about the effect, and a caller that passes a bad signal
+ * number is entitled to hear about it here exactly as it would from
+ * signal() or sigaction().  Unlike those two, SIGKILL and SIGSTOP are
+ * accepted: this page lists no uncatchable-signal error, and with the
+ * flag a no-op there is nothing about them to refuse. */
+int siginterrupt(int sig, int flag) { if (!sig_valid(sig)) { errno = EINVAL; return -1; } (void)flag; return 0; }
 /* The alternate signal stack, and whether a handler is running on it.
  *
  * This used to be a stub that ignored ss, reported SS_DISABLE, and
