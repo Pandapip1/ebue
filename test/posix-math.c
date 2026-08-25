@@ -1864,13 +1864,24 @@ static void test_fenv_getenv_does_not_modify(void)
 	unsigned short cw, orig;
 
 	/* Save the control word found on entry and restore exactly it at the
-	 * end.  fesetenv(&e) is NOT a restore here: `e` was captured after
-	 * this test unmasked divide-by-zero, so putting it back leaves x87
-	 * divide-by-zero TRAPPING for every later test in this file, and the
-	 * first 1.0/0.0 in any of them kills the process with no output at
-	 * all.  Exception masking is process-global hardware state; a test
-	 * that changes it owes the rest of the run an exact restore.  (Same
-	 * hazard, same remedy, as test_fenv_holdexcept_installs_nonstop().) */
+	 * end.  Exception masking is process-global hardware state, and a
+	 * test that changes it owes the rest of the run an exact restore.
+	 *
+	 * AND DO NOT "RESTORE" WITH fesetenv(&e).  `e` was captured AFTER
+	 * this test unmasked divide-by-zero, so installing it puts the
+	 * process back into the unmasked state rather than the one found on
+	 * entry -- and now that fegetenv() faithfully preserves the control
+	 * word (it used to mask everything as an FNSTENV side effect, which
+	 * silently made `e` safe to install), FLDENV of an environment whose
+	 * divide-by-zero is unmasked AND whose status word has the
+	 * corresponding flag pending raises the exception on the spot.  That
+	 * is a hardware FPE inside fesetenv(), not a failed assertion:
+	 * observed natively under tools/asan-build.sh as
+	 * "AddressSanitizer: FPE ... in fesetenv".
+	 *
+	 * So the round trip is deliberately NOT exercised here;
+	 * test_fenv_env_roundtrip() covers fesetenv() on an environment that
+	 * is safe to install. */
 	__asm__ __volatile__("fnstcw %0" : "=m"(orig));
 	cw = orig & (unsigned short)~0x04u;	/* unmask divide-by-zero (ZM) */
 	__asm__ __volatile__("fldcw %0" : : "m"(cw));
@@ -1880,7 +1891,6 @@ static void test_fenv_getenv_does_not_modify(void)
 	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
 	CHECK((cw & 0x04) == 0);		/* fegetenv must not have masked it */
 
-	CHECK(fesetenv(&e) == 0);
 	__asm__ __volatile__("fldcw %0" : : "m"(orig));
 }
 

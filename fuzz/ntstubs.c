@@ -299,6 +299,14 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 		}
 	}
 	__fd_init();
+	/* crt1.c calls __fenv_init() here too, and natively there is no
+	 * crt1.  Without this the startup floating-point environment is
+	 * never captured, FE_DFL_ENV falls back to its first-use capture,
+	 * and "the environment installed at program startup" silently
+	 * becomes "the environment when someone first asked" -- which is the
+	 * behaviour src/math/fenv.c explicitly rejects.  Anything that links
+	 * ntlibc's objects without its crt1 has to make this call. */
+	__fenv_init();
 	xstatus_init(envp);
 
 	/* One more thing a real execve() gives a child and a constructor
