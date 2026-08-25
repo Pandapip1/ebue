@@ -43,7 +43,6 @@ B test_glob_noescape
 B test_group_redir_leak
 B test_heredoc_queue_leak
 B test_heredoc_quoted_delim_roundtrip
-B test_ionum_overflow
 B test_mlock_munlock
 B test_mmap_fixed_atomic_replace
 B test_mmap_private
