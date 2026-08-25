@@ -1153,6 +1153,66 @@ static void test_ungetwc(void)
 	remove("test.tmp");
 }
 
+#if 0	/* BUG: a file-positioning function does not discard ungetwc()
+	 * pushback.  ungetwc.html DESCRIPTION: "A successful intervening
+	 * call (with the stream pointed to by stream) to a
+	 * file-positioning function (fseek(), fseeko(), fsetpos(), or
+	 * rewind()) shall discard any pushed-back wide characters for the
+	 * stream."  fflush.html's read-stream clause says the same thing
+	 * for its own action, naming "characters pushed back onto the
+	 * stream by ungetc() or ungetwc()".
+	 *
+	 * Mechanism: the wide pushback lives in its own slot, f->wunget /
+	 * f->nwunget (src/stdio/stdio_impl.h), separate from the byte slot
+	 * f->nunget.  Across the whole tree, f->nwunget is written in
+	 * exactly two places -- src/stdio/wide.c:167, where ungetwc() sets
+	 * it, and src/stdio/wide.c:52, where the next getwc_core() consumes
+	 * it -- so a read is the only thing that can ever clear it.  Every
+	 * reset path knows about the byte slot and not the wide one:
+	 * src/stdio/seek.c's fseeko() (and therefore fseek(), fsetpos() and
+	 * rewind()) clears f->nunget, src/stdio/buf.c's __fflush_locked()
+	 * and __towrite() clear f->nunget, src/stdio/file.c's freopen()
+	 * clears f->nunget.  None of them touches f->nwunget.
+	 *
+	 * The result is a phantom wide character injected after the seek:
+	 * the pushback POSIX says was discarded is returned first, and the
+	 * byte the caller seeked to arrives one fgetwc() late.  Every
+	 * position the stream reports is correct; only the character
+	 * sequence is wrong, which makes it the kind of bug that shows up
+	 * far from its cause.
+	 *
+	 * Re-enable when the positioning and flush paths clear the wide
+	 * pushback slot alongside the byte one. */
+static void test_ungetwc_discarded_by_positioning(void)
+{
+	FILE *f = fopen("test.tmp", "wb+");
+
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fputs("abc", f) >= 0);
+	rewind(f);
+
+	/* fseek() discards the pushback */
+	CHECK(fgetwc(f) == L'a');
+	CHECK(ungetwc(L'X', f) == L'X');
+	CHECK(fseek(f, 2, SEEK_SET) == 0);
+	CHECK(fgetwc(f) == L'c');
+
+	/* rewind() likewise */
+	CHECK(ungetwc(L'X', f) == L'X');
+	rewind(f);
+	CHECK(fgetwc(f) == L'a');
+
+	/* and so does fflush() on a readable stream, per fflush.html */
+	CHECK(ungetwc(L'X', f) == L'X');
+	CHECK(fflush(f) == 0);
+	CHECK(fgetwc(f) == L'b');
+
+	CHECK(fclose(f) == 0);
+	remove("test.tmp");
+}
+#endif
+
 /* ---------------------------------------------------------------------
  * fwide -- fwide.html
  * ------------------------------------------------------------------- */
