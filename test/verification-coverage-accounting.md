@@ -681,7 +681,7 @@ instead, which a mutated tilde-expanding `glob()` fails.
 | Site | Mechanism |
 |------|-----------|
 | `posix-misc.c:279` | `readdir` `[ENOENT]` is a POSIX **may fail**; optional by definition, and no conformant implementation is required to detect it |
-| `posix-wchar.c:1140` | `wcwidth()` on a non-BMP character: `wchar_t` is 16 bits by the NT ABI and the function takes one unit, so it is handed one surrogate half at a time. No implementation on this platform can do better |
+| `posix-wchar.c:1140` | `wcwidth()` on a non-BMP character: `wchar_t` is 16 bits by the NT ABI and the function takes one unit, so it is handed one surrogate half at a time. No implementation on this platform can do better. **The width premise is now pinned** by a compile-time assertion in `test/posix-wchar.c` (`sizeof(wchar_t) == 2`), verified to fire by mutation, so a port that widened `wchar_t` breaks the build rather than the fence |
 | `posix-dl.c:313` | `MAP_FIXED` atomic replacement: `NtMapViewOfSection` with an overlapping `BaseAddress` returns `STATUS_CONFLICTING_ADDRESSES` rather than replacing, and the unmap-then-map sequence has a TOCTOU gap POSIX's contract does not |
 | `posix-dl.c:737` | `POSIX_SPAWN_RESETIDS`: an NT access token has a SID set and privileges, with no real/effective/saved triple for the flag to reset |
 
@@ -698,6 +698,16 @@ or pty fd class is added** -- and every one of these fences argues from
 *serial-line* semantics, which is precisely what a COM port is. The
 mechanism `GetCommState`/`SetCommState` over a `DCB` is named inside
 `posix-dl.c:538` as the thing that would make it observable.
+
+**The expiry is now written down in the tree**, which was this
+section's central complaint. The four `posix-termios.c` fences in this
+group each carry it, naming the three lines that would have to change
+together: `src/unistd/isatty.c:12` and `src/termios/termios.c:145` both
+answer `ENOTTY` for anything that is not `__FD_CONSOLE`, and
+`src/internal/fd.c:68` folds `FILE_DEVICE_SERIAL_PORT` in with
+`FILE_DEVICE_NULL` into `__FD_CHAR`. Each fence says to re-audit all
+four together if that mapping changes. (The `posix-dl.c` half of the
+group is another audit's file and is untouched here.)
 
 | Site | Clause |
 |------|--------|
@@ -796,7 +806,7 @@ unasserted, but that is a separate mechanism, not this fence's.
 |------|--------|--------------------------------------------|
 | `posix-dl.c:162` | `RTLD_LOCAL` module-scoped symbol tables | Conditional on `dlsym()` using the NT loader's process-wide export resolution. `src/internal/pe.c` already has `ntlibc_pe_find_export`, a private export walker; a `dlsym` rebuilt on it with per-handle scoping makes `RTLD_LOCAL` observable. The fence argues from what *the NT loader* cannot do, but ntlibc is not obliged to use the NT loader |
 | `posix-grp.c:788` | `readv`/`writev` atomicity vs. concurrent `read`/`write` (XSH 2.9.7) | **RESOLVED: retagged `N/A` -> `UNIMPL`.** This row was right, and understated. The fence said "there is no genuinely atomic alternative available", which `src/misc/uio.c`'s own banner contradicts -- it says the page-granular primitives were "considered and rejected" and calls the result "a deliberate, documented divergence from POSIX". A rejected alternative is not an absent one. The byte-range locks this row names are a second route the page-granularity objection does not even reach. (The fence also miscited the section as XBD; it is XSH chapter 2) |
-| `posix-signal.c:781` | `SIGBUS` default disposition from `EXCEPTION_DATATYPE_MISALIGNMENT` | Conditional on **two** facts: that `EFLAGS.AC` is never set on this target, and that the target is x86/x86_64. An AArch64 port makes unaligned scalar access trap by configuration, and the fence becomes false |
+| `posix-signal.c:781` | `SIGBUS` default disposition from `EXCEPTION_DATATYPE_MISALIGNMENT` | **Condition now written into the fence.** Both facts named there -- `EFLAGS.AC` never set, and the target being x86/x86_64 at all -- with the AArch64 (`SCTLR_EL1.A`) case spelled out as what makes it false, and an instruction to re-audit the day a third arch appears rather than assume it carried over |
 | `posix-misc.c:249` | `readdir` `[EOVERFLOW]` (a **shall fail**) | **RESOLVED: verdict confirmed, premise corrected and now enforced.** The arch worry does not apply -- `ino_t`/`off_t` are not per-arch at all. Both come from the SHARED `include/alltypes.h.in`; `arch/i386` and `arch/x86_64` contribute only the `_Int64` macro and both define it as `long long`. But the fence had a real factual error: it claimed `d_off`'s source `dp->tell` was 64-bit. It is `long` (`src/dirent/dirent_internal.h:52`), which is **32 bits on both targets** -- i386, and x86_64 because Windows is LLP64. The conclusion survives because the error was conservative (a widening cannot overflow). "Nothing checks" is now false: two compile-time assertions in `test/posix-misc.c` pin `sizeof(ino_t) >= 8` and `sizeof(off_t) >= sizeof(long)`, verified to fire by mutation |
 
 ### The one that is not a mechanism argument at all -- RESOLVED

@@ -299,11 +299,26 @@ static void test_puts_eintr(void)
 /* [EIO] "A physical I/O error has occurred, or the process is a member
  * of a background process group attempting to write to its controlling
  * terminal, TOSTOP is set..." */
-#if 0 /* N/A: NT has no controlling terminal, no process groups with a
-       * foreground/background distinction, and no TOSTOP (see
-       * src/termios/, whose tcsetpgrp is a stub) -- the second half of
-       * the clause has no mechanism.  The first half, a genuine physical
-       * I/O error, is not something a test can provoke on demand. */
+#if 0 /* N/A, both halves, for two different reasons.
+       *
+       * Background-process-group write to a controlling terminal with
+       * TOSTOP set: no mechanism.  Stated carefully, because a
+       * neighbouring correction makes the loose version misleading --
+       * NT DOES have process groups (console process groups, created
+       * by CREATE_NEW_PROCESS_GROUP and targeted by
+       * GenerateConsoleCtrlEvent; see test/posix-spawn.c's
+       * POSIX_SPAWN_SETPGROUP fence, which was wrong on exactly this
+       * point).  What NT has no analogue of is the rest of the clause:
+       * there is no CONTROLLING TERMINAL owned by a session, no
+       * foreground/background distinction among console process groups
+       * -- a console delivers input to whoever reads it and gates
+       * nothing on group membership -- and no TOSTOP to enable
+       * (src/termios/, whose tcsetpgrp is a stub).  So the condition
+       * the clause describes cannot be constructed here even though
+       * one word of it now has a real NT counterpart.
+       *
+       * A genuine physical I/O error: real, mapped, and not something a
+       * test can provoke on demand. */
 static void test_puts_eio(void)
 {
 	errno = 0;

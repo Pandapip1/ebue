@@ -478,7 +478,20 @@ static void test_tcgetsid(int consolefd)
 	write() returns; NT console output is already in the screen
 	buffer by the time WriteConsole() returns, so there is no state
 	in which tcdrain() could be seen to block, and no way to
-	distinguish a correct immediate return from a stub. */
+	distinguish a correct immediate return from a stub.
+ *
+ *	EXPIRY (this fence is conditional, and the condition is not
+ *	written down anywhere else in the tree): it holds only while the
+ *	ONLY descriptor class this library will call a terminal is
+ *	__FD_CONSOLE.  src/unistd/isatty.c:12 and src/termios/termios.c:145
+ *	both answer ENOTTY for anything else, and src/internal/fd.c:68
+ *	currently folds FILE_DEVICE_SERIAL_PORT in with FILE_DEVICE_NULL
+ *	into __FD_CHAR.  A COM port is exactly the serial line every
+ *	argument in this group reasons about, so the day that mapping
+ *	gains a tty class and the termios gate accepts it, this fence and
+ *	its three siblings become FALSE and the clauses become live and
+ *	testable (GetCommState/SetCommState over a DCB is the mechanism).
+ *	Re-audit all four together if that line changes. */
 static void test_tcdrain_blocks_until_transmitted(int consolefd)
 {
 	CHECK(write(consolefd, "x", 1) == 1);
@@ -498,7 +511,20 @@ static void test_tcdrain_blocks_until_transmitted(int consolefd)
 	nevertheless unobservable here: there is no console API to
 	suspend a screen-buffer write, and no wire for a STOP/START
 	character to be transmitted onto, so a conforming implementation
-	and a stub are indistinguishable from inside the process. */
+	and a stub are indistinguishable from inside the process.
+ *
+ *	EXPIRY (this fence is conditional, and the condition is not
+ *	written down anywhere else in the tree): it holds only while the
+ *	ONLY descriptor class this library will call a terminal is
+ *	__FD_CONSOLE.  src/unistd/isatty.c:12 and src/termios/termios.c:145
+ *	both answer ENOTTY for anything else, and src/internal/fd.c:68
+ *	currently folds FILE_DEVICE_SERIAL_PORT in with FILE_DEVICE_NULL
+ *	into __FD_CHAR.  A COM port is exactly the serial line every
+ *	argument in this group reasons about, so the day that mapping
+ *	gains a tty class and the termios gate accepts it, this fence and
+ *	its three siblings become FALSE and the clauses become live and
+ *	testable (GetCommState/SetCommState over a DCB is the mechanism).
+ *	Re-audit all four together if that line changes. */
 static void test_tcflow_suspends_output(int consolefd)
 {
 	CHECK(tcflow(consolefd, TCOOFF) == 0);
@@ -571,7 +597,20 @@ static void test_tcflush_discards_input(int consolefd)
 	units through ReadConsole()/WriteConsole(), and there are no
 	RTS/CTS signal lines on a console to gate -- so nothing on this
 	platform could ever apply them, only store them (see
-	include/termios.h's c_cflag comment). */
+	include/termios.h's c_cflag comment).
+ *
+ *	EXPIRY (this fence is conditional, and the condition is not
+ *	written down anywhere else in the tree): it holds only while the
+ *	ONLY descriptor class this library will call a terminal is
+ *	__FD_CONSOLE.  src/unistd/isatty.c:12 and src/termios/termios.c:145
+ *	both answer ENOTTY for anything else, and src/internal/fd.c:68
+ *	currently folds FILE_DEVICE_SERIAL_PORT in with FILE_DEVICE_NULL
+ *	into __FD_CHAR.  A COM port is exactly the serial line every
+ *	argument in this group reasons about, so the day that mapping
+ *	gains a tty class and the termios gate accepts it, this fence and
+ *	its three siblings become FALSE and the clauses become live and
+ *	testable (GetCommState/SetCommState over a DCB is the mechanism).
+ *	Re-audit all four together if that line changes. */
 static void test_termios_cflag_serial_bits(void)
 {
 	struct termios t;
@@ -592,7 +631,20 @@ static void test_termios_cflag_serial_bits(void)
 	with any structural analogue at all, and even those cannot be
 	retargeted to a different byte; the rest (VQUIT, VERASE, VKILL,
 	VEOL, VEOL2, VMIN, VTIME, VSTART, VSTOP, VSUSP, VREPRINT,
-	VDISCARD, VWERASE, VLNEXT) have no console concept whatsoever. */
+	VDISCARD, VWERASE, VLNEXT) have no console concept whatsoever.
+ *
+ *	EXPIRY (this fence is conditional, and the condition is not
+ *	written down anywhere else in the tree): it holds only while the
+ *	ONLY descriptor class this library will call a terminal is
+ *	__FD_CONSOLE.  src/unistd/isatty.c:12 and src/termios/termios.c:145
+ *	both answer ENOTTY for anything else, and src/internal/fd.c:68
+ *	currently folds FILE_DEVICE_SERIAL_PORT in with FILE_DEVICE_NULL
+ *	into __FD_CHAR.  A COM port is exactly the serial line every
+ *	argument in this group reasons about, so the day that mapping
+ *	gains a tty class and the termios gate accepts it, this fence and
+ *	its three siblings become FALSE and the clauses become live and
+ *	testable (GetCommState/SetCommState over a DCB is the mechanism).
+ *	Re-audit all four together if that line changes. */
 static void test_termios_cc_reprogram(int consolefd)
 {
 	struct termios t;

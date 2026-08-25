@@ -1172,6 +1172,9 @@ static void test_wcwidth_bmp(void)
 }
 #endif
 
+/* C99 build, so the negative-array idiom rather than static_assert. */
+typedef char wcwidth_fence_needs_16bit_wchar_t[sizeof(wchar_t) == 2 ? 1 : -1];
+
 #if 0 /* N/A: wcwidth() -- wcwidth.html DESCRIPTION -- cannot report the
        * true column width of a non-BMP character.  Such a character is
        * two wchar_t (a UTF-16 surrogate pair, e.g. U+1F600 GRINNING
@@ -1183,7 +1186,18 @@ static void test_wcwidth_bmp(void)
        * range (commonly -1, treating the lone unit as unprintable),
        * which is wrong for a real 2-column composed character and
        * right by accident for nothing -- the per-half return value can
-       * never equal the composed character's actual width. */
+       * never equal the composed character's actual width.
+       *
+       * The premise is a type width, so it is pinned rather than only
+       * described: the assertion below fails the build if wchar_t ever
+       * stops being 16-bit.  It is 16-bit because that is the Windows
+       * ABI (arch/x86_64/bits/alltypes.h.in: "TYPEDEF unsigned short
+       * wchar_t;") and because every string this library hands NT is a
+       * UNICODE_STRING of UTF-16 code units, so it is not a free
+       * choice.  If a port ever widened it to 32 bits, non-BMP
+       * characters would become representable in one wchar_t and this
+       * clause would become live -- at which point this fence is wrong
+       * and the compiler says so. */
 static void test_wcwidth_non_bmp(void)
 {
 	/* U+1F600 (a genuinely 2-column glyph in terminals) split into

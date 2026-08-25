@@ -797,7 +797,18 @@ static void test_fault_sigill_code(const char *self)
  * real and implemented, but nothing a test can portably execute
  * reaches it -- there is no conformant way to provoke this exact
  * fault, which is what N/A here is about, not "ntlibc doesn't support
- * it". */
+ * it".
+ *
+ * EXPIRY, stated because this fence is conditional on TWO facts and
+ * neither was written down: (1) that EFLAGS.AC is never set on this
+ * target, and (2) that the target is x86 or x86_64 at all.  The whole
+ * argument above is an argument about the x86 alignment-check
+ * contract.  On an architecture where unaligned scalar access traps by
+ * configuration rather than by an opt-in flag -- AArch64 with SCTLR_EL1.A
+ * set is the obvious case -- provoking the fault becomes ordinary
+ * portable C, the clause becomes live, and this fence becomes false.
+ * ntlibc is x86_64 and i386 only today (arch/); re-audit this the day a
+ * third arch appears rather than assuming it carried over. */
 static void test_fault_sigbus(const char *self)
 {
 	char *argv[3];
