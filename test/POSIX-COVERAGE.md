@@ -4313,3 +4313,264 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## langinfo.h, nl_types.h, monetary.h, iconv.h — the locale/message-handling headers this tree does not have (group Y)
+
+Four headers POSIX.1-2017 requires and `include/` does not contain, all
+in the locale and message-handling family: `<langinfo.h>`
+(`nl_langinfo`, `nl_langinfo_l`), `<nl_types.h>` (`catopen`, `catgets`,
+`catclose`), `<monetary.h>` (`strfmon`, `strfmon_l`) and `<iconv.h>`
+(`iconv_open`, `iconv`, `iconv_close`). Eleven absent function
+interfaces across four absent headers; six `#if 0` blocks defining a
+test function in `test/posix-msgcat.c` — **not** one per header, because
+`<langinfo.h>`'s header-constant clause, `nl_langinfo()` and
+`nl_langinfo_l()` are three clauses with three different acceptance
+criteria and get a fence each, while the other three headers get one
+apiece. (A seventh `#if 0`, in `main()`, holds the six call sites and
+defines no function.)
+
+**All four are UNIMPL, and specifically UNIMPL *not declined*.** That is
+the finding, and the distinction from the other absent-header file in
+this suite is the point: `test/posix-stropts.c` records `<stropts.h>` as
+DECLINED — POSIX deleted it in Issue 8, NT has no STREAMS subsystem, and
+its `ioctl()` prototype collides with one this tree ships. None of that
+applies to any of these four. All eleven functions are current in
+POSIX.1-2017, `POSIX-GAP-ACCOUNTING.md` counts every one of them POSIX
+**base**, and nothing on the twelve header and function pages consulted
+requires an OS facility this tree lacks. The strongest platform
+dependency anywhere in them is `catopen()`'s pathname resolution and its
+"If a file descriptor is used to implement message catalog descriptors,
+the FD_CLOEXEC flag shall be set" — both of which ntlibc already
+implements and audits. Everything else is computation over memory. Three of the four are table lookup and
+string formatting over data this tree already holds; the fourth is
+explicitly specified to keep working when there is nothing installed for
+it to read.
+
+**What each ledger already said, checked both ways.** The two files are
+keyed differently — this one by test function, `POSIX-GAP-ACCOUNTING.md`
+by subject — so neither search alone answers "is this recorded". Grepping
+both for each header name, each function name and the subject in prose:
+`POSIX-GAP-ACCOUNTING.md` §"Locale and message catalogues (11)" carries
+all four as subjects with interface counts, an option column and a
+sentence of triage each, and names no test function, cites no page and
+quotes no clause. This file carried **nothing**; its only touch on the
+subject is `fork()`'s row listing "message catalogs" among the facilities
+a `fork()` clause has no object for, which is a statement about that
+clause and not about `<nl_types.h>`, and nothing here contradicts it.
+What the fences add on top of what was already recorded is therefore the
+clause text, per-header tests, and the first rows for these four headers
+in the test-function-keyed ledger.
+
+**The absence itself is evidenced with a positive control**, since a grep
+that finds nothing proves nothing unless the same grep finds something
+when there is something to find. `grep -rn 'wctype' include/ src/` gives
+41 hits and `grep -rn 'localeconv' include/ src/` gives two (a
+declaration and a definition); the same pattern over
+`langinfo|nl_types|monetary\.h|iconv|nl_langinfo|catopen|catgets|catclose|strfmon|nl_item|nl_catd`
+across `include/ src/ arch/ crt/` exits 1 with no output. `find include
+-name 'wctype.h' -o -name 'locale.h' -o -name 'langinfo.h' -o -name
+'iconv.h'` returns the first two and not the last two. Commands and
+output are reproduced in the test file's banner.
+
+**What is already in the tree, shown rather than assumed.** Six live
+tests in `test/posix-msgcat.c` reach langinfo/monetary/iconv data
+*through the interfaces that do exist*, so that each fence claims a
+missing accessor rather than missing data — which is exactly what
+`langinfo.h.html`'s APPLICATION USAGE advises an application to do:
+"the strftime() function should be used to access date and time
+information defined in category LC_TIME. The localeconv() function
+should be used to access information corresponding to RADIXCHAR,
+THOUSEP, and CRNCYSTR." Those six run and pass today.
+
+| function | clause | status | test |
+|---|---|---|---|
+| `<langinfo.h>` header contents | `langinfo.h.html` DESCRIPTION — "The `<langinfo.h>` header shall define the symbolic constants used to identify items of langinfo data (see `nl_langinfo()`).", plus "shall define the `locale_t` type as described in `<locale.h>`", "shall define the `nl_item` type as described in `<nl_types.h>`", and "shall define the following symbolic constants with type `nl_item`. The entries under Category indicate in which `setlocale()` category each item is defined." — a table of **55** constants | **UNIMPL (fenced)** — the header does not exist and neither does any of the 55, nor `nl_item`, nor the header that would define `nl_item`. Enumerated from the page, not from memory. Observed: fails to **compile**; `test/libc-test-expected.txt` already records it as "clocale_mbfuncs.c:7: error: include file 'langinfo.h' not found" | `test/posix-msgcat.c` fence `test_langinfo_h_item_constants` |
+| `nl_langinfo` | `nl_langinfo.html` DESCRIPTION — "shall return a pointer to a string containing information relevant to the particular language or cultural area defined in the current locale"; RETURN VALUE — "In a locale where langinfo data is not defined, these functions shall return a pointer to the corresponding string in the POSIX locale. In all locales, these functions shall return a pointer to an empty string if item contains an invalid setting."; ERRORS — "No errors are defined." | **UNIMPL (fenced)** — absent. The RETURN VALUE sentence is written for exactly this implementation, which is why C-locale-only is not an N/A: every item has a determined POSIX-locale answer here, and 48 of the 55 are already in the tree under some other name (see the arithmetic in finding 1 below) | `test/posix-msgcat.c` fence `test_nl_langinfo_posix_locale_values` |
+| `nl_langinfo_l` | `nl_langinfo.html`, the `locale_t` form — "or in the locale represented by locale, respectively"; "The behavior is undefined if the locale argument to `nl_langinfo_l()` is the special locale object `LC_GLOBAL_LOCALE` or is not a valid locale object handle." | **UNIMPL (fenced)** — absent. Recorded separately from `nl_langinfo` because its acceptance criterion is larger (answer out of a passed-in locale) and because it is the *cheaper* half here: `newlocale`/`duplocale`/`freelocale`/`uselocale` all exist (`src/misc/locale.c`, audited in `test/posix-locale.c`) and every handle they produce is the same immutable C locale, so the two forms must coincide. The `LC_GLOBAL_LOCALE` clause is recorded as a thing the test must **not** require | `test/posix-msgcat.c` fence `test_nl_langinfo_l` |
+| `catopen` `catgets` `catclose`, and `<nl_types.h>` | `nl_types.h.html` DESCRIPTION — "shall define at least the following types:" (`nl_catd`, `nl_item`), "shall define at least the following symbolic constants:" (`NL_SETD`, `NL_CAT_LOCALE`), and the three prototypes. `catgets.html` RETURN VALUE — "If the call is unsuccessful for any reason, s shall be returned and errno shall be set to indicate the error."; `catopen.html` ERRORS — every listed condition is under "The `catopen()` function **may** fail if:" | **UNIMPL (fenced)** — none of it exists. The clearest UNIMPL of the four: POSIX specifies what to answer when no catalogue is installed, so "there are no message catalogues on NT" is the case the clause names rather than an exemption from it. Test shaped by two clauses that forbid the obvious shortcuts — "The value of `NL_SETD` is implementation-defined" (so no value is asserted) and "The results are undefined if catd is not a value returned by `catopen()` for a message catalog still open in the process" (so `catgets()` is never called on a failed descriptor). Observed: fails to **compile** | `test/posix-msgcat.c` fence `test_nl_types_h_catalogue_access` |
+| `strfmon` `strfmon_l`, and `<monetary.h>` | `monetary.h.html` DESCRIPTION — the three "shall define the *T* type as described in `<X>`" sentences and the two prototypes. `strfmon.html` DESCRIPTION — the conversion-specification grammar (flags, field width, left precision, right precision, conversion specifier); RETURN VALUE and "[E2BIG] Conversion stopped due to lack of space in the buffer." | **UNIMPL (fenced)** — absent. The low-value argument is recorded, not hidden: every `LC_MONETARY` member of `struct lconv` here is the "not available" value (`src/misc/locale.c`'s `__posix_lconv` initialiser, lines 24-49, asserted live), so `%n` and `%i` would differ from each other by very little. That is priority, not applicability — the `=f`/`^`/`+`/`(`/`!`/`-` flags, the field width, `#n`, `.p` rounding, `%%` and the `[E2BIG]` rule are locale-independent mechanics that all have to be written and are all testable in the C locale. Assertions are written against those mechanics; where the page leaves spelling open (`(` interacting with left-precision alignment) the assertion is structural. Observed: fails to **compile** | `test/posix-msgcat.c` fence `test_strfmon_posix_locale` |
+| `iconv_open` `iconv` `iconv_close`, and `<iconv.h>` | `iconv.h.html` DESCRIPTION — `iconv_t`, "Identifies the conversion from one codeset to another.", and the three prototypes. `iconv.html` — the three stop conditions ("If a sequence of input bytes does not form a valid character in the specified codeset, conversion shall stop after the previous successfully converted character..."), "The variable pointed to by inbuf shall be updated to point to the byte following the last byte successfully used in the conversion.", and *shall fail* `[EILSEQ]`/`[E2BIG]`/`[EINVAL]` | **UNIMPL (fenced)** — absent, and the two libc-test entries it blocks are already recorded as unbuildable. **Corrects `POSIX-HEADER-INVENTORY.md`**: it points at `src/internal/utf.c`, which is ntdll-backed (`RtlUTF8ToUnicodeN`/`RtlUnicodeToUTF8N`) and whole-string, with no descriptor, no incremental advance, no resumable state and no partial-output case. `src/stdlib/mbrtowc.c` has all four in pure C, and its `(size_t)-1`+`EILSEQ` / `(size_t)-2` / caller-space-check map onto `[EILSEQ]`/`[EINVAL]`/`[E2BIG]` one for one. Observed: fails to **compile** | `test/posix-msgcat.c` fence `test_iconv_open_convert_close` |
+| `strftime` (as the LC_TIME accessor `nl_langinfo` would replace) | `strftime.html` — "In the C or POSIX locale ... the replacement strings for the following specifiers are:" `%A` "One of Sunday, Monday, ..., Saturday.", `%a` "The first three characters of %A.", `%B`, `%b`, `%p` "One of AM or PM.", `%c` "Equivalent to %a %b %e %T %Y.", `%r` "Equivalent to %I:%M:%S %p.", `%x` "Equivalent to %m/%d/%y.", `%X` "Equivalent to %T." | covered — asserted live, two-sided (each composite against both the literal the C locale produces and the expansion of the format string `nl_langinfo()` would have to return). These nine are `D_T_FMT`, `D_FMT`, `T_FMT`, `T_FMT_AMPM`, `AM_STR`, `PM_STR`, `DAY_n`, `ABDAY_n`, `MON_n`, `ABMON_n` — 44 of the 55 items (38 names plus the six formats and affixes; the five era/alternative-digit items are the rest of `LC_TIME` and have nothing to store), present in `src/time/names.c` (four const arrays) and `src/time/strftime.c` (*switch cases*, not strings: there is no `D_T_FMT` in this tree to return a pointer to, only code that behaves as if there were) | `test/posix-msgcat.c` `test_lc_time_data_is_present_without_an_accessor` |
+| `localeconv` (as the RADIXCHAR/THOUSEP/CRNCYSTR accessor) | `localeconv.html` DESCRIPTION — "The members of the structure with type `char *` are pointers to strings, any of which (except `decimal_point`) can point to "", to indicate that the value is not available in the current locale or is of zero length. The members with type `char` are non-negative numbers, any of which can be {CHAR_MAX} to indicate that the value is not available in the current locale."; `langinfo.h.html` — "If the locale's values for `p_cs_precedes` and `n_cs_precedes` do not match, the value of `nl_langinfo(CRNCYSTR)` ... is unspecified." | covered — asserted live. Every `LC_MONETARY` member is the "not available" value, and `p_cs_precedes == n_cs_precedes`, so `CRNCYSTR` would have a specified answer here. This is both the `<monetary.h>` finding stated as data and the evidence for the three items `<langinfo.h>` would take from `struct lconv` | `test/posix-msgcat.c` `test_lc_numeric_and_lc_monetary_data_without_an_accessor` |
+| `regcomp` `regexec` (as the `YESEXPR`/`NOEXPR` consumer) | `langinfo.h.html` — `YESEXPR` "Affirmative response expression.", `NOEXPR` "Negative response expression.", both category `LC_MESSAGES` | covered — asserted live. The only two items that are a string to *compile* rather than to print; `src/regex/regex.c` handles expressions of that shape today (group E), so the idiom is blocked on a name for two literals, not on a facility. The POSIX-locale values of these two come from XBD Chapter 7, which was **not** among the pages consulted; the test therefore asserts the consumer, and the file does not quote a value it could not read | `test/posix-msgcat.c` `test_yesexpr_noexpr_have_a_working_consumer` |
+| `mbrtowc` `wcrtomb` (as the `CODESET` evidence and the converter `<iconv.h>` would wrap) | `langinfo.h.html` — `CODESET` "Codeset name.", category `LC_CTYPE`; `iconv.html` *shall fail* `[EILSEQ]`/`[EINVAL]` | covered — asserted live: `MB_CUR_MAX == 4`, a 3-byte sequence decoding to U+4E2D and back, `(size_t)-1` with `EILSEQ` on a stray `0xff`, `(size_t)-2` on a truncated sequence. Establishes both that the codeset is UTF-8 and that two of `iconv()`'s three *shall fail* conditions already have an implementation behind them | `test/posix-msgcat.c` `test_codeset_is_utf8_and_the_converter_exists` |
+| `setlocale` (`LC_MESSAGES`) | `catopen.html` DESCRIPTION — "If the value of the oflag argument is 0, the LANG environment variable is used to locate the catalog without regard to the `LC_MESSAGES` category. If the oflag argument is `NL_CAT_LOCALE`, the `LC_MESSAGES` category is used to locate the message catalog" | covered — asserted live. The one piece of locale state a catalogue opener consults is present and answers "C". Forecloses the "there is no `LC_MESSAGES` on this target" version of the N/A argument | `test/posix-msgcat.c` `test_lc_messages_category_exists` |
+| `<limits.h>` `NL_MSGMAX` `NL_SETMAX` `NL_TEXTMAX` | `limits.h.html` "Other Invariant Values" — "{NL_MSGMAX} Maximum message number. Minimum Acceptable Value: 32 767", "{NL_SETMAX} Maximum set number. Minimum Acceptable Value: 255", "{NL_TEXTMAX} Maximum number of bytes in a message string. Minimum Acceptable Value: {_POSIX2_LINE_MAX}" | covered — asserted live (added by the group U sweep, `include/limits.h:165-167`). These bound `catgets()`'s `msg_id`, `set_id` and message string: the arithmetic that describes a message catalogue is in this tree and the interface that would give it meaning is not. Runs rather than sitting in prose so that a later removal makes the `<nl_types.h>` fence's claim visibly untrue | `test/posix-msgcat.c` `test_message_catalogue_limits_exist_without_the_header` |
+
+### UNIMPL found (six clauses, four headers)
+
+1. **`<langinfo.h>`'s 55 item constants, and `nl_item` with them.** The
+   constant list was enumerated from `langinfo.h.html`'s own table
+   rather than from recollection, and the header's Category column is
+   what makes the finding checkable: it says which `setlocale()`
+   category each item belongs to, and every category but two turns out
+   to be data this tree already holds. The arithmetic, counted off the
+   page's table rather than derived, because a count is the easiest
+   thing in an audit to get wrong: **49** LC_TIME + **2** LC_NUMERIC +
+   **1** LC_MONETARY + **1** LC_CTYPE + **2** LC_MESSAGES = **55**. Of
+   the 49 LC_TIME items, 38 names (`DAY_1..7`, `ABDAY_1..7`,
+   `MON_1..12`, `ABMON_1..12`) are `src/time/names.c`'s four const
+   arrays and 6 formats and affixes (`D_T_FMT`, `D_FMT`, `T_FMT`,
+   `T_FMT_AMPM`, `AM_STR`, `PM_STR`) are *switch cases* in
+   `src/time/strftime.c`, leaving 5 era/alt-digit items with nothing to
+   store because the POSIX locale defines neither. The 2 LC_NUMERIC and
+   1 LC_MONETARY items are fields of `src/misc/locale.c`'s
+   `__posix_lconv` initialiser (lines 24-49; the relevant lines are quoted in the test file); the 1
+   LC_CTYPE item is `src/stdlib/mbrtowc.c`'s UTF-8; the 2 LC_MESSAGES
+   items are two string literals with a working `regcomp()` waiting for
+   them. So **48 of the 55 already exist here under some other name.**
+   **The overlap is the finding.** Four of this file's six live tests
+   are that data, reached the way `langinfo.h.html`'s own APPLICATION
+   USAGE tells an application to reach it.
+
+   The counter-argument rejected: "ntlibc is C-locale-only, so there is
+   no langinfo data to serve — N/A." It fails on the standard's own
+   words. `nl_langinfo.html` RETURN VALUE: "In a locale where langinfo
+   data is not defined, these functions shall return a pointer to the
+   corresponding string in the POSIX locale." Being C-locale-only is
+   the case that sentence names. N/A in this ledger needs a mechanism
+   that makes a clause unenterable, and there is none — every item has
+   a determined right answer here, which is why the fence can assert
+   all of them.
+
+   The era and alternative-digit constants are fenced rather than
+   dropped, on the reasoning group U used for `O_TTY_INIT`: an
+   implementation with nothing to say still has to define the constant
+   and answer for it.
+
+2. **`nl_langinfo()`** — absent. Fenced separately from the constant
+   list because a `#define` set alone would leave the declared-but-
+   unimplemented trap: an item on the table is valid by being on it, so
+   a null return is never legal for any of the 55.
+
+3. **`nl_langinfo_l()`** — absent, and fenced separately again because
+   its acceptance criterion is larger and its cost here is smaller.
+   Larger: it must answer out of a passed-in `locale_t`. Smaller: this
+   tree already has the whole locale-object API and only one locale, so
+   the two forms must return the same strings. One clause is recorded
+   and deliberately **not** tested: "The `nl_langinfo()` function need
+   not be thread-safe", against a RATIONALE that requires
+   `nl_langinfo_l()` to be. ntlibc has no threads, so no test here can
+   observe the difference — noted so that whoever implements it knows
+   the buffer choice is constrained by something no test will catch.
+
+4. **`<nl_types.h>`, `catopen`, `catgets`, `catclose`** — the clearest
+   UNIMPL of the four, because POSIX designed this interface so that an
+   implementation with no catalogues is still conforming *and* the
+   application using it still works. Every `catopen.html` error is a
+   *may fail*, so always failing is legal; `catgets.html` says "If the
+   call is unsuccessful for any reason, s shall be returned", so the
+   caller's own compiled-in string comes back. A conforming
+   implementation here is a few dozen lines over `getenv()` (NLSPATH),
+   `open()`/`read()`/`close()` and the `LC_MESSAGES` category
+   `src/misc/locale.c` already accepts — all present. Even the
+   platform-flavoured clause is already satisfied: "If a file
+   descriptor is used to implement message catalog descriptors, the
+   FD_CLOEXEC flag shall be set" and this tree has and audits
+   `FD_CLOEXEC`. So do the `<limits.h>` constants that bound a
+   catalogue.
+
+   The counter-argument rejected: "there are no message catalogues on
+   Windows, so the clause cannot apply." That inverts the standard's
+   permission. A clause telling you what to answer when you have
+   nothing is not a clause you are exempt from for having nothing. What
+   is absent here is the header, not the catalogues.
+
+   `nl_item` couples this header to `<langinfo.h>`: that header "shall
+   define the `nl_item` type as described in `<nl_types.h>`", so
+   `<langinfo.h>` cannot be shipped correctly while this one is
+   missing. The two are one unit of work even though they are two
+   headers and four fences.
+
+5. **`<monetary.h>`, `strfmon`, `strfmon_l`** — absent. This is the row
+   where the honest answer is "cheap, base, and genuinely low value",
+   and both halves are recorded. Low value, shown as data rather than
+   asserted as an impression: every `LC_MONETARY` member here is the
+   "not available" value. Still UNIMPL and not N/A, because everything
+   `strfmon.html` specifies other than the field values is
+   locale-independent mechanics — flags, field width, left and right
+   precision, `%%`, and the *shall fail* `[E2BIG]` — all of which have
+   to be written and all of which are testable in the C locale.
+
+6. **`<iconv.h>`, `iconv_open`, `iconv`, `iconv_close`** — absent, and
+   this fence also **corrects a claim in
+   `test/POSIX-HEADER-INVENTORY.md`** rather than repeating it. That
+   file (draft, last touched 1b82187, 2026-08-24, and self-described as
+   comparing against an `include/` of 41 headers where `find include
+   -name '*.h' | wc -l` is 67 today) says `iconv` is "mostly a
+   stable-name wrapper around" `src/internal/utf.c`. Re-checked against
+   the file: `utf.c` calls `RtlUTF8ToUnicodeN`/`RtlUnicodeToUTF8N` and
+   `__malloc`s whole strings, so it has no conversion descriptor, no
+   incremental pointer advance, no resumable state and no
+   partial-output case — none of the four things `iconv.html`'s clauses
+   are about, and it would not work on the native asan leg either.
+   `src/stdlib/mbrtowc.c` has all four in pure C, and its return
+   contract maps onto `iconv()`'s three *shall fail* conditions one for
+   one. The gap is real either way; the route to closing it is not the
+   one recorded.
+
+### N/A found: none, and that is a considered result
+
+No clause in this group is N/A. The test file argues it at each fence
+rather than once, but the shape is the same every time, and it is worth
+stating here because "NT is a different kind of system" would have made
+all four disappear as N/A without a single false statement being
+written.
+
+N/A in this ledger requires a **mechanism** that keeps a clause from
+applying — the standard for it is `test/posix-stropts.c`'s: `ioctl.html`
+scopes its clauses to STREAMS devices, NT has no STREAMS subsystem, so
+`fildes` can never name one and the clauses are vacuous rather than
+violated. A scope that cannot be entered. Nothing in this group has
+that shape:
+
+- Every one of the twelve pages consulted is computation over memory
+  plus, at most, `getenv()` and pathname-based `open()`. The only
+  platform-shaped clauses anywhere in the group are `catopen()`'s
+  pathname-resolution errors and its `FD_CLOEXEC` requirement, and
+  ntlibc implements and audits both — so even they are satisfied here
+  rather than unenterable.
+- The two facts that look like mechanisms are not. "This libc is
+  C-locale-only" is the case `nl_langinfo.html`'s RETURN VALUE
+  explicitly legislates for. "There are no message catalogues here" is
+  the case `catopen.html`'s *may fail* list and `catgets.html`'s
+  default-string contract explicitly legislate for. Both make the work
+  small; neither makes a clause unenterable.
+- And the live tests are the empirical half of the same argument: if
+  the data were genuinely absent, four of them could not pass.
+
+Nor is any of it DECLINED, the other thing UNIMPL covers in this
+project. `<stropts.h>` was declined for three specific reasons — POSIX
+deleted it, the header without the subsystem moves a compile failure to
+a link failure, and its prototype collides with a working function here.
+Check each against these four: none is obsolescent; every name would
+come with real, standard-sanctioned behaviour behind it, so shipping
+these headers removes a failure rather than relocating one; and nothing
+in any of them collides with an interface this tree already has.
+`<langinfo.h>` is additionally the highest-density header lever in the
+whole libc-test corpus by
+`test/LIBC-TEST-MAP.generated.md`'s own measurement — 3 tests naming it,
+3 unblocked by it alone, 2 absent interfaces, 1.50 tests per interface,
+ahead of `pthread.h` (0.33) and `semaphore.h` (0.90).
+
+The honest half of that, recorded so the group is not read as a work
+order: `<nl_types.h>` and `<monetary.h>` unblock **nothing** in that
+corpus and do not appear in its table at all. Cheap and base, not
+urgent.
+
+### What a strictly conforming application observes today (all four)
+
+The same thing, and it is the first thing that happens rather than the
+last: **the translation unit does not compile.** Not a link failure, not
+a degraded run-time answer — `#include <langinfo.h>` does not resolve,
+and the type of every argument these functions take does not exist, so a
+caller cannot even reach the fallbacks the standard provides for it
+(`nl_langinfo()`'s empty string for an invalid item, `catgets()`'s
+default string, `catopen()`'s permitted failure).
+`test/libc-test-expected.txt` already records four instances —
+`clocale_mbfuncs` and `mbc` ("include file 'langinfo.h' not found"),
+`iconv_open` and `iconv-roundtrips` ("include file 'iconv.h' not found")
+— plus one case where the absence reaches past the callers that name it:
+`fgetwc-buffering` is "unverifiable" because libc-test's `t_setutf8()`
+needs `nl_langinfo(CODESET)` to select the locale the test requires, so
+no run on this target under Wine or on real Windows can exercise it.
