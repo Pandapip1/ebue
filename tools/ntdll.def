@@ -26,6 +26,7 @@ NtFreeVirtualMemory
 NtFsControlFile
 NtGetContextThread
 NtLockFile
+NtLockVirtualMemory
 NtMapViewOfSection
 NtOpenFile
 NtOpenProcess
@@ -60,6 +61,7 @@ NtSuspendThread
 NtTerminateProcess
 NtTerminateThread
 NtUnlockFile
+NtUnlockVirtualMemory
 NtUnmapViewOfSection
 NtWaitForMultipleObjects
 NtWaitForSingleObject

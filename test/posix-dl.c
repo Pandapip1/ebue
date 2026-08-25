@@ -20,12 +20,16 @@
  * they make about what NT can and cannot do, with the fences that the
  * implementations refuted removed rather than narrowed.
  *
- * The <sys/mman.h> and <termios.h> types/prototypes still do not exist
- * in include/, so -- following the pattern test/posix-sysmisc.c already
- * set for setrlimit()/select()
- * (both declared but never defined) -- they are declared locally here,
- * never included from include/.  This file does not add or modify any
- * header; a sibling agent owns that.
+ * <sys/mman.h> now joins them: include/sys/mman.h and src/mman/mman.c
+ * ship, clause-audited in test/posix-mman.c, so this file includes the
+ * real header and its local mman scaffolding is gone, with the fences
+ * the implementation refuted removed rather than narrowed.
+ *
+ * <termios.h> is the one still declared locally here.  The header does
+ * ship, and test/posix-termios.c audits it against the real one;
+ * converting this section away from its local scaffolding is a separate
+ * change and is not made here.  This file does not add or modify any
+ * header.
  *
  * Every specified clause gets a real test, written as if it were going
  * to run, even where it cannot possibly pass today.  Three fences, same
@@ -41,9 +45,10 @@
  * Each header gets a short unfenced section first, wherever ntlibc
  * already has *something* real to point the clause at under a
  * different name -- those assertions run and are counted like any
- * other test.  <dlfcn.h> and <spawn.h> both have one; <sys/mman.h> and
- * <termios.h> do not (nothing in src/ maps to either one, even
- * partially, without kernel32 functions this build does not import).
+ * other test.  <dlfcn.h>, <spawn.h> and <termios.h> each have one;
+ * <sys/mman.h> never did, because when this file was written nothing in
+ * src/ mapped to it even partially -- that is no longer true, and
+ * test/posix-mman.c is the section it never had.
  */
 #include "test-policy.h"
 #include <stdio.h>
@@ -53,6 +58,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <dlfcn.h>
+#include <sys/mman.h>
 #include "ntlibc/rpath.h"
 
 static int fails;
@@ -243,214 +249,53 @@ static void test_dlerror_consumed_once(void)
 /* ============================================================
  * <sys/mman.h> -- mmap/munmap/mprotect/msync/mlock
  *
- * No src/ file maps to any part of this header even partially: there
- * is no anonymous-memory or file-mapping facility here at all beyond
- * RtlAllocateHeap-backed malloc() (src/malloc/malloc.c), which is a
- * different abstraction (a sub-allocator over one growable heap, not
- * page-granular address-space control). The three ntdll calls POSIX's
- * model maps onto are NtCreateSection() / NtMapViewOfSection() /
- * NtProtectVirtualMemory() -- none declared in src/internal/nt.h
- * today (grep confirms; only NtAllocateVirtualMemory/
- * NtFreeVirtualMemory/NtProtectVirtualMemory's PAGE_x and MEM_x constants
- * partially exist, used by src/malloc/malloc.c and
- * arch/i386/src/wow64_fixup.c, and NtProtectVirtualMemory itself is
- * already declared -- just never called for this purpose).
+ * The argument this section made, when nothing in src/ mapped to this
+ * header even partially: the only memory facility here was
+ * RtlAllocateHeap-backed malloc() (src/malloc/malloc.c), a different
+ * abstraction entirely -- a sub-allocator over one growable heap, not
+ * page-granular address-space control -- and the ntdll calls POSIX's
+ * model maps onto were mostly undeclared.
+ *
+ * include/sys/mman.h and src/mman/mman.c now ship, and
+ * test/posix-mman.c is the clause audit against the real header.  All
+ * seven fences that stood here are gone, and NOT because they were
+ * merely duplicated: every one of them was WRONG, in the same way, and
+ * the way is worth recording.
+ *
+ * Each fenced body called
+ *
+ *     mmap(0, n, prot, MAP_PRIVATE, -1, (off_t_local)0)
+ *
+ * and asserted `p != MAP_FAILED`.  That call must FAIL.  POSIX Issue 7
+ * -- the edition this tree speaks, 48 citations across include/ and src/
+ * against 4 for Issue 8 -- has no anonymous mapping at all: mmap.html
+ * does not mention MAP_ANONYMOUS or MAP_ANON anywhere, DESCRIPTION
+ * requires a mapping to be "between the address space of the process ...
+ * and the memory object represented by the file descriptor fildes", and
+ * ERRORS makes "[EBADF] The fildes argument is not a valid open file
+ * descriptor" a SHALL FAIL.  Measured against glibc rather than derived:
+ * that exact call returns MAP_FAILED with errno EBADF, and succeeds only
+ * once MAP_ANONYMOUS is added.
+ *
+ * So seven fences asserted success for a case the standard requires to
+ * fail, and they did it because the local scaffolding below them was
+ * written from memory of what mmap() looks like on Linux rather than
+ * from the page.  Nothing about the fences' NT reasoning was wrong --
+ * NtCreateSection/NtMapViewOfSection/PAGE_WRITECOPY are all real and
+ * the mprotect fence's translation table was exactly right -- but the
+ * expected values were derived, not observed, and a fence with a wrong
+ * expected value is worse than no fence: it certifies the wrong thing
+ * the day someone un-fences it.
+ *
+ * The clauses moved to test/posix-mman.c and gained MAP_ANONYMOUS, which
+ * moves them toward the specification, not away from it.  <sys/mman.h>
+ * ships MAP_ANONYMOUS as a documented non-POSIX extension behind
+ * _BSD_SOURCE/_GNU_SOURCE, the same gate <signal.h> puts on sigorset().
+ * File-backed mmap() is refused with [ENODEV] and stays fenced -- in
+ * test/posix-mman.c, retagged as a decline-for-now with the
+ * MEM_RESERVE_PLACEHOLDER route and its Windows 10 1803+ floor named.
  * ==============================================================
  */
-
-#define PROT_NONE  0x0
-#define PROT_READ  0x1
-#define PROT_WRITE 0x2
-#define PROT_EXEC  0x4
-
-#define MAP_SHARED  0x01
-#define MAP_PRIVATE 0x02
-#define MAP_FIXED   0x10
-
-#define MAP_FAILED ((void *)-1)
-
-typedef long off_t_local;   /* avoid clashing with the real off_t if a
-                              * future include ever pulls it in transitively */
-
-#if NTLIBC_TEST(UNIMPL, posix_dl_mmap_private) /* UNIMPL: mmap.html DESCRIPTION -- MAP_PRIVATE: "Modifications
-	to the mapped data by the calling process shall be visible
-	only to the calling process and shall not change the
-	underlying object." NT mechanism: NtCreateSection() over the
-	target file handle (or NULL/pagefile-backed for an anonymous
-	mapping, i.e. MAP_ANONYMOUS) followed by
-	NtMapViewOfSection(..., Win32Protect=PAGE_WRITECOPY) --
-	PAGE_WRITECOPY is precisely NT's copy-on-write-per-view
-	primitive, an exact match for MAP_PRIVATE's semantics, not an
-	approximation of them. */
-static void test_mmap_private(void)
-{
-	void *p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, (off_t_local)0);
-	CHECK(p != MAP_FAILED);
-	if (p != MAP_FAILED) {
-		((char *)p)[0] = 'x';           /* writable, private */
-		CHECK(munmap(p, 4096) == 0);
-	}
-}
-#endif
-
-#if NTLIBC_TEST(UNIMPL, posix_dl_mmap_shared) /* UNIMPL: mmap.html DESCRIPTION -- MAP_SHARED: "Writes ...
-	shall change the underlying object such that a reference
-	obtained ... through another mapping of the object experiences
-	that change." NT mechanism: the SAME NtCreateSection() as
-	MAP_PRIVATE, but mapped with NtMapViewOfSection(...,
-	Win32Protect=PAGE_READWRITE) -- and the same section handle
-	passed to a second NtMapViewOfSection() call (in this process or,
-	across processes, an inherited/duplicated handle) is required to
-	see the writes, since NT's sharing unit is the section object
-	itself, not the view. */
-static void test_mmap_shared(void)
-{
-	void *p1 = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, -1, (off_t_local)0);
-	void *p2;
-	CHECK(p1 != MAP_FAILED);
-	if (p1 != MAP_FAILED) {
-		((char *)p1)[0] = 'y';
-		/* A second mapping of the same underlying section must see
-		 * the write immediately. */
-		p2 = mmap(p1, 4096, PROT_READ, MAP_SHARED | MAP_FIXED, -1, (off_t_local)0);
-		CHECK(p2 == p1 && ((char *)p2)[0] == 'y');
-		CHECK(munmap(p1, 4096) == 0);
-	}
-}
-#endif
-
-#if NTLIBC_TEST(NA, posix_dl_mmap_fixed_atomic_replace) /* N/A: mmap.html DESCRIPTION -- MAP_FIXED: "the implementation
-	... shall use the address ... exactly as specified", implicitly
-	replacing/unmapping any prior mapping that overlapped it
-	(mmap.html's own wording: "If a mapping to be replaced was
-	private, ... the modifications shall be discarded"). NT has no
-	single primitive that does "unmap whatever is there, then map
-	this, atomically": NtMapViewOfSection() given a BaseAddress hint
-	that overlaps an existing view fails with
-	STATUS_CONFLICTING_ADDRESSES rather than replacing it. The only
-	available sequence -- NtUnmapViewOfSection() of the old range,
-	then NtMapViewOfSection() at that address -- has a TOCTOU gap
-	POSIX's MAP_FIXED does not have: between the two calls, another
-	thread's own NtMapViewOfSection()/NtAllocateVirtualMemory() call
-	elsewhere in the process can claim the now-free range first (not
-	a concern for ntlibc specifically, which has no threads of its
-	own, but a real, unfixable divergence from the spec's atomicity
-	guarantee, not merely "not implemented yet"). Separately: even
-	the *address itself* is constrained NT-side in a way POSIX's
-	model never mentions -- NtMapViewOfSection()'s BaseAddress must
-	fall on a 64 KiB (SYSTEM_INFO.AllocationGranularity,
-	src/internal/nt.h's SYSTEM_INFO struct already declares the
-	field, just never queried) boundary, not merely the 4 KiB page
-	boundary mmap.html requires (getpagesize(), src/unistd/sysconf.c,
-	hardcodes 4096) -- a MAP_FIXED request at a page-aligned but
-	not-64K-aligned address, legal under POSIX, cannot be honoured
-	at all. */
-static void test_mmap_fixed_atomic_replace(void)
-{
-	void *base = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, (off_t_local)0);
-	void *p;
-	CHECK(base != MAP_FAILED);
-	if (base == MAP_FAILED) return;
-	((char *)base)[0] = 'a';
-	/* Re-map the same address with MAP_FIXED: must succeed and must
-	 * discard the prior private mapping's contents, exactly as
-	 * mmap.html specifies -- not fail with an address-in-use error. */
-	p = mmap(base, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, -1, (off_t_local)0);
-	CHECK(p == base);
-	munmap(base, 8192);
-}
-#endif
-
-#if NTLIBC_TEST(UNIMPL, posix_dl_mprotect_roundtrip) /* UNIMPL: mprotect.html DESCRIPTION -- "change the access
-	protections for the calling process's memory pages containing
-	any part of the address space" to PROT_READ|PROT_WRITE|PROT_EXEC
-	combinations. NT mechanism: NtProtectVirtualMemory() (already
-	declared, src/internal/nt.h:1058) with PROT_* translated to the
-	PAGE_* constants src/internal/nt.h already has almost all of:
-	PAGE_NOACCESS/PAGE_READONLY (lines 880-881) for
-	PROT_NONE/PROT_READ, PAGE_READWRITE/PAGE_EXECUTE/
-	PAGE_EXECUTE_READ/PAGE_EXECUTE_READWRITE (lines 882-885) for
-	every PROT_WRITE and/or PROT_EXEC combination -- the one missing
-	piece is PAGE_WRITECOPY for a PROT_WRITE view over a MAP_PRIVATE
-	mapping specifically, not declared anywhere yet. This is the
-	smallest gap in the whole header: only a translation table and a
-	direct call, no new ntdll surface to add. */
-static void test_mprotect_roundtrip(void)
-{
-	void *p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, (off_t_local)0);
-	CHECK(p != MAP_FAILED);
-	if (p == MAP_FAILED) return;
-	CHECK(mprotect(p, 4096, PROT_READ) == 0);
-	/* ERRORS: EACCES-shaped failure -- writing to a PROT_READ page
-	 * must fault. Not attempted here (would SIGSEGV this process);
-	 * left as a documented, deliberately-unattempted clause, the
-	 * same way test/posix-alloc.c does not force a real SIGSEGV. */
-	CHECK(mprotect(p, 4096, PROT_READ | PROT_WRITE) == 0);
-	munmap(p, 4096);
-}
-#endif
-
-#if NTLIBC_TEST(UNIMPL, posix_dl_munmap_return_and_einval) /* UNIMPL: munmap.html DESCRIPTION -- "removes ... mappings for
-	those whole pages containing any part of the address space",
-	RETURN VALUE 0 on success. NT mechanism: NtUnmapViewOfSection()
-	(not declared in src/internal/nt.h today). ERRORS EINVAL for an
-	address not page-aligned maps directly to
-	STATUS_INVALID_PARAMETER / STATUS_NOT_MAPPED_VIEW from the same
-	call. */
-static void test_munmap_return_and_einval(void)
-{
-	void *p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, (off_t_local)0);
-	CHECK(p != MAP_FAILED);
-	if (p != MAP_FAILED) CHECK(munmap(p, 4096) == 0);
-
-	errno = 0;
-	CHECK(munmap((void *)1, 4096) == -1 && errno == EINVAL);
-}
-#endif
-
-#if NTLIBC_TEST(UNIMPL, posix_dl_msync_shared_file) /* UNIMPL: msync.html DESCRIPTION -- "writes all modified copies
-	of pages ... back to the filesystem". NT mechanism: kernel32's
-	FlushViewOfFile(), reached the same way this codebase already
-	reaches every other kernel32-only function with no ntdll
-	equivalent -- LdrLoadDll(L"kernel32.dll") +
-	LdrGetProcedureAddress(), the exact pattern
-	src/signal/signal.c uses for SetConsoleCtrlHandler
-	(src/internal/kernel32.h documents the convention: kernel32
-	declarations live behind NTLIBC_USE_KERNEL32, never linked
-	directly). Meaningful only for a MAP_SHARED, file-backed mapping
-	-- msync() on a MAP_PRIVATE or anonymous mapping is legal and a
-	no-op per the same page, not an error. */
-static void test_msync_shared_file(void)
-{
-	void *p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, (off_t_local)0);
-	CHECK(p != MAP_FAILED);
-	if (p != MAP_FAILED) {
-		CHECK(msync(p, 4096, 0 /* MS_SYNC */) == 0);   /* private: legal no-op */
-		munmap(p, 4096);
-	}
-}
-#endif
-
-#if NTLIBC_TEST(UNIMPL, posix_dl_mlock_munlock) /* UNIMPL: mlock.html DESCRIPTION -- "lock into memory ... the
-	whole pages containing any part of the address range". NT
-	mechanism: kernel32's VirtualLock()/VirtualUnlock() (same
-	LdrLoadDll("kernel32.dll") reach-out as msync above) --
-	semantically close but not identical to POSIX's contract:
-	VirtualLock() also implicitly guarantees the pages are resident
-	(committed and faulted in) at the moment of the call, which
-	mlock.html leaves as "the system may require ... resident", so
-	this direction over-delivers rather than falling short. */
-static void test_mlock_munlock(void)
-{
-	void *p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, (off_t_local)0);
-	CHECK(p != MAP_FAILED);
-	if (p != MAP_FAILED) {
-		CHECK(mlock(p, 4096) == 0);
-		CHECK(munlock(p, 4096) == 0);
-		munmap(p, 4096);
-	}
-}
-#endif
 
 /* ============================================================
  * <termios.h> -- the best partial mapping in this group.
