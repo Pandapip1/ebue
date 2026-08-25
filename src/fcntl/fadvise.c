@@ -8,8 +8,8 @@
  * implementation is free to do nothing but validate its arguments and
  * report success. NT has no per-handle readahead/cache-priority knob
  * this library reaches for elsewhere, so that is exactly what this
- * does: check the fd and the advice value are both valid (the two
- * required error cases: EBADF, EINVAL) and otherwise no-op.
+ * does: check the fd, the advice value and the length are all valid
+ * (the two required error cases: EBADF, EINVAL) and otherwise no-op.
  *
  * posix_fallocate() is a real implementation, not a no-op: POSIX
  * requires it to "ensure that any required storage for regular file
@@ -30,9 +30,21 @@
 int posix_fadvise(int fd, off_t offset, off_t len, int advice)
 {
 	struct __fd *f = __fd_get(fd);
-	(void)offset; (void)len;
+	/* offset carries no constraint of its own: posix_fadvise.html's
+	 * [EINVAL] clause names advice and len only, and "the specified
+	 * range need not currently exist in the file", so there is nothing
+	 * here to check it against. */
+	(void)offset;
 	/* posix_fadvise() returns the error number directly, not -1/errno. */
 	if (!f) return EBADF;
+	/* posix_fadvise.html ERRORS, *shall fail*: "[EINVAL] The value of
+	 * advice is invalid, or the value of len is less than zero."  One
+	 * clause with two halves; the switch below is the advice half.
+	 * Note len == 0 is not a degenerate length to be lumped in with
+	 * the negatives -- the DESCRIPTION gives it a meaning of its own,
+	 * "If len is zero, all data following offset is specified" -- so
+	 * the test is strictly `< 0`. */
+	if (len < 0) return EINVAL;
 	switch (advice) {
 	case POSIX_FADV_NORMAL: case POSIX_FADV_RANDOM: case POSIX_FADV_SEQUENTIAL:
 	case POSIX_FADV_WILLNEED: case POSIX_FADV_DONTNEED: case POSIX_FADV_NOREUSE:

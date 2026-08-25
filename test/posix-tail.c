@@ -32,13 +32,15 @@
  *
  * ==================== outcomes ========================================
  *
- * Four BUGs fenced, all four in the two <fcntl.h> advisory functions
- * and all four *shall fail* error clauses that are simply absent:
+ * One BUG fenced in the two <fcntl.h> advisory functions, a *shall
+ * fail* error clause that is simply absent:
  *
- *   posix_fadvise   no [EINVAL] for len < 0
  *   posix_fadvise   no [ESPIPE] for a pipe or FIFO
- *   posix_fallocate [ENODEV] for a non-regular file reported as [EBADF]
- *   posix_fallocate no [EBADF] for a descriptor opened read-only
+ *
+ * Three others that were fenced here are now fixed and run live:
+ * posix_fadvise's missing [EINVAL] for len < 0, posix_fallocate's
+ * [ENODEV] for a non-regular file reported as [EBADF], and its missing
+ * [EBADF] for a descriptor opened read-only.
  *
  * One BUG fenced in nftw(): no protection against a directory that is
  * a descendant of itself through a symbolic link, which nftw.html
@@ -803,20 +805,11 @@ static void test_posix_fadvise(void)
 	unlink("tail-fadv.tmp");
 }
 
-#if 0 /* BUG: posix_fadvise() never looks at `len`, so the negative-len
-       * half of its [EINVAL] clause is unimplemented.
-       *
-       * posix_fadvise.html ERRORS, *shall fail*:
-       *   "[EINVAL] The value of advice is invalid, or the value of len
-       *    is less than zero."
-       *
-       * src/fcntl/fadvise.c opens `(void)offset; (void)len;` and then
-       * switches on advice alone.  Measured under Wine:
-       * posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL) returns 0 where
-       * EINVAL is required.  The advice half of the same clause IS
-       * implemented and is asserted live above, which is what makes
-       * this a half-implemented shall-fail check rather than an
-       * unimplemented function. */
+/* The other half of the [EINVAL] clause asserted above: "[EINVAL] The
+ * value of advice is invalid, or the value of len is less than zero."
+ * Kept apart from test_posix_fadvise() because the advice half is a
+ * property of the switch in src/fcntl/fadvise.c and this one is a
+ * property of the guard in front of it. */
 static void test_posix_fadvise_einval_negative_len(void)
 {
 	int fd = open("tail-fadv2.tmp", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -830,7 +823,6 @@ static void test_posix_fadvise_einval_negative_len(void)
 	close(fd);
 	unlink("tail-fadv2.tmp");
 }
-#endif
 
 #if 0 /* BUG: posix_fadvise() returns 0 for a pipe or FIFO instead of
        * [ESPIPE].
@@ -1580,9 +1572,7 @@ int main(void)
 	kill_tree();
 
 	test_posix_fadvise();
-#if 0 /* BUG: see the fence above test_posix_fadvise_einval_negative_len */
 	test_posix_fadvise_einval_negative_len();
-#endif
 #if 0 /* BUG: see the fence above test_posix_fadvise_espipe */
 	test_posix_fadvise_espipe();
 #endif
