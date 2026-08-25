@@ -179,7 +179,8 @@ read_ledger() {
 	for term in $NTLIBC_TEST_PROFILE; do
 		profile_args="$profile_args --profile $term"
 	done
-	# shellcheck disable=SC2086 -- profile selectors are whitespace-separated
+	# profile selectors are whitespace-separated, so this one has to split.
+	# shellcheck disable=SC2086
 	"$srcdir/tools/test-policy.py" resolve --suite libc-test \
 		--defaults "$LEDGER" --profile "runtime=$NTLIBC_TEST_RUNTIME" \
 		$profile_args > "$1/rows" || return 1
