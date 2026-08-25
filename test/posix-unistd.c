@@ -1277,29 +1277,23 @@ static void test_confstr(void)
 	CHECK(confstr(_CS_PATH, buf, 1) == n);
 	CHECK(buf[0] == 0);
 
-#if 0	/* BUG: confstr() reports success for an invalid name.
-	 * confstr.html RETURN VALUE: "If the value of the name argument is
-	 * invalid, confstr() shall return 0 and set errno to indicate the
-	 * error", and ERRORS lists "[EINVAL] The value of the name argument
-	 * is invalid" as its only, shall-fail, entry.
-	 *
-	 * Mechanism: src/unistd/sysconf.c's confstr() starts from
-	 * `const char *s = "";` and only replaces it when
-	 * `name == _CS_PATH`.  An unrecognized name therefore falls through
-	 * the same path a genuine empty value would: it writes a lone NUL
-	 * into the caller's buffer and returns `i + 1` == 1.  A caller
-	 * cannot tell an invalid name from a valid one whose value happens
-	 * to be empty, and the mandated 0-plus-EINVAL never happens for any
-	 * input.  (POSIX does distinguish those two cases: a valid name with
-	 * no configuration-defined value returns 0 with errno *unchanged*,
-	 * which is also unreachable here.)  Probed on this tree: both calls
-	 * below return 1 with errno untouched.  Re-enable when confstr()
-	 * rejects unknown names. */
+	/* An invalid name is the one shall-fail entry: 0 with [EINVAL],
+	 * which is a different 0 from the "valid name, no
+	 * configuration-defined value" 0 that leaves errno alone.  Fixed:
+	 * src/unistd/sysconf.c's confstr() switches on name and rejects the
+	 * default, where it used to start from an empty value and only
+	 * replace it for _CS_PATH -- so an unrecognized name wrote a lone
+	 * null and returned 1, indistinguishable from a valid empty value.
+	 * -1 is not a _CS_* value at all; 12345 is past every name a future
+	 * <unistd.h> would plausibly assign. */
 	errno = 0;
 	CHECK(confstr(-1, buf, sizeof buf) == 0 && errno == EINVAL);
 	errno = 0;
 	CHECK(confstr(12345, buf, sizeof buf) == 0 && errno == EINVAL);
-#endif
+
+	/* ...and a valid name still answers, after a rejected one: the
+	 * switch must not have turned _CS_PATH into a casualty. */
+	CHECK(confstr(_CS_PATH, buf, sizeof buf) == n);
 }
 
 /* swab.html.  DESCRIPTION: "shall copy nbytes bytes, which are pointed

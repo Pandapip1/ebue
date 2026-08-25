@@ -61,11 +61,27 @@ long pathconf(const char *path, int name)
 long fpathconf(int fd, int name) { (void)fd; return pathconf("", name); }
 int getpagesize(void) { return 4096; }
 int getdtablesize(void) { return FD_MAX; }
+/* confstr.html RETURN VALUE: an invalid name is 0 with [EINVAL], not the
+ * 1 that a lone terminating null would account for and not (size_t)-1.
+ * The name set is closed here rather than defaulted, which is what makes
+ * that reachable: <unistd.h> defines exactly one _CS_* constant, so
+ * every name but _CS_PATH is invalid, and a name added to the header has
+ * to gain a case below with it.
+ *
+ * POSIX's other zero -- a valid name with no configuration-defined
+ * value, which returns 0 with errno UNCHANGED -- has no name to reach it
+ * in this tree.  A case wanting it cannot just set s to "": the tail
+ * below counts the null it writes and returns 1.
+ */
 size_t confstr(int name, char *buf, size_t len)
 {
-	const char *s = "";
+	const char *s;
 	size_t i;
-	if (name == _CS_PATH) s = "/bin:/usr/bin";
+
+	switch (name) {
+	case _CS_PATH: s = "/bin:/usr/bin"; break;
+	default: errno = EINVAL; return 0;
+	}
 	for (i = 0; s[i] && i + 1 < len; i++) buf[i] = s[i];
 	if (len) buf[i] = 0;
 	while (s[i]) i++;

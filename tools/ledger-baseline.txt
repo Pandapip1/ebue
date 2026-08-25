@@ -24,7 +24,6 @@
 # The 18 rows corrected in the commit that added this file were all
 # fixes landed in this session whose rows had not caught up -- which is
 # the drift this check exists to prevent, observed one more time.
-A test_confstr
 A test_fpathconf
 A test_id_session_stubs
 A test_puts_ebadf
