@@ -33,10 +33,13 @@
  *     runtime ENOSYS. Now defined (src/misc/resource.c, unfenced below)
  *     for the RLIMIT_* resources NT *can* enforce (RLIMIT_NPROC,
  *     RLIMIT_CPU, RLIMIT_AS/RLIMIT_DATA -- job objects give a real
- *     primitive); still fenced N/A for the ones it cannot (RLIMIT_NOFILE,
- *     RLIMIT_STACK, RLIMIT_FSIZE, RLIMIT_CORE, RLIMIT_RSS,
- *     RLIMIT_MEMLOCK -- no NT mechanism reaches these after process
- *     start, re-verified rather than just inherited).
+ *     primitive), and for RLIMIT_NOFILE, which needs no NT primitive at
+ *     all (the fd table is ntlibc's own -- see the RLIMIT_NOFILE
+ *     section below, which was an N/A fence until that was noticed).
+ *     Still fenced for the ones no mechanism reaches after process
+ *     start: RLIMIT_STACK and RLIMIT_CORE as N/A, RLIMIT_FSIZE as
+ *     UNIMPL; RLIMIT_RSS and RLIMIT_MEMLOCK are not POSIX resources at
+ *     all.
  *
  *   - getpriority()/setpriority() are POSIX.1-2017 base functions
  *     (moved from XSI to BASE in Issue 5 -- getpriority.html). Now
@@ -232,66 +235,131 @@ static void test_setrlimit_enforceable(void)
  *
  * UNIMPL -- see the fence below. */
 
-/* UNIMPL: setrlimit.html RLIMIT_NOFILE, "a number one greater than the
- * maximum value that the system may assign to a newly-created
- * descriptor."  Formerly fenced N/A on the mechanism "there is no NT
- * object whose size a setrlimit() call could shrink at runtime, only a
- * recompile."  That is a category error: RLIMIT_NOFILE does not cap an
- * NT object.  Descriptors here are ntlibc's own, handed out by
- * __fd_alloc() (src/internal/fd.c) out of the static __fds[FD_MAX]
- * table in this process's own address space:
+/* setrlimit.html RLIMIT_NOFILE: "a number one greater than the maximum
+ * value that the system may assign to a newly-created descriptor."
  *
- *     for (i = lowest; i < FD_MAX; i++)
- *             if (!__fds[i].h) return i;
- *     errno = EMFILE;
- *     return -1;
+ * Was fenced N/A on the mechanism "there is no NT object whose size a
+ * setrlimit() call could shrink at runtime, only a recompile."  That was
+ * a category error, and it is what kept this clause unimplemented for as
+ * long as it was: RLIMIT_NOFILE does not cap an NT object.  Descriptors
+ * here are ntlibc's own, handed out by __fd_alloc() (src/internal/fd.c)
+ * from the static __fds[] table in this process's address space, and
+ * that function already returned the EMFILE the clause requires -- the
+ * only missing piece was that its loop bound was the compile-time
+ * constant FD_MAX rather than a ceiling setrlimit() could lower.  "The
+ * system" in the clause is this implementation.  Now implemented:
+ * src/internal/fd.c's __fd_limit, lowered by src/misc/resource.c.
  *
- * The EMFILE the clause requires is already written and already
- * reached; the only thing missing is that the loop bound is the
- * compile-time constant rather than a runtime ceiling setrlimit()
- * could lower.  No NT primitive is involved in closing that gap, and
- * "the system" in the clause is this implementation.  Not implementing
- * it is a choice, which makes this UNIMPL, not N/A.  (src/misc/
- * resource.c currently refuses the lowering with EINVAL rather than
- * silently accepting it, which is the honest answer for an
- * unenforced limit but is not one of the ERRORS the page lists.)
- *
- * The same category error applies to RLIMIT_FSIZE, whose "maximum size
- * of a file, in bytes, that may be created by a process" is checkable
- * against the resulting offset inside src/unistd/write.c and
- * src/unistd/ftruncate.c without asking NT for a quota primitive --
- * though enforcement there is only as complete as ntlibc's own I/O
- * paths, unlike RLIMIT_NOFILE, which is airtight because the fd table
- * is wholly ntlibc's.
- *
- * Not enabled here even once implemented: RLIMIT_NOFILE is
- * process-wide and inherited, so lowering it mid-suite would break
- * every later test the same way the RLIMIT_AS note above records a
- * 1 MiB cap breaking test_getrusage()'s child on real Windows. */
-#if 0 /* UNIMPL: RLIMIT_NOFILE enforcement -- __fd_alloc()'s ceiling is
-	a compile-time constant, not a runtime one; see above. */
-static void test_setrlimit_nofile_enforced(void)
+ * Run in a CHILD, not here.  RLIMIT_NOFILE is process-wide: lowering it
+ * in the test process would starve every later test in this file of
+ * descriptors, the same failure the RLIMIT_AS note above records (a
+ * 1 MiB cap killed test_getrusage()'s child on real Windows while
+ * passing under Wine).  A fresh process starts at FD_MAX again, so the
+ * child both isolates the damage and incidentally shows the limit is
+ * per-process state rather than something inherited. */
+static void test_setrlimit_nofile(const char *self)
+{
+	char *argv[3];
+	pid_t pid;
+	int status;
+
+	argv[0] = (char *)self;
+	argv[1] = (char *)"--nofile-child";
+	argv[2] = 0;
+	pid = __spawn(self, argv, environ);
+	if (pid < 0) {
+		printf("note: cannot spawn \"%s\" (errno %d); RLIMIT_NOFILE enforcement check skipped\n", self, errno);
+		return;
+	}
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+	/* This process's own limit is untouched by the child's. */
+	{
+		struct rlimit rl;
+		CHECK(getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur == 1024);
+	}
+}
+
+static void test_setrlimit_nofile_child(void)
 {
 	struct rlimit rl, back;
-	int fds[8], i, n = 0;
+	int fds[64], i, n = 0, saw_emfile = 0;
 
-	rl.rlim_cur = 4;
-	rl.rlim_max = 16;
+	CHECK(getrlimit(RLIMIT_NOFILE, &back) == 0);
+	CHECK(back.rlim_cur == 1024);
+
+	/* Lower the soft limit well above 0,1,2 so the standard streams
+	 * survive, but low enough that a handful of opens exhausts it. */
+	rl.rlim_cur = 8;
+	rl.rlim_max = back.rlim_max;
 	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
-	CHECK(getrlimit(RLIMIT_NOFILE, &back) == 0 && back.rlim_cur == 4);
 
-	/* "one greater than the maximum value ... assigned to a
-	 * newly-created descriptor": no fd >= 4 may be handed out. */
+	/* "shall be reported by getrlimit" -- the round trip must show the
+	 * value that is actually enforced, not the old one. */
+	CHECK(getrlimit(RLIMIT_NOFILE, &back) == 0 && back.rlim_cur == 8);
+
 	errno = 0;
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < 64; i++) {
 		fds[i] = open("rl-nofile.txt", O_CREAT | O_RDWR, 0644);
-		if (fds[i] < 0) break;
-		CHECK(fds[i] < 4);
+		if (fds[i] < 0) { saw_emfile = (errno == EMFILE); break; }
+		/* "one greater than the maximum value the system may assign":
+		 * no descriptor at or above the limit may ever be handed out. */
+		CHECK(fds[i] < 8);
 		n++;
 	}
-	CHECK(i < 8 && errno == EMFILE);
-	while (n--) close(fds[n]);
+	/* It must actually run out, and with EMFILE -- not succeed 64 times
+	 * (limit ignored) and not fail with some other errno. */
+	CHECK(i < 64);
+	CHECK(saw_emfile);
+
+	while (n-- > 0) close(fds[n]);
 	unlink("rl-nofile.txt");
+
+	/* Raising the hard limit back is EPERM (no appropriate privileges),
+	 * but re-raising the soft limit up to the unchanged hard limit is
+	 * allowed and must restore real capacity. */
+	rl.rlim_cur = back.rlim_max;
+	rl.rlim_max = back.rlim_max;
+	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+	CHECK(getrlimit(RLIMIT_NOFILE, &back) == 0 && back.rlim_cur == 1024);
+}
+
+/* UNIMPL: setrlimit.html RLIMIT_FSIZE, "the maximum size of a file, in
+ * bytes, that may be created by a process."  The same category error
+ * the RLIMIT_NOFILE fence made applies here -- the old reason was "no
+ * per-process max-file-size quota primitive exists in the NT I/O
+ * manager", but no NT quota is needed: the limit is checkable against
+ * the resulting offset inside src/unistd/write.c and
+ * src/unistd/ftruncate.c.  Not implemented, and not implemented
+ * alongside RLIMIT_NOFILE on purpose, because it is not the same kind
+ * of thing.  RLIMIT_NOFILE is airtight once enforced -- the fd table is
+ * wholly ntlibc's, so nothing can allocate a descriptor behind its
+ * back.  RLIMIT_FSIZE enforcement would only ever be as complete as
+ * ntlibc's own I/O paths: a file grown by any other means, in this
+ * process or another, would sail past it.  That is a weaker promise
+ * than the clause makes and is worth deciding on deliberately rather
+ * than inheriting from a neighbouring commit. */
+#if 0 /* UNIMPL: RLIMIT_FSIZE enforcement, see above */
+static void test_setrlimit_fsize_enforced(void)
+{
+	struct rlimit rl;
+	char buf[512];
+	int fd;
+
+	rl.rlim_cur = 256;
+	rl.rlim_max = RLIM_INFINITY;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
+	fd = open("rl-fsize.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	memset(buf, 'x', sizeof buf);
+	errno = 0;
+	/* write.html ERRORS: "[EFBIG] An attempt was made to write a file
+	 * that exceeds the implementation-defined maximum file size or the
+	 * process' file size limit". */
+	CHECK(write(fd, buf, sizeof buf) == -1 && errno == EFBIG);
+	close(fd);
+	unlink("rl-fsize.txt");
 }
 #endif
 
@@ -1474,6 +1542,14 @@ int main(int argc, char **argv)
 	if (argc > 1 && !strcmp(argv[1], "--waitid-exit3")) return 3;
 	if (argc > 1 && !strcmp(argv[1], "--waitid-sigterm")) { kill(getpid(), SIGTERM); return 111; }
 	if (argc > 1 && !strcmp(argv[1], "--waitid-sigabrt")) { kill(getpid(), SIGABRT); return 111; }
+	if (argc > 1 && !strcmp(argv[1], "--nofile-child")) {
+		/* The RLIMIT_NOFILE assertions, in a process of their own so
+		 * that lowering a process-wide limit cannot reach any other
+		 * test.  Exit status is the failure count. */
+		test_setrlimit_nofile_child();
+		if (fails) printf("posix-sysmisc --nofile-child: %d failure(s)\n", fails);
+		return fails != 0;
+	}
 	if (argc > 1 && !strcmp(argv[1], "--rusage-child")) {
 		/* burn a little real CPU so RUSAGE_CHILDREN has something
 		 * non-trivial to accumulate; kept short since correctness
@@ -1485,6 +1561,7 @@ int main(int argc, char **argv)
 
 	test_getrlimit();
 	test_setrlimit_enforceable();
+	test_setrlimit_nofile(argv[0]);
 	test_getrusage(argv[0]);
 	test_getpriority_setpriority();
 	test_select_ready_count();

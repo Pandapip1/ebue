@@ -134,6 +134,16 @@ struct __fd {
 
 extern struct __fd __fds[FD_MAX];
 
+/* The runtime descriptor ceiling: no descriptor >= __fd_limit is ever
+ * handed out.  Starts at FD_MAX (the table's own size, which remains the
+ * hard ceiling) and is lowered by setrlimit(RLIMIT_NOFILE) --
+ * setrlimit.html defines that resource as "a number one greater than the
+ * maximum value that the system may assign to a newly-created
+ * descriptor", and on this platform "the system" is this library: the
+ * table is ours, so the limit is ours to enforce.  See src/misc/
+ * resource.c. */
+extern int __fd_limit;
+
 int __fd_alloc(int lowest);                  /* a free slot >= lowest, or -1 (EMFILE) */
 int __fd_install(HANDLE, unsigned flags, int type);    /* alloc + fill; -1 with errno */
 int __fd_install_at(int fd, HANDLE, unsigned flags, int type);

@@ -2,15 +2,31 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * getrlimit()/setrlimit(): getrlimit() reports real numbers this library
- * actually enforces -- FD_MAX for RLIMIT_NOFILE (src/internal/fd.c's
- * fixed-size __fds[] table) and, for RLIMIT_NPROC/RLIMIT_CPU/RLIMIT_AS/
+ * actually enforces -- __fd_limit for RLIMIT_NOFILE (src/internal/fd.c's
+ * live descriptor ceiling) and, for RLIMIT_NPROC/RLIMIT_CPU/RLIMIT_AS/
  * RLIMIT_DATA, whatever the last successful setrlimit() call recorded
  * (CHILD_CAP_LIMIT_/RLIM_INFINITY by default) -- and RLIM_INFINITY for
  * every other resource NT has no per-process cap for.
  *
- * setrlimit() is defined for exactly the resources include/sys/
- * resource.h's own comment documents as having a real NT enforcement
- * primitive: RLIMIT_NPROC, RLIMIT_CPU, RLIMIT_AS, and RLIMIT_DATA, via a
+ * RLIMIT_NOFILE is the one enforceable resource here that needs no NT
+ * primitive at all, and it was long mis-recorded as needing one.  Its
+ * clause -- "a number one greater than the maximum value that the system
+ * may assign to a newly-created descriptor" (setrlimit.html) -- is about
+ * descriptors, and descriptors on this platform are wholly ntlibc's own:
+ * __fd_alloc() hands them out of the static __fds[] table in this
+ * process's address space and already returns EMFILE when it runs out.
+ * "The system" in that sentence is this library.  So setrlimit() lowers
+ * __fd_limit, the bound __fd_alloc() loops to, and the limit is honoured
+ * for real rather than accepted-and-ignored.  The soft limit has exactly
+ * one copy -- __fd_limit itself -- so getrlimit() cannot drift from what
+ * is enforced.  The hard limit may be lowered but never raised (no
+ * appropriate privileges), and never past FD_MAX in any case: the table
+ * is a fixed array, not something a limit can grow.
+ *
+ * setrlimit() additionally reflects onto NT for exactly the resources
+ * include/sys/resource.h's own comment documents as having a real NT
+ * enforcement primitive: RLIMIT_NPROC, RLIMIT_CPU, RLIMIT_AS, and
+ * RLIMIT_DATA, via a
  * job object this process creates and assigns itself to on first use
  * (NtCreateJobObject/NtAssignProcessToJobObject, src/internal/nt.h) and
  * whose JobObjectExtendedLimitInformation this then updates
@@ -24,11 +40,10 @@
  * way getrlimit() already reported FD_MAX/CHILD_CAP_LIMIT_ without ever
  * asking NT to confirm them.
  *
- * For every other resource (RLIMIT_NOFILE, RLIMIT_STACK, RLIMIT_FSIZE,
- * RLIMIT_CORE, RLIMIT_RSS, RLIMIT_MEMLOCK) there is no NT mechanism that
- * reaches the thing being capped after this process has already started
- * (FD_MAX is a compile-time array bound; NT fixes stack reservation at
- * NtCreateThreadEx() time; there is no per-process max-file-size,
+ * For every other resource (RLIMIT_STACK, RLIMIT_FSIZE, RLIMIT_CORE,
+ * RLIMIT_RSS, RLIMIT_MEMLOCK) there is no mechanism that reaches the
+ * thing being capped after this process has already started
+ * (NT fixes stack reservation at NtCreateThreadEx() time; there is no per-process max-file-size,
  * core-dump-size, RSS, or mlock-budget primitive at all -- see
  * include/sys/resource.h for the fuller per-resource accounting).
  * setrlimit() for one of these accepts a request only when it does not
@@ -67,13 +82,22 @@ static rlim_t nproc_cur = CHILD_CAP_LIMIT_, nproc_max = CHILD_CAP_LIMIT_;
 static rlim_t cpu_cur = RLIM_INFINITY, cpu_max = RLIM_INFINITY;
 static rlim_t as_cur = RLIM_INFINITY, as_max = RLIM_INFINITY;
 static rlim_t data_cur = RLIM_INFINITY, data_max = RLIM_INFINITY;
+/* RLIMIT_NOFILE's soft limit lives in __fd_limit (src/internal/fd.c), the
+ * bound __fd_alloc() actually loops to, so that there is exactly one copy
+ * of it and getrlimit() cannot drift from what is enforced.  Only the
+ * hard limit needs storing here. */
+static rlim_t nofile_max = FD_MAX;
 
 int getrlimit(int resource, struct rlimit *rl)
 {
 	if (!rl) { errno = EFAULT; return -1; }
 	switch (resource) {
 	case RLIMIT_NOFILE:
-		rl->rlim_cur = rl->rlim_max = FD_MAX;
+		/* Soft limit is the live ceiling __fd_alloc() enforces; hard
+		 * limit is the table's own size, which no setrlimit() can
+		 * raise past because the table is a fixed array. */
+		rl->rlim_cur = (rlim_t)__fd_limit;
+		rl->rlim_max = nofile_max;
 		break;
 	case RLIMIT_NPROC:
 		rl->rlim_cur = nproc_cur; rl->rlim_max = nproc_max;
@@ -162,6 +186,25 @@ int setrlimit(int resource, const struct rlimit *rl)
 	if (rl->rlim_cur > rl->rlim_max) { errno = EINVAL; return -1; }
 
 	switch (resource) {
+	case RLIMIT_NOFILE:
+		/* setrlimit.html: RLIMIT_NOFILE is "a number one greater than
+		 * the maximum value that the system may assign to a
+		 * newly-created descriptor".  Descriptors here are this
+		 * library's own -- __fd_alloc() hands them out of the static
+		 * __fds[] table -- so "the system" is ntlibc and the limit is
+		 * enforceable without any NT primitive at all.  It is honoured
+		 * for real: __fd_alloc() loops to __fd_limit and returns the
+		 * EMFILE the clause requires past it.
+		 *
+		 * The hard limit can be lowered but never raised (no
+		 * appropriate privileges -- src/unistd/ids.c's one always
+		 * unprivileged user), and never past FD_MAX in any case, since
+		 * the table is a fixed array rather than something a limit
+		 * could grow. */
+		if (rl->rlim_max > cur.rlim_max) { errno = EPERM; return -1; }
+		nofile_max = rl->rlim_max;
+		__fd_limit = rl->rlim_cur > (rlim_t)FD_MAX ? FD_MAX : (int)rl->rlim_cur;
+		return 0;
 	case RLIMIT_NPROC: case RLIMIT_CPU: case RLIMIT_AS: case RLIMIT_DATA:
 		/* "Only a process with appropriate privileges can raise a
 		 * hard limit" -- this library's one always-unprivileged
@@ -176,7 +219,7 @@ int setrlimit(int resource, const struct rlimit *rl)
 		apply_job_limits();
 		return 0;
 	default:
-		/* RLIMIT_NOFILE/STACK/FSIZE/CORE/RSS/MEMLOCK: no NT
+		/* RLIMIT_STACK/FSIZE/CORE/RSS/MEMLOCK: no NT
 		 * mechanism can actually move the fixed ceiling these
 		 * already report (see the file banner comment). Accept the
 		 * call only when it does not ask for anything stricter than

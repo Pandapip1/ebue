@@ -23,6 +23,7 @@
 #include "libc.h"
 
 struct __fd __fds[FD_MAX];
+int __fd_limit = FD_MAX;
 
 /* msvcrt's _osfile bits */
 #define FOPEN      0x01
@@ -74,7 +75,12 @@ int __fd_alloc(int lowest)
 {
 	int i;
 	if (lowest < 0) lowest = 0;
-	for (i = lowest; i < FD_MAX; i++)
+	/* __fd_limit, not FD_MAX: setrlimit(RLIMIT_NOFILE) lowers it, and
+	 * "a number one greater than the maximum value that the system may
+	 * assign to a newly-created descriptor" (setrlimit.html) is exactly
+	 * this bound.  It never exceeds FD_MAX, so the table stays in
+	 * range whatever a caller asks for. */
+	for (i = lowest; i < __fd_limit; i++)
 		if (!__fds[i].h) return i;
 	errno = EMFILE;
 	return -1;
