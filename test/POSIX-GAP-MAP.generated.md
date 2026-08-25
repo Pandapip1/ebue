@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 | | |
 |---|---|
-| ntlibc | `99e5418749b6e98cd93a6146e660f5f04e168d1f` |
+| ntlibc | `323634ed12c7504c1688f946bc556ea5683c4be9` |
 | LTP (`third_party/ltp`) | `4c0cfb849f19beed68175de9fb7d02df55987084` |
 | suite | `testcases/open_posix_testsuite/conformance/interfaces/` |
 | census | 1610 tests in 190 directories (189 interfaces + `testfrmw`) |
@@ -99,45 +99,44 @@ deliberately does not implement* (`tools/lint-undefined.sh`'s exception
 mechanism). A `not-marked` row is either a hole nobody noticed or a stale
 exception list, and it is the highest-signal line in this file.
 
-### Unresolved at link (implicit declaration reached the linker) (94 test(s))
+### Unresolved at link (implicit declaration reached the linker) (109 test(s))
 
 | symbol | tests | declared? | marker |
 |---|---|---|---|
 | `timer_create` | 49 | no | **not-marked** |
 | `sigqueue` | 15 | yes | `undefined-ok` |
+| `sched_getparam` | 14 | no | **not-marked** |
+| `sched_getscheduler` | 6 | no | **not-marked** |
 | `sigignore` | 6 | no | **not-marked** |
-| `sched_getscheduler` | 5 | no | **not-marked** |
 | `sigtimedwait` | 5 | yes | `undefined-ok` |
 | `sigwaitinfo` | 5 | yes | `undefined-ok` |
 | `pthread_sigmask` | 1 | no | **not-marked** |
 | `sched_get_priority_max` | 1 | no | **not-marked** |
 | `sched_get_priority_min` | 1 | no | **not-marked** |
-| `sched_getparam` | 1 | no | **not-marked** |
 | `sched_rr_get_interval` | 1 | no | **not-marked** |
+| `sched_setscheduler` | 1 | no | **not-marked** |
 | `timer_delete` | 1 | no | **not-marked** |
 | `timer_getoverrun` | 1 | no | **not-marked** |
 | `timer_gettime` | 1 | no | **not-marked** |
 | `timer_settime` | 1 | no | **not-marked** |
 
-### Undeclared identifier — a missing **macro**, not a missing function (21 test(s))
+### Undeclared identifier — a missing **macro**, not a missing function (33 test(s))
 
 | identifier | tests | declared? | marker |
 |---|---|---|---|
-| `SCHED_FIFO` | 5 | no | **not-marked** |
+| `SCHED_FIFO` | 13 | no | **not-marked** |
+| `SCHED_RR` | 6 | no | **not-marked** |
 | `SIG_HOLD` | 3 | no | **not-marked** |
 | `_SC_CPUTIME` | 3 | no | **not-marked** |
 | `SCHED_OTHER` | 2 | no | **not-marked** |
-| `SCHED_RR` | 2 | no | **not-marked** |
 | `_SC_MONOTONIC_CLOCK` | 2 | no | **not-marked** |
 | `_SC_THREAD_CPUTIME` | 2 | no | **not-marked** |
 | `_SC_ASYNCHRONOUS_IO` | 1 | no | **not-marked** |
 | `_SC_SIGQUEUE_MAX` | 1 | no | **not-marked** |
 
-### Incomplete type (27 test(s))
+### Incomplete type (0 test(s))
 
-| type | tests | declared? | marker |
-|---|---|---|---|
-| `struct sched_param` | 27 | no | **not-marked** |
+None.
 
 ### The suite's own option-group probe firing (3 test(s))
 
@@ -379,9 +378,9 @@ headers all resolve, the first symbol/macro/type that does not.
 | `raise` | 7 | 0 | 0 | 7 | yes | yes | `-` |
 | `sched_get_priority_max` | 5 | 0 | 4 | 1 | no | no | `SCHED_FIFO` |
 | `sched_get_priority_min` | 5 | 0 | 4 | 1 | no | no | `SCHED_FIFO` |
-| `sched_getparam` | 6 | 0 | 6 | 0 | no | no | `struct sched_param` |
+| `sched_getparam` | 6 | 0 | 6 | 0 | no | no | `sched_getparam` |
 | `sched_getscheduler` | 5 | 0 | 5 | 0 | no | no | `sched_getscheduler` |
-| `sched_rr_get_interval` | 4 | 0 | 4 | 0 | no | no | `struct sched_param` |
+| `sched_rr_get_interval` | 4 | 0 | 4 | 0 | no | no | `SCHED_RR` |
 | `sched_setparam` | 22 | 4 | 14 | 4 | no | no | `pthread.h` |
 | `sched_setscheduler` | 21 | 4 | 11 | 6 | no | no | `pthread.h` |
 | `sched_yield` | 2 | 1 | 0 | 1 | yes | yes | `pthread.h` |
@@ -431,7 +430,7 @@ headers all resolve, the first symbol/macro/type that does not.
 <!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.
 Do not edit by hand -- see "the data block" in tools/posix-gapmap.sh.
 
-s	ntlibc	99e5418749b6e98cd93a6146e660f5f04e168d1f
+s	ntlibc	323634ed12c7504c1688f946bc556ea5683c4be9
 s	ltp	4c0cfb849f19beed68175de9fb7d02df55987084
 s	cc	x86_64-win32-tcc
 s	tests	1610
@@ -1200,64 +1199,64 @@ t	sched_get_priority_min/1-2.c	B		macro	SCHED_FIFO
 t	sched_get_priority_min/1-3.c	C			
 t	sched_get_priority_min/1-4.c	B		macro	SCHED_OTHER
 t	sched_get_priority_min/2-1.c	B		link	sched_get_priority_min
-t	sched_getparam/1-1.c	B		type	struct sched_param
-t	sched_getparam/2-1.c	B		type	struct sched_param
-t	sched_getparam/3-1.c	B		type	struct sched_param
-t	sched_getparam/4-1.c	B		type	struct sched_param
-t	sched_getparam/6-1.c	B		type	struct sched_param
+t	sched_getparam/1-1.c	B		link	sched_getparam
+t	sched_getparam/2-1.c	B		link	sched_getparam
+t	sched_getparam/3-1.c	B		link	sched_getparam
+t	sched_getparam/4-1.c	B		link	sched_getparam
+t	sched_getparam/6-1.c	B		link	sched_getparam
 t	sched_getparam/speculative/7-1.c	B		link	sched_getparam
 t	sched_getscheduler/1-1.c	B		link	sched_getscheduler
 t	sched_getscheduler/3-1.c	B		link	sched_getscheduler
 t	sched_getscheduler/4-1.c	B		link	sched_getscheduler
 t	sched_getscheduler/5-1.c	B		link	sched_getscheduler
 t	sched_getscheduler/7-1.c	B		link	sched_getscheduler
-t	sched_rr_get_interval/1-1.c	B		type	struct sched_param
-t	sched_rr_get_interval/2-1.c	B		type	struct sched_param
-t	sched_rr_get_interval/3-1.c	B		type	struct sched_param
+t	sched_rr_get_interval/1-1.c	B		macro	SCHED_RR
+t	sched_rr_get_interval/2-1.c	B		macro	SCHED_RR
+t	sched_rr_get_interval/3-1.c	B		macro	SCHED_RR
 t	sched_rr_get_interval/speculative/5-1.c	B		link	sched_rr_get_interval
-t	sched_setparam/1-1.c	B		type	struct sched_param
-t	sched_setparam/2-1.c	B	sys/pstat.h sys/sysctl.h 	type	struct sched_param
-t	sched_setparam/2-2.c	B	sys/pstat.h sys/sysctl.h 	type	struct sched_param
+t	sched_setparam/1-1.c	B		link	sched_getparam
+t	sched_setparam/2-1.c	B	sys/pstat.h sys/sysctl.h 	macro	SCHED_FIFO
+t	sched_setparam/2-2.c	B	sys/pstat.h sys/sysctl.h 	macro	SCHED_RR
 t	sched_setparam/20-1.c	A	pthread.h 		
 t	sched_setparam/21-1.c	A	pthread.h 		
 t	sched_setparam/21-2.c	A	pthread.h 		
-t	sched_setparam/22-1.c	B		type	struct sched_param
-t	sched_setparam/23-1.c	B		type	struct sched_param
+t	sched_setparam/22-1.c	B		link	sched_getparam
+t	sched_setparam/23-1.c	B		link	sched_getparam
 t	sched_setparam/23-2.c	C			
 t	sched_setparam/23-3.c	C			
 t	sched_setparam/23-4.c	C			
 t	sched_setparam/23-5.c	C			
-t	sched_setparam/23-6.c	B		type	struct sched_param
-t	sched_setparam/23-7.c	B		type	struct sched_param
-t	sched_setparam/25-1.c	B		type	struct sched_param
+t	sched_setparam/23-6.c	B		macro	SCHED_FIFO
+t	sched_setparam/23-7.c	B		link	sched_getparam
+t	sched_setparam/25-1.c	B		link	sched_getscheduler
 t	sched_setparam/25-2.c	B		optprobe	_POSIX_SPORADIC_SERVER support not defined
 t	sched_setparam/25-3.c	B		optprobe	_POSIX_SPORADIC_SERVER not defined correctly
 t	sched_setparam/25-4.c	B		optprobe	_POSIX_SPORADIC_SERVER not defined properly
-t	sched_setparam/26-1.c	B		type	struct sched_param
-t	sched_setparam/27-1.c	B		type	struct sched_param
-t	sched_setparam/5-1.c	B		type	struct sched_param
+t	sched_setparam/26-1.c	B		link	sched_getparam
+t	sched_setparam/27-1.c	B		link	sched_getparam
+t	sched_setparam/5-1.c	B		link	sched_getparam
 t	sched_setparam/9-1.c	A	sys/ipc.h sys/pstat.h sys/shm.h sys/sysctl.h 		
 t	sched_setscheduler/1-1.c	B		macro	SCHED_FIFO
 t	sched_setscheduler/15-1.c	A	pthread.h 		
 t	sched_setscheduler/15-2.c	A	pthread.h 		
-t	sched_setscheduler/16-1.c	B		type	struct sched_param
+t	sched_setscheduler/16-1.c	B		macro	SCHED_FIFO
 t	sched_setscheduler/17-1.c	B		macro	SCHED_FIFO
 t	sched_setscheduler/17-2.c	C			
 t	sched_setscheduler/17-3.c	C			
 t	sched_setscheduler/17-4.c	C			
-t	sched_setscheduler/17-5.c	B		type	struct sched_param
-t	sched_setscheduler/17-6.c	B		type	struct sched_param
-t	sched_setscheduler/17-7.c	B		type	struct sched_param
+t	sched_setscheduler/17-5.c	B		link	sched_getparam
+t	sched_setscheduler/17-6.c	B		macro	SCHED_FIFO
+t	sched_setscheduler/17-7.c	B		macro	SCHED_FIFO
 t	sched_setscheduler/19-1.c	B		macro	SCHED_FIFO
 t	sched_setscheduler/19-2.c	C			
 t	sched_setscheduler/19-3.c	C			
 t	sched_setscheduler/19-4.c	C			
-t	sched_setscheduler/19-5.c	B		type	struct sched_param
-t	sched_setscheduler/20-1.c	B		type	struct sched_param
-t	sched_setscheduler/21-1.c	B		type	struct sched_param
+t	sched_setscheduler/19-5.c	B		link	sched_setscheduler
+t	sched_setscheduler/20-1.c	B		macro	SCHED_FIFO
+t	sched_setscheduler/21-1.c	B		macro	SCHED_FIFO
 t	sched_setscheduler/22-1.c	A	pthread.h 		
 t	sched_setscheduler/22-2.c	A	pthread.h 		
-t	sched_setscheduler/4-1.c	B		type	struct sched_param
+t	sched_setscheduler/4-1.c	B		macro	SCHED_FIFO
 t	sched_yield/1-1.c	A	pthread.h 		
 t	sched_yield/2-1.c	C			
 t	sem_close/1-1.c	A	semaphore.h 		
@@ -2250,11 +2249,11 @@ n	sched_get_priority_min	no	no
 n	sched_getparam	no	no
 n	sched_getscheduler	no	no
 n	sched_rr_get_interval	no	no
+n	sched_setscheduler	no	no
 n	sigignore	no	no
 n	sigqueue	yes	yes
 n	sigtimedwait	yes	yes
 n	sigwaitinfo	yes	yes
-n	struct sched_param	no	no
 n	timer_create	no	no
 n	timer_delete	no	no
 n	timer_getoverrun	no	no
