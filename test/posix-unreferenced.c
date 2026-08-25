@@ -1770,8 +1770,16 @@ static void test_fchmodat_einval(void)
  * one-line stub that used to be there. */
 static void test_sigwait_spec(void)
 {
-	sigset_t set, old, bad;
+	sigset_t set, old, pend;
 	int sig = -1;
+
+	/* Every assertion below reads the process-wide pending set, so start
+	 * from a known-empty one rather than assuming: an earlier test that
+	 * left something pending would otherwise make sigwait() legitimately
+	 * select that instead, and this test would fail for the wrong
+	 * reason. */
+	CHECK(sigpending(&pend) == 0);
+	CHECK(sigisemptyset(&pend) == 1);
 
 	CHECK(sigemptyset(&set) == 0);
 	CHECK(sigaddset(&set, SIGUSR1) == 0);
@@ -1780,21 +1788,50 @@ static void test_sigwait_spec(void)
 	CHECK(sigprocmask(SIG_BLOCK, &set, &old) == 0);
 	CHECK(raise(SIGUSR1) == 0);
 	/* selects the pending signal, returns zero, stores the number */
+	errno = 0;
 	CHECK(sigwait(&set, &sig) == 0);
 	CHECK(sig == SIGUSR1);
+	/* errno is not a channel this function reports through, on any path
+	 * -- the stub's errno = EINVAL was outside the contract, and that
+	 * defect is independent of the missing behaviour it sat alongside */
+	CHECK(errno == 0);
 	/* "atomically clear it from the system's set of pending signals" */
-	CHECK(sigpending(&bad) == 0);
-	CHECK(sigismember(&bad, SIGUSR1) == 0);
+	CHECK(sigpending(&pend) == 0);
+	CHECK(sigismember(&pend, SIGUSR1) == 0);
 	CHECK(sigprocmask(SIG_SETMASK, &old, 0) == 0);
 
 	/* "[EINVAL] The set argument contains an invalid or unsupported
-	 * signal number." -- reported through the return value, with errno
-	 * left alone. */
-	CHECK(sigemptyset(&bad) == 0);
-	bad.__bits[0] = ~0UL;   /* every bit, valid signal numbers or not */
-	errno = 0;
-	CHECK(sigwait(&bad, &sig) == EINVAL);
-	CHECK(errno == 0);
+	 * signal number" is a MAY FAIL, not a shall-fail -- the fence that
+	 * stood here cited it as "ERRORS, shall fail", which is wrong; read
+	 * off the page, ERRORS reads "The sigwait() function may fail if".
+	 * So both answers conform, and this implementation takes the other
+	 * one: stray bits are ignored, never rejected.
+	 *
+	 * Measured, not derived.  glibc does not reject them either: a raw
+	 * memset(0xff) sigset_t with SIGUSR1 pending returns 0 with sig=10
+	 * there, as does glibc's own sigfillset().  And this library's
+	 * sigfillset() is memset(0xff) over a 128-byte sigset_t -- 1024 bits
+	 * for 64 real signals -- so a sigwait() that rejected stray bits
+	 * would fail the commonest sigwait idiom there is, every time.
+	 *
+	 * That is asserted here, positively, rather than left unsaid: a
+	 * filled set with a pending signal in it must succeed. */
+	{
+		sigset_t filled;
+		CHECK(sigpending(&pend) == 0);
+		CHECK(sigisemptyset(&pend) == 1);
+		CHECK(sigprocmask(SIG_BLOCK, &set, &old) == 0);
+		CHECK(raise(SIGUSR1) == 0);
+		CHECK(sigfillset(&filled) == 0);
+		sig = -1;
+		errno = 0;
+		CHECK(sigwait(&filled, &sig) == 0);
+		CHECK(sig == SIGUSR1);
+		CHECK(errno == 0);
+		CHECK(sigpending(&pend) == 0);
+		CHECK(sigismember(&pend, SIGUSR1) == 0);
+		CHECK(sigprocmask(SIG_SETMASK, &old, 0) == 0);
+	}
 }
 
 /* ================================================================= */
