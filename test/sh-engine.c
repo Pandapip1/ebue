@@ -651,6 +651,48 @@ static void test_roundtrip(void)
 	check_roundtrip("(if a; then b; fi); { while c; do d; done; }");
 }
 
+#if 0	/* BUG: the printer writes a here-document's terminator line as
+	 * the delimiter word was WRITTEN, while the parser matches
+	 * terminator lines against the delimiter with quote removal
+	 * APPLIED.  A quoted delimiter's printed terminator therefore
+	 * does not terminate its own here-document.
+	 *
+	 * src/sh/print.c:41 drain_heredocs() writes fputs(r->word), the
+	 * raw source text.  src/sh/parse.c:273 drain_heredocs() compares
+	 * each line against strip_delim(r->word) (parse.c:235), which
+	 * strips the quotes and sets heredoc_quoted.  Nothing reconciles
+	 * them, so the two agree only for an unquoted delimiter.
+	 *
+	 * VERIFIED with a probe that dumps the AST between the stages:
+	 *
+	 *     src    "a<<\"\""
+	 *     parse1  r->word = "\"\"" ; r->heredoc = ""  (empty body)
+	 *     print1  a << ""\n""\n
+	 *     parse2  r->word = "\"\"" ; r->heredoc = "\"\"\n"
+	 *     print2  a << ""\n""\n""\n
+	 *
+	 * The delimiter is the empty string after quote removal, so the
+	 * parser is looking for an EMPTY line; the printer gave it the
+	 * two-character line "" instead, which is swallowed as body.
+	 * Every round trip adds one line, so this fixed point does not
+	 * merely fail, it diverges.
+	 *
+	 * The empty delimiter is what exposes it in a one-line program:
+	 * it is the only quoted delimiter whose here-document can
+	 * terminate with no body at all.  "a<<X" and "a<<\"X\"" simply
+	 * fail to parse, having no terminator anywhere.
+	 *
+	 * Found by fuzz/fuzz_shparse.c as "\x7f<<\t\"\"" and reduced by
+	 * hand; "a<<''" is the same defect.  fuzz_shparse.c's
+	 * hdquote_fence() keeps the harness off it -- delete that when
+	 * this fence is lifted. */
+static void test_heredoc_quoted_delim_roundtrip(void)
+{
+	check_roundtrip("a<<\"\"");
+	check_roundtrip("a<<''");
+}
+#endif
+
 #if 0	/* BUG: parse -> print -> parse -> print is not a fixed point for
 	 * a command word that is literally "!".  2.9.2 makes "!" a
 	 * reserved word when it is the first word of a pipeline, and 2.4

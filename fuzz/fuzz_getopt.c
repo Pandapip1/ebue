@@ -69,8 +69,18 @@ static char storage[CAP + 1];
 
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 {
-	char *argv[MAXARGV + 1];
-	char *before[MAXARGV + 1];
+	/* MAXARGV + 2, not + 1.  The input supplies up to MAXARGV
+	 * elements, prepending "prog" makes MAXARGV + 1, and argv must
+	 * then carry the terminating NULL that every real argv has --
+	 * so the largest index written is MAXARGV + 1.  At + 1 the
+	 * `argv[argc] = 0` below wrote one past the end whenever the
+	 * input filled every slot, and `before` overran with it in the
+	 * memcpy of argc + 1 pointers.  VERIFIED: UBSan reported
+	 * "index 25 out of bounds for type 'char *[25]'" at that
+	 * assignment.  It took a fuzzer that could fill all 24 slots to
+	 * reach it, which is why it survived the first runs. */
+	char *argv[MAXARGV + 2];
+	char *before[MAXARGV + 2];
 	struct option longopts[MAXLONG + 1];
 	const char *optstring;
 	int argc = 0, nlong = 0, which, i, iter, limit, err_on;
