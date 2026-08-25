@@ -363,3 +363,163 @@ sm_closure() {
 SM_WORKER_GUARD='[ "${SM_BUILD_VERIFIED:-no}" = yes ] || { echo "suitemap: INTERNAL ERROR -- a compile worker started without the build guard; refusing to measure." >&2; exit 2; }'
 
 sm_pct() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f%%", (b?a*100/b:0)}'; }
+
+# ==========================================================  the cache
+#
+# Measuring is not cheap, and the pre-commit hook that keeps these
+# reports honest has to pay for it on every commit that could have moved
+# a number.  So the analysis half is cached.
+#
+# WHAT THE COST ACTUALLY IS, MEASURED
+#
+# posix-gapmap, 1610 tests, GAPMAP_JOBS=2, total 8.5s:
+#
+#   compile every test        3.0s   35%
+#   absent-header resolution  2.2s   26%
+#   class B detail + ledger   2.7s   32%
+#   emit                      0.5s    6%
+#
+# Note what that says: caching "the compiled artefacts" alone would leave
+# two thirds of the cost on the table.  The unit worth caching is the
+# whole ANALYSIS -- every intermediate the derivations read.
+#
+# THE KEY IS THE ENTIRE DESIGN
+#
+# A cache keyed on something that does not fully determine its value
+# serves a stale answer silently, and a silently stale gap measurement is
+# strictly worse than no cache: it is exactly the "good news shaped like
+# a broken instrument" failure this instrument exists to prevent, with a
+# performance optimisation as its cause.  So the key covers every input,
+# and each component is recorded SEPARATELY so a miss can be explained
+# rather than guessed at:
+#
+#   cc       $CC and its own version banner.  A compiler that has been
+#            rebuilt in place classifies differently and is invisible to
+#            a name-only key.
+#   flags    CFLAGS_C99FSE, CFLAGS_AUTO and the -I set, verbatim.
+#   headers  the content of every header this library offers --
+#            include/, arch/, obj/include/.  This is what decides class A.
+#   libc     lib/libc.a by content.  This is what decides B from C, and
+#            it is why the cache correctly misses after almost any build:
+#            a changed library can change a link outcome.
+#   suite    the suite's SHARED material -- its include tree and harness
+#            -- hashed separately from the per-test sources.
+#   tool     this engine and the calling backend, by content.  The
+#            classification rules live in them, so an edit to either must
+#            invalidate everything -- including an edit made while
+#            debugging the cache itself.
+#
+# Deliberately NOT keyed on: the ntlibc SHA (it changes every commit and
+# determines none of these numbers; the report records it separately and
+# --check enforces it), the wall clock, or a version counter somebody has
+# to remember to bump.
+#
+# A cache that never misses is as broken as one that never hits, and
+# neither is visible from the outside, so sm_cache_explain_miss names the
+# components that moved and there is an invalidation matrix in
+# CONTRIBUTING.md that changes each input in turn and checks the answer.
+#
+# WHAT THE CACHE MAY NOT DO
+#
+# It may not stand in for the build guard.  sm_require_built runs first
+# and unconditionally: a tree with no lib/libc.a is refused before a key
+# is ever computed, so no hit can let an unbuilt tree report a total gap.
+# The census and the submodule pin check are likewise outside the cache.
+#
+# Disable with SUITEMAP_CACHE=0; relocate with SUITEMAP_CACHE_DIR.  The
+# directory is gitignored: derived, per-machine, safe to delete.
+
+SM_CACHE_DIR=${SUITEMAP_CACHE_DIR:-$srcdir/.suitemap-cache}
+SM_CACHE_ENABLED=${SUITEMAP_CACHE:-1}
+
+# A content hash over a set of trees.  Paths are hashed as well as
+# contents, so MOVING a header invalidates just as editing one does.
+# NUL-delimited throughout: a path containing a space must not hash as
+# two paths.
+sm_hash_paths() {
+	for _r in "$@"; do
+		[ -e "$_r" ] && find "$_r" -type f -print0
+	done | sort -z | xargs -0 -r sha256sum 2>/dev/null |
+		sha256sum | cut -d' ' -f1
+}
+
+sm_hash_str() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+
+# SM_CACHE_SUITE_PATHS is set by the backend to its suite's shared
+# material only -- the tests' own sources are not in it.
+sm_cache_compute_key() {
+	[ "$SM_CACHE_ENABLED" = 1 ] || return 1
+
+	SM_K_CC=$(sm_hash_str "$CC$("$CC" -v 2>&1 | head -5)")
+	SM_K_FLAGS=$(sm_hash_str "$CFLAGS_C99FSE|$CFLAGS_AUTO|${INC:-}")
+	SM_K_HEADERS=$(sm_hash_paths "$srcdir/include" "$srcdir/arch" "$srcdir/obj/include")
+	SM_K_LIBC=$(sha256sum "$srcdir/lib/libc.a" | cut -d' ' -f1)
+	# shellcheck disable=SC2086  # a deliberate word list of roots
+	SM_K_SUITE=$(sm_hash_paths ${SM_CACHE_SUITE_PATHS:-})
+	SM_K_TOOL=$(sm_hash_paths "$srcdir/tools/suitemap-engine.sh" "$srcdir/tools/$SM_TOOL.sh")
+
+	SM_CACHE_KEY=$(sm_hash_str \
+		"$SM_K_CC|$SM_K_FLAGS|$SM_K_HEADERS|$SM_K_LIBC|$SM_K_SUITE|$SM_K_TOOL")
+	return 0
+}
+
+# Emitted in a fixed order that is also sorted, because
+# sm_cache_explain_miss joins two of these.
+sm_cache_key_breakdown() {
+	printf 'cc\t%s\nflags\t%s\nheaders\t%s\nlibc\t%s\nsuite\t%s\ntool\t%s\n' \
+		"$SM_K_CC" "$SM_K_FLAGS" "$SM_K_HEADERS" "$SM_K_LIBC" \
+		"$SM_K_SUITE" "$SM_K_TOOL"
+}
+
+sm_cache_explain_miss() {
+	_last="$SM_CACHE_DIR/$SM_TOOL.last-key"
+	[ -f "$_last" ] || { echo "$SM_TOOL: cache: cold (no previous run)" >&2; return; }
+	mkdir -p "$SM_CACHE_DIR"
+	sm_cache_key_breakdown > "$SM_CACHE_DIR/.now.$$"
+	_ch=$(join -j1 "$_last" "$SM_CACHE_DIR/.now.$$" 2>/dev/null |
+	      awk '$2 != $3 { printf "%s ", $1 }')
+	rm -f "$SM_CACHE_DIR/.now.$$"
+	if [ -n "$_ch" ]; then
+		echo "$SM_TOOL: cache: miss -- changed: $_ch" >&2
+	else
+		echo "$SM_TOOL: cache: miss (no entry for this key yet)" >&2
+	fi
+}
+
+# ------------------------------------------------- the analysis entry
+#
+# Every intermediate the derivations read.  A hit skips everything
+# between enumeration and rendering.
+sm_cache_analysis_load() {
+	[ -n "${SM_CACHE_KEY:-}" ] || return 1
+	_d="$SM_CACHE_DIR/analysis/$SM_CACHE_KEY"
+	[ -f "$_d/.complete" ] || return 1
+	cp "$_d"/* "$W/" 2>/dev/null || return 1
+	rm -f "$W/.complete"
+	# A HIT records the key too.  It used to be written only on a store,
+	# which meant that after any hit the recorded key was whatever the
+	# last MISS had computed, and the next miss then blamed components
+	# that had not moved -- "changed: flags tool" for a run in which only
+	# the flags changed.  A cache whose miss explanation is wrong is a
+	# cache nobody can tell from a broken one.
+	sm_cache_key_breakdown > "$SM_CACHE_DIR/$SM_TOOL.last-key"
+	echo "$SM_TOOL: cache: hit (analysis reused; nothing recompiled)" >&2
+	return 0
+}
+
+# Written to a temporary directory and renamed into place, so an
+# interrupted run cannot leave a half-written entry that a later run
+# would trust.  `.complete` is created last and is the only thing a load
+# looks for -- a partial entry is not a smaller gap, it is no entry.
+sm_cache_analysis_store() {
+	[ -n "${SM_CACHE_KEY:-}" ] || return 0
+	_d="$SM_CACHE_DIR/analysis/$SM_CACHE_KEY"
+	_t="$SM_CACHE_DIR/analysis/.tmp.$$"
+	rm -rf "$_t"; mkdir -p "$_t" || return 0
+	for _f in "$@"; do [ -f "$W/$_f" ] && cp "$W/$_f" "$_t/"; done
+	: > "$_t/.complete"
+	rm -rf "$_d"
+	mv "$_t" "$_d" 2>/dev/null || rm -rf "$_t"
+	sm_cache_key_breakdown > "$SM_CACHE_DIR/$SM_TOOL.last-key"
+	return 0
+}

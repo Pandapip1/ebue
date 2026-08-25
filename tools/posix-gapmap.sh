@@ -581,12 +581,37 @@ if [ -z "$LTP_SHA" ]; then
 fi
 NTLIBC_SHA=$(git -C "$GAPMAP_GITDIR" rev-parse HEAD 2>/dev/null || echo unknown)
 
+# ---------------------------------------------------------- the cache
+#
+# Everything from here to "the derivations" is the expensive half: 3.0s
+# of compiling, 2.2s resolving absent headers and 2.7s of class B detail
+# and header scanning, on a 24-core box at GAPMAP_JOBS=2.  All of it is a
+# pure function of the inputs the cache key covers, so on a hit it is
+# skipped entirely.
+#
+# The census, the LTP pin check and the SHA lookups above stay OUTSIDE
+# the cache deliberately.  They are cheap, and two of them are guards:
+# a cache that could answer for a suite whose pin had moved would be
+# defeating the check that exists to stop the report describing one
+# suite while labelled with another.
+#
+# SM_CACHE_SUITE_PATHS is the suite's SHARED material only -- the include
+# tree and the harness every test compiles against.  The per-test sources
+# are keyed per test, which is what makes a submodule bump recompile the
+# tests that changed rather than all 1610.
+INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -I$srcdir/obj/include -I$srcdir/include -I$SUITE/include -I$SUITE"
+SM_CACHE_SUITE_PATHS="$SUITE/include $SUITE/lib"
+if sm_cache_compute_key && sm_cache_analysis_load; then
+	: # every intermediate below is already in $W
+else
+	[ "$SM_CACHE_ENABLED" = 1 ] && sm_cache_explain_miss
+
 # ---------------------------------------------------------- classification
 #
 # INC is the Makefile's obj/test/%.exe include set plus the suite's own
 # two include roots, exactly as test/external-suites.md's "Reproducing
-# these numbers" section records the compile line.
-INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -I$srcdir/obj/include -I$srcdir/include -I$SUITE/include -I$SUITE"
+# these numbers" section records the compile line.  (Set above, before the
+# cache key, because the key covers it.)
 SEARCH="$SUITE/include:$SUITE:$srcdir/arch/$ARCH:$srcdir/arch/generic:$srcdir/obj/include:$srcdir/include"
 
 mkdir -p "$W/log" "$W/exe"
@@ -735,6 +760,10 @@ find "$srcdir/include" "$srcdir/obj/include" -name '*.h' -print0 |
 nm -g --defined-only "$srcdir/lib/libc.a" 2>/dev/null |
 	awk '$2 ~ /^[TDBRW]$/ { print $3 }' |
 	sed 's/^_//' | sort -u > "$W/defined.txt"
+
+	sm_cache_analysis_store class.tsv sets.tsv bdetail.tsv \
+		declared.txt defined.txt undefok.txt
+fi
 
 fi
 

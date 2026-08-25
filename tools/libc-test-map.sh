@@ -328,17 +328,22 @@ require_suite() {
 # floors here will not notice -- but the `unbuildable` count in the gate
 # summary and the A+B count here will disagree, which a human reading
 # both will.
+# require_toolchain -- the guard, and the -I set the cache key covers.
+#
+# Hoisted out of classify() because the key is computed before anything
+# is compiled and $INC is one of its components.  The guard, the compiler
+# identity and the CFLAGS all come from the engine, which is also what
+# unlocks sm_cc.  This used to be four private lines inside classify(),
+# and the lib/libc.a test among them was a bare `die` with no reasoning
+# -- reorder past it and the report would have read as a total gap
+# instead of a build error.  See the engine's "the guard".
+require_toolchain() {
+	sm_require_built
+	INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -Iobj/include -I$srcdir/include -I$SUITE/src/common"
+}
+
 classify() {
 	W=$1
-	# The guard, the compiler identity and the CFLAGS all come from the
-	# engine, which is also what unlocks sm_cc.  This used to be four
-	# private lines here, and the lib/libc.a test among them was a bare
-	# `die` with no reasoning -- reorder past it and the report would
-	# have read as a total gap instead of a build error.  See the
-	# engine's "the guard".
-	sm_require_built
-
-	INC="-I$srcdir/arch/$ARCH -I$srcdir/arch/generic -Iobj/include -I$srcdir/include -I$SUITE/src/common"
 	mkdir -p "$W/build" "$W/obj"
 
 	hobjs=""
@@ -1237,8 +1242,23 @@ main() {
 		lc_sha=$(suite_sha)
 		n_functional=$(count_c "$SUITE/src/functional")
 		n_regression=$(count_c "$SUITE/src/regression")
-		classify "$W"
-		absent_sets "$W"
+		require_toolchain
+
+		# The expensive half -- 146 compiles and the absent-header
+		# resolution -- behind the engine's cache.  The census counts and
+		# the SHA lookups above stay outside it: they are cheap, and two
+		# of them are guards.  SM_CACHE_SUITE_PATHS is the suite's SHARED
+		# material plus this tree's shim, i.e. everything every test
+		# compiles against; the per-test sources are not in it.
+		SM_CACHE_SUITE_PATHS="$SUITE/src/common $SHIM"
+		if sm_cache_compute_key && sm_cache_analysis_load; then
+			: # $W/rows and $W/needs came from the cache
+		else
+			[ "$SM_CACHE_ENABLED" = 1 ] && sm_cache_explain_miss
+			classify "$W"
+			absent_sets "$W"
+			sm_cache_analysis_store rows needs
+		fi
 		# Both of these interrogate history and another checked-in
 		# document, not the rows: check_deletions asks git whether the
 		# commit a section 4 annotation names really removed that symbol,

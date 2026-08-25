@@ -71,3 +71,10 @@ oom-*
 /sh-main-out.txt
 /sh-main-err.txt
 tmp-*
+
+# tools/suitemap-engine.sh caches the expensive half of the two gap maps
+# here -- compiled test results and the analysis intermediates they feed.
+# Derived, per-machine, and keyed on every input that determines it (see
+# "the cache" in the engine), so it is safe to delete at any time; the
+# next run simply pays full price.
+.suitemap-cache/
