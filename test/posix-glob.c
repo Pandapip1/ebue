@@ -1161,6 +1161,12 @@ static void test_globfree_idempotent(void)
 
 	close(creat("gfi1.gfitxt", 0644));
 	CHECK(glob("*.gfitxt", 0, NULL, &g) == 0);
+	/* The state globfree() has to clear must first be non-empty, or
+	 * the two assertions after it cannot tell "cleared" from "never
+	 * populated" -- glob.html DESCRIPTION: gl_pathc is "the number of
+	 * matched pathnames", and one file was just created to match. */
+	CHECK(g.gl_pathc >= 1);
+	CHECK(g.gl_pathv != NULL);
 	globfree(&g);
 	globfree(&g);		/* must be a no-op, not a double free */
 	CHECK(g.gl_pathv == NULL);
@@ -1382,8 +1388,15 @@ static void test_wordexp_reuse_and_append_order(void)
 	if (we.we_wordc == 1) CHECK(strcmp(we.we_wordv[0], "x") == 0);
 	wordfree(&we);
 
-	/* wordfree() must leave the structure safe to free again. */
+	/* wordfree() must leave the structure safe to free again.  As with
+	 * globfree() above, the pre-state has to be non-empty first:
+	 * wordexp.html DESCRIPTION makes we_wordc "the count of wordv
+	 * pointers", and "a b" is two words, so the trailing == 0 checks
+	 * are testing a reset rather than agreeing with an untouched
+	 * struct. */
 	CHECK(wordexp("a b", &we, 0) == 0);
+	CHECK(we.we_wordc == 2);
+	CHECK(we.we_wordv != NULL);
 	wordfree(&we);
 	wordfree(&we);
 	CHECK(we.we_wordv == NULL);
@@ -2844,6 +2857,15 @@ static int nftw_cb(const char *path, const struct stat *sb, int flag, struct FTW
 	if (!strcmp(path, "root")) {
 		CHECK(f->level == 0);
 		nftw_dir_reported_last = (nftw_last_flag == FTW_F || nftw_last_flag == FTW_DP);
+	} else {
+		/* nftw.html: "The value of level indicates depth relative to
+		 * the root of the walk, where the root level is 0."  Checking
+		 * only the root's 0 could not distinguish a level nftw()
+		 * genuinely computes from a struct FTW it never writes; every
+		 * other path in this walk is below the root, so its level must
+		 * be above 0. */
+		CHECK(f->level > 0);
+		CHECK(f->base > 0 && !strcmp(path + f->base, strrchr(path, '/') + 1));
 	}
 	nftw_last_flag = flag;
 	return 0;

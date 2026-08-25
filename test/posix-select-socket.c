@@ -152,7 +152,14 @@ static int poll_one(int fd, short events, int ms, short *revents)
 
 	p.fd = fd;
 	p.events = events;
-	p.revents = 0;
+	/* Poisoned, not zeroed.  poll.html DESCRIPTION: "In each pollfd
+	 * structure, poll() shall clear the revents member" -- so an
+	 * implementation that leaves revents alone is non-conforming, and
+	 * every `CHECK(revents == 0)` in this file is a check of exactly
+	 * that clause.  Seeding 0 here made those checks unfalsifiable:
+	 * they read back the value this helper had just written, so they
+	 * passed identically whether or not poll() touched the field. */
+	p.revents = -1;
 	n = poll(&p, 1, ms);
 	*revents = p.revents;
 	return n;
