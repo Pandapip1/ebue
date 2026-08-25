@@ -6,15 +6,23 @@
  * question cannot find a header POSIX requires that ntlibc simply does
  * not have -- a full-source bootstrap found exactly that kind of gap
  * for <pwd.h>.  This file is the first pass at the other question, for
- * four headers ntlibc does not implement at all:
+ * four headers ntlibc did not implement at all when it was written:
  *
  *   <dlfcn.h>    dynamic loading
  *   <sys/mman.h> memory mapping
  *   <termios.h>  terminal control
  *   <spawn.h>    posix_spawn()
  *
- * None of these types/prototypes exist in include/, so -- following the
- * pattern test/posix-sysmisc.c already set for setrlimit()/select()
+ * Two of those four have since landed: <dlfcn.h> (src/dlfcn/dlfcn.c,
+ * exercised through the real header at the end of this file) and
+ * <spawn.h> (src/process/posix_spawn.c and siblings, clause-audited in
+ * test/posix-spawn.c).  Their sections here are kept for the argument
+ * they make about what NT can and cannot do, with the fences that the
+ * implementations refuted removed rather than narrowed.
+ *
+ * The <sys/mman.h> and <termios.h> types/prototypes still do not exist
+ * in include/, so -- following the pattern test/posix-sysmisc.c already
+ * set for setrlimit()/select()
  * (both declared but never defined) -- they are declared locally here,
  * never included from include/.  This file does not add or modify any
  * header; a sibling agent owns that.
@@ -635,18 +643,22 @@ static void test_termios_cflag_serial_bits(void)
 /* ============================================================
  * <spawn.h> -- posix_spawn()/posix_spawnp()
  *
- * ntlibc already has the process-creation engine posix_spawn() would
- * be a thin wrapper over: __spawn() (src/process/spawn.c), used today
- * by execve() (src/process/exec.c). __spawn() already inherits the
- * *whole* non-close-on-exec fd table by index, not just fds 0-2
- * (src/internal/fd.c's __fd_runtime_data() walks every slot up to
- * FD_MAX) -- which means most of posix_spawn_file_actions_t is
- * already expressible today, without any new NT primitive, by simply
- * performing the equivalent open()/dup2()/close() in the parent
- * *before* calling __spawn(): the child sees whatever fd layout the
- * parent had at the moment __spawn() ran, exactly what POSIX's
- * file-actions replay is specified to produce. The real, unfenced
- * demonstration below does exactly that for adddup2().
+ * <spawn.h> was absent when this file was written, and this section
+ * argued the shape an implementation would take: __spawn()
+ * (src/process/spawn.c) already inherits the *whole* non-close-on-exec
+ * fd table by index, not just fds 0-2 (src/internal/fd.c's
+ * __fd_runtime_data() walks every slot up to FD_MAX), so a file-actions
+ * replay reduces to performing the equivalent open()/dup2()/close() in
+ * the parent immediately before calling __spawn().
+ *
+ * That is now the shipped implementation -- include/spawn.h,
+ * src/process/posix_spawn.c, src/process/spawn_file_actions.c,
+ * src/process/spawnattr.c -- and test/posix-spawn.c is the clause audit
+ * of it.  What remains here is the section's own historical argument
+ * plus the one gap that outlived it (POSIX_SPAWN_SETSIGMASK with a
+ * non-empty mask, fenced UNIMPL below); the unfenced demonstration
+ * below still runs, as a check that the __spawn() inheritance the whole
+ * design rests on behaves the way the argument claimed.
  * ==============================================================
  */
 
@@ -704,35 +716,19 @@ struct spawn_attr_local { unsigned short flags; int pgroup; };
 #define POSIX_SPAWN_RESETIDS      0x20
 #define POSIX_SPAWN_USEVFORK      0x40
 
-#if 0 /* UNIMPL: posix_spawn.html DESCRIPTION -- the file_actions
-	object itself: posix_spawn_file_actions_init/_destroy/_addopen/
-	_addclose/_adddup2, replayed "as if" in the child before it
-	execs. Genuinely implementable directly on top of __spawn(),
-	exactly as test_spawn_fd_remap_via_existing_inheritance()
-	demonstrates by hand above: posix_spawn() would apply each
-	recorded action (open()/dup2()/close()) to the *parent's* fd
-	table immediately before calling __spawn(), then undo it
-	afterward (safe to do non-atomically here specifically because
-	ntlibc has no threads, so nothing else can observe or race the
-	parent's fd table mid-spawn). No new NT primitive needed -- the
-	whole gap is in spawn.h's interface shape, not in __spawn()'s
-	capability. */
-static void test_posix_spawn_file_actions(const char *self)
-{
-	posix_spawn_file_actions_t fa;
-	pid_t pid;
-	int status;
-	char *argv[2] = { (char *)self, 0 };
+/* No fence for posix_spawn_file_actions_t.  This file used to carry an
+ * UNIMPL fence here arguing that the object was implementable directly
+ * on top of __spawn() by replaying each recorded action against the
+ * *parent's* fd table immediately before the call and undoing it after,
+ * safe because ntlibc has no threads to race the table.  That is now
+ * exactly what src/process/posix_spawn.c does, action for action, and
+ * src/process/spawn_file_actions.c is the recording half -- so
+ * posix_spawn.html DESCRIPTION step 3 ("The file actions ... shall be
+ * performed in the order in which they were added") is implemented, not
+ * merely implementable, and there is no gap left to fence.  The clauses
+ * are tested for real in test/posix-spawn.c, against the shipped
+ * <spawn.h>, rather than duplicated here against local declarations. */
 
-	CHECK(posix_spawn_file_actions_init(&fa) == 0);
-	CHECK(posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0) == 0);
-	CHECK(posix_spawn_file_actions_addclose(&fa, 3) == 0);
-	CHECK(posix_spawn_file_actions_adddup2(&fa, 1, 2) == 0);
-	CHECK(posix_spawn(&pid, self, &fa, 0, argv, environ) == 0);
-	CHECK(waitpid(pid, &status, 0) == pid);
-	CHECK(posix_spawn_file_actions_destroy(&fa) == 0);
-}
-#endif
 
 #if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS:
 	"reset the effective user ID ... to the real user ID, and the
@@ -774,24 +770,52 @@ static void test_spawn_setschedparam(void)
 }
 #endif
 
-#if 0 /* N/A: posix_spawn.html DESCRIPTION --
-	POSIX_SPAWN_SETSIGDEF/POSIX_SPAWN_SETSIGMASK: install a chosen
-	signal disposition/mask in the child "as if" by sigaction()/
-	sigprocmask() before it execs. ntlibc's signal state
-	(src/signal/signal.c) is process-local software bookkeeping, not
-	a kernel-tracked property NT propagates across process creation
-	the way a real fork()+exec() inherits it -- a freshly created NT
-	process always starts with its own crt1 initialising signal
-	state from scratch, before main() ever runs, with nothing of the
-	parent's signal.c state passed across RtlCreateUserProcess() at
-	all. There is no channel to hand a chosen initial mask/
-	disposition to a child that has not yet run its own startup
-	code -- not a missing wrapper around an existing NT mechanism
-	the way SETSCHEDPARAM is, but a missing mechanism outright. */
+/* POSIX_SPAWN_SETSIGDEF is not fenced at all.  "the signals ... shall
+ * be set to their default actions in the child": src/signal/signal.c's
+ * disposition table (`handlers[]`) is a static, an NT process created by
+ * RtlCreateUserProcess runs its own crt1 before main(), and nothing
+ * carries a parent's dispositions across -- so every signal in every
+ * fresh child is already SIG_DFL, whatever subset the caller names.
+ * src/process/posix_spawn.c accepts the flag on exactly that ground
+ * (check_attr() lets it through unconditionally), and the postcondition
+ * holds by construction rather than being ignored.  Nothing missing. */
+
+#if 0 /* UNIMPL: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
+	with a *non-empty* mask: "the signal mask of the child process
+	shall be set to the signal set specified in the spawn-sigmask
+	attribute".  src/process/posix_spawn.c honours the empty mask,
+	which is true by construction (`blocked` in src/signal/signal.c is
+	a static, so a fresh child's mask is empty -- and it is the case
+	GNU make actually takes, calling sigemptyset() before
+	posix_spawnattr_setsigmask()), and refuses a non-empty one with
+	EINVAL rather than accepting it and silently not installing it.
+
+	This fence previously read N/A on the grounds that there is "no
+	channel to hand a chosen initial mask/disposition to a child that
+	has not yet run its own startup code".  That reason is false, and
+	was already false when it was written: RTL_USER_PROCESS_PARAMETERS'
+	RuntimeData is such a channel.  It is packed into the parameters
+	block by RtlCreateProcessParametersEx (src/process/spawn.c),
+	carries the inherited descriptor table today, is read back by
+	__fd_init (src/internal/fd.c) before main(), and
+	test/spawn-runtimedata-stress.c exercises it hard enough to have
+	caught a dangling-pointer bug in it.  The mechanism exists.
+
+	What is missing is a format and a reader: RuntimeData's layout is
+	msvcrt's inherited-descriptor table (count, then osfile[], then
+	osfhnd[]) precisely so an ntlibc child and an msvcrt child can each
+	read the other's, so a mask would have to be an ntlibc-specific
+	trailer past the count msvcrt stops at, picked up by __fd_init or a
+	sibling initialiser.  And even then it would not be POSIX's
+	promise: on POSIX the kernel carries the mask across exec so it
+	applies to any image, whereas a RuntimeData trailer reaches an
+	ntlibc-built child only and would silently do nothing for cmd.exe.
+	Choosing not to build that is UNIMPL, never N/A.  test/posix-
+	spawn.c carries the same finding against the shipped <spawn.h>. */
 static void test_spawn_setsigmask(void)
 {
 	struct spawn_attr_local attr;
-	attr.flags = POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK;
+	attr.flags = POSIX_SPAWN_SETSIGMASK;
 	CHECK(attr.flags & POSIX_SPAWN_SETSIGMASK);
 }
 #endif
