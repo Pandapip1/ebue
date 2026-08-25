@@ -216,14 +216,51 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 	int absolute;
 
 	if (!path) { errno = EFAULT; return -1; }
+	/* "path is an empty string" is [ENOENT] on every page that specifies
+	 * an *at() function -- open.html ("or path points to an empty
+	 * string"), stat.html, access.html, unlink.html, mkdir.html,
+	 * chmod.html, utimensat.html, readlink.html, link.html ("path1 or
+	 * path2"), symlink.html, rename.html ("either old or new") -- and no
+	 * page's *at()-specific ERRORS subsection carves out an exception.
+	 * __ntpath() has said so since it was written; this branch did not.
+	 *
+	 * DO NOT "SIMPLIFY" THIS AWAY on the grounds that the object manager
+	 * copes with an empty name perfectly well.  It does, and that is
+	 * precisely the problem.  An empty UNICODE_STRING names the
+	 * RootDirectory handle itself, so without this guard every *at()
+	 * function silently operated on the descriptor's own directory:
+	 * fchmodat(dfd, "", 0644, 0) changed that directory's mode and
+	 * returned 0, and openat/fstatat/faccessat/utimensat likewise
+	 * succeeded on the wrong object.  (The others reached NT and returned
+	 * some incidental errno -- EISDIR, EEXIST, EINVAL -- never ENOENT.)
+	 *
+	 * The comment that used to sit below this, on the relative branch,
+	 * read "An empty name (\"\") opens the directory itself".  That
+	 * sentence is TRUE about the NT object manager and FALSE as a
+	 * statement of what this function should do with a caller's empty
+	 * path: it described a mechanism and then let the mechanism decide
+	 * the policy, and the code faithfully implemented the comment.  Both
+	 * were wrong at the POSIX layer for the same reason.  The empty NT
+	 * name is correct as an ENCODING -- the branch below deliberately
+	 * produces one for "." -- and wrong as a POLICY for caller input.
+	 * Keep the two apart.
+	 *
+	 * This is not the AT_EMPTY_PATH case either: that flag is a Linux
+	 * extension, it is not in POSIX.1-2017, and this library neither
+	 * defines it nor has any caller that asks for it.  A caller meaning
+	 * "the directory itself" spells it ".". */
+	if (!*path) { errno = ENOENT; return -1; }
 	absolute = path[0] == '/' || path[0] == '\\' ||
 		(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':');
 	if (dirfd == AT_FDCWD || absolute) return __ntpath(path, out, attributes);
 
 	/* Relative to a directory handle: the object manager resolves a
 	 * relative name against RootDirectory, so the name is given as-is,
-	 * with slashes fixed and without the DOS->NT conversion.  An empty
-	 * name ("") opens the directory itself. */
+	 * with slashes fixed and without the DOS->NT conversion.  "." becomes
+	 * the empty NT name, which is how the object manager spells "the
+	 * RootDirectory itself" -- that is this encoding's legitimate use.  A
+	 * caller's own empty path is a different thing and was rejected as
+	 * [ENOENT] above; see the note there. */
 	{
 		struct __fd *f = __fd_get(dirfd);
 		WCHAR *w;

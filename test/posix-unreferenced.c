@@ -753,12 +753,6 @@ static void test_renameat_new_relative_to_dirfd(void)
 /* "[ENOENT] ... or either old or new points to an empty string." --
  * the AT_FDCWD form of this holds and is asserted unfenced above; the
  * form with a real directory descriptor does not. */
-#if 0 /* BUG: src/internal/path.c's __ntpath_at() treats an empty
-       * relative name as naming the descriptor's directory itself ("An
-       * empty name (\"\") opens the directory itself"), so
-       * renameat(dfd, "", ...) tries to rename that directory rather
-       * than failing.  Observed: it comes back EINVAL from NT, not the
-       * [ENOENT] rename.html requires. */
 static void test_renameat_empty_at_dirfd(void)
 {
 	int dfd;
@@ -775,7 +769,6 @@ static void test_renameat_empty_at_dirfd(void)
 	CHECK(close(dfd) == 0);
 	CHECK(unlink("ren.d/x") == 0);
 }
-#endif
 
 /* "[EINVAL] The old pathname names an ancestor directory of the new
  * pathname, or either pathname argument contains a final component that
@@ -1002,11 +995,6 @@ static void test_fchmodat_empty(void)
 }
 
 /* The same clause, with a real directory descriptor. */
-#if 0 /* BUG: __ntpath_at() documents an empty relative name as "opens
-       * the directory itself", so fchmodat(dfd, "", mode, 0) silently
-       * changes the mode of the descriptor's own directory and returns
-       * 0 where chmod.html requires [ENOENT].  Observed against this
-       * tree: return 0, errno untouched. */
 static void test_fchmodat_empty_at_dirfd(void)
 {
 	int dfd = open("chm.d", O_RDONLY);
@@ -1017,7 +1005,6 @@ static void test_fchmodat_empty_at_dirfd(void)
 	CHECK(errno == ENOENT);
 	CHECK(close(dfd) == 0);
 }
-#endif
 
 /* XBD 4.13 Pathname Resolution, which chmod.html's DESCRIPTION invokes
  * for path: a component of "dot" "refers to the directory specified by
@@ -1577,9 +1564,11 @@ int main(void)
 	test_renameat_errors();
 	test_renameat_enotdir_dir_over_file();
 	test_renameat_new_relative_to_dirfd();
+	test_renameat_empty_at_dirfd();
 	test_fchmodat_success();
 	test_fchmodat_errors();
 	test_fchmodat_empty();
+	test_fchmodat_empty_at_dirfd();
 
 	test_scanf_basics(name);
 	test_scanf_returns(name);
