@@ -418,37 +418,10 @@ static void test_getgrgid_r_alignment_and_erange_boundary(void)
 	}
 }
 
-#if 0 /* BUG: getgrgid.html/getgrnam.html ERRORS list, for the non-_r
-	forms, exactly [EIO], [EINTR], [EMFILE] and [ENFILE], all "may
-	fail". [ERANGE] is listed only for getgrgid_r()/getgrnam_r(),
-	where it means "insufficient storage was supplied via buffer and
-	bufsize" -- an argument the non-_r forms do not have. RETURN
-	VALUE adds: "If the requested entry was not found, errno shall
-	not be changed."
-
-	src/misc/grp.c's getgrnam() and getgrgid() both do
-
-		r = fill_current(&g_gr, g_grmem, g_grbuf, sizeof g_grbuf);
-		if (r == ERANGE) { errno = ERANGE; return 0; }
-
-	on their *internal* static buffer, setting an errno POSIX does
-	not permit them to set. g_grbuf is only 256 + sizeof g_grmem =
-	272 bytes, so any %USERNAME% longer than that reaches it -- well
-	inside what a program can set for itself, no unusual NT
-	configuration needed.
-
-	getgrent() inherits it, delegating to getgrgid(), whose ERRORS
-	list is likewise [EIO]/[EINTR]/[EMFILE]/[ENFILE] only.
-
-	This is the "stub returning an errno that is not in its POSIX
-	list" shape, not a platform N/A. Fenced rather than fixed, per
-	the standing rule; the fix is to treat an internal-buffer
-	overflow as "not found" (NULL, errno untouched), or to size the
-	static buffer so the case is unreachable. src/misc/pwd.c has the
-	identical defect -- see test/pwd.c's matching fence. */
 static void test_getgrgid_erange_not_in_its_errno_list(void)
 {
 	static char big[400];
+	struct group *gr;
 	char *saved_username = getenv("USERNAME");
 	char *saved_user = getenv("USER");
 	char keep_username[256], keep_user[256];
@@ -461,14 +434,27 @@ static void test_getgrgid_erange_not_in_its_errno_list(void)
 	big[sizeof big - 1] = 0;
 	CHECK(setenv("USERNAME", big, 1) == 0);
 
+	/* The clause, not one particular remedy for it -- see the matching
+	 * note in test/pwd.c.  The fix taken grows the internal buffer, so
+	 * the call now succeeds and returns the real record instead of
+	 * reporting a group that exists as "not found"; asserting NULL here
+	 * would pin the weaker remedy.  What getgrgid.html requires is that
+	 * [ERANGE] (listed only for the _r forms, where it describes a
+	 * caller-supplied buffer) never escapes the non-_r form, and that a
+	 * "not found" answer leaves errno unchanged. */
 	errno = 0;
-	CHECK(getgrgid(getgid()) == NULL);
-	CHECK(errno != ERANGE);		/* fails today: errno == ERANGE */
+	gr = getgrgid(getgid());
+	CHECK(errno != ERANGE);
+	if (gr) {
+		CHECK(gr->gr_name != NULL);
+		CHECK(gr->gr_name && !strcmp(gr->gr_name, big));
+	} else {
+		CHECK(errno == 0);
+	}
 
 	if (had_username) setenv("USERNAME", keep_username, 1); else unsetenv("USERNAME");
 	if (had_user) setenv("USER", keep_user, 1); else unsetenv("USER");
 }
-#endif
 
 static void test_uname(void)
 {
@@ -915,6 +901,7 @@ int main(int argc, char **argv)
 	test_grent_reopen_and_errno();
 	test_getgrgid_r_alignment_and_erange_boundary();
 
+	test_getgrgid_erange_not_in_its_errno_list();
 	test_uname();
 
 	test_times_self();

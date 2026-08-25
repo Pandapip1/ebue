@@ -56,7 +56,14 @@
  * thread-safe."). */
 static struct group g_gr;
 static char *g_grmem[2];
-static char g_grbuf[256 + sizeof g_grmem];   /* name, plus gr_mem[0]'s copy */
+/* Grown on demand rather than fixed, for the reason spelled out in
+ * src/misc/pwd.c beside g_pwbuf: getgrnam.html lists [ERANGE] only for
+ * getgrnam_r()/getgrgid_r(), where it describes a CALLER-supplied
+ * buffer, so the non-_r forms have no way to report that this internal
+ * one was too small.  The fixed 272 bytes this used to be was reachable
+ * by any program that set a long enough %USERNAME%.  See fill_shared(). */
+static char *g_grbuf;
+static size_t g_grbufsz;
 
 /* current_name(): identical lookup to src/misc/pwd.c's -- kept as a
  * separate static rather than shared across translation units so this
@@ -74,8 +81,9 @@ static const char *current_name(void)
  * bytes): the name once, plus a two-element gr_mem pointer array
  * (gr_mem[0] aliases the same stored name; gr_mem is not a second
  * copy).  Returns 1 on success, 0 if the name is unknowable (treated
- * as "not found" by every caller), or ERANGE if buf is too small. */
-static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz)
+ * as "not found" by every caller), or ERANGE if buf is too small --
+ * in which case *needp is set to the size that would do. */
+static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, size_t *needp)
 {
 	const char *name = current_name();
 	size_t nl;
@@ -83,7 +91,7 @@ static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz)
 	if (!name) return 0;
 
 	nl = strlen(name) + 1;
-	if (nl > bufsz) return ERANGE;
+	if (nl > bufsz) { if (needp) *needp = nl; return ERANGE; }
 
 	memcpy(buf, name, nl);
 	gr->gr_name = buf;
@@ -121,19 +129,39 @@ static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
 	mem = (char **)(void *)(buf + pad);
 	buf += need;
 	bufsz -= need;
-	return fill_current(gr, mem, buf, bufsz);
+	return fill_current(gr, mem, buf, bufsz, 0);
 }
 
 /* getgrnam.html RETURN VALUE: "If the requested entry was not found,
  * errno shall not be changed." */
+/* fill_current() into the shared buffer, growing it if it does not fit.
+ * Returns 1 on success, 0 for "not found", never ERANGE.  Same rationale
+ * and the same allocation-failure policy as src/misc/pwd.c's
+ * fill_shared(): an errno POSIX does not list for these functions must
+ * not escape them, and [ENOMEM] is not listed either, so a failed
+ * allocation is reported as "not found" with errno untouched. */
+static int fill_shared(void)
+{
+	size_t need = 0;
+	int r = fill_current(&g_gr, g_grmem, g_grbuf, g_grbufsz, &need);
+	char *nb;
+
+	if (r != ERANGE) return r;
+	nb = realloc(g_grbuf, need);
+	if (!nb) return 0;
+	g_grbuf = nb;
+	g_grbufsz = need;
+	r = fill_current(&g_gr, g_grmem, g_grbuf, g_grbufsz, &need);
+	return r == ERANGE ? 0 : r;
+}
+
 struct group *getgrnam(const char *name)
 {
 	const char *cur = current_name();
 	int r;
 
 	if (!name || !cur || strcmp(name, cur) != 0) return 0;
-	r = fill_current(&g_gr, g_grmem, g_grbuf, sizeof g_grbuf);
-	if (r == ERANGE) { errno = ERANGE; return 0; }
+	r = fill_shared();
 	if (r == 0) return 0;
 	return &g_gr;
 }
@@ -143,8 +171,7 @@ struct group *getgrgid(gid_t gid)
 	int r;
 
 	if (gid != getgid()) return 0;
-	r = fill_current(&g_gr, g_grmem, g_grbuf, sizeof g_grbuf);
-	if (r == ERANGE) { errno = ERANGE; return 0; }
+	r = fill_shared();
 	if (r == 0) return 0;
 	return &g_gr;
 }
