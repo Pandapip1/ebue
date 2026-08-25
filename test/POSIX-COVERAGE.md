@@ -511,7 +511,7 @@ not every clause line, to keep this section a manageable size):
 | linkat (AT_FDCWD == link, dirfd-relative on both sides, st_nlink incremented, same st_ino, EEXIST, ENOENT, EBADF) | covered | test/posix-unistd.c `test_linkat` |
 | linkat | AT_SYMLINK_FOLLOW | N/A — `src/unistd/link.c` always opens with FILE_OPEN_REPARSE_POINT and ignores `flag`, so it always implements the flag-clear branch; telling the two apart needs a symlink, which the suite's own environment cannot create — a Wine VERSION gap, not a privilege one (measured, `ff1327e`): stock apt Wine 9.0 answers `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED`, that FSCTL having first shipped in wine-10.19, so nothing ever reaches a privilege check. On real NT the privilege (or Developer Mode) *is* the requirement, which is why the real-Windows legs are the ones that can close this | -- |
 | execl / execle / execlp / fexecve | argv and envp delivered to the exec'd image; the exec'd image's exit status becomes the caller's; ENOENT for a missing file (direct and PATH-searching forms); EBADF for fexecve on a closed descriptor; a failed exec returns and leaves the process image running | covered | test/exec.c (`--exec-l`, `--exec-le`, `--exec-lp`, `--exec-f` roles) |
-| confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1` | covered; **BUG (fenced)** for [EINVAL] — an unrecognized name returns 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
+| confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1`, [EINVAL] for an invalid name | covered — the [EINVAL] half was a **BUG, FIXED**: `src/unistd/sysconf.c`'s `confstr()` now switches on `name` and rejects the `default`, where it used to start from an empty value and only replace it for `_CS_PATH`, so an unrecognized name returned 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
 | swab | adjacent-byte exchange, nothing written past nbytes, nbytes 0 and negative do nothing, odd nbytes exchanges nbytes-1, double swab is identity | covered (pure byte shuffling — the one call in this group for which a Wine pass is strong evidence) | test/posix-unistd.c `test_swab` |
 | sync | callable, returns no value, defines no error | covered as far as POSIX allows; the scheduling itself N/A — POSIX permits `sync()` to be undetectable by any conforming observation (`fsync()` is the call with a completion guarantee) | test/posix-unistd.c `test_sync` |
 | getlogin / getlogin_r | same name from both; getlogin_r returns 0 (not a length, not -1) on success and the errno *value* ERANGE on a short buffer; exactly-fits is a success | covered | test/posix-unistd.c `test_getlogin` |
@@ -538,7 +538,9 @@ EISDIR/ENOTEMPTY") and the corresponding fenced tests in
 
 ### Bugs found (never-asserted sweep, unistd.h group)
 
-Three, all fenced in `test/posix-unistd.c`, all probed on this tree.
+Three, all probed on this tree. The second is **fixed** and its
+assertions now run; the other two are still fenced in
+`test/posix-unistd.c`.
 
 1. **`unlinkat()` masks off undefined `flag` bits instead of rejecting
    them.** `unlink.html` ERRORS lists as *shall fail*: "[EINVAL]
@@ -556,20 +558,30 @@ Three, all fenced in `test/posix-unistd.c`, all probed on this tree.
    `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }` guard,
    but a fix belongs in a change of its own, not in an audit pass.
 
-2. **`confstr()` reports success for an invalid name.** `confstr.html`
-   RETURN VALUE: "If the value of the name argument is invalid,
-   confstr() shall return 0 and set errno to indicate the error";
-   ERRORS lists "[EINVAL] ... the name argument is invalid" as its only,
-   shall-fail, entry.
+2. **`confstr()` reported success for an invalid name — FIXED.**
+   `confstr.html` RETURN VALUE: "If the value of the name argument is
+   invalid, confstr() shall return 0 and set errno to indicate the
+   error"; ERRORS lists "[EINVAL] ... the name argument is invalid" as
+   its only, shall-fail, entry.
 
-   Mechanism: `src/unistd/sysconf.c`'s `confstr()` starts from
-   `const char *s = "";` and replaces it only when `name == _CS_PATH`.
-   An unrecognized name falls through the same path a genuine empty
-   value would — a lone NUL into the caller's buffer, and `i + 1` == 1
-   returned. Probed: `confstr(-1, buf, n)` and `confstr(12345, buf, n)`
-   both return 1 with errno untouched. A caller cannot tell an invalid
-   name from a valid one with an empty value, and neither of POSIX's two
-   zero-returning cases is reachable for any input.
+   Mechanism of the defect: `src/unistd/sysconf.c`'s `confstr()` started
+   from `const char *s = "";` and replaced it only when
+   `name == _CS_PATH`. An unrecognized name fell through the same path a
+   genuine empty value would — a lone NUL into the caller's buffer, and
+   `i + 1` == 1 returned. Probed: `confstr(-1, buf, n)` and
+   `confstr(12345, buf, n)` both returned 1 with errno untouched. A
+   caller could not tell an invalid name from a valid one with an empty
+   value, and neither of POSIX's two zero-returning cases was reachable
+   for any input.
+
+   The fix closes the name set instead of defaulting it: `confstr()`
+   switches on `name`, `_CS_PATH` is the one case, and the `default` is
+   `errno = EINVAL; return 0`. `<unistd.h>` defines exactly one `_CS_*`
+   constant, so that is the whole recognized set — and a name added to
+   the header must gain a case with it, which is stated at the function.
+   POSIX's *other* zero, a valid name with no configuration-defined
+   value returning 0 with errno unchanged, still has no name to reach it
+   here.
 
 3. **`tcgetpgrp()`/`tcsetpgrp()` never fail, not even on a descriptor
    that is not open.** `tcgetpgrp.html`: "The tcgetpgrp() function
@@ -4244,7 +4256,7 @@ self-check is the only thing that runs.
 | `fcntl.h` | `fcntl.h.html` DESCRIPTION — the file-access-mode list ("The values shall be unique, except that `O_EXEC` and `O_SEARCH` may have equal values"), plus "`O_TTY_INIT` ... can have the value zero and in this case it need not be bitwise-distinct" | **ABSENT** | **UNIMPL (fenced)** — `O_EXEC`, `O_SEARCH`, `O_TTY_INIT` are in no header in `include/`; every other `O_*` POSIX lists, including `O_DSYNC`, `O_RSYNC`, `O_DIRECTORY` and `O_NOFOLLOW`, is present. None of the three is optional, and `O_TTY_INIT`'s permission to be zero is the standard's own way of saying an implementation with nothing to do for it still defines it. The fence covers the **header constants only** — whether `open()` would then have to give `O_SEARCH` a traverse-only directory handle is a separate, larger gap it does not claim. Observed: fails to **compile**, `'O_EXEC' undeclared` | `test/posix-io.c` fence `test_fcntl_h_access_mode_constants` |
 | `unistd.h` | `unistd.h.html` DESCRIPTION — "The `<unistd.h>` header shall define the following symbolic constants for `sysconf()`:", 125 `_SC_*` names, unconditional | **ABSENT** | **UNIMPL (fenced)** — 15 of 125 defined, **110 absent**. Acceptance criterion is **both** halves, not just the `#define`: `sysconf.html` specifies `[EINVAL]` only for an *invalid* name, and every name on the list is valid by being on it, so a definition alone would leave `src/unistd/sysconf.c`'s `default: errno = EINVAL` answering "no such name" for a name `<unistd.h>` mandates — the declared-but-unimplemented trap exactly. The truthful answer for an unsupported option is `-1` with **errno unchanged**, which the test accepts. Consumer impact: autoconf/gnulib probe `_SC_SYMLOOP_MAX`, `_SC_IOV_MAX`, `_SC_GETPW_R_SIZE_MAX` routinely. Observed: fails to **compile**, `'_SC_2_CHAR_TERM' undeclared` | `test/posix-unistd.c` fence `test_unistd_sysconf_names` |
 | `unistd.h` | `unistd.h.html` DESCRIPTION — "...the following symbolic constants for `pathconf()`:", 21 `_PC_*` names | **ABSENT** | **UNIMPL (fenced)** — 9 of 21 defined, **12 absent** (`_PC_2_SYMLINKS`, `_PC_ALLOC_SIZE_MIN`, `_PC_ASYNC_IO`, `_PC_FILESIZEBITS`, `_PC_PRIO_IO`, the four `_PC_REC_*`, `_PC_SYMLINK_MAX`, `_PC_SYNC_IO`, `_PC_TIMESTAMP_RESOLUTION`). Unlike the `_SC_` list this does **not** require every name to be answerable — `fpathconf.html` makes "[EINVAL] The implementation does not support an association of the variable *name* with the specified file" a *may fail* — so the test asserts only that both entry points decide the *same* thing, extending `test_fpathconf`'s existing shape. Observed: fails to **compile**, `'_PC_2_SYMLINKS' undeclared` | `test/posix-unistd.c` fence `test_unistd_pathconf_names` |
-| `unistd.h` | `unistd.h.html` DESCRIPTION — "...the following symbolic constants for the `confstr()` function:", 31 `_CS_*` names | **ABSENT** | **UNIMPL (fenced)** — only `_CS_PATH` defined; **30 absent** (the `_CS_POSIX_V6_`/`_CS_POSIX_V7_` programming-model `CFLAGS`/`LDFLAGS`/`LIBS` triples, `_CS_POSIX_V7_THREADS_*`, both `_WIDTH_RESTRICTED_ENVS`, `_CS_V6_ENV`/`_CS_V7_ENV`). These are what a `getconf`-driven build system asks for — the bootstrap situation this libc is a target of. Acceptance criterion deliberately **the definitions only**: `confstr()`'s answers are entangled with the already-fenced `confstr()` `[EINVAL]` BUG, so while that stands no assertion can tell "recognized, empty value" from "unrecognized", and this fence will not build a claim on another agent's open defect. Observed: fails to **compile**, `'_CS_POSIX_V6_ILP32_OFF32_CFLAGS' undeclared` | `test/posix-unistd.c` fence `test_unistd_confstr_names` |
+| `unistd.h` | `unistd.h.html` DESCRIPTION — "...the following symbolic constants for the `confstr()` function:", 31 `_CS_*` names | **ABSENT** | **UNIMPL (fenced)** — only `_CS_PATH` defined; **30 absent** (the `_CS_POSIX_V6_`/`_CS_POSIX_V7_` programming-model `CFLAGS`/`LDFLAGS`/`LIBS` triples, `_CS_POSIX_V7_THREADS_*`, both `_WIDTH_RESTRICTED_ENVS`, `_CS_V6_ENV`/`_CS_V7_ENV`). These are what a `getconf`-driven build system asks for — the bootstrap situation this libc is a target of. Acceptance criterion deliberately **the definitions only**: when this was written `confstr()`'s answers were entangled with the then-open `confstr()` `[EINVAL]` BUG, so no assertion could tell "recognized, empty value" from "unrecognized". That BUG is now fixed, and the fix names the follow-on precisely — `confstr()`'s recognized set is a closed `switch` over the `_CS_*` names `<unistd.h>` defines, so each of the 30 must gain a `case` in `src/unistd/sysconf.c` as it gains its `#define`, or it will be reported `[EINVAL]`. Observed: fails to **compile**, `'_CS_POSIX_V6_ILP32_OFF32_CFLAGS' undeclared` | `test/posix-unistd.c` fence `test_unistd_confstr_names` |
 | `unistd.h` | `unistd.h.html` "Constants for Options and Option Groups" — the thirteen constants whose text reads "This symbol shall **always** be set to the value 200809L", as against the section's general "The following symbolic constants, **if defined** in `<unistd.h>`, shall have a value of -1, 0, or greater" | **ABSENT** | **UNIMPL (fenced)** — none of the thirteen is defined, and no `_POSIX_*`/`_XOPEN_*` option constant at all beyond `_POSIX_VERSION`/`_POSIX2_VERSION`. **The acceptance criterion here is not "add a `#define`"**, which is why it is a clause of its own: `200809L` is a compile-time promise the application may test with `#if` and cannot re-check at runtime. Seven of the thirteen are thread-related and the pthread family is a recorded absence — defining `_POSIX_THREADS` as `200809L` with no threads would be a false claim and strictly worse than the omission. The gap is the **option**, not the constant. What the omission costs today: `#ifdef _POSIX_TIMERS` gets the same silence from a libc that *has* `clock_gettime()`/`clock_nanosleep()` as from one that has nothing. Observed: fails to **compile**, `'_POSIX_ASYNCHRONOUS_IO' undeclared` | `test/posix-unistd.c` fence `test_unistd_mandatory_option_constants` |
 | `unistd.h` | `unistd.h.html` "Constants for Functions" — "`_POSIX_VDISABLE` This symbol shall be defined to be the value of a character that shall disable terminal special character handling... This symbol shall always be set to a value other than -1" | **ABSENT** | **UNIMPL (fenced)** — not defined anywhere in `include/`, although `pathconf(_PC_VDISABLE)` already answers `0` (`src/unistd/sysconf.c`) and `<termios.h>` is implemented and audited (group A): the value already exists inside the library, only the constant naming it is missing. Mandatory in its own right — it is not in the options section and carries no option marker. Consumer impact: coreutils' `stty` reads it at **compile** time to print and set `undef`, so its absence is a build failure, not a degraded answer. Acceptance criterion: the definition, agreeing with what `pathconf(_PC_VDISABLE)` already reports. Observed: fails to **compile**, `'_POSIX_VDISABLE' undeclared` | `test/posix-unistd.c` fence `test_unistd_posix_vdisable` |
 | `limits.h` | `limits.h.html` "Minimum Values" — "The `<limits.h>` header shall define the following symbolic constants with the values shown", for the three entries carrying **no** option-group marker | present | covered — FIXED: the three unmarked Minimum Values are defined with the standard's exact values (4/128/64). They are portable floors an application may rely on, not a claim about ntlibc, which is why defining them is safe while threads are absent | `test/posix-limits.c` fence `test_limits_minimum_values_unmarked` |
