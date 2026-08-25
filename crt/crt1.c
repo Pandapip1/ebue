@@ -4,10 +4,12 @@
  * Program startup.
  *
  * The kernel enters a new process's first thread at ntdll's
- * RtlUserThreadStart, which calls the image's entry point -- this file's
- * _start -- with the PEB as its one argument.  tcc's PE linker names
- * _start as the entry when linking with -nostdlib, so nothing has to be
- * said on the command line.
+ * RtlUserThreadStart, which reaches the image's entry point -- this
+ * file's _start.  tcc's PE linker names _start as the entry when linking
+ * with -nostdlib, so nothing has to be said on the command line.
+ *
+ * _start takes no arguments.  See __libc_start_main below for why: the
+ * entry point of a Windows-subsystem image is not passed one.
  *
  * What a C program expects to have been done by the time main runs, and
  * is done here: argv split out of the one command line string Windows
@@ -167,20 +169,132 @@ static char **build_environ(const WCHAR *env)
 	return ev;
 }
 
-void __libc_start_main(void *peb)
+void __libc_start_main(void)
 {
 	PRTL_USER_PROCESS_PARAMETERS pp;
 	int rc;
 
-	/* RtlUserThreadStart already handed _start the PEB directly (see
-	 * this file's header comment) -- use that, rather than an
-	 * RtlGetCurrentPeb() call, which is itself an ntdll import and so,
-	 * under -Wl,--delay-all, would be a delay-load stub whose very
-	 * first resolution needs __peb to already be set (delayload2.c's
-	 * __delayLoadHelper2 computes every RVA off __peb->ImageBaseAddress)
-	 * -- a chicken-and-egg deadlock this avoids entirely by never
-	 * making an ntdll call before __peb exists. */
-	__peb = (PPEB)peb;
+	/* The PEB comes out of the TEB, not out of an argument.
+	 *
+	 * This used to read a first stack argument, on the reasoning that
+	 * ntdll's RtlUserThreadStart hands the initial thread's start
+	 * routine the PEB.  That is true -- from Vista onwards.  It is a
+	 * statement about one era of NT, not about entry points, and
+	 * ntlibc's images are Subsystem 3 (Windows CUI), which is where the
+	 * era matters:
+	 *
+	 *   - NT 4.0 through Server 2003 start the first thread at
+	 *     kernel32!BaseProcessStart, reached through
+	 *     BaseProcessStartThunk;
+	 *   - Vista and later unified process and thread startup on
+	 *     ntdll!RtlUserThreadStart, whose thread parameter *is* the
+	 *     PEB.  ReactOS's ntdll.spec marks RtlUserThreadStart
+	 *     `-stub -version=0x600+' for exactly that reason.
+	 *
+	 * On the pre-Vista path the PEB is put in EBX and then dropped.
+	 * ReactOS's BaseThreadStartThunk and BaseProcessStartThunk differ
+	 * by one instruction -- the thread thunk does `push ebx' for
+	 * lpParameter, the process thunk does not
+	 * (dll/win32/kernel32/client/i386/thread.S) -- and
+	 * BaseProcessStartup duly calls `lpStartAddress()' with no
+	 * arguments, PPROCESS_START_ROUTINE being DWORD(WINAPI *)(VOID)
+	 * (dll/win32/kernel32/client/proc.c).  The initial context does set
+	 * it: `Context->Eax = StartAddress; Context->Ebx = Parameter;'
+	 * (dll/win32/kernel32/client/utils.c).  So the value exists and
+	 * simply never reaches the callee, leaving whatever the preceding
+	 * NtSetInformationThread call left in that slot -- in practice
+	 * NtCurrentThread(), the pseudo-handle 0xFFFFFFFE, so that reading
+	 * ->ProcessParameters off it faulted at address 0xE.
+	 *
+	 * This is not a ReactOS quirk.  NT 4.0's own thunk is
+	 * instruction-for-instruction the same shape
+	 * (xor ebp,ebp / push eax / push 0 / jmp BaseProcessStart),
+	 * measured from an NTSD disassembly by the coordinator who reported
+	 * this; ReactOS is reproducing NT 5.x faithfully rather than
+	 * diverging from it.  Recorded gap: no XP or Server 2003 binary was
+	 * available, so NT 5.x's BaseProcessStart bytes were never actually
+	 * disassembled.  NT 4 is measured, and the XP thunk has the same
+	 * shape, but that last step is inference, not measurement.
+	 *
+	 * Wine cannot testify about any of this: `BaseProcessStart' does
+	 * not appear anywhere under its dlls/ or include/.  It implements
+	 * only the Vista+ shape -- the initial thread is started as
+	 * signal_start_thread(TransferAddress, peb, teb)
+	 * (dlls/ntdll/unix/server.c) and BaseThreadInitThunk passes that
+	 * arg straight to the entry point, pushed on i386 and in %rcx on
+	 * x86_64 (dlls/kernel32/thread.c).  So the old assumption survived
+	 * here precisely because Wine implements the era the assumption
+	 * came from.  Independent corroboration that the eras really do
+	 * differ, from neither ReactOS nor our own code: Wine's own
+	 * kernel32 process test once asserted
+	 *   ok( !((ctx.Esp + 0x10) & 0xfff) || broken( !((ctx.Esp + 4) & 0xfff) ),
+	 * with the comment `winxp, w2k3' (dlls/kernel32/tests/process.c at
+	 * wine f19a0fb6c, line 3445; since deleted upstream) -- XP/2003
+	 * reserve one dword below StackBase where Vista+ reserves 0x10, and
+	 * ReactOS's own `Context->Esp -= sizeof(PVOID)' (utils.c) matches
+	 * the measured w2k3 number.
+	 *
+	 * A related hazard, checked and found NOT to apply here -- recorded
+	 * because the check is worth keeping and the negative result is
+	 * easy to get backwards.  /ENTRY is documented to require __stdcall
+	 * ("The function must be defined to use the __stdcall calling
+	 * convention" -- MSVC's /ENTRY reference, Remarks).  A __stdcall
+	 * entry point taking one argument emits `ret 4' and would therefore
+	 * over-pop BaseProcessStartup's frame on every pre-Vista system,
+	 * corrupting the caller's stack quite apart from the bad read.  Our
+	 * _start was plain C, which tcc compiles as __cdecl, so it never
+	 * had that defect.  Settled by disassembly, not by reasoning from
+	 * the signature:
+	 *
+	 *   i386 before:  mov 0x8(%ebp),%eax / push %eax / call
+	 *                 / add $0x4,%esp / leave / ret   <-- bare `ret'
+	 *   i386 after:   push %ebp / mov %esp,%ebp / call / leave / ret
+	 *
+	 * x86_64 has no callee-pop at all, so no difference is expected
+	 * there and none is seen (`call / leave / ret' before and after).
+	 * This change therefore fixes one defect, the read -- not two.  The
+	 * old signature was still wrong under the documented convention and
+	 * merely harmless under the one we happened to get; `void
+	 * _start(void)' is the unique signature correct under both, since a
+	 * zero-argument callee pops nothing either way.  (In practice the
+	 * epilogue is unreachable anyway -- __libc_start_main ends in
+	 * exit(), which is _Noreturn -- but the signature should not depend
+	 * on that.)
+	 *
+	 * Hence: read the PEB from the TEB, which every thread has before
+	 * any user code runs, on every NT version, whatever the subsystem.
+	 * Note that no Microsoft documentation states what a Windows-
+	 * subsystem entry point receives -- the /ENTRY page says only that
+	 * "the parameters and return value depend on if the program is a
+	 * console application, a windows application or a DLL" -- so there
+	 * was never a documented argument to read in the first place.
+	 *
+	 * Deliberately NOT done: detecting at run time which convention we
+	 * got.  There is no reliable way to tell a passed PEB from a stale
+	 * stack slot that merely looks like one -- that is exactly how this
+	 * bug hid, 0xFFFFFFFE being a plausible-looking pointer.  The short
+	 * version of everything above: the entry-point argument is
+	 * unspecified before Vista and must never be relied on; the TEB is
+	 * the portable source.
+	 *
+	 * __teb() is a two-instruction read of fs:0x18 / gs:0x30 compiled
+	 * into libc.a (src/internal/{i386,x86_64}/teb.c) -- not an ntdll
+	 * import -- so this keeps the property the old comment was really
+	 * defending: no ntdll call happens before __peb exists.  That
+	 * matters because RtlGetCurrentPeb(), the obvious alternative, is
+	 * an ntdll import, and under -Wl,--delay-all it would be a
+	 * delay-load stub whose very first resolution needs __peb already
+	 * set (delayload2.c's __delayLoadHelper2 computes every RVA off
+	 * __peb->ImageBaseAddress) -- a chicken-and-egg deadlock.
+	 *
+	 * TEB.ProcessEnvironmentBlock is at +0x30 on i386 and +0x60 on
+	 * x86_64.  nt.h asserts exactly that (NT_LAYOUT_OFFSET(TEB,
+	 * ProcessEnvironmentBlock, 12*NT_PTR)), and ReactOS's own
+	 * against-real-Windows layout tests pin the same two numbers for
+	 * both Windows Server 2003 and Windows 10
+	 * (sdk/include/ndk/tests/win2003_x86.c and win10_x86.c: 0x030;
+	 * win2003_x64.c and win10_x64.c: 0x060). */
+	__peb = __teb()->ProcessEnvironmentBlock;
 	pp = __peb->ProcessParameters;
 
 	__argc = split_cmdline(pp->CommandLine.Buffer, pp->CommandLine.Length / sizeof(WCHAR), &__argv);
@@ -198,7 +312,7 @@ void __libc_start_main(void *peb)
 	exit(rc);
 }
 
-void _start(void *peb)
+void _start(void)
 {
-	__libc_start_main(peb);
+	__libc_start_main();
 }

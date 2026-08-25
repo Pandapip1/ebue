@@ -58,10 +58,10 @@
  * ntlibc_delay_descr_t, whose fields are plain native pointers by
  * ntlibc's own private convention (see that header's comment) -- the
  * two formats are unrelated in memory layout even though they play the
- * same role. __peb->ImageBaseAddress (set by crt1.c from the PEB the
- * kernel hands _start -- see crt1.c's own comment on why that is a
- * direct assignment now, not an RtlGetCurrentPeb() call) is the base
- * every RVA here is relative to.
+ * same role. __peb->ImageBaseAddress (set by crt1.c from the PEB it
+ * reads out of the TEB -- see crt1.c's own comment on why it is read
+ * from there, and not from an entry-point argument or an
+ * RtlGetCurrentPeb() call) is the base every RVA here is relative to.
  *
  * The one field this file does *not* treat as an RVA is what an IAT
  * slot *contains*: even in the RVA-based descriptor format, the delay

@@ -48,11 +48,12 @@ float __floatundisf(unsigned long long);
 long double __floatundixf(unsigned long long);
 
 /* ---- program entry (crt/crt1.c) ---------------------------------------- */
-/* ntdll's RtlUserThreadStart calls _start with the PEB as its argument,
- * and tcc's PE linker picks _start up as the image entry point by name.
- * Neither of these is ever called from C. */
-void __libc_start_main(void *peb);
-void _start(void *peb);
+/* tcc's PE linker picks _start up as the image entry point by name.
+ * Neither of these is ever called from C, and neither takes an argument:
+ * the entry point of a Windows-subsystem image is not passed one (see
+ * crt1.c's __libc_start_main for the full reasoning and the citations). */
+void __libc_start_main(void);
+void _start(void);
 
 /* ---- delay-load helper (crt/delayload2.c) ------------------------------ */
 /* Looked up by this exact name and called by the linker-generated
