@@ -1218,6 +1218,90 @@ static void test_siginterrupt(void)
 #endif
 }
 
+/* ==================================================================
+ * <signal.h> header content -- the si_code constants ntlibc does not
+ * define.  Audit group U (XBD header contents); see
+ * test/POSIX-COVERAGE.md "XBD header contents (group U)".
+ * ================================================================== */
+
+#if 0 /* UNIMPL: signal.h.html DESCRIPTION, immediately after the
+	siginfo_t member list: "[CX] The <signal.h> header shall define the
+	symbolic constants in the Code column of the following table for
+	use as values of si_code that are signal-specific or
+	non-signal-specific reasons why the signal was generated."  The
+	table's CX rows are SIGILL (ILL_ILLOPC, ILL_ILLOPN, ILL_ILLADR,
+	ILL_ILLTRP, ILL_PRVOPC, ILL_PRVREG, ILL_COPROC, ILL_BADSTK),
+	SIGFPE (the seven FPE_*), SIGSEGV (SEGV_MAPERR, SEGV_ACCERR),
+	SIGBUS (BUS_ADRALN, BUS_ADRERR, BUS_OBJERR) and SIGCHLD (the five
+	CLD_*), with SIGTRAP's two TRAP_* marked [XSI].  CX is the
+	standard's marker for an extension to ISO C that POSIX requires,
+	not an option group, so the whole table is mandatory.
+
+	ntlibc defines 31 of the 40 and is missing NINE: ILL_ILLOPN,
+	ILL_ILLADR, ILL_ILLTRP, ILL_PRVREG, ILL_COPROC, ILL_BADSTK,
+	FPE_FLTSUB, BUS_ADRERR and BUS_OBJERR.  Triage: ABSENT.  This is a
+	ragged edge rather than a missing family -- ILL_ILLOPC and
+	ILL_PRVOPC are present while their six siblings are not, and
+	BUS_ADRALN is present while the other two BUS_* are not -- which
+	is exactly the shape only a spec-inward sweep finds: nothing about
+	the header looks incomplete from inside the tree, and the tests
+	that use si_code (test_sigsegv_code and friends below) happen to
+	provoke only codes that exist.
+
+	ACCEPTANCE CRITERION: the nine definitions, distinct within their
+	own signal's group -- si_code is compared for equality against
+	these, so two codes for the same signal sharing a value would make
+	a handler unable to tell the reasons apart.  This fence claims
+	NOTHING about ntlibc ever *delivering* the nine: whether NT raises
+	a coprocessor error or a nonexistent-physical-address bus fault at
+	all is a separate question, the codes are what a portable handler
+	switches on regardless, and a handler that cannot name a code
+	cannot have a default branch for it either.  Do not read an
+	un-fencing of this test as acceptance that any of the nine is ever
+	reported.
+
+	Observed today: fails to COMPILE, "'ILL_ILLOPN' undeclared"
+	(verified by un-fencing this test alone and building with
+	x86_64-win32-tcc; compile-time, so no Wine-vs-real-NT
+	uncertainty). */
+static void test_signal_si_code_constants(void)
+{
+	static const int ill[] = {
+		ILL_ILLOPC, ILL_ILLOPN, ILL_ILLADR, ILL_ILLTRP,
+		ILL_PRVOPC, ILL_PRVREG, ILL_COPROC, ILL_BADSTK
+	};
+	static const int fpe[] = {
+		FPE_INTDIV, FPE_INTOVF, FPE_FLTDIV, FPE_FLTOVF,
+		FPE_FLTUND, FPE_FLTRES, FPE_FLTINV, FPE_FLTSUB
+	};
+	static const int bus[] = { BUS_ADRALN, BUS_ADRERR, BUS_OBJERR };
+	size_t i, j;
+
+	for (i = 0; i < sizeof ill / sizeof ill[0]; i++)
+		for (j = i + 1; j < sizeof ill / sizeof ill[0]; j++)
+			CHECK(ill[i] != ill[j]);
+	for (i = 0; i < sizeof fpe / sizeof fpe[0]; i++)
+		for (j = i + 1; j < sizeof fpe / sizeof fpe[0]; j++)
+			CHECK(fpe[i] != fpe[j]);
+	for (i = 0; i < sizeof bus / sizeof bus[0]; i++)
+		for (j = i + 1; j < sizeof bus / sizeof bus[0]; j++)
+			CHECK(bus[i] != bus[j]);
+
+	/* A si_code value is assigned into siginfo_t's int si_code, so
+	 * each must fit there -- the property that makes the table
+	 * usable at all. */
+	{
+		siginfo_t si;
+		si.si_code = ILL_BADSTK;
+		CHECK(si.si_code == ILL_BADSTK);
+		si.si_code = FPE_FLTSUB;
+		CHECK(si.si_code == FPE_FLTSUB);
+		si.si_code = BUS_OBJERR;
+		CHECK(si.si_code == BUS_OBJERR);
+	}
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	self = argv[0];

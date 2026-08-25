@@ -78,6 +78,138 @@ static void test_fcntl_h_defines_seek_whence(void)
 }
 #endif
 
+/* ================= island: <tar.h>, alone ======================== */
+#if 0 /* UNIMPL: tar.h.html DESCRIPTION: "The <tar.h> header shall define
+	the following symbolic constants with the indicated values",
+	listing TMAGIC "ustar" / TMAGLEN 6 / TVERSION "00" / TVERSLEN 2,
+	the nine typeflag values REGTYPE..CONTTYPE, and the twelve octal
+	mode-field bits TSUID..TOEXEC.  ntlibc has NO <tar.h> at all:
+	include/ does not contain the file.  Triage: ABSENT (the whole
+	header).  <tar.h> is POSIX base -- its SYNOPSIS box carries no
+	option-group margin marker; the only [XSI] in the page is on the
+	single constant TSVTX.
+
+	WHY THIS ONE PROVES THE SHAPE OF THE BLIND SPOT group U audits.
+	<tar.h> declares no functions whatsoever.  It is therefore outside
+	test/POSIX-GAP-ACCOUNTING.md's 1177 POSIX.1-2017 function
+	interfaces BY CONSTRUCTION rather than by oversight -- no
+	function-granular accounting, however exhaustive, can ever record
+	its absence.  Before this fence, nothing in the tree recorded that
+	ntlibc lacks a mandatory POSIX header: not the ledger, not the
+	header inventory, not a banner.  It read as "fine".
+
+	ACCEPTANCE CRITERION: the header, with the values the standard
+	prints.  Nothing more -- this is a pure constants header, there is
+	no behaviour behind it and nothing in src/ would need to change.
+	Consumer: GNU tar and pax read the ustar typeflags and magic from
+	here rather than defining their own.
+
+	Observed today: fails to COMPILE, "include file 'tar.h' not
+	found" -- a compile-time failure, so no Wine-vs-real-NT
+	uncertainty arises. */
+#include <tar.h>
+
+static void test_tar_h_constants(void)
+{
+	/* "TMAGIC ... Used in the magic field in the ustar header block,
+	 * INCLUDING the trailing null byte"; "TMAGLEN 6 ... Length in
+	 * octets of the magic field." */
+	UCHECK(sizeof TMAGIC == (unsigned)TMAGLEN);
+	UCHECK(TMAGIC[0] == 'u' && TMAGIC[1] == 's' && TMAGIC[2] == 't');
+	UCHECK(TMAGIC[3] == 'a' && TMAGIC[4] == 'r' && TMAGIC[5] == '\0');
+
+	/* "TVERSION "00" ... EXCLUDING the trailing null byte";
+	 * "TVERSLEN 2". */
+	UCHECK(sizeof TVERSION - 1 == (unsigned)TVERSLEN);
+	UCHECK(TVERSION[0] == '0' && TVERSION[1] == '0');
+
+	/* Typeflag field definitions -- the values are the archive
+	 * format's own bytes, so they are exact, not floors. */
+	UCHECK(REGTYPE == '0');
+	UCHECK(AREGTYPE == '\0');
+	UCHECK(LNKTYPE == '1');
+	UCHECK(SYMTYPE == '2');
+	UCHECK(CHRTYPE == '3');
+	UCHECK(BLKTYPE == '4');
+	UCHECK(DIRTYPE == '5');
+	UCHECK(FIFOTYPE == '6');
+	UCHECK(CONTTYPE == '7');
+
+	/* Mode field bit definitions (octal). */
+	UCHECK(TSUID == 04000);
+	UCHECK(TSGID == 02000);
+	UCHECK(TSVTX == 01000);		/* [XSI] */
+	UCHECK(TUREAD == 00400);
+	UCHECK(TUWRITE == 00200);
+	UCHECK(TUEXEC == 00100);
+	UCHECK(TGREAD == 00040);
+	UCHECK(TGWRITE == 00020);
+	UCHECK(TGEXEC == 00010);
+	UCHECK(TOREAD == 00004);
+	UCHECK(TOWRITE == 00002);
+	UCHECK(TOEXEC == 00001);
+}
+#endif
+
+/* ================= island: <cpio.h>, alone ======================= */
+#if 0 /* UNIMPL: cpio.h.html DESCRIPTION: "The <cpio.h> header shall
+	define the symbolic constants needed by the c_mode field of the
+	cpio archive format, with the names and values given in the
+	following table", listing the twenty C_* octal constants, followed
+	by "The <cpio.h> header shall define the following symbolic
+	constant as a string: MAGIC "070707"".  ntlibc has NO <cpio.h> at
+	all.  Triage: ABSENT (the whole header).
+
+	POSIX BASE, NOT XSI -- correcting the obvious assumption: the
+	page's own CHANGE HISTORY says "Issue 7 The <cpio.h> header is
+	moved from the XSI option to the Base."  It was XSI in Issue 6 and
+	is not any more, so its absence is a base-conformance hole and not
+	a missing option group.  That distinction is the one
+	test/POSIX-GAP-ACCOUNTING.md calls "not cosmetic", and it may
+	decide whether this header is ever worth adding.
+
+	Like <tar.h>, this header declares no functions, so it is outside
+	the 1177-interface accounting by construction; see the <tar.h>
+	fence above for why that is the whole point of group U.
+
+	ACCEPTANCE CRITERION: the header, with the values the standard
+	prints.  Pure constants; nothing in src/ would change.
+
+	Observed today: fails to COMPILE, "include file 'cpio.h' not
+	found". */
+#include <cpio.h>
+
+static void test_cpio_h_constants(void)
+{
+	UCHECK(C_IRUSR == 0000400);
+	UCHECK(C_IWUSR == 0000200);
+	UCHECK(C_IXUSR == 0000100);
+	UCHECK(C_IRGRP == 0000040);
+	UCHECK(C_IWGRP == 0000020);
+	UCHECK(C_IXGRP == 0000010);
+	UCHECK(C_IROTH == 0000004);
+	UCHECK(C_IWOTH == 0000002);
+	UCHECK(C_IXOTH == 0000001);
+	UCHECK(C_ISUID == 0004000);
+	UCHECK(C_ISGID == 0002000);
+	UCHECK(C_ISVTX == 0001000);
+	UCHECK(C_ISDIR == 0040000);
+	UCHECK(C_ISFIFO == 0010000);
+	UCHECK(C_ISREG == 0100000);
+	UCHECK(C_ISBLK == 0060000);
+	UCHECK(C_ISCHR == 0020000);
+	UCHECK(C_ISCTG == 0110000);
+	UCHECK(C_ISLNK == 0120000);
+	UCHECK(C_ISSOCK == 0140000);
+
+	/* "shall define the following symbolic constant as a string:
+	 * MAGIC "070707"" -- six digits plus the terminating null. */
+	UCHECK(sizeof MAGIC == 7);
+	UCHECK(MAGIC[0] == '0' && MAGIC[1] == '7' && MAGIC[2] == '0');
+	UCHECK(MAGIC[3] == '7' && MAGIC[4] == '0' && MAGIC[5] == '7');
+}
+#endif
+
 /* ============ end of the islands; anything goes below ============ */
 #include <stdio.h>
 
