@@ -1804,41 +1804,51 @@ static void test_fenv_updateenv_reraises(void)
 	CHECK(fesetround(FE_TONEAREST) == 0);
 }
 
-#if 0 /* BUG: basedefs/fenv.h.html -- FE_DFL_ENV "represents the
-	default floating-point environment (that is, the one installed
-	at program startup) and has type pointer to const-qualified
-	fenv_t."
+/* The same clause, but pinning WHEN the default environment is captured
+ * rather than what it contains.
+ *
+ * test_fenv_dfl_env_is_startup_env() below compares FE_DFL_ENV against
+ * the environment main() recorded, which catches a WRONG default (the
+ * hardcoded 0x037F this library used to install) but NOT a default
+ * captured too late: a capture taken at first use records whatever the
+ * environment happened to be by then and enshrines it as "startup".
+ * Mutation-testing showed that gap directly -- removing crt1's
+ * __fenv_init() call left that test passing.
+ *
+ * So this one perturbs the environment FIRST -- widening x87 precision
+ * control to 64-bit, which nothing else in this file does -- and then
+ * requires FE_DFL_ENV to still describe the startup state.  A capture
+ * taken at first use would have recorded the widened value here and the
+ * comparison would fail.
+ *
+ * It must therefore run BEFORE every other test that touches FE_DFL_ENV
+ * (test_fenv_updateenv_reraises() among them), or the first-use capture
+ * would already have happened somewhere clean and the discriminator
+ * would be spent.  Its position in main() is part of the assertion; see
+ * the note there.
+ *
+ * Precision control is the field to perturb because it is the one the
+ * old hardcoded constant got wrong, and because fesetround() cannot
+ * reach it -- so no other test can disturb this one by accident. */
+static void test_fenv_dfl_env_captured_at_startup(void)
+{
+	unsigned short orig, cw;
+	fenv_t e;
 
-	fesetenv(FE_DFL_ENV) does not install the environment this
-	platform starts up with. src/math/fenv.c hardcodes an x87
-	control word of 0x037F, taken from musl's Linux x86_64 fenv
-	code, where 0x037F *is* the startup value. NT starts a thread
-	with 0x027F -- verified with a bare -nostdlib PE that does
-	nothing but fnstcw at its entry point, so it is the
-	kernel-supplied initial thread state and not something crt/
-	crt1.c sets (that file contains no FPU initialisation at all).
+	CHECK(g_startup_env_ok);
+	__asm__ __volatile__("fnstcw %0" : "=m"(orig));
+	cw = (unsigned short)(orig | 0x0300u);	/* PC = 64-bit (extended) */
+	__asm__ __volatile__("fldcw %0" : : "m"(cw));
 
-	The two differ in the precision-control field (bits 8-9):
-	0x027F is 53-bit (double) precision, 0x037F is 64-bit
-	(extended). So any call to fesetenv(FE_DFL_ENV) -- including
-	the one inside feupdateenv(FE_DFL_ENV) -- silently widens x87
-	precision, changing the double-rounding behaviour of every
-	src/math/x87.h helper on both arches and of all plain `double`
-	arithmetic on i386, where include/fenv.h's banner records that
-	tcc emits x87 rather than SSE.
+	CHECK(fesetenv(FE_DFL_ENV) == 0);
+	CHECK(fegetenv(&e) == 0);
+	CHECK((fenv_x87_cw_no_rc(&e) & 0x0300u) ==
+	      (fenv_x87_cw_no_rc(&g_startup_env) & 0x0300u));
 
-	The MXCSR half is correct: 0x1F80 is measured to be the startup
-	value, and matches.
+	/* restore exactly what was found on entry -- process-global state */
+	__asm__ __volatile__("fldcw %0" : : "m"(orig));
+}
 
-	This test needs no hardcoded constant and so holds on real
-	Windows as well as under Wine: it compares FE_DFL_ENV against
-	the environment main() captured before anything else ran.
-	Rounding control is masked out because fesetround() may
-	legitimately have changed it in between.
-
-	Fix shape: capture the startup environment once (in crt1, or
-	lazily on first use) and install that, with the status flags
-	cleared, instead of a hardcoded word. */
 static void test_fenv_dfl_env_is_startup_env(void)
 {
 	fenv_t dfl;
@@ -1847,7 +1857,6 @@ static void test_fenv_dfl_env_is_startup_env(void)
 	CHECK(fegetenv(&dfl) == 0);
 	CHECK(fenv_x87_cw_no_rc(&dfl) == fenv_x87_cw_no_rc(&g_startup_env));
 }
-#endif
 
 static void test_fenv_getenv_does_not_modify(void)
 {
@@ -1927,6 +1936,11 @@ int main(void)
 	test_hypot();
 	test_nan();
 	test_errhandling();
+	/* FIRST among the fenv tests, deliberately: it perturbs the
+	 * environment and then requires FE_DFL_ENV to still report the
+	 * startup state, which only discriminates while no earlier test has
+	 * touched FE_DFL_ENV.  Moving it later silently voids it. */
+	test_fenv_dfl_env_captured_at_startup();
 	test_fenv_zero_argument();
 	test_fenv_testexcept_subset();
 	test_fenv_raise_exact_set();
@@ -1934,6 +1948,7 @@ int main(void)
 	test_fenv_round_affects_arithmetic();
 	test_fenv_env_roundtrip();
 	test_fenv_updateenv_reraises();
+	test_fenv_dfl_env_is_startup_env();
 	test_fenv_getenv_does_not_modify();
 	test_fenv_holdexcept_installs_nonstop();
 	test_float_ld_variants();

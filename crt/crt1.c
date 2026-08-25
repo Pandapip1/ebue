@@ -192,6 +192,7 @@ void __libc_start_main(void *peb)
 
 	__fd_init();
 	__signal_init();
+	__fenv_init();
 
 	rc = main(__argc, __argv, __environ);
 	exit(rc);

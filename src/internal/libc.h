@@ -313,6 +313,9 @@ _Noreturn void __nt_exit(int);
 #define __NT_IS_SIGNAL_EXIT(code) (((unsigned)(code) & ~0x7fu) == __NT_SIGNAL_EXIT_BASE)
 
 void __signal_init(void);
+/* Capture the startup floating-point environment for FE_DFL_ENV
+ * (src/math/fenv.c).  Must run before anything can change it. */
+void __fenv_init(void);
 int __raise_internal(int);
 
 /* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/

@@ -138,6 +138,30 @@ int fesetround(int round)
 	return 0;
 }
 
+/* The floating-point environment as it was at program startup, which is
+ * what <fenv.h> defines FE_DFL_ENV to mean.  Captured by __fenv_init(),
+ * called from crt1 before main -- the only moment at which "at program
+ * startup" is still true.
+ *
+ * dfl_env_ok guards the case of a program that did not come through
+ * crt1 at all (a DLL, a bare -nostdlib entry point of its own).  Such a
+ * caller gets a capture taken at first use instead, which is strictly
+ * better than a hardcoded constant and honestly worse than a startup
+ * capture: it is only "the environment when FE_DFL_ENV was first
+ * needed".  Nothing better is available without a startup hook. */
+static fenv_t dfl_env;
+static int dfl_env_ok;
+
+void __fenv_init(void)
+{
+	/* Captured exactly, status flags included: the clause says "the one
+	 * installed at program startup", not "a cleared version of it".  On
+	 * this target the startup status flags are clear anyway, so the
+	 * distinction is theoretical -- but copying is what the clause says
+	 * and needs no justification, while clearing would. */
+	dfl_env_ok = (fegetenv(&dfl_env) == 0);
+}
+
 /* fegetenv.html DESCRIPTION: "The fegetenv() function shall attempt to
  * store the current floating-point environment in the object pointed to
  * by envp."  STORE, not modify.
@@ -177,21 +201,34 @@ int fesetenv(const fenv_t *envp)
 	 * with (and what feclearexcept/fnclex alone cannot reproduce, since
 	 * they leave the control word and rounding mode untouched). */
 	if (envp == FE_DFL_ENV) {
-		unsigned char env[28] = { 0 };
-		unsigned short cw = 0x37f;
-		env[0] = (unsigned char)cw;
-		env[1] = (unsigned char)(cw >> 8);
-		/* tag word (byte offset 8-9): 0xffff marks all eight x87
-		 * registers empty, the real power-on/reset value -- 0 would
-		 * mean every register holds a valid (garbage) value. */
-		env[8] = 0xff;
-		env[9] = 0xff;
-		__asm__ __volatile__("fldenv (%0)" : : "r"(env) : "memory");
+		/* <fenv.h>: FE_DFL_ENV "represents the default floating-point
+		 * environment (that is, THE ONE INSTALLED AT PROGRAM STARTUP)".
+		 *
+		 * This used to build an environment around a hardcoded x87
+		 * control word of 0x037F -- musl's value, correct for Linux
+		 * x86_64, and WRONG HERE.  NT starts a thread with 0x027F.  The
+		 * two differ in precision control (bits 8-9): 0x027F is 53-bit
+		 * (double), 0x037F is 64-bit (extended).  So every
+		 * fesetenv(FE_DFL_ENV), including the one inside
+		 * feupdateenv(FE_DFL_ENV), silently WIDENED x87 precision and
+		 * changed the double-rounding behaviour of every src/math/x87.h
+		 * helper on both arches, and of all plain `double` arithmetic on
+		 * i386 (where tcc emits x87 rather than SSE -- see
+		 * include/fenv.h's banner).  Measured startup values on this
+		 * target: x87 CW 0x027F, MXCSR 0x1F80.  The MXCSR constant was
+		 * right; the control word was not.
+		 *
+		 * Rather than swapping one hardcoded word for another -- which
+		 * would keep the same class of defect and merely move the day it
+		 * is wrong -- the startup environment is CAPTURED, by
+		 * __fenv_init() from crt1 alongside __fd_init() and
+		 * __signal_init().  That is what the clause actually says, and
+		 * it cannot go stale against a future Windows, a different
+		 * arch, or a host that starts threads differently. */
+		if (!dfl_env_ok) __fenv_init();
+		__asm__ __volatile__("fldenv (%0)" : : "r"(dfl_env.__x87env) : "memory");
 #ifndef __i386__
-		{
-			unsigned int mxcsr = 0x1f80;
-			__asm__ __volatile__("ldmxcsr (%0)" : : "r"(&mxcsr) : "memory");
-		}
+		__asm__ __volatile__("ldmxcsr (%0)" : : "r"(&dfl_env.__mxcsr) : "memory");
 #endif
 		return 0;
 	}
