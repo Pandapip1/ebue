@@ -65,8 +65,18 @@
  * storage; none of these functions are required to be thread-safe
  * (getpwnam.html DESCRIPTION: "The getpwnam() function need not be
  * thread-safe."). */
+/* Grown on demand rather than fixed, because POSIX gives the non-_r
+ * forms NO WAY to report that this buffer was too small.  getpwnam.html
+ * lists [ERANGE] only for getpwnam_r()/getpwuid_r(), where it means
+ * "insufficient storage was supplied via buffer and bufsize" -- an
+ * argument the non-_r forms do not have.  The standard is therefore
+ * assuming the implementation makes its own storage adequate, and the
+ * only conforming answers left if it does not are "not found" (a lie
+ * about a user who exists) or an errno the ERRORS list forbids.  Sizing
+ * it correctly avoids the choice.  See fill_shared(). */
 static struct passwd g_pw;
-static char g_pwbuf[256 + 2 * 4096];   /* name + dir + shell, PATH_MAX each */
+static char *g_pwbuf;
+static size_t g_pwbufsz;
 
 /* current_name(): the same %USERNAME%-then-%USER% lookup getlogin()
  * (src/unistd/ids.c) uses, so getpwnam(getlogin()) and
@@ -83,10 +93,10 @@ static const char *current_name(void)
 /* fill_current(): pack the current user's record into buf (bufsz
  * bytes).  Returns 1 on success, 0 if the user's name is unknowable
  * (treated as "not found" by every caller), or ERANGE if buf is too
- * small.  Never touches the global errno -- callers decide, per
+ * small -- in which case *needp is set to the size that would do.  Never touches the global errno -- callers decide, per
  * function, whether that return travels through errno (getpwnam(),
  * getpwuid()) or is returned directly (the _r variants). */
-static int fill_current(struct passwd *pw, char *buf, size_t bufsz)
+static int fill_current(struct passwd *pw, char *buf, size_t bufsz, size_t *needp)
 {
 	const char *name = current_name();
 	const char *dir, *shell;
@@ -103,7 +113,7 @@ static int fill_current(struct passwd *pw, char *buf, size_t bufsz)
 	dl = strlen(dir) + 1;
 	sl = strlen(shell) + 1;
 	need = nl + dl + sl;
-	if (need > bufsz) return ERANGE;
+	if (need > bufsz) { if (needp) *needp = need; return ERANGE; }
 
 	memcpy(buf, name, nl);
 	pw->pw_name = buf;
@@ -119,19 +129,55 @@ static int fill_current(struct passwd *pw, char *buf, size_t bufsz)
 	return 1;
 }
 
+/* fill_current() into the shared buffer, growing it if it does not fit.
+ *
+ * Returns 1 on success, 0 for "not found".  It never reports ERANGE,
+ * which is the whole point: getpwnam()/getpwuid() used to do
+ *
+ *     r = fill_current(&g_pw, g_pwbuf, sizeof g_pwbuf);
+ *     if (r == ERANGE) { errno = ERANGE; return 0; }
+ *
+ * against a fixed 8448-byte buffer, setting an errno that is not in
+ * their ERRORS list -- reachable by any program that sets a long enough
+ * %USERNAME%, %USERPROFILE% or %ComSpec%, which needs no unusual NT
+ * configuration at all.
+ *
+ * An allocation failure is reported as "not found" with errno left
+ * alone.  That is not a happy answer, but [ENOMEM] is not in these
+ * functions' ERRORS list either, and RETURN VALUE requires errno to be
+ * untouched when the entry was not found -- so of the answers available
+ * it is the only conforming one.
+ *
+ * The returned strings point into this buffer and a later call may
+ * reallocate it; getpwnam.html permits exactly that ("the return value
+ * may point to a static area which is overwritten by a subsequent call
+ * to getpwent(), getpwnam(), or getpwuid()"). */
+static int fill_shared(void)
+{
+	size_t need = 0;
+	int r = fill_current(&g_pw, g_pwbuf, g_pwbufsz, &need);
+	char *nb;
+
+	if (r != ERANGE) return r;
+	nb = realloc(g_pwbuf, need);
+	if (!nb) return 0;
+	g_pwbuf = nb;
+	g_pwbufsz = need;
+	r = fill_current(&g_pw, g_pwbuf, g_pwbufsz, &need);
+	return r == ERANGE ? 0 : r;
+}
+
 /* getpwnam.html RETURN VALUE: "If the requested entry was not found,
- * errno shall not be changed." errno is only ever set here on the
- * ERANGE-equivalent case, which cannot happen against g_pwbuf's fixed
- * size unless %USERNAME%/%USERPROFILE%/%ComSpec% together exceed it
- * (each individually capped well under PATH_MAX by NT itself). */
+ * errno shall not be changed."  These functions now never set errno at
+ * all: the only errno they ever set was the [ERANGE] that is not in
+ * their ERRORS list, and fill_shared() removes that case. */
 struct passwd *getpwnam(const char *name)
 {
 	const char *cur = current_name();
 	int r;
 
 	if (!name || !cur || strcmp(name, cur) != 0) return 0;
-	r = fill_current(&g_pw, g_pwbuf, sizeof g_pwbuf);
-	if (r == ERANGE) { errno = ERANGE; return 0; }
+	r = fill_shared();
 	if (r == 0) return 0;
 	return &g_pw;
 }
@@ -141,8 +187,7 @@ struct passwd *getpwuid(uid_t uid)
 	int r;
 
 	if (uid != getuid()) return 0;
-	r = fill_current(&g_pw, g_pwbuf, sizeof g_pwbuf);
-	if (r == ERANGE) { errno = ERANGE; return 0; }
+	r = fill_shared();
 	if (r == 0) return 0;
 	return &g_pw;
 }
@@ -162,7 +207,7 @@ int getpwnam_r(const char *name, struct passwd *pwd, char *buffer,
 	if (!name) return 0;
 	cur = current_name();
 	if (!cur || strcmp(name, cur) != 0) return 0;
-	r = fill_current(pwd, buffer, bufsize);
+	r = fill_current(pwd, buffer, bufsize, 0);
 	if (r == ERANGE) return ERANGE;
 	if (r == 0) return 0;
 	*result = pwd;
@@ -176,7 +221,7 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buffer,
 
 	*result = 0;
 	if (uid != getuid()) return 0;
-	r = fill_current(pwd, buffer, bufsize);
+	r = fill_current(pwd, buffer, bufsize, 0);
 	if (r == ERANGE) return ERANGE;
 	if (r == 0) return 0;
 	*result = pwd;

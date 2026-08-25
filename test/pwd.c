@@ -434,43 +434,10 @@ static void test_pw_name_matches_getlogin(void)
 	if (pw && login) CHECK(strcmp(pw->pw_name, login) == 0);
 }
 
-#if 0 /* BUG: getpwuid.html/getpwnam.html ERRORS list, for the
-	non-_r forms, exactly [EIO], [EINTR], [EMFILE] and [ENFILE], all
-	"may fail". [ERANGE] is listed only for getpwuid_r()/
-	getpwnam_r(), where it means "insufficient storage was supplied
-	via buffer and bufsize" -- an argument the non-_r forms do not
-	have. RETURN VALUE adds: "If the requested entry was not found,
-	errno shall not be changed."
-
-	src/misc/pwd.c's getpwnam() and getpwuid() both do
-
-		r = fill_current(&g_pw, g_pwbuf, sizeof g_pwbuf);
-		if (r == ERANGE) { errno = ERANGE; return 0; }
-
-	on their *internal* static buffer, so they can set an errno POSIX
-	does not permit them to set. g_pwbuf is 256 + 2*4096 bytes, so
-	the path is reached whenever %USERNAME% plus %USERPROFILE% plus
-	%ComSpec% exceed that -- reachable by any program that sets those
-	environment variables, which is all it takes, no unusual NT
-	configuration required.
-
-	getpwent() inherits it: src/misc/pwd.c's getpwent() delegates to
-	getpwuid(), whose ERRORS list is likewise [EIO]/[EINTR]/[EMFILE]/
-	[ENFILE] only.
-
-	This is the "stub returning an errno that is not in its POSIX
-	list" shape, not a platform N/A -- the same class as mkfifo()
-	answering ENOSYS. Fenced rather than fixed, per the standing
-	rule; the fix is to treat an internal-buffer overflow as "not
-	found" (NULL with errno untouched), or to size the static buffer
-	so the case is unreachable and say so.
-
-	src/misc/grp.c has the identical defect with a much smaller
-	buffer (256 + sizeof g_grmem, i.e. 272 bytes) -- see
-	test/posix-grp.c's matching fence. */
 static void test_getpwuid_erange_not_in_its_errno_list(void)
 {
 	static char big[9000];
+	struct passwd *pw;
 	char *saved_username = getenv("USERNAME");
 	char *saved_user = getenv("USER");
 	char keep_username[256], keep_user[256];
@@ -483,19 +450,43 @@ static void test_getpwuid_erange_not_in_its_errno_list(void)
 	big[sizeof big - 1] = 0;
 	CHECK(setenv("USERNAME", big, 1) == 0);
 
+	/* The clause, not one particular remedy for it.
+	 *
+	 * The fence this replaces asserted `getpwuid(getuid()) == NULL`,
+	 * because it had in mind the fix of treating an internal-buffer
+	 * overflow as "not found".  The fix actually taken grows the buffer,
+	 * so the call now SUCCEEDS and returns the real record -- which is
+	 * also conforming, and better, since the user does exist.  Asserting
+	 * NULL would have pinned the weaker of the two remedies and would
+	 * fail against the stronger one.
+	 *
+	 * What getpwuid.html actually requires is that [ERANGE] -- which is
+	 * listed only for getpwuid_r()/getpwnam_r(), where it describes a
+	 * caller-supplied buffer -- never comes out of the non-_r form, and
+	 * that "if the requested entry was not found, errno shall not be
+	 * changed".  So: never ERANGE, and whichever answer is given must be
+	 * self-consistent. */
 	errno = 0;
-	CHECK(getpwuid(getuid()) == NULL);
-	CHECK(errno != ERANGE);		/* fails today: errno == ERANGE */
+	pw = getpwuid(getuid());
+	CHECK(errno != ERANGE);
+	if (pw) {
+		/* if it succeeded it must have succeeded honestly */
+		CHECK(pw->pw_name != NULL);
+		CHECK(pw->pw_name && !strcmp(pw->pw_name, big));
+	} else {
+		/* "not found" leaves errno untouched */
+		CHECK(errno == 0);
+	}
 
 	if (had_username) setenv("USERNAME", keep_username, 1); else unsetenv("USERNAME");
 	if (had_user) setenv("USER", keep_user, 1); else unsetenv("USER");
 }
-#endif
 
 int main(void)
 {
 	printf("note: have_user() = %s\n", have_user() ? "true" : "false");
 	test_getpwuid_absurd_uid();
+	test_getpwuid_erange_not_in_its_errno_list();
 	test_getpwuid_r_absurd_uid();
 	test_pwent_reopen_and_errno();
 	test_getpwuid_r_erange_boundary();
