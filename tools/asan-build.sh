@@ -399,11 +399,14 @@ echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped
 # ---- 2. run the tests that a native build can say anything about -----------
 #
 # A test is run unless it is on this list, and each entry says why it is
-# not.  Two kinds left: those that assert the target ABI, which a native
+# not.  The kinds left: those that assert the target ABI, which a native
 # compiler does not have (math's 80- vs 64-bit long double; strto used
 # to be here too, see test/strto.c, now fixed instead of skipped); and
 # posix-misc, blocked on an actual architecture mismatch, not a build-
-# system one (see its entry below).  Process cloning (fork()) is not on
+# system one (see its entry below); and those that reach an NT-only
+# primitive a native process has no counterpart for -- the Ldr* loader
+# entry points (spawn-stdhandle-attr, posix-rename-symlink), which do not
+# even link here.  Process cloning (fork()) is not on
 # this list any more: fuzz/ntstubs.c's RtlCloneUserProcess is a real host
 # fork(2), not a stub.  Neither is the wait-status pair (waitpid-overflow,
 # posix-signal): fuzz/ntstubs.c now carries a dying process's full exit
@@ -423,6 +426,8 @@ not_native()
 		echo "uses sigsetjmp, whose src/setjmp/x86_64/setjmp.S is genuinely Win64-ABI machine code (first arg in %rcx, xmm6-15 treated as callee-saved) -- not merely unbuilt, but wrong if assembled for a SysV caller: %rcx is not this ABI's first-argument register and its xmm6-15 are caller-saved scratch, so jmp_buf would be silently corrupted rather than just fail to link" ;;
 	spawn-stdhandle-attr)
 		echo "resolves NtCreateUserProcess itself, at run time, with LdrGetDllHandle()/LdrGetProcedureAddress() against a loaded ntdll.dll (see its resolve_ncup()) -- module-handle and export-table primitives that only the NT loader has, and that fuzz/ntstubs.c cannot stand in for: there is no ntdll image in a native ELF process to hand back a handle to, and the syscall it goes on to look up is the very thing under test, so a stub answering it would be testing the stub. Its subject is what real NT's PsAttributeStdHandleInfo does to the child's process parameters, which needs a real NT process anyway. Covered by 'make check' under Wine (and real Windows CI)" ;;
+	posix-rename-symlink)
+		echo "builds a directory-flavoured reparse point with Win32 CreateSymbolicLinkW(SYMBOLIC_LINK_FLAG_DIRECTORY), resolved at run time through LdrLoadDll()/LdrGetProcedureAddress() because ntlibc declares no kernel32 imports (see test_rename_dir_over_forced_directory_symlink()). Those two Ldr* entry points are NT-loader primitives with no stub in fuzz/ntstubs.c, so the whole file fails to link natively -- 'undefined reference to LdrGetProcedureAddress / LdrLoadDll' -- not just that one group. A stub cannot supply them either: there is no kernel32.dll PE image in an ELF process to load or to walk an export table of, and the object the export produces is the very thing under test -- an entry carrying FILE_ATTRIBUTE_DIRECTORY and FILE_ATTRIBUTE_REPARSE_POINT at once, which is NT's file-attribute model and not something a host symlink(2) has. Standing in with a POSIX symlink would delete the subject and leave the measurement asserting against the stand-in, the same objection recorded for spawn-stdhandle-attr above. Covered by 'make check' under Wine (and real Windows CI)" ;;
 	spawn-runtimedata-stress)
 		echo "needs RuntimeData-based descriptor inheritance for a fd above 2, which this stub's RtlCreateUserProcess (fuzz/ntstubs.c) does not model: it execve()s a real host binary, and the fresh child's __ntshim_init constructor wires up only StandardInput/Output/Error (FD2H(0..2)) before calling __fd_init -- there is no PEB-parameters blob carrying a RuntimeData table across that real execve the way real NT's process-parameters copy does. Covered by 'make check' under Wine (and real Windows CI) instead, where RtlCreateUserProcess is the real thing" ;;
 	posix-kill-perm-win)
