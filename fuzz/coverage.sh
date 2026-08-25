@@ -24,6 +24,11 @@
 # whatever a previous night happened to find.
 set -eu
 
+# See the long comment in tools/fuzz.sh: an unset-here $DEBUGINFOD_URLS is
+# what keeps llvm-symbolizer from making a doomed network request, and
+# ASan's blocking read() on its pipe from hanging with it.
+export DEBUGINFOD_URLS=
+
 : "${COVOUT:?run via make -C fuzz coverage}"
 : "${COVDATA:?run via make -C fuzz coverage}"
 : "${SRCDIR:?run via make -C fuzz coverage}"

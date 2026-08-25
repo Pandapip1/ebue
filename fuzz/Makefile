@@ -127,13 +127,18 @@ LEAKS ?= 1
 # one stopped instead of starting from random bytes.
 CORPUS ?= $(abspath $(srcdir)/obj/fuzzcorpus)
 
+# DEBUGINFOD_URLS= : see the long comment in ../tools/fuzz.sh.  With it set
+# -- Ubuntu exports it from /etc/profile.d/debuginfod.sh -- llvm-symbolizer
+# makes a doomed HTTPS request for the harness's build-id before reading the
+# DWARF that is already in the harness, and ASan's blocking read() on the
+# symbolizer pipe hangs with it.
 run: all
 	@rc=0; \
 	for h in $(HARNESSES); do \
 	   mkdir -p $(CORPUS)/$$h/corpus $(CORPUS)/$$h/crashes; \
 	   before=$$(ls -1 $(CORPUS)/$$h/corpus | wc -l); \
 	   echo "== fuzz_$$h ($(FUZZ_TIME)s, corpus $$before)"; \
-	   NTLIBC_FUZZ_MIRROR=$(CORPUS)/$$h \
+	   NTLIBC_FUZZ_MIRROR=$(CORPUS)/$$h DEBUGINFOD_URLS= \
 	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS):handle_abort=1 \
 	   UBSAN_OPTIONS=print_stacktrace=1 \
 	   $(OUT)/fuzz_$$h -max_total_time=$(FUZZ_TIME) -max_len=256 \

@@ -72,6 +72,15 @@ EXTRA=${NTLIBC_ASAN_EXTRA:-}
 # NTLIBC_LEAKS=0 only to isolate some other failure.
 LEAKS=${NTLIBC_LEAKS:-1}
 
+# See the long comment in tools/fuzz.sh: with $DEBUGINFOD_URLS set (Ubuntu
+# exports it from /etc/profile.d/debuginfod.sh, so every login shell has
+# it), llvm-symbolizer makes a doomed HTTPS request for each module's
+# build-id before it reads the DWARF already inside the binary, and ASan's
+# blocking read() on the symbolizer pipe stalls with it.  Cleared here so a
+# failing test still prints a symbolized trace instead of being killed by
+# the timeout below with nothing to show.
+export DEBUGINFOD_URLS=
+
 # -shared-libasan is not cosmetic either: with the static runtime, ASan's
 # own calls to sysconf()/malloc() bind at link time to ntlibc's versions,
 # and ASan starts up on an NT libc that is not initialised yet.  In the

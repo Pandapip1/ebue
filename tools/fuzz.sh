@@ -83,11 +83,59 @@ LEAKS=${NTLIBC_LEAKS:-1}
 # It is set per-invocation below instead.
 ASAN_SO=$(${CC:-clang} -print-file-name=libclang_rt.asan-x86_64.so)
 
+# Why --repro used to hang after printing the first two lines of an ASan
+# report, and `make -C fuzz run` did not when run from CI.
+#
+# ASan symbolizes a crash by forking llvm-symbolizer, writing the query
+# to its stdin pipe and doing a blocking read() on its stdout pipe.  The
+# harness therefore cannot make progress until the symbolizer answers.
+#
+# llvm-symbolizer (Ubuntu's llvm-symbolizer-18, and any LLVM built with
+# LLVM_ENABLE_DEBUGINFOD) looks for a module's debug info in this order:
+# /usr/lib/debug/.build-id/<id>.debug, then ~/.cache/llvm-debuginfod,
+# then -- if $DEBUGINFOD_URLS is set -- an HTTPS GET to each server in
+# it, and only then the DWARF already inside the binary.  Ubuntu exports
+# DEBUGINFOD_URLS=https://debuginfod.ubuntu.com from
+# /etc/profile.d/debuginfod.sh, so every interactive login shell has it.
+# The harnesses are built with -g and carry their own DWARF, and no
+# distro server has ever heard of their build-id, so that request can
+# only ever fail -- but it is made first, and while it is outstanding
+# llvm-symbolizer sits in poll() on the TLS socket and the harness sits
+# in read() on the pipe.  Measured on this build: strace shows the
+# symbolizer connect to 91.189.92.252:443 and then poll(fd=5, 1000ms) in
+# a loop indefinitely; the harness's kernel wchan is anon_pipe_read.
+# With DEBUGINFOD_URLS cleared the same query answers in under a second
+# from the in-binary DWARF.
+#
+# That is also the whole of the CI-versus-terminal difference: GitHub
+# Actions runs each step under a *non-login* shell, which never sources
+# /etc/profile.d, so the workflow's Fuzz step never had the variable set
+# and never made the request.
+#
+# Clearing it costs nothing this script wants: the /usr/lib/debug and
+# ~/.cache lookups still happen (they are local and come first), and the
+# harness's own frames -- the fuzz_path.c:78:11 an issue reporter needs
+# -- come from DWARF inside the executable.  The only thing given up is
+# network-fetched debug info for distro shared libraries, which was
+# never arriving anyway.
+export DEBUGINFOD_URLS=
+
 if [ "${1:-}" = "--repro" ]; then
 	shift
 	[ $# -ge 1 ] || { echo "usage: tools/fuzz.sh --repro <artefact>" >&2; exit 2; }
-	art=$1
-	name=${2:-$(basename "$(dirname "$art")")}
+	art_in=$1
+	# Resolved to an absolute path here, once, and used for both the
+	# mirror root and the argument the harness is handed.  A relative
+	# artefact used to reach libFuzzer verbatim and die with
+	#     ERROR: The required directory "crash-abc" does not exist
+	# -- libFuzzer stats the name through ntlibc, which resolves it
+	# against ntstubs.c's simulated volume, where the caller's host cwd
+	# does not exist.  It is a clear failure rather than a silent wrong
+	# answer, but there is no reason to make the reporter in GitHub
+	# issue #1 type an absolute path when the script can compute one.
+	artdir=$(cd "$(dirname "$art_in")" && pwd) || exit 1
+	art=$artdir/$(basename "$art_in")
+	name=${2:-$(basename "$artdir")}
 	make -C "$srcdir/fuzz" "$srcdir/obj/fuzz/fuzz_$name" >/dev/null
 	# The artefact has to be visible in ntstubs.c's simulated volume, or
 	# the harness cannot read the file it was just handed.  Before
@@ -96,7 +144,7 @@ if [ "${1:-}" = "--repro" ]; then
 	#     ERROR: The required directory "<file>" does not exist
 	# which is libFuzzer saying it could not stat the path -- the
 	# documented way to replay a finding, replaying nothing.
-	exec env NTLIBC_FUZZ_MIRROR="$(cd "$(dirname "$art")" && pwd)" \
+	exec env NTLIBC_FUZZ_MIRROR="$artdir" \
 	     LD_PRELOAD="$ASAN_SO" \
 	     ASAN_OPTIONS=detect_leaks="$LEAKS":handle_abort=1 \
 	     UBSAN_OPTIONS=print_stacktrace=1 \
