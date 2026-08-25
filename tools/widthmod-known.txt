@@ -15,6 +15,10 @@
 # test that records it.  That is the whole point of keeping this where a
 # machine reads it.
 #
-src/stdio/printf.c	case LM_z: case LM_t: sv = va_arg(ap, long); break;	signed %zd/%td read as 32-bit long under LLP64; fenced as test_printf_z_modifier_width in test/posix-stdio.c (f9f1937)
-src/stdio/printf.c	case LM_z: case LM_t: uv = va_arg(ap, unsigned long); break;	unsigned %zu/%tu read as 32-bit unsigned long under LLP64; same fence
-src/stdio/printf.c	case LM_z: case LM_t: *(long *)ptr = (long)count; break;	%zn/%tn writes four bytes into an eight-byte object, corrupting the caller; same fence
+# The list is currently EMPTY, and that is a real state, not a missing
+# file: printf.c's three sites were fixed in c200c7f and their entries
+# removed here.  An empty list means every LM_z/LM_t site in the tree is
+# judged on its merits, with nothing excused; the scan's own floors
+# (see tools/lint-widthmod.sh) still fail a run that judged nothing, so
+# emptiness here cannot make the stage vacuous.
+#

@@ -1066,17 +1066,20 @@ static void test_snprintf_eoverflow(void)
  * conversion specifier applies to a pointer to a signed integer type
  * corresponding to a size_t argument."  t says the same for ptrdiff_t.
  *
- * src/stdio/printf.c reads both with va_arg(ap, long) -- lines 514 and
- * 531 for the value conversions, 628 for %n.  On this target long is 32
- * bits and size_t is 64 (LLP64), so the type is simply wrong.  The %n
- * case is the worst of the three: it stores through *(long *), writing
+ * src/stdio/printf.c USED TO read both with va_arg(ap, long) at three
+ * sites -- two value conversions and %n.  On this target long is 32
+ * bits and size_t is 64 (LLP64), so the type was simply wrong.  The %n
+ * case was the worst of the three: it stored through *(long *), writing
  * four bytes into the caller's eight-byte object and leaving the other
- * four whatever they were.
+ * four whatever they were.  Fixed in c200c7f; this test is the fence
+ * that was opened by that commit, and it stays live so the defect
+ * cannot come back silently.  tools/lint-widthmod.sh guards the same
+ * property statically, over every LM_z/LM_t site in the tree.
  *
- * The tree already contains the correct pattern, in the file that
- * implements the same grammar: src/stdio/scanf.c:495,496,617,618 pair
- * LM_z with size_t and LM_t with ptrdiff_t, and has no instance of this
- * bug.  printf.c is the only offender.
+ * The tree already contained the correct pattern, in the file that
+ * implements the same grammar: src/stdio/scanf.c pairs LM_z with size_t
+ * and LM_t with ptrdiff_t, and has no instance of this bug.  printf.c
+ * was the only offender.
  *
  * Found by musl's libc-test (printf-fmt-n), not by this file's own
  * clause audit, which read these pages closely enough to fence the
