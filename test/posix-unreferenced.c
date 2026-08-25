@@ -1010,50 +1010,86 @@ static void test_fchmodat_empty_at_dirfd(void)
  * for path: a component of "dot" "refers to the directory specified by
  * its predecessor".  A relative path containing one, resolved against a
  * directory descriptor, must therefore work. */
-#if 0 /* BUG -- IN SHARED PATH MACHINERY, NOT IN fchmodat().  This one
-       * defect reaches EVERY *at() entry point this library ships.  It
-       * is fenced once, here, to avoid a dozen identical copies; the
-       * affected functions are named in full so that a reader arriving
-       * from any of them finds it:
-       *
-       *     openat (via __open_handle), faccessat (via fstatat),
-       *     fstatat, unlinkat and rmdir (via __unlink_at), linkat,
-       *     symlinkat, readlinkat, mkdirat, renameat, fchmodat,
-       *     utimensat, and nftw()'s directory walk
-       *
-       * -- every caller of __ntpath_at() in src/, checked by grep at
-       * the commit that added this file.  (fchownat and mknodat/
-       * mkfifoat are stubs that never build a path, so they are not
-       * affected.)  See
-       * test/POSIX-COVERAGE.md group R, "Observed behaviour worth
-       * recording", which carries the same list so it is discoverable
-       * from the ledger rather than only from this file.
-       *
-       * src/internal/path.c's __ntpath_at() special-cases a path that is
-       * exactly "." (n == 1 && w[0] == '.') and otherwise hands the name
-       * to the NT object manager unchanged.  The object manager does not
-       * implement dot components in a RootDirectory-relative name, so
-       * fchmodat(dfd, "./f", ...) fails with ENOENT while
-       * fchmodat(dfd, "f", ...) on the same file succeeds.  XBD 4.13
-       * Pathname Resolution, which every one of those pages invokes,
-       * requires the two to be identical.
-       *
-       * Note that this affects only the RootDirectory-relative branch:
-       * an AT_FDCWD or absolute path goes through __ntpath(), which does
-       * the DOS->NT conversion and handles dot components correctly.
-       * That asymmetry is why it survives -- the common case works. */
 static void test_fchmodat_dot_component(void)
 {
-	int dfd = open("chm.d", O_RDONLY);
+	struct stat st;
+	int dfd, sub;
+
+	dfd = open("chm.d", O_RDONLY);
 	CHECK(dfd >= 0);
 	if (dfd < 0) return;
+
+	/* dot as the first component */
 	CHECK(fchmodat(dfd, "./f", 0444, 0) == 0);
 	CHECK(!(mode_of("chm.d/f") & 0222));
 	CHECK(fchmodat(dfd, "./f", 0644, 0) == 0);
 	CHECK(mode_of("chm.d/f") & 0222);
+
+	/* dot and dot-dot in the middle, and dot-dot escaping the
+	 * descriptor's own directory -- which a RootDirectory-relative NT
+	 * name cannot express at all, so it exercises the other resolution
+	 * path rather than the same one */
+	CHECK(mkdir("chm.d/sub", 0755) == 0 || errno == EEXIST);
+	CHECK(fstatat(dfd, "./sub", &st, 0) == 0 && S_ISDIR(st.st_mode));
+	CHECK(fstatat(dfd, "sub/../f", &st, 0) == 0 && S_ISREG(st.st_mode));
+	sub = open("chm.d/sub", O_RDONLY);
+	CHECK(sub >= 0);
+	if (sub >= 0) {
+		CHECK(fstatat(sub, "..", &st, 0) == 0 && S_ISDIR(st.st_mode));
+		CHECK(fstatat(sub, "../f", &st, 0) == 0 && S_ISREG(st.st_mode));
+		CHECK(close(sub) == 0);
+	}
+
+	CHECK(fstatat(dfd, "sub/.", &st, 0) == 0 && S_ISDIR(st.st_mode));
+
+	/* Two invariants about what normalisation must NOT weaken, asserted
+	 * as EQUIVALENCES rather than absolute answers, deliberately.
+	 *
+	 * (1) A trailing "." requires the name to be a directory, exactly as
+	 *     a trailing slash does.  dos_from_posix() computes the
+	 *     trailing-slash flag from the ORIGINAL string, before the dot is
+	 *     resolved away, so a normalisation that forgets to re-raise it
+	 *     turns "f/." into a plain "f" and silently stops checking.
+	 * (2) A path PREFIX component that exists and is not a directory is
+	 *     [ENOTDIR], and the prefix walk has to run over the NORMALISED
+	 *     name -- a walk over the string the caller wrote is inspecting a
+	 *     path NT will never resolve, i.e. a guard that looks present and
+	 *     is absent.
+	 *
+	 * Why equivalences: both verdicts come from reject_if_not_dir() and
+	 * __nt_prefix_not_dir(), which answer a RootDirectory-relative
+	 * NtQueryAttributesFile -- and src/internal/path.c documents that
+	 * Wine resolves such a query against the process working directory
+	 * instead, so under Wine BOTH are inoperative for a dirfd and the
+	 * absolute verdict is unavailable.  Asserting "== ENOTDIR" here would
+	 * therefore be asserting a real-Windows-only fact, and would pass
+	 * vacuously nowhere and fail honestly under Wine.  What IS true in
+	 * every environment, and is the property this normalisation could
+	 * actually break, is that the dotted spelling answers identically to
+	 * the undotted one.  On the real-Windows CI leg the controls
+	 * themselves become ENOTDIR and the equivalence then pins the real
+	 * clause. */
+	{
+		int c_rc, c_err, d_rc, d_err;
+		errno = 0; c_rc = fstatat(dfd, "f/", &st, 0);      c_err = errno;
+		errno = 0; d_rc = fstatat(dfd, "f/.", &st, 0);     d_err = errno;
+		CHECK(d_rc == c_rc && d_err == c_err);
+		if (c_rc == 0)
+			printf("NOTE dirfd-relative trailing-slash rejection is inoperative here "
+			       "(fstatat(dfd,\"f/\") on a regular file returned 0); the \"f/.\" "
+			       "equivalence above is what is being checked, not [ENOTDIR]\n");
+		errno = 0; c_rc = fstatat(dfd, "f/under", &st, 0);   c_err = errno;
+		errno = 0; d_rc = fstatat(dfd, "./f/under", &st, 0); d_err = errno;
+		CHECK(d_rc == c_rc && d_err == c_err);
+		if (c_err != ENOTDIR)
+			printf("NOTE dirfd-relative prefix [ENOTDIR] is inoperative here "
+			       "(fstatat(dfd,\"f/under\") gave errno=%d, want 20); the "
+			       "\"./f/under\" equivalence above is what is being checked\n", c_err);
+	}
+
+	CHECK(rmdir("chm.d/sub") == 0);
 	CHECK(close(dfd) == 0);
 }
-#endif
 
 /* "[EPERM] The effective user ID does not match the owner of the file
  * and the process does not have appropriate privileges", "[EACCES] Search
@@ -1569,6 +1605,7 @@ int main(void)
 	test_fchmodat_errors();
 	test_fchmodat_empty();
 	test_fchmodat_empty_at_dirfd();
+	test_fchmodat_dot_component();
 
 	test_scanf_basics(name);
 	test_scanf_returns(name);

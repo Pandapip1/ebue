@@ -211,6 +211,89 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 	return 0;
 }
 
+/* Lexical resolution of "." and ".." in a RootDirectory-relative name.
+ *
+ * XBD 4.13 Pathname Resolution, which every page specifying an *at()
+ * function invokes for its path argument: "The special filename dot
+ * shall refer to the directory specified by its predecessor.  The
+ * special filename dot-dot shall refer to the parent directory of its
+ * predecessor directory."  The NT object manager does not implement
+ * either in a name resolved against a RootDirectory handle -- it takes
+ * the name as a literal sequence of components -- so without this pass
+ * openat(dfd, "./f", ...) failed with ENOENT while openat(dfd, "f", ...)
+ * on the same file succeeded, and no spelling of ".." could reach a
+ * parent at all.
+ *
+ * WHY LEXICAL, AND WHAT IT COSTS.  Resolving ".." by string surgery is
+ * not what XBD 4.13 asks for: where a preceding component is a symbolic
+ * link, the parent of the link's target is not the lexical parent, and
+ * a lexical pass also collapses across components that do not exist or
+ * are not directories, which 4.13 requires to fail.  This is done
+ * anyway, deliberately, because it is what the REST OF THIS LIBRARY
+ * already does: the AT_FDCWD and absolute branch resolves through
+ * RtlDosPathNameToNtPathName_U, i.e. Windows path normalisation, which
+ * Microsoft documents as a string pass performed before the file system
+ * is consulted ("This function does not verify that the resulting path
+ * and file name are valid, or that they see an existing file on the
+ * associated volume" -- GetFullPathName Remarks).  Measured against this
+ * tree through that branch: stat("d/nonexistent/../f") and
+ * stat("d/regularfile/../f") both return 0.
+ *
+ * So the choice here is not "correct or lexical", it is "agree with the
+ * other branch or disagree with it".  A library that answers the same
+ * question two different ways depending on whether the caller passed
+ * AT_FDCWD or a directory descriptor is worse than one that answers
+ * consistently, because the inconsistency is undebuggable.  The gap
+ * itself is fenced as its own finding; see test/posix-unreferenced.c,
+ * test_pathres_dotdot_over_nondir().
+ *
+ * Operates in place -- the result is never longer than the input.
+ * Returns 0 with *np and *trailing updated, or 1 if the name escapes
+ * above the RootDirectory (a leading ".." with nothing to pop), which
+ * a RootDirectory-relative name cannot express and which the caller
+ * resolves a different way. */
+static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
+{
+	size_t n = *np, out = 0, i = 0;
+	int lastdot = 0;
+
+	while (i < n) {
+		size_t j = i, len;
+		while (j < n && w[j] != '\\') j++;
+		len = j - i;
+		if (len == 0) {
+			/* a doubled separator: no component at all */
+		} else if (len == 1 && w[i] == '.') {
+			lastdot = 1;
+		} else if (len == 2 && w[i] == '.' && w[i+1] == '.') {
+			if (out == 0) return 1;               /* above the root */
+			while (out > 0 && w[out-1] != '\\') out--;
+			if (out > 0) out--;                   /* and its separator */
+			lastdot = 1;
+		} else {
+			/* out < i whenever out > 0 (each emitted component is at
+			 * least as short as its source and i has passed a
+			 * separator), so this never overwrites the source. */
+			if (out) w[out++] = '\\';
+			memmove(w + out, w + i, len * sizeof(WCHAR));
+			out += len;
+			lastdot = 0;
+		}
+		i = j < n ? j + 1 : j;
+	}
+	w[out] = 0;
+	*np = out;
+	/* A name whose last component was "." or ".." names a directory by
+	 * construction, and dos_from_posix computed `trailing` from the
+	 * ORIGINAL string -- so "sub/." would otherwise stop requiring sub
+	 * to be a directory once the "." is gone.  An empty result is the
+	 * RootDirectory itself, which the caller has already established is
+	 * a directory. */
+	if (lastdot) *trailing = 1;
+	if (out == 0) *trailing = 0;
+	return 0;
+}
+
 int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attributes)
 {
 	int absolute;
@@ -268,9 +351,42 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		int trailing;
 		if (!f) return -1;
 		if (f->type != __FD_DIR) { errno = ENOTDIR; return -1; }
+		int esc;
 		w = dos_from_posix(path, &n, &trailing);
 		if (!w) return -1;
-		if (n == 1 && w[0] == '.') { w[0] = 0; n = 0; trailing = 0; }
+		esc = normalize_rel(w, &n, &trailing);
+		if (esc) {
+			/* The name reaches above the descriptor's directory, which
+			 * a RootDirectory-relative name has no way to say.  Resolve
+			 * the descriptor to an absolute path and hand the whole
+			 * thing to __ntpath(), which normalises through the Rtl --
+			 * the same answer the AT_FDCWD branch would give.  One extra
+			 * query, and only in this case: a name that stays at or
+			 * below the descriptor never gets here.
+			 *
+			 * Deliberately NOT done for every relative name.  Resolving
+			 * by path would throw away what the *at() family exists for
+			 * -- the descriptor pins the directory even if it is renamed
+			 * out from under the caller -- so it is the fallback for the
+			 * one shape that cannot be expressed, not the strategy. */
+			char *dir, *joined;
+			size_t dl;
+			int rc;
+			__free(w);
+			dir = __handle_path(f->h);
+			if (!dir) return -1;
+			dl = strlen(dir);
+			joined = __malloc(dl + 1 + strlen(path) + 1);
+			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
+			memcpy(joined, dir, dl);
+			/* "C:\\" already ends in one */
+			if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\';
+			strcpy(joined + dl, path);
+			__free(dir);
+			rc = __ntpath(joined, out, attributes);
+			__free(joined);
+			return rc;
+		}
 		/* UNICODE_STRING.Length is a USHORT count of bytes and
 		 * MaximumLength has to hold one more code unit, so a name past
 		 * 32766 code units cannot be described -- and narrowing it would
