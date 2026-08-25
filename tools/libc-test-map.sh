@@ -1227,6 +1227,17 @@ main() {
 	*) sed -n '2,118p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 	esac
 
+	# --render takes an optional second argument: re-render THAT file in
+	# place rather than the checked-in report.  Same device as
+	# tools/posix-gapmap.sh's, and for the same reason --
+	# tools/merge-gendata.sh has to render git's temporary %A file and
+	# must never touch the real report path, which git's merge machinery
+	# owns until the whole merge, rebase or cherry-pick has finished.
+	if [ "$mode" = --render ] && [ $# -ge 2 ]; then
+		REPORT=$2
+		SM_REPORT=$REPORT
+	fi
+
 	sm_workdir
 
 	rc=0
