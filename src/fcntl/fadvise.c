@@ -8,8 +8,9 @@
  * implementation is free to do nothing but validate its arguments and
  * report success. NT has no per-handle readahead/cache-priority knob
  * this library reaches for elsewhere, so that is exactly what this
- * does: check the fd, the advice value and the length are all valid
- * (the two required error cases: EBADF, EINVAL) and otherwise no-op.
+ * does: check the fd, the advice value and the length are all valid,
+ * refuse a pipe or FIFO because the ERRORS section says to (the three
+ * required error cases: EBADF, EINVAL, ESPIPE) and otherwise no-op.
  *
  * posix_fallocate() is a real implementation, not a no-op: POSIX
  * requires it to "ensure that any required storage for regular file
@@ -48,10 +49,39 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
 	switch (advice) {
 	case POSIX_FADV_NORMAL: case POSIX_FADV_RANDOM: case POSIX_FADV_SEQUENTIAL:
 	case POSIX_FADV_WILLNEED: case POSIX_FADV_DONTNEED: case POSIX_FADV_NOREUSE:
-		return 0;
+		break;
 	default:
 		return EINVAL;
 	}
+	/* posix_fadvise.html ERRORS, *shall fail*: "[ESPIPE] The fd
+	 * argument is associated with a pipe or FIFO."  This function used
+	 * to return 0 here for every descriptor that got past the two
+	 * checks above, because it never looked at what the descriptor
+	 * actually was -- and "no effect is a conforming effect" does not
+	 * reach this clause: the page requires the call to *fail*, not
+	 * merely to do nothing.
+	 *
+	 * __FD_PIPE is exactly the clause's set and no more.
+	 * __handle_type() (src/internal/fd.c) assigns it to
+	 * FILE_DEVICE_NAMED_PIPE -- which on NT is both an anonymous
+	 * pipe() pair and a named FIFO, there being no separate device
+	 * type for the two -- and to FILE_DEVICE_MAILSLOT; a regular file,
+	 * directory, console, character device or socket each get a type
+	 * of their own and cannot land here.  posix_fallocate() below
+	 * spells its identically worded clause the same way.
+	 *
+	 * Placed last, after both halves of [EINVAL], deliberately.  POSIX
+	 * orders none of these three against each other, so a pipe given
+	 * with a bogus advice may conformingly yield either answer.  The
+	 * rule chosen is the one posix_fallocate() already follows --
+	 * validate the arguments the caller passed, then the object they
+	 * name -- so the two functions in this file cannot be caught
+	 * disagreeing about a descriptor that fails two clauses at once.
+	 * [EBADF] first is the one ordering that is forced rather than
+	 * chosen: f->type cannot be read until __fd_get() has produced an
+	 * f to read it from. */
+	if (f->type == __FD_PIPE) return ESPIPE;
+	return 0;
 }
 
 /* The maximum file size of the volume a handle lives on, for
