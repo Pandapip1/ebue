@@ -354,19 +354,21 @@ exec 1>&3 3>&-
 test "$srcdir" = "." || ln -sf "$srcdir/Makefile" .
 
 #
-# Enable the tracked pre-commit hook (regenerates boot/kaem/ and blocks
-# the commit on drift -- see .githooks/pre-commit), and the boot/kaem/
-# merge driver (regenerates instead of leaving conflict markers in a
-# generated bootstrap script -- see .gitattributes and
-# tools/merge-kaem.sh), for anyone who builds from a git checkout.
-# Neither is read from the repository itself (core.hooksPath and
+# Enable the tracked pre-commit hook (regenerates every generated,
+# committed file and blocks the commit on drift -- see
+# .githooks/pre-commit) and the two merge drivers for those files:
+# tools/merge-kaem.sh for boot/kaem/*.kaem, and tools/merge-gendata.sh
+# for the two generated reports under test/. All three exist because a
+# three-way text merge of a generated file is never the right
+# resolution. None is read from the repository itself (core.hooksPath and
 # merge.*.driver are both per-clone config git deliberately does not
-# track), so both are set here, the same way, in one place. No-op outside
-# a git checkout.
+# track), so they are set here, the same way, in one place. No-op outside
+# a git checkout. See .gitattributes and CONTRIBUTING.md.
 #
 if git -C "$abs_srcdir" rev-parse --git-dir >/dev/null 2>&1 ; then
 git -C "$abs_srcdir" config core.hooksPath .githooks
 git -C "$abs_srcdir" config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
+git -C "$abs_srcdir" config merge.ntlibc-gendata.driver 'tools/merge-gendata.sh %O %A %B %P'
 fi
 
 printf "done\n"
