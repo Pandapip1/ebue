@@ -148,36 +148,30 @@ static void test_getgroups(void)
 	 * and it must at least be self-consistent. */
 	if (n == 1) CHECK(list[0] == getegid());
 
-#if 0	/* BUG: getgroups() succeeds for a negative gidsetsize.
-	 * getgroups.html ERRORS: "The getgroups() function *shall* fail
+	/* getgroups.html ERRORS: "The getgroups() function *shall* fail
 	 * if: [EINVAL] The gidsetsize argument is non-zero and less than
 	 * the number of group IDs that would have been returned."  -1 is
-	 * non-zero and is less than the 1 this implementation would have
-	 * returned, so the clause applies exactly and it is a shall-fail,
-	 * not a may-fail.
-	 *
-	 * Mechanism: src/unistd/ids.c:20 is
-	 *     int getgroups(int n, gid_t *g) { if (n > 0) g[0] = 1000; return 1; }
-	 * -- n is used only to decide whether to store, never to decide
-	 * whether to fail.  A negative gidsetsize therefore reports "1
-	 * group ID stored" into an array it did not write, and a caller
-	 * that trusts the return value reads uninitialised memory.  That
-	 * is the same shape as the tcgetpgrp()/tcsetpgrp() [EBADF] defect
-	 * test/posix-unistd.c already fences: an argument check that was
-	 * never written, entirely separable from the single-identity
-	 * design (the count this implementation returns is 1 either way).
-	 * Probed on this tree: getgroups(-1, list) returns 1, errno
-	 * untouched.  Re-enable when gidsetsize is validated. */
+	 * non-zero and is less than the 1 this implementation returns, so
+	 * the clause applies exactly and it is a shall-fail, not a
+	 * may-fail.  The array must come back untouched with it: a call
+	 * that returns -1 stored no group IDs, and a caller that trusts a
+	 * "1 group ID stored" answer for a buffer nothing was written to
+	 * reads uninitialised memory. */
+	memset(list, 0x5a, sizeof list);
 	errno = 0;
 	CHECK(getgroups(-1, list) == -1 && errno == EINVAL);
-#endif
+	for (i = 0; i < (int)(sizeof list / sizeof list[0]); i++)
+		CHECK(list[i] == (gid_t)0x5a5a5a5a);
 
-	/* Not fenced, and deliberately so: [EINVAL] for a *positive*
-	 * gidsetsize smaller than the count is unconstructible here rather
-	 * than unimplemented.  The count is 1, and the smallest positive
+	/* [EINVAL] for a *positive* gidsetsize smaller than the count is
+	 * unconstructible here rather than unimplemented, so there is no
+	 * assertion for it.  The count is 1, and the smallest positive
 	 * gidsetsize is 1, so no positive value is ever "less than the
 	 * number of group IDs that would have been returned".  A one-group
-	 * process cannot exhibit that error, on any implementation. */
+	 * process cannot exhibit that error, on any implementation --
+	 * src/unistd/ids.c still spells the comparison against the count
+	 * rather than against zero, so the check does not become wrong if
+	 * that count ever grows. */
 }
 
 /* ============================================================
