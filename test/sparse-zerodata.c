@@ -35,14 +35,46 @@
  * (real Windows Server 2025); under Wine it exits 77 naming the missing
  * mechanism rather than passing vacuously.
  *
- * WHAT NT ACTUALLY DOES (measured; the earlier rule here was WRONG)
+ * WHAT NT ACTUALLY DOES (measured; two earlier rules here were WRONG)
  *
- * On Windows Server 2025 build 26100, NTFS, 4 KB clusters:
+ * On Windows Server 2025 build 26100, NTFS:
  *
- *   On a file MARKED SPARSE, NTFS releases exactly those 64 KB-aligned
- *   allocation units WHOLLY COVERED by the requested range, and zeroes
- *   the remainder of the range in place.  On a file not marked sparse it
+ *   On a file MARKED SPARSE, NTFS releases exactly those allocation
+ *   units WHOLLY COVERED by the requested range, and zeroes the
+ *   remainder of the range in place.  On a file not marked sparse it
  *   only zeroes, and releases nothing.
+ *
+ *   The unit is min(16 * cluster, 65536): sixteen clusters, capped at
+ *   64 KB.  That is NTFS's compression unit.
+ *
+ * The cap is not decoration, and it is why this file derives the unit
+ * from FileFsSizeInformation instead of writing 65536 down.  Measured
+ * across three cluster regimes, with the 4096 leg run first as a control
+ * against the already-known answer so the instrument was validated
+ * before it was trusted:
+ *
+ *     cluster    16 x cluster    MEASURED granularity
+ *      1024          16384             16384
+ *      4096          65536             65536   <- control
+ *      8192         131072             65536
+ *
+ * NEITHER of the two candidates this file previously entertained is
+ * right.  "A constant 64 KB" holds at and above 4 KB clusters and fails
+ * below.  "16 x the cluster size" holds at and below 4 KB clusters and
+ * fails above.  Each is correct in exactly half the range, which is
+ * precisely why 4 KB-cluster data -- everything anyone had -- could not
+ * separate them: 4096 is the crossover point.
+ *
+ * Note what 8192 does, because it is the trap.  It sits on the FLAT part
+ * of the curve, above the crossover, and measures 65536 -- the same
+ * number the incumbent 4 KB volume gives.  Run as a lone "discriminating"
+ * cell against the framing "128 KB if the rule is 16 x cluster, 64 KB if
+ * it is constant", a clean 65536 reads as constant-64 KB CONFIRMED.  It
+ * would have been a false confirmation of the favoured hypothesis, from
+ * a passing run with a passing control, and it was very nearly built.
+ * A cell that can only produce the incumbent answer is not a test of the
+ * incumbent, however carefully the rest of it is constructed.  The
+ * discriminating regimes are BELOW 4096.
  *
  * The banner that used to stand here said the opposite -- that the
  * UNMARKED case was the discriminating one -- and commit 323634e's
@@ -81,30 +113,28 @@
  *
  * WHICH CLUSTER REGIME DID THIS RUN SEE?
  *
- * FileFsSizeInformation is queried and printed once, unconditionally, so
- * the log records the volume's actual bytes-per-cluster instead of
- * leaving a reader to assume 4 KB.  It matters because every published
- * measurement of the 64 KB figure was taken on 4 KB-cluster NTFS, where
- * "a constant 64 KB" and "16 x the cluster size" predict the same
- * number and no amount of such data can separate them.  On any other
- * cluster size the two predictions differ, this file prints both and
- * says which the observation matches, and it reports UNVERIFIED rather
- * than asserting -- because on that volume the expected value is the
- * open question, and asserting it would be deriving the answer instead
- * of measuring it.
+ * FileFsSizeInformation is queried once, unconditionally, and the unit
+ * every expected value below is computed from is DERIVED from it --
+ * min(16 * cluster, 65536) -- rather than written down.  On the 4 KB
+ * runners that still evaluates to 65536, so nothing about the existing
+ * rows changes; the point is that the rule in the file is now the rule
+ * NTFS has, so a run on any other volume computes the right expectation
+ * instead of the 4 KB one.  Every row is asserted on every cluster size,
+ * because the rule is now known for every cluster size.
  *
- * Point NTLIBC_ZD_DIR at such a volume, and NTLIBC_ZD_CLUSTER at the
+ * Point NTLIBC_ZD_DIR at another volume, and NTLIBC_ZD_CLUSTER at the
  * cluster size that was asked for, and this file measures there instead
  * -- after reading the size back off the filesystem and refusing to run
  * if it is not what was requested.  Building the volume is not this
- * file's job.  A hosted Windows runner can attach a VHD, but 1024 is not
- * a legal allocation unit on one (a VHD presents a 4096-byte physical
- * sector and NTFS requires the cluster to be a multiple of it); 8192 is
- * legal and discriminates just as sharply, predicting a 131072-byte unit
- * under "16 x cluster" against 65536 under "constant".  The two
- * candidates that have been considered fail in OPPOSITE directions from
- * 4 KB -- 1024 predicts a smaller unit, 8192 a larger one -- which is
- * why having both would be worth more than having either twice.
+ * file's job.  A hosted Windows runner can attach a VHD; 1024 needs
+ * New-VHD -PhysicalSectorSizeBytes 512, because NTFS requires the
+ * cluster to be a multiple of the physical sector and a VHD presents
+ * 4096 by default.
+ *
+ * If a future run ever wants to re-measure the rule rather than assume
+ * it, the regime to build is BELOW 4096 -- 1024 or 2048.  2048 predicts
+ * 32768, which nothing else predicts.  Do not reach for 8192: see the
+ * trap described above.
  *
  * WHAT IS ASSERTED AND WHAT IS ONLY MEASURED
  *
@@ -235,13 +265,12 @@ HANDLE __fd_handle(int fd);
 #define FILE_SIZE  1048576
 #define FILL_BYTE  0xAB
 
-/* The sparse allocation unit as measured on 4 KB-cluster NTFS.  Named a
- * hypothesis rather than a constant on purpose: every measurement of it
- * comes from volumes where 16 * cluster is also 65536, so the data
- * behind it cannot tell "always 64 KB" from "16 x the cluster size".
- * On a 4 KB volume both agree and this file asserts; elsewhere it prints
- * both predictions and asserts neither.  See the banner. */
-#define UNIT_CONST_64K   65536
+/* The sparse allocation unit is min(16 * cluster, UNIT_CAP): sixteen
+ * clusters, capped at 64 KB.  That is NTFS's compression unit, and it is
+ * derived from the volume's measured cluster size rather than written
+ * down as a number, because writing it down as a number is what was
+ * wrong before.  See the banner for the measurements. */
+#define UNIT_CAP         65536
 #define REGIME_CLUSTER   4096
 
 #define STATUS_INVALID_PARAMETER ((NTSTATUS)0xC000000DL)
@@ -267,7 +296,7 @@ NTSTATUS NTAPI NtSetInformationFile(HANDLE, IO_STATUS_BLOCK *, PVOID, ULONG, int
  * volume and reproduce this file's whole failure one level up: correct
  * arithmetic applied to a stimulus that was never the one requested. */
 static long long g_cluster;      /* bytes per cluster, measured */
-static int       g_assert;       /* 1 only in the regime where the rule is established */
+static long long g_unit;         /* min(16 * g_cluster, UNIT_CAP), derived */
 static int       rows_measured;
 
 static int not_supported(NTSTATUS st)
@@ -493,7 +522,7 @@ static void run_row(const struct row *r, int mark_sparse)
 	NTSTATUS st_sparse = 0, st_zero;
 	HANDLE h;
 	int fd, ok_before, data_row;
-	long long expect_rel_const, expect_rel_16x, observed_rel;
+	long long expect_rel, expect_rel_16x, expect_rel_cap, observed_rel;
 	unsigned in_len;
 
 	snprintf(tag, sizeof tag, "%s/%s", r->name, mark_sparse ? "sparse" : "unmarked");
@@ -581,16 +610,18 @@ static void run_row(const struct row *r, int mark_sparse)
 
 	observed_rel = (long long)before.AllocationSize - (long long)after.AllocationSize;
 
-	/* The two hypotheses, both printed, on every row and every volume.
-	 * On a 4 KB volume they coincide and that is stated rather than
-	 * hidden; elsewhere they differ and the observation picks one. */
-	expect_rel_const = mark_sparse ? released_bytes(r->off, r->beyond, UNIT_CONST_64K) : 0;
-	expect_rel_16x   = mark_sparse ? released_bytes(r->off, r->beyond, 16 * g_cluster) : 0;
-	printf("zerodata[%s]: released observed=%lld  predicted: const-64K=%lld  16x-cluster(%lld)=%lld%s\n",
-	       tag, observed_rel, expect_rel_const, 16 * g_cluster, expect_rel_16x,
-	       expect_rel_const == expect_rel_16x
-	         ? "  [predictions COINCIDE: this row cannot discriminate on this volume]"
-	         : "  [predictions DIFFER: this row discriminates]");
+	/* One prediction, from the rule, on every volume.  The two refuted
+	 * candidates are printed beside it so a reader can see at a glance
+	 * which half of the curve this volume sits on -- below the cap the
+	 * rule tracks 16 x cluster, at or above it the rule is the cap --
+	 * and so that a disagreement names which candidate it matches. */
+	expect_rel      = mark_sparse ? released_bytes(r->off, r->beyond, g_unit) : 0;
+	expect_rel_16x  = mark_sparse ? released_bytes(r->off, r->beyond, 16 * g_cluster) : 0;
+	expect_rel_cap  = mark_sparse ? released_bytes(r->off, r->beyond, UNIT_CAP) : 0;
+	printf("zerodata[%s]: released observed=%lld  predicted=%lld (unit=%lld)  "
+	       "[refuted candidates: 16x-cluster(%lld)=%lld  constant-64K=%lld]\n",
+	       tag, observed_rel, expect_rel, g_unit,
+	       16 * g_cluster, expect_rel_16x, expect_rel_cap);
 
 	if (r->expect == EXPECT_INVALID) {
 		printf("zerodata[%s]: status expectation: STATUS_INVALID_PARAMETER (0xC000000D)\n", tag);
@@ -599,12 +630,13 @@ static void run_row(const struct row *r, int mark_sparse)
 			       "(0x%08lX) -- stock Wine. Real NT is required.\n",
 			       tag, (unsigned long)(unsigned)st_zero);
 			unverified++;
-		} else if (g_assert) {
+		} else {
+			/* Unconditional: whether an inverted or negative range is
+			 * rejected has nothing to do with the volume's cluster
+			 * size, so there is no regime in which this goes unchecked. */
 			CHECK(st_zero == STATUS_INVALID_PARAMETER);
 			CHECK(after.EndOfFile == before.EndOfFile);
 			CHECK(after.AllocationSize == before.AllocationSize);
-		} else {
-			unverified++;
 		}
 		close(fd); free(buf); return;
 	}
@@ -637,20 +669,14 @@ static void run_row(const struct row *r, int mark_sparse)
 	/* ---- contract assertions (success path) ---- */
 	data_row = r->off >= 0 && r->beyond <= FILE_SIZE && r->beyond > r->off;
 
-	if (!g_assert) {
-		printf("zerodata[%s]: NOT ASSERTED: bytes-per-cluster is %lld, not %d. The "
-		       "expected release is exactly the open question on this volume, so this "
-		       "row is a measurement and nothing here is checked against it.\n",
-		       tag, g_cluster, REGIME_CLUSTER);
-		unverified++; close(fd); free(buf); return;
-	}
-
 	/* Zeroing a range is not a truncation, and it does not extend a file. */
 	CHECK(after.EndOfFile == before.EndOfFile);
 	CHECK(after.EndOfFile == FILE_SIZE);
 
-	/* AllocationSize: asserted, not merely measured.  It IS the claim. */
-	CHECK(observed_rel == expect_rel_const);
+	/* AllocationSize: asserted, not merely measured.  It IS the claim.
+	 * Asserted on EVERY cluster size, because the rule is now known for
+	 * every cluster size rather than only for 4096. */
+	CHECK(observed_rel == expect_rel);
 
 	/* The extent list, which is the same claim stated directly.  Release
 	 * of [lo,hi) leaves [0,lo) and [hi,FILE_SIZE); no release leaves one
@@ -658,9 +684,9 @@ static void run_row(const struct row *r, int mark_sparse)
 	{
 		long long lo = 0, hi = 0, exp_off[2], exp_len[2];
 		unsigned exp_n = 0, i;
-		if (expect_rel_const > 0) {
-			lo = ((r->off + UNIT_CONST_64K - 1) / UNIT_CONST_64K) * UNIT_CONST_64K;
-			hi = lo + expect_rel_const;
+		if (expect_rel > 0) {
+			lo = ((r->off + g_unit - 1) / g_unit) * g_unit;
+			hi = lo + expect_rel;
 			if (lo > 0)         { exp_off[exp_n] = 0;  exp_len[exp_n] = lo; exp_n++; }
 			if (hi < FILE_SIZE) { exp_off[exp_n] = hi; exp_len[exp_n] = FILE_SIZE - hi; exp_n++; }
 		} else {
@@ -885,19 +911,17 @@ int main(void)
 		       "the one that was asked for.\n", asked, g_cluster);
 	}
 
-	g_assert = (g_cluster == REGIME_CLUSTER);
+	g_unit = 16 * g_cluster;
+	if (g_unit > UNIT_CAP) g_unit = UNIT_CAP;
 	printf("zerodata: file size %d, fill byte 0x%02X, %d row(s) x {sparse, unmarked}\n",
 	       FILE_SIZE, FILL_BYTE, NROWS);
-	if (g_assert) {
-		printf("zerodata: 4096-byte clusters: 'constant 64 KB' and '16 x cluster' predict "
-		       "the SAME unit here, so this run asserts the whole-unit rule but CANNOT "
-		       "discriminate which of the two rules produces it.\n");
-	} else {
-		printf("zerodata: %lld-byte clusters: 'constant 64 KB' predicts a %d-byte unit and "
-		       "'16 x cluster' predicts %lld. This run DISCRIMINATES them, and asserts "
-		       "nothing, because the expected value is the question.\n",
-		       g_cluster, UNIT_CONST_64K, 16 * g_cluster);
-	}
+	printf("zerodata: allocation unit = min(16 * %lld, %d) = %lld  [%s the cap]\n",
+	       g_cluster, UNIT_CAP, g_unit,
+	       16 * g_cluster >= UNIT_CAP ? "at or above" : "below");
+	if (g_cluster != REGIME_CLUSTER)
+		printf("zerodata: this is NOT the %d-byte-cluster regime the rows were first "
+		       "written against; the expected releases below are derived from the rule "
+		       "and this volume's cluster size, not carried over.\n", REGIME_CLUSTER);
 
 	for (i = 0; i < NROWS; i++) {
 		run_row(&rows[i], 1);
@@ -925,7 +949,7 @@ int main(void)
 	}
 	if (unverified) {
 		printf("UNVERIFIED zerodata: %d measurement(s) went unverified in this "
-		       "environment (see the SKIP / MEASURED-ONLY / NOT ASSERTED lines above for "
+		       "environment (see the SKIP / MEASURED-ONLY lines above for "
 		       "which and why), across %d SET_ZERO_DATA rows and 8 class-19 rows; %d row(s) "
 		       "did reach the FSCTL. No failures in what did run -- and note that the "
 		       "MEASURED-ONLY rows are unverified BY DESIGN, because no value has been "
