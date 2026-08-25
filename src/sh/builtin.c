@@ -7,7 +7,7 @@
  *
  * ---- Why this file exists ---------------------------------------------
  *
- * Until this stage src/sh/exec.c had exactly one built-in, `cd`, matched
+ * Until this stage src/sh/execute.c had exactly one built-in, `cd`, matched
  * with a raw strcmp() on the *unexpanded* first word, and its own
  * comment said so explicitly: "this builtin exists to make stage 4's
  * subshell/brace tests exercisable, not to be a general-purpose builtin
@@ -482,7 +482,7 @@ static int bi_exit(struct sh_builtin_ctx *ctx)
 /* XCU cd(1p), and XCU 2.12: "Working directory as set by cd" is part of
  * the shell execution environment, so this can only ever run in the
  * shell's own process -- there is no cd.exe on any platform, and there
- * could not usefully be one.  Moved here from src/sh/exec.c, which
+ * could not usefully be one.  Moved here from src/sh/execute.c, which
  * implemented it inline against the *unexpanded* first word and said in
  * its own comment that it was "not to be a general-purpose builtin
  * dispatcher"; this file is that dispatcher, and cd is now dispatched
@@ -538,7 +538,7 @@ static int bi_cd(struct sh_builtin_ctx *ctx)
  * '\''  splice: close, escape one, reopen.
  *
  * The deviation that remains, stated rather than hidden: this shell's
- * only variable store is the real `environ` (see src/sh/exec.c), so
+ * only variable store is the real `environ` (see src/sh/execute.c), so
  * what is listed is the environment, not a separate set of unexported
  * shell variables, and there is no collation-order sort. */
 static void write_quoted(const char *v)

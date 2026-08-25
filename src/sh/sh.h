@@ -258,7 +258,7 @@ void __sh_free_command_contents(struct sh_command *c);
  * `f` it always terminates. */
 void __sh_print_list(FILE *f, const struct sh_list *list);
 
-/* ---- execution (stage 2 on -- see src/sh/exec.c) --------------------
+/* ---- execution (stage 2 on -- see src/sh/execute.c) --------------------
  *
  * Each of these returns 0 and writes an exit status through `status`
  * on success, or -1 (status left untouched) for a construct this

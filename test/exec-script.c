@@ -22,7 +22,7 @@
  *     operand, with any remaining arguments passed to the new shell",
  *     and, for a command name containing a <slash>, the same fallback
  *     "with the command name as its first operand".
- *     (src/sh/exec.c's run_interpreted().)
+ *     (src/sh/execute.c's run_interpreted().)
  *
  * Why this is not a conformance nicety on NT.  RtlCreateUserProcess
  * cannot start a script image -- it returns STATUS_INVALID_IMAGE_NOT_MZ
@@ -75,7 +75,7 @@
  * "beside the calling image" is a directory this file controls -- which
  * is what lets the decoy be placed there at all.
  *
- * Cases D and E, the shell's half of the clause, drive src/sh/exec.c's
+ * Cases D and E, the shell's half of the clause, drive src/sh/execute.c's
  * command search directly through __sh_parse()/__sh_exec_list() (the
  * same entry points test/sh-engine.c uses) rather than by running
  * obj/sh/sh.exe.  Same reason: the subject is the [ENOEXEC] branch of
@@ -370,7 +370,7 @@ int main(int argc, char **argv)
 	 * there; the decoy sh.exe in the same directory is what the search
 	 * would find if the shell still looked for an interpreter.
 	 *
-	 * Driven through __sh_parse()/__sh_exec_list() -- src/sh/exec.c's
+	 * Driven through __sh_parse()/__sh_exec_list() -- src/sh/execute.c's
 	 * own entry points, the ones test/sh-engine.c uses -- rather than
 	 * by running obj/sh/sh.exe.  The subject is the [ENOEXEC] branch
 	 * inside that executor, which is in libc.a; see the header.

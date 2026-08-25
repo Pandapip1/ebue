@@ -1,6 +1,28 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
+ * (This file is execute.c, not the exec.c it was until 2026-08: an
+ * `ar' member is named by the *basename* of the object handed to the
+ * archiver -- every archiver strips the directory and none offers a way
+ * to ask otherwise -- and tcc's built-in -ar, which is this project's
+ * $(AR) and the only archiver the boot/kaem bootstrap has, truncates
+ * that basename to 15 characters besides (tcctools.c's tcc_tool_ar()
+ * clamps istrlen to sizeof(arhdro.ar_name)-1 = 15 and writes a '/'
+ * terminator at that offset, with no SysV `//' long-name table to
+ * escape to).  This file and src/process/exec.c, the exec()/execve()
+ * family, therefore both landed in lib/libc.a as a single member name,
+ * `exec.o'.  Nothing had broken -- the archive's symbol index still
+ * resolved every symbol in both objects, which is exactly why it sat
+ * unnoticed until an outside consumer counted members -- but `ar x' and
+ * `ar p' can only ever reach the first of the two, and the POSIX exec()
+ * family has the better claim to `exec.o'.  Because the member name is
+ * capped at 15 characters, no naming scheme derived from the full source
+ * path can make these names unique by construction; what makes the
+ * collision non-recurring instead is tools/linkcheck.sh, which asserts
+ * per arch on every gate run that lib/libc.a's member count equals its
+ * unique-member-name count, and fails the stage naming both colliding
+ * sources if it ever does not.)
+ *
  * Stage 3 added redirections and multi-command pipelines on top of
  * stage 2's simple-command execution; stage 4 (see exec_group()'s
  * header comment further down) adds subshells "( list )" and brace
@@ -1194,7 +1216,7 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  *
  * A standalone subshell needs the same redirection bracketing, plus
  * genuine isolation of variables and cwd. The obvious tool is fork():
- * exec.c's own header comment used to say exactly that ("needs the
+ * this file's own header comment used to say exactly that ("needs the
  * fork() this file's header comment says a plain simple command does
  * not"). It is deliberately not used here. Two things earn that:
  *

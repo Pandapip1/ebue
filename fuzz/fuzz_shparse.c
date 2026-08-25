@@ -7,7 +7,7 @@
  * program text into an AST, entirely in memory: quote state across four
  * kinds of quoting, balanced "$(...)" and "${...}", backquotes,
  * here-documents drained at the newline, IO numbers, pipelines, and-or
- * lists, subshells and brace groups.  src/sh/exec.c is deliberately not
+ * lists, subshells and brace groups.  src/sh/execute.c is deliberately not
  * reached from here -- executing a fuzzer's program would fork.
  *
  * The parser is the single largest untested-against-hostile-input

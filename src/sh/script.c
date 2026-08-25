@@ -392,7 +392,7 @@ static int check_list(const struct sh_list *list)
 	if (!list) return 0;
 	for (it = list->items; it; it = it->next) {
 		if (it->sep == SH_SEP_AMP) {
-			/* src/sh/exec.c's __sh_exec_list() runs an async item
+			/* src/sh/execute.c's __sh_exec_list() runs an async item
 			 * synchronously ("true backgrounding is future work"),
 			 * which is a silently different meaning -- the caller
 			 * blocks, and the list's status is the command's rather
@@ -593,7 +593,7 @@ int __sh_main(int argc, char **argv)
  *
  * The only thing this adds to __sh_main() is that it is re-entrant with
  * respect to a shell that is *already* running in this process, which
- * is exactly the src/sh/exec.c caller's situation: XCU 2.9.1's fallback
+ * is exactly the src/sh/execute.c caller's situation: XCU 2.9.1's fallback
  * is a shell invoked to run one command, not a takeover of the one that
  * invoked it, so the running shell's positional parameters, $0 and
  * function definitions have to survive it.  Save/restore is the same

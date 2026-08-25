@@ -310,7 +310,7 @@ char *__find_program(const char *name, int use_path);
  * argv -- { arg0, command_file, argument..., 0 } -- as one invocation
  * of sh(1p) in this process, and returns its exit status.  Shared by
  * execvp()/execlp() (src/process/exec.c) and the shell's own command
- * search (src/sh/exec.c), so the two clauses are one mechanism.  See
+ * search (src/sh/execute.c), so the two clauses are one mechanism.  See
  * src/sh/script.c, and src/process/exec.c for why it is a call and not
  * a second image. */
 int __sh_run_script(int argc, char *const argv[]);
@@ -336,7 +336,7 @@ int __sh_run_script(int argc, char *const argv[]);
  * the caller owns and *status the command's exit status (2.9.1's "the
  * exit status of the last command substitution performed").  Returns -1
  * with *out NULL and *status untouched for a syntax error in `program`,
- * for a construct src/sh/exec.c still cannot execute (its own -1
+ * for a construct src/sh/execute.c still cannot execute (its own -1
  * convention -- see sh.h), or on resource failure; there is no way to
  * distinguish those here and no caller that would act differently.
  */
@@ -367,7 +367,7 @@ const char *__sh_param_zero(void);
 int __sh_param_count(void);
 const char *__sh_param_get(int n);
 /* XCU 2.5.2 '?': "Expands to the decimal exit status of the most recent
- * pipeline."  src/sh/exec.c maintains it in __sh_exec_pipeline(), which
+ * pipeline."  src/sh/execute.c maintains it in __sh_exec_pipeline(), which
  * is the one place every status this shell produces funnels through --
  * so "the most recent pipeline" is what the variable already holds,
  * not an approximation of it. */

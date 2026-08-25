@@ -1161,7 +1161,7 @@ static void test_wordexp_arith_shift_bounds(void)
  *
  * Live, not fenced. */
 /* Whether a command substitution can capture anything at all here.
- * src/sh/exec.c captures a substituted command's output by pointing
+ * src/sh/execute.c captures a substituted command's output by pointing
  * this process's own fd 1 at a temporary file before spawning it, which
  * a real child inherits -- true under Wine and on real Windows, and NOT
  * true under tools/asan-build.sh's native harness, whose

@@ -94,7 +94,7 @@ int __sh_func_define(const char *name, const char *body)
  * must not survive it, exactly as an assignment or a `cd` must not:
  * 2.12's subshell environment is a copy, and "changes made to the
  * subshell environment shall not affect the shell environment".
- * src/sh/exec.c already brackets `environ`, the working directory and
+ * src/sh/execute.c already brackets `environ`, the working directory and
  * the positional parameters; this is the same bracket for one more kind
  * of state.
  *

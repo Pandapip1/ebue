@@ -127,6 +127,118 @@ for f in lib/crt1.o lib/libc.a lib/ntdll.def; do
 	[ -f "$f" ] || { echo "linkcheck: $f missing -- run 'make' first" >&2; exit 1; }
 done
 
+# ---------------------------------------------------------------------
+# lib/libc.a's member names must be unique.
+#
+# An `ar' member is named by the *basename* of the file handed to ar.
+# Every archiver strips the directory (GNU ar, llvm-ar and tcc's
+# built-in -ar alike) and none of them offers a way to ask for anything
+# else, so a mirrored object tree -- obj/src/process/exec.o and
+# obj/src/sh/exec.o -- collapses into one flat archive namespace whether
+# the build system means it to or not.
+#
+# tcc's ar, which is this project's $(AR) (`AR = $(CC) -ar', and the
+# boot/kaem bootstrap has no other archiver at all), goes one step
+# further: it truncates that basename to 15 characters.  tcctools.c's
+# tcc_tool_ar() clamps `istrlen' to `sizeof(arhdro.ar_name) - 1' and
+# writes the '/' terminator at that offset, and it emits no SysV `//'
+# long-name table to escape to.  So `spawn_file_actions.o' is really
+# stored as `spawn_file_acti', and any two sources anywhere under src/
+# whose basenames agree in their first 15 characters are one member
+# name -- not merely two sources with the identical basename.
+#
+# That 15-character cap is also why this is a check rather than a naming
+# scheme: no injective encoding of a source path exists inside 15
+# characters, so member names cannot be made unique *by construction*
+# without hashing them into illegibility.  What can be guaranteed is
+# that a collision never lands silently, which is this check's whole
+# job.
+#
+# The collision is not hypothetical.  src/process/exec.c (the
+# exec()/execve() family) and src/sh/exec.c (the shell executor, renamed
+# to src/sh/execute.c when this was found) both landed as `exec.o':
+# 308 members under 307 distinct names on x86_64, 310/309 on i386.
+# Nothing had broken -- the archive symbol index still resolved every
+# symbol in both objects, and both tcc's linker and GNU ld linked
+# against it fine -- which is exactly why it sat there unnoticed until
+# an outside consumer counted members.  But `ar x'/`ar p' can only ever
+# reach the first of the two, and any consumer resolving by member name
+# rather than by symbol gets whichever one the archive order hands it.
+#
+# This check exists because that was invisible from inside the tree:
+# nothing failed, nothing warned, and the only reason it was ever found
+# is that somebody outside counted.  A count is cheap and it cannot be
+# fooled by "it links fine here".
+#
+# It lives in linkcheck, rather than in the Makefile, for two reasons.
+# linkcheck is already a per-arch gate stage over the *built* lib/libc.a
+# (linkcheck-i386 and linkcheck-x86_64 are separate stages in
+# tools/gate.sh), and reading the archive back is what makes the
+# 15-character truncation visible at all -- a check over the Makefile's
+# object list would only ever see untruncated names and would miss that
+# entire class.  Putting it in the `lib/libc.a' recipe was the other
+# candidate and is deliberately rejected: tools/gen-kaem.sh rewrites
+# that recipe's dry run into boot/kaem/build-*.kaem and fails on any
+# command it cannot classify, so a check there would have to be taught
+# to the bootstrap generator too, for no gain.
+#
+# Like the missing-file check above, and unlike a symbol finding, this
+# is a structural defect in the artefact rather than a report about the
+# library's contents, so it is not subject to LINKCHECK_STRICT=0.
+#
+# $CC is a command name possibly carrying flags, exactly as at the
+# compile and link sites further down, and must word-split.
+# shellcheck disable=SC2086
+ar_names=$($CC -ar t lib/libc.a 2>&1) || {
+	echo "linkcheck [$ARCH]: FAILED -- could not list lib/libc.a's members with" >&2
+	echo "linkcheck [$ARCH]: '$CC -ar t':" >&2
+	printf '%s\n' "$ar_names" | sed 's/^/linkcheck: /' >&2
+	exit 1
+}
+
+ar_total=$(printf '%s\n' "$ar_names" | grep -c '.')
+ar_uniq=$(printf '%s\n' "$ar_names" | sort | uniq | grep -c '.')
+
+# A floor, so an `ar t' that silently produced nothing (or a handful of
+# lines) cannot pass this check by making 0 equal 0.  The library has
+# had 300-odd objects for a long time and only ever grows; 100 is far
+# below any plausible real value and far above any accident.
+if [ "$ar_total" -lt 100 ]; then
+	echo "linkcheck [$ARCH]: FAILED -- lib/libc.a lists only $ar_total member(s)." >&2
+	echo "linkcheck [$ARCH]: That is too few to be a real build of this library, so the" >&2
+	echo "linkcheck [$ARCH]: member-name uniqueness check below would be vacuous.  Either" >&2
+	echo "linkcheck [$ARCH]: the archive is truncated, or '$CC -ar t' does not list members" >&2
+	echo "linkcheck [$ARCH]: one per line the way this check assumes." >&2
+	exit 1
+fi
+
+if [ "$ar_total" -ne "$ar_uniq" ]; then
+	echo "linkcheck [$ARCH]: FAILED -- lib/libc.a has $ar_total member(s) under only" >&2
+	echo "linkcheck [$ARCH]: $ar_uniq distinct name(s).  An ar member name is the object's" >&2
+	echo "linkcheck [$ARCH]: basename truncated to 15 characters (tcc's ar -- see the comment" >&2
+	echo "linkcheck [$ARCH]: above this check), so two sources in different directories, or" >&2
+	echo "linkcheck [$ARCH]: two long names in the same one, can shadow each other in the" >&2
+	echo "linkcheck [$ARCH]: archive even though their paths differ." >&2
+	echo "linkcheck [$ARCH]: Colliding member name(s), with the sources that produce them:" >&2
+	printf '%s\n' "$ar_names" | sort | uniq -d | while IFS= read -r dup; do
+		echo "linkcheck [$ARCH]:   $dup" >&2
+		find src arch crt -name '*.c' -o -name '*.S' -o -name '*.s' 2>/dev/null |
+		sort | while IFS= read -r f; do
+			b=${f##*/}
+			b=${b%.*}.o
+			case $(printf '%.15s' "$b") in
+				"$dup") echo "linkcheck [$ARCH]:     $f" >&2 ;;
+			esac
+		done
+	done
+	echo "linkcheck [$ARCH]: Rename one of them so the first 15 characters of the object" >&2
+	echo "linkcheck [$ARCH]: basename differ, then run 'make generated' to regenerate the" >&2
+	echo "linkcheck [$ARCH]: boot/kaem bootstrap scripts." >&2
+	exit 1
+fi
+
+echo "linkcheck [$ARCH]: lib/libc.a: $ar_total member(s), $ar_uniq distinct name(s) -- no collisions"
+
 builddir=obj/linkcheck
 rm -rf "$builddir"
 mkdir -p "$builddir" || exit 1

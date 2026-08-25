@@ -1014,7 +1014,7 @@ static void test_exec_reuses_wordexp_param_expansion(const char *self)
  * checked as results by test_exec_cmdsub_in_redirections() below. What
  * is left here is the convention itself, which is still live and still
  * needs a construct that genuinely reaches it: two directly adjacent
- * compound-command stages in one pipeline, which src/sh/exec.c refuses
+ * compound-command stages in one pipeline, which src/sh/execute.c refuses
  * up front rather than deadlock without a fork(). */
 static void test_exec_reports_unimplemented_constructs(const char *self)
 {
@@ -1182,7 +1182,7 @@ static void test_exec_redir_append(const char *self)
  * noclobber option (set -C) is set; this shell has no `set` builtin at
  * all yet (test/sh-design.md's scope), so nothing ever refuses a plain
  * '>' in the first place and '>|' has nothing extra to override --
- * see apply_one_redir()'s SH_R_CLOBBER case in src/sh/exec.c for the
+ * see apply_one_redir()'s SH_R_CLOBBER case in src/sh/execute.c for the
  * same point made where the behavior actually lives. This just checks
  * '>|' still *works* like '>', not that it is indistinguishable in
  * every hypothetical future (a `set -C` builtin would only need to
@@ -1281,7 +1281,7 @@ static void test_exec_redir_order_last_wins(const char *self)
  * points at file), while "cmd 2>&1 >file" does not (fd 2 is duplicated
  * from the *old* fd 1 first, and only then does fd 1 move to file) --
  * this is exactly the ordering apply_redirs()/apply_one_redir() in
- * src/sh/exec.c process left to right, never as a batch. */
+ * src/sh/execute.c process left to right, never as a batch. */
 static void test_exec_redir_dup_output_ordering(const char *self)
 {
 	if (!file_redir_supported(self)) return;
@@ -1389,7 +1389,7 @@ static void test_exec_heredoc_dash_strips_tabs(const char *self)
 
 /* 2.7.4: "If no part of word is quoted, all lines ... shall be
  * expanded for parameter expansion" -- reusing wordexp() (see
- * expand_heredoc() in src/sh/exec.c) rather than a second from-scratch
+ * expand_heredoc() in src/sh/execute.c) rather than a second from-scratch
  * expander. */
 static void test_exec_heredoc_unquoted_expands(const char *self)
 {
@@ -1509,7 +1509,7 @@ static void test_exec_pipeline_stage_redir_overrides_pipe(const char *self)
  * working-directory checks below inspect *this test process's own*
  * getenv()/getcwd() directly, rather than needing a child role, because
  * run() executes the parsed AST in this very process (exec_group() in
- * src/sh/exec.c does not fork for a standalone group -- see its header
+ * src/sh/execute.c does not fork for a standalone group -- see its header
  * comment for why); a group used as a pipeline stage does fork, and
  * test_exec_group_pipeline_stage() below checks specifically that even
  * then nothing leaks back into this process.
@@ -1695,7 +1695,7 @@ static void test_exec_group_nesting(const char *self)
 
 /* A group used as one stage of a multi-command pipeline: its stdout
  * must reach the next stage exactly like a simple command's would
- * (src/sh/exec.c's fork_group_stage()), and -- per 2.12's "each command
+ * (src/sh/execute.c's fork_group_stage()), and -- per 2.12's "each command
  * of a multi-command pipeline is in a subshell environment", which
  * applies regardless of "(...)" vs "{...}" -- an assignment inside a
  * *brace* group used this way must still not leak into the real shell,
@@ -2140,7 +2140,7 @@ static void test_exec_cmdsub_exit_status(const char *self)
 
 /* 2.6.3: "executing command in a subshell environment (see Shell
  * Execution Environment)", i.e. 2.12's -- the same one "( list )" gets,
- * which src/sh/exec.c implements by reusing exec_group()'s own
+ * which src/sh/execute.c implements by reusing exec_group()'s own
  * save-and-restore rather than a second mechanism. So a substituted
  * command's assignment and its `cd` must both be gone afterwards, the
  * way test_exec_subshell_does_not_persist_assignment_and_cd() already
@@ -2236,7 +2236,7 @@ static void test_exec_cmdsub_in_redirections(const char *self)
 /* The -1 "cannot execute this AST node at all" convention (sh.h)
  * survives stage 5: it now means the *substituted* list used a
  * construct this executor still refuses, not that substitution itself
- * is unimplemented. src/sh/exec.c refuses two directly adjacent
+ * is unimplemented. src/sh/execute.c refuses two directly adjacent
  * compound-command pipeline stages (it would deadlock without a
  * fork()), which makes a usable, stable example of one. */
 static void test_exec_cmdsub_propagates_unimplemented(const char *self)
@@ -2285,7 +2285,7 @@ static char *read_all_stdin(size_t *out_len)
 
 /* 2.9.1 step 1: the command name a built-in is matched against is the
  * one that exists *after* the word expansions, not the raw source text
- * -- which is precisely what src/sh/exec.c's old raw strcmp("cd") could
+ * -- which is precisely what src/sh/execute.c's old raw strcmp("cd") could
  * not express.  Both a quoted 'cd' and a $VAR expanding to "cd" have to
  * reach the built-in. */
 static void test_builtin_dispatch_uses_expanded_name(void)

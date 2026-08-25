@@ -33,7 +33,7 @@
  * pattern and for the same reason: this platform has no /bin/true,
  * /bin/echo or /bin/cat to build a test around.
  *
- * Nothing here forks. The shell spawns processes (src/sh/exec.c never
+ * Nothing here forks. The shell spawns processes (src/sh/execute.c never
  * calls fork(), by design) and so does this file, via __spawn() --
  * which matters for the CI Wine legs, whose Wine has no
  * RtlCloneUserProcess and hangs rather than fails on a fork().
@@ -96,7 +96,7 @@ static int find_sh(const char *argv0)
  *
  * Redirection is done by dup2()ing this process's own descriptors
  * immediately before __spawn() and putting them back straight after --
- * the same technique src/sh/exec.c uses for a real redirection, and the
+ * the same technique src/sh/execute.c uses for a real redirection, and the
  * only one available, since __spawn() inherits the table as it stands
  * rather than taking file actions. */
 #define OUTFILE "sh-main-out.txt"

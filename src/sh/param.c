@@ -8,7 +8,7 @@
  *
  * Every other piece of shell state this project has needed so far lives
  * in the real `environ`: an assignment is setenv(), an expansion is
- * getenv(), and src/sh/exec.c says so at length.  Positional parameters
+ * getenv(), and src/sh/execute.c says so at length.  Positional parameters
  * cannot be stored that way and it is worth being explicit about why,
  * because "just put them in the environment as $1, $2, ..." looks
  * plausible until three separate rules break:
