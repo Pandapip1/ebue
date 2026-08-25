@@ -1086,7 +1086,34 @@ static void test_snprintf_eoverflow(void)
  * <apostrophe> flag and [EOVERFLOW] and walked past this. */
 static void test_printf_z_modifier_width(void)
 {
-	size_t big = (size_t)0xdeadbeefULL << 32;
+	/* size_t, ssize_t and ptrdiff_t are 64 bits on the LLP64 target
+	 * this defect lived on and 32 bits on i386, so both the values and
+	 * the decimals they must print are per-arch.  Selected with
+	 * sizeof() rather than #if because ntlibc's <stdint.h> defines no
+	 * SIZE_MAX to test against (INT64_MAX and friends are there; the
+	 * pointer-width limits are not), and a runtime select compiles and
+	 * type-checks both arms on both arches.
+	 *
+	 * On i386 long, size_t and ptrdiff_t are all 32 bits and occupy the
+	 * same argument slot, so va_arg(ap, long) and va_arg(ap, size_t)
+	 * fetch identical bytes and the original defect is NOT observable
+	 * here -- which is exactly why it survived: the fence has to run on
+	 * the LLP64 arch to bite.  The i386 arm is still worth running: it
+	 * holds the %z/%t grammar itself (accepted, not misparsed as a
+	 * stray modifier) and %zn's store to the whole object. */
+	int wide = sizeof(size_t) > 4;
+	size_t big = wide ? (size_t)(0xdeadbeefULL << 32) : (size_t)0xdeadbeefUL;
+	const char *big_text = wide ? "16045690981097406464" : "3735928559";
+	/* The signed value must be one a 32-bit long CANNOT hold, or the
+	 * assertion proves nothing: -1 sign-extends to the same bits either
+	 * way, and mutation-testing confirmed that a -1-only check passes
+	 * with the defect restored.  0xdeadbeef is above 2^31, so read
+	 * through a 32-bit long it comes back negative -- that is the
+	 * discriminating value, and it is only representable in a 64-bit
+	 * ssize_t.  On i386 no such value exists (see above), so that arm
+	 * uses the same bit pattern read as a 32-bit signed quantity, which
+	 * still round-trips %zd and %td against %lld. */
+	long long sval = wide ? 0xdeadbeefLL : -559038737LL;
 	size_t n = (size_t)-1;
 	ptrdiff_t t = -1;
 	char b[64], ref[64];
@@ -1103,23 +1130,18 @@ static void test_printf_z_modifier_width(void)
 	snprintf(ref, sizeof ref, "%llu", (unsigned long long)big);
 	snprintf(b, sizeof b, "%zu", big);
 	CHECK(strcmp(b, ref) == 0);
-	CHECK(strcmp(b, "16045690981097406464") == 0);
+	CHECK(strcmp(b, big_text) == 0);
 
-	/* Signed, and t as well as z.  The value must be one that a 32-bit
-	 * long CANNOT hold, or the assertion proves nothing: -1 sign-extends
-	 * to the same bits either way, and mutation-testing confirmed that a
-	 * -1-only check passes with the defect restored.  0xdeadbeef is
-	 * above 2^31, so read through a 32-bit long it comes back negative. */
-	snprintf(ref, sizeof ref, "%lld", 0xdeadbeefLL);
-	snprintf(b, sizeof b, "%zd", (ssize_t)0xdeadbeefLL);
+	/* Signed, and t as well as z. */
+	snprintf(ref, sizeof ref, "%lld", sval);
+	snprintf(b, sizeof b, "%zd", (ssize_t)sval);
 	CHECK(strcmp(b, ref) == 0);
-	snprintf(b, sizeof b, "%td", (ptrdiff_t)0xdeadbeefLL);
+	snprintf(b, sizeof b, "%td", (ptrdiff_t)sval);
 	CHECK(strcmp(b, ref) == 0);
 	/* and -1 still round-trips, so the fix is not "always widen wrongly" */
 	snprintf(ref, sizeof ref, "%lld", -1LL);
 	snprintf(b, sizeof b, "%zd", (ssize_t)-1);
 	CHECK(strcmp(b, ref) == 0);
-
 	/* %zn must write all of a size_t, not its low half -- the worst of
 	 * the three, because it corrupts an object the caller owns rather
 	 * than merely printing a wrong number.  Pre-set to all-ones so a
