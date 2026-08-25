@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 | | |
 |---|---|
-| ntlibc | `ebddd6b822713ac95d76c57646c3d2f5f3c0569e` |
+| ntlibc | `99e5418749b6e98cd93a6146e660f5f04e168d1f` |
 | LTP (`third_party/ltp`) | `4c0cfb849f19beed68175de9fb7d02df55987084` |
 | suite | `testcases/open_posix_testsuite/conformance/interfaces/` |
 | census | 1610 tests in 190 directories (189 interfaces + `testfrmw`) |
@@ -431,7 +431,7 @@ headers all resolve, the first symbol/macro/type that does not.
 <!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.
 Do not edit by hand -- see "the data block" in tools/posix-gapmap.sh.
 
-s	ntlibc	ebddd6b822713ac95d76c57646c3d2f5f3c0569e
+s	ntlibc	99e5418749b6e98cd93a6146e660f5f04e168d1f
 s	ltp	4c0cfb849f19beed68175de9fb7d02df55987084
 s	cc	x86_64-win32-tcc
 s	tests	1610
