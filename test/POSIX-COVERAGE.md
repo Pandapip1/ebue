@@ -3829,13 +3829,13 @@ Wine is sound for them; the `[ENOEXEC]` answer comes from
 | execv / execve | "[ENOENT] A component of path or file does not name an existing file or path or file is an empty string" — a missing program and the empty string | covered | test/posix-unistd-exec.c (`test_path_errors`) |
 | execl / execle | the same [ENOENT], through the l-forms' `va_list` argument builder | covered | test/posix-unistd-exec.c (`test_path_errors`) |
 | execvp / execlp | the same [ENOENT], for a name in no PATH directory ("Otherwise, the path prefix for this file is obtained by a search of the directories passed as the environment variable PATH") | covered | test/posix-unistd-exec.c (`test_path_errors`) |
-| execvp / execlp | ... and for the **empty string** | **BUG** — see below | fenced, `test_path_errors` |
+| execvp / execlp | ... and for the **empty string** | covered — was a BUG, fixed; see below | test/posix-unistd-exec.c (`test_path_errors`) |
 | execv / execl | "[ENOTDIR] A component of the new process image file's path prefix names an existing file that is neither a directory nor a symbolic link to a directory ..." | covered | test/posix-unistd-exec.c (`test_path_errors`) |
 | execv / execve | "The new image shall be constructed from a regular, executable file" — a directory is not one, so the call must fail and leave the caller running | covered | test/posix-unistd-exec.c (`test_not_a_regular_file`) |
 | execv / execve | "[EACCES] The new process image file is not a regular file and the implementation does not support execution of files of its type" — the *errno* for that case | **BUG** — see below | fenced, `test_not_a_regular_file` |
 | fexecve | "[EBADF] The fd argument is not a valid file descriptor open for executing" — for a descriptor open on a **directory**, which is the one place on this page where EBADF is the right answer. Asserted rather than fenced, to pin the distinction the [EACCES] fence draws | covered | test/posix-unistd-exec.c (`test_not_a_regular_file`) |
 | all seven | "[EACCES] Search permission is denied for a directory listed in the new process image file's path prefix, or the new process image file denies execution permission" | N/A — `src/unistd/access.c`'s `X_OK` is satisfied by the file merely existing (NTFS has no execute bit this library maps a mode onto — `src/stat/chmod.c`'s banner), and one fixed identity cannot construct an unsearchable directory. Neither branch is reachable | — |
-| all seven | RETURN VALUE "If one of the exec functions returns to the calling process image, an error has occurred; the return value shall be -1, and errno shall be set" — every call in the file, 19 of them | covered | test/posix-unistd-exec.c (all four functions, counted in `main`) |
+| all seven | RETURN VALUE "If one of the exec functions returns to the calling process image, an error has occurred; the return value shall be -1, and errno shall be set" — every call in the file, 23 of them | covered | test/posix-unistd-exec.c (all four functions, counted in `main`) |
 | execve | "If execution fails, the calling process image remains unchanged" — in the form that once bit this tree: an open **FD_CLOEXEC** descriptor must survive a failed exec and still be readable at its old offset. `src/process/exec.c`'s banner records the regression (`__fd_close_all_cloexec()` used to run *before* the spawn, so a failed `execv()` handed back a process whose cloexec fds were already shut) | covered | test/posix-unistd-exec.c (`test_failed_exec_leaves_image_unchanged`) |
 | execve | ... and the environment a *failed* `execve()` was asked to install does not take effect on the caller: "the environment for the new process image shall be taken from the external variable environ in the calling process" | covered | test/posix-unistd-exec.c (`test_failed_exec_leaves_image_unchanged`) |
 | all seven | "[ELOOP]", "[ENAMETOOLONG]", "[ETXTBSY]", "[ENOMEM]" | N/A — a symlink cycle handed to NT's own resolver; `[ETXTBSY]`/`[ENOMEM]` are may-fail. `[ENAMETOOLONG]` is a shall-fail that this tree answers `ENOENT` to, but that is a library-wide path-resolution property already fenced against `utime()` in `test/posix-strings.c`, not an exec defect, and is not re-opened here | — |
@@ -3843,17 +3843,45 @@ Wine is sound for them; the `[ENOEXEC]` answer comes from
 
 ### Bugs found (unistd.h exec group)
 
-1. **`execvp()`/`execlp()` report `[EBADF]` for an empty `file`
-   argument, where `exec.html` requires `[ENOENT]`.** The v/l forms get
-   this right; the p-forms do not. `src/process/exec.c:62` computes
+1. **`execvp()`/`execlp()` reported `[EBADF]` for an empty `file`
+   argument, where `exec.html` requires `[ENOENT]` — fixed.** The v/l
+   forms got this right; the p-forms did not. `src/process/exec.c`'s
+   `execvpe()` computes
    `use_path = !strchr(file, '/') && !strchr(file, '\\')`, which is
-   true for `""`, so `__find_program("", 1)` runs the PATH search with
-   an empty name. `try_dir()` then builds `<PATH entry>\` — a directory
-   name with nothing appended — and **accepts it**, because
-   `access(p, X_OK)` succeeds on a directory. `execvp("")` therefore
-   resolves to the first directory in `PATH` and tries to execute it.
-   The empty string is a case `__find_program()` has to reject before
-   the loop.
+   true for `""`, so `__find_program("", 1)` ran the PATH search with
+   an empty name. `try_dir()` then built `<PATH entry>\` — a directory
+   name with nothing appended — and **accepted it**, because
+   `access(p, X_OK)` succeeds on a directory (NTFS has no execute bit
+   `src/unistd/access.c` maps `X_OK` onto). `execvp("")` therefore
+   resolved to the *first* directory in `PATH` and asked NT to run it
+   as a process image, so the errno the caller saw was whatever the
+   failed image section mapped to — measured under Wine, errno 9
+   `EBADF`; on real NT the same route reaches `EIO`, per the
+   measurement in `fexecve()`'s comment in `src/process/exec.c`. Either
+   way, never `ENOENT`.
+
+   **Fixed in the commit that unfenced it.** `__find_program()`
+   (`src/process/find_program.c`) now rejects an empty name with
+   `ENOENT` before either branch, which is where the clause belongs:
+   the empty string names nothing whether or not a PATH search is
+   asked for, and answering it in the library rather than from an
+   NTSTATUS makes the errno independent of which of NT or Wine is
+   underneath. The reject is deliberately *not* in `execvpe()`, so the
+   other callers of the same resolver — `posix_spawnp()`
+   (`src/process/posix_spawn.c`) and the shell's command lookup
+   (`src/sh/exec.c`) — get the same answer. Non-empty names are
+   untouched, and `test_path_errors()` now carries a **positive
+   control** saying so: it prepends an empty entry to `PATH` (the
+   current directory, which `main()` has `chdir()`ed into) and
+   `execvp()`s a non-PE text file placed there, which must fail for
+   some reason *other* than `[ENOENT]` — a resolver that satisfied
+   this clause by refusing every lookup would answer `ENOENT` and fail
+   it. Measured under Wine: `ENOEXEC` (8) for the on-`PATH` name, and
+   `ENOENT` (2) for both `""` and a name in no `PATH` directory, so
+   the three outcomes are genuinely distinguished. The
+   directory-as-process-image case below is untouched as well
+   (verified: `execv("./ex-dir")` still reports errno 9), so its fence
+   keeps its premise.
 
 2. **Executing a directory reports `[EBADF]`, which is not an errno
    `exec.html` allows the path-taking forms to produce.** The page's

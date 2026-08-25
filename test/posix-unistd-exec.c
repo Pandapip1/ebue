@@ -158,7 +158,7 @@ static void test_enoexec(void)
 static void test_path_errors(void)
 {
 	char *av[2];
-	int fd;
+	int fd, r;
 
 	av[0] = (char *)"x";
 	av[1] = 0;
@@ -208,35 +208,83 @@ static void test_path_errors(void)
 	CHECK(execl("ex-plain.txt/prog", "x", (char *)0) == -1 && errno == ENOTDIR);
 	reached++;
 
-#if 0	/* BUG: the PATH-searching forms report [EBADF] for an empty
-	 * file argument instead of [ENOENT].
-	 *
-	 * exec.html ERRORS: "The exec functions, except for fexecve(),
-	 * *shall* fail if: ... [ENOENT] A component of path or file does
-	 * not name an existing file or path or file is an empty string."
-	 * The v/l forms get this right (asserted unfenced above); the
-	 * p-forms do not.
-	 *
-	 * Mechanism: src/process/exec.c:62 computes
-	 *     use_path = !strchr(file, '/') && !strchr(file, '\\');
-	 * which is true for "", so __find_program("", 1)
-	 * (src/process/find_program.c) runs the PATH search with an empty
-	 * name.  try_dir() then builds `<PATH entry>\` -- a directory
-	 * name, with nothing appended -- and accepts it, because
-	 * `access(p, X_OK)` succeeds on a directory
-	 * (src/unistd/access.c).  execvp("") therefore resolves to the
-	 * first directory in PATH and tries to execute *that*, and the
-	 * errno the caller sees is whatever spawning a directory produces
-	 * (see the fence below).  The empty string is a case
-	 * __find_program() has to reject before the loop, exactly as
-	 * exec.html requires.  Probed on this tree: execvp("", av) and
-	 * execlp("", "x", 0) both return -1 with errno 9 (EBADF).
-	 * Re-enable when the p-forms reject an empty file argument. */
+	/* The same clause reaches the p-forms through their PATH search.
+	 * `use_path` in src/process/exec.c's execvpe() is true for "" --
+	 * an empty name has no <slash> -- so the empty string has to be
+	 * rejected by __find_program() (src/process/find_program.c)
+	 * before the PATH loop runs.  It cannot be left to the loop: an
+	 * empty name makes try_dir() build `<PATH entry>\`, a directory
+	 * name with nothing appended, which `access(p, X_OK)` accepts
+	 * (src/unistd/access.c), so execvp("") would resolve to the first
+	 * directory in PATH and report whatever spawning a directory
+	 * produces rather than [ENOENT]. */
 	errno = 0;
 	CHECK(execvp("", av) == -1 && errno == ENOENT);
+	reached++;
 	errno = 0;
 	CHECK(execlp("", "x", (char *)0) == -1 && errno == ENOENT);
-#endif
+	reached++;
+
+	/* Positive control for the two assertions above.  "Reject the
+	 * empty string" is a requirement a resolver could satisfy by
+	 * failing every lookup, and every other p-form assertion in this
+	 * function wants ENOENT too, so on its own the group cannot tell
+	 * a working PATH search from one that refuses outright.  This
+	 * pins the other side: a name that *is* in a PATH directory must
+	 * still be found, and must fail for a reason that is not
+	 * [ENOENT].
+	 *
+	 * The name is put on PATH rather than found there, because the
+	 * search is over the Windows PATH (';'-separated, no current
+	 * directory implied) and nothing this test can execute is on it.
+	 * An empty entry means the current directory, as on Unix -- which
+	 * is this test's own temporary directory, since main() chdir()s
+	 * into it -- so prepending one is enough.  The file is the same
+	 * non-PE text image the [ENOEXEC] group above uses, so the
+	 * resolver succeeding is visible as ENOEXEC: found, not runnable.
+	 * (Same oracle caveat as that group: ENOEXEC comes from
+	 * RtlCreateUserProcess, so the windows-test legs are the
+	 * authority on the exact errno.  The load-bearing half here is
+	 * that it is not ENOENT.) */
+	{
+		const char *oldpath = getenv("PATH");
+		char *saved = oldpath ? strdup(oldpath) : 0;
+		CHECK(!oldpath || saved != NULL);
+
+		fd = open("ex-onpath.sh", O_CREAT | O_WRONLY | O_TRUNC, 0755);
+		CHECK(fd >= 0);
+		if (fd >= 0) {
+			CHECK(write(fd, "#!/bin/sh\necho hello\n", 21) == 21);
+			CHECK(close(fd) == 0);
+
+			{
+				size_t n = saved ? strlen(saved) : 0;
+				char *withdot = malloc(n + 2);
+				CHECK(withdot != NULL);
+				if (withdot) {
+					withdot[0] = ';';   /* leading empty entry == "." */
+					memcpy(withdot + 1, saved ? saved : "", n + 1);
+					CHECK(setenv("PATH", withdot, 1) == 0);
+					free(withdot);
+				}
+			}
+
+			errno = 0;
+			r = execvp("ex-onpath.sh", av);
+			printf("observed: execvp(\"ex-onpath.sh\") = %d, errno=%d "
+			       "(must not be %d ENOENT; %d ENOEXEC under Wine)\n",
+			       r, errno, ENOENT, ENOEXEC);
+			CHECK(r == -1 && errno != ENOENT);
+			reached++;
+			errno = 0;
+			CHECK(execlp("ex-onpath.sh", "x", (char *)0) == -1 && errno != ENOENT);
+			reached++;
+
+			if (saved) CHECK(setenv("PATH", saved, 1) == 0);
+			CHECK(unlink("ex-onpath.sh") == 0);
+		}
+		free(saved);
+	}
 
 	CHECK(unlink("ex-plain.txt") == 0);
 }
@@ -450,11 +498,11 @@ int main(void)
 
 	/* Every call this file makes is one POSIX requires to fail, so
 	 * reaching here at all is the "calling process image remains
-	 * unchanged" clause holding 19 times over.  The count is asserted
+	 * unchanged" clause holding 23 times over.  The count is asserted
 	 * rather than left implicit so that an exec which silently started
 	 * *succeeding* -- and therefore never returned -- cannot be
 	 * mistaken for a shorter run that passed. */
-	CHECK(reached == 19);
+	CHECK(reached == 23);
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);
