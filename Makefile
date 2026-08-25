@@ -298,8 +298,26 @@ TEST_SRCS = $(filter-out $(srcdir)/test/delayall.c,$(sort $(wildcard $(srcdir)/t
 TEST_EXES = $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
 TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 
+# TEST_DEPFLAGS is the same mechanism DEPFLAGS provides for library
+# objects, applied to the test binaries -- which compile and link in one
+# step, so the depfile is named from the .exe rather than from a .o.
+#
+# Without it a test binary depended on its own .c file and the libraries
+# and on NOTHING ELSE: not <tar.h>, not <stdio.h>, not the generated
+# obj/include/bits/alltypes.h.  Editing a header and re-running `make
+# obj/test/foo.exe` rebuilt nothing and silently ran the previous
+# binary.  That is the same class of defect the DEPFLAGS comment above
+# describes for private headers -- "a stale .o ... would link without
+# complaint" -- and it bit for real: two mutation runs against
+# include/tar.h came back falsely clean because the mutated header was
+# never compiled in.
+#
+# It matters most for exactly the work that touches headers, where the
+# alternative is remembering to delete the target by hand every time.
+TEST_DEPFLAGS = -MMD -MF $(@:.exe=.d)
+
 obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
 
 # test/rpath.c delay-loads this DLL from its own directory ($ORIGIN)
 # to exercise the real resolution path -- it links against nothing of
@@ -356,7 +374,7 @@ obj/test/delayall-plugin.dll: $(srcdir)/test/delayall-plugin-src/delayall-plugin
 # order is what turns "unresolved reference to ntlibc_rpath_load" etc.
 # into a clean link).
 obj/test/delayall.exe: $(srcdir)/test/delayall.c $(ALL_LIBS) obj/test/delayall-plugin.dll | obj/test
-	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -Wl,--delay-all -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< obj/test/delayall-plugin.dll lib/delayload2.o -Llib -lc -lntdll
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) $(TEST_DEPFLAGS) -Wl,--delay-all -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< obj/test/delayall-plugin.dll lib/delayload2.o -Llib -lc -lntdll
 
 TEST_EXES += obj/test/delayall.exe
 # TEST_RUN is a recursively-expanded (`=`) variable, so it re-reads
@@ -653,3 +671,6 @@ distclean: clean
 .PHONY: all clean install install-libs install-headers install-tools check distclean
 
 -include $(ALL_OBJS:.o=.d)
+# The same, for the test binaries (see TEST_DEPFLAGS).  Absent on a
+# clean tree, which is harmless: the first build creates them.
+-include $(TEST_EXES:.exe=.d)
