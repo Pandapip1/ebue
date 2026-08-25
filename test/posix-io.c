@@ -372,6 +372,44 @@ static void test_pipe(void)
 	close(fd[0]);
 }
 
+#if 0	/* BUG: fsync() on a pipe reports success where POSIX requires a
+	 * shall-fail [EINVAL].  fsync.html ERRORS: "[EINVAL] The fildes
+	 * argument does not refer to a file on which this operation is
+	 * possible."
+	 *
+	 * Mechanism: src/unistd/fsync.c:13 is
+	 *     if (f->type != __FD_FILE) return 0;
+	 * -- every descriptor that is not a regular file short-circuits to
+	 * success before NtFlushBuffersFile() is ever reached, so a pipe,
+	 * a socket and a console fd all report that they were flushed.
+	 * EINVAL appears nowhere in that file.  Returning 0 is the
+	 * dangerous direction: a caller that fsync()s a pipe to force
+	 * durability is told it succeeded.
+	 *
+	 * This is NOT a consequence of <sys/mman.h> Pass 1.  It is a
+	 * pre-existing gap that Pass 1 only made VISIBLE: OPTS fsync/7-1
+	 * asserts exactly this clause and had never been built before,
+	 * because it #includes <sys/mman.h> (fsync/7-1.c:16) and that
+	 * header did not exist.  Shipping the header moved the test out of
+	 * the header-absent class into the set that runs, and it fails.
+	 *
+	 * Re-enable when fsync() rejects a non-file descriptor.  fdatasync()
+	 * is a bare alias of fsync() (src/unistd/fsync.c:19) and inherits
+	 * the same defect, so it is asserted here too. */
+static void test_fsync_pipe_einval(void)
+{
+	int fd[2];
+
+	CHECK(pipe(fd) == 0);
+	errno = 0;
+	CHECK(fsync(fd[1]) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(fdatasync(fd[1]) == -1 && errno == EINVAL);
+	close(fd[0]);
+	close(fd[1]);
+}
+#endif
+
 /* ---- chdir: chdir.html ERRORS ENOENT ---- */
 static void test_chdir(void)
 {
