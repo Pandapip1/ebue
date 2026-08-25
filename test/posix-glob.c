@@ -1755,6 +1755,63 @@ static void test_wordexp_badchar_nocmd_and_literal_splitting(void)
 /* wordexp.html RETURN VALUE: "[WRDE_SYNTAX] Shell syntax error, such
  * as unbalanced parentheses or unterminated string." Nothing asserted
  * any of the five paths src/wordexp/ produces it from. */
+#if NTLIBC_TEST(BUG, posix_glob_wordexp_line_continuation) /* BUG: wordexp() does not perform <backslash><newline> line
+	 * continuation.  wordexp.html makes the input "subject to quoting
+	 * as in XCU Section 2.2, Quoting", and XCU 2.2.1, Escape Character
+	 * (Backslash): "A <backslash> that is not quoted shall preserve the
+	 * literal value of the following character, with the exception of a
+	 * <newline>.  If a <newline> follows the <backslash>, the shell
+	 * shall interpret this as line continuation.  The <backslash> and
+	 * <newline> shall be removed before splitting the input into
+	 * tokens."  XCU 2.2.3 keeps the backslash special before a
+	 * <newline> inside double-quotes, so the same removal applies
+	 * there.
+	 *
+	 * Mechanism: both escape paths in src/wordexp/wordexp.c push the
+	 * escaped byte verbatim and have no <newline> case.  Unquoted:
+	 *
+	 *     if (c == '\\') {
+	 *             if (!p[1]) { rc = WRDE_SYNTAX; goto fail; }
+	 *             if (fbuf_push(&field, p[1], 1)) { ... }
+	 *
+	 * and inside double-quotes the guard even lists '\n' among the
+	 * characters the backslash may escape --
+	 * strchr("\"\\$`\n", p[1]) -- and then pushes it as a literal like
+	 * any other.  So the newline survives into the field, and because
+	 * it is marked literal it does not act as a separator either: the
+	 * caller gets one word with an embedded newline where POSIX says
+	 * both bytes are gone before tokenising even begins.
+	 *
+	 * Single-quoted '\<newline>' is right, and must stay right -- there
+	 * the backslash is not an escape character at all and both bytes
+	 * are data.
+	 *
+	 * Re-enable when the two escape paths drop the pair. */
+static void test_wordexp_line_continuation(void)
+{
+	wordexp_t we;
+
+	CHECK(wordexp("ab\\\ncd", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && !strcmp(we.we_wordv[0], "abcd"));
+	wordfree(&we);
+
+	/* XCU 2.2.3: the same inside double-quotes */
+	CHECK(wordexp("\"ab\\\ncd\"", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && !strcmp(we.we_wordv[0], "abcd"));
+	wordfree(&we);
+
+	/* repeated, and still one word */
+	CHECK(wordexp("x\\\ny\\\nz", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && !strcmp(we.we_wordv[0], "xyz"));
+	wordfree(&we);
+
+	/* but a single-quoted backslash-newline is two literal bytes */
+	CHECK(wordexp("'a\\\nb'", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && !strcmp(we.we_wordv[0], "a\\\nb"));
+	wordfree(&we);
+}
+#endif
+
 static void test_wordexp_syntax_errors(void)
 {
 	wordexp_t we;
