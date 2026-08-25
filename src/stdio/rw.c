@@ -15,6 +15,7 @@
 
 int __fgetc(FILE *f)
 {
+	__byte_oriented(f);
 	if (f->nunget) return f->unget[--f->nunget];
 	if (!f->readable) { errno = EBADF; f->err = 1; return EOF; }
 	if (__toread(f) < 0) return EOF;
@@ -32,6 +33,7 @@ int __fgetc(FILE *f)
 int __fputc(int c, FILE *f)
 {
 	unsigned char ch = (unsigned char)c;
+	__byte_oriented(f);
 	if (!f->writable) { errno = EBADF; f->err = 1; return EOF; }
 	if (__towrite(f) < 0) return EOF;
 	if (f->bufmode == _IONBF) {
@@ -74,6 +76,7 @@ size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 	size_t total = size * nmemb, got = 0;
 	unsigned char *p = ptr;
 
+	__byte_oriented(f);
 	if (!size || !nmemb) return 0;
 	if (!f->readable) { errno = EBADF; f->err = 1; return 0; }
 	while (f->nunget && got < total) p[got++] = (unsigned char)f->unget[--f->nunget];
@@ -105,6 +108,7 @@ size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 	size_t total = size * nmemb, put = 0;
 	const unsigned char *p = ptr;
 
+	__byte_oriented(f);
 	if (!size || !nmemb) return 0;
 	if (!f->writable) { errno = EBADF; f->err = 1; return 0; }
 	if (__towrite(f) < 0) return 0;

@@ -73,6 +73,17 @@ size_t wcsrtombs (char *__restrict, const wchar_t **__restrict, size_t, mbstate_
 size_t mbsnrtowcs (wchar_t *__restrict, const char **__restrict, size_t, size_t, mbstate_t *__restrict);
 size_t wcsnrtombs (char *__restrict, const wchar_t **__restrict, size_t, size_t, mbstate_t *__restrict);
 
+wint_t fgetwc (FILE *);
+wchar_t *fgetws (wchar_t *__restrict, int, FILE *__restrict);
+wint_t fputwc (wchar_t, FILE *);
+int fputws (const wchar_t *__restrict, FILE *__restrict);
+int fwide (FILE *, int);
+wint_t getwc (FILE *);
+wint_t getwchar (void);
+wint_t putwc (wchar_t, FILE *);
+wint_t putwchar (wchar_t);
+wint_t ungetwc (wint_t, FILE *);
+
 size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict);
 
 int wcscoll (const wchar_t *, const wchar_t *);

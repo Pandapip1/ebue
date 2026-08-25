@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <sys/types.h>
+#include <wchar.h>
 #include "libc.h"
 
 struct _IO_FILE {
@@ -40,6 +41,22 @@ struct _IO_FILE {
 
 	int unget[8];
 	int nunget;
+
+	/* Wide-character side (src/stdio/wide.c).  `wide` is fwide()'s
+	 * orientation: <0 byte, 0 undecided, >0 wide.  The two mbstate_t
+	 * are the read and write conversion states -- separate, because a
+	 * read-write stream can be mid-character in one direction while the
+	 * other is at rest, and because this target's 16-bit wchar_t means
+	 * the READ state can hold a low surrogate owed to the caller while
+	 * the WRITE state holds a high surrogate awaiting its partner (see
+	 * src/stdlib/mbrtowc.c).  wunget is ungetwc()'s single pushback
+	 * slot: the byte `unget` array above cannot serve, because a wide
+	 * character pushed back after conversion has no byte form to put
+	 * there and POSIX guarantees only one level of wide pushback. */
+	int wide;
+	mbstate_t wst_in, wst_out;
+	wchar_t wunget;
+	int nwunget;
 
 	/* fmemopen / open_memstream */
 	unsigned char *mem_buf;
@@ -100,6 +117,16 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap);
 __wraps static inline unsigned long long __neg_mag(unsigned long long uv)
 {
 	return -uv;
+}
+
+/* Give a stream byte orientation if it has none yet (fwide.html: "a
+ * byte input/output function has been applied to a stream without
+ * orientation" makes it byte-oriented).  Called from the byte-level
+ * primitives so fwide() reports the truth; deliberately a test rather
+ * than an unconditional store so the branch is perfectly predicted. */
+static inline void __byte_oriented(FILE *f)
+{
+	if (!f->wide) f->wide = -1;
 }
 
 /* fread/fwrite/fgetc/fputc without the (nonexistent) locking; the public

@@ -734,6 +734,12 @@ ABI), listed below.
 | mbsrtowcs / wcsrtombs | conversion via mbrtowc()/wcrtomb(); \*src set correctly; dst==NULL -> length only | covered | test/posix-wchar.c |
 | btowc | WEOF for EOF or an invalid one-byte char in the initial shift state | covered, plus a documented divergence: under UTF-8, bytes 0x80-0xFF are never a complete one-byte character, so `btowc()` correctly returns WEOF for them even though the POSIX-locale clause's literal text (written for a single-byte-identity encoding) says it shouldn't | test/posix-wchar.c |
 | wctob | EOF unless c has a length-1 representation in the initial shift state | covered | test/posix-wchar.c |
+| fgetwc / getwc / getwchar | one wide character per call incl. a multibyte sequence and a supplementary character arriving as two `wchar_t` from one four-byte sequence; a null wide character distinguished from WEOF; `[EILSEQ]` for invalid bytes and for end-of-file mid-sequence, setting the error rather than the end-of-file indicator | covered | test/posix-wchar.c |
+| fputwc / putwc / putwchar | `wc` returned on success, including for a lone high surrogate that writes nothing until its partner arrives; the whole multibyte sequence written; `[EILSEQ]` for an unpaired low surrogate | covered | test/posix-wchar.c |
+| fgetws | the `n-1` bound counted in wide characters not bytes; `<newline>` retained; null-wide-character termination; a final unterminated line returned and end-of-file reported on the next call; a null pointer at end-of-file with nothing read | covered | test/posix-wchar.c |
+| fputws | non-negative on success; the terminating null wide character not written; an empty string succeeds; a surrogate pair crossing one conversion state | covered | test/posix-wchar.c |
+| ungetwc | one level of pushback, guaranteed and enforced; WEOF rejected leaving the stream unchanged; the end-of-file indicator cleared; a non-ASCII character returned unchanged (the slot holds a wide character, not its bytes) | covered | test/posix-wchar.c |
+| fwide | no orientation on a newly opened stream; a query (mode 0) does not create one; an orientation once set is never changed in either direction; byte and wide I/O functions set it without fwide() being called | covered | test/posix-wchar.c |
 | `<wctype.h>` (isw*/tow*/wctype/wctrans) | header does not exist in this library at all | N/A (whole header missing) | -- |
 | wcstoimax / wcstoumax | equivalent to the wcstol/wcstoll/wcstoul/wcstoull family; overflow/EINVAL/base-0 auto-detection | covered | test/posix-wchar.c |
 

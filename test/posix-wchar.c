@@ -34,12 +34,11 @@
  *            surrogate pair, since wcwidth() is only ever handed one
  *            code unit at a time and can never see its partner).
  *   UNIMPL:  absent, but nothing about UTF-16 prevents implementing it.
- * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib,
- * 2026-08-24): fgetwc, fgetws, fputwc, fputws, fwide, getwc, getwchar,
- * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
+ * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib
+ * + src/stdio, 2026-08-24): fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, open_wmemstream, wcwidth, wcswidth,
- * wcstod, wcstof, wcstold.  Confirmed *present*
+ * wscanf, open_wmemstream, wcwidth, wcswidth, wcstod, wcstof,
+ * wcstold.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -52,7 +51,8 @@
  * wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul, wcstoull, and
  * (src/string/wcscoll.c, wcsxfrm.c) wcscoll, wcscoll_l, wcsxfrm,
  * wcsxfrm_l, plus (src/stdlib/mbrtowc.c) mbsnrtowcs and wcsnrtombs and
- * (src/time/wcsftime.c) wcsftime.  Also now present, as
+ * (src/time/wcsftime.c) wcsftime and (src/stdio/wide.c) fgetwc, getwc,
+ * getwchar, fputwc, putwc, putwchar, fgetws, fputws, ungetwc, fwide.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -67,6 +67,7 @@
 #include <limits.h>
 #include <inttypes.h>
 #include <locale.h>
+#include <unistd.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -798,11 +799,6 @@ static void test_wcstoimax(void)
 /* ---------------------------------------------------------------------
  * fgetwc / getwc / getwchar -- fgetwc.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fgetwc()/getwc()/getwchar() -- fgetwc.html DESCRIPTION,
-       * RETURN VALUE.  Implementable: reads one converted wide character
-       * per call, no per-call knowledge of surrogate pairing is needed
-       * (a caller assembling a supplementary character just calls twice,
-       * exactly like the existing mbrtowc()-based UTF-8 decoder does). */
 static void test_fgetwc(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
@@ -819,18 +815,136 @@ static void test_fgetwc(void)
 	CHECK(fgetwc(f) == WEOF);
 	CHECK(feof(f));
 	fclose(f);
+
+	/* A multibyte character spanning several bytes is ONE wide
+	 * character: U+00E9 is 0xC3 0xA9 in UTF-8. */
+	f = fopen("test.tmp", "w+");
+	fputs("\xc3\xa9z", f);
+	rewind(f);
+	CHECK(fgetwc(f) == 0xe9);
+	CHECK(fgetwc(f) == L'z');
+	fclose(f);
+
+	/* A supplementary character is four bytes and, with this target's
+	 * 16-bit wchar_t, TWO wide characters -- the UTF-16 surrogate
+	 * pair.  The second comes from the conversion state with no
+	 * further bytes read. */
+	f = fopen("test.tmp", "w+");
+	fputs("\xf0\x9f\x98\x80!", f);	/* U+1F600 */
+	rewind(f);
+	CHECK(fgetwc(f) == 0xd83d);
+	CHECK(fgetwc(f) == 0xde00);
+	CHECK(fgetwc(f) == L'!');
+	CHECK(fgetwc(f) == WEOF);
+	fclose(f);
+
+	/* fgetwc.html [EILSEQ]: "The data obtained from the input stream
+	 * does not form a valid character."  The error indicator, not the
+	 * end-of-file indicator, is what gets set. */
+	f = fopen("test.tmp", "w+");
+	fputs("\xff", f);
+	rewind(f);
+	errno = 0;
+	CHECK(fgetwc(f) == WEOF);
+	CHECK(errno == EILSEQ);
+	CHECK(ferror(f));
+	CHECK(!feof(f));
+	fclose(f);
+
+	/* End of file part-way through a multibyte character is also an
+	 * encoding error, not a clean end of file. */
+	f = fopen("test.tmp", "w+");
+	fputs("a\xc3", f);
+	rewind(f);
+	CHECK(fgetwc(f) == L'a');
+	errno = 0;
+	CHECK(fgetwc(f) == WEOF);
+	CHECK(errno == EILSEQ);
+	CHECK(ferror(f));
+	fclose(f);
+
+	/* A null byte converts to a null WIDE character, which is a
+	 * perfectly good return value and must not be confused with WEOF. */
+	f = fopen("test.tmp", "wb+");
+	fputc(0, f);
+	fputc('x', f);
+	rewind(f);
+	CHECK(fgetwc(f) == 0);
+	CHECK(!feof(f));
+	CHECK(fgetwc(f) == L'x');
+	fclose(f);
+
 	remove("test.tmp");
 }
-#endif
+
+/* getwchar()/putwchar() are fgetwc(stdin)/fputwc(stdout) and can only
+ * be tested by pointing those two streams somewhere checkable.  stdin
+ * is simply reopened on a scratch file; stdout uses the same
+ * save-with-dup, reopen, restore-with-dup2 dance test/posix-unreferenced.c
+ * uses for puts(), because CHECK()'s own diagnostic goes to stdout, so
+ * every result is captured into a local and only asserted once stdout is
+ * itself again. */
+static void test_getwchar_putwchar(void)
+{
+	FILE *f;
+	int saved, restored = 0, reopened = 0;
+	wint_t r1 = 0, r2 = 0, r3 = 0;
+	char got[8];
+	size_t n = 0;
+
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	fputs("\xc3\xa9Z", f);		/* U+00E9 then 'Z' */
+	fclose(f);
+
+	/* "getwchar() shall be equivalent to getwc(stdin)" */
+	CHECK(freopen("test.tmp", "rb", stdin) != 0);
+	CHECK(getwchar() == 0xe9);
+	CHECK(getwchar() == L'Z');
+	CHECK(getwchar() == WEOF);
+
+	/* "putwchar(wc) shall be equivalent to putwc(wc, stdout)" */
+	saved = dup(1);
+	CHECK(saved >= 0);
+	if (saved < 0) { remove("test.tmp"); return; }
+	CHECK(fflush(stdout) == 0);
+	if (freopen("test2.tmp", "wb", stdout)) {
+		reopened = 1;
+		r1 = putwchar(0xe9);
+		r2 = putwchar(L'Z');
+		r3 = fwide(stdout, 0) > 0 ? 1 : 0;
+		fflush(stdout);
+	}
+	if (freopen("test3.tmp", "wb", stdout)) restored = 1;
+	if (restored) {
+		restored = dup2(saved, fileno(stdout)) == fileno(stdout);
+		setvbuf(stdout, 0, _IOLBF, 0);
+	}
+	close(saved);
+
+	CHECK(reopened);
+	CHECK(restored);
+	if (reopened) {
+		/* "Upon successful completion ... shall return wc" */
+		CHECK(r1 == 0xe9);
+		CHECK(r2 == L'Z');
+		/* the wide function oriented the stream */
+		CHECK(r3 == 1);
+		f = fopen("test2.tmp", "rb");
+		CHECK(f != 0);
+		if (f) { n = fread(got, 1, sizeof got, f); fclose(f); }
+		/* U+00E9 goes out as its two UTF-8 bytes, not as one */
+		CHECK(n == 3);
+		CHECK(!memcmp(got, "\xc3\xa9Z", 3));
+	}
+	remove("test.tmp");
+	remove("test2.tmp");
+	remove("test3.tmp");
+}
 
 /* ---------------------------------------------------------------------
  * fputwc / putwc / putwchar -- fputwc.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fputwc()/putwc()/putwchar() -- fputwc.html DESCRIPTION,
-       * RETURN VALUE, ERRORS.  Implementable per code unit; a caller
-       * writing a supplementary character just calls it twice with the
-       * two surrogate halves, same shape as wcrtomb()'s existing
-       * pending-high-surrogate state machine. */
 static void test_fputwc(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
@@ -841,17 +955,47 @@ static void test_fputwc(void)
 	CHECK(fgetc(f) == 'A');
 	CHECK(fgetc(f) == 'B');
 	fclose(f);
+
+	/* A wide character outside ASCII becomes its whole multibyte
+	 * sequence: U+00E9 is two bytes. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(fputwc(0xe9, f) == 0xe9);
+	rewind(f);
+	CHECK(fgetc(f) == 0xc3);
+	CHECK(fgetc(f) == 0xa9);
+	CHECK(fgetc(f) == EOF);
+	fclose(f);
+
+	/* A supplementary character is two wchar_t here and one 4-byte
+	 * sequence on the stream.  fputwc.html requires wc to be returned
+	 * for BOTH halves -- the high surrogate is accepted even though
+	 * nothing can be written until its partner arrives. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(fputwc(0xd83d, f) == 0xd83d);
+	CHECK(fputwc(0xde00, f) == 0xde00);
+	rewind(f);
+	CHECK(fgetc(f) == 0xf0);
+	CHECK(fgetc(f) == 0x9f);
+	CHECK(fgetc(f) == 0x98);
+	CHECK(fgetc(f) == 0x80);
+	CHECK(fgetc(f) == EOF);
+	fclose(f);
+
+	/* fputwc.html [EILSEQ]: "The wide-character code wc does not
+	 * correspond to a valid character."  A low surrogate with no high
+	 * surrogate before it is exactly that. */
+	f = fopen("test.tmp", "wb+");
+	errno = 0;
+	CHECK(fputwc(0xde00, f) == WEOF);
+	CHECK(errno == EILSEQ);
+	CHECK(ferror(f));
+	fclose(f);
 	remove("test.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * fgetws -- fgetws.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fgetws() -- fgetws.html DESCRIPTION, RETURN VALUE.
-       * Implementable: reads code units (not codepoints) up to n-1,
-       * newline, or EOF, and NUL-terminates -- exactly wcsncpy's unit
-       * granularity, no surrogate awareness required. */
 static void test_fgetws(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
@@ -863,20 +1007,50 @@ static void test_fgetws(void)
 	 * be terminated with a null wide-character code." */
 	CHECK(fgetws(buf, 8, f) == buf);
 	CHECK(!wcscmp(buf, W("abc\n")));
+	/* the newline is retained and reading continues after it */
+	CHECK(fgetws(buf, 8, f) == buf);
+	CHECK(!wcscmp(buf, W("def\n")));
 	/* "the end-of-file indicator ... shall be set and fgetws() shall
 	 * return a null pointer" once at EOF with nothing read. */
 	fseek(f, 0, SEEK_END);
 	CHECK(fgetws(buf, 8, f) == 0);
+	CHECK(feof(f));
+	fclose(f);
+
+	/* "until n-1 wide characters are read": the bound is in wide
+	 * characters, and the remainder stays on the stream. */
+	f = fopen("test.tmp", "wb+");
+	fputs("abcdef\n", f);
+	rewind(f);
+	CHECK(fgetws(buf, 4, f) == buf);
+	CHECK(!wcscmp(buf, W("abc")));
+	CHECK(fgetwc(f) == L'd');
+	fclose(f);
+
+	/* A final line with no newline is returned, terminated; the next
+	 * call is the one that reports end of file. */
+	f = fopen("test.tmp", "wb+");
+	fputs("xy", f);
+	rewind(f);
+	CHECK(fgetws(buf, 8, f) == buf);
+	CHECK(!wcscmp(buf, W("xy")));
+	CHECK(fgetws(buf, 8, f) == 0);
+	fclose(f);
+
+	/* The bound counts WIDE characters, not bytes: three U+00E9 are
+	 * six bytes on the stream and three units in the buffer. */
+	f = fopen("test.tmp", "wb+");
+	fputs("\xc3\xa9\xc3\xa9\xc3\xa9", f);
+	rewind(f);
+	CHECK(fgetws(buf, 4, f) == buf);
+	CHECK(buf[0] == 0xe9 && buf[1] == 0xe9 && buf[2] == 0xe9 && buf[3] == 0);
 	fclose(f);
 	remove("test.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * fputws -- fputws.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fputws() -- fputws.html DESCRIPTION, RETURN VALUE.
-       * Implementable per code unit, terminating NUL not written. */
 static void test_fputws(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
@@ -887,17 +1061,35 @@ static void test_fputws(void)
 	CHECK(fgetc(f) == 'a' && fgetc(f) == 'b' && fgetc(f) == 'c');
 	CHECK(fgetc(f) == EOF);	/* no terminating NUL byte written */
 	fclose(f);
+
+	/* An empty string writes nothing and still succeeds. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(fputws(W(""), f) >= 0);
+	rewind(f);
+	CHECK(fgetc(f) == EOF);
+	fclose(f);
+
+	/* Non-ASCII goes out as its multibyte form; a supplementary
+	 * character crosses the surrogate pair correctly because both
+	 * halves go through the stream's single conversion state. */
+	f = fopen("test.tmp", "wb+");
+	{
+		static const wchar_t mixed[4] = { 0xe9, 0xd83d, 0xde00, 0 };
+		CHECK(fputws(mixed, f) >= 0);
+	}
+	rewind(f);
+	{
+		char got[8];
+		CHECK(fread(got, 1, sizeof got, f) == 6);
+		CHECK(!memcmp(got, "\xc3\xa9\xf0\x9f\x98\x80", 6));
+	}
+	fclose(f);
 	remove("test.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * ungetwc -- ungetwc.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: ungetwc() -- ungetwc.html DESCRIPTION, RETURN VALUE.
-       * Implementable as a one-wchar_t pushback slot per stream, same
-       * granularity as fgetwc(); pushing back one half of a surrogate
-       * pair is no different from pushing back any other code unit. */
 static void test_ungetwc(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
@@ -911,30 +1103,92 @@ static void test_ungetwc(void)
 	/* "If wc is WEOF, the operation shall fail and the input stream
 	 * shall be left unchanged." */
 	CHECK(ungetwc(WEOF, f) == WEOF);
+	CHECK(fgetwc(f) == WEOF);	/* still at end of file */
+	fclose(f);
+
+	/* "the end-of-file indicator for the stream shall be cleared" --
+	 * and a character that was never read may be pushed back, since
+	 * the pushed-back value need not be the one that was there. */
+	f = fopen("test.tmp", "wb+");
+	fputs("A", f);
+	rewind(f);
+	CHECK(fgetwc(f) == L'A');
+	CHECK(fgetwc(f) == WEOF);
+	CHECK(feof(f));
+	CHECK(ungetwc(L'Q', f) == L'Q');
+	CHECK(!feof(f));
+	CHECK(fgetwc(f) == L'Q');
+	CHECK(fgetwc(f) == WEOF);
+	fclose(f);
+
+	/* A non-ASCII wide character survives pushback unchanged: the
+	 * pushback slot holds a wide character, not the bytes it came
+	 * from, so nothing is re-encoded on the way back out. */
+	f = fopen("test.tmp", "wb+");
+	fputs("\xc3\xa9", f);
+	rewind(f);
+	CHECK(fgetwc(f) == 0xe9);
+	CHECK(ungetwc(0xe9, f) == 0xe9);
+	CHECK(fgetwc(f) == 0xe9);
+	fclose(f);
+
+	/* Only one level is guaranteed, and this implementation provides
+	 * exactly one: a second pushback with the first still outstanding
+	 * fails rather than silently discarding it. */
+	f = fopen("test.tmp", "wb+");
+	fputs("AB", f);
+	rewind(f);
+	CHECK(fgetwc(f) == L'A');
+	CHECK(ungetwc(L'A', f) == L'A');
+	CHECK(ungetwc(L'Z', f) == WEOF);
+	CHECK(fgetwc(f) == L'A');
+	CHECK(fgetwc(f) == L'B');
 	fclose(f);
 	remove("test.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * fwide -- fwide.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fwide() -- fwide.html DESCRIPTION, RETURN VALUE.
-       * Implementable as one extra int per FILE; no wchar_t-width
-       * dependency at all. */
 static void test_fwide(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
+	/* "A newly opened stream has no orientation": a pure query
+	 * (mode == 0) must report that without creating one. */
+	CHECK(fwide(f, 0) == 0);
+	CHECK(fwide(f, 0) == 0);
 	/* mode > 0 requests wide orientation */
 	CHECK(fwide(f, 1) > 0);
 	/* "If the orientation of the stream has already been determined,
 	 * fwide() shall not change it." -- a later negative request must
 	 * still report wide. */
 	CHECK(fwide(f, -1) > 0);
+	CHECK(fwide(f, 0) > 0);
+	fclose(f);
+
+	/* the same in the other direction */
+	f = fopen("test.tmp", "w+");
+	CHECK(fwide(f, -1) < 0);
+	CHECK(fwide(f, 1) < 0);
+	fclose(f);
+
+	/* "a byte input/output function has been applied to a stream
+	 * without orientation" makes it byte-oriented, without fwide()
+	 * being called at all. */
+	f = fopen("test.tmp", "w+");
+	fputc('x', f);
+	CHECK(fwide(f, 0) < 0);
+	CHECK(fwide(f, 1) < 0);
+	fclose(f);
+
+	/* and a wide function does the same in the wide direction */
+	f = fopen("test.tmp", "w+");
+	CHECK(fputwc(L'x', f) == L'x');
+	CHECK(fwide(f, 0) > 0);
+	CHECK(fwide(f, -1) > 0);
 	fclose(f);
 	remove("test.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * fwprintf / wprintf / swprintf (+ v-variants) -- fwprintf.html
@@ -1864,6 +2118,14 @@ int main(void)
 	test_mbsnrtowcs();
 	test_wcsnrtombs();
 	test_wcsftime();
+
+	test_fwide();
+	test_fgetwc();
+	test_getwchar_putwchar();
+	test_fputwc();
+	test_fgetws();
+	test_fputws();
+	test_ungetwc();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

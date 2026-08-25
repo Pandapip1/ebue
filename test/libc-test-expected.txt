@@ -59,7 +59,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=65 xfail=23 unclassified=4 unbuildable=54
+# COUNTS pass=66 xfail=23 unclassified=4 unbuildable=53
 #
 argv                              pass
 basename                          pass
@@ -78,7 +78,16 @@ fcntl                             unclassified  NOT-YET-TRIAGED -- F_SETLK acros
 fdopen                            pass
 fflush-exit                       pass
 fgets-eof                         pass
-fgetwc-buffering                  unbuildable  tcc: error: unresolved reference to 'fgetwc'
+# fgetwc-buffering builds and links as of src/stdio/wide.c, but it opens
+# with libc-test's t_setutf8(), which needs nl_langinfo(CODESET) -- a
+# function this target does not have.  tools/libc-test.sh's shim reports
+# that at run time, so the test comes out UNVERIFIED (rc=77) here and on
+# the real-Windows leg alike, and the unverified path never compares a
+# verdict against the row below.  `pass` is recorded rather than an
+# xfail because there is no defect to fence: the row states what must
+# hold the moment <langinfo.h> exists, and until then the stage says
+# "unverified" in its own output rather than letting this look checked.
+fgetwc-buffering                  pass
 flockfile-list                    unbuildable  lib/libc.a: error: link symbol 'malloc' defined twice
 fnmatch                           xfail:defect  GAP-ACCOUNTING.md:264 lists fnmatch as implemented-but-not-clause-audited; 5 pattern failures incl. [[?*\] and a bare backslash
 fpclassify-invalid-ld80           pass

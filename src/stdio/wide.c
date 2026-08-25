@@ -1,0 +1,164 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * The wide-character stdio family: fgetwc/getwc/getwchar,
+ * fputwc/putwc/putwchar, fgetws, fputws, ungetwc and fwide, per
+ * fgetwc.html, fputwc.html, fgetws.html, fputws.html, ungetwc.html and
+ * fwide.html.
+ *
+ * Everything here is a thin layer over the byte primitives in rw.c and
+ * the UTF-8 <-> UTF-16 converter in src/stdlib/mbrtowc.c: a stream
+ * still holds bytes, and a wide character is what those bytes decode
+ * to.  Only two pieces of per-stream state are new (see stdio_impl.h):
+ * the fwide() orientation, and a single wide pushback slot.
+ *
+ * THE 16-BIT wchar_t SHOWS UP IN EXACTLY ONE PLACE, and it is worth
+ * naming because it is invisible in the code.  A supplementary
+ * character is one 4-byte UTF-8 sequence but TWO wchar_t, so
+ * mbrtowc() hands back the high surrogate having consumed all four
+ * bytes and keeps the low one in the conversion state, to be returned
+ * on the next call with no bytes consumed (its (size_t)-3 return).
+ * fgetwc() therefore asks the state for a pending unit BEFORE it reads
+ * anything, which is why every call starts with a zero-length
+ * mbrtowc().  Symmetrically wcrtomb() answers 0 for a lone high
+ * surrogate -- nothing written yet -- which fputwc() must report as
+ * success returning wc, not as an error.  Neither case is a POSIX
+ * clause; both are forced by the wchar_t width and are the only reason
+ * this file is not a dozen one-liners.
+ */
+#include <stdio.h>
+#include <wchar.h>
+#include <limits.h>
+#include <errno.h>
+#include "stdio_impl.h"
+
+/* Read one wide character.  WEOF on end-of-file or error, with the
+ * stream's eof/err indicator set by the byte layer or here. */
+static wint_t getwc_core(FILE *f)
+{
+	char b;
+	size_t i = 0, r;
+	wchar_t wc = 0;
+
+	if (f->nwunget) { f->nwunget = 0; return (wint_t)f->wunget; }
+
+	/* A unit owed from a previous surrogate pair, delivered from state
+	 * alone.  A zero-length call cannot consume anything, so this is
+	 * safe to ask unconditionally. */
+	if (mbrtowc(&wc, "", 0, &f->wst_in) == (size_t)-3) return (wint_t)wc;
+
+	for (;;) {
+		int c = __fgetc(f);
+		if (c == EOF) {
+			/* End of input in the middle of a sequence is an
+			 * encoding error, not a clean EOF: fgetwc.html says
+			 * [EILSEQ] when "the data obtained from the input
+			 * stream does not form a valid character". */
+			if (i) { errno = EILSEQ; f->err = 1; }
+			return WEOF;
+		}
+		b = (char)c;
+		i++;
+		r = mbrtowc(&wc, &b, 1, &f->wst_in);
+		if (r == (size_t)-1) { f->err = 1; return WEOF; }
+		if (r == (size_t)-2) {
+			if (i >= MB_LEN_MAX) { errno = EILSEQ; f->err = 1; return WEOF; }
+			continue;	/* incomplete: feed another byte */
+		}
+		return (wint_t)wc;	/* r == 0 is a null wide character, not EOF */
+	}
+}
+
+/* Write one wide character.  WEOF on error. */
+static wint_t putwc_core(wchar_t wc, FILE *f)
+{
+	char buf[MB_LEN_MAX];
+	size_t r, i;
+
+	r = wcrtomb(buf, wc, &f->wst_out);
+	if (r == (size_t)-1) { f->err = 1; return WEOF; }	/* wcrtomb set EILSEQ */
+	/* r == 0: a high surrogate held for its partner.  Nothing is
+	 * written, and fputwc.html still requires wc to be returned -- the
+	 * character has been accepted, it is simply not complete yet. */
+	for (i = 0; i < r; i++)
+		if (__fputc((unsigned char)buf[i], f) == EOF) return WEOF;
+	return (wint_t)wc;
+}
+
+wint_t fgetwc(FILE *f)
+{
+	if (!f->wide) f->wide = 1;
+	return getwc_core(f);
+}
+
+wint_t getwc(FILE *f) { return fgetwc(f); }
+wint_t getwchar(void) { return fgetwc(stdin); }
+
+wint_t fputwc(wchar_t wc, FILE *f)
+{
+	if (!f->wide) f->wide = 1;
+	return putwc_core(wc, f);
+}
+
+wint_t putwc(wchar_t wc, FILE *f) { return fputwc(wc, f); }
+wint_t putwchar(wchar_t wc) { return fputwc(wc, stdout); }
+
+/* ungetwc.html: "push the wide character ... back onto the input
+ * stream", one level guaranteed; WEOF is rejected and leaves the stream
+ * unchanged; the end-of-file indicator is cleared. */
+wint_t ungetwc(wint_t wc, FILE *f)
+{
+	if (wc == WEOF || !f->readable) return WEOF;
+	if (f->nwunget) return WEOF;	/* one level, as guaranteed */
+	f->wunget = (wchar_t)wc;
+	f->nwunget = 1;
+	f->eof = 0;
+	if (!f->wide) f->wide = 1;
+	return wc;
+}
+
+/* fgetws.html: read at most n-1 wide characters, stopping after a
+ * <newline> (which is retained) or at end-of-file, then terminate with
+ * a null wide character.  A null pointer if end-of-file is reached with
+ * nothing read, or on error. */
+wchar_t *fgetws(wchar_t *__restrict ws, int n, FILE *__restrict f)
+{
+	wchar_t *p = ws;
+
+	if (n <= 0) return 0;
+	if (!f->wide) f->wide = 1;
+	while (n > 1) {
+		wint_t c = getwc_core(f);
+		if (c == WEOF) {
+			if (f->err || p == ws) return 0;
+			break;
+		}
+		*p++ = (wchar_t)c;
+		n--;
+		if (c == L'\n') break;
+	}
+	*p = 0;
+	return ws;
+}
+
+/* fputws.html: write the string, NOT its terminating null wide
+ * character.  A non-negative number on success, -1 (EOF) on error. */
+int fputws(const wchar_t *__restrict ws, FILE *__restrict f)
+{
+	if (!f->wide) f->wide = 1;
+	for (; *ws; ws++)
+		if (putwc_core(*ws, f) == WEOF) return -1;
+	return 0;
+}
+
+/* fwide.html: set the orientation only if the stream has none; report
+ * it either way.  A stream already oriented is never changed, which is
+ * why a query (mode == 0) and a losing request are the same code path. */
+int fwide(FILE *f, int mode)
+{
+	if (!f->wide) {
+		if (mode > 0) f->wide = 1;
+		else if (mode < 0) f->wide = -1;
+	}
+	return f->wide;
+}
