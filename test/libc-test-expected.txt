@@ -122,7 +122,7 @@ getpwnam_r-errno                  pass
 iconv_open                        unbuildable  iconv_open.c:3: error: include file 'iconv.h' not found
 iconv-roundtrips                  unbuildable  iconv-roundtrips.c:3: error: include file 'iconv.h' not found
 inet_ntop-v4mapped                xfail:defect  GAP-ACCOUNTING.md:242; inet_pton(AF_INET6,"::ffff:1.2.3.4") fails outright
-inet_pton                         xfail:defect  GAP-ACCOUNTING.md:242 arpa/inet.h not clause-audited; leading zero accepted, embedded space accepted, AF_INET6 "::" rejected
+inet_pton                         xfail:defect  GAP-ACCOUNTING.md:242 arpa/inet.h not clause-audited; embedded space accepted, AF_INET6 "::" rejected
 inet_pton-empty-last-field        xfail:defect  GAP-ACCOUNTING.md:242; "1:2:3:4:5:6:7::" mis-parsed and an over-long address accepted
 ipc_msg                           unbuildable  ipc_msg.c:9: error: include file 'sys/msg.h' not found
 ipc_sem                           unbuildable  ipc_sem.c:9: error: include file 'sys/sem.h' not found

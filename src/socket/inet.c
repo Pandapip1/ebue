@@ -123,6 +123,18 @@ int inet_pton(int af, const char *__restrict src, void *__restrict dst)
 		int digits = 0;
 		unsigned v = 0;
 		if (i) { if (*p != '.') return 0; p++; }
+		/* inet_ntop.html gives inet_pton() the strict form
+		 * "ddd.ddd.ddd.ddd where 'ddd' is a one to three digit decimal
+		 * number", and in the same paragraph says it "does not accept
+		 * other formats (such as the octal numbers...that inet_addr()
+		 * accepts)".  A leading '0' followed by another digit is
+		 * exactly the spelling inet_addr() above hands to
+		 * strtoul(base 0) as octal, so reading it here as decimal
+		 * would make one string mean two addresses through two
+		 * functions of this library.  A lone "0" is a one-digit
+		 * decimal number and stays legal -- it is only a zero with
+		 * more digits behind it that is rejected. */
+		if (p[0] == '0' && p[1] >= '0' && p[1] <= '9') return 0;
 		while (*p >= '0' && *p <= '9') {
 			v = v * 10 + (unsigned)(*p - '0');
 			if (v > 255) return 0;
