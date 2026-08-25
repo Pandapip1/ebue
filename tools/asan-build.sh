@@ -440,6 +440,77 @@ not_native()
 	esac
 }
 
+# The OTHER axis, and why there are two lists rather than one pattern.
+#
+# `-win` in a test's name means "Wine cannot run this".  That is not the
+# same claim as "the native stub build cannot run this", which is what
+# not_native() above records -- and the two genuinely come apart.
+# Verified by content, not assumed: obj/asan/test holds real ELF
+# executables for fork-win, fork-handles-win, fork-cloexec-exec-win,
+# process-win and posix-fork-clauses-win, each with an empty .link.err
+# and a non-empty .out, and obj/asan/unlinkable.txt is empty.  They link
+# and they RUN here, because this build has a real fork() where Wine
+# lacks RtlCloneUserProcess.  posix-kill-perm-win is excluded above for a
+# reason that has nothing to do with Wine.  So not_native() must stay a
+# per-test list and must NOT grow a `*-win` pattern; see the note in
+# posix-kill-perm-win's own entry.
+#
+# What that leaves is a gap rather than an error.  A NEW test/*-win.c
+# named in neither list is rejected by nothing: it is simply linked, and
+# what happens next is decided by whether the link happens to succeed.
+# If it does, `make asan` runs it while `make check` skips it -- the
+# Makefile's TEST_RUN filters `%-win.exe` mechanically, by suffix, with
+# no per-test opinion at all -- so the two harnesses diverge on a file
+# nobody made a decision about, and the divergence is invisible because
+# both stay green.  tools/test-policy.py does not cover this: it governs
+# source-level NTLIBC_TEST fences inside a test, not which harness runs
+# the file.
+#
+# This list closes the gap by making the absence loud instead.  Every
+# test/*-win.c must appear in exactly one of the two lists, so adding one
+# forces an explicit answer on each axis separately.  Membership here
+# asserts only the native-build axis -- "the stub build CAN run this" --
+# and says nothing about Wine, which is what the suffix already said.
+win_runs_native()
+{
+	case $1 in
+	fork-win|fork-handles-win|fork-cloexec-exec-win|process-win|posix-fork-clauses-win)
+		echo yes ;;
+	*)  echo "" ;;
+	esac
+}
+
+# Enforced before anything is linked, so the diagnostic is about the
+# missing decision rather than about a link error downstream of it.
+win_unclassified=
+for wt in $(cd "$srcdir" && echo test/*-win.c); do
+	wn=$(basename "$wt" .c)
+	[ "$wn" = "*-win" ] && continue          # no matches: the glob stayed literal
+	[ -n "$(not_native "$wn")" ] && continue
+	[ -n "$(win_runs_native "$wn")" ] && continue
+	win_unclassified="$win_unclassified $wn"
+done
+if [ -n "$win_unclassified" ]; then
+	echo "asan: test/*-win.c named in NEITHER list:$win_unclassified" >&2
+	echo "asan:" >&2
+	echo "asan: The -win suffix says Wine cannot run it. It does not say" >&2
+	echo "asan: whether THIS build -- native ELF against fuzz/ntstubs.c --" >&2
+	echo "asan: can. Those are different axes and each needs its own answer." >&2
+	echo "asan:" >&2
+	echo "asan: Left unanswered the file is linked anyway, and the outcome is" >&2
+	echo "asan: decided by whether that link happens to succeed: if it does," >&2
+	echo "asan: 'make asan' runs it while 'make check' skips it (the Makefile" >&2
+	echo "asan: filters %-win.exe by suffix), and the two harnesses diverge" >&2
+	echo "asan: with both still reporting green." >&2
+	echo "asan:" >&2
+	echo "asan: Pick one, in tools/asan-build.sh:" >&2
+	echo "asan:   not_native()      -- and give the reason it cannot run here," >&2
+	echo "asan:                        which is what that list stores." >&2
+	echo "asan:   win_runs_native() -- it runs natively despite the suffix," >&2
+	echo "asan:                        as fork-win and process-win do." >&2
+	exit 2
+fi
+
 
 TINC="-I$srcdir/obj/include -I$srcdir/include -I$srcdir/arch/$ARCH -I$srcdir/arch/generic"
 ran=0 passed=0 nolink=0 skipped=0 unverified=0
