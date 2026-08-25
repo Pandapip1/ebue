@@ -514,26 +514,41 @@ static void test_glob_noescape(void)
 }
 #endif
 
-/* N/A: glob.html APPLICATION USAGE explicitly places tilde expansion
- * out of scope for glob() itself ("Applications that need tilde and
- * parameter expansion should use wordexp()") -- so this is not a gap
- * in glob() at all, POSIX base glob() simply never looks at a leading
- * '~'. If ntlibc ever adds glibc's non-standard GLOB_TILDE extension,
- * THAT would need getpwnam() for the ~user form (bare '~' needs only
- * getenv("HOME")) -- noted here for the sibling <pwd.h> work to see,
- * not asserted either way since GLOB_TILDE is not a base requirement. */
-#if 0 /* N/A: glob.html tilde is out of scope for base glob(), see above */
-static void test_glob_tilde_not_base_scope(void)
+/* glob.html DESCRIPTION: glob() matches "using the rules defined in XCU
+ * Pattern Matching Notation" (XCU 2.13), in which '~' is an ordinary
+ * character with no special meaning; APPLICATION USAGE confirms the
+ * absence deliberately ("Applications that need tilde and parameter
+ * expansion should use wordexp()"). That is not a reason to leave the
+ * behaviour unasserted -- it is precisely what makes "a leading '~' is
+ * matched literally" a mandatory, observable clause, and glob() is the
+ * one function required to get it wrong-free. Formerly fenced N/A on
+ * the grounds that tilde is "out of scope"; out of scope for
+ * *expansion* means in scope for *literal matching*.
+ *
+ * The obvious spelling -- glob("~", GLOB_NOCHECK) and check gl_pathv[0]
+ * -- does not discriminate: GLOB_NOCHECK returns the original pattern
+ * string verbatim when nothing matched (src/glob/glob.c pushes
+ * `pattern`, not the post-processed pattern), so a tilde-EXPANDING
+ * implementation would answer "~" too. Matching a real file named "~"
+ * without GLOB_NOCHECK is the test that actually distinguishes them. */
+static void test_glob_tilde_is_ordinary(void)
 {
 	glob_t g;
+	int fd;
 
-	/* base glob() must treat a leading '~' as an ordinary pattern
-	 * character, NOT expand it -- unlike a shell glob */
-	CHECK(glob("~", GLOB_NOCHECK, NULL, &g) == 0);
-	CHECK(strcmp(g.gl_pathv[0], "~") == 0);
+	/* a file literally named "~" must be matched by the pattern "~" */
+	fd = creat("~", 0644);
+	CHECK(fd >= 0 && close(fd) == 0);
+	CHECK(glob("~", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	CHECK(g.gl_pathc >= 1 && strcmp(g.gl_pathv[0], "~") == 0);
+	globfree(&g);
+	unlink("~");
+
+	/* and a ~user-shaped pattern is a pathname, not a user lookup */
+	CHECK(glob("~nosuchuser/x", 0, NULL, &g) == GLOB_NOMATCH);
 	globfree(&g);
 }
-#endif
 
 /* UNIMPL: glob.html RETURN VALUE -- "[GLOB_NOSPACE] An attempt to
  * allocate memory failed." globfree() then "free[s] any space
@@ -2953,6 +2968,7 @@ int main(int argc, char **argv)
 	test_fnmatch_period_forms();
 	test_fnmatch_bracket_edges();
 	test_glob_leading_period();
+	test_glob_tilde_is_ordinary();
 	test_globfree_idempotent();
 
 	char cwd_before_ftw[512];

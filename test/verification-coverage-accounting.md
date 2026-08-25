@@ -660,13 +660,26 @@ mechanism can stop being true, and an `N/A` whose mechanism has expired
 is a silent defect with no line changed. **This is the
 highest-value section of this document.**
 
-Result: **5 permanent, 25 conditional.**
+Result: **4 permanent, 25 conditional** (was 5 permanent; the
+`posix-glob.c` row below was audited out -- see the note).
 
-### Permanent (5) -- the mechanism cannot change
+**Audited out (N/A -> live assertion):** `posix-glob.c:525`, tilde
+expansion. The mechanism was stated as "out of scope for base `glob()`
+by the specification itself". That is true of tilde *expansion* and is
+exactly why literal tilde *matching* is mandatory: `glob()` matches by
+XCU 2.13 Pattern Matching Notation, in which `~` is an ordinary
+character, so "a leading `~` is matched literally" is a required,
+observable clause, not an absent one. It is now asserted for real in
+`test_glob_tilde_is_ordinary()`. Note also that the fenced test could
+not have discriminated: it used `GLOB_NOCHECK`, which returns the
+original pattern string verbatim, so a tilde-expanding implementation
+would have passed it. The live test matches a real file named `~`
+instead, which a mutated tilde-expanding `glob()` fails.
+
+### Permanent (4) -- the mechanism cannot change
 
 | Site | Mechanism |
 |------|-----------|
-| `posix-glob.c:525` | tilde expansion is out of scope for base `glob()` *by the specification itself*, not by any platform fact |
 | `posix-misc.c:279` | `readdir` `[ENOENT]` is a POSIX **may fail**; optional by definition, and no conformant implementation is required to detect it |
 | `posix-wchar.c:1140` | `wcwidth()` on a non-BMP character: `wchar_t` is 16 bits by the NT ABI and the function takes one unit, so it is handed one surrogate half at a time. No implementation on this platform can do better |
 | `posix-dl.c:313` | `MAP_FIXED` atomic replacement: `NtMapViewOfSection` with an overlapping `BaseAddress` returns `STATUS_CONFLICTING_ADDRESSES` rather than replacing, and the unmap-then-map sequence has a TOCTOU gap POSIX's contract does not |
