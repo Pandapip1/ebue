@@ -319,6 +319,21 @@ static int fn4(const char *p, const struct stat *st, int flag, struct FTW *f)
 
 static void reset_walk(void) { nent = 0; stop_after = 0; stop_value = 0; saw_null_stat = 0; }
 
+/* fn4(), plus the check that gives FTW_CHDIR its point: "nftw() shall
+ * change the current working directory to each directory as it reports
+ * files in that directory", so the object's own filename -- p + base,
+ * the offset nftw() hands the callback for exactly this purpose -- must
+ * name it from where the callback is standing. */
+static int chdir_probe_misses;
+
+static int fn4_chdir(const char *p, const struct stat *st, int flag, struct FTW *f)
+{
+	struct stat probe;
+	record(p, st, flag, f->base, f->level);
+	if (stat(p + f->base, &probe) != 0) chdir_probe_misses++;
+	return 0;
+}
+
 static int find_ent(const char *path)
 {
 	int i;
@@ -545,51 +560,26 @@ static void test_nftw(void)
 	(void)r;
 }
 
-#if 0 /* BUG: with FTW_CHDIR set, nftw() walks nothing below the root.
-       * Every entry of every directory is reported as FTW_NS, no
-       * directory below the root is ever descended into, and the walk
-       * returns 0 as though the tree had been exhausted.
-       *
-       * nftw.html DESCRIPTION: "The nftw() function shall recursively
-       * descend the directory hierarchy rooted in path", and
-       * "FTW_CHDIR: If set, nftw() shall change the current working
-       * directory to each directory as it reports files in that
-       * directory."  FTW_CHDIR changes where the walk stands; it does
-       * not license the walk to stop finding the files it is standing
-       * on top of.  FTW_NS is specified as "The stat() function failed
-       * on the object because of lack of appropriate permission" --
-       * not "the implementation looked in the wrong place".
-       *
-       * Mechanism, in src/ftw/ftw.c: walk() opens the directory, calls
-       * `chdir_absolute(ws, path)`, and then builds each child path by
-       * appending "/name" to `path` -- which is relative to the walk's
-       * ORIGINAL working directory.  chdir_absolute() is careful to
-       * resolve its own argument against the cwd captured before the
-       * first chdir (see its comment, which diagnoses exactly this
-       * hazard), but nothing does the same for the child paths handed
-       * to the recursive walk()'s lstat()/stat()/opendir().  Once the
-       * process has chdir'd into "tailtree", looking up "tailtree/f1"
-       * resolves to "tailtree/tailtree/f1".
-       *
-       * Measured under Wine, on the fixture this file builds:
-       *   nftw t4      flag=2 (FTW_D)  cwd=.../pw2
-       *   nftw t4/f1   flag=4 (FTW_NS) cwd=.../pw2/t4
-       *   nftw t4/sub  flag=4 (FTW_NS) cwd=.../pw2/t4
-       *   rc=0
-       * -- t4/sub/f2 is never reported at all, because t4/sub was
-       * mis-typed as FTW_NS and therefore never descended.  Without
-       * FTW_CHDIR the identical walk reports all four objects with the
-       * right types, so this is FTW_CHDIR alone.
-       *
-       * Note this is not the "results are unspecified if the
-       * application-supplied fn function does not preserve the current
-       * working directory" escape clause: fn4() below changes nothing.
-       *
-       * Fix shape: resolve each child against the walk's captured
-       * cwd0 the way chdir_absolute() already does, or -- simpler and
-       * what 4.4BSD's ftw does -- open each directory and pass
-       * de->d_name relative to the directory just chdir'd into, keeping
-       * the accumulated path only for reporting. */
+/* FTW_CHDIR's own half of the flag: the walk must still find and
+ * descend the whole tree while standing somewhere other than the cwd it
+ * started in.  It is a separate test from test_nftw() above because it
+ * exercises a separate mechanism in src/ftw/ftw.c -- every pathname the
+ * recursion carries is relative to the walk's original cwd, so with
+ * FTW_CHDIR set each of them has to be resolved against the cwd
+ * captured before the first chdir() before the filesystem is asked
+ * about it (resolve() there).  Getting that wrong does not fail
+ * loudly: lstat() simply misses, the entry is reported FTW_NS, and a
+ * directory mis-typed that way is never descended into, so the walk
+ * still returns 0 as though the tree had been exhausted.  Hence the
+ * FTW_NS sweep and the exact per-entry types below rather than a count.
+ *
+ * FTW_NS is specified as "The stat() function failed on the object
+ * because of lack of appropriate permission" -- it is not a way to
+ * report "the implementation looked in the wrong place".
+ *
+ * fn4() changes no directory itself, so none of this is covered by the
+ * "results are unspecified if the application-supplied fn function does
+ * not preserve the current working directory" escape clause. */
 static void test_nftw_chdir(void)
 {
 	char cwd0[1024], cwd1[1024];
@@ -612,8 +602,19 @@ static void test_nftw_chdir(void)
 	 * which is what distinguishes a fix from "ignore FTW_CHDIR" */
 	CHECK(getcwd(cwd1, sizeof cwd1) != NULL);
 	CHECK(chdir(cwd0) == 0);
+
+	/* ... and what a caller actually uses FTW_CHDIR for: every entry
+	 * must be reachable by its basename (path + base) from wherever the
+	 * walk is standing when it reports it, not just eventually named
+	 * correctly in full.  fn4_chdir() checks that from inside the
+	 * callback, which is the only place it can be observed. */
+	reset_walk();
+	chdir_probe_misses = 0;
+	CHECK(nftw("tailtree", fn4_chdir, 5, FTW_CHDIR) == 0);
+	CHECK(nent == 4);
+	CHECK(chdir_probe_misses == 0);
+	CHECK(chdir(cwd0) == 0);
 }
-#endif
 
 /* nftw.html FTW_PHYS/FTW_SL/FTW_SLN, and ftw.html's FTW_SL, all need a
  * real symbolic link.  symlink() fails ENOSYS under Wine -- the correct
@@ -1577,9 +1578,7 @@ int main(void)
 
 	test_ftw();
 	test_nftw();
-#if 0 /* BUG: see the fence above test_nftw_chdir */
 	test_nftw_chdir();
-#endif
 	test_nftw_symlinks();
 #if 0 /* BUG: see the fence above test_nftw_symlink_loop */
 	test_nftw_symlink_loop();
