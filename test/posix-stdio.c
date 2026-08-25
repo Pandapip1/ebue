@@ -863,60 +863,27 @@ static void test_getc_unlocked(const char *name)
 	CHECK(fclose(f) == 0);
 }
 
-/* tempnam.html (XSI, obsolescent).  DESCRIPTION: "shall generate a
- * pathname that may be used for a temporary file"; if dir "is a null
- * pointer or points to a string which is not a pathname for an
- * appropriate directory, the path prefix defined as P_tmpdir in the
- * <stdio.h> header shall be used"; pfx is "a string of up to five bytes
- * to be used as the beginning of the filename".  RETURN VALUE: "Upon
- * successful completion, tempnam() shall allocate space for a string,
- * put the generated pathname in that space, and return a pointer to it.
- * The pointer shall be suitable for use in a subsequent call to
- * free()."  ERRORS: "[ENOMEM] Insufficient storage space is available."
+/* tmpnam.html (obsolescent).  DESCRIPTION: "The tmpnam() function shall
+ * generate a string that is a valid pathname that does not name an
+ * existing file"; RETURN VALUE: the internal-buffer form (a null
+ * argument) has to answer the same way as the caller-buffer form.
  *
- * That the result must be free()-able is the clause with teeth here, and
- * it is checked for real: tools/asan-build.sh runs every test under
- * LeakSanitizer, so a returned pointer that is not a live malloc block
- * fails the asan gate rather than passing quietly.  This is the same
- * mechanism that caught the vdprintf() leak the last never-asserted
- * sweep turned up.
+ * The clause is only worth as much as what it is for: the caller goes on
+ * to create the file, and O_CREAT|O_EXCL is the only safe way to use a
+ * name this function produces, so that create is asserted here rather
+ * than the absence of a stat alone.
  *
- * N/A, with the reason: [ENOMEM].  Reaching it needs allocator
- * exhaustion, which this suite has no way to induce -- the ledger
- * already treats malloc-exhaustion paths that way throughout.
+ * This was a fenced BUG.  src/stdio/misc.c's tmpnam() called mkstemp()
+ * on a "tmpnam_XXXXXX" template and handed back the name of the file
+ * mkstemp had just created, so the exclusive create got [EEXIST] every
+ * time and every call left a zero-byte tmpnam_* file in the current
+ * directory; it generates the name with mktemp() now, which checks for
+ * non-existence instead of creating.  (That function's comment records
+ * why tempnam()'s create-then-unlink was not the route taken.)
  *
- * Filesystem-adjacent (it names a path under the temp directory and
- * src/stdio/misc.c reaches mkstemp() to pick one), so real-Windows CI
- * is the authority; Wine agreeing is weak evidence. */
-#if NTLIBC_TEST(BUG, posix_stdio_tmpnam_does_not_create) /* BUG: tmpnam() hands back the name of a file it has just
-	 * created.  tmpnam.html DESCRIPTION: "The tmpnam() function shall
-	 * generate a string that is a valid pathname that does not name an
-	 * existing file."  The whole point of the guarantee is that the
-	 * caller can go on to create the file -- typically with
-	 * O_CREAT|O_EXCL, which is the only safe way to use a name this
-	 * function produces.
-	 *
-	 * Mechanism: src/stdio/misc.c's tmpnam() calls mkstemp() on a
-	 * "tmpnam_XXXXXX" template, closes the fd, and returns the name.
-	 * mkstemp() *creates* the file, and unlike its neighbour tempnam()
-	 * three functions further down -- which does `close(fd);
-	 * unlink(tmpl);` for exactly this reason -- tmpnam() never unlinks
-	 * it.  Two consequences: an O_CREAT|O_EXCL create on the returned
-	 * name fails with [EEXIST], and every call leaves a zero-byte
-	 * tmpnam_* file in the current working directory.
-	 *
-	 * The existing coverage shows it inadvertently: test/stdio.c's
-	 * tmpnam case does `nm = tmpnam(0); CHECK(remove(nm) == 0);` on a
-	 * name nothing ever opened, and that remove() succeeds -- it can
-	 * only succeed because tmpnam() left a file there.  The row in
-	 * test/POSIX-COVERAGE.md covers uniqueness, L_tmpnam sizing and
-	 * removed-on-close, not this clause.
-	 *
-	 * The fix is tempnam()'s: unlink after close.  (Keeping the
-	 * mkstemp() call is what keeps successive names distinct, which is
-	 * the reason the current code creates at all, so the fix does not
-	 * cost that.)  Re-enable when tmpnam() stops leaving the file
-	 * behind. */
+ * Filesystem-adjacent (it names, and the caller then creates, a path in
+ * the current directory), so real-Windows CI is the authority; Wine
+ * agreeing is weak evidence. */
 static void test_tmpnam_does_not_create(void)
 {
 	char buf[L_tmpnam];
@@ -942,8 +909,32 @@ static void test_tmpnam_does_not_create(void)
 	CHECK(b != 0);
 	if (b) CHECK(stat(b, &st) == -1);
 }
-#endif
 
+/* tempnam.html (XSI, obsolescent).  DESCRIPTION: "shall generate a
+ * pathname that may be used for a temporary file"; if dir "is a null
+ * pointer or points to a string which is not a pathname for an
+ * appropriate directory, the path prefix defined as P_tmpdir in the
+ * <stdio.h> header shall be used"; pfx is "a string of up to five bytes
+ * to be used as the beginning of the filename".  RETURN VALUE: "Upon
+ * successful completion, tempnam() shall allocate space for a string,
+ * put the generated pathname in that space, and return a pointer to it.
+ * The pointer shall be suitable for use in a subsequent call to
+ * free()."  ERRORS: "[ENOMEM] Insufficient storage space is available."
+ *
+ * That the result must be free()-able is the clause with teeth here, and
+ * it is checked for real: tools/asan-build.sh runs every test under
+ * LeakSanitizer, so a returned pointer that is not a live malloc block
+ * fails the asan gate rather than passing quietly.  This is the same
+ * mechanism that caught the vdprintf() leak the last never-asserted
+ * sweep turned up.
+ *
+ * N/A, with the reason: [ENOMEM].  Reaching it needs allocator
+ * exhaustion, which this suite has no way to induce -- the ledger
+ * already treats malloc-exhaustion paths that way throughout.
+ *
+ * Filesystem-adjacent (it names a path under the temp directory and
+ * src/stdio/misc.c reaches mkstemp() to pick one), so real-Windows CI
+ * is the authority; Wine agreeing is weak evidence. */
 static void test_tempnam(void)
 {
 	char *a, *b;
@@ -2369,6 +2360,7 @@ int main(void)
 		test_flockfile_nesting(name);
 		test_v_forms(name);
 		test_getc_unlocked(name);
+		test_tmpnam_does_not_create();
 		test_tempnam();
 		test_printf_output_error(name);
 		test_dprintf_fd_path(name);

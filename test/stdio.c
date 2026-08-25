@@ -1382,9 +1382,14 @@ static void test_tmpfile(void)
 
 /* tmpnam: a usable, unique name that fits a char[L_tmpnam] however long
  * $TMP is (it once built "$TMP/tXXXXXX" and overflowed the caller's
- * buffer).  Runs in a spawned child (--tmpnam-child) so a regression
- * there cannot take the parent's other results with it; the parent
- * CHECKs the child's exit status. */
+ * buffer).  The name is a name only -- tmpnam() creates nothing, which
+ * is what test/posix-stdio.c's test_tmpnam_does_not_create() holds it
+ * to -- so everything removed here is removed because this test created
+ * it first.  (Until src/stdio/misc.c stopped calling mkstemp(), the two
+ * remove()s of names nothing had ever opened passed for the wrong
+ * reason: tmpnam() had left the files there.)  Runs in a spawned child
+ * (--tmpnam-child) so a regression there cannot take the parent's other
+ * results with it; the parent CHECKs the child's exit status. */
 static int test_tmpnam_child(void)
 {
 	FILE *f;
@@ -1401,12 +1406,23 @@ static int test_tmpnam_child(void)
 		f = fopen(nm, "w");
 		CHECK(f != 0);
 		if (f) { CHECK(fputs("x", f) == 0); CHECK(fclose(f) == 0); }
+		f = fopen(other, "w");
+		CHECK(f != 0);
+		if (f) CHECK(fclose(f) == 0);
 		CHECK(remove(nm) == 0);
 		CHECK(remove(other) == 0);
 	}
 	nm = tmpnam(0);
 	CHECK(nm != 0);
-	if (nm) CHECK(remove(nm) == 0);
+	if (nm) {
+		/* nothing to remove yet: the name is unused until this test
+		 * uses it */
+		CHECK(remove(nm) == -1);
+		f = fopen(nm, "w");
+		CHECK(f != 0);
+		if (f) CHECK(fclose(f) == 0);
+		CHECK(remove(nm) == 0);
+	}
 	fflush(stdout);
 	return fails != 0;
 }
