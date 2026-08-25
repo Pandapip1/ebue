@@ -834,27 +834,52 @@ static void test_writev_all_zero(void)
 	unlink("t-uio-zero.tmp");
 }
 
-/* XBD 2.9.7 "Thread Interactions with Regular File Operations"
- * (basedefs/V2_chap02.html) requires read(), write(), readv(), and
- * writev() (among others) to be atomic with respect to each other on
- * a regular file: "If two threads each call one of these functions,
- * each call shall either see all of the specified effects of the
- * other call, or none of them." src/misc/uio.c's readv()/writev() are
- * a loop of separate NtReadFile()/NtWriteFile() calls, so a concurrent
- * write() from another thread can land in the middle of a readv()'s
- * buffers, or vice versa -- there is no genuinely atomic alternative
- * available: NT's real scatter/gather primitives
- * (NtReadFileScatter()/NtWriteFileGather()) require every element to
- * be page-aligned and a whole number of pages, which an arbitrary
- * struct iovec from a real caller is not. Not testable in-process
- * either way (it is a cross-thread race, not a single-call return
- * value), so this is documentation, not an assertion. */
-#if 0 /* N/A: XBD 2.9.7 (basedefs/V2_chap02.html) -- readv()/writev()
-       * are not atomic with respect to concurrent read()/write() on
-       * the same regular file, because NT's only real scatter/gather
-       * primitives (NtReadFileScatter/NtWriteFileGather) are
-       * page-granular and cannot serve an arbitrary iovec. See
-       * src/misc/uio.c's header comment. */
+/* UNIMPL: XSH 2.9.7 "Thread Interactions with Regular File Operations"
+ * (functions/V2_chap02.html#tag_15_09_07).  Checked against the live
+ * spec page rather than paraphrased, and note the citation was also
+ * wrong -- this is XSH chapter 2, not XBD.  Verbatim: "All of the
+ * following functions shall be atomic with respect to each other in
+ * the effects specified in POSIX.1-2017 when they operate on regular
+ * files or symbolic links", followed by a table of 39 functions that
+ * includes read(), write(), readv() and writev(), and then: "If two
+ * threads each call one of these functions, each call shall either see
+ * all of the specified effects of the other call, or none of them."
+ *
+ * So the clause names readv()/writev() explicitly and applies to this
+ * library.  ntlibc does not satisfy it: src/misc/uio.c implements both
+ * as a loop over its own read()/write(), one iovec at a time, so a
+ * concurrent write() can land in the middle of a readv()'s buffers.
+ *
+ * This was fenced N/A on the reason "there is no genuinely atomic
+ * alternative available", which is false, and is contradicted by the
+ * very file the fence points at.  src/misc/uio.c's own banner says an
+ * alternative existed and was REJECTED as a trade-off: NT's
+ * NtReadFileScatter()/NtWriteFileGather() are page-granular, and
+ * "restricting readv()/writev() to page-aligned, page-sized buffers
+ * would satisfy the atomicity clause but reject ordinary vectors",
+ * which the banner judges less useful than a loop that works for the
+ * vectors real callers pass.  A rejected alternative is not an absent
+ * one, and the banner calls it what it is -- "a deliberate, documented
+ * divergence from POSIX".  A divergence we chose is UNIMPL.
+ *
+ * Since 2c40c74 the premise is weaker still.  That commit added real
+ * mandatory NT byte-range locks (src/file/flock.c, NtLockFile/
+ * NtUnlockFile), so atomicity is also obtainable by SERIALISING rather
+ * than by finding a single atomic primitive -- which sidesteps the
+ * page-granularity objection entirely, since a lock does not care what
+ * the buffers look like.  Whether that cost is worth paying on every
+ * readv()/writev() is a real question; it is not the same question as
+ * "the platform cannot do this."
+ *
+ * Left fenced rather than asserted, for a reason that is about testing
+ * and not about conformance: the clause is stated over "two threads",
+ * and ntlibc exposes no thread-creation interface at all (there is no
+ * <pthread.h> in the tree), so a two-thread race cannot be written in
+ * this library's own terms.  That makes it unasserted, not
+ * inapplicable. */
+#if 0 /* UNIMPL: XSH 2.9.7 readv()/writev() atomicity -- a documented
+       * design choice in src/misc/uio.c, not a platform limit; see
+       * above. */
 #endif
 
 /* ================================================================== */

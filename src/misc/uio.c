@@ -16,6 +16,13 @@
  * middle of this readv()'s buffers, or another thread's read()/write()
  * can observe this writev() only partially applied.
  *
+ * Because that divergence is a CHOICE, test/posix-grp.c records it as
+ * UNIMPL rather than N/A: nothing about NT makes the clause
+ * meaningless, and two routes to satisfying it exist (see below, and
+ * the byte-range locks src/file/flock.c added in 2c40c74, which give
+ * atomicity by serialising and so do not care about buffer alignment
+ * at all).  Both were judged not worth their cost; neither is absent.
+ *
  * The alternative NT actually offers, NtReadFileScatter()/
  * NtWriteFileGather(), was considered and rejected: both are
  * page-granular (every element must be page-aligned and a whole
