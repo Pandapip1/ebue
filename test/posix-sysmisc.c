@@ -277,7 +277,12 @@ static void test_setrlimit_fsize_accepts_lowering(void)
 	errno = 0;
 	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == -1 && errno == EINVAL);
 
-	/* restore, so later tests are not run under a file-size cap */
+	/* Restore as much as can be restored, and note what cannot: a hard
+	 * limit lowered above is lowered for the life of the process, so
+	 * every later test runs under rlim_max == 2048.  Left generous
+	 * enough that nothing else in this file notices; the enforcement
+	 * test below reads the current hard limit rather than assuming
+	 * RLIM_INFINITY, which is what the lowering would otherwise break. */
 	rl.rlim_cur = 2048; rl.rlim_max = 2048;
 	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
 }
@@ -372,41 +377,128 @@ static void test_setrlimit_nofile_child(void)
 	CHECK(getrlimit(RLIMIT_NOFILE, &back) == 0 && back.rlim_cur == 1024);
 }
 
-/* UNIMPL: setrlimit.html RLIMIT_FSIZE, "the maximum size of a file, in
- * bytes, that may be created by a process."  The same category error
- * the RLIMIT_NOFILE fence made applies here -- the old reason was "no
- * per-process max-file-size quota primitive exists in the NT I/O
- * manager", but no NT quota is needed: the limit is checkable against
- * the resulting offset inside src/unistd/write.c and
- * src/unistd/ftruncate.c.  Not implemented, and not implemented
- * alongside RLIMIT_NOFILE on purpose, because it is not the same kind
- * of thing.  RLIMIT_NOFILE is airtight once enforced -- the fd table is
- * wholly ntlibc's, so nothing can allocate a descriptor behind its
- * back.  RLIMIT_FSIZE enforcement would only ever be as complete as
- * ntlibc's own I/O paths: a file grown by any other means, in this
- * process or another, would sail past it.  That is a weaker promise
- * than the clause makes and is worth deciding on deliberately rather
- * than inheriting from a neighbouring commit. */
-#if 0 /* UNIMPL: RLIMIT_FSIZE enforcement, see above */
+/* setrlimit.html RLIMIT_FSIZE, "the maximum size of a file, in bytes,
+ * that may be created by a process", and the ENFORCEMENT half.
+ *
+ * This was fenced UNIMPL on the reasoning that "RLIMIT_FSIZE enforcement
+ * would only ever be as complete as ntlibc's own I/O paths: a file grown
+ * by any other means, in this process or another, would sail past it."
+ * Both halves of that turned out weaker than they read:
+ *
+ *   - "in another process" is outside the clause, not a hole in it.  The
+ *     limit governs what THIS process may create.
+ *   - "in this process" was checkable, and the surface is CLOSED.  Every
+ *     path by which this process can extend a file is ntlibc's own --
+ *     write(), pwrite(), writev() (which delegates to write()),
+ *     ftruncate(), posix_fallocate(), and stdio, which funnels into
+ *     write().  There is no mmap in this library at all: no
+ *     <sys/mman.h>, no implementation.
+ *
+ * So enforcement is complete for this process, exactly as RLIMIT_NOFILE's
+ * is, and for the same reason -- the resource is bounded by this
+ * library's own code rather than by a kernel primitive we lack.
+ *
+ * THE EXPECTED VALUES BELOW ARE MEASURED, NOT DERIVED.  The fenced
+ * version of this test asserted that write(fd, buf, 512) on an empty file
+ * under a 256-byte limit returns -1 with [EFBIG].  No implementation
+ * behaves that way.  Measured on Linux/glibc with SIGXFSZ ignored:
+ *     write(512) on an empty file     -> 256  (TRUNCATED, no error)
+ *     write(200) at offset 200        -> 56
+ *     write(512) with the file at 256 -> -1, EFBIG
+ *     pwrite(100) at offset 1000      -> -1, EFBIG
+ *     ftruncate(1024)                 -> -1, EFBIG
+ *     ftruncate(128)                  -> 0
+ *     posix_fallocate(0, 1024)        -> EFBIG
+ * A write is CLAMPED when it starts below the limit and would cross it,
+ * and fails only when not one byte may be written; operations that
+ * cannot partially succeed fail outright. */
 static void test_setrlimit_fsize_enforced(void)
 {
-	struct rlimit rl;
+	struct rlimit rl, saved;
 	char buf[512];
 	int fd;
 
+	CHECK(getrlimit(RLIMIT_FSIZE, &saved) == 0);
 	rl.rlim_cur = 256;
-	rl.rlim_max = RLIM_INFINITY;
+	/* the hard limit found on entry, NOT RLIM_INFINITY: a hard limit can
+	 * be lowered but never raised again, so an earlier test in this file
+	 * that lowered it would make an unconditional RLIM_INFINITY here fail
+	 * with [EPERM].  Process-wide limits are exactly the kind of global
+	 * state a test must take as it finds. */
+	rl.rlim_max = saved.rlim_max;
 	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
+
 	fd = open("rl-fsize.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	memset(buf, 'x', sizeof buf);
+
+	/* clamped to the limit, not refused */
+	errno = 0;
+	CHECK(write(fd, buf, sizeof buf) == 256);
+
+	/* now at the limit: write.html "[EFBIG] An attempt was made to write
+	 * a file that exceeds ... the process' file size limit" */
+	errno = 0;
+	CHECK(write(fd, buf, sizeof buf) == -1);
+	CHECK(errno == EFBIG);
+
+	/* pwrite past the limit fails; pwrite inside it is clamped */
+	errno = 0;
+	CHECK(pwrite(fd, buf, 100, 1000) == -1 && errno == EFBIG);
+	errno = 0;
+	CHECK(pwrite(fd, buf, 100, 200) == 56);
+
+	/* ftruncate cannot partially succeed: above the limit it fails,
+	 * at or below it succeeds */
+	errno = 0;
+	CHECK(ftruncate(fd, 1024) == -1 && errno == EFBIG);
+	CHECK(ftruncate(fd, 256) == 0);
+	CHECK(ftruncate(fd, 128) == 0);
+
+	CHECK(posix_fallocate(fd, 0, 1024) == EFBIG);
+
+	/* and with the limit lifted, the same calls succeed -- so the
+	 * failures above are the limit talking and not something else */
+	CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+	errno = 0;
+	CHECK(write(fd, buf, sizeof buf) == 512);
+	CHECK(ftruncate(fd, 1024) == 0);
+
+	close(fd);
+	unlink("rl-fsize.txt");
+	CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+}
+
+/* The other half of the clause, deliberately NOT implemented.  Recorded
+ * so that "ntlibc implements RLIMIT_FSIZE" does not silently come to mean
+ * "implements all of it". */
+#if 0 /* UNIMPL: SIGXFSZ.  setrlimit.html: exceeding RLIMIT_FSIZE causes
+       * "the SIGXFSZ signal to be generated for the thread".  ntlibc
+       * reports [EFBIG] and does not raise the signal.  Signal delivery
+       * from inside the write path is a separate piece of work with its
+       * own failure modes -- src/signal/signal.c's __raise_internal is
+       * the mechanism, the same one write() already uses for SIGPIPE, so
+       * this is implementable rather than inapplicable. */
+static void test_setrlimit_fsize_sigxfsz(void)
+{
+	struct rlimit rl, saved;
+	char buf[512];
+	int fd;
+	volatile int caught = 0;
+
+	CHECK(getrlimit(RLIMIT_FSIZE, &saved) == 0);
+	rl.rlim_cur = 0; rl.rlim_max = RLIM_INFINITY;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
+	fd = open("rl-xfsz.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
 	CHECK(fd >= 0);
 	memset(buf, 'x', sizeof buf);
 	errno = 0;
-	/* write.html ERRORS: "[EFBIG] An attempt was made to write a file
-	 * that exceeds the implementation-defined maximum file size or the
-	 * process' file size limit". */
 	CHECK(write(fd, buf, sizeof buf) == -1 && errno == EFBIG);
+	CHECK(caught == 1);
 	close(fd);
-	unlink("rl-fsize.txt");
+	unlink("rl-xfsz.txt");
+	CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
 }
 #endif
 
@@ -1639,6 +1731,7 @@ int main(int argc, char **argv)
 	test_getrlimit();
 	test_setrlimit_enforceable();
 	test_setrlimit_fsize_accepts_lowering();
+	test_setrlimit_fsize_enforced();
 	test_setrlimit_nofile(argv[0]);
 	test_getrusage(argv[0]);
 	test_getpriority_setpriority();

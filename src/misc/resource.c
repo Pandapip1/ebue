@@ -100,6 +100,105 @@ static rlim_t fsize_cur = RLIM_INFINITY, fsize_max = RLIM_INFINITY;
  * hard limit needs storing here. */
 static rlim_t nofile_max = FD_MAX;
 
+/* ---- RLIMIT_FSIZE enforcement ------------------------------------------
+ *
+ * setrlimit.html: RLIMIT_FSIZE is "the maximum size of a file, in bytes,
+ * that may be created by a process", and write.html's [EFBIG] is "An
+ * attempt was made to write a file that exceeds the implementation-
+ * defined maximum file size or the process' file size limit".
+ *
+ * NT has no per-process file-size quota and needs none.  The limit
+ * governs what THIS process may create, and every path by which this
+ * process can extend a file goes through ntlibc's own I/O -- write(),
+ * pwrite(), writev(), ftruncate(), posix_fallocate(), and stdio, which
+ * funnels into write().  There is no mmap in this library at all (no
+ * <sys/mman.h>, no implementation), so that list is closed and
+ * enforcement here is complete for this process, exactly as
+ * RLIMIT_NOFILE's is.  A file extended by ANOTHER process is outside the
+ * clause rather than a hole in this: the limit is per-process.
+ *
+ * SEMANTICS ARE MEASURED, NOT ASSUMED.  Taken from Linux/glibc with
+ * SIGXFSZ ignored, limit 256:
+ *     write(512) on an empty file        -> 256   (TRUNCATED, no error)
+ *     write(200) at offset 200           -> 56    (truncated to the limit)
+ *     write(512) with the file at 256    -> -1, EFBIG
+ *     pwrite(100) at offset 1000         -> -1, EFBIG
+ *     ftruncate(1024) / ftruncate(256)   -> -1 EFBIG / 0
+ *     ftruncate(128)                     -> 0     (shrinking is fine)
+ *     posix_fallocate(0, 1024)           -> EFBIG
+ * So a write is CLAMPED when it starts below the limit and would cross
+ * it, and fails with [EFBIG] only when not one byte may be written.
+ * Operations that cannot partially succeed -- ftruncate, posix_fallocate
+ * -- fail outright rather than clamping.
+ *
+ * A previous version of the fenced test expected write(512) on an empty
+ * file to fail with EFBIG.  That is not what any implementation does,
+ * and it is why the numbers above were measured before this was written.
+ */
+
+/* Cheap predicate the write paths test before doing any work at all: with
+ * no limit set -- the overwhelmingly common case -- nothing below runs
+ * and the hot path is untouched. */
+int __fsize_limited(void)
+{
+	return fsize_cur != RLIM_INFINITY;
+}
+
+/* The offset a write on this handle will start at.  `append` selects the
+ * end of the file rather than the current position, matching what
+ * NtWriteFile does for FILE_WRITE_TO_END_OF_FILE. */
+static int fsize_start(HANDLE h, int append, long long *out)
+{
+	IO_STATUS_BLOCK io;
+
+	if (append) {
+		FILE_STANDARD_INFORMATION si;
+		if (!NT_SUCCESS(NtQueryInformationFile(h, &io, &si, sizeof si, FileStandardInformation)))
+			return -1;
+		*out = si.EndOfFile;
+	} else {
+		FILE_POSITION_INFORMATION pi;
+		if (!NT_SUCCESS(NtQueryInformationFile(h, &io, &pi, sizeof pi, FilePositionInformation)))
+			return -1;
+		*out = pi.CurrentByteOffset;
+	}
+	return 0;
+}
+
+/* How many of `count` bytes may be written on this handle.  Returns
+ * `count` unchanged when no limit applies or the query cannot be
+ * answered (a limit we cannot evaluate must not silently truncate a
+ * caller's write), a smaller count when the write would cross the limit,
+ * or -1 with errno EFBIG when not one byte may be written. */
+long long __fsize_clamp(HANDLE h, int append, size_t count)
+{
+	long long off, room;
+
+	if (!__fsize_limited()) return (long long)count;
+	if (fsize_start(h, append, &off) < 0) return (long long)count;
+	room = (long long)fsize_cur - off;
+	if (room <= 0) { errno = EFBIG; return -1; }
+	return (long long)count < room ? (long long)count : room;
+}
+
+/* How many bytes may still be written starting at `off`.  LLONG_MAX when
+ * no limit applies, so a caller can compare against it unconditionally;
+ * 0 or less means not one byte may be written there. */
+long long __fsize_room_at(long long off)
+{
+	if (!__fsize_limited()) return 0x7fffffffffffffffLL;
+	return (long long)fsize_cur - off;
+}
+
+/* For an operation that cannot partially succeed: may this process leave
+ * the file `size` bytes long?  0 if yes, -1 with errno EFBIG if not. */
+int __fsize_allow(long long size)
+{
+	if (!__fsize_limited()) return 0;
+	if (size > (long long)fsize_cur) { errno = EFBIG; return -1; }
+	return 0;
+}
+
 int getrlimit(int resource, struct rlimit *rl)
 {
 	if (!rl) { errno = EFAULT; return -1; }

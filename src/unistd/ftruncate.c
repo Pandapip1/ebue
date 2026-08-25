@@ -14,6 +14,11 @@ int ftruncate(int fd, off_t len)
 	NTSTATUS st;
 	if (!f) return -1;
 	if (len < 0) { errno = EINVAL; return -1; }
+	/* RLIMIT_FSIZE (src/misc/resource.c).  ftruncate cannot partially
+	 * succeed, so it fails outright rather than clamping the way write()
+	 * does -- measured against Linux/glibc, where ftruncate above the
+	 * limit is [EFBIG] and shrinking to below it is always allowed. */
+	if (__fsize_allow((long long)len) < 0) return -1;
 	eof.EndOfFile = len;
 	st = NtSetInformationFile(f->h, &io, &eof, sizeof eof, FileEndOfFileInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);

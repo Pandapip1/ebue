@@ -23,6 +23,17 @@ ssize_t write(int fd, const void *buf, size_t count)
 	if (count > 0x7fffffff) count = 0x7fffffff;
 	if (!count) return 0;
 
+	/* RLIMIT_FSIZE: clamp to the process file-size limit, or fail with
+	 * [EFBIG] when not one byte may be written (src/misc/resource.c).
+	 * Only regular files have a size this can be about, and the
+	 * predicate short-circuits when no limit is set, so an unlimited
+	 * process pays nothing. */
+	if (f->type == __FD_FILE && __fsize_limited()) {
+		long long room = __fsize_clamp(f->h, (f->flags & O_APPEND) != 0, count);
+		if (room < 0) return -1;
+		count = (size_t)room;
+	}
+
 	if ((f->flags & O_APPEND) && f->type == __FD_FILE) {
 		pos = FILE_WRITE_TO_END_OF_FILE;
 		pp = &pos;
@@ -51,6 +62,13 @@ ssize_t pwrite(int fd, const void *buf, size_t count, off_t off)
 	if ((f->flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
+	/* RLIMIT_FSIZE, measured against the CALLER'S offset rather than the
+	 * file position -- pwrite writes where it is told. */
+	if (__fsize_limited()) {
+		long long room = __fsize_room_at(off);
+		if (room <= 0) { errno = EFBIG; return -1; }
+		if ((long long)count > room) count = (size_t)room;
+	}
 	/* NT moves a synchronous handle's position to the end of a positioned
 	 * transfer; POSIX says it must not move.  See src/internal/fdpos.c. */
 	if (__fd_pos_save(f->h, &saved) < 0) return -1;

@@ -342,6 +342,16 @@ void __signal_init(void);
 /* Capture the startup floating-point environment for FE_DFL_ENV
  * (src/math/fenv.c).  Must run before anything can change it. */
 void __fenv_init(void);
+/* RLIMIT_FSIZE, enforced by ntlibc's own write paths because NT has no
+ * per-process file-size primitive and needs none (src/misc/resource.c).
+ * __fsize_limited() is the cheap predicate to test first; __fsize_clamp()
+ * returns how many of `count` bytes may be written on a handle, or -1
+ * with EFBIG; __fsize_allow() answers for an operation that cannot
+ * partially succeed (ftruncate, posix_fallocate). */
+int __fsize_limited(void);
+long long __fsize_clamp(HANDLE h, int append, size_t count);
+long long __fsize_room_at(long long off);
+int __fsize_allow(long long size);
 int __raise_internal(int);
 
 /* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/

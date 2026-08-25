@@ -177,6 +177,12 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	 * acquire a new failure mode from one. */
 	if (offset > LLONG_MAX - len) return EFBIG;
 	want = (long long)offset + (long long)len;
+	/* RLIMIT_FSIZE (src/misc/resource.c): the process file-size limit is
+	 * the other half of the same [EFBIG] clause as the volume maximum
+	 * below -- posix_fallocate.html's "[EFBIG] The value of offset+len is
+	 * greater than the maximum file size".  Like ftruncate, this cannot
+	 * partially succeed, so it fails outright. */
+	if (__fsize_allow(want) < 0) return EFBIG;
 	if (want > 4LL * 1024 * 1024 * 1024 && want > volume_max_file_size(f->h))
 		return EFBIG;
 
