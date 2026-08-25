@@ -2750,7 +2750,7 @@ clauses that are simply absent. **One assertion group comes out
 | ftw | *may fail* "[EINVAL] The value of the ndirs argument is invalid" | N/A — *may* fail; ntlibc does not validate `ndirs` and is conforming not to | — |
 | posix_fadvise | DESCRIPTION: every advice value is advisory and "shall have no effect on the semantics of other operations" (asserted by reading the file back after `POSIX_FADV_DONTNEED`); "The specified range need not currently exist in the file"; "If len is zero, all data following offset is specified"; RETURN VALUE returns the error number, not `-1`/`errno` | covered — all six `POSIX_FADV_*` values | test/posix-tail.c (`test_posix_fadvise`) |
 | posix_fadvise | *shall fail* "[EBADF] The fd argument is not a valid file descriptor"; the advice half of "[EINVAL] The value of advice is invalid" | covered | test/posix-tail.c (`test_posix_fadvise`) |
-| posix_fadvise | the other half of the same clause: "…or the value of len is less than zero" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_einval_negative_len`) |
+| posix_fadvise | the other half of the same clause: "…or the value of len is less than zero" | covered — **FIXED**; `src/fcntl/fadvise.c` guards `len < 0` ahead of the advice switch | test/posix-tail.c (`test_posix_fadvise_einval_negative_len`) |
 | posix_fadvise | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | **BUG (fenced)** | test/posix-tail.c (`test_posix_fadvise_espipe`) |
 | posix_fallocate | "If the offset+len is beyond the current file size, then posix_fallocate() shall adjust the file size to offset+len. Otherwise, the file size shall not be changed"; the range is really writable and readable back; "Space allocated … shall be freed by a successful call to creat() or open() that truncates the size of the file" | covered | test/posix-tail.c (`test_posix_fallocate`) |
 | posix_fallocate | *shall fail* `[EBADF]` (invalid fd), `[EINVAL]` (negative `offset` or `len`), `[ESPIPE]` (pipe/FIFO); *may fail* `[EINVAL]` for `len == 0` (asserted permissively, since it is optional) | covered | test/posix-tail.c (`test_posix_fallocate`) |
@@ -2826,14 +2826,16 @@ clauses that are simply absent. **One assertion group comes out
    every ancestor on the recursion path — `src/stat/stat.c` fills both
    with real values here, and `FTW_MOUNT` already relies on `st_dev`.
 
-3. **`posix_fadvise()` never looks at `len`.** `posix_fadvise.html`
-   *shall fail*: "[EINVAL] The value of advice is invalid, **or the
-   value of len is less than zero**." `src/fcntl/fadvise.c` opens
-   `(void)offset; (void)len;` and switches on `advice` alone. Measured:
-   `posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL)` returns 0. The
-   *advice* half of the same clause is implemented and passes, which
-   makes this a half-implemented shall-fail check rather than an
-   unimplemented function.
+3. **`posix_fadvise()` never looked at `len` — FIXED.**
+   `posix_fadvise.html` *shall fail*: "[EINVAL] The value of advice is
+   invalid, **or the value of len is less than zero**."
+   `src/fcntl/fadvise.c` opened `(void)offset; (void)len;` and switched
+   on `advice` alone, so `posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL)`
+   returned 0. It now returns `EINVAL` for `len < 0`, ahead of the
+   advice switch; `len == 0` keeps its own documented meaning ("all
+   data following offset is specified") and `offset` stays unchecked,
+   because this page's `[EINVAL]` names advice and len only.
+   `test_posix_fadvise_einval_negative_len` is un-fenced and runs.
 
 4. **`posix_fadvise()` returns 0 for a pipe or FIFO instead of
    `[ESPIPE]`.** *Shall fail*: "[ESPIPE] The fd argument is associated
