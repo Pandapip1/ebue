@@ -445,6 +445,15 @@ enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC };
  * of the same named-pipe device name for the write end.  A byte queue
  * with an end count reproduces what the tests observe; there is no
  * blocking (see NtReadFile). */
+/* Matches the quotas src/unistd/pipe.c asks NtCreateNamedPipeFile for,
+ * and the host pipe(2) capacity Linux gives by default. */
+#define PIPE_QUOTA 65536
+
+#ifndef FILE_PIPE_CLIENT_END
+#define FILE_PIPE_CLIENT_END 0
+#define FILE_PIPE_SERVER_END 1
+#endif
+
 struct vpipe {
 	struct vpipe *next;
 	WCHAR *name;
@@ -1729,11 +1738,41 @@ NTSTATUS NTAPI NtQueryInformationFile(HANDLE h, PIO_STATUS_BLOCK io, PVOID buf,
 		 * own comment on this same field for the cross-process
 		 * caveat). */
 		pli->NamedPipeState = (p->readers && p->writers) ? FILE_PIPE_CONNECTED_STATE : 0;
-		if (!f->writer && p->rfd >= 0) syscall(SYS_ioctl, p->rfd, 0x541B /* FIONREAD */, &avail);
-		pli->ReadDataAvailable = (ULONG)avail;
-		/* WriteQuotaAvailable is deliberately left 0: the real
-		 * select.c never reads it (see its own comment on why), so
-		 * there is nothing here that depends on a faithful value. */
+		if (p->rfd >= 0) syscall(SYS_ioctl, p->rfd, 0x541B /* FIONREAD */, &avail);
+		/* ReadDataAvailable is what THIS end can read, so it is the
+		 * queue depth only for the read end; the write end reads
+		 * nothing. */
+		pli->ReadDataAvailable = f->writer ? 0 : (ULONG)avail;
+
+		/* WriteQuotaAvailable is answered for real here, because it is
+		 * now load-bearing in src/select/select.c and neither of the
+		 * other two environments can exercise it: wine-9.0 (what
+		 * `make check` runs against) hardcodes it to 0, so select.c's
+		 * wqa_works() probe disables the path there entirely.  This
+		 * native build is therefore the only oracle outside real-NT
+		 * CI, and a 0 here would silently disable the very logic the
+		 * ASan run exists to cover.
+		 *
+		 * Follows the rule measured on Windows Server 2025 build
+		 * 26100: an end's WriteQuotaAvailable is its write-direction
+		 * quota minus the bytes currently buffered in that direction.
+		 * The host pipe carries exactly one direction (writer -> reader),
+		 * so the write end's buffered count is the host FIONREAD and
+		 * the read end -- whose write direction is never used by
+		 * src/unistd/pipe.c -- sits at its full quota. */
+		pli->InboundQuota = PIPE_QUOTA;
+		pli->OutboundQuota = PIPE_QUOTA;
+		pli->NamedPipeEnd = f->writer ? FILE_PIPE_CLIENT_END : FILE_PIPE_SERVER_END;
+		/* Clamped, not merely subtracted.  A write larger than the
+		 * buffer gets queued, so a buffered count can transiently
+		 * exceed the quota; an unclamped PIPE_QUOTA - avail would
+		 * underflow this ULONG into a huge value that reads as
+		 * "enormous room available" -- the same wrong answer the
+		 * hardcoded always-writable used to give, reached by a
+		 * different route and much harder to spot. */
+		pli->WriteQuotaAvailable = f->writer
+			? (ULONG)(avail <= 0 ? PIPE_QUOTA : avail >= PIPE_QUOTA ? 0 : PIPE_QUOTA - avail)
+			: PIPE_QUOTA;
 		if (io) io->Information = sizeof *pli;
 		return STATUS_SUCCESS;
 	}

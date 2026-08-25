@@ -206,6 +206,12 @@ void *__fd_runtime_data(size_t *len);
  * silently reporting ready unconditionally. */
 void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup);
 
+/* src/unistd/pipe.c: the raw handle pair behind pipe2(), without any fd
+ * table involvement.  The read end is the pipe's server end, the write
+ * end its client end.  `inherit` requests OBJ_INHERIT.  Used by pipe2()
+ * and by select.c's WriteQuotaAvailable capability probe. */
+NTSTATUS __pipe_handles(HANDLE *rp, HANDLE *wp, int inherit);
+
 /* The "wait" half: block for up to wait_ticks 100ns units (relative),
  * waking early if any of the `ncons` console handles becomes signalled,
  * or indefinitely if `infinite` is non-zero (wait_ticks is then

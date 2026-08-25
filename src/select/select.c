@@ -17,12 +17,13 @@
  *     read/write handle itself is not signalled when data arrives or
  *     drains, unlike a console.  The only way to know readability is
  *     to ask, via NtQueryInformationFile(FilePipeLocalInformation)'s
- *     ReadDataAvailable -- so this is polled.  Writability has no
- *     working answer at all: the same call's WriteQuotaAvailable is
- *     documented for exactly this, but reads back 0 always under
- *     Wine (the environment `make check` runs in) whether or not the
- *     pipe actually has room, so it is not used -- see __fd_probe()'s
- *     comment for the fallback this forces.
+ *     ReadDataAvailable -- so this is polled.  Writability comes from
+ *     the same call's WriteQuotaAvailable, which is the field
+ *     documented for it and which real NT populates correctly; it is
+ *     used only once wqa_works() below has confirmed, by positive
+ *     control, that this platform populates it at all, because
+ *     wine-9.0 and older return a hard 0 there for every pipe and
+ *     reading that as "full" would report an empty pipe unwritable.
  *   - __FD_SOCKET: like a pipe, the handle itself is not a waitable
  *     NT object for this purpose, so it is polled -- by a single
  *     zero-timeout IOCTL_AFD_SELECT per pass (see __fd_probe() below).
@@ -182,6 +183,75 @@
 /* 20ms, in 100ns units (see file banner for why). */
 #define POLL_INTERVAL_TICKS 200000LL
 
+/* Is FILE_PIPE_LOCAL_INFORMATION's WriteQuotaAvailable populated on the
+ * platform this process is running on?
+ *
+ * This has to be asked, and asked behaviourally, because a 0 in that
+ * field is ambiguous and the two readings are opposites:
+ *
+ *   - on a platform that implements it, 0 means "the write direction is
+ *     completely full", i.e. do NOT report writable; and
+ *   - on one that does not, 0 is simply what the field always holds, and
+ *     reporting not-writable on it would make select()/poll() claim a
+ *     perfectly empty pipe is unwritable -- a caller that waits for
+ *     writability before writing then waits forever.
+ *
+ * Both readings are live in environments this library is built and
+ * tested in.  Wine's server hardcoded WriteQuotaAvailable to a literal
+ * 0, marked FIXME, until commit 4cbb92cfb ("server: Improve returned
+ * value in member WriteQuotaAvailable.", 2024-11-16), which first
+ * shipped in wine-10.0;
+ * wine-9.0 -- the version `make check` runs against on the primary
+ * development machine -- predates it and returns a hard 0 for every
+ * pipe, empty or full.  Reading that 0 as "full" is precisely the
+ * always-wrong direction, so the field cannot be trusted blind.
+ *
+ * The discriminator is a positive control, run once per process and
+ * cached: make a private pipe, write nothing to it, and ask.  A freshly
+ * created pipe with a non-zero quota has its entire write direction
+ * free, so an implementation that populates the field MUST report a
+ * non-zero WriteQuotaAvailable there.  Anything else -- a 0, or a query
+ * that fails -- means the field carries no signal on this platform, and
+ * the old always-ready fallback is used instead.  That fallback is
+ * over-eager only (it can report ready when a write would block, never
+ * the reverse), which is the direction this project accepts elsewhere
+ * for "no honest answer" cases.
+ *
+ * Note which end is probed.  src/unistd/pipe.c makes the read end the
+ * pipe's server end and the write end its client end, so the handle a
+ * writability probe queries is always a CLIENT end.  The probe below
+ * therefore queries the client end too, matching what __fd_probe() will
+ * actually be asked about rather than the more commonly measured server
+ * end.
+ *
+ * Returns 1 if the field is usable, 0 if not. */
+static int wqa_works(void)
+{
+	/* -1 = not yet asked.  A benign race here would only repeat the
+	 * probe and reach the same answer; this library is single-threaded
+	 * regardless (see the banner in src/internal/libc.h). */
+	static int cached = -1;
+	HANDLE r, w;
+	IO_STATUS_BLOCK io;
+	FILE_PIPE_LOCAL_INFORMATION pli;
+	NTSTATUS st;
+
+	if (cached >= 0) return cached;
+
+	cached = 0;
+	if (!NT_SUCCESS(__pipe_handles(&r, &w, 0))) return cached;
+
+	/* w is the client end, empty, with a 65536-byte inbound quota. */
+	memset(&pli, 0, sizeof pli);
+	st = NtQueryInformationFile(w, &io, &pli, sizeof pli, FilePipeLocalInformation);
+	if (NT_SUCCESS(st) && pli.WriteQuotaAvailable > 0)
+		cached = 1;
+
+	NtClose(w);
+	NtClose(r);
+	return cached;
+}
+
 /* See src/internal/libc.h for the contract. */
 void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 {
@@ -195,28 +265,73 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 			/* Broken/disconnected: a read() would return 0 (EOF) or an
 			 * error, a write() would fail -- neither would block, so
 			 * both count as ready, same as a hung-up descriptor does
-			 * on Linux. */
+			 * on Linux.
+			 *
+			 * This test deliberately stays AHEAD of the
+			 * WriteQuotaAvailable consult below, and the ordering is
+			 * load-bearing rather than incidental.  NT does not carry
+			 * the buffered-bytes reduction past a peer disconnect:
+			 * measured on Server 2025, a pipe with 32768 bytes still
+			 * buffered whose reading end had closed reported its full
+			 * 65536 quota as available.  A disconnected pipe therefore
+			 * reads as "plenty of room", which must not be taken as
+			 * authoritative writability -- the write() that follows
+			 * will fail, not succeed.
+			 *
+			 * Both paths happen to land on ready here, which is what
+			 * POSIX wants (write.html: the write() is what reports
+			 * [EPIPE], so select() must not hide it by withholding
+			 * readiness), so the observed NT behaviour is convenient
+			 * rather than dangerous.  It is still resolved here, by
+			 * the explicit state test, so that it stays correct if NT
+			 * ever reports 0 in that cell instead. */
 			*canread = 1; *canwrite = 1; *hup = 1;
 			break;
 		}
 		*canread = pli.ReadDataAvailable > 0;
-		/* WriteQuotaAvailable is documented as exactly the field for
-		 * this, but is not usable in practice: verified against Wine
-		 * (the environment `make check` runs in) it reads back 0
-		 * always, before and after writes, whether or not the pipe
-		 * has room -- unimplemented there, not merely untested.  A
-		 * pipe write here is also always synchronous (NtWriteFile
-		 * blocks internally until room exists rather than returning
-		 * a distinct "would block" status), so there is no second
-		 * source to cross-check it against either.  Given no honest
-		 * signal is available, the write side is treated like a
-		 * regular file's: always ready.  This can only ever be
-		 * over-eager (reporting ready when a subsequent write would
-		 * in fact block on a full pipe), never the reverse, which
-		 * matches this project's stance elsewhere on "no honest
-		 * answer" cases (see exceptfds, above the FD_SETSIZE banner
-		 * in include/sys/select.h). */
-		*canwrite = 1;
+		/* WriteQuotaAvailable is the field documented for exactly
+		 * this, and on real NT it works: measured on Windows Server
+		 * 2025 build 26100, an end's WriteQuotaAvailable is its
+		 * write-direction quota minus the bytes currently buffered in
+		 * that direction, tracking live and restored exactly by a
+		 * drain.  So consult it -- but only once this process has
+		 * established that the field is populated at all here; see
+		 * wqa_works() for why that check is not optional and why a 0
+		 * cannot be read as "full" without it.
+		 *
+		 * Scope of what this field is being trusted for here.
+		 * src/unistd/pipe.c has the library's only
+		 * NtCreateNamedPipeFile call, and it is always byte-stream
+		 * (FILE_PIPE_BYTE_STREAM_TYPE/_MODE) with both quotas at
+		 * 65536.  A __FD_PIPE inherited from a non-ntlibc parent
+		 * could be another shape, so the two that differ are worth
+		 * naming:
+		 *
+		 *   - message mode needs no special case.  NT was measured
+		 *     charging data bytes only, with no per-message overhead:
+		 *     eight cells writing the same 16384-byte total into a
+		 *     65536 quota, split 1x16384, 64x256, 256x64 and 512x32,
+		 *     all reported the same 49152, so nothing scales with
+		 *     message count.  (That sweep bounds per-message charge,
+		 *     not framing itself -- it cannot separate "framing is
+		 *     free" from "NT coalesced the writes" -- but the charge
+		 *     is what this comparison depends on.)
+		 *   - a zero-quota pipe is a genuinely zero-size buffer on
+		 *     NT rather than a system default, and the rule is not
+		 *     established there.  This library cannot create one, and
+		 *     an inherited one would read 0 here and be reported
+		 *     not-writable, which for a buffer that can never accept
+		 *     an unread byte is the conservative answer.
+		 *
+		 * No arithmetic is done on the field -- it is compared, not
+		 * reduced -- so the underflow that an unclamped
+		 * quota-minus-buffered subtraction is prone to (a transiently
+		 * over-quota buffered count wrapping into "enormous room
+		 * available", i.e. today's wrong answer by another route)
+		 * cannot arise on this side.  That clamp is the pipe
+		 * implementation's job; see fuzz/ntstubs.c for this project's
+		 * own instance of it. */
+		*canwrite = wqa_works() ? pli.WriteQuotaAvailable > 0 : 1;
 		break;
 	}
 	case __FD_CONSOLE:

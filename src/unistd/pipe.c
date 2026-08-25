@@ -12,7 +12,14 @@
 #include <errno.h>
 #include "libc.h"
 
-int pipe2(int fds[2], int flags)
+/* Creates the two handles of an anonymous pipe: the read end is the
+ * server side (NtCreateNamedPipeFile), the write end an NtOpenFile of
+ * the same name -- so a pipe write fd is always the CLIENT end, and its
+ * write direction is the pipe's inbound direction.  Split out of pipe2()
+ * so src/select/select.c's one-shot WriteQuotaAvailable capability probe
+ * can make a pipe of its own without allocating fds.  `inherit` asks for
+ * OBJ_INHERIT, i.e. the absence of O_CLOEXEC. */
+NTSTATUS __pipe_handles(HANDLE *rp, HANDLE *wp, int inherit)
 {
 	static unsigned serial;
 	WCHAR name[64];
@@ -22,7 +29,6 @@ int pipe2(int fds[2], int flags)
 	LARGE_INTEGER timeout = -1200000000LL;  /* 120s, the default */
 	HANDLE r, w;
 	NTSTATUS st;
-	int rfd, wfd;
 	unsigned pid = (unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess;
 	unsigned n;
 	const char pfx[] = "\\Device\\NamedPipe\\ntlibc.";
@@ -44,18 +50,31 @@ int pipe2(int fds[2], int flags)
 	us.Length = (USHORT)(i * sizeof(WCHAR));
 	/* USHORT-safe: same fixed name, one WCHAR longer. */
 	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | (flags & O_CLOEXEC ? 0 : OBJ_INHERIT), 0, 0);
+	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | (inherit ? OBJ_INHERIT : 0), 0, 0);
 
 	st = NtCreateNamedPipeFile(&r, GENERIC_READ | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &oa, &io,
 	                           FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_CREATE,
 	                           FILE_SYNCHRONOUS_IO_NONALERT,
 	                           FILE_PIPE_BYTE_STREAM_TYPE, FILE_PIPE_BYTE_STREAM_MODE,
 	                           FILE_PIPE_QUEUE_OPERATION, 1, 65536, 65536, &timeout);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (!NT_SUCCESS(st)) return st;
 
 	st = NtOpenFile(&w, GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &io,
 	                FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
-	if (!NT_SUCCESS(st)) { NtClose(r); return __set_errno_status(st); }
+	if (!NT_SUCCESS(st)) { NtClose(r); return st; }
+
+	*rp = r;
+	*wp = w;
+	return STATUS_SUCCESS;
+}
+
+int pipe2(int fds[2], int flags)
+{
+	HANDLE r, w;
+	int rfd, wfd;
+	NTSTATUS st = __pipe_handles(&r, &w, !(flags & O_CLOEXEC));
+
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	rfd = __fd_install(r, O_RDONLY | (flags & (O_CLOEXEC | O_NONBLOCK)), __FD_PIPE);
 	if (rfd < 0) { NtClose(r); NtClose(w); return -1; }

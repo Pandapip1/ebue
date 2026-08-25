@@ -65,8 +65,8 @@
  * file's code. test/posix-termios.c treats an unexpected flock()
  * failure as a note rather than a hard assertion for exactly this
  * reason, the same tolerance this project already extends to other
- * confirmed Wine quirks (e.g. src/select/select.c's
- * WriteQuotaAvailable note).
+ * confirmed Wine quirks (e.g. src/select/select.c's wqa_works(), which
+ * works around wine-9.0 hardcoding WriteQuotaAvailable to 0).
  *
  * test/posix-termios.c deliberately never exercises an actual type
  * change (LOCK_SH followed by LOCK_EX or vice versa) on a single fd,

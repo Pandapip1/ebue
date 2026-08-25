@@ -9,11 +9,12 @@
  *     ReadDataAvailable field src/select/select.c's __fd_probe()
  *     already queries to answer "is this pipe readable" -- same call,
  *     same field, just returned as a count instead of a boolean; not
- *     duplicated logic, the identical NT mechanism. (That file's
- *     comment also notes WriteQuotaAvailable reads back 0 always under
- *     Wine regardless of actual room -- irrelevant here since FIONREAD
- *     only ever asks about the read side, but worth restating: nothing
- *     in this file leans on that field either.) For __FD_FILE, it is
+ *     duplicated logic, the identical NT mechanism. (That file also
+ *     reads WriteQuotaAvailable from the same structure, gated on a
+ *     one-shot capability probe because wine-9.0 and older hardcode it
+ *     to 0 -- irrelevant here since FIONREAD only ever asks about the
+ *     read side, but worth restating: nothing in this file leans on
+ *     that field either.) For __FD_FILE, it is
  *     bytes remaining until EOF (FileStandardInformation's EndOfFile
  *     minus FilePositionInformation's CurrentByteOffset) -- a real,
  *     if less commonly needed, answer. Anything else (a console, a
