@@ -7,6 +7,44 @@
 #include <errno.h>
 #include "libc.h"
 
+/* write.html, ERRORS, shall fail: "[EFBIG] The file is a regular file,
+ * nbyte is greater than 0, and the starting position is greater than or
+ * equal to the offset maximum established in the open file description
+ * associated with fildes."  The starting position of a write() is the
+ * file position, or the end of the file when O_APPEND is set (that is
+ * what FILE_WRITE_TO_END_OF_FILE below resolves to).
+ *
+ * WHY THIS IS ASKED ON THE FAILURE PATH rather than before the write.
+ * The alternative is an unconditional NtQueryInformationFile in front of
+ * every NtWriteFile -- one extra round trip on the hottest path in the
+ * library, paid by every stdio flush, to evaluate a condition that no
+ * successful write can ever satisfy.  A starting position at or past
+ * __OFF_MAX cannot produce a successful transfer: there is nowhere for
+ * the bytes to go.  So the query is only worth making once NT has
+ * already refused, where it costs nothing and where its only effect is
+ * to replace one error report with the one POSIX names.  A shall-fail
+ * clause that turns an error into a *different* error is exactly the
+ * shape that suits this placement.
+ *
+ * A query that cannot be answered reports 0 -- the caller then gets
+ * NT's own status, which is what it would have got before. */
+static int start_at_offset_max(struct __fd *f)
+{
+	IO_STATUS_BLOCK io;
+
+	if (f->flags & O_APPEND) {
+		FILE_STANDARD_INFORMATION si;
+		if (!NT_SUCCESS(NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation)))
+			return 0;
+		return si.EndOfFile >= __OFF_MAX;
+	} else {
+		FILE_POSITION_INFORMATION pi;
+		if (!NT_SUCCESS(NtQueryInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation)))
+			return 0;
+		return pi.CurrentByteOffset >= __OFF_MAX;
+	}
+}
+
 ssize_t write(int fd, const void *buf, size_t count)
 {
 	struct __fd *f = __fd_get(fd);
@@ -46,7 +84,10 @@ ssize_t write(int fd, const void *buf, size_t count)
 		errno = EPIPE;
 		return -1;
 	}
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (!NT_SUCCESS(st)) {
+		if (f->type == __FD_FILE && start_at_offset_max(f)) { errno = EFBIG; return -1; }
+		return __set_errno_status(st);
+	}
 	return (ssize_t)io.Information;
 }
 
@@ -62,6 +103,19 @@ ssize_t pwrite(int fd, const void *buf, size_t count, off_t off)
 	if ((f->flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
+	/* The offset maximum, measured against the CALLER'S offset: for
+	 * pwrite the "starting position" write.html's [EFBIG] speaks of is
+	 * the offset argument, so unlike write() above this needs no query
+	 * and is decided before anything is attempted.  The clamp below is
+	 * the DESCRIPTION's other half -- "For regular files, no data
+	 * transfer shall occur past the offset maximum established in the
+	 * open file description associated with fildes" -- which turns a
+	 * request straddling the maximum into a short write rather than an
+	 * error.  Both arms are unsigned so that off + count cannot overflow
+	 * a signed off_t on the way to being compared. */
+	if (count && off >= __OFF_MAX) { errno = EFBIG; return -1; }
+	if ((unsigned long long)off + count > (unsigned long long)__OFF_MAX)
+		count = (size_t)(__OFF_MAX - off);
 	/* RLIMIT_FSIZE, measured against the CALLER'S offset rather than the
 	 * file position -- pwrite writes where it is told. */
 	if (__fsize_limited()) {

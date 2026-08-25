@@ -354,6 +354,15 @@ void __fenv_init(void);
  * returns how many of `count` bytes may be written on a handle, or -1
  * with EFBIG; __fsize_allow() answers for an operation that cannot
  * partially succeed (ftruncate, posix_fallocate). */
+/* The offset maximum established in an open file description, i.e. the
+ * largest value an off_t can hold.  off_t is _Int64 unconditionally
+ * (include/alltypes.h.in), so this is not arch-dependent.  write.html
+ * DESCRIPTION -- "For regular files, no data transfer shall occur past
+ * the offset maximum established in the open file description
+ * associated with fildes" -- and its shall-fail [EFBIG] both turn on
+ * this value; see src/unistd/write.c. */
+#define __OFF_MAX 0x7fffffffffffffffLL
+
 int __fsize_limited(void);
 long long __fsize_clamp(HANDLE h, int append, size_t count);
 long long __fsize_room_at(long long off);

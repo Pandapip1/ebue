@@ -262,13 +262,44 @@ static void test_puts_eagain(int fd1)
  * maximum file size", "...the file size limit of the process", or "The
  * file is a regular file and an attempt was made to write at or beyond
  * the offset maximum." */
-#if 0 /* UNIMPL: src/unistd/write.c maps NTSTATUS through
-       * __set_errno_status() and nothing there produces EFBIG; NT's
-       * STATUS_DISK_FULL becomes ENOSPC and there is no per-process file
-       * size limit (no setrlimit(RLIMIT_FSIZE) here) to exceed.  A write
-       * at or beyond the off_t offset maximum is implementable -- seek to
-       * OFF_MAX and write -- and would today return whatever NT says
-       * rather than EFBIG. */
+#if 0 /* N/A THROUGH puts(), all three sub-clauses -- but each for its own
+       * reason, and two of the three reasons this fence used to give were
+       * out of date.  A "shall fail" entry is not discharged by some of
+       * its conditions being vacuous, so they are taken one at a time.
+       *
+       * IMPLEMENTATION-DEFINED MAXIMUM FILE SIZE: N/A, and this half of
+       * the old text still holds.  NT reports a full volume as
+       * STATUS_DISK_FULL, which src/internal/errno.c maps to ENOSPC, and
+       * filling a volume is not something this suite can do.
+       *
+       * FILE SIZE LIMIT OF THE PROCESS: NO LONGER TRUE that there is
+       * none.  setrlimit(RLIMIT_FSIZE) exists and is enforced by this
+       * library's own write paths (src/misc/resource.c, and the clamp in
+       * src/unistd/write.c).  The clause is reachable and IS asserted --
+       * test/posix-sysmisc.c, test_setrlimit_fsize_enforced(), which
+       * pins write, pwrite, ftruncate and posix_fallocate against a
+       * 256-byte limit.  It is simply not reachable through puts(),
+       * whose only descriptor is fd 1.
+       *
+       * AT OR BEYOND THE OFFSET MAXIMUM: now implemented, and asserted
+       * elsewhere -- src/unistd/write.c reports [EFBIG] for a starting
+       * position at or past __OFF_MAX, and test/posix-io.c's
+       * test_read_write() pins it.  What is NOT true is the old text's
+       * claim that puts() can reach it by seeking fd 1 to the offset
+       * maximum.  Measured, by binary search under Wine on ext4: the
+       * largest position NtSetInformationFile(FilePositionInformation)
+       * accepts is 0xffffffff000, and OFF_MAX comes back [EINVAL] -- so
+       * the very first line of the test below, CHECK(lseek(1, OFF_MAX,
+       * SEEK_SET) == OFF_MAX), fails before puts() is ever called.
+       * glibc on ext4 refuses the identical seek with the identical
+       * errno, for the filesystem's reason rather than the libc's.  The
+       * clause is therefore pinned on pwrite(), which takes the starting
+       * position as an argument and needs no seek.
+       *
+       * (Note also that OFF_MAX is not defined anywhere in this tree --
+       * it is a BSD spelling, not a POSIX one -- so the body below would
+       * not compile if un-fenced.  test/posix-io.c writes the constant
+       * out.) */
 static void test_puts_efbig(void)
 {
 	CHECK(lseek(1, OFF_MAX, SEEK_SET) == OFF_MAX);

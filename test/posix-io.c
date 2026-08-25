@@ -110,6 +110,56 @@ static void test_read_write(void)
 	CHECK(close(fd) == 0);
 
 	unlink("t-rw.txt");
+
+	/* write.html DESCRIPTION: "For regular files, no data transfer shall
+	 * occur past the offset maximum established in the open file
+	 * description associated with fildes."  ERRORS, shall fail:
+	 * "[EFBIG] The file is a regular file, nbyte is greater than 0, and
+	 * the starting position is greater than or equal to the offset
+	 * maximum established in the open file description associated with
+	 * fildes."
+	 *
+	 * pwrite() is the vehicle, not write(), and the reason is measured
+	 * rather than stylistic.  The clause needs a starting position at or
+	 * past the offset maximum; for write() that is the file position,
+	 * and lseek() cannot put a descriptor there on this host.  Binary
+	 * searched under Wine on ext4: the largest offset NtSetInformation-
+	 * File(FilePositionInformation) accepts is 0xffffffff000, and every
+	 * larger one -- OFF_MAX, 2^62 -- comes back [EINVAL], so the
+	 * precondition of the write() spelling is not constructible here.
+	 * (glibc on ext4 refuses the same seek with the same errno, for the
+	 * same filesystem reason.)  pwrite() takes the starting position as
+	 * an argument and so sidesteps the seek entirely.
+	 *
+	 * MEASURED BEFORE THE FIX: pwrite(fd, "x", 1, OFF_MAX) returned -1
+	 * with [EINVAL], NT's STATUS_INVALID_PARAMETER for a write it cannot
+	 * place -- not [EFBIG]. */
+	fd = open("t-offmax.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		/* off_t is _Int64 (include/alltypes.h.in), so the offset
+		 * maximum an open file description can express is this. */
+		off_t offmax = (off_t)0x7fffffffffffffffLL;
+
+		errno = 0;
+		CHECK(pwrite(fd, "x", 1, offmax) == -1);
+		CHECK(errno == EFBIG);
+
+		/* "nbyte is greater than 0" is part of the clause, not
+		 * decoration: a zero-length request at the same position is
+		 * outside it and must not be reported as [EFBIG].  This is the
+		 * boundary that keeps the fix from degenerating into "any
+		 * pwrite at a large offset is EFBIG". */
+		errno = 0;
+		CHECK(!(pwrite(fd, "x", 0, offmax) == -1 && errno == EFBIG));
+
+		/* and a pwrite nowhere near the maximum still works */
+		errno = 0;
+		CHECK(pwrite(fd, "hello", 5, 0) == 5);
+
+		CHECK(close(fd) == 0);
+		unlink("t-offmax.txt");
+	}
 }
 
 /* ---- lseek: lseek.html ---- */
