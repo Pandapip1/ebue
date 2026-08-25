@@ -252,16 +252,77 @@ static void test_syntax_error(void)
 
 static void test_refuses_reserved_words(void)
 {
-	CHECK(run_c("if x; then y; fi", 0) == 2);
-	CHECK(err_contains("if"));
+	/* `case` is what is left of this list: the construct has no
+	 * grammar, so the word still reaches the executor as a command
+	 * name and would exit 127 about a fiction. */
+	/* `case x in y) ;; esac` is rejected one layer earlier -- ')' is a
+	 * lexer-level operator, so it is a *syntax* error and never
+	 * reaches the refusal list.  `case word` is the form that parses
+	 * cleanly and therefore the one that has to be refused by name. */
+	CHECK(run_c("case foo", 0) == 2);
+	CHECK(err_contains("case"));
 	CHECK(out_is_empty());
 
-	CHECK(run_c("for i in a b; do y; done", 0) == 2);
-	CHECK(err_contains("for"));
+	CHECK(run_c("esac", 0) == 2);
+	CHECK(err_contains("case"));
+
+	CHECK(run_c("case x in y) ;; esac", 0) == 2);
+	CHECK(err_contains("syntax error"));
 
 	/* A quoted word is not a reserved word: it is an ordinary command
-	 * name that simply does not exist, so the honest answer is 127. */
+	 * name that simply does not exist, so the honest answer is 127.
+	 * XCU 2.10.1 rule 1's note -- "because at this point
+	 * <quotation-mark> characters are retained in the token, quoted
+	 * strings cannot be recognized as reserved words". */
+	CHECK(run_c("'case'", 0) == 127);
 	CHECK(run_c("'if'", 0) == 127);
+	CHECK(run_c("'fi'", 0) == 127);
+
+	/* `if`/`while`/`until`/`for` came off the refusal list when stage
+	 * 6b gave them a grammar, so these now *run*: the command inside
+	 * is what fails, with a true 127 about a name the script really
+	 * did write.  A misplaced terminator is a syntax error (2) from
+	 * the parser, which is what keeps the refusal property those words
+	 * used to get from the list. */
+	CHECK(run_c("for i in a b; do y; done", 0) == 127);
+	/* 0, not 127: `x` is not found, so the condition is false and
+	 * 2.9.4's "or zero, if none was executed" applies -- the 127 is
+	 * the *condition's* status and must not become the command's. */
+	CHECK(run_c("if x; then y; fi", 0) == 0);
+	CHECK(run_c("while x; do y; done", 0) == 0);
+	CHECK(run_c("if x; then y; else exit 4; fi", 0) == 4);
+	CHECK(run_c("fi", 0) == 2);
+	CHECK(err_contains("syntax error"));
+	CHECK(run_c("done", 0) == 2);
+	CHECK(err_contains("syntax error"));
+}
+
+/* The compound commands really work through the binary, not just
+ * in-process: test/sh-engine.c drives __sh_exec_list() directly, and
+ * "the engine is wired into sh.exe" is a separate claim. */
+static void test_compound_commands_run(void)
+{
+	char cmd[1600], buf[256];
+
+	CHECK(run_c("if true; then exit 3; fi", 0) == 3);
+	CHECK(run_c("if false; then exit 3; else exit 4; fi", 0) == 4);
+	CHECK(run_c("if false; then exit 3; fi", 0) == 0);
+	CHECK(run_c("while false; do exit 9; done", 0) == 0);
+	CHECK(run_c("until true; do exit 9; done", 0) == 0);
+	CHECK(run_c("for f in a b c; do test \"$f\" = c; done", 0) == 0);
+	CHECK(run_c("for f in a b c; do exit 7; done", 0) == 7);
+
+	sprintf(cmd, "for f in a b; do '%s' --produce \"$f\"; done > cap5.txt", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into("cap5.txt", buf, sizeof buf);
+	CHECK(strcmp(buf, "ab") == 0);
+
+	/* XCU 2.9.4: "for name" with no "in" list is "in \"$@\"", and
+	 * there are no positional parameters -- refused up front, by name,
+	 * like every other thing this shell will not guess at. */
+	CHECK(run_c("for f; do y; done", 0) == 2);
+	CHECK(err_contains("positional"));
+	CHECK(out_is_empty());
 }
 
 static void test_refuses_unimplemented_builtins(void)
@@ -343,7 +404,7 @@ static void test_command_name_becomes_dollar_zero(void)
 {
 	/* sh(1p): with -c, "command_name" is assigned to $0, which is what
 	 * a shell prefixes its diagnostics with. */
-	CHECK(run_c("if x; then y; fi", "mybuild") == 2);
+	CHECK(run_c("case foo", "mybuild") == 2);
 	CHECK(err_contains("mybuild: "));
 }
 
@@ -413,7 +474,7 @@ static void cleanup_artifacts(void)
 	static const char *const files[] = {
 		OUTFILE, ERRFILE,
 		"cap1.txt", "cap2.txt", "cap3.txt", "cap4.txt",
-		"preflight.txt", "script1.sh", "script2.sh",
+		"cap5.txt", "preflight.txt", "script1.sh", "script2.sh",
 		0
 	};
 	size_t i;
@@ -466,6 +527,7 @@ int main(int argc, char **argv)
 
 	test_syntax_error();
 	test_refuses_reserved_words();
+	test_compound_commands_run();
 	test_refuses_unimplemented_builtins();
 	test_refuses_special_parameters();
 	test_refuses_async();

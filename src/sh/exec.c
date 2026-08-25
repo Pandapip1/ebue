@@ -1151,6 +1151,193 @@ static void env_snapshot_restore(const struct env_snapshot *es)
  * its body, and -- for SH_CMD_SUBSHELL only -- environ/cwd
  * save-and-restore around that per this function group's header
  * comment. Same -1/0 convention as every other __sh_exec_*() helper. */
+
+/* ==== Compound commands (XCU 2.9.4) ====================================
+ *
+ * Stage 6b.  `if`, `while`, `until` and `for` are the constructs
+ * test/sh-design.md's item 2 names; `case` and function definitions are
+ * not here yet and still lex as ordinary WORDs, so sh/main.c still
+ * refuses them by name.
+ *
+ * Three properties are shared by all four and are the reason they live
+ * next to each other rather than in the executor's simple-command path:
+ *
+ *  - **They run in this process, with no subshell.**  2.12's list of
+ *    what a subshell environment scopes ("Grouping Commands" in 2.9.4
+ *    is the construct that asks for one, via "( )") does not include
+ *    the control-flow constructs, so a `cd` inside a `for` body moves
+ *    the shell, and an assignment in an `if` branch survives the `fi`.
+ *    exec_group() supplies the subshell semantics for "( ... )" and
+ *    deliberately is not reused here.
+ *
+ *  - **The condition's status is not the construct's status.**  Every
+ *    one of the four says so explicitly and differently -- an `if` with
+ *    no branch taken is 0 "if none was executed", a `while` whose body
+ *    never runs is 0 "if none was executed", a `for` over an empty word
+ *    list is 0.  Each of these therefore keeps the condition's status in
+ *    a local and only ever writes *status from a body.  Letting the
+ *    condition fall through would make `if false; then ...; fi` report
+ *    1, which is the single most common way to get this wrong.
+ *
+ *  - **A pending `exit` has to get out.**  These are loops and
+ *    branches around __sh_exec_list(), which is exactly what sh.h's
+ *    control-flow comment means by "however many nested lists" -- so
+ *    each checks __sh_flow_pending() at every point it would otherwise
+ *    iterate again or evaluate another condition.  Without that,
+ *    `while true; do exit 0; done` never terminates: the body returns
+ *    normally with the flag set and the loop asks the condition again.
+ */
+
+/* 2.9.4 "The if Conditional Construct": "The if compound-list shall be
+ * executed; if its exit status is zero, the then compound-list shall be
+ * executed and the command shall complete.  Otherwise, each elif
+ * compound-list shall be executed, in turn ... Otherwise, the else
+ * compound-list shall be executed."  Exit status: "the exit status of
+ * the then or else compound-list that was executed, or zero, if none
+ * was executed." */
+static int exec_if(const struct sh_command *cmd, int *status)
+{
+	const struct sh_ifarm *a;
+
+	*status = 0;
+	for (a = cmd->arms; a; a = a->next) {
+		int cond_status;
+		int rc = __sh_exec_list(a->cond, &cond_status);
+		if (rc) return rc;
+		if (__sh_flow_pending()) { *status = cond_status; return 0; }
+		if (cond_status == 0) return __sh_exec_list(a->body, status);
+	}
+	if (cmd->else_body) return __sh_exec_list(cmd->else_body, status);
+	return 0;
+}
+
+/* 2.9.4 "The while Loop": "compound-list-1 shall be executed, and if it
+ * has a non-zero exit status, the while command shall complete.
+ * Otherwise, the compound-list-2 shall be executed, and the process
+ * shall repeat."  "The until Loop" is the same sentence with the test
+ * inverted -- "if it has a zero exit status, the until command
+ * completes" -- which is `cmd->until`.  Exit status for both: "the exit
+ * status of the last compound-list-2 executed, or zero if none was
+ * executed", which is why *status starts at 0 and is only ever written
+ * by the body. */
+static int exec_loop(const struct sh_command *cmd, int *status)
+{
+	*status = 0;
+	for (;;) {
+		int cond_status, rc;
+
+		rc = __sh_exec_list(cmd->cond, &cond_status);
+		if (rc) return rc;
+		if (__sh_flow_pending()) { *status = cond_status; return 0; }
+		if (cmd->until ? (cond_status == 0) : (cond_status != 0)) return 0;
+
+		rc = __sh_exec_list(cmd->body, status);
+		if (rc) return rc;
+		if (__sh_flow_pending()) return 0;
+	}
+}
+
+/* 2.9.4 "The for Loop": "the list of words following in shall be
+ * expanded to generate a list of items.  Then, the variable name shall
+ * be set to each item, in turn, and the compound-list executed each
+ * time.  If no items result from the expansion, the compound-list shall
+ * not be executed."  Exit status: "the exit status of the last command
+ * that executes.  If there are no items, the exit status shall be
+ * zero."
+ *
+ * The words are expanded exactly the way a simple command's arguments
+ * are -- one wordexp() per source word with WRDE_APPEND -- so the item
+ * list is whatever that call produces and this file never tokenises
+ * anything itself (see this file's header on why that reuse is the
+ * point).  "for f in *.c" therefore iterates the matched files without
+ * being a special case here.
+ *
+ * Two of XCU 2.6's rules are consequently *not* delivered, and both
+ * belong to src/wordexp/wordexp.c, which states them: the result of a
+ * parameter expansion is not field-split, so "for f in $LIST" is one
+ * item and not $LIST's fields; and an empty field is not deleted, so
+ * "for f in $UNSET" is one empty item rather than no items, which is
+ * the one path 2.9.4's "if no items result from the expansion, the
+ * compound-list shall not be executed" does not yet reach.  Neither is
+ * worked around here on purpose: `cmd $LIST` goes through the identical
+ * call and gets the identical answer, and a `for` that disagreed with a
+ * simple command about what a word expands to would be a worse defect
+ * than one consistent documented gap.  test/sh-engine.c pins both, so
+ * they invert visibly when wordexp() grows the behaviour.
+ *
+ * Setting `name` is setenv(), which is what every assignment in this
+ * shell already is: the only variable store any expansion here can see
+ * is the real `environ` (test/sh-design.md, sh/main.c's header).  The
+ * loop variable is therefore *exported* to children, where a real shell
+ * would leave it unexported unless something exported it.  That is the
+ * pre-existing deviation the whole variable story has, not a new one
+ * this construct introduces -- `X=1; cmd` already behaves the same way
+ * -- and it is stated here rather than left for someone to find. */
+static int exec_for(const struct sh_command *cmd, int *status)
+{
+	wordexp_t we;
+	const struct sh_word *w;
+	int first = 1, rc = 0;
+	size_t i;
+
+	*status = 0;
+
+	/* 2.9.4: "Omitting: in word ... shall be equivalent to: in "$@"".
+	 * There are no positional parameters in this shell -- wordexp()
+	 * expands only $NAME/${NAME} -- so there is nothing to iterate and
+	 * no honest approximation of one.  Iterating zero times would be a
+	 * silently different program (2.9.4 makes a for over no items exit
+	 * 0 having run nothing, which is indistinguishable from a correct
+	 * run over an empty "$@"), so this is the -1 "cannot execute this
+	 * node" convention instead; sh/main.c refuses such a program up
+	 * front, before anything runs, with a message that names why. */
+	if (!cmd->have_in) return -1;
+
+	if (!cmd->words) return 0; /* `for f in ; do` -- no items, exit 0 */
+
+	for (w = cmd->words; w; w = w->next) {
+		if (wordexp(w->text, &we, first ? 0 : WRDE_APPEND)) {
+			if (!first) wordfree(&we);
+			return -1; /* same meaning as in spawn_stage() */
+		}
+		first = 0;
+	}
+
+	for (i = 0; i < we.we_wordc; i++) {
+		if (setenv(cmd->name, we.we_wordv[i], 1) < 0) { rc = -1; break; }
+		rc = __sh_exec_list(cmd->body, status);
+		if (rc) break;
+		if (__sh_flow_pending()) break;
+	}
+	wordfree(&we);
+	return rc;
+}
+
+/* The body of any compound command, run in this process.  Both callers
+ * -- exec_group() for a standalone "(...)"/"{...}"/if/while/for, and
+ * exec_group_stage_inline() for one as a pipeline stage -- used to read
+ * cmd->body directly, which was right when the only two compound kinds
+ * stored their whole body there.  Routing through one dispatcher
+ * instead means a kind added later cannot be wired into one of those
+ * two paths and silently forgotten in the other; the default arm makes
+ * that a reported -1 rather than a silent "ran an empty list, exit 0". */
+static int exec_compound(const struct sh_command *cmd, int *status)
+{
+	switch (cmd->kind) {
+	case SH_CMD_SUBSHELL:
+	case SH_CMD_BRACE:
+		return __sh_exec_list(cmd->body, status);
+	case SH_CMD_IF:
+		return exec_if(cmd, status);
+	case SH_CMD_LOOP:
+		return exec_loop(cmd, status);
+	case SH_CMD_FOR:
+		return exec_for(cmd, status);
+	default:
+		return -1;
+	}
+}
+
 static int exec_group(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1169,7 +1356,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 		if (env_snapshot_take(&es)) { restore_fds(&rs); return -1; }
 	}
 
-	rc = __sh_exec_list(cmd->body, status);
+	rc = exec_compound(cmd, status);
 
 	if (is_subshell) {
 		/* "( exit 3 )" exits *the subshell*, not the shell (2.9.4
@@ -1406,7 +1593,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	oldcwd = getcwd(0, 0);
 	if (env_snapshot_take(&es)) { __free(oldcwd); restore_fds(&rs); return -1; }
 
-	rc = __sh_exec_list(cmd->body, status);
+	rc = exec_compound(cmd, status);
 
 	/* 2.12 puts every stage of a multi-command pipeline in a subshell
 	 * environment regardless of "(...)" vs "{...}", so an `exit` in

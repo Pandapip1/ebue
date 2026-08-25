@@ -453,7 +453,21 @@ struct parser {
 static void advance(struct parser *p)
 {
 	if (p->cur.type == T_WORD) { __free(p->cur.text); p->cur.text = 0; }
-	if (p->had_error) return;
+	if (p->had_error) {
+		/* Leaving p->cur as a T_WORD whose text has just been freed and
+		 * NULLed breaks the invariant every T_WORD consumer relies on --
+		 * is_resword() strcmp()s it, is_name() walks it, xstrdup() takes
+		 * its length -- so an error would arm a null dereference for any
+		 * caller that inspects the token before it checks had_error.
+		 * Every current caller does check first, which is why this has
+		 * never fired; that is a property of the callers, not of the
+		 * token, and stage 6b added several new places that ask "is this
+		 * word a reserved word?" before doing anything else.  Handing
+		 * back T_ERROR keeps the invariant true at the source instead of
+		 * relying on each new caller to remember. */
+		p->cur = mktok(T_ERROR);
+		return;
+	}
 	p->cur = next_raw_token(&p->lx);
 	if (p->cur.type == T_ERROR) p->had_error = 1;
 }
@@ -533,41 +547,300 @@ static struct sh_redir *parse_redir(struct parser *p)
 	return r;
 }
 
-static struct sh_list *parse_list(struct parser *p, int stop_rparen, int stop_rbrace);
+/* ---- compound commands (XCU 2.9.4) -----------------------------------
+ *
+ * `if`, `while`, `until` and `for` all have the shape 2.9.4 opens by
+ * describing -- "each of these compound commands has a reserved word or
+ * control operator at the beginning, and a corresponding terminator
+ * reserved word or operator at the end" -- so the machinery is built
+ * once: a set of reserved words that end the compound-list currently
+ * being parsed, and one parse_list() that stops on any of them.
+ * '(' ')' and '{' '}' were already two hard-coded flags of exactly this
+ * kind and become two more bits of the same mask.
+ *
+ * Reserved words are recognised the same way `!`, `{` and `}` already
+ * were (sh.h's banner): a bare, unquoted WORD token whose text is
+ * exactly the word, and only where the grammar expects one.  That is
+ * XCU 2.10.1's rule 1, including its note -- "because at this point
+ * <quotation-mark> characters are retained in the token, quoted strings
+ * cannot be recognized as reserved words" -- which falls out for free
+ * here, since parse.c keeps word text raw, so `"fi"` is the four-
+ * character token "\"fi\"" and simply is not the word `fi`. */
+#define ST_RPAREN 0x01
+#define ST_RBRACE 0x02
+#define ST_THEN   0x04
+#define ST_ELIF   0x08   /* `elif`, `else` and `fi` all end a then-part */
+#define ST_FI     0x10
+#define ST_DO     0x20
+#define ST_DONE   0x40
 
-static int at_group_stop(struct parser *p, int stop_rparen, int stop_rbrace)
+static struct sh_list *parse_list(struct parser *p, unsigned stops);
+
+/* A bare, unquoted WORD token whose text is exactly `w`. */
+static int is_resword(struct parser *p, const char *w)
+{
+	return p->cur.type == T_WORD && strcmp(p->cur.text, w) == 0;
+}
+
+static int expect_resword(struct parser *p, const char *w)
+{
+	if (p->had_error) return -1;
+	if (!is_resword(p, w)) {
+		perr(p, "expected `%s'", w);
+		return -1;
+	}
+	advance(p);
+	return p->had_error ? -1 : 0;
+}
+
+static int at_group_stop(struct parser *p, unsigned stops)
 {
 	if (p->cur.type == T_EOF) return 1;
-	if (stop_rparen && p->cur.type == T_RPAREN) return 1;
-	if (stop_rbrace && p->cur.type == T_RBRACE) return 1;
+	if ((stops & ST_RPAREN) && p->cur.type == T_RPAREN) return 1;
+	if ((stops & ST_RBRACE) && p->cur.type == T_RBRACE) return 1;
+	if (p->cur.type != T_WORD) return 0;
+	if ((stops & ST_THEN) && is_resword(p, "then")) return 1;
+	if ((stops & ST_ELIF) &&
+	    (is_resword(p, "elif") || is_resword(p, "else") || is_resword(p, "fi"))) return 1;
+	if ((stops & ST_FI) && is_resword(p, "fi")) return 1;
+	if ((stops & ST_DO) && is_resword(p, "do")) return 1;
+	if ((stops & ST_DONE) && is_resword(p, "done")) return 1;
+	return 0;
+}
+
+/* Reserved words that can only ever appear *inside* a construct, never
+ * at the start of a command.  Seeing one in command position means the
+ * program is malformed -- `fi` with no `if`, a `then` the parser has
+ * already walked past -- and XCU 2.10.1 rule 1 says the token
+ * identifier for the reserved word results there, i.e. it is a syntax
+ * error rather than a command named "fi".  Diagnosing it here is what
+ * keeps sh/main.c's refuse-before-anything-runs property intact now
+ * that these words have come off its refusal list: without this they
+ * would fall through to a simple command, fail PATH lookup, and exit
+ * 127 with a true statement about a fiction.
+ *
+ * `case`/`esac` are deliberately absent: the `case` construct is not
+ * implemented yet, so `case` still lexes as an ordinary WORD and
+ * sh/main.c still refuses it by name with a message that says so. */
+static const char *const misplaced_reswords[] = {
+	"then", "else", "elif", "fi", "do", "done", "in", 0
+};
+
+/* Every sh_command allocation goes through here.  The struct has grown
+ * six fields that only some kinds use, and a kind that forgets to
+ * initialise one reads uninitialised memory in free.c's walk long
+ * before anything notices in the executor -- so there is exactly one
+ * place that decides what an unset field is. */
+static struct sh_command *new_command(struct parser *p, enum sh_cmd_kind kind)
+{
+	struct sh_command *c = __malloc(sizeof *c);
+	if (!c) { perr(p, "out of memory"); return 0; }
+	c->kind = kind;
+	c->assigns = 0;
+	c->words = 0;
+	c->body = 0;
+	c->arms = 0;
+	c->else_body = 0;
+	c->cond = 0;
+	c->until = 0;
+	c->name = 0;
+	c->have_in = 0;
+	c->redirs = 0;
+	return c;
+}
+
+static void free_command(struct sh_command *c)
+{
+	if (!c) return;
+	__sh_free_command_contents(c);
+	__free(c);
+}
+
+/* XBD Name: "a word consisting solely of underscores, digits, and
+ * alphabetics from the portable character set, the first character of
+ * which is not a digit" -- XCU 2.10.1's rule 5 ("NAME in for"). */
+static int is_name(const char *s)
+{
+	const char *q = s;
+	if (!(isalpha((unsigned char)*q) || *q == '_')) return 0;
+	for (q++; *q; q++) if (!(isalnum((unsigned char)*q) || *q == '_')) return 0;
+	return 1;
+}
+
+/* `do compound-list done`, shared by the for/while/until loops -- 2.9.4
+ * spells the same two reserved words out for each of the three. */
+static struct sh_list *parse_do_group(struct parser *p)
+{
+	struct sh_list *body;
+	skip_newlines(p);
+	if (expect_resword(p, "do")) return 0;
+	body = parse_list(p, ST_DONE);
+	if (p->had_error) { __sh_list_free(body); return 0; }
+	if (expect_resword(p, "done")) { __sh_list_free(body); return 0; }
+	return body;
+}
+
+/* 2.9.4 "The if Conditional Construct":
+ *
+ *   if compound-list then compound-list
+ *   [elif compound-list then compound-list]... [else compound-list] fi
+ */
+static struct sh_command *parse_if(struct parser *p)
+{
+	struct sh_command *cmd = new_command(p, SH_CMD_IF);
+	struct sh_ifarm *tail = 0;
+
+	if (!cmd) return 0;
+	advance(p); /* `if` */
+	for (;;) {
+		struct sh_ifarm *arm = __malloc(sizeof *arm);
+		if (!arm) { perr(p, "out of memory"); goto fail; }
+		arm->cond = 0;
+		arm->body = 0;
+		arm->next = 0;
+		if (tail) tail->next = arm; else cmd->arms = arm;
+		tail = arm;
+
+		arm->cond = parse_list(p, ST_THEN);
+		if (p->had_error) goto fail;
+		if (expect_resword(p, "then")) goto fail;
+		arm->body = parse_list(p, ST_ELIF);
+		if (p->had_error) goto fail;
+
+		if (!is_resword(p, "elif")) break;
+		advance(p); /* `elif`: same shape as `if`, so loop */
+	}
+	if (is_resword(p, "else")) {
+		advance(p);
+		cmd->else_body = parse_list(p, ST_FI);
+		if (p->had_error) goto fail;
+	}
+	if (expect_resword(p, "fi")) goto fail;
+	return cmd;
+fail:
+	free_command(cmd);
+	return 0;
+}
+
+/* 2.9.4 "The while Loop" / "The until Loop" -- identical grammar, and
+ * the only difference is the sense of the test, which is one bit on the
+ * node rather than a duplicated parser. */
+static struct sh_command *parse_loop(struct parser *p, int until)
+{
+	struct sh_command *cmd = new_command(p, SH_CMD_LOOP);
+	if (!cmd) return 0;
+	cmd->until = until;
+	advance(p); /* `while` / `until` */
+	cmd->cond = parse_list(p, ST_DO);
+	if (p->had_error) { free_command(cmd); return 0; }
+	cmd->body = parse_do_group(p);
+	if (p->had_error) { free_command(cmd); return 0; }
+	return cmd;
+}
+
+/* 2.9.4 "The for Loop", via the 2.10.2 grammar's three for_clause
+ * productions:
+ *
+ *   For name linebreak do_group
+ *   For name linebreak in           sequential_sep do_group
+ *   For name linebreak in wordlist  sequential_sep do_group
+ *
+ * The first is 2.9.4's "Omitting: in word ... shall be equivalent to:
+ * in "$@"".  It is parsed (so the shape is recorded honestly) and
+ * refused at execution, because this shell has no positional
+ * parameters to iterate -- see exec_for() and sh/main.c. */
+static struct sh_command *parse_for(struct parser *p)
+{
+	struct sh_command *cmd = new_command(p, SH_CMD_FOR);
+	struct sh_word *wtail = 0;
+
+	if (!cmd) return 0;
+	advance(p); /* `for` */
+	if (p->cur.type != T_WORD || !is_name(p->cur.text)) {
+		perr(p, "expected a variable name after `for'");
+		goto fail;
+	}
+	cmd->name = xstrdup(p->cur.text);
+	if (!cmd->name) { perr(p, "out of memory"); goto fail; }
+	advance(p);
+	skip_newlines(p); /* `linebreak` */
+
+	if (is_resword(p, "in")) {
+		advance(p);
+		cmd->have_in = 1;
+		while (p->cur.type == T_WORD) {
+			struct sh_word *w = __malloc(sizeof *w);
+			if (!w) { perr(p, "out of memory"); goto fail; }
+			w->text = xstrdup(p->cur.text);
+			w->next = 0;
+			if (!w->text) { __free(w); perr(p, "out of memory"); goto fail; }
+			if (wtail) wtail->next = w; else cmd->words = w;
+			wtail = w;
+			advance(p);
+		}
+	}
+	/* `sequential_sep`: ';' or a newline, either followed by more
+	 * newlines.  Also accepted after a bare `for name`, which the
+	 * grammar spells as plain `linebreak` but every shell in practice
+	 * lets a ';' end. */
+	if (p->cur.type == T_SEMI) advance(p);
+
+	cmd->body = parse_do_group(p);
+	if (p->had_error) goto fail;
+	return cmd;
+fail:
+	free_command(cmd);
 	return 0;
 }
 
 static struct sh_command *parse_command(struct parser *p)
 {
-	struct sh_command *cmd = __malloc(sizeof *cmd);
+	struct sh_command *cmd;
 	struct sh_redir *rtail = 0;
-	if (!cmd) { perr(p, "out of memory"); return 0; }
-	cmd->assigns = 0; cmd->words = 0; cmd->body = 0; cmd->redirs = 0;
+
+	/* XCU 2.9.1 decides between a compound command and a simple one on
+	 * the *first* token, before any word is collected -- 2.10.1 rule 1:
+	 * "when the TOKEN is exactly a reserved word, the token identifier
+	 * for that reserved word shall result". */
+	if (p->cur.type == T_WORD) {
+		size_t i;
+		if (is_resword(p, "if")) cmd = parse_if(p);
+		else if (is_resword(p, "while")) cmd = parse_loop(p, 0);
+		else if (is_resword(p, "until")) cmd = parse_loop(p, 1);
+		else if (is_resword(p, "for")) cmd = parse_for(p);
+		else {
+			for (i = 0; misplaced_reswords[i]; i++)
+				if (strcmp(p->cur.text, misplaced_reswords[i]) == 0) {
+					perr(p, "unexpected reserved word `%s'", misplaced_reswords[i]);
+					return 0;
+				}
+			goto not_compound;
+		}
+		if (!cmd) return 0;
+		goto trailing_redirs;
+	}
+not_compound:
+
+	cmd = new_command(p, SH_CMD_SIMPLE);
+	if (!cmd) return 0;
 
 	if (p->cur.type == T_LPAREN) {
 		advance(p);
 		cmd->kind = SH_CMD_SUBSHELL;
-		cmd->body = parse_list(p, 1, 0);
-		if (p->had_error) { __sh_list_free(cmd->body); __free(cmd); return 0; }
-		if (p->cur.type != T_RPAREN) { perr(p, "expected ')'"); __sh_list_free(cmd->body); __free(cmd); return 0; }
+		cmd->body = parse_list(p, ST_RPAREN);
+		if (p->had_error) { free_command(cmd); return 0; }
+		if (p->cur.type != T_RPAREN) { perr(p, "expected ')'"); free_command(cmd); return 0; }
 		advance(p);
 	} else if (p->cur.type == T_LBRACE) {
 		advance(p);
 		cmd->kind = SH_CMD_BRACE;
-		cmd->body = parse_list(p, 0, 1);
-		if (p->had_error) { __sh_list_free(cmd->body); __free(cmd); return 0; }
-		if (p->cur.type != T_RBRACE) { perr(p, "expected '}'"); __sh_list_free(cmd->body); __free(cmd); return 0; }
+		cmd->body = parse_list(p, ST_RBRACE);
+		if (p->had_error) { free_command(cmd); return 0; }
+		if (p->cur.type != T_RBRACE) { perr(p, "expected '}'"); free_command(cmd); return 0; }
 		advance(p);
 	} else {
 		struct sh_word *atail = 0, *wtail = 0;
 		int seen_word = 0;
-		cmd->kind = SH_CMD_SIMPLE;
 		for (;;) {
 			if (p->cur.type == T_IONUM || is_redir_op(p->cur.type)) {
 				struct sh_redir *r = parse_redir(p);
@@ -606,17 +879,16 @@ static struct sh_command *parse_command(struct parser *p)
 		}
 		return cmd;
 simple_fail:
-		__sh_free_words(cmd->assigns);
-		__sh_free_words(cmd->words);
-		__sh_free_redirs(cmd->redirs);
-		__free(cmd);
+		free_command(cmd);
 		return 0;
 	}
 
-	/* redirections may also trail a subshell/brace group */
+trailing_redirs:
+	/* 2.9.4: "each can be followed by redirections on the same line as
+	 * the terminator". */
 	while (p->cur.type == T_IONUM || is_redir_op(p->cur.type)) {
 		struct sh_redir *r = parse_redir(p);
-		if (!r) { __sh_list_free(cmd->body); __free(cmd); return 0; }
+		if (!r) { free_command(cmd); return 0; }
 		if (rtail) rtail->next = r; else cmd->redirs = r;
 		rtail = r;
 	}
@@ -691,14 +963,14 @@ static struct sh_andor *parse_andor(struct parser *p)
 	return head;
 }
 
-static struct sh_list *parse_list(struct parser *p, int stop_rparen, int stop_rbrace)
+static struct sh_list *parse_list(struct parser *p, unsigned stops)
 {
 	struct sh_list *list = __malloc(sizeof *list);
 	struct sh_list_item *tail = 0;
 	if (!list) { perr(p, "out of memory"); return 0; }
 	list->items = 0;
 	skip_newlines(p);
-	while (!p->had_error && !at_group_stop(p, stop_rparen, stop_rbrace)) {
+	while (!p->had_error && !at_group_stop(p, stops)) {
 		struct sh_list_item *item = __malloc(sizeof *item);
 		if (!item) { perr(p, "out of memory"); return list; }
 		item->andor = parse_andor(p);
@@ -730,7 +1002,7 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 	p.cur = mktok(T_EOF);
 	advance(&p);
 
-	list = parse_list(&p, 0, 0);
+	list = parse_list(&p, 0);
 
 	if (!p.had_error && p.cur.type != T_EOF) {
 		perr(&p, "unexpected token near '%s'", p.cur.type == T_WORD ? p.cur.text : "?");

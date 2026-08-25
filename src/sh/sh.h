@@ -15,21 +15,28 @@
  * commands (including leading NAME=value assignments), pipelines,
  * '&&'/'||'/';'/newline lists, '&' as an asynchronous separator,
  * subshells '( list )' and brace groups '{ list ; }', redirections
- * including here-documents, and (stage 5) command substitution in both
- * the '$(...)' and the '`...`' form.  Control-flow reserved words
- * (if/while/for/case), functions, aliases and job control are
- * deliberately out of scope -- see the design note and the top-level
- * task report.  Because every one of those lexes as an ordinary WORD
- * here, a program using one would otherwise be *executed* as something
- * else entirely (an external command called "if"); sh/main.c refuses
- * such a program up front, with a diagnostic naming what is
- * unsupported, rather than letting it run -- see that file's header for
- * the full list and why refusing beats a misleading "command not
- * found".
+ * including here-documents, (stage 5) command substitution in both the
+ * '$(...)' and the '`...`' form, and (stage 6b) the compound commands
+ * 'if/then/elif/else/fi', 'while|until ... do ... done' and
+ * 'for name [in words] do ... done' (XCU 2.9.4).
+ *
+ * Still out of scope, and still WORD tokens here: 'case', function
+ * definitions, aliases and job control.  Because each of those lexes as
+ * an ordinary WORD, a program using one would otherwise be *executed*
+ * as something else entirely (an external command called "case");
+ * sh/main.c refuses such a program up front, with a diagnostic naming
+ * what is unsupported, rather than letting it run -- see that file's
+ * header for the full list and why refusing beats a misleading
+ * "command not found".  'for name' with no 'in' list is refused the
+ * same way, because 2.9.4 defines it as 'in "$@"' and there are no
+ * positional parameters.
  *
  * '!' pipeline negation is parsed as a reserved word (a bare, unquoted
- * WORD token whose text is exactly "!"/"{"/"}"), recognised only where
- * the grammar expects it.  Every other operator -- | & ; < > ( ) { } --
+ * WORD token whose text is exactly "!"/"{"/"}"), as are the compound
+ * commands' own reserved words, all by the same rule (XCU 2.10.1 rule
+ * 1) and recognised only where the grammar expects them; a misplaced
+ * one -- a bare 'fi', a stray 'do' -- is a syntax error rather than a
+ * command of that name.  Every other operator -- | & ; < > ( ) { } --
  * is tokenised as a true lexer-level operator and can therefore never
  * appear inside an unquoted WORD; this matches src/wordexp/wordexp.c,
  * which already rejects all of these as WRDE_BADCHAR when unquoted, so
@@ -73,19 +80,65 @@ struct sh_redir {
 	struct sh_redir *next;
 };
 
-enum sh_cmd_kind { SH_CMD_SIMPLE, SH_CMD_SUBSHELL, SH_CMD_BRACE };
+enum sh_cmd_kind {
+	SH_CMD_SIMPLE,
+	SH_CMD_SUBSHELL,
+	SH_CMD_BRACE,
+	SH_CMD_IF,     /* if/elif/else/fi     (XCU 2.9.4 "The if Conditional Construct") */
+	SH_CMD_LOOP,   /* while/until/do/done (XCU 2.9.4 "The while Loop"/"The until Loop") */
+	SH_CMD_FOR     /* for/in/do/done      (XCU 2.9.4 "The for Loop") */
+};
+
+/* One arm of an if command: the `if`/`elif` condition and the
+ * `then` compound-list it guards.  2.9.4 gives `elif` exactly the same
+ * shape as `if` ("each elif compound-list shall be executed, in turn,
+ * and if its exit status is zero, the then compound-list shall be
+ * executed"), so they are one node type in a list rather than a
+ * separate case -- the `else` part is the only genuinely different
+ * thing, and it hangs off the command instead. */
+struct sh_ifarm {
+	struct sh_list *cond;
+	struct sh_list *body;
+	struct sh_ifarm *next;
+};
 
 struct sh_command {
 	enum sh_cmd_kind kind;
 
 	/* SH_CMD_SIMPLE */
 	struct sh_word *assigns;    /* leading NAME=value prefix words */
-	struct sh_word *words;      /* command name + arguments */
+	/* SH_CMD_SIMPLE: command name + arguments.
+	 * SH_CMD_FOR: the `in` word list, raw and unexpanded -- 2.9.4 says
+	 * "the list of words following in shall be expanded to generate a
+	 * list of items", i.e. at execution time, exactly like a simple
+	 * command's arguments, so they are the same kind of thing and get
+	 * the same field. */
+	struct sh_word *words;
 
-	/* SH_CMD_SUBSHELL / SH_CMD_BRACE */
+	/* SH_CMD_SUBSHELL / SH_CMD_BRACE: the group's body.
+	 * SH_CMD_LOOP / SH_CMD_FOR: the `do ... done` compound-list. */
 	struct sh_list *body;
 
-	/* every kind: redirections attached directly to this command */
+	/* SH_CMD_IF */
+	struct sh_ifarm *arms;      /* the if arm, then each elif arm */
+	struct sh_list *else_body;  /* the `else` part, or NULL */
+
+	/* SH_CMD_LOOP */
+	struct sh_list *cond;       /* compound-list-1 */
+	int until;                  /* 0: `while`, 1: `until` */
+
+	/* SH_CMD_FOR */
+	char *name;                 /* the NAME between `for` and `in` */
+	int have_in;                /* 0: `for name` with no `in` word list,
+	                             * which 2.9.4 defines as `in "$@"` -- see
+	                             * exec.c and sh/main.c on why that is
+	                             * refused rather than approximated */
+
+	/* every kind: redirections attached directly to this command.
+	 * 2.9.4: "each can be followed by redirections on the same line as
+	 * the terminator.  Each redirection shall apply to all the commands
+	 * within the compound command that do not explicitly override that
+	 * redirection." */
 	struct sh_redir *redirs;
 };
 

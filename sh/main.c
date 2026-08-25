@@ -44,15 +44,22 @@
  * than diagnosed, because they are syntactically indistinguishable from
  * something the engine does support:
  *
- *   - Reserved words and unimplemented built-ins. `if`, `for`, `export`,
- *     `exit`, ... all lex as ordinary WORD tokens today (sh.h's banner),
- *     so `if foo; then bar; fi` parses as four separate simple commands
- *     and would run a program called "if". PATH lookup then fails and
- *     the shell reports "if: command not found" with status 127 -- a
- *     true statement about a fiction, and precisely the "cannot tell"
+ *   - Reserved words and unimplemented built-ins. `case` and `export`
+ *     still lex as ordinary WORD tokens (sh.h's banner), so
+ *     `case x in y) ;; esac` parses as simple commands and would run a
+ *     program called "case". PATH lookup then fails and the shell
+ *     reports "case: command not found" with status 127 -- a true
+ *     statement about a fiction, and precisely the "cannot tell"
  *     failure test/sh-design.md's "Placement and gates" warns about.
  *     `export X=1` is worse: it fails with 127 while the variable is
  *     silently *not* exported.
+ *
+ *     `if`/`while`/`until`/`for` are no longer in this class: stage 6b
+ *     gave them a real grammar, and a misplaced `fi`/`do`/`done` is now
+ *     a parse error rather than a command name. What survives of the
+ *     problem for them is `for name` with no `in` list, which XCU 2.9.4
+ *     defines as `in "$@"` -- a positional-parameter program with no
+ *     "$@" written anywhere in it, refused below by name.
  *   - Positional and other special parameters. src/wordexp/wordexp.c's
  *     expand_param() supports exactly $NAME and ${NAME}; a `$` followed
  *     by anything else (a digit, @, *, #, ?, !, -, $) is left in place as
@@ -116,13 +123,26 @@ static void diag_bad_param(const char *what, const char *where)
 
 /* ---- the refusal lists ----------------------------------------------
  *
- * Reserved words (XCU 2.4) that the grammar does not implement. `{`,
- * `}` and `!` are absent because the parser does recognise those three
- * (sh.h's banner), and `in` is here because it can only ever appear as
- * part of a for/case the parser cannot build. */
+ * Reserved words (XCU 2.4) that the grammar does not implement.
+ *
+ * Down to two.  `if`/`then`/`else`/`elif`/`fi`, `while`/`until`,
+ * `for`/`do`/`done` and `in` all came off with stage 6b: src/sh/parse.c
+ * builds those constructs now, and a *misplaced* one of them -- a bare
+ * `fi`, a stray `do` -- is a syntax error raised there (XCU 2.10.1
+ * rule 1) rather than a command named "fi".  The property this list
+ * exists to preserve is that no such word is ever silently executed as
+ * an external program, and the parser now holds that property for these
+ * words directly, which is a strictly stronger place for it: it catches
+ * a misplaced `fi` anywhere in the program, including inside a "(...)"
+ * this check would have to recurse into.  `{`, `}` and `!` were never
+ * on this list for exactly the same reason.
+ *
+ * `case`/`esac` stay: that construct is not implemented, so `case`
+ * still lexes as an ordinary WORD (sh.h's banner) and
+ * `case x in y) ;; esac` would otherwise run a program called "case"
+ * and exit 127 about a fiction. */
 static const char *const reserved[] = {
-	"if", "then", "else", "elif", "fi",
-	"case", "esac", "while", "until", "for", "do", "done", "in",
+	"case", "esac",
 	0
 };
 
@@ -253,16 +273,52 @@ static int check_list(const struct sh_list *list);
 static int check_command(const struct sh_command *c)
 {
 	const char *name;
+	const struct sh_ifarm *a;
 
 	if (check_redirs(c->redirs)) return -1;
-	if (c->body) return check_list(c->body);
+
+	/* Switched on the kind rather than on "does it have a body?": the
+	 * compound commands stage 6b added keep their parts in several
+	 * different fields (an if's arms, a loop's condition, a for's word
+	 * list), and a `for` in particular has *both* a word list to scan
+	 * for unsupported expansions and a body to recurse into.  The old
+	 * `if (c->body) return check_list(c->body);` would have walked a
+	 * loop's body and silently skipped its condition -- a program whose
+	 * `while` test used "$1" would then have run. */
+	switch (c->kind) {
+	case SH_CMD_SUBSHELL:
+	case SH_CMD_BRACE:
+		return check_list(c->body);
+	case SH_CMD_IF:
+		for (a = c->arms; a; a = a->next)
+			if (check_list(a->cond) || check_list(a->body)) return -1;
+		return check_list(c->else_body);
+	case SH_CMD_LOOP:
+		if (check_list(c->cond)) return -1;
+		return check_list(c->body);
+	case SH_CMD_FOR:
+		/* XCU 2.9.4: "Omitting: in word ... shall be equivalent to:
+		 * in "$@"".  So `for f; do ...; done` is a positional-
+		 * parameter program even though no "$@" appears in its text,
+		 * which is why it needs saying here and not just wherever
+		 * bad_expansion() looks. */
+		if (!c->have_in) {
+			diag_bad_param("$@", " (a `for' with no `in' list iterates \"$@\")");
+			return -1;
+		}
+		if (check_words(c->words)) return -1;
+		return check_list(c->body);
+	default:
+		break;
+	}
+
 	if (check_words(c->assigns) || check_words(c->words)) return -1;
 
 	if (!c->words || !c->words->text) return 0;
 	name = c->words->text;
 	if (in_list(reserved, name)) {
-		diag("%s: control-flow reserved words (if/while/for/case) are not "
-		     "implemented -- see test/sh-design.md", name);
+		diag("%s: the `case' construct is not implemented -- see "
+		     "test/sh-design.md", name);
 		return -1;
 	}
 	if (in_list(unimplemented_builtins, name)) {

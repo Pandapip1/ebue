@@ -29,12 +29,37 @@ void __sh_free_redirs(struct sh_redir *r)
 	}
 }
 
+/* SH_CMD_IF's arms.  Each arm owns its two compound-lists; the chain
+ * covers the `if` arm and every `elif` arm, which sh.h makes the same
+ * node type for exactly this reason. */
+static void free_ifarms(struct sh_ifarm *a)
+{
+	while (a) {
+		struct sh_ifarm *n = a->next;
+		__sh_list_free(a->cond);
+		__sh_list_free(a->body);
+		__free(a);
+		a = n;
+	}
+}
+
+/* Unconditional in every field, not switched on c->kind: parse.c's
+ * new_command() zeroes all of them for every kind, so a field this
+ * command does not use is a NULL that each of these already ignores.
+ * Switching on the kind instead would mean a node abandoned halfway
+ * through parsing -- kind already set, fields belonging to a different
+ * kind still populated by an earlier goto -- leaked whatever the switch
+ * decided not to look at. */
 void __sh_free_command_contents(struct sh_command *c)
 {
 	__sh_free_words(c->assigns);
 	__sh_free_words(c->words);
 	__sh_free_redirs(c->redirs);
 	__sh_list_free(c->body);
+	free_ifarms(c->arms);
+	__sh_list_free(c->else_body);
+	__sh_list_free(c->cond);
+	__free(c->name);
 }
 
 static void free_pipeline_contents(struct sh_pipeline *pl)

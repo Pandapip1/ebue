@@ -448,6 +448,30 @@ static void test_rejects_malformed(void)
 	must_reject("cat <<EOF\nno terminator here\n"); /* here-doc delimiter never seen */
 	must_reject(">");                     /* redirection operator with no target word */
 	must_reject(";");                     /* separator with nothing before it */
+
+	/* Stage 6b: XCU 2.10.1 rule 1 -- "when the TOKEN is exactly a
+	 * reserved word, the token identifier for that reserved word shall
+	 * result".  In command position, each of these can only be a
+	 * misplaced terminator, so it is a syntax error and not a command
+	 * of that name.  This is the assertion that keeps sh/main.c's
+	 * refuse-before-anything-runs property after `if`/`for` came off
+	 * its reserved-word list: without it they would go back to being
+	 * an external command that exits 127 about a fiction. */
+	must_reject("fi");
+	must_reject("then");
+	must_reject("else");
+	must_reject("elif");
+	must_reject("do");
+	must_reject("done");
+	must_reject("in");
+	must_reject("echo hi; done");         /* misplaced anywhere, not just first */
+	must_reject("if true; then a");       /* `then` part never terminated */
+	must_reject("if true; a; fi");        /* no `then` at all */
+	must_reject("while true; a; done");   /* no `do` */
+	must_reject("while true; do a");      /* `do` never terminated */
+	must_reject("for; do a; done");       /* no name */
+	must_reject("for 9x in a; do b; done"); /* not a NAME (rule 5) */
+	must_reject("for f in a b");          /* no do_group */
 }
 
 /* ---- parse-and-print round trip: stage 1's other testability requirement */
@@ -493,6 +517,25 @@ static void test_roundtrip(void)
 	check_roundtrip("echo \"a;b\" 'c|d'");
 	check_roundtrip("echo $(a | b; c) ${FOO} $((1+2))");
 	check_roundtrip("echo `a | b; c`suffix");
+
+	/* Stage 6b.  These are the fields print.c would otherwise have no
+	 * reason to visit -- an if's arm chain, a loop's separate
+	 * condition, a for's name/have_in -- and the round trip is the one
+	 * check that a printed compound command reparses as *the same*
+	 * compound command rather than as something that merely parses. */
+	check_roundtrip("if a; then b; fi");
+	check_roundtrip("if a; then b; else c; fi");
+	check_roundtrip("if a; then b; elif c; then d; else e; fi");
+	check_roundtrip("if a; then b; elif c; then d; elif e; then f; fi");
+	check_roundtrip("while a; do b; done");
+	check_roundtrip("until a; do b; done");
+	check_roundtrip("for f in a b c; do d; done");
+	check_roundtrip("for f in; do d; done");
+	check_roundtrip("if a | b && c; then d | e; fi");
+	check_roundtrip("while a; do if b; then c; fi; done");
+	check_roundtrip("if a; then b; fi > out 2>&1");
+	check_roundtrip("for f in *.c; do cat $f; done | wc");
+	check_roundtrip("(if a; then b; fi); { while c; do d; done; }");
 }
 
 /* ---- stage 2: execution of simple commands -----------------------------
@@ -2422,6 +2465,441 @@ static int child_role(int argc, char **argv)
 	return -1;
 }
 
+
+/* ---- stage 6b: the compound commands (XCU 2.9.4) ---------------------
+ *
+ * Spec page: XCU 2.9.4 "Compound Commands" -- "The if Conditional
+ * Construct", "The while Loop", "The until Loop", "The for Loop", plus
+ * 2.10.1's rule 1 and rule 5 for how their reserved words and the for
+ * loop's NAME are recognised.
+ */
+
+/* "the body produced exactly this" -- the assertion a status alone cannot
+ * make.  Several stage-6b mutations survived a suite that checked only
+ * exit status: a pipeline stage that never ran its body at all still
+ * reports 0, because an empty compound-list is a successful one.  Reading
+ * the bytes back is what tells those two apart. */
+static void check_file_is(const char *path, const char *want)
+{
+	char buf[256];
+	size_t n = 0;
+	FILE *f = fopen(path, "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	n = fread(buf, 1, sizeof buf - 1, f);
+	buf[n] = 0;
+	fclose(f);
+	if (strcmp(buf, want) != 0) {
+		printf("FAIL %s: got \"%s\", want \"%s\"\n", path, buf, want);
+		fails++;
+	}
+}
+
+/* 2.9.4 "The if Conditional Construct": "The if compound-list shall be
+ * executed; if its exit status is zero, the then compound-list shall be
+ * executed and the command shall complete.  Otherwise, each elif
+ * compound-list shall be executed, in turn, and if its exit status is
+ * zero, the then compound-list shall be executed and the command shall
+ * complete.  Otherwise, the else compound-list shall be executed." */
+static void test_if_branches(const char *self)
+{
+	char src[768];
+	int status;
+
+	snprintf(src, sizeof src, "if true; then '%s' --exit-child 3; fi", self);
+	CHECK(run(src, &status) == 0 && status == 3);
+
+	/* The false branch must not run its body at all, not merely report
+	 * a different status: a marker file is the only way to tell those
+	 * two apart from out here. */
+	unlink("shtst_if_marker.txt");
+	snprintf(src, sizeof src, "if false; then '%s' --produce x > shtst_if_marker.txt; fi", self);
+	CHECK(run(src, &status) == 0);
+	CHECK(access("shtst_if_marker.txt", F_OK) != 0);
+
+	snprintf(src, sizeof src, "if false; then '%s' --exit-child 3; else '%s' --exit-child 4; fi", self, self);
+	CHECK(run(src, &status) == 0 && status == 4);
+
+	/* elif: taken in order, first zero condition wins, and a later
+	 * elif whose condition is also true must not run. */
+	snprintf(src, sizeof src, "if false; then '%s' --exit-child 3; elif true; then '%s' --exit-child 5; else '%s' --exit-child 4; fi", self, self, self);
+	CHECK(run(src, &status) == 0 && status == 5);
+	snprintf(src, sizeof src, "if false; then '%s' --exit-child 3; elif false; then '%s' --exit-child 5; else '%s' --exit-child 4; fi", self, self, self);
+	CHECK(run(src, &status) == 0 && status == 4);
+	snprintf(src, sizeof src, "if true; then '%s' --exit-child 2; elif true; then '%s' --exit-child 5; fi", self, self);
+	CHECK(run(src, &status) == 0 && status == 2);
+	snprintf(src, sizeof src, "if false; then '%s' --exit-child 2; elif false; then '%s' --exit-child 5; elif true; then '%s' --exit-child 6; fi", self, self, self);
+	CHECK(run(src, &status) == 0 && status == 6);
+
+	unlink("shtst_if_marker.txt");
+}
+
+/* 2.9.4, if EXIT STATUS: "the exit status of the then or else
+ * compound-list that was executed, or zero, if none was executed."
+ *
+ * The "zero, if none was executed" half is the one an implementation
+ * gets wrong by letting the condition's status fall through -- and the
+ * condition of a taken-nothing `if` is *always* non-zero by
+ * construction, so a fall-through implementation reports 1 here every
+ * time.  Preceding it with a failing command as well pins that the
+ * status is reset rather than merely inherited from further back. */
+static void test_if_status_when_nothing_ran(void)
+{
+	int status;
+
+	CHECK(run("if false; then :; fi", &status) == 0 && status == 0);
+	CHECK(run("false; if false; then :; fi", &status) == 0 && status == 0);
+	CHECK(run("true; if false; then :; fi", &status) == 0 && status == 0);
+	/* An `if` whose condition is a *pipeline* still uses that
+	 * pipeline's status, i.e. the last stage's (2.9.2). */
+	CHECK(run("if false | true; then :; fi", &status) == 0 && status == 0);
+	CHECK(run("if true | false; then exit 3; fi", &status) == 0 && status == 0);
+	/* "! cond" is a pipeline negation, so it inverts which branch runs. */
+	CHECK(run("if ! false; then exit 3; fi", &status) == 0 && status == 3);
+}
+
+/* 2.9.4 "The while Loop": "compound-list-1 shall be executed, and if it
+ * has a non-zero exit status, the while command shall complete.
+ * Otherwise, the compound-list-2 shall be executed, and the process
+ * shall repeat."  EXIT STATUS: "the exit status of the last
+ * compound-list-2 executed, or zero if none was executed."
+ *
+ * Every loop here has a body that makes its own condition false, so a
+ * bug that never re-evaluates the condition hangs rather than passes --
+ * which is the failure mode worth having, and why none of them is
+ * `while true`. */
+static void test_while_until(void)
+{
+	int status;
+
+	/* Runs zero times: status 0, and the body must not run. */
+	CHECK(run("while false; do exit 9; done", &status) == 0 && status == 0);
+	CHECK(run("until true; do exit 9; done", &status) == 0 && status == 0);
+	/* ... and 0 even when the last thing before it failed. */
+	CHECK(run("false; while false; do exit 9; done", &status) == 0 && status == 0);
+	CHECK(run("false; until true; do exit 9; done", &status) == 0 && status == 0);
+
+	/* Runs until the body falsifies the condition.  `until` is the
+	 * same loop with the test inverted, so it needs the mirror-image
+	 * condition to terminate -- if the two shared a sense, one of
+	 * these two would spin forever. */
+	unsetenv("SHT_N");
+	CHECK(run("SHT_N=a; while test \"$SHT_N\" = a; do SHT_N=b; done; test \"$SHT_N\" = b", &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SHT_N");
+	CHECK(run("SHT_N=a; until test \"$SHT_N\" = b; do SHT_N=b; done; test \"$SHT_N\" = b", &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SHT_N");
+
+	/* "the exit status of the last compound-list-2 executed": the
+	 * *body*'s, never the condition's -- and the condition's final
+	 * evaluation is by definition the one that ended the loop, so an
+	 * implementation that lets it through reports the wrong number
+	 * every single time a loop terminates normally. */
+	unsetenv("SHT_N");
+	CHECK(run("SHT_N=a; while test \"$SHT_N\" = a; do SHT_N=b; false; done", &status) == 0);
+	CHECK(status == 1);
+	unsetenv("SHT_N");
+}
+
+/* 2.9.4 "The for Loop": "the list of words following in shall be
+ * expanded to generate a list of items.  Then, the variable name shall
+ * be set to each item, in turn, and the compound-list executed each
+ * time.  If no items result from the expansion, the compound-list shall
+ * not be executed."  EXIT STATUS: "the exit status of the last command
+ * that executes.  If there are no items, the exit status shall be
+ * zero." */
+static void test_for_loop(const char *self)
+{
+	char src[768];
+	int status;
+	FILE *f;
+	char buf[128];
+
+	/* Iterates in order, and `name` really is set to each item: the
+	 * body appends $f to a file, so the file contents are the item
+	 * sequence rather than a count. */
+	/* Redirection-dependent, so it carries the same capability guard the
+	 * stage-3 redirection tests use: a spawned child cannot see this
+	 * process's file redirections under the native ASan stub. */
+	if (file_redir_supported(self)) {
+		unlink("shtst_for_out.txt");
+		snprintf(src, sizeof src,
+			"for f in a b c; do '%s' --produce \"$f\" >> shtst_for_out.txt; done", self);
+		CHECK(run(src, &status) == 0);
+		buf[0] = 0;
+		f = fopen("shtst_for_out.txt", "rb");
+		CHECK(f != 0);
+		if (f) { size_t n = fread(buf, 1, sizeof buf - 1, f); buf[n] = 0; fclose(f); }
+		CHECK(strcmp(buf, "a\nb\nc\n") == 0); /* --produce writes its operand plus a newline */
+		unlink("shtst_for_out.txt");
+	}
+
+	/* "the exit status of the last command that executes" -- the last
+	 * iteration's, not the first's and not an aggregate. */
+	CHECK(run("for f in a b c; do test \"$f\" = c; done", &status) == 0 && status == 0);
+	CHECK(run("for f in a b c; do test \"$f\" = a; done", &status) == 0 && status == 1);
+
+	/* "If no items result from the expansion, the compound-list shall
+	 * not be executed" and "if there are no items, the exit status
+	 * shall be zero" -- both halves, since a body that ran once and
+	 * happened to exit 0 would satisfy only the second. */
+	CHECK(run("for f in ; do exit 9; done", &status) == 0 && status == 0);
+	CHECK(run("false; for f in ; do exit 9; done", &status) == 0 && status == 0);
+
+	/* "shall be expanded" is the ordinary word expansion, so one source
+	 * word can become several items and several source words can be one
+	 * item each -- exec_for() does not tokenise the list itself. */
+	CHECK(run("for f in a 'b c' d; do test \"$f\" = d; done", &status) == 0 && status == 0);
+	CHECK(run("for f in a 'b c' d; do test \"$f\" = 'b c'; done", &status) == 0 && status == 1);
+	unsetenv("SHT_LIST");
+	CHECK(run("SHT_LIST='p q r'; for f in \"$SHT_LIST\"; do test \"$f\" = 'p q r'; done", &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SHT_LIST");
+
+	/* ---- two inherited wordexp() gaps, pinned deliberately ----------
+	 *
+	 * Both of these assert what this shell *does*, not what XCU 2.6
+	 * says, and both belong to src/wordexp/wordexp.c rather than to
+	 * exec_for() -- a simple command's arguments go through the exact
+	 * same call and get the exact same answer, so "fixing" either one
+	 * here would make `for f in $X` and `cmd $X` disagree about what a
+	 * word expands to inside one shell, which is worse than one
+	 * consistent, documented gap.  include/wordexp.h states both.
+	 * When wordexp() grows the missing behaviour these two assertions
+	 * are what will notice, so they invert rather than silently start
+	 * passing for a new reason.
+	 *
+	 * (a) "the result of a parameter expansion is not split (an
+	 *     unquoted $VAR whose value contains a space stays one field)"
+	 *     -- wordexp.h.  XCU 2.6.5 would make this three items and the
+	 *     last one "r". */
+	unsetenv("SHT_LIST");
+	CHECK(run("SHT_LIST='p q r'; for f in $SHT_LIST; do test \"$f\" = r; done", &status) == 0);
+	CHECK(status == 1); /* XCU 2.6.5 says 0 */
+	CHECK(run("SHT_LIST='p q r'; for f in $SHT_LIST; do test \"$f\" = 'p q r'; done", &status) == 0);
+	CHECK(status == 0); /* XCU 2.6.5 says 1 */
+	unsetenv("SHT_LIST");
+
+	/* (b) XCU 2.6: "If the complete expansion appropriate for a word
+	 *     results in an empty field, that empty field shall be deleted
+	 *     from the list of fields ... unless the original word
+	 *     contained single-quote or double-quote characters."  This
+	 *     wordexp() keeps the empty field, so an unset variable is one
+	 *     empty item rather than no items, and the body runs once with
+	 *     the loop variable set to "".  2.9.4's "if no items result
+	 *     from the expansion, the compound-list shall not be executed"
+	 *     therefore does not reach this case yet. */
+	unsetenv("SHT_EMPTY");
+	CHECK(run("for f in $SHT_EMPTY; do exit 9; done", &status) == 0);
+	CHECK(status == 9); /* XCU 2.6 + 2.9.4 say 0, with the body not run */
+
+	/* The loop variable survives the loop -- it is an ordinary
+	 * assignment into the one variable store this shell has. */
+	unsetenv("SHT_V");
+	CHECK(run("for SHT_V in a b; do :; done; test \"$SHT_V\" = b", &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SHT_V");
+}
+
+/* 2.9.4's opening paragraph: "each can be followed by redirections on
+ * the same line as the terminator.  Each redirection shall apply to all
+ * the commands within the compound command that do not explicitly
+ * override that redirection." */
+static void test_compound_redirection(const char *self)
+{
+	char src[768];
+	int status;
+	char buf[128];
+	FILE *f;
+
+	/* Every assertion in here is about a redirection reaching a spawned
+	 * child, which the native ASan stub cannot model -- tools/asan-build.sh
+	 * compiles src/*.c against fuzz/ntstubs.c, whose RtlCreateUserProcess
+	 * execve()s a real host binary instead of copying NT process
+	 * parameters.  file_redir_supported() is the probe the stage-3
+	 * redirection tests already use for exactly this, and it prints a note
+	 * saying what was skipped rather than passing vacuously.  Covered for
+	 * real by `make check` under Wine and by the real-Windows CI leg. */
+	if (!file_redir_supported(self)) return;
+
+	unlink("shtst_cr_out.txt");
+	snprintf(src, sizeof src,
+		"for f in a b; do '%s' --produce \"$f\"; done > shtst_cr_out.txt", self);
+	CHECK(run(src, &status) == 0);
+	buf[0] = 0;
+	f = fopen("shtst_cr_out.txt", "rb");
+	CHECK(f != 0);
+	if (f) { size_t n = fread(buf, 1, sizeof buf - 1, f); buf[n] = 0; fclose(f); }
+	CHECK(strcmp(buf, "a\nb\n") == 0);
+
+	unlink("shtst_cr_out.txt");
+	snprintf(src, sizeof src,
+		"if true; then '%s' --produce inner; fi > shtst_cr_out.txt", self);
+	CHECK(run(src, &status) == 0);
+	buf[0] = 0;
+	f = fopen("shtst_cr_out.txt", "rb");
+	CHECK(f != 0);
+	if (f) { size_t n = fread(buf, 1, sizeof buf - 1, f); buf[n] = 0; fclose(f); }
+	CHECK(strcmp(buf, "inner\n") == 0);
+	unlink("shtst_cr_out.txt");
+}
+
+/* 2.12: a subshell environment is what "( list )" asks for; the
+ * control-flow constructs are not on that list, so their bodies run in
+ * the shell's own environment and their side effects outlive them.
+ * Getting this backwards is not a status bug -- every status above
+ * still comes out right -- so it needs its own assertions. */
+static void test_compound_runs_in_current_environment(void)
+{
+	char *saved = save_cwd();
+	char *now;
+	int status;
+
+	unsetenv("SHT_ENV");
+	CHECK(run("if true; then SHT_ENV=set; fi; test \"$SHT_ENV\" = set", &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SHT_ENV");
+	CHECK(run("for f in a; do SHT_ENV=set; done; test \"$SHT_ENV\" = set", &status) == 0);
+	CHECK(status == 0);
+	unsetenv("SHT_ENV");
+
+	/* ... and a "( ... )" around the same thing still scopes it,
+	 * which is the control that makes the two assertions above mean
+	 * "not a subshell" rather than "environ happens to persist". */
+	CHECK(run("( SHT_ENV=set ); test \"$SHT_ENV\" = set", &status) == 0);
+	CHECK(status == 1);
+	unsetenv("SHT_ENV");
+
+	CHECK(mkdir("shtst_cmp_dir", 0755) == 0 || errno == EEXIST);
+	CHECK(run("for f in a; do cd shtst_cmp_dir; done", &status) == 0);
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) != 0); /* the shell really moved */
+	free(now);
+	restore_cwd(saved);
+	rmdir("shtst_cmp_dir");
+}
+
+/* 2.14 `exit` from inside a compound command: sh.h's control-flow
+ * comment says the unwind has to get out of "however many nested lists,
+ * and-or terms and pipelines it is buried in", and a loop is the one
+ * construct where failing to notice does not merely report a wrong
+ * status -- `while` asks its condition again and spins forever.  Each
+ * of these therefore has a body that would never terminate the loop on
+ * its own. */
+static void test_exit_unwinds_compound(const char *self)
+{
+	char src[768];
+	int status;
+
+	CHECK(run("while true; do exit 4; done", &status) == 0 && status == 4);
+	CHECK(run("until false; do exit 5; done", &status) == 0 && status == 5);
+	CHECK(run("if true; then exit 6; fi", &status) == 0 && status == 6);
+	CHECK(run("for f in a b c; do exit 7; done", &status) == 0 && status == 7);
+	/* ... and the body must run ONCE, not once per item.  The status above
+	 * cannot see the difference: re-running `exit 7` for every remaining
+	 * item produces the same 7.  Only a side effect per iteration shows
+	 * that the loop kept going after the unwind began -- 2.9.4's loop does
+	 * not get to run its body again once `exit` is pending. */
+	/* redirection-dependent: see file_redir_supported() */
+	if (file_redir_supported(self)) {
+		unlink("shtst_fx_marker.txt");
+		snprintf(src, sizeof src,
+			"for f in a b c; do '%s' --produce \"$f\" >> shtst_fx_marker.txt; exit 7; done", self);
+		CHECK(run(src, &status) == 0 && status == 7);
+		check_file_is("shtst_fx_marker.txt", "a\n");
+		unlink("shtst_fx_marker.txt");
+	}
+
+	/* Nothing after it in the same program runs. */
+	unlink("shtst_cx_marker.txt");
+	snprintf(src, sizeof src,
+		"while true; do exit 2; done; '%s' --produce x > shtst_cx_marker.txt", self);
+	CHECK(run(src, &status) == 0 && status == 2);
+	CHECK(access("shtst_cx_marker.txt", F_OK) != 0);
+
+	/* An `exit` in a *condition* stops the loop too, and its status is
+	 * the program's -- otherwise the condition's status would be read
+	 * as "keep going" and the loop would run its body once more. */
+	CHECK(run("while exit 8; do :; done", &status) == 0 && status == 8);
+	CHECK(run("if exit 9; then :; fi", &status) == 0 && status == 9);
+
+	/* A subshell around it still consumes the unwind (2.9.4/2.12), so
+	 * the rest of the program runs and reports its own status. */
+	snprintf(src, sizeof src, "( while true; do exit 3; done ); '%s' --exit-child 5", self);
+	CHECK(run(src, &status) == 0 && status == 5);
+
+	unlink("shtst_cx_marker.txt");
+}
+
+/* A compound command is a pipeline stage like any other (2.9.2), and
+ * 2.12 puts every stage of a multi-command pipeline in a subshell
+ * environment -- so a `cd` in a looping stage must not move the shell,
+ * exactly as it must not from a "{ ...; }" stage. */
+static void test_compound_as_pipeline_stage(const char *self)
+{
+	char src[768];
+	char *saved = save_cwd();
+	char *now;
+	int status;
+
+	/* Redirected to a file rather than left on this process's stdout:
+	 * a suite that prints the output of the programs it runs makes a
+	 * real failure line harder to see, and the pipeline's own plumbing
+	 * is what is under test, not where its last stage lands. */
+	/* The CONTENT, not just the status.  An `if` stage whose body never
+	 * ran still exits 0 (an empty compound-list succeeds), so a status-only
+	 * assertion here passes even when the stage executed nothing at all --
+	 * which is exactly what happens if this path reads cmd->body directly
+	 * instead of dispatching on the kind: SH_CMD_IF keeps its branches in
+	 * ->arms and its ->body is NULL. */
+	/* redirection-dependent: see file_redir_supported() */
+	if (file_redir_supported(self)) {
+		unlink("shtst_cps_out.txt");
+		snprintf(src, sizeof src,
+			"'%s' --produce hi | if true; then '%s' --cat; fi > shtst_cps_out.txt", self, self);
+		CHECK(run(src, &status) == 0 && status == 0);
+		check_file_is("shtst_cps_out.txt", "hi\n");
+
+		/* Same for a `for` stage, which fails differently and so needs its own
+		 * assertion: ->body IS the do-group there, so a bypassing path runs the
+		 * body once with the loop variable never set, rather than not at all. */
+		unlink("shtst_cps_out.txt");
+		snprintf(src, sizeof src,
+			"for f in a b; do '%s' --produce \"$f\"; done | '%s' --cat > shtst_cps_out.txt", self, self);
+		CHECK(run(src, &status) == 0 && status == 0);
+		check_file_is("shtst_cps_out.txt", "a\nb\n");
+		unlink("shtst_cps_out.txt");
+	}
+
+	CHECK(mkdir("shtst_cps_dir", 0755) == 0 || errno == EEXIST);
+	snprintf(src, sizeof src, "while false; do :; done | '%s' --exit-child 0", self);
+	CHECK(run(src, &status) == 0);
+	snprintf(src, sizeof src, "for f in a; do cd shtst_cps_dir; done | '%s' --exit-child 0", self);
+	CHECK(run(src, &status) == 0);
+	now = getcwd(0, 0);
+	CHECK(now && saved && strcmp(now, saved) == 0); /* the shell did not move */
+	free(now);
+	restore_cwd(saved);
+	rmdir("shtst_cps_dir");
+}
+
+/* 2.9.4: "Omitting: in word ... shall be equivalent to: in "$@"".
+ * There are no positional parameters here, so this is refused rather
+ * than run -- exec.c's -1 "cannot execute this node" convention, which
+ * reaches a caller as a nonzero return and never as a status. */
+static void test_for_without_in_is_refused(void)
+{
+	int status;
+	struct sh_list *l = __sh_parse("for f; do :; done", 0, 0);
+
+	CHECK(l != 0); /* it *parses*: the shape is recorded honestly */
+	if (l) {
+		CHECK(__sh_exec_list(l, &status) == -1);
+		__sh_list_free(l);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1) { int r = child_role(argc, argv); if (r >= 0) return r; }
@@ -2518,7 +2996,17 @@ int main(int argc, char **argv)
 	test_builtin_bracket();
 	test_builtin_in_compound_contexts(argv[0]);
 
+	test_if_branches(argv[0]);
+	test_if_status_when_nothing_ran();
+	test_while_until();
+	test_for_loop(argv[0]);
+	test_compound_redirection(argv[0]);
+	test_compound_runs_in_current_environment();
+	test_exit_unwinds_compound(argv[0]);
+	test_compound_as_pipeline_stage(argv[0]);
+	test_for_without_in_is_refused();
+
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
-	printf("sh: all ok (stage 6a: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, and the built-in dispatcher with test/[/:/true/false/exit/cd -- see test/sh-design.md)\n");
+	printf("sh: all ok (stage 6b: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, the built-in dispatcher with test/[/:/true/false/exit/cd, and the if/while/until/for compound commands -- see test/sh-design.md)\n");
 	return 0;
 }

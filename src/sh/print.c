@@ -94,6 +94,47 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 		print_list(c, cmd->body);
 		fputs("}", c->f);
 		break;
+	/* The compound commands are reprinted in the multi-line form XCU
+	 * 2.9.4 gives them, with a real <newline> before each terminator
+	 * reserved word rather than a "; ".  That is not cosmetic: print_list()
+	 * already ends every item with a newline, so `fi`/`done` land in
+	 * command position on a fresh line, which is the only position
+	 * parse.c recognises a reserved word in -- printing "cmd; fi" would
+	 * reparse `fi` as an argument and break the round-trip the whole
+	 * file exists to support. */
+	case SH_CMD_IF: {
+		const struct sh_ifarm *a;
+		for (a = cmd->arms; a; a = a->next) {
+			fputs(a == cmd->arms ? "if " : "elif ", c->f);
+			print_list(c, a->cond);
+			fputs("then\n", c->f);
+			print_list(c, a->body);
+		}
+		if (cmd->else_body) {
+			fputs("else\n", c->f);
+			print_list(c, cmd->else_body);
+		}
+		fputs("fi", c->f);
+		break;
+	}
+	case SH_CMD_LOOP:
+		fputs(cmd->until ? "until " : "while ", c->f);
+		print_list(c, cmd->cond);
+		fputs("do\n", c->f);
+		print_list(c, cmd->body);
+		fputs("done", c->f);
+		break;
+	case SH_CMD_FOR:
+		fputs("for ", c->f);
+		fputs(cmd->name, c->f);
+		if (cmd->have_in) {
+			fputs(" in", c->f);
+			print_words(c, cmd->words, 1);
+		}
+		fputs("\ndo\n", c->f);
+		print_list(c, cmd->body);
+		fputs("done", c->f);
+		break;
 	default:
 		print_words(c, cmd->assigns, 0);
 		print_words(c, cmd->words, cmd->assigns != 0);
