@@ -73,7 +73,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map posix-gapmap asan linkcheck-i386 linkcheck-x86_64 hygiene ledger lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map posix-gapmap posix-optsrun asan linkcheck-i386 linkcheck-x86_64 hygiene ledger lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -193,9 +193,9 @@ note() { printf '%s\n' "$*" >&2; }
 # submodule. It holds two -- musl's libc-test (~940 files, 11 MB), read
 # by `libc-test` and `libc-test-map`, and the Linux Test Project (~47 MB,
 # of which this project reads only testcases/open_posix_testsuite/), read
-# by `posix-gapmap`. Every other copy would be paying ~58 MB of rsync for
-# nothing, and each copy that does get one takes only the submodule it
-# actually reads.
+# by `posix-gapmap` and `posix-optsrun`. Every other copy would be paying
+# ~58 MB of rsync for nothing, and each copy that does get one takes only
+# the submodule it actually reads.
 #
 # Deliberately no count of how many copies that is: it would be a
 # hand-maintained number describing a list two screens further down, and
@@ -234,7 +234,7 @@ make_tree() {
 			--exclude='*.tmp' --exclude=/third_party/ltp/ \
 			"$srcdir/" "$dest/"
 		;;
-	posix-gapmap)
+	posix-gapmap|posix-optsrun)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
 			--exclude=/.suitemap-cache/ \
@@ -339,6 +339,7 @@ fi
 for pair in \
 	"check-i386:check-i386" "check-x86_64:check-x86_64" "libc-test:libc-test" \
 	"libc-test-map:libc-test-map" "posix-gapmap:posix-gapmap" \
+	"posix-optsrun:posix-optsrun" \
 	"asan:asan" "linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
 	"hygiene:hygiene" "lint-plain:lint-plain" \
 	"lint-analyze-pinned:lint-analyze-pinned" "lint-shell-pinned:lint-shell-pinned" \
@@ -427,6 +428,31 @@ fi
 if want posix-gapmap; then
 	t="$GATE_JOBS_DIR/trees/posix-gapmap"
 	run_stage posix-gapmap "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && GAPMAP_GITDIR='$srcdir' make posix-gapmap-check"
+fi
+
+# posix-optsrun: the other half. posix-gapmap measures what can be
+# COMPILED against this library and executes nothing; this stage RUNS the
+# 591 tests it classes as C, which until it existed had never been run at
+# all.
+#
+# Still no pass-count threshold -- that argument is unchanged and it was
+# never an argument against executing the tests. This gates on
+# REGRESSION: a test the checked-in test/POSIX-OPTS-RUN.generated.md
+# records as PASS that no longer passes. Movement inside the not-PASS
+# population is a diff, not a failure.
+#
+# ~4-5 min: 591 Wine executions, each run three times (see that script's
+# FLAKY section), serially on purpose because OPTS carries timing
+# assertions and the report is checked in. That makes it the second
+# longest stage after asan, so it is started here beside the other suite
+# stages rather than late.
+#
+# OPTSRUN_GITDIR for the same load-bearing reason GAPMAP_GITDIR exists:
+# this copy has no .git, the ancestry invariant needs one, and the script
+# fails rather than skips when it cannot reach a repository.
+if want posix-optsrun; then
+	t="$GATE_JOBS_DIR/trees/posix-optsrun"
+	run_stage posix-optsrun "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && OPTSRUN_GITDIR='$srcdir' make posix-optsrun-check"
 fi
 
 if want asan; then

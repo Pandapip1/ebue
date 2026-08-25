@@ -636,6 +636,133 @@ jobs:
       - name: POSIX gap map is current and still discriminating
         run: make posix-gapmap-check
 
+  # The other half of the sentence `posix-gapmap` starts.
+  #
+  # That job's comment ends "No Wine: nothing here is executed, only
+  # compiled and linked" -- which meant the 591 tests it classes as C,
+  # the ones that compile and link clean, had NEVER BEEN RUN. Nobody
+  # knew whether they passed. This job runs them.
+  #
+  # It does not relitigate the gap map's argument and does not weaken it.
+  # OPTS is still a GAP oracle here rather than a correctness one, its
+  # class distribution is still not a verdict, and there is still NO
+  # PASS-COUNT THRESHOLD anywhere -- a threshold on a distribution would
+  # be a number nobody could justify. But "do not threshold a count" was
+  # never an argument against EXECUTING the tests. Running 591 tests and
+  # recording which ones fail is a different act, and what this job gates
+  # on is REGRESSION: a test the checked-in
+  # test/POSIX-OPTS-RUN.generated.md records as PASS that no longer
+  # passes. Movement inside the not-PASS population appears in the diff
+  # and does not turn this red, because a gate that fires on every kind
+  # of movement is as useless as one that fires on none.
+  #
+  # A SEPARATE JOB rather than a step in `posix-gapmap`, for the reason
+  # that job gives for being separate from `libc-test`: it is a different
+  # claim, needing Wine, with a different meaning of failure. Keeping
+  # them apart also means a red here cannot be misread as the gap map
+  # having gone stale, and vice versa.
+  #
+  # WHY THIS IS NOT A NIGHTLY. It was expected to be one. Measured: 1 s
+  # to compile-and-link all 1610, and ~4-5 min to execute the 591 that
+  # link, serially, each three times. That is a fraction of this
+  # workflow's existing critical path, on a build `posix-gapmap` already
+  # performs, so splitting it off to a schedule would buy nothing and
+  # cost the property that makes it worth having -- that a regression is
+  # attributable to the push that caused it.
+  #
+  # WHY SERIAL. OPTS carries timing assertions (nanosleep, clock_*,
+  # sched_*), tools/libc-test.sh already measured Wine process startup
+  # under contention at 40x its idle cost, and this report is CHECKED IN
+  # so its diff is the whole signal. A timing test that flips under
+  # parallel load costs more than the parallelism saves.
+  #
+  # The thing this job is built to not become is the one this repository
+  # spent a day removing nine times over: a stage that reports success
+  # having measured nothing. "591 ran, 591 passed" from a harness that
+  # ran nothing looks exactly like success. tools/posix-optsrun.sh
+  # therefore refuses to start without the suite, without lib/libc.a, and
+  # -- the one that matters here -- without a Wine PROVEN to work, by
+  # building a known-good test and requiring it to actually come back
+  # PASS. A `command -v wine` check would have been vacuous: a Wine that
+  # starts and dies yields zero executions, zero failures, and a green
+  # job. And it refuses to report at all unless the number of recorded
+  # outcomes equals the number of tests that linked, so a sweep killed
+  # partway through fails instead of reading as a small clean result.
+  posix-optsrun:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    # Generous against the measured ~5 min: 591 Wine executions on a
+    # cold runner, and a hung job otherwise occupies a runner until
+    # GitHub's 360-minute default. There is deliberately no
+    # `concurrency:` block (see above), so nothing cancels it either.
+    timeout-minutes: 30
+    steps:
+      # submodules: true and NOT `recursive`, and fetch-depth: 0, for
+      # exactly the reasons spelled out on the posix-gapmap job above --
+      # third_party/ltp IS the suite, LTP's four nested submodules are
+      # never read by it (two of them live on git.kernel.org), and the
+      # ancestry invariant cannot be answered from a shallow clone.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      # Same hard error as posix-gapmap's, and it matters MORE here: an
+      # absent suite does not produce an obviously-broken result, it
+      # produces a sweep of zero tests with zero failures.
+      - name: Assert the OPTS suite actually arrived
+        run: |
+          d=third_party/ltp/testcases/open_posix_testsuite
+          if [ ! -f "$d/include/posixtest.h" ]; then
+            echo "FAILED: third_party/ltp is empty -- the suite this job exists to run did not arrive." >&2
+            echo "The checkout step above must keep 'submodules: true'." >&2
+            git submodule status || true
+            exit 1
+          fi
+          n=$(find "$d/conformance/interfaces" -name '*.c' | wc -l)
+          echo "$n conformance test source file(s) present"
+          if [ "$n" -eq 0 ]; then
+            echo "FAILED: the suite holds no conformance tests; this job would run nothing." >&2
+            exit 1
+          fi
+
+      - name: Restore tinycc toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/tinycc-install
+          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+
+      - name: Add tinycc to PATH
+        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+
+      - name: Install Wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y wine wine32:i386 wine64
+
+      # x86_64 only, and --disable-kernel32, matching the posix-gapmap
+      # job: the verdicts are about libc behaviour, not about the console
+      # Ctrl-C handler that is the only thing behind NTLIBC_USE_KERNEL32.
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+
+      # Spelled out rather than left to $(ALL_LIBS), for the same reason
+      # the neighbouring jobs spell it out: a library build failure
+      # should read as a library build failure and not as 591 tests
+      # having stopped linking.
+      - name: Build
+        run: make -j"$(nproc)"
+
+      # Proves the invariant checks themselves still fire, against
+      # synthetic inputs, before the real sweep is trusted. Cheap, and it
+      # is the difference between a guard and a comment.
+      - name: OPTS runner invariants still fire
+        run: ./tools/posix-optsrun.sh --selftest
+
+      - name: Open POSIX Test Suite runs with no regressions
+        run: make posix-optsrun-check
+
   # Runs the exact same PE binaries `build-test-exes` compiled and that
   # the `ntlibc-suite` job (for the non-*-win.c ones) runs under Wine -- the two
   # legs consume the same artifact and run concurrently, so this one does
