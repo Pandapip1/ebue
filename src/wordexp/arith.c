@@ -106,14 +106,38 @@
  * 2.6.4's "[o]nly signed long integer arithmetic is required", not a
  * defect: using a wider type is the optional extension, not the rule.
  *
- * Not covered by this: the shift operators, whose right operand is
- * still unbounded. That is a separate undefined-behaviour class (ISO C
- * 6.5.7p3, the shift *count*, not the result's magnitude) and it is
- * fenced in test/posix-glob.c, not fixed here.
+ * SHIFT COUNTS ARE A DIFFERENT UNDEFINED-BEHAVIOUR CLASS, AND ARE
+ * REFUSED RATHER THAN WRAPPED.
+ *
+ * The wraparound above answers 6.5's overflow, which is about the
+ * *result*'s magnitude. ISO C 6.5.7p3 is about the shift *count*: "If
+ * the value of the right operand is negative or is greater than or
+ * equal to the width of the promoted left operand, the behavior is
+ * undefined." That one cannot be answered with a value at all -- 6.5
+ * describes no shift for those counts, so there is nothing for 1.1.2's
+ * "equivalent to ... Section 6.5" to be equivalent to, and every shell
+ * in the field (bash, dash, ksh) rejects a negative count rather than
+ * inventing one. So an out-of-range count is an expansion failure,
+ * reported WRDE_SYNTAX -- the same code, and the same shape of guard,
+ * as the zero divisor of '/' and '%' next to it in apply_binop().
+ *
+ * The width used is LONG_BIT, <limits.h>'s own "number of bits in a
+ * long", and NOT sizeof(long) * CHAR_BIT. Those two differ: long is 32
+ * bits on every target this library builds for (LLP64 on x86_64, ILP32
+ * on i386 -- both arches' bits/limits.h say LONG_BIT 32), but these
+ * sources are also compiled natively by tools/asan-build.sh and fuzz/,
+ * where the host compiler's long is 64. What a caller of ntlibc's
+ * wordexp() is allowed to write must be a property of ntlibc, not of
+ * whichever compiler happened to translate this file, so the ceiling
+ * is the target's 32 in both builds. That also makes the guard
+ * strictly conservative in the native build: it refuses counts in
+ * [32,64), which are undefined on every real target even though the
+ * host's long could have performed them.
  */
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include "internal.h"
 #include "libc.h"
 
@@ -263,6 +287,30 @@ static long wrap_to_long(unsigned long u)
 	return (long)(u - half) - (long)(half - 1UL) - 1L;
 }
 
+/* ISO C 6.5.7p3's bound on a shift count, reached from 2.6.4 by way of
+ * 1.1.2: the count must be non-negative and strictly less than the
+ * width of the promoted left operand, or the shift is undefined and
+ * there is no result to return. Returns 1 if the shift may be
+ * performed; otherwise records the failure (WRDE_SYNTAX, exactly as
+ * '/' and '%' do for a zero divisor) and returns 0.
+ *
+ * fail() is already a no-op while !a->live, so a count inside a
+ * short-circuited branch -- $((0 && (1 << -1))) -- is parsed and
+ * ignored rather than failing the whole expansion, which is the same
+ * treatment division by zero gets one arm below.
+ *
+ * LONG_BIT rather than sizeof(long) * CHAR_BIT: see the file header's
+ * note on shift counts for why the ceiling is the target's width in
+ * the native sanitizer build too. */
+static int shift_count_ok(struct arith *a, long rhs)
+{
+	if (rhs < 0 || rhs >= LONG_BIT) {
+		fail(a, WRDE_SYNTAX);
+		return 0;
+	}
+	return 1;
+}
+
 /* Unary minus, and the quotient of the one division that overflows.
  * __wraps (include/features.h) because the modular subtraction below is
  * the specified behaviour here, not an accident: tools/asan-build.sh
@@ -297,8 +345,20 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	case '&': return cur & rhs;
 	case '^': return cur ^ rhs;
 	case '|': return cur | rhs;
-	case 'L': return cur << rhs;	/* "<<="/"<<" */
-	case 'R': return cur >> rhs;	/* ">>="/">>" */
+	/* Both shifts refuse an out-of-range count up front (6.5.7p3);
+	 * see shift_count_ok() above. With the count in range, the left
+	 * shift still goes through unsigned long, because 6.5.7p4 makes
+	 * `cur << rhs` undefined a second time when cur is negative or
+	 * the result does not fit -- 1L << 31 on this target's 32-bit
+	 * long -- and that half is the ordinary overflow this file
+	 * defines as wraparound, not a reason to refuse the expression.
+	 * The right shift is left as written: a negative left operand
+	 * there is implementation-defined (6.5.7p5), not undefined, and
+	 * every compiler this library is built with shifts arithmetically. */
+	case 'L': if (!shift_count_ok(a, rhs)) return 0;
+		  return wrap_to_long((unsigned long)cur << rhs);	/* "<<="/"<<" */
+	case 'R': if (!shift_count_ok(a, rhs)) return 0;
+		  return cur >> rhs;	/* ">>="/">>" */
 	case '<': return cur < rhs;
 	case '>': return cur > rhs;
 	case 'l': return cur <= rhs;	/* "<=" */
