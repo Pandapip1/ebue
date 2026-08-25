@@ -1383,43 +1383,74 @@ static void test_glob_mark_trailing_slash_pattern(void)
 	globfree(&g);
 }
 
-#if 0 /* BUG (latent): glob.html DESCRIPTION -- "glob() is a pathname
-	generator that shall implement the rules defined in XCU Pattern
-	Matching Notation", which includes 2.13.3: "If a <slash>
-	character is found following an unescaped <left-square-bracket>
-	before a corresponding <right-square-bracket> is found, the open
-	bracket shall be treated as an ordinary character. For example,
-	the pattern "a[b/c]d" ... only matches a pathname of literally
-	a[b/c]d."
-
-	Note this is a glob() requirement and *not* an fnmatch() one:
-	fnmatch.html incorporates only 2.13.1 and 2.13.2, and its own
-	FNM_PATHNAME text says merely that a <slash> "shall not be
-	matched ... by a bracket expression", which ntlibc honours.
-
-	src/glob/glob.c splits the pattern into path components on every
-	'/' with no bracket awareness, so "a[b/c]d" becomes the
-	components "a[b" and "c]d". Today that happens to produce the
-	right answer -- GLOB_NOMATCH -- but for the wrong reason: the
-	component "a[b" fails to match because of the unmatched-bracket
-	BUG fenced as test_fnmatch_unmatched_bracket_is_literal() above.
-	Fix that one alone and this pattern starts wrongly matching a
-	directory named "a[b" containing a file named "c]d". The two must
-	be fixed together, and this test is the regression guard for the
-	pair.
-
-	Since no POSIX filename may contain a <slash>, the correct answer
-	is that this pattern matches nothing at all. */
+/* glob.html DESCRIPTION: "glob() is a pathname generator that shall
+ * implement the rules defined in XCU Pattern Matching Notation", with
+ * optional support for RULE 3 only -- so rule 1, quoted next, is
+ * mandatory.
+ *
+ * XCU 2.14.3 "Patterns Used for Filename Expansion", rule 1 (numbered
+ * 2.13.3 in POSIX.1-2017/2018 and POSIX.1-2004; the normative text is
+ * unchanged across all three editions):
+ *
+ *   "<slash> characters in the pattern shall be identified before
+ *    bracket expressions; thus, a <slash> cannot be included in a
+ *    pattern bracket expression used for filename expansion.  If a
+ *    <slash> character is found following an unescaped
+ *    <left-square-bracket> character before a corresponding
+ *    <right-square-bracket> is found, the open bracket shall be treated
+ *    as an ordinary character.  For example, the pattern "a[b/c]d" does
+ *    not match such pathnames as abd or a/d.  It only matches a
+ *    pathname of literally a[b/c]d."
+ *
+ * The Rationale (C.2.14.3) settles what "literally" means: "On some
+ * implementations (including those conforming to the Single UNIX
+ * Specification), it matched a pathname of literally 'a[b/c]d'.  On
+ * other systems, it produced an undefined condition...  In this
+ * version, the XSI behavior is now required."
+ *
+ * So the pattern MATCHES -- the pathname a[b/c]d is the directory "a[b"
+ * containing the file "c]d", brackets being ordinary characters
+ * throughout.  Confirmed against glibc, which returns 0 and yields
+ * [a[b/c]d] with that fixture present.
+ *
+ * THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE, as a fenced BUG, on the
+ * reasoning that "no POSIX filename may contain a <slash>, [so] the
+ * correct answer is that this pattern matches nothing at all".  That
+ * conflates FILENAME with PATHNAME: no filename may contain a slash,
+ * which is exactly why the slash separates the two components -- and a
+ * pathname made of them is what the standard says is matched.  The
+ * standard's own example draws that distinction by naming "abd" and
+ * "a/d" as the pathnames NOT matched, which is why both are asserted
+ * below: a wrong-but-plausible implementation that simply stripped the
+ * brackets would match one of them. */
 static void test_glob_bracket_containing_slash(void)
 {
 	glob_t g;
 
 	CHECK(mkdir("a[b", 0755) == 0 || errno == EEXIST);
 	close(creat("a[b/c]d", 0644));
+
 	memset(&g, 0, sizeof g);
-	CHECK(glob("a[b/c]d", 0, NULL, &g) == GLOB_NOMATCH);
+	CHECK(glob("a[b/c]d", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "a[b/c]d") == 0);
+	globfree(&g);
+
+	/* "does not match such pathnames as abd or a/d" -- named by the
+	 * standard, and the two a bracket-stripping implementation would
+	 * wrongly match */
+	close(creat("abd", 0644));
+	CHECK(mkdir("a", 0755) == 0 || errno == EEXIST);
+	close(creat("a/d", 0644));
+	memset(&g, 0, sizeof g);
+	CHECK(glob("a[b/c]d", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "a[b/c]d") == 0);
+	globfree(&g);
+	unlink("abd");
+	unlink("a/d");
+	rmdir("a");
 }
-#endif
 
 /* wordexp.html DESCRIPTION, the three clauses the fence below this one
  * used to bury. All three are implemented and passing today; they were
@@ -3269,6 +3300,7 @@ int main(int argc, char **argv)
 	test_fnmatch_period_forms();
 	test_fnmatch_bracket_edges();
 	test_fnmatch_unmatched_bracket_is_literal();
+	test_glob_bracket_containing_slash();
 	test_glob_mark_trailing_slash_pattern();
 	test_glob_append_does_not_resort();
 	test_glob_empty_pattern();
