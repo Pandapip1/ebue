@@ -46,15 +46,22 @@
  * The filter accepts a repeat operator only when the item it applies
  * to is an ordinary atom (a literal, '.', an escaped character, or a
  * bracket expression), never a group, an anchor, an alternation branch
- * start, or another repeat.  It does *not* model brackets exactly: it
- * treats a leading '!' as a negation marker the way fnmatch does,
- * which POSIX brackets do not, so "[!]**" reads to it as an
- * unterminated bracket that regcomp will reject.  regcomp reads it as
- * a bracket matching '!' followed by a repeat of a repeat -- which is
- * how the stack-overflow reproducer of record got past this filter.
- * The gap is harmless now (worst case is a slow unit, not a kill) and
- * is left as it is deliberately: tightening it would only re-hide the
- * shapes the fix made safe.
+ * start, or another repeat.
+ *
+ * It used to mis-model brackets, and that is worth recording because
+ * the mistake was invisible in exactly the way harness bugs are: it
+ * treated a leading '!' as a negation marker, which is fnmatch's rule
+ * (XBD 2.13.1), not a POSIX bracket's (XBD 9.3.5, where only '^'
+ * negates).  So "[!]" read to it as an *unterminated* bracket, it
+ * concluded regcomp would reject the pattern and there was nothing to
+ * filter, and every repeat operator after that point was analysed
+ * against a parse regcomp does not share.  Both reproducers of record
+ * for the stack overflow -- this harness's own, and the one CI filed
+ * as issue #1 -- are "[!]" followed by a repeat of a repeat, and both
+ * walked straight through the filter.  Fixed; a filter that mis-models
+ * the language it is filtering excludes and admits the wrong inputs in
+ * both directions, which is a coverage gap wearing the shape of
+ * coverage.
  *
  * NO DIFFERENTIAL ORACLE.  One was measured: comparing against glibc's
  * regexec produced 1357 mismatches, overwhelmingly GNU BRE extensions
@@ -138,7 +145,19 @@ static int safe_to_exec(const char *p, int ere)
 
 		if (c == '[') {                         /* skip a whole bracket expression */
 			const char *q = p + 1;
-			if (*q == '^' || *q == '!') q++;
+			/* Only '^' negates a POSIX bracket (XBD 9.3.5); '!'
+			 * is fnmatch's spelling (XBD 2.13.1) and is an
+			 * ordinary member here.  Treating it as a negation
+			 * marker made this scanner read "[!]" as an
+			 * unterminated bracket -- so it answered "regcomp
+			 * will reject this, nothing to filter" for a pattern
+			 * regcomp in fact accepts as a bracket matching '!',
+			 * and every repeat operator after it was analysed
+			 * against the wrong parse.  That is how the
+			 * stack-overflow reproducer of record got past this
+			 * filter.  A leading ']' *is* an ordinary member, in
+			 * both notations, which is the line below. */
+			if (*q == '^') q++;
 			if (*q == ']') q++;
 			while (*q && *q != ']') {
 				if (q[0] == '[' && (q[1] == ':' || q[1] == '.' || q[1] == '=')) {

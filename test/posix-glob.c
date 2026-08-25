@@ -2230,6 +2230,35 @@ static void test_regex_nullable_repeat_does_not_crash(void)
 		regfree(&re);
 	}
 
+	/* The CI reproducer, byte for byte, and the reason this case is
+	 * transcribed here rather than left in the corpus: it was found by
+	 * the *push* leg of .github/workflows/fuzz.yml, which restores the
+	 * corpus but never saves it, so the run artefact was the only copy
+	 * in existence and expired with the run.  A corpus entry protects a
+	 * bug only for as long as that corpus survives, and this one nearly
+	 * did not survive at all.
+	 *
+	 *   run       .../actions/runs/32793767974  (issue #1)
+	 *   artefact  crash-b904a0c526d3a36fb035f469575d7506cc93dd32
+	 *   base64    /////ytbIV0qK1shXSr/+Gr/////////fP///////////
+	 *             ////3z///////////hq/////////3z//////////////
+	 *             /98//////////////9R/w==
+	 *
+	 * Decoded through fuzz/fuzz_regex.c's input format (byte 0 cflags,
+	 * byte 1 eflags, byte 2 the pattern/subject split), that 82-byte
+	 * unit is exactly the four values below.  Its stack trace was 245
+	 * consecutive run() frames at the I_SPLIT recursion; the ASan
+	 * SUMMARY named tolower(), which is merely the function that
+	 * happened to touch the guard page. */
+	CHECK(regcomp(&re, "\xff+[!]*+[!]*\xff\xf8j\xff\xff\xff\xff",
+	              REG_EXTENDED | REG_ICASE | REG_NOSUB | REG_NEWLINE) == 0);
+	r = regexec(&re,
+	            "\xff\xff\xff|\xff\xff\xff\xff\xff\xff\xff\xff"
+	            "\xff\xff\xff\xff|\xff\xff\xff\xff\xff\xff\xff",
+	            2, m, REG_NOTBOL | REG_NOTEOL);
+	CHECK(r == 0 || r == REG_NOMATCH || r == REG_ESPACE);
+	regfree(&re);
+
 	/* No pathology, just a long subject: one C frame per byte was the
 	 * other half of the same defect. */
 	big = malloc(n + 2);
