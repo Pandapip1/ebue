@@ -186,6 +186,76 @@ static void test_kill(void)
 	 * being exercised here. */
 }
 
+#if NTLIBC_TEST(BUG, posix_signal_kill_validates_sig_for_other_pid) /* BUG: kill() validates sig only when the target is the caller,
+	 * and terminates the target with the unvalidated value otherwise.
+	 * kill.html ERRORS, shall fail: "[EINVAL] The value of the sig
+	 * argument is an invalid or unsupported signal number."  And
+	 * DESCRIPTION, on the null signal: "If sig is 0 (the null signal),
+	 * error checking is performed but no signal is actually sent" --
+	 * the whole design of the page is that a call which fails its
+	 * checks delivers nothing.
+	 *
+	 * Mechanism: src/signal/signal.c's kill() has two arms.  The
+	 * self-arm --
+	 *
+	 *     if (pid == getpid() || pid == 0 || pid == -1) {
+	 *             if (!sig) return 0;
+	 *             return raise(sig);
+	 *     }
+	 *
+	 * -- reaches sig_valid() through raise()/__raise_internal(), which
+	 * is what makes the kill(getpid(), 9999) assertion in test_kill()
+	 * above pass.  The remote-pid arm never calls sig_valid() at all.
+	 * It opens the target and goes straight to
+	 *
+	 *     NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig));
+	 *
+	 * and __NT_SIGNAL_EXIT (src/internal/libc.h) is
+	 * `0xE0DE0000 | ((unsigned)sig & 0x7f)` -- it *masks* the number
+	 * rather than rejecting it.  So an invalid signal number does not
+	 * merely fail to be rejected: the process dies, and the exit status
+	 * encodes whatever the low seven bits happened to be.  9999 & 0x7f
+	 * is 15, so the parent's waitpid() reports WTERMSIG == SIGTERM for
+	 * a signal that was never a signal; kill(pid, -1) masks to 127 and
+	 * kills just as cheerfully.
+	 *
+	 * This is the destructive shape of a missing argument check: a
+	 * conforming program that computes a signal number and gets it
+	 * wrong is told the kill succeeded, the target is gone, and the
+	 * status blames a different signal.
+	 *
+	 * The fix is to move sig_valid() ahead of the pid dispatch, so both
+	 * arms reject before anything is opened or terminated.
+	 *
+	 * Re-enable when the remote-pid arm validates sig. */
+static void test_kill_validates_sig_for_other_pid(void)
+{
+	pid_t pid;
+	int status;
+	char *argv[3];
+
+	argv[0] = self; argv[1] = (char *)"--sleep"; argv[2] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid <= 0) { printf("note: cannot spawn self (errno %d); skipped\n", errno); return; }
+
+	errno = 0;
+	CHECK(kill(pid, 9999) == -1 && errno == EINVAL);
+	CHECK(kill(pid, 0) == 0);	/* nothing was sent: still there */
+
+	errno = 0;
+	CHECK(kill(pid, -1) == -1 && errno == EINVAL);
+	CHECK(kill(pid, 0) == 0);
+
+	errno = 0;
+	CHECK(kill(pid, _NSIG) == -1 && errno == EINVAL);
+	CHECK(kill(pid, 0) == 0);
+
+	CHECK(kill(pid, SIGTERM) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+}
+#endif
+
 /* ================================================================== *
  * sigaction.html
  * ================================================================== */
