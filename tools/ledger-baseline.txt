@@ -27,7 +27,6 @@
 A test_confstr
 A test_fpathconf
 A test_id_session_stubs
-A test_limits_pathname
 A test_puts_ebadf
 A test_regex_nullable_repeat_does_not_crash
 A test_setrlimit_unenforceable
@@ -42,7 +41,6 @@ B test_chmod_cannot_move_exec_bits
 B test_chmod_group_other_write_aliases_owner
 B test_dlopen_rtld_local_scoping
 B test_fault_sigbus
-B test_fwprintf
 B test_getdate_no_datemsk_must_fail
 B test_glob_err_callback
 B test_glob_noescape

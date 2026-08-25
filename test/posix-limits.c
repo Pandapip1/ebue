@@ -201,9 +201,14 @@ static void test_limits_pathname(void)
 	CHECK(HOST_NAME_MAX >= _POSIX_HOST_NAME_MAX);
 	/* FILESIZEBITS: "Minimum Acceptable Value: 32". */
 	CHECK(FILESIZEBITS >= 32);
-	/* IOV_MAX: XSI floor is {_XOPEN_IOV_MAX} == 16 (not defined as a
-	 * macro by ntlibc, so the spec's literal is used directly here). */
-	CHECK(IOV_MAX >= 16);
+	/* IOV_MAX: the XSI floor is {_XOPEN_IOV_MAX}, which <limits.h> now
+	 * defines -- so the macro is used rather than the spec's literal.
+	 * This line previously read `CHECK(IOV_MAX >= 16)` under a comment
+	 * saying the constant was "not defined as a macro by ntlibc", which
+	 * is how that gap stayed invisible: an audit hit the absence, worked
+	 * around it with a literal, and left no fence and no ledger row, so
+	 * from outside it was indistinguishable from "checked, fine". */
+	CHECK(IOV_MAX >= _XOPEN_IOV_MAX);
 }
 
 /* ---- _POSIX_ / _POSIX2_ "Minimum Values" table: these are exact
@@ -773,73 +778,13 @@ static void test_imaxdiv(void)
  * shown" are the ones fenced below.
  * ================================================================== */
 
-#if 0 /* UNIMPL: limits.h.html "Minimum Values": "The <limits.h> header
-	shall define the following symbolic constants with the values
-	shown.  These are the most restrictive values for certain features
-	on an implementation conforming to this volume of POSIX.1-2017."
-	Three of that table's entries carry NO option-group margin marker
-	and are absent from ntlibc's <limits.h>:
-	_POSIX_THREAD_DESTRUCTOR_ITERATIONS, _POSIX_THREAD_KEYS_MAX and
-	_POSIX_THREAD_THREADS_MAX.  Triage: ABSENT.
-
-	These are the portable floors a strictly conforming application
-	may rely on, not a statement about ntlibc's own capability -- they
-	are constants with fixed values printed in the standard, which is
-	why the assertions below are equalities rather than inequalities,
-	matching test_limits_posix_floors() above.  So unlike <unistd.h>'s
-	_POSIX_THREADS (fenced separately in test/posix-unistd.c, where
-	defining the constant would be a false claim about a capability we
-	do not have), defining these three claims nothing: they say what
-	the standard guarantees, not what this implementation provides.
-	The acceptance criterion really is three #defines.
-
-	The seven other absentees from this same table -- _POSIX_MQ_OPEN_MAX
-	and _POSIX_MQ_PRIO_MAX [MSG], _POSIX_SS_REPL_MAX [SS|TSP], and the
-	four _POSIX_TRACE_* [OB TRC] -- are NOT fenced here.  Each carries
-	an option-group margin marker for an option ntlibc does not claim,
-	and whether "shall define ... with the values shown" survives that
-	marker is a question this audit does not answer on its own
-	authority.  Recorded as open in POSIX-COVERAGE.md rather than
-	guessed at.
-
-	Observed today: fails to COMPILE,
-	"'_POSIX_THREAD_DESTRUCTOR_ITERATIONS' undeclared". */
 static void test_limits_minimum_values_unmarked(void)
 {
 	CHECK(_POSIX_THREAD_DESTRUCTOR_ITERATIONS == 4);
 	CHECK(_POSIX_THREAD_KEYS_MAX == 128);
 	CHECK(_POSIX_THREAD_THREADS_MAX == 64);
 }
-#endif
 
-#if 0 /* UNIMPL: limits.h.html "Minimum Values", same sentence as the
-	fence above, for its three [XSI] entries: {_XOPEN_IOV_MAX} "Value:
-	16", {_XOPEN_NAME_MAX} "Value: 255", {_XOPEN_PATH_MAX} "Value:
-	1024".  All three are absent from ntlibc's <limits.h>.  Triage:
-	ABSENT.
-
-	Fenced separately from the unmarked three because the triage
-	differs: an absent XSI constant is a missing option group, which a
-	POSIX-conformant implementation is permitted not to have, whereas
-	an absent base constant is a conformance hole
-	(test/POSIX-GAP-ACCOUNTING.md's "XSI vs base" note makes exactly
-	this distinction and calls it not cosmetic).  What makes these
-	three worth fencing anyway is that ntlibc does not decline XSI: it
-	compiles -D_XOPEN_SOURCE=700, implements readv()/writev() and
-	<sys/uio.h>, and defines IOV_MAX -- so _XOPEN_IOV_MAX is the floor
-	for a limit this library already publishes.
-
-	EVIDENCE THAT THIS GAP WAS SEEN AND NOT RECORDED, which is the
-	whole point of group U: test_limits_pathname() above asserts
-	`CHECK(IOV_MAX >= 16)` under the comment "XSI floor is
-	{_XOPEN_IOV_MAX} == 16 (not defined as a macro by ntlibc, so the
-	spec's literal is used directly here)".  A previous audit hit this
-	absence, worked around it with a literal, and left no fence, no
-	ledger row and no header note behind -- so from outside, the gap
-	was indistinguishable from "checked, fine".  When this fence is
-	un-fenced, that literal 16 should become _XOPEN_IOV_MAX.
-
-	Observed today: fails to COMPILE, "'_XOPEN_IOV_MAX' undeclared". */
 static void test_limits_minimum_values_xsi(void)
 {
 	CHECK(_XOPEN_IOV_MAX == 16);
@@ -852,42 +797,7 @@ static void test_limits_minimum_values_xsi(void)
 	CHECK(NAME_MAX >= _XOPEN_NAME_MAX);
 	CHECK(PATH_MAX >= _XOPEN_PATH_MAX);
 }
-#endif
 
-#if 0 /* UNIMPL: limits.h.html "Runtime Increasable Values": "The
-	magnitude limitations in the following list shall be fixed by
-	specific implementations.  An application should assume that the
-	value of the symbolic constant defined by <limits.h> in a specific
-	implementation is the minimum that pertains whenever the
-	application is run under that implementation."  Unlike the two
-	sections this group deliberately leaves alone, this one grants no
-	permission to omit -- the value may be *increased* at run time and
-	reported through sysconf(), but the header still has to publish
-	the compile-time minimum.  Nine of its ten entries are absent from
-	ntlibc's <limits.h>: BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX,
-	BC_STRING_MAX, CHARCLASS_NAME_MAX, COLL_WEIGHTS_MAX,
-	EXPR_NEST_MAX, LINE_MAX and RE_DUP_MAX.  Only NGROUPS_MAX is
-	present.  Triage: ABSENT.
-
-	Consumer impact is the highest in the <limits.h> group and is why
-	it is fenced ahead of the others: LINE_MAX is what a line-oriented
-	utility sizes its input buffer to, and sed, awk and the coreutils
-	text tools are exactly the packages this libc exists to build;
-	RE_DUP_MAX bounds a BRE/ERE interval expression and is read by
-	regex code directly; COLL_WEIGHTS_MAX and CHARCLASS_NAME_MAX are
-	read by locale-aware regex and collation code.  The corresponding
-	_POSIX2_* floors are all present, so each of these nine has a
-	floor to be checked against the moment it exists -- which is what
-	the assertions below do.
-
-	ACCEPTANCE CRITERION: the nine definitions, each no smaller than
-	its _POSIX2_/_POSIX_ floor.  This fence claims nothing about
-	sysconf() reporting them; the corresponding _SC_BC_BASE_MAX,
-	_SC_COLL_WEIGHTS_MAX, _SC_EXPR_NEST_MAX and _SC_RE_DUP_MAX names
-	are absent too and are fenced with the rest of the sysconf list in
-	test/posix-unistd.c.
-
-	Observed today: fails to COMPILE, "'BC_BASE_MAX' undeclared". */
 static void test_limits_runtime_increasable(void)
 {
 	CHECK(BC_BASE_MAX >= _POSIX2_BC_BASE_MAX);
@@ -911,32 +821,7 @@ static void test_limits_runtime_increasable(void)
 	CHECK(0);
 #endif
 }
-#endif
 
-#if 0 /* UNIMPL: limits.h.html "Other Invariant Values": "The <limits.h>
-	header shall define the following symbolic constants:", listing
-	{NL_ARGMAX} "Minimum Acceptable Value: 9", {NL_LANGMAX} [XSI]
-	"14", {NL_MSGMAX} "32 767", {NL_SETMAX} "255", {NL_TEXTMAX}
-	"{_POSIX2_LINE_MAX}" and {NZERO} [XSI] "20".  All six are absent
-	from ntlibc's <limits.h>.  Triage: ABSENT.  Four are base and two
-	([XSI], noted in the assertions) are the XSI pair; the sentence
-	itself is unconditional and grants no permission to omit, which is
-	what separates this section from the two group U leaves alone.
-
-	NL_ARGMAX is the one with a live connection elsewhere in this
-	tree: it bounds n in a "%n$" conversion specification, and ntlibc's
-	printf does not implement positional arguments at all (recorded in
-	POSIX-COVERAGE.md's stdio.h section).  Its absence is therefore
-	consistent with the rest of the library -- but consistency is not
-	conformance, and a consumer that reads NL_ARGMAX to size its own
-	argument table gets a compile error rather than a small number.
-
-	ACCEPTANCE CRITERION: the six definitions, each no smaller than
-	the printed Minimum Acceptable Value.  Nothing here claims printf
-	should grow %n$ support; that is a separate, already-recorded
-	divergence.
-
-	Observed today: fails to COMPILE, "'NL_ARGMAX' undeclared". */
 static void test_limits_other_invariant(void)
 {
 	CHECK(NL_ARGMAX >= 9);
@@ -946,7 +831,6 @@ static void test_limits_other_invariant(void)
 	CHECK(NL_TEXTMAX >= _POSIX2_LINE_MAX);
 	CHECK(NZERO >= 20);			/* [XSI] */
 }
-#endif
 
 int main(void)
 {
@@ -954,6 +838,10 @@ int main(void)
 	test_limits_consistency();
 	test_limits_pathname();
 	test_limits_posix_floors();
+	test_limits_minimum_values_unmarked();
+	test_limits_minimum_values_xsi();
+	test_limits_runtime_increasable();
+	test_limits_other_invariant();
 
 	test_float_radix_and_rounds();
 	test_float_flt();

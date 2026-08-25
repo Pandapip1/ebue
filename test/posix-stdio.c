@@ -1218,6 +1218,62 @@ static void test_printf_l_modifier(void)
 		CHECK(!memcmp(b, "\xf0\x9f\x98\x80", 4));
 	}
 }
+/* fprintf.html DESCRIPTION, conversion specifications: "Conversions can
+ * be applied to the nth argument after the format in the argument list,
+ * rather than to the next unused argument.  In this case, the conversion
+ * specifier character % (see below) is replaced by the sequence "%n$",
+ * where n is a decimal integer in the range [1,{NL_ARGMAX}] ... The
+ * format can contain either numbered argument conversion specifications
+ * (that is, "%n$" and "*m$"), or unnumbered argument conversion
+ * specifications (that is, % and *), but not both."
+ */
+#if 0 /* UNIMPL: positional arguments are not implemented.
+       * src/stdio/printf.c's conversion parser reads flags, width,
+       * precision and length modifier and has no notion of an argument
+       * INDEX at all -- there is no "$" anywhere in the file -- so "%1$s"
+       * is parsed as a "1" width followed by an unknown "$" conversion,
+       * and the argument list is walked in order regardless.
+       *
+       * Not fixed here, and this fence is the record of that.  <limits.h>
+       * DOES define NL_ARGMAX (9, the standard's floor), which is a
+       * deliberate decision rather than an oversight and is explained at
+       * the definition: omitting it breaks a conforming consumer that
+       * merely references the constant -- a configure probe, an #ifdef, a
+       * buffer size -- without ever writing "%n$", whereas defining it can
+       * only mislead a consumer that writes "%n$" and is already broken by
+       * printf whatever the header says.  So the header is complete and
+       * THIS is where the gap lives, against the code that actually has
+       * it.
+       *
+       * Implementing it is a real change, not a stub: the parser needs an
+       * argument index, and the "either numbered or unnumbered, not both"
+       * rule means a format has to be classified before any conversion is
+       * performed.  va_arg cannot be rewound, so the arguments have to be
+       * collected into an indexable table first -- which needs each one's
+       * TYPE, which is only known from its own conversion specifier.  That
+       * is the whole reason implementations that support this scan the
+       * format twice. */
+static void test_printf_positional_arguments(void)
+{
+	char b[64];
+
+	/* the n'th argument, out of order */
+	CHECK(snprintf(b, sizeof b, "%2$s %1$s", "world", "hello") == 11);
+	CHECK(!strcmp(b, "hello world"));
+
+	/* the same argument twice -- the thing unnumbered specs cannot do */
+	CHECK(snprintf(b, sizeof b, "%1$d %1$d", 7) == 3);
+	CHECK(!strcmp(b, "7 7"));
+
+	/* "*m$" for a width taken from the m'th argument */
+	CHECK(snprintf(b, sizeof b, "%2$*1$d", 5, 42) == 5);
+	CHECK(!strcmp(b, "   42"));
+
+	/* n is "in the range [1,{NL_ARGMAX}]", so the upper end must work */
+	CHECK(snprintf(b, sizeof b, "%9$d", 1, 2, 3, 4, 5, 6, 7, 8, 99) == 2);
+	CHECK(!strcmp(b, "99"));
+}
+#endif
 
 static void test_printf_z_modifier_width(void)
 {
