@@ -288,7 +288,27 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 	}
 	prefix[preflen] = 0;
 
-	rc = do_glob(prefix, preflen, pat, flags, errfunc, &out);
+	/* An EMPTY pattern names no pathname, so it matches nothing --
+	 * glob.html RETURN VALUE, "[GLOB_NOMATCH] The pattern does not match
+	 * any existing pathname, and GLOB_NOCHECK was not set".
+	 *
+	 * do_glob() cannot be asked this question.  Its pattern-exhausted
+	 * branch assumes it was reached part-way through a recursion, after
+	 * a caller had already confirmed the prefix names a directory (its
+	 * own comment says so), and synthesises "." when the prefix is
+	 * empty.  Reached with an empty pattern from HERE that assumption is
+	 * false, and glob("", 0, ...) returned 0 with gl_pathv[0] == "." --
+	 * a pathname the caller never asked about, handed back as a
+	 * successful match.
+	 *
+	 * Guarded at the call rather than inside do_glob() because the
+	 * assumption the branch makes is correct for every recursive entry;
+	 * only the initial one can violate it.  Note "/" is NOT empty and
+	 * must still work: pat has already advanced past the leading slash
+	 * by this point, leaving preflen == 1 and an empty pat, which is the
+	 * legitimate exhausted case naming the root.  So the test is on the
+	 * caller's original pattern, not on pat. */
+	rc = *pattern ? do_glob(prefix, preflen, pat, flags, errfunc, &out) : 0;
 
 	if (rc == -1) {
 		/* Frees everything in out, including any entries kept alive

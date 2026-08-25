@@ -1311,27 +1311,36 @@ static void test_glob_append_does_not_resort(void)
 }
 #endif
 
-#if 0 /* BUG: glob.html RETURN VALUE -- "[GLOB_NOMATCH] The pattern
-	does not match any existing pathname, and GLOB_NOCHECK was not
-	set."
-
-	An empty pattern names no pathname, so it matches nothing. But
-	src/glob/glob.c's pattern-exhausted branch assumes it was reached
-	part-way through a recursion, after a directory prefix had
-	already been confirmed, and synthesises "." when the prefix is
-	empty. Measured: glob("", 0, NULL, &g) returns 0 with
-	gl_pathc == 1 and gl_pathv[0] == ".".
-
-	That is a pathname the caller never asked about, handed back as
-	a successful match. */
 static void test_glob_empty_pattern(void)
 {
 	glob_t g;
 
 	memset(&g, 0, sizeof g);
 	CHECK(glob("", 0, NULL, &g) == GLOB_NOMATCH);
+	globfree(&g);
+
+	/* GLOB_NOCHECK on the same pattern: "the pattern shall be returned",
+	 * so an empty pattern comes back as one empty string.  Distinct from
+	 * the above, and it keeps "matches nothing" from being implemented
+	 * as "fails early and ignores the flags". */
+	memset(&g, 0, sizeof g);
+	CHECK(glob("", GLOB_NOCHECK, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "") == 0);
+	globfree(&g);
+
+	/* POSITIVE CONTROL, and the reason the guard is on the caller's
+	 * original pattern rather than on the internal one: "/" is not an
+	 * empty pattern and must still match the root.  Internally the
+	 * leading slash is consumed before the recursion, leaving an empty
+	 * remainder -- the legitimate pattern-exhausted case -- so a guard
+	 * written one level lower would break this. */
+	memset(&g, 0, sizeof g);
+	CHECK(glob("/", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "/") == 0);
+	globfree(&g);
 }
-#endif
 
 #if 0 /* BUG: glob.html DESCRIPTION -- "GLOB_MARK: Each pathname that
 	is a directory that matches pattern shall have a <slash>
@@ -3126,6 +3135,7 @@ int main(int argc, char **argv)
 
 	test_fnmatch_period_forms();
 	test_fnmatch_bracket_edges();
+	test_glob_empty_pattern();
 	test_glob_leading_period();
 	test_glob_tilde_is_ordinary();
 	test_globfree_idempotent();
