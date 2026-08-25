@@ -219,7 +219,13 @@ size_t mbsnrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t nm
 		if (ws && out >= n) break;
 		r = mbrtowc(&wc, s, nmc, st);
 		if (r == (size_t)-1) { if (ws) *src = s; return (size_t)-1; }
-		if (r == (size_t)-2) { s += nmc; nmc = 0; break; }
+		/* No `nmc = 0` here.  It looks like the natural companion to
+		 * `s += nmc`, and it is dead: the break leaves the loop, nmc
+		 * is a by-value parameter, and nothing below the loop reads
+		 * it.  clang-analyzer's deadcode.DeadStores said so and was
+		 * right.  The bound is spent either way -- what carries that
+		 * fact out of the loop is s, which is what *src is set from. */
+		if (r == (size_t)-2) { s += nmc; break; }
 		if (r == (size_t)-3) r = 0;	/* delivered from state, no bytes used */
 		if (ws) ws[out] = wc;
 		if (!wc) { if (ws) *src = 0; return out; }

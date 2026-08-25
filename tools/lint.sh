@@ -119,6 +119,31 @@ fi
 
 findings=0
 note() { printf '%s\n' "$*"; }
+
+# show_findings FILE -- print the findings a stage has just counted.
+#
+# A count is not something anyone can act on.  These logs are written
+# under obj/lint/, which is a build directory: in CI it lives inside the
+# runner and is never uploaded, so "-> obj/lint/x86_64.analyze.log.uniq"
+# names a file nobody reading the red board can open.  Every stage below
+# printed a number and a path to a file that, in the one place the number
+# matters, does not exist.  Two separate people asked independently where
+# the analyzer's count came from, and neither could answer it from the
+# log; a stage that reports a count it cannot explain is a stage nobody
+# can act on, and acting on it is the entire purpose.
+#
+# Bounded, because a stage that has genuinely fallen over emits thousands
+# of lines and burying the summary underneath them is its own failure
+# mode: the first $LINT_SHOW, then how many were elided and the path that
+# still holds all of them.
+: "${LINT_SHOW:=40}"
+show_findings() {
+	[ -s "$1" ] || return 0
+	sed "${LINT_SHOW}q" "$1" | sed 's/^/    /'
+	_tot=$(grep -c . "$1" || true)
+	[ "$_tot" -le "$LINT_SHOW" ] ||
+		note "    ... and $((_tot - LINT_SHOW)) more, all of them in $1"
+}
 hdr() { printf '\n=== %s ===\n' "$*"; }
 
 # A stage whose tool is absent is a *failure*, not a pass.  Silently
@@ -191,14 +216,36 @@ WARN_FLAGS="-Wall -Wextra -Wno-unused-function \
 # the destination, means a compiler process that opens the header while a
 # second generator is mid-write never sees a truncated file -- `mv` on
 # the same filesystem is a single rename, not a byte-by-byte copy.
+#
+# The skip is conditional on the destination MATCHING what this tree
+# would generate, not merely on it existing.  A bare -f cache never
+# expires, and obj/ survives a checkout: a local run after any commit
+# that touches either alltypes.h.gen went on linting against the
+# previous tree's types.  That is not a stale-cache annoyance, it is a gate reporting
+# about a tree that is not there -- it produced 83 phantom "incomplete
+# definition of type 'struct tm'" errors here, against the 1 real
+# finding CI reports, and made the stage look locally unreproducible.
+# CI never sees it because CI always starts from an empty checkout,
+# which is the worst possible split: the wrong answer appears only where
+# someone is trying to reproduce a real one.
+#
+# Compared, not stat'd.  Mtimes are the wrong instrument twice over: `-nt`
+# is not POSIX sh (SC3013, and this file is #!/bin/sh), and a checkout can
+# leave a stale file whose mtime is newer than the source it is stale
+# against.  The two inputs total 8KB, so generating unconditionally and
+# comparing costs nothing measurable, and it keeps the temp-plus-`mv`
+# shape the concurrency note above depends on.
 gen_alltypes() {
 	dest=$builddir/$1/include/bits/alltypes.h
-	[ -f "$dest" ] && return 0
 	mkdir -p "$builddir/$1/include/bits" || return 1
 	tmp="$dest.$$.tmp"
 	cat "arch/$1/bits/alltypes.h.gen" include/alltypes.h.gen > "$tmp" || {
 		rm -f "$tmp"; return 1
 	}
+	if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then
+		rm -f "$tmp"
+		return 0
+	fi
 	mv -f "$tmp" "$dest"
 }
 
@@ -346,6 +393,7 @@ stage_warn() {
 			n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 				| tee "$out.uniq" | wc -l)
 			note "$cc [$arch]: $nsrc file(s), $n unique diagnostic(s) -> $out.uniq"
+			show_findings "$out.uniq"
 			[ "$n" -gt 0 ] && any=1
 		done
 	done
@@ -532,6 +580,7 @@ stage_analyze() {
 		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 			| tee "$out.uniq" | wc -l)
 		note "analyzer [$arch]: $nsrc file(s), $n unique finding(s) -> $out.uniq"
+		show_findings "$out.uniq"
 		[ "$n" -gt 0 ] && any=1
 	done
 	if [ "$analyzed" -eq 0 ] && [ "$LINT_ALLOW_MISSING" != 1 ]; then
@@ -568,6 +617,7 @@ stage_cppcheck() {
 			$(sources_for "$arch") > "$out" 2>&1
 		n=$(grep -c . "$out")
 		note "cppcheck [$arch]: $n line(s) -> $out"
+		show_findings "$out"
 		[ "$n" -gt 0 ] && any=1
 	done
 	return $any
@@ -587,6 +637,7 @@ stage_shell() {
 	rc=$?
 	n=$(grep -cE '^In .* line [0-9]+:' "$out")
 	note "shellcheck: $n finding(s) -> $out"
+	show_findings "$out"
 	[ "$rc" -eq 0 ] && return 0
 	return 1
 }
