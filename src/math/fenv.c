@@ -138,9 +138,32 @@ int fesetround(int round)
 	return 0;
 }
 
+/* fegetenv.html DESCRIPTION: "The fegetenv() function shall attempt to
+ * store the current floating-point environment in the object pointed to
+ * by envp."  STORE, not modify.
+ *
+ * THE FLDENV BELOW IS NOT REDUNDANT -- DO NOT DELETE IT.  It reads as a
+ * no-op (load back exactly what was just stored) and it is not: FNSTENV,
+ * after saving the environment, MASKS ALL FLOATING-POINT EXCEPTIONS.
+ * That is documented behaviour of the instruction, not an erratum
+ * (Intel SDM, FSTENV/FNSTENV), and it made this getter silently mask
+ * every x87 exception as a side effect -- leaving the caller unable to
+ * save and restore an environment, which is the function's entire
+ * purpose.  Reloading the just-saved image undoes it.  glibc's x86
+ * fegetenv() does exactly this, for exactly this reason; musl's x86_64
+ * version has the defect this library inherited from it.
+ *
+ * Nothing in <fenv.h> can unmask an exception -- feholdexcept() is
+ * specified to go the other way -- so this is not observable through the
+ * header alone, which is why it survived.  test/posix-math.c's
+ * test_fenv_getenv_does_not_modify() reaches the control word with
+ * inline asm to see it.
+ *
+ * STMXCSR has no such side effect and needs no counterpart. */
 int fegetenv(fenv_t *envp)
 {
 	__asm__ __volatile__("fnstenv (%0)" : : "r"(envp->__x87env) : "memory");
+	__asm__ __volatile__("fldenv (%0)" : : "r"(envp->__x87env) : "memory");
 #ifndef __i386__
 	__asm__ __volatile__("stmxcsr (%0)" : : "r"(&envp->__mxcsr) : "memory");
 #endif

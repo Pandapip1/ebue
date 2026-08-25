@@ -1849,51 +1849,31 @@ static void test_fenv_dfl_env_is_startup_env(void)
 }
 #endif
 
-#if 0 /* BUG: fegetenv.html DESCRIPTION -- "The fegetenv() function
-	shall attempt to store the current floating-point environment in
-	the object pointed to by envp." Storing, not modifying: a getter
-	that changes what it read leaves the caller unable to save and
-	restore an environment, which is the function's entire purpose.
-
-	src/math/fenv.c's fegetenv() is a bare FNSTENV with no restoring
-	FLDENV. Per the Intel SDM's FSTENV/FNSTENV description, the
-	instruction, after saving the environment, "mask[s] all
-	floating-point exceptions" -- so fegetenv() silently masks every
-	x87 exception as a side effect. glibc's x86 fegetenv() issues an
-	FLDENV of the just-saved image for exactly this reason; musl's
-	x86_64 version has the same defect ntlibc inherited.
-
-	Not observable through this header alone, because nothing in
-	POSIX can unmask an exception -- feholdexcept() is specified to
-	go the other way. So the test has to reach the control word
-	directly, which is why it is written with inline asm and why it
-	is x86-specific; both arches this library builds for are x86, and
-	the asm is inside the fence so it is never compiled.
-
-	Measured on x86_64: control word 0x027B (divide-by-zero
-	unmasked) before the call, 0x027F (masked again) after.
-
-	Fix shape: follow the FNSTENV with an FLDENV of the image just
-	stored. Note this also removes the accident that currently makes
-	feholdexcept() look like it masks anything -- see the next
-	fence. */
 static void test_fenv_getenv_does_not_modify(void)
 {
 	fenv_t e;
-	unsigned short cw;
+	unsigned short cw, orig;
 
-	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
-	cw &= (unsigned short)~0x04u;		/* unmask divide-by-zero (ZM) */
+	/* Save the control word found on entry and restore exactly it at the
+	 * end.  fesetenv(&e) is NOT a restore here: `e` was captured after
+	 * this test unmasked divide-by-zero, so putting it back leaves x87
+	 * divide-by-zero TRAPPING for every later test in this file, and the
+	 * first 1.0/0.0 in any of them kills the process with no output at
+	 * all.  Exception masking is process-global hardware state; a test
+	 * that changes it owes the rest of the run an exact restore.  (Same
+	 * hazard, same remedy, as test_fenv_holdexcept_installs_nonstop().) */
+	__asm__ __volatile__("fnstcw %0" : "=m"(orig));
+	cw = orig & (unsigned short)~0x04u;	/* unmask divide-by-zero (ZM) */
 	__asm__ __volatile__("fldcw %0" : : "m"(cw));
 
 	CHECK(fegetenv(&e) == 0);
 
 	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
-	CHECK((cw & 0x04) == 0);		/* still unmasked -- fails today */
+	CHECK((cw & 0x04) == 0);		/* fegetenv must not have masked it */
 
 	CHECK(fesetenv(&e) == 0);
+	__asm__ __volatile__("fldcw %0" : : "m"(orig));
 }
-#endif
 
 static void test_fenv_holdexcept_installs_nonstop(void)
 {
@@ -1954,6 +1934,7 @@ int main(void)
 	test_fenv_round_affects_arithmetic();
 	test_fenv_env_roundtrip();
 	test_fenv_updateenv_reraises();
+	test_fenv_getenv_does_not_modify();
 	test_fenv_holdexcept_installs_nonstop();
 	test_float_ld_variants();
 	test_lround_lrint();
