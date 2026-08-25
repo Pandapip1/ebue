@@ -26,7 +26,6 @@
 # the drift this check exists to prevent, observed one more time.
 A test_confstr
 A test_fpathconf
-A test_id_session_stubs
 A test_puts_ebadf
 A test_regex_nullable_repeat_does_not_crash
 A test_setrlimit_unenforceable
