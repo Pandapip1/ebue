@@ -55,7 +55,28 @@ struct lconv *localeconv(void)
 
 locale_t newlocale(int mask, const char *name, locale_t base)
 {
-	(void)mask; (void)base;
+	(void)base;
+	/* newlocale.html ERRORS, *shall fail* (not "may fail"):
+	 *   "[EINVAL] The category_mask contains a bit that does not
+	 *    correspond to a valid category."
+	 * DESCRIPTION defines the valid bits as "a bitwise-inclusive OR of
+	 * the symbolic constants LC_CTYPE_MASK, ... LC_MESSAGES_MASK, or any
+	 * of the implementation-defined mask values defined in <locale.h>".
+	 *
+	 * <locale.h> defines those six AND LC_ALL_MASK, which is 0x7fffffff
+	 * -- so under that wording every bit 0..30 belongs to a mask value
+	 * this implementation defines, and only bit 31 (the sign bit) can be
+	 * rejected without also rejecting LC_ALL_MASK itself.  Hence the test
+	 * is against ~LC_ALL_MASK rather than against the OR of the six.
+	 *
+	 * Being C-locale-only is not an excuse for skipping this: validating
+	 * a bitmask needs no locale data at all, and *shall fail* makes it
+	 * part of the contract a caller relies on to detect its own bad
+	 * argument. */
+	if (mask & ~LC_ALL_MASK) {
+		errno = EINVAL;
+		return 0;
+	}
 	if (name && *name && strcmp(name, "C") && strcmp(name, "POSIX")) {
 		errno = ENOENT;
 		return 0;

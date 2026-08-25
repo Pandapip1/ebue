@@ -136,32 +136,6 @@ static void test_newlocale_base_unchanged_on_failure(void)
 	freelocale(base);
 }
 
-#if 0 /* BUG: newlocale() never validates category_mask.
-       * newlocale.html ERRORS, *shall fail* (not "may fail"):
-       *   "[EINVAL] The category_mask contains a bit that does not
-       *    correspond to a valid category."
-       * DESCRIPTION defines the valid bits as "a bitwise-inclusive OR
-       * of the symbolic constants LC_CTYPE_MASK, LC_NUMERIC_MASK,
-       * LC_TIME_MASK, LC_COLLATE_MASK, LC_MONETARY_MASK, and
-       * LC_MESSAGES_MASK, or any of the implementation-defined mask
-       * values defined in <locale.h>".  include/locale.h defines those
-       * six plus LC_ALL_MASK (0x7fffffff), so bit 31 -- the sign bit,
-       * outside LC_ALL_MASK -- corresponds to no category under any
-       * reading.
-       *
-       * src/misc/locale.c's newlocale() opens with `(void)mask;` and
-       * never looks at it again: every mask, including one that is
-       * nothing but invalid bits, returns a valid handle and success.
-       * Measured under Wine: newlocale(0x40000000|(1<<31), "C", 0)
-       * returns a non-null handle with errno untouched.
-       *
-       * This is not excused by ntlibc being C-locale-only.  Validating
-       * a bitmask requires no locale data of any kind, and the clause
-       * is *shall fail*, which makes it part of the contract a caller
-       * is entitled to rely on to detect its own bad argument.  It is
-       * the same defect class as the six unimplemented shall-fail
-       * argument checks the never-asserted-name sweep found (see
-       * test/POSIX-GAP-ACCOUNTING.md, "Successor session"). */
 static void test_newlocale_einval_on_invalid_mask(void)
 {
 	int bad = (int)(~(unsigned)LC_ALL_MASK);   /* bit 31 only */
@@ -181,7 +155,6 @@ static void test_newlocale_einval_on_invalid_mask(void)
 	CHECK(newlocale(bad, "no_SUCH.locale", (locale_t)0) == (locale_t)0);
 	CHECK(errno == EINVAL || errno == ENOENT);
 }
-#endif
 
 /* --------------------------------------------------------------------
  * duplocale -- duplocale.html
@@ -395,9 +368,7 @@ int main(void)
 	test_newlocale_accepts_the_preset_names();
 	test_newlocale_enoent();
 	test_newlocale_base_unchanged_on_failure();
-#if 0 /* BUG: see the fence above test_newlocale_einval_on_invalid_mask */
 	test_newlocale_einval_on_invalid_mask();
-#endif
 	test_duplocale();
 	test_freelocale();
 	test_uselocale_query_does_not_change();
