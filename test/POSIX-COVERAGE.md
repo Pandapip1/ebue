@@ -4313,3 +4313,280 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## sys/utsname.h, sys/times.h, sys/time.h — the three one-function rows (group Z)
+
+The last three single-function headers `test/POSIX-GAP-ACCOUNTING.md`'s
+frozen "Implemented, not clause-audited (357)" table still carries as
+rows of their own: `sys/times.h` (1, `times`, XSI), `sys/utsname.h` (1,
+`uname`) and `sys/time.h` (1, `gettimeofday`, `OB`). Audited in
+`test/posix-sysinfo.c` (new file) against the pages themselves —
+`uname.3posix`, `times.3posix`, `gettimeofday.3posix`,
+`sys_utsname.h.7posix`, `sys_times.h.7posix` and `sys_time.h.7posix` of
+IEEE Std 1003.1-2017 — with every clause quoted from the standard's own
+words rather than paraphrased from memory.
+
+Group J3 (`test/posix-tail.c`) and the `<grp.h>` group
+(`test/posix-grp.c`) already reached all three names, so this section
+records only what they left. Their contribution was the *shape* of each
+answer: members NUL-terminated and non-empty, two `uname()` calls
+agreeing, `times()` non-decreasing, `gettimeofday()` within two seconds
+of `time()`. What is added here is the *substance* — where each value
+comes from, whether the units are the units the page names, and whether
+the recursive half of `times()`'s child accounting exists. **Two `#if 0`
+fences, one test function each, both UNIMPL**; counted as fences, not as
+clauses (the clause sentences behind them number four) and not as units
+of work (lifting them touches two source files and one, respectively).
+**`gettimeofday()` came out conformant and nothing was fenced against
+it.**
+
+`basedefs/sys_time.h.html` had never been read by any group — J3's
+banner lists `sys_uio.h`, `ftw.h`, `sys_times.h` and `sys_utsname.h` and
+not it — so its rows below are that page's first assertions anywhere in
+this tree.
+
+| function | clause | status | test |
+|---|---|---|---|
+| `<sys/utsname.h>` | `sys_utsname.h.html` DESCRIPTION — "The `<sys/utsname.h>` header shall define the structure `utsname` which shall include at least the following members:", each declared `char <name>[]`; "The following shall be declared as a function and may also be defined as a macro: `int uname(struct utsname *);`" | covered — the membership half is a compile-time claim the file's compiling settles; asserted at run time are the two halves a compiler does not check, that each member is an **array** (a `char *` would satisfy every string assertion `test/posix-tail.c` makes) and that the prototype is the page's, by assigning `uname` to a function pointer spelled as the page spells it | test/posix-sysinfo.c (`test_utsname_header_shape`) |
+| `<sys/utsname.h>` | same page — "The character arrays are of unspecified size, but the data stored in them shall be terminated by a null byte" | covered — against the **header** page (`test/posix-tail.c` cites the function page for it) and with a `0x5a` poison, so a struct left holding `0x5a` fails as surely as one left holding `0xff` | test/posix-sysinfo.c (`test_utsname_header_shape`) |
+| `uname` | RETURN VALUE "Upon successful completion, a non-negative value shall be returned"; ERRORS "No errors are defined" — the second read as *the call must not begin reporting an error on a later invocation*, since `src/misc/uname.c` re-queries the OS every time (`RtlGetVersion()` at :64, `gethostname()` at :68) rather than caching | covered — eight consecutive calls | test/posix-sysinfo.c (`test_uname_return_value`) |
+| `uname` | DESCRIPTION — "The array `machine` shall contain a name that identifies the hardware that the system is running on" | covered — cross-checked against `sizeof(void *)`, which is deliberately **not** what the implementation consults. `test/posix-grp.c` pins the spelling against `__x86_64__`/`__i386__`, the same macros `src/misc/uname.c:76-81` switches on, so that check and the code cannot disagree; a build reporting `x86_64` from a 32-bit translation unit passes there and fails here | test/posix-sysinfo.c (`test_uname_machine_matches_this_binary`) |
+| `uname` | DESCRIPTION — "The arrays `release` and `version` shall further identify the operating system", with "The format of each member is implementation-defined" | covered, **structure only** — digits-and-dots for `release` and a `"Build "` prefix over a pure decimal for `version` follow from the two `snprintf` format strings at `src/misc/uname.c:71` and `:73` whatever `RtlGetVersion()` answers, so they cannot differ between the Wine, real-Windows and native legs. The *values* are printed, not asserted: nobody here has observed what any leg reports, and on the native leg they are `fuzz/ntstubs.c`'s fixed 10.0/19045, which that file itself calls "a fixed, clearly-a-placeholder Windows 10 version number" | test/posix-sysinfo.c (`test_uname_release_and_version_identify_the_os`) |
+| `uname` | DESCRIPTION — "The `uname()` function shall store information identifying the current system in the structure pointed to by `name`", for `sysname`/`release`/`version`/`machine` | covered — a forged `%COMPUTERNAME%` moves none of the four, which is the positive control that makes the fence below a finding about `nodename` in particular rather than about `uname()` in general | test/posix-sysinfo.c (`test_uname_system_fields_are_not_the_environment`) |
+| `uname` | the same sentence, for `nodename` — with "`nodename` shall contain the name of this node within an implementation-defined communications network" | **UNIMPL (fenced)** — see 1 below | test/posix-sysinfo.c (`test_uname_nodename_identifies_the_system`) |
+| `uname` | APPLICATION USAGE "The inclusion of the `nodename` member in this structure does not imply that it is sufficient information for interfacing to communications networks"; RATIONALE "The values of the structure members are not constrained to have any relation to the version of this volume of POSIX.1-2017 implemented in the operating system" | N/A — both are informative and both are *permissions*, not requirements. Recorded because they were read and weighed before the fence above was written, and because the first is the strongest argument against it | — |
+| `<sys/times.h>` | `sys_times.h.html` DESCRIPTION — "shall define the `tms` structure ... `clock_t tms_utime` / `tms_stime` / `tms_cutime` / `tms_cstime`"; "shall define the `clock_t` type as described in `<sys/types.h>`"; "A function prototype shall be provided. `clock_t times(struct tms *);`" | covered — plus the thing `sys_types.h.html` leaves open ("`clock_t` shall be an integer or real-floating type") and that every `!= (clock_t)-1` check in this tree silently depends on: that `(clock_t)-1` is distinguishable from a tick count. It is (`_Int64`, `include/alltypes.h.gen`), and asserting it makes those checks sound rather than coincidental | test/posix-sysinfo.c (`test_tms_header_shape`) |
+| `times` | DESCRIPTION, bullets 3 and 4 — "The `tms_cutime` structure member is the sum of the `tms_utime` and `tms_cutime` times of the child processes" / "...`tms_cstime` ... is the sum of the `tms_stime` and `tms_cstime` times of the child processes", for the **empty** sum: a process that has waited for nothing must report 0 | covered — asserted as `main()`'s first act, in a binary that spawns nothing (the one test needing a process tree is fenced). Not vacuous on its own and not claimed to be: zero is also what an unwired accumulator reads as, and `test/posix-grp.c`'s `test_times_children` drives the same counters non-zero through a real reap. "0 before any wait, non-zero after one" is the claim; neither half alone is one | test/posix-sysinfo.c (`test_times_child_totals_start_empty`) |
+| `times` | the same two bullets for the **recursive** term — the reaped child's own `tms_cutime`/`tms_cstime`, which RATIONALE describes as "The inclusion of times of child processes is recursive, so that a parent process may collect the total times of all of its descendants" | **UNIMPL (fenced)** — see 2 below | test/posix-sysinfo.c (`test_times_child_times_are_recursive`) |
+| `times` | RETURN VALUE — "times() shall return the elapsed real time, in clock ticks, since an arbitrary point in the past"; DESCRIPTION "All times are measured in terms of the number of clock ticks used"; APPLICATION USAGE "Applications should use `sysconf(_SC_CLK_TCK)` to determine the number of clock ticks per second" | covered — the **unit**, which nothing in the tree had checked. `test/posix-tail.c` and `test/posix-grp.c` both assert only that the value does not go backwards, which a `times()` returning 100ns ticks, milliseconds or seconds would satisfy equally. Measured across a 400ms sleep against `gettimeofday()` — a different NT primitive (`NtQuerySystemTime`, versus `NtQueryPerformanceCounter` behind `CLOCK_MONOTONIC`), so this is two clocks agreeing and not one agreeing with itself — and bounded by a factor of four either way, which catches any unit error (all are factors of 1000+) while tolerating any scheduling delay. Skipped, with a note, if `CLOCK_REALTIME` was stepped during the window | test/posix-sysinfo.c (`test_times_return_is_real_time_in_clock_ticks`) |
+| `times` | DESCRIPTION, bullets 1 and 2 — "`tms_utime` ... is the CPU time charged for the execution of user instructions of the calling process" / "`tms_stime` ... for execution by the system on behalf of the calling process" | covered — against a **third** reader of the same NT source, `clock_gettime(CLOCK_PROCESS_CPUTIME_ID)` (`test/posix-grp.c` uses `getrusage(RUSAGE_SELF)`). It is the rounding that makes this worth doing: `clock_gettime` sums `KernelTime` and `UserTime` before converting where `times()` converts each separately, so `floor(a)+floor(b) <= floor(a+b)` plus monotone CPU pins the inequality's direction, and a lost or gained factor anywhere breaks it | test/posix-sysinfo.c (`test_times_cpu_agrees_with_clock_gettime`) |
+| `times` | RETURN VALUE — "This point does not change from one invocation of `times()` within the process to another"; RATIONALE — "This volume of POSIX.1-2017 permits an implementation to make the reference point for the returned value be the start-up time of the process, rather than system start-up time" | covered — the reference point `src/misc/times.c:74` uses is `CLOCK_MONOTONIC`, which is neither of the RATIONALE's two examples and does not need to be; the requirement is only that it be fixed within the process, asserted as `c1 >= c0` across the sleep | test/posix-sysinfo.c (`test_times_return_is_real_time_in_clock_ticks`) |
+| `times` | ERRORS — "[EOVERFLOW] The return value would overflow the range of `clock_t`" | N/A, with the mechanism: `clock_t` is `_Int64` (`include/alltypes.h.gen`) and the return value is ticks at 100/s, so the range is exhausted after 2^63/100 seconds. The RATIONALE confirms this is a 32-bit concern — "If the type `clock_t` is defined to be a signed 32-bit integer, it overflows in somewhat more than a year if there are 60 clock ticks per second, or less than a year if there are 100" — and ntlibc's is 64. Group J3 already recorded this row as untestable; this adds why it is also unreachable | — |
+| `<sys/time.h>` | `sys_time.h.html` DESCRIPTION — the `timeval` structure (`time_t tv_sec`, `suseconds_t tv_usec`), the `itimerval` structure (`struct timeval it_interval`, `it_value`), "shall define the `time_t` and `suseconds_t` types as described in `<sys/types.h>`", "shall define the `fd_set` type as described in `<sys/select.h>`", `ITIMER_REAL`/`ITIMER_VIRTUAL`/`ITIMER_PROF`, and "shall define the following as described in `<sys/select.h>`: `FD_CLR()` `FD_ISSET()` `FD_SET()` `FD_ZERO()` `FD_SETSIZE`" | covered — **first assertions on this page anywhere in the tree**. All satisfied; `include/sys/time.h` pulls `<sys/select.h>` in, which is the page's own suggestion ("Inclusion of the `<sys/time.h>` header may make visible all symbols from the `<sys/select.h>` header"). The `FD_*` *behaviour* is audited in `test/posix-sysmisc.c` (`test_fd_macros`); what is checked here is only that this header makes them visible, which is this page's clause | test/posix-sysinfo.c (`test_sys_time_header_shape`) |
+| `<sys/time.h>` | the `suseconds_t` half of that, reaching `sys_types.h.html` — "The type `suseconds_t` shall be a signed integer type capable of storing values at least in the range [-1, 1000000]" | covered — the one clause on this page a header can get wrong invisibly: an unsigned `suseconds_t` satisfies every ordinary use of `struct timeval` while breaking `timersub()` (`include/sys/time.h`'s own macro needs a negative intermediate) and every caller that subtracts two timevals | test/posix-sysinfo.c (`test_sys_time_header_shape`) |
+| `<sys/time.h>` | the same page's declaration list, for `getitimer()` and `setitimer()` | covered as a *header* clause — the page requires them **declared**, and `include/sys/time.h` declares both. Their absence from `src/` is a different finding, already recorded in `test/POSIX-GAP-ACCOUNTING.md`'s absent table and rooted there in `alarm()`'s stub; deliberately **not** re-fenced here, and neither name is so much as referenced by the test, since a reference to an undefined symbol is a link failure in all three of this suite's environments | test/posix-sysinfo.c (`test_sys_time_header_shape`) |
+| `gettimeofday` | DESCRIPTION — "shall obtain the current time, expressed as seconds and microseconds since the Epoch, and store it in the `timeval` structure pointed to by `tp`"; RETURN VALUE "shall return 0 and no value shall be reserved to indicate an error"; ERRORS "No errors are defined" | covered — the **seconds** half re-checked against `clock_gettime(CLOCK_REALTIME)` in *microseconds* rather than against `time()` in seconds (`test/posix-tail.c`'s check). APPLICATION USAGE names `clock_gettime()` as what applications should be using instead, so the two disagreeing is the interesting failure, and `time()`'s one-second granularity cannot see it | test/posix-sysinfo.c (`test_gettimeofday_epoch_and_return_value`) |
+| `gettimeofday` | the **microseconds** half of the same sentence | covered, and it is the one arithmetic step `src/time/gettimeofday.c` performs (`tv->tv_usec = ts.tv_nsec / 1000`, :34). A wrong divisor there survives every existing assertion — `tv_usec` still in [0, 1000000), `tv_sec` still agreeing with `time()`, consecutive readings still non-decreasing — and would leave the sub-second half of the interface silently dead. A correct clock sweeps `tv_usec` across the full range once a second, so the test waits (bounded by `CLOCK_MONOTONIC`, not by an iteration count) for a reading above 100000. Deliberately compatible with a coarse clock: it waits for the *sweep*, not for a change | test/posix-sysinfo.c (`test_gettimeofday_microseconds_are_microseconds`) |
+| `gettimeofday` | DESCRIPTION — "The resolution of the system clock is unspecified" | N/A — unspecified, so nothing may be asserted, and the test above is written so that it holds at any resolution. Group J3 recorded the same row; repeated here only because the microseconds row above could be misread as a resolution claim | — |
+| `gettimeofday` | DESCRIPTION — "If `tzp` is not a null pointer, the behavior is unspecified" | N/A as a conformance clause — nothing on this page can be asserted about it. What runs is an **implemented-behaviour** check of what `src/time/gettimeofday.c:31` actually does with the argument (`(void)tz`), the way `test/posix-grp.c` checks `uname(NULL)`: `tp` is filled exactly as it would have been, and the object `tzp` points at is not written. `test/posix-tail.c` established only that passing one is survivable | test/posix-sysinfo.c (`test_gettimeofday_tzp_is_inert`) |
+| `gettimeofday` | FUTURE DIRECTIONS — "The `gettimeofday()` function may be removed in a future version" | N/A — informative, and a statement about the standard rather than about an implementation. Noted so the `OB` marking on this row is not mistaken for a gap: an obsolescent interface that is present and correct is present and correct | — |
+
+### UNIMPL found (group Z)
+
+1. **`uname()`'s `nodename` is a copy of a caller-writable environment
+   variable, and `"localhost"` when it is unset.** `uname.html`
+   DESCRIPTION: "The `uname()` function shall store information
+   identifying the current system in the structure pointed to by
+   `name`." `src/misc/uname.c:68-69` is
+
+   ```c
+   if (gethostname(u->nodename, sizeof u->nodename) < 0)
+           strcpy(u->nodename, "localhost");
+   ```
+
+   and `src/unistd/gethostname.c:11,13` is the whole of the lookup
+   behind it — `getenv("COMPUTERNAME")`, with `if (!h) h = "localhost";`.
+   Two consequences, and they are different failures. A process whose
+   environment does not carry `COMPUTERNAME` — a service, anything
+   started through `execve()` with a hand-built `envp`, and every
+   native `make asan` run, where `fuzz/ntstubs.c` starts with an empty
+   environment — is told its node is called `localhost`; every machine
+   answers `localhost`, so the member identifies nothing. And
+   `setenv("COMPUTERNAME", x)` changes what `uname()` reports: a member
+   of a structure the page says holds information identifying the
+   current system is writable by the program asking the question.
+
+   **UNIMPL, not BUG**, because no code implements this clause at all,
+   correctly or otherwise. Checked rather than assumed: `grep -rniE
+   'computername|GetComputerName|NtOpenKey|NtQueryValueKey|ActiveComputerName|hostname' src/`
+   returns four lines and only four — the two above, `gethostname()`'s
+   declaration, and `src/misc/uname.c`'s banner sentence describing the
+   same environment read. The same grep finding
+   `src/unistd/gethostname.c:11` is its own positive control.
+
+   **UNIMPL, not N/A**, because N/A needs a mechanism by which the
+   platform cannot answer, and NT plainly can: `%COMPUTERNAME%` is
+   populated by the OS, so the value being read out of the environment
+   is one NT put there. What this tree lacks is a way to ask directly —
+   neither `NtOpenKey` nor `NtQueryValueKey` appears anywhere in
+   `tools/ntdll.def` (positive control: that file's line 45 is
+   `NtQuerySystemTime` and line 93 is `RtlGetVersion`) or in
+   `src/internal/nt.h`, and that list is maintained by hand and added to
+   routinely. The exact route — a registry read under
+   `Control\ComputerName`, or kernel32's `GetComputerNameW()` in the
+   `--enable-kernel32` build — is **not** verified here and the fence
+   says so; whoever implements it must confirm it rather than take it
+   from the fence.
+
+   **The counter-argument, which is real.** This page is unusually
+   permissive about what the member may contain, and every permission
+   was read before the fence was written: "The format of each member is
+   implementation-defined"; APPLICATION USAGE's disclaimer that
+   `nodename` "does not imply that it is sufficient information for
+   interfacing to communications networks"; RATIONALE's note that in the
+   historical implementations `uname()` came from, "The values it
+   returns are set at system compile time"; and
+   `sys_utsname.h.html`'s own wording, "Name of this node within the
+   communications network to which this node is attached, **if any**",
+   an escape the function page does not carry. Together those license a
+   constant, and they license a name useless for opening a socket. They
+   do not license this. A value set at system compile time is set by the
+   *system*; a value read out of the caller's environment is set by the
+   *caller*, which is not an implementation-defined format but an
+   implementation-defined oracle, and a wrong one. And "if any" is about
+   a node attached to no network — it says nothing about a node whose
+   name NT is holding and the library declines to ask for. Format is
+   implementation-defined; "identifying the current system" is not.
+
+   **Not already recorded.** `grep -rn nodename` over both ledgers finds
+   exactly one row, `test/posix-tail.c`'s, which records that `nodename`
+   *matches* `gethostname()` — the identity, not the oracle, and it
+   still holds after this fence is lifted. `grep -rn COMPUTERNAME` finds
+   one prose sentence in the `unistd.h` identity group, stated as
+   mechanism and not as a finding.
+
+   **Note for whoever fixes it:** the mechanism is shared with
+   `gethostname()`, whose own row (the `unistd.h` identity group, item 6)
+   records a *different* defect on the same three lines — truncation
+   reported as `-1`/`[ENAMETOOLONG]` where `gethostname.html` makes it a
+   successful completion. Both are `src/unistd/gethostname.c`. Fixing
+   the lookup does not fix that return value or vice versa, and
+   `test/unistd.c:723` pins the present one.
+
+2. **`times()`'s child-time accounting is not recursive: a grandchild's
+   CPU time is dropped at every generation boundary.** `times.html`
+   DESCRIPTION is explicit that the total is two terms: "The `tms_cutime`
+   structure member is the sum of the `tms_utime` **and `tms_cutime`**
+   times of the child processes", and likewise for `tms_cstime`. The
+   RATIONALE says what those sentences are for: "The inclusion of times
+   of child processes is recursive, so that a parent process may collect
+   the total times of all of its descendants. But the times of a child
+   are only added to those of its parent when its parent successfully
+   waits on the child."
+
+   ntlibc implements the first term only. `src/process/wait.c:136-141`:
+
+   ```c
+   st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
+   if (!NT_SUCCESS(st)) return;
+   ticks_to_timeval((unsigned long long)kt.KernelTime, &ru->ru_stime);
+   ticks_to_timeval((unsigned long long)kt.UserTime, &ru->ru_utime);
+   children_ktime100ns += (unsigned long long)kt.KernelTime;
+   children_utime100ns += (unsigned long long)kt.UserTime;
+   ```
+
+   `KERNEL_USER_TIMES` has no child-time fields — read first-hand at
+   `src/internal/nt.h:905-910`, where the whole structure is
+   `CreateTime`, `ExitTime`, `KernelTime`, `UserTime` and nothing else,
+   rather than taken from `wait.c`'s banner, which says the same.
+   `grep -rn 'children_ktime100ns\|children_utime100ns\|fill_child_rusage' src/`
+   finds five sites, all in `src/process/wait.c`, with exactly one write
+   pair (`:140-141`) reached from exactly one place (the reap path at
+   `:258-259`). `src/misc/times.c:69` reads that accumulator through
+   `__rusage_children()`, so what a caller gets is the sum of its
+   immediate children's own CPU time and nothing below them.
+
+   **What a caller observes:** anything that measures work it does not
+   perform directly. A build driver runs a compiler through a wrapper
+   that itself waits for the compiler; the wrapper's CPU time is a
+   rounding error and the compiler's is the whole cost, and the driver
+   is charged the wrapper. No error, no missing return value — the
+   number is simply too small, silently, in proportion to how deep the
+   process tree goes.
+
+   **UNIMPL, not BUG:** there is no code for the recursive term to get
+   wrong; the grep above is the whole of the accounting. **UNIMPL, not
+   N/A:** two routes exist and what each needs was checked. *Carry the
+   numbers* — whenever the child is itself an ntlibc program this
+   library owns both ends, and the child could hand back its own
+   accumulator at exit for `fill_child_rusage()` to add. Nothing in
+   `src/` passes libc state to a child out-of-band today (`grep -rn
+   '_NTLIBC\|__ntlibc_'` over `src/process/`'s C files finds nothing);
+   the one worked precedent in the tree is in the harness rather than
+   the library, `fuzz/ntstubs.c:178`'s `XCHILD_MARK`. *Ask NT* — a job
+   object accumulates a whole process tree's CPU time, including
+   processes this library did not build, and `src/misc/resource.c:254-256`
+   already creates one and assigns this process to it for
+   `RLIMIT_NPROC`/`RLIMIT_AS`. `JobObjectBasicAccountingInformation` is
+   declared (`src/internal/nt.h:989`); the query that would read it is
+   not — `NtQueryInformationJobObject` is in no declaration in
+   `src/internal/nt.h` and no line of `tools/ntdll.def` (positive
+   control: `NtCreateJobObject`, `NtAssignProcessToJobObject` and
+   `NtSetInformationJobObject` are in both) — and neither is the
+   accounting structure, `nt.h`'s own comment saying "this library only
+   ever uses `JobObjectBasicLimitInformation` and
+   `JobObjectExtendedLimitInformation`". Neither route is free, and the
+   job-object one is a real design decision about what a "child" is; but
+   "we would have to write it" is UNIMPL here, not N/A. The clause is
+   not vacuous the way a STREAMS clause is: ntlibc has processes, has
+   `wait()`, and has grandchildren.
+
+   **Not already recorded.** `grep -rn recursive` over both ledgers
+   finds only an `nftw()` line, while `grep -rn tms_cutime` over the
+   same two files finds six rows — so the search surface works and this
+   clause really is unrecorded. The six existing rows are all about the
+   *first* term, which ntlibc does implement and `test/posix-grp.c`
+   verifies.
+
+   **Acceptance criterion, and a warning about the oracle.** The fenced
+   assertion, unfenced, on the Wine and real-Windows legs. Natively
+   `fuzz/ntstubs.c:2975` answers `ProcessTimes` with
+   `if (f) return STATUS_NOT_IMPLEMENTED;` for any handle but this
+   process's own, so the accumulator is legitimately zero there and the
+   check must be skipped the way `test/posix-grp.c`'s
+   `test_times_children` skips its own floors. Read that function's
+   comment first: it records that stock Wine's
+   `NtQueryInformationProcess()` ignores the handle for this info class
+   and returns the *calling* process's times, which would make this
+   assertion measure the wrong process on the Wine leg too, and it names
+   the upstream fix. That is a dated measurement, not a fact — re-take
+   it rather than inherit it.
+
+### Not fenced on purpose (group Z)
+
+- **`gettimeofday()`'s dead `-1` return.** `src/time/gettimeofday.c:32`
+  reads `if (clock_gettime(CLOCK_REALTIME, &ts) < 0) return -1;`, which
+  looks like a violation of "no value shall be reserved to indicate an
+  error". It is unreachable: `src/time/clock_gettime.c`'s
+  `realtime_get()` (:25-31) is `NtQuerySystemTime()` followed by
+  `return 0`, with no failure path at all, and `CLOCK_REALTIME` routes
+  to it directly. No caller can observe a reserved value, so there is
+  nothing to fence and no assertion that could tell the difference.
+  Recorded here so the next reader of that file does not have to
+  re-derive it.
+- **`times()`'s duplicated tick constant.** `src/misc/times.c:46`
+  converts by dividing by `__TICKS_PER_SEC / 100`, in which the `100` is
+  the literal value `src/unistd/sysconf.c:14` independently returns for
+  `_SC_CLK_TCK` — two copies of one constant in two files. The file's
+  banner claims the opposite ("rather than a second hardcoded constant,
+  so a future change to `_SC_CLK_TCK`'s answer cannot silently desync
+  from this file"). Not a POSIX finding while the two agree, and not
+  fenced; `test_times_return_is_real_time_in_clock_ticks` is what would
+  catch them diverging, which is why it reads the tick rate from
+  `sysconf()` rather than writing 100.
+- **`uname()`'s `machine` on a third architecture.** `src/misc/uname.c:81`
+  answers `"unknown"` where neither `__x86_64__` nor `__i386__` is
+  defined. Unreachable — `arch/` contains `generic`, `i386` and
+  `x86_64` and nothing else — so there is no build in which the clause
+  is violated. The test reports rather than asserts if it ever sees one.
+
+### Open, not decided by this group (group Z)
+
+`sys_time.h.html` requires `suseconds_t` "as described in
+`<sys/types.h>`", and that page adds: "The implementation shall support
+one or more programming environments in which the widths of `blksize_t`,
+`pid_t`, `size_t`, `ssize_t`, and `suseconds_t` are no greater than the
+width of type `long`." ntlibc appears to satisfy this in **no**
+environment: `include/alltypes.h.gen:45` is `typedef _Int64
+suseconds_t`, `_Int64` is `long long` on both arches
+(`arch/x86_64/bits/alltypes.h.gen`, `arch/i386/bits/alltypes.h.gen`),
+and both those files set `__LONG_MAX 0x7fffffffL` — a 32-bit `long`
+under both LLP64 (win64) and ILP32 (win32). The same is true of
+`size_t`/`ssize_t` on x86_64, where `_Addr` is `long long`.
+
+Left open rather than fenced: it is a `sys_types.h.html` clause, not one
+of this group's three pages, and it is entangled with the `_CS_POSIX_V7_*`
+programming-model names group U already fenced as absent — those
+constants are how the standard says an application *finds* such an
+environment. Recorded so a `<sys/types.h>` audit does not have to
+rediscover it, and deliberately not counted in this group's totals.
