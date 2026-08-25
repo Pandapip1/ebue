@@ -798,6 +798,19 @@ jobs:
           name: test-exes-${{ matrix.name }}
           path: test-exes
 
+      # Q3 (version spread), answered from every leg rather than assumed.
+      # All three legs say `runs-on: windows-latest`, so they are expected
+      # to be the same image and the same build -- but "expected to be" is
+      # what an assumption sounds like, and this costs one line to turn
+      # into data. If the three legs ever print different builds, the
+      # version axis exists after all; if they print the same one, that is
+      # the honest answer and it is recorded rather than inferred.
+      - name: Report the Windows build this leg actually runs
+        shell: pwsh
+        run: |
+          $cv = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+          Write-Host "harness: leg=${{ matrix.name }} build=$($cv.CurrentBuild) UBR=$($cv.UBR) display=$($cv.DisplayVersion) product=$($cv.ProductName)"
+
       - name: Run test binaries on real Windows
         shell: pwsh
         run: |
@@ -914,6 +927,7 @@ jobs:
             foreach ($f in $failedNames) { Say "  $f" }
             exit 1
           }
+
 
   # Static checking that tcc does not do: gcc and clang strict-warning
   # builds of the whole library for both arches, plus the clang static

@@ -1,9 +1,16 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * FSCTL_SET_ZERO_DATA: what NT actually does to a 65536-byte file when
- * asked to zero 8192..40960, for a file previously marked sparse with
- * FSCTL_SET_SPARSE and for one that was never marked.
+ * FSCTL_SET_ZERO_DATA: at what granularity NT releases allocation, and
+ * whether the sparse mark is what enables it.  A table of ranges --
+ * covering whole allocation units, covering none, straddling two,
+ * covering the whole file, and past/inverted/negative -- each run
+ * against a file marked sparse with FSCTL_SET_SPARSE and against one
+ * that was never marked.
+ *
+ * It also measures FileAllocationInformation (info class 19) against the
+ * sparse attribute, which nothing else does: every published number for
+ * that class was taken on dense files.
  *
  * WHY THIS FILE EXISTS
  *
@@ -28,35 +35,94 @@
  * (real Windows Server 2025); under Wine it exits 77 naming the missing
  * mechanism rather than passing vacuously.
  *
- * THE UNMARKED CASE IS THE DISCRIMINATING ONE, AND ONE NUMBER IS NOT
- * ENOUGH TO SETTLE IT
+ * WHAT NT ACTUALLY DOES (measured; the earlier rule here was WRONG)
  *
- * "The range read back as zero" is true both when NT zero-filled the
- * bytes in place and when NT deallocated the clusters underneath them --
- * a hole reads as zero.  The two are distinguished only by
- * AllocationSize: zeroing in place leaves it unchanged, deallocating
- * drops it.  So both EndOfFile and AllocationSize are captured before
- * and after via NtQueryInformationFile(FileStandardInformation), and the
- * verdict below is printed explicitly rather than left to be inferred
- * from the numbers by whoever reads the log.
+ * On Windows Server 2025 build 26100, NTFS, 4 KB clusters:
+ *
+ *   On a file MARKED SPARSE, NTFS releases exactly those 64 KB-aligned
+ *   allocation units WHOLLY COVERED by the requested range, and zeroes
+ *   the remainder of the range in place.  On a file not marked sparse it
+ *   only zeroes, and releases nothing.
+ *
+ * The banner that used to stand here said the opposite -- that the
+ * UNMARKED case was the discriminating one -- and commit 323634e's
+ * message asserted, as fact, that NT never deallocates and that the
+ * granularity was a matter of *cluster* alignment.  Both are refuted.
+ * The discriminating case is the SPARSE one with a range that covers at
+ * least one whole 64 KB unit; the unmarked case is the control.  Cluster
+ * alignment is not the rule: a range can be perfectly cluster-aligned,
+ * as [32768,98304) is on 4 KB clusters, and still release nothing,
+ * because it covers no whole allocation unit.
+ *
+ * HOW THE WRONG RULE GOT HERE, AND WHY THE TABLE BELOW EXISTS
+ *
+ * This file used to have three constants: FILE_SIZE 65536, ZERO_FROM
+ * 8192, ZERO_TO 40960.  A 32 KB range inside a 65536-byte file -- that
+ * is, a range sitting entirely within the file's single 64 KB allocation
+ * unit.  No unit was wholly covered, so no unit COULD be released, so
+ * the sparse and unmarked cases were guaranteed to print identical
+ * output and VERDICT=DEALLOCATED was unreachable by construction.  The
+ * probe was structurally incapable of discriminating what it existed to
+ * discriminate, and it printed PASS while doing so.
+ *
+ * Two independent oracles agreed on the wrong answer, because both
+ * varied the *implementation* and neither varied the *stimulus*.  When
+ * 323634e was written to chase the anomaly it added two new observations
+ * -- the sparse attribute and the extent list -- and left FILE_SIZE,
+ * ZERO_FROM and ZERO_TO exactly as they were.  Varying the observation
+ * is not varying the input.
+ *
+ * So the parameters are now a TABLE, not three #defines, and every row
+ * states what a different outcome would have meant.  Rows that must
+ * release and rows that must NOT release are both present and both
+ * asserted: the sub-unit rows are what make the releasing rows mean
+ * something, and dropping them as uninteresting is how the file got into
+ * its previous state.
+ *
+ * WHICH CLUSTER REGIME DID THIS RUN SEE?
+ *
+ * FileFsSizeInformation is queried and printed once, unconditionally, so
+ * the log records the volume's actual bytes-per-cluster instead of
+ * leaving a reader to assume 4 KB.  It matters because every published
+ * measurement of the 64 KB figure was taken on 4 KB-cluster NTFS, where
+ * "a constant 64 KB" and "16 x the cluster size" predict the same
+ * number and no amount of such data can separate them.  On any other
+ * cluster size the two predictions differ, this file prints both and
+ * says which the observation matches, and it reports UNVERIFIED rather
+ * than asserting -- because on that volume the expected value is the
+ * open question, and asserting it would be deriving the answer instead
+ * of measuring it.
+ *
+ * Point NTLIBC_ZD_DIR at such a volume, and NTLIBC_ZD_CLUSTER at the
+ * cluster size that was asked for, and this file measures there instead
+ * -- after reading the size back off the filesystem and refusing to run
+ * if it is not what was requested.  Building the volume is not this
+ * file's job.  A hosted Windows runner can attach a VHD, but 1024 is not
+ * a legal allocation unit on one (a VHD presents a 4096-byte physical
+ * sector and NTFS requires the cluster to be a multiple of it); 8192 is
+ * legal and discriminates just as sharply, predicting a 131072-byte unit
+ * under "16 x cluster" against 65536 under "constant".  The two
+ * candidates that have been considered fail in OPPOSITE directions from
+ * 4 KB -- 1024 predicts a smaller unit, 8192 a larger one -- which is
+ * why having both would be worth more than having either twice.
  *
  * WHAT IS ASSERTED AND WHAT IS ONLY MEASURED
  *
- * Asserted (these can turn the leg red): if the ioctl reports success,
- * then the requested range must read back as zero, the bytes on either
- * side of it must be untouched, and EndOfFile must be unchanged --
- * zeroing a range is not a truncation.  Those are the documented
- * contract, and a violation is a real finding.
+ * Asserted, on a 4 KB-cluster volume, for every row: if the ioctl
+ * reports success then the requested range reads back as zero, the bytes
+ * on either side are untouched, EndOfFile is unchanged (zeroing is not a
+ * truncation), AllocationSize equals the before value minus the wholly
+ * covered 64 KB units, and FSCTL_QUERY_ALLOCATED_RANGES returns exactly
+ * the extents that release implies.  AllocationSize used to be measured
+ * and never asserted; it is the claim, so it is now asserted.
  *
- * Only measured (never asserted): AllocationSize.  Whether NT
- * deallocates for a non-sparse file is exactly the open question this
- * probe exists to answer; asserting an expected value here would be
- * deriving the answer instead of observing it.
+ * Only measured, never asserted: everything on a volume whose cluster
+ * size is not 4096 (see above).
  *
  * If the ioctl fails, the contract assertions have no input to run
  * against.  A not-supported-family status makes the whole binary
  * unverified (rc=77) naming the status; any other failure status is
- * printed just as prominently and also leaves the case unverified,
+ * printed just as prominently and also leaves the row unverified,
  * because a status is a measurement and this file's job is to report
  * measurements.
  *
@@ -147,16 +213,72 @@ NTSTATUS NTAPI NtQueryInformationFile(HANDLE, IO_STATUS_BLOCK *, PVOID, ULONG, i
 /* src/internal/libc.h: "HANDLE __fd_handle(int fd)  -- NULL with errno=EBADF". */
 HANDLE __fd_handle(int fd);
 
-/* ---- probe parameters ------------------------------------------- */
-#define FILE_SIZE  65536
-#define ZERO_FROM   8192
-#define ZERO_TO    40960
+
+/* ---- probe parameters -------------------------------------------
+ *
+ * FILE_SIZE is 1 MB: sixteen 64 KB allocation units, so a range can be
+ * wholly inside one unit, cover exactly one, cover several, straddle
+ * two, or cover the lot -- distinctions a 65536-byte file cannot make,
+ * which is why the previous 65536 could not discriminate anything.
+ */
+#define FILE_SIZE  1048576
 #define FILL_BYTE  0xAB
+
+/* The sparse allocation unit as measured on 4 KB-cluster NTFS.  Named a
+ * hypothesis rather than a constant on purpose: every measurement of it
+ * comes from volumes where 16 * cluster is also 65536, so the data
+ * behind it cannot tell "always 64 KB" from "16 x the cluster size".
+ * On a 4 KB volume both agree and this file asserts; elsewhere it prints
+ * both predictions and asserts neither.  See the banner. */
+#define UNIT_CONST_64K   65536
+#define REGIME_CLUSTER   4096
+
+#define STATUS_INVALID_PARAMETER ((NTSTATUS)0xC000000DL)
+
+/* FILE_FS_SIZE_INFORMATION / FileFsSizeInformation, hand-declared for the
+ * same reason as everything else here (test/*.c has no src/internal on
+ * the include path).  cluster = SectorsPerAllocationUnit * BytesPerSector. */
+typedef struct _FILE_FS_SIZE_INFORMATION {
+	LONGLONG TotalAllocationUnits;
+	LONGLONG AvailableAllocationUnits;
+	ULONG SectorsPerAllocationUnit;
+	ULONG BytesPerSector;
+} FILE_FS_SIZE_INFORMATION;
+#define FileFsSizeInformation 3
+NTSTATUS NTAPI NtQueryVolumeInformationFile(HANDLE, IO_STATUS_BLOCK *, PVOID, ULONG, int);
+
+/* FileAllocationInformation, for the class-19 section at the bottom. */
+#define FileAllocationInformation 19
+NTSTATUS NTAPI NtSetInformationFile(HANDLE, IO_STATUS_BLOCK *, PVOID, ULONG, int);
+
+/* Measured once, then asserted -- see run_probe().  A probe that records
+ * the cluster regime without asserting it can silently run on the wrong
+ * volume and reproduce this file's whole failure one level up: correct
+ * arithmetic applied to a stimulus that was never the one requested. */
+static long long g_cluster;      /* bytes per cluster, measured */
+static int       g_assert;       /* 1 only in the regime where the rule is established */
+static int       rows_measured;
 
 static int not_supported(NTSTATUS st)
 {
 	return st == STATUS_NOT_SUPPORTED || st == STATUS_INVALID_DEVICE_REQUEST ||
 	       st == STATUS_NOT_IMPLEMENTED;
+}
+
+/* Bytes NTFS should release for [off,beyond) if the unit is `unit`:
+ * exactly the unit-aligned units WHOLLY covered by the range, after the
+ * range is clamped to the file.  Cluster alignment does not enter into
+ * it -- [32768,98304) is cluster-aligned on any volume at or below 32 KB
+ * clusters and still covers no whole 64 KB unit. */
+static long long released_bytes(long long off, long long beyond, long long unit)
+{
+	long long lo, hi;
+	if (off < 0) off = 0;
+	if (beyond > FILE_SIZE) beyond = FILE_SIZE;
+	if (beyond <= off) return 0;
+	lo = ((off + unit - 1) / unit) * unit;
+	hi = (beyond / unit) * unit;
+	return hi > lo ? hi - lo : 0;
 }
 
 static int query_std(HANDLE h, FILE_STANDARD_INFORMATION *si, const char *when, const char *tag)
@@ -178,8 +300,8 @@ static int query_std(HANDLE h, FILE_STANDARD_INFORMATION *si, const char *when, 
  * than asserted: FSCTL_SET_SPARSE reporting success and the attribute
  * being observable afterwards are two different claims, and on a volume
  * that does not support sparse files they can come apart.  Without this
- * line a sparse case that quietly behaved like the unmarked one would be
- * indistinguishable from NT declining to deallocate. */
+ * line a sparse row that quietly behaved like an unmarked one would be
+ * indistinguishable from NT declining to release. */
 static void report_sparse_attr(HANDLE h, const char *tag, const char *when)
 {
 	IO_STATUS_BLOCK io;
@@ -198,74 +320,193 @@ static void report_sparse_attr(HANDLE h, const char *tag, const char *when)
 }
 
 /* The allocated extents of the whole file, straight from the filesystem.
- * This is the direct form of the question AllocationSize answers only
- * indirectly: a punched hole shows up here as a gap between ranges, and
- * a file with no hole reports exactly one range covering everything. */
-static void report_allocated_ranges(HANDLE h, const char *tag, const char *when)
+ * This is the direct form of the claim AllocationSize makes only in
+ * aggregate: a released hole shows up here as a gap, with its boundaries
+ * snapped to the real allocation unit -- so the extent list states the
+ * unit in bytes, whatever it is, including a value neither hypothesis
+ * anticipated.  Returned into the caller's array so it can be asserted
+ * and not merely printed. */
+static int report_allocated_ranges(HANDLE h, const char *tag, const char *when,
+                                   FILE_ALLOCATED_RANGE_BUFFER *out, unsigned cap,
+                                   unsigned *n_out)
 {
 	IO_STATUS_BLOCK io;
 	FILE_ALLOCATED_RANGE_BUFFER in;
-	FILE_ALLOCATED_RANGE_BUFFER out[16];
 	NTSTATUS st;
 	unsigned n, i;
 
+	*n_out = 0;
 	in.FileOffset = 0;
 	in.Length = FILE_SIZE;
-	memset(out, 0, sizeof out);
+	memset(out, 0, cap * sizeof *out);
 	io.Information = 0;
 	st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_QUERY_ALLOCATED_RANGES,
-	                     &in, (ULONG)sizeof in, out, (ULONG)sizeof out);
+	                     &in, (ULONG)sizeof in, out, (ULONG)(cap * sizeof *out));
 	if (!NT_SUCCESS(st)) {
 		printf("zerodata[%s]: FSCTL_QUERY_ALLOCATED_RANGES %s -> 0x%08lX "
 		       "(extents not measured)\n", tag, when, (unsigned long)(unsigned)st);
-		return;
+		return 0;
 	}
 	n = (unsigned)(io.Information / sizeof out[0]);
+	if (n > cap) n = cap;
+	*n_out = n;
 	printf("zerodata[%s]: allocated extents %s: %u range(s)%s\n",
 	       tag, when, n, n == 0 ? " -- the file is entirely unallocated" : "");
-	for (i = 0; i < n && i < 16; i++)
+	for (i = 0; i < n; i++)
 		printf("zerodata[%s]:   extent %u: [%lld,%lld)\n", tag, i,
 		       (long long)out[i].FileOffset,
 		       (long long)(out[i].FileOffset + out[i].Length));
+	return 1;
 }
 
-/* Runs one case.  `mark_sparse` selects (a) vs (b). */
-static void run_case(const char *tag, int mark_sparse)
+/* ---- the table --------------------------------------------------
+ *
+ * Every row says what it asks and what a DIFFERENT outcome would have
+ * looked like.  A row whose two outcomes are the same number does not
+ * belong in this file; that is what the old [8192,40960) row was.
+ */
+enum { EXPECT_OK, EXPECT_INVALID, EXPECT_MEASURE };
+
+struct row {
+	const char *name;
+	long long   off, beyond;
+	unsigned    in_size;   /* declared input length; 0 => sizeof the struct */
+	int         null_in;   /* 0 = real buffer, 1 = NULL, 2 = unmapped non-NULL */
+	int         readonly;  /* reopen without write access before the FSCTL */
+	int         expect;
+	const char *asks;
+	const char *otherwise;
+};
+
+static const struct row rows[] = {
+/* --- release rows: each covers at least one whole 64 KB unit --- */
+{ "whole-file",      0,        FILE_SIZE, 0,0,0, EXPECT_OK,
+  "the entire file: all sixteen units wholly covered",
+  "sparse: Alloc 1048576->0 and no extents. If Alloc stays at 1048576 here the apparatus "
+  "cannot observe release at all and every no-release row below is uninterpretable." },
+{ "interior-512k",   262144,   786432,    0,0,0, EXPECT_OK,
+  "aligned interior 512 KB: eight whole units",
+  "sparse: Alloc drops by exactly 524288, extents [0,262144) and [786432,1048576). A drop of "
+  "some other size means the unit is not 64 KB." },
+{ "one-unit",        65536,    131072,    0,0,0, EXPECT_OK,
+  "exactly one aligned 64 KB unit",
+  "sparse: Alloc drops by exactly 65536. No drop means the unit is LARGER than 64 KB, which on "
+  "a 4 KB volume would refute the whole rule." },
+{ "measure-the-unit", 4096,    FILE_SIZE - 4096, 0,0,0, EXPECT_OK,
+  "everything but one 4 KB slice at each end: ends aligned to no candidate unit, so the "
+  "retained head/tail extents STATE the real unit in bytes",
+  "head extent [0,65536) => unit is a constant 64 KB; [0,16*cluster) => unit is 16 x cluster; "
+  "[0,cluster) => cluster granularity; no gap at all => no release" },
+/* --- no-release rows: controls, and they are what make the rows above
+ *     mean anything.  Both are cluster-aligned on a 4 KB volume, so if
+ *     the rule were about cluster alignment they would release. --- */
+{ "sub-cluster",     4096,     8192,      0,0,0, EXPECT_OK,
+  "4 KB wholly inside the first unit: no unit can be released",
+  "any drop in Alloc, or any gap in the extent list, means the granularity is FINER than 64 KB" },
+{ "straddle-two",    32768,    98304,     0,0,0, EXPECT_OK,
+  "64 KB long, cluster-aligned, but straddling two units so covering neither whole",
+  "no drop => coverage of a whole unit is the rule; a 65536 drop => length alone decides, and "
+  "the whole-unit story is wrong" },
+/* --- edges --- */
+{ "past-eof",        FILE_SIZE + 4096, FILE_SIZE + 8192, 0,0,0, EXPECT_OK,
+  "a range entirely past EOF",
+  "EndOfFile stays 1048576 => the FSCTL does not extend a file; EndOfFile grows => it does" },
+{ "inverted",        8192,     4096,      0,0,0, EXPECT_INVALID,
+  "BeyondFinalZero < FileOffset",
+  "STATUS_INVALID_PARAMETER expected; success would mean NT normalises the range" },
+{ "negative-offset", -4096,    4096,      0,0,0, EXPECT_INVALID,
+  "a negative FileOffset",
+  "STATUS_INVALID_PARAMETER expected; success would mean the offset is treated as unsigned" },
+/* --- input-length rows.  The length check is `<`, not `!=`: a SURPLUS
+ *     declared length succeeds on NT and the request is honoured.  `!=`
+ *     is the obvious thing to write and it silently rejects valid
+ *     callers, so the surplus rows are here to pin that down rather
+ *     than leave a new probe encoding the wrong rule. --- */
+{ "inlen-short",     65536,    131072,    8,  0,0, EXPECT_INVALID,
+  "input length 8, one field short of the structure",
+  "STATUS_INVALID_PARAMETER expected; success would mean NT reads past the declared length" },
+{ "inlen-exact",     65536,    131072,    16, 0,0, EXPECT_OK,
+  "input length exactly sizeof(FILE_ZERO_DATA_INFORMATION)",
+  "must succeed and release 65536; anything else contradicts the release rows above" },
+{ "inlen-surplus17", 65536,    131072,    17, 0,0, EXPECT_OK,
+  "input length 17: one byte MORE than the structure",
+  "must SUCCEED and honour the request. A failure here would mean the check is `!=` rather "
+  "than `<`, and an implementation copying that would reject valid callers." },
+{ "inlen-surplus24", 65536,    131072,    24, 0,0, EXPECT_OK,
+  "input length 24: eight bytes more than the structure",
+  "same as inlen-surplus17; two surplus lengths so a single odd byte count cannot pass by luck" },
+/* --- pointer rows.  DELIBERATELY measured, not asserted.  The claim
+ *     "NT rejects a bad pointer before dereferencing, because the FSCTL
+ *     is METHOD_BUFFERED and the I/O manager captures behind
+ *     ProbeForRead" is an inference from the control code, not something
+ *     any run has shown.  It is a strong prior and it is still a guess,
+ *     and asserting a mechanism passes exactly as green as measuring one
+ *     -- a status code says WHAT NT returned, never WHY.  The length
+ *     claim above is measured and is asserted; this is not, and these
+ *     rows exist to make it measurable.  A bad pointer paired with a bad
+ *     length would not separate the two, since the length is checked
+ *     first, so both rows here carry a VALID 16-byte length. --- */
+{ "null-input-len16", 65536,   131072,    16, 1,0, EXPECT_MEASURE,
+  "a NULL input pointer with a length NT is known to accept",
+  "unasserted. INVALID_PARAMETER and ACCESS_VIOLATION are both plausible and they say different "
+  "things about where the rejection happens; neither is established, so this row reports the "
+  "raw status." },
+{ "bad-input-len16",  65536,   131072,    16, 2,0, EXPECT_MEASURE,
+  "a non-NULL but unmapped input pointer with a length NT accepts: the only shape that can "
+  "distinguish a pointer check from a NULL check, and nobody has run it",
+  "unasserted. If this differs from null-input-len16 then NULL is special-cased rather than "
+  "being one unreadable address among many." },
+/* --- access.  Deliberately EXPECT_MEASURE: nobody has measured what NT
+ *     returns without FILE_WRITE_DATA, and inventing a value is what
+ *     this file exists to stop. --- */
+{ "no-write-access", 65536,    131072,    0,  0,1, EXPECT_MEASURE,
+  "the same request on a handle opened WITHOUT write access",
+  "unmeasured until now: this row reports the raw status rather than asserting one. "
+  "ACCESS_DENIED and INVALID_DEVICE_REQUEST are both plausible and they mean different things." },
+};
+#define NROWS ((int)(sizeof rows / sizeof rows[0]))
+
+/* Runs one row against one sparse/unmarked variant. */
+static void run_row(const struct row *r, int mark_sparse)
 {
-	char path[64];
+	char path[96], tag[96];
 	unsigned char *buf;
 	FILE_STANDARD_INFORMATION before, after;
+	FILE_ALLOCATED_RANGE_BUFFER ext_before[32], ext_after[32];
+	unsigned n_before = 0, n_after = 0;
 	IO_STATUS_BLOCK io;
-	FILE_ZERO_DATA_INFORMATION zd;
+	/* Padded, so a surplus declared length still names memory we own --
+	 * otherwise inlen-surplus24 would have NT capture eight bytes past
+	 * the end of a stack object and the row would be testing our bug. */
+	struct { FILE_ZERO_DATA_INFORMATION z; unsigned char pad[16]; } zbuf;
 	NTSTATUS st_sparse = 0, st_zero;
 	HANDLE h;
-	int fd, i, range_zero = 1, outside_intact = 1;
-	long long delta;
+	int fd, ok_before, data_row;
+	long long expect_rel_const, expect_rel_16x, observed_rel;
+	unsigned in_len;
 
-	snprintf(path, sizeof path, "zd-%s.bin", tag);
+	snprintf(tag, sizeof tag, "%s/%s", r->name, mark_sparse ? "sparse" : "unmarked");
+	snprintf(path, sizeof path, "zd-%s-%d.bin", r->name, mark_sparse);
+
 	buf = malloc(FILE_SIZE);
 	if (!buf) { printf("FAIL %s: malloc\n", tag); fails++; return; }
 
 	fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
 	if (fd < 0) { printf("FAIL %s: open: %s\n", tag, strerror(errno)); fails++; free(buf); return; }
-
 	h = __fd_handle(fd);
 	if (!h) { printf("FAIL %s: __fd_handle: %s\n", tag, strerror(errno)); fails++; close(fd); free(buf); return; }
 
-	/* (a) mark sparse before the data is written -- the canonical order,
-	 * and the one a caller that wants a sparse file would use. */
+	/* Mark sparse before the data is written -- the canonical order, and
+	 * the one a caller that wants a sparse file would use. */
 	if (mark_sparse) {
 		FILE_SET_SPARSE_BUFFER sb;
 		sb.SetSparse = 1;
 		st_sparse = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_SPARSE, &sb, (ULONG)sizeof sb, 0, 0);
-		printf("zerodata[%s]: FSCTL_SET_SPARSE -> 0x%08lX\n", tag, (unsigned long)(unsigned)st_sparse);
 		if (!NT_SUCCESS(st_sparse)) {
 			printf("SKIP zerodata[%s]: the file could not be marked sparse "
-			       "(FSCTL_SET_SPARSE -> 0x%08lX), so the sparse case was not "
-			       "measured\n", tag, (unsigned long)(unsigned)st_sparse);
-			unverified++;
-			close(fd); free(buf);
-			return;
+			       "(FSCTL_SET_SPARSE -> 0x%08lX), so this row was not measured\n",
+			       tag, (unsigned long)(unsigned)st_sparse);
+			unverified++; close(fd); free(buf); return;
 		}
 	}
 
@@ -276,25 +517,94 @@ static void run_case(const char *tag, int mark_sparse)
 	}
 	if (fsync(fd) != 0) { printf("FAIL %s: fsync: %s\n", tag, strerror(errno)); fails++; }
 
-	if (!query_std(h, &before, "before", tag)) { unverified++; close(fd); free(buf); return; }
+	if (r->readonly) {
+		close(fd);
+		fd = open(path, O_RDONLY);
+		if (fd < 0) { printf("FAIL %s: reopen O_RDONLY: %s\n", tag, strerror(errno)); fails++; free(buf); return; }
+		h = __fd_handle(fd);
+		if (!h) { printf("FAIL %s: __fd_handle after reopen\n", tag); fails++; close(fd); free(buf); return; }
+	}
+
+	printf("zerodata[%s]: ASKS      %s\n", tag, r->asks);
+	/* The row's OTHERWISE is written for the sparse variant, which is the
+	 * one that can release.  The unmarked variant is the control and its
+	 * expectation is the same for every row, so say that here rather than
+	 * printing sparse-flavoured text against an unmarked measurement. */
+	if (mark_sparse)
+		printf("zerodata[%s]: OTHERWISE %s\n", tag, r->otherwise);
+	else
+		printf("zerodata[%s]: OTHERWISE control: on a file never marked sparse nothing "
+		       "may be released for ANY row -- AllocationSize unchanged and one extent "
+		       "covering the whole file. A release here would mean the sparse mark is "
+		       "not what enables it, refuting the rule for every row above.\n", tag);
+
+	ok_before = query_std(h, &before, "before", tag);
+	if (!ok_before) { unverified++; close(fd); free(buf); return; }
 	report_sparse_attr(h, tag, "before");
-	report_allocated_ranges(h, tag, "before");
+	report_allocated_ranges(h, tag, "before", ext_before, 32, &n_before);
 
-	zd.FileOffset = ZERO_FROM;
-	zd.BeyondFinalZero = ZERO_TO;
-	st_zero = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_ZERO_DATA, &zd, (ULONG)sizeof zd, 0, 0);
+	memset(&zbuf, 0, sizeof zbuf);
+	zbuf.z.FileOffset = r->off;
+	zbuf.z.BeyondFinalZero = r->beyond;
+	in_len = r->in_size ? r->in_size : (unsigned)sizeof zbuf.z;
+	st_zero = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_ZERO_DATA,
+	                          r->null_in == 1 ? (PVOID)0 :
+	                          r->null_in == 2 ? (PVOID)(ULONG_PTR)0x10 : (PVOID)&zbuf,
+	                          (ULONG)in_len, 0, 0);
 
-	printf("zerodata[%s]: FSCTL_SET_ZERO_DATA [%d,%d) -> 0x%08lX\n",
-	       tag, ZERO_FROM, ZERO_TO, (unsigned long)(unsigned)st_zero);
+	printf("zerodata[%s]: FSCTL_SET_ZERO_DATA [%lld,%lld) inlen=%u%s%s -> 0x%08lX\n",
+	       tag, r->off, r->beyond, in_len,
+	       r->null_in == 1 ? " input=NULL" : r->null_in == 2 ? " input=0x10(unmapped)" : "",
+	       r->readonly ? " handle=O_RDONLY" : "",
+	       (unsigned long)(unsigned)st_zero);
+	rows_measured++;
 
 	if (!query_std(h, &after, "after", tag)) { unverified++; close(fd); free(buf); return; }
 	report_sparse_attr(h, tag, "after");
-	report_allocated_ranges(h, tag, "after");
+	report_allocated_ranges(h, tag, "after", ext_after, 32, &n_after);
 
 	printf("zerodata[%s]: EndOfFile      before=%lld after=%lld\n",
 	       tag, (long long)before.EndOfFile, (long long)after.EndOfFile);
 	printf("zerodata[%s]: AllocationSize before=%lld after=%lld\n",
 	       tag, (long long)before.AllocationSize, (long long)after.AllocationSize);
+
+	observed_rel = (long long)before.AllocationSize - (long long)after.AllocationSize;
+
+	/* The two hypotheses, both printed, on every row and every volume.
+	 * On a 4 KB volume they coincide and that is stated rather than
+	 * hidden; elsewhere they differ and the observation picks one. */
+	expect_rel_const = mark_sparse ? released_bytes(r->off, r->beyond, UNIT_CONST_64K) : 0;
+	expect_rel_16x   = mark_sparse ? released_bytes(r->off, r->beyond, 16 * g_cluster) : 0;
+	printf("zerodata[%s]: released observed=%lld  predicted: const-64K=%lld  16x-cluster(%lld)=%lld%s\n",
+	       tag, observed_rel, expect_rel_const, 16 * g_cluster, expect_rel_16x,
+	       expect_rel_const == expect_rel_16x
+	         ? "  [predictions COINCIDE: this row cannot discriminate on this volume]"
+	         : "  [predictions DIFFER: this row discriminates]");
+
+	if (r->expect == EXPECT_INVALID) {
+		printf("zerodata[%s]: status expectation: STATUS_INVALID_PARAMETER (0xC000000D)\n", tag);
+		if (not_supported(st_zero)) {
+			printf("SKIP zerodata[%s]: FSCTL_SET_ZERO_DATA is unimplemented here "
+			       "(0x%08lX) -- stock Wine. Real NT is required.\n",
+			       tag, (unsigned long)(unsigned)st_zero);
+			unverified++;
+		} else if (g_assert) {
+			CHECK(st_zero == STATUS_INVALID_PARAMETER);
+			CHECK(after.EndOfFile == before.EndOfFile);
+			CHECK(after.AllocationSize == before.AllocationSize);
+		} else {
+			unverified++;
+		}
+		close(fd); free(buf); return;
+	}
+
+	if (r->expect == EXPECT_MEASURE) {
+		printf("zerodata[%s]: MEASURED-ONLY: status 0x%08lX is the result; no value is "
+		       "asserted because none has been established.\n",
+		       tag, (unsigned long)(unsigned)st_zero);
+		unverified++;
+		close(fd); free(buf); return;
+	}
 
 	if (!NT_SUCCESS(st_zero)) {
 		if (not_supported(st_zero))
@@ -307,24 +617,58 @@ static void run_case(const char *tag, int mark_sparse)
 			       tag, (unsigned long)(unsigned)st_zero);
 		else
 			printf("SKIP zerodata[%s]: FSCTL_SET_ZERO_DATA failed with 0x%08lX -- "
-			       "that status IS the measurement for this case; the success "
+			       "that status IS the measurement for this row; the success "
 			       "contract below could not be evaluated.\n",
 			       tag, (unsigned long)(unsigned)st_zero);
-		unverified++;
-		close(fd); free(buf);
-		return;
+		unverified++; close(fd); free(buf); return;
 	}
 
-	/* ---- contract assertions (success path only) ---- */
+	/* ---- contract assertions (success path) ---- */
+	data_row = r->off >= 0 && r->beyond <= FILE_SIZE && r->beyond > r->off;
 
-	/* Zeroing a range is not a truncation. */
+	if (!g_assert) {
+		printf("zerodata[%s]: NOT ASSERTED: bytes-per-cluster is %lld, not %d. The "
+		       "expected release is exactly the open question on this volume, so this "
+		       "row is a measurement and nothing here is checked against it.\n",
+		       tag, g_cluster, REGIME_CLUSTER);
+		unverified++; close(fd); free(buf); return;
+	}
+
+	/* Zeroing a range is not a truncation, and it does not extend a file. */
 	CHECK(after.EndOfFile == before.EndOfFile);
 	CHECK(after.EndOfFile == FILE_SIZE);
 
-	memset(buf, 0x5A, FILE_SIZE);   /* poison, so a short read cannot look like zeros */
-	if (lseek(fd, 0, SEEK_SET) != 0) { printf("FAIL %s: lseek\n", tag); fails++; }
+	/* AllocationSize: asserted, not merely measured.  It IS the claim. */
+	CHECK(observed_rel == expect_rel_const);
+
+	/* The extent list, which is the same claim stated directly.  Release
+	 * of [lo,hi) leaves [0,lo) and [hi,FILE_SIZE); no release leaves one
+	 * extent covering everything. */
 	{
+		long long lo = 0, hi = 0, exp_off[2], exp_len[2];
+		unsigned exp_n = 0, i;
+		if (expect_rel_const > 0) {
+			lo = ((r->off + UNIT_CONST_64K - 1) / UNIT_CONST_64K) * UNIT_CONST_64K;
+			hi = lo + expect_rel_const;
+			if (lo > 0)         { exp_off[exp_n] = 0;  exp_len[exp_n] = lo; exp_n++; }
+			if (hi < FILE_SIZE) { exp_off[exp_n] = hi; exp_len[exp_n] = FILE_SIZE - hi; exp_n++; }
+		} else {
+			exp_off[0] = 0; exp_len[0] = FILE_SIZE; exp_n = 1;
+		}
+		printf("zerodata[%s]: extents expected: %u range(s)\n", tag, exp_n);
+		CHECK(n_after == exp_n);
+		for (i = 0; i < exp_n && i < n_after; i++) {
+			CHECK(ext_after[i].FileOffset == exp_off[i]);
+			CHECK(ext_after[i].Length == exp_len[i]);
+		}
+		(void)n_before;
+	}
+
+	if (data_row) {
+		int i, range_zero = 1, outside_intact = 1;
 		size_t got = 0;
+		memset(buf, 0x5A, FILE_SIZE);   /* poison, so a short read cannot look like zeros */
+		if (lseek(fd, 0, SEEK_SET) != 0) { printf("FAIL %s: lseek\n", tag); fails++; }
 		while (got < FILE_SIZE) {
 			ssize_t n = read(fd, buf + got, FILE_SIZE - got);
 			if (n <= 0) break;
@@ -332,55 +676,250 @@ static void run_case(const char *tag, int mark_sparse)
 		}
 		CHECK(got == FILE_SIZE);
 		if (got != FILE_SIZE) { close(fd); free(buf); return; }
+		for (i = (int)r->off; i < (int)r->beyond; i++) if (buf[i] != 0) { range_zero = 0; break; }
+		for (i = 0; i < (int)r->off; i++) if (buf[i] != FILL_BYTE) { outside_intact = 0; break; }
+		for (i = (int)r->beyond; i < FILE_SIZE; i++) if (buf[i] != FILL_BYTE) { outside_intact = 0; break; }
+		printf("zerodata[%s]: range reads back as zero: %s; bytes outside still 0x%02X: %s\n",
+		       tag, range_zero ? "yes" : "NO", FILL_BYTE, outside_intact ? "yes" : "NO");
+		CHECK(range_zero);
+		CHECK(outside_intact);
 	}
-	for (i = ZERO_FROM; i < ZERO_TO; i++) if (buf[i] != 0) { range_zero = 0; break; }
-	for (i = 0; i < ZERO_FROM; i++) if (buf[i] != FILL_BYTE) { outside_intact = 0; break; }
-	for (i = ZERO_TO; i < FILE_SIZE; i++) if (buf[i] != FILL_BYTE) { outside_intact = 0; break; }
 
-	printf("zerodata[%s]: range [%d,%d) reads back as zero: %s\n",
-	       tag, ZERO_FROM, ZERO_TO, range_zero ? "yes" : "NO");
-	printf("zerodata[%s]: bytes outside the range still 0x%02X: %s\n",
-	       tag, FILL_BYTE, outside_intact ? "yes" : "NO");
+	close(fd); free(buf);
+}
 
-	CHECK(range_zero);
-	CHECK(outside_intact);
+/* ---- FileAllocationInformation (info class 19) x the sparse mark ----
+ *
+ * Every published number for class 19 was taken on a file that was not
+ * marked sparse, and the two features are now implemented together
+ * downstream, so their interaction is live code with no measurements
+ * behind it.  Measured, never asserted: there is nothing established to
+ * assert against, and putting a guess here would be the same mistake
+ * this file was rewritten to correct.
+ */
+static void run_alloc_class19(const char *name, int mark_sparse, long long punch_from,
+                              long long punch_to, long long request)
+{
+	char path[96], tag[96];
+	unsigned char *buf;
+	FILE_STANDARD_INFORMATION before, after;
+	FILE_ALLOCATED_RANGE_BUFFER ext[32];
+	unsigned n = 0;
+	IO_STATUS_BLOCK io;
+	NTSTATUS st;
+	HANDLE h;
+	int fd;
 
-	/* ---- the discriminating verdict, stated rather than implied ---- */
-	delta = (long long)before.AllocationSize - (long long)after.AllocationSize;
-	if (delta > 0)
-		printf("zerodata[%s]: VERDICT=DEALLOCATED -- AllocationSize dropped by %lld "
-		       "bytes, so NT punched a hole rather than writing zeros.\n", tag, delta);
-	else if (delta == 0)
-		printf("zerodata[%s]: VERDICT=ZEROED-IN-PLACE -- AllocationSize is unchanged, "
-		       "so the bytes were zeroed without deallocating any clusters.\n", tag);
-	else
-		printf("zerodata[%s]: VERDICT=GREW -- AllocationSize rose by %lld bytes, which "
-		       "neither plain zeroing nor deallocation predicts.\n", tag, -delta);
+	snprintf(tag, sizeof tag, "class19/%s/%s", name, mark_sparse ? "sparse" : "unmarked");
+	snprintf(path, sizeof path, "c19-%s-%d.bin", name, mark_sparse);
 
-	close(fd);
-	free(buf);
+	buf = malloc(FILE_SIZE);
+	if (!buf) { printf("FAIL %s: malloc\n", tag); fails++; return; }
+	fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0) { printf("FAIL %s: open: %s\n", tag, strerror(errno)); fails++; free(buf); return; }
+	h = __fd_handle(fd);
+	if (!h) { printf("FAIL %s: __fd_handle\n", tag); fails++; close(fd); free(buf); return; }
+
+	if (mark_sparse) {
+		FILE_SET_SPARSE_BUFFER sb;
+		sb.SetSparse = 1;
+		st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_SPARSE, &sb, (ULONG)sizeof sb, 0, 0);
+		if (!NT_SUCCESS(st)) {
+			printf("SKIP zerodata[%s]: FSCTL_SET_SPARSE -> 0x%08lX\n",
+			       tag, (unsigned long)(unsigned)st);
+			unverified++; close(fd); free(buf); return;
+		}
+	}
+	memset(buf, FILL_BYTE, FILE_SIZE);
+	if (write(fd, buf, FILE_SIZE) != FILE_SIZE) {
+		printf("FAIL %s: short write\n", tag); fails++; close(fd); free(buf); return;
+	}
+	fsync(fd);
+
+	if (punch_to > punch_from) {
+		FILE_ZERO_DATA_INFORMATION z;
+		z.FileOffset = punch_from; z.BeyondFinalZero = punch_to;
+		st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_SET_ZERO_DATA, &z, (ULONG)sizeof z, 0, 0);
+		printf("zerodata[%s]: pre-punch [%lld,%lld) -> 0x%08lX\n",
+		       tag, punch_from, punch_to, (unsigned long)(unsigned)st);
+		if (!NT_SUCCESS(st)) {
+			printf("SKIP zerodata[%s]: the pre-punch failed, so the retained-extent "
+			       "question this row exists to ask cannot be posed\n", tag);
+			unverified++; close(fd); free(buf); return;
+		}
+	}
+
+	if (!query_std(h, &before, "before", tag)) { unverified++; close(fd); free(buf); return; }
+	report_allocated_ranges(h, tag, "before", ext, 32, &n);
+	printf("zerodata[%s]: before EndOfFile=%lld AllocationSize=%lld\n",
+	       tag, (long long)before.EndOfFile, (long long)before.AllocationSize);
+
+	st = NtSetInformationFile(h, &io, &request, (ULONG)sizeof request, FileAllocationInformation);
+	printf("zerodata[%s]: NtSetInformationFile(FileAllocationInformation, %lld) -> 0x%08lX\n",
+	       tag, request, (unsigned long)(unsigned)st);
+
+	if (!query_std(h, &after, "after", tag)) { unverified++; close(fd); free(buf); return; }
+	report_allocated_ranges(h, tag, "after", ext, 32, &n);
+	printf("zerodata[%s]: after  EndOfFile=%lld AllocationSize=%lld\n",
+	       tag, (long long)after.EndOfFile, (long long)after.AllocationSize);
+	printf("zerodata[%s]: MEASURED-ONLY: EndOfFile %lld->%lld tells whether class 19 still "
+	       "truncates on a sparse file; AllocationSize %lld->%lld tells whether it tracks the "
+	       "REQUEST (%lld) or the RETAINED EXTENTS. Paired with its %s twin so any difference "
+	       "is attributable to the sparse mark and nothing else.\n",
+	       tag, (long long)before.EndOfFile, (long long)after.EndOfFile,
+	       (long long)before.AllocationSize, (long long)after.AllocationSize,
+	       request, mark_sparse ? "unmarked" : "sparse");
+
+	close(fd); free(buf);
 }
 
 int main(void)
 {
 	char dir[] = "zerodatXXXXXX";
+	const char *want = getenv("NTLIBC_ZD_DIR");
+	FILE_FS_SIZE_INFORMATION fsi;
+	IO_STATUS_BLOCK io;
+	NTSTATUS st;
+	HANDLE h;
+	int fd, i, total_rows;
+
+	/* NTLIBC_ZD_DIR points the probe at a volume other than the default
+	 * one -- .github/probes/ntfs-sparse-granularity.ps1 builds a
+	 * 1 KB-cluster VHD and sets it.  Failing to chdir is fatal, not a
+	 * fallback to the default volume: running the whole battery on 4 KB
+	 * clusters while the log says a non-4 KB regime was requested is a
+	 * silent substitution of a weaker stimulus, which is exactly the
+	 * class of error this file was rewritten to remove. */
+	if (want && *want) {
+		if (chdir(want) != 0) {
+			printf("FAIL zerodata: NTLIBC_ZD_DIR=%s but chdir failed: %s\n",
+			       want, strerror(errno));
+			return 1;
+		}
+		printf("zerodata: NTLIBC_ZD_DIR=%s (a non-default volume was requested)\n", want);
+	}
 
 	if (!mkdtemp(dir)) { printf("FAIL mkdtemp: %s\n", strerror(errno)); return 1; }
 	if (chdir(dir) != 0) { printf("FAIL chdir: %s\n", strerror(errno)); return 1; }
 
-	printf("zerodata: file size %d, zero range [%d,%d), fill byte 0x%02X\n",
-	       FILE_SIZE, ZERO_FROM, ZERO_TO, FILL_BYTE);
+	/* Which cluster regime is this?  Asserted, not just logged: a probe
+	 * that records the regime without checking it can run on the wrong
+	 * volume and produce arithmetic that is internally consistent and
+	 * about the wrong filesystem. */
+	fd = open("regime.bin", O_RDWR | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0) { printf("FAIL zerodata: open regime.bin: %s\n", strerror(errno)); return 1; }
+	h = __fd_handle(fd);
+	if (!h) { printf("FAIL zerodata: __fd_handle for regime.bin\n"); return 1; }
+	memset(&fsi, 0, sizeof fsi);
+	st = NtQueryVolumeInformationFile(h, &io, &fsi, (ULONG)sizeof fsi, FileFsSizeInformation);
+	if (!NT_SUCCESS(st)) {
+		printf("FAIL zerodata: NtQueryVolumeInformationFile(FileFsSizeInformation) -> "
+		       "0x%08lX; without the cluster size no row's expected value can be "
+		       "computed and none may be asserted\n", (unsigned long)(unsigned)st);
+		close(fd);
+		return 1;
+	}
+	g_cluster = (long long)fsi.SectorsPerAllocationUnit * (long long)fsi.BytesPerSector;
+	printf("zerodata: volume geometry: BytesPerSector=%lu SectorsPerAllocationUnit=%lu "
+	       "=> bytes-per-cluster=%lld\n",
+	       (unsigned long)fsi.BytesPerSector, (unsigned long)fsi.SectorsPerAllocationUnit,
+	       g_cluster);
+	close(fd);
 
-	/* (a) previously marked with FSCTL_SET_SPARSE */
-	run_case("sparse", 1);
-	/* (b) never marked -- the discriminating case */
-	run_case("unmarked", 0);
+	if (g_cluster <= 0) {
+		printf("FAIL zerodata: computed bytes-per-cluster is %lld, which is not a "
+		       "usable geometry\n", g_cluster);
+		return 1;
+	}
+	/* The one-level-up failure, made loud.
+	 *
+	 * A caller that points NTLIBC_ZD_DIR at a volume built for a
+	 * different cluster size must also say which size it asked for, via
+	 * NTLIBC_ZD_CLUSTER, and the two are compared against what the
+	 * filesystem reports.  This is not belt-and-braces.  Formatting a
+	 * volume with a chosen allocation unit can fail while leaving the
+	 * volume mounted and perfectly usable at the default 4096 -- a
+	 * rejected AllocationUnitSize, a silent rounding to the physical
+	 * sector size -- and the battery would then run to completion,
+	 * cleanly, on a duplicate of the volume we already have, and
+	 * "confirm" the incumbent 64 KB rule.  A false confirmation of the
+	 * hypothesis under test, indistinguishable in the log from a real
+	 * one.  That is the whole failure mode of this file reproduced one
+	 * level up, and the readback is what stops it.
+	 *
+	 * Such a run is VOID, not failed, and the two are labelled
+	 * differently because they mean different things: failed says a
+	 * claim about NTFS was contradicted, void says no claim was tested.
+	 * Void still cannot report green -- it exits 77, which the CI
+	 * harness surfaces as UNVERIFIED rather than PASS. */
+	if (want && *want) {
+		const char *cs = getenv("NTLIBC_ZD_CLUSTER");
+		long long asked = cs && *cs ? strtoll(cs, 0, 10) : 0;
+		if (!asked) {
+			printf("VOID zerodata: NTLIBC_ZD_DIR=%s names a volume chosen for its "
+			       "cluster size, but NTLIBC_ZD_CLUSTER does not say which size was "
+			       "asked for, so the %lld bytes per cluster reported here cannot be "
+			       "checked against anything. Nothing was tested.\n", want, g_cluster);
+			return 77;
+		}
+		if (asked != g_cluster) {
+			printf("VOID zerodata: NTLIBC_ZD_CLUSTER=%lld was requested, but the volume "
+			       "at %s reports %lld bytes per cluster. The format did not take -- and "
+			       "a volume that is still mounted and usable at the wrong cluster size "
+			       "produces a complete, clean-looking run on the regime this was "
+			       "supposed to leave. Nothing was tested.\n", asked, want, g_cluster);
+			return 77;
+		}
+		printf("zerodata: NTLIBC_ZD_CLUSTER=%lld requested, %lld measured: the volume is "
+		       "the one that was asked for.\n", asked, g_cluster);
+	}
 
+	g_assert = (g_cluster == REGIME_CLUSTER);
+	printf("zerodata: file size %d, fill byte 0x%02X, %d row(s) x {sparse, unmarked}\n",
+	       FILE_SIZE, FILL_BYTE, NROWS);
+	if (g_assert) {
+		printf("zerodata: 4096-byte clusters: 'constant 64 KB' and '16 x cluster' predict "
+		       "the SAME unit here, so this run asserts the whole-unit rule but CANNOT "
+		       "discriminate which of the two rules produces it.\n");
+	} else {
+		printf("zerodata: %lld-byte clusters: 'constant 64 KB' predicts a %d-byte unit and "
+		       "'16 x cluster' predicts %lld. This run DISCRIMINATES them, and asserts "
+		       "nothing, because the expected value is the question.\n",
+		       g_cluster, UNIT_CONST_64K, 16 * g_cluster);
+	}
+
+	for (i = 0; i < NROWS; i++) {
+		run_row(&rows[i], 1);
+		run_row(&rows[i], 0);
+	}
+
+	/* Class 19.  (a) shrink far below EOF; (b) punch first, then request
+	 * the original size, so retained extents and the request differ by a
+	 * known amount -- on a dense file they are equal and the question
+	 * cannot even be posed, which is why the existing table is silent on
+	 * it; (c) grow past EOF; (d) zero. */
+	for (i = 0; i < 2; i++) {
+		run_alloc_class19("shrink",      i, 0, 0, 4096);
+		run_alloc_class19("vs-extents",  i, 262144, 786432, FILE_SIZE);
+		run_alloc_class19("grow",        i, 0, 0, 4 * (long long)FILE_SIZE);
+		run_alloc_class19("zero",        i, 0, 0, 0);
+	}
+
+	total_rows = NROWS * 2;
 	if (fails) { printf("FAILED %d check(s)\n", fails); return 1; }
+	if (rows_measured == 0) {
+		printf("FAILED zerodata: not one row reached the FSCTL. This binary verified "
+		       "nothing, which is not the same as passing.\n");
+		return 1;
+	}
 	if (unverified) {
-		printf("UNVERIFIED zerodata: %d of 2 case(s) could not be measured in this "
-		       "environment (see SKIP lines above); no failures in what did run\n",
-		       unverified);
+		printf("UNVERIFIED zerodata: %d measurement(s) went unverified in this "
+		       "environment (see the SKIP / MEASURED-ONLY / NOT ASSERTED lines above for "
+		       "which and why), across %d SET_ZERO_DATA rows and 8 class-19 rows; %d row(s) "
+		       "did reach the FSCTL. No failures in what did run -- and note that the "
+		       "MEASURED-ONLY rows are unverified BY DESIGN, because no value has been "
+		       "established for them to be checked against.\n",
+		       unverified, total_rows, rows_measured);
 		return 77;
 	}
 	printf("PASS zerodata\n");
