@@ -2198,8 +2198,22 @@ static void test_regex_regfree_after_failed_regcomp(void)
  * REG_EXTENDED|REG_NOSUB|REG_NEWLINE. Reduced to "[!]**" here. */
 static void test_regex_nullable_repeat_does_not_crash(void)
 {
-	static const char *const nullable[] = {
-		"(a*)*b", "()*a", "^*a", "[!]**", "(|)*x", NULL
+	/* Each entry carries its own cflags: "^*a" and the two anchor
+	 * shapes below are BREs (see the next fence), the rest EREs. */
+	static const struct { const char *pat; int cf; } nullable[] = {
+		{ "(a*)*b", REG_EXTENDED }, { "()*a", REG_EXTENDED },
+		{ "^*a", 0 }, { "[!]**", REG_EXTENDED }, { "(|)*x", REG_EXTENDED },
+		/* An UNBOUNDED repeat over a bare anchor -- no group and no
+		 * bracket in sight.  fuzz/fuzz_regex.c reduced the class to
+		 * the BRE "^+", which is the smallest member of it: bare '+'
+		 * is a repeat operator in this implementation's BREs
+		 * (deliberately -- src/regex/regex.c:328 says so), so it
+		 * wraps the zero-width I_BOL and emits the same
+		 * progress-free SPLIT/JMP loop the group shapes above do.
+		 * Kept here so that a fix for the group and bracket shapes
+		 * alone cannot pass this test. */
+		{ "^+", 0 }, { "^*", 0 },
+		{ NULL, 0 }
 	};
 	regex_t re;
 	regmatch_t m[2];
@@ -2207,10 +2221,9 @@ static void test_regex_nullable_repeat_does_not_crash(void)
 	size_t i, n = 96 * 1024;
 	int r;
 
-	for (i = 0; nullable[i]; i++) {
-		/* "^*a" is a BRE (see the next fence); the rest are EREs. */
-		int cf = strcmp(nullable[i], "^*a") == 0 ? 0 : REG_EXTENDED;
-		CHECK(regcomp(&re, nullable[i], cf) == 0);
+	for (i = 0; nullable[i].pat; i++) {
+		int cf = nullable[i].cf;
+		CHECK(regcomp(&re, nullable[i].pat, cf) == 0);
 		r = regexec(&re, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 2, m, 0);
 		/* The point of the test: control reaches this line. */
 		CHECK(r == 0 || r == REG_NOMATCH || r == REG_ESPACE);
@@ -2254,7 +2267,34 @@ static void test_regex_nullable_repeat_does_not_crash(void)
 	test_regex_nullable_repeat_does_not_crash() above is live.
 
 	The third pattern is also the symptom of the BUG in the next
-	fence -- see there for why "^*a" reaches this path at all. */
+	fence -- see there for why "^*a" reaches this path at all.
+
+	The class is wider than these three, and a fixer who tests only
+	them will think it is done when it is not: the shape is an
+	UNBOUNDED repeat ('*' or '+') over any zero-width atom, and the
+	atom need not be a group or a bracket expression. Found by
+	fuzz/fuzz_regex.c and reduced to the BRE "^+", which is the
+	smallest member of the class -- a bare anchor and one operator.
+	Measured here against glibc on the same subject:
+
+	    BRE "^+"   this: REG_ESPACE    glibc: REG_NOMATCH
+	    BRE "^*"   this: REG_ESPACE    glibc: REG_NOMATCH
+
+	Both are now in test_regex_nullable_repeat_does_not_crash()'s
+	table above, so the crash clause covers them; it is only the
+	answer that is still wrong, which is what this fence records.
+
+	Two limits on that claim, measured rather than assumed, because
+	the obvious generalisation is wrong in both directions. A BOUNDED
+	repeat does not reach it -- '?' cannot build a progress-free loop,
+	and BRE "^?" and "$?" both answer normally. And the anchor matters
+	as much as the operator: BRE "$+" answers REG_NOMATCH, agreeing
+	with glibc, where "^+" does not.
+
+	Separately, and not fenced because it is a different clause: glibc
+	rejects every ERE spelling of these at regcomp() with REG_BADRPT,
+	while this implementation accepts them and then exhausts the
+	budget. */
 static void test_regex_nullable_repeat_result(void)
 {
 	regex_t re;
