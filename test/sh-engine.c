@@ -475,8 +475,58 @@ static void test_rejects_malformed(void)
 
 	/* "a <<E (" belongs here -- it is malformed and it is rejected --
 	 * but it is in the fenced case below instead: it leaks, and
-	 * test/ runs under `make asan` with leak detection on. */
+	 * test/ runs under `make asan` with leak detection on.  So does
+	 * "()<a<", for a different reason, in its own fence below. */
 }
+
+#if 0	/* BUG: a failed parse of a redirection TRAILING a subshell or
+	 * brace group leaks every redirection already parsed for that
+	 * group.  src/sh/parse.c:617 collects them with
+	 *
+	 *     while (p->cur.type == T_IONUM || is_redir_op(p->cur.type)) {
+	 *             struct sh_redir *r = parse_redir(p);
+	 *             if (!r) { __sh_list_free(cmd->body); __free(cmd); return 0; }
+	 *             if (rtail) rtail->next = r; else cmd->redirs = r;
+	 *             rtail = r;
+	 *     }
+	 *
+	 * and that error path frees cmd->body and cmd but NOT
+	 * cmd->redirs -- the list this very loop has been building.
+	 * The simple-command path forty lines above gets it right: its
+	 * `simple_fail:` label calls __sh_free_redirs(cmd->redirs)
+	 * alongside the words and the command.  Only the group path
+	 * forgets, which is why every fixed test missed it -- they all
+	 * redirect simple commands.
+	 *
+	 * 42 bytes per redirection already attached: 40 for the
+	 * struct sh_redir, plus the xstrdup of its target word.  It is
+	 * linear in how many succeeded before one failed, so it is a
+	 * leak an attacker sizes, not a fixed one.
+	 *
+	 * Found by fuzz/fuzz_shparse.c under LeakSanitizer, which
+	 * reduced it to "()<\377<", and reduced by hand from there.
+	 * VERIFIED, with the count scaling as the mechanism predicts:
+	 *
+	 *     "()<a"      parses      -- no leak
+	 *     "<a<"       no group    -- no leak (simple_fail frees)
+	 *     "()<a<"     84 bytes in 4 allocations
+	 *     "()<a<b<"  168 bytes in 8 allocations
+	 *
+	 * (The harness parses each failing source twice -- once with an
+	 * errbuf and once with NULL -- so the figures above are two
+	 * leaks each: 42 bytes per redirection per parse.)
+	 *
+	 * fuzz_shparse.c's group_redir_fence() keeps the harness off
+	 * it; delete that function and its calls when this fence is
+	 * lifted.  As with the here-document leak there is no CHECK()
+	 * spelling for "this was not freed", so the case is the
+	 * smallest program that reproduces it, left unbuilt; run it
+	 * under `make asan` with detect_leaks=1 to see the report. */
+static void test_group_redir_leak(void)
+{
+	CHECK(__sh_parse("()<a<", 0, 0) == 0);   /* leaks 42 bytes */
+}
+#endif
 
 #if 0	/* BUG: a here-document that is queued and never drained leaks
 	 * its queue entry.  parse_redir() (src/sh/parse.c:524) pushes a

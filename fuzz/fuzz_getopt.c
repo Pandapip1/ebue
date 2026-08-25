@@ -141,7 +141,25 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	optarg = 0;
 	optopt = 0;
 
+	/* The bound has to be counted in CHARACTERS, not in argv
+	 * elements.  getopt() returns one result per option character,
+	 * and clustered short options mean a single element yields as
+	 * many results as it has bytes: with an empty optstring,
+	 * argv[1] = "--RR-R..." (25 bytes) makes 24 successive calls
+	 * return '?', one per character, before the 25th returns -1.
+	 * That is correct behaviour and the old bound of 4*argc+16 --
+	 * 24 for this argc -- called it a hang.  VERIFIED: that exact
+	 * input is what libFuzzer reduced to, and the assertion fired
+	 * on a library doing precisely what 1.4 says it should.
+	 *
+	 * Summing the lengths keeps the assertion meaningful -- a real
+	 * failure to advance still trips it, because no correct parse
+	 * can return more times than there are characters to consume --
+	 * while removing the false positive.  The 4*argc+16 slack is
+	 * kept on top for the per-element results (a '?' for a missing
+	 * argument, the "--" terminator) that consume no character. */
 	limit = 4 * argc + 16;
+	for (i = 0; i < argc; i++) limit += (int)strlen(argv[i]);
 	for (iter = 0; iter < limit; iter++) {
 		int idx = -1;
 		int c;
