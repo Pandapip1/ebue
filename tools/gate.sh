@@ -177,10 +177,11 @@ esac
 : "${RUNTESTS_JOBS:=$GATE_MAKE_JOBS}"
 : "${LIBC_TEST_JOBS:=$GATE_MAKE_JOBS}"
 : "${GAPMAP_JOBS:=$GATE_MAKE_JOBS}"
+: "${OPTSRUN_JOBS:=$GATE_MAKE_JOBS}"
 : "${ASAN_JOBS:=$GATE_MAKE_JOBS}"
 : "${LINT_JOBS:=$GATE_MAKE_JOBS}"
 : "${LINKCHECK_JOBS:=$GATE_MAKE_JOBS}"
-export RUNTESTS_JOBS LIBC_TEST_JOBS GAPMAP_JOBS ASAN_JOBS LINT_JOBS LINKCHECK_JOBS
+export RUNTESTS_JOBS LIBC_TEST_JOBS GAPMAP_JOBS OPTSRUN_JOBS ASAN_JOBS LINT_JOBS LINKCHECK_JOBS
 
 note() { printf '%s\n' "$*" >&2; }
 
@@ -447,12 +448,24 @@ fi
 # longest stage after asan, so it is started here beside the other suite
 # stages rather than late.
 #
+# The concurrency budget at the top of this file matters MORE to this
+# stage than to any other, which is why it takes GATE_MAKE_JOBS like the
+# rest rather than the whole box. Its sweep is serial Wine, and three of
+# the tests it runs sit ON the clock-observability boundary -- they are
+# the FLAKY set that tools/posix-optsrun.sh fences with a pinned ceiling.
+# A stage that oversubscribed the machine would push more of the
+# nanosleep/clock_nanosleep family across that boundary, and the cost
+# would not be a slow stage: it would be flakes eating a ceiling sized
+# for a real population. OPTSRUN_JOBS is capped alongside it above for
+# the reason given there -- capping `make -j` alone moves a fan-out
+# rather than removing it.
+#
 # OPTSRUN_GITDIR for the same load-bearing reason GAPMAP_GITDIR exists:
 # this copy has no .git, the ancestry invariant needs one, and the script
 # fails rather than skips when it cannot reach a repository.
 if want posix-optsrun; then
 	t="$GATE_JOBS_DIR/trees/posix-optsrun"
-	run_stage posix-optsrun "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && OPTSRUN_GITDIR='$srcdir' make posix-optsrun-check"
+	run_stage posix-optsrun "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && OPTSRUN_GITDIR='$srcdir' make posix-optsrun-check"
 fi
 
 if want asan; then
