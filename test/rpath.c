@@ -30,6 +30,20 @@
  *     that never mentions this API) has no ntlibc_rpath_... or
  *     ntlibc_delayLoadHelper2 symbols.)
  *
+ * If this exits 6 rather than 0 or 1, it never reached any of the
+ * CHECKs below: 6 is 0xE0DE0006 truncated to a POSIX exit status, i.e.
+ * __NT_SIGNAL_EXIT(SIGABRT) from abort() in ntlibc_rpath_fail() -- the
+ * very first rpath_plugin_answer() call could not delay-load
+ * rpath-plugin.dll at all.  Nothing in this file prints on that path,
+ * so read the stderr line the failure does leave, which names the
+ * NTSTATUS: 0xc0000135 means the DLL is not next to the .exe,
+ * 0xc000007b/0xc0000020 mean the file is there but is not a loadable
+ * image -- most often a half-written obj/test/rpath-plugin.dll left by
+ * an interrupted or OOM-killed build, which make will happily call "up
+ * to date" for ever after.  The Makefile now renames that DLL into
+ * place atomically so that cannot happen; if it somehow does, the fix
+ * is to rebuild it, never to relax anything here.
+ *
  * NT-only, like src/internal/rpath.c and src/internal/delayload.c that
  * this exercises: under tools/asan-build.sh's native run this fails to
  * compile (see the #error below) rather than fail to link with a
@@ -106,28 +120,5 @@ int main(int argc, char **argv)
 	CHECK(argv != 0 && argv[0] != 0);
 
 	if (!fails) printf("PASS\n");
-	else {
-		/* This test has been observed failing under CPU contention and
-		 * passing without it, on the same commit: three samples taken
-		 * while a gate or lint stage was running concurrently failed,
-		 * and one uncontended sample of the same tree passed.  That
-		 * cost someone an afternoon of bisecting a regression that was
-		 * not there, and it was nearly attributed to main.
-		 *
-		 * The mechanism has NOT been established -- what is known is
-		 * the correlation, and it is stated as a correlation.  Nothing
-		 * here is relaxed, no assertion is softened and there is no
-		 * retry: a real break in the delay-load path must still fail,
-		 * and it still does.  This only tells the next reader which
-		 * question to ask first, because the cheapest thing they can do
-		 * is re-run it on an idle box before believing it.
-		 *
-		 * tools/gate.sh runs 4 stages x 3 make jobs under CPUQuota=800%;
-		 * a `make check` overlapping that reproduces the failure. */
-		printf("NOTE: rpath.exe has been seen to fail under CPU contention\n");
-		printf("NOTE:   and pass on an idle machine at the same commit.\n");
-		printf("NOTE:   Before bisecting this, re-run it with nothing else\n");
-		printf("NOTE:   running -- in particular not tools/gate.sh.\n");
-	}
 	return fails ? 1 : 0;
 }

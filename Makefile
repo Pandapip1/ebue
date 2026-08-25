@@ -96,6 +96,23 @@ ifeq ($(WRAPPER),yes)
 ALL_TOOLS_BUILT = $(ALL_TOOLS)
 endif
 
+# A recipe that fails *after* it has already written part of its target
+# leaves that partial file behind, and make then treats it as up to date
+# for ever after -- the file is newer than its prerequisites, so nothing
+# ever rebuilds it, and every later `make` says "up to date" about a
+# corrupt artefact.  That is not hypothetical here: it is exactly how
+# `make check` comes to report `FAIL rpath.exe (rc=6)` on run after run
+# (rc=6 is 0xE0DE0006 truncated to a POSIX exit status -- abort() out of
+# ntlibc_rpath_fail(), i.e. the delay-loaded rpath-plugin.dll would not
+# map), while every other test still passes and a fresh tree passes too.
+# GNU make already removes a target whose recipe was killed by a signal;
+# .DELETE_ON_ERROR extends that to a recipe that merely exits non-zero,
+# which is the case it does not handle by default.  See also the atomic
+# rename on the two plugin DLLs below, for the one route this cannot
+# cover: make itself being SIGKILLed (a cgroup OOM kill takes the whole
+# process group, so make never runs its own cleanup).
+.DELETE_ON_ERROR:
+
 all: $(ALL_LIBS) $(ALL_TOOLS_BUILT) $(SH_EXE)
 
 OBJ_DIRS = $(sort $(patsubst %/,%,$(dir $(ALL_LIBS) $(ALL_TOOLS) $(ALL_OBJS) $(GENH))) obj/include)
@@ -292,8 +309,21 @@ obj/test/%.exe: $(srcdir)/test/%.c $(ALL_LIBS) | obj/test
 # it is not itself a test (no main), so test/*.c's generic pattern rule
 # above must never see it -- that's also why its source lives one level
 # down, in test/rpath-plugin-src/, out of the test/*.c glob entirely.
+#
+# Written to a temporary and renamed into place, not straight to $@.
+# rename(2) is atomic, so nothing can ever observe a half-written DLL:
+# not a `make check` running rpath.exe out of the same obj/ while this
+# link is in flight, and -- the case .DELETE_ON_ERROR above cannot cover
+# -- not a later run either, after a cgroup OOM kill SIGKILLs the whole
+# process group and make never gets to delete its own partial output.
+# This file earns the extra care the other build outputs do not: it is
+# the only one consumed at *run* time, by the NT loader inside another
+# program, so a corrupt one is not caught by a link that follows.  It
+# surfaces only as `FAIL rpath.exe (rc=6)` -- abort() out of
+# ntlibc_rpath_fail() -- on every subsequent run, with make insisting
+# the DLL is up to date the whole time.  Same for delayall-plugin.dll.
 obj/test/rpath-plugin.dll: $(srcdir)/test/rpath-plugin-src/rpath-plugin.c | obj/test
-	$(CC) -shared -o $@ $<
+	$(CC) -shared -o $@.tmp $< && mv -f $@.tmp $@
 
 obj/test/rpath.exe: obj/test/rpath-plugin.dll
 
@@ -315,7 +345,7 @@ obj/test/sh-main.exe: $(SH_EXE)
 # whether linker accepts -Wl,--delay-all" for the probe that sets it.
 ifeq ($(DELAY_ALL),yes)
 obj/test/delayall-plugin.dll: $(srcdir)/test/delayall-plugin-src/delayall-plugin.c | obj/test
-	$(CC) -shared -o $@ $<
+	$(CC) -shared -o $@.tmp $< && mv -f $@.tmp $@
 
 # delayload2.o must come *before* -lc/-lntdll on the command line, not
 # after: tcc resolves each archive's undefined symbols in a single pass
