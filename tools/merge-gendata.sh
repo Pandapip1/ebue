@@ -69,11 +69,24 @@
 # WHAT IT DELIBERATELY DOES NOT CLAIM
 #
 # A key-wise merge of the rows is still not a measurement of the merged
-# tree.  Two branches whose header additions INTERACT -- a test blocked
-# by both pthread.h and mqueue.h is still class A on each branch alone,
-# and becomes class C only once both have landed -- will merge to rows
-# that are individually right and jointly stale.  Nothing available to a
-# merge driver can see that; only a fresh run can.
+# tree.
+#
+# INTERACTING HEADER additions turn out to be the easy case, and this was
+# measured rather than assumed.  Land semaphore.h on one branch and
+# sys/mman.h on another: the six tests blocked by both have their
+# absent-header SET reduced differently on each side, so those rows
+# diverge, the divergence rule below fires, and git records the path as
+# conflicted.  The row merge said A=730 where measuring said A=728, and
+# it did NOT publish that quietly -- it asked for a regeneration.  The
+# set is part of the row, so any header interaction is visible here.
+#
+# What is NOT visible is an interaction one level down, in the LIBRARY
+# rather than the headers.  A class B test needs a symbol; branch A adds
+# one symbol it needs and branch B adds another; the test is still class
+# B on each branch alone and becomes class C only once both have landed.
+# All three versions of that row read `B`, so they agree, nothing
+# diverges, and the merged report is individually right and jointly
+# stale.  Only a fresh measurement can see it.
 #
 # So the driver refuses to certify what it cannot check: it stamps the
 # recorded ntlibc SHA as `unknown`.  That is not cosmetic.  Both
