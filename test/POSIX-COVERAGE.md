@@ -3492,7 +3492,7 @@ underneath.
 | linkat | "[ENOTDIR] The path1 or path2 argument is not an absolute path and fd1 or fd2, respectively, is a file descriptor associated with a non-directory file" — both sides | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "[ENOENT] A component of either path prefix does not exist ... or path1 or path2 points to an empty string" — the **path2** side (`test/posix-unistd.c` covers path1) | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "[EEXIST] The path2 argument resolves to an existing directory entry" — when path2 is path1, and when it is a directory | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
-| linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | **BUG** — see below | fenced, `test_linkat_remaining`; the *failure itself* and the absence of debris are asserted unfenced |
+| linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | covered — was a BUG (a directory path1 reported `EISDIR`, which `link.html`'s ERRORS list does not contain); **fixed in the commit that unfenced it**: `src/unistd/link.c`'s `linkat()` reads path1's attributes off the handle it already holds and returns `EPERM` before path2 is resolved, with `STATUS_FILE_IS_A_DIRECTORY` from `NtSetInformationFile` mapped to `EPERM` at that call site as the fallback | test/posix-unistd-links.c (`test_linkat_remaining`) — the errno, the absence of debris, and a regular-file positive control (both `linkat()` and `link()` still make a real hard link) |
 | linkat | "If path1 names a symbolic link ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for the symbolic link path1 and not its target" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | **BUG** — see below; supersedes this ledger's earlier N/A for the clause | fenced, `test_linkat_remaining` |
 | linkat | "shall atomically create a new link for the existing file and the link count of the file shall be incremented by one"; [EEXIST]; [ENOENT] for path1 and the empty string; [EBADF] on either side; dirfd-relative creation | covered — pre-existing | test/posix-unistd.c (`test_linkat`) |
@@ -3501,18 +3501,31 @@ underneath.
 
 ### Bugs found (unistd.h `*at()` link group)
 
-1. **`linkat()` on a directory reports `EISDIR`, an errno `link.html`
-   does not list.** The page's shall-fail list has "[EPERM] The file
-   named by path1 is a directory and either the calling process does
-   not have appropriate privileges or the implementation prohibits
-   using link() on directories" — NTFS does prohibit it, so that
-   clause applies exactly. `EISDIR` appears nowhere in `link.html`'s
-   ERRORS. `src/unistd/link.c`'s `linkat()` has no directory case at
-   all: it lets `NtSetInformationFile` fail with
-   `STATUS_FILE_IS_A_DIRECTORY` and hands that to
+1. **`linkat()` on a directory reported `EISDIR`, an errno
+   `link.html` does not list — fixed.** The page's shall-fail list has
+   "[EPERM] The file named by path1 is a directory and either the
+   calling process does not have appropriate privileges or the
+   implementation prohibits using link() on directories" — NTFS does
+   prohibit it, so that clause applied exactly. `EISDIR` appears
+   nowhere in `link.html`'s ERRORS. `src/unistd/link.c`'s `linkat()`
+   had no directory case at all: it let `NtSetInformationFile` fail
+   with `STATUS_FILE_IS_A_DIRECTORY` and handed that to
    `__set_errno_status()`, whose table maps it to `EISDIR`. That
    mapping is right for `open()` and `rename()`, where `EISDIR` *is* a
-   specified errno; it is this call site that needs to translate.
+   specified errno; it was this call site that had to translate.
+
+   **Fixed in the commit that unfenced it.** `linkat()` now asks the path1
+   handle it has already opened for `FileAttributeTagInformation` and
+   returns `EPERM` for a directory before path2 is resolved, so the
+   errno does not depend on which status a particular filesystem
+   chooses; a `STATUS_FILE_IS_A_DIRECTORY` that still reaches the
+   `NtSetInformationFile` call is mapped to `EPERM` there as well, for
+   the volume whose driver cannot answer the attribute query. The
+   directory predicate is `src/stdio/misc.c`'s `isdir_attrs()`, so a
+   symbolic link to a directory stays a non-directory file the way
+   POSIX, `renameat()` and `lstat()` already have it. A regular-file
+   path1 is untouched, and `test_linkat_remaining()` now pins that
+   with a positive control beside the `EPERM` assertion.
 
 2. **`linkat()` ignores `flags`, so `AT_SYMLINK_FOLLOW` does nothing.**
    `link.html` distinguishes two behaviours by that flag; `src/unistd/

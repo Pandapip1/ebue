@@ -39,8 +39,9 @@
  * read a symlink without the privilege, which is why the privileged
  * half of this file is exercised locally at all -- but a Wine pass is
  * evidence about Wine's reparse-point emulation, not about NTFS.  The
- * two fenced findings below are both readable straight out of
- * src/unistd/link.c and do not depend on which of the two is running.
+ * one fenced finding left below -- the [EPERM]-on-a-directory one has
+ * since been fixed -- is readable straight out of src/unistd/link.c and
+ * does not depend on which of the two is running.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -431,35 +432,54 @@ static void test_linkat_remaining(void)
 	errno = 0;
 	CHECK(linkat(AT_FDCWD, "lk-src.txt", AT_FDCWD, "lk-dir", 0) == -1 && errno == EEXIST);
 
-#if 0	/* BUG: linkat() on a directory fails with an errno link.html
-	 * does not list.
-	 *
-	 * link.html ERRORS: "These functions *shall* fail if: ... [EPERM]
+	/* link.html ERRORS: "These functions *shall* fail if: ... [EPERM]
 	 * The file named by path1 is a directory and either the calling
 	 * process does not have appropriate privileges or the
 	 * implementation prohibits using link() on directories."  NTFS
 	 * does prohibit hard links to directories, so the clause's second
-	 * branch applies exactly and [EPERM] is what the page requires.
-	 * [EISDIR] appears nowhere in link.html's ERRORS list.
-	 *
-	 * Mechanism: src/unistd/link.c's linkat() has no case for a
-	 * directory path1 at all -- it lets NtSetInformationFile fail with
-	 * STATUS_FILE_IS_A_DIRECTORY and passes that to
-	 * __set_errno_status(), whose table (src/internal/errno.c) maps it
-	 * to EISDIR.  That mapping is right for the calls where EISDIR
-	 * *is* a specified errno (open(), rename() -- both already
-	 * covered in test/posix-unistd.c); it is this call site that needs
-	 * to translate.  Probed on this tree:
-	 * linkat(AT_FDCWD, "lk-dir", AT_FDCWD, "lk-dir2", 0) returns -1
-	 * with errno 21 (EISDIR).  Re-enable when linkat() reports EPERM
-	 * for a directory path1. */
+	 * branch applies exactly and [EPERM] is what the page requires --
+	 * unconditionally, for every caller, however privileged.  [EISDIR]
+	 * appears nowhere in link.html's ERRORS list, so the
+	 * STATUS_FILE_IS_A_DIRECTORY that NtSetInformationFile answers
+	 * with has to be translated at this call site rather than run
+	 * through src/internal/errno.c's general table, where the same
+	 * status correctly means EISDIR for open() and rename().
+	 * src/unistd/link.c settles it from path1's attributes before
+	 * path2 is resolved, so the errno does not depend on which status
+	 * a given filesystem picks.  And the call must leave no entry. */
 	errno = 0;
 	CHECK(linkat(AT_FDCWD, "lk-dir", AT_FDCWD, "lk-dir2", 0) == -1 && errno == EPERM);
-#endif
-	/* Whatever the errno, the call must fail and leave no entry: that
-	 * half is asserted unfenced. */
-	CHECK(linkat(AT_FDCWD, "lk-dir", AT_FDCWD, "lk-dir2", 0) == -1);
 	CHECK(access("lk-dir2", F_OK) == -1);
+
+	/* Positive control on the clause above: only a directory path1 may
+	 * be refused.  A regular-file path1 must still produce a real hard
+	 * link -- same file, link count incremented -- through both
+	 * linkat() and link(), so the [EPERM] above cannot be reached by
+	 * refusing everything.  Guarded the way test/posix-unistd.c's
+	 * test_linkat() guards it, because a filesystem need not support
+	 * hard links at all; EPERM is excluded from that guard, since
+	 * "path1 is a directory" is the only thing this call can mean by
+	 * it and lk-src.txt is not one. */
+	errno = 0;
+	if (linkat(AT_FDCWD, "lk-src.txt", AT_FDCWD, "lk-reg", 0) == 0) {
+		struct stat sa, sb;
+		CHECK(stat("lk-src.txt", &sa) == 0);
+		CHECK(stat("lk-reg", &sb) == 0);
+		CHECK(S_ISREG(sb.st_mode));
+		CHECK(sa.st_nlink == 2);
+		CHECK(sa.st_ino == sb.st_ino);
+		CHECK(unlink("lk-reg") == 0);
+
+		CHECK(link("lk-src.txt", "lk-reg2") == 0);
+		CHECK(stat("lk-reg2", &sb) == 0);
+		CHECK(S_ISREG(sb.st_mode));
+		CHECK(sb.st_nlink == 2);
+		CHECK(unlink("lk-reg2") == 0);
+	} else {
+		CHECK(errno != EPERM);
+		printf("note: hard links unsupported here (linkat errno %d), "
+		       "regular-file control skipped\n", errno);
+	}
 
 	if (have_symlinks) {
 		CHECK(symlinkat("lk-src.txt", AT_FDCWD, "lk-sym") == 0);
