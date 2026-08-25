@@ -49,6 +49,7 @@
  * observed errno and exits 77 rather than reporting a pass over
  * assertions that never ran.
  */
+#include "test-policy.h"
 #include <spawn.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -882,7 +883,7 @@ static void test_null_actions_and_argv(void)
 
 /* ---------------------------------------------------------------- */
 
-#if 0 /* UNIMPL: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
+#if NTLIBC_TEST(BUG, posix_spawn_setsigmask_nonempty_is_delivered) /* BUG (compiles and links; formerly UNIMPL):: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
 	with a *non-empty* mask, and POSIX_SPAWN_SETSIGDEF's converse
 	(leaving a signal at a non-default disposition the parent chose).
 	Both need the parent to hand initial signal state to a child that
@@ -931,7 +932,7 @@ static void test_setsigmask_nonempty_is_delivered(void)
 }
 #endif
 
-#if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETPGROUP with
+#if NTLIBC_TEST(NA, posix_spawn_setpgroup_other_group) /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETPGROUP with
 	a spawn-pgroup naming some *other* process's group.
 	
 	The mechanism previously recorded here -- "NT has no process-group
@@ -985,7 +986,7 @@ static void test_setpgroup_other_group(void)
 }
 #endif
 
-#if 0 /* UNIMPL: posix_spawn.html DESCRIPTION --
+#if NTLIBC_TEST(BUG, posix_spawn_setschedparam_applied) /* BUG (compiles and links; formerly UNIMPL):: posix_spawn.html DESCRIPTION --
 	POSIX_SPAWN_SETSCHEDULER/POSIX_SPAWN_SETSCHEDPARAM actually being
 	applied.  NT mechanism, already half-built by accident: __spawn()
 	creates the process *suspended* (RtlCreateUserProcess followed by a
@@ -1020,7 +1021,7 @@ static void test_setschedparam_applied(void)
 }
 #endif
 
-#if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS,
+#if NTLIBC_TEST(NA, posix_spawn_resetids) /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS,
 	"reset the effective user ID of the child process to the real user
 	ID of the parent process".  An NT access token carries a set of
 	SIDs and privileges; it has no real/effective/saved-set-id triple,

@@ -68,7 +68,7 @@
  * works; only the real-Windows CI legs carry information.
  *
  * This test never fails.  It prints what it measured and exits 0, or
- * exits 77 ("unverified", see test/posix-socket.c and tools/runtests.sh)
+ * exits 77 ("unverified", see test/posix-socket.c and tools/run-tests.py)
  * if the machinery it needs is unavailable.  Interpreting the numbers is
  * a human job; pre-judging them in an assertion would only turn a
  * surprising result into a red board.

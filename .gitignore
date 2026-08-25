@@ -4,6 +4,13 @@
 /config.mak
 /obj/
 /lib/
+__pycache__/
+*.py[cod]
+
+# External-suite reports are reproducible CI/developer artefacts, not source.
+/test/LIBC-TEST-MAP.generated.md
+/test/POSIX-GAP-MAP.generated.md
+/test/POSIX-OPTS-RUN.generated.md
 
 # Sanitizer and fuzzer output.  /obj/ already covers obj/asan, obj/fuzzlib
 # and obj/fuzz, which is where `make asan` and `make fuzz` put everything;
@@ -50,7 +57,7 @@ oom-*
 /.claude/
 
 # Intermediates written by test binaries run directly from the repo root.
-# `make check` never leaves these -- tools/runtests.sh gives each test a
+# `make check` never leaves these -- tools/run-tests.py gives each test a
 # private cwd -- but running obj/test/<t>.exe by hand, which is what anyone
 # iterating on a test actually does, writes them here.  Untracked droppings
 # in the root are not cosmetic: `tools/gate.sh reuse` rsyncs the working

@@ -8,49 +8,10 @@
 # dialect to apply to a library; without it the whole file is checked
 # against an unknown shell (SC2148) and the useful checks are skipped.
 #
-# tools/suitemap-engine.sh -- the common half of the two gap maps.
-#
-# NOT EXECUTABLE, AND NOT A TOOL.  It is sourced by a backend, which is
-# the executable the world calls:
-#
-#   tools/posix-gapmap.sh   -- LTP's Open POSIX Test Suite  (1610 tests)
-#   tools/libc-test-map.sh  -- musl's libc-test             (146 tests)
-#
-# WHY THIS FILE EXISTS
-#
-# The two backends were written in parallel from one design, and for a
-# while they were two near-identical ~1000-line scripts.  That is not a
-# duplication complaint, it is a correctness one: every property either
-# tool establishes has to be established AGAIN in the other, and the
-# second time is where it silently is not.  Three found instances, all
-# of them real:
-#
-#   - LC_ALL.  posix-gapmap's sorts ordered words rather than bytes; CI
-#     was red on it and c2ac057 fixed it there.  libc-test-map had the
-#     identical defect and nobody looked: the report as committed had
-#     been generated under a UTF-8 locale, so anyone running --check
-#     under C got a red stage for a reason unrelated to the gap.
-#
-#   - The refuse-to-measure guard.  posix-gapmap refuses to run without
-#     lib/libc.a and says why -- without it every test fails to link and
-#     the report reads as a total gap, which is a build error and not a
-#     measurement.  libc-test-map had the same test buried inside
-#     classify() as a bare one-line `die` with no reasoning, where a
-#     future edit could reorder past it without noticing what it was for.
-#
-#   - The greedy closure.  They were two DIFFERENT algorithms wearing the
-#     same section heading.  posix-gapmap picks the header that fully
-#     unblocks the most tests, recomputed at every step.  libc-test-map
-#     picked the most-NAMED header, which is not the same thing: on
-#     `t1={a,b} t2={a,c} t3={d} t4={d}` it recommends `a.h` first, and
-#     a.h unblocks nothing at all.  It also drained its residue to zero,
-#     implying a gap that can always be closed one header at a time.
-#     They happen to agree on both corpora today; they agree by accident
-#     of the data, not by construction.
-#
-# So the rule this file exists to enforce: anything that decides what a
-# number MEANS lives here, exactly once.  A backend describes its suite
-# and nothing else.
+# tools/suitemap-engine.sh -- report, cache and compiler-guard helpers for
+# tools/posix-gapmap.sh.  This is sourced shell code, not an executable.
+# Keeping the generic mechanics here leaves the driver focused on OPTS
+# discovery and classification.
 #
 # WHAT A BACKEND SUPPLIES, AND WHAT IT MAY NOT
 #
@@ -86,19 +47,15 @@
 # ---------------------------------------------------------- determinism
 #
 # Every `sort`, every `grep -x`, every awk string comparison and every
-# glob in this tool and in both backends orders BYTES, not words.
+# glob in this tool orders BYTES, not words.
 #
 # glibc's UTF-8 collations ignore punctuation at the first comparison
 # level, so `sched_getparam` sorts BEFORE `sched_get_priority_max` under
 # en_US.UTF-8 (compare `schedgetparam` with `schedgetprioritymax`) and
 # AFTER it under C (`_` is 0x5F, `p` is 0x70).
 #
-# Both reports are CHECKED IN and both are verified by diffing a fresh
-# render against the committed file, so this is not cosmetic: a
-# developer's locale and CI's disagree permanently, --check goes red on a
-# regeneration that changed nothing, and the diff -- the entire reason
-# the files are checked in -- stops being readable.  It has happened to
-# both tools.
+# Stable byte ordering keeps reports comparable across developer and CI
+# locales.
 #
 # Set once, here, and exported, rather than per-`sort`: pathname
 # expansion, awk string comparison, `grep` and `tr` ranges are all
@@ -237,22 +194,9 @@ sm_workdir() {
 # of those rows, which is what lets `--render` reproduce a report without
 # the suite, a config.mak, a build or a compiler.
 #
-# WHY IT IS IN THE REPORT AND NOT IN A SECOND FILE
+# Keeping the rows and rendering together also makes an uploaded report
+# self-contained.
 #
-# Two checked-in files that must agree are a staleness bug waiting to
-# happen, and a stale checked-in report is the exact thing these tools
-# exist to prevent.  One file cannot drift from itself.
-#
-# It is also what makes a merge driver possible.  A three-way TEXT merge
-# of a rendered table is meaningless -- two branches that each land a
-# header change move every count, and the right answer is neither side's
-# text -- but the rows are keyed, structured and independent, so merging
-# THOSE and re-rendering is a real resolution.  Doing that needs the data
-# of all three versions of one path, which is exactly what git hands a
-# merge driver and nothing else: not the tree, not the suite, not a
-# compiler, none of which git guarantees are on disk mid-merge.  See
-# tools/merge-gendata.sh, and tools/merge-kaem.sh's header for the
-# empirical story behind that constraint.
 # Emitted by each backend's report body; sm_read_data_block below reads
 # only the END marker, so shellcheck sees no use of the BEGIN one.
 # shellcheck disable=SC2034  # emitted by the backends, not here
@@ -327,12 +271,7 @@ sm_strip_shas() { sed -e '/^| ntlibc | `/d' -e '/^s	ntlibc	/d' "$1"; }
 #      call it agreement.  "I could not check" and "it checks out" are
 #      different claims.
 #   2. the report must carry a stamp at all.
-#   3. the stamp must be a well-formed object name -- 40 lower-case hex
-#      -- and must not be the `unknown` that tools/merge-gendata.sh
-#      writes after resolving a merge of the data block.  That is the
-#      tripwire that stops a report whose rows were MERGED from passing
-#      as one whose rows were MEASURED, and it is preserved deliberately
-#      and tested by name.
+#   3. the stamp must be a well-formed object name -- 40 lower-case hex.
 #
 # Ancestry itself is reported and not enforced.  The reason is that its
 # two failing outcomes are indistinguishable in the only case that
@@ -359,10 +298,7 @@ sm_check_provenance() {
 		return 1; }
 	[ "$_sha" != unknown ] || {
 		echo "$SM_TOOL: PROVENANCE FAILED -- the report records ntlibc SHA" >&2
-		echo "$SM_TOOL:   'unknown'.  tools/merge-gendata.sh stamps that after" >&2
-		echo "$SM_TOOL:   resolving a merge of the data block: these rows were" >&2
-		echo "$SM_TOOL:   MERGED, not measured, and a merge of two measurements" >&2
-		echo "$SM_TOOL:   is not itself a measurement of anything." >&2
+		echo "$SM_TOOL:   'unknown'; this report is not tied to a checkout." >&2
 		echo "$SM_TOOL:   Regenerate for real: tools/$SM_TOOL.sh" >&2
 		return 1; }
 	# 40 lower-case hex.  A stamp is documentation, and documentation

@@ -10,49 +10,42 @@
 # WHY THIS SCRIPT IS SHAPED THE WAY IT IS
 #
 # test/external-suites.md measured this corpus against the tree and found
-# 22 behavioural defects on the first run.  Wiring in a suite with 27 red
-# lines has exactly one interesting failure mode, and it is not "the
-# suite is wrong": it is that the expected-failure list becomes a place
-# to put things, quietly grows, and the stage stops meaning anything.
-# Every rule below exists to make that impossible rather than merely
-# discouraged:
+# 22 behavioural defects on the first run. A ledger must make those known
+# states reviewable without turning into an append-only exemption list.
 #
 #   * Every test in the corpus must have exactly one line in
 #     test/libc-test-expected.txt.  A test in the corpus with no line is
 #     a hard error, not a default-to-ignored.
-#   * A test that is expected to fail and passes is a hard error.  A
-#     fixed defect must force the ledger to be updated, the same way
-#     tools/lint-undefined.sh treats a stale exception.
+#   * Pedantic requires BUG to compile and fail and UNIMPL not to compile.
+#     A fixed defect therefore forces the ledger to be updated.
 #   * The ledger carries pinned counts in its header, and this script
-#     checks them.  You cannot add an xfail line without also editing
-#     the number of xfails, in the same commit, where a reviewer sees it.
-#   * `unclassified` is a separate status from `xfail`, with its own
-#     pinned count that is a CEILING.  A failure nobody has looked at
-#     must never be recorded as one somebody decided about; those are
-#     different claims and this file keeps them different.
+#     checks them. A disposition population cannot change silently.
+#   * The ledger uses the same PASS/BUG/UNIMPL/NA/FLAKY dispositions as
+#     the in-tree suite. Raw compiler and process outcomes remain separate.
 #
-# THE THREE OUTCOMES
+# OBSERVATIONS AND DISPOSITIONS
 #
-# Same contract as tools/runtests.sh (see its header): 0 pass, 77 "ran
+# Same contract as tools/run-tests.py (see its header): 0 pass, 77 "ran
 # but declined to check something", anything else fail.  Mapped here:
 #
-#   does not compile/link  -> UNBUILDABLE, never a pass.  57 of the 146
+#   does not compile/link  -> UNBUILDABLE observation. UNIMPL expects it.
+#                             52 of the 146
 #                             tests die at #include; that is the gap
 #                             accounting restated as a build error, and
 #                             it is evidence of nothing about behaviour.
-#   output contains the    -> UNVERIFIED (77).  the shim (test/libc-test-shim-src/)
+#   output contains the    -> NA for this runtime. The shim
 #   shim's stub marker        stubs four helpers it cannot implement here
 #                             (no mmap, no enforced rlimits, no
 #                             langinfo); a test whose premise was stubbed
 #                             out did not check its premise.
-#   output contains Wine's -> UNVERIFIED (77).  Detected at RUN TIME from
+#   output contains Wine's -> NA for this runtime. Detected at run time from
 #   RtlCloneUserProcess       the output, never from a static list: these
 #   string                    same tests run for real on the Windows CI
 #                             leg and on a Wine build that implements it,
 #                             and a baked-in exclusion would hide that.
 #   otherwise              -> the exit status is the verdict.
 #
-# The summary prints `unbuildable` even when it is the largest number,
+# The summary prints UNIMPL even when it is the largest number,
 # because "39% of this suite cannot be compiled against this library" is
 # the most useful single fact this stage produces.  And a run in which
 # nothing was actually adjudicated exits non-zero (the VERIFIED_FLOOR
@@ -74,6 +67,7 @@
 #   WINE            wine binary (default: config.mak's WINE)
 #   LIBC_TEST_JOBS  parallel workers (default: nproc)
 #   LIBC_TEST_MATH  path to a full libc-test checkout, for `math`
+#   NTLIBC_TEST_PROFILE  whitespace-separated additional KEY=VALUE selectors
 
 set -u
 
@@ -101,6 +95,17 @@ WINE_MARK='RtlCloneUserProcess'
 # library or Wine has fallen over cannot report success.  It only moves
 # deliberately.
 VERIFIED_FLOOR=70
+
+# Normal skips known BUG and UNIMPL cases. Pedantic probes both to catch
+# stale classifications. Strict performs the same probes, then disallows
+# either disposition and requires every FLAKY case to pass.
+: "${NTLIBC_TEST_MODE:=normal}"
+: "${NTLIBC_TEST_RUNTIME:=wine}"
+: "${NTLIBC_TEST_PROFILE:=}"
+case "$NTLIBC_TEST_MODE" in
+	normal|pedantic|strict) ;;
+	*) echo "libc-test: NTLIBC_TEST_MODE must be normal, pedantic or strict." >&2; exit 2 ;;
+esac
 
 usage() { sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -153,25 +158,31 @@ read_ledger() {
 	/^#[ \t]*COUNTS[ \t]/ { print "COUNTS " $0 > out "/counts"; next }
 	/^[ \t]*#/ || /^[ \t]*$/ { next }
 	{
-		if (NF < 2) { print "MALFORMED " $0 > out "/errors"; next }
-		name=$1; status=$2
+		if (NF < 3) { print "MALFORMED " $0 > out "/errors"; next }
+		name=$1; selector=$2; status=$3
 		reason=""
-		for (i=3;i<=NF;i++) reason = reason (i>3?" ":"") $i
-		if (status != "pass" && status != "unbuildable" &&
-		    status != "unclassified" && status != "unverifiable" &&
-		    substr(status,1,6) != "xfail:") {
+		for (i=4;i<=NF;i++) reason = reason (i>4?" ":"") $i
+		if (status != "PASS" && status != "BUG" && status != "UNIMPL" &&
+		    status != "NA" && status != "FLAKY") {
 			print "BADSTATUS " name " " status > out "/errors"; next
 		}
-		if ((substr(status,1,6) == "xfail:" || status == "unverifiable") && reason == "") {
+		if (status != "PASS" && reason == "") {
 			print "NOREASON " name > out "/errors"; next
 		}
-		if (status == "unclassified" && substr(reason,1,15) != "NOT-YET-TRIAGED") {
-			print "BADUNCLASSIFIED " name > out "/errors"; next
-		}
-		if (name in seen) { print "DUPLICATE " name > out "/errors"; next }
-		seen[name]=1
-		print name "\t" status "\t" reason > out "/rows"
+		key=name SUBSEP selector
+		if (key in seen) { print "DUPLICATE " name " " selector > out "/errors"; next }
+		seen[key]=1
+		print name "\t" selector "\t" status "\t" reason > out "/base"
 	}' "$LEDGER"
+	[ -f "$1/errors" ] && return 0
+	profile_args=""
+	for term in $NTLIBC_TEST_PROFILE; do
+		profile_args="$profile_args --profile $term"
+	done
+	# shellcheck disable=SC2086 -- profile selectors are whitespace-separated
+	"$srcdir/tools/test-policy.py" resolve --suite libc-test \
+		--defaults "$LEDGER" --profile "runtime=$NTLIBC_TEST_RUNTIME" \
+		$profile_args > "$1/rows" || return 1
 	return 0
 }
 
@@ -238,7 +249,7 @@ if [ "${1:-}" = "--selftest" ]; then
 		echo "selftest: FAIL -- $SHIM no longer prints '$SHIM_MARK'." >&2
 		echo "selftest: the stubbed-helper detection in this script is keyed" >&2
 		echo "selftest: to that literal; without it two structurally" >&2
-		echo "selftest: unverifiable tests would be adjudicated as ordinary" >&2
+		echo "selftest: runtime-NA tests would be adjudicated as ordinary" >&2
 		echo "selftest: failures or passes." >&2
 		rc=1
 	else
@@ -253,12 +264,9 @@ if [ "${1:-}" = "--selftest" ]; then
 		cat "$W/errors" >&2 2>/dev/null
 		rc=1
 	fi
-	# `unverifiable` must require a reason, exactly as xfail: does.  A
-	# row asserting "no target can ever adjudicate this" with no reason
-	# is the assertion at its least checkable, so the parser rejects it
-	# and this proves the rejection still fires.
+	# Every non-PASS disposition must explain why it applies.
 	bad="$W/bad-ledger"
-	printf '# COUNTS pass=0\nsome-test unverifiable\n' > "$bad"
+	printf '# COUNTS PASS=0 BUG=0 UNIMPL=0 NA=0 FLAKY=0\nsome-test runtime=wine NA\n' > "$bad"
 	mkdir -p "$W/b"
 	# read_ledger reads the global LEDGER; save and restore it rather
 	# than prefixing the call, because a variable assignment prefixed to
@@ -269,11 +277,9 @@ if [ "${1:-}" = "--selftest" ]; then
 	read_ledger "$W/b" 2>/dev/null
 	LEDGER="$real_ledger"
 	if grep -q '^NOREASON some-test$' "$W/b/errors" 2>/dev/null; then
-		echo "selftest: OK -- an 'unverifiable' row with no reason is rejected"
+		echo "selftest: OK -- an unexplained non-PASS row is rejected"
 	else
-		echo "selftest: FAIL -- an 'unverifiable' row with no reason was accepted." >&2
-		echo "selftest: that status is a claim about every target this project" >&2
-		echo "selftest: has; unexplained, it cannot be reviewed or retired." >&2
+		echo "selftest: FAIL -- an unexplained NA row was accepted." >&2
 		rc=1
 	fi
 	exit $rc
@@ -297,7 +303,7 @@ CFLAGS_C99FSE=$(cfg CFLAGS_C99FSE); CFLAGS_AUTO=$(cfg CFLAGS_AUTO)
 [ -f "$srcdir/lib/libc.a" ] || {
 	echo "libc-test: lib/libc.a is missing; run make first." >&2; exit 2; }
 if [ -z "$WINE" ]; then
-	# Same reasoning as tools/runtests.sh: "no wine at all" is the whole
+	# Same reasoning as tools/run-tests.py: "no wine at all" is the whole
 	# stage going empty, not a per-test exception, so it fails.
 	echo "libc-test: config.mak has no WINE and none was given." >&2
 	echo "libc-test: nothing would run; that is a failure, not a skip." >&2
@@ -371,13 +377,20 @@ fi
 
 build_one() {
 	f=$1; n=$(basename "$f" .c)
+	want=$(ledger_status "$n")
+	if [ "$want" = NA ] ||
+	   { [ "$NTLIBC_TEST_MODE" = normal ] &&
+	     { [ "$want" = BUG ] || [ "$want" = UNIMPL ]; }; }; then
+		echo NA > "$W/out/$n.state"
+		return
+	fi
 	# shellcheck disable=SC2086
 	if $CC $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC -nostdlib \
 	    -o "obj/libc-test/$n.exe" "$srcdir/lib/crt1.o" "$f" $hobjs \
 	    -L"$srcdir/lib" -lc -lntdll > "$W/out/$n.build" 2>&1; then
 		echo built > "$W/out/$n.state"
 	else
-		echo unbuildable > "$W/out/$n.state"
+		echo UNBUILDABLE > "$W/out/$n.state"
 		rm -f "obj/libc-test/$n.exe"
 	fi
 }
@@ -425,32 +438,43 @@ run_end=$(date +%s)
 
 # ----------------------------------------------------------- adjudicate
 
-passed=0; known=0; unclassified=0; unverified=0; unbuildable=0
+passed=0; bugs=0; flaky=0; na=0; unimpl=0
 regressions=""; unexpected=""; stale=""; absent=""; timeouts=""
-verifiable=""
 verified=0
 
 for f in $corpus; do
 	n=$(basename "$f" .c)
 	want=$(ledger_status "$n")
-	state=$(cat "$W/out/$n.state" 2>/dev/null || echo unbuildable)
+	state=$(cat "$W/out/$n.state" 2>/dev/null || echo UNBUILDABLE)
 
 	if [ "$want" = ABSENT ]; then
 		absent="$absent $n"
 		continue
 	fi
 
-	if [ "$state" = unbuildable ]; then
-		unbuildable=$((unbuildable + 1))
+	if [ "$state" = NA ]; then
+		case "$want" in
+		BUG) bugs=$((bugs + 1)); echo "BUG $n (not probed in normal mode) -- $(ledger_reason "$n")" ;;
+		UNIMPL) unimpl=$((unimpl + 1)); echo "UNIMPL $n (not probed in normal mode) -- $(ledger_reason "$n")" ;;
+		NA) na=$((na + 1)); echo "NA $n -- $(ledger_reason "$n")" ;;
+		*) stale="$stale $n(ledger:$want,actual:NA)" ;;
+		esac
+		continue
+	fi
+
+	if [ "$state" = UNBUILDABLE ]; then
 		why=$(grep -m1 -i 'error\|include' "$W/out/$n.build" 2>/dev/null | sed 's/^ *//')
-		echo "UNBUILDABLE $n -- ${why:-no diagnostic}"
-		if [ "$want" != unbuildable ]; then
-			stale="$stale $n(ledger:$want,actual:unbuildable)"
+		if [ "$want" = UNIMPL ]; then
+			unimpl=$((unimpl + 1))
+			echo "UNIMPL $n -- ${why:-no diagnostic}"
+		else
+			echo "UNBUILDABLE $n -- ${why:-no diagnostic}"
+			stale="$stale $n(ledger:$want,actual:UNBUILDABLE)"
 		fi
 		continue
 	fi
-	if [ "$want" = unbuildable ]; then
-		stale="$stale $n(ledger:unbuildable,actual:built)"
+	if [ "$want" = UNIMPL ]; then
+		stale="$stale $n(ledger:UNIMPL,actual:built)"
 	fi
 
 	rc=$(cat "$W/out/$n.rc" 2>/dev/null || echo 1)
@@ -461,22 +485,22 @@ for f in $corpus; do
 	# Wine that implements RtlCloneUserProcess these same tests produce a
 	# real verdict, and that must be visible without editing anything.
 	if grep -qF "$WINE_MARK" "$log" 2>/dev/null; then
-		unverified=$((unverified + 1))
-		echo "UNVERIFIED $n (rc=77) -- fork unavailable under this wine ($WINE_MARK)"
+		na=$((na + 1))
+		echo "NA $n (rc=77) -- fork unavailable under this wine ($WINE_MARK)"
 		continue
 	fi
 	if grep -qF "$SHIM_MARK" "$log" 2>/dev/null; then
-		unverified=$((unverified + 1))
-		echo "UNVERIFIED $n (rc=77) -- $(grep -m1 -F "$SHIM_MARK" "$log" | sed "s/.*$SHIM_MARK//")"
+		na=$((na + 1))
+		echo "NA $n (rc=77) -- $(grep -m1 -F "$SHIM_MARK" "$log" | sed "s/.*$SHIM_MARK//")"
 		continue
 	fi
 
 	# A test killed by the timeout above did not produce a verdict: it
 	# did not finish.  Counting rc=124 as "it failed" would let a
-	# wedged or merely slow test satisfy an xfail row -- observed
+	# wedged or merely slow test satisfy a BUG row -- observed
 	# exactly once, when a 25s bound under gate contention turned 14
 	# trivial tests into "regressions" and quietly let `fcntl`'s
-	# unclassified row be satisfied by a timeout rather than by the
+	# unresolved row be satisfied by a timeout rather than by the
 	# behaviour it describes.  Its own bucket, and it fails the stage.
 	if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
 		timeouts="$timeouts $n"
@@ -486,7 +510,7 @@ for f in $corpus; do
 
 	verified=$((verified + 1))
 	case "$want" in
-	pass)
+	PASS)
 		if [ "$rc" = 0 ]; then
 			passed=$((passed + 1))
 		else
@@ -494,42 +518,36 @@ for f in $corpus; do
 			echo "FAIL $n (rc=$rc) -- ledger says this passes"
 			sed 's/^/    /' "$log" | head -20
 		fi ;;
-	unclassified)
+	BUG)
 		if [ "$rc" = 0 ]; then
 			unexpected="$unexpected $n"
 		else
-			unclassified=$((unclassified + 1))
-			echo "UNCLASSIFIED-FAIL $n (rc=$rc) -- nobody has triaged this yet"
+			bugs=$((bugs + 1))
+			echo "BUG $n (failed as declared) -- $(ledger_reason "$n")"
 		fi ;;
-	xfail:*)
-		if [ "$rc" = 0 ]; then
-			unexpected="$unexpected $n"
-		else
-			known=$((known + 1))
-			echo "KNOWN-FAIL $n -- ${want#xfail:}: $(ledger_reason "$n")"
-		fi ;;
-	unverifiable)
-		# Reaching this case at all is the news.  An `unverifiable` row
-		# asserts that no target available to this project can adjudicate
-		# the test -- so the two 77 branches above should have taken it,
-		# and getting a real rc here means that assertion is now false.
-		# Whether the verdict is 0 or not is beside the point and is
-		# deliberately not branched on: either way the row is wrong.
-		verifiable="$verifiable $n(rc=$rc)"
-		echo "NOW-VERIFIABLE $n (rc=$rc) -- ledger says no target here can adjudicate this, but it just did"
-		;;
+	FLAKY)
+		flaky=$((flaky + 1))
+		if [ "$NTLIBC_TEST_MODE" = strict ] && [ "$rc" != 0 ]; then
+			regressions="$regressions $n(FLAKY-strict)"
+		fi
+		echo "FLAKY $n (rc=$rc) -- $(ledger_reason "$n")" ;;
 	esac
 done
 
 echo
 echo "=== libc-test summary (build $((build_end - build_start))s, run $((run_end - run_start))s) ==="
-echo "$passed passed, $known known, $unclassified unclassified, $unverified unverified, $unbuildable unbuildable"
+echo "$passed PASS, $bugs BUG, $unimpl UNIMPL, $na NA, $flaky FLAKY"
 echo
-echo "unbuildable is printed above even though it is one of the largest"
-echo "numbers here: $unbuildable of $(echo "$corpus" | wc -w) tests cannot be compiled against this"
-echo "library at all, almost all of them at #include.  That is the gap"
-echo "accounting restated as a build error, and it is the single most"
-echo "useful fact this stage produces.  It is not a pass."
+if [ "$NTLIBC_TEST_MODE" = normal ]; then
+	echo "$unimpl of $(echo "$corpus" | wc -w) tests are classified UNIMPL and were not"
+	echo "compiled in normal mode. Pedantic verifies that each still fails to build."
+else
+	echo "UNIMPL is printed above even though it is one of the largest"
+	echo "numbers here: $unimpl of $(echo "$corpus" | wc -w) tests cannot be compiled against this"
+	echo "library at all, almost all of them at #include.  That is the gap"
+	echo "accounting restated as a build error, and it is the single most"
+	echo "useful fact this stage produces.  It is not a pass."
+fi
 
 rc=0
 
@@ -558,9 +576,9 @@ if [ -n "$regressions" ]; then
 fi
 if [ -n "$unexpected" ]; then
 	echo
-	echo "libc-test: FAILED -- test(s) the ledger expects to fail now PASS:$unexpected"
+	echo "libc-test: FAILED -- BUG test(s) now PASS:$unexpected"
 	echo "libc-test: that is a fixed defect.  Update test/libc-test-expected.txt"
-	echo "libc-test: (status pass, and the COUNTS header) in the same commit as"
+	echo "libc-test: (disposition PASS, and the COUNTS header) in the same commit as"
 	echo "libc-test: the fix, so the ledger cannot outlive what it describes."
 	rc=1
 fi
@@ -569,31 +587,12 @@ if [ -n "$stale" ]; then
 	echo "libc-test: FAILED -- ledger disagrees with what actually built:$stale"
 	rc=1
 fi
-if [ -n "$verifiable" ]; then
-	echo
-	echo "libc-test: FAILED -- test(s) recorded 'unverifiable' produced a"
-	echo "libc-test: verdict:$verifiable"
-	echo "libc-test: that status means no target this project has can adjudicate"
-	echo "libc-test: the test -- a permanent hole, not a temporary one.  One of"
-	echo "libc-test: them just filled itself in, so the claim is stale.  Move the"
-	echo "libc-test: row to pass, xfail: or unclassified according to what it now"
-	echo "libc-test: does, and adjust the COUNTS header in the same commit."
-	rc=1
-fi
-
 # ---- the counts pin ------------------------------------------------------
 #
 # The whole anti-drift mechanism, in six lines.  The ledger's header
 # states, as numbers, how many tests are in each bucket; this compares
-# them against the file's own rows.  Appending an xfail line without
-# touching the header fails here, so the diff that adds a known failure
-# ALWAYS also contains the line "the number of known failures is now N+1"
-# -- which is the thing a reviewer actually needs to see, and the thing
-# an append-only exception list never shows anyone.
-#
-# unclassified is compared with -gt, not -ne: it is a ceiling that may
-# only come down, because every unclassified row is a failure nobody has
-# looked at.  The others are exact.
+# them against the default rows. Profile overrides live separately in
+# test/test-profiles.tsv, so the base counts remain stable across runners.
 #
 counts=$(sed -n 's/^#[ \t]*COUNTS[ \t]*//p' "$LEDGER" | tail -1)
 if [ -z "$counts" ]; then
@@ -603,40 +602,30 @@ if [ -z "$counts" ]; then
 else
 	for kv in $counts; do
 		k=${kv%%=*}; v=${kv#*=}
-		a=$(awk -F'\t' -v k="$k" '
-			($2==k) || (k=="xfail" && substr($2,1,6)=="xfail:") {c++}
-			END{print c+0}' "$W/rows")
-		case "$k" in
-		unclassified)
-			if [ "$a" -gt "$v" ]; then
-				echo
-				echo "libc-test: FAILED -- the ledger now has $a unclassified rows;"
-				echo "libc-test: its pinned ceiling is $v.  That number is a budget"
-				echo "libc-test: that may only come down: an unclassified row is a"
-				echo "libc-test: failure nobody has examined, and letting the count"
-				echo "libc-test: grow silently is precisely the failure this stage"
-				echo "libc-test: was built to prevent."
-				rc=1
-			fi ;;
-		*)
-			if [ "$a" -ne "$v" ]; then
-				echo
-				echo "libc-test: FAILED -- ledger header says $k=$v, file has $a."
-				echo "libc-test: the header and the rows must be edited together, so"
-				echo "libc-test: that a commit which adds a known failure also says"
-				echo "libc-test: out loud that the number of them went up."
-				rc=1
-			fi ;;
-		esac
+		a=$(awk -F'\t' -v k="$k" '$3==k {c++} END{print c+0}' "$W/base")
+		if [ "$a" -ne "$v" ]; then
+			echo
+			echo "libc-test: FAILED -- ledger header says $k=$v, resolved profile has $a."
+			rc=1
+		fi
 	done
 fi
 
+if [ "$NTLIBC_TEST_MODE" = strict ]; then
+	strict_bug=$(awk -F'\t' '$2=="BUG"{c++}END{print c+0}' "$W/rows")
+	strict_unimpl=$(awk -F'\t' '$2=="UNIMPL"{c++}END{print c+0}' "$W/rows")
+	if [ "$strict_bug" -gt 0 ] || [ "$strict_unimpl" -gt 0 ]; then
+		echo "libc-test: STRICT disallows $strict_bug BUG and $strict_unimpl UNIMPL disposition(s)."
+		rc=1
+	fi
+fi
+
 # ---- the floor -----------------------------------------------------------
-if [ "$verified" -lt "$VERIFIED_FLOOR" ]; then
+if [ "$NTLIBC_TEST_MODE" != normal ] && [ "$verified" -lt "$VERIFIED_FLOOR" ]; then
 	echo
 	echo "libc-test: FAILED -- only $verified test(s) produced a real verdict;"
 	echo "libc-test: this stage's floor is $VERIFIED_FLOOR.  Everything else was"
-	echo "libc-test: unbuildable or unverified, so this run checked almost"
+	echo "libc-test: UNIMPL or NA, so this run checked almost"
 	echo "libc-test: nothing about the library's behaviour and must not be"
 	echo "libc-test: reported as success.  (tools/libc-test.sh: VERIFIED_FLOOR)"
 	rc=1

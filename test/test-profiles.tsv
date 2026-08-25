@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Profile-specific overrides shared by every test suite.
+#
+# suite<TAB>case<TAB>selector<TAB>disposition<TAB>reason
+#
+# Selectors are comma-separated KEY=VALUE terms. Supported dimensions are
+# runtime, target_arch, host_arch, wow64 and kernel32; capability.NAME is
+# available for runner features that vary independently of those dimensions.
+# The most-specific matching rule wins. Equal-specificity matches are an error,
+# as are duplicate rules. In-tree declarations can be global fallbacks;
+# imported suite ledgers may intentionally provide only measured profiles.
+ntlibc	sh_engine_group_redir_leak	runtime=wine	NA	memory leak is observable only under the native sanitizer profile
+ntlibc	sh_engine_group_redir_leak	runtime=windows	NA	memory leak is observable only under the native sanitizer profile
+ntlibc	sh_engine_group_redir_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile
+ntlibc	sh_engine_heredoc_queue_leak	runtime=wine	NA	memory leak is observable only under the native sanitizer profile
+ntlibc	sh_engine_heredoc_queue_leak	runtime=windows	NA	memory leak is observable only under the native sanitizer profile
+ntlibc	sh_engine_heredoc_queue_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile
+ntlibc	posix_tail_nftw_symlink_loop	runtime=wine,capability.symlink=no	NA	the runner cannot construct the symbolic-link loop
+ntlibc	posix_termios_tcflush_discards_input	capability.console=no	NA	the runner has no console input queue to flush

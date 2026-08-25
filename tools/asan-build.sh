@@ -465,7 +465,7 @@ ran=0 passed=0 nolink=0 skipped=0 unverified=0
 #   directory would produce failures that depend on timing, in a
 #   sanitizer build whose entire purpose is to make failures
 #   deterministic.  Giving each test a private mktemp -d cwd -- what
-#   tools/runtests.sh already does -- would fix that and is worth doing,
+#   tools/run-tests.py already does -- would fix that and is worth doing,
 #   but it is a behavioural change to how every test sees the world and
 #   belongs in its own commit with its own evidence, not smuggled in
 #   behind a speedup.
@@ -559,7 +559,7 @@ while IFS="$(printf '\t')" read -r idx n t; do
 			rc=$?
 			if [ "$rc" = 77 ]; then
 				# Same "ran, but declined to verify something it detected
-				# at run time" outcome tools/runtests.sh's own rc=77
+				# at run time" outcome tools/run-tests.py's own rc=77
 				# bucket reports (test/posix-socket.c's network probe,
 				# specifically: this build's fuzz/ntstubs.c stub volume
 				# has no \Device\Afd node, so socket() itself fails

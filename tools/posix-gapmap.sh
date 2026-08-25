@@ -4,7 +4,7 @@
 #
 # tools/posix-gapmap.sh -- measure how much of the Open POSIX Test Suite
 # this library can even be compiled against, and write the answer to
-# test/POSIX-GAP-MAP.generated.md.
+# an ignored report at test/POSIX-GAP-MAP.generated.md.
 #
 # WHAT THIS IS AND IS NOT
 #
@@ -25,14 +25,8 @@
 # distribution, so making the distribution itself a gate would force a
 # threshold nobody can justify -- and a threshold nobody can justify is
 # the "number nobody reads" failure mode by another route.  The report is
-# therefore CHECKED IN, and what the gate enforces is that it is not
-# stale and that the measurement still discriminates.
-#
-# Checked in rather than produced as CI output because the value is the
-# DIFF.  `git diff test/POSIX-GAP-MAP.generated.md` after landing
-# pthread.h shows 445 tests move from blocked to attempted, which is a
-# better changelog entry than any prose; and a stale checked-in file is
-# visible where a CI artifact nobody downloaded is not.
+# therefore written as a CI/developer artefact rather than reduced to a
+# pass count. The hard gate is that the measurement still discriminates.
 #
 # THE FAILURE MODE THIS SCRIPT IS BUILT AROUND
 #
@@ -77,15 +71,12 @@
 #      because a classifier that has started answering constantly is
 #      still right about half the population.
 #
-# And one process invariant that tooling cannot infer: the report records
-# the ntlibc SHA it was generated from, and --check fails if that SHA is
-# not a well-formed stamp.  That is what stops the file being quietly
-# months old while looking authoritative.
+# The report records the ntlibc SHA it was generated from so an uploaded
+# artefact remains attributable to a checkout.
 #
 # Usage:
 #   tools/posix-gapmap.sh              regenerate test/POSIX-GAP-MAP.generated.md
-#   tools/posix-gapmap.sh --check      verify the checked-in report + all
-#                                      four invariants; write nothing
+#   tools/posix-gapmap.sh --check      compare an existing local report
 #   tools/posix-gapmap.sh --render     re-render the report from the data
 #                                      block it already carries: no suite,
 #                                      no build, no config.mak, no compile
@@ -115,13 +106,12 @@ REPORT="$srcdir/test/POSIX-GAP-MAP.generated.md"
 # This file is a BACKEND.  Everything that decides what a number means --
 # LC_ALL, the refuse-to-measure guard, the compiler wrapper that enforces
 # it, the data block, the provenance check, the greedy closure -- lives in
-# tools/suitemap-engine.sh and is shared with tools/libc-test-map.sh.
+# tools/suitemap-engine.sh.
 # What is left here is the Open POSIX Test Suite itself: how to find its
 # tests, how to classify one, and what its report says.
 #
-# See the engine's header for why: these two backends were two
-# near-identical scripts, and every property established in one of them
-# was re-established worse, or not at all, in the other.
+# The split keeps suite-specific classification separate from generic
+# report, cache and compiler-guard mechanics.
 SM_TOOL=posix-gapmap
 SM_ROW_TAGS='[stdn]'
 # shellcheck source=tools/suitemap-engine.sh
@@ -417,12 +407,7 @@ if [ "$mode" = --selftest ]; then
 	ck "canaries accept A for A and C for C"  0 check_canaries A C
 	ck "provenance rejects a non-repository"  1 check_provenance HEAD /nonexistent-not-a-repo
 	ck "provenance rejects an empty SHA"      1 check_provenance ""
-	# The merge tripwire, by name: tools/merge-gendata.sh writes exactly
-	# this after resolving a data block, so that a report whose rows were
-	# merged cannot pass as one whose rows were measured.  Losing this
-	# would be the one real weakening in dropping the ancestry rule, so
-	# it is asserted rather than left to follow from the hex test.
-	ck "provenance rejects the merge stamp"   1 check_provenance unknown
+		ck "provenance rejects an unknown stamp" 1 check_provenance unknown
 	ck "provenance rejects a short SHA"       1 check_provenance 45d1616
 	ck "provenance rejects a non-hex SHA"     1 check_provenance zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
 	# A rebased-away SHA -- well-formed, and absent from this repository
@@ -926,16 +911,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 | census | $n_tests tests in $n_dirs directories ($CENSUS_IFACE_DIRS interfaces + \`testfrmw\`) |
 | compiler | \`$CC\` |
 
-This file is **checked in on purpose**: the value of a gap measurement is
-its *diff*. Landing \`pthread.h\` moves several hundred tests from blocked
-to attempted, and that diff is a better changelog entry than prose. It is
-also why a stale copy is visible where an undownloaded CI artifact is not.
+This report is an ignored build artefact uploaded by CI. Compare artefacts
+when a change intentionally moves compile/link coverage; the source tree
+does not carry generated measurements through merges.
 
 It is **not a pass/fail gate**. Its output is a distribution, and a
-threshold on a distribution is a number nobody can justify. What the gate
-enforces is \`tools/posix-gapmap.sh --check\`: that this file is not stale,
-and that the measurement behind it still discriminates. See that script's
-header for the four invariants and why each exists.
+threshold on a distribution is a number nobody can justify. The census,
+partition, floors and canaries instead ensure the measurement discriminates.
 
 Read the taxonomy the right way round. As a *correctness* oracle OPTS is
 close to worthless against this tree -- it caught zero of the five

@@ -810,7 +810,7 @@ static void test_wait_rusage(const char *self)
 	 *
 	 * Detected by measuring rather than by asking which platform this
 	 * is, so it needs no version test and cannot go stale when Wine
-	 * fixes it.  rc=77 (tools/runtests.sh: UNVERIFIED) rather than a
+	 * fixes it.  rc=77 (tools/run-tests.py: UNVERIFIED) rather than a
 	 * silent skip -- a run that could not check the clause must not
 	 * read like one that did. */
 	{

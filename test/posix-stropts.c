@@ -67,6 +67,7 @@
  * src/ioctl/ioctl.c's banner; giving it real tests of its own is a
  * separate, non-POSIX job.
  */
+#include "test-policy.h"
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -131,7 +132,7 @@ static void test_ebadf(void)
  * fence and answered there, because it is a reasonable thing to think
  * and someone will think it again.
  * ------------------------------------------------------------------ */
-#if 0 /* UNIMPL (declined, 2026-08-25): <stropts.h> does not exist.
+#if NTLIBC_TEST(NA, posix_stropts_placeholder_not_a_header_test) /* N/A: this block cannot test that <stropts.h> exists.
        * ioctl.html SYNOPSIS:
        *   #include <stropts.h>
        *   int ioctl(int fildes, int request, ... );
@@ -240,7 +241,7 @@ static void test_stropts_header_exists(void)
 int main(void)
 {
 	test_ebadf();
-#if 0 /* UNIMPL (declined): see the fence above test_stropts_header_exists.
+#if NTLIBC_TEST(NA, posix_stropts_placeholder_not_a_header_test) /* N/A: see the fence above test_stropts_header_exists.
        * This is the same fence, not a second one: the call site has to
        * be guarded too, because the function it calls is inside the
        * first #if 0. */

@@ -22,7 +22,7 @@
  *
  * How the exe is found: this test walks up from its own argv[0]
  * (obj/test/sh-main.exe) to obj/ and down again to sh/sh.exe, rather
- * than taking a path from the environment or a -D. tools/runtests.sh
+ * than taking a path from the environment or a -D. tools/run-tests.py
  * runs every test from a private temporary working directory, so
  * nothing relative to the cwd would resolve, and argv[0] is the only
  * thing that is true both under Wine (where it arrives as a DOS path)
@@ -594,7 +594,7 @@ static void test_stdin_script(void)
 }
 
 /* Every fixture and capture file this suite creates, removed on the way
- * out.  tools/runtests.sh gives each test its own mktemp -d working
+ * out.  tools/run-tests.py gives each test its own mktemp -d working
  * directory, so leaving them behind costs that path nothing -- but a
  * developer running obj/test/sh-main.exe straight out of the checkout
  * (which is how it gets debugged) drops eight untracked files into the
@@ -647,7 +647,7 @@ int main(int argc, char **argv)
 	self = argv[0];
 	if (find_sh(argv[0]) != 0 || access(sh_path, R_OK) != 0) {
 		/* 77 is this suite's "ran, but declined to check something"
-		 * status (tools/runtests.sh): without the binary there is
+		 * status (tools/run-tests.py): without the binary there is
 		 * nothing here to test, and reporting a pass would be a lie. */
 		printf("SKIP sh-main: cannot locate the sh binary (tried \"%s\" from argv[0] \"%s\")\n",
 			sh_path, argv[0] ? argv[0] : "(null)");

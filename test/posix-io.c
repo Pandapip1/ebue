@@ -7,6 +7,7 @@
  * with #if 0, tagged BUG:, rather than weakened -- see the report for
  * the list.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -472,7 +473,7 @@ static void test_fseek_update(void)
  * test/POSIX-COVERAGE.md "XBD header contents (group U)".
  * ================================================================== */
 
-#if 0 /* UNIMPL: fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall
+#if NTLIBC_TEST(UNIMPL, posix_io_fcntl_h_access_mode_constants) /* UNIMPL: fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall
 	define the following symbolic constants for use as the file access
 	modes for open(), openat(), and fcntl(). The values shall be
 	unique, except that O_EXEC and O_SEARCH may have equal values...

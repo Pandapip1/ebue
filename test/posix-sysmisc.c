@@ -57,6 +57,7 @@
  * was already tested independent of select() ever existing.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -473,7 +474,7 @@ static void test_setrlimit_fsize_enforced(void)
 /* The other half of the clause, deliberately NOT implemented.  Recorded
  * so that "ntlibc implements RLIMIT_FSIZE" does not silently come to mean
  * "implements all of it". */
-#if 0 /* UNIMPL: SIGXFSZ.  setrlimit.html: exceeding RLIMIT_FSIZE causes
+#if NTLIBC_TEST(BUG, posix_sysmisc_setrlimit_fsize_sigxfsz) /* BUG (compiles and links; formerly UNIMPL):: SIGXFSZ.  setrlimit.html: exceeding RLIMIT_FSIZE causes
        * "the SIGXFSZ signal to be generated for the thread".  ntlibc
        * reports [EFBIG] and does not raise the signal.  Signal delivery
        * from inside the write path is a separate piece of work with its
@@ -507,7 +508,7 @@ static void test_setrlimit_fsize_sigxfsz(void)
  * any setrlimit() call in this process can run, and ntdll exposes no
  * route to lower a running thread's ceiling.  See the accounting
  * above. */
-#if 0 /* N/A: RLIMIT_STACK, see above */
+#if NTLIBC_TEST(NA, posix_sysmisc_setrlimit_stack_unenforceable) /* N/A: RLIMIT_STACK, see above */
 static void test_setrlimit_stack_unenforceable(void)
 {
 	struct rlimit rl;
@@ -1651,7 +1652,7 @@ static void test_waitid_errors(void)
 	CHECK(waitid(P_PID, (id_t)getpid(), &si, WEXITED) == -1 && errno == ECHILD);
 }
 
-#if 0 /* UNIMPL: waitid.html DESCRIPTION -- WSTOPPED ("Status shall be
+#if NTLIBC_TEST(BUG, posix_sysmisc_waitid_stopped_continued) /* BUG (compiles and links; formerly UNIMPL):: waitid.html DESCRIPTION -- WSTOPPED ("Status shall be
        * returned for any child that has stopped upon receipt of a
        * signal") and WCONTINUED ("Status shall be returned for any
        * continued child process").

@@ -16,5 +16,3 @@
 # how it actually resolves a conflict and the manual fallback.
 boot/kaem/build-i386.kaem merge=ntlibc-kaem
 boot/kaem/build-x86_64.kaem merge=ntlibc-kaem
-
-test/*.generated.md merge=ntlibc-gendata

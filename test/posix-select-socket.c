@@ -56,7 +56,7 @@
  * test/posix-socket.c exactly: a runtime capability probe
  * (socket()+bind()+listen()) gates every network assertion, a failure
  * prints one SKIP line naming the call and its errno, and the exit
- * code is 77 -- tools/runtests.sh's third bucket, "ran, verified
+ * code is 77 -- tools/run-tests.py's third bucket, "ran, verified
  * nothing new", which is neither a pass nor a failure.  A plain
  * `return 0` there would report PASS, forever and on every platform,
  * for a fix nothing had checked.
@@ -83,7 +83,7 @@ static int fails;
 static int unverified;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
-/* Distinct from test/posix-socket.c's 55123: tools/runtests.sh runs the
+/* Distinct from test/posix-socket.c's 55123: tools/run-tests.py runs the
  * non-serial tests in parallel (xargs -P), so two loopback tests
  * sharing a fixed port would collide with each other rather than with
  * anything on the machine.  getsockname() is not implemented (see

@@ -12,6 +12,7 @@
  * Everything happens in a fresh mkdtemp directory, removed at the end.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -617,7 +618,7 @@ static void test_stat_dir_size_is_zero(void)
  * read-only", so the read bits src/stat/stat.c's mode_from_attrs()
  * synthesizes (0444, always set) cannot be cleared by chmod() at all --
  * confirmed live below rather than asserted from the source comment. */
-#if 0 /* UNIMPL: chmod.html DESCRIPTION "set the file permission bits
+#if NTLIBC_TEST(BUG, posix_unistd_chmod_cannot_clear_read_bits) /* BUG (compiles and links; formerly UNIMPL):: chmod.html DESCRIPTION "set the file permission bits
        * ... to the value contained in mode" -- but chmod(path, 0) here
        * leaves S_IRUSR|S_IRGRP|S_IROTH set anyway.  Was N/A on "there
        * is no 'deny read' attribute a chmod-only implementation can
@@ -646,7 +647,7 @@ static void test_chmod_cannot_clear_read_bits(void)
  * *contents* look like a PE/script; NT does not gate that on a
  * permission bit the way exec() gates on S_IXUSR), so ntlibc's naming
  * heuristic is the only signal available and chmod cannot move it. */
-#if 0 /* UNIMPL: chmod.html says mode's 0111 bits become the new
+#if NTLIBC_TEST(BUG, posix_unistd_chmod_cannot_move_exec_bits) /* BUG (compiles and links; formerly UNIMPL):: chmod.html says mode's 0111 bits become the new
        * S_IX{USR,GRP,OTH} bits; here chmod(0000) on a .exe leaves them
        * set and chmod(0777) on a .txt cannot set them.  Was N/A on "NT
        * has no execute-permission attribute to write".  NT has no
@@ -688,7 +689,7 @@ static void test_chmod_cannot_move_exec_bits(void)
  * documented in test_open_umask_bug where the server's
  * FileWriteAttributes-as-Unix-O_WRONLY mapping refuses a chmod back
  * from read-only by path -- see that comment for the citation.) */
-#if 0 /* UNIMPL: chmod.html says the individual mode bits requested
+#if NTLIBC_TEST(BUG, posix_unistd_chmod_group_other_write_aliases_owner) /* BUG (compiles and links; formerly UNIMPL):: chmod.html says the individual mode bits requested
        * become the new mode; here S_IWGRP/S_IWOTH alone have the
        * identical, all-or-nothing effect as S_IWUSR|S_IWGRP|S_IWOTH
        * together.  The proximate mechanism is right -- chmod_handle()
@@ -1506,7 +1507,7 @@ static void test_id_session_stubs(void)
 	 * descriptor this process really holds still gets the fixed answer,
 	 * even though it is not a console.  That is not an accident of the
 	 * runner -- fd 0 above is already such a descriptor, since
-	 * tools/runtests.sh runs every test with stdin on /dev/null -- so
+	 * tools/run-tests.py runs every test with stdin on /dev/null -- so
 	 * the model here answers per process, not per terminal, and
 	 * [ENOTTY] is deliberately not part of this gate (see
 	 * src/unistd/ttyname.c and test/POSIX-COVERAGE.md).  A pipe is the
@@ -1626,7 +1627,7 @@ static void test_linkat(void)
  * needs _POSIX_VDISABLE.
  * ================================================================== */
 
-#if 0 /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
+#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_sysconf_names) /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
 	define the following symbolic constants for sysconf():", followed
 	by a list of 125 _SC_* names.  The sentence is unconditional: no
 	option-group margin marker guards the list, and an implementation
@@ -1719,7 +1720,7 @@ static void test_unistd_sysconf_names(void)
 }
 #endif
 
-#if 0 /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
+#if NTLIBC_TEST(UNIMPL, posix_unistd_fpathconf) /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
 	define the following symbolic constants for pathconf():", followed
 	by a list of 21 _PC_* names.  Unconditional, same as the sysconf
 	list.  ntlibc defines 9; _PC_2_SYMLINKS, _PC_ALLOC_SIZE_MIN,
@@ -1779,7 +1780,7 @@ static void test_unistd_pathconf_names(void)
 }
 #endif
 
-#if 0 /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
+#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_confstr_names) /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
 	define the following symbolic constants for the confstr()
 	function:", followed by a list of 31 _CS_* names.  ntlibc defines
 	exactly one of them, _CS_PATH; the other 30 -- the
@@ -1841,7 +1842,7 @@ static void test_unistd_confstr_names(void)
 }
 #endif
 
-#if 0 /* UNIMPL: unistd.h.html "Constants for Options and Option Groups"
+#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_mandatory_option_constants) /* UNIMPL: unistd.h.html "Constants for Options and Option Groups"
 	gives thirteen constants the wording "This symbol shall always be
 	set to the value 200809L" -- _POSIX_ASYNCHRONOUS_IO,
 	_POSIX_BARRIERS, _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES,
@@ -1898,7 +1899,7 @@ static void test_unistd_mandatory_option_constants(void)
 }
 #endif
 
-#if 0 /* UNIMPL: unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE
+#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_posix_vdisable) /* UNIMPL: unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE
 	This symbol shall be defined to be the value of a character that
 	shall disable terminal special character handling as described in
 	Special Control Characters.  This symbol shall always be set to a

@@ -9,6 +9,7 @@
  * clauses that file's checks do not exercise, with a citation on every
  * assertion. Run headless under Wine, same as test/stdio.c.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -85,7 +86,7 @@ static void test_fflush_read_stream(const char *name)
 	}
 }
 
-#if 0	/* BUG: fflush() fails on a readable stream whose fd cannot seek.
+#if NTLIBC_TEST(BUG, posix_stdio_fflush_nonseekable_read_stream) /* BUG: fflush() fails on a readable stream whose fd cannot seek.
 	 * fflush.html DESCRIPTION states the read-stream action with an
 	 * explicit seekability condition: "For a stream open for reading
 	 * with an underlying file description, if the file is not already
@@ -334,7 +335,7 @@ static void perror_prefixed(void) { errno = ENOENT; perror("myprefix"); }
 static void perror_noprefix_null(void) { errno = EACCES; perror(0); }
 static void perror_noprefix_empty(void) { errno = EACCES; perror(""); }
 
-#if 0	/* BUG: fflush(NULL) does not flush stderr, because stderr is not
+#if NTLIBC_TEST(BUG, posix_stdio_fflush_null_covers_stderr) /* BUG: fflush(NULL) does not flush stderr, because stderr is not
 	 * on the list it walks.  fflush.html DESCRIPTION: "If stream is a
 	 * null pointer, fflush() shall perform this flushing action on all
 	 * streams for which the behavior is defined above."  stderr is such
@@ -541,7 +542,7 @@ static void test_popen(void)
 	}
 }
 
-#if 0 /* UNIMPL: popen.html ERRORS "shall fail" clause: "[EMFILE]
+#if NTLIBC_TEST(PASS, posix_stdio_popen_emfile) /* PASS: popen.html ERRORS "shall fail" clause: "[EMFILE]
        * {STREAM_MAX} streams are currently open in the calling
        * process."  Was N/A; the tag was wrong, and this is a
        * correction of the tag rather than of the decision.
@@ -561,8 +562,8 @@ static void test_popen(void)
        * a full __fds[FD_MAX] table, and popen() reaches it like every
        * other stream constructor.  Nothing about NT makes the clause
        * meaningless.  A clause we chose not to exercise is UNIMPL.
-       * (Flagged independently as the one misfiled tag of the 30 in
-       * test/verification-coverage-accounting.md, section 6.) */
+       * The independent probe is inexpensive enough in practice and passes;
+       * keep it as real coverage instead of a test-economy exception. */
 static void test_popen_emfile(void)
 {
 	FILE *fs[8192];
@@ -887,7 +888,7 @@ static void test_getc_unlocked(const char *name)
  * Filesystem-adjacent (it names a path under the temp directory and
  * src/stdio/misc.c reaches mkstemp() to pick one), so real-Windows CI
  * is the authority; Wine agreeing is weak evidence. */
-#if 0	/* BUG: tmpnam() hands back the name of a file it has just
+#if NTLIBC_TEST(BUG, posix_stdio_tmpnam_does_not_create) /* BUG: tmpnam() hands back the name of a file it has just
 	 * created.  tmpnam.html DESCRIPTION: "The tmpnam() function shall
 	 * generate a string that is a valid pathname that does not name an
 	 * existing file."  The whole point of the guarantee is that the
@@ -1421,7 +1422,7 @@ static void test_printf_l_modifier(void)
  * (that is, "%n$" and "*m$"), or unnumbered argument conversion
  * specifications (that is, % and *), but not both."
  */
-#if 0 /* UNIMPL: positional arguments are not implemented.
+#if NTLIBC_TEST(BUG, posix_stdio_printf_positional_arguments) /* BUG (compiles and links; formerly UNIMPL):: positional arguments are not implemented.
        * src/stdio/printf.c's conversion parser reads flags, width,
        * precision and length modifier and has no notion of an argument
        * INDEX at all -- there is no "$" anywhere in the file -- so "%1$s"

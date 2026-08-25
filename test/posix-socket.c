@@ -56,7 +56,7 @@
  * naming the mechanism and observed errno and returns exit code 77
  * (a distinct "ran, but verified nothing new" outcome, not a plain
  * pass and not a FAIL either) rather than either silently skipping or
- * failing the whole suite.  tools/runtests.sh recognizes 77 and reports
+ * failing the whole suite.  tools/run-tests.py recognizes 77 and reports
  * it as its own bucket in the run summary, separate from both PASS and
  * FAIL -- the same shape asan-build.sh already uses for its "N not
  * applicable natively" bucket, just decided at run time here instead of
@@ -70,6 +70,7 @@
  * actually expects; there, this test exits 0 with every assertion having
  * actually run.
  */
+#include "test-policy.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -436,7 +437,7 @@ int main(void)
 	 * declared in <sys/socket.h>/<netinet/in.h> (see that header's own
 	 * banner), so none of this can even be written outside an #if 0
 	 * fence. */
-#if 0 /* UNIMPL: sys_socket.h.html's full function list --
+#if NTLIBC_TEST(UNIMPL, posix_socket_send_recv_and_socketpair_interfaces) /* UNIMPL: sys_socket.h.html's full function list --
 	sendto()/recvfrom()/sendmsg()/recvmsg() (UDP and ancillary
 	data), socketpair() (AF_UNIX) -- networking-audit.md sec 6
 	stages 5/6/7. */
@@ -448,7 +449,7 @@ int main(void)
 		recvfrom(sv[1], b, sizeof b, 0, 0, 0);
 	}
 #endif
-#if 0 /* UNIMPL: netinet_in.h.html's struct sockaddr_in6/struct
+#if NTLIBC_TEST(UNIMPL, posix_socket_ipv6_address_types) /* UNIMPL: netinet_in.h.html's struct sockaddr_in6/struct
 	in6_addr/IN6_IS_ADDR_* -- networking-audit.md sec 6 does not
 	stage AF_INET6 explicitly (it stages AF_UNIX and UDP), but this
 	project's task for this file scoped AF_INET/SOCK_STREAM only,
@@ -458,7 +459,7 @@ int main(void)
 		a6.sin6_family = AF_INET6;
 	}
 #endif
-#if 0 /* UNIMPL: getsockname.html/getpeername.html -- not in this
+#if NTLIBC_TEST(UNIMPL, posix_socket_getsockname_and_getpeername) /* UNIMPL: getsockname.html/getpeername.html -- not in this
 	project's declared scope for this stage (see <sys/socket.h>'s
 	banner); this file's own network tests work around the gap with
 	a fixed TEST_PORT instead of querying an ephemeral one. */
@@ -474,7 +475,7 @@ int main(void)
 		/* Everything that ran passed, but that is not the same claim as
 		 * "all ok" -- see the file banner and the SKIP line(s) above for
 		 * which assertion groups never ran at all. Exit 77 rather than 0
-		 * so tools/runtests.sh reports this run in its own bucket instead
+		 * so tools/run-tests.py reports this run in its own bucket instead
 		 * of silently counting it as a pass. */
 		printf("posix-socket: %d assertion group(s) unverified in this "
 		       "environment (see SKIP lines above); no failures in what "

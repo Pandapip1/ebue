@@ -403,9 +403,24 @@ test-exes: $(TEST_EXES)
 
 check: $(TEST_EXES)
 ifneq ($(DELAY_ALL),yes)
-	@echo "SKIP delayall.exe (this \$$(CC) has no -Wl,--delay-all support -- see configure's probe)"
+	@echo "NA delayall.exe (this \$$(CC) has no -Wl,--delay-all support -- see configure's probe)"
 endif
-	@$(srcdir)/tools/runtests.sh "$(WINE)" $(TEST_RUN)
+	@$(srcdir)/tools/test-policy.py check --profile runtime=wine $(foreach profile,$(TEST_PROFILE),--profile $(profile))
+	@$(srcdir)/tools/run-tests.py --runner "$(WINE)" \
+		--profile runtime=wine --profile target_arch=$(ARCH) \
+		--profile kernel32=$(KERNEL32) $(TEST_RUN)
+
+# Probe every source-level disposition independently.  Pedantic validates
+# that BUG still compiles and fails and that UNIMPL still fails to link;
+# strict performs those same probes and additionally rejects BUG and UNIMPL
+# fences, while still allowing genuinely inapplicable N/A cases.
+check-pedantic: check
+	@WINE="$(WINE)" $(srcdir)/tools/test-policy.py pedantic $(foreach profile,$(TEST_PROFILE),--profile $(profile))
+
+check-strict: check
+	@WINE="$(WINE)" $(srcdir)/tools/test-policy.py strict $(foreach profile,$(TEST_PROFILE),--profile $(profile))
+
+.PHONY: check check-pedantic check-strict
 
 #
 # libc-test: musl's own regression corpus (third_party/libc-test,
@@ -425,45 +440,26 @@ endif
 # the arch config.mak currently names.
 #
 libc-test: $(ALL_LIBS)
-	@WINE="$(WINE)" $(srcdir)/tools/libc-test.sh
+	@WINE="$(WINE)" NTLIBC_TEST_MODE=normal NTLIBC_TEST_PROFILE="$(TEST_PROFILE)" $(srcdir)/tools/libc-test.sh
 
-.PHONY: libc-test
+libc-test-pedantic: $(ALL_LIBS)
+	@WINE="$(WINE)" NTLIBC_TEST_MODE=pedantic NTLIBC_TEST_PROFILE="$(TEST_PROFILE)" $(srcdir)/tools/libc-test.sh
+
+libc-test-strict: $(ALL_LIBS)
+	@WINE="$(WINE)" NTLIBC_TEST_MODE=strict NTLIBC_TEST_PROFILE="$(TEST_PROFILE)" $(srcdir)/tools/libc-test.sh
+
+.PHONY: libc-test libc-test-pedantic libc-test-strict
 
 #
-# libc-test-map / libc-test-map-check: the coverage map for that same
-# corpus (test/LIBC-TEST-MAP.generated.md, checked in).
-#
-# `libc-test` above answers yes/no and ends its summary with a bare count
-# of unbuildable tests.  This pair takes that count apart -- which header,
-# which symbol, and which single addition would unblock the most.  It is
-# deliberately NOT a pass/fail stage: its output is a distribution, and a
-# gate stage over a distribution would need a threshold nobody can
-# justify.  What the gate runs is `libc-test-map-check`, which is a
-# staleness-and-honesty check over the checked-in file and does have a
-# yes/no answer.
-#
-# Same $(ALL_LIBS) dependency and the same reason: it links 146 PEs
-# against lib/libc.a to classify them.  Unlike `libc-test` it never runs
-# any of them, so it needs no WINE.
-#
-libc-test-map: $(ALL_LIBS)
-	@$(srcdir)/tools/libc-test-map.sh
-
-.PHONY: libc-test-map
-
 # posix-gapmap: how much of the Open POSIX Test Suite (third_party/ltp's
 # testcases/open_posix_testsuite/, a git submodule pinned at a SHA -- see
 # third_party/README.md) can be compiled against this library at all.
 #
 # Deliberately NOT part of `check` and NOT a pass/fail suite.  Its output
-# is a distribution -- 873 tests whose #include fails, 146 that die at
-# link, 591 that build -- and a threshold on a distribution is a number
-# nobody can justify.  So `posix-gapmap` WRITES the report
-# (test/POSIX-GAP-MAP.generated.md, checked in, because the value of a
-# gap measurement is its diff) and `posix-gapmap-check` is what the gate
-# runs: the report is current, and the measurement behind it still
-# discriminates.  See tools/posix-gapmap.sh's header for the four
-# invariants that make the second claim mean something.
+# is a distribution -- tests blocked by headers, blocked at link, and
+# buildable -- written as an untracked report.  The census, partition,
+# floors and canaries in tools/posix-gapmap.sh make a broken measurement
+# fail instead of looking like a closed gap.
 #
 # Depends on $(ALL_LIBS) for the same reason libc-test does: it links
 # 1610 PEs against lib/libc.a, and a missing library would make every one
@@ -472,15 +468,15 @@ libc-test-map: $(ALL_LIBS)
 posix-gapmap: $(ALL_LIBS)
 	@$(srcdir)/tools/posix-gapmap.sh
 
-.PHONY: posix-gapmap posix-gapmap
+.PHONY: posix-gapmap
 
 # posix-optsrun: the other half of the sentence posix-gapmap starts.
 #
 # posix-gapmap answers "how much of that suite can we be COMPILED
 # against" and executes nothing -- its job comment in ci.yml says so.
-# Which meant the 591 tests it classes as C, the ones that compile and
-# link clean, had never been RUN.  Nobody knew whether they passed.
-# `posix-optsrun` runs them and writes test/POSIX-OPTS-RUN.generated.md.
+# `posix-optsrun-pedantic` checks all 1610 profile dispositions: PASS and
+# BUG cases compile and run, UNIMPL cases must fail compilation, NA cases
+# stay out, and FLAKY cases remain observable without weakening strict.
 #
 # Also deliberately NOT part of `check`, and for the same reason:
 # `check` is this library's own suite and its failures are ours.  A
@@ -488,20 +484,24 @@ posix-gapmap: $(ALL_LIBS)
 # different claim with a different meaning of failure, exactly as
 # libc-test is kept separate.
 #
-# And, like the gap map, NO PASS-COUNT THRESHOLD.  The report is checked
-# in and `posix-optsrun-check` gates on REGRESSION -- a test moving PASS
-# to anything else -- not on a number.  See tools/posix-optsrun.sh's
-# header for the three refusals and five invariants that stop a sweep
-# which executed nothing from reporting no failures.
+# The exact case census and complete profile ledger prevent an empty or
+# partial sweep from reporting success. The detailed report remains a CI
+# artefact.
 #
 # Depends on $(ALL_LIBS) for the same reason the gap map does, one step
 # further along: without lib/libc.a nothing links, nothing runs, and the
 # report says "no failures" about a sweep of zero tests.
 #
 posix-optsrun: $(ALL_LIBS)
-	@$(srcdir)/tools/posix-optsrun.sh
+	@WINE="$(WINE)" $(srcdir)/tools/posix-opts.py normal $(foreach profile,$(TEST_PROFILE),--profile $(profile))
 
-.PHONY: posix-optsrun
+posix-optsrun-pedantic: $(ALL_LIBS)
+	@WINE="$(WINE)" $(srcdir)/tools/posix-opts.py pedantic $(foreach profile,$(TEST_PROFILE),--profile $(profile))
+
+posix-optsrun-strict: $(ALL_LIBS)
+	@WINE="$(WINE)" $(srcdir)/tools/posix-opts.py strict $(foreach profile,$(TEST_PROFILE),--profile $(profile))
+
+.PHONY: posix-optsrun posix-optsrun-pedantic posix-optsrun-strict
 
 #
 # check-kernel32: convenience wrapper for a developer who already has a
@@ -612,15 +612,6 @@ hygiene: $(GENH)
 	./tools/hdr-hygiene.sh
 
 .PHONY: hygiene
-
-# Ledger consistency: test/POSIX-COVERAGE.md's "(fenced)" rows against
-# the `#if 0` blocks in test/*.c, both directions.  Needs no build --
-# it is a grep over two checked-in artefacts -- so it has no
-# prerequisite and runs in a second.
-ledger:
-	./tools/lint-ledger.sh
-
-.PHONY: ledger
 
 # asan/fuzz: a second, native (Linux/ELF) build of the same src/*.c under
 # AddressSanitizer, UBSan and libFuzzer.  This is not a substitute for

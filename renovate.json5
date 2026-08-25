@@ -76,9 +76,9 @@
         "pass. Check tinycc's log between the old and new commit for codegen",
         "or PE-output changes.",
         "",
-        "`TINYCC_SHA` is duplicated in `ci.yml` and `fuzz.yml` and both must",
-        "end up identical -- fuzz.yml reads the cache entry ci.yml writes,",
-        "keyed on this value."
+        "`TINYCC_SHA` is duplicated in `ci.yml` and",
+        "`posix-gapmap-nightly.yml`; keep both identical so the nightly",
+        "restores the cache written by CI instead of rebuilding tinycc."
       ]
     }
   ],

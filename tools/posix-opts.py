@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Build and adjudicate the Open POSIX Test Suite with ntlibc policy."""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import dataclasses
+import os
+from pathlib import Path
+import platform
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+
+from testlib import policy_accepts
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SUITE = ROOT / "third_party" / "ltp" / "testcases" / "open_posix_testsuite"
+IFACES = SUITE / "conformance" / "interfaces"
+EXPECTED = ROOT / "test" / "posix-opts-expected.txt"
+REPORT = ROOT / "test" / "POSIX-OPTS-RUN.generated.md"
+CENSUS = 1610
+
+
+@dataclasses.dataclass
+class CaseResult:
+    case: str
+    disposition: str
+    built: bool
+    observation: str
+    detail: str = ""
+
+
+def read_config() -> dict[str, str]:
+    path = ROOT / "config.mak"
+    if not path.is_file():
+        raise RuntimeError("config.mak is missing; run ./configure first")
+    result: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            result[key.strip()] = value.strip()
+    return result
+
+
+def profile(cfg: dict[str, str], runtime: str, supplied: list[str]) -> list[str]:
+    host = platform.machine().lower()
+    host = "x86_64" if host in {"amd64", "x86_64"} else "i386" if host in {
+        "x86", "i386", "i686"
+    } else host
+    values = {
+        "runtime": runtime,
+        "target_arch": cfg.get("ARCH", "unknown"),
+        "host_arch": host,
+        "kernel32": cfg.get("KERNEL32", "no"),
+    }
+    values["wow64"] = (
+        "yes" if values["target_arch"] == "i386" and host == "x86_64" else "no"
+    )
+    for term in supplied:
+        if "=" not in term:
+            raise RuntimeError(f"profile term must be KEY=VALUE: {term}")
+        key, value = term.split("=", 1)
+        values[key] = value
+    return [f"{key}={value}" for key, value in sorted(values.items())]
+
+
+def resolved_policy(profile_terms: list[str]) -> dict[str, tuple[str, str]]:
+    command = [
+        sys.executable, str(ROOT / "tools" / "test-policy.py"), "resolve",
+        "--suite", "posix-opts", "--defaults", str(EXPECTED),
+    ]
+    for term in profile_terms:
+        command.extend(("--profile", term))
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, check=False)
+    if result.returncode:
+        raise RuntimeError(result.stdout.strip())
+    policy: dict[str, tuple[str, str]] = {}
+    for line in result.stdout.splitlines():
+        case, disposition, reason = line.split("\t", 2)
+        policy[case] = (disposition, reason)
+    return policy
+
+
+def compile_command(cfg: dict[str, str], source: Path, output: Path) -> list[str]:
+    arch = cfg["ARCH"]
+    command = shlex.split(cfg["CC"])
+    command += shlex.split(cfg.get("CFLAGS_C99FSE", ""))
+    command += shlex.split(cfg.get("CFLAGS_AUTO", ""))
+    command += [
+        "-D_GNU_SOURCE", f"-I{ROOT / 'arch' / arch}",
+        f"-I{ROOT / 'arch' / 'generic'}", f"-I{ROOT / 'obj' / 'include'}",
+        f"-I{ROOT / 'include'}", f"-I{SUITE / 'include'}", f"-I{SUITE}",
+        "-nostdlib", "-o", str(output), str(ROOT / "lib" / "crt1.o"),
+        str(source), str(SUITE / "lib" / "common.c"),
+        f"-L{ROOT / 'lib'}", "-lc", "-lntdll",
+    ]
+    return command
+
+
+def build_one(cfg: dict[str, str], case: str, disposition: str,
+              work: Path) -> CaseResult:
+    output = work / "exe" / (case.replace("/", "_") + ".exe")
+    result = subprocess.run(
+        compile_command(cfg, IFACES / case, output), cwd=ROOT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    if result.returncode:
+        return CaseResult(case, disposition, False, "UNBUILDABLE", result.stdout)
+    return CaseResult(case, disposition, True, "BUILT", str(output))
+
+
+def attempt(executable: Path, runner: list[str], work: Path, timeout: int,
+            number: int) -> tuple[str, str]:
+    directory = work / "run" / f"{executable.stem}.{number}"
+    directory.mkdir()
+    environment = os.environ.copy()
+    if runner:
+        environment["WINEDEBUG"] = "-all"
+        environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
+    try:
+        result = subprocess.run(
+            [*runner, str(executable)], cwd=directory, env=environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, errors="replace",
+            timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        return "TIMEOUT", error.stdout or ""
+    except OSError as error:
+        return "ERROR", str(error)
+    outcomes = {0: "PASS", 1: "FAIL", 2: "UNRESOLVED", 4: "UNSUPPORTED", 5: "UNTESTED"}
+    return outcomes.get(result.returncode, "ABNORMAL"), result.stdout
+
+
+def run_one(result: CaseResult, runner: list[str], work: Path,
+            attempts: int, timeout: int) -> CaseResult:
+    executable = Path(result.detail)
+    seen: list[str] = []
+    logs: list[str] = []
+    for number in range(attempts):
+        outcome, output = attempt(executable, runner, work, timeout, number)
+        seen.append(outcome)
+        logs.append(output)
+    passes = seen.count("PASS")
+    if passes == attempts:
+        observation = "PASS"
+    elif passes:
+        observation = "FLAKY"
+    else:
+        observation = seen[-1] if len(set(seen)) == 1 else "FLAKY"
+    return dataclasses.replace(result, observation=observation,
+                               detail="\n".join(logs))
+
+
+def accepted(mode: str, result: CaseResult) -> bool:
+    observation = result.observation
+    if result.disposition == "FLAKY" and observation == "FLAKY":
+        observation = "FAIL"
+    return policy_accepts(mode, result.disposition, result.built, observation)
+
+
+def write_report(results: list[CaseResult], profile_terms: list[str], mode: str,
+                 seconds: int) -> None:
+    counts: dict[str, int] = {}
+    for result in results:
+        counts[result.disposition] = counts.get(result.disposition, 0) + 1
+    with REPORT.open("w", encoding="utf-8") as report:
+        report.write("<!--\nSPDX-FileCopyrightText: (C) 2026 Gavin John\n")
+        report.write("SPDX-License-Identifier: GPL-3.0-or-later\n-->\n\n")
+        report.write("# Open POSIX Test Suite result\n\n")
+        report.write(f"Mode: `{mode}`  \nProfile: `{','.join(profile_terms)}`  \n")
+        report.write(f"Elapsed: {seconds}s\n\n")
+        report.write("| disposition | count |\n|---|---:|\n")
+        for disposition in ("PASS", "BUG", "UNIMPL", "NA", "FLAKY"):
+            report.write(f"| `{disposition}` | {counts.get(disposition, 0)} |\n")
+        report.write("\n```text\n")
+        for result in results:
+            report.write(
+                f"{result.case}\t{result.disposition}\t{result.observation}\n"
+            )
+        report.write("```\n")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", nargs="?", default="normal",
+                        choices=("normal", "pedantic", "strict", "selftest"))
+    parser.add_argument("--runtime", default="wine")
+    parser.add_argument("--profile", action="append", default=[])
+    parser.add_argument("--runner", default=os.environ.get("WINE", ""))
+    parser.add_argument("--jobs", type=int,
+                        default=int(os.environ.get("OPTSRUN_JOBS", "4")))
+    parser.add_argument("--attempts", type=int,
+                        default=int(os.environ.get("OPTSRUN_ATTEMPTS", "3")))
+    parser.add_argument("--timeout", type=int, default=120)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.mode == "selftest":
+        checks = [
+            policy_accepts("pedantic", "BUG", True, "FAIL"),
+            not policy_accepts("pedantic", "BUG", True, "ABNORMAL"),
+            not policy_accepts("pedantic", "BUG", True, "TIMEOUT"),
+            not policy_accepts("strict", "BUG", True, "FAIL"),
+            policy_accepts("pedantic", "UNIMPL", False, "UNBUILDABLE"),
+            not policy_accepts("strict", "UNIMPL", False, "UNBUILDABLE"),
+        ]
+        print("posix-opts selftest: PASS" if all(checks) else "posix-opts selftest: FAIL")
+        return 0 if all(checks) else 1
+    if min(args.jobs, args.attempts, args.timeout) < 1:
+        print("posix-opts: jobs, attempts and timeout must be positive", file=sys.stderr)
+        return 2
+    if not IFACES.is_dir():
+        print("posix-opts: LTP submodule is empty; run git submodule update --init",
+              file=sys.stderr)
+        return 2
+    cfg = read_config()
+    if not (ROOT / "lib" / "libc.a").is_file():
+        raise RuntimeError("lib/libc.a is missing; run make first")
+    profile_terms = profile(cfg, args.runtime, args.profile)
+    policy = resolved_policy(profile_terms)
+    discovered = sorted(
+        str(path.relative_to(IFACES)) for path in IFACES.rglob("*.c")
+    )
+    if len(discovered) != CENSUS or set(discovered) != set(policy):
+        missing = sorted(set(discovered) - set(policy))
+        stale = sorted(set(policy) - set(discovered))
+        raise RuntimeError(
+            f"census/policy mismatch: {len(discovered)} sources; "
+            f"unannotated={missing[:8]}, stale={stale[:8]}"
+        )
+    runner = shlex.split(args.runner, posix=os.name != "nt")
+    if args.runtime != "windows" and not runner:
+        raise RuntimeError("no runner configured")
+
+    started = time.monotonic()
+    results: dict[str, CaseResult] = {}
+    with tempfile.TemporaryDirectory(prefix="ntlibc-posix-opts.") as name:
+        work = Path(name)
+        (work / "exe").mkdir()
+        (work / "run").mkdir()
+        selected: list[tuple[str, str]] = []
+        for case in discovered:
+            disposition, reason = policy[case]
+            if disposition == "NA" or (
+                args.mode == "normal" and disposition in {"BUG", "UNIMPL"}
+            ):
+                results[case] = CaseResult(case, disposition, False, "NA", reason)
+            else:
+                selected.append((case, disposition))
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {
+                pool.submit(build_one, cfg, case, disposition, work): case
+                for case, disposition in selected
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                results[result.case] = result
+        runnable = [
+            result for result in results.values()
+            if result.built and result.disposition != "UNIMPL"
+        ]
+        # LTP cases share enough process/timing state that execution remains
+        # serial; compilation is the expensive parallel-safe phase.
+        for result in sorted(runnable, key=lambda item: item.case):
+            results[result.case] = run_one(
+                result, runner, work, args.attempts, args.timeout
+            )
+
+    ordered = [results[case] for case in discovered]
+    failures = [result for result in ordered if not accepted(args.mode, result)]
+    for result in ordered:
+        print(f"{result.disposition:<7} {result.case} [{result.observation}]")
+        if result in failures and result.detail:
+            for line in result.detail.splitlines()[-12:]:
+                print(f"        {line}")
+    elapsed = int(time.monotonic() - started)
+    write_report(ordered, profile_terms, args.mode, elapsed)
+    print(f"posix-opts: {len(ordered)} cases, {len(failures)} policy failure(s); "
+          f"report {REPORT}")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RuntimeError as error:
+        print(f"posix-opts: {error}", file=sys.stderr)
+        raise SystemExit(2)

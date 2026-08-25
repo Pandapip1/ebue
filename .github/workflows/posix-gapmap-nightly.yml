@@ -11,11 +11,9 @@ name: POSIX gap map (nightly)
 #
 # WHAT THIS ADDS OVER THE PER-PUSH CHECK, WHICH IS THE HONEST QUESTION
 #
-# ci.yml's `posix-gapmap` job already regenerates the whole report on
-# every push and fails if it differs from the checked-in file, so the
-# nightly run finds nothing new about the tree -- the generation is
-# deterministic given the tree and the pinned LTP SHA, and both are
-# fixed between pushes.
+# ci.yml's `posix-gapmap` job already measures the pinned suite on every
+# push.  The nightly adds upstream-drift visibility and keeps a downloadable
+# snapshot without committing generated reports to the source tree.
 #
 # What it adds is the one thing a per-push job structurally cannot see:
 # whether the PIN has drifted from upstream. New tests landing in LTP
@@ -23,9 +21,8 @@ name: POSIX gap map (nightly)
 # repository, and nothing else in this project would ever notice.
 #
 # That drift is reported and never enforced. "How far behind upstream is
-# acceptable" is exactly the unjustifiable threshold this whole report
-# refuses to invent, so this workflow fails only on the things that are
-# actually checkable: the four invariants, and the report being current.
+# acceptable" is exactly the unjustifiable threshold this report refuses
+# to invent. The classification invariants remain hard failures.
 on:
   schedule:
     # 04:17 UTC. Off the hour on purpose -- GitHub queues scheduled
@@ -48,9 +45,7 @@ jobs:
       # submodules: true, deliberately NOT `recursive`, and
       # fetch-depth: 0. LTP carries four nested submodules of its own,
       # two of them on git.kernel.org, and the Open POSIX Test Suite
-      # reads none of them; a shallow clone cannot answer the report's
-      # SHA-ancestry invariant. See the identically-shaped step in
-      # ci.yml's posix-gapmap job.
+      # reads none of them. See the identically-shaped step in ci.yml.
       - uses: actions/checkout@v7
         with:
           submodules: true
@@ -71,28 +66,14 @@ jobs:
             exit 1
           fi
 
-      # Build the toolchain rather than only restoring it: a nightly run
-      # can be the first thing to notice that the cache has expired, and
-      # a cache miss must not turn into a skipped measurement.
-      - name: Restore tinycc toolchain
-        id: tinycc
-        uses: actions/cache@v6
+      # A nightly may be the first run after the shared cache expires, so
+      # it is allowed to rebuild the pinned toolchain on a miss.
+      - name: Restore or build tinycc
+        uses: ./.github/actions/setup-tinycc
         with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Build tinycc if the cache missed
-        if: steps.tinycc.outputs.cache-hit != 'true'
-        run: |
-          git clone "$TINYCC_REPO" /tmp/tinycc
-          cd /tmp/tinycc
-          git checkout "$TINYCC_SHA"
-          ./configure --prefix="$HOME/tinycc-install" --enable-cross
-          make -j"$(nproc)"
-          make install
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+          build-on-miss: "true"
 
       - name: Configure
         run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
@@ -104,8 +85,8 @@ jobs:
       # invariants are what make the numbers below mean anything, and a
       # nightly that reported a distribution without them would be the
       # number-nobody-reads failure this report is built to avoid.
-      - name: POSIX gap map is current and still discriminating
-        run: make posix-gapmap-check
+      - name: Generate POSIX gap map
+        run: make posix-gapmap
 
       # Informational only, and never a failure. See the header.
       - name: How far the LTP pin has drifted from upstream
@@ -128,7 +109,7 @@ jobs:
           fi
 
       - name: Upload the report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: posix-gap-map
           path: test/POSIX-GAP-MAP.generated.md

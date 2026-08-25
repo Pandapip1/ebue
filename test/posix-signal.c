@@ -18,6 +18,7 @@
  * sigtimedwait(), a real sigsuspend() that blocks) are marked N/A with
  * the reason below rather than given a test that could never pass.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -778,7 +779,7 @@ static void test_fault_sigill_code(const char *self)
 #endif
 }
 
-#if 0 /* N/A: signal.h.html basedefs / sigaction.html default-disposition
+#if NTLIBC_TEST(NA, posix_signal_fault_sigbus) /* N/A: signal.h.html basedefs / sigaction.html default-disposition
  * table: SIGBUS's default action is to terminate the process, mapped
  * here from EXCEPTION_DATATYPE_MISALIGNMENT (src/signal/signal.c:
  * exception_handler() -- the switch case exists and IS wired to
@@ -1224,7 +1225,7 @@ static void test_siginterrupt(void)
 	 * restart-vs-EINTR decision for the flag to steer.  What is *not*
 	 * N/A is the argument check below. */
 
-#if 0	/* BUG: siginterrupt() accepts any signal number, valid or not.
+#if NTLIBC_TEST(BUG, posix_signal_siginterrupt_rejects_invalid_signal) /* BUG: siginterrupt() accepts any signal number, valid or not.
 	 * siginterrupt.html ERRORS lists as shall-fail: "[EINVAL] The sig
 	 * argument is not a valid signal number."
 	 *
@@ -1251,7 +1252,7 @@ static void test_siginterrupt(void)
  * test/POSIX-COVERAGE.md "XBD header contents (group U)".
  * ================================================================== */
 
-#if 0 /* UNIMPL: signal.h.html DESCRIPTION, immediately after the
+#if NTLIBC_TEST(UNIMPL, posix_signal_signal_si_code_constants) /* UNIMPL: signal.h.html DESCRIPTION, immediately after the
 	siginfo_t member list: "[CX] The <signal.h> header shall define the
 	symbolic constants in the Code column of the following table for
 	use as values of si_code that are signal-specific or

@@ -33,6 +33,7 @@
  * is an emulation of the primitive under test, so the windows-test
  * legs are the authority for everything below.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,7 +243,7 @@ static void test_locks_not_inherited(void)
 	CHECK(close(fd) == 0);
 	CHECK(unlink("fk-lock.txt") == 0);
 
-#if 0	/* N/A: the clause cannot be *distinguished* on this platform.
+#if NTLIBC_TEST(NA, posix_fork_fcntl_lock_inheritance_observable) /* N/A: the clause cannot be *distinguished* on this platform.
 	 * fork.html DESCRIPTION: "File locks set by the parent process
 	 * shall not be inherited by the child process."
 	 *
@@ -406,7 +407,7 @@ static void test_independent_execution(void)
  * ============================================================ */
 static void test_alarm_cleared_in_child(void)
 {
-#if 0	/* UNIMPL: nothing to cancel.  fork.html DESCRIPTION requires the
+#if NTLIBC_TEST(BUG, posix_fork_clauses_win_alarm) /* BUG (compiles and links; formerly UNIMPL):: nothing to cancel.  fork.html DESCRIPTION requires the
 	 * child's pending alarm to be cleared, and alarm.html's RETURN
 	 * VALUE is the only way to observe whether one is pending.
 	 * src/unistd/sleep.c:41 is

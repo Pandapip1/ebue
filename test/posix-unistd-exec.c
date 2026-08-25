@@ -35,6 +35,7 @@
  * non-PE image, which the real-Windows legs are the authority on.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,7 +103,7 @@ static void test_enoexec(void)
 		CHECK(close(fd) == 0);
 	}
 
-#if 0	/* UNIMPL: execvp()/execlp() do not fall back to a command
+#if NTLIBC_TEST(BUG, posix_unistd_exec_execvp_interpreter_fallback) /* BUG: execvp() does not fall back to a command
 	 * interpreter.
 	 *
 	 * exec.html DESCRIPTION: "There are two distinct ways in which the
@@ -128,15 +129,19 @@ static void test_enoexec(void)
 	 * and execlp("./ex-text.sh") both return -1 with errno 8
 	 * (ENOEXEC), where the clause requires the shell to run.
 	 *
-	 * UNIMPL, not N/A: this tree now *has* a shell -- src/sh/ and the
-	 * `sh` binary -- so <shell path> exists and the fallback is a
-	 * re-exec of it, not a platform impossibility.  "I chose not to"
-	 * is UNIMPL by this project's rule.  Re-enabling this needs the
-	 * role harness in test/exec.c rather than an in-process call,
-	 * since a working fallback does not return; what is written here
-	 * is the observation that identifies the gap. */
+	 * A successful fallback does not return: the script becomes the
+	 * process image and exits zero.  Any return therefore fails this
+	 * independent policy probe. */
 	errno = 0;
-	CHECK(execvp("./ex-text.sh", av) == -1 && errno == ENOEXEC);
+	CHECK(execvp("./ex-text.sh", av) != -1);
+#endif
+
+#if NTLIBC_TEST(BUG, posix_unistd_exec_execlp_interpreter_fallback) /* BUG: execlp() has the same required interpreter fallback and the
+	 * same missing ENOEXEC branch.  Keep it as a separate case because
+	 * fixing either p-form makes a successful call replace this process,
+	 * so the two expectations cannot be exercised sequentially. */
+	errno = 0;
+	CHECK(execlp("./ex-text.sh", "ex-text.sh", (char *)0) != -1);
 #endif
 
 	CHECK(unlink("ex-text.sh") == 0);
@@ -312,7 +317,7 @@ static void test_not_a_regular_file(void)
 	CHECK(execve("./ex-dir", av, environ) == -1);
 	reached++;
 
-#if 0	/* BUG: executing a directory reports [EBADF], which is not one
+#if NTLIBC_TEST(BUG, posix_unistd_exec_directory_reports_eacces) /* BUG: executing a directory reports [EBADF], which is not one
 	 * of the errnos exec.html lists for it.
 	 *
 	 * exec.html ERRORS: "The exec functions *shall* fail if: ...
@@ -472,7 +477,7 @@ int main(void)
 	 * Reported as rc=77 "unverified" rather than as a pass, and
 	 * rather than as an entry in tools/asan-build.sh's not_native()
 	 * table -- the SKIP-plus-77 route needs no change to the runner
-	 * and is the mechanism tools/runtests.sh, tools/asan-build.sh and
+	 * and is the mechanism tools/run-tests.py, tools/asan-build.sh and
 	 * CI's PowerShell loop all already honour (test/posix-socket.c is
 	 * the model).  The PE build under `make check`, and the
 	 * real-Windows CI legs, are where these clauses are checked. */

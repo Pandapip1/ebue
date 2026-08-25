@@ -176,7 +176,7 @@ arrangement had been careful to keep out of the tree entirely.
 | upstream | `https://github.com/linux-test-project/ltp` |
 | what this project reads | `testcases/open_posix_testsuite/conformance/interfaces/` — 1610 tests in 190 directories |
 | licence | GPLv2+, with some BSD-2 files — see below |
-| driver | `tools/posix-gapmap.sh`, report `test/POSIX-GAP-MAP.generated.md` |
+| drivers | `tools/posix-gapmap.sh` measures; `tools/posix-opts.py` adjudicates every case |
 
 ### Provenance of the remote
 
@@ -206,7 +206,7 @@ Measured:
 |---|---|
 | full clone, git objects | **77 MB** over **18 370** commits |
 | working tree at `4c0cfb8` | 47 MB |
-| what `tools/posix-gapmap.sh` and `tools/posix-optsrun.sh` read | `testcases/open_posix_testsuite/`, **14 MB** |
+| what `tools/posix-gapmap.sh` and `tools/posix-opts.py` read | `testcases/open_posix_testsuite/`, **14 MB** |
 | `git submodule update --init --recursive` from a fresh clone | **5.5 s**, +7 MB for LTP's own four nested submodules |
 
 So the arrangement fetches roughly nine times what it uses. Three ways
@@ -263,14 +263,13 @@ unrelated to what it is testing.
 
 `tools/posix-gapmap.sh` compiles the 1610 conformance tests to
 throwaway PEs in a `mktemp -d` and deletes them, and
-`tools/posix-optsrun.sh` does the same and additionally *executes* the
+`tools/posix-opts.py` does the same and additionally *executes* the
 591 that link, each in its own throwaway working directory under the
 same `mktemp -d`; nothing under
 `third_party/ltp/` is linked into `lib/`, installed, or shipped. LTP
 proper — the 1396 kernel syscall tests — is never touched at all: its
 framework reads `/proc` in 19 places and wants root, mounts and cgroups,
-which `test/external-suites.md` records as the reason LTP itself is
-unusable here even though the suite inside it is not.
+which are unavailable when testing a Windows-targeting libc.
 
 ### Licence, and why there is no `REUSE.toml` stanza
 
@@ -305,20 +304,14 @@ reintroduce by inertia:
 cd third_party/ltp
 git fetch origin && git checkout <new-sha>
 cd ../.. && git add third_party/ltp
-make posix-gapmap                      # regenerate the gap report
-make posix-optsrun                     # regenerate the run report
+make posix-gapmap                      # measure compile/link coverage
+make posix-optsrun-pedantic            # probe the measured Wine/x86_64 profile
 ```
 
 Expect `tools/posix-gapmap.sh`'s census invariant to fire if the new
 revision adds or removes tests: `CENSUS_TESTS` and `CENSUS_DIRS` are
 pinned constants and moving them is a deliberate edit, reviewed in the
 same commit as the SHA. That is the point — see that script's header.
-`tools/posix-optsrun.sh` pins `CENSUS_TESTS` too, and moving the pin
-must move both in the one commit.
-
-Regenerate the gap report **first**. `posix-optsrun` cross-checks the
-number of tests that link against the class-C count in the checked-in
-`test/POSIX-GAP-MAP.generated.md` and refuses to report if the two
-disagree — if the two tools disagree about what can be built at all,
-one of them is describing a tree that is not this one, and both reports
-are suspect.
+`tools/posix-opts.py` pins the census and resolves every case through
+`test/posix-opts-expected.txt` plus `test/test-profiles.tsv`.
+Moving the suite pin must update every affected census in the same commit.
