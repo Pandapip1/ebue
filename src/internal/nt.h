@@ -1260,6 +1260,19 @@ NTSTATUS NTAPI NtWriteVirtualMemory(HANDLE, PVOID, const void *, SIZE_T, SIZE_T 
 NTSTATUS NTAPI NtAllocateVirtualMemory(HANDLE, PVOID *, ULONG_PTR, SIZE_T *, ULONG, ULONG);
 NTSTATUS NTAPI NtFreeVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG);
 NTSTATUS NTAPI NtProtectVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG, PULONG);
+/* Real, non-stub exports, and implemented in Wine as well as on NT:
+ * dlls/ntdll/ntdll.spec:272 is a genuine `stdcall -syscall` thunk (the
+ * adjacent NtLockProductActivationKeys/NtLockRegistryKey are commented-out
+ * `# @ stub`, which is the contrast), and dlls/ntdll/unix/virtual.c:6254
+ * calls the host's mlock(2) for NtCurrentProcess() rather than returning
+ * STATUS_NOT_IMPLEMENTED.  Both measured at wine 855d92781.
+ *
+ * Neither takes a structure, so the layout-assertion block below needs
+ * nothing new for them -- worth saying, because "adds prototypes but no
+ * assertions" otherwise reads as an oversight rather than a fact about
+ * these two signatures.  Used by mlock()/munlock() (src/mman/mman.c). */
+NTSTATUS NTAPI NtLockVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG);
+NTSTATUS NTAPI NtUnlockVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG);
 NTSTATUS NTAPI NtQueryVirtualMemory(HANDLE, PVOID, MEMORY_INFORMATION_CLASS, PVOID, SIZE_T, SIZE_T *);
 NTSTATUS NTAPI NtQuerySystemTime(LARGE_INTEGER *);
 NTSTATUS NTAPI NtSetSystemTime(LARGE_INTEGER *, LARGE_INTEGER *);
