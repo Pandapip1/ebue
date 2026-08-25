@@ -407,8 +407,9 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
  *
  * Not simulated, and refused rather than faked: share-mode conflicts
  * (every open is as if FILE_SHARE_VALID_FLAGS), security descriptors,
- * reparse points and symlinks, alternate streams, extended attributes,
- * short (8.3) names, and volumes other than C:.
+ * reparse points and symlinks, alternate streams, extended attributes
+ * other than the single $LXMOD word used by stat/chmod, short (8.3)
+ * names, and volumes other than C:.
  */
 
 #define VFS_HANDLES 1024
@@ -429,6 +430,8 @@ struct vnode {
 	int delete_pending;
 	unsigned long long id;       /* the "index number" (st_ino) */
 	ULONG attrs;
+	ULONG lxmod;
+	int have_lxmod;
 	LARGE_INTEGER ctime, atime, mtime, chtime;
 	unsigned char *data;         /* file contents */
 	long long size;
@@ -1442,8 +1445,23 @@ NTSTATUS NTAPI NtCreateFile(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES 
                             ULONG share, ULONG disposition, ULONG options,
                             PVOID ea, ULONG ealen)
 {
-	(void)alloc; (void)share; (void)ea; (void)ealen;
-	return do_create(out, access, oa, io, attrs, disposition, options);
+	NTSTATUS st;
+	(void)alloc; (void)share;
+	st = do_create(out, access, oa, io, attrs, disposition, options);
+	if (NT_SUCCESS(st) && io && io->Information == FILE_CREATED && ea && ealen >= 19) {
+		__NT_FILE_FULL_EA_INFORMATION *x = ea;
+		if (x->EaNameLength == 6 && x->EaValueLength == 4 &&
+		    !memcmp(x->EaName, "$LXMOD", 6)) {
+			unsigned char *p = (unsigned char *)x->EaName + 7;
+			struct ofile *f = of_get(*out);
+			if (f && f->kind == OF_VFS) {
+				f->node->lxmod = (ULONG)p[0] | (ULONG)p[1] << 8 |
+				                 (ULONG)p[2] << 16 | (ULONG)p[3] << 24;
+				f->node->have_lxmod = 1;
+			}
+		}
+	}
+	return st;
 }
 
 NTSTATUS NTAPI NtOpenFile(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES oa,
@@ -1451,6 +1469,51 @@ NTSTATUS NTAPI NtOpenFile(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES oa
 {
 	(void)share;
 	return do_create(out, access, oa, io, 0, FILE_OPEN, options);
+}
+
+NTSTATUS NTAPI NtQueryEaFile(HANDLE h, PIO_STATUS_BLOCK io, PVOID buf,
+			     ULONG len, BOOLEAN single, PVOID list, ULONG listlen,
+			     PULONG index, BOOLEAN restart)
+{
+	struct ofile *f = of_get(h);
+	__NT_FILE_GET_EA_INFORMATION *get = list;
+	__NT_FILE_FULL_EA_INFORMATION *ea = buf;
+	unsigned char *p;
+	(void)single; (void)index; (void)restart;
+	if (!f || f->kind != OF_VFS) return STATUS_INVALID_HANDLE;
+	if (!(f->access & FILE_READ_EA)) return STATUS_ACCESS_DENIED;
+	if (!f->node->have_lxmod) return STATUS_NOT_FOUND;
+	if (!get || listlen < 12 || get->EaNameLength != 6 ||
+	    memcmp(get->EaName, "$LXMOD", 6)) return STATUS_NOT_FOUND;
+	if (len < 19) return STATUS_BUFFER_TOO_SMALL;
+	memset(ea, 0, 19);
+	ea->EaNameLength = 6;
+	ea->EaValueLength = 4;
+	memcpy(ea->EaName, "$LXMOD", 7);
+	p = (unsigned char *)ea->EaName + 7;
+	p[0] = (unsigned char)f->node->lxmod;
+	p[1] = (unsigned char)(f->node->lxmod >> 8);
+	p[2] = (unsigned char)(f->node->lxmod >> 16);
+	p[3] = (unsigned char)(f->node->lxmod >> 24);
+	if (io) { io->Status = STATUS_SUCCESS; io->Information = 19; }
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtSetEaFile(HANDLE h, PIO_STATUS_BLOCK io, PVOID buf, ULONG len)
+{
+	struct ofile *f = of_get(h);
+	__NT_FILE_FULL_EA_INFORMATION *ea = buf;
+	unsigned char *p;
+	if (!f || f->kind != OF_VFS) return STATUS_INVALID_HANDLE;
+	if (!(f->access & FILE_WRITE_EA)) return STATUS_ACCESS_DENIED;
+	if (!ea || len < 19 || ea->EaNameLength != 6 || ea->EaValueLength != 4 ||
+	    memcmp(ea->EaName, "$LXMOD", 6)) return STATUS_INVALID_PARAMETER;
+	p = (unsigned char *)ea->EaName + 7;
+	f->node->lxmod = (ULONG)p[0] | (ULONG)p[1] << 8 |
+	                 (ULONG)p[2] << 16 | (ULONG)p[3] << 24;
+	f->node->have_lxmod = 1;
+	if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; }
+	return STATUS_SUCCESS;
 }
 
 /* The server (read) end of a pipe, and the only way one is created. */

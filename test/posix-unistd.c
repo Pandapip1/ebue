@@ -33,9 +33,8 @@ static int fails;
  * bits and the corresponding bits in the complement of the process' file
  * mode creation mask" -- i.e. mode is ANDed with ~umask before it takes
  * effect.  Fixed: src/fcntl/open.c's __open_handle() now ANDs mode with
- * ~__umask_get() (src/stat/chmod.c) before deciding
- * FILE_ATTRIBUTE_READONLY -- the only mode bit NTFS gives any meaning
- * to here, so it is the only bit umask can be observed to affect. */
+ * ~__umask_get() (src/stat/chmod.c) before recording execute bits in
+ * $LXMOD and deciding FILE_ATTRIBUTE_READONLY from the write bits. */
 static void test_open_umask_bug(void)
 {
 	mode_t old;
@@ -85,8 +84,8 @@ static void test_open_umask_bug(void)
  * server denies that open outright once FILE_ATTRIBUTE_READONLY is
  * already set (real NT does not -- see test_open_umask_bug() above),
  * so chmod() on a 0444 file was permanently EACCES.  This is what
- * broke GNU tar extraction downstream: tar creates most files 0444,
- * then chmod()s/utimensat()s them. */
+	 * broke GNU tar extraction downstream: tar creates most files 0444,
+	 * then chmod()s/utimensat()s them. */
 static void test_chmod_owner_can_always_chmod_readonly(void)
 {
 	struct stat st;
@@ -636,46 +635,6 @@ static void test_chmod_cannot_clear_read_bits(void)
 	CHECK(stat("t-crb.txt", &st) == 0);
 	CHECK((st.st_mode & 0444) == 0);	/* would fail: NTFS keeps the file readable */
 	unlink("t-crb.txt");
-}
-#endif
-
-/* sys_stat.h.html: S_IXUSR/S_IXGRP/S_IXOTH (0111) "execute/search
- * permission".  src/stat/stat.c's has_exe_suffix()/mode_from_attrs()
- * derive these purely from the filename's extension (.exe/.com/.bat/
- * .cmd/.sh); chmod_handle() never touches them.  NTFS has no execute
- * permission bit at all (any file can be "run" via CreateProcess if its
- * *contents* look like a PE/script; NT does not gate that on a
- * permission bit the way exec() gates on S_IXUSR), so ntlibc's naming
- * heuristic is the only signal available and chmod cannot move it. */
-#if NTLIBC_TEST(BUG, posix_unistd_chmod_cannot_move_exec_bits) /* BUG (compiles and links; formerly UNIMPL):: chmod.html says mode's 0111 bits become the new
-       * S_IX{USR,GRP,OTH} bits; here chmod(0000) on a .exe leaves them
-       * set and chmod(0777) on a .txt cannot set them.  Was N/A on "NT
-       * has no execute-permission attribute to write".  NT has no
-       * execute ATTRIBUTE, which is what that sentence is really about,
-       * but it does have an execute RIGHT -- FILE_EXECUTE, defined in
-       * this tree's own src/internal/nt.h:376 -- carried in the
-       * security descriptor and checked when a section is created for
-       * image execution.  ntlibc writes no security descriptors, which
-       * is why the filename heuristic is all st_mode has.  See the
-       * banner above this group. */
-static void test_chmod_cannot_move_exec_bits(void)
-{
-	struct stat st;
-	int fd = open("t-cxb.exe", O_CREAT | O_WRONLY | O_TRUNC, 0644);
-	CHECK(fd >= 0 && close(fd) == 0);
-	CHECK(stat("t-cxb.exe", &st) == 0);
-	CHECK((st.st_mode & 0111) != 0);	/* name-derived, exec bits already on */
-	CHECK(chmod("t-cxb.exe", 0000) == 0);
-	CHECK(stat("t-cxb.exe", &st) == 0);
-	CHECK((st.st_mode & 0111) == 0);	/* would fail: still name-derived, still on */
-	unlink("t-cxb.exe");
-
-	fd = open("t-cxb.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
-	CHECK(fd >= 0 && close(fd) == 0);
-	CHECK(chmod("t-cxb.txt", 0777) == 0);
-	CHECK(stat("t-cxb.txt", &st) == 0);
-	CHECK((st.st_mode & 0111) != 0);	/* would fail: .txt never gets exec bits */
-	unlink("t-cxb.txt");
 }
 #endif
 

@@ -3,12 +3,17 @@
  *
  * stat, from the information NT keeps.
  *
- * Mode bits are made up the way every Unix layer on Windows makes them
- * up: a directory is 0755, a file 0644 (0444 when read-only), and a file
- * whose name ends in .exe, .com, .bat or .cmd gets the execute bits --
- * as does any file starting with "#!" or "MZ" when that is cheap to
- * check, which it is not here, so only the name is consulted.  The inode
- * is the NTFS file reference number, the device the volume serial.
+ * Execute/search bits come from WSL's $LXMOD NTFS extended attribute when
+ * it exists.  It is a four-byte mode value and gives chmod() a persistent
+ * execute bit without editing a Windows DACL.  ntlibc intentionally does
+ * not create $LXUID or $LXGID: those are literal IDs in a WSL distribution
+ * and cannot be derived from ntlibc's Windows process identity.
+ *
+ * A file with no $LXMOD keeps the compatibility rule used before mode
+ * metadata was supported: directories are 0755, ordinary files 0644,
+ * recognized executable suffixes add 0111, and FILE_ATTRIBUTE_READONLY
+ * removes 0222.  New files made by ntlibc receive $LXMOD at creation, so
+ * the fallback is principally for pre-existing Windows files.
  *
  * Pipes, consoles, character devices and the "couldn't classify it"
  * fallback get a synthetic st_dev/st_ino instead: stat.html's DESCRIPTION
@@ -128,15 +133,23 @@ static int has_exe_suffix(const WCHAR *name, size_t n)
 	return 0;
 }
 
-static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe)
+static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
+                              int have_lxmod, unsigned lxmod)
 {
 	mode_t m;
 	if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) &&
 	    (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT || tag == IO_REPARSE_TAG_LX_SYMLINK))
-		return S_IFLNK | 0777;
-	if (attrs & FILE_ATTRIBUTE_DIRECTORY) m = S_IFDIR | 0755;
-	else if (attrs & FILE_ATTRIBUTE_DEVICE) m = S_IFCHR | 0666;
-	else m = S_IFREG | (exe ? 0755 : 0644);
+		m = S_IFLNK;
+	else if (attrs & FILE_ATTRIBUTE_DIRECTORY) m = S_IFDIR;
+	else if (attrs & FILE_ATTRIBUTE_DEVICE) m = S_IFCHR;
+	else m = S_IFREG;
+	if (S_ISLNK(m)) m |= 0777;
+	else if (S_ISDIR(m)) m |= 0755;
+	else if (S_ISCHR(m)) m |= 0666;
+	else m |= exe ? 0755 : 0644;
+	/* $LXMOD owns the execute/search bits.  Read stays synthetic and
+	 * write remains the FILE_ATTRIBUTE_READONLY mapping. */
+	if (have_lxmod) m = (m & ~0111) | (lxmod & 0111);
 	if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
 	return m;
 }
@@ -150,7 +163,8 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	FILE_ATTRIBUTE_TAG_INFORMATION ti;
 	FILE_FS_VOLUME_INFORMATION vi;
 	NTSTATUS s;
-	int exe = 0;
+	unsigned lxmod = 0;
+	int have_lxmod, exe = 0;
 
 	memset(st, 0, sizeof *st);
 	if (type == __FD_PIPE) {
@@ -173,8 +187,9 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	if (NT_SUCCESS(NtQueryVolumeInformationFile(h, &io, &vi, sizeof vi, FileFsVolumeInformation)) ||
 	    io.Information >= offsetof(FILE_FS_VOLUME_INFORMATION, VolumeLabel))
 		st->st_dev = vi.VolumeSerialNumber;
+	have_lxmod = __lxmod_get(h, &lxmod);
 
-	if (!(bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+	if (!have_lxmod && !(bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
 		char nb[sizeof(FILE_NAME_INFORMATION) + 520];
 		FILE_NAME_INFORMATION *ni = (FILE_NAME_INFORMATION *)nb;
 		s = NtQueryInformationFile(h, &io, ni, sizeof nb, FileNameInformation);
@@ -186,7 +201,8 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	}
 
 	st->st_ino = (ino_t)ii.IndexNumber;
-	st->st_mode = mode_from_attrs(bi.FileAttributes, ti.ReparseTag, exe);
+	st->st_mode = mode_from_attrs(bi.FileAttributes, ti.ReparseTag,
+	                              exe, have_lxmod, lxmod);
 	st->st_nlink = si.NumberOfLinks ? si.NumberOfLinks : 1;
 	st->st_uid = getuid();
 	st->st_gid = getgid();
@@ -232,12 +248,12 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 	}
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 	               (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
 	if (s == STATUS_IO_REPARSE_TAG_NOT_HANDLED && !(flags & AT_SYMLINK_NOFOLLOW)) {
 		/* A reparse point of a kind nothing resolves (WSL links): report it as is. */
-		s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+		s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 		               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT);
 	}
 	__ntpath_free(&np);

@@ -558,11 +558,10 @@ static void test_chown_family(void)
 	 * privileges, the set-user-ID (S_ISUID) and set-group-ID (S_ISGID)
 	 * bits of the file mode shall be cleared upon successful return."
 	 *
-	 * N/A, with the mechanism: NTFS has no set-user-ID or
-	 * set-group-ID bit and src/stat/chmod.c stores no shadow for one
-	 * -- the only mode bit NTFS gives meaning to is
-	 * FILE_ATTRIBUTE_READONLY (that file's own banner, and
-	 * test/posix-unistd.c's chmod tests).  st_mode can therefore never
+	 * N/A, with the mechanism: ntlibc reserves $LXMOD for the execute
+	 * permission mapping and does not expose its set-user-ID or
+	 * set-group-ID bits; FILE_ATTRIBUTE_READONLY remains the write
+	 * mapping.  st_mode can therefore never
 	 * come back with S_ISUID set, so "shall be cleared" has nothing to
 	 * clear.  Asserted in the only direction that is observable: the
 	 * bits are absent before and after. */

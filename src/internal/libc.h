@@ -306,6 +306,12 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
 /* Resolve a program name the way execvp does: PATH search plus the .exe
  * suffix Windows wants.  Returns a malloc'd absolute path or NULL. */
 char *__find_program(const char *name, int use_path);
+int __is_program(const char *path);
+/* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the
+ * mode attribute is used: ntlibc must not manufacture Linux UID/GID values. */
+int __lxmod_get(HANDLE, unsigned *mode);       /* 1 found, 0 absent/invalid */
+int __lxmod_set(HANDLE, unsigned mode);       /* 0 or -1 with errno */
+unsigned __lxmod_create_buffer(void *, unsigned mode); /* NtCreateFile EA */
 /* The [ENOEXEC] command interpreter of XSH exec and XCU 2.9.1: runs
  * argv -- { arg0, command_file, argument..., 0 } -- as one invocation
  * of sh(1p) in this process, and returns its exit status.  Shared by

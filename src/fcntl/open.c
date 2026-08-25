@@ -10,11 +10,13 @@
  * inheritable unless O_CLOEXEC says otherwise, because fork needs them
  * copied and exec passes them on.
  *
- * Executable permission has no meaning to NTFS; the mode argument only
- * decides whether the file is created read-only (no write bit given).
+ * A newly created file receives WSL's $LXMOD NTFS extended attribute;
+ * FILE_ATTRIBUTE_READONLY also mirrors the aggregate write bits for
+ * ordinary Windows programs.
  */
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
@@ -29,6 +31,9 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	NTSTATUS st;
 	HANDLE h;
 	int type;
+	unsigned char mode_ea[32];
+	void *ea = 0;
+	ULONG ea_len = 0;
 
 	/* /dev/stdin, /dev/stdout, /dev/stderr and /dev/fd/N are the fd table. */
 	if (!strncmp(path, "/dev/", 5)) {
@@ -51,7 +56,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE | (flags & O_CLOEXEC ? 0 : OBJ_INHERIT)) < 0)
 		return -1;
 
-	access = SYNCHRONIZE | FILE_READ_ATTRIBUTES;
+	access = SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_READ_EA;
 	switch (flags & O_ACCMODE) {
 	case O_RDONLY: access |= FILE_GENERIC_READ; break;
 	case O_WRONLY: access |= FILE_GENERIC_WRITE; break;
@@ -72,7 +77,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	}
 	if (flags & O_APPEND) access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA;
 	if (flags & O_TRUNC) access |= FILE_WRITE_DATA;   /* overwrite needs it */
-	if (flags & O_PATH) access = SYNCHRONIZE | FILE_READ_ATTRIBUTES;
+	if (flags & O_PATH) access = SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_READ_EA;
 
 	switch (flags & (O_CREAT | O_EXCL | O_TRUNC)) {
 	case 0:
@@ -94,15 +99,18 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	if (flags & O_DIRECT) options |= FILE_NO_INTERMEDIATE_BUFFERING;
 
 	attrs = FILE_ATTRIBUTE_NORMAL;
-	/* open.html DESCRIPTION: mode is ANDed with the complement of the
-	 * process' umask before it takes effect.  NTFS has no room for the
-	 * rest of the mode bits (see the file comment), so umask's only
-	 * observable effect here, like mode's, is whether the write bits
-	 * survive to decide FILE_ATTRIBUTE_READONLY. */
-	if ((flags & O_CREAT) && !(mode & ~__umask_get() & 0222)) attrs = FILE_ATTRIBUTE_READONLY;
+	/* open.html DESCRIPTION: mode is ANDed with the complement of umask.
+	 * NtCreateFile only applies its EA buffer when it creates the object,
+	 * so O_CREAT on an existing file cannot overwrite that file's mode. */
+	if (flags & O_CREAT) {
+		mode = mode & ~__umask_get() & 07777;
+		if (!(mode & 0222)) attrs = FILE_ATTRIBUTE_READONLY;
+		ea_len = __lxmod_create_buffer(mode_ea, S_IFREG | mode);
+		ea = mode_ea;
+	}
 
 	st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS,
-	                  disposition, options, 0, 0);
+	                  disposition, options, ea, ea_len);
 
 	/* A directory opened without O_DIRECTORY for reading: allowed by
 	 * POSIX (reads then fail with EISDIR); NT refuses FILE_NON_DIRECTORY
@@ -110,7 +118,8 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	 * with STATUS_FILE_IS_A_DIRECTORY, so retry as a directory. */
 	if (st == STATUS_FILE_IS_A_DIRECTORY && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_CREAT)) {
 		options |= FILE_DIRECTORY_FILE;
-		access = SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE;
+		access = SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES |
+		         FILE_READ_EA | FILE_TRAVERSE;
 		st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS, FILE_OPEN, options, 0, 0);
 	}
 	/* Writing to a directory is EISDIR, not EACCES. */

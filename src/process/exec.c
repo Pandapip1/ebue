@@ -26,6 +26,12 @@
 int execve(const char *path, char *const argv[], char *const envp[])
 {
 	int pid, status;
+	struct stat st;
+	if (stat(path, &st) < 0) return -1;
+	if (!S_ISREG(st.st_mode) || !(st.st_mode & 0111)) {
+		errno = EACCES;
+		return -1;
+	}
 	pid = __spawn(path, argv, envp);
 	if (pid < 0) return -1;
 	/* Past this point exec has "succeeded": the new program is running

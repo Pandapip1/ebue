@@ -219,14 +219,9 @@ static void test_path_errors(void)
 	CHECK(execlp("", "x", (char *)0) == -1 && errno == ENOENT);
 	reached++;
 
-	/* Positive control for the two assertions above.  "Reject the
-	 * empty string" is a requirement a resolver could satisfy by
-	 * failing every lookup, and every other p-form assertion in this
-	 * function wants ENOENT too, so on its own the group cannot tell
-	 * a working PATH search from one that refuses outright.  This
-	 * pins the other side: a name that *is* in a PATH directory must
-	 * still be found, and must fail for a reason that is not
-	 * [ENOENT].
+	/* A directory on PATH is not an executable-file candidate.  The
+	 * content-aware search opens candidates with FILE_NON_DIRECTORY_FILE,
+	 * so this must be indistinguishable from no matching program.
 	 *
 	 * The name is put on PATH rather than found there, because the
 	 * search is over the Windows PATH (';'-separated, no current
@@ -235,18 +230,9 @@ static void test_path_errors(void)
 	 * is this test's own temporary directory, since main() chdir()s
 	 * into it -- so prepending one is enough.
 	 *
-	 * What is put there is a *directory*, not the non-PE text image
-	 * the [ENOEXEC] group above uses, and the difference is not
-	 * cosmetic: a text image is precisely what execvp()/execlp() now
-	 * hand to a command interpreter (the clause quoted in
-	 * test_enoexec() above), so probing with one would not come back
-	 * at all -- the script would become this process.  A directory
-	 * satisfies the search (access(X_OK) is true of one on NTFS, see
-	 * src/process/find_program.c's own note on execvp("")), so the
-	 * resolver still succeeds on it, and asking NT to run a directory
-	 * as a process image fails with neither ENOENT nor ENOEXEC, so it
-	 * returns and is observable.  The load-bearing half is unchanged:
-	 * an errno that is not [ENOENT] means the name was found. */
+	 * What is put there is a directory rather than a text file because
+	 * execvp() correctly hands a recognized shebang file to the command
+	 * interpreter and would not return to this test. */
 	{
 		const char *oldpath = getenv("PATH");
 		char *saved = oldpath ? strdup(oldpath) : 0;
@@ -268,11 +254,11 @@ static void test_path_errors(void)
 			errno = 0;
 			r = execvp("ex-onpath.d", av);
 			printf("observed: execvp(\"ex-onpath.d\") = %d, errno=%d "
-			       "(must not be %d ENOENT)\n", r, errno, ENOENT);
-			CHECK(r == -1 && errno != ENOENT);
+			       "(want %d ENOENT)\n", r, errno, ENOENT);
+			CHECK(r == -1 && errno == ENOENT);
 			reached++;
 			errno = 0;
-			CHECK(execlp("ex-onpath.d", "x", (char *)0) == -1 && errno != ENOENT);
+			CHECK(execlp("ex-onpath.d", "x", (char *)0) == -1 && errno == ENOENT);
 			reached++;
 
 			if (saved) CHECK(setenv("PATH", saved, 1) == 0);
@@ -376,12 +362,10 @@ static void test_not_a_regular_file(void)
 	/* N/A, with the mechanism: "[EACCES] Search permission is denied
 	 * for a directory listed in the new process image file's path
 	 * prefix, or the new process image file denies execution
-	 * permission."  src/unistd/access.c's X_OK is satisfied by the
-	 * file merely existing (NTFS has no execute bit that this library
-	 * maps a mode bit onto -- src/stat/chmod.c's banner: the only bit
-	 * with meaning is FILE_ATTRIBUTE_READONLY), and one fixed identity
-	 * (src/unistd/ids.c) cannot construct a directory it may not
-	 * search.  So neither branch of that clause is reachable.
+	 * permission."  $LXMOD now makes the file-permission branch
+	 * reachable and is covered by test/exec-search.c.  One fixed identity
+	 * (src/unistd/ids.c) still cannot construct a directory it may not
+	 * search, so that branch remains unavailable here.
 	 *
 	 * N/A: [ELOOP] needs a symbolic-link cycle, handed to NT's own
 	 * resolver by src/internal/path.c; [ETXTBSY] and [ENOMEM] are

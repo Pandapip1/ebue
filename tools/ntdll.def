@@ -78,6 +78,7 @@ NtOpenThread                            ; 3.51
 NtProtectVirtualMemory                  ; 3.51
 NtQueryAttributesFile                   ; 3.51
 NtQueryDirectoryFile                    ; 3.51
+NtQueryEaFile                           ; 3.51
 NtQueryFullAttributesFile               ; 4.0
 NtQueryInformationFile                  ; 3.51
 NtQueryInformationProcess               ; 3.51
@@ -96,6 +97,7 @@ NtResumeProcess                         ; 5.1
 NtResumeThread                          ; 3.51
 NtSetContextThread                      ; 3.51
 NtSetEvent                              ; 3.51
+NtSetEaFile                             ; 3.51
 NtSetInformationFile                    ; 3.51
 NtSetInformationJobObject               ; 5.0
 NtSetInformationProcess                 ; 3.51

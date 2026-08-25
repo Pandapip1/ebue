@@ -428,23 +428,11 @@ static void test_mkostemp(void)
  * src/stdlib/mktemp.c actually requests: mkostemps() calls
  * open(tmpl, flags|O_CREAT|O_EXCL|O_RDWR, 0600).
  *
- * N/A: not merely unattempted but unrepresentable by this library's
- * permission model, which is confirmed (not speculated) by reading both
- * ends of it.  src/fcntl/open.c's own header comment for the O_CREAT
- * path says it outright: "NTFS has no room for the rest of the mode
- * bits ... umask's only observable effect here, like mode's, is whether
- * the write bits survive to decide FILE_ATTRIBUTE_READONLY" -- i.e. of
- * every bit in the mode argument, exactly one boolean (writable or not)
- * is ever written down anywhere, as FILE_ATTRIBUTE_READONLY.  Reading it
- * back is symmetric: src/stat/stat.c's mode_from_attrs() hard-codes
- * `S_IFREG | (exe ? 0755 : 0644)` and only ever clears the write bits
- * (`m &= ~0222`) for FILE_ATTRIBUTE_READONLY -- the read bits for
- * user/group/other are compile-time constants, not derived from
- * anything mkstemp() requested.  So S_IRUSR|S_IWUSR-only is not a
- * missing feature with a code path waiting to be filled in: there is no
- * storage location in this design, anywhere between open()'s mode
- * argument and stat()'s st_mode, that a "readable by owner only" bit
- * could round-trip through.  Confirmed live under Wine: mkstemp()
+ * N/A: ntlibc now writes the mode word to WSL's $LXMOD metadata, but
+ * intentionally consumes only its execute/search bits.  Read bits remain
+ * synthetic, while write permission remains the aggregate Windows
+ * FILE_ATTRIBUTE_READONLY mapping.  Thus S_IRUSR|S_IWUSR-only still
+ * cannot round-trip through this permission model.  Under Wine, mkstemp()
  * followed by fstat() reports mode 0644, not 0600, for a file created
  * with the literal open(..., 0600) call above, and it would read
  * exactly the same on real Windows NT since nothing here queries an NT
@@ -455,9 +443,8 @@ static void test_mkostemp(void)
  * DACL (a discretionary access-control list naming the creating SID) --
  * NT does have that machinery, but no code in this tree touches it, and
  * adding it would be a new permission model for open()/stat()/chmod()
- * collectively, not a one-line fix to stat.c's synthesis function.
- * That is out of scope here (this change touches src/stat/stat.c only)
- * and, per the ledger, would need verification against real ACL
+ * collectively, not an extension of the $LXMOD execute-bit mapping.
+ * That remains out of scope and, per the ledger, would need verification against real ACL
  * behaviour that only a real NT box (not Wine) could confirm -- so it
  * is left as a real, well-understood gap rather than attempted
  * half-way. */
@@ -466,10 +453,10 @@ static void test_mkstemp_permission_bits(void)
 #if NTLIBC_TEST(BUG, posix_stdlib_mkstemp_owner_only_permissions) /* BUG (compiles and links; formerly UNIMPL):: mkstemp.html DESCRIPTION -- the file is created with
        * mode S_IRUSR|S_IWUSR only (0600).  Was N/A, and asserted
        * "unrepresentable, not merely unimplemented".  That is the wrong
-       * way round.  The proximate facts are right -- this library's
-       * only storable permission bit is FILE_ATTRIBUTE_READONLY, and
-       * the read bits are compile-time constants in
-       * src/stat/stat.c's mode_from_attrs() -- but they are facts about
+       * way round.  The proximate facts are right -- $LXMOD is consumed
+       * only for execute/search bits, FILE_ATTRIBUTE_READONLY carries
+       * aggregate write permission, and read bits remain synthetic --
+       * but they are facts about
        * THIS LIBRARY, not about NT.  "Owner-only readable" is
        * representable on NT: it is a DACL with one allow ACE for the
        * owner's SID, which NtSetSecurityObject writes and
@@ -498,10 +485,9 @@ static void test_mkstemp_permission_bits(void)
 	}
 #endif
 	printf("note: mkstemp() permission bits (S_IRUSR|S_IWUSR only) are "
-	       "N/A, not just unchecked -- ntlibc's only real, storable "
-	       "permission bit is FILE_ATTRIBUTE_READONLY (src/fcntl/open.c, "
-	       "src/stat/stat.c); the read bits stat() reports are "
-	       "compile-time constants with no NT DACL behind them, so "
+	       "N/A -- $LXMOD is consumed only for execute/search bits and "
+	       "FILE_ATTRIBUTE_READONLY stores aggregate write permission; "
+	       "the read bits stat() reports have no NT DACL behind them, so "
 	       "\"owner-only readable\" cannot round-trip through this "
 	       "library's permission model at all\n");
 }
@@ -620,12 +606,9 @@ static void test_system(void)
 	 * system() shall be as if the command interpreter terminated using
 	 * exit(127)."  This *is* independently triggerable, contrary to
 	 * what the ledger previously assumed: point $ComSpec at a file that
-	 * passes find_shell()'s own access(path, X_OK) check (which, per
-	 * src/stat/stat.c, requires a name ending in .exe/.com/.bat/.cmd/
-	 * .sh -- Windows has no real execute-permission bit, so ntlibc
-	 * derives X_OK from the filename suffix) but is not a valid PE
-	 * image, so the shell "cannot be executed" once ntlibc actually
-	 * tries to launch it.
+	 * passes find_shell()'s own access(path, X_OK) check (the fixture is
+	 * explicitly chmod'd executable) but is not a valid PE image, so the
+	 * shell "cannot be executed" once ntlibc actually tries to launch it.
 	 *
 	 * src/stdlib/system.c's find_shell() finds this file (it passes the
 	 * access() check), but __spawn() then fails outright (NT process
@@ -641,6 +624,7 @@ static void test_system(void)
 		if (fd >= 0) {
 			CHECK(write(fd, "not a valid PE image\n", 22) == 22);
 			CHECK(close(fd) == 0);
+			CHECK(chmod(t, 0755) == 0);
 			CHECK(setenv("ComSpec", t, 1) == 0);
 			st = system("exit 0");
 			CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 127);

@@ -445,6 +445,13 @@ typedef struct _TEB {
 #define FILE_ATTRIBUTE_OFFLINE              0x00001000
 #define FILE_ATTRIBUTE_NOT_CONTENT_INDEXED  0x00002000
 #define FILE_ATTRIBUTE_ENCRYPTED            0x00004000
+/* Cloud-backed placeholders (OneDrive and other sync engines).  A file
+ * carrying either of these has no local data: opening it, or reading a
+ * byte of it, makes the provider fetch the whole thing over the network.
+ * __is_program() (src/process/find_program.c) checks them so that a PATH
+ * search never triggers a multi-megabyte download to look at two bytes. */
+#define FILE_ATTRIBUTE_RECALL_ON_OPEN         0x00040000
+#define FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS  0x00400000
 
 #define FILE_SUPERSEDE                  0x00000000
 #define FILE_OPEN                       0x00000001
@@ -1262,6 +1269,23 @@ typedef LONG (NTAPI *PVECTORED_EXCEPTION_HANDLER)(EXCEPTION_POINTERS *);
 
 typedef void (NTAPI *PIO_APC_ROUTINE)(PVOID, PIO_STATUS_BLOCK, ULONG);
 
+/* NtQueryEaFile/NtSetEaFile wire records.  EaNameLength excludes the
+ * terminating NUL; EaValueLength does not.  The value starts immediately
+ * after EaName[EaNameLength + 1], and non-final records are ULONG-aligned. */
+typedef struct __nt_file_full_ea_information {
+	ULONG NextEntryOffset;
+	UCHAR Flags;
+	UCHAR EaNameLength;
+	USHORT EaValueLength;
+	char EaName[1];
+} __NT_FILE_FULL_EA_INFORMATION;
+
+typedef struct __nt_file_get_ea_information {
+	ULONG NextEntryOffset;
+	UCHAR EaNameLength;
+	char EaName[1];
+} __NT_FILE_GET_EA_INFORMATION;
+
 /* ---- prototypes ------------------------------------------------------ */
 NTSTATUS NTAPI NtClose(HANDLE);
 NTSTATUS NTAPI NtCreateFile(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, LARGE_INTEGER *, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
@@ -1270,6 +1294,8 @@ NTSTATUS NTAPI NtReadFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLO
 NTSTATUS NTAPI NtWriteFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, const void *, ULONG, LARGE_INTEGER *, PULONG);
 NTSTATUS NTAPI NtQueryInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
 NTSTATUS NTAPI NtSetInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+NTSTATUS NTAPI NtQueryEaFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, BOOLEAN, PVOID, ULONG, PULONG, BOOLEAN);
+NTSTATUS NTAPI NtSetEaFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG);
 NTSTATUS NTAPI NtQueryVolumeInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FS_INFORMATION_CLASS);
 NTSTATUS NTAPI NtQueryObject(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtQueryDirectoryFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS, BOOLEAN, PUNICODE_STRING, BOOLEAN);

@@ -12,12 +12,17 @@ int mkdirat(int dirfd, const char *path, mode_t mode)
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS st;
-	(void)mode;
+	unsigned char mode_ea[32];
+	unsigned ea_len;
+
+	mode = mode & ~__umask_get() & 07777;
+	ea_len = __lxmod_create_buffer(mode_ea, S_IFDIR | mode);
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | SYNCHRONIZE, &np.oa, &io, 0, FILE_ATTRIBUTE_NORMAL,
 	                  FILE_SHARE_VALID_FLAGS, FILE_CREATE,
-	                  FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT, 0, 0);
+	                  FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT,
+	                  mode_ea, ea_len);
 	__ntpath_free(&np);
 	/* mkdir.html requires [EEXIST] when the named file exists, whatever
 	 * kind of file it is -- and this call reaches that case through NT's

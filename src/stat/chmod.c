@@ -1,9 +1,12 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* chmod can only express one thing on NTFS: whether the file is read-only. */
+/* chmod persists the POSIX mode in WSL's $LXMOD NTFS extended attribute.
+ * FILE_ATTRIBUTE_READONLY is kept in sync with the aggregate write bits so
+ * ordinary Windows programs observe the closest native equivalent too. */
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -11,26 +14,58 @@ static int chmod_handle(HANDLE h, mode_t mode)
 {
 	IO_STATUS_BLOCK io;
 	FILE_BASIC_INFORMATION bi, set;
+	struct stat before;
 	NTSTATUS st;
+	unsigned lxmode;
+	int have_before = __fstat_handle(h, __FD_FILE, &before) == 0;
 	st = NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	lxmode = (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ? S_IFDIR : S_IFREG) |
+	         (mode & 07777);
 	set.CreationTime = set.LastAccessTime = set.LastWriteTime = set.ChangeTime = 0;
 	set.FileAttributes = bi.FileAttributes;
 	if (mode & 0222) set.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
 	else set.FileAttributes |= FILE_ATTRIBUTE_READONLY;
 	if (!(set.FileAttributes & ~FILE_ATTRIBUTE_ARCHIVE)) set.FileAttributes |= FILE_ATTRIBUTE_NORMAL;
-	if (set.FileAttributes == bi.FileAttributes) return 0;
-	st = NtSetInformationFile(h, &io, &set, sizeof set, FileBasicInformation);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (set.FileAttributes != bi.FileAttributes) {
+		st = NtSetInformationFile(h, &io, &set, sizeof set, FileBasicInformation);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	}
+	if (__lxmod_set(h, lxmode) < 0) {
+		/* Wine through 10.x stubs NtSetEaFile as ACCESS_DENIED.  Preserve
+		 * the historical readonly-only chmod when the requested execute
+		 * bits already match what stat could report without $LXMOD; an
+		 * actual execute-bit change still fails honestly. */
+		if (have_before && (mode & 0111) == (before.st_mode & 0111))
+			return 0;
+		/* Do not leave the Windows read-only state changed after a mode
+		 * metadata failure.  The old $LXMOD value, if any, was untouched
+		 * because NtSetEaFile replaces its single entry atomically. */
+		if (set.FileAttributes != bi.FileAttributes)
+			NtSetInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
+		return -1;
+	}
 	return 0;
 }
 
 int fchmod(int fd, mode_t mode)
 {
 	struct __fd *f = __fd_get(fd);
+	char *path;
+	int r, e;
 	if (!f) return -1;
 	if (f->type != __FD_FILE && f->type != __FD_DIR) return 0;
-	return chmod_handle(f->h, mode);
+	r = chmod_handle(f->h, mode);
+	if (r == 0 || errno != EACCES) return r;
+	/* O_RDONLY handles do not carry FILE_WRITE_EA.  Reopen the same object
+	 * by name with that right, as path-taking chmod does.  An unlinked file
+	 * has no reopenable name and correctly retains the original failure. */
+	e = errno;
+	path = __handle_path(f->h);
+	if (!path) { errno = e; return -1; }
+	r = fchmodat(AT_FDCWD, path, mode, 0);
+	free(path);
+	return r;
 }
 
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
@@ -53,7 +88,9 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 	if (flags & ~AT_SYMLINK_NOFOLLOW) { errno = EINVAL; return -1; }
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
-	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
+	               FILE_READ_EA | FILE_WRITE_EA | SYNCHRONIZE,
+	               &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	if (st == STATUS_ACCESS_DENIED) {
 		/* chmod.html DESCRIPTION: the owner of a file "may always
 		 * change the permission of the file" -- a file's own mode
@@ -67,7 +104,8 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 		 * does not itself require FILE_WRITE_ATTRIBUTES on the
 		 * handle, the same workaround test/unistd.c already applies
 		 * by hand via fchmod() on an O_RDONLY descriptor. */
-		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
+		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
+		                &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	}
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
