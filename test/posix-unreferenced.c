@@ -715,38 +715,6 @@ static void test_renameat_enotdir_dir_over_file(void)
 /* renameat.html DESCRIPTION: "If new is a relative path, the file is
  * located relative to the directory associated with the file descriptor
  * newfd instead of the current working directory." */
-#if 0 /* BUG: renameat() ignores newfd ENTIRELY.  Half of what
-       * distinguishes renameat() from rename() does not work at all --
-       * not an edge case, the principal feature.
-       *
-       * src/stdio/misc.c builds the FILE_RENAME_INFORMATION for the
-       * destination with `ri->RootDirectory = 0` unconditionally, while
-       * __ntpath_at(newdirfd, ...) returns a name that is *relative* to
-       * that descriptor's handle (it puts the handle in
-       * out->oa.RootDirectory and leaves the name unqualified).  NT then
-       * resolves the bare relative name against nothing, so every
-       * renameat() whose new path is relative to a real descriptor fails
-       * with STATUS_OBJECT_NAME_NOT_FOUND -> ENOENT, whatever the
-       * destination directory contains.  Only the old side of
-       * renameat() honours its descriptor today.
-       *
-       * A consequence worth knowing when reading the unfenced
-       * [EBADF]/[ENOTDIR] assertions for newfd in
-       * test_renameat_errors(): those pass for the right reason
-       * (__ntpath_at rejects a bad descriptor before the rename is
-       * attempted) but they cannot distinguish this defect, because a
-       * GOOD descriptor is then thrown away.
-       *
-       * THE FIX IS ONE LINE, in src/stdio/misc.c's renameat(), right
-       * where ri->RootDirectory is assigned:
-       *
-       *     ri->RootDirectory = np.oa.RootDirectory;
-       *
-       * (np.oa.RootDirectory is 0 for an absolute or AT_FDCWD path, so
-       * this is strictly a superset of today's behaviour.)  Left as a
-       * fence rather than applied because a fix needs its own review;
-       * the remedy is recorded here so it does not have to be
-       * rediscovered. */
 static void test_renameat_new_relative_to_dirfd(void)
 {
 	int dfd;
@@ -766,7 +734,6 @@ static void test_renameat_new_relative_to_dirfd(void)
 	CHECK(unlink("ren.d/nd/c") == 0);
 	CHECK(rmdir("ren.d/nd") == 0);
 }
-#endif
 
 /* "[ENOENT] ... or either old or new points to an empty string." --
  * the AT_FDCWD form of this holds and is asserted unfenced above; the
@@ -1594,6 +1561,7 @@ int main(void)
 	test_renameat_success();
 	test_renameat_errors();
 	test_renameat_enotdir_dir_over_file();
+	test_renameat_new_relative_to_dirfd();
 	test_fchmodat_success();
 	test_fchmodat_errors();
 	test_fchmodat_empty();

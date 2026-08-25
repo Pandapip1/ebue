@@ -102,7 +102,19 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	ri = __malloc(bufsz);
 	if (!ri) { NtClose(h); __ntpath_free(&np); errno = ENOMEM; return -1; }
 	ri->Flags = FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
-	ri->RootDirectory = 0;
+	/* renameat.html DESCRIPTION: "If new is a relative path, the file is
+	 * located relative to the directory associated with the file
+	 * descriptor newfd instead of the current working directory."
+	 * __ntpath_at() expresses exactly that by putting newfd's handle in
+	 * np.oa.RootDirectory and leaving np.nt unqualified, so the handle
+	 * has to be carried into the rename request too -- FILE_RENAME_
+	 * INFORMATION's RootDirectory is the same "resolve FileName against
+	 * this directory" mechanism as OBJECT_ATTRIBUTES'.  Hardcoding 0
+	 * here threw newfd away and asked NT to resolve a bare relative name
+	 * against nothing.  np.oa.RootDirectory is 0 for an absolute path or
+	 * AT_FDCWD, where np.nt is already a full NT path, so this is a
+	 * superset of the old behaviour rather than a change to it. */
+	ri->RootDirectory = np.oa.RootDirectory;
 	ri->FileNameLength = np.nt.Length;
 	memcpy(ri->FileName, np.nt.Buffer, np.nt.Length);
 
