@@ -522,7 +522,7 @@ not every clause line, to keep this section a manageable size):
 | rename ENOTEMPTY/EEXIST (new is a non-empty dir) | **fixed**, commit 3c606a7 (same fix, gives ENOTEMPTY instead of EACCES) | test/posix-unistd.c `test_rename_onto_nonempty_dir` |
 | link / symlink | covered | test/unistd.c |
 | linkat (AT_FDCWD == link, dirfd-relative on both sides, st_nlink incremented, same st_ino, EEXIST, ENOENT, EBADF) | covered | test/posix-unistd.c `test_linkat` |
-| linkat | AT_SYMLINK_FOLLOW | N/A — `src/unistd/link.c` always opens with FILE_OPEN_REPARSE_POINT and ignores `flag`, so it always implements the flag-clear branch; telling the two apart needs a symlink, which the suite's own environment cannot create — a Wine VERSION gap, not a privilege one (measured, `ff1327e`): stock apt Wine 9.0 answers `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED`, that FSCTL having first shipped in wine-10.19, so nothing ever reaches a privilege check. On real NT the privilege (or Developer Mode) *is* the requirement, which is why the real-Windows legs are the ones that can close this | -- |
+| linkat | AT_SYMLINK_FOLLOW | covered *(needs the privilege)* — was a **BUG**: `src/unistd/link.c` used to discard `flag` and always open with FILE_OPEN_REPARSE_POINT, so it always implemented the flag-clear branch. **Fixed in the commit that unfenced it**: the option is now asked for only when the flag is clear, so with it set NT resolves the link during the open and the hard link is made to the target. This row's earlier N/A verdict is superseded — telling the two branches apart needs a symlink, and whether one can be created is an environment fact, not a reason to call the clause inapplicable. Where none can be created the assertions SKIP (rc=77): a Wine VERSION gap, not a privilege one (measured, `ff1327e`): stock apt Wine 9.0 answers `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED`, that FSCTL having first shipped in wine-10.19, so nothing ever reaches a privilege check. On real NT the privilege (or Developer Mode) *is* the requirement, which is why the real-Windows legs are the ones that can close this | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | execl / execle / execlp / fexecve | argv and envp delivered to the exec'd image; the exec'd image's exit status becomes the caller's; ENOENT for a missing file (direct and PATH-searching forms); EBADF for fexecve on a closed descriptor; a failed exec returns and leaves the process image running | covered | test/exec.c (`--exec-l`, `--exec-le`, `--exec-lp`, `--exec-f` roles) |
 | confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1`, [EINVAL] for an invalid name | covered — the [EINVAL] half was a **BUG, FIXED**: `src/unistd/sysconf.c`'s `confstr()` now switches on `name` and rejects the `default`, where it used to start from an empty value and only replace it for `_CS_PATH`, so an unrecognized name returned 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
 | swab | adjacent-byte exchange, nothing written past nbytes, nbytes 0 and negative do nothing, odd nbytes exchanges nbytes-1, double swab is identity | covered (pure byte shuffling — the one call in this group for which a Wine pass is strong evidence) | test/posix-unistd.c `test_swab` |
@@ -3707,9 +3707,9 @@ underneath.
 | linkat | "[EEXIST] The path2 argument resolves to an existing directory entry" — when path2 is path1, and when it is a directory | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | covered — was a BUG (a directory path1 reported `EISDIR`, which `link.html`'s ERRORS list does not contain); **fixed in the commit that unfenced it**: `src/unistd/link.c`'s `linkat()` reads path1's attributes off the handle it already holds and returns `EPERM` before path2 is resolved, with `STATUS_FILE_IS_A_DIRECTORY` from `NtSetInformationFile` mapped to `EPERM` at that call site as the fallback | test/posix-unistd-links.c (`test_linkat_remaining`) — the errno, the absence of debris, and a regular-file positive control (both `linkat()` and `link()` still make a real hard link) |
 | linkat | "If path1 names a symbolic link ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for the symbolic link path1 and not its target" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_linkat_remaining`) |
-| linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | **BUG** — see below; supersedes this ledger's earlier N/A for the clause | fenced, `test_linkat_remaining` |
+| linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | covered *(needs the privilege)* — was a **BUG** (`flags` was discarded outright); **fixed in the commit that unfenced it**, see below. Supersedes this ledger's earlier N/A for the clause | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "shall atomically create a new link for the existing file and the link count of the file shall be incremented by one"; [EEXIST]; [ENOENT] for path1 and the empty string; [EBADF] on either side; dirfd-relative creation | covered — pre-existing | test/posix-unistd.c (`test_linkat`) |
-| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, and linkat() likewise ignores its flag argument outright; unasserted (unlike unlinkat()'s [EINVAL], which is a shall-fail and is now enforced) | — |
+| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, and deliberately not taken: `linkat()` reads `AT_SYMLINK_FOLLOW` out of `flags` and lets any other bit mean the flag-clear branch, so there is nothing to assert (unlike unlinkat()'s [EINVAL], which is a shall-fail and is now enforced) | — |
 | linkat | [EMLINK], [EXDEV], [ENOSPC], [EROFS], [EACCES], [ELOOP] | N/A — {LINK_MAX} is 1023 here so [EMLINK] means creating a thousand entries per run for a limit the platform rather than this code enforces; [EXDEV] needs two filesystems a CI image is not guaranteed to have; the rest as for symlinkat | — |
 
 ### Bugs found (unistd.h `*at()` link group)
@@ -3740,13 +3740,33 @@ underneath.
    path1 is untouched, and `test_linkat_remaining()` now pins that
    with a positive control beside the `EPERM` assertion.
 
-2. **`linkat()` ignores `flags`, so `AT_SYMLINK_FOLLOW` does nothing.**
-   `link.html` distinguishes two behaviours by that flag; `src/unistd/
-   link.c:27` is `(void)flags;` and line 31 opens with
+2. **`linkat()` ignored `flags`, so `AT_SYMLINK_FOLLOW` did nothing —
+   fixed.** `link.html` distinguishes two behaviours by that flag;
+   `src/unistd/link.c` had `(void)flags;` and opened path1 with
    `FILE_OPEN_REPARSE_POINT` unconditionally, which is precisely the
-   flag-*clear* branch. Measured: the entry created with
+   flag-*clear* branch. Measured before the fix: the entry created with
    `AT_SYMLINK_FOLLOW` is itself a symbolic link, where the clause
    requires a hard link to the target.
+
+   **Fixed in the commit that unfenced it.** The two branches differ by
+   exactly one create option, so `linkat()` now builds its open options
+   from the flag — `FILE_OPEN_REPARSE_POINT` only when
+   `AT_SYMLINK_FOLLOW` is clear — and everything downstream (the
+   `FileAttributeTagInformation` query, the [EPERM] decision, the
+   `FileLinkInformation` set) runs against whichever file that open
+   resolved to. The two fixes compose rather than collide: with the flag
+   set the handle is the target, so the directory check sees the
+   target's attributes and its reparse-point exemption cannot fire —
+   a symbolic link to a directory is then "path1 names a directory" and
+   [EPERM] is correct, where with the flag clear it is a non-directory
+   file and the link is made to the link itself.
+
+   Two assertions that need no symbolic link pin the half of this that
+   *must not* change, and run in every environment: with
+   `AT_SYMLINK_FOLLOW` set, a regular-file path1 still hard-links
+   (compared against the flag-clear outcome recorded a few lines
+   earlier, so a filesystem without hard links is not asked for one) and
+   a directory path1 still fails [EPERM] leaving no entry.
 
    **This supersedes an earlier N/A.**
    `test/POSIX-GAP-ACCOUNTING.md`'s successor-session notes record this
@@ -3757,8 +3777,8 @@ underneath.
    privilege half of it holds only for the real-Windows leg; on the
    Wine leg the blocker is an unimplemented `FSCTL_SET_REPARSE_POINT`
    — and it is why
-   the fence sits behind the symlink probe, but it is not a reason
-   to call the clause inapplicable. The defect is visible in the source
+   the assertions sit behind the symlink probe, but it was not a reason
+   to call the clause inapplicable. The defect was visible in the source
    without running anything, and it is reachable in any environment
    that can create a symbolic link at all. N/A is for "a real NT
    mechanism makes the clause inapplicable", not for "this CI image

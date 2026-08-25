@@ -37,11 +37,29 @@ int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
 	FILE_LINK_INFORMATION *li;
 	FILE_ATTRIBUTE_TAG_INFORMATION ti;
 	size_t sz;
-	(void)flags;
+	ULONG opts;
+
+	/* link.html DESCRIPTION: "If path1 names a symbolic link, ... [if]
+	 * the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for
+	 * the symbolic link path1 and not its target"; with the flag set,
+	 * "a new link is created for the file referred to by path1".  The
+	 * whole of that distinction is in this one create option: NT
+	 * resolves a reparse point on open unless FILE_OPEN_REPARSE_POINT
+	 * asks it not to, so the handle FileLinkInformation is set on -- and
+	 * therefore the file the new directory entry names -- is the link
+	 * itself with the option, and the target without it.  Nothing below
+	 * needs a second path: the attribute query, the [EPERM] decision and
+	 * the link all run against whichever file this open picked.
+	 *
+	 * The flag is read rather than the whole argument validated:
+	 * link.html's "[EINVAL] The value of the flag argument is not valid"
+	 * is a may-fail, unlike unlinkat()'s, so an unrecognised bit is left
+	 * to mean the flag-clear branch. */
+	opts = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT;
+	if (!(flags & AT_SYMLINK_FOLLOW)) opts |= FILE_OPEN_REPARSE_POINT;
 
 	if (__ntpath_at(olddirfd, oldpath, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
-	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
+	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, opts);
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
@@ -63,8 +81,12 @@ int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
 	 * renameat() and lstat() agree on what counts as a directory: NT
 	 * puts FILE_ATTRIBUTE_DIRECTORY on a symbolic link to a directory,
 	 * but POSIX classifies a symbolic link as a non-directory file
-	 * whatever it points at, and with the flag clear it is the link
-	 * itself that is being linked. */
+	 * whatever it points at, and with AT_SYMLINK_FOLLOW clear it is the
+	 * link itself that is being linked.  With the flag set the open
+	 * above already followed the link, so these are the target's
+	 * attributes and the reparse-point exemption cannot fire: a
+	 * symbolic link to a directory is then "path1 names a directory"
+	 * and [EPERM] is right. */
 	if (NT_SUCCESS(NtQueryInformationFile(h, &io, &ti, sizeof ti, FileAttributeTagInformation)) &&
 	    (ti.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
 	    !((ti.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
