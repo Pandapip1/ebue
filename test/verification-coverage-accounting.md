@@ -730,18 +730,44 @@ console-dependent test in that file detect-and-skips. Interactively
 they do run. The clause is therefore writable on the same terms as its
 neighbours, and the fence now says how.
 
-#### C2 -- "no DACL / security-descriptor storage anywhere in the tree" (4 fences)
+#### C2 -- "no DACL / security-descriptor storage anywhere in the tree" (4 fences) -- RESOLVED
 
-`FILE_ATTRIBUTE_READONLY` is the only storable permission bit, and the
-read/execute bits are compile-time constants in `mode_from_attrs()`.
-**Expires on any real NT ACL support.**
+**All four retagged `N/A` -> `UNIMPL`.** This section's own note on
+`posix-unistd.c:599` was the thread that unravelled the group, and it
+generalises to all four: each fence argued from the NTFS *attribute
+word* and stated the conclusion as a property of the platform. NT's
+permission model is the *security descriptor*, and it is strictly more
+expressive than POSIX's nine mode bits, not less:
+
+- an execute right exists -- `FILE_EXECUTE` (0x0020) is defined in this
+  tree's OWN `src/internal/nt.h:376`, and NT checks it when a section is
+  created for image execution;
+- per-identity granularity exists -- a DACL holds one ACE per SID, so
+  "group may write, other may not" has somewhere to live;
+- a deny exists -- `RtlAddAccessDeniedAce` builds exactly the DENY ACE
+  the read-bits fence said would be needed;
+- and the calls exist -- `NtQuerySecurityObject` / `NtSetSecurityObject`
+  (`dlls/ntdll/ntdll.spec` 344, 419), `RtlSetDaclSecurityDescriptor`
+  (1024), `RtlAddAccessDeniedAce` (496), all real ntdll entry points
+  implemented even by Wine.
+
+None is declared in `src/internal/nt.h`. That is the actual blocker and
+it is a choice. Two of the four fences already half-admitted it in their
+own closing words -- "which ntlibc's `chmod()` does not attempt", and
+"real NT DACL storage, which no code in this tree has". A fence that
+names the alternative and says we did not do it is describing `UNIMPL`.
+
+The decision itself is untouched -- it may well be right, and a
+POSIX-mode -> DACL mapping has real design questions about which SIDs
+stand in for "group" and "other". Anyone implementing it must measure on
+real Windows: Wine's DACL emulation over a Unix filesystem is not NT's.
 
 | Site | Clause |
 |------|--------|
 | `posix-stdlib.c:415` | `mkstemp()` creating with mode `0600` |
 | `posix-unistd.c:572` | `chmod(path, 0)` leaving the read bits set (needs DENY ACEs) |
-| `posix-unistd.c:599` | `chmod`'s `0111` bits -- note NT *does* have a `FILE_EXECUTE` access right; the fence's "NT has no execute-permission attribute" is true of the *attribute* word, not of the security descriptor |
-| `posix-unistd.c:635` | `S_IWGRP`/`S_IWOTH` distinct from `S_IWUSR` -- `chmod_handle()` tests `mode & 0222` as one aggregate |
+| `posix-unistd.c:599` | `chmod`'s `0111` bits |
+| `posix-unistd.c:635` | `S_IWGRP`/`S_IWOTH` distinct from `S_IWUSR` |
 
 #### C3 -- "no process groups, no job control, `kill(SIGSTOP)` terminates" (3 fences)
 

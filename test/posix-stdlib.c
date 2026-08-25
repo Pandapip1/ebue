@@ -412,15 +412,29 @@ static void test_mkostemp(void)
  * half-way. */
 static void test_mkstemp_permission_bits(void)
 {
-#if 0 /* N/A: mkstemp.html DESCRIPTION -- file created with mode
-       * S_IRUSR|S_IWUSR only (0600).  Unrepresentable, not merely
-       * unimplemented: this library's only real, storable permission
-       * bit is FILE_ATTRIBUTE_READONLY (the write bits); the read bits
-       * for owner/group/other are compile-time constants in
-       * mode_from_attrs() with no connection to what open()/mkstemp()
-       * requested, so "owner-only readable" can never be observed
-       * without adding real NT DACL storage, which no code in this tree
-       * has. */
+#if 0 /* UNIMPL: mkstemp.html DESCRIPTION -- the file is created with
+       * mode S_IRUSR|S_IWUSR only (0600).  Was N/A, and asserted
+       * "unrepresentable, not merely unimplemented".  That is the wrong
+       * way round.  The proximate facts are right -- this library's
+       * only storable permission bit is FILE_ATTRIBUTE_READONLY, and
+       * the read bits are compile-time constants in
+       * src/stat/stat.c's mode_from_attrs() -- but they are facts about
+       * THIS LIBRARY, not about NT.  "Owner-only readable" is
+       * representable on NT: it is a DACL with one allow ACE for the
+       * owner's SID, which NtSetSecurityObject writes and
+       * NtQuerySecurityObject reads (both real ntdll syscalls,
+       * exported and implemented even by Wine, dlls/ntdll/ntdll.spec
+       * lines 419 and 344).  The fence's own closing clause says the
+       * blocker out loud -- "real NT DACL storage, which no code in
+       * this tree has" -- which is the definition of unimplemented, not
+       * of unrepresentable.
+       *
+       * Same group as the three chmod fences in test/posix-unistd.c;
+       * see the banner above them for the full accounting of what NT's
+       * security descriptor does provide.  Retagged, not reopened: the
+       * decision to do no ACL work may well be right, and it would need
+       * measuring on real Windows rather than Wine, whose DACL
+       * emulation over a Unix filesystem is not NT's. */
 	char t[] = "mkperm-XXXXXX";
 	int fd = mkstemp(t);
 	struct stat st;

@@ -560,6 +560,54 @@ static void test_stat_dir_size_is_zero(void)
 	CHECK(rmdir("t-dsz") == 0);
 }
 
+/* ---------------------------------------------------------------------
+ * chmod()'s permission bits: three clauses, all UNIMPL, none N/A.
+ *
+ * The three fences below were N/A, each naming its own variation on
+ * "NTFS has no attribute to store this in".  That is true of the
+ * ATTRIBUTE WORD and false about the platform, and the difference is
+ * the whole point: NT's permission model is not the attribute word, it
+ * is the security descriptor, and NT's is strictly MORE expressive than
+ * POSIX's nine mode bits, not less.
+ *
+ *   - There is an execute right.  FILE_EXECUTE (0x0020) and
+ *     FILE_GENERIC_EXECUTE are defined in this tree's OWN header,
+ *     src/internal/nt.h:376 and :395.  NT checks it when a section is
+ *     created for image execution, which is the same gate POSIX's
+ *     S_IXUSR is.
+ *   - There is per-identity granularity.  A DACL holds one ACE per SID,
+ *     so "group may write but other may not" has somewhere to live;
+ *     "one aggregate FILE_ATTRIBUTE_READONLY bit" is a property of the
+ *     mapping ntlibc chose, not of NTFS.
+ *   - There is a deny.  RtlAddAccessDeniedAce builds exactly the DENY
+ *     ACE the read-bits fence says would be needed.
+ *   - And the calls exist: NtQuerySecurityObject and NtSetSecurityObject
+ *     are real ntdll syscalls, exported and implemented even by Wine
+ *     (dlls/ntdll/ntdll.spec lines 344 and 419), as are
+ *     RtlSetDaclSecurityDescriptor and RtlAddAccessDeniedAce (lines
+ *     1024 and 496).
+ *
+ * None of them is declared in src/internal/nt.h.  That is the real
+ * blocker, and it is a choice: ntlibc does no ACL work anywhere, so
+ * chmod() has nothing but FILE_ATTRIBUTE_READONLY to write and stat()
+ * has nothing but the attribute word to read back.  Two of the three
+ * fences below already half-admitted this -- one said DENY ACEs are
+ * "which ntlibc's chmod() does not attempt", the other said observing
+ * it needs "real NT DACL storage, which no code in this tree has".  A
+ * fence that names the alternative and says we did not do it is
+ * describing UNIMPL, whatever tag it wears.
+ *
+ * Retagged, not reopened: the decision to stay out of ACL editing may
+ * well be right (it is a large amount of surface, and a POSIX-mode ->
+ * DACL mapping has real design questions about which SIDs stand in for
+ * "group" and "other").  What changes is only that these say so.
+ *
+ * test/POSIX-COVERAGE.md's "re-audit against real Windows rather than
+ * Wine" note applies with force here: Wine's DACL emulation over a Unix
+ * filesystem is not NT's, so anyone implementing this must measure on
+ * real Windows and not on Wine.
+ * ------------------------------------------------------------------ */
+
 /* sys_stat.h.html: S_IRUSR/S_IRGRP/S_IROTH (0444) "read permission" for
  * owner/group/other. src/stat/chmod.c's chmod_handle() comment: "chmod
  * can only express one thing on NTFS: whether the file is read-only" --
@@ -569,13 +617,15 @@ static void test_stat_dir_size_is_zero(void)
  * read-only", so the read bits src/stat/stat.c's mode_from_attrs()
  * synthesizes (0444, always set) cannot be cleared by chmod() at all --
  * confirmed live below rather than asserted from the source comment. */
-#if 0 /* N/A: chmod.html DESCRIPTION "set the file permission bits ...
-       * to the value contained in mode" -- but chmod(path, 0) here
-       * leaves S_IRUSR|S_IRGRP|S_IROTH set anyway.  NTFS has exactly
-       * one relevant attribute (FILE_ATTRIBUTE_READONLY, mapped from
-       * mode&0222); there is no "deny read" attribute a chmod-only
-       * implementation can flip without also doing full ACL editing
-       * (DENY ACEs), which ntlibc's chmod() does not attempt. */
+#if 0 /* UNIMPL: chmod.html DESCRIPTION "set the file permission bits
+       * ... to the value contained in mode" -- but chmod(path, 0) here
+       * leaves S_IRUSR|S_IRGRP|S_IROTH set anyway.  Was N/A on "there
+       * is no 'deny read' attribute a chmod-only implementation can
+       * flip".  True of the attribute word; but the DENY ACE the same
+       * sentence goes on to name is exactly what NT provides for this
+       * (RtlAddAccessDeniedAce), and the sentence's own conclusion --
+       * "which ntlibc's chmod() does not attempt" -- is a choice, not a
+       * platform limit.  See the banner above this group. */
 static void test_chmod_cannot_clear_read_bits(void)
 {
 	struct stat st;
@@ -596,11 +646,17 @@ static void test_chmod_cannot_clear_read_bits(void)
  * *contents* look like a PE/script; NT does not gate that on a
  * permission bit the way exec() gates on S_IXUSR), so ntlibc's naming
  * heuristic is the only signal available and chmod cannot move it. */
-#if 0 /* N/A: chmod.html says mode's 0111 bits become the new S_IX{USR,GRP,OTH}
-       * bits; here chmod(0000) on a .exe leaves them set, and
-       * chmod(0777) on a .txt cannot set them -- neither is
-       * observable because NT has no execute-permission attribute to
-       * write, only the filename ntlibc already used to fake st_mode. */
+#if 0 /* UNIMPL: chmod.html says mode's 0111 bits become the new
+       * S_IX{USR,GRP,OTH} bits; here chmod(0000) on a .exe leaves them
+       * set and chmod(0777) on a .txt cannot set them.  Was N/A on "NT
+       * has no execute-permission attribute to write".  NT has no
+       * execute ATTRIBUTE, which is what that sentence is really about,
+       * but it does have an execute RIGHT -- FILE_EXECUTE, defined in
+       * this tree's own src/internal/nt.h:376 -- carried in the
+       * security descriptor and checked when a section is created for
+       * image execution.  ntlibc writes no security descriptors, which
+       * is why the filename heuristic is all st_mode has.  See the
+       * banner above this group. */
 static void test_chmod_cannot_move_exec_bits(void)
 {
 	struct stat st;
@@ -632,15 +688,18 @@ static void test_chmod_cannot_move_exec_bits(void)
  * documented in test_open_umask_bug where the server's
  * FileWriteAttributes-as-Unix-O_WRONLY mapping refuses a chmod back
  * from read-only by path -- see that comment for the citation.) */
-#if 0 /* N/A: chmod.html says the individual mode bits requested become
-       * the new mode; here S_IWGRP/S_IWOTH alone have the identical,
-       * all-or-nothing effect as S_IWUSR|S_IWGRP|S_IWOTH together, and
-       * st_mode afterwards never reflects which of the three bits was
-       * actually asked for.  Mechanism: chmod_handle() in
-       * src/stat/chmod.c tests "mode & 0222" as one aggregate boolean
-       * against the single FILE_ATTRIBUTE_READONLY bit NTFS exposes;
-       * there is no NTFS concept of group- or other-write distinct
-       * from owner-write to store the difference in. */
+#if 0 /* UNIMPL: chmod.html says the individual mode bits requested
+       * become the new mode; here S_IWGRP/S_IWOTH alone have the
+       * identical, all-or-nothing effect as S_IWUSR|S_IWGRP|S_IWOTH
+       * together.  The proximate mechanism is right -- chmod_handle()
+       * in src/stat/chmod.c tests "mode & 0222" as one aggregate
+       * boolean against a single FILE_ATTRIBUTE_READONLY bit -- but the
+       * conclusion drawn from it was not: "there is no NTFS concept of
+       * group- or other-write distinct from owner-write to store the
+       * difference in" is false.  A DACL holds one ACE per SID, which
+       * is per-identity granularity POSIX's three classes do not even
+       * need all of.  The aggregate is a property of the mapping ntlibc
+       * chose, not of NTFS.  See the banner above this group. */
 static void test_chmod_group_other_write_aliases_owner(void)
 {
 	struct stat st;
