@@ -354,27 +354,36 @@ static void test_process_group_and_session(void)
 	CHECK(setsid() == getpgrp());
 	CHECK(getsid(0) == getpgrp());
 
-#if 0	/* BUG: getpgid() and getsid() answer for a process that does not
-	 * exist.  getpgid.html ERRORS: "The getpgid() function *shall*
-	 * fail if: ... [ESRCH] There is no process with a process ID equal
-	 * to pid."  getsid.html carries the identical shall-fail clause.
-	 *
-	 * Mechanism: src/unistd/ids.c:21,25 are
-	 *     pid_t getpgid(pid_t p) { (void)p; return 1; }
-	 *     pid_t getsid(pid_t p)  { (void)p; return 1; }
-	 * -- pid is discarded, so there is no pid for which either can
-	 * fail.  Unlike the "one session" argument, this needs no session
-	 * model at all to get right: src/process/children.c already tracks
-	 * every process this one created and src/process/wait.c already
-	 * distinguishes a live child from an unknown pid, which is exactly
-	 * the lookup [ESRCH] describes.  Probed on this tree: both return
-	 * 1 for pid 999999, errno untouched.
-	 * Re-enable when both validate pid. */
+	/* getpgid.html ERRORS: "The getpgid() function *shall* fail if:
+	 * ... [ESRCH] There is no process with a process ID equal to
+	 * pid."  getsid.html carries the identical shall-fail clause.
+	 * The clause is about the existence of a *process*, so a
+	 * one-session platform is bound by it like any other; both
+	 * getters resolve pid through src/unistd/ids.c's pid_exists()
+	 * (the child table of src/process/children.c, then an
+	 * NtOpenProcess by CLIENT_ID) rather than discarding it. */
 	errno = 0;
 	CHECK(getpgid(999999) == (pid_t)-1 && errno == ESRCH);
 	errno = 0;
 	CHECK(getsid(999999) == (pid_t)-1 && errno == ESRCH);
-#endif
+
+	/* A negative pid names no process either; kill() reports ESRCH
+	 * for one (src/signal/signal.c) and these agree. */
+	errno = 0;
+	CHECK(getpgid(-2) == (pid_t)-1 && errno == ESRCH);
+	errno = 0;
+	CHECK(getsid(-2) == (pid_t)-1 && errno == ESRCH);
+
+	/* ...and the pids that *do* name a process still answer, with
+	 * errno untouched: a check that fails everything would satisfy
+	 * the four assertions above and violate getpgid.html's "If pid is
+	 * equal to 0 ..." and RETURN VALUE, which the next four pin from
+	 * the other side. */
+	errno = 0;
+	CHECK(getpgid(0) == getpgrp() && errno == 0);
+	CHECK(getpgid(self) == getpgrp() && errno == 0);
+	CHECK(getsid(0) != (pid_t)-1 && errno == 0);
+	CHECK(getsid(self) == getsid(0) && errno == 0);
 
 #if 0	/* BUG: setpgid() accepts a negative pgid and an unrelated pid.
 	 * setpgid.html ERRORS, both shall-fail:

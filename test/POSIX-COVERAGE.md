@@ -3297,7 +3297,7 @@ for the filesystem or console groups.
 | getpgrp | getpgrp.html RETURN VALUE "shall always be successful and no return value is reserved to indicate an error"; ERRORS "No errors are defined" | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | getpgid | "If pid is equal to 0, getpgid() shall return the process group ID of the calling process" — agrees with getpgrp() and with getpgid(getpid()) | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | getsid | "If pid is (pid_t)0, it specifies the calling process"; `(pid_t)-1` reserved for the error return | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
-| getpgid / getsid | "[ESRCH] There is no process with a process ID equal to pid" (shall-fail, both pages) | **BUG** — see below | fenced, `test_process_group_and_session` |
+| getpgid / getsid | "[ESRCH] There is no process with a process ID equal to pid" (shall-fail, both pages) | covered — was a fenced BUG (`pid` was discarded by both, so no pid could fail); FIXED, see below. Asserted for an unallocated pid and for a negative one, with the pids that *do* name a process (0, `getpid()`) pinned as still answering | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | getpgid / getsid | "[EPERM] ... not in the same session as the calling process" | N/A — one fixed session for every process, and NT has no session or process-group object for src/process/spawn.c to put a child in a different one of (a Job object has no leader, no session and no controlling-terminal relationship) | — |
 | setpgid | "if pid is 0, the process ID of the calling process shall be used. Also, if pgid is 0, the process ID of the indicated process shall be used"; RETURN VALUE 0 on success | covered | test/posix-unistd-ids.c (`test_process_group_and_session`) |
 | setpgid | "[EINVAL] The value of the pgid argument is less than 0" and "[ESRCH] The value of the pid argument does not match the process ID of the calling process or of a child process" (both shall-fail) | **BUG** — see below | fenced, `test_process_group_and_session` |
@@ -3363,12 +3363,29 @@ as the record; the rest still stand as found.
    current one is both what the page requires and what the
    single-identity model actually means.
 
-3. **`getpgid()`/`getsid()` answer for a process that does not exist.**
-   Both pages: "[ESRCH] There is no process with a process ID equal to
-   pid", shall-fail. `src/unistd/ids.c:21,25` discard `pid`. This needs
+3. **`getpgid()`/`getsid()` answered for a process that does not
+   exist.** FIXED — both now resolve `pid` through `pid_exists()` in
+   `src/unistd/ids.c` before answering, and `test_process_group_and_session`
+   asserts the clause unfenced. The description is kept in the past
+   tense as the record of what was wrong. Both pages: "[ESRCH] There is
+   no process with a process ID equal to pid", shall-fail.
+   `src/unistd/ids.c:21,25` were `{ (void)p; return 1; }`, discarding
+   `pid`, so there was no pid for which either could fail. This needed
    no session model to get right: `src/process/children.c` already
    tracks every process this one created and `src/process/wait.c`
-   already distinguishes a live child from an unknown pid.
+   already distinguishes a live child from an unknown pid. The fix
+   takes that lookup and the one `kill()`/`getpriority()` already use:
+   pid 0 and the caller's own pid are the caller; a pid in the child
+   table is a child, live or exited-but-unreaped (which is still a
+   process POSIX-wise, and is the case an `NtOpenProcess` probe alone
+   could get wrong, Wine and Windows disagreeing about whether an
+   exited pid is still openable — see `src/process/wait.c`);
+   anything else is put to the object manager by CLIENT_ID, where
+   STATUS_INVALID_CID means [ESRCH] and STATUS_ACCESS_DENIED means the
+   process exists and is merely not ours to open. A negative pid names
+   no process and is refused without an NT call. The answer for a pid
+   that *does* exist is unchanged — the fixed 1 of the one process
+   group and one session this platform has.
 
 4. **`setpgid()` accepts a negative `pgid` and an unrelated `pid`.**
    `setpgid.html`: "[EINVAL] The value of the pgid argument is less
