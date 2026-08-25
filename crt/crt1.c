@@ -8,8 +8,11 @@
  * file's _start.  tcc's PE linker names _start as the entry when linking
  * with -nostdlib, so nothing has to be said on the command line.
  *
- * _start takes no arguments.  See __libc_start_main below for why: the
- * entry point of a Windows-subsystem image is not passed one.
+ * _start declares two parameters, and uses neither.  They are captured
+ * into __entry_arg0/__entry_arg1 purely so test/entry-arg.c can report
+ * what the OS actually handed the entry point; the PEB itself comes from
+ * the TEB.  See __libc_start_main below for why -- a Windows-subsystem
+ * image's entry point is not reliably passed anything.
  *
  * What a C program expects to have been done by the time main runs, and
  * is done here: argv split out of the one command line string Windows
@@ -312,7 +315,52 @@ void __libc_start_main(void)
 	exit(rc);
 }
 
-void _start(void)
+/* The raw value of the image entry point's first argument, captured
+ * before anything in this file can overwrite or reinterpret it.
+ *
+ * This exists to be *measured*, not used.  __libc_start_main above no
+ * longer reads it -- it takes the PEB from the TEB, for the reasons set
+ * out there -- and that separation is exactly what makes this a
+ * measurement: the CRT no longer has a stake in the answer.  The old
+ * evidence that real Windows passes the PEB here was that this CRT read
+ * the slot and nothing crashed, which is not a reading of the value.  The
+ * assumption is version-specific, not universal: Vista and later enter at
+ * ntdll!RtlUserThreadStart, whose thread parameter is the PEB, but NT 4
+ * through Server 2003 enter at kernel32!BaseProcessStart and forward
+ * nothing -- which is why ReactOS, which targets that era, declares the
+ * entry point as PPROCESS_START_ROUTINE, DWORD (WINAPI *)(VOID).
+ * test/entry-arg.c prints this alongside the PEB read out of the TEB and
+ * the PEB the kernel reports for the process, so that a log says which of
+ * them the entry point was actually handed; its header comment carries the
+ * full version axis.
+ *
+ * Nothing may make this the source of __peb: it is the quantity under
+ * measurement, and a consumer would turn the measurement into a
+ * tautology. */
+void *__entry_arg0;
+
+/* The second argument slot -- %rdx on x86_64, [%esp+8] on i386 -- captured
+ * for exactly one reason: it is the control for __entry_arg0.
+ *
+ * Nobody claims the entry point takes two arguments.  That is the point.
+ * If __entry_arg0 came back holding the PEB and there were no second
+ * reading, "we captured the incoming argument" and "we reported the PEB
+ * because that is what this code always reports" would produce identical
+ * logs.  A second slot read the same way, through the same mechanism, in
+ * the same call, cannot hold the PEB by construction -- so a log showing
+ * arg0 == PEB and arg1 == something else is a log in which the capture
+ * demonstrably reads real machine state rather than synthesising an
+ * answer.  If both slots came back equal to the PEB, or both came back
+ * zero, that would be a reason to distrust the measurement, and it is
+ * only visible because this is here. */
+void *__entry_arg1;
+
+/* Both parameters are captured and neither is used.  The first is named
+ * arg0, not peb, deliberately: calling it "peb" is what made the original
+ * bug look reasonable for as long as it did. */
+void _start(void *arg0, void *arg1)
 {
+	__entry_arg0 = arg0;
+	__entry_arg1 = arg1;
 	__libc_start_main();
 }

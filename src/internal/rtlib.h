@@ -49,11 +49,21 @@ long double __floatundixf(unsigned long long);
 
 /* ---- program entry (crt/crt1.c) ---------------------------------------- */
 /* tcc's PE linker picks _start up as the image entry point by name.
- * Neither of these is ever called from C, and neither takes an argument:
- * the entry point of a Windows-subsystem image is not passed one (see
- * crt1.c's __libc_start_main for the full reasoning and the citations). */
+ * Neither of these is ever called from C.
+ *
+ * __libc_start_main takes nothing: the PEB is read from the TEB, because
+ * the entry point of a Windows-subsystem image is not reliably passed one
+ * (see crt1.c's __libc_start_main for the full reasoning and citations).
+ *
+ * _start's two parameters are NOT arguments anyone promises to pass.  They
+ * are the entry-argument measurement and its control, captured into
+ * __entry_arg0/__entry_arg1 and never used for anything else -- in
+ * particular never as the source of __peb, which is the whole point.
+ * Reading them is safe under both calling conventions ntlibc targets (a
+ * register on x86_64, a caller-owned stack slot on i386, and _start never
+ * returns).  See crt/crt1.c and test/entry-arg.c. */
 void __libc_start_main(void);
-void _start(void);
+void _start(void *arg0, void *arg1);
 
 /* ---- delay-load helper (crt/delayload2.c) ------------------------------ */
 /* Looked up by this exact name and called by the linker-generated

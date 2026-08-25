@@ -30,6 +30,8 @@ char **__env_find(const char *name, size_t l);
 int __putenv(char *s, size_t l, char *owned);
 
 PTEB __teb(void);                            /* this thread's TEB */
+extern void *__entry_arg0;                   /* raw arg 1 to _start; measured, never used */
+extern void *__entry_arg1;                   /* raw arg 2 slot; the control for __entry_arg0 */
 #define __process_heap() (__peb->ProcessHeap)
 
 /* ---- errno ------------------------------------------------------------- */

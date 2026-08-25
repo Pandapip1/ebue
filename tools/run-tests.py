@@ -21,6 +21,9 @@ from testlib import parse_profile
 
 SERIAL_PREFIXES = ("fork", "waitpid", "exec", "spawn", "posix-signal")
 
+# Prefix a test uses to mark a line as a measurement the log must keep.
+MEASURE_PREFIX = "measure:"
+
 # Per-test timeout overrides, in seconds, keyed on the executable's stem.
 # --timeout is the ceiling for everything else; a name here may raise its
 # own, never lower it.
@@ -131,6 +134,18 @@ def report(result: Result, timeout: int) -> None:
     if result.outcome not in {"PASS"} and result.output:
         for line in result.output.splitlines()[-40:]:
             print(f"        {line}")
+        return
+    # A passing test's output is normally noise.  It is not noise when the
+    # test exists to report a *value* rather than a verdict: test/entry-arg.c
+    # prints what the OS passed to the image entry point, and that reading is
+    # the entire product of the run -- suppressing it on PASS would leave the
+    # log saying only that nothing crashed, which is the exact non-evidence
+    # the test was written to replace.  Lines carrying MEASURE_PREFIX are
+    # echoed whatever the outcome; nothing else about PASS output changes.
+    if result.output:
+        for line in result.output.splitlines():
+            if line.startswith(MEASURE_PREFIX):
+                print(f"        {line}")
 
 
 def parse_args() -> argparse.Namespace:
