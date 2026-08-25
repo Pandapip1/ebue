@@ -163,6 +163,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include "test-policy.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -458,101 +459,140 @@ static void test_pipe_round_trip(void)
  * The finding.  The banner has the full argument; the fence carries the
  * short form and what the test would establish.
  * ------------------------------------------------------------------ */
-#if 0 /* UNIMPL: writev.html DESCRIPTION -- "The writev() function shall
-       * be equivalent to write(), except as described below" -- and so
-       * write.html DESCRIPTION's pipe clause: "Write requests of
-       * {PIPE_BUF} bytes or less shall not be interleaved with data
-       * from other processes doing writes on the same pipe. Writes of
-       * greater than {PIPE_BUF} bytes may have data interleaved, on
-       * arbitrary boundaries, with writes by other processes, whether
-       * or not the O_NONBLOCK flag of the file status flags is set."
-       *
-       * WHAT src/misc/uio.c ACTUALLY DOES, read from the file rather
-       * than inferred: writev()'s body is
-       *
-       *     for (i = 0; i < iovcnt; i++) {
-       *             if (!iov[i].iov_len) continue;
-       *             w = write(fd, iov[i].iov_base, iov[i].iov_len);
-       *             ...
-       *     }
-       *
-       * -- one call to this library's own write() per non-empty area,
-       * and no other I/O anywhere in the file.  So a writev() of four
-       * 16-byte areas to a pipe is four calls to write(), whatever
-       * write() then does with each.  The 64-byte record is well under
-       * {PIPE_BUF}, which include/limits.h line 29 defines as 4096.
-       *
-       * That the file contains no {PIPE_BUF} test and no branch on the
-       * descriptor's type is not an impression: `grep -rn PIPE_BUF src/`
-       * returns exactly one line, src/unistd/sysconf.c's
-       * `case _PC_PIPE_BUF: return PIPE_BUF;`, and src/misc/uio.c is
-       * 114 lines that include <sys/uio.h>, <limits.h>, <unistd.h> and
-       * <errno.h> and call nothing but read() and write().
-       *
-       * WHY UNIMPL AND NOT N/A.  Nothing about NT makes the clause
-       * meaningless: pipes exist (src/unistd/pipe.c builds them from
-       * NtCreateNamedPipeFile), other processes exist, and the
-       * conforming implementation needs no NT facility this library
-       * lacks.  When the lengths sum to {PIPE_BUF} or less, copy the
-       * pieces into one bounded stack buffer and issue a single
-       * write(); when they sum to more, the clause itself permits
-       * interleaving "on arbitrary boundaries", so the existing loop is
-       * already conforming there.  The missing thing is a mechanism.
-       *
-       * WHY UNIMPL AND NOT BUG.  The two are close here and the case
-       * for BUG is real -- writev() exists, is handed a pipe, and
-       * answers wrongly.  What decides it is that no code in the tree
-       * attempts this guarantee at all: no coalescing path, no
-       * {PIPE_BUF} comparison, no branch on the descriptor's type.
-       * Nothing computes a wrong answer; a whole mechanism is absent,
-       * which is this project's UNIMPL.
-       *
-       * WHY src/misc/uio.c's BANNER DOES NOT ALREADY COVER THIS.  That
-       * banner declines XSH 2.9.7's atomicity -- stated over two
-       * threads and over regular files -- on the ground that NT's
-       * NtReadFileScatter()/NtWriteFileGather() are page-granular and
-       * would force page-aligned iovecs on every caller.
-       *
-       * That page-granularity claim is THE BANNER'S, not this file's.
-       * It is read from src/misc/uio.c as it stands at 9acc389 and has
-       * not been re-measured here -- there is no NT to measure against
-       * from where this was written, and this project has had "cannot
-       * be done here" claims in fence comments turn out to be stale
-       * before.  Nothing below depends on whether it is still true:
-       * this finding does not need a scatter/gather primitive at all.
-       * If someone does re-measure it and it has decayed, that reopens
-       * the 2.9.7 question in test/posix-grp.c, not this one.
-       *
-       * What matters here is that neither half of that argument reaches
-       * this clause: it is stated over other processes and over pipes,
-       * and satisfying it uses no scatter/gather primitive and imposes
-       * no alignment on anything the caller passes.  The divergence
-       * recorded there is argued; this one is inherited.
-       *
-       * WHY FENCED RATHER THAN ASSERTED, given that -- unlike XSH 2.9.7,
-       * which needs two threads this library cannot create -- the test
-       * below can actually be written here.
-       *
-       * Stated precisely, because it was reasoned from the source and
-       * not measured: nothing here was run.  What is known is
-       * structural.  src/misc/uio.c issues PIECES separate write()
-       * calls per writev(), so whatever atomicity each write() has, the
-       * group of them has none, and the guarantee the clause states
-       * cannot hold however the calls are scheduled.  The test's shape
-       * is deliberately one-sided on top of that: a conforming writev()
-       * makes every REC-byte block of the stream uniform, so the check
-       * can never fail against a correct implementation and no
-       * scheduling can make it report a defect that is not there.  It
-       * can only UNDER-report -- a run in which the two writers never
-       * actually overlap passes -- which is why it is fenced rather
-       * than run as a live assertion whose green would mean nothing,
-       * and a reason to run it with ROUNDS large if it is ever
-       * un-fenced.  A successor with a running tree should un-fence it
-       * once and record what it observed.
-       *
-       * Needs `#include <sys/wait.h>` at the top of this file for
-       * waitpid(); fork() and pipe() come from <unistd.h>, already
-       * included. */
+#if NTLIBC_TEST(BUG, posix_uio_writev_pipe_below_pipe_buf_not_interleaved) /* BUG: writev.html DESCRIPTION -- "The writev() function shall
+	be equivalent to write(), except as described below" -- and so
+	write.html DESCRIPTION's pipe clause: "Write requests of
+	{PIPE_BUF} bytes or less shall not be interleaved with data
+	from other processes doing writes on the same pipe. Writes of
+	greater than {PIPE_BUF} bytes may have data interleaved, on
+	arbitrary boundaries, with writes by other processes, whether
+	or not the O_NONBLOCK flag of the file status flags is set."
+
+	WHAT src/misc/uio.c ACTUALLY DOES, read from the file rather
+	than inferred: writev()'s body is
+
+	    for (i = 0; i < iovcnt; i++) {
+	            if (!iov[i].iov_len) continue;
+	            w = write(fd, iov[i].iov_base, iov[i].iov_len);
+	            ...
+	    }
+
+	-- one call to this library's own write() per non-empty area,
+	and no other I/O anywhere in the file.  So a writev() of four
+	16-byte areas to a pipe is four calls to write(), whatever
+	write() then does with each.  The 64-byte record is well under
+	{PIPE_BUF}, which include/limits.h line 29 defines as 4096.
+
+	That the file contains no {PIPE_BUF} test and no branch on the
+	descriptor's type is not an impression: `grep -rn PIPE_BUF src/`
+	returns exactly one line, src/unistd/sysconf.c's
+	`case _PC_PIPE_BUF: return PIPE_BUF;`, and src/misc/uio.c is
+	114 lines that include <sys/uio.h>, <limits.h>, <unistd.h> and
+	<errno.h> and call nothing but read() and write().
+
+	WHY THE DISPOSITION IS BUG.  The prose above argues the case in
+	the ledger's older vocabulary, where UNIMPL meant "a whole
+	mechanism is absent" and BUG meant "code implements the clause
+	and gets it wrong".  That argument still reads correctly and is
+	left standing.  What decides the marker is narrower and is
+	machine-checked: tools/test-policy.py probes an UNIMPL case by
+	un-fencing it and requiring the translation unit to FAIL TO
+	COMPILE -- UNIMPL is the disposition for an absent *interface*,
+	not an absent mechanism behind a present one.  The interface
+	here is present and this case compiles, so UNIMPL is measurably
+	false (the probe reports it STALE) and BUG -- compiles, runs,
+	fails the assertion -- is the only disposition the tool will
+	accept.  The clause is under-delivered either way; only the
+	marker changed.
+
+	WHAT A GREEN PEDANTIC RUN HERE IS AND IS NOT EVIDENCE FOR.  The
+	assertion forks (src/process/fork.c), and stock apt Wine 9.0 --
+	what .github/workflows/ci.yml's setup-wine installs, and the
+	only runner that ever enables this case, since windows-test runs
+	tools/run-tests.py over prebuilt binaries and never un-fences
+	anything -- has no ntdll.RtlCloneUserProcess.  Measured: the
+	probe aborts with "unimplemented function
+	ntdll.dll.RtlCloneUserProcess" before reaching the first
+	interleaving check.  So the probe's FAIL is nonzero-exit, not a
+	measurement of the clause, and must not be read as one.
+
+	The claim does not rest on that probe.  It rests on
+	src/misc/uio.c's writev(), which is a loop issuing one
+	independent write() per iovec:
+
+	  for (i = 0; i < iovcnt; i++) { ... w = write(fd, iov[i].iov_base,
+	  iov[i].iov_len); ... }
+
+	n iovecs summing to {PIPE_BUF} or less are therefore n separate
+	pipe writes with n-1 windows between them, and write.html's
+	"shall not be interleaved" cannot hold structurally, whatever a
+	runner reports.  When the runner gains fork the assertion becomes
+	live and measures the same thing directly.
+
+	WHY NOT N/A.  Nothing about NT makes the clause
+	meaningless: pipes exist (src/unistd/pipe.c builds them from
+	NtCreateNamedPipeFile), other processes exist, and the
+	conforming implementation needs no NT facility this library
+	lacks.  When the lengths sum to {PIPE_BUF} or less, copy the
+	pieces into one bounded stack buffer and issue a single
+	write(); when they sum to more, the clause itself permits
+	interleaving "on arbitrary boundaries", so the existing loop is
+	already conforming there.  The missing thing is a mechanism.
+
+	WHY THE OLDER VOCABULARY LEANED UNIMPL.  The two are close here
+	and the case for BUG is real -- writev() exists, is handed a pipe, and
+	answers wrongly.  What decides it is that no code in the tree
+	attempts this guarantee at all: no coalescing path, no
+	{PIPE_BUF} comparison, no branch on the descriptor's type.
+	Nothing computes a wrong answer; a whole mechanism is absent.
+	That reading is what the paragraph above supersedes.
+
+	WHY src/misc/uio.c's BANNER DOES NOT ALREADY COVER THIS.  That
+	banner declines XSH 2.9.7's atomicity -- stated over two
+	threads and over regular files -- on the ground that NT's
+	NtReadFileScatter()/NtWriteFileGather() are page-granular and
+	would force page-aligned iovecs on every caller.
+
+	That page-granularity claim is THE BANNER'S, not this file's.
+	It is read from src/misc/uio.c as it stands at 9acc389 and has
+	not been re-measured here -- there is no NT to measure against
+	from where this was written, and this project has had "cannot
+	be done here" claims in fence comments turn out to be stale
+	before.  Nothing below depends on whether it is still true:
+	this finding does not need a scatter/gather primitive at all.
+	If someone does re-measure it and it has decayed, that reopens
+	the 2.9.7 question in test/posix-grp.c, not this one.
+
+	What matters here is that neither half of that argument reaches
+	this clause: it is stated over other processes and over pipes,
+	and satisfying it uses no scatter/gather primitive and imposes
+	no alignment on anything the caller passes.  The divergence
+	recorded there is argued; this one is inherited.
+
+	WHY FENCED RATHER THAN ASSERTED, given that -- unlike XSH 2.9.7,
+	which needs two threads this library cannot create -- the test
+	below can actually be written here.
+
+	Stated precisely, because it was reasoned from the source and
+	not measured: nothing here was run.  What is known is
+	structural.  src/misc/uio.c issues PIECES separate write()
+	calls per writev(), so whatever atomicity each write() has, the
+	group of them has none, and the guarantee the clause states
+	cannot hold however the calls are scheduled.  The test's shape
+	is deliberately one-sided on top of that: a conforming writev()
+	makes every REC-byte block of the stream uniform, so the check
+	can never fail against a correct implementation and no
+	scheduling can make it report a defect that is not there.  It
+	can only UNDER-report -- a run in which the two writers never
+	actually overlap passes -- which is why it is fenced rather
+	than run as a live assertion whose green would mean nothing,
+	and a reason to run it with ROUNDS large if it is ever
+	un-fenced.  A successor with a running tree should un-fence it
+	once and record what it observed.
+
+	Needs `#include <sys/wait.h>` at the top of this file for
+	waitpid(); fork() and pipe() come from <unistd.h>, already
+	included. */
 static void test_writev_pipe_below_pipe_buf_not_interleaved(void)
 {
 	enum { REC = 64, PIECES = 4, ROUNDS = 64 };
@@ -619,10 +659,10 @@ int main(void)
 	test_readv_iovcnt_upper_edge();
 	test_ebadf_wrong_access_mode();
 	test_pipe_round_trip();
-#if 0 /* UNIMPL: see the fence above
-       * test_writev_pipe_below_pipe_buf_not_interleaved.  The same
-       * fence, not a second one: the call site has to be guarded too,
-       * because the function it calls is inside the first #if 0. */
+#if NTLIBC_TEST(BUG, posix_uio_writev_pipe_below_pipe_buf_not_interleaved) /* BUG: see the fence above
+	test_writev_pipe_below_pipe_buf_not_interleaved.  The same
+	fence, not a second one: the call site has to be guarded too,
+	because the function it calls is inside the first #if 0. */
 	test_writev_pipe_below_pipe_buf_not_interleaved();
 #endif
 

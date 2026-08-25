@@ -100,6 +100,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include "test-policy.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -528,95 +529,95 @@ static void test_inet_pton_strict_grammar(void)
 /* --------------------------------------------------------------------
  * The AF_INET6 half of inet_ntop.html -- the gap.
  * ------------------------------------------------------------------ */
-#if 0 /* UNIMPL: inet_ntop.html DESCRIPTION -- "The AF_INET and AF_INET6
-       * address families shall be supported."  The same paragraph says
-       * of inet_ntop()'s af argument "This can be AF_INET or
-       * AF_INET6", and of inet_pton()'s dst buffer that it "shall be
-       * large enough to hold the numeric address (32 bits for AF_INET,
-       * 128 bits for AF_INET6)".  The three text forms inet_pton() must
-       * accept are spelled out in the page's own numbered list: 1. "The
-       * preferred form is "x:x:x:x:x:x:x:x", where the 'x's are the
-       * hexadecimal values of the eight 16-bit pieces of the address";
-       * 2. "A string of contiguous zero fields in the preferred form
-       * can be shown as "::".  The "::" can only appear once in an
-       * address. Unspecified addresses ("0:0:0:0:0:0:0:0") may be
-       * represented simply as "::"."; 3. "x:x:x:x:x:x:d.d.d.d", the
-       * mixed form whose low 32 bits are written as an IPv4 address.
-       *
-       * src/socket/inet.c implements none of it: both functions open
-       * with `if (af != AF_INET)` and report EAFNOSUPPORT, and
-       * <netinet/in.h> declares no in6_addr structure, so the test
-       * below cannot even be written outside a fence.
-       *
-       * OBSERVED, not derived, both halves.  Behaviour: linking a
-       * caller against src/socket/inet.c and a host libc,
-       * inet_pton(AF_INET6, "::1", b) and inet_pton(AF_INET6,
-       * "2001:db8::1", b) both return -1 with errno EAFNOSUPPORT, and
-       * inet_ntop(AF_INET6, b, out, 64) returns NULL with the same
-       * errno.  Absence of the type: `grep -rn "INET6_ADDRSTRLEN\|
-       * in6_addr" include/ src/ test/ fuzz/` finds four hits and all
-       * four are prose -- <netinet/in.h>'s banner, two comments in
-       * test/posix-socket.c, one line of test/verification-coverage-
-       * accounting.md -- with no definition anywhere.  (The same grep
-       * finding those four is the control: the pattern matches text
-       * that is there, so the missing definition is a real absence and
-       * not a mistyped query.)
-       *
-       * UNIMPL, not N/A, and the distinction matters more here than
-       * anywhere else in the socket subsystem.  The rest of ntlibc's
-       * IPv6 absence has a mechanism behind it: an AF_INET6 socket
-       * needs an AFD path this tree does not have, and
-       * test/networking-audit.md sec 6 stages that work behind a bind()
-       * that does not yet function under Wine.  These two clauses have
-       * none of that.  They are string parsing and string formatting
-       * over a 16-byte array -- no descriptor, no device, no ioctl,
-       * nothing NT supplies or withholds -- and src/socket/inet.c's own
-       * banner says so of the whole file ("pure C with no NT dependency
-       * at all").  They are missing because nobody wrote them, which is
-       * what UNIMPL means in this ledger.
-       *
-       * NOT N/A on the "no IPv6 stack here" argument, which is the
-       * tempting one: inet_pton(AF_INET6) no more requires a stack that
-       * can carry an IPv6 packet than inet_pton(AF_INET) requires one
-       * that can carry an IPv4 packet.  A caller that reads an address
-       * out of a configuration file to validate, compare, store or
-       * print it needs the parser and nothing else.
-       *
-       * NOT a BUG either, and this is the counter-argument worth
-       * writing down, because test/posix-socket.c's test_inet_pton_ntop
-       * asserts today's behaviour as CORRECT: [EAFNOSUPPORT] is a
-       * documented ERRORS value of both functions, so returning it
-       * looks conforming.  It is not.  ERRORS defines it for an af that
-       * "is invalid", and RETURN VALUE for one that "is unknown", while
-       * the DESCRIPTION sentence quoted at the top of this fence makes
-       * AF_INET6 neither: it is a family the implementation shall
-       * support.  Answering "I do not know this family" for a family
-       * the page names in the same paragraph is the
-       * declared-but-unimplemented trap, not conformance.
-       * posix-socket.c's assertions remain the right ones for that file
-       * -- they pin the behaviour a caller gets today so it cannot
-       * change silently -- and this fence records that the behaviour
-       * they pin is a gap.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  A program that includes
-       * <arpa/inet.h> and writes `struct in6_addr a; inet_pton(AF_INET6,
-       * s, &a);` does not compile (no such type, and no
-       * INET6_ADDRSTRLEN to size the other direction's buffer); one
-       * that reaches the call through a void * gets -1/EAFNOSUPPORT for
-       * every input, well-formed ones included.
-       *
-       * WHAT WOULD HAVE TO BE WRITTEN.  The two conversions in
-       * src/socket/inet.c -- the parser is the larger half: eight
-       * 16-bit fields, at most one "::" run, an optional trailing
-       * dotted quad, and for the reverse a rule for choosing which zero
-       * run to elide -- plus the in6_addr structure ("uint8_t
-       * s6_addr[16]", netinet_in.h.html) and INET6_ADDRSTRLEN in
-       * <netinet/in.h>.  No new NT call, and no dependency on the
-       * staged AFD work, which is the point: this half can land before
-       * any of it.  It does NOT require the rest of that header's IPv6
-       * set (sockaddr_in6, ipv6_mreq, the IPV6_* options,
-       * IN6_IS_ADDR_*), which stay out of scope with the sockets that
-       * would use them. */
+#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_text_forms) /* UNIMPL: inet_ntop.html DESCRIPTION -- "The AF_INET and AF_INET6
+	address families shall be supported."  The same paragraph says
+	of inet_ntop()'s af argument "This can be AF_INET or
+	AF_INET6", and of inet_pton()'s dst buffer that it "shall be
+	large enough to hold the numeric address (32 bits for AF_INET,
+	128 bits for AF_INET6)".  The three text forms inet_pton() must
+	accept are spelled out in the page's own numbered list: 1. "The
+	preferred form is "x:x:x:x:x:x:x:x", where the 'x's are the
+	hexadecimal values of the eight 16-bit pieces of the address";
+	2. "A string of contiguous zero fields in the preferred form
+	can be shown as "::".  The "::" can only appear once in an
+	address. Unspecified addresses ("0:0:0:0:0:0:0:0") may be
+	represented simply as "::"."; 3. "x:x:x:x:x:x:d.d.d.d", the
+	mixed form whose low 32 bits are written as an IPv4 address.
+
+	src/socket/inet.c implements none of it: both functions open
+	with `if (af != AF_INET)` and report EAFNOSUPPORT, and
+	<netinet/in.h> declares no in6_addr structure, so the test
+	below cannot even be written outside a fence.
+
+	OBSERVED, not derived, both halves.  Behaviour: linking a
+	caller against src/socket/inet.c and a host libc,
+	inet_pton(AF_INET6, "::1", b) and inet_pton(AF_INET6,
+	"2001:db8::1", b) both return -1 with errno EAFNOSUPPORT, and
+	inet_ntop(AF_INET6, b, out, 64) returns NULL with the same
+	errno.  Absence of the type: `grep -rn "INET6_ADDRSTRLEN\|
+	in6_addr" include/ src/ test/ fuzz/` finds four hits and all
+	four are prose -- <netinet/in.h>'s banner, two comments in
+	test/posix-socket.c, one line of test/verification-coverage-
+	accounting.md -- with no definition anywhere.  (The same grep
+	finding those four is the control: the pattern matches text
+	that is there, so the missing definition is a real absence and
+	not a mistyped query.)
+
+	UNIMPL, not N/A, and the distinction matters more here than
+	anywhere else in the socket subsystem.  The rest of ntlibc's
+	IPv6 absence has a mechanism behind it: an AF_INET6 socket
+	needs an AFD path this tree does not have, and
+	test/networking-audit.md sec 6 stages that work behind a bind()
+	that does not yet function under Wine.  These two clauses have
+	none of that.  They are string parsing and string formatting
+	over a 16-byte array -- no descriptor, no device, no ioctl,
+	nothing NT supplies or withholds -- and src/socket/inet.c's own
+	banner says so of the whole file ("pure C with no NT dependency
+	at all").  They are missing because nobody wrote them, which is
+	what UNIMPL means in this ledger.
+
+	NOT N/A on the "no IPv6 stack here" argument, which is the
+	tempting one: inet_pton(AF_INET6) no more requires a stack that
+	can carry an IPv6 packet than inet_pton(AF_INET) requires one
+	that can carry an IPv4 packet.  A caller that reads an address
+	out of a configuration file to validate, compare, store or
+	print it needs the parser and nothing else.
+
+	NOT a BUG either, and this is the counter-argument worth
+	writing down, because test/posix-socket.c's test_inet_pton_ntop
+	asserts today's behaviour as CORRECT: [EAFNOSUPPORT] is a
+	documented ERRORS value of both functions, so returning it
+	looks conforming.  It is not.  ERRORS defines it for an af that
+	"is invalid", and RETURN VALUE for one that "is unknown", while
+	the DESCRIPTION sentence quoted at the top of this fence makes
+	AF_INET6 neither: it is a family the implementation shall
+	support.  Answering "I do not know this family" for a family
+	the page names in the same paragraph is the
+	declared-but-unimplemented trap, not conformance.
+	posix-socket.c's assertions remain the right ones for that file
+	-- they pin the behaviour a caller gets today so it cannot
+	change silently -- and this fence records that the behaviour
+	they pin is a gap.
+
+	WHAT A CALLER OBSERVES TODAY.  A program that includes
+	<arpa/inet.h> and writes `struct in6_addr a; inet_pton(AF_INET6,
+	s, &a);` does not compile (no such type, and no
+	INET6_ADDRSTRLEN to size the other direction's buffer); one
+	that reaches the call through a void * gets -1/EAFNOSUPPORT for
+	every input, well-formed ones included.
+
+	WHAT WOULD HAVE TO BE WRITTEN.  The two conversions in
+	src/socket/inet.c -- the parser is the larger half: eight
+	16-bit fields, at most one "::" run, an optional trailing
+	dotted quad, and for the reverse a rule for choosing which zero
+	run to elide -- plus the in6_addr structure ("uint8_t
+	s6_addr[16]", netinet_in.h.html) and INET6_ADDRSTRLEN in
+	<netinet/in.h>.  No new NT call, and no dependency on the
+	staged AFD work, which is the point: this half can land before
+	any of it.  It does NOT require the rest of that header's IPv6
+	set (sockaddr_in6, ipv6_mreq, the IPV6_* options,
+	IN6_IS_ADDR_*), which stay out of scope with the sockets that
+	would use them. */
 static void test_inet6_text_forms(void)
 {
 	struct in6_addr a6;
@@ -651,42 +652,42 @@ static void test_inet6_text_forms(void)
 }
 #endif
 
-#if 0 /* UNIMPL: basedefs/arpa_inet.h.html DESCRIPTION -- "The
-       * <arpa/inet.h> header shall define the INET_ADDRSTRLEN and
-       * INET6_ADDRSTRLEN macros as described in <netinet/in.h>", and
-       * basedefs/netinet_in.h.html, which describes them with their
-       * values: "INET_ADDRSTRLEN 16. Length of the string form for IP."
-       * and "INET6_ADDRSTRLEN 46. Length of the string form for IPv6."
-       * ntlibc's <netinet/in.h> defines the first and stops.
-       *
-       * Fenced separately from test_inet6_text_forms although it is the
-       * same gap, for two reasons.
-       *
-       * It fails a consumer differently.  A program that sizes a buffer
-       * with INET6_ADDRSTRLEN and calls only inet_ntop(AF_INET, ...) --
-       * which is what portable code that may one day be handed an IPv6
-       * address looks like -- fails to compile here over a macro whose
-       * value the standard fixes.
-       *
-       * And it is the one name in this gap that no banner in the tree
-       * records.  POSIX-COVERAGE.md's group U deliberately did not
-       * fence "<netinet/in.h>'s IPv6 set" because that header's own
-       * banner scopes it out -- but the banner scopes out
-       * "AF_INET6/struct sockaddr_in6/struct in6_addr and the IPV6_*
-       * socket options", and INET6_ADDRSTRLEN is in none of those four
-       * groups.  Nor is it in <arpa/inet.h>'s banner, which lists what
-       * that header omits and does not mention it.  The clause quoted
-       * above is on the <arpa/inet.h> page, not the <netinet/in.h> one,
-       * so a reader following either banner's scope note would conclude
-       * the header is complete.  That is the silence this fence breaks.
-       *
-       * It is deliberately NOT proposed as a standalone fix.  Defining
-       * a constant that sizes a buffer for a conversion the library
-       * cannot perform is the "declared elsewhere, not here" trap
-       * <arpa/inet.h>'s own banner says this project avoids, and
-       * <netinet/in.h>'s banner gives the same rule for the IPv6 set it
-       * omits ("never declare what has no body").  The constant should
-       * land with the conversions, in one commit. */
+#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_addrstrlen_defined) /* UNIMPL: basedefs/arpa_inet.h.html DESCRIPTION -- "The
+	<arpa/inet.h> header shall define the INET_ADDRSTRLEN and
+	INET6_ADDRSTRLEN macros as described in <netinet/in.h>", and
+	basedefs/netinet_in.h.html, which describes them with their
+	values: "INET_ADDRSTRLEN 16. Length of the string form for IP."
+	and "INET6_ADDRSTRLEN 46. Length of the string form for IPv6."
+	ntlibc's <netinet/in.h> defines the first and stops.
+
+	Fenced separately from test_inet6_text_forms although it is the
+	same gap, for two reasons.
+
+	It fails a consumer differently.  A program that sizes a buffer
+	with INET6_ADDRSTRLEN and calls only inet_ntop(AF_INET, ...) --
+	which is what portable code that may one day be handed an IPv6
+	address looks like -- fails to compile here over a macro whose
+	value the standard fixes.
+
+	And it is the one name in this gap that no banner in the tree
+	records.  POSIX-COVERAGE.md's group U deliberately did not
+	fence "<netinet/in.h>'s IPv6 set" because that header's own
+	banner scopes it out -- but the banner scopes out
+	"AF_INET6/struct sockaddr_in6/struct in6_addr and the IPV6_*
+	socket options", and INET6_ADDRSTRLEN is in none of those four
+	groups.  Nor is it in <arpa/inet.h>'s banner, which lists what
+	that header omits and does not mention it.  The clause quoted
+	above is on the <arpa/inet.h> page, not the <netinet/in.h> one,
+	so a reader following either banner's scope note would conclude
+	the header is complete.  That is the silence this fence breaks.
+
+	It is deliberately NOT proposed as a standalone fix.  Defining
+	a constant that sizes a buffer for a conversion the library
+	cannot perform is the "declared elsewhere, not here" trap
+	<arpa/inet.h>'s own banner says this project avoids, and
+	<netinet/in.h>'s banner gives the same rule for the IPv6 set it
+	omits ("never declare what has no body").  The constant should
+	land with the conversions, in one commit. */
 static void test_inet6_addrstrlen_defined(void)
 {
 	CHECK(INET6_ADDRSTRLEN == 46);
@@ -697,94 +698,94 @@ static void test_inet6_addrstrlen_defined(void)
 /* --------------------------------------------------------------------
  * inet_addr()'s two defects.
  * ------------------------------------------------------------------ */
-#if 0 /* BUG: inet_addr.html DESCRIPTION and RETURN VALUE -- the
-       * function converts "the string pointed to by cp, in the standard
-       * IPv4 dotted decimal notation", and "Otherwise, it shall return
-       * (in_addr_t)(-1)".  ntlibc accepts three spellings that are not
-       * in that notation under any reading of the page.
-       *
-       * MECHANISM.  src/socket/inet.c parses each part with
-       * strtoul(p, &end, 0) and checks only that it consumed something.
-       * strtoul() is specified to skip leading white space and to
-       * accept an optional '+' or '-' before the digits, so each of
-       * these reaches the range checks as an ordinary value:
-       *
-       *   " 1.2.3.4"  -> 1.2.3.4        (leading white space skipped)
-       *   "+1.2.3.4"  -> 1.2.3.4        (sign consumed)
-       *   "1. 2.3.4"  -> 1.2.3.4        (both, mid-string)
-       *   "-2"        -> 255.255.255.254 on both PE targets
-       *
-       * The last is target-dependent and is the one that produces a
-       * wrong ADDRESS rather than a wrongly-accepted spelling, so it is
-       * worth spelling out.  strtoul() negates within unsigned long, so
-       * "-2" yields ULONG_MAX-1; the one-part form's only range check
-       * is `parts[0] > 0xffffffffUL`, which on the targets where
-       * unsigned long is 32 bits -- i386 and, LLP64, x86_64, i.e. every
-       * target this project ships -- is a comparison against ULONG_MAX
-       * and can never be true.  The value survives and htonl() turns it
-       * into 255.255.255.254.  Where unsigned long is 64 bits, which is
-       * only `make asan`'s native ELF build, the same check does reject
-       * it: one string, two answers, by target.
-       *
-       * OBSERVED, not derived.  The four assertions below were run
-       * against src/socket/inet.c itself, by linking this file with it
-       * against a host libc.  The first three fail there (the values
-       * above are what came back); the fourth PASSES there, because
-       * that build's unsigned long is 64 bits -- which is the
-       * divergence, seen from the only side this session can run.  The
-       * 32-bit side was measured the same way, on the same parse loop
-       * with a 32-bit part type standing in for LLP64, and returned
-       * 255.255.255.254.  All four stay fenced together because the
-       * clause they test is one clause, and because a live assertion
-       * that holds on one target and not another is worse than none.
-       *
-       * WHY THIS IS A BUG AND NOT LATITUDE.  fuzz/fuzz_inet.c declines
-       * to oracle inet_addr() against the host's precisely here, and
-       * its banner argues the corner is under-specified: the page says
-       * the parts may be "decimal, octal, or hexadecimal, as specified
-       * in the ISO C standard", which is strtoul()'s own vocabulary, so
-       * reaching for strtoul() is defensible.  That argument is
-       * accepted as far as the RADIX goes -- test_inet_addr_forms_and_
-       * radix asserts the radix behaviour as CORRECT for exactly that
-       * reason -- but it does not reach the sign or the space.  The
-       * sentence it rests on is about how a NUMBER is written, and it
-       * offers a closed trichotomy for that: "a leading 0x or 0X
-       * implies hexadecimal; otherwise, a leading '0' implies octal;
-       * otherwise, the number is interpreted as decimal".  A part
-       * beginning with '+' or ' ' falls into the third arm, and " 1" is
-       * not a decimal number.  A '-' does not make the part a number in
-       * a different base; it makes the string denote no address at all.
-       *
-       * The decisive evidence is inside this implementation rather than
-       * outside it.  inet_addr("1.2.3.4 ") is rejected today -- the
-       * trailing-garbage check at the end of the parse loop -- while
-       * inet_addr(" 1.2.3.4") is accepted.  A reading under which white
-       * space belongs to the notation would have to accept both; a
-       * reading under which it does not would reject both.  The library
-       * holds neither reading: it holds "whatever strtoul() ate", which
-       * is not an interpretation of the page but the absence of one.
-       * test_inet_addr_forms_and_radix's `inet_addr("1.2.3.4 ")`
-       * assertion is the live half of that argument and stays green
-       * either way.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  A configuration reader that
-       * trims its own lines is unaffected; one that does not silently
-       * accepts " 10.0.0.1", so a file this library accepts is rejected
-       * by glibc, musl and Winsock, and a validation pass built on
-       * inet_addr() passes strings its consumer will later reject.  The
-       * "-2" case is worse in kind: not a lenient acceptance of a valid
-       * address, but the conversion of a plainly invalid string into a
-       * specific, plausible, wrong one.
-       *
-       * THE FIX, if taken up: guard the strtoul() call the way musl's
-       * inet_aton() does, by requiring the first character of each part
-       * to be a digit before accepting what strtoul() returned.  One
-       * condition, no cost, and it leaves the radix behaviour these
-       * tests assert untouched.  Note that fixing it also releases
-       * fuzz/fuzz_inet.c to oracle inet_addr() against the host's: as
-       * of c7c0171, which removed that harness's leading-zero guard,
-       * the divergence described here is the only reason its banner
-       * still gives for not making that comparison. */
+#if NTLIBC_TEST(BUG, posix_inet_inet_addr_rejects_sign_and_space) /* BUG: inet_addr.html DESCRIPTION and RETURN VALUE -- the
+	function converts "the string pointed to by cp, in the standard
+	IPv4 dotted decimal notation", and "Otherwise, it shall return
+	(in_addr_t)(-1)".  ntlibc accepts three spellings that are not
+	in that notation under any reading of the page.
+
+	MECHANISM.  src/socket/inet.c parses each part with
+	strtoul(p, &end, 0) and checks only that it consumed something.
+	strtoul() is specified to skip leading white space and to
+	accept an optional '+' or '-' before the digits, so each of
+	these reaches the range checks as an ordinary value:
+
+	  " 1.2.3.4"  -> 1.2.3.4        (leading white space skipped)
+	  "+1.2.3.4"  -> 1.2.3.4        (sign consumed)
+	  "1. 2.3.4"  -> 1.2.3.4        (both, mid-string)
+	  "-2"        -> 255.255.255.254 on both PE targets
+
+	The last is target-dependent and is the one that produces a
+	wrong ADDRESS rather than a wrongly-accepted spelling, so it is
+	worth spelling out.  strtoul() negates within unsigned long, so
+	"-2" yields ULONG_MAX-1; the one-part form's only range check
+	is `parts[0] > 0xffffffffUL`, which on the targets where
+	unsigned long is 32 bits -- i386 and, LLP64, x86_64, i.e. every
+	target this project ships -- is a comparison against ULONG_MAX
+	and can never be true.  The value survives and htonl() turns it
+	into 255.255.255.254.  Where unsigned long is 64 bits, which is
+	only `make asan`'s native ELF build, the same check does reject
+	it: one string, two answers, by target.
+
+	OBSERVED, not derived.  The four assertions below were run
+	against src/socket/inet.c itself, by linking this file with it
+	against a host libc.  The first three fail there (the values
+	above are what came back); the fourth PASSES there, because
+	that build's unsigned long is 64 bits -- which is the
+	divergence, seen from the only side this session can run.  The
+	32-bit side was measured the same way, on the same parse loop
+	with a 32-bit part type standing in for LLP64, and returned
+	255.255.255.254.  All four stay fenced together because the
+	clause they test is one clause, and because a live assertion
+	that holds on one target and not another is worse than none.
+
+	WHY THIS IS A BUG AND NOT LATITUDE.  fuzz/fuzz_inet.c declines
+	to oracle inet_addr() against the host's precisely here, and
+	its banner argues the corner is under-specified: the page says
+	the parts may be "decimal, octal, or hexadecimal, as specified
+	in the ISO C standard", which is strtoul()'s own vocabulary, so
+	reaching for strtoul() is defensible.  That argument is
+	accepted as far as the RADIX goes -- test_inet_addr_forms_and_
+	radix asserts the radix behaviour as CORRECT for exactly that
+	reason -- but it does not reach the sign or the space.  The
+	sentence it rests on is about how a NUMBER is written, and it
+	offers a closed trichotomy for that: "a leading 0x or 0X
+	implies hexadecimal; otherwise, a leading '0' implies octal;
+	otherwise, the number is interpreted as decimal".  A part
+	beginning with '+' or ' ' falls into the third arm, and " 1" is
+	not a decimal number.  A '-' does not make the part a number in
+	a different base; it makes the string denote no address at all.
+
+	The decisive evidence is inside this implementation rather than
+	outside it.  inet_addr("1.2.3.4 ") is rejected today -- the
+	trailing-garbage check at the end of the parse loop -- while
+	inet_addr(" 1.2.3.4") is accepted.  A reading under which white
+	space belongs to the notation would have to accept both; a
+	reading under which it does not would reject both.  The library
+	holds neither reading: it holds "whatever strtoul() ate", which
+	is not an interpretation of the page but the absence of one.
+	test_inet_addr_forms_and_radix's `inet_addr("1.2.3.4 ")`
+	assertion is the live half of that argument and stays green
+	either way.
+
+	WHAT A CALLER OBSERVES TODAY.  A configuration reader that
+	trims its own lines is unaffected; one that does not silently
+	accepts " 10.0.0.1", so a file this library accepts is rejected
+	by glibc, musl and Winsock, and a validation pass built on
+	inet_addr() passes strings its consumer will later reject.  The
+	"-2" case is worse in kind: not a lenient acceptance of a valid
+	address, but the conversion of a plainly invalid string into a
+	specific, plausible, wrong one.
+
+	THE FIX, if taken up: guard the strtoul() call the way musl's
+	inet_aton() does, by requiring the first character of each part
+	to be a digit before accepting what strtoul() returned.  One
+	condition, no cost, and it leaves the radix behaviour these
+	tests assert untouched.  Note that fixing it also releases
+	fuzz/fuzz_inet.c to oracle inet_addr() against the host's: as
+	of c7c0171, which removed that harness's leading-zero guard,
+	the divergence described here is the only reason its banner
+	still gives for not making that comparison. */
 static void test_inet_addr_rejects_sign_and_space(void)
 {
 	CHECK(inet_addr(" 1.2.3.4") == (in_addr_t)(-1));
@@ -794,57 +795,57 @@ static void test_inet_addr_rejects_sign_and_space(void)
 }
 #endif
 
-#if 0 /* BUG: errno.html DESCRIPTION -- "No function in this volume of
-       * POSIX.1-2017 shall set errno to 0."  inet_addr()'s parse loop
-       * (src/socket/inet.c) executes `errno = 0;` before every
-       * strtoul() call, on the success path and the failure path alike,
-       * and inet_addr.html's ERRORS section is "No errors are defined."
-       * -- so the function has nothing to report through errno and
-       * clears it anyway.
-       *
-       * This is the one clause on these three pages that is violated
-       * unconditionally, on every call, on every target.
-       *
-       * OBSERVED, not derived: the two assertions below were run
-       * against src/socket/inet.c itself (this file links with it
-       * against a host libc) and both fail -- errno is 0 after
-       * inet_addr("1.2.3.4") and after inet_addr("not an address"),
-       * having been EDOM immediately before each call.  Unlike the
-       * fence above this one, nothing here is target-dependent: the
-       * assignment is unconditional.
-       *
-       * WHY IT IS THERE, AND WHY THAT MAKES IT A BUG RATHER THAN A
-       * STYLE POINT.  `errno = 0` before strtoul() is the first half of
-       * the standard [ERANGE] idiom; the second half -- a test of errno
-       * after the call -- was never written, so the assignment protects
-       * nothing.  (The overflow it was presumably meant to catch is in
-       * fact caught, by the explicit range checks that follow: a
-       * saturated ULONG_MAX fails every one of them, and in the
-       * one-part form converts to the failure value anyway.  This is a
-       * dead assignment, not a missing check.)  Its one live effect is
-       * destructive: it destroys errno for the caller.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  errno.html's own sentence -- the
-       * value "shall be defined only after a call to a function for
-       * which it is explicitly stated to be set and until it is changed
-       * by the next function call" -- is what makes the "set errno to
-       * 0, call, examine errno" idiom work at all, and this breaks it
-       * across an intervening inet_addr().  The concrete shape:
-       * strtol() sets [ERANGE], the caller has not read errno yet, an
-       * inet_addr() call on the next field of the same line clears it,
-       * and the overflow is never noticed.  This project already reads
-       * the same page this way -- POSIX-COVERAGE.md's group T section
-       * defends its own `CHECK(errno == 0)` assertions with it -- so
-       * the reading is the tree's, not this file's.
-       *
-       * Asserted as `errno != 0` rather than `errno == <what I set>`
-       * because that is exactly the clause: the page permits any
-       * function call to change errno, and forbids only setting it to
-       * zero.
-       *
-       * THE FIX: delete the `errno = 0;` line.  Nothing reads it.  A
-       * later change that does want to consult errno after strtoul()
-       * must save and restore the caller's value around the parse. */
+#if NTLIBC_TEST(BUG, posix_inet_inet_addr_preserves_errno) /* BUG: errno.html DESCRIPTION -- "No function in this volume of
+	POSIX.1-2017 shall set errno to 0."  inet_addr()'s parse loop
+	(src/socket/inet.c) executes `errno = 0;` before every
+	strtoul() call, on the success path and the failure path alike,
+	and inet_addr.html's ERRORS section is "No errors are defined."
+	-- so the function has nothing to report through errno and
+	clears it anyway.
+
+	This is the one clause on these three pages that is violated
+	unconditionally, on every call, on every target.
+
+	OBSERVED, not derived: the two assertions below were run
+	against src/socket/inet.c itself (this file links with it
+	against a host libc) and both fail -- errno is 0 after
+	inet_addr("1.2.3.4") and after inet_addr("not an address"),
+	having been EDOM immediately before each call.  Unlike the
+	fence above this one, nothing here is target-dependent: the
+	assignment is unconditional.
+
+	WHY IT IS THERE, AND WHY THAT MAKES IT A BUG RATHER THAN A
+	STYLE POINT.  `errno = 0` before strtoul() is the first half of
+	the standard [ERANGE] idiom; the second half -- a test of errno
+	after the call -- was never written, so the assignment protects
+	nothing.  (The overflow it was presumably meant to catch is in
+	fact caught, by the explicit range checks that follow: a
+	saturated ULONG_MAX fails every one of them, and in the
+	one-part form converts to the failure value anyway.  This is a
+	dead assignment, not a missing check.)  Its one live effect is
+	destructive: it destroys errno for the caller.
+
+	WHAT A CALLER OBSERVES TODAY.  errno.html's own sentence -- the
+	value "shall be defined only after a call to a function for
+	which it is explicitly stated to be set and until it is changed
+	by the next function call" -- is what makes the "set errno to
+	0, call, examine errno" idiom work at all, and this breaks it
+	across an intervening inet_addr().  The concrete shape:
+	strtol() sets [ERANGE], the caller has not read errno yet, an
+	inet_addr() call on the next field of the same line clears it,
+	and the overflow is never noticed.  This project already reads
+	the same page this way -- POSIX-COVERAGE.md's group T section
+	defends its own `CHECK(errno == 0)` assertions with it -- so
+	the reading is the tree's, not this file's.
+
+	Asserted as `errno != 0` rather than `errno == <what I set>`
+	because that is exactly the clause: the page permits any
+	function call to change errno, and forbids only setting it to
+	zero.
+
+	THE FIX: delete the `errno = 0;` line.  Nothing reads it.  A
+	later change that does want to consult errno after strtoul()
+	must save and restore the caller's value around the parse. */
 static void test_inet_addr_preserves_errno(void)
 {
 	errno = EDOM;
@@ -867,17 +868,17 @@ int main(void)
 	test_inet_ntop_size_and_family();
 	test_inet_pton_strict_grammar();
 
-#if 0 /* UNIMPL: see the fence above test_inet6_text_forms.  Fenced here
-       * too because the function it calls is inside that #if 0. */
+#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_text_forms) /* UNIMPL: see the fence above test_inet6_text_forms.  Fenced here
+	too because the function it calls is inside that #if 0. */
 	test_inet6_text_forms();
 #endif
-#if 0 /* UNIMPL: see the fence above test_inet6_addrstrlen_defined. */
+#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_addrstrlen_defined) /* UNIMPL: see the fence above test_inet6_addrstrlen_defined. */
 	test_inet6_addrstrlen_defined();
 #endif
-#if 0 /* BUG: see the fence above test_inet_addr_rejects_sign_and_space. */
+#if NTLIBC_TEST(BUG, posix_inet_inet_addr_rejects_sign_and_space) /* BUG: see the fence above test_inet_addr_rejects_sign_and_space. */
 	test_inet_addr_rejects_sign_and_space();
 #endif
-#if 0 /* BUG: see the fence above test_inet_addr_preserves_errno. */
+#if NTLIBC_TEST(BUG, posix_inet_inet_addr_preserves_errno) /* BUG: see the fence above test_inet_addr_preserves_errno. */
 	test_inet_addr_preserves_errno();
 #endif
 

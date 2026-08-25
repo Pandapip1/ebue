@@ -105,6 +105,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include "test-policy.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -331,123 +332,139 @@ static void test_uname_system_fields_are_not_the_environment(void)
 	else CHECK(unsetenv("COMPUTERNAME") == 0);
 }
 
-#if 0 /* UNIMPL: uname.html DESCRIPTION -- "The uname() function shall
-       * store information identifying the current system in the
-       * structure pointed to by name", and of the five members "nodename
-       * shall contain the name of this node within an
-       * implementation-defined communications network".
-       *
-       * WHAT src/misc/uname.c DOES.  Verbatim, src/misc/uname.c:68-69:
-       *
-       *     if (gethostname(u->nodename, sizeof u->nodename) < 0)
-       *             strcpy(u->nodename, "localhost");
-       *
-       * and src/unistd/gethostname.c:11,13, which is the whole of the
-       * lookup behind it:
-       *
-       *     const char *h = getenv("COMPUTERNAME");
-       *     ...
-       *     if (!h) h = "localhost";
-       *
-       * Nothing in this library ever asks NT what this node is called.
-       * Checked rather than assumed: `grep -rniE 'computername|
-       * GetComputerName|NtOpenKey|NtQueryValueKey|ActiveComputerName|
-       * hostname' src/` returns four lines and only four -- the two
-       * above, gethostname()'s own declaration line, and uname.c's
-       * banner sentence describing the same env read.  The same grep
-       * finding gethostname.c:11 is its own positive control: the query
-       * reaches the code, so the absence of an NT lookup is a real
-       * absence and not a missed search.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  Two things, and they are
-       * different failures:
-       *
-       *   - A process whose environment does not carry COMPUTERNAME --
-       *     a service, anything started through execve() with a
-       *     hand-built envp, and every native `make asan` run of this
-       *     very file (fuzz/ntstubs.c "The environment starts empty")
-       *     -- is told its node is called "localhost".  Every machine
-       *     answers "localhost".  That is the same string on all of
-       *     them, so it identifies nothing, and the machine's real name
-       *     is sitting in the registry the whole time.
-       *   - setenv("COMPUTERNAME", x) changes what uname() reports.  A
-       *     member of a structure the page says holds "information
-       *     identifying the current system" is writable by the program
-       *     asking the question.
-       *
-       * WHY UNIMPL AND NOT BUG.  BUG in this ledger's vocabulary is
-       * code that implements a clause and gets it wrong.  There is no
-       * code here that implements this clause at all: no NT query for
-       * the node name exists anywhere in src/, correct or otherwise.
-       * The environment variable is a stand-in that was never replaced.
-       *
-       * WHY UNIMPL AND NOT N/A.  N/A needs a mechanism by which the
-       * platform CANNOT answer, and NT plainly can: %COMPUTERNAME% is
-       * populated by the OS itself, so the value this library reads out
-       * of the environment is one NT put there.  What it does not have
-       * is a way to ask for it directly, and that is a gap in this
-       * tree's ntdll surface rather than in NT's.  Verified here:
-       * neither NtOpenKey nor NtQueryValueKey appears anywhere in
-       * tools/ntdll.def (`grep -inE 'openkey|queryvaluekey'
-       * tools/ntdll.def` is empty; positive control, the same file's
-       * line 45 is NtQuerySystemTime and line 93 is RtlGetVersion), and
-       * neither is declared in src/internal/nt.h.  That list is
-       * maintained by hand and added to routinely -- src/misc/uname.c's
-       * own banner says of RtlGetVersion() "tools/ntdll.def already
-       * exports it", i.e. that having to add one is the normal case.
-       *
-       * WHOEVER IMPLEMENTS THIS MUST CONFIRM THE ROUTE, not take it
-       * from here.  The registry path usually named for the machine
-       * name (under Control\ComputerName) and kernel32's
-       * GetComputerNameW() are both outside anything this audit could
-       * check from the tree, and neither has been tested here.  The
-       * claim being made is narrower and is the one that matters for
-       * the classification: the answer exists on the machine, this
-       * library does not ask for it, and asking would take new code.
-       *
-       * THE COUNTER-ARGUMENT, WHICH IS REAL AND IS REJECTED.  This page
-       * is unusually permissive about the member's contents and every
-       * permission was read before fencing:
-       *   - "The format of each member is implementation-defined."
-       *   - APPLICATION USAGE: "The inclusion of the nodename member in
-       *     this structure does not imply that it is sufficient
-       *     information for interfacing to communications networks."
-       *   - RATIONALE: "The uname() function originated in System III,
-       *     System V, and related implementations, and it does not
-       *     exist in Version 7 or 4.3 BSD.  The values it returns are
-       *     set at system compile time in those historical
-       *     implementations."
-       *   - sys_utsname.h.html says "Name of this node within the
-       *     communications network to which this node is attached, if
-       *     any" -- the "if any" being an escape the function page does
-       *     not carry.
-       * Together those license a constant, and they license a name that
-       * is useless for actually opening a socket.  They do not license
-       * THIS.  A value "set at system compile time" is set by the
-       * system; a value read out of the caller's own environment is set
-       * by the caller, which is not an implementation-defined format
-       * but an implementation-defined ORACLE, and a wrong one.  And the
-       * "if any" escape is about a node attached to no network -- it
-       * says nothing about a node that has a name NT is holding and the
-       * library declines to ask for.  Format is implementation-defined;
-       * "identifying the current system" is not.
-       *
-       * ACCEPTANCE CRITERION, and it is a Windows-side one.  On a real
-       * NT machine all three uname() calls below must report the node's
-       * actual name, unmoved by the environment.  Natively (`make asan`,
-       * fuzz/ntstubs.c) there is no registry to read and no NT node name
-       * to report, so a fix will need the stub to answer for one; that
-       * is a fuzz/ntstubs.c change, not a reason to weaken the
-       * assertions.
-       *
-       * NOTE FOR WHOEVER FIXES IT: the mechanism is shared with
-       * gethostname(), whose own audit (test/POSIX-COVERAGE.md, the
-       * unistd.h identity group) records a different defect on the same
-       * three lines -- truncation reported as -1/ENAMETOOLONG where
-       * gethostname.html makes it a successful completion.  Both are the
-       * same file.  Fixing the lookup does not fix that return value and
-       * vice versa; see test/posix-unistd-ids.c before touching
-       * src/unistd/gethostname.c. */
+#if NTLIBC_TEST(BUG, posix_sysinfo_uname_nodename_identifies_the_system) /* BUG: uname.html DESCRIPTION -- "The uname() function shall
+	store information identifying the current system in the
+	structure pointed to by name", and of the five members "nodename
+	shall contain the name of this node within an
+	implementation-defined communications network".
+
+	WHAT src/misc/uname.c DOES.  Verbatim, src/misc/uname.c:68-69:
+
+	    if (gethostname(u->nodename, sizeof u->nodename) < 0)
+	            strcpy(u->nodename, "localhost");
+
+	and src/unistd/gethostname.c:11,13, which is the whole of the
+	lookup behind it:
+
+	    const char *h = getenv("COMPUTERNAME");
+	    ...
+	    if (!h) h = "localhost";
+
+	Nothing in this library ever asks NT what this node is called.
+	Checked rather than assumed: `grep -rniE 'computername|
+	GetComputerName|NtOpenKey|NtQueryValueKey|ActiveComputerName|
+	hostname' src/` returns four lines and only four -- the two
+	above, gethostname()'s own declaration line, and uname.c's
+	banner sentence describing the same env read.  The same grep
+	finding gethostname.c:11 is its own positive control: the query
+	reaches the code, so the absence of an NT lookup is a real
+	absence and not a missed search.
+
+	WHAT A CALLER OBSERVES TODAY.  Two things, and they are
+	different failures:
+
+	  - A process whose environment does not carry COMPUTERNAME --
+	    a service, anything started through execve() with a
+	    hand-built envp, and every native `make asan` run of this
+	    very file (fuzz/ntstubs.c "The environment starts empty")
+	    -- is told its node is called "localhost".  Every machine
+	    answers "localhost".  That is the same string on all of
+	    them, so it identifies nothing, and the machine's real name
+	    is sitting in the registry the whole time.
+	  - setenv("COMPUTERNAME", x) changes what uname() reports.  A
+	    member of a structure the page says holds "information
+	    identifying the current system" is writable by the program
+	    asking the question.
+
+	WHY THE DISPOSITION IS BUG.  The prose above argues the case in
+	the ledger's older vocabulary, where UNIMPL meant "a whole
+	mechanism is absent" and BUG meant "code implements the clause
+	and gets it wrong".  That argument still reads correctly and is
+	left standing.  What decides the marker is narrower and is
+	machine-checked: tools/test-policy.py probes an UNIMPL case by
+	un-fencing it and requiring the translation unit to FAIL TO
+	COMPILE -- UNIMPL is the disposition for an absent *interface*,
+	not an absent mechanism behind a present one.  The interface
+	here is present and this case compiles, so UNIMPL is measurably
+	false (the probe reports it STALE) and BUG -- compiles, runs,
+	fails the assertion -- is the only disposition the tool will
+	accept.  The clause is under-delivered either way; only the
+	marker changed.
+
+	WHY NOT BUG IN THE OLDER SENSE.  BUG in this ledger's older
+	vocabulary is code that implements a clause and gets it wrong.
+	There is no
+	code here that implements this clause at all: no NT query for
+	the node name exists anywhere in src/, correct or otherwise.
+	The environment variable is a stand-in that was never replaced.
+
+	WHY NOT N/A.  N/A needs a mechanism by which the
+	platform CANNOT answer, and NT plainly can: %COMPUTERNAME% is
+	populated by the OS itself, so the value this library reads out
+	of the environment is one NT put there.  What it does not have
+	is a way to ask for it directly, and that is a gap in this
+	tree's ntdll surface rather than in NT's.  Verified here:
+	neither NtOpenKey nor NtQueryValueKey appears anywhere in
+	tools/ntdll.def (`grep -inE 'openkey|queryvaluekey'
+	tools/ntdll.def` is empty; positive control, the same file's
+	line 45 is NtQuerySystemTime and line 93 is RtlGetVersion), and
+	neither is declared in src/internal/nt.h.  That list is
+	maintained by hand and added to routinely -- src/misc/uname.c's
+	own banner says of RtlGetVersion() "tools/ntdll.def already
+	exports it", i.e. that having to add one is the normal case.
+
+	WHOEVER IMPLEMENTS THIS MUST CONFIRM THE ROUTE, not take it
+	from here.  The registry path usually named for the machine
+	name (under Control\ComputerName) and kernel32's
+	GetComputerNameW() are both outside anything this audit could
+	check from the tree, and neither has been tested here.  The
+	claim being made is narrower and is the one that matters for
+	the classification: the answer exists on the machine, this
+	library does not ask for it, and asking would take new code.
+
+	THE COUNTER-ARGUMENT, WHICH IS REAL AND IS REJECTED.  This page
+	is unusually permissive about the member's contents and every
+	permission was read before fencing:
+	  - "The format of each member is implementation-defined."
+	  - APPLICATION USAGE: "The inclusion of the nodename member in
+	    this structure does not imply that it is sufficient
+	    information for interfacing to communications networks."
+	  - RATIONALE: "The uname() function originated in System III,
+	    System V, and related implementations, and it does not
+	    exist in Version 7 or 4.3 BSD.  The values it returns are
+	    set at system compile time in those historical
+	    implementations."
+	  - sys_utsname.h.html says "Name of this node within the
+	    communications network to which this node is attached, if
+	    any" -- the "if any" being an escape the function page does
+	    not carry.
+	Together those license a constant, and they license a name that
+	is useless for actually opening a socket.  They do not license
+	THIS.  A value "set at system compile time" is set by the
+	system; a value read out of the caller's own environment is set
+	by the caller, which is not an implementation-defined format
+	but an implementation-defined ORACLE, and a wrong one.  And the
+	"if any" escape is about a node attached to no network -- it
+	says nothing about a node that has a name NT is holding and the
+	library declines to ask for.  Format is implementation-defined;
+	"identifying the current system" is not.
+
+	ACCEPTANCE CRITERION, and it is a Windows-side one.  On a real
+	NT machine all three uname() calls below must report the node's
+	actual name, unmoved by the environment.  Natively (`make asan`,
+	fuzz/ntstubs.c) there is no registry to read and no NT node name
+	to report, so a fix will need the stub to answer for one; that
+	is a fuzz/ntstubs.c change, not a reason to weaken the
+	assertions.
+
+	NOTE FOR WHOEVER FIXES IT: the mechanism is shared with
+	gethostname(), whose own audit (test/POSIX-COVERAGE.md, the
+	unistd.h identity group) records a different defect on the same
+	three lines -- truncation reported as -1/ENAMETOOLONG where
+	gethostname.html makes it a successful completion.  Both are the
+	same file.  Fixing the lookup does not fix that return value and
+	vice versa; see test/posix-unistd-ids.c before touching
+	src/unistd/gethostname.c. */
 static void test_uname_nodename_identifies_the_system(void)
 {
 	struct utsname real, forged, scrubbed;
@@ -697,122 +714,137 @@ static void test_times_cpu_agrees_with_clock_gettime(void)
 	CHECK(cpu_ticks - self_ticks < 500);
 }
 
-#if 0 /* UNIMPL: times.html DESCRIPTION -- "The tms_cutime structure
-       * member is the sum of the tms_utime and tms_cutime times of the
-       * child processes" and "The tms_cstime structure member is the sum
-       * of the tms_stime and tms_cstime times of the child processes",
-       * with RATIONALE saying what those two sentences are for: "The
-       * inclusion of times of child processes is recursive, so that a
-       * parent process may collect the total times of all of its
-       * descendants.  But the times of a child are only added to those
-       * of its parent when its parent successfully waits on the child."
-       *
-       * ntlibc implements the non-recursive half only.  The clause is
-       * two terms -- the reaped child's OWN CPU time (tms_utime), and
-       * the CPU time that child had already collected from ITS children
-       * (tms_cutime) -- and src/process/wait.c's fill_child_rusage()
-       * adds the first and does not have the second.  Verbatim,
-       * src/process/wait.c:136-141:
-       *
-       *     st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
-       *     if (!NT_SUCCESS(st)) return;
-       *     ticks_to_timeval((unsigned long long)kt.KernelTime, &ru->ru_stime);
-       *     ticks_to_timeval((unsigned long long)kt.UserTime, &ru->ru_utime);
-       *     children_ktime100ns += (unsigned long long)kt.KernelTime;
-       *     children_utime100ns += (unsigned long long)kt.UserTime;
-       *
-       * KERNEL_USER_TIMES is a per-process object with no child-time
-       * fields at all.  Read first-hand rather than taken from wait.c's
-       * banner, which says the same thing: src/internal/nt.h:905-910 is
-       * the whole structure, and it is CreateTime, ExitTime, KernelTime,
-       * UserTime and nothing else.  `grep -rn 'children_ktime100ns\|
-       * children_utime100ns\|fill_child_rusage' src/` finds five sites,
-       * all in src/process/wait.c, with exactly one write pair
-       * (:140-141) reached from exactly one place (the reap path at
-       * :258-259).  src/misc/times.c:69 then reads that accumulator
-       * through __rusage_children(), so every generation boundary drops
-       * the whole subtree below it.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  Anything that measures work it
-       * does not perform directly.  A build driver runs a compiler
-       * through a wrapper that itself waits for the compiler: the
-       * wrapper's own CPU time is a rounding error and the compiler's is
-       * the whole cost, and ntlibc charges the driver the wrapper and
-       * discards the compiler.  There is no error and no missing return
-       * value; the number is simply too small, silently, in proportion
-       * to how deep the process tree goes.
-       *
-       * WHY UNIMPL AND NOT BUG.  Nothing here implements the recursive
-       * term and gets it wrong -- there is no code for it anywhere; the
-       * grep above is the whole of the accounting.  NT does not surface
-       * a child's child-time totals, so the totals would have to be
-       * carried by this library across the process boundary itself, and
-       * that machinery does not exist.
-       *
-       * WHY UNIMPL AND NOT N/A.  Two routes exist, and what each one
-       * needs was checked rather than assumed:
-       *
-       *   - Carry the numbers.  Whenever the child is itself an ntlibc
-       *     program this library owns both ends: the child could hand
-       *     back children_utime100ns/children_ktime100ns at exit and
-       *     fill_child_rusage() could add them to what ProcessTimes
-       *     reports.  Nothing in src/ passes libc state to a child
-       *     out-of-band today (`grep -rn '_NTLIBC\|__ntlibc_'` over the
-       *     C files of src/process/ finds nothing); the one precedent in
-       *     the tree is in the test harness rather than the library --
-       *     fuzz/ntstubs.c's XCHILD_MARK ("_NTLIBC_XCHILD=1",
-       *     fuzz/ntstubs.c:178), an environment marker a child looks for
-       *     at startup.  So this is a channel to be built, not one to be
-       *     reused.
-       *   - Ask NT.  A job object accumulates the CPU time of a whole
-       *     process tree, including processes this library did not
-       *     build, and src/misc/resource.c:254-256 ALREADY creates one
-       *     and assigns this process to it for RLIMIT_NPROC/RLIMIT_AS.
-       *     JobObjectBasicAccountingInformation is declared
-       *     (src/internal/nt.h:989); the query that would read it is
-       *     not -- NtQueryInformationJobObject appears in no
-       *     declaration in src/internal/nt.h and in no line of
-       *     tools/ntdll.def (positive control: NtCreateJobObject,
-       *     NtAssignProcessToJobObject and NtSetInformationJobObject are
-       *     all in both), and neither is the accounting structure
-       *     itself, nt.h's own comment saying "this library only ever
-       *     uses JobObjectBasicLimitInformation and
-       *     JobObjectExtendedLimitInformation".
-       *
-       * Neither is free, and the job-object route in particular is a
-       * real design decision about what a "child" is; but "we would have
-       * to write it" is UNIMPL in this ledger, not N/A.  The clause is
-       * also not vacuous the way a STREAMS clause is: ntlibc has
-       * processes, has wait(), and has grandchildren.
-       *
-       * ACCEPTANCE CRITERION.  The assertion below, unfenced, on the
-       * Wine and real-Windows legs.  A middle process that burns no
-       * user CPU of its own spawns a grandchild that burns a measured
-       * amount, waits for it, and exits; the grandchild's time must
-       * then arrive in this process's tms_cutime by way of the middle
-       * process's.  Natively (`make asan`) fuzz/ntstubs.c:2975 answers
-       * ProcessTimes with `if (f) return STATUS_NOT_IMPLEMENTED;` --
-       * whose own trailing comment there reads "only this process's own
-       * times" -- for any handle that is not this process's own, so the
-       * accumulator is legitimately zero there and
-       * the check would have to be skipped exactly the way
-       * test/posix-grp.c's test_times_children() skips its own floors
-       * -- see that function's comment before wiring this up.
-       *
-       * And read that comment rather than trusting this one: it records
-       * that stock Wine's NtQueryInformationProcess() ignores the handle
-       * for ProcessTimes and returns the CALLING process's times, which
-       * would make this assertion measure the wrong process on the Wine
-       * leg too.  That was true as of test/posix-grp.c's writing and it
-       * names the upstream fix (aa1c505c2/94e2d180c in this project's
-       * Wine fork).  Whoever unfences this must re-measure it rather
-       * than inherit it: a "this platform cannot" is a dated
-       * measurement, not a fact.
-       *
-       * The whole apparatus is fenced together: the two child roles
-       * below exist only to drive this assertion, so leaving them live
-       * would put an unreachable re-exec path into every run of this
-       * binary. */
+#if NTLIBC_TEST(BUG, posix_sysinfo_times_child_times_are_recursive) /* BUG: times.html DESCRIPTION -- "The tms_cutime structure
+	member is the sum of the tms_utime and tms_cutime times of the
+	child processes" and "The tms_cstime structure member is the sum
+	of the tms_stime and tms_cstime times of the child processes",
+	with RATIONALE saying what those two sentences are for: "The
+	inclusion of times of child processes is recursive, so that a
+	parent process may collect the total times of all of its
+	descendants.  But the times of a child are only added to those
+	of its parent when its parent successfully waits on the child."
+
+	ntlibc implements the non-recursive half only.  The clause is
+	two terms -- the reaped child's OWN CPU time (tms_utime), and
+	the CPU time that child had already collected from ITS children
+	(tms_cutime) -- and src/process/wait.c's fill_child_rusage()
+	adds the first and does not have the second.  Verbatim,
+	src/process/wait.c:136-141:
+
+	    st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
+	    if (!NT_SUCCESS(st)) return;
+	    ticks_to_timeval((unsigned long long)kt.KernelTime, &ru->ru_stime);
+	    ticks_to_timeval((unsigned long long)kt.UserTime, &ru->ru_utime);
+	    children_ktime100ns += (unsigned long long)kt.KernelTime;
+	    children_utime100ns += (unsigned long long)kt.UserTime;
+
+	KERNEL_USER_TIMES is a per-process object with no child-time
+	fields at all.  Read first-hand rather than taken from wait.c's
+	banner, which says the same thing: src/internal/nt.h:905-910 is
+	the whole structure, and it is CreateTime, ExitTime, KernelTime,
+	UserTime and nothing else.  `grep -rn 'children_ktime100ns\|
+	children_utime100ns\|fill_child_rusage' src/` finds five sites,
+	all in src/process/wait.c, with exactly one write pair
+	(:140-141) reached from exactly one place (the reap path at
+	:258-259).  src/misc/times.c:69 then reads that accumulator
+	through __rusage_children(), so every generation boundary drops
+	the whole subtree below it.
+
+	WHAT A CALLER OBSERVES TODAY.  Anything that measures work it
+	does not perform directly.  A build driver runs a compiler
+	through a wrapper that itself waits for the compiler: the
+	wrapper's own CPU time is a rounding error and the compiler's is
+	the whole cost, and ntlibc charges the driver the wrapper and
+	discards the compiler.  There is no error and no missing return
+	value; the number is simply too small, silently, in proportion
+	to how deep the process tree goes.
+
+	WHY THE DISPOSITION IS BUG.  The prose above argues the case in
+	the ledger's older vocabulary, where UNIMPL meant "a whole
+	mechanism is absent" and BUG meant "code implements the clause
+	and gets it wrong".  That argument still reads correctly and is
+	left standing.  What decides the marker is narrower and is
+	machine-checked: tools/test-policy.py probes an UNIMPL case by
+	un-fencing it and requiring the translation unit to FAIL TO
+	COMPILE -- UNIMPL is the disposition for an absent *interface*,
+	not an absent mechanism behind a present one.  The interface
+	here is present and this case compiles, so UNIMPL is measurably
+	false (the probe reports it STALE) and BUG -- compiles, runs,
+	fails the assertion -- is the only disposition the tool will
+	accept.  The clause is under-delivered either way; only the
+	marker changed.
+
+	WHY NOT BUG IN THE OLDER SENSE.  Nothing here implements the recursive
+	term and gets it wrong -- there is no code for it anywhere; the
+	grep above is the whole of the accounting.  NT does not surface
+	a child's child-time totals, so the totals would have to be
+	carried by this library across the process boundary itself, and
+	that machinery does not exist.
+
+	WHY NOT N/A.  Two routes exist, and what each one
+	needs was checked rather than assumed:
+
+	  - Carry the numbers.  Whenever the child is itself an ntlibc
+	    program this library owns both ends: the child could hand
+	    back children_utime100ns/children_ktime100ns at exit and
+	    fill_child_rusage() could add them to what ProcessTimes
+	    reports.  Nothing in src/ passes libc state to a child
+	    out-of-band today (`grep -rn '_NTLIBC\|__ntlibc_'` over the
+	    C files of src/process/ finds nothing); the one precedent in
+	    the tree is in the test harness rather than the library --
+	    fuzz/ntstubs.c's XCHILD_MARK ("_NTLIBC_XCHILD=1",
+	    fuzz/ntstubs.c:178), an environment marker a child looks for
+	    at startup.  So this is a channel to be built, not one to be
+	    reused.
+	  - Ask NT.  A job object accumulates the CPU time of a whole
+	    process tree, including processes this library did not
+	    build, and src/misc/resource.c:254-256 ALREADY creates one
+	    and assigns this process to it for RLIMIT_NPROC/RLIMIT_AS.
+	    JobObjectBasicAccountingInformation is declared
+	    (src/internal/nt.h:989); the query that would read it is
+	    not -- NtQueryInformationJobObject appears in no
+	    declaration in src/internal/nt.h and in no line of
+	    tools/ntdll.def (positive control: NtCreateJobObject,
+	    NtAssignProcessToJobObject and NtSetInformationJobObject are
+	    all in both), and neither is the accounting structure
+	    itself, nt.h's own comment saying "this library only ever
+	    uses JobObjectBasicLimitInformation and
+	    JobObjectExtendedLimitInformation".
+
+	Neither is free, and the job-object route in particular is a
+	real design decision about what a "child" is; but "we would have
+	to write it" is UNIMPL in this ledger, not N/A.  The clause is
+	also not vacuous the way a STREAMS clause is: ntlibc has
+	processes, has wait(), and has grandchildren.
+
+	ACCEPTANCE CRITERION.  The assertion below, unfenced, on the
+	Wine and real-Windows legs.  A middle process that burns no
+	user CPU of its own spawns a grandchild that burns a measured
+	amount, waits for it, and exits; the grandchild's time must
+	then arrive in this process's tms_cutime by way of the middle
+	process's.  Natively (`make asan`) fuzz/ntstubs.c:2975 answers
+	ProcessTimes with `if (f) return STATUS_NOT_IMPLEMENTED;` --
+	whose own trailing comment there reads "only this process's own
+	times" -- for any handle that is not this process's own, so the
+	accumulator is legitimately zero there and
+	the check would have to be skipped exactly the way
+	test/posix-grp.c's test_times_children() skips its own floors
+	-- see that function's comment before wiring this up.
+
+	And read that comment rather than trusting this one: it records
+	that stock Wine's NtQueryInformationProcess() ignores the handle
+	for ProcessTimes and returns the CALLING process's times, which
+	would make this assertion measure the wrong process on the Wine
+	leg too.  That was true as of test/posix-grp.c's writing and it
+	names the upstream fix (aa1c505c2/94e2d180c in this project's
+	Wine fork).  Whoever unfences this must re-measure it rather
+	than inherit it: a "this platform cannot" is a dated
+	measurement, not a fact.
+
+	The whole apparatus is fenced together: the two child roles
+	below exist only to drive this assertion, so leaving them live
+	would put an unreachable re-exec path into every run of this
+	binary. */
 #include <sys/wait.h>
 
 int __spawn(const char *path, char *const argv[], char *const envp[]);
@@ -1158,17 +1190,17 @@ int main(int argc, char **argv)
 	self = argv[0];
 	(void)argc;
 
-#if 0 /* UNIMPL: see the fence above test_times_child_times_are_recursive.
-       * The same fence, not a second one: these two roles exist only to
-       * drive that assertion.
-       *
-       *   --rollup-burn    the grandchild.  Burns user CPU until its own
-       *                    tms_utime confirms NT charged it.
-       *   --rollup-middle  the middle process.  Burns nothing itself,
-       *                    spawns the grandchild and waits for it, so
-       *                    every tick it is credited with arrives
-       *                    through its own tms_cutime -- which is the
-       *                    term this library drops. */
+#if NTLIBC_TEST(BUG, posix_sysinfo_times_child_times_are_recursive) /* BUG: see the fence above test_times_child_times_are_recursive.
+	The same fence, not a second one: these two roles exist only to
+	drive that assertion.
+
+	  --rollup-burn    the grandchild.  Burns user CPU until its own
+	                   tms_utime confirms NT charged it.
+	  --rollup-middle  the middle process.  Burns nothing itself,
+	                   spawns the grandchild and waits for it, so
+	                   every tick it is credited with arrives
+	                   through its own tms_cutime -- which is the
+	                   term this library drops. */
 	if (argc > 1 && !strcmp(argv[1], "--rollup-burn"))
 		return rollup_burn(ROLLUP_TICKS) == 0 ? 0 : 3;
 	if (argc > 1 && !strcmp(argv[1], "--rollup-middle")) {
@@ -1202,14 +1234,14 @@ int main(int argc, char **argv)
 	test_uname_machine_matches_this_binary();
 	test_uname_release_and_version_identify_the_os();
 	test_uname_system_fields_are_not_the_environment();
-#if 0 /* UNIMPL: see the fence above test_uname_nodename_identifies_the_system. */
+#if NTLIBC_TEST(BUG, posix_sysinfo_uname_nodename_identifies_the_system) /* BUG: see the fence above test_uname_nodename_identifies_the_system. */
 	test_uname_nodename_identifies_the_system();
 #endif
 
 	test_tms_header_shape();
 	test_times_return_is_real_time_in_clock_ticks();
 	test_times_cpu_agrees_with_clock_gettime();
-#if 0 /* UNIMPL: see the fence above test_times_child_times_are_recursive. */
+#if NTLIBC_TEST(BUG, posix_sysinfo_times_child_times_are_recursive) /* BUG: see the fence above test_times_child_times_are_recursive. */
 	test_times_child_times_are_recursive();
 #endif
 

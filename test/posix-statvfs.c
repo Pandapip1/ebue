@@ -114,6 +114,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include "test-policy.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -411,100 +412,115 @@ static void test_posix_fallocate_inside_file(void)
 /* --------------------------------------------------------------------
  * statvfs() and [ELOOP].
  * ------------------------------------------------------------------ */
-#if 0 /* UNIMPL: statvfs.html ERRORS, statvfs() *shall fail* -- "[ELOOP]
-       * A loop exists in symbolic links encountered during resolution
-       * of the path argument."  (And the *may fail* companion, "[ELOOP]
-       * More than {SYMLOOP_MAX} symbolic links were encountered during
-       * resolution of the path argument.")
-       *
-       * WHY THIS IS UNIMPL AND NOT THE N/A EVERY OTHER [ELOOP] ROW IN
-       * test/POSIX-COVERAGE.md RECORDS.  Those rows -- renameat,
-       * fchmodat, symlinkat, linkat, the chown family, the exec family,
-       * utime -- all give the same mechanism: this suite's environment
-       * cannot create a symbolic link, so no loop can be built to hand
-       * to NT's own resolver.  That is true (measured elsewhere in this
-       * tree as a Wine VERSION gap: stock apt Wine 9.0 answers
-       * FSCTL_SET_REPARSE_POINT with STATUS_NOT_SUPPORTED, and that
-       * ioctl arrived in wine-10.19), and it is a statement about the
-       * runner, not about the library.  It would settle the question
-       * only if the library could answer the clause once given a loop.
-       *
-       * It cannot, and here is the evidence rather than the inference.
-       *
-       *   $ grep -rn ELOOP src/
-       *   src/string/strerror.c:51: [ELOOP] = "Symbolic link loop",
-       *
-       * One line, and it is a message string.  POSITIVE CONTROL, so
-       * that a null result is an absence and not a broken query -- the
-       * same grep for an errno this library demonstrably does produce:
-       *
-       *   $ grep -rn ENAMETOOLONG src/
-       *   src/string/strerror.c:47:  [ENAMETOOLONG] = "Filename too long",
-       *   src/stdlib/realpath.c:37:  ... errno = ENAMETOOLONG; ...
-       *   src/process/spawn.c:385:   ... errno = ENAMETOOLONG; ...
-       *   src/unistd/chdir.c:24:     ... errno = ENAMETOOLONG; ...
-       *   src/unistd/link.c:232:     errno = ENAMETOOLONG;
-       *   src/unistd/gethostname.c:15: ... errno = ENAMETOOLONG; ...
-       *   (and more)
-       *
-       * The message-table line plus producing sites is what a
-       * PRODUCED errno looks like in this tree; ELOOP has the first and
-       * none of the second.  `grep -n ELOOP src/internal/errno.c`
-       * returns nothing, against 73 `return E...` lines in that file.
-       * The two reparse-point statuses that ARE mapped there,
-       * STATUS_NOT_A_REPARSE_POINT and STATUS_IO_REPARSE_TAG_NOT_HANDLED,
-       * both give EINVAL -- and both mean "this is not a link" rather
-       * than "these links cycle".
-       *
-       * The status a loop would arrive as is not even NAMED in this
-       * tree.  `grep -rn REPARSE_POINT_NOT_RESOLVED src/ include/ test/`
-       * finds it in exactly two places, both of them COMMENTS in
-       * test/posix-unreferenced.c (lines 1061 and 1507), and in neither
-       * src/internal/nt.h nor any .c file -- against 97 `#define
-       * STATUS_...` lines in nt.h.  src/internal/errno.c switches on
-       * NTSTATUS constants; it cannot have a case for one the tree does
-       * not define.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  The part that is certain is the
-       * negative: never ELOOP.  For the positive, src/internal/errno.c's
-       * __errno_from_status() falls through to
-       * __errno_from_doserror(RtlNtStatusToDosError(st)), whose own
-       * default arm is `return EIO`, so unless the loop status happens
-       * to translate onto one of the thirty-odd Win32 codes that second
-       * table names, a caller sees EIO.  That last step is DERIVED, not
-       * measured -- RtlNtStatusToDosError cannot be run from here --
-       * and it is flagged as derived because it is the only part of
-       * this fence that is.  If it holds it is a particularly poor
-       * substitute, since [EIO] is on this same page's shall-fail list
-       * for a completely different condition ("An I/O error occurred
-       * while reading the file system"), leaving a caller unable to
-       * tell a symlink cycle from a failing disk.
-       *
-       * THE COUNTER-ARGUMENT, AND WHY IT WAS REJECTED.  One of those
-       * two comments -- test/posix-unreferenced.c:1062 -- states the
-       * opposite in passing, that src/internal/errno.c "does map to
-       * ELOOP".  It is easy to see why that was believed: the status
-       * has exactly the right name, the mapping table is long, and the
-       * environment argument meant nobody had to check.  The greps
-       * above are the check, and they run against this tree rather than
-       * against a recollection of it.  That file is NOT edited here --
-       * this audit changes only its own two paths -- and this fence is
-       * scoped to statvfs.html; the other pages' [ELOOP] rows are left
-       * to whoever re-audits them, with the note that their N/A is
-       * under-stated rather than wrong.
-       *
-       * NOT A BUG in this project's vocabulary, because there is no
-       * half-implemented check to be wrong: the clause was never
-       * written.  Fixing it is the loop status added to
-       * src/internal/nt.h, plus one case in src/internal/errno.c's
-       * status table -- which is why this is really a gap in the
-       * mapping; statvfs() is merely the page whose audit reached it.
-       *
-       * The assertions below are what would run if it were implemented.
-       * They need symlink(), which src/unistd/link.c does provide, and
-       * they cannot run on this suite's Wine for the version reason
-       * above -- so even with the mapping in place this fence would
-       * become a runner-conditional test rather than a live one. */
+#if NTLIBC_TEST(BUG, posix_statvfs_statvfs_eloop) /* BUG: statvfs.html ERRORS, statvfs() *shall fail* -- "[ELOOP]
+	A loop exists in symbolic links encountered during resolution
+	of the path argument."  (And the *may fail* companion, "[ELOOP]
+	More than {SYMLOOP_MAX} symbolic links were encountered during
+	resolution of the path argument.")
+
+	WHY THIS IS BUG AND NOT THE N/A EVERY OTHER [ELOOP] ROW IN
+	test/POSIX-COVERAGE.md RECORDS.  Those rows -- renameat,
+	fchmodat, symlinkat, linkat, the chown family, the exec family,
+	utime -- all give the same mechanism: this suite's environment
+	cannot create a symbolic link, so no loop can be built to hand
+	to NT's own resolver.  That is true (measured elsewhere in this
+	tree as a Wine VERSION gap: stock apt Wine 9.0 answers
+	FSCTL_SET_REPARSE_POINT with STATUS_NOT_SUPPORTED, and that
+	ioctl arrived in wine-10.19), and it is a statement about the
+	runner, not about the library.  It would settle the question
+	only if the library could answer the clause once given a loop.
+
+	WHY THE DISPOSITION IS BUG.  The prose above argues the case in
+	the ledger's older vocabulary, where UNIMPL meant "a whole
+	mechanism is absent" and BUG meant "code implements the clause
+	and gets it wrong".  That argument still reads correctly and is
+	left standing.  What decides the marker is narrower and is
+	machine-checked: tools/test-policy.py probes an UNIMPL case by
+	un-fencing it and requiring the translation unit to FAIL TO
+	COMPILE -- UNIMPL is the disposition for an absent *interface*,
+	not an absent mechanism behind a present one.  The interface
+	here is present and this case compiles, so UNIMPL is measurably
+	false (the probe reports it STALE) and BUG -- compiles, runs,
+	fails the assertion -- is the only disposition the tool will
+	accept.  The clause is under-delivered either way; only the
+	marker changed.
+
+	It cannot, and here is the evidence rather than the inference.
+
+	  $ grep -rn ELOOP src/
+	  src/string/strerror.c:51: [ELOOP] = "Symbolic link loop",
+
+	One line, and it is a message string.  POSITIVE CONTROL, so
+	that a null result is an absence and not a broken query -- the
+	same grep for an errno this library demonstrably does produce:
+
+	  $ grep -rn ENAMETOOLONG src/
+	  src/string/strerror.c:47:  [ENAMETOOLONG] = "Filename too long",
+	  src/stdlib/realpath.c:37:  ... errno = ENAMETOOLONG; ...
+	  src/process/spawn.c:385:   ... errno = ENAMETOOLONG; ...
+	  src/unistd/chdir.c:24:     ... errno = ENAMETOOLONG; ...
+	  src/unistd/link.c:232:     errno = ENAMETOOLONG;
+	  src/unistd/gethostname.c:15: ... errno = ENAMETOOLONG; ...
+	  (and more)
+
+	The message-table line plus producing sites is what a
+	PRODUCED errno looks like in this tree; ELOOP has the first and
+	none of the second.  `grep -n ELOOP src/internal/errno.c`
+	returns nothing, against 73 `return E...` lines in that file.
+	The two reparse-point statuses that ARE mapped there,
+	STATUS_NOT_A_REPARSE_POINT and STATUS_IO_REPARSE_TAG_NOT_HANDLED,
+	both give EINVAL -- and both mean "this is not a link" rather
+	than "these links cycle".
+
+	The status a loop would arrive as is not even NAMED in this
+	tree.  `grep -rn REPARSE_POINT_NOT_RESOLVED src/ include/ test/`
+	finds it in exactly two places, both of them COMMENTS in
+	test/posix-unreferenced.c (lines 1061 and 1507), and in neither
+	src/internal/nt.h nor any .c file -- against 97 `#define
+	STATUS_...` lines in nt.h.  src/internal/errno.c switches on
+	NTSTATUS constants; it cannot have a case for one the tree does
+	not define.
+
+	WHAT A CALLER OBSERVES TODAY.  The part that is certain is the
+	negative: never ELOOP.  For the positive, src/internal/errno.c's
+	__errno_from_status() falls through to
+	__errno_from_doserror(RtlNtStatusToDosError(st)), whose own
+	default arm is `return EIO`, so unless the loop status happens
+	to translate onto one of the thirty-odd Win32 codes that second
+	table names, a caller sees EIO.  That last step is DERIVED, not
+	measured -- RtlNtStatusToDosError cannot be run from here --
+	and it is flagged as derived because it is the only part of
+	this fence that is.  If it holds it is a particularly poor
+	substitute, since [EIO] is on this same page's shall-fail list
+	for a completely different condition ("An I/O error occurred
+	while reading the file system"), leaving a caller unable to
+	tell a symlink cycle from a failing disk.
+
+	THE COUNTER-ARGUMENT, AND WHY IT WAS REJECTED.  One of those
+	two comments -- test/posix-unreferenced.c:1062 -- states the
+	opposite in passing, that src/internal/errno.c "does map to
+	ELOOP".  It is easy to see why that was believed: the status
+	has exactly the right name, the mapping table is long, and the
+	environment argument meant nobody had to check.  The greps
+	above are the check, and they run against this tree rather than
+	against a recollection of it.  That file is NOT edited here --
+	this audit changes only its own two paths -- and this fence is
+	scoped to statvfs.html; the other pages' [ELOOP] rows are left
+	to whoever re-audits them, with the note that their N/A is
+	under-stated rather than wrong.
+
+	NOT A BUG in this project's vocabulary, because there is no
+	half-implemented check to be wrong: the clause was never
+	written.  Fixing it is the loop status added to
+	src/internal/nt.h, plus one case in src/internal/errno.c's
+	status table -- which is why this is really a gap in the
+	mapping; statvfs() is merely the page whose audit reached it.
+
+	The assertions below are what would run if it were implemented.
+	They need symlink(), which src/unistd/link.c does provide, and
+	they cannot run on this suite's Wine for the version reason
+	above -- so even with the mapping in place this fence would
+	become a runner-conditional test rather than a live one. */
 static void test_statvfs_eloop(void)
 {
 	struct statvfs b;
@@ -529,121 +545,122 @@ static void test_statvfs_eloop(void)
 /* --------------------------------------------------------------------
  * posix_fallocate() and the storage it promises.
  * ------------------------------------------------------------------ */
-#if 0 /* UNIMPL: posix_fallocate.html DESCRIPTION -- "The
-       * posix_fallocate() function shall ensure that any required
-       * storage for regular file data starting at offset and continuing
-       * for len bytes is allocated on the file system storage media. If
-       * posix_fallocate() returns successfully, subsequent writes to the
-       * specified file data shall not fail due to the lack of free space
-       * on the file system storage media."
-       *
-       * That sentence is the whole function.  Everything else on the
-       * page -- adjusting the file size, freeing the space on a
-       * truncating open() -- ftruncate() already does.  It is also the
-       * one clause nothing in test/ asserts, and the reason is that it
-       * is invisible from the return value: every existing assertion
-       * about the "allocation" is really an assertion about st_size or
-       * about the range being writable, and a plain ftruncate() passes
-       * all of them.  test/unistd.c:503 states the intent in its
-       * comment -- "posix_fallocate: really reserves storage and can
-       * grow the file" -- above two checks of st_size, which is exactly
-       * the confusion this fence exists to name.
-       *
-       * WHAT src/fcntl/fadvise.c ACTUALLY DOES.  The reservation is
-       * NtSetInformationFile(FileAllocationInformation), and its result
-       * is deliberately discarded for four statuses:
-       *
-       *     if (!NT_SUCCESS(st)
-       *         && st != STATUS_NOT_IMPLEMENTED
-       *         && st != STATUS_NOT_SUPPORTED
-       *         && st != STATUS_INVALID_DEVICE_REQUEST
-       *         && st != STATUS_INVALID_INFO_CLASS)
-       *             return __errno_from_status(st);
-       *
-       * Control then falls through to the FileEndOfFileInformation set
-       * below it and the function returns 0.  When that arm is taken,
-       * posix_fallocate() has done a plain ftruncate() and returned
-       * success -- the guarantee is not degraded, it is absent, and the
-       * caller is told the opposite.  Its own comment concedes as much:
-       * "a strict reading of posix_fallocate() loses the 'no later
-       * write can ENOSPC' guarantee on such a system".  That concession
-       * lives only in the source; no test and no ledger row carried it
-       * until this one, which is what made it a silent gap rather than
-       * a documented divergence.
-       *
-       * This is NOT hypothetical, and it is not only about Wine.  There
-       * is a second, arch-independent arm: the interlock
-       * `want > si.AllocationSize && want >= si.EndOfFile` skips the
-       * allocation entirely for any request that lies INSIDE the
-       * current file size, which is the sparse-or-compressed-file case
-       * -- and that case is the only one where a write inside an
-       * existing file can fail for lack of space at all.  So for a
-       * sparse file, posix_fallocate() reserves nothing by design.  The
-       * banner argues that trade honestly (clamping the request up to
-       * si.EndOfFile would de-sparsify the whole file, turning a
-       * hundred-byte request into a terabyte one), and the argument is
-       * good; it is still an under-delivered clause, and this project's
-       * vocabulary calls a deliberate "I chose not to" UNIMPL.  No
-       * assertion is written for that arm: ntlibc has no FSCTL_SET_SPARSE
-       * and Wine's FSCTL_SET_ZERO_DATA answers STATUS_NOT_SUPPORTED, so
-       * a sparse file cannot be built from inside this tree to test it
-       * on -- the same "no assertion to write" situation
-       * test/posix-stropts.c records for STREAMS.
-       *
-       * THE COUNTER-ARGUMENT, AND WHY IT DOES NOT SURVIVE.  fadvise.c
-       * says: "the alternative is failing a real Windows-capable call
-       * every time it merely runs under Wine, which is worse than the
-       * degraded guarantee."  That poses a false choice between lying
-       * and failing.  POSIX supplies a third answer written for this
-       * exact condition -- posix_fallocate.html ERRORS, *shall fail*:
-       * "[EINVAL] The len argument is less than zero, or the offset
-       * argument is less than zero, or the underlying file system does
-       * not support this operation."  A storage layer that cannot
-       * reserve blocks is entitled to say so, in a value the caller can
-       * branch on, and test/POSIX-COVERAGE.md already records that
-       * answer as conforming where the library happens to give it.
-       *
-       * AND A CAUTION THAT IS DELIBERATELY NOT TURNED INTO A CLAIM.  It
-       * is tempting to add "and the library already gives the [EINVAL]
-       * answer on i386, so it contradicts itself by architecture".  Do
-       * not: the tree holds TWO records that disagree about which
-       * status WOW64 produces for this, and neither can be re-run from
-       * here.  fadvise.c's own comment, a few lines above the swallow
-       * list, says "Wine reports the same missing set-info case as
-       * STATUS_NOT_IMPLEMENTED natively but as STATUS_INVALID_INFO_CLASS
-       * under WOW64" -- and STATUS_INVALID_INFO_CLASS is ON the swallow
-       * list, so on that record both arches swallow and agree.
-       * test/posix-tail.c:879 and test/POSIX-COVERAGE.md:2919 instead
-       * say WOW64 answers STATUS_INVALID_PARAMETER for a zero-length
-       * file, which is NOT on the list and would give EINVAL.  Both
-       * were measured by earlier sessions; the swallow list has since
-       * been widened to cover the first, which is exactly the shape of
-       * a claim that goes stale.  The finding above does not depend on
-       * which is current: it is that the swallowing arm exists at all
-       * and returns zero, which is four lines of src/fcntl/fadvise.c
-       * anyone can read.
-       *
-       * WHY THIS ASSERTION IS FENCED RATHER THAN LIVE.  st_blocks is
-       * derived from FILE_STANDARD_INFORMATION's AllocationSize
-       * (src/stat/stat.c: `st->st_blocks = (si.AllocationSize + 511) /
-       * 512;`), so it measures the reservation directly and nothing
-       * else in the suite does.  That behaviour differs by leg, and the
-       * measurement is somebody else's rather than this file's:
-       * src/fcntl/fadvise.c's interlock comment records "Measured on
-       * Windows 11 22621 by the Wine-divergence session: a non-sparse
-       * file of EndOfFile 16384 reports AllocationSize 16384 on NTFS,
-       * and 0 under Wine."  A live assertion would therefore pass on the
-       * real-Windows CI leg and fail under `make check` -- which is
-       * precisely the split the finding is about, and is why it is
-       * written down here instead of being run.
-       *
-       * IF SOMEONE UN-FENCES THIS, un-fence it as a measurement, not as
-       * a pass/fail: run it, print what st_blocks actually is on each
-       * leg, and only then decide.  A "cannot" written into a comment
-       * is a decaying measurement, not a fact -- this tree has already
-       * had to revise several of them once somebody re-tried the thing
-       * -- and the ones relied on above are dated 2026-08 and describe
-       * Wine and NTFS versions that will move. */
+#if NTLIBC_TEST(BUG, posix_statvfs_posix_fallocate_reserves_storage) /* BUG: posix_fallocate.html DESCRIPTION -- "The
+	posix_fallocate() function shall ensure that any required
+	storage for regular file data starting at offset and continuing
+	for len bytes is allocated on the file system storage media. If
+	posix_fallocate() returns successfully, subsequent writes to the
+	specified file data shall not fail due to the lack of free space
+	on the file system storage media."
+
+	That sentence is the whole function.  Everything else on the
+	page -- adjusting the file size, freeing the space on a
+	truncating open() -- ftruncate() already does.  It is also the
+	one clause nothing in test/ asserts, and the reason is that it
+	is invisible from the return value: every existing assertion
+	about the "allocation" is really an assertion about st_size or
+	about the range being writable, and a plain ftruncate() passes
+	all of them.  test/unistd.c:503 states the intent in its
+	comment -- "posix_fallocate: really reserves storage and can
+	grow the file" -- above two checks of st_size, which is exactly
+	the confusion this fence exists to name.
+
+	WHAT src/fcntl/fadvise.c ACTUALLY DOES.  The reservation is
+	NtSetInformationFile(FileAllocationInformation), and its result
+	is deliberately discarded for four statuses:
+
+	    if (!NT_SUCCESS(st)
+	        && st != STATUS_NOT_IMPLEMENTED
+	        && st != STATUS_NOT_SUPPORTED
+	        && st != STATUS_INVALID_DEVICE_REQUEST
+	        && st != STATUS_INVALID_INFO_CLASS)
+	            return __errno_from_status(st);
+
+	Control then falls through to the FileEndOfFileInformation set
+	below it and the function returns 0.  When that arm is taken,
+	posix_fallocate() has done a plain ftruncate() and returned
+	success -- the guarantee is not degraded, it is absent, and the
+	caller is told the opposite.  Its own comment concedes as much:
+	"a strict reading of posix_fallocate() loses the 'no later
+	write can ENOSPC' guarantee on such a system".  That concession
+	lives only in the source; no test and no ledger row carried it
+	until this one, which is what made it a silent gap rather than
+	a documented divergence.
+
+	This is NOT hypothetical, and it is not only about Wine.  There
+	is a second, arch-independent arm: the interlock
+	`want > si.AllocationSize && want >= si.EndOfFile` skips the
+	allocation entirely for any request that lies INSIDE the
+	current file size, which is the sparse-or-compressed-file case
+	-- and that case is the only one where a write inside an
+	existing file can fail for lack of space at all.  So for a
+	sparse file, posix_fallocate() reserves nothing by design.  The
+	banner argues that trade honestly (clamping the request up to
+	si.EndOfFile would de-sparsify the whole file, turning a
+	hundred-byte request into a terabyte one), and the argument is
+	good; it is still an under-delivered clause -- a deliberate
+	"I chose not to", which is nonetheless a clause this library
+	does not deliver.  No
+	assertion is written for that arm: ntlibc has no FSCTL_SET_SPARSE
+	and Wine's FSCTL_SET_ZERO_DATA answers STATUS_NOT_SUPPORTED, so
+	a sparse file cannot be built from inside this tree to test it
+	on -- the same "no assertion to write" situation
+	test/posix-stropts.c records for STREAMS.
+
+	THE COUNTER-ARGUMENT, AND WHY IT DOES NOT SURVIVE.  fadvise.c
+	says: "the alternative is failing a real Windows-capable call
+	every time it merely runs under Wine, which is worse than the
+	degraded guarantee."  That poses a false choice between lying
+	and failing.  POSIX supplies a third answer written for this
+	exact condition -- posix_fallocate.html ERRORS, *shall fail*:
+	"[EINVAL] The len argument is less than zero, or the offset
+	argument is less than zero, or the underlying file system does
+	not support this operation."  A storage layer that cannot
+	reserve blocks is entitled to say so, in a value the caller can
+	branch on, and test/POSIX-COVERAGE.md already records that
+	answer as conforming where the library happens to give it.
+
+	AND A CAUTION THAT IS DELIBERATELY NOT TURNED INTO A CLAIM.  It
+	is tempting to add "and the library already gives the [EINVAL]
+	answer on i386, so it contradicts itself by architecture".  Do
+	not: the tree holds TWO records that disagree about which
+	status WOW64 produces for this, and neither can be re-run from
+	here.  fadvise.c's own comment, a few lines above the swallow
+	list, says "Wine reports the same missing set-info case as
+	STATUS_NOT_IMPLEMENTED natively but as STATUS_INVALID_INFO_CLASS
+	under WOW64" -- and STATUS_INVALID_INFO_CLASS is ON the swallow
+	list, so on that record both arches swallow and agree.
+	test/posix-tail.c:879 and test/POSIX-COVERAGE.md:2919 instead
+	say WOW64 answers STATUS_INVALID_PARAMETER for a zero-length
+	file, which is NOT on the list and would give EINVAL.  Both
+	were measured by earlier sessions; the swallow list has since
+	been widened to cover the first, which is exactly the shape of
+	a claim that goes stale.  The finding above does not depend on
+	which is current: it is that the swallowing arm exists at all
+	and returns zero, which is four lines of src/fcntl/fadvise.c
+	anyone can read.
+
+	WHY THIS ASSERTION IS FENCED RATHER THAN LIVE.  st_blocks is
+	derived from FILE_STANDARD_INFORMATION's AllocationSize
+	(src/stat/stat.c: `st->st_blocks = (si.AllocationSize + 511) /
+	512;`), so it measures the reservation directly and nothing
+	else in the suite does.  That behaviour differs by leg, and the
+	measurement is somebody else's rather than this file's:
+	src/fcntl/fadvise.c's interlock comment records "Measured on
+	Windows 11 22621 by the Wine-divergence session: a non-sparse
+	file of EndOfFile 16384 reports AllocationSize 16384 on NTFS,
+	and 0 under Wine."  A live assertion would therefore pass on the
+	real-Windows CI leg and fail under `make check` -- which is
+	precisely the split the finding is about, and is why it is
+	written down here instead of being run.
+
+	IF SOMEONE UN-FENCES THIS, un-fence it as a measurement, not as
+	a pass/fail: run it, print what st_blocks actually is on each
+	leg, and only then decide.  A "cannot" written into a comment
+	is a decaying measurement, not a fact -- this tree has already
+	had to revise several of them once somebody re-tried the thing
+	-- and the ones relied on above are dated 2026-08 and describe
+	Wine and NTFS versions that will move. */
 static void test_posix_fallocate_reserves_storage(void)
 {
 	struct stat st;
@@ -679,13 +696,13 @@ int main(void)
 	test_statvfs_flag_bits();
 	test_posix_fadvise_no_effect();
 	test_posix_fallocate_inside_file();
-#if 0 /* UNIMPL: see the fence above test_statvfs_eloop.  The call site
-       * is fenced with it, because the function it names is inside that
-       * #if 0. */
+#if NTLIBC_TEST(BUG, posix_statvfs_statvfs_eloop) /* BUG: see the fence above test_statvfs_eloop.  The call site
+	carries the same case id, because the function it names is inside
+	that fence. */
 	test_statvfs_eloop();
 #endif
-#if 0 /* UNIMPL: see the fence above test_posix_fallocate_reserves_storage,
-       * same reason as the call site just above. */
+#if NTLIBC_TEST(BUG, posix_statvfs_posix_fallocate_reserves_storage) /* BUG: see the fence above test_posix_fallocate_reserves_storage,
+	same reason as the call site just above. */
 	test_posix_fallocate_reserves_storage();
 #endif
 

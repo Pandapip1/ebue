@@ -105,6 +105,7 @@ static int ftw_h_alone_types(const struct stat *st)
 #include <stdio.h>
 #include <errno.h>
 #include <limits.h>
+#include "test-policy.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -751,78 +752,78 @@ static void test_ndirs_out_of_range(void)
 /* ====================================================================
  * FINDING 1 -- fenced BUG
  * ================================================================== */
-#if 0 /* BUG: src/ftw/ftw.c reports every stat()/lstat() failure below
-       * the walk root as FTW_NS, and every opendir() failure as
-       * FTW_DNR, and carries on walking.  Both pages reserve that for
-       * a lack-of-permission failure and require any other failure to
-       * end the walk with -1.
-       *
-       * nftw.html DESCRIPTION, the FTW_NS bullet, which says it
-       * outright: "FTW_NS The stat() function failed on the object
-       * because of lack of appropriate permission. The stat buffer
-       * passed to fn is undefined. Failure of stat() for any other
-       * reason is considered an error and nftw() shall return -1."
-       *
-       * nftw.html RETURN VALUE, the same requirement as a termination
-       * condition: "The nftw() function shall continue until the first
-       * of the following conditions occurs: ... The nftw() function
-       * detects an error other than [EACCES] (see FTW_DNR and FTW_NS
-       * above), in which case nftw() shall return -1 and set errno to
-       * indicate the error."
-       *
-       * ftw.html says it twice too -- DESCRIPTION: "The tree traversal
-       * shall continue until either the tree is exhausted, an
-       * invocation of fn returns a non-zero value, or some error,
-       * other than [EACCES], is detected within ftw()", and RETURN
-       * VALUE: "If ftw() encounters an error other than [EACCES] (see
-       * FTW_DNR and FTW_NS above), it shall return -1 and set errno to
-       * indicate the error."  The parenthetical is the standard tying
-       * FTW_DNR and FTW_NS to that one errno and to no other.
-       *
-       * WHAT src/ftw/ftw.c DOES (read, not measured).  walk() opens
-       * with `if (lstat(path, &lst) < 0) { if (is_root) return -1; ...
-       * return report(ws, path, &zero, FTW_NS, level); }`.  The walk
-       * root is handled correctly; for anything below it, errno is
-       * never examined -- every failure becomes FTW_NS and the parent's
-       * readdir() loop keeps going, because report() returns whatever
-       * fn returns and fn returning 0 means "continue".  The
-       * FTW_PHYS-clear branch does the same for stat(): `else if
-       * (stat(path, &st) < 0) return report(ws, path, &lst,
-       * S_ISLNK(lst.st_mode) ? FTW_SLN : FTW_NS, level);`.  And the
-       * directory branch does the same for opendir(): `if
-       * (level_open(ws, lru, &lv) < 0) { free(lv.path); return
-       * report(ws, path, rst, FTW_DNR, level); }`, where level_open()
-       * fails exactly when opendir() does, whatever it failed with.
-       * There is no `errno == EACCES` test anywhere in the file.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  A walk over a tree something
-       * else is changing -- a build tree, a spool directory, anything
-       * a second process writes -- silently reports the vanished
-       * entries as FTW_NS and returns 0, so the caller is told the
-       * tree was exhausted and that some of it was unreadable, when in
-       * fact the walk hit an [ENOENT] the standard requires it to stop
-       * on.  A caller that deletes a tree with nftw(FTW_DEPTH) is the
-       * worst case: it gets 0 back and believes the tree is gone.
-       *
-       * UNIMPL, not N/A or BUG?  BUG.  The interface exists, the
-       * clause is one it implements (it already distinguishes the walk
-       * root, where it returns -1 correctly), and the fix is local:
-       * consult errno at the three call sites above and route only
-       * EACCES to FTW_NS/FTW_DNR.
-       *
-       * WHY FENCED RATHER THAN LIVE.  The fixture below makes a
-       * stat() fail for a reason other than permission by having the
-       * callback unlink a sibling the walk has not reached yet, which
-       * needs the entry's name to have been buffered by readdir()
-       * already.  src/dirent/dirent_internal.h sets __DIRBUF_SIZE to
-       * 32768 and src/dirent/getdents.c fills that buffer from one
-       * NtQueryDirectoryFile, so a three-entry directory arrives in a
-       * single call -- read from those files, not measured here.  That
-       * is a real dependency on an implementation detail, and it is
-       * why this is fenced rather than run: it would be a poor live
-       * assertion even once the defect is fixed.  The clause it
-       * asserts does not depend on it, and neither does the reading of
-       * src/ftw/ftw.c above. */
+#if NTLIBC_TEST(BUG, posix_ftw_error_other_than_eacces_stops_walk) /* BUG: src/ftw/ftw.c reports every stat()/lstat() failure below
+	the walk root as FTW_NS, and every opendir() failure as
+	FTW_DNR, and carries on walking.  Both pages reserve that for
+	a lack-of-permission failure and require any other failure to
+	end the walk with -1.
+
+	nftw.html DESCRIPTION, the FTW_NS bullet, which says it
+	outright: "FTW_NS The stat() function failed on the object
+	because of lack of appropriate permission. The stat buffer
+	passed to fn is undefined. Failure of stat() for any other
+	reason is considered an error and nftw() shall return -1."
+
+	nftw.html RETURN VALUE, the same requirement as a termination
+	condition: "The nftw() function shall continue until the first
+	of the following conditions occurs: ... The nftw() function
+	detects an error other than [EACCES] (see FTW_DNR and FTW_NS
+	above), in which case nftw() shall return -1 and set errno to
+	indicate the error."
+
+	ftw.html says it twice too -- DESCRIPTION: "The tree traversal
+	shall continue until either the tree is exhausted, an
+	invocation of fn returns a non-zero value, or some error,
+	other than [EACCES], is detected within ftw()", and RETURN
+	VALUE: "If ftw() encounters an error other than [EACCES] (see
+	FTW_DNR and FTW_NS above), it shall return -1 and set errno to
+	indicate the error."  The parenthetical is the standard tying
+	FTW_DNR and FTW_NS to that one errno and to no other.
+
+	WHAT src/ftw/ftw.c DOES (read, not measured).  walk() opens
+	with `if (lstat(path, &lst) < 0) { if (is_root) return -1; ...
+	return report(ws, path, &zero, FTW_NS, level); }`.  The walk
+	root is handled correctly; for anything below it, errno is
+	never examined -- every failure becomes FTW_NS and the parent's
+	readdir() loop keeps going, because report() returns whatever
+	fn returns and fn returning 0 means "continue".  The
+	FTW_PHYS-clear branch does the same for stat(): `else if
+	(stat(path, &st) < 0) return report(ws, path, &lst,
+	S_ISLNK(lst.st_mode) ? FTW_SLN : FTW_NS, level);`.  And the
+	directory branch does the same for opendir(): `if
+	(level_open(ws, lru, &lv) < 0) { free(lv.path); return
+	report(ws, path, rst, FTW_DNR, level); }`, where level_open()
+	fails exactly when opendir() does, whatever it failed with.
+	There is no `errno == EACCES` test anywhere in the file.
+
+	WHAT A CALLER OBSERVES TODAY.  A walk over a tree something
+	else is changing -- a build tree, a spool directory, anything
+	a second process writes -- silently reports the vanished
+	entries as FTW_NS and returns 0, so the caller is told the
+	tree was exhausted and that some of it was unreadable, when in
+	fact the walk hit an [ENOENT] the standard requires it to stop
+	on.  A caller that deletes a tree with nftw(FTW_DEPTH) is the
+	worst case: it gets 0 back and believes the tree is gone.
+
+	UNIMPL, not N/A or BUG?  BUG.  The interface exists, the
+	clause is one it implements (it already distinguishes the walk
+	root, where it returns -1 correctly), and the fix is local:
+	consult errno at the three call sites above and route only
+	EACCES to FTW_NS/FTW_DNR.
+
+	WHY FENCED RATHER THAN LIVE.  The fixture below makes a
+	stat() fail for a reason other than permission by having the
+	callback unlink a sibling the walk has not reached yet, which
+	needs the entry's name to have been buffered by readdir()
+	already.  src/dirent/dirent_internal.h sets __DIRBUF_SIZE to
+	32768 and src/dirent/getdents.c fills that buffer from one
+	NtQueryDirectoryFile, so a three-entry directory arrives in a
+	single call -- read from those files, not measured here.  That
+	is a real dependency on an implementation detail, and it is
+	why this is fenced rather than run: it would be a poor live
+	assertion even once the defect is fixed.  The clause it
+	asserts does not depend on it, and neither does the reading of
+	src/ftw/ftw.c above. */
 static int mut_removed;
 static int mut_cb(const char *p, const struct stat *st, int flag, struct FTW *f)
 {
@@ -871,68 +872,87 @@ static void test_nftw_error_other_than_eacces_stops_the_walk(void)
 /* ====================================================================
  * FINDING 2 -- fenced BUG
  * ================================================================== */
-#if 0 /* BUG: with FTW_DEPTH clear, a directory that cannot be read is
-       * handed to fn twice -- once as FTW_D, then again as FTW_DNR.
-       *
-       * nftw.html DESCRIPTION: "At each file it encounters, nftw()
-       * shall call the user-supplied function fn with four arguments",
-       * of which "The third argument is an integer giving additional
-       * information. Its value is one of the following: ... FTW_D The
-       * object is a directory. ... FTW_DNR The object is a directory
-       * that cannot be read. The fn function shall not be called for
-       * any of its descendants."  One file, one call, one of those
-       * values -- not one file, two calls, two different values.
-       * ftw.html's counterpart is "For each object in the hierarchy,
-       * ftw() shall call the function pointed to by fn", with "FTW_DNR
-       * For a directory that cannot be read" and "If the integer is
-       * FTW_DNR, descendants of that directory shall not be
-       * processed."
-       *
-       * WHAT src/ftw/ftw.c DOES (read, not measured).  walk() emits
-       * the pre-order report before it has tried to open anything:
-       *
-       *     if (!(ws->flags & FTW_DEPTH)) {
-       *             r = report(ws, path, rst, FTW_D, level);
-       *             if (r) return r;
-       *     }
-       *     ...
-       *     if (level_open(ws, lru, &lv) < 0) {
-       *             free(lv.path);
-       *             return report(ws, path, rst, FTW_DNR, level);
-       *     }
-       *
-       * so an unreadable directory goes through both.  With FTW_DEPTH
-       * set the first report is skipped and the same directory is
-       * reported exactly once, which is what shows the duplicate is an
-       * artefact of when the FTW_D report is emitted rather than a
-       * decision about FTW_DNR: the same object gets one call or two
-       * depending on a flag whose entire specified effect is ordering.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  A callback that counts, sums or
-       * mirrors counts the directory twice; one that switches on the
-       * third argument acts on FTW_D -- descending, or creating the
-       * mirror entry and expecting its contents -- for a directory
-       * whose contents will never arrive.
-       *
-       * Fix shape: attempt the open first and choose FTW_D or FTW_DNR
-       * from the result, which is also where the errno test finding 1
-       * needs has to go, so the two share one change to that branch.
-       *
-       * WHY FENCED.  It needs a directory opendir() fails on with
-       * [EACCES], which is the fixture test/POSIX-COVERAGE.md's group
-       * J3 row and `glob()`'s GLOB_ERR row both record as unbuildable
-       * here ("chmod 0 does not revoke owner access on this
-       * platform").  That claim is theirs and is repeated, not
-       * re-established: it was not re-tested for this file, which
-       * could run nothing.  The defect itself does not rest on it --
-       * it is visible in the source quoted above -- and these
-       * assertions should pass unchanged on any platform that can
-       * build the fixture, which is the same standard
-       * test/posix-tail.c's `test_nftw_symlink_loop` fence is held to.
-       * The fixture line is left as a comment rather than as a
-       * chmod() call for exactly that reason: a chmod() that silently
-       * does nothing would turn this into a test that passes for the
-       * wrong reason. */
+#if NTLIBC_TEST(NA, posix_ftw_unreadable_dir_reported_twice) /* N/A (the defect below is real; this test cannot show it -- see WHY N/A): with FTW_DEPTH clear, a directory that cannot be read is
+	handed to fn twice -- once as FTW_D, then again as FTW_DNR.
+
+	nftw.html DESCRIPTION: "At each file it encounters, nftw()
+	shall call the user-supplied function fn with four arguments",
+	of which "The third argument is an integer giving additional
+	information. Its value is one of the following: ... FTW_D The
+	object is a directory. ... FTW_DNR The object is a directory
+	that cannot be read. The fn function shall not be called for
+	any of its descendants."  One file, one call, one of those
+	values -- not one file, two calls, two different values.
+	ftw.html's counterpart is "For each object in the hierarchy,
+	ftw() shall call the function pointed to by fn", with "FTW_DNR
+	For a directory that cannot be read" and "If the integer is
+	FTW_DNR, descendants of that directory shall not be
+	processed."
+
+	WHAT src/ftw/ftw.c DOES (read, not measured).  walk() emits
+	the pre-order report before it has tried to open anything:
+
+	    if (!(ws->flags & FTW_DEPTH)) {
+	            r = report(ws, path, rst, FTW_D, level);
+	            if (r) return r;
+	    }
+	    ...
+	    if (level_open(ws, lru, &lv) < 0) {
+	            free(lv.path);
+	            return report(ws, path, rst, FTW_DNR, level);
+	    }
+
+	so an unreadable directory goes through both.  With FTW_DEPTH
+	set the first report is skipped and the same directory is
+	reported exactly once, which is what shows the duplicate is an
+	artefact of when the FTW_D report is emitted rather than a
+	decision about FTW_DNR: the same object gets one call or two
+	depending on a flag whose entire specified effect is ordering.
+
+	WHAT A CALLER OBSERVES TODAY.  A callback that counts, sums or
+	mirrors counts the directory twice; one that switches on the
+	third argument acts on FTW_D -- descending, or creating the
+	mirror entry and expecting its contents -- for a directory
+	whose contents will never arrive.
+
+	Fix shape: attempt the open first and choose FTW_D or FTW_DNR
+	from the result, which is also where the errno test finding 1
+	needs has to go, so the two share one change to that branch.
+
+	WHY N/A AND NOT BUG.  The defect above is real and rests on the
+	source quoted, not on this test.  The disposition, though, has to
+	describe what this test can measure, and the answer is nothing.
+
+	It needs a directory opendir() fails on with [EACCES].  That
+	fixture was recorded as unbuildable here ("chmod 0 does not
+	revoke owner access on this platform"), so the fixture line was
+	left as a comment rather than a chmod() call -- deliberately, so
+	a chmod() that silently did nothing could not make this pass for
+	the wrong reason.
+
+	MEASURED, and this is why the marker changed.  Nothing creates
+	"ftwtree/noread" at all -- not make_tree(), which builds only
+	ftwtree, d1, d1/d2, d1/d2/d3 and five files, and not this
+	function.  Every assertion below therefore addresses a path that
+	does not exist, on any runner: count_ent("ftwtree/noread") is 0,
+	not 2, and the branch under test is never reached.  Run with the
+	fence forced open, the case fails four assertions -- none of them
+	the double report.  A BUG marker would have recorded that failure
+	as confirmation of the finding, which it is not: this test cannot
+	distinguish the defect from its own missing fixture.  So it is
+	declared N/A and is not probed, rather than being counted as
+	evidence it does not supply.
+
+	To make it live, the fixture need not be an [EACCES] directory at
+	all.  Any opendir() failure after the FTW_D report exercises the
+	same branch -- e.g. a callback that rmdir()s "ftwtree/noread"
+	when it is handed FTW_D for it, the same mid-walk mutation
+	test_nftw_error_other_than_eacces_stops_the_walk already uses
+	successfully here.  level_open() then fails with [ENOENT] and the
+	same object is reported FTW_D and then FTW_DNR, which is the
+	clause violation, needing no permission the runner cannot grant.
+	That is a new assertion rather than a repair of this one, so it
+	is left to a follow-up. */
 static void test_nftw_dnr_reported_once(void)
 {
 	int i, n_d = 0, n_dnr = 0;
@@ -970,55 +990,55 @@ static void test_nftw_dnr_reported_once(void)
 /* ====================================================================
  * FINDING 3 -- fenced BUG
  * ================================================================== */
-#if 0 /* BUG: nftw() does not set errno to [EACCES] when fn returns -1
-       * without setting errno itself.
-       *
-       * nftw.html ERRORS, *shall fail*: "[EACCES] Search permission is
-       * denied for any component of path or read permission is denied
-       * for path, or fn returns -1 and does not reset errno."  The
-       * third alternative is nftw()'s alone -- ftw.html's [EACCES]
-       * entry reads "Search permission is denied for any component of
-       * path or read permission is denied for path." and stops there
-       * -- so it is not boilerplate shared between the two pages, it
-       * is a requirement written for nftw() specifically.
-       *
-       * WHAT src/ftw/ftw.c DOES (read, not measured).  The string
-       * "errno" appears in it four times: `errno = ENOENT` in each of
-       * ftw() and nftw() for an empty path, and `errno = ENOMEM` twice
-       * on allocation failure.  fn's return value travels back out
-       * through report() and walk() untouched, so when fn returns -1
-       * the caller gets -1 with errno holding whatever the last
-       * lstat()/stat()/opendir() left in it -- which on a walk where
-       * nothing failed is whatever the caller had before the call.
-       *
-       * WHAT A CALLER OBSERVES TODAY.  nftw() returns -1, which is
-       * also its own failure return, and errno does not say which of
-       * the two happened.  Pinning it to [EACCES] is what makes that
-       * -1 mean something definite, and it is the only reason the
-       * clause exists: a callback returning -1 is otherwise
-       * indistinguishable from nftw() failing.
-       *
-       * THE COUNTER-ARGUMENT, AND WHY IT IS REJECTED.  One can read
-       * the ERRORS section as describing only nftw()'s own failures,
-       * and a non-zero return from fn as not being one of those --
-       * RETURN VALUE lists "An invocation of fn shall return a
-       * non-zero value, in which case nftw() shall return that value"
-       * as a different termination condition from "detects an error".
-       * On that reading the sentence is a remark about how such a -1
-       * usually arises rather than an obligation.  It is rejected
-       * because the sentence is not in RETURN VALUE, it is an entry in
-       * the *shall fail* list, and an entry there states a condition
-       * under which the function shall fail with that errno; and
-       * because the condition it names -- "fn returns -1 and does not
-       * reset errno" -- is a fact about fn, not about nftw(), so on
-       * the descriptive reading the clause would have no addressee at
-       * all.  This is nonetheless the weakest of this file's three
-       * findings and is recorded as such in the ledger.
-       *
-       * Fix shape: in nftw(), if the value coming back out of walk()
-       * is -1 and errno is unchanged from what it was on entry, set
-       * errno to EACCES.  ftw() must NOT get the same treatment: the
-       * clause is not on its page. */
+#if NTLIBC_TEST(BUG, posix_ftw_eacces_when_fn_returns_minus_one) /* BUG: nftw() does not set errno to [EACCES] when fn returns -1
+	without setting errno itself.
+
+	nftw.html ERRORS, *shall fail*: "[EACCES] Search permission is
+	denied for any component of path or read permission is denied
+	for path, or fn returns -1 and does not reset errno."  The
+	third alternative is nftw()'s alone -- ftw.html's [EACCES]
+	entry reads "Search permission is denied for any component of
+	path or read permission is denied for path." and stops there
+	-- so it is not boilerplate shared between the two pages, it
+	is a requirement written for nftw() specifically.
+
+	WHAT src/ftw/ftw.c DOES (read, not measured).  The string
+	"errno" appears in it four times: `errno = ENOENT` in each of
+	ftw() and nftw() for an empty path, and `errno = ENOMEM` twice
+	on allocation failure.  fn's return value travels back out
+	through report() and walk() untouched, so when fn returns -1
+	the caller gets -1 with errno holding whatever the last
+	lstat()/stat()/opendir() left in it -- which on a walk where
+	nothing failed is whatever the caller had before the call.
+
+	WHAT A CALLER OBSERVES TODAY.  nftw() returns -1, which is
+	also its own failure return, and errno does not say which of
+	the two happened.  Pinning it to [EACCES] is what makes that
+	-1 mean something definite, and it is the only reason the
+	clause exists: a callback returning -1 is otherwise
+	indistinguishable from nftw() failing.
+
+	THE COUNTER-ARGUMENT, AND WHY IT IS REJECTED.  One can read
+	the ERRORS section as describing only nftw()'s own failures,
+	and a non-zero return from fn as not being one of those --
+	RETURN VALUE lists "An invocation of fn shall return a
+	non-zero value, in which case nftw() shall return that value"
+	as a different termination condition from "detects an error".
+	On that reading the sentence is a remark about how such a -1
+	usually arises rather than an obligation.  It is rejected
+	because the sentence is not in RETURN VALUE, it is an entry in
+	the *shall fail* list, and an entry there states a condition
+	under which the function shall fail with that errno; and
+	because the condition it names -- "fn returns -1 and does not
+	reset errno" -- is a fact about fn, not about nftw(), so on
+	the descriptive reading the clause would have no addressee at
+	all.  This is nonetheless the weakest of this file's three
+	findings and is recorded as such in the ledger.
+
+	Fix shape: in nftw(), if the value coming back out of walk()
+	is -1 and errno is unchanged from what it was on entry, set
+	errno to EACCES.  ftw() must NOT get the same treatment: the
+	clause is not on its page. */
 static int minus_one_cb(const char *p, const struct stat *st, int flag, struct FTW *f)
 {
 	record(p, st, flag, f->base, f->level);
@@ -1052,13 +1072,13 @@ int main(void)
 	test_flag_combinations();
 	test_ftw_enametoolong();
 	test_ndirs_out_of_range();
-#if 0 /* BUG: see the fence above test_nftw_error_other_than_eacces_stops_the_walk */
+#if NTLIBC_TEST(BUG, posix_ftw_error_other_than_eacces_stops_walk) /* BUG: see the fence above test_nftw_error_other_than_eacces_stops_the_walk */
 	test_nftw_error_other_than_eacces_stops_the_walk();
 #endif
-#if 0 /* BUG: see the fence above test_nftw_dnr_reported_once */
+#if NTLIBC_TEST(NA, posix_ftw_unreadable_dir_reported_twice) /* N/A: see the fence above test_nftw_dnr_reported_once */
 	test_nftw_dnr_reported_once();
 #endif
-#if 0 /* BUG: see the fence above test_nftw_eacces_when_fn_returns_minus_one */
+#if NTLIBC_TEST(BUG, posix_ftw_eacces_when_fn_returns_minus_one) /* BUG: see the fence above test_nftw_eacces_when_fn_returns_minus_one */
 	test_nftw_eacces_when_fn_returns_minus_one();
 #endif
 
