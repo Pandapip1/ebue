@@ -108,11 +108,20 @@
  *     is unconditionally true and there is nothing to reset.
  *
  *   POSIX_SPAWN_SETPGROUP -- honoured only for the one process group
- *     this platform has.  src/unistd/ids.c answers getpgrp() and
- *     getpgid() with a fixed 1 for every process; there is no NT object
- *     that plays a POSIX process group's role (a job object groups for
- *     resource limits, not for job-control signal delivery).  So a
- *     spawn-pgroup of that same group is already true of the child, and
+ *     this library models.  src/unistd/ids.c answers getpgrp() and
+ *     getpgid() with a fixed 1 for every process.  Note that NT is not
+ *     short of a process-group concept: console process groups are
+ *     created by CreateProcess's CREATE_NEW_PROCESS_GROUP and are the
+ *     target of GenerateConsoleCtrlEvent's dwProcessGroupId, which is
+ *     job-control signal delivery to a group.  (An earlier version of
+ *     this comment compared against job objects and concluded NT had
+ *     no such concept; that was the wrong object and the wrong
+ *     conclusion -- see test/posix-spawn.c's fence.)  What NT does not
+ *     have is a way to *join* one: a console process group's members
+ *     are exactly the descendants of its root process, its id is
+ *     always that root's pid, and no call places a process into a
+ *     pre-existing group it does not descend from.  So a
+ *     spawn-pgroup of the group this library models is already true of the child, and
  *     anything else -- including 0, "put the child in a new group of
  *     its own" -- is refused with EINVAL, which is what ERRORS routes
  *     here ("an error value shall be returned as described by

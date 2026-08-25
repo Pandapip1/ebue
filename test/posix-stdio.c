@@ -412,17 +412,28 @@ static void test_popen(void)
 	}
 }
 
-#if 0 /* N/A: popen.html ERRORS "shall fail" clause: "[EMFILE]
+#if 0 /* UNIMPL: popen.html ERRORS "shall fail" clause: "[EMFILE]
        * {STREAM_MAX} streams are currently open in the calling
-       * process." Driving the process to STREAM_MAX (FOPEN_MAX) open
-       * FILE*s purely to observe one more popen() call fail is not a
-       * popen()-specific behaviour -- every *fopen()-family function
-       * hits the same wall the same way, and ntlibc has no
+       * process."  Was N/A; the tag was wrong, and this is a
+       * correction of the tag rather than of the decision.
+       *
+       * The reason recorded here has always been a test-economy
+       * judgement, not a platform fact: driving the process to
+       * STREAM_MAX purely to watch one more popen() fail is not a
+       * popen()-specific behaviour -- every fopen()-family function
+       * hits the same wall the same way, ntlibc has no
        * STREAM_MAX-specific logic in popen() to distinguish from the
-       * generic "out of fd table / out of memory" paths fopen() itself
-       * already exercises; doing it here would just be an expensive,
-       * redundant repeat of that generic exhaustion test under a
-       * different function name. */
+       * generic "out of fd table / out of memory" paths fopen()
+       * already exercises, and repeating it here would be an
+       * expensive duplicate under a different function name.  That may
+       * well be the right call.  But N/A asserts the clause is
+       * *inapplicable on this platform*, and this one is perfectly
+       * applicable: __fd_alloc() (src/internal/fd.c) returns EMFILE on
+       * a full __fds[FD_MAX] table, and popen() reaches it like every
+       * other stream constructor.  Nothing about NT makes the clause
+       * meaningless.  A clause we chose not to exercise is UNIMPL.
+       * (Flagged independently as the one misfiled tag of the 30 in
+       * test/verification-coverage-accounting.md, section 6.) */
 static void test_popen_emfile(void)
 {
 	FILE *fs[8192];

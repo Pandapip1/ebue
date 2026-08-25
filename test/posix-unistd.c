@@ -697,55 +697,38 @@ static void test_kill_zero_is_own_group_of_one(void)
 	CHECK(signal(SIGUSR2, SIG_DFL) != SIG_ERR);
 }
 
-/* kill.html ERRORS EPERM: "The process does not have permission to send
- * the signal to any receiving process" -- POSIX's own example is a
- * real/effective/saved-uid mismatch.  src/unistd/ids.c documents "There
- * is one user as far as this library is concerned": getuid(), geteuid()
- * and the saved set-uid this library never separately tracks are all
- * always 1000, and setuid()/seteuid()/setreuid() are no-ops that cannot
- * create a second identity.  There being only one uid, ever, on this
- * platform is what makes a uid-mismatch EPERM structurally impossible
- * here -- not merely hard to trigger under Wine, since real hardware
- * has the identical single-fixed-uid design. */
-#if 0 /* N/A: kill.html ERRORS EPERM (uid mismatch case) -- ntlibc has
-       * exactly one uid (1000, src/unistd/ids.c), always, on every NT
-       * target it runs on; setuid()/seteuid()/setreuid() are no-ops,
-       * so no process this library controls can ever have a differing
-       * real/effective/saved uid to be checked against. */
-static void test_kill_eperm_uid_mismatch(void)
-{
-	CHECK(getuid() == geteuid());
-	CHECK(seteuid(0) == 0);		/* no-op; cannot actually change identity */
-	CHECK(geteuid() == 1000);		/* still 1000 -- no second uid was created */
-	errno = 0;
-	CHECK(kill(getpid(), 0) == -1 && errno == EPERM);	/* never observable */
-}
-#endif
-
-/* kill.html ERRORS EPERM: the other route to EPERM here is NT's own
- * process-protection ACLs, independent of ntlibc's uid model entirely
- * -- src/signal/signal.c's kill() maps NtOpenProcess's
- * STATUS_ACCESS_DENIED to EPERM.  On real Windows, pid 4 is always the
- * "System" process, protected against PROCESS_TERMINATE from an
- * unprivileged caller, so kill(4, 0) (the sig==0 existence/permission
- * probe) should fail EPERM there.  Under Wine there is no "System"
- * process at pid 4 to protect -- NtOpenProcess fails with an
- * invalid-CID status, which kill() maps to ESRCH instead -- so detect
- * that shape and skip the assertion rather than asserting either one
- * blindly (same detect-and-note pattern as test/unistd.c's read-only
- * unlink/chmod cases). CI runs a real-Windows leg, so this is not
- * merely Wine-hostile -- it does run for real there. */
-static void test_kill_eperm_protected_process(void)
-{
-	errno = 0;
-	if (kill((pid_t)4, 0) == -1 && errno == ESRCH) {
-		printf("note: pid 4 is not a protected process here (Wine has no "
-		       "\"System\" process); EPERM path not reachable\n");
-		return;
-	}
-	CHECK(kill((pid_t)4, 0) == -1);
-	CHECK(errno == EPERM);
-}
+/* kill.html ERRORS: "[EPERM] The process does not have permission to
+ * send the signal to any receiving process."
+ *
+ * Asserted in test/posix-kill-perm-win.c, not here.  Two things used to
+ * sit at this spot and both were wrong, in opposite directions:
+ *
+ *   - an N/A fence, test_kill_eperm_uid_mismatch(), claiming the clause
+ *     was "structurally impossible here" because src/unistd/ids.c has
+ *     exactly one uid (1000) forever.  kill()'s EPERM has nothing to do
+ *     with uids: src/signal/signal.c maps NtOpenProcess's
+ *     STATUS_ACCESS_DENIED straight to EPERM, and that is NT's own
+ *     access check on the target process object.  The fence was
+ *     refuted by the test fifteen lines below it, in this same file.
+ *
+ *   - test_kill_eperm_protected_process(), which asserted the real
+ *     thing but skipped itself with a printed note whenever kill(4, 0)
+ *     answered ESRCH.  That is the correct shape for Wine, where pid 4
+ *     does not exist -- but it is also indistinguishable from real NT
+ *     having stopped denying pid 4, which the test would then pass
+ *     silently.  A conditional assertion cannot be the only assertion.
+ *
+ * The replacement is unconditional, on the leg where the condition
+ * genuinely holds: *-win.c tests are built everywhere and run only on
+ * the real-Windows CI leg.  It also carries the positive controls this
+ * one lacked (a live self-kill, and a nonexistent pid that must answer
+ * ESRCH rather than EPERM), so a build where every kill() failed cannot
+ * pass it.  See that file's header for the measured NtOpenProcess
+ * status table and for why no token-elevation check belongs in it.
+ *
+ * The uid-mismatch half of the clause is a different mechanism and is
+ * still unasserted: it needs a process owned by another user, observed
+ * from an unelevated token.  It is not folded in here. */
 
 /* access.html DESCRIPTION: access() "shall check ... using the real
  * user ID in place of the effective user ID and the real group ID in
@@ -1597,7 +1580,6 @@ int main(void)
 	test_stat_dir_size_is_zero();
 	test_kill_neg1_reaches_self();
 	test_kill_zero_is_own_group_of_one();
-	test_kill_eperm_protected_process();
 	test_access_real_effective_uid_identical();
 	test_utimes();
 	test_fpathconf();

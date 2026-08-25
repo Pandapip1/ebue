@@ -932,17 +932,45 @@ static void test_setsigmask_nonempty_is_delivered(void)
 #endif
 
 #if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETPGROUP with
-	a spawn-pgroup naming some *other* process's group.  NT has no
-	process-group object in the POSIX sense: a job object groups
-	processes for resource limits, not for job-control signal
-	delivery, which is what a process group is for.  ntlibc models the
-	consequence honestly rather than inventing one -- src/unistd/ids.c
-	answers getpgrp()/getpgid() with a fixed 1 for every process, and
-	test/POSIX-COVERAGE.md fences kill()'s pid==0/pid<-1 group forms on
-	the same mechanism -- so there is no second group for a child to be
-	placed into and nothing to observe a placement against.  This is a
-	missing concept, not a missing wrapper; posix_spawn() refuses any
-	spawn-pgroup but the one existing group (asserted above). */
+	a spawn-pgroup naming some *other* process's group.
+	
+	The mechanism previously recorded here -- "NT has no process-group
+	object in the POSIX sense: a job object groups processes for
+	resource limits, not for job-control signal delivery" -- is false,
+	and job objects are the wrong object to compare against.  NT does
+	have process groups, and they exist for exactly the purpose the
+	old reason said they did not: console process groups.  Per
+	GenerateConsoleCtrlEvent (learn.microsoft.com/en-us/windows/
+	console/generateconsolectrlevent, "Parameters"): "A process group
+	is created when the CREATE_NEW_PROCESS_GROUP flag is specified in
+	a call to the CreateProcess function.  The process identifier of
+	the new process is also the process group identifier of a new
+	process group", and CTRL_BREAK_EVENT is delivered to a named
+	dwProcessGroupId -- job-control signal delivery to a group,
+	precisely.
+
+	The verdict survives on the *correct* mechanism, which is a
+	narrower and more specific fact: console process-group membership
+	is fixed by descent from the group root at creation time.  The
+	same page: "The process group includes all processes that are
+	descendants of the root process."  There is no NT call that places
+	a process into a pre-existing group it is not a descendant of, and
+	no group id is chooseable -- it is always the root process's own
+	pid.  So a child cannot be spawned into some *other* process's
+	group, and there is nothing to observe a placement against.
+
+	Note what this does NOT excuse: ntlibc's own group model
+	(src/unistd/ids.c answers getpgrp()/getpgid() with a fixed 1 for
+	every process, setpgid() is a no-op) is a choice, not a
+	consequence of the platform, since a group concept does exist to
+	be modelled on.  Only the join-another-group clause fenced here is
+	genuinely unreachable.  posix_spawn() refuses any spawn-pgroup but
+	the one group it models (asserted above).
+
+	INFERRED from Microsoft's documented console API, not measured: the
+	blocker is the shape of the API surface (no call takes a target
+	group id at process creation other than "make me a new root"), so
+	no run of any binary could refute it. */
 static void test_setpgroup_other_group(void)
 {
 	posix_spawnattr_t at;

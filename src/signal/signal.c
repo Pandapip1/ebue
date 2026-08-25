@@ -256,6 +256,34 @@ int kill(pid_t pid, int sig)
 		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
 		cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid;
 		cid.UniqueThread = 0;
+		/* The access mask below decides which errno the caller sees,
+		 * so it is load-bearing and not merely "enough rights for
+		 * what we do next".  kill.html's "[EPERM] The process does
+		 * not have permission to send the signal" is produced here
+		 * by NT's own access check on the target process object --
+		 * ntlibc performs no identity comparison of its own, and
+		 * src/unistd/ids.c's single fixed uid has nothing to do with
+		 * it.  Measured on real Windows 11 Pro 22621 against the
+		 * System process (pid 4), from an ELEVATED token:
+		 *
+		 *   PROCESS_TERMINATE | QUERY_LIMITED_INFORMATION -> c0000022
+		 *                                        (ACCESS_DENIED)
+		 *   PROCESS_QUERY_LIMITED_INFORMATION alone       -> 00000000
+		 *                                        (SUCCESS)
+		 *   PROCESS_TERMINATE alone                       -> c0000022
+		 *                                        (ACCESS_DENIED)
+		 *
+		 * The denial is specific to PROCESS_TERMINATE on a protected
+		 * process, not a blanket refusal to touch pid 4.  Narrowing
+		 * this mask to query-only would therefore turn a correct
+		 * EPERM into a silent success, and would break
+		 * test/posix-kill-perm-win.c for a reason that looks
+		 * unrelated to the change.  Keep PROCESS_TERMINATE in the
+		 * mask even if a future caller only needs to query.
+		 *
+		 * The ESRCH arm below is a genuinely different status, not a
+		 * second reading of the same failure: a nonexistent pid
+		 * answered STATUS_INVALID_CID (c000000b) in the same run. */
 		st = NtOpenProcess(&h, PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
 		if (!NT_SUCCESS(st)) { errno = st == STATUS_ACCESS_DENIED ? EPERM : ESRCH; return -1; }
 	}
