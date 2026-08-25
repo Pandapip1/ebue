@@ -21,6 +21,31 @@ from testlib import parse_profile
 
 SERIAL_PREFIXES = ("fork", "waitpid", "exec", "spawn", "posix-signal")
 
+# Per-test timeout overrides, in seconds, keyed on the executable's stem.
+# --timeout is the ceiling for everything else; a name here may raise its
+# own, never lower it.
+#
+# sh-engine: measured at 2.2 s under Wine on a loaded workstation, and it
+# exceeds 120 s on real Windows -- it timed out on 2 of 3 windows-test legs
+# even on a fast run and 3 of 3 on a slow one, having passed on i386 the
+# run before. A 50x gap between runtimes is not a slow test, and this entry
+# is NOT an assertion that it is one: at 120 s a hang and a slow test are
+# indistinguishable, because both produce the same TIMEOUT. Ten minutes is
+# chosen to tell them apart. If sh-engine now passes, the test was slow on
+# native NT and the number was wrong; if it still times out, the extra
+# eight minutes prove a genuine stall in the shell engine's process
+# spawn/wait/pipe handling, which is a defect in ntlibc and not in this
+# table. Either outcome is information the 120 s ceiling was destroying.
+#
+# So this entry is expected to be temporary in one direction or the other.
+# Do not add names here to make a red test green -- that converts a defect
+# into a slow suite, which is the one move that buys nothing.
+SLOW_TESTS = {"sh-engine": 600}
+
+
+def timeout_for(path: Path, default: int) -> int:
+    return max(default, SLOW_TESTS.get(path.stem, 0))
+
 
 @dataclasses.dataclass(frozen=True)
 class Result:
@@ -87,8 +112,13 @@ def discover_artifact(root: Path) -> list[Path]:
     return sorted(test_dir.glob("*.exe"), key=lambda path: path.name)
 
 
-def report(result: Result) -> None:
-    suffix = "" if result.returncode is None else f" (rc={result.returncode})"
+def report(result: Result, timeout: int) -> None:
+    if result.outcome == "TIMEOUT":
+        suffix = f" (exceeded {timeout}s)"
+    elif result.returncode is None:
+        suffix = ""
+    else:
+        suffix = f" (rc={result.returncode})"
     print(f"{result.outcome:<7} {result.executable.name}{suffix}")
     if result.outcome not in {"PASS"} and result.output:
         for line in result.output.splitlines()[-40:]:
@@ -168,12 +198,14 @@ def main() -> int:
         # the independent pool without ever overlapping each other.
         with ThreadPoolExecutor(max_workers=args.jobs + bool(serial)) as pool:
             futures = {
-                pool.submit(run_one, path, runner, root, args.timeout): path
+                pool.submit(run_one, path, runner, root,
+                            timeout_for(path, args.timeout)): path
                 for path in parallel
             }
 
             def run_serial() -> list[Result]:
-                return [run_one(path, runner, root, args.timeout) for path in serial]
+                return [run_one(path, runner, root,
+                                timeout_for(path, args.timeout)) for path in serial]
 
             serial_future = pool.submit(run_serial) if serial else None
             for future in as_completed(futures):
@@ -186,7 +218,7 @@ def main() -> int:
     counts: dict[str, int] = {}
     for path in executables:
         result = results[path]
-        report(result)
+        report(result, timeout_for(path, args.timeout))
         counts[result.outcome] = counts.get(result.outcome, 0) + 1
     order = ("PASS", "FAIL", "NA", "TIMEOUT", "ERROR")
     profile_text = ",".join(f"{key}={value}" for key, value in sorted(profile_values.items()))
