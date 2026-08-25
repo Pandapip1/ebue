@@ -39,7 +39,7 @@
  * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
  * wscanf, open_wmemstream, wcwidth, wcswidth,
- * wcstod, wcstof, wcstold, wcsftime, mbsnrtowcs, wcsnrtombs.  Confirmed *present*
+ * wcstod, wcstof, wcstold, wcsftime.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -51,7 +51,7 @@
  * wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp, wcscasecmp_l,
  * wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul, wcstoull, and
  * (src/string/wcscoll.c, wcsxfrm.c) wcscoll, wcscoll_l, wcsxfrm,
- * wcsxfrm_l.  Also now present, as
+ * wcsxfrm_l, plus (src/stdlib/mbrtowc.c) mbsnrtowcs and wcsnrtombs.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1565,38 +1565,161 @@ static void test_wcsftime(void)
 #endif
 
 /* ---------------------------------------------------------------------
- * mbsnrtowcs / wcsnrtombs -- mbsnrtowcs.html
- * Bounded-input variants of mbsrtowcs()/wcsrtombs(), both implemented
- * above; the extra nmc/nwc parameter is a plain length cap, no
- * surrogate-specific behavior beyond what those two already have.
+ * mbsnrtowcs / wcsnrtombs -- mbsnrtowcs.html, wcsnrtombs.html
+ * Bounded-input variants of mbsrtowcs()/wcsrtombs(), implemented
+ * alongside them in src/stdlib/mbrtowc.c.  The fence used to call the
+ * extra nmc/nwc parameter "a plain length cap, no surrogate-specific
+ * behavior beyond what those two already have"; that turned out to be
+ * wrong in two ways, both now asserted below.  A real input bound makes
+ * mbrtowc()'s "incomplete" return the ordinary end-of-buffer case
+ * rather than the error mbsrtowcs() can treat it as, and it makes the
+ * surrogate-pair lookahead in wcsrtombs() illegal without a guard,
+ * because the caller's array need not be null-terminated.  These are
+ * Issue 8 pages, cited against
+ * https://pubs.opengroup.org/onlinepubs/9799919799/ rather than the
+ * Issue 7 base URL the rest of this file uses -- neither function
+ * exists in Issue 7.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: mbsnrtowcs() -- mbsnrtowcs.html DESCRIPTION, RETURN
-       * VALUE (adds an nmc byte-count bound over mbsrtowcs()). */
 static void test_mbsnrtowcs(void)
 {
-	wchar_t dst[8];
+	/* dst is zeroed rather than left uninitialised: with nmc stopping
+	 * the conversion before the source's terminating null, mbsnrtowcs()
+	 * writes no null wide character, so comparing dst as a *string*
+	 * would read past what the call defines.  The original transcription
+	 * of this test did exactly that and passed by luck. */
+	wchar_t dst[8] = {0};
 	const char *src = "abcdef";
 	mbstate_t st;
 	memset(&st, 0, sizeof(st));
-	/* only 3 of the 6 source bytes may be consumed */
+	/* "the conversion ... is limited to at most nmc bytes": only 3 of
+	 * the 6 source bytes may be consumed */
 	CHECK(mbsnrtowcs(dst, &src, 3, 8, &st) == 3);
-	CHECK(!wcscmp(dst, W("abc")));
-}
-#endif
+	CHECK(dst[0] == L'a' && dst[1] == L'b' && dst[2] == L'c');
+	/* "the address just past the last byte processed" */
+	CHECK(src != 0 && !strcmp(src, "def"));
 
-#if 0 /* UNIMPL: wcsnrtombs() -- mbsnrtowcs.html DESCRIPTION, RETURN
-       * VALUE (adds an nwc wchar_t-count bound over wcsrtombs()). */
+	/* Reaching the terminating null: src is set to a null pointer and
+	 * the null is not counted in the return value. */
+	memset(&st, 0, sizeof(st));
+	src = "ab";
+	CHECK(mbsnrtowcs(dst, &src, 10, 8, &st) == 2);
+	CHECK(src == 0);
+	CHECK(!wcscmp(dst, W("ab")));
+
+	/* The len bound applies as it does for mbsrtowcs(): at most len
+	 * wide characters are stored, and src stops there. */
+	memset(&st, 0, sizeof(st));
+	src = "abcdef";
+	CHECK(mbsnrtowcs(dst, &src, 10, 2, &st) == 2);
+	CHECK(src != 0 && !strcmp(src, "cdef"));
+
+	/* dst a null pointer: the count is computed and the pointer object
+	 * pointed to by src is not modified. */
+	memset(&st, 0, sizeof(st));
+	src = "abcdef";
+	CHECK(mbsnrtowcs(0, &src, 4, 1, &st) == 4);
+	CHECK(src != 0 && !strcmp(src, "abcdef"));
+
+	/* "If the input buffer ends with an incomplete character,
+	 * conversion shall stop at the end of the input buffer; a
+	 * subsequent call ... shall correctly complete the conversion of
+	 * that character."  U+00E9 is 0xC3 0xA9 in UTF-8, so a 2-byte
+	 * window over "a\xc3\xa9" ends one byte into that character. */
+	memset(&st, 0, sizeof(st));
+	memset(dst, 0, sizeof(dst));
+	src = "a\xc3\xa9";
+	CHECK(mbsnrtowcs(dst, &src, 2, 8, &st) == 1);
+	CHECK(dst[0] == L'a');
+	CHECK(src != 0 && !strcmp(src, "\xa9"));	/* past the byte consumed */
+	CHECK(!mbsinit(&st));				/* partial sequence held */
+	/* the continuation byte alone now completes it */
+	CHECK(mbsnrtowcs(dst, &src, 1, 8, &st) == 1);
+	CHECK(dst[0] == 0xe9);
+	CHECK(mbsinit(&st));
+
+	/* A supplementary character is one 4-byte UTF-8 sequence and two
+	 * wchar_t here.  mbrtowc() hands back the high surrogate having
+	 * consumed all four bytes, then the low surrogate from state alone
+	 * consuming none -- so the second half must still be delivered
+	 * after the byte budget is exhausted.  (This is why mbrtowc() is
+	 * called before, not after, testing nmc.) */
+	memset(&st, 0, sizeof(st));
+	memset(dst, 0, sizeof(dst));
+	src = "\xf0\x9f\x98\x80";	/* U+1F600 */
+	CHECK(mbsnrtowcs(dst, &src, 4, 8, &st) == 2);
+	CHECK(dst[0] == 0xd83d && dst[1] == 0xde00);
+	CHECK(src != 0 && *src == 0);
+	CHECK(mbsinit(&st));
+
+	/* [EILSEQ]: "An invalid character sequence is detected." */
+	memset(&st, 0, sizeof(st));
+	src = "a\xff";
+	errno = 0;
+	CHECK(mbsnrtowcs(dst, &src, 2, 8, &st) == (size_t)-1);
+	CHECK(errno == EILSEQ);
+}
+
 static void test_wcsnrtombs(void)
 {
 	char dst[8];
 	const wchar_t *src = W("abcdef");
+	const wchar_t *start;
+	/* U+1F600 as a UTF-16 surrogate pair; W() cannot build one, since
+	 * it only widens ASCII. */
+	static const wchar_t pair[3] = { 0xd83d, 0xde00, 0 };
 	mbstate_t st;
+
 	memset(&st, 0, sizeof(st));
-	/* only 3 of the 6 source wchar_t may be consumed */
+	/* "the conversion is limited to the first nwc wide characters":
+	 * only 3 of the 6 source wchar_t may be consumed */
 	CHECK(wcsnrtombs(dst, &src, 3, 8, &st) == 3);
 	CHECK(!memcmp(dst, "abc", 3));
+	/* "the address just past the last wide character converted" */
+	CHECK(src != 0 && !wcscmp(src, W("def")));
+
+	/* Reaching the terminating null wide character: src becomes a null
+	 * pointer, and the null byte is written but not counted. */
+	memset(&st, 0, sizeof(st));
+	src = W("ab");
+	memset(dst, 'Z', sizeof(dst));
+	CHECK(wcsnrtombs(dst, &src, 10, 8, &st) == 2);
+	CHECK(src == 0);
+	CHECK(!strcmp(dst, "ab"));
+
+	/* dst a null pointer: byte count only, src not modified. */
+	memset(&st, 0, sizeof(st));
+	src = start = W("abcdef");
+	CHECK(wcsnrtombs(0, &src, 4, 1, &st) == 4);
+	CHECK(src == start);
+
+	/* A supplementary character is four bytes and must never be split:
+	 * with room for only three, nothing is written and the count stops
+	 * short of it. */
+	memset(&st, 0, sizeof(st));
+	src = pair;
+	memset(dst, 'Z', sizeof(dst));
+	CHECK(wcsnrtombs(dst, &src, 2, 3, &st) == 0);
+	CHECK(dst[0] == 'Z');
+	CHECK(src == pair);
+	/* with room, both halves convert together as one 4-byte sequence */
+	memset(&st, 0, sizeof(st));
+	src = pair;
+	CHECK(wcsnrtombs(dst, &src, 2, 8, &st) == 4);
+	CHECK(!memcmp(dst, "\xf0\x9f\x98\x80", 4));
+	CHECK(src == pair + 2);
+
+	/* A high surrogate that is the last wide character inside nwc has
+	 * no partner this call may read.  ntlibc reports [EILSEQ], the same
+	 * answer wcsrtombs() gives for a lone high surrogate; POSIX does
+	 * not describe the case because it cannot arise with a 32-bit
+	 * wchar_t.  Asserted so the choice is pinned rather than incidental.
+	 */
+	memset(&st, 0, sizeof(st));
+	src = pair;
+	errno = 0;
+	CHECK(wcsnrtombs(dst, &src, 1, 8, &st) == (size_t)-1);
+	CHECK(errno == EILSEQ);
 }
-#endif
 
 
 int main(void)
@@ -1655,6 +1778,8 @@ int main(void)
 	test_wcstol_family();
 	test_wcscoll();
 	test_wcsxfrm();
+	test_mbsnrtowcs();
+	test_wcsnrtombs();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

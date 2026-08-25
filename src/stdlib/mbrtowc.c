@@ -180,6 +180,110 @@ size_t wcsrtombs(char *__restrict s, const wchar_t **__restrict src, size_t n, m
 	return out;
 }
 
+/* mbsnrtowcs(): the bounded form of mbsrtowcs() above, per
+ * https://pubs.opengroup.org/onlinepubs/9799919799/functions/mbsnrtowcs.html
+ * -- "equivalent to the mbsrtowcs() function, except that the conversion
+ * of characters indirectly pointed to by src is limited to at most nmc
+ * bytes (the size of the input buffer)".
+ *
+ * The bound is what makes this more than a wrapper.  mbsrtowcs() above
+ * always hands mbrtowc() a fixed n of 4 and can therefore treat a -2
+ * ("incomplete") return as EILSEQ, because the only way a 4-byte window
+ * over a NUL-terminated string ends mid-character is a NUL inside the
+ * sequence.  Here the window is the caller's, so -2 is the ordinary
+ * end-of-buffer case and must NOT be an error: mbsnrtowcs.html says "if
+ * the input buffer ends with an incomplete character, conversion shall
+ * stop at the end of the input buffer; a subsequent call ... shall
+ * correctly complete the conversion of that character".  mbrtowc() has
+ * already stashed the partial sequence in *st, so stopping is all that
+ * is required; *src is advanced past the bytes it consumed, which is
+ * "the address just past the last byte processed".
+ *
+ * mbrtowc() is called before the nmc == 0 test rather than after, and
+ * deliberately: it answers a pending low surrogate (its (size_t)-3
+ * return, see the file header) from state alone, consuming no bytes, so
+ * the second half of a supplementary character must still be delivered
+ * when the byte budget is already exhausted.  With nothing pending and
+ * nmc == 0 it returns -2 and the loop ends, which is the same outcome an
+ * up-front test would have given.
+ */
+size_t mbsnrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t nmc, size_t n, mbstate_t *__restrict st)
+{
+	static mbstate_t internal;
+	const char *s = *src;
+	size_t out = 0, r;
+	wchar_t wc = 0;
+
+	if (!st) st = &internal;
+	for (;;) {
+		if (ws && out >= n) break;
+		r = mbrtowc(&wc, s, nmc, st);
+		if (r == (size_t)-1) { if (ws) *src = s; return (size_t)-1; }
+		if (r == (size_t)-2) { s += nmc; nmc = 0; break; }
+		if (r == (size_t)-3) r = 0;	/* delivered from state, no bytes used */
+		if (ws) ws[out] = wc;
+		if (!wc) { if (ws) *src = 0; return out; }
+		s += r; nmc -= r;
+		out++;
+	}
+	if (ws) *src = s;
+	return out;
+}
+
+/* wcsnrtombs(): the bounded form of wcsrtombs() above, per
+ * https://pubs.opengroup.org/onlinepubs/9799919799/functions/wcsnrtombs.html
+ * -- "equivalent to the wcsrtombs() function, except that the conversion
+ * is limited to the first nwc wide characters".  Returns a BYTE count,
+ * like wcsrtombs().
+ *
+ * The surrogate-pair lookahead needs an extra guard that wcsrtombs()
+ * does not.  There, ws[1] is always safe to read: the input is a
+ * null-terminated wide string, so if ws[0] is not the null then ws[1] is
+ * within the array.  Here the caller has bounded the input to nwc wide
+ * characters and it need not be terminated at all, so peeking at ws[1]
+ * to see whether a high surrogate has its partner is only legal when
+ * nwc >= 2.  Getting this wrong would read one wchar_t past the caller's
+ * buffer on exactly the inputs this function exists for.
+ *
+ * A high surrogate that is the last wide character within nwc therefore
+ * falls through to the single-unit path, where wcrtomb() stashes it and
+ * returns 0, and this function reports EILSEQ -- the same answer
+ * wcsrtombs() gives for a lone high surrogate.  POSIX does not describe
+ * this case because it cannot arise with a 32-bit wchar_t; the choice
+ * here is consistency with the sibling function rather than inventing a
+ * second convention, and it is deliberate: emitting a partial character
+ * is not an option, and silently stopping would make a truncated pair
+ * indistinguishable from a completed conversion.
+ */
+size_t wcsnrtombs(char *__restrict s, const wchar_t **__restrict src, size_t nwc, size_t n, mbstate_t *__restrict st)
+{
+	static mbstate_t internal;
+	const wchar_t *ws = *src;
+	char buf[4];
+	size_t out = 0, r;
+
+	if (!st) st = &internal;
+	for (;;) {
+		if (!nwc) break;
+		if (nwc >= 2 && SURR_HI(ws[0]) && SURR_LO(ws[1])) {
+			if (s && out + 4 > n) break;
+			wcrtomb(buf, ws[0], st);
+			wcrtomb(buf, ws[1], st);
+			if (s) memcpy(s + out, buf, 4);
+			out += 4; ws += 2; nwc -= 2;
+			continue;
+		}
+		r = wcrtomb(buf, ws[0], st);
+		if (r == (size_t)-1 || r == 0) { st->__opaque1 = 0; if (s) *src = ws; errno = EILSEQ; return (size_t)-1; }
+		if (s && out + r > n) break;
+		if (s) memcpy(s + out, buf, r);
+		if (!ws[0]) { if (s) *src = 0; return out; }
+		out += r; ws++; nwc--;
+	}
+	if (s) *src = ws;
+	return out;
+}
+
 wint_t btowc(int c)
 {
 	unsigned char b = (unsigned char)c;
