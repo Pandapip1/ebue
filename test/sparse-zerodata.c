@@ -140,6 +140,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdint.h>
 
 static int fails;
 static int unverified;
@@ -149,7 +150,17 @@ static int unverified;
 typedef int NTSTATUS;
 typedef void *HANDLE;
 typedef void *PVOID;
-typedef unsigned long ULONG;
+/* NT's ULONG is 32-bit on every target NT runs on, and `unsigned long`
+ * is 32-bit under LLP64 -- so spelling it that way is correct for the
+ * PE build and silently wrong anywhere `unsigned long` is 64 bits.  The
+ * native AddressSanitizer build (tools/asan-build.sh) is exactly that:
+ * LP64 ELF, where it made FILE_FS_SIZE_INFORMATION's two trailing
+ * ULONGs 8 bytes each, so SectorsPerAllocationUnit read back as
+ * (BytesPerSector << 32) | SectorsPerAllocationUnit and BytesPerSector
+ * read past the structure as 0 -- a bytes-per-cluster of 0 that looked
+ * like a filesystem with no geometry.  Fixed width, as
+ * src/internal/nt.h:36 spells it, is right on both. */
+typedef uint32_t ULONG;
 typedef unsigned char BOOLEAN;
 typedef long long LONGLONG;
 #ifdef __i386__
