@@ -69,7 +69,13 @@ static void test_printf(void)
 	FMT("-1", "%hd", 65535);
 	FMT("65535", "%hu", 65535);
 	FMT("99", "%jd", (long long)99);
-	FMT("-7", "%td", (long)-7);
+	/* (ptrdiff_t), not (long): %td requires a ptrdiff_t argument, and on
+	 * LLP64 long is 32 bits while ptrdiff_t is 64, so passing a long was
+	 * a type mismatch -- undefined behaviour that happened to work only
+	 * while printf.c read %t as long (fixed in "printf: read %z and %t
+	 * as size_t/ptrdiff_t, not as long").  Every neighbouring line here
+	 * already passes the type its conversion names; this one did not. */
+	FMT("-7", "%td", (ptrdiff_t)-7);
 
 	/* flags, width, precision */
 	FMT("   42", "%5d", 42);

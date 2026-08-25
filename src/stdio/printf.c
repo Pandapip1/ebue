@@ -545,7 +545,18 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 					case LM_h: sv = (short)va_arg(ap, int); break;
 					case LM_l: sv = va_arg(ap, long); break;
 					case LM_ll: case LM_j: sv = va_arg(ap, long long); break;
-					case LM_z: case LM_t: sv = va_arg(ap, long); break;
+					/* LLP64: long is 32 bits here while size_t and
+					 * ptrdiff_t are 64, so `long` is simply the wrong
+					 * type to pull these with -- "%zd" of a value above
+					 * 4G printed its low half.  fprintf.html: z
+					 * "applies to a size_t or the corresponding signed
+					 * integer type argument", t likewise for ptrdiff_t.
+					 * Pull each as the type the page names.
+					 * src/stdio/scanf.c implements the same grammar and
+					 * has always done this correctly; printf.c was the
+					 * only offender. */
+					case LM_z: sv = (long long)va_arg(ap, ssize_t); break;
+					case LM_t: sv = (long long)va_arg(ap, ptrdiff_t); break;
 					default: sv = va_arg(ap, int); break;
 					}
 					neg = sv < 0;
@@ -562,7 +573,8 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 					case LM_h: uv = (unsigned short)va_arg(ap, unsigned int); break;
 					case LM_l: uv = va_arg(ap, unsigned long); break;
 					case LM_ll: case LM_j: uv = va_arg(ap, unsigned long long); break;
-					case LM_z: case LM_t: uv = va_arg(ap, unsigned long); break;
+					case LM_z: uv = (unsigned long long)va_arg(ap, size_t); break;
+					case LM_t: uv = (unsigned long long)va_arg(ap, ptrdiff_t); break;
 					default: uv = va_arg(ap, unsigned int); break;
 					}
 				}
@@ -659,7 +671,13 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				case LM_h: *(short *)ptr = (short)count; break;
 				case LM_l: *(long *)ptr = (long)count; break;
 				case LM_ll: case LM_j: *(long long *)ptr = (long long)count; break;
-				case LM_z: case LM_t: *(long *)ptr = (long)count; break;
+				/* The worst of the three: this stored through
+				 * *(long *), writing FOUR bytes into the caller's
+				 * EIGHT-byte size_t and leaving the upper four whatever
+				 * they happened to be -- silent corruption of an object
+				 * the caller owns, not merely a wrong number printed. */
+				case LM_z: *(size_t *)ptr = (size_t)count; break;
+				case LM_t: *(ptrdiff_t *)ptr = (ptrdiff_t)count; break;
 				default: *(int *)ptr = (int)count; break;
 				}
 				break;

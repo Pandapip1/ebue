@@ -10,6 +10,7 @@
  * assertion. Run headless under Wine, same as test/stdio.c.
  */
 #include <stdio.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1080,22 +1081,53 @@ static void test_snprintf_eoverflow(void)
  * Found by musl's libc-test (printf-fmt-n), not by this file's own
  * clause audit, which read these pages closely enough to fence the
  * <apostrophe> flag and [EOVERFLOW] and walked past this. */
-#if 0 /* BUG: printf's z and t length modifiers are read as long, which is 32-bit under LLP64; "%zd" of a value above 4G prints the low half, and "%zn" writes four bytes into an eight-byte size_t, corrupting the caller's object */
 static void test_printf_z_modifier_width(void)
 {
 	size_t big = (size_t)0xdeadbeefULL << 32;
 	size_t n = (size_t)-1;
-	char b[64];
+	ptrdiff_t t = -1;
+	char b[64], ref[64];
 
+	/* Checked TWO ways on purpose.  The fence's version asserted only a
+	 * hand-written decimal literal, and that literal was WRONG:
+	 * 0xdeadbeef << 32 is 16045690981097406464, but it said
+	 * ...537536, i.e. 0xdeadbeef00020000.  A correct fix therefore still
+	 * failed the test, which invites "fixing" the library until the
+	 * wrong constant is produced.  Comparing against "%llu" of the same
+	 * value is the check that cannot be typo'd out of agreement; the
+	 * literal is kept as well, corrected, so that a bug shared by both
+	 * conversions could still be caught. */
+	snprintf(ref, sizeof ref, "%llu", (unsigned long long)big);
 	snprintf(b, sizeof b, "%zu", big);
-	CHECK(strcmp(b, "16045690981097537536") == 0);
+	CHECK(strcmp(b, ref) == 0);
+	CHECK(strcmp(b, "16045690981097406464") == 0);
 
-	/* %zn must write all of a size_t, not its low half. */
+	/* Signed, and t as well as z.  The value must be one that a 32-bit
+	 * long CANNOT hold, or the assertion proves nothing: -1 sign-extends
+	 * to the same bits either way, and mutation-testing confirmed that a
+	 * -1-only check passes with the defect restored.  0xdeadbeef is
+	 * above 2^31, so read through a 32-bit long it comes back negative. */
+	snprintf(ref, sizeof ref, "%lld", 0xdeadbeefLL);
+	snprintf(b, sizeof b, "%zd", (ssize_t)0xdeadbeefLL);
+	CHECK(strcmp(b, ref) == 0);
+	snprintf(b, sizeof b, "%td", (ptrdiff_t)0xdeadbeefLL);
+	CHECK(strcmp(b, ref) == 0);
+	/* and -1 still round-trips, so the fix is not "always widen wrongly" */
+	snprintf(ref, sizeof ref, "%lld", -1LL);
+	snprintf(b, sizeof b, "%zd", (ssize_t)-1);
+	CHECK(strcmp(b, ref) == 0);
+
+	/* %zn must write all of a size_t, not its low half -- the worst of
+	 * the three, because it corrupts an object the caller owns rather
+	 * than merely printing a wrong number.  Pre-set to all-ones so a
+	 * four-byte store leaves the upper half visibly wrong. */
 	n = (size_t)-1;
 	snprintf(b, sizeof b, "ab%zn", &n);
 	CHECK(n == 2);
+	t = -1;
+	snprintf(b, sizeof b, "abc%tn", &t);
+	CHECK(t == 3);
 }
-#endif
 
 /* fprintf.html, the flag characters: "'  [CX] (The <apostrophe>.)  The
  * integer portion of the result of a decimal conversion ( %i, %d, %u,
@@ -1888,6 +1920,7 @@ int main(void)
 	test_popen();
 
 	test_snprintf_boundaries();
+	test_printf_z_modifier_width();
 	test_printf_apostrophe_flag();
 	test_printf_width_precision();
 	test_sscanf_clauses();
