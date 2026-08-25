@@ -4313,3 +4313,238 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## ftw.h — the clauses group J3's fixture could not reach (group X)
+
+`<ftw.h>` was already audited: group J3 (`test/posix-tail.c`) walked
+`ftw()` and `nftw()` clause by clause against a two-level, four-object
+tree, and `test/posix-glob.c`'s `ftw.h` section covers the basic
+descent, `FTW_DEPTH` and `struct FTW` again. Between them they fence
+two BUGs (`FTW_CHDIR`; the directory that is a descendant of itself)
+and report the `FTW_PHYS`/`FTW_SL`/`FTW_SLN` group as `rc=77`
+unverified. This group re-read both spec pages and the whole of
+`src/ftw/ftw.c` and `include/ftw.h` looking for what those two files'
+**fixtures** cannot reach, and it is a real category: a two-level tree
+never makes the descriptor limit evict anything, and a tree where
+nothing fails never reaches either page's error model.
+`test/posix-ftw.c` (new file) is the result.
+
+**Three BUGs fenced** — three fenced test functions, six `#if 0` blocks
+(each fence's call site in `main()` is guarded separately), four clauses
+violated (the first fence covers the `stat()` half and the `opendir()`
+half of one requirement). All three are in error handling, and all
+three are invisible from a fixture in which nothing goes wrong. **One
+existing N/A row is corrected** and the clause asserted live instead.
+Nothing here re-reports a J3 finding.
+
+| function | clause | status | test |
+|---|---|---|---|
+| ftw, nftw | `ftw.h.html` DESCRIPTION — "The `<ftw.h>` header shall define the FTW structure, which shall include at least the following members: int base; int level"; the seven third-argument constants, which must be pairwise distinct for a callback to switch on them; the four fourth-argument constants, which `nftw.html` requires to compose as "a bitwise-inclusive OR of zero or more of the following flags" and so must share no bit | covered | test/posix-ftw.c (`test_ftw_h_header_shape`) |
+| ftw, nftw | `ftw.h.html` DESCRIPTION — "The `<ftw.h>` header shall define the stat structure and the symbolic names for st_mode and the file type test macros as described in `<sys/stat.h>`" | covered — as a **compile**-shaped island: `ftw_h_alone_types()` sits above every other `#include` in the file, so `<ftw.h>` is the only header that can have supplied `struct stat`, `st_mode`, `S_ISDIR` and `S_ISREG`. Same reasoning as group U's "Where a group U fence lives" | test/posix-ftw.c (`ftw_h_alone_types`, exercised from `test_ftw_h_header_shape`) |
+| nftw | "The value of level indicates depth relative to the root of the walk, where the root level is 0"; "The value of base is the offset of the object's filename in the pathname passed as the first argument to fn"; "The second argument is a pointer to the stat buffer … filled in as if fstatat(), stat(), or lstat() had been called" | covered — at **depths 0 through 4**, exact `level` for all nine objects, `path + base` compared against the filename at every level, and the stat buffer's `S_ISDIR` cross-checked against the type flag the same call reports. J3 and `posix-glob.c` both stop at depth 2, where `base_offset()`'s `strrchr` and the recursion counter have barely been exercised | test/posix-ftw.c (`test_nftw_level_base_and_stat_buffer`) |
+| ftw | "The ftw() function shall visit a directory before visiting any of its descendants" | covered — for **every** ancestor/descendant pair of a four-level tree, not only the root's immediate children | test/posix-ftw.c (`test_nftw_level_base_and_stat_buffer`) |
+| ftw | `ftw.html`'s own list of third-argument values is FTW_D, FTW_DNR, FTW_F, FTW_SL, FTW_NS — FTW_DP and FTW_SLN are on `nftw.html`'s list only | covered — an `ftw()` walk delivers neither | test/posix-ftw.c (`test_nftw_level_base_and_stat_buffer`) |
+| ftw, nftw | "The ftw() function shall use at most one file descriptor for each level in the tree"; "The argument fd_limit sets the maximum number of file descriptors that shall be used by nftw() while traversing the file tree. At most one file descriptor shall be used for each directory level" | covered — four limits (1, 2, 3, 16) against a **four-level** tree, pre- and post-order, asserting each of the nine objects is reported exactly once. This is what actually drives `src/ftw/ftw.c`'s `close_one()`/`telldir()` → `opendir()`/`seekdir()` replay: J3's two-level tree at `ndirs == 1` is one eviction, this is three nested. A replay off by one entry either way shows up as a duplicate or a missing object | test/posix-ftw.c (`test_fd_limit_and_visit_once`) |
+| ftw | "When ftw() returns it shall close any directory streams and file descriptors it uses not counting any opened by the application-supplied fn function" | covered — **not asserted anywhere before this group.** Observable without a private interface: `open()` returns the lowest-numbered free descriptor (`open.html`; `src/internal/fd.c`'s `__fd_alloc()` scans the table from 0), `opendir()` takes one (`src/dirent/opendir.c` → `__fd_install()`) and `closedir()` returns it (`src/dirent/closedir.c` → `close()`), so the descriptor `open()` hands back before and after a walk must be identical and would differ by exactly the number of streams left open. Asserted across an exhausted tree, an early `fn` return deep in the recursion, the same with the eviction machinery active, a post-order walk, `ftw()`, and a walk that fails outright | test/posix-ftw.c (`test_streams_closed_when_it_returns`) |
+| ftw, nftw | the walk root need not be a directory — "the directory hierarchy rooted in path", with `[ENOTDIR]` scoped to "**a component** of path" | covered — a regular-file root is reported exactly once as FTW_F at `level == 0` with `base` at its filename, and the call returns 0; unchanged under FTW_DEPTH | test/posix-ftw.c (`test_walk_root_is_not_a_directory`) |
+| nftw | RETURN VALUE — "An invocation of fn shall return a non-zero value, in which case nftw() shall return that value" | covered — from the **seventh of nine** callbacks, which is below the root with FTW_DEPTH set or clear, so the value has to survive being returned up through several recursion frames; also through the eviction machinery at `fd_limit == 1`, and for `ftw()`. J3 stops at its first and second callback, at or beside the root | test/posix-ftw.c (`test_stop_value_from_depth`) |
+| nftw | the fourth argument "is a bitwise-inclusive OR of zero or more of the following flags" — the flags **compose** | covered — six combinations of FTW_PHYS/FTW_MOUNT/FTW_DEPTH, each asserting all nine objects once, the right `level`, FTW_D vs FTW_DP by the FTW_DEPTH bit, the FTW_DEPTH ordering three levels down, and that FTW_SL/FTW_SLN/FTW_NS/FTW_DNR never appear on a symlink-free, one-volume, readable fixture. FTW_CHDIR is deliberately excluded: it is J3's fenced BUG and folding it in would re-report it | test/posix-ftw.c (`test_flag_combinations`) |
+| ftw, nftw | *shall fail* "[ENAMETOOLONG] The length of a component of a pathname is longer than {NAME_MAX}" | covered — **and this corrects group J3's row above**, which grouped `[ENAMETOOLONG]` with FTW_DNR/FTW_NS/`[EACCES]` into one N/A whose stated mechanism is this platform's permission model. That mechanism does not reach this clause: it needs no fixture, only a name, and the name need not exist. `src/internal/path.c`'s `__name_too_long()` implements it for every path-taking interface (`NAME_MAX` = 255, `include/limits.h:31`), `dos_from_posix()` calls it first and sets the errno, `__ntpath()` propagates it untouched, and `lstat()` reaches it through `fstatat(AT_FDCWD, …)` → `__ntpath_at()`'s AT_FDCWD branch. Asserted for a bare over-long name and for one under an existing directory, for both functions | test/posix-ftw.c (`test_ftw_enametoolong`) |
+| ftw, nftw | "Failure of stat() for any other reason is considered an error and nftw() shall return -1"; "The tree traversal shall continue until … some error, other than [EACCES], is detected within ftw()" | **BUG (fenced)** — every `stat()`/`lstat()` failure becomes FTW_NS and every `opendir()` failure becomes FTW_DNR, and the walk continues; see 1 below | test/posix-ftw.c (`test_nftw_error_other_than_eacces_stops_the_walk`) |
+| nftw | "At each file it encounters, nftw() shall call the user-supplied function fn with four arguments … The third argument is an integer … Its value is one of the following", together with "FTW_DNR The object is a directory that cannot be read" | **BUG (fenced)** — with FTW_DEPTH clear the same unreadable directory is reported twice, as FTW_D and then as FTW_DNR; see 2 below | test/posix-ftw.c (`test_nftw_dnr_reported_once`) |
+| nftw | *shall fail* "[EACCES] … or fn returns -1 and does not reset errno" — an alternative `ftw.html`'s otherwise identical `[EACCES]` entry does not carry | **BUG (fenced)** — the weakest of the three; see 3 below, including the counter-argument | test/posix-ftw.c (`test_nftw_eacces_when_fn_returns_minus_one`) |
+| ftw | "The argument ndirs should be in the range [1,{OPEN_MAX}]"; *may fail* "[EINVAL] The value of the ndirs argument is invalid" (`nftw.html`'s ERRORS has **no** `[EINVAL]` at all) | N/A — a *should* and a *may fail*, so `ndirs`/`fd_limit` ≤ 0 is an application error with no required outcome. `src/ftw/ftw.c`'s `level_open()` guards eviction with `ws->nopenfd >= 1`, so ≤ 0 switches the ceiling off rather than clamping it — recorded, not fenced, because no clause says what it must do instead. Asserted only permissively: the call terminates and does not report a partial tree as a complete one | test/posix-ftw.c (`test_ndirs_out_of_range`) |
+| ftw, nftw | *shall fail* "[EOVERFLOW] A field in the stat structure cannot be represented correctly in the current programming environment for one or more files found in the file hierarchy" | N/A — no field can fail to be represented, on either arch leg; see 1 under "N/A found" below | — |
+| ftw, nftw | "The ftw() function need not be thread-safe" / "The nftw() function need not be thread-safe" | N/A — permission, not obligation, and unexercisable besides: the `pthread.h` family is a recorded absence, so this library ships no way to start a second thread to call `nftw()` from | — |
+| ftw, nftw | "The results are unspecified if the application-supplied fn function does not preserve the current working directory" | N/A — unspecified. Every callback in `test/posix-ftw.c` preserves it; none is asserted about | — |
+| ftw, nftw | *shall fail* `[ELOOP]`, *may fail* `[ELOOP]` for `{SYMLOOP_MAX}` | N/A here, already recorded — needs a real symbolic link, which is group J3's `rc=77` row, not a new finding | — |
+| ftw, nftw | FTW_DNR and FTW_NS as **reachable outcomes** (an unreadable directory, an unstattable object), *shall fail* `[EACCES]`, *may fail* `[EMFILE]`/`[ENFILE]` | N/A here, already recorded by group J3 — repeated, not re-established: J3's stated mechanism (`chmod 0` does not revoke owner access on this platform) was **not** re-tested for this group, which could run nothing. It is why findings 1 and 2 below are fenced rather than live | — |
+| ftw | APPLICATION USAGE (storage leaked if `fn` `longjmp()`s out); FUTURE DIRECTIONS ("The ftw() function may be removed in a future version") | N/A — the page marks both sections informative | — |
+
+### BUGs found (group X)
+
+1. **Every `stat()`/`lstat()` failure is reported as FTW_NS and every
+   `opendir()` failure as FTW_DNR, and the walk continues — where only
+   a lack-of-permission failure may be treated that way.** This is the
+   one that matters, and between them the two pages state it four
+   times. `nftw.html`, the FTW_NS bullet: "FTW_NS The stat() function
+   failed on the object because of lack of appropriate permission. The
+   stat buffer passed to fn is undefined. Failure of stat() for any
+   other reason is considered an error and nftw() shall return -1."
+   `nftw.html` RETURN VALUE: "The nftw() function detects an error
+   other than [EACCES] (see FTW_DNR and FTW_NS above), in which case
+   nftw() shall return -1 and set errno to indicate the error."
+   `ftw.html` DESCRIPTION: "The tree traversal shall continue until
+   either the tree is exhausted, an invocation of fn returns a non-zero
+   value, or some error, other than [EACCES], is detected within
+   ftw()." `ftw.html` RETURN VALUE repeats it with the same
+   parenthetical — which is the standard tying FTW_DNR and FTW_NS to
+   that one errno and to no other.
+
+   Mechanism, read from `src/ftw/ftw.c` rather than measured: `walk()`
+   opens with `if (lstat(path, &lst) < 0) { if (is_root) return -1; …
+   return report(ws, path, &zero, FTW_NS, level); }` — the walk **root**
+   is handled correctly, and nothing below it is. The FTW_PHYS-clear
+   branch does the same for `stat()` (`… ? FTW_SLN : FTW_NS`), and the
+   directory branch does the same for `opendir()` (`if (level_open(…) <
+   0) { free(lv.path); return report(ws, path, rst, FTW_DNR, level); }`,
+   where `level_open()` fails exactly when `opendir()` does, whatever
+   it failed with). There is no `errno == EACCES` test anywhere in the
+   file. Because `report()` returns whatever `fn` returns and a `fn`
+   returning 0 means "continue", the walk then runs to the end and
+   returns 0.
+
+   What a caller observes today: a walk over a tree something else is
+   changing — a build tree, a spool directory — reports the vanished
+   entries as FTW_NS and returns 0, so the caller is told the tree was
+   exhausted **and** that part of it was unreadable, when what actually
+   happened is an `[ENOENT]` the standard requires the walk to stop on.
+   The `nftw(FTW_DEPTH)`-based recursive delete is the worst case: it
+   gets 0 back and believes the tree is gone.
+
+   BUG rather than UNIMPL: the clause is one this implementation
+   already partly implements — it distinguishes the walk root and
+   returns -1 there — and the fix is local, an errno test at three call
+   sites. Fenced rather than live because the fixture the test uses to
+   make a non-`[EACCES]` `stat()` failure happen (the callback unlinks
+   a sibling the walk has not reached) depends on `readdir()` having
+   buffered that name already; `src/dirent/dirent_internal.h` sets
+   `__DIRBUF_SIZE` to 32768 and `src/dirent/getdents.c` fills that
+   buffer from one `NtQueryDirectoryFile`, so a three-entry directory
+   arrives in one call — read from those files, not measured here.
+   That dependence is real and would make a poor live assertion even
+   after the fix; neither the clause nor the reading of `src/ftw/ftw.c`
+   rests on it.
+
+2. **An unreadable directory is reported twice — FTW_D, then FTW_DNR —
+   whenever FTW_DEPTH is clear.** `nftw.html`: "At each file it
+   encounters, nftw() shall call the user-supplied function fn with
+   four arguments", of which "The third argument is an integer giving
+   additional information. Its value is one of the following: … FTW_D
+   The object is a directory. … FTW_DNR The object is a directory that
+   cannot be read. The fn function shall not be called for any of its
+   descendants." One file, one call, one of those values.
+
+   Mechanism, read from `src/ftw/ftw.c`: `walk()` emits the pre-order
+   `report(…, FTW_D, …)` **before** it has tried to open anything, and
+   the `FTW_DNR` report is what the failed `level_open()` returns
+   afterwards. With FTW_DEPTH **set** the first report is skipped and
+   the same directory is reported exactly once — which is what shows
+   the duplicate is an artefact of when the FTW_D report is emitted
+   rather than a decision about FTW_DNR: the same object gets one call
+   or two depending on a flag whose entire specified effect is
+   ordering.
+
+   The counter-argument, and why it is rejected: neither page contains
+   the words "exactly once", so one could read two calls carrying two
+   different values as satisfying both bullets separately. Rejected
+   because the standard pairs one call with one file ("At each file it
+   encounters … shall call"; `ftw.html`: "For each object in the
+   hierarchy, ftw() shall call the function pointed to by fn"), and
+   because the harm is concrete rather than formal: a callback that
+   counts or mirrors counts the directory twice, and one that acts on
+   FTW_D — descending, or creating the mirror entry and expecting its
+   contents — acts on a directory whose contents will never arrive.
+   The fix shares a branch with finding 1: attempt the open first, then
+   choose FTW_D, FTW_DNR or a `-1` return from the result.
+
+   Fenced because it needs a directory `opendir()` fails on with
+   `[EACCES]`, the fixture group J3's row and `glob()`'s `GLOB_ERR` row
+   both record as unbuildable here. That claim is theirs and is
+   repeated rather than re-established — it was not re-tested for this
+   group, which could run nothing. The defect does not rest on it; the
+   assertions should pass unchanged wherever the fixture can be built,
+   which is the standard `test_nftw_symlink_loop` is already held to.
+   The fixture line is left as a comment rather than as a `chmod()`
+   call deliberately: a `chmod()` that silently does nothing would turn
+   this into a test that passes for the wrong reason.
+
+3. **`nftw()` does not set `errno` to `[EACCES]` when `fn` returns -1
+   without setting `errno` itself.** `nftw.html` ERRORS, *shall fail*:
+   "[EACCES] Search permission is denied for any component of path or
+   read permission is denied for path, or fn returns -1 and does not
+   reset errno." The third alternative is `nftw()`'s alone —
+   `ftw.html`'s otherwise identical entry reads "Search permission is
+   denied for any component of path or read permission is denied for
+   path." and stops there — so it is not boilerplate shared between the
+   two pages.
+
+   Mechanism, read from `src/ftw/ftw.c`: the string `errno` occurs four
+   times in the file — `errno = ENOENT` in each of `ftw()` and `nftw()`
+   for an empty path, and `errno = ENOMEM` twice on allocation failure.
+   `fn`'s return value travels back out through `report()` and `walk()`
+   untouched, so `nftw()` returning -1 because `fn` did leaves `errno`
+   holding whatever the caller had before the call.
+
+   The counter-argument, and why it is rejected: ERRORS can be read as
+   describing only `nftw()`'s own failures, and RETURN VALUE does list
+   "An invocation of fn shall return a non-zero value" as a *different*
+   termination condition from "detects an error" — on that reading the
+   sentence is a remark about how such a -1 usually arises. Rejected
+   because it is not in RETURN VALUE, it is an entry in the *shall
+   fail* list, and an entry there states a condition under which the
+   function shall fail with that errno; and because the condition it
+   names is a fact about `fn`, not about `nftw()`, so on the
+   descriptive reading it would have no addressee at all. The point of
+   the clause is that `fn`'s -1 and `nftw()`'s own -1 are otherwise
+   indistinguishable. It is still the weakest of the three findings,
+   which is why that is said here as well as at the fence. Whatever
+   the fix, it must not be applied to `ftw()`: the clause is not on its
+   page.
+
+### N/A found (group X)
+
+1. **`[EOVERFLOW]` has no object here, rather than no fixture.** The
+   clause is about a field of `struct stat` that "cannot be represented
+   correctly in the current programming environment", and on both arch
+   legs no such field exists: `include/alltypes.h.gen` — the
+   arch-independent half of the generated header — types `off_t` and
+   `time_t` as `_Int64` and `ino_t`/`dev_t` as `unsigned _Int64`, and
+   `src/stat/stat.c` fills each of them from an NT value no wider
+   (`EndOfFile`, `IndexNumber`, the `FILETIME`s through
+   `__nt_to_unix_sec()`). This is a mechanism, not "NT is different":
+   the representation the clause asks about is wide enough by
+   construction, so the condition cannot arise even on i386.
+   Deliberately **not** folded into the permission-model N/A rows,
+   which are about a fixture that cannot be built rather than a
+   condition that cannot exist.
+
+2. **Thread-safety is a permission and unexercisable besides.** Both
+   pages say the function "need not be thread-safe", which imposes
+   nothing; and the `pthread.h` family is a recorded absence, so this
+   library ships no way to start a second thread that could call
+   `nftw()` concurrently. Recorded rather than passed over so the
+   sentence is visibly accounted for.
+
+3. **`ndirs`/`fd_limit` ≤ 0 is not a gap, and was checked before it was
+   dismissed.** `ftw.html` says "The argument ndirs should be in the
+   range [1,{OPEN_MAX}]" — a *should* — and its only error clause about
+   the argument is a *may fail* `[EINVAL]`; `nftw.html`'s ERRORS
+   section has no `[EINVAL]` at all. `src/ftw/ftw.c`'s `level_open()`
+   guards its eviction with `ws->nopenfd >= 1`, so a limit of 0 or less
+   turns the descriptor ceiling off entirely rather than clamping it to
+   1 the way some implementations do. That is worth recording — it is
+   the opposite of what the argument's name suggests — but no clause
+   says what must happen instead, and fencing it would be manufacturing
+   a gap. `test_ndirs_out_of_range()` therefore asserts only that the
+   call terminates and does not report a partial tree as a complete
+   one.
+
+### Not reached (group X)
+
+The `[EACCES]` half of the error model — an unreadable directory, an
+unstattable object, and `[EMFILE]`/`[ENFILE]` — is still not reached,
+for the reason group J3 recorded and this group repeats without
+re-testing it. That is exactly why findings 1 and 2 are fenced: the
+defects are in the source and are quoted from it, but the fixtures that
+would run the assertions are the ones this platform's permission model
+is said not to allow. Anyone who refutes that claim — it is a
+measurement, and measurements decay — should unfence both and expect
+them to fail until the branch they share is fixed.
+
+Also not reached, and not a defect of this group: everything group J3
+already records as `rc=77` unverified (`FTW_PHYS`'s `FTW_SL`, `FTW_SLN`
+and link-following) and the two BUGs it already fences (`FTW_CHDIR`,
+and the directory that is a descendant of itself). `test/posix-ftw.c`
+deliberately keeps `FTW_CHDIR` out of its flag-combination sweep so
+that a red run there cannot be J3's finding wearing a new name.
