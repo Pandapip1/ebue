@@ -114,21 +114,32 @@ report_render() {
 	return 0
 }
 
-# Is the recorded ntlibc SHA still a claim this tree can stand behind?
-# Returns 0 if it is, non-zero if the report needs re-measuring.
-# tools/merge-gendata.sh stamps `unknown` after resolving a merge,
-# precisely so the next commit measures for real; an ancestry failure
-# means the same thing for a report that has gone quietly old.  Either
-# way it forces the expensive path regardless of what is staged --
-# `unknown` is the one state where re-rendering alone would be actively
-# misleading, since the file would keep claiming a measurement that never
-# happened.
+# Is the recorded ntlibc stamp one this tree can stand behind?  Returns 0
+# if it is, non-zero if the report needs re-measuring, in which case the
+# expensive path runs regardless of what is staged.
+#
+# The test is the engine's sm_check_provenance, restated: a stamp must be
+# present, must be a full object name, and must not be the `unknown` that
+# tools/merge-gendata.sh writes after resolving a merge.  That last is
+# the one state where re-rendering alone would be actively misleading --
+# the file would keep claiming a measurement that never happened -- so it
+# forces a real one.
+#
+# It deliberately does NOT ask whether the stamp is an ancestor of HEAD,
+# which is what it used to ask.  Work is landed here by rebasing, so a
+# report measured in a branch is stamped with a commit that no longer
+# exists once that branch is pushed; asking for ancestry made this
+# function answer "re-measure" on essentially every commit after a
+# rebase, and made the gate stage red outright.  See "provenance" in
+# tools/suitemap-engine.sh.
 report_sha_ok() {
 	# shellcheck disable=SC2016  # a sed script, and Markdown backticks in it
 	sha=$(sed -n 's/^| ntlibc | `\(.*\)` |$/\1/p' "$1" | head -1)
 	[ -n "$sha" ] || return 1
 	[ "$sha" != unknown ] || return 1
-	git merge-base --is-ancestor "$sha" HEAD 2>/dev/null
+	[ "${#sha}" -eq 40 ] || return 1
+	case $sha in *[!0-9a-f]*) return 1 ;; esac
+	return 0
 }
 
 hookw=$(mktemp -d)
@@ -207,8 +218,8 @@ report_measure() {
 	# was not hypothetical: it blocked the commit that introduced it.
 	#
 	# --check is the comparison that already gets this right. It strips
-	# both places the SHA appears, diffs everything else, and enforces
-	# ancestry separately -- which is also what the gate stage runs, so
+	# both places the SHA appears, diffs everything else, and vets the
+	# stamp separately -- which is also what the gate stage runs, so
 	# the hook and the gate now agree by construction rather than by
 	# coincidence.  It writes nothing, so the hook no longer silently
 	# rewrites a tracked file either.

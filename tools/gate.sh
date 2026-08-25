@@ -217,10 +217,10 @@ note() { printf '%s\n' "$*" >&2; }
 #
 # libc-test-map needs the same corpus, and one thing more: rsync strips
 # .git from every copy, so a stage that has to answer "is the SHA this
-# report records an ancestor of HEAD?" cannot answer it from inside the
-# copy. It is handed LIBC_TEST_MAP_GITREPO pointing back at the real
+# does the stamp this report records resolve?" cannot answer it from
+# inside the copy. It is handed LIBC_TEST_MAP_GITREPO pointing back at the real
 # tree instead. Note what it must NOT do: degrade to "no .git, so skip
-# the ancestry check". A staleness check that silently stops checking
+# the provenance check". A staleness check that silently stops checking
 # staleness is precisely the vacuous stage this gate has been pruning.
 #
 make_tree() {
@@ -390,7 +390,7 @@ fi
 # failure mode by another route.  So the map is regenerated on demand
 # (`make libc-test-map`) and nightly, and what runs here is `--check`:
 # the checked-in file must still describe THIS tree, its recorded ntlibc
-# SHA must be an ancestor of HEAD, and its four invariants must hold.
+# stamp must be well-formed, and its four invariants must hold.
 # Those all have honest yes/no answers.
 #
 # No WINE: this stage compiles and links the corpus to classify it and
@@ -420,7 +420,7 @@ fi
 #
 # GAPMAP_GITDIR points back at the real tree because this copy has no
 # .git of its own, and one of the invariants is that the SHA the report
-# records is an ancestor of HEAD. The script FAILS rather than skips when
+# records still resolves. The script FAILS rather than skips when
 # it cannot reach a repository -- "I could not check" and "it checks out"
 # are different claims -- so the variable is load-bearing, not a
 # convenience.

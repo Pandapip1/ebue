@@ -90,9 +90,12 @@
 #
 # So the driver refuses to certify what it cannot check: it stamps the
 # recorded ntlibc SHA as `unknown`.  That is not cosmetic.  Both
-# generators' --check verifies the recorded SHA is an ancestor of HEAD --
-# the process invariant that stops a report being quietly months old --
-# and `unknown` fails it loudly, by an existing, self-tested code path.
+# generators' --check requires the recorded SHA to be a well-formed
+# object name, and rejects `unknown` by name -- loudly, through an
+# existing code path that tools/posix-gapmap.sh --selftest asserts
+# fires.  Of everything the provenance check does, this is the part
+# that is genuinely load-bearing rather than documentary, which is why
+# it survived the ancestry rule being dropped.
 # The merge itself completes, with no markers anywhere; what does not
 # happen is the merged report silently reading as a current measurement.
 # .githooks/pre-commit sees the same `unknown` and re-measures for real

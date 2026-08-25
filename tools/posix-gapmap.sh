@@ -79,7 +79,7 @@
 #
 # And one process invariant that tooling cannot infer: the report records
 # the ntlibc SHA it was generated from, and --check fails if that SHA is
-# not an ancestor of HEAD.  That is what stops the file being quietly
+# not a well-formed stamp.  That is what stops the file being quietly
 # months old while looking authoritative.
 #
 # Usage:
@@ -95,7 +95,7 @@
 #
 # Env:
 #   GAPMAP_JOBS     parallel compiles (default: nproc)
-#   GAPMAP_GITDIR   repository to resolve the SHA-ancestry check against.
+#   GAPMAP_GITDIR   repository to resolve the provenance stamp against.
 #                   Defaults to the source tree.  tools/gate.sh sets it,
 #                   because its stages run in an rsync'd copy with no
 #                   .git of its own.
@@ -114,7 +114,7 @@ REPORT="$srcdir/test/POSIX-GAP-MAP.generated.md"
 #
 # This file is a BACKEND.  Everything that decides what a number means --
 # LC_ALL, the refuse-to-measure guard, the compiler wrapper that enforces
-# it, the data block, the ancestry check, the greedy closure -- lives in
+# it, the data block, the provenance check, the greedy closure -- lives in
 # tools/suitemap-engine.sh and is shared with tools/libc-test-map.sh.
 # What is left here is the Open POSIX Test Suite itself: how to find its
 # tests, how to classify one, and what its report says.
@@ -375,19 +375,21 @@ check_canaries() {
 	return $_rc
 }
 
-# The process invariant: the SHA the checked-in report records must be an
-# ancestor of HEAD.  Nothing in the file's contents can reveal that it
-# describes a tree from three months ago, so it is checked here.
+# The process invariant: the checked-in report must carry a well-formed
+# provenance stamp, and must not carry the `unknown` that a merge
+# resolution leaves behind.  What the report DESCRIBES is settled by
+# --check's regeneration diff, not by the stamp -- see "provenance" in
+# tools/suitemap-engine.sh for why that swap happened and what it cost.
 #
 # The gate runs its stages in an rsync'd copy with no .git, which is why
 # GAPMAP_GITDIR exists.  Note what this does NOT do: if no repository is
 # reachable it FAILS rather than skipping.  "I could not check" and "it
 # checks out" are different claims.
-# The engine owns the ancestry check itself; this names the override
+# The engine owns the provenance check itself; this names the override
 # variable this backend has always used, for the diagnostic.
 SM_GITDIR=$GAPMAP_GITDIR
 SM_GITDIR_HINT=GAPMAP_GITDIR
-check_ancestry() { sm_check_ancestry "$@"; }
+check_provenance() { sm_check_provenance "$@"; }
 
 # ------------------------------------------------------------- the selftest
 #
@@ -424,20 +426,34 @@ if [ "$mode" = --selftest ]; then
 	ck "canaries reject a stuck-C answer"     1 check_canaries C C
 	ck "canaries reject a swap"               1 check_canaries C A
 	ck "canaries accept A for A and C for C"  0 check_canaries A C
-	ck "ancestry rejects a non-repository"    1 check_ancestry HEAD /nonexistent-not-a-repo
-	ck "ancestry rejects an empty SHA"        1 check_ancestry ""
-	ck "ancestry rejects an unknown SHA"      1 check_ancestry 0000000000000000000000000000000000000000
+	ck "provenance rejects a non-repository"  1 check_provenance HEAD /nonexistent-not-a-repo
+	ck "provenance rejects an empty SHA"      1 check_provenance ""
+	# The merge tripwire, by name: tools/merge-gendata.sh writes exactly
+	# this after resolving a data block, so that a report whose rows were
+	# merged cannot pass as one whose rows were measured.  Losing this
+	# would be the one real weakening in dropping the ancestry rule, so
+	# it is asserted rather than left to follow from the hex test.
+	ck "provenance rejects the merge stamp"   1 check_provenance unknown
+	ck "provenance rejects a short SHA"       1 check_provenance 45d1616
+	ck "provenance rejects a non-hex SHA"     1 check_provenance zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+	# A rebased-away SHA -- well-formed, and absent from this repository
+	# because landing the work that measured it rewrote the commit.  This
+	# is the case the old ancestry rule failed and this one must not: it
+	# is what made both reports red on main at 45d1616 while every
+	# measured row in them was byte-correct.  What establishes those rows
+	# is the regeneration diff, which is unchanged and still runs.
+	ck "provenance accepts a rebased-away SHA" 0 check_provenance 0000000000000000000000000000000000000000
 	# The positive direction needs a real repository, which a gate tree
 	# copy does not have.  Reported as such rather than silently skipped:
 	# an unrun check must never read as a passed one.
 	if git -C "$GAPMAP_GITDIR" rev-parse HEAD >/dev/null 2>&1; then
-		ck "ancestry accepts HEAD itself"     0 check_ancestry "$(git -C "$GAPMAP_GITDIR" rev-parse HEAD)"
-		nck=18
+		ck "provenance accepts HEAD itself"   0 check_provenance "$(git -C "$GAPMAP_GITDIR" rev-parse HEAD)"
+		nck=21
 	else
 		echo "selftest: NOTE -- $GAPMAP_GITDIR is not a git repository, so the"
-		echo "selftest:         positive ancestry check was not run.  Set"
+		echo "selftest:         positive provenance check was not run.  Set"
 		echo "selftest:         GAPMAP_GITDIR to exercise it."
-		nck=17
+		nck=20
 	fi
 	if [ "$fails" -ne 0 ]; then
 		echo "selftest: $fails invariant check(s) did not behave as documented." >&2
@@ -543,7 +559,7 @@ check_census "$n_tests" "$n_dirs" || exit 1
 # so inside a stage copy the first source is simply not there -- the
 # report came out saying `unknown`, which is how this fallback exists.
 # The second is read out of GAPMAP_GITDIR, the same repository the
-# ancestry invariant uses.
+# provenance invariant uses.
 #
 # When both are available and DISAGREE, that is a hard error rather than
 # a preference for one of them: the checkout has been moved off the pin,
@@ -1215,8 +1231,10 @@ fi
 #
 # Regenerates into a temporary file and diffs.  What it deliberately does
 # NOT compare is the two SHA lines: the recorded ntlibc SHA is the point
-# of the ancestry check below, and comparing it here would make the stage
-# red on every commit for a reason that has nothing to do with the gap.
+# of the provenance check below, and comparing it here would make the
+# stage red on every commit for a reason that has nothing to do with the
+# gap.  The diff, not the stamp, is what says this report describes this
+# tree -- and it is the whole reason the stamp no longer has to.
 [ -f "$REPORT" ] || {
 	echo "posix-gapmap: $REPORT does not exist." >&2
 	echo "posix-gapmap: generate it with tools/posix-gapmap.sh" >&2
@@ -1224,12 +1242,12 @@ fi
 
 # shellcheck disable=SC2016  # a sed script, and Markdown backticks in it
 recorded=$(sed -n 's/^| ntlibc | `\(.*\)` |$/\1/p' "$REPORT" | head -1)
-check_ancestry "$recorded" || exit 1
+check_provenance "$recorded" || exit 1
 
 emit > "$W/new.md" || exit 1
 # The recorded ntlibc SHA appears twice now -- in the header table and as
 # an `s` row -- and neither is compared, for the same reason: it changes
-# on every commit, check_ancestry above is what actually enforces it, and
+# on every commit, check_provenance above is what vets it, and
 # diffing it here would make this stage red for a reason that has nothing
 # to do with the gap.
 

@@ -226,55 +226,126 @@ sm_read_data_block() {
 
 # The recorded ntlibc SHA appears twice in every report -- once in the
 # header table, once as an `s` row -- and NEITHER is compared by --check.
-# It changes on every commit; sm_check_ancestry is what actually enforces
-# it.  Diffing it would make the stage red for a reason that has nothing
+# It changes on every commit; sm_check_provenance is what vets it, and
+# the regeneration diff below is what vets the rows it stamps.  Diffing it would make the stage red for a reason that has nothing
 # to do with the gap, and a stage that is red for no reason is a stage
 # somebody turns off.
 #
 # The second pattern carries a literal tab: POSIX sed has no \t.
 sm_strip_shas() { sed -e '/^| ntlibc | `/d' -e '/^s	ntlibc	/d' "$1"; }
 
-# ------------------------------------------------------------- ancestry
+# ---------------------------------------------------------- provenance
 #
-# The report claims to describe a specific tree.  This is what makes that
-# claim checkable: the recorded SHA must be an ancestor of HEAD.  A
-# failure is not a skip -- an unverifiable pin and a verified one are
-# different claims, and a report that cannot say which tree it describes
-# is not evidence about any tree.
+# WHAT THIS WAS, AND WHY IT IS NOT THAT ANY MORE
 #
-# tools/merge-gendata.sh stamps the SHA `unknown` after resolving a
-# merge, precisely so this fails loudly until someone measures for real.
-# The repository is a parameter with a default rather than read straight
-# from the environment, so a selftest can point one call at a
-# non-repository without a subshell to contain the override.  The default
-# is SM_GITDIR, which each backend sets to its own override variable --
-# the gate runs its stages in an rsync'd copy with no .git of its own,
-# and the two backends spell that override differently for historical
-# reasons.  SM_GITDIR_HINT, if set, names it in the diagnostic.
-sm_check_ancestry() {
+# This was an ANCESTRY check: the SHA the report records had to be an
+# ancestor of HEAD.  The intent was right -- a report claims to describe
+# a specific tree, and that claim should be checkable -- but it keyed the
+# claim on a COMMIT'S IDENTITY, and a commit's identity is the one thing
+# a rebase does not preserve.  Work is landed in this repository by
+# rebasing it onto current origin/main and pushing, so the commit a
+# report was measured at is rewritten before it is ever published.  The
+# recorded SHA is then not merely a non-ancestor of HEAD: it is not in
+# the repository at all, in any clone, ever.
+#
+# That is not hypothetical.  Both reports were red on main at 45d1616
+# recording ebddd6b, a commit no clone of this repository has.  A full
+# regeneration -- 1610 conformance compiles for the gap map, 146 for the
+# coverage map -- changed exactly four lines across the two files, and
+# all four were the SHA.  Every measured row was byte-identical.  The
+# reports were correct and the gate was red, which is exactly the "red
+# for a reason that has nothing to do with the gap" failure the rest of
+# this file is written to avoid, and exactly what gets a stage turned
+# off.
+#
+# WHAT ACTUALLY CHECKS THE CLAIM
+#
+# --check does not take the report's word for anything.  It regenerates
+# from THIS tree and diffs every row.  That diff is the report's claim
+# EVALUATED rather than asserted, and it is strictly stronger than any
+# statement about a SHA:
+#
+#   - a report carried in from an unrelated tree describes that tree's
+#     gap, so its rows differ from this tree's and the diff rejects it;
+#   - and if its rows do NOT differ, then it is a true statement about
+#     this tree, whatever tree it was measured on.
+#
+# An ancestry proof stacked on top of a full re-measurement therefore
+# adds nothing about the numbers.  It only ever spoke about the stamp.
+#
+# So the stamp is now checked AS a stamp, and only for the properties a
+# rebase cannot destroy:
+#
+#   1. the repository named must actually be a repository.  Not
+#      cosmetic: --generate stamps the literal `unknown` when it cannot
+#      run rev-parse (see NTLIBC_SHA in the backends), and sm_strip_shas
+#      removes the SHA rows before the diff, so a --check run pointed at
+#      a non-repository would compare `unknown` against `unknown` and
+#      call it agreement.  "I could not check" and "it checks out" are
+#      different claims.
+#   2. the report must carry a stamp at all.
+#   3. the stamp must be a well-formed object name -- 40 lower-case hex
+#      -- and must not be the `unknown` that tools/merge-gendata.sh
+#      writes after resolving a merge of the data block.  That is the
+#      tripwire that stops a report whose rows were MERGED from passing
+#      as one whose rows were MEASURED, and it is preserved deliberately
+#      and tested by name.
+#
+# Ancestry itself is reported and not enforced.  The reason is that its
+# two failing outcomes are indistinguishable in the only case that
+# arises: a SHA a rebase rewrote away and a SHA from somebody else's
+# repository are both simply absent.  Enforcing it cannot separate the
+# honest case from the dishonest one, and does reliably fail the honest
+# one several times an hour.  What it CAN still do is say which of the
+# three situations holds, so a reader of a --check log knows whether the
+# stamp is quotable to `git show`; so it says so, and passes.
+sm_check_provenance() {
 	_sha=$1; _gitdir=${2:-$SM_GITDIR}
 	git -C "$_gitdir" rev-parse --git-dir >/dev/null 2>&1 || {
-		echo "$SM_TOOL: ANCESTRY FAILED -- $_gitdir is not a git" >&2
-		echo "$SM_TOOL:   repository, so the report's recorded ntlibc SHA" >&2
-		echo "$SM_TOOL:   cannot be checked against HEAD." >&2
+		echo "$SM_TOOL: PROVENANCE FAILED -- $_gitdir is not a git" >&2
+		echo "$SM_TOOL:   repository, so a regeneration here would stamp" >&2
+		echo "$SM_TOOL:   'unknown' and --check would be comparing one" >&2
+		echo "$SM_TOOL:   unstamped report against another." >&2
 		[ -z "${SM_GITDIR_HINT:-}" ] ||
 			echo "$SM_TOOL:   Point $SM_GITDIR_HINT at the real tree." >&2
 		echo "$SM_TOOL:   This is a failure and not a skip: an unverifiable" >&2
 		echo "$SM_TOOL:   pin and a verified one are different claims." >&2
 		return 1; }
 	[ -n "$_sha" ] || {
-		echo "$SM_TOOL: ANCESTRY FAILED -- the report records no ntlibc SHA." >&2
+		echo "$SM_TOOL: PROVENANCE FAILED -- the report records no ntlibc SHA." >&2
 		return 1; }
-	git -C "$_gitdir" cat-file -e "$_sha^{commit}" 2>/dev/null || {
-		echo "$SM_TOOL: ANCESTRY FAILED -- the report records ntlibc SHA" >&2
-		echo "$SM_TOOL:   $_sha, which this repository does not have." >&2
+	[ "$_sha" != unknown ] || {
+		echo "$SM_TOOL: PROVENANCE FAILED -- the report records ntlibc SHA" >&2
+		echo "$SM_TOOL:   'unknown'.  tools/merge-gendata.sh stamps that after" >&2
+		echo "$SM_TOOL:   resolving a merge of the data block: these rows were" >&2
+		echo "$SM_TOOL:   MERGED, not measured, and a merge of two measurements" >&2
+		echo "$SM_TOOL:   is not itself a measurement of anything." >&2
+		echo "$SM_TOOL:   Regenerate for real: tools/$SM_TOOL.sh" >&2
 		return 1; }
-	git -C "$_gitdir" merge-base --is-ancestor "$_sha" HEAD 2>/dev/null || {
-		echo "$SM_TOOL: ANCESTRY FAILED -- the report records ntlibc SHA" >&2
-		echo "$SM_TOOL:   $_sha, which is not an ancestor of HEAD." >&2
-		echo "$SM_TOOL: The report therefore describes a tree that is not" >&2
-		echo "$SM_TOOL:   this one.  Regenerate it: tools/$SM_TOOL.sh" >&2
+	# 40 lower-case hex.  A stamp is documentation, and documentation
+	# that cannot be pasted into `git show` is not documentation.
+	_bad=no
+	case $_sha in *[!0-9a-f]*) _bad=yes ;; esac
+	[ "${#_sha}" -eq 40 ] || _bad=yes
+	[ "$_bad" = no ] || {
+		echo "$SM_TOOL: PROVENANCE FAILED -- the report records ntlibc SHA" >&2
+		echo "$SM_TOOL:   '$_sha', which is not a full object name (40" >&2
+		echo "$SM_TOOL:   lower-case hex digits).  The stamp has been edited" >&2
+		echo "$SM_TOOL:   by hand or truncated; regenerate: tools/$SM_TOOL.sh" >&2
 		return 1; }
+	# Reported, not enforced -- see the block above.  Goes to stdout,
+	# because none of the three outcomes is an error.
+	if ! git -C "$_gitdir" cat-file -e "$_sha^{commit}" 2>/dev/null; then
+		echo "$SM_TOOL: provenance: measured at $_sha, which this clone does"
+		echo "$SM_TOOL:   not have -- the ordinary reason is that landing that"
+		echo "$SM_TOOL:   work rebased it.  Not an error: the regeneration diff"
+		echo "$SM_TOOL:   is what establishes the report describes THIS tree."
+	elif git -C "$_gitdir" merge-base --is-ancestor "$_sha" HEAD 2>/dev/null; then
+		echo "$SM_TOOL: provenance: measured at $_sha, an ancestor of HEAD."
+	else
+		echo "$SM_TOOL: provenance: measured at $_sha, which this clone has but"
+		echo "$SM_TOOL:   which is not an ancestor of HEAD."
+	fi
 	return 0
 }
 

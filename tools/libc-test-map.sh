@@ -107,7 +107,7 @@
 #                                       no submodule, no config.mak, no compiler
 #
 # Env:
-#   LIBC_TEST_MAP_GITREPO  the git repository to ask for SHAs and ancestry
+#   LIBC_TEST_MAP_GITREPO  the git repository to ask for SHAs and provenance
 #                        (default: the source tree).  tools/gate.sh runs
 #                        this inside an rsync'd copy with no .git and
 #                        points this back at the real tree.
@@ -124,7 +124,7 @@ srcdir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$srcdir" || exit 1
 
 SUITE="${LIBC_TEST_MAP_SUITE:-$srcdir/third_party/libc-test}"
-# The git repository to ask about SHAs and ancestry.  Normally $srcdir --
+# The git repository to ask about SHAs and provenance.  Normally $srcdir --
 # but tools/gate.sh runs this stage inside an rsync'd tree copy that has
 # no .git at all, and points this back at the real tree.  It is NOT
 # optional: "no .git, so skip the check" is the one answer this script
@@ -137,7 +137,7 @@ SHIM="$srcdir/test/libc-test-shim-src/libc-test-shim.c"
 #
 # This file is a BACKEND.  Everything that decides what a number means --
 # LC_ALL, the refuse-to-measure guard, the compiler wrapper that enforces
-# it, the data block, the ancestry check, the greedy closure -- lives in
+# it, the data block, the provenance check, the greedy closure -- lives in
 # tools/suitemap-engine.sh and is shared with tools/posix-gapmap.sh.
 # What is left here is musl's libc-test itself: how to find its tests,
 # how to classify one, and what its report says.
@@ -267,14 +267,15 @@ BQ='`'
 
 g() { git -C "$GITREPO" "$@"; }
 
-# Every SHA and every ancestry question goes through here, and a failure
+# Every SHA and every provenance question goes through here, and a failure
 # is fatal rather than a fallback.
 #
 # The tempting shape is `git rev-parse HEAD 2>/dev/null || echo unknown`,
 # and it is wrong for the same reason everything else in this file is
 # shaped the way it is.  This report's entire claim to being evidence
-# about THIS tree rests on the SHA it records and on --check confirming
-# that SHA is an ancestor of HEAD.  A run that cannot reach git cannot
+# about THIS tree rests on --check regenerating it from that tree and
+# diffing, and on the stamp that says where it came from.  A run that
+# cannot reach git cannot regenerate, cannot stamp, and so cannot
 # make that claim, and a report stamped "unknown" that still prints a
 # gap distribution is worse than no report: it looks authoritative and
 # is unfalsifiable.  So: hard error, naming the fix.
@@ -282,8 +283,8 @@ require_git() {
 	g rev-parse --git-dir >/dev/null 2>&1 && return 0
 	echo "libc-test-map: $GITREPO is not a git repository." >&2
 	echo "libc-test-map: this report records the ntlibc SHA it was generated" >&2
-	echo "libc-test-map: at, and --check verifies that SHA is an ancestor of" >&2
-	echo "libc-test-map: HEAD.  Without git neither is possible, and a" >&2
+	echo "libc-test-map: at, and --check regenerates from that tree and" >&2
+	echo "libc-test-map: diffs.  Without git neither is possible, and a" >&2
 	echo "libc-test-map: coverage map that cannot say which tree it describes" >&2
 	echo "libc-test-map: is not evidence about any tree.  This is an error," >&2
 	echo "libc-test-map: not a skip." >&2
@@ -869,7 +870,8 @@ because a guard nobody has seen fail is a guard nobody knows works:
 | 3b | the driver made to stop registering build failures — the gap reads as **closed** | \`only 0 tests blocked, floor is 40\` |
 | 4 | a canary re-pinned to the wrong class, population untouched | \`pthread_cond-smasher is 'A' (want C)\` |
 | — | deletion pin pointed at a commit that does not remove \`clearenv\` | \`eb5a607 does not remove any line mentioning 'clearenv'\` |
-| — | recorded SHA replaced with a commit off this history | \`not an ancestor of HEAD\` |
+| — | recorded SHA replaced with the \`unknown\` a merge resolution leaves | \`these rows were MERGED, not measured\` |
+| — | a measured row altered by hand, stamp left alone | \`--check FAILED: ... is stale\` |
 
 The 3b run is the one worth reading twice: **invariant 4 fired at the
 same time**, because a driver that has stopped seeing build failures
@@ -885,14 +887,21 @@ one, in opposite directions, because a classifier that has started
 answering constantly — always \`A\`, or always \`C\` — satisfies either one
 alone.
 
-And one process invariant tooling cannot enforce on its own: the ntlibc
-SHA recorded above must be an **ancestor of \`HEAD\`**, which \`--check\`
-verifies. That is what stops this file being quietly months old while
-looking authoritative.
+And the process invariant: \`--check\` does not take this file's word for
+anything. It **regenerates every row above from the tree it is run in
+and diffs**, so a report that has gone quietly months old, or that was
+carried in from another tree, differs and is rejected. The ntlibc SHA
+recorded above is *provenance* and is checked as such — it must be a
+well-formed object name, and must not be the \`unknown\` that a merge
+resolution stamps — but it is deliberately **not** required to be an
+ancestor of \`HEAD\`, because this project lands work by rebasing and the
+commit a report was measured at is routinely rewritten before it is ever
+pushed. See "provenance" in \`tools/suitemap-engine.sh\`.
 
 The \`deleted-on-purpose\` annotations in section 4 are verified the same
 way, and for the same reason: \`--check\` confirms each named commit is an
-ancestor of \`HEAD\` **and** that it actually removed that symbol. A prose
+ancestor of \`HEAD\` **and** that it actually removed that symbol — those
+name *published* commits, so ancestry is the right question there. A prose
 claim nobody checks is how a report starts lying.
 
 ## 6. Per-test ledger
@@ -1207,14 +1216,17 @@ check_iface_counts() {
 check_sha() {
 	[ -f "$REPORT" ] || { echo "--check: $REPORT is missing.  Run tools/libc-test-map.sh." >&2; return 1; }
 	# shellcheck disable=SC2016  # markdown backticks in a sed pattern
-	sha=$(sed -n 's/^| ntlibc | `\([0-9a-f]*\)` |$/\1/p' "$REPORT" | head -1)
-	[ -n "$sha" ] || { echo "--check: $REPORT records no ntlibc SHA." >&2; return 1; }
-	# The ancestry rule itself lives in the engine, so that both reports
-	# make the same claim and fail the same way.  The wording of a
-	# failure here therefore changed with unification; what it checks
-	# did not.
-	sm_check_ancestry "$sha" || return 1
-	echo "sha ok: report generated at $sha, an ancestor of HEAD"
+	# `\(.*\)`, not `\([0-9a-f]*\)`.  A hex-only pattern silently turns
+	# every malformed stamp into the empty string, so the `unknown` that
+	# tools/merge-gendata.sh writes was being reported as "records no
+	# ntlibc SHA" -- true in a sense, and useless: it named neither the
+	# merge nor the fix.  Extract whatever is there and let the engine
+	# say what is wrong with it, which is also what posix-gapmap does.
+	sha=$(sed -n 's/^| ntlibc | `\(.*\)` |$/\1/p' "$REPORT" | head -1)
+	# The provenance rule itself lives in the engine, so that both
+	# reports make the same claim and fail the same way.  It vets the
+	# stamp; the regeneration diff below vets the rows the stamp is on.
+	sm_check_provenance "$sha" || return 1
 	return 0
 }
 
