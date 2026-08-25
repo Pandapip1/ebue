@@ -75,12 +75,28 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	 * [ESPIPE] says the more useful thing about a pipe, and the existing
 	 * assertion for it predates this check. */
 	if ((f->flags & O_ACCMODE) == O_RDONLY) return EBADF;
+	/* posix_fallocate.html ERRORS, *shall fail*: "[ENODEV] The fd argument
+	 * does not refer to a regular file."  This used to be spelled
+	 * `if (si.Directory) return EBADF;` -- a comment that named the right
+	 * condition over code that returned the wrong errno for it, and that
+	 * tested only one of the several ways a descriptor can fail to be a
+	 * regular file.  [EBADF] on this page means two OTHER things ("is not
+	 * a valid file descriptor", and "was opened without write
+	 * permission"), so a caller that distinguishes them was told something
+	 * false about its own descriptor.
+	 *
+	 * __FD_FILE is exactly the right predicate: __handle_type() assigns it
+	 * to a disk/network/CD/tape file-system object that is NOT a directory
+	 * (directories become __FD_DIR), so everything else -- a character
+	 * device such as NUL, a console, a socket, a pipe -- is by
+	 * construction not a regular file.  A pipe never reaches here because
+	 * [ESPIPE] above is more specific and POSIX gives it its own clause. */
+	if (f->type != __FD_FILE) return ENODEV;
 	want = (long long)offset + (long long)len;
 	if (want < 0) return EFBIG;
 
 	st = NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation);
 	if (!NT_SUCCESS(st)) return __errno_from_status(st);
-	if (si.Directory) return EBADF;   /* not a regular file */
 
 	/* The second half of this guard is a data-loss interlock, not an
 	 * optimisation.  ZwSetInformationFile(FileAllocationInformation) is

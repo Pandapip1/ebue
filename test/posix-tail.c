@@ -1049,34 +1049,6 @@ static void test_posix_fallocate_efbig(void)
 }
 #endif
 
-#if 0 /* BUG: posix_fallocate() reports [EBADF] for a file that is not a
-       * regular file, where POSIX requires [ENODEV].
-       *
-       * posix_fallocate.html ERRORS, *shall fail*:
-       *   "[ENODEV] The fd argument does not refer to a regular file."
-       * [EBADF] on the same page means two other things -- "the fd
-       * argument is not a valid file descriptor", or "references a file
-       * that was opened without write permission" -- so a caller that
-       * distinguishes them is told the wrong thing about its own
-       * descriptor.
-       *
-       * src/fcntl/fadvise.c's line is
-       *     if (si.Directory) return EBADF;   / * not a regular file * /
-       * -- the comment names the right condition and the code returns
-       * the wrong errno for it.
-       *
-       * The fixture below is a character device opened for WRITING
-       * ("/dev/null", or "NUL" by its NT name), not a directory, and
-       * that is deliberate: a directory descriptor is simultaneously
-       * "not a regular file" AND "opened without write permission", so
-       * both [ENODEV] and [EBADF] would conform for one and it could
-       * not distinguish the two clauses.  A writable character device
-       * is only the first, so [EBADF] is unambiguously wrong for it.
-       * Measured under Wine: open("NUL", O_WRONLY) gives a valid,
-       * writable, S_ISCHR descriptor and posix_fallocate() on it
-       * returns 9 (EBADF) where 19 (ENODEV) is required.  (The
-       * directory case is asserted live above, permissively, as
-       * ENODEV-or-EBADF, since both conform there.) */
 static void test_posix_fallocate_enodev(void)
 {
 	static const char *const devs[] = { "/dev/null", "NUL" };
@@ -1097,7 +1069,6 @@ static void test_posix_fallocate_enodev(void)
 	}
 	CHECK(found);
 }
-#endif
 
 static void test_posix_fallocate_ebadf_readonly(void)
 {
@@ -1624,9 +1595,7 @@ int main(void)
 #if 0 /* BUG: see the fence above test_posix_fallocate_efbig */
 	test_posix_fallocate_efbig();
 #endif
-#if 0 /* BUG: see the fence above test_posix_fallocate_enodev */
 	test_posix_fallocate_enodev();
-#endif
 	test_posix_fallocate_ebadf_readonly();
 
 	test__setjmp_return_values();
