@@ -439,6 +439,18 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
  * old pointer directly fail to COMPILE rather than silently read one
  * byte of a wide format unit.  A stride refactor whose misses are
  * invisible at st == 1 is exactly the kind that ships a latent bug.
+ *
+ * `st` is a size_t, not an int, for the same reason src/stdlib/strtod.c
+ * gives at its own cursor: it is a byte stride and every use of it is
+ * pointer arithmetic.  As an int, the %[ range scanner's `fp += 2 * st`
+ * computed the step in int and widened the product to ptrdiff_t
+ * afterwards (clang-tidy
+ * bugprone-implicit-widening-of-multiplication-result, on 64-bit
+ * targets only, where ptrdiff_t is wider than int).  Nothing truncated
+ * -- st is 1 or sizeof(wchar_t) -- but the type, not a cast at the one
+ * site the analyzer happened to reach, is what makes the arithmetic
+ * right.  gf() being a macro means the declared type of `st` is the
+ * only thing that decides that width.
  * ------------------------------------------------------------------ */
 /* A MACRO, not a static function, and measured rather than assumed.
  * The shipped compiler for this target is tcc, which does no inlining
@@ -452,7 +464,7 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 #define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
                            : (unsigned)*(const wchar_t *)(const void *)(q))
 
-static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
+static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 {
 	int nmatched = 0, gotEOF = 0, ilseq = 0;
 	const char *fp = fmt;
