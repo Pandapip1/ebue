@@ -87,6 +87,30 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
  * bytes -- and fwprintf(), whose return is "the number of wide
  * characters transmitted" (fwprintf.html RETURN VALUE).
  *
+ * KNOWN RESIDUAL COST, measured, so nobody re-derives it and reaches for
+ * the alternative without the argument.  One formatter instead of two
+ * costs about 5.9% here: 1.180s -> 1.250s over eight rounds of 500000
+ * iterations of five snprintf() calls, uninstrumented, x86_64-win32-tcc
+ * under Wine, the variants interleaved in one loop and minima taken.
+ * That residual is the struct indirection below plus the `st == 1`
+ * branch per format character; two further costs that were NOT
+ * inherent have already been removed (out() re-deriving
+ * `wide && f->wmem` on every call, and memsetting the whole struct
+ * where only the mbstate_t needs zeroing -- together they were the
+ * difference between 11.0% and 5.9%).
+ *
+ * Removing the last 5.9% would mean compiling this formatter twice from
+ * a template, one instantiation per stride.  CONSIDERED AND DECLINED,
+ * and the reason is correctness rather than effort: %ls and %lc are
+ * written once for four argument/sink combinations precisely so they
+ * cannot drift, and two instantiations reintroduce exactly that
+ * surface -- a conversion added to one and not the other is a defect no
+ * differential test catches, because both are generated from one source
+ * and look consistent.  This library's consumers are configure, gcc,
+ * tcc and sh, all compile-bound or I/O-bound, where 5.9% of the
+ * formatter is not measurable.  Revisit only with a real workload that
+ * shows printf dominating.
+ *
  * `count` and `bad` moved off the parameter lists and into the struct
  * deliberately, and not for tidiness: the signature change makes every
  * one of the ~40 call sites a compile error until it is converted,
