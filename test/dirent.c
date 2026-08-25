@@ -3,7 +3,7 @@
  *
  * opendir/readdir/scandir etc., exercised without stdio (not yet built
  * when this was written): failures are reported with write(2, ...) and
- * the process exit code, the way runtests.sh checks every other test.
+ * the process exit code, the way run-tests.py checks every other test.
  */
 #define _GNU_SOURCE
 #include <dirent.h>

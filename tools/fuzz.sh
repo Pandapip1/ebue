@@ -36,7 +36,8 @@
 # function shells out to llvm-symbolizer against a 200-object binary and
 # costs about thirty seconds a time.  Crash reports are still symbolized.
 #
-# Exits non-zero if any harness finds something.
+# FUZZ_JOBS controls how many harness shards run concurrently (default 1).
+# Exits non-zero if any harness finds something or a worker fails to report.
 
 set -eu
 srcdir=$(cd "$(dirname "$0")/.." && pwd)
@@ -156,7 +157,12 @@ fi
 
 time=${1:-60}
 if [ $# -gt 0 ]; then shift; fi
-harnesses=${*:-"strtod printf scanf utf path strptime strtol strftime fnmatch regex glob wordexp shparse inet string search getopt env"}
+if [ $# -gt 0 ]; then
+	harnesses=$*
+else
+	harnesses=$(find "$srcdir/fuzz" -maxdepth 1 -name 'fuzz_*.c' -printf '%f\n' |
+		sed 's/^fuzz_//; s/\.c$//' | sort)
+fi
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
 	echo "fuzz: run 'make' first (obj/include/bits/alltypes.h is missing)" >&2
@@ -164,6 +170,10 @@ if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
 fi
 
 corpus=${NTLIBC_FUZZ_CORPUS-$srcdir/obj/fuzzcorpus}
+: "${FUZZ_JOBS:=1}"
+case $FUZZ_JOBS in
+''|*[!0-9]*|0) echo "fuzz: FUZZ_JOBS must be a positive integer" >&2; exit 2 ;;
+esac
 
 # -timeout=0, AND A WATCHDOG OF OUR OWN, because libFuzzer's does not work
 # here and its only observable effect was to fail a run at random.
@@ -216,8 +226,9 @@ corpus=${NTLIBC_FUZZ_CORPUS-$srcdir/obj/fuzzcorpus}
 watchdog=$(( time * 3 + 300 ))
 
 make -C "$srcdir/fuzz" all
-rc=0
-for h in $harnesses; do
+
+run_harness() {
+	h=$1
 	# The before/after counts are printed, not asserted: the point of
 	# persisting a corpus is that it grows, and a run that reports the same
 	# number twice is telling you the mirror stopped working.
@@ -265,9 +276,50 @@ for h in $harnesses; do
 			fi
 		fi
 		rc=1
+		return 1
 	fi
 	if [ -n "$corpus" ]; then
 		echo "   corpus $before -> $(find "$corpus/$h/corpus" -type f | wc -l)"
 	fi
+	return 0
+}
+
+# Shard rather than starting every harness at once: libFuzzer is
+# single-threaded and -max_total_time is wall time, so one shard per core
+# uses the runner without oversubscribing it.
+work=$(mktemp -d "${TMPDIR:-/tmp}/ntlibc-fuzz.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT
+n=0
+for h in $harnesses; do
+	printf '%s\n' "$h" >> "$work/shard.$((n % FUZZ_JOBS))"
+	n=$((n + 1))
 done
+[ "$n" -gt 0 ] || { echo "fuzz: no harnesses selected" >&2; exit 2; }
+
+workers=0
+for shard in "$work"/shard.*; do
+	workers=$((workers + 1))
+	id=${shard##*.}
+	(
+		worker_rc=0
+		while IFS= read -r h; do
+			run_harness "$h" || worker_rc=1
+		done < "$shard"
+		printf '%s\n' "$worker_rc" > "$work/rc.$id"
+	) > "$work/log.$id" 2>&1 &
+done
+wait
+
+cat "$work"/log.*
+reported=0
+rc=0
+for status in "$work"/rc.*; do
+	[ -f "$status" ] || continue
+	reported=$((reported + 1))
+	[ "$(cat "$status")" -eq 0 ] || rc=1
+done
+if [ "$reported" -ne "$workers" ]; then
+	echo "fuzz: $reported of $workers worker(s) reported a result" >&2
+	rc=1
+fi
 exit $rc

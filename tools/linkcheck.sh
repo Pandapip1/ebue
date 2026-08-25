@@ -412,7 +412,7 @@ linkcheck_exception() {
 #     is a confirmed non-hazard on the "spec MUST but nobody enforces
 #     it" side and is deliberately NOT asserted here.
 #
-# Every test this project runs, runs under Wine (tools/runtests.sh);
+# Every test this project runs, runs under Wine (tools/run-tests.py);
 # none of them would ever notice a SectionAlignment regression. This
 # check exists so a static header inspection catches it instead, on
 # every .exe tools/linkcheck.sh builds.
@@ -553,7 +553,7 @@ done < "$declfile"
 # cost of `make linkcheck`.
 #
 # Sharded across LINKCHECK_JOBS subshells of *this* shell, rather than
-# the `xargs -P ... sh -c` pattern tools/lint.sh and tools/runtests.sh
+# the worker pattern in tools/lint.sh and tools/run-tests.py
 # use.  The reason is specific and not a preference: the per-symbol work
 # calls pe_header_check(), which calls pe_le(), which calls
 # pe_u8_list().  A `sh -c` child does not inherit shell functions, so the

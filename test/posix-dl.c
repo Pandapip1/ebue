@@ -45,6 +45,7 @@
  * <termios.h> do not (nothing in src/ maps to either one, even
  * partially, without kernel32 functions this build does not import).
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -167,7 +168,7 @@ static void test_dlopen_now_lazy(void)
 	if (h2) dlclose(h2);
 }
 
-#if 0 /* N/A: dlopen.html DESCRIPTION -- RTLD_LOCAL: "symbols ... are
+#if NTLIBC_TEST(NA, posix_dl_dlopen_rtld_local_scoping) /* N/A: dlopen.html DESCRIPTION -- RTLD_LOCAL: "symbols ... are
 	not made available to resolve references in subsequently
 	loaded shared objects" (the default, when RTLD_GLOBAL is not
 	given). The NT loader has no notion of a module-scoped symbol
@@ -271,7 +272,7 @@ static void test_dlerror_consumed_once(void)
 typedef long off_t_local;   /* avoid clashing with the real off_t if a
                               * future include ever pulls it in transitively */
 
-#if 0 /* UNIMPL: mmap.html DESCRIPTION -- MAP_PRIVATE: "Modifications
+#if NTLIBC_TEST(UNIMPL, posix_dl_mmap_private) /* UNIMPL: mmap.html DESCRIPTION -- MAP_PRIVATE: "Modifications
 	to the mapped data by the calling process shall be visible
 	only to the calling process and shall not change the
 	underlying object." NT mechanism: NtCreateSection() over the
@@ -292,7 +293,7 @@ static void test_mmap_private(void)
 }
 #endif
 
-#if 0 /* UNIMPL: mmap.html DESCRIPTION -- MAP_SHARED: "Writes ...
+#if NTLIBC_TEST(UNIMPL, posix_dl_mmap_shared) /* UNIMPL: mmap.html DESCRIPTION -- MAP_SHARED: "Writes ...
 	shall change the underlying object such that a reference
 	obtained ... through another mapping of the object experiences
 	that change." NT mechanism: the SAME NtCreateSection() as
@@ -318,7 +319,7 @@ static void test_mmap_shared(void)
 }
 #endif
 
-#if 0 /* N/A: mmap.html DESCRIPTION -- MAP_FIXED: "the implementation
+#if NTLIBC_TEST(NA, posix_dl_mmap_fixed_atomic_replace) /* N/A: mmap.html DESCRIPTION -- MAP_FIXED: "the implementation
 	... shall use the address ... exactly as specified", implicitly
 	replacing/unmapping any prior mapping that overlapped it
 	(mmap.html's own wording: "If a mapping to be replaced was
@@ -360,7 +361,7 @@ static void test_mmap_fixed_atomic_replace(void)
 }
 #endif
 
-#if 0 /* UNIMPL: mprotect.html DESCRIPTION -- "change the access
+#if NTLIBC_TEST(UNIMPL, posix_dl_mprotect_roundtrip) /* UNIMPL: mprotect.html DESCRIPTION -- "change the access
 	protections for the calling process's memory pages containing
 	any part of the address space" to PROT_READ|PROT_WRITE|PROT_EXEC
 	combinations. NT mechanism: NtProtectVirtualMemory() (already
@@ -389,7 +390,7 @@ static void test_mprotect_roundtrip(void)
 }
 #endif
 
-#if 0 /* UNIMPL: munmap.html DESCRIPTION -- "removes ... mappings for
+#if NTLIBC_TEST(UNIMPL, posix_dl_munmap_return_and_einval) /* UNIMPL: munmap.html DESCRIPTION -- "removes ... mappings for
 	those whole pages containing any part of the address space",
 	RETURN VALUE 0 on success. NT mechanism: NtUnmapViewOfSection()
 	(not declared in src/internal/nt.h today). ERRORS EINVAL for an
@@ -407,7 +408,7 @@ static void test_munmap_return_and_einval(void)
 }
 #endif
 
-#if 0 /* UNIMPL: msync.html DESCRIPTION -- "writes all modified copies
+#if NTLIBC_TEST(UNIMPL, posix_dl_msync_shared_file) /* UNIMPL: msync.html DESCRIPTION -- "writes all modified copies
 	of pages ... back to the filesystem". NT mechanism: kernel32's
 	FlushViewOfFile(), reached the same way this codebase already
 	reaches every other kernel32-only function with no ntdll
@@ -430,7 +431,7 @@ static void test_msync_shared_file(void)
 }
 #endif
 
-#if 0 /* UNIMPL: mlock.html DESCRIPTION -- "lock into memory ... the
+#if NTLIBC_TEST(UNIMPL, posix_dl_mlock_munlock) /* UNIMPL: mlock.html DESCRIPTION -- "lock into memory ... the
 	whole pages containing any part of the address range". NT
 	mechanism: kernel32's VirtualLock()/VirtualUnlock() (same
 	LdrLoadDll("kernel32.dll") reach-out as msync above) --
@@ -478,7 +479,7 @@ static void test_termios_isatty_prerequisite(void)
 	 * associated with a terminal device." A real tcgetattr() would
 	 * fail ENOTTY for exactly the fds isatty() already says are not
 	 * a tty for. stdin under `make check`'s runner is redirected
-	 * (tools/runtests.sh), not a console, and a definitely-invalid
+	 * (tools/run-tests.py), not a console, and a definitely-invalid
 	 * fd is never a tty either -- both must read as "not a tty". */
 	CHECK(isatty(1000) == 0);
 	CHECK(errno == EBADF || errno == ENOTTY);
@@ -499,7 +500,7 @@ struct termios_local {
 #define TCOFLUSH  1
 #define TCIOFLUSH 2
 
-#if 0 /* UNIMPL: termios.html tcgetattr()/tcsetattr() DESCRIPTION --
+#if NTLIBC_TEST(BUG, posix_dl_tcgetattr_tcsetattr_lflag) /* BUG (compiles and links; formerly UNIMPL):: termios.html tcgetattr()/tcsetattr() DESCRIPTION --
 	round-trip c_lflag's ICANON (canonical/line-buffered input) and
 	ECHO bits. NT mechanism: GetConsoleMode()/SetConsoleMode() on
 	the console input handle -- ENABLE_LINE_INPUT is a real,
@@ -519,7 +520,7 @@ static void test_tcgetattr_tcsetattr_lflag(void)
 }
 #endif
 
-#if 0 /* N/A: termios.html struct termios DESCRIPTION -- c_cc[] special
+#if NTLIBC_TEST(NA, posix_dl_termios_cc_special_chars) /* N/A: termios.html struct termios DESCRIPTION -- c_cc[] special
 	characters (VINTR, VEOF, VERASE, VKILL, ...): "control
 	character values". A real console's Ctrl-C handling is fixed
 	kernel behaviour wired to SetConsoleCtrlHandler
@@ -543,7 +544,7 @@ static void test_termios_cc_special_chars(void)
 }
 #endif
 
-#if 0 /* N/A: termios.html cfgetispeed.html/cfsetospeed.html etc. --
+#if NTLIBC_TEST(NA, posix_dl_termios_baud_rate) /* N/A: termios.html cfgetispeed.html/cfsetospeed.html etc. --
 	baud rate is a property of a physical (or virtual) serial line's
 	clocking, not of a console session at all. A Windows console
 	handle has no bit rate, parity, or stop-bit configuration --
@@ -567,7 +568,7 @@ static void test_termios_baud_rate(void)
 }
 #endif
 
-#if 0 /* UNIMPL: tcflush.html DESCRIPTION -- TCIFLUSH: "discard[s]
+#if NTLIBC_TEST(BUG, posix_dl_tcflush_input) /* BUG (compiles and links; formerly UNIMPL):: tcflush.html DESCRIPTION -- TCIFLUSH: "discard[s]
 	data received but not read". NT mechanism: kernel32's
 	FlushConsoleInputBuffer() is a real, exact match for the input
 	side. */
@@ -577,7 +578,7 @@ static void test_tcflush_input(void)
 }
 #endif
 
-#if 0 /* N/A: tcflush.html DESCRIPTION -- TCOFLUSH/TCIOFLUSH:
+#if NTLIBC_TEST(NA, posix_dl_tcflush_output) /* N/A: tcflush.html DESCRIPTION -- TCOFLUSH/TCIOFLUSH:
 	"discard[s] data written ... but not transmitted". A console
 	handle has no transmit buffer to discard from in the first place
 	-- WriteConsole()/WriteFile() to a console completes only once
@@ -593,7 +594,7 @@ static void test_tcflush_output(void)
 }
 #endif
 
-#if 0 /* N/A: tcdrain.html DESCRIPTION -- "wait until all output
+#if NTLIBC_TEST(NA, posix_dl_tcdrain_noop_only) /* N/A: tcdrain.html DESCRIPTION -- "wait until all output
 	written ... has been transmitted." Same reasoning as TCOFLUSH
 	above: a console write is synchronously complete (the data is
 	already in the screen buffer) by the time WriteConsole() returns,
@@ -606,7 +607,7 @@ static void test_tcdrain_noop_only(void)
 }
 #endif
 
-#if 0 /* N/A: tcsendbreak.html DESCRIPTION -- "transmit[s] a
+#if NTLIBC_TEST(NA, posix_dl_tcsendbreak_unsupported) /* N/A: tcsendbreak.html DESCRIPTION -- "transmit[s] a
 	continuous stream of zero-valued bits for a specific duration"
 	(a break condition, a physical-layer concept for an actual
 	serial line, per POSIX's own Rationale on this page: "on
@@ -622,7 +623,7 @@ static void test_tcsendbreak_unsupported(void)
 }
 #endif
 
-#if 0 /* N/A: termios.html struct termios DESCRIPTION -- c_cflag's
+#if NTLIBC_TEST(NA, posix_dl_termios_cflag_serial_bits) /* N/A: termios.html struct termios DESCRIPTION -- c_cflag's
 	CS5/CS6/CS7/CS8 (character size), PARENB/PARODD (parity),
 	CSTOPB (stop bits), and the XSI CRTSCTS/hardware-flow-control
 	bit are all properties of a physical serial line's wire
@@ -730,7 +731,7 @@ struct spawn_attr_local { unsigned short flags; int pgroup; };
  * <spawn.h>, rather than duplicated here against local declarations. */
 
 
-#if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS:
+#if NTLIBC_TEST(NA, posix_dl_spawn_resetids) /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS:
 	"reset the effective user ID ... to the real user ID, and the
 	effective group ID ... to the real group ID". NT's access-token
 	model has no distinct real/effective/saved-set-id triple the way
@@ -747,7 +748,7 @@ static void test_spawn_resetids(void)
 }
 #endif
 
-#if 0 /* UNIMPL: posix_spawn.html DESCRIPTION --
+#if NTLIBC_TEST(NA, posix_dl_spawn_setschedparam) /* N/A in this audit file: posix_spawn.html DESCRIPTION --
 	POSIX_SPAWN_SETSCHEDPARAM/POSIX_SPAWN_SETSCHEDULER: apply a
 	scheduling policy/priority to the child before it starts
 	running. NT mechanism: __spawn() already creates the child
@@ -761,7 +762,9 @@ static void test_spawn_resetids(void)
 	need) on info.Process/info.Thread, called in that same window
 	before the existing NtResumeThread() call, is a real, unused
 	hook point that is already half-built by accident of how
-	__spawn() has to create the process in the first place. */
+	__spawn() has to create the process in the first place. The executable
+	behavior is covered by posix_spawn_setschedparam_applied; this block
+	only checks a local flag constant and is not a BUG test. */
 static void test_spawn_setschedparam(void)
 {
 	struct spawn_attr_local attr;
@@ -780,7 +783,7 @@ static void test_spawn_setschedparam(void)
  * (check_attr() lets it through unconditionally), and the postcondition
  * holds by construction rather than being ignored.  Nothing missing. */
 
-#if 0 /* UNIMPL: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
+#if NTLIBC_TEST(NA, posix_dl_spawn_setsigmask) /* N/A in this audit file: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
 	with a *non-empty* mask: "the signal mask of the child process
 	shall be set to the signal set specified in the spawn-sigmask
 	attribute".  src/process/posix_spawn.c honours the empty mask,
@@ -811,7 +814,9 @@ static void test_spawn_setschedparam(void)
 	applies to any image, whereas a RuntimeData trailer reaches an
 	ntlibc-built child only and would silently do nothing for cmd.exe.
 	Choosing not to build that is UNIMPL, never N/A.  test/posix-
-	spawn.c carries the same finding against the shipped <spawn.h>. */
+	spawn.c carries the same finding against the shipped <spawn.h>, and
+	posix_spawn_setsigmask_nonempty_is_delivered is the executable BUG
+	case. This block only checks a local flag constant. */
 static void test_spawn_setsigmask(void)
 {
 	struct spawn_attr_local attr;
@@ -820,7 +825,7 @@ static void test_spawn_setsigmask(void)
 }
 #endif
 
-#if 0 /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETPGROUP:
+#if NTLIBC_TEST(NA, posix_dl_spawn_setpgroup) /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETPGROUP:
 	"set the process group ID of the new process ... as if by
 	setpgid()." NT has no process-group concept in the POSIX sense
 	at all (no getpgid()/setpgid() anywhere in this tree, and no NT
@@ -995,7 +1000,7 @@ static void test_dlfcn_header_constants(void)
 	CHECK((RTLD_NOW & RTLD_GLOBAL) == 0 && (RTLD_NOW & RTLD_LOCAL) == 0);
 }
 
-#if 0 /* BUG: dlerror.html DESCRIPTION -- "If no dynamic linking errors
+#if NTLIBC_TEST(BUG, posix_dl_dlerror_null_after_successful_dlopen) /* BUG: dlerror.html DESCRIPTION -- "If no dynamic linking errors
 	have occurred since the last invocation of dlerror(), dlerror()
 	shall return NULL."
 
@@ -1040,7 +1045,7 @@ static void test_dlerror_null_after_successful_dlopen(void)
 }
 #endif
 
-#if 0 /* BUG: dlopen.html DESCRIPTION -- "If file is a null pointer,
+#if NTLIBC_TEST(BUG, posix_dl_dlopen_null_global_symbol_set) /* BUG: dlopen.html DESCRIPTION -- "If file is a null pointer,
 	dlopen() shall return a global symbol table handle for the
 	currently running process image. This symbol table handle shall
 	provide access to the symbols from an ordered set of executable
@@ -1089,7 +1094,7 @@ static void test_dlopen_null_global_symbol_set(void)
 }
 #endif
 
-#if 0 /* BUG (knowing deviation, recorded rather than changed):
+#if NTLIBC_TEST(BUG, posix_dl_dlopen_relative_pathname_uses_cwd) /* BUG (knowing deviation, recorded rather than changed):
 	dlopen.html DESCRIPTION -- "If file contains a <slash>
 	character, the file argument is used as the pathname for the
 	file. Otherwise, file is used in an implementation-defined manner

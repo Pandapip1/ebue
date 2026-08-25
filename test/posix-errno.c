@@ -14,6 +14,7 @@
  * values ever change, this file will not notice; that is the accepted
  * cost of not exposing an internal header to tests (see report).
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stddef.h>	/* size_t, for the group U fence below */
 #include <string.h>	/* strerror(), for the group U fence below */
@@ -210,7 +211,7 @@ static const struct dc doserror_table[] = {
  * test/POSIX-COVERAGE.md "XBD header contents (group U)".
  * ================================================================== */
 
-#if 0 /* UNIMPL: errno.h.html DESCRIPTION: "The <errno.h> header shall
+#if NTLIBC_TEST(UNIMPL, posix_errno_errno_mandatory_macros) /* UNIMPL: errno.h.html DESCRIPTION: "The <errno.h> header shall
 	define the following macros which shall expand to integer constant
 	expressions with type int, distinct positive values (except as
 	noted below), and which shall be suitable for use in #if

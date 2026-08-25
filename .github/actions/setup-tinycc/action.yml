@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Set up tinycc
+description: Restore ntlibc's pinned cross toolchain, optionally building it on a cache miss
+
+inputs:
+  repository:
+    description: Repository containing the pinned tinycc revision
+    required: true
+  revision:
+    description: Pinned tinycc commit
+    required: true
+  build-on-miss:
+    description: Build and cache the toolchain when it is not already cached
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore tinycc toolchain
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/tinycc-install
+        key: tinycc-${{ inputs.revision }}-${{ runner.os }}-v1
+
+    - name: Build tinycc after a cache miss
+      if: steps.cache.outputs.cache-hit != 'true' && inputs.build-on-miss == 'true'
+      shell: bash
+      env:
+        TINYCC_REPOSITORY: ${{ inputs.repository }}
+        TINYCC_REVISION: ${{ inputs.revision }}
+      run: |
+        git clone "$TINYCC_REPOSITORY" "$RUNNER_TEMP/tinycc"
+        git -C "$RUNNER_TEMP/tinycc" checkout "$TINYCC_REVISION"
+        cd "$RUNNER_TEMP/tinycc"
+        ./configure --enable-cross --prefix="$HOME/tinycc-install"
+        make -j"$(nproc)"
+        make install
+
+    - name: Verify and expose the cross compilers
+      shell: bash
+      run: |
+        test -x "$HOME/tinycc-install/bin/i386-win32-tcc"
+        test -x "$HOME/tinycc-install/bin/x86_64-win32-tcc"
+        echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"

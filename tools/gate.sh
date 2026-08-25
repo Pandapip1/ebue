@@ -40,7 +40,7 @@
 #   GATE_MAKE_JOBS  how many jobs each stage may run at once -- the -j
 #                   passed to every `make` below, and the default for
 #                   every sub-tool that fans out on its own (RUNTESTS_JOBS,
-#                   LIBC_TEST_JOBS, GAPMAP_JOBS, ASAN_JOBS, LINT_JOBS,
+#                   LIBC_TEST_JOBS, OPTSRUN_JOBS, ASAN_JOBS, LINT_JOBS,
 #                   LINKCHECK_JOBS).  Default 3.  Explicitly NOT nproc:
 #                   see the concurrency-budget comment below.
 #   GATE_STAGE_CONCURRENCY
@@ -73,7 +73,7 @@ mkdir -p "$GATE_JOBS_DIR/logs" "$GATE_JOBS_DIR/trees" || exit 1
 
 # Every concurrent stage name, in the fixed order the summary reports them
 # -- independent of start/finish order, so two runs are diffable.
-ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test libc-test-map posix-gapmap posix-optsrun asan linkcheck-i386 linkcheck-x86_64 hygiene ledger lint-plain lint-analyze-pinned lint-shell-pinned"
+ALL_STAGES="generated reuse check-i386 check-x86_64 libc-test posix-optsrun asan install-check linkcheck-i386 linkcheck-x86_64 hygiene lint-plain lint-analyze-pinned lint-shell-pinned"
 
 if [ "${1:-}" = "--list" ]; then
 	for s in $ALL_STAGES; do echo "$s"; done
@@ -110,8 +110,8 @@ fi
 # --- concurrency budget ----------------------------------------------
 #
 # Every stage below used to hardcode `make -j"$(nproc)"`, and every
-# sub-tool a stage invokes (tools/runtests.sh, tools/libc-test.sh,
-# tools/posix-gapmap.sh, tools/asan-build.sh, tools/lint.sh,
+# sub-tool a stage invokes (tools/run-tests.py, tools/libc-test.sh,
+# tools/posix-opts.py, tools/asan-build.sh, tools/lint.sh,
 # tools/lint-unreferenced.sh, tools/linkcheck.sh) independently defaults
 # its own worker count to nproc.  All 14 stages launch at once.  So the
 # thing that actually lands on the machine is a PRODUCT, not a sum:
@@ -138,11 +138,11 @@ fi
 #
 # Why 3 and 4 rather than, say, 12 x 1 or 1 x 12: stage cost here is
 # wildly unequal.  `reuse` and the two nix-shell lint stages are minutes
-# of I/O and evaluation with almost no CPU, while posix-gapmap is 1610
-# tcc compile-and-links and asan is 282 clang compiles.  A wide-ish stage
-# cap lets the cheap stages retire and hand their slot to a heavy one,
-# and J=3 keeps each heavy stage's own fan-out from collapsing to serial
-# (posix-gapmap at -P1 is minutes where -P3 is under one).
+# of I/O and evaluation with almost no CPU, while posix-optsrun is 1576
+# tcc compile-and-links plus 591 serial Wine runs and asan is 282 clang
+# compiles.  A wide-ish stage cap lets the cheap stages retire and hand
+# their slot to a heavy one, and J=3 keeps each heavy stage's own
+# fan-out from collapsing to serial.
 #
 # Note what this is NOT: a job server.  The genuinely correct instrument
 # would be one token pool shared by every worker in the run, so a stage
@@ -173,15 +173,14 @@ esac
 # not already set one explicitly, so `LINT_JOBS=1 tools/gate.sh` still
 # means what it says.  Without this, capping `make -j` alone would move
 # the fan-out rather than remove it: `make check` at -j3 still hands off
-# to tools/runtests.sh, which would still start nproc Wine processes.
+# to tools/run-tests.py, which would still start nproc Wine processes.
 : "${RUNTESTS_JOBS:=$GATE_MAKE_JOBS}"
 : "${LIBC_TEST_JOBS:=$GATE_MAKE_JOBS}"
-: "${GAPMAP_JOBS:=$GATE_MAKE_JOBS}"
 : "${OPTSRUN_JOBS:=$GATE_MAKE_JOBS}"
 : "${ASAN_JOBS:=$GATE_MAKE_JOBS}"
 : "${LINT_JOBS:=$GATE_MAKE_JOBS}"
 : "${LINKCHECK_JOBS:=$GATE_MAKE_JOBS}"
-export RUNTESTS_JOBS LIBC_TEST_JOBS GAPMAP_JOBS OPTSRUN_JOBS ASAN_JOBS LINT_JOBS LINKCHECK_JOBS
+export RUNTESTS_JOBS LIBC_TEST_JOBS OPTSRUN_JOBS ASAN_JOBS LINT_JOBS LINKCHECK_JOBS
 
 note() { printf '%s\n' "$*" >&2; }
 
@@ -192,9 +191,9 @@ note() { printf '%s\n' "$*" >&2; }
 #
 # third_party/ is excluded from every copy EXCEPT the stages that read a
 # submodule. It holds two -- musl's libc-test (~940 files, 11 MB), read
-# by `libc-test` and `libc-test-map`, and the Linux Test Project (~47 MB,
+# by `libc-test`, and the Linux Test Project (~47 MB,
 # of which this project reads only testcases/open_posix_testsuite/), read
-# by `posix-gapmap` and `posix-optsrun`. Every other copy would be paying
+# by `posix-optsrun`. Every other copy would be paying
 # ~58 MB of rsync for nothing, and each copy that does get one takes only
 # the submodule it actually reads.
 #
@@ -216,36 +215,25 @@ note() { printf '%s\n' "$*" >&2; }
 # The two suite stages do get their copy, .git-file and all: the plain
 # files survive rsync, which is all their drivers need.
 #
-# libc-test-map needs the same corpus, and one thing more: rsync strips
-# .git from every copy, so a stage that has to answer "is the SHA this
-# does the stamp this report records resolve?" cannot answer it from
-# inside the copy. It is handed LIBC_TEST_MAP_GITREPO pointing back at the real
-# tree instead. Note what it must NOT do: degrade to "no .git, so skip
-# the provenance check". A staleness check that silently stops checking
-# staleness is precisely the vacuous stage this gate has been pruning.
-#
 make_tree() {
 	dest="$GATE_JOBS_DIR/trees/$1"
 	mkdir -p "$dest"
 	case "$1" in
-	libc-test|libc-test-map)
+	libc-test)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
-			--exclude=/.suitemap-cache/ \
 			--exclude='*.tmp' --exclude=/third_party/ltp/ \
 			"$srcdir/" "$dest/"
 		;;
-	posix-gapmap|posix-optsrun)
+	posix-optsrun)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
-			--exclude=/.suitemap-cache/ \
 			--exclude='*.tmp' --exclude=/third_party/libc-test/ \
 			"$srcdir/" "$dest/"
 		;;
 	*)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
-			--exclude=/.suitemap-cache/ \
 			--exclude='*.tmp' --exclude=/third_party/ \
 			"$srcdir/" "$dest/"
 		;;
@@ -339,9 +327,8 @@ fi
 # the source tree, so every copy sees the same (post-generated) state.
 for pair in \
 	"check-i386:check-i386" "check-x86_64:check-x86_64" "libc-test:libc-test" \
-	"libc-test-map:libc-test-map" "posix-gapmap:posix-gapmap" \
-	"posix-optsrun:posix-optsrun" \
-	"asan:asan" "linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
+	"posix-optsrun:posix-optsrun" "asan:asan" "install-check:install-check" \
+	"linkcheck-i386:linkcheck-i386" "linkcheck-x86_64:linkcheck-x86_64" \
 	"hygiene:hygiene" "lint-plain:lint-plain" \
 	"lint-analyze-pinned:lint-analyze-pinned" "lint-shell-pinned:lint-shell-pinned" \
 	"reuse:reuse"
@@ -365,12 +352,12 @@ wine_cfg=""
 
 if want check-i386; then
 	t="$GATE_JOBS_DIR/trees/check-i386"
-	run_stage check-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS check"
+	run_stage check-i386 "cd '$t' && ./configure --host=i386-win32 CC=i386-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS check"
 fi
 
 if want check-x86_64; then
 	t="$GATE_JOBS_DIR/trees/check-x86_64"
-	run_stage check-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS check"
+	run_stage check-x86_64 "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS check"
 fi
 
 # libc-test: musl's regression corpus, adjudicated against
@@ -381,70 +368,19 @@ fi
 # would double the ledger's maintenance for no new evidence.
 if want libc-test; then
 	t="$GATE_JOBS_DIR/trees/libc-test"
-	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS && make libc-test"
+	run_stage libc-test "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS && make libc-test-pedantic"
 fi
 
-# libc-test-map: the STALENESS-AND-HONESTY check over the checked-in
-# coverage map (test/LIBC-TEST-MAP.generated.md), not the map itself.
-#
-# The map is a distribution, and a gate stage over a distribution needs a
-# threshold nobody can justify -- which is the "number nobody reads"
-# failure mode by another route.  So the map is regenerated on demand
-# (`make libc-test-map`) and nightly, and what runs here is `--check`:
-# the checked-in file must still describe THIS tree, its recorded ntlibc
-# stamp must be well-formed, and its four invariants must hold.
-# Those all have honest yes/no answers.
-#
-# No WINE: this stage compiles and links the corpus to classify it and
-# never runs a test.  It measures ~9 s, against a critical path set by
-# asan (~198 s), so it costs the gate nothing.
-if want libc-test-map; then
-	t="$GATE_JOBS_DIR/trees/libc-test-map"
-	run_stage libc-test-map "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && LIBC_TEST_MAP_GITREPO='$srcdir' make libc-test-map-check"
-fi
-
-# posix-gapmap: the staleness-and-honesty check on
-# test/POSIX-GAP-MAP.generated.md, the Open POSIX Test Suite gap report.
-#
-# NOT a pass/fail run of that suite, and deliberately so: the report's
-# output is a distribution, and a threshold on a distribution is a number
-# nobody can justify -- which is the "number nobody reads" failure mode
-# by another route. What this stage asserts is narrower and checkable:
-# the checked-in report matches the tree, and the measurement that
-# produced it still discriminates (census, partition, floors in BOTH
-# directions, and two canaries). See tools/posix-gapmap.sh's header.
-#
-# 1610 tcc compile-and-links, no Wine at all -- ~20 s when it had the
-# whole box (-P nproc), longer now that it runs at GAPMAP_JOBS =
-# GATE_MAKE_JOBS like every other fan-out here. Still nowhere near the
-# critical path asan sets, and the whole box was never this stage's to
-# take: see the concurrency-budget comment at the top.
-#
-# GAPMAP_GITDIR points back at the real tree because this copy has no
-# .git of its own, and one of the invariants is that the SHA the report
-# records still resolves. The script FAILS rather than skips when
-# it cannot reach a repository -- "I could not check" and "it checks out"
-# are different claims -- so the variable is load-bearing, not a
-# convenience.
-if want posix-gapmap; then
-	t="$GATE_JOBS_DIR/trees/posix-gapmap"
-	run_stage posix-gapmap "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && GAPMAP_GITDIR='$srcdir' make posix-gapmap-check"
-fi
-
-# posix-optsrun: the other half. posix-gapmap measures what can be
-# COMPILED against this library and executes nothing; this stage RUNS the
-# 591 tests it classes as C, which until it existed had never been run at
-# all.
-#
-# Still no pass-count threshold -- that argument is unchanged and it was
-# never an argument against executing the tests. This gates on
-# REGRESSION: a test the checked-in test/POSIX-OPTS-RUN.generated.md
-# records as PASS that no longer passes. Movement inside the not-PASS
-# population is a diff, not a failure.
+# posix-optsrun: all 1,610 Open POSIX Test Suite cases, adjudicated
+# against test/posix-opts-expected.txt.  RUNS the cases the resolved
+# pedantic profile says must execute, while also proving that every
+# UNIMPL case still fails compilation -- which is what retired the
+# separate compile-only gap map (see the Makefile's posix-optsrun
+# comment for how its four invariants map onto the ledger).
 #
 # ~4-5 min: 591 Wine executions, each run three times (see that script's
 # FLAKY section), serially on purpose because OPTS carries timing
-# assertions and the report is checked in. That makes it the second
+# assertions. That makes it the second
 # longest stage after asan, so it is started here beside the other suite
 # stages rather than late.
 #
@@ -452,25 +388,42 @@ fi
 # stage than to any other, which is why it takes GATE_MAKE_JOBS like the
 # rest rather than the whole box. Its sweep is serial Wine, and three of
 # the tests it runs sit ON the clock-observability boundary -- they are
-# the FLAKY set that tools/posix-optsrun.sh fences with a pinned ceiling.
+# explicitly FLAKY in the shared disposition ledger.
 # A stage that oversubscribed the machine would push more of the
 # nanosleep/clock_nanosleep family across that boundary, and the cost
-# would not be a slow stage: it would be flakes eating a ceiling sized
-# for a real population. OPTSRUN_JOBS is capped alongside it above for
+# would not be a slow stage: it would create misleading observations.
+# OPTSRUN_JOBS is capped alongside it above for
 # the reason given there -- capping `make -j` alone moves a fan-out
 # rather than removing it.
 #
-# OPTSRUN_GITDIR for the same load-bearing reason GAPMAP_GITDIR exists:
-# this copy has no .git, the ancestry invariant needs one, and the script
-# fails rather than skips when it cannot reach a repository.
+# OPTSRUN_GITDIR points back to the source repository so the copied stage
+# can verify the LTP gitlink matches the checked-out submodule.
 if want posix-optsrun; then
 	t="$GATE_JOBS_DIR/trees/posix-optsrun"
-	run_stage posix-optsrun "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && OPTSRUN_GITDIR='$srcdir' make posix-optsrun-check"
+	run_stage posix-optsrun "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && OPTSRUN_GITDIR='$srcdir' make posix-optsrun-pedantic"
 fi
 
 if want asan; then
 	t="$GATE_JOBS_DIR/trees/asan"
-	run_stage asan "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make asan"
+	run_stage asan "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make asan"
+fi
+
+# install-check: the only stage that leaves the source tree behind
+# entirely.  Every other stage here compiles against -I./include
+# -I./arch/$ARCH -Iobj/include -Llib, so none of them can see a header
+# that is never installed, an installed header that pulls in a path only
+# the source tree has, or a broken tools/ntlibc-tcc wrapper.  The script
+# configures and builds a second out-of-tree copy, installs it into a
+# temporary prefix, and builds and runs against that prefix alone.
+#
+# It was written and then never wired to anything -- not CI, not this
+# gate, not CONTRIBUTING.md -- which made it the same vacuous-coverage
+# shape the summary floor below exists to reject, one level up: a check
+# that reports nothing because it never runs.  x86_64 only, like
+# libc-test: the install layout is the subject and it is not per-arch.
+if want install-check; then
+	t="$GATE_JOBS_DIR/trees/install-check"
+	run_stage install-check "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS install-check"
 fi
 
 # -j for consistency with check-i386/check-x86_64 above, which have
@@ -485,26 +438,19 @@ fi
 # it was fixed.
 if want linkcheck-i386; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-i386"
-	run_stage linkcheck-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
+	run_stage linkcheck-i386 "cd '$t' && ./configure --host=i386-win32 CC=i386-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
 fi
 
 if want linkcheck-x86_64; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-x86_64"
-	run_stage linkcheck-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
-fi
-
-# Ledger consistency (tools/lint-ledger.sh).  No tree copy and no
-# configure: it reads test/POSIX-COVERAGE.md and test/*.c straight out of
-# the source directory and builds nothing.
-if want ledger; then
-	run_stage ledger "cd '$srcdir' && ./tools/lint-ledger.sh"
+	run_stage linkcheck-x86_64 "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
 fi
 
 if want hygiene; then
 	t="$GATE_JOBS_DIR/trees/hygiene"
 	# hygiene.sh checks both arches itself; the Makefile's $(GENH)
 	# prerequisite just needs *a* configured arch to exist.
-	run_stage hygiene "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make hygiene"
+	run_stage hygiene "cd '$t' && ./configure --host=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make hygiene"
 fi
 
 if want lint-plain; then

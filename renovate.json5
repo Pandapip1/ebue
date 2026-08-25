@@ -74,11 +74,7 @@
         "must be 15/15 for both i386-win32 and x86_64-win32, `make generated`",
         "must stay drift-free, and the real-Windows leg (not just Wine) must",
         "pass. Check tinycc's log between the old and new commit for codegen",
-        "or PE-output changes.",
-        "",
-        "`TINYCC_SHA` is duplicated in `ci.yml` and `fuzz.yml` and both must",
-        "end up identical -- fuzz.yml reads the cache entry ci.yml writes,",
-        "keyed on this value."
+        "or PE-output changes."
       ]
     }
   ],

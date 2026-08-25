@@ -8,6 +8,7 @@
  * functions/<name>.html it checks.  See test/posix-coverage/stdlib.md
  * for the full ledger, including what those five files already cover.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -412,7 +413,7 @@ static void test_mkostemp(void)
  * half-way. */
 static void test_mkstemp_permission_bits(void)
 {
-#if 0 /* UNIMPL: mkstemp.html DESCRIPTION -- the file is created with
+#if NTLIBC_TEST(BUG, posix_stdlib_mkstemp_owner_only_permissions) /* BUG (compiles and links; formerly UNIMPL):: mkstemp.html DESCRIPTION -- the file is created with
        * mode S_IRUSR|S_IWUSR only (0600).  Was N/A, and asserted
        * "unrepresentable, not merely unimplemented".  That is the wrong
        * way round.  The proximate facts are right -- this library's

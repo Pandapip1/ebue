@@ -57,6 +57,7 @@
  *   utilities/test.html (OPERANDS, EXTENDED DESCRIPTION, EXIT STATUS)
  *   utilities/true.html  utilities/false.html  utilities/cd.html
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -479,7 +480,7 @@ static void test_rejects_malformed(void)
 	 * "()<a<", for a different reason, in its own fence below. */
 }
 
-#if 0	/* BUG: a failed parse of a redirection TRAILING a subshell or
+#if NTLIBC_TEST(BUG, sh_engine_group_redir_leak) /* BUG: a failed parse of a redirection TRAILING a subshell or
 	 * brace group leaks every redirection already parsed for that
 	 * group.  src/sh/parse.c:617 collects them with
 	 *
@@ -528,7 +529,7 @@ static void test_group_redir_leak(void)
 }
 #endif
 
-#if 0	/* BUG: a here-document that is queued and never drained leaks
+#if NTLIBC_TEST(BUG, sh_engine_heredoc_queue_leak) /* BUG: a here-document that is queued and never drained leaks
 	 * its queue entry.  parse_redir() (src/sh/parse.c:524) pushes a
 	 * `struct pending_hd` onto the lexer's pending list *before* the
 	 * advance() that would reach the newline -- deliberately, and the
@@ -735,7 +736,7 @@ static void test_funcdef_heredoc_before_list_operator(void)
 	}
 }
 
-#if 0	/* BUG: the printer writes a here-document's terminator line as
+#if NTLIBC_TEST(BUG, sh_engine_heredoc_quoted_delim_roundtrip) /* BUG: the printer writes a here-document's terminator line as
 	 * the delimiter word was WRITTEN, while the parser matches
 	 * terminator lines against the delimiter with quote removal
 	 * APPLIED.  A quoted delimiter's printed terminator therefore
@@ -777,7 +778,7 @@ static void test_heredoc_quoted_delim_roundtrip(void)
 }
 #endif
 
-#if 0	/* BUG: parse -> print -> parse -> print is not a fixed point for
+#if NTLIBC_TEST(BUG, sh_engine_bang_word_roundtrip) /* BUG: parse -> print -> parse -> print is not a fixed point for
 	 * a command word that is literally "!".  2.9.2 makes "!" a
 	 * reserved word when it is the first word of a pipeline, and 2.4
 	 * requires it to be quoted to be used as an ordinary word there;
@@ -801,7 +802,7 @@ static void test_bang_word_roundtrip(void)
 }
 #endif
 
-#if 0	/* BUG: parse -> print -> parse -> print is not a fixed point for a
+#if NTLIBC_TEST(BUG, sh_engine_funcdef_list_operator_roundtrip) /* BUG: parse -> print -> parse -> print is not a fixed point for a
 	 * function definition followed by a list operator.  Every round
 	 * trip inserts one more <blank> between the body and the operator,
 	 * so like the here-document fence above this does not merely fail,

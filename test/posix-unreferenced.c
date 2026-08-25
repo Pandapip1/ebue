@@ -40,6 +40,7 @@
  * the FILE object survives) or with freopen(), the same way
  * test/posix-stdio.c's test_vprintf_vscanf() does.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -239,7 +240,7 @@ static void test_puts_epipe(void)
  * [EAGAIN] "The O_NONBLOCK flag is set for the file descriptor
  * underlying stream and the thread would be delayed in the write
  * operation." */
-#if 0 /* N/A, verdict confirmed, reason made precise.  The old text
+#if NTLIBC_TEST(NA, posix_unreferenced_puts_eagain) /* N/A, verdict confirmed, reason made precise.  The old text
        * said "this library has no O_NONBLOCK for a file descriptor at
        * all", which overstates: the bit is accepted and stored, by both
        * fcntl(F_SETFL) (src/fcntl/fcntl.c:55) and ioctl(FIONBIO)
@@ -269,7 +270,7 @@ static void test_puts_eagain(int fd1)
  * maximum file size", "...the file size limit of the process", or "The
  * file is a regular file and an attempt was made to write at or beyond
  * the offset maximum." */
-#if 0 /* N/A THROUGH puts(), all three sub-clauses -- but each for its own
+#if NTLIBC_TEST(NA, posix_unreferenced_puts_efbig) /* N/A THROUGH puts(), all three sub-clauses -- but each for its own
        * reason, and two of the three reasons this fence used to give were
        * out of date.  A "shall fail" entry is not discharged by some of
        * its conditions being vacuous, so they are taken one at a time.
@@ -319,7 +320,7 @@ static void test_puts_efbig(void)
 
 /* [EINTR] "The write operation was terminated due to the receipt of a
  * signal, and no data was transferred." */
-#if 0 /* N/A: signals here are not asynchronous with respect to a blocked
+#if NTLIBC_TEST(NA, posix_unreferenced_puts_eintr) /* N/A: signals here are not asynchronous with respect to a blocked
        * NT wait -- src/signal/signal.c delivers a signal by running the
        * handler from the raising thread (__raise_internal), and nothing
        * interrupts NtWriteFile, which this library always issues on a
@@ -338,7 +339,7 @@ static void test_puts_eintr(void)
 /* [EIO] "A physical I/O error has occurred, or the process is a member
  * of a background process group attempting to write to its controlling
  * terminal, TOSTOP is set..." */
-#if 0 /* N/A, both halves, for two different reasons.
+#if NTLIBC_TEST(NA, posix_unreferenced_puts_eio) /* N/A, both halves, for two different reasons.
        *
        * Background-process-group write to a controlling terminal with
        * TOSTOP set: no mechanism.  Stated carefully, because a
@@ -369,7 +370,7 @@ static void test_puts_eio(void)
 
 /* [ENOSPC] "There was no free space remaining on the device containing
  * the file." */
-#if 0 /* N/A: reachable only by filling the volume the scratch file lives
+#if NTLIBC_TEST(NA, posix_unreferenced_puts_enospc) /* N/A: reachable only by filling the volume the scratch file lives
        * on.  src/internal/errno.c does map STATUS_DISK_FULL to ENOSPC,
        * so the path exists; a test that fills a disk to prove it is not
        * one this suite can run. */
@@ -385,7 +386,7 @@ static void test_puts_enospc(void)
 /* fputc.html ERRORS, may fail: "[ENOMEM] Insufficient storage space is
  * available."  and "[ENXIO] A request was made of a nonexistent device,
  * or the request was outside the capabilities of the device." */
-#if 0 /* N/A: both are "may fail", and neither is producible on demand --
+#if NTLIBC_TEST(NA, posix_unreferenced_puts_may_fail) /* N/A: both are "may fail", and neither is producible on demand --
        * ENOMEM would need the buffer allocation in __ensure_buf() to
        * fail, and ENXIO a device that answers STATUS_NO_SUCH_DEVICE to a
        * write on an already-open handle. */
@@ -495,31 +496,140 @@ static void test_scanf_ebadf(const char *name)
 }
 
 /* scanf.html ERRORS, shall fail: "[ENOMEM] Insufficient storage space is
- * available."  The only conversion that allocates is the 'm'
- * assignment-allocation character, which this implementation does not
- * have; src/stdio/scanf.c's scandrain() comment states the position
- * outright -- "scanf has no channel for ENOMEM, so this becomes a
- * matching failure". */
-#if 0 /* BUG: fscanf.html's conversion syntax includes the optional
-       * assignment-allocation character 'm' for the s, c and [
-       * conversions -- "the corresponding argument shall be of type
-       * char ** ... the function shall allocate a buffer" -- and
-       * src/stdio/scanf.c does not implement it: 'm' is not one of the
-       * length modifiers its parser accepts, so "%ms" falls through
-       * switch(*p) to `default: break`, silently consuming nothing,
-       * assigning nothing, and reporting neither a matching failure nor
-       * an error.  With no allocating conversion there is also no
-       * situation in which the required [ENOMEM] can be reported. */
+ * available."  The conversions that allocate are the ones carrying
+ * fscanf.html's [CX] assignment-allocation character 'm': "the
+ * corresponding argument shall be of type char ** ... the function
+ * shall allocate a buffer ... The caller is responsible for freeing the
+ * memory after usage."  That is the only storage src/stdio/scanf.c
+ * obtains on the caller's behalf, so it is the only place the page's
+ * shall-fail can arise.
+ *
+ * Allocator exhaustion is not producible on demand, so what is asserted
+ * here is everything that has to hold for the error to BE reportable:
+ * the three conversions exist, they allocate, a width caps them, and
+ * every way one of them can fail leaves the caller's pointer alone
+ * rather than handing over a half-built buffer.  The two [EILSEQ] cases
+ * are in this function rather than with the other encoding assertions
+ * because they are the only failures that can strand a buffer that
+ * already has bytes in it -- `make asan` runs this file natively under
+ * LeakSanitizer, which is what turns them into a leak check. */
 static void test_scanf_enomem(const char *name)
 {
-	char *p = 0;
+	char *p = 0, *q = 0;
+	wchar_t *w = 0;
+	char buf[16], big[513];
+	int n = -1;
+
+	/* the s conversion: a buffer holding the input and a terminator */
 	CHECK(write_file(name, "allocated") == 0);
 	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
 	CHECK(scanf("%ms", &p) == 1);
 	CHECK(p != 0 && !strcmp(p, "allocated"));
-	free(p);
+	free(p); p = 0;
+
+	/* a field far past any plausible initial buffer size, so the
+	 * growth path is exercised rather than one lucky allocation */
+	memset(big, 'k', 512);
+	big[512] = 0;
+	CHECK(write_file(name, big) == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%ms", &p) == 1);
+	CHECK(p != 0 && strlen(p) == 512);
+	free(p); p = 0;
+
+	/* a field width caps an allocating conversion the same as any
+	 * other, and the directive after it resumes where it stopped */
+	CHECK(write_file(name, "abcdef") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%3ms%ms", &p, &q) == 2);
+	CHECK(p != 0 && !strcmp(p, "abc"));
+	CHECK(q != 0 && !strcmp(q, "def"));
+	free(p); free(q); p = q = 0;
+
+	/* the c conversion: "a sequence of bytes of the number specified by
+	 * the field width", and no terminating null -- so the buffer holds
+	 * exactly three bytes and nothing may be read past them */
+	CHECK(write_file(name, "xyz") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%3mc", &p) == 1);
+	CHECK(p != 0 && !memcmp(p, "xyz", 3));
+	free(p); p = 0;
+
+	/* the [ conversion */
+	CHECK(write_file(name, "12345abc") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%m[0-9]%ms", &p, &q) == 2);
+	CHECK(p != 0 && !strcmp(p, "12345"));
+	CHECK(q != 0 && !strcmp(q, "abc"));
+	free(p); free(q); p = q = 0;
+
+	/* with the l qualifier the argument is wchar_t ** and the bytes are
+	 * converted "as if by a call to the mbrtowc() function" -- the
+	 * character above the BMP costs a surrogate pair, so the buffer the
+	 * conversion sizes for itself is not one element per input byte */
+	CHECK(write_file(name, "\xf0\x9d\x84\x9e") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%mls", &w) == 1);
+	CHECK(w != 0 && w[0] == 0xd834 && w[1] == 0xdd1e && w[2] == 0);
+	free(w); w = 0;
+
+	/* a matching failure receives no pointer: the argument is "a
+	 * pointer variable that will receive a pointer to the allocated
+	 * buffer" and there is no buffer to receive */
+	CHECK(write_file(name, "abc") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%m[0-9]", &p) == 0);
+	CHECK(p == 0);
+
+	/* the assignment-suppressing '*' allocates nothing and consumes no
+	 * argument, so the %d below is the first one */
+	CHECK(write_file(name, "skipme 42") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%*ms %d", &n) == 1);
+	CHECK(n == 42);
+
+	/* an encoding error PART WAY THROUGH an allocating field: the bytes
+	 * already converted sit in a buffer that has to be released rather
+	 * than handed over, and the caller's pointer stays as it was */
+	CHECK(write_file(name, "ab\x80") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%mls", &w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(w == 0);
+	clearerr(stdin);
+
+	/* likewise a sequence truncated by end of input */
+	CHECK(write_file(name, "\xc3") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%mls", &w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(w == 0);
+	clearerr(stdin);
+
+	/* a conversion that COMPLETED before a later directive failed has
+	 * already handed its buffer over, and the caller owns it -- an
+	 * implementation that dropped it on the floor instead would be the
+	 * leak, since the caller has no other reference to free */
+	CHECK(write_file(name, "ok ab\x80") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%ms %mls", &p, &w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(p != 0 && !strcmp(p, "ok"));
+	CHECK(w == 0);
+	free(p); p = 0;
+	clearerr(stdin);
+
+	/* the unmodified conversions must be untouched by all of this: 'm'
+	 * is a new branch in the same three conversions, not a rewrite */
+	CHECK(write_file(name, "plain 42") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	n = -1;
+	CHECK(scanf("%s %d", buf, &n) == 2);
+	CHECK(!strcmp(buf, "plain") && n == 42);
 }
-#endif
 
 /* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does not
  * form a valid character." */
@@ -635,7 +745,7 @@ static void test_scanf_l_modifier(const char *name)
 
 /* scanf.html ERRORS, may fail: "[EINVAL] There are insufficient
  * arguments." */
-#if 0 /* N/A: "may fail", and undetectable in principle here -- a
+#if NTLIBC_TEST(NA, posix_unreferenced_scanf_einval) /* N/A: "may fail", and undetectable in principle here -- a
        * variadic callee cannot count the arguments it was handed, and
        * this implementation reads each one with va_arg() as the format
        * demands it.  Passing too few is undefined behaviour at the call
@@ -658,7 +768,7 @@ static void test_scanf_einval(const char *name)
  * associated with the corresponding stream."  Also [EAGAIN], [EINTR],
  * [EIO], and may-fail [ENOMEM]/[ENXIO] -- the same list, and for the
  * same reasons, as the puts() fences above. */
-#if 0 /* N/A: same mechanisms as the fputc fences above -- O_NONBLOCK
+#if NTLIBC_TEST(NA, posix_unreferenced_scanf_stream_errors) /* N/A: same mechanisms as the fputc fences above -- O_NONBLOCK
        * stored but never consulted (EAGAIN; see that fence for the
        * corrected wording, and note the one live EAGAIN path in this
        * library, src/unistd/read.c:37's STATUS_PIPE_EMPTY arm, is
@@ -742,7 +852,7 @@ static void test_renameat_success(void)
  * new... The new argument shall not name any directory other than an
  * empty directory." -- an EMPTY directory at new must be removed and
  * replaced, not refused. */
-#if 0 /* BUG, on two counts.  NT's FileRenameInformation[Ex] will not
+#if NTLIBC_TEST(BUG, posix_unreferenced_renameat_dir_over_empty_dir) /* BUG, on two counts.  NT's FileRenameInformation[Ex] will not
        * replace an existing directory even with
        * FILE_RENAME_REPLACE_IF_EXISTS, so the call comes back
        * STATUS_ACCESS_DENIED; src/stdio/misc.c then reaches its
@@ -928,7 +1038,7 @@ static void test_renameat_empty_at_dirfd(void)
 /* "[EINVAL] The old pathname names an ancestor directory of the new
  * pathname, or either pathname argument contains a final component that
  * is dot or dot-dot." */
-#if 0 /* BUG: neither clause is checked.  src/stdio/misc.c's renameat()
+#if NTLIBC_TEST(BUG, posix_unreferenced_renameat_einval) /* BUG: neither clause is checked.  src/stdio/misc.c's renameat()
        * hands both paths straight to __ntpath_at() and then to
        * NtSetInformationFile(FileRenameInformationEx); nothing anywhere
        * inspects the final component for "." or "..", and nothing tests
@@ -960,7 +1070,9 @@ static void test_renameat_einval(void)
  * directory containing the file...", and "[EROFS] The requested
  * operation requires writing in a directory on a read-only file
  * system." */
-#if 0 /* Mixed; the three errors here do not share a mechanism.
+#if NTLIBC_TEST(BUG, posix_unreferenced_renameat_eacces) /* BUG (compiles and links; formerly UNIMPL):: the executable fixture below exercises the missing
+       * permission-denial mechanism.  The EPERM and EROFS alternatives
+       * are N/A and remain documented separately here.
        *
        * [EACCES] (search/write permission denied on a path prefix) --
        * UNIMPL, not N/A.  The recorded reason, "this library has no
@@ -1000,7 +1112,8 @@ static void test_renameat_eacces(void)
 /* "[EBUSY] The directory named by old or new is currently in use by the
  * system or another process, and the implementation considers this an
  * error." */
-#if 0 /* UNCERTAIN, and the reason recorded here was false.  Do not
+#if NTLIBC_TEST(NA, posix_unreferenced_renameat_ebusy) /* N/A: the clause is optional and neither the Wine runner nor the
+       * currently supported NT behavior supplies a stable trigger.  Do not
        * treat this as settled inapplicability.
        *
        * Clause: "[EBUSY] The directory named by old or new is currently
@@ -1052,7 +1165,8 @@ static void test_renameat_ebusy(void)
  * would contain new cannot be extended", "[ELOOP] A loop exists in
  * symbolic links...", "[EXDEV] The links named by new and old are on
  * different file systems..." */
-#if 0 /* N/A / UNIMPL mix, one line each:
+#if NTLIBC_TEST(NA, posix_unreferenced_renameat_misc_errors) /* N/A: the executable ENAMETOOLONG check below is live elsewhere;
+       * this fence retains the remaining unprovokable platform cases.
        * EIO   -- not provocable on demand (N/A).
        * EMLINK -- NTFS directories have no link count that renames
        *           increment; there is no {LINK_MAX} to exceed (N/A).
@@ -1228,7 +1342,7 @@ static void test_fchmodat_empty_at_dirfd(void)
 /* XBD 4.13 Pathname Resolution, again -- but this one is NOT about the
  * *at() family, and is filed here only because it was found while
  * fixing the dirfd-relative dot handling next door. */
-#if 0 /* BUG -- IN THE SHARED ABSOLUTE/AT_FDCWD PATH BUILDER, REACHABLE
+#if NTLIBC_TEST(BUG, posix_unreferenced_pathres_dotdot_over_nondir) /* BUG -- IN THE SHARED ABSOLUTE/AT_FDCWD PATH BUILDER, REACHABLE
        * FROM EVERY PATH-TAKING FUNCTION IN THIS LIBRARY, not only the
        * *at() ones.  src/internal/path.c's __ntpath() resolves through
        * RtlDosPathNameToNtPathName_U, i.e. Windows path normalisation,
@@ -1394,7 +1508,9 @@ static void test_fchmodat_dot_component(void)
  * and the process does not have appropriate privileges", "[EACCES] Search
  * permission is denied on a component of the path prefix", "[EROFS] The
  * named file resides on a read-only file system." */
-#if 0 /* Mixed, same split as the renameat fence above.
+#if NTLIBC_TEST(BUG, posix_unreferenced_fchmodat_eperm) /* BUG (compiles and links; formerly UNIMPL):: the executable fixture below exercises the missing
+       * ownership/permission-denial mechanism.  EROFS is N/A and remains
+       * documented separately here.
        *
        * [EPERM] (effective uid does not match the owner) and [EACCES]
        * (search permission denied on a path prefix) -- UNIMPL, not N/A.
@@ -1428,7 +1544,7 @@ static void test_fchmodat_eperm(void)
  * resolution of the path argument", and may fail "[ELOOP] More than
  * {SYMLOOP_MAX} symbolic links were encountered during resolution of the
  * path argument." */
-#if 0 /* N/A on the CI leg's Wine ONLY, and the reason previously
+#if NTLIBC_TEST(NA, posix_unreferenced_fchmodat_eloop) /* N/A on the CI leg's Wine ONLY, and the reason previously
        * recorded here was false.  This is the canonical account of the
        * symlink gap; the [ELOOP] line in test_renameat_misc_errors()
        * above points here rather than repeating it.
@@ -1606,7 +1722,7 @@ static void test_fchmodat_enametoolong(void)
 /* ERRORS, may fail: "[EINTR] A signal was caught during execution of the
  * function", "[EINVAL] The value of the mode argument is invalid",
  * "[EINVAL] The value of the flag argument is invalid." */
-#if 0 /* UNIMPL: all three are "may fail", so none of them is a spec
+#if NTLIBC_TEST(BUG, posix_unreferenced_fchmodat_einval) /* BUG (compiles and links; formerly UNIMPL):: all three are "may fail", so none of them is a spec
        * violation as things stand -- but the flag one is worth naming.
        * src/stat/chmod.c tests `flags & AT_SYMLINK_NOFOLLOW` and ignores
        * every other bit, so fchmodat(fd, path, mode, 0x4000) silently
@@ -1665,7 +1781,7 @@ static void test_sigwait_stub(void)
  * set is pending at the time of the call, the thread shall be suspended
  * until one or more becomes pending."  ERRORS, shall fail: "[EINVAL] The
  * set argument contains an invalid or unsupported signal number." */
-#if 0 /* UNIMPL: src/signal/signal.c's sigwait() is a one-line stub that
+#if NTLIBC_TEST(BUG, posix_unreferenced_sigwait_spec) /* BUG (compiles and links; formerly UNIMPL):: src/signal/signal.c's sigwait() is a one-line stub that
        * returns EINVAL unconditionally.  Nothing about selecting a
        * pending signal, clearing it, or suspending the thread is
        * implemented, and the mechanism to implement it does exist here
@@ -1818,7 +1934,7 @@ static void test_psignal(const char *name)
  * detecting the failure: "no indication of an error shall be returned",
  * so the caller sets errno to zero beforehand and checks it, or uses
  * ferror(stderr). */
-#if 0 /* N/A: identical to the puts() fences above -- EBADF is the one
+#if NTLIBC_TEST(NA, posix_unreferenced_psignal_ebadf) /* N/A: identical to the puts() fences above -- EBADF is the one
        * fputc error a test can actually arrange (reopen stderr
        * read-only), and doing so here would only re-prove what
        * test_puts_ebadf() already proves about the shared __fwrite()
@@ -2015,7 +2131,7 @@ static void test_strxfrm_l(void)
 /* strxfrm.html ERRORS, may fail: "[EINVAL] The string pointed to by the
  * s2 argument contains characters outside the domain of the collating
  * sequence." */
-#if 0 /* N/A: "may fail", and there is no such string.  This library's
+#if NTLIBC_TEST(NA, posix_unreferenced_strxfrm_l_einval) /* N/A: "may fail", and there is no such string.  This library's
        * collating sequence is the C locale's, whose domain is every
        * value a char can hold (src/string/strxfrm.c transforms by
        * copying), so no input is outside it.  The clause has no
@@ -2063,6 +2179,7 @@ int main(void)
 	test_scanf_returns(name);
 	test_scanf_eilseq(name);
 	test_scanf_l_modifier(name);
+	test_scanf_enomem(name);
 	test_scanf_ebadf(name);
 
 	test_puts_success(name);
@@ -2072,7 +2189,7 @@ int main(void)
 	remove(name); free(name);
 	remove(ro); free(ro);
 	remove(scratch); free(scratch);
-	/* leave nothing behind: runtests.sh gives each test a private
+	/* leave nothing behind: run-tests.py gives each test a private
 	 * directory, but the tree copies gate.sh takes are not private */
 	unlink("chm.d/f"); rmdir("chm.d");
 	rmdir("ren.d");

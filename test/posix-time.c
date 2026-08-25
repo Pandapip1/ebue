@@ -11,6 +11,7 @@
  * the runner's zone (see test/time.c for the same pattern).
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -528,7 +529,7 @@ static void test_getdate(void)
 		CHECK(tm->tm_wday == 0); /* 2000-01-02 was a Sunday */
 	}
 
-#if 0 /* UNIMPL: getdate.html ERRORS code 1 -- "The DATEMSK environment
+#if NTLIBC_TEST(UNIMPL, posix_time_getdate_no_datemsk_must_fail) /* UNIMPL: getdate.html ERRORS code 1 -- "The DATEMSK environment
        * variable is null or undefined".  Not N/A: nothing about NT
        * prevents this, it is a deliberate design choice in
        * src/time/getdate.c to fall back to built-in templates instead

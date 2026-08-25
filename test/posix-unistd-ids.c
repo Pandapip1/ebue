@@ -36,6 +36,7 @@
  * it -- what is being measured is ntlibc's own C, not NT's behaviour.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,7 +230,7 @@ static void test_setid_family(void)
 		if (nb > 0) CHECK(!memcmp(before, after, (size_t)nb * sizeof(gid_t)));
 	}
 
-#if 0	/* BUG: every set*id() call reports success for a request it did
+#if NTLIBC_TEST(BUG, posix_ids_setid_refuses_unauthorized_ids) /* BUG: every set*id() call reports success for a request it did
 	 * not carry out, including requests POSIX requires it to *refuse*.
 	 *
 	 * setuid.html ERRORS: "The setuid() function *shall* fail, return
@@ -277,7 +278,7 @@ static void test_setid_family(void)
 	errno = 0; CHECK(setregid(0, 0) == -1 && errno == EPERM);
 #endif
 
-#if 0	/* BUG: the same six accept an id that is not a value the
+#if NTLIBC_TEST(BUG, posix_ids_setid_rejects_unsupported_ids) /* BUG: the same six accept an id that is not a value the
 	 * implementation supports at all.  setuid.html ERRORS: "[EINVAL]
 	 * The value of the uid argument is invalid and not supported by
 	 * the implementation" -- also a shall-fail, and the four seteuid/
@@ -385,7 +386,7 @@ static void test_process_group_and_session(void)
 	CHECK(getsid(0) != (pid_t)-1 && errno == 0);
 	CHECK(getsid(self) == getsid(0) && errno == 0);
 
-#if 0	/* BUG: setpgid() accepts a negative pgid and an unrelated pid.
+#if NTLIBC_TEST(BUG, posix_ids_setpgid_validates_arguments) /* BUG: setpgid() accepts a negative pgid and an unrelated pid.
 	 * setpgid.html ERRORS, both shall-fail:
 	 *   "[EINVAL] The value of the pgid argument is less than 0, or is
 	 *    not a value supported by the implementation."
@@ -407,7 +408,7 @@ static void test_process_group_and_session(void)
 	CHECK(setpgid(999999, 0) == -1 && errno == ESRCH);
 #endif
 
-#if 0	/* UNIMPL: setsid() cannot report [EPERM], because this platform
+#if NTLIBC_TEST(BUG, posix_ids_setsid_second_call_eperm) /* BUG (compiles and links; formerly UNIMPL):: setsid() cannot report [EPERM], because this platform
 	 * has no state in which the clause's precondition could become
 	 * true and no state it could move to if it did.
 	 *
@@ -443,7 +444,7 @@ static void test_process_group_and_session(void)
 	CHECK(setsid() == (pid_t)-1 && errno == EPERM);
 #endif
 
-#if 0	/* UNIMPL: setpgrp() does not set the process group ID to the
+#if NTLIBC_TEST(BUG, posix_ids_setpgrp_sets_process_group) /* BUG (compiles and links; formerly UNIMPL):: setpgrp() does not set the process group ID to the
 	 * process ID.  setpgrp.html DESCRIPTION: "If the calling process
 	 * is not already a session leader, setpgrp() sets the process
 	 * group ID of the calling process to the process ID of the calling
@@ -527,7 +528,7 @@ static void test_chown_family(void)
 
 	CHECK(close(fd) == 0);
 
-#if 0	/* BUG: the whole chown family reports success for a path that
+#if NTLIBC_TEST(BUG, posix_ids_chown_family_validates_paths_and_fds) /* BUG: the whole chown family reports success for a path that
 	 * does not exist, for the empty string, and for a path whose
 	 * prefix is a regular file -- and fchown()/fchownat() for a
 	 * descriptor that was never opened.
@@ -616,7 +617,7 @@ static void test_alarm(void)
 	CHECK(alarm(0) == 0);
 	CHECK(errno == 0);
 
-#if 0	/* UNIMPL: alarm() never schedules anything, so it can never
+#if NTLIBC_TEST(BUG, posix_ids_alarm_schedules_and_reports_remaining) /* BUG (compiles and links; formerly UNIMPL):: alarm() never schedules anything, so it can never
 	 * report time remaining.
 	 *
 	 * alarm.html DESCRIPTION: "The alarm() function shall cause the
@@ -650,7 +651,7 @@ static void test_alarm(void)
 	CHECK(alarm(0) == 0);		/* and now it is cancelled */
 #endif
 
-#if 0	/* N/A: pause() cannot be called from this suite at all --
+#if NTLIBC_TEST(NA, posix_ids_pause_requires_async_signal_delivery) /* N/A: pause() cannot be called from this suite at all --
 	 * calling it deadlocks the run rather than failing it.
 	 *
 	 * pause.html DESCRIPTION: "The pause() function shall suspend the
@@ -719,7 +720,7 @@ static void test_nice(void)
 	errno = 0;
 	CHECK(nice(0) >= -20 && nice(0) <= 19);		/* {NZERO} >= 20 */
 
-#if 0	/* UNIMPL: nice() ignores incr entirely, and <limits.h> does not
+#if NTLIBC_TEST(BUG, posix_ids_nice_changes_priority_and_defines_nzero) /* BUG (compiles and links; formerly UNIMPL):: nice() ignores incr entirely, and <limits.h> does not
 	 * define {NZERO}, so its return value has no defined meaning.
 	 *
 	 * nice.html DESCRIPTION: "The nice() function shall add the value
@@ -820,7 +821,7 @@ static void test_gethostname(void)
 		CHECK(small[4] == '@');		/* nothing written past namelen */
 	}
 
-#if 0	/* BUG: gethostname() reports a failure POSIX does not define
+#if NTLIBC_TEST(BUG, posix_ids_gethostname_short_buffer_succeeds) /* BUG: gethostname() reports a failure POSIX does not define
 	 * when the name does not fit.
 	 *
 	 * gethostname.html DESCRIPTION: "The namelen argument shall

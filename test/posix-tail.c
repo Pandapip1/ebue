@@ -54,12 +54,13 @@
  * read the errno back as evidence of NOT_IMPLEMENTED specifically.  On
  * the Wine leg the privilege is never consulted at all. The probe is made at
  * run time, a SKIP line naming the mechanism and the observed errno is
- * printed, and main() returns 77 -- tools/runtests.sh, tools/asan-
+ * printed, and main() returns 77 -- tools/run-tests.py, tools/asan-
  * build.sh and CI's PowerShell loop all report that in their own
  * bucket. Modelled on test/posix-socket.c. Nothing is silently
  * skipped and nothing unrun is reported as a pass.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <sys/uio.h>
 #include <sys/times.h>
 #include <sys/utsname.h>
@@ -678,7 +679,7 @@ static void test_nftw_symlinks(void)
 	unlink("tailtree/link");
 }
 
-#if 0 /* BUG: nftw() has no protection against a directory that is a
+#if NTLIBC_TEST(BUG, posix_tail_nftw_symlink_loop) /* BUG: nftw() has no protection against a directory that is a
        * descendant of itself, so a symbolic link back up the tree makes
        * it recurse until the stack or the path length gives out.
        *
@@ -1580,7 +1581,7 @@ int main(void)
 	test_nftw();
 	test_nftw_chdir();
 	test_nftw_symlinks();
-#if 0 /* BUG: see the fence above test_nftw_symlink_loop */
+#if NTLIBC_TEST(BUG, posix_tail_nftw_symlink_loop) /* BUG: see the fence above test_nftw_symlink_loop */
 	test_nftw_symlink_loop();
 #endif
 	kill_tree();
@@ -1608,7 +1609,7 @@ int main(void)
 	if (unverified) {
 		/* Everything that ran passed, but that is not the same claim
 		 * as "all ok" -- see the SKIP line(s) above for which
-		 * assertion groups never ran.  Exit 77 so tools/runtests.sh
+		 * assertion groups never ran.  Exit 77 so tools/run-tests.py
 		 * reports this in its own bucket instead of counting it as a
 		 * pass.  Same convention as test/posix-socket.c. */
 		printf("posix-tail: %d assertion group(s) unverified in this "

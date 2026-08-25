@@ -19,7 +19,7 @@
  * Console-dependent assertions (termios's ISIG/ICANON/ECHO round trip,
  * tcflush()'s real input-flush, TIOCGWINSZ) need an actual NT console,
  * which `make check`'s runner does not have on any of fds 0/1/2 --
- * tools/runtests.sh redirects stdin from /dev/null and captures
+ * tools/run-tests.py redirects stdin from /dev/null and captures
  * stdout/stderr through a pipe, so isatty() is false on all three
  * there (test/unistd.c's own isatty(1000) comment already establishes
  * this). This file does not assert into that void: it opens /dev/tty
@@ -29,6 +29,7 @@
  * real behaviour when a console is actually available or asserts the
  * honest fallback/error path when it is not -- never a blind skip.
  */
+#include "test-policy.h"
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
@@ -226,7 +227,7 @@ static void test_termios_header_constants(void)
 		CHECK((cflag[i] & (unsigned long)CSIZE) == 0);
 }
 
-#if 0 /* UNIMPL: termios.h.html's Output Modes table marks the delay
+#if NTLIBC_TEST(UNIMPL, posix_termios_termios_oflag_delay_masks) /* UNIMPL: termios.h.html's Output Modes table marks the delay
 	masks [XSI] alongside ONLCR/OCRNL/ONOCR/ONLRET/OFILL/OFDEL --
 	NLDLY (NL0, NL1), CRDLY (CR0..CR3), TABDLY (TAB0..TAB3), BSDLY
 	(BS0, BS1), VTDLY (VT0, VT1), FFDLY (FF0, FF1). ntlibc compiles
@@ -472,7 +473,7 @@ static void test_tcgetsid(int consolefd)
  * no transmit queue exists to drain, suspend or discard), which is
  * sound but is a platform fact rather than a spec permission. */
 
-#if 0 /* N/A: tcdrain.html DESCRIPTION "shall block until all output
+#if NTLIBC_TEST(NA, posix_termios_tcdrain_blocks_until_transmitted) /* N/A: tcdrain.html DESCRIPTION "shall block until all output
 	written to the object referred to by fildes is transmitted."
 	Observing this requires output that is still in flight after
 	write() returns; NT console output is already in the screen
@@ -501,7 +502,7 @@ static void test_tcdrain_blocks_until_transmitted(int consolefd)
 }
 #endif
 
-#if 0 /* N/A: tcflow.html DESCRIPTION -- TCOOFF "output shall be
+#if NTLIBC_TEST(NA, posix_termios_tcflow_suspends_output) /* N/A: tcflow.html DESCRIPTION -- TCOOFF "output shall be
 	suspended", TCOON "suspended output shall be restarted", TCIOFF/
 	TCION "the system shall transmit a STOP [START] character".
 	Unlike tcsendbreak(), this page grants no implementation-defined
@@ -535,7 +536,8 @@ static void test_tcflow_suspends_output(int consolefd)
 }
 #endif
 
-#if 0 /* Mixed, and the two halves are not the same kind of thing.
+#if NTLIBC_TEST(BUG, posix_termios_tcflush_discards_input) /* BUG (compiles and links; formerly UNIMPL):: the executable body below is the implementable input
+	half; the output half is N/A and remains documented separately here.
 	tcflush.html DESCRIPTION: "shall discard data written to the
 	object referred to by fildes ... but not transmitted, or data
 	received but not read, depending on the value of queue_selector."
@@ -564,7 +566,7 @@ static void test_tcflow_suspends_output(int consolefd)
 
 	The ACTUAL blocker is an environment condition, and it is the one
 	the old reason never mentioned: there is no console attached at
-	all under `make check`.  tools/runtests.sh redirects stdin from
+	all under `make check`.  tools/run-tests.py redirects stdin from
 	/dev/null and captures stdout/stderr through a pipe, open("/dev/
 	tty") does not resolve on this platform (see main()'s comment),
 	and the fd 0/1/2 fallback finds nothing isatty() will call a
@@ -589,7 +591,7 @@ static void test_tcflush_discards_input(int consolefd)
 }
 #endif
 
-#if 0 /* N/A: termios.html struct termios DESCRIPTION -- c_cflag's
+#if NTLIBC_TEST(NA, posix_termios_termios_cflag_serial_bits) /* N/A: termios.html struct termios DESCRIPTION -- c_cflag's
 	CS5/CS6/CS7/CS8, PARENB/PARODD, CSTOPB, CRTSCTS all describe a
 	physical serial line's wire encoding (character size, parity,
 	stop bits, hardware flow control). A console handle has none of
@@ -622,7 +624,7 @@ static void test_termios_cflag_serial_bits(void)
 }
 #endif
 
-#if 0 /* N/A: termios.html struct termios DESCRIPTION -- c_cc[]'s
+#if NTLIBC_TEST(NA, posix_termios_termios_cc_reprogram) /* N/A: termios.html struct termios DESCRIPTION -- c_cc[]'s
 	VINTR/VEOF etc "control character values" are not independently
 	reprogrammable through any NT console API. VINTR's Ctrl-C
 	(ENABLE_PROCESSED_INPUT only turns Ctrl-C handling on or off
@@ -891,7 +893,7 @@ int main(int argc, char **argv)
 	int consolefd;
 	int console_borrowed = 0;
 	/* Fixed relative name in the current directory, not a path derived
-	 * from argv[0]: tools/runtests.sh gives every test its own private
+	 * from argv[0]: tools/run-tests.py gives every test its own private
 	 * working directory (see that script's header comment), so a plain
 	 * relative filename is collision-free here. Earlier versions built
 	 * this by snprintf()-ing "%s.flocktest" onto argv[0] into a fixed
@@ -937,7 +939,7 @@ int main(int argc, char **argv)
 	 * check`'s runner. Whichever of fds 0/1/2 isatty() calls a
 	 * console is a genuine __FD_CONSOLE descriptor and works for every
 	 * function in this file, so fall back to that: under `make check`
-	 * none of the three qualifies (tools/runtests.sh redirects stdin
+	 * none of the three qualifies (tools/run-tests.py redirects stdin
 	 * from /dev/null and captures stdout/stderr through a pipe) and
 	 * the detect-and-note branches below still fire, but in an
 	 * interactive run the console-dependent clauses now actually run

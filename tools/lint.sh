@@ -629,7 +629,7 @@ stage_shell() {
 	out=$builddir/shellcheck.log
 	mkdir -p "$builddir"
 	# No -s: these scripts are a deliberate mix of #!/bin/sh (configure,
-	# the hook, install.sh, runtests.sh, this file) and #!/usr/bin/env bash
+# the hook, install.sh, run-tests.py, this file) and #!/usr/bin/env bash
 	# (the two generators), and forcing one dialect would report the other
 	# half's perfectly valid syntax as errors.  shellcheck reads the
 	# shebangs itself.

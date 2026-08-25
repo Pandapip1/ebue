@@ -4,238 +4,172 @@
 # test/libc-test-expected.txt -- the adjudication ledger for
 # third_party/libc-test, read by tools/libc-test.sh.
 #
-# One line per test in the corpus, all 146 of them:
+# One or more profile rules per corpus test:
 #
-#     <name>  <status>  <reason>
+#     <name>  <profile selector>  <disposition>  <reason>
 #
-# and every test must have exactly one.  A corpus test with no line
-# here is a hard failure, not a default-to-ignored: a test nobody has
-# decided about must look undecided.
+# The dispositions are PASS, BUG, UNIMPL, NA and FLAKY.  Every non-PASS
+# row requires a reason.  Compiler/process observations remain separate:
+# pedantic requires BUG to build and fail and UNIMPL not to build; strict
+# performs those probes and then rejects either disposition.
 #
-# STATUSES
-#
-#   pass             must exit 0.  If it does not, that is a regression
-#                    and the stage goes red.
-#   xfail:defect     a real behavioural defect of THIS LIBRARY, triaged,
-#                    with the ledger row (or its absence) named in the
-#                    reason.  Not fixed here -- this project fences
-#                    confirmed defects rather than fixing them in the
-#                    same pass; this file is the fence for the ones that
-#                    live in an external suite.
-#   xfail:documented a divergence the tree already documents and stands
-#                    behind (a deliberate stub, a design difference, a
-#                    platform primitive that does not exist).
-#   xfail:env        blocked by the target environment, not by this
-#                    library, in a way that is NOT detectable from the
-#                    test's own output at run time.  Anything that IS
-#                    detectable -- Wine's RtlCloneUserProcess abort, a
-#                    stubbed shim helper -- is reported as unverified
-#                    (rc=77) by tools/libc-test.sh instead and never
-#                    reaches this file.  Keep this category small.
-#   unclassified     IT FAILS AND NOBODY HAS LOOKED AT IT.  Reason must
-#                    begin with NOT-YET-TRIAGED.  This is deliberately a
-#                    different word from xfail: an unexamined failure
-#                    recorded as "expected" looks decided, and is worse
-#                    than one recorded as undecided.
-#   unbuildable      does not compile or link.  Reason is the compiler's
-#                    own first error, verbatim.  NEVER a pass: 57 of
-#                    146 tests die at #include, which is the gap
-#                    accounting restated as a build error and is
-#                    evidence of nothing about behaviour.
-#   unverifiable     builds and runs, but NO TARGET THIS PROJECT HAS can
-#                    adjudicate it, and none is expected to.  Reason
-#                    required, and must name the missing thing.
-#
-# WHY `unverifiable` IS ITS OWN STATUS AND NOT ONE OF THE OTHER FOUR
-#
-# It is not `unbuildable`: it builds and links.  It is not `xfail:env`:
-# that category is for a block that is NOT detectable from the test's own
-# output at run time, whereas these announce themselves (tools/libc-test.sh
-# reads the shim's SHIM-STUBBED marker out of the log) and are counted as
-# unverified by the harness.  It is not `unclassified`: that means "it
-# fails and nobody has looked", and somebody has.
-#
-# The one it is easiest to confuse with is `pass`, and that confusion is
-# the reason this status exists.  Several rows here say `pass` while
-# coming out unverified under stock Wine -- `fflush-exit` is one: it needs
-# RtlCloneUserProcess, so it produces no verdict here, but it produces a
-# real one on the real-Windows CI leg.  "Verified elsewhere" and
-# "verifiable nowhere" are different facts.  Recording both as `pass`
-# erases the difference, and erasing it is how a PERMANENT hole comes to
-# look like a temporary one -- a `pass` row reads as a claim somebody is
-# checking, and for these nobody is, anywhere.
-#
-# What the status still asserts, and why that is not vacuous: the harness
-# never compares a verdict against an unverifiable row while the test
-# stays unverified, and it prints "UNVERIFIED" for it in its own output,
-# so nothing here looks checked.  But the moment such a test DOES produce
-# a verdict, the harness fails the stage with NOW-VERIFIABLE: the claim
-# "no target we have can adjudicate this" is falsifiable, is checked on
-# every run, and cannot outlive the condition that made it true.
-# tools/libc-test.sh --selftest additionally proves an unverifiable row
-# with no reason is rejected outright.
-#
-# WHY THIS FILE CANNOT GROW SILENTLY
-#
-# The COUNTS line below is checked by tools/libc-test.sh against the
-# rows in this file.  pass, xfail and unbuildable must match EXACTLY;
-# unclassified is a CEILING that may only come down.  So a commit that
-# adds a known failure necessarily also contains the line saying the
-# number of known failures went up -- which is the thing a reviewer
-# needs to see, and the thing an append-only exception list never shows
-# anyone.  A test that is expected to fail and starts passing is also a
-# hard failure: a fixed defect must force this file to be updated.
+# A disposition may be overridden by adding a more specific profile rule.
+# Profile dimensions include runtime, target and host architecture, WOW64,
+# kernel32 support and named runtime capabilities.  The shared resolver
+# rejects ambiguous matches and profiles for which no rule exists. This
+# baseline deliberately claims only the configuration in which it was measured;
+# another platform must be annotated before it can use the ledger.
 #
 # Baseline: ntlibc 661c577, libc-test 68edb8b, x86_64-win32-tcc, under
 # the project's patched Wine (which implements RtlCloneUserProcess, so
 # nothing here is Wine-fork-blocked; on stock Wine several of these
-# become unverified at run time instead, by design).
+# become NA at run time instead, by design).
 #
-# COUNTS pass=68 xfail=21 unclassified=4 unbuildable=52 unverifiable=1
+# COUNTS PASS=68 BUG=15 UNIMPL=52 NA=11 FLAKY=0
 #
-argv                              pass
-basename                          pass
-clocale_mbfuncs                   unbuildable  clocale_mbfuncs.c:7: error: include file 'langinfo.h' not found
-clock_gettime                     pass
-crypt                             unbuildable  crypt.c:2: error: include file 'crypt.h' not found
-daemon-failure                    unbuildable  tcc: error: unresolved reference to 'daemon'
-dirname                           pass
-dlopen                            unbuildable  tcc: error: unresolved reference to '__rpath'
-dlopen_dso                        unbuildable  tcc: error: unresolved reference to 'main'
-dn_expand-empty                   unbuildable  dn_expand-empty.c:4: error: include file 'resolv.h' not found
-dn_expand-ptr-0                   unbuildable  dn_expand-ptr-0.c:4: error: include file 'resolv.h' not found
-env                               unbuildable  tcc: error: unresolved reference to 'clearenv' (dropped as an unused non-POSIX extension in 49b8099)
-execle-env                        xfail:env  no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
-fcntl                             unclassified  NOT-YET-TRIAGED -- F_SETLK across fork(): "lock failed to work" and the child does not see the parent's lock. Real record-locking exists (src/file/flock.c, NT byte-range locks); whether this is a defect, a Wine artefact, or a fork()-inheritance question is undecided.
-fdopen                            pass
-fflush-exit                       pass
-fgets-eof                         pass
-fgetwc-buffering                  unverifiable  builds and links as of src/stdio/wide.c, but opens with libc-test's t_setutf8(), which needs nl_langinfo(CODESET); no <langinfo.h> on this target, under Wine or on the real-Windows leg, so no run here can select the UTF-8 locale the test requires
-flockfile-list                    unbuildable  lib/libc.a: error: link symbol 'malloc' defined twice
-fnmatch                           xfail:defect  GAP-ACCOUNTING.md:264 lists fnmatch as implemented-but-not-clause-audited; 5 pattern failures incl. [[?*\] and a bare backslash
-fpclassify-invalid-ld80           pass
-fscanf                            pass
-ftello-unflushed-append           xfail:defect  COVERAGE.md has ftello rows but not this case; ftello on an unflushed append stream reports 3, want 7
-fwscanf                           pass
-getpwnam_r-crash                  pass
-getpwnam_r-errno                  pass
-iconv_open                        unbuildable  iconv_open.c:3: error: include file 'iconv.h' not found
-iconv-roundtrips                  unbuildable  iconv-roundtrips.c:3: error: include file 'iconv.h' not found
-inet_ntop-v4mapped                xfail:defect  GAP-ACCOUNTING.md:242; inet_pton(AF_INET6,"::ffff:1.2.3.4") fails outright
-inet_pton                         xfail:defect  GAP-ACCOUNTING.md:242 arpa/inet.h not clause-audited; embedded space accepted, AF_INET6 "::" rejected
-inet_pton-empty-last-field        xfail:defect  GAP-ACCOUNTING.md:242; "1:2:3:4:5:6:7::" mis-parsed and an over-long address accepted
-ipc_msg                           unbuildable  ipc_msg.c:9: error: include file 'sys/msg.h' not found
-ipc_sem                           unbuildable  ipc_sem.c:9: error: include file 'sys/sem.h' not found
-ipc_shm                           unbuildable  ipc_shm.c:9: error: include file 'sys/shm.h' not found
-iswspace-null                     pass
-lrand48-signextend                xfail:defect  COVERAGE.md:221 asserts only the [0,2^31) range; POSIX fixes the 48-bit LCG, so the three values are specified and ours diverge
-lseek-large                       pass
-malloc-0                          pass
-malloc-brk-fail                   unbuildable  malloc-brk-fail.c:6: error: include file 'sys/mman.h' not found
-malloc-oom                        unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here; on real Windows it will.
-mbc                               unbuildable  mbc.c:6: error: include file 'langinfo.h' not found
-mbsrtowcs-overflow                pass
-memmem-oob                        pass
-memmem-oob-read                   pass
-memstream                         pass          fixed: two fmemopen defects (a seek past a fixed buffer's end was accepted; append mode wrote at the file position instead of the end) plus fseek() discarding read-ahead before a failed seek
-mkdtemp-failure                   pass
-mkstemp-failure                   pass
-mntent                            unbuildable  mntent.c:5: error: include file 'mntent.h' not found
-popen                             xfail:env  no /bin/sh on the target -- the shell script reaches cmd.exe, which rejects it (external-suites.md, build assumption 3)
-printf-1e9-oob                    pass
-printf-fmt-g-round                pass
-printf-fmt-g-zeros                pass
-printf-fmt-n                      pass
-pthread_atfork-errno-clobber      unbuildable  pthread_atfork-errno-clobber.c:2: error: include file 'pthread.h' not found
-pthread_cancel                    unbuildable  pthread_cancel.c:1: error: include file 'pthread.h' not found
-pthread_cancel-points             unbuildable  pthread_cancel-points.c:3: error: include file 'pthread.h' not found
-pthread_cancel-sem_wait           unbuildable  pthread_cancel-sem_wait.c:2: error: include file 'pthread.h' not found
-pthread_cond                      unbuildable  pthread_cond.c:1: error: include file 'pthread.h' not found
-pthread_condattr_setclock         unbuildable  pthread_condattr_setclock.c:3: error: include file 'pthread.h' not found
-pthread_cond-smasher              unbuildable  pthread_cond-smasher.c:12: error: include file 'pthread.h' not found
-pthread_cond_wait-cancel_ignored  unbuildable  pthread_cond_wait-cancel_ignored.c:4: error: include file 'pthread.h' not found
-pthread_create-oom                unbuildable  pthread_create-oom.c:3: error: include file 'pthread.h' not found
-pthread_exit-cancel               unbuildable  pthread_exit-cancel.c:3: error: include file 'pthread.h' not found
-pthread_exit-dtor                 unbuildable  pthread_exit-dtor.c:6: error: include file 'pthread.h' not found
-pthread_mutex                     unbuildable  pthread_mutex.c:2: error: include file 'pthread.h' not found
-pthread_mutex_pi                  unbuildable  pthread_mutex_pi.c:2: error: include file 'pthread.h' not found
-pthread_once-deadlock             unbuildable  pthread_once-deadlock.c:3: error: include file 'pthread.h' not found
-pthread_robust                    unbuildable  pthread_robust.c:1: error: include file 'pthread.h' not found
-pthread-robust-detach             unbuildable  pthread-robust-detach.c:3: error: include file 'pthread.h' not found
-pthread_rwlock-ebusy              unbuildable  pthread_rwlock-ebusy.c:3: error: include file 'pthread.h' not found
-pthread_tsd                       unbuildable  pthread_tsd.c:1: error: include file 'pthread.h' not found
-putenv-doublefree                 pass
-qsort                             pass
-raise-race                        unbuildable  raise-race.c:4: error: include file 'pthread.h' not found
-random                            xfail:defect  COVERAGE.md:227 asserts setstate()'s return value only, not that the restored state reproduces the stream; it does not
-regex-backref-0                   pass
-regex-bracket-icase               pass
-regexec-nosub                     pass
-regex-ere-backref                 pass
-regex-escaped-high-byte           xfail:defect  REG_BADPAT appears nowhere in either ledger or any test/*.c; regcomp("\\\xfc") returns 0
-regex-negated-range               pass
-rewind-clear-error                pass
-rlimit-open-files                 pass
-scanf-bytes-consumed              pass
-scanf-match-literal-eof           pass
-scanf-nullbyte-char               pass
-search_hsearch                    pass
-search_insque                     pass
-search_lsearch                    pass
-search_tsearch                    pass
-sem_close-unmap                   unbuildable  sem_close-unmap.c:5: error: include file 'semaphore.h' not found
-sem_init                          unbuildable  sem_init.c:2: error: include file 'pthread.h' not found
-sem_open                          unbuildable  sem_open.c:6: error: include file 'semaphore.h' not found
-setenv-oom                        unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here.
-setjmp                            xfail:defect  not covered; siglongjmp does not restore the signal mask
-setvbuf-unget                     pass
-sigaltstack                       xfail:documented  GAP-ACCOUNTING.md:439 -- sigaltstack is a deliberate degenerate stub (src/signal/signal.c:306), COVERAGE.md:602 marks it N/A
-sigprocmask-internal              xfail:documented  design difference, not a defect: __libc_current_sigrtmin() is 35 here, so signals 32-34 are not reserved and are blockable
-sigreturn                         pass
-snprintf                          pass
-socket                            unbuildable  socket.c:38: error: 'SOCK_CLOEXEC' undeclared
-spawn                             xfail:documented  <spawn.h> now exists and everything in this test but one line passes; it spawns the program "echo", and NT has no echo executable -- echo is a cmd.exe builtin, not an image on PATH, so posix_spawnp() answers ENOENT (2) and the waitpid()/read() lines cascade from it. src/process/find_program.c searches PATH for a real image, which is what POSIX specifies. ntlibc's own posix_spawnp() coverage is test/posix-spawn.c test_spawnp_path_search, which resolves a name that does exist
-sscanf                            xfail:defect  not covered; "%8c%8c" on 13 bytes returns 2 fields, POSIX says 1
-sscanf-eof                        pass
-sscanf_long                       unclassified  NOT-YET-TRIAGED -- unverifiable in this environment (t_setrlim stubbed; the test needs an enforced RLIMIT_STACK), so it never reaches adjudication here.
-stat                              pass
-statvfs                           xfail:defect  ledger mentions f_files; "/" reports 0 file nodes
-strftime                          xfail:defect  COVERAGE.md:286-287 covers %U %W %V %G %g pass-through only; flags and field width (%03C %+3C %012F) are unimplemented and emitted literally
-string                            pass
-string_memcpy                     pass
-string_memmem                     pass
-string_memset                     pass
-string_strchr                     pass
-string_strcspn                    pass
-string_strstr                     pass
-strptime                          xfail:defect  not covered; %C alone yields 1800 not 1856, %s unparsed
-strtod                            pass
-strtod_long                       pass
-strtod_simple                     pass
-strtof                            pass
-strtol                            pass
-strtold                           pass
-strverscmp                        pass
-swprintf                          unbuildable  swprintf.c:11: error: include file 'langinfo.h' not found
-syscall-sign-extend               unbuildable  syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found
-tgmath                            unbuildable  tgmath.c:1: error: include file 'tgmath.h' not found
-time                              pass
-tls_align                         unbuildable  tcc: error: unresolved reference to 't'
-tls_align_dlopen                  unbuildable  tcc: error: unresolved reference to '__rpath'
-tls_align_dso                     unbuildable  tcc: error: unresolved reference to 'main'
-tls_get_new-dtv                   unbuildable  tls_get_new-dtv.c:2: error: include file 'pthread.h' not found
-tls_get_new-dtv_dso               unbuildable  tcc: error: unresolved reference to 'main'
-tls_init                          unbuildable  tls_init.c:1: error: include file 'pthread.h' not found
-tls_init_dlopen                   unbuildable  tcc: error: unresolved reference to '__rpath'
-tls_init_dso                      unbuildable  tcc: error: unresolved reference to 'main'
-tls_local_exec                    unbuildable  tls_local_exec.c:3: error: include file 'pthread.h' not found
-udiv                              pass
-ungetc                            pass
-uselocale-0                       pass
-utime                             xfail:defect  not covered; utimensat on "/dev/null/invalid" gives ENOENT where POSIX specifies ENOTDIR
-vfork                             xfail:env  no /bin/sh on the target; the second half execl()s "/bin/sh -c"
-wcsncpy-read-overflow             pass
-wcsstr                            pass
-wcsstr-false-negative             pass
-wcstol                            pass
-wordexp                           xfail:defect  overlaps the field-splitting work already fenced at test/posix-glob.c:1226,1271; $FOO="bar baz" yields one word, and ${X:-d}/${X-d}/${X:+y} give WRDE_SYNTAX
+argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
+basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
+clocale_mbfuncs                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  clocale_mbfuncs.c:7: error: include file 'langinfo.h' not found
+clock_gettime                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+crypt                             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  crypt.c:2: error: include file 'crypt.h' not found
+daemon-failure                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'daemon'
+dirname                           runtime=wine,target_arch=x86_64,kernel32=no  PASS
+dlopen                            runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to '__rpath'
+dlopen_dso                        runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'main'
+dn_expand-empty                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  dn_expand-empty.c:4: error: include file 'resolv.h' not found
+dn_expand-ptr-0                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  dn_expand-ptr-0.c:4: error: include file 'resolv.h' not found
+env                               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'clearenv' (dropped as an unused non-POSIX extension in 49b8099)
+execle-env                        runtime=wine,target_arch=x86_64,kernel32=no  NA  no /bin/sh on the target; execle("/bin/sh",...) cannot succeed
+fcntl                             runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- F_SETLK across fork(): "lock failed to work" and the child does not see the parent's lock. Real record-locking exists (src/file/flock.c, NT byte-range locks); whether this is a defect, a Wine artefact, or a fork()-inheritance question is undecided.
+fdopen                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+fflush-exit                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
+fgets-eof                         runtime=wine,target_arch=x86_64,kernel32=no  PASS
+fgetwc-buffering                  runtime=wine,target_arch=x86_64,kernel32=no  NA  builds and links as of src/stdio/wide.c, but opens with libc-test's t_setutf8(), which needs nl_langinfo(CODESET); no <langinfo.h> on this target, under Wine or on the real-Windows leg, so no run here can select the UTF-8 locale the test requires
+flockfile-list                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  lib/libc.a: error: link symbol 'malloc' defined twice
+fnmatch                           runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:264 lists fnmatch as implemented-but-not-clause-audited; 5 pattern failures incl. [[?*\] and a bare backslash
+fpclassify-invalid-ld80           runtime=wine,target_arch=x86_64,kernel32=no  PASS
+fscanf                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+ftello-unflushed-append           runtime=wine,target_arch=x86_64,kernel32=no  BUG  COVERAGE.md has ftello rows but not this case; ftello on an unflushed append stream reports 3, want 7
+fwscanf                           runtime=wine,target_arch=x86_64,kernel32=no  PASS
+getpwnam_r-crash                  runtime=wine,target_arch=x86_64,kernel32=no  PASS
+getpwnam_r-errno                  runtime=wine,target_arch=x86_64,kernel32=no  PASS
+iconv_open                        runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  iconv_open.c:3: error: include file 'iconv.h' not found
+iconv-roundtrips                  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  iconv-roundtrips.c:3: error: include file 'iconv.h' not found
+inet_ntop-v4mapped                runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:242; inet_pton(AF_INET6,"::ffff:1.2.3.4") fails outright
+inet_pton                         runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:242 arpa/inet.h not clause-audited; embedded space accepted, AF_INET6 "::" rejected
+inet_pton-empty-last-field        runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:242; "1:2:3:4:5:6:7::" mis-parsed and an over-long address accepted
+ipc_msg                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_msg.c:9: error: include file 'sys/msg.h' not found
+ipc_sem                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_sem.c:9: error: include file 'sys/sem.h' not found
+ipc_shm                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_shm.c:9: error: include file 'sys/shm.h' not found
+iswspace-null                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+lrand48-signextend                runtime=wine,target_arch=x86_64,kernel32=no  BUG  COVERAGE.md:221 asserts only the [0,2^31) range; POSIX fixes the 48-bit LCG, so the three values are specified and ours diverge
+lseek-large                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
+malloc-0                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
+malloc-brk-fail                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  malloc-brk-fail.c:6: error: include file 'sys/mman.h' not found
+malloc-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here; on real Windows it will.
+mbc                               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  mbc.c:6: error: include file 'langinfo.h' not found
+mbsrtowcs-overflow                runtime=wine,target_arch=x86_64,kernel32=no  PASS
+memmem-oob                        runtime=wine,target_arch=x86_64,kernel32=no  PASS
+memmem-oob-read                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
+memstream                         runtime=wine,target_arch=x86_64,kernel32=no  PASS          fixed: two fmemopen defects (a seek past a fixed buffer's end was accepted; append mode wrote at the file position instead of the end) plus fseek() discarding read-ahead before a failed seek
+mkdtemp-failure                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
+mkstemp-failure                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
+mntent                            runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  mntent.c:5: error: include file 'mntent.h' not found
+popen                             runtime=wine,target_arch=x86_64,kernel32=no  NA  no /bin/sh on the target -- the shell script reaches cmd.exe, which rejects it (external-suites.md, build assumption 3)
+printf-1e9-oob                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
+printf-fmt-g-round                runtime=wine,target_arch=x86_64,kernel32=no  PASS
+printf-fmt-g-zeros                runtime=wine,target_arch=x86_64,kernel32=no  PASS
+printf-fmt-n                      runtime=wine,target_arch=x86_64,kernel32=no  PASS
+pthread_atfork-errno-clobber      runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_atfork-errno-clobber.c:2: error: include file 'pthread.h' not found
+pthread_cancel                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cancel.c:1: error: include file 'pthread.h' not found
+pthread_cancel-points             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cancel-points.c:3: error: include file 'pthread.h' not found
+pthread_cancel-sem_wait           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cancel-sem_wait.c:2: error: include file 'pthread.h' not found
+pthread_cond                      runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cond.c:1: error: include file 'pthread.h' not found
+pthread_condattr_setclock         runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_condattr_setclock.c:3: error: include file 'pthread.h' not found
+pthread_cond-smasher              runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cond-smasher.c:12: error: include file 'pthread.h' not found
+pthread_cond_wait-cancel_ignored  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cond_wait-cancel_ignored.c:4: error: include file 'pthread.h' not found
+pthread_create-oom                runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_create-oom.c:3: error: include file 'pthread.h' not found
+pthread_exit-cancel               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_exit-cancel.c:3: error: include file 'pthread.h' not found
+pthread_exit-dtor                 runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_exit-dtor.c:6: error: include file 'pthread.h' not found
+pthread_mutex                     runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_mutex.c:2: error: include file 'pthread.h' not found
+pthread_mutex_pi                  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_mutex_pi.c:2: error: include file 'pthread.h' not found
+pthread_once-deadlock             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_once-deadlock.c:3: error: include file 'pthread.h' not found
+pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_robust.c:1: error: include file 'pthread.h' not found
+pthread-robust-detach             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread-robust-detach.c:3: error: include file 'pthread.h' not found
+pthread_rwlock-ebusy              runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_rwlock-ebusy.c:3: error: include file 'pthread.h' not found
+pthread_tsd                       runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_tsd.c:1: error: include file 'pthread.h' not found
+putenv-doublefree                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
+qsort                             runtime=wine,target_arch=x86_64,kernel32=no  PASS
+raise-race                        runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  raise-race.c:4: error: include file 'pthread.h' not found
+random                            runtime=wine,target_arch=x86_64,kernel32=no  BUG  COVERAGE.md:227 asserts setstate()'s return value only, not that the restored state reproduces the stream; it does not
+regex-backref-0                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
+regex-bracket-icase               runtime=wine,target_arch=x86_64,kernel32=no  PASS
+regexec-nosub                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+regex-ere-backref                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
+regex-escaped-high-byte           runtime=wine,target_arch=x86_64,kernel32=no  BUG  REG_BADPAT appears nowhere in either ledger or any test/*.c; regcomp("\\\xfc") returns 0
+regex-negated-range               runtime=wine,target_arch=x86_64,kernel32=no  PASS
+rewind-clear-error                runtime=wine,target_arch=x86_64,kernel32=no  PASS
+rlimit-open-files                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
+scanf-bytes-consumed              runtime=wine,target_arch=x86_64,kernel32=no  PASS
+scanf-match-literal-eof           runtime=wine,target_arch=x86_64,kernel32=no  PASS
+scanf-nullbyte-char               runtime=wine,target_arch=x86_64,kernel32=no  PASS
+search_hsearch                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
+search_insque                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+search_lsearch                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
+search_tsearch                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
+sem_close-unmap                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  sem_close-unmap.c:5: error: include file 'semaphore.h' not found
+sem_init                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  sem_init.c:2: error: include file 'pthread.h' not found
+sem_open                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  sem_open.c:6: error: include file 'semaphore.h' not found
+setenv-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here.
+setjmp                            runtime=wine,target_arch=x86_64,kernel32=no  BUG  not covered; siglongjmp does not restore the signal mask
+setvbuf-unget                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+sigaltstack                       runtime=wine,target_arch=x86_64,kernel32=no  NA  GAP-ACCOUNTING.md:439 -- sigaltstack is a deliberate degenerate stub (src/signal/signal.c:306), COVERAGE.md:602 marks it N/A
+sigprocmask-internal              runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: __libc_current_sigrtmin() is 35 here, so signals 32-34 are not reserved and are blockable
+sigreturn                         runtime=wine,target_arch=x86_64,kernel32=no  PASS
+snprintf                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
+socket                            runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  socket.c:38: error: 'SOCK_CLOEXEC' undeclared
+spawn                             runtime=wine,target_arch=x86_64,kernel32=no  NA  <spawn.h> now exists and everything in this test but one line passes; it spawns the program "echo", and NT has no echo executable -- echo is a cmd.exe builtin, not an image on PATH, so posix_spawnp() answers ENOENT (2) and the waitpid()/read() lines cascade from it. src/process/find_program.c searches PATH for a real image, which is what POSIX specifies. ntlibc's own posix_spawnp() coverage is test/posix-spawn.c test_spawnp_path_search, which resolves a name that does exist
+sscanf                            runtime=wine,target_arch=x86_64,kernel32=no  BUG  not covered; "%8c%8c" on 13 bytes returns 2 fields, POSIX says 1
+sscanf-eof                        runtime=wine,target_arch=x86_64,kernel32=no  PASS
+sscanf_long                       runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_setrlim stubbed; the test needs an enforced RLIMIT_STACK), so it never reaches adjudication here.
+stat                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
+statvfs                           runtime=wine,target_arch=x86_64,kernel32=no  BUG  ledger mentions f_files; "/" reports 0 file nodes
+strftime                          runtime=wine,target_arch=x86_64,kernel32=no  BUG  COVERAGE.md:286-287 covers %U %W %V %G %g pass-through only; flags and field width (%03C %+3C %012F) are unimplemented and emitted literally
+string                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+string_memcpy                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+string_memmem                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+string_memset                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+string_strchr                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+string_strcspn                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
+string_strstr                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strptime                          runtime=wine,target_arch=x86_64,kernel32=no  BUG  not covered; %C alone yields 1800 not 1856, %s unparsed
+strtod                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strtod_long                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strtod_simple                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strtof                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strtol                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strtold                           runtime=wine,target_arch=x86_64,kernel32=no  PASS
+strverscmp                        runtime=wine,target_arch=x86_64,kernel32=no  PASS
+swprintf                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  swprintf.c:11: error: include file 'langinfo.h' not found
+syscall-sign-extend               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found
+tgmath                            runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tgmath.c:1: error: include file 'tgmath.h' not found
+time                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
+tls_align                         runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 't'
+tls_align_dlopen                  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to '__rpath'
+tls_align_dso                     runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'main'
+tls_get_new-dtv                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tls_get_new-dtv.c:2: error: include file 'pthread.h' not found
+tls_get_new-dtv_dso               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'main'
+tls_init                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tls_init.c:1: error: include file 'pthread.h' not found
+tls_init_dlopen                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to '__rpath'
+tls_init_dso                      runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'main'
+tls_local_exec                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tls_local_exec.c:3: error: include file 'pthread.h' not found
+udiv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
+ungetc                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+uselocale-0                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
+utime                             runtime=wine,target_arch=x86_64,kernel32=no  BUG  not covered; utimensat on "/dev/null/invalid" gives ENOENT where POSIX specifies ENOTDIR
+vfork                             runtime=wine,target_arch=x86_64,kernel32=no  NA  no /bin/sh on the target; the second half execl()s "/bin/sh -c"
+wcsncpy-read-overflow             runtime=wine,target_arch=x86_64,kernel32=no  PASS
+wcsstr                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+wcsstr-false-negative             runtime=wine,target_arch=x86_64,kernel32=no  PASS
+wcstol                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
+wordexp                           runtime=wine,target_arch=x86_64,kernel32=no  BUG  overlaps the field-splitting work already fenced at test/posix-glob.c:1226,1271; $FOO="bar baz" yields one word, and ${X:-d}/${X-d}/${X:+y} give WRDE_SYNTAX

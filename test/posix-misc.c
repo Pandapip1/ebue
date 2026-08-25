@@ -10,6 +10,7 @@
  * it checks.  See test/posix-coverage/misc.md for the full ledger.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <dirent.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -275,7 +276,7 @@ static void test_dtype(void)
 typedef char eoverflow_fence_needs_64bit_ino_t[sizeof(ino_t) >= 8 ? 1 : -1];
 typedef char eoverflow_fence_needs_off_t_at_least_as_wide_as_long[sizeof(off_t) >= sizeof(long) ? 1 : -1];
 
-#if 0 /* N/A: readdir.html/readdir_r.html ERRORS, the "shall fail"
+#if NTLIBC_TEST(NA, posix_misc_readdir_eoverflow) /* N/A: readdir.html/readdir_r.html ERRORS, the "shall fail"
        * (mandatory-when-triggered, not optional) list: "[EOVERFLOW]
        * One of the values in the structure to be returned cannot be
        * represented correctly." Checked against the live spec page
@@ -314,7 +315,7 @@ static void test_readdir_eoverflow(void)
 }
 #endif
 
-#if 0 /* N/A: readdir.html/readdir_r.html ERRORS, the "may fail"
+#if NTLIBC_TEST(NA, posix_misc_readdir_enoent_position) /* N/A: readdir.html/readdir_r.html ERRORS, the "may fail"
        * (optional) list: "[ENOENT] The current position of the
        * directory stream is invalid." POSIX "may fail" conditions are
        * explicitly optional -- a conformant implementation need not
@@ -639,7 +640,7 @@ static void test_getopt(void)
 
 	/* opterr controls whether getopt() writes anything to stderr for an
 	 * unknown option; this cannot be captured portably here (stderr may
-	 * be redirected by runtests.sh), so only the return-value contract
+	 * be redirected by run-tests.py), so only the return-value contract
 	 * (independent of opterr) is asserted: an unknown option still
 	 * yields '?' and sets optopt regardless of opterr. */
 	{

@@ -3,61 +3,6 @@
 
 name: CI
 
-# Builds ntlibc and runs its test suite for both supported targets,
-# i386-win32 and x86_64-win32, two ways:
-#
-#   - `ntlibc-suite` (Linux + Wine): cross-builds with tinycc and runs
-#     this project's own test/*.c under Wine. Fast, but Wine emulates
-#     ntdll/kernel32 rather than being real Windows, so it can pass (or
-#     fail) differently than the real thing -- notably it doesn't
-#     implement everything (see the Makefile's TEST_RUN comment on the
-#     `*-win.c` tests it can't run at all).
-#   - `libc-test` (Linux + Wine): the same build, but running musl's
-#     imported regression corpus (third_party/libc-test) against it,
-#     adjudicated line by line against test/libc-test-expected.txt. A
-#     separate job from `ntlibc-suite` because it is a separate claim
-#     about the library, made against a foreign suite and its own
-#     ledger; sharing a job reported either failure against the same
-#     leg. x86_64-only -- see that job's comment.
-#   - `windows-test` (real `windows-latest` runner): downloads the very
-#     same test/*.exe the `build-test-exes` job compiled (including the
-#     `*-win.c` ones Wine skips) and runs them directly on real Windows.
-#     This is
-#     the job that actually proves fork()/WOW64 behavior and any
-#     kernel32 (Ctrl-C handler) code paths, rather than relying on Wine's
-#     emulation of them. GitHub-hosted Windows runners are free and
-#     unlimited for public repositories (this repo is public), so there's
-#     no cost reason not to run this in addition to the Wine-based jobs.
-#     No tcc/cross-toolchain is needed on that runner at all -- it never
-#     compiles anything, it only executes the binaries the Linux job
-#     already built.
-#
-# `ntlibc-suite`'s matrix (mirrored by `build-test-exes`) has three legs, not a full 2x2 of arch x kernel32: both
-# arches at the default `--disable-kernel32` (the configuration the
-# project actually recommends, per CONTRIBUTING.md's "NTDLL first,
-# kernel32 only as a last resort" -- that has to stay the best-covered
-# build, not lose coverage to the guarded one), plus one extra x86_64 leg
-# at `--enable-kernel32` so the code behind every `#ifdef
-# NTLIBC_USE_KERNEL32` (currently src/signal/signal.c's console
-# Ctrl-C/Ctrl-Break handler, installed via kernel32's
-# SetConsoleCtrlHandler) actually gets compiled, run under Wine, and then
-# re-run on real Windows by `windows-test` below. A full 2x2 would double
-# the job instead of adding one leg to it; kernel32 support itself isn't
-# arch-specific -- it's a single kernel32 call reached the same way on
-# both targets -- so one arch is enough to exercise it, the same
-# reasoning the "Regenerate generated files" step below already uses to
-# run on only one leg.
-#
-# The only non-standard piece of the build itself is the compiler: ntlibc
-# is built with a win32-cross-targeting tinycc (upstream tinycc's own
-# `./configure --enable-cross` produces both the i386-win32-tcc and
-# x86_64-win32-tcc binaries used below, alongside the native/other cross
-# targets we don't need here). That's a completely ordinary,
-# from-scratch-buildable-in-CI toolchain -- nothing like the kaem/mescc-tools
-# bootstrap path under boot/kaem/, which is unrelated to CI and is not
-# exercised here except for the drift check in the "Regenerate generated
-# files" step below.
-
 on:
   push:
   pull_request:
@@ -65,961 +10,254 @@ on:
 permissions:
   contents: read
 
-# No `concurrency:` block on purpose. Every run is allowed to finish.
-#
-# Superseding a run is only ever right where a later commit makes an
-# earlier one uninteresting. That is never true here: every commit pushed
-# to main is a state of the tree somebody may bisect to, and a cancelled
-# run reports as a *failure* -- so cancelling does not merely lose the
-# answer, it records a red one that was never earned and leaves the
-# history lying about which commits were tested.
-#
-# What gets lost is the signal nothing else provides. The `windows-test`
-# legs on a real Windows runner are this project's only oracle for real-NT
-# behaviour -- Wine emulates ntdll/kernel32 and has both passed things real
-# Windows fails and failed things it passes, so several bugs were visible
-# only there. Throwing away that verdict to save runner time is the wrong
-# trade, and the runners are free on a public repo anyway; the cost of
-# overlapping runs is queue latency, not money.
-
+# Do not cancel superseded runs: each commit on main remains useful bisect
+# evidence, and the real-Windows jobs are the only oracle for native NT.
 env:
-  # Pinned to a specific upstream tinycc commit (rather than always
-  # building tinycc's HEAD) so this workflow's toolchain -- and therefore
-  # ntlibc's own build/test results -- stay reproducible across CI runs
-  # and don't shift underneath us if tinycc lands a regression or a
-  # behavior change. Bump this deliberately (and re-validate ntlibc
-  # against the new commit) rather than tracking upstream automatically.
-  # Pandapip1/tinycc, branch ntlibc-toolchain: upstream mob (2ba12e83) plus
-  # two things ntlibc needs. An inline-asm operand fix ("=m"/"m" on an array
-  # struct member reached through a pointer, which src/math/fenv.c hits), and
-  # -Wl,--delay-all, which test/delayall.c requires -- configure probes for
-  # it and skips that test where it is missing, so an upstream toolchain
-  # still builds everything else. Pinned by SHA, not by branch name, so a
-  # push to the fork cannot silently change what CI compiles with.
   TINYCC_REPO: https://github.com/Pandapip1/tinycc.git
   TINYCC_SHA: 69eed4d346f31dea12d61b99f60298d2f59f66be
 
 jobs:
   reuse:
     runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 10
     steps:
-      # Deliberately WITHOUT `submodules:`. third_party/ holds two --
-      # musl's libc-test and the Linux Test Project -- and neither's files
-      # are this repository's files for REUSE purposes. They belong to
-      # their own projects, which ship their own COPYRIGHT/COPYING, and
-      # neither is uniformly licensed (libc-test's src/math/ucb and
-      # src/math/crlibm are BSD and GPL, not MIT; LTP's open_posix_testsuite
-      # is GPLv2+ with some BSD-2 files). Checking them out here would make
-      # this job lint another project's tree and demand SPDX headers we
-      # have no right to add. The local `reuse` tool skips submodules on
-      # its own when .git is present, so leaving them out here is what
-      # keeps the two in agreement; tools/gate.sh's reuse stage excludes
-      # third_party/ from its tree copy for the same reason. See
-      # third_party/README.md.
+      # Submodules are separate projects with their own licensing metadata.
       - uses: actions/checkout@v7
       - uses: fsfe/reuse-action@v5
 
-  # Build the win32-cross tinycc toolchain once and cache it, keyed on the
-  # pinned commit above, so a normal CI run restores a prebuilt toolchain
-  # instead of rebuilding a whole cross-compiler from scratch every time.
   build-toolchain:
     runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 30
     steps:
-      - name: Cache tinycc toolchain
-        id: cache-tinycc
-        uses: actions/cache@v6
+      - uses: actions/checkout@v7
+      - name: Restore or build tinycc
+        uses: ./.github/actions/setup-tinycc
         with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+          build-on-miss: "true"
 
-      - name: Clone tinycc
-        if: steps.cache-tinycc.outputs.cache-hit != 'true'
-        run: |
-          git clone "$TINYCC_REPO" tinycc
-          git -C tinycc checkout "$TINYCC_SHA"
-
-      - name: Build and install tinycc (--enable-cross)
-        if: steps.cache-tinycc.outputs.cache-hit != 'true'
-        run: |
-          cd tinycc
-          ./configure --enable-cross --prefix="$HOME/tinycc-install"
-          make -j"$(nproc)"
-          make install
-
-      - name: Sanity-check the cross compilers exist
-        run: |
-          test -x "$HOME/tinycc-install/bin/i386-win32-tcc"
-          test -x "$HOME/tinycc-install/bin/x86_64-win32-tcc"
-
-  # Compile the test PEs and publish them, without running anything.
-  #
-  # This job exists purely to get `windows-test` off the critical path of
-  # the Wine run, and it is not a redundant build -- please don't fold it
-  # back into `ntlibc-suite`. The real-Windows legs consume exactly one thing from
-  # the Linux side: the `test-exes-*` artifact. Those .exe files are
-  # finished the moment they are *compiled*; nothing the Wine run does
-  # afterwards changes a byte of them. While the upload lived at the end
-  # of the old combined Wine job, the real-Windows legs waited for the whole leg anyway --
-  # measured on a real run, ~62s installing Wine (which they never use)
-  # plus a ~75s `make check` that is almost entirely Wine process startup,
-  # so roughly 140s of waiting for artefacts that were ready in the first
-  # second of it. The cross-compile itself is well under a second with
-  # tcc, so this job is essentially runner startup, a cache restore and an
-  # upload.
-  #
-  # Deliberately no Wine here: installing it is the single largest step in
-  # the old serial path and this job has nothing to run.
-  #
-  # Only `windows-test` depends on this job. The two Wine jobs below run
-  # alongside it and build their own trees -- see the comment on
-  # `ntlibc-suite`, which sets out at length why they rebuild rather than
-  # consuming this job's artifact, and why that is the safer of the two
-  # hand-offs rather than merely the cheaper one.
-  #
-  # The matrix mirrors `ntlibc-suite`'s three legs exactly, because the
-  # artifact names (`test-exes-${{ matrix.name }}`) are what
-  # `windows-test` indexes by -- see the header comment for why there are
-  # three legs and not a full 2x2.
+  # This produces the exact PE files consumed on real Windows.  Wine jobs
+  # rebuild independently so they can run in parallel with this hand-off.
   build-test-exes:
     needs: build-toolchain
     runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: i386
-            host: i386-win32
-            cc: i386-win32-tcc
-            kernel32: false
-            name: i386
-          - arch: x86_64
-            host: x86_64-win32
-            cc: x86_64-win32-tcc
-            kernel32: false
-            name: x86_64
-          - arch: x86_64
-            host: x86_64-win32
-            cc: x86_64-win32-tcc
-            kernel32: true
-            name: x86_64-kernel32
+          - { host: i386-win32, cc: i386-win32-tcc, kernel32: disable, name: i386 }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: disable, name: x86_64 }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: enable, name: x86_64-kernel32 }
     steps:
       - uses: actions/checkout@v7
-
-      - name: Restore tinycc toolchain
-        uses: actions/cache@v6
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
         with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
       - name: Configure
-        run: |
-          ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} \
-            --${{ matrix.kernel32 && 'enable' || 'disable' }}-kernel32
-
-      # `test-exes` (Makefile) is `check` without the runtests.sh line:
-      # it builds every test PE -- including the *-win.c ones Wine cannot
-      # run, and the plugin DLLs that are prerequisites of the tests that
-      # load them -- and runs none of them.
-      - name: Build the test binaries
+        run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --${{ matrix.kernel32 }}-kernel32
+      - name: Build test binaries
         run: make -j"$(nproc)" test-exes
-
-      # Publish the built PE test binaries (everything under obj/test/,
-      # which includes the *-win.c ones the `ntlibc-suite` job's `check` step
-      # deliberately doesn't run under Wine -- see the Makefile's
-      # TEST_RUN comment) so the windows-test job below can execute them
-      # on a real Windows runner. Named per matrix leg (not just per arch)
-      # because x86_64 produces two builds -- a kernel32-enabled test
-      # binary and a kernel32-disabled one behave differently (only the
-      # former installs a Ctrl-C handler), so they can't share a name.
       - name: Upload test binaries
         uses: actions/upload-artifact@v7
         with:
           name: test-exes-${{ matrix.name }}
-          # The .dll matters: test/rpath.c delay-loads obj/test/rpath-plugin.dll
-          # from its own directory ($ORIGIN). Uploading only *.exe left the
-          # plugin behind, so on the real-Windows runner the search correctly
-          # found nothing and the helper aborted -- a red leg caused by a
-          # missing artefact, not by the code under test.
-          #
-          # obj/sh/sh.exe matters for the same reason and was missing for
-          # the same one: test/sh-main.c spawns the sh binary and finds it
-          # by walking two components up from its own argv[0] and back down
-          # to sh/sh.exe (see that file's header). With only obj/test/ in
-          # the artefact there was no sh/ to walk down to, so sh-main.exe
-          # exited 77 on this leg *every run* -- the black-box tests of the
-          # sh utility were verified under Wine and nowhere else.
-          #
-          # Note what adding it does to the artefact's shape.
-          # actions/upload-artifact roots the artefact at the least common
-          # ancestor of the search paths; with obj/test/* alone that was
-          # obj/test, and the files landed at the artefact root. With
-          # obj/sh/sh.exe alongside it the ancestor becomes obj/, so the
-          # artefact now contains test/ and sh/ subdirectories. That is
-          # deliberate -- it reproduces the obj/{test,sh} layout find_sh()
-          # already knows how to walk -- and windows-test below reads
-          # test-exes/test, not test-exes, because of it.
+          # Keep obj/{test,sh}; sh-main.exe walks this layout to its fixture.
           path: |
             obj/test/*.exe
             obj/test/*.dll
             obj/sh/sh.exe
-          # Guards against a silently empty upload: an empty artifact would
-          # make windows-test's PowerShell loop iterate zero times and exit
-          # 0 -- a green job that tested nothing.
           if-no-files-found: error
 
-  # ntlibc's OWN test suite (`make check`) under Wine.
-  #
-  # This job and `libc-test` below were one job until the two suites were
-  # split apart. They are separate now because they are separate claims:
-  # `make check` is this project's own test/*.c, and `libc-test` is
-  # musl's imported corpus adjudicated against a ledger. Sharing a job
-  # made either failure report against the same leg, and -- worse -- the
-  # corpus step was an `if: matrix.name == 'x86_64'` inside a three-leg
-  # matrix, so on two of the three legs it rendered as a *skipped step*
-  # nobody could tell apart from a stage that had been quietly disabled.
-  # Its arch pinning is now a property of the job (see `libc-test`), so
-  # the board shows exactly one libc-test leg and it either ran or it
-  # did not.
-  #
-  # A *sibling* of build-test-exes, not a consumer of it -- deliberately,
-  # and please don't "tidy" the two into a chain. The obvious-looking
-  # simplification is to have every leg share build-test-exes as its one
-  # dependency, but the consumers want different things: `windows-test`
-  # wants only the artifact, while this job wants a configured tree it
-  # builds itself, in under a second. Gating it on build-test-exes would
-  # therefore buy it nothing and cost it that job's entire startup
-  # latency -- runner allocation, checkout, cache restore, ~25-30s it
-  # does not pay today -- to wait on a job whose real work is sub-second.
-  # Kept as siblings, total wall clock is max(this leg, build-test-exes +
-  # windows-test) instead of a serial 25-30s added to both.
-  #
-  # Rebuilds rather than downloading the artifact above, and that is the
-  # deliberate answer to "the test jobs should consume what the build job
-  # produced". Three reasons, in order of weight:
-  #
-  #   1. It would not work. `make check` needs a configured tree with
-  #      lib/libc.a present (every test .exe lists it as a prerequisite),
-  #      and a consuming job checks the sources out fresh -- so every
-  #      *.c is newer than any downloaded *.exe and make rebuilds the lot
-  #      regardless. The download would be pure cost.
-  #   2. Worse than not working, it would hide a bad hand-off. Because
-  #      make would rebuild anyway, an artifact that arrived empty,
-  #      renamed or wrongly shaped would produce a *green* job -- the
-  #      exact failure fe327e4 had to fix on the windows-test side, only
-  #      this time invisible, because the rebuild would paper over it.
-  #      An artifact hand-off is only safe where the consumer cannot
-  #      substitute for it; `windows-test` genuinely cannot (no
-  #      toolchain, and it is the whole reason build-test-exes exists),
-  #      and these two jobs trivially can.
-  #   3. The cross-compile is under a second with tcc against a restored
-  #      toolchain cache, next to ~62s of installing Wine in this same
-  #      job. There is no measurable saving to buy.
-  #
-  # What this job does have to defend against is running nothing at all,
-  # and that guard lives in tools/runtests.sh: it counts what actually
-  # ran and fails when the count is zero, rather than concluding "no
-  # failures" from an empty loop. Same floor, same reason as
-  # windows-test's `$ran -eq 0`.
   ntlibc-suite:
     needs: build-toolchain
     runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: i386
-            host: i386-win32
-            cc: i386-win32-tcc
-            kernel32: false
-            name: i386
-          - arch: x86_64
-            host: x86_64-win32
-            cc: x86_64-win32-tcc
-            kernel32: false
-            name: x86_64
-          - arch: x86_64
-            host: x86_64-win32
-            cc: x86_64-win32-tcc
-            kernel32: true
-            name: x86_64-kernel32
+          - { host: i386-win32, cc: i386-win32-tcc, kernel32: disable, name: i386 }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: disable, name: x86_64 }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: enable, name: x86_64-kernel32 }
     steps:
-      # Deliberately WITHOUT `submodules:`. The only thing in this
-      # repository that needs one is third_party/libc-test, and that is
-      # the `libc-test` job's business, not this one's -- ~940 files and
-      # 11 MB this job would never open, on every one of three legs. It
-      # is also what keeps the flag load-bearing where it does appear:
-      # if every checkout said `submodules: recursive` out of habit,
-      # nobody could tell which job would actually break without it.
-      # See third_party/README.md.
       - uses: actions/checkout@v7
-
-      - name: Restore tinycc toolchain
-        uses: actions/cache@v6
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
         with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
-      # Package set needed for `make check` to actually run the PE test
-      # binaries under Wine (both the 32- and 64-bit loaders are needed
-      # regardless of which ntlibc arch is under test).
-      - name: Install Wine
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine wine32:i386 wine64
-
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Set up Wine
+        uses: ./.github/actions/setup-wine
       - name: Configure
-        run: |
-          ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} \
-            --${{ matrix.kernel32 && 'enable' || 'disable' }}-kernel32
-
-      - name: Build
-        run: make -j"$(nproc)"
-
-      - name: Check
-        run: make -j"$(nproc)" check
-
-      # Only needs to run once, not once per matrix leg (both generators
-      # cover every arch themselves): catches either kind of generated-and-
-      # committed file drifting out of sync with its source -- the expanded
-      # bits/*.h.gen headers vs. their *.h.in DSL sources, and
-      # boot/kaem/build-$(ARCH).kaem vs. the real Makefile build recipe as
-      # source files are added/removed/renamed. See CONTRIBUTING.md's "kaem
-      # bootstrap build path" section, and .githooks/pre-commit, which runs
-      # the same two checks locally.
-      #
-      # Deliberately pinned to the kernel32-disabled x86_64 leg, not just
-      # "x86_64": KERNEL32 feeds CFLAGS_ALL (Makefile), so gen-kaem.sh's
-      # dry-run bakes -DNTLIBC_USE_KERNEL32 into every compile line of
-      # boot/kaem/build-*.kaem when it's run against a tree configured
-      # with --enable-kernel32 -- confirmed locally: every recipe line
-      # differs. The committed kaem scripts have to reflect one
-      # configuration consistently rather than whichever leg happened to
-      # regenerate them last, and it has to be --disable-kernel32: the
-      # kaem/mescc-tools bootstrap path is pure-ntdll by nature (it is
-      # building the compiler itself, long before kernel32 is even a
-      # concept there's a use for), matching this project's own default.
-      #
-      # This one stays an `if:` on a step rather than becoming its own
-      # job, unlike the libc-test split below, and the difference is not
-      # inconsistency: a skipped *test suite* is a claim about the code
-      # that silently was not made, which is what had to stop, whereas
-      # this is a drift check whose whole nature is "run once, in one
-      # configuration" -- there is no per-leg verdict for it to be
-      # missing.
-      - name: Regenerate generated files and check for drift
+        run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --${{ matrix.kernel32 }}-kernel32
+      - name: Build and check
+        run: >-
+          make -j"$(nproc)" ${{ matrix.name == 'x86_64' && 'check-pedantic' || 'check' }}
+          TEST_PROFILE="capability.symlink=no capability.console=no"
+      - name: Check generated files
         if: matrix.name == 'x86_64'
         run: |
           make generated
           git diff --exit-code -- 'arch/*/bits/*.h.gen' 'include/*.h.gen'
           git diff --exit-code -- boot/kaem/
 
-  # musl's libc-test corpus, adjudicated against
-  # test/libc-test-expected.txt. Its own job, a sibling of
-  # `ntlibc-suite` above and of build-test-exes -- see `ntlibc-suite`'s
-  # comment for why nothing here is chained and why this rebuilds
-  # instead of downloading an artifact.
-  #
-  # x86_64-only, and single-legged on purpose. tools/gate.sh pins the
-  # same stage to x86_64 for the same reason: the corpus is
-  # arch-independent C, so a second arch doubles test/libc-test-expected.txt's
-  # maintenance for no new evidence. What changed is *where* the pin
-  # lives. It used to be `if: matrix.name == 'x86_64'` on a step inside a
-  # three-leg matrix, which rendered on the board as a step that was
-  # skipped twice -- indistinguishable from a stage somebody had turned
-  # off. As a job with no matrix at all, there is exactly one leg, it is
-  # named for what it runs, and it is either green or red.
-  #
-  # This runs against the stock apt Wine installed below, which predates
-  # RtlCloneUserProcess -- so the tests that fork report rc=77
-  # (UNVERIFIED) here rather than a verdict. That is detected from each
-  # test's own output at run time, never from a static list, precisely
-  # so the number is visible and moves on its own when Wine gains the
-  # call. See tools/libc-test.sh's header.
   libc-test:
     needs: build-toolchain
     runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 20
     steps:
-      # submodules: recursive -- third_party/libc-test IS the corpus this
-      # job runs, and it is a submodule. Without this the directory is
-      # empty and tools/libc-test.sh exits 2 by design rather than
-      # skipping, so the flag is load-bearing here and nowhere else in
-      # this workflow. See third_party/README.md.
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      # The corpus is this job's input the way the test-exes artifact is
-      # windows-test's, so it gets the same treatment: arriving empty is
-      # a hard error with a message naming the cause, not a skip and not
-      # a pass. tools/libc-test.sh already exits 2 on an empty
-      # third_party/libc-test, and its VERIFIED_FLOOR then refuses to
-      # call a run that adjudicated almost nothing a success; this check
-      # is in front of both so that a checkout that did not bring the
-      # submodule says so in one line instead of being diagnosed from a
-      # build error 40 lines into another script.
-      - name: Assert the libc-test corpus actually arrived
-        run: |
-          if [ ! -f third_party/libc-test/COPYRIGHT ]; then
-            echo "FAILED: third_party/libc-test is empty -- the corpus this job exists to run did not arrive." >&2
-            echo "The checkout step above must keep 'submodules: recursive'." >&2
-            git submodule status || true
-            exit 1
-          fi
-          n=$(find third_party/libc-test/src -name '*.c' | wc -l)
-          echo "$n corpus source file(s) present"
-          if [ "$n" -eq 0 ]; then
-            echo "FAILED: third_party/libc-test/src holds no *.c; this job would verify nothing." >&2
-            exit 1
-          fi
-
-      - name: Restore tinycc toolchain
-        uses: actions/cache@v6
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
         with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
-      - name: Install Wine
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Set up Wine
+        uses: ./.github/actions/setup-wine
+      - name: Configure and build
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine wine32:i386 wine64
+          ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+          make -j"$(nproc)"
+      - name: Run libc-test corpus
+        run: make libc-test-pedantic
 
-      # --disable-kernel32, matching both the default build and
-      # tools/gate.sh's libc-test stage: the corpus exercises libc
-      # behaviour, not the console Ctrl-C handler that is the only thing
-      # behind NTLIBC_USE_KERNEL32.
-      - name: Configure
-        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
-
-      # `make libc-test` depends on $(ALL_LIBS), so this is not strictly
-      # required -- it is spelled out for the same reason tools/gate.sh's
-      # libc-test stage spells it out: a library build failure reads as a
-      # library build failure rather than as a corpus failure.
-      - name: Build
-        run: make -j"$(nproc)"
-
-      - name: libc-test corpus
-        run: make libc-test
-
-  # The Open POSIX Test Suite gap report's staleness-and-honesty check.
-  #
-  # NOT a pass/fail run of that suite. OPTS is a GAP oracle here, not a
-  # correctness one -- test/external-suites.md measured it catching zero
-  # of the five defects this project's own audits fenced -- and its
-  # output is a distribution, not a verdict. The 1019 tests that fail to
-  # compile are the product. A threshold on that distribution would be a
-  # number nobody could justify, so there is none.
-  #
-  # What this job asserts instead is narrow and checkable: that the
-  # checked-in test/POSIX-GAP-MAP.generated.md still matches the tree,
-  # and that the measurement behind it still discriminates -- census,
-  # partition, floors in BOTH directions, and two canaries. The lower
-  # floor is the one that matters: an -I that stopped pointing at the
-  # suite makes everything link and the gap read as CLOSED, which is good
-  # news shaped like a broken instrument. See tools/posix-gapmap.sh.
-  #
-  # A separate job from `libc-test` for the same reason `libc-test` is
-  # separate from `ntlibc-suite`: it is a different claim, about a
-  # different foreign suite, with a different meaning of failure.
-  # No Wine: nothing here is executed, only compiled and linked.
-  posix-gapmap:
-    needs: build-toolchain
-    runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either.
-    timeout-minutes: 20
-    steps:
-      # submodules: true, and deliberately NOT `recursive` -- do not
-      # "helpfully" change it. third_party/ltp IS the suite this job
-      # measures, so the flag is load-bearing: without it the directory
-      # is empty and tools/posix-gapmap.sh exits 2 by design. But LTP
-      # carries four nested submodules of its own -- testcases/kernel/
-      # mce-test and tools/sparse/sparse-src on **git.kernel.org**, plus
-      # ltx and kirk -- and the Open POSIX Test Suite reads none of the
-      # four. `recursive` would make this job's success depend on a host
-      # outside GitHub for content it never opens. A job that fetches
-      # exactly what it uses has one fewer way to fail for a reason
-      # unrelated to what it is testing. See third_party/README.md.
-      #
-      # fetch-depth: 0 because one of the invariants is that the SHA the
-      # report records is an ancestor of HEAD, and a shallow clone cannot
-      # answer that. tools/posix-gapmap.sh fails rather than skips when it
-      # cannot check -- "I could not check" and "it checks out" are
-      # different claims -- so a default checkout would turn this job red
-      # for the wrong reason.
-      - uses: actions/checkout@v7
-        with:
-          submodules: true
-          fetch-depth: 0
-
-      # The suite is this job's input the way the corpus is libc-test's,
-      # and gets the same treatment: arriving empty is a hard error with a
-      # message naming the cause, not a skip and not a pass. This matters
-      # more here than anywhere else in the workflow, because an absent
-      # suite does not produce an obviously-broken result -- it produces
-      # "0 blocked tests", which is indistinguishable from every gap
-      # having closed and is strictly more dangerous, being good news.
-      - name: Assert the OPTS suite actually arrived
-        run: |
-          d=third_party/ltp/testcases/open_posix_testsuite
-          if [ ! -f "$d/include/posixtest.h" ]; then
-            echo "FAILED: third_party/ltp is empty -- the suite this job exists to measure did not arrive." >&2
-            echo "The checkout step above must keep 'submodules: true'." >&2
-            git submodule status || true
-            exit 1
-          fi
-          n=$(find "$d/conformance/interfaces" -name '*.c' | wc -l)
-          echo "$n conformance test source file(s) present"
-          if [ "$n" -eq 0 ]; then
-            echo "FAILED: the suite holds no conformance tests; this job would measure nothing." >&2
-            exit 1
-          fi
-
-      - name: Restore tinycc toolchain
-        uses: actions/cache@v6
-        with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
-      # x86_64 only. The report is about which headers and interfaces
-      # exist, which is arch-independent here; running it twice would
-      # double the runtime and produce the same file.
-      - name: Configure
-        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
-
-      # Spelled out rather than left to the target's $(ALL_LIBS)
-      # prerequisite, for the same reason libc-test spells it out: a
-      # library build failure should read as a library build failure and
-      # not as the gap having grown to 1610.
-      - name: Build
-        run: make -j"$(nproc)"
-
-      - name: POSIX gap map is current and still discriminating
-        run: make posix-gapmap-check
-
-  # The other half of the sentence `posix-gapmap` starts.
-  #
-  # That job's comment ends "No Wine: nothing here is executed, only
-  # compiled and linked" -- which meant the 591 tests it classes as C,
-  # the ones that compile and link clean, had NEVER BEEN RUN. Nobody
-  # knew whether they passed. This job runs them.
-  #
-  # It does not relitigate the gap map's argument and does not weaken it.
-  # OPTS is still a GAP oracle here rather than a correctness one, its
-  # class distribution is still not a verdict, and there is still NO
-  # PASS-COUNT THRESHOLD anywhere -- a threshold on a distribution would
-  # be a number nobody could justify. But "do not threshold a count" was
-  # never an argument against EXECUTING the tests. Running 591 tests and
-  # recording which ones fail is a different act, and what this job gates
-  # on is REGRESSION: a test the checked-in
-  # test/POSIX-OPTS-RUN.generated.md records as PASS that no longer
-  # passes. Movement inside the not-PASS population appears in the diff
-  # and does not turn this red, because a gate that fires on every kind
-  # of movement is as useless as one that fires on none.
-  #
-  # A SEPARATE JOB rather than a step in `posix-gapmap`, for the reason
-  # that job gives for being separate from `libc-test`: it is a different
-  # claim, needing Wine, with a different meaning of failure. Keeping
-  # them apart also means a red here cannot be misread as the gap map
-  # having gone stale, and vice versa.
-  #
-  # WHY THIS IS NOT A NIGHTLY. It was expected to be one. Measured: 1 s
-  # to compile-and-link all 1610, and ~4-5 min to execute the 591 that
-  # link, serially, each three times. That is a fraction of this
-  # workflow's existing critical path, on a build `posix-gapmap` already
-  # performs, so splitting it off to a schedule would buy nothing and
-  # cost the property that makes it worth having -- that a regression is
-  # attributable to the push that caused it.
-  #
-  # WHY SERIAL. OPTS carries timing assertions (nanosleep, clock_*,
-  # sched_*), tools/libc-test.sh already measured Wine process startup
-  # under contention at 40x its idle cost, and this report is CHECKED IN
-  # so its diff is the whole signal. A timing test that flips under
-  # parallel load costs more than the parallelism saves.
-  #
-  # The thing this job is built to not become is the one this repository
-  # spent a day removing nine times over: a stage that reports success
-  # having measured nothing. "591 ran, 591 passed" from a harness that
-  # ran nothing looks exactly like success. tools/posix-optsrun.sh
-  # therefore refuses to start without the suite, without lib/libc.a, and
-  # -- the one that matters here -- without a Wine PROVEN to work, by
-  # building a known-good test and requiring it to actually come back
-  # PASS. A `command -v wine` check would have been vacuous: a Wine that
-  # starts and dies yields zero executions, zero failures, and a green
-  # job. And it refuses to report at all unless the number of recorded
-  # outcomes equals the number of tests that linked, so a sweep killed
-  # partway through fails instead of reading as a small clean result.
   posix-optsrun:
     needs: build-toolchain
     runs-on: ubuntu-24.04
-    # Generous against the measured ~5 min: 591 Wine executions on a
-    # cold runner, and a hung job otherwise occupies a runner until
-    # GitHub's 360-minute default. There is deliberately no
-    # `concurrency:` block (see above), so nothing cancels it either.
     timeout-minutes: 30
     steps:
-      # submodules: true and NOT `recursive`, and fetch-depth: 0, for
-      # exactly the reasons spelled out on the posix-gapmap job above --
-      # third_party/ltp IS the suite, LTP's four nested submodules are
-      # never read by it (two of them live on git.kernel.org), and the
-      # ancestry invariant cannot be answered from a shallow clone.
       - uses: actions/checkout@v7
         with:
           submodules: true
           fetch-depth: 0
-
-      # Same hard error as posix-gapmap's, and it matters MORE here: an
-      # absent suite does not produce an obviously-broken result, it
-      # produces a sweep of zero tests with zero failures.
-      - name: Assert the OPTS suite actually arrived
-        run: |
-          d=third_party/ltp/testcases/open_posix_testsuite
-          if [ ! -f "$d/include/posixtest.h" ]; then
-            echo "FAILED: third_party/ltp is empty -- the suite this job exists to run did not arrive." >&2
-            echo "The checkout step above must keep 'submodules: true'." >&2
-            git submodule status || true
-            exit 1
-          fi
-          n=$(find "$d/conformance/interfaces" -name '*.c' | wc -l)
-          echo "$n conformance test source file(s) present"
-          if [ "$n" -eq 0 ]; then
-            echo "FAILED: the suite holds no conformance tests; this job would run nothing." >&2
-            exit 1
-          fi
-
-      - name: Restore tinycc toolchain
-        uses: actions/cache@v6
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
         with:
-          path: ~/tinycc-install
-          key: tinycc-${{ env.TINYCC_SHA }}-${{ runner.os }}-v1
-
-      - name: Add tinycc to PATH
-        run: echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"
-
-      - name: Install Wine
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Set up Wine
+        uses: ./.github/actions/setup-wine
+      - name: Configure and build
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine wine32:i386 wine64
+          ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+          make -j"$(nproc)"
+      - name: Check runner invariants
+        run: ./tools/posix-opts.py selftest
+      - name: Run buildable Open POSIX Test Suite cases
+        run: make posix-optsrun-pedantic
 
-      # x86_64 only, and --disable-kernel32, matching the posix-gapmap
-      # job: the verdicts are about libc behaviour, not about the console
-      # Ctrl-C handler that is the only thing behind NTLIBC_USE_KERNEL32.
-      - name: Configure
-        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
-
-      # Spelled out rather than left to $(ALL_LIBS), for the same reason
-      # the neighbouring jobs spell it out: a library build failure
-      # should read as a library build failure and not as 591 tests
-      # having stopped linking.
-      - name: Build
-        run: make -j"$(nproc)"
-
-      # Proves the invariant checks themselves still fire, against
-      # synthetic inputs, before the real sweep is trusted. Cheap, and it
-      # is the difference between a guard and a comment.
-      - name: OPTS runner invariants still fire
-        run: ./tools/posix-optsrun.sh --selftest
-
-      - name: Open POSIX Test Suite runs with no regressions
-        run: make posix-optsrun-check
-
-  # Runs the exact same PE binaries `build-test-exes` compiled and that
-  # the `ntlibc-suite` job (for the non-*-win.c ones) runs under Wine -- the two
-  # legs consume the same artifact and run concurrently, so this one does
-  # not wait on the Wine verdict. This time on a real
-  # Windows machine. windows-latest is an x86_64 host; a plain i386 PE
-  # .exe runs on it transparently through WOW64 with no special setup --
-  # WOW64 is Windows' built-in compatibility layer specifically for
-  # running unmodified 32-bit x86 binaries on 64-bit Windows (see
-  # Microsoft's "WOW64 Implementation Details":
-  # https://learn.microsoft.com/en-us/windows/win32/winprog64/wow64-implementation-details).
   windows-test:
     needs: build-test-exes
     runs-on: windows-latest
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      # Mirrors the `build-test-exes` legs exactly (by artifact name, not
-      # just by arch) so a kernel32-enabled build gets proven against real
-      # Windows too, rather than only ever running under Wine's emulation
-      # of kernel32 -- Wine doesn't implement everything ntlibc might call
-      # (see the TEST_RUN comment in the Makefile), so this is the leg
-      # that actually matters for the Ctrl-C handler path.
-      matrix:
-        name: [i386, x86_64, x86_64-kernel32]
-    steps:
-      - name: Download test binaries
-        uses: actions/download-artifact@v8
-        with:
-          name: test-exes-${{ matrix.name }}
-          path: test-exes
-
-      - name: Run test binaries on real Windows
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $unverified = 0
-          $ran = 0
-          # The failing binaries by name, not a boolean.  Two reasons,
-          # both learned from one investigation (CI run 32796247127).
-          #
-          # First, it is the single source of truth for "did this leg
-          # fail": the exit decision below is `$failedNames.Count -gt 0`,
-          # so there is no separate flag that could be set without a name
-          # recorded, or a name recorded without the flag set.  The
-          # previous shape had exactly that seam, and while reading the
-          # step to prove the seam was never crossed cost an hour, the
-          # seam not existing costs nothing.
-          #
-          # Second, the summary can then name what failed.  It used to say
-          # only "One or more test binaries failed", leaving the identity
-          # in a `FAIL` line some 200 lines earlier -- above where GitHub's
-          # log view drops you, and interleaved with the test binaries'
-          # own output.  Looking for the answer where the answer should be,
-          # not finding it, and inferring a mechanism from its absence is
-          # what actually happened.  A named summary ends that in seconds.
-          $failedNames = @()
-          # Every line this step writes about itself is prefixed
-          # "harness:", because the test binaries it runs emit lines in the
-          # same vocabulary it does -- delayall.exe and rpath.exe each
-          # print a bare "PASS", and any assertion failure prints
-          # "FAIL <file>:<line>: <expr>".  Without a prefix `grep '^PASS'`
-          # over this step's log overcounts by two and `grep '^FAIL'` by
-          # two, so the log cannot be read by machine and is ambiguous to a
-          # human skimming it.  "harness:" rather than a sigil like "::"
-          # on purpose: it survives being pasted into a message, it is
-          # obvious to a reader who has never seen this file, and "::"
-          # would read as GitHub workflow-command syntax.
-          function Say($m) { Write-Host "harness: $m" }
-          # The artefact is rooted at obj/, so the test binaries are under
-          # test-exes/test and obj/sh/sh.exe arrives as test-exes/sh/sh.exe
-          # -- which is exactly the layout test/sh-main.c's find_sh() walks
-          # (up two from argv[0], down to sh\sh.exe). Checked rather than
-          # assumed: if a future upload-artifact changes how it picks the
-          # artefact root, the loop below would find no .exe and the $ran
-          # floor would report "this job verified nothing", which is true
-          # but says nothing about why. This says why.
-          foreach ($p in @("test-exes/test", "test-exes/sh/sh.exe")) {
-            if (-not (Test-Path $p)) {
-              Say "FAILED: expected $p in the downloaded artefact; its layout has changed"
-              Say "Downloaded tree:"
-              Get-ChildItem -Path test-exes -Recurse -Name | ForEach-Object { Say "  $_" }
-              exit 1
-            }
-          }
-          # Not -Recurse: sh.exe is a *fixture* for sh-main.exe, not a test.
-          # Running it as one would leave it reading this job's stdin.
-          Get-ChildItem -Path test-exes/test -Filter *.exe | Sort-Object Name | ForEach-Object {
-            $ran += 1
-            Say "Running $($_.Name)"
-            & $_.FullName
-            $rc = $LASTEXITCODE
-            if ($rc -eq 0) {
-              Say "PASS $($_.Name)"
-            } elseif ($rc -eq 77) {
-              # Same third outcome tools/runtests.sh and tools/asan-build.sh
-              # already recognise: the binary ran and nothing it could check
-              # failed, but some assertion group could not be verified in this
-              # environment (it printed SKIP lines saying which). Distinct from
-              # a pass, and deliberately not a failure.
-              Say "UNVERIFIED $($_.Name) (rc=77)"
-              $unverified += 1
-            } else {
-              Say "FAIL $($_.Name) (rc=$rc)"
-              # Assignment inside a ForEach-Object script block writes to
-              # the enclosing scope, not a child one -- which is why $ran
-              # above reaches the real count instead of resetting to 1
-              # every iteration.  The same is true here.
-              $failedNames += "$($_.Name) (rc=$rc)"
-            }
-          }
-          # A floor, for the same reason tools/runtests.sh and
-          # tools/asan-build.sh have one: $failedNames can only grow
-          # inside the loop body, so an empty test-exes/ directory runs
-          # the body zero times, leaves it empty, and exits 0 --
-          # this leg reporting green having executed nothing.  That is
-          # not hypothetical for a download step: a rename of the
-          # artifact, an upload that produced a differently-shaped
-          # directory, or a matrix leg whose artifact does not exist all
-          # end here.  The upload side is already guarded
-          # (if-no-files-found: error in build-test-exes); this is the
-          # download-and-run side, and it is the leg that caught the
-          # METHOD_BUFFERED IOCTL_AFD_SELECT bug, which no other leg
-          # could see.
-          Say "$ran test binary/binaries ran"
-          if ($ran -eq 0) {
-            Say "FAILED: no test binaries were found under test-exes/test/; this job verified nothing"
-            exit 1
-          }
-          if ($unverified -gt 0) {
-            Say "$unverified test binary/binaries reported unverified (rc=77)"
-          }
-          # @(...) so a single failure is still an array: PowerShell
-          # unrolls a one-element array in several contexts, and .Count on
-          # the bare string it would become is also 1, so this happens to
-          # be right either way -- written explicitly rather than relying
-          # on that coincidence.
-          $failedNames = @($failedNames)
-          if ($failedNames.Count -gt 0) {
-            Say "$($failedNames.Count) test binary/binaries failed:"
-            # Names only, no keyword.  "FAIL <name> (rc=)" is the loop's
-            # per-binary verdict and repeating it here would make
-            # `grep '^harness: FAIL '` count every failure twice, which is
-            # the same ambiguity the "harness:" prefix exists to remove --
-            # one level up, in the summary rather than in the vocabulary.
-            foreach ($f in $failedNames) { Say "  $f" }
-            exit 1
-          }
-
-  # Static checking that tcc does not do: gcc and clang strict-warning
-  # builds of the whole library for both arches, plus the clang static
-  # analyzer, cppcheck and shellcheck where installed. Strict on purpose
-  # -- `make lint` exits non-zero on any finding and nothing here is
-  # relaxed to keep the job green. It is expected to be RED until the
-  # open findings are worked off; a check that lies about the state of
-  # the tree is worse than one that is honestly failing.
-  #
-  # Independent of the tcc jobs: it never builds with tcc, so no `needs:`.
-  # One job per lint stage rather than one job running all five. Three
-  # reasons: a red board names the stage that failed instead of just
-  # "lint", so the logs are only needed for the detail; the stages are
-  # independent and now run in parallel, so wall-clock is the slowest
-  # stage (cppcheck, ~70s) rather than their sum (~140s); and each job
-  # installs only the tools it needs instead of every linter for every
-  # stage.
-  #
-  # fail-fast is off deliberately: one stage failing should not hide the
-  # state of the other four, which is exactly what made the last few
-  # lint failures take several rounds to work through.
-  lint:
-    runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
-          # gcc and clang strict-warning builds, both arches.
-          - stage: warn
-            packages: clang gcc-mingw-w64-i686 gcc-mingw-w64-x86-64
-          # clang-tidy, pinned: newer LLVM adds checks under the
-          # bugprone-*/cert-*/misc-*/clang-analyzer-* families this project
-          # enables, so an unpinned install makes the finding count -- and
-          # so whether this is green -- depend on which Ubuntu image is
-          # current rather than on the code.
-          - stage: analyze
-            packages: clang clang-tidy-18
-          - stage: cppcheck
-            packages: cppcheck
-          - stage: shell
-            packages: shellcheck
-          # Checks every function declared in include/ is defined
-          # somewhere; needs no tool beyond a shell.
-          - stage: undefined
-            packages: ""
-          # Unguarded (USHORT) narrowing casts -- the UNICODE_STRING.Length
-          # wrap class tools/lint-ushort.sh was written for.  Text-only,
-          # needs no tool beyond a shell, and takes half a second; it was
-          # simply never listed here, so the detector written to stop that
-          # bug recurring had never run in CI at all.
-          - stage: ushort
-            packages: ""
-          # Functions this library implements that no test/*.c even
-          # references.  Compiles every test/*.c natively and reads the
-          # undefined symbols, so it needs a native clang and nm (both
-          # already on ubuntu-24.04; clang is installed explicitly for
-          # the same reason the warn stage installs it).
-          - stage: unreferenced
-            packages: clang
-          # printf/scanf's z and t length modifiers must not be read as
-          # long, which is 32-bit on this LLP64 target.  Text-only,
-          # needs no tool beyond a shell.  printf.c's three sites were
-          # fixed in c200c7f, so tools/widthmod-known.txt is now empty
-          # and every LM_z/LM_t site in the tree is judged with nothing
-          # excused.  A NEW site fails; so does a known-list entry that
-          # outlives its defect, and so does a run that judged nothing.
-          - stage: widthmod
-            packages: ""
+          - { name: i386, arch: i386, kernel32: no }
+          - { name: x86_64, arch: x86_64, kernel32: no }
+          - { name: x86_64-kernel32, arch: x86_64, kernel32: yes }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download test binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: test-exes-${{ matrix.name }}
+          path: test-exes
+      - name: Report Windows version
+        shell: pwsh
+        run: |
+          $cv = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+          Write-Host "harness: leg=${{ matrix.name }} build=$($cv.CurrentBuild) UBR=$($cv.UBR) display=$($cv.DisplayVersion)"
+      - name: Run test binaries on real Windows
+        shell: pwsh
+        run: >-
+          python tools/run-tests.py --artifact-root test-exes
+          --profile runtime=windows --profile target_arch=${{ matrix.arch }}
+          --profile kernel32=${{ matrix.kernel32 }}
+
+  # linkcheck and hygiene were local-gate-only for their whole life, so a
+  # push could go red on `tools/gate.sh` and green here.  Both need the
+  # real $(CC) rather than a host compiler -- linkcheck's whole point is a
+  # genuine per-arch PE link, which is how `#define alloca __builtin_alloca`
+  # once shipped past every host-toolchain lint -- so they need the pinned
+  # tinycc, but neither needs Wine: nothing is executed.
+  linkcheck:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: i386-win32, cc: i386-win32-tcc }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc }
+    name: linkcheck (${{ matrix.host }})
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
+        with:
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Configure
+        run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --disable-kernel32
+      - name: Link every declared symbol
+        run: make -j"$(nproc)" linkcheck
+
+  # hdr-hygiene.sh sweeps both arches itself; the $(GENH) prerequisite just
+  # needs *a* configured arch to exist.
+  hygiene:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
+        with:
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+      - name: Compile every public header in isolation
+        run: make hygiene
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { stage: warn, packages: "clang gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
+          - { stage: analyze, packages: "clang clang-tidy-18" }
+          - { stage: cppcheck, packages: cppcheck }
+          - { stage: shell, packages: shellcheck }
+          - { stage: undefined, packages: "" }
+          - { stage: ushort, packages: "" }
+          - { stage: unreferenced, packages: clang }
+          - { stage: widthmod, packages: "" }
     name: lint (${{ matrix.stage }})
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install the tools this stage needs
+      - name: Install stage tools
         if: matrix.packages != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
-
-      # tools/lint.sh reads neither config.mak nor ARCH: it derives the
-      # arch list from arch/*/ and builds its own alltypes.h, so no
-      # ./configure and no cross toolchain are needed here.
-      # LINT_TIDY_EXACT=1 applies only to the analyze stage (the other
-      # stages ignore it): the point of pinning clang-tidy-18 here is
-      # that this job runs one known analysis, and .clang-tidy selects
-      # checks by wildcard, so without an equality assertion against
-      # tools/clang-tidy-checks.txt an image bump silently changes what
-      # "0 findings" means.  A tool offering more is drift the pin exists
-      # to prevent; a tool offering fewer is a weaker analysis reporting
-      # the same green.
-      - name: tools/lint.sh ${{ matrix.stage }}
+      - name: Run lint stage
         env:
           CLANG_TIDY: clang-tidy-18
           LINT_TIDY_EXACT: "1"
         run: tools/lint.sh ${{ matrix.stage }}
-
-      # Each stage writes its findings to obj/lint/*.log and prints only a
-      # count, so without these a red job says "1 finding" without saying
-      # which. Tool versions differ between here and a developer's machine
-      # -- every lint failure so far has been exactly that -- so these logs
-      # are often the only way to see what CI saw.
-      - name: Upload the ${{ matrix.stage }} logs
+      - name: Upload lint logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -1027,36 +265,18 @@ jobs:
           path: obj/lint/
           if-no-files-found: warn
 
-  # A second, native (Linux/ELF) build of the same src/*.c under
-  # AddressSanitizer and UBSan, running the test/*.c that do not need
-  # ntdll. This catches memory errors and undefined behaviour that the
-  # tcc/Wine build cannot see at all -- the LLONG_MIN negations in
-  # printf.c and scanf.c were both found this way, and both pass `make
-  # check` under tcc, which happens to emit the wrapping instruction.
-  #
-  # Also expected to be RED for now. Not relaxed.
   asan:
     runs-on: ubuntu-24.04
-    # A hung job otherwise occupies a runner until GitHub's 360-minute
-    # default. There is deliberately no `concurrency:` block (see above),
-    # so nothing cancels it either -- a test that hangs rather than fails
-    # blocked main for 25 minutes before being cancelled by hand.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-
       - name: Install clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
-
-      # $(GENH) is a concatenation of committed .h.gen files, so this
-      # needs no compiler -- only ARCH, which make takes on the command
-      # line. asan builds everything else natively with clang.
-      - name: make asan
+      - name: Run AddressSanitizer and UBSan suite
         run: make ARCH=x86_64 asan
-
-      - name: Upload the failing test output
+      - name: Upload failing test output
         if: failure()
         uses: actions/upload-artifact@v7
         with:

@@ -63,6 +63,7 @@
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
  * towctrans.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1153,7 +1154,7 @@ static void test_ungetwc(void)
 	remove("test.tmp");
 }
 
-#if 0	/* BUG: a file-positioning function does not discard ungetwc()
+#if NTLIBC_TEST(BUG, posix_wchar_ungetwc_discarded_by_positioning) /* BUG: a file-positioning function does not discard ungetwc()
 	 * pushback.  ungetwc.html DESCRIPTION: "A successful intervening
 	 * call (with the stream pointed to by stream) to a
 	 * file-positioning function (fseek(), fseeko(), fsetpos(), or
@@ -1986,7 +1987,7 @@ static void test_wctrans(void)
  * never report the *composed* character's true display width (e.g. 2
  * columns for most emoji) -- that clause is N/A, not merely unwritten.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL (declined, 2026-08-24): wcwidth()/wcswidth() --
+#if NTLIBC_TEST(UNIMPL, posix_wchar_wcwidth_bmp) /* UNIMPL (declined, 2026-08-24): wcwidth()/wcswidth() --
        * wcwidth.html DESCRIPTION, RETURN VALUE.  UNIMPL is the right
        * tag because this project's rule counts "I chose not to" as
        * UNIMPL; the assertions below are all satisfiable and are kept
@@ -2033,7 +2034,7 @@ static void test_wcwidth_bmp(void)
 /* C99 build, so the negative-array idiom rather than static_assert. */
 typedef char wcwidth_fence_needs_16bit_wchar_t[sizeof(wchar_t) == 2 ? 1 : -1];
 
-#if 0 /* N/A: wcwidth() -- wcwidth.html DESCRIPTION -- cannot report the
+#if NTLIBC_TEST(NA, posix_wchar_wcwidth_non_bmp) /* N/A: wcwidth() -- wcwidth.html DESCRIPTION -- cannot report the
        * true column width of a non-BMP character.  Such a character is
        * two wchar_t (a UTF-16 surrogate pair, e.g. U+1F600 GRINNING
        * FACE = 0xd83d 0xde00); wcwidth() takes a single wchar_t, so it

@@ -23,6 +23,7 @@
  * deliberately starts with an empty environ, so both branches are
  * exercised for real depending on which harness runs this file.
  */
+#include "test-policy.h"
 #include <grp.h>
 #include <sys/utsname.h>
 #include <sys/times.h>
@@ -837,7 +838,7 @@ static void test_times_children(void)
 	 *
 	 * Detected by measuring, not by asking which platform this is, so
 	 * it needs no version test and cannot go stale when Wine fixes it.
-	 * rc=77 (tools/runtests.sh: UNVERIFIED) rather than a silent skip:
+	 * rc=77 (tools/run-tests.py: UNVERIFIED) rather than a silent skip:
 	 * a run that could not check the clause must not read like one
 	 * that did. */
 	if (timeval_to_clockticks(&ru_child.ru_utime) < BURN_CHILD_TICKS) {
@@ -1105,9 +1106,10 @@ static void test_writev_all_zero(void)
  * <pthread.h> in the tree), so a two-thread race cannot be written in
  * this library's own terms.  That makes it unasserted, not
  * inapplicable. */
-#if 0 /* UNIMPL: XSH 2.9.7 readv()/writev() atomicity -- a documented
+#if NTLIBC_TEST(NA, posix_grp_readv_writev_thread_atomicity) /* N/A: XSH 2.9.7 readv()/writev() atomicity -- a documented
        * design choice in src/misc/uio.c, not a platform limit; see
-       * above. */
+       * above. No assertion can be made until this project has a thread
+       * creation interface; an empty compilable fence is not a BUG test. */
 #endif
 
 /* ================================================================== */

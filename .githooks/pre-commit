@@ -2,15 +2,10 @@
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Regenerates everything in this tree that is generated *and* committed --
-# the expanded bits/*.h.gen headers, boot/kaem/build-$(ARCH).kaem, and the
-# two gap reports under test/ -- and blocks the commit if that changes
-# anything, so an edit to a bits/*.h.in DSL source, a source-file
-# add/remove/rename, or a header that moves what this library implements
-# can never be committed with a stale generated file sitting alongside it.
-# See CONTRIBUTING.md's "kaem bootstrap build path" and "Merging a
-# generated report" sections. This mirrors the "Regenerate generated
-# files and check for drift" step in .github/workflows/ci.yml.
+# Regenerates the files that are both generated and committed: the expanded
+# bits/*.h.gen headers and boot/kaem/build-$(ARCH).kaem.  The external-suite
+# reports are CI artefacts now, so they deliberately do not participate in
+# commits or merges.
 #
 # Enabled automatically by ./configure; to enable by hand:
 #   git config core.hooksPath .githooks
@@ -18,6 +13,10 @@
 set -e
 
 cd "$(git rev-parse --show-toplevel)"
+
+# Fence syntax and stable case IDs need no configured compiler.  Catch a
+# malformed or ambiguous disposition before it reaches any of the runners.
+./tools/test-policy.py validate >/dev/null
 
 # tools/gen-alltypes.sh is a pure function of the source tree (no CC, no
 # ARCH, no config.mak), so this half always runs, configured or not.
@@ -56,102 +55,8 @@ if [ -n "$conflicted" ]; then
 	echo "pre-commit: it again.  Never 'git add' straight after a resolve." >&2
 	exit 1
 fi
-
-# ---------------------------------------------------- the gap reports
-#
-# test/POSIX-GAP-MAP.generated.md and test/LIBC-TEST-MAP.generated.md are
-# generated and committed too, and they go stale for a reason nothing
-# else here does: not an edit to them, but a header or a symbol landing
-# somewhere else in the tree.  spawn.h landing is what put both of CI's
-# staleness stages red, from two commits that never touched either file.
-#
-# WHAT THIS COSTS, MEASURED
-#
-# On a 24-core box, from a built tree: the full re-measurement is ~6.0s
-# for posix-gapmap (it compiles all 1610 OPTS conformance tests) and
-# ~1.3s for libc-test-map, plus ~0.2s for the `make` in front of them.
-# The cheap half -- re-rendering both reports from the data blocks they
-# carry, which compiles nothing -- is ~2.8s and ~0.3s, and needs neither
-# the submodules, nor config.mak, nor a build.
-#
-# ~7.5s is inside the budget of a hook people will actually leave
-# enabled, so this does the real measurement whenever it can rather than
-# only re-rendering.  What it will not do is pay it for a commit that
-# cannot possibly have moved either number: the exemption list below is
-# deliberately tiny and stated as an exemption, so that anything not on
-# it -- anything at all that could touch a header or a symbol -- gets
-# measured.  Being wrong in the direction of doing the work is cheap
-# here; being wrong the other way is a stale report.
-#
-# WHEN THE SUBMODULE IS NOT THERE
-#
-# Neither generator can measure anything without its submodule
-# (third_party/ltp, third_party/libc-test), and a hook that failed the
-# commit over that would be intolerable in a clone made without
-# --recurse-submodules.  But silently doing nothing is the staleness bug
-# with extra steps.  So: re-render from the data block (which needs no
-# submodule at all, and still catches a hand-edited report, a template
-# change, and a truncated data block), and say plainly what was checked
-# and what was not.  "I could not measure this" and "this measures out"
-# are different claims and this hook never conflates them.
-
-report_render() {
-	# $1 tool, $2 report path, $3 submodule path
-	if ! "./tools/$1.sh" --render >/dev/null 2>"$hookw/err"; then
-		echo "pre-commit: ./tools/$1.sh --render failed:" >&2
-		sed 's/^/pre-commit:   /' "$hookw/err" >&2
-		echo "pre-commit: $2 cannot be re-rendered from its own data" >&2
-		echo "pre-commit: block.  Regenerate it with 'make $1'." >&2
-		return 1
-	fi
-	if ! git diff --quiet -- "$2"; then
-		echo "pre-commit: $2 does not match its own data block." >&2
-		echo "pre-commit: Re-rendering it changed the file, which means it" >&2
-		echo "pre-commit: was hand-edited, or the renderer changed under it." >&2
-		echo "pre-commit: Review the diff, 'git add $2' and commit again." >&2
-		return 1
-	fi
-	return 0
-}
-
-# Is the recorded ntlibc stamp one this tree can stand behind?  Returns 0
-# if it is, non-zero if the report needs re-measuring, in which case the
-# expensive path runs regardless of what is staged.
-#
-# The test is the engine's sm_check_provenance, restated: a stamp must be
-# present, must be a full object name, and must not be the `unknown` that
-# tools/merge-gendata.sh writes after resolving a merge.  That last is
-# the one state where re-rendering alone would be actively misleading --
-# the file would keep claiming a measurement that never happened -- so it
-# forces a real one.
-#
-# It deliberately does NOT ask whether the stamp is an ancestor of HEAD,
-# which is what it used to ask.  Work is landed here by rebasing, so a
-# report measured in a branch is stamped with a commit that no longer
-# exists once that branch is pushed; asking for ancestry made this
-# function answer "re-measure" on essentially every commit after a
-# rebase, and made the gate stage red outright.  See "provenance" in
-# tools/suitemap-engine.sh.
-report_sha_ok() {
-	# shellcheck disable=SC2016  # a sed script, and Markdown backticks in it
-	sha=$(sed -n 's/^| ntlibc | `\(.*\)` |$/\1/p' "$1" | head -1)
-	[ -n "$sha" ] || return 1
-	[ "$sha" != unknown ] || return 1
-	[ "${#sha}" -eq 40 ] || return 1
-	case $sha in *[!0-9a-f]*) return 1 ;; esac
-	return 0
-}
-
-hookw=$(mktemp -d)
-trap 'rm -rf "$hookw"' EXIT
-
-report_render posix-gapmap   test/POSIX-GAP-MAP.generated.md || exit 1
-report_render libc-test-map  test/LIBC-TEST-MAP.generated.md || exit 1
-
 if [ ! -f config.mak ]; then
-	# Nothing configured yet, so there is no CC/ARCH to hand gen-kaem.sh
-	# and no build to measure the gap reports against; the re-render above
-	# is everything that can be checked without one.
+	# Nothing configured yet, so there is no CC/ARCH to hand gen-kaem.sh.
 	exit 0
 fi
 
@@ -163,79 +68,3 @@ if ! git diff --quiet -- boot/kaem/; then
 	echo "pre-commit: 'git add boot/kaem/' and commit again." >&2
 	exit 1
 fi
-
-# Does anything staged make a re-measurement worth its seconds?  Stated
-# as an exemption list, not an inclusion list: these are the only paths
-# that provably cannot change what this C library implements.  Everything
-# else -- every header, every source file, every submodule bump, the
-# generators themselves -- gets measured.
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
-relevant=0
-for f in $staged; do
-	case $f in
-	*.md|LICENSES/*|COPYING|README*|renovate.json5|.github/*|.githooks/*) ;;
-	*) relevant=1 ;;
-	esac
-done
-report_sha_ok test/POSIX-GAP-MAP.generated.md  || relevant=1
-report_sha_ok test/LIBC-TEST-MAP.generated.md  || relevant=1
-
-[ "$relevant" -eq 1 ] || exit 0
-
-# config.mak was already required above for `make kaem`, so by here it
-# exists; a build is needed too, and is cheap.
-make >/dev/null 2>"$hookw/err" || {
-	echo "pre-commit: 'make' failed, so the gap reports cannot be" >&2
-	echo "pre-commit: re-measured.  This is a build error, not a" >&2
-	echo "pre-commit: measurement.  Fix the build, or commit with" >&2
-	echo "pre-commit: --no-verify and expect CI to catch the report." >&2
-	sed 's/^/pre-commit:   /' "$hookw/err" >&2
-	exit 1
-}
-
-report_measure() {
-	# $1 tool, $2 report path, $3 submodule path, $4 make target
-	if [ ! -d "$3" ] || [ -z "$(ls -A "$3" 2>/dev/null)" ]; then
-		echo "pre-commit: NOT MEASURED -- $3 is not checked out, so" >&2
-		echo "pre-commit:   $2" >&2
-		echo "pre-commit:   was re-rendered from its own data block but NOT" >&2
-		echo "pre-commit:   re-measured against this tree.  If this commit" >&2
-		echo "pre-commit:   moves a header or a symbol, that report is now" >&2
-		echo "pre-commit:   stale and CI will say so.  To measure it here:" >&2
-		echo "pre-commit:     git submodule update --init --recursive" >&2
-		echo "pre-commit:     make $4" >&2
-		return 0
-	fi
-	# `make $4-check`, NOT `make $4` followed by `git diff`.
-	#
-	# The recorded ntlibc SHA legitimately trails HEAD between
-	# regenerations -- a report generated during commit N records N, and
-	# is committed as part of N+1 -- so a raw `git diff` of the file sees
-	# that row move on EVERY commit and calls the report stale when
-	# nothing about the gap has changed.  That would demand a report
-	# regeneration alongside every code commit, which is churn, and a
-	# hook that is red for no reason is a hook somebody turns off.  This
-	# was not hypothetical: it blocked the commit that introduced it.
-	#
-	# --check is the comparison that already gets this right. It strips
-	# both places the SHA appears, diffs everything else, and vets the
-	# stamp separately -- which is also what the gate stage runs, so
-	# the hook and the gate now agree by construction rather than by
-	# coincidence.  It writes nothing, so the hook no longer silently
-	# rewrites a tracked file either.
-	if ! make "$4-check" >/dev/null 2>"$hookw/err"; then
-		echo "pre-commit: $2 is stale, or its own invariants fail." >&2
-		sed 's/^/pre-commit:   /' "$hookw/err" >&2
-		echo "pre-commit: That diff is the changelog entry for whatever this" >&2
-		echo "pre-commit: commit changes -- review it, then:" >&2
-		echo "pre-commit:     make $4 && git add $2" >&2
-		echo "pre-commit: and commit again." >&2
-		return 1
-	fi
-	return 0
-}
-
-report_measure posix-gapmap  test/POSIX-GAP-MAP.generated.md \
-	third_party/ltp posix-gapmap || exit 1
-report_measure libc-test-map test/LIBC-TEST-MAP.generated.md \
-	third_party/libc-test libc-test-map || exit 1

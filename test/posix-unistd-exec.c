@@ -35,6 +35,7 @@
  * non-PE image, which the real-Windows legs are the authority on.
  */
 #define _GNU_SOURCE
+#include "test-policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,7 +103,7 @@ static void test_enoexec(void)
 		CHECK(close(fd) == 0);
 	}
 
-#if 0	/* UNIMPL: execvp()/execlp() do not fall back to a command
+#if NTLIBC_TEST(BUG, posix_unistd_exec_execvp_interpreter_fallback) /* BUG: execvp() does not fall back to a command
 	 * interpreter.
 	 *
 	 * exec.html DESCRIPTION: "There are two distinct ways in which the
@@ -128,15 +129,19 @@ static void test_enoexec(void)
 	 * and execlp("./ex-text.sh") both return -1 with errno 8
 	 * (ENOEXEC), where the clause requires the shell to run.
 	 *
-	 * UNIMPL, not N/A: this tree now *has* a shell -- src/sh/ and the
-	 * `sh` binary -- so <shell path> exists and the fallback is a
-	 * re-exec of it, not a platform impossibility.  "I chose not to"
-	 * is UNIMPL by this project's rule.  Re-enabling this needs the
-	 * role harness in test/exec.c rather than an in-process call,
-	 * since a working fallback does not return; what is written here
-	 * is the observation that identifies the gap. */
+	 * A successful fallback does not return: the script becomes the
+	 * process image and exits zero.  Any return therefore fails this
+	 * independent policy probe. */
 	errno = 0;
-	CHECK(execvp("./ex-text.sh", av) == -1 && errno == ENOEXEC);
+	CHECK(execvp("./ex-text.sh", av) != -1);
+#endif
+
+#if NTLIBC_TEST(BUG, posix_unistd_exec_execlp_interpreter_fallback) /* BUG: execlp() has the same required interpreter fallback and the
+	 * same missing ENOEXEC branch.  Keep it as a separate case because
+	 * fixing either p-form makes a successful call replace this process,
+	 * so the two expectations cannot be exercised sequentially. */
+	errno = 0;
+	CHECK(execlp("./ex-text.sh", "ex-text.sh", (char *)0) != -1);
 #endif
 
 	CHECK(unlink("ex-text.sh") == 0);
@@ -158,7 +163,7 @@ static void test_enoexec(void)
 static void test_path_errors(void)
 {
 	char *av[2];
-	int fd;
+	int fd, r;
 
 	av[0] = (char *)"x";
 	av[1] = 0;
@@ -208,35 +213,83 @@ static void test_path_errors(void)
 	CHECK(execl("ex-plain.txt/prog", "x", (char *)0) == -1 && errno == ENOTDIR);
 	reached++;
 
-#if 0	/* BUG: the PATH-searching forms report [EBADF] for an empty
-	 * file argument instead of [ENOENT].
-	 *
-	 * exec.html ERRORS: "The exec functions, except for fexecve(),
-	 * *shall* fail if: ... [ENOENT] A component of path or file does
-	 * not name an existing file or path or file is an empty string."
-	 * The v/l forms get this right (asserted unfenced above); the
-	 * p-forms do not.
-	 *
-	 * Mechanism: src/process/exec.c:62 computes
-	 *     use_path = !strchr(file, '/') && !strchr(file, '\\');
-	 * which is true for "", so __find_program("", 1)
-	 * (src/process/find_program.c) runs the PATH search with an empty
-	 * name.  try_dir() then builds `<PATH entry>\` -- a directory
-	 * name, with nothing appended -- and accepts it, because
-	 * `access(p, X_OK)` succeeds on a directory
-	 * (src/unistd/access.c).  execvp("") therefore resolves to the
-	 * first directory in PATH and tries to execute *that*, and the
-	 * errno the caller sees is whatever spawning a directory produces
-	 * (see the fence below).  The empty string is a case
-	 * __find_program() has to reject before the loop, exactly as
-	 * exec.html requires.  Probed on this tree: execvp("", av) and
-	 * execlp("", "x", 0) both return -1 with errno 9 (EBADF).
-	 * Re-enable when the p-forms reject an empty file argument. */
+	/* The same clause reaches the p-forms through their PATH search.
+	 * `use_path` in src/process/exec.c's execvpe() is true for "" --
+	 * an empty name has no <slash> -- so the empty string has to be
+	 * rejected by __find_program() (src/process/find_program.c)
+	 * before the PATH loop runs.  It cannot be left to the loop: an
+	 * empty name makes try_dir() build `<PATH entry>\`, a directory
+	 * name with nothing appended, which `access(p, X_OK)` accepts
+	 * (src/unistd/access.c), so execvp("") would resolve to the first
+	 * directory in PATH and report whatever spawning a directory
+	 * produces rather than [ENOENT]. */
 	errno = 0;
 	CHECK(execvp("", av) == -1 && errno == ENOENT);
+	reached++;
 	errno = 0;
 	CHECK(execlp("", "x", (char *)0) == -1 && errno == ENOENT);
-#endif
+	reached++;
+
+	/* Positive control for the two assertions above.  "Reject the
+	 * empty string" is a requirement a resolver could satisfy by
+	 * failing every lookup, and every other p-form assertion in this
+	 * function wants ENOENT too, so on its own the group cannot tell
+	 * a working PATH search from one that refuses outright.  This
+	 * pins the other side: a name that *is* in a PATH directory must
+	 * still be found, and must fail for a reason that is not
+	 * [ENOENT].
+	 *
+	 * The name is put on PATH rather than found there, because the
+	 * search is over the Windows PATH (';'-separated, no current
+	 * directory implied) and nothing this test can execute is on it.
+	 * An empty entry means the current directory, as on Unix -- which
+	 * is this test's own temporary directory, since main() chdir()s
+	 * into it -- so prepending one is enough.  The file is the same
+	 * non-PE text image the [ENOEXEC] group above uses, so the
+	 * resolver succeeding is visible as ENOEXEC: found, not runnable.
+	 * (Same oracle caveat as that group: ENOEXEC comes from
+	 * RtlCreateUserProcess, so the windows-test legs are the
+	 * authority on the exact errno.  The load-bearing half here is
+	 * that it is not ENOENT.) */
+	{
+		const char *oldpath = getenv("PATH");
+		char *saved = oldpath ? strdup(oldpath) : 0;
+		CHECK(!oldpath || saved != NULL);
+
+		fd = open("ex-onpath.sh", O_CREAT | O_WRONLY | O_TRUNC, 0755);
+		CHECK(fd >= 0);
+		if (fd >= 0) {
+			CHECK(write(fd, "#!/bin/sh\necho hello\n", 21) == 21);
+			CHECK(close(fd) == 0);
+
+			{
+				size_t n = saved ? strlen(saved) : 0;
+				char *withdot = malloc(n + 2);
+				CHECK(withdot != NULL);
+				if (withdot) {
+					withdot[0] = ';';   /* leading empty entry == "." */
+					memcpy(withdot + 1, saved ? saved : "", n + 1);
+					CHECK(setenv("PATH", withdot, 1) == 0);
+					free(withdot);
+				}
+			}
+
+			errno = 0;
+			r = execvp("ex-onpath.sh", av);
+			printf("observed: execvp(\"ex-onpath.sh\") = %d, errno=%d "
+			       "(must not be %d ENOENT; %d ENOEXEC under Wine)\n",
+			       r, errno, ENOENT, ENOEXEC);
+			CHECK(r == -1 && errno != ENOENT);
+			reached++;
+			errno = 0;
+			CHECK(execlp("ex-onpath.sh", "x", (char *)0) == -1 && errno != ENOENT);
+			reached++;
+
+			if (saved) CHECK(setenv("PATH", saved, 1) == 0);
+			CHECK(unlink("ex-onpath.sh") == 0);
+		}
+		free(saved);
+	}
 
 	CHECK(unlink("ex-plain.txt") == 0);
 }
@@ -264,7 +317,7 @@ static void test_not_a_regular_file(void)
 	CHECK(execve("./ex-dir", av, environ) == -1);
 	reached++;
 
-#if 0	/* BUG: executing a directory reports [EBADF], which is not one
+#if NTLIBC_TEST(BUG, posix_unistd_exec_directory_reports_eacces) /* BUG: executing a directory reports [EBADF], which is not one
 	 * of the errnos exec.html lists for it.
 	 *
 	 * exec.html ERRORS: "The exec functions *shall* fail if: ...
@@ -424,7 +477,7 @@ int main(void)
 	 * Reported as rc=77 "unverified" rather than as a pass, and
 	 * rather than as an entry in tools/asan-build.sh's not_native()
 	 * table -- the SKIP-plus-77 route needs no change to the runner
-	 * and is the mechanism tools/runtests.sh, tools/asan-build.sh and
+	 * and is the mechanism tools/run-tests.py, tools/asan-build.sh and
 	 * CI's PowerShell loop all already honour (test/posix-socket.c is
 	 * the model).  The PE build under `make check`, and the
 	 * real-Windows CI legs, are where these clauses are checked. */
@@ -450,11 +503,11 @@ int main(void)
 
 	/* Every call this file makes is one POSIX requires to fail, so
 	 * reaching here at all is the "calling process image remains
-	 * unchanged" clause holding 19 times over.  The count is asserted
+	 * unchanged" clause holding 23 times over.  The count is asserted
 	 * rather than left implicit so that an exec which silently started
 	 * *succeeding* -- and therefore never returned -- cannot be
 	 * mistaken for a shorter run that passed. */
-	CHECK(reached == 19);
+	CHECK(reached == 23);
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);

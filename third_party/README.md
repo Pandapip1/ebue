@@ -176,7 +176,7 @@ arrangement had been careful to keep out of the tree entirely.
 | upstream | `https://github.com/linux-test-project/ltp` |
 | what this project reads | `testcases/open_posix_testsuite/conformance/interfaces/` — 1610 tests in 190 directories |
 | licence | GPLv2+, with some BSD-2 files — see below |
-| driver | `tools/posix-gapmap.sh`, report `test/POSIX-GAP-MAP.generated.md` |
+| driver | `tools/posix-opts.py`, ledger `test/posix-opts-expected.txt` |
 
 ### Provenance of the remote
 
@@ -206,7 +206,7 @@ Measured:
 |---|---|
 | full clone, git objects | **77 MB** over **18 370** commits |
 | working tree at `4c0cfb8` | 47 MB |
-| what `tools/posix-gapmap.sh` and `tools/posix-optsrun.sh` read | `testcases/open_posix_testsuite/`, **14 MB** |
+| what `tools/posix-opts.py` reads | `testcases/open_posix_testsuite/`, **14 MB** |
 | `git submodule update --init --recursive` from a fresh clone | **5.5 s**, +7 MB for LTP's own four nested submodules |
 
 So the arrangement fetches roughly nine times what it uses. Three ways
@@ -252,25 +252,22 @@ and `tools/kirk/kirk-src`. `git submodule update --init --recursive`
 recurses into all four; measured above at 5.5 s and 7 MB, so it is not
 worth working around locally.
 
-CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-gapmap` and
-`posix-optsrun` jobs check out with `submodules: true`, not
-`recursive`, because OPTS needs
+CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-optsrun` job
+checks out with `submodules: true`, not `recursive`, because OPTS needs
 none of the four and two of them live on a host outside GitHub. A job
 that fetches exactly what it reads has one fewer way to fail for a reason
 unrelated to what it is testing.
 
 ### Nothing here is compiled into anything shipped
 
-`tools/posix-gapmap.sh` compiles the 1610 conformance tests to
-throwaway PEs in a `mktemp -d` and deletes them, and
-`tools/posix-optsrun.sh` does the same and additionally *executes* the
-591 that link, each in its own throwaway working directory under the
-same `mktemp -d`; nothing under
+`tools/posix-opts.py` compiles the 1610 conformance tests to throwaway
+PEs in a `mktemp -d` and *executes* the 591 that link, each in its own
+throwaway working directory under that same `mktemp -d`, then deletes
+all of it; nothing under
 `third_party/ltp/` is linked into `lib/`, installed, or shipped. LTP
 proper — the 1396 kernel syscall tests — is never touched at all: its
 framework reads `/proc` in 19 places and wants root, mounts and cgroups,
-which `test/external-suites.md` records as the reason LTP itself is
-unusable here even though the suite inside it is not.
+which are unavailable when testing a Windows-targeting libc.
 
 ### Licence, and why there is no `REUSE.toml` stanza
 
@@ -305,20 +302,14 @@ reintroduce by inertia:
 cd third_party/ltp
 git fetch origin && git checkout <new-sha>
 cd ../.. && git add third_party/ltp
-make posix-gapmap                      # regenerate the gap report
-make posix-optsrun                     # regenerate the run report
+make posix-optsrun-pedantic            # probe the measured Wine/x86_64 profile
 ```
 
-Expect `tools/posix-gapmap.sh`'s census invariant to fire if the new
-revision adds or removes tests: `CENSUS_TESTS` and `CENSUS_DIRS` are
-pinned constants and moving them is a deliberate edit, reviewed in the
-same commit as the SHA. That is the point — see that script's header.
-`tools/posix-optsrun.sh` pins `CENSUS_TESTS` too, and moving the pin
-must move both in the one commit.
-
-Regenerate the gap report **first**. `posix-optsrun` cross-checks the
-number of tests that link against the class-C count in the checked-in
-`test/POSIX-GAP-MAP.generated.md` and refuses to report if the two
-disagree — if the two tools disagree about what can be built at all,
-one of them is describing a tree that is not this one, and both reports
-are suspect.
+Expect this to fail if the new revision adds or removes tests, and that
+is the point. `tools/posix-opts.py` refuses to measure unless the
+discovered sources number exactly `CENSUS` **and** the discovered set
+equals the annotated set, so a new upstream case is a hard error until
+somebody gives it a disposition — it cannot arrive unnoticed and dilute
+the result. Bump `CENSUS`, annotate the new cases in
+`test/posix-opts-expected.txt`, and review both in the same commit as
+the SHA.
