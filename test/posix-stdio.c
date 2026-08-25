@@ -760,6 +760,62 @@ static void test_getc_unlocked(const char *name)
  * Filesystem-adjacent (it names a path under the temp directory and
  * src/stdio/misc.c reaches mkstemp() to pick one), so real-Windows CI
  * is the authority; Wine agreeing is weak evidence. */
+#if 0	/* BUG: tmpnam() hands back the name of a file it has just
+	 * created.  tmpnam.html DESCRIPTION: "The tmpnam() function shall
+	 * generate a string that is a valid pathname that does not name an
+	 * existing file."  The whole point of the guarantee is that the
+	 * caller can go on to create the file -- typically with
+	 * O_CREAT|O_EXCL, which is the only safe way to use a name this
+	 * function produces.
+	 *
+	 * Mechanism: src/stdio/misc.c's tmpnam() calls mkstemp() on a
+	 * "tmpnam_XXXXXX" template, closes the fd, and returns the name.
+	 * mkstemp() *creates* the file, and unlike its neighbour tempnam()
+	 * three functions further down -- which does `close(fd);
+	 * unlink(tmpl);` for exactly this reason -- tmpnam() never unlinks
+	 * it.  Two consequences: an O_CREAT|O_EXCL create on the returned
+	 * name fails with [EEXIST], and every call leaves a zero-byte
+	 * tmpnam_* file in the current working directory.
+	 *
+	 * The existing coverage shows it inadvertently: test/stdio.c's
+	 * tmpnam case does `nm = tmpnam(0); CHECK(remove(nm) == 0);` on a
+	 * name nothing ever opened, and that remove() succeeds -- it can
+	 * only succeed because tmpnam() left a file there.  The row in
+	 * test/POSIX-COVERAGE.md covers uniqueness, L_tmpnam sizing and
+	 * removed-on-close, not this clause.
+	 *
+	 * The fix is tempnam()'s: unlink after close.  (Keeping the
+	 * mkstemp() call is what keeps successive names distinct, which is
+	 * the reason the current code creates at all, so the fix does not
+	 * cost that.)  Re-enable when tmpnam() stops leaving the file
+	 * behind. */
+static void test_tmpnam_does_not_create(void)
+{
+	char buf[L_tmpnam];
+	char *a, *b;
+	struct stat st;
+	int fd;
+
+	a = tmpnam(buf);
+	CHECK(a == buf);
+	if (!a) return;
+
+	/* "a valid pathname that does not name an existing file" */
+	CHECK(stat(a, &st) == -1);
+
+	/* which is what makes the documented use -- an exclusive create on
+	 * the returned name -- work rather than collide with itself. */
+	fd = open(a, O_CREAT | O_EXCL | O_WRONLY, 0600);
+	CHECK(fd >= 0);
+	if (fd >= 0) { CHECK(close(fd) == 0); CHECK(remove(a) == 0); }
+
+	/* and the internal-buffer form must behave the same way */
+	b = tmpnam(NULL);
+	CHECK(b != 0);
+	if (b) CHECK(stat(b, &st) == -1);
+}
+#endif
+
 static void test_tempnam(void)
 {
 	char *a, *b;
