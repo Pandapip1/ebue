@@ -1021,9 +1021,18 @@ static void test_renameat_ebusy(void)
        * ENOSPC -- would require filling the volume (N/A).
        * ELOOP  -- NT resolves reparse points itself and answers
        *           STATUS_REPARSE_POINT_NOT_RESOLVED, which
-       *           src/internal/errno.c does map to ELOOP; building a
-       *           symlink loop needs SeCreateSymbolicLinkPrivilege,
-       *           which the test environment does not have (N/A here).
+       *           src/internal/errno.c does map to ELOOP.  A symlink
+       *           loop cannot be built on the CI leg's Wine, but NOT
+       *           for the SeCreateSymbolicLinkPrivilege reason this
+       *           line used to give: measured, the create succeeds and
+       *           FSCTL_SET_REPARSE_POINT answers 0xc00000bb
+       *           STATUS_NOT_SUPPORTED, because Ubuntu ships wine-9.0
+       *           and that ioctl arrived in wine-10.19.  It works on a
+       *           current Wine.  See test_fchmodat_eloop()'s fence
+       *           below for the measured statuses, why this is a Wine
+       *           version gap rather than a bug on either side, and
+       *           why the privilege question stays open for genuine
+       *           Windows (N/A on this runner only).
        * ENAMETOOLONG -- reachable and mapped: __ntpath_at() returns it
        *           for a name past __US_MAX_WCHARS.  Left fenced only
        *           because the clause is about a single *component*
@@ -1374,12 +1383,84 @@ static void test_fchmodat_eperm(void)
  * resolution of the path argument", and may fail "[ELOOP] More than
  * {SYMLOOP_MAX} symbolic links were encountered during resolution of the
  * path argument." */
-#if 0 /* N/A: creating a symbolic link on NT needs
+#if 0 /* N/A on the CI leg's Wine ONLY, and the reason previously
+       * recorded here was false.  This is the canonical account of the
+       * symlink gap; the [ELOOP] line in test_renameat_misc_errors()
+       * above points here rather than repeating it.
+       *
+       * The old reason: "creating a symbolic link on NT needs
        * SeCreateSymbolicLinkPrivilege, which this suite's environment
        * does not hold (and Wine's default prefix does not grant), so no
-       * loop can be built to resolve.  src/internal/errno.c does map
-       * STATUS_REPARSE_POINT_NOT_RESOLVED to ELOOP, so the report path
-       * exists. */
+       * loop can be built to resolve."  MEASURED, and no privilege
+       * check is involved in the observed failure at all.
+       *
+       * Stock apt Wine -- wine-9.0 (Ubuntu 9.0~repack-4build3), which
+       * is what the CI leg installs:
+       *
+       *   NtCreateFile (the placeholder, isdir=0 and isdir=1)
+       *                                       0x00000000  SUCCESS
+       *   NtFsControlFile FSCTL_SET_REPARSE_POINT
+       *                                       0xc00000bb  NOT_SUPPORTED
+       *
+       * Locally built Wine at 91292d82c (wine-11.16):
+       *
+       *   NtCreateFile                        0x00000000
+       *   FSCTL_SET_REPARSE_POINT             0x00000000
+       *   and symlinkat() returns 0 with the links present on disk.
+       *
+       * So the create SUCCEEDS and the ioctl IS reached.  Nothing
+       * answered STATUS_PRIVILEGE_NOT_HELD or STATUS_ACCESS_DENIED, so
+       * the EPERM arm src/unistd/link.c has for a denied privilege
+       * never ran.  The privilege was never the observed blocker.
+       *
+       * The actual cause is a Wine VERSION gap, not a bug on either
+       * side.  Reparse-point support -- the filesystem feature symbolic
+       * links are built on -- arrived in wine-10.19, released
+       * 2025-11-14 and headlined for exactly that; Ubuntu ships 9.0,
+       * which predates it by about a year.  So wine-9.0's
+       * default_fd_ioctl() has no FSCTL_SET_REPARSE_POINT case and
+       * falls through to set_error(STATUS_NOT_SUPPORTED), which is
+       * precisely the 0xc00000bb measured.  ntlibc's sequence is
+       * correct and works unmodified on a current Wine, so there is
+       * nothing to fix in this tree, and the Wine side is already fixed
+       * upstream.
+       *
+       * Provenance, since a version boundary is the kind of detail that
+       * rots into a confident wrong number.  Confirmed on this machine:
+       * `wine --version` reports wine-9.0 (Ubuntu 9.0~repack-4build3);
+       * a current Wine checkout does handle FSCTL_SET_REPARSE_POINT, in
+       * server/fd.c beside the FSCTL_DISMOUNT_VOLUME case that is the
+       * only one 9.0 had; and wine-10.19 is independently documented as
+       * the reparse-point release.  RELAYED from the session that took
+       * the measurements above, and NOT re-derivable here because the
+       * local Wine clone is shallow and carries no 9.0 tag: the commit
+       * 95f83739d "server: Implement FSCTL_SET_REPARSE_POINT", and the
+       * 9.0 line number server/fd.c:2409.  Treat those two as the
+       * citation to re-check first if this paragraph is ever doubted.
+       *
+       * Do NOT read ENOSYS as evidence of STATUS_NOT_IMPLEMENTED here.
+       * src/internal/errno.c:82-84 maps THREE statuses onto ENOSYS --
+       * NOT_IMPLEMENTED, NOT_SUPPORTED and INVALID_DEVICE_REQUEST -- so
+       * the ENOSYS a caller sees is the correct rendering of
+       * 0xc00000bb, and back-inferring the status from the errno loses
+       * exactly the distinction that matters.
+       *
+       * STILL OPEN, and deliberately not answered here: whether
+       * SeCreateSymbolicLinkPrivilege is the real blocker on GENUINE
+       * Windows without Developer Mode.  That is plausible and
+       * untested; no measurement in this tree bears on it.  It belongs
+       * on the real-Windows leg, and until someone runs it there the
+       * privilege question is UNCERTAIN rather than settled either way.
+       *
+       * EXPIRY, and it is close: this fence holds only while the Wine
+       * on the runner is older than 10.19.  Moving these assertions
+       * from unverified to verified on the Wine leg is a runner
+       * configuration change -- the WineHQ repository rather than
+       * `apt install wine` -- and needs no code change on either side.
+       *
+       * The report path was never in question and remains correct:
+       * src/internal/errno.c maps STATUS_REPARSE_POINT_NOT_RESOLVED to
+       * ELOOP. */
 static void test_fchmodat_eloop(void)
 {
 	CHECK(symlink("l2", "chm.d/l1") == 0);
