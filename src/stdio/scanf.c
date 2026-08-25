@@ -599,19 +599,19 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
 			case 's': {
 				if (lm == LM_l) {
 					wchar_t *ws = assign ? va_arg(ap, wchar_t *) : 0;
-					mbstate_t st;
+					mbstate_t mbs;
 					int nn = 0, nb = 0;
-					memset(&st, 0, sizeof st);
+					memset(&mbs, 0, sizeof mbs);
 					c = skipspace(&sc);
 					if (c == EOF) { gotEOF = 1; goto done; }
 					for (; c != EOF && !isspace(c) && (width < 0 || nb < width); c = rd(&sc)) {
-						if (wide_put(c, ws, &nn, &st, assign) < 0) { ilseq = 1; goto done; }
+						if (wide_put(c, ws, &nn, &mbs, assign) < 0) { ilseq = 1; goto done; }
 						nb++;
 					}
 					unrd(&sc, c);
 					/* a sequence left half-finished is an encoding error
 					 * too: there are no more bytes that could complete it */
-					if (!mbsinit(&st)) { ilseq = 1; goto done; }
+					if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
 					if (nb == 0) goto done;
 					if (assign) { ws[nn] = 0; nmatched++; }
 					break;
@@ -634,7 +634,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
 			case 'c': {
 				if (lm == LM_l) {
 					wchar_t *ws = assign ? va_arg(ap, wchar_t *) : 0;
-					mbstate_t st;
+					mbstate_t mbs;
 					/* fscanf.html's c entry: "Matches a sequence of bytes
 					 * of the number specified by the field width (1 if no
 					 * field width is present)" -- the width is a BYTE
@@ -644,14 +644,14 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
 					 * the spec this suite audits against and it says
 					 * bytes.)  No null byte is added, here or below. */
 					int w = width < 0 ? 1 : width, nb, nn = 0;
-					memset(&st, 0, sizeof st);
+					memset(&mbs, 0, sizeof mbs);
 					for (nb = 0; nb < w; nb++) {
 						c = rd(&sc);
 						if (c == EOF) break;
-						if (wide_put(c, ws, &nn, &st, assign) < 0) { ilseq = 1; goto done; }
+						if (wide_put(c, ws, &nn, &mbs, assign) < 0) { ilseq = 1; goto done; }
 					}
 					if (nb == 0) { gotEOF = 1; goto done; }
-					if (!mbsinit(&st)) { ilseq = 1; goto done; }
+					if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
 					if (assign) nmatched++;
 					break;
 				}
@@ -694,18 +694,18 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
 					/* fp now at the closing ']'; the outer loop steps past it */
 				}
 				if (lm == LM_l) {
-					mbstate_t st;
+					mbstate_t mbs;
 					int nb = 0;
 					nn = 0;
-					memset(&st, 0, sizeof st);
+					memset(&mbs, 0, sizeof mbs);
 					c = rd(&sc);
 					while (c != EOF && (set[(unsigned char)c] != 0) != neg && (width < 0 || nb < width)) {
-						if (wide_put(c, (wchar_t *)s, &nn, &st, assign) < 0) { ilseq = 1; goto done; }
+						if (wide_put(c, (wchar_t *)s, &nn, &mbs, assign) < 0) { ilseq = 1; goto done; }
 						nb++;
 						c = rd(&sc);
 					}
 					unrd(&sc, c);
-					if (!mbsinit(&st)) { ilseq = 1; goto done; }
+					if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
 					if (nb == 0) { if (c == EOF) gotEOF = 1; goto done; }
 					if (assign) { ((wchar_t *)s)[nn] = 0; nmatched++; }
 					break;
