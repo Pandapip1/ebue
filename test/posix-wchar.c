@@ -39,7 +39,7 @@
  * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
  * wscanf, open_wmemstream, wcwidth, wcswidth,
- * wcstod, wcstof, wcstold, wcsftime.  Confirmed *present*
+ * wcstod, wcstof, wcstold.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -51,7 +51,8 @@
  * wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp, wcscasecmp_l,
  * wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul, wcstoull, and
  * (src/string/wcscoll.c, wcsxfrm.c) wcscoll, wcscoll_l, wcsxfrm,
- * wcsxfrm_l, plus (src/stdlib/mbrtowc.c) mbsnrtowcs and wcsnrtombs.  Also now present, as
+ * wcsxfrm_l, plus (src/stdlib/mbrtowc.c) mbsnrtowcs and wcsnrtombs and
+ * (src/time/wcsftime.c) wcsftime.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1542,10 +1543,11 @@ static void test_wcsxfrm(void)
 
 /* ---------------------------------------------------------------------
  * wcsftime -- wcsftime.html
+ * Implemented in src/time/wcsftime.c, by walking the wide format and
+ * calling strftime() once per conversion specifier -- not by formatting
+ * the whole thing into bytes and widening, which cannot honour a
+ * maxsize counted in wide characters.  See that file's header.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcsftime() -- wcsftime.html DESCRIPTION, RETURN VALUE.
-       * Formats only ASCII digits/letters into wchar_t units, same
-       * granularity as strftime(); no surrogate involvement. */
 static void test_wcsftime(void)
 {
 	wchar_t buf[32];
@@ -1561,8 +1563,75 @@ static void test_wcsftime(void)
 	/* "If the total number of resulting characters ... is not more
 	 * than maxsize, [...] Otherwise, zero is returned." */
 	CHECK(wcsftime(buf, 4, W("%Y-%m-%d"), &tm) == 0);
+	/* the boundary: the count INCLUDING the terminating null must fit */
+	CHECK(wcsftime(buf, 11, W("%Y-%m-%d"), &tm) == 10);
+	CHECK(wcsftime(buf, 10, W("%Y-%m-%d"), &tm) == 0);
+	/* maxsize 0 cannot even hold the terminating null */
+	CHECK(wcsftime(buf, 0, W(""), &tm) == 0);
+
+	/* Ordinary characters "shall be copied unchanged into the array",
+	 * and %% produces a single '%'. */
+	CHECK(wcsftime(buf, 32, W("a%%b"), &tm) == 3);
+	CHECK(!wcscmp(buf, W("a%b")));
+
+	/* strftime()'s own grammar, mirrored: an unrecognised specifier is
+	 * passed through literally, and a trailing '%' is dropped.  Pinned
+	 * here so wcsftime() and strftime() cannot drift apart. */
+	CHECK(wcsftime(buf, 32, W("[%q]"), &tm) == 4);
+	CHECK(!wcscmp(buf, W("[%q]")));
+	CHECK(wcsftime(buf, 32, W("ab%"), &tm) == 2);
+	CHECK(!wcscmp(buf, W("ab")));
+
+	/* %n and %t are a <newline> and a <tab>. */
+	CHECK(wcsftime(buf, 32, W("%n%t"), &tm) == 2);
+	CHECK(buf[0] == L'\n' && buf[1] == L'\t');
+
+	/* THE COUNT IS IN WIDE CHARACTERS, NOT BYTES.  Three U+00E9
+	 * literals are three wide characters but six UTF-8 bytes, so an
+	 * implementation that budgeted maxsize in bytes would fail this
+	 * where POSIX requires it to succeed. */
+	{
+		static const wchar_t acc[4] = { 0xe9, 0xe9, 0xe9, 0 };
+		CHECK(wcsftime(buf, 4, acc, &tm) == 3);
+		CHECK(buf[0] == 0xe9 && buf[2] == 0xe9 && buf[3] == 0);
+		CHECK(wcsftime(buf, 3, acc, &tm) == 0);
+	}
+
+	/* A conversion specifier whose letter is not a single-byte
+	 * character cannot be spelled in strftime()'s byte format at all.
+	 * strftime()'s answer for an unrecognised specifier is to emit the
+	 * '%' and the character literally, and wcsftime() must agree. */
+	{
+		static const wchar_t oddspec[3] = { L'%', 0xe9, 0 };
+		CHECK(wcsftime(buf, 32, oddspec, &tm) == 2);
+		CHECK(buf[0] == L'%' && buf[1] == 0xe9 && buf[2] == 0);
+	}
+
+	/* A specifier whose EXPANSION is non-ASCII: %Z copies tm's zone
+	 * name (src/time/strftime.c), so a zone name holding U+1F600 --
+	 * four UTF-8 bytes -- must arrive as exactly two wchar_t, the
+	 * UTF-16 surrogate pair, and be counted as two.  This is the case
+	 * that separates a correct wide-character count from a byte count:
+	 * an implementation formatting into bytes and widening afterwards
+	 * has to get this conversion right, and one budgeting maxsize in
+	 * bytes gets the count wrong by two. */
+	tm.__tm_zone = "\xf0\x9f\x98\x80";
+	CHECK(wcsftime(buf, 32, W("%Z"), &tm) == 2);
+	CHECK(buf[0] == 0xd83d && buf[1] == 0xde00 && buf[2] == 0);
+	/* and the maxsize test counts those two, not the four bytes */
+	CHECK(wcsftime(buf, 3, W("%Z"), &tm) == 2);
+	CHECK(wcsftime(buf, 2, W("%Z"), &tm) == 0);
+	tm.__tm_zone = 0;
+
+	/* A supplementary character in the format is two wchar_t (a UTF-16
+	 * surrogate pair) and must be copied through as two, unmangled --
+	 * it is a literal, so it never goes near a conversion. */
+	{
+		static const wchar_t emoji[3] = { 0xd83d, 0xde00, 0 };
+		CHECK(wcsftime(buf, 32, emoji, &tm) == 2);
+		CHECK(buf[0] == 0xd83d && buf[1] == 0xde00 && buf[2] == 0);
+	}
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * mbsnrtowcs / wcsnrtombs -- mbsnrtowcs.html, wcsnrtombs.html
@@ -1780,6 +1849,7 @@ int main(void)
 	test_wcsxfrm();
 	test_mbsnrtowcs();
 	test_wcsnrtombs();
+	test_wcsftime();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

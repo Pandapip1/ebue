@@ -17,6 +17,7 @@ extern "C" {
 #define __NEED_wint_t
 #define __NEED_mbstate_t
 #define __NEED_locale_t
+#define __NEED_struct_tm
 
 #include <bits/alltypes.h>
 
@@ -71,6 +72,8 @@ size_t mbsrtowcs (wchar_t *__restrict, const char **__restrict, size_t, mbstate_
 size_t wcsrtombs (char *__restrict, const wchar_t **__restrict, size_t, mbstate_t *__restrict);
 size_t mbsnrtowcs (wchar_t *__restrict, const char **__restrict, size_t, size_t, mbstate_t *__restrict);
 size_t wcsnrtombs (char *__restrict, const wchar_t **__restrict, size_t, size_t, mbstate_t *__restrict);
+
+size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict);
 
 int wcscoll (const wchar_t *, const wchar_t *);
 int wcscoll_l (const wchar_t *, const wchar_t *, locale_t);

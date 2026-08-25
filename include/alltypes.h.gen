@@ -181,6 +181,36 @@ struct timespec { time_t tv_sec; long tv_nsec; };
 #endif
 
 
+/* <time.h>'s BSD/GNU spelling of struct tm's two reserved-namespace
+ * members.  These #defines have to precede the struct definition, and
+ * therefore have to live wherever the struct does: while struct tm was
+ * defined in time.h below them they worked by position, and moving the
+ * struct here without them would have silently produced a struct with
+ * __tm_gmtoff/__tm_zone members in any translation unit that reached
+ * the struct through a header other than <time.h> -- two incompatible
+ * layouts of the same type, which is the exact ODR trap the shared
+ * definition exists to prevent.  (src/time/gmtime.c and localtime.c
+ * caught this immediately when it was got wrong.) */
+#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
+#define __tm_gmtoff tm_gmtoff
+#define __tm_zone tm_zone
+#endif
+
+/* struct tm lived in <time.h> alone until <wchar.h> needed it too:
+ * wchar.h.html requires <wchar.h> to declare struct tm as a COMPLETE
+ * type (for wcsftime()), not merely to forward-declare it, so a caller
+ * may write `struct tm tm;` having included only <wchar.h>.  Sharing it
+ * through the __NEED_/__DEFINED_ mechanism is how this tree already
+ * handles a type two headers must agree on; a second definition in
+ * wchar.h would be a silent ODR trap the first time either one gained
+ * a field.  The __tm_gmtoff/__tm_zone members are the reserved-namespace
+ * extensions strftime()'s %z/%Z read (src/time/strftime.c). */
+#if defined(__NEED_struct_tm) && !defined(__DEFINED_struct_tm)
+struct tm { int tm_sec; int tm_min; int tm_hour; int tm_mday; int tm_mon; int tm_year; int tm_wday; int tm_yday; int tm_isdst; long __tm_gmtoff; const char *__tm_zone; };
+#define __DEFINED_struct_tm
+#endif
+
+
 /* POSIX puts struct sched_param in <sched.h>; ntlibc's <sched.h>
  * deliberately declares nothing from the _POSIX_PRIORITY_SCHEDULING
  * option group, so the only header that defines it today is <spawn.h>,

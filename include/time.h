@@ -20,6 +20,7 @@ extern "C" {
 #define __NEED_time_t
 #define __NEED_clock_t
 #define __NEED_struct_timespec
+#define __NEED_struct_tm
 
 #if defined(_POSIX_SOURCE) || defined(_POSIX_C_SOURCE) \
  || defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) \
@@ -32,24 +33,6 @@ extern "C" {
 
 #include <bits/alltypes.h>
 
-#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
-#define __tm_gmtoff tm_gmtoff
-#define __tm_zone tm_zone
-#endif
-
-struct tm {
-	int tm_sec;
-	int tm_min;
-	int tm_hour;
-	int tm_mday;
-	int tm_mon;
-	int tm_year;
-	int tm_wday;
-	int tm_yday;
-	int tm_isdst;
-	long __tm_gmtoff;
-	const char *__tm_zone;
-};
 
 clock_t clock (void);
 time_t time (time_t *);
