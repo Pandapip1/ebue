@@ -421,28 +421,53 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 	return 0;
 }
 
-int __vfscanf(FILE *f, const char *fmt, va_list ap)
+/* ------------------------------------------------------------------
+ * FORMAT CURSOR
+ *
+ * The directive scanner below reads its format through gf() and steps
+ * by `st` bytes rather than dereferencing a char*, so that one scanner
+ * serves both fscanf() (st == 1, a byte format) and, once the wide
+ * entry points exist, fwscanf() (st == sizeof(wchar_t)).  Every
+ * character a conversion specification can contain is ASCII, and the
+ * <ctype.h> functions used here are range tests that are false above
+ * 0x7f (src/ctype/isspace.c and friends), so a wide format unit of
+ * 0x1234 behaves exactly as a non-directive byte does -- no
+ * wide-specific classification is needed or wanted.
+ *
+ * The cursor was renamed from `p` to `fp` in the same change, and
+ * deliberately: renaming it makes any site that still dereferences the
+ * old pointer directly fail to COMPILE rather than silently read one
+ * byte of a wide format unit.  A stride refactor whose misses are
+ * invisible at st == 1 is exactly the kind that ships a latent bug.
+ * ------------------------------------------------------------------ */
+static unsigned gf(const char *q, int st)
+{
+	return st == 1 ? (unsigned)(unsigned char)*q
+	               : (unsigned)*(const wchar_t *)(const void *)q;
+}
+
+static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
 	int nmatched = 0, gotEOF = 0, ilseq = 0;
-	const char *p = fmt;
+	const char *fp = fmt;
 	int c = 0;
 	struct sc sc;
 
 	sc_init(&sc, f);
-	for (; *p; p++) {
-		if (isspace((unsigned char)*p)) {
+	for (; gf(fp, st); fp += st) {
+		if (isspace((int)gf(fp, st))) {
 			c = skipspace(&sc);
 			unrd(&sc, c);
 			continue;
 		}
-		if (*p != '%') {
+		if (gf(fp, st) != '%') {
 			c = rd(&sc);
 			if (c == EOF) { gotEOF = 1; goto done; }
-			if (c != *p) { unrd(&sc, c); goto done; }
+			if ((unsigned)c != gf(fp, st)) { unrd(&sc, c); goto done; }
 			continue;
 		}
-		p++;
-		if (*p == '%') {
+		fp += st;
+		if (gf(fp, st) == '%') {
 			c = rd(&sc);
 			if (c == EOF) { gotEOF = 1; goto done; }
 			if (c != '%') { unrd(&sc, c); goto done; }
@@ -451,23 +476,23 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 
 		{
 			int assign = 1, width = -1, lm = LM_NONE;
-			if (*p == '*') { assign = 0; p++; }
-			while (*p >= '0' && *p <= '9') { if (width < 0) width = 0; width = width * 10 + (*p++ - '0'); }
+			if (gf(fp, st) == '*') { assign = 0; fp += st; }
+			while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { if (width < 0) width = 0; width = width * 10 + (int)(gf(fp, st) - '0'); fp += st; }
 			for (;;) {
-				if (*p == 'h') { lm = lm == LM_h ? LM_hh : LM_h; p++; }
-				else if (*p == 'l') { lm = lm == LM_l ? LM_ll : LM_l; p++; }
-				else if (*p == 'j') { lm = LM_j; p++; }
-				else if (*p == 'z') { lm = LM_z; p++; }
-				else if (*p == 't') { lm = LM_t; p++; }
-				else if (*p == 'L') { lm = LM_L; p++; }
+				if (gf(fp, st) == 'h') { lm = lm == LM_h ? LM_hh : LM_h; fp += st; }
+				else if (gf(fp, st) == 'l') { lm = lm == LM_l ? LM_ll : LM_l; fp += st; }
+				else if (gf(fp, st) == 'j') { lm = LM_j; fp += st; }
+				else if (gf(fp, st) == 'z') { lm = LM_z; fp += st; }
+				else if (gf(fp, st) == 't') { lm = LM_t; fp += st; }
+				else if (gf(fp, st) == 'L') { lm = LM_L; fp += st; }
 				else break;
 			}
 
-			switch (*p) {
+			switch ((int)gf(fp, st)) {
 			case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
-				int base = (*p == 'o') ? 8 : (*p == 'x' || *p == 'X') ? 16 : 10;
-				int autodetect = *p == 'i';
-				int issigned = *p == 'd' || *p == 'i';
+				int base = (gf(fp, st) == 'o') ? 8 : (gf(fp, st) == 'x' || gf(fp, st) == 'X') ? 16 : 10;
+				int autodetect = gf(fp, st) == 'i';
+				int issigned = gf(fp, st) == 'd' || gf(fp, st) == 'i';
 				int neg = 0, any = 0, ovf = 0;
 				unsigned long long uv = 0;
 				struct fld fl;
@@ -652,21 +677,21 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				 * and cast at the point of use. */
 				char *s = assign ? va_arg(ap, char *) : 0;
 				int neg = 0, nn = 0;
-				p++;
-				if (*p == '^') { neg = 1; p++; }
+				fp += st;
+				if (gf(fp, st) == '^') { neg = 1; fp += st; }
 				{
-					const char *start = p;
+					const char *start = fp;
 					do {
-						if (*p == '-' && p[1] && p[1] != ']' && p != start) {
-							int a = (unsigned char)p[-1], b = (unsigned char)p[1], k;
-							for (k = a; k <= b; k++) set[k] = 1;
-							p += 2;
+						if (gf(fp, st) == '-' && gf(fp + st, st) && gf(fp + st, st) != ']' && fp != start) {
+							unsigned a = gf(fp - st, st), b = gf(fp + st, st), k;
+							if (a < 256 && b < 256) for (k = a; k <= b; k++) set[k] = 1;
+							fp += 2 * st;
 						} else {
-							set[(unsigned char)*p] = 1;
-							p++;
+							if (gf(fp, st) < 256) set[gf(fp, st)] = 1;
+							fp += st;
 						}
-					} while (*p && *p != ']');
-					/* p now at the closing ']'; the outer for(;*p;p++) will step past it */
+					} while (gf(fp, st) && gf(fp, st) != ']');
+					/* fp now at the closing ']'; the outer loop steps past it */
 				}
 				if (lm == LM_l) {
 					mbstate_t st;
@@ -743,6 +768,11 @@ done:
 	 * ferror() can tell it apart from end-of-file. */
 	if (ilseq) { f->err = 1; errno = EILSEQ; return EOF; }
 	return (nmatched == 0 && gotEOF) ? EOF : nmatched;
+}
+
+int __vfscanf(FILE *f, const char *fmt, va_list ap)
+{
+	return vfscanf_st(f, fmt, ap, 1);
 }
 
 int vfscanf(FILE *__restrict f, const char *__restrict fmt, __isoc_va_list ap)
