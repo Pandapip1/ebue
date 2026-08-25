@@ -575,11 +575,11 @@ static void test_chown_family(void)
 	/* fchownat()'s [EINVAL] ("The value of the flag argument is not
 	 * valid") is a *may*-fail on chown.html, not a shall-fail, so
 	 * accepting an undefined flag bit is permitted here and is not
-	 * fenced -- unlike unlinkat(), whose flag masking test/
-	 * posix-unistd.c's test_unlinkat() fences, because unlinkat.html
-	 * makes its [EINVAL] a shall-fail and because there the accepted
-	 * bit changes what the call *does*.  fchownat() does nothing
-	 * either way. */
+	 * fenced -- unlike unlinkat(), whose flag masking was a bug and is
+	 * fixed (test/posix-unistd.c's test_unlinkat() asserts it), because
+	 * unlink.html makes its [EINVAL] a shall-fail and because there the
+	 * accepted bit changed what the call *did*.  fchownat() does
+	 * nothing either way. */
 	CHECK(fchownat(AT_FDCWD, "chf.txt", (uid_t)-1, (gid_t)-1, 0x9999) == 0);
 
 	CHECK(unlink("chf.txt") == 0);

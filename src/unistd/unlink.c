@@ -53,4 +53,14 @@ int __unlink_at(int dirfd, const char *path, int isdir)
 
 int unlink(const char *path) { return __unlink_at(AT_FDCWD, path, 0); }
 int rmdir(const char *path) { return __unlink_at(AT_FDCWD, path, 1); }
-int unlinkat(int dirfd, const char *path, int flags) { return __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }
+
+/* AT_REMOVEDIR is the only flag unlinkat() defines, and unlink.html's
+ * "[EINVAL] (unlinkat() only) The value of the flag argument is not
+ * valid" is a shall-fail: every other bit has to be refused rather than
+ * masked off, or a caller who passes the wrong AT_* constant gets a
+ * deletion instead of a diagnostic. */
+int unlinkat(int dirfd, const char *path, int flags)
+{
+	if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }
+	return __unlink_at(dirfd, path, flags & AT_REMOVEDIR);
+}
