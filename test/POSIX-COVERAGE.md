@@ -4313,3 +4313,298 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## sys/statvfs.h and fcntl.h's advisory pair (group W)
+
+`statvfs()`/`fstatvfs()` and `posix_fadvise()`/`posix_fallocate()`,
+clause by clause against `functions/statvfs.html`,
+`functions/fstatvfs.html`, `functions/posix_fadvise.html`,
+`functions/posix_fallocate.html`, `basedefs/sys_statvfs.h.html` and
+`basedefs/fcntl.h.html`. Implementations: `src/stat/statvfs.c` and
+`src/fcntl/fadvise.c`; headers `include/sys/statvfs.h` and
+`include/fcntl.h`; new audit file `test/posix-statvfs.c`.
+
+Counts, said separately because they disagree: **25 clause rows** in the
+table below, **2 `#if 0` fences** (one clause each), **4 new live
+assertion groups**. Neither ledger recorded either fence.
+`POSIX-COVERAGE.md` is keyed by test function and
+`POSIX-GAP-ACCOUNTING.md` by subject, so both were searched both ways —
+by function name (`statvfs`, `fstatvfs`, `posix_fadvise`,
+`posix_fallocate`), by header (`sys/statvfs.h`, `fcntl.h`) and by
+subject in prose (`ELOOP`, "Advisory Information", allocation). What
+`POSIX-GAP-ACCOUNTING.md` has for the second finding is a *different*
+statement — `posix_fallocate()`'s allocation clauses listed as `rc=77`
+**unverified on i386** — which is about a test not running, not about
+the guarantee being dropped where it does run.
+
+This is a **re-audit of already-audited functions**, and most of what
+these four pages say was already asserted — by `test/posix-sysmisc.c`
+(every `struct statvfs` member, the `[ENOENT]`/`[ENOTDIR]`/`[EBADF]`
+errors), by `test/posix-tail.c` (all six advice values, the
+error-number return, six of `posix_fallocate()`'s error clauses, and two
+fenced `posix_fadvise()` BUGs), and by `test/unistd.c`. The new file
+asserts only the residue and duplicates none of it. The two clauses that
+came back unreached are the same shape: **a clause no test could have
+caught, because the observable a test would look at is identical whether
+the clause is honoured or not.**
+
+The first is `statvfs()`'s `[ELOOP]`, which every existing `[ELOOP]` row
+in this file records as N/A on an environment argument — this suite
+cannot create a symbolic link, so no loop can be built. That is true and
+it hides that the library could not answer the clause even if it could
+build one. The second is `posix_fallocate()`'s storage-reservation
+guarantee, the only clause on its page that a plain `ftruncate()` would
+not also satisfy, and which `src/fcntl/fadvise.c` deliberately drops —
+while returning zero — whenever NT refuses `FileAllocationInformation`.
+
+Both `<fcntl.h>` interfaces are optional: each page's APPLICATION USAGE
+says the function "is part of the Advisory Information option and need
+not be provided on all implementations", and both NAME lines are tagged
+"(ADVANCED REALTIME)". The margin markers themselves are not visible in
+the rendering used for this audit and are **not** guessed at. ntlibc
+ships both, so both are held to their pages in full.
+
+Evidence discipline, since nothing here could be built or run by its
+author: every factual claim is a line of `src/` quoted with its file, a
+grep given with a **positive control** proving the query finds things of
+that shape, or a measurement attributed to the file that records it.
+Where the tree holds two records that disagree, that is said and no
+claim is built on either — see the caution in 2 below.
+
+| function | clause | status | test |
+|---|---|---|---|
+| statvfs / fstatvfs | DESCRIPTION — "shall obtain information about the file system containing the file referenced by *fildes*" / "named by *path*"; "the *buf* argument is a pointer to a **statvfs** structure that shall be filled"; "Read, write, or execute permission of the named file is not required" (`src/stat/statvfs.c` opens with `FILE_READ_ATTRIBUTES`, the NT mask that asks for none of the three) | covered | test/posix-sysmisc.c `test_statvfs` |
+| `struct statvfs` members | `sys_statvfs.h.html` — the eleven members it "shall include at least", and "It is unspecified whether all members of the **statvfs** structure have meaningful values on all file systems" | covered — all eleven present with the standard's types. `f_files`/`f_ffree`/`f_favail` are a documented zero under that sentence and are **not re-opened**; the counter-argument was considered and rejected, see 3 below | test/posix-sysmisc.c `test_statvfs` |
+| `f_flag` | `sys_statvfs.h.html` — "unsigned long f_flag Bit mask of f_flag values", and the two constants: "ST_RDONLY Read-only file system", "ST_NOSUID Does not support the semantics of the ST_ISUID and ST_ISGID file mode bits" | covered — `ST_NOSUID` set unconditionally (asserted in `test/posix-sysmisc.c`) is a **true** claim rather than a default. `ST_RDONLY` is the one bit that is a real query — `src/stat/statvfs.c` sets it from `FILE_READ_ONLY_VOLUME` or `FILE_READ_ONLY_DEVICE` and from nothing else — and is newly pinned **clear** on a volume the test has just written a byte to, which is the half `test/posix-sysmisc.c` says in terms that it does not assert. Also pinned: the two are distinct single bits, and `f_flag` carries no third bit (an ntlibc invariant, not a clause — POSIX permits further bits) | test/posix-statvfs.c `test_statvfs_flag_bits` |
+| statvfs ERRORS | *shall fail* "[ENOENT] A component of *path* does not name an existing file or *path* is an empty string"; "[ENOTDIR] A component of the path prefix names an existing file that is neither a directory nor a symbolic link to a directory, or ..." | covered | test/posix-sysmisc.c `test_statvfs_errors` |
+| statvfs ERRORS | *shall fail* "[ENAMETOOLONG] The length of a component of a pathname is longer than {NAME_MAX}" | covered — newly asserted for this page. Reached through `src/internal/path.c`'s `__name_too_long()`, the library-wide per-component check landed in `36cec4c`, not through anything in `statvfs()` itself; the assertion also pins that a component of exactly `{NAME_MAX}` bytes is *not* rejected, so the check is not simply refusing everything | test/posix-statvfs.c `test_statvfs_enametoolong` |
+| statvfs ERRORS | *may fail* "[ENAMETOOLONG] The length of a pathname exceeds {PATH_MAX}, or pathname resolution of a symbolic link produced an intermediate result with a length that exceeds {PATH_MAX}" | N/A — a *may fail* this implementation does not take up. `__ntpath()`'s whole-path bound is `__US_MAX_WCHARS` (what a `UNICODE_STRING` can describe) rather than `{PATH_MAX}`, so a longer path is accepted and answered on its merits. "May fail" permits both, and `9acc389` made carrying such a pathname a deliberate property of this tree | — |
+| statvfs ERRORS | *shall fail* "[ELOOP] A loop exists in symbolic links encountered during resolution of the *path* argument", and *may fail* "[ELOOP] More than {SYMLOOP_MAX} symbolic links were encountered during resolution of the *path* argument" | **UNIMPL (fenced)** — not the environment N/A the other `[ELOOP]` rows record. `ELOOP` is produced by **no code path in `src/`**, and the NT status a loop would arrive as is not even defined in the tree. See 1 below for the greps and their positive controls | test/posix-statvfs.c fence `test_statvfs_eloop` |
+| statvfs ERRORS | *shall fail* "[EACCES] Search permission is denied on a component of the path prefix" | N/A — the permission-model limit this file already records for `ftw()`/`glob()`/the `chown` family: `chmod 0` does not revoke owner access here and there is no second security principal, so a prefix that cannot be searched cannot be built. `STATUS_ACCESS_DENIED` → `EACCES` **is** mapped (`src/internal/errno.c`), unlike the `[ELOOP]` row above — which is exactly what separates the two verdicts | — |
+| statvfs / fstatvfs ERRORS | *shall fail* "[EIO] An I/O error occurred while reading the file system" | N/A — a hardware error, not provocable on demand; `STATUS_DATA_ERROR` → `EIO` is mapped. Note the interaction with the `[ELOOP]` row: if a loop status does fall to the DOS table's `default: return EIO`, then `[EIO]` here is over-broad rather than absent | — |
+| statvfs / fstatvfs ERRORS | *shall fail* "[EINTR] A signal was caught during execution of the function" | N/A — `NtQueryVolumeInformationFile()` on a handle opened `FILE_SYNCHRONOUS_IO_NONALERT` is not an alertable wait, and `src/signal/signal.c` runs handlers from a console control handler or from `raise()`, never by interrupting an in-progress NT query. There is no window in which the condition arises | — |
+| statvfs / fstatvfs ERRORS | *shall fail* "[EOVERFLOW] One of the values to be returned cannot be represented correctly in the structure pointed to by *buf*" | covered (guarded, by inspection) — only `f_bsize`/`f_frsize` can overflow, being `unsigned long` (32-bit under LLP64) against a cluster size computed from two `ULONG`s; the block counts cannot, `fsblkcnt_t` being unsigned 64-bit against signed 64-bit NT counters. Not reachable from a test: no NT volume has a >4GB cluster | test/posix-sysmisc.c row above |
+| fstatvfs ERRORS | *shall fail* "[EBADF] The *fildes* argument is not an open file descriptor" | covered | test/posix-sysmisc.c `test_statvfs_errors` |
+| statvfs / fstatvfs | RETURN VALUE — "Upon successful completion, statvfs() shall return 0. Otherwise, it shall return -1 and set errno to indicate the error" | covered. The sentence names only `statvfs()`; that is the standard's own wording, not a transcription slip, and `fstatvfs()` is asserted to the same shape | test/posix-sysmisc.c `test_statvfs`, `test_statvfs_errors` |
+| posix_fadvise | DESCRIPTION — the six advice values and their meanings; "The specified range need not currently exist in the file"; "If len is zero, all data following offset is specified"; RETURN VALUE — "Upon successful completion, posix_fadvise() shall return zero; otherwise, an error number shall be returned to indicate the error" | covered | test/posix-tail.c `test_posix_fadvise` |
+| posix_fadvise | DESCRIPTION — "The posix_fadvise() function shall have no effect on the semantics of other operations on the specified data, although it may affect the performance of other operations" | covered — newly widened. `test/posix-tail.c` asserts it once, for `POSIX_FADV_DONTNEED`, by reading the data back; this asserts it for **all six** advice values and over two further observables a no-op must also leave alone, the file offset and the file size. That a validate-and-no-op implementation is conforming is `src/fcntl/fadvise.c`'s banner's argument, already accepted in group J ("`posix_fadvise()` doing nothing is conforming") — it is cited, not re-derived; these assertions only pin the no-op in place if the function ever grows a body | test/posix-statvfs.c `test_posix_fadvise_no_effect` |
+| `POSIX_FADV_*` | `fcntl.h.html` — "The `<fcntl.h>` header shall define the following symbolic constants for the advice argument used by posix_fadvise():" | covered — all six defined in `include/fcntl.h`, and newly asserted pairwise distinct. The header page states each constant's meaning and not its encoding, so distinctness is an **inference** from six distinguishable meanings for one argument, and is labelled as one at the assertion | test/posix-statvfs.c `test_posix_fadvise_no_effect` |
+| posix_fadvise ERRORS | *shall fail* "[EBADF] The fd argument is not a valid file descriptor"; the advice half of "[EINVAL] The value of advice is invalid, or the value of len is less than zero" | covered | test/posix-tail.c `test_posix_fadvise` |
+| posix_fadvise ERRORS | the `len` half of that same "[EINVAL]" clause — "or the value of len is less than zero" | covered — **FIXED on main while this group was in progress** (`c72b701`; `src/fcntl/fadvise.c:47` now guards `len < 0` ahead of the advice switch, and `test_posix_fadvise_einval_negative_len` is un-fenced and runs). Recorded here because this row was drafted as an open BUG from the tree as it stood at `9acc389` and was corrected on rebase rather than landed stale — the row in `posix_fadvise`'s own section above is the authoritative one | test/posix-tail.c `test_posix_fadvise_einval_negative_len` |
+| posix_fadvise ERRORS | *shall fail* "[ESPIPE] The fd argument is associated with a pipe or FIFO" | **BUG (fenced)** — still open on the tree this group rebased onto: `posix_fadvise()` inspects `f->type` nowhere, although `posix_fallocate()` does exactly that one function away (`src/fcntl/fadvise.c:131`). Already found and recorded; **not re-opened by this group**, and this row exists only so a reader of group W does not conclude the audit missed it | test/posix-tail.c `test_posix_fadvise_espipe` |
+| posix_fallocate | DESCRIPTION — "If the offset+len is beyond the current file size, then posix_fallocate() shall adjust the file size to offset+len. Otherwise, the file size shall not be changed" | covered — the "beyond" arm in `test/posix-tail.c`; the "otherwise" arm newly widened to assert that it disturbs nothing else either, neither the file offset nor the bytes already in the range. Not decoration: `src/fcntl/fadvise.c`'s interlock exists precisely because `FileAllocationInformation` pulls the end-of-file position **down** to a smaller allocation size, so "the file size shall not be changed" is a live data-loss risk on this path, and the content check is what would catch that interlock being deleted as redundant | test/posix-statvfs.c `test_posix_fallocate_inside_file` |
+| posix_fallocate | DESCRIPTION — "shall ensure that any required storage for regular file data starting at offset and continuing for len bytes is allocated on the file system storage media. If posix_fallocate() returns successfully, subsequent writes to the specified file data shall not fail due to the lack of free space on the file system storage media" | **UNIMPL (fenced)** — the guarantee is dropped, and zero returned anyway, on two arms of `src/fcntl/fadvise.c`: when `NtSetInformationFile(FileAllocationInformation)` answers any of the four swallowed statuses (lines 273–278), and, by the interlock at line 246, for any request lying entirely inside the current file size. POSIX supplies the honest answer for the first — `[EINVAL]` "or the underlying file system does not support this operation" — and the function returns 0 instead. See 2 below | test/posix-statvfs.c fence `test_posix_fallocate_reserves_storage` |
+| posix_fallocate | DESCRIPTION — "Space allocated via posix_fallocate() shall be freed by a successful call to creat() or open() that truncates the size of the file" | covered | test/posix-tail.c `test_posix_fallocate` |
+| posix_fallocate | DESCRIPTION — "It is implementation-defined whether a previous posix_fadvise() call influences allocation strategy" | N/A — implementation-defined, and the answer here is "it does not": `posix_fadvise()` records nothing (`src/fcntl/fadvise.c` validates its two arguments and returns), so there is no previous call for an allocation strategy to consult. Nothing to assert | — |
+| posix_fallocate ERRORS | *shall fail* `[EBADF]` (both forms), `[EFBIG]`, `[EINVAL]` (negative `len`/`offset`), `[ENODEV]`, `[ESPIPE]`; *may fail* `[EINVAL]` for `len == 0` | covered | test/posix-tail.c `test_posix_fallocate`, `test_posix_fallocate_efbig`, `test_posix_fallocate_enodev`, `test_posix_fallocate_ebadf_readonly` |
+| posix_fallocate ERRORS | *shall fail* "[ENOSPC] There is insufficient free space remaining on the file system storage media"; "[EIO] An I/O error occurred while reading from or writing to a file system"; "[EINTR] A signal was caught during execution" | N/A — filling the volume, a hardware error, and the same absent signal window as the `statvfs` `[EINTR]` row. `STATUS_DISK_FULL` → `ENOSPC` and `STATUS_DATA_ERROR` → `EIO` are both mapped in `src/internal/errno.c` | — |
+| posix_fadvise / posix_fallocate | APPLICATION USAGE — "is part of the Advisory Information option and need not be provided on all implementations" | covered — both provided. `_POSIX_ADVISORY_INFO`/`_SC_ADVISORY_INFO` are absent from `<unistd.h>`, but that is the already-fenced group U finding about the option-constant and `_SC_` lists as wholes, **not** a new one, and is not re-opened here | test/posix-unistd.c fences `test_unistd_mandatory_option_constants`, `test_unistd_sysconf_names` |
+
+### UNIMPL found (group W)
+
+1. **`ELOOP` is a value this library can spell and cannot produce.**
+   `statvfs.html` ERRORS makes it a *shall fail*: "[ELOOP] A loop exists
+   in symbolic links encountered during resolution of the *path*
+   argument." Every other `[ELOOP]` row in this file — `renameat`,
+   `fchmodat`, `symlinkat`, `linkat`, the `chown` family, the exec
+   family, `utime` — answers N/A with one mechanism: this suite's
+   environment cannot create a symbolic link, so no loop can be built to
+   hand to NT's own resolver. That is a dated statement about a runner,
+   and one already revised once (from "needs
+   `SeCreateSymbolicLinkPrivilege`" to "needs wine-10.19", `ff1327e`),
+   so it will expire. More to the point it would settle the question
+   only if the library could answer the clause once given a loop.
+
+   It cannot, and this is the evidence rather than the inference:
+
+   ```
+   $ grep -rn ELOOP src/
+   src/string/strerror.c:51:  [ELOOP] = "Symbolic link loop",
+   ```
+
+   One hit, and it is a message string. **Positive control**, so that a
+   null result is an absence and not a broken query — the same grep for
+   an errno this library demonstrably does produce:
+
+   ```
+   $ grep -rn ENAMETOOLONG src/
+   src/string/strerror.c:47:     [ENAMETOOLONG] = "Filename too long",
+   src/stdlib/realpath.c:37:     ... errno = ENAMETOOLONG; ...
+   src/process/spawn.c:385:      ... errno = ENAMETOOLONG; ...
+   src/unistd/chdir.c:24:        ... errno = ENAMETOOLONG; ...
+   src/unistd/link.c:232:        errno = ENAMETOOLONG;
+   src/unistd/gethostname.c:15:  ... errno = ENAMETOOLONG; ...   (and more)
+   ```
+
+   A *produced* errno in this tree looks like a message-table line plus
+   producing sites; `ELOOP` has the first and none of the second.
+   `grep -n ELOOP src/internal/errno.c` returns nothing, against 73
+   `return E...` lines in that one file. The two reparse-point statuses
+   that **are** mapped there, `STATUS_NOT_A_REPARSE_POINT` and
+   `STATUS_IO_REPARSE_TAG_NOT_HANDLED`, both give `EINVAL` — and both
+   mean "this is not a link" rather than "these links cycle".
+
+   The status a loop would arrive as is not even **named** in the tree:
+   `grep -rn REPARSE_POINT_NOT_RESOLVED src/ include/ test/` finds it in
+   exactly two places, both of them comments in
+   `test/posix-unreferenced.c` (lines 1061 and 1507), and in neither
+   `src/internal/nt.h` nor any `.c` file — against 97 `#define
+   STATUS_...` lines in `nt.h`. `src/internal/errno.c` switches on
+   `NTSTATUS` constants; it cannot have a case for one the tree does not
+   define.
+
+   **The counter-argument, and why it was rejected.** One of those two
+   comments, `test/posix-unreferenced.c:1062`, states the opposite in
+   passing — that `src/internal/errno.c` "does map to `ELOOP`". It is
+   easy to see why that was believed: the status has exactly the right
+   name, the mapping table is long, and the environment argument meant
+   nobody had to check. The greps above are the check, and they run
+   against this tree rather than against a recollection of it. That file
+   is **not edited here** — this group changes only its own two paths —
+   and this row is scoped to `statvfs.html`; the other pages' `[ELOOP]`
+   rows are left to whoever re-audits them, with the note that their N/A
+   is under-stated rather than wrong.
+
+   **UNIMPL and not BUG**, because there is no half-written check to be
+   wrong about: the clause was never implemented. **Not N/A**, because
+   nothing about NT prevents it — NT detects the loop and reports it
+   distinctly; the value is dropped on the way through the errno table.
+   What a caller sees instead is derived rather than measured, and
+   flagged as such: `__errno_from_status()` falls through to
+   `__errno_from_doserror(RtlNtStatusToDosError(st))`, whose own default
+   arm is `return EIO`, so unless the loop status translates onto one of
+   the thirty-odd Win32 codes that second table names, the answer is
+   `EIO` — which would be a poor substitute, `[EIO]` being on this same
+   page's shall-fail list for a different condition. The **certain**
+   part is the negative: never `ELOOP`. The fix is one line in
+   `src/internal/errno.c`'s status table, plus the `#define` it needs.
+
+2. **`posix_fallocate()` returns success having reserved nothing.**
+   The clause is the whole function: "shall ensure that any required
+   storage for regular file data ... is allocated on the file system
+   storage media. If posix_fallocate() returns successfully, subsequent
+   writes to the specified file data shall not fail due to the lack of
+   free space on the file system storage media." Everything else on the
+   page — adjusting the size, freeing the space on a truncating
+   `open()` — `ftruncate()` already does, which is why nothing caught
+   this: **every existing assertion about the "allocation" is really an
+   assertion about `st_size` or about the range being writable, and a
+   plain `ftruncate()` passes all of them.** `test/unistd.c:503` states
+   the intent in its comment — "posix_fallocate: really reserves storage
+   and can grow the file" — directly above two checks of `st_size`.
+
+   `src/fcntl/fadvise.c` lines 273–278 discard the result of
+   `NtSetInformationFile(FileAllocationInformation)` for four statuses
+   (`STATUS_NOT_IMPLEMENTED`, `STATUS_NOT_SUPPORTED`,
+   `STATUS_INVALID_DEVICE_REQUEST`, `STATUS_INVALID_INFO_CLASS`) and
+   fall through to the `FileEndOfFileInformation` set below, then return
+   0. On that arm the function has performed a plain `ftruncate()` and
+   reported success. Its own comment concedes it — "a strict reading of
+   `posix_fallocate()` loses the 'no later write can ENOSPC' guarantee
+   on such a system" — but that concession lived only in the source: no
+   test and no ledger row carried it, which made it a silent gap rather
+   than a documented divergence.
+
+   There is a second, arch-independent arm. The interlock at line 246,
+   `want > si.AllocationSize && want >= si.EndOfFile`, skips the
+   allocation entirely for any request lying **inside** the current file
+   size — the sparse-or-compressed-file case, and the only case in which
+   a write inside an existing file can fail for lack of space at all. So
+   for a sparse file `posix_fallocate()` reserves nothing by design. The
+   banner argues that trade honestly (clamping the request up to
+   `si.EndOfFile` would de-sparsify the whole file, turning a
+   hundred-byte request into a terabyte one and most likely into
+   `ENOSPC`), and the argument is good. It is still an under-delivered
+   clause, and a deliberate "I chose not to" is UNIMPL here. No
+   assertion is written for that arm: ntlibc has no `FSCTL_SET_SPARSE`
+   and Wine's `FSCTL_SET_ZERO_DATA` answers `STATUS_NOT_SUPPORTED`
+   (`src/fcntl/fadvise.c`'s own note), so a sparse file cannot be built
+   from inside this tree to test on — the same "no assertion to write"
+   situation `test/posix-stropts.c` records for STREAMS, and a "cannot"
+   worth re-testing rather than inheriting.
+
+   **The counter-argument, and why it was rejected.** `fadvise.c` says:
+   "the alternative is failing a real Windows-capable call every time it
+   merely runs under Wine, which is worse than the degraded guarantee."
+   That is a false choice between lying and failing. POSIX supplies a
+   third answer written for this exact condition —
+   `posix_fallocate.html` ERRORS, *shall fail*: "[EINVAL] The len
+   argument is less than zero, or the offset argument is less than zero,
+   **or the underlying file system does not support this operation**" —
+   an answer a caller can branch on, and one this ledger already records
+   as conforming where the library happens to give it.
+
+   **A caution deliberately NOT turned into a second argument.** It is
+   tempting to add "and the library already gives that `[EINVAL]` on
+   i386, so it contradicts itself by architecture". It was drafted and
+   then withdrawn, because the tree holds **two records that disagree**
+   about which status WOW64 produces here and neither can be re-run from
+   this session. `src/fcntl/fadvise.c`'s own comment, a few lines above
+   the swallow list, says Wine "reports the same missing set-info case
+   as `STATUS_NOT_IMPLEMENTED` natively but as `STATUS_INVALID_INFO_CLASS`
+   under WOW64" — and `STATUS_INVALID_INFO_CLASS` **is** on the swallow
+   list, so on that record both arches swallow and agree.
+   `test/posix-tail.c:879` and this file's group J discussion instead
+   say WOW64 answers `STATUS_INVALID_PARAMETER` for a zero-length file,
+   which is not on the list and would give `EINVAL`. Both were measured
+   by earlier sessions; the swallow list has since been widened to cover
+   the first, which is exactly how such a claim goes stale. **The
+   finding does not depend on which is current**: it is that the
+   swallowing arm exists at all and returns zero, which is four lines of
+   `src/fcntl/fadvise.c` anyone can read.
+
+   **Why the assertion is fenced rather than live.** `st_blocks` is
+   derived from `FILE_STANDARD_INFORMATION`'s `AllocationSize`
+   (`src/stat/stat.c:194`: `st->st_blocks = (si.AllocationSize + 511) /
+   512;`), so it measures the reservation directly, and nothing else in
+   the suite does. The behaviour differs by leg, and that measurement is
+   somebody else's rather than this group's: `src/fcntl/fadvise.c`'s
+   interlock comment records "Measured on Windows 11 22621 by the
+   Wine-divergence session: a non-sparse file of EndOfFile 16384 reports
+   AllocationSize 16384 on NTFS, and 0 under Wine." A live assertion
+   would therefore pass on the real-Windows CI leg and fail under `make
+   check` — precisely the split the finding is about. Whoever un-fences
+   it should un-fence it as a **measurement** first: run it, print what
+   `st_blocks` actually is on each leg, and only then decide.
+
+### N/A found (group W)
+
+3. **`f_files`/`f_ffree`/`f_favail` are a documented zero and stay
+   one.** `sys_statvfs.h.html` requires the three members and
+   `fstatvfs.html`'s DESCRIPTION excuses their content: "It is
+   unspecified whether all members of the **statvfs** structure have
+   meaningful values on all file systems." `src/stat/statvfs.c`'s banner
+   argues the zeros at length and `test/posix-sysmisc.c` asserts them,
+   so a later change that starts inventing an inode count fails the
+   suite. This group re-examined that decision and did **not** re-open
+   it. The counter-argument considered: the banner's reason is scoped to
+   the `FileFs*` information classes ("none of the `FileFs*` classes
+   exposes a record count"), which leaves open whether some other ntdll
+   route could supply a total. Rejected, on the standard's own pairing
+   rather than on an NT API this session cannot test: POSIX pairs
+   `f_files` with `f_ffree` and `f_favail`, and a nonzero `f_files`
+   beside a zero `f_ffree` does not read as "inode accounting is
+   unavailable" — it reads as "this file system has no file serial
+   numbers left", which is a false statement a caller doing capacity
+   arithmetic would act on. Three honest zeros under the standard's
+   escape clause beat one real number that turns the other two into
+   lies. If someone does find a source for all three, that is a
+   different proposal and should be argued on its own.
+
+4. **`f_bsize` equalling `f_frsize` is not a stub.** POSIX distinguishes
+   them ("File system block size" against "Fundamental file system block
+   size", the unit `f_blocks` is counted in) and permits them to differ.
+   On NT they cannot usefully: the allocation unit *is* the fundamental
+   block, and every volume size NT reports is counted in allocation
+   units, so there is no second number to put in `f_bsize`. Recorded
+   because "they are the same, so one must be a placeholder" is the
+   natural first reading of `src/stat/statvfs.c`, and it is wrong.
+
+### Not reached (group W)
+
+`[EACCES]`, `[EIO]` and `[EINTR]` on `statvfs()`/`fstatvfs()`, and
+`[ENOSPC]`, `[EIO]` and `[EINTR]` on `posix_fallocate()`: a second
+security principal, a hardware error, a full volume, and a signal window
+that does not exist on a synchronous NT query. All six are **mapped** in
+`src/internal/errno.c` — which is the distinction this group turned on,
+and the reason `[ELOOP]` is fenced above while these six are not.
