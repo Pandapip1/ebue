@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import dataclasses
 import os
 from pathlib import Path
@@ -26,6 +27,27 @@ IFACES = SUITE / "conformance" / "interfaces"
 EXPECTED = ROOT / "test" / "posix-opts-expected.txt"
 CENSUS = 1610
 
+# Interfaces whose assertions are about elapsed time rather than about a
+# return value.  These are the only cases that cannot absorb machine load:
+# a nanosleep that is asked to sleep 10 ms and measures 12 does not fail
+# because the library is wrong, it fails because something else was on the
+# CPU.  All three FLAKY entries in test/posix-opts-expected.txt live here
+# ("baseline disagreed across repeated runs"), and one of them still came
+# back FLAKY on a fully serial run, so the boundary is real and close.
+#
+# Everything outside this set asserts on return values and errno and is
+# indifferent to what else is running, which is what makes the split
+# worth having: it is ~40 cases of 591.
+CLOCK_BOUND = (
+    "nanosleep", "clock_nanosleep", "clock_gettime", "clock_getres",
+    "clock_settime", "clock", "time", "timer_create", "timer_settime",
+    "timer_gettime", "sleep", "alarm",
+)
+
+
+def is_clock_bound(case: str) -> bool:
+    return case.split("/", 1)[0] in CLOCK_BOUND
+
 
 @dataclasses.dataclass
 class CaseResult:
@@ -34,6 +56,33 @@ class CaseResult:
     built: bool
     observation: str
     detail: str = ""
+
+
+_emit_lock = threading.Lock()
+
+
+def emit(result: CaseResult, mode: str) -> bool:
+    """Report one case the moment it is decided. Returns True if accepted.
+
+    Held under a lock because the parallel run phase emits from worker
+    threads: without it a failing case's output could interleave with
+    another case's, and a spliced traceback is worse than no traceback.
+    The lock is the whole ordering discipline -- completion order is not
+    stable and is not made stable, because what matters is that each
+    case's block is atomic, not that blocks arrive in a fixed sequence.
+
+    A passing case gets one line. Its output is not news; the run has 591
+    of them and printing them all is how a log stops being read.
+    """
+    ok = accepted(mode, result)
+    with _emit_lock:
+        mark = "     " if ok else "FAIL "
+        print(f"{mark}{result.disposition:<7} {result.case} [{result.observation}]")
+        if not ok and result.detail:
+            for line in result.detail.splitlines()[-12:]:
+                print(f"        {line}")
+        sys.stdout.flush()
+    return ok
 
 
 def progress(message: str) -> None:
@@ -232,8 +281,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime", default="wine")
     parser.add_argument("--profile", action="append", default=[])
     parser.add_argument("--runner", default=os.environ.get("WINE", ""))
+    # nproc, matching tools/run-tests.py's RUNTESTS_JOBS rather than the
+    # hardcoded 4 this used to carry. Safe to derive from the machine here
+    # for the reason it is NOT safe inside tools/gate.sh: the gate runs many
+    # stages at once, so its cost is a product, and it therefore pins
+    # OPTSRUN_JOBS to GATE_MAKE_JOBS itself before invoking this. Standalone
+    # -- a developer, or a CI job that owns its runner -- there is no product
+    # and no reason to leave five sixths of the machine idle.
     parser.add_argument("--jobs", type=int,
-                        default=int(os.environ.get("OPTSRUN_JOBS", "4")))
+                        default=int(os.environ.get("OPTSRUN_JOBS",
+                                                   os.cpu_count() or 1)))
     parser.add_argument("--attempts", type=int,
                         default=int(os.environ.get("OPTSRUN_ATTEMPTS", "3")))
     parser.add_argument("--timeout", type=int, default=120)
@@ -292,7 +349,9 @@ def main() -> int:
             if disposition == "NA" or (
                 args.mode == "normal" and disposition in {"BUG", "UNIMPL"}
             ):
-                results[case] = CaseResult(case, disposition, False, "NA", reason)
+                skipped = CaseResult(case, disposition, False, "NA", reason)
+                results[case] = skipped
+                emit(skipped, args.mode)
             else:
                 selected.append((case, disposition))
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -300,50 +359,69 @@ def main() -> int:
                 pool.submit(build_one, cfg, case, disposition, work): case
                 for case, disposition in selected
             }
-            done = 0
             for future in as_completed(futures):
                 result = future.result()
                 results[result.case] = result
-                done += 1
-                # A build-phase verdict is final for two populations, and
-                # only those two: a case that must run but did not compile,
-                # and an UNIMPL case that compiled when it must not. Every
-                # other built case is merely not decided yet -- its verdict
-                # needs the run -- so reporting it here would be wrong.
-                if not result.built and result.disposition != "UNIMPL":
-                    progress(f"posix-opts: FAIL {result.case} "
-                             f"({result.disposition} did not build)")
-                elif result.built and result.disposition == "UNIMPL":
-                    progress(f"posix-opts: FAIL {result.case} "
-                             f"(UNIMPL built, and must not)")
-                if done % 100 == 0 or done == len(selected):
-                    progress(f"posix-opts: built {done}/{len(selected)}")
-        runnable = [
-            result for result in results.values()
-            if result.built and result.disposition != "UNIMPL"
-        ]
-        # LTP cases share enough process/timing state that execution remains
-        # serial; compilation is the expensive parallel-safe phase.
-        progress(f"posix-opts: running {len(runnable)} case(s), "
-                 f"{args.attempts} attempt(s) each, serially")
-        for done, result in enumerate(
-            sorted(runnable, key=lambda item: item.case), start=1
-        ):
-            result = run_one(result, runner, work, args.attempts, args.timeout)
-            results[result.case] = result
-            if not accepted(args.mode, result):
-                progress(f"posix-opts: FAIL {result.case} "
-                         f"({result.disposition} observed {result.observation})")
-            elif done % 25 == 0 or done == len(runnable):
-                progress(f"posix-opts: ran {done}/{len(runnable)}")
+                # A case that built and is not UNIMPL has not been decided
+                # yet -- its verdict needs the run, and claiming one here
+                # either way would be a guess. Everything else is final at
+                # build time and is reported now: an UNIMPL case (which
+                # never runs, so this is its verdict) and any case that
+                # failed to compile.
+                if not (result.built and result.disposition != "UNIMPL"):
+                    emit(result, args.mode)
+        runnable = sorted(
+            (result for result in results.values()
+             if result.built and result.disposition != "UNIMPL"),
+            key=lambda item: item.case,
+        )
+        bulk = [r for r in runnable if not is_clock_bound(r.case)]
+        clock = [r for r in runnable if is_clock_bound(r.case)]
+
+        def run_and_emit(result: CaseResult) -> CaseResult:
+            out = run_one(result, runner, work, args.attempts, args.timeout)
+            results[out.case] = out
+            emit(out, args.mode)
+            return out
+
+        # Phase one: everything that asserts on return values, in parallel.
+        # This is the bulk -- and it used to be the whole run, serially,
+        # which is why a full sweep took ~39 minutes and CI's 30-minute
+        # wall killed it on every push without it ever reporting anything.
+        progress(f"posix-opts: running {len(bulk)} case(s) at {args.jobs} "
+                 f"job(s), {args.attempts} attempt(s) each")
+        if bulk:
+            with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+                for future in as_completed(
+                    [pool.submit(run_and_emit, r) for r in bulk]
+                ):
+                    future.result()
+
+        # Phase two: the clock-bound cases, serially, and deliberately
+        # AFTER phase one rather than beside it. Running them in their own
+        # serial thread next to a parallel pool -- the shape
+        # tools/run-tests.py uses for process-sensitive tests -- would not
+        # protect them, because what moves a sleep across its tolerance is
+        # load on the machine, not concurrency among themselves. They are
+        # ~40 of 591, so buying them a quiet machine costs a couple of
+        # minutes and keeps the one property that makes them meaningful.
+        if clock:
+            progress(f"posix-opts: running {len(clock)} clock-bound case(s) "
+                     f"serially, alone")
+            for result in clock:
+                run_and_emit(result)
 
     ordered = [results[case] for case in discovered]
     failures = [result for result in ordered if not accepted(args.mode, result)]
-    for result in ordered:
-        print(f"{result.disposition:<7} {result.case} [{result.observation}]")
-        if result in failures and result.detail:
-            for line in result.detail.splitlines()[-12:]:
-                print(f"        {line}")
+    # No end-of-run dump: every case was reported by emit() at the moment it
+    # was decided. Repeating all 1610 here would only be useful to a reader
+    # who was not given anything until the process exited, which is the
+    # thing this stopped doing.
+    if failures:
+        print(f"posix-opts: {len(failures)} case(s) failed policy:")
+        for result in failures:
+            print(f"    {result.disposition:<7} {result.case} "
+                  f"[{result.observation}]")
     counts: dict[str, int] = {}
     for result in ordered:
         counts[result.disposition] = counts.get(result.disposition, 0) + 1
