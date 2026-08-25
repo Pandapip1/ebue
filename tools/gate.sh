@@ -142,18 +142,21 @@ make_tree() {
 	libc-test|libc-test-map)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
+			--exclude=/.suitemap-cache/ \
 			--exclude='*.tmp' --exclude=/third_party/ltp/ \
 			"$srcdir/" "$dest/"
 		;;
 	posix-gapmap)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
+			--exclude=/.suitemap-cache/ \
 			--exclude='*.tmp' --exclude=/third_party/libc-test/ \
 			"$srcdir/" "$dest/"
 		;;
 	*)
 		rsync -a --delete \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
+			--exclude=/.suitemap-cache/ \
 			--exclude='*.tmp' --exclude=/third_party/ \
 			"$srcdir/" "$dest/"
 		;;
