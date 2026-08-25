@@ -124,7 +124,11 @@ enum {
 
 struct __fd {
 	HANDLE h;              /* NULL when the slot is free */
-	unsigned flags;        /* O_APPEND, O_NONBLOCK, O_CLOEXEC as given to open */
+	unsigned flags;        /* O_ACCMODE, O_APPEND, O_NONBLOCK, O_CLOEXEC as given
+	                        * to open -- the access mode is load-bearing, not
+	                        * decorative: write() refuses an O_RDONLY descriptor,
+	                        * and O_RDONLY is 0, so a slot filled in without it
+	                        * silently reads back as read-only */
 	unsigned char type;    /* __FD_* */
 	unsigned char eof;     /* a pipe/console that has reported end of input */
 	unsigned char dirflag; /* for directories: 0 or FILE_OPEN_REPARSE_POINT used */

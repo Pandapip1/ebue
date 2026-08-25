@@ -117,6 +117,62 @@ HANDLE __fd_handle(int fd)
 	return f ? f->h : 0;
 }
 
+/* The access mode of a handle this process did not open.
+ *
+ * The RuntimeData block a parent leaves for its child is msvcrt's
+ * _osfile format -- the FOPEN/FAPPEND/FPIPE/FDEV bits above are that
+ * format's, byte for byte, which is what lets an ntlibc program and an
+ * msvcrt program inherit each other's descriptors.  That format has no
+ * access-mode bit: all eight are spoken for, and msvcrt does not carry
+ * the mode across inheritance either.  So the mode cannot be recovered
+ * from the block, and it must not be added to the block -- a ninth bit
+ * would be meaningless to every other CRT that reads this and would
+ * make the payload a private extension rather than the interop format
+ * it is.
+ *
+ * It does not need to be.  The handle itself knows: the object manager
+ * records the access the handle was opened with, and
+ * NtQueryObject(ObjectBasicInformation) reports it in GrantedAccess.
+ * That is authoritative rather than advisory -- it is the very mask the
+ * kernel will check a read or write against -- and it works whatever
+ * CRT the parent was built with, including one that never heard of
+ * ntlibc.
+ *
+ * Measured (Wine, x86_64), GrantedAccess for handles this library opens:
+ *   O_RDONLY          0x00120089  READ_DATA, no WRITE_DATA
+ *   O_WRONLY          0x00120196  WRITE_DATA, no READ_DATA
+ *   O_RDWR            0x0012019f  both
+ *   O_WRONLY|O_APPEND 0x00120194  APPEND_DATA only, no WRITE_DATA
+ * -- the last because open() maps O_APPEND by trading FILE_WRITE_DATA
+ * for FILE_APPEND_DATA (src/fcntl/open.c), so "writable" here has to
+ * mean either bit or an appending descriptor reads back as read-only.
+ *
+ * `fallback` is used only if the query fails, which is not expected:
+ * ObjectBasicInformation needs no access rights of its own.  It is
+ * O_RDWR for an inherited descriptor, deliberately, and NOT the
+ * O_RDONLY that used to be assumed: assuming read-only is precisely
+ * what produced the defect this fixes, and the two errors are not
+ * symmetric.  Guessing too permissive is corrected by the kernel, which
+ * refuses the operation on its own; guessing too restrictive is
+ * corrected by nobody, because this library refuses the operation
+ * before the kernel is ever asked, on a descriptor that would have
+ * worked. */
+static unsigned accmode_of(HANDLE h, unsigned fallback)
+{
+	OBJECT_BASIC_INFORMATION obi;
+	ULONG len = 0;
+	int r, w;
+
+	if (!NT_SUCCESS(NtQueryObject(h, ObjectBasicInformation, &obi, sizeof obi, &len)))
+		return fallback;
+	r = (obi.GrantedAccess & FILE_READ_DATA) != 0;
+	w = (obi.GrantedAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0;
+	if (r && w) return O_RDWR;
+	if (w) return O_WRONLY;
+	if (r) return O_RDONLY;
+	return fallback;
+}
+
 /* Descriptors 0-2, from the process parameters the creator left behind.
  *
  * Both guards below are load-bearing, and the second one is doing more
@@ -160,7 +216,18 @@ void __fd_init(void)
 				if (!(osfile[i] & FOPEN) || !h || h == (HANDLE)(LONG_PTR)-1) continue;
 				if (i < 3 && __fds[i].h) continue;   /* the PEB's std handles win */
 				if (__handle_type(h) == __FD_UNKNOWN) continue;
-				__fd_install_at(i, h, osfile[i] & FAPPEND ? O_APPEND : 0, 0);
+				/* The access mode is NOT in osfile[i] -- see
+				 * accmode_of().  Without it every inherited
+				 * descriptor read back as O_RDONLY (because
+				 * O_RDONLY is 0), and src/unistd/write.c's
+				 * write()/pwrite() refuse an O_RDONLY descriptor
+				 * with EBADF -- so an inherited writable
+				 * descriptor could not be written to at all,
+				 * while ftruncate() and posix_fallocate() on the
+				 * very same descriptor succeeded, because they
+				 * ask the kernel instead of this field. */
+				__fd_install_at(i, h, (osfile[i] & FAPPEND ? O_APPEND : 0) |
+				                      accmode_of(h, O_RDWR), 0);
 			}
 		}
 	}

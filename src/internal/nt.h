@@ -618,6 +618,26 @@ typedef struct _OBJECT_NAME_INFORMATION {
 	UNICODE_STRING Name;
 } OBJECT_NAME_INFORMATION;
 
+/* ObjectBasicInformation.  Only GrantedAccess is used here (src/internal/
+ * fd.c, to recover the access mode of a handle this process did not open),
+ * but the whole structure has to be declared because NtQueryObject checks
+ * the length it is given against the class's full size.  Layout per
+ * <https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryobject>
+ * and ntifs.h. */
+typedef struct _OBJECT_BASIC_INFORMATION {
+	ULONG Attributes;
+	ACCESS_MASK GrantedAccess;
+	ULONG HandleCount;
+	ULONG PointerCount;
+	ULONG PagedPoolCharge;
+	ULONG NonPagedPoolCharge;
+	ULONG Reserved[3];
+	ULONG NameInfoSize;
+	ULONG TypeInfoSize;
+	ULONG SecurityDescriptorSize;
+	LARGE_INTEGER CreationTime;
+} OBJECT_BASIC_INFORMATION;
+
 typedef struct _FILE_POSITION_INFORMATION {
 	LARGE_INTEGER CurrentByteOffset;
 } FILE_POSITION_INFORMATION;
