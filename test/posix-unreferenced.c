@@ -698,38 +698,6 @@ static void test_renameat_errors(void)
 
 /* "[ENOTDIR] ... or the old argument names a directory and the new
  * argument names a non-directory file." */
-#if 0 /* BUG -- SILENT DATA LOSS.  This is the most serious defect this
-       * audit found, and it is worth stating in those words: a fully
-       * conforming rename() / renameat() call that POSIX requires to
-       * FAIL instead SUCCEEDS and destroys the caller's file, with no
-       * error, no diagnostic and no way for the caller to know.
-       *
-       * NT's FileRenameInformationEx with FILE_RENAME_REPLACE_IF_EXISTS
-       * happily renames a directory over an existing regular file, and
-       * src/stdio/misc.c never checks the two objects' types against
-       * each other.  The call returns 0, the regular file is gone, and
-       * the name now refers to the directory.
-       *
-       * rename.html ERRORS requires [ENOTDIR] for exactly this case
-       * ("the old argument names a directory and the new argument names
-       * a non-directory file"), and RETURN VALUE requires that when the
-       * call fails "neither the file named by old nor the file named by
-       * new shall be changed or created".  Both are violated: the wrong
-       * status AND the destruction.
-       *
-       * Verified against this tree at the commit that added this file:
-       * the rename returned 0, and stat() on the victim's name then
-       * reported S_ISDIR.
-       *
-       * The fix belongs in src/stdio/misc.c's renameat(), which already
-       * queries FileBasicInformation on both objects for its
-       * EISDIR/ENOTEMPTY disambiguation -- it needs the same query
-       * BEFORE the rename, not only after a STATUS_ACCESS_DENIED, and
-       * must reject old_isdir && !new_isdir with ENOTDIR.
-       *
-       * Note the mirror case, a non-directory onto an existing
-       * directory, IS handled -- test_renameat_errors() asserts the
-       * [EISDIR] for it unfenced.  Only this direction is unguarded. */
 static void test_renameat_enotdir_dir_over_file(void)
 {
 	struct stat st;
@@ -743,7 +711,6 @@ static void test_renameat_enotdir_dir_over_file(void)
 	CHECK(rmdir("ren.d/sd") == 0);
 	CHECK(unlink("ren.d/victim") == 0);
 }
-#endif
 
 /* renameat.html DESCRIPTION: "If new is a relative path, the file is
  * located relative to the directory associated with the file descriptor
@@ -1626,6 +1593,7 @@ int main(void)
 
 	test_renameat_success();
 	test_renameat_errors();
+	test_renameat_enotdir_dir_over_file();
 	test_fchmodat_success();
 	test_fchmodat_errors();
 	test_fchmodat_empty();

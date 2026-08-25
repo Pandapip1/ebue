@@ -51,13 +51,15 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	HANDLE h;
 	NTSTATUS st;
 	size_t bufsz;
+	FILE_BASIC_INFORMATION obi, nbi;
+	int old_isdir, new_exists, new_isdir;
 
 	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	if (__ntpath_at(newdirfd, new, &np, OBJ_CASE_INSENSITIVE) < 0) { __ntpath_free(&op); return -1; }
 
 	/* FILE_READ_ATTRIBUTES is requested alongside DELETE because the
-	 * STATUS_ACCESS_DENIED fallback below queries FileBasicInformation
-	 * on this same handle to disambiguate EISDIR from ENOTEMPTY.
+	 * type check below queries FileBasicInformation on this same handle
+	 * to learn whether old is a directory.
 	 * NtQueryInformationFile(FileBasicInformation) requires
 	 * FILE_READ_ATTRIBUTES on real NT (same requirement as
 	 * src/stat/chmod.c's query and src/stat/utimensat.c's, see the
@@ -69,6 +71,32 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT);
 	__ntpath_free(&op);
 	if (!NT_SUCCESS(st)) { __ntpath_free(&np); return __set_errno_status(st); }
+
+	/* rename.html ERRORS: "the old argument names a directory and the new
+	 * argument names a non-directory file" is [ENOTDIR], and RETURN VALUE
+	 * requires that on failure "neither the file named by old nor the file
+	 * named by new shall be changed or created".  NT honours neither:
+	 * FileRenameInformation[Ex] with FILE_RENAME_REPLACE_IF_EXISTS will
+	 * rename a directory straight over an existing regular file, unlink
+	 * the victim and report success.  The check therefore has to happen
+	 * HERE, before the set -- once NT has run, the file is already gone
+	 * and there is nothing left to diagnose.
+	 *
+	 * old's type comes from the handle already open on it (which is why
+	 * the open above asks for FILE_READ_ATTRIBUTES); new's from a
+	 * handle-less attribute query, since new is never opened.  Both are
+	 * reused by the STATUS_ACCESS_DENIED disambiguation below, which used
+	 * to make these same two queries for itself after the fact. */
+	old_isdir = NT_SUCCESS(NtQueryInformationFile(h, &io, &obi, sizeof obi, FileBasicInformation)) &&
+	            (obi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+	new_exists = NT_SUCCESS(NtQueryAttributesFile(&np.oa, &nbi));
+	new_isdir = new_exists && (nbi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+	if (old_isdir && new_exists && !new_isdir) {
+		NtClose(h);
+		__ntpath_free(&np);
+		errno = ENOTDIR;
+		return -1;
+	}
 
 	bufsz = sizeof(FILE_RENAME_INFORMATION) + np.nt.Length;
 	ri = __malloc(bufsz);
@@ -92,20 +120,12 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	 * the generic map in __set_errno_status turns both into plain
 	 * EACCES, which is right for genuine permission failures but wrong
 	 * here.  Disambiguate by type, the way open.c already special-cases
-	 * STATUS_FILE_IS_A_DIRECTORY -- old's type from the handle already
-	 * open on it, new's type from a handle-less attribute query (new was
-	 * never opened). */
-	if (st == STATUS_ACCESS_DENIED) {
-		FILE_BASIC_INFORMATION obi, nbi;
-		int old_isdir = NT_SUCCESS(NtQueryInformationFile(h, &io, &obi, sizeof obi, FileBasicInformation)) &&
-		                (obi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY);
-		NTSTATUS qst = NtQueryAttributesFile(&np.oa, &nbi);
-		if (NT_SUCCESS(qst) && (nbi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-			NtClose(h);
-			__ntpath_free(&np);
-			errno = old_isdir ? ENOTEMPTY : EISDIR;
-			return -1;
-		}
+	 * STATUS_FILE_IS_A_DIRECTORY, using the types established above. */
+	if (st == STATUS_ACCESS_DENIED && new_isdir) {
+		NtClose(h);
+		__ntpath_free(&np);
+		errno = old_isdir ? ENOTEMPTY : EISDIR;
+		return -1;
 	}
 
 	NtClose(h);
