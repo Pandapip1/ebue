@@ -621,6 +621,21 @@ static void test_renameat_errors(void)
 	 * the oldfd argument is ... neither AT_FDCWD nor a valid file
 	 * descriptor open for reading or searching, [or the same for new /
 	 * newfd]." */
+	/* A caution about what the newfd halves of this group and the
+	 * [ENOTDIR] group below do NOT prove, recorded because it took a
+	 * separate investigation to establish and would otherwise have to be
+	 * rediscovered.  Both newfd assertions passed unchanged across the
+	 * whole period in which renameat() ignored newfd entirely and every
+	 * dirfd-relative destination failed with ENOENT (fixed in "renameat:
+	 * honour newfd for the destination path").  They could not have
+	 * detected it: __ntpath_at() rejects a bad or non-directory
+	 * descriptor BEFORE the rename is attempted, so what these lines
+	 * exercise is the rejection path, while the defect lived entirely in
+	 * what happened to a GOOD descriptor -- which was silently discarded.
+	 * An assertion that a bad descriptor is refused says nothing about
+	 * whether a good one is used.  test_renameat_new_relative_to_dirfd()
+	 * is the assertion that actually holds newfd to its contract; keep
+	 * these, but do not read them as covering it. */
 	errno = 0;
 	CHECK(renameat(9999, "x", AT_FDCWD, "ren.d/y") == -1);
 	CHECK(errno == EBADF);
