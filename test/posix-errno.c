@@ -15,6 +15,8 @@
  * cost of not exposing an internal header to tests (see report).
  */
 #include <stdio.h>
+#include <stddef.h>	/* size_t, for the group U fence below */
+#include <string.h>	/* strerror(), for the group U fence below */
 #include <errno.h>
 
 static int fails;
@@ -201,6 +203,90 @@ static const struct dc doserror_table[] = {
 	{ 1816, ENOMEM, "ERROR_NOT_ENOUGH_QUOTA" },
 	{ 999999, EIO, "(unmapped -> default EIO)" },
 };
+
+/* ==================================================================
+ * <errno.h> header content -- the five mandatory error macros ntlibc
+ * does not define.  Audit group U (XBD header contents); see
+ * test/POSIX-COVERAGE.md "XBD header contents (group U)".
+ * ================================================================== */
+
+#if 0 /* UNIMPL: errno.h.html DESCRIPTION: "The <errno.h> header shall
+	define the following macros which shall expand to integer constant
+	expressions with type int, distinct positive values (except as
+	noted below), and which shall be suitable for use in #if
+	preprocessing directives", followed by a list of 81 names.  The
+	list is unconditional -- no option-group margin marker guards any
+	of these five -- so all 81 are mandatory for a conforming
+	<errno.h>.  ntlibc defines 76 of them; EBADMSG, EMULTIHOP,
+	ENETRESET, ENOLINK and EPROTO are absent from include/errno.h
+	altogether (triage: ABSENT, not "declared but unimplemented" --
+	there is no declaration to find).  Nothing in include/, test/ or
+	the two ledgers records the omission: POSIX-GAP-ACCOUNTING.md
+	enumerates function interfaces, and an errno macro is not one.
+	Consumer impact: gnulib's errno/strerror-override modules name
+	EPROTO, EBADMSG, ENOLINK and EMULTIHOP directly and substitute
+	their own values when the platform lacks them -- but only after
+	its configure probe has already decided what the platform is, so
+	the failure here is the plain compile error below, not a silent
+	wrong answer.  Observed today: fails to COMPILE, "'EBADMSG'
+	undeclared" (verified with the target preprocessor,
+	x86_64-win32-tcc -E over include/; a compile-time failure, so no
+	Wine-vs-real-NT uncertainty arises). */
+static void test_errno_mandatory_macros(void)
+{
+	/* "distinct positive values" -- and distinct from every other
+	 * error macro the same list mandates, which is what makes them
+	 * usable as switch labels. */
+	static const int mandatory[] = {
+		EBADMSG, EMULTIHOP, ENETRESET, ENOLINK, EPROTO,
+		/* the ones ntlibc already has, for the distinctness check */
+		E2BIG, EACCES, EADDRINUSE, EADDRNOTAVAIL, EAFNOSUPPORT,
+		EALREADY, EBADF, EBUSY, ECANCELED, ECHILD, ECONNABORTED,
+		ECONNREFUSED, ECONNRESET, EDEADLK, EDESTADDRREQ, EDOM,
+		EDQUOT, EEXIST, EFAULT, EFBIG, EHOSTUNREACH, EIDRM, EILSEQ,
+		EINPROGRESS, EINTR, EINVAL, EIO, EISCONN, EISDIR, ELOOP,
+		EMFILE, EMLINK, EMSGSIZE, ENAMETOOLONG, ENETDOWN,
+		ENETUNREACH, ENFILE, ENOBUFS, ENODATA, ENODEV, ENOENT,
+		ENOEXEC, ENOLCK, ENOMEM, ENOMSG, ENOPROTOOPT, ENOSPC,
+		ENOSR, ENOSTR, ENOSYS, ENOTCONN, ENOTDIR, ENOTEMPTY,
+		ENOTRECOVERABLE, ENOTSOCK, ENOTTY, ENXIO, EOVERFLOW,
+		EOWNERDEAD, EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE,
+		ERANGE, EROFS, ESPIPE, ESRCH, ESTALE, ETIME, ETIMEDOUT,
+		ETXTBSY, EXDEV,
+	};
+	size_t i, j;
+
+	CHECK(EBADMSG > 0 && EMULTIHOP > 0 && ENETRESET > 0);
+	CHECK(ENOLINK > 0 && EPROTO > 0);
+
+	for (i = 0; i < sizeof mandatory / sizeof mandatory[0]; i++)
+		for (j = i + 1; j < sizeof mandatory / sizeof mandatory[0]; j++)
+			CHECK(mandatory[i] != mandatory[j]);
+
+	/* "suitable for use in #if preprocessing directives" -- the five
+	 * must be integer constant expressions the preprocessor can see,
+	 * not enum constants or extern objects. */
+#if EPROTO > 0 && EBADMSG > 0 && ENOLINK > 0 && EMULTIHOP > 0 && ENETRESET > 0
+	CHECK(1);
+#else
+	CHECK(0);
+#endif
+
+	/* strerror.html RETURN VALUE: strerror() sets errno to [EINVAL]
+	 * only "if errnum is not a valid error number"; a value <errno.h>
+	 * itself mandates is valid, so closing this gap means a message
+	 * for each, not just a #define. */
+	{
+		static const int five[] = { EBADMSG, EMULTIHOP, ENETRESET, ENOLINK, EPROTO };
+		for (i = 0; i < 5; i++) {
+			const char *m;
+			errno = 0;
+			m = strerror(five[i]);
+			CHECK(m != NULL && m[0] != '\0' && errno == 0);
+		}
+	}
+}
+#endif
 
 int main(void)
 {

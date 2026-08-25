@@ -4114,3 +4114,90 @@ Making `strverscmp()` return 0 unconditionally
 and leaves every test touched by this group green (`exec`, `posix-grp`,
 `posix-glob`, `posix-sysmisc`, `posix-select-socket`). A pass from them
 therefore means "correctly indifferent", not "never ran".
+
+## XBD header contents — the macros no ledger counts (group U)
+
+Every other section of this file, and all of
+`test/POSIX-GAP-ACCOUNTING.md`, is **function-granular**. That file
+buckets all 1177 POSIX.1-2017 System Interfaces function interfaces, so
+"function *X* is absent" is recorded somewhere for every *X*. The gap
+this group audits is one level down: the **symbolic constants, macros
+and limits XBD requires a header to define**, which are not function
+interfaces and therefore appear in no ledger row, no test, and no header
+banner. A 1177-row accounting looks exhaustive, and that is precisely
+what made this surface invisible.
+
+`<tar.h>` and `<cpio.h>` are the clearest proof of the shape of the
+blind spot: they declare **no functions at all**, so they are outside
+that accounting's 1177 by construction rather than by oversight.
+
+Method, reproducible end to end: fetch the XBD `basedefs/<hdr>.h.html`
+page for every header in `include/`, extract every macro name from each
+page's DESCRIPTION, then probe each name against the real include tree
+with the **target preprocessor** —
+`x86_64-win32-tcc -E -std=c99 -nostdinc -I arch/$(ARCH) -I arch/generic
+-I obj/include -I include` — rather than by reading the headers. A macro
+can be present in a header and unreachable behind a feature-test guard;
+only the preprocessor settles which. Every "missing" below is a
+preprocessor result, not a grep result.
+
+### Audited and clean (group U)
+
+These are as much a result as the gaps: an unaudited surface and an
+audited-and-clean surface look identical from outside.
+
+| surface | scope of the check | result |
+|---|---|---|
+| cross-header exposure requirements | all **68** "the `<X>` header shall define *T* as described in `<Y>`" sentences extracted from the XBD pages; every one applying to a header we have was **compile**-probed (`<sys/wait.h>`/`siginfo_t`+`id_t`+`sigval`, `<sys/stat.h>`/`struct timespec`+`blkcnt_t`+`blksize_t`, `<sys/select.h>`/`sigset_t`+`suseconds_t`, `<sys/time.h>`/`fd_set`, `<time.h>`/`clockid_t`+`timer_t`+`locale_t`+`pid_t`, `<dirent.h>`/`ino_t`, `<termios.h>`/`pid_t`, `<unistd.h>`/`intptr_t`+`size_t`+`ssize_t`+`off_t`+`uid_t`+`gid_t`+`pid_t`+`SEEK_*`) | **clean.** The single failure is `<signal.h>`/`pthread_t`, which is the already-recorded absent `pthread.h` family — not a new finding |
+| `<inttypes.h>` `PRI*`/`SCN*` | the full matrix: 6 conversions × {plain, `LEAST`, `FAST`} × {8,16,32,64}, plus `MAX` and `PTR` | **complete, zero missing** |
+| `<errno.h>` | all 81 mandated error macros | 76 present, 5 missing — see below |
+| headers with **no** missing mandatory macro | `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<strings.h>`, `<wchar.h>`, `<wctype.h>`, `<locale.h>`, `<poll.h>`, `<glob.h>`, `<fnmatch.h>`, `<wordexp.h>`, `<regex.h>`, `<ftw.h>`, `<search.h>`, `<sys/stat.h>`, `<sys/statvfs.h>`, `<sys/uio.h>`, `<sys/times.h>`, `<sys/utsname.h>`, `<sys/socket.h>`, `<time.h>` | **clean** (15+ headers) |
+
+Deliberately **not** fenced by this group, because they are already
+recorded elsewhere and so are not silence: `<netinet/in.h>`'s IPv6 set
+and `<sys/socket.h>`'s `struct msghdr`/`cmsghdr`/`CMSG_*` (both headers'
+own banner scope notes), `<sched.h>`'s `SCHED_*` (that header's banner,
+and `POSIX-GAP-ACCOUNTING.md`), and `<termios.h>`'s output-delay masks
+(`test/posix-termios.c`, already fenced).
+
+### Where a group U fence lives (group U)
+
+A header-content fence must **fail the way a consumer fails**. Where
+an XBD clause is about what *one* header supplies on its own, the test
+needs a translation unit that includes only that header, and it lives
+in `test/posix-headers.c` — a file whose top is a sequence of small
+TU-shaped "islands", each including exactly the header its clause is
+about, each carrying its test immediately after that `#include`, and
+ordered so no earlier island can supply a name a later one probes.
+`<fcntl.h>`'s `SEEK_*` clause is the worked example: `<stdio.h>` and
+`<unistd.h>` both define `SEEK_SET`, so in any ordinary test file that
+clause degrades into a runtime assertion about a recorded flag, which
+tests a different thing than the one that breaks people — a consumer
+meets it as a compile error in a single-header TU.
+
+Where a clause is only about a name existing **somewhere**, an existing
+test file is the right home and `posix-headers.c` is the wrong one.
+That file adds one binary to `make check` (57 -> 58 passed); every
+clause in it is currently fenced, and it passes because its harness
+self-check is the only thing that runs.
+
+### Findings (group U)
+
+| header | clause | triage | status | test |
+|---|---|---|---|---|
+| `errno.h` | `errno.h.html` DESCRIPTION — "The `<errno.h>` header shall define the following macros ... distinct positive values ... suitable for use in `#if` preprocessing directives", 81 names, unconditional (no option marker on any of them) | **ABSENT** | **UNIMPL (fenced)** — `EBADMSG`, `EMULTIHOP`, `ENETRESET`, `ENOLINK`, `EPROTO` are in no header in `include/`. The other 76 are present. Consumer impact: gnulib's `errno`/`strerror-override` modules name four of the five directly. Observed: fails to **compile**, `'EBADMSG' undeclared` | `test/posix-errno.c` fence `test_errno_mandatory_macros` |
+| `fcntl.h` | `fcntl.h.html` DESCRIPTION — "The `<fcntl.h>` header shall define the values used for `l_whence`, `SEEK_SET`, `SEEK_CUR`, and `SEEK_END` as described in `<stdio.h>`" | **ABSENT** | **UNIMPL (fenced)** — defined in `<stdio.h>` and `<unistd.h>`, not in `<fcntl.h>`. The sentence exists so a TU doing record locking (which needs `<fcntl.h>` for `struct flock` and `F_SETLK`) can fill in `l_whence` without `<stdio.h>`; such a TU compiles on glibc and musl and fails here. Acceptance criterion is the three definitions and nothing more — `lseek()`/`fcntl()` already honour the three values (priority 6). Observed: fails to **compile**, `'SEEK_SET' undeclared`, in an isolated single-header TU — which is why it lives in `test/posix-headers.c` rather than in a file that includes `<stdio.h>` for the rest of its audit | `test/posix-headers.c` fence `test_fcntl_h_defines_seek_whence` |
+| `fcntl.h` | `fcntl.h.html` DESCRIPTION — the file-access-mode list ("The values shall be unique, except that `O_EXEC` and `O_SEARCH` may have equal values"), plus "`O_TTY_INIT` ... can have the value zero and in this case it need not be bitwise-distinct" | **ABSENT** | **UNIMPL (fenced)** — `O_EXEC`, `O_SEARCH`, `O_TTY_INIT` are in no header in `include/`; every other `O_*` POSIX lists, including `O_DSYNC`, `O_RSYNC`, `O_DIRECTORY` and `O_NOFOLLOW`, is present. None of the three is optional, and `O_TTY_INIT`'s permission to be zero is the standard's own way of saying an implementation with nothing to do for it still defines it. The fence covers the **header constants only** — whether `open()` would then have to give `O_SEARCH` a traverse-only directory handle is a separate, larger gap it does not claim. Observed: fails to **compile**, `'O_EXEC' undeclared` | `test/posix-io.c` fence `test_fcntl_h_access_mode_constants` |
+
+### Not fenced on purpose (group U)
+
+`<limits.h>`'s "Runtime Invariant Values (Possibly Indeterminate)" and
+"Pathname Variable Values" sections both say a definition "**shall be
+omitted** from `<limits.h>` on specific implementations where the
+corresponding value is equal to or greater than the stated minimum, but
+is unspecified/can vary". Every name in those two sections is therefore
+legally absent, and none is fenced. Do not "complete the set" later:
+fencing a legally-omittable constant would be manufacturing a finding.
+The three sections that do say "shall define ... with the values shown"
+— Minimum Values, Runtime Increasable Values, Other Invariant Values —
+are the ones this group fences.

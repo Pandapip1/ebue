@@ -347,6 +347,59 @@ static void test_fseek_update(void)
 	unlink("t-fs.txt");
 }
 
+/* ==================================================================
+ * <fcntl.h> header content -- mandatory symbolic constants ntlibc does
+ * not define.  Audit group U (XBD header contents); see
+ * test/POSIX-COVERAGE.md "XBD header contents (group U)".
+ * ================================================================== */
+
+#if 0 /* UNIMPL: fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall
+	define the following symbolic constants for use as the file access
+	modes for open(), openat(), and fcntl(). The values shall be
+	unique, except that O_EXEC and O_SEARCH may have equal values...
+	O_EXEC Open for execute only (non-directory files)... O_SEARCH
+	Open directory for search only", and, in the file-status-flag
+	list, "O_TTY_INIT Set the termios structure terminal parameters to
+	a state that provides conforming behavior... The O_TTY_INIT flag
+	can have the value zero and in this case it need not be
+	bitwise-distinct from the other flags."  ntlibc defines
+	O_RDONLY/O_WRONLY/O_RDWR/O_ACCMODE and every O_* creation and
+	status flag POSIX lists including O_DSYNC, O_RSYNC, O_DIRECTORY
+	and O_NOFOLLOW, but not O_EXEC, O_SEARCH or O_TTY_INIT.  Triage:
+	ABSENT (no declaration anywhere in include/).  None of the three
+	is optional: no option-group marker guards them, and O_TTY_INIT
+	is explicitly permitted to be zero, which is the standard's own
+	way of saying an implementation with nothing to do for it still
+	has to define it.  Scope of this fence: the HEADER CONSTANTS only.
+	Whether open() would then have to give O_SEARCH a directory
+	handle with traverse-only access, and O_EXEC an execute-only one,
+	is a larger, separate gap that this fence deliberately does not
+	claim -- do not read an un-fencing of this test as acceptance of
+	that.  Observed today: fails to COMPILE, "'O_EXEC' undeclared". */
+static void test_fcntl_h_access_mode_constants(void)
+{
+	/* "The values shall be unique, except that O_EXEC and O_SEARCH
+	 * may have equal values." */
+	CHECK(O_RDONLY != O_WRONLY && O_RDONLY != O_RDWR && O_WRONLY != O_RDWR);
+	CHECK(O_EXEC != O_RDONLY && O_EXEC != O_WRONLY && O_EXEC != O_RDWR);
+	CHECK(O_SEARCH != O_RDONLY && O_SEARCH != O_WRONLY && O_SEARCH != O_RDWR);
+
+	/* "O_ACCMODE Mask for file access modes" -- a file access mode
+	 * that the mask does not cover cannot be recovered from
+	 * fcntl(F_GETFL), which is what the mask is for. */
+	CHECK((O_EXEC & O_ACCMODE) == O_EXEC);
+	CHECK((O_SEARCH & O_ACCMODE) == O_SEARCH);
+
+	/* O_TTY_INIT may be zero, so the only thing to assert is that it
+	 * exists and the preprocessor can see it. */
+#if defined(O_TTY_INIT) && defined(O_EXEC) && defined(O_SEARCH)
+	CHECK(O_TTY_INIT >= 0);
+#else
+	CHECK(0);
+#endif
+}
+#endif
+
 int main(void)
 {
 	test_open_close();
