@@ -334,6 +334,75 @@ static void perror_prefixed(void) { errno = ENOENT; perror("myprefix"); }
 static void perror_noprefix_null(void) { errno = EACCES; perror(0); }
 static void perror_noprefix_empty(void) { errno = EACCES; perror(""); }
 
+#if 0	/* BUG: fflush(NULL) does not flush stderr, because stderr is not
+	 * on the list it walks.  fflush.html DESCRIPTION: "If stream is a
+	 * null pointer, fflush() shall perform this flushing action on all
+	 * streams for which the behavior is defined above."  stderr is such
+	 * a stream: it is open for writing with an underlying file
+	 * description, which is exactly the case the paragraph above it
+	 * defines.
+	 *
+	 * Mechanism: src/stdio/file.c gives the three standard streams as
+	 * file-scope statics (stdin_f/stdout_f/stderr_f) with no ->next,
+	 * and only __file_new() ever pushes a FILE onto the __stdio_files
+	 * list -- so none of the three is ever on it.  src/stdio/buf.c's
+	 * fflush(NULL) walks that list plus stdout, by name, and nothing
+	 * else:
+	 *
+	 *     if (__fflush_locked(stdout) < 0) r = EOF;
+	 *     for (p = __stdio_files; p; p = p->next) ...
+	 *
+	 * stderr and stdin are simply missing.  That the omission is an
+	 * oversight rather than a decision is visible two files away:
+	 * __stdio_exit() flushes stdout AND stderr before walking the same
+	 * list, because whoever wrote it knew the list does not contain
+	 * them.
+	 *
+	 * stderr is unbuffered by default here (bufmode = _IONBF), so
+	 * nothing is normally pending on it and the gap stays invisible --
+	 * until a caller does what POSIX explicitly permits and gives
+	 * stderr a buffer with setvbuf().  Then output that fflush(NULL)
+	 * was told to push out sits in the buffer instead.
+	 *
+	 * The same omission has a second, input-side face: fflush(NULL)
+	 * does not apply the read-stream action to stdin either, so an
+	 * outstanding ungetc() pushback on a seekable stdin survives a call
+	 * that POSIX says discards it.  Only the stderr half is asserted
+	 * below, because it needs no assumption about what stdin is
+	 * connected to when the suite runs.
+	 *
+	 * Re-enable when fflush(NULL) covers all three standard streams. */
+static void test_fflush_null_covers_stderr(void)
+{
+	static char ebuf[BUFSIZ];
+	char got[64];
+	int p[2], saved;
+	ssize_t n;
+
+	CHECK(pipe(p) == 0);
+	saved = dup(2);
+	CHECK(saved >= 0);
+	CHECK(dup2(p[1], 2) == 2);
+	close(p[1]);
+
+	/* POSIX lets a caller buffer stderr; "the standard error stream
+	 * ... shall not be fully buffered" only constrains the default. */
+	CHECK(setvbuf(stderr, ebuf, _IOLBF, sizeof ebuf) == 0);
+	CHECK(fputs("hello", stderr) >= 0);	/* no newline: still buffered */
+
+	CHECK(fflush(NULL) == 0);		/* must reach fd 2 now */
+
+	dup2(saved, 2);
+	close(saved);
+	setvbuf(stderr, 0, _IONBF, 0);		/* put stderr back */
+
+	n = read(p[0], got, sizeof got - 1);
+	close(p[0]);
+	got[n > 0 ? n : 0] = 0;
+	CHECK(n == 5 && !strcmp(got, "hello"));
+}
+#endif
+
 static void test_perror(void)
 {
 	char buf[256];
