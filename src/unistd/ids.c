@@ -15,7 +15,22 @@ int setgid(gid_t g) { (void)g; return 0; }
 int setegid(gid_t g) { (void)g; return 0; }
 int setreuid(uid_t r, uid_t e) { (void)r; (void)e; return 0; }
 int setregid(gid_t r, gid_t e) { (void)r; (void)e; return 0; }
-int getgroups(int n, gid_t *g) { if (n > 0) g[0] = 1000; return 1; }
+/* The supplementary group list this library reports is one entry long
+ * and holds the effective group ID -- getgroups.html leaves it
+ * implementation-defined whether the effective gid appears there, and
+ * with one identity there is nothing else to put in it.  gidsetsize is
+ * an argument, though, and gets read as one: [EINVAL] is a *shall*-fail
+ * for a gidsetsize "non-zero and less than the number of group IDs that
+ * would have been returned", which every negative value is, given a
+ * count of 1.  gidsetsize 0 asks for the count alone and must not touch
+ * grouplist -- callers pass a null pointer for that form. */
+int getgroups(int n, gid_t *g)
+{
+	const int held = 1;
+	if (n != 0 && n < held) { errno = EINVAL; return -1; }
+	if (n != 0) g[0] = getegid();
+	return held;
+}
 pid_t getpgrp(void) { return 1; }
 pid_t getpgid(pid_t p) { (void)p; return 1; }
 int setpgid(pid_t a, pid_t b) { (void)a; (void)b; return 0; }

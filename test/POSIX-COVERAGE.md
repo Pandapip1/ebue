@@ -3261,8 +3261,8 @@ for the filesystem or console groups.
 | geteuid / getegid | geteuid.html's real-vs-effective distinction | N/A — NT has no set-user-ID bit and no saved set-user-ID; a process token is not switched by executing a file, so nothing on this platform can make the effective id differ from the real one. The agreement *is* asserted (test/posix-unistd.c's `test_access_real_effective_uid_identical` already leans on it) | — |
 | getgroups | "If gidsetsize is 0, getgroups() shall return the number of group IDs that it would otherwise return without modifying the array" | covered | test/posix-unistd-ids.c (`test_getgroups`) |
 | getgroups | "the value returned shall always be greater than or equal to one and less than or equal to the value of {NGROUPS_MAX}+1"; "The actual number of group IDs stored in the array shall be returned" — same count with room for all of them, and the first *n* entries actually written | covered | test/posix-unistd-ids.c (`test_getgroups`) |
-| getgroups | "[EINVAL] The gidsetsize argument is non-zero and less than the number of group IDs that would have been returned" — for a **negative** gidsetsize | **BUG** — see below | fenced, `test_getgroups` |
-| getgroups | the same [EINVAL] for a *positive* gidsetsize | N/A — unconstructible rather than unimplemented: the count is 1 and the smallest positive gidsetsize is 1, so no positive value is ever less than it. A one-group process cannot exhibit that error on any implementation | — |
+| getgroups | "[EINVAL] The gidsetsize argument is non-zero and less than the number of group IDs that would have been returned" — for a **negative** gidsetsize | covered — was a fenced BUG (`gidsetsize` decided only whether to *store*, never whether to *fail*); FIXED, see below | test/posix-unistd-ids.c (`test_getgroups`) |
+| getgroups | the same [EINVAL] for a *positive* gidsetsize | N/A — unconstructible rather than unimplemented: the count is 1 and the smallest positive gidsetsize is 1, so no positive value is ever less than it. A one-group process cannot exhibit that error on any implementation. `src/unistd/ids.c` compares against the count rather than against zero, so the check stays right if the count ever grows | — |
 | setuid / seteuid / setgid / setegid / setreuid / setregid | setuid.html RETURN VALUE "Upon successful completion, 0 shall be returned" for the request this platform can honestly grant (the id already in force), and setreuid.html's `(uid_t)-1` "left unchanged" form | covered | test/posix-unistd-ids.c (`test_setid_family`) |
 | setuid / setgid | "The setuid() function shall not affect the supplementary group list in any way" / "Any supplementary group IDs of the calling process shall remain unchanged" — observed through getgroups() | covered | test/posix-unistd-ids.c (`test_setid_family`) |
 | setuid / seteuid / setgid / setegid / setreuid / setregid | "[EPERM] The process does not have appropriate privileges and uid does not match the real user ID or the saved set-user-ID" (shall-fail, all six pages) | **BUG** — see below | fenced, `test_setid_family` |
@@ -3300,16 +3300,22 @@ for the filesystem or console groups.
 ### Bugs found (unistd.h identity group)
 
 Six, all shall-fail error clauses, all probed on this tree rather than
-inferred, none fixed here.
+inferred, none fixed by the audit commit itself. An entry marked FIXED
+has been corrected since, and its description is kept in the past tense
+as the record; the rest still stand as found.
 
-1. **`getgroups()` succeeds for a negative `gidsetsize`.**
-   `getgroups.html` ERRORS: "[EINVAL] The gidsetsize argument is
-   non-zero and less than the number of group IDs that would have been
-   returned." -1 is non-zero and less than the 1 this implementation
-   returns. `src/unistd/ids.c:20` uses `n` only to decide whether to
-   *store*, never whether to *fail*, so `getgroups(-1, list)` reports
-   "1 group ID stored" into an array it did not write and a caller that
-   trusts the return reads uninitialised memory.
+1. **`getgroups()` succeeded for a negative `gidsetsize`.** FIXED —
+   `src/unistd/ids.c`'s `getgroups()` now compares `gidsetsize` against
+   the count it would return, and `test_getgroups` asserts the clause
+   unfenced. The description is kept in the past tense as the record of
+   what was wrong. `getgroups.html` ERRORS: "[EINVAL] The gidsetsize
+   argument is non-zero and less than the number of group IDs that
+   would have been returned." -1 is non-zero and less than the 1 this
+   implementation returns. `src/unistd/ids.c:20` used `n` only to
+   decide whether to *store*, never whether to *fail*, so
+   `getgroups(-1, list)` reported "1 group ID stored" into an array it
+   did not write and a caller that trusted the return read
+   uninitialised memory.
 
 2. **The whole `set*id` family reports success for requests it did not
    carry out, including ones POSIX requires it to refuse.**
