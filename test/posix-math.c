@@ -39,6 +39,7 @@
 #include <errno.h>
 #include <fenv.h>
 #include <limits.h>
+#include "test-policy.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -736,6 +737,53 @@ static void test_asin_acos(void)
  * NaN->NaN; sinh/tanh: ±0/±Inf->x; cosh: ±0->1, ±Inf->+Inf;
  * sinh/cosh overflow -> range error, ±HUGE_VAL. Not declared by
  * include/math.h. */
+#if NTLIBC_TEST(BUG, posix_math_sinh_large_negative_is_finite) /* BUG: sinh() returns -Inf for ordinary finite arguments below
+	 * about -38.  sinh.html RETURN VALUE: "Upon successful completion,
+	 * these functions shall return the hyperbolic sine of x."  The only
+	 * sanctioned +-HUGE_VAL return is the range error ERRORS names,
+	 * "The result overflows" -- and sinh(-40) is about -1.1769e17,
+	 * which is not remotely an overflow of a double, or even of a
+	 * float.
+	 *
+	 * Mechanism: src/math/sinh.c evaluates the identity
+	 *
+	 *     0.5L * (t + t / (t + 1.0L)),   t = expm1l(x)
+	 *
+	 * which is exact at the small-|x| end and unusable at the negative
+	 * end.  For |x| > 0.5 src/math/expm1.c computes expm1l as
+	 * expl(x) - 1.0L; once e^x falls below 2**-54 -- x below roughly
+	 * -37.4 with this target's 53-bit long double -- that subtraction
+	 * rounds to exactly -1.0.  Then t + 1.0L is exactly +0.0, t/(t+1.0L)
+	 * is -1/0, and the whole expression is -Inf, with FE_DIVBYZERO
+	 * raised on the way out.
+	 *
+	 * The overflow guard above it does not catch this: it tests
+	 * `t == HUGE_VALL`, which is the *positive* end, where expm1l
+	 * genuinely overflowed.  The negative end has no guard at all, and
+	 * sinh(-1000.0) passes today only by coincidence -- there -Inf
+	 * happens to be the answer the overflow clause requires anyway.
+	 *
+	 * The fix is the usual one for this identity: for sufficiently
+	 * negative x, use -0.5 * expl(-x) (or fall back to the exp-based
+	 * form) rather than dividing by t + 1.
+	 *
+	 * Re-enable when sinh() stays finite where the true value is. */
+static void test_sinh_large_negative_is_finite(void)
+{
+	double r = sinh(-40.0);
+
+	/* the true value is -1.1769287308472616e17 */
+	CHECK(isfinite(r));
+	CHECK(r < -1.17e17 && r > -1.18e17);
+
+	/* sinhf() is (float)sinhl(), so it inherits the same division */
+	CHECK(isfinite(sinhf(-40.0f)));
+
+	/* and the positive end must keep working */
+	CHECK(isfinite(sinh(40.0)));
+}
+#endif
+
 static void test_hyperbolic(void)
 {
 	CHECK(isnan(sinh(NAN)) && isnan(cosh(NAN)) && isnan(tanh(NAN)));
