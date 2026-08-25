@@ -812,6 +812,108 @@ static void test_wordexp_arith(void)
 	wordfree(&we);
 }
 
+/* XBD 2.6.4 requires "signed long integer arithmetic" and routes the
+ * operators through XBD 1.1.2 to ISO C 6.5, where signed overflow is
+ * undefined behaviour -- so 2.6.4 specifies no result for an expression
+ * whose value does not fit, and an implementation has to pick one and
+ * be consistent about it. src/wordexp/arith.c's header documents the
+ * choice: two's-complement wraparound at the width of long, computed
+ * through unsigned long so it is defined rather than whatever the
+ * hardware does. This test pins that choice down.
+ *
+ * Before it, apply_binop() simply evaluated `cur * rhs` (and `+`, `-`,
+ * and the unary negation in arith_unary()) on signed longs. Reproducer
+ * of record, from fuzz/fuzz_wordexp.c driving __wordexp_arith()
+ * directly:
+ *
+ *   $((2147483647*2147483647*2147483647))
+ *   src/wordexp/arith.c:210:23: runtime error: signed integer overflow:
+ *   4611686014132420609 * 2147483647 cannot be represented in type 'long'
+ *
+ * -- which tools/asan-build.sh's -fno-sanitize-recover turns into a
+ * process abort, and which on the 32-bit-long LLP64 target is reached
+ * by something as ordinary as $((65536*65536)).
+ *
+ * Every expression here is built at run time from the width of long
+ * rather than written out, because the width genuinely differs between
+ * the two builds this file runs in: 32 bits on the NT target, 64 in the
+ * native ASan build. "1*2*2*..." with (N-1) twos is 2**(N-1) in both,
+ * which is exactly LONG_MIN once wrapped -- and it is reachable
+ * *through strtol*, which a literal LONG_MIN is not (the headers' 
+ * LONG_MAX is the target's in both builds, so a 64-bit literal clamps). */
+static long wrapped(unsigned long u)
+{
+	unsigned long half = ((unsigned long)-1 >> 1) + 1UL;
+	if (u < half) return (long)u;
+	return (long)(u - half) - (long)(half - 1UL) - 1L;
+}
+
+static void test_wordexp_arith_overflow_wraps(void)
+{
+	wordexp_t we;
+	char expr[512], want[64], min_expr[256];
+	unsigned long u = 2147483647UL;
+	size_t nbits = sizeof(long) * 8, i, n;
+	long lmin = wrapped(((unsigned long)-1 >> 1) + 1UL);
+
+	/* The fuzzer's finding, reduced: a product that overflows signed
+	 * long in both builds (2147483647**2 already does at 32 bits;
+	 * 2147483647**3 does at 64). */
+	snprintf(want, sizeof want, "%ld", wrapped(u * u * u));
+	CHECK(wordexp("$((2147483647*2147483647*2147483647))", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], want) == 0);
+	wordfree(&we);
+
+	/* Addition and subtraction wrap the same way. */
+	snprintf(want, sizeof want, "%ld", wrapped(u * u + u * u));
+	snprintf(expr, sizeof expr, "$((2147483647*2147483647+2147483647*2147483647))");
+	CHECK(wordexp(expr, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], want) == 0);
+	wordfree(&we);
+
+	/* "1*2*2*...", (N-1) twos: 2**(N-1), i.e. LONG_MIN wrapped. */
+	n = 0;
+	n += (size_t)snprintf(min_expr + n, sizeof min_expr - n, "1");
+	for (i = 1; i < nbits; i++)
+		n += (size_t)snprintf(min_expr + n, sizeof min_expr - n, "*2");
+	snprintf(expr, sizeof expr, "$((%s))", min_expr);
+	snprintf(want, sizeof want, "%ld", lmin);
+	CHECK(wordexp(expr, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], want) == 0);
+	wordfree(&we);
+
+	/* Negating LONG_MIN: no representable result, so it wraps to
+	 * itself rather than being undefined. */
+	snprintf(expr, sizeof expr, "$((-(%s)))", min_expr);
+	CHECK(wordexp(expr, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], want) == 0);
+	wordfree(&we);
+
+	/* LONG_MIN / -1 overflows too (ISO C 6.5.5p6), and on x86 it is a
+	 * hardware #DE rather than a wrong answer. Quotient wraps to
+	 * LONG_MIN; the remainder of anything by -1 is 0. */
+	snprintf(expr, sizeof expr, "$((%s / -1))", min_expr);
+	CHECK(wordexp(expr, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], want) == 0);
+	wordfree(&we);
+
+	snprintf(expr, sizeof expr, "$((%s %% -1))", min_expr);
+	CHECK(wordexp(expr, &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "0") == 0);
+	wordfree(&we);
+
+	/* And nothing about the ordinary cases moved. */
+	CHECK(wordexp("$((6*7))", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "42") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((-7/2))", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "-3") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((-7%2))", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "-1") == 0);
+	wordfree(&we);
+}
+
 #if 0 /* BUG: XBD 2.6.4 Arithmetic Expansion -- the expression "shall be
 	processed according to the rules given in [XBD 1.1.2] Arithmetic
 	Precision and Operations", and 1.1.2 says evaluation "shall be
@@ -3043,6 +3145,7 @@ int main(int argc, char **argv)
 	test_wordexp_glob_and_quotes();
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
+	test_wordexp_arith_overflow_wraps();
 	test_wordexp_cmdsub(argv[0]);
 	test_wordexp_badchar_nocmd_and_literal_splitting();
 	test_wordexp_syntax_errors();

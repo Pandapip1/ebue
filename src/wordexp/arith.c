@@ -71,6 +71,45 @@
  * module. A setenv() failure (out of memory) is reported as
  * WRDE_NOSPACE, same as every other allocation failure in this
  * directory.
+ *
+ * OVERFLOW: DEFINED AS TWO'S-COMPLEMENT WRAPAROUND.
+ *
+ * 2.6.4 requires "signed long integer arithmetic" and routes the
+ * operators through 1.1.2 to ISO C 6.5, where signed overflow is
+ * *undefined behaviour* -- so the standard neither specifies a result
+ * nor requires a diagnostic, and an implementation has to decide.
+ * 2.6.4's "[i]f the expression is invalid ... the expansion fails" is
+ * about an expression the shell cannot parse or a variable whose
+ * contents it does not recognize, not about a well-formed expression
+ * whose value does not fit; and 2.6.4's own permission to "use a
+ * real-floating type instead of signed long as long as it does not
+ * affect the results in cases where there is no overflow" only makes
+ * sense if the overflow cases are left open.
+ *
+ * The choice here is modular wraparound at the width of long, computed
+ * through unsigned long so that it is defined rather than whatever the
+ * hardware does:
+ *
+ *   - it is what every shell in the field does (bash, dash, ksh all
+ *     print LONG_MIN for $((LONG_MAX+1))), so scripts see the familiar
+ *     answer;
+ *   - it keeps 2.6.4's own worked example, "x=$(($x-1))" in a loop,
+ *     total for every input rather than turning a decrement into an
+ *     expansion failure at one particular value;
+ *   - it is a value, not an error, which matters because <wordexp.h>
+ *     has no code that means "arithmetic overflow" -- the nearest,
+ *     WRDE_SYNTAX, would be an outright lie about a syntactically
+ *     valid expression.
+ *
+ * That long is 32 bits here (LLP64) and 64 bits on a glibc host is
+ * visible to scripts -- $((65536*65536)) is 0 here -- but that is
+ * 2.6.4's "[o]nly signed long integer arithmetic is required", not a
+ * defect: using a wider type is the optional extension, not the rule.
+ *
+ * Not covered by this: the shift operators, whose right operand is
+ * still unbounded. That is a separate undefined-behaviour class (ISO C
+ * 6.5.7p3, the shift *count*, not the result's magnitude) and it is
+ * fenced in test/posix-glob.c, not fixed here.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -201,15 +240,60 @@ static int match_assign_op(const char **pp)
 	return 0;
 }
 
-static long apply_binop(struct arith *a, int op, long cur, long rhs)
+/* Reduce an unsigned long back into long, modulo 2**N -- the
+ * wraparound this evaluator defines its arithmetic to have (see the
+ * OVERFLOW note in the file header).
+ *
+ * Spelled out rather than written `(long)u`, which for u > LONG_MAX is
+ * only implementation-defined (ISO C 6.3.1.3p3), and derived from
+ * ~0UL rather than from <limits.h>'s LONG_MAX: this
+ * library targets LLP64, where long is 32 bits, but its sources are
+ * also compiled natively by tools/asan-build.sh and fuzz/, where the
+ * compiler's long is 64 bits while the headers' LONG_MAX is still the
+ * target's. Anything here that mixed the two would be wrong in exactly
+ * one of the two builds. `half` is 2**(N-1) for whatever N the
+ * compiler actually has. */
+static long wrap_to_long(unsigned long u)
+{
+	unsigned long half = (~0UL >> 1) + 1UL;
+
+	if (u < half) return (long)u;
+	/* u - half is in [0, 2**(N-1)-1], so it fits; and
+	 * -(long)(half-1) - 1 is the real LONG_MIN. */
+	return (long)(u - half) - (long)(half - 1UL) - 1L;
+}
+
+/* Unary minus, and the quotient of the one division that overflows.
+ * __wraps (include/features.h) because the modular subtraction below is
+ * the specified behaviour here, not an accident: tools/asan-build.sh
+ * runs -fsanitize=unsigned-integer-overflow precisely so that an
+ * *unmarked* wrap is a finding. */
+__wraps static long negate(long v)
+{
+	return wrap_to_long(0UL - (unsigned long)v);
+}
+
+/* __wraps for the same reason as negate() above: '+', '-' and '*' below
+ * are deliberately modular. */
+__wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 {
 	switch (op) {
 	case '=': return rhs;
-	case '+': return cur + rhs;
-	case '-': return cur - rhs;
-	case '*': return cur * rhs;
-	case '/': if (rhs == 0) { fail(a, WRDE_SYNTAX); return 0; } return cur / rhs;
-	case '%': if (rhs == 0) { fail(a, WRDE_SYNTAX); return 0; } return cur % rhs;
+	case '+': return wrap_to_long((unsigned long)cur + (unsigned long)rhs);
+	case '-': return wrap_to_long((unsigned long)cur - (unsigned long)rhs);
+	case '*': return wrap_to_long((unsigned long)cur * (unsigned long)rhs);
+	/* rhs == -1 is split out because LONG_MIN / -1 and LONG_MIN % -1
+	 * are the two overflowing divisions (ISO C 6.5.5p6), and on x86
+	 * the first is not a wrong answer but a #DE -- a hardware trap,
+	 * not something a sanitizer build is needed to notice. The
+	 * wrapped quotient of LONG_MIN / -1 is LONG_MIN; the remainder is
+	 * 0 for every cur. */
+	case '/': if (rhs == 0) { fail(a, WRDE_SYNTAX); return 0; }
+		  if (rhs == -1) return negate(cur);
+		  return cur / rhs;
+	case '%': if (rhs == 0) { fail(a, WRDE_SYNTAX); return 0; }
+		  if (rhs == -1) return 0;
+		  return cur % rhs;
 	case '&': return cur & rhs;
 	case '^': return cur ^ rhs;
 	case '|': return cur | rhs;
@@ -269,7 +353,9 @@ static long arith_unary(struct arith *a)
 {
 	skip_ws(a);
 	if (*a->p == '+') { a->p++; return arith_unary(a); }
-	if (*a->p == '-') { a->p++; return -arith_unary(a); }
+	/* Not `-arith_unary(a)`: negating LONG_MIN overflows, same as
+	 * every other operator in apply_binop() above. */
+	if (*a->p == '-') { a->p++; return negate(arith_unary(a)); }
 	if (*a->p == '~') { a->p++; return ~arith_unary(a); }
 	if (*a->p == '!') { a->p++; return !arith_unary(a); }
 	return arith_primary(a);
