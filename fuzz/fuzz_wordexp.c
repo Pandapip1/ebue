@@ -74,7 +74,7 @@ extern void oracle_mismatch_i(const char *, const char *, long long, long long);
  * seconds, leaving a permanently red harness that reports nothing else.
  *
  * test/posix-glob.c's test_wordexp_arith_shift_bounds fence records it:
- * src/wordexp/arith.c:216-217 perform `cur << rhs` and `cur >> rhs` with
+ * src/wordexp/arith.c:300-301 perform `cur << rhs` and `cur >> rhs` with
  * no bound on rhs, so "1<<-1", "1<<64" and "1<<63" are all undefined
  * behaviour, and tools/asan-build.sh builds with
  * -fsanitize=undefined -fno-sanitize-recover, which turns each of them
