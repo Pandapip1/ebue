@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=393 BUG=163 UNIMPL=1016 NA=34 FLAKY=4
+# COUNTS PASS=406 BUG=179 UNIMPL=977 NA=44 FLAKY=4
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -139,9 +139,9 @@ fork/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: comp
 fork/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by nl_types.h pthread.h
 fork/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 fork/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-fsync/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-fsync/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-fsync/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+fsync/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+fsync/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+fsync/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	real pre-existing defect, not a design refusal: src/unistd/fsync.c returns 0 for any non-__FD_FILE descriptor, so fsync(pipe) reports success where fsync.html requires shall-fail [EINVAL]; fenced as posix_io_fsync_pipe_einval. Only visible now because the case #includes <sys/mman.h>
 getpid/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 gmtime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 gmtime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -174,11 +174,11 @@ lio_listio/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A
 lio_listio/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 localtime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mktime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-mlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlock/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Linux-specific rule -- the case cites 'Linux 2.6.9 and later' and gates on RLIMIT_MEMLOCK, which src/misc/resource.c does not enforce, so mlock() genuinely succeeds and the case scores its result==0 branch as a failure
+mlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mlock/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
+mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Linux-specific rule -- the case cites 'Linux 2.6.9 and later' and gates on RLIMIT_MEMLOCK, which src/misc/resource.c does not enforce, so mlock() genuinely succeeds and the case scores its result==0 branch as a failure
 mlockall/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/13-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
@@ -186,40 +186,40 @@ mlockall/3-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: 
 mlockall/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/speculative/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
 mmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/11-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/11-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/11-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h sys/vfs.h
+mmap/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/11-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
+mmap/11-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
+mmap/11-4.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
 mmap/11-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/11-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mntent.h sys/mman.h sys/mount.h
-mmap/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mmap/11-6.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
 mmap/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/19-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mmap/19-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/24-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/24-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/27-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/31-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/32-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/6-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/6-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/6-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mmap/27-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
+mmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/31-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
+mmap/32-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
+mmap/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
+mmap/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
+mmap/6-4.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/6-5.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/6-6.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
 mmap/7-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/7-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mq_close/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h
 mq_close/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h
 mq_close/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h
@@ -347,10 +347,10 @@ mq_unlink/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A:
 mq_unlink/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h
 mq_unlink/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h
 mq_unlink/speculative/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h
-munlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-munlock/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-munlock/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-munlockall/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+munlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
+munlock/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+munlock/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+munlockall/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 munmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
@@ -1542,14 +1542,14 @@ sigtimedwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class
 sigtimedwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigtimedwait/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigtimedwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
 sigwait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 sigwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 sigwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 sigwait/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 sigwait/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigwait/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigwait/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigwaitinfo/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigwaitinfo/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigwaitinfo/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
