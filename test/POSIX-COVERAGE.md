@@ -522,7 +522,7 @@ not every clause line, to keep this section a manageable size):
 | rename ENOTEMPTY/EEXIST (new is a non-empty dir) | **fixed**, commit 3c606a7 (same fix, gives ENOTEMPTY instead of EACCES) | test/posix-unistd.c `test_rename_onto_nonempty_dir` |
 | link / symlink | covered | test/unistd.c |
 | linkat (AT_FDCWD == link, dirfd-relative on both sides, st_nlink incremented, same st_ino, EEXIST, ENOENT, EBADF) | covered | test/posix-unistd.c `test_linkat` |
-| linkat | AT_SYMLINK_FOLLOW | N/A — `src/unistd/link.c` always opens with FILE_OPEN_REPARSE_POINT and ignores `flag`, so it always implements the flag-clear branch; telling the two apart needs a symlink, which the suite's own environment cannot create — a Wine VERSION gap, not a privilege one (measured, `ff1327e`): stock apt Wine 9.0 answers `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED`, that FSCTL having first shipped in wine-10.19, so nothing ever reaches a privilege check. On real NT the privilege (or Developer Mode) *is* the requirement, which is why the real-Windows legs are the ones that can close this | -- |
+| linkat | AT_SYMLINK_FOLLOW | covered *(needs the privilege)* — was a **BUG**: `src/unistd/link.c` used to discard `flag` and always open with FILE_OPEN_REPARSE_POINT, so it always implemented the flag-clear branch. **Fixed in the commit that unfenced it**: the option is now asked for only when the flag is clear, so with it set NT resolves the link during the open and the hard link is made to the target. This row's earlier N/A verdict is superseded — telling the two branches apart needs a symlink, and whether one can be created is an environment fact, not a reason to call the clause inapplicable. Where none can be created the assertions SKIP (rc=77): a Wine VERSION gap, not a privilege one (measured, `ff1327e`): stock apt Wine 9.0 answers `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED`, that FSCTL having first shipped in wine-10.19, so nothing ever reaches a privilege check. On real NT the privilege (or Developer Mode) *is* the requirement, which is why the real-Windows legs are the ones that can close this | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | execl / execle / execlp / fexecve | argv and envp delivered to the exec'd image; the exec'd image's exit status becomes the caller's; ENOENT for a missing file (direct and PATH-searching forms); EBADF for fexecve on a closed descriptor; a failed exec returns and leaves the process image running | covered | test/exec.c (`--exec-l`, `--exec-le`, `--exec-lp`, `--exec-f` roles) |
 | confstr | `_CS_PATH` value and size, `len == 0`/`buf == NULL` sizing call, truncation to `len-1`, [EINVAL] for an invalid name | covered — the [EINVAL] half was a **BUG, FIXED**: `src/unistd/sysconf.c`'s `confstr()` now switches on `name` and rejects the `default`, where it used to start from an empty value and only replace it for `_CS_PATH`, so an unrecognized name returned 1 with errno untouched instead of 0 with EINVAL | test/posix-unistd.c `test_confstr` |
 | swab | adjacent-byte exchange, nothing written past nbytes, nbytes 0 and negative do nothing, odd nbytes exchanges nbytes-1, double swab is identity | covered (pure byte shuffling — the one call in this group for which a Wine pass is strong evidence) | test/posix-unistd.c `test_swab` |
@@ -3176,8 +3176,8 @@ verdict recorded with its evidence (`flockfile`).
 | sscanf | DESCRIPTION: "An input item shall be defined as the longest sequence of input bytes ... which is an initial subsequence of a matching sequence" — for a 400-digit fraction with an exponent, far past any staging buffer | covered — a fixed-size numeric staging buffer has been a real defect here before; `src/stdio/scanf.c`'s `struct nbuf` moves to the heap when a field outgrows its 128-byte `init[]`, and this exercises that | test/posix-stdio.c `test_sscanf_clauses` |
 | fscanf | DESCRIPTION: "if the comparison shows that they are not equivalent, the directive shall fail, and the differing and subsequent bytes shall remain unread" | covered — only a real stream can show this; `sscanf()` has no observable read position afterwards | test/posix-stdio.c `test_fscanf_stream_clauses` |
 | fscanf | RETURN VALUE: "If an error occurs before the first conversion (if any) has completed ... EOF shall be returned and errno shall be set to indicate the error. If a read error occurs, the error indicator for the stream shall be set" | covered — read error manufactured by scanning a stream not open for reading (`fgetc.html` [EBADF]) | test/posix-stdio.c `test_fscanf_stream_clauses` |
-| fscanf family | DESCRIPTION, `[CX]`: "The %c, %s, and %[ conversion specifiers shall accept an optional assignment-allocation character 'm', which shall cause a memory buffer to be allocated" | **UNIMPL (fenced)** — the directive parser does not recognise `'m'` at all; see below | test/posix-stdio.c `test_scanf_m_modifier` |
-| fscanf family | ERRORS: "[ENOMEM] Insufficient storage space is available" — a **shall fail** | N/A to assert (allocator exhaustion), but a defect on this path is visible by inspection; see "Observed behaviour" below | — |
+| fscanf family | DESCRIPTION, `[CX]`: "The %c, %s, and %[ conversion specifiers shall accept an optional assignment-allocation character 'm', which shall cause a memory buffer to be allocated" | covered — `src/stdio/scanf.c`'s directive parser takes `'m'` where the page puts it (after the width, before the length modifier) and `struct abuf` grows the buffer as the field arrives, trimming it to what it holds before handing it over; all three conversions, both destination widths, and a width combined with `'m'` | test/posix-stdio.c `test_scanf_m_modifier`, test/posix-unreferenced.c `test_scanf_enomem` |
+| fscanf family | ERRORS: "[ENOMEM] Insufficient storage space is available" — a **shall fail** | reportable, not assertable — allocator exhaustion cannot be induced here, but the condition now has a channel: an allocation failure in an `'m'` conversion or in the numeric staging buffer returns `EOF` with `errno` set to `[ENOMEM]`. What *is* asserted is everything that has to hold for that to be reachable and safe — the conversions allocate, and each way they can fail frees the partial buffer and leaves the caller's pointer alone (checked natively under LeakSanitizer by `make asan`) | test/posix-unreferenced.c `test_scanf_enomem` |
 | fscanf family | ERRORS: "[EINVAL] There are insufficient arguments" (a *may fail*) | N/A — a may-fail, and there is no conforming way for a variadic callee to detect the condition | — |
 | fscanf family | ERRORS: "[EILSEQ] Input byte sequence does not form a valid character" | N/A — POSIX-locale-only parser, no encoding step to fail | — |
 | gets | `gets.html` DESCRIPTION: "shall read bytes from ... stdin ... until a `<newline>` is read or an end-of-file condition is encountered. Any `<newline>` shall be discarded and a null byte shall be placed immediately after the last byte read into the array" | covered — both the newline-terminated and the EOF-terminated line | test/posix-stdio.c `test_gets` |
@@ -3296,19 +3296,35 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
 
 ### UNIMPL found (groups K/L)
 
-1. **The `[CX]` assignment-allocation character `'m'` is not
-   implemented for `%c`, `%s` or `%[`.** `fscanf.html` DESCRIPTION:
-   "The %c, %s, and %[ conversion specifiers shall accept an optional
-   assignment-allocation character 'm', which shall cause a memory
-   buffer to be allocated to hold the string converted including a
-   terminating null character ... The application shall be responsible
+1. **The `[CX]` assignment-allocation character `'m'` was not
+   implemented for `%c`, `%s` or `%[` — FIXED.** `fscanf.html`
+   DESCRIPTION: "The %c, %s, and %[ conversion specifiers shall accept
+   an optional assignment-allocation character 'm', which shall cause a
+   memory buffer to be allocated to hold the string converted including
+   a terminating null character ... The application shall be responsible
    for freeing the memory after usage." `src/stdio/scanf.c`'s directive
-   parser recognises `'*'`, a width and the length modifiers, and
-   nothing else; an `'m'` falls through the conversion switch's default
-   arm, so no argument is consumed and every remaining directive is
-   then matched against the wrong input. Measured:
-   `sscanf("abc", "%ms", &p)` returns 0 and leaves `p` untouched.
-   UNIMPL rather than BUG: the feature is absent, not wrong.
+   parser recognised `'*'`, a width and the length modifiers, and
+   nothing else; an `'m'` fell through the conversion switch's default
+   arm, so no argument was consumed and every remaining directive was
+   then matched against the wrong input. Measured before the fix:
+   `sscanf("abc", "%ms", &p)` returned 0 and left `p` untouched. It was
+   filed UNIMPL rather than BUG because the feature was absent rather
+   than wrong.
+
+   The parser now takes `'m'` where the page puts it — after the field
+   width and before the length modifier — and `struct abuf` in the same
+   file grows the destination as the field arrives, doubling rather than
+   trusting the width (which may be absent, or far larger than the
+   input), then trimming to what the field holds before storing the
+   pointer through the caller's `char **`/`wchar_t **`. The pointer is
+   stored **only** on success, so a matching failure, an encoding error
+   or an allocation failure all free the partial buffer and leave the
+   caller's variable exactly as it was. Both destination widths are
+   covered, since `'m'` composes with the `l` qualifier the same way the
+   non-allocating forms do, and the width the conversion allocates for
+   is not one element per input unit: one multibyte character above the
+   BMP becomes a surrogate *pair* of `wchar_t`, and under `fwscanf()`
+   one wide character becomes up to `MB_LEN_MAX` bytes.
 
 ### Observed behaviour where POSIX permits latitude (groups K/L)
 
@@ -3322,17 +3338,30 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
   deliberately not fenced: the reading is genuinely ambiguous and
   pinning either answer would be inventing a requirement.
 
-- **`fscanf()` has no channel for `[ENOMEM]`, which the page makes a
-  *shall fail*.** `fscanf.html` ERRORS: "In addition, the fscanf()
-  function shall fail if: ... [ENOMEM] Insufficient storage space is
-  available." `src/stdio/scanf.c` says so itself, in the banner over
-  `scandrain()`: "scanf has no channel for ENOMEM, so this becomes a
-  matching failure". A conforming caller therefore cannot distinguish
-  a malformed field from an exhausted allocator. Found by inspection
-  and recorded here rather than fenced, for the same reason the
-  `glob.h` section records its `GLOB_NOSPACE` finding this way: no
-  assertion this suite can write reaches the path, so there is nothing
-  to un-fence when it is fixed.
+- **`fscanf()` had no channel for `[ENOMEM]`, which the page makes a
+  *shall fail* — FIXED.** `fscanf.html` ERRORS: "In addition, the
+  fscanf() function shall fail if: ... [ENOMEM] Insufficient storage
+  space is available." `src/stdio/scanf.c` used to say so itself, in the
+  banner over `scandrain()`: "scanf has no channel for ENOMEM, so this
+  becomes a matching failure" — so a conforming caller could not
+  distinguish a malformed field from an exhausted allocator. It was
+  recorded here rather than fenced for the same reason the `glob.h`
+  section records its `GLOB_NOSPACE` finding this way: no assertion this
+  suite can write reaches the path.
+
+  It was fixed alongside the `'m'` conversions above, which are the
+  first thing in this parser to allocate on the *caller's* behalf and so
+  the first thing that made the error worth having a channel for. An
+  allocation failure — in an `'m'` buffer or in the numeric staging
+  buffer `scandrain()` guards — now returns `EOF` with `errno` set to
+  `[ENOMEM]`. It deliberately does **not** set the stream's error
+  indicator, unlike `[EILSEQ]`: `fgetc.html` makes that indicator a
+  statement about a *read* error, and nothing went wrong reading the
+  stream. The path still cannot be reached by an assertion, so the
+  ledger entry stays "reportable, not assertable"; what the suite does
+  pin is everything the report depends on — that the conversions
+  allocate at all, and that every failure among them frees what it
+  built (checked natively under LeakSanitizer by `make asan`).
 
 - **`gets()` returns `s`, not a null pointer, if a read error strikes
   after some bytes are already in the array.** `gets.html` RETURN
@@ -3367,10 +3396,14 @@ carried by this file alone.
 single call transmitting more than 2 GiB). `[ENOMEM]` on the
 printf and scanf families (allocator exhaustion). `[EILSEQ]` on both
 families (POSIX-locale-only, no encoding step). `fscanf`'s `[EINVAL]`
-may-fail. `gets()`'s read-error-after-partial-line path, and
-`fscanf()`'s `[ENOMEM]` path — both recorded under "Observed
-behaviour" above as inspection findings that no assertion here can
-reach. Every clause of `flockfile.html` that needs a second thread.
+may-fail. `gets()`'s read-error-after-partial-line path, recorded under
+"Observed behaviour" above as an inspection finding that no assertion
+here can reach. `fscanf()`'s `[ENOMEM]` path is still unreachable by an
+assertion for the same reason, but it is no longer an inspection finding
+about a *missing* channel: since the `'m'` conversions landed, the error
+is produced, and what the suite reaches instead is every property the
+report rests on. Every clause of `flockfile.html` that needs a second
+thread.
 
 ## unistd.h identity, process group, session, scheduling (successor-queue item 2, group M)
 
@@ -3674,9 +3707,9 @@ underneath.
 | linkat | "[EEXIST] The path2 argument resolves to an existing directory entry" — when path2 is path1, and when it is a directory | covered | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "[EPERM] The file named by path1 is a directory and either the calling process does not have appropriate privileges or the implementation prohibits using link() on directories" | covered — was a BUG (a directory path1 reported `EISDIR`, which `link.html`'s ERRORS list does not contain); **fixed in the commit that unfenced it**: `src/unistd/link.c`'s `linkat()` reads path1's attributes off the handle it already holds and returns `EPERM` before path2 is resolved, with `STATUS_FILE_IS_A_DIRECTORY` from `NtSetInformationFile` mapped to `EPERM` at that call site as the fallback | test/posix-unistd-links.c (`test_linkat_remaining`) — the errno, the absence of debris, and a regular-file positive control (both `linkat()` and `link()` still make a real hard link) |
 | linkat | "If path1 names a symbolic link ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for the symbolic link path1 and not its target" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_linkat_remaining`) |
-| linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | **BUG** — see below; supersedes this ledger's earlier N/A for the clause | fenced, `test_linkat_remaining` |
+| linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | covered *(needs the privilege)* — was a **BUG** (`flags` was discarded outright); **fixed in the commit that unfenced it**, see below. Supersedes this ledger's earlier N/A for the clause | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | "shall atomically create a new link for the existing file and the link count of the file shall be incremented by one"; [EEXIST]; [ENOENT] for path1 and the empty string; [EBADF] on either side; dirfd-relative creation | covered — pre-existing | test/posix-unistd.c (`test_linkat`) |
-| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, and linkat() likewise ignores its flag argument outright; unasserted (unlike unlinkat()'s [EINVAL], which is a shall-fail and is now enforced) | — |
+| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, and deliberately not taken: `linkat()` reads `AT_SYMLINK_FOLLOW` out of `flags` and lets any other bit mean the flag-clear branch, so there is nothing to assert (unlike unlinkat()'s [EINVAL], which is a shall-fail and is now enforced) | — |
 | linkat | [EMLINK], [EXDEV], [ENOSPC], [EROFS], [EACCES], [ELOOP] | N/A — {LINK_MAX} is 1023 here so [EMLINK] means creating a thousand entries per run for a limit the platform rather than this code enforces; [EXDEV] needs two filesystems a CI image is not guaranteed to have; the rest as for symlinkat | — |
 
 ### Bugs found (unistd.h `*at()` link group)
@@ -3707,13 +3740,33 @@ underneath.
    path1 is untouched, and `test_linkat_remaining()` now pins that
    with a positive control beside the `EPERM` assertion.
 
-2. **`linkat()` ignores `flags`, so `AT_SYMLINK_FOLLOW` does nothing.**
-   `link.html` distinguishes two behaviours by that flag; `src/unistd/
-   link.c:27` is `(void)flags;` and line 31 opens with
+2. **`linkat()` ignored `flags`, so `AT_SYMLINK_FOLLOW` did nothing —
+   fixed.** `link.html` distinguishes two behaviours by that flag;
+   `src/unistd/link.c` had `(void)flags;` and opened path1 with
    `FILE_OPEN_REPARSE_POINT` unconditionally, which is precisely the
-   flag-*clear* branch. Measured: the entry created with
+   flag-*clear* branch. Measured before the fix: the entry created with
    `AT_SYMLINK_FOLLOW` is itself a symbolic link, where the clause
    requires a hard link to the target.
+
+   **Fixed in the commit that unfenced it.** The two branches differ by
+   exactly one create option, so `linkat()` now builds its open options
+   from the flag — `FILE_OPEN_REPARSE_POINT` only when
+   `AT_SYMLINK_FOLLOW` is clear — and everything downstream (the
+   `FileAttributeTagInformation` query, the [EPERM] decision, the
+   `FileLinkInformation` set) runs against whichever file that open
+   resolved to. The two fixes compose rather than collide: with the flag
+   set the handle is the target, so the directory check sees the
+   target's attributes and its reparse-point exemption cannot fire —
+   a symbolic link to a directory is then "path1 names a directory" and
+   [EPERM] is correct, where with the flag clear it is a non-directory
+   file and the link is made to the link itself.
+
+   Two assertions that need no symbolic link pin the half of this that
+   *must not* change, and run in every environment: with
+   `AT_SYMLINK_FOLLOW` set, a regular-file path1 still hard-links
+   (compared against the flag-clear outcome recorded a few lines
+   earlier, so a filesystem without hard links is not asked for one) and
+   a directory path1 still fails [EPERM] leaving no entry.
 
    **This supersedes an earlier N/A.**
    `test/POSIX-GAP-ACCOUNTING.md`'s successor-session notes record this
@@ -3724,8 +3777,8 @@ underneath.
    privilege half of it holds only for the real-Windows leg; on the
    Wine leg the blocker is an unimplemented `FSCTL_SET_REPARSE_POINT`
    — and it is why
-   the fence sits behind the symlink probe, but it is not a reason
-   to call the clause inapplicable. The defect is visible in the source
+   the assertions sit behind the symlink probe, but it was not a reason
+   to call the clause inapplicable. The defect was visible in the source
    without running anything, and it is reachable in any environment
    that can create a symbolic link at all. N/A is for "a real NT
    mechanism makes the clause inapplicable", not for "this CI image
@@ -3796,13 +3849,13 @@ Wine is sound for them; the `[ENOEXEC]` answer comes from
 | execv / execve | "[ENOENT] A component of path or file does not name an existing file or path or file is an empty string" — a missing program and the empty string | covered | test/posix-unistd-exec.c (`test_path_errors`) |
 | execl / execle | the same [ENOENT], through the l-forms' `va_list` argument builder | covered | test/posix-unistd-exec.c (`test_path_errors`) |
 | execvp / execlp | the same [ENOENT], for a name in no PATH directory ("Otherwise, the path prefix for this file is obtained by a search of the directories passed as the environment variable PATH") | covered | test/posix-unistd-exec.c (`test_path_errors`) |
-| execvp / execlp | ... and for the **empty string** | **BUG** — see below | fenced, `test_path_errors` |
+| execvp / execlp | ... and for the **empty string** | covered — was a BUG, fixed; see below | test/posix-unistd-exec.c (`test_path_errors`) |
 | execv / execl | "[ENOTDIR] A component of the new process image file's path prefix names an existing file that is neither a directory nor a symbolic link to a directory ..." | covered | test/posix-unistd-exec.c (`test_path_errors`) |
 | execv / execve | "The new image shall be constructed from a regular, executable file" — a directory is not one, so the call must fail and leave the caller running | covered | test/posix-unistd-exec.c (`test_not_a_regular_file`) |
 | execv / execve | "[EACCES] The new process image file is not a regular file and the implementation does not support execution of files of its type" — the *errno* for that case | **BUG** — see below | fenced, `test_not_a_regular_file` |
 | fexecve | "[EBADF] The fd argument is not a valid file descriptor open for executing" — for a descriptor open on a **directory**, which is the one place on this page where EBADF is the right answer. Asserted rather than fenced, to pin the distinction the [EACCES] fence draws | covered | test/posix-unistd-exec.c (`test_not_a_regular_file`) |
 | all seven | "[EACCES] Search permission is denied for a directory listed in the new process image file's path prefix, or the new process image file denies execution permission" | N/A — `src/unistd/access.c`'s `X_OK` is satisfied by the file merely existing (NTFS has no execute bit this library maps a mode onto — `src/stat/chmod.c`'s banner), and one fixed identity cannot construct an unsearchable directory. Neither branch is reachable | — |
-| all seven | RETURN VALUE "If one of the exec functions returns to the calling process image, an error has occurred; the return value shall be -1, and errno shall be set" — every call in the file, 19 of them | covered | test/posix-unistd-exec.c (all four functions, counted in `main`) |
+| all seven | RETURN VALUE "If one of the exec functions returns to the calling process image, an error has occurred; the return value shall be -1, and errno shall be set" — every call in the file, 23 of them | covered | test/posix-unistd-exec.c (all four functions, counted in `main`) |
 | execve | "If execution fails, the calling process image remains unchanged" — in the form that once bit this tree: an open **FD_CLOEXEC** descriptor must survive a failed exec and still be readable at its old offset. `src/process/exec.c`'s banner records the regression (`__fd_close_all_cloexec()` used to run *before* the spawn, so a failed `execv()` handed back a process whose cloexec fds were already shut) | covered | test/posix-unistd-exec.c (`test_failed_exec_leaves_image_unchanged`) |
 | execve | ... and the environment a *failed* `execve()` was asked to install does not take effect on the caller: "the environment for the new process image shall be taken from the external variable environ in the calling process" | covered | test/posix-unistd-exec.c (`test_failed_exec_leaves_image_unchanged`) |
 | all seven | "[ELOOP]", "[ENAMETOOLONG]", "[ETXTBSY]", "[ENOMEM]" | N/A — a symlink cycle handed to NT's own resolver; `[ETXTBSY]`/`[ENOMEM]` are may-fail. `[ENAMETOOLONG]` is a shall-fail that this tree answers `ENOENT` to, but that is a library-wide path-resolution property already fenced against `utime()` in `test/posix-strings.c`, not an exec defect, and is not re-opened here | — |
@@ -3810,17 +3863,45 @@ Wine is sound for them; the `[ENOEXEC]` answer comes from
 
 ### Bugs found (unistd.h exec group)
 
-1. **`execvp()`/`execlp()` report `[EBADF]` for an empty `file`
-   argument, where `exec.html` requires `[ENOENT]`.** The v/l forms get
-   this right; the p-forms do not. `src/process/exec.c:62` computes
+1. **`execvp()`/`execlp()` reported `[EBADF]` for an empty `file`
+   argument, where `exec.html` requires `[ENOENT]` — fixed.** The v/l
+   forms got this right; the p-forms did not. `src/process/exec.c`'s
+   `execvpe()` computes
    `use_path = !strchr(file, '/') && !strchr(file, '\\')`, which is
-   true for `""`, so `__find_program("", 1)` runs the PATH search with
-   an empty name. `try_dir()` then builds `<PATH entry>\` — a directory
-   name with nothing appended — and **accepts it**, because
-   `access(p, X_OK)` succeeds on a directory. `execvp("")` therefore
-   resolves to the first directory in `PATH` and tries to execute it.
-   The empty string is a case `__find_program()` has to reject before
-   the loop.
+   true for `""`, so `__find_program("", 1)` ran the PATH search with
+   an empty name. `try_dir()` then built `<PATH entry>\` — a directory
+   name with nothing appended — and **accepted it**, because
+   `access(p, X_OK)` succeeds on a directory (NTFS has no execute bit
+   `src/unistd/access.c` maps `X_OK` onto). `execvp("")` therefore
+   resolved to the *first* directory in `PATH` and asked NT to run it
+   as a process image, so the errno the caller saw was whatever the
+   failed image section mapped to — measured under Wine, errno 9
+   `EBADF`; on real NT the same route reaches `EIO`, per the
+   measurement in `fexecve()`'s comment in `src/process/exec.c`. Either
+   way, never `ENOENT`.
+
+   **Fixed in the commit that unfenced it.** `__find_program()`
+   (`src/process/find_program.c`) now rejects an empty name with
+   `ENOENT` before either branch, which is where the clause belongs:
+   the empty string names nothing whether or not a PATH search is
+   asked for, and answering it in the library rather than from an
+   NTSTATUS makes the errno independent of which of NT or Wine is
+   underneath. The reject is deliberately *not* in `execvpe()`, so the
+   other callers of the same resolver — `posix_spawnp()`
+   (`src/process/posix_spawn.c`) and the shell's command lookup
+   (`src/sh/exec.c`) — get the same answer. Non-empty names are
+   untouched, and `test_path_errors()` now carries a **positive
+   control** saying so: it prepends an empty entry to `PATH` (the
+   current directory, which `main()` has `chdir()`ed into) and
+   `execvp()`s a non-PE text file placed there, which must fail for
+   some reason *other* than `[ENOENT]` — a resolver that satisfied
+   this clause by refusing every lookup would answer `ENOENT` and fail
+   it. Measured under Wine: `ENOEXEC` (8) for the on-`PATH` name, and
+   `ENOENT` (2) for both `""` and a name in no `PATH` directory, so
+   the three outcomes are genuinely distinguished. The
+   directory-as-process-image case below is untouched as well
+   (verified: `execv("./ex-dir")` still reports errno 9), so its fence
+   keeps its premise.
 
 2. **Executing a directory reports `[EBADF]`, which is not an errno
    `exec.html` allows the path-taking forms to produce.** The page's
@@ -4085,7 +4166,7 @@ decides whether anyone acts:
 | scanf | DESCRIPTION: "equivalent to `fscanf()` with the argument `stdin` interposed"; `%n` consuming no input and never counting toward the return value; the assignment-suppressing `*` | covered | `test_scanf_basics`, `test_scanf_returns` |
 | scanf | RETURN VALUE: "the number of successfully matched and assigned input items", "can be zero in the event of an early matching failure", and "If the input ends before the first conversion ... has completed ... EOF shall be returned" — all three, plus the case where a *later* conversion hits EOF and the result is therefore not EOF | covered | `test_scanf_returns` |
 | scanf | `fgetc.html` `[EBADF]` — `scanf()` on a `stdin` reopened write-only | covered | `test_scanf_ebadf` |
-| scanf | `ERRORS`, shall fail: `[ENOMEM]` "Insufficient storage space is available" | **BUG (fenced)** — the `m` assignment-allocation character is not implemented at all; `%ms` falls through `switch(*p)` to `default: break`, assigning nothing and reporting neither a matching failure nor an error. With no allocating conversion there is no situation in which `[ENOMEM]` can arise | `test_scanf_enomem` |
+| scanf | `ERRORS`, shall fail: `[ENOMEM]` "Insufficient storage space is available" | covered — FIXED (this commit); the fenced defect was: the `m` assignment-allocation character was not implemented at all, so `%ms` fell through `switch(*p)` to `default: break`, assigning nothing and reporting neither a matching failure nor an error, and with no allocating conversion there was no situation in which `[ENOMEM]` could arise. `src/stdio/scanf.c` now implements `'m'` for `%s`, `%c` and `%[` (see the `fscanf family` rows above), so the error has a channel: an allocation failure returns `EOF` with `errno == ENOMEM`. Exhausting the allocator is still not producible on demand, so what the test asserts is every property the report rests on — the conversions allocate, a width caps them, and a matching failure or an `[EILSEQ]` part-way through a field frees the partial buffer and leaves the caller's pointer untouched | `test_scanf_enomem` |
 |  | POINTER, 2026-08-24: `test/external-suites.md`'s `regression/printf-fmt-n | %n mismatch | needs triage` row was RESOLVED by **c200c7f** ("printf: read %z and %t as size_t/ptrdiff_t, not as long").  That document is a dated measurement against a named base revision and is deliberately not edited; the resolution is recorded here, in the living one, so a reader of either finds it | -- | -- |
 | scanf | `ERRORS`, shall fail: `[EILSEQ]` "Input byte sequence does not form a valid character" | covered — raised by the `l` length modifier's conversion, and the conversion itself is asserted separately, because detecting the failure and performing the conversion are two different things | `test_scanf_eilseq`, `test_scanf_l_modifier` (both in test/posix-unreferenced.c, both unfenced) |
 |  | CORRECTION, 2026-08-24: this row previously read "**BUG (fenced)** — the `l` length modifier is parsed and then ignored by the `s`, `c` and `[` conversions, so `%ls` stores raw bytes into a `wchar_t` buffer".  That stopped being true at **6029595** ("scanf: implement the l (ell) length modifier for %s, %c and %["), which added `wide_put()` to `src/stdio/scanf.c` and unfenced both tests; the row was not updated with it.  Recorded rather than silently overwritten so the change is legible.  Note this is a living document and is corrected in place; `POSIX-GAP-ACCOUNTING.md` is a dated record and is never retro-edited | -- | -- |

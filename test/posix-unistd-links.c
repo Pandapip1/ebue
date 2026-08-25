@@ -38,10 +38,15 @@
  * authority.  Wine implements reparse points well enough to create and
  * read a symlink without the privilege, which is why the privileged
  * half of this file is exercised locally at all -- but a Wine pass is
- * evidence about Wine's reparse-point emulation, not about NTFS.  The
- * one fenced finding left below -- the [EPERM]-on-a-directory one has
- * since been fixed -- is readable straight out of src/unistd/link.c and
- * does not depend on which of the two is running.
+ * evidence about Wine's reparse-point emulation, not about NTFS.  Both
+ * findings this file recorded -- linkat() reporting [EISDIR] for a
+ * directory path1, and linkat() discarding its flag argument so
+ * AT_SYMLINK_FOLLOW did nothing -- have since been fixed, and no fence
+ * remains here.  Each was readable straight out of src/unistd/link.c
+ * and did not depend on which of the two runtimes was running; what
+ * *does* depend on the runtime is whether the assertions that pin the
+ * second one can execute at all, since they need a symbolic link to
+ * exist.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -384,11 +389,11 @@ static void test_readlinkat_dirfd(void)
 
 /* ============================================================
  * linkat -- the clauses test_linkat() in test/posix-unistd.c leaves
- * open, and the AT_SYMLINK_FOLLOW finding
+ * open, and both AT_SYMLINK_FOLLOW branches
  * ============================================================ */
 static void test_linkat_remaining(void)
 {
-	int fd;
+	int fd, hardlinks;
 
 	fd = open("lk-src.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
 	CHECK(fd >= 0 && write(fd, "abc", 3) == 3 && close(fd) == 0);
@@ -461,7 +466,8 @@ static void test_linkat_remaining(void)
 	 * "path1 is a directory" is the only thing this call can mean by
 	 * it and lk-src.txt is not one. */
 	errno = 0;
-	if (linkat(AT_FDCWD, "lk-src.txt", AT_FDCWD, "lk-reg", 0) == 0) {
+	hardlinks = (linkat(AT_FDCWD, "lk-src.txt", AT_FDCWD, "lk-reg", 0) == 0);
+	if (hardlinks) {
 		struct stat sa, sb;
 		CHECK(stat("lk-src.txt", &sa) == 0);
 		CHECK(stat("lk-reg", &sb) == 0);
@@ -481,14 +487,47 @@ static void test_linkat_remaining(void)
 		       "regular-file control skipped\n", errno);
 	}
 
+	/* AT_SYMLINK_FOLLOW where path1 is not a symbolic link.  The flag
+	 * decides which file path1 resolves to, and a path that is not a
+	 * link resolves to itself either way, so setting it must change
+	 * nothing at all here: the same success for a regular file, the
+	 * same [EPERM] for a directory.  These assertions need no symbolic
+	 * link, so unlike the pair below they run in every environment --
+	 * and they are what stops "honour the flag" from being achieved by
+	 * refusing, or mis-resolving, every call that sets it.  The
+	 * regular-file half is compared against the flag-clear outcome
+	 * recorded just above rather than asserted outright, so a
+	 * filesystem without hard links is still not asked for one; on a
+	 * filesystem that has them, a refusal is a failure. */
+	errno = 0;
+	if (linkat(AT_FDCWD, "lk-src.txt", AT_FDCWD, "lk-follow-reg", AT_SYMLINK_FOLLOW) == 0) {
+		struct stat sa, sb;
+		CHECK(hardlinks);
+		CHECK(stat("lk-src.txt", &sa) == 0);
+		CHECK(stat("lk-follow-reg", &sb) == 0);
+		CHECK(S_ISREG(sb.st_mode));
+		CHECK(sa.st_nlink == 2);
+		CHECK(sa.st_ino == sb.st_ino);
+		CHECK(unlink("lk-follow-reg") == 0);
+	} else {
+		CHECK(!hardlinks);
+		printf("note: hard links unsupported here (linkat errno %d), "
+		       "AT_SYMLINK_FOLLOW regular-file control skipped\n", errno);
+	}
+	errno = 0;
+	CHECK(linkat(AT_FDCWD, "lk-dir", AT_FDCWD, "lk-dir3", AT_SYMLINK_FOLLOW) == -1 && errno == EPERM);
+	CHECK(access("lk-dir3", F_OK) == -1);
+
 	if (have_symlinks) {
 		CHECK(symlinkat("lk-src.txt", AT_FDCWD, "lk-sym") == 0);
 
 		/* link.html DESCRIPTION: "If path1 names a symbolic link,
 		 * ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new
 		 * link is created for the symbolic link path1 and not its
-		 * target."  That branch is what src/unistd/link.c
-		 * implements unconditionally, and it is correct for flag 0. */
+		 * target."  src/unistd/link.c reaches that branch by asking
+		 * for FILE_OPEN_REPARSE_POINT, so the handle it sets
+		 * FileLinkInformation on is the link rather than what the
+		 * link points at. */
 		if (linkat(AT_FDCWD, "lk-sym", AT_FDCWD, "lk-hardsym", 0) == 0) {
 			struct stat st;
 			CHECK(lstat("lk-hardsym", &st) == 0);
@@ -500,40 +539,23 @@ static void test_linkat_remaining(void)
 			skips++;
 		}
 
-#if 0		/* BUG: linkat() ignores its flag argument, so
-		 * AT_SYMLINK_FOLLOW does nothing.
+		/* The other branch of the same sentence: "... [if] the
+		 * AT_SYMLINK_FOLLOW flag is set ... a new link is created
+		 * for the file referred to by path1."  The new entry must
+		 * be a hard link to the *target* -- a regular file -- not a
+		 * second name for the symbolic link, so S_ISLNK() has to be
+		 * false and S_ISREG() true where the flag-clear case above
+		 * requires the opposite.  linkat() used to discard `flags`
+		 * outright and always ask for FILE_OPEN_REPARSE_POINT,
+		 * collapsing the two branches into the flag-clear one; it
+		 * now leaves that option off when the flag is set, so the
+		 * object manager resolves the link during the open.
 		 *
-		 * link.html DESCRIPTION: "If path1 names a symbolic link,
-		 * ... [if] the AT_SYMLINK_FOLLOW flag is set ... a new link
-		 * is created for the file referred to by path1."  With the
-		 * flag set, the new entry must be a hard link to the
-		 * *target* -- a regular file -- not a second name for the
-		 * symbolic link.
-		 *
-		 * Mechanism: src/unistd/link.c:21 declares
-		 * `int linkat(..., int flags)` and line 27 is `(void)flags;`
-		 * -- the argument is discarded, and the open on line 31
-		 * passes FILE_OPEN_REPARSE_POINT unconditionally, which is
-		 * precisely the flag-*clear* behaviour.  So the two branches
-		 * the page distinguishes are collapsed into one.
-		 *
-		 * test/POSIX-GAP-ACCOUNTING.md's successor-session notes
-		 * record this clause as N/A on the grounds that
-		 * distinguishing the branches "needs a symbolic link, which
-		 * needs SeCreateSymbolicLinkPrivilege and is not available
-		 * on the CI images this suite is the authority on".  (The
-		 * privilege half of that is right only for the real-Windows
-		 * leg; see this file's banner.)  That is
-		 * an accurate statement about the *test environment* and it
-		 * is why this fence sits behind have_symlinks -- but it is
-		 * not a reason to call the clause inapplicable: the defect
-		 * is visible in the source without running anything, and it
-		 * is reachable in any environment that can create a symbolic
-		 * link at all.  Probed on this tree (Wine, which creates
-		 * reparse points without the privilege): the entry created
-		 * with AT_SYMLINK_FOLLOW is itself a symbolic link, i.e.
-		 * S_ISLNK() is true where the clause requires S_ISREG().
-		 * Re-enable when linkat() honours flags. */
+		 * This group is the reason the whole block sits behind
+		 * have_symlinks: telling the branches apart needs a symbolic
+		 * link to exist, and creating one is an environment fact
+		 * (see this file's banner).  Where none can be created it is
+		 * reported as a SKIP and rc=77, not as a pass. */
 		{
 			struct stat st;
 			CHECK(linkat(AT_FDCWD, "lk-sym", AT_FDCWD, "lk-follow", AT_SYMLINK_FOLLOW) == 0);
@@ -542,7 +564,6 @@ static void test_linkat_remaining(void)
 			CHECK(S_ISREG(st.st_mode));
 			CHECK(unlink("lk-follow") == 0);
 		}
-#endif
 		CHECK(unlink("lk-sym") == 0);
 	} else {
 		printf("SKIP posix-unistd-links linkat AT_SYMLINK_FOLLOW clauses "

@@ -1958,25 +1958,45 @@ static void test_fscanf_stream_clauses(const char *name)
  * pointer variable that will receive a pointer to the allocated
  * buffer."
  *
- * src/stdio/scanf.c's directive parser recognises '*', a width and the
- * length modifiers, and nothing else: an 'm' falls through the
- * conversion switch's default arm, so no argument is consumed and the
- * remaining directives are then matched against the wrong input.
- * Measured: sscanf("abc", "%ms", &p) returns 0 and leaves p untouched.
- * Genuinely unimplemented rather than a wrong answer to an implemented
- * clause, hence UNIMPL. */
-#if 0 /* UNIMPL: the [CX] 'm' assignment-allocation character is not implemented for %c/%s/%[; POSIX fscanf.html requires it to malloc() a buffer and store the pointer through the corresponding argument */
+ * Asserted through sscanf() here, and through scanf() on a real stream
+ * in test/posix-unreferenced.c's test_scanf_enomem(), which is where the
+ * failure paths and the [ENOMEM] the page makes a shall-fail live.  The
+ * two are worth having separately: sscanf() reaches the parser through a
+ * memory FILE, and the allocating conversions read through the same
+ * cursor as everything else, so a buffer sized from the wrong stream is
+ * a mistake only one of the two would show. */
 static void test_scanf_m_modifier(void)
 {
 	char *p = 0;
+	char *q = 0;
+	wchar_t *w = 0;
+
 	CHECK(sscanf("abc", "%ms", &p) == 1);
 	CHECK(p != 0);
 	if (p) {
 		CHECK(!strcmp(p, "abc"));
 		free(p);
+		p = 0;
 	}
+
+	/* all three conversions, and the l qualifier's wchar_t ** form */
+	CHECK(sscanf("  hi 007", "%ms %m[0-9]", &p, &q) == 2);
+	CHECK(p != 0 && !strcmp(p, "hi"));
+	CHECK(q != 0 && !strcmp(q, "007"));
+	free(p); free(q); p = q = 0;
+
+	CHECK(sscanf("\xc3\xa9z", "%mls", &w) == 1);
+	CHECK(w != 0 && w[0] == 0x00e9 && w[1] == L'z' && w[2] == 0);
+	free(w); w = 0;
+
+	CHECK(sscanf("wx", "%2mc", &p) == 1);
+	CHECK(p != 0 && !memcmp(p, "wx", 2));
+	free(p); p = 0;
+
+	/* a matching failure hands over nothing */
+	CHECK(sscanf("abc", "%m[0-9]", &p) == 0);
+	CHECK(p == 0);
 }
-#endif
 
 /* gets.html.  DESCRIPTION: "shall read bytes from the standard input
  * stream, stdin, into the array pointed to by s, until a <newline> is
@@ -2352,6 +2372,7 @@ int main(void)
 		test_printf_output_error(name);
 		test_dprintf_fd_path(name);
 		test_fscanf_stream_clauses(name);
+		test_scanf_m_modifier();
 		/* these three repoint stdin at the temp file and leave it there */
 		test_vprintf_vscanf(name);
 		test_getchar(name);

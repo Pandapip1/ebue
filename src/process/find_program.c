@@ -51,6 +51,21 @@ char *__find_program(const char *name, int use_path)
 {
 	const char *path, *p;
 	char *r;
+	/* The empty string names nothing, and it has to be answered here
+	 * rather than left to the search below.  exec.html's [ENOENT] is
+	 * explicit -- "A component of path or file does not name an
+	 * existing file or path or file is an empty string" -- but "" has
+	 * no directory part, so has_dir() sends it into the PATH loop,
+	 * where try_dir() appends it to a PATH entry and produces
+	 * `<entry>\`: the directory itself, with nothing after it.
+	 * access(X_OK) is satisfied by a directory (src/unistd/access.c --
+	 * NTFS has no execute bit this library maps X_OK onto), so the
+	 * loop *succeeds* on its first entry, and execvp("") ends up
+	 * asking NT to run a directory as a process image.  The errno that
+	 * comes back is then whatever status the failed image section maps
+	 * to (EBADF under Wine, EIO on NT per fexecve()'s note in
+	 * src/process/exec.c) -- never the ENOENT the clause requires. */
+	if (!name[0]) { errno = ENOENT; return 0; }
 	if (!use_path || has_dir(name)) {
 		r = malloc(strlen(name) + 1);
 		if (r) strcpy(r, name);
