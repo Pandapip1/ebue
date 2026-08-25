@@ -4313,3 +4313,202 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## sys/uio.h: readv()/writev(), the clauses the regular-file audits do not reach (group V)
+
+`test/POSIX-GAP-ACCOUNTING.md` still lists `sys/uio.h` (2) under
+"Implemented, not clause-audited". It is audited — twice, in
+`test/posix-tail.c` (group J3) and again in `test/posix-grp.c` — so the
+first thing this group settled was what those two do *not* cover.
+Between them they audit the gather/scatter ordering, the `[EINVAL]`
+`iovcnt` range including the `iovcnt == IOV_MAX` upper edge on the
+write side, the `[EINVAL]` `ssize_t`-overflow clause with "no data shall
+be transferred" checked through `st_size`, `writev()`'s
+all-`iov_len`-zero clause, `struct iovec`'s two members, and `[EBADF]`
+for the descriptor `-1`. **Every one of those assertions is made on a
+regular file**, and that is where the remaining gap turned out to live.
+
+`test/posix-uio.c` (new file) takes the rest: `writev()`'s own RETURN
+VALUE sentence about the file-pointer, the file-offset clauses both
+functions inherit through "shall be equivalent to", `readv()`'s
+zero-sum edge and its `{IOV_MAX}` upper edge (each of which existed only
+for the other direction), the *access-mode* half of `[EBADF]`, a
+vectored round trip over a **pipe** — and **one UNIMPL**: on a pipe,
+`writev()` does not give `write()`'s `{PIPE_BUF}` non-interleaving
+guarantee, and unlike the cross-thread atomicity requirement already on
+file this one is stated over *processes*, which this platform has.
+
+Counting, since three numbers here disagree: the file adds **six live
+test functions and one fenced one**, in **one `#if 0` block** (two, if
+the guarded call site in `main()` is counted separately — it is the
+same fence). Those seven functions carry **eleven ledger rows** below,
+because several clauses are asserted by the same function and two rows
+name no test at all.
+
+| function | clause | status | test |
+|---|---|---|---|
+| writev | DESCRIPTION "The `writev()` function shall be equivalent to `write()`, except as described below" — and therefore `write.html` DESCRIPTION's pipe clause, "Write requests of {PIPE_BUF} bytes or less shall not be interleaved with data from other processes doing writes on the same pipe. Writes of greater than {PIPE_BUF} bytes may have data interleaved, on arbitrary boundaries, with writes by other processes, whether or not the O_NONBLOCK flag of the file status flags is set" | **UNIMPL (fenced)** — `src/misc/uio.c`'s `writev()` is a loop calling this library's `write()` once per non-empty `iovec`, so a record whose lengths sum to {PIPE_BUF} or less is issued as several separate pipe writes and another process can land between them. {PIPE_BUF} is 4096 here, so this is the whole of the clause, not a corner of it. See (1) below | test/posix-uio.c (`test_writev_pipe_below_pipe_buf_not_interleaved`) |
+| writev | RETURN VALUE "Upon successful completion, `writev()` shall return the number of bytes actually written. Otherwise, it shall return a value of -1, **the file-pointer shall remain unchanged**, and `errno` shall be set to indicate an error" | covered — `writev()`'s own sentence, with no counterpart on `write.html` (whose RETURN VALUE says only "-1 shall be returned and `errno` set") or on `readv.html` (whose RETURN VALUE is "Refer to `read()`"). **Sharpened, not new**: `posix-grp.c`'s `test_iov_len_overflow` already compares `lseek(fd, 0, SEEK_CUR)` before and after this failure — but on a file it has just opened `O_TRUNC` and never seeked, so both readings are 0 and an implementation that *reset* the offset on failure passes it unchanged; and it attributes the check to "no data shall be transferred", a different clause that would also hold of an implementation which moved the offset without writing. This group seeks to 2 first, which separates the two answers, and covers both failure paths `src/misc/uio.c` takes | test/posix-uio.c (`test_writev_failure_leaves_file_pointer`) |
+| readv, writev | the offset clauses inherited through the two "shall be equivalent to" sentences: `read.html` "The file offset shall be incremented by the number of bytes actually read"; `write.html` "Before successful return from `write()`, the file offset shall be incremented by the number of bytes actually written" | covered — asserted across an `iovec` boundary in each direction, with the read split placed differently from the write split. Nothing in the tree asserted the *advance*, checked rather than assumed: `grep -n SEEK_CUR test/posix-tail.c test/posix-grp.c` returns nothing for the first and four lines for the second, and all four are the two before/after pairs asserting the offset must **not** move (`test_iov_len_overflow`, `test_writev_all_zero`). So an implementation that left the offset alone after a successful transfer, or advanced it by the whole *requested* length, passed both files | test/posix-uio.c (`test_offset_advances_by_transferred_count`) |
+| readv | the read-side zero-sum edge. `readv.html` has no counterpart to `writev.html`'s all-zero clause; it inherits `read.html`'s "if `nbyte` is zero ... the `read()` function shall return zero and have no other results" | covered — asserted at a position with real data after it, so a return of 0 cannot be confused with end-of-file: the offset must not move and the next `readv()` must still see the data. `posix-tail.c` has `writev()`'s side of this only | test/posix-uio.c (`test_readv_zero_sum`) |
+| readv | DESCRIPTION "The `iovcnt` argument is valid if greater than 0 and less than or equal to {IOV_MAX}" — the *upper edge accepted*, on the read side | covered — `posix-tail.c` asserts the edge for `writev()` only. `src/misc/uio.c` happens to share `check_iov()` between the two, but a shared helper is an implementation detail and the sentence is printed on both pages. `limits.h.html` gives {IOV_MAX} as "Maximum number of `iovec` structures that one process has available for use with `readv()` or `writev()`" | test/posix-uio.c (`test_readv_iovcnt_upper_edge`) |
+| readv, writev | ERRORS "Refer to `read()`"/"Refer to `write()`", for the *access-mode* half of each `[EBADF]`: "The `fildes` argument is not a valid file descriptor open for reading" / "... open for writing" | covered — `posix-tail.c` asserts the other half (the descriptor `-1`, not valid at all). The access-mode half is a separate code path: `src/unistd/read.c` and `src/unistd/write.c` each test `O_ACCMODE` before touching NT | test/posix-uio.c (`test_ebadf_wrong_access_mode`) |
+| readv, writev | the DESCRIPTION sentences are stated over `fildes` with no file-type restriction — "shall gather output data from the `iovcnt` buffers specified by the members of the `iov` array", "shall always fill an area completely before proceeding to the next" | covered — a vectored round trip over a **pipe**. Every other assertion about these two functions in this tree is made on a regular file, so what this establishes is that the vector handling is not accidentally tied to seekability. No zero-length area is used, because `write.html` makes a zero-byte write to a non-regular file unspecified | test/posix-uio.c (`test_pipe_round_trip`) |
+| readv | the read-side mirror of the `writev()` pipe finding | N/A — there is no such clause to violate. `read.html` DESCRIPTION says outright "The behavior of multiple concurrent reads on the same pipe, FIFO, or terminal device is unspecified", and `readv()` inherits it. The mechanism is the standard's own scoping, not a platform limit: `readv()`'s per-`iovec` loop on a pipe is conforming because nothing is specified for it to contradict | — |
+| readv, writev | XSH 2.9.7's cross-thread atomicity on a regular file | already recorded — argued at length in `test/posix-grp.c`, which reclassifies it from N/A to UNIMPL; group J3's row above still reads N/A. Not re-opened here beyond the note in (3) below. Unassertable either way: the clause is stated over two threads and this library exposes no thread-creation interface | — |
+| readv, writev | `sysconf(_SC_IOV_MAX)` — `limits.h.html` puts {IOV_MAX} among the values whose "actual value supported by a specific instance shall be provided by the `sysconf()` function", and `sys_uio.h.html` APPLICATION USAGE says "The symbol {IOV_MAX} defined in `<limits.h>` should always be used to learn about the limits instead of assuming a fixed value" | already recorded — `_SC_IOV_MAX` is one of the 110 missing `_SC_` names fenced as `test_unistd_sysconf_names` in `test/posix-unistd.c`. Not a `sys/uio.h` finding: {IOV_MAX} *is* defined in `include/limits.h` (1024), so it is not one of the indeterminate values that sentence is about, and the `<limits.h>` half of the clause holds | test/posix-limits.c |
+| readv | DESCRIPTION "Upon successful completion, `readv()` shall mark for update the last data access timestamp of the file" | **open, not decided by this group** — see (2) below | — |
+
+### UNIMPL found (group V)
+
+1. **`writev()` on a pipe does not give the `{PIPE_BUF}`
+   non-interleaving guarantee.** `writev.html` DESCRIPTION's first
+   sentence is "The `writev()` function shall be equivalent to
+   `write()`, except as described below", and everything "below" is
+   about the `iov` array — the gather order, the `{IOV_MAX}` range,
+   "shall always write a complete area before proceeding to the next",
+   the all-zero-lengths case, the `{SSIZE_MAX}` sum. None of it lifts
+   any clause of `write()`. One of `write()`'s clauses is the pipe one
+   quoted in the table row, and `src/misc/uio.c`'s loop cannot satisfy
+   it: a four-element `writev()` of a 64-byte record is four separate
+   pipe writes, and any other process writing that pipe can land
+   between them.
+
+   **Why this is not already covered by `src/misc/uio.c`'s banner.**
+   That banner is a careful, argued rejection of a *different* clause,
+   and its argument does not reach this one. It answers XSH 2.9.7
+   "Thread Interactions with Regular File Operations" — stated over two
+   **threads** and over **regular files** — on the ground that NT's only
+   scatter/gather primitives, `NtReadFileScatter()`/
+   `NtWriteFileGather()`, are page-granular and would force page-aligned
+   iovecs on every caller. Three things separate the two:
+
+   - **Scope.** This clause is stated over other **processes** and over
+     **pipes**. `test/posix-grp.c` leaves 2.9.7 unasserted because
+     ntlibc has no thread-creation interface; it does have `fork()`
+     (`src/process/fork.c`) and `pipe()` (`src/unistd/pipe.c`), so this
+     one is expressible in the library's own terms and the fenced test
+     writes it.
+   - **The stated reason does not apply.** Satisfying the pipe clause
+     needs no scatter/gather primitive at all. When the lengths sum to
+     `{PIPE_BUF}` or less, copy the pieces into one 4096-byte stack
+     buffer and issue a single `write()`; when they sum to more, the
+     clause itself permits interleaving "on arbitrary boundaries", so
+     the existing loop is already conforming there. Nothing is required
+     of the caller's alignment.
+   - **The cost weighed is not the cost here.** The banner rejects the
+     conforming route because it "would satisfy the atomicity clause
+     but reject ordinary vectors". The coalescing route rejects
+     nothing: every vector any caller can pass is still accepted, and
+     only the vectors small enough for the clause to be about pay the
+     copy.
+
+   **The page-granularity claim is attributed, not adopted.** That
+   `NtReadFileScatter()`/`NtWriteFileGather()` are page-granular is
+   `src/misc/uio.c`'s own assertion, read from the file as it stands at
+   `9acc389` and **not re-measured by this group** — there was no NT to
+   measure it against from where this audit was done, and this project
+   has had "cannot be done here" claims in fence comments go stale
+   before. Nothing in this finding rests on it: satisfying the pipe
+   clause needs no scatter/gather primitive at all. If someone does
+   re-measure it and it has decayed, that reopens XSH 2.9.7 in
+   `test/posix-grp.c`, not this row.
+
+   **What the implementation does, from the source rather than from
+   inference.** `src/misc/uio.c` is 114 lines. Its `writev()` body is a
+   `for` loop over `iovcnt` that skips zero-length areas and calls
+   `write(fd, iov[i].iov_base, iov[i].iov_len)` once per remaining
+   area; there is no other I/O call in the file. `grep -rn PIPE_BUF
+   src/` returns exactly one line — `src/unistd/sysconf.c`'s `case
+   _PC_PIPE_BUF: return PIPE_BUF;` — so the absence of a `{PIPE_BUF}`
+   comparison in `uio.c` is a grep result, not an impression, and the
+   grep is known to work because it finds the `sysconf.c` line.
+   `{PIPE_BUF}` is 4096 (`include/limits.h` line 29) and `{IOV_MAX}` is
+   1024 (line 35), both read, neither derived.
+
+   **UNIMPL and not BUG, and the counter-argument.** AGAINST: `writev()`
+   exists, is handed a pipe, and answers wrongly, which is the shape of
+   a BUG — and the deliberate choice on file was made about a clause
+   that is not this one, so the pipe case was never actually declined,
+   only inherited. FOR, and this is what decides it: what is missing is
+   a *guarantee*, and the code that would provide it does not exist
+   anywhere in the tree — no coalescing path, no `{PIPE_BUF}`
+   comparison, no branch on the descriptor's type in `src/misc/uio.c`.
+   Nothing computes a wrong answer; a whole mechanism is absent, which
+   is this project's UNIMPL. What does not survive either way is the
+   *reason on file*: the banner presents the loop as an argued
+   trade-off, and the argument it makes does not reach pipes.
+
+   **Why fenced rather than asserted**, given that — unlike XSH 2.9.7 —
+   the test can actually be written here. Stated precisely, because it
+   was reasoned from the source and **nothing was run**: what is known
+   is structural. `src/misc/uio.c` issues one `write()` per non-empty
+   area, so whatever atomicity each `write()` has, the group of them has
+   none, and the clause's guarantee cannot hold however the calls are
+   scheduled. The test's shape is one-sided on top of that: every write
+   in it is `REC` bytes and the total is a whole number of them, so
+   under the clause the stream is a concatenation of whole records and
+   every `REC`-byte block is uniform. It therefore cannot fail against a
+   conforming implementation and no scheduling can make it report a
+   defect that is not there; it can only *under*-report, in a run where
+   the two writers never overlap — which is why it is fenced rather than
+   run as a live assertion whose green would mean nothing. **A successor
+   with a running tree should un-fence it once and record what it
+   observed**; this row is a structural claim, not a measurement.
+
+   **What a caller observes today**: a program that uses `writev()` to
+   put whole records on a shared pipe — the ordinary reason to reach for
+   it — gets records other writers can split, silently and only under
+   load. The same program is correct on Linux and on the BSDs.
+
+### Open, not decided by this group (group V)
+
+2. **`readv.html`'s "Upon successful completion, `readv()` shall mark
+   for update the last data access timestamp of the file" is left
+   open, not fenced and not claimed covered.** The sentence is on
+   `readv.html`'s own page (and `read.html` carries its own, qualified
+   "where `nbyte` is greater than 0"), and nothing in this tree records
+   either. It is not fenced because this audit could not establish the
+   answer without running: `src/unistd/read.c` does no timestamp work
+   of its own and leaves it to `NtReadFile`, and whether NT then moves
+   the timestamp is a *volume* policy — NTFS suppresses last-access
+   updates by default — so the honest reading is that the outcome may
+   differ between the Wine leg, the real-Windows leg and the native
+   `make asan` leg. Asserting it live would be asserting the
+   environment, and fencing it would be claiming a defect this audit
+   has not demonstrated. Recorded so a successor with a running tree
+   can settle it in one measurement; if it is a gap, it is `read()`'s
+   before it is `readv()`'s.
+
+### Observed while auditing, not a finding of this group (group V)
+
+3. **The ledger disagrees with itself about XSH 2.9.7.** Group J3's
+   table row above reads "N/A — `src/misc/uio.c`'s banner documents this
+   as a deliberate, argued divergence ... No test: ntlibc has no threads
+   to race with", and the paragraph under "Observed behaviour where
+   POSIX permits latitude (group J3)" says the same. `test/posix-grp.c`,
+   written later, argues at length that this is wrong under this
+   project's own vocabulary — a divergence we chose is UNIMPL, not N/A —
+   and leaves a comment-only `#if 0` recording it, with no ledger row.
+   This group did not re-open that question and has not edited the J3
+   row (this section is append-only); it notes the disagreement because
+   a reader who arrives at the J3 row and stops will get the older
+   answer. Note also that the newer argument does not reach the pipe
+   clause in (1): that one is about processes, and `posix-grp.c`'s
+   reason for leaving 2.9.7 unasserted — no threads — is exactly why the
+   two need separate records.
+
+### Not reached (group V)
+
+`[EINTR]` for either function (no asynchronous signal delivery on this
+platform, the same mechanism `pselect()`'s row records); `[EIO]`,
+`[ENOBUFS]`, `[ENOMEM]`, `[ENXIO]` and the STREAMS-conditioned errors
+inherited from `read()`/`write()` (all *may fail*, and the STREAMS ones
+are vacuous for the reason `test/posix-stropts.c` sets out — NT has no
+STREAMS subsystem, so `fildes` can never name one); `[EOVERFLOW]` on the
+read side and `[EFBIG]`/`[ENOSPC]` on the write side, which are `read()`
+and `write()` clauses audited in their own groups rather than through
+the vector wrappers; the `O_NONBLOCK` arms of `write.html`'s pipe list,
+which cannot be reached through `writev()` because `src/unistd/write.c`
+has no non-blocking pipe path at all — a `write()` gap, not a
+`sys/uio.h` one, and deliberately not claimed here.
