@@ -50,6 +50,38 @@
  *     of which sets up an alternation where the first and last
  *     branches disagree on length), but a pattern like "a|ab" against
  *     "ab" will report "a" here, not the "ab" strict POSIX would.
+ *
+ * BOUNDED MATCHING, AND WHAT regexec() REPORTS WHEN IT RUNS OUT.
+ *
+ * A backtracking VM has no polynomial bound on the work one match
+ * attempt can take, so this one carries two explicit budgets -- see
+ * MAX_STEPS and MAX_BACKTRACK below for the numbers and for why each
+ * is where it is.  Exhausting either makes regexec() return
+ * REG_ESPACE.
+ *
+ * That is a deliberate choice of code, not an invented one.  XBD
+ * <regex.h> defines REG_ESPACE as "Out of memory", and XSH regcomp()
+ * DESCRIPTION says of the matcher: "If regexec() finds a match, it
+ * shall return zero; otherwise, it shall return non-zero indicating
+ * either no match or an error."  So an error return from regexec() is
+ * contemplated by the standard, and REG_ESPACE is the only code in the
+ * header that means "a resource ran out" rather than "your pattern was
+ * malformed" (those are all regcomp()'s).  The budgets ARE a resource;
+ * a match attempt that hits one has not been shown not to match.
+ *
+ * Returning REG_NOMATCH instead would be worse than useless: it is a
+ * definite, wrong answer where the implementation in fact has no
+ * answer, and a caller cannot tell it from a real non-match.  Until
+ * 2026-08 that is what MAX_STEPS did.
+ *
+ * The budgets are also the reason this matcher is iterative rather
+ * than recursive.  It used to recurse once per SPLIT and once per
+ * SAVE, so the real limit was the C stack -- unbounded and
+ * unreportable: a repeat whose body can match the empty string
+ * ("(a*)*b", "()*a", or a bracket expression that can match nothing)
+ * compiles to a SPLIT/JMP loop that makes no input progress, and it
+ * killed the process outright long before MAX_STEPS could count to
+ * two million.  Found by fuzz/fuzz_regex.c.
  */
 #include <regex.h>
 #include <ctype.h>
@@ -567,6 +599,27 @@ int regcomp(regex_t *__restrict preg, const char *__restrict pattern, int cflags
 	return 0;
 }
 
+/* One entry on the matcher's explicit backtracking stack.  Two kinds,
+ * because unwinding has to undo two different things:
+ *
+ *   BT_TRY   an alternative not taken yet: resume the VM at `pc` with
+ *            the subject pointer `sp`.  Pushed by I_SPLIT.
+ *   BT_UNDO  a capture slot's previous value, restored when unwinding
+ *            past the I_SAVE that overwrote it.
+ *
+ * Popping applies every BT_UNDO it passes before it reaches a BT_TRY,
+ * so the slots seen by the resumed alternative are exactly the ones
+ * that were live at the I_SPLIT which pushed it -- which is what the
+ * recursive version got for free from the C stack. */
+enum { BT_TRY, BT_UNDO };
+
+struct bt {
+	unsigned char kind;
+	int x;			/* BT_TRY: pc.  BT_UNDO: slot number */
+	const char *sp;		/* BT_TRY */
+	regoff_t old;		/* BT_UNDO */
+};
+
 struct mstate {
 	const char *begin, *end;
 	int cflags, eflags;
@@ -574,6 +627,8 @@ struct mstate {
 	int nslot;
 	struct rx *rx;
 	int steps;
+	struct bt *bt;		/* backtracking stack, grown on demand */
+	int nbt, capbt;
 };
 
 /* Backtracking limit: caps pathological exponential blowup (see file
@@ -582,55 +637,151 @@ struct mstate {
  * degenerate pattern fails the match rather than running forever. */
 #define MAX_STEPS 2000000
 
+/* Ceiling on the backtracking stack, in entries.  It cannot be reached
+ * before MAX_STEPS by a pattern that makes progress -- every entry is
+ * pushed by an instruction that also costs a step -- so it is a memory
+ * bound, not a second work bound: 256K entries is ~6MB on the 32-bit
+ * target, and it caps what a single regexec() can ask the allocator
+ * for.  What it costs is the length of subject a single unbounded
+ * repeat can consume: "a*" pushes one entry per 'a', so a subject
+ * longer than this many bytes reports REG_ESPACE rather than matching.
+ * That is a real limit and is documented here deliberately; before
+ * this it was a recursion depth of the same size, i.e. a process kill
+ * at a few thousand. */
+#define MAX_BACKTRACK 262144
+
+/* Push, growing by doubling.  Returns 0 if the stack cannot grow --
+ * out of memory, or MAX_BACKTRACK reached; both are REG_ESPACE to the
+ * caller, which is what <regex.h> defines that code to mean ("Out of
+ * memory"). */
+static int bt_grow(struct mstate *ms)
+{
+	int cap = ms->capbt ? ms->capbt * 2 : 64;
+	struct bt *p;
+
+	if (ms->capbt >= MAX_BACKTRACK) return 0;
+	if (cap > MAX_BACKTRACK) cap = MAX_BACKTRACK;
+	p = realloc(ms->bt, (size_t)cap * sizeof *p);
+	if (!p) return 0;
+	ms->bt = p;
+	ms->capbt = cap;
+	return 1;
+}
+
+static int bt_push_try(struct mstate *ms, int pc, const char *sp)
+{
+	struct bt *e;
+	if (ms->nbt == ms->capbt && !bt_grow(ms)) return 0;
+	e = &ms->bt[ms->nbt++];
+	e->kind = BT_TRY;
+	e->x = pc;
+	e->sp = sp;
+	e->old = 0;
+	return 1;
+}
+
+static int bt_push_undo(struct mstate *ms, int slot, regoff_t old)
+{
+	struct bt *e;
+	if (ms->nbt == ms->capbt && !bt_grow(ms)) return 0;
+	e = &ms->bt[ms->nbt++];
+	e->kind = BT_UNDO;
+	e->x = slot;
+	e->sp = 0;
+	e->old = old;
+	return 1;
+}
+
+/* Returns 1 on a match, 0 on no match, and -1 when the matcher ran out
+ * of budget -- MAX_STEPS, MAX_BACKTRACK, or the allocator -- which
+ * regexec() turns into REG_ESPACE.  -1 is deliberately NOT folded into
+ * 0: "I gave up" and "this subject does not match" are different
+ * answers, and reporting the second for the first is a wrong result
+ * rather than a refusal.
+ *
+ * The VM is iterative.  It used to recurse once per I_SPLIT and once
+ * per I_SAVE, which made the C stack the only bound on how far a match
+ * attempt could go: MAX_STEPS counts steps, not depth, so a
+ * progress-free SPLIT/JMP loop (any repeat whose body can match the
+ * empty string) blew the stack long before the step counter tripped,
+ * and even a well-behaved "a*" needed one C frame per character of
+ * subject.  Both are gone: alternatives live on the heap stack above,
+ * whose size is bounded and whose exhaustion is reportable. */
 static int run(struct mstate *ms, int pc, const char *sp)
 {
 	for (;;) {
 		struct inst *in;
-		if (++ms->steps > MAX_STEPS) return 0;
+
+		if (++ms->steps > MAX_STEPS) return -1;
 		in = &ms->rx->prog[pc];
 		switch (in->op) {
 		case I_CHAR: {
 			int c;
-			if (sp >= ms->end) return 0;
+			if (sp >= ms->end) goto backtrack;
 			c = (unsigned char)*sp;
 			if (ms->cflags & REG_ICASE) c = tolower(c);
-			if (c != in->c) return 0;
+			if (c != in->c) goto backtrack;
 			sp++; pc++; continue;
 		}
 		case I_ANY:
-			if (sp >= ms->end) return 0;
-			if ((ms->cflags & REG_NEWLINE) && *sp == '\n') return 0;
+			if (sp >= ms->end) goto backtrack;
+			if ((ms->cflags & REG_NEWLINE) && *sp == '\n') goto backtrack;
 			sp++; pc++; continue;
 		case I_SET:
-			if (sp >= ms->end) return 0;
-			if (!testbit(&ms->rx->sets[in->set], (unsigned char)*sp, ms->cflags & REG_ICASE)) return 0;
+			if (sp >= ms->end) goto backtrack;
+			if (!testbit(&ms->rx->sets[in->set], (unsigned char)*sp, ms->cflags & REG_ICASE)) goto backtrack;
 			sp++; pc++; continue;
 		case I_BOL:
-			if (sp == ms->begin) { if (ms->eflags & REG_NOTBOL) return 0; pc++; continue; }
+			if (sp == ms->begin) {
+				if (ms->eflags & REG_NOTBOL) goto backtrack;
+				pc++; continue;
+			}
 			if ((ms->cflags & REG_NEWLINE) && sp[-1] == '\n') { pc++; continue; }
-			return 0;
+			goto backtrack;
 		case I_EOL:
-			if (sp == ms->end) { if (ms->eflags & REG_NOTEOL) return 0; pc++; continue; }
+			if (sp == ms->end) {
+				if (ms->eflags & REG_NOTEOL) goto backtrack;
+				pc++; continue;
+			}
 			if ((ms->cflags & REG_NEWLINE) && *sp == '\n') { pc++; continue; }
-			return 0;
-		case I_SAVE: {
-			regoff_t old = in->x < ms->nslot ? ms->slot[in->x] : 0;
-			int ok;
-			if (in->x < ms->nslot) ms->slot[in->x] = sp - ms->begin;
-			ok = run(ms, pc + 1, sp);
-			if (ok) return 1;
-			if (in->x < ms->nslot) ms->slot[in->x] = old;
-			return 0;
-		}
+			goto backtrack;
+		case I_SAVE:
+			/* Overwrite the slot now and record the old value, so
+			 * that unwinding past this point restores it -- what
+			 * the recursive version did in its `if (ok) ... else
+			 * slot[x] = old` tail. */
+			if (in->x < ms->nslot) {
+				if (!bt_push_undo(ms, in->x, ms->slot[in->x])) return -1;
+				ms->slot[in->x] = sp - ms->begin;
+			}
+			pc++;
+			continue;
 		case I_JMP:
 			pc = in->x; continue;
 		case I_SPLIT:
-			if (run(ms, in->x, sp)) return 1;
-			pc = in->y; continue;
+			/* Greedy: take x now, keep y for later.  Same order
+			 * as `if (run(ms, in->x, sp)) return 1; pc = in->y;`. */
+			if (!bt_push_try(ms, in->y, sp)) return -1;
+			pc = in->x;
+			continue;
 		case I_MATCH:
 			return 1;
 		default:
-			return 0;
+			goto backtrack;
+		}
+
+	backtrack:
+		/* Backtrack: undo capture writes until an untaken
+		 * alternative surfaces.  An empty stack means this start
+		 * offset has no match. */
+		for (;;) {
+			struct bt *e;
+			if (ms->nbt == 0) return 0;
+			e = &ms->bt[--ms->nbt];
+			if (e->kind == BT_UNDO) { ms->slot[e->x] = e->old; continue; }
+			pc = e->x;
+			sp = e->sp;
+			break;
 		}
 	}
 }
@@ -656,13 +807,31 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 	ms.slot = slot;
 	ms.nslot = nslot;
 	ms.rx = rx;
+	ms.bt = NULL;
+	ms.nbt = ms.capbt = 0;
 
 	for (start = 0; start <= len; start++) {
-		int i;
+		int i, r;
 		for (i = 0; i < nslot; i++) slot[i] = -1;
 		ms.steps = 0;
-		if (run(&ms, 0, string + start)) { matched = 1; break; }
+		ms.nbt = 0;		/* the buffer is reused; the contents are not */
+		r = run(&ms, 0, string + start);
+		if (r > 0) { matched = 1; break; }
+		if (r < 0) {
+			/* The matcher ran out of budget rather than
+			 * out of subject.  <regex.h>: REG_ESPACE, "Out
+			 * of memory" -- and regcomp.html's DESCRIPTION
+			 * allows it: "If regexec() finds a match, it
+			 * shall return zero; otherwise, it shall return
+			 * non-zero indicating either no match or an
+			 * error."  Reporting REG_NOMATCH here would be
+			 * a wrong answer, not a refusal. */
+			free(ms.bt);
+			free(slot);
+			return REG_ESPACE;
+		}
 	}
+	free(ms.bt);
 
 	if (matched && nmatch > 0 && pmatch && !(rx->cflags & REG_NOSUB)) {
 		size_t i;

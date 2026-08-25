@@ -2033,37 +2033,100 @@ static void test_regex_regfree_after_failed_regcomp(void)
 	regfree(&re);
 }
 
-#if 0 /* BUG: regcomp.html RETURN VALUE -- "If regexec() finds a match,
-	it shall return zero; otherwise, it shall return non-zero
-	indicating either no match or an error." Neither outcome is
-	"terminate the process".
+/* regcomp.html DESCRIPTION: "If regexec() finds a match, it shall
+ * return zero; otherwise, it shall return non-zero indicating either no
+ * match or an error." Terminating the process is neither, and that is
+ * what these patterns used to do.
+ *
+ * src/regex/regex.c's run() recursed once per I_SPLIT and once per
+ * I_SAVE, so the C stack -- not MAX_STEPS, which counts steps and not
+ * depth -- was the only bound on a match attempt. Two shapes reached
+ * it:
+ *
+ *   - a repeat whose body can match the empty string compiles to a
+ *     SPLIT/JMP loop that makes no input progress, so the recursion
+ *     never terminates: "(a*)*b", "()*a", "^*a", and the fuzzer's
+ *     "[!]**" (a bracket expression, then a repeat applied to a repeat)
+ *     all killed the process outright under Wine;
+ *   - a perfectly ordinary "a*" needed one C frame per byte of subject,
+ *     so a long enough subject killed it too, with no pathology in the
+ *     pattern at all. The 96 KiB subject below is far past what an NT
+ *     thread's 1 MiB default stack could hold at ~200 bytes a frame.
+ *
+ * run() is now iterative over an explicit, bounded heap stack. What
+ * this test asserts is the clause: regexec() *returns*, and returns a
+ * value <regex.h> defines. It deliberately does not assert *which*
+ * value for the nullable-repeat patterns -- the second defect named in
+ * the fence below this one (the compiler emitting a progress-free loop
+ * rather than breaking it) is still live, so those exhaust the step
+ * budget and report REG_ESPACE where glibc reports a match or
+ * REG_NOMATCH. Refusing is not the right answer, but it is a defined
+ * one, and it is what the fence below covers.
+ *
+ * Reproducer of record for the crash, from fuzz/fuzz_regex.c on its
+ * first 180 s run (base64 Xf/uWyFdKioqKir/9iqWGyoqKl1dLi5g): pattern
+ * "[!]****", subject "*\377\366*\226\033***]]..`", cflags
+ * REG_EXTENDED|REG_NOSUB|REG_NEWLINE. Reduced to "[!]**" here. */
+static void test_regex_nullable_repeat_does_not_crash(void)
+{
+	static const char *const nullable[] = {
+		"(a*)*b", "()*a", "^*a", "[!]**", "(|)*x", NULL
+	};
+	regex_t re;
+	regmatch_t m[2];
+	char *big;
+	size_t i, n = 96 * 1024;
+	int r;
 
-	src/regex/regex.c's run() recurses once per I_SPLIT and once per
-	I_SAVE. When a repeat's body can match the empty string, the
-	SPLIT/JMP loop the compiler emits makes no input progress, so the
-	recursion is unbounded. The MAX_STEPS guard in the same function
-	counts *steps*, not depth, so two million nested run() frames
-	exhaust the C stack long before the counter trips.
+	for (i = 0; nullable[i]; i++) {
+		/* "^*a" is a BRE (see the next fence); the rest are EREs. */
+		int cf = strcmp(nullable[i], "^*a") == 0 ? 0 : REG_EXTENDED;
+		CHECK(regcomp(&re, nullable[i], cf) == 0);
+		r = regexec(&re, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 2, m, 0);
+		/* The point of the test: control reaches this line. */
+		CHECK(r == 0 || r == REG_NOMATCH || r == REG_ESPACE);
+		regfree(&re);
+	}
 
-	Measured under Wine: each of the three regexec() calls below
-	kills the process outright. They are not exotic patterns -- any
-	program that hands a user-supplied pattern to regcomp() (a
-	config file, a grep-alike, ntlibc's own src/sh/) can be crashed
-	by them. glibc, musl and the BSDs all return normally for all
-	three.
+	/* No pathology, just a long subject: one C frame per byte was the
+	 * other half of the same defect. */
+	big = malloc(n + 2);
+	CHECK(big != NULL);
+	if (!big) return;
+	memset(big, 'a', n);
+	big[n] = 'b';
+	big[n + 1] = 0;
+	CHECK(regcomp(&re, "a*b", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, big, 1, m, 0) == 0);
+	CHECK(m[0].rm_so == 0 && (size_t)m[0].rm_eo == n + 1);
+	regfree(&re);
+	free(big);
+}
 
-	The whole test is fenced, not merely its assertions: an unfenced
-	crash here would take test/posix-glob.c's entire binary down and
-	report as a `make check` failure with no indication of which
-	clause was at fault.
+#if 0 /* BUG: regcomp.html RETURN VALUE -- "Upon successful completion,
+	the regexec() function shall return 0. Otherwise, it shall return
+	REG_NOMATCH to indicate no match." These three patterns are not
+	exotic -- any program that hands a user-supplied pattern to
+	regcomp() (a config file, a grep-alike, ntlibc's own src/sh/) can
+	reach them -- and glibc, musl and the BSDs all answer all three.
 
-	Two independent defects: run() has no recursion-depth bound, and
-	the compiler emits a progress-free loop rather than breaking it.
-	Either fix alone would stop the crash.
+	This implementation reports REG_ESPACE for each. The cause is the
+	second of the two defects the crash above had: the compiler emits
+	a progress-free SPLIT/JMP loop for a repeat whose body can match
+	the empty string, and nothing breaks it, so the match attempt
+	spends MAX_STEPS going nowhere and src/regex/regex.c's run()
+	reports the budget exhaustion (see that file's "BOUNDED MATCHING"
+	header note for why REG_ESPACE and not REG_NOMATCH).
+
+	The fix belongs in the compiler or in the VM's loop handling --
+	an empty-width check on each iteration of a repeat -- not in the
+	budget. Fenced rather than crashing now: the assertions below are
+	wrong answers, not a process kill, which is why
+	test_regex_nullable_repeat_does_not_crash() above is live.
 
 	The third pattern is also the symptom of the BUG in the next
 	fence -- see there for why "^*a" reaches this path at all. */
-static void test_regex_nullable_repeat_does_not_crash(void)
+static void test_regex_nullable_repeat_result(void)
 {
 	regex_t re;
 	regmatch_t m[2];
@@ -3038,6 +3101,7 @@ int main(int argc, char **argv)
 	test_regex_bre_anchor_vs_literal();
 	test_regex_regerror_truncation();
 	test_regex_regfree_after_failed_regcomp();
+	test_regex_nullable_repeat_does_not_crash();
 
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");
