@@ -448,6 +448,7 @@ coverage: `test/stdio.c` (~430 checks).
 | ftell / ftello | position accounts for buffered-ahead/behind bytes on update streams | covered | test/stdio.c |
 | rewind / fgetpos / fsetpos | round-trip; rewind clears the error indicator too | covered | test/stdio.c |
 | fflush | `fflush(NULL)` flushes every open stream | covered | test/stdio.c |
+| fflush | DESCRIPTION: "If stream is a null pointer, fflush() shall perform this flushing action on all streams for which the behavior is defined above" -- stderr and stdin included | **BUG (fenced)** -- the three standard streams are file-scope statics that `__file_new()` never links onto `__stdio_files`, and `fflush(NULL)` walks that list plus `stdout` by name; `__stdio_exit()` flushing stdout *and* stderr before the same walk shows the list is known not to hold them | test/posix-stdio.c `test_fflush_null_covers_stderr` |
 | fflush | on a readable stream with an underlying fd: discards not-yet-reread ungetc() bytes and resyncs the fd offset to the stream position | covered — was a BUG (`__fflush_locked` short-circuited for any non-writable stream); **fixed in 99474ee** | test/posix-stdio.c `test_fflush_read_stream` |
 | setvbuf | valid before any other operation; returns 0 | covered | test/posix-stdio.c |
 | setvbuf | returns non-zero for an invalid `type` | covered — was a BUG (any `type` accepted, 0 returned unconditionally); **fixed in 99474ee**: only `_IOFBF`/`_IOLBF`/`_IONBF` accepted, else EINVAL | test/posix-stdio.c |
