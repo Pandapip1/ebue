@@ -3994,3 +3994,108 @@ here as elsewhere in this ledger). `[EINVAL]` "the value specified by
 *file_actions* ... is invalid" is a *may fail* this implementation does
 not take up: an object that was never `_init()`ed is undefined
 behaviour, not a detectable state.
+
+## The vacuous zero-assertion sweep (group T)
+
+Not a header audit. A sweep of the whole of `test/` for assertions of
+the shape "this field is 0", triaged by one question: **would this
+assertion pass identically if the code under test had never run, never
+written the field, or handed back a struct that arrived zeroed?** A zero
+that is also the value of "nothing happened" is not a measurement.
+
+Method: every `CHECK(...== 0)` in `test/*.c` on a counter, time, size,
+offset, error field, list count, or returned-struct member was read in
+context and classified. Companion assertions and preceding non-zero
+states are what make a zero meaningful, so each DISCRIMINATING verdict
+below names the specific line that supplies one. Verdicts marked
+**VERIFIED** were mutation-tested: the field's producer was broken so it
+is never populated, and the test was required to go from green to red.
+
+### Tally
+
+| verdict | count |
+|---|---|
+| DISCRIMINATING | 34 |
+| VACUOUS (fixed here) | 9 |
+| UNCERTAIN | 1 |
+
+The headline result is that this codebase's zero-assertions are mostly
+already discriminating — the prevailing house idiom is to poison the
+destination (`memset(&x, 0xff, sizeof x)`, or `pfd.revents = -1`) or to
+pair the zero with a non-zero companion in the same function. The nine
+exceptions clustered in two places: child CPU-time accounting, and
+helpers that seeded the very value their callers then asserted.
+
+### VACUOUS — fixed
+
+| site | why it could not fail | fix | mutation evidence |
+|---|---|---|---|
+| `test/exec.c` `test_wait_rusage`, `test/process-win.c` `test_wait_rusage` (2 sites) | the "running total grew" check was a four-clause **disjunction**, one clause of which was `ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec` — satisfied by the two structs merely being *equal*, which they are at zero. It passed with `getrusage(RUSAGE_CHILDREN)` writing nothing at all. (The disjunction is itself a symptom: comparing `tv_sec` and `tv_usec` independently is wrong because `tv_usec` wraps each second) | compare whole timevals folded to microseconds; poison `ru_after` before the call; `test/exec.c` additionally requires the accumulated total to be non-zero, not merely non-decreasing | **VERIFIED.** Deleting the two `children_*time100ns +=` lines in `src/process/wait.c` `fill_child_rusage()` leaves the *previous* test green ("exec: all tests passed") and fails the new one at `test/exec.c:575` |
+| `test/posix-grp.c` `test_times_children` (2 sites) | `t.tms_cutime == timeval_to_clockticks(&ru_children.ru_utime)` is the right *shape* — two readers of one accumulator (`children_utime100ns` in `src/process/wait.c`) — but `0 == 0` agrees whether or not either reader works. The `--times-child` role already burned CPU to avoid this; nothing checked that the burn showed up | assert the total is non-zero (measured: 49 ticks at `_SC_CLK_TCK` 100 under stock Wine) before comparing the two readers; poison both destinations | **VERIFIED.** Same mutation: previous test green, new one fails at `test/posix-grp.c:637` and `:638` |
+| `test/posix-grp.c` `test_times_self` (2 sites) | `t.tms_utime >= utime_ticks` where a test process that has done nothing reports `0 >= 0`, and the "not off by an order of magnitude" bounds were `0 - 0 < 500`. Passed with `times()` and `getrusage()` both writing nothing | burn measurable user CPU first, then require `t.tms_utime > 0` as well as the cross-check | **VERIFIED** by the same mutation round |
+| `test/posix-select-socket.c` `poll_one()` — 5 caller sites | the helper seeded `p.revents = 0` and then handed the value back to five callers each asserting `revents == 0`. They read back what the helper had just written, so a `poll()` that ignored `revents` entirely satisfied all five | seed `-1`, the idiom `test/posix-sysmisc.c` already uses | **VERIFIED indirectly.** Deleting `p->revents = 0` in `src/select/poll.c` fails `test/posix-sysmisc.c:573` and `:587` — the `-1` idiom catching exactly this. It cannot be shown on `posix-select-socket.exe` itself, which reports rc=77 unverified under stock Wine (`bind()` → `errno=5`) |
+| `test/posix-glob.c` `test_globfree_idempotent` | asserted `gl_pathc == 0` and `gl_pathv == NULL` after `globfree()` without ever establishing the count had been non-zero | assert `gl_pathc >= 1` and `gl_pathv != NULL` between the `glob()` and the frees | **VERIFIED.** Forcing `pglob->gl_pathc = 0` in `src/glob/glob.c` fails the new `test/posix-glob.c:1153` |
+| `test/posix-glob.c` wordexp free-idempotence | same shape for `we_wordc == 0` after a double `wordfree()` | assert `we_wordc == 2` and `we_wordv != NULL` first | **VERIFIED.** Forcing `pwordexp->we_wordc = 0` in `src/wordexp/wordexp.c` fails the new `test/posix-glob.c:1383` |
+| `test/posix-glob.c` `nftw_cb` | `f->level == 0` was checked only for the walk root, where 0 is the correct value — so it could not distinguish a `level` `nftw()` computes from a `struct FTW` it never writes | assert `f->level > 0` and the `base` offset for every non-root path | **VERIFIED, and the sharpest of the set.** Forcing `f.level = 0` in `src/ftw/ftw.c`'s `report()` leaves the previous `test/posix-glob.c` passing outright ("posix-glob: all ok", rc=0) and fails the new `:2852` three times. `test/posix-tail.c` does check non-zero levels, but it is rc=77 unverified under stock Wine, so *nothing in a green `make check`* caught this before |
+
+### UNCERTAIN
+
+`test/posix-fork-clauses-win.c:340` — the forked child reports `RC_TIMES`
+if `t.tms_cutime != 0 || t.tms_cstime != 0`, checking fork.html's "The
+child process values of tms_utime, tms_stime, tms_cutime, and tms_cstime
+shall be set to 0." This is the exact clause `a8a3016` fixed
+(`__rusage_children_reset()`), and it is discriminating **only if the
+parent's own accumulated child time is non-zero when the fork happens** —
+which nothing in the file establishes. Three earlier tests do reap
+children first, so on the real-Windows legs it is very likely non-zero,
+but "likely" is not a measurement and this file is filtered out of the
+Wine leg (`TEST_RUN = $(filter-out %-win.exe,...)`), so it could not be
+run here to find out. Left untouched rather than guessed at: adding an
+unverifiable assertion to a test only the `windows-test` legs execute
+would risk turning that leg red for a reason nobody could reproduce
+locally.
+
+### DISCRIMINATING — the ones that already hold, and what makes them hold
+
+Recorded because the *reason* is the reusable part; each names the line
+that supplies the non-zero pre-state or companion.
+
+| site | what makes the zero meaningful |
+|---|---|
+| `test/exec.c:534`, `test/process-win.c:207` `ru_child.ru_*.tv_sec >= 0` | `memset(&ru_child, 0xff, ...)` immediately before the `wait4()` — an untouched struct reads back −1 and fails |
+| `test/posix-sysmisc.c:573`, `:587` `pfd.revents == 0` | `pfd.revents = -1` on the preceding line |
+| `test/posix-select-socket.c:384`, `:385`, `:402` `pfd[i].revents == 0` | `pfd[i].revents = -1` at `:381`–`:382` and `:399` (these three were already correct; only the `poll_one()` helper was not) |
+| `test/posix-sysmisc.c:1085` `f_files == f_ffree == f_favail == 0` | documented zeros, but the same struct is proved populated by `f_frsize > 0 && f_bsize > 0` at `:1071` and `f_blocks > 0` at `:1077` |
+| `test/misc.c:218` `sig_calls == 0` while blocked | `CHECK(sig_calls == 1)` at `:222` after the unblock — the counter is proved to be genuinely tracked |
+| `test/posix-glob.c:1777` `m[1].rm_so == 0 && rm_eo == 0` | the preceding `regexec()` into the *same* array left `−1/−1` and is asserted so at `:1769` |
+| `test/posix-tail.c:461` `level == 0 && base == 0` | `:462`–`:464` assert levels 1, 1, 2 and bases 9, 9, 13 for the other entries |
+| `test/posix-tail.c:432`, `:436` `nent == 0` | `reset_walk()` plus `CHECK(nent == 4)` at `:459` |
+| `test/posix-tail.c:932` `st.st_size == 0` after `O_TRUNC` | `st.st_size == 4096` at `:921` on the same struct |
+| `test/posix-unistd.c:348` `st.st_size == 0` after `creat()` | `st.st_size == 10` at `:345` on the same struct |
+| `test/posix-unistd.c:552`, `:557` directory `st_size == 0` | `S_ISDIR(st.st_mode)` at `:551` proves `stat()` populated the struct |
+| `test/posix-limits.c:736` `imaxdiv(0,5)` quot/rem zero | `:732`–`:735` assert non-zero quot/rem from the same function |
+| `test/time.c:53` `tm_isdst == 0` | `check_tm()` asserts seven other fields against known non-zero values at `:45`–`:52` |
+| `test/posix-time.c:528` `tm_wday == 0` | `:525`–`:526` assert non-zero year/mday/hour/min/sec on the same struct |
+| `test/posix-io.c:327` `ftell(f) == 0` | `CHECK(ftell(f) == 1)` at `:331` |
+| `test/sh-engine.c:265` `pl->bang == 0` | `CHECK(pl->bang == 1)` at `:278` |
+| `test/sh-engine.c` list terminators (`->next == 0`, 11 sites) | each is the tail of an inline non-NULL chain in the same expression, and `only_command()` asserts `l->items != 0` at `:91` before any of them |
+| `test/sh-engine.c:111`/`:145`/`:160` `assigns == 0` / `words == 0` | complementary pair: `test_simple_command_words` asserts `words != 0` while `assigns == 0`, `test_assignment_only_command` asserts `assigns != 0` while `words == 0` |
+| `test/posix-ctype.c`, `test/posix-wctype.c` `is*(x) == 0` | every one is adjacent to an `is*(y) != 0` for the complementary character |
+
+### A separate category, deliberately not counted
+
+`CHECK(errno == 0)` after a successful call (`test/posix-io.c:95`,
+`:101`, `:109`, `:251`, `test/posix-misc.c:79`) *looks* like this family
+but is not. There the absence of a write is the requirement itself —
+XSH 2.3 (`basedefs/V1_chap02.html`) permits a function to set `errno` on
+success only where its page says so, so "nothing was written" is the
+positive result being asserted, not a proxy for one. The explicit
+`errno = 0` before each call is what makes it well-formed.
+
+### Negative control
+
+Making `strverscmp()` return 0 unconditionally
+(`src/string/strverscmp.c`) turns `test/string.c` red at `:107`–`:109`
+and leaves every test touched by this group green (`exec`, `posix-grp`,
+`posix-glob`, `posix-sysmisc`, `posix-select-socket`). A pass from them
+therefore means "correctly indifferent", not "never ran".
