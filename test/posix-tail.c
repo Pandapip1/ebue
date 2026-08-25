@@ -1099,28 +1099,6 @@ static void test_posix_fallocate_enodev(void)
 }
 #endif
 
-#if 0 /* BUG: posix_fallocate() never checks that the descriptor was
-       * opened for writing.
-       *
-       * posix_fallocate.html ERRORS, *shall fail*:
-       *   "[EBADF] The fd argument references a file that was opened
-       *    without write permission."
-       *
-       * src/fcntl/fallocate.c looks at f->type and si.Directory and
-       * never at the access mode, so a read-only descriptor takes the
-       * ordinary path.  Measured under Wine: with an 11-byte file open
-       * O_RDONLY, posix_fallocate(fd, 0, 5) -- a range already inside
-       * the file, so no NT call is made at all -- returns 0, reporting
-       * success for an allocation the caller can never write into.
-       * (posix_fallocate(fd, 0, 100) on the same descriptor happens to
-       * come back 9 as well, but only as a side effect of how the
-       * failing NtSetInformationFile status maps; that is not the
-       * required check, and it is environment-dependent.  The
-       * within-EOF call above is the decisive one.)
-       *
-       * Fix shape: f->flags already records the flags open() was given
-       * (src/internal/libc.h), so `(f->flags & O_ACCMODE) == O_RDONLY`
-       * is the whole test. */
 static void test_posix_fallocate_ebadf_readonly(void)
 {
 	int fd = open("tail-falloc-ro.tmp", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -1142,7 +1120,6 @@ static void test_posix_fallocate_ebadf_readonly(void)
 	}
 	unlink("tail-falloc-ro.tmp");
 }
-#endif
 
 /* ====================================================================
  * setjmp.h -- _setjmp(), _longjmp()   (OB XSI)
@@ -1650,9 +1627,7 @@ int main(void)
 #if 0 /* BUG: see the fence above test_posix_fallocate_enodev */
 	test_posix_fallocate_enodev();
 #endif
-#if 0 /* BUG: see the fence above test_posix_fallocate_ebadf_readonly */
 	test_posix_fallocate_ebadf_readonly();
-#endif
 
 	test__setjmp_return_values();
 	test__longjmp_does_not_manipulate_the_signal_mask();

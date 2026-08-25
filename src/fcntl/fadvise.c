@@ -54,6 +54,27 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	if (!f) return EBADF;
 	if (offset < 0 || len < 0) return EINVAL;
 	if (f->type == __FD_PIPE) return ESPIPE;
+	/* posix_fallocate.html ERRORS, *shall fail*: "[EBADF] The fd argument
+	 * references a file that was opened without write permission."  This
+	 * function allocates storage and may extend the file, so a descriptor
+	 * the caller cannot write through must be refused -- previously it
+	 * was not checked at all, and posix_fallocate(rd, 0, 5) on a
+	 * read-only descriptor with the range already inside the file
+	 * returned 0, promising an allocation the caller can never use.
+	 * (A range PAST the end happened to fail as well, but only as a side
+	 * effect of NT refusing the FileEndOfFileInformation set on a
+	 * read-only handle; that is environment-dependent and is not this
+	 * clause.)  This is the same test src/unistd/write.c applies, and it
+	 * is only correct because inherited descriptors now record their real
+	 * access mode (src/internal/fd.c's accmode_of) -- before that, every
+	 * descriptor inherited across a spawn read back as O_RDONLY and this
+	 * check would have refused writable ones.
+	 *
+	 * Placed after the [ESPIPE] arm on purpose.  A pipe's read end
+	 * satisfies both clauses at once and POSIX orders neither, but
+	 * [ESPIPE] says the more useful thing about a pipe, and the existing
+	 * assertion for it predates this check. */
+	if ((f->flags & O_ACCMODE) == O_RDONLY) return EBADF;
 	want = (long long)offset + (long long)len;
 	if (want < 0) return EFBIG;
 
