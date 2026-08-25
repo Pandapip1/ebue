@@ -199,7 +199,41 @@ int __raise_internal(int sig)
 	if (h == SIG_IGN) return 0;
 	if (h == SIG_DFL) {
 		if (!default_action(sig)) return 0;
-		__stdio_exit();
+		/* SIGABRT ONLY, and the asymmetry is the whole point.
+		 *
+		 * XSH 2.4.3 Signal Actions: "If the default action is to
+		 * terminate the process abnormally, the process is terminated
+		 * as if by a call to _exit(), except that the status made
+		 * available to wait(), waitid(), and waitpid() indicates
+		 * abnormal termination by the signal."  And _exit() itself,
+		 * DESCRIPTION: "Open streams shall NOT be flushed.  Whether
+		 * open streams are closed (without flushing) is
+		 * implementation-defined" -- with its RATIONALE confirming the
+		 * scope: those consequences "occur regardless of whether the
+		 * process called _exit() ... or instead was terminated due to a
+		 * signal."  So for a default-terminate signal, flushing here is
+		 * not merely unnecessary, it is forbidden.
+		 *
+		 * abort() is the exception the standard writes out.
+		 * abort.html DESCRIPTION: "The abnormal termination processing
+		 * shall include the default actions defined for SIGABRT and MAY
+		 * INCLUDE an attempt to effect fclose() on all open streams."
+		 * (Its RATIONALE records the softening from "shall include the
+		 * effect of fclose()" for async-signal-safety.)  A *may*, so
+		 * flushing on SIGABRT is a permitted choice rather than a
+		 * requirement -- and it is the useful one: src/exit/abort.c
+		 * reaches this path, and a program that dies on a failed
+		 * assertion having silently dropped its diagnostics is worse to
+		 * debug for no conformance gain.  Pinned by
+		 * test_abort_flushes_stdio() rather than left to be rediscovered.
+		 *
+		 * This used to flush unconditionally, with no recorded reason at
+		 * either call site and no ledger row.  That is also how it came
+		 * to be the second half of a SIGPIPE recursion (src/stdio/file.c
+		 * has the measurement); the re-entrancy guard there stays
+		 * regardless of this, since the failure mode was a stack
+		 * overflow that reported success. */
+		if (sig == SIGABRT) __stdio_exit();
 		__nt_exit(__NT_SIGNAL_EXIT(sig));
 	}
 	/* else: h is a real handler.  Written as an else rather than a
@@ -693,7 +727,25 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	default: return EXCEPTION_CONTINUE_SEARCH;
 	}
 	if (handlers[sig] == SIG_DFL) {
-		__stdio_exit();
+		/* No flush, unconditionally -- and for two independent reasons.
+		 *
+		 * The clause is the one at __raise_internal()'s SIG_DFL branch
+		 * above: XSH 2.4.3 makes a default-terminate signal behave "as
+		 * if by a call to _exit()", and _exit() says open streams
+		 * "shall not be flushed".  SIGABRT is the only signal POSIX
+		 * exempts (abort.html's "may include an attempt to effect
+		 * fclose()"), and nothing reaching THIS function is SIGABRT:
+		 * every case above maps an NT exception to SIGSEGV, SIGBUS,
+		 * SIGILL, SIGFPE, SIGTRAP or SIGINT.  So the exemption cannot
+		 * apply here and the prohibition always does.
+		 *
+		 * Independently of conformance: this runs inside a vectored
+		 * exception handler, on whatever stack is left at the moment of
+		 * the fault.  For EXCEPTION_STACK_OVERFLOW that is by
+		 * definition almost none, and __stdio_exit() walks every open
+		 * FILE calling fflush().  Flushing was how the handler for a
+		 * stack overflow used to re-enter the very cycle that caused
+		 * it -- see src/stdio/file.c. */
 		__nt_exit(__NT_SIGNAL_EXIT(sig));
 	}
 	if (handlers[sig] == SIG_IGN) {

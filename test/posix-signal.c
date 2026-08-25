@@ -579,6 +579,134 @@ static void test_abort_overrides(const char *self)
 	}
 }
 
+/* ---- stdio buffers and a terminating signal -----------------------
+ *
+ * BOTH DIRECTIONS ARE ASSERTED ON PURPOSE.  The rule is an asymmetry
+ * and only half of it is a prohibition, so a test that checked one side
+ * would stay green through a change that broke the other:
+ *
+ *   any default-terminate signal   MUST NOT flush   (XSH 2.4.3 ->
+ *       _exit(): "Open streams shall not be flushed")
+ *   SIGABRT                        MAY flush        (abort.html: "may
+ *       include an attempt to effect fclose() on all open streams")
+ *
+ * The SIGABRT half pins a *permitted choice* this library makes, not a
+ * requirement -- an implementation that dropped the buffers on abort()
+ * would conform too.  It is pinned so the choice stays visible and a
+ * change to it has to be deliberate; src/signal/signal.c records why it
+ * is made.  The SIGTERM half is a real conformance assertion.
+ *
+ * THE MEASUREMENT IS CHECKED BEFORE IT IS TRUSTED.  Both assertions
+ * reduce to "how many bytes of the child's buffer reached the file",
+ * and a zero can mean two entirely different things: the flush did not
+ * happen (what is being tested), or the file never carried anything
+ * from the child in the first place (a fact about the build, not about
+ * flushing).  That is not hypothetical -- under the native ASan build
+ * fuzz/ntstubs.c supplies an in-memory volume rooted at C:\work, and it
+ * is PER PROCESS, so nothing a spawned child writes is visible to the
+ * parent no matter what happened to the buffer.  On that build the
+ * SIGTERM half would pass vacuously and the SIGABRT half would fail
+ * spuriously, and only the second of those is loud.
+ *
+ * So flush_probe_channel_works() runs first: a child that writes the
+ * same bytes and flushes them EXPLICITLY, before exiting normally.  If
+ * the parent cannot read those back, the apparatus cannot measure
+ * anything here and both halves are skipped with a note.  The skip is
+ * therefore derived from a measurement rather than from a build-type
+ * #ifdef, which also means it disappears by itself if ntstubs ever
+ * grows a volume that survives a spawn.
+ *
+ * The child writes into a FILE on disk rather than a pipe, so the
+ * evidence outlives it: the parent reads the file afterwards and the
+ * byte count is the whole measurement.  Buffered, never explicitly
+ * flushed, and well under BUFSIZ, so nothing can reach the file except
+ * through a flush somebody performed. */
+#define FLUSHPROBE_TEXT "buffered-and-never-explicitly-flushed"
+
+static int flush_probe_child(int sig)
+{
+	FILE *f = fopen("flushprobe.tmp", "w");
+	if (!f) return 71;
+	if (setvbuf(f, 0, _IOFBF, 4096) != 0) return 74;
+	if (fputs(FLUSHPROBE_TEXT, f) == EOF) return 75;
+	if (sig == 0) {
+		/* The control: flush on purpose and leave normally, so the
+		 * parent is measuring the file channel and nothing else. */
+		if (fflush(f) != 0) return 78;
+		if (fclose(f) != 0) return 79;
+		return 0;
+	}
+	if (sig == SIGABRT) abort();
+	raise(sig);
+	return 76;   /* must not be reached: both dispositions terminate */
+}
+
+static long flush_probe_bytes(const char *s, const char *mode, int *status)
+{
+	char *argv[3];
+	char buf[128];
+	FILE *f;
+	pid_t pid;
+	size_t n;
+
+	remove("flushprobe.tmp");
+	argv[0] = (char *)s; argv[1] = (char *)mode; argv[2] = NULL;
+	pid = __spawn(s, argv, environ);
+	if (pid < 0) return -1;
+	if (waitpid(pid, status, 0) != pid) return -1;
+
+	f = fopen("flushprobe.tmp", "r");
+	if (!f) return 0;            /* never created is "nothing was written" */
+	n = fread(buf, 1, sizeof buf, f);
+	fclose(f);
+	remove("flushprobe.tmp");
+	return (long)n;
+}
+
+/* Can a child's explicitly-flushed file be read back by the parent in
+ * this build at all?  See the section comment: without this, a zero
+ * byte count is unreadable. */
+static int flush_probe_channel_works(const char *s)
+{
+	int status = 0;
+	long n = flush_probe_bytes(s, "--flush-probe-control", &status);
+
+	if (n == (long)strlen(FLUSHPROBE_TEXT) && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+		return 1;
+	printf("note: a child's flushed file does not reach the parent in this build"
+	       " (control wrote %ld of %ld byte(s)); stdio-flush-on-signal checks skipped\n",
+	       n < 0 ? 0L : n, (long)strlen(FLUSHPROBE_TEXT));
+	return 0;
+}
+
+static void test_terminating_signal_does_not_flush_stdio(const char *s)
+{
+	int status = 0;
+	long n = flush_probe_bytes(s, "--flush-probe-term", &status);
+
+	if (n < 0) { CHECK(0 && "spawn/waitpid failed for --flush-probe-term"); return; }
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+	/* The clause. Not "n is small" -- exactly nothing. */
+	if (n != 0) printf("    note: %ld byte(s) reached the file\n", n);
+	CHECK(n == 0);
+}
+
+static void test_abort_flushes_stdio(const char *s)
+{
+	int status = 0;
+	long n = flush_probe_bytes(s, "--flush-probe-abort", &status);
+
+	if (n < 0) { CHECK(0 && "spawn/waitpid failed for --flush-probe-abort"); return; }
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+	/* Positive direction: the permitted flush actually happened, and in
+	 * full -- a partial write would mean something other than
+	 * __stdio_exit() produced it. */
+	if (n != (long)strlen(FLUSHPROBE_TEXT))
+		printf("    note: %ld byte(s) reached the file, wanted %ld\n",
+		       n, (long)strlen(FLUSHPROBE_TEXT));
+	CHECK(n == (long)strlen(FLUSHPROBE_TEXT));
+}
+
 /* ================================================================== *
  * psiginfo.html
  * ================================================================== */
@@ -1472,6 +1600,9 @@ int main(int argc, char **argv)
 
 	if (argc > 1 && !strcmp(argv[1], "--sleep")) { sleep(30); return 0; }
 	if (argc == 3 && !strcmp(argv[1], "--child")) return atoi(argv[2]) & 0xff;
+	if (argc > 1 && !strcmp(argv[1], "--flush-probe-control")) return flush_probe_child(0);
+	if (argc > 1 && !strcmp(argv[1], "--flush-probe-term")) return flush_probe_child(SIGTERM);
+	if (argc > 1 && !strcmp(argv[1], "--flush-probe-abort")) return flush_probe_child(SIGABRT);
 	if (argc > 1 && !strcmp(argv[1], "--abort-blocked")) {
 		sigset_t s;
 		sigemptyset(&s);
@@ -1618,6 +1749,10 @@ int main(int argc, char **argv)
 	test_sigpending();
 	test_sigsuspend_stub();
 	test_abort_overrides(argv[0]);
+	if (flush_probe_channel_works(argv[0])) {
+		test_terminating_signal_does_not_flush_stdio(argv[0]);
+		test_abort_flushes_stdio(argv[0]);
+	}
 	test_psiginfo();
 	test_sa_siginfo_raise();
 	test_sa_siginfo_fault_child(argv[0]);
