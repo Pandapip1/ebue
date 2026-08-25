@@ -471,6 +471,7 @@ coverage: `test/stdio.c` (~430 checks).
 | scanf family | conversion table, field width, %n, assignment suppression | covered (pre-existing, ~250 lines) | test/stdio.c |
 | remove / rename | success, ENOENT | covered | test/stdio.c |
 | tmpfile / tmpnam | uniqueness, L_tmpnam buffer sizing, removed-on-close semantics | covered | test/stdio.c |
+| tmpnam | DESCRIPTION: "The tmpnam() function shall generate a string that is a valid pathname that does not name an existing file" | **BUG (fenced)** -- `src/stdio/misc.c`'s tmpnam() returns the template mkstemp() just created and, unlike the tempnam() three functions below it, never unlinks it; an `O_CREAT|O_EXCL` create on the returned name gets [EEXIST], and each call leaves a zero-byte `tmpnam_*` file in the cwd | test/posix-stdio.c `test_tmpnam_does_not_create` |
 | tempnam (XSI, obsolescent) | honours `dir` and `pfx`, null `dir` falls back to P_tmpdir, null `pfx` accepted, the generated name does not already exist and is usable, two calls differ, the result is free()-able | covered | test/posix-stdio.c `test_tempnam` |
 | tempnam | [ENOMEM] | N/A — needs allocator exhaustion, which this suite cannot induce | -- |
 | getc_unlocked | functionally equivalent to getc() on the same stream inside a flockfile()/funlockfile() scope; unsigned-char return; EOF at end | covered | test/posix-stdio.c `test_getc_unlocked` |
