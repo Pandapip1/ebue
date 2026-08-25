@@ -152,6 +152,12 @@ int fesetround(int round)
 static fenv_t dfl_env;
 static int dfl_env_ok;
 
+/* Declared here rather than by including src/internal/libc.h, where the
+ * matching declaration lives beside __fd_init() and __signal_init():
+ * libc.h includes nt.h, which is NT-specific, and this file is also
+ * compiled natively by tools/asan-build.sh.  Keep the two in step. */
+void __fenv_init(void);
+
 void __fenv_init(void)
 {
 	/* Captured exactly, status flags included: the clause says "the one
