@@ -38,8 +38,8 @@
  * 2026-08-24): fgetwc, fgetws, fputwc, fputws, fwide, getwc, getwchar,
  * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, open_wmemstream, wcwidth, wcswidth, wcstol, wcstoll, wcstoul,
- * wcstoull, wcstod, wcstof, wcstold, wcscoll, wcscoll_l, wcsxfrm,
+ * wscanf, open_wmemstream, wcwidth, wcswidth,
+ * wcstod, wcstof, wcstold, wcscoll, wcscoll_l, wcsxfrm,
  * wcsxfrm_l, wcsftime, mbsnrtowcs, wcsnrtombs.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
@@ -47,9 +47,10 @@
  * wcsrtombs, plus the stdlib.h mbtowc/wctomb/mblen/mbstowcs/wcstombs and
  * inttypes.h wcstoimax/wcstoumax already covered.  Newly present as of
  * 2026-08-24 (src/string/wcsstr.c, wcsspn.c, wcstok.c, wcsdup.c,
- * wcsnlen.c, wcpcpy.c, wcscasecmp.c), tested below rather than fenced:
- * wcsstr, wcspbrk, wcscspn, wcsspn, wcstok, wcsdup, wcsnlen, wcpcpy,
- * wcpncpy, wcscasecmp, wcscasecmp_l, wcsncasecmp, wcsncasecmp_l.  Also now present, as
+ * wcsnlen.c, wcpcpy.c, wcscasecmp.c, and src/stdlib/wcstol.c), tested
+ * below rather than fenced: wcsstr, wcspbrk, wcscspn, wcsspn, wcstok,
+ * wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp, wcscasecmp_l,
+ * wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul, wcstoull.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1338,11 +1339,11 @@ static void test_wcscasecmp(void)
 
 /* ---------------------------------------------------------------------
  * wcstol / wcstoll / wcstoul / wcstoull -- wcstol.html
- * Pure ASCII-digit parsing (same subject-sequence grammar wcstoimax()
- * already implements above); no surrogate involvement.  UNIMPL.
+ * Pure ASCII-digit parsing (the same subject-sequence grammar
+ * wcstoimax() implements above, and now literally the same parser --
+ * src/stdlib/wcstol.c, which is what src/stdlib/wcstoimax.c was
+ * renamed to when these four joined it); no surrogate involvement.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcstol()/wcstoll()/wcstoul()/wcstoull() -- wcstol.html
-       * DESCRIPTION, RETURN VALUE, ERRORS. */
 static void test_wcstol_family(void)
 {
 	wchar_t *end;
@@ -1355,8 +1356,75 @@ static void test_wcstol_family(void)
 	CHECK(wcstoul(W("42"), 0, 10) == 42UL);
 	CHECK(wcstoll(W("42"), 0, 10) == 42LL);
 	CHECK(wcstoull(W("42"), 0, 10) == 42ULL);
+
+	/* LLP64: long is 32 bits, long long is 64.  wcstoll() must reach
+	 * past LONG_MAX where wcstol() saturates, or the two are not
+	 * distinguishable at all on this target. */
+	CHECK(wcstoll(W("2147483648"), 0, 10) == 2147483648LL);
+	errno = 0;
+	CHECK(wcstol(W("2147483648"), 0, 10) == LONG_MAX);
+	CHECK(errno == ERANGE);
+
+	/* "If the value of base is 0, the expected form of the subject
+	 * sequence is that of a decimal, octal, or hexadecimal constant."
+	 */
+	CHECK(wcstol(W("0x1f"), &end, 0) == 31);
+	CHECK(*end == 0);
+	CHECK(wcstol(W("017"), 0, 0) == 15);
+	/* base 16 with an optional 0x prefix */
+	CHECK(wcstol(W("0x1f"), 0, 16) == 31);
+
+	/* "the subject sequence shall be interpreted as an integer ...
+	 * and if the subject sequence begins with a <hyphen-minus>, the
+	 * value resulting from the conversion shall be negated" -- for
+	 * the unsigned forms that negation wraps, it is not an error. */
+	CHECK(wcstoul(W("-1"), 0, 10) == ULONG_MAX);
+	CHECK(wcstoull(W("-1"), 0, 10) == ULLONG_MAX);
+
+	/* "If the correct value is outside the range ... {ULONG_MAX} ...
+	 * shall be returned and errno set to [ERANGE]." */
+	errno = 0;
+	CHECK(wcstoul(W("99999999999999999999"), 0, 10) == ULONG_MAX);
+	CHECK(errno == ERANGE);
+	errno = 0;
+	CHECK(wcstoull(W("99999999999999999999"), 0, 10) == ULLONG_MAX);
+	CHECK(errno == ERANGE);
+	/* A magnitude that overflows even uintmax_t, with a minus sign,
+	 * is still "outside the range of representable values" for the
+	 * unsigned forms: {ULONG_MAX}/{ULLONG_MAX} and [ERANGE], not a
+	 * wrapped negation.  (This is the case that distinguishes the
+	 * unsigned arm of the shared worker from the signed one; without
+	 * it a wcstoul() routed through the signed arm returns 0 here.) */
+	errno = 0;
+	CHECK(wcstoul(W("-99999999999999999999"), 0, 10) == ULONG_MAX);
+	CHECK(errno == ERANGE);
+	errno = 0;
+	CHECK(wcstoull(W("-99999999999999999999"), 0, 10) == ULLONG_MAX);
+	CHECK(errno == ERANGE);
+
+	/* the negative end of the signed range clamps to LONG_MIN */
+	errno = 0;
+	CHECK(wcstol(W("-99999999999999999999"), 0, 10) == LONG_MIN);
+	CHECK(errno == ERANGE);
+	errno = 0;
+	CHECK(wcstoll(W("-99999999999999999999"), 0, 10) == LLONG_MIN);
+	CHECK(errno == ERANGE);
+
+	/* "If no conversion could be performed, 0 shall be returned and
+	 * errno may be set to [EINVAL]" -- and endptr, if not null, gets
+	 * the original nptr back. */
+	{
+		const wchar_t *nptr = W("zz");
+		end = 0;
+		CHECK(wcstol(nptr, &end, 10) == 0);
+		CHECK(end == nptr);
+	}
+
+	/* leading whitespace is skipped, and endptr stops at the first
+	 * unconvertible unit */
+	CHECK(wcstol(W("  -12abc"), &end, 10) == -12);
+	CHECK(*end == L'a');
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcstod / wcstof / wcstold -- wcstod.html
@@ -1519,6 +1587,7 @@ int main(void)
 	test_wcsnlen();
 	test_wcpcpy();
 	test_wcscasecmp();
+	test_wcstol_family();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

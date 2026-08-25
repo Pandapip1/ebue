@@ -70,6 +70,11 @@ size_t mbrlen (const char *__restrict, size_t, mbstate_t *__restrict);
 size_t mbsrtowcs (wchar_t *__restrict, const char **__restrict, size_t, mbstate_t *__restrict);
 size_t wcsrtombs (char *__restrict, const wchar_t **__restrict, size_t, mbstate_t *__restrict);
 
+long wcstol (const wchar_t *__restrict, wchar_t **__restrict, int);
+unsigned long wcstoul (const wchar_t *__restrict, wchar_t **__restrict, int);
+long long wcstoll (const wchar_t *__restrict, wchar_t **__restrict, int);
+unsigned long long wcstoull (const wchar_t *__restrict, wchar_t **__restrict, int);
+
 #ifdef __cplusplus
 }
 #endif
