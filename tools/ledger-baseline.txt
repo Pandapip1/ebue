@@ -35,7 +35,6 @@ A test_siginterrupt
 A test_sigset
 A test_unlinkat
 A test_uselocale_reports_lc_global_locale
-B test_bang_word_roundtrip
 B test_chmod_cannot_clear_read_bits
 B test_chmod_cannot_move_exec_bits
 B test_chmod_group_other_write_aliases_owner
@@ -46,7 +45,6 @@ B test_glob_err_callback
 B test_glob_noescape
 B test_group_redir_leak
 B test_heredoc_queue_leak
-B test_heredoc_quoted_delim_roundtrip
 B test_ionum_overflow
 B test_mlock_munlock
 B test_mmap_fixed_atomic_replace

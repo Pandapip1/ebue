@@ -732,6 +732,58 @@ static void test_bang_word_roundtrip(void)
 }
 #endif
 
+#if 0	/* BUG: parse -> print -> parse -> print is not a fixed point for a
+	 * function definition followed by a list operator.  Every round
+	 * trip inserts one more <blank> between the body and the operator,
+	 * so like the here-document fence above this does not merely fail,
+	 * it diverges:
+	 *
+	 *     "a()()&"   prints as   "a() () &"
+	 *                REprints as "a() ()  &"
+	 *                then        "a() ()   &"
+	 *
+	 * src/sh/parse.c:885-896 parse_funcdef() captures the body as the
+	 * text from the body's first token to `end = p->cur.start` -- the
+	 * START of the token that FOLLOWS the body.  The lexer has already
+	 * skipped the <blank>s in between, so they are inside the captured
+	 * extent: given "a() () &" the body is "() " and not "()".
+	 * src/sh/print.c:148 writes func_text back verbatim, and
+	 * print_list()/print_pipeline()/print_andor() then write the
+	 * operator with a leading space of their own (print.c:183 " &",
+	 * :163 " | ", :171 " && "/" || "), so one blank becomes two.
+	 *
+	 * WHY ONLY A LIST OPERATOR, which is what makes this survive the
+	 * cases test_roundtrip() above already checks:
+	 *
+	 *   - a redirection does not expose it.  parse_command() consumes
+	 *     the redirection into the BODY's redirection list, so it ends
+	 *     up inside func_text and reprints exactly where it was --
+	 *     "f() { a; } > out" is a fixed point and is checked live
+	 *     above.
+	 *   - ';' and <newline> do not expose it either.  print_list()
+	 *     ends an item with a bare '\n' and writes no leading blank
+	 *     for the next one, so the reprint has no blank to swallow --
+	 *     "f() { :; }; g() { :; }; f" is checked live above too.
+	 *
+	 * That is the whole of the gap: stage 7b's round-trip cases put a
+	 * function definition before ';', a <newline>, a redirection and
+	 * end-of-input, and never before '&', '|', '&&' or '||'.
+	 *
+	 * Found by fuzz/fuzz_shparse.c as "\x01&A()()&" and, independently
+	 * in the same run, inside a 256-byte pipeline as "___()()|"; both
+	 * reduce to the four cases below.  fuzz_shparse.c's funcdef_fence()
+	 * keeps the harness off it -- delete that when this fence is
+	 * lifted. */
+static void test_funcdef_before_list_operator_roundtrip(void)
+{
+	check_roundtrip("a()()&");
+	check_roundtrip("a()()|b");
+	check_roundtrip("a()()&&b");
+	check_roundtrip("a()()||b");
+	check_roundtrip("f() { a; }&");
+}
+#endif
+
 /* ---- stage 2: execution of simple commands -----------------------------
  *
  * These re-exec this very binary (matching test/misc.c's

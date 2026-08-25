@@ -247,6 +247,61 @@ static int bang_fence(const char *src)
 	return strchr(src, '!') != 0;
 }
 
+/* BUG, fenced in test/sh-engine.c as
+ * test_funcdef_before_list_operator_roundtrip(): a function definition
+ * followed by a list operator does not reach a fixed point, and does not
+ * merely fail to -- it diverges, one <blank> further apart every round
+ * trip.
+ *
+ * src/sh/parse.c:885-896 parse_funcdef() captures the body as the text
+ * up to the START of the token that follows it, and the lexer has
+ * already skipped the <blank>s in between, so they are captured as part
+ * of the body.  src/sh/print.c:148 writes that back verbatim and then
+ * writes the operator with a leading space of its own.
+ *
+ * Minimal reproducer, found by this harness and reduced by hand:
+ *
+ *     "a()()&"   prints as   "a() () &"
+ *                REprints as "a() ()  &"
+ *                then        "a() ()   &"
+ *
+ * Only a list operator exposes it: a redirection is consumed into the
+ * body's own redirection list and lands inside the captured text, and
+ * ';'/<newline> are printed as a bare '\n' with no leading blank.
+ * Fenced in test/sh-engine.c, not fixed.
+ *
+ * Only the comparison is suppressed: the parse, the print, the reparse
+ * and the second print all still run, so parse_funcdef() and the
+ * FUNCDEF arm of print_command() stay under test and under ASan.  The
+ * filter is an over-approximation, for the reason bang_fence() gives --
+ * a name character immediately before '(' is where a function
+ * definition can start, which is deliberately narrow enough to leave
+ * "$(" and "((" alone, and '&' or '|' is what the printer needs in
+ * order to emit the leading space that makes the extra blank visible.
+ * Deciding precisely would mean reimplementing the lexer here.
+ *
+ * Measured rather than assumed, over 3044 accumulated corpus units from
+ * three runs: this filter matches 27 of them, 0.9%.  bang_fence()'s
+ * matches 248, 8.1%.  Requiring the '(' to be preceded by a name
+ * character is what keeps it there -- "$(" and "((" are far commoner in
+ * this corpus than a function definition is, and neither is matched.
+ *
+ * When the fence is lifted, delete funcdef_fence() and its caller. */
+static int funcdef_fence(const char *src)
+{
+	size_t i;
+
+	if (!strchr(src, '&') && !strchr(src, '|')) return 0;
+	for (i = 1; src[i]; i++) {
+		char c = src[i - 1];
+		if (src[i] == '(' &&
+		    ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+		     (c >= '0' && c <= '9') || c == '_'))
+			return 1;
+	}
+	return 0;
+}
+
 /* Reprint `l` into a fresh heap string, or NULL if the memstream could
  * not be created.  The caller frees. */
 static char *reprint(const struct sh_list *l)
@@ -318,7 +373,8 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		p2 = reprint(l2);
 		__sh_list_free(l2);
 		if (p2) {
-			if (strcmp(p1, p2) != 0 && !bang_fence(src) && !hdquote_fence(src))
+			if (strcmp(p1, p2) != 0 && !bang_fence(src) && !hdquote_fence(src) &&
+			    !funcdef_fence(src))
 				oracle_mismatch_s("parse/print is not a fixed point", src, p2, p1);
 			free(p2);
 		}

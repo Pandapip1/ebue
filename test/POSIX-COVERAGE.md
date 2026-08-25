@@ -4281,3 +4281,43 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+
+## XCU 2.9.5 Function Definition Command — the parse/print fixed point (group V)
+
+Every other section of this file buckets a *System Interfaces* function.
+This one does not, and that is why the three rows below had no ledger
+entry at all until now: they are fences in `test/sh-engine.c`, which
+tests the Shell Command Language engine in `src/sh/` rather than any
+`<header.h>` interface, so no function-granular table has a place for
+them. `tools/lint-ledger.sh` reported all three as its class B ("this is
+fenced, but no table row records it as fenced") and two of them were
+parked in `tools/ledger-baseline.txt` for exactly that reason. Recording
+them here is what lets that baseline shrink.
+
+The claim under test is `src/sh/print.c`'s own banner, and it is a
+property rather than a clause: **parse -> print -> parse -> print must
+reach a fixed point**, i.e. the second print equals the first.
+`check_roundtrip()` in `test/sh-engine.c` checks it by hand for a fixed
+set of programs and `fuzz/fuzz_shparse.c` generalises it to arbitrary
+input; each row below is an input for which it does not hold. All three
+were found by the fuzzer, and each has a matching fence in
+`fuzz_shparse.c` that suppresses only the comparison — the parse, the
+print, the reparse and the second print still run on those inputs, so
+the code stays under ASan.
+
+| Clause / property | What breaks it | Status | Test |
+|---|---|---|---|
+| XCU 2.9.5 Function Definition Command, with 2.9.3 Lists — a function definition followed by `&`, `\|`, `&&` or `\|\|` | `src/sh/parse.c:885-896` captures the body up to the *start of the token after it*, so the `<blank>`s the lexer already skipped are captured as part of the body; `src/sh/print.c:148` writes that back verbatim and the operator then adds a leading space of its own | **BUG (fenced)** — diverges rather than merely failing: one more `<blank>` per round trip (`"a()()&"` -> `"a() () &"` -> `"a() ()  &"`) | test/sh-engine.c `test_funcdef_before_list_operator_roundtrip` |
+| XCU 2.7.4 Here-Document — a *quoted* delimiter | `src/sh/print.c:41` writes the delimiter as it was **written**; `src/sh/parse.c:273` matches terminator lines against it with **quote removal applied**. Nothing reconciles the two, so they agree only for an unquoted delimiter | **BUG (fenced)** — also diverges: the printed terminator is swallowed as body, adding a line per round trip | test/sh-engine.c `test_heredoc_quoted_delim_roundtrip` |
+| XCU 2.9.2 Pipelines with 2.4 Reserved Words — the word `!` used literally | `!` is a reserved word at the head of a pipeline and must be quoted to be an ordinary word there; `src/sh/print.c` writes such a word out bare, so the printer's own output reparses as a negation and the word is gone | **BUG (fenced)** | test/sh-engine.c `test_bang_word_roundtrip` |
+
+Not a fence, recorded so it is not "completed" later: a function
+definition before `;`, a `<newline>`, a redirection or end-of-input is a
+fixed point, and all four shapes are checked **live** in
+`test_roundtrip()`. The redirection case is the interesting one —
+`parse_command()` consumes the redirection into the *body's* redirection
+list, so it lands inside the captured text and reprints where it was.
+The first row above is a gap in which *separator* stage 7b's cases put
+after a function definition, not a gap in whether they cover function
+definitions at all.
