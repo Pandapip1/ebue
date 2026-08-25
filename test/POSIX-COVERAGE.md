@@ -449,6 +449,7 @@ coverage: `test/stdio.c` (~430 checks).
 | rewind / fgetpos / fsetpos | round-trip; rewind clears the error indicator too | covered | test/stdio.c |
 | fflush | `fflush(NULL)` flushes every open stream | covered | test/stdio.c |
 | fflush | on a readable stream with an underlying fd: discards not-yet-reread ungetc() bytes and resyncs the fd offset to the stream position | covered — was a BUG (`__fflush_locked` short-circuited for any non-writable stream); **fixed in 99474ee** | test/posix-stdio.c `test_fflush_read_stream` |
+| fflush | DESCRIPTION conditions the read-stream resync on "the file is one capable of seeking"; on a non-seekable fd (pipe/FIFO/console) there is nothing to resync and RETURN VALUE's success arm applies | **BUG (fenced)** -- `__fflush_locked()` exempts only memory streams from the resync, so the seek reaches `lseek()`, which answers [ESPIPE] for any non-`__FD_FILE` fd; `fflush()` returns EOF, latches the error indicator, and `fclose()` inherits the EOF | test/posix-stdio.c `test_fflush_nonseekable_read_stream` |
 | setvbuf | valid before any other operation; returns 0 | covered | test/posix-stdio.c |
 | setvbuf | returns non-zero for an invalid `type` | covered — was a BUG (any `type` accepted, 0 returned unconditionally); **fixed in 99474ee**: only `_IOFBF`/`_IOLBF`/`_IONBF` accepted, else EINVAL | test/posix-stdio.c |
 | setbuf / setlinebuf | equivalence to a specific setvbuf call | covered | test/posix-stdio.c |
