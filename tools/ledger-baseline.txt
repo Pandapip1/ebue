@@ -90,4 +90,3 @@ B test_termios_cflag_serial_bits
 B test_termios_oflag_delay_masks
 B test_wcwidth_bmp
 B test_wcwidth_non_bmp
-B test_wordexp_arith_shift_bounds

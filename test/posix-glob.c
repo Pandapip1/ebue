@@ -914,64 +914,48 @@ static void test_wordexp_arith_overflow_wraps(void)
 	wordfree(&we);
 }
 
-#if 0 /* BUG: XBD 2.6.4 Arithmetic Expansion -- the expression "shall be
-	processed according to the rules given in [XBD 1.1.2] Arithmetic
-	Precision and Operations", and 1.1.2 says evaluation "shall be
-	equivalent to that described in Section 6.5, Expressions, of the
-	ISO C standard". ISO C 6.5.7p3 makes a shift whose right operand
-	is negative, or is greater than or equal to the width of the
-	promoted left operand, *undefined behaviour* -- so an
-	implementation of 2.6.4 may not simply perform it.
-
-	src/wordexp/arith.c's apply_binop() does:
-
-	    case 'L': return cur << rhs;    ("<<=" / "<<")
-	    case 'R': return cur >> rhs;    (">>=" / ">>")
-
-	with no bound on rhs at all (arith.c:216-217), and the '/' and
-	'%' cases immediately above it show the author knew to guard the
-	other operand-dependent UB in the same switch. A left shift that
-	overflows the sign bit (1 << 63 on a 64-bit long, 1 << 31 on the
-	32-bit long this library targets) is undefined for the same
-	reason and is equally unguarded.
-
-	Found by fuzz/fuzz_wordexp.c, which drives __wordexp_arith()
-	directly; the first sixty-second run reported it. Reduced from
-	the fuzzer's "J\237\013<<+~+~" to the five cases below, each
-	verified one-per-process against the instrumented build:
-
-	  $((1<<-1))   arith.c:216 shift exponent -1 is negative
-	  $((1>>-1))   arith.c:217 shift exponent -1 is negative
-	  $((1<<64))   arith.c:216 shift exponent 64 is too large
-	  $((1>>64))   arith.c:217 shift exponent 64 is too large
-	  $((1<<63))   arith.c:216 left shift of 1 by 63 places cannot
-	               be represented in type 'long'
-
-	Under UndefinedBehaviorSanitizer (tools/asan-build.sh builds with
-	-fsanitize=undefined -fno-sanitize-recover) every one of them
-	terminates the process, which is why the whole test is fenced
-	rather than only its assertions: an unfenced case here would take
-	this file's entire binary down.
-
-	The expected results below are the ones 1.1.2 implies by way of
-	6.5: there is no correct value for an undefined operation, so the
-	only defensible behaviour is to refuse the expression, and
-	WRDE_SYNTAX is the code arith.c already uses for the sibling
-	guard (division and modulus by zero, tested unfenced above).
-	bash, dash and ksh all reject a negative shift count; glibc's
-	wordexp does not implement $(()) at all, so it is not an oracle
-	here.
-
-	The last case is target-dependent and stated for the target this
-	library is built for, not for the native sanitizer build: `long`
-	is 32 bits under LLP64 (arch/x86_64/bits/limits.h, LONG_MAX
-	0x7fffffffL), so 1<<31 is the overflowing shift there and 1<<63
-	is merely an over-wide one. Both are undefined; the test asks
-	only that the shift count be rejected when it is not less than
-	the width, which is the same requirement either way. */
+/* XBD 2.6.4 Arithmetic Expansion -- the expression "shall be processed
+ * according to the rules given in [XBD 1.1.2] Arithmetic Precision and
+ * Operations", and 1.1.2 says evaluation "shall be equivalent to that
+ * described in Section 6.5, Expressions, of the ISO C standard". ISO C
+ * 6.5.7p3 makes a shift whose right operand is negative, or is greater
+ * than or equal to the width of the promoted left operand, *undefined
+ * behaviour*: 6.5 describes no shift at all for those counts, so there
+ * is nothing for 1.1.2 to be equivalent to and an implementation of
+ * 2.6.4 may not simply perform one. There is no correct value to
+ * return, so the expansion fails, reported WRDE_SYNTAX -- the code
+ * src/wordexp/arith.c already uses for the sibling guard, division and
+ * modulus by zero, asserted unfenced in test_wordexp_arith() above.
+ * bash, dash and ksh all reject a negative shift count too; glibc's
+ * wordexp does not implement $(()) at all, so it is not an oracle here.
+ *
+ * Until this was fixed, apply_binop() evaluated `cur << rhs` and
+ * `cur >> rhs` with no bound on rhs at all, while the '/' and '%' cases
+ * immediately above it in the same switch already guarded the other
+ * operand-dependent UB. Found by fuzz/fuzz_wordexp.c, which drives
+ * __wordexp_arith() directly; the first sixty-second run reported it,
+ * reduced from the fuzzer's "J\237\013<<+~+~" to the cases below. Under
+ * UndefinedBehaviorSanitizer (tools/asan-build.sh builds with
+ * -fsanitize=undefined -fno-sanitize-recover) each of them terminated
+ * the process outright, which is why the whole test had to be fenced
+ * rather than only its assertions -- one unfenced case would have taken
+ * this file's entire binary down.
+ *
+ * The counts are written out rather than derived from sizeof(long) --
+ * unlike test_wordexp_arith_overflow_wraps() above, where the width
+ * genuinely differs between the two builds this file runs in -- because
+ * the ceiling here is deliberately NOT the compiling machine's: arith.c
+ * bounds the count by <limits.h>'s LONG_BIT, which is 32 for both of
+ * this library's targets (arch/x86_64 LLP64 and arch/i386 ILP32 both
+ * say LONG_BIT 32) and stays 32 in the native sanitizer build, where
+ * the host compiler's own long is 64 bits. What a caller of ntlibc's
+ * wordexp() may write is a property of ntlibc, not of whoever compiled
+ * it, so 32 is out of range in both builds; see arith.c's header note
+ * on shift counts. */
 static void test_wordexp_arith_shift_bounds(void)
 {
 	wordexp_t we;
+	char want[64];
 
 	/* a negative shift count is undefined in 6.5.7p3, both directions */
 	CHECK(wordexp("$((1<<-1))", &we, 0) == WRDE_SYNTAX);
@@ -983,18 +967,76 @@ static void test_wordexp_arith_shift_bounds(void)
 	CHECK(wordexp("$((1>>64))", &we, 0) == WRDE_SYNTAX);
 	CHECK(wordexp("$((1<<32))", &we, 0) == WRDE_SYNTAX);
 
-	/* the compound-assignment spellings reach the same switch arms */
+	/* The compound-assignment spellings reach the same switch arms and
+	 * must be bounded there too -- arith_assign() routes "<<="/">>="
+	 * through the same apply_binop() 'L'/'R' cases as the plain
+	 * operators, so a guard written at the parse site rather than in
+	 * apply_binop() would leave these two wrong.
+	 *
+	 * Each is its own expansion, with the variable seeded by a separate
+	 * one, rather than the shorter "$((v=1, v<<=-1))": after a comma
+	 * arith_assign()'s lookahead starts on the blank, which is not a
+	 * name start, so that spelling never reaches match_assign_op() at
+	 * all and fails as an ordinary parse error instead. It would have
+	 * been WRDE_SYNTAX either way -- i.e. it would have asserted
+	 * nothing about the shift guard. */
 	unsetenv("WORDEXP_ARITH_SH");
-	CHECK(wordexp("$((WORDEXP_ARITH_SH=1, WORDEXP_ARITH_SH<<=-1))", &we, 0) == WRDE_SYNTAX);
-	CHECK(wordexp("$((WORDEXP_ARITH_SH=1, WORDEXP_ARITH_SH>>=64))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH=1))", &we, 0) == 0);
+	wordfree(&we);
+
+	/* first with an in-range count, so the guard cannot be "achieved"
+	 * by disabling compound shift assignment outright: both spellings
+	 * still compute and still persist their result (2.6.4: "All
+	 * changes to variables in an arithmetic expression shall be in
+	 * effect after the arithmetic expansion") */
+	CHECK(wordexp("$((WORDEXP_ARITH_SH<<=3))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "8") == 0);
+	CHECK(strcmp(getenv("WORDEXP_ARITH_SH"), "8") == 0);
+	wordfree(&we);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH>>=2))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "2") == 0);
+	CHECK(strcmp(getenv("WORDEXP_ARITH_SH"), "2") == 0);
+	wordfree(&we);
+
+	/* then out of range, in both directions */
+	CHECK(wordexp("$((WORDEXP_ARITH_SH<<=-1))", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("$((WORDEXP_ARITH_SH>>=64))", &we, 0) == WRDE_SYNTAX);
 
 	/* a well-formed shift still works, so the guard must bound the
 	 * count rather than reject the operator */
 	CHECK(wordexp("$((1<<4)) $((256>>4))", &we, 0) == 0);
 	CHECK(strcmp(we.we_wordv[0], "16") == 0 && strcmp(we.we_wordv[1], "16") == 0);
 	wordfree(&we);
+
+	/* Both edges of the accepted range, so the guard cannot be
+	 * "achieved" by refusing more than 6.5.7p3 asks. A count of 0 is
+	 * the floor (a `<=` where the code needs `<` would reject it) and
+	 * LONG_BIT-1 is the last legal count (a `>` where the code needs
+	 * `>=` would let LONG_BIT itself through, which the 1<<32 case
+	 * above catches, but a `>=` written one too low would reject 31,
+	 * which only this case catches). 1<<31 is also 6.5.7p4's
+	 * overflowing left shift on a 32-bit long: in range as a *count*,
+	 * so it must produce this file's documented wraparound rather
+	 * than an expansion failure. The expected value goes through
+	 * wrapped() because that half really is the compiling machine's
+	 * width -- LONG_BIT bounds the count, sizeof(long) decides the
+	 * value -- and the two builds genuinely differ there. */
+	CHECK(wordexp("$((1<<0)) $((7>>0))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "1") == 0 && strcmp(we.we_wordv[1], "7") == 0);
+	wordfree(&we);
+
+	snprintf(want, sizeof want, "%ld", wrapped(1UL << 31));
+	CHECK(wordexp("$((1<<31)) $((-8>>1))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], want) == 0);
+	CHECK(strcmp(we.we_wordv[1], "-4") == 0);
+	wordfree(&we);
+
+	/* and a short-circuited branch never reaches the guard at all,
+	 * same as the untaken division by zero above */
+	CHECK(wordexp("$((0 && (1<<-1))) $((1 || (1>>64)))", &we, 0) == 0);
+	CHECK(strcmp(we.we_wordv[0], "0") == 0 && strcmp(we.we_wordv[1], "1") == 0);
+	wordfree(&we);
 }
-#endif
 
 
 /* Was N/A, and is not any more -- the one entry in this file that
@@ -3420,6 +3462,7 @@ int main(int argc, char **argv)
 	test_wordexp_bookkeeping_flags();
 	test_wordexp_arith();
 	test_wordexp_arith_overflow_wraps();
+	test_wordexp_arith_shift_bounds();
 	test_wordexp_cmdsub(argv[0]);
 	test_wordexp_badchar_nocmd_and_literal_splitting();
 	test_wordexp_syntax_errors();
