@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 | | |
 |---|---|
-| ntlibc | `323634ed12c7504c1688f946bc556ea5683c4be9` |
+| ntlibc | `2cbd9308cff9f8556d0a8e77a770202ecc7fb6ee` |
 | LTP (`third_party/ltp`) | `4c0cfb849f19beed68175de9fb7d02df55987084` |
 | suite | `testcases/open_posix_testsuite/conformance/interfaces/` |
 | census | 1610 tests in 190 directories (189 interfaces + `testfrmw`) |
@@ -30,14 +30,14 @@ Read the taxonomy the right way round. As a *correctness* oracle OPTS is
 close to worthless against this tree -- it caught zero of the five
 defects our own audits fenced. As a *gap* oracle it is the best
 instrument available, because its subject matter is precisely the half of
-POSIX this library does not have. **The 1019 tests that do not
+POSIX this library does not have. **The 1016 tests that do not
 compile are this file's product, not its failure.**
 
 | class | tests | meaning |
 |---|---|---|
 | **A** header absent entirely | 873 | the `#include` fails. The honest failure: a portable program finds out at compile time. |
-| **B** header present, interface missing | 146 | the `#include` *succeeds* and it dies at link, or on an undeclared macro, or on an incomplete type. **The worst of the three for a downstream consumer**, and the one an interface-granularity ledger cannot see. |
-| **C** compiles and links | 591 | reachable. Not the same as correct, and not the same as present -- see section 3. |
+| **B** header present, interface missing | 143 | the `#include` *succeeds* and it dies at link, or on an undeclared macro, or on an incomplete type. **The worst of the three for a downstream consumer**, and the one an interface-granularity ledger cannot see. |
+| **C** compiles and links | 594 | reachable. Not the same as correct, and not the same as present -- see section 3. |
 
 ## 1. Header levers
 
@@ -46,7 +46,7 @@ is **how many tests stop being blocked entirely if header X exists**. A
 test naming both `pthread.h` and `semaphore.h` is unblocked by neither
 alone, and a table that counted it under both would overstate both.
 
-875 of the 1019 blocked tests are blocked by at least one
+875 of the 1016 blocked tests are blocked by at least one
 absent header. Greedy closure, recomputed at every step (a header's value
 rises as its co-blockers land):
 
@@ -120,13 +120,12 @@ exception list, and it is the highest-signal line in this file.
 | `timer_gettime` | 1 | no | **not-marked** |
 | `timer_settime` | 1 | no | **not-marked** |
 
-### Undeclared identifier — a missing **macro**, not a missing function (33 test(s))
+### Undeclared identifier — a missing **macro**, not a missing function (30 test(s))
 
 | identifier | tests | declared? | marker |
 |---|---|---|---|
 | `SCHED_FIFO` | 13 | no | **not-marked** |
 | `SCHED_RR` | 6 | no | **not-marked** |
-| `SIG_HOLD` | 3 | no | **not-marked** |
 | `_SC_CPUTIME` | 3 | no | **not-marked** |
 | `SCHED_OTHER` | 2 | no | **not-marked** |
 | `_SC_MONOTONIC_CLOCK` | 2 | no | **not-marked** |
@@ -410,7 +409,7 @@ headers all resolve, the first symbol/macro/type that does not.
 | `sigprocmask` | 12 | 0 | 0 | 12 | yes | yes | `-` |
 | `sigqueue` | 13 | 0 | 13 | 0 | yes | no | `sigqueue` |
 | `sigrelse` | 3 | 0 | 0 | 3 | yes | yes | `-` |
-| `sigset` | 10 | 0 | 3 | 7 | yes | yes | `SIG_HOLD` |
+| `sigset` | 10 | 0 | 0 | 10 | yes | yes | `-` |
 | `sigsuspend` | 4 | 0 | 0 | 4 | yes | yes | `-` |
 | `sigtimedwait` | 5 | 0 | 5 | 0 | yes | no | `sigtimedwait` |
 | `sigwait` | 8 | 3 | 0 | 5 | yes | yes | `pthread.h` |
@@ -430,7 +429,7 @@ headers all resolve, the first symbol/macro/type that does not.
 <!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.
 Do not edit by hand -- see "the data block" in tools/posix-gapmap.sh.
 
-s	ntlibc	323634ed12c7504c1688f946bc556ea5683c4be9
+s	ntlibc	2cbd9308cff9f8556d0a8e77a770202ecc7fb6ee
 s	ltp	4c0cfb849f19beed68175de9fb7d02df55987084
 s	cc	x86_64-win32-tcc
 s	tests	1610
@@ -1953,9 +1952,9 @@ t	sigset/2-1.c	C
 t	sigset/3-1.c	C			
 t	sigset/4-1.c	C			
 t	sigset/5-1.c	C			
-t	sigset/6-1.c	B		macro	SIG_HOLD
-t	sigset/7-1.c	B		macro	SIG_HOLD
-t	sigset/8-1.c	B		macro	SIG_HOLD
+t	sigset/6-1.c	C			
+t	sigset/7-1.c	C			
+t	sigset/8-1.c	C			
 t	sigset/9-1.c	C			
 t	sigsuspend/1-1.c	C			
 t	sigsuspend/3-1.c	C			
@@ -2237,7 +2236,6 @@ d	timer_settime	no	no	no
 n	SCHED_FIFO	no	no
 n	SCHED_OTHER	no	no
 n	SCHED_RR	no	no
-n	SIG_HOLD	no	no
 n	_SC_ASYNCHRONOUS_IO	no	no
 n	_SC_CPUTIME	no	no
 n	_SC_MONOTONIC_CLOCK	no	no
