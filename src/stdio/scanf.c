@@ -49,6 +49,7 @@
 #include <limits.h>
 #include <ctype.h>
 #include <errno.h>
+#include <wchar.h>
 #include "stdio_impl.h"
 
 enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
@@ -380,9 +381,49 @@ static void scandrain(struct fld *fl)
 	fld_unget(fl, c);
 }
 
+/* One input byte through mbrtowc(), for the l-modified %s, %c and %[.
+ *
+ * fscanf.html says the same sentence under all three: "If an l (ell)
+ * qualifier is present, the input is a sequence of characters that
+ * begins in the initial shift state.  Each character shall be converted
+ * to a wide character as if by a call to the mbrtowc() function."
+ *
+ * Fed one byte at a time because that is how this scanner reads: a
+ * partial sequence lives in the mbstate_t between calls, which is
+ * exactly what mbrtowc's (size_t)-2 return is for.
+ *
+ * SURROGATE PAIRS ARE THE SUBTLE PART.  wchar_t is a 16-bit UTF-16 code
+ * unit on this target, so a character above the BMP is TWO wchar_t from
+ * ONE multibyte character: src/stdlib/mbrtowc.c hands back the high
+ * surrogate and keeps the low one in the state, to be returned by a
+ * later call that consumes nothing, with (size_t)-3.  A loop that
+ * assumes one wide character per mbrtowc() call silently drops the low
+ * surrogate.  It is drained here with n == 0, which cannot consume input
+ * and which returns -2 harmlessly when nothing is pending -- note
+ * mbrtowc checks its pending-surrogate state BEFORE it checks n, which
+ * is what makes the zero-length call work.
+ *
+ * Returns 0, or -1 for an encoding error ([EILSEQ]). */
+static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
+{
+	char ch = (char)c;
+	wchar_t wc;
+	size_t r = mbrtowc(&wc, &ch, 1, st);
+
+	if (r == (size_t)-1) return -1;
+	if (r == (size_t)-2) return 0;          /* incomplete; more bytes needed */
+	if (assign) ws[*nn] = wc;
+	(*nn)++;
+	while (mbrtowc(&wc, &ch, 0, st) == (size_t)-3) {
+		if (assign) ws[*nn] = wc;
+		(*nn)++;
+	}
+	return 0;
+}
+
 int __vfscanf(FILE *f, const char *fmt, va_list ap)
 {
-	int nmatched = 0, gotEOF = 0;
+	int nmatched = 0, gotEOF = 0, ilseq = 0;
 	const char *p = fmt;
 	int c = 0;
 	struct sc sc;
@@ -531,6 +572,26 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				break;
 			}
 			case 's': {
+				if (lm == LM_l) {
+					wchar_t *ws = assign ? va_arg(ap, wchar_t *) : 0;
+					mbstate_t st;
+					int nn = 0, nb = 0;
+					memset(&st, 0, sizeof st);
+					c = skipspace(&sc);
+					if (c == EOF) { gotEOF = 1; goto done; }
+					for (; c != EOF && !isspace(c) && (width < 0 || nb < width); c = rd(&sc)) {
+						if (wide_put(c, ws, &nn, &st, assign) < 0) { ilseq = 1; goto done; }
+						nb++;
+					}
+					unrd(&sc, c);
+					/* a sequence left half-finished is an encoding error
+					 * too: there are no more bytes that could complete it */
+					if (!mbsinit(&st)) { ilseq = 1; goto done; }
+					if (nb == 0) goto done;
+					if (assign) { ws[nn] = 0; nmatched++; }
+					break;
+				}
+				{
 				char *s = assign ? va_arg(ap, char *) : 0;
 				int nn = 0;
 				c = skipspace(&sc);
@@ -542,9 +603,34 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				unrd(&sc, c);
 				if (nn == 0) goto done;
 				if (assign) { s[nn] = 0; nmatched++; }
+				}
 				break;
 			}
 			case 'c': {
+				if (lm == LM_l) {
+					wchar_t *ws = assign ? va_arg(ap, wchar_t *) : 0;
+					mbstate_t st;
+					/* fscanf.html's c entry: "Matches a sequence of bytes
+					 * of the number specified by the field width (1 if no
+					 * field width is present)" -- the width is a BYTE
+					 * count, and the l qualifier converts those bytes
+					 * rather than changing what the width counts.  (C99
+					 * is arguably read the other way for %lc; POSIX is
+					 * the spec this suite audits against and it says
+					 * bytes.)  No null byte is added, here or below. */
+					int w = width < 0 ? 1 : width, nb, nn = 0;
+					memset(&st, 0, sizeof st);
+					for (nb = 0; nb < w; nb++) {
+						c = rd(&sc);
+						if (c == EOF) break;
+						if (wide_put(c, ws, &nn, &st, assign) < 0) { ilseq = 1; goto done; }
+					}
+					if (nb == 0) { gotEOF = 1; goto done; }
+					if (!mbsinit(&st)) { ilseq = 1; goto done; }
+					if (assign) nmatched++;
+					break;
+				}
+				{
 				char *s = assign ? va_arg(ap, char *) : 0;
 				int w = width < 0 ? 1 : width, nn;
 				for (nn = 0; nn < w; nn++) {
@@ -554,10 +640,16 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 				}
 				if (nn == 0) { gotEOF = 1; goto done; }
 				if (assign) nmatched++;
+				}
 				break;
 			}
 			case '[': {
 				unsigned char set[256] = {0};
+				/* One va_arg for both widths: the caller's pointer is
+				 * char * without the l qualifier and wchar_t * with it,
+				 * and both are object pointers of the same
+				 * representation on this target, so it is fetched once
+				 * and cast at the point of use. */
 				char *s = assign ? va_arg(ap, char *) : 0;
 				int neg = 0, nn = 0;
 				p++;
@@ -575,6 +667,23 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 						}
 					} while (*p && *p != ']');
 					/* p now at the closing ']'; the outer for(;*p;p++) will step past it */
+				}
+				if (lm == LM_l) {
+					mbstate_t st;
+					int nb = 0;
+					nn = 0;
+					memset(&st, 0, sizeof st);
+					c = rd(&sc);
+					while (c != EOF && (set[(unsigned char)c] != 0) != neg && (width < 0 || nb < width)) {
+						if (wide_put(c, (wchar_t *)s, &nn, &st, assign) < 0) { ilseq = 1; goto done; }
+						nb++;
+						c = rd(&sc);
+					}
+					unrd(&sc, c);
+					if (!mbsinit(&st)) { ilseq = 1; goto done; }
+					if (nb == 0) { if (c == EOF) gotEOF = 1; goto done; }
+					if (assign) { ((wchar_t *)s)[nn] = 0; nmatched++; }
+					break;
 				}
 				c = rd(&sc);
 				while (c != EOF && (set[(unsigned char)c] != 0) != neg && (width < 0 || nn < width)) {
@@ -627,6 +736,12 @@ int __vfscanf(FILE *f, const char *fmt, va_list ap)
 	}
 done:
 	sc_done(&sc);
+	/* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does
+	 * not form a valid character."  This is a READ error, not a matching
+	 * failure: RETURN VALUE says EOF "if an input failure occurs before
+	 * any conversion", and the stream's error indicator has to be set so
+	 * ferror() can tell it apart from end-of-file. */
+	if (ilseq) { f->err = 1; errno = EILSEQ; return EOF; }
 	return (nmatched == 0 && gotEOF) ? EOF : nmatched;
 }
 

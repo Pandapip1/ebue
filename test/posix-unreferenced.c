@@ -53,6 +53,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <locale.h>
+#include <wchar.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -484,15 +485,6 @@ static void test_scanf_enomem(const char *name)
 
 /* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does not
  * form a valid character." */
-#if 0 /* BUG: the l (ell) length modifier is parsed but then ignored by
-       * the s, c and [ conversions -- src/stdio/scanf.c's `case 's':`
-       * does `char *s = va_arg(ap, char *)` and stores raw bytes
-       * regardless of lm, so "%ls" writes bytes into a wchar_t buffer
-       * instead of converting the multibyte sequence.  fscanf.html
-       * requires "%ls" to convert the input to a sequence of wide
-       * characters "as if by repeated calls to mbrtowc()", and it is
-       * exactly that conversion failing that raises [EILSEQ]; with no
-       * conversion at all, the error can never be produced. */
 static void test_scanf_eilseq(const char *name)
 {
 	wchar_t w[8];
@@ -505,7 +497,103 @@ static void test_scanf_eilseq(const char *name)
 	CHECK(errno == EILSEQ);
 	CHECK(ferror(stdin) != 0);
 }
-#endif
+
+/* The clause the [EILSEQ] above is a consequence OF, asserted in its own
+ * right.  fscanf.html, the s conversion: "If an l (ell) qualifier is
+ * present, the input is a sequence of characters that begins in the
+ * initial shift state.  Each character shall be converted to a wide
+ * character as if by a call to the mbrtowc() function" -- and the same
+ * sentence appears under c and under [.
+ *
+ * Asserted separately because the [EILSEQ] test alone does NOT pin it: a
+ * conversion could validate the byte sequence, report the error, and
+ * still store raw bytes into the caller's wchar_t array on the success
+ * path.  Detecting the failure and performing the conversion are two
+ * different things and need two different assertions. */
+static void test_scanf_l_modifier(const char *name)
+{
+	wchar_t w[16], w2[16];
+	char narrow[16];
+	int n;
+
+	/* plain ASCII: one wide character per byte, NUL-terminated */
+	CHECK(write_file(name, "hello world") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	w[0] = w[1] = 0;
+	CHECK(scanf("%ls", w) == 1);
+	CHECK(w[0] == L'h' && w[1] == L'e' && w[4] == L'o' && w[5] == 0);
+
+	/* a two-byte UTF-8 character must become ONE wide character.  With
+	 * the modifier ignored, w[0] would hold the lead byte 0xC3 and w[1]
+	 * the continuation byte 0xA9 instead. */
+	CHECK(write_file(name, "\xc3\xa9x") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	memset(w, 0, sizeof w);
+	CHECK(scanf("%ls", w) == 1);
+	CHECK(w[0] == 0x00e9);          /* U+00E9 LATIN SMALL LETTER E WITH ACUTE */
+	CHECK(w[1] == L'x');
+	CHECK(w[2] == 0);
+
+	/* a three-byte sequence, likewise one wide character */
+	CHECK(write_file(name, "\xe2\x82\xac") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	memset(w, 0, sizeof w);
+	CHECK(scanf("%ls", w) == 1);
+	CHECK(w[0] == 0x20ac);          /* U+20AC EURO SIGN */
+	CHECK(w[1] == 0);
+
+	/* Above the BMP.  wchar_t is a 16-bit UTF-16 code unit here, so
+	 * U+1D11E must arrive as a SURROGATE PAIR -- two wchar_t from one
+	 * multibyte character.  This is the case a conversion loop that
+	 * assumes one wide character per mbrtowc() call gets wrong. */
+	CHECK(write_file(name, "\xf0\x9d\x84\x9e") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	memset(w, 0, sizeof w);
+	CHECK(scanf("%ls", w) == 1);
+	CHECK(w[0] == 0xd834);
+	CHECK(w[1] == 0xdd1e);
+	CHECK(w[2] == 0);
+
+	/* %lc -- no null byte is added, and the width is a byte count */
+	CHECK(write_file(name, "\xc3\xa9z") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	memset(w, 0, sizeof w);
+	CHECK(scanf("%2lc", w) == 1);
+	CHECK(w[0] == 0x00e9);
+
+	/* %l[ -- note the string break after the hex escape: C hex escapes are
+	 * greedy, so "\xc3\xa9ab." would lex \xa9ab as ONE escape and the
+	 * literal would not contain the bytes intended.  ('a' and 'b' are hex
+	 * digits; the other fixtures here are followed by non-hex characters
+	 * and do not need the break.) */
+	CHECK(write_file(name, "\xc3\xa9" "ab.") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	memset(w, 0, sizeof w);
+	CHECK(scanf("%l[^.]", w) == 1);
+	CHECK(w[0] == 0x00e9 && w[1] == L'a' && w[2] == L'b' && w[3] == 0);
+
+	/* the unmodified conversions must be untouched by all of this */
+	CHECK(write_file(name, "plain 42") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%s %d", narrow, &n) == 2);
+	CHECK(!strcmp(narrow, "plain") && n == 42);
+
+	/* an assignment-suppressed %*ls consumes input and stores nothing */
+	CHECK(write_file(name, "\xc3\xa9 tail") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	memset(w2, 0, sizeof w2);
+	CHECK(scanf("%*ls %ls", w2) == 1);
+	CHECK(w2[0] == L't' && w2[1] == L'a');
+
+	/* a TRUNCATED multibyte sequence at end of input is an encoding
+	 * error too, not a silent short read: the state is left non-initial
+	 * and there are no more bytes to complete it */
+	CHECK(write_file(name, "\xc3") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%ls", w) == EOF);
+	CHECK(errno == EILSEQ);
+}
 
 /* scanf.html ERRORS, may fail: "[EINVAL] There are insufficient
  * arguments." */
@@ -1778,6 +1866,8 @@ int main(void)
 
 	test_scanf_basics(name);
 	test_scanf_returns(name);
+	test_scanf_eilseq(name);
+	test_scanf_l_modifier(name);
 	test_scanf_ebadf(name);
 
 	test_puts_success(name);
