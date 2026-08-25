@@ -45,14 +45,23 @@
  *               any means POSIX defines, and freelocale() on the
  *               "copy" cannot damage the original because freelocale()
  *               does nothing.
- *   newlocale   BUG -- a *shall fail* [EINVAL] argument check is
- *               simply absent.  Nothing about being C-locale-only
- *               excuses it; validating a bitmask needs no locale data.
- *   uselocale   BUG -- and the interesting one.  See the fence.
+ *   newlocale   covered -- was a BUG (the *shall fail* [EINVAL]
+ *               category_mask check was simply absent; nothing about
+ *               being C-locale-only excused it, since validating a
+ *               bitmask needs no locale data).  Fixed by 5904d9c:
+ *               newlocale() rejects a mask bit outside LC_ALL_MASK.
+ *   uselocale   covered -- was a BUG, and the interesting one.
+ *               uselocale(0) == LC_GLOBAL_LOCALE is THE documented way
+ *               to ask whether a thread-local locale is in use, and the
+ *               answer was wrong.  Fixed by 9cdd011, with one word of
+ *               state; note the fix is NOT "return LC_GLOBAL_LOCALE
+ *               unconditionally" -- once uselocale(loc) has been called
+ *               a thread-local locale IS in use.  See src/misc/locale.c.
  *
- * Two BUGs fenced.  Both are `#if 0 / * BUG: ... * /` per this
- * project's convention: the assertions are real and runnable and
- * should pass the day each is fixed.
+ * No BUGs are fenced in this file.  Every assertion below runs.  Both
+ * fences were real when 33a0afd wrote this header; 5904d9c and 9cdd011
+ * removed them and left this list behind, which is what this paragraph
+ * used to be wrong about.
  */
 #include <locale.h>
 #include <errno.h>

@@ -8,12 +8,14 @@
  * program's status, so the parent just inspects the spawned child's exit
  * code.
  *
- * BUG (live, expected to FAIL TO LINK): execvp/execvpe (src/process/exec.c:46)
- * call __find_program, which src/internal/libc.h:117 declares but no
- * source file defines.  execv/execve/execvp all live in exec.o, so any
- * reference to any exec function pulls the object in and the link fails
- * with "unresolved reference to '__find_program'".  Once that is defined
- * this test must also pass at runtime.
+ * The PATH-searching forms are exercised here too: test_exec_path()
+ * calls execvp(), which resolves through __find_program()
+ * (src/process/find_program.c) before handing the resolved image to the
+ * same __spawn() path execv() uses.  This paragraph used to say the file
+ * was "expected to FAIL TO LINK" because __find_program was declared and
+ * defined nowhere.  That was true when a25a370 wrote it and stopped
+ * being true ten commits later, when abe9fc4 added
+ * src/process/find_program.c.
  */
 #include <stdio.h>
 #include <stdlib.h>
