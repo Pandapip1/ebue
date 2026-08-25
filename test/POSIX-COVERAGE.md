@@ -4313,3 +4313,226 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## `arpa/inet.h` — the eight address and byte-order functions (arpa/inet.h group)
+
+New audit file (`test/posix-inet.c`), no new source. This closes the
+oldest of the four rows `POSIX-GAP-ACCOUNTING.md` still lists as
+"Implemented, not clause-audited": `arpa/inet.h` (8), which that file's
+successor-queue note says "was deliberately left alone in that pass
+because the socket subsystem was under concurrent modification" and
+"should wait for the socket subsystem to settle". It has, for the part
+this file audits: `git log --oneline -- src/socket/` lists two commits
+in that directory's whole life — the one that created it, and c7c0171,
+a one-line conformance fix to `inet_pton()` — so the AFD churn that
+note was avoiding is not in this file's way, and nothing in
+`src/socket/inet.c` touches AFD, a descriptor or a device anyway. Before this section, `POSIX-COVERAGE.md`
+contained no row naming any of the eight (`grep -n
+'inet_pton\|inet_ntop\|inet_addr\|inet_ntoa\|htonl\|ntohs'` over both
+ledgers found exactly two hits, both in `POSIX-GAP-ACCOUNTING.md`), so
+nothing here re-decides an existing row.
+
+`test/posix-socket.c` already exercised all eight unconditionally, and
+that is not what this group repeats. That file proves the subsystem
+works; this one reads `htonl.html`, `inet_addr.html`, `inet_ntop.html`
+and `arpa_inet.h.html` sentence by sentence and asserts the corners —
+the four dotted forms and the radix rule, `inet_ntoa()`'s static
+storage, `inet_ntop()`'s exact `[ENOSPC]` boundary, and the grammar
+`inet_pton()` must *refuse*. The one deliberate overlap is the
+`AF_INET6` `[EAFNOSUPPORT]` pair, which `posix-socket.c` asserts as
+correct behaviour and this group re-reads as the observable face of a
+gap.
+
+Counting, since three numbers here disagree: **four findings** (two
+UNIMPL, two BUG), carried by **four fenced test functions** and four
+matching fenced call sites in `main()` — the call sites are the same
+four findings, not four more. A fifth defect in this area — a part with
+a leading zero, accepted by `inet_pton()` and read as decimal, found by
+`fuzz/fuzz_inet.c` — was **fixed on main in c7c0171 while this audit was
+being written**, so it is recorded below as fixed rather than as a
+finding, and its row is the one row in this section that this group did
+not decide.
+
+Everything asserted live was **run** before it was written down, not
+derived: `test/posix-inet.c` and `src/socket/inet.c` link against a host
+libc unchanged (the eight definitions preempt the host's), so the
+expected values are observed outputs of this implementation. Each fence
+was run the same way to confirm it fails today and fails for the reason
+it gives. The single thing that run cannot see is the two PE targets'
+32-bit `unsigned long`; it matters in exactly one assertion, which says
+so.
+
+| function | clause | status | test |
+|---|---|---|---|
+| htonl / htons / ntohl / ntohs | `htonl.html` DESCRIPTION "These functions shall convert 16-bit and 32-bit quantities between network byte order and host byte order" and RETURN VALUE, read together with `inet_addr.html`'s "All Internet addresses shall be returned in network order (bytes ordered from left to right)" | covered. `posix-socket.c`'s `test_byteorder` asserts the swap and that each is its own inverse; what this adds is what network order *is* as a byte sequence — the octets of `htonl(0x01020304)` in memory are 1,2,3,4 in that order, which is a byte-order-independent test of a byte-order function, and `inet_pton()`/`inet_addr()` produce the same four octets for `"1.2.3.4"` | test/posix-inet.c `test_byteorder_wire_layout` |
+| htonl / htons / ntohl / ntohs, declaration form | `arpa_inet.h.html` — "The following shall be declared as functions, or defined as macros, or both", and `htonl.html` "On some implementations, these functions are defined as macros" | covered, and deliberately **not** asserted through a function pointer: a macro-only header conforms for these four, so `&htonl` is not a clause. ntlibc declares functions and defines no macro (`include/arpa/inet.h`), which satisfies the looser clause the strict way | test/posix-inet.c `test_declared_as_functions` (comment) |
+| inet_addr / inet_ntoa / inet_ntop / inet_pton, declaration form | `arpa_inet.h.html` — "The following shall be declared as functions and may also be defined as macros. Function prototypes shall be provided." | covered. Here a real function *is* required, so each of the four is called through a pointer to it. This is the same page as the row above and the opposite requirement; separating them is the point | `test_declared_as_functions` |
+| `<arpa/inet.h>` contents | `arpa_inet.h.html` — the header "shall define the in_port_t and in_addr_t types", "shall define the in_addr structure", and "shall define the INET_ADDRSTRLEN and INET6_ADDRSTRLEN macros as described in `<netinet/in.h>`"; `netinet_in.h.html` supplies the descriptions ("Equivalent to the type uint16_t"/"uint32_t", "shall include at least the following member: in_addr_t s_addr", "INET_ADDRSTRLEN 16. Length of the string form for IP.") | covered for four of the five. The test file includes `<arpa/inet.h>` and `<sys/socket.h>` and *not* `<netinet/in.h>` — which `<sys/socket.h>` does not pull in either — so these names reach it through `<arpa/inet.h>` or not at all, which is the clause and is how a consumer meets it | `test_arpa_inet_header_contents` |
+| `INET6_ADDRSTRLEN` | `arpa_inet.h.html` (same sentence as `INET_ADDRSTRLEN`) and `netinet_in.h.html` "INET6_ADDRSTRLEN 46. Length of the string form for IPv6." | **UNIMPL (fenced)** — defined in no header in `include/`. The one name in this gap that no banner in the tree records; see finding 2 | test/posix-inet.c fence `test_inet6_addrstrlen_defined` |
+| inet_addr | `inet_addr.html` DESCRIPTION, the four forms verbatim — "a.b.c.d ... each shall be interpreted as a byte of data", "a.b.c ... the last part shall be interpreted as a 16-bit quantity and placed in the rightmost two bytes", "a.b ... a 24-bit quantity ... rightmost three bytes", "a ... the value shall be stored directly in the network address without any byte rearrangement" | covered. `posix-socket.c` covers `a` and `a.b` with decimal parts; this adds `a.b.c` and each form's range limit | `test_inet_addr_forms_and_radix` |
+| inet_addr, radix | `inet_addr.html` — "All numbers supplied as parts in IPv4 dotted decimal notation may be decimal, octal, or hexadecimal, as specified in the ISO C standard (that is, a leading 0x or 0X implies hexadecimal; otherwise, a leading '0' implies octal; otherwise, the number is interpreted as decimal)." | covered, and the half of this page most implementations get wrong. `inet_addr("010.1.1.1")` is 8.1.1.1 here, not 10.1.1.1, in every form and position | `test_inet_addr_forms_and_radix` |
+| inet_addr, RETURN VALUE | `inet_addr.html` — the string must be "in the standard IPv4 dotted decimal notation"; "Otherwise, it shall return (in_addr_t)(-1)" | **BUG (fenced)** — a leading `'+'`, leading white space, and (on both PE targets only) a leading `'-'` are accepted. See finding 3 | test/posix-inet.c fence `test_inet_addr_rejects_sign_and_space` |
+| inet_addr, errno | `errno.html` DESCRIPTION — "No function in this volume of POSIX.1‐2017 shall set errno to 0", against `inet_addr.html` ERRORS "No errors are defined." | **BUG (fenced)** — `src/socket/inet.c` executes `errno = 0;` before every `strtoul()` and never reads it back. The only clause on these pages that is violated on every call, on every target. See finding 4 | test/posix-inet.c fence `test_inet_addr_preserves_errno` |
+| inet_addr, `"255.255.255.255"` | `inet_addr.html` RETURN VALUE and ERRORS ("No errors are defined.") | latitude the page does not resolve, recorded and not asserted: the broadcast address converts to the same 32 bits as the failure return, and with no errors defined a caller has nothing else to consult. Every failure assertion in this file therefore uses a string that is not the broadcast address | — (comment in `test_inet_addr_forms_and_radix`) |
+| inet_ntoa | `inet_addr.html` DESCRIPTION "shall convert the Internet host address specified by *in* to a string in the Internet standard dot notation" and RETURN VALUE "a pointer to the network address in Internet standard dot notation"; APPLICATION USAGE "The return value of inet_ntoa() may point to static data that may be overwritten by subsequent calls to inet_ntoa()." | covered, including the overwrite itself: the pointer from the first call is asserted to hold the second call's text. `src/socket/inet.c`'s one process-wide `static char buf[INET_ADDRSTRLEN]` is exactly what the page permits, and the longest output (`"255.255.255.255"`) is asserted to be `INET_ADDRSTRLEN-1` characters | `test_inet_ntoa_static_storage` |
+| inet_ntoa, reentrancy | `inet_addr.html` DESCRIPTION — "The inet_ntoa() function need not be thread-safe." | **N/A** — a permission with no object here. ntlibc has no threads at all (no `<pthread.h>`, no thread-creation interface in `src/`; `POSIX-GAP-ACCOUNTING.md` records the pthread family as absent), so no second thread can exist to observe the shared buffer, and there is nothing the clause could excuse or forbid | — |
+| inet_ntop, AF_INET | `inet_ntop.html` DESCRIPTION "shall convert a numeric address into a text string suitable for presentation"; the src address "must be in network byte order"; RETURN VALUE "a pointer to the buffer containing the text string if the conversion succeeds, and NULL otherwise, and set errno to indicate the error" | covered | `test_inet_ntop_size_and_family` |
+| inet_ntop, ERRORS | `inet_ntop.html` — "[ENOSPC] The size of the inet_ntop() result buffer is inadequate." and "[EAFNOSUPPORT] The af argument is invalid." | covered at the exact boundary, which is what this adds: for `"1.2.3.4"` size 8 succeeds and size 7 fails, so an off-by-one in either direction is caught (`posix-socket.c` passes 4 for a 7-character address, which brackets it but does not locate it); size 0 fails; `AF_UNIX` and `AF_UNSPEC` fail with `[EAFNOSUPPORT]`. One assertion is marked in the file as *beyond* the clause — that the refused buffer is not written into — kept because `fuzz/fuzz_inet.c` depends on it | `test_inet_ntop_size_and_family` |
+| inet_pton, AF_INET grammar | `inet_ntop.html` DESCRIPTION — "the src string shall be in the standard IPv4 dotted-decimal form: ddd.ddd.ddd.ddd where "ddd" is a one to three digit decimal number between 0 and 255 (see inet_addr()). The inet_pton() function does not accept other formats (such as the octal numbers, hexadecimal numbers, and fewer than four numbers that inet_addr() accepts)." | covered, and this is the point of auditing the two functions in one file: every string `test_inet_addr_forms_and_radix` asserts `inet_addr()` must accept, this asserts `inet_pton()` must refuse — the short forms, the `0x` and leading-`0` parts, four-digit parts, and anything surrounding the four numbers. `src/socket/inet.c` writes this loop by hand instead of reusing the `strtoul()` path, which is why it passes | `test_inet_pton_strict_grammar` |
+| inet_pton, a part with a leading zero | same clause ("a one to three digit decimal number between 0 and 255", "does not accept other formats (such as the octal numbers ... that inet_addr() accepts)") | covered — FIXED (c7c0171, landed while this section was being written); the defect was that `"01.2.3.4"` and `"0.0.0.00"` were accepted and read as decimal, found by `fuzz/fuzz_inet.c` against the host's `inet_pton()`. It was the same disagreement as finding 3 seen from the other end — `inet_pton()` too lax about a leading `'0'`, `inet_addr()` too lax about whatever `strtoul()` swallows — and the half finding 3 records is what that commit did not touch. Not re-asserted in `test/posix-inet.c`: `test/posix-socket.c` now asserts it live, and `fuzz/fuzz_inet.c`'s `has_leading_zero_part()` guard is gone. What this group adds beside it is the length half of the same sentence, "a one to three digit decimal number", which no other test covers | test/posix-socket.c `test_inet_pton_ntop`; `test_inet_pton_strict_grammar` for the length rule |
+| inet_pton, RETURN VALUE | `inet_ntop.html` — "shall return 1 if the conversion succeeds, with the address pointed to by dst in network byte order. It shall return 0 if the input is not a valid IPv4 dotted-decimal string or a valid IPv6 address string, or -1 with errno set to [EAFNOSUPPORT] if the af argument is unknown." | covered, all three outcomes, including that the 0 is not an error: no `[EAFNOSUPPORT]` is reported for a merely invalid string, and `errno` is not cleared on the way past (`errno.html` again). Asserted as `errno != 0` and `errno != EAFNOSUPPORT` rather than as "errno is untouched", because `errno.html` permits any function call to change it | `test_inet_pton_strict_grammar` |
+| inet_ntop / inet_pton, AF_INET6 | `inet_ntop.html` DESCRIPTION — "The AF_INET and AF_INET6 address families shall be supported", the three numbered IPv6 text forms (preferred `x:x:x:x:x:x:x:x`, the `"::"` form, and the mixed `x:x:x:x:x:x:d.d.d.d`), and "128 bits for AF_INET6" | **UNIMPL (fenced)** — both functions answer `-1`/`NULL` with `[EAFNOSUPPORT]` for `AF_INET6`, observed. See finding 1 | test/posix-inet.c fence `test_inet6_text_forms` |
+
+### UNIMPL found (arpa/inet.h group)
+
+1. **`inet_ntop()`/`inet_pton()` do not support `AF_INET6`.** Observed,
+   not inferred: linking a caller against `src/socket/inet.c`,
+   `inet_pton(AF_INET6, "::1", b)` and `inet_pton(AF_INET6,
+   "2001:db8::1", b)` both return `-1` with `errno` `EAFNOSUPPORT`, and
+   `inet_ntop(AF_INET6, b, out, 64)` returns NULL with the same errno.
+
+   **UNIMPL and not N/A**, and the distinction is sharper here than
+   anywhere else in the socket subsystem. The rest of ntlibc's IPv6
+   absence has a mechanism behind it — an `AF_INET6` socket needs an AFD
+   path this tree does not have, and `test/networking-audit.md` sec 6
+   stages that behind a `bind()` that does not yet work under Wine.
+   These two clauses have none of that. They are string parsing and
+   string formatting over a 16-byte array: no descriptor, no device, no
+   ioctl, nothing NT supplies or withholds. `src/socket/inet.c`'s own
+   banner says so of the whole file ("pure C with no NT dependency at
+   all"). `inet_pton(AF_INET6)` no more needs a stack that can carry an
+   IPv6 packet than `inet_pton(AF_INET)` needs one that can carry an
+   IPv4 packet; a caller validating an address out of a configuration
+   file needs the parser and nothing else.
+
+   **The counter-argument, rejected.** `test/posix-socket.c`'s
+   `test_inet_pton_ntop` asserts today's behaviour as *correct*, and
+   `[EAFNOSUPPORT]` is a documented ERRORS value of both functions, so
+   returning it looks conforming. It is not. ERRORS defines that error
+   for an *af* that "is invalid" and RETURN VALUE for one that "is
+   unknown", while the DESCRIPTION makes `AF_INET6` neither: it is a
+   family the implementation "shall" support, named in the same
+   paragraph. Answering "I do not know this family" for a family the
+   page requires is the declared-but-unimplemented trap. Those
+   assertions remain right for that file — they pin what a caller gets
+   today so it cannot change silently — and this fence records that what
+   they pin is a gap.
+
+   Acceptance criterion, deliberately narrow: the two conversions plus
+   `struct in6_addr` ("uint8_t s6_addr[16]") and `INET6_ADDRSTRLEN`. It
+   does **not** require the rest of `<netinet/in.h>`'s IPv6 set —
+   `sockaddr_in6`, `ipv6_mreq`, the `IPV6_*` options, `IN6_IS_ADDR_*` —
+   which stay out of scope with the sockets that would use them, and it
+   does not depend on any of the staged AFD work. That is the point:
+   this half can land before any of it.
+
+2. **`INET6_ADDRSTRLEN` is defined in no header.** Fenced separately
+   from finding 1 although it is the same gap, for two reasons.
+
+   It fails a consumer differently: a program that sizes a buffer with
+   `INET6_ADDRSTRLEN` and calls only `inet_ntop(AF_INET, ...)` — what
+   portable code that may one day be handed an IPv6 address looks like —
+   fails to *compile* here, over a macro whose value the standard fixes
+   at 46.
+
+   And it is the one name in this gap that no banner in the tree
+   records. Group U deliberately did not fence "`<netinet/in.h>`'s IPv6
+   set" on the ground that the header's own banner scopes it out — but
+   that banner scopes out "AF_INET6/struct sockaddr_in6/struct
+   in6_addr and the IPV6_* socket options", and `INET6_ADDRSTRLEN` is in
+   none of those four groups. Nor is it in `<arpa/inet.h>`'s banner,
+   which lists what that header omits and does not mention it. The
+   clause that mandates it is on the `arpa_inet.h.html` page, not the
+   `netinet_in.h.html` one, so a reader following either banner's scope
+   note would conclude the header is complete. That silence is what the
+   fence breaks.
+
+   It is deliberately **not** proposed as a standalone fix: a constant
+   that sizes a buffer for a conversion the library cannot perform is
+   the "declared elsewhere, not here" trap `<arpa/inet.h>`'s banner says
+   this project avoids. It should land with the conversions.
+
+### Bugs found (arpa/inet.h group)
+
+3. **`inet_addr()` accepts a leading sign and leading white space.**
+   `src/socket/inet.c` parses each part with `strtoul(p, &end, 0)` and
+   checks only that something was consumed. `strtoul()` skips leading
+   white space and accepts an optional `'+'` or `'-'`, so `" 1.2.3.4"`,
+   `"+1.2.3.4"` and `"1. 2.3.4"` all convert to 1.2.3.4 — all three
+   observed by running the fenced assertions against
+   `src/socket/inet.c`.
+
+   The `'-'` case is worse in kind and target-dependent. `strtoul()`
+   negates within `unsigned long`, so `"-2"` yields `ULONG_MAX-1`; the
+   one-part form's only range check is `parts[0] > 0xffffffffUL`, which
+   where `unsigned long` is 32 bits — i386 and, LLP64, x86_64, i.e.
+   every target this project ships — compares against `ULONG_MAX` and
+   can never be true, so the value survives and becomes
+   255.255.255.254. Where `unsigned long` is 64 bits, which is only
+   `make asan`'s native ELF build, the same check rejects it. One
+   string, two answers, by target: measured both ways (the 32-bit side
+   on the same parse loop with a 32-bit part type standing in for
+   LLP64). All four assertions stay fenced together — the clause is one
+   clause, and a live assertion that holds on one target and not another
+   is worse than none.
+
+   **The counter-argument, rejected in part.** `fuzz/fuzz_inet.c`
+   declines to oracle `inet_addr()` against the host's precisely here,
+   and its banner argues the corner is under-specified: the page says
+   parts may be "decimal, octal, or hexadecimal, as specified in the ISO
+   C standard", which is `strtoul()`'s own vocabulary. That is accepted
+   as far as the **radix** goes — the row above asserts the radix
+   behaviour as *correct* for exactly that reason — and it does not
+   reach the sign or the space. The sentence is about how a *number* is
+   written and offers a closed trichotomy for it; a part beginning with
+   `'+'` or `' '` falls into the third arm, and `" 1"` is not a decimal
+   number. A `'-'` does not make the part a number in another base; it
+   makes the string denote no address.
+
+   The decisive evidence is inside the implementation rather than
+   outside it: `inet_addr("1.2.3.4 ")` is rejected today (the
+   trailing-garbage check) while `inet_addr(" 1.2.3.4")` is accepted. A
+   reading under which white space belongs to the notation must accept
+   both; a reading under which it does not must reject both. The
+   library holds neither — it holds "whatever `strtoul()` ate", which is
+   not an interpretation of the page but the absence of one. The
+   trailing-space assertion is live, and stays green under either
+   reading.
+
+   The fix is musl's: require the first character of each part to be a
+   digit before accepting what `strtoul()` returned. It leaves the radix
+   behaviour these tests assert untouched, and it also releases
+   `fuzz/fuzz_inet.c` to oracle `inet_addr()` against the host, which
+   this divergence is the only reason it does not.
+
+4. **`inet_addr()` sets `errno` to 0 on every call.** The parse loop
+   executes `errno = 0;` before every `strtoul()`, on the success path
+   and the failure path alike, and `inet_addr.html` ERRORS is "No errors
+   are defined." — so the function has nothing to report through `errno`
+   and clears it anyway. `errno.html` forbids exactly this: "No function
+   in this volume of POSIX.1‐2017 shall set errno to 0." Observed:
+   `errno` is 0 after `inet_addr("1.2.3.4")` and after `inet_addr("not
+   an address")`, having been `EDOM` immediately before each call.
+
+   Not a style point. `errno = 0` before `strtoul()` is the first half
+   of the `[ERANGE]` idiom and the second half was never written, so the
+   assignment protects nothing — and the overflow it was presumably
+   meant to catch is in fact caught, by the explicit range checks that
+   follow (a saturated `ULONG_MAX` fails every one of them, and in the
+   one-part form converts to the failure value anyway). It is a dead
+   assignment whose one live effect is destructive: it destroys `errno`
+   for the caller, breaking the "set errno to 0, call, examine errno"
+   idiom across an intervening `inet_addr()`. This ledger already reads
+   the same page this way — group T's section defends its own
+   `CHECK(errno == 0)` assertions with it — so the reading is the
+   tree's, not this file's. The fix is to delete the line.
+
+### Not reached (arpa/inet.h group)
+
+`inet_ntop()`'s "The dst argument points to a buffer where the function
+stores the resulting text string; it shall not be NULL" is a
+requirement on the *caller*, so there is nothing to assert: passing NULL
+is undefined and a test that did it would be testing the compiler's
+mood. The same goes for a `src` that is not a valid address of the
+right size. `inet_addr()` and `inet_ntoa()` have no ERRORS at all, so
+no error path of theirs is unreached — there is none.
