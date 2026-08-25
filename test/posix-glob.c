@@ -2746,27 +2746,60 @@ static void test_regex_icase_inside_character_class(void)
 }
 #endif
 
-#if 0 /* BUG: regex.h.html's error-code table -- REG_EESCAPE is
-	"Trailing <backslash> character in pattern"; REG_EPAREN is
-	"'\(\)' imbalance". A BRE ending in an unescaped backslash is the
-	first, not the second.
-
-	src/regex/regex.c's BRE branch parser treats a trailing backslash
-	as end-of-branch and returns without consuming it; regcomp() then
-	sees leftover input and attributes it to parentheses. The ERE
-	path gets this right, so the two grammars disagree about the same
-	malformed pattern.
-
-	Measured: BRE "a\" -> 8 (REG_EPAREN); ERE "a\" -> 5
-	(REG_EESCAPE). */
+/* regex.h.html's error-code table -- REG_EESCAPE is "Trailing
+ * <backslash> character in pattern"; REG_EPAREN is "'\(\)' imbalance".
+ * A pattern ending in an unescaped backslash is the first, not the
+ * second, in either grammar.
+ *
+ * The two used to disagree: src/regex/regex.c's BRE branch parser ended
+ * the branch on a trailing backslash without consuming it, so regcomp()
+ * saw leftover input and blamed the parentheses -- BRE "a\" answered 8
+ * (REG_EPAREN) where ERE "a\" answered 5 (REG_EESCAPE). Both now reach
+ * esc_literal(), which is the one place that decides what an incomplete
+ * escape means.
+ *
+ * The other half of the check is that REG_EPAREN is still reported
+ * where it is genuinely earned, and that a *complete* "\\" escape is
+ * still an ordinary literal backslash -- neither may be sacrificed to
+ * make the first half pass. The inside-a-group cases are here because
+ * that is where the two errors actually compete: the group's closing
+ * "\)" test ran even when the body had already failed, and overwrote
+ * its code. */
 static void test_regex_bre_trailing_backslash_code(void)
 {
 	regex_t re;
 
-	CHECK(regcomp(&re, "a\\", 0) == REG_EESCAPE);		/* gives REG_EPAREN today */
-	CHECK(regcomp(&re, "a\\", REG_EXTENDED) == REG_EESCAPE);	/* already correct */
+	CHECK(regcomp(&re, "a\\", 0) == REG_EESCAPE);
+	CHECK(regcomp(&re, "a\\", REG_EXTENDED) == REG_EESCAPE);
+	CHECK(regcomp(&re, "\\", 0) == REG_EESCAPE);		/* the whole pattern */
+	CHECK(regcomp(&re, "\\", REG_EXTENDED) == REG_EESCAPE);
+
+	/* Unterminated escape inside an unterminated group: the escape is
+	 * the error the parser reached first. */
+	CHECK(regcomp(&re, "\\(a\\", 0) == REG_EESCAPE);
+	CHECK(regcomp(&re, "(a\\", REG_EXTENDED) == REG_EESCAPE);
+
+	/* Still REG_EPAREN when the imbalance is the only defect. */
+	CHECK(regcomp(&re, "\\(abc", 0) == REG_EPAREN);
+	CHECK(regcomp(&re, "abc\\)", 0) == REG_EPAREN);
+	CHECK(regcomp(&re, "(abc", REG_EXTENDED) == REG_EPAREN);
+
+	/* A completed escape is unaffected: "a\\" is 'a' then a literal
+	 * backslash, and a group still compiles and captures. */
+	CHECK(regcomp(&re, "a\\\\", 0) == 0);
+	CHECK(regexec(&re, "a\\", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "ab", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "a\\\\", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "a\\", 0, NULL, 0) == 0);
+	regfree(&re);
+
+	CHECK(regcomp(&re, "\\(a\\)b", 0) == 0);
+	CHECK(re.re_nsub == 1);
+	CHECK(regexec(&re, "ab", 0, NULL, 0) == 0);
+	regfree(&re);
 }
-#endif
 
 #if 0 /* BUG: regex.h.html's error-code table -- REG_EBRACE is "'\{\}'
 	imbalance"; REG_BADBR is "Content of '\{\}' invalid: not a
@@ -3643,6 +3676,7 @@ int main(int argc, char **argv)
 	test_regex_regfree_after_failed_regcomp();
 	test_regex_nullable_repeat_does_not_crash();
 	test_regex_interval_expansion_is_bounded();
+	test_regex_bre_trailing_backslash_code();
 
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");

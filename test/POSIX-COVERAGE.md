@@ -1891,15 +1891,17 @@ boundary counts and locale-dependent bracket expressions as unaudited.
 makes no NT call; everything below was measured under Wine and would
 measure identically anywhere.
 
-Six BUGs and one UNIMPL, all fenced. The first is the serious one: a
-`regexec()` that terminates the process.
+Six BUGs and one UNIMPL when this section was written; BUG 4 (the
+trailing-backslash error code) is fixed, so five BUGs and the UNIMPL
+remain fenced. The first is the serious one: a `regexec()` that
+terminates the process.
 
 | function | clause checked | status | test |
 |---|---|---|---|
 | regexec | "If regexec() finds a match, it shall return zero; otherwise, it shall return non-zero" — on a repeat whose body can match empty | **BUG (fenced)** — crashes the process | test/posix-glob.c (`test_regex_nullable_repeat_does_not_crash`) |
 | regcomp | XBD 9.3.3: the asterisk is ordinary "As the first character of an entire BRE (after an initial `^`, if any)" | **BUG (fenced)** | test/posix-glob.c (`test_regex_bre_star_after_leading_circumflex`) |
 | regcomp | REG_ICASE, "Ignore case in match" — inside a bracket expression's character classes | **BUG (fenced)** | test/posix-glob.c (`test_regex_icase_inside_character_class`) |
-| regcomp | regex.h.html: REG_EESCAPE is "Trailing `<backslash>` character in pattern" | **BUG (fenced)** — a BRE gives REG_EPAREN | test/posix-glob.c (`test_regex_bre_trailing_backslash_code`) |
+| regcomp | regex.h.html: REG_EESCAPE is "Trailing `<backslash>` character in pattern" | covered — was a BUG: a BRE gave REG_EPAREN | test/posix-glob.c (`test_regex_bre_trailing_backslash_code`) |
 | regcomp | regex.h.html: REG_EBRACE is "`'\{\}'` imbalance", distinct from REG_BADBR's "Content of `'\{\}'` invalid" | **BUG (fenced)** — REG_EBRACE is never produced at all | test/posix-glob.c (`test_regex_ebrace_vs_badbr`) |
 | regexec | XBD 9.1: "the search is for the longest of the leftmost matches" | **BUG (fenced)**, self-documented in `src/regex/regex.c`'s banner | test/posix-glob.c (`test_regex_leftmost_longest_alternation`) |
 | regcomp | XBD 9.3.6 back-references `\1`..`\9` in a BRE | **UNIMPL (fenced)** — deliberately rejected, with a documented rationale | test/posix-glob.c (`test_regex_bre_backreference`) |
@@ -1965,14 +1967,29 @@ Six BUGs and one UNIMPL, all fenced. The first is the serious one: a
 
    Test (fenced): `test_regex_icase_inside_character_class`.
 
-4. **A BRE ending in an unescaped backslash reports REG_EPAREN, not
-   REG_EESCAPE.** The BRE branch parser treats a trailing backslash as
-   end-of-branch without consuming it, and `regcomp()` then attributes
-   the leftover input to parentheses. The ERE path is correct, so the
-   two grammars disagree about the same malformed pattern. Measured:
-   BRE `"a\"` → REG_EPAREN, ERE `"a\"` → REG_EESCAPE.
+4. **A BRE ending in an unescaped backslash reported REG_EPAREN, not
+   REG_EESCAPE — fixed.** The BRE branch parser treated a trailing
+   backslash as end-of-branch without consuming it, and `regcomp()`
+   then attributed the leftover input to parentheses. The ERE path was
+   correct, so the two grammars disagreed about the same malformed
+   pattern. Measured before the fix: BRE `"a\"` → REG_EPAREN, ERE
+   `"a\"` → REG_EESCAPE.
 
-   Test (fenced): `test_regex_bre_trailing_backslash_code`.
+   The end-of-branch test no longer names a trailing backslash, so it
+   reaches `bre_atom()` and then `esc_literal()` — the single place
+   that decides what an incomplete escape means, and the one the ERE
+   path already used. A second half was needed for the same code to
+   survive inside a group: both grammars' `(`/`\(` atoms ran their
+   closing-delimiter check even when the body had already failed, and
+   overwrote its error with REG_EPAREN, so `"\(a\"` and `"(a\"` both
+   answered REG_EPAREN. That check is now skipped on a sticky error,
+   which is the discipline the parser's own header describes for its
+   emit helpers.
+
+   Test: `test_regex_bre_trailing_backslash_code`, which also pins the
+   three cases that must NOT change — a genuine `\(`/`\)` imbalance is
+   still REG_EPAREN, a completed `\\` is still a literal backslash, and
+   a well-formed group still compiles and captures.
 
 5. **REG_EBRACE is unreachable; brace imbalance reports REG_BADBR.**
    `regex.h.html` distinguishes REG_EBRACE ("`'\{\}'` imbalance") from
