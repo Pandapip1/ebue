@@ -1358,23 +1358,6 @@ static void test_glob_empty_pattern(void)
 	globfree(&g);
 }
 
-#if 0 /* BUG: glob.html DESCRIPTION -- "GLOB_MARK: Each pathname that
-	is a directory that matches pattern shall have a <slash>
-	appended."
-
-	The clause is about what the pathname *is*, not about how the
-	pattern named it, so a pattern that ends in a slash and matches a
-	directory must still come back with the slash appended. In
-	src/glob/glob.c a pattern with a trailing slash exits through the
-	pattern-exhausted branch, which strips the trailing slash and
-	never consults GLOB_MARK at all.
-
-	Measured with "subdir" a real directory: glob("subdir/",
-	GLOB_MARK, NULL, &g) returns 0 with gl_pathv[0] == "subdir".
-	It matched, it is a directory, so the slash is mandatory.
-
-	test_glob_mark() covers only the wildcard path ("s*"), which
-	goes through a different branch and is correct. */
 static void test_glob_mark_trailing_slash_pattern(void)
 {
 	glob_t g;
@@ -1385,8 +1368,27 @@ static void test_glob_mark_trailing_slash_pattern(void)
 	CHECK(g.gl_pathc == 1);
 	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "globmarkdir/") == 0);
 	globfree(&g);
+
+	/* WITHOUT GLOB_MARK the slash must still be there: it came from the
+	 * pattern, and the generated pathname is the one that matched.
+	 * Checked against glibc, which returns "globmarkdir/" for both.
+	 * Without this assertion the two behaviours are indistinguishable
+	 * and a fix that made the slash conditional on GLOB_MARK -- which is
+	 * what this fence's wording suggests -- passes. */
+	memset(&g, 0, sizeof g);
+	CHECK(glob("globmarkdir/", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "globmarkdir/") == 0);
+	globfree(&g);
+
+	/* and the control that says the slash is not simply always added:
+	 * no trailing slash in the pattern, no GLOB_MARK, no slash back */
+	memset(&g, 0, sizeof g);
+	CHECK(glob("globmarkdir", 0, NULL, &g) == 0);
+	CHECK(g.gl_pathc == 1);
+	if (g.gl_pathc == 1) CHECK(strcmp(g.gl_pathv[0], "globmarkdir") == 0);
+	globfree(&g);
 }
-#endif
 
 #if 0 /* BUG (latent): glob.html DESCRIPTION -- "glob() is a pathname
 	generator that shall implement the rules defined in XCU Pattern
@@ -3151,6 +3153,7 @@ int main(int argc, char **argv)
 
 	test_fnmatch_period_forms();
 	test_fnmatch_bracket_edges();
+	test_glob_mark_trailing_slash_pattern();
 	test_glob_append_does_not_resort();
 	test_glob_empty_pattern();
 	test_glob_leading_period();

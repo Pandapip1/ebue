@@ -139,8 +139,36 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 		 * wildcard branches below both stat() before descending), so
 		 * this is always a real, existing path. */
 		char *m;
-		if (preflen == 0) m = xstrdup(".");
-		else if (preflen == 1 && prefix[0] == '/') m = xstrdup("/");
+		if (preflen == 1 && prefix[0] == '/') m = xstrdup("/");
+		else if (preflen) {
+			/* A pattern ending in a slash yields a pathname ending in
+			 * a slash -- ALWAYS, not only under GLOB_MARK.
+			 *
+			 * This branch is where a trailing-slash pattern lands, and
+			 * it used to strip the slash: glob("subdir/", ...) returned
+			 * "subdir" whatever the flags.  The generated pathname is
+			 * supposed to be the one that matched, and the pattern's
+			 * own trailing slash is part of it; GLOB_MARK is then
+			 * simply redundant for this shape rather than the thing
+			 * that enables it.  Confirmed against glibc, which returns
+			 * "subdir/" for both glob("subdir/", 0) and
+			 * glob("subdir/", GLOB_MARK) -- and "subdir" for
+			 * glob("subdir", 0), where there is no slash to keep.
+			 *
+			 * (An earlier version of this fix made keeping the slash
+			 * conditional on GLOB_MARK, which the fence's wording
+			 * suggested.  Mutation-testing said the unconditional form
+			 * was indistinguishable, and measuring glibc showed why:
+			 * the unconditional form is the correct one.)
+			 *
+			 * Nothing needs to be re-stat()ed to know this is a
+			 * directory: reaching here means a caller matched a
+			 * component with a trailing slash and confirmed it with
+			 * stat() before descending (see the literal and wildcard
+			 * branches), so prefix already ends in '/' and names a
+			 * directory. */
+			m = xstrdup(prefix);
+		} else if (preflen == 0) m = xstrdup(".");
 		else {
 			char tmp[PATH_MAX];
 			memcpy(tmp, prefix, preflen - 1);
