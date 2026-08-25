@@ -40,7 +40,17 @@ Status values:
 - **N/A (reason)** — not a POSIX.1-2017 base function (GNU/BSD
   extension), or the LEGACY variant removed in Issue 7, or the clause
   cannot be triggered/observed under Wine or without real hardware
-  failure (e.g. malloc-exhaustion ENOMEM paths).
+  failure (e.g. malloc-exhaustion ENOMEM paths). That last case
+  includes the one the fence vocabulary kept getting wrong: a clause
+  whose **code exists** but whose **test fixture cannot be built here**
+  is N/A, not UNIMPL. UNIMPL's contract is "absent, but implementable,
+  and the fence names the NT mechanism"; a fence with nothing absent
+  and no mechanism to name is not making that claim. Such an N/A is
+  usually conditional rather than permanent, so it carries an expiry
+  condition naming what would make the fixture buildable — see
+  `test/verification-coverage-accounting.md` section 6 for the
+  permanent/conditional split, and section 5 for the three
+  `test/posix-glob.c` fences this rule retagged.
 - **BUG (fenced)** — a genuine spec violation found; test is in the file
   with `#if 0 /* BUG: ... */`, see "Bugs found" below.
 - **not yet reached** — nobody has checked the spec page against the
