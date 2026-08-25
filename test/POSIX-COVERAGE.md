@@ -742,6 +742,7 @@ ABI), listed below.
 | fputws | non-negative on success; the terminating null wide character not written; an empty string succeeds; a surrogate pair crossing one conversion state | covered | test/posix-wchar.c |
 | ungetwc | one level of pushback, guaranteed and enforced; WEOF rejected leaving the stream unchanged; the end-of-file indicator cleared; a non-ASCII character returned unchanged (the slot holds a wide character, not its bytes) | covered | test/posix-wchar.c |
 | fwide | no orientation on a newly opened stream; a query (mode 0) does not create one; an orientation once set is never changed in either direction; byte and wide I/O functions set it without fwide() being called | covered | test/posix-wchar.c |
+| open_wmemstream | the buffer holds `wchar_t`, not their multibyte encoding, so a non-ASCII character occupies and is counted as one wide character and a supplementary character as the two it was written as; `*sizep` a wide-character count; wide orientation established at open, before any wide function is applied; a never-written stream reporting an empty terminated buffer; the realloc growth path over 5000 characters; `fclose()` flushing so the final size is visible; `[EINVAL]` for a null `bufp` or `sizep` | covered | test/posix-wchar.c |
 | `<wctype.h>` (isw*/tow*/wctype/wctrans) | header does not exist in this library at all | N/A (whole header missing) | -- |
 | wcstoimax / wcstoumax | equivalent to the wcstol/wcstoll/wcstoul/wcstoull family; overflow/EINVAL/base-0 auto-detection | covered | test/posix-wchar.c |
 

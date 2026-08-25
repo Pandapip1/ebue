@@ -83,6 +83,7 @@ wint_t getwchar (void);
 wint_t putwc (wchar_t, FILE *);
 wint_t putwchar (wchar_t);
 wint_t ungetwc (wint_t, FILE *);
+FILE *open_wmemstream (wchar_t **, size_t *);
 
 size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict);
 

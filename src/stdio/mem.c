@@ -11,6 +11,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <wchar.h>
 #include "stdio_impl.h"
 
 FILE *fmemopen(void *__restrict buf, size_t size, const char *__restrict mode)
@@ -75,6 +76,71 @@ FILE *open_memstream(char **bufp, size_t *sizep)
 	f->mem_out_ptr = bufp;
 	f->mem_out_size = sizep;
 	*bufp = (char *)b;
+	*sizep = 0;
+	f->bufmode = _IOFBF;
+	f->next = __stdio_files;
+	__stdio_files = f;
+	return f;
+}
+
+/* open_wmemstream(): https://pubs.opengroup.org/onlinepubs/9699919799/functions/open_wmemstream.html
+ * DESCRIPTION, RETURN VALUE, ERRORS.  open_memstream()'s wide twin: a
+ * dynamically grown buffer behind a FILE, except that the buffer holds
+ * wchar_t and *sizep counts WIDE CHARACTERS.
+ *
+ * Three differences from the byte version, all of them consequences of
+ * that one sentence:
+ *
+ *  - the stream is wide-oriented from the moment it exists.  Not a
+ *    convenience: fwide.html leaves a byte function applied to a
+ *    wide-oriented stream undefined, and here it would be concretely
+ *    destructive, because a stray fputc() would put an odd number of
+ *    bytes into a buffer whose contents are wchar_t and misalign
+ *    everything after it.  Setting the orientation up front is what
+ *    makes fwide() report the truth about that.
+ *
+ *  - the `wmem` flag tells src/stdio/buf.c's __file_write() to keep a
+ *    null WIDE character past the end rather than a null byte, and to
+ *    divide the byte length down before storing it through sizep.
+ *
+ *  - src/stdio/wide.c's fputwc() path writes the wchar_t's own bytes
+ *    for this stream instead of converting through wcrtomb().  A memory
+ *    stream that holds wide characters must not hold their multibyte
+ *    encoding; that is the whole difference between this and
+ *    open_memstream().
+ *
+ * mem_len/mem_pos/mem_size stay BYTE counts, so all the growth
+ * arithmetic is shared with open_memstream() unchanged; only the
+ * terminator width and the reported size are divided.
+ *
+ * The caller owns the buffer and frees it, exactly as for
+ * open_memstream(); fclose() does not (f->mem_owned is for
+ * fmemopen(NULL, ...) and is deliberately not set here).
+ */
+FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
+{
+	FILE *f;
+	wchar_t *b;
+
+	if (!bufp || !sizep) { errno = EINVAL; return 0; }
+	b = malloc(sizeof *b);
+	if (!b) return 0;
+	b[0] = 0;
+	f = malloc(sizeof *f);
+	if (!f) { free(b); return 0; }
+	memset(f, 0, sizeof *f);
+	f->fd = -1;
+	f->pid = -1;
+	f->is_mem = 1;
+	f->mem_dynamic = 1;
+	f->wmem = 1;
+	f->wide = 1;
+	f->writable = 1;
+	f->mem_buf = (unsigned char *)b;
+	f->mem_size = sizeof *b;
+	f->mem_out_ptr = (char **)(void *)bufp;
+	f->mem_out_size = sizep;
+	*bufp = b;
 	*sizep = 0;
 	f->bufmode = _IOFBF;
 	f->next = __stdio_files;

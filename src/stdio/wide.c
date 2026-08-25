@@ -30,6 +30,7 @@
 #include <wchar.h>
 #include <limits.h>
 #include <errno.h>
+#include <string.h>
 #include "stdio_impl.h"
 
 /* Read one wide character.  WEOF on end-of-file or error, with the
@@ -74,6 +75,22 @@ static wint_t putwc_core(wchar_t wc, FILE *f)
 {
 	char buf[MB_LEN_MAX];
 	size_t r, i;
+
+	/* An open_wmemstream() buffer holds wchar_t, not their multibyte
+	 * encoding, so this stream's units go out as their own bytes and
+	 * never through wcrtomb().  Writing them one byte at a time through
+	 * __fputc() keeps the ordinary buffering and growth path -- the
+	 * count is always a whole wchar_t, so nothing downstream ever sees
+	 * a partial unit.  (A surrogate pair is two units and is stored as
+	 * two, unchanged: a wide memory stream is meant to hold exactly
+	 * what was written to it.) */
+	if (f->wmem) {
+		unsigned char raw[sizeof(wchar_t)];
+		memcpy(raw, &wc, sizeof wc);
+		for (i = 0; i < sizeof wc; i++)
+			if (__fputc(raw[i], f) == EOF) return WEOF;
+		return (wint_t)wc;
+	}
 
 	r = wcrtomb(buf, wc, &f->wst_out);
 	if (r == (size_t)-1) { f->err = 1; return WEOF; }	/* wcrtomb set EILSEQ */

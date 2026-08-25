@@ -37,9 +37,16 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 {
 	if (f->is_mem) {
 		size_t avail;
-		if (f->mem_dynamic && f->mem_pos + n + 1 > f->mem_size) {
+		/* The terminator this block keeps past mem_len is one null
+		 * BYTE for a byte stream and one null WIDE CHARACTER for an
+		 * open_wmemstream() one, which is why it is a width and not a
+		 * literal 1: mem_* are byte counts in both cases (so the growth
+		 * arithmetic here is shared), and only the terminator and the
+		 * reported size differ. */
+		size_t term = f->wmem ? sizeof(wchar_t) : 1;
+		if (f->mem_dynamic && f->mem_pos + n + term > f->mem_size) {
 			size_t ns = f->mem_size ? f->mem_size : 128;
-			while (ns < f->mem_pos + n + 1) ns *= 2;
+			while (ns < f->mem_pos + n + term) ns *= 2;
 			unsigned char *nb = realloc(f->mem_buf, ns);
 			if (!nb) { errno = ENOMEM; return -1; }
 			f->mem_buf = nb;
@@ -50,10 +57,15 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		if (n) memcpy(f->mem_buf + f->mem_pos, buf, n);
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
-		if (f->mem_len < f->mem_size) f->mem_buf[f->mem_len] = 0;
+		if (f->mem_len + term <= f->mem_size) memset(f->mem_buf + f->mem_len, 0, term);
 		if (f->mem_dynamic) {
 			if (f->mem_out_ptr) *f->mem_out_ptr = (char *)f->mem_buf;
-			if (f->mem_out_size) *f->mem_out_size = f->mem_len;
+			/* open_wmemstream.html: sizep is "the number of wide
+			 * characters", so the byte length is divided down.  It is
+			 * always a whole multiple: every write to a wmem stream
+			 * comes from src/stdio/wide.c a whole wchar_t at a time. */
+			if (f->mem_out_size)
+				*f->mem_out_size = f->wmem ? f->mem_len / sizeof(wchar_t) : f->mem_len;
 		}
 		return (ssize_t)n;
 	}

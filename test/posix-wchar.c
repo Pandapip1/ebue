@@ -37,7 +37,7 @@
  * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib
  * + src/stdio, 2026-08-24): fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, open_wmemstream, wcwidth, wcswidth.  Confirmed *present*
+ * wscanf, wcwidth, wcswidth.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -52,7 +52,8 @@
  * wcsxfrm_l, plus (src/stdlib/mbrtowc.c) mbsnrtowcs and wcsnrtombs and
  * (src/time/wcsftime.c) wcsftime and (src/stdio/wide.c) fgetwc, getwc,
  * getwchar, fputwc, putwc, putwchar, fgetws, fputws, ungetwc, fwide,
- * and (src/stdlib/strtod.c) wcstod, wcstof, wcstold.  Also now present, as
+ * and (src/stdlib/strtod.c) wcstod, wcstof, wcstold, and
+ * (src/stdio/mem.c) open_wmemstream.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1232,10 +1233,10 @@ static void test_fwscanf(void)
 
 /* ---------------------------------------------------------------------
  * open_wmemstream -- open_wmemstream.html
+ * Implemented in src/stdio/mem.c beside open_memstream, sharing its
+ * growth path; the buffer holds wchar_t rather than their multibyte
+ * encoding, and *sizep is a wide-character count.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: open_wmemstream() -- open_wmemstream.html DESCRIPTION,
-       * RETURN VALUE, ERRORS.  Implementable: a growable wchar_t buffer
-       * behind a FILE*, no per-codepoint reasoning involved. */
 static void test_open_wmemstream(void)
 {
 	wchar_t *buf;
@@ -1244,6 +1245,12 @@ static void test_open_wmemstream(void)
 	/* "Upon successful completion ... a pointer to the object
 	 * controlling the stream." */
 	CHECK(f != 0);
+	/* "The stream shall be wide-oriented" -- from the moment it exists,
+	 * before any wide function has been applied to it.  Checked first,
+	 * because calling fputws() below would set the orientation itself
+	 * and hide whether open_wmemstream() had established it. */
+	CHECK(fwide(f, 0) > 0);
+	CHECK(fwide(f, -1) > 0);
 	fputws(W("hi"), f);
 	fflush(f);
 	/* "*bufp shall point to a wchar_t array ... and sizep shall
@@ -1251,10 +1258,70 @@ static void test_open_wmemstream(void)
 	 * position." */
 	CHECK(len == 2);
 	CHECK(!wcscmp(buf, W("hi")));
+
+	/* The buffer holds wchar_t, not their multibyte encoding: a
+	 * non-ASCII character occupies exactly one wide character and is
+	 * counted as one, where a byte memory stream would have stored two
+	 * UTF-8 bytes. */
+	CHECK(fputwc(0xe9, f) == 0xe9);
+	fflush(f);
+	CHECK(len == 3);
+	CHECK(buf[2] == 0xe9 && buf[3] == 0);
+
+	/* A supplementary character is two wchar_t here and is stored as
+	 * the two it was written as. */
+	CHECK(fputwc(0xd83d, f) == 0xd83d);
+	CHECK(fputwc(0xde00, f) == 0xde00);
+	fflush(f);
+	CHECK(len == 5);
+	CHECK(buf[3] == 0xd83d && buf[4] == 0xde00 && buf[5] == 0);
+
+	/* fclose() flushes, so the final size is visible afterwards, and
+	 * the buffer is the caller's to free. */
+	fclose(f);
+	CHECK(len == 5);
+	CHECK(buf[0] == L'h' && buf[4] == 0xde00 && buf[5] == 0);
+	free(buf);
+
+	/* A stream that is never written to still reports an empty,
+	 * terminated buffer. */
+	buf = 0; len = (size_t)-1;
+	f = open_wmemstream(&buf, &len);
+	CHECK(f != 0);
+	CHECK(len == 0);
+	CHECK(buf != 0 && buf[0] == 0);
 	fclose(f);
 	free(buf);
+
+	/* Enough output to force the buffer to grow several times, so the
+	 * realloc path is exercised rather than only the initial block --
+	 * and, at 5000, a length at which a size reported in BYTES rather
+	 * than wide characters is unmistakable (it would read 10000 here,
+	 * wchar_t being two bytes on this target).  The short cases above
+	 * pin the same property with a non-ASCII character and a surrogate
+	 * pair, where a byte count would also be wrong but by less. */
+	f = open_wmemstream(&buf, &len);
+	CHECK(f != 0);
+	if (f) {
+		int i;
+		for (i = 0; i < 5000; i++) CHECK(fputwc((wchar_t)(L'a' + i % 26), f) != WEOF);
+		fclose(f);
+		CHECK(len == 5000);
+		CHECK(buf[0] == L'a' && buf[25] == L'z' && buf[26] == L'a');
+		CHECK(buf[4999] == (wchar_t)(L'a' + (4999 % 26)));
+		CHECK(buf[5000] == 0);
+		free(buf);
+	}
+
+	/* open_wmemstream.html ERRORS, [EINVAL]: "bufp or sizep is a null
+	 * pointer." */
+	errno = 0;
+	CHECK(open_wmemstream(0, &len) == 0);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(open_wmemstream(&buf, 0) == 0);
+	CHECK(errno == EINVAL);
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * isw*() classification family -- iswalpha.html
@@ -2237,6 +2304,7 @@ int main(void)
 	test_fgetws();
 	test_fputws();
 	test_ungetwc();
+	test_open_wmemstream();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");
