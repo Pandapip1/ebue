@@ -90,11 +90,8 @@ jobs:
         with:
           repository: ${{ env.TINYCC_REPO }}
           revision: ${{ env.TINYCC_SHA }}
-      - name: Install Wine
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine wine32:i386 wine64
+      - name: Set up Wine
+        uses: ./.github/actions/setup-wine
       - name: Configure
         run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --${{ matrix.kernel32 }}-kernel32
       - name: Build and check
@@ -121,47 +118,14 @@ jobs:
         with:
           repository: ${{ env.TINYCC_REPO }}
           revision: ${{ env.TINYCC_SHA }}
-      - name: Install Wine
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine wine32:i386 wine64
+      - name: Set up Wine
+        uses: ./.github/actions/setup-wine
       - name: Configure and build
         run: |
           ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
           make -j"$(nproc)"
       - name: Run libc-test corpus
         run: make libc-test-pedantic
-
-  # OPTS is useful in two different ways: the gap map classifies every test;
-  # the run job executes every case that links.  Neither invents a pass-count
-  # threshold, and both drivers enforce census/floor/canary invariants.
-  posix-gapmap:
-    needs: build-toolchain
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: true
-          fetch-depth: 0
-      - name: Set up tinycc
-        uses: ./.github/actions/setup-tinycc
-        with:
-          repository: ${{ env.TINYCC_REPO }}
-          revision: ${{ env.TINYCC_SHA }}
-      - name: Configure and build
-        run: |
-          ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
-          make -j"$(nproc)"
-      - name: Generate POSIX gap map
-        run: make posix-gapmap
-      - name: Upload POSIX gap map
-        uses: actions/upload-artifact@v7
-        with:
-          name: posix-gap-map
-          path: test/POSIX-GAP-MAP.generated.md
-          if-no-files-found: error
 
   posix-optsrun:
     needs: build-toolchain
@@ -177,11 +141,8 @@ jobs:
         with:
           repository: ${{ env.TINYCC_REPO }}
           revision: ${{ env.TINYCC_SHA }}
-      - name: Install Wine
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine wine32:i386 wine64
+      - name: Set up Wine
+        uses: ./.github/actions/setup-wine
       - name: Configure and build
         run: |
           ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
@@ -190,12 +151,6 @@ jobs:
         run: ./tools/posix-opts.py selftest
       - name: Run buildable Open POSIX Test Suite cases
         run: make posix-optsrun-pedantic
-      - name: Upload Open POSIX Test Suite results
-        uses: actions/upload-artifact@v7
-        with:
-          name: posix-opts-results
-          path: test/POSIX-OPTS-RUN.generated.md
-          if-no-files-found: error
 
   windows-test:
     needs: build-test-exes
@@ -226,6 +181,53 @@ jobs:
           python tools/run-tests.py --artifact-root test-exes
           --profile runtime=windows --profile target_arch=${{ matrix.arch }}
           --profile kernel32=${{ matrix.kernel32 }}
+
+  # linkcheck and hygiene were local-gate-only for their whole life, so a
+  # push could go red on `tools/gate.sh` and green here.  Both need the
+  # real $(CC) rather than a host compiler -- linkcheck's whole point is a
+  # genuine per-arch PE link, which is how `#define alloca __builtin_alloca`
+  # once shipped past every host-toolchain lint -- so they need the pinned
+  # tinycc, but neither needs Wine: nothing is executed.
+  linkcheck:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: i386-win32, cc: i386-win32-tcc }
+          - { host: x86_64-win32, cc: x86_64-win32-tcc }
+    name: linkcheck (${{ matrix.host }})
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
+        with:
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Configure
+        run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --disable-kernel32
+      - name: Link every declared symbol
+        run: make -j"$(nproc)" linkcheck
+
+  # hdr-hygiene.sh sweeps both arches itself; the $(GENH) prerequisite just
+  # needs *a* configured arch to exist.
+  hygiene:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
+        with:
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Configure
+        run: ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
+      - name: Compile every public header in isolation
+        run: make hygiene
 
   lint:
     runs-on: ubuntu-24.04

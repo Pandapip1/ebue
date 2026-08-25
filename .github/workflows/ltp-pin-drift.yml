@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: LTP pin drift (nightly)
+
+# A separate workflow file rather than a `schedule:` trigger added to
+# ci.yml, deliberately: `on: schedule` is a workflow-level trigger, so
+# putting it there would run every job in CI nightly as a side effect of
+# wanting one of them.
+#
+# This used to be a full second copy of ci.yml's posix-gapmap job --
+# checkout, pinned toolchain, configure, build, measure, upload -- wrapped
+# around one extra step.  ci.yml adjudicates the whole suite on every
+# push, so all of that was re-measuring on a timer what had already been
+# measured on the commit.  What remains is the single thing a per-push job
+# structurally cannot see: whether the PIN has drifted from upstream.  New
+# tests landing in LTP change what this repository would say about POSIX
+# without changing anything in this repository, and nothing else here
+# would ever notice.
+#
+# So there is no toolchain and no build below.  This reads two git
+# histories and prints the difference.
+#
+# That drift is reported and never enforced.  "How far behind upstream is
+# acceptable" is exactly the unjustifiable threshold this refuses to
+# invent.  The classification invariants are hard failures in
+# tools/posix-opts.py, on every push, where they belong.
+#
+# Renovate cannot replace this: its git-submodules manager is opt-in beta
+# and off by default, and third_party/ltp points at a fork, so Renovate
+# would track the fork's tip rather than upstream LTP.
+on:
+  schedule:
+    # 04:17 UTC. Off the hour on purpose -- GitHub queues scheduled
+    # workflows hardest at :00.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # submodules: true, deliberately NOT `recursive`, and fetch-depth: 0.
+      # LTP carries four nested submodules of its own, two of them on
+      # git.kernel.org, and the Open POSIX Test Suite reads none of them.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      # Without this, an empty submodule makes every count below zero and
+      # the report reads as "no drift" -- the measurement-broke-looks-like-
+      # good-news failure, in the one job that has no other floor.
+      - name: Assert the OPTS suite actually arrived
+        run: |
+          d=third_party/ltp/testcases/open_posix_testsuite
+          if [ ! -f "$d/include/posixtest.h" ]; then
+            echo "FAILED: third_party/ltp is empty -- there is nothing to compare." >&2
+            git submodule status || true
+            exit 1
+          fi
+          n=$(find "$d/conformance/interfaces" -name '*.c' | wc -l)
+          echo "$n conformance test source file(s) present"
+          if [ "$n" -eq 0 ]; then
+            echo "FAILED: the suite holds no conformance tests." >&2
+            exit 1
+          fi
+
+      # Informational only, and never a failure. See the header.
+      - name: How far the LTP pin has drifted from upstream
+        run: |
+          cd third_party/ltp
+          pin=$(git rev-parse HEAD)
+          git remote add upstream https://github.com/linux-test-project/ltp.git 2>/dev/null || true
+          git fetch --quiet upstream master
+          behind=$(git rev-list --count "$pin..upstream/master")
+          echo "pin:            $pin"
+          echo "commits behind: $behind"
+          d=testcases/open_posix_testsuite/conformance/interfaces
+          here=$(find "$d" -name '*.c' | wc -l)
+          there=$(git ls-tree -r --name-only upstream/master -- "$d" | grep -c '\.c$' || true)
+          echo "conformance tests at the pin:      $here"
+          echo "conformance tests at upstream tip: $there"
+          if [ "$here" != "$there" ]; then
+            echo "::notice::LTP upstream has $there conformance tests, the pin has $here."
+            echo "::notice::Moving the pin fires the census check in tools/posix-opts.py;"
+            echo "::notice::bump CENSUS and annotate the new cases in the same commit."
+          fi

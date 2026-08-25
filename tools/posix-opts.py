@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITE = ROOT / "third_party" / "ltp" / "testcases" / "open_posix_testsuite"
 IFACES = SUITE / "conformance" / "interfaces"
 EXPECTED = ROOT / "test" / "posix-opts-expected.txt"
-REPORT = ROOT / "test" / "POSIX-OPTS-RUN.generated.md"
 CENSUS = 1610
 
 
@@ -35,6 +34,47 @@ class CaseResult:
     built: bool
     observation: str
     detail: str = ""
+
+
+def check_pin() -> None:
+    """Refuse to measure a suite that is not the one this repository pins.
+
+    Two independent sources say which LTP revision is on disk:
+
+      the submodule's own HEAD   what is actually being compiled
+      the gitlink at HEAD        what this repository says should be there
+
+    When both are readable and they DISAGREE, that is a hard error rather
+    than a preference for one: the checkout has been moved off the pin, so
+    every disposition in test/posix-opts-expected.txt is being adjudicated
+    against a suite nobody else has.  Case names would still line up often
+    enough for the census to pass, which is exactly what makes this the one
+    failure here that produces plausible, wrong, permanent numbers.
+
+    tools/gate.sh's stage copies are rsync'd with --exclude=.git, which
+    strips third_party/ltp's .git FILE along with the top-level directory,
+    so inside a stage copy the submodule's own HEAD is simply unreadable.
+    OPTSRUN_GITDIR points such a copy back at the real repository; where
+    neither source is readable there is nothing to compare and nothing to
+    contradict, which is a missing check rather than a failed one.
+    """
+    gitdir = os.environ.get("OPTSRUN_GITDIR", str(ROOT))
+    def rev(where: str, spec: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", where, "rev-parse", spec], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    head = rev(str(SUITE), "HEAD")
+    link = rev(gitdir, "HEAD:third_party/ltp")
+    if head and link and head != link:
+        raise RuntimeError(
+            f"LTP pin mismatch: third_party/ltp is checked out at {head}, "
+            f"but this repository pins {link}. Every disposition would be "
+            f"adjudicated against a suite this repository does not describe. "
+            f"Either restore the pin (git submodule update --init) or commit "
+            f"the move."
+        )
 
 
 def read_config() -> dict[str, str]:
@@ -167,28 +207,6 @@ def accepted(mode: str, result: CaseResult) -> bool:
     return policy_accepts(mode, result.disposition, result.built, observation)
 
 
-def write_report(results: list[CaseResult], profile_terms: list[str], mode: str,
-                 seconds: int) -> None:
-    counts: dict[str, int] = {}
-    for result in results:
-        counts[result.disposition] = counts.get(result.disposition, 0) + 1
-    with REPORT.open("w", encoding="utf-8") as report:
-        report.write("<!--\nSPDX-FileCopyrightText: (C) 2026 Gavin John\n")
-        report.write("SPDX-License-Identifier: GPL-3.0-or-later\n-->\n\n")
-        report.write("# Open POSIX Test Suite result\n\n")
-        report.write(f"Mode: `{mode}`  \nProfile: `{','.join(profile_terms)}`  \n")
-        report.write(f"Elapsed: {seconds}s\n\n")
-        report.write("| disposition | count |\n|---|---:|\n")
-        for disposition in ("PASS", "BUG", "UNIMPL", "NA", "FLAKY"):
-            report.write(f"| `{disposition}` | {counts.get(disposition, 0)} |\n")
-        report.write("\n```text\n")
-        for result in results:
-            report.write(
-                f"{result.case}\t{result.disposition}\t{result.observation}\n"
-            )
-        report.write("```\n")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", nargs="?", default="normal",
@@ -224,6 +242,7 @@ def main() -> int:
         print("posix-opts: LTP submodule is empty; run git submodule update --init",
               file=sys.stderr)
         return 2
+    check_pin()
     cfg = read_config()
     if not (ROOT / "lib" / "libc.a").is_file():
         raise RuntimeError("lib/libc.a is missing; run make first")
@@ -284,10 +303,17 @@ def main() -> int:
         if result in failures and result.detail:
             for line in result.detail.splitlines()[-12:]:
                 print(f"        {line}")
+    counts: dict[str, int] = {}
+    for result in ordered:
+        counts[result.disposition] = counts.get(result.disposition, 0) + 1
     elapsed = int(time.monotonic() - started)
-    write_report(ordered, profile_terms, args.mode, elapsed)
-    print(f"posix-opts: {len(ordered)} cases, {len(failures)} policy failure(s); "
-          f"report {REPORT}")
+    tally = "  ".join(
+        f"{disposition}={counts.get(disposition, 0)}"
+        for disposition in ("PASS", "BUG", "UNIMPL", "NA", "FLAKY")
+    )
+    print(f"posix-opts: mode={args.mode} profile={','.join(profile_terms)} {elapsed}s")
+    print(f"posix-opts: {tally}")
+    print(f"posix-opts: {len(ordered)} cases, {len(failures)} policy failure(s)")
     return 1 if failures else 0
 
 

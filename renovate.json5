@@ -74,11 +74,7 @@
         "must be 15/15 for both i386-win32 and x86_64-win32, `make generated`",
         "must stay drift-free, and the real-Windows leg (not just Wine) must",
         "pass. Check tinycc's log between the old and new commit for codegen",
-        "or PE-output changes.",
-        "",
-        "`TINYCC_SHA` is duplicated in `ci.yml` and",
-        "`posix-gapmap-nightly.yml`; keep both identical so the nightly",
-        "restores the cache written by CI instead of rebuilding tinycc."
+        "or PE-output changes."
       ]
     }
   ],

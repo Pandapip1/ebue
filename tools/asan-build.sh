@@ -53,7 +53,7 @@ if [ -f "$srcdir/config.mak" ]; then
 		echo "asan: obj/include/bits/alltypes.h would give a $cfg_arch-width" >&2
 		echo "asan: size_t/ssize_t to a native $ARCH build -- wrong, and it" >&2
 		echo "asan: fails in ways that look like library bugs." >&2
-		echo "asan: reconfigure first (./configure --target=$ARCH-win32 CC=$ARCH-win32-tcc)," >&2
+		echo "asan: reconfigure first (./configure --host=$ARCH-win32 CC=$ARCH-win32-tcc)," >&2
 		echo "asan: or set NTLIBC_ARCH=$cfg_arch if you really meant that." >&2
 		exit 2
 	fi

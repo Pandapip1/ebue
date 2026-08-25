@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The single implementation of "this job runs PE files", shared by every
+# Wine-executing job in ci.yml.  It was three identical copies of the same
+# five lines; a copy is not just duplication here, it is a place for the
+# legs to silently disagree about which Wine ran the suite.
+#
+# wine32:i386 is not optional even for the x86_64 legs: the i386 leg needs
+# it outright, and dpkg --add-architecture has to happen before the update
+# or the :i386 package is simply not visible.
+
+name: Set up Wine
+description: Install a 32- and 64-bit capable Wine for running ntlibc's PE test binaries.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Wine
+      shell: bash
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y wine wine32:i386 wine64
+    - name: Report Wine version
+      shell: bash
+      run: wine --version

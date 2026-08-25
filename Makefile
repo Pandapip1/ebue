@@ -451,32 +451,41 @@ libc-test-strict: $(ALL_LIBS)
 .PHONY: libc-test libc-test-pedantic libc-test-strict
 
 #
-# posix-gapmap: how much of the Open POSIX Test Suite (third_party/ltp's
+# posix-optsrun: the Open POSIX Test Suite (third_party/ltp's
 # testcases/open_posix_testsuite/, a git submodule pinned at a SHA -- see
-# third_party/README.md) can be compiled against this library at all.
+# third_party/README.md), adjudicated case by case.
 #
-# Deliberately NOT part of `check` and NOT a pass/fail suite.  Its output
-# is a distribution -- tests blocked by headers, blocked at link, and
-# buildable -- written as an untracked report.  The census, partition,
-# floors and canaries in tools/posix-gapmap.sh make a broken measurement
-# fail instead of looking like a closed gap.
-#
-# Depends on $(ALL_LIBS) for the same reason libc-test does: it links
-# 1610 PEs against lib/libc.a, and a missing library would make every one
-# of them fail and the gap read as total.
-#
-posix-gapmap: $(ALL_LIBS)
-	@$(srcdir)/tools/posix-gapmap.sh
-
-.PHONY: posix-gapmap
-
-# posix-optsrun: the other half of the sentence posix-gapmap starts.
-#
-# posix-gapmap answers "how much of that suite can we be COMPILED
-# against" and executes nothing -- its job comment in ci.yml says so.
 # `posix-optsrun-pedantic` checks all 1610 profile dispositions: PASS and
 # BUG cases compile and run, UNIMPL cases must fail compilation, NA cases
 # stay out, and FLAKY cases remain observable without weakening strict.
+#
+# This absorbed the separate `posix-gapmap` compile-only census, which
+# measured the same 1610 cases and gated four AGGREGATE invariants over
+# them -- a census, a partition, floors in both directions, and two
+# canaries.  Every one of those is a weaker restatement of what
+# test/posix-opts-expected.txt now says per case:
+#
+#   census + partition   tools/posix-opts.py refuses to run unless the
+#                        discovered sources number exactly CENSUS *and*
+#                        the discovered set equals the annotated set, so
+#                        an unannotated or stale case is a hard error
+#                        rather than a count that still adds up.
+#   floor (links)        358 PASS + 199 BUG cases must build and run.  A
+#                        compiler that stopped finding lib/libc.a fails
+#                        557 cases by name, not one threshold.
+#   floor (blocked)      1016 UNIMPL cases must FAIL to build.  The
+#                        dangerous direction -- an -I that starts
+#                        pointing at a host libc, making everything link
+#                        and the gap read as closed -- is now caught 1016
+#                        times over instead of by a single floor.
+#   canaries             two hand-picked cases were a proxy for "the
+#                        classifier still discriminates".  The ledger
+#                        checks all 1610 in both directions.
+#
+# The class A/B/C classification the gap map produced did not go away
+# either: it is recorded per case in the ledger's reason column ("OPTS
+# class A: compile/link blocked by aio.h"), where it names the header
+# instead of contributing to a bucket total.
 #
 # Also deliberately NOT part of `check`, and for the same reason:
 # `check` is this library's own suite and its failures are ours.  A
@@ -485,12 +494,13 @@ posix-gapmap: $(ALL_LIBS)
 # libc-test is kept separate.
 #
 # The exact case census and complete profile ledger prevent an empty or
-# partial sweep from reporting success. The detailed report remains a CI
-# artefact.
+# partial sweep from reporting success. There is no generated report: the
+# driver prints every case and its observation to stdout, so the run log
+# is the record.
 #
-# Depends on $(ALL_LIBS) for the same reason the gap map does, one step
-# further along: without lib/libc.a nothing links, nothing runs, and the
-# report says "no failures" about a sweep of zero tests.
+# Depends on $(ALL_LIBS) for the same reason libc-test does: without
+# lib/libc.a nothing links, nothing runs, and the run reports "no
+# failures" about a sweep of zero tests.
 #
 posix-optsrun: $(ALL_LIBS)
 	@WINE="$(WINE)" $(srcdir)/tools/posix-opts.py normal $(foreach profile,$(TEST_PROFILE),--profile $(profile))

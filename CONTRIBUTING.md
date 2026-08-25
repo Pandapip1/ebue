@@ -94,13 +94,13 @@ make linkcheck     # declarations, definitions and PE import/header checks
 make asan          # native AddressSanitizer and UBSan suite
 make fuzz          # native libFuzzer harnesses, 60 seconds each
 make libc-test     # musl libc-test corpus under Wine
-make posix-gapmap  # classify all Open POSIX Test Suite cases
 make posix-optsrun # Open POSIX suite through the shared policy
+make install-check # build and run against an installed prefix only
 ```
 
-The two external-suite reports are reproducible, ignored build artefacts.
-CI uploads them for inspection; they are not committed and do not require
-merge drivers or pre-commit regeneration.
+No suite writes a generated report. Every runner prints its per-case
+result to stdout, so the run log is the record; there is nothing to
+commit, diff, regenerate in a hook, or keep a merge driver for.
 
 ## The pre-push gate
 
@@ -155,16 +155,21 @@ The workflows deliberately keep different schedules and meanings separate:
 
 - `ci.yml` runs deterministic push/PR gates: both architectures under Wine,
   the x86_64 kernel32 configuration, the same binaries on real Windows,
-  libc-test, both OPTS measurements, lint, sanitizers and REUSE.
+  libc-test, the Open POSIX suite, linkcheck, header hygiene, lint,
+  sanitizers and REUSE.
 - `fuzz.yml` runs a short corpus-backed net on pushes to main and a longer
   corpus-writing scheduled search.
-- `posix-gapmap-nightly.yml` measures the pinned LTP suite and reports how
-  far its pin has drifted from upstream.
+- `ltp-pin-drift.yml` reports how far the pinned LTP submodule has drifted
+  from upstream. It builds nothing: the suite itself is adjudicated on every
+  push by `ci.yml`, and drift is the one thing a per-push job cannot see.
 
 `.github/actions/setup-tinycc/action.yml` is the single implementation of
 the pinned toolchain cache/restore/build setup shared by CI workflows. The
 toolchain revision remains explicit in each workflow using it so Renovate
-can update and review the pin.
+can update and review the pin. `.github/actions/setup-wine/action.yml` is
+the same idea for the jobs that execute PE files: one definition rather
+than a copy per job, so the Wine-executing legs cannot drift apart in what
+they install.
 
 Wine and real Windows both execute the PE files through `tools/run-tests.py`.
 It checks the artifact layout, refuses a zero-test run, isolates working

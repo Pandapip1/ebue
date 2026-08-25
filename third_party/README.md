@@ -176,7 +176,7 @@ arrangement had been careful to keep out of the tree entirely.
 | upstream | `https://github.com/linux-test-project/ltp` |
 | what this project reads | `testcases/open_posix_testsuite/conformance/interfaces/` — 1610 tests in 190 directories |
 | licence | GPLv2+, with some BSD-2 files — see below |
-| drivers | `tools/posix-gapmap.sh` measures; `tools/posix-opts.py` adjudicates every case |
+| driver | `tools/posix-opts.py`, ledger `test/posix-opts-expected.txt` |
 
 ### Provenance of the remote
 
@@ -206,7 +206,7 @@ Measured:
 |---|---|
 | full clone, git objects | **77 MB** over **18 370** commits |
 | working tree at `4c0cfb8` | 47 MB |
-| what `tools/posix-gapmap.sh` and `tools/posix-opts.py` read | `testcases/open_posix_testsuite/`, **14 MB** |
+| what `tools/posix-opts.py` reads | `testcases/open_posix_testsuite/`, **14 MB** |
 | `git submodule update --init --recursive` from a fresh clone | **5.5 s**, +7 MB for LTP's own four nested submodules |
 
 So the arrangement fetches roughly nine times what it uses. Three ways
@@ -252,20 +252,18 @@ and `tools/kirk/kirk-src`. `git submodule update --init --recursive`
 recurses into all four; measured above at 5.5 s and 7 MB, so it is not
 worth working around locally.
 
-CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-gapmap` and
-`posix-optsrun` jobs check out with `submodules: true`, not
-`recursive`, because OPTS needs
+CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-optsrun` job
+checks out with `submodules: true`, not `recursive`, because OPTS needs
 none of the four and two of them live on a host outside GitHub. A job
 that fetches exactly what it reads has one fewer way to fail for a reason
 unrelated to what it is testing.
 
 ### Nothing here is compiled into anything shipped
 
-`tools/posix-gapmap.sh` compiles the 1610 conformance tests to
-throwaway PEs in a `mktemp -d` and deletes them, and
-`tools/posix-opts.py` does the same and additionally *executes* the
-591 that link, each in its own throwaway working directory under the
-same `mktemp -d`; nothing under
+`tools/posix-opts.py` compiles the 1610 conformance tests to throwaway
+PEs in a `mktemp -d` and *executes* the 591 that link, each in its own
+throwaway working directory under that same `mktemp -d`, then deletes
+all of it; nothing under
 `third_party/ltp/` is linked into `lib/`, installed, or shipped. LTP
 proper — the 1396 kernel syscall tests — is never touched at all: its
 framework reads `/proc` in 19 places and wants root, mounts and cgroups,
@@ -304,14 +302,14 @@ reintroduce by inertia:
 cd third_party/ltp
 git fetch origin && git checkout <new-sha>
 cd ../.. && git add third_party/ltp
-make posix-gapmap                      # measure compile/link coverage
 make posix-optsrun-pedantic            # probe the measured Wine/x86_64 profile
 ```
 
-Expect `tools/posix-gapmap.sh`'s census invariant to fire if the new
-revision adds or removes tests: `CENSUS_TESTS` and `CENSUS_DIRS` are
-pinned constants and moving them is a deliberate edit, reviewed in the
-same commit as the SHA. That is the point — see that script's header.
-`tools/posix-opts.py` pins the census and resolves every case through
-`test/posix-opts-expected.txt` plus `test/test-profiles.tsv`.
-Moving the suite pin must update every affected census in the same commit.
+Expect this to fail if the new revision adds or removes tests, and that
+is the point. `tools/posix-opts.py` refuses to measure unless the
+discovered sources number exactly `CENSUS` **and** the discovered set
+equals the annotated set, so a new upstream case is a hard error until
+somebody gives it a disposition — it cannot arrive unnoticed and dilute
+the result. Bump `CENSUS`, annotate the new cases in
+`test/posix-opts-expected.txt`, and review both in the same commit as
+the SHA.
