@@ -371,6 +371,72 @@ static void test_sigprocmask(void)
  * from delivery ... and ... pending." Complements test/misc.c's "blocked
  * signal becomes pending" check by also confirming pending is empty
  * beforehand and cleared again after delivery. */
+#if NTLIBC_TEST(BUG, posix_signal_sigign_discards_pending) /* BUG: setting a disposition to SIG_IGN does not discard an
+	 * already-pending signal.  sigaction.html DESCRIPTION: "Setting a
+	 * signal action to SIG_IGN for a signal that is pending shall cause
+	 * the pending signal to be discarded, whether or not it is
+	 * blocked."  And immediately after: "Setting a signal action to
+	 * SIG_DFL for a signal that is pending, and whose default action is
+	 * to ignore the signal (for example, SIGCHLD), shall cause the
+	 * pending signal to be discarded, whether or not it is blocked."
+	 *
+	 * Mechanism: `pending` is a file-static in src/signal/signal.c with
+	 * exactly four references -- its definition, the line in
+	 * __raise_internal() that adds to it when the signal is blocked,
+	 * the drain loop in sigprocmask(), and sigpending().  Neither
+	 * signal() nor sigaction() touches it: they write handlers[],
+	 * act_mask[] and act_flags[] and nothing else.  So a signal that
+	 * went pending under a block stays pending across any number of
+	 * disposition changes.
+	 *
+	 * The delivery itself is harmless -- __raise_internal() returns
+	 * immediately for SIG_IGN -- but the pending set is directly
+	 * observable through sigpending(), and it is not merely cosmetic:
+	 * setting the disposition back to a real handler before unblocking
+	 * resurrects a signal POSIX says was discarded, and the handler
+	 * runs.
+	 *
+	 * Re-enable when signal()/sigaction() clear the pending bit for a
+	 * disposition of SIG_IGN, and for SIG_DFL on a signal whose default
+	 * action is to ignore (default_action() in the same file already
+	 * classifies SIGCHLD/SIGURG/SIGWINCH/SIGCONT that way). */
+static void test_sigign_discards_pending(void)
+{
+	sigset_t s, pend;
+
+	sigemptyset(&s);
+	sigaddset(&s, SIGUSR1);
+	CHECK(sigprocmask(SIG_BLOCK, &s, NULL) == 0);
+	CHECK(raise(SIGUSR1) == 0);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, SIGUSR1) == 1);
+
+	/* "shall cause the pending signal to be discarded, whether or not
+	 * it is blocked" -- it is still blocked here. */
+	CHECK(signal(SIGUSR1, SIG_IGN) != SIG_ERR);
+	CHECK(sigpending(&pend) == 0);
+	CHECK(sigismember(&pend, SIGUSR1) == 0);
+
+	/* and so it must not come back when a handler is reinstated and the
+	 * signal unblocked. */
+	CHECK(signal(SIGUSR1, dummy_handler) != SIG_ERR);
+	CHECK(sigprocmask(SIG_UNBLOCK, &s, NULL) == 0);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, SIGUSR1) == 0);
+
+	/* the SIG_DFL half, on a signal whose default action is to ignore */
+	sigemptyset(&s);
+	sigaddset(&s, SIGCHLD);
+	CHECK(sigprocmask(SIG_BLOCK, &s, NULL) == 0);
+	CHECK(signal(SIGCHLD, dummy_handler) != SIG_ERR);
+	CHECK(raise(SIGCHLD) == 0);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, SIGCHLD) == 1);
+	CHECK(signal(SIGCHLD, SIG_DFL) != SIG_ERR);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, SIGCHLD) == 0);
+
+	CHECK(sigprocmask(SIG_UNBLOCK, &s, NULL) == 0);
+	signal(SIGUSR1, SIG_DFL);
+}
+#endif
+
 static void test_sigpending(void)
 {
 	sigset_t s, pend;
