@@ -23,6 +23,21 @@
  * walk's own root, compared against every subsequent entry). This is
  * not N/A on this platform.
  *
+ * Directories that would be descendants of themselves: with FTW_PHYS
+ * clear the walk follows links, so a link back up the tree makes a
+ * directory its own descendant and the recursion never terminates.
+ * nftw.html requires that case be cut off, so every directory the
+ * recursion has entered keeps its (st_dev, st_ino) on a stack threaded
+ * through walk()'s own `anc` parameter, and a directory whose pair is
+ * already on it is not descended into.  The pair is the identity
+ * stat.html specifies ("st_ino together with st_dev uniquely identify
+ * the file"), and both halves are real here -- st_dev is the volume
+ * serial number FTW_MOUNT above already relies on, and st_ino is
+ * FileInternalInformation's IndexNumber (src/stat/stat.c).  Only the
+ * path is remembered, not every directory ever seen: the requirement is
+ * "descendant of itself", so two different links to one directory in
+ * unrelated branches are both walked, as they must be.
+ *
  * FTW_CHDIR: built directly on chdir() (src/unistd/chdir.c).  Every
  * pathname the recursion carries is relative to the walk's *original*
  * cwd -- each recursive call appends "/name" to its parent's path, and
@@ -46,6 +61,18 @@ struct level {
 	DIR *dp;
 	long pos;		/* telldir() position, valid while dp == NULL and pos != 0 */
 	char *path;
+};
+
+/* One entry per directory the recursion is currently inside, innermost
+ * first.  Each frame lives on the walk() invocation that pushed it and
+ * is passed down as an argument rather than parked in struct walkstate,
+ * so the chain is exactly as deep as the recursion, unwinds with it, and
+ * needs no cleanup on any error return -- and no pointer to a stack
+ * frame ever outlives the call that owns it. */
+struct ancestor {
+	const struct ancestor *up;
+	dev_t dev;
+	ino_t ino;
 };
 
 struct walkstate {
@@ -198,7 +225,26 @@ static int mount_skip(struct walkstate *ws, const struct stat *st)
 	return st->st_dev != ws->root_dev;
 }
 
-static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root)
+/* Is `st` one of the directories the recursion is already inside -- i.e.
+ * would descending into it make it a descendant of itself?
+ *
+ * Only asked when FTW_PHYS is clear, which is the only case nftw.html
+ * imposes the requirement for and the only case that can produce the
+ * cycle: with FTW_PHYS set, a link is reported (FTW_SL) rather than
+ * followed, so the walk never leaves the one directory hierarchy it was
+ * given.  Leaving FTW_PHYS alone is also what keeps it usable as the
+ * escape hatch a caller reaches for when it wants the links themselves. */
+static int is_own_ancestor(const struct ancestor *anc, const struct stat *st)
+{
+	const struct ancestor *a;
+
+	for (a = anc; a; a = a->up)
+		if (a->ino == st->st_ino && a->dev == st->st_dev) return 1;
+	return 0;
+}
+
+static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root,
+		const struct ancestor *anc)
 {
 	struct stat lst, st, zero;
 	const struct stat *rst;
@@ -244,6 +290,21 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 
 	if (type != FTW_D) return report(ws, path, rst, type, level);
 
+	/* nftw.html, both halves: "If FTW_PHYS is clear and FTW_DEPTH is
+	 * set, nftw() shall follow links instead of reporting them, but
+	 * shall not report any directory that would be a descendant of
+	 * itself.  If FTW_PHYS is clear and FTW_DEPTH is clear, nftw()
+	 * shall follow links instead of reporting them, but shall not
+	 * report the contents of any directory that would be a descendant
+	 * of itself."  The two differ in what survives: with FTW_DEPTH
+	 * clear the directory is still reported (as FTW_D, which is where
+	 * it would have been reported anyway, before its contents), and
+	 * only the descent is dropped; with FTW_DEPTH set the only report
+	 * it would ever get is the FTW_DP that comes *after* its contents,
+	 * and that one the clause forbids outright. */
+	if (!(ws->flags & FTW_PHYS) && is_own_ancestor(anc, rst))
+		return (ws->flags & FTW_DEPTH) ? 0 : report(ws, path, rst, FTW_D, level);
+
 	/* Directory: FTW_DEPTH reports it last (FTW_DP), after every entry;
 	 * otherwise report it first, as FTW_D, before descending. */
 	if (!(ws->flags & FTW_DEPTH)) {
@@ -253,6 +314,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 
 	{
 		struct level lv;
+		struct ancestor here;
 		struct dirent *de;
 		size_t plen = strlen(path);
 		int had_trailing_slash = plen > 0 && path[plen - 1] == '/';
@@ -267,6 +329,15 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			free(lv.path);
 			return report(ws, path, rst, FTW_DNR, level);
 		}
+
+		/* On the path from here down, so is_own_ancestor() can see it.
+		 * Pushed only once the descent is really going to happen: a
+		 * directory reported FTW_DNR is never entered, and one left on
+		 * the chain after that would make a *sibling* of the same
+		 * inode look like a cycle. */
+		here.dev = rst->st_dev;
+		here.ino = rst->st_ino;
+		here.up = anc;
 
 		if (ws->flags & FTW_CHDIR) { enter_dir(ws, path); ws->cwd_moved = 0; }
 
@@ -286,7 +357,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			/* level_open() may have closed lv.dp to make room for a
 			 * descendant's own directory; reopen (and replay via
 			 * seekdir()) right before the next readdir() needs it. */
-			r = walk(ws, lru, child, level + 1, 0);
+			r = walk(ws, lru, child, level + 1, 0, &here);
 			free(child);
 			if (r) break;
 
@@ -326,7 +397,7 @@ int ftw(const char *path, int (*fn)(const char *, const struct stat *, int), int
 	ws.legacy = 1;
 	lru.head = lru.tail = NULL;
 
-	return walk(&ws, &lru, path, 0, 1);
+	return walk(&ws, &lru, path, 0, 1, NULL);
 }
 
 int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, struct FTW *),
@@ -359,7 +430,7 @@ int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, str
 	}
 
 	{
-		int r = walk(&ws, &lru, path, 0, 1);
+		int r = walk(&ws, &lru, path, 0, 1, NULL);
 		free(ws.cwd0);
 		return r;
 	}

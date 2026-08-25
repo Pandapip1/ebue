@@ -32,27 +32,27 @@
  *
  * ==================== outcomes ========================================
  *
- * No BUG is fenced any longer in the two <fcntl.h> advisory
- * functions.  Four that were fenced here are now fixed and run live:
- * posix_fadvise's missing [ESPIPE] for a pipe or FIFO and its missing
- * [EINVAL] for len < 0, posix_fallocate's [ENODEV] for a non-regular
- * file reported as [EBADF], and its missing [EBADF] for a descriptor
- * opened read-only.
+ * Nothing in this file is fenced any more.  Four of the fences were in
+ * the two <fcntl.h> advisory functions and are fixed: posix_fadvise's
+ * missing [ESPIPE] for a pipe or FIFO and its missing [EINVAL] for
+ * len < 0, posix_fallocate's [ENODEV] for a non-regular file reported
+ * as [EBADF], and its missing [EBADF] for a descriptor opened
+ * read-only.  The last one was in nftw() -- no protection against a
+ * directory that is a descendant of itself through a symbolic link,
+ * which nftw.html requires when FTW_PHYS is clear -- and it is fixed
+ * too, in src/ftw/ftw.c, with `test_nftw_symlink_loop` running live.
  *
- * One BUG fenced in nftw(): no protection against a directory that is
- * a descendant of itself through a symbolic link, which nftw.html
- * requires when FTW_PHYS is clear.
- *
- * One assertion group can come out **unverified (exit 77)** rather than
- * passing or failing: the FTW_PHYS/FTW_SL/FTW_SLN group needs a real
- * symbolic link, and symlink() here fails ENOSYS under Wine and EPERM
- * on a real Windows without SeCreateSymbolicLinkPrivilege.  That ENOSYS
+ * Two assertion groups can come out **unverified (exit 77)** rather than
+ * passing or failing, for one reason between them: both the
+ * FTW_PHYS/FTW_SL/FTW_SLN group and the descendant-of-itself group need
+ * a real symbolic link, and symlink() here fails ENOSYS under Wine and
+ * EPERM on a real Windows without SeCreateSymbolicLinkPrivilege.  That ENOSYS
  * is the correct rendering of the STATUS_NOT_SUPPORTED (0xc00000bb)
  * stock Wine below 10.19 answers FSCTL_SET_REPARSE_POINT with -- and
  * src/internal/errno.c:82-84 maps that status onto ENOSYS along with
  * STATUS_NOT_IMPLEMENTED and STATUS_INVALID_DEVICE_REQUEST, so do not
  * read the errno back as evidence of NOT_IMPLEMENTED specifically.  On
- * the Wine leg the privilege is never consulted at all. The probe is made at
+ * the Wine leg the privilege is never consulted at all. Each group probes at
  * run time, a SKIP line naming the mechanism and the observed errno is
  * printed, and main() returns 77 -- tools/run-tests.py, tools/asan-
  * build.sh and CI's PowerShell loop all report that in their own
@@ -679,43 +679,40 @@ static void test_nftw_symlinks(void)
 	unlink("tailtree/link");
 }
 
-#if NTLIBC_TEST(BUG, posix_tail_nftw_symlink_loop) /* BUG: nftw() has no protection against a directory that is a
-       * descendant of itself, so a symbolic link back up the tree makes
-       * it recurse until the stack or the path length gives out.
-       *
-       * nftw.html DESCRIPTION, both halves of the requirement:
-       *   "If FTW_PHYS is clear and FTW_DEPTH is set, nftw() shall
-       *    follow links instead of reporting them, but shall not report
-       *    any directory that would be a descendant of itself.  If
-       *    FTW_PHYS is clear and FTW_DEPTH is clear, nftw() shall
-       *    follow links instead of reporting them, but shall not report
-       *    the contents of any directory that would be a descendant of
-       *    itself."
-       *
-       * src/ftw/ftw.c's walk() carries no record of the directories
-       * already entered -- struct walkstate has nopenfd, open_count,
-       * flags, legacy, root_dev and the two callback pointers, and
-       * nothing else -- so there is no state in which "would be a
-       * descendant of itself" could be computed.  With FTW_PHYS clear
-       * it stats through the link, sees a directory, and descends.
-       *
-       * Fenced rather than merely unverified because the defect is in
-       * the code, not in the environment: it is visible by inspection
-       * and does not depend on being able to create the link.  The
-       * assertions below need one, so this block stays fenced until
-       * both the fix lands and a platform that can make a symbolic
-       * link runs it -- at which point it should pass unchanged.
-       *
-       * Fix shape: keep the (st_dev, st_ino) of every ancestor on the
-       * recursion path and refuse to descend into one already on it.
-       * src/stat/stat.c fills both fields with real values here
-       * (st_dev from the NT volume serial number, the same field
-       * FTW_MOUNT already relies on), so the mechanism exists. */
+/* nftw.html DESCRIPTION, both halves of the requirement:
+ *   "If FTW_PHYS is clear and FTW_DEPTH is set, nftw() shall follow
+ *    links instead of reporting them, but shall not report any
+ *    directory that would be a descendant of itself.  If FTW_PHYS is
+ *    clear and FTW_DEPTH is clear, nftw() shall follow links instead of
+ *    reporting them, but shall not report the contents of any directory
+ *    that would be a descendant of itself."
+ *
+ * src/ftw/ftw.c keeps the (st_dev, st_ino) of every directory on the
+ * recursion path (struct walkstate's `anc`, a chain of stack frames) and
+ * refuses to descend into one already on it.  Both halves of the pair
+ * are real here -- st_dev is the NT volume serial number FTW_MOUNT
+ * already relies on, st_ino is FileInternalInformation's IndexNumber --
+ * so the same-file test stat.html specifies works.
+ *
+ * Like test_nftw_symlinks() above, this needs a symbolic link the
+ * platform may refuse to create, so it probes at run time and reports
+ * itself unverified rather than passing silently on a walk it never
+ * made. */
 static void test_nftw_symlink_loop(void)
 {
 	int i, dirs;
 
-	if (symlink("..", "tailtree/sub/loop") < 0) return;
+	unlink("tailtree/sub/loop");
+	if (symlink("..", "tailtree/sub/loop") < 0) {
+		printf("SKIP posix-tail nftw descendant-of-itself tests "
+		       "(symlink() failed, errno=%d; same mechanism as the "
+		       "group above) -- the FTW_PHYS-clear \"shall not report "
+		       "the contents of any directory that would be a "
+		       "descendant of itself\" clauses were not exercised\n",
+		       errno);
+		unverified++;
+		return;
+	}
 
 	/* FTW_PHYS clear, FTW_DEPTH clear: the contents of a directory
 	 * that would be a descendant of itself must not be reported.  The
@@ -728,12 +725,31 @@ static void test_nftw_symlink_loop(void)
 		if (ent[i].flag == FTW_D) dirs++;
 	CHECK(dirs <= 3);          /* tailtree, tailtree/sub, and the link */
 	CHECK(nent < MAXENT);      /* it terminated rather than running away */
+	/* ...and the cut falls exactly at the loop, not wider: in this half
+	 * of the clause the directory itself is still reported ("shall not
+	 * report the *contents*"), and every real object is still walked.
+	 * Without these, refusing the whole subtree -- or the whole walk --
+	 * would satisfy the two bounds above just as well. */
+	i = find_ent("tailtree/sub/loop");
+	CHECK(i >= 0 && ent[i].flag == FTW_D);
+	CHECK(find_ent("tailtree/sub/loop/f1") < 0);
+	CHECK(find_ent("tailtree") >= 0);
+	CHECK(find_ent("tailtree/f1") >= 0);
+	CHECK(find_ent("tailtree/sub") >= 0);
+	CHECK(find_ent("tailtree/sub/f2") >= 0);
 
 	/* FTW_PHYS clear, FTW_DEPTH set: the directory itself must not be
-	 * reported when it would be a descendant of itself */
+	 * reported when it would be a descendant of itself -- the only
+	 * report it would ever get is the FTW_DP that comes *after* its
+	 * contents, and this half of the clause forbids that outright. */
 	reset_walk();
 	CHECK(nftw("tailtree", fn4, 5, FTW_DEPTH) == 0);
 	CHECK(nent < MAXENT);
+	CHECK(find_ent("tailtree/sub/loop") < 0);
+	CHECK(find_ent("tailtree") >= 0);
+	CHECK(find_ent("tailtree/f1") >= 0);
+	CHECK(find_ent("tailtree/sub") >= 0);
+	CHECK(find_ent("tailtree/sub/f2") >= 0);
 
 	/* FTW_PHYS set is the escape hatch and must be unaffected: the
 	 * link is reported as FTW_SL and never followed */
@@ -744,7 +760,6 @@ static void test_nftw_symlink_loop(void)
 
 	unlink("tailtree/sub/loop");
 }
-#endif
 
 /* ====================================================================
  * fcntl.h -- posix_fadvise(), posix_fallocate()
@@ -1581,9 +1596,7 @@ int main(void)
 	test_nftw();
 	test_nftw_chdir();
 	test_nftw_symlinks();
-#if NTLIBC_TEST(BUG, posix_tail_nftw_symlink_loop) /* BUG: see the fence above test_nftw_symlink_loop */
 	test_nftw_symlink_loop();
-#endif
 	kill_tree();
 
 	test_posix_fadvise();

@@ -50,6 +50,5 @@ ntlibc	sh_engine_group_redir_leak	runtime=reactos	NA	memory leak is observable o
 ntlibc	sh_engine_heredoc_queue_leak	runtime=wine	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_heredoc_queue_leak	runtime=windows	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_heredoc_queue_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile
-ntlibc	posix_tail_nftw_symlink_loop	runtime=wine,capability.symlink=no	NA	the runner cannot construct the symbolic-link loop
 ntlibc	posix_termios_tcflush_discards_input	capability.console=no	NA	the runner has no console input queue to flush
 ntlibc	posix_statvfs_statvfs_eloop	runtime=wine,capability.symlink=no	NA	the runner cannot construct the symbolic-link loop
