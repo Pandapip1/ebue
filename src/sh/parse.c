@@ -43,6 +43,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <limits.h>
 #include "libc.h"
 #include "sh.h"
 
@@ -451,8 +452,31 @@ static struct token next_raw_token(struct lexer *lx)
 			alldig = len > 0;
 			for (i = 0; i < len; i++) if (!isdigit((unsigned char)w[i])) { alldig = 0; break; }
 			if (alldig && (*lx->p == '<' || *lx->p == '>')) {
-				int v = 0;
-				for (i = 0; i < len; i++) v = v * 10 + (w[i] - '0');
+				/* 2.10.1 puts no length on an IO_NUMBER ("made up
+				 * solely of digits" immediately followed by '<' or
+				 * '>'), but the value has to end up in a redirection's
+				 * `fd`, an int, and a digit string that does not fit
+				 * one is not a file descriptor any redirection could
+				 * name.  Accumulating it unchecked was signed overflow
+				 * -- undefined behaviour, and where it did not trap it
+				 * handed the redirection whatever the wrap produced,
+				 * possibly negative, as its fd.  So the multiply is
+				 * guarded and an out-of-range digit string is
+				 * diagnosed here rather than silently wrapped, or
+				 * silently demoted to a WORD (which would turn
+				 * "2147483648<x" into a command *named* 2147483648 --
+				 * a different program, accepted without a word). */
+				int v = 0, ovf = 0;
+				for (i = 0; i < len; i++) {
+					int d = w[i] - '0';
+					if (v > (INT_MAX - d) / 10) { ovf = 1; break; }
+					v = v * 10 + d;
+				}
+				if (ovf) {
+					lex_errf(lx, "file descriptor number too large: %s", w);
+					__free(w);
+					return mktok(T_ERROR);
+				}
 				__free(w);
 				tok = mktok(T_IONUM);
 				tok.ionum = v;

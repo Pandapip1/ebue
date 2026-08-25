@@ -95,44 +95,6 @@ static int heredoc_fence(const char *src)
 	return strstr(src, "<<") != 0;
 }
 
-/* BUG: the IO-number lexer overflows a signed int.  src/sh/parse.c:433
- * turns an all-digit word that is followed by '<' or '>' into an
- * SH_R_* redirection's fd with
- *
- *     for (i = 0; i < len; i++) v = v * 10 + (w[i] - '0');
- *
- * and `v` is an `int` with no bound on `len` and no check before the
- * multiply.  "877777777777777<x" makes that signed overflow, which is
- * undefined behaviour -- UBSan reports it as
- * "signed integer overflow: 877777777 * 10 cannot be represented in
- * type 'int'" -- and on a build where it does not trap it yields an
- * arbitrary, possibly negative, file descriptor number for the
- * redirection.  Found by this harness in a sixty-second run.
- *
- * Fenced in test/sh-engine.c, not fixed, per the standing rule.  The
- * filter below is an over-approximation on purpose: it rejects any
- * source with ten or more consecutive digits, which is a superset of
- * the inputs that can overflow (INT_MAX is ten digits) and is cheap
- * and obviously correct, where "does this particular digit run exceed
- * INT_MAX" would be the harness reimplementing the thing under test.
- * Nine-digit IO numbers, and every other lexer path, stay reachable.
- *
- * When the fence is lifted, delete ionum_fence() and its caller. */
-static int ionum_fence(const char *src)
-{
-	int run = 0;
-	size_t i;
-
-	for (i = 0; src[i]; i++) {
-		if (src[i] >= '0' && src[i] <= '9') {
-			if (++run >= 10) return 1;
-		} else {
-			run = 0;
-		}
-	}
-	return 0;
-}
-
 /* BUG: a failed parse of a redirection trailing a subshell or brace
  * group leaks every redirection already parsed for that group.
  * src/sh/parse.c:617 builds the list with a loop whose failure path
@@ -150,8 +112,8 @@ static int ionum_fence(const char *src)
  *
  * Fenced in test/sh-engine.c, not fixed, per the standing rule.
  *
- * The filter is an over-approximation, as heredoc_fence() and
- * ionum_fence() are: any source carrying both a group-delimiting
+ * The filter is an over-approximation, as heredoc_fence() is: any
+ * source carrying both a group-delimiting
  * byte and a redirection operator.  Deciding exactly would mean
  * knowing whether the redirection trails a group, which is the
  * parse this harness is here to test.  As with the here-document
@@ -238,8 +200,8 @@ static int hdquote_fence(const char *src)
  * still run on those inputs, so every line of parse.c and print.c the
  * negation path touches stays under test and under ASan.  The filter
  * is an over-approximation ('!' anywhere, not just at a pipeline
- * head), for the reason ionum_fence() gives -- deciding precisely
- * would mean reimplementing the lexer in the harness.
+ * head), for the reason the other filters here give -- deciding
+ * precisely would mean reimplementing the lexer in the harness.
  *
  * When the fence is lifted, delete bang_fence() and its caller. */
 static int bang_fence(const char *src)
@@ -275,8 +237,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	memcpy(src, data, n);
 	src[n] = 0;
 	if (memchr(src, 0, n)) return 0;        /* embedded NUL: not one program */
-
-	if (ionum_fence(src)) return 0;
 
 	/* errbuf is filled with a sentinel so the "wrote a diagnostic that
 	 * is not NUL-terminated" case is visible: __sh_parse documents that

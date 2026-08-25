@@ -4281,3 +4281,46 @@ fencing a legally-omittable constant would be manufacturing a finding.
 The three sections that do say "shall define ... with the values shown"
 — Minimum Values, Runtime Increasable Values, Other Invariant Values —
 are the ones this group fences.
+
+## The shell engine's IO_NUMBER lexer (XCU 2.7, 2.10.1)
+
+This ledger is organised by header and function, and the shell engine
+(`src/sh/`, tested by `test/sh-engine.c`) is neither: it implements XCU
+chapter 2, the Shell Command Language, which has no function page of
+its own. There is therefore no chapter-2 section above, and this one
+does not try to become the missing audit of the whole chapter — it
+records the one clause whose fence was lifted, so that
+`tools/lint-ledger.sh`'s two directions have something to agree with
+and a successor auditing the rest of chapter 2 has a place to start.
+
+| clause | requirement | status | test |
+| --- | --- | --- | --- |
+| XCU 2.7 Redirection, 2.10.1 Shell Grammar Lexical Conventions | "the number shall be a file descriptor number"; IO_NUMBER is a token "made up solely of digits" immediately followed by `<` or `>` — with no length limit stated on the digit string | covered — **was a fenced BUG, now FIXED**: `src/sh/parse.c` accumulated the digits into an `int` with an unguarded `v = v * 10 + (w[i] - '0')`, so fifteen digits was signed overflow (undefined behaviour, and where it did not trap the redirection kept whatever the wrap produced — possibly a negative fd) | test/sh-engine.c (`test_ionum_overflow`) |
+
+The clause puts no bound on the digit string, but the value has to
+become a redirection's `fd`, which is an `int`, so a digit string that
+does not fit one names no file descriptor that could ever be
+redirected. The lexer now guards the multiply and diagnoses such a
+string (`file descriptor number too large: ...`) instead of wrapping
+it. Demoting it to an ordinary WORD was the other candidate and was
+rejected: it would silently turn `2147483648<x` into a command *named*
+`2147483648` — a different program, accepted without a word — which is
+exactly the "subtly wrong is worse than no shell" failure
+`test/sh-design.md` says matters most here.
+
+The boundary is asserted from both sides, so the guard cannot be
+satisfied by refusing every IO number: `2147483647<x` (INT_MAX, in
+range by one) still lexes as an IO_NUMBER and reaches the redirection
+carrying that value, and `cmd 2>out 10<in` still parses with `fd` 2 and
+10.
+
+The defect was found by `fuzz/fuzz_shparse.c` under UBSan; that
+harness's `ionum_fence()` — which kept the fuzzer off any input with
+ten or more consecutive digits — has been deleted along with the fence.
+
+**Four other fences remain in `test/sh-engine.c`** (a redirection-list
+leak, a here-document queue leak, and two printer round-trip bugs).
+None of them is recorded here, and none is this section's business;
+they are listed in `tools/ledger-baseline.txt` as class-B entries —
+fenced, with no row in this file — which is where the rest of the
+chapter-2 audit will have to start.
