@@ -120,8 +120,9 @@ static int alt_active;      /* nonzero while a handler runs on it */
 
 /* Defined in src/signal/$ARCH/altstack.S -- PE builds only.
  *
- * tools/asan-build.sh and tools/fuzz.sh compile src/*.c natively with
- * clang and link no .S at all, so the symbol simply does not exist there.
+ * tools/asan-build.sh and tools/fuzz.sh compile the C sources under
+ * src/ natively with clang and link no .S at all, so the symbol simply
+ * does not exist there.
  * Nor could those files be reused if it did: the x86_64 one takes its
  * arguments in rcx/rdx/r8 per the Windows x64 ABI, which is not where a
  * SysV ELF caller puts them. */
