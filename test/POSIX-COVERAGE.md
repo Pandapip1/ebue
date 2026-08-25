@@ -458,7 +458,9 @@ coverage: `test/stdio.c` (~430 checks).
 | ftell / ftello | position accounts for buffered-ahead/behind bytes on update streams | covered | test/stdio.c |
 | rewind / fgetpos / fsetpos | round-trip; rewind clears the error indicator too | covered | test/stdio.c |
 | fflush | `fflush(NULL)` flushes every open stream | covered | test/stdio.c |
+| fflush | DESCRIPTION: "If stream is a null pointer, fflush() shall perform this flushing action on all streams for which the behavior is defined above" -- stderr and stdin included | **BUG (fenced)** -- the three standard streams are file-scope statics that `__file_new()` never links onto `__stdio_files`, and `fflush(NULL)` walks that list plus `stdout` by name; `__stdio_exit()` flushing stdout *and* stderr before the same walk shows the list is known not to hold them | test/posix-stdio.c `test_fflush_null_covers_stderr` |
 | fflush | on a readable stream with an underlying fd: discards not-yet-reread ungetc() bytes and resyncs the fd offset to the stream position | covered — was a BUG (`__fflush_locked` short-circuited for any non-writable stream); **fixed in 99474ee** | test/posix-stdio.c `test_fflush_read_stream` |
+| fflush | DESCRIPTION conditions the read-stream resync on "the file is one capable of seeking"; on a non-seekable fd (pipe/FIFO/console) there is nothing to resync and RETURN VALUE's success arm applies | **BUG (fenced)** -- `__fflush_locked()` exempts only memory streams from the resync, so the seek reaches `lseek()`, which answers [ESPIPE] for any non-`__FD_FILE` fd; `fflush()` returns EOF, latches the error indicator, and `fclose()` inherits the EOF | test/posix-stdio.c `test_fflush_nonseekable_read_stream` |
 | setvbuf | valid before any other operation; returns 0 | covered | test/posix-stdio.c |
 | setvbuf | returns non-zero for an invalid `type` | covered — was a BUG (any `type` accepted, 0 returned unconditionally); **fixed in 99474ee**: only `_IOFBF`/`_IOLBF`/`_IONBF` accepted, else EINVAL | test/posix-stdio.c |
 | setbuf / setlinebuf | equivalence to a specific setvbuf call | covered | test/posix-stdio.c |
@@ -469,6 +471,7 @@ coverage: `test/stdio.c` (~430 checks).
 | scanf family | conversion table, field width, %n, assignment suppression | covered (pre-existing, ~250 lines) | test/stdio.c |
 | remove / rename | success, ENOENT | covered | test/stdio.c |
 | tmpfile / tmpnam | uniqueness, L_tmpnam buffer sizing, removed-on-close semantics | covered | test/stdio.c |
+| tmpnam | DESCRIPTION: "The tmpnam() function shall generate a string that is a valid pathname that does not name an existing file" | **BUG (fenced)** -- `src/stdio/misc.c`'s tmpnam() returns the template mkstemp() just created and, unlike the tempnam() three functions below it, never unlinks it; an `O_CREAT|O_EXCL` create on the returned name gets [EEXIST], and each call leaves a zero-byte `tmpnam_*` file in the cwd | test/posix-stdio.c `test_tmpnam_does_not_create` |
 | tempnam (XSI, obsolescent) | honours `dir` and `pfx`, null `dir` falls back to P_tmpdir, null `pfx` accepted, the generated name does not already exist and is usable, two calls differ, the result is free()-able | covered | test/posix-stdio.c `test_tempnam` |
 | tempnam | [ENOMEM] | N/A — needs allocator exhaustion, which this suite cannot induce | -- |
 | getc_unlocked | functionally equivalent to getc() on the same stream inside a flockfile()/funlockfile() scope; unsigned-char return; EOF at end | covered | test/posix-stdio.c `test_getc_unlocked` |
@@ -662,7 +665,7 @@ entries below.
 | sigsuspend | DESCRIPTION: replace the mask, actually suspend until a signal is delivered | N/A — documented permanent stub (`{ errno = EINTR; return -1; }`); no per-thread wait primitive exists to build a real one on | -- |
 | sigwait / sigtimedwait / sigqueue / sigaltstack | require per-process queued-signal-with-payload or alt-stack facilities this platform has none of | N/A — documented stubs (see include/signal.h) | -- |
 | sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()`; [EINVAL] for an illegal signal number | covered — [EINVAL] was a BUG (both wrappers discarded `sigaddset()`'s failure, so the bad bit was never set, `sigprocmask()` got an empty mask and returned 0); **fixed**: both now return -1 as soon as `sigaddset()` fails, leaving the process mask untouched | test/posix-signal.c `test_sighold_sigrelse` |
-| sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP | covered; **BUG (fenced)** for the SIG_HOLD return and the "shall remove sig from the mask" clause — `<signal.h>` does not define SIG_HOLD at all and `sigset()` is a bare alias of `signal()` | test/posix-signal.c `test_sigset` |
+| sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP; the SIG_HOLD return, the "shall remove sig from the calling process' signal mask" clause, and `func == SIG_HOLD` (block sig, leave the disposition alone) | covered — the mask half was a **BUG, FIXED**: `<signal.h>` now defines `SIG_HOLD` as `((void (*)(int)) 2)`, continuing its own SIG_DFL 0 / SIG_IGN 1 sequence, and `src/signal/signal.c`'s `sigset()` is a real implementation rather than a bare alias of `signal()` — it reads the mask first, installs, then unblocks sig, and returns SIG_HOLD when sig had been blocked | test/posix-signal.c `test_sigset` |
 | sigpause (XSI, obsolescent) | returns -1 with EINTR | covered | test/posix-signal.c `test_sigpause` |
 | sigpause | DESCRIPTION: suspend until a signal is received | N/A — same reason as `sigsuspend()` above: no asynchronous delivery exists, so a call that genuinely suspended could only hang | -- |
 | siginterrupt (XSI, obsolescent) | returns 0 for a valid signal, both flag values | covered; **BUG (fenced)** for [EINVAL] — `sig` is discarded without validation | test/posix-signal.c `test_siginterrupt` |
@@ -701,11 +704,10 @@ no-ops rather than silently dropped. `src/process/wait.c` now validates
 
 ### Bugs found (never-asserted sweep, signal.h group)
 
-Three, originally all fenced in `test/posix-signal.c`, all found by the
-first calls anything in this tree has ever made to these five XSI names.
-All three were probed on this tree, not inferred from source. The first
-has since been fixed and its assertions un-fenced unmodified; two remain
-fenced.
+Three, all found by the first calls anything in this tree has ever made
+to these five XSI names, and all three probed on this tree rather than
+inferred from source.  The first two are **fixed** and their assertions
+now run un-fenced; the third is still fenced in `test/posix-signal.c`.
 
 1. **`sighold()`/`sigrelse()` reported success for an illegal signal
    number.** FIXED; kept here in past tense as the record.
@@ -726,16 +728,42 @@ fenced.
    works afterwards, so the [EINVAL] arm cannot be satisfied by refusing
    everything.
 
-2. **`sigset()` cannot report SIG_HOLD, and `<signal.h>` does not define
-   it.** `sigset.html` RETURN VALUE: "shall return SIG_HOLD if the
-   signal had been blocked and the signal's previous disposition if it
-   had not been blocked", and the call "shall remove sig from the calling
-   process' signal mask". `include/signal.h:260` declares `sigset()` but
-   never defines `SIG_HOLD`, which `basedefs/signal.h.html` requires
-   alongside it, so no conforming caller can even spell the comparison;
-   and `src/signal/signal.c:311` is `{ return signal(sig, h); }`, which
-   neither consults nor clears the mask. Probed: with SIGUSR1 held,
-   `sigset()` returns SIG_DFL and SIGUSR1 stays blocked.
+2. **`sigset()` could not report SIG_HOLD, and `<signal.h>` did not
+   define it — FIXED.** `sigset.html` RETURN VALUE: "shall return
+   SIG_HOLD if the signal had been blocked and the signal's previous
+   disposition if it had not been blocked", and the call "shall remove
+   sig from the calling process' signal mask".
+
+   Mechanism of the defect: two halves of one omission. `include/signal.h`
+   declared `sigset()` but never defined `SIG_HOLD`, which
+   `basedefs/signal.h.html` requires alongside it, so the constant the
+   clause is written in terms of did not exist and no conforming caller
+   could even spell the comparison; and `src/signal/signal.c`'s body was
+   `{ return signal(sig, h); }`, which neither consulted nor cleared the
+   mask. Probed: with SIGUSR1 held, `sigset()` returned SIG_DFL and
+   SIGUSR1 stayed blocked — indistinguishable, to the caller, from the
+   signal never having been held.
+
+   The fix supplies both halves, because either alone is useless. The
+   header defines `SIG_HOLD` as `((void (*)(int)) 2)`, continuing the
+   `SIG_DFL` 0 / `SIG_IGN` 1 sequence it already has (the same value musl
+   and glibc use); all the standard asks is that it be distinguishable
+   from those two, from `SIG_ERR`, and from any address a caller could
+   pass. `sigset()` now records whether sig was blocked *before* it
+   installs the new disposition, installs through `signal()` (so the
+   [EINVAL] cases keep exactly the answers they had), unblocks sig with
+   `sigprocmask(SIG_UNBLOCK)`, and returns `SIG_HOLD` in place of the
+   previous disposition when sig had been blocked. The unblock is done
+   after the install, not before: `sigprocmask()` delivers whatever the
+   unblock made deliverable, and a signal that arrived while sig was held
+   belongs to the handler being installed now.
+
+   Defining `SIG_HOLD` also makes it a legal *argument*, which the bare
+   alias would have jumped to as a function address, so the same change
+   implements `func == SIG_HOLD`: "sig shall be added to the calling
+   process' signal mask and its disposition shall remain unchanged",
+   with the same return rule. `test_sigset` covers both directions and
+   pins the disposition across each.
 
 3. **`siginterrupt()` accepts any signal number.** `siginterrupt.html`
    ERRORS, shall-fail: "[EINVAL] The sig argument is not a valid signal
@@ -792,6 +820,7 @@ ABI), listed below.
 | fputwc / putwc / putwchar | `wc` returned on success, including for a lone high surrogate that writes nothing until its partner arrives; the whole multibyte sequence written; `[EILSEQ]` for an unpaired low surrogate | covered | test/posix-wchar.c |
 | fgetws | the `n-1` bound counted in wide characters not bytes; `<newline>` retained; null-wide-character termination; a final unterminated line returned and end-of-file reported on the next call; a null pointer at end-of-file with nothing read | covered | test/posix-wchar.c |
 | fputws | non-negative on success; the terminating null wide character not written; an empty string succeeds; a surrogate pair crossing one conversion state | covered | test/posix-wchar.c |
+| ungetwc | DESCRIPTION: "A successful intervening call (with the stream pointed to by stream) to a file-positioning function (fseek(), fseeko(), fsetpos(), or rewind()) shall discard any pushed-back wide characters for the stream" -- and fflush.html names ungetwc() pushback in its own read-stream clause | **BUG (fenced)** -- the wide pushback slot `f->nwunget` is cleared only by the next read (`src/stdio/wide.c`); `fseeko()`, `__fflush_locked()`, `__towrite()` and `freopen()` each clear the byte slot `f->nunget` and none of them touches the wide one, so a seek injects a phantom wide character | test/posix-wchar.c `test_ungetwc_discarded_by_positioning` |
 | ungetwc | one level of pushback, guaranteed and enforced; WEOF rejected leaving the stream unchanged; the end-of-file indicator cleared; a non-ASCII character returned unchanged (the slot holds a wide character, not its bytes) | covered | test/posix-wchar.c |
 | fwide | no orientation on a newly opened stream; a query (mode 0) does not create one; an orientation once set is never changed in either direction; byte and wide I/O functions set it without fwide() being called | covered | test/posix-wchar.c |
 | fwprintf / wprintf / swprintf / vfwprintf / vwprintf / vswprintf | the RETURN counted in wide characters, and the field width and precision likewise, over a `%s` whose bytes are a two-byte UTF-8 sequence and a supplementary character that becomes a surrogate pair; `%ls` copied through unchanged; `%c` converted "as if by calling btowc()", failing with `[EILSEQ]` for a byte that is not a complete character; `%lc` taking the whole `wint_t`; ordinary characters and an unknown conversion taken from the WIDE format; and swprintf()'s distinct truncation contract -- a negative return with errno set, not snprintf()'s would-have-been length | covered | test/posix-wchar.c |
@@ -1862,15 +1891,17 @@ boundary counts and locale-dependent bracket expressions as unaudited.
 makes no NT call; everything below was measured under Wine and would
 measure identically anywhere.
 
-Six BUGs and one UNIMPL, all fenced. The first is the serious one: a
-`regexec()` that terminates the process.
+Six BUGs and one UNIMPL when this section was written; BUG 4 (the
+trailing-backslash error code) is fixed, so five BUGs and the UNIMPL
+remain fenced. The first is the serious one: a `regexec()` that
+terminates the process.
 
 | function | clause checked | status | test |
 |---|---|---|---|
 | regexec | "If regexec() finds a match, it shall return zero; otherwise, it shall return non-zero" — on a repeat whose body can match empty | **BUG (fenced)** — crashes the process | test/posix-glob.c (`test_regex_nullable_repeat_does_not_crash`) |
 | regcomp | XBD 9.3.3: the asterisk is ordinary "As the first character of an entire BRE (after an initial `^`, if any)" | **BUG (fenced)** | test/posix-glob.c (`test_regex_bre_star_after_leading_circumflex`) |
 | regcomp | REG_ICASE, "Ignore case in match" — inside a bracket expression's character classes | **BUG (fenced)** | test/posix-glob.c (`test_regex_icase_inside_character_class`) |
-| regcomp | regex.h.html: REG_EESCAPE is "Trailing `<backslash>` character in pattern" | **BUG (fenced)** — a BRE gives REG_EPAREN | test/posix-glob.c (`test_regex_bre_trailing_backslash_code`) |
+| regcomp | regex.h.html: REG_EESCAPE is "Trailing `<backslash>` character in pattern" | covered — was a BUG: a BRE gave REG_EPAREN | test/posix-glob.c (`test_regex_bre_trailing_backslash_code`) |
 | regcomp | regex.h.html: REG_EBRACE is "`'\{\}'` imbalance", distinct from REG_BADBR's "Content of `'\{\}'` invalid" | **BUG (fenced)** — REG_EBRACE is never produced at all | test/posix-glob.c (`test_regex_ebrace_vs_badbr`) |
 | regexec | XBD 9.1: "the search is for the longest of the leftmost matches" | **BUG (fenced)**, self-documented in `src/regex/regex.c`'s banner | test/posix-glob.c (`test_regex_leftmost_longest_alternation`) |
 | regcomp | XBD 9.3.6 back-references `\1`..`\9` in a BRE | **UNIMPL (fenced)** — deliberately rejected, with a documented rationale | test/posix-glob.c (`test_regex_bre_backreference`) |
@@ -1936,14 +1967,29 @@ Six BUGs and one UNIMPL, all fenced. The first is the serious one: a
 
    Test (fenced): `test_regex_icase_inside_character_class`.
 
-4. **A BRE ending in an unescaped backslash reports REG_EPAREN, not
-   REG_EESCAPE.** The BRE branch parser treats a trailing backslash as
-   end-of-branch without consuming it, and `regcomp()` then attributes
-   the leftover input to parentheses. The ERE path is correct, so the
-   two grammars disagree about the same malformed pattern. Measured:
-   BRE `"a\"` → REG_EPAREN, ERE `"a\"` → REG_EESCAPE.
+4. **A BRE ending in an unescaped backslash reported REG_EPAREN, not
+   REG_EESCAPE — fixed.** The BRE branch parser treated a trailing
+   backslash as end-of-branch without consuming it, and `regcomp()`
+   then attributed the leftover input to parentheses. The ERE path was
+   correct, so the two grammars disagreed about the same malformed
+   pattern. Measured before the fix: BRE `"a\"` → REG_EPAREN, ERE
+   `"a\"` → REG_EESCAPE.
 
-   Test (fenced): `test_regex_bre_trailing_backslash_code`.
+   The end-of-branch test no longer names a trailing backslash, so it
+   reaches `bre_atom()` and then `esc_literal()` — the single place
+   that decides what an incomplete escape means, and the one the ERE
+   path already used. A second half was needed for the same code to
+   survive inside a group: both grammars' `(`/`\(` atoms ran their
+   closing-delimiter check even when the body had already failed, and
+   overwrote its error with REG_EPAREN, so `"\(a\"` and `"(a\"` both
+   answered REG_EPAREN. That check is now skipped on a sticky error,
+   which is the discipline the parser's own header describes for its
+   emit helpers.
+
+   Test: `test_regex_bre_trailing_backslash_code`, which also pins the
+   three cases that must NOT change — a genuine `\(`/`\)` imbalance is
+   still REG_EPAREN, a completed `\\` is still a literal backslash, and
+   a well-formed group still compiles and captures.
 
 5. **REG_EBRACE is unreachable; brace imbalance reports REG_BADBR.**
    `regex.h.html` distinguishes REG_EBRACE ("`'\{\}'` imbalance") from
@@ -2760,9 +2806,10 @@ STREAMS interface, so there is no partial implementation to grade.
 ### J3: sys/uio.h, ftw.h, fcntl.h advisory, setjmp.h OB XSI, string.h, sys/times.h, sys/utsname.h, sys/time.h, stdlib.h srand48
 
 Fourteen functions across nine headers, in `test/posix-tail.c` (new
-file). **Five BUGs fenced** — one in `nftw()` that is severe, one more
-in `nftw()` found by inspection, and three more *shall fail* error
-clauses that are simply absent. **One assertion group comes out
+file). **Two BUGs fenced** — one in `nftw()` found by inspection, and
+one *shall fail* error clause that is simply absent. Four others that
+were fenced here have since been fixed and run live, among them the
+severe `nftw()`/`FTW_CHDIR` one. **One assertion group comes out
 `rc=77` unverified** here.
 
 | function | clause checked | status | test |
@@ -2782,7 +2829,7 @@ clauses that are simply absent. **One assertion group comes out
 | nftw | "FTW_DEPTH: If set, nftw() shall report all files in a directory before reporting the directory itself", and FTW_DP "shall only occur if the FTW_DEPTH flag is included in flags" — both directions asserted | covered | test/posix-tail.c (`test_nftw`) |
 | nftw | "FTW_MOUNT: If set, nftw() shall only report files in the same file system as path" — a real test here, since `src/stat/stat.c` fills `st_dev` from the NT volume serial number | covered | test/posix-tail.c (`test_nftw`) |
 | nftw | "FTW_CHDIR: … If clear, nftw() shall not change the current working directory" | covered | test/posix-tail.c (`test_nftw`) |
-| nftw | "FTW_CHDIR: If set, nftw() shall change the current working directory to each directory as it reports files in that directory" — together with "shall recursively descend the directory hierarchy rooted in path" | **BUG (fenced)** — the severe one; see below | test/posix-tail.c (`test_nftw_chdir`) |
+| nftw | "FTW_CHDIR: If set, nftw() shall change the current working directory to each directory as it reports files in that directory" — together with "shall recursively descend the directory hierarchy rooted in path", and the point of the flag: every entry reachable by `path + base` from where the walk stands when it reports it | covered — **FIXED**; `src/ftw/ftw.c`'s `resolve()` now rewrites every accumulated walk path against the cwd captured before the first `chdir()`, for all of `lstat`/`stat`/`opendir` and not just the `chdir` | test/posix-tail.c (`test_nftw_chdir`) |
 | nftw | "If FTW_PHYS is clear … nftw() shall follow links instead of reporting them, but shall not report the contents of any directory that would be a descendant of itself" (and the FTW_DEPTH variant) | **BUG (fenced)** | test/posix-tail.c (`test_nftw_symlink_loop`) |
 | nftw, ftw | FTW_PHYS's FTW_SL, FTW_SLN, and link-following | **unverified (rc=77)** — needs a real symbolic link; `symlink()` fails `ENOSYS` under Wine and `EPERM` on real Windows without `SeCreateSymbolicLinkPrivilege`. The `ENOSYS` is the correct rendering of `STATUS_NOT_SUPPORTED` (0xc00000bb), which stock Wine below 10.19 answers `FSCTL_SET_REPARSE_POINT` with — `src/internal/errno.c:82-84` maps that status onto `ENOSYS` together with `STATUS_NOT_IMPLEMENTED` and `STATUS_INVALID_DEVICE_REQUEST`, so the errno is not evidence of `NOT_IMPLEMENTED` in particular, and on that leg the privilege is never consulted. Probed at run time, one SKIP line naming the mechanism and errno | test/posix-tail.c (`test_nftw_symlinks`) |
 | ftw, nftw | FTW_DNR (an unreadable directory), FTW_NS (an unstattable object), `[EACCES]`, `[ELOOP]`, `[ENAMETOOLONG]`, `[EOVERFLOW]`, `[EMFILE]`/`[ENFILE]` | N/A — the same permission-model limit `glob()`'s `GLOB_ERR` row already records: `chmod 0` does not revoke owner access on this platform, so a directory that cannot be read or an object that cannot be stat'd cannot be built | — |
@@ -2816,12 +2863,12 @@ clauses that are simply absent. **One assertion group comes out
 
 ### Bugs found (group J3)
 
-1. **`nftw()` with `FTW_CHDIR` walks nothing below the root.** Every
-   entry of every directory is reported as `FTW_NS`, no directory below
-   the root is ever descended into, and the walk returns 0 as though
-   the tree had been exhausted. This is the most severe defect in the
-   group: a caller gets a *successful* return and a silently truncated
-   walk.
+1. **`nftw()` with `FTW_CHDIR` walked nothing below the root — FIXED.**
+   Every entry of every directory was reported as `FTW_NS`, no
+   directory below the root was ever descended into, and the walk
+   returned 0 as though the tree had been exhausted. This was the most
+   severe defect in the group: a caller got a *successful* return and a
+   silently truncated walk.
 
    `nftw.html`: "shall recursively descend the directory hierarchy
    rooted in path", and "FTW_CHDIR: If set, nftw() shall change the
@@ -2830,24 +2877,38 @@ clauses that are simply absent. **One assertion group comes out
    failed on the object because of lack of appropriate permission" —
    not "the implementation looked in the wrong place".
 
-   Mechanism: `src/ftw/ftw.c`'s `walk()` opens the directory, calls
-   `chdir_absolute(ws, path)`, and then builds each child path by
+   Mechanism: `src/ftw/ftw.c`'s `walk()` opened the directory, called
+   `chdir_absolute(ws, path)`, and then built each child path by
    appending `"/name"` to `path` — which is relative to the walk's
-   *original* working directory. `chdir_absolute()` is careful to
-   resolve its own argument against the cwd captured before the first
-   `chdir()` (its comment diagnoses exactly this hazard), but nothing
-   does the same for the child paths handed to the recursive
-   `walk()`'s `lstat()`/`stat()`/`opendir()`. Once the process has
-   `chdir`'d into `tailtree`, looking up `tailtree/f1` resolves to
+   *original* working directory. `chdir_absolute()` resolved its own
+   argument against the cwd captured before the first `chdir()` (its
+   comment diagnosed exactly this hazard), but nothing did the same for
+   the child paths handed to the recursive `walk()`'s
+   `lstat()`/`stat()`/`opendir()`. Once the process had `chdir`'d into
+   `tailtree`, looking up `tailtree/f1` resolved to
    `tailtree/tailtree/f1`.
 
-   Measured under Wine on this file's own fixture: `t4` → `FTW_D`;
-   `t4/f1` → `FTW_NS`; `t4/sub` → `FTW_NS`; `t4/sub/f2` never reported
-   at all; `rc = 0`. Without `FTW_CHDIR` the identical walk reports all
-   four objects with the right types, so this is `FTW_CHDIR` alone. Not
-   the "results are unspecified if the application-supplied fn function
-   does not preserve the current working directory" escape clause: the
-   test's callback changes nothing.
+   Measured under Wine on this file's own fixture, before the fix: `t4`
+   → `FTW_D`; `t4/f1` → `FTW_NS`; `t4/sub` → `FTW_NS`; `t4/sub/f2`
+   never reported at all; `rc = 0`. Without `FTW_CHDIR` the identical
+   walk reported all four objects with the right types, so this was
+   `FTW_CHDIR` alone. Not the "results are unspecified if the
+   application-supplied fn function does not preserve the current
+   working directory" escape clause: the test's callback changes
+   nothing.
+
+   The fix was to stop treating this as a `chdir()` problem.
+   `chdir_absolute()` is now `resolve()`, which returns the rewritten
+   pathname rather than performing the `chdir` itself, and *every*
+   filesystem call the walk makes goes through it — `lstat()`,
+   `stat()`, `level_open()`'s `opendir()`, and the `chdir()` — so the
+   accumulated path is used for reporting only. It allocates nothing
+   unless `FTW_CHDIR` is set, `cwd0` being `NULL` otherwise. `walk()`
+   also returns to its own directory after a child directory walk left
+   the process standing inside it, which is what makes the clause
+   literally true ("as it reports files in that directory") rather than
+   true only until the first descent; `test_nftw_chdir()` asserts that
+   from inside the callback, through `path + base`.
 
 2. **`nftw()` has no protection against a directory that is a
    descendant of itself.** `nftw.html` requires, when `FTW_PHYS` is

@@ -543,6 +543,12 @@ static void ere_atom(struct parser *ps)
 		ps->p++;
 		emit(ps, I_SAVE, 0, 0, 2 * g, 0);
 		ere_alt(ps);
+		/* Sticky error, as for the emit helpers above: a group whose
+		 * body already failed has not been shown to be unbalanced --
+		 * the parse simply stopped where it was. Without this,
+		 * "(a\" reports the missing ')' this return then walks past
+		 * rather than the REG_EESCAPE esc_literal() diagnosed. */
+		if (ps->err) return;
 		if (*ps->p != ')') { ps->err = REG_EPAREN; return; }
 		ps->p++;
 		emit(ps, I_SAVE, 0, 0, 2 * g + 1, 0);
@@ -619,6 +625,7 @@ static void bre_atom(struct parser *ps, int at_start)
 		ps->p += 2;
 		emit(ps, I_SAVE, 0, 0, 2 * g, 0);
 		bre_branch(ps);
+		if (ps->err) return;	/* sticky, as in ere_atom() above */
 		if (ps->p[0] != '\\' || ps->p[1] != ')') { ps->err = REG_EPAREN; return; }
 		ps->p += 2;
 		emit(ps, I_SAVE, 0, 0, 2 * g + 1, 0);
@@ -642,7 +649,16 @@ static void bre_branch(struct parser *ps)
 		int c0 = (unsigned char)ps->p[0];
 		int c1 = c0 ? (unsigned char)ps->p[1] : 0;	/* short-circuit: never index past a NUL */
 		int start;
-		int is_end = (c0 == '\0') || (c0 == '\\' && (c1 == ')' || c1 == '\0'));
+		/* A branch ends at the end of the pattern or at a "\)". A
+		 * lone trailing backslash is NEITHER: it is the incomplete
+		 * escape <regex.h>'s error table calls REG_EESCAPE, so it is
+		 * handed to bre_atom() like any other backslash and
+		 * esc_literal() finds the missing character. Ending the
+		 * branch on it instead left it unconsumed, and regcomp()'s
+		 * leftover-input check below then blamed it on an unbalanced
+		 * "\(" -- the ERE path, which has never had such a carve-out,
+		 * answered REG_EESCAPE for the same pattern. */
+		int is_end = (c0 == '\0') || (c0 == '\\' && c1 == ')');
 		if (is_end) return;
 
 		/* A leading '*' is an ordinary character (regcomp.html

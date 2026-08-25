@@ -258,6 +258,16 @@ int siginterrupt(int, int);
 int sighold(int);
 int sigrelse(int);
 void (*sigset(int, void (*)(int)))(int);
+/* basedefs/signal.h.html requires SIG_HOLD alongside sigset(): it is
+ * both an argument to sigset() ("If func is SIG_HOLD, sig shall be
+ * added to the calling process' signal mask") and its "the signal had
+ * been blocked" return value.  2 continues the SIG_DFL 0 / SIG_IGN 1
+ * sequence at the bottom of this header (same value musl and glibc
+ * use), which is all the standard asks of it: SIG_HOLD only has to be
+ * distinguishable from SIG_DFL, SIG_IGN, SIG_ERR and from the address
+ * of any function a caller could actually pass, and no target this
+ * library builds for can place code at 2. */
+#define SIG_HOLD ((void (*)(int)) 2)
 #define TRAP_BRKPT 1
 #define TRAP_TRACE 2
 #define POLL_IN 1
