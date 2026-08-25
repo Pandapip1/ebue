@@ -7,14 +7,26 @@
  *
  * WHY THIS FILE EXISTS
  *
- * Wine implements FSCTL_SET_SPARSE -- it persists the mark in a
- * `user.WINESPARSE` extended attribute -- but not FSCTL_SET_ZERO_DATA,
- * the call that actually punches the hole.  So under Wine a program can
- * mark a file sparse and then never create a hole in it, and every
- * question about the resulting file's *allocation* is unanswerable
- * there.  This binary is therefore a probe whose only real oracle is the
- * `windows-test` CI leg (real Windows Server 2025); under Wine it exits
- * 77 naming the missing mechanism rather than passing vacuously.
+ * Wine answers FSCTL_SET_SPARSE with STATUS_SUCCESS and does nothing
+ * else: in wine-9.0, which is what the CI Wine legs run,
+ * dlls/ntdll/unix/file.c:6156-6160 is literally
+ * `TRACE("FSCTL_SET_SPARSE: Ignoring request")` followed by
+ * `status = STATUS_SUCCESS`.  Nothing is persisted, so the file never
+ * acquires FILE_ATTRIBUTE_SPARSE_FILE -- measured here, and the reason
+ * this file reports the attribute rather than trusting the ioctl's
+ * return value.  (A `user.WINESPARSE` extended attribute that does
+ * remember the mark exists only in *our* Wine fork, added by
+ * 6ccc83feb "ntdll: Allocate real blocks when extending a file that is
+ * not sparse", which is on Pandapip1/wine master and in no upstream Wine
+ * release; it is not what stock Wine does and must not be described as
+ * such.)
+ *
+ * FSCTL_SET_ZERO_DATA -- the call that actually punches the hole -- has
+ * no implementation in stock Wine at all, so every question about the
+ * resulting file's *allocation* is unanswerable there.  This binary is
+ * therefore a probe whose only real oracle is the `windows-test` CI leg
+ * (real Windows Server 2025); under Wine it exits 77 naming the missing
+ * mechanism rather than passing vacuously.
  *
  * THE UNMARKED CASE IS THE DISCRIMINATING ONE, AND ONE NUMBER IS NOT
  * ENOUGH TO SETTLE IT
@@ -97,6 +109,18 @@ typedef struct _FILE_STANDARD_INFORMATION {
 } FILE_STANDARD_INFORMATION;
 #define FileStandardInformation 5
 
+typedef struct _FILE_BASIC_INFORMATION {
+	LONGLONG CreationTime, LastAccessTime, LastWriteTime, ChangeTime;
+	ULONG FileAttributes;
+} FILE_BASIC_INFORMATION;
+#define FileBasicInformation 4
+#define FILE_ATTRIBUTE_SPARSE_FILE 0x00000200UL
+
+typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
+	LONGLONG FileOffset;
+	LONGLONG Length;
+} FILE_ALLOCATED_RANGE_BUFFER;
+
 typedef struct _FILE_SET_SPARSE_BUFFER { BOOLEAN SetSparse; } FILE_SET_SPARSE_BUFFER;
 typedef struct _FILE_ZERO_DATA_INFORMATION {
 	LONGLONG FileOffset;
@@ -109,6 +133,9 @@ typedef struct _FILE_ZERO_DATA_INFORMATION {
  * SET_ZERO_DATA: fn 50, FILE_WRITE_DATA (2). */
 #define FSCTL_SET_SPARSE     0x000900C4UL
 #define FSCTL_SET_ZERO_DATA  0x000980C8UL
+/* fn 51, METHOD_NEITHER (3), FILE_READ_DATA (1):
+ * (9 << 16) | (1 << 14) | (51 << 2) | 3. */
+#define FSCTL_QUERY_ALLOCATED_RANGES 0x000940CFUL
 
 #define STATUS_NOT_IMPLEMENTED        ((NTSTATUS)0xC0000002L)
 #define STATUS_INVALID_DEVICE_REQUEST ((NTSTATUS)0xC0000010L)
@@ -145,6 +172,61 @@ static int query_std(HANDLE h, FILE_STANDARD_INFORMATION *si, const char *when, 
 		return 0;
 	}
 	return 1;
+}
+
+/* Is FILE_ATTRIBUTE_SPARSE_FILE actually set right now?  Printed rather
+ * than asserted: FSCTL_SET_SPARSE reporting success and the attribute
+ * being observable afterwards are two different claims, and on a volume
+ * that does not support sparse files they can come apart.  Without this
+ * line a sparse case that quietly behaved like the unmarked one would be
+ * indistinguishable from NT declining to deallocate. */
+static void report_sparse_attr(HANDLE h, const char *tag, const char *when)
+{
+	IO_STATUS_BLOCK io;
+	FILE_BASIC_INFORMATION bi;
+	NTSTATUS st;
+	memset(&bi, 0, sizeof bi);
+	st = NtQueryInformationFile(h, &io, &bi, (ULONG)sizeof bi, FileBasicInformation);
+	if (!NT_SUCCESS(st)) {
+		printf("zerodata[%s]: FileAttributes %s -> query failed 0x%08lX\n",
+		       tag, when, (unsigned long)(unsigned)st);
+		return;
+	}
+	printf("zerodata[%s]: FileAttributes %s = 0x%08lX (FILE_ATTRIBUTE_SPARSE_FILE: %s)\n",
+	       tag, when, (unsigned long)bi.FileAttributes,
+	       (bi.FileAttributes & FILE_ATTRIBUTE_SPARSE_FILE) ? "set" : "clear");
+}
+
+/* The allocated extents of the whole file, straight from the filesystem.
+ * This is the direct form of the question AllocationSize answers only
+ * indirectly: a punched hole shows up here as a gap between ranges, and
+ * a file with no hole reports exactly one range covering everything. */
+static void report_allocated_ranges(HANDLE h, const char *tag, const char *when)
+{
+	IO_STATUS_BLOCK io;
+	FILE_ALLOCATED_RANGE_BUFFER in;
+	FILE_ALLOCATED_RANGE_BUFFER out[16];
+	NTSTATUS st;
+	unsigned n, i;
+
+	in.FileOffset = 0;
+	in.Length = FILE_SIZE;
+	memset(out, 0, sizeof out);
+	io.Information = 0;
+	st = NtFsControlFile(h, 0, 0, 0, &io, FSCTL_QUERY_ALLOCATED_RANGES,
+	                     &in, (ULONG)sizeof in, out, (ULONG)sizeof out);
+	if (!NT_SUCCESS(st)) {
+		printf("zerodata[%s]: FSCTL_QUERY_ALLOCATED_RANGES %s -> 0x%08lX "
+		       "(extents not measured)\n", tag, when, (unsigned long)(unsigned)st);
+		return;
+	}
+	n = (unsigned)(io.Information / sizeof out[0]);
+	printf("zerodata[%s]: allocated extents %s: %u range(s)%s\n",
+	       tag, when, n, n == 0 ? " -- the file is entirely unallocated" : "");
+	for (i = 0; i < n && i < 16; i++)
+		printf("zerodata[%s]:   extent %u: [%lld,%lld)\n", tag, i,
+		       (long long)out[i].FileOffset,
+		       (long long)(out[i].FileOffset + out[i].Length));
 }
 
 /* Runs one case.  `mark_sparse` selects (a) vs (b). */
@@ -195,6 +277,8 @@ static void run_case(const char *tag, int mark_sparse)
 	if (fsync(fd) != 0) { printf("FAIL %s: fsync: %s\n", tag, strerror(errno)); fails++; }
 
 	if (!query_std(h, &before, "before", tag)) { unverified++; close(fd); free(buf); return; }
+	report_sparse_attr(h, tag, "before");
+	report_allocated_ranges(h, tag, "before");
 
 	zd.FileOffset = ZERO_FROM;
 	zd.BeyondFinalZero = ZERO_TO;
@@ -204,6 +288,8 @@ static void run_case(const char *tag, int mark_sparse)
 	       tag, ZERO_FROM, ZERO_TO, (unsigned long)(unsigned)st_zero);
 
 	if (!query_std(h, &after, "after", tag)) { unverified++; close(fd); free(buf); return; }
+	report_sparse_attr(h, tag, "after");
+	report_allocated_ranges(h, tag, "after");
 
 	printf("zerodata[%s]: EndOfFile      before=%lld after=%lld\n",
 	       tag, (long long)before.EndOfFile, (long long)after.EndOfFile);
@@ -213,10 +299,12 @@ static void run_case(const char *tag, int mark_sparse)
 	if (!NT_SUCCESS(st_zero)) {
 		if (not_supported(st_zero))
 			printf("SKIP zerodata[%s]: FSCTL_SET_ZERO_DATA is unimplemented in this "
-			       "environment (status 0x%08lX) -- this is what stock Wine does; "
-			       "it implements FSCTL_SET_SPARSE (persisted as a user.WINESPARSE "
-			       "xattr) but never punches the hole.  Real NT is required to "
-			       "answer this probe.\n", tag, (unsigned long)(unsigned)st_zero);
+			       "environment (status 0x%08lX) -- this is what stock Wine does. "
+			       "Wine's FSCTL_SET_SPARSE returns STATUS_SUCCESS while ignoring "
+			       "the request (wine-9.0 dlls/ntdll/unix/file.c:6156), so no hole "
+			       "is ever punched and no allocation question can be answered "
+			       "here.  Real NT is required to answer this probe.\n",
+			       tag, (unsigned long)(unsigned)st_zero);
 		else
 			printf("SKIP zerodata[%s]: FSCTL_SET_ZERO_DATA failed with 0x%08lX -- "
 			       "that status IS the measurement for this case; the success "
