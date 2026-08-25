@@ -171,6 +171,22 @@ struct sh_command {
 	 * costs an expansion of every word in the body. */
 	char *func_text;
 
+	/* SH_CMD_FUNCDEF: the body's AST, kept ONLY to outlive a here-document
+	 * the lexer has queued but not yet drained -- see parse_funcdef() in
+	 * src/sh/parse.c, which is the only place this is ever set, and which
+	 * sets it only when something is actually pending.  Nothing reads it;
+	 * it exists so that the `struct sh_redir` a `struct pending_hd` still
+	 * points at is not freed out from under drain_heredocs().
+	 *
+	 * This does NOT reintroduce the hazard the comment above rules out.
+	 * That one is about the *function table* holding a borrowed pointer
+	 * into an AST that is freed before the function is called; the table
+	 * still stores text, and this field lives and dies with the sh_list
+	 * the definition was parsed into -- which is exactly the lifetime the
+	 * pending queue needs, since the queue is always drained before
+	 * __sh_parse() returns. */
+	struct sh_command *func_body;
+
 	int have_in;                /* 0: `for name` with no `in` word list,
 	                             * which 2.9.4 defines as `in "$@"` -- see
 	                             * exec.c and sh/main.c on why that is

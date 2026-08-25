@@ -666,6 +666,54 @@ static void test_roundtrip(void)
 	check_roundtrip("f() { :; }\ng() { :; }");
 }
 
+/* A here-document inside a function-definition body, where the function
+ * definition is followed by a list operator.  This was a
+ * heap-use-after-free, found by fuzz/fuzz_shparse.c and fixed in
+ * src/sh/parse.c's parse_funcdef():
+ *
+ * parse_funcdef() parses the body only to find its extent and then
+ * throws the AST away, but a `<<` inside that body has registered a
+ * `struct pending_hd` holding a borrowed pointer to its `struct
+ * sh_redir`, and that queue is drained at the next <newline> or at EOF
+ * -- not at the end of the body.  So when the token after the body is
+ * one parse_command() leaves for its caller ('|', '&', '&&', '||'),
+ * the entry was still live when the body was freed, and
+ * drain_heredocs() then read `h->redir->word` out of freed memory.
+ * `f()(<<E)&` is the ten-byte reduction; the programs below are the
+ * same shapes written out with a real terminator line so that they
+ * parse.  The fix keeps the body in sh_command.func_body whenever
+ * anything is pending.
+ *
+ * WHAT THE ASSERTIONS ARE FOR, since a use-after-free need not be
+ * visible in a `make check` build with no sanitizer: `make asan`
+ * (tools/asan-build.sh) compiles src/sh/*.c natively and runs this very
+ * file under ASan, which is what turns the first case into a hard
+ * failure.  Under plain `make check` these two assertions still
+ * discriminate, against the OTHER way this could have been "fixed":
+ * each program must parse, and must parse to exactly ONE list item.
+ * Dropping the pending entry instead of keeping its redirection alive
+ * would leave the here-document body and its terminator to be read as
+ * two more commands, and the count would be three. */
+static void test_funcdef_heredoc_before_list_operator(void)
+{
+	static const char *const progs[] = {
+		"f()( a <<E )|b\nx\nE\n",
+		"f()( a <<E )&\nx\nE\n",
+		"f(){ a <<E ;}|b\nx\nE\n",
+		"f()( a <<E )&& b\nx\nE\n",
+		"f()( a <<E )|| b\nx\nE\n"
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof progs / sizeof *progs; i++) {
+		struct sh_list *l = must_parse(progs[i]);
+		if (!l) continue;
+		CHECK(l->items != 0);
+		if (l->items) CHECK(l->items->next == 0);
+		__sh_list_free(l);
+	}
+}
+
 #if 0	/* BUG: the printer writes a here-document's terminator line as
 	 * the delimiter word was WRITTEN, while the parser matches
 	 * terminator lines against the delimiter with quote removal
@@ -4075,6 +4123,7 @@ int main(int argc, char **argv)
 	test_rejects_malformed();
 
 	test_roundtrip();
+	test_funcdef_heredoc_before_list_operator();
 
 	test_exec_simple_command_status(argv[0]);
 	test_exec_command_not_found();
