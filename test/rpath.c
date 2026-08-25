@@ -106,5 +106,28 @@ int main(int argc, char **argv)
 	CHECK(argv != 0 && argv[0] != 0);
 
 	if (!fails) printf("PASS\n");
+	else {
+		/* This test has been observed failing under CPU contention and
+		 * passing without it, on the same commit: three samples taken
+		 * while a gate or lint stage was running concurrently failed,
+		 * and one uncontended sample of the same tree passed.  That
+		 * cost someone an afternoon of bisecting a regression that was
+		 * not there, and it was nearly attributed to main.
+		 *
+		 * The mechanism has NOT been established -- what is known is
+		 * the correlation, and it is stated as a correlation.  Nothing
+		 * here is relaxed, no assertion is softened and there is no
+		 * retry: a real break in the delay-load path must still fail,
+		 * and it still does.  This only tells the next reader which
+		 * question to ask first, because the cheapest thing they can do
+		 * is re-run it on an idle box before believing it.
+		 *
+		 * tools/gate.sh runs 4 stages x 3 make jobs under CPUQuota=800%;
+		 * a `make check` overlapping that reproduces the failure. */
+		printf("NOTE: rpath.exe has been seen to fail under CPU contention\n");
+		printf("NOTE:   and pass on an idle machine at the same commit.\n");
+		printf("NOTE:   Before bisecting this, re-run it with nothing else\n");
+		printf("NOTE:   running -- in particular not tools/gate.sh.\n");
+	}
 	return fails ? 1 : 0;
 }
