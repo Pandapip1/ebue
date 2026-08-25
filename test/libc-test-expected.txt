@@ -59,7 +59,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=61 xfail=24 unclassified=4 unbuildable=57
+# COUNTS pass=63 xfail=24 unclassified=4 unbuildable=55
 #
 argv                              pass
 basename                          pass
@@ -203,7 +203,7 @@ uselocale-0                       pass
 utime                             xfail:defect  not covered; utimensat on "/dev/null/invalid" gives ENOENT where POSIX specifies ENOTDIR
 vfork                             xfail:env  no /bin/sh on the target; the second half execl()s "/bin/sh -c"
 wcsncpy-read-overflow             pass
-wcsstr                            unbuildable  tcc: error: unresolved reference to 'wcsstr'
-wcsstr-false-negative             unbuildable  tcc: error: unresolved reference to 'wcsstr'
+wcsstr                            pass
+wcsstr-false-negative             pass
 wcstol                            unbuildable  tcc: error: unresolved reference to 'wcstol'
 wordexp                           xfail:defect  overlaps the field-splitting work already fenced at test/posix-glob.c:1226,1271; $FOO="bar baz" yields one word, and ${X:-d}/${X-d}/${X:+y} give WRDE_SYNTAX
