@@ -1321,6 +1321,61 @@ static void test_fnmatch_bracket_edges(void)
 	CHECK(fnmatch("[\n]", "\n", 0) == 0);
 }
 
+#if NTLIBC_TEST(BUG, posix_glob_fnmatch_collating_and_equivalence) /* BUG: fnmatch() does not recognise collating symbols "[. .]" or
+	 * equivalence classes "[= =]" inside a bracket expression.
+	 * fnmatch.html DESCRIPTION: "The fnmatch() function shall match
+	 * patterns as described in XCU Section 2.13.1, Patterns Matching a
+	 * Single Character."  XCU 2.13.1: "The character sequences \"[.\",
+	 * \"[=\", and \"[:\" shall be special inside a bracket expression
+	 * and are used to delimit collating symbols, equivalence class
+	 * expressions, and character class expressions", and the
+	 * right-square-bracket "shall terminate the bracket expression,
+	 * unless it appears in a collating symbol (such as \"[.].]\") or is
+	 * the ending right-square-bracket for a collating symbol,
+	 * equivalence class, or character class."
+	 *
+	 * Mechanism: the bracket scanner in src/fnmatch/fnmatch.c special-
+	 * cases exactly one of the three sequences --
+	 *
+	 *     if (p[0] == '[' && p[1] == ':') { ... }
+	 *
+	 * -- and "[." and "[=" fall through to the plain single-character
+	 * and range member handler below it.  So "[[.a.]]" is read as the
+	 * member set { '[', '.', 'a' }, terminated by the collating
+	 * symbol's own ']', leaving a stray ']' in the pattern; the match
+	 * then fails.  The ']'-inside-a-collating-symbol rule goes the same
+	 * way.
+	 *
+	 * Two things make this a gap rather than a documented limitation.
+	 * src/regex/regex.c does implement the syntax, so the library's two
+	 * pattern languages disagree where POSIX makes them agree; and
+	 * src/glob/glob.c hands every component to fnmatch(), so glob()
+	 * inherits it.  The file's banner says bracket expressions are
+	 * handled in full and records no deviation here.
+	 *
+	 * The N/A row in test/POSIX-COVERAGE.md about multi-character
+	 * collating elements is a different point and about regcomp(): it
+	 * turns on the C locale having no multi-character elements, which
+	 * says nothing about whether the single-character *syntax* has to
+	 * be parsed.  It does.
+	 *
+	 * Re-enable when the fnmatch() scanner handles all three
+	 * sequences. */
+static void test_fnmatch_collating_and_equivalence(void)
+{
+	CHECK(fnmatch("[[.a.]]", "a", 0) == 0);
+	CHECK(fnmatch("[[=a=]]", "a", 0) == 0);
+
+	/* a ']' inside a collating symbol does not end the expression */
+	CHECK(fnmatch("[[.].]]", "]", 0) == 0);
+
+	/* and the expression goes on being a bracket expression afterwards */
+	CHECK(fnmatch("[[.a.]]x", "ax", 0) == 0);
+	CHECK(fnmatch("[[.a.]b]", "b", 0) == 0);
+	CHECK(fnmatch("[[.a.]]", "b", 0) == FNM_NOMATCH);
+}
+#endif
+
 static void test_fnmatch_unmatched_bracket_is_literal(void)
 {
 	CHECK(fnmatch("[abc", "[abc", 0) == 0);
