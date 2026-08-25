@@ -95,43 +95,6 @@ static int heredoc_fence(const char *src)
 	return strstr(src, "<<") != 0;
 }
 
-/* BUG: a failed parse of a redirection trailing a subshell or brace
- * group leaks every redirection already parsed for that group.
- * src/sh/parse.c:617 builds the list with a loop whose failure path
- * frees cmd->body and cmd but not cmd->redirs; the simple-command
- * path's `simple_fail:` label, forty lines above, does free them.
- * 42 bytes per redirection that had already succeeded, so the size
- * is chosen by the input rather than fixed.
- *
- * Found by this harness as "()<\377<" and reduced by hand:
- *
- *     "()<a"      parses         -- no leak
- *     "<a<"       no group       -- no leak
- *     "()<a<"     42 bytes, per parse
- *     "()<a<b<"   84 bytes, per parse
- *
- * Fenced in test/sh-engine.c, not fixed, per the standing rule.
- *
- * The filter is an over-approximation, as heredoc_fence() is: any
- * source carrying both a group-delimiting
- * byte and a redirection operator.  Deciding exactly would mean
- * knowing whether the redirection trails a group, which is the
- * parse this harness is here to test.  As with the here-document
- * leak only LeakSanitizer is switched off, and only around the
- * parses themselves -- the parse, the print, the reparse and the
- * reprint all still run on these inputs and all still run under
- * ASan, so the loop at parse.c:617 stays covered for everything
- * except the fact that it leaks.
- *
- * When the fence is lifted, delete group_redir_fence() and its
- * calls -- and note that it subsumes heredoc_fence() for any
- * source that has a group in it, so lift them together or the
- * remaining one will look broader than it is. */
-static int group_redir_fence(const char *src)
-{
-	return src[strcspn(src, "(){}")] != 0 && src[strcspn(src, "<>")] != 0;
-}
-
 /* BUG: the printer writes a here-document's terminator line as the
  * delimiter word was WRITTEN, but the parser matches terminator
  * lines against the delimiter with quote removal APPLIED, so a
@@ -298,7 +261,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	 * it truncates to fit, and a truncation that forgets the NUL is the
 	 * classic form of that bug. */
 	memset(errbuf, 'Z', sizeof errbuf);
-	fenced = heredoc_fence(src) || group_redir_fence(src);
+	fenced = heredoc_fence(src);
 	if (fenced) __lsan_disable();
 	l1 = __sh_parse(src, errbuf, sizeof errbuf);
 

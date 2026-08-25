@@ -1071,7 +1071,22 @@ simple_fail:
 
 trailing_redirs:
 	/* 2.9.4: "each can be followed by redirections on the same line as
-	 * the terminator". */
+	 * the terminator".
+	 *
+	 * The failure path frees the whole node through free_command() and
+	 * not by hand, and that is load-bearing rather than stylistic: at
+	 * this point `cmd` owns a redirection list this very loop has been
+	 * building, and it is reached from two directions -- fallthrough
+	 * from the '(' / '{' branches above, where the group's body hangs
+	 * off cmd->body, and the `goto trailing_redirs` the if/while/until/
+	 * for parsers take, where it hangs off cmd->arms/cmd->cond instead.
+	 * Anything narrower than "free the whole command" would therefore
+	 * have to enumerate a set of fields that new_command() keeps
+	 * growing, and would leak whichever one it had not heard of --
+	 * 42 bytes per already-parsed redirection alone, chosen by the
+	 * input rather than fixed.  test/sh-engine.c's
+	 * test_group_redir_leak() is the regression test, and it is checked
+	 * by `make asan`, whose LeakSanitizer is what can see it at all. */
 	while (p->cur.type == T_IONUM || is_redir_op(p->cur.type)) {
 		struct sh_redir *r = parse_redir(p);
 		if (!r) { free_command(cmd); return 0; }

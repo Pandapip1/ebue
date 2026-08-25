@@ -44,9 +44,6 @@
 #
 # Probing them for real is a design change and deliberately not done here;
 # this note exists so the limitation is known rather than silent.
-ntlibc	sh_engine_group_redir_leak	runtime=wine	NA	memory leak is observable only under the native sanitizer profile
-ntlibc	sh_engine_group_redir_leak	runtime=windows	NA	memory leak is observable only under the native sanitizer profile
-ntlibc	sh_engine_group_redir_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_heredoc_queue_leak	runtime=wine	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_heredoc_queue_leak	runtime=windows	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_heredoc_queue_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile
