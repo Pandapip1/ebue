@@ -40,7 +40,15 @@ SERIAL_PREFIXES = ("fork", "waitpid", "exec", "spawn", "posix-signal")
 # So this entry is expected to be temporary in one direction or the other.
 # Do not add names here to make a red test green -- that converts a defect
 # into a slow suite, which is the one move that buys nothing.
-SLOW_TESTS = {"sh-engine": 600}
+# fork-cloexec-exec-win: 300 iterations (its N_ITERS) of fork() + execv().
+# On real Windows that is 300 RtlCloneUserProcess clones and 300 execs, so
+# 120 s allowed it 400 ms per cycle -- and it passed on the x86_64 leg of
+# the same run where it timed out on i386 and kernel32, which is what a
+# test sitting on its own budget looks like rather than one that hangs.
+# Unlike sh-engine's entry, this one has a mechanism behind it: the cost
+# is proportional to a constant in the test, and process creation on
+# native NT is the expensive thing being measured.
+SLOW_TESTS = {"sh-engine": 600, "fork-cloexec-exec-win": 600}
 
 
 def timeout_for(path: Path, default: int) -> int:
