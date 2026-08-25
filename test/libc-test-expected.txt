@@ -59,7 +59,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=64 xfail=24 unclassified=4 unbuildable=54
+# COUNTS pass=65 xfail=23 unclassified=4 unbuildable=54
 #
 argv                              pass
 basename                          pass
@@ -143,7 +143,7 @@ regex-ere-backref                 pass
 regex-escaped-high-byte           xfail:defect  REG_BADPAT appears nowhere in either ledger or any test/*.c; regcomp("\\\xfc") returns 0
 regex-negated-range               pass
 rewind-clear-error                pass
-rlimit-open-files                 xfail:documented  src/misc/resource.c header + include/sys/resource.h: lowering RLIMIT_NOFILE is refused with EINVAL by design rather than accepted and not honoured (FD_MAX is a compile-time array bound)
+rlimit-open-files                 pass
 scanf-bytes-consumed              pass
 scanf-match-literal-eof           pass
 scanf-nullbyte-char               pass
