@@ -675,9 +675,39 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $failed = $false
           $unverified = 0
           $ran = 0
+          # The failing binaries by name, not a boolean.  Two reasons,
+          # both learned from one investigation (CI run 32796247127).
+          #
+          # First, it is the single source of truth for "did this leg
+          # fail": the exit decision below is `$failedNames.Count -gt 0`,
+          # so there is no separate flag that could be set without a name
+          # recorded, or a name recorded without the flag set.  The
+          # previous shape had exactly that seam, and while reading the
+          # step to prove the seam was never crossed cost an hour, the
+          # seam not existing costs nothing.
+          #
+          # Second, the summary can then name what failed.  It used to say
+          # only "One or more test binaries failed", leaving the identity
+          # in a `FAIL` line some 200 lines earlier -- above where GitHub's
+          # log view drops you, and interleaved with the test binaries'
+          # own output.  Looking for the answer where the answer should be,
+          # not finding it, and inferring a mechanism from its absence is
+          # what actually happened.  A named summary ends that in seconds.
+          $failedNames = @()
+          # Every line this step writes about itself is prefixed
+          # "harness:", because the test binaries it runs emit lines in the
+          # same vocabulary it does -- delayall.exe and rpath.exe each
+          # print a bare "PASS", and any assertion failure prints
+          # "FAIL <file>:<line>: <expr>".  Without a prefix `grep '^PASS'`
+          # over this step's log overcounts by two and `grep '^FAIL'` by
+          # two, so the log cannot be read by machine and is ambiguous to a
+          # human skimming it.  "harness:" rather than a sigil like "::"
+          # on purpose: it survives being pasted into a message, it is
+          # obvious to a reader who has never seen this file, and "::"
+          # would read as GitHub workflow-command syntax.
+          function Say($m) { Write-Host "harness: $m" }
           # The artefact is rooted at obj/, so the test binaries are under
           # test-exes/test and obj/sh/sh.exe arrives as test-exes/sh/sh.exe
           # -- which is exactly the layout test/sh-main.c's find_sh() walks
@@ -688,9 +718,9 @@ jobs:
           # but says nothing about why. This says why.
           foreach ($p in @("test-exes/test", "test-exes/sh/sh.exe")) {
             if (-not (Test-Path $p)) {
-              Write-Host "FAILED: expected $p in the downloaded artefact; its layout has changed"
-              Write-Host "Downloaded tree:"
-              Get-ChildItem -Path test-exes -Recurse -Name | ForEach-Object { Write-Host "  $_" }
+              Say "FAILED: expected $p in the downloaded artefact; its layout has changed"
+              Say "Downloaded tree:"
+              Get-ChildItem -Path test-exes -Recurse -Name | ForEach-Object { Say "  $_" }
               exit 1
             }
           }
@@ -698,28 +728,32 @@ jobs:
           # Running it as one would leave it reading this job's stdin.
           Get-ChildItem -Path test-exes/test -Filter *.exe | Sort-Object Name | ForEach-Object {
             $ran += 1
-            Write-Host "Running $($_.Name)"
+            Say "Running $($_.Name)"
             & $_.FullName
             $rc = $LASTEXITCODE
             if ($rc -eq 0) {
-              Write-Host "PASS $($_.Name)"
+              Say "PASS $($_.Name)"
             } elseif ($rc -eq 77) {
               # Same third outcome tools/runtests.sh and tools/asan-build.sh
               # already recognise: the binary ran and nothing it could check
               # failed, but some assertion group could not be verified in this
               # environment (it printed SKIP lines saying which). Distinct from
               # a pass, and deliberately not a failure.
-              Write-Host "UNVERIFIED $($_.Name) (rc=77)"
+              Say "UNVERIFIED $($_.Name) (rc=77)"
               $unverified += 1
             } else {
-              Write-Host "FAIL $($_.Name) (rc=$rc)"
-              $failed = $true
+              Say "FAIL $($_.Name) (rc=$rc)"
+              # Assignment inside a ForEach-Object script block writes to
+              # the enclosing scope, not a child one -- which is why $ran
+              # above reaches the real count instead of resetting to 1
+              # every iteration.  The same is true here.
+              $failedNames += "$($_.Name) (rc=$rc)"
             }
           }
           # A floor, for the same reason tools/runtests.sh and
-          # tools/asan-build.sh have one: $failed can only become true
+          # tools/asan-build.sh have one: $failedNames can only grow
           # inside the loop body, so an empty test-exes/ directory runs
-          # the body zero times, leaves $failed false, and exits 0 --
+          # the body zero times, leaves it empty, and exits 0 --
           # this leg reporting green having executed nothing.  That is
           # not hypothetical for a download step: a rename of the
           # artifact, an upload that produced a differently-shaped
@@ -729,16 +763,28 @@ jobs:
           # download-and-run side, and it is the leg that caught the
           # METHOD_BUFFERED IOCTL_AFD_SELECT bug, which no other leg
           # could see.
-          Write-Host "$ran test binary/binaries ran"
+          Say "$ran test binary/binaries ran"
           if ($ran -eq 0) {
-            Write-Host "FAILED: no test binaries were found under test-exes/test/; this job verified nothing"
+            Say "FAILED: no test binaries were found under test-exes/test/; this job verified nothing"
             exit 1
           }
           if ($unverified -gt 0) {
-            Write-Host "$unverified test binary/binaries reported unverified (rc=77)"
+            Say "$unverified test binary/binaries reported unverified (rc=77)"
           }
-          if ($failed) {
-            Write-Host "One or more test binaries failed"
+          # @(...) so a single failure is still an array: PowerShell
+          # unrolls a one-element array in several contexts, and .Count on
+          # the bare string it would become is also 1, so this happens to
+          # be right either way -- written explicitly rather than relying
+          # on that coincidence.
+          $failedNames = @($failedNames)
+          if ($failedNames.Count -gt 0) {
+            Say "$($failedNames.Count) test binary/binaries failed:"
+            # Names only, no keyword.  "FAIL <name> (rc=)" is the loop's
+            # per-binary verdict and repeating it here would make
+            # `grep '^harness: FAIL '` count every failure twice, which is
+            # the same ambiguity the "harness:" prefix exists to remove --
+            # one level up, in the summary rather than in the vocabulary.
+            foreach ($f in $failedNames) { Say "  $f" }
             exit 1
           }
 
