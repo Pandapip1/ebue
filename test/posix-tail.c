@@ -996,48 +996,36 @@ static void test_posix_fallocate(void)
 	unlink("tail-falloc.tmp");
 }
 
-#if 0 /* BUG: posix_fallocate()'s [EFBIG] check is signed-integer
-       * overflow -- it is undefined behaviour, and it is the ONLY way
-       * that error can be produced.
-       *
-       * posix_fallocate.html ERRORS, *shall fail*:
-       *   "[EFBIG] The value of offset+len is greater than the maximum
-       *    file size."
-       *
-       * src/fcntl/fadvise.c computes
-       *     want = (long long)offset + (long long)len;
-       *     if (want < 0) return EFBIG;
-       * -- which relies on the sum having already wrapped.  Signed
-       * overflow is undefined in C, so a compiler is entitled to delete
-       * the `want < 0` test outright (it "cannot" be true), and any
-       * pair of arguments whose sum fits in a long long never sets it.
-       * There is therefore no argument pair that reaches [EFBIG]
-       * defined-ly.
-       *
-       * Caught by UndefinedBehaviorSanitizer under `make asan`, from
-       * this file's own first draft, which asserted [EFBIG] live:
-       *   src/fcntl/fadvise.c:57:27: runtime error: signed integer
-       *   overflow: 4611686018427387904 + 4611686018427387904 cannot be
-       *   represented in type 'long long'
-       * The live assertion was removed rather than kept, because a test
-       * that provokes undefined behaviour in the library is not a
-       * conformance test; the assertion belongs here, fenced, until the
-       * check is written the defined way.
-       *
-       * Fix shape: compare before adding, not after --
-       *     if (offset > MAXFILESIZE - len) return EFBIG;
-       * with MAXFILESIZE the platform's real limit rather than
-       * LLONG_MAX, since POSIX's clause is about "the maximum file
-       * size", not about what fits in an off_t. */
 static void test_posix_fallocate_efbig(void)
 {
 	int fd = open("tail-falloc-efbig.tmp", O_RDWR | O_CREAT | O_TRUNC, 0644);
 	CHECK(fd >= 0);
 	if (fd < 0) return;
-	/* Well past any file size NTFS can represent (its limit is under
-	 * 2^48 bytes), and with no overflow of off_t in the sum. */
+	/* Past any file size NTFS can represent, with no overflow of off_t in
+	 * the sum.
+	 *
+	 * The bound that matters is 8 PB = 2^53, NOT the "under 2^48" this
+	 * comment used to claim: per Microsoft's NTFS overview the largest
+	 * volume-and-file is cluster-size dependent and reaches 8 PB on a
+	 * 2048 KB-cluster volume (256 TB = 2^48 is the 64 KB row, not the
+	 * ceiling).  The values below survive that correction with room to
+	 * spare -- 2^61 exceeds even 8 PB -- but the reasoning did not, and a
+	 * comment giving a wrong reason for a right test is what gets
+	 * "corrected" in the wrong direction later.
+	 *
+	 * On the ordinary 4 KB-cluster volume this runs on, the real limit is
+	 * 4096 * (2^32-1) = 16 TiB, so these are far past it. */
 	CHECK(posix_fallocate(fd, (off_t)1 << 60, (off_t)1 << 60) == EFBIG);
 	CHECK(posix_fallocate(fd, 0, (off_t)1 << 61) == EFBIG);
+	/* The representability guard itself, which the two assertions above
+	 * do NOT reach: their sums fit in a long long and are merely larger
+	 * than the volume's limit.  These two cannot be represented at all,
+	 * so they pin `offset > LLONG_MAX - len` specifically -- and this is
+	 * exactly the case the old `want = offset + len; if (want < 0)` form
+	 * could only ever reach by signed-overflow undefined behaviour. */
+	CHECK(posix_fallocate(fd, (off_t)LLONG_MAX, 1) == EFBIG);
+	CHECK(posix_fallocate(fd, 1, (off_t)LLONG_MAX) == EFBIG);
+	CHECK(posix_fallocate(fd, (off_t)LLONG_MAX, (off_t)LLONG_MAX) == EFBIG);
 	/* and a request that is merely large but representable is not
 	 * turned into EFBIG by the same check */
 	{
@@ -1047,7 +1035,6 @@ static void test_posix_fallocate_efbig(void)
 	close(fd);
 	unlink("tail-falloc-efbig.tmp");
 }
-#endif
 
 static void test_posix_fallocate_enodev(void)
 {
@@ -1592,9 +1579,7 @@ int main(void)
 	test_posix_fadvise_espipe();
 #endif
 	test_posix_fallocate();
-#if 0 /* BUG: see the fence above test_posix_fallocate_efbig */
 	test_posix_fallocate_efbig();
-#endif
 	test_posix_fallocate_enodev();
 	test_posix_fallocate_ebadf_readonly();
 

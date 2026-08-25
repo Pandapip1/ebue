@@ -24,6 +24,7 @@
  */
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include "libc.h"
 
 int posix_fadvise(int fd, off_t offset, off_t len, int advice)
@@ -39,6 +40,68 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
 	default:
 		return EINVAL;
 	}
+}
+
+/* The maximum file size of the volume a handle lives on, for
+ * posix_fallocate()'s [EFBIG].
+ *
+ * posix_fallocate.html's clause is "[EFBIG] The value of offset+len is
+ * greater than the maximum file size" -- a property of the VOLUME, not
+ * of the operating system, which is why this is derived per volume
+ * rather than being one constant for all of them.
+ *
+ * NT cannot be asked directly, and cannot be left to answer for itself.
+ * Measured on this tree: ftruncate() to 32 TiB, 256 TiB, 8 PiB, 2^61
+ * and 2^62 all fail identically with STATUS mapping to ENOMEM, and the
+ * threshold tracks the volume's FREE SPACE (1 TiB succeeded), not any
+ * file-size limit.  So NT reports "no room", never "too big for this
+ * file system", and the bound has to be computed here.
+ *
+ * The rule is Microsoft's own.  BEWARE: two current Learn pages
+ * disagree, and the wrong one is the more quotable.
+ *
+ *   - "File System Functionality Comparison", Limits table, gives
+ *     "Maximum file size | NTFS | 2^64-1 bytes".  That is the on-disk
+ *     field width, not what the implementation supports, and it is what
+ *     someone will find if they go looking to "correct" this function.
+ *   - "NTFS overview", Support for large volumes, gives the real rule:
+ *     "The actual maximum volume and file size depends on the cluster
+ *     size and the total number of clusters supported by NTFS (up to
+ *     2^32-1 clusters)", with a table headed "Largest volume and file":
+ *     4 KB cluster -> 16 TB, 64 KB -> 256 TB, 2048 KB (max) -> 8 PB.
+ *
+ * The second is used, because cluster_size * (2^32 - 1) reproduces that
+ * table exactly: 4096 * 4294967295 = 17592186040320, i.e. the 16 TB row,
+ * to the byte.  A derivation that independently reproduces the
+ * authority's own published figure is sourced rather than guessed.
+ *
+ * ANY query failure yields LLONG_MAX, i.e. no limit of ours, and so does
+ * a volume that reports a zero cluster size.  That is deliberate and it
+ * is the whole fallback policy: an unrecognised volume must not be
+ * treated as having a limit of zero.  It also means [EFBIG] is
+ * BEST-EFFORT OFF NTFS -- FAT32's real 4 GiB ceiling is enforced by NT,
+ * not by us, and the cluster formula does not describe it.  The
+ * asymmetry justifies that: guessing too permissive is corrected by the
+ * kernel, which refuses the operation itself; guessing too restrictive
+ * is corrected by nobody, because this function would refuse before the
+ * kernel is ever asked, on a request that would have worked.
+ *
+ * Under Wine the numbers describe the HOST file system rather than an
+ * NTFS volume (ext4 reports a 4096 cluster, which happens to give the
+ * same 16 TiB).  That is a divergence, but a harmless one: it can only
+ * move the bound, and the fallback is permissive either way. */
+static long long volume_max_file_size(HANDLE h)
+{
+	IO_STATUS_BLOCK io;
+	FILE_FS_SIZE_INFORMATION fsi;
+	unsigned long long cluster, lim;
+
+	if (!NT_SUCCESS(NtQueryVolumeInformationFile(h, &io, &fsi, sizeof fsi, FileFsSizeInformation)))
+		return LLONG_MAX;
+	cluster = (unsigned long long)fsi.SectorsPerAllocationUnit * fsi.BytesPerSector;
+	if (!cluster) return LLONG_MAX;
+	lim = cluster * 4294967295ULL;
+	return lim > (unsigned long long)LLONG_MAX ? LLONG_MAX : (long long)lim;
 }
 
 int posix_fallocate(int fd, off_t offset, off_t len)
@@ -92,8 +155,30 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	 * construction not a regular file.  A pipe never reaches here because
 	 * [ESPIPE] above is more specific and POSIX gives it its own clause. */
 	if (f->type != __FD_FILE) return ENODEV;
+	/* posix_fallocate.html ERRORS, *shall fail*: "[EFBIG] The value of
+	 * offset+len is greater than the maximum file size."
+	 *
+	 * COMPARE BEFORE ADDING.  DO NOT "SIMPLIFY" THIS BACK TO
+	 * `want = offset + len; if (want < 0) return EFBIG;`.  That is what
+	 * this used to say, and it relies on the sum having ALREADY wrapped
+	 * -- signed integer overflow, which is undefined in C, so a compiler
+	 * is entitled to delete the test as unreachable, and no argument pair
+	 * whose sum fits in a long long ever set it.  [EFBIG] was therefore
+	 * unreachable by any defined execution, and UndefinedBehaviorSanitizer
+	 * flagged the addition under `make asan`.  Both operands are known
+	 * non-negative here (the [EINVAL] arm above rejects negatives), so
+	 * this form cannot overflow and needs no wrap to work.
+	 *
+	 * The volume's real limit is only consulted for a request already too
+	 * large to be plausible.  4 GiB is chosen because it is obviously
+	 * below any limit a real volume reports -- it is FAT32's entire
+	 * ceiling -- not because it is tuned to anything; the point is that
+	 * the ordinary path issues no volume query at all and so cannot
+	 * acquire a new failure mode from one. */
+	if (offset > LLONG_MAX - len) return EFBIG;
 	want = (long long)offset + (long long)len;
-	if (want < 0) return EFBIG;
+	if (want > 4LL * 1024 * 1024 * 1024 && want > volume_max_file_size(f->h))
+		return EFBIG;
 
 	st = NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation);
 	if (!NT_SUCCESS(st)) return __errno_from_status(st);
