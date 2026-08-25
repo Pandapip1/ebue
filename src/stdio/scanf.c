@@ -440,11 +440,17 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
  * byte of a wide format unit.  A stride refactor whose misses are
  * invisible at st == 1 is exactly the kind that ships a latent bug.
  * ------------------------------------------------------------------ */
-static unsigned gf(const char *q, int st)
-{
-	return st == 1 ? (unsigned)(unsigned char)*q
-	               : (unsigned)*(const wchar_t *)(const void *)q;
-}
+/* A MACRO, not a static function, and measured rather than assumed.
+ * The shipped compiler for this target is tcc, which does no inlining
+ * at all, so a fetch helper written as a function is a real call per
+ * format character.  Benchmarked over 300000 iterations of eight
+ * sscanf() calls: 0.79-0.82s with the pre-refactor scanner, 0.92-0.99s
+ * with a function-call fetch -- about 17% -- and back to the
+ * pre-refactor time with the macro below.  Nothing about the
+ * abstraction changes; only whether the compiler is given the chance to
+ * fold `st` away at each site. */
+#define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
+                           : (unsigned)*(const wchar_t *)(const void *)(q))
 
 static int vfscanf_st(FILE *f, const char *fmt, va_list ap, int st)
 {

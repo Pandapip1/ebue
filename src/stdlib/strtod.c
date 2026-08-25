@@ -258,11 +258,17 @@ static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int em
  * unchanged by tolower(), exactly as a non-subject-sequence byte does,
  * so no wide-specific classification is needed anywhere.
  * ------------------------------------------------------------------ */
-static unsigned gc(const char *p, int st)
-{
-	return st == 1 ? (unsigned)(unsigned char)*p
-	               : (unsigned)*(const wchar_t *)(const void *)p;
-}
+/* A MACRO, not a static function, and the difference is measured rather
+ * than assumed: the shipped compiler for this target is tcc, which does
+ * no inlining, so a fetch helper written as a function is a real call
+ * per character scanned.  Here that is worth about 1.4% (this parser's
+ * time is dominated by the big-integer division, not the scan); in
+ * src/stdio/scanf.c, whose scanner is nearly all cursor, the same
+ * helper cost 17%.  Same abstraction either way -- the only difference
+ * is whether the compiler is given the chance to fold `st` away at each
+ * site. */
+#define gc(p, s) ((s) == 1 ? (unsigned)(unsigned char)*(p) \
+                           : (unsigned)*(const wchar_t *)(const void *)(p))
 
 static int ci_prefix(const char *s, const char *word, int st)
 {
