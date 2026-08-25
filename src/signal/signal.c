@@ -118,8 +118,16 @@ static int default_action(int sig)
 static stack_t alt_stack;   /* ss_sp == 0 means none is installed */
 static int alt_active;      /* nonzero while a handler runs on it */
 
-/* Defined in src/signal/$ARCH/altstack.S. */
+/* Defined in src/signal/$ARCH/altstack.S -- PE builds only.
+ *
+ * tools/asan-build.sh and tools/fuzz.sh compile src/*.c natively with
+ * clang and link no .S at all, so the symbol simply does not exist there.
+ * Nor could those files be reused if it did: the x86_64 one takes its
+ * arguments in rcx/rdx/r8 per the Windows x64 ABI, which is not where a
+ * SysV ELF caller puts them. */
+#ifdef _WIN32
 void __sig_call_on_altstack(void *sp, void (*fn)(void *), void *arg);
+#endif
 
 /* One shape for both handler signatures, so the stack switch below has a
  * single void(*)(void *) to call whichever kind of handler is installed. */
@@ -148,6 +156,7 @@ static void sig_deliver(void *p)
  * returns", and SS_ONSTACK is what a handler reads to detect this. */
 static void sig_dispatch(struct sig_delivery *d, int flags)
 {
+#ifdef _WIN32
 	if ((flags & SA_ONSTACK) && alt_stack.ss_sp && !alt_active) {
 		void *top = (char *)alt_stack.ss_sp + alt_stack.ss_size;
 		alt_active = 1;
@@ -156,6 +165,28 @@ static void sig_dispatch(struct sig_delivery *d, int flags)
 	} else {
 		sig_deliver(d);
 	}
+#else
+	/* Native (AddressSanitizer / libFuzzer) build: deliver on the
+	 * current stack.
+	 *
+	 * Not merely because the asm above is absent. A raw stack switch is
+	 * actively wrong under ASan, which tracks frames on the stack it
+	 * knows about and offers __sanitizer_start_switch_fiber() precisely
+	 * so a program that changes stacks can tell it; switching without
+	 * that produces false reports about the stack it lost track of. The
+	 * subject of this build is the memory safety of OS-independent code,
+	 * not signal delivery.
+	 *
+	 * alt_active is deliberately NOT set here. Setting it would make
+	 * sigaltstack() report SS_ONSTACK -- "a handler is running on the
+	 * alternate stack" -- during a delivery that is doing no such thing,
+	 * which is the exact lie this whole change removed. A native build
+	 * reports honestly that it is not on the alternate stack; SA_ONSTACK
+	 * is covered by `make check` under Wine and on real Windows, where
+	 * the switch is real. */
+	(void)flags;
+	sig_deliver(d);
+#endif
 }
 
 int __raise_internal(int sig)
