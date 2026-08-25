@@ -36,6 +36,24 @@ class CaseResult:
     detail: str = ""
 
 
+def progress(message: str) -> None:
+    """Live progress, on stderr, deliberately not on stdout.
+
+    stdout carries the final report in `discovered` order, so two runs of
+    the same tree are diffable and a redirect still yields a stable
+    artefact. Completion order is not stable -- the build phase is a
+    thread pool -- so streaming it onto stdout would destroy that.
+
+    This exists because a batched harness that prints only at the end has
+    nothing to say when it is killed. CI's posix-optsrun job is cancelled
+    at its 30-minute wall on every push while the real work takes ~40
+    minutes, and it has therefore never once reported which cases it got
+    through or what was already failing. A run that dies half way should
+    still leave evidence of the half it did.
+    """
+    print(message, file=sys.stderr, flush=True)
+
+
 def check_pin() -> None:
     """Refuse to measure a suite that is not the one this repository pins.
 
@@ -282,19 +300,42 @@ def main() -> int:
                 pool.submit(build_one, cfg, case, disposition, work): case
                 for case, disposition in selected
             }
+            done = 0
             for future in as_completed(futures):
                 result = future.result()
                 results[result.case] = result
+                done += 1
+                # A build-phase verdict is final for two populations, and
+                # only those two: a case that must run but did not compile,
+                # and an UNIMPL case that compiled when it must not. Every
+                # other built case is merely not decided yet -- its verdict
+                # needs the run -- so reporting it here would be wrong.
+                if not result.built and result.disposition != "UNIMPL":
+                    progress(f"posix-opts: FAIL {result.case} "
+                             f"({result.disposition} did not build)")
+                elif result.built and result.disposition == "UNIMPL":
+                    progress(f"posix-opts: FAIL {result.case} "
+                             f"(UNIMPL built, and must not)")
+                if done % 100 == 0 or done == len(selected):
+                    progress(f"posix-opts: built {done}/{len(selected)}")
         runnable = [
             result for result in results.values()
             if result.built and result.disposition != "UNIMPL"
         ]
         # LTP cases share enough process/timing state that execution remains
         # serial; compilation is the expensive parallel-safe phase.
-        for result in sorted(runnable, key=lambda item: item.case):
-            results[result.case] = run_one(
-                result, runner, work, args.attempts, args.timeout
-            )
+        progress(f"posix-opts: running {len(runnable)} case(s), "
+                 f"{args.attempts} attempt(s) each, serially")
+        for done, result in enumerate(
+            sorted(runnable, key=lambda item: item.case), start=1
+        ):
+            result = run_one(result, runner, work, args.attempts, args.timeout)
+            results[result.case] = result
+            if not accepted(args.mode, result):
+                progress(f"posix-opts: FAIL {result.case} "
+                         f"({result.disposition} observed {result.observation})")
+            elif done % 25 == 0 or done == len(runnable):
+                progress(f"posix-opts: ran {done}/{len(runnable)}")
 
     ordered = [results[case] for case in discovered]
     failures = [result for result in ordered if not accepted(args.mode, result)]

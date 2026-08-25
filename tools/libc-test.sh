@@ -396,10 +396,35 @@ build_one() {
 	fi
 }
 
-echo "libc-test: building $(echo "$corpus" | wc -w) tests with $CC ..."
+# Progress goes to stderr, never stdout.  stdout carries the adjudicated
+# report in corpus order so two runs of the same tree are diffable and a
+# redirect still yields a stable artefact; this channel is for a human (or
+# a CI log) watching a run that has not finished yet.  A harness that
+# speaks only at the end has nothing to say when it is killed part way,
+# which is precisely the state the Open POSIX job has been in.
+n_corpus=$(echo "$corpus" | wc -w)
+echo "libc-test: building $n_corpus tests with $CC ..."
+echo "libc-test: building $n_corpus tests with $CC ..." >&2
 build_start=$(date +%s)
+built_n=0
 # shellcheck disable=SC2086
-for f in $corpus; do build_one "$f"; done
+for f in $corpus; do
+	build_one "$f"
+	built_n=$((built_n + 1))
+	bn=$(basename "$f" .c)
+	# UNBUILDABLE is the expected state for a large part of this corpus,
+	# so it is not itself news.  It is news when the ledger expected the
+	# test to run: that verdict is already final here and does not need
+	# the run phase to confirm it.
+	if [ "$(cat "$W/out/$bn.state" 2>/dev/null)" = UNBUILDABLE ]; then
+		case "$(ledger_status "$bn")" in
+		PASS|FLAKY) echo "libc-test: FAIL $bn (expected to run, did not build)" >&2 ;;
+		esac
+	fi
+	if [ $((built_n % 25)) -eq 0 ] || [ "$built_n" -eq "$n_corpus" ]; then
+		echo "libc-test: built $built_n/$n_corpus" >&2
+	fi
+done
 build_end=$(date +%s)
 
 # ------------------------------------------------------------------- run
@@ -419,8 +444,14 @@ d=$(mktemp -d "$W/work.XXXXXX") || { echo 1 > "$W/out/$n.rc"; exit 0; }
 # should be far above anything a working test needs.
 ( cd "$d" && WINEDEBUG=-all WINEDLLOVERRIDES=winedbg.exe=d \
     timeout -k 5 120 "$WINE" "$1" ) > "$W/out/$n.log" 2>&1 </dev/null
-echo $? > "$W/out/$n.rc"
+rc=$?
+echo $rc > "$W/out/$n.rc"
 rm -rf "$d"
+# Progress from inside an xargs -P worker: unordered by construction, one
+# short line per test so the writes stay atomic and do not interleave
+# mid-line.  Adjudication still happens once, later, in corpus order --
+# this only says which tests have finished and how they exited.
+echo "libc-test: ran $n (rc=$rc)" >&2
 EOF
 chmod +x "$runner"
 export W WINE
@@ -431,6 +462,7 @@ for f in $corpus; do
 	[ -x "obj/libc-test/$n.exe" ] && exes="$exes $srcdir/obj/libc-test/$n.exe"
 done
 run_start=$(date +%s)
+echo "libc-test: running $(echo "$exes" | wc -w) built test(s) with $LIBC_TEST_JOBS worker(s) ..." >&2
 if [ -n "$exes" ]; then
 	# shellcheck disable=SC2086
 	printf '%s\n' $exes | xargs -P "$LIBC_TEST_JOBS" -I{} sh "$runner" {}
