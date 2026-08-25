@@ -1721,55 +1721,33 @@ static void test_fchmodat_enametoolong(void)
 
 /* ERRORS, may fail: "[EINTR] A signal was caught during execution of the
  * function", "[EINVAL] The value of the mode argument is invalid",
- * "[EINVAL] The value of the flag argument is invalid." */
-#if NTLIBC_TEST(BUG, posix_unreferenced_fchmodat_einval) /* BUG (compiles and links; formerly UNIMPL):: all three are "may fail", so none of them is a spec
-       * violation as things stand -- but the flag one is worth naming.
-       * src/stat/chmod.c tests `flags & AT_SYMLINK_NOFOLLOW` and ignores
-       * every other bit, so fchmodat(fd, path, mode, 0x4000) silently
-       * succeeds where glibc reports EINVAL.  Implementable in one line;
-       * fenced rather than asserted because POSIX permits the current
-       * behaviour. */
+ * "[EINVAL] The value of the flag argument is invalid."
+ *
+ * The flag one is now taken up and unfenced.  All three are "may fail",
+ * so ignoring the bits was never a spec violation -- but of the two
+ * legal answers, silently succeeding on a flag the caller believes it
+ * asked for is the worse one, and one line in src/stat/chmod.c buys the
+ * better one.  Measured against glibc rather than derived:
+ * fchmodat(AT_FDCWD, path, 0644, 0x4000) is -1/EINVAL there, while
+ * AT_SYMLINK_NOFOLLOW (0x100) and 0 both succeed -- so the check is on
+ * unknown bits, not a whitelist that would have caught
+ * AT_SYMLINK_NOFOLLOW too.
+ *
+ * The other two stay unasserted: [EINTR] needs an asynchronous signal
+ * this platform cannot deliver to a running syscall, and an invalid
+ * mode has no meaning here -- src/stat/chmod.c reads exactly one
+ * bit-group out of mode (0222) and NTFS has no other permission for a
+ * mode to be wrong about. */
 static void test_fchmodat_einval(void)
 {
 	errno = 0;
 	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, 0x4000) == -1);
 	CHECK(errno == EINVAL);
 }
-#endif
 
 /* ================================================================= */
 /* sigwait.html                                                       */
 /* ================================================================= */
-
-/* sigwait.html is recorded in test/POSIX-GAP-ACCOUNTING.md under
- * "Permanent degenerate stubs": src/signal/signal.c implements it as
- *
- *     int sigwait(const sigset_t *s, int *sig)
- *     { (void)s; (void)sig; errno = EINVAL; return EINVAL; }
- *
- * This pins that down as the observed behaviour, so a change to it is
- * visible, and states what the specification actually requires in the
- * fenced block below.  Note that returning the error number AND setting
- * errno is itself outside the contract -- RETURN VALUE: "Upon successful
- * completion, sigwait() shall store the signal number of the received
- * signal at the location referenced by sig and return zero.  Otherwise,
- * an error number shall be returned to indicate the error" -- sigwait()
- * reports through its return value, not through errno. */
-static void test_sigwait_stub(void)
-{
-	sigset_t set;
-	int sig = -1;
-
-	CHECK(sigemptyset(&set) == 0);
-	CHECK(sigaddset(&set, SIGUSR1) == 0);
-	/* Degenerate stub: fails for every argument, including a set that
-	 * is perfectly valid, and never stores a signal number. */
-	CHECK(sigwait(&set, &sig) == EINVAL);
-	CHECK(sig == -1);
-	/* and again with the set it would be entitled to reject */
-	CHECK(sigemptyset(&set) == 0);
-	CHECK(sigwait(&set, &sig) == EINVAL);
-}
 
 /* sigwait.html DESCRIPTION: "The sigwait() function shall select a
  * pending signal from set, atomically clear it from the system's set of
@@ -1779,17 +1757,17 @@ static void test_sigwait_stub(void)
  * implementation-defined whether upon successful return there are any
  * remaining pending signals for that signal number.  ... If no signal in
  * set is pending at the time of the call, the thread shall be suspended
- * until one or more becomes pending."  ERRORS, shall fail: "[EINVAL] The
- * set argument contains an invalid or unsupported signal number." */
-#if NTLIBC_TEST(BUG, posix_unreferenced_sigwait_spec) /* BUG (compiles and links; formerly UNIMPL):: src/signal/signal.c's sigwait() is a one-line stub that
-       * returns EINVAL unconditionally.  Nothing about selecting a
-       * pending signal, clearing it, or suspending the thread is
-       * implemented, and the mechanism to implement it does exist here
-       * -- sigpending() already reports the pending set and
-       * sigprocmask() already delivers on unblock (both in the same
-       * file), so a sigwait() that consults `pending` and clears the
-       * chosen bit is writable.  This is a genuine gap, not a platform
-       * limitation. */
+ * until one or more becomes pending."  ERRORS, MAY fail: "[EINVAL] The
+ * set argument contains an invalid or unsupported signal number" -- read
+ * off the page, whose ERRORS section opens "The sigwait() function may
+ * fail if".  The fence this test used to sit behind cited it as "shall
+ * fail", which is wrong and would have made the assertions below look
+ * like a deviation instead of a choice between two conforming answers.
+ *
+ * Unfenced here because src/signal/signal.c no longer stubs sigwait():
+ * it selects the lowest-numbered pending signal in set, clears it, and
+ * suspends otherwise.  The BUG registration this replaces described the
+ * one-line stub that used to be there. */
 static void test_sigwait_spec(void)
 {
 	sigset_t set, old, bad;
@@ -1818,7 +1796,6 @@ static void test_sigwait_spec(void)
 	CHECK(sigwait(&bad, &sig) == EINVAL);
 	CHECK(errno == 0);
 }
-#endif
 
 /* ================================================================= */
 /* psignal.html                                                       */
@@ -2160,7 +2137,7 @@ int main(void)
 
 	test_roundl();
 	test_strxfrm_l();
-	test_sigwait_stub();
+	test_sigwait_spec();
 	test_psignal(name);
 
 	test_renameat_success();
@@ -2174,6 +2151,7 @@ int main(void)
 	test_fchmodat_empty_at_dirfd();
 	test_fchmodat_dot_component();
 	test_fchmodat_enametoolong();
+	test_fchmodat_einval();
 
 	test_scanf_basics(name);
 	test_scanf_returns(name);

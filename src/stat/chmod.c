@@ -41,6 +41,16 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 	NTSTATUS st;
 	ULONG options;
 	int r;
+	/* fchmodat.html ERRORS: "[EINVAL] The value of the flag argument is
+	 * invalid."  AT_SYMLINK_NOFOLLOW is the only flag this page defines,
+	 * so every other bit is invalid.  It is a *may fail* error, so
+	 * ignoring the bits was conforming -- but silently succeeding on a
+	 * flag the caller believes it asked for is the worse of the two legal
+	 * answers, and glibc reports EINVAL here (measured: fchmodat(AT_FDCWD,
+	 * path, 0644, 0x4000) -> -1/EINVAL, while AT_SYMLINK_NOFOLLOW and 0
+	 * both succeed).  Checked before __ntpath_at() so a bad flag costs no
+	 * path conversion and cannot be masked by a path error. */
+	if (flags & ~AT_SYMLINK_NOFOLLOW) { errno = EINVAL; return -1; }
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
 	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
