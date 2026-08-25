@@ -662,7 +662,7 @@ entries below.
 | sigsuspend | DESCRIPTION: replace the mask, actually suspend until a signal is delivered | N/A — documented permanent stub (`{ errno = EINTR; return -1; }`); no per-thread wait primitive exists to build a real one on | -- |
 | sigwait / sigtimedwait / sigqueue / sigaltstack | require per-process queued-signal-with-payload or alt-stack facilities this platform has none of | N/A — documented stubs (see include/signal.h) | -- |
 | sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()`; [EINVAL] for an illegal signal number | covered — [EINVAL] was a BUG (both wrappers discarded `sigaddset()`'s failure, so the bad bit was never set, `sigprocmask()` got an empty mask and returned 0); **fixed**: both now return -1 as soon as `sigaddset()` fails, leaving the process mask untouched | test/posix-signal.c `test_sighold_sigrelse` |
-| sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP | covered; **BUG (fenced)** for the SIG_HOLD return and the "shall remove sig from the mask" clause — `<signal.h>` does not define SIG_HOLD at all and `sigset()` is a bare alias of `signal()` | test/posix-signal.c `test_sigset` |
+| sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP; the SIG_HOLD return, the "shall remove sig from the calling process' signal mask" clause, and `func == SIG_HOLD` (block sig, leave the disposition alone) | covered — the mask half was a **BUG, FIXED**: `<signal.h>` now defines `SIG_HOLD` as `((void (*)(int)) 2)`, continuing its own SIG_DFL 0 / SIG_IGN 1 sequence, and `src/signal/signal.c`'s `sigset()` is a real implementation rather than a bare alias of `signal()` — it reads the mask first, installs, then unblocks sig, and returns SIG_HOLD when sig had been blocked | test/posix-signal.c `test_sigset` |
 | sigpause (XSI, obsolescent) | returns -1 with EINTR | covered | test/posix-signal.c `test_sigpause` |
 | sigpause | DESCRIPTION: suspend until a signal is received | N/A — same reason as `sigsuspend()` above: no asynchronous delivery exists, so a call that genuinely suspended could only hang | -- |
 | siginterrupt (XSI, obsolescent) | returns 0 for a valid signal, both flag values | covered; **BUG (fenced)** for [EINVAL] — `sig` is discarded without validation | test/posix-signal.c `test_siginterrupt` |
@@ -701,11 +701,10 @@ no-ops rather than silently dropped. `src/process/wait.c` now validates
 
 ### Bugs found (never-asserted sweep, signal.h group)
 
-Three, originally all fenced in `test/posix-signal.c`, all found by the
-first calls anything in this tree has ever made to these five XSI names.
-All three were probed on this tree, not inferred from source. The first
-has since been fixed and its assertions un-fenced unmodified; two remain
-fenced.
+Three, all found by the first calls anything in this tree has ever made
+to these five XSI names, and all three probed on this tree rather than
+inferred from source.  The first two are **fixed** and their assertions
+now run un-fenced; the third is still fenced in `test/posix-signal.c`.
 
 1. **`sighold()`/`sigrelse()` reported success for an illegal signal
    number.** FIXED; kept here in past tense as the record.
@@ -726,16 +725,42 @@ fenced.
    works afterwards, so the [EINVAL] arm cannot be satisfied by refusing
    everything.
 
-2. **`sigset()` cannot report SIG_HOLD, and `<signal.h>` does not define
-   it.** `sigset.html` RETURN VALUE: "shall return SIG_HOLD if the
-   signal had been blocked and the signal's previous disposition if it
-   had not been blocked", and the call "shall remove sig from the calling
-   process' signal mask". `include/signal.h:260` declares `sigset()` but
-   never defines `SIG_HOLD`, which `basedefs/signal.h.html` requires
-   alongside it, so no conforming caller can even spell the comparison;
-   and `src/signal/signal.c:311` is `{ return signal(sig, h); }`, which
-   neither consults nor clears the mask. Probed: with SIGUSR1 held,
-   `sigset()` returns SIG_DFL and SIGUSR1 stays blocked.
+2. **`sigset()` could not report SIG_HOLD, and `<signal.h>` did not
+   define it — FIXED.** `sigset.html` RETURN VALUE: "shall return
+   SIG_HOLD if the signal had been blocked and the signal's previous
+   disposition if it had not been blocked", and the call "shall remove
+   sig from the calling process' signal mask".
+
+   Mechanism of the defect: two halves of one omission. `include/signal.h`
+   declared `sigset()` but never defined `SIG_HOLD`, which
+   `basedefs/signal.h.html` requires alongside it, so the constant the
+   clause is written in terms of did not exist and no conforming caller
+   could even spell the comparison; and `src/signal/signal.c`'s body was
+   `{ return signal(sig, h); }`, which neither consulted nor cleared the
+   mask. Probed: with SIGUSR1 held, `sigset()` returned SIG_DFL and
+   SIGUSR1 stayed blocked — indistinguishable, to the caller, from the
+   signal never having been held.
+
+   The fix supplies both halves, because either alone is useless. The
+   header defines `SIG_HOLD` as `((void (*)(int)) 2)`, continuing the
+   `SIG_DFL` 0 / `SIG_IGN` 1 sequence it already has (the same value musl
+   and glibc use); all the standard asks is that it be distinguishable
+   from those two, from `SIG_ERR`, and from any address a caller could
+   pass. `sigset()` now records whether sig was blocked *before* it
+   installs the new disposition, installs through `signal()` (so the
+   [EINVAL] cases keep exactly the answers they had), unblocks sig with
+   `sigprocmask(SIG_UNBLOCK)`, and returns `SIG_HOLD` in place of the
+   previous disposition when sig had been blocked. The unblock is done
+   after the install, not before: `sigprocmask()` delivers whatever the
+   unblock made deliverable, and a signal that arrived while sig was held
+   belongs to the handler being installed now.
+
+   Defining `SIG_HOLD` also makes it a legal *argument*, which the bare
+   alias would have jumped to as a function address, so the same change
+   implements `func == SIG_HOLD`: "sig shall be added to the calling
+   process' signal mask and its disposition shall remain unchanged",
+   with the same return rule. `test_sigset` covers both directions and
+   pins the disposition across each.
 
 3. **`siginterrupt()` accepts any signal number.** `siginterrupt.html`
    ERRORS, shall-fail: "[EINVAL] The sig argument is not a valid signal

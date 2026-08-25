@@ -1162,32 +1162,41 @@ static void test_sigset(void)
 	errno = 0;
 	CHECK(sigset(SIGSTOP, hold_handler) == SIG_ERR && errno == EINVAL);
 
-#if 0	/* BUG: sigset() cannot report SIG_HOLD, and <signal.h> does not
-	 * even define it.  sigset.html RETURN VALUE: "Upon successful
-	 * completion, sigset() shall return SIG_HOLD if the signal had been
-	 * blocked and the signal's previous disposition if it had not been
-	 * blocked."  It also says the call "shall remove sig from the
-	 * calling process' signal mask" -- the SIG_HOLD return is how a
-	 * caller learns that just happened.
-	 *
-	 * Two linked defects, one mechanism.  include/signal.h declares
-	 * sigset() (line 260) but never defines SIG_HOLD, which
-	 * basedefs/signal.h.html requires alongside it -- so the constant
-	 * this clause is written in terms of does not exist, and no
-	 * conforming caller can even spell the comparison.  And
-	 * src/signal/signal.c's body is
-	 *     void (*sigset(int sig, void (*h)(int)))(int)
-	 *     { return signal(sig, h); }
-	 * which neither consults the mask nor unblocks sig, so it returns
-	 * the previous disposition in the blocked case too -- indis-
-	 * tinguishable, to the caller, from the signal never having been
-	 * held.  Re-enable once <signal.h> defines SIG_HOLD and sigset()
-	 * unblocks sig and returns SIG_HOLD when it was blocked. */
+	/* RETURN VALUE: "Upon successful completion, sigset() shall return
+	 * SIG_HOLD if the signal had been blocked and the signal's previous
+	 * disposition if it had not been blocked."  The two halves have to
+	 * be checked together: the SIG_HOLD return is how a caller learns
+	 * that the call also "remove[d] sig from the calling process' signal
+	 * mask", so a run that only looked at the return value could not
+	 * tell that answer apart from a stale one. */
 	CHECK(sighold(SIGUSR1) == 0);
 	CHECK(sigset(SIGUSR1, hold_handler) == SIG_HOLD);
 	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
 	CHECK(sigismember(&cur, SIGUSR1) == 0);	/* "shall remove sig from ... mask" */
-#endif
+	/* and the disposition the SIG_HOLD return replaced the name of was
+	 * still installed -- SIG_HOLD is a report about the mask, not a
+	 * licence to drop the handler on the floor */
+	CHECK(signal(SIGUSR1, SIG_DFL) == hold_handler);
+
+	/* DESCRIPTION: "If func is SIG_HOLD, sig shall be added to the
+	 * calling process' signal mask and its disposition shall remain
+	 * unchanged."  The same return rule applies, so the first call --
+	 * on an unblocked signal -- reports the disposition it left alone,
+	 * and the second, now that sig is held, reports SIG_HOLD. */
+	CHECK(sigset(SIGUSR1, hold_handler) == SIG_DFL);
+	CHECK(sigset(SIGUSR1, SIG_HOLD) == hold_handler);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 1);
+	CHECK(sigset(SIGUSR1, SIG_HOLD) == SIG_HOLD);
+	CHECK(signal(SIGUSR1, SIG_DFL) == hold_handler);	/* disposition unchanged */
+
+	/* unblocked signal, unblocked afterwards: the mask is not the only
+	 * thing sigset() may not disturb -- a plain disposition change on a
+	 * signal that was never held must still leave it unheld */
+	CHECK(sigrelse(SIGUSR1) == 0);
+	CHECK(sigset(SIGUSR1, hold_handler) == SIG_DFL);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 0);
 
 	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
 }

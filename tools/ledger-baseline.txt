@@ -29,7 +29,6 @@ A test_puts_ebadf
 A test_regex_nullable_repeat_does_not_crash
 A test_setrlimit_unenforceable
 A test_siginterrupt
-A test_sigset
 A test_uselocale_reports_lc_global_locale
 B test_bang_word_roundtrip
 B test_chmod_cannot_clear_read_bits

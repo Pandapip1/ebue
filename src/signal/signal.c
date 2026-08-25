@@ -340,7 +340,48 @@ int __libc_current_sigrtmax(void) { return _NSIG - 1; }
  * call must. */
 int sighold(int sig) { sigset_t s; sigemptyset(&s); if (sigaddset(&s, sig) < 0) return -1; return sigprocmask(SIG_BLOCK, &s, 0); }
 int sigrelse(int sig) { sigset_t s; sigemptyset(&s); if (sigaddset(&s, sig) < 0) return -1; return sigprocmask(SIG_UNBLOCK, &s, 0); }
-void (*sigset(int sig, void (*h)(int)))(int) { return signal(sig, h); }
+
+/* sigset.html is not signal() with a different name, and the difference
+ * is entirely about the signal mask.  RETURN VALUE: "Upon successful
+ * completion, sigset() shall return SIG_HOLD if the signal had been
+ * blocked and the signal's previous disposition if it had not been
+ * blocked."  DESCRIPTION, for the ordinary disposition-setting case:
+ * "sig shall be removed from the calling process' signal mask" -- the
+ * SIG_HOLD return is how the caller learns that just happened, which is
+ * why the two clauses have to be implemented together.  And for
+ * func == SIG_HOLD: "sig shall be added to the calling process' signal
+ * mask and its disposition shall remain unchanged" -- the one call that
+ * moves the mask the other way and installs nothing.
+ *
+ * The unblock is done after the new disposition is in place, not before:
+ * sigprocmask(SIG_UNBLOCK) delivers whatever became deliverable, and a
+ * signal that arrived while sig was held belongs to the handler the
+ * caller is installing now, not to the one it is replacing. */
+void (*sigset(int sig, void (*h)(int)))(int)
+{
+	void (*old)(int);
+	int was_blocked;
+	sigset_t one;
+
+	if (!sig_valid(sig) || sig == SIGKILL || sig == SIGSTOP) { errno = EINVAL; return SIG_ERR; }
+	was_blocked = sigismember(&blocked, sig);
+	sigemptyset(&one);
+	sigaddset(&one, sig);
+
+	if (h == SIG_HOLD) {
+		old = handlers[sig];   /* read before the mask moves: sigprocmask()
+		                        * runs whatever became deliverable, and a
+		                        * handler may install a new disposition */
+		if (sigprocmask(SIG_BLOCK, &one, 0) < 0) return SIG_ERR;
+		return was_blocked ? SIG_HOLD : old;
+	}
+
+	old = signal(sig, h);
+	if (old == SIG_ERR) return SIG_ERR;
+	if (!was_blocked) return old;
+	if (sigprocmask(SIG_UNBLOCK, &one, 0) < 0) return SIG_ERR;
+	return SIG_HOLD;
+}
 int sigpause(int sig) { (void)sig; errno = EINTR; return -1; }
 
 /* SEGV_MAPERR vs SEGV_ACCERR (signal.h.html siginfo_t DESCRIPTION) for
