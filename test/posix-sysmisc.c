@@ -197,43 +197,113 @@ static void test_setrlimit_enforceable(void)
 	CHECK(getrlimit(RLIMIT_AS, &rl2) == 0 && rl2.rlim_cur == ((rlim_t)256 << 20));
 }
 
-/* N/A: setrlimit.html DESCRIPTION obliges the limit to actually
- * "restrict the amount of [the] resource" once set. RLIMIT_NOFILE's
- * cap is the compile-time __fds[FD_MAX] array bound
- * (src/internal/libc.h) -- there is no NT object whose size a
- * setrlimit() call could shrink at runtime, only a recompile.
- * RLIMIT_STACK: NT fixes a thread's stack reservation at
- * NtCreateThreadEx() time (src/process/*); nothing in ntdll lets a
- * running thread's ceiling be lowered afterward, and the *only*
- * thread this applies to (the main thread) is already running by the
- * time any setrlimit() call could execute. RLIMIT_FSIZE: no per-process
- * max-file-size quota primitive exists in the NT I/O manager (NTFS
- * quotas are per-volume, per-user, not per-process). RLIMIT_CORE: NT
- * has no core-dump concept to size (WER minidumps are configured
- * machine-wide, not via a per-process byte ceiling). RLIMIT_RSS: no
- * distinct RSS quota field exists separate from the AS/DATA memory
- * limit already covered above, and POSIX itself says RSS is
- * advisory-only on implementations that even have it. RLIMIT_MEMLOCK:
- * NT's SetProcessWorkingSetSize()/VirtualLock() have no "how many
- * bytes may this process lock" cap to set, only a per-call pinning
- * primitive. If setrlimit() were written to *accept* a lower value
- * for these without enforcing it, it would misrepresent itself the
- * same way include/sys/resource.h's own undefined-ok comment already
- * warns against. */
-#if 0 /* N/A: setrlimit.html DESCRIPTION requires the new limit to
-	actually constrain resource use; see comment above for why no
-	NT primitive reaches RLIMIT_NOFILE/STACK/FSIZE/CORE/RSS/MEMLOCK
-	after process start. */
-static void test_setrlimit_unenforceable(void)
+/* setrlimit.html DESCRIPTION obliges a limit, once set, to actually
+ * "restrict the amount of [the] resource".  This block used to be one
+ * N/A fence covering RLIMIT_NOFILE/STACK/FSIZE/CORE/RSS/MEMLOCK under
+ * the single mechanism "no NT primitive reaches these after process
+ * start".  Re-audited: that mechanism is true of two of them, a
+ * category error for two more, and inapplicable to the last two.  The
+ * six are now accounted for separately.
+ *
+ * N/A -- the mechanism is a real NT fact:
+ *
+ *   RLIMIT_STACK ("the maximum size of the initial thread's stack").
+ *     NT fixes a thread's stack reservation at NtCreateThreadEx() time
+ *     from the PE header's SizeOfStackReserve; nothing in ntdll lowers
+ *     a running thread's ceiling afterwards, and the only thread the
+ *     clause is about -- the initial one -- is already running before
+ *     any setrlimit() call in this process can execute.
+ *
+ *   RLIMIT_CORE ("the maximum size of a core file in bytes that may be
+ *     created by a process").  NT has no core file to size.  WER
+ *     minidump policy is machine-wide registry configuration, not a
+ *     per-process byte ceiling, so there is no object the clause could
+ *     be about.
+ *
+ * Not POSIX at all -- there is no clause here to be N/A against:
+ *
+ *   RLIMIT_RSS and RLIMIT_MEMLOCK are BSD/Linux extensions.
+ *     setrlimit.html defines exactly seven resources -- RLIMIT_CORE,
+ *     RLIMIT_CPU, RLIMIT_DATA, RLIMIT_FSIZE, RLIMIT_NOFILE,
+ *     RLIMIT_STACK, RLIMIT_AS -- and neither of these appears on the
+ *     page.  Including them in a POSIX-conformance N/A was a
+ *     miscategorisation; they are extensions ntlibc chooses to report
+ *     RLIM_INFINITY for.
+ *
+ * UNIMPL -- see the fence below. */
+
+/* UNIMPL: setrlimit.html RLIMIT_NOFILE, "a number one greater than the
+ * maximum value that the system may assign to a newly-created
+ * descriptor."  Formerly fenced N/A on the mechanism "there is no NT
+ * object whose size a setrlimit() call could shrink at runtime, only a
+ * recompile."  That is a category error: RLIMIT_NOFILE does not cap an
+ * NT object.  Descriptors here are ntlibc's own, handed out by
+ * __fd_alloc() (src/internal/fd.c) out of the static __fds[FD_MAX]
+ * table in this process's own address space:
+ *
+ *     for (i = lowest; i < FD_MAX; i++)
+ *             if (!__fds[i].h) return i;
+ *     errno = EMFILE;
+ *     return -1;
+ *
+ * The EMFILE the clause requires is already written and already
+ * reached; the only thing missing is that the loop bound is the
+ * compile-time constant rather than a runtime ceiling setrlimit()
+ * could lower.  No NT primitive is involved in closing that gap, and
+ * "the system" in the clause is this implementation.  Not implementing
+ * it is a choice, which makes this UNIMPL, not N/A.  (src/misc/
+ * resource.c currently refuses the lowering with EINVAL rather than
+ * silently accepting it, which is the honest answer for an
+ * unenforced limit but is not one of the ERRORS the page lists.)
+ *
+ * The same category error applies to RLIMIT_FSIZE, whose "maximum size
+ * of a file, in bytes, that may be created by a process" is checkable
+ * against the resulting offset inside src/unistd/write.c and
+ * src/unistd/ftruncate.c without asking NT for a quota primitive --
+ * though enforcement there is only as complete as ntlibc's own I/O
+ * paths, unlike RLIMIT_NOFILE, which is airtight because the fd table
+ * is wholly ntlibc's.
+ *
+ * Not enabled here even once implemented: RLIMIT_NOFILE is
+ * process-wide and inherited, so lowering it mid-suite would break
+ * every later test the same way the RLIMIT_AS note above records a
+ * 1 MiB cap breaking test_getrusage()'s child on real Windows. */
+#if 0 /* UNIMPL: RLIMIT_NOFILE enforcement -- __fd_alloc()'s ceiling is
+	a compile-time constant, not a runtime one; see above. */
+static void test_setrlimit_nofile_enforced(void)
 {
-	struct rlimit rl;
+	struct rlimit rl, back;
+	int fds[8], i, n = 0;
 
 	rl.rlim_cur = 4;
 	rl.rlim_max = 16;
 	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
-	/* a real implementation would now have to make open() past fd 4
-	 * fail with EMFILE -- impossible: FD_MAX is a compile-time
-	 * array size, not a runtime ceiling ntlibc's fd allocator reads. */
+	CHECK(getrlimit(RLIMIT_NOFILE, &back) == 0 && back.rlim_cur == 4);
+
+	/* "one greater than the maximum value ... assigned to a
+	 * newly-created descriptor": no fd >= 4 may be handed out. */
+	errno = 0;
+	for (i = 0; i < 8; i++) {
+		fds[i] = open("rl-nofile.txt", O_CREAT | O_RDWR, 0644);
+		if (fds[i] < 0) break;
+		CHECK(fds[i] < 4);
+		n++;
+	}
+	CHECK(i < 8 && errno == EMFILE);
+	while (n--) close(fds[n]);
+	unlink("rl-nofile.txt");
+}
+#endif
+
+/* N/A: setrlimit.html RLIMIT_STACK -- NT fixes the initial thread's
+ * stack reservation at thread-creation time from the PE header, before
+ * any setrlimit() call in this process can run, and ntdll exposes no
+ * route to lower a running thread's ceiling.  See the accounting
+ * above. */
+#if 0 /* N/A: RLIMIT_STACK, see above */
+static void test_setrlimit_stack_unenforceable(void)
+{
+	struct rlimit rl;
 
 	rl.rlim_cur = 64 * 1024;
 	rl.rlim_max = 1024 * 1024;
