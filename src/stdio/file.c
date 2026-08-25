@@ -181,10 +181,56 @@ void funlockfile(FILE *f) { (void)f; }
 
 /* exit() calls this to flush and close everything still open, the way a
  * real process shutdown (or _exit after a clean run) is expected to
- * leave nothing buffered unwritten. */
+ * leave nothing buffered unwritten.
+ *
+ * WHY THE RE-ENTRANCY GUARD.  This is not defensive programming; it
+ * closes a measured infinite recursion that ended in a fault.  A flush
+ * here can itself raise a signal whose default action is to terminate,
+ * and the terminate path comes straight back through this function:
+ *
+ *     fflush(f) -> write() -> STATUS_PIPE_BROKEN
+ *               -> __raise_internal(SIGPIPE)          [src/unistd/write.c]
+ *               -> default action is terminate        [src/signal/signal.c]
+ *               -> __stdio_exit()                     [here]
+ *               -> fflush(f) ...
+ *
+ * and the second pass re-flushes the SAME stream, because the buffer it
+ * is trying to drain was never drained -- the write that would have
+ * emptied it did not return.  Measured on a pipe whose read end had
+ * closed: roughly 1 MB of stack consumed, then EXCEPTION_STACK_OVERFLOW
+ * (0xC00000FD).  Worse than the fault itself, the process then died
+ * reporting exit code 0 -- the overflow destroys the
+ * __NT_SIGNAL_EXIT(SIGPIPE) that should have been reported -- so a
+ * crashed program looked to its parent like a successful one.  (A plain
+ * unbuffered SIGPIPE death from the same library exits 13, correctly.)
+ *
+ * The guard is deliberately on the WHOLE function rather than per-FILE.
+ * Once a fatal signal is being delivered the process is ending; flushing
+ * what we can once and then getting out of the way is the whole
+ * contract, and a second entry has, by construction, nothing new to
+ * flush that the first entry is not already inside of.  A per-FILE
+ * "flush in progress" flag would let the remaining streams still be
+ * flushed after a broken one, which is strictly more output but also a
+ * second place for this same cycle to hide; if that is ever wanted it
+ * should come with its own test for the two-broken-pipes case.
+ *
+ * Note this leaves the streams AFTER the offending one unflushed on the
+ * signal path.  That is a deliberate loss and not a regression in
+ * behaviour anyone could have relied on: the alternative on that path
+ * was a stack overflow, which flushed nothing at all.  It is also closer
+ * to POSIX, where death by an unhandled signal does not flush stdio.
+ *
+ * The vectored exception handler calls this too (src/signal/signal.c),
+ * which is how the stack-overflow handler used to re-enter the same
+ * cycle with no stack left; the guard covers that call site as well. */
 void __stdio_exit(void)
 {
+	static int in_progress;
 	FILE *f;
+
+	if (in_progress) return;
+	in_progress = 1;
+
 	fflush(stdout);
 	fflush(stderr);
 	for (f = __stdio_files; f; f = f->next)
@@ -192,4 +238,9 @@ void __stdio_exit(void)
 	/* Buffers are not freed and fds not closed: the process is about to
 	 * end and NtTerminateProcess reclaims everything at once. Flushing
 	 * is the only observable effect that matters. */
+
+	/* Deliberately NOT cleared.  There is no "after" for this function:
+	 * every caller is on its way to __nt_exit().  Clearing it would only
+	 * re-arm the recursion for a second fatal signal arriving during the
+	 * same shutdown. */
 }
