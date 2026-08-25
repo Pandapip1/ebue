@@ -123,7 +123,6 @@ REPORT="$srcdir/test/POSIX-GAP-MAP.generated.md"
 # near-identical scripts, and every property established in one of them
 # was re-established worse, or not at all, in the other.
 SM_TOOL=posix-gapmap
-SM_REPORT=$REPORT
 SM_ROW_TAGS='[stdn]'
 # shellcheck source=tools/suitemap-engine.sh
 . "$srcdir/tools/suitemap-engine.sh"

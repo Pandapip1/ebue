@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
+# shellcheck shell=sh
+#
+# No shebang, because this file is sourced and never executed -- see
+# "NOT EXECUTABLE" below.  The directive is how shellcheck is told which
+# dialect to apply to a library; without it the whole file is checked
+# against an unknown shell (SC2148) and the useful checks are skipped.
+#
 # tools/suitemap-engine.sh -- the common half of the two gap maps.
 #
 # NOT EXECUTABLE, AND NOT A TOOL.  It is sourced by a backend, which is
@@ -49,10 +56,22 @@
 #
 # Before sourcing this file a backend sets:
 #
+#   srcdir         absolute path of the source tree
 #   SM_TOOL        the name in every diagnostic, e.g. `posix-gapmap`
-#   SM_REPORT      absolute path of the generated report it owns
 #   SM_ROW_TAGS    the data-block row tags it uses, as an sed/awk
 #                  bracket expression, e.g. '[stdn]'
+#
+# That list used to include SM_REPORT, "absolute path of the generated
+# report it owns".  Both backends set it and nothing has ever read it:
+# each renders to its own $REPORT directly.  It is removed rather than
+# documented, because a contract variable nobody reads is a contract
+# nobody is keeping, and the next reader has to grep the whole engine to
+# find that out.  shellcheck's SC2034 is what noticed.
+#
+# The three that remain are re-declared immediately below rather than
+# merely described here, so that a backend which forgets one fails at
+# the source line naming what is missing, instead of somewhere later in
+# a diagnostic that prints an empty tool name.
 #
 # and defines its own enumeration, its own per-test classification, and
 # its own report body.  Those three are genuinely per-suite: LTP's
@@ -88,6 +107,18 @@
 LC_ALL=C
 export LC_ALL
 
+# The inbound contract, enforced.  `${x:?msg}` in an assignment to the
+# same name is a no-op when the backend has done its job and an abort
+# naming the omission when it has not.  It also makes the contract
+# visible to shellcheck, which lints this file standalone and otherwise
+# reports SM_TOOL as a possible misspelling of SM_K_TOOL (SC2153) and
+# srcdir as never assigned (SC2154) -- both of which are the same
+# observation it cannot see the backend, and neither of which it should
+# have to guess at.
+srcdir=${srcdir:?a suitemap backend must set srcdir before sourcing the engine}
+SM_TOOL=${SM_TOOL:?a suitemap backend must set SM_TOOL before sourcing the engine}
+SM_ROW_TAGS=${SM_ROW_TAGS:?a suitemap backend must set SM_ROW_TAGS before sourcing the engine}
+
 sm_die() { echo "$SM_TOOL: $*" >&2; exit 2; }
 
 # ------------------------------------------------------------- the guard
@@ -121,7 +152,16 @@ sm_require_built() {
 		echo "$SM_TOOL: no config.mak; run ./configure first." >&2
 		exit 2; }
 
-	CC=$(sm_cfg CC); ARCH=$(sm_cfg ARCH)
+	# ARCH is read by both backends' include paths, not by this file,
+	# and the engine is linted standalone, so that use is invisible.
+	# (A comment whose first word is the linter's name is parsed as a
+	# directive, hence the wording -- SC1072/SC1073 if you get it wrong.)
+	CC=$(sm_cfg CC)
+	# On its own line because a directive attaches to the next COMMAND,
+	# and `CC=...; ARCH=...` is two of them -- placed above the pair it
+	# would suppress nothing and the finding would survive.
+	# shellcheck disable=SC2034  # consumed by the backends, not here
+	ARCH=$(sm_cfg ARCH)
 	CFLAGS_C99FSE=$(sm_cfg CFLAGS_C99FSE); CFLAGS_AUTO=$(sm_cfg CFLAGS_AUTO)
 
 	[ -n "$CC" ] || { echo "$SM_TOOL: config.mak has no CC." >&2; exit 2; }
@@ -213,6 +253,9 @@ sm_workdir() {
 # compiler, none of which git guarantees are on disk mid-merge.  See
 # tools/merge-gendata.sh, and tools/merge-kaem.sh's header for the
 # empirical story behind that constraint.
+# Emitted by each backend's report body; sm_read_data_block below reads
+# only the END marker, so shellcheck sees no use of the BEGIN one.
+# shellcheck disable=SC2034  # emitted by the backends, not here
 SM_DATA_BEGIN='<!-- BEGIN ntlibc-generated-data v1 -- the rows this report was rendered from.'
 SM_DATA_END='END ntlibc-generated-data -->'
 
@@ -431,6 +474,11 @@ sm_closure() {
 # carries the assertion inline, and SM_BUILD_VERIFIED is exported so it
 # can see it.  Same contract as sm_cc: reaching a compile without the
 # guard is a bug in this tool, not a fact about the tree.
+# Single quotes are the point: this is shell TEXT, printed verbatim into
+# the generated compile wrapper and evaluated there, in another process,
+# against that process's SM_BUILD_VERIFIED.  Expanding it here would bake
+# in this process's answer and the guard would assert nothing.
+# shellcheck disable=SC2034,SC2016  # emitted by the backends; deliberately unexpanded
 SM_WORKER_GUARD='[ "${SM_BUILD_VERIFIED:-no}" = yes ] || { echo "suitemap: INTERNAL ERROR -- a compile worker started without the build guard; refusing to measure." >&2; exit 2; }'
 
 sm_pct() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f%%", (b?a*100/b:0)}'; }

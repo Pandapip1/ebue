@@ -146,7 +146,6 @@ SHIM="$srcdir/test/libc-test-shim-src/libc-test-shim.c"
 # and that file had, differently, are named there; one of them was this
 # file's LC_ALL bug and one was this file's weaker greedy closure.
 SM_TOOL=libc-test-map
-SM_REPORT=$REPORT
 SM_ROW_TAGS='[sht]'
 SM_GITDIR=$GITREPO
 SM_GITDIR_HINT=LIBC_TEST_MAP_GITREPO
@@ -1246,7 +1245,6 @@ main() {
 	# owns until the whole merge, rebase or cherry-pick has finished.
 	if [ "$mode" = --render ] && [ $# -ge 2 ]; then
 		REPORT=$2
-		SM_REPORT=$REPORT
 	fi
 
 	sm_workdir
