@@ -210,6 +210,72 @@ static void test_cpio_h_constants(void)
 }
 #endif
 
+/* ================= island: <sched.h>, alone ====================== */
+#if 0 /* UNIMPL: sched.h.html DESCRIPTION: "The <sched.h> header shall
+	define the sched_param structure, which shall include the
+	scheduling parameters required for implementation of each
+	supported scheduling policy.  This structure shall include at
+	least the following member: int sched_priority".  ntlibc's
+	<sched.h> declares sched_yield() and nothing else, so this
+	island's `struct sched_param` is an incomplete type.  Triage:
+	ABSENT from this header (the struct itself exists in
+	obj/include/bits/alltypes.h under __NEED_struct_sched_param, and
+	<spawn.h> reaches it that way for posix_spawnattr_setschedparam()
+	-- so the type exists and only <sched.h>'s exposure of it is
+	missing).
+
+	THIS ONE CONTRADICTS A RECORD ALREADY IN THE TREE AND IS FLAGGED
+	FOR ADJUDICATION RATHER THAN SETTLED HERE.  include/sched.h's
+	banner says: "Everything else this header is specified to declare
+	-- struct sched_param, the SCHED_FIFO/SCHED_RR/SCHED_SPORADIC/
+	SCHED_OTHER policies, and sched_getparam/... -- belongs to the
+	_POSIX_PRIORITY_SCHEDULING option group... Basedefs permits
+	exactly this -- those declarations sit inside the standard's own
+	`[PS]` margin markers."  That is true of the four policy constants
+	(the page marks them "SCHED_FIFO [ PS|TPS ]", "SCHED_RR [ PS|TPS ]",
+	"SCHED_SPORADIC [ SS|TSP ]", "SCHED_OTHER [ PS|TPS ]") and true of
+	the seven function declarations (all inside `[PS]`/`[PS|TPS]`
+	regions).  It is NOT true of the sched_param sentence: that
+	sentence carries no margin marker at all and sits outside every
+	option region on the page -- checked mechanically by counting the
+	page's own opt-start/opt-end region delimiters, which balance to
+	zero before it, and confirmed by reading the rendered text, where
+	the two sentences either side of it DO carry their markers
+	("[ PS ] ... pid_t", "[ SS|TSP ] ... time_t").  So the struct is
+	POSIX base and unconditional, while the policies and functions
+	the banner groups it with are genuinely optional.  The banner's
+	conclusion is right for eight of its nine subjects and wrong for
+	one, which is exactly how a correct-sounding blanket
+	justification hides a real gap.
+
+	ACCEPTANCE CRITERION: <sched.h> exposing the struct it is
+	specified to define -- one __NEED_struct_sched_param include, the
+	same way <spawn.h> already does it.  This fence claims NOTHING
+	about the _POSIX_PRIORITY_SCHEDULING option: not the four policy
+	constants, not the seven functions, not sched_setscheduler()'s
+	behaviour.  include/sched.h's reasoning for declining those stands
+	untouched, and this fence does not reopen it.
+
+	Observed today: fails to COMPILE, tcc reporting "initialization of
+	incomplete type" at the declaration of `sp` -- compile-time, so no
+	Wine-vs-real-NT uncertainty arises. */
+#include <sched.h>
+
+static void test_sched_h_defines_sched_param(void)
+{
+	struct sched_param sp;
+
+	/* "shall include at least the following member: int
+	 * sched_priority Process or thread execution scheduling
+	 * priority." */
+	sp.sched_priority = 0;
+	UCHECK(sp.sched_priority == 0);
+	sp.sched_priority = 7;
+	UCHECK(sp.sched_priority == 7);
+	UCHECK(sizeof sp >= sizeof(int));
+}
+#endif
+
 /* ============ end of the islands; anything goes below ============ */
 #include <stdio.h>
 
