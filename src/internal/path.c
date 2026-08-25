@@ -18,13 +18,74 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include "libc.h"
+
+/* XBD <limits.h> {NAME_MAX}: "Maximum number of bytes in a filename
+ * (not including the terminating null of a string)."  BYTES, not
+ * characters, and that distinction is the whole subtlety here.
+ *
+ * fchmodat.html ERRORS, shall fail -- and the identical clause is
+ * boilerplate on open, openat, stat, fstatat, access, faccessat, unlink,
+ * unlinkat, mkdir, mkdirat, link, linkat, symlink, symlinkat, rename,
+ * renameat, chmod, chdir, utimensat, opendir, ... : "[ENAMETOOLONG] The
+ * length of a component of a pathname is longer than {NAME_MAX}."
+ *
+ * THIS IS NOT THE [ENAMETOOLONG] THIS LIBRARY ALREADY HAD.  Those same
+ * pages list a SECOND, MAY-FAIL [ENAMETOOLONG] about the length of the
+ * whole pathname, and that is the one __ntpath()/__ntpath_at()/chdir()
+ * have always reported, as the __US_MAX_WCHARS bound -- a name a
+ * UNICODE_STRING cannot describe.  The two are easy to conflate and the
+ * difference matters: that bound is ~32k code units, so it says nothing
+ * whatever about a 300-byte component sitting inside a short path.  This
+ * function implements the shall-fail per-component clause; the
+ * whole-path bound stays where it was.
+ *
+ * It lives here, in the one place __ntpath() and __ntpath_at()'s
+ * relative branch both route through, rather than in any caller.  The
+ * clause is on every path-taking interface in this library, not on
+ * fchmodat() -- fchmodat is merely where it was noticed.
+ *
+ * WHAT THIS CHANGES, MEASURED RATHER THAN REASONED.  NTFS bounds a
+ * component at 255 UTF-16 CODE UNITS; {NAME_MAX} bounds it at 255
+ * BYTES.  On ASCII the two agree and nothing moves: measured under Wine
+ * before this check, a 255-byte component opened and a 256-byte one
+ * failed -- with [ENOENT], which is the bug, NT having answered about a
+ * name it could not form.  They part company on multi-byte UTF-8: 100
+ * CJK characters are 300 bytes but only 100 code units, and before this
+ * commit open(), openat(), mkdir() and the rest CREATED such a name
+ * successfully.  They now refuse it.
+ *
+ * That is deliberate, it is what POSIX asks for, and it is what glibc
+ * does -- measured on ext4, whose own limit is likewise 255 bytes, where
+ * the same 300-byte name fails with [ENAMETOOLONG] through open, openat
+ * and chmod alike.  The cost is named here so nobody has to rediscover
+ * it: a long non-ASCII filename NTFS would have accepted is no longer
+ * reachable through this library.
+ *
+ * Zero-length pieces -- a doubled separator, the empty piece before a
+ * leading slash -- are not components and are not measured.  Both
+ * separators are recognised because dos_from_posix() has not yet run
+ * when a caller's path reaches here and either may be present. */
+int __name_too_long(const char *path)
+{
+	const char *p = path;
+
+	while (*p) {
+		const char *start = p;
+		while (*p && *p != '/' && *p != '\\') p++;
+		if ((size_t)(p - start) > NAME_MAX) return 1;
+		if (*p) p++;
+	}
+	return 0;
+}
 
 static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 {
 	WCHAR *w;
 	size_t i, n;
 
+	if (__name_too_long(path)) { errno = ENAMETOOLONG; return 0; }
 	if (!strcmp(path, "/dev/null")) path = "NUL";
 	else if (!strcmp(path, "/dev/tty")) path = "CON";
 	else if (!strncmp(path, "/dev/", 5)) {

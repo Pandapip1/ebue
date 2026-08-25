@@ -72,6 +72,13 @@ struct __ntpath {
 /* Translate a POSIX-ish path into NT form.  Forward slashes become
  * backslashes; "/dev/null" becomes NUL; a relative path is resolved
  * against the current directory by the Rtl.  Returns 0 or -1 with errno. */
+/* The shall-fail per-component [ENAMETOOLONG] check every path-taking
+ * interface owes: 1 when some component of `path` is longer than
+ * {NAME_MAX} bytes.  __ntpath()/__ntpath_at() apply it themselves, via
+ * the path builder they share; chdir(), which builds its own
+ * UNICODE_STRING, calls it directly.  See src/internal/path.c for why
+ * this is NOT the whole-path __US_MAX_WCHARS bound next to it. */
+int __name_too_long(const char *path);
 int __ntpath(const char *path, struct __ntpath *out, ULONG attributes);
 /* Like __ntpath but the path is relative to the directory handle dirfd
  * refers to (AT_FDCWD for the current directory). */

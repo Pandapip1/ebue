@@ -1064,11 +1064,18 @@ static void test_renameat_ebusy(void)
        *           version gap rather than a bug on either side, and
        *           why the privilege question stays open for genuine
        *           Windows (N/A on this runner only).
-       * ENAMETOOLONG -- reachable and mapped: __ntpath_at() returns it
-       *           for a name past __US_MAX_WCHARS.  Left fenced only
-       *           because the clause is about a single *component*
-       *           exceeding {NAME_MAX}, and this implementation's check
-       *           is on the whole path's length instead (UNIMPL).
+       * ENAMETOOLONG -- reachable, mapped, and NO LONGER UNIMPL.  Two
+       *           separate checks now stand behind it: the whole-path
+       *           __US_MAX_WCHARS bound (the page's *may-fail* clause),
+       *           which is what the body below actually trips with its
+       *           8192-byte name, and the per-component {NAME_MAX}
+       *           check in src/internal/path.c's __name_too_long()
+       *           (the page's *shall-fail* clause), which reaches
+       *           renameat like every other path-taking interface.
+       *           The shall-fail clause is pinned in
+       *           test_fchmodat_enametoolong() below rather than here.
+       *           This whole fence stays only because it is a MIX and
+       *           the other five clauses in it are still N/A.
        * EXDEV  -- src/stdio/misc.c does translate STATUS_NOT_SAME_DEVICE
        *           to EXDEV; a second writable volume is not something
        *           this suite can assume (N/A here). */
@@ -1503,23 +1510,81 @@ static void test_fchmodat_eloop(void)
 #endif
 
 /* "[ENAMETOOLONG] The length of a component of a pathname is longer than
- * {NAME_MAX}." */
-#if 0 /* UNIMPL: __ntpath_at() does report ENAMETOOLONG, but for the
-       * whole path exceeding __US_MAX_WCHARS -- the length UNICODE_STRING
-       * can describe -- not for a single component exceeding {NAME_MAX}.
-       * A 300-byte component inside a short path is passed straight to
-       * NT, which answers STATUS_OBJECT_NAME_INVALID and comes back as
-       * something other than ENAMETOOLONG. */
+ * {NAME_MAX}."  SHALL FAIL -- and distinct from the may-fail
+ * [ENAMETOOLONG] about the length of the whole pathname, which this
+ * library reports as the __US_MAX_WCHARS bound and which says nothing
+ * about a single over-long component inside a short path.  This test is
+ * the shall-fail one.
+ *
+ * The clause is not an fchmodat quirk: it is boilerplate on every
+ * path-taking page, and until this test was written {NAME_MAX} appeared
+ * nowhere in src/ except sysconf.c, where it was only reported as a
+ * value.  So the check lives in src/internal/path.c's __name_too_long(),
+ * called from the builder __ntpath() and __ntpath_at() share (and
+ * directly by chdir(), which builds its own UNICODE_STRING) -- fchmodat
+ * is merely where it was noticed.  Both branches of __ntpath_at() are
+ * exercised below for that reason: AT_FDCWD goes through __ntpath(), a
+ * real directory descriptor goes through the RootDirectory-relative
+ * branch, and a check placed in only one of them would leave half the
+ * library wrong.
+ *
+ * MEASURED BEFORE THE FIX, under Wine: a 300-byte component came back
+ * -1/[ENOENT] -- not [ENAMETOOLONG], and not the
+ * STATUS_OBJECT_NAME_INVALID the old fence guessed at.  A 255-byte
+ * component opened successfully and a 256-byte one did not, so the
+ * boundary below is where the host puts it too. */
 static void test_fchmodat_enametoolong(void)
 {
-	char comp[300];
+	char comp[300], name255[256], path[512];
+	int fd, dfd;
+
 	memset(comp, 'c', sizeof comp - 1);
 	comp[sizeof comp - 1] = 0;
+	memset(name255, 'd', 255);
+	name255[255] = 0;
+
+	/* AT_FDCWD: the __ntpath() branch. */
 	errno = 0;
 	CHECK(fchmodat(AT_FDCWD, comp, 0444, 0) == -1);
 	CHECK(errno == ENAMETOOLONG);
+
+	/* The over-long component inside a longer path is still the
+	 * component's length that decides, not the path's -- this is the
+	 * case the whole-path __US_MAX_WCHARS bound cannot see. */
+	strcpy(path, "chm.d/");
+	strcat(path, comp);
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, path, 0444, 0) == -1);
+	CHECK(errno == ENAMETOOLONG);
+
+	/* A real directory descriptor: the RootDirectory-relative branch. */
+	dfd = open("chm.d", O_RDONLY);
+	CHECK(dfd >= 0);
+	if (dfd >= 0) {
+		errno = 0;
+		CHECK(fchmodat(dfd, comp, 0444, 0) == -1);
+		CHECK(errno == ENAMETOOLONG);
+		CHECK(close(dfd) == 0);
+	}
+
+	/* THE BOUNDARY, which is what stops this from passing for the wrong
+	 * reason.  {NAME_MAX} is 255 and the clause is "longer than", so a
+	 * component of exactly {NAME_MAX} bytes must still work -- a check
+	 * written with >= instead of > would break it, and so would one that
+	 * rejected every long-ish name. */
+	CHECK(strlen(name255) == NAME_MAX);
+	strcpy(path, "chm.d/");
+	strcat(path, name255);
+	fd = open(path, O_CREAT | O_WRONLY, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(close(fd) == 0);
+		errno = 0;
+		CHECK(fchmodat(AT_FDCWD, path, 0444, 0) == 0);
+		CHECK(chmod(path, 0644) == 0);
+		CHECK(unlink(path) == 0);
+	}
 }
-#endif
 
 /* ERRORS, may fail: "[EINTR] A signal was caught during execution of the
  * function", "[EINVAL] The value of the mode argument is invalid",
@@ -1975,6 +2040,7 @@ int main(void)
 	test_fchmodat_empty();
 	test_fchmodat_empty_at_dirfd();
 	test_fchmodat_dot_component();
+	test_fchmodat_enametoolong();
 
 	test_scanf_basics(name);
 	test_scanf_returns(name);

@@ -14,6 +14,14 @@ int chdir(const char *path)
 	NTSTATUS st;
 
 	if (!path || !*path) { errno = ENOENT; return -1; }
+	/* chdir.html ERRORS, shall fail: "[ENAMETOOLONG] The length of a
+	 * component of a pathname is longer than {NAME_MAX}."  chdir does
+	 * not go through src/internal/path.c's builder -- it hand-builds a
+	 * UNICODE_STRING for RtlSetCurrentDirectory_U -- so it has to ask
+	 * for itself, or it would be the one path-taking interface in the
+	 * library without the check.  Distinct from the whole-path bound a
+	 * few lines below; see __name_too_long()'s banner. */
+	if (__name_too_long(path)) { errno = ENAMETOOLONG; return -1; }
 	w = __utf8_to_utf16(path, &n);
 	if (!w) return -1;
 	for (i = 0; i < n; i++) if (w[i] == '/') w[i] = '\\';
