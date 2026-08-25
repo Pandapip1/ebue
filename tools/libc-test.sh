@@ -158,10 +158,11 @@ read_ledger() {
 		reason=""
 		for (i=3;i<=NF;i++) reason = reason (i>3?" ":"") $i
 		if (status != "pass" && status != "unbuildable" &&
-		    status != "unclassified" && substr(status,1,6) != "xfail:") {
+		    status != "unclassified" && status != "unverifiable" &&
+		    substr(status,1,6) != "xfail:") {
 			print "BADSTATUS " name " " status > out "/errors"; next
 		}
-		if (substr(status,1,6) == "xfail:" && reason == "") {
+		if ((substr(status,1,6) == "xfail:" || status == "unverifiable") && reason == "") {
 			print "NOREASON " name > out "/errors"; next
 		}
 		if (status == "unclassified" && substr(reason,1,15) != "NOT-YET-TRIAGED") {
@@ -250,6 +251,29 @@ if [ "${1:-}" = "--selftest" ]; then
 	else
 		echo "selftest: FAIL -- ledger has malformed rows:" >&2
 		cat "$W/errors" >&2 2>/dev/null
+		rc=1
+	fi
+	# `unverifiable` must require a reason, exactly as xfail: does.  A
+	# row asserting "no target can ever adjudicate this" with no reason
+	# is the assertion at its least checkable, so the parser rejects it
+	# and this proves the rejection still fires.
+	bad="$W/bad-ledger"
+	printf '# COUNTS pass=0\nsome-test unverifiable\n' > "$bad"
+	mkdir -p "$W/b"
+	# read_ledger reads the global LEDGER; save and restore it rather
+	# than prefixing the call, because a variable assignment prefixed to
+	# a FUNCTION invocation persists after it in some POSIX shells and
+	# would leave the rest of this script pointed at a fake ledger.
+	real_ledger="$LEDGER"
+	LEDGER="$bad"
+	read_ledger "$W/b" 2>/dev/null
+	LEDGER="$real_ledger"
+	if grep -q '^NOREASON some-test$' "$W/b/errors" 2>/dev/null; then
+		echo "selftest: OK -- an 'unverifiable' row with no reason is rejected"
+	else
+		echo "selftest: FAIL -- an 'unverifiable' row with no reason was accepted." >&2
+		echo "selftest: that status is a claim about every target this project" >&2
+		echo "selftest: has; unexplained, it cannot be reviewed or retired." >&2
 		rc=1
 	fi
 	exit $rc
@@ -403,6 +427,7 @@ run_end=$(date +%s)
 
 passed=0; known=0; unclassified=0; unverified=0; unbuildable=0
 regressions=""; unexpected=""; stale=""; absent=""; timeouts=""
+verifiable=""
 verified=0
 
 for f in $corpus; do
@@ -483,6 +508,16 @@ for f in $corpus; do
 			known=$((known + 1))
 			echo "KNOWN-FAIL $n -- ${want#xfail:}: $(ledger_reason "$n")"
 		fi ;;
+	unverifiable)
+		# Reaching this case at all is the news.  An `unverifiable` row
+		# asserts that no target available to this project can adjudicate
+		# the test -- so the two 77 branches above should have taken it,
+		# and getting a real rc here means that assertion is now false.
+		# Whether the verdict is 0 or not is beside the point and is
+		# deliberately not branched on: either way the row is wrong.
+		verifiable="$verifiable $n(rc=$rc)"
+		echo "NOW-VERIFIABLE $n (rc=$rc) -- ledger says no target here can adjudicate this, but it just did"
+		;;
 	esac
 done
 
@@ -532,6 +567,17 @@ fi
 if [ -n "$stale" ]; then
 	echo
 	echo "libc-test: FAILED -- ledger disagrees with what actually built:$stale"
+	rc=1
+fi
+if [ -n "$verifiable" ]; then
+	echo
+	echo "libc-test: FAILED -- test(s) recorded 'unverifiable' produced a"
+	echo "libc-test: verdict:$verifiable"
+	echo "libc-test: that status means no target this project has can adjudicate"
+	echo "libc-test: the test -- a permanent hole, not a temporary one.  One of"
+	echo "libc-test: them just filled itself in, so the claim is stale.  Move the"
+	echo "libc-test: row to pass, xfail: or unclassified according to what it now"
+	echo "libc-test: does, and adjust the COUNTS header in the same commit."
 	rc=1
 fi
 

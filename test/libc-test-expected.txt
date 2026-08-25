@@ -42,6 +42,38 @@
 #                    146 tests die at #include, which is the gap
 #                    accounting restated as a build error and is
 #                    evidence of nothing about behaviour.
+#   unverifiable     builds and runs, but NO TARGET THIS PROJECT HAS can
+#                    adjudicate it, and none is expected to.  Reason
+#                    required, and must name the missing thing.
+#
+# WHY `unverifiable` IS ITS OWN STATUS AND NOT ONE OF THE OTHER FOUR
+#
+# It is not `unbuildable`: it builds and links.  It is not `xfail:env`:
+# that category is for a block that is NOT detectable from the test's own
+# output at run time, whereas these announce themselves (tools/libc-test.sh
+# reads the shim's SHIM-STUBBED marker out of the log) and are counted as
+# unverified by the harness.  It is not `unclassified`: that means "it
+# fails and nobody has looked", and somebody has.
+#
+# The one it is easiest to confuse with is `pass`, and that confusion is
+# the reason this status exists.  Several rows here say `pass` while
+# coming out unverified under stock Wine -- `fflush-exit` is one: it needs
+# RtlCloneUserProcess, so it produces no verdict here, but it produces a
+# real one on the real-Windows CI leg.  "Verified elsewhere" and
+# "verifiable nowhere" are different facts.  Recording both as `pass`
+# erases the difference, and erasing it is how a PERMANENT hole comes to
+# look like a temporary one -- a `pass` row reads as a claim somebody is
+# checking, and for these nobody is, anywhere.
+#
+# What the status still asserts, and why that is not vacuous: the harness
+# never compares a verdict against an unverifiable row while the test
+# stays unverified, and it prints "UNVERIFIED" for it in its own output,
+# so nothing here looks checked.  But the moment such a test DOES produce
+# a verdict, the harness fails the stage with NOW-VERIFIABLE: the claim
+# "no target we have can adjudicate this" is falsifiable, is checked on
+# every run, and cannot outlive the condition that made it true.
+# tools/libc-test.sh --selftest additionally proves an unverifiable row
+# with no reason is rejected outright.
 #
 # WHY THIS FILE CANNOT GROW SILENTLY
 #
@@ -59,7 +91,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=66 xfail=23 unclassified=4 unbuildable=53
+# COUNTS pass=65 xfail=23 unclassified=4 unbuildable=53 unverifiable=1
 #
 argv                              pass
 basename                          pass
@@ -78,16 +110,7 @@ fcntl                             unclassified  NOT-YET-TRIAGED -- F_SETLK acros
 fdopen                            pass
 fflush-exit                       pass
 fgets-eof                         pass
-# fgetwc-buffering builds and links as of src/stdio/wide.c, but it opens
-# with libc-test's t_setutf8(), which needs nl_langinfo(CODESET) -- a
-# function this target does not have.  tools/libc-test.sh's shim reports
-# that at run time, so the test comes out UNVERIFIED (rc=77) here and on
-# the real-Windows leg alike, and the unverified path never compares a
-# verdict against the row below.  `pass` is recorded rather than an
-# xfail because there is no defect to fence: the row states what must
-# hold the moment <langinfo.h> exists, and until then the stage says
-# "unverified" in its own output rather than letting this look checked.
-fgetwc-buffering                  pass
+fgetwc-buffering                  unverifiable  builds and links as of src/stdio/wide.c, but opens with libc-test's t_setutf8(), which needs nl_langinfo(CODESET); no <langinfo.h> on this target, under Wine or on the real-Windows leg, so no run here can select the UTF-8 locale the test requires
 flockfile-list                    unbuildable  lib/libc.a: error: link symbol 'malloc' defined twice
 fnmatch                           xfail:defect  GAP-ACCOUNTING.md:264 lists fnmatch as implemented-but-not-clause-audited; 5 pattern failures incl. [[?*\] and a bare backslash
 fpclassify-invalid-ld80           pass
