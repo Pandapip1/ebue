@@ -91,7 +91,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=65 xfail=23 unclassified=4 unbuildable=53 unverifiable=1
+# COUNTS pass=66 xfail=22 unclassified=4 unbuildable=53 unverifiable=1
 #
 argv                              pass
 basename                          pass
@@ -145,7 +145,7 @@ popen                             xfail:env  no /bin/sh on the target -- the she
 printf-1e9-oob                    pass
 printf-fmt-g-round                pass
 printf-fmt-g-zeros                pass
-printf-fmt-n                      xfail:defect  NOT in external-suites.md's 22 -- found by this run: the z length modifier is 32-bit in printf, so %zn stores 4 bytes of 8 and %zd of 0xdeadbeef00000000 prints 0; %lln is correct
+printf-fmt-n                      pass
 pthread_atfork-errno-clobber      unbuildable  pthread_atfork-errno-clobber.c:2: error: include file 'pthread.h' not found
 pthread_cancel                    unbuildable  pthread_cancel.c:1: error: include file 'pthread.h' not found
 pthread_cancel-points             unbuildable  pthread_cancel-points.c:3: error: include file 'pthread.h' not found
