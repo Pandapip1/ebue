@@ -712,13 +712,23 @@ mechanism `GetCommState`/`SetCommState` over a `DCB` is named inside
 | `posix-termios.c:533` | `c_cflag` wire encoding |
 | `posix-termios.c:553` | `c_cc[]` reprogramming |
 
-`posix-termios.c:512` (`tcflush`) sits in this group but has a
-**second, much cheaper expiry**: the fence says the input half
-(`TCIFLUSH`) *is genuinely implemented* via `FlushConsoleInputBuffer`
-and is unobservable only because ntlibc does not wrap kernel32's
-`WriteConsoleInput`, which would let a test inject into its own console
-input queue. That is one wrapper away from being verifiable, and it is
-the single most actionable entry in this section.
+`posix-termios.c:512` (`tcflush`) sat in this group with a **second,
+much cheaper expiry**, and this row was right that it was the most
+actionable entry. **RESOLVED: the fence is rewritten, and it turns out
+not even to need the wrapper.** The stated reason -- that the input
+half is unobservable because "ntlibc does not wrap kernel32's
+`WriteConsoleInput`" -- reasons about ntlibc's API surface, but a TEST
+is not confined to ntlibc's API. This tree already resolves exports
+directly in two places: `src/termios/termios.c`'s own `k32_proc()`, and
+`test/spawn-stdhandle-attr.c`, which looks up `NtCreateUserProcess` at
+run time. So no wrapper is needed at all. The real blocker, which the
+old reason never named, is an environment condition: `make check` has
+no console attached (`tools/runtests.sh` redirects stdin from
+`/dev/null`, `open("/dev/tty")` does not resolve here, and the fd 0/1/2
+fallback finds nothing `isatty()` accepts), which is why every other
+console-dependent test in that file detect-and-skips. Interactively
+they do run. The clause is therefore writable on the same terms as its
+neighbours, and the fence now says how.
 
 #### C2 -- "no DACL / security-descriptor storage anywhere in the tree" (4 fences)
 
@@ -738,7 +748,7 @@ read/execute bits are compile-time constants in `mode_from_attrs()`.
 | Site | Clause | Note |
 |------|--------|------|
 | `posix-dl.c:799` | `POSIX_SPAWN_SETPGROUP` | expires if process groups are ever invented for this platform |
-| `posix-sysmisc.c:1348` | `waitid` `WSTOPPED`/`WCONTINUED` | `kill(pid, SIGSTOP)` is `NtTerminateProcess`; NT does have `NtSuspendProcess`, so this is a design choice as much as a platform fact |
+| `posix-sysmisc.c:1348` | `waitid` `WSTOPPED`/`WCONTINUED` | **RESOLVED: retagged `N/A` -> `UNIMPL`.** This row was right. Confirmed `NtSuspendProcess`/`NtResumeProcess` are real ntdll syscalls, exported and implemented even by Wine (`dlls/ntdll/ntdll.spec`, `dlls/ntdll/unix/process.c:1900`); they are absent only from `src/internal/nt.h`. The fence had used "not part of the surface `nt.h` declares" as load-bearing evidence in an argument claiming to be about the platform. Since the clause scopes `WSTOPPED` to a child stopped "upon receipt of a signal", and every signal here is one ntlibc itself delivers, the stop is always ntlibc-initiated and needs no kernel notification -- implementable from the `__child` table. The genuinely impossible half (a child suspended by a debugger or another process) is split out and kept as `N/A` |
 | `posix-dl.c:777` | `POSIX_SPAWN_SETSIGDEF`/`SETSIGMASK` | **arguably already expired.** The stated reason is "there is no channel to hand a chosen initial mask/disposition to a child that has not yet run its own startup". The tree has exactly such a channel: `RTL_USER_PROCESS_PARAMETERS`'s `RuntimeData`, which `test/spawn-runtimedata-stress.c` exercises, and which `src/process/spawn.c:18` already uses to hand the child a block its `crt1` reads back before `main()` |
 
 #### C4 -- "exactly one uid, 1000, and `setuid` is a no-op" (0 fences -- RESOLVED)

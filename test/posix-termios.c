@@ -509,18 +509,51 @@ static void test_tcflow_suspends_output(int consolefd)
 }
 #endif
 
-#if 0 /* N/A: tcflush.html DESCRIPTION "shall discard data written to
-	the object referred to by fildes ... but not transmitted, or
-	data received but not read, depending on the value of
-	queue_selector."
-	The input half (TCIFLUSH/TCIOFLUSH) is genuinely implemented via
-	kernel32's FlushConsoleInputBuffer(), but observing it requires
-	typed-ahead keystrokes sitting unread in a real interactive
-	console's input buffer -- there is no way to inject input into
+#if 0 /* Mixed, and the two halves are not the same kind of thing.
+	tcflush.html DESCRIPTION: "shall discard data written to the
+	object referred to by fildes ... but not transmitted, or data
+	received but not read, depending on the value of queue_selector."
+
+	OUTPUT half (TCOFLUSH): N/A, same mechanism as tcdrain() above --
+	a console write is already in the screen buffer when
+	WriteConsole() returns, so there is no untransmitted output to
+	discard and a conforming implementation is indistinguishable from
+	a stub.
+
+	INPUT half (TCIFLUSH/TCIOFLUSH): NOT N/A.  It is genuinely
+	implemented (kernel32's FlushConsoleInputBuffer(), see this file's
+	banner and src/termios/termios.c), the clause is fully applicable,
+	and it is observable -- just not by `make check`.  The reason
+	recorded here used to be "there is no way to inject input into
 	one's own console input queue from inside the process without
-	kernel32's WriteConsoleInput(), which ntlibc does not wrap. The
-	output half (TCOFLUSH) is unobservable for the same reason
-	tcdrain() is. */
+	kernel32's WriteConsoleInput(), which ntlibc does not wrap."  That
+	is false as stated, because it reasons about ntlibc's API surface
+	when the constraint on a TEST is not ntlibc's API surface.  A test
+	may resolve an export itself, and this tree already does exactly
+	that in two places: src/termios/termios.c's own k32_proc() looks
+	kernel32 entry points up by name through LdrGetProcedureAddress,
+	and test/spawn-stdhandle-attr.c resolves NtCreateUserProcess at
+	run time the same way.  WriteConsoleInput is one such resolve
+	away; "ntlibc does not wrap it" was never the blocker.
+
+	The ACTUAL blocker is an environment condition, and it is the one
+	the old reason never mentioned: there is no console attached at
+	all under `make check`.  tools/runtests.sh redirects stdin from
+	/dev/null and captures stdout/stderr through a pipe, open("/dev/
+	tty") does not resolve on this platform (see main()'s comment),
+	and the fd 0/1/2 fallback finds nothing isatty() will call a
+	terminal -- which is why every other console-dependent test in
+	this file detect-and-skips there.  In an INTERACTIVE run the
+	fallback does find a real console, and those neighbours do run.
+
+	So this clause is writable, on the same terms as its neighbours:
+	borrow the console fd main() already finds, resolve
+	WriteConsoleInput through LdrGetProcedureAddress, inject a
+	KEY_EVENT_RECORD, tcflush(TCIFLUSH), and assert the byte is gone.
+	It skips in CI like the rest.  Left unwritten rather than
+	misdescribed -- and it needs a kernel32 build, since without
+	NTLIBC_USE_KERNEL32 tcflush()'s input half has no implementation
+	to test. */
 static void test_tcflush_discards_input(int consolefd)
 {
 	char c;

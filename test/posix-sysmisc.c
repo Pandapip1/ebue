@@ -1483,33 +1483,63 @@ static void test_waitid_errors(void)
 	CHECK(waitid(P_PID, (id_t)getpid(), &si, WEXITED) == -1 && errno == ECHILD);
 }
 
-#if 0 /* N/A: waitid.html DESCRIPTION -- WSTOPPED ("Status shall be
+#if 0 /* UNIMPL: waitid.html DESCRIPTION -- WSTOPPED ("Status shall be
        * returned for any child that has stopped upon receipt of a
        * signal") and WCONTINUED ("Status shall be returned for any
-       * continued child process") require a child that can be stopped
-       * and continued.  No child on this platform can be:
+       * continued child process").
        *
-       *   - kill(pid, SIGSTOP) here is NtTerminateProcess(h,
-       *     __NT_SIGNAL_EXIT(SIGSTOP)) (src/signal/signal.c's kill()).
-       *     It ends the child rather than suspending it, NT having no
-       *     job control and no signal delivery to suspend into.
-       *   - even a process suspended by some other means could not be
-       *     reported.  An NT process object transitions to signalled
-       *     exactly once, on termination; there is no waitable stop or
-       *     continue transition for NtWaitForSingleObject to return,
-       *     and NtSuspendProcess is not part of the surface
-       *     src/internal/nt.h declares.
+       * Was N/A, concluding "this is a platform impossibility, not
+       * unfinished work: there is no NT mechanism that would implement
+       * it."  Re-audited, and that conclusion does not hold for the
+       * case the clause is actually about.  The old reason rested on
+       * two facts, one true and one not a fact about NT at all:
        *
-       * So this is a platform impossibility, not unfinished work:
-       * there is no NT mechanism that would implement it.  waitid()
-       * accepts both flags and simply never has such a status to
-       * report, which is correct behaviour on a system where children
-       * never stop -- and CLD_STOPPED/CLD_CONTINUED, though defined by
-       * <signal.h> for source compatibility, are never produced.
+       *   - "An NT process object transitions to signalled exactly
+       *     once, on termination; there is no waitable stop or continue
+       *     transition for NtWaitForSingleObject to return."  TRUE, and
+       *     it does settle one case -- see the N/A paragraph below.
        *
-       * Written out as the real assertions it would need, so that if NT
-       * ever grows the notion, the test is here rather than needing to
-       * be invented. */
+       *   - "NtSuspendProcess is not part of the surface
+       *     src/internal/nt.h declares."  This is a statement about
+       *     ntlibc's own header, not about the platform, and it was
+       *     doing load-bearing work in an argument that claimed to be
+       *     about the platform.  NtSuspendProcess and NtResumeProcess
+       *     are real ntdll syscalls -- exported and implemented even by
+       *     Wine (dlls/ntdll/ntdll.spec, "@ stdcall -syscall
+       *     NtSuspendProcess(long)"; dlls/ntdll/unix/process.c:1900).
+       *     They are absent from nt.h because nobody added them.
+       *
+       * Likewise "kill(pid, SIGSTOP) here is NtTerminateProcess(...)"
+       * describes src/signal/signal.c's current choice, not a
+       * constraint on what it could do.
+       *
+       * What is actually implementable: the clause scopes WSTOPPED to a
+       * child "that has stopped upon receipt of a signal", and on this
+       * platform the only signals that exist are the ones this library
+       * itself delivers.  So the stop is always one ntlibc INITIATED --
+       * which means it needs no kernel notification to learn about it.
+       * kill(pid, SIGSTOP) could call NtSuspendProcess, record the
+       * stopped state in the __child table it already keeps
+       * (src/process/children.c), and waitid(WSTOPPED) could report it
+       * from there; SIGCONT/NtResumeProcess and WCONTINUED likewise.
+       * No waitable transition is required, because the library is the
+       * one doing the stopping.  That is real work nobody has done, not
+       * a missing mechanism.
+       *
+       * N/A, and separately so: a child suspended by something OUTSIDE
+       * this library -- a debugger, or another process calling
+       * NtSuspendProcess on it -- cannot be reported, and that half is
+       * a genuine platform limit for the reason the old fence gave.
+       * There is no waitable stopped/continued transition and no
+       * notification, so ntlibc could not learn of it at all.  It is
+       * also not what the clause asks for: such a stop is not "upon
+       * receipt of a signal".
+       *
+       * Left fenced because implementing it is job control, not a
+       * one-line fix: it touches kill(), the child table, waitid(),
+       * waitpid()'s WUNTRACED, and the wait-status encoding
+       * (WIFSTOPPED/WSTOPSIG). Written out as the assertions it would
+       * need so the test is here when someone does it. */
 static void test_waitid_stopped_continued(void)
 {
 	siginfo_t si;
