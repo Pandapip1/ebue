@@ -231,13 +231,22 @@ static void test_puts_epipe(void)
  * [EAGAIN] "The O_NONBLOCK flag is set for the file descriptor
  * underlying stream and the thread would be delayed in the write
  * operation." */
-#if 0 /* N/A: this library has no O_NONBLOCK for a file descriptor at
-       * all -- include/fcntl.h defines O_NONBLOCK, but src/unistd/write.c
-       * issues an unconditional NtWriteFile and waits out STATUS_PENDING
-       * itself, and NT has no per-handle non-blocking mode for the
-       * synchronous file I/O this maps onto (FILE_SYNCHRONOUS_IO_NONALERT
-       * is set on every handle __ntpath opens).  There is no state a test
-       * could put fd 1 into that would make this clause apply. */
+#if 0 /* N/A, verdict confirmed, reason made precise.  The old text
+       * said "this library has no O_NONBLOCK for a file descriptor at
+       * all", which overstates: the bit is accepted and stored, by both
+       * fcntl(F_SETFL) (src/fcntl/fcntl.c:55) and ioctl(FIONBIO)
+       * (src/ioctl/ioctl.c:143), and fcntl(F_GETFL) reads it back.  The
+       * accurate statement is that NOTHING EVER CONSULTS IT on a write
+       * path -- src/ioctl/ioctl.c's own banner says so outright,
+       * "O_NONBLOCK today only changes what fcntl(F_GETFL) reports
+       * back".  src/unistd/write.c issues an unconditional NtWriteFile
+       * and waits out STATUS_PENDING itself, on a handle __ntpath opens
+       * with FILE_SYNCHRONOUS_IO_NONALERT, so the write completes or
+       * fails but never defers.  There is still no state a test could
+       * put fd 1 into that would make this clause apply, so the verdict
+       * stands; but "the flag does not exist" and "the flag exists and
+       * is ignored" are different claims, and only the second is
+       * true. */
 static void test_puts_eagain(int fd1)
 {
 	errno = 0;
@@ -508,8 +517,13 @@ static void test_scanf_einval(const char *name)
  * associated with the corresponding stream."  Also [EAGAIN], [EINTR],
  * [EIO], and may-fail [ENOMEM]/[ENXIO] -- the same list, and for the
  * same reasons, as the puts() fences above. */
-#if 0 /* N/A: same mechanisms as the fputc fences above -- no
-       * O_NONBLOCK on a file descriptor (EAGAIN), no signal that can
+#if 0 /* N/A: same mechanisms as the fputc fences above -- O_NONBLOCK
+       * stored but never consulted (EAGAIN; see that fence for the
+       * corrected wording, and note the one live EAGAIN path in this
+       * library, src/unistd/read.c:37's STATUS_PIPE_EMPTY arm, is
+       * unreachable here: measured under Wine, a read() of an empty
+       * pipe BLOCKS rather than answering STATUS_PIPE_EMPTY, since
+       * nothing puts the pipe into a no-wait mode), no signal that can
        * interrupt a non-alertable NtReadFile (EINTR), no controlling
        * terminal (EIO), and no way to demand ENOMEM/ENXIO.  EOVERFLOW is
        * the one with a real mechanism (seek stdin past the off_t
@@ -805,12 +819,32 @@ static void test_renameat_einval(void)
  * directory containing the file...", and "[EROFS] The requested
  * operation requires writing in a directory on a read-only file
  * system." */
-#if 0 /* N/A: this library has no POSIX permission model to deny with --
-       * src/stat/chmod.c states it outright ("chmod can only express one
-       * thing on NTFS: whether the file is read-only"), there is no
-       * S_ISVTX behaviour anywhere, and mounting a read-only volume is
-       * not something the test suite can arrange.  A directory's NTFS
-       * read-only attribute does not stop renames within it. */
+#if 0 /* Mixed; the three errors here do not share a mechanism.
+       *
+       * [EACCES] (search/write permission denied on a path prefix) --
+       * UNIMPL, not N/A.  The recorded reason, "this library has no
+       * POSIX permission model to deny with", is about THIS LIBRARY.
+       * NT has the model: a directory DACL with a deny ACE makes
+       * NtSetInformationFile(FileRenameInformation) answer
+       * STATUS_ACCESS_DENIED, which src/internal/errno.c:63 already
+       * maps to EACCES.  The reporting path is live and correct; what
+       * is missing is any way to CREATE the denial, because ntlibc
+       * declares no security APIs at all (NtSetSecurityObject,
+       * RtlAddAccessDeniedAce -- real ntdll entry points, absent from
+       * src/internal/nt.h).  That is the same choice the permission-bit
+       * fences in test/posix-unistd.c are retagged for; see the banner
+       * above them.  It is also correct that a directory's NTFS
+       * read-only attribute does not stop renames within it -- which is
+       * exactly why the attribute word is not the mechanism here.
+       *
+       * [EPERM], the S_ISVTX case -- N/A.  NT has no sticky-bit
+       * analogue: no "only the owner may unlink from this directory"
+       * flag exists in either the attribute word or the security
+       * descriptor, since a DACL grants delete on the file, not
+       * conditionally on directory ownership.
+       *
+       * [EROFS] -- N/A, environment: mounting a read-only volume is not
+       * something the test suite can arrange. */
 static void test_renameat_eacces(void)
 {
 	CHECK(mkdir("ren.d/ro", 0755) == 0);
@@ -825,12 +859,40 @@ static void test_renameat_eacces(void)
 /* "[EBUSY] The directory named by old or new is currently in use by the
  * system or another process, and the implementation considers this an
  * error." */
-#if 0 /* N/A: NT does report a rename of a directory that is some
-       * process's current directory as STATUS_ACCESS_DENIED /
+#if 0 /* UNCERTAIN, and the reason recorded here was false.  Do not
+       * treat this as settled inapplicability.
+       *
+       * Clause: "[EBUSY] The directory named by old or new is currently
+       * in use by the system or another process, and the implementation
+       * considers this an error."
+       *
+       * The old reason said NT reports this as "STATUS_ACCESS_DENIED /
        * STATUS_SHARING_VIOLATION rather than anything that maps to
-       * EBUSY, and the clause is conditioned on "the implementation
-       * considers this an error" -- it is optional even where the
-       * mechanism exists. */
+       * EBUSY".  STATUS_SHARING_VIOLATION IS mapped to EBUSY --
+       * src/internal/errno.c:66, three lines from
+       * STATUS_ACCESS_DENIED's mapping to EACCES:
+       *
+       *     case STATUS_SHARING_VIOLATION:
+       *     case STATUS_USER_MAPPED_FILE: return EBUSY;
+       *
+       * So the reporting path this fence declared absent is present and
+       * correct, and the clause is satisfiable exactly when NT answers
+       * SHARING_VIOLATION.
+       *
+       * Whether it DOES is the open question, and it cannot be settled
+       * here.  chdir() goes through RtlSetCurrentDirectory_U
+       * (src/unistd/chdir.c:27), which on NT opens the directory and
+       * keeps the handle in the process parameters -- a held handle is
+       * what would produce the sharing violation.  MEASURED UNDER WINE:
+       * chdir("busyd"), chdir(".."), rename("busyd", ...) SUCCEEDS,
+       * returning 0.  Wine evidently does not hold the directory the
+       * way NT does.  That is a Wine observation and says nothing about
+       * NT; it must not be read as "the clause is unreachable".  Needs
+       * a real-Windows run before anything is concluded.
+       *
+       * The one part of the old reason that stands: the clause is
+       * conditioned on "the implementation considers this an error", so
+       * it is permissive even where the mechanism exists. */
 static void test_renameat_ebusy(void)
 {
 	CHECK(mkdir("ren.d/busy", 0755) == 0);
@@ -1175,12 +1237,24 @@ static void test_fchmodat_dot_component(void)
  * and the process does not have appropriate privileges", "[EACCES] Search
  * permission is denied on a component of the path prefix", "[EROFS] The
  * named file resides on a read-only file system." */
-#if 0 /* N/A: there is no POSIX ownership or permission model here to
-       * violate.  src/stat/chmod.c goes out of its way in the other
-       * direction -- it retries the open with FILE_READ_ATTRIBUTES alone
-       * when Wine denies FILE_WRITE_ATTRIBUTES on an already-read-only
-       * file, precisely so that "the owner of a file may always change
-       * the permission of the file" holds.  A read-only volume is not
+#if 0 /* Mixed, same split as the renameat fence above.
+       *
+       * [EPERM] (effective uid does not match the owner) and [EACCES]
+       * (search permission denied on a path prefix) -- UNIMPL, not N/A.
+       * "There is no POSIX ownership or permission model here to
+       * violate" is a statement about this library, not about NT, which
+       * has both: files carry an owner SID and a DACL, and
+       * STATUS_ACCESS_DENIED is already mapped to EACCES by
+       * src/internal/errno.c:63.  ntlibc declares none of the security
+       * APIs that would let a test establish either condition, which is
+       * the choice recorded in test/posix-unistd.c's permission-bit
+       * banner.  The observation about src/stat/chmod.c retrying with
+       * FILE_READ_ATTRIBUTES alone stands and is worth keeping: it is
+       * there so that "the owner of a file may always change the
+       * permission of the file" holds, which is the clause working, not
+       * a reason the clause cannot apply.
+       *
+       * [EROFS] -- N/A, environment: a read-only volume is not
        * arrangeable from the suite. */
 static void test_fchmodat_eperm(void)
 {
