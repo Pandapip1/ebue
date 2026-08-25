@@ -1006,6 +1006,86 @@ static void test_fchmodat_empty_at_dirfd(void)
 	CHECK(close(dfd) == 0);
 }
 
+/* XBD 4.13 Pathname Resolution, again -- but this one is NOT about the
+ * *at() family, and is filed here only because it was found while
+ * fixing the dirfd-relative dot handling next door. */
+#if 0 /* BUG -- IN THE SHARED ABSOLUTE/AT_FDCWD PATH BUILDER, REACHABLE
+       * FROM EVERY PATH-TAKING FUNCTION IN THIS LIBRARY, not only the
+       * *at() ones.  src/internal/path.c's __ntpath() resolves through
+       * RtlDosPathNameToNtPathName_U, i.e. Windows path normalisation,
+       * which evaluates "." and ".." as a pure string pass BEFORE the
+       * file system is consulted.  Microsoft documents this directly --
+       * GetFullPathName Remarks: "This function does not verify that the
+       * resulting path and file name are valid, or that they see an
+       * existing file on the associated volume."
+       *
+       * XBD 4.13 Pathname Resolution requires the opposite: "Each
+       * filename in the pathname is located in the directory specified
+       * by its predecessor (for example, in the pathname fragment a/b,
+       * file b is located in directory a).  Pathname resolution shall
+       * fail if this cannot be accomplished."  So an intermediate
+       * component that does not exist must give [ENOENT], and one that
+       * exists but is not a directory must give [ENOTDIR] -- and
+       * "dot-dot shall refer to the parent directory of its predecessor
+       * directory" presupposes that the predecessor IS a directory.
+       *
+       * Observed against this tree, through the ordinary absolute /
+       * AT_FDCWD branch -- all four return 0 where POSIX requires
+       * failure:
+       *     stat("dd/nonexistent/../f")        -> 0
+       *     stat("dd/no/such/dir/../../../f")  -> 0
+       *     stat("dd/f/../f")   [f is a FILE]  -> 0
+       *     stat("dd/nonexistent/./../f")      -> 0
+       * with the control stat("dd/reallymissing") correctly -1/ENOENT.
+       *
+       * This is the lexical-".." divergence biting WITH NO SYMLINK
+       * INVOLVED, which is what makes it demonstrable today rather than
+       * a hypothesis about environments where symbolic links can be
+       * created.  (The same lexical resolution is also wrong for a
+       * symlinked predecessor, per 4.13, but that half cannot currently
+       * be exercised here.)
+       *
+       * Recorded rather than fixed, deliberately.  Fixing it means
+       * resolving pathnames component-by-component instead of handing
+       * the string to the Rtl, which changes __ntpath() and therefore
+       * every function built on it, costs a query per component, and
+       * would put this library's path semantics deliberately at odds
+       * with every other program on the platform.  That is a scoped
+       * decision of its own, not something to smuggle in behind a fix
+       * to the dirfd-relative branch -- and note that the dirfd branch
+       * was deliberately made lexical TO MATCH THIS ONE (see
+       * src/internal/path.c's normalize_rel), so if this is ever
+       * changed, both must change together or the two branches will
+       * disagree. */
+static void test_pathres_dotdot_over_nondir(void)
+{
+	struct stat st;
+	CHECK(mkdir("pr.d", 0755) == 0 || errno == EEXIST);
+	CHECK(write_file("pr.d/f", "f") == 0);
+
+	/* an intermediate component that does not exist */
+	errno = 0;
+	CHECK(stat("pr.d/nonexistent/../f", &st) == -1);
+	CHECK(errno == ENOENT);
+
+	/* an intermediate component that exists and is not a directory */
+	errno = 0;
+	CHECK(stat("pr.d/f/../f", &st) == -1);
+	CHECK(errno == ENOTDIR);
+
+	/* and the same through a dot rather than a dot-dot */
+	errno = 0;
+	CHECK(stat("pr.d/nonexistent/./../f", &st) == -1);
+	CHECK(errno == ENOENT);
+
+	/* control: the file really is there by its own name */
+	CHECK(stat("pr.d/f", &st) == 0);
+
+	CHECK(unlink("pr.d/f") == 0);
+	CHECK(rmdir("pr.d") == 0);
+}
+#endif
+
 /* XBD 4.13 Pathname Resolution, which chmod.html's DESCRIPTION invokes
  * for path: a component of "dot" "refers to the directory specified by
  * its predecessor".  A relative path containing one, resolved against a
