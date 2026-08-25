@@ -495,31 +495,140 @@ static void test_scanf_ebadf(const char *name)
 }
 
 /* scanf.html ERRORS, shall fail: "[ENOMEM] Insufficient storage space is
- * available."  The only conversion that allocates is the 'm'
- * assignment-allocation character, which this implementation does not
- * have; src/stdio/scanf.c's scandrain() comment states the position
- * outright -- "scanf has no channel for ENOMEM, so this becomes a
- * matching failure". */
-#if 0 /* BUG: fscanf.html's conversion syntax includes the optional
-       * assignment-allocation character 'm' for the s, c and [
-       * conversions -- "the corresponding argument shall be of type
-       * char ** ... the function shall allocate a buffer" -- and
-       * src/stdio/scanf.c does not implement it: 'm' is not one of the
-       * length modifiers its parser accepts, so "%ms" falls through
-       * switch(*p) to `default: break`, silently consuming nothing,
-       * assigning nothing, and reporting neither a matching failure nor
-       * an error.  With no allocating conversion there is also no
-       * situation in which the required [ENOMEM] can be reported. */
+ * available."  The conversions that allocate are the ones carrying
+ * fscanf.html's [CX] assignment-allocation character 'm': "the
+ * corresponding argument shall be of type char ** ... the function
+ * shall allocate a buffer ... The caller is responsible for freeing the
+ * memory after usage."  That is the only storage src/stdio/scanf.c
+ * obtains on the caller's behalf, so it is the only place the page's
+ * shall-fail can arise.
+ *
+ * Allocator exhaustion is not producible on demand, so what is asserted
+ * here is everything that has to hold for the error to BE reportable:
+ * the three conversions exist, they allocate, a width caps them, and
+ * every way one of them can fail leaves the caller's pointer alone
+ * rather than handing over a half-built buffer.  The two [EILSEQ] cases
+ * are in this function rather than with the other encoding assertions
+ * because they are the only failures that can strand a buffer that
+ * already has bytes in it -- `make asan` runs this file natively under
+ * LeakSanitizer, which is what turns them into a leak check. */
 static void test_scanf_enomem(const char *name)
 {
-	char *p = 0;
+	char *p = 0, *q = 0;
+	wchar_t *w = 0;
+	char buf[16], big[513];
+	int n = -1;
+
+	/* the s conversion: a buffer holding the input and a terminator */
 	CHECK(write_file(name, "allocated") == 0);
 	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
 	CHECK(scanf("%ms", &p) == 1);
 	CHECK(p != 0 && !strcmp(p, "allocated"));
-	free(p);
+	free(p); p = 0;
+
+	/* a field far past any plausible initial buffer size, so the
+	 * growth path is exercised rather than one lucky allocation */
+	memset(big, 'k', 512);
+	big[512] = 0;
+	CHECK(write_file(name, big) == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%ms", &p) == 1);
+	CHECK(p != 0 && strlen(p) == 512);
+	free(p); p = 0;
+
+	/* a field width caps an allocating conversion the same as any
+	 * other, and the directive after it resumes where it stopped */
+	CHECK(write_file(name, "abcdef") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%3ms%ms", &p, &q) == 2);
+	CHECK(p != 0 && !strcmp(p, "abc"));
+	CHECK(q != 0 && !strcmp(q, "def"));
+	free(p); free(q); p = q = 0;
+
+	/* the c conversion: "a sequence of bytes of the number specified by
+	 * the field width", and no terminating null -- so the buffer holds
+	 * exactly three bytes and nothing may be read past them */
+	CHECK(write_file(name, "xyz") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%3mc", &p) == 1);
+	CHECK(p != 0 && !memcmp(p, "xyz", 3));
+	free(p); p = 0;
+
+	/* the [ conversion */
+	CHECK(write_file(name, "12345abc") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%m[0-9]%ms", &p, &q) == 2);
+	CHECK(p != 0 && !strcmp(p, "12345"));
+	CHECK(q != 0 && !strcmp(q, "abc"));
+	free(p); free(q); p = q = 0;
+
+	/* with the l qualifier the argument is wchar_t ** and the bytes are
+	 * converted "as if by a call to the mbrtowc() function" -- the
+	 * character above the BMP costs a surrogate pair, so the buffer the
+	 * conversion sizes for itself is not one element per input byte */
+	CHECK(write_file(name, "\xf0\x9d\x84\x9e") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%mls", &w) == 1);
+	CHECK(w != 0 && w[0] == 0xd834 && w[1] == 0xdd1e && w[2] == 0);
+	free(w); w = 0;
+
+	/* a matching failure receives no pointer: the argument is "a
+	 * pointer variable that will receive a pointer to the allocated
+	 * buffer" and there is no buffer to receive */
+	CHECK(write_file(name, "abc") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%m[0-9]", &p) == 0);
+	CHECK(p == 0);
+
+	/* the assignment-suppressing '*' allocates nothing and consumes no
+	 * argument, so the %d below is the first one */
+	CHECK(write_file(name, "skipme 42") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	CHECK(scanf("%*ms %d", &n) == 1);
+	CHECK(n == 42);
+
+	/* an encoding error PART WAY THROUGH an allocating field: the bytes
+	 * already converted sit in a buffer that has to be released rather
+	 * than handed over, and the caller's pointer stays as it was */
+	CHECK(write_file(name, "ab\x80") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%mls", &w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(w == 0);
+	clearerr(stdin);
+
+	/* likewise a sequence truncated by end of input */
+	CHECK(write_file(name, "\xc3") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%mls", &w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(w == 0);
+	clearerr(stdin);
+
+	/* a conversion that COMPLETED before a later directive failed has
+	 * already handed its buffer over, and the caller owns it -- an
+	 * implementation that dropped it on the floor instead would be the
+	 * leak, since the caller has no other reference to free */
+	CHECK(write_file(name, "ok ab\x80") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	errno = 0;
+	CHECK(scanf("%ms %mls", &p, &w) == EOF);
+	CHECK(errno == EILSEQ);
+	CHECK(p != 0 && !strcmp(p, "ok"));
+	CHECK(w == 0);
+	free(p); p = 0;
+	clearerr(stdin);
+
+	/* the unmodified conversions must be untouched by all of this: 'm'
+	 * is a new branch in the same three conversions, not a rewrite */
+	CHECK(write_file(name, "plain 42") == 0);
+	if (!freopen(name, "rb", stdin)) { CHECK(0); return; }
+	n = -1;
+	CHECK(scanf("%s %d", buf, &n) == 2);
+	CHECK(!strcmp(buf, "plain") && n == 42);
 }
-#endif
 
 /* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does not
  * form a valid character." */
@@ -2063,6 +2172,7 @@ int main(void)
 	test_scanf_returns(name);
 	test_scanf_eilseq(name);
 	test_scanf_l_modifier(name);
+	test_scanf_enomem(name);
 	test_scanf_ebadf(name);
 
 	test_puts_success(name);
