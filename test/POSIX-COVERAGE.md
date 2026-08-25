@@ -3045,8 +3045,8 @@ verdict recorded with its evidence (`flockfile`).
 | sscanf | DESCRIPTION: "An input item shall be defined as the longest sequence of input bytes ... which is an initial subsequence of a matching sequence" — for a 400-digit fraction with an exponent, far past any staging buffer | covered — a fixed-size numeric staging buffer has been a real defect here before; `src/stdio/scanf.c`'s `struct nbuf` moves to the heap when a field outgrows its 128-byte `init[]`, and this exercises that | test/posix-stdio.c `test_sscanf_clauses` |
 | fscanf | DESCRIPTION: "if the comparison shows that they are not equivalent, the directive shall fail, and the differing and subsequent bytes shall remain unread" | covered — only a real stream can show this; `sscanf()` has no observable read position afterwards | test/posix-stdio.c `test_fscanf_stream_clauses` |
 | fscanf | RETURN VALUE: "If an error occurs before the first conversion (if any) has completed ... EOF shall be returned and errno shall be set to indicate the error. If a read error occurs, the error indicator for the stream shall be set" | covered — read error manufactured by scanning a stream not open for reading (`fgetc.html` [EBADF]) | test/posix-stdio.c `test_fscanf_stream_clauses` |
-| fscanf family | DESCRIPTION, `[CX]`: "The %c, %s, and %[ conversion specifiers shall accept an optional assignment-allocation character 'm', which shall cause a memory buffer to be allocated" | **UNIMPL (fenced)** — the directive parser does not recognise `'m'` at all; see below | test/posix-stdio.c `test_scanf_m_modifier` |
-| fscanf family | ERRORS: "[ENOMEM] Insufficient storage space is available" — a **shall fail** | N/A to assert (allocator exhaustion), but a defect on this path is visible by inspection; see "Observed behaviour" below | — |
+| fscanf family | DESCRIPTION, `[CX]`: "The %c, %s, and %[ conversion specifiers shall accept an optional assignment-allocation character 'm', which shall cause a memory buffer to be allocated" | covered — `src/stdio/scanf.c`'s directive parser takes `'m'` where the page puts it (after the width, before the length modifier) and `struct abuf` grows the buffer as the field arrives, trimming it to what it holds before handing it over; all three conversions, both destination widths, and a width combined with `'m'` | test/posix-stdio.c `test_scanf_m_modifier`, test/posix-unreferenced.c `test_scanf_enomem` |
+| fscanf family | ERRORS: "[ENOMEM] Insufficient storage space is available" — a **shall fail** | reportable, not assertable — allocator exhaustion cannot be induced here, but the condition now has a channel: an allocation failure in an `'m'` conversion or in the numeric staging buffer returns `EOF` with `errno` set to `[ENOMEM]`. What *is* asserted is everything that has to hold for that to be reachable and safe — the conversions allocate, and each way they can fail frees the partial buffer and leaves the caller's pointer alone (checked natively under LeakSanitizer by `make asan`) | test/posix-unreferenced.c `test_scanf_enomem` |
 | fscanf family | ERRORS: "[EINVAL] There are insufficient arguments" (a *may fail*) | N/A — a may-fail, and there is no conforming way for a variadic callee to detect the condition | — |
 | fscanf family | ERRORS: "[EILSEQ] Input byte sequence does not form a valid character" | N/A — POSIX-locale-only parser, no encoding step to fail | — |
 | gets | `gets.html` DESCRIPTION: "shall read bytes from ... stdin ... until a `<newline>` is read or an end-of-file condition is encountered. Any `<newline>` shall be discarded and a null byte shall be placed immediately after the last byte read into the array" | covered — both the newline-terminated and the EOF-terminated line | test/posix-stdio.c `test_gets` |
@@ -3165,19 +3165,35 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
 
 ### UNIMPL found (groups K/L)
 
-1. **The `[CX]` assignment-allocation character `'m'` is not
-   implemented for `%c`, `%s` or `%[`.** `fscanf.html` DESCRIPTION:
-   "The %c, %s, and %[ conversion specifiers shall accept an optional
-   assignment-allocation character 'm', which shall cause a memory
-   buffer to be allocated to hold the string converted including a
-   terminating null character ... The application shall be responsible
+1. **The `[CX]` assignment-allocation character `'m'` was not
+   implemented for `%c`, `%s` or `%[` — FIXED.** `fscanf.html`
+   DESCRIPTION: "The %c, %s, and %[ conversion specifiers shall accept
+   an optional assignment-allocation character 'm', which shall cause a
+   memory buffer to be allocated to hold the string converted including
+   a terminating null character ... The application shall be responsible
    for freeing the memory after usage." `src/stdio/scanf.c`'s directive
-   parser recognises `'*'`, a width and the length modifiers, and
-   nothing else; an `'m'` falls through the conversion switch's default
-   arm, so no argument is consumed and every remaining directive is
-   then matched against the wrong input. Measured:
-   `sscanf("abc", "%ms", &p)` returns 0 and leaves `p` untouched.
-   UNIMPL rather than BUG: the feature is absent, not wrong.
+   parser recognised `'*'`, a width and the length modifiers, and
+   nothing else; an `'m'` fell through the conversion switch's default
+   arm, so no argument was consumed and every remaining directive was
+   then matched against the wrong input. Measured before the fix:
+   `sscanf("abc", "%ms", &p)` returned 0 and left `p` untouched. It was
+   filed UNIMPL rather than BUG because the feature was absent rather
+   than wrong.
+
+   The parser now takes `'m'` where the page puts it — after the field
+   width and before the length modifier — and `struct abuf` in the same
+   file grows the destination as the field arrives, doubling rather than
+   trusting the width (which may be absent, or far larger than the
+   input), then trimming to what the field holds before storing the
+   pointer through the caller's `char **`/`wchar_t **`. The pointer is
+   stored **only** on success, so a matching failure, an encoding error
+   or an allocation failure all free the partial buffer and leave the
+   caller's variable exactly as it was. Both destination widths are
+   covered, since `'m'` composes with the `l` qualifier the same way the
+   non-allocating forms do, and the width the conversion allocates for
+   is not one element per input unit: one multibyte character above the
+   BMP becomes a surrogate *pair* of `wchar_t`, and under `fwscanf()`
+   one wide character becomes up to `MB_LEN_MAX` bytes.
 
 ### Observed behaviour where POSIX permits latitude (groups K/L)
 
@@ -3191,17 +3207,30 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
   deliberately not fenced: the reading is genuinely ambiguous and
   pinning either answer would be inventing a requirement.
 
-- **`fscanf()` has no channel for `[ENOMEM]`, which the page makes a
-  *shall fail*.** `fscanf.html` ERRORS: "In addition, the fscanf()
-  function shall fail if: ... [ENOMEM] Insufficient storage space is
-  available." `src/stdio/scanf.c` says so itself, in the banner over
-  `scandrain()`: "scanf has no channel for ENOMEM, so this becomes a
-  matching failure". A conforming caller therefore cannot distinguish
-  a malformed field from an exhausted allocator. Found by inspection
-  and recorded here rather than fenced, for the same reason the
-  `glob.h` section records its `GLOB_NOSPACE` finding this way: no
-  assertion this suite can write reaches the path, so there is nothing
-  to un-fence when it is fixed.
+- **`fscanf()` had no channel for `[ENOMEM]`, which the page makes a
+  *shall fail* — FIXED.** `fscanf.html` ERRORS: "In addition, the
+  fscanf() function shall fail if: ... [ENOMEM] Insufficient storage
+  space is available." `src/stdio/scanf.c` used to say so itself, in the
+  banner over `scandrain()`: "scanf has no channel for ENOMEM, so this
+  becomes a matching failure" — so a conforming caller could not
+  distinguish a malformed field from an exhausted allocator. It was
+  recorded here rather than fenced for the same reason the `glob.h`
+  section records its `GLOB_NOSPACE` finding this way: no assertion this
+  suite can write reaches the path.
+
+  It was fixed alongside the `'m'` conversions above, which are the
+  first thing in this parser to allocate on the *caller's* behalf and so
+  the first thing that made the error worth having a channel for. An
+  allocation failure — in an `'m'` buffer or in the numeric staging
+  buffer `scandrain()` guards — now returns `EOF` with `errno` set to
+  `[ENOMEM]`. It deliberately does **not** set the stream's error
+  indicator, unlike `[EILSEQ]`: `fgetc.html` makes that indicator a
+  statement about a *read* error, and nothing went wrong reading the
+  stream. The path still cannot be reached by an assertion, so the
+  ledger entry stays "reportable, not assertable"; what the suite does
+  pin is everything the report depends on — that the conversions
+  allocate at all, and that every failure among them frees what it
+  built (checked natively under LeakSanitizer by `make asan`).
 
 - **`gets()` returns `s`, not a null pointer, if a read error strikes
   after some bytes are already in the array.** `gets.html` RETURN
@@ -3236,10 +3265,14 @@ carried by this file alone.
 single call transmitting more than 2 GiB). `[ENOMEM]` on the
 printf and scanf families (allocator exhaustion). `[EILSEQ]` on both
 families (POSIX-locale-only, no encoding step). `fscanf`'s `[EINVAL]`
-may-fail. `gets()`'s read-error-after-partial-line path, and
-`fscanf()`'s `[ENOMEM]` path — both recorded under "Observed
-behaviour" above as inspection findings that no assertion here can
-reach. Every clause of `flockfile.html` that needs a second thread.
+may-fail. `gets()`'s read-error-after-partial-line path, recorded under
+"Observed behaviour" above as an inspection finding that no assertion
+here can reach. `fscanf()`'s `[ENOMEM]` path is still unreachable by an
+assertion for the same reason, but it is no longer an inspection finding
+about a *missing* channel: since the `'m'` conversions landed, the error
+is produced, and what the suite reaches instead is every property the
+report rests on. Every clause of `flockfile.html` that needs a second
+thread.
 
 ## unistd.h identity, process group, session, scheduling (successor-queue item 2, group M)
 
@@ -3924,7 +3957,7 @@ decides whether anyone acts:
 | scanf | DESCRIPTION: "equivalent to `fscanf()` with the argument `stdin` interposed"; `%n` consuming no input and never counting toward the return value; the assignment-suppressing `*` | covered | `test_scanf_basics`, `test_scanf_returns` |
 | scanf | RETURN VALUE: "the number of successfully matched and assigned input items", "can be zero in the event of an early matching failure", and "If the input ends before the first conversion ... has completed ... EOF shall be returned" — all three, plus the case where a *later* conversion hits EOF and the result is therefore not EOF | covered | `test_scanf_returns` |
 | scanf | `fgetc.html` `[EBADF]` — `scanf()` on a `stdin` reopened write-only | covered | `test_scanf_ebadf` |
-| scanf | `ERRORS`, shall fail: `[ENOMEM]` "Insufficient storage space is available" | **BUG (fenced)** — the `m` assignment-allocation character is not implemented at all; `%ms` falls through `switch(*p)` to `default: break`, assigning nothing and reporting neither a matching failure nor an error. With no allocating conversion there is no situation in which `[ENOMEM]` can arise | `test_scanf_enomem` |
+| scanf | `ERRORS`, shall fail: `[ENOMEM]` "Insufficient storage space is available" | covered — FIXED (this commit); the fenced defect was: the `m` assignment-allocation character was not implemented at all, so `%ms` fell through `switch(*p)` to `default: break`, assigning nothing and reporting neither a matching failure nor an error, and with no allocating conversion there was no situation in which `[ENOMEM]` could arise. `src/stdio/scanf.c` now implements `'m'` for `%s`, `%c` and `%[` (see the `fscanf family` rows above), so the error has a channel: an allocation failure returns `EOF` with `errno == ENOMEM`. Exhausting the allocator is still not producible on demand, so what the test asserts is every property the report rests on — the conversions allocate, a width caps them, and a matching failure or an `[EILSEQ]` part-way through a field frees the partial buffer and leaves the caller's pointer untouched | `test_scanf_enomem` |
 |  | POINTER, 2026-08-24: `test/external-suites.md`'s `regression/printf-fmt-n | %n mismatch | needs triage` row was RESOLVED by **c200c7f** ("printf: read %z and %t as size_t/ptrdiff_t, not as long").  That document is a dated measurement against a named base revision and is deliberately not edited; the resolution is recorded here, in the living one, so a reader of either finds it | -- | -- |
 | scanf | `ERRORS`, shall fail: `[EILSEQ]` "Input byte sequence does not form a valid character" | covered — raised by the `l` length modifier's conversion, and the conversion itself is asserted separately, because detecting the failure and performing the conversion are two different things | `test_scanf_eilseq`, `test_scanf_l_modifier` (both in test/posix-unreferenced.c, both unfenced) |
 |  | CORRECTION, 2026-08-24: this row previously read "**BUG (fenced)** — the `l` length modifier is parsed and then ignored by the `s`, `c` and `[` conversions, so `%ls` stores raw bytes into a `wchar_t` buffer".  That stopped being true at **6029595** ("scanf: implement the l (ell) length modifier for %s, %c and %["), which added `wide_put()` to `src/stdio/scanf.c` and unfenced both tests; the row was not updated with it.  Recorded rather than silently overwritten so the change is legible.  Note this is a living document and is corrected in place; `POSIX-GAP-ACCOUNTING.md` is a dated record and is never retro-edited | -- | -- |

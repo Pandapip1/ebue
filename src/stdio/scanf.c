@@ -35,9 +35,10 @@
  * refuse it, so struct sc keeps a small stack behind it (see unrd
  * below) and seeks back whatever is left over at the end.
  *
- * %[...] scansets and the usual conversions are implemented; positional
- * arguments and vector-of-float %a/%A input conversions are not, since
- * nothing in this tree needs them.
+ * %[...] scansets, the usual conversions and POSIX's [CX]
+ * assignment-allocation character 'm' (see struct abuf) are
+ * implemented; positional arguments and vector-of-float %a/%A input
+ * conversions are not, since nothing in this tree needs them.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -86,12 +87,35 @@ struct sc {
 };
 
 /* The text of one numeric field.  Starts in the caller's frame and
- * grows on the heap; oom is sticky, and the caller turns it into a
- * matching failure, which is the only failure scanf can report. */
+ * grows on the heap; oom is sticky, and the caller turns it into the
+ * [ENOMEM] fscanf.html makes a shall-fail. */
 struct nbuf {
 	char *p;
 	int len, cap, oom;
 	char init[128];
+};
+
+/* The destination of an 'm'-qualified %s, %c or %[.
+ *
+ * fscanf.html DESCRIPTION, the [CX] assignment-allocation character:
+ * "The %c, %s, and %[ conversion specifiers shall accept an optional
+ * assignment-allocation character 'm', which shall cause a memory
+ * buffer to be allocated to hold the string converted including a
+ * terminating null character.  In such a case, the argument
+ * corresponding to the conversion specifier should be a reference to a
+ * pointer variable that will receive a pointer to the allocated buffer
+ * ... the caller is responsible for freeing the memory after usage."
+ *
+ * cap counts ELEMENTS, not bytes, because the destination is wchar_t
+ * for an l-qualified conversion and char otherwise, and store_unit()
+ * below indexes it in elements either way; esz says which.  The
+ * caller's pointer is written only once the conversion has succeeded,
+ * so a matching failure, an encoding error or an allocation failure all
+ * leave it exactly as it was and free whatever had been built. */
+struct abuf {
+	void *p;
+	int cap;                /* elements allocated */
+	int esz;                /* bytes per element */
 };
 
 /* A width-limited view of the cursor: %20lf may take twenty characters
@@ -245,6 +269,70 @@ static int nb_put(struct nbuf *b, int c)
 	}
 	b->p[b->len++] = (char)c;
 	return 1;
+}
+
+static void ab_init(struct abuf *b, int esz)
+{
+	b->p = 0;
+	b->cap = 0;
+	b->esz = esz;
+}
+
+/* Drop a buffer the conversion is not going to hand over.  Every exit
+ * from an 'm' conversion that is not a success goes through here, which
+ * is what keeps a matching failure or an [EILSEQ] from leaking the part
+ * of the field that had already been built. */
+static void ab_free(struct abuf *b)
+{
+	free(b->p);
+	b->p = 0;
+	b->cap = 0;
+}
+
+/* Room for `need` elements.  Doubling rather than growing by the field
+ * width, which may be absent entirely and, when present, may be far
+ * larger than the input: %1000000ms on a three-byte field should cost
+ * three bytes.  0 is out of memory, which the caller turns into
+ * [ENOMEM] -- including the two overflow guards, since a size this
+ * arithmetic cannot even express is a size no allocator can serve. */
+static int ab_room(struct abuf *b, int need)
+{
+	void *q;
+	int cap = b->cap;
+
+	if (need <= cap) return 1;
+	if (cap < 32) cap = 32;
+	while (cap < need) {
+		if (cap > INT_MAX / 2) return 0;
+		cap *= 2;
+	}
+	if (cap > INT_MAX / b->esz) return 0;
+	q = realloc(b->p, (size_t)cap * (size_t)b->esz);
+	if (!q) return 0;
+	b->p = q;
+	b->cap = cap;
+	return 1;
+}
+
+/* Hand the finished buffer to the caller.  `n` is the element count the
+ * buffer has to keep -- including the terminator for %s and %[, and
+ * without one for %c, which fscanf.html does not terminate -- so the
+ * caller gets a block the size of what it holds rather than of whatever
+ * the doubling above last landed on.  A shrink that fails is not a
+ * failure of the conversion: the oversized block is just as usable, and
+ * realloc leaves it untouched when it cannot satisfy the request.
+ *
+ * The store is through void ** for the same reason the conversions
+ * fetch their argument as a bare void *: it is char ** without the l
+ * qualifier and wchar_t ** with it, and every object pointer has one
+ * representation on this target. */
+static void ab_give(struct abuf *b, void *arg, int n)
+{
+	void *q = realloc(b->p, (size_t)(n > 0 ? n : 1) * (size_t)b->esz);
+	if (q) b->p = q;
+	*(void **)arg = b->p;
+	b->p = 0;
+	b->cap = 0;
 }
 
 static int fld_get(struct fld *fl)
@@ -425,10 +513,11 @@ static int scanfloat(struct fld *fl, struct nbuf *b)
 	return ok;
 }
 
-/* Out of memory staging a field.  scanf has no channel for ENOMEM, so
- * this becomes a matching failure -- but the field is drained first, so
- * the stream stops where it would have stopped and the directives that
- * would have followed see the same input either way. */
+/* Out of memory staging a field.  The failure itself is reported as the
+ * [ENOMEM] fscanf.html makes a shall-fail; the field is drained first so
+ * that the stream stops where the input item ended rather than in the
+ * middle of it, which is where a caller inspecting the stream after the
+ * error would expect to find it. */
 static void scandrain(struct fld *fl)
 {
 	int c;
@@ -582,6 +671,17 @@ static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
 	}
 }
 
+/* How many elements an allocating destination must have room for before
+ * the next store_unit(), given that nn are already in it.
+ *
+ * One INPUT unit is not one stored element: the wide -> char row of
+ * store_unit() emits up to MB_LEN_MAX bytes from a single wide
+ * character, and the bytes -> wchar_t row emits two wchar_t when a
+ * multibyte character above the BMP decodes to a surrogate pair.  So
+ * the headroom is a whole unit's worth, not one element, plus the one
+ * %s and %[ still owe their terminator. */
+#define ALLOC_HEAD(nn) ((nn) + MB_LEN_MAX + 1)
+
 /* The null that terminates %s and %[ (never %c), in the width the
  * destination actually has. */
 static void store_term(void *dst, int nn, int wide_out)
@@ -616,7 +716,7 @@ static int wset_has(const char *b, const char *e, int st, unsigned c)
 
 static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 {
-	int nmatched = 0, gotEOF = 0, ilseq = 0;
+	int nmatched = 0, gotEOF = 0, ilseq = 0, oom = 0;
 	const char *fp = fmt;
 	int c = 0;
 	struct sc sc;
@@ -643,11 +743,22 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 		}
 
 		{
-			int assign = 1, width = -1, lm = LM_NONE;
+			int assign = 1, width = -1, lm = LM_NONE, alloc = 0;
 			if (gf(fp, st) == '*') { assign = 0; fp += st; }
 			while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { if (width < 0) width = 0; width = width * 10 + (int)(gf(fp, st) - '0'); fp += st; }
+			/* fscanf.html puts the assignment-allocation character
+			 * 'm' between the field width and the length modifier,
+			 * which is where this loop picks it up; taking it in the
+			 * same loop as the modifiers also accepts "%lms" for the
+			 * "%mls" the page spells out.  It means something only to
+			 * the s, c and [ conversions -- the page says the
+			 * application "shall ensure" it is used with no other and
+			 * not together with '*' -- and the other conversions
+			 * ignore it rather than inventing a diagnostic for
+			 * something the page leaves undefined. */
 			for (;;) {
-				if (gf(fp, st) == 'h') { lm = lm == LM_h ? LM_hh : LM_h; fp += st; }
+				if (gf(fp, st) == 'm') { alloc = 1; fp += st; }
+				else if (gf(fp, st) == 'h') { lm = lm == LM_h ? LM_hh : LM_h; fp += st; }
 				else if (gf(fp, st) == 'l') { lm = lm == LM_l ? LM_ll : LM_l; fp += st; }
 				else if (gf(fp, st) == 'j') { lm = LM_j; fp += st; }
 				else if (gf(fp, st) == 'z') { lm = LM_z; fp += st; }
@@ -747,7 +858,10 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				nb_init(&nb);
 				r = scanfloat(&fl, &nb);
 				if (r <= 0) {
-					if (r < 0) scandrain(&fl);
+					/* r < 0 is out of memory staging the field,
+					 * not a matching failure: the item may well
+					 * have matched and there is no way to know. */
+					if (r < 0) { scandrain(&fl); oom = 1; }
 					nb_done(&nb);
 					goto done;
 				}
@@ -767,24 +881,38 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 			case 's': {
 				/* One va_arg for both destination widths: char * without
 				 * the l qualifier and wchar_t * with it, both object
-				 * pointers of the same representation on this target. */
-				void *dst = assign ? va_arg(ap, void *) : 0;
+				 * pointers of the same representation on this target.
+				 * With 'm' the argument is one indirection further out
+				 * -- char ** or wchar_t ** -- and names where to leave
+				 * the buffer this conversion allocates rather than the
+				 * array to write into, so `arg` and `dst` are two
+				 * different things from here on. */
+				void *arg = assign ? va_arg(ap, void *) : 0;
 				int wout = lm == LM_l;
+				int alc = alloc && assign;
+				struct abuf ab;
+				void *dst = alc ? 0 : arg;
 				mbstate_t mbs;
 				int nn = 0, nu = 0;   /* elements stored; units read */
+				ab_init(&ab, wout ? (int)sizeof(wchar_t) : 1);
 				memset(&mbs, 0, sizeof mbs);
 				c = skipspace(&sc);
 				if (c == EOF) { gotEOF = 1; goto done; }
 				for (; c != EOF && !isspace(c) && (width < 0 || nu < width); c = rd(&sc)) {
-					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; goto done; }
+					if (alc) {
+						if (!ab_room(&ab, ALLOC_HEAD(nn))) { oom = 1; ab_free(&ab); goto done; }
+						dst = ab.p;   /* re-read: growing may have moved it */
+					}
+					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; ab_free(&ab); goto done; }
 					nu++;
 				}
 				unrd(&sc, c);
 				/* a sequence left half-finished is an encoding error
 				 * too: there are no more units that could complete it */
-				if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
-				if (nu == 0) goto done;
-				if (assign) { store_term(dst, nn, wout); nmatched++; }
+				if (!mbsinit(&mbs)) { ilseq = 1; ab_free(&ab); goto done; }
+				if (nu == 0) { ab_free(&ab); goto done; }
+				if (alc) { store_term(ab.p, nn, wout); ab_give(&ab, arg, nn + 1); nmatched++; }
+				else if (assign) { store_term(dst, nn, wout); nmatched++; }
 				break;
 			}
 			case 'c': {
@@ -795,19 +923,30 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				 * both, and the l qualifier changes what is stored rather
 				 * than what the width counts.  (C99 is arguably read the
 				 * other way for %lc; POSIX is the spec this suite audits
-				 * against and it says bytes.)  No null is added. */
-				void *dst = assign ? va_arg(ap, void *) : 0;
+				 * against and it says bytes.)  No null is added, and an
+				 * 'm' buffer is therefore sized to exactly what was
+				 * stored, with no room for one. */
+				void *arg = assign ? va_arg(ap, void *) : 0;
 				int wout = lm == LM_l;
+				int alc = alloc && assign;
+				struct abuf ab;
+				void *dst = alc ? 0 : arg;
 				mbstate_t mbs;
 				int w = width < 0 ? 1 : width, nu, nn = 0;
+				ab_init(&ab, wout ? (int)sizeof(wchar_t) : 1);
 				memset(&mbs, 0, sizeof mbs);
 				for (nu = 0; nu < w; nu++) {
 					c = rd(&sc);
 					if (c == EOF) break;
-					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; goto done; }
+					if (alc) {
+						if (!ab_room(&ab, ALLOC_HEAD(nn))) { oom = 1; ab_free(&ab); goto done; }
+						dst = ab.p;   /* re-read: growing may have moved it */
+					}
+					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; ab_free(&ab); goto done; }
 				}
-				if (nu == 0) { gotEOF = 1; goto done; }
-				if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
+				if (nu == 0) { gotEOF = 1; ab_free(&ab); goto done; }
+				if (!mbsinit(&mbs)) { ilseq = 1; ab_free(&ab); goto done; }
+				if (alc) ab_give(&ab, arg, nn);
 				if (assign) nmatched++;
 				break;
 			}
@@ -817,12 +956,17 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				 * char * without the l qualifier and wchar_t * with it,
 				 * and both are object pointers of the same
 				 * representation on this target, so it is fetched once
-				 * and cast at the point of use. */
-				void *dst = assign ? va_arg(ap, void *) : 0;
+				 * and cast at the point of use -- and one further
+				 * indirection out again when 'm' is present. */
+				void *arg = assign ? va_arg(ap, void *) : 0;
 				int wout = lm == LM_l;
+				int alc = alloc && assign;
+				struct abuf ab;
+				void *dst = alc ? 0 : arg;
 				mbstate_t mbs;
 				int neg = 0, nn = 0, nu = 0, anyhigh = 0;
 				const char *setstart, *setend;
+				ab_init(&ab, wout ? (int)sizeof(wchar_t) : 1);
 				fp += st;
 				if (gf(fp, st) == '^') { neg = 1; fp += st; }
 				setstart = fp;
@@ -849,14 +993,19 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				       && (((unsigned)c < 256 ? set[c] != 0
 				            : anyhigh && wset_has(setstart, setend, st, (unsigned)c)) != neg)
 				       && (width < 0 || nu < width)) {
-					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; goto done; }
+					if (alc) {
+						if (!ab_room(&ab, ALLOC_HEAD(nn))) { oom = 1; ab_free(&ab); goto done; }
+						dst = ab.p;   /* re-read: growing may have moved it */
+					}
+					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; ab_free(&ab); goto done; }
 					nu++;
 					c = rd(&sc);
 				}
 				unrd(&sc, c);
-				if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
-				if (nu == 0) { if (c == EOF) gotEOF = 1; goto done; }
-				if (assign) { store_term(dst, nn, wout); nmatched++; }
+				if (!mbsinit(&mbs)) { ilseq = 1; ab_free(&ab); goto done; }
+				if (nu == 0) { ab_free(&ab); if (c == EOF) gotEOF = 1; goto done; }
+				if (alc) { store_term(ab.p, nn, wout); ab_give(&ab, arg, nn + 1); nmatched++; }
+				else if (assign) { store_term(dst, nn, wout); nmatched++; }
 				break;
 			}
 			case 'p': {
@@ -906,6 +1055,19 @@ done:
 	 * any conversion", and the stream's error indicator has to be set so
 	 * ferror() can tell it apart from end-of-file. */
 	if (ilseq) { f->err = 1; errno = EILSEQ; return EOF; }
+	/* fscanf.html ERRORS, shall fail: "[ENOMEM] Insufficient storage
+	 * space is available."  Two things allocate here: the 'm'
+	 * assignment-allocation character, which allocates on the caller's
+	 * behalf, and the numeric staging buffer, which allocates on this
+	 * function's own.  Either failing is the page's shall-fail, and
+	 * EOF-with-errno is the only channel RETURN VALUE gives an error.
+	 *
+	 * Unlike [EILSEQ] this does NOT set the stream's error indicator:
+	 * the stream is intact and nothing went wrong reading it, and
+	 * fgetc.html makes the indicator a statement about a *read* error.
+	 * A caller separates the two the way it always has -- ferror() for
+	 * an input failure, errno for this. */
+	if (oom) { errno = ENOMEM; return EOF; }
 	return (nmatched == 0 && gotEOF) ? EOF : nmatched;
 }
 
