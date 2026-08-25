@@ -85,6 +85,64 @@ static void test_fflush_read_stream(const char *name)
 	}
 }
 
+#if 0	/* BUG: fflush() fails on a readable stream whose fd cannot seek.
+	 * fflush.html DESCRIPTION states the read-stream action with an
+	 * explicit seekability condition: "For a stream open for reading
+	 * with an underlying file description, if the file is not already
+	 * at EOF, and the file is one capable of seeking, the file offset
+	 * of the underlying open file description shall be set to the file
+	 * position of the stream, and any characters pushed back onto the
+	 * stream by ungetc() or ungetwc() that have not subsequently been
+	 * read from the stream shall be discarded (without further changing
+	 * the file offset)."  A pipe, FIFO or console is not capable of
+	 * seeking, so there is no offset to move and nothing has failed --
+	 * which leaves only RETURN VALUE's success arm: "Upon successful
+	 * completion, fflush() shall return 0; otherwise, it shall set the
+	 * error indicator for the stream, return EOF, and set errno to
+	 * indicate the error."
+	 *
+	 * Mechanism: src/stdio/buf.c's __fflush_locked() exempts memory
+	 * streams from the resync and nothing else -- `if (ahead &&
+	 * !f->is_mem)`.  A pipe-backed stream with read-ahead therefore
+	 * still calls __file_seek(), which reaches src/unistd/lseek.c:18,
+	 * `if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }`.
+	 * __fflush_locked() then latches f->err and returns -1, so fflush()
+	 * returns EOF on a stream where nothing was wrong, ferror() reports
+	 * an error that never happened, and fclose() -- which returns
+	 * fflush()'s result (src/stdio/file.c:150) -- reports EOF for a
+	 * stream that closed perfectly well.
+	 *
+	 * The condition to test is seekability, not is_mem: the fix is to
+	 * treat an ESPIPE from the resync seek as "nothing to resync"
+	 * rather than as a failure, the way the read-ahead distance is
+	 * already ignored for a memory stream.  This is source-derived --
+	 * it is ntlibc's own lseek() refusing a non-__FD_FILE fd, not an
+	 * emulator artefact -- so it holds on Wine and on real NT alike.
+	 * Re-enable when fflush() stops failing here. */
+static void test_fflush_nonseekable_read_stream(void)
+{
+	int fds[2];
+	FILE *f;
+
+	CHECK(pipe(fds) == 0);
+	CHECK(write(fds[1], "abcdefgh", 8) == 8);
+	CHECK(close(fds[1]) == 0);
+
+	f = fdopen(fds[0], "rb");
+	CHECK(f != 0);
+	if (!f) { close(fds[0]); return; }
+
+	/* One byte consumed, seven sitting in the buffer: the read-ahead
+	 * distance __fflush_locked() would try to seek back over. */
+	CHECK(fgetc(f) == 'a');
+
+	CHECK(fflush(f) == 0);		/* not seekable: nothing to resync */
+	CHECK(ferror(f) == 0);		/* and so nothing to report */
+	CHECK(fgetc(f) == 'b');		/* the stream is left undisturbed */
+	CHECK(fclose(f) == 0);
+}
+#endif
+
 /* fopen.html DESCRIPTION: on a stream open for update ("+"), "output is
  * not directly followed by input without an intervening call to
  * fflush() or to a file positioning function..., and input is not
