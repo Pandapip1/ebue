@@ -1196,37 +1196,30 @@ static void test_fnmatch_bracket_edges(void)
 	CHECK(fnmatch("[\n]", "\n", 0) == 0);
 }
 
-#if 0 /* BUG: XCU 2.13.1 -- "Otherwise, the <left-square-bracket> shall
-	match the character itself."
-
-	src/fnmatch/fnmatch.c's bracket scanner walks to the end of the
-	pattern looking for a closing ']' and, not finding one, returns
-	the accumulated match state anyway -- so a pattern with an
-	unterminated '[' is consumed as if it had been a bracket
-	expression, instead of the '[' being demoted to an ordinary
-	character.
-
-	Measured: fnmatch("[abc", "[abc", 0), fnmatch("a[b", "a[b", 0)
-	and fnmatch("[", "[", 0) all give FNM_NOMATCH; POSIX requires 0
-	for each. glibc, musl and the BSDs all match.
-
-	Note this differs deliberately from the regular-expression
-	grammar, where the same input is an error -- see
-	test_regex_bracket_edges(), which asserts REG_EBRACK for
-	regcomp("[abc"). The two pattern languages are not the same
-	language, and this is one of the places they part company.
-
-	Fixing this also un-masks the glob() bracket/slash gap fenced as
-	test_glob_bracket_containing_slash() below -- the two should be
-	fixed together. */
 static void test_fnmatch_unmatched_bracket_is_literal(void)
 {
 	CHECK(fnmatch("[abc", "[abc", 0) == 0);
 	CHECK(fnmatch("a[b", "a[b", 0) == 0);
 	CHECK(fnmatch("[", "[", 0) == 0);
 	CHECK(fnmatch("[]", "[]", 0) == 0);
+
+	/* The demoted '[' is an ORDINARY CHARACTER, so it matches '[' and
+	 * nothing else.  Without these, "treat it as a literal" is
+	 * indistinguishable from "treat it as a wildcard that consumes one
+	 * character" -- mutation-testing confirmed that gap: dropping the
+	 * `*s != '['` test passed every assertion above. */
+	CHECK(fnmatch("[abc", "xabc", 0) == FNM_NOMATCH);
+	CHECK(fnmatch("[", "x", 0) == FNM_NOMATCH);
+	CHECK(fnmatch("a[b", "axb", 0) == FNM_NOMATCH);
+	CHECK(fnmatch("[", "", 0) == FNM_NOMATCH);
+
+	/* and a WELL-FORMED bracket must still behave as a bracket, so the
+	 * demotion cannot have swallowed the ordinary case */
+	CHECK(fnmatch("[abc]", "b", 0) == 0);
+	CHECK(fnmatch("[abc]", "d", 0) == FNM_NOMATCH);
+	CHECK(fnmatch("[!abc]", "d", 0) == 0);
+	CHECK(fnmatch("[a-c]", "b", 0) == 0);
 }
-#endif
 
 /* glob.html DESCRIPTION: "If a filename begins with a <period>, the
  * <period> shall be explicitly matched by using a <period> as the
@@ -3275,6 +3268,7 @@ int main(int argc, char **argv)
 
 	test_fnmatch_period_forms();
 	test_fnmatch_bracket_edges();
+	test_fnmatch_unmatched_bracket_is_literal();
 	test_glob_mark_trailing_slash_pattern();
 	test_glob_append_does_not_resort();
 	test_glob_empty_pattern();

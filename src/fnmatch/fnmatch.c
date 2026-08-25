@@ -47,7 +47,24 @@ static int class_match(const char *name, size_t len, unsigned char c)
 
 /* *pp points at the '[' that opens the bracket expression; advanced past
  * the matching ']' on return.  Returns 1 if c is a member (after
- * applying negation), 0 otherwise. */
+ * applying negation), 0 if not, and -1 if the expression is UNTERMINATED
+ * -- no ']' before the end of the pattern -- in which case *pp is left
+ * where it was and the caller must treat the '[' as an ordinary
+ * character.
+ *
+ * XCU 2.13.1: "Otherwise, the <left-square-bracket> shall match the
+ * character itself."  This used to walk to the end looking for a ']'
+ * and, not finding one, return the accumulated match state anyway -- so
+ * an unterminated '[' was consumed as if it had been a bracket
+ * expression instead of being demoted to a literal.  fnmatch("[abc",
+ * "[abc", 0), fnmatch("a[b", "a[b", 0) and fnmatch("[", "[", 0) all
+ * gave FNM_NOMATCH where POSIX requires 0; glibc, musl and the BSDs all
+ * match, and glibc was re-measured to confirm it before this change.
+ *
+ * Note this differs deliberately from the regular-expression grammar,
+ * where the same input is an error -- test_regex_bracket_edges()
+ * asserts REG_EBRACK for regcomp("[abc").  The two pattern languages
+ * are not the same language and this is one of the places they part. */
 static int bracket_match(const char **pp, unsigned char c, int flags)
 {
 	const char *p = *pp + 1;
@@ -90,7 +107,10 @@ static int bracket_match(const char **pp, unsigned char c, int flags)
 			}
 		}
 	}
-	if (*p == ']') p++;
+	/* Loop exits on ']' or on end-of-pattern; the latter is the
+	 * unterminated case, and *pp deliberately stays put. */
+	if (*p != ']') return -1;
+	p++;
 	*pp = p;
 	return neg ? !matched : matched;
 }
@@ -127,10 +147,25 @@ static int fnm_match(const char *pat, const char *s, const char *start, int flag
 			s++;
 		} else if (*pat == '[') {
 			unsigned char c = (unsigned char)*s;
+			const char *probe = pat;
+			int r;
+			/* Probed before the FNM_PATHNAME/FNM_PERIOD guards below,
+			 * because those describe what a BRACKET EXPRESSION may
+			 * match; an unterminated '[' is not one, and must be judged
+			 * as the ordinary character it is. */
+			r = *s ? bracket_match(&probe, c, flags) : -1;
+			if (r < 0) {
+				/* not a bracket expression: a literal '[' */
+				if (*s != '[') return FNM_NOMATCH;
+				pat++;
+				s++;
+				continue;
+			}
 			if (!*s) return FNM_NOMATCH;
 			if ((flags & FNM_PATHNAME) && c == '/') return FNM_NOMATCH;
 			if ((flags & FNM_PERIOD) && c == '.' && leading(start, s, flags)) return FNM_NOMATCH;
-			if (!bracket_match(&pat, c, flags)) return FNM_NOMATCH;
+			if (!r) return FNM_NOMATCH;
+			pat = probe;
 			s++;
 		} else if (*pat == '\\' && !(flags & FNM_NOESCAPE)) {
 			if (!pat[1]) return FNM_NOMATCH; /* trailing unescaped backslash: malformed */
