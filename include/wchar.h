@@ -16,6 +16,7 @@ extern "C" {
 #define __NEED_wchar_t
 #define __NEED_wint_t
 #define __NEED_mbstate_t
+#define __NEED_locale_t
 
 #include <bits/alltypes.h>
 
@@ -39,12 +40,26 @@ int wcscmp (const wchar_t *, const wchar_t *);
 int wcsncmp (const wchar_t *, const wchar_t *, size_t);
 wchar_t *wcschr (const wchar_t *, wchar_t);
 wchar_t *wcsrchr (const wchar_t *, wchar_t);
+wchar_t *wcsstr (const wchar_t *, const wchar_t *);
 size_t wcslen (const wchar_t *);
 wchar_t *wmemcpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
 wchar_t *wmemmove (wchar_t *, const wchar_t *, size_t);
 wchar_t *wmemset (wchar_t *, wchar_t, size_t);
 int wmemcmp (const wchar_t *, const wchar_t *, size_t);
 wchar_t *wmemchr (const wchar_t *, wchar_t, size_t);
+
+size_t wcsnlen (const wchar_t *, size_t);
+wchar_t *wcsdup (const wchar_t *);
+wchar_t *wcpcpy (wchar_t *__restrict, const wchar_t *__restrict);
+wchar_t *wcpncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
+wchar_t *wcspbrk (const wchar_t *, const wchar_t *);
+size_t wcsspn (const wchar_t *, const wchar_t *);
+size_t wcscspn (const wchar_t *, const wchar_t *);
+wchar_t *wcstok (wchar_t *__restrict, const wchar_t *__restrict, wchar_t **__restrict);
+int wcscasecmp (const wchar_t *, const wchar_t *);
+int wcsncasecmp (const wchar_t *, const wchar_t *, size_t);
+int wcscasecmp_l (const wchar_t *, const wchar_t *, locale_t);
+int wcsncasecmp_l (const wchar_t *, const wchar_t *, size_t, locale_t);
 
 wint_t btowc (int);
 int wctob (wint_t);

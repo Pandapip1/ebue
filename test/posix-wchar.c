@@ -35,19 +35,21 @@
  *            code unit at a time and can never see its partner).
  *   UNIMPL:  absent, but nothing about UTF-16 prevents implementing it.
  * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib,
- * 2026-08-22): fgetwc, fgetws, fputwc, fputws, fwide, getwc, getwchar,
+ * 2026-08-24): fgetwc, fgetws, fputwc, fputws, fwide, getwc, getwchar,
  * putwc, putwchar, ungetwc, fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, open_wmemstream, wcwidth, wcswidth, wcsstr, wcspbrk,
- * wcscspn, wcsspn, wcstok, wcsdup, wcsnlen, wcpcpy, wcpncpy, wcscasecmp,
- * wcscasecmp_l, wcsncasecmp, wcsncasecmp_l, wcstol, wcstoll, wcstoul,
+ * wscanf, open_wmemstream, wcwidth, wcswidth, wcstol, wcstoll, wcstoul,
  * wcstoull, wcstod, wcstof, wcstold, wcscoll, wcscoll_l, wcsxfrm,
  * wcsxfrm_l, wcsftime, mbsnrtowcs, wcsnrtombs.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
  * wcsrtombs, plus the stdlib.h mbtowc/wctomb/mblen/mbstowcs/wcstombs and
- * inttypes.h wcstoimax/wcstoumax already covered.  Also now present, as
+ * inttypes.h wcstoimax/wcstoumax already covered.  Newly present as of
+ * 2026-08-24 (src/string/wcsstr.c, wcsspn.c, wcstok.c, wcsdup.c,
+ * wcsnlen.c, wcpcpy.c, wcscasecmp.c), tested below rather than fenced:
+ * wcsstr, wcspbrk, wcscspn, wcsspn, wcstok, wcsdup, wcsnlen, wcpcpy,
+ * wcpncpy, wcscasecmp, wcscasecmp_l, wcsncasecmp, wcsncasecmp_l.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -61,6 +63,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <inttypes.h>
+#include <locale.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1161,11 +1164,10 @@ static void test_wcwidth_non_bmp(void)
 
 /* ---------------------------------------------------------------------
  * wcsstr / wcspbrk / wcscspn / wcsspn -- wcsstr.html and family
- * Pure code-unit sequence search, exactly like the implemented
+ * Pure code-unit sequence search, exactly like the already-implemented
  * wcschr()/wcsrchr(): a surrogate pair is just two opaque units to
- * match, so these are fully implementable.  UNIMPL.
+ * match.  Implemented in src/string/wcsstr.c and src/string/wcsspn.c.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcsstr() -- wcsstr.html DESCRIPTION, RETURN VALUE. */
 static void test_wcsstr(void)
 {
 	const wchar_t *hay = W("abcdef");
@@ -1175,11 +1177,7 @@ static void test_wcsstr(void)
 	 * the function shall return ws1." */
 	CHECK(wcsstr(hay, W("")) == hay);
 }
-#endif
 
-#if 0 /* UNIMPL: wcspbrk()/wcscspn()/wcsspn() -- wcspbrk.html,
-       * wcscspn.html, wcsspn.html DESCRIPTION, RETURN VALUE (mirrors
-       * the byte-string strpbrk/strcspn/strspn contracts). */
 static void test_wcspbrk_family(void)
 {
 	const wchar_t *s = W("abc123");
@@ -1193,12 +1191,10 @@ static void test_wcspbrk_family(void)
 	 * from accept. */
 	CHECK(wcsspn(s, W("abc")) == 3);
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcstok -- wcstok.html
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcstok() -- wcstok.html DESCRIPTION, RETURN VALUE. */
 static void test_wcstok(void)
 {
 	wchar_t buf[16];
@@ -1213,13 +1209,36 @@ static void test_wcstok(void)
 	/* "If there are no non-separator characters remaining ... a null
 	 * pointer shall be returned." */
 	CHECK(wcstok(0, W(","), &save) == 0);
+
+	/* "The first call ... shall search ... for the first wide-character
+	 * code that is not contained in the current separator string" --
+	 * leading and repeated separators are skipped, not returned as
+	 * empty tokens. */
+	wcscpy(buf, W(",,ab,,cd,,"));
+	tok = wcstok(buf, W(","), &save);
+	CHECK(tok == buf + 2 && !wcscmp(tok, W("ab")));
+	tok = wcstok(0, W(","), &save);
+	CHECK(tok != 0 && !wcscmp(tok, W("cd")));
+	CHECK(wcstok(0, W(","), &save) == 0);
+
+	/* A string of nothing but separators yields no token at all. */
+	wcscpy(buf, W(",,,"));
+	CHECK(wcstok(buf, W(","), &save) == 0);
+
+	/* The separator set may change between calls: "the separator
+	 * string pointed to by ws2 may be different from call to call." */
+	wcscpy(buf, W("ab:cd,ef"));
+	tok = wcstok(buf, W(":"), &save);
+	CHECK(tok != 0 && !wcscmp(tok, W("ab")));
+	tok = wcstok(0, W(","), &save);
+	CHECK(tok != 0 && !wcscmp(tok, W("cd")));
+	tok = wcstok(0, W(","), &save);
+	CHECK(tok != 0 && !wcscmp(tok, W("ef")));
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcsdup / wcsnlen / wcpcpy / wcpncpy
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcsdup() -- wcsdup.html DESCRIPTION, RETURN VALUE. */
 static void test_wcsdup(void)
 {
 	wchar_t *d = wcsdup(W("abc"));
@@ -1227,40 +1246,46 @@ static void test_wcsdup(void)
 	CHECK(d != 0 && !wcscmp(d, W("abc")));
 	free(d);
 }
-#endif
 
-#if 0 /* UNIMPL: wcsnlen() -- POSIX Issue 7 TC2, mirrors strnlen.html
-       * DESCRIPTION, RETURN VALUE: "the number of wide characters
-       * preceding the first null wide character, if ws contains a
-       * null wide character within the first maxlen ... ; otherwise
-       * maxlen." */
 static void test_wcsnlen(void)
 {
 	CHECK(wcsnlen(W("abc"), 10) == 3);
 	CHECK(wcsnlen(W("abcdef"), 3) == 3);
 }
-#endif
 
-#if 0 /* UNIMPL: wcpcpy()/wcpncpy() -- GNU/Issue 8 extension mirroring
-       * stpcpy/stpncpy: copies like wcscpy()/wcsncpy() but "return[s] a
-       * pointer to the terminating null wide character" (wcpcpy) or to
-       * the last-written unit (wcpncpy) instead of the destination. */
 static void test_wcpcpy(void)
 {
 	wchar_t buf[8];
 	wchar_t *end = wcpcpy(buf, W("abc"));
 	CHECK(end == buf + 3 && *end == 0);
+	CHECK(!wcscmp(buf, W("abc")));
+
+	/* wcpncpy: stpncpy.html RETURN VALUE read for wide characters --
+	 * "a pointer to the terminating null byte in s1", i.e. the first
+	 * pad unit when the source is shorter than n. */
+	wmemset(buf, L'Z', 8);
+	end = wcpncpy(buf, W("ab"), 5);
+	CHECK(end == buf + 2 && *end == 0);
+	/* "the remainder ... shall be filled with null bytes" */
+	CHECK(buf[2] == 0 && buf[3] == 0 && buf[4] == 0);
+	/* untouched past n */
+	CHECK(buf[5] == L'Z');
+	/* "or, if s1 is not null-terminated, s1 + n": source at least n
+	 * long, so nothing is written past n and no terminator exists. */
+	wmemset(buf, L'Z', 8);
+	end = wcpncpy(buf, W("abcdef"), 3);
+	CHECK(end == buf + 3);
+	CHECK(buf[0] == L'a' && buf[1] == L'b' && buf[2] == L'c');
+	CHECK(buf[3] == L'Z');
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcscasecmp / wcsncasecmp (+ _l) -- wcscasecmp.html
  * Case-folding a lone surrogate half is identity (it is not a cased
  * letter), the same domain restriction as towlower() above, so this is
- * fully implementable for the whole wchar_t domain.  UNIMPL.
+ * well defined over the whole wchar_t domain.  Implemented in
+ * src/string/wcscasecmp.c.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcscasecmp()/wcscasecmp_l()/wcsncasecmp()/
-       * wcsncasecmp_l() -- wcscasecmp.html DESCRIPTION, RETURN VALUE. */
 static void test_wcscasecmp(void)
 {
 	/* "an integer greater than, equal to, or less than 0" ignoring
@@ -1268,8 +1293,19 @@ static void test_wcscasecmp(void)
 	CHECK(wcscasecmp(W("ABC"), W("abc")) == 0);
 	CHECK(wcscasecmp(W("abd"), W("abc")) > 0);
 	CHECK(wcsncasecmp(W("ABCxyz"), W("abcqqq"), 3) == 0);
+	CHECK(wcsncasecmp(W("ABD"), W("abc"), 3) > 0);
+	/* n == 0: nothing compared, so equal. */
+	CHECK(wcsncasecmp(W("x"), W("y"), 0) == 0);
+	/* wcscasecmp.html: the _l forms "shall be equivalent to" the
+	 * plain forms "except that the locale ... is the locale
+	 * represented by locale".  This library has only C/POSIX, so
+	 * both must agree with the plain forms (same shape as
+	 * test/posix-strings.c's strcasecmp_l checks). */
+	CHECK(wcscasecmp_l(W("ABC"), W("abc"), LC_GLOBAL_LOCALE) == 0);
+	CHECK(wcscasecmp_l(W("abd"), W("abc"), LC_GLOBAL_LOCALE) > 0);
+	CHECK(wcsncasecmp_l(W("ABCxyz"), W("abcqqq"), 3, LC_GLOBAL_LOCALE) == 0);
+	CHECK(wcsncasecmp_l(W("ABD"), W("abc"), 3, LC_GLOBAL_LOCALE) > 0);
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcstol / wcstoll / wcstoul / wcstoull -- wcstol.html
@@ -1446,6 +1482,14 @@ int main(void)
 	test_iswctype();
 	test_towlower();
 	test_wctrans();
+
+	test_wcsstr();
+	test_wcspbrk_family();
+	test_wcstok();
+	test_wcsdup();
+	test_wcsnlen();
+	test_wcpcpy();
+	test_wcscasecmp();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

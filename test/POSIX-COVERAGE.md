@@ -184,7 +184,7 @@ function, not clause-cited). New clause-cited audit: `test/posix-string.c`
 | explicit_bzero | not POSIX (glibc/BSD extension) | N/A (not POSIX.1-2017) | test/string.c (sanity only) |
 | ffs | XSI option group in strings.h | covered (sanity) — not re-audited clause-by-clause this session | test/string.c |
 | ffsl / ffsll | not POSIX (GNU extension, `ffs` widened) | N/A (not POSIX.1-2017) | test/string.c (sanity only) |
-| wcs*/wmem* (declared via string.h/wchar.h) | full clause audit deferred to the wchar.h pass — **that pass covered them**: `wcslen`/`wcscpy`/`wcsncpy`/`wcscat`/`wcsncat`/`wcscmp`/`wcsncmp`/`wcschr`/`wcsrchr` and `wmemchr`/`wmemcmp`/`wmemcpy`/`wmemmove`/`wmemset` all have clause-cited assertions there; the rest of the `wcs*` surface (`wcscoll`, `wcsxfrm`, `wcsdup`, `wcstok`, `wcsstr`, `wcspbrk`, `wcsspn`, `wcscspn`, `wcsnlen`, `wcpcpy`, `wcpncpy`, `wcscasecmp`, `wcsncasecmp`, `wcsftime`, `wcswidth`, the `wcstol` family, `mbsnrtowcs`, `wcsnrtombs`) is not implemented by this libc at all | covered / N/A (not implemented) — see the wchar.h section (priority 8) | test/posix-wchar.c; test/string.c (sanity only) |
+| wcs*/wmem* (declared via string.h/wchar.h) | full clause audit deferred to the wchar.h pass — **that pass covered them**: `wcslen`/`wcscpy`/`wcsncpy`/`wcscat`/`wcsncat`/`wcscmp`/`wcsncmp`/`wcschr`/`wcsrchr` and `wmemchr`/`wmemcmp`/`wmemcpy`/`wmemmove`/`wmemset` all have clause-cited assertions there; `wcsstr`, `wcspbrk`, `wcsspn`, `wcscspn`, `wcstok`, `wcsdup`, `wcsnlen`, `wcpcpy`, `wcpncpy`, `wcscasecmp`, `wcsncasecmp` are now implemented and clause-tested there too; the remainder of the `wcs*` surface (`wcscoll`, `wcsxfrm`, `wcsftime`, `wcswidth`, the `wcstol` family, `mbsnrtowcs`, `wcsnrtombs`) is not implemented by this libc at all | covered / N/A (not implemented) — see the wchar.h section (priority 8) | test/posix-wchar.c; test/string.c (sanity only) |
 
 ### Bugs found this session
 
@@ -718,7 +718,9 @@ ABI), listed below.
 | function | clause checked | status | test |
 |---|---|---|---|
 | wcslen / wcscpy / wcsncpy / wcscat / wcsncat / wcscmp / wcsncmp / wcschr / wcsrchr | copy/compare/search semantics, NUL handling | covered | test/posix-wchar.c |
-| wcsnlen / wcpcpy / wcpncpy / wcscoll / wcsxfrm / wcscasecmp / wcsncasecmp / wcspbrk / wcscspn / wcsspn / wcsstr / wcstok / wcsdup / wcsftime / wcswidth / wcwidth / wcstol family / mbsnrtowcs / wcsnrtombs | not implemented by this libc's wchar.h at all | N/A (missing from this libc) | -- |
+| wcsstr / wcspbrk / wcscspn / wcsspn / wcstok / wcsdup / wcsnlen / wcpcpy / wcpncpy / wcscasecmp / wcsncasecmp (+ `_l`) | search/span/tokenise/duplicate/bounded-length/copy-returning-end/case-insensitive-compare semantics, each read for wide characters off the corresponding byte-string page | covered | test/posix-wchar.c |
+| wcscoll / wcsxfrm / wcsftime / wcstol family / mbsnrtowcs / wcsnrtombs | not implemented by this libc's wchar.h at all | **UNIMPL (fenced)** | test/posix-wchar.c, fenced |
+| wcwidth / wcswidth | not implemented, and deliberately so: an ASCII-only `wcwidth()` would report -1 for every code point from U+0080 up, and providing it would displace the gnulib replacement consumers use when a libc has none | **UNIMPL (fenced, declined)** | test/posix-wchar.c, fenced |
 | wmemchr / wmemcmp / wmemcpy / wmemmove / wmemset | n-bounded semantics, n==0 edge cases, overlap-safety | covered | test/posix-wchar.c |
 | mbsinit | true if ps NULL or initial state | covered | test/posix-wchar.c |
 | mbrtowc | 0/1..n/-1(EILSEQ)/-2(incomplete); overlong+surrogate+>U+10FFFF rejected; s==NULL behaves as mbrtowc(NULL,"",1,ps); errno unchanged on success | covered, plus a documented divergence (surrogate-pair delivery uses an undocumented `-3` return not in POSIX's 0/1..n/-1/-2 contract) | test/posix-wchar.c |
