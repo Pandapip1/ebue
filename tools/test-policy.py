@@ -248,6 +248,23 @@ def compile_probe(source: Path, output: Path, cfg: dict[str, str]) -> subprocess
                           stderr=subprocess.STDOUT, check=False)
 
 
+
+# subprocess.run(text=True) does NOT decode what comes back on a timeout.
+# CPython raises TimeoutExpired with the raw buffered output, so .stdout is
+# `bytes` even though every successful return from the same call is `str`
+# (measured on 3.12.3, with and without errors="replace"). Joining those
+# logs then dies with "TypeError: sequence item N: expected str instance,
+# bytes found" -- so a run that was merely SLOW is reported as a Python
+# traceback rather than as the TIMEOUT it is. That matters most exactly
+# when it is least welcome: under a saturated machine, where timeouts are
+# common and the traceback looks like a defect in the tree.
+def _as_text(output) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
 def run_probe(executable: Path, cfg: dict[str, str], work: Path) -> tuple[str, str]:
     wine = os.environ.get("WINE", cfg.get("WINE", ""))
     if not wine:
@@ -261,7 +278,7 @@ def run_probe(executable: Path, cfg: dict[str, str], work: Path) -> tuple[str, s
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=120, check=False)
     except subprocess.TimeoutExpired as exc:
-        return "TIMEOUT", (exc.stdout or "")
+        return "TIMEOUT", _as_text(exc.stdout)
     if result.returncode == 0:
         return "PASS", result.stdout
     if result.returncode == 77:
