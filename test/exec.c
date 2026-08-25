@@ -506,6 +506,16 @@ static void test_argv0_roundtrip(const char *self)
  * for the child, filled from its NT process times before its handle is
  * closed -- runnable here (no fork()) via the same __spawn()+"--exit"
  * shape run_role() uses. */
+/* A whole struct timeval as microseconds, so a "did not go backwards"
+ * check is one comparison on the real quantity rather than two
+ * independent ones on its halves -- tv_usec on its own wraps at each
+ * whole second, which is how the previous form here came to be a
+ * disjunction that could not fail. */
+static long long timeval_usec(const struct timeval *tv)
+{
+	return (long long)tv->tv_sec * 1000000 + (long long)tv->tv_usec;
+}
+
 static void test_wait_rusage(const char *self)
 {
 	char *argv[4];
@@ -513,6 +523,7 @@ static void test_wait_rusage(const char *self)
 	pid_t pid, r;
 	int status;
 
+	memset(&ru_before, 0, sizeof ru_before);
 	CHECK(getrusage(RUSAGE_CHILDREN, &ru_before) == 0);
 
 	argv[0] = (char *)self; argv[1] = (char *)"--exit"; argv[2] = (char *)"7"; argv[3] = 0;
@@ -526,11 +537,42 @@ static void test_wait_rusage(const char *self)
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
 	CHECK(ru_child.ru_utime.tv_sec >= 0 && ru_child.ru_stime.tv_sec >= 0);
 
+	/* getrusage.html DESCRIPTION: RUSAGE_CHILDREN "returns information
+	 * about resources utilized by the terminated and waited-for
+	 * children of the current process" -- a running total, so it can
+	 * only ever grow across a reap, never shrink.
+	 *
+	 * Two things make that a real check rather than a tautology.
+	 * First, the comparison is on the whole timeval (seconds folded
+	 * into microseconds): the previous form compared tv_sec and
+	 * tv_usec independently and OR'd four clauses together, so
+	 * `ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec` alone
+	 * satisfied it -- and with both structs identical, which is what
+	 * every field of this total actually is under stock Wine (measured:
+	 * NtQueryInformationProcess(ProcessTimes) on an exited child
+	 * reports KernelTime == UserTime == 0), 0 >= 0 passed whether or
+	 * not getrusage() had done anything at all.  Second, ru_after is
+	 * poisoned before the call, so a getrusage() that returns 0 without
+	 * writing the struct leaves -1s that are below any legitimate
+	 * `before` and the comparison fails.
+	 *
+	 * What this still cannot distinguish, on a platform that reports
+	 * zero child CPU time, is "accumulated correctly" from "accumulated
+	 * nothing" -- both totals are legitimately 0 there.  The
+	 * windows-test legs are the oracle for that half. */
+	memset(&ru_after, 0xff, sizeof ru_after);
 	CHECK(getrusage(RUSAGE_CHILDREN, &ru_after) == 0);
-	CHECK(ru_after.ru_utime.tv_sec > ru_before.ru_utime.tv_sec
-	   || ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec
-	   || ru_after.ru_stime.tv_sec > ru_before.ru_stime.tv_sec
-	   || ru_after.ru_stime.tv_usec >= ru_before.ru_stime.tv_usec);
+	CHECK(timeval_usec(&ru_after.ru_utime) >= timeval_usec(&ru_before.ru_utime));
+	CHECK(timeval_usec(&ru_after.ru_stime) >= timeval_usec(&ru_before.ru_stime));
+	/* And the total is genuinely non-zero, not merely non-decreasing:
+	 * a monotonicity check alone is satisfied by an accumulator that is
+	 * never written.  Every child this file has reaped by now was a
+	 * whole process creation, so the system half of the total cannot be
+	 * zero on a platform that charges child CPU time at all (measured
+	 * under stock apt Wine: 0.17s by this point, and growing across
+	 * this reap).  The user half is not asserted -- these children exit
+	 * without running user code worth a tick, and it measures 0. */
+	CHECK(timeval_usec(&ru_after.ru_stime) > 0);
 
 	/* wait3() is the (-1, ...) shape of the same call; ru == NULL is
 	 * also valid, like waitpid(). */

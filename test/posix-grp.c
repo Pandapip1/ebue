@@ -541,9 +541,26 @@ static void test_times_self(void)
 	clock_t r;
 	clock_t utime_ticks, stime_ticks;
 
+	/* Burn enough real user CPU that the readings below are non-zero on
+	 * any platform that tracks process times at all.  Without this the
+	 * whole function was vacuous: a test process that has done almost
+	 * nothing reports tms_utime == 0 and ru_utime == 0, so
+	 * `t.tms_utime >= utime_ticks` was 0 >= 0 and passed identically if
+	 * times() and getrusage() had both written nothing.  Measured under
+	 * stock Wine: ~300M iterations of this loop is ~0.5s of user time,
+	 * i.e. ~50 ticks at the _SC_CLK_TCK of 100 this build reports, so
+	 * the > 0 assertion below has a wide margin over the 10ms tick. */
+	{
+		volatile double x = 0;
+		long i;
+		for (i = 0; i < 300000000L; i++) x += (double)i;
+		(void)x;
+	}
+
+	memset(&ru_before, 0xff, sizeof ru_before);
 	CHECK(getrusage(RUSAGE_SELF, &ru_before) == 0);
 
-	memset(&t, 0, sizeof t);
+	memset(&t, 0xff, sizeof t);
 	r = times(&t);
 	/* times.html RETURN VALUE: "(clock_t)-1 shall be returned" only
 	 * on failure; this call cannot fail (no children waited on yet,
@@ -559,6 +576,12 @@ static void test_times_self(void)
 	 * only have grown since -- never gone backwards. */
 	utime_ticks = timeval_to_clockticks(&ru_before.ru_utime);
 	stime_ticks = timeval_to_clockticks(&ru_before.ru_stime);
+	/* The field is genuinely tracked, not merely zero: after the burn
+	 * above it must have advanced past zero.  This is the assertion
+	 * that makes the cross-check below mean something -- 0 >= 0 does
+	 * not distinguish "charged correctly" from "never populated". */
+	CHECK(utime_ticks > 0);
+	CHECK(t.tms_utime > 0);
 	CHECK(t.tms_utime >= utime_ticks);
 	CHECK(t.tms_stime >= stime_ticks);
 	/* And not off by some wildly different order of magnitude either
@@ -588,9 +611,31 @@ static void test_times_children(void)
 	CHECK(waitpid(pid, &status, 0) == pid);
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
+	/* Both destinations are poisoned first, so "the reader returned
+	 * success without writing the field" is a failure here and not an
+	 * accidental match at zero. */
+	memset(&ru_children, 0xff, sizeof ru_children);
 	CHECK(getrusage(RUSAGE_CHILDREN, &ru_children) == 0);
-	memset(&t, 0, sizeof t);
+	memset(&t, 0xff, sizeof t);
 	CHECK(times(&t) != (clock_t)-1);
+
+	CHECK(t.tms_cutime >= 0 && t.tms_cstime >= 0);
+
+	/* The assertion that makes the cross-check below mean anything.
+	 * Two readers of one accumulator (src/process/wait.c's
+	 * children_utime100ns/children_ktime100ns) agreeing at zero agree
+	 * whether or not either reader works and whether or not wait.c ever
+	 * accumulated anything -- and zero is exactly what an unpopulated
+	 * accumulator reads as.  The "--times-child" role in main() burns
+	 * real CPU precisely so this is not zero; measured under stock apt
+	 * Wine it is 49 ticks at the _SC_CLK_TCK of 100 this build reports,
+	 * so the margin over the 1-tick floor is wide.
+	 *
+	 * tms_cstime is deliberately not held to > 0: a child that only
+	 * spins in user code need not be charged any system time at all,
+	 * and it measures 0 here. */
+	CHECK(t.tms_cutime > 0);
+	CHECK(timeval_to_clockticks(&ru_children.ru_utime) > 0);
 
 	CHECK(t.tms_cutime == timeval_to_clockticks(&ru_children.ru_utime));
 	CHECK(t.tms_cstime == timeval_to_clockticks(&ru_children.ru_stime));

@@ -182,12 +182,20 @@ static void test_wait_semantics(void)
 /* wait3()/wait4(): same reaping as waitpid(), plus a struct rusage for
  * the child just reaped, and getrusage(RUSAGE_CHILDREN)'s running total
  * grows to match. */
+/* See test/exec.c's copy: a whole timeval as microseconds, so the
+ * monotonicity check is one comparison on the real quantity. */
+static long long timeval_usec(const struct timeval *tv)
+{
+	return (long long)tv->tv_sec * 1000000 + (long long)tv->tv_usec;
+}
+
 static void test_wait_rusage(void)
 {
 	struct rusage ru_before, ru_after, ru_child;
 	pid_t pid, r;
 	int status;
 
+	memset(&ru_before, 0, sizeof ru_before);
 	CHECK(getrusage(RUSAGE_CHILDREN, &ru_before) == 0);
 
 	pid = fork_exit(7);
@@ -199,11 +207,20 @@ static void test_wait_rusage(void)
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 7);
 	CHECK(ru_child.ru_utime.tv_sec >= 0 && ru_child.ru_stime.tv_sec >= 0);
 
+	/* Same repair as test/exec.c's test_wait_rusage(): the old form
+	 * OR'd four half-timeval comparisons together, one of which
+	 * (`ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec`) is
+	 * satisfied by the two structs simply being equal -- which they
+	 * are, at zero, on any platform whose ProcessTimes for an exited
+	 * child reads back 0.  So it passed with getrusage(RUSAGE_CHILDREN)
+	 * doing nothing whatsoever.  Poisoning ru_after makes a
+	 * never-written struct fail, and comparing whole timevals makes the
+	 * "running total never shrinks" claim (getrusage.html DESCRIPTION,
+	 * RUSAGE_CHILDREN) the thing actually being checked. */
+	memset(&ru_after, 0xff, sizeof ru_after);
 	CHECK(getrusage(RUSAGE_CHILDREN, &ru_after) == 0);
-	CHECK(ru_after.ru_utime.tv_sec > ru_before.ru_utime.tv_sec
-	   || ru_after.ru_utime.tv_usec >= ru_before.ru_utime.tv_usec
-	   || ru_after.ru_stime.tv_sec > ru_before.ru_stime.tv_sec
-	   || ru_after.ru_stime.tv_usec >= ru_before.ru_stime.tv_usec);
+	CHECK(timeval_usec(&ru_after.ru_utime) >= timeval_usec(&ru_before.ru_utime));
+	CHECK(timeval_usec(&ru_after.ru_stime) >= timeval_usec(&ru_before.ru_stime));
 
 	/* wait3() is the (-1, ...) shape of the same call. */
 	pid = fork_exit(8);
