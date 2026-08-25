@@ -373,6 +373,9 @@ two regenerations by hand:
 ```
 make generated   # == make alltypes + make kaem
 ```
+The hook also keeps the two gap reports honest -- see "Keeping the gap
+reports honest" below, which is a different problem: those go stale from
+commits that never touch them.
 CI runs the same pair and `git diff --exit-code`s the results (the
 "Regenerate generated files and check for drift" step). If you're
 committing without having run `./configure` in this checkout, enable the
@@ -439,3 +442,216 @@ hand with the same `git config` line `./configure` uses:
 ```
 git config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
 ```
+
+### The two gap maps: one engine, two backends
+
+`test/POSIX-GAP-MAP.generated.md` and `test/LIBC-TEST-MAP.generated.md`
+are generated, committed, and each has a gate stage checking it is not
+stale. They are produced by two backends over one engine:
+
+| | |
+|---|---|
+| `tools/suitemap-engine.sh` | the engine. Sourced, never run. Everything that decides what a number *means*. |
+| `tools/posix-gapmap.sh` | backend: LTP's Open POSIX Test Suite, 1610 tests |
+| `tools/libc-test-map.sh` | backend: musl's `libc-test`, 146 tests |
+
+They were once two near-identical ~1300-line scripts, and that was a
+correctness problem rather than a tidiness one: every property either
+tool established had to be established *again* in the other, and the
+second time is where it quietly was not. Three real instances are named
+in the engine's header — a locale bug that shipped twice and was found
+once, a refuse-to-measure guard that was reasoned in one and a bare
+one-line `die` in the other, and two *different* greedy algorithms under
+the same section heading.
+
+So: anything that decides what a number means lives in the engine, once.
+A backend describes its suite — how to enumerate it, how to classify one
+test, what its report says — and nothing else.
+
+**A backend may not compile anything itself.** Every compile goes through
+`sm_cc`, and `sm_cc` refuses to run until `sm_require_built` has passed.
+That guard is the most important thing in either tool: without
+`lib/libc.a` every test fails to link, every test classifies as blocked,
+and the report reads as a *total gap* — a build error wearing the costume
+of a measurement. Making it unskippable rather than merely present is the
+point. Where a backend compiles in parallel the worker is a separate
+process, so it carries the same assertion inline via `SM_WORKER_GUARD`.
+
+### Keeping the gap reports honest
+
+They go stale for a reason `boot/kaem/` and the `*.h.gen` headers do not:
+not because someone edited them, but because a header or a symbol landed
+*somewhere else in the tree*. `spawn.h` landing put both stages red from
+two commits that touched neither file.
+
+**The reports carry their own data.** Each ends with an HTML comment
+holding the rows it was rendered from. Everything above it — the greedy
+closure, the ledger, the reconciliation, every count in the prose — is a
+pure function of those rows. So there are two operations, costing very
+differently (measured on a 24-core box at `GAPMAP_JOBS=2`):
+
+| | what it does | needs | posix-gapmap | libc-test-map |
+|---|---|---|---|---|
+| `make posix-gapmap` / `make libc-test-map` | **measures** the tree | the submodule, `config.mak`, a build | 8.9s cold, 2.7s warm | 1.2s cold, 0.2s warm |
+| `tools/…  --render` | **re-renders** from the rows it already carries | nothing at all | 2.8s | 0.2s |
+| `make …-check` | measures, and diffs against the checked-in file | as the first row | as the first row | as the first row |
+
+The invariants — census, partition, both floors, the canaries — live on
+the *rendering* side, so they fire on `--render` too. That is deliberate:
+if they only ran during a measurement, the cheap path would be a way to
+launder a broken or truncated set of rows past every one of them.
+
+**The pre-commit hook** re-renders both reports on every commit and
+re-measures both whenever anything staged could possibly have moved a
+number — which is everything except `*.md`, `LICENSES/`, `.github/` and
+`.githooks/`. It states that as an *exemption* list on purpose: being
+wrong in the direction of spending the seconds is cheap, being wrong the
+other way is a stale report. Costs 3.2s on a commit that cannot move a
+number, 8.6–15.2s on one that can.
+
+If a submodule is not checked out the hook **does not skip quietly**: it
+re-renders, and says in as many words that the report was *not* measured.
+"I could not check" and "it checks out" are different claims.
+
+### The cache
+
+Measuring is not cheap and the hook has to pay for it, so the analysis
+half is cached under `.suitemap-cache/` (gitignored, per-machine, safe to
+delete — the next run just pays full price). `SUITEMAP_CACHE=0` disables
+it; `SUITEMAP_CACHE_DIR` relocates it.
+
+What is cached is the whole **analysis**, not just compiled objects.
+Profiling posix-gapmap's 8.5s said compiling the 1610 tests is only 35%
+of it; absent-header resolution and the class B/ledger work are the other
+57%. Caching "the compiled artefacts" would have left two thirds on the
+table.
+
+**The key is the entire design.** A cache keyed on something that does
+not fully determine its value serves a stale answer silently, and a
+silently stale gap measurement is strictly worse than no cache — it is
+the "good news shaped like a broken instrument" failure these tools exist
+to prevent, with a performance optimisation as its cause. Six components,
+hashed separately so a miss can be *explained* rather than guessed at:
+
+| component | covers | why it must be in the key |
+|---|---|---|
+| `cc` | `$CC` **and its version banner** | a compiler rebuilt in place is invisible to a name-only key |
+| `flags` | `CFLAGS_C99FSE`, `CFLAGS_AUTO`, the `-I` set | changes what compiles |
+| `headers` | `include/`, `arch/`, `obj/include/` | decides class A |
+| `libc` | `lib/libc.a` by content | decides B from C |
+| `suite` | the suite's *shared* material only | so a submodule bump recompiles what changed |
+| `tool` | the engine and the backend | the classification rules live there |
+
+A miss prints which components moved. If you are ever suspicious of it,
+`SUITEMAP_CACHE=0` and compare: cached and uncached output are required
+to be byte-identical, and that equivalence is how the cache was
+validated in the first place — each of the six inputs was *changed in
+turn* and the answer checked, rather than reading the key back and
+concluding that the code which computes it ran.
+
+`lib/libc.a` is byte-reproducible across an identical rebuild, which is
+what makes this cache useful rather than theoretical: a no-op `make`
+still hits.
+
+### Keeping the gap reports honest
+
+`test/POSIX-GAP-MAP.generated.md` (`tools/posix-gapmap.sh`) and
+`test/LIBC-TEST-MAP.generated.md` (`tools/libc-test-map.sh`) are
+generated and committed too, and the gate has a stage for each one's
+staleness. They go stale for a reason `boot/kaem/` and the `*.h.gen`
+headers do not: not because someone edited them, but because a header or
+a symbol landed *somewhere else in the tree*. `spawn.h` landing put both
+stages red from two commits that touched neither file, and the authors
+had no way to know until CI said so.
+
+**The reports carry their own data.** Each one ends with an HTML comment
+holding the rows it was rendered from -- one per conformance test, one
+per interface directory, one per class B name, plus a few scalars.
+Everything above it (the greedy closure, the ledger, the reconciliation,
+every count in the prose) is a pure function of those rows. So there are
+two different operations on these files, and they cost very differently:
+
+| | what it does | needs | cost (24 cores) |
+|---|---|---|---|
+| `make posix-gapmap` / `make libc-test-map` | **measures** the tree: compiles 1610 OPTS tests / builds musl's corpus, and writes new rows | the submodule, `config.mak`, a build | ~6.0s / ~1.3s |
+| `tools/posix-gapmap.sh --render` / `tools/libc-test-map.sh --render` | **re-renders** the report from the rows it already carries | nothing at all | ~2.8s / ~0.3s |
+| `make posix-gapmap-check` / `make libc-test-map-check` | measures, and diffs against the checked-in file | as the first row | as the first row |
+
+The invariants -- census, partition, both floors, the canaries -- live on
+the *rendering* side, so they fire on `--render` too. That is deliberate:
+if they only ran during a measurement, the cheap path would be a way to
+launder a broken or truncated set of rows past every one of them.
+
+**The pre-commit hook** re-renders both reports on every commit (cheap,
+and it catches a hand-edit or a renderer change), and re-measures both
+whenever anything staged could possibly have moved a number -- which is
+everything except `*.md`, `LICENSES/`, `.github/` and `.githooks/`. It
+states that exemption as an exemption on purpose: being wrong in the
+direction of spending the seconds is cheap, and being wrong the other way
+is a stale report.
+
+If a submodule is not checked out the hook **does not skip quietly**: it
+re-renders, and says in as many words that the report was *not* measured
+and that CI will catch it if this commit moved a number. "I could not
+check" and "it checks out" are different claims.
+
+### Merging a generated report
+
+`test/*.generated.md` is routed through a second merge driver,
+`tools/merge-gendata.sh` (`.gitattributes`, `merge=ntlibc-gendata`),
+registered by `./configure` alongside the `boot/kaem/` one. By hand:
+```
+git config merge.ntlibc-gendata.driver 'tools/merge-gendata.sh %O %A %B %P'
+```
+
+The reason is the same as for `boot/kaem/` and sharper: these files are
+almost entirely derived, so two branches that each land a header change
+*every number in both files*, and a three-way text merge of that is not
+merely conflict-prone but meaningless -- the correct result is neither
+side's text.
+
+It reaches a different answer from `tools/merge-kaem.sh`, for a reason
+worth stating. `merge-kaem.sh` had to reconcile generated *text*, hunk
+shape by hunk shape, because `boot/kaem/*.kaem` has no separable data
+layer -- the text is all there is. These reports do have one, so this
+driver merges the **rows**, key by key, with the textbook three-way rule
+(one row per test, per directory, per name, per scalar, and the key is
+unique within a version), and then re-renders the report from the merged
+rows using the generator's own `--render FILE` mode. That is a real
+resolution rather than a text reconciliation.
+
+What it does **not** do is regenerate from the worktree, for exactly the
+reason `merge-kaem.sh`'s header documents at length: git's `ort` backend
+writes nothing to the index or working tree -- not even a sibling path
+that merged cleanly -- until every path's merge has finished, so a live
+regeneration silently measures a tree missing whatever the other side
+added. Here it would be worse, since the generators also need their
+submodule and a build, neither of which a mid-rebase clone is guaranteed
+to have. Both the row merge and `--render` are pure functions of the
+three blobs git hands the driver, which is the only input a merge driver
+can rely on.
+
+And it does not claim more than it can check. Interacting *header*
+additions turn out to be the easy case: land `semaphore.h` on one branch
+and `sys/mman.h` on another, and the six tests blocked by both have their
+absent-header set reduced differently on each side, so those rows
+diverge, the driver marks the path conflicted and asks for a
+regeneration. (Measured: the row merge said `A=730` where measuring the
+merged tree said `A=728`, and it did not publish that quietly.)
+
+What it cannot see is an interaction one level *down*, in the library
+rather than the headers: a class B test needing two symbols, one added on
+each branch. All three versions of that row read `B`, nothing diverges,
+and the merged report is individually right and jointly stale. So the
+driver stamps the recorded ntlibc SHA `unknown`. Both tools' `--check`
+verifies that SHA is an ancestor of `HEAD`, so `unknown` fails loudly by
+an existing, self-tested path; the merge itself completes with no
+conflict markers anywhere; and the pre-commit hook treats `unknown` as a
+reason to re-measure, so the ordinary case clears the beacon on the very
+next commit without anyone needing to know it was lit.
+
+Where rows were changed *differently on both sides*, the driver takes
+this side's value -- so the file stays valid and marker-free -- and exits
+non-zero so git records the path as conflicted. Regenerate and `git add`
+it. It never guesses at a divergence, the same contract
+`merge-kaem.sh` uses for a hunk shape it does not recognize.
