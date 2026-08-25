@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <math.h>
 #include <float.h>
+#include <wchar.h>
 #include <features.h>
 
 /* Significant decimal digits kept exactly; see the note above for why
@@ -225,28 +226,68 @@ static double bn_scale_round(bn_t *N, bn_t *D, int e2, int sticky, int p, int em
 	return scalbn((double)q, g);
 }
 
-static int ci_prefix(const char *s, const char *word)
+/* ------------------------------------------------------------------
+ * INPUT CURSOR
+ *
+ * The parsing front end below (ci_prefix, parse_hex, parse_dec, strtox)
+ * reads through gc() and steps by `st` bytes instead of dereferencing a
+ * char* directly, so that one parser serves both strtod() (st == 1,
+ * bytes) and wcstod() (st == sizeof(wchar_t), UTF-16 code units).  The
+ * big-integer core above is untouched and knows nothing about this: by
+ * the time a value reaches it the input is already digits and an
+ * exponent.
+ *
+ * Why a shared parser rather than narrowing a wide string into a buffer
+ * and calling strtod() on it: a conforming subject sequence is
+ * UNBOUNDED -- "1" followed by a million digits is a valid input that
+ * this converter handles exactly today -- so any fixed narrowing buffer
+ * truncates a value, and a dynamic one puts an allocation, whose
+ * failure wcstod() has no return value to report, in front of a
+ * function that cannot fail for that reason.  (musl solves this by
+ * streaming the wide string through a FILE and substituting a byte that
+ * cannot appear in a subject sequence; that works because its
+ * __floatscan reads a stream.  Ours reads a contiguous buffer, so there
+ * is nothing to stream through.  Recorded here so the next reader does
+ * not have to rediscover it.)
+ *
+ * Every character this grammar accepts is ASCII, and the <ctype.h>
+ * functions used below are all ASCII-only by construction (see
+ * src/ctype/isdigit.c and friends: each is a range test on the value,
+ * false for everything above 0x7f).  A wide unit of 0x1234 therefore
+ * answers false to isdigit()/isspace()/isalnum() and is returned
+ * unchanged by tolower(), exactly as a non-subject-sequence byte does,
+ * so no wide-specific classification is needed anywhere.
+ * ------------------------------------------------------------------ */
+static unsigned gc(const char *p, int st)
+{
+	return st == 1 ? (unsigned)(unsigned char)*p
+	               : (unsigned)*(const wchar_t *)(const void *)p;
+}
+
+static int ci_prefix(const char *s, const char *word, int st)
 {
 	int n = 0;
 	while (*word) {
-		if (tolower((unsigned char)s[n]) != *word) return 0;
+		if (tolower((int)gc(s + (size_t)n * (size_t)st, st)) != *word) return 0;
 		n++; word++;
 	}
 	return n;
 }
 
-static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin)
+static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p, int emin, int st)
 {
 	bn_t N, D;
 	uint64_t m = 0;
 	int exp = 0, any = 0, seen_dot = 0, sticky = 0, e = 0, eneg = 0, d;
 	const char *p2 = s;
+	unsigned c;
 
-	for (;; p2++) {
-		if (isdigit((unsigned char)*p2)) d = *p2 - '0';
-		else if (*p2 >= 'a' && *p2 <= 'f') d = *p2 - 'a' + 10;
-		else if (*p2 >= 'A' && *p2 <= 'F') d = *p2 - 'A' + 10;
-		else if (*p2 == '.' && !seen_dot) { seen_dot = 1; continue; }
+	for (;; p2 += st) {
+		c = gc(p2, st);
+		if (isdigit((int)c)) d = (int)c - '0';
+		else if (c >= 'a' && c <= 'f') d = (int)c - 'a' + 10;
+		else if (c >= 'A' && c <= 'F') d = (int)c - 'A' + 10;
+		else if (c == '.' && !seen_dot) { seen_dot = 1; continue; }
 		else break;
 		any = 1;
 		if (m >> 60) { sticky |= d; if (!seen_dot) exp += 4; }
@@ -254,11 +295,13 @@ static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p
 	}
 	if (!any) { *ok = 0; return 0; }
 	if (sticky) m |= 1; /* the tail is below every bit we kept */
-	if (*p2 == 'p' || *p2 == 'P') {
-		const char *q = p2 + 1;
-		if (*q == '+') q++; else if (*q == '-') { eneg = 1; q++; }
-		if (isdigit((unsigned char)*q)) {
-			while (isdigit((unsigned char)*q)) { if (e < 100000) e = e * 10 + (*q - '0'); q++; }
+	c = gc(p2, st);
+	if (c == 'p' || c == 'P') {
+		const char *q = p2 + st;
+		c = gc(q, st);
+		if (c == '+') q += st; else if (c == '-') { eneg = 1; q += st; }
+		if (isdigit((int)gc(q, st))) {
+			while (isdigit((int)(c = gc(q, st)))) { if (e < 100000) e = e * 10 + (int)(c - '0'); q += st; }
 			p2 = q;
 		}
 	}
@@ -273,33 +316,37 @@ static double parse_hex(const char *s, const char **end, int *ok, int *nz, int p
 	return bn_scale_round(&N, &D, exp, 0, p, emin);
 }
 
-static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin)
+static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p, int emin, int st)
 {
 	bn_t N, D;
 	unsigned char dig[MAXDIG];
 	int nd = 0, exp = 0, any = 0, seen_dot = 0, e = 0, eneg = 0, sticky = 0, i;
 	const char *p2 = s;
+	unsigned c;
 
-	for (;; p2++) {
-		if (isdigit((unsigned char)*p2)) {
+	for (;; p2 += st) {
+		c = gc(p2, st);
+		if (isdigit((int)c)) {
 			any = 1;
 			if (nd < MAXDIG) {
-				if (nd || *p2 != '0') dig[nd++] = (unsigned char)(*p2 - '0');
+				if (nd || c != '0') dig[nd++] = (unsigned char)(c - '0');
 				if (seen_dot) exp--;
 			} else {
-				if (*p2 != '0') sticky = 1;
+				if (c != '0') sticky = 1;
 				if (!seen_dot) exp++;
 			}
-		} else if (*p2 == '.' && !seen_dot) {
+		} else if (c == '.' && !seen_dot) {
 			seen_dot = 1;
 		} else break;
 	}
 	if (!any) { *ok = 0; return 0; }
-	if (*p2 == 'e' || *p2 == 'E') {
-		const char *q = p2 + 1;
-		if (*q == '+') q++; else if (*q == '-') { eneg = 1; q++; }
-		if (isdigit((unsigned char)*q)) {
-			while (isdigit((unsigned char)*q)) { if (e < 100000) e = e * 10 + (*q - '0'); q++; }
+	c = gc(p2, st);
+	if (c == 'e' || c == 'E') {
+		const char *q = p2 + st;
+		c = gc(q, st);
+		if (c == '+') q += st; else if (c == '-') { eneg = 1; q += st; }
+		if (isdigit((int)gc(q, st))) {
+			while (isdigit((int)(c = gc(q, st)))) { if (e < 100000) e = e * 10 + (int)(c - '0'); q += st; }
 			p2 = q;
 		}
 	}
@@ -334,38 +381,40 @@ static double parse_dec(const char *s, const char **end, int *ok, int *nz, int p
 	return bn_scale_round(&N, &D, 0, sticky, p, emin);
 }
 
-static long double strtox(const char *s0, char **endptr, int kind)
+static long double strtox(const char *s0, char **endptr, int kind, int st)
 {
 	const char *s = s0, *end;
 	double v;
 	int neg = 0, ok = 0, n, nz = 1, lit = 0;
 	int p = kind == 0 ? 24 : 53;
 	int emin = kind == 0 ? -149 : -1074;
+	unsigned c;
 
-	while (isspace((unsigned char)*s)) s++;
-	if (*s == '+') s++; else if (*s == '-') { neg = 1; s++; }
+	while (isspace((int)gc(s, st))) s += st;
+	c = gc(s, st);
+	if (c == '+') s += st; else if (c == '-') { neg = 1; s += st; }
 
-	if ((n = ci_prefix(s, "inf"))) {
-		int n2 = ci_prefix(s, "infinity");
-		end = s + (n2 ? n2 : n);
+	if ((n = ci_prefix(s, "inf", st))) {
+		int n2 = ci_prefix(s, "infinity", st);
+		end = s + (size_t)(n2 ? n2 : n) * (size_t)st;
 		v = HUGE_VAL;
 		ok = 1; lit = 1;
-	} else if ((n = ci_prefix(s, "nan"))) {
-		end = s + n;
-		if (*end == '(') {
-			const char *q = end + 1;
-			while (isalnum((unsigned char)*q) || *q == '_') q++;
-			if (*q == ')') end = q + 1;
+	} else if ((n = ci_prefix(s, "nan", st))) {
+		end = s + (size_t)n * (size_t)st;
+		if (gc(end, st) == '(') {
+			const char *q = end + st;
+			while (isalnum((int)(c = gc(q, st))) || c == '_') q += st;
+			if (gc(q, st) == ')') end = q + st;
 		}
 		v = NAN;
 		ok = 1; lit = 1;
-	} else if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-		v = parse_hex(s + 2, &end, &ok, &nz, p, emin);
+	} else if (gc(s, st) == '0' && (gc(s + st, st) == 'x' || gc(s + st, st) == 'X')) {
+		v = parse_hex(s + 2 * st, &end, &ok, &nz, p, emin, st);
 		if (!ok) { /* just "0" then */
-			v = 0; end = s + 1; ok = 1; nz = 0;
+			v = 0; end = s + st; ok = 1; nz = 0;
 		}
 	} else {
-		v = parse_dec(s, &end, &ok, &nz, p, emin);
+		v = parse_dec(s, &end, &ok, &nz, p, emin, st);
 	}
 	if (!ok) { if (endptr) *endptr = (char *)s0; return 0; }
 	if (endptr) *endptr = (char *)end;
@@ -385,6 +434,6 @@ static long double strtox(const char *s0, char **endptr, int kind)
 	return neg ? -(long double)v : (long double)v;
 }
 
-float strtof(const char *__restrict s, char **__restrict e) { return (float)strtox(s, e, 0); }
-double strtod(const char *__restrict s, char **__restrict e) { return (double)strtox(s, e, 1); }
-long double strtold(const char *__restrict s, char **__restrict e) { return strtox(s, e, 2); }
+float strtof(const char *__restrict s, char **__restrict e) { return (float)strtox(s, e, 0, 1); }
+double strtod(const char *__restrict s, char **__restrict e) { return (double)strtox(s, e, 1, 1); }
+long double strtold(const char *__restrict s, char **__restrict e) { return strtox(s, e, 2, 1); }
