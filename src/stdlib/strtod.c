@@ -437,3 +437,34 @@ static long double strtox(const char *s0, char **endptr, int kind, int st)
 float strtof(const char *__restrict s, char **__restrict e) { return (float)strtox(s, e, 0, 1); }
 double strtod(const char *__restrict s, char **__restrict e) { return (double)strtox(s, e, 1, 1); }
 long double strtold(const char *__restrict s, char **__restrict e) { return strtox(s, e, 2, 1); }
+
+/* wcstod()/wcstof()/wcstold(): wcstod.html DESCRIPTION, RETURN VALUE,
+ * ERRORS -- "equivalent to strtod(), strtof(), and strtold()
+ * respectively, except that the argument nptr is a wide-character
+ * string".  Same parser, stride sizeof(wchar_t); see the input-cursor
+ * note above for why this is a shared parser rather than a narrowing
+ * wrapper.
+ *
+ * The pointer laundering is the only wart.  strtox() walks raw bytes and
+ * reports its stop position as a char*, which for stride > 1 is a
+ * position inside the wide array; casting it back to wchar_t* is exact,
+ * because every step it took was a whole multiple of sizeof(wchar_t)
+ * from a properly aligned start.  The alternative -- a second endptr
+ * type threaded through the parser -- would duplicate the one thing
+ * that has to stay in step between the two strides.
+ */
+static long double wcstox(const wchar_t *nptr, wchar_t **endptr, int kind)
+{
+	char *end = 0;
+	long double v = strtox((const char *)(const void *)nptr, &end, kind,
+	                       (int)sizeof(wchar_t));
+	if (endptr) *endptr = (wchar_t *)(void *)end;
+	return v;
+}
+
+float wcstof(const wchar_t *__restrict s, wchar_t **__restrict e)
+{ return (float)wcstox(s, e, 0); }
+double wcstod(const wchar_t *__restrict s, wchar_t **__restrict e)
+{ return (double)wcstox(s, e, 1); }
+long double wcstold(const wchar_t *__restrict s, wchar_t **__restrict e)
+{ return wcstox(s, e, 2); }

@@ -37,8 +37,7 @@
  * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib
  * + src/stdio, 2026-08-24): fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, open_wmemstream, wcwidth, wcswidth, wcstod, wcstof,
- * wcstold.  Confirmed *present*
+ * wscanf, open_wmemstream, wcwidth, wcswidth.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -52,7 +51,8 @@
  * (src/string/wcscoll.c, wcsxfrm.c) wcscoll, wcscoll_l, wcsxfrm,
  * wcsxfrm_l, plus (src/stdlib/mbrtowc.c) mbsnrtowcs and wcsnrtombs and
  * (src/time/wcsftime.c) wcsftime and (src/stdio/wide.c) fgetwc, getwc,
- * getwchar, fputwc, putwc, putwchar, fgetws, fputws, ungetwc, fwide.  Also now present, as
+ * getwchar, fputwc, putwc, putwchar, fgetws, fputws, ungetwc, fwide,
+ * and (src/stdlib/strtod.c) wcstod, wcstof, wcstold.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1698,19 +1698,129 @@ static void test_wcstol_family(void)
 
 /* ---------------------------------------------------------------------
  * wcstod / wcstof / wcstold -- wcstod.html
+ * Implemented in src/stdlib/strtod.c, sharing that file's exact
+ * correctly-rounded parser through a stride cursor rather than
+ * narrowing the wide string into a buffer first -- a conforming subject
+ * sequence is unbounded, and any fixed buffer would truncate a value
+ * that converter handles exactly today.  See its input-cursor note.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: wcstod()/wcstof()/wcstold() -- wcstod.html DESCRIPTION,
-       * RETURN VALUE, ERRORS. */
+/* wcstod.html: the three wide forms "shall be equivalent to strtod(),
+ * strtof(), and strtold() respectively, except that the argument nptr
+ * is a wide-character string".  That is a clause about EQUIVALENCE, so
+ * the strongest way to test it is to assert it directly: widen an ASCII
+ * string, run both, and require the results to agree bit for bit, the
+ * endptr to stop at the same offset, and errno to match.  A wide
+ * implementation that truncated long input, or classified a character
+ * differently, or lost a byte of the mantissa, fails here without the
+ * test having to know what the right answer is. */
+static void wcstod_same_as_strtod(const char *ascii)
+{
+	static wchar_t wide[70000];
+	char *be = 0;
+	wchar_t *we = 0;
+	double bd, wd;
+	float bf, wf;
+	long double bl, wl;
+	int berr, werr;
+	size_t i;
+
+	for (i = 0; ascii[i] && i + 1 < sizeof wide / sizeof *wide; i++)
+		wide[i] = (wchar_t)(unsigned char)ascii[i];
+	wide[i] = 0;
+
+	errno = 0; bd = strtod(ascii, &be); berr = errno;
+	errno = 0; wd = wcstod(wide, &we); werr = errno;
+	CHECK(!memcmp(&bd, &wd, sizeof bd));
+	CHECK((size_t)(be - ascii) == (size_t)(we - wide));
+	CHECK(berr == werr);
+
+	errno = 0; bf = strtof(ascii, &be); berr = errno;
+	errno = 0; wf = wcstof(wide, &we); werr = errno;
+	CHECK(!memcmp(&bf, &wf, sizeof bf));
+	CHECK((size_t)(be - ascii) == (size_t)(we - wide));
+	CHECK(berr == werr);
+
+	errno = 0; bl = strtold(ascii, &be); berr = errno;
+	errno = 0; wl = wcstold(wide, &we); werr = errno;
+	CHECK(!memcmp(&bl, &wl, sizeof bl));
+	CHECK((size_t)(be - ascii) == (size_t)(we - wide));
+	CHECK(berr == werr);
+}
+
 static void test_wcstod_family(void)
 {
+	static const char *cases[] = {
+		"", " ", "+", "-", ".", "x", "xyz",
+		"0", "-0", "1", "-1", "1.", ".1", "1.5", "-1.5", "+1.5",
+		"  \t\n\v\f\r 1.5", "1.5abc", "1.5e", "1.5e+", "1e5", "1E-5",
+		"1e308", "1e309", "1e-308", "1e-324", "1e-400", "1e99999",
+		"2.2250738585072011e-308", "2.2250738585072014e-308",
+		"4.9406564584124654e-324", "9007199254740993",
+		"1.7976931348623158e308", "1.7976931348623159e308",
+		"INF", "inf", "InFiNiTy", "infin", "-inf",
+		"NAN", "nan(123)", "nan(_a1)", "nan(", "-nan",
+		"0x1p0", "0X1P4", "0x1.8p1", "0x.8p1", "0x1p-1074", "0x1p1024",
+		"0x", "0xg", "0x1p", "0x1fffffffffffff",
+		"1e0000000000000000000005", "0e99999", "00000", "017",
+	};
 	wchar_t *end;
+	size_t i;
+	static char longbuf[70000];
+
+	/* The clause, spelled out on a wide spread of subject sequences. */
+	for (i = 0; i < sizeof cases / sizeof *cases; i++)
+		wcstod_same_as_strtod(cases[i]);
+
+	/* The case the whole shared-parser design exists for: a subject
+	 * sequence far longer than any buffer a narrowing implementation
+	 * would have used.  MAXDIG in src/stdlib/strtod.c is 800, so these
+	 * straddle it and then run well past it. */
+	{
+		size_t lens[] = { 511, 512, 513, 799, 800, 801, 4096, 60000 };
+		size_t k, j;
+		for (k = 0; k < sizeof lens / sizeof *lens; k++) {
+			for (j = 0; j < lens[k]; j++)
+				longbuf[j] = (char)('0' + (int)(j % 9) + 1);
+			longbuf[lens[k]] = 0;
+			wcstod_same_as_strtod(longbuf);
+			/* the same digits as a fraction, where every one of them
+			 * is significant to the result */
+			memmove(longbuf + 2, longbuf, lens[k] + 1);
+			longbuf[0] = '0'; longbuf[1] = '.';
+			wcstod_same_as_strtod(longbuf);
+		}
+	}
+
+	/* And the transcribed assertions the fence carried, kept as direct
+	 * statements rather than only as equivalences. */
 	CHECK(wcstod(W("1.5"), &end) == 1.5);
 	CHECK(*end == 0);
-	/* "If no conversion could be performed, 0 shall be returned." */
-	end = 0;
-	CHECK(wcstod(W("xyz"), &end) == 0.0);
+	CHECK(wcstof(W("1.5"), &end) == 1.5f);
+	CHECK(wcstold(W("1.5"), &end) == 1.5L);
+	/* "If no conversion could be performed, 0 shall be returned" and
+	 * "the value of nptr shall be stored in the object pointed to by
+	 * endptr". */
+	{
+		const wchar_t *nptr = W("xyz");
+		end = 0;
+		CHECK(wcstod(nptr, &end) == 0.0);
+		CHECK(end == nptr);
+	}
+	/* endptr stops at the first unconvertible unit */
+	CHECK(wcstod(W("  -2.5e1zz"), &end) == -25.0);
+	CHECK(*end == L'z');
+	/* the hexadecimal form */
+	CHECK(wcstod(W("0x1p4"), &end) == 16.0);
+	CHECK(*end == 0);
+	/* "shall return ... HUGE_VAL ... and errno shall be set to
+	 * [ERANGE]" */
+	errno = 0;
+	CHECK(wcstod(W("1e400"), 0) > 1.0e308);
+	CHECK(errno == ERANGE);
+	errno = 0;
+	CHECK(wcstod(W("1e-400"), 0) == 0.0);
+	CHECK(errno == ERANGE);
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * wcscoll / wcscoll_l / wcsxfrm / wcsxfrm_l -- wcscoll.html,
@@ -2113,6 +2223,7 @@ int main(void)
 	test_wcpcpy();
 	test_wcscasecmp();
 	test_wcstol_family();
+	test_wcstod_family();
 	test_wcscoll();
 	test_wcsxfrm();
 	test_mbsnrtowcs();

@@ -91,6 +91,9 @@ int wcscoll_l (const wchar_t *, const wchar_t *, locale_t);
 size_t wcsxfrm (wchar_t *__restrict, const wchar_t *__restrict, size_t);
 size_t wcsxfrm_l (wchar_t *__restrict, const wchar_t *__restrict, size_t, locale_t);
 
+double wcstod (const wchar_t *__restrict, wchar_t **__restrict);
+float wcstof (const wchar_t *__restrict, wchar_t **__restrict);
+long double wcstold (const wchar_t *__restrict, wchar_t **__restrict);
 long wcstol (const wchar_t *__restrict, wchar_t **__restrict, int);
 unsigned long wcstoul (const wchar_t *__restrict, wchar_t **__restrict, int);
 long long wcstoll (const wchar_t *__restrict, wchar_t **__restrict, int);
