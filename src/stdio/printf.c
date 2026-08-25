@@ -461,7 +461,7 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 		if (*p == '%') { out(f, "%", 1, &count, &bad); p++; continue; }
 
 		{
-			int flags = 0; /* 1=+ 2=space 4=- 8=0 16=# */
+			int flags = 0; /* 1=+ 2=space 4=- 8=0 16=# 32=' */
 			int width = 0, prec = -1, haswidth = 0;
 			int lm = LM_NONE;
 			int neg_width = 0;
@@ -472,6 +472,40 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				else if (*p == ' ') flags |= 2;
 				else if (*p == '0') flags |= 8;
 				else if (*p == '#') flags |= 16;
+				/* fprintf.html's flag table: "'  [CX] (The
+				 * <apostrophe>.)  The integer portion of the result
+				 * of a decimal conversion ( %i, %d, %u, %f, %F, %g,
+				 * or %G ) shall be formatted with thousands'
+				 * grouping characters. ... The non-monetary grouping
+				 * character is used."
+				 *
+				 * A [CX] flag, i.e. base POSIX rather than XSI, so
+				 * it must be ACCEPTED whatever the locale.  Accepted
+				 * and then ignored is not a stub here, it is the
+				 * complete implementation: the grouping to apply is
+				 * LC_NUMERIC's `grouping`, which is "" in the POSIX
+				 * locale (src/misc/locale.c), and the POSIX locale
+				 * is the only one this library has -- setlocale()
+				 * accepts nothing else.  An empty grouping
+				 * specification means no separators, so the flagged
+				 * conversion must produce byte-for-byte what the
+				 * unflagged one produces, which is what ignoring it
+				 * does.  The bit is recorded rather than dropped so
+				 * that a future locale with real grouping has
+				 * somewhere to hook on.
+				 *
+				 * Leaving it out of this loop was NOT a cosmetic
+				 * defect.  The apostrophe ended the flag scan, fell
+				 * through the conversion switch's default arm, and
+				 * that arm emits the bytes literally WITHOUT
+				 * consuming an argument -- so every conversion after
+				 * a %' in the same format read the previous one's
+				 * argument.  printf("%'d %s\n", total, name) handed
+				 * `total` to %s to dereference as a char *.  And in
+				 * the POSIX locale the correct output for %'d is
+				 * identical to %d, so the one visible symptom was
+				 * the least alarming one. */
+				else if (*p == '\'') flags |= 32;
 				else break;
 			}
 			if (*p == '*') { width = va_arg(ap, int); p++; haswidth = 1; if (width < 0) { neg_width = 1; width = -width; } }

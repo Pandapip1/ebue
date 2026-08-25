@@ -2981,7 +2981,7 @@ verdict recorded with its evidence (`flockfile`).
 | snprintf | ERRORS: "[EOVERFLOW] The value of n is greater than {INT_MAX}" — a **shall fail**, not a may-fail | **BUG (fenced)** — no bound is checked at all; see below | test/posix-stdio.c `test_snprintf_eoverflow` |
 | sprintf | DESCRIPTION: "shall place output followed by the null byte"; RETURN VALUE: "the number of bytes written to s, excluding the terminating null byte" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | fprintf / printf / dprintf | DESCRIPTION: "If the format is exhausted while arguments remain, the excess arguments shall be evaluated but are otherwise ignored" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
-| fprintf family | the flag table's `'` (`<apostrophe>`) entry: "The integer portion of the result of a decimal conversion ... shall be formatted with thousands' grouping characters" — a `[CX]` flag, i.e. base POSIX, and in the POSIX locale a no-op that must still be *accepted* | **BUG (fenced)** — `"%'d"` is emitted literally; see below | test/posix-stdio.c `test_printf_apostrophe_flag` |
+| fprintf family | the flag table's `'` (`<apostrophe>`) entry: "The integer portion of the result of a decimal conversion ... shall be formatted with thousands' grouping characters" — a `[CX]` flag, i.e. base POSIX, and in the POSIX locale a no-op that must still be *accepted* | covered — was a fenced BUG (`"%'d"` emitted literally, and no argument consumed); FIXED, see below | test/posix-stdio.c `test_printf_apostrophe_flag` |
 | fprintf family | DESCRIPTION: "A negative field width is taken as a `'-'` flag followed by a positive field width. A negative precision is taken as if the precision were omitted" | covered | test/posix-stdio.c `test_printf_width_precision` |
 | fprintf family | the flag table's `#`, `+` and `<space>` entries, and the precision rules for `d`, `f`, `e`, `g` and `s`, including "The result of converting a zero value with a precision of 0 shall be no characters" | covered | test/posix-stdio.c `test_printf_width_precision` |
 | fprintf family | the precision clause out to the widest a `double` has: `%.1074f` of the smallest subnormal, whose exact expansion's last non-zero fractional digit is the 1074th | covered — and deliberately deep: a formatter that clamped its internal expansion short would still get the length and the leading digits right, so nothing shallower catches it | test/posix-stdio.c `test_printf_width_precision` |
@@ -3071,8 +3071,13 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
    page's "shall fail" list explicitly, and checking each entry, finds
    more here than auditing return values or happy paths does.
 
-2. **The `[CX]` `<apostrophe>` flag is not recognised; `"%'d"` is
-   emitted literally.** `fprintf.html`'s flag table lists `'` as a
+2. **The `[CX]` `<apostrophe>` flag was not recognised; `"%'d"` was
+   emitted literally.** FIXED — `src/stdio/printf.c`'s flag loop now
+   accepts `'`. The description below is kept in the past tense as the
+   record of what was wrong and why it mattered; the fence is gone and
+   `test_printf_apostrophe_flag` asserts the clause for real, including
+   the argument-stream alignment that the original one-conversion test
+   could not have detected. `fprintf.html`'s flag table lists `'` as a
    `[CX]` flag — base POSIX, not XSI — requiring the integer portion of
    a decimal conversion to be "formatted with thousands' grouping
    characters", using "the non-monetary grouping character". In the

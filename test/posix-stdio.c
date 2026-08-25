@@ -1132,16 +1132,53 @@ static void test_printf_z_modifier_width(void)
  * separators, and concludes "not supported here, harmless" has no
  * reason to suspect that the rest of their format is now misaligned.
  * The one visible symptom is the one that looks least alarming. */
-#if 0 /* BUG: the [CX] <apostrophe> flag is not recognised; "%'d" is emitted literally instead of formatting the argument (in the POSIX locale, identically to "%d") -- and no argument is consumed, so every later conversion in the same format reads the wrong one: a silent argument-stream desync, not a cosmetic defect */
 static void test_printf_apostrophe_flag(void)
 {
-	char grouped[32], plain[32];
+	char grouped[64], plain[64];
 
+	/* In the POSIX locale the non-monetary grouping is empty, so the
+	 * flagged conversion must produce byte-for-byte what the unflagged
+	 * one produces -- for every conversion the flag table names. */
 	CHECK(snprintf(plain, sizeof plain, "%d", 1234567) == 7);
 	CHECK(snprintf(grouped, sizeof grouped, "%'d", 1234567) == 7);
 	CHECK(!strcmp(grouped, plain));
+
+	CHECK(snprintf(plain, sizeof plain, "%i", -1234567) == 8);
+	CHECK(snprintf(grouped, sizeof grouped, "%'i", -1234567) == 8);
+	CHECK(!strcmp(grouped, plain));
+
+	CHECK(snprintf(plain, sizeof plain, "%u", 4000000000u) == 10);
+	CHECK(snprintf(grouped, sizeof grouped, "%'u", 4000000000u) == 10);
+	CHECK(!strcmp(grouped, plain));
+
+	snprintf(plain, sizeof plain, "%f", 1234567.5);
+	snprintf(grouped, sizeof grouped, "%'f", 1234567.5);
+	CHECK(!strcmp(grouped, plain));
+
+	snprintf(plain, sizeof plain, "%g", 1234567.5);
+	snprintf(grouped, sizeof grouped, "%'g", 1234567.5);
+	CHECK(!strcmp(grouped, plain));
+
+	/* the flag combines with width, precision and the other flags */
+	CHECK(snprintf(plain, sizeof plain, "%+08.3d", 42) ==
+	      snprintf(grouped, sizeof grouped, "%+'08.3d", 42));
+	CHECK(!strcmp(grouped, plain));
+
+	/* THE ARGUMENT-STREAM ASSERTION, which is the whole severity of this
+	 * defect and which comparing one conversion's output cannot detect.
+	 * When the flag was unrecognised the bytes were emitted literally and
+	 * NO argument was consumed, so the next conversion read the previous
+	 * conversion's argument and everything after it was misaligned.
+	 * Two integer conversions are used rather than the "%'d %s" shape
+	 * from the fence text: that shape is the dangerous one in real code
+	 * (%s is handed an int and dereferences it), but it is undefined
+	 * behaviour to provoke here, and this pins the same desync safely --
+	 * with the flag unrecognised the second conversion prints 111. */
+	CHECK(snprintf(grouped, sizeof grouped, "%'d %d", 111, 222) == 7);
+	CHECK(!strcmp(grouped, "111 222"));
+	CHECK(snprintf(grouped, sizeof grouped, "%'d%'d%'d", 1, 2, 3) == 3);
+	CHECK(!strcmp(grouped, "123"));
 }
-#endif
 
 /* fprintf.html DESCRIPTION, field width and precision: "A negative
  * field width is taken as a '-' flag followed by a positive field
@@ -1851,6 +1888,7 @@ int main(void)
 	test_popen();
 
 	test_snprintf_boundaries();
+	test_printf_apostrophe_flag();
 	test_printf_width_precision();
 	test_sscanf_clauses();
 	test_ctermid();
