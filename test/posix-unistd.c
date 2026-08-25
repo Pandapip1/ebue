@@ -1083,22 +1083,15 @@ static void test_unlinkat(void)
 	CHECK(unlinkat(4096, "ua2.txt", 0) == -1 && errno == EBADF);
 	CHECK(stat("ua2.txt", &st) == 0);
 
-#if 0	/* BUG: unlinkat() ignores undefined bits in flag instead of
-	 * rejecting them.  unlink.html ERRORS: "[EINVAL] (unlinkat() only)
-	 * The value of the flag argument is not valid."  AT_REMOVEDIR is
-	 * the only flag unlinkat() defines, so any other bit is invalid.
-	 * src/unistd/unlink.c is
-	 *     int unlinkat(int dirfd, const char *path, int flags)
-	 *     { return __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }
-	 * -- it masks the one bit it understands and silently discards the
-	 * rest, so unlinkat(fd, path, AT_SYMLINK_NOFOLLOW) deletes the file
-	 * rather than failing, and a caller that passes the wrong constant
-	 * gets destruction instead of a diagnostic.  Re-enable when
-	 * unlinkat() rejects flags & ~AT_REMOVEDIR with EINVAL. */
+	/* [EINVAL] "(unlinkat() only) The value of the flag argument is not
+	 * valid."  AT_REMOVEDIR is the only flag unlinkat() defines, so any
+	 * other bit is invalid: src/unistd/unlink.c rejects
+	 * flags & ~AT_REMOVEDIR rather than masking it off, because masking
+	 * turns a caller's wrong AT_* constant into a deletion.  The file
+	 * must still be there afterwards. */
 	errno = 0;
 	CHECK(unlinkat(AT_FDCWD, "ua2.txt", AT_SYMLINK_NOFOLLOW) == -1 && errno == EINVAL);
 	CHECK(stat("ua2.txt", &st) == 0);
-#endif
 
 	CHECK(unlinkat(AT_FDCWD, "ua2.txt", 0) == 0);
 }
@@ -1600,10 +1593,10 @@ static void test_linkat(void)
 	 * FSCTL_SET_REPARSE_POINT rather than a privilege) -- so
 	 * the clause cannot be exercised here either way, and asserting the
 	 * flag-clear branch alone would claim coverage this test does not
-	 * have.  The [EINVAL] for an invalid flag value is the same
-	 * unvalidated-flags defect already fenced in test_unlinkat() above
-	 * (linkat() likewise masks nothing and validates nothing); it is
-	 * recorded there rather than duplicated here. */
+	 * have.  The [EINVAL] for an invalid flag value is left unasserted:
+	 * linkat() validates nothing, but linkat's [EINVAL] is a may-fail,
+	 * unlike the shall-fail unlinkat() now enforces in
+	 * test_unlinkat() above. */
 }
 
 /* ==================================================================

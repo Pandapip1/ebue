@@ -62,7 +62,7 @@ four rows here whose second slash-joined name (`utimes`, `fpathconf`,
 `readlink`, `unlinkat`) was called by no test. **Those four are now
 closed**: each has been split onto a row of its own above and given a
 first-ever assertion in `test/posix-unistd.c`, which turned up one
-fenced bug (`unlinkat()`'s `flag` validation).
+bug (`unlinkat()`'s `flag` validation), since fixed.
 
 ## Priority order (per the task brief)
 
@@ -503,7 +503,7 @@ not every clause line, to keep this section a manageable size):
 | mkdir / rmdir / unlink | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | mkdirat (AT_FDCWD == mkdir, dirfd-relative, EEXIST on a dir and on a file, ENOENT, ENOTDIR for a file prefix component and for a non-directory `fd`, EBADF) | covered; the `mode` clause N/A — directory mode bits are implementation-defined on NTFS and `src/stat/mkdir.c` ignores `mode` by design | test/posix-unistd.c `test_mkdirat` |
 | mkfifo / mkfifoat / mknod / mknodat | N/A (permanent stubs — see `test/POSIX-GAP-ACCOUNTING.md`'s degenerate-stub table); the one clause a stub can honour, "if -1 is returned, the new file shall not be created", **is** asserted, as is `mknod`'s POSIX-listed [EPERM] | test/posix-unistd.c `test_mkfifo_mknod_stubs` |
-| unlinkat (AT_FDCWD == unlink/rmdir, AT_REMOVEDIR, ENOTDIR, ENOTEMPTY, ENOENT, EBADF, dirfd-relative) | **BUG (fenced)** — undefined `flag` bits are masked off instead of giving EINVAL | test/posix-unistd.c `test_unlinkat` |
+| unlinkat (AT_FDCWD == unlink/rmdir, AT_REMOVEDIR, ENOTDIR, ENOTEMPTY, ENOENT, EBADF, dirfd-relative) | covered; the [EINVAL] clause **fixed** (`src/unistd/unlink.c`'s `unlinkat()` now rejects `flags & ~AT_REMOVEDIR` instead of masking it off) and asserted unfenced | test/posix-unistd.c `test_unlinkat` |
 | rename / renameat: success, ENOENT, same-file no-op | covered | test/unistd.c, test/posix-io.c, test/posix-unistd.c |
 | rename EISDIR (new is a dir, old isn't) | **fixed**, commit 3c606a7 (`renameat()` in `src/stdio/misc.c` now disambiguates NT's `STATUS_ACCESS_DENIED` by querying old/new's types, giving EISDIR instead of EACCES) | test/posix-unistd.c `test_rename_new_dir_old_file_eisdir` |
 | rename ENOTEMPTY/EEXIST (new is a non-empty dir) | **fixed**, commit 3c606a7 (same fix, gives ENOTEMPTY instead of EACCES) | test/posix-unistd.c `test_rename_onto_nonempty_dir` |
@@ -538,23 +538,26 @@ EISDIR/ENOTEMPTY") and the corresponding fenced tests in
 
 ### Bugs found (never-asserted sweep, unistd.h group)
 
-Three, all fenced in `test/posix-unistd.c`, all probed on this tree.
+Three, all found fenced in `test/posix-unistd.c`, all probed on this
+tree; the first is fixed and un-fenced, two remain.
 
-1. **`unlinkat()` masks off undefined `flag` bits instead of rejecting
-   them.** `unlink.html` ERRORS lists as *shall fail*: "[EINVAL]
-   (unlinkat() only) The value of the flag argument is not valid."
-   `AT_REMOVEDIR` is the only flag `unlinkat()` defines, so every other
-   bit is invalid.
+1. **`unlinkat()` masked off undefined `flag` bits instead of rejecting
+   them** — **fixed**. `unlink.html` ERRORS lists as *shall fail*:
+   "[EINVAL] (unlinkat() only) The value of the flag argument is not
+   valid." `AT_REMOVEDIR` is the only flag `unlinkat()` defines, so
+   every other bit is invalid.
 
-   Mechanism: `src/unistd/unlink.c` is
+   Mechanism: `src/unistd/unlink.c` was
    `int unlinkat(int dirfd, const char *path, int flags) { return
-   __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }` — it keeps the one
-   bit it understands and silently discards the rest. Probed on this
-   tree: `unlinkat(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW)` returns 0 and
-   **deletes the file**, so a caller who reaches for the wrong `AT_`
-   constant gets destruction rather than a diagnostic. The fix is a
-   `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }` guard,
-   but a fix belongs in a change of its own, not in an audit pass.
+   __unlink_at(dirfd, path, flags & AT_REMOVEDIR); }` — it kept the one
+   bit it understood and silently discarded the rest. Probed on this
+   tree before the fix: `unlinkat(AT_FDCWD, path, AT_SYMLINK_NOFOLLOW)`
+   returned 0 and **deleted the file**, so a caller who reached for the
+   wrong `AT_` constant got destruction rather than a diagnostic. The
+   fix is the `if (flags & ~AT_REMOVEDIR) { errno = EINVAL; return -1; }`
+   guard in front of `__unlink_at()`; the assertion pair (EINVAL, and
+   the file still there afterwards) now runs unfenced in
+   `test_unlinkat()`.
 
 2. **`confstr()` reports success for an invalid name.** `confstr.html`
    RETURN VALUE: "If the value of the name argument is invalid,
@@ -3285,7 +3288,7 @@ for the filesystem or console groups.
 | chown / lchown | "[ENOENT] A component of path does not name an existing file or path is an empty string" and "[ENOTDIR] A component of the path prefix names an existing file that is neither a directory nor a symbolic link to a directory" (both shall-fail) | **BUG** — see below | fenced, `test_chown_family` |
 | fchown | "[EBADF] The fildes argument is not an open file descriptor" (shall-fail) | **BUG** — same fence group | fenced, `test_chown_family` |
 | fchownat | "[EBADF] The path argument does not specify an absolute path and the fd argument is neither AT_FDCWD nor a valid file descriptor" and its [ENOENT] (both shall-fail) | **BUG** — same fence group | fenced, `test_chown_family` |
-| fchownat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, so accepting an undefined flag bit is permitted; not fenced, unlike unlinkat()'s masking (unlinkat.html makes its [EINVAL] shall-fail, and there the accepted bit changes what the call does — fchownat() does nothing either way) | test/posix-unistd-ids.c (`test_chown_family`) |
+| fchownat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, so accepting an undefined flag bit is permitted; not fenced, unlike unlinkat()'s masking, which was a bug and is fixed (unlink.html makes its [EINVAL] shall-fail, and there the accepted bit changed what the call did — fchownat() does nothing either way) | test/posix-unistd-ids.c (`test_chown_family`) |
 | chown family | [EACCES], [EPERM], [EROFS], [ELOOP], [EIO], [EINTR] | N/A — each needs a second security principal, a read-only mount, a symlink cycle handed to NT's own resolver, or is a may-fail. Unreachable *even if the four functions were fully implemented*, which is what separates them from the fenced rows above | — |
 | alarm | alarm.html ERRORS "The alarm() function is always successful, and no return value is reserved to indicate an error"; RETURN VALUE "Otherwise, alarm() shall return 0" with no request outstanding | covered | test/posix-unistd-ids.c (`test_alarm`) |
 | alarm | "shall cause the system to generate a SIGALRM signal ... after the number of realtime seconds specified"; "If there is a previous alarm() request with time remaining, alarm() shall return a non-zero value that is the number of seconds until the previous request would have generated a SIGALRM" | **UNIMPL** — see below | fenced, `test_alarm` |
@@ -3502,7 +3505,7 @@ underneath.
 | linkat | "If path1 names a symbolic link ... [if] the AT_SYMLINK_FOLLOW flag is clear ... a new link is created for the symbolic link path1 and not its target" | covered *(needs the privilege)* | test/posix-unistd-links.c (`test_linkat_remaining`) |
 | linkat | ... "[if] the AT_SYMLINK_FOLLOW flag is set ... a new link is created for the file referred to by path1" | **BUG** — see below; supersedes this ledger's earlier N/A for the clause | fenced, `test_linkat_remaining` |
 | linkat | "shall atomically create a new link for the existing file and the link count of the file shall be incremented by one"; [EEXIST]; [ENOENT] for path1 and the empty string; [EBADF] on either side; dirfd-relative creation | covered — pre-existing | test/posix-unistd.c (`test_linkat`) |
-| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail; recorded with the `unlinkat()` flag-masking fence in test/posix-unistd.c rather than duplicated | — |
+| linkat | "[EINVAL] The value of the flag argument is not valid" | *may*-fail, and linkat() likewise ignores its flag argument outright; unasserted (unlike unlinkat()'s [EINVAL], which is a shall-fail and is now enforced) | — |
 | linkat | [EMLINK], [EXDEV], [ENOSPC], [EROFS], [EACCES], [ELOOP] | N/A — {LINK_MAX} is 1023 here so [EMLINK] means creating a thousand entries per run for a limit the platform rather than this code enforces; [EXDEV] needs two filesystems a CI image is not guaranteed to have; the rest as for symlinkat | — |
 
 ### Bugs found (unistd.h `*at()` link group)
