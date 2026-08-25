@@ -75,6 +75,13 @@ static int gbuf_push_n(struct gbuf *b, const char *s, size_t n)
 	return 0;
 }
 
+static char *xstrndup(const char *s, size_t n)
+{
+	char *p = __malloc(n + 1);
+	if (p) { memcpy(p, s, n); p[n] = 0; }
+	return p;
+}
+
 static char *xstrdup(const char *s)
 {
 	size_t n = strlen(s) + 1;
@@ -187,6 +194,14 @@ struct token {
 	enum tok_type type;
 	char *text;   /* T_WORD: raw word text, __malloc'd, owned by caller */
 	int ionum;    /* T_IONUM: the parsed value */
+	/* Where this token begins in the source `__sh_parse()` was handed.
+	 * Only XCU 2.9.5's function definition needs it -- the body is kept
+	 * as raw source text (sh.h's sh_command.func_text says why), and
+	 * "raw source text" has to mean an exact substring of the program,
+	 * not a reconstruction.  Recorded for every token because the
+	 * extent is delimited by the token *after* the body, which can be
+	 * any of them. */
+	const char *start;
 };
 
 static int is_redir_op(enum tok_type t)
@@ -210,6 +225,7 @@ struct pending_hd {
 
 struct lexer {
 	const char *p;
+	const char *tokstart;   /* where the token being returned began */
 	struct pending_hd *pending_head, *pending_tail;
 	int err;
 	char errbuf[256];
@@ -379,7 +395,7 @@ fail:
 	return 0;
 }
 
-static struct token mktok(enum tok_type t) { struct token tok; tok.type = t; tok.text = 0; tok.ionum = 0; return tok; }
+static struct token mktok(enum tok_type t) { struct token tok; tok.type = t; tok.text = 0; tok.ionum = 0; tok.start = 0; return tok; }
 
 static struct token next_raw_token(struct lexer *lx)
 {
@@ -388,6 +404,12 @@ static struct token next_raw_token(struct lexer *lx)
 		if (c == ' ' || c == '\t') { lx->p++; continue; }
 		if (c == '\\' && lx->p[1] == '\n') { lx->p += 2; continue; }
 		if (c == '#') { while (*lx->p && *lx->p != '\n') lx->p++; continue; }
+		/* Past every `continue` above, so lx->p is now the first
+		 * character of a real token rather than of the blanks, the
+		 * escaped newline or the comment in front of it.  Recorded on
+		 * the lexer instead of threaded through mktok()'s dozen call
+		 * sites; advance() copies it onto the token it just got. */
+		lx->tokstart = lx->p;
 		if (c == 0) {
 			if (lx->pending_head && drain_heredocs(lx)) return mktok(T_ERROR);
 			return mktok(T_EOF);
@@ -469,6 +491,7 @@ static void advance(struct parser *p)
 		return;
 	}
 	p->cur = next_raw_token(&p->lx);
+	p->cur.start = p->lx.tokstart;
 	if (p->cur.type == T_ERROR) p->had_error = 1;
 }
 
@@ -644,6 +667,7 @@ static struct sh_command *new_command(struct parser *p, enum sh_cmd_kind kind)
 	c->cond = 0;
 	c->until = 0;
 	c->name = 0;
+	c->func_text = 0;
 	c->have_in = 0;
 	c->redirs = 0;
 	return c;
@@ -793,6 +817,91 @@ fail:
 	return 0;
 }
 
+static struct sh_command *parse_command(struct parser *p);
+
+/* XCU 2.9.5 "Function Definition Command":
+ *
+ *   fname ( ) compound-command [ io-redirect ... ]
+ *
+ * Called with `fname` already consumed (the caller owns the string and
+ * hands ownership over on success) and p->cur sitting on the '('.
+ * `cmd` is the sh_command the caller already allocated as
+ * SH_CMD_SIMPLE; this converts it in place, which is what lets the
+ * caller fall through to the ordinary simple-command loop when the
+ * lookahead turns out not to be a definition after all.
+ *
+ * Two things are checked here rather than deferred:
+ *
+ *  - fname must not be a 2.14 special built-in: "the application shall
+ *    ensure that it is a name (see XBD Name) and that it is not the
+ *    name of a special built-in utility".  It has to be a *parse*
+ *    error, because 2.9.1's search order runs special built-ins at step
+ *    1a and functions only at step 1c -- so a `set() { ... }` that was
+ *    accepted could never be called, and a definition that silently
+ *    never takes effect is precisely the undiagnosable wrongness
+ *    sh/main.c's refusal list exists to prevent.  A *regular* built-in
+ *    is fine and is not checked: 1c beats 1d, so `test() { ... }`
+ *    legitimately shadows this shell's `test`.
+ *  - the body must be a compound command.  2.9.5's grammar admits
+ *    nothing else, and `f() echo hi` would otherwise be silently
+ *    accepted as something the re-parse at call time could not run.
+ *
+ * The body is then captured as the source text between the token that
+ * starts it and the token that follows it -- see sh.h's func_text.  It
+ * is parsed first, and the resulting AST thrown away: parsing is how
+ * the extent is found (the parser is the only thing that knows where a
+ * compound command ends), and validating the body at definition time
+ * rather than at first call is what keeps a syntax error inside a
+ * function from surfacing halfway through a build script. */
+static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd, char *fname)
+{
+	const struct sh_builtin *bi;
+	struct sh_command *body;
+	const char *start, *end;
+
+	advance(p);   /* '(' */
+	if (p->cur.type != T_RPAREN) {
+		perr(p, "expected `)' in the definition of function `%s'", fname);
+		goto fail;
+	}
+	advance(p);
+	skip_newlines(p);   /* 2.10.2's `linebreak` between ')' and the body */
+	if (p->had_error) goto fail;
+
+	bi = __sh_builtin_lookup(fname);
+	if (bi && bi->special) {
+		perr(p, "`%s' is a special built-in and cannot be a function name", fname);
+		goto fail;
+	}
+
+	if (!(p->cur.type == T_LPAREN || p->cur.type == T_LBRACE ||
+	      is_resword(p, "if") || is_resword(p, "while") ||
+	      is_resword(p, "until") || is_resword(p, "for"))) {
+		perr(p, "the body of function `%s' must be a compound command "
+		        "(`{ ... ; }', `( ... )', if/while/until/for)", fname);
+		goto fail;
+	}
+
+	start = p->cur.start;
+	body = parse_command(p);
+	if (!body) goto fail;      /* perr() already issued */
+	free_command(body);
+	end = p->cur.start;        /* the token after the body -- T_EOF has
+	                            * one too, pointing at the NUL, so there
+	                            * is no end-of-input special case */
+	if (end < start) end = start;
+
+	cmd->kind = SH_CMD_FUNCDEF;
+	cmd->name = fname;
+	cmd->func_text = xstrndup(start, (size_t)(end - start));
+	if (!cmd->func_text) { cmd->name = 0; perr(p, "out of memory"); goto fail; }
+	return cmd;
+fail:
+	__free(fname);
+	free_command(cmd);
+	return 0;
+}
+
 static struct sh_command *parse_command(struct parser *p)
 {
 	struct sh_command *cmd;
@@ -841,6 +950,34 @@ not_compound:
 	} else {
 		struct sh_word *atail = 0, *wtail = 0;
 		int seen_word = 0;
+
+		/* XCU 2.9.5's one-token lookahead: a NAME followed by '(' at
+		 * the very start of a command is a function definition, and a
+		 * NAME followed by anything else is that command's first word.
+		 * There is no peek() in this parser, so the word is consumed
+		 * and *stashed* -- taking ownership of p->cur.text so
+		 * advance() does not free it -- and then either handed to
+		 * parse_funcdef() or pushed onto this command's word list
+		 * below.  is_name() is what keeps `X=1 cmd` and `./cmd` out of
+		 * this path; the compound reserved words were already taken
+		 * above. */
+		if (p->cur.type == T_WORD && is_name(p->cur.text)) {
+			char *fname = p->cur.text;
+			struct sh_word *w;
+			p->cur.text = 0;
+			advance(p);
+			if (p->had_error) { __free(fname); free_command(cmd); return 0; }
+			if (p->cur.type == T_LPAREN)
+				return parse_funcdef(p, cmd, fname);
+			w = __malloc(sizeof *w);
+			if (!w) { __free(fname); perr(p, "out of memory"); goto simple_fail; }
+			w->text = fname;
+			w->next = 0;
+			cmd->words = w;
+			wtail = w;
+			seen_word = 1;
+		}
+
 		for (;;) {
 			if (p->cur.type == T_IONUM || is_redir_op(p->cur.type)) {
 				struct sh_redir *r = parse_redir(p);
@@ -994,6 +1131,7 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 	struct sh_list *list;
 
 	p.lx.p = src;
+	p.lx.tokstart = src;
 	p.lx.pending_head = p.lx.pending_tail = 0;
 	p.lx.err = 0;
 	p.lx.errbuf[0] = 0;

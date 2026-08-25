@@ -377,19 +377,58 @@ static void test_refuses_special_parameters(void)
 	 * refused, because a `$?` left in place as the two literal
 	 * characters "$?" is silent corruption of a script's meaning
 	 * rather than a missing feature it can notice. */
-	CHECK(run_c("no-such-utility-xyzzy \"$?\"", 0) == 2);
-	CHECK(err_contains("$?"));
 	CHECK(run_c("no-such-utility-xyzzy $!", 0) == 2);
+	CHECK(err_contains("$!"));
 	CHECK(run_c("no-such-utility-xyzzy $$", 0) == 2);
 	CHECK(run_c("no-such-utility-xyzzy $-", 0) == 2);
 	/* ${#NAME} is string length, a different expansion this shell does
 	 * not implement -- it must stay refused rather than being
 	 * mistaken for the ${#} that stage 7 does implement. */
 	CHECK(run_c("no-such-utility-xyzzy ${#x}", 0) == 2);
-	CHECK(run_c("no-such-utility-xyzzy > $?", 0) == 2);
+	CHECK(run_c("no-such-utility-xyzzy > $!", 0) == 2);
 
 	/* Single-quoted, it is literal text, not an expansion at all. */
-	CHECK(run_c("no-such-utility-xyzzy '$?'", 0) == 127);
+	CHECK(run_c("no-such-utility-xyzzy '$!'", 0) == 127);
+
+	/* $? came off this list in stage 7b and must now *work*, not
+	 * merely stop being refused. */
+	CHECK(run_c("false; test \"$?\" = 1", 0) == 0);
+	CHECK(run_c("exit 7", 0) == 7);
+}
+
+/* XCU 2.9.5 through the binary: a function really is defined, called
+ * with its own positional parameters, and can `return`.  test/
+ * sh-engine.c drives the engine directly; that the *utility* wires it
+ * up is a separate claim, and it is the one a script handed to
+ * obj/sh/sh.exe depends on. */
+static void test_functions_through_the_binary(void)
+{
+	char cmd[1600], buf[256];
+
+	CHECK(run_c("f() { return 3; }; f", 0) == 3);
+	CHECK(run_c("f() { test \"$1\" = hi; }; f hi", 0) == 0);
+	CHECK(run_c("f() { test \"$1\" = hi; }; f no", 0) == 1);
+	/* Recursion, and `for` with no `in` over the function's own
+	 * arguments -- 2.9.4's "in \"$@\"" meeting 2.9.5's temporary
+	 * positional parameters. */
+	CHECK(run_c("r() { if test \"$#\" = 0; then return 5; fi; shift; r \"$@\"; }; "
+	            "r a b c", 0) == 5);
+
+	/* And the bytes, not just the status: a function that never ran
+	 * its body exits 0 exactly like one that ran it correctly. */
+	sprintf(cmd, "p() { for a; do '%s' --produce \"$a\"; done; }; p x y > cap6.txt", self);
+	CHECK(run_c(cmd, 0) == 0);
+	slurp_into("cap6.txt", buf, sizeof buf);
+	CHECK(strcmp(buf, "xy") == 0);
+
+	/* A definition whose body uses something the preflight refuses is
+	 * refused at the definition, before anything runs -- the property
+	 * sh/main.c's header calls refuse-before-running-anything. */
+	unlink("preflight2.txt");
+	sprintf(cmd, "'%s' --produce ran > preflight2.txt; f() { export X=1; }", self);
+	CHECK(run_c(cmd, 0) == 2);
+	CHECK(err_contains("export"));
+	CHECK(slurp_into("preflight2.txt", buf, sizeof buf) != 0);
 }
 
 /* sh(1p) OPERANDS and XCU 2.5.1: "[p]ositional parameters are initially
@@ -570,7 +609,7 @@ static void cleanup_artifacts(void)
 		OUTFILE, ERRFILE,
 		"cap1.txt", "cap2.txt", "cap3.txt", "cap4.txt",
 		"cap5.txt", "preflight.txt", "script1.sh", "script2.sh",
-		"script3.sh", "script4.sh",
+		"script3.sh", "script4.sh", "cap6.txt", "preflight2.txt",
 		0
 	};
 	size_t i;
@@ -627,6 +666,7 @@ int main(int argc, char **argv)
 	test_refuses_unimplemented_builtins();
 	test_refuses_special_parameters();
 	test_positional_parameters_from_argv();
+	test_functions_through_the_binary();
 	test_refuses_async();
 	test_refuses_before_running_anything();
 

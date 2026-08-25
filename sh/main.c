@@ -55,6 +55,13 @@
  *     `export X=1` is worse: it fails with 127 while the variable is
  *     silently *not* exported.
  *
+ *     Function definitions are no longer in this class either: stage 7b
+ *     gave them a grammar (XCU 2.9.5), so `f() { ... }` is parsed and
+ *     `f` really is called.  A definition's body is checked *here*, at
+ *     the definition, by re-parsing it -- see check_command() below --
+ *     so a function whose body uses something on these lists is refused
+ *     before any of the program runs, not on the call.
+ *
  *     `if`/`while`/`until`/`for` are no longer in this class: stage 6b
  *     gave them a real grammar, and a misplaced `fi`/`do`/`done` is now
  *     a parse error rather than a command name. `for name` with no `in`
@@ -119,7 +126,7 @@ static const char *progname = "sh";
  * here-document body), so the wording cannot drift between them. */
 static void diag_bad_param(const char *what, const char *where)
 {
-	diag("%s: this special parameter ($?, $!, $$, $-, ${#NAME}) is not "
+	diag("%s: this special parameter ($!, $$, $-, ${#NAME}) is not "
 	     "implemented%s -- see test/sh-design.md", what, where);
 }
 
@@ -164,7 +171,7 @@ static const char *const reserved[] = {
  * on this list is refused, up front, by name. */
 static const char *const unimplemented_builtins[] = {
 	".", "break", "continue", "eval", "exec", "export",
-	"readonly", "return", "times", "trap", "unset",
+	"readonly", "times", "trap", "unset",
 	"alias", "unalias", "bg", "fg", "jobs", "command", "getopts",
 	"hash", "read", "ulimit", "umask", "wait",
 	0
@@ -218,15 +225,16 @@ static int bad_expansion(const char *text, char *what)
 				if (*d >= '0' && *d <= '9') {
 					while (*d >= '0' && *d <= '9') d++;
 					if (*d != '}') bad = p;
-				} else if ((*d == '@' || *d == '*' || *d == '#') && d[1] == '}') {
+				} else if ((*d == '@' || *d == '*' || *d == '#' || *d == '?') && d[1] == '}') {
 					/* implemented */
 				} else if (!((*d >= 'a' && *d <= 'z') || (*d >= 'A' && *d <= 'Z') || *d == '_')) {
 					bad = p;
 				}
-			} else if (c == '?' || c == '!' || c == '-' || c == '$') {
+			} else if (c == '!' || c == '-' || c == '$') {
 				/* The special parameters of 2.5.2 that are still not
 				 * implemented.  $0..$9, $@, $* and $# came off this
-				 * list in stage 7 and are expanded for real. */
+				 * list in stage 7a and $? in stage 7b; all are
+				 * expanded for real. */
 				bad = p;
 			}
 			if (bad) {
@@ -308,6 +316,26 @@ static int check_command(const struct sh_command *c)
 	case SH_CMD_LOOP:
 		if (check_list(c->cond)) return -1;
 		return check_list(c->body);
+	case SH_CMD_FUNCDEF:
+		/* The body is source text (src/sh/sh.h), not a subtree, so it
+		 * is re-parsed to be checked.  Checking it *here*, at the
+		 * definition, is what keeps this file's refuse-before-anything-
+		 * runs property: a function whose body uses `export` or `$!`
+		 * would otherwise be defined happily and blow up on the call,
+		 * by which time half the script has run.  A parse failure is
+		 * impossible for text src/sh/parse.c already parsed once, and
+		 * is reported rather than assumed away. */
+		{
+			struct sh_list *body = __sh_parse(c->func_text, 0, 0);
+			int rc;
+			if (!body) {
+				diag("%s: cannot re-parse the function body", c->name);
+				return -1;
+			}
+			rc = check_list(body);
+			__sh_list_free(body);
+			return rc;
+		}
 	case SH_CMD_FOR:
 		/* `for name` with no `in` list -- XCU 2.9.4's "Omitting: in
 		 * word ... shall be equivalent to: in "$@"" -- used to be

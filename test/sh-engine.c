@@ -649,6 +649,21 @@ static void test_roundtrip(void)
 	check_roundtrip("if a; then b; fi > out 2>&1");
 	check_roundtrip("for f in *.c; do cat $f; done | wc");
 	check_roundtrip("(if a; then b; fi); { while c; do d; done; }");
+
+	/* Stage 7b.  A function definition reprints its body as the raw
+	 * source text src/sh/parse.c captured (sh.h's func_text), so the
+	 * round trip is what checks that captured extent is *exactly* the
+	 * body: too short and the reprint does not reparse, too long and
+	 * it swallows the next command and the second print differs. */
+	check_roundtrip("f() { :; }");
+	check_roundtrip("f() { a; b; }");
+	check_roundtrip("f() ( a )");
+	check_roundtrip("f() if a; then b; fi");
+	check_roundtrip("f() while a; do b; done");
+	check_roundtrip("f() for i in a b; do c; done");
+	check_roundtrip("f() { a; } > out");
+	check_roundtrip("f() { :; }; g() { :; }; f");
+	check_roundtrip("f() { :; }\ng() { :; }");
 }
 
 #if 0	/* BUG: the printer writes a here-document's terminator line as
@@ -3522,6 +3537,458 @@ static void test_for_without_in_iterates_positional_parameters(void)
 	CHECK(__sh_params_replace(args, 0) == 0);
 }
 
+
+/* ---- stage 7b: shell functions (XCU 2.9.5) and $? (2.5.2) ------------
+ *
+ * Spec pages (https://pubs.opengroup.org/onlinepubs/9699919799/):
+ *   utilities/V3_chap02.html 2.9.5 Function Definition Command
+ *   utilities/V3_chap02.html 2.9.1 Command Search and Execution
+ *   utilities/V3_chap02.html 2.5.2 Special Parameters ('?')
+ *   utilities/V3_chap02.html 2.12 Shell Execution Environment
+ *   utilities/return.html
+ *
+ * Several of these accumulate into an environment variable and assert
+ * the accumulated *string* rather than an exit status.  That is not
+ * ceremony: a function that ran the wrong number of times, or nested in
+ * the wrong order, or saw the wrong positional parameters, still exits
+ * 0 if its last command happened to succeed -- and an empty
+ * compound-list exits 0 too, so "did nothing" and "did the right thing"
+ * are the same status.  The accumulated string is the only thing that
+ * tells them apart.
+ */
+
+/* Every program below is meant to be an independent one, the way each
+ * `sh -c` invocation is a fresh process.  Variables already get that
+ * treatment here by hand (the unsetenv() calls throughout this file);
+ * functions need the same, because src/sh/func.c's table is
+ * process-global and a `true()` defined by one assertion would
+ * otherwise shadow the built-in for every assertion after it -- which
+ * is exactly how three of these tests first failed. */
+static void reset_functions(void)
+{
+	struct sh_funcs f;
+	__sh_funcs_take(&f);
+	__sh_funcs_free(&f);
+}
+
+/* 2.9.5's shape: "fname ( ) compound-command [io-redirect...]", with
+ * the body kept as the raw source text src/sh/sh.h describes -- so the
+ * AST assertion is about the exact substring captured, which is what a
+ * later __sh_parse() of it depends on. */
+static void test_funcdef_parse(void)
+{
+	reset_functions();
+	struct sh_list *l;
+	struct sh_command *c;
+
+	l = must_parse("f() { :; }");
+	if (l) {
+		c = only_command(l);
+		if (c) {
+			CHECK(c->kind == SH_CMD_FUNCDEF);
+			CHECK(c->name && strcmp(c->name, "f") == 0);
+			CHECK(c->func_text && strcmp(c->func_text, "{ :; }") == 0);
+		}
+		__sh_list_free(l);
+	}
+
+	/* No space before '(' is the usual spelling and must lex the same:
+	 * '(' is a lexer-level operator, so "f()" is three tokens. */
+	l = must_parse("f ( ) ( : )");
+	if (l) {
+		c = only_command(l);
+		if (c) {
+			CHECK(c->kind == SH_CMD_FUNCDEF);
+			CHECK(c->func_text && strcmp(c->func_text, "( : )") == 0);
+		}
+		__sh_list_free(l);
+	}
+
+	/* The captured extent stops at the token *after* the body, so a
+	 * following command is not swallowed into it. */
+	l = must_parse("f() { :; }; g() { :; }");
+	if (l) {
+		CHECK(l->items != 0);
+		if (l->items) {
+			struct sh_command *first = &l->items->andor->pipeline.commands[0];
+			CHECK(first->kind == SH_CMD_FUNCDEF);
+			CHECK(first->func_text && strcmp(first->func_text, "{ :; }") == 0);
+			CHECK(l->items->next != 0);
+		}
+		__sh_list_free(l);
+	}
+
+	/* 2.9.5's grammar admits only a compound command as the body. */
+	must_reject("f() echo hi");
+	must_reject("f() ");
+	must_reject("f( { :; }");
+	/* The minimal input that separates "checks for ')'" from "skips a
+	 * token and hopes": here the token after '(' is not ')', and a
+	 * parser that did not check would land on a perfectly good body
+	 * and accept the whole thing as `f() { :; }`.  2.9.5's grammar has
+	 * the two parentheses adjacent. */
+	must_reject("f(x { :; }");
+	/* "the application shall ensure that ... it is not the name of a
+	 * special built-in utility" -- and it has to be refused at parse
+	 * time, because 2.9.1 runs special built-ins at step 1a and
+	 * functions only at 1c, so an accepted definition could never be
+	 * called. */
+	must_reject("set() { :; }");
+	must_reject("shift() { :; }");
+	must_reject("return() { :; }");
+	must_reject(":() { :; }");
+	must_reject("exit() { :; }");
+	/* A *regular* built-in is fine: 1c beats 1d. */
+	{
+		struct sh_list *ok = __sh_parse("cd() { :; }", 0, 0);
+		CHECK(ok != 0);
+		__sh_list_free(ok);
+	}
+}
+
+/* 2.9.5: "The operands to the command temporarily shall become the
+ * positional parameters during the execution of the compound-command;
+ * the special parameter '#' also shall be changed to reflect the number
+ * of operands.  The special parameter 0 shall be unchanged.  When the
+ * function completes, the values of the positional parameters and the
+ * special parameter '#' shall be restored to the values they had before
+ * the function was executed." */
+static void test_function_positional_parameters(void)
+{
+	reset_functions();
+	int status;
+
+	CHECK(__sh_param_set_zero("myshell") == 0);
+
+	/* New parameters inside; the caller's restored after -- both
+	 * halves, since a call that never installed any would satisfy the
+	 * restore assertion alone. */
+	CHECK(run("set -- x y z; f() { test \"$1\" = a && test \"$#\" = 2; }; f a b",
+	          &status) == 0 && status == 0);
+	CHECK(run("set -- x y z; f() { :; }; f a b; test \"$1\" = x && test \"$#\" = 3",
+	          &status) == 0 && status == 0);
+	/* A call with no operands makes $# zero inside, not "unchanged". */
+	CHECK(run("set -- x y; f() { test \"$#\" = 0; }; f", &status) == 0 && status == 0);
+	/* "The special parameter 0 shall be unchanged." */
+	CHECK(run("f() { test \"$0\" = myshell; }; f a b", &status) == 0 && status == 0);
+
+	/* Nesting restores each frame's own list, not the outermost one:
+	 * the inner call must not leave the outer function looking at its
+	 * arguments.  Asserted on the accumulated sequence so that the
+	 * order of restoration is pinned, not just the final value. */
+	unsetenv("SHT_FN");
+	CHECK(run("SHT_FN=; inner() { SHT_FN=\"$SHT_FN[i:$1]\"; }; "
+	          "outer() { SHT_FN=\"$SHT_FN[o:$1]\"; inner deep; "
+	          "SHT_FN=\"$SHT_FN[o:$1]\"; }; outer top", &status) == 0);
+	CHECK(getenv("SHT_FN") && strcmp(getenv("SHT_FN"), "[o:top][i:deep][o:top]") == 0);
+
+	/* Recursion: each frame owns its own list all the way down and
+	 * back.  `shift` inside the recursion is what makes the lists
+	 * genuinely different per frame rather than three copies of one.
+	 *
+	 * The trace is "$1 on the way down" for each frame, then "$1 on
+	 * the way back up" -- and the way-up value is *this frame's* $1
+	 * after its own shift, not the value it was called with: a b c
+	 * going down, then the empty $1 the innermost caller was left
+	 * holding, then c, then b.  "abccb", not the "abccba" that reading
+	 * the source too quickly suggests; VERIFIED against bash and dash,
+	 * which both print exactly this.  It is the right assertion for
+	 * the wrong-looking reason, so: an implementation that shared one
+	 * parameter list between frames would print "abc" and then three
+	 * empty strings, and one that restored the *caller's* list instead
+	 * of this frame's would print "abc" then "cba". */
+	unsetenv("SHT_FN");
+	CHECK(run("SHT_FN=; r() { if test \"$#\" = 0; then return 0; fi; "
+	          "SHT_FN=\"$SHT_FN$1\"; shift; r \"$@\"; SHT_FN=\"$SHT_FN$1\"; }; "
+	          "r a b c", &status) == 0 && status == 0);
+	CHECK(getenv("SHT_FN") && strcmp(getenv("SHT_FN"), "abccb") == 0);
+	unsetenv("SHT_FN");
+
+	/* "$@" inside a function is the function's arguments, including
+	 * the zero-argument case that must forward nothing. */
+	CHECK(run("f() { g \"$@\"; }; g() { test \"$#\" = 0; }; f", &status) == 0 && status == 0);
+	CHECK(run("f() { g \"$@\"; }; g() { test \"$#\" = 2 && test \"$2\" = 'b c'; }; "
+	          "f a 'b c'", &status) == 0 && status == 0);
+
+	CHECK(__sh_params_replace(0, 0) == 0);
+}
+
+/* 2.9.5 Exit Status: "The exit status of a function definition shall be
+ * zero ... The exit status of a function invocation shall be the exit
+ * status of the last command executed by the function." */
+static void test_function_exit_status(void)
+{
+	reset_functions();
+	int status;
+
+	CHECK(run("f() { :; }", &status) == 0 && status == 0);
+	CHECK(run("false; f() { :; }; test \"$?\" = 0", &status) == 0 && status == 0);
+	CHECK(run("f() { true; false; }; f", &status) == 0 && status == 1);
+	CHECK(run("f() { false; true; }; f", &status) == 0 && status == 0);
+	/* An empty body runs no command, so there is no "last command":
+	 * zero, like any other empty compound-list. */
+	CHECK(run("f() { :; }; f", &status) == 0 && status == 0);
+	/* A function is an ordinary simple command in every other respect:
+	 * it takes part in and-or lists and in `!`. */
+	CHECK(run("f() { false; }; f || true", &status) == 0 && status == 0);
+	CHECK(run("f() { false; }; ! f", &status) == 0 && status == 0);
+}
+
+/* return(1p): "The return utility shall cause the shell to stop
+ * executing the current function ... The value of the special parameter
+ * '?' shall be set to n ... or to the exit status of the last command
+ * executed if n is not specified." */
+static void test_builtin_return(void)
+{
+	reset_functions();
+	int status;
+
+	CHECK(run("f() { return 3; }; f", &status) == 0 && status == 3);
+	/* It really *stops*: a command after the return must not run.  A
+	 * status assertion alone cannot see this -- `return 3` and
+	 * `return 3; false` both end at 3 only if the return worked, but a
+	 * body whose trailing command sets the same status would hide it,
+	 * so the side effect is asserted instead. */
+	unsetenv("SHT_RET");
+	CHECK(run("f() { return 3; SHT_RET=ran; }; f", &status) == 0 && status == 3);
+	CHECK(getenv("SHT_RET") == 0);
+	/* ... including out of a nested compound command. */
+	CHECK(run("f() { if true; then return 4; fi; SHT_RET=ran; }; f",
+	          &status) == 0 && status == 4);
+	CHECK(getenv("SHT_RET") == 0);
+	CHECK(run("f() { while true; do return 5; done; SHT_RET=ran; }; f",
+	          &status) == 0 && status == 5);
+	CHECK(getenv("SHT_RET") == 0);
+	/* ... and out of an and-or list, which needs data chosen so the
+	 * short-circuit would otherwise let the next term run: after
+	 * `return 0` the status is 0, so "&&" *would* run the marker, and
+	 * only the pending unwind stops it.  `return 1 || marker` is the
+	 * mirror.  A test using "return 1 && marker" proves nothing --
+	 * the short-circuit alone skips the marker there. */
+	unsetenv("SHT_RET");
+	CHECK(run("f() { return 0 && SHT_RET=ran; }; f", &status) == 0 && status == 0);
+	CHECK(getenv("SHT_RET") == 0);
+	CHECK(run("f() { return 1 || SHT_RET=ran; }; f", &status) == 0 && status == 1);
+	CHECK(getenv("SHT_RET") == 0);
+
+	/* ... and it must not keep unwinding past the call. */
+	CHECK(run("f() { return 3; }; f; SHT_RET=after", &status) == 0);
+	CHECK(getenv("SHT_RET") && strcmp(getenv("SHT_RET"), "after") == 0);
+	unsetenv("SHT_RET");
+
+	/* No operand: "the exit status of the last command executed". */
+	CHECK(run("f() { false; return; }; f", &status) == 0 && status == 1);
+	CHECK(run("f() { true; return; }; f", &status) == 0 && status == 0);
+
+	/* Nested calls return one level, not all of them. */
+	CHECK(run("g() { return 2; }; f() { g; return 7; }; f", &status) == 0 && status == 7);
+
+	/* "an unsigned decimal integer": anything else is an error, not a
+	 * salvaged number. */
+	CHECK(run("f() { return x; }; f", &status) == 0 && status == 2);
+	CHECK(run("f() { return -1; }; f", &status) == 0 && status == 2);
+	CHECK(run("f() { return 1 2; }; f", &status) == 0 && status == 2);
+
+	/* return(1p) leaves `return` outside a function unspecified; this
+	 * shell diagnoses it with a nonzero status (2.14) rather than
+	 * quietly exiting the whole shell, and -- the part that matters --
+	 * does not unwind, so the rest of the program still runs. */
+	unsetenv("SHT_RET");
+	CHECK(run("return; SHT_RET=after", &status) == 0);
+	CHECK(getenv("SHT_RET") && strcmp(getenv("SHT_RET"), "after") == 0);
+	unsetenv("SHT_RET");
+
+	/* `exit` inside a function is still the *shell* exiting, which is
+	 * the one behavioural difference between the two unwinds. */
+	CHECK(run("f() { exit 9; }; f; SHT_RET=after", &status) == 0 && status == 9);
+	CHECK(getenv("SHT_RET") == 0);
+
+	/* A subshell consumes either unwind, so "( return 3 )" leaves the
+	 * function running -- exactly as "( exit 3 )" does. */
+	CHECK(run("f() { ( return 3 ); return 6; }; f", &status) == 0 && status == 6);
+	unsetenv("SHT_RET");
+}
+
+/* 2.9.1 "Command Search and Execution": step 1a special built-in, step
+ * 1c function, step 1d the regular built-ins of its own table, step 1e
+ * PATH.  So the answer is not "built-ins win" or "functions win": it
+ * depends on which kind of built-in, and getting it backwards makes
+ * exactly one of these two assertions fail. */
+static void test_function_search_order(void)
+{
+	reset_functions();
+	int status;
+
+	/* `test` is not in 1d's table at all -- it is an ordinary utility
+	 * this shell happens to provide -- so a function shadows it.
+	 * `test 1 -eq 2` is false; if the function ran, the status is 0. */
+	CHECK(run("test 1 -eq 2", &status) == 0 && status == 1);   /* the built-in */
+	CHECK(run("test() { return 0; }; test 1 -eq 2", &status) == 0 && status == 0);
+	reset_functions();   /* ... and it really was the definition that
+	                      * changed the answer, not the assertion order:
+	                      * with the definition dropped, the built-in is
+	                      * back. */
+	CHECK(run("test 1 -eq 2", &status) == 0 && status == 1);
+	/* `true` and `false` ARE in 1d's table, and 1c still beats 1d. */
+	CHECK(run("true", &status) == 0 && status == 0);
+	CHECK(run("true() { return 5; }; true", &status) == 0 && status == 5);
+	reset_functions();
+	CHECK(run("false", &status) == 0 && status == 1);
+	CHECK(run("false() { return 0; }; false", &status) == 0 && status == 0);
+	reset_functions();
+	/* A special built-in (1a) is *not* shadowed.  2.9.5 forbids writing
+	 * such a definition and src/sh/parse.c refuses it (pinned by
+	 * test_funcdef_parse() above), so the only way to ask the
+	 * *executor* this question is to install one behind the parser's
+	 * back -- which is exactly why it is worth asking.  The two guards
+	 * are independent: a suite that only tested the parser's would
+	 * pass with the executor's step-1a-before-step-1c ordering
+	 * removed, because nothing could ever reach it. */
+	CHECK(run("f() { :; }; :", &status) == 0 && status == 0);
+	CHECK(__sh_func_define(":", "{ return 9; }") == 0);
+	CHECK(run(":", &status) == 0 && status == 0);          /* the built-in, not 9 */
+	CHECK(__sh_func_define("exit", "{ return 9; }") == 0);
+	CHECK(run("exit 4", &status) == 0 && status == 4);     /* the built-in, not 9 */
+	reset_functions();
+}
+
+/* 2.9.5: "When the function is declared, none of the expansions in
+ * wordexp shall be performed on the text in compound-command or
+ * io-redirect; all expansions shall be performed as normal each time
+ * the function is called." */
+static void test_function_body_expanded_at_call_time(void)
+{
+	reset_functions();
+	int status;
+
+	unsetenv("SHT_FX");
+	CHECK(run("SHT_FX=one; f() { test \"$SHT_FX\" = two; }; SHT_FX=two; f",
+	          &status) == 0 && status == 0);
+	/* Two calls, different values, same definition. */
+	unsetenv("SHT_FN");
+	CHECK(run("SHT_FN=; f() { SHT_FN=\"$SHT_FN[$SHT_FX]\"; }; "
+	          "SHT_FX=a; f; SHT_FX=b; f", &status) == 0);
+	CHECK(getenv("SHT_FN") && strcmp(getenv("SHT_FN"), "[a][b]") == 0);
+	unsetenv("SHT_FN");
+	unsetenv("SHT_FX");
+
+	/* Redefinition replaces. */
+	CHECK(run("f() { return 1; }; f() { return 2; }; f", &status) == 0 && status == 2);
+}
+
+/* 2.12: a subshell environment's changes "shall not affect the shell
+ * execution environment" -- a function defined in one does not survive
+ * it, and one defined outside is still visible inside. */
+static void test_functions_are_subshell_scoped(void)
+{
+	reset_functions();
+	int status;
+
+	CHECK(run("( f() { return 3; } ); f", &status) == 0 && status == 127);
+	CHECK(run("f() { return 3; }; ( f )", &status) == 0 && status == 3);
+	/* Redefining inside a subshell does not leak out either. */
+	CHECK(run("f() { return 3; }; ( f() { return 4; }; f ); f",
+	          &status) == 0 && status == 3);
+	/* A brace group runs "in the current process environment" (2.9.4),
+	 * so it is not scoped. */
+	CHECK(run("{ f() { return 3; } ; }; f", &status) == 0 && status == 3);
+}
+
+/* 2.9.5's body may be any compound command, and 2.9.4's "each can be
+ * followed by redirections" carries into the definition's
+ * [io-redirect...]. */
+static void test_function_body_forms(const char *self)
+{
+	reset_functions();
+	int status;
+
+	CHECK(run("f() ( return 3 ); f", &status) == 0 && status == 3);
+	CHECK(run("f() { return 3; }; f", &status) == 0 && status == 3);
+	CHECK(run("f() if true; then return 3; fi; f", &status) == 0 && status == 3);
+	CHECK(run("f() while true; do return 3; done; f", &status) == 0 && status == 3);
+	CHECK(run("f() for i in a; do return 3; done; f", &status) == 0 && status == 3);
+	/* `for` with no `in` inside a function iterates the *function's*
+	 * arguments, which is 2.9.4's "in \"$@\"" meeting 2.9.5's "the
+	 * operands ... temporarily shall become the positional
+	 * parameters". */
+	unsetenv("SHT_FN");
+	CHECK(run("SHT_FN=; f() { for i; do SHT_FN=\"$SHT_FN[$i]\"; done; }; f p q",
+	          &status) == 0);
+	CHECK(getenv("SHT_FN") && strcmp(getenv("SHT_FN"), "[p][q]") == 0);
+	unsetenv("SHT_FN");
+
+	/* A here-document inside a function body: the captured extent has
+	 * to reach past the body lines the lexer drained, which is the one
+	 * way the source-text capture could be subtly short. */
+	if (file_redir_supported(self)) {
+		char src[768], *tmp = make_tmp(), *got;
+		if (tmp) {
+			snprintf(src, sizeof src,
+				"f() { '%s' --cat > %s <<EOF\nbody $1\nEOF\n}\nf ARG", self, tmp);
+			CHECK(run(src, &status) == 0 && status == 0);
+			got = slurp(tmp);
+			CHECK(got != 0);
+			if (got) {
+				if (strcmp(got, "body ARG\n") != 0) {
+					fails++;
+					printf("FAIL heredoc in function: got \"%s\"\n", got);
+				}
+				free(got);
+			}
+			remove(tmp);
+			free(tmp);
+		}
+	}
+}
+
+/* 2.5.2 '?': "Expands to the decimal exit status of the most recent
+ * pipeline." */
+static void test_dollar_question(void)
+{
+	reset_functions();
+	int status;
+
+	CHECK(run("true; test \"$?\" = 0", &status) == 0 && status == 0);
+	CHECK(run("false; test \"$?\" = 1", &status) == 0 && status == 0);
+	CHECK(run("false; test \"${?}\" = 1", &status) == 0 && status == 0);
+	/* "the most recent pipeline", so a pipeline's status is the last
+	 * stage's -- and a `!` negation is part of the pipeline. */
+	CHECK(run("! true; test \"$?\" = 1", &status) == 0 && status == 0);
+	/* A command not found is 127 and $? can see it. */
+	CHECK(run("no-such-utility-xyzzy; test \"$?\" = 127", &status) == 0 && status == 0);
+	/* A function invocation is a command like any other. */
+	CHECK(run("f() { return 4; }; f; test \"$?\" = 4", &status) == 0 && status == 0);
+	/* $? and command substitution.  The status of a command containing
+	 * one still reaches $? through 2.9.1's "no command name, but the
+	 * command contained a command substitution" rule -- this is the
+	 * case a `configure` writes constantly. */
+	CHECK(run("x=$(false); test \"$?\" = 1", &status) == 0 && status == 0);
+	CHECK(run("x=$(true); test \"$?\" = 0", &status) == 0 && status == 0);
+
+	/* Whether a substitution's *own* commands change $? for the rest
+	 * of the same command is NOT settled by the standard, and the
+	 * shells disagree: XCU 2.12 lists what a shell execution
+	 * environment consists of and $? is not on that list, so "changes
+	 * made to the subshell environment shall not affect the shell
+	 * environment" does not reach it.  VERIFIED on this machine:
+	 * `false; x="$(true)$?"` gives 1 under dash and busybox ash, and 0
+	 * under bash.  This shell restores, i.e. takes the dash reading,
+	 * because it makes $? mean "the status of the last command this
+	 * shell completed" with no exception carved out for the middle of
+	 * a word.  The assertion below exists to pin that choice, not to
+	 * claim the standard requires it.
+	 *
+	 * Note the data: `false; x=$(true); ...` cannot see this at all,
+	 * because the substitution's status and the caller's $? are both
+	 * 0.  They have to differ on the axis being tested. */
+	CHECK(run("false; x=\"$(true)$?\"; test \"$x\" = 1", &status) == 0 && status == 0);
+	CHECK(run("true; x=\"$(false)$?\"; test \"$x\" = 0", &status) == 0 && status == 0);
+	CHECK(run("false; :; test \"$?\" = 0", &status) == 0 && status == 0);
+	/* ${#NAME} is a different expansion and stays unimplemented, so it
+	 * must not be confused with ${?} or ${#}. */
+	CHECK(run("test \"${?x}\" = '${?x}'", &status) == 0 && status == 0);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1) { int r = child_role(argc, argv); if (r >= 0) return r; }
@@ -3637,6 +4104,16 @@ int main(int argc, char **argv)
 	test_builtin_shift();
 	test_params_are_subshell_scoped();
 	test_params_are_not_environment_variables();
+
+	test_funcdef_parse();
+	test_function_positional_parameters();
+	test_function_exit_status();
+	test_builtin_return();
+	test_function_search_order();
+	test_function_body_expanded_at_call_time();
+	test_functions_are_subshell_scoped();
+	test_function_body_forms(argv[0]);
+	test_dollar_question();
 
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
 	printf("sh: all ok (stage 6b: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, the built-in dispatcher with test/[/:/true/false/exit/cd, and the if/while/until/for compound commands -- see test/sh-design.md)\n");

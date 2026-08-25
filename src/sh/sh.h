@@ -31,14 +31,23 @@
  * is consequently real now: 2.9.4 defines it as 'in "$@"', and there
  * is a "$@".
  *
- * Still out of scope, and still WORD tokens here: 'case', function
- * definitions, aliases and job control.  Because each of those lexes as
- * an ordinary WORD, a program using one would otherwise be *executed*
- * as something else entirely (an external command called "case");
+ * Stage 7b adds XCU 2.9.5's function definitions -- 'fname ( )
+ * compound-command' -- with the 'return' special built-in, and 2.5.2's
+ * '?'.  A function is "a compound command with new positional
+ * parameters", which is why it could only follow stage 7a: the body is
+ * stored as raw source text (see sh_command.func_text below on why),
+ * the call installs a new parameter list and restores the caller's, and
+ * XCU 2.9.1's search order puts the lookup between the special and the
+ * regular built-ins rather than before or after both.
+ *
+ * Still out of scope, and still WORD tokens here: 'case', aliases and
+ * job control.  Because each of those lexes as an ordinary WORD, a
+ * program using one would otherwise be *executed* as something else
+ * entirely (an external command called "case");
  * sh/main.c refuses such a program up front, with a diagnostic naming
  * what is unsupported, rather than letting it run -- see that file's
  * header for the full list and why refusing beats a misleading
- * "command not found".  The special parameters $?, $!, $$ and $- are
+ * "command not found".  The special parameters $!, $$ and $- are
  * refused there for the same reason.
  *
  * '!' pipeline negation is parsed as a reserved word (a bare, unquoted
@@ -96,7 +105,8 @@ enum sh_cmd_kind {
 	SH_CMD_BRACE,
 	SH_CMD_IF,     /* if/elif/else/fi     (XCU 2.9.4 "The if Conditional Construct") */
 	SH_CMD_LOOP,   /* while/until/do/done (XCU 2.9.4 "The while Loop"/"The until Loop") */
-	SH_CMD_FOR     /* for/in/do/done      (XCU 2.9.4 "The for Loop") */
+	SH_CMD_FOR,    /* for/in/do/done      (XCU 2.9.4 "The for Loop") */
+	SH_CMD_FUNCDEF /* fname ( ) compound-command  (XCU 2.9.5) */
 };
 
 /* One arm of an if command: the `if`/`elif` condition and the
@@ -137,8 +147,30 @@ struct sh_command {
 	struct sh_list *cond;       /* compound-list-1 */
 	int until;                  /* 0: `while`, 1: `until` */
 
-	/* SH_CMD_FOR */
-	char *name;                 /* the NAME between `for` and `in` */
+	/* SH_CMD_FOR: the NAME between `for` and `in`.
+	 * SH_CMD_FUNCDEF: the fname being defined. */
+	char *name;
+	/* SH_CMD_FUNCDEF: the function body, kept as its *raw source text*
+	 * -- the compound-command (and any trailing io-redirect) exactly as
+	 * written, from src/sh/parse.c's captured extent.
+	 *
+	 * Source rather than an AST node, which is the one design decision
+	 * in this construct worth arguing.  2.9.5 says the body is executed
+	 * "whenever the function name is specified as the name of a simple
+	 * command", which can be long after the sh_list it was defined in
+	 * has been freed: `__sh_cmdsub()` parses, executes and frees a
+	 * complete AST per substitution, and test/sh-engine.c runs one
+	 * program per `run()` call.  A function table holding borrowed
+	 * pointers into those trees would be reading freed memory on the
+	 * next call.  The alternatives are a deep-copy walk of the whole
+	 * AST -- ~100 lines that must be kept in sync with every field
+	 * added here, exactly the hazard new_command()'s comment in
+	 * parse.c warns about -- or keeping the text, which is what the
+	 * shell was handed in the first place and cannot fall out of sync
+	 * with anything.  Re-parsing per call is the cost; a call already
+	 * costs an expansion of every word in the body. */
+	char *func_text;
+
 	int have_in;                /* 0: `for name` with no `in` word list,
 	                             * which 2.9.4 defines as `in "$@"` -- see
 	                             * exec.c and sh/main.c on why that is
@@ -253,6 +285,31 @@ struct sh_builtin {
 
 const struct sh_builtin *__sh_builtin_lookup(const char *name);
 
+/* ---- shell functions (XCU 2.9.5) ------------------------------------
+ *
+ * src/sh/func.c owns the table.  A definition is a (name, body-source)
+ * pair -- see sh_command.func_text above for why the body is text.
+ *
+ * XCU 2.9.1's "Command Search and Execution" fixes where a lookup goes
+ * relative to the built-ins, and it is not "before" or "after" but
+ * *between*: step 1a runs a special built-in, step 1c runs a function,
+ * step 1d runs the regular built-ins of its own table (`cd`, `true`,
+ * `false`, ...), step 1e searches PATH.  So a function named `test`
+ * shadows this shell's `test` built-in -- `test` is not even in 1d's
+ * table, it is an ordinary PATH utility -- while a function named `set`
+ * does not shadow `set`, and 2.9.5 forbids defining one ("the
+ * application shall ensure that ... it is not the name of a special
+ * built-in utility"), which src/sh/parse.c enforces at definition. */
+struct sh_fn;
+struct sh_funcs { struct sh_fn *head; };
+
+int __sh_func_define(const char *name, const char *body);
+const char *__sh_func_lookup(const char *name);
+void __sh_funcs_take(struct sh_funcs *out);     /* move out, leaving none */
+int __sh_funcs_copy(const struct sh_funcs *src); /* install a duplicate of src */
+void __sh_funcs_install(struct sh_funcs *in);   /* move in, freeing current */
+void __sh_funcs_free(struct sh_funcs *f);       /* release a taken table */
+
 /* ---- positional and special parameters (XCU 2.5.1, 2.5.2) -----------
  *
  * src/sh/param.c owns the list; see that file's header for why it is an
@@ -292,6 +349,25 @@ void __sh_params_free(struct sh_params *p);
 void __sh_flow_exit(int status);
 int __sh_flow_pending(void);
 void __sh_flow_clear(void);
+
+/* `return` (XCU 2.14, return(1p)) unwinds to the nearest *function*
+ * boundary instead of out of the shell, so it is a second pending flag
+ * rather than a reuse of `exit`'s: the two differ in exactly one place,
+ * which is who consumes them.  __sh_flow_pending() answers "is some
+ * unwind in progress?" for both, so every list/and-or loop that already
+ * checks it needs no change; __sh_flow_clear() clears both, which is
+ * what makes "( return 3 )" exit that subshell and let the function
+ * carry on, exactly as it makes "( exit 3 )" exit that subshell.  Only
+ * a function call consumes a pending `return`. */
+void __sh_flow_return(int status);
+int __sh_flow_return_pending(void);
+int __sh_flow_return_status(void);
+void __sh_flow_return_clear(void);
+
+/* Nonzero while a function body is executing.  return(1p) makes the
+ * result of `return` outside a function unspecified; this shell
+ * diagnoses it rather than guessing, and this is what it asks. */
+int __sh_in_function(void);
 
 /* The status of the last command executed (XCU 2.8.2), maintained by
  * exec.c and read by `exit` with no operand. */

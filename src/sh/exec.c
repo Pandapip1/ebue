@@ -176,6 +176,22 @@ static unsigned long cmdsub_generation;
 static int sh_last_status;
 static int flow_exit_pending;
 
+/* `return` (XCU 2.9.5, return(1p)) unwinds the same way `exit` does and
+ * differs in exactly one place: who stops it.  A separate flag rather
+ * than a reused one because the *status* has to survive independently
+ * -- `f() { return 3; }; f` must give the call status 3 while
+ * sh_last_status still tracks 2.8.2's "last command executed" -- and
+ * because a function that returns must not look, to any caller in
+ * between, like a shell that is exiting. */
+static int flow_return_pending;
+static int flow_return_status;
+
+/* How many function bodies are currently executing.  Read by
+ * `return` through __sh_in_function() (return(1p) leaves `return`
+ * outside a function unspecified and this shell diagnoses it), and used
+ * by call_function() below as a recursion bound. */
+static int func_depth;
+
 void __sh_flow_exit(int status)
 {
 	flow_exit_pending = 1;
@@ -184,12 +200,43 @@ void __sh_flow_exit(int status)
 
 int __sh_flow_pending(void)
 {
-	return flow_exit_pending;
+	return flow_exit_pending || flow_return_pending;
 }
 
+/* Clears *both*.  Every caller of this is a subshell environment
+ * consuming an unwind that belongs to it -- "( exit 3 )" exits the
+ * subshell, and so does "( return 3 )", which is why a `return` inside
+ * a subshell inside a function does not return from the function. */
 void __sh_flow_clear(void)
 {
 	flow_exit_pending = 0;
+	flow_return_pending = 0;
+}
+
+void __sh_flow_return(int status)
+{
+	flow_return_pending = 1;
+	flow_return_status = status;
+}
+
+int __sh_flow_return_pending(void)
+{
+	return flow_return_pending;
+}
+
+int __sh_flow_return_status(void)
+{
+	return flow_return_status;
+}
+
+void __sh_flow_return_clear(void)
+{
+	flow_return_pending = 0;
+}
+
+int __sh_in_function(void)
+{
+	return func_depth > 0;
 }
 
 int __sh_last_status(void)
@@ -663,6 +710,85 @@ static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, i
 	return 0;
 }
 
+/* ==== Shell functions (XCU 2.9.5) ====================================== */
+
+/* 2.9.5: "The compound-command shall be executed whenever the function
+ * name is specified as the name of a simple command ... The operands to
+ * the command temporarily shall become the positional parameters during
+ * the execution of the compound-command; the special parameter '#' also
+ * shall be changed to reflect the number of operands.  The special
+ * parameter 0 shall be unchanged.  When the function completes, the
+ * values of the positional parameters and the special parameter '#'
+ * shall be restored to the values they had before the function was
+ * executed."
+ *
+ * Nesting and recursion come out of __sh_params_take() being a *move*:
+ * each frame owns the list it took and is the only owner of it, so a
+ * recursive call cannot alias its caller's however deep it goes.  $0 is
+ * untouched here, which is the whole of "the special parameter 0 shall
+ * be unchanged" -- src/sh/param.c keeps it outside the array precisely
+ * so that this function has nothing to do about it.
+ *
+ * The body is re-parsed per call (sh.h's func_text says why it is text
+ * and not an AST).  A parse failure here cannot happen for a body
+ * src/sh/parse.c already parsed once at definition, but it is reported
+ * as the -1 "cannot execute this node" convention rather than assumed
+ * away.
+ *
+ * `depth` is a bound, not a policy: an accidentally infinite recursion
+ * would otherwise exhaust the real stack, and a shell that crashes has
+ * told the script author nothing.  2.8.1 lets a non-interactive shell
+ * treat this as an error; it is diagnosed with a nonzero status and the
+ * unwind is left alone.
+ *
+ * Exit status: 2.9.5's "the exit status of the last command executed by
+ * the function", which __sh_exec_list() has already written into
+ * *status -- unless `return` ran, whose own operand replaces it. */
+#define SH_FUNC_DEPTH_MAX 128
+
+static int call_function(const char *name, const char *body,
+                         char **argv, int argc, int *status)
+{
+	struct sh_params saved;
+	struct sh_list *list;
+	int rc;
+
+	if (func_depth >= SH_FUNC_DEPTH_MAX) {
+		fprintf(stderr, "%s: function calls nested more than %d deep\n",
+			name, SH_FUNC_DEPTH_MAX);
+		*status = 1;
+		return 0;
+	}
+
+	list = __sh_parse(body, 0, 0);
+	if (!list) return -1;
+
+	__sh_params_take(&saved);
+	if (__sh_params_replace(argv + 1, argc - 1) < 0) {
+		__sh_params_install(&saved);
+		__sh_list_free(list);
+		return -1;
+	}
+
+	func_depth++;
+	*status = 0;
+	rc = __sh_exec_list(list, status);
+	func_depth--;
+
+	/* Consume a pending `return` -- and *only* a pending return.  A
+	 * pending `exit` belongs to the shell and must keep unwinding
+	 * straight through this frame, which is the one behavioural
+	 * difference between the two flags. */
+	if (__sh_flow_return_pending()) {
+		*status = __sh_flow_return_status();
+		__sh_flow_return_clear();
+	}
+
+	__sh_params_install(&saved);
+	__sh_list_free(list);
+	return rc;
+}
+
 /* ==== Spawning one already-redirected simple command ==================== */
 
 struct stage_result {
@@ -752,7 +878,43 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 	 * command at all (the -1 convention) is the honest answer, since
 	 * a silently-unapplied assignment is exactly the class of silent
 	 * wrongness sh/main.c's refusal list exists to prevent. */
+	/* 2.9.1's search order is a *sequence*, and the function step sits
+	 * between the two kinds of built-in rather than before or after
+	 * both: 1a special built-in, 1c function, 1d the regular built-ins
+	 * of 1d's own table, 1e PATH.  Written out below in that order,
+	 * because the shorthand "built-ins beat functions" and "functions
+	 * beat built-ins" are each half right and each produce a wrong
+	 * shell.  Concretely: `test` is not in 1d's table at all -- it is
+	 * an ordinary PATH utility that this shell happens to provide, so
+	 * a `test()` function shadows it -- while `set` is 1a and a
+	 * `set()` function could never run, which is why src/sh/parse.c
+	 * refuses to define one. */
 	bi = __sh_builtin_lookup(we.we_wordv[0]);
+	if (!bi || !bi->special) {
+		const char *body = __sh_func_lookup(we.we_wordv[0]);
+		if (body) {
+			/* An assignment prefix is refused on a function call for
+			 * the same reason it is on a built-in below: 2.9.1 scopes
+			 * such an assignment to the utility, and this shell's only
+			 * variable store is the real `environ`, so applying it
+			 * would leak with no way to undo it.  Silently not
+			 * applying it is worse than refusing. */
+			if (cmd->assigns) { wordfree(&we); return -1; }
+			if (!env_mutate) {
+				/* One stage of a multi-command pipeline is a subshell
+				 * environment (2.12) that this shell does not fork
+				 * for; a function body may `cd` or assign, so running
+				 * it here would leak.  See run_stage()'s comment. */
+				out->status = 0;
+				wordfree(&we);
+				return 0;
+			}
+			rc = call_function(we.we_wordv[0], body,
+			                   we.we_wordv, (int)we.we_wordc, &out->status);
+			wordfree(&we);
+			return rc;
+		}
+	}
 	if (bi) {
 		struct sh_builtin_ctx ctx;
 		if (cmd->assigns) { wordfree(&we); return -1; }
@@ -1078,14 +1240,29 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * subshell's own copy out of it.  One owner per array at every moment,
  * which is what makes nesting safe.  Returns -1 on OOM with the
  * caller's list already restored. */
-static int params_subshell_enter(struct sh_params *saved)
+static int params_subshell_enter(struct sh_params *saved, struct sh_funcs *fsaved)
 {
 	__sh_params_take(saved);
 	if (__sh_params_replace(saved->v, saved->n) < 0) {
 		__sh_params_install(saved);
 		return -1;
 	}
+	/* 2.9.5's functions are subshell-scoped for the same reason: a
+	 * "( f() { ...; } )" must not define f in the caller, and the
+	 * subshell must still see the functions the caller had. */
+	__sh_funcs_take(fsaved);
+	if (__sh_funcs_copy(fsaved) < 0) {
+		__sh_funcs_install(fsaved);
+		__sh_params_install(saved);
+		return -1;
+	}
 	return 0;
+}
+
+static void params_subshell_leave(struct sh_params *saved, struct sh_funcs *fsaved)
+{
+	__sh_funcs_install(fsaved);
+	__sh_params_install(saved);
 }
 
 struct env_snapshot {
@@ -1356,9 +1533,30 @@ static int exec_for(const struct sh_command *cmd, int *status)
  * instead means a kind added later cannot be wired into one of those
  * two paths and silently forgotten in the other; the default arm makes
  * that a reported -1 rather than a silent "ran an empty list, exit 0". */
+/* 2.9.5 Exit Status: "The exit status of a function definition shall be
+ * zero if the function was declared successfully; otherwise, it shall be
+ * greater than zero."  Nothing is expanded here -- 2.9.5: "When the
+ * function is declared, none of the expansions in wordexp shall be
+ * performed on the text in compound-command or io-redirect; all
+ * expansions shall be performed as normal each time the function is
+ * called" -- which is exactly what storing the raw source text
+ * delivers, rather than being a rule this file has to remember. */
+static int exec_funcdef(const struct sh_command *cmd, int *status)
+{
+	if (__sh_func_define(cmd->name, cmd->func_text) < 0) {
+		fprintf(stderr, "%s: cannot define function\n", cmd->name);
+		*status = 1;
+		return 0;
+	}
+	*status = 0;
+	return 0;
+}
+
 static int exec_compound(const struct sh_command *cmd, int *status)
 {
 	switch (cmd->kind) {
+	case SH_CMD_FUNCDEF:
+		return exec_funcdef(cmd, status);
 	case SH_CMD_SUBSHELL:
 	case SH_CMD_BRACE:
 		return __sh_exec_list(cmd->body, status);
@@ -1380,6 +1578,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	int rc;
 	struct env_snapshot es;
 	struct sh_params ps;
+	struct sh_funcs fs;
 	char *oldcwd = 0;
 	int is_subshell = cmd->kind == SH_CMD_SUBSHELL;
 
@@ -1390,7 +1589,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	if (is_subshell) {
 		oldcwd = getcwd(0, 0);
 		if (env_snapshot_take(&es)) { restore_fds(&rs); return -1; }
-		if (params_subshell_enter(&ps)) {
+		if (params_subshell_enter(&ps, &fs)) {
 			env_snapshot_restore(&es);
 			free_env_snapshot(&es);
 			if (oldcwd) __free(oldcwd);
@@ -1411,7 +1610,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 		 * "{ exit 3; }" runs "in the current process environment"
 		 * (2.9.4) and really is the shell exiting. */
 		if (__sh_flow_pending()) __sh_flow_clear();
-		__sh_params_install(&ps);
+		params_subshell_leave(&ps, &fs);
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
 		if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1522,8 +1721,10 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	struct redir_state rs;
 	struct env_snapshot es;
 	struct sh_params ps;
+	struct sh_funcs fs;
 	char *oldcwd;
 	char *buf;
+	int saved_last;
 	FILE *tf;
 	int tfd, rc, st = 0;
 	size_t len;
@@ -1558,7 +1759,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 		__sh_list_free(list);
 		return -1;
 	}
-	if (params_subshell_enter(&ps)) {
+	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
 		__free(oldcwd);
@@ -1568,13 +1769,25 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 		return -1;
 	}
 
+	saved_last = sh_last_status;
 	rc = __sh_exec_list(list, &st);
 
 	/* 2.6.3 runs the substituted command "in a subshell environment",
 	 * so "$(exit 3)" is a substitution whose status is 3, never the
 	 * calling shell exiting. */
 	if (__sh_flow_pending()) __sh_flow_clear();
-	__sh_params_install(&ps);
+	/* And that subshell environment includes 2.5.2's '?'.  A command
+	 * inside the substitution must not change the calling shell's "$?"
+	 * -- `false; echo "$(true)$?"` prints 1, because the substitution
+	 * ran in a subshell whose statuses are its own.  Without this,
+	 * every "$?" written to the right of a substitution in the same
+	 * word would silently report the substitution's last command
+	 * instead.  The substitution's own status still reaches 2.9.1's
+	 * "no command name, but the command contained a command
+	 * substitution" rule, which travels through cmdsub_status above
+	 * rather than through this variable. */
+	sh_last_status = saved_last;
+	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1639,6 +1852,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	int failed = 0;
 	struct env_snapshot es;
 	struct sh_params ps;
+	struct sh_funcs fs;
 	char *oldcwd;
 	int rc;
 
@@ -1648,7 +1862,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 
 	oldcwd = getcwd(0, 0);
 	if (env_snapshot_take(&es)) { __free(oldcwd); restore_fds(&rs); return -1; }
-	if (params_subshell_enter(&ps)) {
+	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
 		__free(oldcwd);
@@ -1664,7 +1878,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	 * standalone brace group exec_group() above deliberately lets
 	 * through. */
 	if (__sh_flow_pending()) __sh_flow_clear();
-	__sh_params_install(&ps);
+	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1898,11 +2112,17 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
 	if (rc) return rc;
 	for (a = a->next; a; a = a->next) {
-		/* An `exit` anywhere in the and-or list ends it, whatever the
-		 * status would have selected next -- see sh.h's control-flow
-		 * comment.  Checked before the short-circuit tests so that
-		 * "exit 0 && cmd" runs no cmd. */
-		if (flow_exit_pending) return 0;
+		/* An `exit` -- or, since stage 7b, a `return` -- anywhere in
+		 * the and-or list ends it, whatever the status would have
+		 * selected next; see sh.h's control-flow comment.  Checked
+		 * before the short-circuit tests so that "exit 0 && cmd" runs
+		 * no cmd.  Through __sh_flow_pending() rather than reading
+		 * flow_exit_pending directly: this loop and the one in
+		 * __sh_exec_list() below were the only two places that read
+		 * the flag instead of asking, and a second kind of unwind
+		 * added later would have been silently ignored by exactly the
+		 * two loops whose job is to stop for one. */
+		if (__sh_flow_pending()) return 0;
 		if (a->op == SH_AO_AND && *status != 0) continue;
 		if (a->op == SH_AO_OR && *status == 0) continue;
 		rc = __sh_exec_pipeline(&a->pipeline, status);
@@ -1931,11 +2151,18 @@ int __sh_exec_list(const struct sh_list *list, int *status)
 	for (it = list->items; it; it = it->next) {
 		rc = __sh_exec_andor(it->andor, status);
 		if (rc) break;
-		if (flow_exit_pending) break;
+		if (__sh_flow_pending()) break;
 		/* SH_SEP_AMP: true backgrounding is future work -- see this
 		 * file's header comment -- so an async item still just runs
 		 * synchronously for now, exactly like SH_SEP_SEQ/SH_SEP_END. */
 	}
-	if (--exec_list_depth == 0) flow_exit_pending = 0;
+	/* Back at the outermost list: no frame above can consume an unwind,
+	 * so neither flag may survive into whatever runs next in this
+	 * process (a second __sh_exec_list() from a test binary, a later
+	 * wordexp() command substitution).  A `return` that reached here
+	 * had no function to return from and has already been diagnosed by
+	 * the built-in; dropping it is what stops it from silently
+	 * truncating an unrelated later program. */
+	if (--exec_list_depth == 0) { flow_exit_pending = 0; flow_return_pending = 0; }
 	return rc;
 }

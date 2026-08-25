@@ -168,8 +168,10 @@ static int fbuf_push_long(struct fbuf *b, long v);
  * expand against src/sh/param.c's list.  Without it -- the public
  * wordexp(), called from a program that has no positional parameters
  * -- a '$' before a digit stays the literal character it always was.
- * 2.5.2's '@' and '*' are NOT here: they can produce more than one
- * field, which only the caller's scan can express. */
+ * 2.5.2's '?' is here too, for the same reason '#' is: it expands to a
+ * single field of decimal digits and nothing about it depends on
+ * quoting.  2.5.2's '@' and '*' are NOT here: they can produce more
+ * than one field, which only the caller's scan can express. */
 static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int quoted)
 {
 	const char *p = *pp + 1;
@@ -215,6 +217,15 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int 
 			return 0;
 		}
 		return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
+	}
+	if (sh && *p == '?' && (!braced || p[1] == '}')) {
+		/* 2.5.2 '?': "Expands to the decimal exit status of the most
+		 * recent pipeline."  Not ${?word} or any other form -- the
+		 * '}' has to come straight after, for the same reason ${#}
+		 * below is not ${#NAME}. */
+		p += braced ? 2 : 1;
+		*pp = p;
+		return fbuf_push_long(b, (long)__sh_last_status()) ? WRDE_NOSPACE : 0;
 	}
 	if (sh && *p == '#' && (!braced || p[1] == '}')) {
 		/* 2.5.2 '#': "Expands to the decimal number of positional

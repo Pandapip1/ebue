@@ -666,6 +666,69 @@ static int bi_shift(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== return (XCU 2.9.5, return(1p)) =================================== */
+
+/* return(1p): "The return utility shall cause the shell to stop
+ * executing the current function or dot script.  If the shell is not
+ * currently executing a function or dot script, the results are
+ * unspecified."  EXIT STATUS: "The value of the special parameter '?'
+ * shall be set to n, an unsigned decimal integer, or to the exit status
+ * of the last command executed if n is not specified."
+ *
+ * "Unspecified" outside a function is resolved as a diagnosed error
+ * rather than as an alias for `exit`, which is the other historical
+ * choice (return(1p) RATIONALE: "In the System V shell this is an
+ * error, whereas in the KornShell, the effect is the same as exit").
+ * The System V reading is the conservative one here: a script that
+ * writes `return` at top level has almost certainly lost track of where
+ * it is, and quietly exiting the whole shell at that point is the kind
+ * of silent, plausible-looking behaviour this shell keeps refusing.
+ * 2.14 requires the status to be nonzero when a special built-in
+ * reports an error without aborting.
+ *
+ * There is no unwinding to do in that case either -- __sh_flow_return()
+ * is what a function call consumes, and setting it with no function
+ * frame above would stop the rest of the program for no reason. */
+static int bi_return(struct sh_builtin_ctx *ctx)
+{
+	int st = ctx->last_status;
+
+	if (ctx->argc > 2) {
+		fprintf(stderr, "return: too many operands\n");
+		ctx->status = 2;
+		return 0;
+	}
+	if (ctx->argc == 2) {
+		const char *a = ctx->argv[1];
+		char *end;
+		long v;
+		if (!*a || !(*a >= '0' && *a <= '9')) {
+			fprintf(stderr, "return: %s: not an unsigned decimal integer\n", a);
+			ctx->status = 2;
+			return 0;
+		}
+		v = strtol(a, &end, 10);
+		if (*end) {
+			fprintf(stderr, "return: %s: not an unsigned decimal integer\n", a);
+			ctx->status = 2;
+			return 0;
+		}
+		/* "If n is not an unsigned decimal integer, or is greater than
+		 * 255, the results are unspecified" -- the same 8-bit
+		 * truncation `exit` already applies here, since that is what a
+		 * wait status can carry. */
+		st = (int)(v & 0xff);
+	}
+	if (!__sh_in_function()) {
+		fprintf(stderr, "return: not currently executing a function\n");
+		ctx->status = 2;
+		return 0;
+	}
+	ctx->status = st;
+	if (ctx->env_mutate) __sh_flow_return(st);
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -688,6 +751,11 @@ static const struct sh_builtin builtins[] = {
 	 * wholesale the way `cd` is. */
 	{ "set",   1, 0, bi_set },
 	{ "shift", 1, 0, bi_shift },
+	/* `return`'s env_effect is 0 for the same reason `exit`'s is: its
+	 * effect in a subshell environment *is* the exit status, which
+	 * bi_return() produces either way, and it consults ctx->env_mutate
+	 * itself to decide whether to start an unwind. */
+	{ "return", 1, 0, bi_return },
 	{ "cd",    0, 1, bi_cd },
 	{ "test",  0, 0, bi_test },
 	{ "[",     0, 0, bi_test },

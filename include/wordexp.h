@@ -79,10 +79,11 @@
  * passing one empty argument is the same defect under another name.
  *
  * The *positional* and *special* parameters of XCU 2.5.1/2.5.2 ($1,
- * ${10}, $@, $*, $#, $0) are deliberately NOT expanded by wordexp():
+ * ${10}, $@, $*, $#, $0, $?) are deliberately NOT expanded by wordexp():
  * the caller is an arbitrary program, which has no positional
- * parameters, so a '$' before a digit or an '@' stays the literal
- * character it always was here.  The shell expands them through a
+ * parameters and no exit status of a last pipeline, so a '$' before a
+ * digit, an '@' or a '?' stays the literal character it always was
+ * here.  The shell expands them through a
  * private entry point into the same scan -- see __wordexp_sh() in
  * src/internal/libc.h, and src/sh/param.c for the list itself.
  *

@@ -172,10 +172,14 @@ implementation):
    not a foregone conclusion — the design note's original scope
    ("simple commands, pipelines, `&&`/`||`/`;` lists, redirections...
    quoting, and the expansions") deliberately left it out.
-3. **Functions, aliases, job control** — also explicit non-goals today.
-   Job control in particular is called out as permanently out of scope
-   ("the libc needs none of them"); functions and aliases are not
-   ruled out forever, just not yet decided.
+3. **Functions, aliases, job control** — functions are *done* (stage
+   7b): XCU 2.9.5's `fname ( ) compound-command`, with new positional
+   parameters per call, `return`, and 2.9.1's command search order
+   placing them between the special and the regular built-ins. They
+   stopped being "not yet decided" the moment `configure` became the
+   target workload, since an autoconf script defines dozens of them.
+   Aliases remain undecided. Job control in particular is called out as
+   permanently out of scope ("the libc needs none of them").
 4. **A `main()` with `-c` and script-file handling** — *done*:
    `sh/main.c`, built as `obj/sh/sh.exe` by `make sh` (and by `make
    all`), with its own black-box tests in `test/sh-main.c`. Its own

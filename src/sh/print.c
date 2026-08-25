@@ -135,6 +135,18 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 		print_list(c, cmd->body);
 		fputs("done", c->f);
 		break;
+	/* XCU 2.9.5: "fname ( ) compound-command [io-redirect...]".  The
+	 * body is reprinted as the raw source text the parser captured
+	 * (sh.h's func_text), which is what makes the round-trip a fixed
+	 * point: re-parsing this output captures the identical substring,
+	 * so the second print is byte-for-byte the first.  A canonicalised
+	 * reprint of a body this file never parsed could not promise
+	 * that. */
+	case SH_CMD_FUNCDEF:
+		fputs(cmd->name, c->f);
+		fputs("() ", c->f);
+		fputs(cmd->func_text, c->f);
+		break;
 	default:
 		print_words(c, cmd->assigns, 0);
 		print_words(c, cmd->words, cmd->assigns != 0);

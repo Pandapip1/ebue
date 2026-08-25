@@ -301,6 +301,12 @@ int __wordexp_sh(const char *words, wordexp_t *pwordexp, int flags);
 const char *__sh_param_zero(void);
 int __sh_param_count(void);
 const char *__sh_param_get(int n);
+/* XCU 2.5.2 '?': "Expands to the decimal exit status of the most recent
+ * pipeline."  src/sh/exec.c maintains it in __sh_exec_pipeline(), which
+ * is the one place every status this shell produces funnels through --
+ * so "the most recent pipeline" is what the variable already holds,
+ * not an approximation of it. */
+int __sh_last_status(void);
 
 /* ---- heap -------------------------------------------------------------- */
 void *__malloc(size_t);

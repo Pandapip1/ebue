@@ -60,6 +60,7 @@ void __sh_free_command_contents(struct sh_command *c)
 	__sh_list_free(c->else_body);
 	__sh_list_free(c->cond);
 	__free(c->name);
+	__free(c->func_text);
 }
 
 static void free_pipeline_contents(struct sh_pipeline *pl)
