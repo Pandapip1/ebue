@@ -235,6 +235,53 @@ static void test_setrlimit_enforceable(void)
  *
  * UNIMPL -- see the fence below. */
 
+/* setrlimit.html for RLIMIT_FSIZE, the ACCEPTANCE half.
+ *
+ * ERRORS lists exactly two [EINVAL] causes: "the value specified in
+ * resource is not valid" and, for setrlimit(), "the new rlim_cur exceeds
+ * the new rlim_max".  Lowering RLIMIT_FSIZE from RLIM_INFINITY is
+ * neither, so refusing it -- which this did, because FSIZE shared an arm
+ * with the resources that genuinely have no enforcement mechanism -- was
+ * a conformance defect the caller could not work around.
+ *
+ * Enforcement is a separate matter and is asserted by
+ * test_setrlimit_fsize_enforced() below; this covers only that a legal
+ * call is accepted and round-trips. */
+static void test_setrlimit_fsize_accepts_lowering(void)
+{
+	struct rlimit rl, back;
+
+	CHECK(getrlimit(RLIMIT_FSIZE, &rl) == 0);
+	CHECK(rl.rlim_cur == RLIM_INFINITY && rl.rlim_max == RLIM_INFINITY);
+
+	rl.rlim_cur = 4096;
+	rl.rlim_max = RLIM_INFINITY;
+	errno = 0;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
+	CHECK(getrlimit(RLIMIT_FSIZE, &back) == 0);
+	CHECK(back.rlim_cur == 4096 && back.rlim_max == RLIM_INFINITY);
+
+	/* lowering the hard limit too, then observing it cannot be raised
+	 * again -- "[EPERM] ... would have raised the maximum limit value,
+	 * and the calling process does not have appropriate privileges" */
+	rl.rlim_cur = 1024; rl.rlim_max = 2048;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
+	CHECK(getrlimit(RLIMIT_FSIZE, &back) == 0);
+	CHECK(back.rlim_cur == 1024 && back.rlim_max == 2048);
+	rl.rlim_cur = 1024; rl.rlim_max = 4096;
+	errno = 0;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == -1 && errno == EPERM);
+
+	/* and the one [EINVAL] that IS specified still fires */
+	rl.rlim_cur = 4096; rl.rlim_max = 2048;
+	errno = 0;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == -1 && errno == EINVAL);
+
+	/* restore, so later tests are not run under a file-size cap */
+	rl.rlim_cur = 2048; rl.rlim_max = 2048;
+	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
+}
+
 /* setrlimit.html RLIMIT_NOFILE: "a number one greater than the maximum
  * value that the system may assign to a newly-created descriptor."
  *
@@ -1591,6 +1638,7 @@ int main(int argc, char **argv)
 
 	test_getrlimit();
 	test_setrlimit_enforceable();
+	test_setrlimit_fsize_accepts_lowering();
 	test_setrlimit_nofile(argv[0]);
 	test_getrusage(argv[0]);
 	test_getpriority_setpriority();

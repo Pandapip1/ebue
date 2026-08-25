@@ -40,7 +40,12 @@
  * way getrlimit() already reported FD_MAX/CHILD_CAP_LIMIT_ without ever
  * asking NT to confirm them.
  *
- * For every other resource (RLIMIT_STACK, RLIMIT_FSIZE, RLIMIT_CORE,
+ * RLIMIT_FSIZE is stored and enforced too, but by ntlibc rather than by
+ * NT: see the note beside fsize_cur below and the checks in the write
+ * paths.  It needs no NT primitive for the same reason RLIMIT_NOFILE
+ * does not -- the resource is bounded by this library's own code.
+ *
+ * For every other resource (RLIMIT_STACK, RLIMIT_CORE,
  * RLIMIT_RSS, RLIMIT_MEMLOCK) there is no mechanism that reaches the
  * thing being capped after this process has already started
  * (NT fixes stack reservation at NtCreateThreadEx() time; there is no per-process max-file-size,
@@ -82,6 +87,13 @@ static rlim_t nproc_cur = CHILD_CAP_LIMIT_, nproc_max = CHILD_CAP_LIMIT_;
 static rlim_t cpu_cur = RLIM_INFINITY, cpu_max = RLIM_INFINITY;
 static rlim_t as_cur = RLIM_INFINITY, as_max = RLIM_INFINITY;
 static rlim_t data_cur = RLIM_INFINITY, data_max = RLIM_INFINITY;
+/* RLIMIT_FSIZE is stored and honoured like the four above, but WITHOUT a
+ * job object: NT has no per-process maximum-file-size primitive, and
+ * needs none.  The limit is about what THIS process may create, and
+ * every path by which this process can extend a file goes through
+ * ntlibc's own I/O -- there is no mmap in this library at all -- so the
+ * enforcement point is our write paths, not the kernel's. */
+static rlim_t fsize_cur = RLIM_INFINITY, fsize_max = RLIM_INFINITY;
 /* RLIMIT_NOFILE's soft limit lives in __fd_limit (src/internal/fd.c), the
  * bound __fd_alloc() actually loops to, so that there is exactly one copy
  * of it and getrlimit() cannot drift from what is enforced.  Only the
@@ -111,8 +123,11 @@ int getrlimit(int resource, struct rlimit *rl)
 	case RLIMIT_DATA:
 		rl->rlim_cur = data_cur; rl->rlim_max = data_max;
 		break;
+	case RLIMIT_FSIZE:
+		rl->rlim_cur = fsize_cur; rl->rlim_max = fsize_max;
+		break;
 	case RLIMIT_STACK: case RLIMIT_CORE: case RLIMIT_RSS:
-	case RLIMIT_MEMLOCK: case RLIMIT_FSIZE:
+	case RLIMIT_MEMLOCK:
 		rl->rlim_cur = rl->rlim_max = RLIM_INFINITY;
 		break;
 	default:
@@ -218,10 +233,29 @@ int setrlimit(int resource, const struct rlimit *rl)
 		}
 		apply_job_limits();
 		return 0;
+	case RLIMIT_FSIZE:
+		/* Accepted for real, and stored.  This used to fall into the
+		 * arm below and be REFUSED with [EINVAL] for any lowering --
+		 * but setrlimit.html's [EINVAL] covers only "the value
+		 * specified in resource is not valid" and "rlim_cur exceeds
+		 * rlim_max", and lowering RLIMIT_FSIZE from RLIM_INFINITY is
+		 * neither.  Refusing a legal call is a violation the caller
+		 * cannot work around.
+		 *
+		 * FSIZE is split out from the arm below because it is not like
+		 * the others: STACK/CORE/RSS/MEMLOCK have no mechanism that
+		 * could reach the thing being capped, whereas the file size
+		 * this process may create is bounded entirely by ntlibc's own
+		 * write paths.  "Refuse rather than lie" belongs where it is
+		 * true, and it is not true here. */
+		if (rl->rlim_max > cur.rlim_max) { errno = EPERM; return -1; }
+		fsize_cur = rl->rlim_cur;
+		fsize_max = rl->rlim_max;
+		return 0;
 	default:
-		/* RLIMIT_STACK/FSIZE/CORE/RSS/MEMLOCK: no NT
-		 * mechanism can actually move the fixed ceiling these
-		 * already report (see the file banner comment). Accept the
+		/* RLIMIT_STACK/CORE/RSS/MEMLOCK: no NT mechanism can actually
+		 * move the fixed ceiling these already report (see the file
+		 * banner comment). Accept the
 		 * call only when it does not ask for anything stricter than
 		 * what is already true -- a harmless no-op -- and refuse
 		 * (EINVAL) a request that would require enforcement this
