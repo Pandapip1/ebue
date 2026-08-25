@@ -1547,6 +1547,42 @@ static void test_mem_streams(void)
 	CHECK(open_memstream(0, &outsz) == 0);
 	CHECK(open_memstream(&out, 0) == 0);
 
+	/* open_memstream.html: *sizep is "the smaller of the current buffer
+	 * length and the number of characters between the beginning of the
+	 * buffer and the current file position indicator", updated "after a
+	 * successful fflush() or fclose()".
+	 *
+	 * Both halves used to be wrong: the size published was the buffer's
+	 * high-water length alone, so after seeking BACKWARD it still
+	 * described bytes past the position; and it was written only from
+	 * the write path, so an fflush() following a seek published nothing
+	 * at all.  Verified against glibc, which reports 5 here. */
+	out = 0; outsz = 99;
+	f = open_memstream(&out, &outsz);
+	CHECK(f != 0);
+	if (f) {
+		CHECK(fputs("hello world", f) >= 0);
+		CHECK(fflush(f) == 0);
+		CHECK(outsz == 11);
+		CHECK(fseek(f, 5, SEEK_SET) == 0);
+		CHECK(fflush(f) == 0);
+		CHECK(outsz == 5);          /* follows the position, not the length */
+		/* and forward again: the buffer length is still 11, so the
+		 * minimum is the position once more */
+		CHECK(fseek(f, 8, SEEK_SET) == 0);
+		CHECK(fflush(f) == 0);
+		CHECK(outsz == 8);
+		/* a write after the backward seek overwrites in place and the
+		 * published size follows the new position */
+		CHECK(fseek(f, 0, SEEK_SET) == 0);
+		CHECK(fputs("HE", f) >= 0);
+		CHECK(fflush(f) == 0);
+		CHECK(outsz == 2);
+		CHECK(memcmp(out, "HEllo world", 11) == 0);
+		CHECK(fclose(f) == 0);
+		free(out);
+	}
+
 	/* asprintf */
 	out = 0;
 	CHECK(asprintf(&out, "%s=%d", "x", 42) == 4);

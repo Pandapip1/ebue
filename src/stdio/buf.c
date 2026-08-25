@@ -33,6 +33,37 @@ ssize_t __file_read(FILE *f, void *buf, size_t n)
 	return read(f->fd, buf, n);
 }
 
+/* Publish an open_memstream()/open_wmemstream() buffer to the caller's
+ * pointer and size.
+ *
+ * open_memstream.html: "the pointer ... and the size ... shall be
+ * updated" after a successful fflush() or fclose(), and *sizep is "the
+ * smaller of the current buffer length and the number of characters
+ * between the beginning of the buffer and the current file position
+ * indicator".
+ *
+ * BOTH HALVES OF THAT WERE WRONG.  The size stored was mem_len alone --
+ * the high-water length -- so after seeking BACKWARD *sizep kept
+ * describing bytes past the position, and it was only ever written from
+ * the write path, so an fflush() that followed a seek published nothing
+ * at all.  Measured against glibc: write "hello world", seek to 5,
+ * fflush -> glibc reports 5, this reported 11.
+ *
+ * open_wmemstream.html: sizep is "the number of wide characters", so the
+ * byte count is divided down.  The minimum is taken FIRST and divided
+ * after, because both operands are byte counts; dividing first would
+ * round each independently. */
+static void mem_publish(FILE *f)
+{
+	size_t n;
+
+	if (!f->mem_dynamic) return;
+	if (f->mem_out_ptr) *f->mem_out_ptr = (char *)f->mem_buf;
+	if (!f->mem_out_size) return;
+	n = f->mem_pos < f->mem_len ? f->mem_pos : f->mem_len;
+	*f->mem_out_size = f->wmem ? n / sizeof(wchar_t) : n;
+}
+
 ssize_t __file_write(FILE *f, const void *buf, size_t n)
 {
 	if (f->is_mem) {
@@ -58,15 +89,7 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
 		if (f->mem_len + term <= f->mem_size) memset(f->mem_buf + f->mem_len, 0, term);
-		if (f->mem_dynamic) {
-			if (f->mem_out_ptr) *f->mem_out_ptr = (char *)f->mem_buf;
-			/* open_wmemstream.html: sizep is "the number of wide
-			 * characters", so the byte length is divided down.  It is
-			 * always a whole multiple: every write to a wmem stream
-			 * comes from src/stdio/wide.c a whole wchar_t at a time. */
-			if (f->mem_out_size)
-				*f->mem_out_size = f->wmem ? f->mem_len / sizeof(wchar_t) : f->mem_len;
-		}
+		mem_publish(f);
 		return (ssize_t)n;
 	}
 	if (f->fd < 0) { errno = EBADF; return -1; }
@@ -132,6 +155,11 @@ int __fflush_locked(FILE *f)
 		}
 		f->rpos = f->rend = 0;
 	}
+	/* "shall be updated ... after a successful fflush() or fclose()" --
+	 * and a seek since the last write may have moved the position, which
+	 * is what *sizep is measured against, so this cannot be left to the
+	 * write path alone. */
+	mem_publish(f);
 	return 0;
 }
 
