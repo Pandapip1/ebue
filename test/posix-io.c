@@ -372,7 +372,7 @@ static void test_pipe(void)
 	close(fd[0]);
 }
 
-#if 0	/* BUG: fsync() on a pipe reports success where POSIX requires a
+#if NTLIBC_TEST(BUG, posix_io_fsync_pipe_einval) /* BUG: fsync() on a pipe reports success where POSIX requires a
 	 * shall-fail [EINVAL].  fsync.html ERRORS: "[EINVAL] The fildes
 	 * argument does not refer to a file on which this operation is
 	 * possible."

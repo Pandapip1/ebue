@@ -24,6 +24,7 @@
  * and a test satisfied by either cannot tell a correct refusal from a
  * wrong one.
  */
+#include "test-policy.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -311,7 +312,7 @@ static void test_mmap_fixed_misaligned_is_einval(void)
 	CHECK(munmap(base, 2 * PG) == 0);
 }
 
-#if 0 /* DECLINED FOR NOW (Pass 2), not impossible and not a platform
+#if NTLIBC_TEST(UNIMPL, posix_mman_mmap_file_backed) /* DECLINED FOR NOW (Pass 2), not impossible and not a platform
        * limit -- a file-backed mmap().  Pass 1 answers [ENODEV] for
        * every file type (asserted above); this is the clause that
        * refusal defers, recorded so the next reader meets the argument
