@@ -9,6 +9,7 @@
  */
 #include <search.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 
 struct slot {
@@ -40,6 +41,30 @@ int hcreate(size_t nel)
 
 	if (table) hdestroy();
 
+	/* hcreate.html RETURN VALUE: "shall return 0 if it cannot allocate
+	 * sufficient space for the table".
+	 *
+	 * The padding below is `nel + nel/2 + 8` in size_t, and that
+	 * arithmetic WRAPS for a large enough nel -- silently producing a
+	 * tiny capacity that calloc() then satisfies easily, so hcreate()
+	 * reported success for a table that could not come close to holding
+	 * nel entries.  Measured before this check: hcreate((SIZE_MAX/3)*2 +
+	 * 2) returned 1 and the 11th ENTER returned NULL -- ten slots
+	 * reported as sufficient for 1.2e19 entries.  That is exactly the
+	 * case the RETURN VALUE clause exists to report, so the wrap turned
+	 * a required failure into a false success.
+	 *
+	 * Refusing up front is the fix rather than checking after the fact,
+	 * because after the wrap there is nothing left to detect: the sum is
+	 * a perfectly ordinary small number.  calloc() cannot cover this
+	 * either -- it guards its OWN multiply (m > SIZE_MAX/n) and is handed
+	 * an already-wrapped cap.
+	 *
+	 * The bound is stated so it cannot itself overflow: dividing first,
+	 * never adding first.  [ENOMEM] is hcreate.html's one listed error
+	 * ("may fail"), and is the honest description of a request whose
+	 * table could never be allocated. */
+	if (nel > (((size_t)-1 - 8) / 3) * 2) { errno = ENOMEM; return 0; }
 	/* "may be adjusted upward" -- pad for load factor, keep it a
 	 * comfortable margin above nel so linear probing stays cheap. */
 	cap = nel + nel / 2 + 8;

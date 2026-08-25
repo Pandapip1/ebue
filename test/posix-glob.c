@@ -2705,40 +2705,11 @@ static void test_search_hsearch_table_full(void)
 	hdestroy();
 }
 
-#if 0 /* BUG: hcreate.html RETURN VALUE -- "The hcreate() function
-	shall return 0 if it cannot allocate sufficient space for the
-	table; otherwise, it shall return non-zero."
-
-	src/search/hsearch.c:45 computes the capacity as
-
-		cap = nel + nel / 2 + 8;
-
-	in size_t, with no overflow check, so a large enough nel wraps
-	to a tiny capacity that calloc() then satisfies easily.
-	hcreate() reports success for a table that cannot come close to
-	holding nel entries -- which is precisely the case the RETURN
-	VALUE clause exists to report.
-
-	nel = (SIZE_MAX / 3) * 2 + 2 is the wrapping value on any
-	two's-complement size_t whose width is even, which covers both
-	arches this library builds for: SIZE_MAX is 3q for q = SIZE_MAX/3
-	(2^32-1 and 2^64-1 are both divisible by 3), so nel = 2q + 2,
-	nel/2 = q + 1, and nel + nel/2 = 3q + 3 = SIZE_MAX + 3, which is
-	2 modulo the size_t width. cap therefore comes out as 10 on both.
-
-	Measured on x86_64: hcreate((SIZE_MAX/3)*2 + 2) returns 1, and
-	the 11th ENTER then returns NULL -- a table of ten slots
-	reported as sufficient space for 1.2e19 entries.
-
-	Fenced rather than fixed, per this project's standing rule. The
-	fix is a range check before the multiply-and-add, e.g. refusing
-	any nel > (SIZE_MAX - 8) / 3 * 2. */
 static void test_search_hcreate_overflow(void)
 {
 	CHECK(hcreate((size_t)(SIZE_MAX / 3) * 2 + 2) == 0);
 	hdestroy();
 }
-#endif
 
 /* tsearch.html DESCRIPTION: "A null pointer shall be returned by
  * tdelete(), tfind(), and tsearch() if rootp is a null pointer on
@@ -3165,6 +3136,7 @@ int main(int argc, char **argv)
 	test_search_hsearch_roundtrip();
 	test_search_hsearch_table_full();
 	test_search_tsearch_tfind();
+	test_search_hcreate_overflow();
 	test_search_null_rootp();
 	test_search_tdelete();
 	test_search_tdelete_parent();
