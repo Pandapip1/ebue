@@ -515,7 +515,7 @@ not every clause line, to keep this section a manageable size):
 | swab | adjacent-byte exchange, nothing written past nbytes, nbytes 0 and negative do nothing, odd nbytes exchanges nbytes-1, double swab is identity | covered (pure byte shuffling — the one call in this group for which a Wine pass is strong evidence) | test/posix-unistd.c `test_swab` |
 | sync | callable, returns no value, defines no error | covered as far as POSIX allows; the scheduling itself N/A — POSIX permits `sync()` to be undetectable by any conforming observation (`fsync()` is the call with a completion guarantee) | test/posix-unistd.c `test_sync` |
 | getlogin / getlogin_r | same name from both; getlogin_r returns 0 (not a length, not -1) on success and the errno *value* ERANGE on a short buffer; exactly-fits is a success | covered | test/posix-unistd.c `test_getlogin` |
-| fchown / fchownat / lchown / setregid / setpgrp / setsid / tcgetpgrp / tcsetpgrp | return values, and agreement with the getters (`setpgrp() == getpgrp()`, `setsid() == getsid(0)`, `tcgetpgrp(0) == getpgrp()`) | covered for the returns; the *effects* N/A — one user and one fixed session, per `src/unistd/ids.c`'s and `src/termios/termios.c`'s banners, so nothing could be observed to change. **BUG (fenced)**: `tcgetpgrp`/`tcsetpgrp` never produce the shall-fail [EBADF] | test/posix-unistd.c `test_id_session_stubs` |
+| fchown / fchownat / lchown / setregid / setpgrp / setsid / tcgetpgrp / tcsetpgrp | return values, agreement with the getters (`setpgrp() == getpgrp()`, `setsid() == getsid(0)`, `tcgetpgrp(0) == getpgrp()`), and `tcgetpgrp`/`tcsetpgrp`'s shall-fail [EBADF] | covered for the returns; the *effects* N/A — one user and one fixed session, per `src/unistd/ids.c`'s and `src/termios/termios.c`'s banners, so nothing could be observed to change. The [EBADF] half was a fenced BUG — both calls discarded `fildes` — and is now **fixed**: `src/unistd/ttyname.c`'s `tcgetpgrp()`/`tcsetpgrp()` run `fildes` through `__fd_get()` before answering, and the fixed answer is `getpgrp()` rather than a second hard-coded 1. [ENOTTY] is deliberately not part of that gate — see the note under the bug list below | test/posix-unistd.c `test_id_session_stubs` |
 | pause | DESCRIPTION: suspend until a signal is delivered; RETURN VALUE -1 with EINTR | N/A — **not callable from this suite at all**: `src/unistd/sleep.c`'s `pause()` is `NtDelayExecution` with a maximal timeout, and no asynchronous delivery exists to end it, so a call hangs forever rather than returning. A test would deadlock the run, not fail it | -- |
 | readlink / readlinkat (byte count, no NUL, bufsize truncation, EINVAL on a non-link, ENOENT, AT_FDCWD, dirfd-relative) | covered | test/unistd.c, test/posix-unistd.c `test_readlink` |
 | access / faccessat (F_OK/R_OK/W_OK/X_OK, ENOENT, EACCES) | covered | test/unistd.c |
@@ -539,8 +539,8 @@ EISDIR/ENOTEMPTY") and the corresponding fenced tests in
 ### Bugs found (never-asserted sweep, unistd.h group)
 
 Three, all found fenced in `test/posix-unistd.c`, all probed on this
-tree. The first two are **fixed** and their assertions now run; the
-third is still fenced.
+tree. All three are now **fixed** and their assertions run unfenced;
+none remain.
 
 1. **`unlinkat()` masked off undefined `flag` bits instead of rejecting
    them** — **fixed**. `unlink.html` ERRORS lists as *shall fail*:
@@ -585,19 +585,36 @@ third is still fenced.
    value returning 0 with errno unchanged, still has no name to reach it
    here.
 
-3. **`tcgetpgrp()`/`tcsetpgrp()` never fail, not even on a descriptor
-   that is not open.** `tcgetpgrp.html`: "The tcgetpgrp() function
-   *shall* fail if: [EBADF] The fildes argument is not a valid file
-   descriptor", and `tcsetpgrp.html` carries the identical clause.
+3. **`tcgetpgrp()`/`tcsetpgrp()` never failed, not even on a descriptor
+   that was not open** — **fixed**, and the fence removed.
+   `tcgetpgrp.html`: "The tcgetpgrp() function *shall* fail if: [EBADF]
+   The fildes argument is not a valid file descriptor", and
+   `tcsetpgrp.html` carries the identical clause.
 
-   Mechanism: `src/unistd/ttyname.c:23-24` discard `fd` without ever
-   reaching `__fd_get()`, which is what every other fd-taking call in
-   the library uses to produce EBADF. Probed: `tcgetpgrp(4096)` returns
-   1 and `tcsetpgrp(4096, 1)` returns 0, both with errno untouched. This
-   is separable from the deliberate single-session design
+   Mechanism: `src/unistd/ttyname.c`'s two one-line definitions
+   discarded `fd` without ever reaching `__fd_get()`, which is what
+   every other fd-taking call in the library uses to produce EBADF.
+   Probed at the time: `tcgetpgrp(4096)` returned 1 and
+   `tcsetpgrp(4096, 1)` returned 0, both with errno untouched. That was
+   separable from the deliberate single-session design
    `src/termios/termios.c`'s banner argues for: a fixed process group
-   for a *valid* terminal descriptor is that design; answering
-   successfully for fd 4096 is an argument check that was never written.
+   for a *valid* descriptor is that design; answering successfully for
+   fd 4096 was an argument check that had never been written. Both now
+   call `__fd_get()` first and return -1 with EBADF when it fails.
+
+   **Still open, deliberately: [ENOTTY] on a valid non-terminal
+   `fildes`.** Both pages also make that a shall-fail ("The calling
+   process does not have a controlling terminal, or the file is not the
+   controlling terminal"), and `src/termios/termios.c`'s `tcgetsid()` —
+   the closest sibling — *does* gate on `__FD_CONSOLE`. It was left out
+   of the fix above because it is a change to the model rather than the
+   missing argument check: this library answers one process group for
+   the whole process, not per descriptor, and the row above records
+   `tcgetpgrp(0) == getpgrp()` as covered on a fd 0 that
+   `tools/runtests.sh` redirects from `/dev/null` and that `isatty()`
+   therefore rejects. Closing it means deciding whether a process that
+   holds no console has a controlling terminal at all, and retiring that
+   covered clause — its own change, with its own fence.
 
 ### Not reached (unistd.h group)
 
@@ -3769,8 +3786,8 @@ to the priority-6 section ("unistd.h, fcntl.h, sys/stat.h") above:
 - `sync` — one row
 - `getlogin / getlogin_r` — one row
 - `fchown / fchownat / lchown / setregid / setpgrp / setsid /
-  tcgetpgrp / tcsetpgrp` — one row, plus the fenced `[EBADF]` BUG for
-  the last two
+  tcgetpgrp / tcsetpgrp` — one row, which also carries the `[EBADF]`
+  BUG the last two used to have (fixed, un-fenced)
 
 So this ledger already carries them and **restating them here as rows
 of their own would double-count every one**. What is stale is
