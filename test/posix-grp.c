@@ -520,27 +520,100 @@ static clock_t timeval_to_clockticks(const struct timeval *tv)
 	return (clock_t)((long long)tv->tv_sec * tck + (long long)tv->tv_usec * tck / 1000000);
 }
 
+/* Burn real user CPU until NT has actually charged this process at
+ * least `want` more clock ticks of it, and report how many it got.
+ *
+ * A fixed iteration count cannot do this job, and both callers below
+ * used to try.  The amount of user time a fixed loop
+ * earns depends on the machine it lands on, while the thing being
+ * asserted -- "> 0 ticks", i.e. at least one 10ms tick at the
+ * _SC_CLK_TCK of 100 this build reports -- is a threshold, not a
+ * proportion.  On a GitHub-hosted Windows Server 2025 x86_64 runner the
+ * child-side loop fell under that threshold and the assertion failed
+ * (CI run 32796247127), while the identical source passed on the slower
+ * i386 and kernel32 legs of the same run.
+ *
+ * The comment this replaces claimed the old child loop was measured at
+ * 49 ticks under stock Wine, which would have been a 49x margin.  It is
+ * not: re-measuring the same 20,000,000-iteration loop, three runs in a
+ * row on one machine, gives 3, 2 and 1 ticks.  So the margin was
+ * between 2x and 0x before this change, and the prose asserting
+ * otherwise was itself the failure -- a measurement reporting on its
+ * own speed rather than on the quantity it names, described as if it
+ * had been checked.
+ *
+ * So: loop until the reading itself says the work landed.  The caller
+ * gets a number it can assert on and, crucially, a distinguishable
+ * failure -- -1 means "this process never accumulated the time", which
+ * is a fact about the burn, not about whichever reader the caller is
+ * actually testing.  Bounded by wall-clock time so a genuinely broken
+ * tms_utime cannot spin here forever; it returns -1 and the caller says
+ * so out loud.
+ *
+ * The accumulator is volatile and its final value is stored to a
+ * volatile object at file scope, so no conforming compiler may delete
+ * the loop: a burn that got optimised away is the same vacuous-pass
+ * trap this helper exists to close, wearing a different hat. */
+static volatile double burn_sink;
+
+#define BURN_WALL_LIMIT_SEC 30
+
+static clock_t burn_user_ticks(clock_t want)
+{
+	struct timespec t0, now;
+	struct tms t;
+	clock_t start;
+	volatile double x = 0;
+	long i;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &t0) < 0) return (clock_t)-1;
+	if (times(&t) == (clock_t)-1) return (clock_t)-1;
+	start = t.tms_utime;
+
+	for (;;) {
+		for (i = 0; i < 5000000L; i++) x += (double)i;
+		burn_sink = x;
+		if (times(&t) == (clock_t)-1) return (clock_t)-1;
+		if (t.tms_utime - start >= want) return t.tms_utime - start;
+		if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return (clock_t)-1;
+		if (now.tv_sec - t0.tv_sec > BURN_WALL_LIMIT_SEC) return (clock_t)-1;
+	}
+}
+
+/* How much user time each side burns before asserting it was charged.
+ * 20 ticks is 200ms at _SC_CLK_TCK 100, i.e. ~13 of Windows' 15.625ms
+ * accounting quanta -- a wide margin over the 1-tick floor being
+ * asserted, and still small enough that both burns together cost this
+ * suite well under a second on any machine that accounts at all. */
+#define BURN_TICKS 20
+
 static void test_times_self(void)
 {
 	struct rusage ru_before;
 	struct tms t;
 	clock_t r;
 	clock_t utime_ticks, stime_ticks;
+	clock_t burned;
 
-	/* Burn enough real user CPU that the readings below are non-zero on
-	 * any platform that tracks process times at all.  Without this the
-	 * whole function was vacuous: a test process that has done almost
-	 * nothing reports tms_utime == 0 and ru_utime == 0, so
-	 * `t.tms_utime >= utime_ticks` was 0 >= 0 and passed identically if
-	 * times() and getrusage() had both written nothing.  Measured under
-	 * stock Wine: ~300M iterations of this loop is ~0.5s of user time,
-	 * i.e. ~50 ticks at the _SC_CLK_TCK of 100 this build reports, so
-	 * the > 0 assertion below has a wide margin over the 10ms tick. */
-	{
-		volatile double x = 0;
-		long i;
-		for (i = 0; i < 300000000L; i++) x += (double)i;
-		(void)x;
+	/* Burn real user CPU until the reading itself confirms it landed,
+	 * so the assertions below are non-zero on any platform that tracks
+	 * process times at all.  Without a burn the whole function was
+	 * vacuous: a test process that has done almost nothing reports
+	 * tms_utime == 0 and ru_utime == 0, so `t.tms_utime >= utime_ticks`
+	 * was 0 >= 0 and passed identically if times() and getrusage() had
+	 * both written nothing.  With a *fixed-size* burn it was merely
+	 * fragile instead -- see burn_user_ticks()'s comment. */
+	burned = burn_user_ticks(BURN_TICKS);
+	/* Distinct from the assertions below on purpose: this one says the
+	 * burn never happened, which is a fact about this loop and says
+	 * nothing at all about times() or getrusage(). */
+	CHECK(burned >= BURN_TICKS);
+	if (burned < BURN_TICKS) {
+		printf("note: could not accumulate %d ticks of user time in "
+		       "%d wall seconds; the tms_utime/ru_utime assertions "
+		       "below cannot mean anything and are skipped\n",
+		       BURN_TICKS, BURN_WALL_LIMIT_SEC);
+		return;
 	}
 
 	memset(&ru_before, 0xff, sizeof ru_before);
@@ -595,6 +668,18 @@ static void test_times_children(void)
 	pid = __spawn(self, argv, environ);
 	if (pid < 0) { printf("note: cannot spawn \"%s\"; times() child test skipped\n", self); return; }
 	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status));
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 3) {
+		/* The child said its own user-time accounting never moved.
+		 * Every assertion below would then be measuring that, not the
+		 * parent-side accumulator they name, so say which one broke
+		 * and stop rather than reporting a misattributed failure. */
+		fails++;
+		printf("FAIL %s:%d: --times-child never accumulated its user time; "
+		       "the tms_cutime/RUSAGE_CHILDREN assertions cannot be "
+		       "evaluated\n", __FILE__, __LINE__);
+		return;
+	}
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
 	/* Both destinations are poisoned first, so "the reader returned
@@ -613,9 +698,12 @@ static void test_times_children(void)
 	 * whether or not either reader works and whether or not wait.c ever
 	 * accumulated anything -- and zero is exactly what an unpopulated
 	 * accumulator reads as.  The "--times-child" role in main() burns
-	 * real CPU precisely so this is not zero; measured under stock apt
-	 * Wine it is 49 ticks at the _SC_CLK_TCK of 100 this build reports,
-	 * so the margin over the 1-tick floor is wide.
+	 * real CPU precisely so this is not zero, and -- since it exited 0
+	 * above -- has already confirmed against its own tms_utime that NT
+	 * charged it at least BURN_TICKS of user time.  So a zero here is
+	 * necessarily src/process/wait.c's fill_child_rusage() failing to
+	 * record time that demonstrably exists, and not a fast machine: the
+	 * child would have exited 3 in that case, handled above.
 	 *
 	 * tms_cstime is deliberately not held to > 0: a child that only
 	 * spins in user code need not be charged any system time at all,
@@ -634,6 +722,12 @@ static void test_times_children(void)
 #ifdef _WIN32
 	CHECK(t.tms_cutime > 0);
 	CHECK(timeval_to_clockticks(&ru_children.ru_utime) > 0);
+	/* Printed unconditionally: a future failure of the two assertions
+	 * above should not need a rebuild to say by how much. */
+	printf("note: reaped child charged tms_cutime=%ld ticks, "
+	       "RUSAGE_CHILDREN ru_utime=%ld ticks (child confirmed >= %d)\n",
+	       (long)t.tms_cutime,
+	       (long)timeval_to_clockticks(&ru_children.ru_utime), BURN_TICKS);
 #else
 	printf("note: child CPU-time totals not held to > 0 in the native build "
 	       "(fuzz/ntstubs.c's ProcessTimes is not implemented for a child "
@@ -874,12 +968,23 @@ int main(int argc, char **argv)
 {
 	self = argv[0];
 	if (argc > 1 && !strcmp(argv[1], "--times-child")) {
-		/* Burn a little real CPU so tms_cutime/tms_cstime have
-		 * something nonzero-shaped to accumulate, then exit cleanly
-		 * so waitpid() reaps a real, queryable exit status. */
-		volatile unsigned long i, sum = 0;
-		for (i = 0; i < 20000000UL; i++) sum += i;
-		(void)sum;
+		/* Burn real CPU until NT confirms it charged this process at
+		 * least BURN_TICKS of user time, then exit cleanly so
+		 * waitpid() reaps a real, queryable exit status.
+		 *
+		 * Exiting 0 is this child's assertion that the time it is
+		 * about to be accounted for genuinely exists.  That is what
+		 * lets test_times_children() read a zero in the parent as a
+		 * parent-side accounting bug instead of "the runner was fast
+		 * today": the two are different failures with different fixes,
+		 * and a fixed-size burn cannot tell them apart.  Exit 3 says
+		 * the burn is what failed. */
+		if (burn_user_ticks(BURN_TICKS) < BURN_TICKS) {
+			printf("posix-grp: --times-child could not accumulate %d "
+			       "ticks of its own user time in %d wall seconds\n",
+			       BURN_TICKS, BURN_WALL_LIMIT_SEC);
+			return 3;
+		}
 		return 0;
 	}
 

@@ -579,6 +579,17 @@ static void test_wait_rusage(const char *self)
 	 * accumulator is legitimately zero. */
 #ifdef _WIN32
 	CHECK(timeval_usec(&ru_after.ru_stime) > 0);
+	/* Printed, not just asserted.  This is the same shape as the child
+	 * CPU-time floor test/posix-grp.c carries, and that one flaked on a
+	 * fast real-Windows runner (CI run 32796247127) because nothing in
+	 * the log said how close to the floor it had been sitting.  Here
+	 * the quantity is not under this test's control -- it is whatever
+	 * kernel time the children reaped so far were charged -- so the
+	 * margin cannot be widened, only made visible. */
+	printf("note: RUSAGE_CHILDREN total after this reap: ru_stime=%lldus "
+	       "ru_utime=%lldus (the assertion above is a floor of 1us, and "
+	       "NT accounts CPU time in ~15625us quanta)\n",
+	       timeval_usec(&ru_after.ru_stime), timeval_usec(&ru_after.ru_utime));
 #else
 	printf("note: RUSAGE_CHILDREN total not held to > 0 natively "
 	       "(fuzz/ntstubs.c reports no child process times)\n");
