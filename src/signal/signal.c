@@ -419,7 +419,72 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 
 int sigpending(sigset_t *s) { *s = pending; return 0; }
 int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
-int sigwait(const sigset_t *s, int *sig) { (void)s; (void)sig; errno = EINVAL; return EINVAL; }
+/* sigwait.html DESCRIPTION: "shall select a pending signal from set,
+ * atomically clear it from the system's set of pending signals, and
+ * return that signal number in the location referenced by sig ... If no
+ * signal in set is pending at the time of the call, the thread shall be
+ * suspended until one or more becomes pending."
+ *
+ * This was `{ errno = EINVAL; return EINVAL; }` -- a degenerate stub
+ * that failed for every argument, including a set it had no grounds to
+ * reject, and additionally set errno, which RETURN VALUE does not
+ * provide for: "an error number shall be returned to indicate the
+ * error", through the return value alone.  errno is saved and restored
+ * here so that stays true on every path.
+ *
+ * Selection is lowest-numbered-first, which also satisfies the one
+ * ordering clause the page states outright ("Should any of the multiple
+ * pending signals in the range SIGRTMIN to SIGRTMAX be selected, it
+ * shall be the lowest numbered one").
+ *
+ * Signal numbers in set that are outside [1, _NSIG) are ignored rather
+ * than rejected.  ERRORS makes "[EINVAL] The set argument contains an
+ * invalid or unsupported signal number" a *may fail*, so both answers
+ * conform, and two things decide it:
+ *
+ *   - sigfillset() above is memset(0xff) over a 128-byte sigset_t, so it
+ *     sets 1024 bits for 64 real signals.  A sigwait() that rejected
+ *     stray bits would fail `sigfillset(&s); sigwait(&s, &sig);` -- the
+ *     commonest sigwait idiom there is -- every single time.
+ *   - Measured, not derived: glibc does not reject them.  A raw
+ *     memset(0xff) sigset_t with SIGUSR1 pending returns 0 and sig=10,
+ *     as does glibc's own sigfillset().
+ *
+ * So this sigwait() has no failure mode at all, which is a legal shape
+ * for a page whose only error is a may-fail.
+ *
+ * The suspend path is a real wait, not a fabricated return.  Nothing on
+ * the main thread can make a signal pending while it is parked inside
+ * this loop -- delivery here is synchronous (see this file's banner) --
+ * but the NTLIBC_USE_KERNEL32 console-control handler runs on a thread
+ * kernel32 creates and reaches `pending` through __raise_internal(), so
+ * a blocked SIGINT genuinely can arrive from outside.  Where it cannot,
+ * this waits forever, which is what POSIX specifies for a thread that
+ * asks for a signal nothing will ever send; inventing an EINTR or an
+ * EAGAIN to escape would be reporting an event that did not happen.
+ * NtDelayExecution() rather than a spin keeps that wait off the CPU. */
+int sigwait(const sigset_t *s, int *sig)
+{
+	int saved_errno = errno;
+	int i;
+
+	for (;;) {
+		for (i = 1; i < _NSIG; i++) {
+			if (!sigismember(s, i) || !sigismember(&pending, i)) continue;
+			sigdelset(&pending, i);
+			if (sig) *sig = i;
+			errno = saved_errno;
+			return 0;
+		}
+		{
+			/* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h);
+			 * negative means relative, in 100ns units, so this is 100ms
+			 * -- the same convention src/unistd/sleep.c uses. */
+			LARGE_INTEGER d = -1000000;
+			NtDelayExecution(FALSE, &d);
+		}
+	}
+}
 int siginterrupt(int sig, int flag) { (void)sig; (void)flag; return 0; }
 /* The alternate signal stack, and whether a handler is running on it.
  *

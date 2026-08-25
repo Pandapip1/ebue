@@ -240,7 +240,15 @@ def attempt(executable: Path, runner: list[str], work: Path, timeout: int,
             timeout=timeout, check=False,
         )
     except subprocess.TimeoutExpired as error:
-        return "TIMEOUT", error.stdout or ""
+        # subprocess does NOT decode what it captured before the kill, even
+        # under text=True: TimeoutExpired.stdout is bytes (CPython 3.12).
+        # Returning it raw poisons the "\n".join(logs) in run_one() with a
+        # TypeError, so a single timing-out case aborts the whole sweep
+        # instead of being recorded as TIMEOUT.
+        captured = error.stdout or ""
+        if isinstance(captured, bytes):
+            captured = captured.decode("utf-8", "replace")
+        return "TIMEOUT", captured
     except OSError as error:
         return "ERROR", str(error)
     outcomes = {0: "PASS", 1: "FAIL", 2: "UNRESOLVED", 4: "UNSUPPORTED", 5: "UNTESTED"}

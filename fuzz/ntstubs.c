@@ -3341,6 +3341,188 @@ NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULO
  * this file's header comment and test/posix-signal.c's
  * NATIVE_NO_FAULT_BRIDGE). Needed only so the link succeeds. */
 NOTIMPL(NtQueryVirtualMemory, (HANDLE a, PVOID b, MEMORY_INFORMATION_CLASS c, PVOID d, SIZE_T e, SIZE_T *f))
+
+/* ---- virtual memory, backed by the host's real mappings ----------
+ *
+ * src/mman/mman.c is the first thing in this library to use the
+ * NtAllocateVirtualMemory/NtFreeVirtualMemory/NtProtectVirtualMemory
+ * family, and it links into libc.a, so without these four every test in
+ * the native build fails to link -- which is how they got here.
+ *
+ * They are FUNCTIONAL rather than NOTIMPL, deliberately.  A NOTIMPL
+ * would have fixed the link and left src/mman/mman.c with zero ASan
+ * coverage, and the risky part of that file is not the NT calls -- it is
+ * the per-page `live` bookkeeping around them, an array index derived
+ * from a pointer difference, which is exactly the sort of thing ASan
+ * exists to catch and exactly the sort of thing a NOTIMPL stub would
+ * hide by never letting the code run.
+ *
+ * This is not modelling NT's allocator so that a test can assert against
+ * the model -- the objection recorded for spawn-stdhandle-attr above.
+ * The subject under test is mman.c's bookkeeping; the host's mmap(2) is
+ * standing in for the *substrate*, the same way this file's NtCreateFile
+ * stands in for the volume.  Where the substrate genuinely differs from
+ * NT the difference is noted below rather than papered over.
+ *
+ * The mapping onto host primitives:
+ *
+ *   MEM_RESERVE|MEM_COMMIT, base NULL -> mmap(NULL, ..., MAP_ANONYMOUS)
+ *   MEM_COMMIT, base inside a reservation -> mprotect() to the requested
+ *     protection.  NT would zero a freshly committed page; the host has
+ *     already done that in the MEM_DECOMMIT below, which is why decommit
+ *     is implemented as a fresh anonymous MAP_FIXED rather than as
+ *     mprotect(PROT_NONE) -- MAP_FIXED over an anonymous range discards
+ *     the old pages and the next read sees zeroes, which is the NT
+ *     behaviour mman.c's MAP_FIXED discard clause depends on.
+ *   MEM_DECOMMIT -> mmap(MAP_FIXED|MAP_ANONYMOUS, PROT_NONE)
+ *   MEM_RELEASE  -> munmap() of the whole reservation.  NT takes base
+ *     with size 0 for this, so the size has to come from somewhere: the
+ *     small table below remembers what this stub handed out.
+ */
+/* Raw syscalls, not the <sys/mman.h> wrappers.  Two reasons, and both
+ * are the point rather than an inconvenience:
+ *
+ *   - This file is compiled -nostdinc against ntlibc's own headers, so
+ *     <sys/mman.h> here is include/sys/mman.h and mmap() here would be
+ *     src/mman/mman.c's mmap() -- i.e. the code under test calling
+ *     itself through its own substrate.  Unbounded recursion, and a
+ *     measurement of nothing.
+ *   - The asan build passes only -D_XOPEN_SOURCE=700, so MAP_ANONYMOUS
+ *     is not even visible here.  That is the _BSD_SOURCE/_GNU_SOURCE
+ *     gate in include/sys/mman.h doing exactly its job, demonstrated by
+ *     accident: a strictly-POSIX translation unit does not see the
+ *     extension.
+ *
+ * So the constants below are the host kernel's own, spelled out the way
+ * this file already spells AT_FDCWD as -100. */
+#define SYS_mprotect 10
+#define SYS_munmap   11
+#define SYS_mlock    149
+#define SYS_munlock  150
+
+#define H_PROT_NONE  0x0
+#define H_PROT_READ  0x1
+#define H_PROT_WRITE 0x2
+#define H_PROT_EXEC  0x4
+#define H_MAP_PRIVATE   0x02
+#define H_MAP_FIXED     0x10
+#define H_MAP_ANONYMOUS 0x20
+
+#define NTSTUB_VM_MAX 256
+static struct { void *base; size_t size; } ntstub_vm[NTSTUB_VM_MAX];
+
+static long ntstub_prot(ULONG page)
+{
+	switch (page) {
+	case PAGE_NOACCESS:          return H_PROT_NONE;
+	case PAGE_READONLY:          return H_PROT_READ;
+	case PAGE_READWRITE:         return H_PROT_READ | H_PROT_WRITE;
+	case PAGE_EXECUTE:           return H_PROT_EXEC;
+	case PAGE_EXECUTE_READ:      return H_PROT_READ | H_PROT_EXEC;
+	case PAGE_EXECUTE_READWRITE: return H_PROT_READ | H_PROT_WRITE | H_PROT_EXEC;
+	default:                     return H_PROT_READ | H_PROT_WRITE;
+	}
+}
+
+/* mmap(2) reports failure as a small negative errno in the return value,
+ * not as MAP_FAILED, when it is reached through syscall(2) this way. */
+static int ntstub_mmap_failed(long r) { return r < 0 && r > -4096; }
+
+NTSTATUS NTAPI NtAllocateVirtualMemory(HANDLE proc, PVOID *base, ULONG_PTR zb,
+                                       SIZE_T *size, ULONG type, ULONG prot)
+{
+	int i;
+	long r;
+	(void)proc; (void)zb;
+	if (!base || !size || !*size) return STATUS_INVALID_PARAMETER;
+
+	if (type & MEM_RESERVE) {
+		r = syscall(SYS_mmap, 0, (long)*size, ntstub_prot(prot),
+		            (long)(H_MAP_PRIVATE | H_MAP_ANONYMOUS), -1L, 0L);
+		if (ntstub_mmap_failed(r)) return STATUS_NO_MEMORY;
+		for (i = 0; i < NTSTUB_VM_MAX; i++) {
+			if (ntstub_vm[i].base) continue;
+			ntstub_vm[i].base = (void *)r;
+			ntstub_vm[i].size = *size;
+			*base = (void *)r;
+			return STATUS_SUCCESS;
+		}
+		syscall(SYS_munmap, r, (long)*size);
+		return STATUS_NO_MEMORY;
+	}
+
+	/* MEM_COMMIT over a subrange of an existing reservation. */
+	if (!*base) return STATUS_INVALID_PARAMETER;
+	if (syscall(SYS_mprotect, (long)*base, (long)*size, ntstub_prot(prot)) != 0)
+		return STATUS_NO_MEMORY;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtFreeVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULONG type)
+{
+	int i;
+	long r;
+	(void)proc;
+	if (!base || !*base || !size) return STATUS_INVALID_PARAMETER;
+
+	if (type & MEM_RELEASE) {
+		/* NT takes base with size 0 here, so the size has to come from
+		 * somewhere: this table remembers what the stub handed out. */
+		for (i = 0; i < NTSTUB_VM_MAX; i++) {
+			if (ntstub_vm[i].base != *base) continue;
+			syscall(SYS_munmap, (long)ntstub_vm[i].base, (long)ntstub_vm[i].size);
+			ntstub_vm[i].base = NULL;
+			ntstub_vm[i].size = 0;
+			return STATUS_SUCCESS;
+		}
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	/* MEM_DECOMMIT: a fresh anonymous MAP_FIXED over the subrange rather
+	 * than mprotect(PROT_NONE).  Both make the pages inaccessible, but
+	 * only this one discards the old pages so that a later commit reads
+	 * as zero -- which is the NT behaviour src/mman/mman.c's MAP_FIXED
+	 * discard clause depends on.  mprotect alone would leave the old
+	 * bytes in place and quietly make that clause untestable here. */
+	if (!*size) return STATUS_INVALID_PARAMETER;
+	r = syscall(SYS_mmap, (long)*base, (long)*size, H_PROT_NONE,
+	            (long)(H_MAP_PRIVATE | H_MAP_ANONYMOUS | H_MAP_FIXED), -1L, 0L);
+	if (ntstub_mmap_failed(r)) return STATUS_INVALID_PARAMETER;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtProtectVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size,
+                                      ULONG prot, PULONG old)
+{
+	(void)proc;
+	if (!base || !*base || !size) return STATUS_INVALID_PARAMETER;
+	if (old) *old = PAGE_READWRITE;   /* not tracked; nothing reads it back */
+	if (syscall(SYS_mprotect, (long)*base, (long)*size, ntstub_prot(prot)) != 0)
+		return STATUS_INVALID_PARAMETER;
+	return STATUS_SUCCESS;
+}
+
+/* mlock(2)/munlock(2) -- which is what Wine's NtLockVirtualMemory does
+ * for the current process too (dlls/ntdll/unix/virtual.c:6254).  Bounded
+ * by RLIMIT_MEMLOCK here exactly as it is there, so test/posix-mman.c's
+ * measured skip path is reachable from this build as well.  That is the
+ * point of keying that skip on the attempt rather than on the platform:
+ * it works unchanged across Wine, real NT, and this native build. */
+NTSTATUS NTAPI NtLockVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULONG unk)
+{
+	(void)proc; (void)unk;
+	if (!base || !*base || !size) return STATUS_INVALID_PARAMETER;
+	if (syscall(SYS_mlock, (long)*base, (long)*size) != 0) return STATUS_ACCESS_DENIED;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtUnlockVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULONG unk)
+{
+	(void)proc; (void)unk;
+	if (!base || !*base || !size) return STATUS_INVALID_PARAMETER;
+	if (syscall(SYS_munlock, (long)*base, (long)*size) != 0) return STATUS_ACCESS_DENIED;
+	return STATUS_SUCCESS;
+}
 /* src/file/flock.c's NtLockFile()/NtUnlockFile() pair: no simulated
  * byte-range lock table exists over the in-memory volume this file's
  * NtCreateFile() stub above serves, so there is nothing genuine to
