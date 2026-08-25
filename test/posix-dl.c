@@ -60,6 +60,7 @@
 #include <dlfcn.h>
 #include <sys/mman.h>
 #include <termios.h>
+#include <spawn.h>
 #include "ntlibc/rpath.h"
 
 static int fails;
@@ -502,11 +503,71 @@ static void test_termios_cflag_serial_bits(void)
  * That is now the shipped implementation -- include/spawn.h,
  * src/process/posix_spawn.c, src/process/spawn_file_actions.c,
  * src/process/spawnattr.c -- and test/posix-spawn.c is the clause audit
- * of it.  What remains here is the section's own historical argument
- * plus the one gap that outlived it (POSIX_SPAWN_SETSIGMASK with a
- * non-empty mask, fenced UNIMPL below); the unfenced demonstration
- * below still runs, as a check that the __spawn() inheritance the whole
- * design rests on behaves the way the argument claimed.
+ * of it, against the real header.  What remains here is the section's
+ * own historical argument, plus the unfenced demonstration below, which
+ * still runs as a check that the __spawn() inheritance the whole design
+ * rests on behaves the way the argument claimed.
+ *
+ * No attribute-flag fences remain here.  Four used to: RESETIDS,
+ * SETSCHEDPARAM/SETSCHEDULER, SETSIGMASK and SETPGROUP.  All four were
+ * stale in the same way the termios section above was -- a survey
+ * written while the header was missing, still sitting there after the
+ * header arrived -- and all four are now owned, clause for clause, by
+ * test/posix-spawn.c, which tests them against the shipped <spawn.h>
+ * instead of against local look-alikes.
+ *
+ * They were not merely redundant.  Each body did
+ * `struct spawn_attr_local attr; attr.flags = POSIX_SPAWN_X;
+ * CHECK(attr.flags == POSIX_SPAWN_X);` -- an assertion about a struct
+ * the test had just filled, which cannot fail and never reached the
+ * library at all.  And the local flag table they were written against
+ * disagreed with the shipped header on six of its seven values:
+ *
+ *     flag                       here (was)   <spawn.h>
+ *     POSIX_SPAWN_RESETIDS         0x20         0x01
+ *     POSIX_SPAWN_SETPGROUP        0x01         0x02
+ *     POSIX_SPAWN_SETSIGDEF        0x02         0x04
+ *     POSIX_SPAWN_SETSIGMASK       0x04         0x08
+ *     POSIX_SPAWN_SETSCHEDPARAM    0x08         0x10
+ *     POSIX_SPAWN_SETSCHEDULER     0x10         0x20
+ *     POSIX_SPAWN_USEVFORK         0x40         0x40
+ *
+ * Note the row that is worse than a mismatch: this file's
+ * POSIX_SPAWN_SETSCHEDULER (0x10) was the shipped header's
+ * POSIX_SPAWN_SETSCHEDPARAM.  A reader who trusted the numbering here
+ * would have read one flag as another.
+ *
+ * ONE OF THOSE FOUR IS NOT A GAP, AND MUST NOT BE "FIXED" LATER.  The
+ * SETSCHEDPARAM/SETSCHEDULER fence read UNIMPL and named a real hook
+ * point -- __spawn() creates the child suspended, so there is a genuine
+ * window before its first instruction in which
+ * NtSetInformationProcess()/NtSetInformationThread() could set a
+ * priority.  The hook point is real; the conclusion drawn from it was
+ * not.  Three places in this tree refuse these two flags deliberately:
+ * src/process/posix_spawn.c's check_attr() returns EINVAL for both, with
+ * a banner arguing the refusal is the correct answer; test/posix-spawn.c
+ * fences the same clause saying the POSIX shape "does not survive the
+ * translation", because mapping sched_priority onto an NT priority class
+ * "would be an invention with a POSIX name on it"; and include/sched.h
+ * declines _POSIX_PRIORITY_SCHEDULING outright, so that a configure
+ * probe finding the symbol cannot conclude the option group is present.
+ * SCHED_FIFO/SCHED_RR/SCHED_OTHER do not exist here, so
+ * posix_spawnattr_setschedpolicy()'s argument has no valid value at all.
+ * A considered refusal, asserted by a currently-passing test, is not
+ * something to un-assert because a stale fence in another file implied
+ * it should be implementable.
+ *
+ * The SETPGROUP fence was stale twice over: its reason -- "a job object
+ * groups processes for resource limits, not for job-control signal
+ * delivery" -- had already been refuted in place.  NT does have process
+ * groups (console process groups, created by CREATE_NEW_PROCESS_GROUP
+ * and targeted by GenerateConsoleCtrlEvent's dwProcessGroupId); job
+ * objects were the wrong object to compare against.  The verdict
+ * survives on the correct and narrower mechanism -- membership is fixed
+ * by descent from the group root, and no call joins a pre-existing group
+ * -- which is what test/posix-spawn.c's fence and
+ * src/process/posix_spawn.c's banner both now say.  Keeping the refuted
+ * wording here would have left the tree arguing with itself.
  * ==============================================================
  */
 
@@ -554,15 +615,13 @@ static void test_spawn_fd_remap_via_existing_inheritance(const char *self)
 	if (n > 0) { buf[n] = 0; CHECK(strstr(buf, "child-fd2") != 0); }
 }
 
-struct spawn_file_action_local { int kind; int fd, newfd; const char *path; int flags; };
-struct spawn_attr_local { unsigned short flags; int pgroup; };
-#define POSIX_SPAWN_SETPGROUP    0x01
-#define POSIX_SPAWN_SETSIGDEF    0x02
-#define POSIX_SPAWN_SETSIGMASK   0x04
-#define POSIX_SPAWN_SETSCHEDPARAM 0x08
-#define POSIX_SPAWN_SETSCHEDULER  0x10
-#define POSIX_SPAWN_RESETIDS      0x20
-#define POSIX_SPAWN_USEVFORK      0x40
+/* No local scaffolding here either.  struct spawn_attr_local, struct
+ * spawn_file_action_local and the seven POSIX_SPAWN_* defines that used
+ * to stand here existed only because <spawn.h> was absent; every one of
+ * them is now the shipped header's, included at the top of this file.
+ * See the section banner above for the six-of-seven value divergence
+ * they had drifted into, and why keeping them would have been worse than
+ * redundant. */
 
 /* No fence for posix_spawn_file_actions_t.  This file used to carry an
  * UNIMPL fence here arguing that the object was implementable directly
@@ -578,47 +637,22 @@ struct spawn_attr_local { unsigned short flags; int pgroup; };
  * <spawn.h>, rather than duplicated here against local declarations. */
 
 
-#if NTLIBC_TEST(NA, posix_dl_spawn_resetids) /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_RESETIDS:
-	"reset the effective user ID ... to the real user ID, and the
-	effective group ID ... to the real group ID". NT's access-token
-	model has no distinct real/effective/saved-set-id triple the way
-	POSIX credentials do (a token simply has a set of SIDs and
-	privileges; there is no setuid-binary-style "effective differs
-	from real" state a spawned child could reset in the first
-	place), so there is no NT operation this flag could ever be
-	wired to -- not a missing wrapper, a missing concept. */
-static void test_spawn_resetids(void)
-{
-	struct spawn_attr_local attr;
-	attr.flags = POSIX_SPAWN_RESETIDS;
-	CHECK(attr.flags == POSIX_SPAWN_RESETIDS);
-}
-#endif
+/* Not fenced: POSIX_SPAWN_RESETIDS.  The N/A verdict stands and is
+ * unchanged -- an NT access token carries a set of SIDs and privileges,
+ * with no real/effective/saved-set-id triple for a child to reset, so
+ * the postcondition is unconditionally true rather than ignored.  The
+ * clause is tested in test/posix-spawn.c (test_resetids), against the
+ * shipped header, and src/process/posix_spawn.c accepts the flag on
+ * exactly that ground. */
 
-#if NTLIBC_TEST(NA, posix_dl_spawn_setschedparam) /* N/A in this audit file: posix_spawn.html DESCRIPTION --
-	POSIX_SPAWN_SETSCHEDPARAM/POSIX_SPAWN_SETSCHEDULER: apply a
-	scheduling policy/priority to the child before it starts
-	running. NT mechanism: __spawn() already creates the child
-	*suspended* (RtlCreateUserProcess(...) followed by a separate
-	NtResumeThread(info.Thread, 0), src/process/spawn.c) specifically
-	so its very first instruction has not executed yet -- exactly
-	the window a real implementation needs. kernel32's
-	SetPriorityClass()/SetThreadPriority() (or ntdll's
-	NtSetInformationProcess()/NtSetInformationThread() directly,
-	avoiding the kernel32 reach-out other N/A entries in this file
-	need) on info.Process/info.Thread, called in that same window
-	before the existing NtResumeThread() call, is a real, unused
-	hook point that is already half-built by accident of how
-	__spawn() has to create the process in the first place. The executable
-	behavior is covered by posix_spawn_setschedparam_applied; this block
-	only checks a local flag constant and is not a BUG test. */
-static void test_spawn_setschedparam(void)
-{
-	struct spawn_attr_local attr;
-	attr.flags = POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER;
-	CHECK(attr.flags & POSIX_SPAWN_SETSCHEDPARAM);
-}
-#endif
+/* Not fenced: POSIX_SPAWN_SETSCHEDPARAM / POSIX_SPAWN_SETSCHEDULER.
+ * See the section banner above -- this is a deliberate refusal in three
+ * places, not a gap, and the UNIMPL fence that used to stand here read
+ * the real suspended-child hook point as licence to implement flags
+ * whose POSIX shape this platform cannot express.  The clause lives in
+ * test/posix-spawn.c (test_setschedparam_applied), which fences it with
+ * the reason, beside a passing assertion that posix_spawn() returns
+ * EINVAL for both flags. */
 
 /* POSIX_SPAWN_SETSIGDEF is not fenced at all.  "the signals ... shall
  * be set to their default actions in the child": src/signal/signal.c's
@@ -630,65 +664,24 @@ static void test_spawn_setschedparam(void)
  * (check_attr() lets it through unconditionally), and the postcondition
  * holds by construction rather than being ignored.  Nothing missing. */
 
-#if NTLIBC_TEST(NA, posix_dl_spawn_setsigmask) /* N/A in this audit file: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETSIGMASK
-	with a *non-empty* mask: "the signal mask of the child process
-	shall be set to the signal set specified in the spawn-sigmask
-	attribute".  src/process/posix_spawn.c honours the empty mask,
-	which is true by construction (`blocked` in src/signal/signal.c is
-	a static, so a fresh child's mask is empty -- and it is the case
-	GNU make actually takes, calling sigemptyset() before
-	posix_spawnattr_setsigmask()), and refuses a non-empty one with
-	EINVAL rather than accepting it and silently not installing it.
+/* Not fenced: POSIX_SPAWN_SETSIGMASK with a non-empty mask.  This is a
+ * genuine outstanding gap and it keeps its UNIMPL fence -- in
+ * test/posix-spawn.c (test_setsigmask_nonempty_is_delivered), against
+ * the shipped header, where the argument it carries (RTL_USER_PROCESS_PARAMETERS' RuntimeData is a real
+ * parent-to-child channel, but a mask sent that way would reach an
+ * ntlibc-built child only and silently do nothing for cmd.exe, so it
+ * would not be POSIX's promise) is stated once rather than twice.
+ * src/process/posix_spawn.c honours the empty mask, which is true by
+ * construction, and refuses a non-empty one with EINVAL rather than
+ * accepting it and silently not installing it. */
 
-	This fence previously read N/A on the grounds that there is "no
-	channel to hand a chosen initial mask/disposition to a child that
-	has not yet run its own startup code".  That reason is false, and
-	was already false when it was written: RTL_USER_PROCESS_PARAMETERS'
-	RuntimeData is such a channel.  It is packed into the parameters
-	block by RtlCreateProcessParametersEx (src/process/spawn.c),
-	carries the inherited descriptor table today, is read back by
-	__fd_init (src/internal/fd.c) before main(), and
-	test/spawn-runtimedata-stress.c exercises it hard enough to have
-	caught a dangling-pointer bug in it.  The mechanism exists.
-
-	What is missing is a format and a reader: RuntimeData's layout is
-	msvcrt's inherited-descriptor table (count, then osfile[], then
-	osfhnd[]) precisely so an ntlibc child and an msvcrt child can each
-	read the other's, so a mask would have to be an ntlibc-specific
-	trailer past the count msvcrt stops at, picked up by __fd_init or a
-	sibling initialiser.  And even then it would not be POSIX's
-	promise: on POSIX the kernel carries the mask across exec so it
-	applies to any image, whereas a RuntimeData trailer reaches an
-	ntlibc-built child only and would silently do nothing for cmd.exe.
-	Choosing not to build that is UNIMPL, never N/A.  test/posix-
-	spawn.c carries the same finding against the shipped <spawn.h>, and
-	posix_spawn_setsigmask_nonempty_is_delivered is the executable BUG
-	case. This block only checks a local flag constant. */
-static void test_spawn_setsigmask(void)
-{
-	struct spawn_attr_local attr;
-	attr.flags = POSIX_SPAWN_SETSIGMASK;
-	CHECK(attr.flags & POSIX_SPAWN_SETSIGMASK);
-}
-#endif
-
-#if NTLIBC_TEST(NA, posix_dl_spawn_setpgroup) /* N/A: posix_spawn.html DESCRIPTION -- POSIX_SPAWN_SETPGROUP:
-	"set the process group ID of the new process ... as if by
-	setpgid()." NT has no process-group concept in the POSIX sense
-	at all (no getpgid()/setpgid() anywhere in this tree, and no NT
-	kernel object plays that role -- a job object groups processes
-	for resource limits, not for job-control signal delivery, which
-	is what a POSIX process group is actually for). Not implementable
-	without first inventing process groups for this platform
-	wholesale, which is out of this header's scope entirely. */
-static void test_spawn_setpgroup(void)
-{
-	struct spawn_attr_local attr;
-	attr.pgroup = 0;
-	attr.flags = POSIX_SPAWN_SETPGROUP;
-	CHECK(attr.flags == POSIX_SPAWN_SETPGROUP);
-}
-#endif
+/* Not fenced: POSIX_SPAWN_SETPGROUP.  The N/A verdict stands, but only
+ * on the corrected mechanism -- console process-group membership is
+ * fixed by descent from the group root, and no NT call joins a
+ * pre-existing group -- not on the job-object comparison the fence here
+ * still carried, which had already been refuted in
+ * src/process/posix_spawn.c and test/posix-spawn.c.  The clause is
+ * tested in test/posix-spawn.c (test_setpgroup_other_group). */
 
 /* Not fenced: POSIX_SPAWN_USEVFORK (XSI/obsolescent -- "the
  * implementation may use vfork() ... instead of fork()") is purely a
