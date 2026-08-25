@@ -206,7 +206,7 @@ Measured:
 |---|---|
 | full clone, git objects | **77 MB** over **18 370** commits |
 | working tree at `4c0cfb8` | 47 MB |
-| what `tools/posix-gapmap.sh` reads | `testcases/open_posix_testsuite/`, **14 MB** |
+| what `tools/posix-gapmap.sh` and `tools/posix-optsrun.sh` read | `testcases/open_posix_testsuite/`, **14 MB** |
 | `git submodule update --init --recursive` from a fresh clone | **5.5 s**, +7 MB for LTP's own four nested submodules |
 
 So the arrangement fetches roughly nine times what it uses. Three ways
@@ -252,8 +252,9 @@ and `tools/kirk/kirk-src`. `git submodule update --init --recursive`
 recurses into all four; measured above at 5.5 s and 7 MB, so it is not
 worth working around locally.
 
-CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-gapmap` job
-checks out with `submodules: true`, not `recursive`, because OPTS needs
+CI does **not** recurse. `.github/workflows/ci.yml`'s `posix-gapmap` and
+`posix-optsrun` jobs check out with `submodules: true`, not
+`recursive`, because OPTS needs
 none of the four and two of them live on a host outside GitHub. A job
 that fetches exactly what it reads has one fewer way to fail for a reason
 unrelated to what it is testing.
@@ -261,7 +262,10 @@ unrelated to what it is testing.
 ### Nothing here is compiled into anything shipped
 
 `tools/posix-gapmap.sh` compiles the 1610 conformance tests to
-throwaway PEs in a `mktemp -d` and deletes them; nothing under
+throwaway PEs in a `mktemp -d` and deletes them, and
+`tools/posix-optsrun.sh` does the same and additionally *executes* the
+591 that link, each in its own throwaway working directory under the
+same `mktemp -d`; nothing under
 `third_party/ltp/` is linked into `lib/`, installed, or shipped. LTP
 proper — the 1396 kernel syscall tests — is never touched at all: its
 framework reads `/proc` in 19 places and wants root, mounts and cgroups,
@@ -287,7 +291,7 @@ Two mechanical consequences, both already handled and both easy to
 reintroduce by inertia:
 
 * `tools/gate.sh`'s `make_tree()` excludes `/third_party/` from every
-  stage copy except the two that read a submodule, because rsync strips
+  stage copy except the ones that read a submodule, because rsync strips
   the `.git` that tells `reuse` those files are somebody else's. A naive
   copy turns thousands of foreign files into thousands of unlicensed
   files of ours, failing locally while CI — which checks out without
@@ -301,10 +305,20 @@ reintroduce by inertia:
 cd third_party/ltp
 git fetch origin && git checkout <new-sha>
 cd ../.. && git add third_party/ltp
-make posix-gapmap                      # regenerate the report
+make posix-gapmap                      # regenerate the gap report
+make posix-optsrun                     # regenerate the run report
 ```
 
 Expect `tools/posix-gapmap.sh`'s census invariant to fire if the new
 revision adds or removes tests: `CENSUS_TESTS` and `CENSUS_DIRS` are
 pinned constants and moving them is a deliberate edit, reviewed in the
 same commit as the SHA. That is the point — see that script's header.
+`tools/posix-optsrun.sh` pins `CENSUS_TESTS` too, and moving the pin
+must move both in the one commit.
+
+Regenerate the gap report **first**. `posix-optsrun` cross-checks the
+number of tests that link against the class-C count in the checked-in
+`test/POSIX-GAP-MAP.generated.md` and refuses to report if the two
+disagree — if the two tools disagree about what can be built at all,
+one of them is describing a tree that is not this one, and both reports
+are suspect.

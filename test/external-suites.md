@@ -550,6 +550,37 @@ value as a gap measure. The two are unrelated axes, and OPTS is strong
 on the second precisely *because* it is weak on the first — its subject
 matter is the interfaces we do not have.
 
+### Follow-up: the sweep above is now run in CI, and recorded per test
+
+The distribution in this section came from **one** manual sweep. It was
+never in CI, never recorded per test, and therefore could not be
+compared against anything — so a test that started failing had nothing
+to fail *against*. `tools/posix-optsrun.sh` and
+`test/POSIX-OPTS-RUN.generated.md` close that: the same 591 tests run
+on every push, each verdict recorded by name, the report checked in so
+the diff is the signal, and the gate firing on **regression** — a test
+moving `PASS` to anything else — rather than on any count. The "no
+threshold on a distribution" argument this document makes is untouched
+by that, because a per-test regression is not a threshold.
+
+Two things the repeated sweep sees that a single sweep structurally
+could not:
+
+- **Intermittence.** Running each test three times found members of the
+  `nanosleep`/`clock_nanosleep` family above sitting *on* the
+  observability boundary rather than past it — passing about half the
+  time. A one-shot sweep records whichever side of the coin it landed
+  on. They are recorded `FLAKY`, a not-`PASS` outcome, in a bucket with
+  a pinned ceiling so it cannot become a place to put failures.
+- **That the `fork` problem is hidden behind the header gap.** The 134
+  `RtlCloneUserProcess` aborts above are the ones that *reach*
+  execution; almost every other `fork`-dependent test in the suite also
+  pulls `pthread.h`, `mqueue.h`, `sys/mman.h` or `semaphore.h` and is
+  therefore class A, never built, never run. Which means relocating a
+  "fork-dependent subset" to the real-Windows `windows-test` leg —
+  where `fork` works — would be infrastructure for almost no
+  population. It is deliberately not done.
+
 ## `libc-test` as a correctness oracle
 
 Unchanged by the reframing, and it is the suite that does this job.
