@@ -285,59 +285,6 @@ static void test_uselocale_install_and_uninstall(void)
 	CHECK(!strcmp(setlocale(LC_ALL, (char *)0), "C"));
 }
 
-#if 0 /* BUG: uselocale() cannot report "no thread-local locale is in
-       * use", so the one question the interface exists to answer
-       * cannot be answered.
-       *
-       * uselocale.html RETURN VALUE, verbatim: "Upon successful
-       * completion, the uselocale() function shall return a handle for
-       * the thread-local locale that was in use as the current locale
-       * for the calling thread on entry to the function, or
-       * LC_GLOBAL_LOCALE if no thread-local locale was in use."
-       *
-       * ntlibc never installs a thread-local locale -- uselocale() is
-       * `{ (void)l; return &__c_locale; }` and stores nothing -- so
-       * "no thread-local locale was in use" is true on entry to every
-       * call ever made, and LC_GLOBAL_LOCALE is therefore the required
-       * return value of every call.  It returns &__c_locale instead.
-       * Measured under Wine: uselocale((locale_t)0) returns 0x41d7c8
-       * while LC_GLOBAL_LOCALE is (locale_t)-1.
-       *
-       * Why this is a BUG and freelocale()'s no-op is not: the failure
-       * here is not "an unused constant is wrong".  `uselocale(0) ==
-       * LC_GLOBAL_LOCALE` is *the documented way for a program to ask
-       * whether it is on the global locale*, and on this
-       * implementation that question always answers "no" when the
-       * truth is always "yes".  The standard save/restore idiom
-       *
-       *     locale_t old = uselocale(my_locale);
-       *     ... ;
-       *     uselocale(old);
-       *
-       * therefore cannot distinguish "I was on the global locale, put
-       * me back on it" from "I was on some locale object, put me back
-       * on that" -- it silently does the wrong one of the two rather
-       * than failing.  That is a caller being misled, not a resource
-       * that did not need freeing, which is exactly the line this
-       * audit draws between BUG and N/A for a C-locale-only libc.
-       *
-       * A correct fix is small but is not "return LC_GLOBAL_LOCALE
-       * unconditionally": once uselocale(loc) has been called, a
-       * thread-local locale *is* in use and a subsequent query must
-       * report it (which the live test_uselocale_install_and_uninstall
-       * above already asserts).  What is needed is one word of state --
-       *
-       *     static locale_t current = LC_GLOBAL_LOCALE;
-       *     locale_t uselocale(locale_t l) {
-       *             locale_t prev = current;
-       *             if (l) current = l;
-       *             return prev;
-       *     }
-       *
-       * -- which satisfies both this fenced test and the live one.
-       * Verified by applying exactly that to src/misc/locale.c and
-       * un-fencing this block: it passes, and nothing else in the file
-       * regresses. */
 static void test_uselocale_reports_lc_global_locale(void)
 {
 	locale_t loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
@@ -350,7 +297,6 @@ static void test_uselocale_reports_lc_global_locale(void)
 	uselocale(LC_GLOBAL_LOCALE);
 	CHECK(uselocale((locale_t)0) == LC_GLOBAL_LOCALE);
 }
-#endif
 
 /* uselocale.html ERRORS: "The uselocale() function *may* fail if:
  * [EINVAL] newloc is not a valid locale object and is not (locale_t)0."
@@ -372,10 +318,19 @@ int main(void)
 	test_duplocale();
 	test_freelocale();
 	test_uselocale_query_does_not_change();
-	test_uselocale_install_and_uninstall();
-#if 0 /* BUG: see the fence above test_uselocale_reports_lc_global_locale */
+	/* BEFORE install_and_uninstall(), deliberately.  Its first assertion
+	 * is "nothing has ever been installed, so the query must say so",
+	 * and that is only a real test of the INITIAL state while no
+	 * uselocale() call has yet installed anything.  Run after
+	 * install_and_uninstall() it merely re-tests the post-uninstall
+	 * state, which the same function's third assertion already covers --
+	 * and mutation-testing showed exactly that: seeding the
+	 * implementation's state with a locale handle instead of
+	 * LC_GLOBAL_LOCALE was NOT caught in the old order, and is caught in
+	 * this one.  test_uselocale_query_does_not_change() above is a pure
+	 * query and installs nothing, so it is safe ahead of this. */
 	test_uselocale_reports_lc_global_locale();
-#endif
+	test_uselocale_install_and_uninstall();
 
 	if (fails) { printf("posix-locale: failures: %d\n", fails); return 1; }
 	printf("posix-locale: all ok\n");

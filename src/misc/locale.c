@@ -95,8 +95,45 @@ locale_t duplocale(locale_t l)
 	return &__c_locale;
 }
 
+/* uselocale.html RETURN VALUE, verbatim: "Upon successful completion,
+ * the uselocale() function shall return a handle for the thread-local
+ * locale that was in use as the current locale for the calling thread on
+ * entry to the function, or LC_GLOBAL_LOCALE if no thread-local locale
+ * was in use."
+ *
+ * This used to be `{ (void)l; return &__c_locale; }`, which stored
+ * nothing -- so "no thread-local locale was in use" was true on entry to
+ * every call ever made, LC_GLOBAL_LOCALE was the required answer every
+ * time, and the function returned a locale handle instead.
+ *
+ * That matters more than an unused constant being wrong, which is why it
+ * is a defect and freelocale()'s no-op is not.  `uselocale(0) ==
+ * LC_GLOBAL_LOCALE` is THE documented way for a program to ask whether it
+ * is on the global locale, and the old code answered "no" when the truth
+ * was always "yes".  The standard save/restore idiom
+ *
+ *     locale_t old = uselocale(my_locale);  ... ;  uselocale(old);
+ *
+ * could therefore not distinguish "I was on the global locale, put me
+ * back on it" from "I was on some locale object, put me back on that":
+ * it silently did the wrong one rather than failing.
+ *
+ * Note the fix is NOT "return LC_GLOBAL_LOCALE unconditionally".  Once
+ * uselocale(loc) has been called a thread-local locale IS in use, and a
+ * subsequent query must report it -- which
+ * test_uselocale_install_and_uninstall() asserts.  One word of state
+ * satisfies both that and the "nothing installed yet" case.
+ *
+ * The state is a plain static rather than thread-local because this
+ * library has no threads to make it local to; if that changes, this is
+ * the declaration that has to change with it. */
+static locale_t current_locale = LC_GLOBAL_LOCALE;
+
 locale_t uselocale(locale_t l)
 {
-	(void)l;
-	return &__c_locale;
+	locale_t prev = current_locale;
+	/* "If the newloc argument is (locale_t)0, the current locale shall
+	 * not be changed" -- a pure query. */
+	if (l) current_locale = l;
+	return prev;
 }
