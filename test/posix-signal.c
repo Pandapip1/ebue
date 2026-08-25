@@ -1075,6 +1075,7 @@ static void hold_handler(int sig) { (void)sig; }
 static void test_sighold_sigrelse(void)
 {
 	sigset_t cur;
+	int i, held;
 
 	/* start from a known state */
 	sigemptyset(&cur);
@@ -1095,23 +1096,14 @@ static void test_sighold_sigrelse(void)
 	/* releasing an already-released signal still succeeds */
 	CHECK(sigrelse(SIGUSR1) == 0);
 
-#if 0	/* BUG: sighold()/sigrelse() report success for an illegal signal
-	 * number.  sigset.html ERRORS lists as shall-fail: "[EINVAL] The sig
-	 * argument is an illegal signal number."
-	 *
-	 * Mechanism: src/signal/signal.c:309-310 are
-	 *     int sighold(int sig)  { sigset_t s; sigemptyset(&s);
-	 *         sigaddset(&s, sig); return sigprocmask(SIG_BLOCK, &s, 0); }
-	 *     int sigrelse(int sig) { ... sigprocmask(SIG_UNBLOCK, &s, 0); }
-	 * -- and sigaddset() *does* validate (line 275: "if (!sig_valid(sig))
-	 * { errno = EINVAL; return -1; }"), but neither wrapper looks at its
-	 * return value.  The bad bit is simply never set in the local set,
-	 * sigprocmask() is then handed an empty mask, succeeds, and returns
-	 * 0 -- so the caller is told the signal was held when nothing
-	 * happened at all, which is the worst of the three possible
-	 * outcomes.  Probed on this tree: sighold(-1) and sighold(NSIG) both
-	 * return 0.  Re-enable when both wrappers propagate sigaddset()'s
-	 * failure. */
+	/* sigset.html ERRORS lists as shall-fail: "[EINVAL] The sig argument
+	 * is an illegal signal number."  Both wrappers build a one-signal
+	 * sigset_t and hand it to sigprocmask(), so the only place the bad
+	 * argument is ever seen is sigaddset()'s own sig_valid() check --
+	 * an empty set is a perfectly legal sigprocmask() argument, so a
+	 * dropped sigaddset() failure turns into a silent success rather
+	 * than an error.  Both signs of "illegal" are probed: below the
+	 * bottom of the range and at NSIG, one past the top. */
 	errno = 0;
 	CHECK(sighold(-1) == -1 && errno == EINVAL);
 	errno = 0;
@@ -1120,7 +1112,22 @@ static void test_sighold_sigrelse(void)
 	CHECK(sigrelse(-1) == -1 && errno == EINVAL);
 	errno = 0;
 	CHECK(sigrelse(NSIG) == -1 && errno == EINVAL);
-#endif
+
+	/* A rejected call must also have changed nothing: the mask the four
+	 * calls above left behind is still the empty one this function
+	 * started from, and a valid signal is still held and released after
+	 * them -- so the [EINVAL] arm cannot be "achieved" by a wrapper that
+	 * refuses everything or that blocks first and reports second. */
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	for (i = 1, held = 0; i < NSIG; i++)
+		if (sigismember(&cur, i) == 1) held++;
+	CHECK(held == 0);
+	CHECK(sighold(SIGUSR1) == 0);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 1);
+	CHECK(sigrelse(SIGUSR1) == 0);
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+	CHECK(sigismember(&cur, SIGUSR1) == 0);
 }
 
 static void test_sigset(void)

@@ -634,7 +634,7 @@ entries below.
 | sigsuspend | return value -1/EINTR (the only return this stub can produce) | covered | test/posix-signal.c |
 | sigsuspend | DESCRIPTION: replace the mask, actually suspend until a signal is delivered | N/A — documented permanent stub (`{ errno = EINTR; return -1; }`); no per-thread wait primitive exists to build a real one on | -- |
 | sigwait / sigtimedwait / sigqueue / sigaltstack | require per-process queued-signal-with-payload or alt-stack facilities this platform has none of | N/A — documented stubs (see include/signal.h) | -- |
-| sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()` | covered; **BUG (fenced)** for [EINVAL] — both wrappers ignore `sigaddset()`'s failure and report success for an illegal signal number | test/posix-signal.c `test_sighold_sigrelse` |
+| sighold / sigrelse (XSI, obsolescent) | block/unblock exactly one signal, idempotent, visible through `sigprocmask()`; [EINVAL] for an illegal signal number | covered — [EINVAL] was a BUG (both wrappers discarded `sigaddset()`'s failure, so the bad bit was never set, `sigprocmask()` got an empty mask and returned 0); **fixed**: both now return -1 as soon as `sigaddset()` fails, leaving the process mask untouched | test/posix-signal.c `test_sighold_sigrelse` |
 | sigset (XSI, obsolescent) | returns the previous disposition and installs the new one; SIG_ERR+EINVAL for an illegal signo, SIGKILL, SIGSTOP | covered; **BUG (fenced)** for the SIG_HOLD return and the "shall remove sig from the mask" clause — `<signal.h>` does not define SIG_HOLD at all and `sigset()` is a bare alias of `signal()` | test/posix-signal.c `test_sigset` |
 | sigpause (XSI, obsolescent) | returns -1 with EINTR | covered | test/posix-signal.c `test_sigpause` |
 | sigpause | DESCRIPTION: suspend until a signal is received | N/A — same reason as `sigsuspend()` above: no asynchronous delivery exists, so a call that genuinely suspended could only hang | -- |
@@ -674,19 +674,30 @@ no-ops rather than silently dropped. `src/process/wait.c` now validates
 
 ### Bugs found (never-asserted sweep, signal.h group)
 
-Three, all fenced in `test/posix-signal.c`, all found by the first calls
-anything in this tree has ever made to these five XSI names. All three
-were probed on this tree, not inferred from source.
+Three, originally all fenced in `test/posix-signal.c`, all found by the
+first calls anything in this tree has ever made to these five XSI names.
+All three were probed on this tree, not inferred from source. The first
+has since been fixed and its assertions un-fenced unmodified; two remain
+fenced.
 
-1. **`sighold()`/`sigrelse()` report success for an illegal signal
-   number.** `sigset.html` ERRORS, shall-fail: "[EINVAL] The sig
-   argument is an illegal signal number." `src/signal/signal.c:309-310`
-   build a one-signal set and hand it to `sigprocmask()`, but never look
-   at `sigaddset()`'s return — and `sigaddset()` *does* validate
-   (line 275). The invalid bit is simply never set, `sigprocmask()` gets
-   an empty mask and succeeds, and the caller is told the signal was
-   held when nothing happened: the worst of the three possible outcomes.
-   `sighold(-1)` and `sighold(NSIG)` both return 0.
+1. **`sighold()`/`sigrelse()` reported success for an illegal signal
+   number.** FIXED; kept here in past tense as the record.
+   `sigset.html` ERRORS, shall-fail: "[EINVAL] The sig argument is an
+   illegal signal number." Both wrappers build a one-signal set and hand
+   it to `sigprocmask()`, but neither looked at `sigaddset()`'s return —
+   and `sigaddset()` *does* validate. The invalid bit was simply never
+   set, `sigprocmask()` got an empty mask and succeeded, and the caller
+   was told the signal was held when nothing happened: the worst of the
+   three possible outcomes. Probed then: `sighold(-1)` and
+   `sighold(NSIG)` both returned 0. Note that the failure could not have
+   degraded into a failing `sigprocmask()` instead — an empty mask is a
+   legal argument that `sigprocmask()` is required to accept — so the
+   check has nowhere else it could live. Both wrappers now return -1
+   with `errno` as `sigaddset()` set it, before touching the process
+   mask; `test_sighold_sigrelse` also pins that a rejected call leaves
+   the mask empty and that a valid `sighold()`/`sigrelse()` pair still
+   works afterwards, so the [EINVAL] arm cannot be satisfied by refusing
+   everything.
 
 2. **`sigset()` cannot report SIG_HOLD, and `<signal.h>` does not define
    it.** `sigset.html` RETURN VALUE: "shall return SIG_HOLD if the
