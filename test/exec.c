@@ -23,11 +23,15 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <sys/times.h>
+#include <time.h>
 
 extern char **environ;
 int __spawn(const char *path, char *const argv[], char *const envp[]);
 
 static int fails;
+/* Assertion groups this run could not exercise at all; see main(). */
+static int unverified;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 /* Arguments exercising every quoting rule spawn.c's append_arg implements
@@ -516,6 +520,148 @@ static long long timeval_usec(const struct timeval *tv)
 	return (long long)tv->tv_sec * 1000000 + (long long)tv->tv_usec;
 }
 
+/* ---- making the child-CPU-time floor deterministic -----------------
+ *
+ * The floor asserted below ("the RUSAGE_CHILDREN total is genuinely
+ * non-zero, not merely non-decreasing") is a threshold, and NT reports
+ * process CPU time only in whole clock-tick quanta -- 15.625ms on x64.
+ * It does not accumulate that time, it *samples* it: the clock ISR
+ * charges one tick to whichever thread is on-CPU at the interrupt
+ * (ReactOS ntoskrnl/ke/time.c, KeUpdateRunTime(): `Thread->UserTime++`
+ * / `Thread->KernelTime++`), and ProcessTimes reports the count scaled
+ * by KeMaximumIncrement.  So a child that really used 10ms of CPU is
+ * charged either one quantum or *zero*, depending on nothing but
+ * whether it happened to span an interrupt.
+ *
+ * test/posix-grp.c's identical floor flaked on exactly that in CI run
+ * 32796247127: a real-Windows x86_64 runner charged its child zero,
+ * while the slower i386 and kernel32 legs of the same run charged it
+ * one and passed.  This file's version was written with the same hole
+ * and had merely not been unlucky yet -- and its own comment concluded
+ * the margin "cannot be widened, only made visible", because the
+ * quantity was whatever the previously-reaped `--exit 7` children
+ * happened to be charged, which is not under this test's control.
+ *
+ * It can be widened, by making the quantity be under this test's
+ * control: reap a child that does not exit until NT has *confirmed*,
+ * against the child's own times(), that it was charged the CPU being
+ * asserted.  Then the floor holds by construction on a machine of any
+ * speed, rather than holding because this one was slow enough today.
+ *
+ * Both halves are confirmed, not just the system half, so the user
+ * floor below stops being unassertable too.  Each chunk of the loop
+ * does both kinds of work: a run of lseek()+write() pairs on a real
+ * file, which cannot be served without entering the kernel, and a run
+ * of floating-point adds whose result is stored to a volatile object at
+ * file scope so no conforming compiler may delete it.  A burn that got
+ * optimised away would be the same vacuous pass in a new hat.
+ *
+ * Bounds: two, because they say different things.  CPU time accrues
+ * only while the process is on a CPU, so under contention (gate.sh runs
+ * stages concurrently; hosted runners are oversubscribed) the same
+ * confirmed ticks take arbitrarily longer in wall-clock terms.  A stall
+ * bound catches a counter that is not advancing at all -- 30s of
+ * continuous work without a single 15.625ms tick is under a 0.06% CPU
+ * share, which no machine load explains -- and a much looser total
+ * bound catches one that advances pathologically slowly, saying so in
+ * terms of machine load rather than of times().
+ *
+ * The system half is required only on _WIN32.  fuzz/ntstubs.c reports
+ * the whole of CLOCK_PROCESS_CPUTIME_ID as UserTime and leaves
+ * KernelTime at 0 (fuzz/ntstubs.c, `case ProcessTimes:`), so natively
+ * tms_stime provably never advances and requiring it would spin to the
+ * bound for a reason that has nothing to do with this library. */
+#define BURN_UTICKS          20
+#define BURN_STICKS          5
+#define BURN_STALL_LIMIT_SEC 30
+#define BURN_WALL_LIMIT_SEC  90
+#define BURN_SCRATCH         "t-exec-burn.tmp"
+
+static volatile double burn_sink;
+
+/* 0 on success; -1 having printed which half of the burn failed and
+ * why.  Distinguishing that from the parent's assertions is the whole
+ * point: "the child was never charged the CPU" and "the parent did not
+ * accumulate CPU the child was charged" are different bugs with
+ * different fixes, and a fixed-size burn cannot tell them apart. */
+static int burn_child_cpu(void)
+{
+	struct timespec t0, last, now;
+	struct tms t;
+	clock_t u0, s0;
+	long gotu = 0, gots = 0, i;
+	volatile double x = 0;
+	int fd, want_s;
+	char b = 'x';
+
+#ifdef _WIN32
+	want_s = BURN_STICKS;
+#else
+	want_s = 0;
+#endif
+
+	fd = open(BURN_SCRATCH, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+	if (fd < 0) {
+		printf("exec --burn-cpu: cannot create %s (errno %d); the "
+		       "system-time half of the burn needs a real file to "
+		       "write to\n", BURN_SCRATCH, errno);
+		return -1;
+	}
+	if (clock_gettime(CLOCK_MONOTONIC, &t0) < 0) goto fail;
+	last = t0;
+	if (times(&t) == (clock_t)-1) goto fail;
+	u0 = t.tms_utime;
+	s0 = t.tms_stime;
+
+	for (;;) {
+		/* Kernel-mode work: each pair is two unavoidable syscalls, and
+		 * the lseek keeps the file one byte long rather than letting
+		 * it grow without bound. */
+		for (i = 0; i < 500; i++) {
+			if (lseek(fd, 0, SEEK_SET) == (off_t)-1) goto fail;
+			if (write(fd, &b, 1) != 1) goto fail;
+		}
+		/* User-mode work. */
+		for (i = 0; i < 2000000L; i++) x += (double)i;
+		burn_sink = x;
+
+		if (times(&t) == (clock_t)-1) goto fail;
+		if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) goto fail;
+		if ((long)(t.tms_utime - u0) > gotu) { gotu = (long)(t.tms_utime - u0); last = now; }
+		if ((long)(t.tms_stime - s0) > gots) { gots = (long)(t.tms_stime - s0); last = now; }
+		if (gotu >= BURN_UTICKS && gots >= want_s) {
+			close(fd);
+			unlink(BURN_SCRATCH);
+			return 0;
+		}
+		if (now.tv_sec - last.tv_sec > BURN_STALL_LIMIT_SEC) {
+			printf("exec --burn-cpu: neither tms_utime nor tms_stime "
+			       "advanced in %d wall seconds of continuous work "
+			       "(%ld/%ld user, %ld/%ld system ticks). That is under "
+			       "a 0.06%% share of one CPU, which no machine load "
+			       "explains -- the counters are not being charged\n",
+			       BURN_STALL_LIMIT_SEC, gotu, (long)BURN_UTICKS,
+			       gots, (long)want_s);
+			goto fail;
+		}
+		if (now.tv_sec - t0.tv_sec > BURN_WALL_LIMIT_SEC) {
+			printf("exec --burn-cpu: only %ld/%ld user and %ld/%ld "
+			       "system ticks in %d wall seconds. The counters are "
+			       "advancing, so this process is getting very little "
+			       "CPU -- suspect contention on this machine "
+			       "(parallel test stages, an oversubscribed CI runner) "
+			       "before suspecting times()\n",
+			       gotu, (long)BURN_UTICKS, gots, (long)want_s,
+			       BURN_WALL_LIMIT_SEC);
+			goto fail;
+		}
+	}
+fail:
+	close(fd);
+	unlink(BURN_SCRATCH);
+	return -1;
+}
+
 static void test_wait_rusage(const char *self)
 {
 	char *argv[4];
@@ -566,37 +712,122 @@ static void test_wait_rusage(const char *self)
 	CHECK(timeval_usec(&ru_after.ru_stime) >= timeval_usec(&ru_before.ru_stime));
 	/* And the total is genuinely non-zero, not merely non-decreasing:
 	 * a monotonicity check alone is satisfied by an accumulator that is
-	 * never written.  Every child this file has reaped by now was a
-	 * whole process creation, so the system half of the total cannot be
-	 * zero on a platform that charges child CPU time at all (measured
-	 * under stock apt Wine: 0.17s by this point, and growing across
-	 * this reap).  The user half is not asserted -- these children exit
-	 * without running user code worth a tick, and it measures 0.
+	 * never written.
+	 *
+	 * This used to rest on "every child reaped by now was a whole
+	 * process creation, so the system half of the total cannot be zero",
+	 * with a measurement under stock Wine standing in for a guarantee.
+	 * It is not a guarantee -- see burn_child_cpu()'s banner for why a
+	 * child that really used CPU can still be charged none of it -- so
+	 * the quantity is made this test's own rather than inherited from
+	 * whatever the `--exit 7` children happened to cost.  The child
+	 * reaped just below does not exit 0 until NT has confirmed, against
+	 * the child's own times(), that it was charged the CPU being
+	 * asserted here, and its exit-3 protocol keeps "the child was never
+	 * charged" from being misread as "the parent failed to accumulate".
 	 *
 	 * Not held in the native asan build, for the reason test/posix-grp.c
 	 * spells out at length: fuzz/ntstubs.c's ProcessTimes returns
 	 * STATUS_NOT_IMPLEMENTED for a child handle, so there the
 	 * accumulator is legitimately zero. */
+	argv[0] = (char *)self; argv[1] = (char *)"--burn-cpu"; argv[2] = 0;
+	fflush(stdout);
+	pid = __spawn(self, argv, environ);
+	CHECK(pid > 0);
+	if (pid <= 0) return;
+	status = -1;
+	memset(&ru_child, 0xff, sizeof ru_child);
+	CHECK(wait4(pid, &status, 0, &ru_child) == pid);
+	CHECK(WIFEXITED(status));
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 3) {
+		/* Counted as a failure and named, rather than skipped: the
+		 * assertions below would otherwise be reporting on the burn
+		 * and not on the accumulator they name. */
+		fails++;
+		printf("FAIL %s:%d: --burn-cpu never accumulated its own CPU "
+		       "time; the RUSAGE_CHILDREN floors below cannot be "
+		       "evaluated\n", __FILE__, __LINE__);
+		return;
+	}
+	CHECK(WEXITSTATUS(status) == 0);
+
+	memset(&ru_after, 0xff, sizeof ru_after);
+	CHECK(getrusage(RUSAGE_CHILDREN, &ru_after) == 0);
+
 #ifdef _WIN32
+	/* Does this platform report a *child's* process times at all?
+	 *
+	 * Asking costs nothing extra, because the child just reaped has
+	 * already confirmed, against its own times(), that it was charged
+	 * at least BURN_UTICKS of user time before exiting.  wait4()'s
+	 * struct rusage is documented as that one child's usage, so on a
+	 * platform that answers the question at all it cannot come back
+	 * below the floor the child itself watched land.  If it does, the
+	 * platform is reporting something other than this child, and every
+	 * assertion below would be reporting on that substitution rather
+	 * than on src/process/wait.c's accumulator.
+	 *
+	 * That is not hypothetical.  Wine's NtQueryInformationProcess()
+	 * ignores the handle for this info class and returns the *calling*
+	 * process's times, carrying its own FIXME saying so
+	 * (dlls/ntdll/unix/process.c, `case ProcessTimes:` -- "FIXME:
+	 * user/kernel times only work for current process"; it fills
+	 * UserTime/KernelTime from the host times() and uses the handle
+	 * only for CreateTime/ExitTime).  So under Wine this whole group
+	 * reads the parent's own CPU, and the `ru_stime > 0` assertion
+	 * that used to stand here was passing on exec.exe's own syscall
+	 * time: the "measured under stock apt Wine: 0.17s by this point"
+	 * that justified it was the parent's number, not any child's.
+	 *
+	 * Detected by measuring rather than by asking which platform this
+	 * is, so it needs no version test and cannot go stale when Wine
+	 * fixes it.  rc=77 (tools/runtests.sh: UNVERIFIED) rather than a
+	 * silent skip -- a run that could not check the clause must not
+	 * read like one that did. */
+	{
+		long tck = sysconf(_SC_CLK_TCK);
+		long long floor_us = tck > 0 ? (long long)BURN_UTICKS * 1000000 / tck : 0;
+
+		if (timeval_usec(&ru_child.ru_utime) < floor_us) {
+			printf("SKIP exec RUSAGE_CHILDREN CPU-time floors: this "
+			       "platform does not report a child's process times. "
+			       "The child confirmed >= %d user ticks (>= %lldus) "
+			       "against its own times() and exited 0, yet wait4() "
+			       "reports ru_utime=%lldus ru_stime=%lldus for it. "
+			       "Wine substitutes the calling process's times here "
+			       "(dlls/ntdll/unix/process.c, case ProcessTimes, "
+			       "\"FIXME: user/kernel times only work for current "
+			       "process\"); the real-Windows legs are the oracle "
+			       "for this clause\n",
+			       BURN_UTICKS, floor_us,
+			       timeval_usec(&ru_child.ru_utime),
+			       timeval_usec(&ru_child.ru_stime));
+			unverified++;
+			return;
+		}
+	}
+
 	CHECK(timeval_usec(&ru_after.ru_stime) > 0);
-	/* Printed, not just asserted.  This is the same shape as the child
-	 * CPU-time floor test/posix-grp.c carries, and that one flaked on a
-	 * fast real-Windows runner (CI run 32796247127) because nothing in
-	 * the log said how close to the floor it had been sitting.  Here
-	 * the quantity is not under this test's control -- it is whatever
-	 * kernel time the children reaped so far were charged -- so the
-	 * margin cannot be widened, only made visible. */
-	printf("note: RUSAGE_CHILDREN total after this reap: ru_stime=%lldus "
-	       "ru_utime=%lldus (the assertion above is a floor of 1us, and "
-	       "NT accounts CPU time in ~15625us quanta)\n",
-	       timeval_usec(&ru_after.ru_stime), timeval_usec(&ru_after.ru_utime));
+	CHECK(timeval_usec(&ru_after.ru_utime) > 0);
+	printf("note: RUSAGE_CHILDREN total after the confirmed-burn child: "
+	       "ru_stime=%lldus ru_utime=%lldus; that child alone was charged "
+	       "ru_utime=%lldus ru_stime=%lldus, having confirmed >= %d user "
+	       "and >= %d system ticks against its own times() (NT accounts "
+	       "CPU time in ~15625us quanta)\n",
+	       timeval_usec(&ru_after.ru_stime), timeval_usec(&ru_after.ru_utime),
+	       timeval_usec(&ru_child.ru_utime), timeval_usec(&ru_child.ru_stime),
+	       BURN_UTICKS, BURN_STICKS);
 #else
 	printf("note: RUSAGE_CHILDREN total not held to > 0 natively "
 	       "(fuzz/ntstubs.c reports no child process times)\n");
 #endif
 
 	/* wait3() is the (-1, ...) shape of the same call; ru == NULL is
-	 * also valid, like waitpid(). */
+	 * also valid, like waitpid().  argv is rebuilt rather than reused:
+	 * the confirmed-burn spawn above overwrote it, and a stale argv
+	 * would quietly turn this into a second --burn-cpu run, whose exit
+	 * status is 0 and not the 7 asserted below. */
+	argv[0] = (char *)self; argv[1] = (char *)"--exit"; argv[2] = (char *)"7"; argv[3] = 0;
 	fflush(stdout);
 	pid = __spawn(self, argv, environ);
 	CHECK(pid > 0);
@@ -609,6 +840,7 @@ static void test_wait_rusage(const char *self)
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--exit")) return atoi(argv[2]);
+	if (argc > 1 && !strcmp(argv[1], "--burn-cpu")) return burn_child_cpu() == 0 ? 0 : 3;
 	if (argc > 1 && !strcmp(argv[1], "--argv0")) return argv0_child(argc, argv);
 	if (argc > 1 && !strcmp(argv[1], "--envblock")) return envblock_child();
 	if (argc > 1 && !strcmp(argv[1], "--arglen"))
@@ -664,6 +896,13 @@ int main(int argc, char **argv)
 	 * execv never comes back, so anything after it would not run. */
 	test_cmdline_limit(argv[0]);
 
-	if (!fails) printf("exec: all tests passed\n");
-	return fails != 0;
+	if (fails) { printf("exec: failures: %d\n", fails); return 1; }
+	if (unverified) {
+		printf("exec: %d assertion group(s) unverified in this "
+		       "environment (see SKIP lines above); no failures in "
+		       "what did run\n", unverified);
+		return 77;
+	}
+	printf("exec: all tests passed\n");
+	return 0;
 }

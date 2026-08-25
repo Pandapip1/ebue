@@ -535,6 +535,16 @@ static void tv_is_valid(const struct timeval *tv)
 	CHECK(tv->tv_usec >= 0 && tv->tv_usec < 1000000);
 }
 
+/* A whole struct timeval as microseconds, so a "did not go backwards"
+ * check is one comparison on the real quantity rather than two
+ * independent ones on its halves.  Same helper test/exec.c carries;
+ * duplicated rather than shared because these test binaries have no
+ * common header and each is meant to read on its own. */
+static long long timeval_usec_sysmisc(const struct timeval *tv)
+{
+	return (long long)tv->tv_sec * 1000000 + (long long)tv->tv_usec;
+}
+
 static void test_getrusage(const char *self)
 {
 	struct rusage ru, before, after;
@@ -579,11 +589,30 @@ static void test_getrusage(const char *self)
 	CHECK(getrusage(RUSAGE_CHILDREN, &after) == 0);
 	tv_is_valid(&after.ru_utime);
 	tv_is_valid(&after.ru_stime);
-	/* monotonic: the total across all reaped children can only grow */
-	CHECK(after.ru_utime.tv_sec > before.ru_utime.tv_sec ||
-	      (after.ru_utime.tv_sec == before.ru_utime.tv_sec && after.ru_utime.tv_usec >= before.ru_utime.tv_usec) ||
-	      after.ru_stime.tv_sec > before.ru_stime.tv_sec ||
-	      (after.ru_stime.tv_sec == before.ru_stime.tv_sec && after.ru_stime.tv_usec >= before.ru_stime.tv_usec));
+	/* monotonic: the total across all reaped children can only grow.
+	 *
+	 * Both halves, AND-ed, each compared as one whole timeval folded to
+	 * microseconds.  The previous form was a four-clause *disjunction*
+	 * over tv_sec and tv_usec compared independently -- the exact
+	 * defect test/exec.c records having fixed in its own copy of this
+	 * check, left standing here.  Any single clause satisfied the
+	 * whole thing, and `after.ru_utime.tv_usec >= before.ru_utime.tv_usec`
+	 * is satisfied by the two structs merely being equal, which they
+	 * are at zero, whether or not getrusage() wrote anything at all.
+	 * Comparing the halves independently is wrong on its own terms too,
+	 * since tv_usec wraps at each whole second.
+	 *
+	 * This stays a monotonicity check and does not become a "> 0" floor.
+	 * The child reaped here burns a fixed iteration count and has not
+	 * confirmed against its own times() that NT charged it anything, so
+	 * a floor here would be the same tick-quantisation flake
+	 * test/posix-grp.c hit in CI run 32796247127: NT samples CPU time
+	 * in 15.625ms quanta rather than accumulating it, so a short child
+	 * is charged one quantum or zero depending on nothing this test
+	 * controls.  test/exec.c test_wait_rusage() is where that floor is
+	 * asserted, against a child built so that it holds. */
+	CHECK(timeval_usec_sysmisc(&after.ru_utime) >= timeval_usec_sysmisc(&before.ru_utime));
+	CHECK(timeval_usec_sysmisc(&after.ru_stime) >= timeval_usec_sysmisc(&before.ru_stime));
 }
 
 /* getpriority()/setpriority(): POSIX.1-2017 base functions (moved from

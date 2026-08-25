@@ -39,6 +39,8 @@
 #include <time.h>
 
 static int fails;
+/* Assertion groups this run could not exercise at all; see main(). */
+static int unverified;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 static const char *self;
@@ -526,12 +528,11 @@ static clock_t timeval_to_clockticks(const struct timeval *tv)
  * A fixed iteration count cannot do this job, and both callers below
  * used to try.  The amount of user time a fixed loop
  * earns depends on the machine it lands on, while the thing being
- * asserted -- "> 0 ticks", i.e. at least one 10ms tick at the
- * _SC_CLK_TCK of 100 this build reports -- is a threshold, not a
- * proportion.  On a GitHub-hosted Windows Server 2025 x86_64 runner the
- * child-side loop fell under that threshold and the assertion failed
- * (CI run 32796247127), while the identical source passed on the slower
- * i386 and kernel32 legs of the same run.
+ * asserted -- "> 0 ticks" -- is a threshold, not a proportion.  On a
+ * GitHub-hosted Windows Server 2025 x86_64 runner the child-side loop
+ * fell under that threshold and the assertion failed (CI run
+ * 32796247127), while the identical source passed on the slower i386
+ * and kernel32 legs of the same run.
  *
  * The comment this replaces claimed the old child loop was measured at
  * 49 ticks under stock Wine, which would have been a 49x margin.  It is
@@ -542,13 +543,60 @@ static clock_t timeval_to_clockticks(const struct timeval *tv)
  * own speed rather than on the quantity it names, described as if it
  * had been checked.
  *
+ * Why the floor is so easy to miss: NT does not accumulate process CPU
+ * time, it *samples* it.  The clock ISR charges one tick to whichever
+ * thread is on-CPU at the interrupt (ReactOS ntoskrnl/ke/time.c,
+ * KeUpdateRunTime(): `Thread->UserTime++`), and ProcessTimes reports
+ * that count scaled by KeMaximumIncrement -- 15.625ms on x64.  So
+ * UserTime only ever takes the values 0, 15.625ms, 31.25ms, ...  A
+ * burn measured at ~10ms of CPU is therefore charged *zero* whenever it
+ * happens not to span a clock interrupt, which is roughly a third of
+ * the time.  MSDN says the same thing by pointing at
+ * QueryProcessCycleTime for anyone who wants real resolution
+ * (GetProcessTimes, Remarks).
+ *
  * So: loop until the reading itself says the work landed.  The caller
  * gets a number it can assert on and, crucially, a distinguishable
  * failure -- -1 means "this process never accumulated the time", which
  * is a fact about the burn, not about whichever reader the caller is
- * actually testing.  Bounded by wall-clock time so a genuinely broken
- * tms_utime cannot spin here forever; it returns -1 and the caller says
- * so out loud.
+ * actually testing.
+ *
+ * The return type is `long`, not clock_t, on purpose.  The failure
+ * sentinel is -1 and every caller tests it with `< want`; that is only
+ * safe while clock_t is signed, which here it happens to be
+ * (include/alltypes.h.in: `TYPEDEF _Int64 clock_t`).  Were it ever
+ * unsigned, `(clock_t)-1` would be a huge positive value and every
+ * timeout would silently satisfy the check instead of failing it --
+ * precisely the vacuous pass this helper exists to prevent, reached
+ * through a typedef this file does not control.  A signed return type
+ * makes the sentinel safe by construction rather than by coincidence.
+ *
+ * Two wall-clock bounds, not one, and they mean different things.  User
+ * time accrues only while this process is actually on a CPU, so on a
+ * contended machine -- tools/gate.sh runs several stages at once, and
+ * hosted CI runners are routinely oversubscribed -- the same confirmed
+ * ticks can take arbitrarily longer in wall-clock terms.  A single
+ * bound tight enough to catch a dead counter is therefore also tight
+ * enough to fire spuriously under load, which would trade a visible
+ * flake for a rarer and much more confusing one.
+ *
+ *   BURN_STALL_LIMIT_SEC  no ticks charged *at all* while spinning
+ *                         continuously for this long.  Contention
+ *                         cannot produce that: 30s of wall clock
+ *                         without a single 15.625ms tick is under a
+ *                         0.06% share of one CPU.  That is a counter
+ *                         that is not being charged, and it is
+ *                         reported as the real failure it is.
+ *   BURN_WALL_LIMIT_SEC   total, for a counter that does advance but
+ *                         pathologically slowly.  200ms of confirmed
+ *                         CPU inside 90s tolerates roughly a 450x
+ *                         oversubscription before firing, against a
+ *                         realistic worst case of maybe 8x, and two
+ *                         such bounds still fit inside the
+ *                         windows-test job's 20-minute timeout.  Its
+ *                         message names machine load explicitly, so a
+ *                         reader who hits it is sent to look at the
+ *                         runner rather than at times().
  *
  * The accumulator is volatile and its final value is stored to a
  * volatile object at file scope, so no conforming compiler may delete
@@ -556,27 +604,52 @@ static clock_t timeval_to_clockticks(const struct timeval *tv)
  * trap this helper exists to close, wearing a different hat. */
 static volatile double burn_sink;
 
-#define BURN_WALL_LIMIT_SEC 30
+#define BURN_STALL_LIMIT_SEC 30
+#define BURN_WALL_LIMIT_SEC  90
 
-static clock_t burn_user_ticks(clock_t want)
+static long burn_user_ticks(long want)
 {
-	struct timespec t0, now;
+	struct timespec t0, last, now;
 	struct tms t;
 	clock_t start;
+	long got = 0;
 	volatile double x = 0;
 	long i;
 
-	if (clock_gettime(CLOCK_MONOTONIC, &t0) < 0) return (clock_t)-1;
-	if (times(&t) == (clock_t)-1) return (clock_t)-1;
+	if (clock_gettime(CLOCK_MONOTONIC, &t0) < 0) return -1;
+	last = t0;
+	if (times(&t) == (clock_t)-1) return -1;
 	start = t.tms_utime;
 
 	for (;;) {
 		for (i = 0; i < 5000000L; i++) x += (double)i;
 		burn_sink = x;
-		if (times(&t) == (clock_t)-1) return (clock_t)-1;
-		if (t.tms_utime - start >= want) return t.tms_utime - start;
-		if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return (clock_t)-1;
-		if (now.tv_sec - t0.tv_sec > BURN_WALL_LIMIT_SEC) return (clock_t)-1;
+		if (times(&t) == (clock_t)-1) return -1;
+		if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return -1;
+		if ((long)(t.tms_utime - start) > got) {
+			got = (long)(t.tms_utime - start);
+			last = now;
+		}
+		if (got >= want) return got;
+		if (now.tv_sec - last.tv_sec > BURN_STALL_LIMIT_SEC) {
+			printf("note: tms_utime has not advanced at all in %d wall "
+			       "seconds of continuous spinning (%ld of %ld ticks). "
+			       "That is under a 0.06%% share of one CPU, which no "
+			       "amount of contention explains -- not parallel test "
+			       "stages, not an oversubscribed CI runner. The "
+			       "user-time counter is not being charged at all\n",
+			       BURN_STALL_LIMIT_SEC, got, want);
+			return -1;
+		}
+		if (now.tv_sec - t0.tv_sec > BURN_WALL_LIMIT_SEC) {
+			printf("note: only %ld of %ld user ticks in %d wall seconds. "
+			       "The counter is advancing, so this process is simply "
+			       "getting very little CPU -- suspect contention on this "
+			       "machine (parallel test stages, an oversubscribed CI "
+			       "runner) before suspecting times()\n",
+			       got, want, BURN_WALL_LIMIT_SEC);
+			return -1;
+		}
 	}
 }
 
@@ -584,8 +657,18 @@ static clock_t burn_user_ticks(clock_t want)
  * 20 ticks is 200ms at _SC_CLK_TCK 100, i.e. ~13 of Windows' 15.625ms
  * accounting quanta -- a wide margin over the 1-tick floor being
  * asserted, and still small enough that both burns together cost this
- * suite well under a second on any machine that accounts at all. */
-#define BURN_TICKS 20
+ * suite well under a second on any machine that accounts at all.
+ *
+ * The two floors are deliberately DIFFERENT numbers.  When both sides
+ * burned BURN_TICKS, the parent's own user time and the child's
+ * confirmed floor were the same value by construction, so
+ * `tms_cutime > 0` could not distinguish "the child's time was
+ * accumulated" from "the parent's own time was reported back" -- and
+ * under Wine it is the latter (see test_times_children()).  The
+ * printed note below shows both numbers, so a reader can see at a
+ * glance which process the total actually came from. */
+#define BURN_TICKS       20
+#define BURN_CHILD_TICKS 31
 
 static void test_times_self(void)
 {
@@ -593,7 +676,7 @@ static void test_times_self(void)
 	struct tms t;
 	clock_t r;
 	clock_t utime_ticks, stime_ticks;
-	clock_t burned;
+	long burned;
 
 	/* Burn real user CPU until the reading itself confirms it landed,
 	 * so the assertions below are non-zero on any platform that tracks
@@ -609,10 +692,10 @@ static void test_times_self(void)
 	 * nothing at all about times() or getrusage(). */
 	CHECK(burned >= BURN_TICKS);
 	if (burned < BURN_TICKS) {
-		printf("note: could not accumulate %d ticks of user time in "
-		       "%d wall seconds; the tms_utime/ru_utime assertions "
-		       "below cannot mean anything and are skipped\n",
-		       BURN_TICKS, BURN_WALL_LIMIT_SEC);
+		printf("note: could not accumulate %d ticks of user time "
+		       "(burn_user_ticks() printed why just above); the "
+		       "tms_utime/ru_utime assertions below cannot mean "
+		       "anything and are skipped\n", BURN_TICKS);
 		return;
 	}
 
@@ -661,13 +744,15 @@ static void test_times_children(void)
 	char *argv[3];
 	pid_t pid;
 	int status;
-	struct rusage ru_children;
+	struct rusage ru_children, ru_child;
+	int child_times_real = 1;
 	struct tms t;
 
 	argv[0] = (char *)self; argv[1] = (char *)"--times-child"; argv[2] = NULL;
 	pid = __spawn(self, argv, environ);
 	if (pid < 0) { printf("note: cannot spawn \"%s\"; times() child test skipped\n", self); return; }
-	CHECK(waitpid(pid, &status, 0) == pid);
+	memset(&ru_child, 0xff, sizeof ru_child);
+	CHECK(wait4(pid, &status, 0, &ru_child) == pid);
 	CHECK(WIFEXITED(status));
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 3) {
 		/* The child said its own user-time accounting never moved.
@@ -720,14 +805,77 @@ static void test_times_children(void)
 	 * dropping the check silently: a run that did not test the clause
 	 * should not read like one that did. */
 #ifdef _WIN32
+	/* Does this platform report a *child's* process times at all?
+	 *
+	 * The check costs nothing extra: the child just reaped confirmed,
+	 * against its own times(), that NT charged it at least
+	 * BURN_CHILD_TICKS of user time before it exited, and wait4()'s
+	 * struct rusage is documented as that one child's usage.  So on a
+	 * platform that answers the question at all it cannot come back
+	 * below the floor the child itself watched land.
+	 *
+	 * Under Wine it does, because Wine's NtQueryInformationProcess()
+	 * ignores the handle for this info class and hands back the
+	 * *calling* process's times, with its own FIXME saying so
+	 * (dlls/ntdll/unix/process.c, `case ProcessTimes:` -- "FIXME:
+	 * user/kernel times only work for current process"; UserTime and
+	 * KernelTime come from the host times(), and the handle is used
+	 * only for CreateTime/ExitTime).
+	 *
+	 * READ THIS BEFORE TRUSTING A GREEN `make check`: under Wine --
+	 * which is `make check`, the asan leg, and every local run -- the
+	 * two assertions below are satisfied by the *parent's* own user
+	 * time, burned by test_times_self() a few lines earlier, and not
+	 * by the child's at all.  Only the windows-test CI legs test the
+	 * clause these assertions name.  That is exactly how this group
+	 * came to look correct while measuring the wrong process: while
+	 * both sides burned the same BURN_TICKS, the parent's own total
+	 * and the child's confirmed floor were the same number by
+	 * construction, and no assertion over them could tell the two
+	 * apart.  The floors are different constants now, and this probe
+	 * refuses to let the run report a pass it did not earn.
+	 *
+	 * Detected by measuring, not by asking which platform this is, so
+	 * it needs no version test and cannot go stale when Wine fixes it.
+	 * rc=77 (tools/runtests.sh: UNVERIFIED) rather than a silent skip:
+	 * a run that could not check the clause must not read like one
+	 * that did. */
+	if (timeval_to_clockticks(&ru_child.ru_utime) < BURN_CHILD_TICKS) {
+		printf("SKIP posix-grp child CPU-time floors: this platform does "
+		       "not report a child's process times. The child confirmed "
+		       ">= %d user ticks against its own times() and exited 0, "
+		       "yet wait4() reports %ld ticks for it (and the parent's "
+		       "own burn was %d ticks -- if the totals below match that "
+		       "instead, they are the parent's). Wine substitutes the "
+		       "calling process's times here (dlls/ntdll/unix/process.c, "
+		       "case ProcessTimes, \"FIXME: user/kernel times only work "
+		       "for current process\"); the real-Windows legs are the "
+		       "oracle for this clause\n",
+		       BURN_CHILD_TICKS,
+		       (long)timeval_to_clockticks(&ru_child.ru_utime), BURN_TICKS);
+		unverified++;
+		child_times_real = 0;
+	}
+	/* Only the two floors are withheld.  The cross-check below is a
+	 * different claim -- that times() and getrusage() are two readers
+	 * of one accumulator and cannot disagree -- and it stays honest
+	 * whatever that accumulator was filled from, so it still runs. */
+	if (child_times_real) {
 	CHECK(t.tms_cutime > 0);
 	CHECK(timeval_to_clockticks(&ru_children.ru_utime) > 0);
 	/* Printed unconditionally: a future failure of the two assertions
-	 * above should not need a rebuild to say by how much. */
+	 * above should not need a rebuild to say by how much.  Both floors
+	 * are shown because they are different numbers on purpose -- a
+	 * total that matches the parent's burn rather than the child's is
+	 * the substitution described above. */
 	printf("note: reaped child charged tms_cutime=%ld ticks, "
-	       "RUSAGE_CHILDREN ru_utime=%ld ticks (child confirmed >= %d)\n",
+	       "RUSAGE_CHILDREN ru_utime=%ld ticks (that child alone: %ld "
+	       "ticks, confirmed >= %d; the parent's own burn was %d)\n",
 	       (long)t.tms_cutime,
-	       (long)timeval_to_clockticks(&ru_children.ru_utime), BURN_TICKS);
+	       (long)timeval_to_clockticks(&ru_children.ru_utime),
+	       (long)timeval_to_clockticks(&ru_child.ru_utime),
+	       BURN_CHILD_TICKS, BURN_TICKS);
+	}
 #else
 	printf("note: child CPU-time totals not held to > 0 in the native build "
 	       "(fuzz/ntstubs.c's ProcessTimes is not implemented for a child "
@@ -979,10 +1127,10 @@ int main(int argc, char **argv)
 		 * today": the two are different failures with different fixes,
 		 * and a fixed-size burn cannot tell them apart.  Exit 3 says
 		 * the burn is what failed. */
-		if (burn_user_ticks(BURN_TICKS) < BURN_TICKS) {
+		if (burn_user_ticks(BURN_CHILD_TICKS) < BURN_CHILD_TICKS) {
 			printf("posix-grp: --times-child could not accumulate %d "
-			       "ticks of its own user time in %d wall seconds\n",
-			       BURN_TICKS, BURN_WALL_LIMIT_SEC);
+			       "ticks of its own user time (burn_user_ticks() "
+			       "printed why just above)\n", BURN_CHILD_TICKS);
 			return 3;
 		}
 		return 0;
@@ -1019,6 +1167,13 @@ int main(int argc, char **argv)
 	test_iov_len_overflow();
 	test_writev_all_zero();
 
-	if (!fails) printf("posix-grp: all tests passed\n");
-	return fails != 0;
+	if (fails) { printf("posix-grp: failures: %d\n", fails); return 1; }
+	if (unverified) {
+		printf("posix-grp: %d assertion group(s) unverified in this "
+		       "environment (see SKIP lines above); no failures in "
+		       "what did run\n", unverified);
+		return 77;
+	}
+	printf("posix-grp: all tests passed\n");
+	return 0;
 }
