@@ -34,14 +34,41 @@
 #include "stdio_impl.h"
 
 /* Read one wide character.  WEOF on end-of-file or error, with the
- * stream's eof/err indicator set by the byte layer or here. */
-static wint_t getwc_core(FILE *f)
+ * stream's eof/err indicator set by the byte layer or here.
+ *
+ * *nbytes, when not null, is set to how many BYTES the character
+ * consumed.  Only src/stdio/scanf.c wants that: it hands look-ahead
+ * back by seeking the stream, which is a byte offset, and for a
+ * variable-width encoding the byte length of a character is not
+ * recoverable from the character.  A pushback slot delivery consumes
+ * nothing and reports 0. */
+static wint_t getwc_core(FILE *f, int *nbytes)
 {
 	char b;
 	size_t i = 0, r;
 	wchar_t wc = 0;
 
+	if (nbytes) *nbytes = 0;
 	if (f->nwunget) { f->nwunget = 0; return (wint_t)f->wunget; }
+
+	/* An open_wmemstream() buffer holds wchar_t, so a unit is read as
+	 * its own bytes rather than decoded -- the mirror of the write path
+	 * below, and for the same reason. */
+	if (f->wmem) {
+		unsigned char raw[sizeof(wchar_t)];
+		for (i = 0; i < sizeof wc; i++) {
+			int c = __fgetc(f);
+			if (c == EOF) {
+				/* A partial unit at the end is not a character. */
+				if (i) { errno = EILSEQ; f->err = 1; }
+				return WEOF;
+			}
+			raw[i] = (unsigned char)c;
+		}
+		memcpy(&wc, raw, sizeof wc);
+		if (nbytes) *nbytes = (int)sizeof wc;
+		return (wint_t)wc;
+	}
 
 	/* A unit owed from a previous surrogate pair, delivered from state
 	 * alone.  A zero-length call cannot consume anything, so this is
@@ -60,6 +87,7 @@ static wint_t getwc_core(FILE *f)
 		}
 		b = (char)c;
 		i++;
+		if (nbytes) (*nbytes)++;
 		r = mbrtowc(&wc, &b, 1, &f->wst_in);
 		if (r == (size_t)-1) { f->err = 1; return WEOF; }
 		if (r == (size_t)-2) {
@@ -105,7 +133,15 @@ static wint_t putwc_core(wchar_t wc, FILE *f)
 wint_t fgetwc(FILE *f)
 {
 	if (!f->wide) f->wide = 1;
-	return getwc_core(f);
+	return getwc_core(f, 0);
+}
+
+/* Internal: fgetwc() that also reports the byte length consumed.  See
+ * getwc_core() above for why anything wants that. */
+wint_t __fgetwc_n(FILE *f, int *nbytes)
+{
+	if (!f->wide) f->wide = 1;
+	return getwc_core(f, nbytes);
 }
 
 wint_t getwc(FILE *f) { return fgetwc(f); }
@@ -145,7 +181,7 @@ wchar_t *fgetws(wchar_t *__restrict ws, int n, FILE *__restrict f)
 	if (n <= 0) return 0;
 	if (!f->wide) f->wide = 1;
 	while (n > 1) {
-		wint_t c = getwc_core(f);
+		wint_t c = getwc_core(f, 0);
 		if (c == WEOF) {
 			if (f->err || p == ws) return 0;
 			break;

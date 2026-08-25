@@ -63,12 +63,26 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
  * falls back to a stack of its own that rd drains before touching the
  * stream again.  Anything still on it when the whole scanf is over is
  * returned to the stream by seeking, the only way left to return it. */
+/* One pushed-back unit.  `nb` is how many BYTES of the stream it came
+ * from: 1 for a byte, 1..4 for a wide character decoded from UTF-8, and
+ * sizeof(wchar_t) for one read out of an open_wmemstream() buffer.
+ * sc_done() hands the look-ahead back by seeking, which is a byte
+ * offset, so the count cannot be recovered from the unit itself once a
+ * variable-width encoding is in play. */
+struct pbent {
+	wchar_t wc;
+	unsigned char nb;
+};
+
 struct sc {
 	FILE *f;
 	int nread;
-	unsigned char *pb;      /* pb[npb-1] is the next character to hand back */
+	int wide;               /* read wide characters, not bytes */
+	int ilseq;              /* a wide read hit an invalid sequence */
+	int lastnb;             /* bytes consumed by the most recent rd() */
+	struct pbent *pb;       /* pb[npb-1] is the next unit to hand back */
 	int npb, pbcap;
-	unsigned char pbinit[32];
+	struct pbent pbinit[32];
 };
 
 /* The text of one numeric field.  Starts in the caller's frame and
@@ -88,45 +102,82 @@ struct fld {
 	int left;
 };
 
-static void sc_init(struct sc *sc, FILE *f)
+static void sc_init(struct sc *sc, FILE *f, int wide)
 {
 	sc->f = f;
 	sc->nread = 0;
+	sc->wide = wide;
+	sc->ilseq = 0;
+	sc->lastnb = 1;
 	sc->pb = sc->pbinit;
 	sc->npb = 0;
-	sc->pbcap = (int)sizeof sc->pbinit;
+	sc->pbcap = (int)(sizeof sc->pbinit / sizeof sc->pbinit[0]);
 }
 
+/* One input unit: a byte for fscanf(), a wide character for fwscanf().
+ *
+ * nread counts UNITS, not bytes, which is what both callers need: the
+ * field width and %n are byte counts under fscanf.html and wide-character
+ * counts under fwscanf.html, and in each mode a unit is the right thing.
+ * That falls out of counting here rather than being special-cased at
+ * ~15 call sites. */
 static int rd(struct sc *sc)
 {
 	int c;
-	if (sc->npb) { sc->nread++; return sc->pb[--sc->npb]; }
-	c = __fgetc(sc->f);
-	if (c != EOF) sc->nread++;
-	return c;
+	if (sc->npb) {
+		struct pbent e = sc->pb[--sc->npb];
+		sc->nread++;
+		sc->lastnb = e.nb;
+		return (int)e.wc;
+	}
+	if (!sc->wide) {
+		c = __fgetc(sc->f);
+		if (c != EOF) { sc->nread++; sc->lastnb = 1; }
+		return c;
+	}
+	{
+		int nb = 0;
+		wint_t w = __fgetwc_n(sc->f, &nb);
+		if (w == WEOF) {
+			/* Distinguish "no more input" from "the input is not a
+			 * character": the stream's error indicator is set only for
+			 * the second, by src/stdio/wide.c. */
+			if (ferror(sc->f)) sc->ilseq = 1;
+			return EOF;
+		}
+		sc->nread++;
+		sc->lastnb = nb ? nb : 1;
+		return (int)w;
+	}
 }
 
 static void unrd(struct sc *sc, int c)
 {
 	if (c == EOF) return;
-	/* The stream first: while its own pushback can hold the
-	 * look-ahead, the cursor stays a plain wrapper around it. */
-	if (sc->npb == 0 && ungetc(c, sc->f) != EOF) { sc->nread--; return; }
+	/* The stream first, and only in byte mode: while its own pushback
+	 * can hold the look-ahead, the cursor stays a plain wrapper around
+	 * it.  In wide mode this stack is always used instead, so that
+	 * sc_done() below knows the exact byte length of everything it
+	 * still owes the stream -- ungetwc() would take the character but
+	 * tell us nothing about how many bytes it stood for. */
+	if (!sc->wide && sc->npb == 0 && ungetc(c, sc->f) != EOF) { sc->nread--; return; }
 	if (sc->npb >= sc->pbcap) {
-		unsigned char *q;
+		struct pbent *q;
 		int cap;
-		if (sc->pbcap > INT_MAX / 2) return;
+		if (sc->pbcap > INT_MAX / (2 * (int)sizeof *q)) return;
 		cap = sc->pbcap * 2;
-		q = sc->pb == sc->pbinit ? malloc((size_t)cap)
-		                         : realloc(sc->pb, (size_t)cap);
+		q = sc->pb == sc->pbinit ? malloc((size_t)cap * sizeof *q)
+		                         : realloc(sc->pb, (size_t)cap * sizeof *q);
 		/* Nowhere to put it and nowhere to report it: the character
 		 * is lost, exactly as an over-read look-ahead always was. */
 		if (!q) return;
-		if (sc->pb == sc->pbinit) memcpy(q, sc->pbinit, (size_t)sc->npb);
+		if (sc->pb == sc->pbinit) memcpy(q, sc->pbinit, (size_t)sc->npb * sizeof *q);
 		sc->pb = q;
 		sc->pbcap = cap;
 	}
-	sc->pb[sc->npb++] = (unsigned char)c;
+	sc->pb[sc->npb].wc = (wchar_t)c;
+	sc->pb[sc->npb].nb = (unsigned char)sc->lastnb;
+	sc->npb++;
 	sc->nread--;
 }
 
@@ -137,15 +188,21 @@ static void sc_done(struct sc *sc)
 {
 	if (sc->npb) {
 		/* A seek that cannot be done is not this call's failure to
-		 * report, so it does not get to leave errno behind either. */
-		int e = errno;
-		if (fseek(sc->f, -(long)sc->npb, SEEK_CUR) == 0) sc->npb = 0;
+		 * report, so it does not get to leave errno behind either.
+		 * The offset is the BYTES the pushed-back units came from, not
+		 * their count: in byte mode every nb is 1 and this is the
+		 * previous expression exactly, and in wide mode it is the only
+		 * correct one. */
+		int e = errno, i;
+		long bytes = 0;
+		for (i = 0; i < sc->npb; i++) bytes += sc->pb[i].nb;
+		if (fseek(sc->f, -bytes, SEEK_CUR) == 0) sc->npb = 0;
 		errno = e;
 	}
 	if (sc->pb != sc->pbinit) free(sc->pb);
 	sc->pb = sc->pbinit;
 	sc->npb = 0;
-	sc->pbcap = (int)sizeof sc->pbinit;
+	sc->pbcap = (int)(sizeof sc->pbinit / sizeof sc->pbinit[0]);
 }
 
 static int skipspace(struct sc *sc)
@@ -463,6 +520,99 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
  * fold `st` away at each site. */
 #define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
                            : (unsigned)*(const wchar_t *)(const void *)(q))
+/* KNOWN RESIDUAL COST, measured, so nobody re-derives it: the `s == 1`
+ * test above is a real branch per format character, and it is worth
+ * about 3.8% of this scanner's time (0.790s -> 0.820s over 300000
+ * iterations of eight sscanf() calls, uninstrumented, x86_64-win32-tcc
+ * under Wine, variants interleaved and minima taken).  Writing the
+ * fetch as a static function instead cost 17% -- tcc does no inlining
+ * -- which is why it is a macro.  Removing the last 3.8% would mean
+ * compiling this scanner twice from a template, one instantiation per
+ * stride; that is a different design, it was considered, and it was
+ * declined as not worth the structure. */
+
+/* One input unit into the caller's array, for %s, %c and %[.
+ *
+ * Four combinations, because BOTH sides vary: the input is bytes for
+ * fscanf() and wide characters for fwscanf(), and the destination is
+ * char for a plain conversion and wchar_t for an l-qualified one.  Two
+ * of the four are conversions and two are copies:
+ *
+ *   bytes  -> char     copy      (fscanf  "%s")
+ *   bytes  -> wchar_t  mbrtowc   (fscanf  "%ls", wide_put above)
+ *   wide   -> wchar_t  copy      (fwscanf "%ls")
+ *   wide   -> char     wcrtomb   (fwscanf "%s")
+ *
+ * fwscanf.html says of the plain forms that the input wide characters
+ * "shall be converted as if by repeated calls to the wcrtomb()
+ * function", which is the fourth row, and the mirror image of the
+ * sentence fscanf.html has for the l-qualified ones.
+ *
+ * *nn counts ELEMENTS STORED, which is not the number of units read
+ * once either conversion is in play: one wide character can be four
+ * bytes, and one multibyte character can be two wchar_t (a surrogate
+ * pair on this target).  The field width counts units READ, and the
+ * caller keeps that separately.
+ *
+ * Returns 0, or -1 for an encoding error ([EILSEQ]). */
+static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
+                      int assign, int wide_out)
+{
+	if (!wide_in) {
+		if (wide_out) return wide_put(c, (wchar_t *)dst, nn, mbs, assign);
+		if (assign) ((char *)dst)[*nn] = (char)c;
+		(*nn)++;
+		return 0;
+	}
+	if (wide_out) {
+		if (assign) ((wchar_t *)dst)[*nn] = (wchar_t)c;
+		(*nn)++;
+		return 0;
+	}
+	{
+		char buf[MB_LEN_MAX];
+		size_t r = wcrtomb(buf, (wchar_t)c, mbs);
+		if (r == (size_t)-1) return -1;
+		/* r == 0 is a high surrogate held for its partner: nothing to
+		 * store yet, and mbsinit() will report the debt if the field
+		 * ends here. */
+		if (assign && r) memcpy((char *)dst + *nn, buf, r);
+		*nn += (int)r;
+		return 0;
+	}
+}
+
+/* The null that terminates %s and %[ (never %c), in the width the
+ * destination actually has. */
+static void store_term(void *dst, int nn, int wide_out)
+{
+	if (wide_out) ((wchar_t *)dst)[nn] = 0;
+	else ((char *)dst)[nn] = 0;
+}
+
+/* Membership for a %[ scanset member the 256-entry table cannot hold.
+ * Only reachable from a wide format, where a scanset may name
+ * characters above 0xff; the table still answers everything below.
+ *
+ * The range rule is src/stdio/scanf.c's own, mirrored deliberately
+ * rather than re-derived: a '-' that is neither the first character of
+ * the set nor immediately before the closing ']' makes a range of the
+ * characters either side of it. */
+static int wset_has(const char *b, const char *e, int st, unsigned c)
+{
+	const char *q;
+	for (q = b; q < e; q += st) {
+		unsigned x = gf(q, st);
+		if (x == '-' && q != b && q + st < e) {
+			unsigned lo = gf(q - st, st), hi = gf(q + st, st);
+			if (c >= lo && c <= hi) return 1;
+			q += st;
+			continue;
+		}
+		if (x == c) return 1;
+	}
+	return 0;
+}
 
 static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 {
@@ -471,7 +621,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 	int c = 0;
 	struct sc sc;
 
-	sc_init(&sc, f);
+	sc_init(&sc, f, st != 1);
 	for (; gf(fp, st); fp += st) {
 		if (isspace((int)gf(fp, st))) {
 			c = skipspace(&sc);
@@ -615,75 +765,50 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				break;
 			}
 			case 's': {
-				if (lm == LM_l) {
-					wchar_t *ws = assign ? va_arg(ap, wchar_t *) : 0;
-					mbstate_t mbs;
-					int nn = 0, nb = 0;
-					memset(&mbs, 0, sizeof mbs);
-					c = skipspace(&sc);
-					if (c == EOF) { gotEOF = 1; goto done; }
-					for (; c != EOF && !isspace(c) && (width < 0 || nb < width); c = rd(&sc)) {
-						if (wide_put(c, ws, &nn, &mbs, assign) < 0) { ilseq = 1; goto done; }
-						nb++;
-					}
-					unrd(&sc, c);
-					/* a sequence left half-finished is an encoding error
-					 * too: there are no more bytes that could complete it */
-					if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
-					if (nb == 0) goto done;
-					if (assign) { ws[nn] = 0; nmatched++; }
-					break;
-				}
-				{
-				char *s = assign ? va_arg(ap, char *) : 0;
-				int nn = 0;
+				/* One va_arg for both destination widths: char * without
+				 * the l qualifier and wchar_t * with it, both object
+				 * pointers of the same representation on this target. */
+				void *dst = assign ? va_arg(ap, void *) : 0;
+				int wout = lm == LM_l;
+				mbstate_t mbs;
+				int nn = 0, nu = 0;   /* elements stored; units read */
+				memset(&mbs, 0, sizeof mbs);
 				c = skipspace(&sc);
 				if (c == EOF) { gotEOF = 1; goto done; }
-				for (; c != EOF && !isspace(c) && (width < 0 || nn < width); c = rd(&sc)) {
-					if (assign) s[nn] = (char)c;
-					nn++;
+				for (; c != EOF && !isspace(c) && (width < 0 || nu < width); c = rd(&sc)) {
+					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; goto done; }
+					nu++;
 				}
 				unrd(&sc, c);
-				if (nn == 0) goto done;
-				if (assign) { s[nn] = 0; nmatched++; }
-				}
+				/* a sequence left half-finished is an encoding error
+				 * too: there are no more units that could complete it */
+				if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
+				if (nu == 0) goto done;
+				if (assign) { store_term(dst, nn, wout); nmatched++; }
 				break;
 			}
 			case 'c': {
-				if (lm == LM_l) {
-					wchar_t *ws = assign ? va_arg(ap, wchar_t *) : 0;
-					mbstate_t mbs;
-					/* fscanf.html's c entry: "Matches a sequence of bytes
-					 * of the number specified by the field width (1 if no
-					 * field width is present)" -- the width is a BYTE
-					 * count, and the l qualifier converts those bytes
-					 * rather than changing what the width counts.  (C99
-					 * is arguably read the other way for %lc; POSIX is
-					 * the spec this suite audits against and it says
-					 * bytes.)  No null byte is added, here or below. */
-					int w = width < 0 ? 1 : width, nb, nn = 0;
-					memset(&mbs, 0, sizeof mbs);
-					for (nb = 0; nb < w; nb++) {
-						c = rd(&sc);
-						if (c == EOF) break;
-						if (wide_put(c, ws, &nn, &mbs, assign) < 0) { ilseq = 1; goto done; }
-					}
-					if (nb == 0) { gotEOF = 1; goto done; }
-					if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
-					if (assign) nmatched++;
-					break;
-				}
-				{
-				char *s = assign ? va_arg(ap, char *) : 0;
-				int w = width < 0 ? 1 : width, nn;
-				for (nn = 0; nn < w; nn++) {
+				/* fscanf.html's c entry: "Matches a sequence of bytes of
+				 * the number specified by the field width (1 if no field
+				 * width is present)"; fwscanf.html's says wide characters
+				 * in the same place.  So the width counts INPUT UNITS in
+				 * both, and the l qualifier changes what is stored rather
+				 * than what the width counts.  (C99 is arguably read the
+				 * other way for %lc; POSIX is the spec this suite audits
+				 * against and it says bytes.)  No null is added. */
+				void *dst = assign ? va_arg(ap, void *) : 0;
+				int wout = lm == LM_l;
+				mbstate_t mbs;
+				int w = width < 0 ? 1 : width, nu, nn = 0;
+				memset(&mbs, 0, sizeof mbs);
+				for (nu = 0; nu < w; nu++) {
 					c = rd(&sc);
 					if (c == EOF) break;
-					if (assign) s[nn] = (char)c;
+					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; goto done; }
 				}
-				if (nn == 0) { gotEOF = 1; goto done; }
+				if (nu == 0) { gotEOF = 1; goto done; }
+				if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
 				if (assign) nmatched++;
-				}
 				break;
 			}
 			case '[': {
@@ -693,50 +818,45 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				 * and both are object pointers of the same
 				 * representation on this target, so it is fetched once
 				 * and cast at the point of use. */
-				char *s = assign ? va_arg(ap, char *) : 0;
-				int neg = 0, nn = 0;
+				void *dst = assign ? va_arg(ap, void *) : 0;
+				int wout = lm == LM_l;
+				mbstate_t mbs;
+				int neg = 0, nn = 0, nu = 0, anyhigh = 0;
+				const char *setstart, *setend;
 				fp += st;
 				if (gf(fp, st) == '^') { neg = 1; fp += st; }
+				setstart = fp;
 				{
 					const char *start = fp;
 					do {
 						if (gf(fp, st) == '-' && gf(fp + st, st) && gf(fp + st, st) != ']' && fp != start) {
 							unsigned a = gf(fp - st, st), b = gf(fp + st, st), k;
 							if (a < 256 && b < 256) for (k = a; k <= b; k++) set[k] = 1;
+							else anyhigh = 1;
 							fp += 2 * st;
 						} else {
 							if (gf(fp, st) < 256) set[gf(fp, st)] = 1;
+							else anyhigh = 1;
 							fp += st;
 						}
 					} while (gf(fp, st) && gf(fp, st) != ']');
 					/* fp now at the closing ']'; the outer loop steps past it */
 				}
-				if (lm == LM_l) {
-					mbstate_t mbs;
-					int nb = 0;
-					nn = 0;
-					memset(&mbs, 0, sizeof mbs);
-					c = rd(&sc);
-					while (c != EOF && (set[(unsigned char)c] != 0) != neg && (width < 0 || nb < width)) {
-						if (wide_put(c, (wchar_t *)s, &nn, &mbs, assign) < 0) { ilseq = 1; goto done; }
-						nb++;
-						c = rd(&sc);
-					}
-					unrd(&sc, c);
-					if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
-					if (nb == 0) { if (c == EOF) gotEOF = 1; goto done; }
-					if (assign) { ((wchar_t *)s)[nn] = 0; nmatched++; }
-					break;
-				}
+				setend = fp;
+				memset(&mbs, 0, sizeof mbs);
 				c = rd(&sc);
-				while (c != EOF && (set[(unsigned char)c] != 0) != neg && (width < 0 || nn < width)) {
-					if (assign) s[nn] = (char)c;
-					nn++;
+				while (c != EOF
+				       && (((unsigned)c < 256 ? set[c] != 0
+				            : anyhigh && wset_has(setstart, setend, st, (unsigned)c)) != neg)
+				       && (width < 0 || nu < width)) {
+					if (store_unit(sc.wide, c, dst, &nn, &mbs, assign, wout) < 0) { ilseq = 1; goto done; }
+					nu++;
 					c = rd(&sc);
 				}
 				unrd(&sc, c);
-				if (nn == 0) { if (c == EOF) gotEOF = 1; goto done; }
-				if (assign) { s[nn] = 0; nmatched++; }
+				if (!mbsinit(&mbs)) { ilseq = 1; goto done; }
+				if (nu == 0) { if (c == EOF) gotEOF = 1; goto done; }
+				if (assign) { store_term(dst, nn, wout); nmatched++; }
 				break;
 			}
 			case 'p': {
@@ -778,6 +898,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 		}
 	}
 done:
+	if (sc.ilseq) ilseq = 1;
 	sc_done(&sc);
 	/* scanf.html ERRORS, shall fail: "[EILSEQ] Input byte sequence does
 	 * not form a valid character."  This is a READ error, not a matching
@@ -848,6 +969,87 @@ int sscanf(const char *__restrict s, const char *__restrict fmt, ...)
 	va_list ap; int r;
 	va_start(ap, fmt);
 	r = vsscanf_impl(s, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+/* ------------------------------------------------------------------
+ * The wide family: fwscanf.html.  "Equivalent to fscanf() ... except
+ * that the argument format is a wide-character string [and] the input
+ * ... is a sequence of wide characters."  Same scanner, stride
+ * sizeof(wchar_t), and struct sc reading wide characters instead of
+ * bytes.
+ * ------------------------------------------------------------------ */
+
+int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
+{
+	return vfscanf_st(f, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+}
+
+/* swscanf() reads a wchar_t array, and reads it IN PLACE: the memory
+ * FILE below points straight at the caller's string with the wmem flag
+ * set, so src/stdio/wide.c's reader takes whole wchar_t out of it
+ * rather than decoding bytes.  No copy and no allocation -- which
+ * matters, because the alternative (converting the wide string to a
+ * byte string first) needs a buffer whose size is the caller's input,
+ * and the same objection that ruled it out for wcstod() applies here.
+ * The cast away from const is safe for the same reason fmemopen()'s
+ * read-only mode is: mf.writable is 0, so nothing can reach a write. */
+static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap)
+{
+	FILE mf;
+	int r;
+	memset(&mf, 0, sizeof mf);
+	mf.fd = -1;
+	mf.pid = -1;
+	mf.is_mem = 1;
+	mf.wmem = 1;
+	mf.wide = 1;
+	mf.readable = 1;
+	mf.mem_buf = (unsigned char *)(void *)(uintptr_t)(const void *)s;
+	mf.mem_len = wcslen(s) * sizeof(wchar_t);
+	mf.mem_size = mf.mem_len;
+	r = vfscanf_st(&mf, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	/* Same as vsscanf_impl: __fill gives even a memory FILE a read
+	 * buffer, and this one never sees fclose. */
+	free(mf.buf);
+	return r;
+}
+
+int vfwscanf(FILE *__restrict f, const wchar_t *__restrict fmt, __isoc_va_list ap)
+{
+	return __vfwscanf(f, fmt, ap);
+}
+int vwscanf(const wchar_t *__restrict fmt, __isoc_va_list ap)
+{
+	return __vfwscanf(stdin, fmt, ap);
+}
+int vswscanf(const wchar_t *__restrict s, const wchar_t *__restrict fmt, __isoc_va_list ap)
+{
+	return vswscanf_impl(s, fmt, ap);
+}
+
+int fwscanf(FILE *__restrict f, const wchar_t *__restrict fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = __vfwscanf(f, fmt, ap);
+	va_end(ap);
+	return r;
+}
+int wscanf(const wchar_t *__restrict fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = __vfwscanf(stdin, fmt, ap);
+	va_end(ap);
+	return r;
+}
+int swscanf(const wchar_t *__restrict s, const wchar_t *__restrict fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vswscanf_impl(s, fmt, ap);
 	va_end(ap);
 	return r;
 }

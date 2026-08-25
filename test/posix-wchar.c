@@ -37,7 +37,8 @@
  * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib
  * + src/stdio, 2026-08-24): fwprintf, fwscanf, swprintf, swscanf,
  * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * wscanf, wcwidth, wcswidth.  Confirmed *present*
+ * fwprintf, swprintf, vfwprintf, vswprintf, vwprintf, wprintf,
+ * wcwidth, wcswidth.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -53,7 +54,8 @@
  * (src/time/wcsftime.c) wcsftime and (src/stdio/wide.c) fgetwc, getwc,
  * getwchar, fputwc, putwc, putwchar, fgetws, fputws, ungetwc, fwide,
  * and (src/stdlib/strtod.c) wcstod, wcstof, wcstold, and
- * (src/stdio/mem.c) open_wmemstream.  Also now present, as
+ * (src/stdio/mem.c) open_wmemstream, and (src/stdio/scanf.c) fwscanf,
+ * swscanf, wscanf, vfwscanf, vswscanf, vwscanf.  Also now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -69,6 +71,7 @@
 #include <inttypes.h>
 #include <locale.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1215,21 +1218,306 @@ static void test_fwprintf(void)
 
 /* ---------------------------------------------------------------------
  * fwscanf / wscanf / swscanf (+ v-variants) -- fwscanf.html
+ * Implemented in src/stdio/scanf.c, sharing the byte family's scanner
+ * through a stride cursor over the format and a wide-character input
+ * cursor; see that file's headers.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fwscanf()/wscanf()/swscanf()/vfwscanf()/vwscanf()/
-       * vswscanf() -- fwscanf.html DESCRIPTION, RETURN VALUE.
-       * Implementable on the same scanf core as the byte-string family;
-       * %lc/%ls just move wchar_t units. */
+/* fwscanf.html: the wide family is "equivalent to fscanf() ... except
+ * that the argument format is a wide-character string [and] the input
+ * ... is a sequence of wide characters".  As with wcstod(), the
+ * strongest way to test an equivalence clause is to assert it: widen an
+ * ASCII input and format, run both families, and require the same
+ * return value, the same converted values and the same errno.  No
+ * oracle is needed and inputs nobody enumerated still get checked. */
+static void swscanf_same_as_sscanf_i(const char *in, const char *fmt)
+{
+	wchar_t wi[128], wf[64];
+	long long ba = -1, bb = -1, wa = -1, wb = -1;
+	int br, wr, be, we;
+	size_t i;
+
+	for (i = 0; in[i] && i + 1 < 128; i++) wi[i] = (wchar_t)(unsigned char)in[i];
+	wi[i] = 0;
+	for (i = 0; fmt[i] && i + 1 < 64; i++) wf[i] = (wchar_t)(unsigned char)fmt[i];
+	wf[i] = 0;
+
+	errno = 0; br = sscanf(in, fmt, &ba, &bb); be = errno;
+	errno = 0; wr = swscanf(wi, wf, &wa, &wb); we = errno;
+	CHECK(br == wr);
+	CHECK(ba == wa);
+	CHECK(bb == wb);
+	CHECK(be == we);
+}
+
+static void swscanf_same_as_sscanf_s(const char *in, const char *fmt)
+{
+	wchar_t wi[128], wf[64];
+	char bs1[80], bs2[80], ws1[80], ws2[80];
+	int br, wr;
+	size_t i;
+
+	for (i = 0; in[i] && i + 1 < 128; i++) wi[i] = (wchar_t)(unsigned char)in[i];
+	wi[i] = 0;
+	for (i = 0; fmt[i] && i + 1 < 64; i++) wf[i] = (wchar_t)(unsigned char)fmt[i];
+	wf[i] = 0;
+
+	memset(bs1, 0, sizeof bs1); memset(bs2, 0, sizeof bs2);
+	memset(ws1, 0, sizeof ws1); memset(ws2, 0, sizeof ws2);
+	br = sscanf(in, fmt, bs1, bs2);
+	wr = swscanf(wi, wf, ws1, ws2);
+	CHECK(br == wr);
+	CHECK(!memcmp(bs1, ws1, sizeof bs1));
+	CHECK(!memcmp(bs2, ws2, sizeof bs2));
+}
+
+/* Thin variadic wrappers so the v* forms can be called with a real
+ * va_list; there is no other way to reach them from a test. */
+static int vswscanf_probe(const wchar_t *in, const wchar_t *fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vswscanf(in, fmt, ap);
+	va_end(ap);
+	return r;
+}
+static int vfwscanf_probe(FILE *f, const wchar_t *fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vfwscanf(f, fmt, ap);
+	va_end(ap);
+	return r;
+}
+static int vwscanf_probe(const wchar_t *fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vwscanf(fmt, ap);
+	va_end(ap);
+	return r;
+}
+
 static void test_fwscanf(void)
 {
-	int n = 0;
+	static const char *icases[] = {
+		"42", "-42", "+42", "  \t\n 42", "", "x", "1 2", "1,2",
+		"12345", "0x1f", "017", "0x", "ff", "777", "-1",
+		"99999999999999999999999", "%42", "a42b", "x42b",
+	};
+	static const char *ifmts[] = {
+		"%lld", "%lld %lld", "%lld,%lld", "%3lld", "%1lld", "%lli",
+		"%llx", "%llo", "%llu", "%*lld %lld", "%%%lld", "a%lldb",
+	};
+	static const char *scases[] = {
+		"hello", "a b", "abcdef", "   lead", "", "z", "abcabX",
+		"abcx", "abcd", "]a]b", "ab]c", "aaaa", "line one\nline two",
+	};
+	static const char *sfmts[] = {
+		"%s", "%s %s", "%3s", "%c", "%3c", "%[abc]", "%[^x]",
+		"%[a-c]", "%[]a]", "%[^]]", "%2[abc]", "%[^\n]",
+	};
+	int n = 0, n2 = 0;
+	size_t i, j;
+	wchar_t wbuf[16];
+	char cbuf[16];
+	FILE *f;
+
 	/* "the number of successfully matched and assigned input items." */
 	CHECK(swscanf(W("42"), W("%d"), &n) == 1);
 	CHECK(n == 42);
 	/* EOF before any conversion. */
 	CHECK(swscanf(W(""), W("%d"), &n) == WEOF);
+
+	/* The equivalence clause, over every combination of the shapes
+	 * above -- 19 x 12 and 13 x 12 pairs.  Most combinations are
+	 * matching failures, which is the point: a failure has to happen
+	 * in the same place in both families. */
+	for (i = 0; i < sizeof icases / sizeof *icases; i++)
+		for (j = 0; j < sizeof ifmts / sizeof *ifmts; j++)
+			swscanf_same_as_sscanf_i(icases[i], ifmts[j]);
+	for (i = 0; i < sizeof scases / sizeof *scases; i++)
+		for (j = 0; j < sizeof sfmts / sizeof *sfmts; j++)
+			swscanf_same_as_sscanf_s(scases[i], sfmts[j]);
+
+	/* Beyond the equivalence: everything that only a WIDE input can
+	 * show, where there is no byte-family answer to compare against.
+	 *
+	 * %ls stores the input wide characters as they are. */
+	{
+		/* 0x1234 deliberately: a character above 0xff, so that a store
+		 * which truncated a wide unit to its low byte would be caught.
+		 * A test using only 0xe9/0xff cannot see that. */
+		static const wchar_t in[4] = { 0xe9, 0x1234, L'x', 0 };
+		wmemset(wbuf, L'Z', 16);
+		CHECK(swscanf(in, W("%ls"), wbuf) == 1);
+		CHECK(wbuf[0] == 0xe9 && wbuf[1] == 0x1234 && wbuf[2] == L'x' && wbuf[3] == 0);
+	}
+	/* %s without the l qualifier converts them "as if by repeated
+	 * calls to the wcrtomb() function" -- U+00E9 becomes its two UTF-8
+	 * bytes, so three wide characters become five bytes. */
+	{
+		static const wchar_t in[4] = { 0xe9, 0x1234, L'x', 0 };
+		memset(cbuf, 'Z', sizeof cbuf);
+		CHECK(swscanf(in, W("%s"), cbuf) == 1);
+		/* U+00E9 is two bytes and U+1234 is three, so three wide
+		 * characters become six bytes plus the terminator. */
+		CHECK(!memcmp(cbuf, "\xc3\xa9\xe1\x88\xb4x", 7));
+	}
+	/* The field width counts WIDE CHARACTERS, not the bytes they would
+	 * become: two of these three is two wide characters and four
+	 * bytes. */
+	{
+		static const wchar_t in[4] = { 0xe9, 0x1234, L'x', 0 };
+		wmemset(wbuf, L'Z', 16);
+		CHECK(swscanf(in, W("%2ls"), wbuf) == 1);
+		CHECK(wbuf[0] == 0xe9 && wbuf[1] == 0x1234 && wbuf[2] == 0);
+		memset(cbuf, 'Z', sizeof cbuf);
+		CHECK(swscanf(in, W("%2s"), cbuf) == 1);
+		/* two wide characters, five bytes: the width is not a byte
+		 * count and this is the pair that proves it */
+		CHECK(!memcmp(cbuf, "\xc3\xa9\xe1\x88\xb4", 6));
+	}
+	/* %n reports the number of WIDE CHARACTERS read. */
+	{
+		static const wchar_t in[5] = { 0xe9, 0x1234, L'1', L'2', 0 };
+		n = -1;
+		CHECK(swscanf(in, W("%2ls%d%n"), wbuf, &n2, &n) == 2);
+		CHECK(n2 == 12);
+		/* four wide characters, which are seven bytes in UTF-8 */
+		CHECK(n == 4);
+	}
+	/* A scanset may name a character the 256-entry table cannot hold. */
+	{
+		/* Both members are above 0xff, so neither can live in the
+		 * 256-entry table the byte scanner uses and both must be found
+		 * by rescanning the format. */
+		static const wchar_t in[4] = { 0x1234, 0x1235, L'x', 0 };
+		static const wchar_t fmt[7] = { L'%', L'l', L'[', 0x1234, 0x1235, L']', 0 };
+		static const wchar_t rng[9] = { L'%', L'l', L'[', 0x1230, L'-', 0x1240, L']', 0 };
+		wmemset(wbuf, L'Z', 16);
+		CHECK(swscanf(in, fmt, wbuf) == 1);
+		CHECK(wbuf[0] == 0x1234 && wbuf[1] == 0x1235 && wbuf[2] == 0);
+		/* and a RANGE whose ends are both above 0xff */
+		wmemset(wbuf, L'Z', 16);
+		CHECK(swscanf(in, rng, wbuf) == 1);
+		CHECK(wbuf[0] == 0x1234 && wbuf[1] == 0x1235 && wbuf[2] == 0);
+		/* a character outside the set stops the field */
+		{
+			static const wchar_t in2[3] = { 0x1234, 0x9999, 0 };
+			wmemset(wbuf, L'Z', 16);
+			CHECK(swscanf(in2, fmt, wbuf) == 1);
+			CHECK(wbuf[0] == 0x1234 && wbuf[1] == 0);
+		}
+		/* A range with one end BELOW 0xff and one above: the low end
+		 * goes into the 256-entry table and the high end cannot, so
+		 * this is the only shape in which the range branch alone has
+		 * to notice that the set has a member the table cannot hold.
+		 * Without that, 'a' matches and U+1000 does not. */
+		{
+			static const wchar_t mix[9] = { L'%', L'l', L'[', L'a', L'-', 0x1234, L']', 0 };
+			static const wchar_t in3[4] = { L'a', 0x1000, L'!', 0 };
+			wmemset(wbuf, L'Z', 16);
+			CHECK(swscanf(in3, mix, wbuf) == 1);
+			CHECK(wbuf[0] == L'a' && wbuf[1] == 0x1000 && wbuf[2] == 0);
+		}
+	}
+	/* And a non-ASCII literal in the format must match the
+	 * corresponding input character. */
+	{
+		static const wchar_t in[4] = { 0xe9, L'4', L'2', 0 };
+		static const wchar_t fmt[6] = { 0xe9, L'%', L'd', 0 };
+		static const wchar_t bad[6] = { 0xea, L'%', L'd', 0 };
+		n = -1;
+		CHECK(swscanf(in, fmt, &n) == 1);
+		CHECK(n == 42);
+		CHECK(swscanf(in, bad, &n) == 0);
+	}
+
+	/* fwscanf() on a real stream: the bytes are decoded as wide
+	 * characters on the way in, so a two-byte UTF-8 sequence is one
+	 * wide character and the field width counts it as one. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	if (f) {
+		fputs("\xc3\xa9\xc3\xbfx 42", f);
+		rewind(f);
+		wmemset(wbuf, L'Z', 16);
+		n = -1;
+		CHECK(fwscanf(f, W("%2ls"), wbuf) == 1);
+		CHECK(wbuf[0] == 0xe9 && wbuf[1] == 0xff && wbuf[2] == 0);
+		CHECK(fwscanf(f, W("%ls %d"), wbuf, &n) == 2);
+		CHECK(wbuf[0] == L'x' && wbuf[1] == 0);
+		CHECK(n == 42);
+		CHECK(fwscanf(f, W("%d"), &n) == WEOF);
+		fclose(f);
+	}
+
+	/* THE PUSHBACK LEDGER.  A conversion that stops on a look-ahead
+	 * character has to give that character back to the stream, and the
+	 * only way to do that beyond the stream's own one-character
+	 * pushback is to SEEK -- which is a byte offset.  Under a
+	 * variable-width encoding the byte length of a wide character
+	 * cannot be recovered from the character, so it has to be
+	 * remembered.  Here the scanset stops on U+00FF, which is two
+	 * bytes: an implementation that seeks back by the NUMBER of
+	 * pushed-back characters instead of their byte length leaves the
+	 * stream in the middle of that sequence, and the next read gets a
+	 * stray continuation byte instead of the character. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	if (f) {
+		/* "\xc3\xbf" "cd", split: a hex escape is GREEDY, so writing
+		 * "ab\xc3\xbfcd" in one literal makes \xbfcd a single escape
+		 * and the file is not what it looks like.  This test was
+		 * written that way first and failed for that reason. */
+		fputs("ab\xc3\xbf" "cd", f);
+		rewind(f);
+		wmemset(wbuf, L'Z', 16);
+		CHECK(fwscanf(f, W("%l[ab]"), wbuf) == 1);
+		CHECK(wbuf[0] == L'a' && wbuf[1] == L'b' && wbuf[2] == 0);
+		wmemset(wbuf, L'Z', 16);
+		CHECK(fwscanf(f, W("%ls"), wbuf) == 1);
+		CHECK(wbuf[0] == 0xff && wbuf[1] == L'c' && wbuf[2] == L'd' && wbuf[3] == 0);
+		fclose(f);
+	}
+	remove("test.tmp");
+
+	/* The va_list forms.  fwscanf.html: vfwscanf(), vswscanf() and
+	 * vwscanf() "shall be equivalent to the fwscanf(), swscanf() and
+	 * wscanf() functions respectively, except that instead of being
+	 * called with a variable number of arguments, they are called with
+	 * an argument list".  Exercised through a helper rather than merely
+	 * named, so each one actually converts something. */
+	n = n2 = -1;
+	CHECK(vswscanf_probe(W("3 4"), W("%d %d"), &n, &n2) == 2);
+	CHECK(n == 3 && n2 == 4);
+
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	if (f) { fputs("5 6", f); rewind(f); n = n2 = -1;
+		CHECK(vfwscanf_probe(f, W("%d %d"), &n, &n2) == 2);
+		CHECK(n == 5 && n2 == 6);
+		fclose(f); }
+
+	/* wscanf()/vwscanf() read stdin, so stdin is reopened on a scratch
+	 * file rather than being asserted about vacuously. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	if (f) { fputs("7 8", f); fclose(f); }
+	if (freopen("test.tmp", "rb", stdin)) {
+		n = n2 = -1;
+		CHECK(wscanf(W("%d %d"), &n, &n2) == 2);
+		CHECK(n == 7 && n2 == 8);
+	} else CHECK(0);
+	f = fopen("test.tmp", "wb+");
+	if (f) { fputs("9 10", f); fclose(f); }
+	if (freopen("test.tmp", "rb", stdin)) {
+		n = n2 = -1;
+		CHECK(vwscanf_probe(W("%d %d"), &n, &n2) == 2);
+		CHECK(n == 9 && n2 == 10);
+	} else CHECK(0);
+	remove("test.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * open_wmemstream -- open_wmemstream.html
@@ -2305,6 +2593,7 @@ int main(void)
 	test_fputws();
 	test_ungetwc();
 	test_open_wmemstream();
+	test_fwscanf();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

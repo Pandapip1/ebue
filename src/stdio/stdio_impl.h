@@ -99,6 +99,11 @@ ssize_t __file_read(FILE *f, void *buf, size_t n);
 ssize_t __file_write(FILE *f, const void *buf, size_t n);
 long long __file_seek(FILE *f, long long off, int whence);
 
+/* One wide character from a stream, reporting how many BYTES it
+ * consumed (src/stdio/scanf.c needs that to hand look-ahead back by
+ * seeking, which is a byte offset). */
+wint_t __fgetwc_n(FILE *f, int *nbytes);
+
 /* The list of every FILE currently open, for __stdio_exit. */
 extern FILE *__stdio_files;
 

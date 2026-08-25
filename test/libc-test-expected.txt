@@ -91,7 +91,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=66 xfail=22 unclassified=4 unbuildable=53 unverifiable=1
+# COUNTS pass=67 xfail=22 unclassified=4 unbuildable=52 unverifiable=1
 #
 argv                              pass
 basename                          pass
@@ -116,7 +116,7 @@ fnmatch                           xfail:defect  GAP-ACCOUNTING.md:264 lists fnma
 fpclassify-invalid-ld80           pass
 fscanf                            pass
 ftello-unflushed-append           xfail:defect  COVERAGE.md has ftello rows but not this case; ftello on an unflushed append stream reports 3, want 7
-fwscanf                           unbuildable  tcc: error: unresolved reference to 'fwscanf'
+fwscanf                           pass
 getpwnam_r-crash                  pass
 getpwnam_r-errno                  pass
 iconv_open                        unbuildable  iconv_open.c:3: error: include file 'iconv.h' not found
