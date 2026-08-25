@@ -46,9 +46,14 @@
  *
  * One assertion group can come out **unverified (exit 77)** rather than
  * passing or failing: the FTW_PHYS/FTW_SL/FTW_SLN group needs a real
- * symbolic link, and symlink() here fails ENOSYS under Wine (its
- * FSCTL_SET_REPARSE_POINT is not implemented) and EPERM on a real
- * Windows without SeCreateSymbolicLinkPrivilege. The probe is made at
+ * symbolic link, and symlink() here fails ENOSYS under Wine and EPERM
+ * on a real Windows without SeCreateSymbolicLinkPrivilege.  That ENOSYS
+ * is the correct rendering of the STATUS_NOT_SUPPORTED (0xc00000bb)
+ * stock Wine below 10.19 answers FSCTL_SET_REPARSE_POINT with -- and
+ * src/internal/errno.c:82-84 maps that status onto ENOSYS along with
+ * STATUS_NOT_IMPLEMENTED and STATUS_INVALID_DEVICE_REQUEST, so do not
+ * read the errno back as evidence of NOT_IMPLEMENTED specifically.  On
+ * the Wine leg the privilege is never consulted at all. The probe is made at
  * run time, a SKIP line naming the mechanism and the observed errno is
  * printed, and main() returns 77 -- tools/runtests.sh, tools/asan-
  * build.sh and CI's PowerShell loop all report that in their own
@@ -612,9 +617,11 @@ static void test_nftw_chdir(void)
 #endif
 
 /* nftw.html FTW_PHYS/FTW_SL/FTW_SLN, and ftw.html's FTW_SL, all need a
- * real symbolic link.  symlink() fails ENOSYS under Wine (its
- * FSCTL_SET_REPARSE_POINT is unimplemented) and EPERM on a real
- * Windows without SeCreateSymbolicLinkPrivilege, so this group probes
+ * real symbolic link.  symlink() fails ENOSYS under Wine -- the correct
+ * rendering of the STATUS_NOT_SUPPORTED that stock Wine below 10.19
+ * answers FSCTL_SET_REPARSE_POINT with, the privilege never being
+ * consulted on that leg -- and EPERM on a real Windows without
+ * SeCreateSymbolicLinkPrivilege, so this group probes
  * at run time and reports itself unverified rather than passing or
  * failing silently. */
 static void test_nftw_symlinks(void)
@@ -625,7 +632,8 @@ static void test_nftw_symlinks(void)
 	if (symlink("f1", "tailtree/link") < 0) {
 		printf("SKIP posix-tail nftw symbolic-link tests "
 		       "(symlink() failed, errno=%d; NT needs "
-		       "SeCreateSymbolicLinkPrivilege and Wine's ntdll does not "
+		       "SeCreateSymbolicLinkPrivilege or Developer Mode, and stock Wine "
+		       "below 10.19 does not "
 		       "implement FSCTL_SET_REPARSE_POINT) -- FTW_PHYS's FTW_SL, "
 		       "FTW_SLN and the symlink-following clauses were not "
 		       "exercised\n", errno);

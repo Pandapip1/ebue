@@ -942,6 +942,20 @@ Both are written up in `test/POSIX-COVERAGE.md`'s "Bugs found
   always implements the flag-clear branch; distinguishing the two needs
   a symbolic link, which needs `SeCreateSymbolicLinkPrivilege` and is
   not available on the CI images this suite is the authority on.
+
+> **Correction, added later and NOT applied to the text above.** This
+> document records what particular audits FOUND, on the dates they ran,
+> and is not edited to describe the present — see the note on dated
+> records in `test/POSIX-COVERAGE.md`'s conventions. The passages above
+> attribute the absence of symbolic links to
+> `SeCreateSymbolicLinkPrivilege`. That is right for the real-Windows
+> leg and WRONG for the Wine leg, where the privilege is never
+> consulted at all: stock Wine below 10.19 answers
+> `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED` (0xc00000bb),
+> which `src/internal/errno.c:82-84` renders as `ENOSYS`. The canonical
+> account is `test/posix-unreferenced.c`'s `test_fchmodat_eloop()`
+> fence; whether the privilege is the blocker on genuine Windows
+> without Developer Mode remains UNCERTAIN and untested.
 - **`sync()`'s scheduling.** POSIX permits `sync()` to be undetectable
   by any conforming observation; `fsync()` is the call with a completion
   guarantee, and `test/unistd.c` already covers it.
@@ -1431,6 +1445,20 @@ use the **rc=77 "unverified"** route for a *privilege* rather than a
 network: without `SeCreateSymbolicLinkPrivilege` the dependent groups
 print a `SKIP` naming the mechanism and the run exits 77 rather than
 reporting a pass.
+
+> **Correction, added later and NOT applied to the text above.** This
+> document records what particular audits FOUND, on the dates they ran,
+> and is not edited to describe the present — see the note on dated
+> records in `test/POSIX-COVERAGE.md`'s conventions. The passages above
+> attribute the absence of symbolic links to
+> `SeCreateSymbolicLinkPrivilege`. That is right for the real-Windows
+> leg and WRONG for the Wine leg, where the privilege is never
+> consulted at all: stock Wine below 10.19 answers
+> `FSCTL_SET_REPARSE_POINT` with `STATUS_NOT_SUPPORTED` (0xc00000bb),
+> which `src/internal/errno.c:82-84` renders as `ENOSYS`. The canonical
+> account is `test/posix-unreferenced.c`'s `test_fchmodat_eloop()`
+> fence; whether the privilege is the blocker on genuine Windows
+> without Developer Mode remains UNCERTAIN and untested.
 
 ## Changes since the clause audit of the `unistd.h` row (groups O and Q)
 

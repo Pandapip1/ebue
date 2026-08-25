@@ -569,9 +569,15 @@ static void test_utime_marks_ctime(void)
  * hardcoded 1000, see include/sys/resource.h's PRIO_USER note), so
  * every caller is always the owner with full access; [EROFS] needs a
  * read-only file system, which the test harness has no way to mount;
- * [ELOOP] needs a symbolic-link loop, and creating any symlink at all
- * on NT requires SeCreateSymbolicLinkPrivilege, which the CI accounts
- * do not hold (test/posix-glob.c documents the same limitation). */
+ * [ELOOP] needs a symbolic-link loop, and no symbolic link can be
+ * created in this environment.  ON THE WINE LEG THE PRIVILEGE IS NOT
+ * THE BLOCKER, which this comment used to say it was: stock Wine below
+ * 10.19 answers FSCTL_SET_REPARSE_POINT with STATUS_NOT_SUPPORTED
+ * (0xc00000bb), which src/internal/errno.c:82-84 renders as ENOSYS, and
+ * SeCreateSymbolicLinkPrivilege is never consulted at all.  Whether the
+ * privilege is the blocker on GENUINE Windows without Developer Mode is
+ * UNCERTAIN and untested.  Full account: test/posix-unreferenced.c's test_fchmodat_eloop() fence, which is the
+ * canonical account and is not duplicated here. */
 static void test_utime_errors(void)
 {
 	struct utimbuf ub;

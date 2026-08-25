@@ -14,9 +14,15 @@
  *   https://pubs.opengroup.org/onlinepubs/9699919799/functions/readlink.html
  *   https://pubs.opengroup.org/onlinepubs/9699919799/functions/link.html
  *
- * A symbolic link on NT is a reparse point, and *creating* one needs
- * SeCreateSymbolicLinkPrivilege or Developer Mode
- * (src/unistd/link.c's banner).  Whether this run has that is an
+ * A symbolic link on NT is a reparse point, and one cannot be created
+ * in every environment.  The BLOCKER DIFFERS BY LEG, and this banner
+ * used to name only the privilege: on real NT it is
+ * SeCreateSymbolicLinkPrivilege or Developer Mode (src/unistd/link.c's
+ * banner), but under stock Wine below 10.19 the privilege is never
+ * consulted -- FSCTL_SET_REPARSE_POINT is answered with
+ * STATUS_NOT_SUPPORTED, which surfaces as ENOSYS.  The canonical
+ * account is test/posix-unreferenced.c's test_fchmodat_eloop() fence
+ * and is not duplicated here.  Whether this run can create one is an
  * environment fact, not a code fact, so every clause that needs a
  * symlink to exist first is behind a single probe: symlinkat() is
  * tried once, and if it fails with [EPERM] the dependent groups are
@@ -177,8 +183,9 @@ static void test_symlinkat_creates(void)
 	if (!have_symlinks) {
 		printf("SKIP posix-unistd-links symlinkat creation clauses "
 		       "(symlinkat() cannot create a link here: NT needs "
-		       "SeCreateSymbolicLinkPrivilege or Developer Mode, "
-		       "src/unistd/link.c banner)\n");
+		       "SeCreateSymbolicLinkPrivilege or Developer Mode; stock "
+		       "Wine below 10.19 fails earlier, at "
+		       "FSCTL_SET_REPARSE_POINT)\n");
 		skips++;
 		return;
 	}
@@ -494,7 +501,9 @@ static void test_linkat_remaining(void)
 		 * record this clause as N/A on the grounds that
 		 * distinguishing the branches "needs a symbolic link, which
 		 * needs SeCreateSymbolicLinkPrivilege and is not available
-		 * on the CI images this suite is the authority on".  That is
+		 * on the CI images this suite is the authority on".  (The
+		 * privilege half of that is right only for the real-Windows
+		 * leg; see this file's banner.)  That is
 		 * an accurate statement about the *test environment* and it
 		 * is why this fence sits behind have_symlinks -- but it is
 		 * not a reason to call the clause inapplicable: the defect
@@ -518,7 +527,9 @@ static void test_linkat_remaining(void)
 	} else {
 		printf("SKIP posix-unistd-links linkat AT_SYMLINK_FOLLOW clauses "
 		       "(no symbolic link can be created here: NT needs "
-		       "SeCreateSymbolicLinkPrivilege or Developer Mode)\n");
+		       "SeCreateSymbolicLinkPrivilege or Developer Mode; stock "
+		       "Wine below 10.19 fails earlier, at "
+		       "FSCTL_SET_REPARSE_POINT)\n");
 		skips++;
 	}
 

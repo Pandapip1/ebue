@@ -2728,7 +2728,7 @@ clauses that are simply absent. **One assertion group comes out
 | nftw | "FTW_CHDIR: … If clear, nftw() shall not change the current working directory" | covered | test/posix-tail.c (`test_nftw`) |
 | nftw | "FTW_CHDIR: If set, nftw() shall change the current working directory to each directory as it reports files in that directory" — together with "shall recursively descend the directory hierarchy rooted in path" | **BUG (fenced)** — the severe one; see below | test/posix-tail.c (`test_nftw_chdir`) |
 | nftw | "If FTW_PHYS is clear … nftw() shall follow links instead of reporting them, but shall not report the contents of any directory that would be a descendant of itself" (and the FTW_DEPTH variant) | **BUG (fenced)** | test/posix-tail.c (`test_nftw_symlink_loop`) |
-| nftw, ftw | FTW_PHYS's FTW_SL, FTW_SLN, and link-following | **unverified (rc=77)** — needs a real symbolic link; `symlink()` fails `ENOSYS` under Wine and `EPERM` on real Windows without `SeCreateSymbolicLinkPrivilege`. Probed at run time, one SKIP line naming the mechanism and errno | test/posix-tail.c (`test_nftw_symlinks`) |
+| nftw, ftw | FTW_PHYS's FTW_SL, FTW_SLN, and link-following | **unverified (rc=77)** — needs a real symbolic link; `symlink()` fails `ENOSYS` under Wine and `EPERM` on real Windows without `SeCreateSymbolicLinkPrivilege`. The `ENOSYS` is the correct rendering of `STATUS_NOT_SUPPORTED` (0xc00000bb), which stock Wine below 10.19 answers `FSCTL_SET_REPARSE_POINT` with — `src/internal/errno.c:82-84` maps that status onto `ENOSYS` together with `STATUS_NOT_IMPLEMENTED` and `STATUS_INVALID_DEVICE_REQUEST`, so the errno is not evidence of `NOT_IMPLEMENTED` in particular, and on that leg the privilege is never consulted. Probed at run time, one SKIP line naming the mechanism and errno | test/posix-tail.c (`test_nftw_symlinks`) |
 | ftw, nftw | FTW_DNR (an unreadable directory), FTW_NS (an unstattable object), `[EACCES]`, `[ELOOP]`, `[ENAMETOOLONG]`, `[EOVERFLOW]`, `[EMFILE]`/`[ENFILE]` | N/A — the same permission-model limit `glob()`'s `GLOB_ERR` row already records: `chmod 0` does not revoke owner access on this platform, so a directory that cannot be read or an object that cannot be stat'd cannot be built | — |
 | ftw | *may fail* "[EINVAL] The value of the ndirs argument is invalid" | N/A — *may* fail; ntlibc does not validate `ndirs` and is conforming not to | — |
 | posix_fadvise | DESCRIPTION: every advice value is advisory and "shall have no effect on the semantics of other operations" (asserted by reading the file back after `POSIX_FADV_DONTNEED`); "The specified range need not currently exist in the file"; "If len is zero, all data following offset is specified"; RETURN VALUE returns the error number, not `-1`/`errno` | covered — all six `POSIX_FADV_*` values | test/posix-tail.c (`test_posix_fadvise`) |
@@ -3436,8 +3436,14 @@ assertions of any kind — `test/posix-glob.c` merely *calls* it while
 building a fixture.
 
 **Environment gate, and the third outcome.** A symbolic link on NT is
-a reparse point and creating one needs `SeCreateSymbolicLinkPrivilege`
-or Developer Mode (`src/unistd/link.c`'s banner). Every clause needing
+a reparse point, and one cannot be created in every environment — but
+the blocker differs by leg, and this paragraph used to name only the
+privilege. On real NT it is `SeCreateSymbolicLinkPrivilege` or
+Developer Mode (`src/unistd/link.c`'s banner); under stock Wine below
+10.19 the privilege is never consulted, because
+`FSCTL_SET_REPARSE_POINT` is answered with `STATUS_NOT_SUPPORTED`.
+The canonical account is `test/posix-unreferenced.c`'s
+`test_fchmodat_eloop()` fence. Every clause needing
 a link to exist first sits behind one trial `symlinkat()`; if that
 fails, those groups print a `SKIP` line naming the mechanism and the
 observed errno and the process exits **77 (unverified)** —
@@ -3517,8 +3523,11 @@ underneath.
    clause as N/A because distinguishing the branches "needs a symbolic
    link, which needs `SeCreateSymbolicLinkPrivilege` and is not
    available on the CI images this suite is the authority on". That is
-   an accurate statement about the *test environment*, and it is why
-   the fence sits behind the privilege probe — but it is not a reason
+   an accurate statement about the *test environment* — though the
+   privilege half of it holds only for the real-Windows leg; on the
+   Wine leg the blocker is an unimplemented `FSCTL_SET_REPARSE_POINT`
+   — and it is why
+   the fence sits behind the symlink probe, but it is not a reason
    to call the clause inapplicable. The defect is visible in the source
    without running anything, and it is reachable in any environment
    that can create a symbolic link at all. N/A is for "a real NT
@@ -3527,9 +3536,12 @@ underneath.
 
 ### Not reached (unistd.h `*at()` link group)
 
-Everything marked *(needs the privilege)* above, in an environment
-without `SeCreateSymbolicLinkPrivilege` or Developer Mode — reported as
-`SKIP` plus rc=77, not as a pass. Also: `[EMLINK]`, `[EXDEV]`, and
+Everything marked *(needs the privilege)* above, in any environment
+that cannot create a symbolic link — on real Windows for want of
+`SeCreateSymbolicLinkPrivilege` or Developer Mode, on stock Wine below
+10.19 because `FSCTL_SET_REPARSE_POINT` is unimplemented there and the
+privilege is never reached. Reported as `SKIP` plus rc=77, not as a
+pass. Also: `[EMLINK]`, `[EXDEV]`, and
 every clause needing a second security principal, a read-only mount, a
 full filesystem or a symbolic-link cycle.
 

@@ -937,9 +937,12 @@ static void test_fpathconf(void)
  * that is not a symbolic link."  [ENOENT]: "A component of path does not
  * name an existing file or path is an empty string."
  *
- * Symbolic links need SeCreateSymbolicLinkPrivilege or developer mode
- * (see src/unistd/link.c's banner), so the success half is conditional
- * on symlink() working; the error half is not, and runs everywhere.
+ * No symbolic link can be created in this environment, so the success
+ * half is conditional on symlink() working; the error half is not, and
+ * runs everywhere.  The blocker differs by leg -- under stock Wine below
+ * 10.19 it is an unimplemented FSCTL_SET_REPARSE_POINT, not
+ * SeCreateSymbolicLinkPrivilege; see test/posix-unreferenced.c's test_fchmodat_eloop() fence, which is the
+ * canonical account and is not duplicated here.
  * Filesystem behaviour throughout -- real-Windows CI is the authority. */
 static void test_readlink(void)
 {
@@ -1591,9 +1594,10 @@ static void test_linkat(void)
 	 * and ignores flags outright, so it always implements the
 	 * flag-clear behaviour ("a new link is created for the symbolic
 	 * link path1 and not its target").  Distinguishing the two needs a
-	 * symbolic link to exist in the first place, which needs
-	 * SeCreateSymbolicLinkPrivilege or developer mode and is not
-	 * available on the CI images this suite is the authority on -- so
+	 * symbolic link to exist in the first place, which cannot be created
+	 * in this environment (the blocker differs by leg -- see the fence
+	 * named above; on the Wine leg it is an unimplemented
+	 * FSCTL_SET_REPARSE_POINT rather than a privilege) -- so
 	 * the clause cannot be exercised here either way, and asserting the
 	 * flag-clear branch alone would claim coverage this test does not
 	 * have.  The [EINVAL] for an invalid flag value is the same
