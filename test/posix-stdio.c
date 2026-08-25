@@ -85,6 +85,64 @@ static void test_fflush_read_stream(const char *name)
 	}
 }
 
+#if 0	/* BUG: fflush() fails on a readable stream whose fd cannot seek.
+	 * fflush.html DESCRIPTION states the read-stream action with an
+	 * explicit seekability condition: "For a stream open for reading
+	 * with an underlying file description, if the file is not already
+	 * at EOF, and the file is one capable of seeking, the file offset
+	 * of the underlying open file description shall be set to the file
+	 * position of the stream, and any characters pushed back onto the
+	 * stream by ungetc() or ungetwc() that have not subsequently been
+	 * read from the stream shall be discarded (without further changing
+	 * the file offset)."  A pipe, FIFO or console is not capable of
+	 * seeking, so there is no offset to move and nothing has failed --
+	 * which leaves only RETURN VALUE's success arm: "Upon successful
+	 * completion, fflush() shall return 0; otherwise, it shall set the
+	 * error indicator for the stream, return EOF, and set errno to
+	 * indicate the error."
+	 *
+	 * Mechanism: src/stdio/buf.c's __fflush_locked() exempts memory
+	 * streams from the resync and nothing else -- `if (ahead &&
+	 * !f->is_mem)`.  A pipe-backed stream with read-ahead therefore
+	 * still calls __file_seek(), which reaches src/unistd/lseek.c:18,
+	 * `if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }`.
+	 * __fflush_locked() then latches f->err and returns -1, so fflush()
+	 * returns EOF on a stream where nothing was wrong, ferror() reports
+	 * an error that never happened, and fclose() -- which returns
+	 * fflush()'s result (src/stdio/file.c:150) -- reports EOF for a
+	 * stream that closed perfectly well.
+	 *
+	 * The condition to test is seekability, not is_mem: the fix is to
+	 * treat an ESPIPE from the resync seek as "nothing to resync"
+	 * rather than as a failure, the way the read-ahead distance is
+	 * already ignored for a memory stream.  This is source-derived --
+	 * it is ntlibc's own lseek() refusing a non-__FD_FILE fd, not an
+	 * emulator artefact -- so it holds on Wine and on real NT alike.
+	 * Re-enable when fflush() stops failing here. */
+static void test_fflush_nonseekable_read_stream(void)
+{
+	int fds[2];
+	FILE *f;
+
+	CHECK(pipe(fds) == 0);
+	CHECK(write(fds[1], "abcdefgh", 8) == 8);
+	CHECK(close(fds[1]) == 0);
+
+	f = fdopen(fds[0], "rb");
+	CHECK(f != 0);
+	if (!f) { close(fds[0]); return; }
+
+	/* One byte consumed, seven sitting in the buffer: the read-ahead
+	 * distance __fflush_locked() would try to seek back over. */
+	CHECK(fgetc(f) == 'a');
+
+	CHECK(fflush(f) == 0);		/* not seekable: nothing to resync */
+	CHECK(ferror(f) == 0);		/* and so nothing to report */
+	CHECK(fgetc(f) == 'b');		/* the stream is left undisturbed */
+	CHECK(fclose(f) == 0);
+}
+#endif
+
 /* fopen.html DESCRIPTION: on a stream open for update ("+"), "output is
  * not directly followed by input without an intervening call to
  * fflush() or to a file positioning function..., and input is not
@@ -275,6 +333,75 @@ static void capture_stderr(void (*fn)(void), char *out, size_t outsz)
 static void perror_prefixed(void) { errno = ENOENT; perror("myprefix"); }
 static void perror_noprefix_null(void) { errno = EACCES; perror(0); }
 static void perror_noprefix_empty(void) { errno = EACCES; perror(""); }
+
+#if 0	/* BUG: fflush(NULL) does not flush stderr, because stderr is not
+	 * on the list it walks.  fflush.html DESCRIPTION: "If stream is a
+	 * null pointer, fflush() shall perform this flushing action on all
+	 * streams for which the behavior is defined above."  stderr is such
+	 * a stream: it is open for writing with an underlying file
+	 * description, which is exactly the case the paragraph above it
+	 * defines.
+	 *
+	 * Mechanism: src/stdio/file.c gives the three standard streams as
+	 * file-scope statics (stdin_f/stdout_f/stderr_f) with no ->next,
+	 * and only __file_new() ever pushes a FILE onto the __stdio_files
+	 * list -- so none of the three is ever on it.  src/stdio/buf.c's
+	 * fflush(NULL) walks that list plus stdout, by name, and nothing
+	 * else:
+	 *
+	 *     if (__fflush_locked(stdout) < 0) r = EOF;
+	 *     for (p = __stdio_files; p; p = p->next) ...
+	 *
+	 * stderr and stdin are simply missing.  That the omission is an
+	 * oversight rather than a decision is visible two files away:
+	 * __stdio_exit() flushes stdout AND stderr before walking the same
+	 * list, because whoever wrote it knew the list does not contain
+	 * them.
+	 *
+	 * stderr is unbuffered by default here (bufmode = _IONBF), so
+	 * nothing is normally pending on it and the gap stays invisible --
+	 * until a caller does what POSIX explicitly permits and gives
+	 * stderr a buffer with setvbuf().  Then output that fflush(NULL)
+	 * was told to push out sits in the buffer instead.
+	 *
+	 * The same omission has a second, input-side face: fflush(NULL)
+	 * does not apply the read-stream action to stdin either, so an
+	 * outstanding ungetc() pushback on a seekable stdin survives a call
+	 * that POSIX says discards it.  Only the stderr half is asserted
+	 * below, because it needs no assumption about what stdin is
+	 * connected to when the suite runs.
+	 *
+	 * Re-enable when fflush(NULL) covers all three standard streams. */
+static void test_fflush_null_covers_stderr(void)
+{
+	static char ebuf[BUFSIZ];
+	char got[64];
+	int p[2], saved;
+	ssize_t n;
+
+	CHECK(pipe(p) == 0);
+	saved = dup(2);
+	CHECK(saved >= 0);
+	CHECK(dup2(p[1], 2) == 2);
+	close(p[1]);
+
+	/* POSIX lets a caller buffer stderr; "the standard error stream
+	 * ... shall not be fully buffered" only constrains the default. */
+	CHECK(setvbuf(stderr, ebuf, _IOLBF, sizeof ebuf) == 0);
+	CHECK(fputs("hello", stderr) >= 0);	/* no newline: still buffered */
+
+	CHECK(fflush(NULL) == 0);		/* must reach fd 2 now */
+
+	dup2(saved, 2);
+	close(saved);
+	setvbuf(stderr, 0, _IONBF, 0);		/* put stderr back */
+
+	n = read(p[0], got, sizeof got - 1);
+	close(p[0]);
+	got[n > 0 ? n : 0] = 0;
+	CHECK(n == 5 && !strcmp(got, "hello"));
+}
+#endif
 
 static void test_perror(void)
 {
@@ -760,6 +887,62 @@ static void test_getc_unlocked(const char *name)
  * Filesystem-adjacent (it names a path under the temp directory and
  * src/stdio/misc.c reaches mkstemp() to pick one), so real-Windows CI
  * is the authority; Wine agreeing is weak evidence. */
+#if 0	/* BUG: tmpnam() hands back the name of a file it has just
+	 * created.  tmpnam.html DESCRIPTION: "The tmpnam() function shall
+	 * generate a string that is a valid pathname that does not name an
+	 * existing file."  The whole point of the guarantee is that the
+	 * caller can go on to create the file -- typically with
+	 * O_CREAT|O_EXCL, which is the only safe way to use a name this
+	 * function produces.
+	 *
+	 * Mechanism: src/stdio/misc.c's tmpnam() calls mkstemp() on a
+	 * "tmpnam_XXXXXX" template, closes the fd, and returns the name.
+	 * mkstemp() *creates* the file, and unlike its neighbour tempnam()
+	 * three functions further down -- which does `close(fd);
+	 * unlink(tmpl);` for exactly this reason -- tmpnam() never unlinks
+	 * it.  Two consequences: an O_CREAT|O_EXCL create on the returned
+	 * name fails with [EEXIST], and every call leaves a zero-byte
+	 * tmpnam_* file in the current working directory.
+	 *
+	 * The existing coverage shows it inadvertently: test/stdio.c's
+	 * tmpnam case does `nm = tmpnam(0); CHECK(remove(nm) == 0);` on a
+	 * name nothing ever opened, and that remove() succeeds -- it can
+	 * only succeed because tmpnam() left a file there.  The row in
+	 * test/POSIX-COVERAGE.md covers uniqueness, L_tmpnam sizing and
+	 * removed-on-close, not this clause.
+	 *
+	 * The fix is tempnam()'s: unlink after close.  (Keeping the
+	 * mkstemp() call is what keeps successive names distinct, which is
+	 * the reason the current code creates at all, so the fix does not
+	 * cost that.)  Re-enable when tmpnam() stops leaving the file
+	 * behind. */
+static void test_tmpnam_does_not_create(void)
+{
+	char buf[L_tmpnam];
+	char *a, *b;
+	struct stat st;
+	int fd;
+
+	a = tmpnam(buf);
+	CHECK(a == buf);
+	if (!a) return;
+
+	/* "a valid pathname that does not name an existing file" */
+	CHECK(stat(a, &st) == -1);
+
+	/* which is what makes the documented use -- an exclusive create on
+	 * the returned name -- work rather than collide with itself. */
+	fd = open(a, O_CREAT | O_EXCL | O_WRONLY, 0600);
+	CHECK(fd >= 0);
+	if (fd >= 0) { CHECK(close(fd) == 0); CHECK(remove(a) == 0); }
+
+	/* and the internal-buffer form must behave the same way */
+	b = tmpnam(NULL);
+	CHECK(b != 0);
+	if (b) CHECK(stat(b, &st) == -1);
+}
+#endif
+
 static void test_tempnam(void)
 {
 	char *a, *b;
