@@ -1543,6 +1543,335 @@ static void test_linkat(void)
 	 * recorded there rather than duplicated here. */
 }
 
+/* ==================================================================
+ * <unistd.h> header content -- the symbolic constants POSIX requires
+ * this header to define.  Audit group U (XBD header contents); see
+ * test/POSIX-COVERAGE.md "XBD header contents (group U)".
+ *
+ * These five fences are the largest single gap group U found, and the
+ * one that bears most directly on what this libc exists for: autoconf
+ * and gnulib probe _PC_NAME_MAX, _SC_SYMLOOP_MAX, _SC_IOV_MAX and
+ * _SC_GETPW_R_SIZE_MAX as a matter of routine, and coreutils' stty
+ * needs _POSIX_VDISABLE.
+ * ================================================================== */
+
+#if 0 /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
+	define the following symbolic constants for sysconf():", followed
+	by a list of 125 _SC_* names.  The sentence is unconditional: no
+	option-group margin marker guards the list, and an implementation
+	that does not support an option still has to define that option's
+	_SC_ name so sysconf() has something to answer -1 about.  ntlibc
+	defines 15 of the 125; the other 110 are absent from include/
+	altogether (triage: ABSENT).  Nothing records this --
+	test/POSIX-GAP-ACCOUNTING.md enumerates the 1177 function
+	interfaces and a symbolic constant is not one of them, and
+	include/unistd.h's banner does not mention the omission.
+
+	ACCEPTANCE CRITERION, which for this list is BOTH halves and not
+	just the #define: sysconf.html specifies "[EINVAL] The value of
+	the name argument is invalid" for an *invalid* name, and every
+	name on this list is valid by definition of being on it.  So a
+	definition alone would move the failure rather than remove it --
+	src/unistd/sysconf.c's `default: errno = EINVAL; return -1` would
+	then answer "that name does not exist" for a name <unistd.h>
+	itself mandates, and a caller cannot distinguish that from a real
+	rejection.  That is the "declared but unimplemented" trap in its
+	exact form: the symbol appears, the consumer's configure test
+	passes, and the consumer stands down its own replacement.  Where
+	an option genuinely is unsupported the truthful answer is -1 with
+	errno UNCHANGED, which sysconf.html permits ("If the variable
+	corresponding to name has no limit ... sysconf() shall return -1
+	without changing errno"), and which the assertion below accepts.
+
+	Observed today: fails to COMPILE, "'_SC_2_CHAR_TERM' undeclared"
+	(verified by un-fencing and building with x86_64-win32-tcc; a
+	compile-time failure, so no Wine-vs-real-NT uncertainty). */
+static void test_unistd_sysconf_names(void)
+{
+	static const int names[] = {
+		_SC_2_CHAR_TERM, _SC_2_C_BIND, _SC_2_C_DEV, _SC_2_FORT_DEV,
+		_SC_2_FORT_RUN, _SC_2_LOCALEDEF, _SC_2_PBS, _SC_2_PBS_ACCOUNTING,
+		_SC_2_PBS_CHECKPOINT, _SC_2_PBS_LOCATE, _SC_2_PBS_MESSAGE,
+		_SC_2_PBS_TRACK, _SC_2_SW_DEV, _SC_2_UPE, _SC_2_VERSION,
+		_SC_ADVISORY_INFO, _SC_AIO_LISTIO_MAX, _SC_AIO_MAX,
+		_SC_AIO_PRIO_DELTA_MAX, _SC_ARG_MAX, _SC_ASYNCHRONOUS_IO,
+		_SC_ATEXIT_MAX, _SC_BARRIERS, _SC_BC_BASE_MAX, _SC_BC_DIM_MAX,
+		_SC_BC_SCALE_MAX, _SC_BC_STRING_MAX, _SC_CHILD_MAX, _SC_CLK_TCK,
+		_SC_CLOCK_SELECTION, _SC_COLL_WEIGHTS_MAX, _SC_CPUTIME,
+		_SC_DELAYTIMER_MAX, _SC_EXPR_NEST_MAX, _SC_FSYNC, _SC_GETGR_R_SIZE_MAX,
+		_SC_GETPW_R_SIZE_MAX, _SC_HOST_NAME_MAX, _SC_IOV_MAX, _SC_IPV6,
+		_SC_JOB_CONTROL, _SC_LINE_MAX, _SC_LOGIN_NAME_MAX, _SC_MAPPED_FILES,
+		_SC_MEMLOCK, _SC_MEMLOCK_RANGE, _SC_MEMORY_PROTECTION,
+		_SC_MESSAGE_PASSING, _SC_MONOTONIC_CLOCK, _SC_MQ_OPEN_MAX,
+		_SC_MQ_PRIO_MAX, _SC_NGROUPS_MAX, _SC_OPEN_MAX, _SC_PAGESIZE,
+		_SC_PAGE_SIZE, _SC_PRIORITIZED_IO, _SC_PRIORITY_SCHEDULING,
+		_SC_RAW_SOCKETS, _SC_READER_WRITER_LOCKS, _SC_REALTIME_SIGNALS,
+		_SC_REGEXP, _SC_RE_DUP_MAX, _SC_RTSIG_MAX, _SC_SAVED_IDS,
+		_SC_SEMAPHORES, _SC_SEM_NSEMS_MAX, _SC_SEM_VALUE_MAX,
+		_SC_SHARED_MEMORY_OBJECTS, _SC_SHELL, _SC_SIGQUEUE_MAX, _SC_SPAWN,
+		_SC_SPIN_LOCKS, _SC_SPORADIC_SERVER, _SC_SS_REPL_MAX, _SC_STREAM_MAX,
+		_SC_SYMLOOP_MAX, _SC_SYNCHRONIZED_IO, _SC_THREADS,
+		_SC_THREAD_ATTR_STACKADDR, _SC_THREAD_ATTR_STACKSIZE,
+		_SC_THREAD_CPUTIME, _SC_THREAD_DESTRUCTOR_ITERATIONS,
+		_SC_THREAD_KEYS_MAX, _SC_THREAD_PRIORITY_SCHEDULING,
+		_SC_THREAD_PRIO_INHERIT, _SC_THREAD_PRIO_PROTECT,
+		_SC_THREAD_PROCESS_SHARED, _SC_THREAD_ROBUST_PRIO_INHERIT,
+		_SC_THREAD_ROBUST_PRIO_PROTECT, _SC_THREAD_SAFE_FUNCTIONS,
+		_SC_THREAD_SPORADIC_SERVER, _SC_THREAD_STACK_MIN,
+		_SC_THREAD_THREADS_MAX, _SC_TIMEOUTS, _SC_TIMERS, _SC_TIMER_MAX,
+		_SC_TRACE, _SC_TRACE_EVENT_FILTER, _SC_TRACE_EVENT_NAME_MAX,
+		_SC_TRACE_INHERIT, _SC_TRACE_LOG, _SC_TRACE_NAME_MAX,
+		_SC_TRACE_SYS_MAX, _SC_TRACE_USER_EVENT_MAX, _SC_TTY_NAME_MAX,
+		_SC_TYPED_MEMORY_OBJECTS, _SC_TZNAME_MAX, _SC_V6_ILP32_OFF32,
+		_SC_V6_ILP32_OFFBIG, _SC_V6_LP64_OFF64, _SC_V6_LPBIG_OFFBIG,
+		_SC_V7_ILP32_OFF32, _SC_V7_ILP32_OFFBIG, _SC_V7_LP64_OFF64,
+		_SC_V7_LPBIG_OFFBIG, _SC_VERSION, _SC_XOPEN_CRYPT, _SC_XOPEN_ENH_I18N,
+		_SC_XOPEN_REALTIME, _SC_XOPEN_REALTIME_THREADS, _SC_XOPEN_SHM,
+		_SC_XOPEN_STREAMS, _SC_XOPEN_UNIX, _SC_XOPEN_UUCP, _SC_XOPEN_VERSION,
+	};
+	size_t i, j;
+
+	/* Selectors for a switch must be distinct to be usable at all. */
+	for (i = 0; i < sizeof names / sizeof names[0]; i++)
+		for (j = i + 1; j < sizeof names / sizeof names[0]; j++)
+			CHECK(names[i] != names[j]);
+
+	/* A mandated name is never an invalid name.  -1 is a legitimate
+	 * answer ("no limit", or "option not supported"), but only with
+	 * errno left alone. */
+	for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+		long v;
+		errno = 0;
+		v = sysconf(names[i]);
+		CHECK(!(v == -1 && errno == EINVAL));
+	}
+}
+#endif
+
+#if 0 /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
+	define the following symbolic constants for pathconf():", followed
+	by a list of 21 _PC_* names.  Unconditional, same as the sysconf
+	list.  ntlibc defines 9; _PC_2_SYMLINKS, _PC_ALLOC_SIZE_MIN,
+	_PC_ASYNC_IO, _PC_FILESIZEBITS, _PC_PRIO_IO, _PC_REC_INCR_XFER_SIZE,
+	_PC_REC_MAX_XFER_SIZE, _PC_REC_MIN_XFER_SIZE, _PC_REC_XFER_ALIGN,
+	_PC_SYMLINK_MAX, _PC_SYNC_IO and _PC_TIMESTAMP_RESOLUTION are
+	absent (triage: ABSENT).  gnulib and autoconf probe
+	_PC_NAME_MAX/_PC_PATH_MAX (both present) but also _PC_SYMLINK_MAX,
+	and a pathname-length-aware consumer that asks for
+	_PC_FILESIZEBITS gets a compile error rather than an answer.
+
+	ACCEPTANCE CRITERION: the definitions, plus the pathconf()/
+	fpathconf() agreement the nine present names already hold to in
+	test_fpathconf() above.  Unlike the _SC_ list this one does NOT
+	require every name to be answerable: fpathconf.html makes
+	"[EINVAL] The implementation does not support an association of
+	the variable name with the specified file" a *may fail*, so
+	rejecting, say, _PC_PRIO_IO for a regular file is conforming --
+	what is not conforming is the name not existing.  The assertion
+	below is written to that boundary: whatever pathconf() decides, it
+	must decide the SAME thing through both entry points.
+
+	Observed today: fails to COMPILE, "'_PC_2_SYMLINKS' undeclared". */
+static void test_unistd_pathconf_names(void)
+{
+	static const int names[] = {
+		_PC_2_SYMLINKS, _PC_ALLOC_SIZE_MIN, _PC_ASYNC_IO, _PC_CHOWN_RESTRICTED,
+		_PC_FILESIZEBITS, _PC_LINK_MAX, _PC_MAX_CANON, _PC_MAX_INPUT,
+		_PC_NAME_MAX, _PC_NO_TRUNC, _PC_PATH_MAX, _PC_PIPE_BUF, _PC_PRIO_IO,
+		_PC_REC_INCR_XFER_SIZE, _PC_REC_MAX_XFER_SIZE, _PC_REC_MIN_XFER_SIZE,
+		_PC_REC_XFER_ALIGN, _PC_SYMLINK_MAX, _PC_SYNC_IO,
+		_PC_TIMESTAMP_RESOLUTION, _PC_VDISABLE,
+	};
+	size_t i, j;
+	int fd;
+
+	for (i = 0; i < sizeof names / sizeof names[0]; i++)
+		for (j = i + 1; j < sizeof names / sizeof names[0]; j++)
+			CHECK(names[i] != names[j]);
+
+	fd = open("upc.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+		long a, b;
+		int ea, eb;
+		errno = 0;
+		a = pathconf("upc.txt", names[i]);
+		ea = errno;
+		errno = 0;
+		b = fpathconf(fd, names[i]);
+		eb = errno;
+		CHECK(a == b);
+		CHECK(ea == eb);
+	}
+	CHECK(close(fd) == 0);
+	CHECK(unlink("upc.txt") == 0);
+}
+#endif
+
+#if 0 /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
+	define the following symbolic constants for the confstr()
+	function:", followed by a list of 31 _CS_* names.  ntlibc defines
+	exactly one of them, _CS_PATH; the other 30 -- the
+	_CS_POSIX_V6_ and _CS_POSIX_V7_ programming-model CFLAGS/LDFLAGS/LIBS
+	triples, _CS_POSIX_V7_THREADS_*, the two _CS_*_WIDTH_RESTRICTED_ENVS
+	and _CS_V6_ENV/_CS_V7_ENV -- are absent (triage: ABSENT).  These
+	are what a `getconf`-driven build system asks for when it wants the
+	compiler flags for a programming model, which is precisely the
+	bootstrap situation this libc is a target of.
+
+	ACCEPTANCE CRITERION, deliberately narrow: THE DEFINITIONS ONLY.
+	This fence claims nothing about what confstr() should return for
+	them, and that restraint is not tidiness -- confstr()'s answers are
+	entangled with an already-fenced BUG (see this file's test_confstr
+	and POSIX-COVERAGE.md's "confstr() reports success for an invalid
+	name": an unrecognized name returns 1 with errno untouched instead
+	of 0 with [EINVAL]).  While that stands there is no assertion that
+	can tell "recognized, empty value" from "unrecognized", so any
+	claim about the values would be built on another agent's open
+	defect.  When that BUG is fixed, the natural follow-on is that
+	confstr() must not report these 30 as invalid; that is a separate
+	fence for whoever fixes it, not this one.  Do not read an
+	un-fencing of this test as acceptance that confstr() answers them.
+
+	Observed today: fails to COMPILE, "'_CS_POSIX_V6_ILP32_OFF32_CFLAGS'
+	undeclared". */
+static void test_unistd_confstr_names(void)
+{
+	static const int names[] = {
+		_CS_PATH,
+		_CS_PATH, _CS_POSIX_V6_ILP32_OFF32_CFLAGS,
+		_CS_POSIX_V6_ILP32_OFF32_LDFLAGS, _CS_POSIX_V6_ILP32_OFF32_LIBS,
+		_CS_POSIX_V6_ILP32_OFFBIG_CFLAGS, _CS_POSIX_V6_ILP32_OFFBIG_LDFLAGS,
+		_CS_POSIX_V6_ILP32_OFFBIG_LIBS, _CS_POSIX_V6_LP64_OFF64_CFLAGS,
+		_CS_POSIX_V6_LP64_OFF64_LDFLAGS, _CS_POSIX_V6_LP64_OFF64_LIBS,
+		_CS_POSIX_V6_LPBIG_OFFBIG_CFLAGS, _CS_POSIX_V6_LPBIG_OFFBIG_LDFLAGS,
+		_CS_POSIX_V6_LPBIG_OFFBIG_LIBS, _CS_POSIX_V6_WIDTH_RESTRICTED_ENVS,
+		_CS_POSIX_V7_ILP32_OFF32_CFLAGS, _CS_POSIX_V7_ILP32_OFF32_LDFLAGS,
+		_CS_POSIX_V7_ILP32_OFF32_LIBS, _CS_POSIX_V7_ILP32_OFFBIG_CFLAGS,
+		_CS_POSIX_V7_ILP32_OFFBIG_LDFLAGS, _CS_POSIX_V7_ILP32_OFFBIG_LIBS,
+		_CS_POSIX_V7_LP64_OFF64_CFLAGS, _CS_POSIX_V7_LP64_OFF64_LDFLAGS,
+		_CS_POSIX_V7_LP64_OFF64_LIBS, _CS_POSIX_V7_LPBIG_OFFBIG_CFLAGS,
+		_CS_POSIX_V7_LPBIG_OFFBIG_LDFLAGS, _CS_POSIX_V7_LPBIG_OFFBIG_LIBS,
+		_CS_POSIX_V7_THREADS_CFLAGS, _CS_POSIX_V7_THREADS_LDFLAGS,
+		_CS_POSIX_V7_WIDTH_RESTRICTED_ENVS, _CS_V6_ENV, _CS_V7_ENV,
+	};
+	size_t i, j;
+
+	for (i = 0; i < sizeof names / sizeof names[0]; i++)
+		for (j = i + 1; j < sizeof names / sizeof names[0]; j++)
+			CHECK(names[i] != names[j]);
+
+	/* "suitable for use in #if preprocessing directives" is not
+	 * claimed for _CS_ names by the standard, so the only structural
+	 * property to assert is that each is an integer constant
+	 * expression usable as a confstr() selector, which the array
+	 * initialiser above already forces. */
+	CHECK(sizeof names / sizeof names[0] == 31);
+}
+#endif
+
+#if 0 /* UNIMPL: unistd.h.html "Constants for Options and Option Groups"
+	gives thirteen constants the wording "This symbol shall always be
+	set to the value 200809L" -- _POSIX_ASYNCHRONOUS_IO,
+	_POSIX_BARRIERS, _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES,
+	_POSIX_MEMORY_PROTECTION, _POSIX_READER_WRITER_LOCKS,
+	_POSIX_REALTIME_SIGNALS, _POSIX_SEMAPHORES, _POSIX_SPIN_LOCKS,
+	_POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS, _POSIX_TIMEOUTS and
+	_POSIX_TIMERS.  "Always" is the operative word: unlike every other
+	entry in that section, which the same page introduces with "The
+	following symbolic constants, IF DEFINED in <unistd.h>, shall have
+	a value of -1, 0, or greater", these thirteen are not optional to
+	define.  ntlibc defines none of the thirteen, and no _POSIX_* or
+	_XOPEN_* option constant at all beyond _POSIX_VERSION and
+	_POSIX2_VERSION.  Triage: ABSENT.
+
+	THIS FENCE'S ACCEPTANCE CRITERION IS NOT "ADD A #define", and that
+	is why it is a clause of its own rather than part of the _SC_/_PC_/
+	_CS_ fences above.  The value 200809L is a compile-time PROMISE to
+	the application that the option is present -- that is the entire
+	purpose of a constant an application may test with #if.  Seven of
+	the thirteen are thread-related and the pthread family is a
+	recorded absence (test/POSIX-GAP-ACCOUNTING.md); defining
+	_POSIX_THREADS as 200809L with no threads behind it would be a
+	false claim, and strictly worse than the omission, because an
+	application that believes it cannot be corrected at runtime.  So
+	the gap here is the OPTION, not the constant, and closing it means
+	implementing the option.  What the omission costs today is
+	smaller but real and previously unrecorded: an application asking
+	"#ifdef _POSIX_TIMERS" gets the same silence from a libc that has
+	clock_gettime()/clock_nanosleep() as from one that has nothing.
+
+	Observed today: fails to COMPILE, "'_POSIX_ASYNCHRONOUS_IO'
+	undeclared". */
+static void test_unistd_mandatory_option_constants(void)
+{
+	static const long always[] = {
+		_POSIX_ASYNCHRONOUS_IO, _POSIX_BARRIERS, _POSIX_CLOCK_SELECTION,
+		_POSIX_MAPPED_FILES, _POSIX_MEMORY_PROTECTION,
+		_POSIX_READER_WRITER_LOCKS, _POSIX_REALTIME_SIGNALS, _POSIX_SEMAPHORES,
+		_POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS,
+		_POSIX_TIMEOUTS, _POSIX_TIMERS,
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof always / sizeof always[0]; i++)
+		CHECK(always[i] == 200809L);
+
+	/* "The values shall be suitable for use in #if preprocessing
+	 * directives" -- the property that makes the promise usable. */
+#if defined(_POSIX_THREADS) && _POSIX_THREADS >= 200809L
+	CHECK(1);
+#else
+	CHECK(0);
+#endif
+}
+#endif
+
+#if 0 /* UNIMPL: unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE
+	This symbol shall be defined to be the value of a character that
+	shall disable terminal special character handling as described in
+	Special Control Characters.  This symbol shall always be set to a
+	value other than -1."  Mandatory in its own right -- it is not in
+	the options section at all, and carries no option-group marker.
+	ntlibc does not define it anywhere in include/ (triage: ABSENT),
+	even though it already answers pathconf(_PC_VDISABLE) with 0
+	(src/unistd/sysconf.c) and <termios.h> is implemented and audited
+	(group A).  So the value this constant would have to carry already
+	exists inside the library; only the constant naming it is missing.
+
+	Consumer impact, and the reason this one is called out separately
+	from the option constants above: coreutils' stty reads
+	_POSIX_VDISABLE to print and set "undef" for a special character,
+	and it is used at compile time, so its absence is a build failure
+	rather than a degraded answer.
+
+	ACCEPTANCE CRITERION: the definition, agreeing with what
+	pathconf(_PC_VDISABLE) already reports -- POSIX has the two name
+	the same thing, so a definition that disagreed with the running
+	answer would be a new defect rather than a fix.
+
+	Observed today: fails to COMPILE, "'_POSIX_VDISABLE' undeclared". */
+static void test_unistd_posix_vdisable(void)
+{
+	/* "shall always be set to a value other than -1" */
+	CHECK(_POSIX_VDISABLE != -1);
+
+	/* pathconf.html: _PC_VDISABLE is "the value of the character that
+	 * disables terminal special characters" for the file -- the same
+	 * character this constant names. */
+	errno = 0;
+	CHECK(pathconf(".", _PC_VDISABLE) == _POSIX_VDISABLE);
+	CHECK(errno == 0);
+
+	/* Usable at compile time, which is how stty uses it. */
+#if defined(_POSIX_VDISABLE) && _POSIX_VDISABLE != -1
+	CHECK(1);
+#else
+	CHECK(0);
+#endif
+}
+#endif
+
 int main(void)
 {
 	char tmpl[] = "posixunistd-XXXXXX";
