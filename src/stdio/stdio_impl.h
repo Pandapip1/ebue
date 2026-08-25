@@ -112,6 +112,7 @@ extern FILE *__stdio_files;
 /* The core formatter/parser every printf/scanf variant calls into. */
 int __vfprintf(FILE *f, const char *fmt, va_list ap);
 int __vfscanf(FILE *f, const char *fmt, va_list ap);
+int __vfwprintf(FILE *f, const wchar_t *fmt, va_list ap);
 int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap);
 
 /* The magnitude of a signed value that might be LLONG_MIN, whose

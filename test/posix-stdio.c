@@ -20,6 +20,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <wchar.h>
 #include <signal.h>
 
 static int fails;
@@ -1084,6 +1085,140 @@ static void test_snprintf_eoverflow(void)
  * Found by musl's libc-test (printf-fmt-n), not by this file's own
  * clause audit, which read these pages closely enough to fence the
  * <apostrophe> flag and [EOVERFLOW] and walked past this. */
+/* fprintf.html, the c and s conversions:
+ *
+ *   c  "If an l (ell) qualifier is present, the wint_t argument shall
+ *       be converted as if by an ls conversion specification with no
+ *       precision and an argument that points to a two-element array of
+ *       type wchar_t, the first element containing the wint_t argument
+ *       ... and the second a null wide character."
+ *
+ *   s  "If an l (ell) qualifier is present, the argument shall be a
+ *       pointer to an array of type wchar_t.  Wide characters from the
+ *       array shall be converted to characters (each as if by a call to
+ *       the wcrtomb() function ...) up to and including a terminating
+ *       null wide character.  ...  If a precision is specified, no more
+ *       than that many bytes shall be written ... and a partial
+ *       character shall not be written."
+ *
+ * This library's only encoding is UTF-8 (src/stdlib/mbrtowc.c), so
+ * U+00E9 is two bytes and U+1234 is three, and the byte count the
+ * conversion reports and the field width it pads to are both byte
+ * counts.
+ *
+ * WHY THIS TEST EXISTS AS ITS OWN THING: two of the cases below pass
+ * against an implementation that ignores the l qualifier entirely, and
+ * they are the two a casual test would have written.  %lc of an ASCII
+ * character is right by accident, because the low byte of the wint_t IS
+ * the character; and %ls of a one-character ASCII wide string is right
+ * by accident, because the second byte of that wchar_t is the NUL that
+ * stops a char* walk.  The cases that bite are a non-ASCII character,
+ * and an ASCII wide string of length two or more. */
+static void test_printf_l_modifier(void)
+{
+	static const wchar_t w_eb[3]  = { 0xe9, L'b', 0 };   /* U+00E9 'b' */
+	static const wchar_t w_ab[3]  = { L'a', L'b', 0 };   /* "ab" */
+	static const wchar_t w_hi[3]  = { 0x1234, L'z', 0 }; /* U+1234 'z' */
+	static const wchar_t w_empty[1] = { 0 };
+	char b[64];
+	int n;
+
+	/* %ls: the whole multibyte form of every wide character. */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%ls", w_eb);
+	CHECK(n == 3);
+	CHECK(!memcmp(b, "\xc3\xa9" "b", 4));
+
+	/* The trap: an ASCII wide string longer than one character.  An
+	 * implementation that reads the wchar_t array as a char* stops at
+	 * the first unit's zero high byte and prints "a". */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%ls", w_ab);
+	CHECK(n == 2);
+	CHECK(!strcmp(b, "ab"));
+
+	/* three-byte character */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%ls", w_hi);
+	CHECK(n == 4);
+	CHECK(!memcmp(b, "\xe1\x88\xb4" "z", 5));
+
+	/* empty wide string writes nothing */
+	memset(b, 'Z', sizeof b);
+	n = snprintf(b, sizeof b, "%ls", w_empty);
+	CHECK(n == 0);
+	CHECK(b[0] == 0);
+
+	/* "If a precision is specified, no more than that many bytes shall
+	 * be written ... and a partial character shall not be written."
+	 * U+00E9 is two bytes, so a precision of 1 writes NOTHING: there is
+	 * no way to write one byte of it. */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%.1ls", w_eb);
+	CHECK(n == 0);
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%.2ls", w_eb);
+	CHECK(n == 2);
+	CHECK(!memcmp(b, "\xc3\xa9", 2));
+	/* three bytes admits the whole first character and the 'b' */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%.3ls", w_eb);
+	CHECK(n == 3);
+	CHECK(!memcmp(b, "\xc3\xa9" "b", 3));
+
+	/* The field width is a BYTE count too, and is computed from the
+	 * converted length -- so an implementation that measured the
+	 * argument as a char* pads by the wrong amount even when the
+	 * characters themselves are ASCII. */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "[%6ls]", w_ab);
+	CHECK(n == 8);
+	CHECK(!strcmp(b, "[    ab]"));
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "[%-6ls]", w_ab);
+	CHECK(n == 8);
+	CHECK(!strcmp(b, "[ab    ]"));
+	/* padding counts the BYTES of a non-ASCII character, not its
+	 * characters: U+00E9 'b' is three bytes, so %6ls pads three */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "[%6ls]", w_eb);
+	CHECK(n == 8);
+	CHECK(!memcmp(b, "[   \xc3\xa9" "b]", 8));
+
+	/* %lc: the wint_t argument, as its whole multibyte form. */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%lc", (wint_t)0xe9);
+	CHECK(n == 2);
+	CHECK(!memcmp(b, "\xc3\xa9", 2));
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%lc", (wint_t)0x1234);
+	CHECK(n == 3);
+	CHECK(!memcmp(b, "\xe1\x88\xb4", 3));
+	/* the accidental case, asserted so the real ones are not the only
+	 * evidence that anything happens at all */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "%lc", (wint_t)L'Z');
+	CHECK(n == 1);
+	CHECK(!strcmp(b, "Z"));
+	/* width pads to the byte count */
+	memset(b, 0, sizeof b);
+	n = snprintf(b, sizeof b, "[%4lc]", (wint_t)0xe9);
+	CHECK(n == 6);
+	CHECK(!memcmp(b, "[  \xc3\xa9]", 6));
+
+	/* A supplementary character is TWO wchar_t on this target (a UTF-16
+	 * surrogate pair) and ONE four-byte sequence on the way out, so the
+	 * conversion state has to carry the high surrogate from one unit to
+	 * the next. */
+	{
+		static const wchar_t pair[3] = { 0xd83d, 0xde00, 0 };  /* U+1F600 */
+		memset(b, 0, sizeof b);
+		n = snprintf(b, sizeof b, "%ls", pair);
+		CHECK(n == 4);
+		CHECK(!memcmp(b, "\xf0\x9f\x98\x80", 4));
+	}
+}
+
 static void test_printf_z_modifier_width(void)
 {
 	/* size_t, ssize_t and ptrdiff_t are 64 bits on the LLP64 target
@@ -1946,6 +2081,7 @@ int main(void)
 
 	test_snprintf_boundaries();
 	test_printf_z_modifier_width();
+	test_printf_l_modifier();
 	test_printf_apostrophe_flag();
 	test_printf_width_precision();
 	test_sscanf_clauses();

@@ -35,10 +35,10 @@
  *            code unit at a time and can never see its partner).
  *   UNIMPL:  absent, but nothing about UTF-16 prevents implementing it.
  * Confirmed absent (grep of include/wchar.h + src/string + src/stdlib
- * + src/stdio, 2026-08-24): fwprintf, fwscanf, swprintf, swscanf,
- * vfwprintf, vfwscanf, vswprintf, vswscanf, vwprintf, vwscanf, wprintf,
- * fwprintf, swprintf, vfwprintf, vswprintf, vwprintf, wprintf,
- * wcwidth, wcswidth.  Confirmed *present*
+ * + src/stdio + src/time, 2026-08-25): wcwidth, wcswidth -- and those
+ * two are a DECLINED implementation, not an unattempted one; see the
+ * fence below.  Every other function in the <wchar.h> synopsis is now
+ * implemented and tested here.  Confirmed *present*
  * (implemented, tested above): wcscpy, wcsncpy, wcscat, wcsncat, wcscmp,
  * wcsncmp, wcschr, wcsrchr, wcslen, wmemcpy, wmemmove, wmemset, wmemcmp,
  * wmemchr, btowc, wctob, mbsinit, mbrtowc, wcrtomb, mbrlen, mbsrtowcs,
@@ -55,7 +55,9 @@
  * getwchar, fputwc, putwc, putwchar, fgetws, fputws, ungetwc, fwide,
  * and (src/stdlib/strtod.c) wcstod, wcstof, wcstold, and
  * (src/stdio/mem.c) open_wmemstream, and (src/stdio/scanf.c) fwscanf,
- * swscanf, wscanf, vfwscanf, vswscanf, vwscanf.  Also now present, as
+ * swscanf, wscanf, vfwscanf, vswscanf, vwscanf, and (src/stdio/printf.c)
+ * fwprintf, swprintf, wprintf, vfwprintf, vswprintf, vwprintf.  Also
+ * now present, as
  * of the new include/wctype.h (2026-08-23): iswalnum/iswalpha/iswblank/
  * iswcntrl/iswdigit/iswgraph/iswlower/iswprint/iswpunct/iswspace/
  * iswupper/iswxdigit, iswctype, wctype, towlower, towupper, wctrans,
@@ -1196,25 +1198,212 @@ static void test_fwide(void)
 
 /* ---------------------------------------------------------------------
  * fwprintf / wprintf / swprintf (+ v-variants) -- fwprintf.html
+ * Implemented in src/stdio/printf.c, sharing the byte family's
+ * formatter through a stride cursor over the format and a sink that
+ * counts wide characters; see that file's headers.
  * ------------------------------------------------------------------- */
-#if 0 /* UNIMPL: fwprintf()/wprintf()/swprintf()/vfwprintf()/vwprintf()/
-       * vswprintf() -- fwprintf.html DESCRIPTION, RETURN VALUE.
-       * Implementable: format-directive processing is over ASCII
-       * conversion characters, argument values go through the same
-       * printf core already used by the byte-string family; no
-       * surrogate-pair barrier since %lc/%ls just copy wchar_t units. */
+/* Thin variadic wrappers so the v* forms can be reached with a real
+ * va_list. */
+static int vswprintf_probe(wchar_t *b, size_t n, const wchar_t *fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vswprintf(b, n, fmt, ap);
+	va_end(ap);
+	return r;
+}
+static int vfwprintf_probe(FILE *f, const wchar_t *fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vfwprintf(f, fmt, ap);
+	va_end(ap);
+	return r;
+}
+static int vwprintf_probe(const wchar_t *fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vwprintf(fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+/* fwprintf.html.  Two things separate this family from fprintf() and
+ * they are the two the tests below are built around:
+ *
+ *  - the RETURN is "the number of wide characters transmitted", not
+ *    bytes, and the field width and precision count wide characters
+ *    too.  For anything outside ASCII those are different numbers.
+ *
+ *  - swprintf() does NOT behave like snprintf() on truncation.  "If n
+ *    or more wide characters were requested to be written, swprintf()
+ *    shall return a negative value, and set errno" -- it does not
+ *    report the length it would have written. */
 static void test_fwprintf(void)
 {
-	wchar_t buf[8];
+	wchar_t buf[64];
+	FILE *f;
+	int n;
+
 	/* "the count of wide characters transmitted (excluding swprintf's
 	 * terminating null)." */
 	CHECK(swprintf(buf, 8, W("%d"), 12) == 2);
 	CHECK(!wcscmp(buf, W("12")));
 	/* "If n or more wide characters were requested to be written,
 	 * swprintf() shall return a negative value, and set errno." */
+	errno = 0;
 	CHECK(swprintf(buf, 2, W("%d"), 12345) < 0);
+	CHECK(errno != 0);
+	/* the boundary: exactly n-1 wide characters plus the null fits */
+	CHECK(swprintf(buf, 6, W("%d"), 12345) == 5);
+	CHECK(!wcscmp(buf, W("12345")));
+	CHECK(swprintf(buf, 5, W("%d"), 12345) < 0);
+
+	/* Ordinary characters, %%, and an unknown conversion, all of which
+	 * come from the WIDE format and may be anything. */
+	CHECK(swprintf(buf, 64, W("a%%b"), 0) == 3);
+	CHECK(!wcscmp(buf, W("a%b")));
+	{
+		static const wchar_t fmt[5] = { L'[', 0x1234, L']', 0 };
+		CHECK(swprintf(buf, 64, fmt) == 3);
+		CHECK(buf[0] == L'[' && buf[1] == 0x1234 && buf[2] == L']' && buf[3] == 0);
+	}
+
+	/* Integers, floats and pointers are ASCII whatever the sink, so
+	 * they are the easy half -- asserted so that a wide sink emitting
+	 * nothing at all could not pass the interesting cases by default. */
+	CHECK(swprintf(buf, 64, W("%d %x %o %u"), -5, 255, 8, 7) == 10);
+	CHECK(!wcscmp(buf, W("-5 ff 10 7")));
+	CHECK(swprintf(buf, 64, W("%5d|%-5d|%05d"), 42, 42, 42) == 17);
+	CHECK(!wcscmp(buf, W("   42|42   |00042")));
+	CHECK(swprintf(buf, 64, W("%.3f"), 1.5) == 5);
+	CHECK(!wcscmp(buf, W("1.500")));
+	CHECK(swprintf(buf, 64, W("%e"), 0.0) == 12);
+	CHECK(swprintf(buf, 64, W("%s"), "hi") == 2);
+	CHECK(!wcscmp(buf, W("hi")));
+
+	/* THE COUNT IS IN WIDE CHARACTERS.  fwprintf.html's s conversion:
+	 * without an l qualifier the bytes "shall be converted to wide
+	 * characters as if by ... mbrtowc()", so a two-byte UTF-8 sequence
+	 * is ONE wide character and counts as one.  An implementation that
+	 * counted bytes would answer 3 here. */
+	CHECK(swprintf(buf, 64, W("%s"), "\xc3\xa9" "b") == 2);
+	CHECK(buf[0] == 0xe9 && buf[1] == L'b' && buf[2] == 0);
+	/* and the precision counts wide characters, not bytes */
+	CHECK(swprintf(buf, 64, W("%.1s"), "\xc3\xa9" "b") == 1);
+	CHECK(buf[0] == 0xe9 && buf[1] == 0);
+	/* as does the field width */
+	CHECK(swprintf(buf, 64, W("[%4s]"), "\xc3\xa9" "b") == 6);
+	CHECK(buf[0] == L'[' && buf[1] == L' ' && buf[2] == L' '
+	      && buf[3] == 0xe9 && buf[4] == L'b' && buf[5] == L']');
+
+	/* A supplementary character arriving through %s: ONE four-byte
+	 * UTF-8 sequence becomes TWO wchar_t here (a UTF-16 surrogate
+	 * pair), the second of which mbrtowc() delivers from state alone
+	 * consuming no bytes.  Both halves are wide characters and both
+	 * count. */
+	CHECK(swprintf(buf, 64, W("%s"), "\xf0\x9f\x98\x80z") == 3);
+	CHECK(buf[0] == 0xd83d && buf[1] == 0xde00 && buf[2] == L'z' && buf[3] == 0);
+	/* and the precision counts those two units, so a precision of 1
+	 * takes the high surrogate alone */
+	CHECK(swprintf(buf, 64, W("%.2s"), "\xf0\x9f\x98\x80z") == 2);
+	CHECK(buf[0] == 0xd83d && buf[1] == 0xde00 && buf[2] == 0);
+
+	/* %ls in a wide sink is a copy: the units go through unchanged. */
+	{
+		static const wchar_t w[4] = { 0xe9, 0x1234, L'z', 0 };
+		CHECK(swprintf(buf, 64, W("%ls"), w) == 3);
+		CHECK(buf[0] == 0xe9 && buf[1] == 0x1234 && buf[2] == L'z' && buf[3] == 0);
+		CHECK(swprintf(buf, 64, W("%.2ls"), w) == 2);
+		CHECK(buf[0] == 0xe9 && buf[1] == 0x1234 && buf[2] == 0);
+	}
+	/* %c is "converted as if by btowc()"; %lc takes the wint_t. */
+	CHECK(swprintf(buf, 64, W("%c"), 'A') == 1);
+	CHECK(buf[0] == L'A' && buf[1] == 0);
+	/* btowc() answers WEOF for a byte that is not a complete character
+	 * on its own -- under UTF-8 that is everything from 0x80 up -- and
+	 * there is no wide character to emit, so the conversion fails.
+	 * Pinned because %c of an ASCII byte is right under any
+	 * implementation, including one that skipped the conversion. */
+	errno = 0;
+	CHECK(swprintf(buf, 64, W("%c"), 0xe9) < 0);
+	CHECK(errno == EILSEQ);
+	CHECK(swprintf(buf, 64, W("%lc"), (wint_t)0x1234) == 1);
+	CHECK(buf[0] == 0x1234 && buf[1] == 0);
+	CHECK(swprintf(buf, 64, W("[%3lc]"), (wint_t)0x1234) == 5);
+	CHECK(buf[0] == L'[' && buf[1] == L' ' && buf[2] == L' '
+	      && buf[3] == 0x1234 && buf[4] == L']');
+
+	/* fwprintf() to a byte stream encodes what it transmits, but still
+	 * REPORTS wide characters: three wide characters here, six bytes on
+	 * the file. */
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	if (f) {
+		static const wchar_t w[4] = { 0xe9, 0x1234, L'z', 0 };
+		char got[16];
+		size_t k;
+		n = fwprintf(f, W("%ls"), w);
+		CHECK(n == 3);
+		rewind(f);
+		k = fread(got, 1, sizeof got, f);
+		CHECK(k == 6);
+		CHECK(!memcmp(got, "\xc3\xa9\xe1\x88\xb4" "z", 6));
+		fclose(f);
+	}
+
+	/* The v-forms.  fwprintf.html: they "shall be equivalent to" their
+	 * variadic counterparts. */
+	CHECK(vswprintf_probe(buf, 64, W("%d-%d"), 4, 5) == 3);
+	CHECK(!wcscmp(buf, W("4-5")));
+	f = fopen("test.tmp", "wb+");
+	CHECK(f != 0);
+	if (f) {
+		CHECK(vfwprintf_probe(f, W("%d"), 77) == 2);
+		fclose(f);
+	}
+
+	/* wprintf()/vwprintf() write to stdout; redirected so they are
+	 * exercised rather than merely named.  Every result is captured
+	 * into a local and asserted only once stdout is itself again,
+	 * because CHECK's own diagnostic goes to stdout. */
+	{
+		int saved = dup(1), reopened = 0, restored = 0, r1 = 0, r2 = 0;
+		CHECK(saved >= 0);
+		if (saved >= 0) {
+			CHECK(fflush(stdout) == 0);
+			if (freopen("test2.tmp", "wb", stdout)) {
+				reopened = 1;
+				r1 = wprintf(W("%d"), 31);
+				r2 = vwprintf_probe(W("%d"), 42);
+				fflush(stdout);
+			}
+			if (freopen("test3.tmp", "wb", stdout)) restored = 1;
+			if (restored) {
+				restored = dup2(saved, fileno(stdout)) == fileno(stdout);
+				setvbuf(stdout, 0, _IOLBF, 0);
+			}
+			close(saved);
+			CHECK(reopened);
+			CHECK(restored);
+			if (reopened) {
+				char got[16];
+				size_t k = 0;
+				CHECK(r1 == 2);
+				CHECK(r2 == 2);
+				f = fopen("test2.tmp", "rb");
+				CHECK(f != 0);
+				if (f) { k = fread(got, 1, sizeof got, f); fclose(f); }
+				CHECK(k == 4);
+				CHECK(!memcmp(got, "3142", 4));
+			}
+		}
+	}
+	remove("test.tmp");
+	remove("test2.tmp");
+	remove("test3.tmp");
 }
-#endif
 
 /* ---------------------------------------------------------------------
  * fwscanf / wscanf / swscanf (+ v-variants) -- fwscanf.html
@@ -2594,6 +2783,7 @@ int main(void)
 	test_ungetwc();
 	test_open_wmemstream();
 	test_fwscanf();
+	test_fwprintf();
 
 	if (fails) { printf("%d check(s) failed\n", fails); return 1; }
 	printf("ok\n");

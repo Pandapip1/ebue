@@ -85,6 +85,12 @@ wint_t putwchar (wchar_t);
 wint_t ungetwc (wint_t, FILE *);
 FILE *open_wmemstream (wchar_t **, size_t *);
 
+int fwprintf (FILE *__restrict, const wchar_t *__restrict, ...);
+int swprintf (wchar_t *__restrict, size_t, const wchar_t *__restrict, ...);
+int wprintf (const wchar_t *__restrict, ...);
+int vfwprintf (FILE *__restrict, const wchar_t *__restrict, __isoc_va_list);
+int vswprintf (wchar_t *__restrict, size_t, const wchar_t *__restrict, __isoc_va_list);
+int vwprintf (const wchar_t *__restrict, __isoc_va_list);
 int fwscanf (FILE *__restrict, const wchar_t *__restrict, ...);
 int swscanf (const wchar_t *__restrict, const wchar_t *__restrict, ...);
 int wscanf (const wchar_t *__restrict, ...);

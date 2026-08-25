@@ -155,6 +155,138 @@ static void pad(struct sink *sk, char c, size_t n)
 	}
 }
 
+/* Emit n wide characters that came from a CALLER (%ls, %lc, or a %s
+ * converted up into a wide sink).  Unlike out(), these can be anything,
+ * so the ASCII shortcut it takes is not available here.
+ *
+ * On a byte-backed stream each unit is encoded with wcrtomb() through
+ * sk->ost, which is why that state lives in the sink: a supplementary
+ * character is TWO wchar_t on this target, and wcrtomb() answers 0 for
+ * the high surrogate -- accepted, nothing written -- holding it until
+ * the low one arrives.  The count still advances, because what is
+ * counted is wide characters. */
+static void out_units(struct sink *sk, const wchar_t *w, size_t n)
+{
+	if (sk->bad) return;
+	if (sk->f->wmem) {
+		if (n && __fwrite(w, sizeof *w, n, sk->f) != n) {
+			if (!sk->f->is_mem || sk->f->mem_dynamic) { sk->f->err = 1; sk->bad = 1; return; }
+		}
+		sk->count += (long)n;
+		return;
+	}
+	{
+		size_t i;
+		char buf[MB_LEN_MAX];
+		for (i = 0; i < n; i++) {
+			size_t r = wcrtomb(buf, w[i], &sk->ost);
+			if (r == (size_t)-1) { sk->f->err = 1; sk->bad = 1; return; }
+			if (r && __fwrite(buf, 1, r, sk->f) != r) {
+				if (!sk->f->is_mem || sk->f->mem_dynamic) { sk->f->err = 1; sk->bad = 1; return; }
+			}
+			sk->count++;
+		}
+	}
+}
+
+/* ------------------------------------------------------------------
+ * STRING AND CHARACTER ARGUMENTS
+ *
+ * The one place in this formatter where what is emitted did not come
+ * from this file.  BOTH sides vary independently -- the argument is a
+ * char * or a wchar_t *, and the sink counts bytes or wide characters
+ * -- so there are four cases, two copies and two conversions:
+ *
+ *   char *   -> bytes     copy       fprintf  "%s"
+ *   wchar_t* -> bytes     wcrtomb    fprintf  "%ls"
+ *   wchar_t* -> wide      copy       fwprintf "%ls"
+ *   char *   -> wide      mbrtowc    fwprintf "%s"
+ *
+ * fprintf.html, the s conversion: with an l qualifier the wide
+ * characters "shall be converted to characters (each as if by a call to
+ * the wcrtomb() function)"; "if a precision is specified, no more than
+ * that many bytes shall be written", and "a partial character shall not
+ * be written".  fwprintf.html says the mirror image for a plain %s --
+ * bytes converted "as if by repeated calls to mbrtowc()", with the
+ * precision counting wide characters.  In both directions the precision
+ * and the field width are measured in the SINK's unit, never the
+ * argument's.
+ *
+ * One function measures and emits, called twice: once with emit == 0 to
+ * get the length the field width must pad against, and once with
+ * emit == 1 to write it.  Two passes rather than a staging buffer
+ * because a string argument has no bound -- the same reason nothing
+ * here is ever sized from a caller's precision (see PREC_MAX).
+ * ------------------------------------------------------------------ */
+static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit)
+{
+	mbstate_t st;
+	long units = 0;
+
+	memset(&st, 0, sizeof st);
+
+	if (!wide_arg && !sk->wide) {			/* char * -> bytes */
+		const char *s = arg;
+		size_t n = strlen(s);
+		if (prec >= 0 && (size_t)prec < n) n = (size_t)prec;
+		if (emit) out(sk, s, n);
+		return (long)n;
+	}
+	if (wide_arg && sk->wide) {			/* wchar_t * -> wide */
+		const wchar_t *w = arg;
+		size_t n = 0;
+		while (w[n] && (prec < 0 || n < (size_t)prec)) n++;
+		if (emit) out_units(sk, w, n);
+		return (long)n;
+	}
+	if (wide_arg) {					/* wchar_t * -> bytes */
+		const wchar_t *w = arg;
+		char buf[MB_LEN_MAX];
+		for (; *w; w++) {
+			size_t r = wcrtomb(buf, *w, &st);
+			if (r == (size_t)-1) break;	/* [EILSEQ]: stop here */
+			/* "a partial character shall not be written": one that
+			 * does not fit inside the precision ENTIRELY is not
+			 * written at all. */
+			if (prec >= 0 && units + (long)r > prec) break;
+			units += (long)r;
+			if (emit && r) out(sk, buf, r);
+		}
+		return units;
+	}
+	{						/* char * -> wide */
+		const char *s = arg;
+		while (*s || !mbsinit(&st)) {
+			wchar_t wc = 0;
+			size_t r = mbrtowc(&wc, s, MB_LEN_MAX, &st);
+			size_t used;
+			if (r == (size_t)-1 || r == (size_t)-2) break;
+			/* (size_t)-3 is a low surrogate delivered from state
+			 * alone, consuming nothing: the second half of a
+			 * supplementary character, and a wide character of its
+			 * own. */
+			used = r == (size_t)-3 ? 0 : r;
+			if (prec >= 0 && units >= prec) break;
+			units++;
+			if (emit) out_units(sk, &wc, 1);
+			s += used;
+			if (!used && !*s && mbsinit(&st)) break;
+		}
+		return units;
+	}
+}
+
+/* %s and %ls: measure, pad, emit, pad. */
+static void emit_str(struct sink *sk, const void *arg, int wide_arg, int prec,
+                     int flags, int width)
+{
+	long n = str_arg(sk, arg, wide_arg, prec, 0);
+	long padn = width - n;
+	if (padn < 0) padn = 0;
+	if (flags & 4) { str_arg(sk, arg, wide_arg, prec, 1); pad(sk, ' ', (size_t)padn); }
+	else { pad(sk, ' ', (size_t)padn); str_arg(sk, arg, wide_arg, prec, 1); }
+}
+
 /* ---- exact decimal expansion of a double ---------------------------- */
 
 /* Big non-negative integers in base 10^9, least significant limb first,
@@ -538,9 +670,17 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 
 	while (gf(fp, st) && !sk->bad) {
 		if (gf(fp, st) != '%') {
+			/* A run of ordinary characters.  These come from the
+			 * CALLER's format, so in a wide format they are wide
+			 * characters and may be anything -- out()'s ASCII
+			 * shortcut does not apply, and neither does its length,
+			 * which would be the run's byte size rather than its
+			 * character count. */
 			const char *start = fp;
 			while (gf(fp, st) && gf(fp, st) != '%') fp += st;
-			out(sk, start, (size_t)(fp - start));
+			if (st == 1) out(sk, start, (size_t)(fp - start));
+			else out_units(sk, (const wchar_t *)(const void *)start,
+			               (size_t)((fp - start) / st));
 			continue;
 		}
 		fp += st;
@@ -709,22 +849,62 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				break;
 			}
 			case 'c': {
-				char c = (char)va_arg(ap, int);
-				int padn = width - 1; if (padn < 0) padn = 0;
-				if (flags & 4) { out(sk, &c, 1); pad(sk, ' ', (size_t)padn); }
-				else { pad(sk, ' ', (size_t)padn); out(sk, &c, 1); }
+				/* fprintf.html: with an l qualifier "the wint_t
+				 * argument shall be converted as if by an ls
+				 * conversion specification with no precision and an
+				 * argument that points to a two-element array of type
+				 * wchar_t, the first element containing the wint_t
+				 * argument ... and the second a null wide character".
+				 * Written literally, so %lc and %ls cannot disagree.
+				 *
+				 * fwprintf.html, plain %c: "the int argument shall be
+				 * converted to a wide character as if by calling
+				 * btowc()". */
+				if (lm == LM_l) {
+					wchar_t wa[2];
+					wa[0] = (wchar_t)va_arg(ap, wint_t);
+					wa[1] = 0;
+					emit_str(sk, wa, 1, -1, flags, width);
+				} else if (sk->wide) {
+					wchar_t wa[2];
+					wint_t b = btowc(va_arg(ap, int));
+					/* btowc() answers WEOF for any byte that is not a
+					 * complete character on its own, which under this
+					 * library's UTF-8 is every byte from 0x80 up.  There
+					 * is no wide character to emit, so the conversion
+					 * fails rather than inventing one: fwprintf.html's
+					 * ERRORS refer to fputwc(), whose [EILSEQ] is
+					 * exactly "the wide-character code ... does not
+					 * correspond to a valid character". */
+					if (b == WEOF) {
+						errno = EILSEQ;
+						sk->f->err = 1;
+						sk->bad = 1;
+						break;
+					}
+					wa[0] = (wchar_t)b;
+					wa[1] = 0;
+					emit_str(sk, wa, 1, -1, flags, width);
+				} else {
+					char c = (char)va_arg(ap, int);
+					int padn = width - 1; if (padn < 0) padn = 0;
+					if (flags & 4) { out(sk, &c, 1); pad(sk, ' ', (size_t)padn); }
+					else { pad(sk, ' ', (size_t)padn); out(sk, &c, 1); }
+				}
 				break;
 			}
 			case 's': {
-				const char *s = va_arg(ap, const char *);
-				size_t n;
-				int padn;
-				if (!s) s = "(null)";
-				n = strlen(s);
-				if (prec >= 0 && (size_t)prec < n) n = (size_t)prec;
-				padn = width - (int)n; if (padn < 0) padn = 0;
-				if (flags & 4) { out(sk, s, n); pad(sk, ' ', (size_t)padn); }
-				else { pad(sk, ' ', (size_t)padn); out(sk, s, n); }
+				const void *arg = va_arg(ap, const void *);
+				int wide_arg = lm == LM_l;
+				/* A null pointer is undefined, but printing "(null)"
+				 * rather than dereferencing it is what this library
+				 * already did and what glibc does; the wide form gets
+				 * the same courtesy, in its own width. */
+				if (!arg) {
+					static const wchar_t wnull[7] = { '(', 'n', 'u', 'l', 'l', ')', 0 };
+					arg = wide_arg ? (const void *)wnull : (const void *)"(null)";
+				}
+				emit_str(sk, arg, wide_arg, prec, flags, width);
 				break;
 			}
 			case 'p': {
@@ -776,7 +956,11 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			}
 			default:
 				/* an unknown conversion: emit it literally, the way glibc does */
-				if (gf(fp, st)) { out(sk, "%", 1); out(sk, fp, 1); }
+				if (gf(fp, st)) {
+					out(sk, "%", 1);
+					if (st == 1) out(sk, fp, 1);
+					else out_units(sk, (const wchar_t *)(const void *)fp, 1);
+				}
 				break;
 			}
 			if (gf(fp, st)) fp += st;
@@ -921,6 +1105,101 @@ int asprintf(char **s, const char *fmt, ...)
 	va_list ap; int r;
 	va_start(ap, fmt);
 	r = vasprintf(s, fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+/* ------------------------------------------------------------------
+ * THE WIDE FAMILY: fwprintf.html
+ *
+ * "Equivalent to fprintf() ... except that the argument format is a
+ * wide-character string" and the result is wide characters.  Same
+ * formatter, stride sizeof(wchar_t), sink counting wide characters.
+ * ------------------------------------------------------------------ */
+int __vfwprintf(FILE *f, const wchar_t *fmt, va_list ap)
+{
+	if (!f->wide) f->wide = 1;
+	return vfprintf_st(f, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+}
+
+/* swprintf() is NOT snprintf() with a different unit, and the
+ * difference is the whole reason this does not reuse vxprintf_mem():
+ *
+ *   snprintf  "shall return the number of bytes that would have been
+ *              written had n been sufficiently large"  -- truncation is
+ *              reported by a return >= n, and the caller re-sizes.
+ *   swprintf  "If n or more wide characters were requested to be
+ *              written, swprintf() shall return a negative value, and
+ *              set errno"  -- there is no would-have-been length.
+ *
+ * So the buffer is given to the formatter as a wchar_t-holding memory
+ * FILE (wmem, exactly like open_wmemstream()'s), the logical count is
+ * compared against n afterwards, and overflow becomes -1/[EOVERFLOW]
+ * rather than a length.  One wide character is reserved for the
+ * terminating null, which is why the test is `>= n` and not `> n`. */
+static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
+{
+	FILE mf;
+	int r;
+
+	if (!n) { errno = EOVERFLOW; return -1; }
+	memset(&mf, 0, sizeof mf);
+	mf.fd = -1;
+	mf.pid = -1;
+	mf.is_mem = 1;
+	mf.wmem = 1;
+	mf.wide = 1;
+	mf.writable = 1;
+	mf.bufmode = _IONBF;
+	mf.mem_buf = (unsigned char *)(void *)s;
+	/* One unit short of the caller's array: the terminating null lives
+	 * in the unit this hides, so an overrun is detected as a short
+	 * write rather than by writing it. */
+	mf.mem_size = (n - 1) * sizeof(wchar_t);
+	r = vfprintf_st(&mf, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	/* Same buffer ownership as vxprintf_mem(): a local FILE never sees
+	 * fclose, so the staging buffer __ensure_buf() gave it is ours. */
+	free(mf.buf);
+	if (r < 0) return r;
+	if ((size_t)r >= n) { errno = EOVERFLOW; return -1; }
+	s[mf.mem_len / sizeof(wchar_t)] = 0;
+	return r;
+}
+
+int vswprintf(wchar_t *__restrict s, size_t n, const wchar_t *__restrict fmt, __isoc_va_list ap)
+{
+	return vswprintf_impl(s, n, fmt, ap);
+}
+int vfwprintf(FILE *__restrict f, const wchar_t *__restrict fmt, __isoc_va_list ap)
+{
+	return __vfwprintf(f, fmt, ap);
+}
+int vwprintf(const wchar_t *__restrict fmt, __isoc_va_list ap)
+{
+	return __vfwprintf(stdout, fmt, ap);
+}
+
+int swprintf(wchar_t *__restrict s, size_t n, const wchar_t *__restrict fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = vswprintf_impl(s, n, fmt, ap);
+	va_end(ap);
+	return r;
+}
+int fwprintf(FILE *__restrict f, const wchar_t *__restrict fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = __vfwprintf(f, fmt, ap);
+	va_end(ap);
+	return r;
+}
+int wprintf(const wchar_t *__restrict fmt, ...)
+{
+	va_list ap; int r;
+	va_start(ap, fmt);
+	r = __vfwprintf(stdout, fmt, ap);
 	va_end(ap);
 	return r;
 }
