@@ -1286,15 +1286,41 @@ static void test_glob_append_does_not_resort(void)
 	 * glob.html: "the pathnames shall be sorted as per the current
 	 * setting of the LC_COLLATE category" unless GLOB_NOSORT.
 	 *
-	 * HONEST LIMIT: it still does not discriminate ON THIS PLATFORM, and
-	 * cannot.  Measured here -- create z, a, m in that order and readdir
-	 * hands back a, m, z -- because NTFS indexes directory entries in
-	 * sorted order and Wine matches it.  So glob() would appear sorted
-	 * even with the qsort deleted.  The assertion is kept because it
-	 * states the requirement and would catch a regression on any
-	 * file system whose readdir is unordered; it is NOT evidence that
-	 * this implementation sorts.  Do not read a pass here as coverage of
-	 * the sort itself. */
+	 * LIMIT OF *THIS* CONTROL -- and read the second paragraph before
+	 * concluding anything from the first.
+	 *
+	 * This control does not discriminate.  Measured: create z, a, m in
+	 * that order and readdir hands back a, m, z, because NTFS indexes
+	 * directory entries in order and Wine matches it.  So with the qsort
+	 * deleted these three names come back sorted anyway and the
+	 * assertion below still passes.  That much is unchanged and still
+	 * true: do not read a pass HERE as coverage of the sort itself.
+	 *
+	 * WHAT THIS COMMENT USED TO SAY, AND WHY IT WAS WRONG.  It said the
+	 * control "does not discriminate ON THIS PLATFORM, and cannot" --
+	 * generalising one measurement over three lowercase names into a
+	 * property of the file system.  It is not one.  NTFS collates on the
+	 * UPPERCASED name, and uppercasing moves '[' (0x5B) from below 'a'
+	 * (0x61) to above 'A' (0x41).  So for names differing in that region
+	 * readdir order and strcmp order genuinely diverge: "fzr-[x]",
+	 * "fzr-a", "fzr-b", "fzr-d" is returned by readdir as fzr-a, fzr-b,
+	 * fzr-d, fzr-[x], while strcmp order puts fzr-[x] FIRST.  A single
+	 * name containing '[' is therefore enough to make glob()'s sort
+	 * observable here, and the "cannot" was false.
+	 *
+	 * test_glob_fuzz_append_same_pattern_runs() below does exactly that
+	 * and IS a real control: mutation-tested by deleting src/glob/glob.c's
+	 * qsort outright, where it fails on all eight entries plus its
+	 * boundary assertion while this one still passes.  So the sort is
+	 * covered on this platform after all -- by that test, not this one.
+	 *
+	 * The lesson is the reason this paragraph is kept rather than
+	 * deleted: a documented impossibility is more durable than a bug,
+	 * because it reads as settled and stops the next person from trying.
+	 * This one survived until somebody tested the claim instead of
+	 * accepting it.  "Cannot" earned from one measurement is a
+	 * conjecture; write down which measurement, so the next reader can
+	 * see what it did and did not cover. */
 	close(creat("srt-z.apps", 0644));
 	close(creat("srt-a.apps", 0644));
 	close(creat("srt-m.apps", 0644));
@@ -1350,11 +1376,13 @@ static void test_glob_append_does_not_resort(void)
  * literal name here, not a bracket expression -- the pattern is
  * "fzr-*", and nothing in it is ever parsed as a bracket.
  *
- * It also, as a side effect, closes the HONEST LIMIT recorded above
- * test_glob_append_does_not_resort(): that test says its positive
- * control cannot discriminate on this platform, because NTFS indexes
- * directory entries in order and readdir hands them back already
- * sorted.  It does -- but NTFS collates on the UPPERCASED name, and
+ * It also, as a side effect, is the control that closes what the
+ * comment above test_glob_append_does_not_resort() used to record as an
+ * impossibility: that test's own control cannot discriminate on this
+ * platform, because NTFS indexes directory entries in order and readdir
+ * hands them back already sorted -- from which that comment concluded
+ * no test here ever could.  It does index them in order -- but NTFS
+ * collates on the UPPERCASED name, and
  * uppercasing moves '[' (0x5B) from below 'a' (0x61) to above 'A'
  * (0x41).  So readdir returns "fzr-a", "fzr-b", "fzr-d", "fzr-[x]"
  * while strcmp order is "fzr-[x]", "fzr-a", "fzr-b", "fzr-d".  Measured
