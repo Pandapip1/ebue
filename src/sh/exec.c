@@ -131,6 +131,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <errno.h>
 #include "libc.h"
 #include "sh.h"
 
@@ -830,6 +831,79 @@ struct stage_result {
  * immediately afterward instead. Returns -1 ("cannot execute this
  * yet") for a word that needs command substitution or on OOM, exactly
  * as stage 2 did; otherwise 0 with *out filled in. */
+/* XCU 2.9.1 Command Search and Execution, the PATH branch: "If the
+ * execl() function fails due to an error equivalent to the [ENOEXEC]
+ * error defined in the System Interfaces volume of POSIX.1-2017, the
+ * shell shall execute a command equivalent to having a shell invoked
+ * with the pathname resulting from the search as its first operand,
+ * with any remaining arguments passed to the new shell, except that the
+ * value of "$0" in the new shell may be set to the command name."  And
+ * the <slash> branch, in its own words: "If the execl() function fails
+ * due to an error equivalent to the [ENOEXEC] error, the shell shall
+ * execute a command equivalent to having a shell invoked with the
+ * command name as its first operand, with any remaining arguments
+ * passed to the new shell."
+ *
+ * Both branches are served by this one call site, and correctly so:
+ * `resolved` *is* the command name in the <slash> case, because
+ * __find_program() copies a name with a directory part through verbatim
+ * (src/process/find_program.c's has_dir() arm) and only substitutes a
+ * found pathname for a bare name.  So "the pathname resulting from the
+ * search" and "the command name" are the same string here, and the
+ * fallback applies to a path containing a slash exactly as 2.9.1 says
+ * it does -- which is the case that matters most on this platform,
+ * since `./configure` names itself with a slash.
+ *
+ * Why this needs [ENOEXEC] at all on NT: nothing here can execute a
+ * script image.  RtlCreateUserProcess returns
+ * STATUS_INVALID_IMAGE_NOT_MZ / STATUS_INVALID_IMAGE_FORMAT and
+ * src/process/spawn.c maps both to ENOEXEC, so this fallback is the
+ * only route by which this shell can run a shell script.  XRAT (XCU
+ * C.2.9.1) states that as the clause's purpose: it "requires that the
+ * shell can execute shell scripts directly, even if the underlying
+ * system does not support the common #! interpreter convention".
+ *
+ * The interpreter is __find_interpreter()'s (src/process/interpreter.c),
+ * whose first candidate is sh.exe beside the running image -- for a
+ * shell that is a re-invocation of itself, which is what "having a
+ * shell invoked" most naturally means.
+ *
+ * argv: { arg0, resolved, args... }.  "any remaining arguments passed
+ * to the new shell" is we_wordv[1..], and the operand before them makes
+ * $0 the pathname (sh(1p) OPERANDS: `sh [command_file [argument...]]`,
+ * and sh/main.c takes command_file as $0).  2.9.1's "may be set to the
+ * command name" permits, but does not require, the other choice.
+ *
+ * Not taken: "If the executable file is not a text file, the shell may
+ * bypass this command execution.  In this case, it shall write an error
+ * message, and shall return an exit status of 126."  That is a "may",
+ * and taking it means deciding what a text file is -- a second sniff of
+ * the file, with its own wrong answers -- to suppress a case where the
+ * interpreter itself will produce a diagnostic anyway.  The permission
+ * is left unexercised rather than half-implemented.
+ *
+ * Returns a pid, or -1 with the caller's 126 to follow. */
+static int spawn_interpreted(const char *resolved, const wordexp_t *we, char *const envp[])
+{
+	char *shell, **av;
+	size_t n = we->we_wordc, i;
+	int pid;
+
+	shell = __find_interpreter();
+	if (!shell) return -1;
+	av = malloc((n + 3) * sizeof *av);
+	if (!av) { __free(shell); return -1; }
+	av[0] = n ? we->we_wordv[0] : (char *)"sh";
+	av[1] = (char *)resolved;
+	for (i = 1; i < n; i++) av[i + 1] = we->we_wordv[i];
+	av[(n ? n : 1) + 1] = 0;
+
+	pid = __spawn(shell, av, envp);
+	free(av);
+	__free(shell);
+	return pid;
+}
+
 static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, int env_mutate)
 {
 	wordexp_t we;
@@ -953,6 +1027,12 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 	}
 
 	out->pid = __spawn(resolved, we.we_wordv, envp);
+	/* XCU 2.9.1's [ENOEXEC] fallback -- the shell's own half of the
+	 * requirement whose libc half is execvp()'s (src/process/exec.c).
+	 * errno is read here, before __free()/wordfree()/free_strv() get a
+	 * chance to write it. */
+	if (out->pid < 0 && errno == ENOEXEC)
+		out->pid = spawn_interpreted(resolved, &we, envp);
 	__free(resolved);
 	wordfree(&we);
 	free_strv(envp, envn);

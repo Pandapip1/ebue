@@ -264,6 +264,10 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
 /* Resolve a program name the way execvp does: PATH search plus the .exe
  * suffix Windows wants.  Returns a malloc'd absolute path or NULL. */
 char *__find_program(const char *name, int use_path);
+/* The sh(1p) the [ENOEXEC] fallback runs, malloc'd, or 0.  Shared by
+ * execvp() (src/process/exec.c) and the shell's own command search
+ * (src/sh/exec.c); the choice is argued in src/process/interpreter.c. */
+char *__find_interpreter(void);
 
 /* ---- the in-process shell (src/sh/, see test/sh-design.md) -------------
  *

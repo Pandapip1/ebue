@@ -79,15 +79,139 @@ int execv(const char *path, char *const argv[])
 	return execve(path, argv, __environ);
 }
 
+/* exec.html DESCRIPTION: "In the cases where the other members of the
+ * exec family of functions would fail and set errno to [ENOEXEC], the
+ * execlp() and execvp() functions shall execute a command interpreter
+ * and the environment of the executed command shall be as if the
+ * process invoked the sh utility using execl() as follows:
+ *
+ *     execl(<shell path>, arg0, file, arg1, ..., (char *)0);
+ *
+ * where <shell path> is an unspecified pathname for the sh utility,
+ * file is the process image file, and for execvp(), where arg0, arg1,
+ * and so on correspond to the values passed to execvp() in argv[0],
+ * argv[1], and so on."
+ *
+ * which is why the same page's [ENOEXEC] entry is scoped "The exec
+ * functions, *except for execlp() and execvp()*, shall fail if" -- for
+ * these two it is not an error at all.  APPLICATION USAGE says the same
+ * thing from the other side: "When the execlp() and execvp() functions
+ * encounter such a file, they assume the file to be a shell script and
+ * invoke a known command interpreter to interpret such files.  This is
+ * now required by POSIX.1-2017."
+ *
+ * Which sh, and why: src/process/interpreter.c.  It is a second image
+ * rather than a call into the shell engine linked into this same
+ * libc.a, and that is the one real decision here, because
+ * test/sh-design.md's "reuse rule" says the shell-specified interfaces
+ * "call those functions directly and never spawn an external
+ * interpreter".  Why that rule does not reach this case:
+ *
+ *  - This clause is a process *replacement*, not a string to interpret.
+ *    wordexp()'s substitution must hand its result back, so it has to
+ *    run in the caller's process; a successful exec has no caller left
+ *    to return to.  Running the script inside the caller's address
+ *    space would leave the old image underneath the new one -- its
+ *    atexit handlers, its signal dispositions, its heap -- which is the
+ *    one thing exec.html says a successful exec does not do.
+ *  - The interpreter contract is bigger than the engine.  sh(1p)'s $0,
+ *    its positional parameters, its exit statuses, and above all
+ *    sh/main.c's up-front refusal of everything the engine would
+ *    otherwise *misread* rather than diagnose (`case`, the special
+ *    parameters that are still literal) live in that main(), not in
+ *    libc.a.  Calling __sh_parse()/__sh_exec_list() from here means
+ *    either duplicating that check or running a program named "case"
+ *    for a script that used one -- the "callers cannot tell" failure
+ *    test/sh-design.md calls worse than no shell at all.
+ *  - Linkage.  The same note's third reason for the in-process rule is
+ *    that the shell "costs nothing to programs that do not use it",
+ *    which is an archive-extraction property: a reference from this
+ *    file would pull the whole command language into every program that
+ *    calls any exec function.
+ *
+ * Returns only on failure, like every other exec path here. */
+static int shell_fallback(const char *path, char *const argv[], char *const envp[])
+{
+	int enoexec = errno;
+	char *shell, **av;
+	size_t n = 0, i;
+
+	shell = __find_interpreter();
+	if (!shell) { errno = enoexec; return -1; }
+	while (argv[n]) n++;
+
+	av = malloc((n + 3) * sizeof *av);
+	if (!av) { free(shell); errno = enoexec; return -1; }
+	/* arg0, file, arg1, ..., (char *)0 -- the clause's own shape.
+	 * arg0 is the caller's, not the shell's path: glibc substitutes
+	 * _PATH_BSHELL there, but POSIX.1-2017 names arg0 as "the value
+	 * passed to execvp() in argv[0]" and POSIX.1-2024 relaxes the same
+	 * slot to "<name> is an unspecified string", so passing argv[0]
+	 * through satisfies both.  It is only what the shell prefixes its
+	 * diagnostics with (sh/main.c's progname); $0 is the operand after
+	 * it either way (sh(1p) OPERANDS, and sh/main.c:508-512).
+	 *
+	 * What is passed as `file` is the *resolved* path, not the argument
+	 * as given.  exec.html says "file is the process image file", and
+	 * for a name with no <slash> the process image file is what the
+	 * PATH search found; the shell's command_file operand is a pathname
+	 * it opens relative to its own current directory, so handing it the
+	 * bare name would resolve it a second time, by different rules,
+	 * against a different place than the one it was found in.
+	 *
+	 * An empty argv (n == 0) is not something a conforming caller
+	 * produces -- exec.html: "The application shall ensure that the
+	 * last member of this array is a null pointer" and arg0 "should
+	 * point to a filename string" -- but it must not index argv[0]
+	 * here, so the shell gets its own name in that slot. */
+	av[0] = n ? argv[0] : (char *)"sh";
+	av[1] = (char *)path;
+	for (i = 1; i < n; i++) av[i + 1] = argv[i];
+	av[(n ? n : 1) + 1] = 0;
+
+	execve(shell, av, envp);
+
+	/* The interpreter could not be run.  The caller asked to execute
+	 * `file`, so that is what its errno stays about: "the shell is not
+	 * installed" is not a diagnosis of `file`, and [ENOEXEC] is what
+	 * this call meant before the fallback existed.  APPLICATION USAGE
+	 * expects exactly this residue: "These implementations of execvp()
+	 * and execlp() only give the [ENOEXEC] error in the rare case of a
+	 * problem with the command interpreter's executable file." */
+	free(av);
+	free(shell);
+	errno = enoexec;
+	return -1;
+}
+
 int execvpe(const char *file, char *const argv[], char *const envp[])
 {
 	char *full;
 	int use_path = !strchr(file, '/') && !strchr(file, '\\');
-	int r;
+	int r, e;
 	full = __find_program(file, use_path);
 	if (!full) { errno = ENOENT; return -1; }
 	r = execve(full, argv, envp);
+	/* The one place the p-forms part company with the rest of the
+	 * family.  [ENOEXEC] here is NT refusing the file as a process
+	 * image: RtlCreateUserProcess answers STATUS_INVALID_IMAGE_NOT_MZ
+	 * for a file with no MZ header at all or STATUS_INVALID_IMAGE_FORMAT
+	 * for a malformed one, and src/process/spawn.c turns both into
+	 * ENOEXEC.  Reading it back off errno rather than plumbing a status
+	 * out of __spawn() keeps the condition stated in the terms
+	 * exec.html states it in -- "would fail and set errno to [ENOEXEC]"
+	 * -- and needs no second channel through execve().
+	 *
+	 * Not gated on use_path.  The clause is about which *function* was
+	 * called, not how the name resolved: "the execlp() and execvp()
+	 * functions shall execute a command interpreter", with no exception
+	 * for a file argument containing a <slash>.  XCU 2.9.1 makes the
+	 * same choice explicitly for the shell's two branches, giving the
+	 * <slash> case its own sentence with the same fallback in it. */
+	if (r == -1 && errno == ENOEXEC) r = shell_fallback(full, argv, envp);
+	e = errno;
 	free(full);
+	errno = e;
 	return r;
 }
 
