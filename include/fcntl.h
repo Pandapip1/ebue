@@ -21,6 +21,24 @@ extern "C" {
 
 #include <bits/alltypes.h>
 
+/* fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall define the
+ * values used for l_whence, SEEK_SET, SEEK_CUR, and SEEK_END as
+ * described in <stdio.h>."
+ *
+ * Unconditional -- the sentence carries no option-group margin marker.
+ * It exists so a translation unit doing record locking, which needs
+ * this header for struct flock and F_SETLK, can fill in l_whence
+ * without also including <stdio.h>; on glibc and musl such a unit
+ * compiles, and here it did not.
+ *
+ * Same values as <stdio.h> and <unistd.h>, and deliberately spelled the
+ * same way rather than guarded: C99 6.10.3p2 makes an identical
+ * redefinition benign, which is what lets all three headers be included
+ * together, and is how <unistd.h> and <stdio.h> already coexist. */
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
 #define O_RDONLY  00
 #define O_WRONLY  01
 #define O_RDWR    02
