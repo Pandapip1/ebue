@@ -17,22 +17,4 @@
 boot/kaem/build-i386.kaem merge=ntlibc-kaem
 boot/kaem/build-x86_64.kaem merge=ntlibc-kaem
 
-# test/*.generated.md are the two gap reports (tools/posix-gapmap.sh,
-# tools/libc-test-map.sh), and they are almost entirely DERIVED: a greedy
-# header closure, a per-directory ledger, a reconciliation, a dozen
-# counts in prose. Land a header on one branch and a different one on
-# another and every number in both files moves, so a three-way TEXT merge
-# of them is not merely conflict-prone, it is meaningless -- the right
-# answer is neither side's text.
-#
-# Unlike boot/kaem/, though, these two have a separable data layer: each
-# report carries the rows it was rendered from in an HTML comment at its
-# end. tools/merge-gendata.sh merges THOSE, key by key, and re-renders --
-# a real resolution rather than a text reconciliation, and still a pure
-# function of the three blobs git hands a merge driver, which is the one
-# thing merge-kaem.sh's header shows a driver can rely on mid-merge.
-#
-# Same per-clone config story as ntlibc-kaem above -- see ./configure and
-# CONTRIBUTING.md's "Merging a generated report" section.
-test/POSIX-GAP-MAP.generated.md merge=ntlibc-gendata
-test/LIBC-TEST-MAP.generated.md merge=ntlibc-gendata
+test/*.generated.md merge=ntlibc-gendata

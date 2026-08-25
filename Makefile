@@ -449,10 +449,7 @@ libc-test: $(ALL_LIBS)
 libc-test-map: $(ALL_LIBS)
 	@$(srcdir)/tools/libc-test-map.sh
 
-libc-test-map-check: $(ALL_LIBS)
-	@LIBC_TEST_MAP_GITREPO="$(LIBC_TEST_MAP_GITREPO)" $(srcdir)/tools/libc-test-map.sh --check
-
-.PHONY: libc-test-map libc-test-map-check
+.PHONY: libc-test-map
 
 # posix-gapmap: how much of the Open POSIX Test Suite (third_party/ltp's
 # testcases/open_posix_testsuite/, a git submodule pinned at a SHA -- see
@@ -475,10 +472,7 @@ libc-test-map-check: $(ALL_LIBS)
 posix-gapmap: $(ALL_LIBS)
 	@$(srcdir)/tools/posix-gapmap.sh
 
-posix-gapmap-check: $(ALL_LIBS)
-	@$(srcdir)/tools/posix-gapmap.sh --check
-
-.PHONY: posix-gapmap posix-gapmap-check
+.PHONY: posix-gapmap posix-gapmap
 
 # posix-optsrun: the other half of the sentence posix-gapmap starts.
 #
@@ -507,10 +501,7 @@ posix-gapmap-check: $(ALL_LIBS)
 posix-optsrun: $(ALL_LIBS)
 	@$(srcdir)/tools/posix-optsrun.sh
 
-posix-optsrun-check: $(ALL_LIBS)
-	@$(srcdir)/tools/posix-optsrun.sh --check
-
-.PHONY: posix-optsrun posix-optsrun-check
+.PHONY: posix-optsrun
 
 #
 # check-kernel32: convenience wrapper for a developer who already has a

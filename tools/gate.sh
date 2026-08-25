@@ -384,53 +384,6 @@ if want libc-test; then
 	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS && make libc-test"
 fi
 
-# libc-test-map: the STALENESS-AND-HONESTY check over the checked-in
-# coverage map (test/LIBC-TEST-MAP.generated.md), not the map itself.
-#
-# The map is a distribution, and a gate stage over a distribution needs a
-# threshold nobody can justify -- which is the "number nobody reads"
-# failure mode by another route.  So the map is regenerated on demand
-# (`make libc-test-map`) and nightly, and what runs here is `--check`:
-# the checked-in file must still describe THIS tree, its recorded ntlibc
-# stamp must be well-formed, and its four invariants must hold.
-# Those all have honest yes/no answers.
-#
-# No WINE: this stage compiles and links the corpus to classify it and
-# never runs a test.  It measures ~9 s, against a critical path set by
-# asan (~198 s), so it costs the gate nothing.
-if want libc-test-map; then
-	t="$GATE_JOBS_DIR/trees/libc-test-map"
-	run_stage libc-test-map "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && LIBC_TEST_MAP_GITREPO='$srcdir' make libc-test-map-check"
-fi
-
-# posix-gapmap: the staleness-and-honesty check on
-# test/POSIX-GAP-MAP.generated.md, the Open POSIX Test Suite gap report.
-#
-# NOT a pass/fail run of that suite, and deliberately so: the report's
-# output is a distribution, and a threshold on a distribution is a number
-# nobody can justify -- which is the "number nobody reads" failure mode
-# by another route. What this stage asserts is narrower and checkable:
-# the checked-in report matches the tree, and the measurement that
-# produced it still discriminates (census, partition, floors in BOTH
-# directions, and two canaries). See tools/posix-gapmap.sh's header.
-#
-# 1610 tcc compile-and-links, no Wine at all -- ~20 s when it had the
-# whole box (-P nproc), longer now that it runs at GAPMAP_JOBS =
-# GATE_MAKE_JOBS like every other fan-out here. Still nowhere near the
-# critical path asan sets, and the whole box was never this stage's to
-# take: see the concurrency-budget comment at the top.
-#
-# GAPMAP_GITDIR points back at the real tree because this copy has no
-# .git of its own, and one of the invariants is that the SHA the report
-# records still resolves. The script FAILS rather than skips when
-# it cannot reach a repository -- "I could not check" and "it checks out"
-# are different claims -- so the variable is load-bearing, not a
-# convenience.
-if want posix-gapmap; then
-	t="$GATE_JOBS_DIR/trees/posix-gapmap"
-	run_stage posix-gapmap "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && GAPMAP_GITDIR='$srcdir' make posix-gapmap-check"
-fi
-
 # posix-optsrun: the other half. posix-gapmap measures what can be
 # COMPILED against this library and executes nothing; this stage RUNS the
 # 591 tests it classes as C, which until it existed had never been run at

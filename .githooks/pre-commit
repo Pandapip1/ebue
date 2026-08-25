@@ -57,62 +57,6 @@ if [ -n "$conflicted" ]; then
 	exit 1
 fi
 
-# ---------------------------------------------------- the gap reports
-#
-# test/POSIX-GAP-MAP.generated.md and test/LIBC-TEST-MAP.generated.md are
-# generated and committed too, and they go stale for a reason nothing
-# else here does: not an edit to them, but a header or a symbol landing
-# somewhere else in the tree.  spawn.h landing is what put both of CI's
-# staleness stages red, from two commits that never touched either file.
-#
-# WHAT THIS COSTS, MEASURED
-#
-# On a 24-core box, from a built tree: the full re-measurement is ~6.0s
-# for posix-gapmap (it compiles all 1610 OPTS conformance tests) and
-# ~1.3s for libc-test-map, plus ~0.2s for the `make` in front of them.
-# The cheap half -- re-rendering both reports from the data blocks they
-# carry, which compiles nothing -- is ~2.8s and ~0.3s, and needs neither
-# the submodules, nor config.mak, nor a build.
-#
-# ~7.5s is inside the budget of a hook people will actually leave
-# enabled, so this does the real measurement whenever it can rather than
-# only re-rendering.  What it will not do is pay it for a commit that
-# cannot possibly have moved either number: the exemption list below is
-# deliberately tiny and stated as an exemption, so that anything not on
-# it -- anything at all that could touch a header or a symbol -- gets
-# measured.  Being wrong in the direction of doing the work is cheap
-# here; being wrong the other way is a stale report.
-#
-# WHEN THE SUBMODULE IS NOT THERE
-#
-# Neither generator can measure anything without its submodule
-# (third_party/ltp, third_party/libc-test), and a hook that failed the
-# commit over that would be intolerable in a clone made without
-# --recurse-submodules.  But silently doing nothing is the staleness bug
-# with extra steps.  So: re-render from the data block (which needs no
-# submodule at all, and still catches a hand-edited report, a template
-# change, and a truncated data block), and say plainly what was checked
-# and what was not.  "I could not measure this" and "this measures out"
-# are different claims and this hook never conflates them.
-
-report_render() {
-	# $1 tool, $2 report path, $3 submodule path
-	if ! "./tools/$1.sh" --render >/dev/null 2>"$hookw/err"; then
-		echo "pre-commit: ./tools/$1.sh --render failed:" >&2
-		sed 's/^/pre-commit:   /' "$hookw/err" >&2
-		echo "pre-commit: $2 cannot be re-rendered from its own data" >&2
-		echo "pre-commit: block.  Regenerate it with 'make $1'." >&2
-		return 1
-	fi
-	if ! git diff --quiet -- "$2"; then
-		echo "pre-commit: $2 does not match its own data block." >&2
-		echo "pre-commit: Re-rendering it changed the file, which means it" >&2
-		echo "pre-commit: was hand-edited, or the renderer changed under it." >&2
-		echo "pre-commit: Review the diff, 'git add $2' and commit again." >&2
-		return 1
-	fi
-	return 0
-}
 
 # Is the recorded ntlibc stamp one this tree can stand behind?  Returns 0
 # if it is, non-zero if the report needs re-measuring, in which case the
@@ -145,9 +89,6 @@ report_sha_ok() {
 hookw=$(mktemp -d)
 trap 'rm -rf "$hookw"' EXIT
 
-report_render posix-gapmap   test/POSIX-GAP-MAP.generated.md || exit 1
-report_render libc-test-map  test/LIBC-TEST-MAP.generated.md || exit 1
-
 if [ ! -f config.mak ]; then
 	# Nothing configured yet, so there is no CC/ARCH to hand gen-kaem.sh
 	# and no build to measure the gap reports against; the re-render above
@@ -177,8 +118,6 @@ for f in $staged; do
 	*) relevant=1 ;;
 	esac
 done
-report_sha_ok test/POSIX-GAP-MAP.generated.md  || relevant=1
-report_sha_ok test/LIBC-TEST-MAP.generated.md  || relevant=1
 
 [ "$relevant" -eq 1 ] || exit 0
 

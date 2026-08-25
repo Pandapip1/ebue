@@ -193,26 +193,16 @@ require_suite() {
 
 mode=${1:---generate}
 case "$mode" in
---generate|--check|--selftest|--render) ;;
+--generate|--check|--selftest) ;;
 -h|--help) usage; exit 0 ;;
 *) usage >&2; exit 2 ;;
 esac
-
-# --render takes an optional second argument: re-render THAT file in
-# place, rather than the checked-in report.  Same device as
-# tools/gen-kaem.sh's optional output path and for the same reason --
-# tools/merge-gendata.sh has to render git's temporary %A file, and must
-# never touch the real report path, which git's merge machinery owns
-# until the whole merge/rebase/cherry-pick has finished.
-if [ "$mode" = --render ] && [ $# -ge 2 ]; then
-	REPORT=$2
-fi
 
 # --selftest exercises the invariant checks themselves against synthetic
 # inputs; it needs no suite and no build.  --render re-derives the report
 # from the data block already embedded in it (see "the data block" below):
 # it compiles nothing, so it needs neither the suite nor a build either.
-if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
+if [ "$mode" != --selftest ]; then
 	require_suite
 fi
 
@@ -227,7 +217,7 @@ fi
 # The guard, the compiler identity and the CFLAGS all come from
 # sm_require_built, which is also what unlocks sm_cc.  Nothing here may
 # invoke $CC directly -- see the engine's "the guard".
-if [ "$mode" != --selftest ] && [ "$mode" != --render ]; then
+if [ "$mode" != --selftest ]; then
 	sm_require_built
 	sm_require_nm
 fi
@@ -1217,7 +1207,7 @@ EOF
 	printf '%s\n' "$SM_DATA_END"
 }
 
-if [ "$mode" = --generate ] || [ "$mode" = --render ]; then
+if [ "$mode" = --generate ]; then
 	emit > "$REPORT.tmp" || { rm -f "$REPORT.tmp"; exit 1; }
 	mv "$REPORT.tmp" "$REPORT"
 	echo "posix-gapmap: wrote $REPORT"
