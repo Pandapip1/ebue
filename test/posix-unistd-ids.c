@@ -45,9 +45,19 @@
 #include <unistd.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+extern char **environ;
+/* Internal: spawn a program as a child and return its pid
+ * (src/process/spawn.c).  fork() needs RtlCloneUserProcess, which stock
+ * wine lacks, so this is how this suite gets a real child at all --
+ * test/misc.c and test/exec.c use it the same way.  Needed here because
+ * setpgid()'s [ESRCH] clause is about the *caller's own* children, and
+ * nothing else in this file can produce one to point it at. */
+int __spawn(const char *path, char *const argv[], char *const envp[]);
 
 /* ============================================================
  * getuid / geteuid / getgid / getegid
@@ -305,7 +315,7 @@ static void test_setid_family(void)
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/setpgrp.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/setsid.html
  * ============================================================ */
-static void test_process_group_and_session(void)
+static void test_process_group_and_session(const char *exe)
 {
 	pid_t self = getpid();
 
@@ -386,27 +396,69 @@ static void test_process_group_and_session(void)
 	CHECK(getsid(0) != (pid_t)-1 && errno == 0);
 	CHECK(getsid(self) == getsid(0) && errno == 0);
 
-#if NTLIBC_TEST(BUG, posix_ids_setpgid_validates_arguments) /* BUG: setpgid() accepts a negative pgid and an unrelated pid.
-	 * setpgid.html ERRORS, both shall-fail:
+	/* setpgid.html ERRORS, both shall-fail:
 	 *   "[EINVAL] The value of the pgid argument is less than 0, or is
 	 *    not a value supported by the implementation."
 	 *   "[ESRCH] The value of the pid argument does not match the
 	 *    process ID of the calling process or of a child process of
 	 *    the calling process."
 	 *
-	 * Mechanism: src/unistd/ids.c:22 is
-	 *     int setpgid(pid_t a, pid_t b) { (void)a; (void)b; return 0; }
-	 * -- neither argument is looked at.  The [EINVAL] half is a pure
-	 * range check on a signed value and needs no process-group model
-	 * whatsoever; the [ESRCH] half needs the same child lookup the
-	 * getpgid fence above describes.  Probed on this tree:
-	 * setpgid(0, -1) and setpgid(999999, 0) both return 0.
-	 * Re-enable when setpgid() validates its arguments. */
+	 * Neither needs a process-group model.  [EINVAL] is a range check
+	 * on a signed value.  [ESRCH] is a *narrower* question than the
+	 * getpgid()/getsid() clause above -- "the calling process or ... a
+	 * child process of the calling process", not "there is no process
+	 * with a process ID equal to pid" -- so src/unistd/ids.c answers it
+	 * from the child table (src/process/children.c) alone rather than
+	 * from the pid_exists() those two use, and setpgid() therefore
+	 * makes no NT call for any argument.  999999 is the unallocated pid
+	 * the getters are probed with above; for them it fails because
+	 * nothing has that pid, for setpgid() it would fail even if
+	 * something did.
+	 *
+	 * The order the two are checked in is itself specified: pgid 0
+	 * means "the process ID of the indicated process", so there is no
+	 * pgid to judge until pid is known to indicate a process of the
+	 * caller's -- setpgid(999999, 0) is [ESRCH], not an [EINVAL] about
+	 * a pgid that was never resolved. */
 	errno = 0;
 	CHECK(setpgid(0, -1) == -1 && errno == EINVAL);
 	errno = 0;
 	CHECK(setpgid(999999, 0) == -1 && errno == ESRCH);
-#endif
+
+	/* The other half of the [ESRCH] clause, which the two assertions
+	 * above cannot reach: a real child of this process must be
+	 * *accepted*, and must stop being accepted once wait() has
+	 * collected it (a reaped child is no longer a child process of the
+	 * calling process).  Without this pair, a setpgid() that accepted
+	 * nothing but the caller itself would satisfy everything asserted
+	 * so far while breaking the one call every job-control parent makes
+	 * -- setpgid(child, pgid) from the parent side of a fork.
+	 *
+	 * Spawning is a note-and-skip rather than a failure: what it probes
+	 * is an additional case, and the clause assertions above do not
+	 * depend on a child existing. */
+	{
+		char *av[3];
+		int pid, status;
+
+		av[0] = (char *)exe;
+		av[1] = (char *)"--child";
+		av[2] = NULL;
+		pid = __spawn(exe, av, environ);
+		if (pid < 0) {
+			printf("note: cannot spawn \"%s\" (errno %d); setpgid()'s child clause not probed\n",
+			       exe, errno);
+		} else {
+			errno = 0;
+			CHECK(setpgid(pid, getpgrp()) == 0 && errno == 0);
+			/* ...and the pgid range check applies to a child too */
+			errno = 0;
+			CHECK(setpgid(pid, -1) == -1 && errno == EINVAL);
+			CHECK(waitpid(pid, &status, 0) == pid);
+			errno = 0;
+			CHECK(setpgid(pid, getpgrp()) == -1 && errno == ESRCH);
+		}
+	}
 
 #if NTLIBC_TEST(BUG, posix_ids_setsid_second_call_eperm) /* BUG (compiles and links; formerly UNIMPL):: setsid() cannot report [EPERM], because this platform
 	 * has no state in which the clause's precondition could become
@@ -867,13 +919,34 @@ static void test_gethostname(void)
 	 * source to cross-check it against on this platform. */
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	char tmpl[] = "posixunistdids-XXXXXX";
-	char *dir = mkdtemp(tmpl);
+	char *dir;
 	char origcwd[4096];
+	static char self[4096];
+
+	/* The --child role.  test_process_group_and_session() spawns this
+	 * program to get a real child process of its own (see there); the
+	 * child has nothing to check and exits 0.  Handled before the
+	 * fixture directory below so a child never creates or removes
+	 * one. */
+	if (argc > 1 && !strcmp(argv[1], "--child")) return 0;
 
 	CHECK(getcwd(origcwd, sizeof origcwd) == origcwd);
+
+	/* __spawn() resolves a relative path against the *current*
+	 * directory and the tests below run from the fixture directory, so
+	 * argv[0] is made absolute here, while the original cwd still
+	 * applies.  tools/runtests.sh already invokes the exe by absolute
+	 * path; the join is for a run by hand. */
+	if (argv[0][0] == '/' || argv[0][0] == '\\' ||
+	    (argv[0][0] && argv[0][1] == ':'))
+		snprintf(self, sizeof self, "%s", argv[0]);
+	else
+		snprintf(self, sizeof self, "%s/%s", origcwd, argv[0]);
+
+	dir = mkdtemp(tmpl);
 	CHECK(dir == tmpl);
 	if (!dir) return 1;
 	CHECK(chdir(dir) == 0);
@@ -881,7 +954,7 @@ int main(void)
 	test_getid_always_successful();
 	test_getgroups();
 	test_setid_family();
-	test_process_group_and_session();
+	test_process_group_and_session(self);
 	test_chown_family();
 	test_alarm();
 	test_nice();

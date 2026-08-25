@@ -100,7 +100,65 @@ pid_t getpgid(pid_t p)
 	if (!pid_exists(p)) { errno = ESRCH; return -1; }
 	return 1;
 }
-int setpgid(pid_t a, pid_t b) { (void)a; (void)b; return 0; }
+/* setpgid()'s [ESRCH] asks a *narrower* question than pid_exists()
+ * above, so it gets its own helper rather than that one.  getpgid.html
+ * and getsid.html fail for a pid that names no process at all;
+ * setpgid.html fails for a pid that names no process *of the caller's*:
+ * "[ESRCH] The value of the pid argument does not match the process ID
+ * of the calling process or of a child process of the calling process."
+ * A pid belonging to some unrelated process therefore has two different
+ * right answers on this page and that one -- getpgid() must answer for
+ * it, setpgid() must refuse it -- so reusing pid_exists() here would be
+ * wrong in exactly the case the clause is about, not merely wasteful.
+ *
+ * The narrowing is what removes the NT call: pid_exists()'s third arm
+ * puts an unknown pid to the object manager because "does this process
+ * exist" is a question about the whole machine, but "is this a child of
+ * mine" is answerable entirely from this process's own bookkeeping.
+ * The child table (src/process/children.c) *is* that set: __child_add()
+ * records every pid fork()/__spawn() creates and __child_remove() drops
+ * it when wait() collects it, which is precisely POSIX's lifetime for
+ * "a child process of the calling process" -- an exited-but-unreaped
+ * child is still one, and a reaped one is not.  So setpgid() makes no
+ * NT call for any argument.
+ *
+ * pid 0 is the caller by DESCRIPTION ("if pid is 0, the process ID of
+ * the calling process shall be used"), and is answered before the table
+ * is consulted for a second reason: __child_find(0) would match the
+ * first *free* slot, since a free slot is one whose pid is 0.
+ *
+ * The two failures are checked pid-first because pgid cannot be fully
+ * resolved until pid is: "if pgid is 0, the process ID of the indicated
+ * process shall be used", and there is no indicated process to take it
+ * from when pid names nothing of ours.
+ *
+ * [EINVAL] is then the range check its clause opens with -- "The value
+ * of the pgid argument is less than 0, or is not a value supported by
+ * the implementation" -- and only that.  Deciding which non-negative
+ * pgids are "supported" would take the process-group model this file
+ * deliberately does not have (getpgrp() answers a fixed 1 for every
+ * process, and test/posix-unistd-ids.c's setsid()/setpgrp() fences
+ * record that as a chosen fiction rather than an oversight), so a
+ * request naming some other group is still granted as the no-op it has
+ * always been.  posix_spawn()'s POSIX_SPAWN_SETPGROUP reaches the
+ * opposite conclusion from the same sentence (src/process/posix_spawn.c
+ * refuses any pgroup but getpgrp()'s) because it has to decide, at
+ * process creation, whether it can honour a flag it was handed; nothing
+ * about that binds the plain no-op case here.
+ */
+static int pid_is_self_or_child(pid_t p)
+{
+	if (p == 0 || p == getpid()) return 1;
+	if (p < 0) return 0;
+	return __child_find((int)p) != 0;
+}
+
+int setpgid(pid_t pid, pid_t pgid)
+{
+	if (!pid_is_self_or_child(pid)) { errno = ESRCH; return -1; }
+	if (pgid < 0) { errno = EINVAL; return -1; }
+	return 0;
+}
 pid_t setpgrp(void) { return 1; }
 pid_t setsid(void) { return 1; }
 pid_t getsid(pid_t p)
