@@ -633,9 +633,28 @@ static void test_times_children(void)
 	 *
 	 * tms_cstime is deliberately not held to > 0: a child that only
 	 * spins in user code need not be charged any system time at all,
-	 * and it measures 0 here. */
+	 * and it measures 0 here.
+	 *
+	 * Not held natively.  tools/asan-build.sh compiles this suite
+	 * against fuzz/ntstubs.c, whose NtQueryInformationProcess answers
+	 * ProcessTimes for this process only and returns
+	 * STATUS_NOT_IMPLEMENTED for any child handle ("if (f) return
+	 * STATUS_NOT_IMPLEMENTED;  /-* only this process's own times *-/").
+	 * fill_child_rusage() bails on that status, so the accumulator is
+	 * legitimately zero there and no assertion could tell that apart
+	 * from a real accounting failure.  Saying so out loud rather than
+	 * dropping the check silently: a run that did not test the clause
+	 * should not read like one that did. */
+#ifdef _WIN32
 	CHECK(t.tms_cutime > 0);
 	CHECK(timeval_to_clockticks(&ru_children.ru_utime) > 0);
+#else
+	printf("note: child CPU-time totals not held to > 0 in the native build "
+	       "(fuzz/ntstubs.c's ProcessTimes is not implemented for a child "
+	       "handle, so the accumulator is legitimately 0); the "
+	       "tms_cutime/getrusage cross-check below therefore agrees "
+	       "vacuously here\n");
+#endif
 
 	CHECK(t.tms_cutime == timeval_to_clockticks(&ru_children.ru_utime));
 	CHECK(t.tms_cstime == timeval_to_clockticks(&ru_children.ru_stime));

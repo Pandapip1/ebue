@@ -571,8 +571,18 @@ static void test_wait_rusage(const char *self)
 	 * zero on a platform that charges child CPU time at all (measured
 	 * under stock apt Wine: 0.17s by this point, and growing across
 	 * this reap).  The user half is not asserted -- these children exit
-	 * without running user code worth a tick, and it measures 0. */
+	 * without running user code worth a tick, and it measures 0.
+	 *
+	 * Not held in the native asan build, for the reason test/posix-grp.c
+	 * spells out at length: fuzz/ntstubs.c's ProcessTimes returns
+	 * STATUS_NOT_IMPLEMENTED for a child handle, so there the
+	 * accumulator is legitimately zero. */
+#ifdef _WIN32
 	CHECK(timeval_usec(&ru_after.ru_stime) > 0);
+#else
+	printf("note: RUSAGE_CHILDREN total not held to > 0 natively "
+	       "(fuzz/ntstubs.c reports no child process times)\n");
+#endif
 
 	/* wait3() is the (-1, ...) shape of the same call; ru == NULL is
 	 * also valid, like waitpid(). */
