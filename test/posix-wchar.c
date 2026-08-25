@@ -1217,6 +1217,67 @@ static void test_ungetwc_discarded_by_positioning(void)
 /* ---------------------------------------------------------------------
  * fwide -- fwide.html
  * ------------------------------------------------------------------- */
+#if NTLIBC_TEST(BUG, posix_wchar_freopen_clears_orientation) /* BUG: freopen() does not clear the stream's orientation or its
+	 * conversion state.  freopen.html DESCRIPTION: "After a successful
+	 * call to the freopen() function, the orientation of the stream
+	 * shall be cleared, the encoding rule shall be cleared, and the
+	 * associated mbstate_t object shall be set to a state
+	 * corresponding to an initial conversion state."  XSH 2.5 makes
+	 * the same point from the other side: "Only a call to the
+	 * freopen() function or the fwide() function can otherwise alter
+	 * the orientation of a stream" -- freopen() is one of exactly two
+	 * things that can, so a freopen() that does not is not a small
+	 * omission.
+	 *
+	 * Mechanism: src/stdio/file.c's freopen() reuses the same FILE
+	 * object and resets
+	 *
+	 *     f->eof = f->err = 0;
+	 *     f->rpos = f->rend = f->wpos = 0;
+	 *     f->nunget = 0;
+	 *
+	 * The five wide fields declared next to those in
+	 * src/stdio/stdio_impl.h -- `int wide; mbstate_t wst_in, wst_out;
+	 * wchar_t wunget; int nwunget;` -- are all left as they were.
+	 * Three things survive the reopen: the orientation, which
+	 * src/stdio/wide.c's fwide() then reports verbatim and refuses to
+	 * change; a half-decoded character or an owed low surrogate in
+	 * wst_in, which corrupts the first fgetwc() on the *new* file; and
+	 * the ungetwc() pushback slot.
+	 *
+	 * The visible consequence is that a stream reopened after any wide
+	 * operation can never be used with the byte functions again in a
+	 * conforming way -- fwide(f, -1) is refused on a stream POSIX says
+	 * has no orientation at all.
+	 *
+	 * Re-enable when freopen() resets the wide half of the FILE
+	 * alongside the byte half. */
+static void test_freopen_clears_orientation(void)
+{
+	FILE *f = fopen("test.tmp", "wb+");
+
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fputs("A", f) >= 0);
+	rewind(f);
+
+	CHECK(fwide(f, 0) == 0);	/* no orientation yet */
+	CHECK(fgetwc(f) == L'A');	/* now wide-oriented */
+	CHECK(fwide(f, 0) > 0);
+
+	f = freopen("test2.tmp", "wb+", f);
+	CHECK(f != 0);
+	if (!f) return;
+
+	CHECK(fwide(f, 0) == 0);	/* "the orientation ... shall be cleared" */
+	CHECK(fwide(f, -1) < 0);	/* and so it is selectable again */
+
+	CHECK(fclose(f) == 0);
+	remove("test.tmp");
+	remove("test2.tmp");
+}
+#endif
+
 static void test_fwide(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
