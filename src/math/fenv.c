@@ -267,7 +267,16 @@ int fesetenv(const fenv_t *envp)
 int feholdexcept(fenv_t *envp)
 {
 	unsigned char env[28] = { 0 };
-	unsigned short cw;
+	/* Zero-initialised for the same reason, and with the same dead-in-
+	 * practice status, as the buffers in feclearexcept() above: the
+	 * analyzer cannot see that the fnstcw below writes through its
+	 * pointer operand, so it treats the read that follows as a garbage
+	 * value (clang-analyzer-core.UndefinedBinaryOperatorResult).  The
+	 * asm overwrites every byte, so this initialiser never survives to
+	 * be read -- it is not a correctness fix, and it is not optional
+	 * either: every other local in this file carries it for the same
+	 * reason.  Do not remove it as redundant. */
+	unsigned short cw = 0;
 
 	(void)fegetenv(envp);
 	(void)feclearexcept(FE_ALL_EXCEPT);
