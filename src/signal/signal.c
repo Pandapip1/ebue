@@ -331,8 +331,15 @@ int siginterrupt(int sig, int flag) { (void)sig; (void)flag; return 0; }
 int sigaltstack(const stack_t *ss, stack_t *old) { (void)ss; if (old) { old->ss_sp = 0; old->ss_size = 0; old->ss_flags = SS_DISABLE; } return 0; }
 int __libc_current_sigrtmin(void) { return 35; }
 int __libc_current_sigrtmax(void) { return _NSIG - 1; }
-int sighold(int sig) { sigset_t s; sigemptyset(&s); sigaddset(&s, sig); return sigprocmask(SIG_BLOCK, &s, 0); }
-int sigrelse(int sig) { sigset_t s; sigemptyset(&s); sigaddset(&s, sig); return sigprocmask(SIG_UNBLOCK, &s, 0); }
+/* sigaddset() is the only place these two ever look at sig, so its
+ * failure is the whole of sigset.html's "[EINVAL] The sig argument is an
+ * illegal signal number" for them: dropping it does not degrade to a
+ * failed sigprocmask(), because the set is then simply left empty and an
+ * empty mask is a legal argument that sigprocmask() reports success for.
+ * Returning here also leaves the process mask untouched, as a shall-fail
+ * call must. */
+int sighold(int sig) { sigset_t s; sigemptyset(&s); if (sigaddset(&s, sig) < 0) return -1; return sigprocmask(SIG_BLOCK, &s, 0); }
+int sigrelse(int sig) { sigset_t s; sigemptyset(&s); if (sigaddset(&s, sig) < 0) return -1; return sigprocmask(SIG_UNBLOCK, &s, 0); }
 void (*sigset(int sig, void (*h)(int)))(int) { return signal(sig, h); }
 int sigpause(int sig) { (void)sig; errno = EINTR; return -1; }
 
