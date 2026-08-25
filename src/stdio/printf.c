@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <math.h>
+#include <wchar.h>
 #include <errno.h>
 #include "stdio_impl.h"
 
@@ -52,25 +53,104 @@ enum { LM_NONE, LM_hh, LM_h, LM_l, LM_ll, LM_j, LM_z, LM_t, LM_L };
  * which makes its body PREC_MAX+1 whatever decexp is. */
 #define BODYMAX 1536
 
-/* Write n bytes to f, tracking the logical (untruncated) total in
- * *count.  A short write is a real error unless f is a fixed memory
- * buffer (sprintf/snprintf), in which case it is just truncation. */
-static void out(FILE *f, const char *s, size_t n, long *count, int *bad)
+/* ------------------------------------------------------------------
+ * FORMAT CURSOR
+ *
+ * The directive scanner reads its format through gf() and steps by `st`
+ * bytes, so that one scanner serves fprintf() (a byte format) and,
+ * once the wide entry points exist, fwprintf() (a wide one).  Every
+ * character a conversion specification can contain is ASCII.
+ *
+ * A MACRO rather than a static function, and measured rather than
+ * assumed: the compiler this library ships through is tcc, which does
+ * no inlining, so a fetch helper written as a function is a real call
+ * per format character.  The identical change cost 17% in
+ * src/stdio/scanf.c (a7c2277).
+ *
+ * `st` is an int, and the width of the pointer arithmetic below is
+ * decided by that declared type rather than by a cast at any one site.
+ *
+ * The cursor is named `fp`, not `p`, deliberately: renaming it makes
+ * any site that still dereferences the old pointer a COMPILE error
+ * rather than a silent one-byte read of a wide format unit.  At st == 1
+ * such a miss behaves perfectly and is invisible to every test, which
+ * is the whole hazard of a stride refactor.
+ * ------------------------------------------------------------------ */
+#define gf(q, s) ((s) == 1 ? (unsigned)(unsigned char)*(q) \
+                           : (unsigned)*(const wchar_t *)(const void *)(q))
+
+/* ------------------------------------------------------------------
+ * THE SINK
+ *
+ * Everything this formatter emits goes through out() below, so that one
+ * body of code can serve fprintf() -- bytes, and a return counted in
+ * bytes -- and fwprintf(), whose return is "the number of wide
+ * characters transmitted" (fwprintf.html RETURN VALUE).
+ *
+ * `count` and `bad` moved off the parameter lists and into the struct
+ * deliberately, and not for tidiness: the signature change makes every
+ * one of the ~40 call sites a compile error until it is converted,
+ * which is the only way to be sure none was missed.  A refactor whose
+ * misses still compile is a refactor whose misses ship.
+ *
+ * `ost` is the conversion state for encoding wide characters onto a
+ * BYTE stream.  It lives here rather than in a local because a
+ * supplementary character is two wchar_t on this target: wcrtomb()
+ * holds the high surrogate and writes nothing until its partner
+ * arrives, so the state must survive between the units of one %ls.
+ * Nothing uses it yet; it arrives with the conversions that need it.
+ * ------------------------------------------------------------------ */
+struct sink {
+	FILE *f;
+	int wide;       /* emit wide characters, and count them */
+	int widemem;    /* wide AND the buffer holds wchar_t: precomputed,
+	                 * because out() is the hottest function here and
+	                 * tcc will not hoist the two loads itself */
+	long count;     /* logical (untruncated) total, in sink units */
+	int bad;
+	mbstate_t ost;
+};
+
+/* Emit n bytes of ASCII text -- everything this file GENERATES (digits,
+ * signs, padding, exponents, "0x", "(nil)", "(null)"), and nothing that
+ * came from a caller's string.  That restriction is what makes a wide
+ * sink almost free: an ASCII wide character encodes to the very byte it
+ * already is, so on a byte-backed stream the bytes written are the same
+ * and the count is the same number either way -- one unit per byte.
+ * The one case that must convert is a buffer that holds wchar_t rather
+ * than their encoding, which is what f->wmem marks.
+ *
+ * A short write is a real error unless f is a fixed memory buffer
+ * (sprintf/snprintf), in which case it is just truncation. */
+static void out(struct sink *sk, const char *s, size_t n)
 {
-	if (*bad) return;
-	if (n && __fwrite(s, 1, n, f) != n) {
-		if (!f->is_mem || f->mem_dynamic) { f->err = 1; *bad = 1; return; }
+	if (sk->bad) return;
+	if (sk->widemem) {
+		while (n) {
+			wchar_t stage[32];
+			size_t k = n < 32 ? n : 32, i;
+			for (i = 0; i < k; i++) stage[i] = (wchar_t)(unsigned char)s[i];
+			if (__fwrite(stage, sizeof *stage, k, sk->f) != k) {
+				if (!sk->f->is_mem || sk->f->mem_dynamic) { sk->f->err = 1; sk->bad = 1; return; }
+			}
+			sk->count += (long)k;
+			s += k; n -= k;
+		}
+		return;
 	}
-	*count += (long)n;
+	if (n && __fwrite(s, 1, n, sk->f) != n) {
+		if (!sk->f->is_mem || sk->f->mem_dynamic) { sk->f->err = 1; sk->bad = 1; return; }
+	}
+	sk->count += (long)n;
 }
 
-static void pad(FILE *f, char c, size_t n, long *count, int *bad)
+static void pad(struct sink *sk, char c, size_t n)
 {
 	char buf[16];
 	memset(buf, c, sizeof buf);
-	while (n && !*bad) {
+	while (n && !sk->bad) {
 		size_t k = n < sizeof buf ? n : sizeof buf;
-		out(f, buf, k, count, bad);
+		out(sk, buf, k);
 		n -= k;
 	}
 }
@@ -344,14 +424,14 @@ static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos)
 /* Write a body of n bytes with `zeros` further '0' spliced in at offset
  * zpos (the end of the mantissa), which is where a precision clamped to
  * PREC_MAX left off. */
-static void out_body(FILE *f, const char *body, int n, int zpos, long zeros, long *count, int *bad)
+static void out_body(struct sink *sk, const char *body, int n, int zpos, long zeros)
 {
-	out(f, body, (size_t)zpos, count, bad);
-	pad(f, '0', (size_t)zeros, count, bad);
-	out(f, body + zpos, (size_t)(n - zpos), count, bad);
+	out(sk, body, (size_t)zpos);
+	pad(sk, '0', (size_t)zeros);
+	out(sk, body + zpos, (size_t)(n - zpos));
 }
 
-static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags, int width, long *count, int *bad)
+static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, int flags, int width)
 {
 	char body[BODYMAX];
 	struct dec D;
@@ -419,8 +499,8 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 	 * spend an age emitting a result that cannot be reported. */
 	if (zeros > (long)(INT_MAX - n - prefixlen)) {
 		errno = EOVERFLOW;
-		f->err = 1;
-		*bad = 1;
+		sk->f->err = 1;
+		sk->bad = 1;
 		return;
 	}
 	total = n + (int)zeros + prefixlen;
@@ -429,36 +509,42 @@ static void emit_float(FILE *f, double v, int conv, int prec, int alt, int flags
 		int pad_n = width - total;
 		if (pad_n < 0) pad_n = 0;
 		if (flags & 4) { /* left */
-			out(f, pfx, (size_t)prefixlen, count, bad);
-			out_body(f, body, n, zpos, zeros, count, bad);
-			pad(f, ' ', (size_t)pad_n, count, bad);
+			out(sk, pfx, (size_t)prefixlen);
+			out_body(sk, body, n, zpos, zeros);
+			pad(sk, ' ', (size_t)pad_n);
 		} else if ((flags & 8) && !special) { /* zero pad, never for inf/nan */
-			out(f, pfx, (size_t)prefixlen, count, bad);
-			pad(f, '0', (size_t)pad_n, count, bad);
-			out_body(f, body, n, zpos, zeros, count, bad);
+			out(sk, pfx, (size_t)prefixlen);
+			pad(sk, '0', (size_t)pad_n);
+			out_body(sk, body, n, zpos, zeros);
 		} else {
-			pad(f, ' ', (size_t)pad_n, count, bad);
-			out(f, pfx, (size_t)prefixlen, count, bad);
-			out_body(f, body, n, zpos, zeros, count, bad);
+			pad(sk, ' ', (size_t)pad_n);
+			out(sk, pfx, (size_t)prefixlen);
+			out_body(sk, body, n, zpos, zeros);
 		}
 	}
 }
 
-int __vfprintf(FILE *f, const char *fmt, va_list ap)
+static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
-	long count = 0;
-	int bad = 0;
-	const char *p = fmt;
+	struct sink sink, *sk = &sink;
+	const char *fp = fmt;
 
-	while (*p && !bad) {
-		if (*p != '%') {
-			const char *start = p;
-			while (*p && *p != '%') p++;
-			out(f, start, (size_t)(p - start), &count, &bad);
+	sink.f = f;
+	sink.wide = st != 1;
+	sink.widemem = sink.wide && f->wmem;
+	sink.count = 0;
+	sink.bad = 0;
+	memset(&sink.ost, 0, sizeof sink.ost);
+
+	while (gf(fp, st) && !sk->bad) {
+		if (gf(fp, st) != '%') {
+			const char *start = fp;
+			while (gf(fp, st) && gf(fp, st) != '%') fp += st;
+			out(sk, start, (size_t)(fp - start));
 			continue;
 		}
-		p++;
-		if (*p == '%') { out(f, "%", 1, &count, &bad); p++; continue; }
+		fp += st;
+		if (gf(fp, st) == '%') { out(sk, "%", 1); fp += st; continue; }
 
 		{
 			int flags = 0; /* 1=+ 2=space 4=- 8=0 16=# 32=' */
@@ -466,12 +552,12 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 			int lm = LM_NONE;
 			int neg_width = 0;
 
-			for (;; p++) {
-				if (*p == '-') flags |= 4;
-				else if (*p == '+') flags |= 1;
-				else if (*p == ' ') flags |= 2;
-				else if (*p == '0') flags |= 8;
-				else if (*p == '#') flags |= 16;
+			for (;; fp += st) {
+				if (gf(fp, st) == '-') flags |= 4;
+				else if (gf(fp, st) == '+') flags |= 1;
+				else if (gf(fp, st) == ' ') flags |= 2;
+				else if (gf(fp, st) == '0') flags |= 8;
+				else if (gf(fp, st) == '#') flags |= 16;
 				/* fprintf.html's flag table: "'  [CX] (The
 				 * <apostrophe>.)  The integer portion of the result
 				 * of a decimal conversion ( %i, %d, %u, %f, %F, %g,
@@ -505,34 +591,34 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				 * the POSIX locale the correct output for %'d is
 				 * identical to %d, so the one visible symptom was
 				 * the least alarming one. */
-				else if (*p == '\'') flags |= 32;
+				else if (gf(fp, st) == '\'') flags |= 32;
 				else break;
 			}
-			if (*p == '*') { width = va_arg(ap, int); p++; haswidth = 1; if (width < 0) { neg_width = 1; width = -width; } }
-			else while (*p >= '0' && *p <= '9') { width = width * 10 + (*p++ - '0'); haswidth = 1; }
+			if (gf(fp, st) == '*') { width = va_arg(ap, int); fp += st; haswidth = 1; if (width < 0) { neg_width = 1; width = -width; } }
+			else while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { width = width * 10 + (int)(gf(fp, st) - '0'); fp += st; haswidth = 1; }
 			if (neg_width) flags |= 4;
 			(void)haswidth;
-			if (*p == '.') {
-				p++;
-				if (*p == '*') { prec = va_arg(ap, int); p++; }
-				else { prec = 0; while (*p >= '0' && *p <= '9') prec = prec * 10 + (*p++ - '0'); }
+			if (gf(fp, st) == '.') {
+				fp += st;
+				if (gf(fp, st) == '*') { prec = va_arg(ap, int); fp += st; }
+				else { prec = 0; while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { prec = prec * 10 + (int)(gf(fp, st) - '0'); fp += st; } }
 				if (prec < 0) prec = -1;
 			}
 			for (;;) {
-				if (*p == 'h') { lm = lm == LM_h ? LM_hh : LM_h; p++; }
-				else if (*p == 'l') { lm = lm == LM_l ? LM_ll : LM_l; p++; }
-				else if (*p == 'j') { lm = LM_j; p++; }
-				else if (*p == 'z') { lm = LM_z; p++; }
-				else if (*p == 't') { lm = LM_t; p++; }
-				else if (*p == 'L') { lm = LM_L; p++; }
+				if (gf(fp, st) == 'h') { lm = lm == LM_h ? LM_hh : LM_h; fp += st; }
+				else if (gf(fp, st) == 'l') { lm = lm == LM_l ? LM_ll : LM_l; fp += st; }
+				else if (gf(fp, st) == 'j') { lm = LM_j; fp += st; }
+				else if (gf(fp, st) == 'z') { lm = LM_z; fp += st; }
+				else if (gf(fp, st) == 't') { lm = LM_t; fp += st; }
+				else if (gf(fp, st) == 'L') { lm = LM_L; fp += st; }
 				else break;
 			}
 
-			switch (*p) {
+			switch ((int)gf(fp, st)) {
 			case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
-				int base = *p == 'o' ? 8 : (*p == 'x' || *p == 'X') ? 16 : 10;
-				int upper = *p == 'X';
-				int issigned = *p == 'd' || *p == 'i';
+				int base = gf(fp, st) == 'o' ? 8 : (gf(fp, st) == 'x' || gf(fp, st) == 'X') ? 16 : 10;
+				int upper = gf(fp, st) == 'X';
+				int issigned = gf(fp, st) == 'd' || gf(fp, st) == 'i';
 				int neg = 0;
 				unsigned long long uv;
 				char digbuf[32]; int dn = 0, zpad;
@@ -599,25 +685,25 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				if ((flags & 16) && base == 8 && !zpad && (dn == 0 || digbuf[dn-1] != '0')) digbuf[dn++] = '0';
 				if ((flags & 16) && base == 16 && uv != 0) { prefix[pn++] = '0'; prefix[pn++] = upper ? 'X' : 'x'; }
 
-				if (zpad > INT_MAX - dn - pn) { errno = EOVERFLOW; f->err = 1; bad = 1; break; }
+				if (zpad > INT_MAX - dn - pn) { errno = EOVERFLOW; sk->f->err = 1; sk->bad = 1; break; }
 				{
 					int total = dn + pn + zpad;
 					int padn = width - total; if (padn < 0) padn = 0;
 					int zero = (flags & 8) && !(flags & 4) && prec < 0;
 					if (flags & 4) {
-						out(f, prefix, (size_t)pn, &count, &bad);
-						pad(f, '0', (size_t)zpad, &count, &bad);
-						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
-						pad(f, ' ', (size_t)padn, &count, &bad);
+						out(sk, prefix, (size_t)pn);
+						pad(sk, '0', (size_t)zpad);
+						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(sk, rev, (size_t)dn); }
+						pad(sk, ' ', (size_t)padn);
 					} else if (zero) {
-						out(f, prefix, (size_t)pn, &count, &bad);
-						pad(f, '0', (size_t)padn, &count, &bad);
-						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
+						out(sk, prefix, (size_t)pn);
+						pad(sk, '0', (size_t)padn);
+						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(sk, rev, (size_t)dn); }
 					} else {
-						pad(f, ' ', (size_t)padn, &count, &bad);
-						out(f, prefix, (size_t)pn, &count, &bad);
-						pad(f, '0', (size_t)zpad, &count, &bad);
-						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(f, rev, (size_t)dn, &count, &bad); }
+						pad(sk, ' ', (size_t)padn);
+						out(sk, prefix, (size_t)pn);
+						pad(sk, '0', (size_t)zpad);
+						{ char rev[sizeof digbuf]; int i; for (i = 0; i < dn; i++) rev[i] = digbuf[dn - 1 - i]; out(sk, rev, (size_t)dn); }
 					}
 				}
 				break;
@@ -625,8 +711,8 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 			case 'c': {
 				char c = (char)va_arg(ap, int);
 				int padn = width - 1; if (padn < 0) padn = 0;
-				if (flags & 4) { out(f, &c, 1, &count, &bad); pad(f, ' ', (size_t)padn, &count, &bad); }
-				else { pad(f, ' ', (size_t)padn, &count, &bad); out(f, &c, 1, &count, &bad); }
+				if (flags & 4) { out(sk, &c, 1); pad(sk, ' ', (size_t)padn); }
+				else { pad(sk, ' ', (size_t)padn); out(sk, &c, 1); }
 				break;
 			}
 			case 's': {
@@ -637,28 +723,28 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 				n = strlen(s);
 				if (prec >= 0 && (size_t)prec < n) n = (size_t)prec;
 				padn = width - (int)n; if (padn < 0) padn = 0;
-				if (flags & 4) { out(f, s, n, &count, &bad); pad(f, ' ', (size_t)padn, &count, &bad); }
-				else { pad(f, ' ', (size_t)padn, &count, &bad); out(f, s, n, &count, &bad); }
+				if (flags & 4) { out(sk, s, n); pad(sk, ' ', (size_t)padn); }
+				else { pad(sk, ' ', (size_t)padn); out(sk, s, n); }
 				break;
 			}
 			case 'p': {
 				void *ptr = va_arg(ap, void *);
 				uintptr_t uv = (uintptr_t)ptr;
 				int dn = 2;   /* the "0x" prefix, emitted literally below */
-				if (!ptr) { out(f, "(nil)", 5, &count, &bad); break; }
+				if (!ptr) { out(sk, "(nil)", 5); break; }
 				{
 					char rev[sizeof(uintptr_t) * 2]; int rn = 0;
 					do { rev[rn++] = "0123456789abcdef"[uv % 16]; uv /= 16; } while (uv);
 					{
 						int padn = width - (dn + rn); if (padn < 0) padn = 0;
 						if (flags & 4) {
-							out(f, "0x", 2, &count, &bad);
-							{ char b2[sizeof(uintptr_t)*2]; int i; for (i=0;i<rn;i++) b2[i]=rev[rn-1-i]; out(f,b2,(size_t)rn,&count,&bad); }
-							pad(f, ' ', (size_t)padn, &count, &bad);
+							out(sk, "0x", 2);
+							{ char b2[sizeof(uintptr_t)*2]; int i; for (i=0;i<rn;i++) b2[i]=rev[rn-1-i]; out(sk,b2,(size_t)rn); }
+							pad(sk, ' ', (size_t)padn);
 						} else {
-							pad(f, ' ', (size_t)padn, &count, &bad);
-							out(f, "0x", 2, &count, &bad);
-							{ char b2[sizeof(uintptr_t)*2]; int i; for (i=0;i<rn;i++) b2[i]=rev[rn-1-i]; out(f,b2,(size_t)rn,&count,&bad); }
+							pad(sk, ' ', (size_t)padn);
+							out(sk, "0x", 2);
+							{ char b2[sizeof(uintptr_t)*2]; int i; for (i=0;i<rn;i++) b2[i]=rev[rn-1-i]; out(sk,b2,(size_t)rn); }
 						}
 					}
 				}
@@ -667,36 +753,41 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 			case 'n': {
 				void *ptr = va_arg(ap, void *);
 				switch (lm) {
-				case LM_hh: *(signed char *)ptr = (signed char)count; break;
-				case LM_h: *(short *)ptr = (short)count; break;
-				case LM_l: *(long *)ptr = (long)count; break;
-				case LM_ll: case LM_j: *(long long *)ptr = (long long)count; break;
+				case LM_hh: *(signed char *)ptr = (signed char)sk->count; break;
+				case LM_h: *(short *)ptr = (short)sk->count; break;
+				case LM_l: *(long *)ptr = (long)sk->count; break;
+				case LM_ll: case LM_j: *(long long *)ptr = (long long)sk->count; break;
 				/* The worst of the three: this stored through
 				 * *(long *), writing FOUR bytes into the caller's
 				 * EIGHT-byte size_t and leaving the upper four whatever
 				 * they happened to be -- silent corruption of an object
 				 * the caller owns, not merely a wrong number printed. */
-				case LM_z: *(size_t *)ptr = (size_t)count; break;
-				case LM_t: *(ptrdiff_t *)ptr = (ptrdiff_t)count; break;
-				default: *(int *)ptr = (int)count; break;
+				case LM_z: *(size_t *)ptr = (size_t)sk->count; break;
+				case LM_t: *(ptrdiff_t *)ptr = (ptrdiff_t)sk->count; break;
+				default: *(int *)ptr = (int)sk->count; break;
 				}
 				break;
 			}
 			case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':
 			case 'a': case 'A': {
 				double v = va_arg(ap, double);
-				emit_float(f, v, *p, prec, flags & 16, flags, width, &count, &bad);
+				emit_float(sk, v, (int)gf(fp, st), prec, flags & 16, flags, width);
 				break;
 			}
 			default:
 				/* an unknown conversion: emit it literally, the way glibc does */
-				if (*p) { out(f, "%", 1, &count, &bad); out(f, p, 1, &count, &bad); }
+				if (gf(fp, st)) { out(sk, "%", 1); out(sk, fp, 1); }
 				break;
 			}
-			if (*p) p++;
+			if (gf(fp, st)) fp += st;
 		}
 	}
-	return bad ? -1 : (int)count;
+	return sk->bad ? -1 : (int)sk->count;
+}
+
+int __vfprintf(FILE *f, const char *fmt, va_list ap)
+{
+	return vfprintf_st(f, fmt, ap, 1);
 }
 
 /* sprintf/snprintf/vsprintf/vsnprintf share this: a throwaway FILE that
