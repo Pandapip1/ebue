@@ -23,8 +23,15 @@
  * walk's own root, compared against every subsequent entry). This is
  * not N/A on this platform.
  *
- * FTW_CHDIR: built directly on chdir() (src/unistd/chdir.c), already
- * implemented and working.
+ * FTW_CHDIR: built directly on chdir() (src/unistd/chdir.c).  Every
+ * pathname the recursion carries is relative to the walk's *original*
+ * cwd -- each recursive call appends "/name" to its parent's path, and
+ * that is also the pathname the callback must be handed -- so once the
+ * walk has chdir'd into a directory, none of those names mean what they
+ * did any more.  resolve() therefore rewrites every one of them against
+ * the cwd captured before the first chdir(), and it is used for *all*
+ * of the walk's filesystem access (chdir, lstat, stat, opendir), not
+ * just the chdir; see its comment.
  */
 #include <ftw.h>
 #include <dirent.h>
@@ -49,40 +56,63 @@ struct walkstate {
 	int have_root_dev;
 	dev_t root_dev;
 	char *cwd0;		/* FTW_CHDIR only: process cwd when the walk started */
+	int cwd_moved;		/* FTW_CHDIR only: a descendant chdir'd away from this level */
 	int (*fn3)(const char *, const struct stat *, int);
 	int (*fn4)(const char *, const struct stat *, int, struct FTW *);
 };
 
-/* FTW_CHDIR: "change the current working directory to each directory as
- * it reports files in that directory" (nftw.html). walk()'s own `path`
- * argument is always built relative to the walk's *original* cwd (each
- * recursive call appends "/name" to its parent's path), but by the time
- * a directory two or more levels deep is entered, chdir() has already
- * moved the process into its parent -- so chdir(path) with the full
- * accumulated path would look for "parent/parent/child" under the new
- * cwd and fail. Resolving `path` to an absolute pathname against the
- * cwd captured once, before the walk's first chdir(), sidesteps that
- * regardless of how deep the recursion is or how many directories have
- * already been entered. Same absolute-path test __ntpath_at() (src/
- * internal/path.c) uses: a leading slash/backslash, or an "X:" drive
- * letter. */
-static int chdir_absolute(struct walkstate *ws, const char *path)
+/* Rewrite one of the walk's accumulated pathnames into something the
+ * filesystem can still be asked about after FTW_CHDIR has moved the
+ * process. Every such pathname is relative to the cwd the walk started
+ * in (walk() appends "/name" to its parent's path), so once the process
+ * has chdir'd into "tailtree", asking about "tailtree/f1" resolves to
+ * "tailtree/tailtree/f1" -- lstat() fails, the entry is reported FTW_NS,
+ * and a directory mis-typed that way is never descended into. Resolving
+ * against the cwd captured once, before the walk's first chdir(), fixes
+ * that no matter how deep the recursion has gone or how many directories
+ * it has already entered.
+ *
+ * cwd0 is non-NULL only for an FTW_CHDIR walk, so this is a no-op (and
+ * allocates nothing) for every other walk. Absolute-path test is the one
+ * __ntpath_at() (src/internal/path.c) uses: a leading slash/backslash,
+ * or an "X:" drive letter.
+ *
+ * Returns the pathname to use, or NULL with errno set on allocation
+ * failure. *tmp gets the allocation the caller must free, or NULL when
+ * the returned pointer is `path` itself. */
+static const char *resolve(struct walkstate *ws, const char *path, char **tmp)
 {
 	int absolute = path[0] == '/' || path[0] == '\\' ||
 		(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':');
-	if (absolute || !ws->cwd0) return chdir(path);
-	{
-		size_t l0 = strlen(ws->cwd0), l1 = strlen(path);
-		char *full = malloc(l0 + 1 + l1 + 1);
-		int r;
-		if (!full) return -1;
-		memcpy(full, ws->cwd0, l0);
-		full[l0] = '/';
-		memcpy(full + l0 + 1, path, l1 + 1);
-		r = chdir(full);
-		free(full);
-		return r;
-	}
+	size_t l0, l1;
+	char *full;
+
+	*tmp = NULL;
+	if (absolute || !ws->cwd0) return path;
+
+	l0 = strlen(ws->cwd0);
+	l1 = strlen(path);
+	full = malloc(l0 + 1 + l1 + 1);
+	if (!full) { errno = ENOMEM; return NULL; }
+	memcpy(full, ws->cwd0, l0);
+	full[l0] = '/';
+	memcpy(full + l0 + 1, path, l1 + 1);
+	*tmp = full;
+	return full;
+}
+
+/* FTW_CHDIR: "change the current working directory to each directory as
+ * it reports files in that directory" (nftw.html). */
+static int enter_dir(struct walkstate *ws, const char *path)
+{
+	char *tmp;
+	const char *p = resolve(ws, path, &tmp);
+	int r;
+
+	if (!p) return -1;
+	r = chdir(p);
+	free(tmp);
+	return r;
 }
 
 /* Head/tail are tracked via two file-scope pointers threaded through the
@@ -122,10 +152,19 @@ static void close_one(struct walkstate *ws, struct lru *lru, struct level *lv)
  * set (from opendir()) on failure. */
 static int level_open(struct walkstate *ws, struct lru *lru, struct level *lv)
 {
+	char *tmp;
+	const char *p;
+
 	if (lv->dp) return 0;
 	if (ws->nopenfd >= 1 && ws->open_count >= ws->nopenfd && lru->head)
 		close_one(ws, lru, lru->head);
-	lv->dp = opendir(lv->path);
+	/* lv->path is an accumulated walk path, so an FTW_CHDIR walk has to
+	 * resolve it too -- this reopen happens *after* the process has
+	 * chdir'd into a descendant. */
+	p = resolve(ws, lv->path, &tmp);
+	if (!p) return -1;
+	lv->dp = opendir(p);
+	free(tmp);
 	if (!lv->dp) return -1;
 	if (lv->pos) seekdir(lv->dp, lv->pos);
 	ws->open_count++;
@@ -163,9 +202,20 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 {
 	struct stat lst, st, zero;
 	const struct stat *rst;
+	const char *fs;
+	char *fstmp;
 	int type, r;
 
-	if (lstat(path, &lst) < 0) {
+	/* Everything below asks the filesystem about `fs` and tells the
+	 * callback about `path`: the two differ only for an FTW_CHDIR walk,
+	 * which has moved the process out from under `path`. */
+	fs = resolve(ws, path, &fstmp);
+	if (!fs) return -1;
+
+	if (lstat(fs, &lst) < 0) {
+		int e = errno;
+		free(fstmp);
+		errno = e;
 		/* ftw.html ERRORS: "[ENOENT] A component of path does not name
 		 * an existing file or path is an empty string" -- for the
 		 * walk's own root this is ftw()/nftw() itself failing (-1,
@@ -181,12 +231,14 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 	if (ws->flags & FTW_PHYS) {
 		rst = &lst;
 		type = S_ISLNK(lst.st_mode) ? FTW_SL : S_ISDIR(lst.st_mode) ? FTW_D : FTW_F;
-	} else if (stat(path, &st) < 0) {
+	} else if (stat(fs, &st) < 0) {
+		free(fstmp);
 		return report(ws, path, &lst, S_ISLNK(lst.st_mode) ? FTW_SLN : FTW_NS, level);
 	} else {
 		rst = &st;
 		type = S_ISDIR(st.st_mode) ? FTW_D : FTW_F;
 	}
+	free(fstmp);
 
 	if (mount_skip(ws, rst)) return 0;
 
@@ -216,7 +268,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			return report(ws, path, rst, FTW_DNR, level);
 		}
 
-		if (ws->flags & FTW_CHDIR) chdir_absolute(ws, path);
+		if (ws->flags & FTW_CHDIR) { enter_dir(ws, path); ws->cwd_moved = 0; }
 
 		r = 0;
 		while ((de = readdir(lv.dp)) != NULL) {
@@ -238,8 +290,18 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 			free(child);
 			if (r) break;
 
+			/* "as it reports files in that directory": a child that
+			 * was itself a directory left the process standing in it,
+			 * so come back here before reporting the next sibling --
+			 * otherwise the whole point of FTW_CHDIR, that fn can use
+			 * path+base as-is, holds only until the first descent. */
+			if (ws->cwd_moved) { enter_dir(ws, path); ws->cwd_moved = 0; }
+
 			if (level_open(ws, lru, &lv) < 0) { r = -1; break; }
 		}
+
+		/* Tell the level above that the cwd is no longer its own. */
+		if (ws->flags & FTW_CHDIR) ws->cwd_moved = 1;
 
 		if (lv.dp) close_one(ws, lru, &lv);
 		free(lv.path);

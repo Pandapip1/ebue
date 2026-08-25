@@ -2721,9 +2721,10 @@ STREAMS interface, so there is no partial implementation to grade.
 ### J3: sys/uio.h, ftw.h, fcntl.h advisory, setjmp.h OB XSI, string.h, sys/times.h, sys/utsname.h, sys/time.h, stdlib.h srand48
 
 Fourteen functions across nine headers, in `test/posix-tail.c` (new
-file). **Five BUGs fenced** — one in `nftw()` that is severe, one more
-in `nftw()` found by inspection, and three more *shall fail* error
-clauses that are simply absent. **One assertion group comes out
+file). **Two BUGs fenced** — one in `nftw()` found by inspection, and
+one *shall fail* error clause that is simply absent. Four others that
+were fenced here have since been fixed and run live, among them the
+severe `nftw()`/`FTW_CHDIR` one. **One assertion group comes out
 `rc=77` unverified** here.
 
 | function | clause checked | status | test |
@@ -2743,7 +2744,7 @@ clauses that are simply absent. **One assertion group comes out
 | nftw | "FTW_DEPTH: If set, nftw() shall report all files in a directory before reporting the directory itself", and FTW_DP "shall only occur if the FTW_DEPTH flag is included in flags" — both directions asserted | covered | test/posix-tail.c (`test_nftw`) |
 | nftw | "FTW_MOUNT: If set, nftw() shall only report files in the same file system as path" — a real test here, since `src/stat/stat.c` fills `st_dev` from the NT volume serial number | covered | test/posix-tail.c (`test_nftw`) |
 | nftw | "FTW_CHDIR: … If clear, nftw() shall not change the current working directory" | covered | test/posix-tail.c (`test_nftw`) |
-| nftw | "FTW_CHDIR: If set, nftw() shall change the current working directory to each directory as it reports files in that directory" — together with "shall recursively descend the directory hierarchy rooted in path" | **BUG (fenced)** — the severe one; see below | test/posix-tail.c (`test_nftw_chdir`) |
+| nftw | "FTW_CHDIR: If set, nftw() shall change the current working directory to each directory as it reports files in that directory" — together with "shall recursively descend the directory hierarchy rooted in path", and the point of the flag: every entry reachable by `path + base` from where the walk stands when it reports it | covered — **FIXED**; `src/ftw/ftw.c`'s `resolve()` now rewrites every accumulated walk path against the cwd captured before the first `chdir()`, for all of `lstat`/`stat`/`opendir` and not just the `chdir` | test/posix-tail.c (`test_nftw_chdir`) |
 | nftw | "If FTW_PHYS is clear … nftw() shall follow links instead of reporting them, but shall not report the contents of any directory that would be a descendant of itself" (and the FTW_DEPTH variant) | **BUG (fenced)** | test/posix-tail.c (`test_nftw_symlink_loop`) |
 | nftw, ftw | FTW_PHYS's FTW_SL, FTW_SLN, and link-following | **unverified (rc=77)** — needs a real symbolic link; `symlink()` fails `ENOSYS` under Wine and `EPERM` on real Windows without `SeCreateSymbolicLinkPrivilege`. The `ENOSYS` is the correct rendering of `STATUS_NOT_SUPPORTED` (0xc00000bb), which stock Wine below 10.19 answers `FSCTL_SET_REPARSE_POINT` with — `src/internal/errno.c:82-84` maps that status onto `ENOSYS` together with `STATUS_NOT_IMPLEMENTED` and `STATUS_INVALID_DEVICE_REQUEST`, so the errno is not evidence of `NOT_IMPLEMENTED` in particular, and on that leg the privilege is never consulted. Probed at run time, one SKIP line naming the mechanism and errno | test/posix-tail.c (`test_nftw_symlinks`) |
 | ftw, nftw | FTW_DNR (an unreadable directory), FTW_NS (an unstattable object), `[EACCES]`, `[ELOOP]`, `[ENAMETOOLONG]`, `[EOVERFLOW]`, `[EMFILE]`/`[ENFILE]` | N/A — the same permission-model limit `glob()`'s `GLOB_ERR` row already records: `chmod 0` does not revoke owner access on this platform, so a directory that cannot be read or an object that cannot be stat'd cannot be built | — |
@@ -2777,12 +2778,12 @@ clauses that are simply absent. **One assertion group comes out
 
 ### Bugs found (group J3)
 
-1. **`nftw()` with `FTW_CHDIR` walks nothing below the root.** Every
-   entry of every directory is reported as `FTW_NS`, no directory below
-   the root is ever descended into, and the walk returns 0 as though
-   the tree had been exhausted. This is the most severe defect in the
-   group: a caller gets a *successful* return and a silently truncated
-   walk.
+1. **`nftw()` with `FTW_CHDIR` walked nothing below the root — FIXED.**
+   Every entry of every directory was reported as `FTW_NS`, no
+   directory below the root was ever descended into, and the walk
+   returned 0 as though the tree had been exhausted. This was the most
+   severe defect in the group: a caller got a *successful* return and a
+   silently truncated walk.
 
    `nftw.html`: "shall recursively descend the directory hierarchy
    rooted in path", and "FTW_CHDIR: If set, nftw() shall change the
@@ -2791,24 +2792,38 @@ clauses that are simply absent. **One assertion group comes out
    failed on the object because of lack of appropriate permission" —
    not "the implementation looked in the wrong place".
 
-   Mechanism: `src/ftw/ftw.c`'s `walk()` opens the directory, calls
-   `chdir_absolute(ws, path)`, and then builds each child path by
+   Mechanism: `src/ftw/ftw.c`'s `walk()` opened the directory, called
+   `chdir_absolute(ws, path)`, and then built each child path by
    appending `"/name"` to `path` — which is relative to the walk's
-   *original* working directory. `chdir_absolute()` is careful to
-   resolve its own argument against the cwd captured before the first
-   `chdir()` (its comment diagnoses exactly this hazard), but nothing
-   does the same for the child paths handed to the recursive
-   `walk()`'s `lstat()`/`stat()`/`opendir()`. Once the process has
-   `chdir`'d into `tailtree`, looking up `tailtree/f1` resolves to
+   *original* working directory. `chdir_absolute()` resolved its own
+   argument against the cwd captured before the first `chdir()` (its
+   comment diagnosed exactly this hazard), but nothing did the same for
+   the child paths handed to the recursive `walk()`'s
+   `lstat()`/`stat()`/`opendir()`. Once the process had `chdir`'d into
+   `tailtree`, looking up `tailtree/f1` resolved to
    `tailtree/tailtree/f1`.
 
-   Measured under Wine on this file's own fixture: `t4` → `FTW_D`;
-   `t4/f1` → `FTW_NS`; `t4/sub` → `FTW_NS`; `t4/sub/f2` never reported
-   at all; `rc = 0`. Without `FTW_CHDIR` the identical walk reports all
-   four objects with the right types, so this is `FTW_CHDIR` alone. Not
-   the "results are unspecified if the application-supplied fn function
-   does not preserve the current working directory" escape clause: the
-   test's callback changes nothing.
+   Measured under Wine on this file's own fixture, before the fix: `t4`
+   → `FTW_D`; `t4/f1` → `FTW_NS`; `t4/sub` → `FTW_NS`; `t4/sub/f2`
+   never reported at all; `rc = 0`. Without `FTW_CHDIR` the identical
+   walk reported all four objects with the right types, so this was
+   `FTW_CHDIR` alone. Not the "results are unspecified if the
+   application-supplied fn function does not preserve the current
+   working directory" escape clause: the test's callback changes
+   nothing.
+
+   The fix was to stop treating this as a `chdir()` problem.
+   `chdir_absolute()` is now `resolve()`, which returns the rewritten
+   pathname rather than performing the `chdir` itself, and *every*
+   filesystem call the walk makes goes through it — `lstat()`,
+   `stat()`, `level_open()`'s `opendir()`, and the `chdir()` — so the
+   accumulated path is used for reporting only. It allocates nothing
+   unless `FTW_CHDIR` is set, `cwd0` being `NULL` otherwise. `walk()`
+   also returns to its own directory after a child directory walk left
+   the process standing inside it, which is what makes the clause
+   literally true ("as it reports files in that directory") rather than
+   true only until the first descent; `test_nftw_chdir()` asserts that
+   from inside the callback, through `path + base`.
 
 2. **`nftw()` has no protection against a directory that is a
    descendant of itself.** `nftw.html` requires, when `FTW_PHYS` is
