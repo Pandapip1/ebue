@@ -37,6 +37,19 @@
 #   GATE_JOBS_DIR   where per-stage tree copies + logs go (default: a
 #                   fresh mktemp -d, removed on a clean exit; kept on
 #                   failure so logs stay inspectable).
+#   GATE_MAKE_JOBS  how many jobs each stage may run at once -- the -j
+#                   passed to every `make` below, and the default for
+#                   every sub-tool that fans out on its own (RUNTESTS_JOBS,
+#                   LIBC_TEST_JOBS, GAPMAP_JOBS, ASAN_JOBS, LINT_JOBS,
+#                   LINKCHECK_JOBS).  Default 3.  Explicitly NOT nproc:
+#                   see the concurrency-budget comment below.
+#   GATE_STAGE_CONCURRENCY
+#                   how many stages may be running at once (default 4;
+#                   0 means no cap, i.e. the old launch-everything
+#                   behaviour).  Stages are still all launched and still
+#                   all reported -- a stage over the cap just waits for a
+#                   slot before it starts working, so nothing about what
+#                   the gate checks changes.
 #   GATE_WINE       wine binary for the check-i386/check-x86_64 stages
 #                   (default: whatever ./configure auto-detects from
 #                   PATH). Set this explicitly if that wine cannot run
@@ -93,6 +106,81 @@ if [ "$expected" -eq 0 ]; then
 	echo "gate: no stage selected; there is nothing to verify." >&2
 	exit 2
 fi
+
+# --- concurrency budget ----------------------------------------------
+#
+# Every stage below used to hardcode `make -j"$(nproc)"`, and every
+# sub-tool a stage invokes (tools/runtests.sh, tools/libc-test.sh,
+# tools/posix-gapmap.sh, tools/asan-build.sh, tools/lint.sh,
+# tools/lint-unreferenced.sh, tools/linkcheck.sh) independently defaults
+# its own worker count to nproc.  All 14 stages launch at once.  So the
+# thing that actually lands on the machine is a PRODUCT, not a sum:
+# 14 stages x 24 CPUs is up to 336 concurrent compilers -- or, worse, 336
+# concurrent Wine processes, which are not cheap in RAM.  On this
+# project's development machine that reproducibly drove load average past
+# 450 and swap to exhaustion, and systemd-oomd killed entire terminal
+# scopes out from under unrelated work.  A per-invocation `-j2` habit is
+# no defence against a number baked into a script.
+#
+# So the budget is expressed as the two factors of that product, and both
+# are capped:
+#
+#   GATE_STAGE_CONCURRENCY (stages at once)  x  GATE_MAKE_JOBS (jobs each)
+#
+# The defaults, 4 x 3, give a peak of 12 -- half of a 24-CPU box, and a
+# 28x reduction on what this script used to ask for.  Half is the point:
+# the gate is something you run on your workstation while the rest of
+# your work carries on, so it must leave the machine usable.  Neither
+# factor is derived from nproc, deliberately -- an nproc-derived default
+# is exactly the bug being fixed, and an absolute small number stays
+# sane from a 4-core laptop to a 128-core server.  Raise both on a
+# machine you own outright; CI sets its own (see .github/workflows).
+#
+# Why 3 and 4 rather than, say, 12 x 1 or 1 x 12: stage cost here is
+# wildly unequal.  `reuse` and the two nix-shell lint stages are minutes
+# of I/O and evaluation with almost no CPU, while posix-gapmap is 1610
+# tcc compile-and-links and asan is 282 clang compiles.  A wide-ish stage
+# cap lets the cheap stages retire and hand their slot to a heavy one,
+# and J=3 keeps each heavy stage's own fan-out from collapsing to serial
+# (posix-gapmap at -P1 is minutes where -P3 is under one).
+#
+# Note what this is NOT: a job server.  The genuinely correct instrument
+# would be one token pool shared by every worker in the run, so a stage
+# that is idle lends its capacity to one that is not.  GNU make's
+# jobserver could do that for the `make` halves, but every fan-out in
+# tools/*.sh is an `xargs -P`, which cannot join a jobserver -- covering
+# them would mean teaching six scripts a new protocol.  Two capped
+# factors bound the product, which is the property that matters here, at
+# a fraction of the blast radius.  If the sub-tools ever grow a shared
+# pool, this becomes one number instead of two.
+#
+: "${GATE_MAKE_JOBS:=3}"
+: "${GATE_STAGE_CONCURRENCY:=4}"
+
+case "$GATE_MAKE_JOBS" in
+''|*[!0-9]*|0)
+	echo "gate: GATE_MAKE_JOBS must be a positive integer (got '$GATE_MAKE_JOBS')" >&2
+	exit 2 ;;
+esac
+case "$GATE_STAGE_CONCURRENCY" in
+''|*[!0-9]*)
+	echo "gate: GATE_STAGE_CONCURRENCY must be a non-negative integer (got '$GATE_STAGE_CONCURRENCY')" >&2
+	exit 2 ;;
+esac
+
+# The sub-tools each read their own knob and each default it to nproc.
+# Give them all GATE_MAKE_JOBS instead -- but only where the caller has
+# not already set one explicitly, so `LINT_JOBS=1 tools/gate.sh` still
+# means what it says.  Without this, capping `make -j` alone would move
+# the fan-out rather than remove it: `make check` at -j3 still hands off
+# to tools/runtests.sh, which would still start nproc Wine processes.
+: "${RUNTESTS_JOBS:=$GATE_MAKE_JOBS}"
+: "${LIBC_TEST_JOBS:=$GATE_MAKE_JOBS}"
+: "${GAPMAP_JOBS:=$GATE_MAKE_JOBS}"
+: "${ASAN_JOBS:=$GATE_MAKE_JOBS}"
+: "${LINT_JOBS:=$GATE_MAKE_JOBS}"
+: "${LINKCHECK_JOBS:=$GATE_MAKE_JOBS}"
+export RUNTESTS_JOBS LIBC_TEST_JOBS GAPMAP_JOBS ASAN_JOBS LINT_JOBS LINKCHECK_JOBS
 
 note() { printf '%s\n' "$*" >&2; }
 
@@ -163,13 +251,47 @@ make_tree() {
 	esac
 }
 
+# The stage-concurrency semaphore.  A FIFO opened read-write (so it never
+# sees EOF and no writer has to stay resident) holding one line per free
+# slot; a stage reads a line to start and writes one back when it is
+# done.  Every stage is still launched, still gets a log and an .rc, and
+# still appears in the summary -- a stage over the cap simply blocks on
+# the read until a slot frees.  GATE_STAGE_CONCURRENCY=0 skips the FIFO
+# entirely and restores the old everything-at-once behaviour.
+stage_sem=""
+if [ "$GATE_STAGE_CONCURRENCY" -gt 0 ]; then
+	stage_sem="$GATE_JOBS_DIR/stage-slots"
+	mkfifo "$stage_sem" || exit 1
+	exec 9<>"$stage_sem" || exit 1
+	slot=0
+	while [ "$slot" -lt "$GATE_STAGE_CONCURRENCY" ]; do
+		printf '.\n' >&9
+		slot=$((slot + 1))
+	done
+fi
+
 # run_stage NAME CMD...  -- run CMD (a single sh -c string) in the
 # background, buffering combined output to its log; record the exit code
 # next to it. Never touches stdout/stderr directly so concurrent stages
 # cannot interleave.
+#
+# The recorded .time deliberately measures the stage's own work, started
+# after its slot is acquired, not the time it spent queued -- so per-stage
+# numbers stay comparable across runs at different concurrencies.  The
+# run's total wall clock in the summary is unchanged and does include
+# queueing, which is where the cost of the cap should show up.
 run_stage() {
 	name=$1; shift
 	(
+		if [ -n "$stage_sem" ]; then
+			# shellcheck disable=SC2034
+			read -r _slot <&9
+			# Release on ANY exit of this subshell, not just the
+			# normal path: a slot leaked by a stage that died would
+			# shrink the budget for the rest of the run, and enough
+			# of them would deadlock `wait`.
+			trap 'printf ".\n" >&9 2>/dev/null' EXIT
+		fi
 		start=$(date +%s)
 		# shellcheck disable=SC2068
 		sh -c "$*" > "$GATE_JOBS_DIR/logs/$name.log" 2>&1
@@ -241,12 +363,12 @@ wine_cfg=""
 
 if want check-i386; then
 	t="$GATE_JOBS_DIR/trees/check-i386"
-	run_stage check-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" check"
+	run_stage check-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS check"
 fi
 
 if want check-x86_64; then
 	t="$GATE_JOBS_DIR/trees/check-x86_64"
-	run_stage check-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" check"
+	run_stage check-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS check"
 fi
 
 # libc-test: musl's regression corpus, adjudicated against
@@ -257,7 +379,7 @@ fi
 # would double the ledger's maintenance for no new evidence.
 if want libc-test; then
 	t="$GATE_JOBS_DIR/trees/libc-test"
-	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j\"\$(nproc)\" && make libc-test"
+	run_stage libc-test "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc $wine_cfg >/dev/null && make -j$GATE_MAKE_JOBS && make libc-test"
 fi
 
 # libc-test-map: the STALENESS-AND-HONESTY check over the checked-in
@@ -276,7 +398,7 @@ fi
 # asan (~198 s), so it costs the gate nothing.
 if want libc-test-map; then
 	t="$GATE_JOBS_DIR/trees/libc-test-map"
-	run_stage libc-test-map "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && LIBC_TEST_MAP_GITREPO='$srcdir' make libc-test-map-check"
+	run_stage libc-test-map "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && LIBC_TEST_MAP_GITREPO='$srcdir' make libc-test-map-check"
 fi
 
 # posix-gapmap: the staleness-and-honesty check on
@@ -290,8 +412,11 @@ fi
 # produced it still discriminates (census, partition, floors in BOTH
 # directions, and two canaries). See tools/posix-gapmap.sh's header.
 #
-# ~20 s: 1610 tcc compile-and-links at -Pnproc, no Wine at all. Sits
-# beside libc-test, far under the critical path asan sets.
+# 1610 tcc compile-and-links, no Wine at all -- ~20 s when it had the
+# whole box (-P nproc), longer now that it runs at GAPMAP_JOBS =
+# GATE_MAKE_JOBS like every other fan-out here. Still nowhere near the
+# critical path asan sets, and the whole box was never this stage's to
+# take: see the concurrency-budget comment at the top.
 #
 # GAPMAP_GITDIR points back at the real tree because this copy has no
 # .git of its own, and one of the invariants is that the SHA the report
@@ -301,7 +426,7 @@ fi
 # convenience.
 if want posix-gapmap; then
 	t="$GATE_JOBS_DIR/trees/posix-gapmap"
-	run_stage posix-gapmap "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" && GAPMAP_GITDIR='$srcdir' make posix-gapmap-check"
+	run_stage posix-gapmap "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS && GAPMAP_GITDIR='$srcdir' make posix-gapmap-check"
 fi
 
 if want asan; then
@@ -321,12 +446,12 @@ fi
 # it was fixed.
 if want linkcheck-i386; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-i386"
-	run_stage linkcheck-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc >/dev/null && make -j\"\$(nproc)\" linkcheck"
+	run_stage linkcheck-i386 "cd '$t' && ./configure --target=i386-win32 CC=i386-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
 fi
 
 if want linkcheck-x86_64; then
 	t="$GATE_JOBS_DIR/trees/linkcheck-x86_64"
-	run_stage linkcheck-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j\"\$(nproc)\" linkcheck"
+	run_stage linkcheck-x86_64 "cd '$t' && ./configure --target=x86_64-win32 CC=x86_64-win32-tcc >/dev/null && make -j$GATE_MAKE_JOBS linkcheck"
 fi
 
 if want hygiene; then

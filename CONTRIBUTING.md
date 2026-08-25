@@ -148,6 +148,66 @@ behaviour. Before merging a **tinycc** bump specifically:
 Renovate only runs once the GitHub App is enabled on the repository; the
 config file alone does nothing.
 
+## The pre-push gate (`tools/gate.sh`)
+
+`tools/gate.sh` runs the whole pre-push verification suite — every stage
+CI would run — with the independent stages concurrent instead of summed:
+
+```
+tools/gate.sh                            # every stage
+tools/gate.sh check-x86_64 lint-plain    # just the named stages
+tools/gate.sh --list                     # the stage names
+```
+
+Each stage that builds anything gets its own private copy of the working
+tree, so stages cannot tread on each other or on the tree you invoked it
+from. Every stage's output is buffered to its own log and printed as one
+labelled unit, and the summary at the end reports every stage in a fixed
+order — so a red run tells you exactly which stage failed, and two runs
+are diffable.
+
+### Concurrency: it is a product, not a sum
+
+**`tools/gate.sh` will not take your whole machine, and it is not
+supposed to.** What lands on the box is
+`GATE_STAGE_CONCURRENCY × GATE_MAKE_JOBS`, and both factors are capped:
+
+| Variable | Default | What it caps |
+| --- | --- | --- |
+| `GATE_MAKE_JOBS` | `3` | The `-j` every stage's `make` gets, **and** the default for every sub-tool that fans out on its own — `RUNTESTS_JOBS`, `LIBC_TEST_JOBS`, `GAPMAP_JOBS`, `ASAN_JOBS`, `LINT_JOBS`, `LINKCHECK_JOBS`. Setting one of those explicitly still wins. |
+| `GATE_STAGE_CONCURRENCY` | `4` | How many stages run at once. `0` means no cap. Stages over the cap are still launched and still reported; they just wait for a slot. |
+
+So the default peak is **12 concurrent workers**, half of a 24-CPU
+workstation, which is the point: the gate is something you run while the
+rest of your work carries on.
+
+Neither default is derived from `nproc`, deliberately. Every stage used
+to hardcode `make -j"$(nproc)"` while all 14 stages launched at once, so
+a plain `tools/gate.sh` on a 24-CPU box asked for up to **14 × 24 = 336**
+concurrent compilers — or Wine processes, which are not cheap in RAM.
+That reproducibly drove this project's development machine past load
+average 450 and into swap exhaustion, at which point `systemd-oomd`
+killed whole terminal scopes belonging to unrelated work. A per-command
+`-j2` habit is no defence against a number baked into a script, which is
+why the number is a knob now and why its default is small.
+
+On a machine you own outright, turn both up:
+
+```
+GATE_STAGE_CONCURRENCY=0 GATE_MAKE_JOBS=$(nproc) tools/gate.sh   # the old behaviour
+GATE_STAGE_CONCURRENCY=6 GATE_MAKE_JOBS=8 tools/gate.sh          # ~48 workers
+```
+
+CI does not use these; its workflows set their own `-j` and get a runner
+to themselves.
+
+`GATE_JOBS_DIR` chooses where the tree copies and logs go (default: a
+fresh `mktemp -d`, removed on a clean exit and **kept on failure** so the
+logs stay readable). `GATE_WINE` picks the wine binary the `check-*`
+stages configure against — set it if the wine on `PATH` cannot run the
+suite, e.g. one predating `RtlCloneUserProcess`, where anything that
+forks hangs in `winedbg --auto` instead of exiting.
+
 ## Linting (`make lint`)
 
 The library is built with tcc, which is far more permissive than gcc or
