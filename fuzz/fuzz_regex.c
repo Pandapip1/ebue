@@ -19,30 +19,42 @@
  * that regfree() after a failed regcomp() is safe here as an extension,
  * so it must stay safe.
  *
- * regexec is fuzzed only for patterns that pass safe_to_exec() below,
- * and that filter is the price of the harness existing at all.
- * test/posix-glob.c:1925 fences a *process kill*: run() recurses once
- * per I_SPLIT with no depth bound, and a repeat whose body can match
- * the empty string compiles to a progress-free SPLIT/JMP loop, so
- * "(a*)*b" against thirty 'a's exhausts the C stack.  The MAX_STEPS
- * guard counts steps, not depth, and never trips.  That defect is
- * known, fenced, and NOT fixed by this harness -- the standing rule
- * here is to fence findings, not fix them.
+ * regexec is fuzzed only for patterns that pass safe_to_exec() below.
+ * What that filter is for has changed, and it is worth being exact
+ * about, because the filter itself is not a faithful model of
+ * regcomp() and never was.
  *
- * But an unfiltered regexec harness discovers it in under a second and
- * then reports nothing else, ever: libFuzzer stops at the first crash,
- * the corpus keeps the reproducer, and every subsequent nightly run
- * dies on the same known input.  A permanently red harness is not a
- * regression net.  So safe_to_exec() rejects exactly the patterns that
- * can build a nullable repeat -- a repeat operator is accepted only
- * when the item it applies to is an ordinary atom (a literal, '.', an
- * escaped character, or a bracket expression), never a group, an
- * anchor, an alternation branch start, or another repeat.  That leaves
- * the matcher's alternation, bracket, anchor, case-folding, REG_NEWLINE
- * and backreference paths fully exercised, and costs only the
- * repeat-of-a-group shapes, which are the fenced ones.
+ * It was written to keep the harness off a *process kill*: run()
+ * recursed once per I_SPLIT with no depth bound, and a repeat whose
+ * body can match the empty string compiles to a progress-free
+ * SPLIT/JMP loop, so "(a*)*b" against thirty 'a's exhausted the C
+ * stack while the MAX_STEPS guard -- which counts steps, not depth --
+ * never tripped.  An unfiltered harness found that in under a second
+ * and then reported nothing else ever after, because libFuzzer stops
+ * at the first crash and the corpus keeps the reproducer.
  *
- * When the fence is lifted, delete safe_to_exec() and this comment.
+ * That defect is fixed: run() is iterative over a bounded heap stack
+ * and reports REG_ESPACE instead of dying (see src/regex/regex.c's
+ * "BOUNDED MATCHING" header note, and the now-live
+ * test_regex_nullable_repeat_does_not_crash() in test/posix-glob.c).
+ * The filter stays anyway, for a smaller reason: a nullable repeat now
+ * burns the whole two-million-step budget at every start offset before
+ * answering, which is on the order of a second per input and would
+ * cost the harness most of its throughput for a class of input whose
+ * answer is already known and already asserted in test/.
+ *
+ * The filter accepts a repeat operator only when the item it applies
+ * to is an ordinary atom (a literal, '.', an escaped character, or a
+ * bracket expression), never a group, an anchor, an alternation branch
+ * start, or another repeat.  It does *not* model brackets exactly: it
+ * treats a leading '!' as a negation marker the way fnmatch does,
+ * which POSIX brackets do not, so "[!]**" reads to it as an
+ * unterminated bracket that regcomp will reject.  regcomp reads it as
+ * a bracket matching '!' followed by a repeat of a repeat -- which is
+ * how the stack-overflow reproducer of record got past this filter.
+ * The gap is harmless now (worst case is a slow unit, not a kill) and
+ * is left as it is deliberately: tightening it would only re-hide the
+ * shapes the fix made safe.
  *
  * NO DIFFERENTIAL ORACLE.  One was measured: comparing against glibc's
  * regexec produced 1357 mismatches, overwhelmingly GNU BRE extensions

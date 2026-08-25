@@ -640,11 +640,12 @@ struct mstate {
 /* Ceiling on the backtracking stack, in entries.  It cannot be reached
  * before MAX_STEPS by a pattern that makes progress -- every entry is
  * pushed by an instruction that also costs a step -- so it is a memory
- * bound, not a second work bound: 256K entries is ~6MB on the 32-bit
- * target, and it caps what a single regexec() can ask the allocator
- * for.  What it costs is the length of subject a single unbounded
- * repeat can consume: "a*" pushes one entry per 'a', so a subject
- * longer than this many bytes reports REG_ESPACE rather than matching.
+ * bound, not a second work bound: 256K entries is ~6 MiB at the 24
+ * bytes struct bt occupies on x86_64 (~4 MiB on i386), and it caps
+ * what a single regexec() can ask the allocator for.  What it costs
+ * is the length of subject a single unbounded repeat can consume:
+ * "a*" pushes one entry per 'a', so a subject longer than this many
+ * bytes reports REG_ESPACE rather than matching.
  * That is a real limit and is documented here deliberately; before
  * this it was a recursion depth of the same size, i.e. a process kill
  * at a few thousand. */
