@@ -3025,7 +3025,7 @@ verdict recorded with its evidence (`flockfile`).
 |---|---|---|---|
 | snprintf | `fprintf.html` DESCRIPTION: "output bytes beyond the n-1st shall be discarded ... and a null byte is written at the end of the bytes actually written"; RETURN VALUE: "the number of bytes that would be written to s had n been sufficiently large excluding the terminating null byte" — exact fit, one short, `n == 1`, and a sentinel one byte past the buffer in each case | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | snprintf | RETURN VALUE: "If the value of n is zero ... nothing shall be written, the number of bytes that would have been written ... shall be returned, and s may be a null pointer" — both the non-null-`s` and null-`s` forms | covered | test/posix-stdio.c `test_snprintf_boundaries` |
-| snprintf | ERRORS: "[EOVERFLOW] The value of n is greater than {INT_MAX}" — a **shall fail**, not a may-fail | **BUG (fenced)** — no bound is checked at all; see below | test/posix-stdio.c `test_snprintf_eoverflow` |
+| snprintf / vsnprintf | ERRORS: "[EOVERFLOW] The value of n is greater than {INT_MAX}" — a **shall fail**, not a may-fail | covered — FIXED (this commit); the fenced defect was: no bound was checked at all, `n` went straight to the throwaway memory `FILE`'s `mem_size` and the call formatted normally. See below | test/posix-stdio.c `test_snprintf_eoverflow` |
 | sprintf | DESCRIPTION: "shall place output followed by the null byte"; RETURN VALUE: "the number of bytes written to s, excluding the terminating null byte" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | fprintf / printf / dprintf | DESCRIPTION: "If the format is exhausted while arguments remain, the excess arguments shall be evaluated but are otherwise ignored" | covered | test/posix-stdio.c `test_snprintf_boundaries` |
 | fprintf family | the flag table's `'` (`<apostrophe>`) entry: "The integer portion of the result of a decimal conversion ... shall be formatted with thousands' grouping characters" — a `[CX]` flag, i.e. base POSIX, and in the POSIX locale a no-op that must still be *accepted* | covered — was a fenced BUG (`"%'d"` emitted literally, and no argument consumed); FIXED, see below | test/posix-stdio.c `test_printf_apostrophe_flag` |
@@ -3092,22 +3092,32 @@ from XBD `<stdarg.h>`, which `va_arg.html` defers to in full.
 
 ### Bugs found (groups K/L)
 
-1. **`snprintf()` does not fail with `[EOVERFLOW]` when `n` is greater
-   than `{INT_MAX}`.** `fprintf.html` ERRORS: "The snprintf() function
-   shall fail if: [EOVERFLOW] The value of n is greater than
-   {INT_MAX}." That is a *shall fail*, not a may-fail, so the call has
+1. **`snprintf()` did not fail with `[EOVERFLOW]` when `n` is greater
+   than `{INT_MAX}`.** FIXED — `src/stdio/printf.c`'s `vsnprintf()` now
+   refuses such a call before it formats anything, which covers
+   `snprintf()` too because that is its only variadic wrapper. The
+   description below is kept in the past tense as the record; the fence
+   is gone and `test_snprintf_eoverflow` asserts the clause for real,
+   for both entry points, with a sentinel byte proving `s` is untouched
+   and an `n == {INT_MAX}` case proving the boundary itself still
+   formats.
+
+   `fprintf.html` ERRORS: "The snprintf() function shall fail if:
+   [EOVERFLOW] The value of n is greater than {INT_MAX}." That is a
+   *shall fail*, not a may-fail, so the call has
    to return a negative value and set `errno` (RETURN VALUE: "If an
    output error was encountered, these functions shall return a
    negative value and set errno") rather than format.
-   `src/stdio/printf.c`'s `vxprintf_mem()` takes `n` straight to the
-   throwaway memory `FILE`'s `mem_size` and never compares it to
-   anything. Measured: `snprintf(b, (size_t)INT_MAX + 1, "z")` returns
-   1, leaves `errno` at 0, and writes `"z"`. The clause exists because
-   the return type is `int`: the return value is defined as the number
-   of bytes that *would* have been written had `n` been sufficiently
-   large, and for `n > INT_MAX` that value is not representable in the
-   return type at all — so the standard makes the call fail up front
-   instead of returning something that cannot be right.
+   `src/stdio/printf.c`'s `vxprintf_mem()` took `n` straight to the
+   throwaway memory `FILE`'s `mem_size` and never compared it to
+   anything. Measured before the fix: `snprintf(b, (size_t)INT_MAX + 1,
+   "z")` returned 1, left `errno` at 0, and wrote `"z"`. The clause
+   exists because the return type is `int`: the return value is defined
+   as the number of bytes that *would* have been written had `n` been
+   sufficiently large, and for `n > INT_MAX` that value is not
+   representable in the return type at all — so the standard makes the
+   call fail up front instead of returning something that cannot be
+   right.
 
    Worth naming the class rather than just the instance: this is an
    ERRORS "shall fail" argument check that was simply never written,
