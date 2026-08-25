@@ -57,6 +57,13 @@
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+/* CHECK, plus the errno the failing call left behind.  For assertions
+ * whose whole content is "this call succeeded": "FAIL ... fd >= 0" says
+ * only that something went wrong, and on the real-Windows CI leg -- the
+ * one platform there is no attaching a debugger to -- that cost a whole
+ * round trip through CI to learn what.  Set errno = 0 before the call so
+ * the number printed is this call's and not a stale one. */
+#define CHECK_E(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s (errno=%d)\n", __FILE__, __LINE__, #cond, errno); } } while (0)
 
 static char *make_tmp(const char *tmpl)
 {
@@ -1575,8 +1582,18 @@ static void test_fchmodat_enametoolong(void)
 	CHECK(strlen(name255) == NAME_MAX);
 	strcpy(path, "chm.d/");
 	strcat(path, name255);
+	/* Note that this path is also longer than Windows' {MAX_PATH} once
+	 * it is resolved against the working directory, so it is the
+	 * hand-built NT path in src/internal/path.c's
+	 * nt_path_over_max_path() that carries it on real Windows; before
+	 * that existed this open failed with [ENAMETOOLONG] on every
+	 * windows-test leg while passing under Wine.  Left as it is rather
+	 * than shortened: the {NAME_MAX} boundary is the point, and a
+	 * boundary that only holds in a shallow working directory is not
+	 * one this library should be claiming. */
+	errno = 0;
 	fd = open(path, O_CREAT | O_WRONLY, 0644);
-	CHECK(fd >= 0);
+	CHECK_E(fd >= 0);
 	if (fd >= 0) {
 		CHECK(close(fd) == 0);
 		errno = 0;

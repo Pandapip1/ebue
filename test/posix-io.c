@@ -253,6 +253,75 @@ static void test_fs(void)
 	CHECK(rename("no-such-file-xyz", "t-r2.txt") == -1 && errno == ENOENT);
 }
 
+/* ---- a path longer than Windows' {MAX_PATH}, which POSIX says nothing
+ * about and <limits.h> promises 4096 bytes of ----
+ *
+ * XBD <limits.h>: {PATH_MAX} is the "Maximum number of bytes in a
+ * pathname, including the terminating null character", and this library
+ * defines it as 4096 (include/limits.h) and reports it from
+ * sysconf(_PC_PATH_MAX) (src/unistd/sysconf.c).  A caller is therefore
+ * entitled to a 4000-byte pathname, and open/stat/mkdir/unlink/rmdir --
+ * every interface that goes through src/internal/path.c -- has to carry
+ * one.
+ *
+ * They did not.  Real Windows' RtlDosPathNameToNtPathName_U applies the
+ * Win32 {MAX_PATH} = 260 ceiling to any name it normalises, so on the
+ * windows-test CI legs every one of these calls used to fail with
+ * [ENAMETOOLONG] at 261 bytes of resolved path, silently capping the
+ * library at a sixteenth of its own advertised {PATH_MAX}.  Wine has no
+ * such ceiling, which is exactly why nothing noticed: this assertion
+ * cannot fail under Wine, and it is the real-Windows leg it is written
+ * for.  See src/internal/path.c's nt_path_over_max_path() for the
+ * measurements and the fix.
+ *
+ * The construction is deliberately independent of the working
+ * directory's own depth -- two 200-byte components under a short one
+ * put the RELATIVE path past 400 bytes on its own, so the test means
+ * the same thing whether it runs from "D:\a\ntlibc\ntlibc" or from a
+ * drive root.  Every individual component stays within {NAME_MAX}
+ * (255), so this is a statement about path length only and does not
+ * quietly re-test the component limit. */
+static void test_long_path(void)
+{
+	char comp[201], dir[512], path[1024], buf[8] = {0};
+	struct stat st;
+	int fd;
+
+	memset(comp, 'p', sizeof comp - 1);
+	comp[sizeof comp - 1] = 0;
+
+	CHECK(mkdir("lp.d", 0755) == 0);
+	strcpy(dir, "lp.d/");
+	strcat(dir, comp);
+	errno = 0;
+	CHECK(mkdir(dir, 0755) == 0);
+	strcpy(path, dir);
+	strcat(path, "/");
+	strcat(path, comp);
+	CHECK(strlen(path) > 260);
+
+	errno = 0;
+	fd = open(path, O_CREAT | O_WRONLY, 0644);
+	if (fd < 0) printf("FAIL %s:%d: open(<%d-byte path>) (errno=%d)\n",
+		__FILE__, __LINE__, (int)strlen(path), errno);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(write(fd, "long", 4) == 4);
+		CHECK(close(fd) == 0);
+		/* and the rest of the path-taking surface reaches it too */
+		errno = 0;
+		CHECK(stat(path, &st) == 0 && st.st_size == 4);
+		fd = open(path, O_RDONLY);
+		CHECK(fd >= 0 && read(fd, buf, sizeof buf) == 4 && !strcmp(buf, "long"));
+		if (fd >= 0) CHECK(close(fd) == 0);
+		errno = 0;
+		CHECK(unlink(path) == 0);
+	}
+	errno = 0;
+	CHECK(rmdir(dir) == 0);
+	CHECK(rmdir("lp.d") == 0);
+}
+
 /* ---- dup2/fcntl: fcntl.html ---- */
 static void test_dup_fcntl(void)
 {
@@ -456,6 +525,7 @@ int main(void)
 	test_read_write();
 	test_lseek();
 	test_fs();
+	test_long_path();
 	test_dup_fcntl();
 	test_pipe();
 	test_chdir();

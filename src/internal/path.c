@@ -231,6 +231,10 @@ static int reject_if_prefix_not_dir(struct __ntpath *out, HANDLE root)
 	return -1;
 }
 
+/* Defined below, next to normalize_rel(), which it uses. */
+static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
+                                 struct __ntpath *out, ULONG attributes);
+
 int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 {
 	WCHAR *dos;
@@ -255,7 +259,16 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 
 	memset(out, 0, sizeof *out);
 	st = RtlDosPathNameToNtPathName_U_WithStatus(dos, &out->nt, 0, 0);
-	if (!NT_SUCCESS(st)) {
+	if (NT_SUCCESS(st)) {
+		out->buf = out->nt.Buffer;
+		out->dos = dos;
+		InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
+	} else if (st == STATUS_NAME_TOO_LONG &&
+	           !nt_path_over_max_path(dos, n, &trailing, out, attributes)) {
+		/* The Rtl refused a name real NT can perfectly well open; the
+		 * NT path was built here instead.  See that function. */
+		__free(dos);
+	} else {
 		__free(dos);
 		/* A relative name that fits on its own can still overflow once it
 		 * is resolved against the current directory; the Rtl says so with
@@ -264,9 +277,6 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 			st == STATUS_NAME_TOO_LONG ? ENAMETOOLONG : ENOENT;
 		return -1;
 	}
-	out->buf = out->nt.Buffer;
-	out->dos = dos;
-	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	if (trailing && reject_if_not_dir(out)) return -1;
 	if (reject_if_prefix_not_dir(out, 0)) return -1;
 	return 0;
@@ -352,6 +362,144 @@ static int normalize_rel(WCHAR *w, size_t *np, int *trailing)
 	 * a directory. */
 	if (lastdot) *trailing = 1;
 	if (out == 0) *trailing = 0;
+	return 0;
+}
+
+/* THE {MAX_PATH} CEILING THE Rtl PUTS ON EVERY DOS NAME, AND WHY THIS
+ * FUNCTION EXISTS.
+ *
+ * MEASURED ON REAL WINDOWS (GitHub windows-latest / Server 2025, CI run
+ * 32822306367, all three windows-test legs agreeing), from a working
+ * directory of "D:\a\ntlibc\ntlibc":
+ *
+ *   open("chm.d/<255 bytes>")               -> -1, [ENAMETOOLONG]  (280)
+ *   open("chm.d/<254 bytes>")               -> -1, [ENAMETOOLONG]  (279)
+ *   open("<255 bytes>")                     -> -1, [ENAMETOOLONG]  (274)
+ *   chdir("chm.d"); open("<255 bytes>")     -> -1, [ENAMETOOLONG]  (280)
+ *   openat(dirfd_of_chm.d, "<255 bytes>")   ->  ok
+ *   open("\\?\D:\a\ntlibc\ntlibc\chm.d\<255 bytes>") -> ok
+ *
+ * The last two are what identify the culprit.  NTFS is happy with the
+ * 255-code-unit component, and NtCreateFile is happy with the 284-byte
+ * name -- the *same file*, created successfully, when the NT path is
+ * handed over ready-made.  The only step that differs between the
+ * failing and succeeding forms is RtlDosPathNameToNtPathName_U's
+ * DOS->NT conversion, and the only route to [ENAMETOOLONG] through
+ * __ntpath()'s Rtl branch is STATUS_NAME_TOO_LONG (the component check
+ * in __name_too_long() and the __US_MAX_WCHARS ceiling are both ruled
+ * out by the 254-byte and 274-byte cases above).  So: the Rtl applies
+ * the Win32 {MAX_PATH} = 260 ceiling to any name it has to normalise,
+ * and the "\\?\" local-device prefix -- which it copies through
+ * verbatim rather than normalising -- is the documented way past it
+ * (Microsoft, "Maximum Path Length Limitation":
+ * https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
+ * #enable-long-paths-in-windows-10-version-1607-and-later).
+ *
+ * That ceiling is not this library's to keep.  <limits.h> says
+ * PATH_MAX is 4096 and sysconf(_PC_PATH_MAX) reports it, so a caller is
+ * entitled to a 4000-byte path; before this, every path-taking
+ * interface silently stopped at 260 on real Windows.  NONE OF THIS IS
+ * VISIBLE UNDER WINE: Wine's RtlDosPathNameToNtPathName_U has no such
+ * ceiling, so all six lines above succeed there, which is why the gap
+ * survived until a test happened to build a path past 260.
+ *
+ * Rather than route every name through a hand-built NT path -- which
+ * would mean reimplementing Windows path normalisation (drive-relative
+ * "C:foo", UNC, device names, the reserved names) for the 99.9% of
+ * paths the Rtl already handles correctly -- this runs ONLY as a
+ * fallback, after the Rtl has refused with STATUS_NAME_TOO_LONG, i.e.
+ * only on names that until now returned -1 outright.  A name that works
+ * today takes exactly the path it took before.
+ *
+ * What it handles is correspondingly narrow: a drive-absolute name
+ * ("X:\..."), a drive-rooted one ("\..." , taking the drive from the
+ * current directory) and a plain relative one (joined onto the current
+ * directory).  Drive-relative "X:rel", and a name whose ".." climbs
+ * above the drive root, are declined -- the caller then reports the
+ * Rtl's [ENAMETOOLONG] as before, which is no worse than what happened
+ * before this existed.  "." and ".." are resolved lexically by
+ * normalize_rel(), the same pass and the same documented caveat as the
+ * __ntpath_at() branch below.
+ *
+ * Returns 0 with *out built (and *trailing possibly updated), or -1
+ * without touching errno meaningfully -- the caller reports the Rtl's
+ * own verdict in that case.  On success *out owns a single __malloc'd
+ * buffer, held in ->dos exactly as the __ntpath_at() branch does, so
+ * __ntpath_free() releases it. */
+static int drive_letter(WCHAR c)
+{
+	return ((c | 0x20) >= 'a' && (c | 0x20) <= 'z');
+}
+
+static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
+                                 struct __ntpath *out, ULONG attributes)
+{
+	WCHAR cur[4096];
+	WCHAR *w = 0, *joined = 0;
+	const WCHAR *body;      /* what follows "X:"; always starts with '\' */
+	WCHAR letter;
+	size_t bodyn, curn = 0, bn, len;
+	ULONG got;
+
+	if (n >= 3 && drive_letter(dos[0]) && dos[1] == ':' && dos[2] == '\\') {
+		letter = dos[0];
+		body = dos + 2;
+		bodyn = n - 2;
+	} else if (n >= 2 && dos[1] == ':') {
+		return -1;              /* drive-relative "X:rel": declined */
+	} else {
+		got = RtlGetCurrentDirectory_U(sizeof cur, cur);
+		if (!got || got > sizeof cur) return -1;
+		curn = got / sizeof(WCHAR);
+		if (curn < 2 || !drive_letter(cur[0]) || cur[1] != ':') return -1;
+		letter = cur[0];
+		if (dos[0] == '\\') {
+			body = dos;
+			bodyn = n;
+		} else {
+			/* "X:\a\b" + "\" + the relative name.  The current
+			 * directory's own trailing separator (present only at a
+			 * drive root) is dropped so the join never doubles it --
+			 * normalize_rel() would swallow a doubled one anyway, but
+			 * the arithmetic below is easier to check without it. */
+			while (curn > 2 && cur[curn-1] == '\\') curn--;
+			joined = __malloc((curn - 2 + 1 + n + 1) * sizeof(WCHAR));
+			if (!joined) return -1;
+			memcpy(joined, cur + 2, (curn - 2) * sizeof(WCHAR));
+			joined[curn - 2] = '\\';
+			memcpy(joined + curn - 1, dos, n * sizeof(WCHAR));
+			bodyn = curn - 1 + n;
+			joined[bodyn] = 0;
+			body = joined;
+		}
+	}
+
+	/* "\??\" + "X:" + "\" + the normalised body, which normalize_rel()
+	 * writes without a leading separator.  It only ever shortens, so the
+	 * allocation below is an upper bound. */
+	w = __malloc((4 + 3 + bodyn + 1) * sizeof(WCHAR));
+	if (!w) { __free(joined); return -1; }
+	w[0] = '\\'; w[1] = '?'; w[2] = '?'; w[3] = '\\';
+	w[4] = letter; w[5] = ':'; w[6] = '\\';
+	bn = bodyn - 1;                 /* body[0] is the separator at w[6] */
+	memcpy(w + 7, body + 1, bn * sizeof(WCHAR));
+	__free(joined);
+	if (normalize_rel(w + 7, &bn, trailing)) { __free(w); return -1; }
+	len = 7 + bn;
+	w[len] = 0;
+
+	/* The same UNICODE_STRING ceiling the rest of this file applies. */
+	if (len > __US_MAX_WCHARS) { __free(w); return -1; }
+
+	memset(out, 0, sizeof *out);
+	out->nt.Buffer = w;
+	/* USHORT-safe: len is bounded by __US_MAX_WCHARS just above, so
+	 * (len + 1) * sizeof(WCHAR) still fits a USHORT. */
+	out->nt.Length = (USHORT)(len * sizeof(WCHAR));
+	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
+	out->buf = 0;                   /* w is freed as ->dos */
+	out->dos = w;
+	InitializeObjectAttributes(&out->oa, &out->nt, attributes, 0, 0);
 	return 0;
 }
 
