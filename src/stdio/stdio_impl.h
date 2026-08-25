@@ -33,6 +33,8 @@ struct _IO_FILE {
 	unsigned char mem_dynamic; /* open_memstream: mem_buf grows and is reported back */
 	unsigned char wmem;      /* open_wmemstream: mem_buf holds wchar_t, not bytes */
 	unsigned char mem_owned; /* fmemopen(NULL,...): mem_buf is ours, free it at fclose */
+	unsigned char mem_append; /* fmemopen(...,"a"): every write goes to the end of
+	                          * the contents, not to the file position */
 	unsigned char no_close;  /* fclose must not close fd (stdin/out/err) */
 
 	unsigned char *buf;

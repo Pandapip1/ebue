@@ -91,7 +91,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become unverified at run time instead, by design).
 #
-# COUNTS pass=67 xfail=22 unclassified=4 unbuildable=52 unverifiable=1
+# COUNTS pass=68 xfail=21 unclassified=4 unbuildable=52 unverifiable=1
 #
 argv                              pass
 basename                          pass
@@ -137,7 +137,7 @@ mbc                               unbuildable  mbc.c:6: error: include file 'lan
 mbsrtowcs-overflow                pass
 memmem-oob                        pass
 memmem-oob-read                   pass
-memstream                         xfail:defect  no clause row; fseek(SEEK_CUR) past end of an open_memstream buffer mis-tracks ftell and content
+memstream                         pass          fixed: two fmemopen defects (a seek past a fixed buffer's end was accepted; append mode wrote at the file position instead of the end) plus fseek() discarding read-ahead before a failed seek
 mkdtemp-failure                   pass
 mkstemp-failure                   pass
 mntent                            unbuildable  mntent.c:5: error: include file 'mntent.h' not found

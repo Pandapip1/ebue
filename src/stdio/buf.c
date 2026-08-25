@@ -75,6 +75,14 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		 * arithmetic here is shared), and only the terminator and the
 		 * reported size differ. */
 		size_t term = f->wmem ? sizeof(wchar_t) : 1;
+		/* fmemopen.html, append modes: the position is reset to the end
+		 * of the contents before each write, so a write goes there and
+		 * not to wherever the caller last seeked.  Without this,
+		 * fmemopen(buf, 10, "a+") on "hello" followed by a seek to 0
+		 * and a 3-byte write produced "h104o" where "hello104" is
+		 * required -- the write landed at the seek position and
+		 * overwrote live content. */
+		if (f->mem_append) f->mem_pos = f->mem_len;
 		if (f->mem_dynamic && f->mem_pos + n + term > f->mem_size) {
 			size_t ns = f->mem_size ? f->mem_size : 128;
 			while (ns < f->mem_pos + n + term) ns *= 2;
@@ -107,6 +115,17 @@ long long __file_seek(FILE *f, long long off, int whence)
 		default: errno = EINVAL; return -1;
 		}
 		if (base + off < 0) { errno = EINVAL; return -1; }
+		/* fmemopen.html: "An attempt to seek a memory buffer stream to
+		 * a negative position or to a position larger than the buffer
+		 * size shall fail."  A FIXED buffer has a size to exceed; an
+		 * open_memstream() buffer grows on demand, so only the negative
+		 * half of that clause applies to it and mem_dynamic is exempt
+		 * here.  Without this an fmemopen(buf, 10, "r+") stream would
+		 * seek to 11 and report ftell() == 11 for a ten-byte buffer. */
+		if (!f->mem_dynamic && (unsigned long long)(base + off) > f->mem_size) {
+			errno = EINVAL;
+			return -1;
+		}
 		f->mem_pos = (size_t)(base + off);
 		return (long long)f->mem_pos;
 	}

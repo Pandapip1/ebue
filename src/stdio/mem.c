@@ -47,6 +47,13 @@ FILE *fmemopen(void *__restrict buf, size_t size, const char *__restrict mode)
 		while (l < size && b[l]) l++;
 		f->mem_len = l;
 		f->mem_pos = l;
+		/* fmemopen.html: for append modes the initial position is the
+		 * first null byte, "and ... the current position shall be reset
+		 * to the size of the buffer" before each write -- so a write
+		 * lands at the end of the CONTENTS whatever the caller has
+		 * seeked to since.  Recorded here because the write path is
+		 * shared with open_memstream(), which has no append mode. */
+		f->mem_append = 1;
 	}
 	f->bufmode = _IOFBF;
 	f->next = __stdio_files;

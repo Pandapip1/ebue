@@ -1524,6 +1524,74 @@ static void test_mem_streams(void)
 	CHECK(fmemopen(buf, 4, "z") == 0);
 	CHECK(errno == EINVAL);
 
+	/* fmemopen.html: "An attempt to seek a memory buffer stream to a
+	 * negative position or to a position larger than the buffer size
+	 * shall fail."  A FIXED buffer has a size to exceed; an
+	 * open_memstream() buffer grows on demand, so only the negative half
+	 * applies there.  Without this a ten-byte stream seeked to 11 and
+	 * reported ftell() == 11. */
+	{
+		char fb[10];
+		FILE *g = fmemopen(fb, sizeof fb, "r+");
+		CHECK(g != 0);
+		if (g) {
+			CHECK(fputs("hello", g) >= 0);
+			CHECK(fseek(g, 0, SEEK_SET) == 0);
+			/* Reach position 5 by READING, not by seeking, so the
+			 * stream is holding buffered read-ahead when the failing
+			 * seek below happens.  That is what makes the "position
+			 * unchanged" assertion discriminate: with an empty buffer
+			 * it passes whatever fseek() does with the buffer on
+			 * failure.  Mutation-testing showed exactly that -- the
+			 * seek-then-discard ordering fix was invisible until this
+			 * read was here. */
+			{
+				char rb[6];
+				CHECK(fread(rb, 1, 5, g) == 5);
+				CHECK(memcmp(rb, "hello", 5) == 0);
+			}
+			CHECK(ftell(g) == 5);
+			errno = 0;
+			CHECK(fseek(g, 6, SEEK_CUR) < 0);
+			CHECK(errno != 0);
+			/* fseek.html: on failure "the file offset ... shall remain
+			 * unchanged" -- and this is the assertion that catches
+			 * fseek() throwing away its read-ahead before a seek that
+			 * then fails, which made ftell() answer the read-ahead
+			 * point instead of the real position. */
+			CHECK(ftell(g) == 5);
+			errno = 0;
+			CHECK(fseek(g, 11, SEEK_SET) < 0);
+			/* exactly the buffer size is allowed; one past is not */
+			CHECK(fseek(g, 10, SEEK_SET) == 0);
+			CHECK(fclose(g) == 0);
+		}
+	}
+
+	/* fmemopen.html, append modes: the position is reset to the end of
+	 * the contents before each write, so a write lands there and not at
+	 * whatever the caller last seeked to.  Without this,
+	 * fmemopen(buf, 10, "a+") over "hello" plus a seek to 0 and a
+	 * three-byte write produced "h104o" -- the write overwrote live
+	 * content in place. */
+	{
+		char ab[10];
+		FILE *g;
+		memcpy(ab, "hello", 6);
+		g = fmemopen(ab, sizeof ab, "a+");
+		CHECK(g != 0);
+		if (g) {
+			CHECK(ftell(g) == 5);          /* opens at the first NUL */
+			CHECK(fseek(g, 0, SEEK_SET) == 0);
+			CHECK(getc(g) == 'h');         /* reads still honour the seek */
+			CHECK(fprintf(g, "%d", 104) == 3);
+			CHECK(fflush(g) == 0);
+			CHECK(ftell(g) == 8);
+			CHECK(memcmp(ab, "hello104", 8) == 0);
+			CHECK(fclose(g) == 0);
+		}
+	}
+
 	/* open_memstream */
 	out = 0; outsz = 99;
 	f = open_memstream(&out, &outsz);
