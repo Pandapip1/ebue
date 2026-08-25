@@ -518,6 +518,154 @@ static int bi_cd(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== set / shift: the positional parameters (XCU 2.5.1) =============== */
+
+/* set(1p) with no options and no arguments: "set shall write the names
+ * and values of all shell variables in the collation sequence of the
+ * current locale.  Each name shall start on a separate line, using the
+ * format: "%s=%s\n" ... The value string shall be written with
+ * appropriate quoting ... The output shall be suitable for reinput to
+ * the shell".
+ *
+ * "Suitable for reinput" is the part that a naive `printf("%s\n", e)`
+ * over environ gets wrong the moment a value contains a space, a '$' or
+ * a quote -- and gets wrong *silently*, producing output that looks
+ * right and means something else when fed back.  So the value is
+ * single-quoted (XCU 2.2.2: "[e]nclosing characters in single-quotes
+ * shall preserve the literal value of each character within the
+ * single-quotes"), with the one character that cannot appear inside
+ * single-quotes -- a single-quote -- written as the standard
+ * '\''  splice: close, escape one, reopen.
+ *
+ * The deviation that remains, stated rather than hidden: this shell's
+ * only variable store is the real `environ` (see src/sh/exec.c), so
+ * what is listed is the environment, not a separate set of unexported
+ * shell variables, and there is no collation-order sort. */
+static void write_quoted(const char *v)
+{
+	fputc('\'', stdout);
+	for (; *v; v++) {
+		if (*v == '\'') fputs("'\\''", stdout);
+		else fputc(*v, stdout);
+	}
+	fputc('\'', stdout);
+}
+
+static void set_list_variables(void)
+{
+	extern char **environ;
+	char **e;
+
+	for (e = environ; e && *e; e++) {
+		const char *eq = strchr(*e, '=');
+		if (!eq) { fputs(*e, stdout); fputc('\n', stdout); continue; }
+		fwrite(*e, 1, (size_t)(eq - *e), stdout);
+		fputc('=', stdout);
+		write_quoted(eq + 1);
+		fputc('\n', stdout);
+	}
+}
+
+/* set(1p): "The remaining arguments shall be assigned in order to the
+ * positional parameters.  The special parameter '#' shall be set to
+ * reflect the number of positional parameters.  All positional
+ * parameters shall be unset before any new values are assigned", and
+ * "[t]he command set -- without argument shall unset all positional
+ * parameters and set the special parameter '#' to zero."
+ *
+ * Options are not implemented, and that is a refusal rather than a
+ * silent no-op: `set -e` that did nothing would change the meaning of
+ * every subsequent failure in the script without the script being able
+ * to tell, which is exactly what sh/main.c's refusal list exists to
+ * prevent.  set(1p)'s EXIT STATUS makes ">0  An invalid option was
+ * specified, or an error occurred" the right shape for saying so.
+ *
+ * `env_effect` is 0 in the table below, not 1, for the same reason
+ * `exit`'s is: the no-operand form *writes to standard output*, which a
+ * pipeline stage must still do ("set | ..." is an ordinary idiom), so
+ * the utility has to run either way and decides for itself which half
+ * of its behaviour a subshell environment discards. */
+static int bi_set(struct sh_builtin_ctx *ctx)
+{
+	int first = 1;
+
+	if (ctx->argc == 1) {
+		set_list_variables();
+		ctx->status = 0;
+		return 0;
+	}
+	if (strcmp(ctx->argv[1], "--") == 0) {
+		first = 2;
+	} else if (ctx->argv[1][0] == '-' || ctx->argv[1][0] == '+') {
+		fprintf(stderr, "set: %s: options are not implemented -- see "
+		                "test/sh-design.md\n", ctx->argv[1]);
+		ctx->status = 2;
+		return 0;
+	}
+	/* 2.12 puts a multi-command pipeline's stages in a subshell
+	 * environment, and this process is not one: renumbering the real
+	 * shell's parameters from a stage would leak out of a subshell
+	 * that is supposed to be discarded.  Not doing it is
+	 * indistinguishable from doing it in a discarded subshell. */
+	if (!ctx->env_mutate) { ctx->status = 0; return 0; }
+	if (__sh_params_replace(ctx->argv + first, ctx->argc - first) < 0) {
+		fprintf(stderr, "set: out of memory\n");
+		ctx->status = 2;
+		return 0;
+	}
+	ctx->status = 0;
+	return 0;
+}
+
+/* shift(1p): "The value n shall be an unsigned decimal integer less
+ * than or equal to the value of the special parameter '#'.  If n is not
+ * given, it shall be assumed to be 1.  If n is 0, the positional and
+ * special parameters are not changed."  EXIT STATUS: "[i]f the n
+ * operand is invalid or is greater than "$#" ... a non-zero exit status
+ * shall be returned."
+ *
+ * "Unsigned decimal integer" is taken literally: a leading '-' or '+',
+ * or any trailing text, is invalid rather than something to salvage,
+ * because `shift $x` with an $x that expanded to nothing or to a word
+ * is precisely the case where guessing produces a wrong-but-plausible
+ * argument list further down the script. */
+static int bi_shift(struct sh_builtin_ctx *ctx)
+{
+	long n = 1;
+
+	if (ctx->argc > 2) {
+		fprintf(stderr, "shift: too many operands\n");
+		ctx->status = 2;
+		return 0;
+	}
+	if (ctx->argc == 2) {
+		const char *a = ctx->argv[1];
+		char *end;
+		if (!*a || !(*a >= '0' && *a <= '9')) {
+			fprintf(stderr, "shift: %s: not an unsigned decimal integer\n", a);
+			ctx->status = 2;
+			return 0;
+		}
+		n = strtol(a, &end, 10);
+		if (*end) {
+			fprintf(stderr, "shift: %s: not an unsigned decimal integer\n", a);
+			ctx->status = 2;
+			return 0;
+		}
+	}
+	if (n > __sh_param_count()) {
+		fprintf(stderr, "shift: can only shift %d positional parameter%s\n",
+			__sh_param_count(), __sh_param_count() == 1 ? "" : "s");
+		ctx->status = 2;
+		return 0;
+	}
+	/* Same subshell reasoning as bi_set() above. */
+	if (!ctx->env_mutate) { ctx->status = 0; return 0; }
+	if (__sh_params_shift((int)n) < 0) { ctx->status = 2; return 0; }
+	ctx->status = 0;
+	return 0;
+}
+
 /* ==== the dispatcher ==================================================== */
 
 /* `special` is XCU 2.14's distinction, recorded because 2.8.1 hangs
@@ -533,6 +681,13 @@ static const struct sh_builtin builtins[] = {
 	 * is 0, and it consults ctx->env_mutate itself to decide whether
 	 * to start a shell-wide unwind. */
 	{ "exit",  1, 0, bi_exit },
+	/* 2.14 special built-ins.  `env_effect` 0 for both: see bi_set()'s
+	 * header comment -- each has an output half that must run in a
+	 * pipeline stage and a mutating half that must not, so each
+	 * consults ctx->env_mutate itself rather than being skipped
+	 * wholesale the way `cd` is. */
+	{ "set",   1, 0, bi_set },
+	{ "shift", 1, 0, bi_shift },
 	{ "cd",    0, 1, bi_cd },
 	{ "test",  0, 0, bi_test },
 	{ "[",     0, 0, bi_test },

@@ -20,6 +20,17 @@
  * 'if/then/elif/else/fi', 'while|until ... do ... done' and
  * 'for name [in words] do ... done' (XCU 2.9.4).
  *
+ * Stage 7 adds the positional and special parameters of XCU 2.5.1 and
+ * 2.5.2 -- $1..$9, ${10} and beyond, $@, $*, $#, $0 -- together with
+ * the 'set' and 'shift' special built-ins that manipulate them.  The
+ * expansion itself is not in this directory: it belongs to the one
+ * left-to-right scan in src/wordexp/wordexp.c, reached through
+ * __wordexp_sh() (src/internal/libc.h), because "$@" produces a
+ * *number of fields* from one word and only that scan knows what is
+ * quoted.  src/sh/param.c owns the list.  'for name' with no 'in' list
+ * is consequently real now: 2.9.4 defines it as 'in "$@"', and there
+ * is a "$@".
+ *
  * Still out of scope, and still WORD tokens here: 'case', function
  * definitions, aliases and job control.  Because each of those lexes as
  * an ordinary WORD, a program using one would otherwise be *executed*
@@ -27,9 +38,8 @@
  * sh/main.c refuses such a program up front, with a diagnostic naming
  * what is unsupported, rather than letting it run -- see that file's
  * header for the full list and why refusing beats a misleading
- * "command not found".  'for name' with no 'in' list is refused the
- * same way, because 2.9.4 defines it as 'in "$@"' and there are no
- * positional parameters.
+ * "command not found".  The special parameters $?, $!, $$ and $- are
+ * refused there for the same reason.
  *
  * '!' pipeline negation is parsed as a reserved word (a bare, unquoted
  * WORD token whose text is exactly "!"/"{"/"}"), as are the compound
@@ -242,6 +252,31 @@ struct sh_builtin {
 };
 
 const struct sh_builtin *__sh_builtin_lookup(const char *name);
+
+/* ---- positional and special parameters (XCU 2.5.1, 2.5.2) -----------
+ *
+ * src/sh/param.c owns the list; see that file's header for why it is an
+ * array here rather than entries in `environ` like every other variable
+ * this shell has.  Expansion of "$1"/"$@"/"$*"/"$#" is not done here:
+ * it happens inside the one left-to-right scan that already knows what
+ * is quoted, i.e. src/wordexp/wordexp.c, reached through
+ * __wordexp_sh() (src/internal/libc.h) -- "$@" has to produce several
+ * *fields* from one word, which nothing bolted on after that scan can
+ * express. */
+struct sh_params {
+	char **v;   /* v[k] is $(k+1); NULL iff n == 0 */
+	int n;      /* $# */
+};
+
+const char *__sh_param_zero(void);
+int __sh_param_set_zero(const char *s);
+int __sh_param_count(void);
+const char *__sh_param_get(int n);            /* 1-based; NULL if unset */
+int __sh_params_replace(char *const *argv, int n);
+int __sh_params_shift(int n);                 /* -1 if n > $# */
+void __sh_params_take(struct sh_params *out);     /* move out, leaving none */
+void __sh_params_install(struct sh_params *in);   /* move in, freeing current */
+void __sh_params_free(struct sh_params *p);
 
 /* ---- shell-wide control flow ----------------------------------------
  *

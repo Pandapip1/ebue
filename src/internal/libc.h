@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <errno.h>
+#include <wordexp.h>
 #include "nt.h"
 
 /* ---- process-wide state ------------------------------------------------ */
@@ -275,6 +276,31 @@ char *__find_program(const char *name, int use_path);
  * distinguish those here and no caller that would act differently.
  */
 int __sh_cmdsub(const char *program, char **out, int *status);
+
+/* The other direction: the shell asks wordexp() to expand a word *as a
+ * shell would*, which differs from the public wordexp() in exactly one
+ * respect -- the special and positional parameters of XCU 2.5.1/2.5.2
+ * ("$1", "${10}", "$@", "$*", "$#") are expanded, against the list
+ * src/sh/param.c owns.  wordexp() itself must not do that: it is a
+ * library call in an arbitrary program, which has no positional
+ * parameters at all, and XCU's own wordexp page describes it in terms
+ * of expanding words, not of being a shell with an argument list.  So
+ * the behaviour is a parameter of one shared scan rather than a second
+ * copy of it -- "$@" expands to several *fields* from one word, and
+ * only the scan that already tracks what is quoted can produce those.
+ *
+ * Same arguments, same return values and same wordexp_t ownership rules
+ * as wordexp(); see <wordexp.h>. */
+int __wordexp_sh(const char *words, wordexp_t *pwordexp, int flags);
+
+/* The three read-only accessors that expansion needs, and only those:
+ * src/sh/param.c owns the list and src/sh/sh.h declares the rest of its
+ * interface (replace/shift/save/restore), which is private to src/sh/.
+ * These are here for the same reason __sh_cmdsub() is -- they cross a
+ * source-directory boundary, into src/wordexp/wordexp.c's scan. */
+const char *__sh_param_zero(void);
+int __sh_param_count(void);
+const char *__sh_param_get(int n);
 
 /* ---- heap -------------------------------------------------------------- */
 void *__malloc(size_t);

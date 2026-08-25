@@ -151,10 +151,26 @@ static int is_ifs(char c) { return c == ' ' || c == '\t' || c == '\n'; }
 static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; }
 static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
-/* Reads a $NAME or ${NAME} parameter expansion starting at *pp (which
- * points at the '$'). Advances *pp past it. Appends the value (as live,
- * unquoted bytes) to b. Returns 0, or a WRDE_* error code. */
-static int expand_param(const char **pp, struct fbuf *b, int flags)
+static int fbuf_push_long(struct fbuf *b, long v);
+
+/* Reads a parameter expansion starting at *pp (which points at the
+ * '$'). Advances *pp past it. Appends the value to b -- as literal
+ * bytes when `quoted` (inside double-quotes the result is not a glob
+ * pattern, XCU 2.6 "quote removal"), as live bytes otherwise, matching
+ * every shell: an unquoted $VAR's value *is* eligible for pathname
+ * expansion.  Returns 0, or a WRDE_* error code.
+ *
+ * `sh` is __wordexp_sh()'s "expand as a shell would" (src/internal/
+ * libc.h): with it, XCU 2.5.1's positional parameters ($1..$9, and
+ * ${10} and beyond, which 2.5.1 requires the braces for -- "when a
+ * positional parameter with more than one digit is specified, the
+ * application shall enclose the digits in braces") and 2.5.2's '#'
+ * expand against src/sh/param.c's list.  Without it -- the public
+ * wordexp(), called from a program that has no positional parameters
+ * -- a '$' before a digit stays the literal character it always was.
+ * 2.5.2's '@' and '*' are NOT here: they can produce more than one
+ * field, which only the caller's scan can express. */
+static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int quoted)
 {
 	const char *p = *pp + 1;
 	const char *start;
@@ -168,6 +184,48 @@ static int expand_param(const char **pp, struct fbuf *b, int flags)
 		p++;
 	}
 	start = p;
+
+	if (sh && *p >= '0' && *p <= '9') {
+		/* 2.5.1: "The digits denoting the positional parameters shall
+		 * always be interpreted as a decimal value, even if there is a
+		 * leading zero."  Unbraced, exactly one digit is consumed --
+		 * "$12" is $1 followed by a literal '2', which is why ${12}
+		 * exists.  The cap keeps a pathological "${99999999999}" from
+		 * overflowing; it is far above any real argument list and the
+		 * answer for it is "unset" either way. */
+		long idx = 0;
+		if (braced) {
+			while (*p >= '0' && *p <= '9') {
+				if (idx < 1000000) idx = idx * 10 + (*p - '0');
+				p++;
+			}
+			if (*p != '}') return WRDE_SYNTAX;
+			p++;
+		} else {
+			idx = *p - '0';
+			p++;
+		}
+		*pp = p;
+		/* 2.5.2: '0' "[e]xpands to the name of the shell or shell
+		 * script" -- a special parameter, never a positional one, so it
+		 * cannot be unset and does not go through __sh_param_get(). */
+		val = idx == 0 ? __sh_param_zero() : __sh_param_get((int)idx);
+		if (!val) {
+			if (flags & WRDE_UNDEF) return WRDE_BADVAL;
+			return 0;
+		}
+		return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
+	}
+	if (sh && *p == '#' && (!braced || p[1] == '}')) {
+		/* 2.5.2 '#': "Expands to the decimal number of positional
+		 * parameters."  ${#NAME} is string length, a different
+		 * expansion this does not implement, and is excluded by
+		 * requiring the '}' to come straight after the '#'. */
+		p += braced ? 2 : 1;
+		*pp = p;
+		return fbuf_push_long(b, (long)__sh_param_count()) ? WRDE_NOSPACE : 0;
+	}
+
 	if (!is_namestart(*p)) {
 		/* "$" not followed by a name: not a parameter expansion this
 		 * implementation supports (see include/wordexp.h -- only bare
@@ -192,7 +250,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags)
 		if (flags & WRDE_UNDEF) return WRDE_BADVAL;
 		return 0;
 	}
-	return fbuf_push_str(b, val, 0) ? WRDE_NOSPACE : 0;
+	return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
 }
 
 /* Reads ~ or ~user starting at *pp (pointing at '~'), only valid when
@@ -515,7 +573,87 @@ nospace:
 	return WRDE_NOSPACE;
 }
 
-int wordexp(const char *words, wordexp_t *pwordexp, int flags)
+/* If `p` (pointing at a '$') introduces "$@"/"${@}" or "$*"/"${*}",
+ * returns '@' or '*' and sets *end past the whole expansion; otherwise
+ * returns 0 and leaves *end alone.  Only the bare and fully-braced
+ * spellings: "${@:-x}" and friends are other expansions this does not
+ * implement, and must not be mistaken for this one. */
+static int at_or_star(const char *p, const char **end)
+{
+	const char *q = p + 1;
+
+	if (*q == '{') {
+		if ((q[1] == '@' || q[1] == '*') && q[2] == '}') { *end = q + 3; return q[1]; }
+		return 0;
+	}
+	if (*q == '@' || *q == '*') { *end = q + 1; return *q; }
+	return 0;
+}
+
+/* XCU 2.5.2's '@' and '*': "Expands to the positional parameters,
+ * starting from one, initially producing one field for each positional
+ * parameter that is set."
+ *
+ * This is the one expansion that cannot be a string: it produces a
+ * *number* of fields, so it splices directly into the caller's scan --
+ * emitting the field built so far, then starting the next one -- rather
+ * than returning text.  That is also why it takes `out` and `active`:
+ * it is doing the same thing the caller's FLUSH does, at a point only
+ * it knows about.
+ *
+ *  - `star && quoted` is 2.5.2's other half for '*': "[w]hen the
+ *    expansion occurs in a context where field splitting will not be
+ *    performed, the initial fields shall be joined to form a single
+ *    field with the value of each parameter separated by the first
+ *    character of the IFS variable ... or separated by a <space> if
+ *    IFS is unset".  This implementation never consults IFS at all
+ *    (see <wordexp.h>), so the separator is always the <space> that
+ *    clause names for an unset IFS.
+ *  - Everything else produces one field per parameter.  For unquoted
+ *    '@' and '*' that is 2.5.2's "initially producing one field for
+ *    each positional parameter", with field splitting then applying to
+ *    each; for "$@" it is the retained-as-separate-fields case.
+ *  - Zero parameters contributes nothing at all -- 2.5.2: "[i]f there
+ *    are no positional parameters, the expansion of '@' shall generate
+ *    zero fields, even when '@' is within double-quotes".  The
+ *    caller's `dq` bookkeeping is what stops the enclosing quotes from
+ *    manufacturing an empty field in that case.
+ *
+ * An empty parameter mid-list is kept as an empty field when quoted (a
+ * quoted null is a field, 2.6) and dropped when not (2.5.2: "any empty
+ * fields may be discarded"), which is what `quoted ||` below says. */
+static int push_params(struct fbuf *b, struct pv *out, int *active, int star, int quoted)
+{
+	int n = __sh_param_count(), i, rc;
+
+	if (star && quoted) {
+		for (i = 1; i <= n; i++) {
+			if (i > 1 && fbuf_push(b, ' ', 1)) return WRDE_NOSPACE;
+			if (fbuf_push_str(b, __sh_param_get(i), 1)) return WRDE_NOSPACE;
+		}
+		return 0;
+	}
+	for (i = 1; i <= n; i++) {
+		size_t before;
+		if (i > 1) {
+			if (*active) {
+				rc = emit_field(b, out);
+				fbuf_free(b);
+				if (rc) return rc;
+			}
+			*active = 0;
+		}
+		before = b->n;
+		if (fbuf_push_str(b, __sh_param_get(i), quoted)) return WRDE_NOSPACE;
+		if (quoted || b->n != before) *active = 1;
+	}
+	return 0;
+}
+
+/* The one scan both wordexp() and __wordexp_sh() run; `sh` is the only
+ * difference between them (see src/internal/libc.h on __wordexp_sh()
+ * for why it is a parameter rather than a second implementation). */
+static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 {
 	struct pv out;
 	struct fbuf field;
@@ -524,6 +662,23 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 	int active = 0;	/* current field has at least one byte, or was opened by a quote */
 	int rc;
 	size_t base = 0;
+	/* State for the one case where a double-quote must *not* keep the
+	 * field alive: 2.5.2 says "$@" with no positional parameters
+	 * generates zero fields "even when '@' is within double-quotes",
+	 * while "" plainly generates one empty field.  The three below
+	 * distinguish them: `dq_prev` is whether the field was already
+	 * alive before this quote opened, `dq_mark` how long it was, and
+	 * `dq_null_at` whether an empty "$@" happened inside.  Only when
+	 * all three say "these quotes contributed nothing but the empty
+	 * $@" is the quote's own activation undone.  That is exactly the
+	 * clause 2.5.2 leaves unspecified -- "if the other parts are all
+	 * within the same double-quotes as the '@', it is unspecified
+	 * whether the result is zero fields or one empty field" -- resolved
+	 * the way bash and dash both resolve it, since `f "$@"` passing one
+	 * empty argument instead of none is the classic script-breaking
+	 * form of getting this wrong. */
+	int dq_prev = 0, dq_null_at = 0;
+	size_t dq_mark = 0;
 
 	if (flags & WRDE_REUSE) wordfree(pwordexp);
 
@@ -562,7 +717,15 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 		if (q == Q_NONE) {
 			if (is_ifs(c)) { FLUSH(); p++; continue; }
 			if (c == '\'') { q = Q_SINGLE; active = 1; p++; continue; }
-			if (c == '"') { q = Q_DOUBLE; active = 1; p++; continue; }
+			if (c == '"') {
+				q = Q_DOUBLE;
+				dq_prev = active;
+				dq_mark = field.n;
+				dq_null_at = 0;
+				active = 1;
+				p++;
+				continue;
+			}
 			if (c == '\\') {
 				if (!p[1]) { rc = WRDE_SYNTAX; goto fail; }
 				if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; }
@@ -606,9 +769,29 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 				continue;
 			}
 			if (c == '$') {
-				active = 1;
-				rc = expand_param(&p, &field, flags);
+				const char *end;
+				int k = sh ? at_or_star(p, &end) : 0;
+				size_t before;
+				if (k) {
+					rc = push_params(&field, &out, &active, k == '*', 0);
+					if (rc) goto fail;
+					p = end;
+					continue;
+				}
+				/* Not `active = 1` up front any more: XCU 2.6 says
+				 * "[i]f the complete expansion appropriate for a word
+				 * results in an empty field, that empty field shall be
+				 * deleted ... unless the original word contained
+				 * single-quote or double-quote characters", so an
+				 * unquoted expansion that produces no bytes must
+				 * produce no field either.  Deciding it on whether
+				 * anything was actually appended is what makes
+				 * `f $1` with no parameters pass nothing rather than
+				 * one empty argument. */
+				before = field.n;
+				rc = expand_param(&p, &field, flags, sh, 0);
 				if (rc) goto fail;
+				if (field.n != before) active = 1;
 				continue;
 			}
 			if (c == '~' && !active) {
@@ -630,7 +813,12 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 			if (fbuf_push(&field, c, 1)) { rc = WRDE_NOSPACE; goto fail; }
 			p++;
 		} else { /* Q_DOUBLE */
-			if (c == '"') { q = Q_NONE; p++; continue; }
+			if (c == '"') {
+				q = Q_NONE;
+				if (dq_null_at && !dq_prev && field.n == dq_mark) active = 0;
+				p++;
+				continue;
+			}
 			if (c == '\\' && p[1] && strchr("\"\\$`\n", p[1])) {
 				if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; }
 				p += 2;
@@ -657,7 +845,16 @@ int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 				continue;
 			}
 			if (c == '$') {
-				rc = expand_param(&p, &field, flags);
+				const char *end;
+				int k = sh ? at_or_star(p, &end) : 0;
+				if (k) {
+					if (k == '@' && __sh_param_count() == 0) dq_null_at = 1;
+					rc = push_params(&field, &out, &active, k == '*', 1);
+					if (rc) goto fail;
+					p = end;
+					continue;
+				}
+				rc = expand_param(&p, &field, flags, sh, 1);
 				if (rc) goto fail;
 				continue;
 			}
@@ -720,6 +917,16 @@ fail:
 	}
 	if (rc == WRDE_NOSPACE) errno = ENOMEM;
 	return rc;
+}
+
+int wordexp(const char *words, wordexp_t *pwordexp, int flags)
+{
+	return expand(words, pwordexp, flags, 0);
+}
+
+int __wordexp_sh(const char *words, wordexp_t *pwordexp, int flags)
+{
+	return expand(words, pwordexp, flags, 1);
 }
 
 void wordfree(wordexp_t *pwordexp)

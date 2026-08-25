@@ -317,12 +317,12 @@ static void test_compound_commands_run(void)
 	slurp_into("cap5.txt", buf, sizeof buf);
 	CHECK(strcmp(buf, "ab") == 0);
 
-	/* XCU 2.9.4: "for name" with no "in" list is "in \"$@\"", and
-	 * there are no positional parameters -- refused up front, by name,
-	 * like every other thing this shell will not guess at. */
-	CHECK(run_c("for f; do y; done", 0) == 2);
-	CHECK(err_contains("positional"));
-	CHECK(out_is_empty());
+	/* XCU 2.9.4: "for name" with no "in" list is "in \"$@\"".  Stage 6b
+	 * refused this up front for want of positional parameters; stage 7
+	 * has them, so it runs -- and with none set it runs the body zero
+	 * times and exits 0, which is 2.9.4's "if there are no items, the
+	 * exit status shall be zero" rather than the old refusal's 2. */
+	CHECK(run_c("for f; do exit 9; done", 0) == 0);
 }
 
 static void test_refuses_unimplemented_builtins(void)
@@ -332,7 +332,24 @@ static void test_refuses_unimplemented_builtins(void)
 	CHECK(run_c("export X=1", 0) == 2);
 	CHECK(err_contains("export"));
 
-	CHECK(run_c("shift", 0) == 2);
+	/* `export` is still on the list; `set` and `shift` came off it in
+	 * stage 7 and must now *work* rather than merely stop being
+	 * refused -- the difference between "the list shrank" and "the
+	 * list shrank and the utility works". */
+	CHECK(run_c("set -- a b c; test \"$#\" = 3", 0) == 0);
+	CHECK(run_c("set -- a b c; shift; test \"$1\" = b", 0) == 0);
+	/* An over-shift is nonzero *and* says so -- shift(1p)'s STDERR is
+	 * "used only for diagnostic messages", and a silent nonzero status
+	 * is what makes a broken script impossible to debug (2.8.1).  The
+	 * status alone is also produced by src/sh/param.c's own range
+	 * guard, so it cannot tell whether the built-in checked at all. */
+	CHECK(run_c("set -- a; shift 5", 0) > 0);
+	CHECK(err_contains("shift"));
+	/* n exactly one past $# is the boundary the built-in's own range
+	 * check is for: src/sh/param.c refuses it too, so the *status* is
+	 * the same either way and only the diagnostic tells whether the
+	 * built-in looked. */
+	CHECK(run_c("set -- a b; shift 3", 0) > 0);
 	CHECK(err_contains("shift"));
 
 	/* A name comes off sh/main.c's refusal list exactly when
@@ -353,16 +370,94 @@ static void test_refuses_unimplemented_builtins(void)
 
 static void test_refuses_special_parameters(void)
 {
-	/* src/wordexp/wordexp.c expands only $NAME/${NAME}; "$1" would
-	 * otherwise reach the command as the two literal characters. */
-	CHECK(run_c("no-such-utility-xyzzy \"$1\"", 0) == 2);
-	CHECK(err_contains("$1"));
-	CHECK(run_c("no-such-utility-xyzzy $@", 0) == 2);
+	/* What is left of this refusal after stage 7.  $1..$9, ${10}, $@,
+	 * $* and $# are expanded for real now (see
+	 * test_positional_parameters_from_argv() below); the special
+	 * parameters of XCU 2.5.2 that are still not implemented are
+	 * refused, because a `$?` left in place as the two literal
+	 * characters "$?" is silent corruption of a script's meaning
+	 * rather than a missing feature it can notice. */
+	CHECK(run_c("no-such-utility-xyzzy \"$?\"", 0) == 2);
+	CHECK(err_contains("$?"));
+	CHECK(run_c("no-such-utility-xyzzy $!", 0) == 2);
+	CHECK(run_c("no-such-utility-xyzzy $$", 0) == 2);
+	CHECK(run_c("no-such-utility-xyzzy $-", 0) == 2);
+	/* ${#NAME} is string length, a different expansion this shell does
+	 * not implement -- it must stay refused rather than being
+	 * mistaken for the ${#} that stage 7 does implement. */
 	CHECK(run_c("no-such-utility-xyzzy ${#x}", 0) == 2);
 	CHECK(run_c("no-such-utility-xyzzy > $?", 0) == 2);
 
 	/* Single-quoted, it is literal text, not an expansion at all. */
-	CHECK(run_c("no-such-utility-xyzzy '$1'", 0) == 127);
+	CHECK(run_c("no-such-utility-xyzzy '$?'", 0) == 127);
+}
+
+/* sh(1p) OPERANDS and XCU 2.5.1: "[p]ositional parameters are initially
+ * assigned when the shell is invoked (see sh)."  This is the one thing
+ * only the *binary* can be asked -- test/sh-engine.c has no argv to
+ * install -- so which operand becomes $0 and which become $1 on is
+ * tested here, for all three invocation forms. */
+static void test_positional_parameters_from_argv(void)
+{
+	char *args[8];
+	char script[1200];
+
+	/* -c: "sh -c command_string [command_name [argument...]]" --
+	 * command_name is $0 and the rest are $1 on.  `test` exits 1 for a
+	 * false comparison and 0 for a true one, so a wrong value is a
+	 * failed run rather than a silent pass. */
+	args[0] = (char *)"sh";
+	args[1] = (char *)"-c";
+	args[2] = (char *)"test \"$0\" = zero && test \"$#\" = 2 && "
+	                  "test \"$1\" = one && test \"$2\" = two";
+	args[3] = (char *)"zero";
+	args[4] = (char *)"one";
+	args[5] = (char *)"two";
+	args[6] = 0;
+	CHECK(run_sh(args, 0) == 0);
+
+	/* With no command_name at all there are no positional parameters
+	 * and $0 stays the shell's own name -- what must not happen is the
+	 * command_string itself becoming $0 or $1. */
+	CHECK(run_c("test \"$#\" = 0", 0) == 0);
+
+	/* An argument containing a space survives as one parameter: it
+	 * arrives through argv, not through any re-splitting. */
+	args[2] = (char *)"test \"$1\" = 'a b' && test \"$#\" = 1";
+	args[3] = (char *)"zero";
+	args[4] = (char *)"a b";
+	args[5] = 0;
+	CHECK(run_sh(args, 0) == 0);
+
+	/* A script file: sh(1p) makes command_file "$0" and the operands
+	 * after it $1 on. */
+	sprintf(script, "test \"$#\" = 2 && test \"$1\" = alpha && "
+	                "test \"$2\" = beta && test \"$0\" = script3.sh\n");
+	write_file("script3.sh", script);
+	args[0] = (char *)"sh";
+	args[1] = (char *)"script3.sh";
+	args[2] = (char *)"alpha";
+	args[3] = (char *)"beta";
+	args[4] = 0;
+	CHECK(run_sh(args, 0) == 0);
+
+	/* "-x" after the command_file is an operand, not an option: it is
+	 * $2, and the shell must not have tried to interpret it. */
+	args[2] = (char *)"alpha";
+	args[3] = (char *)"-x";
+	args[4] = 0;
+	write_file("script3.sh", "test \"$2\" = -x && test \"$#\" = 2\n");
+	CHECK(run_sh(args, 0) == 0);
+
+	/* A script on standard input: every operand is a positional
+	 * parameter, since there is no command_file to consume one. */
+	write_file("script4.sh", "test \"$#\" = 2 && test \"$1\" = p && test \"$2\" = q\n");
+	args[0] = (char *)"sh";
+	args[1] = (char *)"-s";
+	args[2] = (char *)"p";
+	args[3] = (char *)"q";
+	args[4] = 0;
+	CHECK(run_sh(args, "script4.sh") == 0);
 }
 
 static void test_refuses_async(void)
@@ -475,6 +570,7 @@ static void cleanup_artifacts(void)
 		OUTFILE, ERRFILE,
 		"cap1.txt", "cap2.txt", "cap3.txt", "cap4.txt",
 		"cap5.txt", "preflight.txt", "script1.sh", "script2.sh",
+		"script3.sh", "script4.sh",
 		0
 	};
 	size_t i;
@@ -530,6 +626,7 @@ int main(int argc, char **argv)
 	test_compound_commands_run();
 	test_refuses_unimplemented_builtins();
 	test_refuses_special_parameters();
+	test_positional_parameters_from_argv();
 	test_refuses_async();
 	test_refuses_before_running_anything();
 

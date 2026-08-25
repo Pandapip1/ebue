@@ -39,7 +39,8 @@
  *
  * The engine implements a documented subset (src/sh/sh.h's banner:
  * simple commands, pipelines, and-or lists, redirections including
- * here-documents, subshells, brace groups, `cd`). Two classes of thing a
+ * here-documents, subshells, brace groups, the compound commands, the
+ * built-ins, and the positional parameters). Two classes of thing a
  * real script does would otherwise be *silently misinterpreted* rather
  * than diagnosed, because they are syntactically indistinguishable from
  * something the engine does support:
@@ -56,17 +57,18 @@
  *
  *     `if`/`while`/`until`/`for` are no longer in this class: stage 6b
  *     gave them a real grammar, and a misplaced `fi`/`do`/`done` is now
- *     a parse error rather than a command name. What survives of the
- *     problem for them is `for name` with no `in` list, which XCU 2.9.4
- *     defines as `in "$@"` -- a positional-parameter program with no
- *     "$@" written anywhere in it, refused below by name.
- *   - Positional and other special parameters. src/wordexp/wordexp.c's
- *     expand_param() supports exactly $NAME and ${NAME}; a `$` followed
- *     by anything else (a digit, @, *, #, ?, !, -, $) is left in place as
- *     a literal `$`, so `echo "$1"` prints the two characters "$1"
- *     instead of the first argument, and `exit $?` never sees a status.
- *     That is silent corruption of a script's meaning, not a missing
- *     feature the script can notice.
+ *     a parse error rather than a command name. `for name` with no `in`
+ *     list -- XCU 2.9.4's `in "$@"` -- came off too in stage 7, which
+ *     gave this shell a "$@" to iterate.
+ *   - The special parameters that are still not implemented.
+ *     src/wordexp/wordexp.c expands $NAME/${NAME} and, through
+ *     __wordexp_sh(), XCU 2.5.1's positional parameters plus 2.5.2's
+ *     '@', '*', '#' and '0'; a `$` followed by anything else (?, !, -,
+ *     $) is left in place as a literal `$`, so `exit $?` never sees a
+ *     status. That is silent corruption of a script's meaning, not a
+ *     missing feature the script can notice, so it is refused. So is
+ *     `${#NAME}`, which is string length -- a different expansion that
+ *     must not be mistaken for the `${#}` this shell does implement.
  *
  * So preflight() below walks the AST __sh_parse() just produced and
  * refuses the whole program, naming what is unsupported, before running
@@ -117,8 +119,8 @@ static const char *progname = "sh";
  * here-document body), so the wording cannot drift between them. */
 static void diag_bad_param(const char *what, const char *where)
 {
-	diag("%s: positional and special parameters ($1, $@, $#, $?, ...) are "
-	     "not implemented%s -- see test/sh-design.md", what, where);
+	diag("%s: this special parameter ($?, $!, $$, $-, ${#NAME}) is not "
+	     "implemented%s -- see test/sh-design.md", what, where);
 }
 
 /* ---- the refusal lists ----------------------------------------------
@@ -162,7 +164,7 @@ static const char *const reserved[] = {
  * on this list is refused, up front, by name. */
 static const char *const unimplemented_builtins[] = {
 	".", "break", "continue", "eval", "exec", "export",
-	"readonly", "return", "set", "shift", "times", "trap", "unset",
+	"readonly", "return", "times", "trap", "unset",
 	"alias", "unalias", "bg", "fg", "jobs", "command", "getopts",
 	"hash", "read", "ulimit", "umask", "wait",
 	0
@@ -205,16 +207,26 @@ static int bad_expansion(const char *text, char *what)
 			char c = p[1];
 			const char *bad = 0;
 			if (c == '{') {
-				/* wordexp()'s expand_param() requires a name
-				 * immediately after '{': ${1}, ${@}, ${#VAR} all
-				 * fall out of it as a literal '$' plus literal
-				 * "{...}" text, which is silent nonsense. */
-				char d = p[2];
-				if (!((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') || d == '_'))
+				/* What __wordexp_sh() accepts inside braces, and
+				 * nothing else.  ${1}/${10} (XCU 2.5.1 requires the
+				 * braces past one digit), ${@}/${*}/${#} (2.5.2) and
+				 * ${NAME} are real expansions now; ${#NAME} is string
+				 * length, a different expansion this shell does not
+				 * implement, and it must stay refused rather than
+				 * being mistaken for ${#}. */
+				const char *d = p + 2;
+				if (*d >= '0' && *d <= '9') {
+					while (*d >= '0' && *d <= '9') d++;
+					if (*d != '}') bad = p;
+				} else if ((*d == '@' || *d == '*' || *d == '#') && d[1] == '}') {
+					/* implemented */
+				} else if (!((*d >= 'a' && *d <= 'z') || (*d >= 'A' && *d <= 'Z') || *d == '_')) {
 					bad = p;
-			} else if ((c >= '0' && c <= '9') ||
-			           c == '@' || c == '*' || c == '#' ||
-			           c == '?' || c == '!' || c == '-' || c == '$') {
+				}
+			} else if (c == '?' || c == '!' || c == '-' || c == '$') {
+				/* The special parameters of 2.5.2 that are still not
+				 * implemented.  $0..$9, $@, $* and $# came off this
+				 * list in stage 7 and are expanded for real. */
 				bad = p;
 			}
 			if (bad) {
@@ -297,15 +309,12 @@ static int check_command(const struct sh_command *c)
 		if (check_list(c->cond)) return -1;
 		return check_list(c->body);
 	case SH_CMD_FOR:
-		/* XCU 2.9.4: "Omitting: in word ... shall be equivalent to:
-		 * in "$@"".  So `for f; do ...; done` is a positional-
-		 * parameter program even though no "$@" appears in its text,
-		 * which is why it needs saying here and not just wherever
-		 * bad_expansion() looks. */
-		if (!c->have_in) {
-			diag_bad_param("$@", " (a `for' with no `in' list iterates \"$@\")");
-			return -1;
-		}
+		/* `for name` with no `in` list -- XCU 2.9.4's "Omitting: in
+		 * word ... shall be equivalent to: in "$@"" -- used to be
+		 * refused here, because there was no "$@" to iterate.  Stage 7
+		 * gives this shell positional parameters, so it runs; there is
+		 * nothing left for this arm to refuse beyond what the word
+		 * list and body already get. */
 		if (check_words(c->words)) return -1;
 		return check_list(c->body);
 	default:
@@ -415,13 +424,15 @@ int main(int argc, char **argv)
 	char *text = 0;
 	char err[256];
 	struct sh_list *list;
-	int status = 0, i;
+	int status = 0, i, pfirst;
+	const char *zero;
 
 	if (argc > 0 && argv[0] && *argv[0]) {
 		const char *b = argv[0], *p;
 		for (p = argv[0]; *p; p++) if (*p == '/' || *p == '\\') b = p + 1;
 		if (*b) progname = b;
 	}
+	zero = progname;
 
 	for (i = 1; i < argc; i++) {
 		const char *a = argv[i];
@@ -439,19 +450,46 @@ int main(int argc, char **argv)
 	}
 	if (i < argc && strcmp(argv[i], "-") == 0) i++;   /* historical "-" */
 
-	/* Positional parameters are deliberately *not* installed anywhere:
-	 * there is nothing to install them into. The engine expands words
-	 * through wordexp(), whose only variable store is the real environ
-	 * (src/wordexp/wordexp.c's expand_param() -> getenv), and $0/$1/$#
-	 * are not environment variables and never reach getenv() at all --
-	 * `$1` is not even lexed as an expansion. Rather than pretend, this
-	 * file refuses any program that references one (preflight() above),
-	 * so the remaining operands are only ever consumed as $0 (a
-	 * diagnostic prefix) and, for the non-`-c` forms, the script path. */
+	/* sh(1p) OPERANDS, and XCU 2.5.1's "[p]ositional parameters are
+	 * initially assigned when the shell is invoked (see sh)".  This
+	 * used to be a comment explaining that there was nowhere to put
+	 * them and that any program referencing one was refused; stage 7
+	 * gives the engine a real list (src/sh/param.c), so the operands
+	 * are installed for real here.
+	 *
+	 * Which operand is $0 differs by form, and 2.5.2 is emphatic that
+	 * $0 is not one of the positional parameters, so it is set
+	 * separately in all three:
+	 *
+	 *  - `sh -c command_string [command_name [argument...]]`:
+	 *    command_name is $0 and the arguments after it are $1 on.  An
+	 *    absent command_name leaves $0 as the shell's own name.
+	 *  - `sh command_file [argument...]`: sh(1p) OPERANDS makes
+	 *    command_file "$0", and the arguments after it $1 on.
+	 *  - `sh [-s] [argument...]`: the program comes from standard
+	 *    input, so every operand is a positional parameter.
+	 *
+	 * `progname` -- what this file prefixes its own diagnostics with --
+	 * deliberately does *not* follow $0 into the command_file case:
+	 * "script.sh: script.sh: cannot open command_file" reads as a
+	 * confused shell rather than a clear one.  It follows $0 for -c,
+	 * which is the form where a build system chooses a name precisely
+	 * so that diagnostics carry it. */
+	pfirst = argc;
 	if (cmdstr) {
 		if (i < argc && *argv[i]) progname = argv[i];   /* command_name is $0 */
+		if (i < argc) { zero = argv[i]; pfirst = i + 1; }
 	} else if (!stdin_flag && i < argc) {
 		file = argv[i];
+		zero = argv[i];
+		pfirst = i + 1;
+	} else {
+		pfirst = i;
+	}
+	if (__sh_param_set_zero(zero) < 0 ||
+	    __sh_params_replace(argv + pfirst, argc - pfirst) < 0) {
+		diag("out of memory");
+		return EX_USAGE;
 	}
 
 	if (cmdstr) {

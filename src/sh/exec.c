@@ -238,7 +238,7 @@ static int split_assignment(const char *raw, char **name, char **val)
 	memcpy(*name, raw, nlen);
 	(*name)[nlen] = 0;
 
-	if (eq[1] && wordexp(eq + 1, &we, 0) == 0) {
+	if (eq[1] && __wordexp_sh(eq + 1, &we, 0) == 0) {
 		have_we = 1;
 		*val = xstrdup(we.we_wordc ? we.we_wordv[0] : "");
 	} else {
@@ -442,7 +442,7 @@ static char *expand_redir_word(const char *raw, int *unsupported)
 {
 	wordexp_t we;
 	char *r;
-	if (wordexp(raw, &we, 0)) { *unsupported = 1; return 0; }
+	if (__wordexp_sh(raw, &we, 0)) { *unsupported = 1; return 0; }
 	r = xstrdup(we.we_wordc ? we.we_wordv[0] : "");
 	wordfree(&we);
 	if (!r) *unsupported = 1;
@@ -494,7 +494,7 @@ static char *expand_heredoc(const char *body, int *unsupported)
 	syn[o++] = '"';
 	syn[o] = 0;
 
-	if (wordexp(syn, &we, 0)) { __free(syn); *unsupported = 1; return 0; }
+	if (__wordexp_sh(syn, &we, 0)) { __free(syn); *unsupported = 1; return 0; }
 	__free(syn);
 	r = xstrdup(we.we_wordc ? we.we_wordv[0] : "");
 	wordfree(&we);
@@ -726,7 +726,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 	if (!cmd->words) { out->status = 0; return 0; }
 
 	for (w = cmd->words; w; w = w->next) {
-		rc = wordexp(w->text, &we, first ? 0 : WRDE_APPEND);
+		rc = __wordexp_sh(w->text, &we, first ? 0 : WRDE_APPEND);
 		if (rc) {
 			if (!first) wordfree(&we);
 			return -1; /* see exec_builtin_cd() above on what a nonzero
@@ -1065,6 +1065,29 @@ static int exec_simple(const struct sh_command *cmd, int *status)
 /* Snapshot of every name=value pair currently in `environ`, deep-copied
  * so it survives whatever setenv()/unsetenv()/putenv() calls the
  * subshell body makes to the live one. */
+/* A subshell environment (XCU 2.12) gets its own copy of the
+ * positional parameters: "( set -- x )" must not renumber the caller's,
+ * any more than "( cd / )" moves it.  2.12's object list does not name
+ * them explicitly, but 2.9.1's "the environment of the shell" and the
+ * whole point of a subshell -- changes to it "shall not affect the
+ * shell execution environment" -- cover them, and every shell agrees.
+ *
+ * take-then-replace rather than a dedicated copy routine: the take
+ * leaves the live list empty and hands this frame the only pointer to
+ * the caller's array, and __sh_params_replace() then builds the
+ * subshell's own copy out of it.  One owner per array at every moment,
+ * which is what makes nesting safe.  Returns -1 on OOM with the
+ * caller's list already restored. */
+static int params_subshell_enter(struct sh_params *saved)
+{
+	__sh_params_take(saved);
+	if (__sh_params_replace(saved->v, saved->n) < 0) {
+		__sh_params_install(saved);
+		return -1;
+	}
+	return 0;
+}
+
 struct env_snapshot {
 	char **names;
 	char **vals;
@@ -1252,18 +1275,18 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * point).  "for f in *.c" therefore iterates the matched files without
  * being a special case here.
  *
- * Two of XCU 2.6's rules are consequently *not* delivered, and both
- * belong to src/wordexp/wordexp.c, which states them: the result of a
+ * One of XCU 2.6's rules is consequently still *not* delivered, and it
+ * belongs to src/wordexp/wordexp.c, which states it: the result of a
  * parameter expansion is not field-split, so "for f in $LIST" is one
- * item and not $LIST's fields; and an empty field is not deleted, so
- * "for f in $UNSET" is one empty item rather than no items, which is
- * the one path 2.9.4's "if no items result from the expansion, the
- * compound-list shall not be executed" does not yet reach.  Neither is
- * worked around here on purpose: `cmd $LIST` goes through the identical
- * call and gets the identical answer, and a `for` that disagreed with a
- * simple command about what a word expands to would be a worse defect
- * than one consistent documented gap.  test/sh-engine.c pins both, so
- * they invert visibly when wordexp() grows the behaviour.
+ * item and not $LIST's fields.  It is not worked around here on
+ * purpose: `cmd $LIST` goes through the identical call and gets the
+ * identical answer, and a `for` that disagreed with a simple command
+ * about what a word expands to would be a worse defect than one
+ * consistent documented gap.  test/sh-engine.c pins it, so it inverts
+ * visibly when wordexp() grows the behaviour -- which is exactly what
+ * happened to the *other* gap this comment used to list: an empty field
+ * is deleted now (2.6), so "for f in $UNSET" runs the body zero times
+ * rather than once with an empty item.
  *
  * Setting `name` is setenv(), which is what every assignment in this
  * shell already is: the only variable store any expansion here can see
@@ -1283,20 +1306,32 @@ static int exec_for(const struct sh_command *cmd, int *status)
 	*status = 0;
 
 	/* 2.9.4: "Omitting: in word ... shall be equivalent to: in "$@"".
-	 * There are no positional parameters in this shell -- wordexp()
-	 * expands only $NAME/${NAME} -- so there is nothing to iterate and
-	 * no honest approximation of one.  Iterating zero times would be a
-	 * silently different program (2.9.4 makes a for over no items exit
-	 * 0 having run nothing, which is indistinguishable from a correct
-	 * run over an empty "$@"), so this is the -1 "cannot execute this
-	 * node" convention instead; sh/main.c refuses such a program up
-	 * front, before anything runs, with a message that names why. */
-	if (!cmd->have_in) return -1;
+	 * Stage 7 gives this shell positional parameters (XCU 2.5.1), so
+	 * the equivalence is now something it can actually deliver, and
+	 * this used to be the -1 "cannot execute this node" refusal.
+	 *
+	 * It reads src/sh/param.c's list directly rather than expanding
+	 * the literal text "\"$@\"" through __wordexp_sh().  The two agree
+	 * -- that is the point of "$@" retaining its fields -- but going
+	 * through the expander would make a `for f; do` depend on the
+	 * quoting of a string this file synthesised, where reading the
+	 * list says what 2.9.4 says: one iteration per positional
+	 * parameter, in order, whatever bytes are in it. */
+	if (!cmd->have_in) {
+		int n = __sh_param_count(), k;
+		for (k = 1; k <= n; k++) {
+			if (setenv(cmd->name, __sh_param_get(k), 1) < 0) return -1;
+			rc = __sh_exec_list(cmd->body, status);
+			if (rc) break;
+			if (__sh_flow_pending()) break;
+		}
+		return rc;
+	}
 
 	if (!cmd->words) return 0; /* `for f in ; do` -- no items, exit 0 */
 
 	for (w = cmd->words; w; w = w->next) {
-		if (wordexp(w->text, &we, first ? 0 : WRDE_APPEND)) {
+		if (__wordexp_sh(w->text, &we, first ? 0 : WRDE_APPEND)) {
 			if (!first) wordfree(&we);
 			return -1; /* same meaning as in spawn_stage() */
 		}
@@ -1344,6 +1379,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	int failed = 0;
 	int rc;
 	struct env_snapshot es;
+	struct sh_params ps;
 	char *oldcwd = 0;
 	int is_subshell = cmd->kind == SH_CMD_SUBSHELL;
 
@@ -1354,6 +1390,13 @@ static int exec_group(const struct sh_command *cmd, int *status)
 	if (is_subshell) {
 		oldcwd = getcwd(0, 0);
 		if (env_snapshot_take(&es)) { restore_fds(&rs); return -1; }
+		if (params_subshell_enter(&ps)) {
+			env_snapshot_restore(&es);
+			free_env_snapshot(&es);
+			if (oldcwd) __free(oldcwd);
+			restore_fds(&rs);
+			return -1;
+		}
 	}
 
 	rc = exec_compound(cmd, status);
@@ -1368,6 +1411,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 		 * "{ exit 3; }" runs "in the current process environment"
 		 * (2.9.4) and really is the shell exiting. */
 		if (__sh_flow_pending()) __sh_flow_clear();
+		__sh_params_install(&ps);
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
 		if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1477,6 +1521,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	struct sh_list *list;
 	struct redir_state rs;
 	struct env_snapshot es;
+	struct sh_params ps;
 	char *oldcwd;
 	char *buf;
 	FILE *tf;
@@ -1513,6 +1558,15 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 		__sh_list_free(list);
 		return -1;
 	}
+	if (params_subshell_enter(&ps)) {
+		env_snapshot_restore(&es);
+		free_env_snapshot(&es);
+		__free(oldcwd);
+		restore_fds(&rs);
+		fclose(tf);
+		__sh_list_free(list);
+		return -1;
+	}
 
 	rc = __sh_exec_list(list, &st);
 
@@ -1520,6 +1574,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	 * so "$(exit 3)" is a substitution whose status is 3, never the
 	 * calling shell exiting. */
 	if (__sh_flow_pending()) __sh_flow_clear();
+	__sh_params_install(&ps);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
@@ -1583,6 +1638,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	struct redir_state rs;
 	int failed = 0;
 	struct env_snapshot es;
+	struct sh_params ps;
 	char *oldcwd;
 	int rc;
 
@@ -1592,6 +1648,13 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 
 	oldcwd = getcwd(0, 0);
 	if (env_snapshot_take(&es)) { __free(oldcwd); restore_fds(&rs); return -1; }
+	if (params_subshell_enter(&ps)) {
+		env_snapshot_restore(&es);
+		free_env_snapshot(&es);
+		__free(oldcwd);
+		restore_fds(&rs);
+		return -1;
+	}
 
 	rc = exec_compound(cmd, status);
 
@@ -1601,6 +1664,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	 * standalone brace group exec_group() above deliberately lets
 	 * through. */
 	if (__sh_flow_pending()) __sh_flow_clear();
+	__sh_params_install(&ps);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }

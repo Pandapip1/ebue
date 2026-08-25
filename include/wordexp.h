@@ -67,6 +67,25 @@
  * setting IFS to anything, including the empty string, changes nothing.
  * Read no claim to the contrary into the paragraphs above.
  *
+ * One thing this header used to list as missing and no longer is: XCU
+ * 2.6's empty-field rule.  "If the complete expansion appropriate for a
+ * word results in an empty field, that empty field shall be deleted
+ * from the list of fields ... unless the original word contained
+ * single-quote or double-quote characters" -- so an unquoted expansion
+ * of an unset or null parameter now produces no field at all, where it
+ * used to produce one empty one, and "$UNSET" still produces the empty
+ * field the quotes require.  That changed because the shell behind
+ * __sh_cmdsub() grew positional parameters and `f $1` with none set
+ * passing one empty argument is the same defect under another name.
+ *
+ * The *positional* and *special* parameters of XCU 2.5.1/2.5.2 ($1,
+ * ${10}, $@, $*, $#, $0) are deliberately NOT expanded by wordexp():
+ * the caller is an arbitrary program, which has no positional
+ * parameters, so a '$' before a digit or an '@' stays the literal
+ * character it always was here.  The shell expands them through a
+ * private entry point into the same scan -- see __wordexp_sh() in
+ * src/internal/libc.h, and src/sh/param.c for the list itself.
+ *
  * wordexp_t layout and the WRDE_* flags plus WRDE_BADCHAR through
  * WRDE_SYNTAX values are fixed at test/posix-glob.c's choices (that file predates this
  * header and declares its own local, unmodified copies of them, and

@@ -2575,6 +2575,22 @@ static int child_role(int argc, char **argv)
 		return 0;
 	}
 
+	/* Writes "N:" and then each remaining argument (argv[2..]) in
+	 * square brackets.  --produce-join above cannot answer stage 7's
+	 * central question: "$@" with no positional parameters must expand
+	 * to ZERO fields, and an argv of zero words and an argv of one
+	 * empty word both join to an empty capture.  Printing the count
+	 * first tells them apart, and the brackets keep an empty field
+	 * visible in the middle of a list.  Note the deliberately loose
+	 * guard -- argc may be exactly 2 here, which is the whole point,
+	 * where every other role needs an operand. */
+	if (!strcmp(role, "--produce-fields")) {
+		int i;
+		printf("%d:", argc - 2);
+		for (i = 2; i < argc; i++) printf("[%s]", argv[i]);
+		return 0;
+	}
+
 	/* Writes TEXT (argv[2]) followed by three newlines -- 2.6.3 strips
 	 * "sequences of one or more <newline> characters at the end of the
 	 * substitution", and one newline cannot tell a correct
@@ -2644,6 +2660,390 @@ static int child_role(int argc, char **argv)
 	return -1;
 }
 
+
+
+/* ---- stage 7: positional parameters (XCU 2.5.1, 2.5.2) ---------------
+ *
+ * Spec pages (https://pubs.opengroup.org/onlinepubs/9699919799/):
+ *   utilities/V3_chap02.html 2.5.1 Positional Parameters
+ *   utilities/V3_chap02.html 2.5.2 Special Parameters ('@', '*', '#', '0')
+ *   utilities/V3_chap02.html 2.6 Word Expansions (the empty-field rule)
+ *   utilities/set.html   utilities/shift.html
+ *
+ * Two interfaces are exercised deliberately, because they answer
+ * different questions.  __sh_params_replace() installs a list directly,
+ * which is how a *test* can set up a case with an embedded blank or an
+ * empty parameter that no amount of shell source text could produce
+ * unambiguously; the `set` built-in installs one through the language,
+ * which is what a script actually does.  A suite with only the first
+ * would pass with `set` unimplemented; one with only the second could
+ * not distinguish "$@" from "$*" on a parameter containing a space.
+ */
+
+/* Runs "'self' --produce-fields WORDS > tmp" and returns the child's
+ * report of exactly which fields WORDS expanded to: "N:[f1][f2]...".
+ * Caller frees.  This is the assertion stage 6b's post-mortem asked
+ * for -- the *bytes* produced, not merely a status, since a command
+ * that received the wrong argv still exits 0. */
+static char *param_fields(const char *self, const char *words)
+{
+	char src[1024], *tmp = make_tmp(), *got;
+	int status;
+	if (!tmp) return 0;
+	snprintf(src, sizeof src, "'%s' --produce-fields %s > %s", self, words, tmp);
+	if (run(src, &status) != 0) { remove(tmp); free(tmp); return 0; }
+	got = slurp(tmp);
+	remove(tmp);
+	free(tmp);
+	return got;
+}
+
+static void check_fields(const char *self, const char *words, const char *want)
+{
+	char *got = param_fields(self, words);
+	if (!got) { fails++; printf("FAIL fields(%s): could not run\n", words); return; }
+	if (strcmp(got, want) != 0) {
+		fails++;
+		printf("FAIL fields(%s): got \"%s\", want \"%s\"\n", words, got, want);
+	}
+	free(got);
+}
+
+/* 2.5.1: "A positional parameter is a parameter denoted by the decimal
+ * value represented by one or more digits, other than the single digit
+ * 0 ... When a positional parameter with more than one digit is
+ * specified, the application shall enclose the digits in braces". */
+static void test_positional_single_and_multi_digit(void)
+{
+	char *args[12];
+	int status, i;
+
+	for (i = 0; i < 12; i++) args[i] = 0;
+	args[0] = (char *)"one";   args[1] = (char *)"two";   args[2] = (char *)"three";
+	args[3] = (char *)"four";  args[4] = (char *)"five";  args[5] = (char *)"six";
+	args[6] = (char *)"seven"; args[7] = (char *)"eight"; args[8] = (char *)"nine";
+	args[9] = (char *)"ten";   args[10] = (char *)"eleven";
+	CHECK(__sh_params_replace(args, 11) == 0);
+
+	CHECK(run("test \"$1\" = one", &status) == 0 && status == 0);
+	CHECK(run("test \"$9\" = nine", &status) == 0 && status == 0);
+	CHECK(run("test \"${9}\" = nine", &status) == 0 && status == 0);
+
+	/* The point of the braces: unbraced, "$10" is $1 followed by a
+	 * literal '0', which is why 2.5.1 requires them past one digit.
+	 * Asserting *both* spellings is what tells a correct
+	 * implementation from one that helpfully reads all the digits. */
+	CHECK(run("test \"$10\" = one0", &status) == 0 && status == 0);
+	CHECK(run("test \"${10}\" = ten", &status) == 0 && status == 0);
+	CHECK(run("test \"${11}\" = eleven", &status) == 0 && status == 0);
+
+	/* "even if there is a leading zero" -- ${01} is $1. */
+	CHECK(run("test \"${01}\" = one", &status) == 0 && status == 0);
+
+	/* Out of range is unset, which expands to nothing at all. */
+	CHECK(run("test \"${12}\" = ''", &status) == 0 && status == 0);
+	CHECK(run("test \"${999}\" = ''", &status) == 0 && status == 0);
+
+	CHECK(__sh_params_replace(args, 0) == 0);
+}
+
+/* 2.5.2 '#': "Expands to the decimal number of positional parameters.
+ * The command name (parameter 0) shall not be counted in the number
+ * given by '#' because it is a special parameter, not a positional
+ * parameter." */
+static void test_positional_count_and_zero(void)
+{
+	char *args[3];
+	int status;
+
+	args[0] = (char *)"a"; args[1] = (char *)"b"; args[2] = (char *)"c";
+
+	CHECK(__sh_params_replace(args, 0) == 0);
+	CHECK(run("test \"$#\" = 0", &status) == 0 && status == 0);
+	CHECK(run("test \"${#}\" = 0", &status) == 0 && status == 0);
+	CHECK(__sh_params_replace(args, 3) == 0);
+	CHECK(run("test \"$#\" = 3", &status) == 0 && status == 0);
+	CHECK(run("test \"${#}\" = 3", &status) == 0 && status == 0);
+
+	/* $0 is not counted, is not $1, and `set`/`shift` never touch it. */
+	CHECK(__sh_param_set_zero("myshell") == 0);
+	CHECK(run("test \"$0\" = myshell", &status) == 0 && status == 0);
+	CHECK(run("shift 3; test \"$0\" = myshell && test \"$#\" = 0", &status) == 0 && status == 0);
+	CHECK(__sh_params_replace(args, 3) == 0);
+	CHECK(run("set -- x; test \"$0\" = myshell && test \"$1\" = x", &status) == 0 && status == 0);
+	CHECK(__sh_params_replace(args, 0) == 0);
+}
+
+/* 2.5.2 '@' and '*', which is where every implementation of this goes
+ * wrong.  Each case below is asserted on the *fields* the command
+ * received, because a status cannot see the difference between "passed
+ * three arguments" and "passed one argument containing three words". */
+static void test_at_and_star_fields(const char *self)
+{
+	char *args[3];
+
+	if (!file_redir_supported(self)) return;
+
+	/* No positional parameters: 2.5.2 -- "[i]f there are no positional
+	 * parameters, the expansion of '@' shall generate zero fields,
+	 * even when '@' is within double-quotes".  This is the assertion
+	 * the whole feature turns on: `f "$@"` with nothing set must pass
+	 * NO argument, not one empty one. */
+	args[0] = 0; args[1] = 0; args[2] = 0;
+	CHECK(__sh_params_replace(args, 0) == 0);
+	check_fields(self, "\"$@\"", "0:");
+	check_fields(self, "$@", "0:");
+	/* "$*" is not the same thing: it is one field, which with no
+	 * parameters is one *empty* field, not zero fields. */
+	check_fields(self, "\"$*\"", "1:[]");
+	check_fields(self, "$*", "0:");
+	/* ... and the enclosing quotes of an unrelated empty pair still
+	 * make a field, which is the clause 2.5.2 spells out: "if the
+	 * expansion is embedded within a word which contains one or more
+	 * other parts that expand to a quoted null string, these null
+	 * string(s) shall still produce an empty field". */
+	check_fields(self, "\"\"$@\"\"", "1:[]");
+	/* Embedded in a word with real text: nothing to splice, so the
+	 * two halves join into one field. */
+	check_fields(self, "x\"$@\"y", "1:[xy]");
+	/* ... and the two one-sided forms, which are the only ones that can
+	 * see whether the field was alive *before* the quote opened: with
+	 * trailing text after the closing quote, text pushed afterwards
+	 * revives the field and hides the mistake. */
+	check_fields(self, "x\"$@\"", "1:[x]");
+	check_fields(self, "\"$@\"y", "1:[y]");
+
+	/* Several parameters, one containing a blank -- the case that
+	 * separates "$@" from "$*" and from an unquoted expansion. */
+	args[0] = (char *)"a b"; args[1] = (char *)"c";
+	CHECK(__sh_params_replace(args, 2) == 0);
+	check_fields(self, "\"$@\"", "2:[a b][c]");
+	check_fields(self, "\"${@}\"", "2:[a b][c]");
+	/* 2.5.2 for '*' in a non-splitting context: "the initial fields
+	 * shall be joined to form a single field with the value of each
+	 * parameter separated by the first character of the IFS variable
+	 * ... or separated by a <space> if IFS is unset".  This shell
+	 * never consults IFS (see <wordexp.h>), so it is always the
+	 * <space> that clause names. */
+	check_fields(self, "\"$*\"", "1:[a b c]");
+	check_fields(self, "\"${*}\"", "1:[a b c]");
+	/* Unquoted, '*' is the *splitting* context of the same clause --
+	 * "initially producing one field for each positional parameter" --
+	 * so it is not the joined form.  Asserting this is what tells the
+	 * two halves of 2.5.2's '*' apart; the joined form alone passes
+	 * whether or not the quoting is consulted. */
+	check_fields(self, "$*", "2:[a b][c]");
+	check_fields(self, "$@", "2:[a b][c]");
+
+	/* 2.5.2's "except that if the parameter being expanded was
+	 * embedded within a word, the first field shall be joined with the
+	 * beginning part of the original word and the last field shall be
+	 * joined with the end part". */
+	check_fields(self, "x\"$@\"y", "2:[xa b][cy]");
+
+	/* An empty parameter in the middle: quoted, a null field is still
+	 * a field (2.6's "unless the original word contained ...
+	 * double-quote characters"); unquoted, 2.5.2 allows it to be
+	 * discarded and this implementation discards it, which is what
+	 * keeps `f $1` with nothing set from passing an empty argument. */
+	args[0] = (char *)"a"; args[1] = (char *)""; args[2] = (char *)"b";
+	CHECK(__sh_params_replace(args, 3) == 0);
+	check_fields(self, "\"$@\"", "3:[a][][b]");
+	check_fields(self, "$@", "2:[a][b]");
+
+	/* One parameter that is entirely empty. */
+	args[0] = (char *)"";
+	CHECK(__sh_params_replace(args, 1) == 0);
+	check_fields(self, "\"$@\"", "1:[]");
+	check_fields(self, "$@", "0:");
+	check_fields(self, "\"$1\"", "1:[]");
+	check_fields(self, "$1", "0:");
+
+	CHECK(__sh_params_replace(args, 0) == 0);
+}
+
+/* The braced spellings this shell does *not* implement must not be
+ * mistaken for the ones it does.  ${#NAME} is string length, a
+ * different expansion from ${#}; ${@...} and ${*...} are the
+ * ${parameter:-word} family, not ${@}.  sh/main.c refuses all three up
+ * front, so the *binary* can never reach them -- which is exactly why
+ * they are asserted here instead: test/sh-engine.c drives the engine
+ * with no preflight in the way, and a refusal that hides a wrong
+ * expansion is a fence, not a test. */
+static void test_unimplemented_brace_forms_do_not_expand(void)
+{
+	char *args[3];
+	int status;
+
+	args[0] = (char *)"a"; args[1] = (char *)"b"; args[2] = (char *)"c";
+	CHECK(__sh_params_replace(args, 3) == 0);
+
+	/* Not the parameter count: with three parameters set, a ${#x} that
+	 * expanded like ${#} would compare equal to 3. */
+	CHECK(run("test \"${#x}\" = 3", &status) == 0 && status == 1);
+	CHECK(run("test \"${#x}\" = '${#x}'", &status) == 0 && status == 0);
+
+	/* Not "$@": a ${@x} that expanded like ${@} would start with "a". */
+	CHECK(run("test \"${@x}\" = '${@x}'", &status) == 0 && status == 0);
+	CHECK(run("test \"${*x}\" = '${*x}'", &status) == 0 && status == 0);
+
+	CHECK(__sh_params_replace(args, 0) == 0);
+}
+
+/* 2.6: "If the complete expansion appropriate for a word results in an
+ * empty field, that empty field shall be deleted from the list of
+ * fields ... unless the original word contained single-quote or
+ * double-quote characters."  Stage 7 closed this gap for every
+ * parameter expansion, not only the positional ones, because "$@"
+ * cannot be right while "$1" is wrong -- so the environment-variable
+ * case is asserted here too. */
+static void test_empty_field_deletion(const char *self)
+{
+	if (!file_redir_supported(self)) return;
+	unsetenv("SHT_P7_EMPTY");
+	check_fields(self, "$SHT_P7_EMPTY", "0:");
+	check_fields(self, "\"$SHT_P7_EMPTY\"", "1:[]");
+	check_fields(self, "''", "1:[]");
+	check_fields(self, "a$SHT_P7_EMPTY", "1:[a]");
+}
+
+/* set(1p): "The remaining arguments shall be assigned in order to the
+ * positional parameters ... All positional parameters shall be unset
+ * before any new values are assigned", and "[t]he command set --
+ * without argument shall unset all positional parameters and set the
+ * special parameter '#' to zero." */
+static void test_builtin_set(const char *self)
+{
+	int status;
+
+	CHECK(run("set -- a b c; test \"$#\" = 3", &status) == 0 && status == 0);
+	CHECK(run("set -- a b c; test \"$3\" = c", &status) == 0 && status == 0);
+	/* "All positional parameters shall be unset before any new values
+	 * are assigned": a shorter second list must not leave $3 behind. */
+	CHECK(run("set -- a b c; set -- x; test \"$#\" = 1 && test \"${3}\" = ''",
+	          &status) == 0 && status == 0);
+	CHECK(run("set -- a b c; set --; test \"$#\" = 0", &status) == 0 && status == 0);
+	/* Without "--", ordinary operands still become the parameters --
+	 * set(1p)'s own example, "set c a b". */
+	CHECK(run("set c a b; test \"$1\" = c && test \"$#\" = 3", &status) == 0 && status == 0);
+	/* "set -- \"$x\"": a value beginning with '-' reaches the list
+	 * intact rather than being read as an option. */
+	CHECK(run("set -- -x; test \"$1\" = -x && test \"$#\" = 1", &status) == 0 && status == 0);
+
+	/* Options are refused, loudly, rather than silently ignored: a
+	 * `set -e` that did nothing would change the meaning of every
+	 * later failure without the script being able to notice.
+	 * set(1p) EXIT STATUS: ">0  An invalid option was specified". */
+	CHECK(run("set -e", &status) == 0 && status > 0);
+	CHECK(run("set +x", &status) == 0 && status > 0);
+	/* And a refused `set` must not have half-assigned anything. */
+	CHECK(run("set -- a b; set -e; test \"$#\" = 2", &status) == 0 && status == 0);
+
+	/* No operands: the variable listing.  Asserted on the bytes, since
+	 * "printed nothing" and "printed the right thing" are both exit 0
+	 * -- and on the quoting, which is the half set(1p) calls out
+	 * ("suitable for reinput to the shell") and the half a naive
+	 * implementation gets wrong. */
+	if (file_redir_supported(self)) {
+		char src[512], *tmp = make_tmp(), *got;
+		if (tmp) {
+			setenv("SHT_P7_LIST", "has space and 'quote'", 1);
+			snprintf(src, sizeof src, "set > %s", tmp);
+			CHECK(run(src, &status) == 0 && status == 0);
+			got = slurp(tmp);
+			CHECK(got != 0);
+			if (got) {
+				CHECK(strstr(got, "SHT_P7_LIST='has space and '\\''quote'\\'''\n") != 0);
+				free(got);
+			}
+			remove(tmp);
+			free(tmp);
+			unsetenv("SHT_P7_LIST");
+		}
+	}
+}
+
+/* shift(1p): "Positional parameter 1 shall be assigned the value of
+ * parameter (1+n) ... If n is not given, it shall be assumed to be 1.
+ * If n is 0, the positional and special parameters are not changed."
+ * EXIT STATUS: "[i]f the n operand is invalid or is greater than
+ * "$#" ... a non-zero exit status shall be returned." */
+static void test_builtin_shift(void)
+{
+	int status;
+
+	/* shift(1p)'s own EXAMPLES: "set a b c d e; shift 2" leaves c d e. */
+	CHECK(run("set -- a b c d e; shift 2; test \"$#\" = 3 && test \"$1\" = c",
+	          &status) == 0 && status == 0);
+	CHECK(run("set -- a b c; shift; test \"$#\" = 2 && test \"$1\" = b",
+	          &status) == 0 && status == 0);
+	/* "If n is 0, the positional and special parameters are not
+	 * changed" -- and it is not an error. */
+	CHECK(run("set -- a b c; shift 0; test \"$#\" = 3 && test \"$1\" = a",
+	          &status) == 0 && status == 0);
+	/* ... and `shift 0` itself succeeds.  Asserting only the trailing
+	 * `test` above cannot see a `shift 0` that returned an error
+	 * status, because the `;` list takes its status from the last
+	 * command either way. */
+	CHECK(run("set -- a b c; shift 0", &status) == 0 && status == 0);
+	CHECK(run("set --; shift 0", &status) == 0 && status == 0);
+	/* Shifting exactly $# is legal and empties the list. */
+	CHECK(run("set -- a b; shift 2; test \"$#\" = 0", &status) == 0 && status == 0);
+
+	/* Greater than $#: nonzero status, and -- the part a status alone
+	 * does not pin -- the parameters must be left alone rather than
+	 * partly shifted. */
+	CHECK(run("set -- a b; shift 3", &status) == 0 && status > 0);
+	CHECK(run("set -- a b; shift 3; test \"$#\" = 2 && test \"$1\" = a",
+	          &status) == 0 && status == 0);
+	CHECK(run("set --; shift", &status) == 0 && status > 0);
+
+	/* "an unsigned decimal integer": not a negative, not a word, not a
+	 * number with trailing text. */
+	CHECK(run("set -- a b; shift -1", &status) == 0 && status > 0);
+	CHECK(run("set -- a b; shift x", &status) == 0 && status > 0);
+	CHECK(run("set -- a b; shift 1x", &status) == 0 && status > 0);
+	CHECK(run("set -- a b; shift 1 2", &status) == 0 && status > 0);
+}
+
+/* XCU 2.12: a subshell environment's changes "shall not affect the
+ * shell execution environment", which covers the positional parameters
+ * as much as it covers the working directory -- exec.c already
+ * snapshots environ and cwd for "( ... )" and for a command
+ * substitution, and stage 7 puts the parameter list in the same
+ * bracket. */
+static void test_params_are_subshell_scoped(void)
+{
+	int status;
+
+	CHECK(run("set -- a b c; ( set -- x ); test \"$#\" = 3 && test \"$1\" = a",
+	          &status) == 0 && status == 0);
+	CHECK(run("set -- a b c; ( shift 2; test \"$#\" = 1 ); test \"$#\" = 3",
+	          &status) == 0 && status == 0);
+	/* A subshell *inherits* them, which is the other half: a snapshot
+	 * that cleared the list instead of copying it would pass the two
+	 * assertions above and fail this one. */
+	CHECK(run("set -- a b c; ( test \"$2\" = b )", &status) == 0 && status == 0);
+	/* A brace group runs "in the current process environment" (2.9.4),
+	 * so it does *not* get the isolation. */
+	CHECK(run("set -- a b c; { set -- x ; }; test \"$#\" = 1", &status) == 0 && status == 0);
+}
+
+/* The parameters are the shell's, not the environment's: XCU 2.5.1's
+ * list is not exported, so a child must not see a variable named "1",
+ * and a stray environment entry of that name must not be mistaken for
+ * a positional parameter. */
+static void test_params_are_not_environment_variables(void)
+{
+	int status;
+
+	setenv("1", "from-environ", 1);
+	CHECK(__sh_params_replace(0, 0) == 0);
+	CHECK(run("test \"$1\" = ''", &status) == 0 && status == 0);
+	CHECK(run("set -- real; test \"$1\" = real", &status) == 0 && status == 0);
+	unsetenv("1");
+	CHECK(__sh_params_replace(0, 0) == 0);
+}
 
 /* ---- stage 6b: the compound commands (XCU 2.9.4) ---------------------
  *
@@ -2864,14 +3264,24 @@ static void test_for_loop(const char *self)
 	 *     results in an empty field, that empty field shall be deleted
 	 *     from the list of fields ... unless the original word
 	 *     contained single-quote or double-quote characters."  This
-	 *     wordexp() keeps the empty field, so an unset variable is one
-	 *     empty item rather than no items, and the body runs once with
-	 *     the loop variable set to "".  2.9.4's "if no items result
+	 *     was the second pinned gap: wordexp() used to *keep* the empty
+	 *     field, so an unset variable was one empty item and the body
+	 *     ran once with the loop variable set to "".  Stage 7 closed
+	 *     it -- "$@" needs it, since `f $1` with no positional
+	 *     parameters passing one empty argument instead of none is the
+	 *     same defect wearing a different name -- so this assertion is
+	 *     inverted rather than deleted: 2.9.4's "if no items result
 	 *     from the expansion, the compound-list shall not be executed"
-	 *     therefore does not reach this case yet. */
+	 *     now reaches this case. */
 	unsetenv("SHT_EMPTY");
 	CHECK(run("for f in $SHT_EMPTY; do exit 9; done", &status) == 0);
-	CHECK(status == 9); /* XCU 2.6 + 2.9.4 say 0, with the body not run */
+	CHECK(status == 0); /* the body did not run */
+	/* And the quoted form still produces a field, which is the half of
+	 * 2.6's sentence that is easy to lose while implementing the other:
+	 * "unless the original word contained ... double-quote
+	 * characters". */
+	CHECK(run("for f in \"$SHT_EMPTY\"; do exit 9; done", &status) == 0);
+	CHECK(status == 9);
 
 	/* The loop variable survives the loop -- it is an ordinary
 	 * assignment into the one variable store this shell has. */
@@ -3064,19 +3474,52 @@ static void test_compound_as_pipeline_stage(const char *self)
 }
 
 /* 2.9.4: "Omitting: in word ... shall be equivalent to: in "$@"".
- * There are no positional parameters here, so this is refused rather
- * than run -- exec.c's -1 "cannot execute this node" convention, which
- * reaches a caller as a nonzero return and never as a status. */
-static void test_for_without_in_is_refused(void)
+ * Stage 6b parsed this and refused it at execution (-1, "cannot execute
+ * this node") because there were no positional parameters; stage 7 has
+ * them, so the equivalence is delivered for real. */
+static void test_for_without_in_iterates_positional_parameters(void)
 {
 	int status;
-	struct sh_list *l = __sh_parse("for f; do :; done", 0, 0);
+	char *args[4];
 
-	CHECK(l != 0); /* it *parses*: the shape is recorded honestly */
-	if (l) {
-		CHECK(__sh_exec_list(l, &status) == -1);
+	args[0] = (char *)"a"; args[1] = (char *)"b"; args[2] = (char *)"c";
+
+	/* It still parses -- that never changed. */
+	{
+		struct sh_list *l = __sh_parse("for f; do :; done", 0, 0);
+		CHECK(l != 0);
 		__sh_list_free(l);
 	}
+
+	/* "in \"$@\"" means the *fields* of "$@": one iteration per
+	 * parameter, each getting the whole parameter even when it
+	 * contains a blank.  SHT_ACC accumulates them so the assertion is
+	 * about what the body saw, not just how many times it ran -- a
+	 * loop that ran three times over the wrong values exits 0 exactly
+	 * like one that ran over the right ones. */
+	CHECK(__sh_params_replace(args, 3) == 0);
+	unsetenv("SHT_ACC");
+	CHECK(run("SHT_ACC=; for f; do SHT_ACC=\"$SHT_ACC-$f\"; done", &status) == 0);
+	CHECK(status == 0);
+	CHECK(getenv("SHT_ACC") && strcmp(getenv("SHT_ACC"), "-a-b-c") == 0);
+
+	args[0] = (char *)"p q"; args[1] = (char *)"r";
+	CHECK(__sh_params_replace(args, 2) == 0);
+	unsetenv("SHT_ACC");
+	CHECK(run("SHT_ACC=; for f; do SHT_ACC=\"$SHT_ACC[$f]\"; done", &status) == 0);
+	CHECK(getenv("SHT_ACC") && strcmp(getenv("SHT_ACC"), "[p q][r]") == 0);
+
+	/* No positional parameters: 2.9.4's "if no items result from the
+	 * expansion, the compound-list shall not be executed", and "if
+	 * there are no items, the exit status shall be zero". */
+	CHECK(__sh_params_replace(args, 0) == 0);
+	CHECK(run("for f; do exit 9; done", &status) == 0);
+	CHECK(status == 0);
+	CHECK(run("false; for f; do exit 9; done", &status) == 0);
+	CHECK(status == 0);
+
+	unsetenv("SHT_ACC");
+	CHECK(__sh_params_replace(args, 0) == 0);
 }
 
 int main(int argc, char **argv)
@@ -3183,7 +3626,17 @@ int main(int argc, char **argv)
 	test_compound_runs_in_current_environment();
 	test_exit_unwinds_compound(argv[0]);
 	test_compound_as_pipeline_stage(argv[0]);
-	test_for_without_in_is_refused();
+	test_for_without_in_iterates_positional_parameters();
+
+	test_positional_single_and_multi_digit();
+	test_positional_count_and_zero();
+	test_at_and_star_fields(argv[0]);
+	test_unimplemented_brace_forms_do_not_expand();
+	test_empty_field_deletion(argv[0]);
+	test_builtin_set(argv[0]);
+	test_builtin_shift();
+	test_params_are_subshell_scoped();
+	test_params_are_not_environment_variables();
 
 	if (fails) { printf("sh: failures: %d\n", fails); return 1; }
 	printf("sh: all ok (stage 6b: lexer + parser + execution of simple commands, redirections, pipelines, subshells and brace groups, command substitution, the built-in dispatcher with test/[/:/true/false/exit/cd, and the if/while/until/for compound commands -- see test/sh-design.md)\n");
