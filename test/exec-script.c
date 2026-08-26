@@ -146,6 +146,18 @@ static int role_run(int argc, char **argv)
 
 /* ---- helpers --------------------------------------------------------- */
 
+/* Mode 0755, not 0644: on NT there is no execute-permission bit distinct
+ * from read/write to begin with, so this is invisible to RtlCreateUserProcess
+ * itself -- but fuzz/ntstubs.c's native stand-in for it is not the real
+ * thing.  It answers with a real host process (see its own header comment),
+ * and to get "no such program" back to the caller *before* forking a doomed
+ * child it first probes access(host, X_OK) and turns a failure into
+ * STATUS_OBJECT_NAME_NOT_FOUND -- i.e. [ENOENT], not [ENOEXEC].  A file this
+ * test wrote at 0644 fails that host-only, Unix-only probe for a reason NT
+ * has no concept of, so under that one build every case here would come
+ * back "no such file" before ever reaching the image-format check the
+ * clause is about -- see test/posix-unistd-exec.c's ex-text.sh, which
+ * already writes at 0755 for exactly this reason. */
 static int copyfile(const char *src, const char *dst)
 {
 	char buf[8192];
@@ -153,7 +165,7 @@ static int copyfile(const char *src, const char *dst)
 	ssize_t n;
 	in = open(src, O_RDONLY);
 	if (in < 0) return -1;
-	out = open(dst, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	out = open(dst, O_CREAT | O_WRONLY | O_TRUNC, 0755);
 	if (out < 0) { close(in); return -1; }
 	while ((n = read(in, buf, sizeof buf)) > 0)
 		if (write(out, buf, (size_t)n) != n) { close(in); close(out); return -1; }
@@ -164,7 +176,7 @@ static int copyfile(const char *src, const char *dst)
 static int writefile(const char *p, const char *data)
 {
 	size_t n = strlen(data);
-	int fd = open(p, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	int fd = open(p, O_CREAT | O_WRONLY | O_TRUNC, 0755);
 	if (fd < 0) return -1;
 	if (n && write(fd, data, n) != (ssize_t)n) { close(fd); return -1; }
 	return close(fd);
