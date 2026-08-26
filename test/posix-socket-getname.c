@@ -1,11 +1,13 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Structural invariants of the two *replies* src/socket/getname.c
- * interprets on behalf of getsockname() and getpeername():
+ * Structural invariants of the two AFD name-query replies recorded in
+ * src/internal/afd.h:
  * IOCTL_AFD_GET_SOCK_NAME's and IOCTL_AFD_GET_PEER_NAME's, as read back
  * by src/socket/afdsupport.c's __afd_sockname_reply_addr() and
- * __afd_peername_reply_addr().
+ * __afd_peername_reply_addr().  Production getpeername() deliberately
+ * uses connect()/accept()'s cached peer instead; keeping this wire parser
+ * tested prevents the reverse-engineered layout from silently rotting.
  *
  * The exact sibling of test/posix-socket-bind.c and
  * test/posix-socket-accept.c, for the same reason and by the same

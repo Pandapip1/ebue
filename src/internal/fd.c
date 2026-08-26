@@ -89,11 +89,10 @@ int __fd_alloc(int lowest)
 int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
 {
 	struct __fd *f = &__fds[fd];
+	memset(f, 0, sizeof *f);
 	f->h = h;
 	f->flags = flags;
 	f->type = (unsigned char)(type ? type : __handle_type(h));
-	f->eof = 0;
-	f->dirflag = 0;
 	f->pos = -1;
 	return fd;
 }

@@ -157,6 +157,13 @@ struct __fd {
 	unsigned char eof;     /* a pipe/console that has reported end of input */
 	unsigned char dirflag; /* for directories: 0 or FILE_OPEN_REPARSE_POINT used */
 	unsigned char pad;
+	/* AF_INET peer cached when connect()/accept() establishes it.  AFD's
+	 * undocumented GET_PEER_NAME ioctl is not a stable Windows ABI; the
+	 * peer cannot change during a stream socket's connected lifetime, so
+	 * remembering the address that established the connection is both
+	 * sufficient and avoids depending on that ioctl. */
+	unsigned char peer[16];
+	unsigned char peer_len;
 	long long pos;         /* the position of an O_APPEND/async-opened handle; -1 = use the kernel's */
 };
 

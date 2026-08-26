@@ -7,27 +7,23 @@
  * name of the specified socket" / "retrieve the peer address of the
  * specified socket".
  *
- * One file, because the two are the same function with two ioctl codes
- * and two state preconditions -- exactly the relationship
- * setsockopt()/getsockopt() have in src/socket/sockopt.c.
+ * One file because both calls share descriptor, argument and state
+ * validation, even though only getsockname() needs an AFD query.
  *
  * Both pages carry the identical address-truncation clause accept.html
  * does: "If the actual length of the address is greater than the length
  * of the supplied sockaddr structure, the stored address shall be
  * truncated" -- and, critically, *address_len still receives the
- * untruncated length, not the number of bytes stored.  Both go through
- * __afd_transport_addr_out() (src/socket/afdsupport.c), which is the
- * same code accept() already uses for that clause, so there is one
- * implementation of the rule rather than three.
+ * untruncated length, not the number of bytes stored.  getsockname()
+ * goes through __afd_transport_addr_out() (src/socket/afdsupport.c);
+ * getpeername() applies the same rule to the sockaddr cached when
+ * connect()/accept() established the connection.
  *
- * The two AFD replies are NOT the same shape -- get-sock-name answers
- * with a TDI_ADDRESS_INFO (a ULONG ActivityCount, then the
- * TRANSPORT_ADDRESS) because afd.sys forwards it to the transport as a
- * TDI query, and get-peer-name answers with a bare TRANSPORT_ADDRESS
- * because afd.sys answers it out of the remote address it recorded at
- * connect/accept time.  See src/internal/afd.h's getsockname/getpeername
- * banner for the sources; that difference is why the two calls below do
- * not share a body.
+ * get-sock-name answers with a TDI_ADDRESS_INFO (a ULONG ActivityCount,
+ * then the TRANSPORT_ADDRESS).  The peer address is immutable for a
+ * connected stream socket, so retaining the address supplied by connect()
+ * or returned to accept() avoids depending on AFD_GET_PEER_NAME, an
+ * undocumented ioctl that is not stable across Windows versions.
  *
  * ERRORS, and the two judgement calls in them:
  *
@@ -129,22 +125,13 @@ int getsockname(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict 
 int getpeername(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 {
 	struct __fd *f = getname_fd(fd, addr, len);
-	/* 22 bytes, not 26: no ActivityCount ahead of the
-	 * TRANSPORT_ADDRESS on this one.  See afd.h. */
-	uint32_t reply[(AFD_PEERNAME_RSP_SIZE + 3) / 4];
-	NTSTATUS st;
+	socklen_t n;
 
 	if (!f) return -1;
 	if (!(f->pad & AFD_ST_CONNECTED)) { errno = ENOTCONN; return -1; }
-
-	memset(reply, 0, sizeof reply);
-	st = __afd_ioctl(f->h, IOCTL_AFD_GET_PEER_NAME, 0, 0, reply,
-	                 (ULONG)__afd_peername_reply_size(), 0);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-
-	if (__afd_peername_reply_addr(reply, addr, len) < 0) {
-		errno = EINVAL;
-		return -1;
-	}
+	if (!f->peer_len) { errno = ENOTCONN; return -1; }
+	n = *len < f->peer_len ? *len : f->peer_len;
+	memcpy(addr, f->peer, n);
+	*len = f->peer_len;
 	return 0;
 }

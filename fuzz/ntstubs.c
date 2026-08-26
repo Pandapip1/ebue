@@ -71,6 +71,7 @@ extern size_t __sanitizer_get_allocated_size(const void *);
 #define SYS_ftruncate 77
 #define SYS_memfd_create 319
 #define SYS_ioctl 16
+#define SYS_lseek 8
 
 /* Handles are (fd + 1), so that 0 stays "no handle". */
 #define H2FD(h) ((int)(long)(h) - 1)
@@ -177,6 +178,10 @@ static char *shim_argv[2] = { (char *)"ntlibc-native", 0 };
  * resetting it to empty.  Never left in the environment __ntshim_init()
  * builds: filtered out below. */
 #define XCHILD_MARK "_NTLIBC_XCHILD=1"
+#define XHOST_PREFIX "_NTLIBC_XHOST="
+#define XVFS_PREFIX "_NTLIBC_XVFS="
+static char *host_self;
+static int vfs_snapshot_fd = -1;
 
 /*
  * The exit code a host wait4() reports is 8 bits (WEXITSTATUS); the exit
@@ -249,7 +254,9 @@ static void xstatus_record(int pid, int code)
 }
 
 static void vfs_init(void);            /* the simulated file system, below */
-static void materialize_argv0(const char *host);  /* below, once nodes exist */
+static void materialize_argv0(const char *name, const char *host);  /* below, once nodes exist */
+static void vfs_snapshot_init(char **envp);       /* below, once nodes exist */
+static int vfs_snapshot_export(void);             /* below, once nodes exist */
 static void mirror_init(char **envp);             /* the corpus mirror, below */
 
 __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char **envp)
@@ -289,6 +296,8 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 			for (i = 0; i < n; i++) {
 				if (!strcmp(envp[i], XCHILD_MARK)) continue;
 				if (!strncmp(envp[i], XSTATUS_FD_PREFIX, sizeof(XSTATUS_FD_PREFIX) - 1)) continue;
+				if (!strncmp(envp[i], XHOST_PREFIX, sizeof(XHOST_PREFIX) - 1)) continue;
+				if (!strncmp(envp[i], XVFS_PREFIX, sizeof(XVFS_PREFIX) - 1)) continue;
 				environ[j] = __interceptor_malloc(strlen(envp[i]) + 1);
 				if (environ[j]) strcpy(environ[j], envp[i]);
 				j++;
@@ -299,6 +308,7 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 			environ[0] = 0;
 		}
 	}
+	vfs_snapshot_init(envp);
 	__fd_init();
 	/* crt1.c calls __fenv_init() here too, and natively there is no
 	 * crt1.  Without this the startup floating-point environment is
@@ -319,7 +329,19 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 	 * in this file touches the host file system" (see the file-system
 	 * comment below): it only ever reads, never shadows a path a test
 	 * itself populates, and only for this one path. */
-	if (argc > 0 && argv) materialize_argv0(argv[0]);
+	{
+		const char *source = 0;
+		int i;
+		if (envp) for (i = 0; envp[i]; i++)
+			if (!strncmp(envp[i], XHOST_PREFIX, sizeof(XHOST_PREFIX) - 1))
+				source = envp[i] + sizeof(XHOST_PREFIX) - 1;
+		if (!source && argc > 0 && argv && argv[0] && argv[0][0] == '/') source = argv[0];
+		if (source) {
+			host_self = __interceptor_malloc(strlen(source) + 1);
+			if (host_self) strcpy(host_self, source);
+		}
+		if (argc > 0 && argv && host_self) materialize_argv0(argv[0], host_self);
+	}
 
 	/* NTLIBC_FUZZ_MIRROR: make one host directory visible in the volume,
 	 * so libFuzzer can find a corpus directory and write back to it.  See
@@ -507,6 +529,7 @@ struct ofile {
 	int pid;                     /* OF_PROC */
 	int exited;
 	int exitcode;
+	int snapshot_fd;             /* OF_PROC: child's shared VFS snapshot */
 };
 
 static struct ofile *vhandles[VFS_HANDLES];
@@ -670,6 +693,166 @@ static void dir_remove(struct vnode *dir, struct vent *victim)
 	}
 }
 
+/* A native process launch has to cross a real execve(), which would
+ * otherwise replace this in-memory volume with a fresh empty one.  Carry a
+ * compact tree snapshot in an inherited memfd so the child sees the same
+ * files and current directory that a real NT child sees on the shared
+ * filesystem.  Handles and pipes have their own inheritance mechanisms;
+ * this format is deliberately only the linked directory tree. */
+#define VFS_SNAPSHOT_MAGIC 0x4e545646u /* "NTVF" */
+#define VFS_SNAPSHOT_MAX_FILE (256u * 1024u * 1024u)
+
+struct vfs_snapshot_rec {
+	ULONG type;                    /* 0=end directory, 1=directory, 2=file */
+	ULONG namelen;                 /* WCHARs */
+	unsigned long long size;       /* file bytes */
+	ULONG attrs;
+	ULONG lxmod;
+	ULONG flags;                   /* bit 0: this node is vcwd; bit 1: lxmod */
+};
+
+static int host_write_all(int fd, const void *buf, size_t len)
+{
+	const unsigned char *p = buf;
+	while (len) {
+		long n = syscall(SYS_write, fd, p, len);
+		if (n <= 0) return -1;
+		p += n;
+		len -= (size_t)n;
+	}
+	return 0;
+}
+
+static int host_read_all(int fd, void *buf, size_t len)
+{
+	unsigned char *p = buf;
+	while (len) {
+		long n = syscall(SYS_read, fd, p, len);
+		if (n <= 0) return -1;
+		p += n;
+		len -= (size_t)n;
+	}
+	return 0;
+}
+
+static int vfs_snapshot_write_dir(int fd, struct vnode *dir)
+{
+	struct vent *e;
+	for (e = dir->entries; e; e = e->next) {
+		struct vnode *v = e->node;
+		struct vfs_snapshot_rec r;
+		memset(&r, 0, sizeof r);
+		r.type = v->isdir ? 1 : 2;
+		r.namelen = (ULONG)e->namelen;
+		r.size = v->isdir ? 0 : (unsigned long long)v->size;
+		r.attrs = v->attrs;
+		r.lxmod = v->lxmod;
+		r.flags = (v == vcwd ? 1u : 0u) | (v->have_lxmod ? 2u : 0u);
+		if (host_write_all(fd, &r, sizeof r) < 0 ||
+		    host_write_all(fd, e->name, e->namelen * sizeof(WCHAR)) < 0)
+			return -1;
+		if (v->isdir) {
+			if (vfs_snapshot_write_dir(fd, v) < 0) return -1;
+		} else if (v->size && host_write_all(fd, v->data, (size_t)v->size) < 0) {
+			return -1;
+		}
+	}
+	{
+		struct vfs_snapshot_rec end;
+		memset(&end, 0, sizeof end);
+		return host_write_all(fd, &end, sizeof end);
+	}
+}
+
+static int vfs_snapshot_write(int fd)
+{
+	ULONG magic = VFS_SNAPSHOT_MAGIC;
+	if (syscall(SYS_ftruncate, fd, 0) < 0 ||
+	    syscall(SYS_lseek, fd, 0, 0 /*SEEK_SET*/) < 0) return -1;
+	if (host_write_all(fd, &magic, sizeof magic) < 0 ||
+	    vfs_snapshot_write_dir(fd, vroot) < 0) return -1;
+	return 0;
+}
+
+static int vfs_snapshot_export(void)
+{
+	int fd = (int)syscall(SYS_memfd_create, "ntlibc-vfs", 0);
+	if (fd < 0) return -1;
+	if (vfs_snapshot_write(fd) < 0) { syscall(SYS_close, fd); return -1; }
+	return fd;
+}
+
+static int vfs_snapshot_read_dir(int fd, struct vnode *dir)
+{
+	for (;;) {
+		struct vfs_snapshot_rec r;
+		struct vent *e;
+		struct vnode *v;
+		WCHAR name[256];
+		if (host_read_all(fd, &r, sizeof r) < 0) return -1;
+		if (!r.type) return 0;
+		if ((r.type != 1 && r.type != 2) || !r.namelen || r.namelen > 255 ||
+		    r.size > VFS_SNAPSHOT_MAX_FILE) return -1;
+		if (host_read_all(fd, name, r.namelen * sizeof(WCHAR)) < 0) return -1;
+		e = dir_find(dir, name, r.namelen);
+		if (e) {
+			v = e->node;
+			if (v->isdir != (r.type == 1)) return -1;
+		} else {
+			v = node_new(r.type == 1);
+			if (!v || !dir_add(dir, name, r.namelen, v)) return -1;
+		}
+		v->attrs = r.attrs;
+		v->lxmod = r.lxmod;
+		v->have_lxmod = (r.flags & 2) != 0;
+		if (r.flags & 1) vcwd = v;
+		if (v->isdir) {
+			if (vfs_snapshot_read_dir(fd, v) < 0) return -1;
+		} else {
+			vfree(v->data);
+			v->data = r.size ? vmalloc((size_t)r.size) : 0;
+			if (r.size && !v->data) return -1;
+			v->size = (long long)r.size;
+			v->cap = (size_t)r.size;
+			if (r.size && host_read_all(fd, v->data, (size_t)r.size) < 0) return -1;
+		}
+	}
+}
+
+static void vfs_snapshot_init(char **envp)
+{
+	int fd = -1, child = 0;
+	size_t i;
+	ULONG magic = 0;
+	if (envp) for (i = 0; envp[i]; i++)
+		if (!strcmp(envp[i], XCHILD_MARK)) { child = 1; break; }
+	if (!child) return;
+	if (envp) for (i = 0; envp[i]; i++) {
+		if (!strncmp(envp[i], XVFS_PREFIX, sizeof(XVFS_PREFIX) - 1)) {
+			const char *p = envp[i] + sizeof(XVFS_PREFIX) - 1;
+			fd = 0;
+			while (*p >= '0' && *p <= '9') fd = fd * 10 + *p++ - '0';
+			if (*p) fd = -1;
+			break;
+		}
+	}
+	if (fd < 0) return;
+	syscall(SYS_lseek, fd, 0, 0 /*SEEK_SET*/);
+	if (host_read_all(fd, &magic, sizeof magic) == 0 && magic == VFS_SNAPSHOT_MAGIC)
+		(void)vfs_snapshot_read_dir(fd, vroot);
+	vfs_snapshot_fd = fd;
+}
+
+static void vfs_snapshot_sync(void)
+{
+	if (vfs_snapshot_fd >= 0) (void)vfs_snapshot_write(vfs_snapshot_fd);
+}
+
+__attribute__((destructor)) static void vfs_snapshot_fini(void)
+{
+	vfs_snapshot_sync();
+}
+
 #define SYS_openat 257
 #define SYS_pipe2  293
 
@@ -681,7 +864,7 @@ static void dir_remove(struct vnode *dir, struct vent *victim)
  * the call site).  Read-only and additive -- an existing entry at the
  * target name, file or directory, is left alone rather than replaced, so
  * this can never clobber something a test created first. */
-static void materialize_argv0(const char *host)
+static void materialize_argv0(const char *name, const char *host)
 {
 	struct vnode *dir;
 	const char *p;
@@ -689,9 +872,9 @@ static void materialize_argv0(const char *host)
 	size_t cap = 0, len = 0;
 	long fd;
 
-	if (!host || host[0] != '/') return;   /* relative argv[0]: not used here */
-	dir = vroot;
-	p = host + 1;
+	if (!name || !*name || !host || host[0] != '/') return;
+	dir = name[0] == '/' ? vroot : vcwd;
+	p = name + (name[0] == '/');
 	while (*p) {
 		const char *start = p;
 		WCHAR wname[512];
@@ -701,7 +884,7 @@ static void materialize_argv0(const char *host)
 		while (*p && *p != '/') p++;
 		clen = (size_t)(p - start);
 		if (*p) p++;
-		if (!clen) continue;
+		if (!clen || (clen == 1 && start[0] == '.')) continue;
 		last = (*p == 0);
 		wn = clen < 512 ? clen : 511;
 		for (i = 0; i < wn; i++) wname[i] = (WCHAR)(unsigned char)start[i];
@@ -742,6 +925,8 @@ static void materialize_argv0(const char *host)
 			nf->data = data;
 			nf->size = (long long)len;
 			nf->cap = cap;
+			nf->lxmod = 0755;
+			nf->have_lxmod = 1;
 		}
 		return;
 	}
@@ -1163,6 +1348,8 @@ static void of_drop(struct ofile *f)
 		if (!unlinked) node_release(n);
 		vfree(f->name);
 	}
+	if (f->kind == OF_PROC && f->snapshot_fd >= 0)
+		syscall(SYS_close, f->snapshot_fd);
 	vfree(f);
 }
 
@@ -2983,6 +3170,26 @@ static char *nt_to_host_path(const WCHAR *p, size_t n)
 	return s;
 }
 
+/* Classify an image that exists only in the simulated volume.  Native
+ * process creation can execute one thing: another copy of this ELF test
+ * binary.  Tests make such copies through ntlibc's own read/write calls,
+ * so they have no corresponding host file for faccessat()/execve(). */
+static int vfs_image_kind(const UNICODE_STRING *image)
+{
+	OBJECT_ATTRIBUTES oa;
+	struct vpath vp;
+	struct vnode *v;
+	NTSTATUS st;
+
+	InitializeObjectAttributes(&oa, (PUNICODE_STRING)image,
+	                           OBJ_CASE_INSENSITIVE, 0, 0);
+	st = resolve(&oa, &vp);
+	if (!NT_SUCCESS(st) || !(v = vpath_node(&vp)) || v->isdir) return -1;
+	if (v->size >= 4 && v->data && v->data[0] == 0x7f &&
+	    v->data[1] == 'E' && v->data[2] == 'L' && v->data[3] == 'F') return 1;
+	return 0;
+}
+
 static NTSTATUS dup_ustr(UNICODE_STRING *dst, const UNICODE_STRING *src)
 {
 	memset(dst, 0, sizeof *dst);
@@ -3052,10 +3259,12 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	char *host;
 	char **argv, **envp, **xenvp = 0;
 	char *xstatus_entry = 0;
+	char *xhost_entry = 0;
+	char *xvfs_entry = 0;
 	struct ofile *f;
 	NTSTATUS st;
 	long pid;
-	int n;
+	int n, vfsfd = -1;
 	(void)attrs; (void)psd; (void)tsd; (void)parent; (void)inherit; (void)debug; (void)token;
 
 	if (!image || !pp || !info) return STATUS_INVALID_PARAMETER;
@@ -3067,8 +3276,16 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	/* Checked before forking so that "no such program" is the status NT
 	 * gives, rather than a child that exists just long enough to fail. */
 	if (syscall(SYS_faccessat, -100 /*AT_FDCWD*/, host, 1 /*X_OK*/, 0) < 0) {
-		st = STATUS_OBJECT_NAME_NOT_FOUND;
-		goto out;
+		int kind = vfs_image_kind(image);
+		if (kind == 1 && host_self) {
+			vfree(host);
+			host = vmalloc(strlen(host_self) + 1);
+			if (!host) { st = STATUS_NO_MEMORY; goto out; }
+			strcpy(host, host_self);
+		} else {
+			st = kind == 0 ? STATUS_INVALID_IMAGE_FORMAT : STATUS_OBJECT_NAME_NOT_FOUND;
+			goto out;
+		}
 	}
 
 	f = vmalloc(sizeof *f);
@@ -3076,6 +3293,7 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	memset(f, 0, sizeof *f);
 	f->kind = OF_PROC;
 	f->exitcode = STATUS_PENDING;
+	f->snapshot_fd = -1;
 
 	/* envp plus the marker __ntshim_init() looks for -- see XCHILD_MARK's
 	 * definition -- so the child knows to rebuild environ from what
@@ -3087,11 +3305,31 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	 * envp's entries in a new array; the strings themselves are still
 	 * envp's to free below. */
 	for (n = 0; envp[n]; n++) ;
-	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 3));
+	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 5));
 	if (xenvp) {
 		int m = n;
 		memcpy(xenvp, envp, sizeof(char *) * (size_t)n);
 		xenvp[m++] = (char *)XCHILD_MARK;
+		if (host_self) {
+			xhost_entry = vmalloc(sizeof(XHOST_PREFIX) + strlen(host_self));
+			if (xhost_entry) {
+				strcpy(xhost_entry, XHOST_PREFIX);
+				strcat(xhost_entry, host_self);
+				xenvp[m++] = xhost_entry;
+			}
+		}
+		vfsfd = vfs_snapshot_export();
+		if (vfsfd >= 0) {
+			xvfs_entry = vmalloc(sizeof(XVFS_PREFIX) + 10);
+			if (xvfs_entry) {
+				snprintf(xvfs_entry, sizeof(XVFS_PREFIX) + 10, "%s%d",
+				         XVFS_PREFIX, vfsfd);
+				xenvp[m++] = xvfs_entry;
+			} else {
+				syscall(SYS_close, vfsfd);
+				vfsfd = -1;
+			}
+		}
 		if (xstatus_fd >= 0) {
 			xstatus_entry = vmalloc(sizeof(XSTATUS_FD_PREFIX) + 10);
 			if (xstatus_entry) {
@@ -3109,9 +3347,15 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 		syscall(SYS_execve, host, argv, xenvp ? xenvp : envp);
 		syscall(SYS_exit_group, 127);
 	}
+	f->snapshot_fd = vfsfd;
+	vfsfd = -1;
 	f->pid = (int)pid;
 	st = of_install(f, &info->Process);
-	if (!NT_SUCCESS(st)) { vfree(f); goto out; }
+	if (!NT_SUCCESS(st)) {
+		if (f->snapshot_fd >= 0) syscall(SYS_close, f->snapshot_fd);
+		vfree(f);
+		goto out;
+	}
 	/* There is one thread and it is the process; the caller closes this
 	 * handle separately, so it is a second reference to the same object. */
 	st = of_install(f, &info->Thread);
@@ -3121,11 +3365,14 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	st = STATUS_SUCCESS;
 
 out:
+	if (vfsfd >= 0) syscall(SYS_close, vfsfd);
 	vfree(host);
 	free_strv(argv);
 	free_strv(envp);
 	vfree(xenvp);           /* the wrapper array only; envp's own strings are envp's */
 	vfree(xstatus_entry);
+	vfree(xhost_entry);
+	vfree(xvfs_entry);
 	return st;
 }
 
@@ -3181,6 +3428,18 @@ static int proc_poll(struct ofile *f, int nohang)
 	r = syscall(SYS_wait4, (long)f->pid, &status, (long)(nohang ? 1 /*WNOHANG*/ : 0), 0);
 	if (r == f->pid) {
 		f->exited = 1;
+		/* The child rewrites the inherited memfd as it exits.  Merge its
+		 * file-tree changes before waitpid() returns, which is when a real
+		 * shared filesystem would already expose them to the parent. */
+		if (f->snapshot_fd >= 0) {
+			ULONG magic = 0;
+			syscall(SYS_lseek, f->snapshot_fd, 0, 0);
+			if (host_read_all(f->snapshot_fd, &magic, sizeof magic) == 0 &&
+			    magic == VFS_SNAPSHOT_MAGIC)
+				(void)vfs_snapshot_read_dir(f->snapshot_fd, vroot);
+			syscall(SYS_close, f->snapshot_fd);
+			f->snapshot_fd = -1;
+		}
 		/* Prefer the out-of-band table (see its comment above): it has
 		 * the real, full-width code NtTerminateProcess was asked to end
 		 * this pid with, where the host's own wait status only carries
@@ -3325,6 +3584,7 @@ NTSTATUS NTAPI NtTerminateProcess(HANDLE h, NTSTATUS code)
 		return STATUS_SUCCESS;
 	}
 	xstatus_record((int)syscall(SYS_getpid), (int)code);
+	vfs_snapshot_sync();
 	syscall(SYS_exit_group, (long)(int)code);
 	return STATUS_SUCCESS;
 }
@@ -3417,6 +3677,7 @@ NTSTATUS NTAPI RtlCloneUserProcess(ULONG flags, PVOID psd, PVOID tsd, HANDLE deb
 	f->kind = OF_PROC;
 	f->exitcode = STATUS_PENDING;
 	f->pid = (int)pid;
+	f->snapshot_fd = -1;
 
 	st = of_install(f, &info->Process);
 	if (!NT_SUCCESS(st)) { vfree(f); return st; }

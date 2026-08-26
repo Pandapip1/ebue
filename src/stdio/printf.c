@@ -795,7 +795,9 @@ static int arg_type(int lm, int conv)
 		switch (lm) {
 		case LM_l: return A_LONG;
 		case LM_ll: case LM_j: return A_LLONG;
+		/* widthmod-ok: A_SSIZE is fetched as ssize_t in pop_arg(). */
 		case LM_z: return A_SSIZE;
+		/* widthmod-ok: A_PTRDIFF is fetched as ptrdiff_t in pop_arg(). */
 		case LM_t: return A_PTRDIFF;
 		default: return A_INT;      /* hh and h promote to int */
 		}
@@ -803,7 +805,9 @@ static int arg_type(int lm, int conv)
 		switch (lm) {
 		case LM_l: return A_ULONG;
 		case LM_ll: case LM_j: return A_ULLONG;
+		/* widthmod-ok: A_SIZE is fetched as size_t in pop_arg(). */
 		case LM_z: return A_SIZE;
+		/* widthmod-ok: A_PTRDIFF is fetched as ptrdiff_t in pop_arg(). */
 		case LM_t: return A_PTRDIFF;
 		default: return A_UINT;
 		}
@@ -1198,6 +1202,7 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 					/* t was fetched as the signed ptrdiff_t it names
 					 * (see pop_arg); this reinterprets it, exactly as
 					 * "(unsigned long long)va_arg(ap, ptrdiff_t)" did. */
+					/* widthmod-ok: pop_arg() fetched ptrdiff_t; this is its unsigned interpretation. */
 					case LM_t: uv = (unsigned long long)a.i; break;
 					default: uv = a.u; break;
 					}

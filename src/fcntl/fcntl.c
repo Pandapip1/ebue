@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <string.h>
 #include "libc.h"
 
 int fcntl(int fd, int cmd, ...)
@@ -31,6 +32,9 @@ int fcntl(int fd, int cmd, ...)
 		                       cmd == F_DUPFD_CLOEXEC ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 		__fd_install_at(nfd, h, (f->flags & ~O_CLOEXEC) | (cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0), f->type);
+		__fds[nfd].pad = f->pad;
+		__fds[nfd].peer_len = f->peer_len;
+		memcpy(__fds[nfd].peer, f->peer, sizeof f->peer);
 		return nfd;
 	}
 	case F_GETFD:

@@ -81,9 +81,10 @@
  * FILE_ANY_ACCESS)) is numerically 0x1202F too.  The second has only the
  * one source: Wine's ws2_32 answers getpeername out of its own cached
  * connect()/accept() state and never issues an ioctl for it, so there is
- * no second derivation of 0x12033 to check against.  Recorded here
- * rather than left implicit, because it means real Windows CI is the
- * only place getpeername()'s wire code can be wrong and be noticed. */
+ * no second derivation of 0x12033 to check against.  ntlibc now follows
+ * that cached-state design too; the peer ioctl definitions remain here
+ * as documented reverse-engineering and for their structural tests, not
+ * as a production dependency. */
 #define IOCTL_AFD_GET_SOCK_NAME      _AFD_CONTROL_CODE(AFD_GET_SOCK_NAME, METHOD_NEITHER_)
 #define IOCTL_AFD_GET_PEER_NAME      _AFD_CONTROL_CODE(AFD_GET_PEER_NAME, METHOD_NEITHER_)
 

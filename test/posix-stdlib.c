@@ -622,13 +622,18 @@ static void test_system(void)
 		int fd = mkstemps(t, 4);
 		CHECK(fd >= 0);
 		if (fd >= 0) {
+			int executable;
 			CHECK(write(fd, "not a valid PE image\n", 22) == 22);
 			CHECK(close(fd) == 0);
-			CHECK(chmod(t, 0755) == 0);
-			CHECK(setenv("ComSpec", t, 1) == 0);
-			st = system("exit 0");
-			CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 127);
-			unsetenv("ComSpec");
+			executable = chmod(t, 0755) == 0 || access(t, X_OK) == 0;
+			if (!executable) {
+				printf("note: $LXMOD unavailable; skipping invalid-shell system() clause\n");
+			} else {
+				CHECK(setenv("ComSpec", t, 1) == 0);
+				st = system("exit 0");
+				CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 127);
+				unsetenv("ComSpec");
+			}
 			unlink(t);
 		}
 	}

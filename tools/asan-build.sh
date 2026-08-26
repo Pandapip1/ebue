@@ -176,7 +176,6 @@ TAG=$SAN_MODE
 RTDIR=$($CC -print-file-name=$SAN_RT)
 RTDIR=$(dirname "$RTDIR")
 LINKFLAGS="-Wl,-rpath,$RTDIR"
-SAN_SO=$RTDIR/$SAN_RT
 
 # -fsanitize=implicit-conversion is NOT part of the -fsanitize=undefined
 # group; it is a separate group of three checks, and they have very
@@ -465,6 +464,14 @@ fi
 stubcflags="$(echo "$CFLAGS" | sed "s!$INTSAN!!")"
 # shellcheck disable=SC2086
 $CC -c $stubcflags -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
+SHIMOBJS="$OBJ/ntstubs.o"
+if [ "$SAN_MODE" = ubsan ]; then
+	# The UBSan-only runtime has no ASan allocator entry points.  Use the
+	# existing host-libc forwarding shim that fuzz/Makefile uses in the
+	# same mode; it is deliberately compiled against host headers.
+	$CC -c -g -O1 "$srcdir/fuzz/ubsanshim.c" -o "$OBJ/ubsanshim.o"
+	SHIMOBJS="$SHIMOBJS $OBJ/ubsanshim.o"
+fi
 
 # An archive would be wrong here.  libclang_rt.asan.so exports weak
 # strcmp/strlen/strxfrm/memcpy/... interceptors and the driver puts it
@@ -688,10 +695,10 @@ mkdir -p "$lpar" || exit 1
 link_one() {
 	l_idx=$1 l_n=$2 l_t=$3
 	l_exe="$OBJ/test/$l_n"
-	# $SAN/$LTOFLAGS/$TINC/$LINKFLAGS/$LIBOBJS are flag and object lists.
+	# $SAN/$LTOFLAGS/$TINC/$LINKFLAGS/$SHIMOBJS/$LIBOBJS are flag and object lists.
 	# shellcheck disable=SC2086
 	if $CC $SAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 -D_GNU_SOURCE -w \
-	     $TINC $LINKFLAGS "$srcdir/$l_t" "$OBJ/ntstubs.o" $LIBOBJS -o "$l_exe" \
+	     $TINC $LINKFLAGS "$srcdir/$l_t" $SHIMOBJS $LIBOBJS -o "$l_exe" \
 	     2> "$l_exe.link.err"; then
 		echo ok > "$lpar/$l_idx.rc"
 	else

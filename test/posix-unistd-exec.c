@@ -295,8 +295,7 @@ static void test_not_a_regular_file(void)
 	CHECK(execve("./ex-dir", av, environ) == -1);
 	reached++;
 
-#if NTLIBC_TEST(BUG, posix_unistd_exec_directory_reports_eacces) /* BUG: executing a directory reports [EBADF], which is not one
-	 * of the errnos exec.html lists for it.
+#if NTLIBC_TEST(PASS, posix_unistd_exec_directory_reports_eacces) /* Executing a directory reports [EACCES], as exec.html requires.
 	 *
 	 * exec.html ERRORS: "The exec functions *shall* fail if: ...
 	 * [EACCES] The new process image file is not a regular file and
@@ -308,15 +307,9 @@ static void test_not_a_regular_file(void)
 	 * produce at all, and a caller distinguishing "I passed a bad fd"
 	 * from "that path is not executable" is misled by it.
 	 *
-	 * Mechanism: src/process/spawn.c hands the path to
-	 * RtlCreateUserProcess without checking that it names a regular
-	 * file; the STATUS_* a directory produces reaches
-	 * __set_errno_status() (src/internal/errno.c) and lands on EBADF.
-	 * A stat() for S_ISREG before the spawn is what the clause asks
-	 * for, and src/stat/stat.c already provides it.  Probed on this
-	 * tree: execv("./ex-dir") and execve("./ex-dir") both return -1
-	 * with errno 9 (EBADF).  Re-enable when a non-regular process
-	 * image file reports EACCES. */
+	 * src/process/exec.c checks S_ISREG before process creation, so the
+	 * driver's unrelated status for attempting to execute a directory
+	 * cannot leak out as [EBADF]. */
 	errno = 0;
 	CHECK(execv("./ex-dir", av) == -1 && errno == EACCES);
 	errno = 0;

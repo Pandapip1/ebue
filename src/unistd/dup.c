@@ -4,19 +4,25 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
 #include "libc.h"
 
 static int dup_to(int fd, int newfd, int cloexec)
 {
 	struct __fd *f = __fd_get(fd);
+	struct __fd state;
 	HANDLE h;
 	NTSTATUS st;
 	if (!f) return -1;
+	state = *f;
 	st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
 	                       cloexec ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	if (__fds[newfd].h) NtClose(__fds[newfd].h);
-	__fd_install_at(newfd, h, (f->flags & ~O_CLOEXEC) | (cloexec ? O_CLOEXEC : 0), f->type);
+	__fd_install_at(newfd, h, (state.flags & ~O_CLOEXEC) | (cloexec ? O_CLOEXEC : 0), state.type);
+	__fds[newfd].pad = state.pad;
+	__fds[newfd].peer_len = state.peer_len;
+	memcpy(__fds[newfd].peer, state.peer, sizeof state.peer);
 	return newfd;
 }
 

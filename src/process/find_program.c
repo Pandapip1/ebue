@@ -97,7 +97,7 @@ int __is_program(const char *path)
 	LARGE_INTEGER off = 0;
 	HANDLE h;
 	NTSTATUS s;
-	unsigned char b[2];
+	unsigned char b[4];
 
 	if (__ntpath_at(AT_FDCWD, path, &np, OBJ_CASE_INSENSITIVE) < 0) return 0;
 	s = NtOpenFile(&h, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io,
@@ -117,8 +117,16 @@ int __is_program(const char *path)
 	io.Information = 0;
 	s = NtReadFile(h, 0, 0, 0, &io, b, sizeof b, &off, 0);
 	NtClose(h);
-	if (!NT_SUCCESS(s) || io.Information < sizeof b) return 0;
-	return (b[0] == 'M' && b[1] == 'Z') || (b[0] == '#' && b[1] == '!');
+	if (!NT_SUCCESS(s) || io.Information < 2) return 0;
+	if ((b[0] == 'M' && b[1] == 'Z') || (b[0] == '#' && b[1] == '!')) return 1;
+#ifdef _NTLIBC_NATIVE_BUILD
+	/* The sanitizer shim starts copied test images as their native ELF
+	 * host binary.  Treat that native image signature exactly as the NT
+	 * build treats MZ; this branch cannot enter a PE build. */
+	if (io.Information >= 4 && b[0] == 0x7f && b[1] == 'E' &&
+	    b[2] == 'L' && b[3] == 'F') return 1;
+#endif
+	return 0;
 }
 
 static int has_dir(const char *name)

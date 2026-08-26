@@ -26,6 +26,7 @@
  * Winsock extension.
  */
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
@@ -39,6 +40,8 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 	HANDLE newh;
 	NTSTATUS st;
 	int newfd;
+	struct sockaddr_in peer;
+	socklen_t peerlen = sizeof peer;
 
 	if (!f) return -1;
 	if (f->type != __FD_SOCKET) { errno = ENOTSOCK; return -1; }
@@ -78,7 +81,7 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 	 * EPROTO, the other candidate in that list, is glossed as the
 	 * protocol stack not being initialised: it would claim every later
 	 * accept() is doomed too, which this does not establish. */
-	if (__afd_accept_reply_addr(&recvd, 0, 0) < 0) {
+	if (__afd_accept_reply_addr(&recvd, (struct sockaddr *)&peer, &peerlen) < 0) {
 		errno = ECONNABORTED;
 		return -1;
 	}
@@ -95,13 +98,19 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 	newfd = __fd_install(newh, 0, __FD_SOCKET);
 	if (newfd < 0) { NtClose(newh); return -1; }
 	__fd_get(newfd)->pad = AFD_ST_BOUND | AFD_ST_CONNECTED;
+	memcpy(__fd_get(newfd)->peer, &peer, sizeof peer);
+	__fd_get(newfd)->peer_len = sizeof peer;
 
 	/* Converted only here, on the success path, so that a failure
 	 * between the check above and this point still leaves the caller's
 	 * address buffer untouched -- the behaviour every earlier revision
 	 * of this function had.  The reply was validated before any of that
 	 * happened, so this call cannot fail. */
-	if (addr) __afd_accept_reply_addr(&recvd, addr, len);
+	if (addr) {
+		socklen_t n = *len < (socklen_t)sizeof peer ? *len : (socklen_t)sizeof peer;
+		memcpy(addr, &peer, n);
+		*len = sizeof peer;
+	}
 
 	return newfd;
 }

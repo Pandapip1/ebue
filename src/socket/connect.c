@@ -55,5 +55,7 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	f->pad |= AFD_ST_CONNECTED;
+	memcpy(f->peer, addr, sizeof(struct sockaddr_in));
+	f->peer_len = sizeof(struct sockaddr_in);
 	return 0;
 }

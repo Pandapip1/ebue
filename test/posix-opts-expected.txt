@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=410 BUG=177 UNIMPL=975 NA=48 FLAKY=0
+# COUNTS PASS=409 BUG=177 UNIMPL=970 NA=54 FLAKY=0
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -55,7 +55,7 @@ aio_return/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A
 aio_suspend/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_suspend/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_suspend/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
-aio_suspend/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
+aio_suspend/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNSUPPORTED because asynchronous I/O is not implemented
 aio_suspend/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_write/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_write/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -81,13 +81,13 @@ clock_getres/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_getres/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_getres/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_getres/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-clock_getres/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-clock_getres/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
+clock_getres/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNSUPPORTED because process CPU-time option is not advertised
+clock_getres/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNSUPPORTED because thread CPU-time option is not advertised
 clock_gettime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_gettime/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_gettime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-clock_gettime/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-clock_gettime/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
+clock_gettime/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+clock_gettime/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite reports UNSUPPORTED because process CPU-time option is not advertised
 clock_gettime/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_gettime/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 clock_gettime/8-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -359,8 +359,8 @@ munmap/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: co
 munmap/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 nanosleep/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
+nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
 nanosleep/10000-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 nanosleep/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	the runner's NtDelayExecution returns STATUS_SUCCESS without waiting on ~0.4% of sub-tick delays (its deadline arithmetic uses the 1 ms-granular NtQuerySystemTime), so the cumulative-elapsed assertion cannot hold reliably
 nanosleep/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)

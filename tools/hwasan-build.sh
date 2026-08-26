@@ -55,7 +55,7 @@ fi
 # before ntlibc is initialised.
 SAN="-fsanitize=hwaddress -shared-libsan"
 SAN_RT=libclang_rt.hwasan-$ARCH.so
-RT=$($CC -print-file-name=$SAN_RT)
+RT=$($CC -print-file-name="$SAN_RT")
 case $RT in
 */libclang_rt.hwasan-*.so) ;;
 *)	echo "hwasan: $CC has no dynamic HWASan runtime ($SAN_RT);" >&2
