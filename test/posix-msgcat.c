@@ -6,7 +6,7 @@
  * file was written:
  *
  *   <langinfo.h>   nl_langinfo, nl_langinfo_l      IMPLEMENTED 2026-08-25
- *   <nl_types.h>   catopen, catgets, catclose      still absent
+ *   <nl_types.h>   catopen, catgets, catclose      IMPLEMENTED 2026-08-25
  *   <monetary.h>   strfmon, strfmon_l              still absent
  *   <iconv.h>      iconv_open, iconv, iconv_close  still absent
  *
@@ -17,8 +17,14 @@
  * agree with today.  What has changed since: <langinfo.h> now exists
  * (include/langinfo.h, src/misc/langinfo.c) with all fifty-five item
  * constants, nl_langinfo() and nl_langinfo_l(); nl_item and nl_catd are
- * typedef'd in bits/alltypes.h.  The three <langinfo.h> cases in this
- * file are consequently un-fenced and run.  Sentences below that say
+ * typedef'd in bits/alltypes.h; and <nl_types.h> now exists too
+ * (include/nl_types.h, src/misc/catgets.c) with catopen(), catgets()
+ * and catclose() over a real NLSPATH resolution and a real catalogue
+ * reader.  The four <langinfo.h>/<nl_types.h> cases in this file are
+ * consequently un-fenced and run, and one new case --
+ * test_catgets_reads_a_catalogue() -- was added, because the original
+ * one can only watch catopen() fail on a machine with no catalogues
+ * installed and so could not tell a reader from a stub.  Sentences below that say
  * "the four", "eleven functions" or "does not exist" are about the
  * 2026-08-25 tree; where a *fenced* case's own comment made such a
  * claim, that comment was rewritten in the same commit as the
@@ -416,6 +422,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <langinfo.h>
+#include <nl_types.h>
 #include "test-policy.h"
 
 static int fails;
@@ -1001,94 +1008,68 @@ static void test_nl_langinfo_l(void)
  * functions/catgets.html, functions/catclose.html
  * =================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_types_h_catalogue_access) /* UNIMPL: <nl_types.h> and the message-catalogue
-	trio do not exist.
+/* IMPLEMENTED (2026-08-25).  <nl_types.h> and the message-catalogue
+   trio exist; see include/nl_types.h and src/misc/catgets.c.
 
-	nl_types.h.html DESCRIPTION requires, verbatim: "The
-	<nl_types.h> header shall define at least the following
-	types:" -- nl_catd, "Used by the message catalog functions
-	catopen(), catgets(), and catclose() to identify a catalog
-	descriptor.", and nl_item, "Used by nl_langinfo() to identify
-	items of langinfo data. Values of objects of type nl_item are
-	defined in <langinfo.h>." -- then "The <nl_types.h> header
-	shall define at least the following symbolic constants:",
-	NL_SETD and NL_CAT_LOCALE, and then the three prototypes:
+   nl_types.h.html DESCRIPTION requires, verbatim: "The <nl_types.h>
+   header shall define at least the following types:" -- nl_catd, "Used
+   by the message catalog functions catopen(), catgets(), and
+   catclose() to identify a catalog descriptor.", and nl_item, "Used by
+   nl_langinfo() to identify items of langinfo data. Values of objects
+   of type nl_item are defined in <langinfo.h>." -- then "The
+   <nl_types.h> header shall define at least the following symbolic
+   constants:", NL_SETD and NL_CAT_LOCALE, and then the three
+   prototypes:
 
-	    int       catclose(nl_catd);
-	    char     *catgets(nl_catd, int, int, const char *);
-	    nl_catd   catopen(const char *, int);
+       int       catclose(nl_catd);
+       char     *catgets(nl_catd, int, int, const char *);
+       nl_catd   catopen(const char *, int);
 
-	None of it is in include/.  Note that nl_item is required by
-	BOTH this header and <langinfo.h> ("shall define the nl_item
-	type as described in <nl_types.h>"), so the two absences are
-	coupled: <langinfo.h> cannot be shipped correctly without this
-	header existing to define the type it borrows.
+   nl_item is required by BOTH this header and <langinfo.h> ("shall
+   define the nl_item type as described in <nl_types.h>"), so the two
+   were coupled and are satisfied together: both typedefs live in
+   bits/alltypes.h behind __NEED_ guards and neither header defines
+   them itself.
 
-	WHY THIS IS THE CLEAREST UNIMPL OF THE FOUR.  POSIX designed
-	this interface so that an implementation with no catalogues is
-	still conforming and -- more to the point -- so that an
-	application using it still works on one:
+   WHAT THIS CASE CAN AND CANNOT REACH.  POSIX designed this interface
+   so that an implementation with no catalogues installed is still
+   conforming and -- more to the point -- so that an application using
+   it still works on one:
 
-	  - catopen.html's ENOENT ("The message catalog does not exist
-	    or the name argument points to an empty string.") is under
-	    "The catopen() function may fail if:".  Every listed
-	    condition is a *may fail*.  Always failing is legal.
-	  - catgets.html DESCRIPTION: "The s argument points to a
-	    default message string which shall be returned by
-	    catgets() if it cannot retrieve the identified message."
-	    RETURN VALUE: "If the call is unsuccessful for any reason,
-	    s shall be returned and errno shall be set to indicate the
-	    error."  So the program's own compiled-in default string
-	    is what comes back, and the caller is correct without a
-	    catalogue.
-	  - catclose.html RETURN VALUE: "Upon successful completion,
-	    catclose() shall return 0; otherwise, -1 shall be
-	    returned, and errno set to indicate the error."
+     - catopen.html's ENOENT ("The message catalog does not exist or
+       the name argument points to an empty string.") is under "The
+       catopen() function may fail if:".  Every listed condition is a
+       *may fail*.  Failing for want of a catalogue is legal.
+     - catgets.html DESCRIPTION: "The s argument points to a default
+       message string which shall be returned by catgets() if it
+       cannot retrieve the identified message."  RETURN VALUE: "If the
+       call is unsuccessful for any reason, s shall be returned and
+       errno shall be set to indicate the error."  So the program's
+       own compiled-in default string is what comes back, and the
+       caller is correct without a catalogue.
+     - catclose.html RETURN VALUE: "Upon successful completion,
+       catclose() shall return 0; otherwise, -1 shall be returned, and
+       errno set to indicate the error."
 
-	A conforming implementation is therefore reachable in a few
-	dozen lines over getenv() (catopen.html: "the environment
-	variable NLSPATH is used with name substituted for the %N
-	conversion specification"), open()/read()/close(), and the
-	LC_MESSAGES category src/misc/locale.c already accepts -- see
-	test_lc_messages_category_exists, which runs today.  Even the
-	one NT-flavoured clause is already satisfied here: "If a file
-	descriptor is used to implement message catalog descriptors,
-	the FD_CLOEXEC flag shall be set; see <fcntl.h>" -- ntlibc has
-	FD_CLOEXEC and O_CLOEXEC and audits both.  And the limits that
-	bound a catalogue are already defined; see
-	test_message_catalogue_limits_exist_without_the_header.
+   There is no gencat in this tree, so nothing installs a catalogue
+   and this case exercises only the no-catalogue path.  That is why
+   test_catgets_reads_a_catalogue() below exists: it writes a
+   catalogue byte by byte and reads it back, so the parser, the two
+   binary searches and the not-in-catalogue path are all covered by
+   something rather than by the observation that a lookup failed.
+   Without it this case would pass on a tree where catopen() was a
+   one-line `return (nl_catd)-1`, which is exactly the outcome the
+   fence it replaces was warning about.
 
-	NOT N/A.  The tempting version -- "there are no message
-	catalogues on Windows, so the clause cannot apply" -- gets the
-	direction of the standard's permission backwards.  The standard
-	anticipates exactly that situation and specifies what to do in
-	it; a clause that tells you what to answer when you have
-	nothing is not a clause you are exempt from for having nothing.
-	What is absent here is the header, not the catalogues.
-
-	NOT DECLINED either: nothing on these three pages is
-	obsolescent, and unlike <stropts.h> shipping the header would
-	not relocate a compile failure to a link failure -- there is
-	real, standard-sanctioned behaviour behind all three names.
-
-	The honest half: <nl_types.h> unblocks nothing in the
-	libc-test corpus (test/LIBC-TEST-MAP.generated.md's header
-	lever table does not list it at all).  Cheap and base, not
-	urgent.
-
-	Observed today: fails to compile -- 'nl_types.h' not found.
-
-	The test below is shaped by two clauses that forbid the
-	obvious shortcuts.  It does not assert a value for NL_SETD:
-	"The value of NL_SETD is implementation-defined."  And it does
-	not call catgets() on a failed descriptor, however tempting
-	that is as a way to check the default-string contract without
-	a catalogue: "The results are undefined if catd is not a value
-	returned by catopen() for a message catalog still open in the
-	process." */
+   The assertions below are shaped by two clauses that forbid the
+   obvious shortcuts.  They do not assert a value for NL_SETD: "The
+   value of NL_SETD is implementation-defined."  And they do not call
+   catgets() on a failed descriptor, however tempting that is as a way
+   to check the default-string contract without a catalogue: "The
+   results are undefined if catd is not a value returned by catopen()
+   for a message catalog still open in the process." */
 static void test_nl_types_h_catalogue_access(void)
 {
-	/* would be: #include <nl_types.h> at the top of this file */
 	static const char deflt[] = "compiled-in default";
 	nl_catd cd;
 	int set_id = NL_SETD;
@@ -1130,7 +1111,146 @@ static void test_nl_types_h_catalogue_access(void)
 	if (cd != (nl_catd)-1)
 		CHECK(catclose(cd) == 0);
 }
-#endif
+
+/* -------------------------------------------------------------------
+ * catgets() against a catalogue that actually exists.
+ *
+ * The case above can only ever watch catopen() fail, because nothing
+ * installs a message catalogue on this platform and there is no gencat
+ * in this tree to build one.  A test that only watches a lookup fail
+ * cannot tell a working implementation from `return (nl_catd)-1;`, so
+ * this one builds a catalogue itself, in the byte format
+ * src/misc/catgets.c documents and reads, and then asks for messages
+ * out of it through the public interface.
+ *
+ * That format is not POSIX's: POSIX standardises gencat's *source*
+ * text and says nothing about the compiled bytes, so the layout is
+ * ntlibc's choice (it is musl's, so that catalogues are portable
+ * between the two).  This test therefore fixes an implementation
+ * detail on purpose, and is the one place in this file that does.  If
+ * the format is ever changed, this is what has to change with it --
+ * which is the point: the alternative is a reader nothing exercises.
+ *
+ * What is asserted here is entirely POSIX, though:
+ *   - "If the identified message is retrieved successfully, catgets()
+ *     shall return a pointer to an internal buffer area containing the
+ *     null-terminated message string."
+ *   - "If the call is unsuccessful for any reason, s shall be returned
+ *     and errno shall be set to indicate the error." -- s, the pointer
+ *     the caller passed, and "[ENOMSG] The message identified by
+ *     set_id and msg_id is not in the message catalog."
+ *   - "Upon successful completion, catclose() shall return 0".
+ *   - catopen.html: "If name contains a '/', then name specifies a
+ *     pathname for the message catalog." -- which is how this
+ *     catalogue is reached without touching NLSPATH.
+ * ------------------------------------------------------------------- */
+static void put32(unsigned char *p, unsigned long v)
+{
+	p[0] = (unsigned char)(v >> 24); p[1] = (unsigned char)(v >> 16);
+	p[2] = (unsigned char)(v >> 8);  p[3] = (unsigned char)v;
+}
+
+static void test_catgets_reads_a_catalogue(void)
+{
+	/* Two sets: set 1 with messages 1 and 5, set 3 with message 2.
+	 * Ids are deliberately non-contiguous and the sets are in
+	 * ascending order, which is what the reader's binary searches
+	 * require and what a generator has to produce. */
+	static const char *const strs[3] = { "first", "fifth", "second-set" };
+	unsigned char cat[256];
+	size_t hdr = 20, nsets = 2, nmsgs = 3;
+	size_t setoff = 0, msgoff = nsets * 12, stroff = msgoff + nmsgs * 12;
+	size_t pool = stroff, i, off, total;
+	unsigned char *m = cat;
+	const char deflt[] = "compiled-in default";
+	char path[] = "posix-msgcat-tmp.cat";
+	char rel[64];
+	nl_catd cd;
+	FILE *f;
+	char *got;
+
+	memset(cat, 0, sizeof cat);
+
+	/* set records: set_id, message count, first message index */
+	put32(m + hdr + setoff + 0, 1);  put32(m + hdr + setoff + 4, 2);
+	put32(m + hdr + setoff + 8, 0);
+	put32(m + hdr + setoff + 12, 3); put32(m + hdr + setoff + 16, 1);
+	put32(m + hdr + setoff + 20, 2);
+
+	/* message records: msg_id, length, offset into the string pool */
+	off = 0;
+	{
+		static const int ids[3] = { 1, 5, 2 };
+		for (i = 0; i < 3; i++) {
+			size_t l = strlen(strs[i]);
+			put32(m + hdr + msgoff + i * 12 + 0, (unsigned long)ids[i]);
+			put32(m + hdr + msgoff + i * 12 + 4, (unsigned long)l);
+			put32(m + hdr + msgoff + i * 12 + 8, (unsigned long)off);
+			memcpy(m + hdr + pool + off, strs[i], l + 1);
+			off += l + 1;
+		}
+	}
+	total = hdr + stroff + off;
+
+	put32(m + 0, 0xff88ff89UL);
+	put32(m + 4, (unsigned long)nsets);
+	put32(m + 8, (unsigned long)(total - hdr));
+	put32(m + 12, (unsigned long)msgoff);
+	put32(m + 16, (unsigned long)stroff);
+
+	f = fopen(path, "wb");
+	CHECK(f != NULL);
+	if (!f) return;
+	CHECK(fwrite(cat, 1, total, f) == total);
+	CHECK(fclose(f) == 0);
+
+	/* A name with a '/' is a pathname, so this reaches the file just
+	 * written without depending on NLSPATH or on the working
+	 * directory being on any search path. */
+	snprintf(rel, sizeof rel, "./%s", path);
+	cd = catopen(rel, NL_CAT_LOCALE);
+	CHECK(cd != (nl_catd)-1);
+	if (cd != (nl_catd)-1) {
+		got = catgets(cd, 1, 1, deflt);
+		CHECK(got != deflt);
+		CHECK(!strcmp(got, "first"));
+
+		got = catgets(cd, 1, 5, deflt);
+		CHECK(!strcmp(got, "fifth"));
+
+		got = catgets(cd, 3, 2, deflt);
+		CHECK(!strcmp(got, "second-set"));
+
+		/* Not in the catalogue: "s shall be returned" -- that
+		 * pointer, not a copy -- "and errno shall be set". */
+		errno = 0;
+		got = catgets(cd, 1, 2, deflt);
+		CHECK(got == deflt);
+		CHECK(errno == ENOMSG);
+
+		errno = 0;
+		got = catgets(cd, 2, 1, deflt);
+		CHECK(got == deflt);
+		CHECK(errno == ENOMSG);
+
+		CHECK(catclose(cd) == 0);
+	}
+
+	/* A file that is not a catalogue must not open as one. */
+	f = fopen(path, "wb");
+	CHECK(f != NULL);
+	if (f) {
+		CHECK(fwrite("not a catalogue at all", 1, 22, f) == 22);
+		CHECK(fclose(f) == 0);
+		errno = 0;
+		cd = catopen(rel, NL_CAT_LOCALE);
+		CHECK(cd == (nl_catd)-1);
+		CHECK(errno != 0);
+		if (cd != (nl_catd)-1) catclose(cd);
+	}
+
+	remove(path);
+}
 
 /* ===================================================================
  * <monetary.h> -- basedefs/monetary.h.html, functions/strfmon.html
@@ -1477,9 +1597,8 @@ int main(void)
 	test_langinfo_h_item_constants();
 	test_nl_langinfo_posix_locale_values();
 	test_nl_langinfo_l();
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_types_h_catalogue_access) /* UNIMPL: see the fence over test_nl_types_h_catalogue_access(). */
 	test_nl_types_h_catalogue_access();
-#endif
+	test_catgets_reads_a_catalogue();
 #if NTLIBC_TEST(UNIMPL, posix_msgcat_strfmon_posix_locale) /* UNIMPL: see the fence over test_strfmon_posix_locale(). */
 	test_strfmon_posix_locale();
 #endif
