@@ -45,22 +45,56 @@ extern "C" {
 #define SI_KERNEL 128
 
 /* si_code values for the hardware-fault signals (SIGILL/SIGFPE/SIGSEGV/
- * SIGBUS), populated by src/signal/signal.c's exception_handler() from
- * the NT EXCEPTION_RECORD -- see the derivation comments there for how
- * each is actually computed. Numeric values match musl/glibc's
+ * SIGBUS), the ones src/signal/signal.c's exception_handler() derives
+ * from the NT EXCEPTION_RECORD -- see the derivation comments there for
+ * how each is actually computed. Numeric values match musl/glibc's
  * bits/signal.h so a program that hardcodes these numbers instead of
  * the names still behaves the same as on Linux; POSIX itself only
  * requires the names, not particular values.
  *
- * Only macros this library can genuinely fill are declared here. The
- * ones glibc/musl also define that ntlibc leaves out -- ILL_ILLOPN,
- * ILL_ILLADR, ILL_ILLTRP, ILL_PRVREG, ILL_COPROC, ILL_BADSTK,
- * FPE_FLTSUB, SEGV_BNDERR, SEGV_PKUERR, SEGV_MTEAERR, SEGV_MTESERR,
- * BUS_ADRERR, BUS_OBJERR, BUS_MCEERR_AR, BUS_MCEERR_AO -- have no NT
- * exception that reliably maps onto them, so declaring them would
- * promise a fault subcode this library can never actually produce. */
+ * signal.h.html's si_code table is marked [CX], which is the standard's
+ * marker for an extension to ISO C that POSIX requires and not an
+ * option group, so every Code column entry is mandatory regardless of
+ * what this platform can raise. Each name below therefore says in its
+ * comment which NT exception status produces it, or that nothing does:
+ * defining a value promises only that it is a value si_code may hold,
+ * never that this system produces it -- the same reasoning the CLD_*
+ * block below spells out, and the same way defining EROFS promises no
+ * errno will ever be it. A handler that cannot name a code cannot have
+ * a default branch for it either, so a `switch (si_code)` covering all
+ * eight ILL_* is a hard build failure rather than a graceful fallback.
+ *
+ * The values are distinct within each signal's own group, which is the
+ * property that makes the table usable: si_code is compared for
+ * equality, so two reasons for the same signal sharing a value would
+ * leave a handler unable to tell them apart.
+ *
+ * SEGV_BNDERR, SEGV_PKUERR, SEGV_MTEAERR, SEGV_MTESERR, BUS_MCEERR_AR
+ * and BUS_MCEERR_AO stay out: those are Linux extensions, not POSIX
+ * table entries, and nothing on this platform reports them. */
 #define ILL_ILLOPC 1   /* EXCEPTION_ILLEGAL_INSTRUCTION */
+#define ILL_ILLOPN 2   /* not produced: EXCEPTION_ILLEGAL_INSTRUCTION is
+                        * NT's whole vocabulary for an undecodable
+                        * instruction -- the EXCEPTION_RECORD carries no
+                        * operand or addressing-mode detail to tell
+                        * ILL_ILLOPN and ILL_ILLADR from ILL_ILLOPC */
+#define ILL_ILLADR 3   /* not produced: as ILL_ILLOPN */
+#define ILL_ILLTRP 4   /* not produced: NT has no illegal-trap status;
+                        * an int n to an unset IDT gate surfaces as
+                        * EXCEPTION_ILLEGAL_INSTRUCTION or a debug
+                        * exception, never as a trap-number report */
 #define ILL_PRVOPC 5   /* EXCEPTION_PRIV_INSTRUCTION */
+#define ILL_PRVREG 6   /* not produced: EXCEPTION_PRIV_INSTRUCTION does
+                        * not say whether the privileged thing was the
+                        * opcode or a register, so a privileged access
+                        * is reported as the opcode case rather than
+                        * guessed between the two */
+#define ILL_COPROC 7   /* not produced: an x87/SSE coprocessor fault is
+                        * an EXCEPTION_FLT_* status on NT, so it arrives
+                        * as SIGFPE with an FPE_* code, never as SIGILL */
+#define ILL_BADSTK 8   /* not produced: a stack-segment fault is reported
+                        * by NT as EXCEPTION_ACCESS_VIOLATION or
+                        * EXCEPTION_STACK_OVERFLOW, both SIGSEGV here */
 
 #define FPE_INTDIV 1   /* EXCEPTION_INT_DIVIDE_BY_ZERO */
 #define FPE_INTOVF 2   /* EXCEPTION_INT_OVERFLOW */
@@ -69,6 +103,7 @@ extern "C" {
 #define FPE_FLTUND 5   /* EXCEPTION_FLT_UNDERFLOW */
 #define FPE_FLTRES 6   /* EXCEPTION_FLT_INEXACT_RESULT */
 #define FPE_FLTINV 7   /* EXCEPTION_FLT_INVALID_OPERATION */
+#define FPE_FLTSUB 8   /* EXCEPTION_ARRAY_BOUNDS_EXCEEDED */
 
 #define SEGV_MAPERR 1  /* EXCEPTION_ACCESS_VIOLATION/EXCEPTION_IN_PAGE_ERROR
                          * on unmapped/reserved-but-uncommitted memory */
@@ -76,14 +111,24 @@ extern "C" {
                          * denied the access */
 
 #define BUS_ADRALN 1   /* EXCEPTION_DATATYPE_MISALIGNMENT */
+#define BUS_ADRERR 2   /* not produced: "nonexistent physical address" is
+                        * a bus-level report NT does not make -- the
+                        * memory manager turns a mapping it cannot
+                        * satisfy into EXCEPTION_ACCESS_VIOLATION, which
+                        * is SIGSEGV/SEGV_MAPERR here */
+#define BUS_OBJERR 3   /* not produced: the nearest NT status is
+                        * EXCEPTION_IN_PAGE_ERROR (the filesystem failed
+                        * an I/O to fault a mapped page in), which
+                        * exception_handler() already reports as SIGSEGV
+                        * alongside EXCEPTION_ACCESS_VIOLATION; moving it
+                        * to SIGBUS is a change to a delivered signal,
+                        * not a header question, so it is not made here */
 
 /* si_code values for SIGCHLD (waitid.html, basedefs/signal.h.html).
- * Unlike the fault subcodes above, all six are defined even though
- * ntlibc produces only three of them, and the distinction is not
- * arbitrary: a fault subcode is asked for by a handler already doing
- * platform-specific fault analysis, whereas CLD_* is the ordinary
- * vocabulary of wait-family status reporting, which any portable
- * SIGCHLD handler may switch over without doing anything
+ * All six are defined even though ntlibc produces only three of them,
+ * on the same footing as the fault subcodes above: CLD_* is the
+ * ordinary vocabulary of wait-family status reporting, which any
+ * portable SIGCHLD handler may switch over without doing anything
  * platform-specific.  A `switch (si_code)` covering all six is
  * guaranteed to compile by POSIX, and breaking that is a hard build
  * failure, not a graceful fallback.  Defining a value promises only

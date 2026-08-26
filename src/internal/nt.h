@@ -1207,6 +1207,15 @@ typedef LONG (NTAPI *PVECTORED_EXCEPTION_HANDLER)(EXCEPTION_POINTERS *);
 #define EXCEPTION_FLT_DENORMAL_OPERAND      0xC000008D
 #define EXCEPTION_FLT_INEXACT_RESULT        0xC000008F
 #define EXCEPTION_FLT_UNDERFLOW             0xC0000093
+
+/* The #BR fault: a BOUND instruction whose index was outside the bounds
+ * pair it was checked against (winnt.h's STATUS_ARRAY_BOUNDS_EXCEEDED,
+ * numerically just below the float family above). Reachable only on
+ * i386 -- BOUND is not an instruction in long mode -- but the status is
+ * defined for both, since exception_handler() dispatches on the code
+ * rather than on the architecture. */
+#define EXCEPTION_ARRAY_BOUNDS_EXCEEDED     0xC000008C
+
 /* Not an access violation (0xC0000005): raised on touching a page an
  * explicit PAGE_GUARD protection was set on (winnt.h's
  * STATUS_GUARD_PAGE_VIOLATION), most commonly by something outside

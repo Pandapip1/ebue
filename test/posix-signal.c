@@ -1520,51 +1520,23 @@ static void test_siginterrupt(void)
 }
 
 /* ==================================================================
- * <signal.h> header content -- the si_code constants ntlibc does not
- * define.  Audit group U (XBD header contents); see
+ * <signal.h> header content -- the si_code constant table.  Audit
+ * group U (XBD header contents); see
  * test/POSIX-COVERAGE.md "XBD header contents (group U)".
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_signal_signal_si_code_constants) /* UNIMPL: signal.h.html DESCRIPTION, immediately after the
-	siginfo_t member list: "[CX] The <signal.h> header shall define the
-	symbolic constants in the Code column of the following table for
-	use as values of si_code that are signal-specific or
-	non-signal-specific reasons why the signal was generated."  The
-	table's CX rows are SIGILL (ILL_ILLOPC, ILL_ILLOPN, ILL_ILLADR,
-	ILL_ILLTRP, ILL_PRVOPC, ILL_PRVREG, ILL_COPROC, ILL_BADSTK),
-	SIGFPE (the seven FPE_*), SIGSEGV (SEGV_MAPERR, SEGV_ACCERR),
-	SIGBUS (BUS_ADRALN, BUS_ADRERR, BUS_OBJERR) and SIGCHLD (the five
-	CLD_*), with SIGTRAP's two TRAP_* marked [XSI].  CX is the
-	standard's marker for an extension to ISO C that POSIX requires,
-	not an option group, so the whole table is mandatory.
-
-	ntlibc defines 31 of the 40 and is missing NINE: ILL_ILLOPN,
-	ILL_ILLADR, ILL_ILLTRP, ILL_PRVREG, ILL_COPROC, ILL_BADSTK,
-	FPE_FLTSUB, BUS_ADRERR and BUS_OBJERR.  Triage: ABSENT.  This is a
-	ragged edge rather than a missing family -- ILL_ILLOPC and
-	ILL_PRVOPC are present while their six siblings are not, and
-	BUS_ADRALN is present while the other two BUS_* are not -- which
-	is exactly the shape only a spec-inward sweep finds: nothing about
-	the header looks incomplete from inside the tree, and the tests
-	that use si_code (test_sigsegv_code and friends below) happen to
-	provoke only codes that exist.
-
-	ACCEPTANCE CRITERION: the nine definitions, distinct within their
-	own signal's group -- si_code is compared for equality against
-	these, so two codes for the same signal sharing a value would make
-	a handler unable to tell the reasons apart.  This fence claims
-	NOTHING about ntlibc ever *delivering* the nine: whether NT raises
-	a coprocessor error or a nonexistent-physical-address bus fault at
-	all is a separate question, the codes are what a portable handler
-	switches on regardless, and a handler that cannot name a code
-	cannot have a default branch for it either.  Do not read an
-	un-fencing of this test as acceptance that any of the nine is ever
-	reported.
-
-	Observed today: fails to COMPILE, "'ILL_ILLOPN' undeclared"
-	(verified by un-fencing this test alone and building with
-	x86_64-win32-tcc; compile-time, so no Wine-vs-real-NT
-	uncertainty). */
+/* signal.h.html DESCRIPTION, immediately after the siginfo_t member
+ * list: "[CX] The <signal.h> header shall define the symbolic constants
+ * in the Code column of the following table for use as values of
+ * si_code".  CX marks an extension to ISO C that POSIX requires, not an
+ * option group, so all 40 Code entries are mandatory.  What is asserted
+ * is the property a handler depends on -- the codes for one signal are
+ * distinct from each other, since si_code is compared for equality --
+ * and NOT that ntlibc ever delivers any particular one: <signal.h>
+ * records per code which NT exception status produces it and which
+ * nothing does -- six of the eight ILL_* and two of the three BUS_* name
+ * conditions NT never reports, and exist so a portable handler can name
+ * them, a default branch included. */
 static void test_signal_si_code_constants(void)
 {
 	static const int ill[] = {
@@ -1601,7 +1573,6 @@ static void test_signal_si_code_constants(void)
 		CHECK(si.si_code == BUS_OBJERR);
 	}
 }
-#endif
 
 int main(int argc, char **argv)
 {
@@ -1784,6 +1755,7 @@ int main(int argc, char **argv)
 	test_sigset();
 	test_sigpause();
 	test_siginterrupt();
+	test_signal_si_code_constants();
 
 	if (!fails) printf("posix-signal: all tests passed\n");
 	return fails != 0;

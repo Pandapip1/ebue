@@ -712,6 +712,19 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	case EXCEPTION_FLT_OVERFLOW: sig = SIGFPE; code = FPE_FLTOVF; break;
 	case EXCEPTION_FLT_UNDERFLOW: sig = SIGFPE; code = FPE_FLTUND; break;
 	case EXCEPTION_FLT_INEXACT_RESULT: sig = SIGFPE; code = FPE_FLTRES; break;
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+		/* FPE_FLTSUB is signal.h.html's "subscript out of range", which
+		 * is what #BR reports, so this is a name-for-name match rather
+		 * than the closest-sounding pick the denormal case below
+		 * refuses to make. SIGFPE and not SIGILL: the instruction was
+		 * legal and executed, it was the operand that was out of range.
+		 * Only i386 can reach it (long mode has no BOUND), but the case
+		 * is unconditional -- dispatch here is on the exception code,
+		 * and an #ifdef would only make the two arches disagree about a
+		 * status neither can see the other raise. */
+		sig = SIGFPE;
+		code = FPE_FLTSUB;
+		break;
 	case EXCEPTION_FLT_DENORMAL_OPERAND:
 		/* A real FP condition (an operand was a denormal), but POSIX's
 		 * FPE_* list (signal.h.html) has no member for it -- INTDIV/
