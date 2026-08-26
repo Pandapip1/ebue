@@ -2495,9 +2495,51 @@ static void vfs_init(void)
 
 /* ---------------------------------------------------------------- clocks */
 
+/* A FIXED SYSTEM CLOCK, FOR HARNESSES WHOSE TARGET READS "NOW".
+ *
+ * Off unless a harness asks for it, and a harness asks for it in its own
+ * LLVMFuzzerInitialize, which libFuzzer runs before any input.
+ *
+ * WHY IT EXISTS.  A fuzz target that consults the wall clock is not
+ * reproducible: src/time/getdate.c seeds its working struct tm from
+ * time(0) so that fields a template does not mention default to today
+ * (getdate.html: "elements ... not specified by the [matched] template
+ * shall be set the same as their equivalents in the current time and
+ * date"), which means the same input takes different branches on
+ * different days, and a crash artefact may not reproduce from the input
+ * that produced it.  A fuzzer whose findings do not reproduce is worth
+ * very little.
+ *
+ * WHY FREEZING IS A FAITHFUL MODEL AND NOT A CONVENIENT FICTION -- which
+ * matters, because a stub that encodes a belief rather than a platform
+ * behaviour cannot be evidence about the code it serves.  NT's system
+ * time is not a high-resolution counter: it advances at the timer tick,
+ * about 15.6 ms by default, and NtQuerySystemTime returns the same value
+ * for every call in between.  A program that queries it several times
+ * inside one tick observes exactly what this produces -- an unchanging
+ * clock.  Freezing is therefore a state the real platform genuinely
+ * presents, at a duration this build stretches, not one it never does.
+ * What it is NOT is a model of a clock that never advances at all, and
+ * anything testing elapsed time must not use it; that is why it is
+ * opt-in and why NtQueryPerformanceCounter below is deliberately left
+ * alone -- a target measuring an interval should still see one.
+ *
+ * The instant is supplied by the caller and is arbitrary: no value here
+ * is derived from anything under test.
+ */
+static long long fixed_time_ns100 = -1;
+
+void __ntfuzz_freeze_clock(long long unix_seconds)
+{
+	/* 100ns ticks since 1601-01-01; 11644473600s from then to the
+	 * Unix epoch, the same conversion the live path below uses. */
+	fixed_time_ns100 = (unix_seconds + 11644473600LL) * 10000000LL;
+}
+
 NTSTATUS NTAPI NtQuerySystemTime(LARGE_INTEGER *t)
 {
 	struct { long sec, nsec; } ts = { 0, 0 };
+	if (fixed_time_ns100 >= 0) { *t = fixed_time_ns100; return STATUS_SUCCESS; }
 	syscall(SYS_clock_gettime, 0 /*CLOCK_REALTIME*/, &ts);
 	/* 100ns ticks since 1601-01-01; 11644473600s from then to the epoch. */
 	*t = (long long)(ts.sec + 11644473600LL) * 10000000LL + ts.nsec / 100;
