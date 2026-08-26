@@ -16,8 +16,8 @@
  */
 #include "test-policy.h"
 #include <stdio.h>
-#include <stddef.h>	/* size_t, for the group U fence below */
-#include <string.h>	/* strerror(), for the group U fence below */
+#include <stddef.h>	/* size_t, for the group U test below */
+#include <string.h>	/* strerror(), for the group U test below */
 #include <errno.h>
 
 static int fails;
@@ -206,33 +206,24 @@ static const struct dc doserror_table[] = {
 };
 
 /* ==================================================================
- * <errno.h> header content -- the five mandatory error macros ntlibc
- * does not define.  Audit group U (XBD header contents); see
- * test/POSIX-COVERAGE.md "XBD header contents (group U)".
+ * <errno.h> header content -- the 81 mandatory error macros.  Audit
+ * group U (XBD header contents); see test/POSIX-COVERAGE.md "XBD
+ * header contents (group U)".
+ *
+ * errno.h.html DESCRIPTION: "The <errno.h> header shall define the
+ * following macros which shall expand to integer constant expressions
+ * with type int, distinct positive values (except as noted below), and
+ * which shall be suitable for use in #if preprocessing directives",
+ * followed by a list of 81 names.  The list is unconditional -- no
+ * option-group margin marker guards any of them -- so all 81 are
+ * mandatory for a conforming <errno.h>.  EBADMSG, EMULTIHOP, ENETRESET,
+ * ENOLINK and EPROTO were the five ntlibc did not define, and a
+ * consumer met that as a compile error rather than a wrong answer:
+ * gnulib's errno/strerror-override modules name four of the five
+ * directly, but only after its configure probe has already decided
+ * what the platform is.
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_errno_errno_mandatory_macros) /* UNIMPL: errno.h.html DESCRIPTION: "The <errno.h> header shall
-	define the following macros which shall expand to integer constant
-	expressions with type int, distinct positive values (except as
-	noted below), and which shall be suitable for use in #if
-	preprocessing directives", followed by a list of 81 names.  The
-	list is unconditional -- no option-group margin marker guards any
-	of these five -- so all 81 are mandatory for a conforming
-	<errno.h>.  ntlibc defines 76 of them; EBADMSG, EMULTIHOP,
-	ENETRESET, ENOLINK and EPROTO are absent from include/errno.h
-	altogether (triage: ABSENT, not "declared but unimplemented" --
-	there is no declaration to find).  Nothing in include/, test/ or
-	the two ledgers records the omission: POSIX-GAP-ACCOUNTING.md
-	enumerates function interfaces, and an errno macro is not one.
-	Consumer impact: gnulib's errno/strerror-override modules name
-	EPROTO, EBADMSG, ENOLINK and EMULTIHOP directly and substitute
-	their own values when the platform lacks them -- but only after
-	its configure probe has already decided what the platform is, so
-	the failure here is the plain compile error below, not a silent
-	wrong answer.  Observed today: fails to COMPILE, "'EBADMSG'
-	undeclared" (verified with the target preprocessor,
-	x86_64-win32-tcc -E over include/; a compile-time failure, so no
-	Wine-vs-real-NT uncertainty arises). */
 static void test_errno_mandatory_macros(void)
 {
 	/* "distinct positive values" -- and distinct from every other
@@ -287,11 +278,12 @@ static void test_errno_mandatory_macros(void)
 		}
 	}
 }
-#endif
 
 int main(void)
 {
 	size_t i;
+
+	test_errno_mandatory_macros();
 
 	for (i = 0; i < sizeof status_table / sizeof status_table[0]; i++) {
 		int got = __errno_from_status(status_table[i].st);

@@ -77,8 +77,7 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 	 * loops already handle by going round again rather than giving up.
 	 * EPROTO, the other candidate in that list, is glossed as the
 	 * protocol stack not being initialised: it would claim every later
-	 * accept() is doomed too, which this does not establish (and it is
-	 * not among the errno values <errno.h> defines here). */
+	 * accept() is doomed too, which this does not establish. */
 	if (__afd_accept_reply_addr(&recvd, 0, 0) < 0) {
 		errno = ECONNABORTED;
 		return -1;

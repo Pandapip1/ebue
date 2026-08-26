@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* Values are Linux/glibc's asm-generic numbering, which is what the rest
+ * of this file has always used; a value is picked from that table rather
+ * than invented so a translation unit that meets ntlibc's errno numbers
+ * and a host's in the same build (a cross-compiled configure cache, a
+ * captured errno replayed on the other side) reads them the same way. */
 #define EPERM            1
 #define ENOENT           2
 #define ESRCH            3
@@ -48,6 +53,10 @@
 #define ENODATA         61
 #define ETIME           62
 #define ENOSR           63
+#define ENOLINK         67
+#define EPROTO          71
+#define EMULTIHOP       72
+#define EBADMSG         74
 #define EOVERFLOW       75
 #define EILSEQ          84
 #define ENOTSOCK        88
@@ -63,6 +72,7 @@
 #define EADDRNOTAVAIL   99
 #define ENETDOWN        100
 #define ENETUNREACH     101
+#define ENETRESET       102
 #define ECONNABORTED    103
 #define ECONNRESET      104
 #define ENOBUFS         105
