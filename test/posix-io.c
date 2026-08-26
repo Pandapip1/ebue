@@ -262,6 +262,59 @@ static void test_lseek(void)
 	unlink("t-ls.txt");
 }
 
+#if NTLIBC_TEST(BUG, posix_io_lseek_eoverflow) /* BUG: lseek() has no [EOVERFLOW] arm, and reaches [EINVAL]
+	 * through signed overflow instead.  lseek.html ERRORS, shall fail:
+	 * "[EOVERFLOW] The resulting file offset would be a value which
+	 * cannot be represented correctly in an object of type off_t."
+	 * That is a separate clause from the [EINVAL] one, which covers
+	 * only "whence is not a proper value, or the resulting file offset
+	 * would be negative for a regular file, block special file, or
+	 * directory".  A caller cannot distinguish "you asked for a
+	 * negative position" from "the arithmetic did not fit" if both
+	 * arrive as EINVAL.
+	 *
+	 * Mechanism: src/unistd/lseek.c ends with
+	 *
+	 *     if (base + off < 0) { errno = EINVAL; return -1; }
+	 *     pi.CurrentByteOffset = base + off;
+	 *
+	 * base and off are both signed 64-bit.  There is no EOVERFLOW arm
+	 * anywhere in the function.  For a positive base and an off near
+	 * OFF_MAX the sum overflows -- undefined behaviour in its own
+	 * right -- and on the two's-complement wrap it lands negative, so
+	 * the negative-offset test fires and reports EINVAL.  The overflow
+	 * case is not merely unreported; it is actively disguised as the
+	 * other one.
+	 *
+	 * The check has to be done before the addition, on the operands.
+	 *
+	 * The fixture must be non-empty: with base == 0 the sum is exactly
+	 * OFF_MAX, nothing overflows, and the seek legitimately succeeds.
+	 *
+	 * Re-enable when lseek() detects the overflow before performing
+	 * it. */
+static void test_lseek_eoverflow(void)
+{
+	int fd;
+
+	CHECK((fd = open("t-ovf.txt", O_CREAT | O_RDWR | O_TRUNC, 0644)) >= 0);
+	if (fd < 0) return;
+	CHECK(write(fd, "abc", 3) == 3);
+	CHECK(lseek(fd, 0, SEEK_END) == 3);
+
+	errno = 0;
+	CHECK(lseek(fd, (off_t)0x7fffffffffffffffLL, SEEK_END) == -1);
+	CHECK(errno == EOVERFLOW);
+
+	/* and the [EINVAL] clause must stay distinct from it */
+	errno = 0;
+	CHECK(lseek(fd, -100, SEEK_SET) == -1 && errno == EINVAL);
+
+	CHECK(close(fd) == 0);
+	unlink("t-ovf.txt");
+}
+#endif
+
 /* ---- stat/mkdir/rmdir/unlink/rename ---- */
 static void test_fs(void)
 {
