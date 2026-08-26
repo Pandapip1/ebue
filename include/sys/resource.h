@@ -104,7 +104,16 @@ int getrusage (int, struct rusage *);
  * the sole member of its own group and the sole process running as this
  * uid" and behave exactly like PRIO_PROCESS on self. Any other who value
  * cannot name a group or user this library tracks, so it is ESRCH -- no
- * group/user directory exists to search. */
+ * group/user directory exists to search.
+ *
+ * nice() (declared by <unistd.h>) moves the same value and is implemented
+ * in src/misc/resource.c in terms of these two, so a caller cannot get a
+ * different answer depending on which page it asks through. It counts
+ * from the other origin -- nice()'s scale is [0, 2*NZERO-1] with the
+ * default at NZERO, this one's is that less NZERO -- and its [EPERM] is
+ * stated on the sign of incr where setpriority()'s [EACCES] is stated on
+ * the resulting value; src/misc/resource.c has both differences in
+ * full. */
 #define NZERO 20
 #define PRIO_PROCESS 0
 #define PRIO_PGRP 1

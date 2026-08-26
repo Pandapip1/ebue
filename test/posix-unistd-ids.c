@@ -10,9 +10,13 @@
  *   src/unistd/ids.c    getuid geteuid getgid getegid getgroups
  *                       setuid seteuid setgid setegid setreuid setregid
  *                       getpgrp getpgid setpgid setpgrp setsid getsid
- *                       chown fchown lchown fchownat nice
+ *                       chown fchown lchown fchownat
  *   src/unistd/sleep.c  alarm pause
  *   src/unistd/gethostname.c  gethostname
+ *   src/misc/resource.c nice  (audited here, with the rest of
+ *                       <unistd.h>, but implemented beside
+ *                       getpriority()/setpriority() so that the one
+ *                       nice value has one owner)
  *
  * The distinction this file exists to draw, and the reason the earlier
  * sweep's "N/A -- one user, one session" is *not* repeated wholesale:
@@ -44,6 +48,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <limits.h>
+#include <sys/resource.h>	/* getpriority(), for the nice() cross-check */
 #include <sys/stat.h>
 #include <sys/wait.h>
 
@@ -735,48 +740,59 @@ static void test_nice(void)
 	 * value being set to the corresponding limit."  So a successful
 	 * return is always in [-{NZERO}, {NZERO}-1], for any incr. */
 	errno = 0;
-	CHECK(nice(0) >= -20 && nice(0) <= 19);		/* {NZERO} >= 20 */
+	CHECK(nice(0) >= -NZERO && nice(0) <= NZERO - 1);
 
-#if NTLIBC_TEST(BUG, posix_ids_nice_changes_priority_and_defines_nzero) /* BUG (compiles and links; formerly UNIMPL):: nice() ignores incr entirely, and <limits.h> does not
-	 * define {NZERO}, so its return value has no defined meaning.
+	/* DESCRIPTION: "The nice() function shall add the value of incr to
+	 * the nice value of the calling process."  RETURN VALUE: "shall
+	 * return the new nice value -{NZERO}."
 	 *
-	 * nice.html DESCRIPTION: "The nice() function shall add the value
-	 * of incr to the nice value of the calling process."  RETURN
-	 * VALUE: "shall return the new nice value -{NZERO}."
-	 *
-	 * Two separate gaps, one fence because neither is testable without
-	 * the other:
-	 *
-	 * 1. src/unistd/ids.c:30 is `int nice(int n) { (void)n; return 0; }`.
-	 *    incr is discarded, so the nice value never changes and two
-	 *    calls that asked for different priorities report the same
-	 *    answer.  Probed: nice(0), nice(5) and nice(-5) all return 0.
-	 *
-	 * 2. include/limits.h defines no NZERO.  XBD <limits.h> lists it
-	 *    ("{NZERO} Default process priority.  Minimum Acceptable
-	 *    Value: 20") and nice()'s return value is specified purely in
-	 *    terms of it, so a caller has nothing to interpret the return
-	 *    against.  That is why the unfenced range check above has to
-	 *    hardcode the minimum acceptable value instead of using the
-	 *    macro.
-	 *
-	 * UNIMPL, not N/A: NT does have process priority --
-	 * NtSetInformationProcess(ProcessBasePriority) and the
-	 * PROCESS_PRIORITY_CLASS values -- and src/misc/resource.c already
-	 * wraps the query side for getpriority(), so a real mapping is
-	 * available and was simply not written.  "I chose not to" is
-	 * UNIMPL by this project's rule.  Re-enable when nice() applies
-	 * incr and <limits.h> defines NZERO. */
-	CHECK(nice(5) == 5 - NZERO);
-	CHECK(nice(0) == 5 - NZERO);	/* the previous call stuck */
-	CHECK(nice(-5) == -1 && errno == EPERM);	/* unprivileged lowering */
-#endif
+	 * WATCH THE ORIGIN, because the text this fence used to carry got
+	 * it wrong and asserted `nice(5) == 5 - NZERO`: a process starts at
+	 * nice value {NZERO} (XBD <limits.h>: "{NZERO} Default process
+	 * priority"), so "the new nice value -{NZERO}" after nice(5) is
+	 * 5, and subtracting {NZERO} a second time would report a process
+	 * pinned at the most favourable priority it can have.  Measured on
+	 * glibc/Linux, unprivileged: nice(0)=0, nice(5)=5, a following
+	 * nice(0)=5, nice(-5)=-1/EPERM, nice(1000)=19. */
+	errno = 0;
+	CHECK(nice(5) == 5);
+	CHECK(errno == 0);		/* success must not disturb errno */
+	CHECK(nice(0) == 5);		/* the previous call stuck */
 
-	/* [EPERM] ("The incr argument is negative and the calling process
-	 * does not have appropriate privileges") is the page's only error,
-	 * and it is covered by the fence above rather than separately:
-	 * with incr ignored there is no negative-incr path to reject, so
-	 * the clause and the DESCRIPTION gap are the same defect. */
+	/* The value nice() reports is the value getpriority() reports:
+	 * src/misc/resource.c keeps one copy of it and nice() is written in
+	 * terms of getpriority()/setpriority(), so the two pages cannot
+	 * describe this process's priority differently.  <sys/resource.h>
+	 * is included for this one assertion; the getpriority()/
+	 * setpriority() clauses themselves are audited in
+	 * test/posix-sysmisc.c. */
+	errno = 0;
+	CHECK(getpriority(PRIO_PROCESS, 0) == 5);
+	CHECK(errno == 0);
+
+	/* "A maximum nice value of 2*{NZERO}-1 ... shall be imposed by the
+	 * system.  Requests for values above ... these limits shall result
+	 * in the nice value being set to the corresponding limit" -- so an
+	 * absurd incr clamps and succeeds rather than failing or wrapping. */
+	errno = 0;
+	CHECK(nice(1000) == NZERO - 1);
+	CHECK(errno == 0);
+
+	/* ERRORS: "[EPERM] The incr argument is negative and the calling
+	 * process does not have appropriate privileges", the page's only
+	 * error.  ntlibc has exactly one user and it is never privileged
+	 * (src/unistd/ids.c), so this is decided here rather than asked of
+	 * NT -- which, probed, accepts every priority raise including
+	 * REALTIME and would leave the clause unreachable.  The test is
+	 * therefore live on any host, root or not. */
+	errno = 0;
+	CHECK(nice(-5) == -1 && errno == EPERM);
+
+	/* RETURN VALUE, failure half: "the nice value of the process shall
+	 * not be changed". */
+	errno = 0;
+	CHECK(nice(0) == NZERO - 1);
+	CHECK(errno == 0);
 }
 
 /* ============================================================

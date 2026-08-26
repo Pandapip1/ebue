@@ -72,6 +72,9 @@
  *
  * getpriority()/setpriority(): see include/sys/resource.h for the full
  * nice<->NT-base-priority mapping this uses and why it round-trips.
+ * nice() (<unistd.h>) is here too, and is written in terms of those two
+ * rather than beside them: one copy of the state, no way for the two
+ * pages' arithmetic to disagree about this process's priority.
  */
 #include <sys/resource.h>
 #include <unistd.h>
@@ -579,4 +582,83 @@ int setpriority(int which, id_t who, int value)
 	NtClose(h);
 	errno = EPERM;
 	return -1;
+}
+
+/* ---- nice() -------------------------------------------------------------
+ *
+ * nice.html DESCRIPTION: "The nice() function shall add the value of incr
+ * to the nice value of the calling process.  A maximum nice value of
+ * 2*{NZERO}-1 and a minimum nice value of 0 shall be imposed by the
+ * system.  Requests for values above or below these limits shall result in
+ * the nice value being set to the corresponding limit."  RETURN VALUE:
+ * "Upon successful completion, nice() shall return the new nice value
+ * -{NZERO}."
+ *
+ * It is getpriority() plus setpriority() and deliberately nothing else --
+ * the same self_nice above, the same NtSetInformationProcess mirroring,
+ * the same clamp -- so the two interfaces cannot end up disagreeing about
+ * what this process's nice value is.  It was previously a `(void)incr;
+ * return 0;` stub in src/unistd/ids.c, which could not have agreed with
+ * anything.
+ *
+ * THE TWO PAGES COUNT FROM DIFFERENT ORIGINS, and mixing them up costs
+ * exactly one {NZERO}.  nice()'s scale is [0, 2*{NZERO}-1] with the
+ * default at {NZERO} (XBD <limits.h>: "{NZERO} Default process
+ * priority"); getpriority()'s is that value less {NZERO}, so its default
+ * is 0 -- which is the scale self_nice is already in.  The new value less
+ * {NZERO} is therefore self_nice + incr, NOT self_nice + incr - {NZERO}.
+ * Measured on glibc/Linux rather than reasoned about: from a default
+ * process, nice(0)=0, nice(5)=5, a following nice(0)=5, nice(1000)=19,
+ * and getpriority(PRIO_PROCESS, 0) agrees with each.
+ *
+ * [EPERM] "The incr argument is negative and the calling process does not
+ * have appropriate privileges."  The privilege decision is THIS LIBRARY'S
+ * and not NT's, which is a choice, not an oversight: NT does not refuse a
+ * raise.  Probed under the Wine this project's suite runs on,
+ * NtSetInformationProcess(NtCurrentProcess(), ProcessPriorityClass)
+ * returned STATUS_SUCCESS for every class including HIGH and REALTIME,
+ * and real NT gates only REALTIME (SeIncreaseBasePriorityPrivilege) --
+ * so deriving the answer from what NT says would make [EPERM] unreachable
+ * and let any process make itself more favourable than everything around
+ * it.  ntlibc models one always-unprivileged user (src/unistd/ids.c),
+ * the same premise setrlimit() refuses a hard-limit raise on, so a
+ * negative incr is always refused here.  (The other route, the
+ * finer-grained ProcessBasePriority class, is STATUS_NOT_IMPLEMENTED on
+ * that Wine -- re-confirmed by the same probe -- which is why
+ * setpriority() above uses ProcessPriorityClass and why this borrows it
+ * rather than writing a second mapping.)
+ *
+ * That is stricter than setpriority() above, which refuses only a request
+ * for a value below the POSIX default rather than any lowering, and the
+ * difference belongs to the two pages rather than to this file:
+ * nice.html's [EPERM] is stated on the SIGN OF incr, unconditionally,
+ * while setpriority.html's [EACCES] is stated on the resulting value.
+ * Linux refuses both (measured, unprivileged: setpriority(PRIO_PROCESS,
+ * 0, 0) from nice value 5 is [EACCES] there); this library's
+ * setpriority() deliberately permits a return to a value the process held
+ * a moment ago, and that older choice is left where it was made.  The
+ * state is one variable either way, so the two calls can differ about
+ * what they will *do* and never about what the nice value *is*.
+ *
+ * APPLICATION USAGE: "As -1 is a permissible return value in a successful
+ * situation, an application wishing to check for error situations should
+ * set errno to 0, then call nice()".  So no successful path here may
+ * touch errno -- neither getpriority() nor setpriority() sets it except
+ * when failing, and nothing below adds to that. */
+int nice(int incr)
+{
+	long long v;
+
+	if (incr < 0) { errno = EPERM; return -1; }
+
+	/* long long because `long` is 32 bits on both targets: incr near
+	 * INT_MAX is a request "above the limit", which the DESCRIPTION
+	 * says to clamp, not licence to overflow on the way there. */
+	v = (long long)self_nice + incr;
+	if (v > NZERO - 1) v = NZERO - 1;
+
+	/* Below-the-limit needs no clamp: self_nice can never be negative
+	 * (setpriority() refuses that) and incr is non-negative here. */
+	if (setpriority(PRIO_PROCESS, 0, (int)v) != 0) return -1;
+	return getpriority(PRIO_PROCESS, 0);
 }
