@@ -901,6 +901,58 @@ static void test_bessel(void)
  * congruent to the true quotient mod 2^n, n>=3, sign of x/y;
  * *quo unspecified when y==0. Neither declared by
  * include/math.h. */
+#if NTLIBC_TEST(BUG, posix_math_remainder_large_quotient) /* BUG: remainder()/remquo() break down once |x/y| is large, and
+	 * return -Inf once x/y overflows.  remainder.html RETURN VALUE:
+	 * "Upon successful completion, these functions shall return the
+	 * floating-point remainder r = x - ny when y is non-zero.  The
+	 * value n is the integral value nearest the exact value x/y.  When
+	 * |n - x/y| = 1/2, the value n is chosen to be even."  "nearest the
+	 * exact value x/y" is what makes |r| <= |y|/2 hold for every finite
+	 * x and non-zero finite y -- that bound is the whole content of the
+	 * function.  remquo.html adds that *quo must be "congruent modulo
+	 * 2**n to the magnitude of the integral quotient of x/y".
+	 *
+	 * Mechanism: src/math/remainder.c computes
+	 *
+	 *     n = __x87_rndint(x / y, -1);
+	 *     r = x - n * y;
+	 *
+	 * x / y is an ordinary rounded division in the result type, so n is
+	 * the integer nearest the *rounded* quotient, not the exact one.
+	 * Every bit x/y lost is a whole multiple of y missing from r, and
+	 * the |r| <= |y|/2 bound goes with it.  When x/y overflows the type
+	 * outright, n is +Inf, n * y is +Inf, and r is x - Inf = -Inf --
+	 * for a pair of perfectly finite arguments.  *quo then takes
+	 * __x87_fmod(Inf, 8.0L), which is NaN, and casts it to int, which
+	 * is undefined behaviour.
+	 *
+	 * The primitive to use is already in this tree: src/math/x87.h's
+	 * FPREM loop is exact, and x87's FPREM1 is its IEEE-remainder
+	 * sibling -- computing the reduction directly instead of routing it
+	 * through a rounded quotient.
+	 *
+	 * The existing test_remainder_remquo_variants() only ever uses
+	 * quotients of two or three, which is why none of this shows.
+	 *
+	 * Re-enable when the reduction stops going through x / y. */
+static void test_remainder_large_quotient(void)
+{
+	int q;
+
+	/* DBL_MAX is an exact multiple of 0.5, so the remainder is zero --
+	 * and must certainly be finite. */
+	CHECK(remainder(1.7976931348623157e308, 0.5) == 0.0);
+
+	/* the defining bound, for a quotient too large to survive rounding */
+	CHECK(fabs(remainder(12345678901234567.0, 3.0)) <= 1.5);
+	CHECK(fabs(remainder(1.0, 1e-300)) <= 0.5e-300);
+
+	/* remquo() must not hand back an infinity, nor an int cast from NaN */
+	q = 12345;
+	CHECK(isfinite(remquo(1.7976931348623157e308, 0.5, &q)));
+}
+#endif
+
 static void test_remainder_remquo(void)
 {
 	int quo;
