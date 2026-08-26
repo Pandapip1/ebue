@@ -1620,44 +1620,37 @@ static void test_linkat(void)
  * this header to define.  Audit group U (XBD header contents); see
  * test/POSIX-COVERAGE.md "XBD header contents (group U)".
  *
- * These five fences are the largest single gap group U found, and the
+ * These five clauses were the largest single gap group U found, and the
  * one that bears most directly on what this libc exists for: autoconf
  * and gnulib probe _PC_NAME_MAX, _SC_SYMLOOP_MAX, _SC_IOV_MAX and
  * _SC_GETPW_R_SIZE_MAX as a matter of routine, and coreutils' stty
  * needs _POSIX_VDISABLE.
+ *
+ * Four of the five now run.  The fifth -- the thirteen option constants
+ * unistd.h.html says "shall always be set to the value 200809L" --
+ * stays fenced on purpose, because unlike the other four its acceptance
+ * criterion is not a #define: see that fence's own text, and the
+ * matching note in include/unistd.h.
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_sysconf_names) /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
-	define the following symbolic constants for sysconf():", followed
-	by a list of 125 _SC_* names.  The sentence is unconditional: no
-	option-group margin marker guards the list, and an implementation
-	that does not support an option still has to define that option's
-	_SC_ name so sysconf() has something to answer -1 about.  ntlibc
-	defines 15 of the 125; the other 110 are absent from include/
-	altogether (triage: ABSENT).  Nothing records this --
-	test/POSIX-GAP-ACCOUNTING.md enumerates the 1177 function
-	interfaces and a symbolic constant is not one of them, and
-	include/unistd.h's banner does not mention the omission.
-
-	ACCEPTANCE CRITERION, which for this list is BOTH halves and not
-	just the #define: sysconf.html specifies "[EINVAL] The value of
-	the name argument is invalid" for an *invalid* name, and every
-	name on this list is valid by definition of being on it.  So a
-	definition alone would move the failure rather than remove it --
-	src/unistd/sysconf.c's `default: errno = EINVAL; return -1` would
-	then answer "that name does not exist" for a name <unistd.h>
-	itself mandates, and a caller cannot distinguish that from a real
-	rejection.  That is the "declared but unimplemented" trap in its
-	exact form: the symbol appears, the consumer's configure test
-	passes, and the consumer stands down its own replacement.  Where
-	an option genuinely is unsupported the truthful answer is -1 with
-	errno UNCHANGED, which sysconf.html permits ("If the variable
-	corresponding to name has no limit ... sysconf() shall return -1
-	without changing errno"), and which the assertion below accepts.
-
-	Observed today: fails to COMPILE, "'_SC_2_CHAR_TERM' undeclared"
-	(verified by un-fencing and building with x86_64-win32-tcc; a
-	compile-time failure, so no Wine-vs-real-NT uncertainty). */
+/* unistd.h.html DESCRIPTION: "The <unistd.h> header shall define the
+ * following symbolic constants for sysconf():", followed by a list of
+ * 125 _SC_* names.  The sentence is unconditional -- no option-group
+ * margin marker guards the list -- so an implementation that does not
+ * support an option still has to define that option's _SC_ name for
+ * sysconf() to have something to answer -1 about.
+ *
+ * Both halves are asserted here, because the #define alone would only
+ * MOVE the failure: sysconf.html specifies [EINVAL] for an *invalid*
+ * name and every name on this list is valid by being on it, so a
+ * `default: errno = EINVAL` reached by a mandated name says "no such
+ * variable" about one <unistd.h> itself promises.  Where an option
+ * genuinely is unsupported the truthful answer is -1 with errno
+ * UNCHANGED ("If the variable corresponding to name has no limit ...
+ * sysconf() shall return -1 without changing errno"), which is what
+ * src/unistd/sysconf.c now gives and what the loop below accepts.
+ *
+ * Pure table lookup in the library, so Wine is a sound oracle. */
 static void test_unistd_sysconf_names(void)
 {
 	static const int names[] = {
@@ -1718,32 +1711,19 @@ static void test_unistd_sysconf_names(void)
 		CHECK(!(v == -1 && errno == EINVAL));
 	}
 }
-#endif
 
-#if NTLIBC_TEST(UNIMPL, posix_unistd_fpathconf) /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
-	define the following symbolic constants for pathconf():", followed
-	by a list of 21 _PC_* names.  Unconditional, same as the sysconf
-	list.  ntlibc defines 9; _PC_2_SYMLINKS, _PC_ALLOC_SIZE_MIN,
-	_PC_ASYNC_IO, _PC_FILESIZEBITS, _PC_PRIO_IO, _PC_REC_INCR_XFER_SIZE,
-	_PC_REC_MAX_XFER_SIZE, _PC_REC_MIN_XFER_SIZE, _PC_REC_XFER_ALIGN,
-	_PC_SYMLINK_MAX, _PC_SYNC_IO and _PC_TIMESTAMP_RESOLUTION are
-	absent (triage: ABSENT).  gnulib and autoconf probe
-	_PC_NAME_MAX/_PC_PATH_MAX (both present) but also _PC_SYMLINK_MAX,
-	and a pathname-length-aware consumer that asks for
-	_PC_FILESIZEBITS gets a compile error rather than an answer.
-
-	ACCEPTANCE CRITERION: the definitions, plus the pathconf()/
-	fpathconf() agreement the nine present names already hold to in
-	test_fpathconf() above.  Unlike the _SC_ list this one does NOT
-	require every name to be answerable: fpathconf.html makes
-	"[EINVAL] The implementation does not support an association of
-	the variable name with the specified file" a *may fail*, so
-	rejecting, say, _PC_PRIO_IO for a regular file is conforming --
-	what is not conforming is the name not existing.  The assertion
-	below is written to that boundary: whatever pathconf() decides, it
-	must decide the SAME thing through both entry points.
-
-	Observed today: fails to COMPILE, "'_PC_2_SYMLINKS' undeclared". */
+/* unistd.h.html DESCRIPTION: "The <unistd.h> header shall define the
+ * following symbolic constants for pathconf():", followed by a list of
+ * 21 _PC_* names.  Unconditional, same as the sysconf list.
+ *
+ * Unlike that list this one does NOT require every name to be
+ * answerable: fpathconf.html makes "[EINVAL] The implementation does
+ * not support an association of the variable name with the specified
+ * file" a *may fail*, so declining, say, _PC_PRIO_IO for a regular file
+ * is conforming -- what is not conforming is the name not existing.
+ * The assertion is written to that boundary: whatever pathconf()
+ * decides, it must decide the SAME thing through both entry points,
+ * extending test_fpathconf()'s shape above to all 21. */
 static void test_unistd_pathconf_names(void)
 {
 	static const int names[] = {
@@ -1778,39 +1758,31 @@ static void test_unistd_pathconf_names(void)
 	CHECK(close(fd) == 0);
 	CHECK(unlink("upc.txt") == 0);
 }
-#endif
 
-#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_confstr_names) /* UNIMPL: unistd.h.html DESCRIPTION: "The <unistd.h> header shall
-	define the following symbolic constants for the confstr()
-	function:", followed by a list of 31 _CS_* names.  ntlibc defines
-	exactly one of them, _CS_PATH; the other 30 -- the
-	_CS_POSIX_V6_ and _CS_POSIX_V7_ programming-model CFLAGS/LDFLAGS/LIBS
-	triples, _CS_POSIX_V7_THREADS_*, the two _CS_*_WIDTH_RESTRICTED_ENVS
-	and _CS_V6_ENV/_CS_V7_ENV -- are absent (triage: ABSENT).  These
-	are what a `getconf`-driven build system asks for when it wants the
-	compiler flags for a programming model, which is precisely the
-	bootstrap situation this libc is a target of.
-
-	ACCEPTANCE CRITERION, deliberately narrow: THE DEFINITIONS ONLY.
-	This fence claims nothing about what confstr() should return for
-	them, and that restraint is not tidiness -- confstr()'s answers are
-	entangled with an already-fenced BUG (see this file's test_confstr
-	and POSIX-COVERAGE.md's "confstr() reports success for an invalid
-	name": an unrecognized name returns 1 with errno untouched instead
-	of 0 with [EINVAL]).  While that stands there is no assertion that
-	can tell "recognized, empty value" from "unrecognized", so any
-	claim about the values would be built on another agent's open
-	defect.  When that BUG is fixed, the natural follow-on is that
-	confstr() must not report these 30 as invalid; that is a separate
-	fence for whoever fixes it, not this one.  Do not read an
-	un-fencing of this test as acceptance that confstr() answers them.
-
-	Observed today: fails to COMPILE, "'_CS_POSIX_V6_ILP32_OFF32_CFLAGS'
-	undeclared". */
+/* unistd.h.html DESCRIPTION: "The <unistd.h> header shall define the
+ * following symbolic constants for the confstr() function:", followed
+ * by a list of 31 _CS_* names -- the _CS_POSIX_V6_/_CS_POSIX_V7_
+ * programming-model CFLAGS/LDFLAGS/LIBS triples,
+ * _CS_POSIX_V7_THREADS_*, the two _CS_*_WIDTH_RESTRICTED_ENVS and
+ * _CS_V6_ENV/_CS_V7_ENV, plus _CS_PATH.  These are what a
+ * getconf-driven build system asks for when it wants the compiler flags
+ * for a programming model, which is the bootstrap situation this libc
+ * is a target of.
+ *
+ * DELIBERATELY NARROW: THE DEFINITIONS ONLY.  Nothing here claims
+ * anything about what confstr() returns for them, and that restraint is
+ * not tidiness -- confstr()'s answers are entangled with the BUG fenced
+ * inside test_confstr() above (an unrecognized name returns 1 with
+ * errno untouched instead of 0 with [EINVAL]).  While that stands there
+ * is no assertion that can tell "recognized, empty value" from
+ * "unrecognized", so any claim about the values would be built on
+ * another open defect.  When it is fixed, the natural follow-on is that
+ * confstr() must not report these 30 as invalid; that belongs to
+ * whoever fixes it.  Do not read this test as acceptance that
+ * confstr() answers them. */
 static void test_unistd_confstr_names(void)
 {
 	static const int names[] = {
-		_CS_PATH,
 		_CS_PATH, _CS_POSIX_V6_ILP32_OFF32_CFLAGS,
 		_CS_POSIX_V6_ILP32_OFF32_LDFLAGS, _CS_POSIX_V6_ILP32_OFF32_LIBS,
 		_CS_POSIX_V6_ILP32_OFFBIG_CFLAGS, _CS_POSIX_V6_ILP32_OFFBIG_LDFLAGS,
@@ -1840,7 +1812,6 @@ static void test_unistd_confstr_names(void)
 	 * initialiser above already forces. */
 	CHECK(sizeof names / sizeof names[0] == 31);
 }
-#endif
 
 #if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_mandatory_option_constants) /* UNIMPL: unistd.h.html "Constants for Options and Option Groups"
 	gives thirteen constants the wording "This symbol shall always be
@@ -1873,6 +1844,20 @@ static void test_unistd_confstr_names(void)
 	"#ifdef _POSIX_TIMERS" gets the same silence from a libc that has
 	clock_gettime()/clock_nanosleep() as from one that has nothing.
 
+	Re-examined when the _SC_/_PC_/_CS_/_POSIX_VDISABLE clauses beside
+	it were implemented, and left standing.  Each of the thirteen was
+	checked against the tree one by one, and not one names an option
+	this library supplies -- including _POSIX_THREAD_SAFE_FUNCTIONS,
+	whose nineteen interfaces do all exist but which sits inside the
+	option group _POSIX_THREADS heads.  Nor is there a legal way to
+	spell "absent": every OTHER constant in that section may be defined
+	as -1, and these thirteen may not, so silence is the only truthful
+	signal POSIX leaves.  What DID change is that the silence is no
+	longer undocumented -- include/unistd.h now carries the same
+	reasoning where a reader of the header will meet it, and
+	sysconf() answers -1 for the matching _SC_ names so the header and
+	the runtime cannot contradict each other.
+
 	Observed today: fails to COMPILE, "'_POSIX_ASYNCHRONOUS_IO'
 	undeclared". */
 static void test_unistd_mandatory_option_constants(void)
@@ -1899,30 +1884,20 @@ static void test_unistd_mandatory_option_constants(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_posix_vdisable) /* UNIMPL: unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE
-	This symbol shall be defined to be the value of a character that
-	shall disable terminal special character handling as described in
-	Special Control Characters.  This symbol shall always be set to a
-	value other than -1."  Mandatory in its own right -- it is not in
-	the options section at all, and carries no option-group marker.
-	ntlibc does not define it anywhere in include/ (triage: ABSENT),
-	even though it already answers pathconf(_PC_VDISABLE) with 0
-	(src/unistd/sysconf.c) and <termios.h> is implemented and audited
-	(group A).  So the value this constant would have to carry already
-	exists inside the library; only the constant naming it is missing.
-
-	Consumer impact, and the reason this one is called out separately
-	from the option constants above: coreutils' stty reads
-	_POSIX_VDISABLE to print and set "undef" for a special character,
-	and it is used at compile time, so its absence is a build failure
-	rather than a degraded answer.
-
-	ACCEPTANCE CRITERION: the definition, agreeing with what
-	pathconf(_PC_VDISABLE) already reports -- POSIX has the two name
-	the same thing, so a definition that disagreed with the running
-	answer would be a new defect rather than a fix.
-
-	Observed today: fails to COMPILE, "'_POSIX_VDISABLE' undeclared". */
+/* unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE  This
+ * symbol shall be defined to be the value of a character that shall
+ * disable terminal special character handling as described in Special
+ * Control Characters.  This symbol shall always be set to a value other
+ * than -1."  Mandatory in its own right -- it is not in the options
+ * section at all and carries no option-group marker.
+ *
+ * The value was already inside the library before the constant existed:
+ * pathconf(_PC_VDISABLE) answers 0 (src/unistd/sysconf.c), and POSIX has
+ * the two name the same character, so the definition agreeing with the
+ * running answer is the whole of the criterion -- one that disagreed
+ * would be a new defect rather than a fix.  coreutils' stty reads this
+ * at COMPILE time to print and set "undef", so its absence was a build
+ * failure rather than a degraded answer. */
 static void test_unistd_posix_vdisable(void)
 {
 	/* "shall always be set to a value other than -1" */
@@ -1942,7 +1917,6 @@ static void test_unistd_posix_vdisable(void)
 	CHECK(0);
 #endif
 }
-#endif
 
 int main(void)
 {
@@ -1994,6 +1968,10 @@ int main(void)
 	test_getlogin();
 	test_id_session_stubs();
 	test_linkat();
+	test_unistd_sysconf_names();
+	test_unistd_pathconf_names();
+	test_unistd_confstr_names();
+	test_unistd_posix_vdisable();
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);

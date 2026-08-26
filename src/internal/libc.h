@@ -346,6 +346,11 @@ static inline long long __unix_to_nt(long long sec, long nsec) { return sec * __
 void __stdio_exit(void);                     /* flush everything at exit */
 
 /* ---- exit -------------------------------------------------------------- */
+/* How many atexit() handlers src/exit/exit.c's fixed table holds.  It
+ * lives here rather than in that file because sysconf(_SC_ATEXIT_MAX)
+ * (src/unistd/sysconf.c) reports it, and a limit published in one place
+ * and enforced in another drifts.  C99 and POSIX both floor it at 32. */
+#define ATEXIT_CAP_ 128
 void __funcs_on_exit(void);
 void __libc_exit_fini(void);
 _Noreturn void __nt_exit(int);

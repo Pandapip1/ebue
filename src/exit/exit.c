@@ -11,15 +11,15 @@
 #include <unistd.h>
 #include "libc.h"
 
-#define ATEXIT_MAX 128
-static void (*handlers[ATEXIT_MAX])(void);
+/* ATEXIT_CAP_ is in libc.h, shared with sysconf(_SC_ATEXIT_MAX). */
+static void (*handlers[ATEXIT_CAP_])(void);
 static int nhandlers;
 static void (*qhandlers[32])(void);
 static int nqhandlers;
 
 int atexit(void (*f)(void))
 {
-	if (nhandlers >= ATEXIT_MAX) return -1;
+	if (nhandlers >= ATEXIT_CAP_) return -1;
 	handlers[nhandlers++] = f;
 	return 0;
 }
