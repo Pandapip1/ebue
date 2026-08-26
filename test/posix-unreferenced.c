@@ -1814,6 +1814,39 @@ static void test_sigwait_spec(void)
 	CHECK(sigismember(&pend, SIGUSR1) == 0);
 	CHECK(sigprocmask(SIG_SETMASK, &old, 0) == 0);
 
+	/* "select a pending signal from set" with more than one candidate.
+	 * POSIX constrains the choice only within SIGRTMIN..SIGRTMAX, so
+	 * this asserts the choice src/signal/signal.c documents -- lowest
+	 * numbered first -- rather than any portable requirement.  It is
+	 * pinned because an implementation-defined choice that nothing
+	 * checks is one that can drift silently, and because it is also
+	 * the order sigprocmask()'s deliver-on-unblock sweep uses: if the
+	 * two ever disagree, a program can tell the accept path and the
+	 * delivery path apart by which signal comes out first.  SIGUSR2 is
+	 * raised FIRST, so ordering by number and ordering by arrival give
+	 * different answers here -- raising them the other way round would
+	 * make the test pass under either rule. */
+	{
+		sigset_t two;
+		CHECK(sigpending(&pend) == 0);
+		CHECK(sigisemptyset(&pend) == 1);
+		CHECK(sigemptyset(&two) == 0);
+		CHECK(sigaddset(&two, SIGUSR1) == 0);
+		CHECK(sigaddset(&two, SIGUSR2) == 0);
+		CHECK(sigprocmask(SIG_BLOCK, &two, &old) == 0);
+		CHECK(raise(SIGUSR2) == 0);
+		CHECK(raise(SIGUSR1) == 0);
+		sig = -1;
+		CHECK(sigwait(&two, &sig) == 0);
+		CHECK(sig == SIGUSR1);
+		sig = -1;
+		CHECK(sigwait(&two, &sig) == 0);
+		CHECK(sig == SIGUSR2);
+		CHECK(sigpending(&pend) == 0);
+		CHECK(sigisemptyset(&pend) == 1);
+		CHECK(sigprocmask(SIG_SETMASK, &old, 0) == 0);
+	}
+
 	/* "[EINVAL] The set argument contains an invalid or unsupported
 	 * signal number" is a MAY FAIL, not a shall-fail -- the fence that
 	 * stood here cited it as "ERRORS, shall fail", which is wrong; read
