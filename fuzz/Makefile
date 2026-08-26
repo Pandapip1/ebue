@@ -63,6 +63,35 @@ FUZZ_TIME ?= 60
 # The two modes use disjoint object and corpus trees ($(MODESUF)), so
 # neither invalidates the other's stamp and a mode switch never relinks
 # against the other mode's objects.
+# NOTHING IN THIS DIRECTORY MAY INVOKE WINE, AND IF THAT EVER CHANGES IT
+# MUST SET THE CRASH-DIALOG OVERRIDE ITSELF.
+#
+# Everything here is native ELF: the harnesses are clang-built, and
+# fuzz/ntstubs.c exists precisely so the NT surface is answered in-process
+# rather than by an NT runtime.  Verified rather than assumed -- an
+# `strace -f -e trace=execve` over a parse, a build, an ubrun and the
+# asan-unavailable path executes only sh, make, find, sort, mkdir, ls,
+# wc, clang and the harness itself.
+#
+# The reason this is written down instead of left obvious: the natural
+# next feature here is replaying a crash artefact against a PE build
+# under Wine, and that would be the first Wine invocation in this
+# directory.  Without
+#
+#     WINEDEBUG=-all WINEDLLOVERRIDES=winedbg.exe=d
+#
+# an unhandled exception -- OR AN UNIMPLEMENTED-FUNCTION STUB -- makes
+# Wine launch `winedbg --auto`, which opens a GUI window on the
+# developer's real desktop and blocks for input, so the run hangs rather
+# than fails.  A fuzz harness exists to provoke crashes, so here that is
+# not an occasional popup but one per finding: a fuzzer having a good
+# night becomes a popup storm on somebody's desktop.
+#
+# These must be set BY the new invocation, not inherited.  The Python
+# suites set them for themselves (tools/run-tests.py, posix-opts.py,
+# test-policy.py) and tools/gate.sh only mentions them in comments while
+# relying on those tools -- so there is no ambient guarantee for a make
+# recipe to lean on.
 SAN_MODE ?= asan
 ifeq ($(SAN_MODE),asan)
 SAN       = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
