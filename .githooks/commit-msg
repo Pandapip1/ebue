@@ -1,0 +1,56 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Rejects `Co-authored-by:` in a commit message.  This project attributes
+# LLM assistance with `Assisted-by:` (CONTRIBUTING.md, "Source
+# conventions").
+#
+# WHY A HOOK RATHER THAN A REMINDER.  The wrong trailer is not
+# carelessness: the Claude Code harness instructs every session, in its
+# system prompt, to end commit messages with `Co-Authored-By:`.  That
+# arrives unasked in every context window, phrased as an instruction,
+# while the project's rule is one line of documentation.  Getting it
+# right requires deciding that the project overrides the harness -- not
+# something anyone falls into.  Measured on origin/main over 100
+# commits: 28 `Co-authored-by:` against 14 `Assisted-by:`, across many
+# authors.  A reminder decays with every new session; a hook does not.
+#
+# Case-insensitively, deliberately: the harness emits `Co-Authored-By:`
+# with that exact capitalisation, so a match on the lowercase spelling
+# would miss every real instance.
+#
+# It rejects rather than rewrites.  A commit silently corrected teaches
+# nothing and hides that a rule exists; an error naming the replacement
+# teaches it once.
+#
+# Enabled by ./configure, or by hand:
+#   git config core.hooksPath .githooks
+#
+# Bypass, for a commit that must legitimately carry the trailer -- a
+# genuine human co-author, or an imported upstream commit:
+#   git commit --no-verify
+
+set -e
+
+msg=$1
+[ -n "$msg" ] || exit 0
+
+# Trailers only: a line that STARTS with the token, allowing leading
+# whitespace.  Prose that merely mentions the word -- this hook's own
+# commit message, for one -- is not a trailer and must not be rejected.
+if grep -Eiq '^[[:space:]]*co-authored-by:' "$msg"; then
+	echo "commit-msg: this project uses 'Assisted-by:', not 'Co-authored-by:'." >&2
+	echo "" >&2
+	grep -Ein '^[[:space:]]*co-authored-by:' "$msg" | sed 's/^/    /' >&2
+	echo "" >&2
+	echo "Rewrite the trailer as:" >&2
+	echo "    Assisted-by: <name> <email>" >&2
+	echo "" >&2
+	echo "See CONTRIBUTING.md, \"Source conventions\".  If the trailer is" >&2
+	echo "correct here -- a real human co-author, or an imported commit --" >&2
+	echo "commit with --no-verify." >&2
+	exit 1
+fi
+
+exit 0
