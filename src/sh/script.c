@@ -120,6 +120,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "libc.h"
 #include "sh.h"
 
 #define EX_USAGE 2       /* usage error, syntax error, unsupported construct */
