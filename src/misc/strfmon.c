@@ -247,8 +247,12 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		 * specification is ignored." */
 		if (lp && ndigits > lp) continue;
 
-		/* Sign and the opening parenthesis. */
-		sign = "";
+		/* Sign and the opening parenthesis.  Every path below
+		 * assigns sign, including the negative_sign fallback the
+		 * banner describes, so there is no initialiser here to go
+		 * stale if a branch is ever added: a new branch that
+		 * forgets to assign is a compile-time warning rather than
+		 * a silently empty sign. */
 		if (x < 0) {
 			if (negpar) sign = "(";
 			else sign = *lc->negative_sign ? lc->negative_sign : "-";

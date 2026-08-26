@@ -1364,6 +1364,22 @@ static void test_strfmon_posix_locale(void)
 	n = strfmon(buf, sizeof buf, "%-10.0n|", 42.0);
 	CHECK(n == 11 && !strcmp(buf, "42        |"));
 
+	/* The negative sign, which is the one LC_MONETARY fallback in
+	 * src/misc/strfmon.c that would be dangerous to get wrong.  The
+	 * POSIX locale's negative_sign is "" (localeconv() above asserts
+	 * exactly that), so honouring it literally would render -42 as
+	 * "42" -- a plausible wrong answer a caller cannot detect.  A
+	 * '-' is substituted instead, and that substitution is asserted
+	 * here rather than left to the '(' case below, which suppresses
+	 * the sign string entirely and so cannot see it.  positive_sign
+	 * IS honoured as empty, which the "42" case pins down. */
+	n = strfmon(buf, sizeof buf, "%.0n", -42.0);
+	CHECK(n == 3 && !strcmp(buf, "-42"));
+	n = strfmon(buf, sizeof buf, "%.2n", -0.5);
+	CHECK(n == 5 && !strcmp(buf, "-0.50"));
+	n = strfmon(buf, sizeof buf, "%10.0n", -42.0);
+	CHECK(n == 10 && !strcmp(buf, "       -42"));
+
 	/* "If '(' is specified, negative amounts are enclosed within
 	 * parentheses." */
 	n = strfmon(buf, sizeof buf, "%(.0n", -42.0);
