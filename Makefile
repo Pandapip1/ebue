@@ -298,6 +298,46 @@ TEST_SRCS = $(filter-out $(srcdir)/test/delayall.c,$(sort $(wildcard $(srcdir)/t
 TEST_EXES = $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
 TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 
+# Capability terms for test/test-profiles.tsv's profile selectors.
+#
+# WHY THIS HAS A DEFAULT AT ALL.  These are *declarations*, not
+# measurements: tools/testlib.py's Rule.matches() only ever compares a
+# selector against the terms passed in with --profile, and nothing in
+# this tree probes for a symlink or a console.  So a rule written
+# `capability.console=no` applies exactly when someone says so, and
+# never otherwise.
+#
+# Until this default existed, the terms lived only in .github/workflows/
+# ci.yml, which meant a plain local `make check-pedantic` passed none of
+# them, the exempting rules could not match, and the base disposition got
+# probed instead.  That is not an environment difference or a flake --
+# it made two cases report STALE deterministically, for every local run,
+# for everyone.  Measured back to back on one tree:
+#
+#     without:  52 BUG, 45 NA, 2 policy failure(s)
+#     with:     50 BUG, 47 NA, 0 policy failure(s)
+#
+# exactly the two cases the rules name, moving as the rules specify.
+#
+# WHAT WOULD FALSIFY EACH, since nothing here checks:
+#   capability.symlink=no  a runner where symlink()/symlinkat() can
+#                          build a loop -- i.e. real Windows with
+#                          SeCreateSymbolicLinkPrivilege, or Developer
+#                          Mode.  Wine's is not that.
+#   capability.console=no  a runner whose stdin is a real console input
+#                          queue rather than a pipe or NUL, so that
+#                          tcflush(TCIFLUSH) has a queue to discard.
+#                          Any interactive run is that.
+#
+# So this default describes a headless CI-shaped runner, which is what
+# both this project's Wine legs and its windows-test legs are.  Override
+# it on the command line if yours is not:
+#     make check-pedantic TEST_PROFILE="capability.console=yes"
+# check-pedantic prints any capability term the rules use and the
+# profile leaves unset, so a third term added later cannot go missing
+# the way these two did.
+TEST_PROFILE ?= capability.symlink=no capability.console=no
+
 # TEST_DEPFLAGS is the same mechanism DEPFLAGS provides for library
 # objects, applied to the test binaries -- which compile and link in one
 # step, so the depfile is named from the .exe rather than from a .o.

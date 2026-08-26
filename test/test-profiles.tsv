@@ -11,6 +11,39 @@
 # The most-specific matching rule wins. Equal-specificity matches are an error,
 # as are duplicate rules. In-tree declarations can be global fallbacks;
 # imported suite ledgers may intentionally provide only measured profiles.
+#
+# capability.NAME TERMS ARE ASSERTED, NOT MEASURED.  Nothing in this tree
+# probes for any of them.  testlib.py's Rule.matches() compares a selector
+# against the terms the caller passed with --profile and nothing else, so a
+# capability rule applies exactly when someone declares it and never
+# otherwise.  Two consequences, and both have bitten:
+#
+#   Forget the term and the rule silently stops applying.  The case it was
+#   exempting is probed against its base disposition and reported STALE,
+#   which reads as a defect in the tree rather than as a missing argument.
+#   The Makefile's TEST_PROFILE default now supplies the terms below, and
+#   test-policy.py prints any capability term these rules use that the
+#   profile leaves unset.
+#
+#   Declare it wrongly and nothing can contradict you.  The declaration
+#   defines the environment for adjudication purposes instead of describing
+#   it, so a run can be adjudicated against a false premise and still come
+#   back green -- the check and the thing checked sharing a source.  What
+#   would falsify each term in use today:
+#
+#     capability.symlink=no  a runner where symlink()/symlinkat() can build
+#                            a loop: real Windows with
+#                            SeCreateSymbolicLinkPrivilege, or Developer
+#                            Mode.  Wine's is not that.
+#     capability.console=no  a runner whose stdin is a real console input
+#                            queue rather than a pipe or NUL, so that
+#                            tcflush(TCIFLUSH) has something to discard.
+#                            Any interactive run is that -- which is why a
+#                            developer running these by hand in a terminal
+#                            is exactly the case the default gets wrong.
+#
+# Probing them for real is a design change and deliberately not done here;
+# this note exists so the limitation is known rather than silent.
 ntlibc	sh_engine_group_redir_leak	runtime=wine	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_group_redir_leak	runtime=windows	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	sh_engine_group_redir_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile

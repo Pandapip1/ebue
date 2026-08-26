@@ -482,6 +482,21 @@ def resolve_defaults(path: Path, suite: str, profile: dict[str, str]) -> int:
     return 0
 
 
+# Capability terms are DECLARATIONS, not measurements: testlib.Rule.matches()
+# only compares a selector against what --profile supplied, and nothing in
+# this tree probes for a symlink or a console.  So a rule guarded by
+# `capability.console=no` silently stops applying the moment nobody passes
+# that term -- and the case it was exempting gets probed and reported STALE,
+# which reads as a defect in the tree rather than as a missing argument.
+# That happened: the terms lived only in ci.yml, so every local run probed
+# two cases their rules meant to exempt.  Naming the gap is cheap; finding
+# it from a STALE line is not.
+def unset_capabilities(rules: list[Rule], profile: dict[str, str]) -> list[str]:
+    wanted = {key for rule in rules for key, _ in rule.selector
+              if key.startswith("capability.")}
+    return sorted(key for key in wanted if key not in profile)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=(
@@ -518,6 +533,16 @@ def main() -> int:
                 f"{PROFILE_MANIFEST.relative_to(ROOT)}:{rule.line}: "
                 f"override names unknown ntlibc case {rule.case}"
             )
+    missing = unset_capabilities(rules, profile)
+    if missing:
+        print("test-policy: capability term(s) used by test/test-profiles.tsv "
+              "but not set in this profile: " + ", ".join(missing),
+              file=sys.stderr)
+        print("test-policy: rules guarded by them cannot match, so the cases "
+              "they exempt are probed against their base disposition.",
+              file=sys.stderr)
+        print("test-policy: the Makefile's TEST_PROFILE default supplies these; "
+              "pass them explicitly if you overrode it.", file=sys.stderr)
     resolved: list[Fence] = []
     for fence in fences:
         if not fence.case_name:
