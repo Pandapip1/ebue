@@ -2597,6 +2597,70 @@ NTSTATUS NTAPI NtQueryPerformanceCounter(LARGE_INTEGER *c, LARGE_INTEGER *f)
 }
 
 /*
+ * Waitable timers, as far as src/unistd/sleep.c's alarm() uses them:
+ * one unnamed NotificationTimer per process, armed with an absolute
+ * deadline and a user APC, cancellable, re-armable in place.
+ *
+ * The APC is the part worth modelling rather than stubbing out.  On NT
+ * an expired timer queues its routine to the thread that armed it and
+ * the kernel runs it at the head of that thread's next *alertable*
+ * wait; that timing is the entire shape of SIGALRM delivery in this
+ * library, so a stub that never called the routine would leave
+ * test/posix-unistd-ids.c's test_alarm() asserting against a silence
+ * this file invented.  NtDelayExecution below therefore does what the
+ * kernel does: when it is alertable and the armed deadline falls
+ * inside the delay, it sleeps as far as the deadline, calls the
+ * routine, and reports STATUS_USER_APC.  A non-alertable delay leaves
+ * the expiry queued, which is what makes the "a program that never
+ * sleeps never sees its SIGALRM" boundary visible here too.
+ *
+ * One timer, no handle-table entry: alarm() creates its timer once and
+ * never closes it (see there), so nothing needs NtClose to know about
+ * this object, and the returned handle is a value outside the vhandles
+ * range that of_get() will simply not find.
+ */
+#define TIMER_HANDLE ((HANDLE)(long)0x7100)
+
+static PTIMER_APC_ROUTINE timer_apc;
+static PVOID timer_apc_ctx;
+static long long timer_due;      /* absolute NT time; 0 = not armed */
+static int timer_queued;         /* expired, routine not yet run */
+
+NTSTATUS NTAPI NtCreateTimer(PHANDLE h, ACCESS_MASK access, POBJECT_ATTRIBUTES oa, TIMER_TYPE type)
+{
+	(void)access; (void)oa; (void)type;
+	if (!h) return STATUS_INVALID_PARAMETER;
+	*h = TIMER_HANDLE;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtSetTimer(HANDLE h, LARGE_INTEGER *due, PTIMER_APC_ROUTINE apc, PVOID ctx,
+                          BOOLEAN resume, LONG period, BOOLEAN *prev)
+{
+	(void)resume; (void)period;
+	if (h != TIMER_HANDLE || !due) return STATUS_INVALID_HANDLE;
+	if (prev) *prev = (BOOLEAN)(timer_due != 0);
+	/* alarm() only ever passes an absolute deadline; a relative one
+	 * would be a negative value here and is not modelled because
+	 * nothing in this library asks for it. */
+	if (*due < 0) return STATUS_INVALID_PARAMETER;
+	timer_due = *due;
+	timer_apc = apc;
+	timer_apc_ctx = ctx;
+	timer_queued = 0;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtCancelTimer(HANDLE h, BOOLEAN *prev)
+{
+	if (h != TIMER_HANDLE) return STATUS_INVALID_HANDLE;
+	if (prev) *prev = (BOOLEAN)(timer_due != 0);
+	timer_due = 0;
+	timer_queued = 0;
+	return STATUS_SUCCESS;
+}
+
+/*
  * This one has to really sleep.  libFuzzer runs a watchdog thread that
  * loops on sleep(1); returning immediately turns that into a spin that
  * starves the fuzzing thread -- the symptom is three executions in ninety
@@ -2606,14 +2670,46 @@ NTSTATUS NTAPI NtDelayExecution(BOOLEAN alertable, LARGE_INTEGER *t)
 {
 	struct { long sec, nsec; } ts;
 	long long ticks;
-	(void)alertable;
+	int fire = 0;
 	if (!t) return STATUS_SUCCESS;
 	ticks = *t;
 	if (ticks >= 0) return STATUS_SUCCESS;   /* absolute time: not supported */
 	ticks = -ticks;                          /* relative, in 100ns units */
-	ts.sec = (long)(ticks / 10000000LL);
-	ts.nsec = (long)((ticks % 10000000LL) * 100);
-	syscall(SYS_nanosleep, &ts, (void *)0);
+
+	if (alertable && (timer_queued || timer_due)) {
+		LARGE_INTEGER now;
+		long long left;
+		NtQuerySystemTime(&now);
+		left = timer_queued ? 0 : timer_due - now;
+		if (left <= 0) {                 /* already due: run it at once */
+			ticks = 0;
+			fire = 1;
+		} else if (left < ticks) {       /* comes due inside this wait */
+			ticks = left;
+			fire = 1;
+		}
+	} else if (alertable == 0 && timer_due) {
+		/* Non-alertable: the expiry is noticed but not delivered, and
+		 * stays queued for the next alertable wait -- measured to be
+		 * what NT and Wine both do. */
+		LARGE_INTEGER now;
+		NtQuerySystemTime(&now);
+		if (timer_due - now <= ticks) timer_queued = 1;
+	}
+
+	if (ticks > 0) {
+		ts.sec = (long)(ticks / 10000000LL);
+		ts.nsec = (long)((ticks % 10000000LL) * 100);
+		syscall(SYS_nanosleep, &ts, (void *)0);
+	}
+	if (fire) {
+		PTIMER_APC_ROUTINE apc = timer_apc;
+		PVOID ctx = timer_apc_ctx;
+		timer_due = 0;
+		timer_queued = 0;
+		if (apc) apc(ctx, 0, 0);
+		return STATUS_USER_APC;
+	}
 	return STATUS_SUCCESS;
 }
 

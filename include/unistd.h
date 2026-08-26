@@ -155,9 +155,13 @@ void swab(const void *__restrict, void *__restrict, ssize_t);
 #if (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE+0 < 700) \
  || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int usleep(unsigned);
-unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm() itself is
-	already a stub returning 0 (src/unistd/sleep.c) -- there is no
-	SIGALRM delivery to build a microsecond-resolution version on top of */
+unsigned ualarm(unsigned, unsigned);  /* undefined-ok: alarm()'s NT timer
+	(src/unistd/sleep.c) would carry a microsecond deadline happily
+	enough, but ualarm()'s second argument makes it a repeating timer,
+	and repeating is the part that cannot be honoured here: SIGALRM is
+	delivered by an APC that only runs while the thread is in an
+	alertable wait, so every expiry a computing thread missed would
+	arrive as one delivery rather than as a series */
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)

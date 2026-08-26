@@ -402,6 +402,16 @@ long long __fsize_room_at(long long off);
 int __fsize_allow(long long size);
 int __fsize_exceeded(void);
 int __raise_internal(int);
+/* How many times a signal-catching function has been entered.  Compared
+ * across an alertable wait by src/unistd/sleep.c to tell a caught signal
+ * (the wait ends, [EINTR]) from an ignored one (it does not) -- see the
+ * comment on caught_count in src/signal/signal.c. */
+unsigned long __sig_caught_count(void);
+/* Forget this process's pending alarm(), without touching NT.  fork()'s
+ * child-side only: fork.html requires the child's alarm to be cancelled,
+ * and the clone arrives with the parent's deadline in its copied address
+ * space (src/unistd/sleep.c). */
+void __alarm_reset_after_fork(void);
 
 /* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/
  * wait4() (src/process/wait.c); exposed non-static so tests can drive its

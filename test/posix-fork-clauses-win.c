@@ -407,32 +407,29 @@ static void test_independent_execution(void)
  * ============================================================ */
 static void test_alarm_cleared_in_child(void)
 {
-#if NTLIBC_TEST(BUG, posix_fork_clauses_win_alarm) /* BUG (compiles and links; formerly UNIMPL):: nothing to cancel.  fork.html DESCRIPTION requires the
-	 * child's pending alarm to be cleared, and alarm.html's RETURN
-	 * VALUE is the only way to observe whether one is pending.
-	 * src/unistd/sleep.c:41 is
-	 *     unsigned alarm(unsigned s) { (void)s; return 0; }
-	 * -- there is no timer to set in the parent and none to clear in
-	 * the child, so a correct implementation of this clause and a
-	 * complete absence of alarms are indistinguishable.
+	/* alarm.html's RETURN VALUE is the only way to observe whether an
+	 * alarm is pending, so this reads the clause off both sides of the
+	 * fork at once: the child must report none, and -- the half that
+	 * makes the first half mean something -- the parent must still
+	 * report its own.  A fork() that cleared nothing would fail the
+	 * first; one that cancelled the shared timer object would fail the
+	 * second.
 	 *
-	 * UNIMPL rather than N/A, and recorded against *this* page rather
-	 * than only against alarm.html, because the fork side would still
-	 * need writing once alarm() is real: RtlCloneUserProcess copies
-	 * address space, so a timer recorded in a global would travel
-	 * into the child and have to be explicitly cancelled there.  This
-	 * fence is the note for whoever does that.  See
-	 * test/posix-unistd-ids.c's test_alarm() for the alarm.html side
-	 * of the same gap. */
+	 * The mechanism being checked is in src/unistd/sleep.c: the
+	 * deadline lives in a static, and RtlCloneUserProcess copies the
+	 * address space, so the child arrives holding the parent's figure
+	 * and fork() has to forget it explicitly
+	 * (__alarm_reset_after_fork(), called beside the tms_cutime reset
+	 * in src/process/fork.c for the same reason). */
 	pid_t pid;
+	unsigned left;
 	CHECK(alarm(100) == 0);
 	pid = fork();
 	CHECK(pid >= 0);
 	if (pid == 0) _exit(alarm(0) == 0 ? RC_OK : 1);
 	CHECK(wait_child(pid) == RC_OK);
-	CHECK(alarm(0) > 0);		/* the parent's alarm survived */
-#endif
-	(void)0;
+	left = alarm(0);		/* the parent's alarm survived */
+	CHECK(left >= 99 && left <= 100);
 }
 
 int main(void)

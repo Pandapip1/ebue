@@ -82,6 +82,8 @@ typedef enum _TOKEN_INFORMATION_CLASS {
 /* ---- status codes ---------------------------------------------------- */
 #define STATUS_SUCCESS                  ((NTSTATUS)0x00000000L)
 #define STATUS_WAIT_0                   ((NTSTATUS)0x00000000L)
+#define STATUS_USER_APC                 ((NTSTATUS)0x000000C0L)
+#define STATUS_ALERTED                  ((NTSTATUS)0x00000101L)
 #define STATUS_TIMEOUT                  ((NTSTATUS)0x00000102L)
 #define STATUS_PENDING                  ((NTSTATUS)0x00000103L)
 #define STATUS_PROCESS_CLONED           ((NTSTATUS)0x00000129L)
@@ -1323,6 +1325,21 @@ NTSTATUS NTAPI NtYieldExecution(void);
 NTSTATUS NTAPI NtQuerySystemInformation(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 NTSTATUS NTAPI NtCreateEvent(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, ULONG, BOOLEAN);
 NTSTATUS NTAPI NtSetEvent(HANDLE, LONG *);
+
+/* Waitable timers.  A NotificationTimer stays signalled once it expires
+ * (a SynchronizationTimer auto-resets on the first waiter); alarm()
+ * wants the one-shot, so it uses the former.  The APC handed to
+ * NtSetTimer is queued to the thread that called it and runs only when
+ * that thread enters an alertable wait -- see src/unistd/sleep.c. */
+typedef enum _TIMER_TYPE {
+	NotificationTimer,
+	SynchronizationTimer
+} TIMER_TYPE;
+typedef void (NTAPI *PTIMER_APC_ROUTINE)(PVOID, ULONG, LONG);
+#define TIMER_ALL_ACCESS (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0x3)
+NTSTATUS NTAPI NtCreateTimer(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, TIMER_TYPE);
+NTSTATUS NTAPI NtSetTimer(HANDLE, LARGE_INTEGER *, PTIMER_APC_ROUTINE, PVOID, BOOLEAN, LONG, BOOLEAN *);
+NTSTATUS NTAPI NtCancelTimer(HANDLE, BOOLEAN *);
 NTSTATUS NTAPI NtRaiseHardError(NTSTATUS, ULONG, ULONG, ULONG_PTR *, ULONG, PULONG);
 NTSTATUS NTAPI NtCreateJobObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 NTSTATUS NTAPI NtAssignProcessToJobObject(HANDLE, HANDLE);

@@ -54,6 +54,20 @@ static int fault_active;
 static void *fault_addr;
 static int fault_si_code;   /* computed by exception_handler(), see there */
 
+/* How many times a signal-catching function has been entered.  Read
+ * through __sig_caught_count() by src/unistd/sleep.c, whose alertable
+ * waits have to tell "a handler ran, so the sleep ends with [EINTR]"
+ * from "the signal was ignored, so the interval keeps running":
+ * sleep.html and nanosleep.html both end a wait only for a signal
+ * "whose action is to invoke a signal-catching function or to terminate
+ * the process", and __raise_internal() below answers 0 for the handled
+ * and the ignored case alike.  A counter rather than a flag so a caller
+ * can compare against a value taken before the wait and needs nothing
+ * cleared afterwards.  Unlocked, like every other global here. */
+static unsigned long caught_count;
+
+unsigned long __sig_caught_count(void) { return caught_count; }
+
 void (*signal(int sig, void (*h)(int)))(int)
 {
 	void (*old)(int);
@@ -286,6 +300,11 @@ int __raise_internal(int sig)
 		if (!(flags & SA_NODEFER)) sigaddset(&blocked, sig);
 		sigdelset(&blocked, SIGKILL);
 		sigdelset(&blocked, SIGSTOP);
+
+		/* Counted before the call, not after: a handler that never
+		 * returns (longjmp out, _exit) still ran, and a sleep it
+		 * interrupted still has to see that it did. */
+		caught_count++;
 
 		/* sigaction.html DESCRIPTION: "If SA_SIGINFO is set ...
 		 * sa_sigaction ... specif[ies] a signal-catching function" that

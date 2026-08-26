@@ -21,18 +21,22 @@ struct itimerval {
 	struct timeval it_value;
 };
 
-int getitimer (int, struct itimerval *);  /* undefined-ok: ITIMER_REAL needs
-	SIGALRM delivery on expiry, and there is none to build on -- alarm()
-	itself is already a permanent stub returning 0 (src/unistd/sleep.c),
-	for the identical reason (see ualarm() in unistd.h). ITIMER_VIRTUAL/
-	ITIMER_PROF fire on CPU time consumed rather than wall-clock time, an
-	even harder signal to generate without a scheduler tick this library
-	sees. A kernel32 timer queue (CreateTimerQueueTimer) does not change
-	this: it would still need to deliver from a callback thread into
-	__raise_internal()'s unlocked handlers/blocked/pending state, the
-	same data race src/signal/signal.c's ctrl_handler() already flags as
-	tolerable only because Ctrl-C is rare -- a real interval timer firing
-	repeatedly is not */
+int getitimer (int, struct itimerval *);  /* undefined-ok: ITIMER_REAL's
+	one-shot half could be armed on the same NT timer alarm() now uses
+	(src/unistd/sleep.c), but an interval timer is defined by its repeat,
+	and repeating is what this platform cannot deliver: SIGALRM arrives
+	through an APC that only runs while the thread is in an alertable
+	wait, so expiries a computing thread missed coalesce instead of
+	queueing (see ualarm() in unistd.h). ITIMER_VIRTUAL/ITIMER_PROF fire
+	on CPU time consumed rather than wall-clock time, an even harder
+	signal to generate without a scheduler tick this library sees. A
+	timer *thread* is what would close both, and it does not change this:
+	it would deliver from a callback thread into __raise_internal()'s
+	unlocked handlers/blocked/pending state, the same data race
+	src/signal/signal.c's ctrl_handler() already flags as tolerable only
+	because Ctrl-C is rare -- a real interval timer firing repeatedly is
+	not -- and src/unistd/sleep.c's banner records the second reason it
+	was rejected, which is what fork() would then be cloning */
 int setitimer (int, const struct itimerval *__restrict, struct itimerval *__restrict);  /* undefined-ok: see getitimer */
 int utimes (const char *, const struct timeval [2]);
 

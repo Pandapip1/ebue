@@ -34,10 +34,14 @@
  *   #if 0 / * UNIMPL: ... * /  genuinely not implemented
  *   #if 0 / * N/A: ... * /     a real NT mechanism makes it inapplicable
  *
- * Oracle: none of these functions makes an NT call except
- * gethostname() (a getenv) and the fd lookups they *should* be making
- * and do not.  Wine is therefore a sound oracle for essentially all of
- * it -- what is being measured is ntlibc's own C, not NT's behaviour.
+ * Oracle: almost none of these functions makes an NT call -- the
+ * exceptions are gethostname() (a getenv), alarm() (an NT waitable
+ * timer, whose APC is what delivers SIGALRM) and the fd lookups they
+ * *should* be making and do not.  Wine is therefore a sound oracle for
+ * essentially all of it -- what is being measured is ntlibc's own C,
+ * not NT's behaviour -- and for the one part that is NT's behaviour,
+ * the timer, Wine's NtCreateTimer/NtSetTimer were measured to queue
+ * and deliver the APC the same way the documented NT ones do.
  */
 #define _GNU_SOURCE
 #include "test-policy.h"
@@ -46,6 +50,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #include <limits.h>
 #include <sys/resource.h>	/* getpriority(), for the nice() cross-check */
@@ -53,6 +58,7 @@
 #include <sys/wait.h>
 
 static int fails;
+static int unverified;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 extern char **environ;
@@ -625,8 +631,14 @@ static void test_chown_family(void)
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/alarm.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/pause.html
  * ============================================================ */
+static volatile sig_atomic_t alarm_caught;
+static void alarm_catcher(int s) { (void)s; alarm_caught++; }
+
 static void test_alarm(void)
 {
+	void (*prev)(int);
+	unsigned left;
+
 	/* alarm.html ERRORS: "The alarm() function is always successful,
 	 * and no return value is reserved to indicate an error."  RETURN
 	 * VALUE: "Otherwise, alarm() shall return 0" -- "otherwise" being
@@ -637,10 +649,7 @@ static void test_alarm(void)
 	CHECK(alarm(0) == 0);
 	CHECK(errno == 0);
 
-#if NTLIBC_TEST(BUG, posix_ids_alarm_schedules_and_reports_remaining) /* BUG (compiles and links; formerly UNIMPL):: alarm() never schedules anything, so it can never
-	 * report time remaining.
-	 *
-	 * alarm.html DESCRIPTION: "The alarm() function shall cause the
+	/* alarm.html DESCRIPTION: "The alarm() function shall cause the
 	 * system to generate a SIGALRM signal for the process after the
 	 * number of realtime seconds specified by seconds have elapsed.
 	 * ... If seconds is 0, a pending alarm request, if any, is
@@ -649,27 +658,93 @@ static void test_alarm(void)
 	 * value that is the number of seconds until the previous request
 	 * would have generated a SIGALRM signal."
 	 *
-	 * src/unistd/sleep.c:41 is
-	 *     unsigned alarm(unsigned s) { (void)s; return 0; }
-	 * -- no timer, no signal, and therefore no remaining time to
-	 * report.  test/POSIX-GAP-ACCOUNTING.md's degenerate-stub table
-	 * already calls this "a genuine gap, and the root of the
-	 * getitimer/setitimer/ualarm undefined-ok: chain: needs a
-	 * per-process timer thread delivering SIGALRM".
-	 *
-	 * UNIMPL, not N/A: NT has the mechanism (a waitable timer, or
-	 * NtSetTimer, plus the APC delivery src/signal/signal.c would need
-	 * anyway), so this is unbuilt rather than unbuildable.  The
-	 * assertion below is the cheapest one that catches it and needs no
-	 * signal delivery at all: schedule far enough out that no
-	 * plausible scheduling delay could have expired it, then cancel
-	 * and read back the remaining time.  Probed on this tree:
-	 * alarm(100) returns 0 and the alarm(0) after it returns 0.
-	 * Re-enable when alarm() is backed by a real timer. */
+	 * Schedule far enough out that no plausible scheduling delay could
+	 * have expired it, then read the remaining time back and cancel.
+	 * The bound is 99..100 rather than == 100 only because the two
+	 * calls read the clock separately; the round-*up* alarm() performs
+	 * is what stops a request with 99.99 seconds to run reporting the
+	 * 0 that means "no request pending". */
 	CHECK(alarm(100) == 0);		/* no previous request */
-	CHECK(alarm(0) > 0);		/* ~100 seconds still to run */
+	left = alarm(0);
+	CHECK(left >= 99 && left <= 100);
 	CHECK(alarm(0) == 0);		/* and now it is cancelled */
-#endif
+
+	/* A new request replaces the old one and reports what the old one
+	 * had left, which is the same RETURN VALUE clause read the other
+	 * way round: "a previous alarm() request with time remaining" does
+	 * not have to have been cancelled to be reported. */
+	CHECK(alarm(100) == 0);
+	left = alarm(50);
+	CHECK(left >= 99 && left <= 100);
+	left = alarm(0);
+	CHECK(left >= 49 && left <= 50);
+
+	/* And the signal itself.  src/unistd/sleep.c arms an NT waitable
+	 * timer whose expiry queues a user APC that calls SIGALRM's
+	 * disposition, and NT runs a queued user APC only while the thread
+	 * is in an alertable wait -- so this asserts delivery the one way
+	 * it is reachable here, from inside a sleep().  sleep.html RETURN
+	 * VALUE: "If sleep() returns due to the delivery of a signal, the
+	 * value returned shall be the 'unslept' amount ... in seconds",
+	 * which is what makes the early return distinguishable from a
+	 * sleep(5) that simply ran its course.
+	 *
+	 * Not fenced, and deliberately not written with pause(): what is
+	 * still out of reach is delivery to a thread that is neither
+	 * sleeping nor paused, and that is recorded in
+	 * test/POSIX-GAP-ACCOUNTING.md rather than asserted here.
+	 *
+	 * RETRIED, and reported unverified rather than failed if every
+	 * attempt is dropped.  MEASURED on the Wine leg of this tree
+	 * (stock Wine 9.0, x86_64): a bare alarm(1) + sleep(5) loses the
+	 * SIGALRM outright in about 1 run in 8 on an idle machine and in
+	 * roughly 2 of 3 with six of them running at once -- and it is
+	 * LOST, not late: the same probe with sleep(30) still reports
+	 * nothing caught after the full thirty seconds in the runs that
+	 * miss, so no timeout makes it reliable.  Nothing on the ntlibc
+	 * side is timing-dependent (one NtSetTimer with an absolute due
+	 * time and an APC routine, then one alertable NtDelayExecution),
+	 * so the drop is between wineserver's timer expiry and the APC
+	 * reaching the waiting thread.
+	 *
+	 * The retry is what keeps this a real assertion instead of a
+	 * coin-flip: a delivery path that worked would satisfy the FIRST
+	 * attempt, and the fallback below reports "not observed" rather
+	 * than "passed", so nothing here can go green on an
+	 * implementation that never delivers.  Real Windows is the oracle
+	 * (.github/workflows/ci.yml runs this suite on Server 2025), and
+	 * there the first attempt is expected to carry it. */
+	prev = signal(SIGALRM, alarm_catcher);
+	CHECK(prev != SIG_ERR);
+	{
+		int attempt;
+		int delivered = 0;
+		for (attempt = 0; attempt < 4 && !delivered; attempt++) {
+			alarm_caught = 0;
+			CHECK(alarm(1) == 0);
+			left = sleep(5);
+			if (alarm_caught == 1) {
+				delivered = 1;
+				CHECK(left >= 3 && left <= 5);
+				/* the request was spent on its delivery */
+				CHECK(alarm(0) == 0);
+			} else {
+				/* nothing arrived; the request has expired
+				 * either way, so there is nothing to cancel */
+				CHECK(left == 0);
+				CHECK(alarm(0) == 0);
+			}
+		}
+		if (!delivered) {
+			printf("SKIP posix-unistd-ids SIGALRM delivery: the timer "
+			       "APC was dropped on all %d attempts (see the "
+			       "comment above -- measured as a runtime defect, "
+			       "not a timeout); alarm()'s arming, reporting and "
+			       "cancellation were still checked above\n", attempt);
+			unverified++;
+		}
+	}
+	CHECK(signal(SIGALRM, prev) == alarm_catcher);
 
 #if NTLIBC_TEST(NA, posix_ids_pause_requires_async_signal_delivery) /* N/A: pause() cannot be called from this suite at all --
 	 * calling it deadlocks the run rather than failing it.
@@ -683,20 +758,23 @@ static void test_alarm(void)
 	 * calling process and control is returned from the signal-catching
 	 * function."
 	 *
-	 * Every clause on the page is conditioned on a signal arriving.
-	 * src/unistd/sleep.c:33-39 implements pause() as an alertable
-	 * NtDelayExecution with a maximal (0x7fffffffffffffff) timeout,
-	 * and this platform has no asynchronous signal delivery to end it:
-	 * src/signal/signal.c raises signals only from within the raising
-	 * thread, so nothing can wake a thread that is sitting in the
-	 * delay.  The call returns -1/[EINTR] only if the wait is
-	 * alerted, and nothing here can alert it.
+	 * Every clause on the page is conditioned on a signal arriving,
+	 * and *this* call has no way of arranging one.  src/unistd/sleep.c
+	 * implements pause() as an alertable NtDelayExecution with a
+	 * maximal (0x7fffffffffffffff) timeout, and exactly one thing in
+	 * this library can end it: an alarm() timer's APC, which is why
+	 * test_alarm() above can assert SIGALRM delivery into a sleep().
+	 * With no alarm pending -- which is the state pause() is called in
+	 * here, and the state a pause() that means "wait for something
+	 * from outside" is always in -- nothing can alert the wait, because
+	 * src/signal/signal.c still raises signals only from within the
+	 * raising thread.
 	 *
 	 * N/A rather than UNIMPL, at the level of *this page*: the errno
 	 * and the -1 return are already written correctly for the case
 	 * they describe, and what is missing is asynchronous signal
-	 * delivery, which is a signal.h gap the ledger records against
-	 * that header.  This is also the one name in
+	 * delivery from outside the process, which is a signal.h gap the
+	 * ledger records against that header.  This is also the one name in
 	 * test/POSIX-GAP-ACCOUNTING.md's original never-asserted 112 that
 	 * that sweep could not give an assertion to, for this exact
 	 * reason.  It must stay fenced: enabling it hangs `make check`
@@ -942,6 +1020,19 @@ int main(int argc, char **argv)
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);
 
-	if (!fails) printf("posix-unistd-ids: all tests passed\n");
-	return fails != 0;
+	if (fails) { printf("posix-unistd-ids: failures: %d\n", fails); return 1; }
+	if (unverified) {
+		/* Everything that ran passed, but that is not the same claim
+		 * as "all tests passed" -- see the SKIP line(s) above for
+		 * which assertion groups never ran.  Exit 77 so
+		 * tools/run-tests.py reports this in its own bucket instead
+		 * of counting it as a pass.  Same convention as
+		 * test/posix-tail.c and test/posix-socket.c. */
+		printf("posix-unistd-ids: %d assertion group(s) unverified in "
+		       "this environment (see SKIP lines above); no failures in "
+		       "what did run\n", unverified);
+		return 77;
+	}
+	printf("posix-unistd-ids: all tests passed\n");
+	return 0;
 }

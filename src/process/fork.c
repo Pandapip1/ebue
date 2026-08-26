@@ -215,6 +215,15 @@ pid_t fork(void)
 		 * in the kernel holds this figure (see wait.c), so this call
 		 * is the only thing that can. */
 		__rusage_children_reset();
+		/* Same shape, same reason: fork.html also says "The time left
+		 * until an alarm clock signal shall be reset to zero, and the
+		 * alarm, if any, shall be canceled", and the deadline
+		 * src/unistd/sleep.c records for a pending alarm() is a static
+		 * that the address-space copy brought along.  The timer object
+		 * behind it did not make the trip -- its handle is deliberately
+		 * not OBJ_INHERIT -- so this only has to forget the deadline,
+		 * not cancel anything. */
+		__alarm_reset_after_fork();
 		return 0;
 	}
 
