@@ -1080,6 +1080,30 @@ typedef struct _JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
 #define PAGE_EXECUTE                0x10
 #define PAGE_EXECUTE_READ           0x20
 #define PAGE_EXECUTE_READWRITE      0x40
+#define PAGE_WRITECOPY              0x08
+#define PAGE_EXECUTE_WRITECOPY      0x80
+
+/* Section objects (src/mman/mman.c's file-backed mmap()).  SEC_COMMIT is
+ * the only allocation attribute used: it means the whole section is
+ * backed by the file and committed up front, as opposed to SEC_RESERVE
+ * (demand-commit, only meaningful for a pagefile-backed section) or
+ * SEC_IMAGE (PE loading, src/process/exec.c's territory, a different
+ * NtCreateSection call entirely). SECTION_MAP_* are the DesiredAccess
+ * bits NtCreateSection/NtMapViewOfSection actually check; ALL_ACCESS is
+ * broad on purpose because the section handle is closed immediately
+ * after the view is mapped (the view keeps its own reference), so there
+ * is no lingering handle whose rights matter later. */
+#define SEC_COMMIT                   0x08000000
+#define SECTION_QUERY                0x0001
+#define SECTION_MAP_WRITE            0x0002
+#define SECTION_MAP_READ             0x0004
+#define SECTION_MAP_EXECUTE          0x0008
+#define SECTION_EXTEND_SIZE          0x0010
+#define SECTION_ALL_ACCESS           (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE| \
+                                       SECTION_QUERY|SECTION_MAP_WRITE| \
+                                       SECTION_MAP_READ|SECTION_MAP_EXECUTE| \
+                                       SECTION_EXTEND_SIZE)
+typedef enum _SECTION_INHERIT { ViewShare = 1, ViewUnmap = 2 } SECTION_INHERIT;
 
 /* NtQueryVirtualMemory()'s MemoryBasicInformation class (used by
  * src/signal/signal.c to tell SEGV_MAPERR from SEGV_ACCERR after an
@@ -1342,6 +1366,14 @@ NTSTATUS NTAPI NtWriteVirtualMemory(HANDLE, PVOID, const void *, SIZE_T, SIZE_T 
 NTSTATUS NTAPI NtAllocateVirtualMemory(HANDLE, PVOID *, ULONG_PTR, SIZE_T *, ULONG, ULONG);
 NTSTATUS NTAPI NtFreeVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG);
 NTSTATUS NTAPI NtProtectVirtualMemory(HANDLE, PVOID *, SIZE_T *, ULONG, PULONG);
+/* File-backed mmap() (src/mman/mman.c).  Real, ordinary ntdll exports on
+ * both NT and Wine -- unlike the SEC_IMAGE call src/process/exec.c uses
+ * for PE loading, this is the everyday data-mapping path every mapped
+ * file goes through. MaximumSize is passed NULL to mean "the file's
+ * current size", which is why mmap() never has to query it itself. */
+NTSTATUS NTAPI NtCreateSection(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, LARGE_INTEGER *, ULONG, ULONG, HANDLE);
+NTSTATUS NTAPI NtMapViewOfSection(HANDLE, HANDLE, PVOID *, ULONG_PTR, SIZE_T, LARGE_INTEGER *, SIZE_T *, SECTION_INHERIT, ULONG, ULONG);
+NTSTATUS NTAPI NtUnmapViewOfSection(HANDLE, PVOID);
 /* Real, non-stub exports, and implemented in Wine as well as on NT:
  * dlls/ntdll/ntdll.spec:272 is a genuine `stdcall -syscall` thunk (the
  * adjacent NtLockProductActivationKeys/NtLockRegistryKey are commented-out

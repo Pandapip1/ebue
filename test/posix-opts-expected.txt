@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=490 BUG=96 UNIMPL=970 NA=54 FLAKY=0
+# COUNTS PASS=504 BUG=82 UNIMPL=970 NA=54 FLAKY=0
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -186,18 +186,18 @@ mlockall/3-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: 
 mlockall/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/speculative/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/11-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
 mmap/11-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
-mmap/11-4.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/11-4.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 2 mmap() is now file-backed (map_file(), src/mman/mman.c) and the sibling case mmap/11-6 -- same fork/mmap/write/munmap shape -- now PASSes, but 11-4 still FAILs at its own second mmap() in the parent: it reads back the byte written into the partial page past EOF by the child's mapping, even though fstat() shows the file's logical length never grew past the truncated size (measured with a standalone repro: size stays constant across write+reopen). The data survives across two independent NtCreateSection() calls of the same on-disk bytes despite the intervening close()+reopen(), which reads as the cache manager (or Wine's file-mapping emulation of it) retaining the shared cache page for the file rather than re-zeroing the tail on a fresh section -- the same class of divergence the LTP test itself calls out with its "known bug on tmpfs" skip on native Linux. Not yet isolated to NT-vs-Wine; not re-fenced as NA without that
 mmap/11-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mmap/11-6.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/11-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/19-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -205,18 +205,18 @@ mmap/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/24-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/24-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/27-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
-mmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/31-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mmap/32-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-mmap/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mmap/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
 mmap/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
-mmap/6-4.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/6-5.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/6-6.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
-mmap/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 1 declines a file-backed mapping with [ENODEV] by design; POSIX Issue 7 has no anonymous mapping, so every OPTS mmap case is necessarily file-backed -- see include/sys/mman.h and test/posix-mman.c's posix_mman_mmap_file_backed fence
+mmap/6-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/6-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/6-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+mmap/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/7-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/7-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-

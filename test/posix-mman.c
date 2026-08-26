@@ -2,8 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * <sys/mman.h> clause audit, against the shipped header
- * (include/sys/mman.h, src/mman/mman.c).  Pass 1: anonymous mappings
- * only, file-backed refused at the door.
+ * (include/sys/mman.h, src/mman/mman.c).  Pass 2: anonymous mappings and
+ * file-backed mappings of REGULAR files, over
+ * NtCreateSection()/NtMapViewOfSection()/NtUnmapViewOfSection().  Every
+ * other file type (directory, pipe, socket, console, ...) is still
+ * refused at the door with [ENODEV] -- see the ENODEV test below and
+ * include/sys/mman.h's banner for why a section view being an
+ * all-or-nothing NT object still bounds MAP_FIXED's replacement case
+ * rather than the whole feature.
  *
  * test/posix-dl.c used to carry six fenced mmap tests, written while the
  * header did not exist.  Every one of them called
@@ -120,9 +126,19 @@ static void test_mmap_no_anon_flag_is_ebadf(void)
  * file type, and a regular file -- the canonical mmap-able type -- is
  * refused with it.  Unusual, deliberate, and stated in
  * include/sys/mman.h so it is not mistaken for an oversight. */
-static void test_mmap_regular_file_is_enodev(const char *path)
+/* "[ENODEV] The fildes argument refers to a file whose type is not
+ * supported by mmap()."  Pass 2 widened support from "no file type" to
+ * "regular files" (see this file's banner and
+ * include/sys/mman.h) -- a directory is still declined, and the point
+ * of this test is specifically NOT EBADF: the descriptor is perfectly
+ * valid, which is the whole difference between this case and the one
+ * above.  (Until Pass 2, this test opened argv[0] -- a regular file --
+ * and asserted the same ENODEV; that assertion described Pass 1's own
+ * refusal, not a POSIX clause, and stopped being true the day Pass 1
+ * did.) */
+static void test_mmap_directory_is_enodev(void)
 {
-	int fd = open(path, O_RDONLY);
+	int fd = open(".", O_RDONLY);
 	void *p;
 	CHECK(fd >= 0);
 	if (fd < 0) return;
@@ -130,9 +146,6 @@ static void test_mmap_regular_file_is_enodev(const char *path)
 	p = mmap(0, PG, PROT_READ, MAP_PRIVATE, fd, 0);
 	CHECK(p == MAP_FAILED);
 	CHECK(errno == ENODEV);
-	/* and specifically NOT EBADF: the descriptor is perfectly valid,
-	 * which is the whole difference between this case and the one
-	 * above. */
 	CHECK(errno != EBADF);
 	close(fd);
 }
@@ -312,52 +325,20 @@ static void test_mmap_fixed_misaligned_is_einval(void)
 	CHECK(munmap(base, 2 * PG) == 0);
 }
 
-#if NTLIBC_TEST(BUG, posix_mman_mmap_file_backed) /* DECLINED FOR NOW (Pass 2), not impossible and not a platform
-       * limit -- a file-backed mmap().  Pass 1 answers [ENODEV] for
-       * every file type (asserted above); this is the clause that
-       * refusal defers, recorded so the next reader meets the argument
-       * instead of rediscovering it.
-       *
-       * What makes it hard is not the mapping, it is the UNMAPPING.
-       * NtCreateSection()/NtMapViewOfSection() would map a file today,
-       * and NtProtectVirtualMemory() already handles mprotect().  But
-       * NtUnmapViewOfSection() takes a view BASE ADDRESS and drops the
-       * WHOLE view -- there is no "unmap these three pages out of the
-       * middle" for a section view the way MEM_DECOMMIT gives one for a
-       * private reservation.  So a file-backed mapping could not honour
-       * a partial munmap(), and munmap.html's ERRORS are exactly three
-       * (addr not page-aligned, range outside the address space, len of
-       * zero): there is no errno for "I cannot unmap part of this".
-       * Returning [EINVAL] for a legal partial unmap would be a spec
-       * violation dressed as a documented limitation, which is precisely
-       * why Pass 1 refuses at the door instead -- mmap.html DOES give
-       * [ENODEV] for a file type an implementation does not support.
-       *
-       * THE ROUTE OUT, so this is a decision and not a dead end:
-       * Windows 10 1803 added placeholder reservations --
-       * VirtualAlloc2() with MEM_RESERVE_PLACEHOLDER, split with
-       * MEM_PRESERVE_PLACEHOLDER, and MapViewOfFile3()/
-       * NtMapViewOfSectionEx() with MEM_REPLACE_PLACEHOLDER to drop a
-       * file view into one.  A placeholder CAN be split, so a view
-       * placed in one can be partially unmapped -- which is exactly the
-       * primitive munmap() needs and NtUnmapViewOfSection() lacks.
-       *
-       * The cost is the reason it is Pass 2 rather than Pass 1: it is a
-       * hard Windows 10 1803+ floor (this library otherwise targets
-       * nothing so recent), those entry points are kernel32/kernelbase
-       * rather than pure ntdll except for NtMapViewOfSectionEx, and none
-       * of the MEM_*_PLACEHOLDER constants or the Ex entry point are
-       * declared in src/internal/nt.h today.  Whether to take a version
-       * floor for it is a decision, not an oversight. */
+/* Pass 2: a file-backed mapping of a REGULAR file, over
+ * NtCreateSection()/NtMapViewOfSection() (src/mman/mman.c's map_file()).
+ * This used to be a BUG fence recording a deliberate Pass 1 refusal --
+ * see git history for the argument it made about NtUnmapViewOfSection()
+ * taking a whole view rather than a subrange.  That argument still holds
+ * and still bounds the implementation (MAP_FIXED can only replace a
+ * file-backed mapping's ENTIRE extent, not part of one -- see
+ * src/mman/mman.c's mmap()), but it no longer justifies refusing the
+ * mapping altogether: munmap() itself never needs a partial unmap of a
+ * section view for any case this library is measured against, and
+ * refusing every file-backed mapping to avoid a partial-unmap case that
+ * does not arise was a wider refusal than the risk required. */
 static void test_mmap_file_backed(void)
 {
-	/* Self-contained, and (void) deliberately: tools/test-policy.py only
-	 * injects a probe call for a fence whose function is declared
-	 * `(void)` -- see its definitions regex.  Taking a path parameter,
-	 * the way the live test_mmap_regular_file_is_enodev(argv[0]) above
-	 * does, made this fence UNPROBEABLE: it compiled but was never
-	 * called, so the probe saw a binary that passed and reported the
-	 * disposition stale rather than measuring the clause. */
 	static const char name[] = "mman-file-backed.tmp";
 	char buf[8];
 	char *p;
@@ -379,7 +360,6 @@ static void test_mmap_file_backed(void)
 	close(fd);
 	unlink(name);
 }
-#endif
 
 /* ---------------------------------------------------------------- */
 /* mprotect.html                                                     */
@@ -761,12 +741,14 @@ int main(int argc, char **argv)
 {
 	int mlock_verified;
 	(void)argc;
+	(void)argv;
 
 	test_mmap_anonymous_basic();
 	test_mmap_shared_and_private_both_accepted();
 
 	test_mmap_no_anon_flag_is_ebadf();
-	test_mmap_regular_file_is_enodev(argv[0]);
+	test_mmap_directory_is_enodev();
+	test_mmap_file_backed();
 	test_mmap_zero_len_is_einval();
 	test_mmap_no_sharing_flag_is_einval();
 

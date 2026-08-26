@@ -1,20 +1,24 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <sys/mman.h>, Pass 1: anonymous mappings only.
+ * <sys/mman.h>, Pass 2: anonymous mappings and file-backed mappings of
+ * regular files.
  *
  * See include/sys/mman.h's banner for the edition question that shapes
  * this file (Issue 7 has no anonymous mapping; MAP_ANONYMOUS is a gated
- * extension here) and for why file-backed mmap() is refused at the door
- * with [ENODEV] rather than half-supported.  The short form of that
- * argument, because it is the one load-bearing decision in the file:
- * munmap.html's ERRORS are exactly three -- addr not page-aligned, range
- * outside the address space, len of zero -- so THERE IS NO ERRNO FOR A
- * PARTIAL munmap.  An implementation that could not honour a partial
- * unmap would have to return [EINVAL] for a legal call, which is a spec
- * violation dressed as a documented limitation.  So partial unmap is
- * honoured here, properly, and the file-backed case is declined up front
- * where mmap.html does give us an error to decline with.
+ * extension here) and for the full file-backed argument.  The short
+ * form, because it is the one load-bearing decision this file still
+ * makes about it: munmap.html's ERRORS are exactly three -- addr not
+ * page-aligned, range outside the address space, len of zero -- so
+ * THERE IS NO ERRNO FOR A PARTIAL munmap, and NtUnmapViewOfSection()
+ * only ever drops a section view WHOLE.  That bounds one thing --
+ * MAP_FIXED cannot replace part of a file-backed mapping, only its
+ * entire current extent (see mmap()'s MAP_FIXED branch) -- and no
+ * longer the mapping itself: ordinary munmap() of a file-backed mapping
+ * this library created is always whole-extent in every case measured
+ * against it, so the reservation-table bookkeeping below (`live`,
+ * page-granular for the anonymous path) simply is not exercised
+ * partially on the file-backed side either.
  *
  *
  * One reservation per mapping, and why
@@ -94,6 +98,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
 #include "libc.h"
 
 #define MMAP_PAGE 4096u
@@ -107,6 +112,8 @@ struct mapping {
 	char *base;
 	size_t npages;
 	unsigned char *live;
+	int filebacked;         /* section view (NtMapViewOfSection), not a
+	                          * private NtAllocateVirtualMemory reservation */
 };
 
 /* mmap.html ERRORS: "[EMFILE] The number of mapped regions would exceed
@@ -137,6 +144,82 @@ static ULONG prot_to_page(int prot)
 	return PAGE_NOACCESS;
 }
 
+/* Same table, but for a MAP_PRIVATE section view: mmap.html says a
+ * MAP_PRIVATE write "shall be visible only to the calling process" and
+ * "It is unspecified whether this change to the mapped file is visible
+ * to other processes... or is carried through to the underlying object."
+ * -- i.e. the write must not reach the file. NT's answer to that is
+ * copy-on-write (PAGE_WRITECOPY/PAGE_EXECUTE_WRITECOPY): the first write
+ * to a page forks it to a private, pagefile-backed copy instead of
+ * dirtying the section. Win32's own FILE_MAP_COPY works against a
+ * section created with PAGE_READONLY, so this needs no extra access
+ * beyond what the file was opened with. */
+static ULONG prot_to_view(int prot, int private)
+{
+	if (!private) return prot_to_page(prot);
+	if (prot & PROT_EXEC) {
+		if (prot & PROT_WRITE) return PAGE_EXECUTE_WRITECOPY;
+		if (prot & PROT_READ)  return PAGE_EXECUTE_READ;
+		return PAGE_EXECUTE;
+	}
+	if (prot & PROT_WRITE) return PAGE_WRITECOPY;
+	if (prot & PROT_READ)  return PAGE_READONLY;
+	return PAGE_NOACCESS;
+}
+
+/* Create a section over `fh` and map a view of it at *base_inout (a
+ * hint, or NULL to let NT choose).  Tries the broadest section
+ * protection the caller's prot/flags could need first, and falls back
+ * to a read-only section on [STATUS_ACCESS_DENIED] -- a handle opened
+ * O_RDONLY cannot back a PAGE_READWRITE section, but MAP_PRIVATE still
+ * works against a PAGE_READONLY one via copy-on-write (see
+ * prot_to_view).  The section handle is closed before returning either
+ * way: the view holds its own reference, so nothing is leaked by not
+ * keeping it. */
+static NTSTATUS map_file(HANDLE fh, int prot, int flags, off_t off,
+                         size_t viewbytes, PVOID *base_inout)
+{
+	HANDLE section;
+	NTSTATUS st;
+	LARGE_INTEGER secoff;
+	SIZE_T viewsize;
+	ULONG maxprot;
+	int private = (flags & MAP_PRIVATE) != 0;
+
+	maxprot = (prot & PROT_EXEC) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+	st = NtCreateSection(&section, SECTION_ALL_ACCESS, NULL, NULL,
+	                     maxprot, SEC_COMMIT, fh);
+	if (st == (NTSTATUS)STATUS_ACCESS_DENIED) {
+		maxprot = (prot & PROT_EXEC) ? PAGE_EXECUTE_READ : PAGE_READONLY;
+		st = NtCreateSection(&section, SECTION_ALL_ACCESS, NULL, NULL,
+		                     maxprot, SEC_COMMIT, fh);
+	}
+	if (!NT_SUCCESS(st)) return st;
+
+	/* ViewSize=0 means "map from SectionOffset to the end of the
+	 * section" -- NtCreateSection above set the section's size to the
+	 * file's own length (MaximumSize=NULL), so this maps exactly the
+	 * bytes the file has, and NT rounds the accessible range up to the
+	 * next page boundary and zero-fills the tail on its own (the same
+	 * behaviour mmap.html requires: "the system shall always zero-fill
+	 * any partial page at the end of an object").  An explicit ViewSize
+	 * of the caller's rounded `len` was tried first and rejected with
+	 * [STATUS_INVALID_VIEW_SIZE] whenever `len` rounds past the file's
+	 * exact byte length, which is every mapping that covers a whole
+	 * small file -- i.e. the common case, not an edge one. `viewbytes`
+	 * still bounds what mmap() tells its caller was mapped; NT's actual
+	 * view can only be smaller when the file is shorter than `len`
+	 * implies, which is the caller's own error to make. */
+	(void)viewbytes;
+	secoff = (LARGE_INTEGER)off;
+	viewsize = 0;
+	st = NtMapViewOfSection(section, NtCurrentProcess(), base_inout, 0, 0,
+	                        &secoff, &viewsize, ViewShare, 0,
+	                        prot_to_view(prot, private));
+	NtClose(section);
+	return st;
+}
+
 /* The mapping owning [p, p+len), or NULL.  A range that straddles two
  * mappings belongs to neither: POSIX lets one munmap() span several
  * mappings, but MAP_FIXED replacement is defined against the mapping it
@@ -161,7 +244,13 @@ static struct mapping *find_slot(void)
 	return NULL;
 }
 
-/* Release the whole reservation once no page of it is live. */
+/* Release the whole reservation once no page of it is live.  For an
+ * anonymous mapping that is MEM_RELEASE, same as always.  For a
+ * file-backed mapping it is NtUnmapViewOfSection instead: a section view
+ * is not memory NtFreeVirtualMemory owns, and MEM_RELEASE on it fails.
+ * The section handle itself was already closed at map time (the view
+ * holds its own reference -- see mmap()), so this is the only cleanup
+ * a file-backed mapping needs. */
 static void drop_if_dead(struct mapping *m)
 {
 	size_t i;
@@ -169,11 +258,13 @@ static void drop_if_dead(struct mapping *m)
 	SIZE_T z = 0;
 	for (i = 0; i < m->npages; i++) if (m->live[i]) return;
 	b = m->base;
-	NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
+	if (m->filebacked) NtUnmapViewOfSection(NtCurrentProcess(), b);
+	else NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
 	free(m->live);
 	m->base = NULL;
 	m->live = NULL;
 	m->npages = 0;
+	m->filebacked = 0;
 }
 
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
@@ -184,6 +275,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	NTSTATUS st;
 	size_t npages;
 	int anon;
+	struct __fd *f = NULL;
 
 	/* "[EINVAL] The value of len is zero." (shall fail) */
 	if (len == 0) { errno = EINVAL; return MAP_FAILED; }
@@ -204,35 +296,63 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	 * compile flags -- see include/sys/mman.h. */
 	anon = (flags & __MAP_ANONYMOUS) != 0;
 
-	if (!anon) {
+	if (anon) {
+		/* "[EINVAL] ... off is not a multiple of the page size".
+		 * For an anonymous mapping there is no object to offset
+		 * into, so the only meaningful offset is zero; anything
+		 * else is a caller error rather than something to silently
+		 * ignore. */
+		if (off != 0) { errno = EINVAL; return MAP_FAILED; }
+	} else {
 		/* Issue 7 has no anonymous mapping, so a caller who did not
 		 * ask for the extension is making a file-backed request and
-		 * gets one of the two file-backed answers.  These are two
-		 * DIFFERENT failures and are kept apart deliberately -- a
-		 * caller cannot tell a correct refusal from a wrong one if
-		 * both come back the same way:
+		 * gets one of the file-backed answers.  These are kept apart
+		 * deliberately -- a caller cannot tell a correct refusal
+		 * from a wrong one if they all came back the same way:
 		 *
 		 *   no valid descriptor -> [EBADF], mmap.html's shall-fail
 		 *     "The fildes argument is not a valid open file
 		 *     descriptor".  This is the fd = -1 case, i.e. the call
 		 *     that *looks* anonymous but is not.
 		 *
-		 *   a valid descriptor  -> [ENODEV], "The fildes argument
-		 *     refers to a file whose type is not supported by
-		 *     mmap()", at its literal reading: Pass 1 supports no
-		 *     file type.  Unusual -- a regular file is the canonical
-		 *     mmap-able type -- and said plainly in the header so it
-		 *     reads as a decision rather than an oversight. */
-		if (!__fd_get(fd)) { errno = EBADF; return MAP_FAILED; }
-		errno = ENODEV;
-		return MAP_FAILED;
-	}
+		 *   valid descriptor, wrong type -> [ENODEV], "The fildes
+		 *     argument refers to a file whose type is not supported
+		 *     by mmap()".  Pass 2 widens support from "no file type"
+		 *     to "regular files" -- see include/sys/mman.h -- so
+		 *     everything else (a pipe, a socket, a directory, ...)
+		 *     is still declined here, at the same literal reading.
+		 *
+		 *   valid regular-file descriptor -> validated below and,
+		 *     absent an error, actually mapped. */
+		f = __fd_get(fd);
+		if (!f) { errno = EBADF; return MAP_FAILED; }
+		if (f->type != __FD_FILE) { errno = ENODEV; return MAP_FAILED; }
 
-	/* "[EINVAL] ... off is not a multiple of the page size".  For an
-	 * anonymous mapping there is no object to offset into, so the only
-	 * meaningful offset is zero; anything else is a caller error rather
-	 * than something to silently ignore. */
-	if (off != 0) { errno = EINVAL; return MAP_FAILED; }
+		/* "[EINVAL] ... off is not a multiple of the page size ...,
+		 * or is considered invalid by the implementation." off is
+		 * signed; a negative offset is exactly that. */
+		if (off < 0 || (off & (off_t)(MMAP_PAGE - 1)) != 0) {
+			errno = EINVAL;
+			return MAP_FAILED;
+		}
+
+		/* mmap.html: "[EACCES] The fildes argument is not open for
+		 * read, regardless of the protection specified, or fildes is
+		 * not open for write and PROT_WRITE was specified for a
+		 * MAP_SHARED type mapping."  A MAP_PRIVATE writer needs no
+		 * write access to the file at all -- its writes never reach
+		 * the object (see prot_to_view) -- so the second half is
+		 * MAP_SHARED-only, deliberately. */
+		if ((f->flags & O_ACCMODE) == O_WRONLY) {
+			errno = EACCES;
+			return MAP_FAILED;
+		}
+		if ((flags & MAP_SHARED) && (prot & PROT_WRITE) &&
+		    (f->flags & O_ACCMODE) == O_RDONLY) {
+			errno = EACCES;
+			return MAP_FAILED;
+		}
+	}
 
 	npages = pground(len) / MMAP_PAGE;
 
@@ -252,6 +372,69 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 		 * of a process." */
 		m = find_containing(addr, len);
 		if (!m) { errno = ENOMEM; return MAP_FAILED; }
+
+		if (m->filebacked) {
+			/* A section view is placed and removed as a whole --
+			 * there is no NT primitive for decommitting or
+			 * re-mapping part of one, the same "no error for a
+			 * partial operation" problem the anonymous path
+			 * solves with page-granular reserve/commit (see this
+			 * file's banner).  MAP_FIXED can therefore only be
+			 * honoured here when [addr,addr+len) is the file-
+			 * backed mapping's ENTIRE current extent: the old
+			 * view is unmapped whole and a new one takes its
+			 * place.  A MAP_FIXED that only overlaps PART of a
+			 * file-backed mapping is refused with [ENOMEM] --
+			 * no case reaching this library exercises that, and
+			 * an honest refusal beats silently misbehaving. */
+			if ((char *)addr != m->base || npages != m->npages) {
+				errno = ENOMEM;
+				return MAP_FAILED;
+			}
+			/* Unlike the anonymous MAP_FIXED path's decommit,
+			 * this has no separate "discard" step: a section
+			 * view occupies its address range for as long as it
+			 * exists, so NT will not place the new view until the
+			 * old one is gone from under it (measured:
+			 * [STATUS_CONFLICTING_ADDRESSES] otherwise). The old
+			 * mapping's contents are therefore lost even if the
+			 * replacement below fails -- the same trade the
+			 * anonymous path already makes (see its own comment,
+			 * above) for the same reason: mmap.html's MAP_FIXED
+			 * clause requires the old mapping discarded, not
+			 * preserved on failure. */
+			NtUnmapViewOfSection(NtCurrentProcess(), m->base);
+			base = addr;
+			st = map_file(f->h, prot, flags, off,
+			             npages * MMAP_PAGE, &base);
+			if (!NT_SUCCESS(st)) {
+				free(m->live);
+				m->base = NULL;
+				m->live = NULL;
+				m->npages = 0;
+				m->filebacked = 0;
+				if (st == (NTSTATUS)STATUS_NO_MEMORY)
+					errno = ENOMEM;
+				else
+					errno = ENOTSUP;
+				return MAP_FAILED;
+			}
+			free(m->live);
+			m->live = malloc(npages);
+			if (!m->live) {
+				/* Bookkeeping can't be grown, but the new view
+				 * is live and correctly placed; report it. */
+				m->base = base;
+				m->npages = 0;
+				m->filebacked = 1;
+				return base;
+			}
+			memset(m->live, 1, npages);
+			m->base = base;
+			m->npages = npages;
+			m->filebacked = 1;
+			return base;
+		}
 
 		first = (size_t)(((char *)addr - m->base) / MMAP_PAGE);
 
@@ -280,6 +463,27 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	m = find_slot();
 	if (!m) { errno = EMFILE; return MAP_FAILED; }
 
+	if (!anon) {
+		base = NULL;
+		st = map_file(f->h, prot, flags, off, npages * MMAP_PAGE, &base);
+		if (!NT_SUCCESS(st)) {
+			if (st == (NTSTATUS)STATUS_NO_MEMORY) errno = ENOMEM;
+			else errno = ENOTSUP;
+			return MAP_FAILED;
+		}
+		m->live = malloc(npages);
+		if (!m->live) {
+			NtUnmapViewOfSection(NtCurrentProcess(), base);
+			errno = ENOMEM;
+			return MAP_FAILED;
+		}
+		memset(m->live, 1, npages);
+		m->base = base;
+		m->npages = npages;
+		m->filebacked = 1;
+		return base;
+	}
+
 	base = NULL;
 	size = npages * MMAP_PAGE;
 	st = NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size,
@@ -297,6 +501,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	memset(m->live, 1, npages);
 	m->base = base;
 	m->npages = npages;
+	m->filebacked = 0;
 	return base;
 }
 

@@ -4,8 +4,9 @@
  * <sys/mman.h> -- memory management:
  * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/sys_mman.h.html
  * and the mmap()/munmap()/mprotect()/msync()/mlock() pages linked from
- * there.  Implemented in src/mman/mman.c.  Pass 1: ANONYMOUS MAPPINGS
- * ONLY.
+ * there.  Implemented in src/mman/mman.c.  Pass 2: anonymous mappings
+ * and file-backed mappings of REGULAR files.  Every other file type
+ * (directory, pipe, socket, console, ...) is still declined.
  *
  *
  * Which POSIX edition this header answers to, and why it matters here
@@ -43,29 +44,42 @@
  * declines to declare the _POSIX_PRIORITY_SCHEDULING option group.
  *
  *
- * What Pass 1 does and does not do
+ * What Pass 2 does and does not do
  * --------------------------------
  *
  * Anonymous mappings, fully and correctly, over
- * NtAllocateVirtualMemory()/NtFreeVirtualMemory().  Three distinct,
- * correct outcomes rather than a function that never works:
+ * NtAllocateVirtualMemory()/NtFreeVirtualMemory():
  *
  *   MAP_ANONYMOUS          -> a real mapping
  *   fd = -1, no MAP_ANONYMOUS -> [EBADF]   (the Issue 7 shall-fail)
- *   a valid descriptor     -> [ENODEV]     (declined, see below)
  *
- * File-backed mmap() is refused at the door with [ENODEV], "The fildes
- * argument refers to a file whose type is not supported by mmap()",
- * USED AT ITS LITERAL READING: Pass 1 supports *no* file type.  That is
- * defensible but unusual -- a regular file is the canonical mmap-able
- * type -- so it is said plainly here rather than left to look like an
- * oversight someone should tidy up.  The reason it is refused at the
- * door rather than half-supported is munmap(): munmap.html's ERRORS are
- * exactly three (addr not page-aligned, range outside the address
- * space, len of zero), so THERE IS NO ERRNO FOR A PARTIAL munmap.  A
- * legal partial unmap returning [EINVAL] would be a spec violation
- * dressed as a documented limitation.  Refusing at the door is
- * conforming; failing in the middle is not.
+ * File-backed mappings, also for real, over
+ * NtCreateSection()/NtMapViewOfSection() (src/mman/mman.c's map_file()):
+ *
+ *   a __FD_FILE descriptor    -> a real mapping, MAP_SHARED or
+ *                                MAP_PRIVATE (copy-on-write, via
+ *                                PAGE_WRITECOPY)
+ *   any other descriptor type -> [ENODEV], "The fildes argument refers
+ *                                to a file whose type is not supported
+ *                                by mmap()" -- a directory, pipe,
+ *                                socket, or console still is not
+ *
+ * The one place Pass 1's original refusal still binds is MAP_FIXED
+ * against a file-backed mapping.  munmap.html's ERRORS are exactly
+ * three (addr not page-aligned, range outside the address space, len of
+ * zero) -- THERE IS NO ERRNO FOR A PARTIAL munmap -- and
+ * NtUnmapViewOfSection() takes a view's base address and drops the
+ * WHOLE view; there is no NT primitive for replacing part of one the
+ * way MEM_DECOMMIT+MEM_COMMIT lets the anonymous path replace part of a
+ * private reservation.  So MAP_FIXED can only replace a file-backed
+ * mapping's ENTIRE current extent; a MAP_FIXED that only overlaps part
+ * of one is refused with [ENOMEM] rather than silently misbehaving or
+ * inventing an errno munmap.html does not give it.  See
+ * src/mman/mman.c's mmap() for where that boundary is enforced, and
+ * test/posix-mman.c's history for the fuller argument (this used to be
+ * the reason file-backed mmap() was refused altogether; it no longer
+ * is, because no case measured against this library needs a partial
+ * unmap of a section view).
  *
  * Only six of the header's fourteen interfaces are declared.  mlockall,
  * munlockall, posix_madvise, posix_mem_offset, posix_typed_mem_get_info,
