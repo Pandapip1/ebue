@@ -767,8 +767,8 @@ static void test_kill_zero_is_own_group_of_one(void)
  *
  *   - an N/A fence, test_kill_eperm_uid_mismatch(), claiming the clause
  *     was "structurally impossible here" because src/unistd/ids.c has
- *     exactly one uid (1000) forever.  kill()'s EPERM has nothing to do
- *     with uids: src/signal/signal.c maps NtOpenProcess's
+ *     exactly one immutable, token-derived uid.  kill()'s EPERM has
+ *     nothing to do with uids: src/signal/signal.c maps NtOpenProcess's
  *     STATUS_ACCESS_DENIED straight to EPERM, and that is NT's own
  *     access check on the target process object.  The fence was
  *     refuted by the test fifteen lines below it, in this same file.
@@ -799,8 +799,9 @@ static void test_kill_zero_is_own_group_of_one(void)
  * instead". src/unistd/access.c's faccessat() ignores flags entirely
  * ("(void)flags;"), which is only spec-compliant because
  * src/unistd/ids.c makes real and effective always identical (a single
- * fixed uid 1000, no setuid); with two distinct identities available,
- * ignoring AT_EACCESS would be a real bug.  This is a real, live
+ * one immutable token identity, no effective setuid); with two distinct
+ * identities available, ignoring AT_EACCESS would be a real bug.  This is
+ * a real, live
  * assertion of that structural fact, not a fence. */
 static void test_access_real_effective_uid_identical(void)
 {

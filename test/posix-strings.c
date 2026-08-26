@@ -565,8 +565,8 @@ static void test_utime_marks_ctime(void)
  * Not observable, and not fenced as separate no-op tests because the
  * reason is a property of the platform rather than of utime():
  * [EACCES] and [EPERM] both need a second security principal to be
- * denied *as* -- ntlibc models exactly one user (geteuid() is a
- * hardcoded 1000, see include/sys/resource.h's PRIO_USER note), so
+ * denied *as* -- ntlibc models exactly one user (geteuid() is the
+ * token-derived current uid; see include/sys/resource.h's PRIO_USER note), so
  * every caller is always the owner with full access; [EROFS] needs a
  * read-only file system, which the test harness has no way to mount;
  * [ELOOP] needs a symbolic-link loop, and no symbolic link can be

@@ -2,9 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * <pwd.h>: NT has no /etc/passwd, but this library has exactly one
- * uid.  getuid()/geteuid() (src/unistd/ids.c) always report 1000 and
- * setuid()/seteuid() are no-ops, so "the current user" is the only
- * user this library can ever be asked about honestly -- and it is
+ * current uid.  getuid()/geteuid() (src/unistd/ids.c) map the process
+ * token's SAM/AD SID and RID, and setuid()/seteuid() can only retain it,
+ * so "the current user" is the only user this library can ever be asked
+ * about honestly -- and it is
  * genuinely knowable:
  *
  *   pw_name  -- %USERNAME%, falling back to %USER%, exactly the
@@ -27,15 +28,9 @@
  *               runnable, and POSIX does not require that check
  *               either (getpwnam.html has no such ERRORS clause).
  *
- * A SID-based route was considered and rejected: NtOpenProcessToken /
- * NtQueryInformationToken(TokenUser) would hand back a SID, but
- * turning a SID into a display name needs LSA (LsaLookupSids) or
- * advapi32's LookupAccountSid -- neither of which this from-scratch,
- * ntdll-only library links (tools/ntdll.def has no Token/Lsa/Sid
- * exports) -- and it would not change what gets reported anyway:
- * pw_uid is getuid(), a fixed sentinel unrelated to any real Windows
- * SID, not a decoded one. The environment route is simpler, already
- * proven by getlogin(), and produces the identical answer.
+ * pw_uid comes from the token SID.  Turning that SID into a display name
+ * would separately require LsaLookupSids or LookupAccountSid, so pw_name
+ * retains the environment route already used by getlogin().
  *
  * Any *other* name or uid is refused cleanly (NULL / *result = NULL,
  * errno untouched, per getpwnam.html/getpwuid.html's "requested entry

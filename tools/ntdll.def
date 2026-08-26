@@ -69,6 +69,7 @@ NtLockVirtualMemory                     ; 3.51
 NtMapViewOfSection                      ; 3.51
 NtOpenFile                              ; 3.51
 NtOpenProcess                           ; 3.51
+NtOpenProcessToken                      ; 3.51
 NtOpenSymbolicLinkObject                ; 3.51
 NtQuerySymbolicLinkObject               ; 3.51
 NtOpenThread                            ; 3.51
@@ -79,6 +80,7 @@ NtQueryFullAttributesFile               ; 4.0
 NtQueryInformationFile                  ; 3.51
 NtQueryInformationProcess               ; 3.51
 NtQueryInformationThread                ; 3.51
+NtQueryInformationToken                 ; 3.51
 NtQueryObject                           ; 3.51
 NtQueryPerformanceCounter               ; 3.51
 NtQuerySystemInformation                ; 3.51

@@ -75,6 +75,7 @@ extern size_t __sanitizer_get_allocated_size(const void *);
 /* Handles are (fd + 1), so that 0 stays "no handle". */
 #define H2FD(h) ((int)(long)(h) - 1)
 #define FD2H(f) ((HANDLE)(long)((f) + 1))
+#define SHIM_TOKEN_HANDLE ((HANDLE)(LONG_PTR)-4)
 
 /* ------------------------------------------------------------------ heap */
 
@@ -1513,10 +1514,50 @@ NTSTATUS NTAPI NtClose(HANDLE h)
 {
 	long i = (long)h - 1;
 	struct ofile *f;
+	if (h == SHIM_TOKEN_HANDLE) return STATUS_SUCCESS;
 	if (i < 0 || i >= VFS_HANDLES || !vhandles[i]) return STATUS_INVALID_HANDLE;
 	f = vhandles[i];
 	vhandles[i] = 0;
 	of_drop(f);
+	return STATUS_SUCCESS;
+}
+
+/* A fixed local-SAM token identity for getuid()'s native tests.  The RID
+ * is deliberately not 1000: retaining the old hardcoded uid would fail
+ * every test which observes this S-1-5-21-111-222-333-4242 fixture. */
+NTSTATUS NTAPI NtOpenProcessToken(HANDLE process, ACCESS_MASK access,
+                                  PHANDLE token)
+{
+	if (process != NtCurrentProcess() || !(access & TOKEN_QUERY) || !token)
+		return STATUS_INVALID_PARAMETER;
+	*token = SHIM_TOKEN_HANDLE;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtQueryInformationToken(HANDLE token,
+                                       TOKEN_INFORMATION_CLASS cls,
+                                       PVOID buf, ULONG len, PULONG outlen)
+{
+	static const ULONG subauth[] = { 21, 111, 222, 333, 4242 };
+	const ULONG sidlen = 8 + sizeof subauth;
+	const ULONG need = sizeof(TOKEN_USER) + sidlen;
+	TOKEN_USER *user;
+	SID *sid;
+
+	if (!outlen) return STATUS_ACCESS_VIOLATION;
+	*outlen = need;
+	if (token != SHIM_TOKEN_HANDLE) return STATUS_INVALID_HANDLE;
+	if (cls != TokenUser) return STATUS_INVALID_INFO_CLASS;
+	if (!buf || len < need) return STATUS_BUFFER_TOO_SMALL;
+
+	memset(buf, 0, need);
+	user = (TOKEN_USER *)buf;
+	sid = (SID *)((UCHAR *)buf + sizeof(TOKEN_USER));
+	user->User.Sid = sid;
+	sid->Revision = SID_REVISION;
+	sid->SubAuthorityCount = sizeof subauth / sizeof subauth[0];
+	sid->IdentifierAuthority.Value[5] = 5;
+	memcpy(sid->SubAuthority, subauth, sizeof subauth);
 	return STATUS_SUCCESS;
 }
 

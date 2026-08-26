@@ -21,6 +21,7 @@
  * serial number.
  */
 #include <sys/stat.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -187,8 +188,8 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	st->st_ino = (ino_t)ii.IndexNumber;
 	st->st_mode = mode_from_attrs(bi.FileAttributes, ti.ReparseTag, exe);
 	st->st_nlink = si.NumberOfLinks ? si.NumberOfLinks : 1;
-	st->st_uid = 1000;
-	st->st_gid = 1000;
+	st->st_uid = getuid();
+	st->st_gid = getgid();
 	st->st_size = S_ISDIR(st->st_mode) ? 0 : si.EndOfFile;
 	st->st_blksize = 4096;
 	st->st_blocks = (si.AllocationSize + 511) / 512;

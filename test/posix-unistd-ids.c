@@ -103,17 +103,28 @@ static void test_getid_always_successful(void)
 	CHECK(eu != (uid_t)-1);
 	CHECK(g != (gid_t)-1);
 	CHECK(eg != (gid_t)-1);
+	/* 1000 is detect_uid()'s no-error fallback.  Every real NT token
+	 * user SID maps elsewhere, so observing it means token detection did
+	 * not run successfully and would leave the old bug indistinguishable. */
+	CHECK(u != (uid_t)1000);
 
 	/* N/A: geteuid.html's real-vs-effective distinction.  NT has no
 	 * set-user-ID bit and no saved set-user-ID -- an NT process's
 	 * token is not switched by executing a file -- so nothing on this
 	 * platform can ever make the effective id differ from the real
-	 * one.  src/unistd/ids.c answers 1000 to all four by construction.
+	 * one.  src/unistd/ids.c derives both user IDs from the same token.
 	 * That the two agree is asserted (test/posix-unistd.c's
 	 * test_access_real_effective_uid_identical() already leans on it);
 	 * that they *can* differ is unconstructible, not unimplemented. */
 	CHECK(u == eu);
 	CHECK(g == eg);
+
+#ifdef __linux__
+	/* fuzz/ntstubs.c supplies a local SAM SID ending in RID 4242.  This
+	 * independent fixture distinguishes the token/RID mapping from the
+	 * old hardcoded 1000 while exercising Cygwin's local 0x30000 range. */
+	CHECK(u == (uid_t)(0x30000u + 4242u));
+#endif
 }
 
 /* ============================================================
@@ -258,7 +269,7 @@ static void test_setid_family(void)
 	 *
 	 * sysconf(_SC_SAVED_IDS) is -1 on this platform
 	 * (src/unistd/sysconf.c), so there is no saved set-user-ID to
-	 * match either, and uid 0 is not the real user ID (1000) -- the
+	 * match either, and uid 0 is not this token-derived user ID -- the
 	 * clause's precondition holds exactly.
 	 *
 	 * "One user, so the *effect* is unobservable" is a sound argument
@@ -282,15 +293,12 @@ static void test_setid_family(void)
 	 * setreuid.html/setregid.html ("[EINVAL] The value of the ruid or
 	 * euid argument is invalid or out-of-range") say the same.
 	 *
-	 * (uid_t)-2 is chosen because (uid_t)-1 is the reserved
-	 * "unchanged" marker setreuid.html gives a meaning to, so -2 is
-	 * the nearest value that is unambiguously not an id.  Where the
-	 * [EINVAL]/[EPERM] line falls is an implementation choice, since
-	 * with one identity no other id can be assumed either; it is drawn
-	 * at the top half of uid_t and the reasoning is written out in
-	 * src/unistd/ids.c above id_supported(). */
-	errno = 0; CHECK(setuid((uid_t)-2) == -1 && errno == EINVAL);
-	errno = 0; CHECK(setgid((gid_t)-2) == -1 && errno == EINVAL);
+	 * (uid_t)-1 is the reserved "unchanged" marker for setreuid() and
+	 * is not an assumable ID for the one-argument calls.  Other values
+	 * in the upper half are valid because trusted-domain offsets use
+	 * that range. */
+	errno = 0; CHECK(setuid((uid_t)-1) == -1 && errno == EINVAL);
+	errno = 0; CHECK(setgid((gid_t)-1) == -1 && errno == EINVAL);
 }
 
 /* ============================================================

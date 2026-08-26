@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * <pwd.h>: there is no /etc/passwd on NT, but there is exactly one uid
- * (src/unistd/ids.c's getuid()/geteuid() always return 1000, and
- * setuid()/seteuid() are no-ops -- see that file's own comment), and
- * that one user's name, home directory and shell are all things NT can
- * genuinely answer.  src/misc/pwd.c fills a struct passwd for that user
+ * <pwd.h>: there is no /etc/passwd on NT, but the process token identifies
+ * exactly one current user.  src/unistd/ids.c maps that user's SAM/AD SID
+ * and RID to a uid, and setuid()/seteuid() can only retain that identity.
+ * The user's name, home directory and shell are also things NT can answer.
+ * src/misc/pwd.c fills a struct passwd for that user
  * and refuses -- cleanly, per getpwnam.html/getpwuid.html, not with a
  * fabricated record -- to answer for anyone else.  See src/misc/pwd.c's
  * header comment for the getpwent()/setpwent()/endpwent() decision. */

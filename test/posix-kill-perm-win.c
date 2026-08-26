@@ -6,8 +6,8 @@
  *
  * This lived in test/posix-unistd.c as an N/A fence claiming the clause
  * was "structurally impossible here", on the grounds that ntlibc has
- * exactly one uid (1000, src/unistd/ids.c), forever, so no uid mismatch
- * can ever be checked.  Both halves of that were wrong.
+ * exactly one immutable token-derived uid (src/unistd/ids.c), so no uid
+ * mismatch can ever be checked.  Both halves of that were wrong.
  *
  * The reason was wrong because kill()'s EPERM has nothing to do with
  * uids.  src/signal/signal.c's kill() reaches a non-child pid through
