@@ -30,6 +30,8 @@
  * forward-declared here and defined at the bottom of the file.
  */
 
+#include "test-policy.h"
+
 static void u_check(int cond, const char *expr, int line);
 #define UCHECK(c) u_check((c), #c, __LINE__)
 
@@ -147,6 +149,66 @@ static void test_sched_h_defines_sched_param(void)
 	UCHECK(sp.sched_priority == 7);
 	UCHECK(sizeof sp >= sizeof(int));
 }
+
+/* ============= island: <ctype.h>, alone ========================== */
+#include <ctype.h>
+
+#if NTLIBC_TEST(UNIMPL, posix_headers_ctype_h_defines_locale_t) /* UNIMPL: <ctype.h> does not define locale_t.
+	 * basedefs/ctype.h.html: "The <ctype.h> header shall define the
+	 * locale_t type as described in <locale.h>."  It is an
+	 * unconditional sentence about a type, and it is what lets a
+	 * translation unit that includes only <ctype.h> name the argument
+	 * the _l family takes.
+	 *
+	 * Mechanism: bits/alltypes.h gates locale_t behind
+	 * __NEED_locale_t, and exactly five headers ask for it --
+	 * include/locale.h, include/string.h, include/strings.h,
+	 * include/wchar.h and include/time.h.  include/ctype.h and
+	 * include/wctype.h are the two headers on the mandate list that do
+	 * not, so a TU including either alone cannot name the type at all.
+	 * Probed on this tree: `#include <ctype.h>` followed by
+	 * `locale_t g;` compiles as an implicit int, while the same two
+	 * lines against <locale.h>, <wchar.h> or <string.h> are clean.
+	 *
+	 * This is separate from the absence of the isalnum_l()/iswalnum_l()
+	 * families, which test/POSIX-GAP-ACCOUNTING.md already records as a
+	 * gap: exposing the type is one __NEED_locale_t line per header and
+	 * claims nothing about those functions.
+	 *
+	 * It also fills a hole in group U's own sweep, which reported that
+	 * of the 68 "shall define T as described in <Y>" sentences the only
+	 * failure was <signal.h>/pthread_t -- these two were not among the
+	 * ones probed.
+	 *
+	 * Re-enable when include/ctype.h requests the type. */
+static void test_ctype_h_defines_locale_t(void)
+{
+	locale_t l = (locale_t)0;
+
+	UCHECK(sizeof l == sizeof(void *));
+	UCHECK(l == (locale_t)0);
+}
+#endif
+
+/* ============= island: <wctype.h>, alone ========================= */
+#include <wctype.h>
+
+#if NTLIBC_TEST(UNIMPL, posix_headers_wctype_h_defines_locale_t) /* UNIMPL: <wctype.h> does not define locale_t either.
+	 * basedefs/wctype.h.html lists the types the header shall define --
+	 * wint_t, wctrans_t, wctype_t, and locale_t "As described in
+	 * <locale.h>".  include/wctype.h asks bits/alltypes.h only for
+	 * __NEED_wint_t and __NEED_wctype_t.  Same mechanism, same
+	 * one-line fix, as the <ctype.h> island above; kept as its own
+	 * island because the clause is about what this header supplies on
+	 * its own. */
+static void test_wctype_h_defines_locale_t(void)
+{
+	locale_t l = (locale_t)0;
+
+	UCHECK(sizeof l == sizeof(void *));
+	UCHECK(l == (locale_t)0);
+}
+#endif
 
 /* ============ end of the islands; anything goes below ============ */
 #include <stdio.h>
