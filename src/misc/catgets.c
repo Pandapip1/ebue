@@ -258,6 +258,13 @@ static size_t expand(char *buf, size_t bufsz, const char *tmpl,
 
 nl_catd catopen(const char *name, int oflag)
 {
+	/* One array, not two literals: `end` is an exclusive end pointer
+	 * into the *same* object as `tmpl` (expand() compares them with
+	 * `<`), and C does not guarantee two identical string literals are
+	 * one object -- so `expand(..., "%N", "%N" + 2, ...)` was both a
+	 * -Wstring-plus-int finding and a relational comparison of pointers
+	 * into potentially distinct arrays. */
+	static const char dflt[] = "%N";
 	char buf[PATH_MAX];
 	const char *path, *lang, *p, *z;
 	nl_catd cd;
@@ -299,7 +306,8 @@ nl_catd catopen(const char *name, int oflag)
 
 		/* "A leading or two adjacent <colon> characters ( "::" ) is
 		 * equivalent to specifying %N." */
-		n = z == p ? expand(buf, sizeof buf, "%N", "%N" + 2, name, lang)
+		n = z == p ? expand(buf, sizeof buf, dflt, dflt + sizeof dflt - 1,
+		                    name, lang)
 		           : expand(buf, sizeof buf, p, z, name, lang);
 		if (n != (size_t)-1) {
 			cd = read_catalog(buf);
