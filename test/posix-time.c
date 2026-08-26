@@ -438,6 +438,66 @@ static void test_strptime_literal_percent_and_ws_run(void)
 	CHECK(end && *end == 0 && tm.tm_year == 100 && tm.tm_mon == 1);
 }
 
+#if NTLIBC_TEST(BUG, posix_time_tzname_dst_designation) /* BUG: tzname[1] is always tzname[0]; TZ's DST designation is
+	 * never parsed.  tzset.html DESCRIPTION: "The tzset() function
+	 * shall set the external variable tzname as follows:
+	 *
+	 *     tzname[0] = "std";
+	 *     tzname[1] = "dst";
+	 *
+	 * where std and dst are as described in XBD Chapter 8."  XBD Ch. 8
+	 * gives TZ the form `std offset dst[offset][,start[/time],
+	 * end[/time]]` and describes dst as "no less than three, nor more
+	 * than {TZNAME_MAX}, bytes that are the designation for the
+	 * corresponding Daylight Saving Time (DST) timezone".
+	 *
+	 * Mechanism: src/time/tzset.c reads one name into one buffer and
+	 * then does
+	 *
+	 *     tzname[0] = tzname[1] = __tzname_buf;
+	 *
+	 * The parse moves on to the offset and never comes back for the
+	 * dst field, so the two entries are the same pointer for every TZ
+	 * value.
+	 *
+	 * This is separable from the DST deviation the file's banner does
+	 * document.  That one is about *rules*: no transition dates are
+	 * parsed, so `daylight` is always 0 and localtime() never shifts --
+	 * and neither of those is disputed here.  tzname[1] is not a rule.
+	 * It is a literal string sitting in the TZ value the caller
+	 * supplied, requiring no zone database, no transition arithmetic
+	 * and no change to timezone, daylight or localtime().  An
+	 * application that reports its zone as tzname[daylight], or logs
+	 * both names, gets the standard-time name where the DST name is
+	 * required.
+	 *
+	 * The ledger's tzset row claims tzname[0]/[1] is covered; no test
+	 * in the tree asserts tzname[1] at all.
+	 *
+	 * Re-enable when tzset() parses the dst designation. */
+static void test_tzname_dst_designation(void)
+{
+	CHECK(setenv("TZ", "EST5EDT", 1) == 0);
+	tzset();
+	CHECK(!strcmp(tzname[0], "EST"));
+	CHECK(!strcmp(tzname[1], "EDT"));
+
+	CHECK(setenv("TZ", "CET-1CEST", 1) == 0);
+	tzset();
+	CHECK(!strcmp(tzname[0], "CET"));
+	CHECK(!strcmp(tzname[1], "CEST"));
+
+	/* with a rule suffix, which changes nothing about the designations */
+	CHECK(setenv("TZ", "PST8PDT,M3.2.0,M11.1.0", 1) == 0);
+	tzset();
+	CHECK(!strcmp(tzname[0], "PST"));
+	CHECK(!strcmp(tzname[1], "PDT"));
+
+	CHECK(setenv("TZ", "UTC0", 1) == 0);
+	tzset();
+}
+#endif
+
 /* tzset.html DESCRIPTION: "The daylight variable shall be set to 0 if
  * Daylight Savings Time conversions should never be applied ...
  * otherwise it shall be set to a non-zero value." ntlibc's tzset() has
