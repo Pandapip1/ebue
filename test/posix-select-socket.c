@@ -86,10 +86,11 @@ static int unverified;
 /* Distinct from test/posix-socket.c's 55123: tools/run-tests.py runs the
  * non-serial tests in parallel (xargs -P), so two loopback tests
  * sharing a fixed port would collide with each other rather than with
- * anything on the machine.  getsockname() is not implemented (see
- * <sys/socket.h>'s banner), so an ephemeral port cannot be discovered
- * and a fixed one in the dynamic/private range (RFC 6335) is the same
- * trade-off posix-socket.c makes. */
+ * anything on the machine.  A fixed port in the dynamic/private range
+ * (RFC 6335) is the same trade-off posix-socket.c makes, and for the
+ * same reason it still makes it now that getsockname() exists: see that
+ * file's TEST_PORT comment for why the ephemeral-port form was not
+ * adopted. */
 #define TEST_PORT 55137
 
 /* Generous, because these are only ever waited on when the assertion

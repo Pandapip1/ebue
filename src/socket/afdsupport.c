@@ -485,23 +485,32 @@ void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, socklen
  * with no arithmetic against Information, and no second source of truth
  * about how big the reply "should" be.  AfdWaitForListen() always
  * declares the whole address written or fails the IRP outright
- * (STATUS_BUFFER_TOO_SMALL), so a well-formed reply always passes.
+ * (STATUS_BUFFER_TOO_SMALL), so a well-formed reply always passes; so
+ * do the two name queries, which either move the whole TDI address in
+ * or fail with STATUS_BUFFER_TOO_SMALL (AfdGetPeerName()) or the
+ * transport's own query error (AfdGetSockName()).
  *
  * AddressType is deliberately not checked: it is the field that overlays
  * sa_family, and socket() admits AF_INET alone, so a connection accepted
- * on one of this library's listeners has no other family to be.  It
- * carries no information AddressLength has not already given. */
-int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, socklen_t *len)
+ * on one of this library's listeners -- or an address AFD reports for
+ * one of its endpoints -- has no other family to be.  It carries no
+ * information AddressLength has not already given.
+ *
+ * The two field offsets are spelled +0 and +4 rather than through the
+ * AFD_*_RSP_OFF_* names, because those differ per reply and this is the
+ * one part that does not: a TRANSPORT_ADDRESS is TAAddressCount then
+ * TA_ADDRESS, wherever the enclosing reply happens to put it. */
+int __afd_transport_addr_out(const void *tap, struct sockaddr *addr, socklen_t *len)
 {
-	const unsigned char *p = (const unsigned char *)reply;
+	const unsigned char *p = (const unsigned char *)tap;
 	TA_ADDRESS ta;
 	int32_t count;
 	unsigned short alen;
 
-	memcpy(&count, p + AFD_ACCEPT_RSP_OFF_ADDR_COUNT, sizeof(count));
+	memcpy(&count, p, sizeof(count));
 	if (count < 1) return -1;
 
-	memcpy(&alen, p + AFD_ACCEPT_RSP_OFF_ADDR_LENGTH, sizeof(alen));
+	memcpy(&alen, p + 4, sizeof(alen));
 	if (alen < TDI_ADDRESS_LENGTH_IP) return -1;
 
 	if (!addr || !len) return 0;
@@ -511,8 +520,46 @@ int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, socklen_t 
 	 * not be aligned for one, and this file's own tests hand it a
 	 * plain unsigned char image. */
 	memset(&ta, 0, sizeof(ta));
-	memcpy(&ta, p + AFD_ACCEPT_RSP_OFF_ADDR_LENGTH,
-	       AFD_ACCEPT_RSP_SIZE - AFD_ACCEPT_RSP_OFF_ADDR_LENGTH);
+	memcpy(&ta, p + 4, (size_t)(2 + 2 + TDI_ADDRESS_LENGTH_IP));
 	__afd_addr_to_sockaddr(&ta, addr, len);
 	return 0;
+}
+
+/* See afd.h.  The wait-for-listen reply is a TRANSPORT_ADDRESS behind a
+ * ULONG SequenceNumber, so the whole of this function is that offset. */
+int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, socklen_t *len)
+{
+	return __afd_transport_addr_out((const unsigned char *)reply + AFD_ACCEPT_RSP_OFF_ADDR_COUNT,
+	                                addr, len);
+}
+
+/* See afd.h.  These four exist so that the one thing that distinguishes
+ * the two name replies -- 26 bytes with a ULONG ActivityCount in front
+ * versus 22 bytes with nothing -- is reachable from a test with no
+ * \Device\Afd, the same way __afd_build_bind_request() makes the bind
+ * request's layout reachable.  Written as separate functions rather
+ * than as an offset argument to one, because the offset is not a
+ * parameter of anything: each ioctl has exactly one right answer, and a
+ * caller that could pass the other one is the bug these are here to
+ * make visible. */
+unsigned long __afd_sockname_reply_size(void)
+{
+	return (unsigned long)AFD_SOCKNAME_RSP_SIZE;
+}
+
+int __afd_sockname_reply_addr(const void *reply, struct sockaddr *addr, socklen_t *len)
+{
+	return __afd_transport_addr_out((const unsigned char *)reply + AFD_SOCKNAME_RSP_OFF_ADDR,
+	                                addr, len);
+}
+
+unsigned long __afd_peername_reply_size(void)
+{
+	return (unsigned long)AFD_PEERNAME_RSP_SIZE;
+}
+
+int __afd_peername_reply_addr(const void *reply, struct sockaddr *addr, socklen_t *len)
+{
+	return __afd_transport_addr_out((const unsigned char *)reply + AFD_PEERNAME_RSP_OFF_ADDR,
+	                                addr, len);
 }

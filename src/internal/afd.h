@@ -63,6 +63,8 @@
 #define AFD_SEND                    7
 #define AFD_SELECT                  9
 #define AFD_DISCONNECT              10
+#define AFD_GET_SOCK_NAME           11
+#define AFD_GET_PEER_NAME           12
 
 #define IOCTL_AFD_BIND               _AFD_CONTROL_CODE(AFD_BIND, METHOD_NEITHER_)
 #define IOCTL_AFD_CONNECT            _AFD_CONTROL_CODE(AFD_CONNECT, METHOD_NEITHER_)
@@ -73,6 +75,17 @@
 #define IOCTL_AFD_SEND               _AFD_CONTROL_CODE(AFD_SEND, METHOD_NEITHER_)
 #define IOCTL_AFD_SELECT             _AFD_CONTROL_CODE(AFD_SELECT, METHOD_BUFFERED_)
 #define IOCTL_AFD_DISCONNECT         _AFD_CONTROL_CODE(AFD_DISCONNECT, METHOD_NEITHER_)
+/* 0x1202F / 0x12033.  The first has the same third-way confirmation the
+ * codes above do: Wine's independently-derived IOCTL_AFD_GETSOCKNAME
+ * (include/wine/afd.h, CTL_CODE(FILE_DEVICE_BEEP, 0x80b, METHOD_NEITHER,
+ * FILE_ANY_ACCESS)) is numerically 0x1202F too.  The second has only the
+ * one source: Wine's ws2_32 answers getpeername out of its own cached
+ * connect()/accept() state and never issues an ioctl for it, so there is
+ * no second derivation of 0x12033 to check against.  Recorded here
+ * rather than left implicit, because it means real Windows CI is the
+ * only place getpeername()'s wire code can be wrong and be noticed. */
+#define IOCTL_AFD_GET_SOCK_NAME      _AFD_CONTROL_CODE(AFD_GET_SOCK_NAME, METHOD_NEITHER_)
+#define IOCTL_AFD_GET_PEER_NAME      _AFD_CONTROL_CODE(AFD_GET_PEER_NAME, METHOD_NEITHER_)
 
 /* Every wire-format struct below spells a 32-bit field as `uint32_t`
  * (and TAAddressCount as `int32_t`, matching TDI's own LONG), not
@@ -850,6 +863,50 @@ typedef struct _AFD_POLL_INFO {
 #define AFD_POLL_H_SIZE       (sizeof(HANDLE) + 8)
 #define AFD_POLL_REQ_SIZE(n)  (AFD_POLL_REQ_OFF_HANDLES + (size_t)(n) * AFD_POLL_H_SIZE)
 
+/* ---- getsockname / getpeername replies, by offset --------------------
+ *
+ * Both ioctls take no input at all and write one TRANSPORT_ADDRESS-
+ * shaped reply.  *** The two replies are NOT the same shape. ***  That
+ * is the single fact this section exists to record, because nothing
+ * about the two function names suggests it and reading the second reply
+ * with the first's offsets yields a plausible-looking address four
+ * bytes out of place:
+ *
+ *   - IOCTL_AFD_GET_SOCK_NAME answers with a TDI_ADDRESS_INFO -- a
+ *     ULONG ActivityCount and *then* the TRANSPORT_ADDRESS, 26 bytes for
+ *     one AF_INET address (AFD_TDI_ADDRESS_INFO_SIZE_IP, the same reply
+ *     IOCTL_AFD_BIND already returns).  It is not AFD's own structure:
+ *     the driver hands the request straight to the transport as a TDI
+ *     TDI_QUERY_INFORMATION/TDI_QUERY_ADDRESS_INFO over an MDL of the
+ *     caller's buffer (ReactOS drivers/network/afd/afd/info.c,
+ *     AfdGetSockName()), and TDI_ADDRESS_INFO is what that query is
+ *     defined to return.  ReactOS's client agrees: WSPGetSockName
+ *     (dll/win32/msafd/misc/dllmain.c) declares its buffer
+ *     PTDI_ADDRESS_INFO and reads the address out of `&TdiAddress->Address`.
+ *   - IOCTL_AFD_GET_PEER_NAME answers with a bare TRANSPORT_ADDRESS, 22
+ *     bytes, no ActivityCount.  AFD does not consult the transport for
+ *     this one at all -- AfdGetPeerName() RtlCopyMemory's the
+ *     FCB->RemoteAddress it recorded at connect/accept time straight
+ *     into the caller's buffer -- and WSPGetPeerName declares its buffer
+ *     PTRANSPORT_ADDRESS, not PTDI_ADDRESS_INFO, to match.
+ *
+ * Both are METHOD_NEITHER, so afd.sys writes through Irp->UserBuffer
+ * with OutputBufferLength as its only bound and there is no
+ * Information-bounded copy-back to reason about (AfdGetPeerName()
+ * completes with Information 0 outright).  The reply buffer is still
+ * zeroed before the call and still interpreted only through
+ * __afd_transport_addr_out(), for the reason the accept banner above
+ * gives: over a zeroed buffer, a reply that stopped short of the
+ * address leaves AddressLength zero, and rejecting zero rejects that
+ * reply without any second source of truth about how big it "should"
+ * have been. */
+#define AFD_SOCKNAME_RSP_OFF_ACTIVITY    ((size_t)0)
+#define AFD_SOCKNAME_RSP_OFF_ADDR        ((size_t)4) /* the TRANSPORT_ADDRESS */
+#define AFD_SOCKNAME_RSP_SIZE            ((size_t)AFD_TDI_ADDRESS_INFO_SIZE_IP)
+
+#define AFD_PEERNAME_RSP_OFF_ADDR        ((size_t)0)
+#define AFD_PEERNAME_RSP_SIZE            ((size_t)(4 + 2 + 2 + TDI_ADDRESS_LENGTH_IP))
+
 /* ---- helpers shared by src/socket/ (every .c there) (src/socket/afdsupport.c) ------ */
 /* socklen_t is `unsigned` (include/alltypes.h.in) -- spelled that way
  * here, not with <sys/socket.h>'s typedef, so this header (pulled into
@@ -1005,6 +1062,32 @@ void __afd_addr_to_sockaddr(const TA_ADDRESS *ta, struct sockaddr *addr, unsigne
  * an AFD_RECEIVED_ACCEPT_DATA and needs no particular alignment.
  * Sets no errno; the caller decides what the failure means. */
 int __afd_accept_reply_addr(const void *reply, struct sockaddr *addr, unsigned *len);
+/* The same interpretation, over a TRANSPORT_ADDRESS image on its own:
+ * `ta` points at TAAddressCount, not at the enclosing reply.  Three
+ * ioctls answer with one of these behind three different headers -- a
+ * ULONG SequenceNumber (wait-for-listen), a ULONG ActivityCount
+ * (get-sock-name), nothing at all (get-peer-name) -- so the header is
+ * the caller's business and the address is this function's.  Checks
+ * TAAddressCount >= 1 and AddressLength >= TDI_ADDRESS_LENGTH_IP before
+ * reading anything, converts into *addr and *len with accept.html's
+ * truncation rule when addr is not NULL, and returns 0, or -1 for a
+ * reply that describes no address.  Sets no errno.  Reads exactly
+ * 4 + 2 + 2 + TDI_ADDRESS_LENGTH_IP bytes and needs no alignment. */
+int __afd_transport_addr_out(const void *ta, struct sockaddr *addr, unsigned *len);
+/* The IOCTL_AFD_GET_SOCK_NAME and IOCTL_AFD_GET_PEER_NAME replies:
+ * __afd_*_reply_size() is the exact byte count each ioctl's output
+ * buffer declares for one AF_INET address (26 and 22 -- see the
+ * getsockname/getpeername banner above for why they differ), and
+ * __afd_*_reply_addr() interprets a buffer of that size, with
+ * __afd_transport_addr_out()'s contract and return value.  Split out
+ * like the bind/connect request builders and for the same reason:
+ * test/posix-socket-getname.c re-parses both by offset with no
+ * reference to this header, and runs with no \Device\Afd at all -- the
+ * only place the +4-versus-+0 difference can be caught here. */
+unsigned long __afd_sockname_reply_size(void);
+int __afd_sockname_reply_addr(const void *reply, struct sockaddr *addr, unsigned *len);
+unsigned long __afd_peername_reply_size(void);
+int __afd_peername_reply_addr(const void *reply, struct sockaddr *addr, unsigned *len);
 
 /* Per-socket state bits, stashed in struct __fd's otherwise-unused `pad`
  * byte for __FD_SOCKET descriptors only (test/networking-audit.md sec 2:

@@ -9,7 +9,7 @@
  * Scope, per test/networking-audit.md and this header's own task:
  * AF_INET with SOCK_STREAM only.  UDP (sendto/recvfrom/sendmsg/
  * recvmsg/SOCK_DGRAM's actual use), AF_INET6, AF_UNIX (and therefore
- * socketpair()) and getsockname()/getpeername()/sockatmark() are all
+ * socketpair()) and sockatmark() are all
  * staged for later work (networking-audit.md sec 6, stages 4-6) and are
  * deliberately *not declared* here -- this project's own standing rule
  * (see test/posix-sysmisc.c's file banner) is that a declared-but-
@@ -18,6 +18,16 @@
  * The SOCK_, AF_, SO_ and MSG_ constants are all defined regardless
  * (free, and needed so e.g. `socket(AF_INET6, ...)` compiles and fails
  * at runtime with EAFNOSUPPORT rather than at compile time).
+ *
+ * getsockname()/getpeername() were on that deferred list until
+ * src/socket/getname.c gave them bodies, and the reason they came off
+ * it early is worth stating: nothing in the staged plan actually
+ * blocked them.  Address introspection needs no new address family, no
+ * new socket type and no new transport -- only two more ioctls on the
+ * endpoint socket() already opens, reusing the very TDI-address
+ * interpretation accept() was already doing.  The list they were on is
+ * a list of work that needs a stage, not a list of things this scope
+ * cannot express.
  */
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
@@ -121,6 +131,8 @@ int bind(int, const struct sockaddr *, socklen_t);
 int listen(int, int);
 int accept(int, struct sockaddr *__restrict, socklen_t *__restrict);
 int connect(int, const struct sockaddr *, socklen_t);
+int getsockname(int, struct sockaddr *__restrict, socklen_t *__restrict);
+int getpeername(int, struct sockaddr *__restrict, socklen_t *__restrict);
 ssize_t send(int, const void *, size_t, int);
 ssize_t recv(int, void *, size_t, int);
 int shutdown(int, int);

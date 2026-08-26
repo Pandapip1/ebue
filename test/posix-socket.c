@@ -13,7 +13,14 @@
  * protocol validation (src/socket/socket.c) happens before any AFD
  * handle is ever opened, so it too is always exercised.  SO_REUSEADDR/
  * SO_TYPE/SO_ERROR (src/socket/sockopt.c) are pure struct __fd state
- * with no AFD ioctl involved, so they are too.
+ * with no AFD ioctl involved, so they are too -- as are the parts of
+ * getsockname()/getpeername() (src/socket/getname.c) that are decided
+ * before an ioctl is issued: the descriptor errors, getpeername()'s
+ * [ENOTCONN], and getsockname()'s unbound case, which POSIX makes a
+ * success and which this implementation therefore answers without
+ * asking AFD at all.  Their reply parsing has its own device-free test,
+ * test/posix-socket-getname.c; what needs a live AFD here is only the
+ * addresses themselves.
  *
  * Everything past socket() succeeding needs a real \Device\Afd
  * endpoint that actually answers AFD ioctls, and that is exactly the
@@ -248,13 +255,122 @@ static void test_sockopt_no_network(void)
 	close(s);
 }
 
+/* getsockname.html/getpeername.html, everything on those two pages that
+ * can be decided without an AFD ioctl -- which, in this environment, is
+ * the only part of either function that can be observed working at all.
+ * Grouped with the no-network tests above and gated the same way, for
+ * the same reason: socket() itself needs a device node that `make asan`'s
+ * stub environment does not have.
+ *
+ * All four cases here are answered by src/socket/getname.c before it
+ * reaches an ioctl, and each is answered there on purpose:
+ *
+ *   - [EBADF]/[ENOTSOCK] are the descriptor checks every other call in
+ *     <sys/socket.h> makes.
+ *   - getsockname() on a socket that was never bound is a SUCCESS, not
+ *     an error: "If the socket has not been bound to a local name, the
+ *     value stored in the object pointed to by address is unspecified"
+ *     (getsockname.html DESCRIPTION).  afd.sys would fail that endpoint
+ *     (STATUS_INVALID_PARAMETER, no address file and no connection), so
+ *     the ioctl is not issued -- the wildcard is returned instead.  The
+ *     assertion is on what POSIX guarantees (a success, and the family)
+ *     plus the wildcard this implementation documents itself as
+ *     returning, not on the "unspecified" value as if it were required.
+ *   - getpeername() [ENOTCONN] is the behavioural half of the same
+ *     coin: an unconnected socket must SAY it is unconnected, not
+ *     succeed with a zeroed address.  That distinction is the one thing
+ *     in this pair a caller can actually be broken by, and it is the
+ *     one thing Wine can still check here. */
+static void test_getname_no_network(void)
+{
+	struct sockaddr_in a;
+	socklen_t l;
+	int s;
+
+	s = socket(AF_INET, SOCK_STREAM, 0);
+	if (s < 0) {
+		printf("SKIP posix-socket getsockname/getpeername tests (socket() failed, errno=%d)\n", errno);
+		unverified++;
+		return;
+	}
+
+	/* getsockname.html/getpeername.html: "[EBADF] The socket argument
+	 * is not a valid file descriptor." */
+	l = sizeof a;
+	errno = 0;
+	CHECK(getsockname(-1, (struct sockaddr *)&a, &l) == -1);
+	CHECK(errno == EBADF);
+	l = sizeof a;
+	errno = 0;
+	CHECK(getpeername(-1, (struct sockaddr *)&a, &l) == -1);
+	CHECK(errno == EBADF);
+
+	/* "[ENOTSOCK] The socket argument does not refer to a socket." */
+	l = sizeof a;
+	errno = 0;
+	CHECK(getsockname(0, (struct sockaddr *)&a, &l) == -1); /* fd 0 is not a socket */
+	CHECK(errno == ENOTSOCK);
+	l = sizeof a;
+	errno = 0;
+	CHECK(getpeername(0, (struct sockaddr *)&a, &l) == -1);
+	CHECK(errno == ENOTSOCK);
+
+	/* A null out-parameter: neither page specifies it (unlike
+	 * accept.html, which explicitly permits a null address), and
+	 * [EINVAL] is the only invalid-argument code either page's ERRORS
+	 * list carries -- see src/socket/getname.c's banner. */
+	l = sizeof a;
+	errno = 0;
+	CHECK(getsockname(s, 0, &l) == -1);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(getsockname(s, (struct sockaddr *)&a, 0) == -1);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(getpeername(s, 0, &l) == -1);
+	CHECK(errno == EINVAL);
+
+	/* getsockname.html: an unbound socket is a success with an
+	 * unspecified value.  This implementation's unspecified value is
+	 * the wildcard, and the truncation contract holds on that path
+	 * too: *address_len is the address's full length. */
+	memset(&a, 0xCC, sizeof a);
+	l = sizeof a;
+	errno = 0;
+	CHECK(getsockname(s, (struct sockaddr *)&a, &l) == 0);
+	CHECK(a.sin_family == AF_INET);
+	CHECK(l == sizeof a);
+	CHECK(a.sin_port == 0);
+	CHECK(a.sin_addr.s_addr == htonl(INADDR_ANY));
+
+	/* getpeername.html: "[ENOTCONN] The socket is not connected or
+	 * otherwise has not had the peer pre-specified."  Not a zeroed
+	 * address returned successfully. */
+	memset(&a, 0xCC, sizeof a);
+	l = sizeof a;
+	errno = 0;
+	CHECK(getpeername(s, (struct sockaddr *)&a, &l) == -1);
+	CHECK(errno == ENOTCONN);
+	CHECK(a.sin_family == 0xCCCC); /* and the caller's buffer is untouched */
+
+	close(s);
+}
+
 /* Fixed loopback port used both by the capability probe and the main
- * end-to-end test below: getsockname() is out of scope here (see the
- * file banner's list of what src/socket/ does not implement), so there
- * is no way to ask AFD which ephemeral port a INADDR_ANY/port-0 bind()
- * landed on -- a fixed port in the dynamic/private range (RFC 6335) is
- * used instead, same trade-off any single-process loopback test in
- * this range makes. */
+ * end-to-end test below, in the dynamic/private range (RFC 6335).
+ *
+ * This used to be a workaround: getsockname() was out of scope, so
+ * there was no way to ask AFD which ephemeral port an INADDR_ANY/port-0
+ * bind() had landed on.  getsockname() now exists (src/socket/
+ * getname.c) and the workaround could be retired -- deliberately not
+ * done here.  Binding port 0 and querying it back would make the
+ * listener's port depend on a call that, in this environment, cannot be
+ * observed working at all (every AFD ioctl fails under Wine, so the
+ * whole group SKIPs), which means the change could only be validated on
+ * the real-Windows leg, and its only benefit -- not colliding with
+ * another process on 55123 -- is a benefit on the leg where nothing
+ * else is running.  The fixed port stays until getsockname() has been
+ * seen to work somewhere. */
 #define TEST_PORT 55123
 
 static int make_loopback_addr(struct sockaddr_in *a)
@@ -351,6 +467,73 @@ static void test_loopback_roundtrip(int listener)
 	CHECK(peer.sin_family == AF_INET);
 	CHECK(peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
 
+	/* getsockname.html/getpeername.html, the halves that need a live
+	 * AFD and so run on the real-Windows leg only.  Three sockets are
+	 * in hand here and each pins something different:
+	 *
+	 *   - `listener` is bound to TEST_PORT and never connected, so its
+	 *     local name is the address bind() was given.  That is the one
+	 *     assertion that ties getsockname()'s answer to a value this
+	 *     test chose rather than to one the stack chose.
+	 *   - `client` was never bind()'d: connect() bound it to an
+	 *     ephemeral port (connect.html, and src/socket/connect.c's
+	 *     wildcard bind).  Its local port is therefore whatever AFD
+	 *     picked -- unknowable, but necessarily non-zero once bound,
+	 *     and necessarily the port the listener saw the connection
+	 *     come from, which accept() already reported in `peer`.  That
+	 *     cross-check is the strongest available statement that
+	 *     getsockname() returned this socket's address and not some
+	 *     other endpoint's.
+	 *   - `client`'s peer is the listener's address, and `accepted`'s
+	 *     peer is the client's -- the two are each other's mirror, so
+	 *     a getpeername() reading the wrong reply offset (see
+	 *     test/posix-socket-getname.c) cannot satisfy both.
+	 */
+	{
+		struct sockaddr_in ln, cn, cp, ap;
+		socklen_t l;
+
+		l = sizeof ln;
+		CHECK(getsockname(listener, (struct sockaddr *)&ln, &l) == 0);
+		CHECK(l == sizeof ln); /* the full length, not the stored count */
+		CHECK(ln.sin_family == AF_INET);
+		CHECK(ln.sin_port == htons(TEST_PORT));
+		CHECK(ln.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+
+		l = sizeof cn;
+		CHECK(getsockname(client, (struct sockaddr *)&cn, &l) == 0);
+		CHECK(cn.sin_family == AF_INET);
+		CHECK(cn.sin_port != 0); /* connect() bound it to something */
+		CHECK(cn.sin_port == peer.sin_port); /* the port accept() saw */
+		CHECK(cn.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+
+		l = sizeof cp;
+		CHECK(getpeername(client, (struct sockaddr *)&cp, &l) == 0);
+		CHECK(l == sizeof cp);
+		CHECK(cp.sin_family == AF_INET);
+		CHECK(cp.sin_port == htons(TEST_PORT));
+		CHECK(cp.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+
+		l = sizeof ap;
+		CHECK(getpeername(accepted, (struct sockaddr *)&ap, &l) == 0);
+		CHECK(ap.sin_family == AF_INET);
+		CHECK(ap.sin_port == cn.sin_port); /* the mirror of getsockname(client) */
+		CHECK(ap.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+
+		/* The truncation clause, on a live address rather than on a
+		 * fixture: "the stored address shall be truncated", and
+		 * address_len still reports the untruncated length. */
+		{
+			unsigned char small[sizeof(struct sockaddr_in) + 8];
+			memset(small, 0xCC, sizeof small);
+			l = 4;
+			CHECK(getpeername(client, (struct sockaddr *)small, &l) == 0);
+			CHECK(l == sizeof(struct sockaddr_in));
+			CHECK(small[4] == 0xCC); /* nothing past the supplied length */
+			CHECK(!memcmp(small, &cp, 4)); /* and what fit is the real address */
+		}
+	}
+
 	/* send.html/recv.html: a normal round trip each direction, plus
 	 * read()/write() (src/unistd/read.c, write.c) going through the
 	 * exact same __FD_SOCKET path. */
@@ -419,6 +602,7 @@ int main(void)
 	test_inet_pton_ntop();
 	test_socket_domain_errors();
 	test_sockopt_no_network();
+	test_getname_no_network();
 
 	listener = network_probe();
 	if (listener >= 0) {
@@ -429,8 +613,8 @@ int main(void)
 
 	/* UDP (sendto/recvfrom/SOCK_DGRAM's actual use), AF_INET6
 	 * (sockaddr_in6/in6_addr/getaddrinfo's AF_INET6 path), AF_UNIX
-	 * (socketpair(), struct sockaddr_un) and getsockname()/
-	 * getpeername()/sockatmark() are all staged for later work, per
+	 * (socketpair(), struct sockaddr_un) and sockatmark() are all
+	 * staged for later work, per
 	 * test/networking-audit.md sec 6 (stages 4-6) -- not merely
 	 * untested, genuinely not implemented, and (per this project's own
 	 * standing rule, test/posix-sysmisc.c's file banner) not even
@@ -457,16 +641,6 @@ int main(void)
 	{
 		struct sockaddr_in6 a6;
 		a6.sin6_family = AF_INET6;
-	}
-#endif
-#if NTLIBC_TEST(UNIMPL, posix_socket_getsockname_and_getpeername) /* UNIMPL: getsockname.html/getpeername.html -- not in this
-	project's declared scope for this stage (see <sys/socket.h>'s
-	banner); this file's own network tests work around the gap with
-	a fixed TEST_PORT instead of querying an ephemeral one. */
-	{
-		struct sockaddr_in a;
-		socklen_t l = sizeof a;
-		getsockname(0, (struct sockaddr *)&a, &l);
 	}
 #endif
 
