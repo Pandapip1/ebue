@@ -225,6 +225,27 @@ seen. Prefer expectations computed from the run itself (a handle this process
 opened) over frozen constants: a test that would still pass with its
 expectations stale is not testing what it names.
 
+**A zero result cannot tell "all failed" from "never ran".** `make asan`
+reports `0/74 passed` on this machine: no test ran at all. Every ASan binary
+aborts at startup with `AddressSanitizer failed to allocate 0xdfff0001000
+bytes ... ReserveShadowMemoryRange failed (errno: 12)`, because Linux's
+`do_mmap()` honours `MAP_NORESERVE` only when `sysctl_overcommit_memory !=
+OVERCOMMIT_NEVER`; under `vm.overcommit_memory=2` — permanent here, a
+maintainer's decision rather than a transient fault — the ~15 TB shadow
+reservation is charged against `CommitLimit` and refused. That was read as 74
+failures during a review, and the misreading costs in a specific direction:
+"N failures" sends you to debug the code, "the harness never started" sends
+you to fix the harness. `make lint` exits 2 for a different cause with the
+same shape — clang-tidy, cppcheck and shellcheck are absent here — and also
+means unknown, not fail. CI's runners use default overcommit, so ASan does run
+there and remains the authority for memory-safety findings; a local `make
+asan` licenses no claim about a heap overflow either way. `CHECKS EXECUTED=0`
+is what separates the two readings, which is why the previous rule's total is
+worth emitting unconditionally rather than only where a skip is anticipated: a
+check that passes without testing anything and a suite that never starts are
+one phenomenon — the harness reporting on itself rather than on its subject —
+and three instances turned up across three projects in one day.
+
 **Ask "true on which version?"** before recording a platform fact. Wine
 implements the shapes it implements; absence there is not evidence about NT,
 and a behaviour shared by both may be true only of one era. The three
