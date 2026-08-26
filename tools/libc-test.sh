@@ -338,10 +338,20 @@ fi
 
 # ----------------------------------------------------------------- build
 
-# The four helpers we keep from upstream's src/common.  vmfill.c,
-# setrlim.c, fdfill.c and utf8.c are deliberately absent: test/
-# libc-test-shim.c replaces them (see its header for each one's reason).
-HELPERS="print rand path memfill"
+# The helpers we keep from upstream's src/common.  vmfill.c, setrlim.c
+# and fdfill.c are deliberately absent: test/libc-test-shim.c replaces
+# them (see its header for each one's reason).
+#
+# utf8.c used to be on that absent list and no longer is.  It needs
+# <langinfo.h> and nl_langinfo(CODESET), which this library now has
+# (include/langinfo.h, src/misc/langinfo.c), so upstream's own helper
+# compiles and does its real job here: its setlocale() chain finds no
+# named UTF-8 locale, falls through to setlocale(LC_CTYPE, ""), and
+# then nl_langinfo(CODESET) answers "UTF-8" -- which is the truth on
+# this target, UTF-8 being the only encoding this library has.  Running
+# the real helper rather than a stub is what lets the tests behind it
+# be adjudicated on their behaviour instead of parked as unverified.
+HELPERS="print rand path memfill utf8"
 hobjs=""
 for h in $HELPERS; do
 	# shellcheck disable=SC2086  # $CC/$CFLAGS_*/$INC are word lists from

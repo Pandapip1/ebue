@@ -2,11 +2,11 @@
  * SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Replacements for the four third_party/libc-test/src/common helpers
- * that cannot be compiled against this library, plus the one that can
- * be compiled but cannot mean anything here.
+ * Replacements for the three third_party/libc-test/src/common helpers
+ * that cannot do their job against this library -- one that will not
+ * compile at all, two that compile and cannot mean anything here.
  *
- * Which four, and why each is here rather than upstream's version:
+ * Which three, and why each is here rather than upstream's version:
  *
  *   t_vmfill   upstream vmfill.c needs <sys/mman.h>; there is no mmap()
  *              in this library and no header to include.  Exhausting
@@ -20,10 +20,14 @@
  *              enforced RLIMIT_NOFILE that loop does not terminate on
  *              an error, it terminates on memory exhaustion, which is
  *              not the same experiment.
- *   t_setutf8  upstream utf8.c needs <langinfo.h>/nl_langinfo(), which
- *              this library does not have.  Dropping utf8.c from the
- *              helper set is what unblocks the link for the whole
- *              corpus (external-suites.md, "build assumptions", item 6).
+ *
+ * NO LONGER HERE: t_setutf8.  Upstream utf8.c needs <langinfo.h> and
+ * nl_langinfo(), which this library did not have when this file was
+ * written and now does (include/langinfo.h, src/misc/langinfo.c), so
+ * tools/libc-test.sh builds upstream's helper again and this file has
+ * no business substituting for it.  A stub is only defensible while the
+ * real thing cannot be built; the moment it can, keeping the stub would
+ * park tests as unverified that are now genuinely adjudicable.
  *
  * WHY THIS FILE LIVES ONE DIRECTORY DOWN
  *
@@ -80,9 +84,3 @@ void t_fdfill(void)
 	    " target; the descriptor table was NOT filled\n");
 }
 
-int t_setutf8(void)
-{
-	t_printf(SHIM_MARK "t_setutf8: no <langinfo.h>/nl_langinfo() on this"
-	    " target; the UTF-8 locale was NOT selected\n");
-	return -1;
-}

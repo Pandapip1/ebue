@@ -25,11 +25,11 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=68 BUG=15 UNIMPL=51 NA=12 FLAKY=0
+# COUNTS PASS=69 BUG=16 UNIMPL=48 NA=13 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
-clocale_mbfuncs                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  clocale_mbfuncs.c:7: error: include file 'langinfo.h' not found
+clocale_mbfuncs                   runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: it opens with setlocale(LC_CTYPE, "C") and then requires MB_CUR_MAX == 1, i.e. a single-byte C locale. UTF-8 is this library's only encoding (src/internal/utf.c), so MB_CUR_MAX is 4 in every locale and test/posix-msgcat.c:test_codeset_is_utf8_and_the_converter_exists asserts that live. Every one of the 8437 failure lines descends from that one premise -- the byte-to-wchar_t map, the wctob round trip and the non-image scan all assume 256 single-byte characters. Built and ran here only as of include/langinfo.h; it was UNIMPL for want of that header
 clock_gettime                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
 crypt                             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  crypt.c:2: error: include file 'crypt.h' not found
 daemon-failure                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tcc: error: unresolved reference to 'daemon'
@@ -44,7 +44,7 @@ fcntl                             runtime=wine,target_arch=x86_64,kernel32=no  N
 fdopen                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
 fflush-exit                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
 fgets-eof                         runtime=wine,target_arch=x86_64,kernel32=no  PASS
-fgetwc-buffering                  runtime=wine,target_arch=x86_64,kernel32=no  NA  builds and links as of src/stdio/wide.c, but opens with libc-test's t_setutf8(), which needs nl_langinfo(CODESET); no <langinfo.h> on this target, under Wine or on the real-Windows leg, so no run here can select the UTF-8 locale the test requires
+fgetwc-buffering                  runtime=wine,target_arch=x86_64,kernel32=no  PASS
 flockfile-list                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  lib/libc.a: error: link symbol 'malloc' defined twice
 fnmatch                           runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:264 lists fnmatch as implemented-but-not-clause-audited; 5 pattern failures incl. [[?*\] and a bare backslash
 fpclassify-invalid-ld80           runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -67,7 +67,7 @@ lseek-large                       runtime=wine,target_arch=x86_64,kernel32=no  P
 malloc-0                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
 malloc-brk-fail                   runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here; on real Windows it will.
 malloc-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here; on real Windows it will.
-mbc                               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  mbc.c:6: error: include file 'langinfo.h' not found
+mbc                               runtime=wine,target_arch=x86_64,kernel32=no  NA  design difference, not a defect: its one failure is mbrtowc("\xf0\x90\x80\x80") yielding 0xd800 where it wants 0x10000. wchar_t is 16-bit on this target because that is the Windows ABI (arch/x86_64/bits/alltypes.h.in), so a non-BMP character is a UTF-16 surrogate pair and cannot be one wchar_t; src/stdlib/mbrtowc.c returns the high surrogate and holds the low one in the mbstate_t, and test/posix-wchar.c:posix_wchar_wcwidth_non_bmp records the same constraint. Built and ran here only as of include/langinfo.h
 mbsrtowcs-overflow                runtime=wine,target_arch=x86_64,kernel32=no  PASS
 memmem-oob                        runtime=wine,target_arch=x86_64,kernel32=no  PASS
 memmem-oob-read                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -150,7 +150,7 @@ strtof                            runtime=wine,target_arch=x86_64,kernel32=no  P
 strtol                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
 strtold                           runtime=wine,target_arch=x86_64,kernel32=no  PASS
 strverscmp                        runtime=wine,target_arch=x86_64,kernel32=no  PASS
-swprintf                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  swprintf.c:11: error: include file 'langinfo.h' not found
+swprintf                          runtime=wine,target_arch=x86_64,kernel32=no  BUG  swprintf.c:128 -- after a truncating swprintf(b, 4, L"%d", 123456) the buffer still holds its pre-call L"xxxxxxxx". fwprintf.html DESCRIPTION: "The swprintf() function shall place output followed by the null wide character in consecutive wide characters starting at *ws; no more than n wide characters shall be written, including a terminating null wide character, which is always added (unless n is zero)." n is 4, not zero, so the null is owed and nothing was written at all. The adjacent "buffer overrun" assertion passes. Built and ran here only as of include/langinfo.h
 syscall-sign-extend               runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  syscall-sign-extend.c:7: error: include file 'sys/syscall.h' not found
 tgmath                            runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  tgmath.c:1: error: include file 'tgmath.h' not found
 time                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
