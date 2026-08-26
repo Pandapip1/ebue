@@ -56,6 +56,18 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	case O_RDONLY: access |= FILE_GENERIC_READ; break;
 	case O_WRONLY: access |= FILE_GENERIC_WRITE; break;
 	case O_RDWR:   access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE; break; // NOLINT(misc-redundant-expression) -- both masks include SYNCHRONIZE, harmless ORed twice
+	/* The fourth access mode, 03, is O_EXEC and O_SEARCH -- equal
+	 * values, as fcntl.h.html permits.  Refused, not served: each asks
+	 * for a handle that can do LESS than a read handle (execute-only on
+	 * a file, traverse-only on a directory), so quietly widening either
+	 * to O_RDONLY would grant more access than the caller asked for and
+	 * return success -- the one way a request to be restricted must not
+	 * fail.  [EINVAL] "The value of the oflag argument is not valid" is
+	 * also what this arm answered before those two names existed, so
+	 * naming them changed no behaviour.  Serving them for real means
+	 * FILE_EXECUTE / FILE_TRAVERSE access masks and the fd-table and
+	 * read()/write() checks that go with a mode neither reads nor
+	 * writes; that is not done here. */
 	default: __ntpath_free(&np); errno = EINVAL; return -1;
 	}
 	if (flags & O_APPEND) access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA;

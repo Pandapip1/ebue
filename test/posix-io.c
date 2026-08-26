@@ -684,34 +684,19 @@ static void test_fseek_update(void)
 }
 
 /* ==================================================================
- * <fcntl.h> header content -- mandatory symbolic constants ntlibc does
- * not define.  Audit group U (XBD header contents); see
+ * <fcntl.h> header content -- the mandatory symbolic constants, as
+ * probed by a consumer.  Audit group U (XBD header contents); see
  * test/POSIX-COVERAGE.md "XBD header contents (group U)".
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_io_fcntl_h_access_mode_constants) /* UNIMPL: fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall
-	define the following symbolic constants for use as the file access
-	modes for open(), openat(), and fcntl(). The values shall be
-	unique, except that O_EXEC and O_SEARCH may have equal values...
-	O_EXEC Open for execute only (non-directory files)... O_SEARCH
-	Open directory for search only", and, in the file-status-flag
-	list, "O_TTY_INIT Set the termios structure terminal parameters to
-	a state that provides conforming behavior... The O_TTY_INIT flag
-	can have the value zero and in this case it need not be
-	bitwise-distinct from the other flags."  ntlibc defines
-	O_RDONLY/O_WRONLY/O_RDWR/O_ACCMODE and every O_* creation and
-	status flag POSIX lists including O_DSYNC, O_RSYNC, O_DIRECTORY
-	and O_NOFOLLOW, but not O_EXEC, O_SEARCH or O_TTY_INIT.  Triage:
-	ABSENT (no declaration anywhere in include/).  None of the three
-	is optional: no option-group marker guards them, and O_TTY_INIT
-	is explicitly permitted to be zero, which is the standard's own
-	way of saying an implementation with nothing to do for it still
-	has to define it.  Scope of this fence: the HEADER CONSTANTS only.
-	Whether open() would then have to give O_SEARCH a directory
-	handle with traverse-only access, and O_EXEC an execute-only one,
-	is a larger, separate gap that this fence deliberately does not
-	claim -- do not read an un-fencing of this test as acceptance of
-	that.  Observed today: fails to COMPILE, "'O_EXEC' undeclared". */
+/* fcntl.h.html DESCRIPTION: "The values shall be unique, except that
+ * O_EXEC and O_SEARCH may have equal values", and, in the file-status-
+ * flag list, "The O_TTY_INIT flag can have the value zero".  All three
+ * are defined in <fcntl.h>: O_EXEC and O_SEARCH share 03, the one
+ * access mode O_ACCMODE could still hold, and O_TTY_INIT is zero.  The
+ * header constants are all this checks -- open() refuses 03 with
+ * [EINVAL] rather than serving it, which is that header's and
+ * src/fcntl/open.c's business to explain. */
 static void test_fcntl_h_access_mode_constants(void)
 {
 	/* "The values shall be unique, except that O_EXEC and O_SEARCH
@@ -734,7 +719,6 @@ static void test_fcntl_h_access_mode_constants(void)
 	CHECK(0);
 #endif
 }
-#endif
 
 int main(void)
 {
@@ -750,6 +734,7 @@ int main(void)
 	test_alloc();
 	test_snprintf();
 	test_fseek_update();
+	test_fcntl_h_access_mode_constants();
 
 	if (!fails) printf("posix-io: all tests passed\n");
 	return fails != 0;

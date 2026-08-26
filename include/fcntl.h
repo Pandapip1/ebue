@@ -44,6 +44,47 @@ extern "C" {
 #define O_RDWR    02
 #define O_ACCMODE 03
 
+/* fcntl.h.html DESCRIPTION: "The <fcntl.h> header shall define the
+ * following symbolic constants for use as the file access modes for
+ * open(), openat(), and fcntl(). The values shall be unique, except
+ * that O_EXEC and O_SEARCH may have equal values."
+ *
+ * 03 is the only bit pattern O_ACCMODE can still hold that is not
+ * already an access mode, and spending it on both -- which is the whole
+ * point of the standard's exception -- is what keeps O_ACCMODE itself
+ * at 03.  The alternative is musl's: spell both as O_PATH and widen the
+ * mask to (03|O_PATH).  Rejected here because it is not additive.  It
+ * would reclassify every existing open(..., O_PATH) in a program as an
+ * execute-only open, and change the value fcntl(F_GETFL) reports for
+ * the descriptors those calls made, purely as a side effect of two new
+ * names appearing.  03, by contrast, was already the unreachable arm of
+ * the access-mode switch in src/fcntl/open.c, so nothing that compiles
+ * today means anything different tomorrow.
+ *
+ * open() refuses both, with [EINVAL] -- the same answer 03 got before
+ * it had names, and read the comment on that switch for why refusing is
+ * the honest answer rather than a stub.  These are the header constants
+ * only; giving O_SEARCH a traverse-only directory handle and O_EXEC an
+ * execute-only one is separate work this does not claim. */
+#define O_EXEC   03
+#define O_SEARCH 03
+
+/* "O_TTY_INIT Set the termios structure terminal parameters to a state
+ * that provides conforming behavior... The O_TTY_INIT flag can have the
+ * value zero and in this case it need not be bitwise-distinct from the
+ * other flags."
+ *
+ * Zero, and by the clause's own escape hatch rather than as a stub.
+ * The only terminal on this platform is the NT console, and the state
+ * that gives conforming behavior there is the mode a console comes up
+ * in -- processed input, line input, echo, which src/termios/termios.c
+ * maps to ISIG|ICANON|ECHO -- so a freshly opened console already
+ * satisfies the flag and there is nothing for open() to set.  What is
+ * NOT claimed: a console whose mode an earlier process altered is not
+ * put back, because nothing in NT distinguishes "as it came up" from
+ * "as someone left it". */
+#define O_TTY_INIT 0
+
 #define O_CREAT        0100
 #define O_EXCL         0200
 #define O_NOCTTY       0400
