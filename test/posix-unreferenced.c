@@ -1743,6 +1743,20 @@ static void test_fchmodat_einval(void)
 	errno = 0;
 	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, 0x4000) == -1);
 	CHECK(errno == EINVAL);
+	/* and the boundary the paragraph above claims but did not check:
+	 * the one legal flag, and no flag at all, must still work.  A test
+	 * written as `if (flags)` would satisfy the assertion above while
+	 * breaking every caller that follows a symbolic-link decision. */
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, AT_SYMLINK_NOFOLLOW) == 0);
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0644, 0) == 0);
+	CHECK(mode_of("chm.d/f") & 0222);
+	/* A rejected call must change nothing, as RETURN VALUE requires --
+	 * AT_REMOVEDIR is a real flag bit belonging to unlinkat(), so this
+	 * is the case a known-bad-list check would have let through. */
+	errno = 0;
+	CHECK(fchmodat(AT_FDCWD, "chm.d/f", 0444, AT_REMOVEDIR) == -1);
+	CHECK(errno == EINVAL);
+	CHECK(mode_of("chm.d/f") & 0222);
 }
 
 /* ================================================================= */
