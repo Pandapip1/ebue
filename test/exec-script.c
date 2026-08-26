@@ -22,7 +22,7 @@
  *     operand, with any remaining arguments passed to the new shell",
  *     and, for a command name containing a <slash>, the same fallback
  *     "with the command name as its first operand".
- *     (src/sh/exec.c's spawn_interpreted().)
+ *     (src/sh/exec.c's run_interpreted().)
  *
  * Why this is not a conformance nicety on NT.  RtlCreateUserProcess
  * cannot start a script image -- it returns STATUS_INVALID_IMAGE_NOT_MZ
@@ -51,15 +51,38 @@
  *
  * ---- Where the interpreter comes from -------------------------------
  *
- * src/process/interpreter.c looks beside the calling image first and on
- * PATH second, and the two cases below are built so that each mechanism
- * is the *only* one that can work in its case: case A puts obj/sh on
- * PATH and no sh.exe beside the caller, case B does the reverse.  A
- * single case covering both would pass with either mechanism broken.
+ * Nowhere on the filesystem, and that is the property these cases are
+ * built to hold on to.  The interpreter is __sh_run_script()
+ * (src/sh/script.c), the sh(1p) utility called as a function inside
+ * libc.a; there is no sh.exe to find, no PATH to search, and therefore
+ * nothing a layout or an environment can take away.
  *
- * The caller in every case is a copy of this binary made in the test's
- * own working directory, not obj/test/exec-script.exe, precisely so
- * that "beside the calling image" is a directory this file controls.
+ * The earlier design did search -- beside the calling image first, PATH
+ * second -- and both halves of it are actively poisoned here rather
+ * than merely absent, because "no external interpreter is consulted" is
+ * a claim a test can only make by making the consultation fail loudly.
+ * Setup writes a decoy `sh.exe` in BOTH former candidate directories:
+ * beside the calling image (the cwd, which is where the child copy
+ * runs from) and in the one PATH entry.  Each decoy is a text file, so
+ * it is exactly what NT cannot start -- any spawn of it comes back
+ * STATUS_INVALID_IMAGE_NOT_MZ.  If a future change reintroduces either
+ * search, the interpreter it finds cannot run, the marker file is never
+ * written, and the case fails.  A passing run therefore says the script
+ * ran with no usable external sh anywhere in reach.
+ *
+ * The caller in the execvp() cases is a copy of this binary made in the
+ * test's own working directory, not obj/test/exec-script.exe, so that
+ * "beside the calling image" is a directory this file controls -- which
+ * is what lets the decoy be placed there at all.
+ *
+ * Cases D and E, the shell's half of the clause, drive src/sh/exec.c's
+ * command search directly through __sh_parse()/__sh_exec_list() (the
+ * same entry points test/sh-engine.c uses) rather than by running
+ * obj/sh/sh.exe.  Same reason: the subject is the [ENOEXEC] branch of
+ * 2.9.1, which lives in libc.a, and reaching it through a second
+ * process would put an external binary back in the dependency list of
+ * a file whose whole point is that there is not one.  The sh *utility's*
+ * own argument handling is test/sh-main.c's subject, not this file's.
  *
  * Runtime note: the [ENOEXEC] itself originates in
  * RtlCreateUserProcess, so the real-Windows legs are its authority --
@@ -78,6 +101,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include "../src/sh/sh.h"
 
 extern char **environ;
 int __spawn(const char *path, char *const argv[], char *const envp[]);
@@ -88,7 +112,12 @@ static int fails;
 #define RC_MARK 7          /* the script's last (only) command's status */
 #define CHILD "es-child.exe"
 #define SCRIPT "es-script.sh"
-#define PATHDIR "es-path"     /* the only PATH entry; deliberately holds no sh.exe */
+#define PATHDIR "es-path"     /* the only PATH entry; holds a decoy sh.exe */
+
+/* Not an NT image, on purpose: see the header.  Any attempt to spawn
+ * this as an interpreter fails, which is how a reintroduced search
+ * makes itself visible instead of silently working. */
+#define DECOY "#!/bin/sh\nexit 99\n"
 
 /* ---- roles ----------------------------------------------------------
  *
@@ -162,32 +191,6 @@ static int run(char *const *args)
 	return WIFEXITED(status) ? WEXITSTATUS(status) : -2;
 }
 
-/* obj/test/exec-script.exe -> obj/sh/sh.exe, keeping argv[0]'s own
- * separator.  Same walk as test/sh-main.c's find_sh(), and for the same
- * reason: the tests run from a private temporary directory, so nothing
- * relative to the cwd resolves, and argv[0] is the only path that is
- * true under both Wine and the real-Windows legs. */
-static int find_sh(const char *argv0, char *out, size_t cap)
-{
-	size_t n;
-	char sep;
-	char *p;
-
-	if (!argv0 || !*argv0) return -1;
-	n = strlen(argv0);
-	if (n + 16 >= cap) return -1;
-	strcpy(out, argv0);
-	for (p = out + n; p > out; p--) if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == out) return -1;
-	sep = p[-1];
-	p[-1] = 0;                                  /* strip "/exec-script.exe" */
-	for (p = out + strlen(out); p > out; p--) if (p[-1] == '/' || p[-1] == '\\') break;
-	if (p == out) return -1;
-	p[-1] = 0;                                  /* strip "/test" */
-	sprintf(out + strlen(out), "%csh%csh.exe", sep, sep);
-	return 0;
-}
-
 /* Every case ends here: the marker file must exist, and must name
  * exactly the arguments the clause says the script's command was to be
  * given.  `want0` is matched as a suffix because $0 is the *resolved*
@@ -251,7 +254,7 @@ static void check_marker(const char *file, const char *want0,
 
 int main(int argc, char **argv)
 {
-	char self[1024], shexe[1024], cwd[1024], pathbuf[2600], pathdir[1100];
+	char self[1024], cwd[1024], pathdir[1100];
 	char script[512];
 	char *av[8];
 	int st;
@@ -261,8 +264,6 @@ int main(int argc, char **argv)
 
 	if (!argv[0] || strlen(argv[0]) >= sizeof self) { printf("FAIL argv[0]\n"); return 1; }
 	strcpy(self, argv[0]);
-	if (find_sh(self, shexe, sizeof shexe) < 0) { printf("FAIL find_sh\n"); return 1; }
-	if (access(shexe, F_OK) != 0) { printf("FAIL no %s\n", shexe); return 1; }
 	if (!getcwd(cwd, sizeof cwd)) { printf("FAIL getcwd\n"); return 1; }
 
 	if (copyfile(self, CHILD) < 0) { printf("FAIL copy self\n"); return 1; }
@@ -285,23 +286,23 @@ int main(int argc, char **argv)
 	if (writefile(PATHDIR "/" SCRIPT, script) < 0) { printf("FAIL write path script\n"); return 1; }
 	snprintf(pathdir, sizeof pathdir, "%s\\" PATHDIR, cwd);
 
+	/* The two decoys.  One beside the calling image (the cwd, where the
+	 * CHILD copy runs from), one in the only PATH entry -- the two
+	 * places the superseded search looked, in that order.  Neither can
+	 * be started as a process, so any case that ends up consulting one
+	 * fails instead of quietly working. */
+	if (writefile("sh.exe", DECOY) < 0) { printf("FAIL write decoy sh.exe\n"); return 1; }
+	if (writefile(PATHDIR "/sh.exe", DECOY) < 0) { printf("FAIL write path decoy\n"); return 1; }
+
 	/* ============================================================
-	 * A. execvp(), interpreter found on PATH.
+	 * A. execvp() on a name with no <slash>, found through PATH.
 	 *
-	 * PATH holds the cwd (so the script itself is found by the search)
-	 * and obj/sh (so "sh" is).  No sh.exe exists beside the calling
-	 * image, so interpreter_path()'s first candidate must miss and the
-	 * PATH candidate must be the one that works.
+	 * PATH holds exactly one entry, PATHDIR, which holds the script and
+	 * the PATH decoy.  The cwd decoy is beside the caller.  So both of
+	 * the places an external interpreter was ever looked for hold a
+	 * file that cannot be started, and the script must still run.
 	 * ============================================================ */
-	{
-		char shdir[1024];
-		char *q;
-		strcpy(shdir, shexe);
-		for (q = shdir + strlen(shdir); q > shdir; q--)
-			if (q[-1] == '/' || q[-1] == '\\') { q[-1] = 0; break; }
-		snprintf(pathbuf, sizeof pathbuf, "%s;%s", pathdir, shdir);
-	}
-	CHECK(setenv("PATH", pathbuf, 1) == 0);
+	CHECK(setenv("PATH", pathdir, 1) == 0);
 
 	av[0] = CHILD; av[1] = (char *)"--run"; av[2] = (char *)SCRIPT;
 	av[3] = (char *)"out-a.txt"; av[4] = (char *)"A1"; av[5] = (char *)"A2"; av[6] = 0;
@@ -312,23 +313,26 @@ int main(int argc, char **argv)
 	check_marker("out-a.txt", SCRIPT, "A1", "A2", 1);
 
 	/* ============================================================
-	 * B. execvp(), interpreter found beside the calling image.
+	 * B. The same call with nothing at all on PATH.
 	 *
-	 * PATH now holds only the cwd, so no "sh" is reachable through it;
-	 * the only sh.exe is the copy made next to CHILD.  This is the
-	 * installed layout (`make install` puts sh.exe and every other
-	 * program in one $bindir) and the mechanism that does not depend on
-	 * PATH at all.
+	 * PATH is emptied, so no PATH search of any kind can succeed --
+	 * not for the interpreter, and not for anything else.  The script
+	 * is named through the cwd copy instead (the caller's own working
+	 * directory, which PATH has no say over).  This is the case that
+	 * separates "the interpreter is in libc.a" from "the interpreter is
+	 * somewhere PATH could reach": there is nowhere left to look.
 	 * ============================================================ */
-	CHECK(copyfile(shexe, "sh.exe") == 0);
-	CHECK(setenv("PATH", pathdir, 1) == 0);
+	CHECK(setenv("PATH", "", 1) == 0);
 
+	av[2] = (char *)"./" SCRIPT;
 	av[3] = (char *)"out-b.txt"; av[4] = (char *)"B1"; av[5] = (char *)"B2";
 	st = run(av);
 	CHECK(st == RC_MARK);
 	if (st != RC_MARK && st >= 100)
 		printf("note: case B execvp failed, errno %d\n", st - 100);
-	check_marker("out-b.txt", SCRIPT, "B1", "B2", 1);
+	check_marker("out-b.txt", "./" SCRIPT, "B1", "B2", 0);
+
+	CHECK(setenv("PATH", pathdir, 1) == 0);
 
 	/* ============================================================
 	 * C. execvp() on a name containing a <slash>: no PATH search
@@ -350,25 +354,45 @@ int main(int argc, char **argv)
 	 * D. The shell's own command search (XCU 2.9.1), PATH branch:
 	 * "a shell invoked with the pathname resulting from the search as
 	 * its first operand, with any remaining arguments passed to the new
-	 * shell".  PATH still holds only the cwd, and sh.exe is beside
-	 * itself there, so the shell re-invokes its own image.
+	 * shell".  PATH holds PATHDIR, so the search finds the script
+	 * there; the decoy sh.exe in the same directory is what the search
+	 * would find if the shell still looked for an interpreter.
+	 *
+	 * Driven through __sh_parse()/__sh_exec_list() -- src/sh/exec.c's
+	 * own entry points, the ones test/sh-engine.c uses -- rather than
+	 * by running obj/sh/sh.exe.  The subject is the [ENOEXEC] branch
+	 * inside that executor, which is in libc.a; see the header.
 	 * ============================================================ */
 	{
 		char cmd[512];
+		struct sh_list *list;
+		char err[256];
+		int status;
+
 		snprintf(cmd, sizeof cmd, "%s out-d.txt D1 D2", SCRIPT);
-		av[0] = (char *)"sh.exe"; av[1] = (char *)"-c"; av[2] = cmd; av[3] = 0;
-		st = run(av);
-		CHECK(st == RC_MARK);
-		if (st != RC_MARK) printf("note: case D sh -c exited %d\n", st);
+		list = __sh_parse(cmd, err, sizeof err);
+		CHECK(list != 0);
+		if (list) {
+			status = -1;
+			CHECK(__sh_exec_list(list, &status) == 0);
+			CHECK(status == RC_MARK);
+			if (status != RC_MARK) printf("note: case D exited %d\n", status);
+			__sh_list_free(list);
+		}
 		check_marker("out-d.txt", SCRIPT, "D1", "D2", 1);
 
 		/* E. The same clause's <slash> branch: "a shell invoked with
 		 * the command name as its first operand". */
 		snprintf(cmd, sizeof cmd, "./%s out-e.txt E1 E2", SCRIPT);
-		av[2] = cmd;
-		st = run(av);
-		CHECK(st == RC_MARK);
-		if (st != RC_MARK) printf("note: case E sh -c exited %d\n", st);
+		list = __sh_parse(cmd, err, sizeof err);
+		CHECK(list != 0);
+		if (list) {
+			status = -1;
+			CHECK(__sh_exec_list(list, &status) == 0);
+			CHECK(status == RC_MARK);
+			if (status != RC_MARK) printf("note: case E exited %d\n", status);
+			__sh_list_free(list);
+		}
 		check_marker("out-e.txt", "./" SCRIPT, "E1", "E2", 0);
 	}
 
@@ -376,6 +400,7 @@ int main(int argc, char **argv)
 	unlink("sh.exe");
 	unlink(SCRIPT);
 	unlink(PATHDIR "/" SCRIPT);
+	unlink(PATHDIR "/sh.exe");
 	rmdir(PATHDIR);
 
 	if (fails) { printf("exec-script: failures: %d\n", fails); return 1; }

@@ -394,4 +394,15 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status);
 int __sh_exec_andor(const struct sh_andor *a, int *status);
 int __sh_exec_list(const struct sh_list *list, int *status);
 
+/* ---- the utility (src/sh/script.c) ----------------------------------
+ *
+ * __sh_main() is sh(1p) itself -- options, operands, the refusal
+ * preflight, and the run -- as a function, so that sh/main.c and the
+ * [ENOEXEC] interpreter reach the same code rather than one of them
+ * spawning the other.  __sh_run_script() wraps it for a caller that may
+ * already have a shell running in this process; it is the only one of
+ * the two declared in src/internal/libc.h, because it is the only one
+ * anything outside src/sh/ and sh/ calls. */
+int __sh_main(int argc, char **argv);
+
 #endif

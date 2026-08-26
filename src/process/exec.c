@@ -100,56 +100,86 @@ int execv(const char *path, char *const argv[])
  * invoke a known command interpreter to interpret such files.  This is
  * now required by POSIX.1-2017."
  *
- * Which sh, and why: src/process/interpreter.c.  It is a second image
- * rather than a call into the shell engine linked into this same
- * libc.a, and that is the one real decision here, because
- * test/sh-design.md's "reuse rule" says the shell-specified interfaces
- * "call those functions directly and never spawn an external
- * interpreter".  Why that rule does not reach this case:
+ * Which sh, and why: this libc's own, called as a function --
+ * __sh_run_script() (src/sh/script.c) -- and not spawned as a second
+ * image.  The reverse was tried first and is worth stating, because it
+ * is the version a reader will otherwise reinvent: find an sh.exe
+ * beside the calling image, else "sh" on PATH, and execve() it.  Both
+ * halves are wrong, and the shell's design note had already ruled on
+ * both in its "reuse rule" -- the shell "is a set of internal functions
+ * compiled into libc.a", its callers "call those functions directly and
+ * never spawn an external interpreter".  This clause is not an
+ * exception to that rule; it is the case the rule was written for.
  *
- *  - This clause is a process *replacement*, not a string to interpret.
- *    wordexp()'s substitution must hand its result back, so it has to
- *    run in the caller's process; a successful exec has no caller left
- *    to return to.  Running the script inside the caller's address
- *    space would leave the old image underneath the new one -- its
- *    atexit handlers, its signal dispositions, its heap -- which is the
- *    one thing exec.html says a successful exec does not do.
- *  - The interpreter contract is bigger than the engine.  sh(1p)'s $0,
- *    its positional parameters, its exit statuses, and above all
- *    sh/main.c's up-front refusal of everything the engine would
- *    otherwise *misread* rather than diagnose (`case`, the special
- *    parameters that are still literal) live in that main(), not in
- *    libc.a.  Calling __sh_parse()/__sh_exec_list() from here means
- *    either duplicating that check or running a program named "case"
- *    for a script that used one -- the "callers cannot tell" failure
- *    test/sh-design.md calls worse than no shell at all.
- *  - Linkage.  The same note's third reason for the in-process rule is
- *    that the shell "costs nothing to programs that do not use it",
- *    which is an archive-extraction property: a reference from this
- *    file would pull the whole command language into every program that
- *    calls any exec function.
+ *  - PATH.  Resolving the interpreter through PATH hands whoever can
+ *    set PATH arbitrary code execution in *every* process that execs a
+ *    script, and the victim did nothing wrong: it called execvp() on a
+ *    file it was entitled to run.  It is no answer that the same PATH
+ *    already chose `file` -- `file` is a script this process meant to
+ *    run, while the interpreter is a native image the process never
+ *    named at all, so PATH is being trusted for strictly more than the
+ *    caller trusted it for.  include/ntlibc/rpath.h refuses the same
+ *    bargain for $ORIGIN DLL search, and the design note refuses it by
+ *    name for wordexp().
+ *  - Beside the image.  This one is not a vulnerability, it is a
+ *    standing maintenance burden that has already come due: "sh.exe is
+ *    next to the running program" is true of `make install` and of
+ *    nothing else, so every build layout that is not that one -- the
+ *    sanitizer objdir, the packaging of the test binaries for a real
+ *    Windows runner -- has to be taught to place a copy, or the clause
+ *    silently stops working there.  A more careful search does not
+ *    remove that burden; it moves it.
+ *
+ * What made the second image look necessary was the claim that running
+ * the script in this process "would leave the old image underneath the
+ * new one".  That is true, and it is already true of execve() above:
+ * nothing here replaces an address space, because NT has no primitive
+ * that does.  Every exec in this file is a stand-in that keeps the
+ * caller's image alive, runs the program, and ends the process with the
+ * program's status.  __sh_run_script() is that same stand-in with the
+ * spawn taken out, so it takes the same measures in the same order --
+ * cloexec descriptors closed once the interpreter is committed to, and
+ * _exit() rather than exit() so the caller's atexit handlers and stdio
+ * buffers die with it, exactly as exec.html requires.
+ *
+ * The interpreter contract being bigger than the engine was the other
+ * objection, and it was a real one: sh(1p)'s operand handling and the
+ * up-front refusal of what the engine would otherwise *misread* rather
+ * than diagnose (`case`, the still-literal special parameters) lived in
+ * sh/main.c, out of reach from here.  They live in src/sh/script.c now,
+ * which is where the reuse rule always implied they belonged, and
+ * sh/main.c is the one-line main() over them the note describes.  Both
+ * callers of the clause get the whole utility, refusals included; there
+ * is nothing left to duplicate.
+ *
+ * What this does cost is linkage: the note's third reason for the
+ * in-process rule is that the shell "costs nothing to programs that do
+ * not use it", and a reference from this file pulls the command
+ * language into every program that calls any exec function.  That is
+ * accepted, not overlooked.  The clause requires an interpreter to be
+ * *available* to every execvp() caller; the only way to keep it out of
+ * the link is to make its availability depend on the filesystem, which
+ * is the thing being fixed.
  *
  * Returns only on failure, like every other exec path here. */
 static int shell_fallback(const char *path, char *const argv[], char *const envp[])
 {
 	int enoexec = errno;
-	char *shell, **av;
+	char **av;
 	size_t n = 0, i;
+	int argc;
 
-	shell = __find_interpreter();
-	if (!shell) { errno = enoexec; return -1; }
 	while (argv[n]) n++;
-
 	av = malloc((n + 3) * sizeof *av);
-	if (!av) { free(shell); errno = enoexec; return -1; }
+	if (!av) { errno = enoexec; return -1; }
 	/* arg0, file, arg1, ..., (char *)0 -- the clause's own shape.
 	 * arg0 is the caller's, not the shell's path: glibc substitutes
 	 * _PATH_BSHELL there, but POSIX.1-2017 names arg0 as "the value
 	 * passed to execvp() in argv[0]" and POSIX.1-2024 relaxes the same
 	 * slot to "<name> is an unspecified string", so passing argv[0]
 	 * through satisfies both.  It is only what the shell prefixes its
-	 * diagnostics with (sh/main.c's progname); $0 is the operand after
-	 * it either way (sh(1p) OPERANDS, and sh/main.c:508-512).
+	 * diagnostics with (src/sh/script.c's progname); $0 is the operand
+	 * after it either way (sh(1p) OPERANDS).
 	 *
 	 * What is passed as `file` is the *resolved* path, not the argument
 	 * as given.  exec.html says "file is the process image file", and
@@ -167,21 +197,27 @@ static int shell_fallback(const char *path, char *const argv[], char *const envp
 	av[0] = n ? argv[0] : (char *)"sh";
 	av[1] = (char *)path;
 	for (i = 1; i < n; i++) av[i + 1] = argv[i];
-	av[(n ? n : 1) + 1] = 0;
+	argc = (int)(n ? n : 1) + 1;
+	av[argc] = 0;
 
-	execve(shell, av, envp);
+	/* "the environment of the executed command shall be as if the
+	 * process invoked the sh utility using execl()" -- the interpreter
+	 * runs with `envp`, which for execvp()/execlp() is the caller's own
+	 * environ and for execvpe() is whatever the caller supplied.  The
+	 * engine reads the environment through __environ (getenv(),
+	 * wordexp()), so pointing that at envp is what an execve() of the
+	 * shell would have done to the new image's environ. */
+	__environ = (char **)envp;
 
-	/* The interpreter could not be run.  The caller asked to execute
-	 * `file`, so that is what its errno stays about: "the shell is not
-	 * installed" is not a diagnosis of `file`, and [ENOEXEC] is what
-	 * this call meant before the fallback existed.  APPLICATION USAGE
-	 * expects exactly this residue: "These implementations of execvp()
-	 * and execlp() only give the [ENOEXEC] error in the rare case of a
-	 * problem with the command interpreter's executable file." */
-	free(av);
-	free(shell);
-	errno = enoexec;
-	return -1;
+	/* Past this point the exec has "succeeded" in the only sense this
+	 * file ever means it (see execve() above): the interpreter is
+	 * committed to and this process is standing in for it.  Only now
+	 * may the close-on-exec descriptors go, and only _exit() may end
+	 * it -- the caller's atexit handlers and unflushed stdio died with
+	 * the image a real exec threw away. */
+	__fd_close_all_cloexec();
+	_exit(__sh_run_script(argc, av));
+	return -1;   /* not reached: _exit() does not return */
 }
 
 int execvpe(const char *file, char *const argv[], char *const envp[])

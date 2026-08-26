@@ -267,7 +267,12 @@ char *__find_program(const char *name, int use_path);
 /* The sh(1p) the [ENOEXEC] fallback runs, malloc'd, or 0.  Shared by
  * execvp() (src/process/exec.c) and the shell's own command search
  * (src/sh/exec.c); the choice is argued in src/process/interpreter.c. */
-char *__find_interpreter(void);
+/* The [ENOEXEC] command interpreter of XSH exec and XCU 2.9.1: runs
+ * argv -- { arg0, command_file, argument..., 0 } -- as one invocation
+ * of sh(1p) in this process, and returns its exit status.  See
+ * src/sh/script.c, and src/process/exec.c for why it is a call and not
+ * a second image. */
+int __sh_run_script(int argc, char *const argv[]);
 
 /* ---- the in-process shell (src/sh/, see test/sh-design.md) -------------
  *

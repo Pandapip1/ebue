@@ -103,46 +103,35 @@ static void test_enoexec(void)
 		CHECK(close(fd) == 0);
 	}
 
-#if NTLIBC_TEST(BUG, posix_unistd_exec_execvp_interpreter_fallback) /* BUG: execvp() does not fall back to a command
-	 * interpreter.
+	/* execvp()/execlp() are the two functions this page's [ENOEXEC]
+	 * entry excludes -- "The exec functions, *except for execlp() and
+	 * execvp()*, shall fail if" -- because for them the clause requires
+	 * a command interpreter to run instead:
 	 *
-	 * exec.html DESCRIPTION: "There are two distinct ways in which the
-	 * contents of the process image file may cause the execution to
-	 * fail, distinguished by the setting of errno to either [ENOEXEC]
-	 * or [EINVAL] ... In the cases where the other members of the exec
-	 * family of functions would fail and set errno to [ENOEXEC], the
-	 * execlp() and execvp() functions *shall execute a command
-	 * interpreter* and the environment of the executed command shall
-	 * be as if the process invoked the sh utility using execl() as
-	 * follows:  execl(<shell path>, arg0, file, arg1, ..., (char *)0);"
+	 *   "In the cases where the other members of the exec family of
+	 *    functions would fail and set errno to [ENOEXEC], the execlp()
+	 *    and execvp() functions shall execute a command interpreter and
+	 *    the environment of the executed command shall be as if the
+	 *    process invoked the sh utility using execl() as follows:
+	 *    execl(<shell path>, arg0, file, arg1, ..., (char *)0);"
 	 *
-	 * That is why exec.html's [ENOEXEC] entry is worded "The exec
-	 * functions, *except for execlp() and execvp()*, shall fail if" --
-	 * for those two the condition is not an error at all.
+	 * Two BUG fences used to stand here, asserting that both calls
+	 * returned -1 where the clause says the shell should run.  They are
+	 * gone because the fallback is implemented (src/process/exec.c's
+	 * shell_fallback(), over __sh_run_script() in src/sh/script.c).
 	 *
-	 * Mechanism: src/process/exec.c:60-77.  execvpe() resolves the
-	 * name with __find_program() and hands the result straight to
-	 * execve(); execvp() and execlp() are one-line wrappers around it.
-	 * There is no ENOEXEC branch anywhere in the file, so the status
-	 * RtlCreateUserProcess returns for a non-PE image reaches the
-	 * caller unaltered.  Probed on this tree: execvp("./ex-text.sh")
-	 * and execlp("./ex-text.sh") both return -1 with errno 8
-	 * (ENOEXEC), where the clause requires the shell to run.
-	 *
-	 * A successful fallback does not return: the script becomes the
-	 * process image and exits zero.  Any return therefore fails this
-	 * independent policy probe. */
-	errno = 0;
-	CHECK(execvp("./ex-text.sh", av) != -1);
-#endif
-
-#if NTLIBC_TEST(BUG, posix_unistd_exec_execlp_interpreter_fallback) /* BUG: execlp() has the same required interpreter fallback and the
-	 * same missing ENOEXEC branch.  Keep it as a separate case because
-	 * fixing either p-form makes a successful call replace this process,
-	 * so the two expectations cannot be exercised sequentially. */
-	errno = 0;
-	CHECK(execlp("./ex-text.sh", "ex-text.sh", (char *)0) != -1);
-#endif
+	 * They are not replaced by the inverse assertion, because a working
+	 * fallback cannot be observed from here: it does not return.  The
+	 * script becomes what this process is running, and whatever it exits
+	 * with becomes this test's exit status -- so an inline `CHECK(execvp
+	 * (...) != -1)` cannot pass, cannot fail, and cannot even reach the
+	 * clauses below it.  The observation needs a child process to spend,
+	 * and a marker file for it to leave behind; that is exactly what
+	 * test/exec-script.c is, and its cases A, B and C cover this clause
+	 * for both p-forms, including the argument vector the execl() shape
+	 * above specifies.  The rest of this file keeps the half that *is*
+	 * observable in-process: the non-p-forms above, which must still
+	 * fail with [ENOEXEC] on the very same file. */
 
 	CHECK(unlink("ex-text.sh") == 0);
 
@@ -244,24 +233,26 @@ static void test_path_errors(void)
 	 * directory implied) and nothing this test can execute is on it.
 	 * An empty entry means the current directory, as on Unix -- which
 	 * is this test's own temporary directory, since main() chdir()s
-	 * into it -- so prepending one is enough.  The file is the same
-	 * non-PE text image the [ENOEXEC] group above uses, so the
-	 * resolver succeeding is visible as ENOEXEC: found, not runnable.
-	 * (Same oracle caveat as that group: ENOEXEC comes from
-	 * RtlCreateUserProcess, so the windows-test legs are the
-	 * authority on the exact errno.  The load-bearing half here is
-	 * that it is not ENOENT.) */
+	 * into it -- so prepending one is enough.
+	 *
+	 * What is put there is a *directory*, not the non-PE text image
+	 * the [ENOEXEC] group above uses, and the difference is not
+	 * cosmetic: a text image is precisely what execvp()/execlp() now
+	 * hand to a command interpreter (the clause quoted in
+	 * test_enoexec() above), so probing with one would not come back
+	 * at all -- the script would become this process.  A directory
+	 * satisfies the search (access(X_OK) is true of one on NTFS, see
+	 * src/process/find_program.c's own note on execvp("")), so the
+	 * resolver still succeeds on it, and asking NT to run a directory
+	 * as a process image fails with neither ENOENT nor ENOEXEC, so it
+	 * returns and is observable.  The load-bearing half is unchanged:
+	 * an errno that is not [ENOENT] means the name was found. */
 	{
 		const char *oldpath = getenv("PATH");
 		char *saved = oldpath ? strdup(oldpath) : 0;
 		CHECK(!oldpath || saved != NULL);
 
-		fd = open("ex-onpath.sh", O_CREAT | O_WRONLY | O_TRUNC, 0755);
-		CHECK(fd >= 0);
-		if (fd >= 0) {
-			CHECK(write(fd, "#!/bin/sh\necho hello\n", 21) == 21);
-			CHECK(close(fd) == 0);
-
+		if (mkdir("ex-onpath.d", 0755) == 0) {
 			{
 				size_t n = saved ? strlen(saved) : 0;
 				char *withdot = malloc(n + 2);
@@ -275,18 +266,19 @@ static void test_path_errors(void)
 			}
 
 			errno = 0;
-			r = execvp("ex-onpath.sh", av);
-			printf("observed: execvp(\"ex-onpath.sh\") = %d, errno=%d "
-			       "(must not be %d ENOENT; %d ENOEXEC under Wine)\n",
-			       r, errno, ENOENT, ENOEXEC);
+			r = execvp("ex-onpath.d", av);
+			printf("observed: execvp(\"ex-onpath.d\") = %d, errno=%d "
+			       "(must not be %d ENOENT)\n", r, errno, ENOENT);
 			CHECK(r == -1 && errno != ENOENT);
 			reached++;
 			errno = 0;
-			CHECK(execlp("ex-onpath.sh", "x", (char *)0) == -1 && errno != ENOENT);
+			CHECK(execlp("ex-onpath.d", "x", (char *)0) == -1 && errno != ENOENT);
 			reached++;
 
 			if (saved) CHECK(setenv("PATH", saved, 1) == 0);
-			CHECK(unlink("ex-onpath.sh") == 0);
+			CHECK(rmdir("ex-onpath.d") == 0);
+		} else {
+			CHECK(0);   /* could not create the probe directory */
 		}
 		free(saved);
 	}

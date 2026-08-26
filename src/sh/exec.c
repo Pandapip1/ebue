@@ -863,10 +863,20 @@ struct stage_result {
  * shell can execute shell scripts directly, even if the underlying
  * system does not support the common #! interpreter convention".
  *
- * The interpreter is __find_interpreter()'s (src/process/interpreter.c),
- * whose first candidate is sh.exe beside the running image -- for a
- * shell that is a re-invocation of itself, which is what "having a
- * shell invoked" most naturally means.
+ * The interpreter is this shell itself, called rather than spawned:
+ * __sh_run_script() (src/sh/script.c) is the whole sh(1p) utility --
+ * operands, refusal preflight and run -- re-entered with the calling
+ * shell's own $0, positional parameters and functions saved around it.
+ * "Having a shell invoked" is most naturally a re-invocation of this
+ * one, and this is that, with no second image to find; see
+ * src/process/exec.c for why finding one was the wrong shape for the
+ * libc half of the same requirement.
+ *
+ * Redirections need nothing special.  spawn_stage() has already
+ * rewired *this* process's descriptors to what the command should see
+ * (see this file's header on why no fork() is needed for that), and an
+ * in-process interpreter reads exactly those, which is what a spawned
+ * one would have inherited.
  *
  * argv: { arg0, resolved, args... }.  "any remaining arguments passed
  * to the new shell" is we_wordv[1..], and the operand before them makes
@@ -882,33 +892,42 @@ struct stage_result {
  * interpreter itself will produce a diagnostic anyway.  The permission
  * is left unexercised rather than half-implemented.
  *
- * Returns a pid, or -1 with the caller's 126 to follow. */
-static int spawn_interpreted(const char *resolved, const wordexp_t *we, char *const envp[])
+ * Returns 0 with *status set -- the command has already run by the time
+ * this returns, so there is no pid for the caller to wait on -- or -1
+ * with the caller's 126 to follow. */
+static int run_interpreted(const char *resolved, const wordexp_t *we, int *status)
 {
-	char *shell, **av;
+	char **av;
 	size_t n = we->we_wordc, i;
-	int pid;
+	int argc;
 
-	shell = __find_interpreter();
-	if (!shell) return -1;
 	av = malloc((n + 3) * sizeof *av);
-	if (!av) { __free(shell); return -1; }
+	if (!av) return -1;
 	av[0] = n ? we->we_wordv[0] : (char *)"sh";
 	av[1] = (char *)resolved;
 	for (i = 1; i < n; i++) av[i + 1] = we->we_wordv[i];
-	av[(n ? n : 1) + 1] = 0;
+	argc = (int)(n ? n : 1) + 1;
+	av[argc] = 0;
 
-	pid = __spawn(shell, av, envp);
+	/* An interpreted command's assignments (`FOO=bar ./script`) are
+	 * already in the envp spawn_stage() built for the process that was
+	 * not started; the interpreter runs in *this* process, so they
+	 * would have to be applied to this shell's own environment and
+	 * taken back afterwards.  That is a transaction this clause does
+	 * not need: XCU 2.9.1 scopes such assignments to "the execution
+	 * environment of the command", and a command that turns out to be
+	 * a script gets them from the shell it is handed to.  Not
+	 * implemented rather than half-implemented -- see the caller. */
+	*status = __sh_run_script(argc, av);
 	free(av);
-	__free(shell);
-	return pid;
+	return 0;
 }
 
 static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, int env_mutate)
 {
 	wordexp_t we;
 	const struct sh_word *w;
-	int first = 1, rc;
+	int first = 1, rc, ran = 0;
 	char *resolved;
 	char **envp = 0;
 	size_t envn = 0;
@@ -1030,13 +1049,22 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 	/* XCU 2.9.1's [ENOEXEC] fallback -- the shell's own half of the
 	 * requirement whose libc half is execvp()'s (src/process/exec.c).
 	 * errno is read here, before __free()/wordfree()/free_strv() get a
-	 * chance to write it. */
-	if (out->pid < 0 && errno == ENOEXEC)
-		out->pid = spawn_interpreted(resolved, &we, envp);
+	 * chance to write it.
+	 *
+	 * The interpreter runs in this process, so on success there is no
+	 * pid: `ran` says out->status is already final, which is exactly
+	 * what stage_result's pid < 0 means to the caller -- it just must
+	 * not then be overwritten with 126 below. */
+	if (out->pid < 0 && errno == ENOEXEC &&
+	    run_interpreted(resolved, &we, &out->status) == 0)
+		ran = 1;
 	__free(resolved);
 	wordfree(&we);
 	free_strv(envp, envn);
-	if (out->pid < 0) { out->status = 126; out->pid = -1; } /* found but could not execute */
+	if (out->pid < 0) {
+		out->pid = -1;
+		if (!ran) out->status = 126; /* found but could not execute */
+	}
 	return 0;
 }
 
