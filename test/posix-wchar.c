@@ -1278,6 +1278,63 @@ static void test_freopen_clears_orientation(void)
 }
 #endif
 
+#if NTLIBC_TEST(BUG, posix_wchar_ungetc_orients_byte) /* BUG: ungetc() does not give an unoriented stream byte
+	 * orientation.  XSH 2.5, Standard I/O Streams: "once a byte
+	 * input/output function has been applied to a stream without
+	 * orientation, the stream shall become byte-oriented."  ungetc() is
+	 * a byte input/output function -- the groups the orientation rule
+	 * exempts are the file-access, file-positioning and error-handling
+	 * functions, plus fwide() itself.
+	 *
+	 * Mechanism: src/stdio/stdio_impl.h has a helper for exactly this,
+	 * __byte_oriented(), and its own comment cites this clause.  It is
+	 * called from the four byte primitives in src/stdio/rw.c --
+	 * __fgetc, __fputc, __fread, __fwrite -- and not from ungetc(),
+	 * which sits in the same file and writes f->unget/f->nunget and
+	 * clears f->eof without touching f->wide.
+	 *
+	 * The asymmetry is internal, not just against the standard:
+	 * src/stdio/wide.c's ungetwc() *does* orient its stream (`if
+	 * (!f->wide) f->wide = 1;`).  The wide half of the pair follows the
+	 * rule and the byte half does not.
+	 *
+	 * What a caller sees is a stream that has had a byte pushed back
+	 * into it and still reports no orientation -- so fwide(f, 1)
+	 * succeeds and turns it wide, with that byte sitting in the
+	 * pushback array where no wide read will ever look for it.
+	 *
+	 * Re-enable when ungetc() calls __byte_oriented() like its
+	 * neighbours. */
+static void test_ungetc_orients_byte(void)
+{
+	FILE *f = fopen("test.tmp", "wb+");
+
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fputs("AB", f) >= 0);
+	rewind(f);
+
+	CHECK(fwide(f, 0) == 0);		/* no orientation yet */
+	CHECK(fgetc(f) == 'A');
+	CHECK(ungetc('A', f) == 'A');
+	CHECK(fwide(f, 0) < 0);			/* a byte function was applied */
+
+	CHECK(fclose(f) == 0);
+
+	/* and on a stream where ungetc() is the *first* operation, which is
+	 * the case the clause is actually about */
+	f = fopen("test.tmp", "rb");
+	CHECK(f != 0);
+	if (!f) return;
+	CHECK(fwide(f, 0) == 0);
+	CHECK(ungetc('Z', f) == 'Z');
+	CHECK(fwide(f, 0) < 0);
+	CHECK(fwide(f, 1) < 0);			/* and not changeable afterwards */
+	CHECK(fclose(f) == 0);
+	remove("test.tmp");
+}
+#endif
+
 static void test_fwide(void)
 {
 	FILE *f = fopen("test.tmp", "w+");
