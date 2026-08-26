@@ -248,7 +248,6 @@ def compile_probe(source: Path, output: Path, cfg: dict[str, str]) -> subprocess
                           stderr=subprocess.STDOUT, check=False)
 
 
-
 # subprocess.run(text=True) does NOT decode what comes back on a timeout.
 # CPython raises TimeoutExpired with the raw buffered output, so .stdout is
 # `bytes` even though every successful return from the same call is `str`
@@ -265,7 +264,50 @@ def _as_text(output) -> str:
         return output.decode("utf-8", errors="replace")
     return output
 
-def run_probe(executable: Path, cfg: dict[str, str], work: Path) -> tuple[str, str]:
+
+# Per-case probe timeout overrides, in seconds, keyed on the case name.
+# PROBE_TIMEOUT is the ceiling for everything else; a name here may raise
+# its own, never lower it.  Same mechanism tools/run-tests.py's SLOW_TESTS
+# provides for whole test binaries -- which this file had no equivalent of,
+# so one policy was expressible in one of the two tools that enforce it.
+#
+# posix_stdio_popen_emfile.  MEASURED, on an otherwise-quiet machine, by
+# timing the probe itself rather than test/posix-stdio.c's binary (they are
+# different programs: the probe is one transformed case, and it is the one
+# that actually exhausts the descriptor table):
+#
+#     11.6 s, 11.6 s, 12.1 s, and 26.8 s under mild load
+#
+# The next slowest probe in the whole suite is 1.97 s, so this is a 6x-13x
+# outlier and the only case anywhere near the ceiling.
+#
+# THIS IS CONTENTION HEADROOM, NOT AN EXPECTATION THAT THE CASE IS SLOW.
+# Twelve seconds is what it costs; the extra is for a machine that is not
+# scheduling.  The mechanism is specific: the case opens descriptors until
+# EMFILE and every one is a Wine process-side allocation, and Wine process
+# startup under fleet saturation has been measured at 40x its idle cost
+# (see tools/libc-test.sh's runner comment).  12 s x 40 is ~480 s, so 600 s
+# -- the same number run-tests.py already uses for its two entries -- is
+# the smallest round figure that covers the measured inflation.
+#
+# What this buys: at 120 s a hang and a contended run are indistinguishable,
+# because both produce TIMEOUT.  This case was reported STALE
+# ("PASS produced TIMEOUT") in three separate loaded gate runs while passing
+# every quiet one.  At 600 s a TIMEOUT means something genuinely stopped.
+#
+# Do NOT add names here to make a red case green: that converts a defect
+# into a slow suite, which buys nothing.  Add one only with a measured
+# idle time and a mechanism for the gap, as above.
+SLOW_PROBES = {"posix_stdio_popen_emfile": 600}
+PROBE_TIMEOUT = 120
+
+
+def probe_timeout(case: str) -> int:
+    return max(PROBE_TIMEOUT, SLOW_PROBES.get(case, 0))
+
+
+def run_probe(executable: Path, cfg: dict[str, str], work: Path,
+              case: str = "") -> tuple[str, str]:
     wine = os.environ.get("WINE", cfg.get("WINE", ""))
     if not wine:
         return "NO-RUNNER", "config.mak has no WINE"
@@ -276,7 +318,8 @@ def run_probe(executable: Path, cfg: dict[str, str], work: Path) -> tuple[str, s
     try:
         result = subprocess.run(command, cwd=work, env=env, text=True,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=120, check=False)
+                                stderr=subprocess.STDOUT,
+                                timeout=probe_timeout(case), check=False)
     except subprocess.TimeoutExpired as exc:
         return "TIMEOUT", _as_text(exc.stdout)
     if result.returncode == 0:
@@ -329,7 +372,7 @@ def probe(mode: str, fences: list[Fence]) -> int:
                     print(f"         {line}")
                 failures += 1
                 continue
-            outcome, output = run_probe(executable, cfg, tmp)
+            outcome, output = run_probe(executable, cfg, tmp, label)
             if disposition == "PASS" and outcome == "PASS":
                 print(f"PASS     {label}")
             elif disposition == "FLAKY" and outcome in {"PASS", "FAIL"} and mode != "strict":
