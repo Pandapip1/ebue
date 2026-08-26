@@ -1,13 +1,28 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Clause-by-clause POSIX.1-2017 audit of four headers ntlibc does not
- * have at all -- the locale/message-handling family:
+ * Clause-by-clause POSIX.1-2017 audit of four headers of the
+ * locale/message-handling family, none of which ntlibc had when this
+ * file was written:
  *
- *   <langinfo.h>   nl_langinfo, nl_langinfo_l
- *   <nl_types.h>   catopen, catgets, catclose
- *   <monetary.h>   strfmon, strfmon_l
- *   <iconv.h>      iconv_open, iconv, iconv_close
+ *   <langinfo.h>   nl_langinfo, nl_langinfo_l      IMPLEMENTED 2026-08-25
+ *   <nl_types.h>   catopen, catgets, catclose      still absent
+ *   <monetary.h>   strfmon, strfmon_l              still absent
+ *   <iconv.h>      iconv_open, iconv, iconv_close  still absent
+ *
+ * STATUS, and read the rest of this banner in its light.  Everything
+ * below the next heading was written and measured on 2026-08-25 against
+ * a tree in which all four were absent, and it is kept verbatim because
+ * a record of what was checked is worth more than a record edited to
+ * agree with today.  What has changed since: <langinfo.h> now exists
+ * (include/langinfo.h, src/misc/langinfo.c) with all fifty-five item
+ * constants, nl_langinfo() and nl_langinfo_l(); nl_item and nl_catd are
+ * typedef'd in bits/alltypes.h.  The three <langinfo.h> cases in this
+ * file are consequently un-fenced and run.  Sentences below that say
+ * "the four", "eleven functions" or "does not exist" are about the
+ * 2026-08-25 tree; where a *fenced* case's own comment made such a
+ * claim, that comment was rewritten in the same commit as the
+ * implementation rather than left to go stale.
  *
  * Spec pages consulted (https://pubs.opengroup.org/onlinepubs/9699919799/):
  *   basedefs/langinfo.h.html    functions/nl_langinfo.html
@@ -37,7 +52,7 @@
  *    that no consulted page gives -- YESEXPR and NOEXPR -- it says so
  *    at the site and does not put the value in quotation marks.
  *
- * ==================== the absence, verified ==========================
+ * ============ the absence, as verified on 2026-08-25 =================
  *
  * An absence is a claim, and a grep that finds nothing is evidence only
  * if the same grep finds something when there is something to find.  So
@@ -400,6 +415,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <langinfo.h>
 #include "test-policy.h"
 
 static int fails;
@@ -724,83 +740,53 @@ static void test_message_catalogue_limits_exist_without_the_header(void)
  * <langinfo.h> -- basedefs/langinfo.h.html
  * =================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_langinfo_h_item_constants) /* UNIMPL: <langinfo.h> does not exist, and neither
-	does any constant it must define.
+/* IMPLEMENTED (2026-08-25).  <langinfo.h> exists; see include/langinfo.h
+   and src/misc/langinfo.c.  This case used to be fenced UNIMPL and read
+   as a description of an absence; it now runs.
 
-	langinfo.h.html DESCRIPTION, in full and verbatim for the four
-	sentences that matter:
+   langinfo.h.html DESCRIPTION, in full and verbatim for the four
+   sentences that matter:
 
-	  "The <langinfo.h> header shall define the symbolic constants
-	   used to identify items of langinfo data (see
-	   nl_langinfo())."
-	  "The <langinfo.h> header shall define the locale_t type as
-	   described in <locale.h>."
-	  "The <langinfo.h> header shall define the nl_item type as
-	   described in <nl_types.h>."
-	  "The <langinfo.h> header shall define the following symbolic
-	   constants with type nl_item. The entries under Category
-	   indicate in which setlocale() category each item is
-	   defined."
+     "The <langinfo.h> header shall define the symbolic constants
+      used to identify items of langinfo data (see nl_langinfo())."
+     "The <langinfo.h> header shall define the locale_t type as
+      described in <locale.h>."
+     "The <langinfo.h> header shall define the nl_item type as
+      described in <nl_types.h>."
+     "The <langinfo.h> header shall define the following symbolic
+      constants with type nl_item. The entries under Category
+      indicate in which setlocale() category each item is defined."
 
-	The table those last two sentences introduce has fifty-five
-	entries, enumerated from the page rather than from memory, and
-	they are exactly the array below.  None of the fifty-five is
-	defined in any header in include/, nor is nl_item, and the
-	header that would define nl_item (<nl_types.h>) is missing
-	too -- so the second and third sentences fail together with
-	the first.  The page also notes: "Inclusion of the
-	<langinfo.h> header may also make visible all symbols from
-	<nl_types.h>."
+   The table those last two sentences introduce has fifty-five entries,
+   enumerated from the page rather than from memory, and they are
+   exactly the array below: 49 LC_TIME + 2 LC_NUMERIC + 1 LC_MONETARY +
+   1 LC_CTYPE + 2 LC_MESSAGES = 55.  The count is spelled out because a
+   count is the easiest thing in an audit to get wrong.
 
-	MOST OF THE TABLE IS ALREADY UNREACHABLE-BY-NAME DATA, WHICH
-	IS THE WHOLE FINDING.  Item by item, by the page's own Category
-	column, and with the arithmetic spelled out because a count is
-	the easiest thing in an audit to get wrong: 49 LC_TIME + 2
-	LC_NUMERIC + 1 LC_MONETARY + 1 LC_CTYPE + 2 LC_MESSAGES = 55.
-	Of the 49 LC_TIME entries, 38 names are src/time/names.c's four
-	const arrays and 6 formats and affixes are open-coded in
-	src/time/strftime.c's %c/%x/%X/%r/%p cases, leaving 5 era and
-	alternative-digit items with nothing to store because the POSIX
-	locale defines neither.  The 2 LC_NUMERIC entries and the 1
-	LC_MONETARY entry are fields of src/misc/locale.c's
-	__posix_lconv; the 1 LC_CTYPE entry is src/stdlib/mbrtowc.c's
-	UTF-8; the 2 LC_MESSAGES entries are two literals with a
-	working regcomp() waiting for them.  48 of the 55 therefore
-	already exist here under some other name.  Four live tests in
-	this file --
-	test_lc_time_data_is_present_without_an_accessor,
-	test_lc_numeric_and_lc_monetary_data_without_an_accessor,
-	test_codeset_is_utf8_and_the_converter_exists and
-	test_yesexpr_noexpr_have_a_working_consumer -- run today and
-	pass.  The data is in the library; the names are not.
+   The values are implementation-defined; include/langinfo.h assigns
+   them as a dense 0..54 range in the page's table order.  This test
+   does not assert any value -- only that all fifty-five names exist,
+   are pairwise distinct, and are answerable.
 
-	UNIMPL rather than N/A: N/A needs a mechanism that keeps the
-	clause from applying, and being C-locale-only is the opposite
-	of one -- nl_langinfo.html's RETURN VALUE is written for
-	precisely this implementation ("In a locale where langinfo
-	data is not defined, these functions shall return a pointer to
-	the corresponding string in the POSIX locale"), so every item
-	has a determined right answer here.
+   ERA, ERA_D_FMT, ERA_D_T_FMT, ERA_T_FMT and ALT_DIGITS are
+   deliberately included rather than omitted: the POSIX locale defines
+   no era and no alternative digits, and an implementation with nothing
+   to say still has to define the constant and answer for it.  Same
+   reasoning group U applied to O_TTY_INIT.
 
-	UNIMPL rather than declined, unlike <stropts.h>: nothing on
-	this page is obsolescent, nothing needs an NT facility,
-	nothing collides with an interface this tree already ships,
-	and no name would have to be declared that could not honestly
-	be answered.
-
-	Observed today: fails to compile.  As recorded in
-	test/libc-test-expected.txt: "clocale_mbfuncs.c:7: error:
-	include file 'langinfo.h' not found".
-
-	ERA, ERA_D_FMT, ERA_D_T_FMT, ERA_T_FMT and ALT_DIGITS are
-	deliberately included rather than omitted: the POSIX locale
-	defines no era and no alternative digits, and an
-	implementation with nothing to say still has to define the
-	constant and answer for it.  Same reasoning group U applied to
-	O_TTY_INIT. */
+   The data behind these names mostly predates them, which was the
+   original finding and is still worth recording: of the 49 LC_TIME
+   entries, 38 names are src/time/names.c's four const arrays and 6
+   formats and affixes were open-coded in src/time/strftime.c's
+   %c/%x/%X/%r/%p cases; the 2 LC_NUMERIC entries and the 1 LC_MONETARY
+   entry are fields of src/misc/locale.c's __posix_lconv; the 1 LC_CTYPE
+   entry is UTF-8; the 2 LC_MESSAGES entries are two literals with a
+   working regcomp() behind them.  What was added was the naming, not
+   the data -- which is why the four sibling tests that reach the same
+   values through strftime(), localeconv(), regcomp() and mbrtowc()
+   still run alongside this one and must keep agreeing with it. */
 static void test_langinfo_h_item_constants(void)
 {
-	/* would be: #include <langinfo.h> at the top of this file */
 	nl_item items[] = {
 		CODESET,
 		D_T_FMT, D_FMT, T_FMT, T_FMT_AMPM, AM_STR, PM_STR,
@@ -839,64 +825,61 @@ static void test_langinfo_h_item_constants(void)
 	CHECK(!strcmp(nl_langinfo(ERA_T_FMT), ""));
 	CHECK(!strcmp(nl_langinfo(ALT_DIGITS), ""));
 }
-#endif
 
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_langinfo_posix_locale_values) /* UNIMPL: nl_langinfo() -- nl_langinfo.html.
+/* IMPLEMENTED (2026-08-25).  nl_langinfo() -- nl_langinfo.html.
+   src/misc/langinfo.c.
 
-	SYNOPSIS, verbatim:
-	  #include <langinfo.h>
-	  char *nl_langinfo(nl_item item);
-	  char *nl_langinfo_l(nl_item item, locale_t locale);
+   SYNOPSIS, verbatim:
+     #include <langinfo.h>
+     char *nl_langinfo(nl_item item);
+     char *nl_langinfo_l(nl_item item, locale_t locale);
 
-	DESCRIPTION: "The nl_langinfo() and nl_langinfo_l() functions
-	shall return a pointer to a string containing information
-	relevant to the particular language or cultural area defined
-	in the current locale, or in the locale represented by locale,
-	respectively (see <langinfo.h>)."
+   DESCRIPTION: "The nl_langinfo() and nl_langinfo_l() functions
+   shall return a pointer to a string containing information
+   relevant to the particular language or cultural area defined
+   in the current locale, or in the locale represented by locale,
+   respectively (see <langinfo.h>)."
 
-	RETURN VALUE: "In a locale where langinfo data is not defined,
-	these functions shall return a pointer to the corresponding
-	string in the POSIX locale. In all locales, these functions
-	shall return a pointer to an empty string if item contains an
-	invalid setting."  And: "The application shall not modify the
-	string returned."
+   RETURN VALUE: "In a locale where langinfo data is not defined,
+   these functions shall return a pointer to the corresponding
+   string in the POSIX locale. In all locales, these functions
+   shall return a pointer to an empty string if item contains an
+   invalid setting."  And: "The application shall not modify the
+   string returned."
 
-	ERRORS: "No errors are defined."  So nothing below inspects
-	errno -- there is nothing for it to inspect.
+   ERRORS: "No errors are defined."  So nothing below inspects
+   errno -- there is nothing for it to inspect.
 
-	Where each expected value comes from, since this matters more
-	than the code:
+   Where each expected value comes from, since this matters more
+   than the code:
 
-	 - The four composites and the day/month/AM/PM strings are
-	   strftime.html's C-or-POSIX-locale list, quoted at
-	   test_lc_time_data_is_present_without_an_accessor above, and
-	   each is also asserted live there through strftime().
-	 - RADIXCHAR and THOUSEP are localeconv()'s decimal_point and
-	   thousands_sep, asserted live in
-	   test_lc_numeric_and_lc_monetary_data_without_an_accessor.
-	 - CRNCYSTR is "" because the local currency symbol is the
-	   empty string, which langinfo.h.html permits explicitly:
-	   "If the local currency symbol is the empty string,
-	   implementations may return the empty string ("")."
-	 - CODESET is "UTF-8" because that is the only encoding this
-	   library has (src/internal/utf.c's banner); the *name* is
-	   implementation-defined, and this fence fixes ntlibc's
-	   choice rather than quoting a requirement.
-	 - YESEXPR and NOEXPR come from XBD Chapter 7, which this
-	   audit did not have; see the note at
-	   test_yesexpr_noexpr_have_a_working_consumer.  They are
-	   asserted here as ntlibc's intended answer.
+    - The four composites and the day/month/AM/PM strings are
+      strftime.html's C-or-POSIX-locale list, quoted at
+      test_lc_time_data_is_present_without_an_accessor above, and
+      each is also asserted live there through strftime().
+    - RADIXCHAR and THOUSEP are localeconv()'s decimal_point and
+      thousands_sep, asserted live in
+      test_lc_numeric_and_lc_monetary_data_without_an_accessor.
+    - CRNCYSTR is "" because the local currency symbol is the
+      empty string, which langinfo.h.html permits explicitly:
+      "If the local currency symbol is the empty string,
+      implementations may return the empty string ("")."
+    - CODESET is "UTF-8" because that is the only encoding this
+      library has (src/internal/utf.c's banner); the *name* is
+      implementation-defined, and this test fixes ntlibc's choice
+      rather than quoting a requirement.
+    - YESEXPR and NOEXPR come from XBD Chapter 7, which this
+      audit did not have; see the note at
+      test_yesexpr_noexpr_have_a_working_consumer.  They are
+      asserted here as ntlibc's chosen answer, not as a quoted one.
 
-	So this fence is not a guess about what the answers would be.
-	It is the same set of answers this file already checks through
-	other interfaces, asked for by their POSIX names.
-
-	Observed today: fails to compile.  A caller cannot even reach
-	the "invalid setting returns an empty string" fallback,
-	because the type of the argument does not exist. */
+   So this case is not a guess about what the answers would be.  It is
+   the same set of answers this file already checks through other
+   interfaces, asked for by their POSIX names -- and the cross-check
+   against strftime() at the end is what makes that a test rather than
+   a restatement. */
 static void test_nl_langinfo_posix_locale_values(void)
 {
-	/* would be: #include <langinfo.h> at the top of this file */
 	CHECK(!strcmp(nl_langinfo(CODESET), "UTF-8"));
 
 	CHECK(!strcmp(nl_langinfo(D_T_FMT), "%a %b %e %H:%M:%S %Y"));
@@ -956,43 +939,42 @@ static void test_nl_langinfo_posix_locale_values(void)
 		}
 	}
 }
-#endif
 
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_langinfo_l) /* UNIMPL: nl_langinfo_l() -- nl_langinfo.html, the
-	locale_t form.
+/* IMPLEMENTED (2026-08-25).  nl_langinfo_l() -- nl_langinfo.html, the
+   locale_t form.  src/misc/langinfo.c.
 
-	Recorded as a clause of its own rather than folded into the
-	fence above because its acceptance criterion is different and
-	strictly larger: it takes a locale_t and must answer out of
-	*that* locale rather than the current one.  This tree already
-	has the whole locale-object API to hand it -- newlocale(),
-	duplocale(), freelocale(), uselocale() and LC_GLOBAL_LOCALE,
-	all in src/misc/locale.c and audited in test/posix-locale.c --
-	and every handle it can produce is the same immutable C locale,
-	so the two forms' answers must coincide.  That coincidence is
-	what the assertions below check, and it is also why this is the
-	cheaper of the two, not the harder one.
+   Recorded as a case of its own rather than folded into the one above
+   because its acceptance criterion is different and strictly larger:
+   it takes a locale_t and must answer out of *that* locale rather than
+   the current one.  This tree has the whole locale-object API to hand
+   it -- newlocale(), duplocale(), freelocale(), uselocale() and
+   LC_GLOBAL_LOCALE, all in src/misc/locale.c and audited in
+   test/posix-locale.c -- and every handle it can produce is the same
+   immutable C locale, so the two forms' answers must coincide.  That
+   coincidence is what the assertions below check, and it is also why
+   this was the cheaper of the two to implement, not the harder one.
+   src/misc/langinfo.c states the same thing from the other side: it
+   ignores the locale_t because there is only one locale to dispatch
+   to, and says so rather than implying a dispatch it does not do.
 
-	LC_GLOBAL_LOCALE is deliberately NOT passed, and saying so is
-	the point of mentioning it: "The behavior is undefined if the
-	locale argument to nl_langinfo_l() is the special locale object
-	LC_GLOBAL_LOCALE or is not a valid locale object handle."  A
-	future implementation must not "helpfully" accept it, and a
-	test must not require that it does.
+   LC_GLOBAL_LOCALE is deliberately NOT passed, and saying so is
+   the point of mentioning it: "The behavior is undefined if the
+   locale argument to nl_langinfo_l() is the special locale object
+   LC_GLOBAL_LOCALE or is not a valid locale object handle."  The
+   implementation must not "helpfully" accept it, and a test must not
+   require that it does.
 
-	One clause this fence deliberately does not test, because it
-	cannot be tested here and pretending otherwise would be worse
-	than recording it: "The nl_langinfo() function need not be
-	thread-safe" -- and, by RATIONALE, nl_langinfo_l() must be.
-	ntlibc has no threads (pthread.h is a recorded absence), so
-	there is no second thread to observe the difference from.  It
-	is noted so that whoever implements this knows the buffer
-	choice is constrained by a clause no test here will catch.
-
-	Observed today: fails to compile. */
+   One clause this case deliberately does not test, because it cannot
+   be tested here and pretending otherwise would be worse than
+   recording it: "The nl_langinfo() function need not be thread-safe"
+   -- and, by RATIONALE, nl_langinfo_l() must be.  ntlibc has no
+   threads (pthread.h is a recorded absence), so there is no second
+   thread to observe the difference from.  It is noted because the
+   buffer choice is constrained by a clause no test here will catch;
+   src/misc/langinfo.c satisfies it by returning only literals and
+   pointers into const tables, never a shared buffer. */
 static void test_nl_langinfo_l(void)
 {
-	/* would be: #include <langinfo.h> at the top of this file */
 	locale_t loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 
 	CHECK(loc != (locale_t)0);
@@ -1013,7 +995,6 @@ static void test_nl_langinfo_l(void)
 
 	freelocale(loc);
 }
-#endif
 
 /* ===================================================================
  * <nl_types.h> -- basedefs/nl_types.h.html, functions/catopen.html,
@@ -1493,15 +1474,9 @@ int main(void)
 	 * inside the fence, so the call has to as well.  Each case's
 	 * argument is at the fence over its definition and is not
 	 * repeated here. */
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_langinfo_h_item_constants) /* UNIMPL: see the fence over test_langinfo_h_item_constants(). */
 	test_langinfo_h_item_constants();
-#endif
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_langinfo_posix_locale_values) /* UNIMPL: see the fence over test_nl_langinfo_posix_locale_values(). */
 	test_nl_langinfo_posix_locale_values();
-#endif
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_langinfo_l) /* UNIMPL: see the fence over test_nl_langinfo_l(). */
 	test_nl_langinfo_l();
-#endif
 #if NTLIBC_TEST(UNIMPL, posix_msgcat_nl_types_h_catalogue_access) /* UNIMPL: see the fence over test_nl_types_h_catalogue_access(). */
 	test_nl_types_h_catalogue_access();
 #endif

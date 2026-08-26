@@ -86,6 +86,21 @@ TYPEDEF unsigned useconds_t;
 
 TYPEDEF struct __locale_struct * locale_t;
 
+/* nl_types.h.html: "nl_item  Used by nl_langinfo() to identify items of
+ * langinfo data."  <langinfo.h> must define the same type ("shall define
+ * the nl_item type as described in <nl_types.h>"), so it lives here
+ * rather than in either header, and neither one can drift from the
+ * other.  int, because every value <langinfo.h> gives it is a small
+ * non-negative constant and the invalid-item probe a caller is entitled
+ * to make -- nl_langinfo((nl_item)-1) -- has to be representable.
+ *
+ * nl_catd is "[u]sed by the message catalog functions catopen(),
+ * catgets(), and catclose() to identify a catalog descriptor"; POSIX
+ * fixes nothing about its representation except that (nl_catd)-1 is a
+ * distinguishable failure value, which a pointer type supplies. */
+TYPEDEF int nl_item;
+TYPEDEF void * nl_catd;
+
 TYPEDEF unsigned socklen_t;
 TYPEDEF unsigned short sa_family_t;
 
