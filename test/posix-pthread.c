@@ -110,6 +110,7 @@ static void test_pthread_create_join_value(void)
 
 #if NTLIBC_TEST(UNIMPL, posix_pthread_detach_join_esrch)
 #include <pthread.h>
+#include <errno.h>
 
 static void *dj_start(void *arg)
 {
@@ -146,6 +147,7 @@ static void test_pthread_detach_join_esrch(void)
 #if NTLIBC_TEST(UNIMPL, posix_pthread_attr_roundtrip)
 #include <pthread.h>
 #include <limits.h>
+#include <errno.h>
 
 static void test_pthread_attr_roundtrip(void)
 {
@@ -207,6 +209,7 @@ static void test_pthread_attr_roundtrip(void)
 
 #if NTLIBC_TEST(UNIMPL, posix_pthread_mutex_lock_unlock)
 #include <pthread.h>
+#include <errno.h>
 
 static void test_pthread_mutex_lock_unlock(void)
 {
@@ -246,6 +249,7 @@ static void test_pthread_mutex_lock_unlock(void)
 
 #if NTLIBC_TEST(UNIMPL, posix_pthread_mutexattr_type_relock)
 #include <pthread.h>
+#include <errno.h>
 
 static void test_pthread_mutexattr_type_relock(void)
 {
@@ -463,6 +467,7 @@ static void test_pthread_rwlock_shared_read(void)
 
 #if NTLIBC_TEST(UNIMPL, posix_pthread_barrier_serial_thread)
 #include <pthread.h>
+#include <errno.h>
 
 static pthread_barrier_t bar_b;
 static int bar_serial;
@@ -751,6 +756,7 @@ static void test_pthread_schedparam_self(void)
 
 #if NTLIBC_TEST(UNIMPL, posix_pthread_concurrency_default)
 #include <pthread.h>
+#include <errno.h>
 
 static void test_pthread_concurrency_default(void)
 {
@@ -796,10 +802,16 @@ static void test_pthread_getcpuclockid(void)
 #endif
 
 /* ==================================================================
- * Per-thread signal interfaces.  These are declared by <signal.h>, not
- * <pthread.h>, and ntlibc HAS <signal.h> -- so unlike everything above
- * these two fences reach the compiler and stop at the missing
- * declaration.  --pedantic decides the disposition; see the report.
+ * Per-thread signal interfaces.  POSIX declares both in <signal.h>, not
+ * <pthread.h>, and ntlibc HAS <signal.h> -- so these two do not fail
+ * the same way as everything above, and the difference was measured
+ * rather than assumed.  pthread_sigmask() gets through the compiler on
+ * an implicit declaration (this tcc warns rather than errors) and dies
+ * at "unresolved reference to 'pthread_sigmask'"; pthread_kill()'s
+ * fence needs pthread_self() for a thread ID, so it still stops at the
+ * missing <pthread.h>.  Both are absences, so both are UNIMPL, and
+ * --pedantic agrees: failing to produce the probe binary is what it
+ * measures, and a link failure is that as much as a compile error is.
  * .../functions/pthread_kill.html, pthread_sigmask.html
  * ================================================================== */
 
@@ -833,6 +845,7 @@ static void test_pthread_sigmask_roundtrip(void)
 #if NTLIBC_TEST(UNIMPL, posix_pthread_kill_signal_zero)
 #include <signal.h>
 #include <pthread.h>
+#include <errno.h>
 
 static void test_pthread_kill_signal_zero(void)
 {
