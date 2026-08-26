@@ -76,6 +76,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <string.h>
 #include "libc.h"
 
@@ -134,7 +135,49 @@ static rlim_t nofile_max = FD_MAX;
  * A previous version of the fenced test expected write(512) on an empty
  * file to fail with EFBIG.  That is not what any implementation does,
  * and it is why the numbers above were measured before this was written.
+ *
+ * The measurements above were taken with SIGXFSZ ignored because the
+ * clause has a second half, implemented by __fsize_exceeded() below:
+ * "If a write or truncate operation would cause this limit to be
+ * exceeded, SIGXFSZ shall be generated for the thread.  If the thread
+ * is blocking, or the process is ignoring, SIGXFSZ, the write or
+ * truncate operation shall fail with errno set to [EFBIG]"
+ * (setrlimit.html).  The signal is not an alternative to the error:
+ * a process that survives it still gets [EFBIG] back.
  */
+
+/* The refusal, in one place so that the signal and the errno cannot
+ * drift apart.  Returns -1 so a caller can `return __fsize_exceeded();`
+ * whatever its own return type is.
+ *
+ * ORDER IS LOAD-BEARING, AND IT IS THE OTHER WAY ROUND FROM THE OBVIOUS
+ * ONE.  __raise_internal() runs the handler inline on this thread and
+ * returns only if the process is meant to carry on, so anything the
+ * handler does -- a write(), a printf(), an open() -- can leave its own
+ * value in errno.  Setting errno first and raising afterwards would let
+ * a handler that merely counts the signal still hand its caller a
+ * stale, wrong errno.  Assigning after the raise is what write() already
+ * does for the SIGPIPE/[EPIPE] pair (src/unistd/write.c), and it is
+ * correct for the same reason.
+ *
+ * If SIGXFSZ is neither caught nor ignored, __raise_internal() does not
+ * return at all: setrlimit.html's default action for SIGXFSZ is
+ * abnormal termination, and this library's default_action()
+ * (src/signal/signal.c) gives it exactly that.
+ *
+ * ONLY THE PROCESS LIMIT COMES THROUGH HERE.  [EFBIG] has two other
+ * sources in this tree and neither is this clause: the offset maximum
+ * of an open file description (write.html, src/unistd/write.c) and a
+ * volume's own maximum file size (posix_fallocate.html,
+ * src/fcntl/fadvise.c).  Those are properties of the file, not limits
+ * "of a process", so setrlimit.html's sentence does not reach them and
+ * they must not generate a signal. */
+int __fsize_exceeded(void)
+{
+	__raise_internal(SIGXFSZ);
+	errno = EFBIG;
+	return -1;
+}
 
 /* Cheap predicate the write paths test before doing any work at all: with
  * no limit set -- the overwhelmingly common case -- nothing below runs
@@ -169,7 +212,8 @@ static int fsize_start(HANDLE h, int append, long long *out)
  * `count` unchanged when no limit applies or the query cannot be
  * answered (a limit we cannot evaluate must not silently truncate a
  * caller's write), a smaller count when the write would cross the limit,
- * or -1 with errno EFBIG when not one byte may be written. */
+ * or __fsize_exceeded()'s -1 -- SIGXFSZ, then errno EFBIG -- when not
+ * one byte may be written. */
 long long __fsize_clamp(HANDLE h, int append, size_t count)
 {
 	long long off, room;
@@ -177,7 +221,7 @@ long long __fsize_clamp(HANDLE h, int append, size_t count)
 	if (!__fsize_limited()) return (long long)count;
 	if (fsize_start(h, append, &off) < 0) return (long long)count;
 	room = (long long)fsize_cur - off;
-	if (room <= 0) { errno = EFBIG; return -1; }
+	if (room <= 0) return __fsize_exceeded();
 	return (long long)count < room ? (long long)count : room;
 }
 
@@ -191,11 +235,14 @@ long long __fsize_room_at(long long off)
 }
 
 /* For an operation that cannot partially succeed: may this process leave
- * the file `size` bytes long?  0 if yes, -1 with errno EFBIG if not. */
+ * the file `size` bytes long?  0 if yes, __fsize_exceeded()'s -1 --
+ * SIGXFSZ, then errno EFBIG -- if not.  setrlimit.html's clause names
+ * "a write or truncate operation", so ftruncate() and posix_fallocate()
+ * generate the signal exactly as write() does. */
 int __fsize_allow(long long size)
 {
 	if (!__fsize_limited()) return 0;
-	if (size > (long long)fsize_cur) { errno = EFBIG; return -1; }
+	if (size > (long long)fsize_cur) return __fsize_exceeded();
 	return 0;
 }
 

@@ -36,10 +36,13 @@
  *     primitive), and for RLIMIT_NOFILE, which needs no NT primitive at
  *     all (the fd table is ntlibc's own -- see the RLIMIT_NOFILE
  *     section below, which was an N/A fence until that was noticed).
- *     Still fenced for the ones no mechanism reaches after process
- *     start: RLIMIT_STACK and RLIMIT_CORE as N/A, RLIMIT_FSIZE as
- *     UNIMPL; RLIMIT_RSS and RLIMIT_MEMLOCK are not POSIX resources at
- *     all.
+ *     RLIMIT_FSIZE likewise needs no NT primitive: every path by which
+ *     this process can extend a file is ntlibc's own, so both halves of
+ *     its clause -- the [EFBIG] refusal and the SIGXFSZ the same
+ *     sentence requires -- are enforced in src/misc/resource.c and
+ *     tested unfenced below.  Still fenced for the ones no mechanism
+ *     reaches after process start: RLIMIT_STACK and RLIMIT_CORE as N/A;
+ *     RLIMIT_RSS and RLIMIT_MEMLOCK are not POSIX resources at all.
  *
  *   - getpriority()/setpriority() are POSIX.1-2017 base functions
  *     (moved from XSI to BASE in Issue 5 -- getpriority.html). Now
@@ -234,7 +237,8 @@ static void test_setrlimit_enforceable(void)
  *     miscategorisation; they are extensions ntlibc chooses to report
  *     RLIM_INFINITY for.
  *
- * UNIMPL -- see the fence below. */
+ * Nothing in this accounting is UNIMPL any longer: RLIMIT_FSIZE's
+ * SIGXFSZ, the last fence here, is implemented and tested below. */
 
 /* setrlimit.html for RLIMIT_FSIZE, the ACCEPTANCE half.
  *
@@ -412,13 +416,23 @@ static void test_setrlimit_nofile_child(void)
  *     posix_fallocate(0, 1024)        -> EFBIG
  * A write is CLAMPED when it starts below the limit and would cross it,
  * and fails only when not one byte may be written; operations that
- * cannot partially succeed fail outright. */
+ * cannot partially succeed fail outright.
+ *
+ * "With SIGXFSZ ignored" above is now a thing this test has to arrange
+ * rather than a footnote about the measuring harness: ntlibc generates
+ * the signal for real (test_setrlimit_fsize_sigxfsz() below), and its
+ * default action is to end the process, so every [EFBIG] asserted here
+ * would otherwise kill this binary before the next line ran.  Exactly
+ * what the numbers above were measured under. */
 static void test_setrlimit_fsize_enforced(void)
 {
 	struct rlimit rl, saved;
+	void (*oldxfsz)(int);
 	char buf[512];
 	int fd;
 
+	oldxfsz = signal(SIGXFSZ, SIG_IGN);
+	CHECK(oldxfsz != SIG_ERR);
 	CHECK(getrlimit(RLIMIT_FSIZE, &saved) == 0);
 	rl.rlim_cur = 256;
 	/* the hard limit found on entry, NOT RLIM_INFINITY: a hard limit can
@@ -469,39 +483,96 @@ static void test_setrlimit_fsize_enforced(void)
 	close(fd);
 	unlink("rl-fsize.txt");
 	CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+	signal(SIGXFSZ, oldxfsz);
 }
 
-/* The other half of the clause, deliberately NOT implemented.  Recorded
- * so that "ntlibc implements RLIMIT_FSIZE" does not silently come to mean
- * "implements all of it". */
-#if NTLIBC_TEST(BUG, posix_sysmisc_setrlimit_fsize_sigxfsz) /* BUG (compiles and links; formerly UNIMPL):: SIGXFSZ.  setrlimit.html: exceeding RLIMIT_FSIZE causes
-       * "the SIGXFSZ signal to be generated for the thread".  ntlibc
-       * reports [EFBIG] and does not raise the signal.  Signal delivery
-       * from inside the write path is a separate piece of work with its
-       * own failure modes -- src/signal/signal.c's __raise_internal is
-       * the mechanism, the same one write() already uses for SIGPIPE, so
-       * this is implementable rather than inapplicable. */
+/* The other half of the same clause: setrlimit.html RLIMIT_FSIZE, "If a
+ * write or truncate operation would cause this limit to be exceeded,
+ * SIGXFSZ shall be generated for the thread.  If the thread is blocking,
+ * or the process is ignoring, SIGXFSZ, the write or truncate operation
+ * shall fail with errno set to [EFBIG] ...".
+ *
+ * BOTH halves, in one call: the handler must have run AND write() must
+ * still report [EFBIG].  A handler that ran but left the caller with
+ * some other errno satisfies neither reading of the sentence, and it is
+ * the failure this test exists to catch -- __raise_internal() calls the
+ * handler inline on this thread, so the handler's own errno writes land
+ * between the refusal and the return.  src/misc/resource.c's
+ * __fsize_exceeded() therefore raises first and assigns errno second,
+ * the same order write() uses for SIGPIPE/[EPIPE].
+ *
+ * The handler deliberately makes an errno-setting call of its own (a
+ * close() that cannot succeed) rather than only counting: a handler that
+ * touches nothing would let the wrong ordering pass. */
+static volatile sig_atomic_t xfsz_caught;
+
+static void xfsz_handler(int sig)
+{
+	(void)sig;
+	xfsz_caught++;
+	/* guaranteed to fail and to set errno to EBADF -- see above */
+	close(-1);
+}
+
 static void test_setrlimit_fsize_sigxfsz(void)
 {
 	struct rlimit rl, saved;
+	void (*oldxfsz)(int);
 	char buf[512];
-	int fd;
-	volatile int caught = 0;
+	int fd, caught;
+
+	xfsz_caught = 0;
+	memset(buf, 'x', sizeof buf);
+	oldxfsz = signal(SIGXFSZ, xfsz_handler);
+	CHECK(oldxfsz != SIG_ERR);
 
 	CHECK(getrlimit(RLIMIT_FSIZE, &saved) == 0);
-	rl.rlim_cur = 0; rl.rlim_max = RLIM_INFINITY;
+	rl.rlim_cur = 0;
+	/* the hard limit found on entry, for the reason spelled out in
+	 * test_setrlimit_fsize_enforced() above: an earlier test here lowers
+	 * it, and it can never be raised again. */
+	rl.rlim_max = saved.rlim_max;
 	CHECK(setrlimit(RLIMIT_FSIZE, &rl) == 0);
 	fd = open("rl-xfsz.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
 	CHECK(fd >= 0);
-	memset(buf, 'x', sizeof buf);
-	errno = 0;
-	CHECK(write(fd, buf, sizeof buf) == -1 && errno == EFBIG);
-	CHECK(caught == 1);
-	close(fd);
-	unlink("rl-xfsz.txt");
+	if (fd >= 0) {
+		errno = 0;
+		CHECK(write(fd, buf, sizeof buf) == -1 && errno == EFBIG);
+		caught = xfsz_caught;
+		CHECK(caught == 1);
+		close(fd);
+		unlink("rl-xfsz.txt");
+	}
+
+	/* ftruncate is the "or truncate" arm of the same sentence */
+	xfsz_caught = 0;
+	fd = open("rl-xfsz.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		errno = 0;
+		CHECK(ftruncate(fd, 1) == -1 && errno == EFBIG);
+		caught = xfsz_caught;
+		CHECK(caught == 1);
+		close(fd);
+		unlink("rl-xfsz.txt");
+	}
+
+	/* and with the limit lifted the signal stops: it is the limit
+	 * talking, not the write */
 	CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+	xfsz_caught = 0;
+	fd = open("rl-xfsz.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(write(fd, buf, sizeof buf) == 512);
+		close(fd);
+		unlink("rl-xfsz.txt");
+	}
+	caught = xfsz_caught;
+	CHECK(caught == 0);
+
+	signal(SIGXFSZ, oldxfsz);
 }
-#endif
 
 /* N/A: setrlimit.html RLIMIT_STACK -- NT fixes the initial thread's
  * stack reservation at thread-creation time from the PE header, before
@@ -1822,6 +1893,7 @@ int main(int argc, char **argv)
 	test_setrlimit_enforceable();
 	test_setrlimit_fsize_accepts_lowering();
 	test_setrlimit_fsize_enforced();
+	test_setrlimit_fsize_sigxfsz();
 	test_setrlimit_nofile(argv[0]);
 	test_getrusage(argv[0]);
 	test_getpriority_setpriority();

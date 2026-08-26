@@ -376,7 +376,12 @@ void __fenv_init(void);
  * __fsize_limited() is the cheap predicate to test first; __fsize_clamp()
  * returns how many of `count` bytes may be written on a handle, or -1
  * with EFBIG; __fsize_allow() answers for an operation that cannot
- * partially succeed (ftruncate, posix_fallocate). */
+ * partially succeed (ftruncate, posix_fallocate).  __fsize_exceeded() is
+ * the single refusal all three end in -- it raises SIGXFSZ and then sets
+ * errno to EFBIG, in that order, and is what a caller that decides the
+ * limit is blown for itself (pwrite) must return.  It is ONLY for the
+ * process limit: [EFBIG] from an offset maximum or a volume's own
+ * maximum file size is not setrlimit.html's clause and raises nothing. */
 /* The offset maximum established in an open file description, i.e. the
  * largest value an off_t can hold.  off_t is _Int64 unconditionally
  * (include/alltypes.h.in), so this is not arch-dependent.  write.html
@@ -390,6 +395,7 @@ int __fsize_limited(void);
 long long __fsize_clamp(HANDLE h, int append, size_t count);
 long long __fsize_room_at(long long off);
 int __fsize_allow(long long size);
+int __fsize_exceeded(void);
 int __raise_internal(int);
 
 /* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/
