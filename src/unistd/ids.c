@@ -3,6 +3,7 @@
 
 /* There is one user as far as this library is concerned. */
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -10,12 +11,78 @@ uid_t getuid(void) { return 1000; }
 uid_t geteuid(void) { return 1000; }
 gid_t getgid(void) { return 1000; }
 gid_t getegid(void) { return 1000; }
-int setuid(uid_t u) { (void)u; return 0; }
-int seteuid(uid_t u) { (void)u; return 0; }
-int setgid(gid_t g) { (void)g; return 0; }
-int setegid(gid_t g) { (void)g; return 0; }
-int setreuid(uid_t r, uid_t e) { (void)r; (void)e; return 0; }
-int setregid(gid_t r, gid_t e) { (void)r; (void)e; return 0; }
+/* The one identity this library has, and the only id any set*id() call
+ * can be asked for and granted.  It is what getuid()/geteuid()/
+ * getgid()/getegid() above answer and what src/stat/stat.c puts in
+ * st_uid/st_gid. */
+#define ID_SELF 1000
+
+/* Which ids exist at all, as opposed to which ids may be assumed.
+ *
+ * setuid.html ERRORS separates two shall-fail answers, and a stub that
+ * returns 0 gives neither:
+ *   "[EINVAL] The value of the uid argument is invalid and not supported
+ *    by the implementation."
+ *   "[EPERM] The process does not have appropriate privileges and uid
+ *    does not match the real user ID or the saved set-user-ID."
+ * seteuid.html, setgid.html and setegid.html carry the identical pair
+ * for their own id, and setreuid.html/setregid.html the equivalent
+ * ("[EINVAL] The value of the ruid or euid argument is invalid or
+ * out-of-range").
+ *
+ * Answering 0 to setuid(0) is the dangerous one.  Every
+ * privilege-dropping idiom in Unix software is
+ *     if (setuid(pw->pw_uid) != 0) abort();
+ * and a call that reports success without dropping anything turns
+ * "refuse to run privileged" into "run believing the drop happened".
+ * sysconf(_SC_SAVED_IDS) is -1 here (src/unistd/sysconf.c), so there is
+ * no saved set-user-ID for a request to match either: the [EPERM]
+ * precondition holds for every id but ID_SELF.
+ *
+ * The [EINVAL]/[EPERM] line has to be drawn somewhere, because with one
+ * identity *no* other id can be assumed and the two clauses would
+ * otherwise collapse into one.  Drawn here at the top half of uid_t:
+ * uid_t and gid_t are 32-bit unsigned (include/alltypes.h.in), POSIX
+ * already reserves (uid_t)-1 in that half as setreuid()'s "leave this
+ * one alone" marker, and this implementation reserves the rest of it as
+ * not-an-id.  That is what makes the range a *supported-value* question
+ * rather than a privilege question: a caller arriving with (uid_t)-2 has
+ * almost always mishandled the -1 marker or mixed a signed id with an
+ * unsigned one, and [EINVAL] says so, where [EPERM] would tell it the
+ * value was a real id it merely could not have.  Ids below the line are
+ * well-formed and simply not this process's, which is [EPERM].
+ *
+ * Note the asymmetry with getgroups() below: this is a *choice about the
+ * id space*, documented here so it is not mistaken for a platform fact.
+ */
+static int id_supported(uid_t id) { return id <= 0x7fffffffu; }
+
+/* The shared body of all six: reject what is not an id, refuse what is
+ * an id but not ours, and grant the request that is already true. */
+static int set_one_id(uid_t id)
+{
+	if (!id_supported(id)) { errno = EINVAL; return -1; }
+	if (id != (uid_t)ID_SELF) { errno = EPERM; return -1; }
+	return 0;
+}
+
+/* setreuid.html DESCRIPTION: "If ruid or euid is -1, the corresponding
+ * effective or real user ID of the current process shall be left
+ * unchanged" -- so (uid_t)-1 is the one value in the reserved half that
+ * these two must accept, and it asks for nothing. */
+static int set_two_ids(uid_t r, uid_t e)
+{
+	if (r != (uid_t)-1 && set_one_id(r) < 0) return -1;
+	if (e != (uid_t)-1 && set_one_id(e) < 0) return -1;
+	return 0;
+}
+
+int setuid(uid_t u) { return set_one_id(u); }
+int seteuid(uid_t u) { return set_one_id(u); }
+int setgid(gid_t g) { return set_one_id((uid_t)g); }
+int setegid(gid_t g) { return set_one_id((uid_t)g); }
+int setreuid(uid_t r, uid_t e) { return set_two_ids(r, e); }
+int setregid(gid_t r, gid_t e) { return set_two_ids((uid_t)r, (uid_t)e); }
 /* The supplementary group list this library reports is one entry long
  * and holds the effective group ID -- getgroups.html leaves it
  * implementation-defined whether the effective gid appears there, and
@@ -166,10 +233,67 @@ pid_t getsid(pid_t p)
 	if (!pid_exists(p)) { errno = ESRCH; return -1; }
 	return 1;
 }
-int chown(const char *p, uid_t u, gid_t g) { (void)p; (void)u; (void)g; return 0; }
-int fchown(int f, uid_t u, gid_t g) { (void)f; (void)u; (void)g; return 0; }
-int lchown(const char *p, uid_t u, gid_t g) { (void)p; (void)u; (void)g; return 0; }
-int fchownat(int d, const char *p, uid_t u, gid_t g, int f) { (void)d; (void)p; (void)u; (void)g; (void)f; return 0; }
+/* There is nothing for the chown family to set -- NT has no POSIX owner
+ * or group, and st_uid/st_gid are the fixed ID_SELF -- but "there is no
+ * ownership to change" is not "there is no path to resolve".
+ *
+ * chown.html ERRORS, all shall-fail:
+ *   "[ENOENT] A component of path does not name an existing file or path
+ *    is an empty string."
+ *   "[ENOTDIR] A component of the path prefix names an existing file
+ *    that is neither a directory nor a symbolic link to a directory ..."
+ * lchown.html repeats both.  fchown.html: "[EBADF] The fildes argument
+ * is not an open file descriptor."  chown.html's fchownat() section adds
+ * [EBADF] for a dirfd that is neither AT_FDCWD nor a valid descriptor
+ * and [ENOTDIR] for one that is not a directory.
+ *
+ * chown("does-not-exist", ...) returning 0 is not a statement about
+ * ownership, it is a statement that the file exists, and it is false: an
+ * installer chowning a list of files it has just laid down loses its
+ * only report that one of them is missing, and `chown()` failing with
+ * ENOENT is a standard existence probe.  So the path is resolved and the
+ * object opened for FILE_READ_ATTRIBUTES, which is exactly the evidence
+ * those clauses ask for and nothing more; the handle is closed again
+ * without a write of any kind.
+ *
+ * __ntpath_at() produces the empty-path [ENOENT], the dirfd [EBADF]/
+ * [ENOTDIR] and the path-prefix [ENOTDIR] itself (src/internal/path.c),
+ * so only the final open is left to this function.
+ *
+ * fchownat()'s [EINVAL] for an unrecognised flag is a *may*-fail on
+ * chown.html, unlike unlinkat()'s, and accepting the bits is the
+ * behaviour test/posix-unistd-ids.c pins; only AT_SYMLINK_NOFOLLOW is
+ * read out of them.  FILE_OPEN_FOR_BACKUP_INTENT, and neither
+ * FILE_DIRECTORY_FILE nor FILE_NON_DIRECTORY_FILE, so that the call
+ * works on a directory and on a regular file alike. */
+static int chown_resolve(int dirfd, const char *path, int flags)
+{
+	struct __ntpath np;
+	IO_STATUS_BLOCK io;
+	OBJECT_ATTRIBUTES *oa;
+	HANDLE h;
+	NTSTATUS st;
+	ULONG options;
+
+	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
+	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
+		(flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
+	oa = &np.oa;
+	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	__ntpath_free(&np);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	NtClose(h);
+	return 0;
+}
+
+int fchownat(int d, const char *p, uid_t u, gid_t g, int f)
+{
+	(void)u; (void)g;
+	return chown_resolve(d, p, f);
+}
+int chown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, 0); }
+int lchown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, AT_SYMLINK_NOFOLLOW); }
+int fchown(int f, uid_t u, gid_t g) { (void)u; (void)g; return __fd_get(f) ? 0 : -1; }
 int nice(int n) { (void)n; return 0; }
 int chroot(const char *p) { (void)p; errno = EPERM; return -1; }
 int issetugid(void) { return 0; }

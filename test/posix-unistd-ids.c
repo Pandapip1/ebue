@@ -240,14 +240,11 @@ static void test_setid_family(void)
 		if (nb > 0) CHECK(!memcmp(before, after, (size_t)nb * sizeof(gid_t)));
 	}
 
-#if NTLIBC_TEST(BUG, posix_ids_setid_refuses_unauthorized_ids) /* BUG: every set*id() call reports success for a request it did
-	 * not carry out, including requests POSIX requires it to *refuse*.
-	 *
-	 * setuid.html ERRORS: "The setuid() function *shall* fail, return
+	/* setuid.html ERRORS: "The setuid() function *shall* fail, return
 	 * -1, and set errno to the corresponding value if one or more of
 	 * the following are true: ... [EPERM] The process does not have
 	 * appropriate privileges and uid does not match the real user ID
-	 * or the saved set-user-ID."  seteuid.html, setgid.html,
+	 * or the saved set-user-ID."  seteuid.html, setgid.html and
 	 * setegid.html carry the identical clause for their own id, and
 	 * setreuid.html/setregid.html carry the equivalent one ("[EPERM]
 	 * The current process does not have appropriate privileges, and
@@ -255,55 +252,40 @@ static void test_setid_family(void)
 	 * value other than the real user ID or the saved set-user-ID").
 	 *
 	 * sysconf(_SC_SAVED_IDS) is -1 on this platform
-	 * (src/unistd/sysconf.c:21), so there is no saved set-user-ID to
+	 * (src/unistd/sysconf.c), so there is no saved set-user-ID to
 	 * match either, and uid 0 is not the real user ID (1000) -- the
 	 * clause's precondition holds exactly.
 	 *
-	 * Mechanism: src/unistd/ids.c:12-19 are six one-line
-	 *     int setuid(uid_t u) { (void)u; return 0; }
-	 * stubs.  The argument is cast to void and 0 is returned
-	 * unconditionally.  Probed on this tree: setuid(0), seteuid(0),
-	 * setgid(0), setegid(0), setreuid(0,0), setregid(0,0) all return 0
-	 * with errno untouched, and getuid()/geteuid()/getgid()/getegid()
-	 * still answer 1000 afterwards.
-	 *
-	 * Classified BUG rather than N/A, and this is the distinction this
-	 * file's banner draws.  "One user, so the *effect* is
-	 * unobservable" is a sound N/A for the success path and
-	 * test/POSIX-GAP-ACCOUNTING.md's degenerate-stub table already
-	 * records it there.  It is not an argument for reporting success
-	 * to `setuid(0)`: that answer is a claim the caller acts on --
-	 * every privilege-dropping idiom in Unix software is
-	 * `if (setuid(pw->pw_uid) != 0) abort();`, and a stub that says 0
+	 * "One user, so the *effect* is unobservable" is a sound argument
+	 * for the success path.  It is not an argument for reporting
+	 * success to setuid(0): that answer is a claim the caller acts on
+	 * -- every privilege-dropping idiom in Unix software is
+	 * `if (setuid(pw->pw_uid) != 0) abort();`, and an answer of 0
 	 * turns "refuse to run unprivileged" into "run believing the drop
-	 * happened".  Returning -1/[EPERM] for any id that is not the
-	 * current one is both what the page requires and what the
-	 * single-identity model actually means.  Re-enable when the six
-	 * stubs validate their argument. */
+	 * happened".  src/unistd/ids.c's set_one_id() therefore refuses
+	 * any id that is not the one identity this library has. */
 	errno = 0; CHECK(setuid(0) == -1 && errno == EPERM);
 	errno = 0; CHECK(seteuid(0) == -1 && errno == EPERM);
 	errno = 0; CHECK(setgid(0) == -1 && errno == EPERM);
 	errno = 0; CHECK(setegid(0) == -1 && errno == EPERM);
 	errno = 0; CHECK(setreuid(0, 0) == -1 && errno == EPERM);
 	errno = 0; CHECK(setregid(0, 0) == -1 && errno == EPERM);
-#endif
 
-#if NTLIBC_TEST(BUG, posix_ids_setid_rejects_unsupported_ids) /* BUG: the same six accept an id that is not a value the
-	 * implementation supports at all.  setuid.html ERRORS: "[EINVAL]
-	 * The value of the uid argument is invalid and not supported by
-	 * the implementation" -- also a shall-fail, and the four seteuid/
-	 * setgid/setegid pages plus setreuid.html/setregid.html ("[EINVAL]
-	 * The value of the ruid or euid argument is invalid or
-	 * out-of-range") say the same.
+	/* setuid.html ERRORS: "[EINVAL] The value of the uid argument is
+	 * invalid and not supported by the implementation" -- also a
+	 * shall-fail, and the seteuid/setgid/setegid pages plus
+	 * setreuid.html/setregid.html ("[EINVAL] The value of the ruid or
+	 * euid argument is invalid or out-of-range") say the same.
 	 *
 	 * (uid_t)-2 is chosen because (uid_t)-1 is the reserved
 	 * "unchanged" marker setreuid.html gives a meaning to, so -2 is
-	 * the nearest value that is unambiguously an id and unambiguously
-	 * not one this library models.  Probed: all six return 0.
-	 * Same mechanism and same fix as the fence above. */
+	 * the nearest value that is unambiguously not an id.  Where the
+	 * [EINVAL]/[EPERM] line falls is an implementation choice, since
+	 * with one identity no other id can be assumed either; it is drawn
+	 * at the top half of uid_t and the reasoning is written out in
+	 * src/unistd/ids.c above id_supported(). */
 	errno = 0; CHECK(setuid((uid_t)-2) == -1 && errno == EINVAL);
 	errno = 0; CHECK(setgid((gid_t)-2) == -1 && errno == EINVAL);
-#endif
 }
 
 /* ============================================================
@@ -580,45 +562,29 @@ static void test_chown_family(void)
 
 	CHECK(close(fd) == 0);
 
-#if NTLIBC_TEST(BUG, posix_ids_chown_family_validates_paths_and_fds) /* BUG: the whole chown family reports success for a path that
-	 * does not exist, for the empty string, and for a path whose
-	 * prefix is a regular file -- and fchown()/fchownat() for a
-	 * descriptor that was never opened.
-	 *
-	 * chown.html ERRORS, all shall-fail:
+	/* chown.html ERRORS, all shall-fail:
 	 *   "[ENOENT] A component of path does not name an existing file
 	 *    or path is an empty string."
 	 *   "[ENOTDIR] A component of the path prefix names an existing
 	 *    file that is neither a directory nor a symbolic link to a
 	 *    directory ..."
-	 * lchown.html repeats both verbatim.  fchown.html: "The fchown()
-	 * function *shall* fail if: [EBADF] The fildes argument is not an
-	 * open file descriptor."  chown.html's fchownat() section:
-	 * "[EBADF] The path argument does not specify an absolute path and
-	 * the fd argument is neither AT_FDCWD nor a valid file descriptor
-	 * open for reading or searching" and "[ENOTDIR] The path argument
-	 * is not an absolute path and fd is a file descriptor associated
-	 * with a non-directory file."
+	 * lchown.html repeats both.  fchown.html: "[EBADF] The fildes
+	 * argument is not an open file descriptor."  chown.html's
+	 * fchownat() section: "[EBADF] The path argument does not specify
+	 * an absolute path and the fd argument is neither AT_FDCWD nor a
+	 * valid file descriptor open for reading or searching".
 	 *
-	 * Mechanism: src/unistd/ids.c:26-29 are four one-line stubs that
-	 * cast every argument to void and return 0.  Not one of them
-	 * touches __ntpath_at() or __fd_get(), which is how every other
-	 * path- or fd-taking call in the library produces these errnos.
-	 *
-	 * Classified BUG rather than N/A on this file's banner rule.  The
-	 * degenerate-stub argument -- "NT has no uid/gid to set, so the
-	 * effect is unobservable" -- is sound and
-	 * test/POSIX-GAP-ACCOUNTING.md records it.  It says nothing about
-	 * *path resolution*: `chown("does-not-exist", ...)` returning 0 is
-	 * not a statement about ownership, it is a statement that the file
-	 * exists, and it is false.  Callers use exactly that: `chown()`
+	 * The degenerate-stub argument -- "NT has no uid/gid to set, so
+	 * the effect is unobservable" -- is sound about *ownership* and
+	 * says nothing about *path resolution*.  chown("does-not-exist",
+	 * ...) returning 0 is not a statement about ownership, it is a
+	 * statement that the file exists, and it is false: `chown()`
 	 * failing with ENOENT is a standard existence probe, and an
 	 * installer that chowns a list of files it has just laid down
-	 * loses its only report that one of them is missing.  The check
-	 * costs an __ntpath_at()/NtQueryFullAttributesFile() the stub
-	 * already has every ingredient for.  Probed on this tree: all
-	 * seven calls below return 0 with errno untouched.
-	 * Re-enable when the four stubs resolve their path/descriptor. */
+	 * loses its only report that one of them is missing.  All four
+	 * now run their path through __ntpath_at() and open the object
+	 * for FILE_READ_ATTRIBUTES, or their descriptor through
+	 * __fd_get(); see src/unistd/ids.c's chown_resolve(). */
 	errno = 0; CHECK(chown("chown-no-such-file", getuid(), getgid()) == -1 && errno == ENOENT);
 	errno = 0; CHECK(chown("", getuid(), getgid()) == -1 && errno == ENOENT);
 	errno = 0; CHECK(lchown("chown-no-such-file", getuid(), getgid()) == -1 && errno == ENOENT);
@@ -626,7 +592,6 @@ static void test_chown_family(void)
 	errno = 0; CHECK(fchown(4096, getuid(), getgid()) == -1 && errno == EBADF);
 	errno = 0; CHECK(fchownat(4096, "rel", getuid(), getgid(), 0) == -1 && errno == EBADF);
 	errno = 0; CHECK(fchownat(AT_FDCWD, "chown-no-such-file", getuid(), getgid(), 0) == -1 && errno == ENOENT);
-#endif
 
 	/* fchownat()'s [EINVAL] ("The value of the flag argument is not
 	 * valid") is a *may*-fail on chown.html, not a shall-fail, so
