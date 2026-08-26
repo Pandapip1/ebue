@@ -865,6 +865,66 @@ static void test_poll_ready_count(void)
 	close(fds[1]);
 }
 
+#if NTLIBC_TEST(BUG, posix_sysmisc_poll_hup_excludes_pollout) /* BUG: poll() reports POLLHUP and POLLOUT together.  poll.html
+	 * DESCRIPTION, the POLLHUP entry: "A device has been disconnected,
+	 * or a pipe or FIFO has been closed.  This event and POLLOUT are
+	 * mutually-exclusive; a stream can never be writable if a hangup
+	 * has occurred.  However, this event and POLLIN, POLLRDNORM,
+	 * POLLRDBAND, or POLLPRI are not mutually-exclusive."  The spec
+	 * goes out of its way to say which combinations are allowed and
+	 * which one is not.
+	 *
+	 * Mechanism: the hangup and the writability come from the same
+	 * assignment.  All three hangup branches of __fd_probe() in
+	 * src/select/select.c say
+	 *
+	 *     *canread = 1; *canwrite = 1; *hup = 1;
+	 *
+	 * -- the broken-pipe case, the socket case for
+	 * AFD_EVENT_CLOSE/ABORT/DISCONNECT, and the case where the socket
+	 * probe ioctl itself failed.  src/select/poll.c then ORs each of
+	 * the three answers into revents independently, with no exclusion:
+	 *
+	 *     if (hup) p->revents |= POLLHUP;
+	 *     if (cr)  p->revents |= (short)(p->events & (POLLIN | POLLRDNORM));
+	 *     if (cw)  p->revents |= (short)(p->events & (POLLOUT | POLLWRNORM));
+	 *
+	 * A caller that polls for POLLIN|POLLOUT on a hung-up descriptor is
+	 * told it may write, which is the one thing the clause exists to
+	 * rule out.  The third branch is the worst of the three: there
+	 * ntlibc reports "hung up" and "writable" at once for a descriptor
+	 * whose state it has just admitted it could not sample.
+	 *
+	 * The fix is one mask in poll.c: POLLHUP clears POLLOUT/POLLWRNORM.
+	 *
+	 * The assertion below is written so it is a genuine test of the
+	 * clause and nothing else -- if no hangup is reported it passes
+	 * vacuously, so it does not depend on how any particular platform
+	 * or emulator decides a closed pipe end has hung up.
+	 *
+	 * Re-enable when POLLHUP suppresses the writability bits. */
+static void test_poll_hup_excludes_pollout(void)
+{
+	int fds[2];
+	struct pollfd pfd;
+
+	CHECK(pipe(fds) == 0);
+	CHECK(write(fds[1], "x", 1) == 1);
+	CHECK(close(fds[1]) == 0);		/* writer gone: hangup */
+
+	pfd.fd = fds[0];
+	pfd.events = POLLIN | POLLOUT;
+	pfd.revents = -1;
+	CHECK(poll(&pfd, 1, 0) >= 0);
+
+	/* POLLHUP with POLLIN is explicitly allowed; POLLHUP with POLLOUT
+	 * is explicitly not. */
+	CHECK(!((pfd.revents & POLLHUP) && (pfd.revents & (POLLOUT | POLLWRNORM))));
+
+	close(fds[0]);
+}
+#endif
+
 /* poll.html DESCRIPTION timeout semantics: "the value 0 ... the poll()
  * function shall return immediately" -- and RETURN VALUE: "0 ... time
  * limit expired" with revents left clear for anything not ready. */
