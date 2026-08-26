@@ -336,7 +336,17 @@ TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 # check-pedantic prints any capability term the rules use and the
 # profile leaves unset, so a third term added later cannot go missing
 # the way these two did.
-TEST_PROFILE ?= capability.symlink=no capability.console=no
+#
+# capability.overcommit=no is the third term, and it is not like the other
+# two: it does not exempt a test case, and no rule in
+# test/test-profiles.tsv selects on it.  It says whether ASan can start at
+# all on this host -- see tools/asan-available.sh -- and it is carried
+# here because this is already the channel by which a runner's facts reach
+# the tools, and a second channel for the same kind of fact is a second
+# place to disagree.  A host with vm.overcommit_memory=2 cannot run any
+# ASan-linked binary; this default says so, and tools/asan-available.sh
+# refuses to act on it unless the kernel agrees.
+TEST_PROFILE ?= capability.symlink=no capability.console=no capability.overcommit=no
 
 # TEST_DEPFLAGS is the same mechanism DEPFLAGS provides for library
 # objects, applied to the test binaries -- which compile and link in one
@@ -686,8 +696,21 @@ minver:
 # Deliberately not part of `all` or `check`: they build the real thing with
 # $(CC), and this builds something else with clang.
 #
+# NTLIBC_TEST_PROFILE carries $(TEST_PROFILE) in, the same env name
+# tools/libc-test.sh already reads it under.  Exit 77 from the script
+# means "unavailable in this environment", not "failed" (see
+# tools/asan-available.sh); it is translated into one plain line here
+# because a bare `make: *** [asan] Error 77` reads as neither.  The
+# status is still 77 and still non-zero: this stage verified nothing,
+# and a caller that treats that as success is the failure mode this
+# project has closed nine times.
 asan: $(GENH)
-	@$(srcdir)/tools/asan-build.sh
+	@NTLIBC_TEST_PROFILE="$(TEST_PROFILE)" $(srcdir)/tools/asan-build.sh; \
+	 rc=$$?; \
+	 if [ $$rc = 77 ]; then \
+	   echo "make: 'asan' is UNAVAILABLE here (exit 77), not failed -- see above."; \
+	 fi; \
+	 exit $$rc
 
 # Wall-clock seconds per harness, matching tools/fuzz.sh's own `${1:-60}`
 # default so the two cannot drift.  It was referenced here and defined
@@ -720,3 +743,13 @@ distclean: clean
 # The same, for the test binaries (see TEST_DEPFLAGS).  Absent on a
 # clean tree, which is harmless: the first build creates them.
 -include $(TEST_EXES:.exe=.d)
+
+# One place holds the TEST_PROFILE default, and fuzz/Makefile is a
+# separate make invocation that needs it (its run/coverage targets ask
+# tools/asan-available.sh whether ASan can start).  It asks here rather
+# than repeating the default, because two copies of a default are two
+# things to forget to change together.
+print-test-profile:
+	@printf '%s\n' '$(TEST_PROFILE)'
+
+.PHONY: print-test-profile

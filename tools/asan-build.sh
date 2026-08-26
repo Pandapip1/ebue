@@ -256,6 +256,21 @@ if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
 	exit 1
 fi
 
+# CAN ASAN ACTUALLY START HERE?  Asked before compiling 297 files that
+# would then be unable to run, and asked in one place -- see
+# tools/asan-available.sh, which carries the mechanism, the reasoning for
+# `unavailable` rather than `error`, and the exit-77 convention.  It is
+# the same script fuzz/Makefile's run and coverage targets call, so the
+# two cannot drift into disagreeing about whether this host can run ASan.
+#
+# Not asked in ubsan mode, which has no shadow to reserve and starts
+# anywhere; and not asked for --objects-only, which builds objects for
+# somebody else to link and never runs anything -- gating it would break
+# `make -C fuzz` on a host where the harnesses are perfectly buildable.
+if [ "$SAN_MODE" = asan ] && [ "$mode" != "--objects-only" ]; then
+	"$srcdir/tools/asan-available.sh" || exit $?
+fi
+
 # Two concurrent runs share $OBJ and clobber each other: the `rm -rf`
 # below deletes objects the other run is still compiling into and linking
 # against.  The build then fails in ways that look nothing like the real

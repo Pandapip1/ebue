@@ -300,6 +300,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang
       - name: Run AddressSanitizer and UBSan suite
+        # capability.overcommit=yes, explicitly.  The Makefile's
+        # TEST_PROFILE default declares `no`, because the machine this
+        # project is developed on has vm.overcommit_memory=2 and no
+        # ASan-linked binary can start there (tools/asan-available.sh).
+        # These runners have the default overcommit setting, so ASan runs
+        # for real here -- and THIS JOB IS THE ONLY PLACE IT DOES, which
+        # makes it the sole authority for heap-overflow, use-after-free,
+        # double-free and leak findings.  Saying it here rather than
+        # relying on asan-available.sh's stale-declaration veto is the
+        # difference between a stated intent and a lucky one.
+        env:
+          TEST_PROFILE: capability.overcommit=yes
         run: make ARCH=x86_64 asan
       - name: Upload failing test output
         if: failure()

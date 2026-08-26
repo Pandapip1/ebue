@@ -41,6 +41,48 @@
 #                            Any interactive run is that -- which is why a
 #                            developer running these by hand in a terminal
 #                            is exactly the case the default gets wrong.
+#     capability.overcommit=no
+#                            a host whose vm.overcommit_memory is not 2.
+#                            THIS ONE IS PROBED, uniquely: the
+#                            falsification is a single read of
+#                            /proc/sys/vm/overcommit_memory, so
+#                            tools/asan-available.sh does it, with the
+#                            declaration able to cause a skip and the
+#                            probe able only to veto one.  It is not a
+#                            general move away from declarations -- the
+#                            two terms above still have none -- it is one
+#                            term whose truth happens to cost nothing to
+#                            check, guarding a stage that would otherwise
+#                            be skipped in CI by inheriting a developer's
+#                            default.
+#
+#   capability.overcommit IS NOT LIKE THE OTHER TWO, and no rule below
+#   selects on it.  The others exempt a named case from adjudication;
+#   this one says whether AddressSanitizer can START on this host at all
+#   -- it reserves a ~15 TB shadow with MAP_NORESERVE, which Linux
+#   honours only when overcommit is not OVERCOMMIT_NEVER, so under
+#   vm.overcommit_memory=2 every ASan-linked binary dies before main().
+#   That is a property of a whole build stage, not of a test case, and
+#   this table has no way to express it: every row here resolves to a
+#   disposition that policy_accepts() adjudicates against one case's
+#   built/outcome pair, and a stage has neither.  Inventing a
+#   suite/case pair for it would produce a row that looks like the
+#   others and means something entirely different.
+#
+#   So the term is carried by the profile VOCABULARY -- which is exactly
+#   the shape of "a fact about this runner" it was built for, and where
+#   parse_profile() already accepts any capability.* key -- and consumed
+#   by the stage that cares (tools/asan-available.sh, called from
+#   tools/asan-build.sh and fuzz/Makefile).  It is documented here
+#   because this is where the vocabulary is documented, and because a
+#   reader looking for what a capability term can mean should find the
+#   one that does not fit the pattern rather than discover it later.
+#
+#   Consequence worth knowing: since no rule selects on it,
+#   test-policy.py's unset_capabilities() will never mention it, and its
+#   absence from a profile is silent.  That is why tools/asan-available.sh
+#   warns when the term is missing and the kernel says the stage cannot
+#   run.
 #
 # Probing them for real is a design change and deliberately not done here;
 # this note exists so the limitation is known rather than silent.

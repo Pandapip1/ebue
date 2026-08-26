@@ -242,13 +242,38 @@ LEAKS ?= 1
 # one stopped instead of starting from random bytes.
 CORPUS ?= $(abspath $(srcdir)/obj/fuzzcorpus$(MODESUF))
 
+# ---------------------------------- can ASan start on this host at all?
+#
+# The same question tools/asan-build.sh asks, asked by the same script,
+# so the two cannot drift into disagreeing.  See tools/asan-available.sh
+# for the mechanism (MAP_NORESERVE is honoured only when overcommit is
+# not OVERCOMMIT_NEVER), for why the answer is `unavailable` rather than
+# `error`, and for the exit-77 convention.
+#
+# Without this, `make -C fuzz run` on a strict-overcommit host prints
+# "AddressSanitizer failed to allocate 0xdfff0001000 bytes" once per
+# harness and exits non-zero, which reads as a corrupt toolchain.  It has
+# been read that way.
+#
+# TEST_PROFILE is not repeated here: the top-level Makefile holds the one
+# default and this asks it for it.  In ubsan mode the check is skipped
+# outright -- there is no shadow to reserve, so there is nothing for the
+# profile to declare unavailable.
+TEST_PROFILE ?= $(shell $(MAKE) -s -C $(srcdir) print-test-profile 2>/dev/null)
+ifeq ($(SAN_MODE),asan)
+CHECK_SAN = NTLIBC_TEST_PROFILE="$(TEST_PROFILE)" $(srcdir)/tools/asan-available.sh || exit $$?;
+else
+CHECK_SAN = :;
+endif
+
 # DEBUGINFOD_URLS= : see the long comment in ../tools/fuzz.sh.  With it set
 # -- Ubuntu exports it from /etc/profile.d/debuginfod.sh -- llvm-symbolizer
 # makes a doomed HTTPS request for the harness's build-id before reading the
 # DWARF that is already in the harness, and ASan's blocking read() on the
 # symbolizer pipe hangs with it.
 run: all
-	@rc=0; \
+	@$(CHECK_SAN) \
+	 rc=0; \
 	for h in $(HARNESSES); do \
 	   mkdir -p $(CORPUS)/$$h/corpus $(CORPUS)/$$h/crashes; \
 	   before=$$(ls -1 $(CORPUS)/$$h/corpus | wc -l); \
@@ -354,7 +379,8 @@ $(COVOUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) $(CO
 	  $(COVLIB)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
 
 coverage: $(COVEXES)
-	@COV_TIME=$(COV_TIME) FUNCS=$(FUNCS) MODULE=$(MODULE) ALL=$(ALL) \
+	@$(CHECK_SAN) \
+	 COV_TIME=$(COV_TIME) FUNCS=$(FUNCS) MODULE=$(MODULE) ALL=$(ALL) \
 	 SAN_SO=$(SAN_SO) COVOUT=$(abspath $(COVOUT)) \
 	 COVDATA=$(abspath $(COVDATA)) SRCDIR=$(abspath $(srcdir)) \
 	 ./coverage.sh $(HARNESSES)
