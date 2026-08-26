@@ -74,6 +74,7 @@ CFLAGS_ORACLE = -fsanitize=address,undefined -g -O1 -w
 # ntstubs.c's __interceptor_malloc and friends ARE the ASan runtime's in
 # this mode; a local definition would collide with it.
 SHIM_SRC  =
+RUNFLAGS  =
 MODESUF   =
 else ifeq ($(SAN_MODE),ubsan)
 # -fsanitize=fuzzer-no-link, and libFuzzer named explicitly below,
@@ -103,6 +104,11 @@ CFLAGS_ORACLE = -fsanitize=undefined -g -O1 -w
 # ...and here they are undefined, so ubsanshim.c supplies them.  See the
 # file itself for what that costs.
 SHIM_SRC  = ubsanshim.c
+# libFuzzer's -detect_leaks defaults to 1 and drives its own leak
+# heuristic plus __lsan_do_recoverable_leak_check.  There is no
+# LeakSanitizer behind that here (ubsanshim.c's __lsan_* are no-ops), so
+# leave it off rather than let it report a "leak" it cannot confirm.
+RUNFLAGS  = -detect_leaks=0
 MODESUF   = -ubsan
 else
 $(error SAN_MODE must be asan or ubsan, not $(SAN_MODE))
@@ -281,7 +287,7 @@ run: all
 	   NTLIBC_FUZZ_MIRROR=$(CORPUS)/$$h DEBUGINFOD_URLS= \
 	   LD_PRELOAD=$(SAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS):handle_abort=1 \
 	   UBSAN_OPTIONS=print_stacktrace=1 \
-	   $(OUT)/fuzz_$$h -max_total_time=$(FUZZ_TIME) -max_len=256 \
+	   $(OUT)/fuzz_$$h $(RUNFLAGS) -max_total_time=$(FUZZ_TIME) -max_len=256 \
 	     -print_funcs=0 -print_final_stats=1 \
 	     -artifact_prefix=$(CORPUS)/$$h/crashes/ \
 	     $(CORPUS)/$$h/corpus \

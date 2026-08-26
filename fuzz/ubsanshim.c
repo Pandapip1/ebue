@@ -97,3 +97,25 @@ size_t __sanitizer_get_allocated_size(const void *p)
 	if (!f) f = (size_t (*)(void *))sym("malloc_usable_size");
 	return f((void *)p);
 }
+
+/* ------------------------------------------- LeakSanitizer's two switches
+ *
+ * __lsan_disable()/__lsan_enable() bracket a region whose allocations
+ * LeakSanitizer should not report.  fuzz/fuzz_shparse.c uses them around
+ * a deliberately-leaked parse, and libFuzzer's own ExternalFunctions
+ * constructor references them too, so without definitions the link fails
+ * outright in this mode -- which is how this gap was found, by building
+ * every harness rather than the ones this work touched.
+ *
+ * No-ops, and exactly right as no-ops: the request is "suspend leak
+ * detection here", and in a build with no LeakSanitizer there is no leak
+ * detection to suspend.  This is NOT the shim quietly satisfying a check
+ * that should have failed -- the check is absent for the whole run, not
+ * only inside the bracket, and that absence is stated everywhere this
+ * mode is described.  A harness whose point is a leak assertion is
+ * vacuous here, and fuzz_shparse's is: its leak fence asserts nothing in
+ * this mode.  The mode-wide statement covers it; a per-call warning
+ * would fire millions of times and be read by nobody.
+ */
+void __lsan_disable(void) { }
+void __lsan_enable(void) { }
