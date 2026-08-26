@@ -90,7 +90,7 @@ for v in $(printf '%s\n' "$exports" | sed -n 's/.*;[[:space:]]*\([0-9][0-9]*\.[0
 	fi
 done
 max="$max_maj.$max_min"
-max_names=$(printf '%s\n' "$exports" | sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*;[[:space:]]*$max_maj\\.$max_min[[:space:]]*$/\1/p" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+max_names=$(printf '%s\n' "$exports" | sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*;[[:space:]]*$max_maj\\.${max_min}[[:space:]]*$/\1/p" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
 # README states the floor once, in a line this script owns the format of.
 declared=$(sed -n 's/^<!-- ntlibc-min-ntdll: \([0-9][0-9]*\.[0-9][0-9]*\) -->$/\1/p' "$readme")
