@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=409 BUG=178 UNIMPL=975 NA=47 FLAKY=1
+# COUNTS PASS=409 BUG=178 UNIMPL=975 NA=48 FLAKY=0
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -362,7 +362,7 @@ nanosleep/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
 nanosleep/10000-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-nanosleep/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline disagreed across repeated runs
+nanosleep/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	the runner's NtDelayExecution returns STATUS_SUCCESS without waiting on ~0.4% of sub-tick delays (its deadline arithmetic uses the 1 ms-granular NtQuerySystemTime), so the cumulative-elapsed assertion cannot hold reliably
 nanosleep/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
 nanosleep/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
 nanosleep/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
