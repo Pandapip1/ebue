@@ -227,27 +227,39 @@ static void test_termios_header_constants(void)
 		CHECK((cflag[i] & (unsigned long)CSIZE) == 0);
 }
 
-#if NTLIBC_TEST(UNIMPL, posix_termios_termios_oflag_delay_masks) /* UNIMPL: termios.h.html's Output Modes table marks the delay
-	masks [XSI] alongside ONLCR/OCRNL/ONOCR/ONLRET/OFILL/OFDEL --
-	NLDLY (NL0, NL1), CRDLY (CR0..CR3), TABDLY (TAB0..TAB3), BSDLY
-	(BS0, BS1), VTDLY (VT0, VT1), FFDLY (FF0, FF1). ntlibc compiles
-	-D_XOPEN_SOURCE=700 and defines the other six [XSI] output-mode
-	names, but not one of the delay names, so this group is an
-	incomplete header rather than a platform impossibility: the
-	values are pure c_oflag bits, and c_oflag is already accepted
-	and stored wholesale (src/termios/termios.c's shadow), so
-	defining them would cost nothing and they would round-trip like
-	every other c_oflag bit. Not N/A -- "no console applies output
-	delays" is equally true of ONLCR, which *is* defined. This is
-	the "I chose not to" case. */
+/* termios.h.html's Output Modes table, the [XSI] delay masks --
+ * NLDLY (NL0, NL1), CRDLY (CR0..CR3), TABDLY (TAB0..TAB3), BSDLY
+ * (BS0, BS1), VTDLY (VT0, VT1), FFDLY (FF0, FF1). Fields, not flags,
+ * so the requirement is one level stronger than the c_oflag group
+ * above: the six masks share one tcflag_t with OPOST and the six
+ * [XSI] flag bits, so they must be non-zero and disjoint from each
+ * other, and each field's values must lie inside their own mask --
+ * NL1 outside NLDLY, or TAB3 wider than TABDLY, would silently set a
+ * bit belonging to some other output mode. The zero values (NL0,
+ * CR0, TAB0, BS0, VT0, FF0) are "field clear" and are inside every
+ * mask trivially, which is why check_disjoint() is applied to the
+ * masks and not to them. See include/termios.h for why the fields are
+ * defined although nothing on this platform waits out a delay. */
 static void test_termios_oflag_delay_masks(void)
 {
 	static const unsigned long dly[] = { NLDLY, CRDLY, TABDLY, BSDLY, VTDLY, FFDLY };
+	static const unsigned long oflag[] = {
+		OPOST, ONLCR, OCRNL, ONOCR, ONLRET, OFDEL, OFILL
+	};
+	int i, j;
+
 	check_disjoint("c_oflag delay masks", dly, 6);
 	CHECK((NL0 & ~(unsigned long)NLDLY) == 0 && (NL1 & ~(unsigned long)NLDLY) == 0);
 	CHECK((TAB3 & ~(unsigned long)TABDLY) == 0);
+	/* ... and no mask may take a bit one of the flags above is already
+	 * using, the same cross-check test_termios_header_constants() makes
+	 * between CSIZE and the other control-mode bits: OPOST and a delay
+	 * field share one c_oflag word, so an overlap would turn selecting
+	 * a delay into disabling output post-processing. */
+	for (i = 0; i < 6; i++)
+		for (j = 0; j < (int)(sizeof oflag / sizeof *oflag); j++)
+			CHECK((dly[i] & oflag[j]) == 0);
 }
-#endif
 
 /* cfgetispeed.html/cfsetispeed.html DESCRIPTION: "store ... in the
  * termios structure" / "obtain ... from the termios structure". This
@@ -912,6 +924,7 @@ int main(int argc, char **argv)
 	test_termios_gating(argv[0]);
 	test_termios_gating_other_shapes();
 	test_termios_header_constants();
+	test_termios_oflag_delay_masks();
 	test_cfsetispeed_cfgetispeed_roundtrip();
 	test_cf_speed_no_interpretation();
 	test_cf_speed_all_rates_and_isolation();

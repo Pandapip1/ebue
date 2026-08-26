@@ -101,6 +101,47 @@ struct termios {
 #define OFILL   0000100
 #define OFDEL   0000200
 
+/* c_oflag delay masks. [XSI] in termios.h.html's Output Modes table,
+ * alongside ONLCR/OCRNL/ONOCR/ONLRET/OFILL/OFDEL above, and in scope
+ * here for the same reason those are: this tree compiles
+ * -D_XOPEN_SOURCE=700. Each name is a field mask over its own values
+ * rather than a single flag bit, so a value lies inside its mask and no
+ * mask may overlap another or any of the flag bits above; the layout is
+ * the conventional one, which fits in the bits left free above OFDEL.
+ * NL0/CR0/TAB0/BS0/VT0/FF0 are zero because "no delay" is the field
+ * being clear, not a value set in it.
+ *
+ * Nothing here ever waits: a console write is finished by the time
+ * WriteConsole() returns, and there is no wire to pad a delay out on,
+ * so a delay field is accepted and stored and never applied -- the same
+ * status ONLCR and OFILL already have, which is why it is a reason to
+ * define these rather than to leave them out. The names have to exist
+ * for code that merely mentions one to compile, and code that reads a
+ * c_oflag back and clears TABDLY out of it is doing nothing this
+ * platform cannot honour. */
+#define NLDLY   0000400
+#define NL0     0000000
+#define NL1     0000400
+#define CRDLY   0003000
+#define CR0     0000000
+#define CR1     0001000
+#define CR2     0002000
+#define CR3     0003000
+#define TABDLY  0014000
+#define TAB0    0000000
+#define TAB1    0004000
+#define TAB2    0010000
+#define TAB3    0014000
+#define BSDLY   0020000
+#define BS0     0000000
+#define BS1     0020000
+#define VTDLY   0040000
+#define VT0     0000000
+#define VT1     0040000
+#define FFDLY   0100000
+#define FF0     0000000
+#define FF1     0100000
+
 /* c_cflag: hardware control -- CSIZE/PARENB/PARODD/CSTOPB/CRTSCTS
  * describe a serial line's wire encoding (character size, parity,
  * stop bits, RTS/CTS flow control). A console handle has none of
