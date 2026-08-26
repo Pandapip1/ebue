@@ -19,6 +19,7 @@ long sysconf(int name)
 	case _SC_JOB_CONTROL: return -1;
 	case _SC_SAVED_IDS: return -1;
 	case _SC_VERSION: return _POSIX_VERSION;
+	case _SC_MONOTONIC_CLOCK: return _POSIX_MONOTONIC_CLOCK;
 	case _SC_PAGESIZE: return 4096;
 	case _SC_LINE_MAX: return 4096;
 	case _SC_HOST_NAME_MAX: return HOST_NAME_MAX;

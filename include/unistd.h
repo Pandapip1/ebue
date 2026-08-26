@@ -235,6 +235,17 @@ pid_t gettid(void);
 #define _POSIX_VERSION  200809L
 #define _POSIX2_VERSION _POSIX_VERSION
 
+/* The Monotonic Clock option. clock_gettime()/clock_getres()/
+ * clock_nanosleep() all accept CLOCK_MONOTONIC (see src/time/
+ * clock_gettime.c, which backs it with NtQueryPerformanceCounter), so
+ * POSIX requires <unistd.h> to say so. Portable code selects between
+ * CLOCK_MONOTONIC and CLOCK_REALTIME on this macro alone, and without
+ * it every such caller silently falls back to CLOCK_REALTIME -- which
+ * on this target is NtQuerySystemTime, a clock Wine deliberately reads
+ * from CLOCK_REALTIME_COARSE and whose granularity is therefore 1 ms
+ * rather than the 100 ns clock_getres() advertises. */
+#define _POSIX_MONOTONIC_CLOCK  200809L
+
 #define _PC_LINK_MAX	0
 #define _PC_MAX_CANON	1
 #define _PC_MAX_INPUT	2
@@ -256,6 +267,7 @@ pid_t gettid(void);
 #define _SC_SAVED_IDS	8
 #define _SC_REALTIME_SIGNALS	9
 #define _SC_VERSION	29
+#define _SC_MONOTONIC_CLOCK	149
 #define _SC_PAGESIZE	30
 #define _SC_PAGE_SIZE	30
 #define _SC_NPROCESSORS_CONF	83
