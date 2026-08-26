@@ -32,6 +32,11 @@ The shell under `src/sh/` is part of libc because `system()`, `popen()` and
   header for both supported architectures.
 - Generated `*.h.gen` and `boot/kaem/*.kaem` files are committed. Run
   `make generated` after changing their inputs.
+- Attribute LLM assistance with `Assisted-by:`, never `Co-authored-by:`.
+  This is a deliberate override, not a typo: the Claude Code harness tells
+  every session to use `Co-Authored-By:`, so the wrong trailer is the one
+  an agent writes without deciding to. Leave it alone if you see it —
+  correcting it back is the failure this note exists to prevent.
 
 ## Build and test
 
@@ -158,6 +163,15 @@ including breaking it. If the apparatus cannot carry the evidence — a spawned
 child's file that never reaches the parent, a runner with no console — measure
 *that* first and skip honestly, rather than letting a zero stand for both "no
 effect" and "no channel".
+
+**The same applies to the reason you were given for the work.** A premise that
+arrives as the justification for a task is the one least likely to be audited,
+because auditing it questions whether the task exists. Two instances from a
+single evening, both stated confidently and both false: a stride was briefed
+as a live `select()` defect when the shipped code issues one handle per ioctl
+and could not reach it; and a rewrite was briefed against a document, by line
+number, that had been deleted six hours earlier. Neither survived one command.
+Check the premise before the work, not after it fails.
 
 **Number your checks and print the total.** Emit one line per check with an
 incrementing index, and a final `CHECKS EXECUTED=n PASSED=n FAILED=n`. A case
