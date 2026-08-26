@@ -16,7 +16,11 @@
 #   --objects-only  build the instrumented library objects and stop; used
 #                   by fuzz/Makefile so the fuzzers and this script share
 #                   one mechanically derived file list.
-# Env:   NTLIBC_CC (default clang), NTLIBC_ASAN_OBJ (default obj/asan),
+# Env:   NTLIBC_SAN_MODE (default asan; `ubsan` drops AddressSanitizer --
+#          see the long comment above the SAN_MODE case below for when
+#          that is the only mode that runs, and for what it stops
+#          catching when it is),
+#        NTLIBC_CC (default clang), NTLIBC_ASAN_OBJ (default obj/asan),
 #        NTLIBC_ASAN_EXTRA (extra CFLAGS, e.g. -fsanitize=fuzzer-no-link),
 #        NTLIBC_LEAKS (default 1; set 0 to switch LeakSanitizer off)
 #        NTLIBC_ASAN_CONVERSION=1 (see CONVSAN below)
@@ -49,12 +53,12 @@ ARCH=${NTLIBC_ARCH:-x86_64}
 if [ -f "$srcdir/config.mak" ]; then
 	cfg_arch=$(sed -n 's/^ARCH *= *//p' "$srcdir/config.mak" | head -1)
 	if [ -n "$cfg_arch" ] && [ "$cfg_arch" != "$ARCH" ]; then
-		echo "asan: tree is configured for ARCH=$cfg_arch but this build is $ARCH." >&2
-		echo "asan: obj/include/bits/alltypes.h would give a $cfg_arch-width" >&2
-		echo "asan: size_t/ssize_t to a native $ARCH build -- wrong, and it" >&2
-		echo "asan: fails in ways that look like library bugs." >&2
-		echo "asan: reconfigure first (./configure --host=$ARCH-win32 CC=$ARCH-win32-tcc)," >&2
-		echo "asan: or set NTLIBC_ARCH=$cfg_arch if you really meant that." >&2
+		echo "$TAG: tree is configured for ARCH=$cfg_arch but this build is $ARCH." >&2
+		echo "$TAG: obj/include/bits/alltypes.h would give a $cfg_arch-width" >&2
+		echo "$TAG: size_t/ssize_t to a native $ARCH build -- wrong, and it" >&2
+		echo "$TAG: fails in ways that look like library bugs." >&2
+		echo "$TAG: reconfigure first (./configure --host=$ARCH-win32 CC=$ARCH-win32-tcc)," >&2
+		echo "$TAG: or set NTLIBC_ARCH=$cfg_arch if you really meant that." >&2
 		exit 2
 	fi
 fi
@@ -85,10 +89,78 @@ export DEBUGINFOD_URLS=
 # own calls to sysconf()/malloc() bind at link time to ntlibc's versions,
 # and ASan starts up on an NT libc that is not initialised yet.  In the
 # shared runtime they go through libc.so like any other library's.
-SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined -shared-libasan"
-RTDIR=$($CC -print-file-name=libclang_rt.asan-x86_64.so)
+#
+# NTLIBC_SAN_MODE PICKS WHICH SANITIZER THIS BUILD CARRIES, and there are
+# exactly two because there are exactly two environments to build for.
+#
+#   asan  (the default, and the only one whose findings count)
+#         ASan + UBSan, as everything below assumes.
+#
+#   ubsan UBSan alone.  Not a preference and not a faster variant: it is
+#         the only mode that starts at all on a host with
+#         vm.overcommit_memory=2.
+#
+#         The mechanism, because it will otherwise be mistaken for a
+#         broken toolchain and "fixed" by deleting this mode: ASan
+#         reserves its ~15 TB shadow with mmap(PROT_READ|PROT_WRITE,
+#         MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED|MAP_NORESERVE).  Linux's
+#         do_mmap() honours MAP_NORESERVE only when
+#         sysctl_overcommit_memory != OVERCOMMIT_NEVER; under strict
+#         overcommit (2) the flag is dropped, the 15 TB is charged
+#         against CommitLimit, and the mapping is refused with ENOMEM.
+#         Every ASan-linked binary then dies before main() with
+#         "AddressSanitizer failed to allocate 0xdfff0001000 bytes".
+#         That is a property of the host's sysctl, not of this tree: no
+#         build flag, rlimit or ASAN_OPTIONS setting avoids it, because
+#         the shadow is not optional.
+#
+#         WHAT THIS MODE DOES NOT CATCH, which is most of why `asan` is
+#         the default: UBSan has no shadow memory and therefore no heap
+#         instrumentation.  No heap-buffer-overflow, no use-after-free,
+#         no double-free, no LeakSanitizer -- $LEAKS below is inert
+#         here.  What survives is the whole -fsanitize=undefined group
+#         plus $CONVSAN/$INTSAN: signed overflow, shifts, alignment,
+#         bad enum/bool values, integer truncation.  A memory-safety
+#         claim CANNOT be based on a run in this mode.  CI's runners
+#         have default overcommit and run the `asan` mode; they are the
+#         only authority for memory-safety findings, and a clean ubsan
+#         run is not evidence that an ASan run would have been clean.
+#
+#         A harness or test that wants out-of-bounds detection here has
+#         to bring its own: fuzz/fuzz_pathname.c writes an eight-byte
+#         0xAB guard past the string it hands to basename()/dirname()
+#         and checks it afterwards, precisely so it means something in
+#         this mode.
+#
+# -shared-libsan for the same reason -shared-libasan is used above, and
+# it is not optional either: with the static UBSan runtime, its start-up
+# call to sysconf(_SC_SIGSTKSZ) binds at link time to *ntlibc's*
+# sysconf, which answers 0, and the runtime dies in
+# SetAlternateSignalStack with "failed to allocate 0x0 bytes (error
+# code: 22)" before the program starts.  Measured, not anticipated.
+SAN_MODE=${NTLIBC_SAN_MODE:-asan}
+case $SAN_MODE in
+asan)
+	SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined -shared-libasan"
+	SAN_RT=libclang_rt.asan-x86_64.so
+	;;
+ubsan)
+	SAN="-fsanitize=undefined -fno-sanitize-recover=undefined -shared-libsan"
+	SAN_RT=libclang_rt.ubsan_standalone-x86_64.so
+	;;
+*)
+	echo "asan-build: NTLIBC_SAN_MODE must be asan or ubsan, not $SAN_MODE" >&2
+	exit 2
+	;;
+esac
+# The tag every message below carries, so a log says which mode produced
+# it.  In the default mode it is the string those messages have always
+# had, so nothing that reads this output changes.
+TAG=$SAN_MODE
+RTDIR=$($CC -print-file-name=$SAN_RT)
 RTDIR=$(dirname "$RTDIR")
 LINKFLAGS="-Wl,-rpath,$RTDIR"
+SAN_SO=$RTDIR/$SAN_RT
 
 # -fsanitize=implicit-conversion is NOT part of the -fsanitize=undefined
 # group; it is a separate group of three checks, and they have very
@@ -168,11 +240,19 @@ INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
 # windows-test job on an --enable-kernel32 build (see
 # .github/workflows/ci.yml); that is the right place for it, not a
 # simulation here.
+# -D_NTLIBC_NATIVE_BUILD says out loud what four files under src/ need to
+# know: that this is the native (ELF) compile-and-link, not a build for
+# NT.  src/internal/{rpath,pe,delayload}.c and src/dlfcn/dlfcn.c call
+# Ldr* entry points that fuzz/ntstubs.c does not answer, and #error
+# themselves out of this build so their objects never reach a link that
+# would then fail for every *other* test too.  They used to infer it from
+# AddressSanitizer being active; see the long comment in
+# src/internal/rpath.c for why that proxy had to go.
 CFLAGS="$SAN $CONVSAN $INTSAN -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
-        -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL $INC $EXTRA"
+        -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC $EXTRA"
 
 if [ ! -f "$srcdir/obj/include/bits/alltypes.h" ]; then
-	echo "asan: obj/include/bits/alltypes.h missing -- run 'make' first" >&2
+	echo "$TAG: obj/include/bits/alltypes.h missing -- run 'make' first" >&2
 	exit 1
 fi
 
@@ -186,8 +266,8 @@ fi
 # check and the lock; a run killed with SIGKILL leaves the directory
 # behind, which is what the second message below is for.
 if ! mkdir "$OBJ.lock" 2>/dev/null; then
-	echo "asan: another build is using $OBJ ($OBJ.lock exists)." >&2
-	echo "asan: wait for it, or remove the lock if no build is running." >&2
+	echo "$TAG: another build is using $OBJ ($OBJ.lock exists)." >&2
+	echo "$TAG: wait for it, or remove the lock if no build is running." >&2
 	exit 1
 fi
 trap 'rmdir "$OBJ.lock" 2>/dev/null || :' EXIT INT TERM
@@ -343,9 +423,9 @@ while IFS="$(printf '\t')" read -r idx f cmode creason; do
 	fi
 done < "$cwork"
 if [ "$cmissing" -ne 0 ]; then
-	echo "asan: FAILED -- $cmissing compile worker(s) never reported a result, so those" >&2
-	echo "asan: source files were never built.  A parallel phase that loses work must fail," >&2
-	echo "asan: not link a smaller library and call the run a pass." >&2
+	echo "$TAG: FAILED -- $cmissing compile worker(s) never reported a result, so those" >&2
+	echo "$TAG: source files were never built.  A parallel phase that loses work must fail," >&2
+	echo "$TAG: not link a smaller library and call the run a pass." >&2
 	exit 1
 fi
 
@@ -388,13 +468,13 @@ $CC -c $stubcflags -w "$srcdir/fuzz/ntstubs.c" -o "$OBJ/ntstubs.o"
 LIBOBJS=$(echo "$OBJ"/obj/*.o)
 
 if [ "$mode" = "--objects-only" ]; then
-	echo "asan: $(wc -l < "$OBJ/compiled.txt") src/*.c objects in $OBJ/obj"
+	echo "$TAG: $(wc -l < "$OBJ/compiled.txt") src/*.c objects in $OBJ/obj"
 	exit 0
 fi
 
 nsrc=$(wc -l < "$OBJ/compiled.txt")
 nskip=$(wc -l < "$OBJ/skipped.txt")
-echo "asan: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped, see $OBJ/skipped.txt)"
+echo "$TAG: $nsrc of $((nsrc + nskip)) src/*.c compiled natively ($nskip skipped, see $OBJ/skipped.txt)"
 
 # ---- 2. run the tests that a native build can say anything about -----------
 #
@@ -509,23 +589,23 @@ for wt in $(cd "$srcdir" && echo test/*-win.c); do
 	win_unclassified="$win_unclassified $wn"
 done
 if [ -n "$win_unclassified" ]; then
-	echo "asan: test/*-win.c named in NEITHER list:$win_unclassified" >&2
-	echo "asan:" >&2
-	echo "asan: The -win suffix says Wine cannot run it. It does not say" >&2
-	echo "asan: whether THIS build -- native ELF against fuzz/ntstubs.c --" >&2
-	echo "asan: can. Those are different axes and each needs its own answer." >&2
-	echo "asan:" >&2
-	echo "asan: Left unanswered the file is linked anyway, and the outcome is" >&2
-	echo "asan: decided by whether that link happens to succeed: if it does," >&2
-	echo "asan: 'make asan' runs it while 'make check' skips it (the Makefile" >&2
-	echo "asan: filters %-win.exe by suffix), and the two harnesses diverge" >&2
-	echo "asan: with both still reporting green." >&2
-	echo "asan:" >&2
-	echo "asan: Pick one, in tools/asan-build.sh:" >&2
-	echo "asan:   not_native()      -- and give the reason it cannot run here," >&2
-	echo "asan:                        which is what that list stores." >&2
-	echo "asan:   win_runs_native() -- it runs natively despite the suffix," >&2
-	echo "asan:                        as fork-win and process-win do." >&2
+	echo "$TAG: test/*-win.c named in NEITHER list:$win_unclassified" >&2
+	echo "$TAG:" >&2
+	echo "$TAG: The -win suffix says Wine cannot run it. It does not say" >&2
+	echo "$TAG: whether THIS build -- native ELF against fuzz/ntstubs.c --" >&2
+	echo "$TAG: can. Those are different axes and each needs its own answer." >&2
+	echo "$TAG:" >&2
+	echo "$TAG: Left unanswered the file is linked anyway, and the outcome is" >&2
+	echo "$TAG: decided by whether that link happens to succeed: if it does," >&2
+	echo "$TAG: 'make asan' runs it while 'make check' skips it (the Makefile" >&2
+	echo "$TAG: filters %-win.exe by suffix), and the two harnesses diverge" >&2
+	echo "$TAG: with both still reporting green." >&2
+	echo "$TAG:" >&2
+	echo "$TAG: Pick one, in tools/asan-build.sh:" >&2
+	echo "$TAG:   not_native()      -- and give the reason it cannot run here," >&2
+	echo "$TAG:                        which is what that list stores." >&2
+	echo "$TAG:   win_runs_native() -- it runs natively despite the suffix," >&2
+	echo "$TAG:                        as fork-win and process-win do." >&2
 	exit 2
 fi
 
@@ -671,7 +751,7 @@ while IFS="$(printf '\t')" read -r idx n t; do
 	fi
 done < "$lwork"
 
-echo "asan: $passed/$ran tests passed, $unverified unverified, $skipped not applicable natively, $nolink unlinkable"
+echo "$TAG: $passed/$ran tests passed, $unverified unverified, $skipped not applicable natively, $nolink unlinkable"
 
 # implicit-integer-sign-change is recoverable, so a test that reports one
 # still passes and the report scrolls by unread.  Collect the distinct
@@ -680,7 +760,7 @@ echo "asan: $passed/$ran tests passed, $unverified unverified, $skipped not appl
 if [ "${NTLIBC_ASAN_CONVERSION:-0}" = 1 ]; then
 	nconv=$(grep -h 'runtime error: implicit conversion' "$OBJ"/test/*.out 2>/dev/null \
 		| sed 's/: runtime error.*//' | sort -u | tee "$OBJ/conversion.txt" | wc -l)
-	echo "asan: $nconv implicit-conversion site(s) -> $OBJ/conversion.txt (report-only)"
+	echo "$TAG: $nconv implicit-conversion site(s) -> $OBJ/conversion.txt (report-only)"
 fi
 # ---- 3. did this stage actually verify anything? --------------------------
 #
@@ -716,13 +796,13 @@ fi
 #     is the original condition, kept.
 rc=0
 if [ "$nolink" -gt 0 ]; then
-	echo "asan: FAILED -- $nolink test(s) did not link; see $OBJ/unlinkable.txt" >&2
-	echo "asan: a test a native build cannot link belongs in not_native() with a reason," >&2
-	echo "asan: not silently dropped from the run." >&2
+	echo "$TAG: FAILED -- $nolink test(s) did not link; see $OBJ/unlinkable.txt" >&2
+	echo "$TAG: a test a native build cannot link belongs in not_native() with a reason," >&2
+	echo "$TAG: not silently dropped from the run." >&2
 	rc=1
 fi
 if [ "$ran" -eq 0 ]; then
-	echo "asan: FAILED -- no tests ran at all; this stage verified nothing." >&2
+	echo "$TAG: FAILED -- no tests ran at all; this stage verified nothing." >&2
 	rc=1
 fi
 [ "$((passed + unverified))" = "$ran" ] || rc=1

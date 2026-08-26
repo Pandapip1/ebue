@@ -11,7 +11,7 @@
 # number against the file you meant to fuzz.
 #
 # Driven by `make -C fuzz coverage`, which builds the instrumented
-# binaries and exports COVOUT/COVDATA/ASAN_SO/SRCDIR.  Run it directly
+# binaries and exports COVOUT/COVDATA/SAN_SO/SRCDIR.  Run it directly
 # only if those are set.
 #
 # Each harness is run once for COV_TIME seconds with its baked-in
@@ -32,7 +32,11 @@ export DEBUGINFOD_URLS=
 : "${COVOUT:?run via make -C fuzz coverage}"
 : "${COVDATA:?run via make -C fuzz coverage}"
 : "${SRCDIR:?run via make -C fuzz coverage}"
-: "${ASAN_SO:?run via make -C fuzz coverage}"
+# SAN_SO, not ASAN_SO: whichever sanitizer runtime the Makefile's
+# SAN_MODE selected.  ASAN_OPTIONS below is simply ignored when that
+# runtime is UBSan's -- there is no LeakSanitizer in that mode to
+# turn on, which is one of the things it stops detecting.
+: "${SAN_SO:?run via make -C fuzz coverage}"
 COV_TIME=${COV_TIME:-20}
 FUNCS=${FUNCS:-}
 ALL=${ALL:-}
@@ -69,7 +73,7 @@ for h in "$@"; do
 
 	echo "== fuzz_$h (${COV_TIME}s)"
 	NTLIBC_FUZZ_MIRROR=$dir \
-	LD_PRELOAD=$ASAN_SO ASAN_OPTIONS=detect_leaks=1:handle_abort=1 \
+	LD_PRELOAD=$SAN_SO ASAN_OPTIONS=detect_leaks=1:handle_abort=1 \
 	UBSAN_OPTIONS=print_stacktrace=1 \
 	"$exe" -max_total_time="$COV_TIME" -max_len=256 \
 	       -print_funcs=0 -print_final_stats=0 >"$dir/run.log" 2>&1 \

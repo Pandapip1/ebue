@@ -24,19 +24,98 @@
 srcdir  = ..
 CC      = clang
 ARCH   ?= x86_64
-LIBDIR  = $(srcdir)/obj/fuzzlib
-OUT     = $(srcdir)/obj/fuzz
+LIBDIR  = $(srcdir)/obj/fuzzlib$(MODESUF)
+OUT     = $(srcdir)/obj/fuzz$(MODESUF)
 FUZZ_TIME ?= 60
 
-SAN  = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
+# SAN_MODE: WHICH SANITIZER, AND WHY THERE IS A CHOICE.
+#
+#   asan   (default) ASan + UBSan.  The only mode whose runs are evidence
+#          about memory safety, and the mode CI runs.
+#
+#   ubsan  UBSan alone.  Not an optimisation and not a preference: on a
+#          host with vm.overcommit_memory=2 it is the only mode that
+#          starts.  ASan reserves its ~15 TB shadow with MAP_NORESERVE,
+#          and Linux's do_mmap() honours that flag only when
+#          sysctl_overcommit_memory != OVERCOMMIT_NEVER; under strict
+#          overcommit the reservation is charged against CommitLimit and
+#          refused, so every ASan-linked binary here dies before main()
+#          with "failed to allocate 0xdfff0001000 bytes".  See the long
+#          comment above SAN_MODE in ../tools/asan-build.sh, which
+#          carries the full mechanism and the list of what this mode
+#          stops detecting.
+#
+# THE SHORT VERSION OF THAT LIST, because it changes how a harness in
+# this directory has to be written: UBSan has no shadow memory, so in
+# this mode there is NO heap-buffer-overflow, use-after-free,
+# double-free or leak detection.  A harness that wants an out-of-bounds
+# write noticed here must bring its own check -- fuzz_pathname.c writes
+# an eight-byte 0xAB guard past the string it hands basename()/dirname()
+# and verifies it afterwards, which works in both modes.  A harness that
+# relies on ASan alone still compiles and runs here; it just stops
+# asserting what it was written to assert, silently.  Write for both.
+#
+#   make -C fuzz                    asan (default)
+#   make -C fuzz ub                 build every harness in ubsan mode
+#   make -C fuzz ubrun              ... and fuzz them
+#   make -C fuzz ubcoverage         ... and report their coverage
+#
+# The two modes use disjoint object and corpus trees ($(MODESUF)), so
+# neither invalidates the other's stamp and a mode switch never relinks
+# against the other mode's objects.
+SAN_MODE ?= asan
+ifeq ($(SAN_MODE),asan)
+SAN       = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
+SAN_RT    = libclang_rt.asan-$(ARCH).so
+SAN_LINK  = -shared-libasan
+# The driver's own -fsanitize=fuzzer supplies libFuzzer here.
+FUZZER_LIB =
+CFLAGS_ORACLE = -fsanitize=address,undefined -g -O1 -w
+# ntstubs.c's __interceptor_malloc and friends ARE the ASan runtime's in
+# this mode; a local definition would collide with it.
+SHIM_SRC  =
+MODESUF   =
+else ifeq ($(SAN_MODE),ubsan)
+# -fsanitize=fuzzer-no-link, and libFuzzer named explicitly below,
+# rather than -fsanitize=fuzzer.  WITHOUT AddressSanitizer the driver
+# adds libclang_rt.fuzzer_interceptors, which carries its own
+# definitions of strcmp/strncmp/strstr for comparison feedback -- and
+# ntlibc defines all three in this same link, so the link fails with
+# "multiple definition of `strncmp'".  Naming libclang_rt.fuzzer
+# directly gets libFuzzer without the interceptors and the collision
+# does not arise.  The alternative, -Wl,--allow-multiple-definition,
+# was tried first and is worse for a reason that is easy to miss: it
+# links, but it silently decides which strcmp the whole binary uses,
+# and in a library whose own strcmp is under test that is exactly the
+# thing not to leave to link order.  libFuzzer loses its string-compare
+# feedback in this mode; that is a fuzzing-efficiency cost, not a
+# correctness one.
+SAN       = -fsanitize=fuzzer-no-link,undefined -fno-sanitize-recover=undefined
+SAN_RT    = libclang_rt.ubsan_standalone-$(ARCH).so
+# -shared-libsan is not optional.  With the static UBSan runtime, its
+# start-up call to sysconf(_SC_SIGSTKSZ) binds at link time to ntlibc's
+# sysconf, which answers 0, and the runtime dies in
+# SetAlternateSignalStack before the program starts.  Same failure, same
+# cause, as the -shared-libasan note in ../tools/asan-build.sh.
+SAN_LINK  = -shared-libsan
+FUZZER_LIB = $(dir $(SAN_SO))libclang_rt.fuzzer-$(ARCH).a -lstdc++
+CFLAGS_ORACLE = -fsanitize=undefined -g -O1 -w
+# ...and here they are undefined, so ubsanshim.c supplies them.  See the
+# file itself for what that costs.
+SHIM_SRC  = ubsanshim.c
+MODESUF   = -ubsan
+else
+$(error SAN_MODE must be asan or ubsan, not $(SAN_MODE))
+endif
+
 INC  = -I$(srcdir)/src/internal -I$(srcdir)/obj/include -I$(srcdir)/include \
        -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic
 CFLAGS_HARNESS = $(SAN) -g -O1 -std=c99 -nostdinc -fno-builtin -w \
                  -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL $(INC)
-# host_oracle.c is the one file built against the host headers.
-CFLAGS_ORACLE  = -fsanitize=address,undefined -g -O1 -w
-ASAN_SO = $(shell $(CC) -print-file-name=libclang_rt.asan-$(ARCH).so)
-RPATH   = -Wl,-rpath,$(dir $(ASAN_SO))
+# host_oracle.c and ubsanshim.c are the two files built against the host
+# headers; CFLAGS_ORACLE is set per mode above.
+SAN_SO  = $(shell $(CC) -print-file-name=$(SAN_RT))
+RPATH   = -Wl,-rpath,$(dir $(SAN_SO))
 # libFuzzer calls stat() to decide whether the corpus path is a directory,
 # and it was compiled against the host's struct stat, which is not ntlibc's.
 # See fuzz/statshim.h -- without the seam every corpus directory looks absent.
@@ -67,7 +146,7 @@ RPATH   = -Wl,-rpath,$(dir $(ASAN_SO))
 # host-layout shim and overruns the caller's buffer exactly as glob did.
 # Call __real_stat() instead; fuzz/fuzz_glob.c declares it and says so.
 STATRENAME = stat=__real_stat
-# $(ASAN_SO) is named explicitly, and first: the shared ASan runtime has to
+# $(SAN_SO) is named explicitly, and first: the shared ASan runtime has to
 # be the first entry in the executable's library list or it refuses to
 # start ("ASan runtime does not come first in initial library list").  The
 # driver appends it after -ldl/-lm, which is too late.
@@ -76,6 +155,8 @@ HARNESSES = strtod printf scanf utf path strptime strtol strftime \
             fnmatch regex glob wordexp \
             shparse inet string search getopt env time pathname
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
+SHIM_OBJ = $(SHIM_SRC:%.c=$(OUT)/%.o)
+COVSHIM_OBJ = $(SHIM_SRC:%.c=$(COVOUT)/%.o)
 
 # What the instrumented library is built from.  Derived with find, never
 # written out by hand: a hand-listed prerequisite set stops mentioning the
@@ -109,6 +190,7 @@ all: $(EXES)
 # corrupt -- the inputs are the same files the script itself reads, and
 # the only way to fool the stamp is to `touch` it by hand.
 $(LIBDIR)/.built: $(LIBDEP)
+	NTLIBC_SAN_MODE=$(SAN_MODE) \
 	NTLIBC_ASAN_OBJ=$(abspath $(LIBDIR)) \
 	NTLIBC_ASAN_EXTRA=-fsanitize=fuzzer-no-link \
 	$(srcdir)/tools/asan-build.sh --objects-only
@@ -121,6 +203,11 @@ $(OUT):
 $(OUT)/host_oracle.o: host_oracle.c statshim.h | $(OUT)
 	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
 
+# Built only in ubsan mode ($(SHIM_SRC) is empty otherwise, so this rule
+# has nothing to make).  Against the host headers, like host_oracle.c.
+$(OUT)/ubsanshim.o: ubsanshim.c | $(OUT)
+	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
+
 # -DNTLIBC_FUZZ_STATWRAP turns on the struct stat seam (fuzz/statshim.h).
 # Only here: tools/asan-build.sh compiles its own copy of ntstubs.c for the
 # test binaries, and those must keep seeing ntlibc's stat() as it is.
@@ -131,10 +218,10 @@ $(OUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(LIBDIR)/.built | $(OUT)
 # would be expanded by make against a directory it may have cached before
 # the stamp rule refilled it, and an empty expansion links a harness with
 # no ntlibc in it at all.
-$(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT)
-	$(CC) $(CFLAGS_HARNESS) -shared-libasan $(RPATH) \
-	  $(ASAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o \
-	  $(LIBDIR)/obj/*.o -ldl -lm -o $@
+$(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(SHIM_OBJ) $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT)
+	$(CC) $(CFLAGS_HARNESS) $(SAN_LINK) $(RPATH) \
+	  $(SAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o $(SHIM_OBJ) \
+	  $(LIBDIR)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
 
 # Leak detection on; see tools/asan-build.sh for why it can be trusted here.
 # handle_abort=1 is what makes a differential mismatch produce a crash
@@ -153,7 +240,7 @@ LEAKS ?= 1
 # comment above mirror_init() in ntstubs.c.  Point CORPUS somewhere
 # persistent (or let CI cache it) and each night resumes where the last
 # one stopped instead of starting from random bytes.
-CORPUS ?= $(abspath $(srcdir)/obj/fuzzcorpus)
+CORPUS ?= $(abspath $(srcdir)/obj/fuzzcorpus$(MODESUF))
 
 # DEBUGINFOD_URLS= : see the long comment in ../tools/fuzz.sh.  With it set
 # -- Ubuntu exports it from /etc/profile.d/debuginfod.sh -- llvm-symbolizer
@@ -167,7 +254,7 @@ run: all
 	   before=$$(ls -1 $(CORPUS)/$$h/corpus | wc -l); \
 	   echo "== fuzz_$$h ($(FUZZ_TIME)s, corpus $$before)"; \
 	   NTLIBC_FUZZ_MIRROR=$(CORPUS)/$$h DEBUGINFOD_URLS= \
-	   LD_PRELOAD=$(ASAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS):handle_abort=1 \
+	   LD_PRELOAD=$(SAN_SO) ASAN_OPTIONS=detect_leaks=$(LEAKS):handle_abort=1 \
 	   UBSAN_OPTIONS=print_stacktrace=1 \
 	   $(OUT)/fuzz_$$h -max_total_time=$(FUZZ_TIME) -max_len=256 \
 	     -print_funcs=0 -print_final_stats=1 \
@@ -227,14 +314,15 @@ run: all
 # runtime's atexit handler fires from there.  exit(), atexit() and
 # __stdio_exit() stay under test, unchanged, in the coverage build as
 # in the fuzzing one.
-COVLIB   = $(srcdir)/obj/fuzzcovlib
-COVOUT   = $(srcdir)/obj/fuzzcov
-COVDATA  = $(srcdir)/obj/fuzzcovdata
+COVLIB   = $(srcdir)/obj/fuzzcovlib$(MODESUF)
+COVOUT   = $(srcdir)/obj/fuzzcov$(MODESUF)
+COVDATA  = $(srcdir)/obj/fuzzcovdata$(MODESUF)
 COV_TIME ?= 20
 PROF      = -fprofile-instr-generate -fcoverage-mapping
 COVEXES   = $(HARNESSES:%=$(COVOUT)/fuzz_%)
 
 $(COVLIB)/.built: $(LIBDEP)
+	NTLIBC_SAN_MODE=$(SAN_MODE) \
 	NTLIBC_ASAN_OBJ=$(abspath $(COVLIB)) \
 	NTLIBC_ASAN_EXTRA='-fsanitize=fuzzer-no-link $(PROF)' \
 	$(srcdir)/tools/asan-build.sh --objects-only
@@ -247,6 +335,9 @@ $(COVOUT):
 $(COVOUT)/host_oracle.o: host_oracle.c statshim.h | $(COVOUT)
 	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
 
+$(COVOUT)/ubsanshim.o: ubsanshim.c | $(COVOUT)
+	$(CC) $(CFLAGS_ORACLE) $(PROF) -c $< -o $@
+
 $(COVOUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(COVLIB)/.built | $(COVOUT)
 	$(CC) $(CFLAGS_HARNESS) $(PROF) -DNTLIBC_FUZZ_STATWRAP -c $< -o $@
 
@@ -255,23 +346,44 @@ $(COVOUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(COVLIB)/.built | $(COVOUT)
 # root.  A per-harness subdirectory, not one shared one: ntstubs.c
 # imports the whole mirror directory into the volume at start-up, so a
 # shared one would make every run slurp in every other run's profraw.
-$(COVOUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVOUT)/ntstubs.o $(COVLIB)/.built | $(COVOUT)
+$(COVOUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) $(COVOUT)/ntstubs.o $(COVLIB)/.built | $(COVOUT)
 	$(CC) $(CFLAGS_HARNESS) $(PROF) \
 	  -fprofile-instr-generate=$(abspath $(COVDATA))/$*/fuzz_$*.profraw \
-	  -shared-libasan $(RPATH) \
-	  $(ASAN_SO) $< $(COVOUT)/ntstubs.o $(COVOUT)/host_oracle.o \
-	  $(COVLIB)/obj/*.o -ldl -lm -o $@
+	  $(SAN_LINK) $(RPATH) \
+	  $(SAN_SO) $< $(COVOUT)/ntstubs.o $(COVOUT)/host_oracle.o $(COVSHIM_OBJ) \
+	  $(COVLIB)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
 
 coverage: $(COVEXES)
 	@COV_TIME=$(COV_TIME) FUNCS=$(FUNCS) MODULE=$(MODULE) ALL=$(ALL) \
-	 ASAN_SO=$(ASAN_SO) COVOUT=$(abspath $(COVOUT)) \
+	 SAN_SO=$(SAN_SO) COVOUT=$(abspath $(COVOUT)) \
 	 COVDATA=$(abspath $(COVDATA)) SRCDIR=$(abspath $(srcdir)) \
 	 ./coverage.sh $(HARNESSES)
 
-clean:
-	rm -rf $(OUT) $(LIBDIR) $(COVOUT) $(COVLIB) $(COVDATA)
+# ------------------------------------------------------------ ubsan mode
+#
+# Thin recursions, so there is one set of rules and not two.  Everything
+# they build lands in the -ubsan trees, so `make -C fuzz` and
+# `make -C fuzz ub` can both be up to date at once.
+ub:
+	@$(MAKE) SAN_MODE=ubsan all
 
-.PHONY: all run clean coverage
+ubrun:
+	@$(MAKE) SAN_MODE=ubsan run
+
+ubcoverage:
+	@$(MAKE) SAN_MODE=ubsan coverage
+
+# Both modes' trees, whichever mode this invocation is in: a `clean` that
+# left the other mode's objects behind would be a `clean` that has to be
+# run twice, and nobody would.
+clean:
+	rm -rf $(srcdir)/obj/fuzz $(srcdir)/obj/fuzzlib \
+	       $(srcdir)/obj/fuzzcov $(srcdir)/obj/fuzzcovlib $(srcdir)/obj/fuzzcovdata \
+	       $(srcdir)/obj/fuzz-ubsan $(srcdir)/obj/fuzzlib-ubsan \
+	       $(srcdir)/obj/fuzzcov-ubsan $(srcdir)/obj/fuzzcovlib-ubsan \
+	       $(srcdir)/obj/fuzzcovdata-ubsan
+
+.PHONY: all run clean coverage ub ubrun ubcoverage
 
 # A half-written object or executable left behind by a failed compile is
 # newer than its sources, so make would consider it up to date next time.

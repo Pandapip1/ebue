@@ -35,11 +35,22 @@
  * The #error below fires only when both are true: not building for NT
  * (tcc predefines _WIN32 for both win32 targets this library builds
  * for -- confirmed for i386-win32-tcc and x86_64-win32-tcc alike), *and*
- * AddressSanitizer is active (__SANITIZE_ADDRESS__ for gcc,
- * __has_feature(address_sanitizer) for clang -- asan-build.sh always
- * passes -fsanitize=address) -- i.e. specifically
- * tools/asan-build.sh's/fuzz/'s real native compile-and-link, which is
- * the one situation this file cannot survive. A plain native
+ * this is the native compile-and-link, which is the one situation this
+ * file cannot survive.
+ *
+ * THE SECOND HALF IS NOW ASKED DIRECTLY, via -D_NTLIBC_NATIVE_BUILD,
+ * which tools/asan-build.sh passes in every mode.  It used to be
+ * inferred from AddressSanitizer being active (__SANITIZE_ADDRESS__ for
+ * gcc, __has_feature(address_sanitizer) for clang), on the reasoning
+ * that asan-build.sh always passes -fsanitize=address.  That stopped
+ * being true when that script gained NTLIBC_SAN_MODE=ubsan -- a native
+ * build with no ASan in it -- and the proxy failed silently in the worst
+ * direction: this file compiled, and then broke the link of every test
+ * and every fuzz harness in that mode with an undefined
+ * LdrGetProcedureAddress.  A proxy for a fact is worth exactly as long
+ * as nothing else can make it false.  The ASan terms are kept as well,
+ * so a native build that reaches these files without going through
+ * asan-build.sh is still caught. A plain native
  * -fsyntax-only pass (tools/lint.sh's fallback when no mingw-w64 cross
  * compiler is installed) defines neither and is unaffected: nothing in
  * this file needs an actual Ldr* definition to type-check, only to
@@ -54,7 +65,8 @@
 #ifndef __has_feature
 #define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
 #endif
-#if !defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
+#if !defined(_WIN32) && (defined(_NTLIBC_NATIVE_BUILD) || \
+                        defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
 #error "rpath.c is NT-only (LdrLoadDll/LdrGetProcedureAddress have no native stand-in); see the comment above"
 #endif
 #include <string.h>

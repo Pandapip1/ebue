@@ -169,7 +169,8 @@
 #ifndef __has_feature
 #define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
 #endif
-#if !defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
+#if !defined(_WIN32) && (defined(_NTLIBC_NATIVE_BUILD) || \
+                        defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
 #error "dlfcn.c is NT-only (built on ntlibc_rpath_*(), which is NT-only itself); see src/internal/rpath.c's comment for why this guard exists"
 #endif
 #include <stddef.h>

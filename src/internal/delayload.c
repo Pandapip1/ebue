@@ -19,7 +19,8 @@
 #ifndef __has_feature
 #define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
 #endif
-#if !defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
+#if !defined(_WIN32) && (defined(_NTLIBC_NATIVE_BUILD) || \
+                        defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
 #error "delayload.c is NT-only (calls into rpath.c, which is NT-only); see the comment above and src/internal/rpath.c"
 #endif
 #include "libc.h"
