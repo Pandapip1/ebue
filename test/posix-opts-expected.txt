@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=407 BUG=179 UNIMPL=975 NA=46 FLAKY=3
+# COUNTS PASS=408 BUG=179 UNIMPL=975 NA=46 FLAKY=2
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -358,7 +358,7 @@ munmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: co
 munmap/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-nanosleep/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	baseline disagreed across repeated runs
+nanosleep/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
 nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
 nanosleep/10000-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
