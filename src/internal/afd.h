@@ -251,13 +251,20 @@ typedef struct _FILE_FULL_EA_INFORMATION {
  *     +12  WCHAR TransportName[]
  *
  * -- a 12-byte header, no address-family/type/protocol fields, because
- * ReactOS's *own* afd.sys (drivers/network/afd/afd/main.c, AfdCreate())
- * reads only those three fields back out.  That is the NT4/2000-era
- * shape, and it is self-consistent for ReactOS.
+ * ReactOS's *own* afd.sys (drivers/network/afd/afd/main.c,
+ * AfdCreateSocket()) reads only those three fields back out.  That is
+ * the NT4/2000-era shape, and it is self-consistent for ReactOS.
  *
- * Real Windows' afd.sys does not use it.  Since Vista the EA value is
- * an AFD_OPEN_PACKET with a *24-byte* header carrying three extra LONGs
- * between GroupID and the name length:
+ * (The header offset is 12, taken from the *member* TransportName, not
+ * from sizeof(AFD_CREATE_PACKET), which is 16 -- it counts the
+ * TransportName[1] placeholder and pads to 4.  The driver copies from
+ * `ConnectInfo->TransportName`, i.e. +12; the `EaInfoValue` it computes
+ * at +sizeof() is used for a debug print and nothing else.  ReactOS's
+ * own apitest agrees, sizing with FIELD_OFFSET(.., TransportName).)
+ *
+ * Since Vista the EA value is instead an AFD_OPEN_PACKET with a
+ * *24-byte* header carrying three extra LONGs between GroupID and the
+ * name length:
  *
  *      +0  ULONG EndpointFlags          (AFD_ENDPOINT_FLAGS)
  *      +4  ULONG GroupID                (GROUP)
@@ -281,6 +288,9 @@ typedef struct _FILE_FULL_EA_INFORMATION {
  *     sizeOfTransportName in exactly that order after a 0x10-byte
  *     eaName.
  *
+ * *** Both shapes are wrong somewhere, and the buffer cannot say which
+ * one it is. ***
+ *
  * Using ReactOS's 12-byte layout against real Windows puts the UTF-16
  * device name where afd.sys expects SocketType/Protocol/
  * TransportDeviceNameLength.  afd.sys then reads a *name length* out of
@@ -293,6 +303,73 @@ typedef struct _FILE_FULL_EA_INFORMATION {
  * windows-test legs while this header carried the ReactOS shape.  Wine
  * cannot see it: Wine's AFD is its own implementation and never parses
  * this packet.
+ *
+ * The mirror-image failure is quieter and therefore worse.  Sending the
+ * 24-byte layout to ReactOS's driver has AfdCreateSocket() read our
+ * AddressFamily (AF_INET == 2) as SizeOfTransportName, so
+ * FCB->TdiDeviceName becomes two bytes copied out of our SocketType
+ * field: the one-character string L"\1".  *NtCreateFile returns
+ * STATUS_SUCCESS.*  socket() succeeds and hands back a corrupt
+ * endpoint.
+ *
+ * *** That much is measured, not reasoned. ***  Booting ReactOS with an
+ * instrumented afd.sys (DebugTraceLevel raised from MIN_TRACE to
+ * MID_TRACE at drivers/network/afd/afd/main.c:21 -- DBG was already on,
+ * so AFD_DbgPrint compiles in and only the runtime level suppressed it;
+ * `ninja afd` and copying the driver onto the VM is the whole cost) and
+ * running an ntlibc socket() program produced, from AfdCreateSocket()'s
+ * success path:
+ *
+ *     (/drivers/network/afd/afd/main.c:438)(AfdCreateSocket)
+ *         Success: AfdOpenPacketXX \x01
+ *
+ * -- the name text being exactly one character, U+0001, on the wire:
+ *
+ *     53 75 63 63 65 73 73 3a 20 41 66 64 4f 70 65 6e
+ *     50 61 63 6b 65 74 58 58 20 01 0d 0a
+ *
+ * Both halves of that fall out of the mechanism independently, which is
+ * what makes it hard to get by coincidence: the length is 2 bytes
+ * because our AddressFamily is AF_INET == 2, and the character is
+ * 0x0001 because it is the low half of our SocketType == SOCK_STREAM.
+ * And it is printed from the *success* path, so the corruption is
+ * silent at its source.
+ *
+ * The control that makes that a finding rather than an anecdote: on the
+ * same boot, through the same instrumented driver, native ws2_32
+ * callers printed `Success: AfdOpenPacketXX \Device\Udp`.  A tracer too
+ * broken to print a device name would have produced a blank or garbled
+ * line indistinguishable from the result above; this rules that out.
+ *
+ * What happens *after* the corrupt endpoint is created is still read
+ * from source, not observed: WarmSocketForBind()'s
+ * `!FCB->TdiDeviceName.Length` guard does not fire (the length is 2,
+ * not 0), TdiOpenAddressFile() hands the one-character name to
+ * ZwCreateFile, and the object-name failure comes back as ENOENT from a
+ * call that never touched a transport name.  bind()'s actual status was
+ * not captured on that boot -- the test program reported over COM2,
+ * which had no driver -- so the ENOENT chain is inferred, anchored at a
+ * measured origin rather than free-floating.
+ *
+ * The corrected path was subsequently measured on that instrumented
+ * ReactOS system.  test/posix-socket-shape.c reported NT 5.2 from the
+ * PEB, selected AFD_SHAPE_NT4, passed all 31 checks (including socket(),
+ * bind(), listen() and close()), and the driver printed `Success:
+ * AfdOpenPacketXX \Device\Tcp`.  Thus both the 12-byte packet image and
+ * the endpoint it creates have a positive result; the test remains the
+ * regression assertion for that result.
+ *
+ * That is why the choice below is made from the OS version rather than
+ * by probing.  A probe needs a failure to learn from; the wrong guess
+ * here *succeeds* in both directions, and by the time an error appears
+ * the endpoint has already been created.  There is no version field,
+ * no length, and no other discriminator in the EA bytes -- ReactOS's
+ * own apitest (modules/rostests/apitests/afd/AfdHelpers.c) picks
+ * between the identical pair of layouts with
+ * `LOBYTE(LOWORD(GetVersion())) >= 6` for exactly this reason.  See
+ * src/internal/ntversion.c for the three tests a divergence must meet
+ * before it is allowed to be version-gated; this one is the reason that
+ * file exists, and is not a licence to gate anything else.
  *
  * phnt notes that leaving TransportDeviceNameLength at 0 (no device
  * name) selects "TLI" transport mode, in which AFD's bind/connect/
@@ -338,6 +415,29 @@ typedef struct _AFD_OPEN_PACKET {
  * not 24 -- it counts the TransportDeviceName[1] placeholder and rounds
  * up -- so sizeof() would overstate the value by 4 bytes. */
 #define AFD_OPEN_PACKET_HEADER_SIZE 24
+
+/* The NT4/NT5 shape, transcribed from ReactOS's shared.h with the same
+ * fixed-width types and for the same LP64 reason as above.  Kept as a
+ * declared structure rather than a run of offsets so the two layouts
+ * can be read side by side: the whole defect is that they differ only
+ * by three fields nobody can see on the wire. */
+typedef struct _AFD_CREATE_PACKET {
+	uint32_t EndpointFlags;
+	uint32_t GroupID;
+	uint32_t SizeOfTransportName; /* bytes, excluding any NUL */
+	WCHAR TransportName[1];
+} AFD_CREATE_PACKET;
+
+/* offsetof(AFD_CREATE_PACKET, TransportName).  NOT
+ * sizeof(AFD_CREATE_PACKET), which is 16 -- see the banner. */
+#define AFD_CREATE_PACKET_HEADER_SIZE 12
+
+/* Which of the two the driver on the other end is going to read.
+ * __afd_open_shape() picks one per platform; the _for() builders below
+ * take it explicitly so a test can construct either shape's byte image
+ * on any host. */
+#define AFD_SHAPE_NT4 0 /* 12-byte AFD_CREATE_PACKET: NT 4 .. NT 5.2, ReactOS */
+#define AFD_SHAPE_NT6 1 /* 24-byte AFD_OPEN_PACKET:   NT 6.0+, real Windows, Wine */
 
 /* ---- bind (shared.h: AFD_BIND_DATA, AFD_SHARE_*) --------------------- */
 #define AFD_SHARE_UNIQUE    0
@@ -771,6 +871,21 @@ int __afd_open(HANDLE *out);
  * \Device\Afd at all. */
 unsigned long __afd_open_ea_size(void);
 void __afd_build_open_ea(void *buf);
+/* The same two, with the packet shape named rather than detected:
+ * AFD_SHAPE_NT4 or AFD_SHAPE_NT6.  These exist so that a test can build
+ * and check *both* byte images on any host, including the one shape the
+ * host it runs on would never choose -- otherwise the legacy layout
+ * would be unasserted everywhere CI can reach.  Library code should
+ * call the two above and let __afd_open_shape() decide. */
+unsigned long __afd_open_ea_size_for(int shape);
+void __afd_build_open_ea_for(int shape, void *buf);
+/* Which shape this platform's afd.sys reads: AFD_SHAPE_NT6 on NT 6.0
+ * and later (real Windows, Wine), AFD_SHAPE_NT4 below that (ReactOS,
+ * which targets NT 5.2).  Decided from PEB.OSMajorVersion via
+ * __nt_version_at_least(); see this header's socket-creation banner for
+ * why this one decision is version-gated instead of probed, and
+ * src/internal/ntversion.c for when that is ever allowed again. */
+int __afd_open_shape(void);
 /* The IOCTL_AFD_BIND request body, split out for exactly the same
  * reason and inspected exactly the same way: __afd_bind_request_size()
  * returns the byte count the ioctl declares (26, not

@@ -25,13 +25,40 @@ static const WCHAR afd_transport[] = AFD_TRANSPORT_TCP;
 #define AFD_TRANSPORT_WCHARS ((sizeof(afd_transport) / sizeof(WCHAR)) - 1) /* excludes the NUL */
 #define AFD_TRANSPORT_BYTES (AFD_TRANSPORT_WCHARS * sizeof(WCHAR))
 
-/* The value is the open packet: its 24-byte header (NOT
- * sizeof(AFD_OPEN_PACKET), which is 28), the name, and the name's NUL.
- * The NUL is not counted by TransportDeviceNameLength but is kept in
- * the buffer, matching ReactOS's WSPSocket, which copies
- * TransportName.Length + sizeof(WCHAR). */
-#define AFD_OPEN_PACKET_BYTES \
-	(AFD_OPEN_PACKET_HEADER_SIZE + AFD_TRANSPORT_BYTES + sizeof(WCHAR))
+/* The value is the open packet: the shape's header (NOT
+ * sizeof(AFD_OPEN_PACKET), which is 28, nor sizeof(AFD_CREATE_PACKET),
+ * which is 16 -- both count a TransportName[1] placeholder and pad),
+ * the name, and the name's NUL.  The NUL is not counted by the packet's
+ * own name-length field but is kept in the buffer, matching ReactOS's
+ * WSPSocket, which copies TransportName.Length + sizeof(WCHAR). */
+#define AFD_OPEN_PACKET_BYTES(hdr) ((hdr) + AFD_TRANSPORT_BYTES + sizeof(WCHAR))
+
+/* See afd.h.  The header byte count for a shape, and the only place
+ * that mapping is written down. */
+static unsigned long afd_shape_header(int shape)
+{
+	return shape == AFD_SHAPE_NT4
+	     ? (unsigned long)AFD_CREATE_PACKET_HEADER_SIZE
+	     : (unsigned long)AFD_OPEN_PACKET_HEADER_SIZE;
+}
+
+/* See afd.h.
+ *
+ * Version-gated, not probed, and afd.h's socket-creation banner is
+ * where the argument for that lives: handing either driver the other
+ * one's layout *succeeds*, so there is no failure for a probe to learn
+ * from.  src/internal/ntversion.c states the three conditions a
+ * divergence has to meet before it may be settled this way.
+ *
+ * The threshold is NT 6.0, matching ReactOS's own apitest
+ * (modules/rostests/apitests/afd/AfdHelpers.c, which branches on
+ * `LOBYTE(LOWORD(GetVersion())) >= 6`).  A platform that cannot supply
+ * a version at all is treated as modern -- see ntversion.c -- so the
+ * shape CI verifies is also the shape any unrecognised platform gets. */
+int __afd_open_shape(void)
+{
+	return __nt_version_at_least(6, 0) ? AFD_SHAPE_NT6 : AFD_SHAPE_NT4;
+}
 
 /* See afd.h.  Exact fit, deliberately: this is
  *
@@ -46,19 +73,33 @@ static const WCHAR afd_transport[] = AFD_TRANSPORT_TCP;
  * validator tolerates trailing slack on a final entry, but there is no
  * reason to declare bytes the entry does not describe -- and an exact,
  * 4-aligned total is an invariant test/posix-socket-ea.c can assert
- * without having to special-case padding. */
-unsigned long __afd_open_ea_size(void)
+ * without having to special-case padding.  (ReactOS's *apitest* sizes
+ * it exactly the way this does, with FIELD_OFFSET throughout.) */
+unsigned long __afd_open_ea_size_for(int shape)
 {
-	return (unsigned long)(AFD_EA_HEADER_SIZE + AFD_EA_NAME_LEN + 1 + AFD_OPEN_PACKET_BYTES);
+	return (unsigned long)(AFD_EA_HEADER_SIZE + AFD_EA_NAME_LEN + 1
+	                       + AFD_OPEN_PACKET_BYTES(afd_shape_header(shape)));
 }
 
-/* See afd.h. */
-void __afd_build_open_ea(void *buf)
+unsigned long __afd_open_ea_size(void)
+{
+	return __afd_open_ea_size_for(__afd_open_shape());
+}
+
+/* See afd.h.
+ *
+ * The two shapes are written out separately and in full rather than
+ * shared through a run of offsets.  They differ by three fields in the
+ * middle, which is precisely the kind of difference that disappears
+ * when it is expressed as arithmetic; each block below can be read
+ * against its reference declaration one field at a time. */
+void __afd_build_open_ea_for(int shape, void *buf)
 {
 	FILE_FULL_EA_INFORMATION *ea = (FILE_FULL_EA_INFORMATION *)buf;
-	AFD_OPEN_PACKET *pkt;
+	unsigned long hdr = afd_shape_header(shape);
+	void *value;
 
-	memset(buf, 0, __afd_open_ea_size());
+	memset(buf, 0, __afd_open_ea_size_for(shape));
 
 	/* Single, and therefore final, entry: NextEntryOffset is 0.  A
 	 * non-zero value would have to equal ALIGN_UP(ComputedLength, 4)
@@ -70,22 +111,43 @@ void __afd_build_open_ea(void *buf)
 	 * == '\0'.  Hence AFD_EA_NAME_LEN here but +1 in the copy. */
 	ea->EaNameLength = AFD_EA_NAME_LEN;
 	memcpy(ea->EaName, AFD_EA_NAME, AFD_EA_NAME_LEN + 1);
-	ea->EaValueLength = (unsigned short)AFD_OPEN_PACKET_BYTES;
+	ea->EaValueLength = (unsigned short)AFD_OPEN_PACKET_BYTES(hdr);
 
 	/* The value starts immediately after the name's NUL.  With a
 	 * 15-byte name that lands at offset 8 + 15 + 1 == 24, so the
-	 * packet's own uint32_t fields stay naturally aligned. */
-	pkt = (AFD_OPEN_PACKET *)(void *)(ea->EaName + AFD_EA_NAME_LEN + 1);
-	pkt->EndpointFlags = 0; /* connection-oriented: not CONNECTIONLESS/RAW/MESSAGE_ORIENTED */
-	pkt->GroupID = 0;
-	/* The three fields ReactOS's 12-byte AFD_CREATE_PACKET does not
-	 * have, and whose absence is what made real Windows read the
-	 * device name as a length -- see afd.h's socket-creation banner. */
-	pkt->AddressFamily = AF_INET;
-	pkt->SocketType = SOCK_STREAM;
-	pkt->Protocol = IPPROTO_TCP;
-	pkt->TransportDeviceNameLength = (uint32_t)AFD_TRANSPORT_BYTES;
-	memcpy(pkt->TransportDeviceName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
+	 * packet's own uint32_t fields stay naturally aligned -- true of
+	 * both shapes, since only the header length differs. */
+	value = (void *)(ea->EaName + AFD_EA_NAME_LEN + 1);
+
+	if (shape == AFD_SHAPE_NT4) {
+		/* ReactOS sdk/include/reactos/drivers/afd/shared.h's
+		 * AFD_CREATE_PACKET, read back by AfdCreateSocket() in
+		 * drivers/network/afd/afd/main.c. */
+		AFD_CREATE_PACKET *pkt = (AFD_CREATE_PACKET *)value;
+		pkt->EndpointFlags = 0; /* connection-oriented */
+		pkt->GroupID = 0;
+		pkt->SizeOfTransportName = (uint32_t)AFD_TRANSPORT_BYTES;
+		memcpy(pkt->TransportName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
+	} else {
+		/* phnt ntafd.h's AFD_OPEN_PACKET. */
+		AFD_OPEN_PACKET *pkt = (AFD_OPEN_PACKET *)value;
+		pkt->EndpointFlags = 0; /* not CONNECTIONLESS/RAW/MESSAGE_ORIENTED */
+		pkt->GroupID = 0;
+		/* The three fields ReactOS's 12-byte AFD_CREATE_PACKET does
+		 * not have, and whose absence is what made real Windows read
+		 * the device name as a length -- see afd.h's socket-creation
+		 * banner. */
+		pkt->AddressFamily = AF_INET;
+		pkt->SocketType = SOCK_STREAM;
+		pkt->Protocol = IPPROTO_TCP;
+		pkt->TransportDeviceNameLength = (uint32_t)AFD_TRANSPORT_BYTES;
+		memcpy(pkt->TransportDeviceName, afd_transport, AFD_TRANSPORT_BYTES + sizeof(WCHAR));
+	}
+}
+
+void __afd_build_open_ea(void *buf)
+{
+	__afd_build_open_ea_for(__afd_open_shape(), buf);
 }
 
 /* Open a fresh \Device\Afd\Endpoint handle carrying the AF_INET/
@@ -96,7 +158,13 @@ void __afd_build_open_ea(void *buf)
  * call and every accept()ed connection needs one of these. */
 int __afd_open(HANDLE *out)
 {
-	unsigned long ea_size = __afd_open_ea_size();
+	/* The shape is read once and passed to both calls, so that the
+	 * buffer's declared size and its contents cannot come from two
+	 * different answers.  __afd_open_shape() is cached and constant
+	 * for the process, so this is belt-and-braces -- but a size/shape
+	 * mismatch here would be a heap overflow, not a wrong packet. */
+	int shape = __afd_open_shape();
+	unsigned long ea_size = __afd_open_ea_size_for(shape);
 	char *buf;
 	UNICODE_STRING devname;
 	OBJECT_ATTRIBUTES oa;
@@ -106,7 +174,7 @@ int __afd_open(HANDLE *out)
 
 	buf = malloc(ea_size);
 	if (!buf) { errno = ENOMEM; return -1; }
-	__afd_build_open_ea(buf);
+	__afd_build_open_ea_for(shape, buf);
 
 	/* \Device\Afd\Endpoint (dllmain.c's DevName; confirmed independently
 	 * by leftarcode's reverse-engineering series -- see afd.h banner). */

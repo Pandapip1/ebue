@@ -66,9 +66,19 @@ static int fails;
 		       __FILE__, __LINE__, (what), g_, g_, w_, w_); } \
 } while (0)
 
-/* src/internal/afd.h; see the banner for why they are re-declared. */
-unsigned long __afd_open_ea_size(void);
-void __afd_build_open_ea(void *buf);
+/* src/internal/afd.h; see the banner for why they are re-declared.
+ *
+ * The *_for() variants are used rather than the plain ones so that this
+ * file keeps asserting the NT 6 layout on every host, including a host
+ * whose own afd.sys wants the NT 4/5 layout.  __afd_build_open_ea()
+ * picks a shape from the OS version (src/internal/ntversion.c); this
+ * test is about the bytes of one specific shape, not about which one
+ * the platform gets, so it names the shape.  Which shape a platform is
+ * given, and that the other shape's bytes are right too, is
+ * test/posix-socket-shape.c's job. */
+#define SHAPE_NT6 1 /* AFD_SHAPE_NT6, src/internal/afd.h */
+unsigned long __afd_open_ea_size_for(int shape);
+void __afd_build_open_ea_for(int shape, void *buf);
 
 /* --- constants, from the references named in the banner --- */
 
@@ -132,7 +142,7 @@ int main(void)
 	const unsigned char *pkt;
 	unsigned i;
 
-	size = __afd_open_ea_size();
+	size = __afd_open_ea_size_for(SHAPE_NT6);
 
 	/* Allocate size + a guard run, so "the builder writes exactly the
 	 * bytes it declares" is checkable.  malloc() is at least 8-byte
@@ -142,7 +152,7 @@ int main(void)
 	if (!alloc) { printf("FAIL %s: out of memory\n", __FILE__); return 1; }
 	memset(alloc, GUARD_BYTE, size + GUARD);
 	buf = alloc;
-	__afd_build_open_ea(buf);
+	__afd_build_open_ea_for(SHAPE_NT6, buf);
 
 	/* --- 1. entry alignment -------------------------------------- *
 	 * NtCreateFile probes the EA buffer at ULONG alignment and every
@@ -240,7 +250,7 @@ int main(void)
 		unsigned char *again = malloc(size);
 		if (!again) { printf("FAIL %s: out of memory\n", __FILE__); free(alloc); return 1; }
 		memset(again, 0x5A, size);
-		__afd_build_open_ea(again);
+		__afd_build_open_ea_for(SHAPE_NT6, again);
 		CHECK(memcmp(again, buf, size) == 0);
 		free(again);
 	}

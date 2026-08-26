@@ -65,6 +65,39 @@ asks for `FileDispositionInformationEx` (Windows 10) and falls back to
 `NtCreateFile` flag can be probed that way. An import cannot, which is
 the whole distinction.
 
+### Probe, do not ask the version
+
+When behavior differs between NT releases, **call the thing and read the
+failure status**. A probe stays correct on platforms nobody here has heard
+of; a version test is only as good as the table of versions behind it, and
+it silently mis-serves anything not in that table.
+
+Branching on `PEB.OSMajorVersion` is reserved for divergences with all
+three of these properties:
+
+1. two releases read the *same* request buffer with different layouts;
+2. the buffer carries **no discriminator** — no version field, no length,
+   nothing in the bytes that says which layout is meant; and
+3. handing either side the wrong layout **succeeds**, so there is no
+   failure for a probe to learn from.
+
+(3) is the binding condition. If the wrong guess returns an error, probe.
+
+The one instance today is AFD's socket-creation extended attribute — NT
+4/5's 12-byte `AFD_CREATE_PACKET` against NT 6+'s 24-byte
+`AFD_OPEN_PACKET`. See `src/internal/ntversion.c` for the mechanism and
+`src/internal/afd.h`'s socket-creation banner for that case in full.
+
+Use `__nt_version_at_least(major, minor)` from `src/internal/libc.h`; do
+not read the PEB fields at a call site. It is cached — the PEB's copy does
+not change for the life of the process.
+
+This is **not** a statement about the minimum supported Windows version.
+That floor is set by the ntdll imports in `tools/ntdll.def`; a platform can
+satisfy it while reporting an older
+kernel version (ReactOS does, exporting `RtlUTF8ToUnicodeN` and
+`RtlUnicodeToUTF8N` while reporting 5.2).
+
 ## Source conventions
 
 - Add an SPDX copyright and licence header to every new file. CI runs
