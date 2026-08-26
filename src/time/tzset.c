@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 int daylight;
 long timezone;
@@ -59,5 +60,28 @@ void tzset(void)
 		if (*tz == ':') { tz++; mn = strtol(tz, (char **)&tz, 10); }
 		if (*tz == ':') { tz++; s = strtol(tz, (char **)&tz, 10); }
 	}
-	timezone = sign * (h * 3600 + mn * 60 + s);
+	/* Combined in `long long`, not in `long`.  h, mn and s come out of
+	 * strtol(), which saturates at LONG_MAX -- 2147483647 on this
+	 * LLP64 target -- and `h * 3600` at that value overflows a 32-bit
+	 * `long`: undefined behaviour, reachable from nothing more exotic
+	 * than TZ=X2147483647 in the environment, which is to say from
+	 * whoever started the process.  The product needs 43 bits and gets
+	 * them; the result is then clamped rather than wrapped, so every
+	 * TZ whose offset already fitted keeps exactly the value it had
+	 * and only the ones that did not fit change -- from undefined to
+	 * saturated.
+	 *
+	 * Found by fuzz/fuzz_time.c, which cannot see the overflow itself:
+	 * `long` is 64 bits in the native fuzzing build and 32 on the
+	 * target, so UBSan never fires there.  What it checks instead is
+	 * the value -- that whatever tzset() computes is representable in
+	 * the target's `long` -- and TZ=X9999999999999999 produced
+	 * 7730941129200 for a field that holds at most 2147483647. */
+	{
+		long long total = (long long)h * 3600 + (long long)mn * 60 + (long long)s;
+		if (sign < 0) total = -total;
+		if (total > LONG_MAX) total = LONG_MAX;
+		else if (total < LONG_MIN) total = LONG_MIN;
+		timezone = (long)total;
+	}
 }

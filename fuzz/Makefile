@@ -74,7 +74,7 @@ STATRENAME = stat=__real_stat
 
 HARNESSES = strtod printf scanf utf path strptime strtol strftime \
             fnmatch regex glob wordexp \
-            shparse inet string search getopt env time
+            shparse inet string search getopt env time pathname
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 
 # What the instrumented library is built from.  Derived with find, never

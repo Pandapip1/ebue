@@ -90,6 +90,7 @@
  * here rather than widening the flags for every other harness. */
 #define _BSD_SOURCE
 #include <time.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -208,6 +209,28 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	else if (strlen(tzname[0]) > 31 || strlen(tzname[1]) > 31)
 		oracle_mismatch_i("tzset produced an over-long tzname", tz,
 		                  (long long)strlen(tzname[0]), 31);
+	/* `timezone` IS A 32-BIT long ON THE TARGET, AND A 64-BIT ONE HERE.
+	 *
+	 * This is the one place in this harness where the native build is
+	 * not the platform, and it has to be compensated for explicitly
+	 * rather than trusted.  include/limits.h gives LONG_MAX as
+	 * 0x7fffffff because the target is LLP64; `long` in THIS build is
+	 * the host compiler's 64-bit one, because the width of a built-in
+	 * type is not something a header can change.  So tzset()'s
+	 * `h * 3600 + mn * 60 + s` -- with h coming straight out of
+	 * strtol(), which saturates at the header's LONG_MAX of
+	 * 2147483647 -- overflows a `long` on the target and does not
+	 * overflow one here.  UBSan running natively therefore cannot see
+	 * that overflow, no matter how long it runs.
+	 *
+	 * What CAN be checked natively is the value: whatever tzset()
+	 * computes has to be representable in the target's `long`, because
+	 * that is the type it is stored in there.  A result outside
+	 * [LONG_MIN, LONG_MAX] as this target's headers define them is the
+	 * defect, reported here as a value rather than as UB. */
+	if (timezone > (long long)LONG_MAX || timezone < (long long)LONG_MIN)
+		oracle_mismatch_i("tzset computed a timezone the target's long cannot hold",
+		                  tz, (long long)timezone, (long long)LONG_MAX);
 
 	/* ------------------------------------- timegm/gmtime, oracled */
 	f[0] = fold(raw[0], -5900, 4100);      /* tm_year: years -4000..6000 */
