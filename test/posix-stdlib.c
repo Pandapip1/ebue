@@ -204,6 +204,56 @@ static void test_rand48_ranges(void)
 	}
 }
 
+#if NTLIBC_TEST(BUG, posix_stdlib_rand_default_seed_is_srand_1) /* BUG: the un-seeded rand() stream is not the srand(1) stream.
+	 * rand.html DESCRIPTION: "If rand() is called before any calls to
+	 * srand() are made, the same sequence shall be generated as when
+	 * srand() is first called with a seed value of 1."  (ISO C99
+	 * 7.20.2.2p2 says the same in the same words.)  It is the one thing
+	 * the standard fixes about the default state, and it is what lets a
+	 * program that never calls srand() be reproduced by one that says
+	 * srand(1).
+	 *
+	 * Mechanism: src/stdlib/rand.c holds the LCG state in
+	 *
+	 *     static uint64_t seed = 1;
+	 *
+	 * while srand() stores `s - 1`, so srand(1) sets the state to 0.
+	 * The default state is therefore the srand(1) state advanced by
+	 * exactly one LCG step, and the two streams are offset by one draw
+	 * for their whole length.  (musl, whose constants this generator
+	 * borrows, leaves the state a zero-initialised static -- which is
+	 * precisely the srand(1) state, and is what makes musl conform.
+	 * The `= 1` initialiser is the whole difference.)
+	 *
+	 * The srand(0) note above that line -- "s - 1 wraps to UINT_MAX for
+	 * srand(0): still a perfectly usable 64-bit seed once widened, not
+	 * a bug the caller can observe" -- is about a different call and
+	 * remains true; nothing about srand(0) is asserted here.
+	 *
+	 * This test has to run before anything else in the process calls
+	 * srand() or rand().  Nothing in this file does -- the generators
+	 * exercised above it are rand48 and random(), which src/stdlib has
+	 * on separate state (src/stdlib/rand.c's `static uint64_t seed`
+	 * is not shared with src/stdlib/random.c or rand48.c) -- so
+	 * wherever the call site lands, the first rand() below is the
+	 * default stream.  Whoever un-fences this should still put the
+	 * call first in main() rather than rely on that.
+	 *
+	 * Re-enable when the default state and srand(1)'s state agree. */
+static void test_rand_default_seed_is_srand_1(void)
+{
+	int a[4], b[4], k;
+
+	/* the default stream, before any srand() in this process */
+	for (k = 0; k < 4; k++) a[k] = rand();
+
+	srand(1);
+	for (k = 0; k < 4; k++) b[k] = rand();
+
+	CHECK(a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]);
+}
+#endif
+
 /* ---- random.html: initstate/setstate return values and size rules. ---- */
 static void test_random_state(void)
 {
