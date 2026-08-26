@@ -187,9 +187,14 @@ a green check that measured something other than what it claimed.
 nothing on a stimulus that cannot discriminate. Before reaching for another
 oracle, ask whether the probe you have could express the disagreement at all:
 a one-element array cannot exercise a stride, and a device-free test emits the
-same bytes whether or not the device would have agreed. Vary the stimulus
-first; it is usually the cheaper axis and always the one that decides whether
-the other is worth anything.
+same bytes whether or not the device would have agreed. A dead stimulus need
+not look degenerate: a reproducer hunting an `INVALID_PARAMETER` condition
+delivered 382,791 `SIGUSR1`s, met the target condition zero times, and hung at
+1/1 — a large, busy, wholly plausible number that measured something other
+than the thing under test, and it would have been filed as a successful run
+had its exit code been trusted. Vary the stimulus first; it is usually the
+cheaper axis and always the one that decides whether the other is worth
+anything.
 
 **Agreement between non-independent sources measures the sharing, not the
 fact.** Two consumers of one header agree at any value it defines. A stub
