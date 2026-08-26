@@ -126,6 +126,48 @@ static void test_mktime_overflow_returns_minus_one(void)
  * the processor time used by the process" -- CPU time, not wall-clock
  * time. Sleeping (wall-clock elapsed) should barely move clock()'s CPU
  * time, unlike a busy loop of comparable wall duration. */
+#if NTLIBC_TEST(BUG, posix_time_clocks_per_sec_type) /* BUG: CLOCKS_PER_SEC does not have type clock_t.
+	 * basedefs/time.h.html, "The <time.h> header shall define the
+	 * following macros": "CLOCKS_PER_SEC -- A number used to convert
+	 * the value returned by the clock() function into seconds.  The
+	 * value shall be an integer constant expression with type clock_t
+	 * and value 1000000."  (ISO C says the same: the macro "expands to
+	 * an expression ... with type clock_t".)
+	 *
+	 * Mechanism: include/time.h has
+	 *
+	 *     #define CLOCKS_PER_SEC 1000000
+	 *
+	 * an unsuffixed decimal constant, so its type is int -- 32 bits on
+	 * this LLP64 target -- while clock_t is `_Int64`, i.e. long long
+	 * (obj/include/bits/alltypes.h).  The type half of the clause is
+	 * simply not met; the value half is, and is already pinned in
+	 * test/time.c.
+	 *
+	 * It is not academic.  The type is what governs the arithmetic the
+	 * macro takes part in: any expression that scales it is evaluated
+	 * in int and overflows there, before the result is ever widened to
+	 * the clock_t it is being assigned to.  One hour of CPU time,
+	 * CLOCKS_PER_SEC * 3600, is 3600000000 -- past INT_MAX, so it wraps
+	 * to a negative number.  The far commoner clock()/CLOCKS_PER_SEC
+	 * happens to be fine, because there the clock_t operand promotes
+	 * the macro, which is why nothing has caught this.
+	 *
+	 * The fix is a suffix: 1000000LL, or ((clock_t)1000000).
+	 *
+	 * Re-enable when the macro carries clock_t's width. */
+static void test_clocks_per_sec_type(void)
+{
+	CHECK(sizeof(CLOCKS_PER_SEC) == sizeof(clock_t));
+
+	/* the observable consequence of the type, not just its size */
+	CHECK((clock_t)(CLOCKS_PER_SEC * 3600) == (clock_t)3600000000LL);
+
+	/* the value half of the same clause, kept alongside it */
+	CHECK(CLOCKS_PER_SEC == 1000000);
+}
+#endif
+
 static void test_clock_is_cpu_time_not_wall_time(void)
 {
 	struct timespec req, before_wall, after_wall;
