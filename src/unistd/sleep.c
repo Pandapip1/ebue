@@ -67,23 +67,45 @@ static int alerted(NTSTATUS st) { return st == STATUS_USER_APC || st == STATUS_A
 static HANDLE alarm_timer;
 /* Absolute NT time the pending SIGALRM is due; 0 means no request. */
 static long long alarm_due;
+/* Which request the pending APC belongs to.  Bumped by every alarm(),
+ * so a queued APC can name the request that queued it; see alarm_apc. */
+static unsigned long alarm_seq;
 
 static void NTAPI alarm_apc(PVOID ctx, ULONG lo, LONG hi)
 {
-	LARGE_INTEGER now;
-	(void)ctx; (void)lo; (void)hi;
+	(void)lo; (void)hi;
 
-	/* Do not trust the queue; re-read the deadline.  NtCancelTimer
-	 * withdraws a timer, but it cannot recall an APC that the expiry has
-	 * already handed to this thread -- and a handed-over APC is not
-	 * *run* until the next alertable wait, so a program that lets an
-	 * alarm expire while it is computing and only then calls alarm(0),
-	 * or re-arms for later, reaches here with the request it names
-	 * already gone.  No deadline means cancelled; a deadline still in
-	 * the future belongs to a later request, whose own APC has not been
-	 * queued yet.  Either way there is no SIGALRM owed. */
-	NtQuerySystemTime(&now);
-	if (!alarm_due || now < alarm_due) return;
+	/* Do not trust the queue: this APC may belong to a request that is
+	 * already gone.  NtCancelTimer withdraws a timer, but it cannot
+	 * recall an APC that the expiry has already handed to this thread
+	 * -- and a handed-over APC is not *run* until the next alertable
+	 * wait, so a program that lets an alarm expire while it is
+	 * computing and only then calls alarm(0), or re-arms for later,
+	 * reaches here with the request it names already spent.
+	 *
+	 * WHICH REQUEST THIS APC IS FOR IS ASKED BY IDENTITY, NOT BY THE
+	 * CLOCK, and that distinction is the whole of this comment.  The
+	 * obvious test -- re-read the time and drop the APC if the deadline
+	 * has not passed -- is wrong, because it cannot tell a superseded
+	 * APC from a punctual one: an NT timer may run its APC a hair
+	 * BEFORE NtQuerySystemTime() agrees the due time has arrived, the
+	 * two being different clocks sampled at different moments.  A
+	 * dropped APC is not retried, and alarm_due stays set, so that
+	 * loses the SIGALRM permanently.  Measured under Wine before this
+	 * was changed, with the comparison instrumented: the APC ran with
+	 * `now - alarm_due` at -9886 ticks (0.99ms early) and the signal
+	 * was silently swallowed, on roughly one run in three; the same
+	 * binary passed the other two.  A tolerance would only move the
+	 * boundary, not remove it.
+	 *
+	 * The generation counter answers the question exactly instead.
+	 * Every alarm() bumps alarm_seq and hands the new value to
+	 * NtSetTimer as the APC context, so `ctx == alarm_seq` is true for
+	 * precisely the APC of the current request and false for every
+	 * stale one -- no clock is read, and an early expiry is delivered
+	 * as the expiry it is.  alarm_due == 0 covers the cancelled case,
+	 * where there is no current request for any APC to match. */
+	if (!alarm_due || (unsigned long)(ULONG_PTR)ctx != alarm_seq) return;
 
 	/* Cleared before delivery, not after: SIGALRM's default action is
 	 * to terminate, so __raise_internal() does not return in that
@@ -123,6 +145,9 @@ unsigned alarm(unsigned s)
 	 * by withdrawing what is there. */
 	if (alarm_timer) NtCancelTimer(alarm_timer, NULL);
 	alarm_due = 0;
+	/* Retire the old request's identity before arming a new one, so an
+	 * APC already handed over for it can no longer match (alarm_apc). */
+	alarm_seq++;
 
 	if (s) {
 		if (!alarm_timer) {
@@ -147,7 +172,8 @@ unsigned alarm(unsigned s)
 			}
 		}
 		due = now + (long long)s * __TICKS_PER_SEC;
-		if (NT_SUCCESS(NtSetTimer(alarm_timer, &due, alarm_apc, NULL, 0, 0, NULL)))
+		if (NT_SUCCESS(NtSetTimer(alarm_timer, &due, alarm_apc,
+		                          (PVOID)(ULONG_PTR)alarm_seq, 0, 0, NULL)))
 			alarm_due = due;
 	}
 	return prev;
@@ -166,6 +192,7 @@ void __alarm_reset_after_fork(void)
 {
 	alarm_due = 0;
 	alarm_timer = 0;
+	alarm_seq++;
 }
 
 /* Wait out `ticks` 100ns units, alertable, so an alarm APC can be
