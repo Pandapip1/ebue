@@ -22,10 +22,16 @@
  *     FlushConsoleInputBuffer() -- tcflush.html DESCRIPTION "discard[s]
  *     data received but not read" is exactly what that call does.
  *   - tcgetsid(): real in the same sense src/unistd/ttyname.c's
- *     tcgetpgrp() already is -- this platform has exactly one, fixed
- *     session (src/unistd/ids.c's getsid()/setsid() always report
- *     session 1), so tcgetsid() reduces to that same fixed answer,
- *     gated by the same ENOTTY check as everything else here.
+ *     tcgetpgrp() is -- the console is the only terminal a process here
+ *     can have and the caller is the only user of it this library can
+ *     name, so "the session associated with the terminal" is the
+ *     caller's own session, which src/unistd/ids.c keeps as real
+ *     per-process state that setsid() moves.  tcgetsid() follows it
+ *     rather than answering a constant, gated by the same ENOTTY check
+ *     as everything else here.  What is *not* modelled is which
+ *     terminal is "controlling": nothing here distinguishes one, so
+ *     setsid()'s "shall have no controlling terminal" leaves these two
+ *     answering for the console as before (src/unistd/ids.c).
  *
  * What is honestly accepted-and-stored, never applied (round-trips
  * through tcgetattr()/tcsetattr() correctly, changes nothing real):
@@ -336,9 +342,11 @@ pid_t tcgetsid(int fd)
 {
 	struct __fd *f = get_console(fd);
 	if (!f) return -1;
-	/* This platform has exactly one, fixed session -- src/unistd/
-	 * ids.c's getsid()/setsid() always answer 1, same as
-	 * src/unistd/ttyname.c's tcgetpgrp() already does for the
-	 * process-group equivalent. */
+	/* The console is the only terminal here and the caller is the only
+	 * user of it this library can name, so the session associated with
+	 * it is the caller's own -- src/unistd/ids.c keeps that as real
+	 * per-process state now, and this follows it rather than answering
+	 * a constant, exactly as src/unistd/ttyname.c's tcgetpgrp() does
+	 * for the process-group equivalent. */
 	return getsid(0);
 }

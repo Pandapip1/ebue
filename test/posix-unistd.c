@@ -739,10 +739,12 @@ static void test_kill_neg1_reaches_self(void)
 
 /* kill.html DESCRIPTION: "If pid is 0 ... sig shall be sent to all
  * processes ... whose process group ID is equal to the process group
- * ID of the sender" -- src/unistd/ids.c's getpgrp()/getpgid() always
- * report group 1 (every process is its own group of one on this
- * platform, per the ledger's kill pid==0/pid<-1 N/A note), so "all
- * processes in the sender's group" reduces exactly to "the sender", and
+ * ID of the sender" -- a process group here is per-process bookkeeping
+ * with no registry behind it (src/unistd/ids.c's banner: no call can
+ * name another process's group), so the sender is the only member of
+ * its own group this platform can enumerate, per the ledger's kill
+ * pid==0/pid<-1 N/A note.  "All processes in the sender's group"
+ * therefore reduces exactly to "the sender", and
  * src/signal/signal.c's kill() implements precisely that: "pid ==
  * getpid() || pid == 0" both route to raise().  This is the
  * group-of-one model actually working, not something Wine-hostile, so
@@ -1422,11 +1424,10 @@ static void test_getlogin(void)
 	CHECK(getlogin_r(buf, strlen(l)) == ERANGE);
 }
 
-/* Identity and session stubs: fchown, fchownat, lchown, setregid,
- * setpgrp, setsid, tcgetpgrp, tcsetpgrp.  src/unistd/ids.c's banner is
- * the governing statement -- "There is one user as far as this library
- * is concerned" -- and src/termios/termios.c's says the same for
- * sessions: exactly one, fixed.
+/* Identity stubs and the session family: fchown, fchownat, lchown,
+ * setregid, setpgrp, setsid, tcgetpgrp, tcsetpgrp.  src/unistd/ids.c's
+ * banner is the governing statement for the identity half -- "There is
+ * one user as far as this library is concerned".
  *
  * chown.html RETURN VALUE: "Upon successful completion, these functions
  * shall return 0"; setpgid.html/setsid.html: setsid() "shall return the
@@ -1434,18 +1435,26 @@ static void test_getlogin(void)
  * value of the process group ID of the foreground process associated
  * with the terminal"; tcsetpgrp.html: 0 on success.
  *
- * N/A, with the reason, for the *effects* rather than the returns: NT
- * has no uid/gid to set and this library models exactly one user and one
- * session, so "the file's user ID shall be set", "the process shall
- * become a session leader" and "the foreground process group shall be
- * set" have nothing that could ever be observed to change.  This ledger
- * already records the same for chown/getuid/setuid/getpgrp; these eight
- * names are the never-called members of the same family.  What *is*
- * asserted is the part that is still a real contract: the return values,
- * internal consistency with the non-stub members of the family that
- * test/unistd.c already covers, and -- for the two that take a
- * descriptor -- the [EBADF] shall-fail, which having a fixed answer
- * does not excuse. */
+ * N/A, with the reason, for the identity *effects* rather than the
+ * returns: NT has no uid/gid to set and this library models exactly one
+ * user, so "the file's user ID shall be set" has nothing that could
+ * ever be observed to change.  This ledger already records the same for
+ * chown/getuid/setuid.
+ *
+ * setpgrp()/setsid() are no longer in that company: src/unistd/ids.c
+ * keeps a real process group and session id per process, so both have
+ * an effect, and the half of the state machine reachable here is the
+ * half test/posix-unistd-ids.c's test_process_group_and_session cannot
+ * reach -- this process has not been made a session leader by the time
+ * it arrives, so setpgrp()'s conditional effect is live.  tcgetpgrp()
+ * follows getpgrp() rather than answering a constant, which is what
+ * keeps the foreground-group assertion below true afterwards.
+ *
+ * What is asserted throughout is the part that is still a real
+ * contract: the return values, internal consistency with the non-stub
+ * members of the family that test/unistd.c already covers, and -- for
+ * the two that take a descriptor -- the [EBADF] shall-fail, which
+ * having a fixed answer does not excuse. */
 static void test_id_session_stubs(void)
 {
 	struct stat before, after;
@@ -1474,12 +1483,24 @@ static void test_id_session_stubs(void)
 	CHECK(setregid((gid_t)-1, (gid_t)-1) == 0);
 	CHECK(getgid() == getegid());
 
-	/* setpgrp()/setsid(): both report the single process group/session
-	 * this platform has, and must agree with the getters test/unistd.c
-	 * already covers. */
+	/* setpgrp.html DESCRIPTION: "If the calling process is not already
+	 * a session leader, setpgrp() sets the process group ID of the
+	 * calling process to the process ID of the calling process";
+	 * RETURN VALUE: "Upon completion, setpgrp() shall return the
+	 * process group ID."  Nothing in this process has made it a
+	 * session leader, so that effect is the live path here and it must
+	 * agree with the getters test/unistd.c already covers.
+	 *
+	 * It leaves the process a group leader, which is exactly
+	 * setsid.html's "[EPERM] The calling process is already a process
+	 * group leader" -- the other end of the transition
+	 * test/posix-unistd-ids.c asserts from the succeeding side. */
+	CHECK(setpgrp() == getpid());
 	CHECK(setpgrp() == getpgrp());
-	CHECK(setsid() == getsid(0));
-	CHECK(setsid() == getpgrp());
+	CHECK(getpgrp() == getpid());
+	errno = 0;
+	CHECK(setsid() == (pid_t)-1 && errno == EPERM);
+	CHECK(getsid(0) > 0);
 
 	/* tcgetpgrp()/tcsetpgrp() on the one foreground group there is.
 	 * tcgetpgrp() must agree with getpgrp() rather than be some third

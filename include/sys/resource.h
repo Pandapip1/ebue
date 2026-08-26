@@ -97,9 +97,10 @@ int getrusage (int, struct rusage *);
  * under is_wow64 after a priority change) -- both honestly approximate,
  * not exact, for a process this one did not set the priority of itself.
  *
- * PRIO_PGRP/PRIO_USER: ntlibc models exactly one process group (this
- * process is always its own and only member -- getpgrp() is a hardcoded
- * 1) and exactly one user (geteuid() is a hardcoded 1000), so who==0,
+ * PRIO_PGRP/PRIO_USER: ntlibc models a process group this process is
+ * always the only nameable member of (src/unistd/ids.c keeps the id as
+ * per-process bookkeeping; no call there reports another process's
+ * group) and exactly one user (geteuid() is a hardcoded 1000), so who==0,
  * who==getpgrp(), or who==geteuid() all honestly denote "this process,
  * the sole member of its own group and the sole process running as this
  * uid" and behave exactly like PRIO_PROCESS on self. Any other who value

@@ -738,12 +738,13 @@ static void test_attr_flags_acted_on(void)
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDULER, 0, 0) == EINVAL);
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER, 0, 0) == EINVAL);
 
-	/* SETPGROUP: this platform has exactly one process group
-	 * (src/unistd/ids.c answers getpgrp() with a fixed 1), so asking
-	 * for that group is already true of the child and asking for any
-	 * other -- 0 included, which means "a new group of the child's
-	 * own" -- is refused with setpgid()'s "[EINVAL] ... not a value
-	 * supported by the implementation". */
+	/* SETPGROUP: the only process group this platform can put a child
+	 * in is the one every process is born into (src/unistd/ids.c's
+	 * banner), so asking for the caller's own group -- which this
+	 * process has not moved out of -- is already true of the child, and
+	 * asking for any other -- 0 included, which means "a new group of
+	 * the child's own" -- is refused with setpgid()'s "[EINVAL] ... not
+	 * a value supported by the implementation". */
 	pg = getpgrp();
 	CHECK(spawn_with_flags(POSIX_SPAWN_SETPGROUP, 0, &pg) == 0);
 	pg = 0;

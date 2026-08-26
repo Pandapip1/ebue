@@ -107,12 +107,16 @@
  *     records this as N/A with that mechanism), so the postcondition
  *     is unconditionally true and there is nothing to reset.
  *
- *   POSIX_SPAWN_SETPGROUP -- honoured only for the one process group
- *     this library models.  src/unistd/ids.c answers getpgrp() and
- *     getpgid() with a fixed 1 for every process.  Note that NT is not
- *     short of a process-group concept: console process groups are
- *     created by CreateProcess's CREATE_NEW_PROCESS_GROUP and are the
- *     target of GenerateConsoleCtrlEvent's dwProcessGroupId, which is
+ *   POSIX_SPAWN_SETPGROUP -- honoured only for the process group the
+ *     caller is already in.  src/unistd/ids.c keeps that group as
+ *     per-process bookkeeping (a spawned child starts in the group
+ *     every process is born into rather than inheriting the caller's,
+ *     which that file's banner records), so the group named by the
+ *     attribute is one this library can neither create nor join for a
+ *     child.  Note that NT is not short of a process-group concept:
+ *     console process groups are created by CreateProcess's
+ *     CREATE_NEW_PROCESS_GROUP and are the target of
+ *     GenerateConsoleCtrlEvent's dwProcessGroupId, which is
  *     job-control signal delivery to a group.  (An earlier version of
  *     this comment compared against job objects and concluded NT had
  *     no such concept; that was the wrong object and the wrong
@@ -120,13 +124,16 @@
  *     have is a way to *join* one: a console process group's members
  *     are exactly the descendants of its root process, its id is
  *     always that root's pid, and no call places a process into a
- *     pre-existing group it does not descend from.  So a
- *     spawn-pgroup of the group this library models is already true of the child, and
- *     anything else -- including 0, "put the child in a new group of
- *     its own" -- is refused with EINVAL, which is what ERRORS routes
- *     here ("an error value shall be returned as described by
- *     setpgid()", whose "[EINVAL] The value of the pgid argument ... is
- *     not a value supported by the implementation" is exactly this).
+ *     pre-existing group it does not descend from.  So a spawn-pgroup
+ *     naming the caller's own group is accepted -- for a caller that
+ *     has not moved itself out of the group every process is born
+ *     into, which is the only case the child can be observed in at
+ *     all, it is already true of the child -- and anything else,
+ *     including 0, "put the child in a new group of its own", is
+ *     refused with EINVAL, which is what ERRORS routes here ("an error
+ *     value shall be returned as described by setpgid()", whose
+ *     "[EINVAL] The value of the pgid argument ... is not a value
+ *     supported by the implementation" is exactly this).
  *
  *   POSIX_SPAWN_SETSCHEDPARAM / POSIX_SPAWN_SETSCHEDULER -- refused,
  *     always, with EINVAL.  ERRORS sends these to sched_setparam() and
