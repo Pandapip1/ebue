@@ -224,6 +224,13 @@ pid_t fork(void)
 		 * not OBJ_INHERIT -- so this only has to forget the deadline,
 		 * not cancel anything. */
 		__alarm_reset_after_fork();
+		/* And once more: the sibling entries that travelled with the
+		 * clone carry the parent's job-control bookkeeping, and this
+		 * process stopped none of them.  Left alone, the clone would
+		 * report through waitpid(WUNTRACED) a stop it did not cause,
+		 * and would resume a sibling out from under the parent on its
+		 * own exit (src/process/children.c). */
+		__child_forget_stops();
 		return 0;
 	}
 

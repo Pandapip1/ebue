@@ -125,7 +125,7 @@ extern "C" {
                         * not a header question, so it is not made here */
 
 /* si_code values for SIGCHLD (waitid.html, basedefs/signal.h.html).
- * All six are defined even though ntlibc produces only three of them,
+ * All six are defined even though ntlibc produces only five of them,
  * on the same footing as the fault subcodes above: CLD_* is the
  * ordinary vocabulary of wait-family status reporting, which any
  * portable SIGCHLD handler may switch over without doing anything
@@ -135,19 +135,21 @@ extern "C" {
  * that it is a value si_code may hold, never that this system produces
  * it -- the same way defining EROFS promises no errno will ever be it.
  *
- * waitid() produces CLD_EXITED, CLD_KILLED and CLD_DUMPED.
+ * waitid() produces CLD_EXITED, CLD_KILLED and CLD_DUMPED, and -- for a
+ * child this library itself stopped -- CLD_STOPPED and CLD_CONTINUED:
+ * kill(pid, SIGSTOP) is NtSuspendProcess and kill(pid, SIGCONT) is
+ * NtResumeProcess (src/signal/signal.c), and because the stop is one
+ * ntlibc performed rather than one it must be told about, it needs no
+ * notification from NT to report it (src/process/wait.c).
  *
- * CLD_TRAPPED, CLD_STOPPED and CLD_CONTINUED are defined for source
- * compatibility and are never produced here, because no child on this
- * platform can be stopped or continued: kill(pid, SIGSTOP) is
- * NtTerminateProcess(h, __NT_SIGNAL_EXIT(SIGSTOP)) (src/signal/signal.c)
- * -- it ends the child rather than suspending it, NT having no job
- * control to suspend into -- and even a process suspended by other
- * means could not be reported, since an NT process object transitions
- * to signalled exactly once, on termination: there is no waitable stop
- * or continue transition for NtWaitForSingleObject to return, and
- * NtSuspendProcess is not part of the surface this library declares.
- * Numeric values match musl/glibc, as above. */
+ * CLD_TRAPPED is defined for source compatibility and is never
+ * produced: it reports a child stopped by a *trace* trap, and this
+ * library has no ptrace and no debugger interface for one to come
+ * from.  A child suspended by something outside this library is
+ * likewise unreportable -- an NT process object transitions to
+ * signalled exactly once, on termination, so there is no waitable stop
+ * transition and nothing to poll -- but that is not what any CLD_* code
+ * above describes either.  Numeric values match musl/glibc, as above. */
 #define CLD_EXITED    1
 #define CLD_KILLED    2
 #define CLD_DUMPED    3

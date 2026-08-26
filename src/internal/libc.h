@@ -241,12 +241,40 @@ struct __child {
 	HANDLE h;
 	int done;               /* reaped status is available */
 	int status;
+	/* Job control.  A stop on this platform is always one this library
+	 * performed itself -- kill(pid, SIGSTOP) is NtSuspendProcess (see
+	 * kill() in src/signal/signal.c) -- so there is nothing to learn
+	 * from the kernel and the two fields below are the whole record of
+	 * it.  stopsig is the signal the child is stopped with right now,
+	 * or 0 if it is running; jobstat is the stop-or-continue wait
+	 * status that has not yet been reported to a waiter, or 0 if there
+	 * is none, which is how waitpid(WUNTRACED)/waitid(WSTOPPED) meet
+	 * "whose status has not yet been reported since they stopped"
+	 * (wait.html) -- reporting clears it. */
+	int stopsig;
+	int jobstat;
 };
+/* The two wait statuses that are not a process exit, in the encoding
+ * <sys/wait.h>'s WIFSTOPPED/WSTOPSIG/WIFCONTINUED decode -- the same
+ * one Linux and the BSDs use, so a program that inspects the raw int
+ * sees what it does there.  Kept here rather than in <sys/wait.h>: POSIX
+ * gives applications the decoding macros and no constructors, and these
+ * are only ever built by the library. */
+#define __W_STOPPED(sig) (((int)(sig) << 8) | 0x7f)
+#define __W_CONTINUED    0xffff
 extern struct __child *__children;   /* __child_cap entries, pid==0 is free */
 extern int __child_cap;
 int __child_add(int pid, HANDLE);
 struct __child *__child_find(int pid);
 void __child_remove(struct __child *);
+/* Resume every child this process left stopped, and forget the stop.
+ * Called on the way out of exit()/_exit() (src/exit/exit.c) -- see
+ * children.c for the exit.html clause it stands in for. */
+void __child_resume_stopped(void);
+/* Drop the stop bookkeeping without resuming anything: fork()'s
+ * child-side only, which inherits the parent's table but stopped none
+ * of it (src/process/fork.c). */
+void __child_forget_stops(void);
 /* RUSAGE_CHILDREN: the running total src/process/wait.c folds every
  * reaped child's ProcessTimes into, read out by getrusage()
  * (src/misc/resource.c). */

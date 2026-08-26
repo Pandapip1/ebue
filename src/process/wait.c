@@ -141,6 +141,42 @@ static void fill_child_rusage(HANDLE h, struct rusage *ru)
 	children_utime100ns += (unsigned long long)kt.UserTime;
 }
 
+/* The pending stop-or-continue report for a child, if any.
+ *
+ * wait.html, WUNTRACED: "The status of any child processes specified by
+ * pid that are stopped, and whose status has not yet been reported since
+ * they stopped, shall also be reported to the requesting process."
+ * WCONTINUED says the same for a child "that has continued from a job
+ * control stop".  waitid.html's WSTOPPED and WCONTINUED are the same two
+ * clauses; WSTOPPED and WUNTRACED are even the same bit
+ * (<sys/wait.h>), so one lookup serves both interfaces and they cannot
+ * come to disagree about a child.
+ *
+ * There is nothing to poll and nothing to ask the kernel.  A child stops
+ * here only because kill() suspended it (src/signal/signal.c), and it
+ * recorded the resulting wait status in the table entry at that moment;
+ * this just finds it.
+ *
+ * `want` is a pid, or 0 for any child.  `which` is WSTOPPED (== WUNTRACED)
+ * and/or WCONTINUED.  Consuming is the caller's job -- it clears
+ * c->jobstat, which is what "has not yet been reported" turns on, unless
+ * WNOWAIT asked for the report to stay available. */
+static struct __child *job_report(pid_t want, int which)
+{
+	int i;
+
+	for (i = 0; i < __child_cap; i++) {
+		struct __child *c = &__children[i];
+		int js = c->jobstat;
+
+		if (!c->pid || !js) continue;
+		if (want && c->pid != want) continue;
+		if (!(which & (WIFCONTINUED(js) ? WCONTINUED : WSTOPPED))) continue;
+		return c;
+	}
+	return 0;
+}
+
 /* One reaping engine for wait/waitpid/wait3/wait4/waitid.
  *
  * `nowait` is waitid()'s WNOWAIT: "Keep the process whose status is
@@ -172,6 +208,23 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	 * options through wait3/wait4, which share this same contract), so
 	 * checking here covers all of them uniformly. */
 	if (options & ~(WNOHANG | WUNTRACED | WCONTINUED)) { errno = EINVAL; return -1; }
+
+	/* A stopped or continued child, ahead of any exit wait.  The order
+	 * matters and is not a preference: a stopped child never becomes
+	 * signalled, so waiting on its handle first would block forever
+	 * holding a status the caller asked for and that is sitting right
+	 * here.  The entry is not removed -- the child has not exited and
+	 * is still to be waited for -- only the report is consumed. */
+	if (options & (WUNTRACED | WCONTINUED)) {
+		c = job_report(pid == -1 || pid == 0 ? 0 : pid < 0 ? -pid : pid,
+		               options & (WUNTRACED | WCONTINUED));
+		if (c) {
+			if (status) *status = c->jobstat;
+			if (ru) memset(ru, 0, sizeof *ru);
+			if (!nowait) c->jobstat = 0;
+			return c->pid;
+		}
+	}
 
 	if (pid == -1 || pid == 0) {
 		/* Any child.  With one table, scan for a done one, or wait on
@@ -306,26 +359,19 @@ pid_t wait(int *status)
  * WEXITED, WSTOPPED, or WCONTINUED" (DESCRIPTION), so a call naming
  * none of them is [EINVAL].
  *
- * WSTOPPED and WCONTINUED are accepted and can never fire, and that is
- * a property of NT rather than of this implementation:
+ * WSTOPPED and WCONTINUED are real, and share every part of their
+ * implementation with waitpid()'s WUNTRACED/WCONTINUED -- see
+ * job_report() above.  A child stops only because kill() suspended it
+ * (NtSuspendProcess, src/signal/signal.c), so the stop is one this
+ * library performed and recorded rather than one it has to be told
+ * about; NT's lack of a waitable stop transition costs nothing here.
  *
- *   - a child cannot be stopped.  kill(pid, SIGSTOP) here is
- *     NtTerminateProcess(h, __NT_SIGNAL_EXIT(SIGSTOP)) (see kill() in
- *     src/signal/signal.c) -- it ends the child rather than suspending
- *     it, because NT has no job control and no signal delivery to
- *     suspend into.
- *   - even a process suspended by other means could not be reported.
- *     An NT process object transitions to signalled exactly once, on
- *     termination; there is no waitable stop or continue transition
- *     for NtWaitForSingleObject to return, and NtSuspendProcess is not
- *     part of the surface this library declares.
- *
- * So the two flags are honoured to the letter -- a caller that passes
- * WSTOPPED|WEXITED gets exit notifications and no stop notifications,
- * which is exactly correct on a system where children never stop --
- * and CLD_STOPPED/CLD_CONTINUED are never produced.  See
- * test/posix-sysmisc.c for the fenced tests that state what a
- * stop/continue notification would have to look like.
+ * What that same lack does cost: a child suspended by anything *else*
+ * -- a debugger, another program calling NtSuspendProcess on it -- is
+ * unreportable, because nothing notifies this process and no state
+ * exists to poll.  That half stays impossible, and it is also not what
+ * the clause asks for ("any child that has stopped upon receipt of a
+ * signal").
  *
  * WNOWAIT is real, not accepted-and-ignored: it maps onto do_waitpid's
  * `nowait`, which records the status in the child table without
@@ -357,33 +403,53 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options)
 	 * P_ALL, and a negative id is not a process id at all. */
 	if (idtype != P_ALL && want <= 0) { errno = ECHILD; return -1; }
 
-	/* WEXITED is the only one of the three that this platform can ever
-	 * satisfy (see the banner), so a call asking *only* for stop or
-	 * continue notifications can never have one available.  With
-	 * WNOHANG that is "no status available", which waitid.html says is
-	 * a 0 return; without it, POSIX would have this block forever
-	 * waiting for a transition that cannot occur, and reporting ECHILD
-	 * is both terminating and true -- there is no child that can ever
-	 * satisfy this request. */
-	if (!(options & WEXITED)) {
-		if (infop) memset(infop, 0, sizeof *infop);
-		if (options & WNOHANG) return 0;
-		errno = ECHILD;
-		return -1;
-	}
+	if (options & WEXITED) {
+		/* WSTOPPED is WUNTRACED and WCONTINUED is WCONTINUED (the
+		 * same bits, <sys/wait.h>), so the flags pass straight
+		 * through and do_waitpid() applies its own job_report() ahead
+		 * of the exit wait.  WEXITED itself has no waitpid() spelling
+		 * -- it is what waitpid() always does -- and must be masked
+		 * off, since do_waitpid() rejects any bit it does not know. */
+		pid = do_waitpid(want, &status, options & (WNOHANG | WSTOPPED | WCONTINUED),
+		                 0, options & WNOWAIT ? 1 : 0);
+		if (pid < 0) return -1;
+		/* "If WNOHANG was specified and status is not available, 0
+		 * shall be returned" (RETURN VALUE).  DESCRIPTION also
+		 * requires infop to be distinguishable in that case;
+		 * POSIX.1-2017 leaves it implementation-defined whether infop
+		 * is written, and zeroing it (si_signo == 0, si_pid == 0) is
+		 * what makes "nothing happened" detectable by a caller that
+		 * only has the 0 return to go on. */
+		if (pid == 0) {
+			if (infop) memset(infop, 0, sizeof *infop);
+			return 0;
+		}
+	} else {
+		/* No WEXITED: the caller wants a stop or continue report and
+		 * explicitly not an exit, so do_waitpid() must not be entered
+		 * at all -- it would wait on the process handle and reap a
+		 * child whose death this call did not ask to hear about.
+		 * Read the report directly instead. */
+		struct __child *c = job_report(want < 0 ? 0 : want, options & (WSTOPPED | WCONTINUED));
 
-	pid = do_waitpid(want, &status, options & WNOHANG, 0, options & WNOWAIT ? 1 : 0);
-	if (pid < 0) return -1;
-
-	/* "If WNOHANG was specified and status is not available, 0 shall be
-	 * returned" (RETURN VALUE).  DESCRIPTION also requires infop to be
-	 * distinguishable in that case; POSIX.1-2017 leaves it
-	 * implementation-defined whether infop is written, and zeroing it
-	 * (si_signo == 0, si_pid == 0) is what makes "nothing happened"
-	 * detectable by a caller that only has the 0 return to go on. */
-	if (pid == 0) {
-		if (infop) memset(infop, 0, sizeof *infop);
-		return 0;
+		if (c) {
+			status = c->jobstat;
+			pid = c->pid;
+			if (!(options & WNOWAIT)) c->jobstat = 0;
+		} else {
+			/* Nothing pending, and nothing can make one pending
+			 * later: the only thing that stops or continues a child
+			 * here is this process calling kill(), and a blocked
+			 * waitid() is not calling kill().  So the wait POSIX
+			 * describes would be an unconditional hang.  With WNOHANG
+			 * this is plainly "no status available", a 0 return;
+			 * without it, ECHILD is both terminating and true --
+			 * there is no child that can ever satisfy this request. */
+			if (infop) memset(infop, 0, sizeof *infop);
+			if (options & WNOHANG) return 0;
+			errno = ECHILD;
+			return -1;
+		}
 	}
 
 	if (infop) {
@@ -392,19 +458,29 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options)
 		 * (DESCRIPTION). */
 		infop->si_signo = SIGCHLD;
 		infop->si_pid = pid;
-		/* The child inherited this process's credentials -- NT has no
-		 * per-process uid at all and src/unistd/ids.c reports one
-		 * fixed value for everything -- so the child's real user id is
-		 * this process's. */
+		/* The child inherited this process's immutable token identity, so
+		 * its token-derived real user ID is this process's too. */
 		infop->si_uid = getuid();
 		if (WIFEXITED(status)) {
 			infop->si_code = CLD_EXITED;
 			/* For CLD_EXITED, si_status is the exit status the child
-			 * passed to _exit(); for the two death-by-signal codes it
-			 * is the signal number.  Both come straight out of the
-			 * wait status __wait_encode_status() already produced, so
-			 * waitid and waitpid can never disagree about a child. */
+			 * passed to _exit(); for every other code it is the
+			 * signal number.  All of them come straight out of the
+			 * same wait status waitpid() would hand back, so waitid
+			 * and waitpid can never disagree about a child. */
 			infop->si_status = WEXITSTATUS(status);
+		} else if (WIFSTOPPED(status)) {
+			/* "the signal that caused the process to terminate, stop,
+			 * or continue" -- here the stop signal kill() was called
+			 * with, which is SIGSTOP or one of the three terminal
+			 * stops (see sig_stops() in src/signal/signal.c). */
+			infop->si_code = CLD_STOPPED;
+			infop->si_status = WSTOPSIG(status);
+		} else if (WIFCONTINUED(status)) {
+			/* A continue has no signal of its own to carry: SIGCONT is
+			 * the only thing that produces one. */
+			infop->si_code = CLD_CONTINUED;
+			infop->si_status = SIGCONT;
 		} else {
 			infop->si_code = WCOREDUMP(status) ? CLD_DUMPED : CLD_KILLED;
 			infop->si_status = WTERMSIG(status);

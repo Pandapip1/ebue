@@ -3075,6 +3075,26 @@ NTSTATUS NTAPI NtResumeThread(HANDLE h, PULONG count)
 	return STATUS_SUCCESS;
 }
 
+NTSTATUS NTAPI NtSuspendProcess(HANDLE h)
+{
+	/* OF_PROC is backed by a real Linux child, so make process suspension
+	 * stateful for native job-control tests.  The raw host signal number is
+	 * intentional: this shim cannot include the host's signal.h alongside
+	 * ntlibc's headers (and NtTerminateProcess below does the same for 9). */
+	struct ofile *f = of_get(h);
+	if (!f || f->kind != OF_PROC) return STATUS_INVALID_HANDLE;
+	return syscall(SYS_kill, (long)f->pid, 19) < 0
+		? STATUS_ACCESS_DENIED : STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtResumeProcess(HANDLE h)
+{
+	struct ofile *f = of_get(h);
+	if (!f || f->kind != OF_PROC) return STATUS_INVALID_HANDLE;
+	return syscall(SYS_kill, (long)f->pid, 18) < 0
+		? STATUS_ACCESS_DENIED : STATUS_SUCCESS;
+}
+
 /* Reap the child if it has finished: 1 = reaped, 0 = still running (only
  * possible for nohang), -1 = the host wait4() itself failed.
  *

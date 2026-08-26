@@ -1783,66 +1783,35 @@ static void test_waitid_errors(void)
 	CHECK(waitid(P_PID, (id_t)getpid(), &si, WEXITED) == -1 && errno == ECHILD);
 }
 
-#if NTLIBC_TEST(BUG, posix_sysmisc_waitid_stopped_continued) /* BUG (compiles and links; formerly UNIMPL):: waitid.html DESCRIPTION -- WSTOPPED ("Status shall be
-       * returned for any child that has stopped upon receipt of a
-       * signal") and WCONTINUED ("Status shall be returned for any
-       * continued child process").
-       *
-       * Was N/A, concluding "this is a platform impossibility, not
-       * unfinished work: there is no NT mechanism that would implement
-       * it."  Re-audited, and that conclusion does not hold for the
-       * case the clause is actually about.  The old reason rested on
-       * two facts, one true and one not a fact about NT at all:
-       *
-       *   - "An NT process object transitions to signalled exactly
-       *     once, on termination; there is no waitable stop or continue
-       *     transition for NtWaitForSingleObject to return."  TRUE, and
-       *     it does settle one case -- see the N/A paragraph below.
-       *
-       *   - "NtSuspendProcess is not part of the surface
-       *     src/internal/nt.h declares."  This is a statement about
-       *     ntlibc's own header, not about the platform, and it was
-       *     doing load-bearing work in an argument that claimed to be
-       *     about the platform.  NtSuspendProcess and NtResumeProcess
-       *     are real ntdll syscalls -- exported and implemented even by
-       *     Wine (dlls/ntdll/ntdll.spec, "@ stdcall -syscall
-       *     NtSuspendProcess(long)"; dlls/ntdll/unix/process.c:1900).
-       *     They are absent from nt.h because nobody added them.
-       *
-       * Likewise "kill(pid, SIGSTOP) here is NtTerminateProcess(...)"
-       * describes src/signal/signal.c's current choice, not a
-       * constraint on what it could do.
-       *
-       * What is actually implementable: the clause scopes WSTOPPED to a
-       * child "that has stopped upon receipt of a signal", and on this
-       * platform the only signals that exist are the ones this library
-       * itself delivers.  So the stop is always one ntlibc INITIATED --
-       * which means it needs no kernel notification to learn about it.
-       * kill(pid, SIGSTOP) could call NtSuspendProcess, record the
-       * stopped state in the __child table it already keeps
-       * (src/process/children.c), and waitid(WSTOPPED) could report it
-       * from there; SIGCONT/NtResumeProcess and WCONTINUED likewise.
-       * No waitable transition is required, because the library is the
-       * one doing the stopping.  That is real work nobody has done, not
-       * a missing mechanism.
-       *
-       * N/A, and separately so: a child suspended by something OUTSIDE
-       * this library -- a debugger, or another process calling
-       * NtSuspendProcess on it -- cannot be reported, and that half is
-       * a genuine platform limit for the reason the old fence gave.
-       * There is no waitable stopped/continued transition and no
-       * notification, so ntlibc could not learn of it at all.  It is
-       * also not what the clause asks for: such a stop is not "upon
-       * receipt of a signal".
-       *
-       * Left fenced because implementing it is job control, not a
-       * one-line fix: it touches kill(), the child table, waitid(),
-       * waitpid()'s WUNTRACED, and the wait-status encoding
-       * (WIFSTOPPED/WSTOPSIG). Written out as the assertions it would
-       * need so the test is here when someone does it. */
+/* waitid.html DESCRIPTION -- WSTOPPED ("Status shall be returned for any
+ * child that has stopped upon receipt of a signal") and WCONTINUED
+ * ("Status shall be returned for any continued child process"), plus
+ * wait.html's WUNTRACED/WCONTINUED, which are the same two clauses and
+ * (WSTOPPED == WUNTRACED) even the same bit.
+ *
+ * This was fenced -- first N/A, then UNIMPL -- on the grounds that
+ * "there is no NT mechanism that would implement it".  There is:
+ * NtSuspendProcess and
+ * NtResumeProcess.  The clause scopes WSTOPPED to a child "that has
+ * stopped upon receipt of a signal", and the only signals that exist on
+ * this platform are the ones this library delivers -- so the stop is
+ * always one ntlibc performed itself (kill(pid, SIGSTOP), see
+ * src/signal/signal.c), which is why it needs no kernel notification to
+ * learn of it and NT's missing stop transition costs nothing.
+ *
+ * Still genuinely impossible, and untested here because no test could
+ * pass: a child suspended by something OUTSIDE this library -- a
+ * debugger, another process calling NtSuspendProcess -- cannot be
+ * reported at all.  That is also not what the clause asks for.
+ *
+ * The waitpid() half is asserted alongside the waitid() half on purpose:
+ * they read the same child-table state through the same lookup, and the
+ * two disagreeing about one child would be a bug this test exists to
+ * catch. */
 static void test_waitid_stopped_continued(void)
 {
 	siginfo_t si;
+	int status = 0;
 	pid_t pid = waitid_spawn("--waitid-sleep");
 
 	if (pid < 0) return;
@@ -1854,22 +1823,64 @@ static void test_waitid_stopped_continued(void)
 	CHECK(si.si_status == SIGSTOP);
 	CHECK(si.si_pid == pid);
 
+	/* "...whose status has not yet been reported since they stopped":
+	 * reported once, so the second ask has nothing available.  WNOHANG
+	 * so that "nothing available" is a 0 return rather than a wait. */
+	memset(&si, 0xa5, sizeof si);
+	CHECK(waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOHANG) == 0);
+	CHECK(si.si_pid == 0 && si.si_signo == 0);
+
+	/* The stopped child is still a child, and still not exited: a plain
+	 * poll for its exit says so rather than reporting the stop. */
+	CHECK(waitpid(pid, &status, WNOHANG) == 0);
+
 	CHECK(kill(pid, SIGCONT) == 0);
 	CHECK(waitid(P_PID, (id_t)pid, &si, WCONTINUED) == 0);
 	CHECK(si.si_code == CLD_CONTINUED);
 	CHECK(si.si_pid == pid);
+	CHECK(si.si_status == SIGCONT);
+	memset(&si, 0xa5, sizeof si);
+	CHECK(waitid(P_PID, (id_t)pid, &si, WCONTINUED | WNOHANG) == 0);
+	CHECK(si.si_pid == 0);
+
+	/* The same state through waitpid(), and through a different stop
+	 * signal: signal.h.html gives SIGTSTP the same "stop the process"
+	 * default action as SIGSTOP, and cross-process delivery here can
+	 * only ever take a signal's default action. */
+	CHECK(kill(pid, SIGTSTP) == 0);
+	status = 0;
+	CHECK(waitpid(pid, &status, WUNTRACED) == pid);
+	CHECK(WIFSTOPPED(status) && WSTOPSIG(status) == SIGTSTP);
+	CHECK(!WIFEXITED(status) && !WIFSIGNALED(status) && !WIFCONTINUED(status));
+	/* reported once here too */
+	CHECK(waitpid(pid, &status, WUNTRACED | WNOHANG) == 0);
+
+	CHECK(kill(pid, SIGCONT) == 0);
+	status = 0;
+	CHECK(waitpid(pid, &status, WCONTINUED) == pid);
+	CHECK(WIFCONTINUED(status));
+	CHECK(!WIFEXITED(status) && !WIFSIGNALED(status) && !WIFSTOPPED(status));
+
+	/* A SIGCONT to a child that is not stopped continues nothing and so
+	 * reports nothing (kill.html). */
+	CHECK(kill(pid, SIGCONT) == 0);
+	CHECK(waitpid(pid, &status, WCONTINUED | WNOHANG) == 0);
 
 	CHECK(kill(pid, SIGKILL) == 0);
 	CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == 0);
 	CHECK(si.si_code == CLD_KILLED);
 }
-#endif
 
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--waitid-exit7")) return 7;
 	if (argc > 1 && !strcmp(argv[1], "--waitid-exit5")) return 5;
 	if (argc > 1 && !strcmp(argv[1], "--waitid-exit3")) return 3;
+	/* A child that stays alive long enough to be stopped, continued and
+	 * killed, and that ends on its own if the parent never gets that
+	 * far: a suspended process cannot wake itself, so the bound is on
+	 * the window before the first stop, not after it. */
+	if (argc > 1 && !strcmp(argv[1], "--waitid-sleep")) { sleep(30); return 0; }
 	if (argc > 1 && !strcmp(argv[1], "--waitid-sigterm")) { kill(getpid(), SIGTERM); return 111; }
 	if (argc > 1 && !strcmp(argv[1], "--waitid-sigabrt")) { kill(getpid(), SIGABRT); return 111; }
 	if (argc > 1 && !strcmp(argv[1], "--nofile-child")) {
@@ -1914,6 +1925,7 @@ int main(int argc, char **argv)
 	test_waitid_exited();
 	test_waitid_signalled();
 	test_waitid_wnowait();
+	test_waitid_stopped_continued();
 	test_waitid_errors();
 	test_getopt_long_abbrev();
 	test_getopt_long_arg_forms();

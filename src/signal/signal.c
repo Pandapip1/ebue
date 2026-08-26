@@ -367,11 +367,77 @@ int __raise_internal(int sig)
 
 int raise(int sig) { return __raise_internal(sig) < 0 ? -1 : 0; }
 
+/* The signals whose default action is "stop the process" -- action S in
+ * signal.h.html's Default Action column: SIGSTOP, and the three
+ * terminal-related stops SIGTSTP, SIGTTIN and SIGTTOU.
+ *
+ * All four stop, not just the uncatchable SIGSTOP, and that is not a
+ * guess about the target's disposition.  On a real system the other
+ * three stop only if the target has not caught or ignored them; here
+ * there is no asynchronous delivery to another process at all (this
+ * file's header comment), so a kill() from this library never runs the
+ * target's handler and never consults its disposition.  The default
+ * action is the only action the target can take, and for all four of
+ * them the default action is to stop. */
+static int sig_stops(int sig)
+{
+	return sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU;
+}
+
+/* kill.html's stop and continue signals, for a child of this process.
+ *
+ * NT has no job control and no signal delivery, but it does have the
+ * thing job control is actually made of: NtSuspendProcess and
+ * NtResumeProcess (src/internal/nt.h) suspend and resume every thread
+ * of a target process.  What is missing is only the *notification* --
+ * an NT process object becomes signalled once, on termination, so
+ * nothing tells a waiter that a stop happened.  Nothing has to: the
+ * stop is the one this library just performed, so it is recorded in the
+ * child table on the spot and waitpid(WUNTRACED)/waitid(WSTOPPED) read
+ * it back from there (src/process/wait.c).  A child suspended by
+ * something outside this library -- a debugger, another process calling
+ * NtSuspendProcess -- is still invisible, and always will be; it is
+ * also not what kill()/wait() describe.
+ *
+ * `c` is the child-table entry, or 0 for a process that is not a child
+ * of ours.  A non-child is suspended or resumed just the same -- the
+ * NT call does not care -- but nothing is recorded, because there is no
+ * entry to record it in and no wait() that could ever report it.
+ *
+ * The two guards keep the kernel's suspend count and this library's
+ * one-bit view of it in step.  NT's count is a counter: two suspends
+ * need two resumes.  POSIX's is not -- a second SIGSTOP to a stopped
+ * process changes nothing, and a SIGCONT continues it once and for all
+ * -- so a repeated SIGSTOP must not deepen the suspension into one a
+ * single SIGCONT can no longer undo. */
+static int sig_job_control(struct __child *c, HANDLE h, int sig)
+{
+	NTSTATUS st;
+
+	if (sig == SIGCONT) {
+		/* kill.html: SIGCONT continues a stopped process.  Sent to one
+		 * that is already running it does nothing -- and in particular
+		 * produces no WCONTINUED status, which is reserved for a child
+		 * that actually was continued. */
+		if (c && !c->stopsig) return 0;
+		st = NtResumeProcess(h);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (c) { c->stopsig = 0; c->jobstat = __W_CONTINUED; }
+		return 0;
+	}
+	if (c && c->stopsig) return 0;
+	st = NtSuspendProcess(h);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (c) { c->stopsig = sig; c->jobstat = __W_STOPPED(sig); }
+	return 0;
+}
+
 int kill(pid_t pid, int sig)
 {
 	struct __child *c;
 	HANDLE h;
 	NTSTATUS st;
+	ACCESS_MASK want;
 	OBJECT_ATTRIBUTES oa;
 	CLIENT_ID cid;
 
@@ -393,6 +459,14 @@ int kill(pid_t pid, int sig)
 	 * group, ESRCH" catch-all below. */
 	if (pid == getpid() || pid == 0 || pid == -1) {
 		if (!sig) return 0;
+		/* Including a stop signal, which is *not* routed through
+		 * NtSuspendProcess the way the cross-process arm below is.
+		 * Suspending yourself here is not a stop but a hang: nothing
+		 * delivers asynchronously (this file's header comment), so the
+		 * only code that could ever call kill(pid, SIGCONT) is code in
+		 * this same suspended process.  raise() therefore applies the
+		 * ordinary default action -- terminate -- which is at least an
+		 * outcome the caller's parent can see and report. */
 		return raise(sig);
 	}
 	if (pid < 0) { errno = ESRCH; return -1; }
@@ -408,8 +482,8 @@ int kill(pid_t pid, int sig)
 		 * not have permission to send the signal" is produced here
 		 * by NT's own access check on the target process object --
 		 * ntlibc performs no identity comparison of its own, and
-		 * src/unistd/ids.c's single fixed uid has nothing to do with
-		 * it.  Measured on real Windows 11 Pro 22621 against the
+		 * src/unistd/ids.c's single token-derived uid has nothing to do
+		 * with it.  Measured on real Windows 11 Pro 22621 against the
 		 * System process (pid 4), from an ELEVATED token:
 		 *
 		 *   PROCESS_TERMINATE | QUERY_LIMITED_INFORMATION -> c0000022
@@ -430,10 +504,23 @@ int kill(pid_t pid, int sig)
 		 * The ESRCH arm below is a genuinely different status, not a
 		 * second reading of the same failure: a nonexistent pid
 		 * answered STATUS_INVALID_CID (c000000b) in the same run. */
-		st = NtOpenProcess(&h, PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
+		want = PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION;
+		/* PROCESS_SUSPEND_RESUME is asked for only when the signal
+		 * actually needs it, and not folded into the mask above for
+		 * every kill(): a right that is not needed can still be
+		 * refused, and one more bit in the mask would turn the
+		 * measured EPERM/ESRCH answers documented above into an EPERM
+		 * for targets that today accept a plain signal. */
+		if (sig_stops(sig) || sig == SIGCONT) want |= PROCESS_SUSPEND_RESUME;
+		st = NtOpenProcess(&h, want, &oa, &cid);
 		if (!NT_SUCCESS(st)) { errno = st == STATUS_ACCESS_DENIED ? EPERM : ESRCH; return -1; }
 	}
 	if (!sig) { if (!c) NtClose(h); return 0; }
+	if (sig_stops(sig) || sig == SIGCONT) {
+		int r = sig_job_control(c, h, sig);
+		if (!c) NtClose(h);
+		return r;
+	}
 	st = NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig));
 	if (!c) NtClose(h);
 	if (!NT_SUCCESS(st) && st != STATUS_PROCESS_IS_TERMINATING) return __set_errno_status(st);

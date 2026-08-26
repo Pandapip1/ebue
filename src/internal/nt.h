@@ -1296,6 +1296,19 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE, BOOLEAN, LARGE_INTEGER *);
 NTSTATUS NTAPI NtWaitForMultipleObjects(ULONG, HANDLE *, ULONG, BOOLEAN, LARGE_INTEGER *);
 NTSTATUS NTAPI NtResumeThread(HANDLE, PULONG);
 NTSTATUS NTAPI NtSuspendThread(HANDLE, PULONG);
+
+/* Whole-process suspend and resume, the primitive kill(pid, SIGSTOP)
+ * and kill(pid, SIGCONT) are built on (src/signal/signal.c).  Each
+ * keeps a per-process count and applies it to every thread the target
+ * has, including ones it creates while suspended -- which is what makes
+ * them usable as job control, where walking the target's thread list
+ * with NtSuspendThread would race a child that spawns a thread mid-stop
+ * and leave it running.  Undocumented by Microsoft but exported by
+ * ntdll on every NT since XP, and implemented by Wine as a real syscall
+ * (dlls/ntdll/ntdll.spec, dlls/ntdll/unix/process.c).  Both want
+ * PROCESS_SUSPEND_RESUME on the handle. */
+NTSTATUS NTAPI NtSuspendProcess(HANDLE);
+NTSTATUS NTAPI NtResumeProcess(HANDLE);
 NTSTATUS NTAPI NtGetContextThread(HANDLE, PVOID);
 NTSTATUS NTAPI NtSetContextThread(HANDLE, PVOID);
 NTSTATUS NTAPI NtReadVirtualMemory(HANDLE, PVOID, PVOID, SIZE_T, SIZE_T *);

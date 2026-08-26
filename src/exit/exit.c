@@ -38,6 +38,15 @@ void __funcs_on_exit(void)
 
 _Noreturn void __nt_exit(int code)
 {
+	/* Before the process goes: continue any child kill(pid, SIGSTOP)
+	 * left suspended.  exit.html requires a SIGCONT to a newly-orphaned
+	 * stopped process group, and every child of ours becomes one the
+	 * moment this process ends; src/process/children.c has the full
+	 * reasoning, including why the clause's SIGHUP half is deliberately
+	 * not sent.  Placed in __nt_exit() rather than in exit() so that
+	 * _exit() and _Exit() -- and the exec() stand-in, which ends
+	 * through here -- cannot skip it. */
+	__child_resume_stopped();
 	NtTerminateProcess(NtCurrentProcess(), code);
 	for (;;) NtTerminateProcess(NtCurrentProcess(), code);
 }

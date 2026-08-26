@@ -68,6 +68,8 @@ int __child_add(int pid, HANDLE h)
 				__children[i].h = h;
 				__children[i].done = 0;
 				__children[i].status = 0;
+				__children[i].stopsig = 0;
+				__children[i].jobstat = 0;
 				return 0;
 			}
 		if (child_grow() < 0) return -1;
@@ -88,3 +90,58 @@ void __child_remove(struct __child *c)
 	c->pid = 0;
 	c->h = 0;
 }
+
+static void clear_stops(int resume)
+{
+	int i;
+	for (i = 0; i < __child_cap; i++) {
+		if (!__children[i].pid) continue;
+		/* Best effort: a status here means the child is already gone,
+		 * which is the outcome this is trying to reach anyway.  Resume
+		 * only a child that is actually stopped; jobstat may instead hold
+		 * an already-running child's pending WCONTINUED report. */
+		if (resume && __children[i].stopsig && __children[i].h)
+			NtResumeProcess(__children[i].h);
+		__children[i].stopsig = 0;
+		/* A forked child did not cause either a sibling's stop or its
+		 * continue, so neither inherited report belongs to it.  Clearing
+		 * both fields also makes the helper's name describe the complete
+		 * job-control state rather than only the kernel suspension. */
+		__children[i].jobstat = 0;
+	}
+}
+
+/* exit.html CONSEQUENCES OF PROCESS TERMINATION: "if the exit of the
+ * process causes a process group to become orphaned, and if any member
+ * of the newly-orphaned process group is stopped, then a SIGHUP signal
+ * followed by a SIGCONT signal shall be sent to each process".  Every
+ * process is its own process group of one here (src/unistd/ids.c), so a
+ * child this process stopped is orphaned the instant this process ends,
+ * and the clause applies to all of them.
+ *
+ * The SIGCONT half is done, the SIGHUP half deliberately is not, and the
+ * asymmetry is not a shortcut.  The clause's purpose is that no stopped
+ * process is left with nobody able to continue it -- and here that
+ * outcome is not merely untidy but terminal: the suspend count lives in
+ * the kernel, the only handle to the child dies with this process, and
+ * NtOpenProcess by pid is the last thing an unrelated program would
+ * think to do, so a child left suspended is suspended for good.
+ * Resuming clears that completely.  SIGHUP would not add to it: this
+ * library cannot deliver a catchable signal to another process (see
+ * kill() in src/signal/signal.c), so kill(child, SIGHUP) is
+ * NtTerminateProcess -- it would unconditionally destroy a child that on
+ * a real system may well have caught SIGHUP and carried on, which is a
+ * strictly worse answer than the one the clause is trying to buy.
+ *
+ * The coverage is wider than exit() because everything funnels through
+ * __nt_exit(): _exit() and _Exit(), abort(), the default "terminate"
+ * action __raise_internal() takes for an uncaught signal, and -- since
+ * exception_handler() turns a mapped NT exception into exactly that --
+ * a parent that dies of a SIGSEGV too.  What does not reach it is a
+ * process ended without this library running at all: an exception code
+ * exception_handler() passes on, or someone else's NtTerminateProcess.
+ * That leaves the same residue any POSIX system leaves for SIGKILL, and
+ * it is the reason a stop is worth keeping short. */
+void __child_resume_stopped(void) { clear_stops(1); }
+
+void __child_forget_stops(void) { clear_stops(0); }
