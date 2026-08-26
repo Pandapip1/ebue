@@ -525,6 +525,236 @@ static int test_mlock_munlock(void)
 	return 1;
 }
 
+/* ================================================================
+ * The eight interfaces this header's own banner declines, made
+ * testable.  include/sys/mman.h says, in prose: "Only six of the
+ * header's fourteen interfaces are declared.  mlockall, munlockall,
+ * posix_madvise, posix_mem_offset, posix_typed_mem_get_info,
+ * posix_typed_mem_open, shm_open and shm_unlink are deliberately
+ * absent, on the same ground as <sched.h>'s omissions: declaring one so
+ * it could return an error is worse than not declaring it, because a
+ * probe that finds the symbol concludes the facility is present."
+ *
+ * That reasoning stands and nothing below disputes it.  What was
+ * missing is that the sentence was ONLY a sentence: a name-level
+ * cross-index of the 1190 POSIX.1-2017 interfaces (see
+ * test/posix-pthread.c's banner for the method and the edition) against
+ * every identifier in test/*.c found all eight with no mention anywhere
+ * in the suite.  This repo counts "I chose not to" as UNIMPL, so these
+ * are UNIMPL fences with real bodies -- what should pass the day the
+ * decision is revisited, not prose restating the decision.
+ *
+ * They fail at LINK, not at the preprocessor, because <sys/mman.h>
+ * itself exists and includes cleanly; the declarations are what is
+ * absent.  tools/test-policy.py --pedantic decides that, not this
+ * comment.
+ * ================================================================ */
+
+#if NTLIBC_TEST(UNIMPL, posix_mman_shm_open_unlink)
+static void test_posix_mman_shm_open_unlink(void)
+{
+	int fd, again;
+	void *p;
+
+	/* shm_open.html: "shall establish a connection between a shared
+	 * memory object and a file descriptor ... The name argument
+	 * conforms to the construction rules for a pathname, except that
+	 * the interpretation of <slash> characters other than the leading
+	 * <slash> character is implementation-defined."  A leading slash
+	 * is the portable form. */
+	fd = shm_open("/ntlibc_mman_shm", O_CREAT | O_EXCL | O_RDWR, 0600);
+	CHECK(fd >= 0);
+	if (fd < 0)
+		return;
+
+	/* "When a shared memory object is created, the state of the shared
+	 * memory object, including all data associated with it, persists
+	 * until the shared memory object is unlinked and all other
+	 * references are gone" -- and it starts at zero length, so
+	 * ftruncate() is what gives it one. */
+	CHECK(ftruncate(fd, PG) == 0);
+
+	/* The descriptor's whole purpose: "can be used by other functions
+	 * to refer to that shared memory object", mmap() being the one
+	 * that matters.  This tree's mmap() refuses every file type with
+	 * [ENODEV] today (see this file's banner), so the day shm_open()
+	 * arrives this assertion is also the statement that a shared
+	 * memory object is the one type it must stop refusing. */
+	p = mmap(NULL, PG, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	CHECK(p != MAP_FAILED);
+	if (p != MAP_FAILED) {
+		((char *)p)[0] = 'x';
+		CHECK(((char *)p)[0] == 'x');
+		CHECK(munmap(p, PG) == 0);
+	}
+
+	/* ERRORS: "[EEXIST] O_CREAT and O_EXCL are set and the named
+	 * shared memory object already exists." */
+	errno = 0;
+	again = shm_open("/ntlibc_mman_shm", O_CREAT | O_EXCL | O_RDWR, 0600);
+	CHECK(again == -1);
+	CHECK(errno == EEXIST);
+
+	CHECK(close(fd) == 0);
+
+	/* shm_unlink.html: "shall remove the name of the shared memory
+	 * object named by the string pointed to by name ... reuse of the
+	 * name shall subsequently cause shm_open() to behave as if no
+	 * shared memory object of this name exists (that is, shm_open()
+	 * will fail if O_CREAT is not set)." */
+	CHECK(shm_unlink("/ntlibc_mman_shm") == 0);
+	errno = 0;
+	CHECK(shm_open("/ntlibc_mman_shm", O_RDWR, 0) == -1);
+	CHECK(errno == ENOENT);
+
+	/* ERRORS: "[ENOENT] The named shared memory object does not
+	 * exist." */
+	errno = 0;
+	CHECK(shm_unlink("/ntlibc_mman_shm") == -1);
+	CHECK(errno == ENOENT);
+}
+#endif
+
+#if NTLIBC_TEST(UNIMPL, posix_mman_mlockall_munlockall)
+static void test_posix_mman_mlockall_munlockall(void)
+{
+	/* mlockall.html: "shall cause all of the pages mapped by the
+	 * address space of a process to be memory-resident until unlocked
+	 * or until the process exits or exec's another process image.  The
+	 * flags argument ... is constructed from the bitwise-inclusive OR
+	 * of one or more of the following symbolic constants, defined in
+	 * <sys/mman.h>: MCL_CURRENT ... MCL_FUTURE".  The two constants
+	 * must be distinct bits, or the OR the clause specifies cannot
+	 * express three states. */
+	CHECK(MCL_CURRENT != MCL_FUTURE);
+	CHECK((MCL_CURRENT & MCL_FUTURE) == 0);
+
+	CHECK(mlockall(MCL_CURRENT) == 0);
+
+	/* munlockall.html: "shall unlock all currently mapped pages of the
+	 * address space of the process ... Upon successful return from
+	 * munlockall(), pages mapped by the address space of the process
+	 * shall no longer be locked ... unless another mechanism has also
+	 * locked the pages." */
+	CHECK(munlockall() == 0);
+
+	/* Idempotent by the same clause: unlocking when nothing is locked
+	 * is not one of the two ERRORS ([EAGAIN], [EPERM]) the page
+	 * lists. */
+	CHECK(munlockall() == 0);
+
+	/* mlockall() ERRORS: "[EINVAL] The flags argument is zero, or
+	 * includes unimplemented flags." */
+	errno = 0;
+	CHECK(mlockall(0) == -1);
+	CHECK(errno == EINVAL);
+}
+#endif
+
+#if NTLIBC_TEST(UNIMPL, posix_mman_posix_madvise_advice)
+static void test_posix_mman_posix_madvise_advice(void)
+{
+	void *p = mmap(NULL, PG, PROT_READ | PROT_WRITE,
+		       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+	CHECK(p != MAP_FAILED);
+	if (p == MAP_FAILED)
+		return;
+
+	/* posix_madvise.html: "shall advise the implementation on the
+	 * expected behavior of the application with respect to the data in
+	 * the memory starting at address addr, and continuing for len
+	 * bytes ... The posix_madvise() function shall have no effect on
+	 * the semantics of access to memory in the specified range,
+	 * although it may affect the performance of access."  Every advice
+	 * value is therefore permitted to be a no-op, and the only
+	 * observable requirement is the return value: "shall return zero;
+	 * otherwise, an error number shall be returned to indicate the
+	 * error." -- note it RETURNS the error rather than setting errno. */
+	CHECK(posix_madvise(p, PG, POSIX_MADV_NORMAL) == 0);
+	CHECK(posix_madvise(p, PG, POSIX_MADV_SEQUENTIAL) == 0);
+	CHECK(posix_madvise(p, PG, POSIX_MADV_RANDOM) == 0);
+	CHECK(posix_madvise(p, PG, POSIX_MADV_WILLNEED) == 0);
+	CHECK(posix_madvise(p, PG, POSIX_MADV_DONTNEED) == 0);
+
+	/* "shall have no effect on the semantics of access": the data
+	 * survives the advice. */
+	((char *)p)[0] = 'y';
+	CHECK(posix_madvise(p, PG, POSIX_MADV_WILLNEED) == 0);
+	CHECK(((char *)p)[0] == 'y');
+
+	/* ERRORS: "[EINVAL] The value of advice is invalid." */
+	CHECK(posix_madvise(p, PG, 0x5eed) == EINVAL);
+
+	/* "[ENOMEM] Addresses in the range starting at addr and continuing
+	 * for len bytes are partly or completely outside the range allowed
+	 * for the address space of the calling process." */
+	CHECK(munmap(p, PG) == 0);
+}
+#endif
+
+#if NTLIBC_TEST(UNIMPL, posix_mman_typed_mem_open_offset)
+static void test_posix_mman_typed_mem_open_offset(void)
+{
+	struct posix_typed_mem_info info;
+	int fd, back = -2;
+	void *p;
+	off_t off = (off_t)-1;
+	size_t len = 0;
+
+	/* posix_typed_mem_open.html: "shall establish a connection between
+	 * the typed memory object specified by the string pointed to by
+	 * name and a file descriptor ... The tflag argument [is] exactly
+	 * one of POSIX_TYPED_MEM_ALLOCATE, POSIX_TYPED_MEM_ALLOCATE_CONTIG
+	 * or POSIX_TYPED_MEM_MAP_ALLOCATABLE."  The three are distinct
+	 * values, since "exactly one" must be expressible. */
+	CHECK(POSIX_TYPED_MEM_ALLOCATE != POSIX_TYPED_MEM_ALLOCATE_CONTIG);
+	CHECK(POSIX_TYPED_MEM_ALLOCATE != POSIX_TYPED_MEM_MAP_ALLOCATABLE);
+	CHECK(POSIX_TYPED_MEM_ALLOCATE_CONTIG
+	      != POSIX_TYPED_MEM_MAP_ALLOCATABLE);
+
+	/* Which typed memory pools exist is entirely implementation-
+	 * defined, so the assertion that holds on any conforming system is
+	 * the ERRORS clause for a name that names nothing: "[ENOENT] The
+	 * named typed memory object does not exist." */
+	errno = 0;
+	fd = posix_typed_mem_open("/ntlibc-no-such-typed-memory",
+				  O_RDWR, POSIX_TYPED_MEM_ALLOCATE);
+	CHECK(fd == -1);
+	CHECK(errno == ENOENT);
+
+	/* posix_typed_mem_get_info.html: "shall return, in the
+	 * posix_tmi_length field of the posix_typed_mem_info structure
+	 * pointed to by info, the maximum length ... which may be
+	 * allocated" -- and ERRORS "[EBADF] The fildes argument is not a
+	 * valid open file descriptor." */
+	errno = 0;
+	CHECK(posix_typed_mem_get_info(-1, &info) == -1);
+	CHECK(errno == EBADF);
+
+	/* posix_mem_offset.html: "shall return in the variable pointed to
+	 * by off a value that identifies the offset (or location), within
+	 * a memory object, of the memory block currently mapped at addr.
+	 * The function shall return in the variable pointed to by fildes,
+	 * the descriptor used (via mmap()) to establish the mapping which
+	 * contains addr.  If that descriptor was closed since the mapping
+	 * was established, the returned value of fildes shall be -1."
+	 *
+	 * An anonymous mapping has no memory object, which is the [EACCES]
+	 * case: "the mapping ... was not established via a memory object,
+	 * or ... the calling process has not [the required] permission." */
+	p = mmap(NULL, PG, PROT_READ | PROT_WRITE,
+		 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK(p != MAP_FAILED);
+	if (p != MAP_FAILED) {
+		errno = 0;
+		CHECK(posix_mem_offset(p, PG, &off, &len, &back) == -1);
+		CHECK(errno == EACCES);
+		CHECK(munmap(p, PG) == 0);
+	}
+}
+#endif
+
 /* ---------------------------------------------------------------- */
 
 int main(int argc, char **argv)
