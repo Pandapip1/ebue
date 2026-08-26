@@ -7,7 +7,7 @@
  *
  *   <langinfo.h>   nl_langinfo, nl_langinfo_l      IMPLEMENTED 2026-08-25
  *   <nl_types.h>   catopen, catgets, catclose      IMPLEMENTED 2026-08-25
- *   <monetary.h>   strfmon, strfmon_l              still absent
+ *   <monetary.h>   strfmon, strfmon_l              IMPLEMENTED 2026-08-25
  *   <iconv.h>      iconv_open, iconv, iconv_close  still absent
  *
  * STATUS, and read the rest of this banner in its light.  Everything
@@ -20,7 +20,10 @@
  * typedef'd in bits/alltypes.h; and <nl_types.h> now exists too
  * (include/nl_types.h, src/misc/catgets.c) with catopen(), catgets()
  * and catclose() over a real NLSPATH resolution and a real catalogue
- * reader.  The four <langinfo.h>/<nl_types.h> cases in this file are
+ * reader; and <monetary.h> now exists (include/monetary.h,
+ * src/misc/strfmon.c) with strfmon() and strfmon_l().  <iconv.h> is
+ * the one of the four still missing.  The five
+ * <langinfo.h>/<nl_types.h>/<monetary.h> cases in this file are
  * consequently un-fenced and run, and one new case --
  * test_catgets_reads_a_catalogue() -- was added, because the original
  * one can only watch catopen() fail on a machine with no catalogues
@@ -423,6 +426,7 @@
 #include <string.h>
 #include <langinfo.h>
 #include <nl_types.h>
+#include <monetary.h>
 #include "test-policy.h"
 
 static int fails;
@@ -1256,84 +1260,84 @@ static void test_catgets_reads_a_catalogue(void)
  * <monetary.h> -- basedefs/monetary.h.html, functions/strfmon.html
  * =================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_strfmon_posix_locale) /* UNIMPL: <monetary.h>, strfmon() and strfmon_l()
-	do not exist.
+/* IMPLEMENTED (2026-08-25).  <monetary.h>, strfmon() and strfmon_l()
+   exist; see include/monetary.h and src/misc/strfmon.c.
 
-	monetary.h.html DESCRIPTION, verbatim: "The <monetary.h> header
-	shall define the locale_t type as described in <locale.h>.",
-	"The <monetary.h> header shall define the size_t type as
-	described in <stddef.h>.", "The <monetary.h> header shall
-	define the ssize_t type as described in <sys/types.h>." -- and
-	the two prototypes:
+   monetary.h.html DESCRIPTION, verbatim: "The <monetary.h> header
+   shall define the locale_t type as described in <locale.h>.",
+   "The <monetary.h> header shall define the size_t type as
+   described in <stddef.h>.", "The <monetary.h> header shall
+   define the ssize_t type as described in <sys/types.h>." -- and
+   the two prototypes:
 
-	    ssize_t  strfmon(char *restrict, size_t, const char *restrict, ...);
-	    ssize_t  strfmon_l(char *restrict, size_t, locale_t,
-	                 const char *restrict, ...);
+       ssize_t  strfmon(char *restrict, size_t, const char *restrict, ...);
+       ssize_t  strfmon_l(char *restrict, size_t, locale_t,
+                    const char *restrict, ...);
 
-	strfmon.html DESCRIPTION: "The strfmon() function shall place
-	characters into the array pointed to by s as controlled by the
-	string pointed to by format. No more than maxsize bytes are
-	placed into the array."  A conversion specification is "A '%'
-	character", "Optional flags", "Optional field width",
-	"Optional left precision", "Optional right precision", "A
-	required conversion specifier character that determines the
-	conversion to be performed".  And: "The strfmon_l() function
-	shall be equivalent to the strfmon() function, except that the
-	locale data used is from the locale represented by locale."
+   strfmon.html DESCRIPTION: "The strfmon() function shall place
+   characters into the array pointed to by s as controlled by the
+   string pointed to by format. No more than maxsize bytes are
+   placed into the array."  A conversion specification is "A '%'
+   character", "Optional flags", "Optional field width", "Optional
+   left precision", "Optional right precision", "A required
+   conversion specifier character that determines the conversion to
+   be performed".  And: "The strfmon_l() function shall be
+   equivalent to the strfmon() function, except that the locale data
+   used is from the locale represented by locale."
 
-	RETURN VALUE: "If the total number of resulting bytes including
-	the terminating null byte is not more than maxsize, these
-	functions shall return the number of bytes placed into the
-	array pointed to by s, not including the terminating NUL
-	character. Otherwise, -1 shall be returned, the contents of the
-	array are unspecified, and errno shall be set to indicate the
-	error."  ERRORS, *shall fail*: "[E2BIG] Conversion stopped due
-	to lack of space in the buffer."
+   RETURN VALUE: "If the total number of resulting bytes including
+   the terminating null byte is not more than maxsize, these
+   functions shall return the number of bytes placed into the
+   array pointed to by s, not including the terminating NUL
+   character. Otherwise, -1 shall be returned, the contents of the
+   array are unspecified, and errno shall be set to indicate the
+   error."  ERRORS, *shall fail*: "[E2BIG] Conversion stopped due
+   to lack of space in the buffer."
 
-	WHY UNIMPL AND NOT N/A.  The low-value argument is real and is
-	recorded rather than hidden: "The LC_MONETARY category of the
-	current locale affects the behavior of this function including
-	the monetary radix character ..., the grouping separator, the
-	currency symbols, and formats" -- and this library's entire
-	LC_MONETARY block is the "not available" value, which
-	test_lc_numeric_and_lc_monetary_data_without_an_accessor
-	asserts live.  So %n and %i here would differ from each other,
-	and from a plain "%.2f", by very little.
+   WHY THE ASSERTIONS ARE ABOUT MECHANICS AND NOT ABOUT MONEY.  "The
+   LC_MONETARY category of the current locale affects the behavior of
+   this function including the monetary radix character ..., the
+   grouping separator, the currency symbols, and formats" -- and this
+   library's entire LC_MONETARY block is the "not available" value,
+   which test_lc_numeric_and_lc_monetary_data_without_an_accessor
+   asserts live.  So %n and %i here differ from each other, and from a
+   plain "%.2f", by very little.
 
-	That is an argument about *priority*.  It is not an argument
-	about applicability, and the page is the reason: everything it
-	specifies other than the field values is locale-independent
-	mechanics.  The "=f" numeric fill character, the '^'
-	grouping-suppression flag, the '+' and '(' negative-style
-	flags, '!' suppressing the currency symbol, '-' left
-	justification ("This flag shall be ignored unless a field
-	width ... is specified"), the field width, the left precision
-	"#n" ("This option causes an amount to be formatted as if it
-	has the number of digits specified by n"), the right precision
-	".p" ("If the value of the right precision p is 0, no radix
-	character appears. ... The amount being formatted is rounded to
-	the specified number of digits prior to formatting"), the "%%"
-	rule ("Convert to a '%'; no argument is converted. The entire
-	conversion specification shall be %%.") and the [E2BIG]
-	truncation rule all have to be written, and all are testable in
-	the C locale.  Nothing about NT and nothing about being
-	C-locale-only prevents any of it.
+   Everything the page specifies *other* than the field values is
+   locale-independent mechanics, and all of it is testable in the C
+   locale: the "=f" numeric fill character, the '^'
+   grouping-suppression flag, the '+' and '(' negative-style flags,
+   '!' suppressing the currency symbol, '-' left justification ("This
+   flag shall be ignored unless a field width ... is specified"), the
+   field width, the left precision "#n" ("This option causes an amount
+   to be formatted as if it has the number of digits specified by n"),
+   the right precision ".p" ("If the value of the right precision p is
+   0, no radix character appears. ... The amount being formatted is
+   rounded to the specified number of digits prior to formatting"),
+   the "%%" rule ("Convert to a '%'; no argument is converted. The
+   entire conversion specification shall be %%.") and the [E2BIG]
+   truncation rule.  Those are what is asserted below, because those
+   are what can actually be wrong here.  Where the page leaves the
+   exact spelling open -- the '(' style interacts with the alignment
+   padding described under Left Precision, which this test does not
+   request -- the assertion is structural rather than a literal
+   comparison.
 
-	The assertions are therefore written against the mechanics
-	rather than against currency symbols: they are what would
-	actually have to pass here.  Where the page leaves the exact
-	spelling open -- the '(' style interacts with the alignment
-	padding described under Left Precision, which this test does
-	not request -- the assertion is structural rather than a
-	literal comparison.
-
-	The honest half, as with <nl_types.h>: <monetary.h> unblocks
-	nothing in the libc-test corpus.  Cheap, base, not urgent.
-
-	Observed today: fails to compile -- 'monetary.h' not found. */
+   WHERE THIS TEST IS DELIBERATELY SILENT.  src/misc/strfmon.c has to
+   choose a fallback everywhere the POSIX locale says "not available"
+   -- the radix character, the default right precision, the negative
+   sign, symbol placement -- and those choices are ntlibc's, not the
+   standard's.  This file asserts a value for exactly one of them (the
+   default right precision, implicitly, via "%n" of 1234.567 still
+   containing "1234"), and states the rest as the source's business.
+   It also does NOT assert the alignment clause "any characters
+   appearing before or after the number ... are padded as necessary
+   with <space> characters to make their positive and negative formats
+   an equal length", which src/misc/strfmon.c records as an
+   implemented-narrowly shortfall.  That is a known gap, named in the
+   source, not something this test overlooked. */
 static void test_strfmon_posix_locale(void)
 {
-	/* would be: #include <monetary.h> at the top of this file */
 	char buf[64];
 	ssize_t n;
 
@@ -1392,7 +1396,6 @@ static void test_strfmon_posix_locale(void)
 		}
 	}
 }
-#endif
 
 /* ===================================================================
  * <iconv.h> -- basedefs/iconv.h.html, functions/iconv_open.html,
@@ -1599,9 +1602,7 @@ int main(void)
 	test_nl_langinfo_l();
 	test_nl_types_h_catalogue_access();
 	test_catgets_reads_a_catalogue();
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_strfmon_posix_locale) /* UNIMPL: see the fence over test_strfmon_posix_locale(). */
 	test_strfmon_posix_locale();
-#endif
 #if NTLIBC_TEST(UNIMPL, posix_msgcat_iconv_open_convert_close) /* UNIMPL: see the fence over test_iconv_open_convert_close(). */
 	test_iconv_open_convert_close();
 #endif
