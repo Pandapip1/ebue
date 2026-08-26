@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=406 BUG=179 UNIMPL=977 NA=44 FLAKY=4
+# COUNTS PASS=407 BUG=180 UNIMPL=975 NA=44 FLAKY=4
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -1560,8 +1560,8 @@ sigwaitinfo/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class 
 sigwaitinfo/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 strchr/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strcpy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-strftime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by langinfo.h
-strftime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by langinfo.h
+strftime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+strftime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	builds and runs as of include/langinfo.h; %EC comes back as the literal "%EC" (3 bytes, wanted 2). src/time/strftime.c implements no E or O modifier at all, and strftime.html requires a fallback rather than a pass-through: "If the alternative format or specification does not exist for the current locale (see ERA in XBD LC_TIME), the behavior shall be as if the unmodified conversion specification were used." The POSIX locale defines no era, so %EC must behave as %C. Same gap as libc-test's strftime row (flags and field width emitted literally)
 strftime/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strlen/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strncpy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
