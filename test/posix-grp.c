@@ -7,15 +7,17 @@
  * test/posix-sysmisc.c bundling several small headers together. Every
  * assertion cites the clause of
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/<name>.html
- * or .../basedefs/<header>.html it checks. Same three-fence convention
- * as test/posix-sysmisc.c/test/posix-dl.c for the one spot that is a
- * real, permanent gap rather than something written to pass:
+ * or .../basedefs/<header>.html it checks. The same three-fence
+ * convention as test/posix-sysmisc.c/test/posix-dl.c is available for a
+ * real, permanent gap:
  *
  *   #if 0 / * N/A: <requirement + citation + why NT can't> * /
  *
- * (readv()/writev()'s cross-thread atomicity requirement -- see
- * src/misc/uio.c's header comment for the full reasoning; this file's
- * copy is the short version next to the fenced-off assertion).
+ * but this file no longer carries one. Its single fence held
+ * readv()/writev()'s cross-thread atomicity requirement (XSH 2.9.7) and
+ * came out when src/misc/uio.c stopped transferring a vector one area
+ * at a time; the long comment left where it stood records both what the
+ * clause needed and why nothing in this file can assert it directly.
  *
  * <grp.h> mirrors test/pwd.c's own structure and its have_user() gate:
  * src/misc/grp.c's one group is only knowable when %USERNAME%/%USER%
@@ -1063,54 +1065,106 @@ static void test_writev_all_zero(void)
 	unlink("t-uio-zero.tmp");
 }
 
-/* UNIMPL: XSH 2.9.7 "Thread Interactions with Regular File Operations"
- * (functions/V2_chap02.html#tag_15_09_07).  Checked against the live
- * spec page rather than paraphrased, and note the citation was also
- * wrong -- this is XSH chapter 2, not XBD.  Verbatim: "All of the
- * following functions shall be atomic with respect to each other in
+/* XSH 2.9.7 "Thread Interactions with Regular File Operations"
+ * (functions/V2_chap02.html#tag_15_09_07) -- checked against the live
+ * spec page, and note the citation, which an earlier version of this
+ * comment got wrong: this is XSH chapter 2, not XBD.  Verbatim: "All of
+ * the following functions shall be atomic with respect to each other in
  * the effects specified in POSIX.1-2017 when they operate on regular
  * files or symbolic links", followed by a table of 39 functions that
  * includes read(), write(), readv() and writev(), and then: "If two
  * threads each call one of these functions, each call shall either see
  * all of the specified effects of the other call, or none of them."
  *
- * So the clause names readv()/writev() explicitly and applies to this
- * library.  ntlibc does not satisfy it: src/misc/uio.c implements both
- * as a loop over its own read()/write(), one iovec at a time, so a
- * concurrent write() can land in the middle of a readv()'s buffers.
+ * This was fenced UNIMPL for as long as src/misc/uio.c looped over
+ * read()/write() one iovec at a time, since a loop of separate
+ * transfers can be caught halfway through.  It no longer loops: the
+ * vector is gathered into a single buffer and moved by a single
+ * read()/write(), so readv() and writev() now have exactly the
+ * atomicity read() and write() have.  That is the whole of what the
+ * clause asks, because what it requires is that the four be atomic
+ * *with respect to each other*, not that any of them be atomic in some
+ * absolute sense.  The fence went with the loop.
  *
- * This was fenced N/A on the reason "there is no genuinely atomic
- * alternative available", which is false, and is contradicted by the
- * very file the fence points at.  src/misc/uio.c's own banner says an
- * alternative existed and was REJECTED as a trade-off: NT's
- * NtReadFileScatter()/NtWriteFileGather() are page-granular, and
- * "restricting readv()/writev() to page-aligned, page-sized buffers
- * would satisfy the atomicity clause but reject ordinary vectors",
- * which the banner judges less useful than a loop that works for the
- * vectors real callers pass.  A rejected alternative is not an absent
- * one, and the banner calls it what it is -- "a deliberate, documented
- * divergence from POSIX".  A divergence we chose is UNIMPL.
+ * NO ASSERTION REPLACES THE FENCE, and the reason is about
+ * observability rather than about conformance.  Single-threaded, on a
+ * regular file, a gathered transfer and a loop of per-area transfers
+ * are indistinguishable through POSIX: same bytes, same order, same
+ * return value, same errno, same st_size -- including under
+ * RLIMIT_FSIZE, where write() clamps to the room left and both shapes
+ * report the same short count.  The difference exists only to a flow of
+ * control running *during* the call, and ntlibc exposes no way to make
+ * one: there is no <pthread.h> in the tree.
  *
- * Since 2c40c74 the premise is weaker still.  That commit added real
- * mandatory NT byte-range locks (src/file/flock.c, NtLockFile/
- * NtUnlockFile), so atomicity is also obtainable by SERIALISING rather
- * than by finding a single atomic primitive -- which sidesteps the
- * page-granularity objection entirely, since a lock does not care what
- * the buffers look like.  Whether that cost is worth paying on every
- * readv()/writev() is a real question; it is not the same question as
- * "the platform cannot do this."
+ * That is not the same as the clause being inapplicable here, which is
+ * why this is not recorded N/A.  fork()/__spawn() do give a second
+ * process sharing one NT file object through an inherited handle
+ * (src/process/spawn.c marks non-cloexec handles OBJ_INHERIT), which is
+ * this platform's shape of a shared open file description and is
+ * exactly the clause's precondition.  What cannot be built is a *test*:
+ * one racing a spawned child would prove non-atomicity if it ever
+ * caught a torn transfer, and prove nothing whatever when it did not,
+ * and a test whose passing carries no information is a flake with a
+ * verdict attached.  times()'s tms_utime magnitude is left unasserted
+ * above for the same reason.
  *
- * Left fenced rather than asserted, for a reason that is about testing
- * and not about conformance: the clause is stated over "two threads",
- * and ntlibc exposes no thread-creation interface at all (there is no
- * <pthread.h> in the tree), so a two-thread race cannot be written in
- * this library's own terms.  That makes it unasserted, not
- * inapplicable. */
-#if NTLIBC_TEST(NA, posix_grp_readv_writev_thread_atomicity) /* N/A: XSH 2.9.7 readv()/writev() atomicity -- a documented
-       * design choice in src/misc/uio.c, not a platform limit; see
-       * above. No assertion can be made until this project has a thread
-       * creation interface; an empty compilable fence is not a BUG test. */
-#endif
+ * What is asserted instead is the half that is deterministic, and it is
+ * the half a successor is most likely to break: the gather itself. */
+
+/* A vector too large for src/misc/uio.c's stack gather buffer -- the
+ * path that file's one allocation lives on -- must still round-trip
+ * whole and in order, and must do so across read boundaries that do not
+ * line up with the write boundaries, so that a gather or a scatter run
+ * out of order shows up as a mismatch instead of cancelling itself out.
+ * readv.html/writev.html DESCRIPTION: "always fill/write a complete
+ * area before proceeding to the next." */
+static void test_readv_writev_gathered(void)
+{
+	enum { AREA = 3072, WHOLE = 3 * AREA };
+	/* Static rather than automatic: the point of the library holding
+	 * the whole vector for the caller is that the caller need not, and
+	 * a test that puts 12 KiB on the stack to check that would be
+	 * arguing against itself. */
+	static char w[3][AREA];
+	static char r[WHOLE + 1];
+	struct iovec iov[4];
+	int fd;
+	size_t i;
+
+	for (i = 0; i < AREA; i++) {
+		w[0][i] = (char)('a' + i % 26);
+		w[1][i] = (char)('A' + i % 26);
+		w[2][i] = (char)('0' + i % 10);
+	}
+
+	fd = open("t-uio-gather.tmp", O_RDWR | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+
+	/* The zero-length area in the middle is not decoration: it is the
+	 * one whose iov_base a gather must never dereference. */
+	iov[0].iov_base = w[0]; iov[0].iov_len = AREA;
+	iov[1].iov_base = NULL; iov[1].iov_len = 0;
+	iov[2].iov_base = w[1]; iov[2].iov_len = AREA;
+	iov[3].iov_base = w[2]; iov[3].iov_len = AREA;
+	CHECK(writev(fd, iov, 4) == (ssize_t)WHOLE);
+
+	CHECK(lseek(fd, 0, SEEK_SET) == 0);
+	memset(r, '#', sizeof r);
+	iov[0].iov_base = r;        iov[0].iov_len = 1;
+	iov[1].iov_base = r + 1;    iov[1].iov_len = 5000;
+	iov[2].iov_base = NULL;     iov[2].iov_len = 0;
+	iov[3].iov_base = r + 5001; iov[3].iov_len = WHOLE - 5001;
+	CHECK(readv(fd, iov, 4) == (ssize_t)WHOLE);
+
+	CHECK(memcmp(r, w[0], AREA) == 0);
+	CHECK(memcmp(r + AREA, w[1], AREA) == 0);
+	CHECK(memcmp(r + 2 * AREA, w[2], AREA) == 0);
+	CHECK(r[WHOLE] == '#');   /* nothing landed past the data */
+
+	close(fd);
+	unlink("t-uio-gather.tmp");
+}
 
 /* ================================================================== */
 
@@ -1168,6 +1222,7 @@ int main(int argc, char **argv)
 	test_iovcnt_range();
 	test_iov_len_overflow();
 	test_writev_all_zero();
+	test_readv_writev_gathered();
 
 	if (fails) { printf("posix-grp: failures: %d\n", fails); return 1; }
 	if (unverified) {

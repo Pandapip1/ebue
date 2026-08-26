@@ -1,44 +1,64 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * readv()/writev(): implemented as a loop over this library's own
- * read()/write() (src/unistd/read.c, src/unistd/write.c), one iovec at
- * a time.
+ * readv()/writev(): one transfer, not one per area.
  *
- * That is a deliberate, documented divergence from POSIX, not an
- * oversight. XBD 2.9.7 "Thread Interactions with Regular File
- * Operations" requires read(), write(), readv(), and writev() (among
- * others) to be atomic with respect to each other on a regular file:
- * "If two threads each call one of these functions, each call shall
- * either see all of the specified effects of the other call, or none
- * of them." A loop of separate NtReadFile()/NtWriteFile() calls cannot
- * give that guarantee -- another thread's write() can land in the
- * middle of this readv()'s buffers, or another thread's read()/write()
- * can observe this writev() only partially applied.
+ * XSH 2.9.7 "Thread Interactions with Regular File Operations"
+ * (functions/V2_chap02.html#tag_15_09_07) lists read(), write(),
+ * readv() and writev() among 39 functions that "shall be atomic with
+ * respect to each other in the effects specified in POSIX.1-2017 when
+ * they operate on regular files or symbolic links", and adds: "If two
+ * threads each call one of these functions, each call shall either see
+ * all of the specified effects of the other call, or none of them."
  *
- * Because that divergence is a CHOICE, test/posix-grp.c records it as
- * UNIMPL rather than N/A: nothing about NT makes the clause
- * meaningless, and two routes to satisfying it exist (see below, and
- * the byte-range locks src/file/flock.c added in 2c40c74, which give
- * atomicity by serialising and so do not care about buffer alignment
- * at all).  Both were judged not worth their cost; neither is absent.
+ * The requirement is *relative*: whatever atomicity read() and write()
+ * have, readv() and writev() must have the same.  So the whole clause
+ * is satisfied by making a readv() literally be a read() and a writev()
+ * literally be a write() -- the vector is gathered into one buffer,
+ * handed to a single src/unistd/write.c call, and therefore reaches the
+ * file as a single NtWriteFile; the read side scatters back out of one
+ * NtReadFile.  Every file ntlibc opens is FILE_SYNCHRONOUS_IO_NONALERT
+ * (src/fcntl/open.c), and the NT I/O manager holds the file object's
+ * own lock across a synchronous transfer, reading and advancing
+ * CurrentByteOffset under it.  That lock lives on the FILE_OBJECT, not
+ * on the handle, so it also covers the case that matters here: a second
+ * process holding an inherited handle (spawn.c marks non-cloexec
+ * handles OBJ_INHERIT, so parent and child share one file object, which
+ * is NT's shape of POSIX's shared open file description).
  *
- * The alternative NT actually offers, NtReadFileScatter()/
- * NtWriteFileGather(), was considered and rejected: both are
- * page-granular (every element must be page-aligned and a whole
- * number of pages -- see MAP_FIXED-adjacent constraints documented for
- * these calls), which an arbitrary struct iovec from a real caller
- * essentially never is. Restricting readv()/writev() to page-aligned,
- * page-sized buffers would satisfy the atomicity clause but reject
- * ordinary vectors, which the callers this exists for (any C program
- * built expecting POSIX readv/writev) do not send. A loop that works
- * for the vectors real callers actually pass, with the atomicity gap
- * documented, was judged more useful than a "conformant" version that
- * only ever accepts single-page-aligned buffers.
+ * The previous implementation looped over read()/write() one iovec at a
+ * time and documented the resulting gap as a deliberate divergence,
+ * on the grounds that the only atomic primitive NT offers is
+ * NtReadFileScatter()/NtWriteFileGather(), which is page-granular --
+ * every element must be page-aligned and a whole number of pages, which
+ * an arbitrary struct iovec never is.  That is true of *scatter/gather*
+ * and irrelevant to atomicity: NT has no need to see the vector at all
+ * if the vector has already been flattened.  Copying is the price, and
+ * it is one memcpy of data that is about to be copied into the page
+ * cache anyway.
  *
- * What *is* preserved: "always fill/write a complete area before
- * proceeding to the next" (readv.html/writev.html DESCRIPTION) --
- * this loop does exactly that, in order, one whole iovec at a time.
+ * Rejected on the way here: taking a byte-range lock (NtLockFile, via
+ * src/file/flock.c) around the existing loop.  It serialises only
+ * against other lock-takers, and plain read()/write() take no locks, so
+ * it would not exclude the very calls 2.9.7 names.
+ *
+ * WHAT THE COPY COSTS, AND WHERE IT IS NOT PAID.  A vector with exactly
+ * one non-empty area is passed straight through -- no gather buffer, no
+ * copy -- which is the overwhelmingly common shape and is already a
+ * single transfer.  Beyond that, a small vector is gathered on the
+ * stack so an ordinary writev() never reaches the allocator.  Only a
+ * vector too large for that buffer allocates, and if the allocation
+ * fails the loop is still there as a fallback: refusing the call with
+ * an errno neither readv.html nor writev.html lists would be a worse
+ * answer than a transfer that is correct in everything except the
+ * atomicity clause.  A caller that cannot spare the bytes it is already
+ * holding is not in a position to be helped.
+ *
+ * What is preserved either way: "always fill/write a complete area
+ * before proceeding to the next" (readv.html/writev.html DESCRIPTION),
+ * since the gather and the scatter both run iov[0], iov[1], ... in
+ * order; and a partial transfer still reports the bytes that really
+ * moved, leaving the areas past them untouched.
  *
  * Two checks are made honestly before any I/O happens:
  *
@@ -57,9 +77,16 @@
 #include <sys/uio.h>
 #include <limits.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 
-static ssize_t check_iov(const struct iovec *iov, int iovcnt)
+/* Big enough that a header-plus-payload writev -- the shape this call
+ * exists for -- is gathered without touching malloc(), small enough to
+ * sit on the stack of a 32-bit process without thought. */
+#define GATHER_STACK 2048
+
+static int check_iov(const struct iovec *iov, int iovcnt, size_t *total)
 {
 	size_t sum = 0;
 	int i;
@@ -71,23 +98,37 @@ static ssize_t check_iov(const struct iovec *iov, int iovcnt)
 		if (iov[i].iov_len > (size_t)SSIZE_MAX - sum) { errno = EINVAL; return -1; }
 		sum += iov[i].iov_len;
 	}
+	*total = sum;
 	return 0;
 }
 
-ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
+/* The index of the only area with a non-zero length, or -1 if several
+ * carry data.  Called only when the total is non-zero, so a return of
+ * -1 really does mean "more than one" and never "none". */
+static int sole_area(const struct iovec *iov, int iovcnt)
+{
+	int i, found = -1;
+
+	for (i = 0; i < iovcnt; i++) {
+		if (!iov[i].iov_len) continue;
+		if (found >= 0) return -1;
+		found = i;
+	}
+	return found;
+}
+
+/* The pre-2.9.7 loop, kept for the one path that cannot gather: a
+ * vector too large for the stack buffer whose allocation failed.  It
+ * is correct in every respect except atomicity. */
+static ssize_t readv_looped(int fd, const struct iovec *iov, int iovcnt)
 {
 	ssize_t total = 0;
 	int i;
-
-	if (check_iov(iov, iovcnt) < 0) return -1;
 
 	for (i = 0; i < iovcnt; i++) {
 		ssize_t r;
 		if (!iov[i].iov_len) continue;
 		r = read(fd, iov[i].iov_base, iov[i].iov_len);
-		/* read.html's own partial-transfer contract: on error after
-		 * some data has already moved, report the bytes that really
-		 * did move rather than losing that fact by returning -1. */
 		if (r < 0) return total ? total : -1;
 		total += r;
 		if ((size_t)r < iov[i].iov_len) break;   /* short read == EOF */
@@ -95,12 +136,10 @@ ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
 	return total;
 }
 
-ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
+static ssize_t writev_looped(int fd, const struct iovec *iov, int iovcnt)
 {
 	ssize_t total = 0;
 	int i;
-
-	if (check_iov(iov, iovcnt) < 0) return -1;
 
 	for (i = 0; i < iovcnt; i++) {
 		ssize_t w;
@@ -111,4 +150,74 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
 		if ((size_t)w < iov[i].iov_len) break;   /* short write */
 	}
 	return total;
+}
+
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
+{
+	char stack[GATHER_STACK];
+	char *buf;
+	size_t total, off = 0, left;
+	ssize_t r;
+	int i;
+
+	if (check_iov(iov, iovcnt, &total) < 0) return -1;
+	/* Every area is zero-length: nothing to read into, and read() is
+	 * not called at all -- the same answer the loop gave, and the one
+	 * writev()'s "return 0 and have no other effect" clause requires of
+	 * its side. */
+	if (!total) return 0;
+	i = sole_area(iov, iovcnt);
+	if (i >= 0) return read(fd, iov[i].iov_base, iov[i].iov_len);
+
+	buf = total <= sizeof stack ? stack : malloc(total);
+	if (!buf) return readv_looped(fd, iov, iovcnt);
+
+	r = read(fd, buf, total);
+	/* Scatter only what arrived, in order, so a short transfer fills
+	 * the early areas completely and leaves the later ones untouched.
+	 * `left` is bounded by the sum of the lengths, so this cannot walk
+	 * past iovcnt; the bound is written out anyway rather than argued. */
+	for (left = r > 0 ? (size_t)r : 0, i = 0; left && i < iovcnt; i++) {
+		size_t n = iov[i].iov_len < left ? iov[i].iov_len : left;
+		if (!n) continue;
+		memcpy(iov[i].iov_base, buf + off, n);
+		off += n;
+		left -= n;
+	}
+	/* free() is entitled to leave errno anywhere it likes; the caller
+	 * is owed read()'s. */
+	if (buf != stack) { int e = errno; free(buf); errno = e; }
+	return r;
+}
+
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
+{
+	char stack[GATHER_STACK];
+	char *buf;
+	size_t total, off = 0;
+	ssize_t w;
+	int i;
+
+	if (check_iov(iov, iovcnt, &total) < 0) return -1;
+	/* writev.html DESCRIPTION: "If fildes refers to a regular file and
+	 * all of the iov_len members ... are 0, writev() shall return 0 and
+	 * have no other effect." */
+	if (!total) return 0;
+	i = sole_area(iov, iovcnt);
+	if (i >= 0) return write(fd, iov[i].iov_base, iov[i].iov_len);
+
+	buf = total <= sizeof stack ? stack : malloc(total);
+	if (!buf) return writev_looped(fd, iov, iovcnt);
+
+	/* A zero-length area is skipped rather than handed to memcpy(): its
+	 * iov_base is allowed to be anything at all, NULL included, and
+	 * memcpy() from NULL is undefined even for a length of 0. */
+	for (i = 0; i < iovcnt; i++) {
+		if (!iov[i].iov_len) continue;
+		memcpy(buf + off, iov[i].iov_base, iov[i].iov_len);
+		off += iov[i].iov_len;
+	}
+	w = write(fd, buf, total);
+	if (buf != stack) { int e = errno; free(buf); errno = e; }
+	return w;
 }

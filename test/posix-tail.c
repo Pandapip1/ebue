@@ -148,14 +148,18 @@ static void test_readv(void)
 	 * completely, found nothing left, and stopped */
 	CHECK(b[0] == '#' && c[0] == '#');
 
-	/* Note on what is NOT assertable here: src/misc/uio.c stops the
-	 * loop when one area comes back short.  For a regular file that
-	 * `break` is unobservable -- the next read() at end-of-file
-	 * returns 0 and the total is the same either way -- and for a pipe
-	 * ntlibc's read() answers EAGAIN on an empty pipe, which the loop
-	 * also treats as "stop and report what moved".  Removing the
-	 * `break` outright was tried and changes no result this file can
-	 * see, so no assertion pretends to cover it.
+	/* Note on what is NOT assertable here: src/misc/uio.c now moves the
+	 * whole vector in one read() and scatters what came back, so the
+	 * short transfer above is a short read() rather than a loop that
+	 * stopped early (XSH 2.9.7 -- see test/posix-grp.c's comment where
+	 * that fence used to be).  The old loop survives only for a vector
+	 * whose gather buffer could not be allocated, and its `break` when
+	 * one area comes back short is unobservable for the same reasons it
+	 * always was: for a regular file the next read() at end-of-file
+	 * returns 0 and the total is identical either way, and for a pipe
+	 * ntlibc's read() answers EAGAIN on empty, which the loop also
+	 * treats as "stop and report what moved".  No assertion pretends to
+	 * cover it.
 	 *
 	 * zero-length areas are skipped, not treated as end-of-input */
 	CHECK(lseek(fd, 0, SEEK_SET) == 0);
