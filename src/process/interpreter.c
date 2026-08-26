@@ -54,7 +54,7 @@
  *   2. Failing that, "sh" through __find_program(), i.e. a PATH search
  *      with the .exe suffix appended (src/process/find_program.c).
  *      Needed because "beside the caller" is false in every layout that
- *      is not `make install` -- in this tree obj/test/*.exe and
+ *      is not `make install` -- in this tree the obj/test programs and
  *      obj/sh/sh.exe are siblings of nothing -- and because a Windows
  *      deployment that puts its tools on PATH rather than in one
  *      directory is ordinary, not exotic.
