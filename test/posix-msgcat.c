@@ -8,7 +8,7 @@
  *   <langinfo.h>   nl_langinfo, nl_langinfo_l      IMPLEMENTED 2026-08-25
  *   <nl_types.h>   catopen, catgets, catclose      IMPLEMENTED 2026-08-25
  *   <monetary.h>   strfmon, strfmon_l              IMPLEMENTED 2026-08-25
- *   <iconv.h>      iconv_open, iconv, iconv_close  still absent
+ *   <iconv.h>      iconv_open, iconv, iconv_close  IMPLEMENTED 2026-08-25
  *
  * STATUS, and read the rest of this banner in its light.  Everything
  * below the next heading was written and measured on 2026-08-25 against
@@ -21,9 +21,11 @@
  * (include/nl_types.h, src/misc/catgets.c) with catopen(), catgets()
  * and catclose() over a real NLSPATH resolution and a real catalogue
  * reader; and <monetary.h> now exists (include/monetary.h,
- * src/misc/strfmon.c) with strfmon() and strfmon_l().  <iconv.h> is
- * the one of the four still missing.  The five
- * <langinfo.h>/<nl_types.h>/<monetary.h> cases in this file are
+ * src/misc/strfmon.c) with strfmon() and strfmon_l(); and <iconv.h>
+ * now exists (include/iconv.h, src/misc/iconv.c) with iconv_open(),
+ * iconv() and iconv_close() over UTF-8 and UTF-16LE.  All four of the
+ * headers this file was written about are now present.  The six cases
+ * covering them in this file are
  * consequently un-fenced and run, and one new case --
  * test_catgets_reads_a_catalogue() -- was added, because the original
  * one can only watch catopen() fail on a machine with no catalogues
@@ -427,6 +429,7 @@
 #include <langinfo.h>
 #include <nl_types.h>
 #include <monetary.h>
+#include <iconv.h>
 #include "test-policy.h"
 
 static int fails;
@@ -1476,98 +1479,80 @@ static void test_strfmon_alignment_pads_to_equal_length(void)
  * functions/iconv.html, functions/iconv_close.html
  * =================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_iconv_open_convert_close) /* UNIMPL: <iconv.h> and the three codeset-
-	conversion functions do not exist.
+/* IMPLEMENTED (2026-08-25).  <iconv.h> and the three codeset-
+   conversion functions exist; see include/iconv.h and
+   src/misc/iconv.c.  This was the last of the four headers this file
+   audits.
 
-	iconv.h.html DESCRIPTION, verbatim: "The <iconv.h> header shall
-	define the following types:" -- iconv_t, "Identifies the
-	conversion from one codeset to another.", and size_t -- then
-	the three prototypes:
+   iconv.h.html DESCRIPTION, verbatim: "The <iconv.h> header shall
+   define the following types:" -- iconv_t, "Identifies the
+   conversion from one codeset to another.", and size_t -- then
+   the three prototypes:
 
-	    size_t  iconv(iconv_t, char **restrict, size_t *restrict,
-	                char **restrict, size_t *restrict);
-	    int     iconv_close(iconv_t);
-	    iconv_t iconv_open(const char *, const char *);
+       size_t  iconv(iconv_t, char **restrict, size_t *restrict,
+                   char **restrict, size_t *restrict);
+       int     iconv_close(iconv_t);
+       iconv_t iconv_open(const char *, const char *);
 
-	iconv.html DESCRIPTION: "The iconv() function shall convert the
-	sequence of characters from one codeset, in the array specified
-	by inbuf, into a sequence of corresponding characters in
-	another codeset, in the array specified by outbuf."  The three
-	stop conditions, verbatim: "If a sequence of input bytes does
-	not form a valid character in the specified codeset, conversion
-	shall stop after the previous successfully converted character.
-	If the input buffer ends with an incomplete character or shift
-	sequence, conversion shall stop after the previous successfully
-	converted bytes. If the output buffer is not large enough to
-	hold the entire converted input, conversion shall stop just
-	prior to the input bytes that would cause the output buffer to
-	overflow."  And: "The variable pointed to by inbuf shall be
-	updated to point to the byte following the last byte
-	successfully used in the conversion."
+   iconv.html DESCRIPTION: "The iconv() function shall convert the
+   sequence of characters from one codeset, in the array specified
+   by inbuf, into a sequence of corresponding characters in
+   another codeset, in the array specified by outbuf."  The three
+   stop conditions, verbatim: "If a sequence of input bytes does
+   not form a valid character in the specified codeset, conversion
+   shall stop after the previous successfully converted character.
+   If the input buffer ends with an incomplete character or shift
+   sequence, conversion shall stop after the previous successfully
+   converted bytes. If the output buffer is not large enough to
+   hold the entire converted input, conversion shall stop just
+   prior to the input bytes that would cause the output buffer to
+   overflow."  And: "The variable pointed to by inbuf shall be
+   updated to point to the byte following the last byte
+   successfully used in the conversion."
 
-	RETURN VALUE: "The iconv() function shall update the variables
-	pointed to by the arguments to reflect the extent of the
-	conversion and return the number of non-identical conversions
-	performed."  ERRORS, *shall fail*: "[EILSEQ] Input conversion
-	stopped due to an input byte that does not belong to the input
-	codeset.", "[E2BIG] Input conversion stopped due to lack of
-	space in the output buffer.", "[EINVAL] Input conversion
-	stopped due to an incomplete character or shift sequence at the
-	end of the input buffer."
+   RETURN VALUE: "The iconv() function shall update the variables
+   pointed to by the arguments to reflect the extent of the
+   conversion and return the number of non-identical conversions
+   performed."  ERRORS, *shall fail*: "[EILSEQ] Input conversion
+   stopped due to an input byte that does not belong to the input
+   codeset.", "[E2BIG] Input conversion stopped due to lack of
+   space in the output buffer.", "[EINVAL] Input conversion
+   stopped due to an incomplete character or shift sequence at the
+   end of the input buffer."
 
-	iconv_open.html: "Settings of fromcode and tocode and their
-	permitted combinations are implementation-defined." -- so the
-	particular codeset names below are ntlibc's choice, not a
-	requirement, and the fence says which is which.  RETURN VALUE:
-	"Otherwise, iconv_open() shall return (iconv_t)-1 and set errno
-	to indicate the error."  iconv_close.html RETURN VALUE: "Upon
-	successful completion, 0 shall be returned; otherwise, -1 shall
-	be returned and errno set to indicate the error."
+   iconv_open.html: "Settings of fromcode and tocode and their
+   permitted combinations are implementation-defined." -- so the
+   particular codeset names below are ntlibc's choice, not a
+   requirement, and this comment says which is which.  RETURN VALUE:
+   "Otherwise, iconv_open() shall return (iconv_t)-1 and set errno
+   to indicate the error."  iconv_close.html RETURN VALUE: "Upon
+   successful completion, 0 shall be returned; otherwise, -1 shall
+   be returned and errno set to indicate the error."
 
-	WHAT IT WOULD BE BUILT ON, corrected.
-	test/POSIX-HEADER-INVENTORY.md points at src/internal/utf.c.
-	Re-checked 2026-08-25, that is the wrong file: utf.c converts
-	whole strings through ntdll's RtlUTF8ToUnicodeN /
-	RtlUnicodeToUTF8N and mallocs its result, so it has no
-	conversion descriptor, no incremental pointer advance, no
-	resumable state and no partial-output case -- none of the four
-	things the clauses quoted above are about.
+   WHAT IT IS BUILT ON, and one correction worth keeping.
+   test/POSIX-HEADER-INVENTORY.md pointed at src/internal/utf.c.
+   Re-checked 2026-08-25, that was the wrong file and
+   src/misc/iconv.c does not use it: utf.c converts whole strings
+   through ntdll's RtlUTF8ToUnicodeN / RtlUnicodeToUTF8N and mallocs
+   its result, so it has no conversion descriptor, no incremental
+   pointer advance, no resumable state and no partial-output case --
+   none of the four things the clauses above are about.  The decoder
+   and encoder are written out in pure C instead, which also keeps
+   this working identically on the native asan build.
 
-	src/stdlib/mbrtowc.c has all four.  mbrtowc()/wcrtomb() are a
-	stateful UTF-8 <-> UTF-16 converter that carries partial
-	sequences and pending surrogates in mbstate_t, in pure C with
-	no ntdll dependency, and their failure returns map onto the
-	three *shall fail* conditions one for one:
+   The three assertions that carry the most weight are the ones about
+   where the pointers are LEFT, not about what came out: after EILSEQ,
+   after EINVAL and after E2BIG the input pointer must sit AT the
+   character that could not be converted, never past it.  That is what
+   makes a resumed call correct, and it is the property a converter
+   that merely returns the right bytes can still get wrong.
 
-	  (size_t)-1 with errno EILSEQ   [EILSEQ]
-	  (size_t)-2 (incomplete input)  [EINVAL]
-	  the caller's own space check   [E2BIG]
-
-	test_codeset_is_utf8_and_the_converter_exists asserts all of
-	that live, today.  So iconv() here is a descriptor allocation,
-	a small codeset alias table, and a loop over a converter that
-	already exists and already works on every leg including the
-	native asan build.
-
-	UNIMPL, not N/A: there is no mechanism that stops the clauses
-	applying.  Codeset conversion is computation over memory; NT is
-	not consulted at any point on any of these four pages.  UNIMPL,
-	not declined: the three functions are current POSIX.1-2017 and
-	POSIX-GAP-ACCOUNTING.md counts them base, they collide with
-	nothing this tree ships, and shipping the header would remove a
-	failure rather than relocate one.
-
-	Observed today: fails to compile.  Twice, in the corpus this
-	project already runs: "iconv_open.c:3: error: include file
-	'iconv.h' not found", and the same for iconv-roundtrips.c.
-
-	The conversion exercised is UTF-8 <-> UTF-16LE because that is
-	what this library already performs internally for every path it
-	hands to ntdll, and the one a caller on this platform most
-	needs a portable name for. */
+   The conversion exercised is UTF-8 <-> UTF-16LE because that is
+   what this library already performs internally for every path it
+   hands to ntdll, and the one a caller on this platform most
+   needs a portable name for. */
 static void test_iconv_open_convert_close(void)
 {
-	/* would be: #include <iconv.h> at the top of this file */
 	char in[] = "A\xe4\xb8\xad";	/* 'A', then U+4E2D */
 	char out[16];
 	char *ip, *op;
@@ -1654,7 +1639,6 @@ static void test_iconv_open_convert_close(void)
 		}
 	}
 }
-#endif
 
 int main(void)
 {
@@ -1680,9 +1664,7 @@ int main(void)
 #if NTLIBC_TEST(BUG, posix_msgcat_strfmon_alignment_pads_to_equal_length) /* BUG: see the fence over test_strfmon_alignment_pads_to_equal_length(). */
 	test_strfmon_alignment_pads_to_equal_length();
 #endif
-#if NTLIBC_TEST(UNIMPL, posix_msgcat_iconv_open_convert_close) /* UNIMPL: see the fence over test_iconv_open_convert_close(). */
 	test_iconv_open_convert_close();
-#endif
 
 	if (fails) { printf("posix-msgcat: failures: %d\n", fails); return 1; }
 	printf("posix-msgcat: all ok\n");
