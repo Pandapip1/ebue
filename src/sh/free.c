@@ -61,6 +61,14 @@ void __sh_free_command_contents(struct sh_command *c)
 	__sh_list_free(c->cond);
 	__free(c->name);
 	__free(c->func_text);
+	/* Recursive rather than a __sh_list_free() like the fields above:
+	 * sh.h's func_body is a bare sh_command, not a list, and parse.c's
+	 * free_command() -- which would be the natural call -- is static
+	 * there.  This is the same two lines it is. */
+	if (c->func_body) {
+		__sh_free_command_contents(c->func_body);
+		__free(c->func_body);
+	}
 }
 
 static void free_pipeline_contents(struct sh_pipeline *pl)

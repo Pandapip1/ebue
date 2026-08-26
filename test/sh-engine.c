@@ -688,6 +688,54 @@ static void test_roundtrip(void)
 	check_roundtrip("f() { :; }\ng() { :; }");
 }
 
+/* A here-document inside a function-definition body, where the function
+ * definition is followed by a list operator.  This was a
+ * heap-use-after-free, found by fuzz/fuzz_shparse.c and fixed in
+ * src/sh/parse.c's parse_funcdef():
+ *
+ * parse_funcdef() parses the body only to find its extent and then
+ * throws the AST away, but a `<<` inside that body has registered a
+ * `struct pending_hd` holding a borrowed pointer to its `struct
+ * sh_redir`, and that queue is drained at the next <newline> or at EOF
+ * -- not at the end of the body.  So when the token after the body is
+ * one parse_command() leaves for its caller ('|', '&', '&&', '||'),
+ * the entry was still live when the body was freed, and
+ * drain_heredocs() then read `h->redir->word` out of freed memory.
+ * `f()(<<E)&` is the ten-byte reduction; the programs below are the
+ * same shapes written out with a real terminator line so that they
+ * parse.  The fix keeps the body in sh_command.func_body whenever
+ * anything is pending.
+ *
+ * WHAT THE ASSERTIONS ARE FOR, since a use-after-free need not be
+ * visible in a `make check` build with no sanitizer: `make asan`
+ * (tools/asan-build.sh) compiles src/sh/*.c natively and runs this very
+ * file under ASan, which is what turns the first case into a hard
+ * failure.  Under plain `make check` these two assertions still
+ * discriminate, against the OTHER way this could have been "fixed":
+ * each program must parse, and must parse to exactly ONE list item.
+ * Dropping the pending entry instead of keeping its redirection alive
+ * would leave the here-document body and its terminator to be read as
+ * two more commands, and the count would be three. */
+static void test_funcdef_heredoc_before_list_operator(void)
+{
+	static const char *const progs[] = {
+		"f()( a <<E )|b\nx\nE\n",
+		"f()( a <<E )&\nx\nE\n",
+		"f(){ a <<E ;}|b\nx\nE\n",
+		"f()( a <<E )&& b\nx\nE\n",
+		"f()( a <<E )|| b\nx\nE\n"
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof progs / sizeof *progs; i++) {
+		struct sh_list *l = must_parse(progs[i]);
+		if (!l) continue;
+		CHECK(l->items != 0);
+		if (l->items) CHECK(l->items->next == 0);
+		__sh_list_free(l);
+	}
+}
+
 #if NTLIBC_TEST(BUG, sh_engine_heredoc_quoted_delim_roundtrip) /* BUG: the printer writes a here-document's terminator line as
 	 * the delimiter word was WRITTEN, while the parser matches
 	 * terminator lines against the delimiter with quote removal
@@ -751,6 +799,58 @@ static void test_heredoc_quoted_delim_roundtrip(void)
 static void test_bang_word_roundtrip(void)
 {
 	check_roundtrip(">! !");
+}
+#endif
+
+#if NTLIBC_TEST(BUG, sh_engine_funcdef_list_operator_roundtrip) /* BUG: parse -> print -> parse -> print is not a fixed point for a
+	 * function definition followed by a list operator.  Every round
+	 * trip inserts one more <blank> between the body and the operator,
+	 * so like the here-document fence above this does not merely fail,
+	 * it diverges:
+	 *
+	 *     "a()()&"   prints as   "a() () &"
+	 *                REprints as "a() ()  &"
+	 *                then        "a() ()   &"
+	 *
+	 * src/sh/parse.c:885-896 parse_funcdef() captures the body as the
+	 * text from the body's first token to `end = p->cur.start` -- the
+	 * START of the token that FOLLOWS the body.  The lexer has already
+	 * skipped the <blank>s in between, so they are inside the captured
+	 * extent: given "a() () &" the body is "() " and not "()".
+	 * src/sh/print.c:148 writes func_text back verbatim, and
+	 * print_list()/print_pipeline()/print_andor() then write the
+	 * operator with a leading space of their own (print.c:183 " &",
+	 * :163 " | ", :171 " && "/" || "), so one blank becomes two.
+	 *
+	 * WHY ONLY A LIST OPERATOR, which is what makes this survive the
+	 * cases test_roundtrip() above already checks:
+	 *
+	 *   - a redirection does not expose it.  parse_command() consumes
+	 *     the redirection into the BODY's redirection list, so it ends
+	 *     up inside func_text and reprints exactly where it was --
+	 *     "f() { a; } > out" is a fixed point and is checked live
+	 *     above.
+	 *   - ';' and <newline> do not expose it either.  print_list()
+	 *     ends an item with a bare '\n' and writes no leading blank
+	 *     for the next one, so the reprint has no blank to swallow --
+	 *     "f() { :; }; g() { :; }; f" is checked live above too.
+	 *
+	 * That is the whole of the gap: stage 7b's round-trip cases put a
+	 * function definition before ';', a <newline>, a redirection and
+	 * end-of-input, and never before '&', '|', '&&' or '||'.
+	 *
+	 * Found by fuzz/fuzz_shparse.c as "\x01&A()()&" and, independently
+	 * in the same run, inside a 256-byte pipeline as "___()()|"; both
+	 * reduce to the four cases below.  fuzz_shparse.c's funcdef_fence()
+	 * keeps the harness off it -- delete that when this fence is
+	 * lifted. */
+static void test_funcdef_before_list_operator_roundtrip(void)
+{
+	check_roundtrip("a()()&");
+	check_roundtrip("a()()|b");
+	check_roundtrip("a()()&&b");
+	check_roundtrip("a()()||b");
+	check_roundtrip("f() { a; }&");
 }
 #endif
 
@@ -4046,6 +4146,7 @@ int main(int argc, char **argv)
 	test_rejects_malformed();
 
 	test_roundtrip();
+	test_funcdef_heredoc_before_list_operator();
 
 	test_exec_simple_command_status(argv[0]);
 	test_exec_command_not_found();

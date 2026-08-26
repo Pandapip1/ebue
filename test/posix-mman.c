@@ -312,7 +312,7 @@ static void test_mmap_fixed_misaligned_is_einval(void)
 	CHECK(munmap(base, 2 * PG) == 0);
 }
 
-#if NTLIBC_TEST(UNIMPL, posix_mman_mmap_file_backed) /* DECLINED FOR NOW (Pass 2), not impossible and not a platform
+#if NTLIBC_TEST(BUG, posix_mman_mmap_file_backed) /* DECLINED FOR NOW (Pass 2), not impossible and not a platform
        * limit -- a file-backed mmap().  Pass 1 answers [ENODEV] for
        * every file type (asserted above); this is the clause that
        * refusal defers, recorded so the next reader meets the argument
@@ -349,23 +349,35 @@ static void test_mmap_fixed_misaligned_is_einval(void)
        * of the MEM_*_PLACEHOLDER constants or the Ex entry point are
        * declared in src/internal/nt.h today.  Whether to take a version
        * floor for it is a decision, not an oversight. */
-static void test_mmap_file_backed(const char *path)
+static void test_mmap_file_backed(void)
 {
-	int fd = open(path, O_RDONLY);
+	/* Self-contained, and (void) deliberately: tools/test-policy.py only
+	 * injects a probe call for a fence whose function is declared
+	 * `(void)` -- see its definitions regex.  Taking a path parameter,
+	 * the way the live test_mmap_regular_file_is_enodev(argv[0]) above
+	 * does, made this fence UNPROBEABLE: it compiled but was never
+	 * called, so the probe saw a binary that passed and reported the
+	 * disposition stale rather than measuring the clause. */
+	static const char name[] = "mman-file-backed.tmp";
+	char buf[8];
 	char *p;
+	int fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0600);
+
 	CHECK(fd >= 0);
 	if (fd < 0) return;
+	CHECK(write(fd, "0123456789abcdef", 16) == 16);
+
 	p = mmap(0, PG, PROT_READ, MAP_PRIVATE, fd, 0);
 	CHECK(p != MAP_FAILED);
 	if (p != MAP_FAILED) {
 		/* the first bytes of the mapping are the first bytes of the
 		 * file -- the whole point of a file-backed mapping */
-		char buf[8];
 		CHECK(pread(fd, buf, sizeof buf, 0) == (ssize_t)sizeof buf);
 		CHECK(memcmp(p, buf, sizeof buf) == 0);
 		CHECK(munmap(p, PG) == 0);
 	}
 	close(fd);
+	unlink(name);
 }
 #endif
 

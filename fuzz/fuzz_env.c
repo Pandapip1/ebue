@@ -38,6 +38,50 @@
  *     memory, so LeakSanitizer does not report it; it is recorded here
  *     because this is where it was found.
  *
+ * THE ENVIRONMENT IS PRUNED BETWEEN INPUTS, for the same reason putenv
+ * is capped -- and the finding that forced it is worth recording, since
+ * it was reported as a library bug and is not one.
+ *
+ * Nothing here ever bounded how large `environ` got.  One environment
+ * for the life of the process is deliberate: that is what makes an
+ * earlier input's leftovers visible to a later one.  But an input runs
+ * as many as 128 records, most of which name something new, and no
+ * input is obliged to unset what it set -- so the entry count only ever
+ * climbs, and check_environ()'s MAXENV backstop is not a property of
+ * the library at all.  It is a number this harness was always going to
+ * walk past given enough inputs.  It did, at input #32125 of a 120 s
+ * run:
+ *
+ *     MISMATCH environ has no terminator within MAXENV
+ *       ntlibc: 4097
+ *       glibc : 4096
+ *
+ * The terminator was exactly where it belonged; there were simply 4096
+ * entries in front of it, put there by the 32124 inputs before this
+ * one.  Which is why the artefact libFuzzer wrote for it replays clean
+ * under `tools/fuzz.sh --repro` -- and why it is worse than a wasted
+ * report: the nightly saves its corpus, so a crash artefact that
+ * reproduces nothing is replayed at start-up every night until someone
+ * deletes it by hand.
+ *
+ * The same unbounded growth is why a run got slower the longer it went.
+ * check_environ() and count_named() each walk the whole array and each
+ * run per record, so an input costs time quadratic in an environment
+ * that never shrinks.  Measured across that run, exec/s at inputs
+ * #7193 / #12695 / #19639 / #28463 was 7193 / 3173 / 1510 / 694 -- the
+ * last stretch searching at a tenth the rate of the first, for the same
+ * wall clock.
+ *
+ * env_prune() therefore trims the environment back to ENVLOW entries
+ * whenever an input starts with more than ENVHIGH of them.  It keeps
+ * the cross-input carry-over the harness wants -- ENVLOW entries of it
+ * -- and every branch of the switch below stays reachable; what it
+ * gives up is only the unbounded tail, which tested nothing but this
+ * file's own arithmetic.  MAXENV stays where it is, doing the job it
+ * was named for: with the prune in place an input cannot start above
+ * ENVHIGH or add more than 128, so an array that reaches MAXENV has
+ * genuinely lost its terminator, and is walked no further than that.
+ *
  * WHAT IS ASSERTED.
  *
  *   - environ is always NULL-terminated, every entry before the
@@ -66,6 +110,8 @@ extern void oracle_mismatch_s(const char *, const char *, const char *, const ch
 
 #define REC      64
 #define MAXENV   4096
+#define ENVHIGH  512            /* see env_prune() and the banner */
+#define ENVLOW   256
 #define PUTARENA 128
 #define PUTCAP   1024           /* see the banner */
 
@@ -120,10 +166,60 @@ static int count_named(const char *name)
 	return n;
 }
 
+/* How many entries environ has, stopping at MAXENV so that an array
+ * whose terminator has been lost is a bounded walk here too. */
+static int env_count(void)
+{
+	int n = 0;
+
+	if (!environ) return 0;
+	while (n <= MAXENV && environ[n]) n++;
+	return n;
+}
+
+/* Trim the environment back to ENVLOW entries once it passes ENVHIGH.
+ * See the banner for what went wrong without this.
+ *
+ * Pruning through unsetenv() rather than by rewriting environ directly
+ * is the point: it retires an entry down the same ownership path
+ * everything else here uses, so a putenv'd string is removed the way
+ * src/env/setenv.c expects and is_putenv() still keeps it from being
+ * free()d.  The cost is that the loop leans on one of the functions
+ * under test, so it is bounded twice -- it gives up if unsetenv()
+ * fails, and it gives up if a call does not actually shrink the array.
+ * Neither is silently swallowed: whatever made unsetenv() stop removing
+ * names is what the assertions in case 3 below exist to report, and
+ * they run on the very next record.
+ *
+ * Called with the environment possibly empty (environ itself NULL), so
+ * the environ[0] dereference below is reached only via n > ENVLOW. */
+static void env_prune(void)
+{
+	int n = env_count();
+
+	if (n <= ENVHIGH) return;
+	while (n > ENVLOW) {
+		char name[REC + 1];
+		size_t nlen = strcspn(environ[0], "=");
+		int m;
+
+		/* An empty or over-long name is check_environ()'s to report;
+		 * every entry here came from a REC-sized record. */
+		if (nlen == 0 || nlen > REC) break;
+		memcpy(name, environ[0], nlen);
+		name[nlen] = 0;
+		if (unsetenv(name) != 0) break;
+		m = env_count();
+		if (m >= n) break;
+		n = m;
+	}
+}
+
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 {
 	size_t pos = 0;
 
+	env_prune();
 	if (size < 2) return 0;
 
 	while (pos + 2 <= size) {

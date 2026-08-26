@@ -145,11 +145,14 @@ if [ "${1:-}" = "--repro" ]; then
 	#     ERROR: The required directory "<file>" does not exist
 	# which is libFuzzer saying it could not stat the path -- the
 	# documented way to replay a finding, replaying nothing.
+	# -timeout=0 for the reason given at the bottom of this file: the
+	# alarm libFuzzer arms is fatal here, and a slow artefact replayed
+	# on its own would be killed by it with nothing said.
 	exec env NTLIBC_FUZZ_MIRROR="$artdir" \
 	     LD_PRELOAD="$ASAN_SO" \
 	     ASAN_OPTIONS=detect_leaks="$LEAKS":handle_abort=1 \
 	     UBSAN_OPTIONS=print_stacktrace=1 \
-	     "$srcdir/obj/fuzz/fuzz_$name" "$art"
+	     "$srcdir/obj/fuzz/fuzz_$name" -timeout=0 "$art"
 fi
 
 time=${1:-60}
@@ -172,6 +175,56 @@ case $FUZZ_JOBS in
 ''|*[!0-9]*|0) echo "fuzz: FUZZ_JOBS must be a positive integer" >&2; exit 2 ;;
 esac
 
+# -timeout=0, AND A WATCHDOG OF OUR OWN, because libFuzzer's does not work
+# here and its only observable effect was to fail a run at random.
+#
+# Same root cause as the handle_abort=1 note above, one signal along.
+# libFuzzer arms its per-unit timeout with setitimer(ITIMER_REAL) and
+# installs the SIGALRM handler with sigaction() -- and sigaction() in
+# these binaries is ntlibc's, a strong definition in the executable, so
+# libFuzzer's handler is registered in ntlibc's own table and the host
+# kernel never hears about it.  setitimer, which ntlibc does not define,
+# resolves to glibc and really does arm the timer.  Confirmed by nm on a
+# built harness:
+#
+#     0000000000190368 t sigaction        <- ntlibc's, in the executable
+#                      U setitimer        <- glibc's, at run time
+#
+# So SIGALRM arrives with its default disposition and the process is
+# killed outright.  The timer is a REPEATING one at -timeout/2+1 seconds
+# (FuzzerDriver's `SetTimer(Flags.timeout / 2 + 1)`), and -timeout
+# defaults to 1200, so every harness in this tree dies at 601 s of wall
+# clock with a bare "Alarm clock" on stderr: no libFuzzer diagnostic, no
+# "timeout" artefact, no reproducing input.  Measured directly --
+# -timeout=4 arms it at 3 s and the harness dies at 3.05 s with status
+# 142 (128+SIGALRM); -timeout=0 skips SetTimer entirely and the same
+# harness runs its full budget and exits 0.
+#
+# What that cost, which is why this is a fix and not a tidy-up: the run
+# still exits non-zero, so this script called it a finding and printed
+# "reproduce: ... <file>" pointing at whatever happened to be sitting in
+# crashes/ -- slow-unit artefacts from earlier in the same run, which
+# replay clean.  That is a report that sends a reader after an input
+# that never crashed anything.
+#
+# 601 s is reachable at the 300 s the nightly uses, because
+# -max_total_time is only checked BETWEEN inputs and fuzz_glob has units
+# that run for tens of seconds: a 300 s dispatch of fuzz_glob alone
+# measured "Done 399891 runs in 358 second(s)" with
+# stat::slowest_unit_time_sec: 40, and the nightly runs four such
+# processes on four vCPUs, where each of those units takes proportionally
+# longer.
+#
+# Nothing is lost by turning it off: a facility whose handler is never
+# called was not detecting hung units in the first place.  What replaces
+# it is a real watchdog -- `timeout` around the harness -- which does
+# bound a genuine hang, and whose kill is reported as a kill instead of
+# as a finding.  It is deliberately loose (three times the budget plus
+# five minutes) so that the ordinary overshoot above is never mistaken
+# for a hang.  -max_total_time itself is unaffected: libFuzzer checks it
+# in its own loop, not in the alarm handler.
+watchdog=$(( time * 3 + 300 ))
+
 make -C "$srcdir/fuzz" all
 
 run_harness() {
@@ -190,17 +243,37 @@ run_harness() {
 		set --
 		mirror=
 	fi
-	if ! NTLIBC_FUZZ_MIRROR="$mirror" LD_PRELOAD="$ASAN_SO" \
+	# `|| st=$?` and not `if ! ...; then st=$?`.  The status wanted here
+	# is the harness's, and inside the then-branch of an `if !` it is
+	# gone: `!` replaces it with its own logical negation, so $? there is
+	# 0 -- verified, `sh -c 'if ! (exit 124); then echo $?; fi'` prints
+	# 0, not 124.  Reading it that way would have made every watchdog
+	# kill look like an ordinary finding, which is the exact confusion
+	# this block exists to end.
+	st=0
+	timeout -k 10 "$watchdog" env \
+	     NTLIBC_FUZZ_MIRROR="$mirror" LD_PRELOAD="$ASAN_SO" \
 	     ASAN_OPTIONS=detect_leaks="$LEAKS":handle_abort=1 \
 	     UBSAN_OPTIONS=print_stacktrace=1 \
 	     "$srcdir/obj/fuzz/fuzz_$h" \
-	     -max_total_time="$time" -max_len=256 -print_funcs=0 -print_final_stats=1 \
-	     "$@"; then
-		echo "   fuzz_$h FOUND SOMETHING (input shown above)"
-		if [ -n "$corpus" ]; then
-			echo "   artefacts: $corpus/$h/crashes"
-			find "$corpus/$h/crashes" -type f 2>/dev/null | sed 's/^/     /'
-			echo "   reproduce: tools/fuzz.sh --repro $corpus/$h/crashes/<file> $h"
+	     -max_total_time="$time" -timeout=0 -max_len=256 -print_funcs=0 \
+	     -print_final_stats=1 \
+	     "$@" || st=$?
+	if [ "$st" -ne 0 ]; then
+		# 124 is `timeout` reporting that it fired; 137 is the
+		# SIGKILL of its own -k escalation when the harness ignored
+		# the TERM.
+		if [ "$st" = 124 ] || [ "$st" = 137 ]; then
+			echo "   fuzz_$h DID NOT FINISH: killed by this script's watchdog after ${watchdog}s."
+			echo "   This is NOT a finding and there is no input to reproduce -- the run"
+			echo "   was cut short, so it has shown nothing about fuzz_$h either way."
+		else
+			echo "   fuzz_$h FOUND SOMETHING (input shown above)"
+			if [ -n "$corpus" ]; then
+				echo "   artefacts: $corpus/$h/crashes"
+				find "$corpus/$h/crashes" -type f 2>/dev/null | sed 's/^/     /'
+				echo "   reproduce: tools/fuzz.sh --repro $corpus/$h/crashes/<file> $h"
+			fi
 		fi
 		rc=1
 		return 1

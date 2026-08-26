@@ -692,6 +692,7 @@ static struct sh_command *new_command(struct parser *p, enum sh_cmd_kind kind)
 	c->until = 0;
 	c->name = 0;
 	c->func_text = 0;
+	c->func_body = 0;
 	c->have_in = 0;
 	c->redirs = 0;
 	return c;
@@ -909,7 +910,31 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	start = p->cur.start;
 	body = parse_command(p);
 	if (!body) goto fail;      /* perr() already issued */
-	free_command(body);
+
+	/* The body was parsed to find its extent, and is normally thrown
+	 * away here -- but not while a here-document is still queued.
+	 *
+	 * A `<<` inside the body registers a `struct pending_hd` holding a
+	 * borrowed pointer to that redirection (see parse_redirect()), and
+	 * the queue is drained at the next <newline> or at EOF, not at the
+	 * end of the body.  So whenever the token *after* the body is
+	 * neither of those -- `|`, `&`, `&&`, `||`, all of which
+	 * parse_command() leaves for the caller -- the entry is still live
+	 * at this point, and freeing the body here left drain_heredocs()
+	 * reading `h->redir->word` out of freed memory.  Found by
+	 * fuzz/fuzz_shparse.c, whose report named parse.c's drain
+	 * (`f()(<<E)&` is the ten-byte reduction, and `f()( a <<E )|b`
+	 * with a real terminator line reproduces it just as well).
+	 *
+	 * Keeping the body alive is the whole fix, and the test is the
+	 * exact condition: pending_head is non-empty iff some entry could
+	 * point into what is about to be freed.  Empty -- the common case,
+	 * every function definition in every script that uses no
+	 * here-document -- and this frees as before.  Non-empty and the
+	 * body lives in cmd->func_body until the enclosing sh_list is
+	 * freed, which is strictly after the drain. */
+	if (p->lx.pending_head) cmd->func_body = body;
+	else                    free_command(body);
 	end = p->cur.start;        /* the token after the body -- T_EOF has
 	                            * one too, pointing at the NUL, so there
 	                            * is no end-of-input special case */
