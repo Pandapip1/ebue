@@ -476,6 +476,24 @@ win_runs_native()
 	case $1 in
 	fork-win|fork-handles-win|fork-cloexec-exec-win|process-win|posix-fork-clauses-win)
 		echo yes ;;
+	# posix-pipe-wquota-win: added when this list first became mandatory,
+	# and answered by measurement rather than by reading the file.  The
+	# -win suffix on it is a statement about Wine only (wine-9.0 pins
+	# WriteQuotaAvailable to a literal 0, wine-10.x returns the full
+	# quota unreduced -- neither can distinguish a fixed select.c from a
+	# broken one).  This build is not Wine: fuzz/ntstubs.c models the
+	# field, so the run here is not vacuous.  Measured, obj/asan/test/
+	# posix-pipe-wquota-win.out on the tree that added the test:
+	#     control  fresh pipe: select=1 poll=1
+	#     filled   65536 bytes of a 65536-byte requested quota
+	#     full     pipe: select=0 poll=0
+	#     drained  32768 bytes
+	#     drained  pipe: select=1 poll=1
+	#     PASS
+	# i.e. all three cells moved, which is exactly the discrimination the
+	# two Wines cannot make.
+	posix-pipe-wquota-win)
+		echo yes ;;
 	*)  echo "" ;;
 	esac
 }
