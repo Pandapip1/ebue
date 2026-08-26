@@ -462,6 +462,9 @@ int __raise_internal(int);
  * (the wait ends, [EINTR]) from an ignored one (it does not) -- see the
  * comment on caught_count in src/signal/signal.c. */
 unsigned long __sig_caught_count(void);
+/* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
+ * comment on __sigchld_nocldwait() in src/signal/signal.c. */
+int __sigchld_nocldwait(void);
 /* Forget this process's pending alarm(), without touching NT.  fork()'s
  * child-side only: fork.html requires the child's alarm to be cancelled,
  * and the clone arrives with the parent's deadline in its copied address

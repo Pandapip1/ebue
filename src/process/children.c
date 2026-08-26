@@ -61,6 +61,12 @@ static int child_grow(void)
 int __child_add(int pid, HANDLE h)
 {
 	int i;
+	/* SA_NOCLDWAIT: this child must never be something wait()/waitpid()
+	 * can find (src/signal/signal.c's __sigchld_nocldwait()).  Reporting
+	 * failure here, same as a table that could not grow, makes both
+	 * callers (fork.c, spawn.c) take the degrade path they already have:
+	 * close the handle and let the child run untracked. */
+	if (__sigchld_nocldwait()) return -1;
 	for (;;) {
 		for (i = 0; i < __child_cap; i++)
 			if (!__children[i].pid) {

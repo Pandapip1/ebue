@@ -27,6 +27,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1171,6 +1173,48 @@ static void test_waitpid_einval_options(void)
 	waitpid(pid, &status, 0);   /* reap it regardless, so it is not left a zombie */
 }
 
+/* sigaction.html, SA_NOCLDWAIT: a child born while it is set on SIGCHLD
+ * must never turn into something wait()/waitpid() can find -- OPTS'
+ * sigaction/21-1.c asserts exactly this (fork, exit immediately, parent's
+ * wait() must answer [ECHILD]) and was BUG until src/process/children.c's
+ * __child_add() started consulting __sigchld_nocldwait().  Restores the
+ * default disposition afterward: every other test in this file that
+ * spawns and reaps a child runs after this one in main()'s list, and an
+ * SA_NOCLDWAIT left set would make every one of them untracked too. */
+static void test_sa_nocldwait(void)
+{
+	struct sigaction sa, old;
+	char *argv[4];
+	pid_t pid;
+	int status;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = SIG_DFL;
+	sa.sa_flags = SA_NOCLDWAIT;
+	CHECK(sigaction(SIGCHLD, &sa, &old) == 0);
+
+	argv[0] = self; argv[1] = (char *)"--child"; argv[2] = (char *)"0"; argv[3] = NULL;
+	pid = __spawn(self, argv, environ);
+	if (pid <= 0) {
+		printf("note: cannot spawn self (errno %d); SA_NOCLDWAIT test skipped\n", errno);
+		sigaction(SIGCHLD, &old, NULL);
+		return;
+	}
+
+	/* Give the child a moment to actually run and exit, so a wrong
+	 * implementation that merely raced the reap (rather than never
+	 * tracking the child at all) is not let off by a lucky timing. */
+	{
+		struct timeval tv = { 0, 50000 };
+		select(0, NULL, NULL, NULL, &tv);
+	}
+
+	errno = 0;
+	CHECK(waitpid(pid, &status, 0) == -1 && errno == ECHILD);
+
+	sigaction(SIGCHLD, &old, NULL);
+}
+
 /* __wait_encode_status(): the exit-code -> wait-status mapping.
  * Exercises the property the task brief specifically calls out: a
  * signal death is encoded as 0xE0DE00xx (__NT_SIGNAL_EXIT in
@@ -1747,6 +1791,7 @@ int main(int argc, char **argv)
 	test_strsignal();
 	test_waitpid_wnohang_running();
 	test_waitpid_einval_options();
+	test_sa_nocldwait();
 	test_wait_encode_status();
 	test_wait4_sanity();
 	test_killpg();

@@ -68,6 +68,18 @@ static unsigned long caught_count;
 
 unsigned long __sig_caught_count(void) { return caught_count; }
 
+/* sigaction.html, SA_NOCLDWAIT: "If ... set for SIGCHLD ... and the
+ * calling process subsequently forks, ... the behavior is unspecified
+ * if ... the process either simultaneously has SA_NOCLDWAIT set or has
+ * SIGCHLD set to SIG_IGN" -- the useful clause is over in wait.html
+ * ERRORS instead: "the calling process has SA_NOCLDWAIT set ... [ECHILD]
+ * ... status information is not retained".  A child born while this is
+ * set must not become something a later wait()/waitpid() can find, so
+ * src/process/children.c's __child_add() consults this before adding an
+ * entry at all -- the same "leave it untracked, let it run" degrade
+ * fork.c and spawn.c already use when the table itself cannot grow. */
+int __sigchld_nocldwait(void) { return (act_flags[SIGCHLD] & SA_NOCLDWAIT) != 0; }
+
 void (*signal(int sig, void (*h)(int)))(int)
 {
 	void (*old)(int);
