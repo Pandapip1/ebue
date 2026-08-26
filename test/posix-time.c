@@ -455,6 +455,70 @@ static void test_timespec_get_matches_realtime(void)
  * Every expected value below was independently computed with GNU
  * coreutils `date -u -d @<epoch> +%U/%W/%V/%G/%g` (glibc's strftime),
  * not derived from ntlibc or from memory. */
+#if NTLIBC_TEST(BUG, posix_time_strftime_iso_week_thursday_years) /* BUG: %V/%G/%g lose a week in every year that begins on a
+	 * Thursday.  strftime.html's %V entry: "Replaced by the week number
+	 * of the year (Monday as the first day of the week) as a decimal
+	 * number [01,53].  If the week containing 1 January has four or
+	 * more days in the new year, then it is considered week 1.
+	 * Otherwise, it is the last week of the previous year, and the next
+	 * week is week 1.  Both January 4th and the first Thursday of
+	 * January are always in week 1."  %G and %g carry the same
+	 * week-based year.
+	 *
+	 * Mechanism: src/time/time_impl.h's __iso_week() computes
+	 *
+	 *     week = (yday - isodow + 10) / 7;
+	 *
+	 * The standard ISO-week-from-ordinal-date formula its comment cites
+	 * takes a *1-based* ordinal day of year.  tm_yday is 0-based, so
+	 * this evaluates floor((ordinal - isodow + 9) / 7) -- one less
+	 * whenever (ordinal - isodow + 10) is a multiple of 7.  Within one
+	 * year (ordinal - isodow) is constant across a week and steps by 7,
+	 * so that congruence holds for every date in a year or for none of
+	 * them: precisely the years whose 1 January is a Thursday.  The
+	 * trailing comment "always > 0" is wrong for the same reason --
+	 * yday = 0 with isodow = 7 gives 0 -- and the `week < 1` arm below
+	 * it then absorbs the error into "last week of the previous year",
+	 * which is why it produces a plausible answer instead of an obvious
+	 * one.
+	 *
+	 * 1970, 1976, 1981, 1987, 1998, 2004, 2009, 2015, 2026, 2032 and
+	 * 2037 all start on a Thursday.  The existing reference instants in
+	 * test_strftime_week_number_family() are in 2000 (Saturday) and
+	 * 2001 (Monday), which is why they pass.
+	 *
+	 * Re-enable when __iso_week() is given the 1-based ordinal its
+	 * formula expects. */
+static void test_strftime_iso_week_thursday_years(void)
+{
+	struct tm tm;
+	time_t t;
+	char buf[16];
+
+	/* 1970-01-01 is a Thursday, so it is the first Thursday of January
+	 * and therefore in week 1 by the clause's own defining property. */
+	t = 0;
+	CHECK(gmtime_r(&t, &tm) != 0);
+	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "01"));
+	CHECK(strftime(buf, sizeof buf, "%G", &tm) == 4 && !strcmp(buf, "1970"));
+	CHECK(strftime(buf, sizeof buf, "%g", &tm) == 2 && !strcmp(buf, "70"));
+
+	/* 2015-12-31, also a Thursday: 2015 began on a Thursday, so it is a
+	 * 53-week ISO year and this is week 53 of it -- the upper end of
+	 * the [01,53] range the clause names. */
+	t = 1451520000;
+	CHECK(gmtime_r(&t, &tm) != 0);
+	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "53"));
+	CHECK(strftime(buf, sizeof buf, "%G", &tm) == 4 && !strcmp(buf, "2015"));
+
+	/* 2026-01-01, a Thursday: week 1 of 2026, not week 52 of 2025. */
+	t = 1767225600;
+	CHECK(gmtime_r(&t, &tm) != 0);
+	CHECK(strftime(buf, sizeof buf, "%V", &tm) == 2 && !strcmp(buf, "01"));
+	CHECK(strftime(buf, sizeof buf, "%G", &tm) == 4 && !strcmp(buf, "2026"));
+}
+#endif
+
 static void test_strftime_week_number_family(void)
 {
 	struct tm tm;
