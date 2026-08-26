@@ -16,8 +16,8 @@
  * therefore the digit glibc and musl print.  %a/%A are exact for the
  * same reason and more directly: a double's significand is already 13
  * hex digits, so they are read straight out of the bits.
- * Positional (%n$) arguments are not implemented; nothing in this tree
- * uses them.
+ * Positional (%n$) arguments are implemented, and an ordinary
+ * unnumbered format does not pay for them: see THE ARGUMENT LIST below.
  *
  * No conversion sizes anything from the caller's precision, which C99
  * 7.19.6.1 leaves unbounded -- see PREC_MAX below.
@@ -680,10 +680,397 @@ static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, i
 	}
 }
 
+/* ------------------------------------------------------------------
+ * THE ARGUMENT LIST: fprintf.html's numbered conversions
+ *
+ * "Conversions can be applied to the nth argument after the format in
+ * the argument list, rather than to the next unused argument.  In this
+ * case, the conversion specifier character % ... is replaced by the
+ * sequence "%n$", where n is a decimal integer in the range
+ * [1,{NL_ARGMAX}] ... The format can contain either numbered argument
+ * conversion specifications (that is, "%n$" and "*m$"), or unnumbered
+ * argument conversion specifications (that is, % and *), but not both."
+ *
+ * A numbered format reads its arguments out of order and va_arg cannot
+ * be rewound, so they have to be collected into an indexable table
+ * before the first conversion runs.  Collecting them needs each
+ * argument's TYPE -- va_arg is a type-directed macro, not a byte count
+ * -- and an argument's type is known only from the conversion
+ * specification that names it.  That is the whole reason the format is
+ * scanned twice: build_argtab() below walks it for types and fills the
+ * table, and the ordinary loop then sources every argument from the
+ * table rather than from the va_list.
+ *
+ * THE UNNUMBERED PATH DOES NOT PAY FOR THIS.  There is no pre-scan, no
+ * table and no allocation: the format is classified at the first
+ * conversion specification, out of the "n$" that specification's own
+ * parse already looked for, and until a numbered one appears the
+ * arguments come off the va_list exactly as they always did.  A format
+ * that never writes "%n$" -- every format in this tree -- pays one
+ * predictable branch per argument fetched.  A malloc here would be paid
+ * by every printf in every program linked against this library, which
+ * is why the table is NL_ARGMAX entries of frame instead.
+ *
+ * KNOWN RESIDUAL COST, measured, in the same register as the sink's
+ * note above, so that nobody re-derives it: the unnumbered path is
+ * about 5% slower than it was before any of this existed.  2030 ms
+ * against 2140 ms of CPU TIME -- clock(), not wall, because this box is
+ * shared -- over eight rounds of 500000 iterations of five snprintf()
+ * calls, minima taken, x86_64-win32-tcc under Wine, the two builds
+ * interleaved.
+ *
+ * Two candidate causes were measured and are NOT it.  The table: an
+ * otherwise identical build with the array shrunk to one entry came out
+ * at the same 2140 ms, so the frame is free.  The added calls: folding
+ * arg_type() into parse_spec() came out at the same 2140 ms too, so it
+ * is not call overhead either.  What is left is the specification being
+ * parsed into a struct that the conversion reads back, and that is
+ * exactly what buys both passes ONE parser.  Two parsers would recover
+ * the 5% and cost a grammar obliged to agree with itself in two places
+ * -- the trade this file has already refused once, on the same grounds,
+ * at the sink.
+ * ------------------------------------------------------------------ */
+
+/* The type an argument is fetched with.  These are the types va_arg
+ * itself is handed: the default argument promotions have already been
+ * applied at the call site, so there is no A_CHAR or A_SHORT -- %hhd's
+ * argument arrives as an int and is narrowed after it is fetched. */
+enum { A_NONE, A_INT, A_UINT, A_LONG, A_ULONG, A_LLONG, A_ULLONG,
+       A_SIZE, A_SSIZE, A_PTRDIFF, A_WINT, A_DOUBLE, A_PTR };
+
+/* One fetched argument, normalised: every integer widens into i or u on
+ * the way out of va_arg, so the conversions below read one member per
+ * signedness instead of one per length modifier.  That is what keeps
+ * the C type a specification names in one place -- pop_arg() below, and
+ * the two cases TAKE spells out for speed, each under the same constant.
+ * The alternative -- every conversion doing its own va_arg AND a
+ * separate table saying what type it would have used -- is two mappings
+ * that must agree, with nothing to notice when they stop agreeing: a
+ * %zu that popped a long into a slot typed as a size_t would misread
+ * every later argument of a numbered format. */
+union varg {
+	long long i;
+	unsigned long long u;
+	double d;
+	void *p;
+};
+
+static void pop_arg(union varg *a, int type, va_list *ap)
+{
+	switch (type) {
+	case A_INT:     a->i = va_arg(*ap, int); break;
+	case A_UINT:    a->u = va_arg(*ap, unsigned int); break;
+	case A_LONG:    a->i = va_arg(*ap, long); break;
+	case A_ULONG:   a->u = va_arg(*ap, unsigned long); break;
+	case A_LLONG:   a->i = va_arg(*ap, long long); break;
+	case A_ULLONG:  a->u = va_arg(*ap, unsigned long long); break;
+	/* LLP64: long is 32 bits here while size_t and ptrdiff_t are 64, so
+	 * `long` is simply the wrong type to pull these with -- "%zd" of a
+	 * value above 4G printed its low half.  fprintf.html: z "applies to
+	 * a size_t or the corresponding signed integer type argument", t
+	 * likewise for ptrdiff_t.  Pull each as the type the page names.
+	 * src/stdio/scanf.c implements the same grammar and has always done
+	 * this correctly; printf.c was the only offender. */
+	case A_SIZE:    a->u = va_arg(*ap, size_t); break;
+	case A_SSIZE:   a->i = va_arg(*ap, ssize_t); break;
+	/* ptrdiff_t is a signed type whatever the conversion's signedness
+	 * is -- the length-modifier table gives t no unsigned counterpart --
+	 * so %tu/%to/%tx fetch it as one and reinterpret afterwards. */
+	case A_PTRDIFF: a->i = va_arg(*ap, ptrdiff_t); break;
+	case A_WINT:    a->i = va_arg(*ap, wint_t); break;
+	case A_DOUBLE:  a->d = va_arg(*ap, double); break;
+	case A_PTR:     a->p = va_arg(*ap, void *); break;
+	default:        a->i = 0; break;   /* A_NONE: nothing is fetched */
+	}
+}
+
+/* The type a conversion fetches, from the pair that decides it.  A_NONE
+ * for one that fetches nothing: an unknown conversion (which this
+ * formatter emits literally, consuming no argument) or a format that
+ * ended before its conversion character. */
+static int arg_type(int lm, int conv)
+{
+	switch (conv) {
+	case 'd': case 'i':
+		switch (lm) {
+		case LM_l: return A_LONG;
+		case LM_ll: case LM_j: return A_LLONG;
+		case LM_z: return A_SSIZE;
+		case LM_t: return A_PTRDIFF;
+		default: return A_INT;      /* hh and h promote to int */
+		}
+	case 'u': case 'o': case 'x': case 'X':
+		switch (lm) {
+		case LM_l: return A_ULONG;
+		case LM_ll: case LM_j: return A_ULLONG;
+		case LM_z: return A_SIZE;
+		case LM_t: return A_PTRDIFF;
+		default: return A_UINT;
+		}
+	case 'c': return lm == LM_l ? A_WINT : A_INT;
+	case 's': case 'p': case 'n': return A_PTR;
+	/* L is accepted and ignored, as it always was here: long double is
+	 * a double on both of this library's targets (checked: tcc gives
+	 * win32 i386 and x86_64 an 8-byte long double), so %Lf fetches the
+	 * same argument %f does. */
+	case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':
+	case 'a': case 'A': return A_DOUBLE;
+	default: return A_NONE;
+	}
+}
+
+/* One parsed conversion specification.  width and prec hold a literal
+ * one; wpos and ppos are -1 when there is no '*' at all, 0 for a '*'
+ * that takes the next unused argument, and n for a "*n$" that names
+ * one.  argpos is 0 when the specification is unnumbered. */
+struct spec {
+	int argpos;
+	int flags;      /* 1=+ 2=space 4=- 8=0 16=# 32=' */
+	int width, wpos;
+	int prec, ppos;
+	int lm;
+	int conv;       /* the conversion character, 0 at end of format */
+	int type;       /* arg_type(lm, conv) */
+};
+
+/* "%n$" and "*n$": a digit run terminated by '$'.  It cannot be told
+ * from a width until the '$' is seen ("%1$s" against "%12s"), so the
+ * only way to read it is to look ahead and rewind -- hence the original
+ * cursor coming back when there is no '$'.  n has no leading zero,
+ * being "a decimal integer in the range [1,{NL_ARGMAX}]", so a leading
+ * '0' is the zero flag and never an index, and "%0$d" is a width of 0
+ * rather than a slot nothing can fill.
+ *
+ * The accumulator stops once it is past NL_ARGMAX: the value is only
+ * ever compared against that bound, and accumulating an arbitrarily
+ * long digit run unclamped is signed overflow. */
+static const char *scan_argno(const char *fp, int st, int *n)
+{
+	const char *q = fp;
+	int v = 0;
+
+	*n = 0;
+	if (gf(q, st) < '1' || gf(q, st) > '9') return fp;
+	while (gf(q, st) >= '0' && gf(q, st) <= '9') {
+		if (v <= NL_ARGMAX) v = v * 10 + (int)(gf(q, st) - '0');
+		q += st;
+	}
+	if (gf(q, st) != '$') return fp;
+	*n = v;
+	return q + st;
+}
+
+/* Parse one conversion specification, from the character after its '%'
+ * to its conversion character, where the cursor is left -- or on the
+ * terminating null of a format that ends mid-specification, which the
+ * caller sees as sp->conv == 0.
+ *
+ * ONE parser, called by both passes.  A second scanner written for the
+ * type-collecting pass would be a copy of this grammar obliged to agree
+ * with it exactly, and a disagreement between the two is neither a
+ * compile error nor a visible one: it is the wrong argument silently
+ * fetched for a conversion.  The cost is one call per DIRECTIVE, which
+ * is not the cost gf() above was made a macro to avoid -- that one was
+ * a call per format CHARACTER. */
+static const char *parse_spec(const char *fp, int st, struct spec *sp)
+{
+	int n;
+
+	sp->flags = 0;
+	sp->width = 0;
+	sp->wpos = -1;
+	sp->prec = -1;
+	sp->ppos = -1;
+	sp->lm = LM_NONE;
+
+	/* The guard, rather than letting scan_argno() return early on its
+	 * own: tcc does not inline, so on the overwhelmingly common
+	 * specification -- one that does not begin with a digit at all --
+	 * this comparison is the whole cost of looking for an index,
+	 * instead of a call that finds nothing. */
+	sp->argpos = 0;
+	if (gf(fp, st) >= '1' && gf(fp, st) <= '9')
+		fp = scan_argno(fp, st, &sp->argpos);
+
+	for (;; fp += st) {
+		if (gf(fp, st) == '-') sp->flags |= 4;
+		else if (gf(fp, st) == '+') sp->flags |= 1;
+		else if (gf(fp, st) == ' ') sp->flags |= 2;
+		else if (gf(fp, st) == '0') sp->flags |= 8;
+		else if (gf(fp, st) == '#') sp->flags |= 16;
+		/* fprintf.html's flag table: "'  [CX] (The <apostrophe>.)  The
+		 * integer portion of the result of a decimal conversion ( %i,
+		 * %d, %u, %f, %F, %g, or %G ) shall be formatted with thousands'
+		 * grouping characters. ... The non-monetary grouping character
+		 * is used."
+		 *
+		 * A [CX] flag, i.e. base POSIX rather than XSI, so it must be
+		 * ACCEPTED whatever the locale.  Accepted and then ignored is
+		 * not a stub here, it is the complete implementation: the
+		 * grouping to apply is LC_NUMERIC's `grouping`, which is "" in
+		 * the POSIX locale (src/misc/locale.c), and the POSIX locale is
+		 * the only one this library has -- setlocale() accepts nothing
+		 * else.  An empty grouping specification means no separators, so
+		 * the flagged conversion must produce byte-for-byte what the
+		 * unflagged one produces, which is what ignoring it does.  The
+		 * bit is recorded rather than dropped so that a future locale
+		 * with real grouping has somewhere to hook on.
+		 *
+		 * Leaving it out of this loop was NOT a cosmetic defect.  The
+		 * apostrophe ended the flag scan, fell through the conversion
+		 * switch's default arm, and that arm emits the bytes literally
+		 * WITHOUT consuming an argument -- so every conversion after a
+		 * %' in the same format read the previous one's argument.
+		 * printf("%'d %s\n", total, name) handed `total` to %s to
+		 * dereference as a char *.  And in the POSIX locale the correct
+		 * output for %'d is identical to %d, so the one visible symptom
+		 * was the least alarming one. */
+		else if (gf(fp, st) == '\'') sp->flags |= 32;
+		else break;
+	}
+
+	if (gf(fp, st) == '*') {
+		fp = scan_argno(fp + st, st, &n);
+		sp->wpos = n;
+	} else {
+		while (gf(fp, st) >= '0' && gf(fp, st) <= '9') {
+			sp->width = sp->width * 10 + (int)(gf(fp, st) - '0');
+			fp += st;
+		}
+	}
+	if (gf(fp, st) == '.') {
+		fp += st;
+		if (gf(fp, st) == '*') { fp = scan_argno(fp + st, st, &n); sp->ppos = n; }
+		else { sp->prec = 0; while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { sp->prec = sp->prec * 10 + (int)(gf(fp, st) - '0'); fp += st; } }
+	}
+	for (;;) {
+		if (gf(fp, st) == 'h') { sp->lm = sp->lm == LM_h ? LM_hh : LM_h; fp += st; }
+		else if (gf(fp, st) == 'l') { sp->lm = sp->lm == LM_l ? LM_ll : LM_l; fp += st; }
+		else if (gf(fp, st) == 'j') { sp->lm = LM_j; fp += st; }
+		else if (gf(fp, st) == 'z') { sp->lm = LM_z; fp += st; }
+		else if (gf(fp, st) == 't') { sp->lm = LM_t; fp += st; }
+		else if (gf(fp, st) == 'L') { sp->lm = LM_L; fp += st; }
+		else break;
+	}
+	sp->conv = (int)gf(fp, st);
+	sp->type = arg_type(sp->lm, sp->conv);
+	return fp;
+}
+
+/* Collect the arguments a numbered format names into tab[1..NL_ARGMAX],
+ * in index order, and return the highest index used -- or -1 for a
+ * format this cannot serve, which the caller reports as [EINVAL].
+ *
+ * Everything POSIX leaves undefined here becomes that -1 rather than a
+ * guess, because the alternative to a diagnosed refusal is not a
+ * slightly wrong answer: it is arguments read at the wrong offsets for
+ * the rest of the format, i.e. an int dereferenced as a char *.  Two
+ * things are refused -- mixing the two forms ("but not both") and an
+ * index outside [1,{NL_ARGMAX}] -- and a gap in the numbering is not
+ * one of them; see the end of this function for why. */
+static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
+{
+	unsigned char types[NL_ARGMAX + 1];
+	const char *fp = fmt;
+	struct spec sp;
+	int i, max = 0;
+
+	memset(types, A_NONE, sizeof types);
+	while (gf(fp, st)) {
+		if (gf(fp, st) != '%') { fp += st; continue; }
+		fp += st;
+		if (gf(fp, st) == '%') { fp += st; continue; }
+		fp = parse_spec(fp, st, &sp);
+		if (sp.conv) fp += st;
+
+		/* The unnumbered forms, in a format that has already shown a
+		 * numbered one: a '*' naming no argument, or a conversion that
+		 * fetches one and names none. */
+		if (sp.wpos == 0 || sp.ppos == 0) return -1;
+		if (sp.type != A_NONE && !sp.argpos) return -1;
+
+		/* "*m$" is always an int -- fprintf.html: "the argument ...
+		 * shall be converted to an int". */
+		if (sp.wpos > 0) {
+			if (sp.wpos > NL_ARGMAX) return -1;
+			types[sp.wpos] = A_INT;
+			if (sp.wpos > max) max = sp.wpos;
+		}
+		if (sp.ppos > 0) {
+			if (sp.ppos > NL_ARGMAX) return -1;
+			types[sp.ppos] = A_INT;
+			if (sp.ppos > max) max = sp.ppos;
+		}
+		if (sp.type != A_NONE) {
+			if (sp.argpos > NL_ARGMAX) return -1;
+			/* Naming one argument twice is the point of the feature and
+			 * is fine; naming it with two different types is undefined,
+			 * and the last specification wins because it is the one
+			 * still in hand. */
+			types[sp.argpos] = (unsigned char)sp.type;
+			if (sp.argpos > max) max = sp.argpos;
+		}
+	}
+
+	/* A GAP: an index below the highest one used that no specification
+	 * names, as in "%9$d" where the first eight arguments are passed and
+	 * never mentioned.  POSIX does not say what that means.  What it
+	 * must not do is read a slot nothing wrote or walk the va_list by a
+	 * width nobody stated, so the unnamed argument is skipped as an int:
+	 * that is what the default argument promotions produce for
+	 * everything narrower, so it is the likeliest guess, and on the
+	 * LLP64 arch every argument slot is one register wide anyway, which
+	 * makes the guess unobservable there.  Filling the slot rather than
+	 * leaving it alone is the half that matters: after this loop every
+	 * entry in [1,max] has been written before anything can read one. */
+	for (i = 1; i <= max; i++)
+		if (types[i] == A_NONE) types[i] = A_INT;
+
+	for (i = 1; i <= max; i++) pop_arg(&tab[i], types[i], ap);
+	return max;
+}
+
+/* The argument a specification names: out of the table for a numbered
+ * format, off the va_list for an unnumbered one.  A macro because the
+ * `else` arm must expand va_arg in this function's own frame, and
+ * because tcc does not inline -- the branch is one predictable test,
+ * a call would not be.
+ *
+ * A_INT and A_PTR are spelled out here rather than left to pop_arg, and
+ * the reason is measurement rather than taste: between them they are
+ * "%d", "%c", every "*" width and precision, "%s", "%p" and "%n", which
+ * is nearly every conversion any of this library's consumers writes.
+ * Under tcc, whose every static function is a real call, routing those
+ * through pop_arg cost 2-3% of the formatter, and the two extra
+ * comparisons here cost nothing measurable.  The duplication is safe in
+ * the way duplication rarely is: each arm is guarded by the very
+ * constant that selects the same arm of pop_arg's switch, so the two
+ * cannot disagree about a type without disagreeing about `ty`. */
+#define TAKE(dst, pos, ty) do { \
+	if (argtab) (dst) = argtab[pos]; \
+	else if ((ty) == A_INT) (dst).i = va_arg(aq, int); \
+	else if ((ty) == A_PTR) (dst).p = va_arg(aq, void *); \
+	else pop_arg(&(dst), (ty), &aq); \
+} while (0)
+
 static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
 	struct sink sink, *sk = &sink;
 	const char *fp = fmt;
+	/* Only a numbered format ever touches these.  Eighty-odd bytes of
+	 * frame is what buys the common path its freedom from a malloc. */
+	union varg argv[NL_ARGMAX + 1];
+	union varg *argtab = 0;
+	/* A local COPY of the argument list, because everything below fetches
+	 * through its ADDRESS.  va_list is an array type on some ABIs -- not
+	 * on either of this library's targets, which is why tcc accepts &ap
+	 * without a murmur and tools/lint.sh's host gcc pass does not -- and
+	 * a parameter of array type is a pointer, so &ap would be a pointer
+	 * to the wrong thing there.  Copying costs the caller nothing:
+	 * vfprintf.html leaves "the value of ap after the return"
+	 * unspecified. */
+	va_list aq;
+	va_copy(aq, ap);
 
 	sink.f = f;
 	sink.wide = st != 1;
@@ -711,78 +1098,74 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 		if (gf(fp, st) == '%') { out(sk, "%", 1); fp += st; continue; }
 
 		{
-			int flags = 0; /* 1=+ 2=space 4=- 8=0 16=# 32=' */
-			int width = 0, prec = -1, haswidth = 0;
-			int lm = LM_NONE;
-			int neg_width = 0;
+			struct spec sp;
+			union varg a;
+			int flags, width, prec;
 
-			for (;; fp += st) {
-				if (gf(fp, st) == '-') flags |= 4;
-				else if (gf(fp, st) == '+') flags |= 1;
-				else if (gf(fp, st) == ' ') flags |= 2;
-				else if (gf(fp, st) == '0') flags |= 8;
-				else if (gf(fp, st) == '#') flags |= 16;
-				/* fprintf.html's flag table: "'  [CX] (The
-				 * <apostrophe>.)  The integer portion of the result
-				 * of a decimal conversion ( %i, %d, %u, %f, %F, %g,
-				 * or %G ) shall be formatted with thousands'
-				 * grouping characters. ... The non-monetary grouping
-				 * character is used."
-				 *
-				 * A [CX] flag, i.e. base POSIX rather than XSI, so
-				 * it must be ACCEPTED whatever the locale.  Accepted
-				 * and then ignored is not a stub here, it is the
-				 * complete implementation: the grouping to apply is
-				 * LC_NUMERIC's `grouping`, which is "" in the POSIX
-				 * locale (src/misc/locale.c), and the POSIX locale
-				 * is the only one this library has -- setlocale()
-				 * accepts nothing else.  An empty grouping
-				 * specification means no separators, so the flagged
-				 * conversion must produce byte-for-byte what the
-				 * unflagged one produces, which is what ignoring it
-				 * does.  The bit is recorded rather than dropped so
-				 * that a future locale with real grouping has
-				 * somewhere to hook on.
-				 *
-				 * Leaving it out of this loop was NOT a cosmetic
-				 * defect.  The apostrophe ended the flag scan, fell
-				 * through the conversion switch's default arm, and
-				 * that arm emits the bytes literally WITHOUT
-				 * consuming an argument -- so every conversion after
-				 * a %' in the same format read the previous one's
-				 * argument.  printf("%'d %s\n", total, name) handed
-				 * `total` to %s to dereference as a char *.  And in
-				 * the POSIX locale the correct output for %'d is
-				 * identical to %d, so the one visible symptom was
-				 * the least alarming one. */
-				else if (gf(fp, st) == '\'') flags |= 32;
-				else break;
+			fp = parse_spec(fp, st, &sp);
+
+			/* The first specification that names an argument settles
+			 * the whole format: from here every argument comes out of
+			 * the table, and build_argtab() has already refused the
+			 * format if any other specification in it is unnumbered.
+			 * Until such a specification appears nothing is scanned
+			 * twice and nothing is stored, so an unnumbered format runs
+			 * exactly as it did before numbered ones existed. */
+			if (!argtab && (sp.argpos || sp.wpos > 0 || sp.ppos > 0)) {
+				if (build_argtab(fmt, st, argv, &aq) < 0) {
+					/* fprintf.html ERRORS: "[EINVAL] There are
+					 * insufficient arguments" -- the nearest named
+					 * failure, and the honest one to report for a
+					 * format whose arguments cannot be located.  The
+					 * stream's error indicator is deliberately NOT set
+					 * the way the [EOVERFLOW] and [EILSEQ] paths above
+					 * set it: nothing went wrong with the stream, and
+					 * ferror() answers for the file rather than for the
+					 * caller's format string. */
+					errno = EINVAL;
+					sk->bad = 1;
+					break;
+				}
+				argtab = argv;
 			}
-			if (gf(fp, st) == '*') { width = va_arg(ap, int); fp += st; haswidth = 1; if (width < 0) { neg_width = 1; width = -width; } }
-			else while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { width = width * 10 + (int)(gf(fp, st) - '0'); fp += st; haswidth = 1; }
-			if (neg_width) flags |= 4;
-			(void)haswidth;
-			if (gf(fp, st) == '.') {
-				fp += st;
-				if (gf(fp, st) == '*') { prec = va_arg(ap, int); fp += st; }
-				else { prec = 0; while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { prec = prec * 10 + (int)(gf(fp, st) - '0'); fp += st; } }
+
+			flags = sp.flags;
+			/* Width, then precision, then the conversion's own argument
+			 * -- the order the unnumbered form consumes them in, which
+			 * is the only order it CAN consume them in. */
+			width = sp.width;
+			if (sp.wpos >= 0) {
+				TAKE(a, sp.wpos, A_INT);
+				width = (int)a.i;
+				/* "A negative field width is taken as a '-' flag
+				 * followed by a positive field width." */
+				if (width < 0) { flags |= 4; width = -width; }
+			}
+			prec = sp.prec;
+			if (sp.ppos >= 0) {
+				TAKE(a, sp.ppos, A_INT);
+				prec = (int)a.i;
+				/* "A negative precision is taken as if the precision
+				 * were omitted." */
 				if (prec < 0) prec = -1;
 			}
-			for (;;) {
-				if (gf(fp, st) == 'h') { lm = lm == LM_h ? LM_hh : LM_h; fp += st; }
-				else if (gf(fp, st) == 'l') { lm = lm == LM_l ? LM_ll : LM_l; fp += st; }
-				else if (gf(fp, st) == 'j') { lm = LM_j; fp += st; }
-				else if (gf(fp, st) == 'z') { lm = LM_z; fp += st; }
-				else if (gf(fp, st) == 't') { lm = LM_t; fp += st; }
-				else if (gf(fp, st) == 'L') { lm = LM_L; fp += st; }
-				else break;
-			}
+			/* Zeroed unconditionally, then overwritten by the fetch
+			 * that a conversion taking an argument performs.  Nothing
+			 * below reads `a` for a conversion that takes none -- an
+			 * unknown one, which is echoed literally -- so this is not
+			 * a correctness fix; it makes the reads in the switch
+			 * UNCONDITIONALLY defined instead of defined by a
+			 * correlation between sp.type and sp.conv that no local
+			 * reader can check.  clang-analyzer could not check it
+			 * either and reported all fourteen of them. */
+			a.i = 0;
+			if (sp.type != A_NONE) TAKE(a, sp.argpos, sp.type);
 
-			switch ((int)gf(fp, st)) {
+			switch (sp.conv) {
 			case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
-				int base = gf(fp, st) == 'o' ? 8 : (gf(fp, st) == 'x' || gf(fp, st) == 'X') ? 16 : 10;
-				int upper = gf(fp, st) == 'X';
-				int issigned = gf(fp, st) == 'd' || gf(fp, st) == 'i';
+				int base = sp.conv == 'o' ? 8 : (sp.conv == 'x' || sp.conv == 'X') ? 16 : 10;
+				int upper = sp.conv == 'X';
+				int issigned = sp.conv == 'd' || sp.conv == 'i';
 				int neg = 0;
 				unsigned long long uv;
 				char digbuf[32]; int dn = 0, zpad;
@@ -790,24 +1173,15 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 
 				if (issigned) {
 					long long sv;
-					switch (lm) {
-					case LM_hh: sv = (signed char)va_arg(ap, int); break; // NOLINT(cert-str34-c) -- deliberate sign extension of a %hhd argument, not a table index
-					case LM_h: sv = (short)va_arg(ap, int); break;
-					case LM_l: sv = va_arg(ap, long); break;
-					case LM_ll: case LM_j: sv = va_arg(ap, long long); break;
-					/* LLP64: long is 32 bits here while size_t and
-					 * ptrdiff_t are 64, so `long` is simply the wrong
-					 * type to pull these with -- "%zd" of a value above
-					 * 4G printed its low half.  fprintf.html: z
-					 * "applies to a size_t or the corresponding signed
-					 * integer type argument", t likewise for ptrdiff_t.
-					 * Pull each as the type the page names.
-					 * src/stdio/scanf.c implements the same grammar and
-					 * has always done this correctly; printf.c was the
-					 * only offender. */
-					case LM_z: sv = (long long)va_arg(ap, ssize_t); break;
-					case LM_t: sv = (long long)va_arg(ap, ptrdiff_t); break;
-					default: sv = va_arg(ap, int); break;
+					/* The fetch above took this at the width its
+					 * length modifier names and sign-extended it (see
+					 * pop_arg), so the only work left is the two
+					 * modifiers naming a type NARROWER than the int
+					 * their argument was promoted to. */
+					switch (sp.lm) {
+					case LM_hh: sv = (signed char)a.i; break; // NOLINT(cert-str34-c) -- deliberate sign extension of a %hhd argument, not a table index
+					case LM_h: sv = (short)a.i; break;
+					default: sv = a.i; break;
 					}
 					neg = sv < 0;
 					/* Negate after widening, not before: -sv is
@@ -818,14 +1192,14 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 					 * exactly the magnitude wanted). */
 					uv = neg ? __neg_mag((unsigned long long)sv) : (unsigned long long)sv;
 				} else {
-					switch (lm) {
-					case LM_hh: uv = (unsigned char)va_arg(ap, unsigned int); break;
-					case LM_h: uv = (unsigned short)va_arg(ap, unsigned int); break;
-					case LM_l: uv = va_arg(ap, unsigned long); break;
-					case LM_ll: case LM_j: uv = va_arg(ap, unsigned long long); break;
-					case LM_z: uv = (unsigned long long)va_arg(ap, size_t); break;
-					case LM_t: uv = (unsigned long long)va_arg(ap, ptrdiff_t); break;
-					default: uv = va_arg(ap, unsigned int); break;
+					switch (sp.lm) {
+					case LM_hh: uv = (unsigned char)a.u; break;
+					case LM_h: uv = (unsigned short)a.u; break;
+					/* t was fetched as the signed ptrdiff_t it names
+					 * (see pop_arg); this reinterprets it, exactly as
+					 * "(unsigned long long)va_arg(ap, ptrdiff_t)" did. */
+					case LM_t: uv = (unsigned long long)a.i; break;
+					default: uv = a.u; break;
 					}
 				}
 
@@ -884,14 +1258,14 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				 * fwprintf.html, plain %c: "the int argument shall be
 				 * converted to a wide character as if by calling
 				 * btowc()". */
-				if (lm == LM_l) {
-					wchar_t wa[2];
-					wa[0] = (wchar_t)va_arg(ap, wint_t);
-					wa[1] = 0;
-					emit_str(sk, wa, 1, -1, flags, width);
+				if (sp.lm == LM_l) {
+					wchar_t wc[2];
+					wc[0] = (wchar_t)a.i;
+					wc[1] = 0;
+					emit_str(sk, wc, 1, -1, flags, width);
 				} else if (sk->wide) {
-					wchar_t wa[2];
-					wint_t b = btowc(va_arg(ap, int));
+					wchar_t wc[2];
+					wint_t b = btowc((int)a.i);
 					/* btowc() answers WEOF for any byte that is not a
 					 * complete character on its own, which under this
 					 * library's UTF-8 is every byte from 0x80 up.  There
@@ -906,11 +1280,11 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 						sk->bad = 1;
 						break;
 					}
-					wa[0] = (wchar_t)b;
-					wa[1] = 0;
-					emit_str(sk, wa, 1, -1, flags, width);
+					wc[0] = (wchar_t)b;
+					wc[1] = 0;
+					emit_str(sk, wc, 1, -1, flags, width);
 				} else {
-					char c = (char)va_arg(ap, int);
+					char c = (char)a.i;
 					int padn = width - 1; if (padn < 0) padn = 0;
 					if (flags & 4) { out(sk, &c, 1); pad(sk, ' ', (size_t)padn); }
 					else { pad(sk, ' ', (size_t)padn); out(sk, &c, 1); }
@@ -918,8 +1292,8 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				break;
 			}
 			case 's': {
-				const void *arg = va_arg(ap, const void *);
-				int wide_arg = lm == LM_l;
+				const void *arg = a.p;
+				int wide_arg = sp.lm == LM_l;
 				/* A null pointer is undefined, but printing "(null)"
 				 * rather than dereferencing it is what this library
 				 * already did and what glibc does; the wide form gets
@@ -932,7 +1306,7 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				break;
 			}
 			case 'p': {
-				void *ptr = va_arg(ap, void *);
+				void *ptr = a.p;
 				uintptr_t uv = (uintptr_t)ptr;
 				int dn = 2;   /* the "0x" prefix, emitted literally below */
 				if (!ptr) { out(sk, "(nil)", 5); break; }
@@ -955,8 +1329,8 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				break;
 			}
 			case 'n': {
-				void *ptr = va_arg(ap, void *);
-				switch (lm) {
+				void *ptr = a.p;
+				switch (sp.lm) {
 				case LM_hh: *(signed char *)ptr = (signed char)sk->count; break;
 				case LM_h: *(short *)ptr = (short)sk->count; break;
 				case LM_l: *(long *)ptr = (long)sk->count; break;
@@ -974,22 +1348,26 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			}
 			case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':
 			case 'a': case 'A': {
-				double v = va_arg(ap, double);
-				emit_float(sk, v, (int)gf(fp, st), prec, flags & 16, flags, width);
+				emit_float(sk, a.d, sp.conv, prec, flags & 16, flags, width);
 				break;
 			}
 			default:
-				/* an unknown conversion: emit it literally, the way glibc does */
-				if (gf(fp, st)) {
+				/* an unknown conversion: emit it literally, the way
+				 * glibc does -- the conversion character and its '%',
+				 * without any "n$" that came between them, since what
+				 * is being echoed is a specification that named no
+				 * conversion at all */
+				if (sp.conv) {
 					out(sk, "%", 1);
 					if (st == 1) out(sk, fp, 1);
 					else out_units(sk, (const wchar_t *)(const void *)fp, 1);
 				}
 				break;
 			}
-			if (gf(fp, st)) fp += st;
+			if (sp.conv) fp += st;
 		}
 	}
+	va_end(aq);
 	return sk->bad ? -1 : (int)sk->count;
 }
 

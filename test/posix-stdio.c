@@ -254,25 +254,6 @@ static void test_fprintf_return(const char *name)
 	CHECK(fclose(f) == 0);
 }
 
-/* printf.c's own header comment: "Positional (%n$) arguments are not
- * implemented; nothing in this tree uses them." POSIX (fprintf.html
- * DESCRIPTION) specifies %n$ as a full reordering mechanism; ntlibc's
- * parser has no notion of '$' at all, so "%1$d" is read as: flags none,
- * width "1", then the byte '$' taken as the conversion specifier. '$'
- * matches no case in __vfprintf's conversion switch, so it falls to the
- * "unknown conversion: emit it literally, the way glibc does" default,
- * which emits "%$" and does NOT consume the int argument or the
- * trailing "d" as part of the specifier -- the "d" is then copied
- * through as an ordinary literal character. This asserts the documented
- * (divergent-from-POSIX) behaviour, not the standard's. */
-static void test_printf_positional_divergence(void)
-{
-	char buf[32];
-	int n = snprintf(buf, sizeof buf, "%1$d", 42);
-	CHECK(n == (int)strlen("%$d"));
-	CHECK(strcmp(buf, "%$d") == 0);
-}
-
 /* clearerr.html DESCRIPTION: "clears the end-of-file and error
  * indicators for the stream pointed to by stream." Both, independently
  * of each other -- test/stdio.c exercises feof/ferror but not a stream
@@ -1413,32 +1394,6 @@ static void test_printf_l_modifier(void)
  * (that is, "%n$" and "*m$"), or unnumbered argument conversion
  * specifications (that is, % and *), but not both."
  */
-#if NTLIBC_TEST(BUG, posix_stdio_printf_positional_arguments) /* BUG (compiles and links; formerly UNIMPL):: positional arguments are not implemented.
-       * src/stdio/printf.c's conversion parser reads flags, width,
-       * precision and length modifier and has no notion of an argument
-       * INDEX at all -- there is no "$" anywhere in the file -- so "%1$s"
-       * is parsed as a "1" width followed by an unknown "$" conversion,
-       * and the argument list is walked in order regardless.
-       *
-       * Not fixed here, and this fence is the record of that.  <limits.h>
-       * DOES define NL_ARGMAX (9, the standard's floor), which is a
-       * deliberate decision rather than an oversight and is explained at
-       * the definition: omitting it breaks a conforming consumer that
-       * merely references the constant -- a configure probe, an #ifdef, a
-       * buffer size -- without ever writing "%n$", whereas defining it can
-       * only mislead a consumer that writes "%n$" and is already broken by
-       * printf whatever the header says.  So the header is complete and
-       * THIS is where the gap lives, against the code that actually has
-       * it.
-       *
-       * Implementing it is a real change, not a stub: the parser needs an
-       * argument index, and the "either numbered or unnumbered, not both"
-       * rule means a format has to be classified before any conversion is
-       * performed.  va_arg cannot be rewound, so the arguments have to be
-       * collected into an indexable table first -- which needs each one's
-       * TYPE, which is only known from its own conversion specifier.  That
-       * is the whole reason implementations that support this scan the
-       * format twice. */
 static void test_printf_positional_arguments(void)
 {
 	char b[64];
@@ -1458,8 +1413,29 @@ static void test_printf_positional_arguments(void)
 	/* n is "in the range [1,{NL_ARGMAX}]", so the upper end must work */
 	CHECK(snprintf(b, sizeof b, "%9$d", 1, 2, 3, 4, 5, 6, 7, 8, 99) == 2);
 	CHECK(!strcmp(b, "99"));
+
+	/* "... but not both".  A format that writes both forms is
+	 * undefined, so what follows pins ntlibc's choice rather than the
+	 * standard's, and pins it because the alternative to a diagnosed
+	 * refusal is not a slightly wrong answer: it is every argument
+	 * after the offending specification read at an offset nobody
+	 * stated.  The refusal is the negative return RETURN VALUE already
+	 * defines, with the [EINVAL] fprintf.html ERRORS names for "There
+	 * are insufficient arguments".  Same treatment for an n outside
+	 * "[1,{NL_ARGMAX}]", which has no argument to name at all. */
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%1$d %d", 1, 2) < 0);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%d %1$d", 1, 2) < 0);
+	CHECK(errno == EINVAL);
+	errno = 0;                                   /* "*" against "*m$" */
+	CHECK(snprintf(b, sizeof b, "%1$*d", 4, 2) < 0);
+	CHECK(errno == EINVAL);
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%10$d", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) < 0);
+	CHECK(errno == EINVAL);
 }
-#endif
 
 static void test_printf_z_modifier_width(void)
 {
@@ -2337,7 +2313,6 @@ int main(void)
 		remove(name);
 		free(name);
 	}
-	test_printf_positional_divergence();
 	test_perror();
 	test_popen();
 
@@ -2345,6 +2320,7 @@ int main(void)
 	test_snprintf_eoverflow();
 	test_printf_z_modifier_width();
 	test_printf_l_modifier();
+	test_printf_positional_arguments();
 	test_printf_apostrophe_flag();
 	test_printf_width_precision();
 	test_sscanf_clauses();

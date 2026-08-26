@@ -166,24 +166,24 @@
 #define NL_SETMAX               255
 #define NL_TEXTMAX              _POSIX2_LINE_MAX
 
-/* NL_ARGMAX bounds n in a "%n$" conversion specification -- and ntlibc's
- * printf DOES NOT IMPLEMENT POSITIONAL ARGUMENTS AT ALL.  Defining it
- * anyway is deliberate, and the reasoning is worth keeping because the
- * honest-looking alternative is worse:
+/* NL_ARGMAX bounds n in a "%n$" conversion specification.  9 is the
+ * standard's floor, and src/stdio/printf.c honours it exactly: an index
+ * in [1,9] is served, one above it is refused with [EINVAL] rather than
+ * read from somewhere the caller never wrote.  Raising this is a
+ * one-constant change there -- the table is NL_ARGMAX entries of frame
+ * -- but nothing asks for more, and the frame is paid by a formatter
+ * every program in the tree goes through.
  *
- * Omitting it breaks a conforming consumer that merely REFERENCES the
- * constant -- sizing a buffer, a configure probe, an #ifdef -- without
- * ever writing %n$.  That is a compile failure in code doing nothing
- * wrong, and this library exists to bootstrap configure and friends.
- * Defining it can only mislead a consumer that writes %n$, and that
- * consumer is already broken by printf whatever this header says: the
- * header neither causes that failure nor prevents it.
- *
- * The gap is recorded where this tree records gaps, against the code
- * that actually has it -- test/posix-stdio.c's fenced
- * test_printf_positional_arguments().  An undefined macro would put a
- * fact about printf in the wrong artefact and tell a reader nothing
- * about why. */
+ * The value was defined here for some time BEFORE printf implemented
+ * %n$ at all, which was deliberate rather than an oversight, and the
+ * reasoning is kept because it is the reasoning for every other
+ * constant in this file: omitting it breaks a conforming consumer that
+ * merely REFERENCES the constant -- sizing a buffer, a configure probe,
+ * an #ifdef -- without ever writing %n$, which is a compile failure in
+ * code doing nothing wrong, and this library exists to bootstrap
+ * configure and friends.  Defining it could only mislead a consumer
+ * that writes %n$, and such a consumer was already broken by printf
+ * whatever this header said. */
 #define NL_ARGMAX               9
 
 /* [XSI].  Also defined by <sys/resource.h>, which needs it for the
