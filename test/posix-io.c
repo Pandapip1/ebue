@@ -282,6 +282,64 @@ static void test_fs(void)
  * drive root.  Every individual component stays within {NAME_MAX}
  * (255), so this is a statement about path length only and does not
  * quietly re-test the component limit. */
+#if NTLIBC_TEST(BUG, posix_io_rmdir_rejects_dot) /* BUG: rmdir("d/.") deletes d.  rmdir.html DESCRIPTION: "If the
+	 * path argument refers to a path whose final component is either
+	 * dot or dot-dot, rmdir() shall fail."  ERRORS, shall fail:
+	 * "[EINVAL] The path argument contains a last component that is
+	 * dot."  unlinkat.html inherits both through AT_REMOVEDIR.
+	 *
+	 * Mechanism: src/unistd/unlink.c's __unlink_at() -- which is all of
+	 * rmdir(), unlink() and unlinkat() -- never looks at the final
+	 * component at all.  It goes from __ntpath_at() straight to
+	 * NtOpenFile(... FILE_DIRECTORY_FILE) and sets the delete
+	 * disposition.  And by the time it sees the name, the dot is gone:
+	 * src/internal/path.c resolves "." and ".." lexically before the
+	 * filesystem is ever consulted -- through
+	 * RtlDosPathNameToNtPathName_U_WithStatus() on the AT_FDCWD and
+	 * absolute branch (the file's own banner cites GetFullPathName's
+	 * Remarks for exactly this), and through normalize_rel()'s explicit
+	 * `len == 1 && w[i] == '.'` / ".." handling on the dirfd-relative
+	 * branch.
+	 *
+	 * So the call POSIX requires to fail instead succeeds -- on the
+	 * *predecessor* of the component that should have refused it.
+	 * "d/." removes d; "d/.." removes d's parent.  This is the one
+	 * missing argument check in this area that destroys data rather
+	 * than returning the wrong errno.
+	 *
+	 * The same collapse is already measured in this tree one layer up:
+	 * test/POSIX-COVERAGE.md's renameat row records "observed, a rename
+	 * of `dir/.` succeeded".  Same normalization, same cause.
+	 *
+	 * The check has to happen on the caller's string, before
+	 * __ntpath_at(), because nothing downstream can still see the dot.
+	 *
+	 * Re-enable when rmdir()/unlinkat(AT_REMOVEDIR) refuse a final dot
+	 * or dot-dot component. */
+static void test_rmdir_rejects_dot(void)
+{
+	struct stat st;
+
+	CHECK(mkdir("t-dot.d", 0755) == 0);
+
+	errno = 0;
+	CHECK(rmdir("t-dot.d/.") == -1 && errno == EINVAL);
+	CHECK(stat("t-dot.d", &st) == 0 && S_ISDIR(st.st_mode));   /* must survive */
+
+	errno = 0;
+	CHECK(unlinkat(AT_FDCWD, "t-dot.d/.", AT_REMOVEDIR) == -1 && errno == EINVAL);
+	CHECK(stat("t-dot.d", &st) == 0 && S_ISDIR(st.st_mode));
+
+	/* dot-dot: the clause covers it too, and here it would take out the
+	 * directory the test itself is running in. */
+	errno = 0;
+	CHECK(rmdir("t-dot.d/..") == -1);
+	CHECK(stat("t-dot.d", &st) == 0 && S_ISDIR(st.st_mode));
+
+	CHECK(rmdir("t-dot.d") == 0);
+}
+#endif
+
 static void test_long_path(void)
 {
 	char comp[201], dir[512], path[1024], buf[8] = {0};
