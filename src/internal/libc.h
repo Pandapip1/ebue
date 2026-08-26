@@ -264,12 +264,11 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
 /* Resolve a program name the way execvp does: PATH search plus the .exe
  * suffix Windows wants.  Returns a malloc'd absolute path or NULL. */
 char *__find_program(const char *name, int use_path);
-/* The sh(1p) the [ENOEXEC] fallback runs, malloc'd, or 0.  Shared by
- * execvp() (src/process/exec.c) and the shell's own command search
- * (src/sh/exec.c); the choice is argued in src/process/interpreter.c. */
 /* The [ENOEXEC] command interpreter of XSH exec and XCU 2.9.1: runs
  * argv -- { arg0, command_file, argument..., 0 } -- as one invocation
- * of sh(1p) in this process, and returns its exit status.  See
+ * of sh(1p) in this process, and returns its exit status.  Shared by
+ * execvp()/execlp() (src/process/exec.c) and the shell's own command
+ * search (src/sh/exec.c), so the two clauses are one mechanism.  See
  * src/sh/script.c, and src/process/exec.c for why it is a call and not
  * a second image. */
 int __sh_run_script(int argc, char *const argv[]);
