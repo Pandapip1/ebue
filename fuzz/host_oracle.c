@@ -142,6 +142,71 @@ int host_inet_pton4(const char *s, unsigned char out[4])
 	return f(2 /* AF_INET, and it is 2 on both sides */, s, out);
 }
 
+/* The time harness's oracle: glibc's timegm() and gmtime_r().
+ *
+ * These two are worth oracling and the rest of <time.h> is not, and the
+ * reason is that they are the two whose answer does not depend on
+ * anything outside their arguments.  timegm() and gmtime_r() are pure
+ * proleptic-Gregorian arithmetic on UTC in both libraries -- no zone
+ * database, no TZ, no "now" -- so a disagreement is a calendar bug in
+ * one of them and nothing else.  mktime()/localtime() are deliberately
+ * NOT oracled: glibc consults /usr/share/zoneinfo and implements POSIX
+ * DST rules, while src/time/tzset.c documents that this target has
+ * neither, so the two are answering different questions and every
+ * "mismatch" would be that documented difference rather than a defect.
+ *
+ * <time.h> here is the host's, so `struct tm` is the host's layout --
+ * which is exactly why the seam is a flat array of ints rather than a
+ * struct: the harness is compiled against ntlibc's headers and the two
+ * layouts are not required to agree.
+ *
+ * glibc's timegm reports out-of-range results as (time_t)-1 with errno
+ * EOVERFLOW; *ok distinguishes that from the legitimate instant
+ * 1969-12-31T23:59:59Z, which is also -1.  The caller must not compare
+ * when *ok is 0 -- not because ntlibc is then excused, but because the
+ * two libraries have made different (and both defensible) choices about
+ * a case POSIX leaves as "shall return (time_t)-1 ... [EOVERFLOW]".
+ */
+#include <time.h>
+typedef time_t (*timegm_fn)(struct tm *);
+typedef struct tm *(*gmtime_r_fn)(const time_t *, struct tm *);
+
+long long host_timegm(const int in[6], int *ok)
+{
+	static timegm_fn f;
+	struct tm tm;
+	time_t r;
+	if (!f) f = (timegm_fn)sym("timegm");
+	memset(&tm, 0, sizeof tm);
+	tm.tm_year = in[0];
+	tm.tm_mon  = in[1];
+	tm.tm_mday = in[2];
+	tm.tm_hour = in[3];
+	tm.tm_min  = in[4];
+	tm.tm_sec  = in[5];
+	tm.tm_isdst = 0;
+	*host_errno_loc() = 0;
+	r = f(&tm);
+	*ok = !(r == (time_t)-1 && *host_errno_loc() != 0);
+	return (long long)r;
+}
+
+/* out[] = year, mon, mday, hour, min, sec, wday, yday.  Returns 0 if
+ * glibc declined the instant (its own year range), 1 on success. */
+int host_gmtime(long long t, int out[8])
+{
+	static gmtime_r_fn f;
+	struct tm tm;
+	time_t tt = (time_t)t;
+	if (!f) f = (gmtime_r_fn)sym("gmtime_r");
+	memset(&tm, 0, sizeof tm);
+	if (!f(&tt, &tm)) return 0;
+	out[0] = tm.tm_year; out[1] = tm.tm_mon;  out[2] = tm.tm_mday;
+	out[3] = tm.tm_hour; out[4] = tm.tm_min;  out[5] = tm.tm_sec;
+	out[6] = tm.tm_wday; out[7] = tm.tm_yday;
+	return 1;
+}
+
 typedef int (*snprintf_fn)(char *, size_t, const char *, ...);
 static snprintf_fn hsnp(void)
 {
