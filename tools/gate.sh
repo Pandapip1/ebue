@@ -215,24 +215,53 @@ note() { printf '%s\n' "$*" >&2; }
 # The two suite stages do get their copy, .git-file and all: the plain
 # files survive rsync, which is all their drivers need.
 #
+# WHY THE .gitignore FILTER, which is the same bug one size down.
+# Excluding third_party/ fixed `reuse` for files belonging to another
+# project.  Ignored build droppings are the same failure for files
+# belonging to no project: rsync copies them, the copy has no .git, and
+# `reuse lint` -- which skips git-ignored files in a real checkout -- has
+# no way left to know they are not ours.  CI checks out from git, so they
+# do not exist there at all.
+#
+# This had been "fixed" repeatedly by adding .gitignore entries whose
+# comments say, in as many words, that they exist to stop the reuse stage
+# going red: /fuzz.log ("the `reuse` gate stage rsyncs the working tree
+# and fails on any file without an SPDX header"), and the whole block of
+# test droppings ("`tools/gate.sh reuse` rsyncs the working tree and fails
+# on them ... Both have happened").  Those entries could not have that
+# effect: nothing here read .gitignore.  They appeared to work only where
+# they happened to coincide with an exclude already on this list -- *.tmp,
+# /obj/, /lib/, /config.mak.  Measured on a clean tree: an untracked,
+# git-ignored fuzz.log still failed the stage, naming itself.
+#
+# `--filter=':- .gitignore'` makes rsync read the same file git does, so
+# those entries finally mean what they claim, and a dropping added
+# tomorrow is covered by ignoring it rather than by editing this script.
+# Note what it does NOT change: an untracked file that is not ignored is
+# still copied, so uncommitted work is still gated -- which is the whole
+# point of rsyncing the working tree instead of HEAD.
+#
 make_tree() {
 	dest="$GATE_JOBS_DIR/trees/$1"
 	mkdir -p "$dest"
 	case "$1" in
 	libc-test)
 		rsync -a --delete \
+			--filter=':- .gitignore' \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
 			--exclude='*.tmp' --exclude=/third_party/ltp/ \
 			"$srcdir/" "$dest/"
 		;;
 	posix-optsrun)
 		rsync -a --delete \
+			--filter=':- .gitignore' \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
 			--exclude='*.tmp' --exclude=/third_party/libc-test/ \
 			"$srcdir/" "$dest/"
 		;;
 	*)
 		rsync -a --delete \
+			--filter=':- .gitignore' \
 			--exclude=.git --exclude=/obj --exclude=/lib --exclude=/config.mak \
 			--exclude='*.tmp' --exclude=/third_party/ \
 			"$srcdir/" "$dest/"
