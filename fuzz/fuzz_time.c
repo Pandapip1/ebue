@@ -115,13 +115,16 @@ static long long rd64(const unsigned char *p)
 	return (long long)u;
 }
 
-/* Fold v into [lo, hi] without a modulus that could be by zero, and
- * without depending on C's sign rules for %: the span is at most a few
- * thousand here, so an unsigned remainder is exact and total. */
+/* Fold v into [lo, hi].  The width is computed in `unsigned`, not in
+ * `int`: the widest range folded to here is the +-2e9 time_t one, and
+ * hi - lo for that is 4e9, which overflows `int`.  UBSan reported it on
+ * the very first run of this harness, on the empty input -- the harness
+ * had the defect, not the library, which is the right way round for it
+ * to be found. */
 static int fold(int v, int lo, int hi)
 {
-	unsigned span = (unsigned)(hi - lo) + 1u;
-	return lo + (int)((unsigned)v % span);
+	unsigned span = ((unsigned)hi - (unsigned)lo) + 1u;
+	return (int)((unsigned)lo + (unsigned)v % span);
 }
 
 /* The harness's own decimal formatter.  Not ntlibc's snprintf, which is
