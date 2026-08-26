@@ -253,7 +253,17 @@ size_t iconv(iconv_t cd, char **restrict inbuf, size_t *restrict inbytesleft,
 	ip = (unsigned char *)*inbuf;
 	il = inbytesleft ? *inbytesleft : 0;
 	op = outbuf && *outbuf ? (unsigned char *)*outbuf : 0;
-	ol = outbytesleft ? *outbytesleft : 0;
+	/* ol must be 0 whenever op is null: encode_utf8()/encode_utf16le()
+	 * only dereference p once n (their length budget, passed ol here)
+	 * is large enough to hold what they write, and nothing else ties
+	 * "large enough" to "non-null" -- outbuf and outbytesleft are two
+	 * independent caller-supplied pointers, so without this a caller
+	 * that passes *outbuf == NULL alongside a positive *outbytesleft
+	 * would reach a null `p[0] = ...` inside those encoders. Making the
+	 * pairing explicit here, rather than only in the encoders, is what
+	 * lets a caller with real output space (op non-null) actually use
+	 * all of ol -- deriving ol from op instead would truncate that. */
+	ol = op && outbytesleft ? *outbytesleft : 0;
 
 	while (il) {
 		uint32_t cp;
