@@ -2331,6 +2331,61 @@ static void test_regex_bracket_edges(void)
  * Also XBD 9.3.2: in a BRE, '{' and '}' are ordinary characters unless
  * escaped, so an ERE-style "a{3,2}" is a five-character literal, not an
  * invalid interval. */
+#if NTLIBC_TEST(BUG, posix_glob_regex_interval_open_minimum) /* BUG: the open-ended interval {m,} requires m+1 occurrences.
+	 * XBD 9.3.6, BREs Matching Multiple Characters, item 2: "An RE
+	 * followed by '\{m,\}' shall match at least m occurrences of the
+	 * preceding RE."  XBD 9.4.6 gives the ERE `{m,}` the same rule.
+	 *
+	 * Mechanism: src/regex/regex.c's apply_repeat() lowers {m,} as
+	 *
+	 *     for (k = 0; k < m; k++) emit_reloc(...);      // m mandatory copies
+	 *     if (n == -1) {
+	 *             int body = ps->rx->nprog;
+	 *             emit_reloc(...);                      // one more copy
+	 *             split = emit(ps, I_SPLIT, 0, 0, body, 0);
+	 *
+	 * -- m mandatory copies, and then a further copy wrapped as `+`.
+	 * The comment on that branch says the extra copy "covers
+	 * [m..inf)", and that is the error: `+` is mandatory-once, so the
+	 * total minimum is m + 1.  The two correct lowerings are m copies
+	 * followed by `*`, or m-1 copies followed by `+`.
+	 *
+	 * {0,} escapes it only because it is special-cased to `*` a few
+	 * lines above, so the one interval form that is exercised today is
+	 * the one form that cannot show the bug.  The existing
+	 * test_regex_intervals() uses `a{0,}` and `(ab){2,}` against
+	 * "ababab" -- three repetitions, which matches whether the minimum
+	 * is two or three -- so the boundary is never touched.
+	 *
+	 * Re-enable when {m,} accepts exactly m. */
+static void test_regex_interval_open_minimum(void)
+{
+	regex_t re;
+
+	/* ERE: exactly m occurrences must match */
+	CHECK(regcomp(&re, "^a{1,}$", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "a", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "aa", 0, NULL, 0) == 0);	/* and more still do */
+	regfree(&re);
+
+	CHECK(regcomp(&re, "^a{3,}$", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "aaa", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "aa", 0, NULL, 0) == REG_NOMATCH);	/* m-1 must not */
+	regfree(&re);
+
+	/* the same rule through a subexpression */
+	CHECK(regcomp(&re, "^(ab){1,}$", REG_EXTENDED) == 0);
+	CHECK(regexec(&re, "ab", 0, NULL, 0) == 0);
+	regfree(&re);
+
+	/* BRE spelling */
+	CHECK(regcomp(&re, "^a\\{2,\\}$", 0) == 0);
+	CHECK(regexec(&re, "aa", 0, NULL, 0) == 0);
+	CHECK(regexec(&re, "a", 0, NULL, 0) == REG_NOMATCH);
+	regfree(&re);
+}
+#endif
+
 static void test_regex_intervals(void)
 {
 	regex_t re;
