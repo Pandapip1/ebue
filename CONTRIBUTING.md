@@ -129,6 +129,63 @@ The gate passes the second value to the subordinate runners as well as to
 setting for a dedicated build machine. `GATE_WINE` selects an alternate
 Wine binary for the two project-suite stages.
 
+## Verifying a measurement
+
+A gate is only worth its reputation if a pass means what it appears to. These
+rules exist because each has been violated here, and each time the result was
+a green check that measured something other than what it claimed.
+
+**Oracles and stimuli are orthogonal axes.** Adding a third environment buys
+nothing on a stimulus that cannot discriminate. Before reaching for another
+oracle, ask whether the probe you have could express the disagreement at all:
+a one-element array cannot exercise a stride, and a device-free test emits the
+same bytes whether or not the device would have agreed. Vary the stimulus
+first; it is usually the cheaper axis and always the one that decides whether
+the other is worth anything.
+
+**Agreement between non-independent sources measures the sharing, not the
+fact.** Two consumers of one header agree at any value it defines. A stub
+written to return what the code under test asserts confirms only that both
+were written by the same hand. An expected value derived from the
+implementation cannot contradict it. Say what would make your sources
+disagree; if nothing would, you have one measurement wearing several hats —
+and cross-oracle agreement on an under-powered stimulus is *worse* than a
+single measurement, because it retires the question.
+
+**Measure expected values; never derive them.** A fence whose expectation was
+computed from the code it fences will certify whatever that code does,
+including breaking it. If the apparatus cannot carry the evidence — a spawned
+child's file that never reaches the parent, a runner with no console — measure
+*that* first and skip honestly, rather than letting a zero stand for both "no
+effect" and "no channel".
+
+**Number your checks and print the total.** Emit one line per check with an
+incrementing index, and a final `CHECKS EXECUTED=n PASSED=n FAILED=n`. A case
+that silently did not run then shows up twice — as a gap in the numbering and
+as a lower total — instead of as silence. `tools/run-tests.py` prints stdout
+only for non-`PASS` outcomes, so a passing probe's numbers are otherwise never
+seen. Prefer expectations computed from the run itself (a handle this process
+opened) over frozen constants: a test that would still pass with its
+expectations stale is not testing what it names.
+
+**Ask "true on which version?"** before recording a platform fact. Wine
+implements the shapes it implements; absence there is not evidence about NT,
+and a behaviour shared by both may be true only of one era. The three
+`windows-test` legs are one Windows build wearing three labels — they vary the
+artifact architecture, not the operating system — so agreement across them is
+one observation, not three.
+
+**Verify the stimulus actually varied.** A parameter silently rounded or
+ignored looks like success while repeating the run you already had. Check that
+the thing you changed reached the thing you were testing.
+
+**A result taken under load is not evidence — re-measure quiet.** When the
+machine is oversubscribed the suites report contention as `TIMEOUT`, which is
+indistinguishable from a hang. Record the load average alongside any gate
+result; re-run a red stage individually before believing it; and verify an
+artifact by content (hash it) rather than assuming it survived. A rule that
+only tells you to doubt produces paralysis — the recovery action is the rule.
+
 ## Sanitizers and fuzzing
 
 `make asan` and `make fuzz` build the OS-independent library code natively
