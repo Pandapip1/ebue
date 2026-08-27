@@ -172,8 +172,9 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	loc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 	if (loc) {
 		b = nl_langinfo_l(item, loc);
-		if (!b || strcmp(a, b) != 0)
-			oracle_mismatch_s("nl_langinfo_l differs in C locale", "", a,
+		if (!a || !b || strcmp(a, b) != 0)
+			oracle_mismatch_s("nl_langinfo_l differs in C locale", "",
+			                  a ? a : "(null)",
 			                  b ? b : "(null)");
 		freelocale(loc);
 	}
