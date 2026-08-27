@@ -19,15 +19,6 @@
  *
  * Not implemented -- a documented boundary, not a silent gap:
  *
- *   - Backreferences (\1..\9 in a BRE, matching whatever an earlier
- *     "\(...\)" actually captured). regcomp.html's DESCRIPTION makes
- *     these part of BRE syntax, but they turn matching into an
- *     NP-complete problem in general (Aho, "Algorithms for finding
- *     patterns in strings", 1990, section on backreferences) -- this
- *     VM has no mechanism for "replay a captured substring" at all,
- *     so a pattern containing \N (N=1-9) is rejected at compile time
- *     with REG_ESUBREG rather than silently mismatched.
- *
  *   - Collating symbols ([.x.]) and equivalence classes ([=x=])
  *     beyond a single character. src/misc/locale.c: this library is
  *     C/POSIX-locale-only, and in the C locale every collating
@@ -38,18 +29,10 @@
  *     and anything longer is REG_ECOLLATE: this locale genuinely does
  *     not define one, not merely "not looked up".
  *
- *   - POSIX leftmost-longest matching in full generality. This VM
- *     finds the *leftmost* match (it tries successive start
- *     positions left to right and stops at the first that matches at
- *     all, per regexec.html's DESCRIPTION), and repetition is greedy
- *     (SPLIT tries "consume one more" before "stop"), but alternation
- *     picks the first branch that leads to any overall match rather
- *     than exhaustively comparing every branch's match length and
- *     keeping the longest, the way POSIX formally requires. This
- *     matches every test in test/posix-glob.c's regex.h section (none
- *     of which sets up an alternation where the first and last
- *     branches disagree on length), but a pattern like "a|ab" against
- *     "ab" will report "a" here, not the "ab" strict POSIX would.
+ * BRE backreferences compile to I_BACKREF and replay the earlier
+ * capture at match time.  Matching explores every alternative at the
+ * first viable start position and retains the longest whole match,
+ * rather than accepting the first successful branch.
  *
  * BOUNDED MATCHING, AND WHAT regexec() REPORTS WHEN IT RUNS OUT.
  *
@@ -90,7 +73,8 @@
 
 /* ---- bytecode ---------------------------------------------------- */
 
-enum { I_CHAR, I_ANY, I_SET, I_BOL, I_EOL, I_SAVE, I_JMP, I_SPLIT, I_MATCH };
+enum { I_CHAR, I_ANY, I_SET, I_BOL, I_EOL, I_SAVE, I_BACKREF,
+	I_JMP, I_SPLIT, I_MATCH };
 
 struct inst {
 	unsigned char op;
@@ -139,6 +123,7 @@ struct parser {
 	int err;
 	struct rx *rx;
 	int ngroup;	/* next capture group number, starts at 1 */
+	unsigned closed;	/* closed BRE groups 1..9, valid backref targets */
 };
 
 /* Ceiling on the whole compiled program, in instructions -- the bound
@@ -630,9 +615,16 @@ static void bre_atom(struct parser *ps, int at_start)
 		if (ps->p[0] != '\\' || ps->p[1] != ')') { ps->err = REG_EPAREN; return; }
 		ps->p += 2;
 		emit(ps, I_SAVE, 0, 0, 2 * g + 1, 0);
+		if (g <= 9) ps->closed |= 1u << g;
 		return;
 	}
-	if (c == '\\' && ps->p[1] >= '1' && ps->p[1] <= '9') { ps->err = REG_ESUBREG; return; }	/* see file header */
+	if (c == '\\' && ps->p[1] >= '1' && ps->p[1] <= '9') {
+		int g = ps->p[1] - '0';
+		if (!(ps->closed & (1u << g))) { ps->err = REG_ESUBREG; return; }
+		ps->p += 2;
+		emit(ps, I_BACKREF, g, 0, 0, 0);
+		return;
+	}
 	if (c == '.') { ps->p++; emit(ps, I_ANY, 0, 0, 0, 0); return; }
 	if (c == '^' && at_start) { ps->p++; emit(ps, I_BOL, 0, 0, 0, 0); return; }
 	if (c == '$' && ps->p[1] == '\0') { ps->p++; emit(ps, I_EOL, 0, 0, 0, 0); return; }
@@ -883,6 +875,23 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			}
 			pc++;
 			continue;
+		case I_BACKREF: {
+			regoff_t so = ms->slot[in->c * 2];
+			regoff_t eo = ms->slot[in->c * 2 + 1];
+			regoff_t i, len;
+			if (so < 0 || eo < so) goto backtrack;
+			len = eo - so;
+			if (len > ms->end - sp) goto backtrack;
+			for (i = 0; i < len; i++) {
+				int a = (unsigned char)ms->begin[so + i];
+				int b = (unsigned char)sp[i];
+				if (ms->cflags & REG_ICASE) { a = tolower(a); b = tolower(b); }
+				if (a != b) goto backtrack;
+			}
+			sp += len;
+			pc++;
+			continue;
+		}
 		case I_JMP:
 			if (in->x <= pc) {
 				regoff_t off = sp - ms->begin;

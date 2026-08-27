@@ -3027,7 +3027,7 @@ static void test_regex_leftmost_longest_alternation(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_glob_regex_bre_backreference) /* BUG (compiles and links; formerly UNIMPL):: XBD 9.3.6 -- "The back-reference expression '\n' shall
+#if NTLIBC_TEST(PASS, posix_glob_regex_bre_backreference) /* XBD 9.3.6 -- "The back-reference expression '\n' shall
 	match the same (possibly empty) string of characters as was
 	matched by a subexpression enclosed between '\(' and '\)'
 	preceding the '\n'. The character 'n' shall be a digit from 1
