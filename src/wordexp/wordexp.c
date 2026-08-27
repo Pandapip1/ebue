@@ -159,6 +159,126 @@ static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
 static int fbuf_push_long(struct fbuf *b, long v);
 
+struct assignment {
+	char *name, *old;
+	int had_old;
+	struct assignment *next;
+};
+
+struct assign_ctx { struct assignment *head; };
+
+static int expand_impl(const char *, wordexp_t *, int, int, struct assign_ctx *);
+
+static int assign_param(struct assign_ctx *ctx, const char *name, const char *value)
+{
+	struct assignment *a;
+	const char *old;
+
+	for (a = ctx->head; a; a = a->next)
+		if (!strcmp(a->name, name)) return setenv(name, value, 1) < 0 ? WRDE_NOSPACE : 0;
+	a = __malloc(sizeof *a);
+	if (!a) return WRDE_NOSPACE;
+	a->name = xstrdup(name);
+	old = getenv(name);
+	a->had_old = old != 0;
+	a->old = old ? xstrdup(old) : 0;
+	if (!a->name || (old && !a->old)) {
+		__free(a->name); __free(a->old); __free(a);
+		return WRDE_NOSPACE;
+	}
+	a->next = ctx->head;
+	ctx->head = a;
+	return setenv(name, value, 1) < 0 ? WRDE_NOSPACE : 0;
+}
+
+static void finish_assignments(struct assign_ctx *ctx, int restore)
+{
+	struct assignment *a, *next;
+
+	for (a = ctx->head; a; a = next) {
+		next = a->next;
+		if (restore) {
+			if (a->had_old) setenv(a->name, a->old, 1);
+			else unsetenv(a->name);
+		}
+		__free(a->name);
+		__free(a->old);
+		__free(a);
+	}
+}
+
+/* Find the closing brace of a ${parameter-word} expansion.  Nested
+ * parameter expansions belong to word and therefore do not close the
+ * outer expansion.  Escaped braces and braces in quotes are data. */
+static const char *param_word_end(const char *p)
+{
+	int depth = 0;
+
+	for (; *p; p++) {
+		if (*p == '\\' && p[1]) { p++; continue; }
+		if (*p == '\'') {
+			while (*++p && *p != '\'') {}
+			if (!*p) return 0;
+			continue;
+		}
+		if (*p == '"') {
+			while (*++p && *p != '"')
+				if (*p == '\\' && p[1]) p++;
+			if (!*p) return 0;
+			continue;
+		}
+		if (p[0] == '$' && p[1] == '{') { depth++; p++; continue; }
+		if (*p == '}') {
+			if (!depth) return p;
+			depth--;
+		}
+	}
+	return 0;
+}
+
+/* Expand an operator's word with the same engine, then turn its fields
+ * back into the single replacement string on which the surrounding
+ * parameter expansion operates.  A multi-field result is joined with
+ * the first IFS byte, as shell "$*" is; the caller performs the final
+ * field splitting when the outer expansion is unquoted. */
+static int expand_param_word(const char *start, const char *end, int flags,
+                             int sh, struct assign_ctx *ctx, char **result)
+{
+	wordexp_t we;
+	char *text, *s;
+	const char *ifs;
+	size_t i, n = 0;
+	int rc;
+
+	*result = 0;
+	text = __malloc((size_t)(end - start) + 1);
+	if (!text) return WRDE_NOSPACE;
+	memcpy(text, start, (size_t)(end - start));
+	text[end - start] = 0;
+	memset(&we, 0, sizeof we);
+	rc = expand_impl(text, &we, flags & (WRDE_NOCMD | WRDE_SHOWERR | WRDE_UNDEF), sh, ctx);
+	__free(text);
+	if (rc) return rc;
+
+	ifs = getenv("IFS");
+	if (!ifs) ifs = " ";
+	for (i = 0; i < we.we_wordc; i++) n += strlen(we.we_wordv[i]);
+	if (we.we_wordc > 1 && *ifs) n += we.we_wordc - 1;
+	s = __malloc(n + 1);
+	if (!s) { wordfree(&we); return WRDE_NOSPACE; }
+	n = 0;
+	for (i = 0; i < we.we_wordc; i++) {
+		size_t z = strlen(we.we_wordv[i]);
+		if (i && *ifs) s[n++] = *ifs;
+		memcpy(s + n, we.we_wordv[i], z);
+		n += z;
+	}
+	s[n] = 0;
+	wordfree(&we);
+	*result = s;
+	return 0;
+}
+
 /* Reads a parameter expansion starting at *pp (which points at the
  * '$'). Advances *pp past it. Appends the value to b -- as literal
  * bytes when `quoted` (inside double-quotes the result is not a glob
@@ -178,7 +298,8 @@ static int fbuf_push_long(struct fbuf *b, long v);
  * single field of decimal digits and nothing about it depends on
  * quoting.  2.5.2's '@' and '*' are NOT here: they can produce more
  * than one field, which only the caller's scan can express. */
-static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int quoted)
+static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
+                        int quoted, struct assign_ctx *ctx)
 {
 	const char *p = *pp + 1;
 	const char *start;
@@ -192,6 +313,20 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int 
 		p++;
 	}
 	start = p;
+
+	if (braced && *p == '#' && is_namestart(p[1])) {
+		p++;
+		start = p;
+		while (is_namechar(*p)) p++;
+		len = (size_t)(p - start);
+		if (*p != '}' || len >= sizeof name) return WRDE_SYNTAX;
+		memcpy(name, start, len);
+		name[len] = 0;
+		*pp = p + 1;
+		val = getenv(name);
+		if (!val && (flags & WRDE_UNDEF)) return WRDE_BADVAL;
+		return fbuf_push_long(b, val ? (long)strlen(val) : 0) ? WRDE_NOSPACE : 0;
+	}
 
 	if (*p >= '0' && *p <= '9') {
 		/* 2.5.1: "The digits denoting the positional parameters shall
@@ -259,13 +394,39 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int 
 	if (len >= sizeof name) return WRDE_SYNTAX;
 	memcpy(name, start, len);
 	name[len] = 0;
-	if (braced) {
-		if (*p != '}') return WRDE_SYNTAX;
-		p++;
+	val = getenv(name);
+	if (braced && *p != '}') {
+		const char *word, *end;
+		char op, *replacement;
+		int colon = 0, use_word, rc;
+
+		if (*p == ':' && p[1] && strchr("-+=?", p[1])) { colon = 1; op = p[1]; word = p + 2; }
+		else if (*p && strchr("-+=?", *p)) { op = *p; word = p + 1; }
+		else return WRDE_SYNTAX;
+		end = param_word_end(word);
+		if (!end) return WRDE_SYNTAX;
+		*pp = end + 1;
+		use_word = !val || (colon && !*val);
+
+		if (op == '+') use_word = !use_word;
+		if (!use_word) {
+			if (op == '+') return 0;
+			return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
+		}
+		if (op == '?') return WRDE_SYNTAX;
+		rc = expand_param_word(word, end, flags, sh, ctx, &replacement);
+		if (rc) return rc;
+		if (op == '=' && (rc = assign_param(ctx, name, replacement))) {
+			__free(replacement);
+			return rc;
+		}
+		rc = fbuf_push_str(b, replacement, quoted) ? WRDE_NOSPACE : 0;
+		__free(replacement);
+		return rc;
 	}
+	if (braced) p++;
 	*pp = p;
 
-	val = getenv(name);
 	if (!val) {
 		if (flags & WRDE_UNDEF) return WRDE_BADVAL;
 		return 0;
@@ -708,7 +869,8 @@ static int push_params(struct fbuf *b, struct pv *out, int *active, int star, in
 /* The one scan both wordexp() and __wordexp_sh() run; `sh` is the only
  * difference between them (see src/internal/libc.h on __wordexp_sh()
  * for why it is a parameter rather than a second implementation). */
-static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
+static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh,
+                       struct assign_ctx *ctx)
 {
 	struct pv out;
 	struct fbuf field;
@@ -847,7 +1009,7 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 				 * `f $1` with no parameters pass nothing rather than
 				 * one empty argument. */
 				before = field.n;
-				rc = expand_param(&p, &field, flags, sh, 0);
+				rc = expand_param(&p, &field, flags, sh, 0, ctx);
 				if (rc) goto fail;
 				rc = split_appended(&field, &out, &active, before);
 				if (rc) goto fail;
@@ -916,7 +1078,7 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 					p = end;
 					continue;
 				}
-				rc = expand_param(&p, &field, flags, sh, 1);
+				rc = expand_param(&p, &field, flags, sh, 1, ctx);
 				if (rc) goto fail;
 				continue;
 			}
@@ -987,12 +1149,18 @@ fail:
 
 int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 {
-	return expand(words, pwordexp, flags, 0);
+	struct assign_ctx ctx = { 0 };
+	int rc = expand_impl(words, pwordexp, flags, 0, &ctx);
+	finish_assignments(&ctx, 1);
+	return rc;
 }
 
 int __wordexp_sh(const char *words, wordexp_t *pwordexp, int flags)
 {
-	return expand(words, pwordexp, flags, 1);
+	struct assign_ctx ctx = { 0 };
+	int rc = expand_impl(words, pwordexp, flags, 1, &ctx);
+	finish_assignments(&ctx, 0);
+	return rc;
 }
 
 void wordfree(wordexp_t *pwordexp)

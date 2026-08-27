@@ -707,6 +707,19 @@ static void test_wordexp_tilde_and_param(void)
 	CHECK(wordexp("$#", &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "0") == 0);
 	wordfree(&we);
+
+	setenv("WORDEXP_SET", "value", 1);
+	unsetenv("WORDEXP_UNSET");
+	CHECK(wordexp("${WORDEXP_UNSET:-default} ${WORDEXP_SET:+alternate}", &we, 0) == 0);
+	CHECK(we.we_wordc == 2 && strcmp(we.we_wordv[0], "default") == 0 &&
+	      strcmp(we.we_wordv[1], "alternate") == 0);
+	wordfree(&we);
+	CHECK(wordexp("${WORDEXP_UNSET:=assigned} ${#WORDEXP_UNSET}", &we, 0) == 0);
+	CHECK(we.we_wordc == 2 && strcmp(we.we_wordv[0], "assigned") == 0 &&
+	      strcmp(we.we_wordv[1], "8") == 0);
+	wordfree(&we);
+	unsetenv("WORDEXP_SET");
+	unsetenv("WORDEXP_UNSET");
 }
 
 /* UNIMPL: wordexp.html DESCRIPTION -- pathname expansion delegates

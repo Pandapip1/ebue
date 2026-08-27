@@ -49,23 +49,18 @@
  *
  * Implemented, none of which needs the shell: tilde expansion (~ and
  * ~user, via getenv("HOME") and include/pwd.h's getpwnam()), parameter
- * expansion of bare $VAR and ${VAR} against environ, arithmetic
+ * expansion of $VAR/${VAR}, ${#VAR}, and the -, +, = and ?
+ * default/alternate operators against environ (assignments are visible
+ * for the duration of one wordexp() call), arithmetic
  * expansion ($((expr)), src/wordexp/arith.c), pathname expansion
  * (delegates to <glob.h>), quote removal, and the
  * WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE bookkeeping flags.
  *
- * Field splitting (XBD 2.6.5), stated exactly, because this is the one
- * area where this header has previously claimed more than the
- * implementation does: <space>/<tab>/<newline> in the *input* text
- * separates fields when unquoted, and so does <space>/<tab>/<newline>
- * in the result of an *unquoted* command substitution (inside
- * double-quotes it does not, per XCU 2.6.3).  Two things it does NOT
- * do, both pre-existing and tracked separately from this header: the
- * result of a parameter expansion is not split (an unquoted $VAR whose
- * value contains a space stays one field), and IFS itself is never
- * consulted -- the three whitespace bytes above are hard-coded, so
- * setting IFS to anything, including the empty string, changes nothing.
- * Read no claim to the contrary into the paragraphs above.
+ * Field splitting (XBD 2.6.5): unquoted expansion results are split on
+ * IFS, with <space>/<tab>/<newline> as the default and no splitting for
+ * a null IFS.  This applies to parameter and command-substitution
+ * results; double-quoted results are not split.  Unquoted whitespace in
+ * the input language separates words independently of IFS.
  *
  * One thing this header used to list as missing and no longer is: XCU
  * 2.6's empty-field rule.  "If the complete expansion appropriate for a
