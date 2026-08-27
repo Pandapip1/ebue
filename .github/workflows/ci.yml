@@ -21,7 +21,7 @@ env:
   # rather than a silent runtime change underneath every Wine-consuming
   # job. See .github/actions/setup-wine and the build-wine job below.
   WINE_REPO: https://github.com/Pandapip1/wine.git
-  WINE_SHA: 275c42ca13fd8d063a37bb98d00a578d62c1c82b
+  WINE_SHA: 3d67aa262
 
 jobs:
   reuse:
