@@ -3,6 +3,9 @@
 #include <setjmp.h>
 #include <signal.h>
 
+void __sigsetjmp_save(sigjmp_buf, int);
+void __siglongjmp_restore(sigjmp_buf);
+
 /* Called by the architecture entry points before they capture or restore
  * registers.  Keeping sigprocmask() out of the assembly also keeps jmp_buf's
  * public mask storage layout in one C-visible place. */

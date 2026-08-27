@@ -65,7 +65,7 @@ static int class_match(const char *name, size_t len, unsigned char c)
  * where the same input is an error -- test_regex_bracket_edges()
  * asserts REG_EBRACK for regcomp("[abc").  The two pattern languages
  * are not the same language and this is one of the places they part. */
-static int bracket_match(const char **pp, unsigned char c, int flags)
+static int bracket_match(const char **pp, unsigned char c)
 {
 	const char *p = *pp + 1;
 	int neg = 0, matched = 0, first = 1;
@@ -160,7 +160,7 @@ static int fnm_match(const char *pat, const char *s, const char *start, int flag
 			 * because those describe what a BRACKET EXPRESSION may
 			 * match; an unterminated '[' is not one, and must be judged
 			 * as the ordinary character it is. */
-			r = *s ? bracket_match(&probe, c, flags) : -1;
+			r = *s ? bracket_match(&probe, c) : -1;
 			if (r == -2) return FNM_NOMATCH;
 			if (r < 0) {
 				/* not a bracket expression: a literal '[' */
