@@ -52,6 +52,9 @@ int main(void)
 	}
 
 	/* rand48 */
+	CHECK(lrand48() == 0);
+	CHECK(lrand48() == 2116118);
+	CHECK(lrand48() == 89401895);
 	srand48(123);
 	{
 		double d = drand48();

@@ -6,7 +6,9 @@
 #include <string.h>
 #include <features.h>
 
-static unsigned short xsubi_default[3] = { 0x330e, 0, 0 };
+/* drand48.html's process-start initializer is Xi = 0.  This is distinct
+ * from srand48(seed), which explicitly installs 0x330e in the low word. */
+static unsigned short xsubi_default[3];
 static unsigned short a_[3] = { 0xe66d, 0xdeec, 0x5 };
 static unsigned short c_ = 0xb;
 
