@@ -134,6 +134,7 @@ static void set_fd_inherit(int i, int inherit)
 	                                 0, inherit ? OBJ_INHERIT : 0, DUPLICATE_SAME_ACCESS))) {
 		NtClose(__fds[i].h);
 		__fds[i].h = dup;
+		__mq_fd_replaced(i, dup);
 	}
 }
 

@@ -161,6 +161,13 @@ static int create_sem(const char *name, LONG initial, LONG maximum, HANDLE *out)
 	NTSTATUS st;
 	object_attributes(name, &oa, &us, wide, sizeof wide / sizeof wide[0]);
 	st = NtCreateSemaphore(out, SEMAPHORE_ALL_ACCESS, &oa, initial, maximum);
+	/* Wine reports an existing named semaphore as the error status
+	 * STATUS_OBJECT_NAME_COLLISION rather than NT's informational
+	 * STATUS_OBJECT_NAME_EXISTS.  Opening it is the same create-or-open
+	 * contract mq_open needs and avoids turning a second mq_open into
+	 * the unrelated filesystem-looking EEXIST. */
+	if (st == STATUS_OBJECT_NAME_COLLISION)
+		st = NtOpenSemaphore(out, SEMAPHORE_ALL_ACCESS, &oa);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
@@ -597,6 +604,12 @@ void __mq_fd_closed(int fd)
 	NtClose(d->items);
 	NtClose(d->lock);
 	memset(d, 0, sizeof *d);
+}
+
+void __mq_fd_replaced(int fd, HANDLE handle)
+{
+	if (fd >= 0 && fd < FD_MAX && mqds[fd].magic == MQ_DESC_MAGIC)
+		mqds[fd].file = handle;
 }
 
 int mq_close(mqd_t mqdes)

@@ -50,6 +50,7 @@ int fcntl(int fd, int cmd, ...)
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 		NtClose(f->h);
 		f->h = h;
+		__mq_fd_replaced(fd, h);
 		f->flags = (f->flags & ~O_CLOEXEC) | want;
 		return 0;
 	}
