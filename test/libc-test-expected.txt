@@ -25,7 +25,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=95 BUG=1 UNIMPL=36 NA=14 FLAKY=0
+# COUNTS PASS=98 BUG=1 UNIMPL=33 NA=14 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -117,9 +117,9 @@ search_hsearch                    runtime=wine,target_arch=x86_64,kernel32=no  P
 search_insque                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
 search_lsearch                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
 search_tsearch                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
-sem_close-unmap                   runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  sem_close-unmap.c:5: error: include file 'semaphore.h' not found
-sem_init                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  sem_init.c:2: error: include file 'pthread.h' not found
-sem_open                          runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  sem_open.c:6: error: include file 'semaphore.h' not found
+sem_close-unmap                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
+sem_init                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
+sem_open                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
 setenv-oom                        runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_vmfill stubbed, no mmap), so it never reaches adjudication here.
 setjmp                            runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed: sigsetjmp records the emulated signal mask and siglongjmp restores it when requested
 setvbuf-unget                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
