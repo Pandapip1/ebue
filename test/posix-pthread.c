@@ -366,7 +366,7 @@ static void test_pthread_mutexattr_type_relock(void)
  * pthread_cond_timedwait.html, pthread_condattr_getclock.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_cond_timedwait_etimedout)
+#if NTLIBC_TEST(PASS, posix_pthread_cond_timedwait_etimedout)
 #include <pthread.h>
 #include <time.h>
 #include <errno.h>
@@ -415,7 +415,7 @@ static void test_pthread_cond_timedwait_etimedout(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_condattr_clock)
+#if NTLIBC_TEST(PASS, posix_pthread_condattr_clock)
 #include <pthread.h>
 #include <time.h>
 

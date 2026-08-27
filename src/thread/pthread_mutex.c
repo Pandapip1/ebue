@@ -264,7 +264,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	if (!self) return EINVAL;
 	data = mutex_data(mutex);
 	RtlAcquirePebLock();
-	if (data->owner != self) {
+	if (data->owner != self && data->type != PTHREAD_MUTEX_NORMAL) {
 		RtlReleasePebLock();
 		return EPERM;
 	}
