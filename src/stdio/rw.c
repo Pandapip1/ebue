@@ -66,6 +66,7 @@ int ungetc(int c, FILE *f)
 {
 	if (c == EOF || !f->readable) return EOF;
 	if (f->nunget >= (int)(sizeof f->unget / sizeof f->unget[0])) return EOF;
+	__byte_oriented(f);
 	f->unget[f->nunget++] = (unsigned char)c;
 	f->eof = 0;
 	return (unsigned char)c;

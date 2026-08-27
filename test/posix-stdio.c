@@ -86,7 +86,7 @@ static void test_fflush_read_stream(const char *name)
 	}
 }
 
-#if NTLIBC_TEST(BUG, posix_stdio_fflush_nonseekable_read_stream) /* BUG: fflush() fails on a readable stream whose fd cannot seek.
+#if NTLIBC_TEST(PASS, posix_stdio_fflush_nonseekable_read_stream) /* fflush() accepts a readable stream whose fd cannot seek.
 	 * fflush.html DESCRIPTION states the read-stream action with an
 	 * explicit seekability condition: "For a stream open for reading
 	 * with an underlying file description, if the file is not already
@@ -316,7 +316,7 @@ static void perror_prefixed(void) { errno = ENOENT; perror("myprefix"); }
 static void perror_noprefix_null(void) { errno = EACCES; perror(0); }
 static void perror_noprefix_empty(void) { errno = EACCES; perror(""); }
 
-#if NTLIBC_TEST(BUG, posix_stdio_fflush_null_covers_stderr) /* BUG: fflush(NULL) does not flush stderr, because stderr is not
+#if NTLIBC_TEST(PASS, posix_stdio_fflush_null_covers_stderr) /* fflush(NULL) includes stderr and stdin.
 	 * on the list it walks.  fflush.html DESCRIPTION: "If stream is a
 	 * null pointer, fflush() shall perform this flushing action on all
 	 * streams for which the behavior is defined above."  stderr is such

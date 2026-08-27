@@ -33,6 +33,7 @@ int fseeko(FILE *f, off_t off, int whence)
 	if (r < 0) return -1;
 	f->rpos = f->rend = 0;
 	f->nunget = 0;
+	f->nwunget = 0;
 	f->eof = 0;
 	return 0;
 }

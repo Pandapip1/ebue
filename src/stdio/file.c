@@ -142,6 +142,11 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 	f->eof = f->err = 0;
 	f->rpos = f->rend = f->wpos = 0;
 	f->nunget = 0;
+	f->wide = 0;
+	memset(&f->wst_in, 0, sizeof f->wst_in);
+	memset(&f->wst_out, 0, sizeof f->wst_out);
+	f->wunget = 0;
+	f->nwunget = 0;
 	if (flags & O_APPEND) fseek(f, 0, SEEK_END);
 	return f;
 }

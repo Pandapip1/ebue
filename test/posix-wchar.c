@@ -1154,7 +1154,7 @@ static void test_ungetwc(void)
 	remove("test.tmp");
 }
 
-#if NTLIBC_TEST(BUG, posix_wchar_ungetwc_discarded_by_positioning) /* BUG: a file-positioning function does not discard ungetwc()
+#if NTLIBC_TEST(PASS, posix_wchar_ungetwc_discarded_by_positioning) /* A file-positioning function discards ungetwc()
 	 * pushback.  ungetwc.html DESCRIPTION: "A successful intervening
 	 * call (with the stream pointed to by stream) to a
 	 * file-positioning function (fseek(), fseeko(), fsetpos(), or
@@ -1217,7 +1217,7 @@ static void test_ungetwc_discarded_by_positioning(void)
 /* ---------------------------------------------------------------------
  * fwide -- fwide.html
  * ------------------------------------------------------------------- */
-#if NTLIBC_TEST(BUG, posix_wchar_freopen_clears_orientation) /* BUG: freopen() does not clear the stream's orientation or its
+#if NTLIBC_TEST(PASS, posix_wchar_freopen_clears_orientation) /* freopen() clears the stream's orientation and its
 	 * conversion state.  freopen.html DESCRIPTION: "After a successful
 	 * call to the freopen() function, the orientation of the stream
 	 * shall be cleared, the encoding rule shall be cleared, and the
@@ -1278,7 +1278,7 @@ static void test_freopen_clears_orientation(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_wchar_ungetc_orients_byte) /* BUG: ungetc() does not give an unoriented stream byte
+#if NTLIBC_TEST(PASS, posix_wchar_ungetc_orients_byte) /* ungetc() gives an unoriented stream byte
 	 * orientation.  XSH 2.5, Standard I/O Streams: "once a byte
 	 * input/output function has been applied to a stream without
 	 * orientation, the stream shall become byte-oriented."  ungetc() is
@@ -1311,7 +1311,10 @@ static void test_ungetc_orients_byte(void)
 
 	CHECK(f != 0);
 	if (!f) return;
-	CHECK(fputs("AB", f) >= 0);
+	/* Populate the file without applying a stdio byte operation to the
+	 * stream: the orientation must still be undecided when ungetc() is
+	 * reached below. */
+	CHECK(write(fileno(f), "AB", 2) == 2);
 	rewind(f);
 
 	CHECK(fwide(f, 0) == 0);		/* no orientation yet */

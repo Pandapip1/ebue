@@ -168,10 +168,19 @@ int __fflush_locked(FILE *f)
 	 * stream's own view -- so there is nothing to resync there. */
 	if (f->readable) {
 		long long ahead = (long long)(f->rend - f->rpos);
-		f->nunget = 0;
 		if (ahead && !f->is_mem) {
-			if (__file_seek(f, -ahead, SEEK_CUR) < 0) { f->err = 1; return -1; }
+			if (__file_seek(f, -ahead, SEEK_CUR) < 0) {
+				/* A non-seekable stream has no underlying offset to
+				 * resynchronise.  Its buffered input remains live. */
+				if (errno == ESPIPE) {
+					mem_publish(f);
+					return 0;
+				}
+				f->err = 1; return -1;
+			}
 		}
+		f->nunget = 0;
+		f->nwunget = 0;
 		f->rpos = f->rend = 0;
 	}
 	/* "shall be updated ... after a successful fflush() or fclose()" --
@@ -194,6 +203,7 @@ int __towrite(FILE *f)
 		long long unread = (long long)(f->rend - f->rpos) + f->nunget;
 		f->rpos = f->rend = 0;
 		f->nunget = 0;
+		f->nwunget = 0;
 		if (__file_seek(f, -unread, SEEK_CUR) < 0) { f->err = 1; return -1; }
 	}
 	return 0;
@@ -217,7 +227,9 @@ int fflush(FILE *f)
 	if (!f) {
 		FILE *p;
 		int r = 0;
+		if (__fflush_locked(stdin) < 0) r = EOF;
 		if (__fflush_locked(stdout) < 0) r = EOF;
+		if (__fflush_locked(stderr) < 0) r = EOF;
 		for (p = __stdio_files; p; p = p->next)
 			if (__fflush_locked(p) < 0) r = EOF;
 		return r;
