@@ -86,6 +86,15 @@ static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 	size_t i, n;
 
 	if (__name_too_long(path)) { errno = ENAMETOOLONG; return 0; }
+	/* The two emulated /dev nodes are terminal device objects, not
+	 * directories.  Reject a child path before the exact-name mapping
+	 * below; otherwise it is treated as an ordinary missing /dev tree and
+	 * incorrectly reported as ENOENT. */
+	if ((!strncmp(path, "/dev/null", 9) && (path[9] == '/' || path[9] == '\\'))
+	 || (!strncmp(path, "/dev/tty", 8) && (path[8] == '/' || path[8] == '\\'))) {
+		errno = ENOTDIR;
+		return 0;
+	}
 	if (!strcmp(path, "/dev/null")) path = "NUL";
 	else if (!strcmp(path, "/dev/tty")) path = "CON";
 	else if (!strncmp(path, "/dev/", 5)) {

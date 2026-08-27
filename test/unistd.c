@@ -550,6 +550,8 @@ int main(void)
 		CHECK(close(fd) == 0);
 		errno = 0;
 		CHECK(utimensat(AT_FDCWD, "nope", ts, 0) == -1 && errno == ENOENT);
+		errno = 0;
+		CHECK(utimensat(AT_FDCWD, "/dev/null/invalid", ts, 0) == -1 && errno == ENOTDIR);
 
 		/* futimesat: same as utimensat/timeval AT_FDCWD, timeval usec
 		 * resolution */
