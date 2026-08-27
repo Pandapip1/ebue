@@ -171,10 +171,7 @@ typedef struct sigaltstack stack_t;
 #define MINSIGSTKSZ 2048
 #define SIGSTKSZ 8192
 
-union sigval {
-	int sival_int;
-	void *sival_ptr;
-};
+#include <bits/sigevent.h>
 
 typedef struct {
 	int si_signo, si_errno, si_code;
@@ -238,18 +235,6 @@ struct sigaltstack {
 	int ss_flags;
 	size_t ss_size;
 };
-
-struct sigevent {
-	union sigval sigev_value;
-	int sigev_signo;
-	int sigev_notify;
-	void (*sigev_notify_function)(union sigval);
-	void *sigev_notify_attributes;
-};
-
-#define SIGEV_SIGNAL 0
-#define SIGEV_NONE 1
-#define SIGEV_THREAD 2
 
 int __libc_current_sigrtmin(void);
 int __libc_current_sigrtmax(void);

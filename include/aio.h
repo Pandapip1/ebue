@@ -6,6 +6,7 @@
 
 #include <features.h>
 #include <signal.h>
+#include <bits/sigevent.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,6 +15,7 @@ extern "C" {
 #define __NEED_off_t
 #define __NEED_size_t
 #define __NEED_ssize_t
+#define __NEED_time_t
 #define __NEED_struct_timespec
 #include <bits/alltypes.h>
 
