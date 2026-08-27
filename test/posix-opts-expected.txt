@@ -1507,19 +1507,19 @@ sigprocmask/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigprocmask/8-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigprocmask/8-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigprocmask/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigqueue/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigqueue/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
+sigqueue/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 added payload-preserving queued delivery over ntlibc's cross-process signal pipe
+sigqueue/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 added sigqueue() argument validation
+sigqueue/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 added sigqueue() existence checking
+sigqueue/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structurally N/A: the assertion requires two Unix security identities and a privileged pid 1, while ntlibc exposes one Windows-token-derived identity; the test ran and failed only its assumed cross-identity EPERM condition
+sigqueue/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented sigqueue(pid, 0, value) existence checking
+sigqueue/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented sigqueue(pid, 0, value) existence checking
+sigqueue/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structurally N/A: the assertion requires two Unix security identities and a privileged pid 1, while ntlibc exposes one Windows-token-derived identity; the test ran and failed only its assumed cross-identity EPERM condition
+sigqueue/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 added FIFO real-time signal queueing with siginfo payloads
+sigqueue/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 added real-time signal queueing for non-SA_SIGINFO handlers
+sigqueue/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 made unblocked self-delivery synchronous
+sigqueue/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented lowest-signal-number priority across queued real-time signals
+sigqueue/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 preserved every queued real-time instance through unblock delivery
+sigqueue/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented the bounded SIGQUEUE_MAX queue and EAGAIN overflow
 sigrelse/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigrelse/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigrelse/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -1537,27 +1537,27 @@ sigsuspend/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compil
 sigsuspend/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: forks a child, installs a sigaction() handler in it, expects kill() from the parent to invoke that handler. src/signal/signal.c's kill() documents why that can't happen on this platform -- "there is no asynchronous delivery to another process at all" -- so a kill() to a non-self pid always calls NtTerminateProcess()/NtSuspendProcess() directly. Same root cause as clock_nanosleep/9-1, /10-1 and nanosleep/3-1, /5-2, /7-1, /7-2 in this same file; a real fix needs remote APC injection into the target's address space, out of scope here. CI run 33027560032 job 98382984861 (commit c6a3624, patched Wine) observed this case as UNRESOLVED (LTP exit code 2), not FAIL -- still BUG, a residual pedantic-mode policy mismatch, not investigated further here.
 sigsuspend/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigsuspend/4-1.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigsuspend/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: forks a child, installs a sigaction() handler in it, expects kill() from the parent to invoke that handler. src/signal/signal.c's kill() documents why that can't happen on this platform -- "there is no asynchronous delivery to another process at all" -- so a kill() to a non-self pid always calls NtTerminateProcess()/NtSuspendProcess() directly. Same root cause as clock_nanosleep/9-1, /10-1 and nanosleep/3-1, /5-2, /7-1, /7-2 in this same file; a real fix needs remote APC injection into the target's address space, out of scope here. CI run 33027560032 job 98382984861 (commit c6a3624, patched Wine) observed this case as UNRESOLVED (LTP exit code 2), not FAIL -- still BUG, a residual pedantic-mode policy mismatch, not investigated further here.
-sigtimedwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigtimedwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigtimedwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigtimedwait/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigtimedwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
+sigtimedwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented bounded synchronous signal waits
+sigtimedwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented bounded synchronous signal waits
+sigtimedwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented immediate selection of an already-pending signal
+sigtimedwait/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented bounded synchronous signal waits
+sigtimedwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented bounded synchronous signal waits
 sigwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: raises SIGRTMIN twice while blocked and expects two independently-consumable pending instances (POSIX real-time signal queueing), verified via sigpending() after each of two sigwait() calls. src/signal/signal.c's `pending` is a sigset_t bitmask, one bit per signal, so a second raise() of an already-pending signal is a no-op and the first sigwait() clears the only record that existed -- matches include/signal.h's own documented boundary for sigwaitinfo()/sigtimedwait()/sigqueue() ("there is no per-process queue of pending signals with siginfo payloads"), just reached here through sigwait() instead, which IS implemented but backed by the same non-queued pending set. A real fix needs a genuine per-signal queue (count or list, not a bit) threaded through raise()/sigwait()/sigpending() alike, out of scope here
+sigwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 replaced the one-bit real-time pending state with independently consumable queued instances
 sigwait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 sigwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 sigwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 sigwait/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 sigwait/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 sigwait/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigwaitinfo/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-sigwaitinfo/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
+sigwaitinfo/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented synchronous pending-signal selection
+sigwaitinfo/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented lowest-signal-number selection
+sigwaitinfo/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 let a waiting set intercept cross-process delivery before handler dispatch
+sigwaitinfo/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 preserved si_signo on queued delivery
+sigwaitinfo/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 preserved SI_USER provenance on kill()/raise() delivery
+sigwaitinfo/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 implemented FIFO payload selection within a real-time signal number
+sigwaitinfo/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 clears each selected queued instance and the pending bit after the last
+sigwaitinfo/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS after 7c4fb68 returns the selected signal number
 strchr/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strcpy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strftime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
