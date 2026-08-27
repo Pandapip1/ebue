@@ -2,7 +2,48 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <pthread.h>
 #include <errno.h>
+#include <string.h>
 #include "pthread_impl.h"
+
+_Noreturn void __pthread_cancel_trampoline(void);
+
+/* A normal user APC is only delivered when the target enters an alertable
+ * wait.  Asynchronous cancellation also has to stop a thread which never
+ * waits (the conformance test intentionally uses a tight loop), so redirect
+ * the suspended target to an arch trampoline which cannot return. */
+static int redirect_async_cancel(HANDLE handle)
+{
+#if defined(__x86_64__)
+	unsigned char storage[0x4d0 + 15];
+	const ULONG flags = 0x100001; /* CONTEXT_AMD64 | CONTEXT_CONTROL */
+	const size_t flags_offset = 0x30;
+	const size_t ip_offset = 0xf8;
+#elif defined(__i386__)
+	unsigned char storage[0x2cc + 15];
+	const ULONG flags = 0x10001; /* CONTEXT_i386 | CONTEXT_CONTROL */
+	const size_t flags_offset = 0;
+	const size_t ip_offset = 0xb8;
+#else
+# error unsupported architecture
+#endif
+	unsigned char *context = (unsigned char *)
+		(((ULONG_PTR)storage + 15) & ~(ULONG_PTR)15);
+	ULONG_PTR ip = (ULONG_PTR)__pthread_cancel_trampoline;
+	ULONG previous;
+	NTSTATUS status;
+
+	memset(context, 0, sizeof storage - 15);
+	memcpy(context + flags_offset, &flags, sizeof flags);
+	status = NtSuspendThread(handle, &previous);
+	if (!NT_SUCCESS(status)) return 0;
+	status = NtGetContextThread(handle, context);
+	if (NT_SUCCESS(status)) {
+		memcpy(context + ip_offset, &ip, sizeof ip);
+		status = NtSetContextThread(handle, context);
+	}
+	NtResumeThread(handle, &previous);
+	return NT_SUCCESS(status);
+}
 
 _Noreturn void __pthread_cancel_current(void)
 {
@@ -10,6 +51,7 @@ _Noreturn void __pthread_cancel_current(void)
 	if (self) {
 		RtlAcquirePebLock();
 		self->cancel_pending = 0;
+		self->cancel_queued = 0;
 		self->cancel_state = PTHREAD_CANCEL_DISABLE;
 		RtlReleasePebLock();
 	}
@@ -46,6 +88,8 @@ static void NTAPI cancel_apc(PVOID argument, PVOID unused1, PVOID unused2)
 int pthread_cancel(pthread_t thread)
 {
 	int queue = 0;
+	int redirect = 0;
+	int cancel_self = 0;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	RtlAcquirePebLock();
 	if (thread->joined || (!thread->handle && thread->exited)) {
@@ -56,13 +100,16 @@ int pthread_cancel(pthread_t thread)
 	if (thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
 	    !thread->cancel_queued && thread->handle) {
 		thread->cancel_queued = 1;
-		queue = 1;
+		redirect = thread != __pthread_self_control &&
+			thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS;
+		queue = !redirect;
 	}
+	cancel_self = thread == __pthread_self_control &&
+		thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
+		thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS;
 	RtlReleasePebLock();
-	if (thread == __pthread_self_control &&
-	    thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
-	    thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS)
-		__pthread_cancel_current();
+	if (cancel_self) __pthread_cancel_current();
+	if (redirect && !redirect_async_cancel(thread->handle)) queue = 1;
 	if (queue && !NT_SUCCESS(NtQueueApcThread(thread->handle, cancel_apc,
 		thread, 0, 0))) {
 		RtlAcquirePebLock();
