@@ -521,7 +521,7 @@ static void run_row(const struct row *r, int mark_sparse)
 	struct { FILE_ZERO_DATA_INFORMATION z; unsigned char pad[16]; } zbuf;
 	NTSTATUS st_sparse = 0, st_zero;
 	HANDLE h;
-	int fd, ok_before, data_row;
+	int fd, ok_before, ok_after_ext, data_row;
 	long long expect_rel, expect_rel_16x, expect_rel_cap, observed_rel;
 	unsigned in_len;
 
@@ -601,7 +601,7 @@ static void run_row(const struct row *r, int mark_sparse)
 
 	if (!query_std(h, &after, "after", tag)) { unverified++; close(fd); free(buf); return; }
 	report_sparse_attr(h, tag, "after");
-	report_allocated_ranges(h, tag, "after", ext_after, 32, &n_after);
+	ok_after_ext = report_allocated_ranges(h, tag, "after", ext_after, 32, &n_after);
 
 	printf("zerodata[%s]: EndOfFile      before=%lld after=%lld\n",
 	       tag, (long long)before.EndOfFile, (long long)after.EndOfFile);
@@ -693,10 +693,31 @@ static void run_row(const struct row *r, int mark_sparse)
 			exp_off[0] = 0; exp_len[0] = FILE_SIZE; exp_n = 1;
 		}
 		printf("zerodata[%s]: extents expected: %u range(s)\n", tag, exp_n);
-		CHECK(n_after == exp_n);
-		for (i = 0; i < exp_n && i < n_after; i++) {
-			CHECK(ext_after[i].FileOffset == exp_off[i]);
-			CHECK(ext_after[i].Length == exp_len[i]);
+		if (!ok_after_ext) {
+			/* report_allocated_ranges() already printed the failing
+			 * status.  n_after is 0 here because the query never ran,
+			 * NOT because it measured zero extents -- asserting against
+			 * it would be scoring "the instrument is broken" as "the
+			 * claim is false".  This is FSCTL_QUERY_ALLOCATED_RANGES,
+			 * a DIFFERENT ioctl from FSCTL_SET_ZERO_DATA above: on
+			 * Pandapip1/wine as of this file's writing, SET_ZERO_DATA
+			 * is implemented (the release-size and read-back checks
+			 * above ran and passed) but QUERY_ALLOCATED_RANGES is not,
+			 * so the direct extent-list claim can't be posed on this
+			 * runtime even though the aggregate one (AllocationSize)
+			 * could be. Real NT (windows-test CI) answers this ioctl
+			 * and this exact assertion runs and passes there. */
+			printf("SKIP zerodata[%s]: FSCTL_QUERY_ALLOCATED_RANGES is unimplemented "
+			       "in this runtime, so the extent-list claim (as opposed to the "
+			       "AllocationSize one already checked above) cannot be posed here\n",
+			       tag);
+			unverified++;
+		} else {
+			CHECK(n_after == exp_n);
+			for (i = 0; i < exp_n && i < n_after; i++) {
+				CHECK(ext_after[i].FileOffset == exp_off[i]);
+				CHECK(ext_after[i].Length == exp_len[i]);
+			}
 		}
 		(void)n_before;
 	}
