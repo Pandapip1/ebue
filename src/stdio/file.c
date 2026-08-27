@@ -103,8 +103,18 @@ FILE *fdopen(int fd, const char *mode)
 	if (!desc) return 0;
 	f = __file_new(fd, flags);
 	if (!f) return 0;
-	if ((desc->flags & O_APPEND) && (flags & O_WRONLY || flags & O_RDWR))
-		fseek(f, 0, SEEK_END);
+	if ((flags & O_APPEND) && (flags & O_ACCMODE) != O_RDONLY) {
+		/* fdopen(...,"a") establishes append mode even when the caller
+		 * opened the descriptor without O_APPEND.  Keep the shared fd
+		 * description in that mode so writes after an intervening seek
+		 * still append, and seed the stream position from the current end
+		 * so ftello() can include buffered, unflushed output. */
+		desc->flags |= O_APPEND;
+		if (fseek(f, 0, SEEK_END) < 0) {
+			__file_free(f);
+			return 0;
+		}
+	}
 	return f;
 }
 

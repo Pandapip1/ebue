@@ -1322,6 +1322,39 @@ static void test_file_io(void)
 			CHECK(strcmp(buf, "via fdopen\n") == 0);
 			CHECK(fclose(f) == 0);
 		}
+
+		/* fdopen append mode is established by the mode argument, even
+		 * when the descriptor itself was opened without O_APPEND.  The
+		 * buffered bytes already contribute to the logical position. */
+		{
+			char *append_name = make_tmp("stdio-append-XXXXXX");
+			CHECK(append_name != 0);
+			if (append_name) {
+				fd = open(append_name, O_WRONLY | O_TRUNC);
+				CHECK(fd >= 0);
+				if (fd >= 0) {
+					CHECK(write(fd, "abcd", 4) == 4);
+					CHECK(close(fd) == 0);
+				}
+				fd = open(append_name, O_WRONLY);
+				CHECK(fd >= 0);
+				if (fd >= 0) {
+					f = fdopen(fd, "a");
+					CHECK(f != 0);
+					if (f) {
+						CHECK(fwrite("efg", 1, 3, f) == 3);
+						CHECK(ftello(f) == (off_t)7);
+						CHECK(fflush(f) == 0);
+						CHECK(ftello(f) == (off_t)7);
+						CHECK(fclose(f) == 0);
+					} else {
+						CHECK(close(fd) == 0);
+					}
+				}
+				CHECK(remove(append_name) == 0);
+				free(append_name);
+			}
+		}
 	}
 
 	/* rename / remove */
