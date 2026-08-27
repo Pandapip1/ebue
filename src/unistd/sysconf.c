@@ -64,6 +64,9 @@ long sysconf(int name)
 	case _SC_CPUTIME: return _POSIX_CPUTIME;
 	case _SC_MEMLOCK: return _POSIX_MEMLOCK;
 	case _SC_MEMLOCK_RANGE: return _POSIX_MEMLOCK_RANGE;
+	case _SC_SEMAPHORES: return _POSIX_SEMAPHORES;
+	case _SC_SEM_NSEMS_MAX: return 64;
+	case _SC_SEM_VALUE_MAX: return 2147483647L;
 	/* The <limits.h> Runtime Increasable Values, which that header
 	 * documents as the compile-time minimum this library promises;
 	 * reporting anything smaller here would break the promise. */
@@ -124,7 +127,6 @@ long sysconf(int name)
 	 *                              the clock_nanosleep() we have)
 	 *   no <aio.h>              -- _SC_ASYNCHRONOUS_IO, _SC_AIO_*,
 	 *                              _SC_PRIORITIZED_IO
-	 *   no <semaphore.h>        -- _SC_SEMAPHORES, _SC_SEM_*
 	 *   no <mqueue.h>           -- _SC_MESSAGE_PASSING, _SC_MQ_*
 	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES,
 	 *                              _SC_MEMORY_PROTECTION,
@@ -175,14 +177,11 @@ long sysconf(int name)
 	case _SC_MAPPED_FILES:
 	case _SC_MEMORY_PROTECTION:
 	case _SC_MESSAGE_PASSING:
-	case _SC_SEMAPHORES:
 	case _SC_AIO_LISTIO_MAX:
 	case _SC_AIO_MAX:
 	case _SC_AIO_PRIO_DELTA_MAX:
 	case _SC_MQ_OPEN_MAX:
 	case _SC_MQ_PRIO_MAX:
-	case _SC_SEM_NSEMS_MAX:
-	case _SC_SEM_VALUE_MAX:
 	case _SC_2_C_BIND:
 	case _SC_2_C_DEV:
 	case _SC_2_FORT_DEV:

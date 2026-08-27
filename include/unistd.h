@@ -261,6 +261,9 @@ pid_t gettid(void);
 #define _POSIX_MEMLOCK       200809L
 #define _POSIX_MEMLOCK_RANGE 200809L
 
+/* Named and unnamed counting semaphores. */
+#define _POSIX_SEMAPHORES 200809L
+
 /* Queued real-time signals, including payload-preserving cross-process
  * sigqueue() delivery and the two synchronous wait interfaces. */
 #define _POSIX_REALTIME_SIGNALS 200809L
@@ -280,7 +283,7 @@ pid_t gettid(void);
  * Groups" whose text on that page reads "This symbol shall always be
  * set to the value 200809L" -- _POSIX_ASYNCHRONOUS_IO, _POSIX_BARRIERS,
  * _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES, _POSIX_MEMORY_PROTECTION,
- * _POSIX_READER_WRITER_LOCKS, _POSIX_SEMAPHORES,
+ * _POSIX_READER_WRITER_LOCKS,
  * _POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS,
  * _POSIX_TIMEOUTS.  Their absence IS a conformance
  * hole and is recorded as one -- test/POSIX-COVERAGE.md group U, and
@@ -298,8 +301,7 @@ pid_t gettid(void);
  *   - there is no <pthread.h> at all, which leaves _POSIX_THREADS,
  *     _POSIX_BARRIERS, _POSIX_READER_WRITER_LOCKS, _POSIX_SPIN_LOCKS
  *     and _POSIX_TIMEOUTS with no interfaces behind them;
- *   - no <aio.h> (_POSIX_ASYNCHRONOUS_IO), no <semaphore.h>
- *     (_POSIX_SEMAPHORES), no <sys/mman.h> (_POSIX_MAPPED_FILES,
+ *   - no <aio.h> (_POSIX_ASYNCHRONOUS_IO), no <sys/mman.h> (_POSIX_MAPPED_FILES,
  *     _POSIX_MEMORY_PROTECTION);
  *   - _POSIX_CLOCK_SELECTION needs pthread_condattr_setclock() as well
  *     as the clock_nanosleep() we do have.

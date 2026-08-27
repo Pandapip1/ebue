@@ -70,7 +70,7 @@ static int fails;
  * sem_post.html, sem_getvalue.html, sem_destroy.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_sem_init_count)
+#if NTLIBC_TEST(PASS, posix_realtime_sem_init_count)
 #include <semaphore.h>
 #include <errno.h>
 
@@ -129,7 +129,7 @@ static void test_posix_realtime_sem_init_count(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_sem_timedwait_etimedout)
+#if NTLIBC_TEST(PASS, posix_realtime_sem_timedwait_etimedout)
 #include <semaphore.h>
 #include <time.h>
 #include <errno.h>
@@ -166,7 +166,7 @@ static void test_posix_realtime_sem_timedwait_etimedout(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_sem_open_named)
+#if NTLIBC_TEST(PASS, posix_realtime_sem_open_named)
 #include <semaphore.h>
 #include <fcntl.h>
 #include <errno.h>

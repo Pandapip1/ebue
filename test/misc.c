@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <libgen.h>
@@ -11,8 +12,10 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sched.h>
+#include <semaphore.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <time.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -108,6 +111,29 @@ static void test_mlockall(void)
 	CHECK(munlockall() == 0);
 	errno = 0;
 	CHECK(mlockall(0) == -1 && errno == EINVAL);
+}
+
+/* ---- semaphores ---- */
+static void test_semaphore(void)
+{
+	sem_t sem;
+	sem_t *named;
+	struct timespec past;
+	int value;
+	CHECK(sem_init(&sem, 0, 1) == 0);
+	CHECK(sem_wait(&sem) == 0);
+	CHECK(sem_trywait(&sem) == -1 && errno == EAGAIN);
+	CHECK(clock_gettime(CLOCK_REALTIME, &past) == 0);
+	past.tv_sec--;
+	CHECK(sem_timedwait(&sem, &past) == -1 && errno == ETIMEDOUT);
+	CHECK(sem_post(&sem) == 0);
+	CHECK(sem_getvalue(&sem, &value) == 0 && value == 1);
+	CHECK(sem_destroy(&sem) == 0);
+	sem_unlink("/ntlibc_misc_sem");
+	named = sem_open("/ntlibc_misc_sem", O_CREAT | O_EXCL, 0600, 1);
+	CHECK(named != SEM_FAILED);
+	if (named != SEM_FAILED) CHECK(sem_close(named) == 0);
+	CHECK(sem_unlink("/ntlibc_misc_sem") == 0);
 }
 
 /* ---- system() ---- */
@@ -401,6 +427,7 @@ int main(int argc, char **argv)
 	test_env();
 	test_sched();
 	test_mlockall();
+	test_semaphore();
 	test_system();
 	test_setjmp();
 	test_signal();
