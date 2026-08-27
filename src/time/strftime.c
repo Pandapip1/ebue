@@ -44,6 +44,21 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 		f++;
 		if (!*f) break;
 
+		/* strftime.html: "If the alternative format or specification
+		 * does not exist for the current locale (see ERA in XBD
+		 * LC_TIME), the behavior shall be as if the unmodified
+		 * conversion specification were used."  The POSIX/C locale
+		 * defines no ERA, so every %E<x> and %O<x> falls back to
+		 * plain %<x> here -- this target has only the C locale (this
+		 * file's banner), so the fallback is unconditional rather
+		 * than locale-dependent.  Consuming the E/O and re-dispatching
+		 * on the following character is the whole fix: previously
+		 * 'E'/'O' matched no case, so the switch below's `default`
+		 * passed "%E"/"%O" through literally and left the base
+		 * specifier that followed (e.g. the 'C' in "%EC") to be
+		 * emitted as an unrelated, unescaped literal character. */
+		if ((*f == 'E' || *f == 'O') && f[1]) f++;
+
 		wday = (unsigned)tm->tm_wday < 7 ? tm->tm_wday : 0;
 		mon = (unsigned)tm->tm_mon < 12 ? tm->tm_mon : 0;
 

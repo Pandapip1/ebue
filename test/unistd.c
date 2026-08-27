@@ -648,7 +648,14 @@ int main(void)
 		errno = 0;
 		CHECK(pwrite(p[1], "x", 1, 0) == -1 && errno == ESPIPE);
 		CHECK(fstat(p[0], &st) == 0 && S_ISFIFO(st.st_mode));
-		CHECK(fsync(p[1]) == 0);
+		/* fsync.html: "[EINVAL] fildes is bound to a special file
+		 * which does not support synchronization." A pipe is exactly
+		 * that -- src/unistd/fsync.c used to report success for any
+		 * non-regular-file descriptor, which this asserted as
+		 * correct; it is not (see test/posix-io.c's
+		 * posix_io_fsync_pipe_einval, un-fenced alongside this). */
+		errno = 0;
+		CHECK(fsync(p[1]) == -1 && errno == EINVAL);
 		errno = 0;
 		CHECK(isatty(p[0]) == 0 && errno == ENOTTY);
 		CHECK(write(p[1], "last", 4) == 4);

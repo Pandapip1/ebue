@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=512 BUG=74 UNIMPL=970 NA=54 FLAKY=0
+# COUNTS PASS=518 BUG=66 UNIMPL=970 NA=56 FLAKY=0
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -141,21 +141,21 @@ fork/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: comp
 fork/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 fsync/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 fsync/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-fsync/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	real pre-existing defect, not a design refusal: src/unistd/fsync.c returns 0 for any non-__FD_FILE descriptor, so fsync(pipe) reports success where fsync.html requires shall-fail [EINVAL]; fenced as posix_io_fsync_pipe_einval. Only visible now because the case #includes <sys/mman.h>
+fsync/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once fsync()/fdatasync() reject a non-regular-file descriptor with [EINVAL] instead of reporting success; fsync.html: "[EINVAL] fildes is bound to a special file which does not support synchronization." Fixed in src/unistd/fsync.c; test/unistd.c's own unconditional fsync(pipe)==0 assertion was wrong the same way and is corrected alongside it
 getpid/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 gmtime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 gmtime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 kill/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-kill/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+kill/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: forks a child, installs a sigaction() handler in it, expects kill() from the parent to invoke that handler. src/signal/signal.c's kill() documents why that can't happen on this platform -- "there is no asynchronous delivery to another process at all" -- so a kill() to a non-self pid always calls NtTerminateProcess()/NtSuspendProcess() directly. Same root cause as clock_nanosleep/9-1, /10-1 and nanosleep/3-1, /5-2, /7-1, /7-2 in this same file; a real fix needs remote APC injection into the target's address space, out of scope here
 kill/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 kill/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 2-2.c:58, reached unconditionally after a kill(999999, 0) ESRCH check that is itself timing-independent, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
 kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 3-1.c:26, its first statement, before any test work runs, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
 killpg/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 killpg/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
-killpg/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+killpg/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once kill()'s self-fast-path also recognises pid==getpgrp(): killpg(getpgrp(), sig) is kill(getpgrp(), sig), and getpgrp() is neither 0 nor getpid() by design (src/unistd/ids.c's sentinel-1), so it fell through to the cross-process branch and tried to NtOpenProcess a pid that names no real process. Fixed in src/signal/signal.c
 killpg/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 killpg/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-killpg/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+killpg/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once kill()/killpg() validate sig before the cross-process branch: sig_valid() was only ever checked inside __raise_internal(), which kill() to a non-self pid never calls, so an invalid sig reached NtTerminateProcess()/NtSuspendProcess() instead of being rejected. Fixed in src/signal/signal.c
 killpg/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 lio_listio/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
 lio_listio/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by aio.h
@@ -175,10 +175,10 @@ lio_listio/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A
 localtime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mktime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Linux-specific rule -- the case cites 'Linux 2.6.9 and later' and gates on RLIMIT_MEMLOCK, which src/misc/resource.c does not enforce, so mlock() genuinely succeeds and the case scores its result==0 branch as a failure
+mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
 mlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mlock/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
-mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Linux-specific rule -- the case cites 'Linux 2.6.9 and later' and gates on RLIMIT_MEMLOCK, which src/misc/resource.c does not enforce, so mlock() genuinely succeeds and the case scores its result==0 branch as a failure
+mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
 mlockall/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/13-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
 mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
@@ -759,7 +759,7 @@ pthread_spin_unlock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPT
 pthread_testcancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 pthread_testcancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 raise/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-raise/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+raise/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once un-fenced; stale, not a defect (measured under the patched Wine build)
 raise/10000-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 raise/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 raise/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -1533,17 +1533,17 @@ sigset/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	linked but produced 
 sigset/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	linked but produced no runtime outcome in the baseline
 sigset/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	linked but produced no runtime outcome in the baseline
 sigset/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigsuspend/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigsuspend/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigsuspend/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigsuspend/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigsuspend/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: forks a child, installs a sigaction() handler in it, expects kill() from the parent to invoke that handler. src/signal/signal.c's kill() documents why that can't happen on this platform -- "there is no asynchronous delivery to another process at all" -- so a kill() to a non-self pid always calls NtTerminateProcess()/NtSuspendProcess() directly. Same root cause as clock_nanosleep/9-1, /10-1 and nanosleep/3-1, /5-2, /7-1, /7-2 in this same file; a real fix needs remote APC injection into the target's address space, out of scope here
+sigsuspend/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: forks a child, installs a sigaction() handler in it, expects kill() from the parent to invoke that handler. src/signal/signal.c's kill() documents why that can't happen on this platform -- "there is no asynchronous delivery to another process at all" -- so a kill() to a non-self pid always calls NtTerminateProcess()/NtSuspendProcess() directly. Same root cause as clock_nanosleep/9-1, /10-1 and nanosleep/3-1, /5-2, /7-1, /7-2 in this same file; a real fix needs remote APC injection into the target's address space, out of scope here
+sigsuspend/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once un-fenced; stale, not a defect (measured under the patched Wine build)
+sigsuspend/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: forks a child, installs a sigaction() handler in it, expects kill() from the parent to invoke that handler. src/signal/signal.c's kill() documents why that can't happen on this platform -- "there is no asynchronous delivery to another process at all" -- so a kill() to a non-self pid always calls NtTerminateProcess()/NtSuspendProcess() directly. Same root cause as clock_nanosleep/9-1, /10-1 and nanosleep/3-1, /5-2, /7-1, /7-2 in this same file; a real fix needs remote APC injection into the target's address space, out of scope here
 sigtimedwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigtimedwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigtimedwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigtimedwait/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigtimedwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class B: compile/link blocked
 sigwait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigwait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL); root cause identified, not fixed here: raises SIGRTMIN twice while blocked and expects two independently-consumable pending instances (POSIX real-time signal queueing), verified via sigpending() after each of two sigwait() calls. src/signal/signal.c's `pending` is a sigset_t bitmask, one bit per signal, so a second raise() of an already-pending signal is a no-op and the first sigwait() clears the only record that existed -- matches include/signal.h's own documented boundary for sigwaitinfo()/sigtimedwait()/sigqueue() ("there is no per-process queue of pending signals with siginfo payloads"), just reached here through sigwait() instead, which IS implemented but backed by the same non-queued pending set. A real fix needs a genuine per-signal queue (count or list, not a bit) threaded through raise()/sigwait()/sigpending() alike, out of scope here
 sigwait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 sigwait/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 sigwait/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
@@ -1561,7 +1561,7 @@ sigwaitinfo/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class 
 strchr/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strcpy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strftime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-strftime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	builds and runs as of include/langinfo.h; %EC comes back as the literal "%EC" (3 bytes, wanted 2). src/time/strftime.c implements no E or O modifier at all, and strftime.html requires a fallback rather than a pass-through: "If the alternative format or specification does not exist for the current locale (see ERA in XBD LC_TIME), the behavior shall be as if the unmodified conversion specification were used." The POSIX locale defines no era, so %EC must behave as %C. Same gap as libc-test's strftime row (flags and field width emitted literally)
+strftime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once strftime() consumes an E/O modifier and re-dispatches on the following character instead of falling through to its unrecognised-specifier default (which emitted "%E"/"%O" literally and left the base specifier after it as an unescaped literal too). strftime.html: an alternate form that does not exist for the locale falls back to the unmodified specifier, which is unconditionally true in the C-only locale this target has. Fixed in src/time/strftime.c
 strftime/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strlen/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strncpy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-

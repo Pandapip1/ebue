@@ -28,14 +28,24 @@
  * only buffer needed is one big enough for a single expanded specifier,
  * which is a fixed size rather than a function of maxsize.
  *
- * The grammar deliberately mirrors src/time/strftime.c EXACTLY rather
- * than being re-derived, so the two can never disagree about what a
- * specifier is: '%' followed by one character, no %E/%O parsing (that
- * file does not implement the locale-alternate modifiers either, and
- * passes them through literally via its `default:` arm, which this
- * reproduces by handing "%E" to strftime and then treating the letter
- * after it as a literal), and a trailing '%' at the end of the format
- * is dropped, matching that file's `if (!*f) break;`.
+ * The grammar deliberately mirrors src/time/strftime.c, with one
+ * KNOWN GAP rather than an exact match: '%' followed by one character
+ * is handed to strftime() as a two-byte format ("%<c>"), so an %E/%O
+ * pair never reaches it intact.  strftime() itself DOES fall back %E<x>
+ * and %O<x> to plain %<x> (strftime.html: "the behavior shall be as if
+ * the unmodified conversion specification were used" when no alternate
+ * form exists, which is always true in the C-only locale this target
+ * has) -- but only when it sees both characters at once, and this file
+ * sends 'E'/'O' alone, one wide character at a time, so strftime()'s
+ * fallback never triggers here: it gets "%E" with nothing after it,
+ * emits that literally via its `default:` arm, and this file's own
+ * loop then emits the following character (the 'C' in "%EC") as an
+ * unrelated literal on the next iteration -- the exact bug strftime.c
+ * itself used to have, un-fixed here.  Widening this loop to detect
+ * E/O and forward two characters at once would close it; that has not
+ * been done, so %E/%O are still broken specifically through wcsftime(),
+ * unlike through strftime() -- and a trailing '%' at the end of the
+ * format is dropped, matching that file's `if (!*f) break;`.
  *
  * A format specifier whose letter is not a single-byte character cannot
  * be spelled in strftime()'s byte format at all.  strftime()'s own

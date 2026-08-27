@@ -453,6 +453,19 @@ int kill(pid_t pid, int sig)
 	OBJECT_ATTRIBUTES oa;
 	CLIENT_ID cid;
 
+	/* kill.html ERRORS: "[EINVAL] The value of the sig argument is an
+	 * invalid or unsupported signal number." sig==0 is exempted --
+	 * kill.html's own DESCRIPTION carves it out as "no signal is sent"
+	 * but the existence/permission checks below it still apply, and
+	 * sig_valid() answers false for 0 (it means "no signal", not "a
+	 * signal"), which would otherwise reject the one call kill(pid, 0)
+	 * exists to make. This used to validate sig only inside
+	 * __raise_internal(), which the cross-process arm below never
+	 * calls -- so kill()/killpg() to another pid with a bogus sig
+	 * reached NtTerminateProcess()/NtSuspendProcess() instead of ever
+	 * being rejected. */
+	if (sig != 0 && !sig_valid(sig)) { errno = EINVAL; return -1; }
+
 	/* kill.html DESCRIPTION: pid == 0 reaches "all processes ... whose
 	 * process group ID is equal to the process group ID of the
 	 * sender", and pid == -1 reaches "all processes ... for which the
@@ -468,8 +481,21 @@ int kill(pid_t pid, int sig)
 	 * degenerate stand-in for the real thing -- it is the real thing,
 	 * fully enumerated. -1 is folded in here, alongside the existing
 	 * 0 case, rather than falling into the general "pid < 0 -> process
-	 * group, ESRCH" catch-all below. */
-	if (pid == getpid() || pid == 0 || pid == -1) {
+	 * group, ESRCH" catch-all below.
+	 *
+	 * killpg(getpgrp(), sig) is kill(getpgrp(), sig) (killpg() is
+	 * exactly that, below), and under the same group-of-one model
+	 * getpgrp() names a set that provably contains only the caller --
+	 * so it belongs in this same fast path.  It is not folded into the
+	 * pid==0 case as a simplification, because getpgrp() is NOT pid==0
+	 * and, per src/unistd/ids.c's banner, is not pid==getpid() either:
+	 * a process that never called setpgrp()/setsid() answers 1, a
+	 * sentinel chosen specifically so it CANNOT equal any real pid.
+	 * Without this arm, killpg(getpgrp(), 0) fell through to the
+	 * cross-process branch below and tried to NtOpenProcess a pid
+	 * (1) that names no real process -- ESRCH for a call POSIX
+	 * requires to succeed against the caller's own, real, group. */
+	if (pid == getpid() || pid == getpgrp() || pid == 0 || pid == -1) {
 		if (!sig) return 0;
 		/* Including a stop signal, which is *not* routed through
 		 * NtSuspendProcess the way the cross-process arm below is.
