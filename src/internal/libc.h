@@ -96,9 +96,11 @@ struct __ntpath {
  * this is NOT the whole-path __US_MAX_WCHARS bound next to it. */
 int __name_too_long(const char *path);
 int __ntpath(const char *path, struct __ntpath *out, ULONG attributes);
+int __ntpath_native(const char *path, struct __ntpath *out, ULONG attributes);
 /* Like __ntpath but the path is relative to the directory handle dirfd
  * refers to (AT_FDCWD for the current directory). */
 int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attributes);
+int __ntpath_at_native(int dirfd, const char *path, struct __ntpath *out, ULONG attributes);
 void __ntpath_free(struct __ntpath *);
 /* POSIX's [ENOTDIR] for a path prefix component that exists and is not a
  * directory, which NT reports identically to a prefix that is not there
@@ -116,7 +118,7 @@ char *__handle_path(HANDLE);
  * handle and its __FD_* classification without installing a descriptor.
  * Returns 0, or -1 with errno. */
 int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
-                  HANDLE *out, int *typeout);
+                  HANDLE *out, int *typeout, int *vfsout, int *vfsnativeout);
 /* The current umask (src/stat/chmod.c owns umask_value), as plain
  * unsigned rather than mode_t so this header does not need mode_t
  * defined -- not every includer has pulled in <sys/stat.h>/<fcntl.h>
@@ -146,6 +148,20 @@ enum {
 	__FD_UNKNOWN
 };
 
+/* The fixed POSIX namespace layered over NT paths.  Zero means that the
+ * descriptor/path belongs to the native filesystem. */
+enum {
+	__VFS_NONE = 0,
+	__VFS_ROOT,
+	__VFS_DEV,
+	__VFS_CONSOLE,
+	__VFS_NULL,
+	__VFS_TTY,
+	__VFS_MISSING
+};
+#define __VFS_NATIVE 0x100
+#define __VFS_KIND(v) ((v) & 0xff)
+
 struct __fd {
 	HANDLE h;              /* NULL when the slot is free */
 	unsigned flags;        /* O_ACCMODE, O_APPEND, O_NONBLOCK, O_CLOEXEC as given
@@ -157,6 +173,10 @@ struct __fd {
 	unsigned char eof;     /* a pipe/console that has reported end of input */
 	unsigned char dirflag; /* for directories: 0 or FILE_OPEN_REPARSE_POINT used */
 	unsigned char pad;
+	unsigned char vfs;     /* one of __VFS_* above; zero for an NT object */
+	unsigned char vfs_native; /* vfs names a native object, not a fallback */
+	unsigned char vseen;   /* mandatory native-directory entries observed */
+	unsigned char vnext;   /* next fallback entry for getdents() */
 	/* AF_INET peer cached when connect()/accept() establishes it.  AFD's
 	 * undocumented GET_PEER_NAME ioctl is not a stable Windows ABI; the
 	 * peer cannot change during a stream socket's connected lifetime, so
@@ -195,6 +215,15 @@ void __mq_fd_replaced(int, HANDLE);           /* follow fork/fcntl handle remake
  * malloc'd blob for a child's RTL_USER_PROCESS_PARAMETERS RuntimeData;
  * *len receives its size.  NULL with errno on failure. */
 void *__fd_runtime_data(size_t *len);
+
+/* Resolve a path in the fixed POSIX namespace.  __VFS_NONE means the path
+ * is native, __VFS_MISSING means it is inside the namespace but absent,
+ * and -1 is a path error with errno set. */
+int __vfs_resolve_at(int dirfd, const char *path);
+int __vfs_open_dir(int kind, int cloexec, HANDLE *out);
+int __vfs_stat(int kind, struct stat *st);
+int __vfs_cwd_get(void);
+void __vfs_cwd_set(int kind);
 
 /* ---- select()/pselect()/poll() shared readiness core (src/select/) ----
  * A per-descriptor-type, non-blocking readiness probe plus a "wait on

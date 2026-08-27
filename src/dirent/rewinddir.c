@@ -8,9 +8,17 @@
 
 void rewinddir(DIR *dp)
 {
+	struct __fd *f = __fd_get(dp->fd);
+	if (f && f->vfs) {
+		f->pos = 0;
+		f->vseen = 0;
+		f->vnext = 0;
+	}
 	dp->bufpos = 0;
 	dp->buflen = 0;
 	dp->restart = 1;
 	dp->done = 0;
 	dp->tell = 0;
+	dp->vseen = 0;
+	dp->vnext = 0;
 }

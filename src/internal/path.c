@@ -12,8 +12,8 @@
  *
  * A rooted path with no drive ("/usr/bin/sh") is taken relative to the
  * root of the current drive, which is the same thing Windows itself does
- * with "\usr\bin\sh".  "/dev/null" is the one Unix device name given a
- * meaning: it becomes NUL.  Everything else is passed through.
+ * with "\usr\bin\sh".  Fixed POSIX objects are resolved before this layer;
+ * native paths that win that resolution are passed through unchanged.
  */
 #include <string.h>
 #include <fcntl.h>
@@ -86,21 +86,6 @@ static WCHAR *dos_from_posix(const char *path, size_t *wlen, int *trailing)
 	size_t i, n;
 
 	if (__name_too_long(path)) { errno = ENAMETOOLONG; return 0; }
-	/* The two emulated /dev nodes are terminal device objects, not
-	 * directories.  Reject a child path before the exact-name mapping
-	 * below; otherwise it is treated as an ordinary missing /dev tree and
-	 * incorrectly reported as ENOENT. */
-	if ((!strncmp(path, "/dev/null", 9) && (path[9] == '/' || path[9] == '\\'))
-	 || (!strncmp(path, "/dev/tty", 8) && (path[8] == '/' || path[8] == '\\'))) {
-		errno = ENOTDIR;
-		return 0;
-	}
-	if (!strcmp(path, "/dev/null")) path = "NUL";
-	else if (!strcmp(path, "/dev/tty")) path = "CON";
-	else if (!strncmp(path, "/dev/", 5)) {
-		/* /dev/stdin etc. are handled by open() via the fd table; anything
-		 * else under /dev has no Windows counterpart. */
-	}
 	w = __utf8_to_utf16(path, &n);
 	if (!w) return 0;
 	for (i = 0; i < n; i++)
@@ -244,8 +229,10 @@ static int reject_if_prefix_not_dir(struct __ntpath *out, HANDLE root)
 static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
                                  struct __ntpath *out, ULONG attributes);
 
-int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
+static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
+                       int overlay)
 {
+	int vfs;
 	WCHAR *dos;
 	size_t n;
 	int trailing;
@@ -253,6 +240,14 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 
 	if (!path) { errno = EFAULT; return -1; }
 	if (!*path) { errno = ENOENT; return -1; }
+	if (overlay) {
+		vfs = __vfs_resolve_at(AT_FDCWD, path);
+		if (vfs < 0) return -1;
+		if (vfs != __VFS_NONE && !(vfs & __VFS_NATIVE)) {
+			errno = vfs == __VFS_MISSING ? ENOENT : EROFS;
+			return -1;
+		}
+	}
 
 	dos = dos_from_posix(path, &n, &trailing);
 	if (!dos) return -1;
@@ -289,6 +284,16 @@ int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
 	if (trailing && reject_if_not_dir(out)) return -1;
 	if (reject_if_prefix_not_dir(out, 0)) return -1;
 	return 0;
+}
+
+int __ntpath(const char *path, struct __ntpath *out, ULONG attributes)
+{
+	return ntpath_impl(path, out, attributes, 1);
+}
+
+int __ntpath_native(const char *path, struct __ntpath *out, ULONG attributes)
+{
+	return ntpath_impl(path, out, attributes, 0);
 }
 
 /* Lexical resolution of "." and ".." in a RootDirectory-relative name.
@@ -512,10 +517,12 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 	return 0;
 }
 
-int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attributes)
+static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
+                          ULONG attributes, int overlay)
 {
 	int absolute;
 
+	int vfs;
 	if (!path) { errno = EFAULT; return -1; }
 	/* "path is an empty string" is [ENOENT] on every page that specifies
 	 * an *at() function -- open.html ("or path points to an empty
@@ -551,9 +558,17 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 	 * defines it nor has any caller that asks for it.  A caller meaning
 	 * "the directory itself" spells it ".". */
 	if (!*path) { errno = ENOENT; return -1; }
+	if (overlay) {
+		vfs = __vfs_resolve_at(dirfd, path);
+		if (vfs < 0) return -1;
+		if (vfs != __VFS_NONE && !(vfs & __VFS_NATIVE)) {
+			errno = vfs == __VFS_MISSING ? ENOENT : EROFS;
+			return -1;
+		}
+	}
 	absolute = path[0] == '/' || path[0] == '\\' ||
 		(((path[0] | 0x20) >= 'a' && (path[0] | 0x20) <= 'z') && path[1] == ':');
-	if (dirfd == AT_FDCWD || absolute) return __ntpath(path, out, attributes);
+	if (dirfd == AT_FDCWD || absolute) return ntpath_impl(path, out, attributes, overlay);
 
 	/* Relative to a directory handle: the object manager resolves a
 	 * relative name against RootDirectory, so the name is given as-is,
@@ -601,7 +616,7 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 			if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\';
 			strcpy(joined + dl, path);
 			__free(dir);
-			rc = __ntpath(joined, out, attributes);
+			rc = ntpath_impl(joined, out, attributes, overlay);
 			__free(joined);
 			return rc;
 		}
@@ -628,6 +643,16 @@ int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attribu
 		if (reject_if_prefix_not_dir(out, f->h)) return -1;
 		return 0;
 	}
+}
+
+int __ntpath_at(int dirfd, const char *path, struct __ntpath *out, ULONG attributes)
+{
+	return ntpath_at_impl(dirfd, path, out, attributes, 1);
+}
+
+int __ntpath_at_native(int dirfd, const char *path, struct __ntpath *out, ULONG attributes)
+{
+	return ntpath_at_impl(dirfd, path, out, attributes, 0);
 }
 
 void __ntpath_free(struct __ntpath *p)

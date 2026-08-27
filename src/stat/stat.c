@@ -222,6 +222,7 @@ int fstat(int fd, struct stat *st)
 {
 	struct __fd *f = __fd_get(fd);
 	if (!f) return -1;
+	if (f->vfs && !f->vfs_native) return __vfs_stat(f->vfs, st);
 	return __fstat_handle(f->h, f->type, st);
 }
 
@@ -231,21 +232,21 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS s;
-	int r;
+	int r, vfs;
 
+	if (!path) { errno = EFAULT; return -1; }
 	if (!strncmp(path, "/dev/", 5)) {
 		int fd = -1;
-		if (!strcmp(path, "/dev/null") || !strcmp(path, "/dev/tty")) {
-			memset(st, 0, sizeof *st);
-			st->st_mode = S_IFCHR | 0666;
-			st->st_nlink = 1;
-			return 0;
-		}
 		if (!strcmp(path, "/dev/stdin")) fd = 0;
 		else if (!strcmp(path, "/dev/stdout")) fd = 1;
 		else if (!strcmp(path, "/dev/stderr")) fd = 2;
 		if (fd >= 0) return fstat(fd, st);
 	}
+	vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE) return __vfs_stat(vfs, st);
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,

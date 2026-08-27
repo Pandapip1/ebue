@@ -22,7 +22,8 @@
 #include <errno.h>
 #include "libc.h"
 
-int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE *out, int *typeout)
+int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
+                  HANDLE *out, int *typeout, int *vfsout, int *vfsnativeout)
 {
 	struct __ntpath np;
 	IO_STATUS_BLOCK io;
@@ -34,6 +35,11 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 	unsigned char mode_ea[32];
 	void *ea = 0;
 	ULONG ea_len = 0;
+	int vfs, native;
+
+	*vfsout = __VFS_NONE;
+	*vfsnativeout = 0;
+	if (!path) { errno = EFAULT; return -1; }
 
 	/* /dev/stdin, /dev/stdout, /dev/stderr and /dev/fd/N are the fd table. */
 	if (!strncmp(path, "/dev/", 5)) {
@@ -49,8 +55,37 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode, HANDLE 
 			                       flags & O_CLOEXEC ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
 			if (!NT_SUCCESS(st)) { __set_errno_status(st); return -1; }
 			*out = h; *typeout = f->type;
+			*vfsout = f->vfs; *vfsnativeout = f->vfs_native;
 			return 0;
 		}
+	}
+
+	vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	native = (vfs & __VFS_NATIVE) != 0;
+	if (native) {
+		*vfsout = __VFS_KIND(vfs);
+		*vfsnativeout = 1;
+		vfs = __VFS_NONE;
+	}
+	if (vfs == __VFS_MISSING) {
+		errno = flags & O_CREAT ? EROFS : ENOENT;
+		return -1;
+	}
+	if (vfs == __VFS_ROOT || vfs == __VFS_DEV) {
+		if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { errno = EEXIST; return -1; }
+		if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC)) { errno = EISDIR; return -1; }
+		if (__vfs_open_dir(vfs, flags & O_CLOEXEC, out) < 0) return -1;
+		*typeout = __FD_DIR;
+		*vfsout = vfs;
+		return 0;
+	}
+	if (vfs == __VFS_CONSOLE || vfs == __VFS_NULL || vfs == __VFS_TTY) {
+		if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { errno = EEXIST; return -1; }
+		if (flags & O_DIRECTORY) { errno = ENOTDIR; return -1; }
+		path = vfs == __VFS_NULL ? "NUL" : "CON";
+		dirfd = AT_FDCWD;
+		*vfsout = vfs;
 	}
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE | (flags & O_CLOEXEC ? 0 : OBJ_INHERIT)) < 0)
@@ -142,7 +177,7 @@ int openat(int dirfd, const char *path, int flags, ...)
 {
 	mode_t mode = 0;
 	HANDLE h;
-	int type, fd;
+	int type, fd, vfs, vfs_native;
 
 	if (flags & O_CREAT) {
 		va_list ap;
@@ -150,9 +185,11 @@ int openat(int dirfd, const char *path, int flags, ...)
 		mode = va_arg(ap, mode_t);
 		va_end(ap);
 	}
-	if (__open_handle(dirfd, path, flags, mode, &h, &type) < 0) return -1;
+	if (__open_handle(dirfd, path, flags, mode, &h, &type, &vfs, &vfs_native) < 0) return -1;
 	fd = __fd_install(h, flags & (O_APPEND | O_NONBLOCK | O_CLOEXEC | O_ACCMODE), type);
 	if (fd < 0) { NtClose(h); return -1; }
+	__fds[fd].vfs = (unsigned char)vfs;
+	__fds[fd].vfs_native = (unsigned char)vfs_native;
 	return fd;
 }
 

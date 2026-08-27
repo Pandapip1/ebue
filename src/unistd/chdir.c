@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
@@ -12,8 +13,21 @@ int chdir(const char *path)
 	size_t n, i;
 	UNICODE_STRING us;
 	NTSTATUS st;
+	int vfs, native;
 
 	if (!path || !*path) { errno = ENOENT; return -1; }
+	vfs = __vfs_resolve_at(AT_FDCWD, path);
+	if (vfs < 0) return -1;
+	native = (vfs & __VFS_NATIVE) != 0;
+	if (native) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE && vfs != __VFS_ROOT && vfs != __VFS_DEV) {
+		errno = ENOTDIR;
+		return -1;
+	}
+	/* Both virtual directories use the native drive root only as the
+	 * process-parameter carrier; pathname dispatch uses vfs above. */
+	if (vfs != __VFS_NONE) path = "/";
 	/* chdir.html ERRORS, shall fail: "[ENAMETOOLONG] The length of a
 	 * component of a pathname is longer than {NAME_MAX}."  chdir does
 	 * not go through src/internal/path.c's builder -- it hand-builds a
@@ -57,13 +71,20 @@ int chdir(const char *path)
 	}
 	__free(w);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	__vfs_cwd_set(vfs);
 	return 0;
 }
 
 int fchdir(int fd)
 {
-	char *p = __handle_path(__fd_handle(fd));
+	struct __fd *f = __fd_get(fd);
+	char *p;
 	int r;
+	if (!f) return -1;
+	if (f->type != __FD_DIR) { errno = ENOTDIR; return -1; }
+	if (!f->vfs_native && f->vfs == __VFS_ROOT) return chdir("/");
+	if (!f->vfs_native && f->vfs == __VFS_DEV) return chdir("/dev");
+	p = __handle_path(f->h);
 	if (!p) return -1;
 	r = chdir(p);
 	__free(p);

@@ -54,6 +54,7 @@ int fchmod(int fd, mode_t mode)
 	char *path;
 	int r, e;
 	if (!f) return -1;
+	if (f->vfs && !f->vfs_native) { errno = EROFS; return -1; }
 	if (f->type != __FD_FILE && f->type != __FD_DIR) return 0;
 	r = chmod_handle(f->h, mode);
 	if (r == 0 || errno != EACCES) return r;

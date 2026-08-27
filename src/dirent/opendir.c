@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * opendir/fdopendir: get a directory HANDLE (through the same __ntpath ->
- * NtCreateFile path open() uses, with FILE_DIRECTORY_FILE so a plain file
- * given by mistake fails with ENOTDIR rather than being read as one) and
- * wrap it in a DIR.
+ * opendir/fdopendir: ask open() for an O_DIRECTORY descriptor and wrap it
+ * in a DIR.  Going through open() is significant for the fixed POSIX
+ * namespace: its directories have event handles only as lifetime and
+ * inheritance carriers, and readdir() enumerates them without asking NT.
  *
  * The handle goes through the fd table like any other, which is what
  * makes dirfd() trivial and fdopendir() nearly free: fdopendir() does not
@@ -41,22 +41,11 @@ DIR *fdopendir(int fd)
 
 DIR *opendir(const char *path)
 {
-	struct __ntpath np;
-	IO_STATUS_BLOCK io;
-	HANDLE h;
-	NTSTATUS st;
 	int fd;
 	DIR *dp;
 
-	if (__ntpath(path, &np, OBJ_CASE_INSENSITIVE) < 0) return 0;
-	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, 0,
-	                  FILE_ATTRIBUTE_NORMAL, FILE_SHARE_VALID_FLAGS, FILE_OPEN,
-	                  FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT, 0, 0);
-	__ntpath_free(&np);
-	if (!NT_SUCCESS(st)) { __set_errno_status(st); return 0; }
-
-	fd = __fd_install(h, O_CLOEXEC, __FD_DIR);
-	if (fd < 0) { NtClose(h); return 0; }
+	fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (fd < 0) return 0;
 
 	dp = alloc_dir(fd);
 	if (!dp) { close(fd); return 0; }

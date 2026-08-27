@@ -137,6 +137,11 @@ ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsz)
 	size_t nlen, i;
 	WCHAR *tmp;
 	int n;
+	int vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE) { errno = EINVAL; return -1; }
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,

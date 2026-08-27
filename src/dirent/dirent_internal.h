@@ -50,6 +50,8 @@ struct __dirstream {
 	int restart;            /* pass RestartScan = TRUE on the next fill */
 	int done;                /* the kernel has said STATUS_NO_MORE_FILES */
 	long tell;                 /* entries returned so far; telldir()'s value */
+	unsigned char vseen;       /* mandatory native-overlay entries observed */
+	unsigned char vnext;       /* next missing mandatory entry to consider */
 	struct dirent ent;          /* storage readdir() returns a pointer into */
 };
 
@@ -58,8 +60,44 @@ struct __dirstream {
  * the same numeric values, duplicated so no feature-test macro is needed
  * just to implement readdir() itself. */
 #define __DT_DIR 4
+#define __DT_CHR 2
 #define __DT_LNK 10
 #define __DT_REG 8
+
+static inline int __dirent_ascii_casecmp(const char *a, const char *b)
+{
+	for (;;) {
+		unsigned char ac = (unsigned char)*a++, bc = (unsigned char)*b++;
+		if (ac >= 'A' && ac <= 'Z') ac += 'a' - 'A';
+		if (bc >= 'A' && bc <= 'Z') bc += 'a' - 'A';
+		if (ac != bc || !ac) return ac - bc;
+	}
+}
+
+static inline int __vfs_mandatory_count(int kind)
+{
+	return kind == __VFS_ROOT ? 1 : kind == __VFS_DEV ? 3 : 0;
+}
+
+static inline const char *__vfs_mandatory_name(int kind, int index)
+{
+	static const char *const root[] = { "dev" };
+	static const char *const dev[] = { "console", "null", "tty" };
+	return kind == __VFS_ROOT ? root[index] : dev[index];
+}
+
+static inline int __vfs_mandatory_kind(int kind, int index)
+{
+	return kind == __VFS_ROOT ? __VFS_DEV : __VFS_CONSOLE + index;
+}
+
+static inline unsigned __vfs_mandatory_seen(int kind, const char *name)
+{
+	int i, n = __vfs_mandatory_count(kind);
+	for (i = 0; i < n; i++)
+		if (!__dirent_ascii_casecmp(name, __vfs_mandatory_name(kind, i))) return 1u << i;
+	return 0;
+}
 
 /* The next raw record from dp's NT buffer, refilling from the kernel as
  * needed.  Returns NULL at end-of-directory (dp->done is then true) or

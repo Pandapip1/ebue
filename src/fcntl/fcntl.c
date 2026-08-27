@@ -33,6 +33,10 @@ int fcntl(int fd, int cmd, ...)
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 		__fd_install_at(nfd, h, (f->flags & ~O_CLOEXEC) | (cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0), f->type);
 		__fds[nfd].pad = f->pad;
+		__fds[nfd].vfs = f->vfs;
+		__fds[nfd].vfs_native = f->vfs_native;
+		__fds[nfd].vseen = f->vseen;
+		__fds[nfd].vnext = f->vnext;
 		__fds[nfd].peer_len = f->peer_len;
 		memcpy(__fds[nfd].peer, f->peer, sizeof f->peer);
 		return nfd;

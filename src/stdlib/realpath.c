@@ -16,9 +16,25 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
 	int fd, saved;
 	char *p, *q;
 	size_t len;
+	int vfs;
 
 	if (!path) { errno = EINVAL; return 0; }
 	if (!*path) { errno = ENOENT; return 0; }
+	vfs = __vfs_resolve_at(AT_FDCWD, path);
+	if (vfs < 0) return 0;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return 0; }
+	if (vfs != __VFS_NONE) {
+		static const char *const names[] = { 0, "/", "/dev", "/dev/console", "/dev/null", "/dev/tty" };
+		const char *name = names[vfs];
+		len = strlen(name);
+		if (!resolved) {
+			resolved = malloc(len + 1);
+			if (!resolved) return 0;
+		}
+		memcpy(resolved, name, len + 1);
+		return resolved;
+	}
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		/* a directory might refuse O_RDONLY; try it as one */

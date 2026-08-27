@@ -14,7 +14,10 @@
  * so that a child started by execve or posix_spawn sees the fds its
  * parent meant it to, including ones redirected by a shell.  The table
  * itself lives in this process's data and is therefore copied whole by
- * fork.
+ * fork.  When a virtual descriptor or cwd exists, an optional tagged
+ * trailer follows the standard table.  Other CRTs stop after osfhnd and
+ * ignore it; an ntlibc child uses it to restore namespace identity that
+ * an NT handle alone cannot describe.
  */
 #include <fcntl.h>
 #include <unistd.h>
@@ -34,6 +37,8 @@ int __fd_limit = FD_MAX;
 #define FAPPEND    0x20
 #define FDEV       0x40
 #define FTEXT      0x80
+
+#define VFS_RUNTIME_MAGIC 0x32534656u /* "VFS2", little-endian */
 
 int __handle_type(HANDLE h)
 {
@@ -203,18 +208,44 @@ void __fd_init(void)
 
 	if (pp->RuntimeData.Buffer && pp->RuntimeData.Length >= sizeof(int)) {
 		const unsigned char *p = (const unsigned char *)pp->RuntimeData.Buffer;
+		const unsigned char *vfs = 0;
+		const unsigned char *vfs_native = 0, *vseen = 0, *vnext = 0;
+		size_t base;
 		int count, i;
 		memcpy(&count, p, sizeof count);
 		if (count > FD_MAX) count = FD_MAX;
-		if ((size_t)pp->RuntimeData.Length >= sizeof(int) + count * (1 + sizeof(HANDLE))) {
+		base = sizeof(int) + count * (1 + sizeof(HANDLE));
+		if ((size_t)pp->RuntimeData.Length >= base) {
 			const unsigned char *osfile = p + sizeof(int);
 			const unsigned char *osfhnd = osfile + count;
+			if ((size_t)pp->RuntimeData.Length >= base + 9 + 4 * (size_t)count) {
+				unsigned magic, trailer_count;
+				memcpy(&magic, p + base, sizeof magic);
+				memcpy(&trailer_count, p + base + 4, sizeof trailer_count);
+				if (magic == VFS_RUNTIME_MAGIC && trailer_count == (unsigned)count) {
+					vfs = p + base + 8;
+					vfs_native = vfs + count;
+					vseen = vfs_native + count;
+					vnext = vseen + count;
+					__vfs_cwd_set(vnext[count]);
+				}
+			}
 			for (i = 0; i < count; i++) {
 				HANDLE h;
+				int vk = vfs ? vfs[i] : __VFS_NONE;
 				memcpy(&h, osfhnd + i * sizeof(HANDLE), sizeof h);
 				if (!(osfile[i] & FOPEN) || !h || h == (HANDLE)(LONG_PTR)-1) continue;
-				if (i < 3 && __fds[i].h) continue;   /* the PEB's std handles win */
-				if (__handle_type(h) == __FD_UNKNOWN) continue;
+				if (i < 3 && __fds[i].h) {
+					if (vk) {
+						__fds[i].vfs = (unsigned char)vk;
+						__fds[i].vfs_native = vfs_native[i];
+						__fds[i].vseen = vseen[i];
+						__fds[i].vnext = vnext[i];
+						if (vk == __VFS_ROOT || vk == __VFS_DEV) __fds[i].type = __FD_DIR;
+					}
+					continue;   /* the PEB's std handles win */
+				}
+				if (!vk && __handle_type(h) == __FD_UNKNOWN) continue;
 				/* The access mode is NOT in osfile[i] -- see
 				 * accmode_of().  Without it every inherited
 				 * descriptor read back as O_RDONLY (because
@@ -226,7 +257,14 @@ void __fd_init(void)
 				 * very same descriptor succeeded, because they
 				 * ask the kernel instead of this field. */
 				__fd_install_at(i, h, (osfile[i] & FAPPEND ? O_APPEND : 0) |
-				                      accmode_of(h, O_RDWR), 0);
+				                      (vk == __VFS_ROOT || vk == __VFS_DEV ? O_RDONLY : accmode_of(h, O_RDWR)),
+				                vk == __VFS_ROOT || vk == __VFS_DEV ? __FD_DIR : 0);
+				__fds[i].vfs = (unsigned char)vk;
+				if (vk) {
+					__fds[i].vfs_native = vfs_native[i];
+					__fds[i].vseen = vseen[i];
+					__fds[i].vnext = vnext[i];
+				}
 			}
 		}
 	}
@@ -239,14 +277,18 @@ void __fd_init(void)
  * pass. */
 void *__fd_runtime_data(size_t *len)
 {
-	int count = 0, i;
+	int count = 0, i, have_vfs = __vfs_cwd_get() != __VFS_NONE;
 	unsigned char *blk, *osfile, *osfhnd;
 
-	for (i = 0; i < FD_MAX; i++)
-		if (__fds[i].h && !(__fds[i].flags & O_CLOEXEC)) count = i + 1;
-	if (count <= 3) { *len = 0; return 0; }
+	for (i = 0; i < FD_MAX; i++) {
+		if (__fds[i].h && !(__fds[i].flags & O_CLOEXEC)) {
+			count = i + 1;
+			if (__fds[i].vfs) have_vfs = 1;
+		}
+	}
+	if (count <= 3 && !have_vfs) { *len = 0; return 0; }
 
-	*len = sizeof(int) + count * (1 + sizeof(HANDLE));
+	*len = sizeof(int) + count * (1 + sizeof(HANDLE)) + (have_vfs ? 9 + 4 * count : 0);
 	blk = __malloc(*len);
 	if (!blk) { *len = 0; return 0; }
 	memcpy(blk, &count, sizeof count);
@@ -271,6 +313,17 @@ void *__fd_runtime_data(size_t *len)
 		}
 		osfile[i] = fl;
 		memcpy(osfhnd + i * sizeof(HANDLE), &h, sizeof h);
+	}
+	if (have_vfs) {
+		unsigned magic = VFS_RUNTIME_MAGIC, trailer_count = (unsigned)count;
+		unsigned char *trailer = osfhnd + count * sizeof(HANDLE);
+		memcpy(trailer, &magic, sizeof magic);
+		memcpy(trailer + 4, &trailer_count, sizeof trailer_count);
+		for (i = 0; i < count; i++) trailer[8 + i] = __fds[i].vfs;
+		for (i = 0; i < count; i++) trailer[8 + count + i] = __fds[i].vfs_native;
+		for (i = 0; i < count; i++) trailer[8 + 2 * count + i] = __fds[i].vseen;
+		for (i = 0; i < count; i++) trailer[8 + 3 * count + i] = __fds[i].vnext;
+		trailer[8 + 4 * count] = (unsigned char)__vfs_cwd_get();
 	}
 	return blk;
 }

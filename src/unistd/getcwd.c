@@ -18,6 +18,20 @@ char *getcwd(char *buf, size_t size)
 	ULONG n;
 	size_t i, len;
 	int r;
+	int vfs = __vfs_cwd_get();
+	if (vfs == __VFS_ROOT || vfs == __VFS_DEV) {
+		const char *path = vfs == __VFS_ROOT ? "/" : "/dev";
+		len = strlen(path);
+		if (!buf) {
+			if (!size) size = len + 1;
+			if (len + 1 > size) { errno = ERANGE; return 0; }
+			buf = malloc(size);
+			if (!buf) return 0;
+		} else if (!size) { errno = EINVAL; return 0; }
+		else if (len + 1 > size) { errno = ERANGE; return 0; }
+		memcpy(buf, path, len + 1);
+		return buf;
+	}
 
 	n = RtlGetCurrentDirectory_U(sizeof w, w);
 	if (!n || n > sizeof w) { errno = ERANGE; return 0; }

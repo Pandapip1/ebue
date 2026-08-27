@@ -60,10 +60,53 @@ static void make_real(DIR *dp, FILE_ID_BOTH_DIR_INFORMATION *fi, struct dirent *
 /* 0 = filled *out; 1 = end of directory; -1 = error, errno set. */
 static int fill(DIR *dp, struct dirent *out)
 {
-	FILE_ID_BOTH_DIR_INFORMATION *fi = __dirstream_next(dp);
-	if (!fi) return dp->done ? 1 : -1;
-	make_real(dp, fi, out);
-	return 0;
+	struct __fd *f = __fd_get(dp->fd);
+	if (!f) return -1;
+	if (!f->vfs_native && (f->vfs == __VFS_ROOT || f->vfs == __VFS_DEV)) {
+		static const char *const root_names[] = { ".", "..", "dev" };
+		static const unsigned char root_types[] = { __DT_DIR, __DT_DIR, __DT_DIR };
+		static const char *const dev_names[] = { ".", "..", "console", "null", "tty" };
+		static const unsigned char dev_types[] = { __DT_DIR, __DT_DIR, __DT_CHR, __DT_CHR, __DT_CHR };
+		const char *const *names = f->vfs == __VFS_ROOT ? root_names : dev_names;
+		const unsigned char *types = f->vfs == __VFS_ROOT ? root_types : dev_types;
+		size_t count = f->vfs == __VFS_ROOT ? 3 : 5;
+		if ((size_t)dp->tell >= count) { dp->done = 1; return 1; }
+		memset(out, 0, sizeof *out);
+		out->d_ino = (ino_t)(dp->tell < 2 ? (f->vfs == __VFS_ROOT ? __VFS_ROOT :
+		                    (dp->tell == 0 ? __VFS_DEV : __VFS_ROOT)) :
+		                    (f->vfs == __VFS_ROOT ? __VFS_DEV : __VFS_CONSOLE + dp->tell - 2));
+		out->d_type = types[dp->tell];
+		out->d_reclen = sizeof *out;
+		strcpy(out->d_name, names[dp->tell]);
+		dp->tell++;
+		out->d_off = dp->tell;
+		return 0;
+	}
+	{
+		FILE_ID_BOTH_DIR_INFORMATION *fi = __dirstream_next(dp);
+		if (fi) {
+			make_real(dp, fi, out);
+			if (f->vfs_native) dp->vseen |= __vfs_mandatory_seen(f->vfs, out->d_name);
+			return 0;
+		}
+		if (!dp->done) return -1;
+	}
+	if (f->vfs_native) {
+		int total = __vfs_mandatory_count(f->vfs);
+		while (dp->vnext < total) {
+			int i = dp->vnext++;
+			if (dp->vseen & (1u << i)) continue;
+			memset(out, 0, sizeof *out);
+			out->d_ino = (ino_t)__vfs_mandatory_kind(f->vfs, i);
+			out->d_type = f->vfs == __VFS_ROOT ? __DT_DIR : __DT_CHR;
+			out->d_reclen = sizeof *out;
+			strcpy(out->d_name, __vfs_mandatory_name(f->vfs, i));
+			dp->tell++;
+			out->d_off = dp->tell;
+			return 0;
+		}
+	}
+	return 1;
 }
 
 int readdir_r(DIR *dp, struct dirent *entry, struct dirent **result)

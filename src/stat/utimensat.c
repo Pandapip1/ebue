@@ -52,6 +52,7 @@ int futimens(int fd, const struct timespec ts[2])
 {
 	struct __fd *f = __fd_get(fd);
 	if (!f) return -1;
+	if (f->vfs && !f->vfs_native) { errno = EROFS; return -1; }
 	return set_times_handle(f->h, ts);
 }
 

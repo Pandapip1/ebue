@@ -145,6 +145,14 @@ int fstatvfs(int fd, struct statvfs *buf)
 	struct __fd *f = __fd_get(fd);
 	if (!f) return -1;   /* __fd_get sets EBADF */
 	if (!buf) { errno = EFAULT; return -1; }
+	if (f->vfs && !f->vfs_native) {
+		memset(buf, 0, sizeof *buf);
+		buf->f_bsize = buf->f_frsize = 4096;
+		buf->f_fsid = 0xffffffffu;
+		buf->f_flag = ST_RDONLY | ST_NOSUID;
+		buf->f_namemax = 255;
+		return 0;
+	}
 	return statvfs_handle(f->h, buf);
 }
 
@@ -154,9 +162,21 @@ int statvfs(const char *__restrict path, struct statvfs *__restrict buf)
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS s;
-	int r;
+	int r, vfs;
 
 	if (!buf) { errno = EFAULT; return -1; }
+	vfs = __vfs_resolve_at(AT_FDCWD, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE) {
+		memset(buf, 0, sizeof *buf);
+		buf->f_bsize = buf->f_frsize = 4096;
+		buf->f_fsid = 0xffffffffu;
+		buf->f_flag = ST_RDONLY | ST_NOSUID;
+		buf->f_namemax = 255;
+		return 0;
+	}
 	/* "Read, write, or execute permission of the named file is not
 	 * required" (DESCRIPTION) -- FILE_READ_ATTRIBUTES is the NT access
 	 * mask that asks for none of the three. */
