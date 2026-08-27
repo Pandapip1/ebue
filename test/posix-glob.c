@@ -1628,6 +1628,10 @@ static void test_glob_fuzz_append_same_pattern_runs(void)
 		CHECK(strcmp(g.gl_pathv[3], g.gl_pathv[4]) > 0);
 
 	globfree(&g);
+	CHECK(unlink("fzr-a") == 0);
+	CHECK(unlink("fzr-b") == 0);
+	CHECK(unlink("fzr-[x]") == 0);
+	CHECK(rmdir("fzr-d") == 0);
 }
 
 static void test_glob_empty_pattern(void)

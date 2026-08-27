@@ -1258,7 +1258,9 @@ static void test_freopen_clears_orientation(void)
 
 	CHECK(f != 0);
 	if (!f) return;
-	CHECK(fputs("A", f) >= 0);
+	/* Populate the file without applying a byte stdio operation: that
+	 * would orient the stream before the wide-operation control below. */
+	CHECK(write(fileno(f), "A", 1) == 1);
 	rewind(f);
 
 	CHECK(fwide(f, 0) == 0);	/* no orientation yet */
