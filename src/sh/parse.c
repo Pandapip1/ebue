@@ -330,6 +330,17 @@ static int drain_heredocs(struct lexer *lx)
 	return 0;
 }
 
+static void discard_heredocs(struct lexer *lx)
+{
+	struct pending_hd *h = lx->pending_head;
+	while (h) {
+		struct pending_hd *next = h->next;
+		__free(h);
+		h = next;
+	}
+	lx->pending_head = lx->pending_tail = 0;
+}
+
 /* Scans one WORD starting at lx->p (which must not currently be blank,
  * newline, EOF, comment-start or an operator character). Advances
  * lx->p past it. Returns the raw text (quotes/backslashes intact),
@@ -1212,6 +1223,7 @@ struct sh_list *__sh_parse(const char *src, char *errbuf, size_t errbuflen)
 		perr(&p, "unexpected token near '%s'", p.cur.type == T_WORD ? p.cur.text : "?");
 	}
 	if (p.cur.type == T_WORD) __free(p.cur.text);
+	discard_heredocs(&p.lx);
 
 	if (p.had_error) {
 		if (errbuf && errbuflen) {

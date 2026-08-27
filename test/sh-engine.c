@@ -556,7 +556,7 @@ static void test_group_redir_leak(void)
 	__sh_list_free(l);
 }
 
-#if NTLIBC_TEST(BUG, sh_engine_heredoc_queue_leak) /* BUG: a here-document that is queued and never drained leaks
+#if NTLIBC_TEST(PASS, sh_engine_heredoc_queue_leak) /* A here-document that is queued and never drained releases
 	 * its queue entry.  parse_redir() (src/sh/parse.c:524) pushes a
 	 * `struct pending_hd` onto the lexer's pending list *before* the
 	 * advance() that would reach the newline -- deliberately, and the

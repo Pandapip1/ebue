@@ -53,47 +53,7 @@
 extern void oracle_mismatch_s(const char *, const char *, const char *, const char *);
 extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 
-/* LeakSanitizer's own interface, declared rather than included:
- * <sanitizer/lsan_interface.h> is a host header and this file is
- * compiled -nostdinc.  Both are exported by the shared ASan runtime
- * the harness already links.  See the block above heredoc_fence(). */
-void __lsan_disable(void);
-void __lsan_enable(void);
-
 #define CAP 1024
-
-/* BUG: a here-document redirection that is queued and then never
- * drained leaks its queue entry.  parse_redir() (src/sh/parse.c:524)
- * pushes a `struct pending_hd` onto the lexer's pending list before
- * the advance() that would reach the newline, and drain_heredocs() --
- * the only thing that frees those entries -- runs only when that
- * newline arrives.  If the parse fails first, __sh_parse()'s error
- * path frees the AST and returns, and the pending list is dropped on
- * the floor: p.lx.pending_head is initialised at line 725 and never
- * torn down.  24 bytes per queued here-document.
- *
- * Minimal reproducer, found by this harness in three minutes and
- * reduced by hand:
- *
- *     __sh_parse("a <<E (", ...)     ->  NULL, 24 bytes leaked
- *
- * ("a <<E" alone does not leak: it parses, so the queue drains.)
- * Fenced in test/sh-engine.c, not fixed, per the standing rule.
- *
- * The harness has to stay off it, for the reason fuzz_regex.c gives at
- * length: libFuzzer stops at the first finding, so a harness that
- * rediscovers a known defect on input 300 reports nothing else ever
- * again.  The narrowest possible exclusion is used -- LeakSanitizer is
- * switched off around the parse itself, and only for a source text
- * that actually contains "<<".  Every other allocation this harness
- * makes, and every allocation any input without a here-document makes,
- * is still accounted for.
- *
- * When the fence is lifted, delete heredoc_fence() and both calls. */
-static int heredoc_fence(const char *src)
-{
-	return strstr(src, "<<") != 0;
-}
 
 /* BUG: the printer writes a here-document's terminator line as the
  * delimiter word was WRITTEN, but the parser matches terminator
@@ -223,7 +183,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	struct sh_list *l1, *l2;
 	char *p1, *p2;
 	size_t n;
-	int fenced;
 
 	n = size < CAP ? size : CAP;
 	if (!n) return 0;
@@ -236,8 +195,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 	 * it truncates to fit, and a truncation that forgets the NUL is the
 	 * classic form of that bug. */
 	memset(errbuf, 'Z', sizeof errbuf);
-	fenced = heredoc_fence(src);
-	if (fenced) __lsan_disable();
 	l1 = __sh_parse(src, errbuf, sizeof errbuf);
 
 	if (!l1) {
@@ -246,7 +203,6 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 			                  (long long)sizeof errbuf, 0);
 		/* A NULL errbuf must be accepted, not dereferenced. */
 		l1 = __sh_parse(src, NULL, 0);
-		if (fenced) __lsan_enable();
 		if (l1) {
 			/* Two identical calls disagreeing about whether the program
 			 * parses is a defect on its own -- the parser has no state
@@ -257,16 +213,13 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		return 0;
 	}
 
-	if (fenced) __lsan_enable();
 	p1 = reprint(l1);
 	__sh_list_free(l1);
 	if (!p1) return 0;
 
 	/* The fixed point, per src/sh/print.c's banner and the by-hand
 	 * version of this check in test/sh-engine.c. */
-	if (fenced) __lsan_disable();
 	l2 = __sh_parse(p1, NULL, 0);
-	if (fenced) __lsan_enable();
 	if (l2) {
 		p2 = reprint(l2);
 		__sh_list_free(l2);
