@@ -125,6 +125,11 @@ int pthread_key_delete(pthread_key_t);
 void *pthread_getspecific(pthread_key_t);
 int pthread_setspecific(pthread_key_t, const void *);
 
+int pthread_cancel(pthread_t);
+int pthread_setcancelstate(int, int *);
+int pthread_setcanceltype(int, int *);
+void pthread_testcancel(void);
+
 int pthread_getschedparam(pthread_t, int *__restrict, struct sched_param *__restrict);
 int pthread_setschedparam(pthread_t, int, const struct sched_param *);
 int pthread_setschedprio(pthread_t, int);
