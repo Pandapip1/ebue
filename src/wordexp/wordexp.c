@@ -230,13 +230,17 @@ static const char *param_word_end(const char *p)
 			continue;
 		}
 		if (*p == '\'') {
-			while (*++p && *p != '\'') {}
+			p++;
+			while (*p && *p != '\'') p++;
 			if (!*p) return 0;
 			continue;
 		}
 		if (*p == '"') {
-			while (*++p && *p != '"')
+			p++;
+			while (*p && *p != '"') {
 				if (*p == '\\' && p[1]) p++;
+				p++;
+			}
 			if (!*p) return 0;
 			continue;
 		}
