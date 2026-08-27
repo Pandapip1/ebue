@@ -832,6 +832,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 		struct inst *in;
 
 		if (++ms->steps > MAX_STEPS) return -1;
+		if (pc < 0 || pc >= ms->rx->nprog) goto backtrack;
 		in = &ms->rx->prog[pc];
 		switch (in->op) {
 		case I_CHAR: {
@@ -876,9 +877,13 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			pc++;
 			continue;
 		case I_BACKREF: {
-			regoff_t so = ms->slot[in->c * 2];
-			regoff_t eo = ms->slot[in->c * 2 + 1];
+			size_t slot;
+			regoff_t so, eo;
 			regoff_t i, len;
+			if (in->c < 0 || in->c >= ms->nslot / 2) goto backtrack;
+			slot = (size_t)in->c * 2;
+			so = ms->slot[slot];
+			eo = ms->slot[slot + 1];
 			if (so < 0 || eo < so) goto backtrack;
 			len = eo - so;
 			if (len > ms->end - sp) goto backtrack;

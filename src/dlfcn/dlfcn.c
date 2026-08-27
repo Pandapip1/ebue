@@ -184,9 +184,15 @@ void *dlsym(void *__restrict handle, const char *__restrict name)
 		LIST_ENTRY *head = &__peb->Ldr->InLoadOrderModuleList;
 		LIST_ENTRY *link;
 		ANSI_STRING symbol;
+		size_t len = strlen(name);
 
+		/* ANSI_STRING counts bytes in a USHORT.  Let the ordinary
+		 * ntlibc_rpath_sym() path below record STATUS_NAME_TOO_LONG
+		 * instead of wrapping a long name into a different symbol. */
+		if (len > 0xffffu)
+			return ntlibc_rpath_sym((ntlibc_dll_t *)handle, name);
 		symbol.Buffer = (char *)name;
-		symbol.Length = (USHORT)strlen(name);
+		symbol.Length = (USHORT)len;
 		symbol.MaximumLength = symbol.Length;
 		for (link = head->Flink; link != head; link = link->Flink) {
 			LDR_DATA_TABLE_ENTRY *entry =
