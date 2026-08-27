@@ -2777,7 +2777,7 @@ static void test_regex_interval_expansion_is_bounded(void)
 	regfree(&re);
 }
 
-#if NTLIBC_TEST(PASS, posix_glob_regex_nullable_repeat_does_not_crash) /* regcomp.html RETURN VALUE -- "Upon successful completion,
+#if NTLIBC_TEST(BUG, posix_glob_regex_nullable_repeat_does_not_crash) /* BUG: regcomp.html RETURN VALUE -- "Upon successful completion,
 	the regexec() function shall return 0. Otherwise, it shall return
 	REG_NOMATCH to indicate no match." These three patterns are not
 	exotic -- any program that hands a user-supplied pattern to
