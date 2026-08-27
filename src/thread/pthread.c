@@ -250,17 +250,53 @@ int pthread_attr_destroy(pthread_attr_t *attr)
 	return 0;
 }
 
-#define ATTR_GETTER(name, field, type) \
-	int name(const pthread_attr_t *__restrict attr, type *__restrict value) \
-	{ if (!valid_attr(attr) || !value) return EINVAL; \
-	  *value = const_attr_data(attr)->field; return 0; }
+int pthread_attr_getdetachstate(const pthread_attr_t *__restrict attr,
+	int *__restrict value)
+{
+	if (!valid_attr(attr) || !value) return EINVAL;
+	*value = const_attr_data(attr)->detach_state;
+	return 0;
+}
 
-ATTR_GETTER(pthread_attr_getdetachstate, detach_state, int)
-ATTR_GETTER(pthread_attr_getguardsize, guard_size, size_t)
-ATTR_GETTER(pthread_attr_getinheritsched, inherit_sched, int)
-ATTR_GETTER(pthread_attr_getschedpolicy, sched_policy, int)
-ATTR_GETTER(pthread_attr_getscope, scope, int)
-ATTR_GETTER(pthread_attr_getstacksize, stack_size, size_t)
+int pthread_attr_getguardsize(const pthread_attr_t *__restrict attr,
+	size_t *__restrict value)
+{
+	if (!valid_attr(attr) || !value) return EINVAL;
+	*value = const_attr_data(attr)->guard_size;
+	return 0;
+}
+
+int pthread_attr_getinheritsched(const pthread_attr_t *__restrict attr,
+	int *__restrict value)
+{
+	if (!valid_attr(attr) || !value) return EINVAL;
+	*value = const_attr_data(attr)->inherit_sched;
+	return 0;
+}
+
+int pthread_attr_getschedpolicy(const pthread_attr_t *__restrict attr,
+	int *__restrict value)
+{
+	if (!valid_attr(attr) || !value) return EINVAL;
+	*value = const_attr_data(attr)->sched_policy;
+	return 0;
+}
+
+int pthread_attr_getscope(const pthread_attr_t *__restrict attr,
+	int *__restrict value)
+{
+	if (!valid_attr(attr) || !value) return EINVAL;
+	*value = const_attr_data(attr)->scope;
+	return 0;
+}
+
+int pthread_attr_getstacksize(const pthread_attr_t *__restrict attr,
+	size_t *__restrict value)
+{
+	if (!valid_attr(attr) || !value) return EINVAL;
+	*value = const_attr_data(attr)->stack_size;
+	return 0;
+}
 
 int pthread_attr_setdetachstate(pthread_attr_t *attr, int value)
 {
