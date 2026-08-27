@@ -211,6 +211,8 @@ typedef struct {
 } siginfo_t;
 #define si_pid     __si_fields.__si_common.__first.__piduid.si_pid
 #define si_uid     __si_fields.__si_common.__first.__piduid.si_uid
+#define si_timerid __si_fields.__si_common.__first.__timer.si_timerid
+#define si_overrun __si_fields.__si_common.__first.__timer.si_overrun
 #define si_status  __si_fields.__si_common.__second.__sigchld.si_status
 #define si_utime   __si_fields.__si_common.__second.__sigchld.si_utime
 #define si_stime   __si_fields.__si_common.__second.__sigchld.si_stime

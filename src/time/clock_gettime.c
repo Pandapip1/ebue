@@ -121,8 +121,10 @@ int clock_getcpuclockid(pid_t pid, clockid_t *id)
 {
 	/* No handle-by-pid CPU-time clock without OpenProcess (and the
 	 * ACCESS_DENIED that usually comes with querying another process's
-	 * times); only "this process" is supported. */
-	if (pid != 0 && pid != getpid()) { errno = ESRCH; return -1; }
+	 * times); only "this process" is supported.  Unlike most POSIX
+	 * interfaces this function returns an error number directly and
+	 * does not report failure through errno. */
+	if (pid != 0 && pid != getpid()) return ESRCH;
 	*id = CLOCK_PROCESS_CPUTIME_ID;
 	return 0;
 }

@@ -58,6 +58,10 @@ long sysconf(int name)
 	case _SC_REALTIME_SIGNALS: return _POSIX_REALTIME_SIGNALS;
 	case _SC_RTSIG_MAX: return RTSIG_MAX;
 	case _SC_SIGQUEUE_MAX: return SIGQUEUE_MAX;
+	case _SC_TIMERS: return _POSIX_TIMERS;
+	case _SC_TIMER_MAX: return TIMER_MAX;
+	case _SC_DELAYTIMER_MAX: return _POSIX_DELAYTIMER_MAX;
+	case _SC_CPUTIME: return _POSIX_CPUTIME;
 	/* The <limits.h> Runtime Increasable Values, which that header
 	 * documents as the compile-time minimum this library promises;
 	 * reporting anything smaller here would break the promise. */
@@ -123,8 +127,6 @@ long sysconf(int name)
 	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES, _SC_MEMLOCK*,
 	 *                              _SC_MEMORY_PROTECTION,
 	 *                              _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
-	 *   no timer_create()       -- _SC_TIMERS, _SC_TIMER_MAX,
-	 *                              _SC_DELAYTIMER_MAX
 	 *   no utilities            -- the _SC_2_* development-utility set
 	 *                              (c99, fort77, localedef, PBS, ...);
 	 *                              sh/ implements a documented subset of
@@ -132,8 +134,7 @@ long sysconf(int name)
 	 *                              rather than a POSIX shell, so
 	 *                              _SC_SHELL goes with them
 	 *   declined outright       -- _SC_TRACE*, _SC_SPORADIC_SERVER,
-	 *                              _SC_PRIORITY_SCHEDULING and
-	 *                              _SC_CPUTIME (<sched.h>'s banner),
+	 *                              _SC_PRIORITY_SCHEDULING,
 	 *                              _SC_XOPEN_CRYPT (crypt() is
 	 *                              undefined-ok), _SC_ADVISORY_INFO
 	 *                              (posix_madvise() needs mman),
@@ -166,7 +167,6 @@ long sysconf(int name)
 	case _SC_JOB_CONTROL:
 	case _SC_SAVED_IDS:
 	case _SC_PRIORITY_SCHEDULING:
-	case _SC_TIMERS:
 	case _SC_ASYNCHRONOUS_IO:
 	case _SC_PRIORITIZED_IO:
 	case _SC_SYNCHRONIZED_IO:
@@ -179,12 +179,10 @@ long sysconf(int name)
 	case _SC_AIO_LISTIO_MAX:
 	case _SC_AIO_MAX:
 	case _SC_AIO_PRIO_DELTA_MAX:
-	case _SC_DELAYTIMER_MAX:
 	case _SC_MQ_OPEN_MAX:
 	case _SC_MQ_PRIO_MAX:
 	case _SC_SEM_NSEMS_MAX:
 	case _SC_SEM_VALUE_MAX:
-	case _SC_TIMER_MAX:
 	case _SC_2_C_BIND:
 	case _SC_2_C_DEV:
 	case _SC_2_FORT_DEV:
@@ -227,7 +225,6 @@ long sysconf(int name)
 	case _SC_ADVISORY_INFO:
 	case _SC_BARRIERS:
 	case _SC_CLOCK_SELECTION:
-	case _SC_CPUTIME:
 	case _SC_READER_WRITER_LOCKS:
 	case _SC_SPIN_LOCKS:
 	case _SC_SHELL:

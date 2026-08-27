@@ -250,6 +250,9 @@ pid_t gettid(void);
  * rather than the 100 ns clock_getres() advertises. */
 #define _POSIX_MONOTONIC_CLOCK  200809L
 
+/* Process CPU-time clocks and clock_getcpuclockid(). */
+#define _POSIX_CPUTIME 200809L
+
 /* shm_open()/shm_unlink() and file-backed MAP_SHARED mappings together
  * provide the Shared Memory Objects option. */
 #define _POSIX_SHARED_MEMORY_OBJECTS 200809L
@@ -257,6 +260,9 @@ pid_t gettid(void);
 /* Queued real-time signals, including payload-preserving cross-process
  * sigqueue() delivery and the two synchronous wait interfaces. */
 #define _POSIX_REALTIME_SIGNALS 200809L
+
+/* Per-process timers over the clocks exposed by <time.h>. */
+#define _POSIX_TIMERS 200809L
 
 /* unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE ... shall
  * always be set to a value other than -1."  0, not the BSD '\377',
@@ -272,7 +278,7 @@ pid_t gettid(void);
  * _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES, _POSIX_MEMORY_PROTECTION,
  * _POSIX_READER_WRITER_LOCKS, _POSIX_SEMAPHORES,
  * _POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS,
- * _POSIX_TIMEOUTS and _POSIX_TIMERS.  Their absence IS a conformance
+ * _POSIX_TIMEOUTS.  Their absence IS a conformance
  * hole and is recorded as one -- test/POSIX-COVERAGE.md group U, and
  * test/posix-unistd.c's still-fenced
  * test_unistd_mandatory_option_constants -- so this note exists to stop
@@ -291,8 +297,6 @@ pid_t gettid(void);
  *   - no <aio.h> (_POSIX_ASYNCHRONOUS_IO), no <semaphore.h>
  *     (_POSIX_SEMAPHORES), no <sys/mman.h> (_POSIX_MAPPED_FILES,
  *     _POSIX_MEMORY_PROTECTION);
- *   - timer_create()/timer_settime() are absent, so _POSIX_TIMERS is
- *     not earned by src/time/clock_gettime.c alone;
  *   - _POSIX_CLOCK_SELECTION needs pthread_condattr_setclock() as well
  *     as the clock_nanosleep() we do have.
  *

@@ -25,17 +25,9 @@
  * never sees its SIGALRM at all.  That gap is recorded in
  * test/POSIX-GAP-ACCOUNTING.md rather than glossed over.
  *
- * A dedicated timer thread would close it -- it could NtAlertThread
- * the main thread from outside, or queue the APC to it -- and it was
- * rejected.  fork() here is RtlCloneUserProcess (src/process/fork.c),
- * which clones only the calling thread: every child would come back
- * carrying a timer thread that does not exist, and any ntdll lock that
- * thread held at the instant of the clone would be held forever in the
- * child.  fork.c's banner spends a page on exactly that class of
- * damage in the WOW64 case; buying compute-bound signal delivery with
- * a second helping of it is not a trade worth making for a library
- * whose fork is its most delicate call.  Revisit if this library ever
- * grows real threads, and an atfork story with them.
+ * POSIX timers now use a dedicated manager thread (src/time/timer.c).
+ * The bounded polling in __alertable_delay() below notices handlers run
+ * by that thread and turns them into EINTR for sleep()/nanosleep().
  *
  * The deadline is kept as an absolute NT system time, the same
  * NtQuerySystemTime clock time() and clock_gettime(CLOCK_REALTIME) read
@@ -52,12 +44,6 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
-
-/* NtDelayExecution's two "you were woken early" answers: STATUS_USER_APC
- * when a queued user APC ran (what a timer expiry produces, measured
- * under Wine and on NT alike) and STATUS_ALERTED for a bare
- * NtAlertThread.  Both mean the wait did not run to its timeout. */
-static int alerted(NTSTATUS st) { return st == STATUS_USER_APC || st == STATUS_ALERTED; }
 
 /* The process-wide alarm.  Created on the first alarm() that asks for
  * one and then kept for the life of the process: it is a single handle,
@@ -208,23 +194,26 @@ void __alarm_reset_after_fork(void)
  * returns 0 for the handled and the ignored case alike, and the
  * terminate case does not come back here at all.
  *
- * The elapsed time is measured on NtQuerySystemTime rather than the
- * performance counter, which would be immune to a clock step: the only
- * thing that can interrupt this wait is an alarm whose own deadline is
- * on the system clock, and having the two agree matters more here than
- * having either one step-proof.  A wait that is never alerted -- every
- * call that is not interrupted -- is a single relative
- * NtDelayExecution and reads no clock at all. */
+ * Elapsed time is measured on NtQuerySystemTime rather than the
+ * performance counter, which would be immune to a clock step: alarm()
+ * deadlines use the system clock, and having the two agree matters more
+ * here than making either one step-proof.  Bounded polling is required
+ * for background signal delivery, so every slice is measured. */
 int __alertable_delay(long long ticks, long long *left)
 {
 	unsigned long caught = __sig_caught_count();
 	LARGE_INTEGER start, now, t;
 
 	NtQuerySystemTime(&start);
-	for (;;) {
-		t = -ticks;
+	while (ticks > 0) {
+		/* Background signal sources (the cross-process delivery thread
+		 * and the POSIX timer manager) run handlers on their own thread.
+		 * A bounded slice lets this thread observe caught_count and return
+		 * EINTR without requiring thread-context injection. */
+		long long slice = ticks < 100000 ? ticks : 100000; /* at most 10ms */
+		t = -slice;
 		if (!t) t = -1;   /* a 0 timeout means "yield", not "no wait" */
-		if (!alerted(NtDelayExecution(1, &t))) return 0;
+		NtDelayExecution(1, &t);
 
 		NtQuerySystemTime(&now);
 		ticks -= now - start;
@@ -234,8 +223,8 @@ int __alertable_delay(long long ticks, long long *left)
 			errno = EINTR;
 			return -1;
 		}
-		if (ticks <= 0) return 0;
 	}
+	return 0;
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem)
@@ -282,23 +271,16 @@ int usleep(unsigned us)
 int pause(void)
 {
 	unsigned long caught = __sig_caught_count();
-	LARGE_INTEGER never = 0x7fffffffffffffffLL;
+	LARGE_INTEGER slice = -1000000; /* 100ms */
 	/* pause.html: "suspend the calling thread until delivery of a
 	 * signal whose action is either to execute a signal-catching
 	 * function or to terminate the process", after which "-1 shall be
 	 * returned and errno set" to [EINTR].  Alertable, so an alarm()
-	 * APC ends it; nothing else in this library can, so a pause() with
-	 * no alarm pending waits out the maximal timeout (see this file's
-	 * header comment, and src/signal/signal.c's).  The loop is for the
-	 * signal that was *ignored*: pause.html ends the wait only on one
-	 * "whose action is either to execute a signal-catching function or
-	 * to terminate the process", so an alert that ran no handler goes
-	 * back into the wait.  A return that is not an alert at all falls
-	 * straight out, which is also what keeps this from spinning on a
-	 * host whose delay cannot express the maximal timeout
-	 * (fuzz/ntstubs.c). */
-	while (alerted(NtDelayExecution(1, &never)) && __sig_caught_count() == caught)
-		;
+	 * APC ends it.  Signals delivered by a background delivery thread
+	 * are observed through the caught counter on the next bounded poll.
+	 * An ignored signal changes no counter and therefore leaves pause()
+	 * waiting, as POSIX requires. */
+	while (__sig_caught_count() == caught) NtDelayExecution(1, &slice);
 	errno = EINTR;
 	return -1;
 }

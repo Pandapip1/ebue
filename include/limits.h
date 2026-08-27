@@ -49,6 +49,7 @@
 #define OPEN_MAX 1024
 #define RTSIG_MAX 30
 #define SIGQUEUE_MAX 32
+#define TIMER_MAX 32
 
 #define _POSIX_AIO_LISTIO_MAX   2
 #define _POSIX_AIO_MAX          1

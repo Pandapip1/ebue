@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Coverage fences for the POSIX Realtime headers ntlibc does not have:
- * <semaphore.h>, <mqueue.h>, <aio.h>, plus the per-process timers
- * <time.h> is specified to declare and the half of <sched.h> that is
- * missing.  POSIX.1-2017 (IEEE Std 1003.1-2017, The Open Group Base
- * Specifications Issue 7, 2018 Edition), the document served at
+ * <semaphore.h>, <mqueue.h>, <aio.h>, plus the half of <sched.h> that is
+ * missing.  This file also keeps the now-implemented per-process timer
+ * fence as a required PASS.  POSIX.1-2017 (IEEE Std 1003.1-2017, The
+ * Open Group Base Specifications Issue 7, 2018 Edition), served at
  * https://pubs.opengroup.org/onlinepubs/9699919799/ .  Clause text was
  * read from Ubuntu's manpages-posix-dev 2017a-2, whose pages carry that
  * edition's COPYRIGHT verbatim; pubs.opengroup.org is unreachable here.
@@ -34,9 +34,9 @@
  *
  *   - <semaphore.h>, <mqueue.h> and <aio.h> do not exist in include/,
  *     so those fences die on their own #include.
- *   - <time.h> and <sched.h> DO exist and are included successfully;
- *     the timer_* and sched_* fences get past the preprocessor and die
- *     on the missing declarations/symbols instead.  include/sched.h's
+ *   - <sched.h> exists and is included successfully; the sched_* fence
+ *     gets past the preprocessor and dies on missing declarations and
+ *     symbols.  include/sched.h's
  *     own banner (lines 7-11) already names its absences in prose --
  *     "the SCHED_FIFO/SCHED_RR/SCHED_SPORADIC/SCHED_OTHER policies, and
  *     sched_getparam/sched_setparam/sched_getscheduler/
@@ -636,11 +636,11 @@ static void test_posix_realtime_aio_cancel_notcanceled(void)
 /* ==================================================================
  * Per-process timers -- .../functions/timer_create.html,
  * timer_settime.html (which also specifies timer_gettime and
- * timer_getoverrun), timer_delete.html.  <time.h> exists here and
- * already defines timer_t and struct itimerspec; the functions do not.
+ * timer_getoverrun), timer_delete.html.  The fence is retained as a
+ * direct standards assertion now that all five interfaces exist.
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_timer_settime_gettime)
+#if NTLIBC_TEST(PASS, posix_realtime_timer_settime_gettime)
 #include <time.h>
 #include <signal.h>
 #include <string.h>
@@ -789,11 +789,9 @@ static void test_posix_realtime_sched_policy_priorities(void)
 
 int main(void)
 {
-	/* Every case here is fenced: none of <semaphore.h>, <mqueue.h> or
-	 * <aio.h> exists, and neither the timer_* nor the sched_* family
-	 * resolves.  tools/test-policy.py --pedantic re-decides each one,
-	 * and the day any of these arrives the probe stops agreeing and
-	 * the fence has to be re-adjudicated against real behaviour. */
+	/* tools/test-policy.py --pedantic re-decides every case.  When a
+	 * missing interface arrives, its probe stops agreeing and the fence
+	 * has to be re-adjudicated against real behaviour. */
 	if (!fails) printf("posix-realtime: all tests passed\n");
 	return fails != 0;
 }

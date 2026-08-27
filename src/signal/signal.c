@@ -742,6 +742,7 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)
 }
 
 int sigpending(sigset_t *s) { __sig_lock(); *s = pending; __sig_unlock(); return 0; }
+int __sig_pending_member(int sig) { return sigismember(&pending, sig); }
 int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
 
 void __sig_pending_reset_after_fork(void)

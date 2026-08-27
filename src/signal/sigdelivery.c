@@ -399,6 +399,7 @@ void __sig_delivery_reinit_after_fork(void)
 	wake_event = 0;
 	lock_event = 0;
 	__sig_pending_reset_after_fork();
+	__timer_reinit_after_fork();
 	__sig_delivery_init();
 }
 

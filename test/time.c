@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -68,6 +69,33 @@ int main(void)
 {
 	size_t i;
 	char buf[128];
+
+	/* Per-process timers: cover all five entry points without depending
+	 * on scheduler timing or asynchronous signal delivery. */
+	{
+		struct sigevent ev;
+		struct itimerspec set, old, current;
+		timer_t timer;
+
+		memset(&ev, 0, sizeof ev);
+		ev.sigev_notify = SIGEV_NONE;
+		CHECK(timer_create(CLOCK_MONOTONIC, &ev, &timer) == 0);
+		CHECK(timer_gettime(timer, &current) == 0);
+		CHECK(current.it_value.tv_sec == 0 && current.it_value.tv_nsec == 0);
+		CHECK(current.it_interval.tv_sec == 0 && current.it_interval.tv_nsec == 0);
+		memset(&set, 0, sizeof set);
+		set.it_value.tv_sec = 10;
+		set.it_interval.tv_sec = 2;
+		CHECK(timer_settime(timer, 0, &set, &old) == 0);
+		CHECK(old.it_value.tv_sec == 0 && old.it_value.tv_nsec == 0);
+		CHECK(timer_gettime(timer, &current) == 0);
+		CHECK(current.it_value.tv_sec >= 9 && current.it_value.tv_sec <= 10);
+		CHECK(current.it_interval.tv_sec == 2 && current.it_interval.tv_nsec == 0);
+		CHECK(timer_getoverrun(timer) == 0);
+		CHECK(timer_delete(timer) == 0);
+		errno = 0;
+		CHECK(timer_delete(timer) == -1 && errno == EINVAL);
+	}
 
 	CHECK(setenv("TZ", "UTC0", 1) == 0);
 	tzset();
@@ -595,8 +623,7 @@ int main(void)
 			clockid_t id = -1;
 			CHECK(clock_getcpuclockid(0, &id) == 0);
 			CHECK(id == CLOCK_PROCESS_CPUTIME_ID);
-			errno = 0;
-			CHECK(clock_getcpuclockid(1234567, &id) == -1 && errno == ESRCH);
+			CHECK(clock_getcpuclockid(1234567, &id) == ESRCH);
 		}
 
 		/* clock(): CPU time, non-decreasing, and in CLOCKS_PER_SEC units */
