@@ -208,6 +208,7 @@ static int base_offset(const char *path)
 static int report(struct walkstate *ws, const char *path, const struct stat *st, int type, int level)
 {
 	struct FTW f;
+	int saved_errno, r;
 
 	if (ws->legacy && (type == FTW_SLN || type == FTW_SL || type == FTW_DP))
 		type = (type == FTW_SL) ? FTW_NS : (type == FTW_SLN ? FTW_NS : FTW_D);
@@ -215,7 +216,10 @@ static int report(struct walkstate *ws, const char *path, const struct stat *st,
 	if (ws->fn3) return ws->fn3(path, st, type);
 	f.base = base_offset(path);
 	f.level = level;
-	return ws->fn4(path, st, type, &f);
+	saved_errno = errno;
+	r = ws->fn4(path, st, type, &f);
+	if (r == -1 && errno == saved_errno) errno = EACCES;
+	return r;
 }
 
 static int mount_skip(struct walkstate *ws, const struct stat *st)
@@ -270,6 +274,7 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		 * that later turns out unstatable (e.g. removed mid-walk) is
 		 * exactly what FTW_NS is for, so only the root is special. */
 		if (is_root) return -1;
+		if (e != EACCES) return -1;
 		memset(&zero, 0, sizeof zero);
 		return report(ws, path, &zero, FTW_NS, level);
 	}
@@ -278,8 +283,12 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		rst = &lst;
 		type = S_ISLNK(lst.st_mode) ? FTW_SL : S_ISDIR(lst.st_mode) ? FTW_D : FTW_F;
 	} else if (stat(fs, &st) < 0) {
+		int e = errno;
 		free(fstmp);
-		return report(ws, path, &lst, S_ISLNK(lst.st_mode) ? FTW_SLN : FTW_NS, level);
+		if (S_ISLNK(lst.st_mode)) return report(ws, path, &lst, FTW_SLN, level);
+		if (e != EACCES) { errno = e; return -1; }
+		errno = e;
+		return report(ws, path, &lst, FTW_NS, level);
 	} else {
 		rst = &st;
 		type = S_ISDIR(st.st_mode) ? FTW_D : FTW_F;
@@ -326,7 +335,10 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		if (!lv.path) { errno = ENOMEM; return -1; }
 
 		if (level_open(ws, lru, &lv) < 0) {
+			int e = errno;
 			free(lv.path);
+			if (e != EACCES) { errno = e; return -1; }
+			errno = e;
 			return report(ws, path, rst, FTW_DNR, level);
 		}
 
