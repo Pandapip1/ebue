@@ -188,7 +188,7 @@ static void test_kill(void)
 	 * being exercised here. */
 }
 
-#if NTLIBC_TEST(BUG, posix_signal_kill_validates_sig_for_other_pid) /* BUG: kill() validates sig only when the target is the caller,
+#if NTLIBC_TEST(PASS, posix_signal_kill_validates_sig_for_other_pid) /* Fixed: kill() now validates sig before selecting the target path.
 	 * and terminates the target with the unvalidated value otherwise.
 	 * kill.html ERRORS, shall fail: "[EINVAL] The value of the sig
 	 * argument is an invalid or unsupported signal number."  And
@@ -443,7 +443,7 @@ static void test_sigprocmask(void)
  * from delivery ... and ... pending." Complements test/misc.c's "blocked
  * signal becomes pending" check by also confirming pending is empty
  * beforehand and cleared again after delivery. */
-#if NTLIBC_TEST(BUG, posix_signal_sigign_discards_pending) /* BUG: setting a disposition to SIG_IGN does not discard an
+#if NTLIBC_TEST(PASS, posix_signal_sigign_discards_pending) /* Setting a disposition to SIG_IGN discards an
 	 * already-pending signal.  sigaction.html DESCRIPTION: "Setting a
 	 * signal action to SIG_IGN for a signal that is pending shall cause
 	 * the pending signal to be discarded, whether or not it is

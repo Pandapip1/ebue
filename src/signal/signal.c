@@ -93,6 +93,8 @@ static unsigned long caught_count;
 
 unsigned long __sig_caught_count(void) { return caught_count; }
 
+static int default_action(int sig);
+
 /* sigaction.html, SA_NOCLDWAIT: "If ... set for SIGCHLD ... and the
  * calling process subsequently forks, ... the behavior is unspecified
  * if ... the process either simultaneously has SA_NOCLDWAIT set or has
@@ -112,6 +114,8 @@ void (*signal(int sig, void (*h)(int)))(int)
 	__sig_lock();
 	old = handlers[sig];
 	handlers[sig] = h;
+	if (h == SIG_IGN || (h == SIG_DFL && !default_action(sig)))
+		sigdelset(&pending, sig);
 	__sig_unlock();
 	return old;
 }
@@ -133,6 +137,9 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 	}
 	if (act) {
 		handlers[sig] = act->sa_handler;
+		if (act->sa_handler == SIG_IGN ||
+		    (act->sa_handler == SIG_DFL && !default_action(sig)))
+			sigdelset(&pending, sig);
 		act_mask[sig] = act->sa_mask;
 		/* SA_RESTART: meaningful for exactly one caller now,
 		 * src/select/select.c's select()/pselect() -- see that file's
