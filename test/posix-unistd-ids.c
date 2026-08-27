@@ -929,7 +929,7 @@ static void test_gethostname(void)
 		CHECK(small[4] == '@');		/* nothing written past namelen */
 	}
 
-#if NTLIBC_TEST(BUG, posix_ids_gethostname_short_buffer_succeeds) /* BUG: gethostname() reports a failure POSIX does not define
+#if NTLIBC_TEST(PASS, posix_ids_gethostname_short_buffer_succeeds) /* gethostname() truncates successfully when the buffer is short.
 	 * when the name does not fit.
 	 *
 	 * gethostname.html DESCRIPTION: "The namelen argument shall

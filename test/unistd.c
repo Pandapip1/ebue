@@ -732,7 +732,7 @@ int main(void)
 	CHECK(buf[0] != 0);
 	CHECK(strlen(buf) < sizeof buf);
 	errno = 0;
-	CHECK(gethostname(buf, 1) == -1 && errno == ENAMETOOLONG);
+	CHECK(gethostname(buf, 1) == 0 && errno == 0);
 
 	/* pids and ids */
 	CHECK(getpid() > 0);

@@ -12,7 +12,10 @@ int gethostname(char *name, size_t len)
 	size_t n;
 	if (!h) h = "localhost";
 	n = strlen(h);
-	if (n >= len) { memcpy(name, h, len); errno = ENAMETOOLONG; return -1; }
+	if (n >= len) {
+		if (len) memcpy(name, h, len);
+		return 0;
+	}
 	memcpy(name, h, n + 1);
 	return 0;
 }
