@@ -25,7 +25,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=78 BUG=9 UNIMPL=46 NA=13 FLAKY=0
+# COUNTS PASS=79 BUG=8 UNIMPL=46 NA=13 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -106,7 +106,7 @@ regex-backref-0                   runtime=wine,target_arch=x86_64,kernel32=no  P
 regex-bracket-icase               runtime=wine,target_arch=x86_64,kernel32=no  PASS
 regexec-nosub                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
 regex-ere-backref                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
-regex-escaped-high-byte           runtime=wine,target_arch=x86_64,kernel32=no  BUG  REG_BADPAT appears nowhere in either ledger or any test/*.c; regcomp("\\\xfc") returns 0
+regex-escaped-high-byte           runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed vendored precondition: skip the UTF-8-only assertion when setlocale() reports that C.UTF-8 is unavailable
 regex-negated-range               runtime=wine,target_arch=x86_64,kernel32=no  PASS
 rewind-clear-error                runtime=wine,target_arch=x86_64,kernel32=no  PASS
 rlimit-open-files                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
