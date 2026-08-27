@@ -85,6 +85,16 @@ static int bracket_match(const char **pp, unsigned char c, int flags)
 				continue;
 			}
 		}
+		if (p[0] == '[' && (p[1] == '.' || p[1] == '=')) {
+			char kind = p[1];
+			const char *q = p + 2;
+			while (*q && !(q[0] == kind && q[1] == ']')) q++;
+			if (*q && q == p + 3) {
+				if (c == (unsigned char)p[2]) matched = 1;
+				p = q + 2;
+				continue;
+			}
+		}
 		{
 			unsigned char lo = (unsigned char)*p;
 			if (!(flags & FNM_NOESCAPE) && lo == '\\' && p[1]) {

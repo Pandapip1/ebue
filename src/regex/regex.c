@@ -255,7 +255,7 @@ static int emit_class(struct parser *ps, struct bracket *bs, const char *name, s
 	for (i = 0; i < sizeof classes / sizeof *classes; i++)
 		if (strlen(classes[i].name) == len && !strncmp(classes[i].name, name, len)) {
 			for (c = 0; c < 256; c++)
-				if (classes[i].fn(c)) setbit(bs, c, 0);	/* classes are their own fold */
+				if (classes[i].fn(c)) setbit(bs, c, ps->icase);
 			return 0;
 		}
 	ps->err = REG_ECTYPE;
@@ -446,10 +446,11 @@ static void apply_repeat(struct parser *ps, int start, int had_atom)
 			parse_bound(ps, &m, &n);
 			if (!ps->err) {
 				if (ps->ere) {
-					if (*ps->p != '}') ps->err = REG_BADBR;
+					if (*ps->p != '}') ps->err = *ps->p ? REG_BADBR : REG_EBRACE;
 					else ps->p++;
 				} else {
-					if (ps->p[0] != '\\' || ps->p[1] != '}') ps->err = REG_BADBR;
+					if (ps->p[0] != '\\' || ps->p[1] != '}')
+						ps->err = *ps->p ? REG_BADBR : REG_EBRACE;
 					else ps->p += 2;
 				}
 			}
@@ -495,14 +496,14 @@ static void apply_repeat(struct parser *ps, int start, int had_atom)
 			} else {
 				for (k = 0; k < m; k++) emit_reloc(ps, saved, len, ps->rx->nprog - start);
 				if (n == -1) {
-					/* m >= 1 here ({0,} is handled above): one
-					 * further copy, wrapped as + (mandatory-once,
-					 * repeatable), covers [m..inf). */
-					int body = ps->rx->nprog;
-					int split;
-					emit_reloc(ps, saved, len, body - start);
-					split = emit(ps, I_SPLIT, 0, 0, body, 0);
-					if (split >= 0) ps->rx->prog[split].y = ps->rx->nprog;
+					/* m mandatory copies followed by zero or more. */
+					int split = emit(ps, I_SPLIT, 0, 0, 0, 0);
+					emit_reloc(ps, saved, len, ps->rx->nprog - start);
+					emit(ps, I_JMP, 0, 0, split, 0);
+					if (split >= 0) {
+						ps->rx->prog[split].x = split + 1;
+						ps->rx->prog[split].y = ps->rx->nprog;
+					}
 				} else {
 					/* (n - m) further optional copies, sequential
 					 * (see file header on why flat "?  ?  ?" is
@@ -671,6 +672,7 @@ static void bre_branch(struct parser *ps)
 		start = ps->rx->nprog;
 		bre_atom(ps, first);
 		if (ps->err) return;
+		if (first && c0 == '^') continue;
 		if (!first || (c0 != '*'))
 			apply_repeat(ps, start, 1);
 		first = 0;

@@ -1321,7 +1321,7 @@ static void test_fnmatch_bracket_edges(void)
 	CHECK(fnmatch("[\n]", "\n", 0) == 0);
 }
 
-#if NTLIBC_TEST(BUG, posix_glob_fnmatch_collating_and_equivalence) /* BUG: fnmatch() does not recognise collating symbols "[. .]" or
+#if NTLIBC_TEST(PASS, posix_glob_fnmatch_collating_and_equivalence) /* fnmatch() recognises collating symbols "[. .]" and
 	 * equivalence classes "[= =]" inside a bracket expression.
 	 * fnmatch.html DESCRIPTION: "The fnmatch() function shall match
 	 * patterns as described in XCU Section 2.13.1, Patterns Matching a
@@ -2447,7 +2447,7 @@ static void test_regex_bracket_edges(void)
  * Also XBD 9.3.2: in a BRE, '{' and '}' are ordinary characters unless
  * escaped, so an ERE-style "a{3,2}" is a five-character literal, not an
  * invalid interval. */
-#if NTLIBC_TEST(BUG, posix_glob_regex_interval_open_minimum) /* BUG: the open-ended interval {m,} requires m+1 occurrences.
+#if NTLIBC_TEST(PASS, posix_glob_regex_interval_open_minimum) /* The open-ended interval {m,} accepts exactly m occurrences.
 	 * XBD 9.3.6, BREs Matching Multiple Characters, item 2: "An RE
 	 * followed by '\{m,\}' shall match at least m occurrences of the
 	 * preceding RE."  XBD 9.4.6 gives the ERE `{m,}` the same rule.
@@ -2846,7 +2846,7 @@ static void test_regex_nullable_repeat_result(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_glob_regex_bre_star_after_leading_circumflex) /* BUG: XBD 9.3.3 -- the <asterisk> "shall be special except when
+#if NTLIBC_TEST(PASS, posix_glob_regex_bre_star_after_leading_circumflex) /* XBD 9.3.3 -- the <asterisk> "shall be special except when
 	used ... As the first character of an entire BRE (after an
 	initial '^', if any)". regcomp.html quotes the same rule, and
 	src/regex/regex.c's own comment above the offending line quotes
@@ -2877,7 +2877,7 @@ static void test_regex_bre_star_after_leading_circumflex(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_glob_regex_icase_inside_character_class) /* BUG: regcomp.html DESCRIPTION -- REG_ICASE, "Ignore case in
+#if NTLIBC_TEST(PASS, posix_glob_regex_icase_inside_character_class) /* regcomp.html DESCRIPTION -- REG_ICASE, "Ignore case in
 	match". XBD 9.3.5 makes no exception for character classes: a
 	bracket expression under REG_ICASE has to match either case.
 
@@ -2973,7 +2973,7 @@ static void test_regex_bre_trailing_backslash_code(void)
 	regfree(&re);
 }
 
-#if NTLIBC_TEST(BUG, posix_glob_regex_ebrace_vs_badbr) /* BUG: regex.h.html's error-code table -- REG_EBRACE is "'\{\}'
+#if NTLIBC_TEST(PASS, posix_glob_regex_ebrace_vs_badbr) /* regex.h.html's error-code table -- REG_EBRACE is "'\{\}'
 	imbalance"; REG_BADBR is "Content of '\{\}' invalid: not a
 	number, number too large, more than two numbers, first larger
 	than second". A missing closing brace is an imbalance, not bad
