@@ -718,8 +718,17 @@ static void test_wordexp_tilde_and_param(void)
 	CHECK(we.we_wordc == 2 && strcmp(we.we_wordv[0], "assigned") == 0 &&
 	      strcmp(we.we_wordv[1], "8") == 0);
 	wordfree(&we);
+	setenv("WORDEXP_TRIM", "abcabc", 1);
+	CHECK(wordexp("x${WORDEXP_TRIM#a*c}x x${WORDEXP_TRIM##a*c}x "
+	              "x${WORDEXP_TRIM%b*c}x x${WORDEXP_TRIM%%b*c}x", &we, 0) == 0);
+	CHECK(we.we_wordc == 4 && strcmp(we.we_wordv[0], "xabcx") == 0 &&
+	      strcmp(we.we_wordv[1], "xx") == 0 &&
+	      strcmp(we.we_wordv[2], "xabcax") == 0 &&
+	      strcmp(we.we_wordv[3], "xax") == 0);
+	wordfree(&we);
 	unsetenv("WORDEXP_SET");
 	unsetenv("WORDEXP_UNSET");
+	unsetenv("WORDEXP_TRIM");
 }
 
 /* UNIMPL: wordexp.html DESCRIPTION -- pathname expansion delegates

@@ -40,6 +40,7 @@
  * scanned).
  */
 #include <wordexp.h>
+#include <fnmatch.h>
 #include <glob.h>
 #include <pwd.h>
 #include <stdlib.h>
@@ -168,6 +169,8 @@ struct assignment {
 struct assign_ctx { struct assignment *head; };
 
 static int expand_impl(const char *, wordexp_t *, int, int, struct assign_ctx *);
+static int expand_trim_pattern(const char *, const char *, int, int,
+                               struct assign_ctx *, char **);
 
 static int assign_param(struct assign_ctx *ctx, const char *name, const char *value)
 {
@@ -399,6 +402,57 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 		const char *word, *end;
 		char op, *replacement;
 		int colon = 0, use_word, rc;
+		int longest = 0;
+
+		if (*p == '#' || *p == '%') {
+			size_t i, cut = 0, vlen;
+			char *pattern, *candidate;
+
+			op = *p++;
+			if (*p == op) { longest = 1; p++; }
+			word = p;
+			end = param_word_end(word);
+			if (!end) return WRDE_SYNTAX;
+			*pp = end + 1;
+			if (!val) {
+				if (flags & WRDE_UNDEF) return WRDE_BADVAL;
+				return 0;
+			}
+			rc = expand_trim_pattern(word, end, flags, sh, ctx, &pattern);
+			if (rc) return rc;
+			vlen = strlen(val);
+			candidate = xstrdup(val);
+			if (!candidate) { __free(pattern); return WRDE_NOSPACE; }
+			if (op == '#') {
+				if (longest) {
+					for (i = vlen + 1; i-- > 0;) {
+						candidate[i] = 0;
+						if (fnmatch(pattern, candidate, 0) == 0) { cut = i; break; }
+					}
+				} else {
+					for (i = 0; i <= vlen; i++) {
+						candidate[i] = 0;
+						if (fnmatch(pattern, candidate, 0) == 0) { cut = i; break; }
+						candidate[i] = val[i];
+					}
+				}
+				rc = fbuf_push_str(b, val + cut, quoted) ? WRDE_NOSPACE : 0;
+			} else {
+				cut = vlen;
+				if (longest) {
+					for (i = 0; i <= vlen; i++)
+						if (fnmatch(pattern, val + i, 0) == 0) { cut = i; break; }
+				} else {
+					for (i = vlen + 1; i-- > 0;)
+						if (fnmatch(pattern, val + i, 0) == 0) { cut = i; break; }
+				}
+				for (i = 0; i < cut; i++)
+					if (fbuf_push(b, val[i], quoted)) { rc = WRDE_NOSPACE; break; }
+			}
+			__free(candidate);
+			__free(pattern);
+			return rc;
+		}
 
 		if (*p == ':' && p[1] && strchr("-+=?", p[1])) { colon = 1; op = p[1]; word = p + 2; }
 		else if (*p && strchr("-+=?", *p)) { op = *p; word = p + 1; }
@@ -432,6 +486,78 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 		return 0;
 	}
 	return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
+}
+
+/* Expand a removal operator's word into an fnmatch pattern.  This is
+ * deliberately not expand_param_word(): pathname expansion is the
+ * following word-expansion phase and must not turn the pattern into a
+ * list of files before it is matched against the parameter value. */
+static int expand_trim_pattern(const char *start, const char *end, int flags,
+                               int sh, struct assign_ctx *ctx, char **result)
+{
+	struct fbuf b = { 0 };
+	char *text, *p, *pattern;
+	enum { T_NONE, T_SINGLE, T_DOUBLE } q = T_NONE;
+	size_t i, n = 0;
+	int rc = 0;
+
+	*result = 0;
+	text = __malloc((size_t)(end - start) + 1);
+	if (!text) return WRDE_NOSPACE;
+	memcpy(text, start, (size_t)(end - start));
+	text[end - start] = 0;
+	for (p = text; *p;) {
+		char c = *p;
+		if (q == T_NONE) {
+			if (c == '\'') { q = T_SINGLE; p++; continue; }
+			if (c == '"') { q = T_DOUBLE; p++; continue; }
+			if (c == '\\' && p[1]) {
+				if (fbuf_push(&b, p[1], 1)) { rc = WRDE_NOSPACE; break; }
+				p += 2; continue;
+			}
+			if (c == '$') {
+				const char *scan = p;
+				rc = expand_param(&scan, &b, flags, sh, 0, ctx);
+				if (rc) break;
+				p = (char *)scan;
+				continue;
+			}
+			if (fbuf_push(&b, c, 0)) { rc = WRDE_NOSPACE; break; }
+			p++;
+		} else if (q == T_SINGLE) {
+			if (c == '\'') { q = T_NONE; p++; continue; }
+			if (fbuf_push(&b, c, 1)) { rc = WRDE_NOSPACE; break; }
+			p++;
+		} else {
+			if (c == '"') { q = T_NONE; p++; continue; }
+			if (c == '\\' && p[1] && strchr("\\\"$`", p[1])) {
+				if (fbuf_push(&b, p[1], 1)) { rc = WRDE_NOSPACE; break; }
+				p += 2; continue;
+			}
+			if (c == '$') {
+				const char *scan = p;
+				rc = expand_param(&scan, &b, flags, sh, 1, ctx);
+				if (rc) break;
+				p = (char *)scan;
+				continue;
+			}
+			if (fbuf_push(&b, c, 1)) { rc = WRDE_NOSPACE; break; }
+			p++;
+		}
+	}
+	__free(text);
+	if (!rc && q != T_NONE) rc = WRDE_SYNTAX;
+	if (rc) { fbuf_free(&b); return rc; }
+	pattern = __malloc(b.n * 2 + 1);
+	if (!pattern) { fbuf_free(&b); return WRDE_NOSPACE; }
+	for (i = 0; i < b.n; i++) {
+		if (b.lit[i] && strchr("*?[\\", b.data[i])) pattern[n++] = '\\';
+		pattern[n++] = b.data[i];
+	}
+	pattern[n] = 0;
+	fbuf_free(&b);
+	*result = pattern;
+	return 0;
 }
 
 /* Reads ~ or ~user starting at *pp (pointing at '~'), only valid when

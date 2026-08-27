@@ -49,9 +49,9 @@
  *
  * Implemented, none of which needs the shell: tilde expansion (~ and
  * ~user, via getenv("HOME") and include/pwd.h's getpwnam()), parameter
- * expansion of $VAR/${VAR}, ${#VAR}, and the -, +, = and ?
- * default/alternate operators against environ (assignments are visible
- * for the duration of one wordexp() call), arithmetic
+ * expansion of $VAR/${VAR}, ${#VAR}, the -, +, = and ? default/alternate
+ * operators, and #/##/%/%% pattern removal against environ (assignments
+ * are visible for the duration of one wordexp() call), arithmetic
  * expansion ($((expr)), src/wordexp/arith.c), pathname expansion
  * (delegates to <glob.h>), quote removal, and the
  * WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE bookkeeping flags.
