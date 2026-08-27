@@ -152,6 +152,20 @@ int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *, int);
 int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict, int *__restrict);
 int pthread_mutexattr_setrobust(pthread_mutexattr_t *, int);
 
+int pthread_cond_init(pthread_cond_t *__restrict, const pthread_condattr_t *__restrict);
+int pthread_cond_destroy(pthread_cond_t *);
+int pthread_cond_wait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict);
+int pthread_cond_timedwait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict,
+	const struct timespec *__restrict);
+int pthread_cond_signal(pthread_cond_t *);
+int pthread_cond_broadcast(pthread_cond_t *);
+int pthread_condattr_init(pthread_condattr_t *);
+int pthread_condattr_destroy(pthread_condattr_t *);
+int pthread_condattr_getclock(const pthread_condattr_t *__restrict, clockid_t *__restrict);
+int pthread_condattr_setclock(pthread_condattr_t *, clockid_t);
+int pthread_condattr_getpshared(const pthread_condattr_t *__restrict, int *__restrict);
+int pthread_condattr_setpshared(pthread_condattr_t *, int);
+
 int pthread_getschedparam(pthread_t, int *__restrict, struct sched_param *__restrict);
 int pthread_setschedparam(pthread_t, int, const struct sched_param *);
 int pthread_setschedprio(pthread_t, int);
