@@ -218,6 +218,10 @@ int main(void)
 		FMT("%z", "+0000");
 		FMT("%%", "%");
 		FMT("%F", "2000-02-29");
+		FMT("%012F", "002000-02-29");
+		FMT("%03C", "020");
+		FMT("%+5Y", "+2000");
+		FMT("%s", "951829509");
 		FMT("%T", "13:05:09");
 		FMT("%D", "02/29/00");
 		FMT("%R", "13:05");
@@ -253,10 +257,7 @@ int main(void)
 		gmtime_r(&t, &tm);
 		FMT("%Y %y %C", "1900 00 19");
 
-		/* The week-number family is documented as unimplemented in
-		 * src/time/strftime.c; unknown conversions pass through
-		 * literally, so just pin that behaviour rather than the
-		 * (absent) week numbers. */
+		/* Week-number family. */
 		t = 951782400;
 		gmtime_r(&t, &tm);
 		memset(buf, 0, sizeof buf);
@@ -270,7 +271,7 @@ int main(void)
 		n = strftime(buf, sizeof buf, "%G", &tm);
 		CHECK(!strcmp(buf, "%G") || !strcmp(buf, "2000"));
 		n = strftime(buf, sizeof buf, "%s", &tm);
-		CHECK(!strcmp(buf, "%s") || !strcmp(buf, "951782400"));
+		CHECK(!strcmp(buf, "951782400"));
 
 		/* width-limited buffers: too small returns 0, exact fit works */
 		n = strftime(buf, 4, "%Y", &tm);
