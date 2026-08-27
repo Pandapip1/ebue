@@ -468,6 +468,7 @@ long long __fsize_room_at(long long off);
 int __fsize_allow(long long size);
 int __fsize_exceeded(void);
 int __raise_internal(int);
+int __raise_internal_info(int, const void *);
 /* How many times a signal-catching function has been entered.  Compared
  * across an alertable wait by src/unistd/sleep.c to tell a caught signal
  * (the wait ends, [EINTR]) from an ignored one (it does not) -- see the
@@ -498,6 +499,8 @@ void __sig_delivery_init(void);
 void __sig_delivery_reinit_after_fork(void);
 HANDLE __sig_delivery_event(void);
 int __sig_try_deliver_remote(int pid, int sig);
+int __sig_try_deliver_remote_info(int pid, int sig, const void *);
+void __sig_pending_reset_after_fork(void);
 void __sig_lock(void);
 void __sig_unlock(void);
 

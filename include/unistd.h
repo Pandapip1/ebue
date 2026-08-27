@@ -254,6 +254,10 @@ pid_t gettid(void);
  * provide the Shared Memory Objects option. */
 #define _POSIX_SHARED_MEMORY_OBJECTS 200809L
 
+/* Queued real-time signals, including payload-preserving cross-process
+ * sigqueue() delivery and the two synchronous wait interfaces. */
+#define _POSIX_REALTIME_SIGNALS 200809L
+
 /* unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE ... shall
  * always be set to a value other than -1."  0, not the BSD '\377',
  * because src/unistd/sysconf.c's pathconf() already answers
@@ -262,11 +266,11 @@ pid_t gettid(void);
  * defect rather than a fix.  If one changes, change both. */
 #define _POSIX_VDISABLE 0
 
-/* DELIBERATELY ABSENT: the thirteen "Constants for Options and Option
+/* DELIBERATELY ABSENT: the remaining "Constants for Options and Option
  * Groups" whose text on that page reads "This symbol shall always be
  * set to the value 200809L" -- _POSIX_ASYNCHRONOUS_IO, _POSIX_BARRIERS,
  * _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES, _POSIX_MEMORY_PROTECTION,
- * _POSIX_READER_WRITER_LOCKS, _POSIX_REALTIME_SIGNALS, _POSIX_SEMAPHORES,
+ * _POSIX_READER_WRITER_LOCKS, _POSIX_SEMAPHORES,
  * _POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS,
  * _POSIX_TIMEOUTS and _POSIX_TIMERS.  Their absence IS a conformance
  * hole and is recorded as one -- test/POSIX-COVERAGE.md group U, and
@@ -289,9 +293,6 @@ pid_t gettid(void);
  *     _POSIX_MEMORY_PROTECTION);
  *   - timer_create()/timer_settime() are absent, so _POSIX_TIMERS is
  *     not earned by src/time/clock_gettime.c alone;
- *   - sigqueue()/sigwaitinfo()/sigtimedwait() are undefined-ok stubs in
- *     <signal.h>, so _POSIX_REALTIME_SIGNALS would name code that is
- *     not there;
  *   - _POSIX_CLOCK_SELECTION needs pthread_condattr_setclock() as well
  *     as the clock_nanosleep() we do have.
  *

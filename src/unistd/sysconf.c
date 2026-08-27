@@ -55,6 +55,9 @@ long sysconf(int name)
 	case _SC_TTY_NAME_MAX: return TTY_NAME_MAX;
 	case _SC_SYMLOOP_MAX: return SYMLOOP_MAX;
 	case _SC_IOV_MAX: return IOV_MAX;
+	case _SC_REALTIME_SIGNALS: return _POSIX_REALTIME_SIGNALS;
+	case _SC_RTSIG_MAX: return RTSIG_MAX;
+	case _SC_SIGQUEUE_MAX: return SIGQUEUE_MAX;
 	/* The <limits.h> Runtime Increasable Values, which that header
 	 * documents as the compile-time minimum this library promises;
 	 * reporting anything smaller here would break the promise. */
@@ -122,10 +125,6 @@ long sysconf(int name)
 	 *                              _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
 	 *   no timer_create()       -- _SC_TIMERS, _SC_TIMER_MAX,
 	 *                              _SC_DELAYTIMER_MAX
-	 *   stub queued signals     -- _SC_REALTIME_SIGNALS, _SC_RTSIG_MAX,
-	 *                              _SC_SIGQUEUE_MAX (<signal.h> marks
-	 *                              sigqueue()/sigwaitinfo()/
-	 *                              sigtimedwait() undefined-ok)
 	 *   no utilities            -- the _SC_2_* development-utility set
 	 *                              (c99, fort77, localedef, PBS, ...);
 	 *                              sh/ implements a documented subset of
@@ -166,7 +165,6 @@ long sysconf(int name)
 	 */
 	case _SC_JOB_CONTROL:
 	case _SC_SAVED_IDS:
-	case _SC_REALTIME_SIGNALS:
 	case _SC_PRIORITY_SCHEDULING:
 	case _SC_TIMERS:
 	case _SC_ASYNCHRONOUS_IO:
@@ -184,10 +182,8 @@ long sysconf(int name)
 	case _SC_DELAYTIMER_MAX:
 	case _SC_MQ_OPEN_MAX:
 	case _SC_MQ_PRIO_MAX:
-	case _SC_RTSIG_MAX:
 	case _SC_SEM_NSEMS_MAX:
 	case _SC_SEM_VALUE_MAX:
-	case _SC_SIGQUEUE_MAX:
 	case _SC_TIMER_MAX:
 	case _SC_2_C_BIND:
 	case _SC_2_C_DEV:

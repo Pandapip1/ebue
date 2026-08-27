@@ -11,11 +11,10 @@
  *
  * src/signal/signal.c's header comment is required reading before any of
  * this: there is no asynchronous signal delivery from another thread or
- * process on this platform. Every signal that reaches a process here is
- * self-generated (raise()/kill(self)/abort()) or a synchronous CPU
- * exception turned into a signal at the point it happens. Clauses that
- * only make sense with real asynchronous/queued delivery (sigwait(),
- * sigtimedwait(), a real sigsuspend() that blocks) are marked N/A with
+ * process on this platform. Signals are self-generated, synchronous CPU
+ * exceptions, or packets handled by ntlibc's delivery thread. Clauses that
+ * only make sense with asynchronous mask replacement (a real
+ * sigsuspend() that blocks) are marked N/A with
  * the reason below rather than given a test that could never pass.
  */
 #include "test-policy.h"
@@ -530,12 +529,65 @@ static void test_sigpending(void)
 	signal(SIGUSR1, SIG_DFL);
 }
 
+static volatile sig_atomic_t queued_handler_value;
+
+static void queued_handler(int sig, siginfo_t *info, void *context)
+{
+	(void)sig;
+	(void)context;
+	queued_handler_value = info->si_value.sival_int;
+}
+
+static void test_realtime_signal_queue(void)
+{
+	struct sigaction sa;
+	struct timespec zero = { 0, 0 };
+	union sigval value;
+	siginfo_t info;
+	sigset_t set, pend;
+	int sig = SIGRTMIN;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_sigaction = queued_handler;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	CHECK(sigaction(sig, &sa, NULL) == 0);
+	sigemptyset(&set);
+	sigaddset(&set, sig);
+	CHECK(sigprocmask(SIG_BLOCK, &set, NULL) == 0);
+
+	value.sival_int = 11;
+	CHECK(sigqueue(getpid(), sig, value) == 0);
+	value.sival_int = 22;
+	CHECK(sigqueue(getpid(), sig, value) == 0);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, sig) == 1);
+	CHECK(sigwaitinfo(&set, &info) == sig);
+	CHECK(info.si_code == SI_QUEUE && info.si_value.sival_int == 11);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, sig) == 1);
+	CHECK(sigwaitinfo(&set, &info) == sig);
+	CHECK(info.si_value.sival_int == 22);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, sig) == 0);
+
+	errno = 0;
+	CHECK(sigtimedwait(&set, &info, &zero) == -1 && errno == EAGAIN);
+	CHECK(raise(sig) == 0 && raise(sig) == 0);
+	CHECK(sigwait(&set, &sig) == 0 && sig == SIGRTMIN);
+	CHECK(sigpending(&pend) == 0 && sigismember(&pend, SIGRTMIN) == 1);
+	CHECK(sigwait(&set, &sig) == 0 && sig == SIGRTMIN);
+
+	CHECK(sigprocmask(SIG_UNBLOCK, &set, NULL) == 0);
+	queued_handler_value = 0;
+	value.sival_int = 37;
+	CHECK(sigqueue(getpid(), SIGRTMIN, value) == 0);
+	CHECK(queued_handler_value == 37);
+	signal(SIGRTMIN, SIG_DFL);
+}
+
 /* sigsuspend.html RETURN VALUE: "If a return occurs, -1 shall be
  * returned and errno set to [EINTR]." src/signal/signal.c's
- * sigsuspend() is a documented permanent stub for the same reason
- * sigwait()/sigtimedwait() are (see include/signal.h's comment on
- * sigwaitinfo()): there is no per-thread suspend/wake primitive to
- * actually block on here. It happens to satisfy this one narrow
+ * sigsuspend() is a documented permanent stub: there is no per-thread
+ * suspend/wake primitive to atomically replace the mask and block. It
+ * happens to satisfy this one narrow
  * return-value clause unconditionally; the DESCRIPTION clause that it
  * replace the mask and actually wait for a signal is N/A (see ledger
  * fragment) rather than tested, since it can never be made to pass. */
@@ -1795,6 +1847,7 @@ int main(int argc, char **argv)
 	test_sigsetops();
 	test_sigprocmask();
 	test_sigpending();
+	test_realtime_signal_queue();
 	test_sigsuspend_stub();
 	test_abort_overrides(argv[0]);
 	if (flush_probe_channel_works(argv[0])) {

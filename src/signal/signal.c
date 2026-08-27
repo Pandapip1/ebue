@@ -48,6 +48,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
+#include <time.h>
 #include "libc.h"
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
@@ -56,6 +58,15 @@
 static void (*handlers[_NSIG])(int);
 static sigset_t blocked;
 static sigset_t pending;
+
+/* Standard signals coalesce while pending. Real-time signals retain one
+ * record per generation, in FIFO order within a signal number.  Selection
+ * scans signal numbers first, which gives POSIX's lowest-real-time-signal
+ * priority without disturbing that FIFO. */
+static siginfo_t pending_info[SIGQUEUE_MAX];
+static int pending_count;
+static sigset_t waiting_set;
+static int wait_active;
 
 /* Per-signal sa_mask/sa_flags, as installed by sigaction().  signal()
  * and sigset() leave these at their zero-initialized defaults (empty
@@ -68,16 +79,73 @@ static int sig_valid(int sig) { return sig > 0 && sig < _NSIG; }
 /* Set only by exception_handler(), immediately around its call into
  * __raise_internal(), so a SIGSEGV/SIGBUS/SIGILL/SIGFPE handler
  * installed with SA_SIGINFO can be told this delivery came from a
- * hardware fault rather than kill()/raise() -- see the siginfo_t
- * construction in __raise_internal() below. Guarded by
- * __sig_lock()/__sig_unlock() at exception_handler()'s call site (see
- * there): now that src/signal/sigdelivery.c's delivery thread can be
- * inside its own __raise_internal() call at the same time, these three
- * globals are no longer implicitly single-threaded the way every other
- * global in this file still is. */
+ * hardware fault rather than kill()/raise().  Guarded by
+ * __sig_lock()/__sig_unlock() at exception_handler()'s call site: the
+ * delivery thread can otherwise be inside its own signal delivery while
+ * these values are being changed. */
 static int fault_active;
 static void *fault_addr;
 static int fault_si_code;   /* computed by exception_handler(), see there */
+
+static void make_siginfo(siginfo_t *si, int sig)
+{
+	memset(si, 0, sizeof *si);
+	si->si_signo = sig;
+	if (fault_active) {
+		si->si_code = fault_si_code;
+		si->si_addr = fault_addr;
+	} else {
+		si->si_code = SI_USER;
+		si->si_pid = getpid();
+		si->si_uid = getuid();
+	}
+}
+
+static int queue_pending(int sig, const siginfo_t *si)
+{
+	int realtime = sig >= SIGRTMIN && sig <= SIGRTMAX;
+	if (!realtime && sigismember(&pending, sig)) return 0;
+	if (pending_count >= SIGQUEUE_MAX) { errno = EAGAIN; return -1; }
+	pending_info[pending_count++] = *si;
+	sigaddset(&pending, sig);
+	return 0;
+}
+
+static int take_pending_signal(int sig, siginfo_t *si)
+{
+	int i;
+	for (i = 0; i < pending_count; i++) {
+		if (pending_info[i].si_signo != sig) continue;
+		if (si) *si = pending_info[i];
+		pending_count--;
+		memmove(&pending_info[i], &pending_info[i + 1],
+		        (size_t)(pending_count - i) * sizeof pending_info[0]);
+		for (i = 0; i < pending_count; i++)
+			if (pending_info[i].si_signo == sig) return 1;
+		sigdelset(&pending, sig);
+		return 1;
+	}
+	/* Accommodate pending state copied from an older process image or
+	 * produced before the queue existed: it has no payload, but it is
+	 * still a real pending signal and must remain consumable. */
+	if (sigismember(&pending, sig)) {
+		if (si) make_siginfo(si, sig);
+		sigdelset(&pending, sig);
+		return 1;
+	}
+	return 0;
+}
+
+static int take_pending_from_set(const sigset_t *set, siginfo_t *si)
+{
+	int sig;
+	for (sig = 1; sig < _NSIG; sig++)
+		if (sigismember(set, sig) && sigismember(&pending, sig)) {
+			take_pending_signal(sig, si);
+			return sig;
+		}
+	return 0;
+}
 
 /* How many times a signal-catching function has been entered.  Read
  * through __sig_caught_count() by src/unistd/sleep.c, whose alertable
@@ -261,11 +329,19 @@ static void sig_dispatch(struct sig_delivery *d, int flags)
 #endif
 }
 
-int __raise_internal(int sig)
+int __raise_internal_info(int sig, const void *data)
 {
 	void (*h)(int);
+	siginfo_t generated;
+	const siginfo_t *supplied = data;
 	if (!sig_valid(sig)) { errno = EINVAL; return -1; }
-	if (sigismember(&blocked, sig)) { sigaddset(&pending, sig); return 0; }
+	if (!supplied) {
+		make_siginfo(&generated, sig);
+		supplied = &generated;
+	}
+	if (sigismember(&blocked, sig) ||
+	    (wait_active && sigismember(&waiting_set, sig)))
+		return queue_pending(sig, supplied);
 	h = handlers[sig];
 	if (h == SIG_IGN) return 0;
 	if (h == SIG_DFL) {
@@ -374,43 +450,8 @@ int __raise_internal(int sig)
 		if (flags & SA_SIGINFO) {
 			void (*hsi)(int, siginfo_t *, void *) =
 				(void (*)(int, siginfo_t *, void *))(void *)h;
-			siginfo_t si;
-
-			memset(&si, 0, sizeof si);
-			si.si_signo = sig;
-			si.si_errno = 0;
-			if (fault_active) {
-				/* signal.h.html siginfo_t DESCRIPTION: si_addr is
-				 * defined for a hardware-fault signal
-				 * (SIGILL/SIGFPE/SIGSEGV/SIGBUS); exception_handler()
-				 * below sets fault_addr from the NT EXCEPTION_RECORD
-				 * for the exception codes that actually carry a
-				 * faulting address.
-				 *
-				 * si_code: exception_handler() below has already
-				 * computed the real fault subcode into fault_si_code
-				 * -- see the derivation there (a straight
-				 * ExceptionCode -> FPE_.../ILL_.../BUS_... table for
-				 * most cases, plus a NtQueryVirtualMemory() lookup to
-				 * tell SEGV_MAPERR from SEGV_ACCERR). Just read it
-				 * back. */
-				si.si_code = fault_si_code;
-				si.si_addr = fault_addr;
-			} else {
-				/* raise.html: raise() "shall be equivalent to calling
-				 * kill(getpid(), sig)"; kill()'s self-delivery path
-				 * (src/signal/signal.c's kill()) and the SIGPIPE/
-				 * SIGINT deliveries elsewhere in this file all funnel
-				 * through here the same way, none of them hardware
-				 * faults, so SI_USER ("signal sent by kill()",
-				 * signal.h.html) plus the sender's own pid/uid is
-				 * correct for every one of them. */
-				si.si_code = SI_USER;
-				si.si_pid = getpid();
-				si.si_uid = getuid();
-			}
 			d.hsi = hsi;
-			d.si = &si;
+			d.si = (siginfo_t *)supplied;
 			sig_dispatch(&d, flags);
 		} else {
 			d.h = h;
@@ -421,6 +462,8 @@ int __raise_internal(int sig)
 	}
 	return 0;
 }
+
+int __raise_internal(int sig) { return __raise_internal_info(sig, 0); }
 
 int raise(int sig) { int r; __sig_lock(); r = __raise_internal(sig); __sig_unlock(); return r < 0 ? -1 : 0; }
 
@@ -670,8 +713,13 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 		sigdelset(&blocked, SIGKILL);
 		sigdelset(&blocked, SIGSTOP);
 		/* deliver anything unblocked and pending */
-		for (i = 1; i < _NSIG; i++)
-			if (sigismember(&pending, i) && !sigismember(&blocked, i)) { sigdelset(&pending, i); __raise_internal(i); }
+		for (i = 1; i < _NSIG; i++) {
+			while (sigismember(&pending, i) && !sigismember(&blocked, i)) {
+				siginfo_t si;
+				take_pending_signal(i, &si);
+				__raise_internal_info(i, &si);
+			}
+		}
 	}
 	__sig_unlock();
 	return 0;
@@ -695,6 +743,43 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)
 
 int sigpending(sigset_t *s) { __sig_lock(); *s = pending; __sig_unlock(); return 0; }
 int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
+
+void __sig_pending_reset_after_fork(void)
+{
+	sigemptyset(&pending);
+	pending_count = 0;
+	wait_active = 0;
+}
+
+int sigqueue(pid_t pid, int sig, union sigval value)
+{
+	siginfo_t si;
+	int r;
+
+	if (sig < 0 || sig >= _NSIG) { errno = EINVAL; return -1; }
+	if (!sig) return kill(pid, 0);
+	memset(&si, 0, sizeof si);
+	si.si_signo = sig;
+	si.si_code = SI_QUEUE;
+	si.si_pid = getpid();
+	si.si_uid = getuid();
+	si.si_value = value;
+
+	if (pid == getpid()) {
+		__sig_lock();
+		r = __raise_internal_info(sig, &si);
+		__sig_unlock();
+		return r < 0 ? -1 : 0;
+	}
+	/* kill(pid, 0) supplies the common existence and permission check
+	 * without generating anything.  Once it succeeds, failure to hand
+	 * the payload to the target listener means the bounded delivery
+	 * resource was unavailable. */
+	if (kill(pid, 0) < 0) return -1;
+	if (__sig_try_deliver_remote_info((int)pid, sig, &si)) return 0;
+	errno = EAGAIN;
+	return -1;
+}
 /* sigwait.html DESCRIPTION: "shall select a pending signal from set,
  * atomically clear it from the system's set of pending signals, and
  * return that signal number in the location referenced by sig ... If no
@@ -751,21 +836,95 @@ int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
 int sigwait(const sigset_t *s, int *sig)
 {
 	int saved_errno = errno;
-	int i;
+	int selected;
 
+	__sig_lock();
+	waiting_set = *s;
+	wait_active = 1;
+	__sig_unlock();
 	for (;;) {
-		for (i = 1; i < _NSIG; i++) {
-			if (!sigismember(s, i) || !sigismember(&pending, i)) continue;
-			sigdelset(&pending, i);
-			if (sig) *sig = i;
+		__sig_lock();
+		selected = take_pending_from_set(s, 0);
+		if (selected) {
+			wait_active = 0;
+			__sig_unlock();
+			if (sig) *sig = selected;
 			errno = saved_errno;
 			return 0;
 		}
+		__sig_unlock();
 		{
 			/* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h);
 			 * negative means relative, in 100ns units, so this is 100ms
 			 * -- the same convention src/unistd/sleep.c uses. */
 			LARGE_INTEGER d = -1000000;
+			NtDelayExecution(FALSE, &d);
+		}
+	}
+}
+
+int sigwaitinfo(const sigset_t *set, siginfo_t *info)
+{
+	int selected;
+	__sig_lock();
+	waiting_set = *set;
+	wait_active = 1;
+	__sig_unlock();
+	for (;;) {
+		__sig_lock();
+		selected = take_pending_from_set(set, info);
+		if (selected) {
+			wait_active = 0;
+			__sig_unlock();
+			return selected;
+		}
+		__sig_unlock();
+		{
+			LARGE_INTEGER d = -100000; /* 10ms */
+			NtDelayExecution(FALSE, &d);
+		}
+	}
+}
+
+int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout)
+{
+	struct timespec start, now;
+	long long limit, elapsed;
+	int selected;
+
+	if (!timeout || timeout->tv_sec < 0 || timeout->tv_nsec < 0 ||
+	    timeout->tv_nsec >= 1000000000L) {
+		errno = EINVAL;
+		return -1;
+	}
+	limit = (long long)timeout->tv_sec * 1000000000LL + timeout->tv_nsec;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	__sig_lock();
+	waiting_set = *set;
+	wait_active = 1;
+	__sig_unlock();
+	for (;;) {
+		__sig_lock();
+		selected = take_pending_from_set(set, info);
+		if (selected) {
+			wait_active = 0;
+			__sig_unlock();
+			return selected;
+		}
+		__sig_unlock();
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		elapsed = (long long)(now.tv_sec - start.tv_sec) * 1000000000LL
+		        + now.tv_nsec - start.tv_nsec;
+		if (elapsed >= limit) {
+			__sig_lock();
+			wait_active = 0;
+			__sig_unlock();
+			errno = EAGAIN;
+			return -1;
+		}
+		{
+			long long left = limit - elapsed;
+			LARGE_INTEGER d = -(left < 10000000LL ? (left + 99) / 100 : 100000);
 			NtDelayExecution(FALSE, &d);
 		}
 	}

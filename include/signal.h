@@ -269,27 +269,9 @@ int sigaction(int, const struct sigaction *__restrict, struct sigaction *__restr
 int sigpending(sigset_t *);
 int sigwait(const sigset_t *__restrict, int *__restrict);
 int pthread_sigmask(int, const sigset_t *__restrict, sigset_t *__restrict);
-int sigwaitinfo(const sigset_t *__restrict, siginfo_t *__restrict);  /* undefined-ok:
-	src/signal/signal.c's sigwait() is already a permanent stub
-	(errno = EINVAL) for the same reason this would be -- there is no
-	per-process queue of pending signals with siginfo payloads to wait
-	on. The library's own top-of-file comment in signal.c is explicit:
-	"There is no asynchronous delivery from other processes"; the only
-	signals that ever arrive are self-generated (raise()/abort()/a
-	broken-pipe write) or synchronous CPU exceptions, both of which run
-	the handler immediately rather than becoming something a separate
-	wait call could pick up later. kernel32 has no POSIX-signal-queue
-	primitive either -- this is a Windows/NT architecture gap, not an
-	ntdll-vs-kernel32 one */
-int sigtimedwait(const sigset_t *__restrict, siginfo_t *__restrict, const struct timespec *__restrict);  /* undefined-ok: see sigwaitinfo */
-int sigqueue(pid_t, int, union sigval);  /* undefined-ok: needs the same
-	per-process queued-signal-with-payload delivery sigwaitinfo() does
-	(see above), plus the ability to deliver into *another* process,
-	which this library's kill() (src/signal/signal.c) explicitly cannot
-	do -- "kill() can only end a process, not interrupt it". Nothing
-	kernel32 offers changes that: Windows simply has no cross-process
-	POSIX-signal-with-data delivery mechanism to reach, from either
-	layer */
+int sigwaitinfo(const sigset_t *__restrict, siginfo_t *__restrict);
+int sigtimedwait(const sigset_t *__restrict, siginfo_t *__restrict, const struct timespec *__restrict);
+int sigqueue(pid_t, int, union sigval);
 
 int sigaltstack(const stack_t *__restrict, stack_t *__restrict);
 

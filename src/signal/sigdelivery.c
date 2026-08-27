@@ -147,7 +147,7 @@
 #include <string.h>
 #include "libc.h"
 
-/* Wire format: fixed 12 bytes, one NT message per signal. FILE_PIPE_MESSAGE_TYPE
+/* Wire format: one fixed-size NT message per signal. FILE_PIPE_MESSAGE_TYPE
  * (below) is what makes "one NtWriteFile call == one NtReadFile call"
  * an NT-enforced guarantee rather than a hope about write sizes staying
  * under some byte-stream atomicity threshold -- unlike
@@ -158,6 +158,9 @@ struct sigpacket {
 	ULONG magic;
 	ULONG signo;
 	ULONG sender_pid;
+	ULONG sender_uid;
+	LONG code;
+	union sigval value;
 };
 #define SIGPACKET_MAGIC 0x736c746eu /* "ntls", little-endian as stored */
 
@@ -293,6 +296,7 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 			st = NtReadFile(pipe, 0, 0, 0, &io, &pkt, sizeof pkt, 0, 0);
 			if (st == STATUS_PENDING) { NtWaitForSingleObject(pipe, 0, 0); st = io.Status; }
 			if (NT_SUCCESS(st) && io.Information == sizeof pkt && pkt.magic == SIGPACKET_MAGIC) {
+				siginfo_t si;
 				/* __raise_internal() validates signo itself (sig_valid()
 				 * in signal.c) and does nothing for a bad one beyond
 				 * setting errno on a thread with no caller to read it --
@@ -300,7 +304,13 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 				 * check here. */
 				__sig_lock();
 				if (wake_event) { LONG prev; NtSetEvent(wake_event, &prev); }
-				__raise_internal((int)pkt.signo);
+				memset(&si, 0, sizeof si);
+				si.si_signo = (int)pkt.signo;
+				si.si_code = (int)pkt.code;
+				si.si_pid = (pid_t)pkt.sender_pid;
+				si.si_uid = (uid_t)pkt.sender_uid;
+				si.si_value = pkt.value;
+				__raise_internal_info((int)pkt.signo, &si);
 				__sig_unlock();
 			}
 		}
@@ -388,6 +398,7 @@ void __sig_delivery_reinit_after_fork(void)
 {
 	wake_event = 0;
 	lock_event = 0;
+	__sig_pending_reset_after_fork();
 	__sig_delivery_init();
 }
 
@@ -406,8 +417,9 @@ void __sig_delivery_reinit_after_fork(void)
  * default-action path exists to handle, and this function draws no
  * distinction between "no listener" and any other reason the attempt
  * did not land. */
-int __sig_try_deliver_remote(int pid, int sig)
+int __sig_try_deliver_remote_info(int pid, int sig, const void *data)
 {
+	const siginfo_t *si = data;
 	WCHAR name[40];
 	UNICODE_STRING us;
 	OBJECT_ATTRIBUTES oa;
@@ -433,9 +445,18 @@ int __sig_try_deliver_remote(int pid, int sig)
 
 	pkt.magic = SIGPACKET_MAGIC;
 	pkt.signo = (ULONG)sig;
-	pkt.sender_pid = (ULONG)getpid();
+	pkt.sender_pid = (ULONG)(si ? si->si_pid : getpid());
+	pkt.sender_uid = (ULONG)(si ? si->si_uid : getuid());
+	pkt.code = (LONG)(si ? si->si_code : SI_USER);
+	if (si) pkt.value = si->si_value;
+	else memset(&pkt.value, 0, sizeof pkt.value);
 	st = NtWriteFile(h, 0, 0, 0, &io, &pkt, sizeof pkt, 0, 0);
 	if (st == STATUS_PENDING) { NtWaitForSingleObject(h, 0, 0); st = io.Status; }
 	NtClose(h);
 	return NT_SUCCESS(st) && io.Information == sizeof pkt;
+}
+
+int __sig_try_deliver_remote(int pid, int sig)
+{
+	return __sig_try_deliver_remote_info(pid, sig, 0);
 }
