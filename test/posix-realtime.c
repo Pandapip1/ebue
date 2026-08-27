@@ -1,10 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Coverage fences for the POSIX Realtime headers ntlibc does not have:
- * <semaphore.h>, <mqueue.h>, <aio.h>, plus the half of <sched.h> that is
- * missing.  This file also keeps the now-implemented per-process timer
- * fence as a required PASS.  POSIX.1-2017 (IEEE Std 1003.1-2017, The
+ * Coverage fences for the POSIX Realtime option groups: semaphores,
+ * message queues, asynchronous I/O, per-process timers, and process
+ * scheduling.  Their formerly absent fences stay here as required PASS
+ * assertions now that each interface family exists.  POSIX.1-2017
+ * (IEEE Std 1003.1-2017, The
  * Open Group Base Specifications Issue 7, 2018 Edition), served at
  * https://pubs.opengroup.org/onlinepubs/9699919799/ .  Clause text was
  * read from Ubuntu's manpages-posix-dev 2017a-2, whose pages carry that
@@ -15,43 +16,20 @@
  * The same name-level cross-index that found <pthread.h> (see
  * test/posix-pthread.c's banner: 1190 interfaces from 882 function
  * pages, 364 with no mention anywhere in test/*.c) puts these five
- * groups together for a reason that is not just "all absent".  They are
+ * groups together for a reason that is not just their original absence.  They are
  * the option groups an NT libc has the most obvious machinery for and
  * the least excuse to skip: NT has real semaphore objects, real
  * overlapped I/O with completion notification, and real waitable
- * timers.  "Absent because the option is hard on this kernel" is not
- * the story here, so recording them as UNIMPL -- rather than letting
- * them stay invisible -- is the point.
+ * timers.  Keeping the original clauses as PASS assertions makes those
+ * interfaces unable to disappear silently again.
  *
  * Counts from that index: <semaphore.h> 10 interfaces, <mqueue.h> 10,
  * <aio.h> 8, the timer_* family 5, the missing <sched.h> half 5.
  *
- * ==================== how each one fails today =======================
- *
- * Measured, not assumed -- `tools/test-policy.py --pedantic` re-decides
- * every one of these and is the authority, but the two shapes are worth
- * naming because they are different:
- *
- *   - <semaphore.h>, <mqueue.h> and <aio.h> do not exist in include/,
- *     so those fences die on their own #include.
- *   - <sched.h> exists and is included successfully; the sched_* fence
- *     gets past the preprocessor and dies on missing declarations and
- *     symbols.  include/sched.h's
- *     own banner (lines 7-11) already names its absences in prose --
- *     "the SCHED_FIFO/SCHED_RR/SCHED_SPORADIC/SCHED_OTHER policies, and
- *     sched_getparam/sched_setparam/sched_getscheduler/
- *     sched_setscheduler/sched_get_priority_max/sched_get_priority_min/
- *     sched_rr_get_interval" -- and that prose is exactly the coverage
- *     this file converts into something a tool can see.
- *
- * Both shapes are the interface being ABSENT, which is what UNIMPL
- * asserts; neither is a wrong answer from a present interface, which is
- * what BUG would assert.
- *
- * NOT fenced here, and why -- see the report accompanying this file:
- * the _SC_SEMAPHORES / _SC_TIMERS / _SC_ASYNCHRONOUS_IO option macros
- * (a `land/unimpl` commit is adding the mandated _SC_ block; a fence on
- * them here would collide), and the XSI IPC group <sys/ipc.h> /
+ * `tools/test-policy.py --pedantic` re-decides every fence and remains
+ * the authority: an interface regression turns a required PASS into a
+ * build or runtime policy failure instead of making the old gap silent.
+ * The XSI IPC group <sys/ipc.h> /
  * <sys/shm.h> / <sys/msg.h> / <sys/sem.h> (claude/posix-gap-batch's
  * 9dc13a9 is already fencing it).
  */
@@ -411,7 +389,7 @@ static void test_posix_realtime_mq_notify_single_registration(void)
  * aio_cancel.html, lio_listio.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_aio_write_read_roundtrip)
+#if NTLIBC_TEST(PASS, posix_realtime_aio_write_read_roundtrip)
 #include <aio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -503,7 +481,7 @@ static void test_posix_realtime_aio_write_read_roundtrip(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_lio_listio_wait)
+#if NTLIBC_TEST(PASS, posix_realtime_lio_listio_wait)
 #include <aio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -573,7 +551,7 @@ static void test_posix_realtime_lio_listio_wait(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_aio_cancel_notcanceled)
+#if NTLIBC_TEST(PASS, posix_realtime_aio_cancel_notcanceled)
 #include <aio.h>
 #include <fcntl.h>
 #include <unistd.h>

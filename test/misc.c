@@ -14,6 +14,7 @@
 #include <sched.h>
 #include <semaphore.h>
 #include <mqueue.h>
+#include <aio.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -169,6 +170,88 @@ static void test_mqueue(void)
 	      prio == 9 && !memcmp(buf, "high", 4));
 	CHECK(mq_close(q) == 0);
 	CHECK(mq_unlink("/ntlibc_misc_mq") == 0);
+}
+
+/* ---- asynchronous I/O ---- */
+static void test_aio(void)
+{
+	struct aiocb cb, first, second;
+	struct aiocb *lio[2];
+	const struct aiocb *wait[1];
+	char out[8] = "aio-data";
+	char in[8] = {0};
+	int fd, canceled;
+
+	fd = open("ntlibc-misc-aio.tmp", O_CREAT | O_TRUNC | O_RDWR, 0600);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+
+	memset(&cb, 0, sizeof cb);
+	cb.aio_fildes = fd;
+	cb.aio_buf = out;
+	cb.aio_nbytes = sizeof out;
+	cb.aio_sigevent.sigev_notify = SIGEV_NONE;
+	CHECK(aio_write(&cb) == 0);
+	wait[0] = &cb;
+	CHECK(aio_suspend(wait, 1, NULL) == 0);
+	CHECK(aio_error(&cb) == 0);
+	CHECK(aio_return(&cb) == (ssize_t)sizeof out);
+
+	memset(&cb, 0, sizeof cb);
+	cb.aio_fildes = fd;
+	cb.aio_sigevent.sigev_notify = SIGEV_NONE;
+	CHECK(aio_fsync(O_SYNC, &cb) == 0);
+	wait[0] = &cb;
+	CHECK(aio_suspend(wait, 1, NULL) == 0);
+	CHECK(aio_return(&cb) == 0);
+
+	memset(&cb, 0, sizeof cb);
+	cb.aio_fildes = fd;
+	cb.aio_buf = in;
+	cb.aio_nbytes = sizeof in;
+	cb.aio_sigevent.sigev_notify = SIGEV_NONE;
+	CHECK(aio_read(&cb) == 0);
+	wait[0] = &cb;
+	CHECK(aio_suspend(wait, 1, NULL) == 0);
+	CHECK(aio_return(&cb) == (ssize_t)sizeof in);
+	CHECK(!memcmp(in, out, sizeof out));
+
+	memset(&first, 0, sizeof first);
+	first.aio_fildes = fd;
+	first.aio_buf = "one";
+	first.aio_nbytes = 3;
+	first.aio_offset = 0;
+	first.aio_lio_opcode = LIO_WRITE;
+	first.aio_sigevent.sigev_notify = SIGEV_NONE;
+	memset(&second, 0, sizeof second);
+	second.aio_fildes = fd;
+	second.aio_buf = "two";
+	second.aio_nbytes = 3;
+	second.aio_offset = 3;
+	second.aio_lio_opcode = LIO_WRITE;
+	second.aio_sigevent.sigev_notify = SIGEV_NONE;
+	lio[0] = &first;
+	lio[1] = &second;
+	CHECK(lio_listio(LIO_WAIT, lio, 2, NULL) == 0);
+	CHECK(aio_return(&first) == 3);
+	CHECK(aio_return(&second) == 3);
+
+	memset(&cb, 0, sizeof cb);
+	cb.aio_fildes = fd;
+	cb.aio_buf = out;
+	cb.aio_nbytes = sizeof out;
+	cb.aio_sigevent.sigev_notify = SIGEV_NONE;
+	CHECK(aio_write(&cb) == 0);
+	canceled = aio_cancel(fd, &cb);
+	CHECK(canceled == AIO_CANCELED || canceled == AIO_NOTCANCELED ||
+	      canceled == AIO_ALLDONE);
+	wait[0] = &cb;
+	CHECK(aio_suspend(wait, 1, NULL) == 0);
+	CHECK(aio_error(&cb) == 0 || aio_error(&cb) == ECANCELED);
+	(void)aio_return(&cb);
+
+	CHECK(close(fd) == 0);
+	CHECK(unlink("ntlibc-misc-aio.tmp") == 0);
 }
 
 /* ---- system() ---- */
@@ -464,6 +547,7 @@ int main(int argc, char **argv)
 	test_mlockall();
 	test_semaphore();
 	test_mqueue();
+	test_aio();
 	test_system();
 	test_setjmp();
 	test_signal();

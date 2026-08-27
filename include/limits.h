@@ -52,6 +52,9 @@
 #define TIMER_MAX 32
 #define MQ_OPEN_MAX 1024
 #define MQ_PRIO_MAX 32768
+#define AIO_LISTIO_MAX 64
+#define AIO_MAX 256
+#define AIO_PRIO_DELTA_MAX 0
 
 #define _POSIX_AIO_LISTIO_MAX   2
 #define _POSIX_AIO_MAX          1

@@ -506,6 +506,7 @@ void __sig_pending_reset_after_fork(void);
 int __sig_pending_member(int sig);
 void __timer_reinit_after_fork(void);
 void __mman_reset_after_fork(void);
+void __aio_reset_after_fork(void);
 void __sig_lock(void);
 void __sig_unlock(void);
 

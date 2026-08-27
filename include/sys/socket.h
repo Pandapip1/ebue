@@ -8,8 +8,8 @@
  *
  * Scope, per test/networking-audit.md and this header's own task:
  * AF_INET with SOCK_STREAM only.  UDP (sendto/recvfrom/sendmsg/
- * recvmsg/SOCK_DGRAM's actual use), AF_INET6, AF_UNIX (and therefore
- * socketpair()) and sockatmark() are all
+ * recvmsg/SOCK_DGRAM's actual use), AF_INET6, general AF_UNIX pathname
+ * sockets, and sockatmark() are all
  * staged for later work (networking-audit.md sec 6, stages 4-6) and are
  * deliberately *not declared* here -- this project's own standing rule
  * (see test/posix-sysmisc.c's file banner) is that a declared-but-
@@ -127,6 +127,7 @@ struct linger {
 #define SOMAXCONN 128
 
 int socket(int, int, int);
+int socketpair(int, int, int, int [2]);
 int bind(int, const struct sockaddr *, socklen_t);
 int listen(int, int);
 int accept(int, struct sockaddr *__restrict, socklen_t *__restrict);

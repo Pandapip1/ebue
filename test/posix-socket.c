@@ -562,6 +562,27 @@ static void test_loopback_roundtrip(int listener)
 	close(accepted);
 }
 
+static void test_socketpair_stream(void)
+{
+	int pair[2];
+	int result;
+	char buffer[8];
+
+	result = socketpair(AF_UNIX, SOCK_STREAM, 0, pair);
+	CHECK(result == 0);
+	if (result < 0) return;
+	CHECK(write(pair[0], "local", 5) == 5);
+	memset(buffer, 0, sizeof buffer);
+	CHECK(read(pair[1], buffer, sizeof buffer) == 5);
+	CHECK(!memcmp(buffer, "local", 5));
+	CHECK(write(pair[1], "pair", 4) == 4);
+	memset(buffer, 0, sizeof buffer);
+	CHECK(read(pair[0], buffer, sizeof buffer) == 4);
+	CHECK(!memcmp(buffer, "pair", 4));
+	CHECK(close(pair[0]) == 0);
+	CHECK(close(pair[1]) == 0);
+}
+
 /* accept.html: EINVAL for a socket that was never listen()'d;
  * bind.html: EINVAL for a second bind() on an already-bound socket;
  * ENOTSOCK for every socket call given a non-socket fd -- all pure
@@ -604,12 +625,13 @@ int main(void)
 	if (listener >= 0) {
 		test_socket_state_errors(listener);
 		test_loopback_roundtrip(listener);
+		test_socketpair_stream();
 		close(listener);
 	}
 
 	/* UDP (sendto/recvfrom/SOCK_DGRAM's actual use), AF_INET6
-	 * (sockaddr_in6/in6_addr/getaddrinfo's AF_INET6 path), AF_UNIX
-	 * (socketpair(), struct sockaddr_un) and sockatmark() are all
+	 * (sockaddr_in6/in6_addr/getaddrinfo's AF_INET6 path), pathname
+	 * AF_UNIX (struct sockaddr_un) and sockatmark() are all
 	 * staged for later work, per
 	 * test/networking-audit.md sec 6 (stages 4-6) -- not merely
 	 * untested, genuinely not implemented, and (per this project's own
@@ -617,10 +639,10 @@ int main(void)
 	 * declared in <sys/socket.h>/<netinet/in.h> (see that header's own
 	 * banner), so none of this can even be written outside an #if 0
 	 * fence. */
-#if NTLIBC_TEST(UNIMPL, posix_socket_send_recv_and_socketpair_interfaces) /* UNIMPL: sys_socket.h.html's full function list --
+#if NTLIBC_TEST(UNIMPL, posix_socket_send_recv_and_socketpair_interfaces) /* UNIMPL: sys_socket.h.html's remaining function list --
 	sendto()/recvfrom()/sendmsg()/recvmsg() (UDP and ancillary
-	data), socketpair() (AF_UNIX) -- networking-audit.md sec 6
-	stages 5/6/7. */
+	data) -- networking-audit.md sec 6 stages 5/6/7.  SOCK_STREAM
+	socketpair() is covered above; SOCK_DGRAM remains with UDP. */
 	{
 		int sv[2];
 		char b[4];

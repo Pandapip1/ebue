@@ -229,6 +229,10 @@ pid_t fork(void)
 		 * RtlCloneUserProcess copied mman.c's bookkeeping bytes, so make
 		 * the child-side state match that kernel-level rule. */
 		__mman_reset_after_fork();
+		/* POSIX AIO operations are not inherited.  The native worker is a
+		 * sibling thread and therefore did not survive RtlCloneUserProcess;
+		 * forget its copied queue and stale event handle in the child. */
+		__aio_reset_after_fork();
 		/* And once more: the sibling entries that travelled with the
 		 * clone carry the parent's job-control bookkeeping, and this
 		 * process stopped none of them.  Left alone, the clone would

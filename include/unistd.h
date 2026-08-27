@@ -267,6 +267,9 @@ pid_t gettid(void);
 /* Named, priority-ordered process-shared message queues. */
 #define _POSIX_MESSAGE_PASSING 200809L
 
+/* Asynchronous reads, writes, synchronization, cancellation and lists. */
+#define _POSIX_ASYNCHRONOUS_IO 200809L
+
 /* Queued real-time signals, including payload-preserving cross-process
  * sigqueue() delivery and the two synchronous wait interfaces. */
 #define _POSIX_REALTIME_SIGNALS 200809L
@@ -295,16 +298,16 @@ pid_t gettid(void);
  * the hole being silent to someone reading the header, which is where a
  * consumer meets it.
  *
- * Why the hole is not closed by adding thirteen #defines.  200809L is a
+ * Why the hole is not closed by adding nine #defines.  200809L is a
  * COMPILE-TIME promise; the whole reason for a constant an application
  * tests with #if is that it cannot be re-checked at run time, so a wrong
  * answer here cannot be corrected the way a wrong sysconf() answer can.
- * Not one of the thirteen names an option this tree actually supplies:
+ * Not one of the nine names an option this tree actually supplies:
  *
  *   - there is no <pthread.h> at all, which leaves _POSIX_THREADS,
  *     _POSIX_BARRIERS, _POSIX_READER_WRITER_LOCKS, _POSIX_SPIN_LOCKS
  *     and _POSIX_TIMEOUTS with no interfaces behind them;
- *   - no <aio.h> (_POSIX_ASYNCHRONOUS_IO), no <sys/mman.h> (_POSIX_MAPPED_FILES,
+ *   - no <sys/mman.h> (_POSIX_MAPPED_FILES,
  *     _POSIX_MEMORY_PROTECTION);
  *   - _POSIX_CLOCK_SELECTION needs pthread_condattr_setclock() as well
  *     as the clock_nanosleep() we do have.
@@ -320,7 +323,7 @@ pid_t gettid(void);
  *
  * And POSIX leaves no third answer.  For every OTHER constant in that
  * section the page says "if defined ... shall have a value of -1, 0, or
- * greater", so -1 spells "not supported"; these thirteen have no such
+ * greater", so -1 spells "not supported"; these nine have no such
  * form, and silence is the only truthful signal left.  Same distinction
  * <limits.h> already records against _POSIX_THREAD_KEYS_MAX and friends:
  * a number the standard prints is not a claim, an option constant is. */

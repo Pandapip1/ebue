@@ -1607,7 +1607,7 @@ static void test_linkat(void)
  * _SC_GETPW_R_SIZE_MAX as a matter of routine, and coreutils' stty
  * needs _POSIX_VDISABLE.
  *
- * Four of the five now run.  The fifth -- the thirteen option constants
+ * Four of the five now run.  The fifth -- the remaining nine option constants
  * unistd.h.html says "shall always be set to the value 200809L" --
  * stays fenced on purpose, because unlike the other four its acceptance
  * criterion is not a #define: see that fence's own text, and the
@@ -1795,26 +1795,23 @@ static void test_unistd_confstr_names(void)
 }
 
 #if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_mandatory_option_constants) /* UNIMPL: unistd.h.html "Constants for Options and Option Groups"
-	gives thirteen constants the wording "This symbol shall always be
-	set to the value 200809L" -- _POSIX_ASYNCHRONOUS_IO,
-	_POSIX_BARRIERS, _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES,
+	gives these remaining nine constants the wording "This symbol shall
+	always be set to the value 200809L" -- _POSIX_BARRIERS,
+	_POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES,
 	_POSIX_MEMORY_PROTECTION, _POSIX_READER_WRITER_LOCKS,
-	_POSIX_REALTIME_SIGNALS, _POSIX_SEMAPHORES, _POSIX_SPIN_LOCKS,
-	_POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS, _POSIX_TIMEOUTS and
-	_POSIX_TIMERS.  "Always" is the operative word: unlike every other
+	_POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS and
+	_POSIX_TIMEOUTS.  "Always" is the operative word: unlike every other
 	entry in that section, which the same page introduces with "The
 	following symbolic constants, IF DEFINED in <unistd.h>, shall have
-	a value of -1, 0, or greater", these thirteen are not optional to
-	define.  ntlibc defines none of the thirteen, and no _POSIX_* or
-	_XOPEN_* option constant at all beyond _POSIX_VERSION and
-	_POSIX2_VERSION.  Triage: ABSENT.
+	a value of -1, 0, or greater", these nine are not optional to
+	define.  ntlibc defines none of the nine.  Triage: ABSENT.
 
 	THIS FENCE'S ACCEPTANCE CRITERION IS NOT "ADD A #define", and that
 	is why it is a clause of its own rather than part of the _SC_/_PC_/
 	_CS_ fences above.  The value 200809L is a compile-time PROMISE to
 	the application that the option is present -- that is the entire
 	purpose of a constant an application may test with #if.  Seven of
-	the thirteen are thread-related and the pthread family is a
+	the nine are thread-related and the pthread family is a
 	recorded absence (test/POSIX-GAP-ACCOUNTING.md); defining
 	_POSIX_THREADS as 200809L with no threads behind it would be a
 	false claim, and strictly worse than the omission, because an
@@ -1825,30 +1822,30 @@ static void test_unistd_confstr_names(void)
 	"#ifdef _POSIX_TIMERS" gets the same silence from a libc that has
 	clock_gettime()/clock_nanosleep() as from one that has nothing.
 
-	Re-examined when the _SC_/_PC_/_CS_/_POSIX_VDISABLE clauses beside
-	it were implemented, and left standing.  Each of the thirteen was
+	Re-examined as the realtime signals, semaphores, timers and AIO
+	options were implemented, and left standing.  Each of the nine was
 	checked against the tree one by one, and not one names an option
 	this library supplies -- including _POSIX_THREAD_SAFE_FUNCTIONS,
 	whose nineteen interfaces do all exist but which sits inside the
 	option group _POSIX_THREADS heads.  Nor is there a legal way to
 	spell "absent": every OTHER constant in that section may be defined
-	as -1, and these thirteen may not, so silence is the only truthful
+	as -1, and these nine may not, so silence is the only truthful
 	signal POSIX leaves.  What DID change is that the silence is no
 	longer undocumented -- include/unistd.h now carries the same
 	reasoning where a reader of the header will meet it, and
 	sysconf() answers -1 for the matching _SC_ names so the header and
 	the runtime cannot contradict each other.
 
-	Observed today: fails to COMPILE, "'_POSIX_ASYNCHRONOUS_IO'
+	Observed today: fails to COMPILE, "'_POSIX_BARRIERS'
 	undeclared". */
 static void test_unistd_mandatory_option_constants(void)
 {
 	static const long always[] = {
-		_POSIX_ASYNCHRONOUS_IO, _POSIX_BARRIERS, _POSIX_CLOCK_SELECTION,
+		_POSIX_BARRIERS, _POSIX_CLOCK_SELECTION,
 		_POSIX_MAPPED_FILES, _POSIX_MEMORY_PROTECTION,
-		_POSIX_READER_WRITER_LOCKS, _POSIX_REALTIME_SIGNALS, _POSIX_SEMAPHORES,
+		_POSIX_READER_WRITER_LOCKS,
 		_POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS,
-		_POSIX_TIMEOUTS, _POSIX_TIMERS,
+		_POSIX_TIMEOUTS,
 	};
 	size_t i;
 
