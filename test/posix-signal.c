@@ -10,12 +10,10 @@
  * read those first; this file does not repeat what they already assert.
  *
  * src/signal/signal.c's header comment is required reading before any of
- * this: there is no asynchronous signal delivery from another thread or
- * process on this platform. Signals are self-generated, synchronous CPU
- * exceptions, or packets handled by ntlibc's delivery thread. Clauses that
- * only make sense with asynchronous mask replacement (a real
- * sigsuspend() that blocks) are marked N/A with
- * the reason below rather than given a test that could never pass.
+ * this: signals are self-generated, synchronous CPU exceptions, timer APCs,
+ * or packets handled by ntlibc's delivery thread.  Blocking interfaces use
+ * those asynchronous sources without pretending an ordinary instruction can
+ * be interrupted in place.
  */
 #include "test-policy.h"
 #include <stdio.h>
@@ -583,20 +581,38 @@ static void test_realtime_signal_queue(void)
 	signal(SIGRTMIN, SIG_DFL);
 }
 
-/* sigsuspend.html RETURN VALUE: "If a return occurs, -1 shall be
- * returned and errno set to [EINTR]." src/signal/signal.c's
- * sigsuspend() is a documented permanent stub: there is no per-thread
- * suspend/wake primitive to atomically replace the mask and block. It
- * happens to satisfy this one narrow
- * return-value clause unconditionally; the DESCRIPTION clause that it
- * replace the mask and actually wait for a signal is N/A (see ledger
- * fragment) rather than tested, since it can never be made to pass. */
-static void test_sigsuspend_stub(void)
+static volatile sig_atomic_t sigsuspend_alarm_caught;
+static void sigsuspend_alarm_handler(int sig)
 {
-	sigset_t s;
-	sigemptyset(&s);
+	(void)sig;
+	sigsuspend_alarm_caught = 1;
+}
+
+/* sigsuspend.html: atomically install the temporary mask and suspend until
+ * a caught signal arrives, then restore the old mask and return -1/EINTR.
+ * alarm() supplies a genuinely asynchronous signal to the calling thread;
+ * cross-process mask replacement and pending delivery are covered in
+ * posix-signal-crossproc.c. */
+static void test_sigsuspend_wait(void)
+{
+	struct sigaction sa, old;
+	sigset_t temporary, before, after;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = sigsuspend_alarm_handler;
+	sigemptyset(&sa.sa_mask);
+	CHECK(sigaction(SIGALRM, &sa, &old) == 0);
+	CHECK(sigprocmask(SIG_SETMASK, NULL, &before) == 0);
+	sigemptyset(&temporary);
+	sigsuspend_alarm_caught = 0;
+	alarm(1);
 	errno = 0;
-	CHECK(sigsuspend(&s) == -1 && errno == EINTR);
+	CHECK(sigsuspend(&temporary) == -1 && errno == EINTR);
+	CHECK(sigsuspend_alarm_caught == 1);
+	CHECK(sigprocmask(SIG_SETMASK, NULL, &after) == 0);
+	CHECK(memcmp(&before, &after, sizeof before) == 0);
+	alarm(0);
+	CHECK(sigaction(SIGALRM, &old, NULL) == 0);
 }
 
 /* ================================================================== *
@@ -1848,7 +1864,7 @@ int main(int argc, char **argv)
 	test_sigprocmask();
 	test_sigpending();
 	test_realtime_signal_queue();
-	test_sigsuspend_stub();
+	test_sigsuspend_wait();
 	test_abort_overrides(argv[0]);
 	if (flush_probe_channel_works(argv[0])) {
 		test_terminating_signal_does_not_flush_stdio(argv[0]);

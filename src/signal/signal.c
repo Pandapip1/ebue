@@ -713,6 +713,20 @@ int sigismember(const sigset_t *s, int sig) { if (!sig_valid(sig)) { errno = EIN
 int sigisemptyset(const sigset_t *s) { size_t i; for (i = 0; i < sizeof s->__bits / sizeof s->__bits[0]; i++) if (s->__bits[i]) return 0; return 1; }
 int sigorset(sigset_t *d, const sigset_t *a, const sigset_t *b) { size_t i; for (i = 0; i < sizeof d->__bits / sizeof d->__bits[0]; i++) d->__bits[i] = a->__bits[i] | b->__bits[i]; return 0; }
 
+/* Called with the signal lock held.  Delivery may run a handler, which is
+ * safe because the lock is recursive on the owning thread. */
+static void drain_unblocked_pending(void)
+{
+	int i;
+	for (i = 1; i < _NSIG; i++) {
+		while (sigismember(&pending, i) && !sigismember(&blocked, i)) {
+			siginfo_t si;
+			take_pending_signal(i, &si);
+			__raise_internal_info(i, &si);
+		}
+	}
+}
+
 int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 {
 	int i;
@@ -737,13 +751,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 		sigdelset(&blocked, SIGKILL);
 		sigdelset(&blocked, SIGSTOP);
 		/* deliver anything unblocked and pending */
-		for (i = 1; i < _NSIG; i++) {
-			while (sigismember(&pending, i) && !sigismember(&blocked, i)) {
-				siginfo_t si;
-				take_pending_signal(i, &si);
-				__raise_internal_info(i, &si);
-			}
-		}
+		drain_unblocked_pending();
 	}
 	__sig_unlock();
 	return 0;
@@ -767,7 +775,41 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)
 
 int sigpending(sigset_t *s) { __sig_lock(); *s = pending; __sig_unlock(); return 0; }
 int __sig_pending_member(int sig) { return sigismember(&pending, sig); }
-int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
+int sigsuspend(const sigset_t *s)
+{
+	sigset_t old;
+	unsigned long caught;
+
+	if (!s) { errno = EFAULT; return -1; }
+	/* Installing the temporary mask and taking the handler-count snapshot
+	 * are one locked operation.  A remote delivery can therefore happen
+	 * either before both or after both, never in the lost-wakeup gap that
+	 * would leave this wait asleep after its signal already ran. */
+	__sig_lock();
+	old = blocked;
+	caught = caught_count;
+	blocked = *s;
+	sigdelset(&blocked, SIGKILL);
+	sigdelset(&blocked, SIGSTOP);
+	drain_unblocked_pending();
+	__sig_unlock();
+
+	/* Cross-process delivery runs on the listener thread.  Polling keeps
+	 * this thread parked without needing register-context injection, and
+	 * ignored signals do not change caught_count so they do not wake the
+	 * suspension. */
+	while (__sig_caught_count() == caught) {
+		LARGE_INTEGER delay = -100000; /* 10ms */
+		NtDelayExecution(TRUE, &delay);
+	}
+
+	/* Restoring the old mask may itself release a signal that arrived
+	 * while the temporary mask blocked it; sigprocmask() performs that
+	 * pending delivery before returning. */
+	(void)sigprocmask(SIG_SETMASK, &old, NULL);
+	errno = EINTR;
+	return -1;
+}
 
 void __sig_pending_reset_after_fork(void)
 {

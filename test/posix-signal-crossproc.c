@@ -87,6 +87,12 @@ static void sleep_ms(long ms)
 static void handler_exit42(int sig) { (void)sig; _exit(42); }
 static volatile sig_atomic_t handler_ran;
 static void handler_mark(int sig) { (void)sig; handler_ran = 1; }
+static volatile sig_atomic_t suspend_seen;
+static void handler_suspend(int sig)
+{
+	if (sig == SIGUSR1) suspend_seen |= 1;
+	if (sig == SIGUSR2) suspend_seen |= 2;
+}
 
 /* The positive case: a real handler, installed with sigaction(), must
  * run for a signal delivered by ANOTHER process's kill() -- the exact
@@ -177,6 +183,35 @@ static int child_select_eintr(void)
 	if (r == -1 && errno == EINTR && handler_ran) return 42;
 	if (r == 0) return 43;      /* timed out -- the wakeup never happened */
 	return 44;                  /* something else entirely */
+}
+
+/* sigsuspend() atomically replaces the mask while it waits, then restores
+ * the original mask before returning EINTR.  SIGUSR2 arrives first and is
+ * held pending by the temporary mask; SIGUSR1 wakes the suspension; the
+ * restoration unblocks and delivers SIGUSR2. */
+static int child_sigsuspend(void)
+{
+	struct sigaction sa;
+	sigset_t original, temporary, current;
+	int r, saved;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_suspend;
+	if (sigaction(SIGUSR1, &sa, NULL) < 0 ||
+	    sigaction(SIGUSR2, &sa, NULL) < 0) return 90;
+	sigemptyset(&original);
+	sigaddset(&original, SIGUSR1);
+	if (sigprocmask(SIG_SETMASK, &original, NULL) < 0) return 91;
+	sigemptyset(&temporary);
+	sigaddset(&temporary, SIGUSR2);
+	r = sigsuspend(&temporary);
+	saved = errno;
+	if (sigprocmask(SIG_SETMASK, NULL, &current) < 0) return 92;
+	if (r != -1 || saved != EINTR) return 93;
+	if (suspend_seen != 3) return 94;
+	if (!sigismember(&current, SIGUSR1) ||
+	    sigismember(&current, SIGUSR2)) return 95;
+	return 42;
 }
 
 /* ------------------------------------------------------------------ *
@@ -291,6 +326,24 @@ static void test_select_returns_eintr(const char *self)
 	CHECK(t1 - t0 < 4000);
 }
 
+static void test_sigsuspend_mask_and_wakeup(const char *self)
+{
+	pid_t pid;
+	int status;
+
+	if (spawn_child(self, "--child-sigsuspend", &pid) < 0) {
+		CHECK(0 && "spawn failed");
+		return;
+	}
+	sleep_ms(STARTUP_GRACE_MS);
+	CHECK(kill(pid, SIGUSR2) == 0);
+	sleep_ms(100);
+	CHECK(kill(pid, SIGUSR1) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe("sigsuspend mask/restore", status);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+}
+
 /* No hang for a target that has no listener yet -- __sig_try_deliver_remote()
  * (src/signal/sigdelivery.c) must fail fast on NtOpenFile rather than
  * wait for one to appear (that function's own comment cites the NT
@@ -341,12 +394,14 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[1], "--child-ignore")) return child_ignore();
 		if (!strcmp(argv[1], "--child-blocked")) return child_blocked();
 		if (!strcmp(argv[1], "--child-select-eintr")) return child_select_eintr();
+		if (!strcmp(argv[1], "--child-sigsuspend")) return child_sigsuspend();
 	}
 
 	test_handler_runs_for_remote_kill(argv[0]);
 	test_sig_ign_survives_remote_kill(argv[0]);
 	test_blocked_signal_goes_pending(argv[0]);
 	test_select_returns_eintr(argv[0]);
+	test_sigsuspend_mask_and_wakeup(argv[0]);
 	test_no_listener_does_not_hang(argv[0]);
 
 	if (fails) printf("posix-signal-crossproc: %d failure(s)\n", fails);
