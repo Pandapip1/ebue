@@ -55,6 +55,34 @@ static int isdir_attrs(ULONG attrs, ULONG tag)
 	return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+static int final_dot_component(const char *path)
+{
+	const char *end = path + strlen(path), *start;
+	while (end > path && (end[-1] == '/' || end[-1] == '\\')) end--;
+	start = end;
+	while (start > path && start[-1] != '/' && start[-1] != '\\') start--;
+	return (end - start == 1 && start[0] == '.') ||
+	       (end - start == 2 && start[0] == '.' && start[1] == '.');
+}
+
+static int ntpath_is_ancestor(const struct __ntpath *old,
+		const struct __ntpath *new)
+{
+	size_t i, on = old->nt.Length / sizeof(WCHAR);
+	size_t nn = new->nt.Length / sizeof(WCHAR);
+	if (old->oa.RootDirectory != new->oa.RootDirectory || on >= nn)
+		return 0;
+	for (i = 0; i < on; i++) {
+		WCHAR a = old->nt.Buffer[i], b = new->nt.Buffer[i];
+		if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+		if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+		if (a == '/') a = '\\';
+		if (b == '/') b = '\\';
+		if (a != b) return 0;
+	}
+	return new->nt.Buffer[on] == '\\' || new->nt.Buffer[on] == '/';
+}
+
 int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 {
 	struct __ntpath op, np;
@@ -66,8 +94,18 @@ int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 	FILE_ATTRIBUTE_TAG_INFORMATION oti, nti;
 	int old_isdir, new_exists, new_isdir;
 
+	if (final_dot_component(old) || final_dot_component(new)) {
+		errno = EINVAL;
+		return -1;
+	}
 	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	if (__ntpath_at(newdirfd, new, &np, OBJ_CASE_INSENSITIVE) < 0) { __ntpath_free(&op); return -1; }
+	if (ntpath_is_ancestor(&op, &np)) {
+		__ntpath_free(&op);
+		__ntpath_free(&np);
+		errno = EINVAL;
+		return -1;
+	}
 
 	/* FILE_READ_ATTRIBUTES is requested alongside DELETE because the
 	 * type check below queries FileBasicInformation on this same handle

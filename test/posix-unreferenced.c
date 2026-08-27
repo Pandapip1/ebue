@@ -1038,7 +1038,7 @@ static void test_renameat_empty_at_dirfd(void)
 /* "[EINVAL] The old pathname names an ancestor directory of the new
  * pathname, or either pathname argument contains a final component that
  * is dot or dot-dot." */
-#if NTLIBC_TEST(BUG, posix_unreferenced_renameat_einval) /* BUG: neither clause is checked.  src/stdio/misc.c's renameat()
+#if NTLIBC_TEST(PASS, posix_unreferenced_renameat_einval) /* Both clauses are checked before the NT rename.  src/stdio/misc.c's renameat()
        * hands both paths straight to __ntpath_at() and then to
        * NtSetInformationFile(FileRenameInformationEx); nothing anywhere
        * inspects the final component for "." or "..", and nothing tests
