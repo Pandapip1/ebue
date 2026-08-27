@@ -321,10 +321,6 @@ int main(void)
 			"%j %Y %T",
 			"%c",
 			"%D %R",
-/* BUG (live, expected to FAIL): src/time/strptime.c:70 %Y reads up to 10 digits, so in a
-       * format with no separator after %Y it swallows the following
-       * fields ("20380119031407" with "%Y%m%d%H%M%S" fails); POSIX/glibc
-       * limit %Y to 4 digits. */
 			"%Y%m%d%H%M%S",
 		};
 
@@ -359,6 +355,16 @@ int main(void)
 		CHECK(end && *end == 0);
 		CHECK(out.tm_year == 70 && out.tm_mon == 0 && out.tm_mday == 1 && out.tm_hour == 0);
 		CHECK(timegm(&out) == 0);
+
+		memset(&out, 0, sizeof out);
+		end = strptime("10.7.56 in 18th", "%d.%m.%y in %C th", &out);
+		CHECK(end && *end == 0);
+		CHECK(out.tm_year == 1856 - 1900 && out.tm_mon == 6 && out.tm_mday == 10);
+
+		memset(&out, 0, sizeof out);
+		end = strptime("683078400", "%s", &out);
+		CHECK(end && *end == 0);
+		CHECK(out.tm_year == 1991 - 1900 && out.tm_mon == 7 && out.tm_mday == 25);
 
 		memset(&out, 0, sizeof out);
 		end = strptime("Thursday January 1 1970", "%A %B %d %Y", &out);

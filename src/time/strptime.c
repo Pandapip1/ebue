@@ -58,7 +58,8 @@ static const char *match_name(const char *s, const char *const *full, const char
  * century value %C parsed (e.g. 19 for the 1900s).  Both are shared
  * across recursive calls so that %r's %p applies to its %I and %C
  * combines correctly with a %y anywhere else in the same format. */
-static const char *parse(const char *s, const char *f, struct tm *tm, int *pm, int *century)
+static const char *parse(const char *s, const char *f, struct tm *tm,
+	int *pm, int *century, int *year2)
 {
 	long v;
 	int idx;
@@ -81,13 +82,14 @@ static const char *parse(const char *s, const char *f, struct tm *tm, int *pm, i
 		case 'R': sub = "%H:%M"; goto expand;
 		case 'T': case 'X': sub = "%H:%M:%S"; goto expand;
 		expand:
-			if (!(s = parse(s, sub, tm, pm, century))) return NULL;
+			if (!(s = parse(s, sub, tm, pm, century, year2))) return NULL;
 			break;
 		/* Widths follow musl/glibc: %Y 4, %j 3, %u/%w 1, everything else 2,
 		 * so an unseparated "%Y%m%d" doesn't let %Y swallow later fields. */
 		case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break;
 		case 'y':
 			if (!(s = read_num(s, 2, &v))) return NULL;
+			*year2 = (int)v;
 			if (*century >= 0) {
 				/* %C already ran (in either order relative to %y): the
 				 * century it set wins, %y only supplies the low two
@@ -106,8 +108,15 @@ static const char *parse(const char *s, const char *f, struct tm *tm, int *pm, i
 			 * it sets the century with the low two digits defaulting to 0. */
 			if (!(s = read_num(s, 2, &v))) return NULL;
 			*century = (int)v;
-			tm->tm_year = (int)(v * 100 - 1900);
+			tm->tm_year = (int)(v * 100 + (*year2 >= 0 ? *year2 : 0) - 1900);
 			break;
+		case 's': {
+			char *end;
+			time_t t = (time_t)strtoll(skip_ws(s), &end, 10);
+			if (end == skip_ws(s) || !localtime_r(&t, tm)) return NULL;
+			s = end;
+			break;
+		}
 		case 'U': case 'W':
 			/* Week number (00..53); consumed like any other numeric
 			 * field but not fed back into tm -- struct tm has no
@@ -171,8 +180,9 @@ char *strptime(const char *restrict s, const char *restrict f, struct tm *restri
 {
 	int pm = -1;
 	int century = -1;
+	int year2 = -1;
 
-	if (!(s = parse(s, f, tm, &pm, &century))) return NULL;
+	if (!(s = parse(s, f, tm, &pm, &century, &year2))) return NULL;
 	if (pm == 1 && tm->tm_hour < 12) tm->tm_hour += 12;
 	else if (pm == 0 && tm->tm_hour == 12) tm->tm_hour = 0;
 	return (char *)s;
