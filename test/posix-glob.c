@@ -2777,7 +2777,7 @@ static void test_regex_interval_expansion_is_bounded(void)
 	regfree(&re);
 }
 
-#if NTLIBC_TEST(BUG, posix_glob_regex_nullable_repeat_does_not_crash) /* BUG: regcomp.html RETURN VALUE -- "Upon successful completion,
+#if NTLIBC_TEST(PASS, posix_glob_regex_nullable_repeat_does_not_crash) /* regcomp.html RETURN VALUE -- "Upon successful completion,
 	the regexec() function shall return 0. Otherwise, it shall return
 	REG_NOMATCH to indicate no match." These three patterns are not
 	exotic -- any program that hands a user-supplied pattern to
@@ -3758,17 +3758,23 @@ static void test_nftw_chdir_and_mount(void)
  * (and test/misc.c's test_abort_child() established it). */
 int main(int argc, char **argv)
 {
-	char run_dir[64];
+	char run_dir[96];
+	const char *base = argv[0];
+	const char *scan;
 
 	if (argc > 2 && !strcmp(argv[1], "--produce")) {
 		printf("%s\n", argv[2]);
 		return 0;
 	}
 
-	/* Policy probes for this translation unit run concurrently.  Keep
-	 * their fixed-name filesystem fixtures from colliding with one
-	 * another by giving each process a private working directory. */
-	snprintf(run_dir, sizeof run_dir, "posix-glob-%ld", (long)getpid());
+	/* Policy probes for this translation unit reuse one working directory,
+	 * and Wine may recycle process ids between them.  Each probe does have
+	 * a distinct executable name (probe-N.exe), so use both identifiers to
+	 * keep their fixed-name filesystem fixtures isolated. */
+	for (scan = argv[0]; *scan; scan++)
+		if (*scan == '/' || *scan == '\\') base = scan + 1;
+	snprintf(run_dir, sizeof run_dir, "posix-glob-%s-%ld",
+	         base, (long)getpid());
 	if (mkdir(run_dir, 0755) != 0 || chdir(run_dir) != 0) {
 		printf("posix-glob: could not create private fixture directory\n");
 		return 1;
