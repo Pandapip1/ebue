@@ -45,7 +45,7 @@ char *asctime (const struct tm *);
 char *ctime (const time_t *);
 int timespec_get(struct timespec *, int);
 
-#define CLOCKS_PER_SEC 1000000
+#define CLOCKS_PER_SEC ((clock_t)1000000)
 
 #define TIME_UTC 1
 

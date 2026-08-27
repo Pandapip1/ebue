@@ -22,34 +22,51 @@ int daylight;
 long timezone;
 char *tzname[2] = { (char *)"UTC", (char *)"UTC" };
 
-static char __tzname_buf[32] = "UTC";
+static char __tzname_std[32] = "UTC";
+static char __tzname_dst[32] = "UTC";
+
+static void read_name(const char **input, char *out, size_t cap)
+{
+	const char *p = *input;
+	size_t n = 0;
+
+	if (*p == '<') {
+		p++;
+		while (*p && *p != '>') {
+			if (n + 1 < cap) out[n++] = *p;
+			p++;
+		}
+		if (*p == '>') p++;
+	} else {
+		while (isalpha((unsigned char)*p)) {
+			if (n + 1 < cap) out[n++] = *p;
+			p++;
+		}
+	}
+	out[n] = 0;
+	*input = p;
+}
 
 void tzset(void)
 {
 	const char *tz = getenv("TZ");
-	size_t i = 0;
 	long h = 0, mn = 0, s = 0;
 	int sign = 1;
 
 	daylight = 0;
 	if (!tz || !*tz) {
-		strcpy(__tzname_buf, "UTC");
+		strcpy(__tzname_std, "UTC");
+		strcpy(__tzname_dst, "UTC");
 		timezone = 0;
-		tzname[0] = tzname[1] = __tzname_buf;
+		tzname[0] = __tzname_std;
+		tzname[1] = __tzname_dst;
 		return;
 	}
 
 	/* Name: a run of letters, or a "quoted" run of anything but '>'. */
-	if (*tz == '<') {
-		tz++;
-		while (*tz && *tz != '>' && i < sizeof __tzname_buf - 1) __tzname_buf[i++] = *tz++;
-		if (*tz == '>') tz++;
-	} else {
-		while (isalpha((unsigned char)*tz) && i < sizeof __tzname_buf - 1) __tzname_buf[i++] = *tz++;
-	}
-	__tzname_buf[i] = 0;
-	if (!__tzname_buf[0]) strcpy(__tzname_buf, "UTC");
-	tzname[0] = tzname[1] = __tzname_buf;
+	read_name(&tz, __tzname_std, sizeof __tzname_std);
+	if (!__tzname_std[0]) strcpy(__tzname_std, "UTC");
+	tzname[0] = __tzname_std;
 
 	/* Offset: [+-]?H[:MM[:SS]], POSIX sense (added to local time to get
 	 * UTC), same sign convention as the `timezone` global. */
@@ -60,6 +77,9 @@ void tzset(void)
 		if (*tz == ':') { tz++; mn = strtol(tz, (char **)&tz, 10); }
 		if (*tz == ':') { tz++; s = strtol(tz, (char **)&tz, 10); }
 	}
+	read_name(&tz, __tzname_dst, sizeof __tzname_dst);
+	if (!__tzname_dst[0]) strcpy(__tzname_dst, __tzname_std);
+	tzname[1] = __tzname_dst;
 	/* Combined in `long long`, not in `long`.  h, mn and s come out of
 	 * strtol(), which saturates at LONG_MAX -- 2147483647 on this
 	 * LLP64 target -- and `h * 3600` at that value overflows a 32-bit

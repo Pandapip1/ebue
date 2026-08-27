@@ -126,7 +126,7 @@ static void test_mktime_overflow_returns_minus_one(void)
  * the processor time used by the process" -- CPU time, not wall-clock
  * time. Sleeping (wall-clock elapsed) should barely move clock()'s CPU
  * time, unlike a busy loop of comparable wall duration. */
-#if NTLIBC_TEST(BUG, posix_time_clocks_per_sec_type) /* BUG: CLOCKS_PER_SEC does not have type clock_t.
+#if NTLIBC_TEST(PASS, posix_time_clocks_per_sec_type) /* CLOCKS_PER_SEC has type clock_t.
 	 * basedefs/time.h.html, "The <time.h> header shall define the
 	 * following macros": "CLOCKS_PER_SEC -- A number used to convert
 	 * the value returned by the clock() function into seconds.  The
@@ -441,7 +441,7 @@ static void test_strptime_literal_percent_and_ws_run(void)
 	CHECK(end && *end == 0 && tm.tm_year == 100 && tm.tm_mon == 1);
 }
 
-#if NTLIBC_TEST(BUG, posix_time_tzname_dst_designation) /* BUG: tzname[1] is always tzname[0]; TZ's DST designation is
+#if NTLIBC_TEST(PASS, posix_time_tzname_dst_designation) /* BUG: tzname[1] is always tzname[0]; TZ's DST designation is
 	 * never parsed.  tzset.html DESCRIPTION: "The tzset() function
 	 * shall set the external variable tzname as follows:
 	 *
@@ -560,7 +560,7 @@ static void test_timespec_get_matches_realtime(void)
  * Every expected value below was independently computed with GNU
  * coreutils `date -u -d @<epoch> +%U/%W/%V/%G/%g` (glibc's strftime),
  * not derived from ntlibc or from memory. */
-#if NTLIBC_TEST(BUG, posix_time_strftime_iso_week_thursday_years) /* BUG: %V/%G/%g lose a week in every year that begins on a
+#if NTLIBC_TEST(PASS, posix_time_strftime_iso_week_thursday_years) /* BUG: %V/%G/%g lose a week in every year that begins on a
 	 * Thursday.  strftime.html's %V entry: "Replaced by the week number
 	 * of the year (Monday as the first day of the week) as a decimal
 	 * number [01,53].  If the week containing 1 January has four or
