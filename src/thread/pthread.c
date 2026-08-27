@@ -191,7 +191,11 @@ int pthread_detach(pthread_t thread)
 	int close_handle;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	RtlAcquirePebLock();
-	if (thread->detached || thread->joined) {
+	if (thread->joined || (!thread->handle && thread->exited)) {
+		RtlReleasePebLock();
+		return ESRCH;
+	}
+	if (thread->detached) {
 		RtlReleasePebLock();
 		return EINVAL;
 	}
@@ -299,7 +303,14 @@ int pthread_attr_getschedparam(const pthread_attr_t *__restrict attr,
 int pthread_attr_setschedparam(pthread_attr_t *__restrict attr,
 	const struct sched_param *__restrict parameter)
 {
+	const struct __pthread_attr_data *data;
+	int minimum, maximum;
 	if (!valid_attr(attr) || !parameter) return EINVAL;
+	data = const_attr_data(attr);
+	minimum = sched_get_priority_min(data->sched_policy);
+	maximum = sched_get_priority_max(data->sched_policy);
+	if (minimum < 0 || maximum < 0 || parameter->sched_priority < minimum ||
+	    parameter->sched_priority > maximum) return EINVAL;
 	attr_data(attr)->sched_priority = parameter->sched_priority;
 	return 0;
 }
