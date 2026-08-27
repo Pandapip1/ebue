@@ -10,8 +10,8 @@
  * header) and is part of the mandatory header content, so leaving it
  * out would be exactly the "declared elsewhere, not here" trap this
  * project avoids -- except here there is a body for it (src/socket/
- * inet.c), so it *is* declared, unlike the AF_INET6/UDP/AF_UNIX pieces
- * <sys/socket.h> and <netinet/in.h> leave out.
+ * inet.c), so it *is* declared.  The AF_INET6 text types are present as
+ * well; only the AF_INET6/UDP/AF_UNIX socket transports remain staged.
  */
 #ifndef _ARPA_INET_H
 #define _ARPA_INET_H

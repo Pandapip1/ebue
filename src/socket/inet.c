@@ -96,69 +96,174 @@ char *inet_ntoa(struct in_addr in)
 	return buf;
 }
 
-/* inet_ntop.html: AF_INET only here (AF_INET6 out of scope, see
- * <sys/socket.h>'s banner) -- "-1...errno...EAFNOSUPPORT" for anything
- * else; ENOSPC "size...too small". */
-const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, socklen_t size)
-{
-	char buf[INET_ADDRSTRLEN];
-	const unsigned char *b;
-	int n;
-
-	if (af != AF_INET) { errno = EAFNOSUPPORT; return 0; }
-	b = (const unsigned char *)src;
-	n = snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
-	if (n < 0 || (socklen_t)n >= size) { errno = ENOSPC; return 0; }
-	memcpy(dst, buf, (size_t)n + 1);
-	return dst;
-}
-
-/* inet_pton.html: "1"/success, "0"/not a valid presentation string for
- * af, "-1"+EAFNOSUPPORT for an unrecognised af.  Strict dotted-quad
- * only -- unlike inet_addr(), inet_pton() is not specified to accept
- * the a/a.b/a.b.c short forms or octal/hex parts. */
-int inet_pton(int af, const char *__restrict src, void *__restrict dst)
+static int pton4(const char *src, unsigned char out[4])
 {
 	unsigned parts[4];
 	int i;
 	const char *p = src;
 
-	if (af != AF_INET) { errno = EAFNOSUPPORT; return -1; }
-	if (!src) return 0;
-
 	for (i = 0; i < 4; i++) {
 		int digits = 0;
 		unsigned v = 0;
 		if (i) { if (*p != '.') return 0; p++; }
-		/* inet_ntop.html gives inet_pton() the strict form
-		 * "ddd.ddd.ddd.ddd where 'ddd' is a one to three digit decimal
-		 * number", and in the same paragraph says it "does not accept
-		 * other formats (such as the octal numbers...that inet_addr()
-		 * accepts)".  A leading '0' followed by another digit is
-		 * exactly the spelling inet_addr() above hands to
-		 * strtoul(base 0) as octal, so reading it here as decimal
-		 * would make one string mean two addresses through two
-		 * functions of this library.  A lone "0" is a one-digit
-		 * decimal number and stays legal -- it is only a zero with
-		 * more digits behind it that is rejected. */
 		if (p[0] == '0' && p[1] >= '0' && p[1] <= '9') return 0;
 		while (*p >= '0' && *p <= '9') {
 			v = v * 10 + (unsigned)(*p - '0');
-			if (v > 255) return 0;
-			p++; digits++;
-			if (digits > 3) return 0;
+			if (v > 255 || ++digits > 3) return 0;
+			p++;
 		}
 		if (!digits) return 0;
 		parts[i] = v;
 	}
-	if (*p) return 0; /* trailing garbage */
+	if (*p) return 0;
+	for (i = 0; i < 4; i++) out[i] = (unsigned char)parts[i];
+	return 1;
+}
 
-	{
-		unsigned char *out = (unsigned char *)dst;
-		out[0] = (unsigned char)parts[0];
-		out[1] = (unsigned char)parts[1];
-		out[2] = (unsigned char)parts[2];
-		out[3] = (unsigned char)parts[3];
+static int hexval(unsigned char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+static int pton6(const char *src, unsigned char out[16])
+{
+	unsigned char tmp[16];
+	unsigned char *p = tmp, *end = tmp + sizeof tmp, *compress = 0;
+	const char *token = src;
+	unsigned value = 0;
+	int saw_digit = 0, digits = 0;
+
+	memset(tmp, 0, sizeof tmp);
+	if (*src == ':' && *++src != ':') return 0;
+	token = src;
+	while (*src) {
+		int h = hexval((unsigned char)*src);
+		if (h >= 0) {
+			value = (value << 4) | (unsigned)h;
+			if (value > 0xffff || ++digits > 4) return 0;
+			saw_digit = 1;
+			src++;
+			continue;
+		}
+		if (*src == ':') {
+			token = ++src;
+			if (!saw_digit) {
+				if (compress) return 0;
+				compress = p;
+				continue;
+			}
+			if (p + 2 > end) return 0;
+			*p++ = (unsigned char)(value >> 8);
+			*p++ = (unsigned char)value;
+			saw_digit = 0;
+			digits = 0;
+			value = 0;
+			if (!*src) break;
+			continue;
+		}
+		if (*src == '.' && saw_digit && p + 4 <= end) {
+			if (!pton4(token, p)) return 0;
+			p += 4;
+			saw_digit = 0;
+			src += strlen(src);
+			break;
+		}
+		return 0;
 	}
+	if (saw_digit) {
+		if (p + 2 > end) return 0;
+		*p++ = (unsigned char)(value >> 8);
+		*p++ = (unsigned char)value;
+	}
+	if (compress) {
+		size_t tail = (size_t)(p - compress);
+		if (p == end) return 0;
+		memmove(end - tail, compress, tail);
+		memset(compress, 0, (size_t)((end - tail) - compress));
+		p = end;
+	}
+	if (p != end) return 0;
+	memcpy(out, tmp, sizeof tmp);
+	return 1;
+}
+
+/* inet_ntop.html: AF_INET and AF_INET6; ENOSPC when size is too small,
+ * and EAFNOSUPPORT for any other family. */
+const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, socklen_t size)
+{
+	char buf[INET6_ADDRSTRLEN];
+	const unsigned char *b;
+	int n;
+
+	b = (const unsigned char *)src;
+	if (af == AF_INET) {
+		n = snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+	} else if (af == AF_INET6) {
+		unsigned words[8];
+		int i, best = -1, bestlen = 0;
+		char *q = buf;
+		size_t left = sizeof buf;
+
+		if (!memcmp(b, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12)) {
+			n = snprintf(buf, sizeof buf, "::ffff:%u.%u.%u.%u",
+			             b[12], b[13], b[14], b[15]);
+		} else {
+			for (i = 0; i < 8; i++) words[i] = (unsigned)b[2*i] << 8 | b[2*i+1];
+			for (i = 0; i < 8;) {
+				int j;
+				if (words[i]) { i++; continue; }
+				for (j = i; j < 8 && !words[j]; j++);
+				if (j - i > bestlen) { best = i; bestlen = j - i; }
+				i = j;
+			}
+			if (bestlen < 2) best = -1;
+			for (i = 0; i < 8;) {
+				if (i == best) {
+					if (left < 3) { errno = ENOSPC; return 0; }
+					*q++ = ':'; *q++ = ':'; left -= 2;
+					i += bestlen;
+					continue;
+				}
+				if (i && i != best + bestlen) {
+					if (left < 2) { errno = ENOSPC; return 0; }
+					*q++ = ':'; left--;
+				}
+				n = snprintf(q, left, "%x", words[i++]);
+				if (n < 0 || (size_t)n >= left) { errno = ENOSPC; return 0; }
+				q += n; left -= (size_t)n;
+			}
+			*q = 0;
+			n = (int)(q - buf);
+		}
+	} else {
+		errno = EAFNOSUPPORT;
+		return 0;
+	}
+	if (n < 0 || (size_t)n + 1 > (size_t)size) { errno = ENOSPC; return 0; }
+	memcpy(dst, buf, (size_t)n + 1);
+	return dst;
+}
+
+/* inet_pton.html: "1"/success, "0"/not a valid presentation string for
+ * af, "-1"+EAFNOSUPPORT for an unrecognised af.  The AF_INET parser is
+ * strict dotted-quad -- unlike inet_addr(), it does not accept the
+ * a/a.b/a.b.c short forms or octal/hex parts -- while AF_INET6 accepts
+ * full, compressed and trailing-dotted-quad forms. */
+int inet_pton(int af, const char *__restrict src, void *__restrict dst)
+{
+	unsigned char tmp[16];
+
+	if (af != AF_INET && af != AF_INET6) { errno = EAFNOSUPPORT; return -1; }
+	if (!src) return 0;
+	if (af == AF_INET) {
+		if (!pton4(src, tmp)) return 0;
+		memcpy(dst, tmp, 4);
+		return 1;
+	}
+	if (!pton6(src, tmp)) return 0;
+	memcpy(dst, tmp, 16);
 	return 1;
 }

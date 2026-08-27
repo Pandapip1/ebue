@@ -4,11 +4,10 @@
  * <netinet/in.h>: https://pubs.opengroup.org/onlinepubs/9699919799/
  * basedefs/netinet_in.h.html.
  *
- * AF_INET6/struct sockaddr_in6/struct in6_addr and the IPV6_* socket
- * options are all out of scope here (test/networking-audit.md sec 6's
- * staging; <sys/socket.h>'s own file banner has the fuller rationale)
- * and are not declared, for the same "never declare what has no body"
- * reason.
+ * The pure-C IPv6 text conversion interface needs struct in6_addr even
+ * though AF_INET6 sockets remain staged separately (test/networking-
+ * audit.md sec 6).  sockaddr_in6 and the IPV6_* socket options stay out
+ * of scope until the AFD transport supports them.
  */
 #ifndef _NETINET_IN_H
 #define _NETINET_IN_H
@@ -26,6 +25,10 @@ typedef uint32_t in_addr_t;
 /* netinet_in.h.html: "struct in_addr...in_addr_t s_addr". */
 struct in_addr {
 	in_addr_t s_addr;
+};
+
+struct in6_addr {
+	uint8_t s6_addr[16];
 };
 
 /* netinet_in.h.html: "struct sockaddr_in...sin_port and sin_addr shall
@@ -59,6 +62,7 @@ struct sockaddr_in {
 #define INADDR_NONE      ((in_addr_t)0xffffffff)
 
 #define INET_ADDRSTRLEN 16
+#define INET6_ADDRSTRLEN 46
 
 #ifdef __cplusplus
 }

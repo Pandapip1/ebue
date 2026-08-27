@@ -130,13 +130,13 @@ static void test_inet_addr(void)
 	CHECK(inet_addr("1.258") == htonl(0x01000102UL));   /* "a.b": b is 24 bits -- 258 = 0x000102 */
 }
 
-/* inet_ntop.html/inet_pton.html: AF_INET only (AF_INET6 out of scope,
- * see <sys/socket.h>'s banner); round trip, ENOSPC, EAFNOSUPPORT,
- * malformed-input 0 return. */
+/* inet_ntop.html/inet_pton.html: AF_INET and the pure-C AF_INET6 text
+ * conversions; round trip, ENOSPC and malformed-input 0 return. */
 static void test_inet_pton_ntop(void)
 {
 	struct in_addr a;
-	char buf[INET_ADDRSTRLEN];
+	struct in6_addr a6;
+	char buf[INET6_ADDRSTRLEN];
 	char tiny[4];
 
 	CHECK(inet_pton(AF_INET, "127.0.0.1", &a) == 1);
@@ -166,17 +166,13 @@ static void test_inet_pton_ntop(void)
 	CHECK(a.s_addr == INADDR_ANY);
 	CHECK(inet_pton(AF_INET, "10.0.0.1", &a) == 1);
 	CHECK(a.s_addr == htonl(0x0a000001UL));
-	errno = 0;
-	CHECK(inet_pton(AF_INET6, "::1", &a) == -1);
-	CHECK(errno == EAFNOSUPPORT);
+	CHECK(inet_pton(AF_INET6, "::1", &a6) == 1);
+	CHECK(inet_ntop(AF_INET6, &a6, buf, sizeof buf) == buf);
+	CHECK(!strcmp(buf, "::1"));
 
 	a.s_addr = htonl(0x01020304UL);
 	CHECK(inet_ntop(AF_INET, &a, buf, sizeof buf) == buf);
 	CHECK(!strcmp(buf, "1.2.3.4"));
-
-	errno = 0;
-	CHECK(inet_ntop(AF_INET6, &a, buf, sizeof buf) == 0);
-	CHECK(errno == EAFNOSUPPORT);
 
 	errno = 0;
 	CHECK(inet_ntop(AF_INET, &a, tiny, sizeof tiny) == 0); /* "1.2.3.4" is 7 chars + NUL, tiny holds 4 */

@@ -30,9 +30,9 @@
  * static storage, inet_ntop()'s exact [ENOSPC] boundary, and the
  * grammar inet_pton() must *refuse*.
  *
- * The one deliberate overlap is the AF_INET6 [EAFNOSUPPORT] pair, which
- * posix-socket.c asserts as correct behaviour and this file re-reads as
- * the observable face of a gap; see the fence at test_inet6_text_forms.
+ * The one deliberate overlap is the AF_INET6 success pair, which
+ * posix-socket.c also exercises; see test_inet6_text_forms below for
+ * the clause-level coverage.
  *
  * WHY EVERY ASSERTION HERE IS UNCONDITIONAL.  src/socket/inet.c's own
  * banner says it: all eight are pure C over a caller's buffer with no
@@ -54,12 +54,12 @@
  *
  * ==================== the findings, up front ==========================
  *
- * 1. UNIMPL -- inet_ntop()/inet_pton() do not support AF_INET6.  This
+ * 1. FIXED -- inet_ntop()/inet_pton() now support AF_INET6.  This
  *    is not an ancillary half of the page: inet_ntop.html requires the
  *    two families in one sentence -- "The AF_INET and AF_INET6 address
  *    families shall be supported." -- and spells out the three IPv6
  *    text forms in the same DESCRIPTION that gives the IPv4 one.
- *    Fenced: test_inet6_text_forms, and the header macro it needs,
+ *    Covered by test_inet6_text_forms, and the header macro it needs,
  *    test_inet6_addrstrlen_defined.
  * 2. BUG -- inet_addr() accepts a leading '+' and leading white space
  *    in a part, and (on the two targets where `unsigned long` is 32
@@ -120,8 +120,7 @@ static int fails;
  * spelled out, "INET_ADDRSTRLEN 16. Length of the string form for IP."
  * and "INET6_ADDRSTRLEN 46. Length of the string form for IPv6."
  *
- * Four of the five hold.  INET6_ADDRSTRLEN is missing and is fenced
- * below, with the AF_INET6 gap it belongs to.
+ * All five now hold.  INET6_ADDRSTRLEN is checked separately below.
  *
  * Deliberately unused here, and worth saying why: INADDR_LOOPBACK,
  * which ntlibc defines and test/posix-socket.c uses throughout, is
@@ -422,10 +421,8 @@ static void test_inet_ntop_size_and_family(void)
 	CHECK(inet_ntop(AF_INET, &a, guard, 0) == 0);
 	CHECK(errno == ENOSPC);
 
-	/* "[EAFNOSUPPORT] The af argument is invalid."  posix-socket.c
-	 * asserts the AF_INET6 case, which this file reads as a gap rather
-	 * than as a feature; these two are families the page does not ask
-	 * inet_ntop() to know, so they are the unambiguous half. */
+	/* "[EAFNOSUPPORT] The af argument is invalid."  AF_INET6 is now a
+	 * supported text family; these two remain genuinely unknown. */
 	errno = 0;
 	CHECK(inet_ntop(AF_UNIX, &a, buf, sizeof buf) == 0);
 	CHECK(errno == EAFNOSUPPORT);
@@ -527,9 +524,9 @@ static void test_inet_pton_strict_grammar(void)
 }
 
 /* --------------------------------------------------------------------
- * The AF_INET6 half of inet_ntop.html -- the gap.
+ * The AF_INET6 half of inet_ntop.html.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_text_forms) /* UNIMPL: inet_ntop.html DESCRIPTION -- "The AF_INET and AF_INET6
+#if NTLIBC_TEST(PASS, posix_inet_inet6_text_forms) /* Implemented: inet_ntop.html DESCRIPTION -- "The AF_INET and AF_INET6
 	address families shall be supported."  The same paragraph says
 	of inet_ntop()'s af argument "This can be AF_INET or
 	AF_INET6", and of inet_pton()'s dst buffer that it "shall be
@@ -544,12 +541,10 @@ static void test_inet_pton_strict_grammar(void)
 	represented simply as "::"."; 3. "x:x:x:x:x:x:d.d.d.d", the
 	mixed form whose low 32 bits are written as an IPv4 address.
 
-	src/socket/inet.c implements none of it: both functions open
-	with `if (af != AF_INET)` and report EAFNOSUPPORT, and
-	<netinet/in.h> declares no in6_addr structure, so the test
-	below cannot even be written outside a fence.
+	src/socket/inet.c now implements all three forms and canonical
+	zero-run compression, while <netinet/in.h> supplies in6_addr.
 
-	OBSERVED, not derived, both halves.  Behaviour: linking a
+	THE FORMER FAILURE, observed rather than derived: linking a
 	caller against src/socket/inet.c and a host libc,
 	inet_pton(AF_INET6, "::1", b) and inet_pton(AF_INET6,
 	"2001:db8::1", b) both return -1 with errno EAFNOSUPPORT, and
@@ -563,7 +558,8 @@ static void test_inet_pton_strict_grammar(void)
 	that is there, so the missing definition is a real absence and
 	not a mistyped query.)
 
-	UNIMPL, not N/A, and the distinction matters more here than
+	The former classification was UNIMPL, not N/A, and the distinction
+	mattered more here than
 	anywhere else in the socket subsystem.  The rest of ntlibc's
 	IPv6 absence has a mechanism behind it: an AF_INET6 socket
 	needs an AFD path this tree does not have, and
@@ -573,7 +569,7 @@ static void test_inet_pton_strict_grammar(void)
 	over a 16-byte array -- no descriptor, no device, no ioctl,
 	nothing NT supplies or withholds -- and src/socket/inet.c's own
 	banner says so of the whole file ("pure C with no NT dependency
-	at all").  They are missing because nobody wrote them, which is
+	at all").  They were missing because nobody had written them, which is
 	what UNIMPL means in this ledger.
 
 	NOT N/A on the "no IPv6 stack here" argument, which is the
@@ -583,7 +579,7 @@ static void test_inet_pton_strict_grammar(void)
 	out of a configuration file to validate, compare, store or
 	print it needs the parser and nothing else.
 
-	NOT a BUG either, and this is the counter-argument worth
+	It was not classified as a BUG either, and this counter-argument was
 	writing down, because test/posix-socket.c's test_inet_pton_ntop
 	asserts today's behaviour as CORRECT: [EAFNOSUPPORT] is a
 	documented ERRORS value of both functions, so returning it
@@ -599,14 +595,14 @@ static void test_inet_pton_strict_grammar(void)
 	change silently -- and this fence records that the behaviour
 	they pin is a gap.
 
-	WHAT A CALLER OBSERVES TODAY.  A program that includes
+	WHAT A CALLER OBSERVED BEFORE THE FIX.  A program that includes
 	<arpa/inet.h> and writes `struct in6_addr a; inet_pton(AF_INET6,
 	s, &a);` does not compile (no such type, and no
 	INET6_ADDRSTRLEN to size the other direction's buffer); one
 	that reaches the call through a void * gets -1/EAFNOSUPPORT for
 	every input, well-formed ones included.
 
-	WHAT WOULD HAVE TO BE WRITTEN.  The two conversions in
+	WHAT WAS WRITTEN.  The two conversions in
 	src/socket/inet.c -- the parser is the larger half: eight
 	16-bit fields, at most one "::" run, an optional trailing
 	dotted quad, and for the reverse a rule for choosing which zero
@@ -652,16 +648,16 @@ static void test_inet6_text_forms(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_addrstrlen_defined) /* UNIMPL: basedefs/arpa_inet.h.html DESCRIPTION -- "The
+#if NTLIBC_TEST(PASS, posix_inet_inet6_addrstrlen_defined) /* Implemented: basedefs/arpa_inet.h.html DESCRIPTION -- "The
 	<arpa/inet.h> header shall define the INET_ADDRSTRLEN and
 	INET6_ADDRSTRLEN macros as described in <netinet/in.h>", and
 	basedefs/netinet_in.h.html, which describes them with their
 	values: "INET_ADDRSTRLEN 16. Length of the string form for IP."
 	and "INET6_ADDRSTRLEN 46. Length of the string form for IPv6."
-	ntlibc's <netinet/in.h> defines the first and stops.
+	ntlibc's <netinet/in.h> now defines both.
 
-	Fenced separately from test_inet6_text_forms although it is the
-	same gap, for two reasons.
+	Fenced separately from test_inet6_text_forms because it is a distinct
+	header contract.
 
 	It fails a consumer differently.  A program that sizes a buffer
 	with INET6_ADDRSTRLEN and calls only inet_ntop(AF_INET, ...) --
@@ -681,7 +677,7 @@ static void test_inet6_text_forms(void)
 	so a reader following either banner's scope note would conclude
 	the header is complete.  That is the silence this fence breaks.
 
-	It is deliberately NOT proposed as a standalone fix.  Defining
+	It deliberately did not land as a standalone fix.  Defining
 	a constant that sizes a buffer for a conversion the library
 	cannot perform is the "declared elsewhere, not here" trap
 	<arpa/inet.h>'s own banner says this project avoids, and
@@ -868,11 +864,11 @@ int main(void)
 	test_inet_ntop_size_and_family();
 	test_inet_pton_strict_grammar();
 
-#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_text_forms) /* UNIMPL: see the fence above test_inet6_text_forms.  Fenced here
+#if NTLIBC_TEST(PASS, posix_inet_inet6_text_forms) /* See the fence above test_inet6_text_forms.  Fenced here
 	too because the function it calls is inside that #if 0. */
 	test_inet6_text_forms();
 #endif
-#if NTLIBC_TEST(UNIMPL, posix_inet_inet6_addrstrlen_defined) /* UNIMPL: see the fence above test_inet6_addrstrlen_defined. */
+#if NTLIBC_TEST(PASS, posix_inet_inet6_addrstrlen_defined) /* See the fence above test_inet6_addrstrlen_defined. */
 	test_inet6_addrstrlen_defined();
 #endif
 #if NTLIBC_TEST(PASS, posix_inet_inet_addr_rejects_sign_and_space)
