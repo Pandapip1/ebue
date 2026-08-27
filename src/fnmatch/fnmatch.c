@@ -84,6 +84,11 @@ static int bracket_match(const char **pp, unsigned char c, int flags)
 				p = q + 2;
 				continue;
 			}
+			/* A class introducer without its ":]" delimiter is a
+			 * malformed bracket expression, not a set containing '[' and
+			 * ':'.  Keep this distinct from an unterminated ordinary set,
+			 * whose opening '[' is demoted to a literal by XCU 2.13.1. */
+			return -2;
 		}
 		if (p[0] == '[' && (p[1] == '.' || p[1] == '=')) {
 			char kind = p[1];
@@ -97,19 +102,11 @@ static int bracket_match(const char **pp, unsigned char c, int flags)
 		}
 		{
 			unsigned char lo = (unsigned char)*p;
-			if (!(flags & FNM_NOESCAPE) && lo == '\\' && p[1]) {
-				p++;
-				lo = (unsigned char)*p;
-			}
 			p++;
 			if (*p == '-' && p[1] && p[1] != ']') {
 				unsigned char hi;
 				p++;
 				hi = (unsigned char)*p;
-				if (!(flags & FNM_NOESCAPE) && hi == '\\' && p[1]) {
-					p++;
-					hi = (unsigned char)*p;
-				}
 				p++;
 				if (c >= lo && c <= hi) matched = 1;
 			} else {
@@ -164,6 +161,7 @@ static int fnm_match(const char *pat, const char *s, const char *start, int flag
 			 * match; an unterminated '[' is not one, and must be judged
 			 * as the ordinary character it is. */
 			r = *s ? bracket_match(&probe, c, flags) : -1;
+			if (r == -2) return FNM_NOMATCH;
 			if (r < 0) {
 				/* not a bracket expression: a literal '[' */
 				if (*s != '[') return FNM_NOMATCH;

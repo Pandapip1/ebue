@@ -1319,6 +1319,16 @@ static void test_fnmatch_bracket_edges(void)
 	CHECK(fnmatch("[]-]", "-", 0) == 0);
 	CHECK(fnmatch("[]-]", "]", 0) == 0);
 	CHECK(fnmatch("[\n]", "\n", 0) == 0);
+
+	/* A backslash inside a bracket expression is an ordinary member;
+	 * the following ']' still terminates the expression. */
+	CHECK(fnmatch("[[?*\\]", "\\", 0) == 0);
+	CHECK(fnmatch("[]?*\\]", "]", 0) == 0);
+
+	/* An incomplete character-class delimiter must not turn a negated
+	 * malformed expression into a wildcard match. */
+	CHECK(fnmatch("*[![:digit:]]*/[![:d-d]", "a/b", FNM_PATHNAME) != 0);
+	CHECK(fnmatch("*[![:digit:]]*/[[:d-d]", "a/[", FNM_PATHNAME) != 0);
 }
 
 #if NTLIBC_TEST(PASS, posix_glob_fnmatch_collating_and_equivalence) /* fnmatch() recognises collating symbols "[. .]" and
