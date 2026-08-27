@@ -723,7 +723,7 @@ static void test_posix_realtime_timer_settime_gettime(void)
  * nothing else; this is that sentence, made testable.
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_sched_policy_priorities)
+#if NTLIBC_TEST(PASS, posix_realtime_sched_policy_priorities)
 #include <sched.h>
 #include <unistd.h>
 #include <time.h>

@@ -10,6 +10,7 @@
 #include <locale.h>
 #include <assert.h>
 #include <unistd.h>
+#include <sched.h>
 #include <sys/wait.h>
 
 static int fails;
@@ -71,6 +72,32 @@ static void test_env(void)
 	CHECK(unsetenv("NTLIBC_PUTENV") == 0);
 	CHECK(getenv("NTLIBC_PUTENV") == NULL);
 	CHECK(!env_has("NTLIBC_PUTENV="));
+}
+
+/* ---- process scheduling ---- */
+static void test_sched(void)
+{
+	struct sched_param param;
+	struct timespec interval;
+	int min = sched_get_priority_min(SCHED_FIFO);
+	int max = sched_get_priority_max(SCHED_FIFO);
+
+	CHECK(min >= 0 && max >= min);
+	CHECK(sched_getscheduler(0) == SCHED_OTHER);
+	CHECK(sched_getparam(0, &param) == 0);
+	param.sched_priority = min;
+	CHECK(sched_setscheduler(0, SCHED_FIFO, &param) == 0);
+	CHECK(sched_getscheduler(0) == SCHED_FIFO);
+	param.sched_priority = max;
+	CHECK(sched_setparam(0, &param) == 0);
+	param.sched_priority = -1;
+	CHECK(sched_getparam(0, &param) == 0 && param.sched_priority == max);
+	CHECK(sched_rr_get_interval(0, &interval) == 0);
+	CHECK(interval.tv_sec == 0 && interval.tv_nsec > 0);
+	errno = 0;
+	CHECK(sched_get_priority_max(-1) == -1 && errno == EINVAL);
+	param.sched_priority = 0;
+	CHECK(sched_setscheduler(0, SCHED_OTHER, &param) == 0);
 }
 
 /* ---- system() ---- */
@@ -362,6 +389,7 @@ int main(int argc, char **argv)
 
 	unlink("misc-exit-flush.tmp");
 	test_env();
+	test_sched();
 	test_system();
 	test_setjmp();
 	test_signal();
