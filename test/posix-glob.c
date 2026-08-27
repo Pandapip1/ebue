@@ -726,6 +726,7 @@ static void test_wordexp_tilde_and_param(void)
 	      strcmp(we.we_wordv[2], "xabcax") == 0 &&
 	      strcmp(we.we_wordv[3], "xax") == 0);
 	wordfree(&we);
+	CHECK(wordexp("${WORDEXP_NEVER_SET:?required}", &we, 0) == WRDE_SYNTAX);
 	unsetenv("WORDEXP_SET");
 	unsetenv("WORDEXP_UNSET");
 	unsetenv("WORDEXP_TRIM");

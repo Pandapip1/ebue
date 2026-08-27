@@ -47,6 +47,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <unistd.h>
 #include "internal.h"
 #include "libc.h"
 
@@ -467,9 +468,17 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 			if (op == '+') return 0;
 			return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
 		}
-		if (op == '?') return WRDE_SYNTAX;
 		rc = expand_param_word(word, end, flags, sh, ctx, &replacement);
 		if (rc) return rc;
+		if (op == '?') {
+			if (flags & WRDE_SHOWERR) {
+				const char *message = *replacement ? replacement : "parameter is unset";
+				write(2, message, strlen(message));
+				write(2, "\n", 1);
+			}
+			__free(replacement);
+			return WRDE_SYNTAX;
+		}
 		if (op == '=' && (rc = assign_param(ctx, name, replacement))) {
 			__free(replacement);
 			return rc;
