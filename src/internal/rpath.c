@@ -240,9 +240,8 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname)
 			path = join("", dllname); /* normalises slashes; dir="" leaves a leading '\\' */
 			if (path && path[0] == '\\') memmove(path, path + 1, strlen(path));
 		} else {
-			char *dir = image_dir();
-			if (!dir) { set_err(STATUS_NO_MEMORY, dllname); return 0; }
-			path = join(dir, dllname);
+			path = join("", dllname);
+			if (path && path[0] == '\\') memmove(path, path + 1, strlen(path));
 		}
 		if (!path) { set_err(STATUS_NO_MEMORY, dllname); return 0; }
 		st = try_load(path, &handle);

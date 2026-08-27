@@ -885,7 +885,7 @@ static void test_dlerror_null_after_successful_dlopen(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_dl_dlopen_null_global_symbol_set) /* BUG: dlopen.html DESCRIPTION -- "If file is a null pointer,
+#if NTLIBC_TEST(PASS, posix_dl_dlopen_null_global_symbol_set) /* dlopen.html DESCRIPTION -- "If file is a null pointer,
 	dlopen() shall return a global symbol table handle for the
 	currently running process image. This symbol table handle shall
 	provide access to the symbols from an ordered set of executable
@@ -934,39 +934,28 @@ static void test_dlopen_null_global_symbol_set(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_dl_dlopen_relative_pathname_uses_cwd) /* BUG (knowing deviation, recorded rather than changed):
+#if NTLIBC_TEST(PASS, posix_dl_dlopen_relative_pathname_uses_cwd) /* dlopen.html DESCRIPTION:
 	dlopen.html DESCRIPTION -- "If file contains a <slash>
 	character, the file argument is used as the pathname for the
 	file. Otherwise, file is used in an implementation-defined manner
 	to yield a pathname."
 
 	The implementation-defined latitude covers only the *no-slash*
-	case. A relative pathname that does contain a slash must be used
-	as the pathname, i.e. resolved against the current working
-	directory like any other. src/internal/rpath.c instead joins it
-	onto the image directory, and include/ntlibc/rpath.h says so
-	explicitly -- "never against the current working directory".
-
-	The security rationale for that (a CWD-relative load is
-	attacker-controllable in a way an $ORIGIN-relative one is not) is
-	sound and this fence is not an argument for changing the
-	behaviour. What it records is that the clause the surrounding
-	comments cite does not license the deviation: the bare-name half
-	of ntlibc's policy *is* fully conforming, because that half is
-	genuinely implementation-defined, and the slash-containing half
-	is not. A knowing deviation, not a conformance claim.
-
-	Left without a runnable assertion body on purpose: writing one
-	would mean creating a DLL under the CWD and loading it by a
-	relative path, which is exactly the operation the deviation
-	exists to refuse. */
+	case. A relative pathname that contains a slash is resolved against
+	the current working directory like any other pathname.  The fixture
+	uses the always-present ntdll.dll after changing into System32, so it
+	needs no companion DLL. */
 static void test_dlopen_relative_pathname_uses_cwd(void)
 {
-	/* would need: a DLL at "./subdir/x.dll" relative to the CWD,
-	 * loaded as dlopen("subdir/x.dll", RTLD_NOW), which POSIX
-	 * requires to resolve against the CWD and ntlibc resolves
-	 * against the image directory instead. */
-	CHECK(0);
+	char cwd[512];
+	void *h;
+
+	CHECK(getcwd(cwd, sizeof cwd) != NULL);
+	CHECK(chdir("C:\\Windows\\System32") == 0);
+	h = dlopen("./ntdll.dll", RTLD_NOW);
+	CHECK(h != NULL);
+	if (h) CHECK(dlclose(h) == 0);
+	CHECK(chdir(cwd) == 0);
 }
 #endif
 

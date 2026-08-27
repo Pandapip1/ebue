@@ -35,10 +35,9 @@
  * ntlibc_rpath_load(dllname):
  *
  *   1. If dllname itself contains a path component ('/' or '\\', or a
- *      drive letter): an absolute one is used as-is; a relative one is
- *      resolved against the image's own directory ($ORIGIN) -- *never*
- *      against the current working directory -- and __rpath is not
- *      consulted at all.
+ *      drive letter): it is used as a pathname.  Absolute paths are
+ *      used as-is and relative paths resolve against the current working
+ *      directory; __rpath is not consulted.
  *   2. Otherwise, __rpath's entries are tried in array order. A relative
  *      entry is resolved against the image directory ($ORIGIN); an
  *      absolute entry (leading '/' or '\\', or a drive letter) is used
@@ -73,15 +72,16 @@
  * that lets an attacker-writable directory sit ahead of the real DLL in
  * the search order lets them substitute their own. This implementation:
  *
- *   - never consults the current working directory, at any step;
+ *   - consults the current working directory only when the caller
+ *     explicitly supplies a relative pathname containing a separator;
  *   - never calls LdrLoadDll with a bare (unqualified) name -- every
  *     candidate handed to the loader is already a fully-qualified path
  *     that this code built itself, so the loader's own search order
  *     (which does include the CWD on plenty of Windows configurations)
  *     is never invoked by this API;
- *   - resolves every relative __rpath entry, and every relative
- *     dllname-with-a-path, against the image's own directory, which is
- *     no more attacker-controlled than the executable itself is;
+ *   - resolves every relative __rpath entry against the image's own
+ *     directory, which is no more attacker-controlled than the
+ *     executable itself is;
  *   - does not follow symlinks/junctions specially or expand
  *     environment references in __rpath entries -- an entry is either a
  *     literal absolute path or a literal path fragment joined onto the

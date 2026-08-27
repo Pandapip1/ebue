@@ -112,39 +112,22 @@
  * calls on the same fully-qualified path (test_dlclose_refcounts,
  * test/posix-dl.c, exercises exactly this).
  *
- * ---- dlopen(NULL, ...): the main program's own exports ---------------
+ * ---- dlopen(NULL, ...): the process-global symbol set ----------------
  *
  * dlopen.html DESCRIPTION: "If file is a null pointer, dlopen() shall
  * return a global symbol table handle for the currently running
  * process image." __peb->ImageBaseAddress (src/internal/nt.h's PEB,
  * populated by the OS before crt1.c ever runs) is exactly that: the
  * base address of the main executable's own already-mapped PE image,
- * the same kind of value ntlibc_rpath_load() returns for a DLL.
- * LdrGetProcedureAddress() -- what ntlibc_rpath_sym() already wraps --
- * does not care whether the base it is handed is a DLL or the main
- * EXE; it walks that image's own IMAGE_EXPORT_DIRECTORY exactly the
- * same way either time (src/internal/pe.c's hand-rolled walker does
- * this identically, for the same reason). So dlsym() on this handle is
- * not a special case below -- it is routed through ntlibc_rpath_sym()
- * like any other handle.
+ * and is used as the distinguished global handle.  dlsym() recognises
+ * it and walks PEB_LDR_DATA's load-order list, asking each module for
+ * the symbol until one succeeds.  That includes the original image,
+ * startup-loaded DLLs, and later LdrLoadDll modules in loader order.
  *
- * What IS a real, worth-recording limitation: an ordinary ntlibc
- * program is a `-nostdlib`-linked, tcc-built PE executable, and tcc
- * does not emit an export directory for an EXE unless something asks
- * it to (there is no ordinary reason to export symbols from a program
- * that is not itself a DLL) -- so DataDirectory[IMAGE_DIRECTORY_ENTRY_
- * EXPORT] is empty for a normal ntlibc-linked program, and every
- * dlsym() call against a dlopen(NULL, ...) handle fails with "symbol
- * not found" (STATUS_ENTRYPOINT_NOT_FOUND, via LdrGetProcedureAddress)
- * even for a symbol that is plainly defined in that very program. This
- * is not a bug in this file: dlopen(NULL, ...) itself succeeds and
- * returns a real, usable-for-dlclose() handle, exactly as specified;
- * it is dlsym() against it that can only ever see what the linker
- * chose to export, and by default that set is empty. A program that
- * wants dlopen(NULL, ...)+dlsym() to find its own symbols would need
- * to link with an explicit export directive (tcc's -bt/-rdynamic-
- * equivalent, if any, or a hand-written .def) -- out of scope for this
- * change, which only had to say why the handle alone is not enough.
+ * An ordinary tcc-linked EXE still has no export directory, so symbols
+ * defined only by the main program require an explicit linker export.
+ * That does not make the global set empty: startup and loaded DLLs are
+ * searched after the executable.
  *
  * ---- native ASan/UBSan build -------------------------------------------
  *
@@ -175,6 +158,7 @@
 #endif
 #include <stddef.h>
 #include <dlfcn.h>
+#include <string.h>
 #include "libc.h"
 #include "ntlibc/rpath.h"
 
@@ -196,6 +180,26 @@ void *dlopen(const char *file, int mode)
 
 void *dlsym(void *__restrict handle, const char *__restrict name)
 {
+	if (handle == MAIN_IMAGE_HANDLE && __peb->Ldr) {
+		LIST_ENTRY *head = &__peb->Ldr->InLoadOrderModuleList;
+		LIST_ENTRY *link;
+		ANSI_STRING symbol;
+
+		symbol.Buffer = (char *)name;
+		symbol.Length = (USHORT)strlen(name);
+		symbol.MaximumLength = symbol.Length;
+		for (link = head->Flink; link != head; link = link->Flink) {
+			LDR_DATA_TABLE_ENTRY *entry =
+				(LDR_DATA_TABLE_ENTRY *)((char *)link -
+				 offsetof(LDR_DATA_TABLE_ENTRY, InLoadOrderLinks));
+			PVOID address = 0;
+			if (NT_SUCCESS(LdrGetProcedureAddress(entry->DllBase,
+					&symbol, 0, &address)))
+				return address;
+		}
+		/* Record the ordinary diagnosable symbol error after the global
+		 * search, without recording every module miss along the way. */
+	}
 	return ntlibc_rpath_sym((ntlibc_dll_t *)handle, name);
 }
 
