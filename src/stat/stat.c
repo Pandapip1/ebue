@@ -3,9 +3,9 @@
  *
  * stat, from the information NT keeps.
  *
- * Execute/search bits come from WSL's $LXMOD NTFS extended attribute when
- * it exists.  It is a four-byte mode value and gives chmod() a persistent
- * execute bit without editing a Windows DACL.  ntlibc intentionally does
+ * Permission and special bits come from WSL's $LXMOD NTFS extended attribute
+ * when it exists.  It is a four-byte mode value and gives files created by
+ * ntlibc a persistent POSIX mode without editing a Windows DACL.  ntlibc does
  * not create $LXUID or $LXGID: those are literal IDs in a WSL distribution
  * and cannot be derived from ntlibc's Windows process identity.
  *
@@ -147,10 +147,12 @@ static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
 	else if (S_ISDIR(m)) m |= 0755;
 	else if (S_ISCHR(m)) m |= 0666;
 	else m |= exe ? 0755 : 0644;
-	/* $LXMOD owns the execute/search bits.  Read stays synthetic and
-	 * write remains the FILE_ATTRIBUTE_READONLY mapping. */
-	if (have_lxmod) m = (m & ~0111) | (lxmod & 0111);
-	if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
+	/* $LXMOD is the POSIX mode record, not merely an execute-bit sidecar.
+	 * Keep the type derived from the live NT object, but report every
+	 * permission and special bit from the metadata.  Files without the EA
+	 * retain the historical attribute/suffix compatibility fallback. */
+	if (have_lxmod) m = (m & S_IFMT) | (lxmod & 07777);
+	else if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
 	return m;
 }
 
@@ -221,9 +223,16 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 int fstat(int fd, struct stat *st)
 {
 	struct __fd *f = __fd_get(fd);
+	int result;
 	if (!f) return -1;
 	if (f->vfs && !f->vfs_native) return __vfs_stat(f->vfs, st);
-	return __fstat_handle(f->h, f->type, st);
+	result = __fstat_handle(f->h, f->type, st);
+	/* Wine does not retain the $LXMOD EA supplied to NtCreateFile.  A
+	 * shm descriptor carries the mode read from its private namespace
+	 * sidecar so fstat() can report the same persistent POSIX metadata. */
+	if (result == 0 && f->shm_mode_valid)
+		st->st_mode = (st->st_mode & S_IFMT) | (f->shm_mode & 07777);
+	return result;
 }
 
 int fstatat(int dirfd, const char *path, struct stat *st, int flags)

@@ -33,6 +33,8 @@ int fcntl(int fd, int cmd, ...)
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 		__fd_install_at(nfd, h, (f->flags & ~O_CLOEXEC) | (cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0), f->type);
 		__fds[nfd].pad = f->pad;
+		__fds[nfd].shm_mode_valid = f->shm_mode_valid;
+		__fds[nfd].shm_mode = f->shm_mode;
 		__fds[nfd].vfs = f->vfs;
 		__fds[nfd].vfs_native = f->vfs_native;
 		__fds[nfd].vseen = f->vseen;

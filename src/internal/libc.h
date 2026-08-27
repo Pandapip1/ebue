@@ -172,7 +172,7 @@ struct __fd {
 	unsigned char type;    /* __FD_* */
 	unsigned char eof;     /* a pipe/console that has reported end of input */
 	unsigned char dirflag; /* for directories: 0 or FILE_OPEN_REPARSE_POINT used */
-	unsigned char pad;
+	unsigned char pad;     /* socket connection state (AFD_ST_*) */
 	unsigned char vfs;     /* one of __VFS_* above; zero for an NT object */
 	unsigned char vfs_native; /* vfs names a native object, not a fallback */
 	unsigned char vseen;   /* mandatory native-directory entries observed */
@@ -184,6 +184,8 @@ struct __fd {
 	 * sufficient and avoids depending on that ioctl. */
 	unsigned char peer[16];
 	unsigned char peer_len;
+	unsigned char shm_mode_valid; /* mode below came from shm_open metadata */
+	unsigned short shm_mode;
 	long long pos;         /* the position of an O_APPEND/async-opened handle; -1 = use the kernel's */
 };
 

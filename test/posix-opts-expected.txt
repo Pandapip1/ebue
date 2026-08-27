@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=918 BUG=67 UNIMPL=528 NA=94 FLAKY=3
+# COUNTS PASS=919 BUG=66 UNIMPL=528 NA=94 FLAKY=3
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
@@ -911,7 +911,7 @@ shm_open/14-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 shm_open/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 shm_open/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 shm_open/17-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-shm_open/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	shm_open creates the object, but stat intentionally consumes only execute bits from $LXMOD and cannot report the requested owner/group/other read/write mode independently
+shm_open/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	shm_open persists the creation mode after applying umask and fstat reports its independent owner/group/other permission bits
 shm_open/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 shm_open/20-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 shm_open/20-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-

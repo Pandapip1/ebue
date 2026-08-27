@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 /* The extension gate is load-bearing (see include/sys/mman.h): tests are
  * built with no feature-test macro, so features.h's default arm defines
@@ -538,6 +539,8 @@ static void test_posix_mman_shm_open_unlink(void)
 {
 	int fd, again;
 	void *p;
+	mode_t oldmask;
+	struct stat st;
 	CHECK(_POSIX_SHARED_MEMORY_OBJECTS > 0);
 	CHECK(sysconf(_SC_SHARED_MEMORY_OBJECTS) > 0);
 
@@ -595,6 +598,30 @@ static void test_posix_mman_shm_open_unlink(void)
 	errno = 0;
 	CHECK(shm_unlink("/ntlibc_mman_shm") == -1);
 	CHECK(errno == ENOENT);
+
+	/* Creation mode is persistent metadata and must retain independent
+	 * owner/group/other bits after applying umask.  This is the exact
+	 * permission shape exercised by Open POSIX shm_open/18-1. */
+	shm_unlink("/ntlibc_mman_shm_mode");
+	oldmask = umask(S_IRGRP | S_IWOTH);
+	fd = shm_open("/ntlibc_mman_shm_mode", O_CREAT | O_EXCL | O_RDONLY,
+	              S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+	umask(oldmask);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(fstat(fd, &st) == 0);
+		CHECK((st.st_mode & 0777) == (S_IWUSR | S_IWGRP | S_IROTH));
+		CHECK(close(fd) == 0);
+		fd = shm_open("/ntlibc_mman_shm_mode", O_RDONLY, 0);
+		CHECK(fd >= 0);
+		if (fd >= 0) {
+			CHECK(fstat(fd, &st) == 0);
+			CHECK((st.st_mode & 0777) ==
+			      (S_IWUSR | S_IWGRP | S_IROTH));
+			CHECK(close(fd) == 0);
+		}
+		CHECK(shm_unlink("/ntlibc_mman_shm_mode") == 0);
+	}
 
 	/* A mapping is itself a reference to the object.  Removing the name
 	 * must therefore succeed after the descriptor is closed, while the

@@ -21,6 +21,8 @@ static int dup_to(int fd, int newfd, int cloexec)
 	if (__fds[newfd].h) NtClose(__fds[newfd].h);
 	__fd_install_at(newfd, h, (state.flags & ~O_CLOEXEC) | (cloexec ? O_CLOEXEC : 0), state.type);
 	__fds[newfd].pad = state.pad;
+	__fds[newfd].shm_mode_valid = state.shm_mode_valid;
+	__fds[newfd].shm_mode = state.shm_mode;
 	__fds[newfd].vfs = state.vfs;
 	__fds[newfd].vfs_native = state.vfs_native;
 	__fds[newfd].vseen = state.vseen;
