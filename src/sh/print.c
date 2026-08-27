@@ -38,6 +38,65 @@ static void queue_heredoc(struct pctx *c, const struct sh_redir *r)
 	c->tail = n;
 }
 
+static void queue_nested_heredocs_list(struct pctx *, const struct sh_list *);
+
+/* Function definitions are printed from func_text, but parse.c may retain
+ * their body AST when a here-document was still pending at the end of the
+ * definition.  Walk that retained tree in source order so the bodies are
+ * emitted after the definition's terminating newline just like any other
+ * queued here-document. */
+static void queue_nested_heredocs_command(struct pctx *c,
+		const struct sh_command *cmd)
+{
+	const struct sh_ifarm *arm;
+	const struct sh_redir *r;
+
+	switch (cmd->kind) {
+	case SH_CMD_SUBSHELL:
+	case SH_CMD_BRACE:
+		queue_nested_heredocs_list(c, cmd->body);
+		break;
+	case SH_CMD_IF:
+		for (arm = cmd->arms; arm; arm = arm->next) {
+			queue_nested_heredocs_list(c, arm->cond);
+			queue_nested_heredocs_list(c, arm->body);
+		}
+		queue_nested_heredocs_list(c, cmd->else_body);
+		break;
+	case SH_CMD_LOOP:
+		queue_nested_heredocs_list(c, cmd->cond);
+		queue_nested_heredocs_list(c, cmd->body);
+		break;
+	case SH_CMD_FOR:
+		queue_nested_heredocs_list(c, cmd->body);
+		break;
+	case SH_CMD_FUNCDEF:
+		if (cmd->func_body)
+			queue_nested_heredocs_command(c, cmd->func_body);
+		break;
+	default:
+		break;
+	}
+	for (r = cmd->redirs; r; r = r->next)
+		if (r->op == SH_R_DLESS || r->op == SH_R_DLESSDASH)
+			queue_heredoc(c, r);
+}
+
+static void queue_nested_heredocs_list(struct pctx *c,
+		const struct sh_list *list)
+{
+	const struct sh_list_item *item;
+	const struct sh_andor *andor;
+	size_t i;
+
+	if (!list) return;
+	for (item = list->items; item; item = item->next)
+		for (andor = item->andor; andor; andor = andor->next)
+			for (i = 0; i < andor->pipeline.ncommands; i++)
+				queue_nested_heredocs_command(c,
+				    &andor->pipeline.commands[i]);
+}
+
 static void drain_heredocs(struct pctx *c)
 {
 	struct hdq *h = c->head;
@@ -147,6 +206,8 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 		fputs(cmd->name, c->f);
 		fputs("() ", c->f);
 		fputs(cmd->func_text, c->f);
+		if (cmd->func_body)
+			queue_nested_heredocs_command(c, cmd->func_body);
 		break;
 	default:
 		print_words(c, cmd->assigns, 0);

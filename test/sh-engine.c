@@ -761,6 +761,12 @@ static void test_funcdef_heredoc_before_list_operator(void)
 		if (l->items) CHECK(l->items->next == 0);
 		__sh_list_free(l);
 	}
+
+	/* The retained body is also the printer's only route to a pending
+	 * here-document.  If it prints only func_text, the following `x'
+	 * line becomes the empty-delimiter here-document body on reparse and
+	 * disappears from the second print.  Reduced from a fuzz finding. */
+	check_roundtrip("f()()<<\"\"&x&\ny\n");
 }
 
 #if NTLIBC_TEST(PASS, sh_engine_heredoc_quoted_delim_roundtrip) /* The printer writes a here-document's quote-removed terminator.
