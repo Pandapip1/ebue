@@ -141,7 +141,7 @@ static char *join(const char *dir, const char *tail)
 
 /* ---- last-failure record ----------------------------------------------- */
 
-static struct {
+static struct rpath_error {
 	int valid;
 	NTSTATUS status;
 	char what[1024];
@@ -253,6 +253,7 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname)
 
 	{
 		const char *const *entry = __rpath;
+		struct rpath_error saved_err = last_err;
 		int tried = 0;
 		for (; entry && *entry; entry++) {
 			char *dir;
@@ -272,7 +273,11 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname)
 			if (!full) { set_err(STATUS_NO_MEMORY, dllname); return 0; }
 
 			st = try_load(full, &handle);
-			if (NT_SUCCESS(st)) { __free(full); return handle; }
+			if (NT_SUCCESS(st)) {
+				__free(full);
+				last_err = saved_err;
+				return handle;
+			}
 			set_err(st, full); /* overwritten by a later entry's failure, if any */
 			__free(full);
 		}

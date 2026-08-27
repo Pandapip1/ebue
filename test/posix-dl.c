@@ -840,7 +840,7 @@ static void test_dlfcn_header_constants(void)
 	CHECK((RTLD_NOW & RTLD_GLOBAL) == 0 && (RTLD_NOW & RTLD_LOCAL) == 0);
 }
 
-#if NTLIBC_TEST(BUG, posix_dl_dlerror_null_after_successful_dlopen) /* BUG: dlerror.html DESCRIPTION -- "If no dynamic linking errors
+#if NTLIBC_TEST(PASS, posix_dl_dlerror_null_after_successful_dlopen) /* dlerror.html DESCRIPTION -- "If no dynamic linking errors
 	have occurred since the last invocation of dlerror(), dlerror()
 	shall return NULL."
 
