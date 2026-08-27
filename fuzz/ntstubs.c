@@ -3947,6 +3947,12 @@ NOTIMPL(NtCreateThreadEx, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, HANDL
 	PVOID e, PVOID f, ULONG g, SIZE_T h, SIZE_T i, SIZE_T j, PVOID k))
 NOTIMPL(NtTerminateThread, (HANDLE a, NTSTATUS b))
 NOTIMPL(NtQueryInformationThread, (HANDLE a, THREADINFOCLASS b, PVOID c, ULONG d, PULONG e))
+/* pthread_cancel() queues its callback through the target's NT thread
+ * handle.  Native pthread creation is deliberately refused above, so no
+ * such handle exists here and executing the callback synchronously would
+ * invent both a target thread and APC delivery semantics.  Refuse the new
+ * boundary explicitly, as for the rest of the NT thread substrate. */
+NOTIMPL(NtQueueApcThread, (HANDLE a, PKNORMAL_ROUTINE b, PVOID c, PVOID d, PVOID e))
 /* POSIX semaphores are backed by NT dispatcher objects.  The current fuzz
  * targets do not exercise that transport; refuse it explicitly so adding
  * semaphore.c to the native whole-library link does not invent semantics. */
