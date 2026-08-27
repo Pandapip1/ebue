@@ -137,7 +137,10 @@ static int pton6(const char *src, unsigned char out[16])
 	int saw_digit = 0, digits = 0;
 
 	memset(tmp, 0, sizeof tmp);
-	if (*src == ':' && *++src != ':') return 0;
+	if (*src == ':') {
+		src++;
+		if (*src != ':') return 0;
+	}
 	token = src;
 	while (*src) {
 		int h = hexval((unsigned char)*src);
@@ -168,7 +171,6 @@ static int pton6(const char *src, unsigned char out[16])
 			if (!pton4(token, p)) return 0;
 			p += 4;
 			saw_digit = 0;
-			src += strlen(src);
 			break;
 		}
 		return 0;
@@ -211,7 +213,10 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 			n = snprintf(buf, sizeof buf, "::ffff:%u.%u.%u.%u",
 			             b[12], b[13], b[14], b[15]);
 		} else {
-			for (i = 0; i < 8; i++) words[i] = (unsigned)b[2*i] << 8 | b[2*i+1];
+			for (i = 0; i < 8; i++) {
+				size_t offset = 2 * (size_t)i;
+				words[i] = (unsigned)b[offset] << 8 | b[offset + 1];
+			}
 			for (i = 0; i < 8;) {
 				int j;
 				if (words[i]) { i++; continue; }
