@@ -133,7 +133,9 @@ static int ensure_dir(const char *path)
 	return 0;
 }
 
-static unsigned long long path_hash(const char *s)
+/* FNV-1a is defined by multiplication modulo 2^64.  The wrap is the hash
+ * operation, not an exceptional arithmetic result. */
+__wraps static unsigned long long path_hash(const char *s)
 {
 	unsigned long long h = 1469598103934665603ULL;
 	while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
