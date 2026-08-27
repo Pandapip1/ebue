@@ -78,13 +78,6 @@ void __pthread_cleanup_pop(struct __pthread_cleanup *cleanup, int execute)
 	if (execute) cleanup->__routine(cleanup->__argument);
 }
 
-/* Filled in by the thread-specific-data slice; keeping the hook here makes
- * the lifecycle ordering explicit from the first working pthread_exit(). */
-void __pthread_run_specific_destructors(struct __pthread *self)
-{
-	(void)self;
-}
-
 static void finish(struct __pthread *self, void *result)
 {
 	int detached;

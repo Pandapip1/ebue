@@ -21,6 +21,11 @@ struct __pthread_attr_data {
 	int sched_priority;
 };
 
+struct __pthread_specific {
+	pthread_key_t key;
+	void *value;
+};
+
 struct __pthread {
 	unsigned magic;
 	HANDLE handle;
@@ -37,7 +42,7 @@ struct __pthread {
 	int sched_policy;
 	int sched_priority;
 	struct __pthread_cleanup *cleanup;
-	void **specific;
+	struct __pthread_specific *specific;
 };
 
 extern __thread struct __pthread *__pthread_self_control;

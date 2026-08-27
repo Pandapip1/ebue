@@ -561,7 +561,7 @@ static void test_pthread_spin_lock_trylock(void)
  * One-time initialization -- .../functions/pthread_once.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_once_runs_once)
+#if NTLIBC_TEST(PASS, posix_pthread_once_runs_once)
 #include <pthread.h>
 
 static pthread_once_t once_ctl = PTHREAD_ONCE_INIT;
@@ -594,7 +594,7 @@ static void test_pthread_once_runs_once(void)
  * pthread_getspecific.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_specific_key)
+#if NTLIBC_TEST(PASS, posix_pthread_specific_key)
 #include <pthread.h>
 
 static int tsd_destructor_calls;
