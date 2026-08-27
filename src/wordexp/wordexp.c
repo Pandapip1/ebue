@@ -148,6 +148,12 @@ static char *xstrdup(const char *s)
 }
 
 static int is_ifs(char c) { return c == ' ' || c == '\t' || c == '\n'; }
+static int is_split_char(char c)
+{
+	const char *ifs = getenv("IFS");
+	if (!ifs) ifs = " \t\n";
+	return strchr(ifs, c) != 0;
+}
 static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; }
 static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
@@ -584,6 +590,41 @@ nospace:
 	return WRDE_NOSPACE;
 }
 
+/* Field-split the live bytes appended by an unquoted expansion.  Input
+ * syntax whitespace is handled by the main scanner; IFS applies here,
+ * to expansion results. */
+static int split_appended(struct fbuf *b, struct pv *out, int *active,
+                          size_t before)
+{
+	size_t i, n = b->n - before;
+	char *text;
+	int rc;
+
+	if (!n) return 0;
+	text = __malloc(n);
+	if (!text) return WRDE_NOSPACE;
+	memcpy(text, b->data + before, n);
+	b->n = before;
+	for (i = 0; i < n; i++) {
+		if (is_split_char(text[i])) {
+			if (*active) {
+				rc = emit_field(b, out);
+				fbuf_free(b);
+				*active = 0;
+				if (rc) { __free(text); return rc; }
+			}
+		} else {
+			if (fbuf_push(b, text[i], 0)) {
+				__free(text);
+				return WRDE_NOSPACE;
+			}
+			*active = 1;
+		}
+	}
+	__free(text);
+	return 0;
+}
+
 /* If `p` (pointing at a '$') introduces "$@"/"${@}" or "$*"/"${*}",
  * returns '@' or '*' and sets *end past the whole expansion; otherwise
  * returns 0 and leaves *end alone.  Only the bare and fully-braced
@@ -739,6 +780,7 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 			}
 			if (c == '\\') {
 				if (!p[1]) { rc = WRDE_SYNTAX; goto fail; }
+				if (p[1] == '\n') { p += 2; continue; }
 				if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; }
 				active = 1;
 				p += 2;
@@ -764,7 +806,7 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 				rc = run_cmdsub(&p, flags, &o);
 				if (rc) goto fail;
 				for (i = 0; o[i]; i++) {
-					if (is_ifs(o[i])) {
+					if (is_split_char(o[i])) {
 						if (active) {
 							rc = emit_field(&field, &out);
 							fbuf_free(&field);
@@ -802,7 +844,8 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 				before = field.n;
 				rc = expand_param(&p, &field, flags, sh, 0);
 				if (rc) goto fail;
-				if (field.n != before) active = 1;
+				rc = split_appended(&field, &out, &active, before);
+				if (rc) goto fail;
 				continue;
 			}
 			if (c == '~' && !active) {
@@ -831,6 +874,7 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 				continue;
 			}
 			if (c == '\\' && p[1] && strchr("\"\\$`\n", p[1])) {
+				if (p[1] == '\n') { p += 2; continue; }
 				if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; }
 				p += 2;
 				continue;
@@ -925,6 +969,10 @@ fail:
 		 * array wrapper itself (a separate allocation from
 		 * pwordexp->we_wordv, safe to free either way). */
 		pv_free_from(&out, base);
+		if (!(flags & WRDE_APPEND)) {
+			pwordexp->we_wordc = 0;
+			pwordexp->we_wordv = 0;
+		}
 	}
 	if (rc == WRDE_NOSPACE) errno = ENOMEM;
 	return rc;

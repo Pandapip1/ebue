@@ -3400,28 +3400,15 @@ static void test_for_loop(const char *self)
 	CHECK(status == 0);
 	unsetenv("SHT_LIST");
 
-	/* ---- two inherited wordexp() gaps, pinned deliberately ----------
+	/* ---- inherited wordexp() behavior -------------------------------
 	 *
-	 * Both of these assert what this shell *does*, not what XCU 2.6
-	 * says, and both belong to src/wordexp/wordexp.c rather than to
-	 * exec_for() -- a simple command's arguments go through the exact
-	 * same call and get the exact same answer, so "fixing" either one
-	 * here would make `for f in $X` and `cmd $X` disagree about what a
-	 * word expands to inside one shell, which is worse than one
-	 * consistent, documented gap.  include/wordexp.h states both.
-	 * When wordexp() grows the missing behaviour these two assertions
-	 * are what will notice, so they invert rather than silently start
-	 * passing for a new reason.
-	 *
-	 * (a) "the result of a parameter expansion is not split (an
-	 *     unquoted $VAR whose value contains a space stays one field)"
-	 *     -- wordexp.h.  XCU 2.6.5 would make this three items and the
-	 *     last one "r". */
+	 * Parameter-expansion results are field-split unless quoted, and the
+	 * shell shares wordexp()'s implementation of that rule. */
 	unsetenv("SHT_LIST");
 	CHECK(run("SHT_LIST='p q r'; for f in $SHT_LIST; do test \"$f\" = r; done", &status) == 0);
-	CHECK(status == 1); /* XCU 2.6.5 says 0 */
+	CHECK(status == 0);
 	CHECK(run("SHT_LIST='p q r'; for f in $SHT_LIST; do test \"$f\" = 'p q r'; done", &status) == 0);
-	CHECK(status == 0); /* XCU 2.6.5 says 1 */
+	CHECK(status == 1);
 	unsetenv("SHT_LIST");
 
 	/* (b) XCU 2.6: "If the complete expansion appropriate for a word
