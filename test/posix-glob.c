@@ -2998,7 +2998,7 @@ static void test_regex_ebrace_vs_badbr(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_glob_regex_leftmost_longest_alternation) /* BUG (self-documented in src/regex/regex.c's banner): XBD 9.1 --
+#if NTLIBC_TEST(PASS, posix_glob_regex_leftmost_longest_alternation) /* XBD 9.1 --
 	"the search is for the longest of the leftmost matches" and
 	"Consistent with the whole match being the longest of the
 	leftmost matches, each subpattern, from left to right, shall

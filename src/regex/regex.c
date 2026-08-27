@@ -747,6 +747,7 @@ struct mstate {
 	const char *begin, *end;
 	int cflags, eflags;
 	regoff_t *slot;
+	regoff_t *best;
 	int nslot;
 	struct rx *rx;
 	regoff_t *progress;	/* last subject offset at each backward edge */
@@ -834,6 +835,7 @@ static int bt_push_undo(struct mstate *ms, int slot, regoff_t old)
  * whose size is bounded and whose exhaustion is reportable. */
 static int run(struct mstate *ms, int pc, const char *sp)
 {
+	int found = 0;
 	for (;;) {
 		struct inst *in;
 
@@ -900,7 +902,11 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			pc = in->x;
 			continue;
 		case I_MATCH:
-			return 1;
+			if (!found || ms->slot[1] > ms->best[1]) {
+				memcpy(ms->best, ms->slot, (size_t)ms->nslot * sizeof *ms->best);
+				found = 1;
+			}
+			goto backtrack;
 		default:
 			goto backtrack;
 		}
@@ -911,7 +917,12 @@ static int run(struct mstate *ms, int pc, const char *sp)
 		 * offset has no match. */
 		for (;;) {
 			struct bt *e;
-			if (ms->nbt == 0) return 0;
+			if (ms->nbt == 0) {
+				if (found)
+					memcpy(ms->slot, ms->best,
+					       (size_t)ms->nslot * sizeof *ms->slot);
+				return found;
+			}
 			e = &ms->bt[--ms->nbt];
 			if (e->kind == BT_UNDO) { ms->slot[e->x] = e->old; continue; }
 			pc = e->x;
@@ -927,6 +938,7 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 	struct rx *rx = preg->__opaque;
 	struct mstate ms;
 	regoff_t *slot;
+	regoff_t *best;
 	regoff_t *progress;
 	int nslot = rx->ncap * 2;
 	size_t len = strlen(string);
@@ -937,12 +949,15 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 	if (!slot) return REG_ESPACE;
 	progress = malloc((size_t)rx->nprog * sizeof *progress);
 	if (!progress) { free(slot); return REG_ESPACE; }
+	best = malloc((size_t)nslot * sizeof *best);
+	if (!best) { free(progress); free(slot); return REG_ESPACE; }
 
 	ms.begin = string;
 	ms.end = string + len;
 	ms.cflags = rx->cflags;
 	ms.eflags = eflags;
 	ms.slot = slot;
+	ms.best = best;
 	ms.nslot = nslot;
 	ms.rx = rx;
 	ms.progress = progress;
@@ -952,6 +967,7 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 	for (start = 0; start <= len; start++) {
 		int i, r;
 		for (i = 0; i < nslot; i++) slot[i] = -1;
+		for (i = 0; i < nslot; i++) best[i] = -1;
 		for (i = 0; i < rx->nprog; i++) progress[i] = -1;
 		ms.steps = 0;
 		ms.nbt = 0;		/* the buffer is reused; the contents are not */
@@ -967,12 +983,14 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 			 * error."  Reporting REG_NOMATCH here would be
 			 * a wrong answer, not a refusal. */
 			free(ms.bt);
+			free(best);
 			free(progress);
 			free(slot);
 			return REG_ESPACE;
 		}
 	}
 	free(ms.bt);
+	free(best);
 	free(progress);
 
 	if (matched && nmatch > 0 && pmatch && !(rx->cflags & REG_NOSUB)) {
