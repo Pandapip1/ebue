@@ -179,13 +179,13 @@ mlock/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [
 mlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mlock/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 mlock/speculative/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- mlock.html's [EPERM] names "appropriate privilege", which XBD leaves implementation-defined; the specific mechanism this case probes (RLIMIT_MEMLOCK soft limit + CAP_IPC_LOCK) is a Linux capability model, and the case's own comment scopes it explicitly: "(Linux 2.6.9 and later)". This platform's mlock() is a real, working NtLockVirtualMemory() call bounded by NT's own working-set quota, not by RLIMIT_MEMLOCK -- src/misc/resource.c does not tie the two together, so setrlimit(RLIMIT_MEMLOCK, 0) changes nothing this mlock() consults, and the call genuinely succeeds. Not reclassified for convenience: the case is asserting a Linux-specific privilege mechanism this platform has no equivalent of, not a POSIX base requirement mlock() fails to meet
-mlockall/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlockall/13-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlockall/3-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlockall/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlockall/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-mlockall/speculative/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mlockall/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after mlockall() implementation: flags zero is rejected with EINVAL
+mlockall/13-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after mlockall() implementation: bits outside MCL_CURRENT|MCL_FUTURE are rejected with EINVAL
+mlockall/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- may-fail privilege probe built after mlockall() implementation but returned UNRESOLVED because mlockall(MCL_CURRENT) succeeded. As with mlock/12-1, POSIX leaves the appropriate privilege implementation-defined; this case specifically tries to manufacture its denial through a Unix uid transition and RLIMIT_MEMLOCK=0, while ntlibc has one fixed NT identity and mlockall() is bounded by NtLockVirtualMemory's working-set quota rather than src/misc/resource.c's non-enforceable RLIMIT_MEMLOCK. It therefore does not test a base mlockall() requirement on this platform
+mlockall/3-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS: MCL_CURRENT locks the existing shared-memory mapping and msync(MS_INVALIDATE) reports EBUSY
+mlockall/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- built after mlockall() implementation but returned UNRESOLVED before calling mlockall(): the case creates an empty regular file and immediately asks mmap() for one page without first extending the object; NtCreateSection cannot create that zero-length file view, so this run never reaches any memory-lock assertion. The sibling shared-memory form mlockall/3-6 reaches the identical MCL_CURRENT+msync(MS_INVALIDATE) assertion and passes
+mlockall/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS: mlockall(MCL_CURRENT) returned zero
+mlockall/speculative/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- duplicate speculative form of mlockall/15-1; built after mlockall() implementation but returned UNRESOLVED because the call succeeded instead of exercising the case's Unix uid+RLIMIT_MEMLOCK privilege model, which this NT target does not use
 mmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -198,7 +198,7 @@ mmap/11-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: C
 mmap/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	FLAKY	changed from PASS to FLAKY: this case compares st_atime across a sleep(1)+mmap write, no fork() involved, but CI run 33025643000 (commit d39cdac) observed FLAKY across its 3 attempts under stock Wine -- atime-granularity timing, same class of load-sensitivity as the CLOCK_BOUND cases, just not clock-interface named so tools/posix-opts.py's CLOCK_BOUND list does not serialize it.
 mmap/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-mmap/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+mmap/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- built after MCL_FUTURE implementation but returned UNRESOLVED before mmap(): its prerequisite setrlimit(RLIMIT_MEMLOCK, 512KiB) fails with EINVAL. src/misc/resource.c deliberately rejects lowering RLIMIT_MEMLOCK because NT has no enforceable per-process memlock-budget primitive; mlockall()/mmap() use NtLockVirtualMemory's real working-set quota instead. The case's constructed Unix rlimit condition therefore cannot be established on this platform, so its EAGAIN assertion is never reached
 mmap/19-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -350,7 +350,7 @@ mq_unlink/speculative/7-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	O
 munlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 munlock/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 munlock/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-munlockall/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
+munlockall/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after _POSIX_MEMLOCK and munlockall() implementation: the call returned zero
 munmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
 munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
