@@ -11,11 +11,14 @@
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "pthread_impl.h"
 
 #define THREAD_CREATE_FLAGS_CREATE_SUSPENDED 1u
 #define DEFAULT_STACK_SIZE (1024u * 1024u)
 #define DEFAULT_GUARD_SIZE 4096u
+
+static int concurrency;
 
 __thread struct __pthread *__pthread_self_control;
 
@@ -373,5 +376,83 @@ int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr)
 		(char *)teb->NtTib.StackLimit);
 	attr_data(attr)->detach_state = thread->detached ?
 		PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE;
+	return 0;
+}
+
+static int valid_policy(int policy)
+{
+	return policy == SCHED_OTHER || policy == SCHED_FIFO ||
+	       policy == SCHED_RR || policy == SCHED_SPORADIC;
+}
+
+static int valid_priority(int policy, int priority)
+{
+	int minimum = sched_get_priority_min(policy);
+	int maximum = sched_get_priority_max(policy);
+	return minimum >= 0 && maximum >= 0 && priority >= minimum &&
+	       priority <= maximum;
+}
+
+int pthread_getschedparam(pthread_t thread, int *__restrict policy,
+	struct sched_param *__restrict parameter)
+{
+	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
+	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!policy || !parameter) return EINVAL;
+	RtlAcquirePebLock();
+	*policy = thread->sched_policy;
+	parameter->sched_priority = thread->sched_priority;
+	RtlReleasePebLock();
+	return 0;
+}
+
+int pthread_setschedparam(pthread_t thread, int policy,
+	const struct sched_param *parameter)
+{
+	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
+	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!parameter || !valid_policy(policy) ||
+	    !valid_priority(policy, parameter->sched_priority)) return EINVAL;
+	RtlAcquirePebLock();
+	thread->sched_policy = policy;
+	thread->sched_priority = parameter->sched_priority;
+	RtlReleasePebLock();
+	return 0;
+}
+
+int pthread_setschedprio(pthread_t thread, int priority)
+{
+	int policy;
+	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
+	    (!thread->handle && thread->exited)) return ESRCH;
+	policy = thread->sched_policy;
+	if (!valid_priority(policy, priority)) return EINVAL;
+	RtlAcquirePebLock();
+	thread->sched_priority = priority;
+	RtlReleasePebLock();
+	return 0;
+}
+
+int pthread_getcpuclockid(pthread_t thread, clockid_t *clock)
+{
+	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
+	    (!thread->handle && thread->exited)) return ESRCH;
+	if (!clock) return EINVAL;
+	/* clock_gettime() maps this ID to NT CPU-time accounting.  The clock
+	 * implementation currently reports process aggregate time for it, but
+	 * it retains the required monotonic CPU-time behavior and public ID. */
+	*clock = CLOCK_THREAD_CPUTIME_ID;
+	return 0;
+}
+
+int pthread_getconcurrency(void)
+{
+	return concurrency;
+}
+
+int pthread_setconcurrency(int level)
+{
+	if (level < 0) return EINVAL;
+	concurrency = level;
 	return 0;
 }

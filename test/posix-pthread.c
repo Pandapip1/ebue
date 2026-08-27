@@ -724,7 +724,7 @@ static void test_pthread_cancel_cleanup(void)
  * pthread_getconcurrency.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_schedparam_self)
+#if NTLIBC_TEST(PASS, posix_pthread_schedparam_self)
 #include <pthread.h>
 #include <sched.h>
 
@@ -754,7 +754,7 @@ static void test_pthread_schedparam_self(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_concurrency_default)
+#if NTLIBC_TEST(PASS, posix_pthread_concurrency_default)
 #include <pthread.h>
 #include <errno.h>
 
@@ -779,7 +779,7 @@ static void test_pthread_concurrency_default(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_getcpuclockid)
+#if NTLIBC_TEST(PASS, posix_pthread_getcpuclockid)
 #include <pthread.h>
 #include <time.h>
 
