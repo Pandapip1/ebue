@@ -120,6 +120,7 @@ int pthread_create(pthread_t *__restrict output,
 	void *__restrict argument)
 {
 	const struct __pthread_attr_data *data = 0;
+	struct __pthread *creator = 0;
 	struct __pthread *thread;
 	HANDLE handle;
 	NTSTATUS status;
@@ -130,6 +131,10 @@ int pthread_create(pthread_t *__restrict output,
 		if (!valid_attr(attr)) return EINVAL;
 		data = const_attr_data(attr);
 	}
+	if (!data || data->inherit_sched == PTHREAD_INHERIT_SCHED) {
+		creator = __pthread_current();
+		if (!creator) return EAGAIN;
+	}
 	thread = calloc(1, sizeof *thread);
 	if (!thread) return EAGAIN;
 	thread->magic = PTHREAD_MAGIC;
@@ -138,8 +143,15 @@ int pthread_create(pthread_t *__restrict output,
 	thread->detached = data && data->detach_state == PTHREAD_CREATE_DETACHED;
 	thread->cancel_state = PTHREAD_CANCEL_ENABLE;
 	thread->cancel_type = PTHREAD_CANCEL_DEFERRED;
-	thread->sched_policy = data ? data->sched_policy : SCHED_OTHER;
-	thread->sched_priority = data ? data->sched_priority : 0;
+	if (creator) {
+		RtlAcquirePebLock();
+		thread->sched_policy = creator->sched_policy;
+		thread->sched_priority = creator->sched_priority;
+		RtlReleasePebLock();
+	} else {
+		thread->sched_policy = data->sched_policy;
+		thread->sched_priority = data->sched_priority;
+	}
 	status = NtCreateThreadEx(&handle, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
 		(PVOID)thread_entry, thread, THREAD_CREATE_FLAGS_CREATE_SUSPENDED,
 		0, data ? data->stack_size : DEFAULT_STACK_SIZE,
@@ -170,22 +182,24 @@ int pthread_join(pthread_t thread, void **result)
 		RtlReleasePebLock();
 		return EINVAL;
 	}
-	if (thread->joined || !thread->handle) {
+	if (thread->joined || thread->joining || !thread->handle) {
 		RtlReleasePebLock();
 		return ESRCH;
 	}
-	thread->joined = 1;
+	thread->joining = 1;
 	RtlReleasePebLock();
 	status = NtWaitForSingleObject(thread->handle, TRUE, 0);
 	if (!NT_SUCCESS(status)) {
 		RtlAcquirePebLock();
-		thread->joined = 0;
+		thread->joining = 0;
 		RtlReleasePebLock();
 		return status == STATUS_USER_APC || status == STATUS_ALERTED ? EINTR : EINVAL;
 	}
 	if (result) *result = thread->result;
 	NtClose(thread->handle);
 	thread->handle = 0;
+	thread->joining = 0;
+	thread->joined = 1;
 	return 0;
 }
 
@@ -198,7 +212,7 @@ int pthread_detach(pthread_t thread)
 		RtlReleasePebLock();
 		return ESRCH;
 	}
-	if (thread->detached) {
+	if (thread->detached || thread->joining) {
 		RtlReleasePebLock();
 		return EINVAL;
 	}

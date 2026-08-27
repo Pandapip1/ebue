@@ -29,6 +29,7 @@ struct __pthread {
 	void *argument;
 	int detached;
 	int exited;
+	int joining;
 	int joined;
 	int cancel_state;
 	int cancel_type;
