@@ -186,6 +186,26 @@ static int child_select_eintr(void)
 	return 44;                  /* something else entirely */
 }
 
+/* The three terminal stops and SIGCONT are catchable too.  kill() must
+ * consult this installed handler before applying their default NT
+ * suspend/resume action; otherwise the child either hangs suspended or
+ * sleeps until select() times out. */
+static int child_job_signal_eintr(int sig)
+{
+	struct sigaction sa;
+	struct timeval tv;
+	int r;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_mark;
+	if (sigaction(sig, &sa, NULL) != 0) return 90;
+	tv.tv_sec = 5; tv.tv_usec = 0;
+	r = select(0, NULL, NULL, NULL, &tv);
+	if (r == -1 && errno == EINTR && handler_ran) return 42;
+	if (r == 0) return 43;
+	return 44;
+}
+
 /* sigsuspend() atomically replaces the mask while it waits, then restores
  * the original mask before returning EINTR.  SIGUSR2 arrives first and is
  * held pending by the temporary mask; SIGUSR1 wakes the suspension; the
@@ -369,6 +389,23 @@ static void test_select_returns_eintr(const char *self)
 	CHECK(t1 - t0 < 4000);
 }
 
+static void test_job_signal_handler(const char *self, const char *mode,
+				    int sig, const char *description)
+{
+	pid_t pid;
+	int status;
+
+	if (spawn_child(self, mode, &pid) < 0) {
+		CHECK(0 && "spawn failed");
+		return;
+	}
+	sleep_ms(STARTUP_GRACE_MS);
+	CHECK(kill(pid, sig) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe(description, status);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+}
+
 static void test_sigsuspend_mask_and_wakeup(const char *self)
 {
 	pid_t pid;
@@ -454,6 +491,10 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[1], "--child-ignore")) return child_ignore();
 		if (!strcmp(argv[1], "--child-blocked")) return child_blocked();
 		if (!strcmp(argv[1], "--child-select-eintr")) return child_select_eintr();
+		if (!strcmp(argv[1], "--child-sigcont")) return child_job_signal_eintr(SIGCONT);
+		if (!strcmp(argv[1], "--child-sigtstp")) return child_job_signal_eintr(SIGTSTP);
+		if (!strcmp(argv[1], "--child-sigttin")) return child_job_signal_eintr(SIGTTIN);
+		if (!strcmp(argv[1], "--child-sigttou")) return child_job_signal_eintr(SIGTTOU);
 		if (!strcmp(argv[1], "--child-sigsuspend")) return child_sigsuspend();
 		if (!strcmp(argv[1], "--child-sigwait")) return child_sigwait();
 		if (!strcmp(argv[1], "--child-nanosleep")) return child_nanosleep();
@@ -464,6 +505,14 @@ int main(int argc, char **argv)
 	test_sig_ign_survives_remote_kill(argv[0]);
 	test_blocked_signal_goes_pending(argv[0]);
 	test_select_returns_eintr(argv[0]);
+	test_job_signal_handler(argv[0], "--child-sigcont", SIGCONT,
+	                        "remote SIGCONT handler");
+	test_job_signal_handler(argv[0], "--child-sigtstp", SIGTSTP,
+	                        "remote SIGTSTP handler");
+	test_job_signal_handler(argv[0], "--child-sigttin", SIGTTIN,
+	                        "remote SIGTTIN handler");
+	test_job_signal_handler(argv[0], "--child-sigttou", SIGTTOU,
+	                        "remote SIGTTOU handler");
 	test_sigsuspend_mask_and_wakeup(argv[0]);
 	test_remote_wait_interface(argv[0], "--child-sigwait", SIGUSR1,
 	                           "remote sigwait");

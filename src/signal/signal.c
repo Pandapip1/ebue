@@ -175,6 +175,15 @@ static int default_action(int sig);
  * fork.c and spawn.c already use when the table itself cannot grow. */
 int __sigchld_nocldwait(void) { return (act_flags[SIGCHLD] & SA_NOCLDWAIT) != 0; }
 
+/* Called by sig_delivery_thread() with the signal lock held.  Stop-shaped
+ * signals need this distinction before kill() chooses between running the
+ * target's caught/ignored disposition and applying the default NT process
+ * suspension itself. */
+int __sig_disposition_is_default(int sig)
+{
+	return !sig_valid(sig) || handlers[sig] == SIG_DFL;
+}
+
 void (*signal(int sig, void (*h)(int)))(int)
 {
 	void (*old)(int);
@@ -470,14 +479,9 @@ int raise(int sig) { int r; __sig_lock(); r = __raise_internal(sig); __sig_unloc
  * signal.h.html's Default Action column: SIGSTOP, and the three
  * terminal-related stops SIGTSTP, SIGTTIN and SIGTTOU.
  *
- * All four stop, not just the uncatchable SIGSTOP, and that is not a
- * guess about the target's disposition.  On a real system the other
- * three stop only if the target has not caught or ignored them; here
- * there is no asynchronous delivery to another process at all (this
- * file's header comment), so a kill() from this library never runs the
- * target's handler and never consults its disposition.  The default
- * action is the only action the target can take, and for all four of
- * them the default action is to stop. */
+ * All four stop by default, not just the uncatchable SIGSTOP.  The other
+ * three first go through the target-disposition handshake below because
+ * their caught and ignored dispositions override that default. */
 static int sig_stops(int sig)
 {
 	return sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU;
@@ -668,6 +672,31 @@ int kill(pid_t pid, int sig)
 		if (!NT_SUCCESS(st)) { errno = st == STATUS_ACCESS_DENIED ? EPERM : ESRCH; return -1; }
 	}
 	if (!sig) { if (!c) NtClose(h); return 0; }
+	if (sig == SIGSTOP) {
+		int changed = sig_job_control(c, h, sig);
+		if (changed > 0) sigchld_job_control(c, sig);
+		if (!c) NtClose(h);
+		return changed < 0 ? -1 : 0;
+	}
+	/* SIGCONT always resumes a child that this process previously stopped,
+	 * even when the child caught or ignored SIGCONT.  Resume first so its
+	 * delivery thread is able to receive the packet, then consult its real
+	 * disposition below. */
+	if (sig == SIGCONT && c && c->stopsig) {
+		int changed = sig_job_control(c, h, sig);
+		if (changed < 0) return -1;
+		if (changed > 0) sigchld_job_control(c, sig);
+	}
+	/* SIGTSTP, SIGTTIN and SIGTTOU are catchable; SIGCONT is catchable as
+	 * well despite its default action being ignore.  Ask the target to
+	 * accept the packet only when its disposition is non-default.  If it
+	 * declines, retain the NT suspend/resume fallback which implements the
+	 * default job-control action. */
+	if ((sig_stops(sig) || sig == SIGCONT) &&
+	    __sig_try_deliver_remote_nondefault((int)pid, sig)) {
+		if (!c) NtClose(h);
+		return 0;
+	}
 	if (sig_stops(sig) || sig == SIGCONT) {
 		int changed = sig_job_control(c, h, sig);
 		if (changed > 0) sigchld_job_control(c, sig);
@@ -687,12 +716,8 @@ int kill(pid_t pid, int sig)
 	 * __signal_init() -- or any other reason the packet did not land)
 	 * falls straight through to the existing behaviour unchanged; see
 	 * that function's own comment for why it does not try to
-	 * distinguish those cases. This does not apply to the sig_stops()/
-	 * SIGCONT branch above: NtSuspendProcess/NtResumeProcess are a real
-	 * process-suspension primitive, not a disposition-consulting one,
-	 * and stay exactly as they were (the target's-DEFAULT-disposition-
-	 * only limitation for STOP-shaped signals is a separate, still-open
-	 * problem -- see this file's header comment). */
+	 * distinguish those cases.  The catchable job-control signals already
+	 * took their acknowledgement-based disposition path above. */
 	if (__sig_try_deliver_remote((int)pid, sig)) {
 		if (!c) NtClose(h);
 		return 0;

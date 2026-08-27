@@ -157,12 +157,14 @@
 struct sigpacket {
 	ULONG magic;
 	ULONG signo;
+	ULONG flags;
 	ULONG sender_pid;
 	ULONG sender_uid;
 	LONG code;
 	union sigval value;
 };
 #define SIGPACKET_MAGIC 0x736c746eu /* "ntls", little-endian as stored */
+#define SIGPACKET_NONDEFAULT_ONLY 1u
 
 static HANDLE wake_event;   /* auto-reset; set on every packet arrival. 0 = not running. */
 static HANDLE lock_event;   /* auto-reset-as-mutex, initially signalled (free). 0 = no locking done. */
@@ -268,7 +270,7 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 		NTSTATUS st;
 
 		InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, 0, 0);
-		st = NtCreateNamedPipeFile(&pipe, GENERIC_READ | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &oa, &io,
+		st = NtCreateNamedPipeFile(&pipe, GENERIC_READ | GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &oa, &io,
 		                           FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_CREATE,
 		                           FILE_SYNCHRONOUS_IO_NONALERT,
 		                           FILE_PIPE_MESSAGE_TYPE, FILE_PIPE_MESSAGE_MODE,
@@ -297,12 +299,27 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 			if (st == STATUS_PENDING) { NtWaitForSingleObject(pipe, 0, 0); st = io.Status; }
 			if (NT_SUCCESS(st) && io.Information == sizeof pkt && pkt.magic == SIGPACKET_MAGIC) {
 				siginfo_t si;
+				unsigned char accepted = 1;
 				/* __raise_internal() validates signo itself (sig_valid()
 				 * in signal.c) and does nothing for a bad one beyond
 				 * setting errno on a thread with no caller to read it --
 				 * harmless, and simpler than duplicating the range
 				 * check here. */
 				__sig_lock();
+				if ((pkt.flags & SIGPACKET_NONDEFAULT_ONLY) &&
+				    __sig_disposition_is_default((int)pkt.signo))
+					accepted = 0;
+				if (pkt.flags & SIGPACKET_NONDEFAULT_ONLY) {
+					st = NtWriteFile(pipe, 0, 0, 0, &io, &accepted,
+					                 sizeof accepted, 0, 0);
+					if (st == STATUS_PENDING) {
+						NtWaitForSingleObject(pipe, 0, 0);
+						st = io.Status;
+					}
+					if (!NT_SUCCESS(st) || io.Information != sizeof accepted)
+						accepted = 0;
+				}
+				if (!accepted) { __sig_unlock(); NtClose(pipe); continue; }
 				if (wake_event) { LONG prev; NtSetEvent(wake_event, &prev); }
 				memset(&si, 0, sizeof si);
 				si.si_signo = (int)pkt.signo;
@@ -403,9 +420,8 @@ void __sig_delivery_reinit_after_fork(void)
 	__sig_delivery_init();
 }
 
-/* kill()'s cross-process arm (src/signal/signal.c), called for an
- * ordinary (non-stop, non-SIGCONT) signal to a real target pid, before
- * that function's existing default-action-only path
+/* kill()'s cross-process arm (src/signal/signal.c), called before that
+ * function's existing default-action-only path
  * (NtTerminateProcess). Returns nonzero if the packet was handed to the
  * target's own listener -- in which case kill() returns success and
  * skips its old path entirely, because the target's delivery thread
@@ -417,8 +433,15 @@ void __sig_delivery_reinit_after_fork(void)
  * still inside __signal_init()) is exactly the case the existing
  * default-action path exists to handle, and this function draws no
  * distinction between "no listener" and any other reason the attempt
- * did not land. */
-int __sig_try_deliver_remote_info(int pid, int sig, const void *data)
+ * did not land.
+ *
+ * Catchable job-control signals set nondefault_only.  Their sender needs
+ * to know whether to deliver a caught/ignored disposition or apply the
+ * default NtSuspendProcess action, so the target replies while holding the
+ * disposition lock and before running a handler.  A zero reply leaves the
+ * packet undelivered and tells kill() to use its default-action fallback. */
+static int sig_try_deliver_remote_info(int pid, int sig, const void *data,
+				       int nondefault_only)
 {
 	const siginfo_t *si = data;
 	WCHAR name[40];
@@ -439,13 +462,15 @@ int __sig_try_deliver_remote_info(int pid, int sig, const void *data)
 	 * window (this file's banner: the last handle closing drops
 	 * CurrentInstances to 0 and NPFS deletes the FCB). Neither case
 	 * blocks. */
-	st = NtOpenFile(&h, GENERIC_WRITE | SYNCHRONIZE, &oa, &io,
+	st = NtOpenFile(&h, GENERIC_WRITE | (nondefault_only ? GENERIC_READ : 0) |
+	                SYNCHRONIZE, &oa, &io,
 	                FILE_SHARE_READ | FILE_SHARE_WRITE,
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
 	if (!NT_SUCCESS(st)) return 0;
 
 	pkt.magic = SIGPACKET_MAGIC;
 	pkt.signo = (ULONG)sig;
+	pkt.flags = nondefault_only ? SIGPACKET_NONDEFAULT_ONLY : 0;
 	pkt.sender_pid = (ULONG)(si ? si->si_pid : getpid());
 	pkt.sender_uid = (ULONG)(si ? si->si_uid : getuid());
 	pkt.code = (LONG)(si ? si->si_code : SI_USER);
@@ -453,11 +478,28 @@ int __sig_try_deliver_remote_info(int pid, int sig, const void *data)
 	else memset(&pkt.value, 0, sizeof pkt.value);
 	st = NtWriteFile(h, 0, 0, 0, &io, &pkt, sizeof pkt, 0, 0);
 	if (st == STATUS_PENDING) { NtWaitForSingleObject(h, 0, 0); st = io.Status; }
+	if (NT_SUCCESS(st) && io.Information == sizeof pkt && nondefault_only) {
+		unsigned char accepted = 0;
+		st = NtReadFile(h, 0, 0, 0, &io, &accepted, sizeof accepted, 0, 0);
+		if (st == STATUS_PENDING) { NtWaitForSingleObject(h, 0, 0); st = io.Status; }
+		NtClose(h);
+		return NT_SUCCESS(st) && io.Information == sizeof accepted && accepted;
+	}
 	NtClose(h);
 	return NT_SUCCESS(st) && io.Information == sizeof pkt;
+}
+
+int __sig_try_deliver_remote_info(int pid, int sig, const void *data)
+{
+	return sig_try_deliver_remote_info(pid, sig, data, 0);
 }
 
 int __sig_try_deliver_remote(int pid, int sig)
 {
 	return __sig_try_deliver_remote_info(pid, sig, 0);
+}
+
+int __sig_try_deliver_remote_nondefault(int pid, int sig)
+{
+	return sig_try_deliver_remote_info(pid, sig, 0, 1);
 }

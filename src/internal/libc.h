@@ -536,6 +536,8 @@ void __sig_delivery_reinit_after_fork(void);
 HANDLE __sig_delivery_event(void);
 int __sig_try_deliver_remote(int pid, int sig);
 int __sig_try_deliver_remote_info(int pid, int sig, const void *);
+int __sig_try_deliver_remote_nondefault(int pid, int sig);
+int __sig_disposition_is_default(int sig);
 void __sig_pending_reset_after_fork(void);
 int __sig_pending_member(int sig);
 void __timer_reinit_after_fork(void);
