@@ -3758,9 +3758,20 @@ static void test_nftw_chdir_and_mount(void)
  * (and test/misc.c's test_abort_child() established it). */
 int main(int argc, char **argv)
 {
+	char run_dir[64];
+
 	if (argc > 2 && !strcmp(argv[1], "--produce")) {
 		printf("%s\n", argv[2]);
 		return 0;
+	}
+
+	/* Policy probes for this translation unit run concurrently.  Keep
+	 * their fixed-name filesystem fixtures from colliding with one
+	 * another by giving each process a private working directory. */
+	snprintf(run_dir, sizeof run_dir, "posix-glob-%ld", (long)getpid());
+	if (mkdir(run_dir, 0755) != 0 || chdir(run_dir) != 0) {
+		printf("posix-glob: could not create private fixture directory\n");
+		return 1;
 	}
 
 	test_fnmatch_basic_grammar();
@@ -3850,6 +3861,7 @@ int main(int argc, char **argv)
 	test_regex_interval_expansion_is_bounded();
 	test_regex_bre_trailing_backslash_code();
 
+	if (chdir("..") == 0) rmdir(run_dir);
 	if (fails) { printf("posix-glob: failures: %d\n", fails); return 1; }
 	printf("posix-glob: all ok (fnmatch/glob/wordexp/search/ftw/regex implemented; remaining fences are documented N/A or environment gaps)\n");
 	return 0;
