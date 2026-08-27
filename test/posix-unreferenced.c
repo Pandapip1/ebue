@@ -1048,19 +1048,21 @@ static void test_renameat_empty_at_dirfd(void)
        * whatever the object manager makes of it -- never EINVAL. */
 static void test_renameat_einval(void)
 {
-	CHECK(mkdir("ren.d/anc", 0755) == 0);
-	CHECK(mkdir("ren.d/anc/inner", 0755) == 0);
+	CHECK(mkdir("ren-einval", 0755) == 0);
+	CHECK(mkdir("ren-einval/anc", 0755) == 0);
+	CHECK(mkdir("ren-einval/anc/inner", 0755) == 0);
 	errno = 0;
-	CHECK(renameat(AT_FDCWD, "ren.d/anc", AT_FDCWD, "ren.d/anc/inner/deep") == -1);
+	CHECK(renameat(AT_FDCWD, "ren-einval/anc", AT_FDCWD, "ren-einval/anc/inner/deep") == -1);
 	CHECK(errno == EINVAL);
 	errno = 0;
-	CHECK(renameat(AT_FDCWD, "ren.d/anc/.", AT_FDCWD, "ren.d/other") == -1);
+	CHECK(renameat(AT_FDCWD, "ren-einval/anc/.", AT_FDCWD, "ren-einval/other") == -1);
 	CHECK(errno == EINVAL);
 	errno = 0;
-	CHECK(renameat(AT_FDCWD, "ren.d/anc/inner/..", AT_FDCWD, "ren.d/other") == -1);
+	CHECK(renameat(AT_FDCWD, "ren-einval/anc/inner/..", AT_FDCWD, "ren-einval/other") == -1);
 	CHECK(errno == EINVAL);
-	CHECK(rmdir("ren.d/anc/inner") == 0);
-	CHECK(rmdir("ren.d/anc") == 0);
+	CHECK(rmdir("ren-einval/anc/inner") == 0);
+	CHECK(rmdir("ren-einval/anc") == 0);
+	CHECK(rmdir("ren-einval") == 0);
 }
 #endif
 
