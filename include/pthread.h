@@ -16,6 +16,7 @@ extern "C" {
 #define __NEED_pthread_t
 #define __NEED_pthread_attr_t
 #include <bits/alltypes.h>
+#include <sched.h>
 
 typedef unsigned pthread_key_t;
 typedef int pthread_once_t;
