@@ -26,6 +26,7 @@ long double sinhl(long double x)
 	long double t;
 	if (x != x) return x;
 	if (x == 0.0L) return x;               /* preserves the sign of zero */
+	if (x < 0.0L) return -sinhl(-x);       /* avoid expm1(x) rounding to -1 */
 	t = expm1l(x);
 	if (t == HUGE_VALL) {                  /* x large enough that e^x overflowed */
 		feraiseexcept(FE_OVERFLOW);

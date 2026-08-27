@@ -13,7 +13,8 @@
 
 static long double remainder_impl(long double x, long double y, int *quop)
 {
-	long double n, r, ax;
+	long double r;
+	int q = 0;
 	int qneg;
 
 	if (x != x || y != y) return x + y;
@@ -33,17 +34,12 @@ static long double remainder_impl(long double x, long double y, int *quop)
 	}
 
 	qneg = (x < 0.0L) != (y < 0.0L);
-	n = __x87_rndint(x / y, -1);
-	r = x - n * y;
+	r = __x87_remainder(x, y, quop ? &q : 0);
 	/* "If the result equals 0, then it has the same sign as x." */
 	if (r == 0.0L) r = copysignl(r, x);
 
 	if (quop) {
-		/* Reduce the (possibly huge) quotient's magnitude mod 8 in long
-		 * double first -- casting a large-magnitude long double
-		 * straight to an integer type would be undefined behaviour. */
-		ax = n < 0.0L ? -n : n;
-		*quop = qneg ? -(int)__x87_fmod(ax, 8.0L) : (int)__x87_fmod(ax, 8.0L);
+		*quop = qneg ? -q : q;
 	}
 	return r;
 }

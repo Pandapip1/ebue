@@ -737,7 +737,7 @@ static void test_asin_acos(void)
  * NaN->NaN; sinh/tanh: ±0/±Inf->x; cosh: ±0->1, ±Inf->+Inf;
  * sinh/cosh overflow -> range error, ±HUGE_VAL. Not declared by
  * include/math.h. */
-#if NTLIBC_TEST(BUG, posix_math_sinh_large_negative_is_finite) /* BUG: sinh() returns -Inf for ordinary finite arguments below
+#if NTLIBC_TEST(PASS, posix_math_sinh_large_negative_is_finite) /* sinh() stays finite for ordinary finite arguments below
 	 * about -38.  sinh.html RETURN VALUE: "Upon successful completion,
 	 * these functions shall return the hyperbolic sine of x."  The only
 	 * sanctioned +-HUGE_VAL return is the range error ERRORS names,
@@ -901,7 +901,7 @@ static void test_bessel(void)
  * congruent to the true quotient mod 2^n, n>=3, sign of x/y;
  * *quo unspecified when y==0. Neither declared by
  * include/math.h. */
-#if NTLIBC_TEST(BUG, posix_math_remainder_large_quotient) /* BUG: remainder()/remquo() break down once |x/y| is large, and
+#if NTLIBC_TEST(PASS, posix_math_remainder_large_quotient) /* remainder()/remquo() reduce without first dividing x/y.
 	 * return -Inf once x/y overflows.  remainder.html RETURN VALUE:
 	 * "Upon successful completion, these functions shall return the
 	 * floating-point remainder r = x - ny when y is non-zero.  The

@@ -117,6 +117,27 @@ static long double __x87_fmod(long double x, long double y)
 	return x;
 }
 
+/* IEEE remainder via FPREM1.  On the final iteration x87 exposes the
+ * low three quotient bits as C0/C3/C1 = Q2/Q1/Q0. */
+static long double __x87_remainder(long double x, long double y, int *quo)
+{
+	unsigned short sw;
+	__asm__ __volatile__(
+		NTLIBC_FLDL " (%2)\n\t"
+		NTLIBC_FLDL " (%1)\n\t"
+		"1:\n\t"
+		"fprem1\n\t"
+		"fnstsw %%ax\n\t"
+		"testb $4, %%ah\n\t"
+		"jnz 1b\n\t"
+		NTLIBC_FSTPL " (%1)\n\t"
+		"fstp %%st(0)"
+		: "=&a"(sw) : "r"(&x), "r"(&y) : "memory");
+	if (quo)
+		*quo = ((sw >> 9) & 1) | ((sw >> 13) & 2) | ((sw >> 6) & 4);
+	return x;
+}
+
 static long double __x87_sin(long double x)
 {
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfsin\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
