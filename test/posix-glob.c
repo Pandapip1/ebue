@@ -1923,6 +1923,8 @@ static void test_wordexp_syntax_errors(void)
 	CHECK(wordexp("${abc", &we, 0) == WRDE_SYNTAX);		/* unterminated ${ } */
 	CHECK(wordexp("$((1+", &we, 0) == WRDE_SYNTAX);		/* unbalanced parentheses */
 	CHECK(wordexp("$((1/0))", &we, 0) == WRDE_SYNTAX);	/* arithmetic error */
+	CHECK(wordexp("$NO_SUCH_VAR_XYZ )", &we, WRDE_UNDEF) == WRDE_BADCHAR);
+	CHECK(wordexp("$NO_SUCH_VAR_XYZ $(", &we, WRDE_UNDEF | WRDE_NOCMD) == WRDE_CMDSUB);
 }
 
 /* wordexp.html DESCRIPTION: "WRDE_REUSE: The pwordexp argument was

@@ -833,6 +833,76 @@ static int run_cmdsub(const char **pp, int flags, char **out)
 	return 0;
 }
 
+/* Check lexical errors before performing any expansion.  Besides being
+ * cheaper than unwinding a partial result, this gives shell syntax and
+ * WRDE_NOCMD the precedence required over WRDE_UNDEF when a malformed
+ * construct occurs later in the input. */
+static int validate_words(const char *words, int flags)
+{
+	const char *p = words;
+	enum { V_NONE, V_SINGLE, V_DOUBLE } q = V_NONE;
+
+	while (*p) {
+		char c = *p;
+		if (q == V_SINGLE) {
+			if (c == '\'') q = V_NONE;
+			p++;
+			continue;
+		}
+		if (q == V_DOUBLE && c == '"') { q = V_NONE; p++; continue; }
+		if (c == '\\') {
+			if (!p[1]) return WRDE_SYNTAX;
+			p += 2;
+			continue;
+		}
+		if (q == V_NONE && c == '\'') { q = V_SINGLE; p++; continue; }
+		if (q == V_NONE && c == '"') { q = V_DOUBLE; p++; continue; }
+		if (c == '$' && p[1] == '{') {
+			const char *end = param_word_end(p + 2);
+			if (!end) return WRDE_SYNTAX;
+			p = end + 1;
+			continue;
+		}
+		if (c == '$' && p[1] == '(' && p[2] == '(') {
+			const char *a = p + 3;
+			int depth = 0;
+			for (;;) {
+				if (!*a) return (flags & WRDE_NOCMD) ? WRDE_CMDSUB : WRDE_SYNTAX;
+				if (a[0] == '$' && a[1] == '{') {
+					const char *end = param_word_end(a + 2);
+					if (!end) return WRDE_SYNTAX;
+					a = end + 1;
+					continue;
+				}
+				if (*a == '(') { depth++; a++; continue; }
+				if (*a == ')') {
+					if (depth) { depth--; a++; continue; }
+					if (a[1] == ')') { p = a + 2; break; }
+					return (flags & WRDE_NOCMD) ? WRDE_CMDSUB : WRDE_SYNTAX;
+				}
+				a++;
+			}
+			continue;
+		}
+		if ((c == '$' && p[1] == '(' && p[2] != '(') || c == '`') {
+			char *text;
+			int syntax = 0;
+			if (flags & WRDE_NOCMD) return WRDE_CMDSUB;
+			text = c == '`' ? cmdsub_backquote_text(&p, &syntax)
+			                  : cmdsub_dollar_text(&p, &syntax);
+			if (!text) return syntax ? WRDE_SYNTAX : WRDE_NOSPACE;
+			__free(text);
+			continue;
+		}
+		if (q == V_NONE) {
+			if (c == '(' || c == ')') return WRDE_BADCHAR;
+			if (c == '\n') return WRDE_BADCHAR;
+		}
+		p++;
+	}
+	return q == V_NONE ? 0 : WRDE_SYNTAX;
+}
+
 /* Turns one already-expanded field (b->data[0..n), with b->lit[i] true
  * for bytes that must stay literal) into one or more output words,
  * pushing them onto out. Live '*'/'?'/'[' bytes trigger glob(); no live
@@ -1285,7 +1355,15 @@ fail:
 int wordexp(const char *words, wordexp_t *pwordexp, int flags)
 {
 	struct assign_ctx ctx = { 0 };
-	int rc = expand_impl(words, pwordexp, flags, 0, &ctx);
+	int rc;
+
+	if (flags & WRDE_REUSE) wordfree(pwordexp);
+	rc = validate_words(words, flags);
+	if (!rc) rc = expand_impl(words, pwordexp, flags & ~WRDE_REUSE, 0, &ctx);
+	else if (!(flags & WRDE_APPEND)) {
+		pwordexp->we_wordc = 0;
+		pwordexp->we_wordv = 0;
+	}
 	finish_assignments(&ctx, 1);
 	return rc;
 }
