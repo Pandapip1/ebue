@@ -34,6 +34,11 @@
  *
  * ==================== the finding, up front =========================
  *
+ * RESOLVED: src/misc/uio.c now gathers a multi-area vector and issues
+ * one write().  The original analysis below is retained as the reason
+ * for the regression test, but its descriptions of the old per-iovec
+ * loop are historical rather than descriptions of the current code.
+ *
  * writev.html DESCRIPTION opens:
  *
  *     "The writev() function shall be equivalent to write(), except as
@@ -159,11 +164,15 @@
 #include <sys/uio.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include "test-policy.h"
+
+extern char **environ;
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -459,7 +468,8 @@ static void test_pipe_round_trip(void)
  * The finding.  The banner has the full argument; the fence carries the
  * short form and what the test would establish.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(BUG, posix_uio_writev_pipe_below_pipe_buf_not_interleaved) /* BUG: writev.html DESCRIPTION -- "The writev() function shall
+#if NTLIBC_TEST(PASS, posix_uio_writev_pipe_below_pipe_buf_not_interleaved) /* Former BUG, now fixed by gathering the vector into one write.
+	writev.html DESCRIPTION -- "The writev() function shall
 	be equivalent to write(), except as described below" -- and so
 	write.html DESCRIPTION's pipe clause: "Write requests of
 	{PIPE_BUF} bytes or less shall not be interleaved with data
@@ -590,36 +600,48 @@ static void test_pipe_round_trip(void)
 	un-fenced.  A successor with a running tree should un-fence it
 	once and record what it observed.
 
-	Needs `#include <sys/wait.h>` at the top of this file for
-	waitpid(); fork() and pipe() come from <unistd.h>, already
-	included. */
-static void test_writev_pipe_below_pipe_buf_not_interleaved(void)
+	The original fixture used fork(), which aborts under the Wine runner
+	before testing writev().  This version uses posix_spawn() and the
+	same inherited pipe, so the assertion reaches the clause on CI. */
+static int writev_child(int fd)
+{
+	enum { REC = 64, PIECES = 4, ROUNDS = 64 };
+	char record[REC];
+	struct iovec iov[PIECES];
+	int i;
+
+	memset(record, 'B', sizeof record);
+	for (i = 0; i < PIECES; i++) {
+		iov[i].iov_base = record + i * (REC / PIECES);
+		iov[i].iov_len = REC / PIECES;
+	}
+	for (i = 0; i < ROUNDS; i++)
+		if (writev(fd, iov, PIECES) != REC) return 1;
+	close(fd);
+	return 0;
+}
+
+static void test_writev_pipe_below_pipe_buf_not_interleaved(const char *self)
 {
 	enum { REC = 64, PIECES = 4, ROUNDS = 64 };
 	char mine[REC], stream[REC * ROUNDS * 2];
+	char fdarg[24];
+	char *child_argv[4];
 	struct iovec iov[PIECES];
-	int p[2], i, status;
+	int p[2], i, status, rc;
 	pid_t child;
 	ssize_t n, got = 0;
 
 	CHECK(pipe(p) == 0);
 
-	child = fork();
-	CHECK(child >= 0);
-	if (child < 0) { close(p[0]); close(p[1]); return; }
-	if (child == 0) {
-		char theirs[REC];
-		close(p[0]);
-		memset(theirs, 'B', sizeof theirs);
-		for (i = 0; i < PIECES; i++) {
-			iov[i].iov_base = theirs + i * (REC / PIECES);
-			iov[i].iov_len = REC / PIECES;
-		}
-		for (i = 0; i < ROUNDS; i++)
-			if (writev(p[1], iov, PIECES) != REC) _exit(1);
-		close(p[1]);
-		_exit(0);
-	}
+	snprintf(fdarg, sizeof fdarg, "%d", p[1]);
+	child_argv[0] = (char *)self;
+	child_argv[1] = (char *)"writev-child";
+	child_argv[2] = fdarg;
+	child_argv[3] = 0;
+	rc = posix_spawn(&child, self, 0, 0, child_argv, environ);
+	CHECK(rc == 0);
+	if (rc != 0) { close(p[0]); close(p[1]); return; }
 
 	memset(mine, 'A', sizeof mine);
 	for (i = 0; i < PIECES; i++) {
@@ -651,19 +673,30 @@ static void test_writev_pipe_below_pipe_buf_not_interleaved(void)
 }
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
+#if NTLIBC_TEST(PASS, posix_uio_writev_pipe_below_pipe_buf_not_interleaved)
+	if (argc == 3 && !strcmp(argv[1], "writev-child")) {
+		int fd = 0;
+		const char *p = argv[2];
+		while (*p >= '0' && *p <= '9') fd = fd * 10 + (*p++ - '0');
+		return *p ? 2 : writev_child(fd);
+	}
+#else
+	(void)argc;
+	(void)argv;
+#endif
 	test_writev_failure_leaves_file_pointer();
 	test_offset_advances_by_transferred_count();
 	test_readv_zero_sum();
 	test_readv_iovcnt_upper_edge();
 	test_ebadf_wrong_access_mode();
 	test_pipe_round_trip();
-#if NTLIBC_TEST(BUG, posix_uio_writev_pipe_below_pipe_buf_not_interleaved) /* BUG: see the fence above
+#if NTLIBC_TEST(PASS, posix_uio_writev_pipe_below_pipe_buf_not_interleaved) /* see the fence above
 	test_writev_pipe_below_pipe_buf_not_interleaved.  The same
 	fence, not a second one: the call site has to be guarded too,
 	because the function it calls is inside the first #if 0. */
-	test_writev_pipe_below_pipe_buf_not_interleaved();
+	test_writev_pipe_below_pipe_buf_not_interleaved(argv[0]);
 #endif
 
 	if (fails) { printf("posix-uio: failures: %d\n", fails); return 1; }
