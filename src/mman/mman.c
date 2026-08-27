@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * <sys/mman.h>, Pass 2: anonymous mappings and file-backed mappings of
- * regular files.
+ * regular files, plus page locking.
  *
  * See include/sys/mman.h's banner for the edition question that shapes
  * this file (Issue 7 has no anonymous mapping; MAP_ANONYMOUS is a gated
@@ -93,6 +93,8 @@
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/mprotect.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/msync.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlock.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlockall.html
+ * https://pubs.opengroup.org/onlinepubs/9699919799/functions/munlockall.html
  */
 #include <sys/mman.h>
 #include <stdlib.h>
@@ -104,14 +106,17 @@
 #define MMAP_PAGE 4096u
 
 /* One live mapping.  `live` is one byte per page: a page is 1 while it
- * is mapped and 0 once munmap()/MAP_FIXED has decommitted it.  A byte
- * rather than a bitmap because mappings here are small and the loop that
- * asks "is anything still live" is the only hot path, and it is not
+ * is mapped and 0 once munmap()/MAP_FIXED has decommitted it. `locked`
+ * records the pages locked through this interface, both so MS_INVALIDATE
+ * can give its required [EBUSY] answer and so munlockall() can unlock the
+ * same ranges.  Bytes rather than bitmaps keep partial-range bookkeeping
+ * straightforward; these mappings are small and none of these loops is
  * hot. */
 struct mapping {
 	char *base;
 	size_t npages;
 	unsigned char *live;
+	unsigned char *locked;
 	int filebacked;         /* section view (NtMapViewOfSection), not a
 	                          * private NtAllocateVirtualMemory reservation */
 };
@@ -123,6 +128,7 @@ struct mapping {
  * having a bound and reporting it is conforming. */
 #define MMAP_MAX 256
 static struct mapping maps[MMAP_MAX];
+static int lock_future;
 
 static size_t pground(size_t n) { return (n + MMAP_PAGE - 1) & ~(size_t)(MMAP_PAGE - 1); }
 static int pgaligned(const void *p) { return ((uintptr_t)p & (MMAP_PAGE - 1)) == 0; }
@@ -244,6 +250,21 @@ static struct mapping *find_slot(void)
 	return NULL;
 }
 
+static int alloc_page_state(struct mapping *m, size_t npages)
+{
+	m->live = malloc(npages);
+	m->locked = calloc(npages, 1);
+	if (!m->live || !m->locked) {
+		free(m->live);
+		free(m->locked);
+		m->live = NULL;
+		m->locked = NULL;
+		return -1;
+	}
+	memset(m->live, 1, npages);
+	return 0;
+}
+
 /* Release the whole reservation once no page of it is live.  For an
  * anonymous mapping that is MEM_RELEASE, same as always.  For a
  * file-backed mapping it is NtUnmapViewOfSection instead: a section view
@@ -261,8 +282,10 @@ static void drop_if_dead(struct mapping *m)
 	if (m->filebacked) NtUnmapViewOfSection(NtCurrentProcess(), b);
 	else NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
 	free(m->live);
+	free(m->locked);
 	m->base = NULL;
 	m->live = NULL;
+	m->locked = NULL;
 	m->npages = 0;
 	m->filebacked = 0;
 }
@@ -423,8 +446,10 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			             npages * MMAP_PAGE, &base);
 			if (!NT_SUCCESS(st)) {
 				free(m->live);
+				free(m->locked);
 				m->base = NULL;
 				m->live = NULL;
+				m->locked = NULL;
 				m->npages = 0;
 				m->filebacked = 0;
 				if (st == (NTSTATUS)STATUS_NO_MEMORY)
@@ -434,8 +459,10 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 				return MAP_FAILED;
 			}
 			free(m->live);
-			m->live = malloc(npages);
-			if (!m->live) {
+			free(m->locked);
+			m->live = NULL;
+			m->locked = NULL;
+			if (alloc_page_state(m, npages) < 0) {
 				/* Bookkeeping can't be grown, but the new view
 				 * is live and correctly placed; report it. */
 				m->base = base;
@@ -443,10 +470,17 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 				m->filebacked = 1;
 				return base;
 			}
-			memset(m->live, 1, npages);
 			m->base = base;
 			m->npages = npages;
 			m->filebacked = 1;
+			if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
+				NtUnmapViewOfSection(NtCurrentProcess(), base);
+				free(m->live);
+				free(m->locked);
+				memset(m, 0, sizeof *m);
+				errno = EAGAIN;
+				return MAP_FAILED;
+			}
 			return base;
 		}
 
@@ -470,7 +504,19 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			__set_errno_status(st);
 			return MAP_FAILED;
 		}
-		for (i = 0; i < npages && first + i < m->npages; i++) m->live[first + i] = 1;
+		for (i = 0; i < npages && first + i < m->npages; i++) {
+			m->live[first + i] = 1;
+			m->locked[first + i] = 0;
+		}
+		if (lock_future && mlock(addr, npages * MMAP_PAGE) < 0) {
+			p = addr;
+			z = npages * MMAP_PAGE;
+			NtFreeVirtualMemory(NtCurrentProcess(), &p, &z, MEM_DECOMMIT);
+			for (i = 0; i < npages && first + i < m->npages; i++) m->live[first + i] = 0;
+			drop_if_dead(m);
+			errno = EAGAIN;
+			return MAP_FAILED;
+		}
 		return addr;
 	}
 
@@ -485,16 +531,22 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			else errno = ENOTSUP;
 			return MAP_FAILED;
 		}
-		m->live = malloc(npages);
-		if (!m->live) {
+		if (alloc_page_state(m, npages) < 0) {
 			NtUnmapViewOfSection(NtCurrentProcess(), base);
 			errno = ENOMEM;
 			return MAP_FAILED;
 		}
-		memset(m->live, 1, npages);
 		m->base = base;
 		m->npages = npages;
 		m->filebacked = 1;
+		if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
+			NtUnmapViewOfSection(NtCurrentProcess(), base);
+			free(m->live);
+			free(m->locked);
+			memset(m, 0, sizeof *m);
+			errno = EAGAIN;
+			return MAP_FAILED;
+		}
 		return base;
 	}
 
@@ -504,18 +556,26 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	                             MEM_RESERVE | MEM_COMMIT, prot_to_page(prot));
 	if (!NT_SUCCESS(st)) { __set_errno_status(st); return MAP_FAILED; }
 
-	m->live = malloc(npages);
-	if (!m->live) {
+	if (alloc_page_state(m, npages) < 0) {
 		PVOID b = base;
 		SIZE_T z = 0;
 		NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
 		errno = ENOMEM;
 		return MAP_FAILED;
 	}
-	memset(m->live, 1, npages);
 	m->base = base;
 	m->npages = npages;
 	m->filebacked = 0;
+	if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
+		PVOID b = base;
+		SIZE_T z = 0;
+		NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
+		free(m->live);
+		free(m->locked);
+		memset(m, 0, sizeof *m);
+		errno = EAGAIN;
+		return MAP_FAILED;
+	}
 	return base;
 }
 
@@ -563,7 +623,10 @@ int munmap(void *addr, size_t len)
 			 * the reservation, leaves the rest of the mapping
 			 * exactly where it was. */
 			NtFreeVirtualMemory(NtCurrentProcess(), &p, &z, MEM_DECOMMIT);
-			for (i = 0; i < n; i++) m->live[first + i] = 0;
+			for (i = 0; i < n; i++) {
+				m->live[first + i] = 0;
+				m->locked[first + i] = 0;
+			}
 			drop_if_dead(m);
 		}
 	}
@@ -590,6 +653,7 @@ int mprotect(void *addr, size_t len, int prot)
 
 int msync(void *addr, size_t len, int flags)
 {
+	int k;
 	/* An honest no-op, not a fabricated success -- see the banner.
 	 * The arguments are still validated, because a caller who passes a
 	 * misaligned address has made an error whether or not there is
@@ -601,7 +665,26 @@ int msync(void *addr, size_t len, int flags)
 	if ((flags & ~(MS_ASYNC | MS_SYNC | MS_INVALIDATE)) != 0) { errno = EINVAL; return -1; }
 	/* "[EINVAL] The value of flags includes both MS_ASYNC and MS_SYNC." */
 	if ((flags & MS_ASYNC) && (flags & MS_SYNC)) { errno = EINVAL; return -1; }
-	(void)len;
+	if (flags & MS_INVALIDATE) {
+		char *a = addr;
+		char *end = a + pground(len);
+		for (k = 0; k < MMAP_MAX; k++) {
+			struct mapping *m = &maps[k];
+			char *lo, *hi;
+			size_t first, n, i;
+			if (!m->base) continue;
+			lo = a > m->base ? a : m->base;
+			hi = end < m->base + m->npages * MMAP_PAGE
+			   ? end : m->base + m->npages * MMAP_PAGE;
+			if (lo >= hi) continue;
+			first = (size_t)(lo - m->base) / MMAP_PAGE;
+			n = (size_t)(hi - lo) / MMAP_PAGE;
+			for (i = 0; i < n; i++) if (m->locked[first + i]) {
+				errno = EBUSY;
+				return -1;
+			}
+		}
+	}
 	return 0;
 }
 
@@ -629,8 +712,120 @@ static int lock_range(const void *addr, size_t len, int lock)
 	st = lock ? NtLockVirtualMemory(NtCurrentProcess(), &p, &z, 1)
 	          : NtUnlockVirtualMemory(NtCurrentProcess(), &p, &z, 1);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	{
+		char *a = p;
+		char *end = a + z;
+		int k;
+		for (k = 0; k < MMAP_MAX; k++) {
+			struct mapping *m = &maps[k];
+			char *lo, *hi;
+			size_t first, n, i;
+			if (!m->base) continue;
+			lo = a > m->base ? a : m->base;
+			hi = end < m->base + m->npages * MMAP_PAGE
+			   ? end : m->base + m->npages * MMAP_PAGE;
+			if (lo >= hi) continue;
+			first = (size_t)(lo - m->base) / MMAP_PAGE;
+			n = (size_t)(hi - lo) / MMAP_PAGE;
+			for (i = 0; i < n; i++) if (m->live[first + i])
+				m->locked[first + i] = (unsigned char)lock;
+		}
+	}
 	return 0;
 }
 
 int mlock(const void *addr, size_t len)   { return lock_range(addr, len, 1); }
 int munlock(const void *addr, size_t len) { return lock_range(addr, len, 0); }
+
+int mlockall(int flags)
+{
+	int k;
+
+	if (!flags || (flags & ~(MCL_CURRENT | MCL_FUTURE))) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (flags & MCL_CURRENT) {
+		for (k = 0; k < MMAP_MAX; k++) {
+			struct mapping *m = &maps[k];
+			size_t first, n;
+			if (!m->base) continue;
+			for (first = 0; first < m->npages; first += n) {
+				while (first < m->npages &&
+				       (!m->live[first] || m->locked[first])) first++;
+				if (first == m->npages) break;
+				for (n = 1; first + n < m->npages &&
+				     m->live[first + n] && !m->locked[first + n]; n++);
+				if (mlock(m->base + first * MMAP_PAGE, n * MMAP_PAGE) < 0) {
+					int saved = errno;
+					int j;
+					/* A failed mlockall() must not leave the
+					 * successfully visited prefix locked. State 2
+					 * distinguishes locks acquired by this call from
+					 * locks that predated it. */
+					for (j = 0; j < MMAP_MAX; j++) {
+						struct mapping *r = &maps[j];
+						size_t a, z;
+						if (!r->base) continue;
+						for (a = 0; a < r->npages; a += z) {
+							while (a < r->npages && r->locked[a] != 2) a++;
+							if (a == r->npages) break;
+							for (z = 1; a + z < r->npages && r->locked[a + z] == 2; z++);
+							munlock(r->base + a * MMAP_PAGE, z * MMAP_PAGE);
+						}
+					}
+					errno = saved;
+					return -1;
+				}
+				memset(m->locked + first, 2, n);
+			}
+		}
+		for (k = 0; k < MMAP_MAX; k++) {
+			struct mapping *m = &maps[k];
+			size_t i;
+			if (!m->base) continue;
+			for (i = 0; i < m->npages; i++)
+				if (m->locked[i] == 2) m->locked[i] = 1;
+		}
+	}
+	if (flags & MCL_FUTURE) lock_future = 1;
+	return 0;
+}
+
+int munlockall(void)
+{
+	int k;
+	int failed = 0;
+	int saved = 0;
+
+	lock_future = 0;
+	for (k = 0; k < MMAP_MAX; k++) {
+		struct mapping *m = &maps[k];
+		size_t first, n;
+		if (!m->base) continue;
+		for (first = 0; first < m->npages; first += n) {
+			while (first < m->npages && !m->locked[first]) first++;
+			if (first == m->npages) break;
+			for (n = 1; first + n < m->npages && m->locked[first + n]; n++);
+			if (munlock(m->base + first * MMAP_PAGE, n * MMAP_PAGE) < 0) {
+				if (!failed) saved = errno;
+				failed = 1;
+			}
+		}
+	}
+	if (failed) {
+		errno = saved;
+		return -1;
+	}
+	return 0;
+}
+
+void __mman_reset_after_fork(void)
+{
+	int k;
+	lock_future = 0;
+	for (k = 0; k < MMAP_MAX; k++) {
+		struct mapping *m = &maps[k];
+		if (m->base && m->locked) memset(m->locked, 0, m->npages);
+	}
+}

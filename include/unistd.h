@@ -257,6 +257,10 @@ pid_t gettid(void);
  * provide the Shared Memory Objects option. */
 #define _POSIX_SHARED_MEMORY_OBJECTS 200809L
 
+/* Whole-address-space and range memory locking. */
+#define _POSIX_MEMLOCK       200809L
+#define _POSIX_MEMLOCK_RANGE 200809L
+
 /* Queued real-time signals, including payload-preserving cross-process
  * sigqueue() delivery and the two synchronous wait interfaces. */
 #define _POSIX_REALTIME_SIGNALS 200809L

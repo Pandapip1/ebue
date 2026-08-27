@@ -506,11 +506,11 @@ static int test_mlock_munlock(void)
 }
 
 /* ================================================================
- * The six interfaces this header's own banner still declines, plus the
+ * The four interfaces this header's own banner still declines, plus the
  * shared-memory pair that graduated from this group.  include/sys/mman.h
- * says, in prose: "Eight of the header's fourteen interfaces are
- * declared.  mlockall, munlockall, posix_madvise, posix_mem_offset,
- * posix_typed_mem_get_info, and posix_typed_mem_open are deliberately
+ * says, in prose: "Ten of the header's fourteen interfaces are
+ * declared.  posix_madvise, posix_mem_offset, posix_typed_mem_get_info,
+ * and posix_typed_mem_open are deliberately
  * absent, on the same ground
  * as <sched.h>'s omissions: declaring one so it could return an error is
  * worse than not declaring it, because a
@@ -525,7 +525,7 @@ static int test_mlock_munlock(void)
  * are UNIMPL fences with real bodies -- what should pass the day the
  * decision is revisited, not prose restating the decision.
  *
- * The six remaining fences fail at LINK, not at the preprocessor,
+ * The four remaining fences fail at LINK, not at the preprocessor,
  * because <sys/mman.h> itself exists and includes cleanly; the
  * declarations are what is absent.  tools/test-policy.py --pedantic
  * decides that, not this comment.  The PASS fence below preserves the
@@ -598,9 +598,10 @@ static void test_posix_mman_shm_open_unlink(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_mman_mlockall_munlockall)
+#if NTLIBC_TEST(PASS, posix_mman_mlockall_munlockall)
 static void test_posix_mman_mlockall_munlockall(void)
 {
+	char *p;
 	/* mlockall.html: "shall cause all of the pages mapped by the
 	 * address space of a process to be memory-resident until unlocked
 	 * or until the process exits or exec's another process image.  The
@@ -611,8 +612,23 @@ static void test_posix_mman_mlockall_munlockall(void)
 	 * express three states. */
 	CHECK(MCL_CURRENT != MCL_FUTURE);
 	CHECK((MCL_CURRENT & MCL_FUTURE) == 0);
+	CHECK(_POSIX_MEMLOCK > 0);
+	CHECK(_POSIX_MEMLOCK_RANGE > 0);
+	CHECK(sysconf(_SC_MEMLOCK) > 0);
+	CHECK(sysconf(_SC_MEMLOCK_RANGE) > 0);
+
+	p = mmap(NULL, PG, PROT_READ | PROT_WRITE,
+	         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK(p != MAP_FAILED);
+	if (p == MAP_FAILED)
+		return;
 
 	CHECK(mlockall(MCL_CURRENT) == 0);
+	if (msync(p, PG, MS_SYNC | MS_INVALIDATE) == -1) {
+		CHECK(errno == EBUSY);
+	} else {
+		CHECK(0);
+	}
 
 	/* munlockall.html: "shall unlock all currently mapped pages of the
 	 * address space of the process ... Upon successful return from
@@ -620,6 +636,7 @@ static void test_posix_mman_mlockall_munlockall(void)
 	 * shall no longer be locked ... unless another mechanism has also
 	 * locked the pages." */
 	CHECK(munlockall() == 0);
+	CHECK(msync(p, PG, MS_SYNC | MS_INVALIDATE) == 0);
 
 	/* Idempotent by the same clause: unlocking when nothing is locked
 	 * is not one of the two ERRORS ([EAGAIN], [EPERM]) the page
@@ -631,6 +648,22 @@ static void test_posix_mman_mlockall_munlockall(void)
 	errno = 0;
 	CHECK(mlockall(0) == -1);
 	CHECK(errno == EINVAL);
+
+	/* MCL_FUTURE applies the same lock to mappings created after the
+	 * call, and munlockall() also cancels that mode. */
+	CHECK(mlockall(MCL_FUTURE) == 0);
+	CHECK(munmap(p, PG) == 0);
+	p = mmap(NULL, PG, PROT_READ | PROT_WRITE,
+	         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK(p != MAP_FAILED);
+	if (p != MAP_FAILED) {
+		errno = 0;
+		CHECK(msync(p, PG, MS_SYNC | MS_INVALIDATE) == -1);
+		CHECK(errno == EBUSY);
+		CHECK(munlockall() == 0);
+		CHECK(msync(p, PG, MS_SYNC | MS_INVALIDATE) == 0);
+		CHECK(munmap(p, PG) == 0);
+	}
 }
 #endif
 

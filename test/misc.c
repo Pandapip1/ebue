@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 
 static int fails;
@@ -98,6 +99,15 @@ static void test_sched(void)
 	CHECK(sched_get_priority_max(-1) == -1 && errno == EINVAL);
 	param.sched_priority = 0;
 	CHECK(sched_setscheduler(0, SCHED_OTHER, &param) == 0);
+}
+
+/* ---- whole-process memory locking ---- */
+static void test_mlockall(void)
+{
+	CHECK(mlockall(MCL_FUTURE) == 0);
+	CHECK(munlockall() == 0);
+	errno = 0;
+	CHECK(mlockall(0) == -1 && errno == EINVAL);
 }
 
 /* ---- system() ---- */
@@ -390,6 +400,7 @@ int main(int argc, char **argv)
 	unlink("misc-exit-flush.tmp");
 	test_env();
 	test_sched();
+	test_mlockall();
 	test_system();
 	test_setjmp();
 	test_signal();

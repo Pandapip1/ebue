@@ -62,6 +62,8 @@ long sysconf(int name)
 	case _SC_TIMER_MAX: return TIMER_MAX;
 	case _SC_DELAYTIMER_MAX: return _POSIX_DELAYTIMER_MAX;
 	case _SC_CPUTIME: return _POSIX_CPUTIME;
+	case _SC_MEMLOCK: return _POSIX_MEMLOCK;
+	case _SC_MEMLOCK_RANGE: return _POSIX_MEMLOCK_RANGE;
 	/* The <limits.h> Runtime Increasable Values, which that header
 	 * documents as the compile-time minimum this library promises;
 	 * reporting anything smaller here would break the promise. */
@@ -124,7 +126,7 @@ long sysconf(int name)
 	 *                              _SC_PRIORITIZED_IO
 	 *   no <semaphore.h>        -- _SC_SEMAPHORES, _SC_SEM_*
 	 *   no <mqueue.h>           -- _SC_MESSAGE_PASSING, _SC_MQ_*
-	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES, _SC_MEMLOCK*,
+	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES,
 	 *                              _SC_MEMORY_PROTECTION,
 	 *                              _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
 	 *   no utilities            -- the _SC_2_* development-utility set
@@ -171,8 +173,6 @@ long sysconf(int name)
 	case _SC_PRIORITIZED_IO:
 	case _SC_SYNCHRONIZED_IO:
 	case _SC_MAPPED_FILES:
-	case _SC_MEMLOCK:
-	case _SC_MEMLOCK_RANGE:
 	case _SC_MEMORY_PROTECTION:
 	case _SC_MESSAGE_PASSING:
 	case _SC_SEMAPHORES:

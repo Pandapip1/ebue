@@ -224,6 +224,10 @@ pid_t fork(void)
 		 * not OBJ_INHERIT -- so this only has to forget the deadline,
 		 * not cancel anything. */
 		__alarm_reset_after_fork();
+		/* Memory locks and MCL_FUTURE are not inherited across fork().
+		 * RtlCloneUserProcess copied mman.c's bookkeeping bytes, so make
+		 * the child-side state match that kernel-level rule. */
+		__mman_reset_after_fork();
 		/* And once more: the sibling entries that travelled with the
 		 * clone carry the parent's job-control bookkeeping, and this
 		 * process stopped none of them.  Left alone, the clone would
