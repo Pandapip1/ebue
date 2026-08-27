@@ -525,7 +525,7 @@ static void test_pthread_rwlock_shared_read(void)
  * pthread_barrier_wait.html  (Barriers option, _POSIX_BARRIERS)
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_barrier_serial_thread)
+#if NTLIBC_TEST(PASS, posix_pthread_barrier_serial_thread)
 #include <pthread.h>
 #include <errno.h>
 
@@ -587,7 +587,7 @@ static void test_pthread_barrier_serial_thread(void)
  * pthread_spin_lock.html  (Spin Locks option, _POSIX_SPIN_LOCKS)
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_spin_lock_trylock)
+#if NTLIBC_TEST(PASS, posix_pthread_spin_lock_trylock)
 #include <pthread.h>
 #include <errno.h>
 
