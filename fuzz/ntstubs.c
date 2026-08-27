@@ -3973,6 +3973,32 @@ NOTIMPL(NtQueryVirtualMemory, (HANDLE a, PVOID b, MEMORY_INFORMATION_CLASS c, PV
 #define NTSTUB_VM_MAX 256
 static struct { void *base; size_t size; } ntstub_vm[NTSTUB_VM_MAX];
 
+/* Tracked file-backed section views (NtMapViewOfSection, below), needed
+ * here too: NtFreeVirtualMemory's MEM_DECOMMIT has to refuse a range
+ * that belongs to one, matching real NT (a section view is not memory
+ * NtFreeVirtualMemory owns -- see include/sys/mman.h's banner and
+ * src/mman/mman.c's mmap()). Declared this early only for that check;
+ * NtCreateSection()/NtMapViewOfSection()/NtUnmapViewOfSection()
+ * themselves are defined together, further down. */
+#define NTSTUB_VIEW_MAX 64
+struct ntstub_view { void *base; size_t size; struct vnode *v; long long off; int writable_shared; };
+static struct ntstub_view ntstub_views[NTSTUB_VIEW_MAX];
+
+/* Whether [base, base+size) overlaps any tracked section view. */
+static int ntstub_view_overlaps(void *base, size_t size)
+{
+	int i;
+	unsigned char *lo = base, *hi = lo + size;
+	for (i = 0; i < NTSTUB_VIEW_MAX; i++) {
+		unsigned char *vlo, *vhi;
+		if (!ntstub_views[i].base) continue;
+		vlo = ntstub_views[i].base;
+		vhi = vlo + ntstub_views[i].size;
+		if (lo < vhi && vlo < hi) return 1;
+	}
+	return 0;
+}
+
 static long ntstub_prot(ULONG page)
 {
 	switch (page) {
@@ -4047,6 +4073,26 @@ NTSTATUS NTAPI NtFreeVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULONG
 	 * discard clause depends on.  mprotect alone would leave the old
 	 * bytes in place and quietly make that clause untestable here. */
 	if (!*size) return STATUS_INVALID_PARAMETER;
+	/* Refuse a range that belongs to a file-backed section view, the
+	 * same way real NT does (include/sys/mman.h's banner): a view is
+	 * placed and removed as a WHOLE, and there is no NT primitive for
+	 * decommitting part of one.  src/mman/mman.c's munmap() calls this
+	 * unconditionally on every mapping, including file-backed ones, and
+	 * never checks the status -- it relies on this failing harmlessly.
+	 * Measured the hard way: without this check, this stub's own
+	 * MEM_DECOMMIT genuinely PROT_NONEs the view (a real anonymous
+	 * mapping, underneath), and src/mman/mman.c's own subsequent
+	 * NtUnmapViewOfSection() -- which writes the view's now-PROT_NONE
+	 * bytes back to the vnode for a dirty MAP_SHARED mapping -- then
+	 * SEGVs reading them.
+	 *
+	 * The exact failure status is not load-bearing -- src/mman/mman.c
+	 * never inspects it (see above) -- so this reuses
+	 * STATUS_INVALID_PARAMETER, already declared and already this
+	 * function's answer for the sibling guard clauses just above,
+	 * rather than adding a made-up NTSTATUS value this file cannot
+	 * verify against real NT. */
+	if (ntstub_view_overlaps(*base, (size_t)*size)) return STATUS_INVALID_PARAMETER;
 	r = syscall(SYS_mmap, (long)*base, (long)*size, H_PROT_NONE,
 	            (long)(H_MAP_PRIVATE | H_MAP_ANONYMOUS | H_MAP_FIXED), -1L, 0L);
 	if (ntstub_mmap_failed(r)) return STATUS_INVALID_PARAMETER;
@@ -4085,6 +4131,154 @@ NTSTATUS NTAPI NtUnlockVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size, ULO
 	if (syscall(SYS_munlock, (long)*base, (long)*size) != 0) return STATUS_ACCESS_DENIED;
 	return STATUS_SUCCESS;
 }
+
+/* ---- file-backed sections (src/mman/mman.c's map_file(), Pass 2) --
+ *
+ * NtCreateSection()/NtMapViewOfSection()/NtUnmapViewOfSection() cannot
+ * be hand off to the host's mmap(fd, ...) the way the anonymous-VM
+ * stubs above hand MEM_RESERVE straight to mmap(MAP_ANONYMOUS): an
+ * OF_VFS handle here has no real host file descriptor behind it at all
+ * -- "files" are the in-memory vnode tree described above NtCreateFile,
+ * not real files on disk (this file's header banner).
+ *
+ * What IS available, and genuine rather than invented: the vnode's own
+ * `data`/`size`, directly readable in this same process.  So a view is
+ * real host anonymous memory (same substrate, same ASan coverage as the
+ * anon-VM stubs), seeded by copying the vnode's bytes in at map time
+ * (so a caller reading a file-backed mapping sees the file's actual
+ * contents, not garbage or zero) and, for a writable MAP_SHARED view,
+ * copied back into the vnode at unmap time (so mmap/write/munmap/
+ * reopen/mmap -- the shape test/posix-mman.c's own test_mmap_file_backed
+ * checks -- sees the write persist).  This is real memory with real
+ * per-page bookkeeping under ASan, which is the point (see the anon-VM
+ * stubs' own banner for why that outranks a NOTIMPL here too); the
+ * places it is NOT faithful to NT, spelled out rather than papered
+ * over:
+ *
+ *   - No cross-process sharing.  A second, independent view of the same
+ *     section (this stub's native build never forks two live processes
+ *     sharing a section handle the way real NT would) does not observe
+ *     a first view's writes.  Nothing measured against this library
+ *     opens a section from two processes.
+ *   - No file-access-mode enforcement.  A real, working section on a
+ *     read-only-opened file rejects a writable request; this stub does
+ *     not model that, because src/mman/mman.c's own O_ACCMODE check
+ *     (mmap(), before map_file() is ever called) already rejects the
+ *     one case that matters to a caller -- MAP_SHARED+PROT_WRITE on a
+ *     read-only descriptor -- so no code path here ever asks this stub
+ *     to enforce it.
+ *   - Growing the file past its current vnode capacity on a write past
+ *     EOF is declined (see NtUnmapViewOfSection below) rather than
+ *     guessed at: this stub has no ftruncate()-equivalent write path of
+ *     its own to invent, and doing so quietly would be exactly the kind
+ *     of plausible-but-wrong host-specific behaviour this file's header
+ *     warns against.
+ */
+#define NTSTUB_SECTION_MAX 64
+struct ntstub_section { struct vnode *v; long long size; };
+static struct ntstub_section ntstub_sections[NTSTUB_SECTION_MAX];
+
+/* ntstub_views[]/ntstub_view_overlaps() are declared earlier, alongside
+ * ntstub_vm[] -- NtFreeVirtualMemory needs them too. See there. */
+
+/* Section handles live in their own tagged range, well clear of
+ * vhandles[]'s 1..VFS_HANDLES so of_get() can never alias one. */
+#define NTSTUB_SECTION_BASE 0x40000000L
+
+NTSTATUS NTAPI NtCreateSection(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES oa,
+                               LARGE_INTEGER *maxsize, ULONG prot, ULONG alloc, HANDLE file)
+{
+	struct ofile *f;
+	int i;
+	(void)access; (void)oa; (void)prot; (void)alloc;
+	if (!out || !file) return STATUS_INVALID_PARAMETER;
+	f = of_get(file);
+	if (!f || f->kind != OF_VFS) return STATUS_INVALID_HANDLE;
+	for (i = 0; i < NTSTUB_SECTION_MAX; i++) {
+		if (ntstub_sections[i].v) continue;
+		ntstub_sections[i].v = f->node;
+		ntstub_sections[i].size = maxsize ? *maxsize : f->node->size;
+		*out = (HANDLE)(NTSTUB_SECTION_BASE + i);
+		return STATUS_SUCCESS;
+	}
+	return STATUS_TOO_MANY_OPENED_FILES;
+}
+
+static struct ntstub_section *ntstub_section_get(HANDLE h)
+{
+	long i = (long)h - NTSTUB_SECTION_BASE;
+	if (i < 0 || i >= NTSTUB_SECTION_MAX || !ntstub_sections[i].v) return 0;
+	return &ntstub_sections[i];
+}
+
+NTSTATUS NTAPI NtMapViewOfSection(HANDLE section, HANDLE proc, PVOID *base, ULONG_PTR zb,
+                                  SIZE_T commit, LARGE_INTEGER *secoff, SIZE_T *viewsize,
+                                  SECTION_INHERIT inherit, ULONG alloctype, ULONG win32prot)
+{
+	struct ntstub_section *s = ntstub_section_get(section);
+	long long off = secoff ? *secoff : 0;
+	size_t want, avail, page = 4096, rounded;
+	long r;
+	int i;
+	(void)proc; (void)zb; (void)commit; (void)inherit; (void)alloctype;
+	if (!s || !base || !viewsize) return STATUS_INVALID_PARAMETER;
+	if (off < 0 || off > s->size) return STATUS_INVALID_PARAMETER;
+	avail = (size_t)(s->size - off);
+	want = *viewsize ? *viewsize : avail;
+	if (want > avail) want = avail;
+	rounded = (want + page - 1) & ~(page - 1);
+	if (!rounded) rounded = page;
+
+	r = syscall(SYS_mmap, (long)*base, (long)rounded, H_PROT_READ | H_PROT_WRITE,
+	            (long)(H_MAP_PRIVATE | H_MAP_ANONYMOUS | (*base ? H_MAP_FIXED : 0)), -1L, 0L);
+	if (ntstub_mmap_failed(r)) return STATUS_NO_MEMORY;
+
+	if (want && s->v->data) {
+		long long n = (long long)want;
+		if (off + n > s->v->size) n = s->v->size - off;
+		if (n > 0) memcpy((void *)r, s->v->data + off, (size_t)n);
+	}
+
+	for (i = 0; i < NTSTUB_VIEW_MAX; i++) {
+		if (ntstub_views[i].base) continue;
+		ntstub_views[i].base = (void *)r;
+		ntstub_views[i].size = rounded;
+		ntstub_views[i].v = s->v;
+		ntstub_views[i].off = off;
+		/* Only these two Win32Protect values name a genuine MAP_SHARED
+		 * writer (src/mman/mman.c's prot_to_view()); PAGE_WRITECOPY /
+		 * PAGE_EXECUTE_WRITECOPY are MAP_PRIVATE, whose writes
+		 * mmap.html requires never reach the object. */
+		ntstub_views[i].writable_shared =
+			(win32prot == PAGE_READWRITE || win32prot == PAGE_EXECUTE_READWRITE);
+		break;
+	}
+	*base = (void *)r;
+	*viewsize = rounded;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtUnmapViewOfSection(HANDLE proc, PVOID base)
+{
+	int i;
+	(void)proc;
+	for (i = 0; i < NTSTUB_VIEW_MAX; i++) {
+		if (ntstub_views[i].base != base) continue;
+		if (ntstub_views[i].writable_shared && ntstub_views[i].v->data) {
+			long long n = (long long)ntstub_views[i].size;
+			if (ntstub_views[i].off + n > ntstub_views[i].v->size)
+				n = ntstub_views[i].v->size - ntstub_views[i].off;
+			if (n > 0)
+				memcpy(ntstub_views[i].v->data + ntstub_views[i].off,
+				       ntstub_views[i].base, (size_t)n);
+		}
+		syscall(SYS_munmap, (long)ntstub_views[i].base, (long)ntstub_views[i].size);
+		ntstub_views[i].base = 0;
+		return STATUS_SUCCESS;
+	}
+	return STATUS_INVALID_PARAMETER;
+}
+
 /* src/file/flock.c's NtLockFile()/NtUnlockFile() pair: no simulated
  * byte-range lock table exists over the in-memory volume this file's
  * NtCreateFile() stub above serves, so there is nothing genuine to

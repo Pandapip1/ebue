@@ -387,7 +387,21 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			 * file-backed mapping is refused with [ENOMEM] --
 			 * no case reaching this library exercises that, and
 			 * an honest refusal beats silently misbehaving. */
-			if ((char *)addr != m->base || npages != m->npages) {
+			/* Also refused here, alongside the partial-replace
+			 * case above: an ANONYMOUS MAP_FIXED landing exactly
+			 * on a file-backed mapping's extent.  POSIX allows a
+			 * MAP_FIXED to replace any previous mapping regardless
+			 * of its kind, but the replacement path below is
+			 * map_file(), which needs a real file descriptor (`f`)
+			 * -- present only when THIS call is itself file-backed
+			 * (`!anon`, set above). Without this check `f` is NULL
+			 * here whenever the current call is anonymous, which
+			 * is exactly the null dereference on f->h that
+			 * `clang --analyze` [core.NullDereference] catches. No
+			 * case reaching this library replaces a file-backed
+			 * mapping with an anonymous one; an honest [ENOMEM]
+			 * beats silently misbehaving here too. */
+			if ((char *)addr != m->base || npages != m->npages || anon) {
 				errno = ENOMEM;
 				return MAP_FAILED;
 			}
