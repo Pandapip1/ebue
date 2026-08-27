@@ -946,6 +946,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				}
 				if (nu == 0) { gotEOF = 1; ab_free(&ab); goto done; }
 				if (!mbsinit(&mbs)) { ilseq = 1; ab_free(&ab); goto done; }
+				if (nu < w) { gotEOF = 1; ab_free(&ab); goto done; }
 				if (alc) ab_give(&ab, arg, nn);
 				if (assign) nmatched++;
 				break;

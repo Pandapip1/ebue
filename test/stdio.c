@@ -566,6 +566,10 @@ static void test_scanf(void)
 	/* %s, %c */
 	CHECK(sscanf("hello world", "%s %s", str, str2) == 2);
 	CHECK(strcmp(str, "hello") == 0 && strcmp(str2, "world") == 0);
+	memset(str, 'X', sizeof str);
+	memset(str2, 'Y', sizeof str2);
+	CHECK(sscanf("hello, world\n", "%8c%8c", str, str2) == 1);
+	CHECK(memcmp(str, "hello, w", 8) == 0);
 	CHECK(sscanf("   hello", "%s", str) == 1 && strcmp(str, "hello") == 0);
 	CHECK(sscanf("hello", "%3s", str) == 1 && strcmp(str, "hel") == 0);
 	CHECK(sscanf("hello", "%3s%s", str, str2) == 2 && strcmp(str, "hel") == 0 && strcmp(str2, "lo") == 0);
