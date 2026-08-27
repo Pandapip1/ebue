@@ -53,7 +53,8 @@
  * operators, and #/##/%/%% pattern removal against environ (assignments
  * are visible for the duration of one wordexp() call), arithmetic
  * expansion ($((expr)), src/wordexp/arith.c), pathname expansion
- * (delegates to <glob.h>), quote removal, and the
+ * (delegates to <glob.h>), ordinary and POSIX.1-2024 dollar-single
+ * quoting, quote removal, and the
  * WRDE_DOOFFS/WRDE_APPEND/WRDE_REUSE bookkeeping flags.
  *
  * Field splitting (XBD 2.6.5): unquoted expansion results are split on

@@ -1913,6 +1913,10 @@ static void test_wordexp_line_continuation(void)
 	CHECK(we.we_wordc == 1 && !strcmp(we.we_wordv[0], "xyz"));
 	wordfree(&we);
 
+	CHECK(wordexp("$'a\\tb'", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "a\tb") == 0);
+	wordfree(&we);
+
 	/* but a single-quoted backslash-newline is two literal bytes */
 	CHECK(wordexp("'a\\\nb'", &we, 0) == 0);
 	CHECK(we.we_wordc == 1 && !strcmp(we.we_wordv[0], "a\\\nb"));

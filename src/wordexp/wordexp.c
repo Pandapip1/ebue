@@ -220,6 +220,15 @@ static const char *param_word_end(const char *p)
 
 	for (; *p; p++) {
 		if (*p == '\\' && p[1]) { p++; continue; }
+		if (p[0] == '$' && p[1] == '\'') {
+			p += 2;
+			while (*p && *p != '\'') {
+				if (*p == '\\' && p[1]) p++;
+				p++;
+			}
+			if (!*p) return 0;
+			continue;
+		}
 		if (*p == '\'') {
 			while (*++p && *p != '\'') {}
 			if (!*p) return 0;
@@ -639,6 +648,50 @@ static int fbuf_push_long(struct fbuf *b, long v)
 	return fbuf_push_str(b, buf, 0);
 }
 
+/* POSIX.1-2024 dollar-single-quotes.  The result is quoted data, so
+ * neither field splitting nor pathname expansion sees these bytes. */
+static int expand_dollar_single(const char **pp, struct fbuf *b)
+{
+	const char *p = *pp + 2;
+
+	while (*p && *p != '\'') {
+		unsigned char c = (unsigned char)*p++;
+		if (c == '\\') {
+			unsigned value = 0;
+			int digits = 0;
+			if (!*p) return WRDE_SYNTAX;
+			c = (unsigned char)*p++;
+			switch (c) {
+			case 'a': c = '\a'; break;
+			case 'b': c = '\b'; break;
+			case 'e': c = 27; break;
+			case 'f': c = '\f'; break;
+			case 'n': c = '\n'; break;
+			case 'r': c = '\r'; break;
+			case 't': c = '\t'; break;
+			case 'v': c = '\v'; break;
+			case '\\': case '\'': case '"': case '?': break;
+			case '\n': continue;
+			case '0':
+				while (digits < 3 && *p >= '0' && *p <= '7') {
+					value = value * 8 + (unsigned)(*p++ - '0');
+					digits++;
+				}
+				c = (unsigned char)value;
+				break;
+			default:
+				/* An unspecified escape keeps the backslash. */
+				if (fbuf_push(b, '\\', 1)) return WRDE_NOSPACE;
+				break;
+			}
+		}
+		if (fbuf_push(b, (char)c, 1)) return WRDE_NOSPACE;
+	}
+	if (*p != '\'') return WRDE_SYNTAX;
+	*pp = p + 1;
+	return 0;
+}
+
 /* Reads $((expr)) starting at *pp (pointing at the '$'; callers have
  * already confirmed p[1]=='(' && p[2]=='('). Advances *pp past the
  * matching "))". Appends the decimal result to b. Returns 0, or a
@@ -872,6 +925,16 @@ static int validate_words(const char *words, int flags)
 			const char *end = param_word_end(p + 2);
 			if (!end) return WRDE_SYNTAX;
 			p = end + 1;
+			continue;
+		}
+		if (q == V_NONE && c == '$' && p[1] == '\'') {
+			p += 2;
+			while (*p && *p != '\'') {
+				if (*p == '\\' && p[1]) p++;
+				p++;
+			}
+			if (!*p) return WRDE_SYNTAX;
+			p++;
 			continue;
 		}
 		if (c == '$' && p[1] == '(' && p[2] == '(') {
@@ -1165,6 +1228,12 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 				if (fbuf_push(&field, p[1], 1)) { rc = WRDE_NOSPACE; goto fail; }
 				active = 1;
 				p += 2;
+				continue;
+			}
+			if (c == '$' && p[1] == '\'') {
+				active = 1;
+				rc = expand_dollar_single(&p, &field);
+				if (rc) goto fail;
 				continue;
 			}
 			if (c == '$' && p[1] == '(' && p[2] == '(') {
