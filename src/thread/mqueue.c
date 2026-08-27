@@ -362,7 +362,7 @@ fail_fd:
 	goto fail_locked_saved;
 fail_created:
 	saved = errno;
-	close(fd); fd = -1;
+	close(fd);
 	unlink(path);
 	goto fail_locked_saved;
 fail_locked:
