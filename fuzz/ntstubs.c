@@ -131,6 +131,12 @@ PTEB __teb(void)
 
 PPEB NTAPI RtlGetCurrentPeb(void) { return &shim_peb; }
 
+/* The native fuzz harness is single-threaded while library startup and
+ * teardown manipulate process-global tables.  These stand in only for
+ * ntdll's serialization boundary; no NT PEB exists to lock here. */
+void NTAPI RtlAcquirePebLock(void) { }
+void NTAPI RtlReleasePebLock(void) { }
+
 /* RtlGetVersion (src/misc/uname.c's uname()): "plausible" grade -- a
  * native Linux run has no real NT version to report, but the real
  * function is documented to always succeed and never leaves its
@@ -3929,6 +3935,13 @@ NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
 NOTIMPL(NtCreateJobObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
 NOTIMPL(NtAssignProcessToJobObject, (HANDLE a, HANDLE b))
 NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULONG d))
+/* POSIX semaphores are backed by NT dispatcher objects.  The current fuzz
+ * targets do not exercise that transport; refuse it explicitly so adding
+ * semaphore.c to the native whole-library link does not invent semantics. */
+NOTIMPL(NtCreateSemaphore, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, LONG d, LONG e))
+NOTIMPL(NtOpenSemaphore, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
+NOTIMPL(NtQuerySemaphore, (HANDLE a, SEMAPHORE_INFORMATION_CLASS b, PVOID c, ULONG d, PULONG e))
+NOTIMPL(NtReleaseSemaphore, (HANDLE a, LONG b, LONG *c))
 /* src/signal/signal.c's segv_code() calls this to tell SEGV_MAPERR from
  * SEGV_ACCERR, but only from inside exception_handler(), which this
  * file's RtlAddVectoredExceptionHandler() (below) never actually
