@@ -1439,10 +1439,12 @@ static void test_fwprintf(void)
 	errno = 0;
 	CHECK(swprintf(buf, 2, W("%d"), 12345) < 0);
 	CHECK(errno != 0);
+	CHECK(!wcscmp(buf, W("1")));
 	/* the boundary: exactly n-1 wide characters plus the null fits */
 	CHECK(swprintf(buf, 6, W("%d"), 12345) == 5);
 	CHECK(!wcscmp(buf, W("12345")));
 	CHECK(swprintf(buf, 5, W("%d"), 12345) < 0);
+	CHECK(!wcscmp(buf, W("1234")));
 
 	/* Ordinary characters, %%, and an unknown conversion, all of which
 	 * come from the WIDE format and may be anything. */

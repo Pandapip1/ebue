@@ -1589,12 +1589,14 @@ static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
 	 * write rather than by writing it. */
 	mf.mem_size = (n - 1) * sizeof(wchar_t);
 	r = vfprintf_st(&mf, (const char *)(const void *)fmt, ap, (int)sizeof(wchar_t));
+	/* The terminating null is unconditional when n is nonzero, including
+	 * the truncation/error path.  mem_len is the prefix actually stored. */
+	s[mf.mem_len / sizeof(wchar_t)] = 0;
 	/* Same buffer ownership as vxprintf_mem(): a local FILE never sees
 	 * fclose, so the staging buffer __ensure_buf() gave it is ours. */
 	free(mf.buf);
 	if (r < 0) return r;
 	if ((size_t)r >= n) { errno = EOVERFLOW; return -1; }
-	s[mf.mem_len / sizeof(wchar_t)] = 0;
 	return r;
 }
 
