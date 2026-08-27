@@ -19,6 +19,7 @@
 #define DEFAULT_GUARD_SIZE 4096u
 
 static int concurrency;
+static int live_threads;
 
 __thread struct __pthread *__pthread_self_control;
 
@@ -53,6 +54,9 @@ struct __pthread *__pthread_current(void)
 	self->cancel_state = PTHREAD_CANCEL_ENABLE;
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;
+	RtlAcquirePebLock();
+	live_threads++;
+	RtlReleasePebLock();
 	__pthread_self_control = self;
 	return self;
 }
@@ -86,6 +90,7 @@ void __pthread_cleanup_pop(struct __pthread_cleanup *cleanup, int execute)
 static void finish(struct __pthread *self, void *result)
 {
 	int detached;
+	int last;
 	while (self->cleanup) {
 		struct __pthread_cleanup *cleanup = self->cleanup;
 		self->cleanup = cleanup->__previous;
@@ -95,8 +100,10 @@ static void finish(struct __pthread *self, void *result)
 	RtlAcquirePebLock();
 	self->result = result;
 	self->exited = 1;
+	last = --live_threads == 0;
 	detached = self->detached;
 	RtlReleasePebLock();
+	if (last) exit(0);
 	if (detached && self->handle && self->handle != NtCurrentThread()) {
 		NtClose(self->handle);
 		self->handle = 0;
@@ -159,12 +166,18 @@ int pthread_create(pthread_t *__restrict output,
 		return status == STATUS_NO_MEMORY ? EAGAIN : EAGAIN;
 	}
 	thread->handle = handle;
+	RtlAcquirePebLock();
+	live_threads++;
+	RtlReleasePebLock();
 	*output = thread;
 	status = NtResumeThread(handle, &previous);
 	if (!NT_SUCCESS(status)) {
 		NtClose(handle);
 		thread->handle = 0;
 		thread->joined = 1;
+		RtlAcquirePebLock();
+		live_threads--;
+		RtlReleasePebLock();
 		return EAGAIN;
 	}
 	return 0;
