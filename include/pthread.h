@@ -195,6 +195,8 @@ int pthread_spin_lock(pthread_spinlock_t *);
 int pthread_spin_trylock(pthread_spinlock_t *);
 int pthread_spin_unlock(pthread_spinlock_t *);
 
+int pthread_atfork(void (*)(void), void (*)(void), void (*)(void));
+
 int pthread_getschedparam(pthread_t, int *__restrict, struct sched_param *__restrict);
 int pthread_setschedparam(pthread_t, int, const struct sched_param *);
 int pthread_setschedprio(pthread_t, int);
