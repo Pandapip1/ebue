@@ -698,7 +698,7 @@ static void test_inet6_addrstrlen_defined(void)
 /* --------------------------------------------------------------------
  * inet_addr()'s two defects.
  * ------------------------------------------------------------------ */
-#if NTLIBC_TEST(BUG, posix_inet_inet_addr_rejects_sign_and_space) /* BUG: inet_addr.html DESCRIPTION and RETURN VALUE -- the
+#if NTLIBC_TEST(PASS, posix_inet_inet_addr_rejects_sign_and_space) /* inet_addr.html DESCRIPTION and RETURN VALUE -- the
 	function converts "the string pointed to by cp, in the standard
 	IPv4 dotted decimal notation", and "Otherwise, it shall return
 	(in_addr_t)(-1)".  ntlibc accepts three spellings that are not
@@ -795,7 +795,7 @@ static void test_inet_addr_rejects_sign_and_space(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, posix_inet_inet_addr_preserves_errno) /* BUG: errno.html DESCRIPTION -- "No function in this volume of
+#if NTLIBC_TEST(PASS, posix_inet_inet_addr_preserves_errno) /* errno.html DESCRIPTION -- "No function in this volume of
 	POSIX.1-2017 shall set errno to 0."  inet_addr()'s parse loop
 	(src/socket/inet.c) executes `errno = 0;` before every
 	strtoul() call, on the success path and the failure path alike,
@@ -875,10 +875,10 @@ int main(void)
 #if NTLIBC_TEST(UNIMPL, posix_inet_inet6_addrstrlen_defined) /* UNIMPL: see the fence above test_inet6_addrstrlen_defined. */
 	test_inet6_addrstrlen_defined();
 #endif
-#if NTLIBC_TEST(BUG, posix_inet_inet_addr_rejects_sign_and_space) /* BUG: see the fence above test_inet_addr_rejects_sign_and_space. */
+#if NTLIBC_TEST(PASS, posix_inet_inet_addr_rejects_sign_and_space)
 	test_inet_addr_rejects_sign_and_space();
 #endif
-#if NTLIBC_TEST(BUG, posix_inet_inet_addr_preserves_errno) /* BUG: see the fence above test_inet_addr_preserves_errno. */
+#if NTLIBC_TEST(PASS, posix_inet_inet_addr_preserves_errno)
 	test_inet_addr_preserves_errno();
 #endif
 

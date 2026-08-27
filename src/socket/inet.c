@@ -42,39 +42,46 @@ in_addr_t inet_addr(const char *s)
 	unsigned long parts[4];
 	int nparts = 0;
 	const char *p = s;
+	in_addr_t result = INADDR_NONE;
+	int saved_errno = errno;
 
-	if (!s) return INADDR_NONE;
+	if (!s) goto done;
 	for (;;) {
 		char *end;
 		unsigned long v;
-		if (nparts == 4) return INADDR_NONE;
-		errno = 0;
+		if (nparts == 4 || *p < '0' || *p > '9') goto done;
 		v = strtoul(p, &end, 0); /* base 0: honours "0x"/"0" prefixes, per inet_addr.html */
-		if (end == p) return INADDR_NONE;
+		if (end == p) goto done;
 		parts[nparts++] = v;
 		p = end;
 		if (*p == '.') { p++; continue; }
 		break;
 	}
-	if (*p) return INADDR_NONE; /* trailing garbage */
+	if (*p) goto done; /* trailing garbage */
 
 	switch (nparts) {
 	case 1:
-		if (parts[0] > 0xffffffffUL) return INADDR_NONE;
-		return htonl((uint32_t)parts[0]);
+		if (parts[0] <= 0xffffffffUL) result = htonl((uint32_t)parts[0]);
+		break;
 	case 2:
-		if (parts[0] > 0xff || parts[1] > 0xffffffUL) return INADDR_NONE;
-		return htonl(((uint32_t)parts[0] << 24) | (uint32_t)parts[1]);
+		if (parts[0] <= 0xff && parts[1] <= 0xffffffUL)
+			result = htonl(((uint32_t)parts[0] << 24) | (uint32_t)parts[1]);
+		break;
 	case 3:
-		if (parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xffffUL) return INADDR_NONE;
-		return htonl(((uint32_t)parts[0] << 24) | ((uint32_t)parts[1] << 16) | (uint32_t)parts[2]);
+		if (parts[0] <= 0xff && parts[1] <= 0xff && parts[2] <= 0xffffUL)
+			result = htonl(((uint32_t)parts[0] << 24) |
+			               ((uint32_t)parts[1] << 16) | (uint32_t)parts[2]);
+		break;
 	case 4:
-		if (parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xff || parts[3] > 0xff) return INADDR_NONE;
-		return htonl(((uint32_t)parts[0] << 24) | ((uint32_t)parts[1] << 16) |
-		             ((uint32_t)parts[2] << 8) | (uint32_t)parts[3]);
-	default:
-		return INADDR_NONE;
+		if (parts[0] <= 0xff && parts[1] <= 0xff && parts[2] <= 0xff && parts[3] <= 0xff)
+			result = htonl(((uint32_t)parts[0] << 24) |
+			               ((uint32_t)parts[1] << 16) |
+			               ((uint32_t)parts[2] << 8) | (uint32_t)parts[3]);
+		break;
 	}
+done:
+	errno = saved_errno;
+	return result;
 }
 
 /* inet_addr.html/inet_ntop.html: inet_ntoa() has no ERRORS/RETURN VALUE
