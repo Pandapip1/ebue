@@ -25,7 +25,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=99 BUG=1 UNIMPL=31 NA=15 FLAKY=0
+# COUNTS PASS=100 BUG=1 UNIMPL=30 NA=15 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -96,7 +96,7 @@ pthread_mutex_pi                  runtime=wine,target_arch=x86_64,kernel32=no  U
 pthread_once-deadlock             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_once-deadlock.c:3: error: include file 'pthread.h' not found
 pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_robust.c:1: error: include file 'pthread.h' not found
 pthread-robust-detach             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread-robust-detach.c:3: error: include file 'pthread.h' not found
-pthread_rwlock-ebusy              runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_rwlock-ebusy.c:3: error: include file 'pthread.h' not found
+pthread_rwlock-ebusy              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 pthread_tsd                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
 putenv-doublefree                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
 qsort                             runtime=wine,target_arch=x86_64,kernel32=no  PASS
