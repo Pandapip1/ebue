@@ -239,23 +239,19 @@ static void test_fcntl_setfl_ignores_accmode(void)
 	unlink("t-setfl.txt");
 }
 
-/* fcntl.html F_GETLK DESCRIPTION: "if no lock would prevent this lock
- * from being created, ... update the l_type field with the value
- * F_UNLCK".  Advisory locks are unimplemented (src/fcntl/fcntl.c always
- * reports success); confirm F_GETLK reports "no conflicting lock" and
- * F_SETLK/F_SETLKW report success, the way a filesystem without locking
- * support would. */
-static void test_fcntl_locks_are_noops(void)
+/* fcntl.html record locking: an uncontended range can be locked and a query
+ * from its owner reports no conflicting lock.  Cross-process conflict
+ * reporting is covered separately by posix-fcntl-lock-crossproc.c. */
+static void test_fcntl_record_locks(void)
 {
 	int fd = open("t-lock.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
 	struct flock fl;
 	CHECK(fd >= 0);
 	memset(&fl, 0, sizeof fl);
-	fl.l_type = F_WRLCK; fl.l_whence = SEEK_SET; fl.l_start = 0; fl.l_len = 0;
-	CHECK(fcntl(fd, F_GETLK, &fl) == 0);
-	CHECK(fl.l_type == F_UNLCK);
+	fl.l_type = F_WRLCK; fl.l_whence = SEEK_SET; fl.l_start = 0; fl.l_len = 100;
 	CHECK(fcntl(fd, F_SETLK, &fl) == 0);
-	CHECK(fcntl(fd, F_SETLKW, &fl) == 0);
+	fl.l_type = F_WRLCK;
+	CHECK(fcntl(fd, F_GETLK, &fl) == 0 && fl.l_type == F_UNLCK);
 	CHECK(close(fd) == 0);
 	unlink("t-lock.txt");
 }
@@ -1914,7 +1910,7 @@ int main(void)
 	test_dup2_self_preserves_cloexec();
 	test_fcntl_dupfd_lowest();
 	test_fcntl_setfl_ignores_accmode();
-	test_fcntl_locks_are_noops();
+	test_fcntl_record_locks();
 	test_access_trailing_slash_enotdir();
 	test_rename_same_file_noop();
 	test_rename_new_dir_old_file_eisdir();

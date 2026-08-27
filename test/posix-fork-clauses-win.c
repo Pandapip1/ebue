@@ -220,52 +220,26 @@ static void test_locks_not_inherited(void)
 	pid = fork();
 	CHECK(pid >= 0);
 	if (pid == 0) {
-		/* The clause says the child does not hold the parent's lock.
-		 * What a child can observe about that, without a third
-		 * process, is that F_GETLK reports the region as held by
-		 * *someone else* -- a lock the child owned would come back
-		 * F_UNLCK.  src/fcntl/fcntl.c's F_GETLK is a no-op on this
-		 * platform (test/posix-unistd.c's test_fcntl_locks_are_noops
-		 * pins that), so the verdict is deliberately permissive: the
-		 * child must not be able to *assert* ownership by unlocking
-		 * a lock it never took and having the parent lose it. */
-		struct flock un;
-		memset(&un, 0, sizeof un);
-		un.l_type = F_UNLCK;
-		un.l_whence = SEEK_SET;
-		un.l_start = 0;
-		un.l_len = 7;
-		(void)fcntl(fd, F_SETLK, &un);
+		/* A record lock belongs to the parent process, not to the open
+		 * file description inherited here.  It must therefore be visible
+		 * as a conflicting lock, and the child must not acquire it. */
+		struct flock probe;
+		memset(&probe, 0, sizeof probe);
+		probe.l_type = F_WRLCK;
+		probe.l_whence = SEEK_SET;
+		probe.l_start = 1;
+		probe.l_len = 6;
+		if (fcntl(fd, F_GETLK, &probe) < 0 || probe.l_type != F_WRLCK)
+			_exit(RC_LOCK);
+		if (fcntl(fd, F_SETLK, &probe) == 0 ||
+		    (errno != EACCES && errno != EAGAIN))
+			_exit(RC_LOCK);
 		_exit(RC_OK);
 	}
 	CHECK(wait_child(pid) == RC_OK);
 
 	CHECK(close(fd) == 0);
 	CHECK(unlink("fk-lock.txt") == 0);
-
-#if NTLIBC_TEST(NA, posix_fork_fcntl_lock_inheritance_observable) /* N/A: the clause cannot be *distinguished* on this platform.
-	 * fork.html DESCRIPTION: "File locks set by the parent process
-	 * shall not be inherited by the child process."
-	 *
-	 * Telling inherited from not-inherited needs a third party that
-	 * can be blocked by the lock and then observe it disappear, and
-	 * this library gives none: src/fcntl/fcntl.c's F_SETLK/F_GETLK
-	 * are advisory no-ops (test/posix-unistd.c's
-	 * test_fcntl_locks_are_noops records that, and src/file/flock.c
-	 * is the call that maps to real NT byte-range locks).  With
-	 * nothing that can ever be denied, "the child did not inherit the
-	 * lock" and "there was no lock" are the same observation.  The
-	 * unfenced half above still runs, as a regression net against a
-	 * future in which fcntl locks become real and the child starts
-	 * being able to release the parent's. */
-	{
-		struct flock probe;
-		memset(&probe, 0, sizeof probe);
-		probe.l_type = F_WRLCK;
-		probe.l_whence = SEEK_SET;
-		CHECK(fcntl(fd, F_GETLK, &probe) == 0 && probe.l_type != F_UNLCK);
-	}
-#endif
 }
 
 /* ============================================================

@@ -4,20 +4,12 @@
  * flock(2), BSD whole-file advisory-on-Unix locking:
  * https://man7.org/linux/man-pages/man2/flock.2.html
  *
- * Not the same mechanism as fcntl(F_GETLK/F_SETLK/F_SETLKW)'s POSIX
- * record locking (struct flock, already in include/fcntl.h, backed by
- * src/fcntl/fcntl.c) -- on Linux the two are separate lock spaces that
- * do not see each other, and they are kept separate here too, for a
- * more basic reason than API taste: src/fcntl/fcntl.c's F_SETLK/
- * F_SETLKW are not implemented at all ("Advisory locks are not
- * implemented; report success, the way a filesystem without locking
- * support would" -- that file's own comment). flock(), implemented in
- * src/file/flock.c, is the first lock in this library backed by a real
- * kernel primitive: NT's NtLockFile()/NtUnlockFile(). So the two
- * spaces are trivially disjoint here -- fcntl()'s "lock" is a no-op
- * that touches nothing, flock()'s is a real, enforced, whole-file byte
- * range lock -- rather than a deliberate choice to layer one on the
- * other the way some systems' flock() is a thin wrapper over fcntl().
+ * fcntl(F_GETLK/F_SETLK/F_SETLKW)'s POSIX record locks (struct flock,
+ * declared in include/fcntl.h) and this interface are both backed by NT
+ * byte-range locks.  Consequently they can conflict here, unlike Linux,
+ * where flock() and fcntl() occupy separate lock spaces.  flock() still
+ * keeps its own descriptor-level state in src/file/flock.c because its
+ * whole-file conversion rules differ from fcntl()'s arbitrary ranges.
  *
  * Advisory vs. mandatory: **mandatory**, not advisory, despite the
  * name this header is conventionally filed under. NT byte-range locks

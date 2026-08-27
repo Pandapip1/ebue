@@ -138,10 +138,9 @@ size_t confstr(int, char *, size_t);
 #define F_TEST  3
 int setreuid(uid_t, uid_t);
 int setregid(gid_t, gid_t);
-int lockf(int, int, off_t);  /* undefined-ok: F_SETLK/F_SETLKW are themselves
-	permanent no-op stubs (src/fcntl/fcntl.c: "Advisory locks are not
-	implemented; report success"), so a lockf() built on them would only
-	look like real locking without providing any -- worse than absent */
+int lockf(int, int, off_t);  /* undefined-ok: the separate lockf() wrapper
+	remains outside the implemented API even though fcntl record locking is
+	now backed by NT byte-range locks */
 long gethostid(void);  /* undefined-ok: BSD host-id concept, no NT analogue */
 int nice(int);
 void sync(void);

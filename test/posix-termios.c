@@ -790,10 +790,8 @@ static void test_ioctl_tiocgwinsz_non_tty(const char *self)
 }
 
 /* ============================================================
- * <sys/file.h> -- flock(). See include/sys/file.h for why this is a
- * separate lock space from fcntl(F_GETLK/F_SETLK) here specifically
- * (the latter is not implemented at all), and why NT's locks are
- * mandatory rather than advisory.
+ * <sys/file.h> -- flock(). See include/sys/file.h for how this and
+ * fcntl() share NT's mandatory byte-range lock space.
  * ============================================================ */
 
 /* flock()'s own success/failure is checked with this rather than a

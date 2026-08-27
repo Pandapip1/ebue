@@ -1,9 +1,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * flock(): see include/sys/file.h for the design writeup (why this is
- * a separate lock space from src/fcntl/fcntl.c's F_GETLK/F_SETLK, and
- * why NT's locks are mandatory rather than advisory).
+ * flock(): see include/sys/file.h for the design writeup (including why
+ * NT's shared byte-range lock space is mandatory rather than advisory).
  *
  * Always locks the whole file, byte 0 through the largest offset NT's
  * signed 64-bit LARGE_INTEGER can express (0x7fffffffffffffff) -- not
