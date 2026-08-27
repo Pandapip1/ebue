@@ -61,16 +61,11 @@
  * quantity-and-symbol, per "If '(' is specified, negative amounts are
  * enclosed within parentheses.", and suppresses the sign string.
  *
- * One clause is implemented in the narrow way and should be read as
- * such: "To ensure alignment, any characters appearing before or after
- * the number in the formatted output such as currency or sign symbols
- * are padded as necessary with <space> characters to make their
- * positive and negative formats an equal length."  With an empty
- * currency symbol and an empty positive sign, the positive and negative
- * formats here differ by exactly the one byte of '-' (or the two of
- * "()"), and this file does NOT insert the compensating space.  A
- * caller aligning columns should pass a field width, which does work.
- * That is a real, visible shortfall rather than a hidden one.
+ * Left precision also equalises the positive and negative sign forms,
+ * as required by the alignment paragraph under the #n option.  This is
+ * deliberately not applied to conversions without #n: the paragraph is
+ * scoped to left precision, and ordinary %.0n must remain the unpadded
+ * representation.
  *
  * "The behavior is undefined if the locale argument to strfmon_l() is
  * the special locale object LC_GLOBAL_LOCALE or is not a valid locale
@@ -154,7 +149,7 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		unsigned long fw = 0, lp = 0, rp;
 		const char *sym, *sign, *radix, *thousep, *grouping;
 		char num[512], field[FIELD_MAX];
-		size_t fl = 0, ndigits, nlen;
+		size_t fl = 0, ndigits, nlen, align_pad = 0;
 		char *dot;
 		double x;
 		int n;
@@ -258,6 +253,19 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 			else sign = *lc->negative_sign ? lc->negative_sign : "-";
 		} else {
 			sign = lc->positive_sign;
+			if (lp && negpar) align_pad = 2;
+			else if (lp) {
+				const char *negative = *lc->negative_sign ? lc->negative_sign : "-";
+				if (strlen(negative) > strlen(sign))
+					align_pad = strlen(negative) - strlen(sign);
+			}
+		}
+		if (lp && x < 0 && !negpar && strlen(lc->positive_sign) > strlen(sign))
+			align_pad = strlen(lc->positive_sign) - strlen(sign);
+		if (align_pad) {
+			if (align_pad > FIELD_MAX - fl) goto e2big;
+			memset(field + fl, ' ', align_pad);
+			fl += align_pad;
 		}
 		if (fappend(field, &fl, sign, strlen(sign)) < 0) goto e2big;
 		if (fappend(field, &fl, sym, strlen(sym)) < 0) goto e2big;

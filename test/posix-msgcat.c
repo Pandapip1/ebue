@@ -1416,8 +1416,8 @@ static void test_strfmon_posix_locale(void)
 	}
 }
 
-#if NTLIBC_TEST(BUG, posix_msgcat_strfmon_alignment_pads_to_equal_length) /* BUG: strfmon() does not pad the
-	positive format to the length of the negative one.
+#if NTLIBC_TEST(PASS, posix_msgcat_strfmon_alignment_pads_to_equal_length) /* strfmon() pads the positive
+    left-precision format to the length of the negative one.
 
 	strfmon.html, under Left Precision, verbatim: "To ensure
 	alignment, any characters appearing before or after the number in
@@ -1425,12 +1425,12 @@ static void test_strfmon_posix_locale(void)
 	as necessary with <space> characters to make their positive and
 	negative formats an equal length."
 
-	READ THIS FENCE NARROWLY.  strfmon() alignment is not broken in
-	general and a caller is not without recourse: a field width works,
-	and `strfmon(b, n, "%10.0n", x)` right-justifies both signs into
-	the same ten columns.  What is missing is the *automatic*
-	equalisation the sentence above requires when no field width is
-	given.  In this locale the currency symbol and the positive sign
+	The alignment sentence occurs under the Left Precision section and
+	applies when #n is present.  The old BUG fixture omitted #n and was
+	therefore testing an unrequired behavior; ordinary %.0n is correctly
+	unpadded.  These corrected calls use #2 and require the automatic
+	equalisation when no field width is given.  In this locale the
+	currency symbol and the positive sign
 	are both the empty string and the negative sign falls back to
 	"-" (src/misc/strfmon.c explains why it does not honour the
 	POSIX locale's empty negative_sign literally), so the two formats
@@ -1454,16 +1454,16 @@ static void test_strfmon_alignment_pads_to_equal_length(void)
 	/* The default '+' style.  positive_sign is "" and the negative
 	 * sign is one byte, so the positive format must be padded by one
 	 * <space> to match. */
-	CHECK(strfmon(pos, sizeof pos, "%.0n", 42.0) > 0);
-	CHECK(strfmon(neg, sizeof neg, "%.0n", -42.0) > 0);
+	CHECK(strfmon(pos, sizeof pos, "%#2.0n", 42.0) > 0);
+	CHECK(strfmon(neg, sizeof neg, "%#2.0n", -42.0) > 0);
 	CHECK(strlen(pos) == strlen(neg));
 
 	/* The '(' style.  "If '(' is specified, negative amounts are
 	 * enclosed within parentheses." -- two bytes to match, not one,
 	 * which is why this is asserted separately rather than inferred
 	 * from the case above. */
-	CHECK(strfmon(pos, sizeof pos, "%(.0n", 42.0) > 0);
-	CHECK(strfmon(neg, sizeof neg, "%(.0n", -42.0) > 0);
+	CHECK(strfmon(pos, sizeof pos, "%(#2.0n", 42.0) > 0);
+	CHECK(strfmon(neg, sizeof neg, "%(#2.0n", -42.0) > 0);
 	CHECK(strlen(pos) == strlen(neg));
 
 	/* The recourse, asserted so the fence cannot be over-read: with a
@@ -1661,7 +1661,7 @@ int main(void)
 	test_nl_types_h_catalogue_access();
 	test_catgets_reads_a_catalogue();
 	test_strfmon_posix_locale();
-#if NTLIBC_TEST(BUG, posix_msgcat_strfmon_alignment_pads_to_equal_length) /* BUG: see the fence over test_strfmon_alignment_pads_to_equal_length(). */
+#if NTLIBC_TEST(PASS, posix_msgcat_strfmon_alignment_pads_to_equal_length) /* BUG: see the fence over test_strfmon_alignment_pads_to_equal_length(). */
 	test_strfmon_alignment_pads_to_equal_length();
 #endif
 	test_iconv_open_convert_close();
