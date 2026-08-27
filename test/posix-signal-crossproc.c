@@ -44,6 +44,7 @@
 #include <sys/wait.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <time.h>
 
 extern char **environ;
 extern int __spawn(const char *, char *const *, char *const *);
@@ -214,6 +215,48 @@ static int child_sigsuspend(void)
 	return 42;
 }
 
+static int child_sigwait(void)
+{
+	sigset_t set;
+	int sig = 0;
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	if (sigwait(&set, &sig) != 0) return 90;
+	return sig == SIGUSR1 ? 42 : 91;
+}
+
+/* Both relative sleep interfaces use __alertable_delay(): a handler run by
+ * the remote-delivery thread must end the wait promptly and leave a sensible
+ * remainder.  Their return conventions intentionally differ. */
+static int child_nanosleep(void)
+{
+	struct sigaction sa;
+	struct timespec request = { 5, 0 }, remaining = { 0, 0 };
+	int r, saved;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_mark;
+	if (sigaction(SIGABRT, &sa, NULL) < 0) return 90;
+	r = nanosleep(&request, &remaining);
+	saved = errno;
+	if (r != -1 || saved != EINTR || !handler_ran) return 91;
+	if (remaining.tv_sec < 3 || remaining.tv_sec > 5) return 92;
+	return 42;
+}
+
+static int child_clock_nanosleep(void)
+{
+	struct sigaction sa;
+	struct timespec request = { 5, 0 }, remaining = { 0, 0 };
+	int r;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_mark;
+	if (sigaction(SIGABRT, &sa, NULL) < 0) return 90;
+	r = clock_nanosleep(CLOCK_REALTIME, 0, &request, &remaining);
+	if (r != EINTR || !handler_ran) return 91;
+	if (remaining.tv_sec < 3 || remaining.tv_sec > 5) return 92;
+	return 42;
+}
+
 /* ------------------------------------------------------------------ *
  * Parent side.
  * ------------------------------------------------------------------ */
@@ -344,6 +387,23 @@ static void test_sigsuspend_mask_and_wakeup(const char *self)
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
 }
 
+static void test_remote_wait_interface(const char *self, const char *mode,
+				       int sig, const char *description)
+{
+	pid_t pid;
+	int status;
+
+	if (spawn_child(self, mode, &pid) < 0) {
+		CHECK(0 && "spawn failed");
+		return;
+	}
+	sleep_ms(STARTUP_GRACE_MS);
+	CHECK(kill(pid, sig) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe(description, status);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+}
+
 /* No hang for a target that has no listener yet -- __sig_try_deliver_remote()
  * (src/signal/sigdelivery.c) must fail fast on NtOpenFile rather than
  * wait for one to appear (that function's own comment cites the NT
@@ -395,6 +455,9 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[1], "--child-blocked")) return child_blocked();
 		if (!strcmp(argv[1], "--child-select-eintr")) return child_select_eintr();
 		if (!strcmp(argv[1], "--child-sigsuspend")) return child_sigsuspend();
+		if (!strcmp(argv[1], "--child-sigwait")) return child_sigwait();
+		if (!strcmp(argv[1], "--child-nanosleep")) return child_nanosleep();
+		if (!strcmp(argv[1], "--child-clock-nanosleep")) return child_clock_nanosleep();
 	}
 
 	test_handler_runs_for_remote_kill(argv[0]);
@@ -402,6 +465,12 @@ int main(int argc, char **argv)
 	test_blocked_signal_goes_pending(argv[0]);
 	test_select_returns_eintr(argv[0]);
 	test_sigsuspend_mask_and_wakeup(argv[0]);
+	test_remote_wait_interface(argv[0], "--child-sigwait", SIGUSR1,
+	                           "remote sigwait");
+	test_remote_wait_interface(argv[0], "--child-nanosleep", SIGABRT,
+	                           "remote nanosleep EINTR");
+	test_remote_wait_interface(argv[0], "--child-clock-nanosleep", SIGABRT,
+	                           "remote clock_nanosleep EINTR");
 	test_no_listener_does_not_hang(argv[0]);
 
 	if (fails) printf("posix-signal-crossproc: %d failure(s)\n", fails);
