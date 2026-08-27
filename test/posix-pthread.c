@@ -69,7 +69,7 @@ static int fails;
  * pthread_self.html, pthread_equal.html, pthread_detach.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_create_join_value)
+#if NTLIBC_TEST(PASS, posix_pthread_create_join_value)
 #include <pthread.h>
 
 static void *cj_start(void *arg)
@@ -108,7 +108,7 @@ static void test_pthread_create_join_value(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_detach_join_esrch)
+#if NTLIBC_TEST(PASS, posix_pthread_detach_join_esrch)
 #include <pthread.h>
 #include <errno.h>
 
@@ -144,7 +144,7 @@ static void test_pthread_detach_join_esrch(void)
  * pthread_attr_get and pthread_attr_set pages
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_attr_roundtrip)
+#if NTLIBC_TEST(PASS, posix_pthread_attr_roundtrip)
 #include <pthread.h>
 #include <limits.h>
 #include <errno.h>

@@ -330,3 +330,20 @@ typedef int sig_atomic_t;
 #define __DEFINED_sig_atomic_t
 #endif
 
+
+/* pthread_t is an implementation-owned control-block pointer.  Keeping the
+ * identity opaque lets joined and detached threads retain a tombstone long
+ * enough for the required ESRCH/EINVAL diagnostics without exposing an NT
+ * HANDLE as part of the public ABI.  pthread_attr_t is deliberately opaque
+ * too; twelve pointer-width slots leave room for the POSIX creation
+ * attributes on both supported architectures. */
+#if defined(__NEED_pthread_t) && !defined(__DEFINED_pthread_t)
+typedef struct __pthread * pthread_t;
+#define __DEFINED_pthread_t
+#endif
+
+#if defined(__NEED_pthread_attr_t) && !defined(__DEFINED_pthread_attr_t)
+typedef struct { void *__opaque[12]; } pthread_attr_t;
+#define __DEFINED_pthread_attr_t
+#endif
+
