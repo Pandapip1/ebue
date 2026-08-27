@@ -15,8 +15,8 @@
 #include "pthread_impl.h"
 
 #define THREAD_CREATE_FLAGS_CREATE_SUSPENDED 1u
-#define DEFAULT_STACK_SIZE (1024u * 1024u)
-#define DEFAULT_GUARD_SIZE 4096u
+#define DEFAULT_STACK_SIZE ((size_t)1024 * 1024)
+#define DEFAULT_GUARD_SIZE ((size_t)4096)
 
 static int concurrency;
 static int live_threads;
@@ -74,7 +74,7 @@ int pthread_equal(pthread_t left, pthread_t right)
 void __pthread_cleanup_push(struct __pthread_cleanup *cleanup)
 {
 	struct __pthread *self = __pthread_current();
-	if (!self) return;
+	if (!self || !cleanup) return;
 	cleanup->__previous = self->cleanup;
 	self->cleanup = cleanup;
 }
@@ -82,7 +82,7 @@ void __pthread_cleanup_push(struct __pthread_cleanup *cleanup)
 void __pthread_cleanup_pop(struct __pthread_cleanup *cleanup, int execute)
 {
 	struct __pthread *self = __pthread_current();
-	if (!self || self->cleanup != cleanup) return;
+	if (!self || !cleanup || self->cleanup != cleanup) return;
 	self->cleanup = cleanup->__previous;
 	if (execute) cleanup->__routine(cleanup->__argument);
 }
@@ -163,7 +163,7 @@ int pthread_create(pthread_t *__restrict output,
 		data ? data->stack_size : DEFAULT_STACK_SIZE, 0);
 	if (!NT_SUCCESS(status)) {
 		free(thread);
-		return status == STATUS_NO_MEMORY ? EAGAIN : EAGAIN;
+		return EAGAIN;
 	}
 	thread->handle = handle;
 	RtlAcquirePebLock();
