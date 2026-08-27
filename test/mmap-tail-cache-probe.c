@@ -72,10 +72,15 @@ int main(void)
 	if (pa == MAP_FAILED) { printf("TAILCACHE: UNRESOLVED 2nd mmap: %s\n", strerror(errno)); return 0; }
 
 	tail = (unsigned char)pa[len + 1];
+	/* tools/run-tests.py only echoes a PASSing test's stdout for lines
+	 * carrying its MEASURE_PREFIX ("measure:") -- everything else on a
+	 * PASS is treated as noise and dropped, which is why the first push
+	 * of this probe produced "PASS (rc=0)" on windows-test with no
+	 * TAILCACHE line to grep. */
 	if (tail == 'b')
-		printf("TAILCACHE: reproduced (2nd mapping's tail byte is 'b', page_size=%ld)\n", page_size);
+		printf("measure: TAILCACHE: reproduced (2nd mapping's tail byte is 'b', page_size=%ld)\n", page_size);
 	else
-		printf("TAILCACHE: not-reproduced (2nd mapping's tail byte is %u, page_size=%ld)\n", tail, page_size);
+		printf("measure: TAILCACHE: not-reproduced (2nd mapping's tail byte is %u, page_size=%ld)\n", tail, page_size);
 
 	munmap(pa, len);
 	close(fd);
