@@ -85,7 +85,7 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 				__fd_probe(f, &cr, &cw, &hup);
 				if (hup) p->revents |= POLLHUP;
 				if (cr) p->revents |= (short)(p->events & (POLLIN | POLLRDNORM));
-				if (cw) p->revents |= (short)(p->events & (POLLOUT | POLLWRNORM));
+				if (cw && !hup) p->revents |= (short)(p->events & (POLLOUT | POLLWRNORM));
 			} else if (f->type == __FD_CONSOLE) {
 				p->revents |= (short)(p->events & (POLLOUT | POLLWRNORM));  /* output: always ready */
 				if ((p->events & (POLLIN | POLLRDNORM)) && ncons < FD_MAX) {

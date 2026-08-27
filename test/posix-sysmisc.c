@@ -936,7 +936,7 @@ static void test_poll_ready_count(void)
 	close(fds[1]);
 }
 
-#if NTLIBC_TEST(BUG, posix_sysmisc_poll_hup_excludes_pollout) /* BUG: poll() reports POLLHUP and POLLOUT together.  poll.html
+#if NTLIBC_TEST(PASS, posix_sysmisc_poll_hup_excludes_pollout) /* BUG: poll() reports POLLHUP and POLLOUT together.  poll.html
 	 * DESCRIPTION, the POLLHUP entry: "A device has been disconnected,
 	 * or a pipe or FIFO has been closed.  This event and POLLOUT are
 	 * mutually-exclusive; a stream can never be writable if a hangup
