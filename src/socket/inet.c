@@ -164,7 +164,11 @@ static int pton6(const char *src, unsigned char out[16])
 			saw_digit = 0;
 			digits = 0;
 			value = 0;
-			if (!*src) break;
+			/* A terminal colon is only valid when it is the second colon
+			 * that established `compress` ("1::").  That case reaches the
+			 * no-digit arm on the next iteration; a colon consumed here is
+			 * a lone trailing separator ("::1:"). */
+			if (!*src) return 0;
 			continue;
 		}
 		if (*src == '.' && saw_digit && p + 4 <= end) {

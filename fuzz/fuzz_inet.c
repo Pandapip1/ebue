@@ -11,8 +11,9 @@
  * that has historically hidden buffer arithmetic bugs in every C library
  * that has ever shipped one.
  *
- * THE ORACLE, AND WHERE IT STOPS.  inet_pton(AF_INET) is compared byte
- * for byte against the host's, through fuzz/host_oracle.c.  That is a
+ * THE ORACLE, AND WHERE IT STOPS.  inet_pton(AF_INET) and
+ * inet_pton(AF_INET6) are compared byte for byte against the host's,
+ * through fuzz/host_oracle.c.  That is a
  * comparison worth making because both sides implement the same
  * specified grammar: inet_pton.html's strict dotted-quad, no short
  * forms, no octal or hexadecimal parts, no leading or trailing space.
@@ -34,9 +35,9 @@
  *   - whenever inet_pton accepts a string, inet_addr must accept it too
  *     and produce the same 32 bits (dotted-quad is a subset of every
  *     reading of inet_addr's grammar);
- *   - inet_ntop of any four bytes must round-trip back through
- *     inet_pton to the same four bytes, and must never write more than
- *     it was given room for;
+ *   - inet_ntop of arbitrary IPv4 and IPv6 bytes must round-trip back
+ *     through inet_pton to the same bytes, and must never write more
+ *     than it was given room for;
  *   - inet_ntop with a size too small must fail with ENOSPC and leave
  *     the destination untouched -- it is the only failure path in the
  *     function that a caller's buffer size can trigger, and the check is
@@ -45,7 +46,7 @@
  *     land inside the caller's object, where ASan sees nothing;
  *   - inet_ntoa's static buffer must hold the same text inet_ntop
  *     produces;
- *   - an unsupported address family must be reported (0/-1 plus
+ *   - a genuinely unsupported address family must be reported (0/-1 plus
  *     EAFNOSUPPORT), never parsed.
  *
  * Byte order: htonl/htons/ntohl/ntohs are checked for the only property
@@ -61,6 +62,7 @@
 #include <stdint.h>
 
 extern int host_inet_pton4(const char *, unsigned char[4]);
+extern int host_inet_pton6(const char *, unsigned char[16]);
 extern void oracle_mismatch_i(const char *, const char *, long long, long long);
 extern void oracle_mismatch_s(const char *, const char *, const char *, const char *);
 
@@ -69,11 +71,11 @@ extern void oracle_mismatch_s(const char *, const char *, const char *, const ch
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 {
 	char s[CAP + 1];
-	unsigned char mine[4], theirs[4];
+	unsigned char mine[16], theirs[16];
 	int r_mine, r_theirs;
 	size_t n;
 
-	if (size < 5) return 0;
+	if (size < 16) return 0;
 
 	/* ---- the four raw bytes: formatting and round-trip ------------- */
 	{
@@ -138,9 +140,44 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		}
 	}
 
+	/* ---- arbitrary IPv6 bytes: formatting and round-trip ----------- */
+	{
+		unsigned char back[16];
+		char out[64], tight[64];
+		const char *p;
+		size_t len;
+
+		memset(out, 'Z', sizeof out);
+		p = inet_ntop(AF_INET6, data, out, sizeof out);
+		if (!p) {
+			oracle_mismatch_i("inet_ntop(AF_INET6) failed with a 64-byte buffer",
+			                  "", 0, 1);
+		} else {
+			len = strlen(out);
+			if (len >= INET6_ADDRSTRLEN)
+				oracle_mismatch_i("inet_ntop(AF_INET6) exceeded INET6_ADDRSTRLEN-1",
+				                  out, (long long)len, INET6_ADDRSTRLEN - 1);
+			if (inet_pton(AF_INET6, out, back) != 1 || memcmp(back, data, 16) != 0)
+				oracle_mismatch_s("IPv6 inet_ntop/inet_pton do not round-trip",
+				                  out, out, "");
+
+			memset(tight, 'Z', sizeof tight);
+			errno = 0;
+			if (inet_ntop(AF_INET6, data, tight, (socklen_t)len) != 0)
+				oracle_mismatch_i("IPv6 inet_ntop accepted a short buffer",
+				                  out, (long long)len, 0);
+			else if (errno != ENOSPC)
+				oracle_mismatch_i("IPv6 inet_ntop short-buffer errno",
+				                  out, errno, ENOSPC);
+			if (tight[0] != 'Z')
+				oracle_mismatch_i("IPv6 inet_ntop wrote into a rejected buffer",
+				                  out, tight[0], 'Z');
+		}
+	}
+
 	/* ---- the string: inet_pton against the host, inet_addr against
 	 * inet_pton --------------------------------------------------- */
-	data += 4; size -= 4;
+	data += 16; size -= 16;
 	n = size < CAP ? size : CAP;
 	memcpy(s, data, n);
 	s[n] = 0;
@@ -178,17 +215,28 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		(void)inet_addr(s);     /* still driven, just not compared */
 	}
 
+	/* IPv6 uses the same specified grammar on both sides. */
+	memset(mine, 0xAA, sizeof mine);
+	memset(theirs, 0xAA, sizeof theirs);
+	r_mine = inet_pton(AF_INET6, s, mine);
+	r_theirs = host_inet_pton6(s, theirs);
+	if (r_mine != r_theirs)
+		oracle_mismatch_i("inet_pton(AF_INET6) return value", s, r_mine, r_theirs);
+	else if (r_mine == 1 && memcmp(mine, theirs, 16) != 0)
+		oracle_mismatch_i("inet_pton(AF_INET6) produced different bytes", s,
+		                  memcmp(mine, theirs, 16), 0);
+
 	/* An unsupported family must be reported, not parsed. */
 	{
 		unsigned char sink[16];
 		char out[64];
 		errno = 0;
-		if (inet_pton(AF_INET6, s, sink) != -1 || errno != EAFNOSUPPORT)
-			oracle_mismatch_i("inet_pton(AF_INET6) did not report EAFNOSUPPORT", s,
+		if (inet_pton(AF_UNIX, s, sink) != -1 || errno != EAFNOSUPPORT)
+			oracle_mismatch_i("inet_pton(AF_UNIX) did not report EAFNOSUPPORT", s,
 			                  errno, EAFNOSUPPORT);
 		errno = 0;
-		if (inet_ntop(AF_INET6, sink, out, sizeof out) != 0 || errno != EAFNOSUPPORT)
-			oracle_mismatch_i("inet_ntop(AF_INET6) did not report EAFNOSUPPORT", s,
+		if (inet_ntop(AF_UNIX, sink, out, sizeof out) != 0 || errno != EAFNOSUPPORT)
+			oracle_mismatch_i("inet_ntop(AF_UNIX) did not report EAFNOSUPPORT", s,
 			                  errno, EAFNOSUPPORT);
 	}
 	return 0;

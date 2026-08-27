@@ -636,6 +636,7 @@ static void test_inet6_text_forms(void)
 	/* ""::" can only appear once in an address", and an IPv4 string is
 	 * not an IPv6 one: 0, not -1 */
 	CHECK(inet_pton(AF_INET6, "1::2::3", &a6) == 0);
+	CHECK(inet_pton(AF_INET6, "::0:", &a6) == 0);
 	CHECK(inet_pton(AF_INET6, "1.2.3.4", &a6) == 0);
 
 	/* and back, in the compressed form */
