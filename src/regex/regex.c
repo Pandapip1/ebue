@@ -749,6 +749,7 @@ struct mstate {
 	regoff_t *slot;
 	int nslot;
 	struct rx *rx;
+	regoff_t *progress;	/* last subject offset at each backward edge */
 	int steps;
 	struct bt *bt;		/* backtracking stack, grown on demand */
 	int nbt, capbt;
@@ -881,10 +882,20 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			pc++;
 			continue;
 		case I_JMP:
+			if (in->x <= pc) {
+				regoff_t off = sp - ms->begin;
+				if (ms->progress[pc] == off) goto backtrack;
+				ms->progress[pc] = off;
+			}
 			pc = in->x; continue;
 		case I_SPLIT:
 			/* Greedy: take x now, keep y for later.  Same order
 			 * as `if (run(ms, in->x, sp)) return 1; pc = in->y;`. */
+			if (in->x <= pc) {
+				regoff_t off = sp - ms->begin;
+				if (ms->progress[pc] == off) { pc = in->y; continue; }
+				ms->progress[pc] = off;
+			}
 			if (!bt_push_try(ms, in->y, sp)) return -1;
 			pc = in->x;
 			continue;
@@ -916,6 +927,7 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 	struct rx *rx = preg->__opaque;
 	struct mstate ms;
 	regoff_t *slot;
+	regoff_t *progress;
 	int nslot = rx->ncap * 2;
 	size_t len = strlen(string);
 	size_t start;
@@ -923,6 +935,8 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 
 	slot = malloc((size_t)nslot * sizeof *slot);
 	if (!slot) return REG_ESPACE;
+	progress = malloc((size_t)rx->nprog * sizeof *progress);
+	if (!progress) { free(slot); return REG_ESPACE; }
 
 	ms.begin = string;
 	ms.end = string + len;
@@ -931,12 +945,14 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 	ms.slot = slot;
 	ms.nslot = nslot;
 	ms.rx = rx;
+	ms.progress = progress;
 	ms.bt = NULL;
 	ms.nbt = ms.capbt = 0;
 
 	for (start = 0; start <= len; start++) {
 		int i, r;
 		for (i = 0; i < nslot; i++) slot[i] = -1;
+		for (i = 0; i < rx->nprog; i++) progress[i] = -1;
 		ms.steps = 0;
 		ms.nbt = 0;		/* the buffer is reused; the contents are not */
 		r = run(&ms, 0, string + start);
@@ -951,11 +967,13 @@ int regexec(const regex_t *__restrict preg, const char *__restrict string,
 			 * error."  Reporting REG_NOMATCH here would be
 			 * a wrong answer, not a refusal. */
 			free(ms.bt);
+			free(progress);
 			free(slot);
 			return REG_ESPACE;
 		}
 	}
 	free(ms.bt);
+	free(progress);
 
 	if (matched && nmatch > 0 && pmatch && !(rx->cflags & REG_NOSUB)) {
 		size_t i;
