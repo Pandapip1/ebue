@@ -15,6 +15,13 @@ permissions:
 env:
   TINYCC_REPO: https://github.com/Pandapip1/tinycc.git
   TINYCC_SHA: 69eed4d346f31dea12d61b99f60298d2f59f66be
+  # Our patched Wine fork: implements RtlCloneUserProcess (fork()) and
+  # related clone work that stock apt Wine lacks entirely. Pinned to a
+  # commit, not a branch, so a fork update is a deliberate bump here
+  # rather than a silent runtime change underneath every Wine-consuming
+  # job. See .github/actions/setup-wine and the build-wine job below.
+  WINE_REPO: https://github.com/Pandapip1/wine.git
+  WINE_SHA: 275c42ca13fd8d063a37bb98d00a578d62c1c82b
 
 jobs:
   reuse:
@@ -62,6 +69,25 @@ jobs:
           revision: ${{ env.TINYCC_SHA }}
           build-on-miss: "true"
 
+  # Build our patched Wine fork once and cache it, keyed on the pinned
+  # commit above, exactly like build-toolchain does for tinycc. A Wine
+  # build takes tens of minutes; every job that needs Wine below restores
+  # this cache instead of rebuilding it, and does so with build-on-miss
+  # left at its default "false" -- a miss there means this job and that
+  # pin disagreed, which should fail loudly rather than rebuild silently
+  # (and slowly, once per matrix leg) inside a downstream job.
+  build-wine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore or build patched Wine
+        uses: ./.github/actions/setup-wine
+        with:
+          repository: ${{ env.WINE_REPO }}
+          revision: ${{ env.WINE_SHA }}
+          build-on-miss: "true"
+
   # This produces the exact PE files consumed on real Windows.  Wine jobs
   # rebuild independently so they can run in parallel with this hand-off.
   build-test-exes:
@@ -98,7 +124,7 @@ jobs:
           if-no-files-found: error
 
   ntlibc-suite:
-    needs: build-toolchain
+    needs: [build-toolchain, build-wine]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -117,6 +143,9 @@ jobs:
           revision: ${{ env.TINYCC_SHA }}
       - name: Set up Wine
         uses: ./.github/actions/setup-wine
+        with:
+          repository: ${{ env.WINE_REPO }}
+          revision: ${{ env.WINE_SHA }}
       - name: Configure
         run: ./configure --host=${{ matrix.host }} CC=${{ matrix.cc }} --${{ matrix.kernel32 }}-kernel32
       - name: Build and check
@@ -131,7 +160,7 @@ jobs:
           git diff --exit-code -- boot/kaem/
 
   libc-test:
-    needs: build-toolchain
+    needs: [build-toolchain, build-wine]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -145,6 +174,9 @@ jobs:
           revision: ${{ env.TINYCC_SHA }}
       - name: Set up Wine
         uses: ./.github/actions/setup-wine
+        with:
+          repository: ${{ env.WINE_REPO }}
+          revision: ${{ env.WINE_SHA }}
       - name: Configure and build
         run: |
           ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32
@@ -153,7 +185,7 @@ jobs:
         run: make libc-test-pedantic
 
   posix-optsrun:
-    needs: build-toolchain
+    needs: [build-toolchain, build-wine]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -168,6 +200,9 @@ jobs:
           revision: ${{ env.TINYCC_SHA }}
       - name: Set up Wine
         uses: ./.github/actions/setup-wine
+        with:
+          repository: ${{ env.WINE_REPO }}
+          revision: ${{ env.WINE_SHA }}
       - name: Configure and build
         run: |
           ./configure --host=x86_64-win32 CC=x86_64-win32-tcc --disable-kernel32

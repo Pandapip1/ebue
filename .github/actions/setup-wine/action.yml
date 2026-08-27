@@ -6,22 +6,98 @@
 # five lines; a copy is not just duplication here, it is a place for the
 # legs to silently disagree about which Wine ran the suite.
 #
-# wine32:i386 is not optional even for the x86_64 legs: the i386 leg needs
-# it outright, and dpkg --add-architecture has to happen before the update
-# or the :i386 package is simply not visible.
+# This installs OUR PATCHED Wine fork (Pandapip1/wine), not the stock apt
+# package.  Stock Wine has no RtlCloneUserProcess and cannot fork(), which
+# made every fork-dependent expectation (sigaction/17-*, the fork clauses,
+# ...) unfalsifiable in CI: a row could be right on a developer's patched
+# build and wrong here for no reason but which binary ran it.  The patched
+# build is what actually implements the syscalls ntlibc's tests exercise.
+#
+# The build is cached by the fork commit so an unchanged fork is a pure
+# cache hit; a moved pin invalidates it automatically.  See build-wine in
+# ci.yml, which populates the cache once and is a hard prerequisite of
+# every job that calls this action -- a cache miss here is a configuration
+# bug (the pin and the populating job disagreed), not something to paper
+# over by rebuilding silently and slowly inside each matrix leg.
 
 name: Set up Wine
-description: Install a 32- and 64-bit capable Wine for running ntlibc's PE test binaries.
+description: Install ntlibc's patched Wine fork (with RtlCloneUserProcess) for running PE test binaries.
+
+inputs:
+  repository:
+    description: Wine fork repository to build
+    required: true
+  revision:
+    description: Pinned Wine fork commit
+    required: true
+  build-on-miss:
+    description: Build and cache the fork when it is not already cached
+    required: false
+    default: "false"
 
 runs:
   using: composite
   steps:
-    - name: Install Wine
+    - name: Restore patched Wine build
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/wine-install
+        # Keyed on the fork commit (not a branch name) so an update to the
+        # fork invalidates this automatically, and a cache hit can only
+        # ever be a build of exactly this commit -- never a stale build
+        # left over from a previous pin, which would silently reintroduce
+        # the same "which binary actually ran this" problem we're fixing.
+        key: wine-${{ inputs.revision }}-${{ runner.os }}-${{ runner.arch }}-v1
+
+    - name: Build patched Wine after a cache miss
+      if: steps.cache.outputs.cache-hit != 'true' && inputs.build-on-miss == 'true'
+      shell: bash
+      env:
+        WINE_REPOSITORY: ${{ inputs.repository }}
+        WINE_REVISION: ${{ inputs.revision }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y \
+          flex bison pkg-config zlib1g-dev \
+          gcc-mingw-w64-i686 gcc-mingw-w64-x86-64
+        git clone "$WINE_REPOSITORY" "$RUNNER_TEMP/wine"
+        git -C "$RUNNER_TEMP/wine" checkout "$WINE_REVISION"
+        mkdir -p "$RUNNER_TEMP/wine/build-wow64"
+        cd "$RUNNER_TEMP/wine/build-wow64"
+        # Matches the flags used for the developer build this fork is
+        # validated against: a single WoW64 build covering both PE
+        # arches, with the optional subsystems (X11, Vulkan, GStreamer,
+        # ...) ntlibc's PE test binaries never touch turned off so the
+        # runner doesn't need their dev packages at all.
+        ../configure --enable-archs=i386,x86_64 \
+          --without-x --without-freetype --without-vulkan --without-opengl \
+          --without-gstreamer --without-sane --without-usb --without-udev \
+          --without-dbus --without-cups \
+          CC=gcc CXX=g++ \
+          --prefix="$HOME/wine-install"
+        make -j"$(nproc)"
+        make install
+        # The cache stores what we run, not what we debug: strip the
+        # installed tree so the cache entry is a runtime, not a build
+        # directory with symbols still attached.
+        find "$HOME/wine-install" -type f -exec sh -c '
+          for f; do
+            case "$(file -b "$f")" in
+              ELF*) strip --strip-unneeded "$f" 2>/dev/null || true ;;
+            esac
+          done
+        ' _ {} +
+
+    - name: Verify and expose the patched Wine build
       shell: bash
       run: |
-        sudo dpkg --add-architecture i386
-        sudo apt-get update
-        sudo apt-get install -y wine wine32:i386 wine64
+        test -x "$HOME/wine-install/bin/wine"
+        echo "$HOME/wine-install/bin" >> "$GITHUB_PATH"
+
     - name: Report Wine version
       shell: bash
-      run: wine --version
+      run: |
+        export PATH="$HOME/wine-install/bin:$PATH"
+        wine --version
