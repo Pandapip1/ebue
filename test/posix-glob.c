@@ -1932,6 +1932,9 @@ static void test_wordexp_line_continuation(void)
 static void test_wordexp_syntax_errors(void)
 {
 	wordexp_t we;
+	CHECK(wordexp("# ignored | $(command)", &we, WRDE_NOCMD) == 0);
+	CHECK(we.we_wordc == 0);
+	wordfree(&we);
 
 	CHECK(wordexp("\"abc", &we, 0) == WRDE_SYNTAX);		/* unterminated string */
 	CHECK(wordexp("'abc", &we, 0) == WRDE_SYNTAX);

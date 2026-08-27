@@ -957,6 +957,11 @@ static int validate_words(const char *words, int flags)
 		}
 		if (q == V_NONE && c == '\'') { q = V_SINGLE; p++; continue; }
 		if (q == V_NONE && c == '"') { q = V_DOUBLE; p++; continue; }
+		if (q == V_NONE && c == '#' &&
+		    (p == words || p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\n')) {
+			while (*p && *p != '\n') p++;
+			return *p == '\n' ? WRDE_BADCHAR : 0;
+		}
 		if (c == '$' && p[1] == '{') {
 			const char *end = param_word_end(p + 2);
 			if (!end) return WRDE_SYNTAX;
@@ -1247,6 +1252,11 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 	while (*p) {
 		char c = *p;
 		if (q == Q_NONE) {
+			if (c == '#' &&
+			    (p == words || p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\n')) {
+				while (*p && *p != '\n') p++;
+				continue;
+			}
 			if (is_ifs(c)) { FLUSH(); p++; continue; }
 			if (c == '\'') { q = Q_SINGLE; active = 1; p++; continue; }
 			if (c == '"') {
