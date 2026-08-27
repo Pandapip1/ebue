@@ -186,11 +186,26 @@ static NTSTATUS map_file(HANDLE fh, int prot, int flags, off_t off,
                          size_t viewbytes, PVOID *base_inout)
 {
 	HANDLE section;
+	IO_STATUS_BLOCK io;
+	FILE_STANDARD_INFORMATION si;
 	NTSTATUS st;
 	LARGE_INTEGER secoff;
 	SIZE_T viewsize;
 	ULONG maxprot;
 	int private = (flags & MAP_PRIVATE) != 0;
+	long long eof = -1;
+
+	/* Wine can retain writes made past EOF in the shared cache page even
+	 * across close()+reopen()+NtCreateSection().  POSIX requires every
+	 * mapping operation to zero-fill that partial page.  Capture the
+	 * logical EOF before mapping so a writable shared view can restore
+	 * the required zero tail below without extending the file. */
+	if (!private && (prot & PROT_WRITE)) {
+		st = NtQueryInformationFile(fh, &io, &si, sizeof si,
+		                            FileStandardInformation);
+		if (!NT_SUCCESS(st)) return st;
+		eof = si.EndOfFile;
+	}
 
 	maxprot = (prot & PROT_EXEC) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
 	st = NtCreateSection(&section, SECTION_ALL_ACCESS, NULL, NULL,
@@ -216,13 +231,19 @@ static NTSTATUS map_file(HANDLE fh, int prot, int flags, off_t off,
 	 * still bounds what mmap() tells its caller was mapped; NT's actual
 	 * view can only be smaller when the file is shorter than `len`
 	 * implies, which is the caller's own error to make. */
-	(void)viewbytes;
 	secoff = (LARGE_INTEGER)off;
 	viewsize = 0;
 	st = NtMapViewOfSection(section, NtCurrentProcess(), base_inout, 0, 0,
 	                        &secoff, &viewsize, ViewShare, 0,
 	                        prot_to_view(prot, private));
 	NtClose(section);
+	if (NT_SUCCESS(st) && eof > off && (eof & (MMAP_PAGE - 1)) != 0 &&
+	    (unsigned long long)(eof - off) < viewbytes) {
+		size_t tail = (size_t)(eof - off);
+		size_t end = pground(tail);
+		if (end > viewbytes) end = viewbytes;
+		memset((char *)*base_inout + tail, 0, end - tail);
+	}
 	return st;
 }
 

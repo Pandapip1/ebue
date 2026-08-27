@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=954 BUG=31 UNIMPL=528 NA=94 FLAKY=3
+# COUNTS PASS=955 BUG=30 UNIMPL=528 NA=94 FLAKY=3
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
@@ -192,7 +192,7 @@ mmap/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/11-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
 mmap/11-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNTESTED
-mmap/11-4.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Pass 2 mmap() is now file-backed (map_file(), src/mman/mman.c) and the sibling case mmap/11-6 -- same fork/mmap/write/munmap shape -- now PASSes, but 11-4 still FAILs at its own second mmap() in the parent: it reads back the byte written into the partial page past EOF by the child's mapping, even though fstat() shows the file's logical length never grew past the truncated size (measured with a standalone repro: size stays constant across write+reopen). The data survives across two independent NtCreateSection() calls of the same on-disk bytes despite the intervening close()+reopen(), which reads as the cache manager (or Wine's file-mapping emulation of it) retaining the shared cache page for the file rather than re-zeroing the tail on a fresh section -- the same class of divergence the LTP test itself calls out with its "known bug on tmpfs" skip on native Linux. Not yet isolated to NT-vs-Wine; not re-fenced as NA without that
+mmap/11-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	mmap re-zeroes a writable shared view's partial page past EOF, preventing retained cache-tail data from leaking into a fresh mapping
 mmap/11-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 mmap/11-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG mmap/11-6.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 mmap/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
