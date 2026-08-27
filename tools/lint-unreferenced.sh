@@ -39,11 +39,12 @@
 #      names it, so no test can assert anything specific about it.
 #      Transitive reachability is a coverage question and needs a coverage
 #      instrument, not this one.
-#   2. Code the native compile does not see does not count.  A call inside
-#      a preprocessor branch that is off here is not a reference.  That is
-#      the intended reading -- an uncompiled call asserts nothing -- and
-#      it is why the two files that genuinely cannot compile natively are
-#      handled explicitly below rather than silently contributing nothing.
+#   2. Ordinary code the native compile does not see does not count.  Policy
+#      fences are the deliberate exception: tools/test-policy.py compiles
+#      PASS, BUG and FLAKY cases as independent translation units, so this
+#      script preprocesses those buildable fences with macro expansion and
+#      counts their call sites too.  UNIMPL and NA fences stay off: the former
+#      is defined by not building, and the latter is deliberately not probed.
 #   3. "Referenced" is not "asserted".  A test that calls a function and
 #      ignores the result satisfies this check.  It is still the right
 #      first cut: a function no test even mentions is a larger and far
@@ -306,7 +307,46 @@ if ls "$workdir"/obj/*.o >/dev/null 2>&1; then
 fi
 sort -u -o "$workdir/symrefs" "$workdir/symrefs"
 nsym=$(grep -c . "$workdir/symrefs" || true)
+
+# Policy-fenced tests are absent from the ordinary objects above because
+# test/test-policy.h deliberately expands every NTLIBC_TEST() to zero.
+# The policy runner turns one buildable case on at a time.  For reference
+# accounting it is enough (and much cheaper) to turn every buildable kind on
+# for preprocessing: no definitions are linked, while macro expansion keeps
+# indirect public helpers such as __pthread_cleanup_push visible.  Line
+# markers restrict extraction to the test source itself, excluding the public
+# header prototypes that preprocessing also emits.
+: > "$workdir/policyrefs"
+: > "$workdir/policyfail"
+mkdir -p "$workdir/policy" || exit 1
+for t in test/*.c; do
+	n=$(basename "$t" .c)
+	case " $NOT_NATIVE " in
+	*" $n "*) continue ;;
+	esac
+	sed -E 's/^([[:space:]]*#[[:space:]]*if[[:space:]]+)NTLIBC_TEST\([[:space:]]*(PASS|BUG|FLAKY),[^)]*\)/\1 1/' "$t" |
+		"$CC_NATIVE" -E -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 \
+		-D_GNU_SOURCE -I"$srcdir/test" $TINC -x c - \
+		> "$workdir/policy/$n.i" 2> "$workdir/policy/$n.err"
+	if [ $? -ne 0 ]; then
+		printf '%s\n' "$t" >> "$workdir/policyfail"
+		continue
+	fi
+	awk '
+		$1 == "#" && $2 ~ /^[0-9]+$/ {
+			active = ($3 == "\"<stdin>\"")
+			next
+		}
+		active { print }
+	' "$workdir/policy/$n.i" |
+		grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' |
+		sed 's/[[:space:]]*($//' >> "$workdir/policyrefs" || true
+done
+sort -u -o "$workdir/policyrefs" "$workdir/policyrefs"
+npolicy=$(grep -c . "$workdir/policyrefs" || true)
+
 cp "$workdir/symrefs" "$workdir/referenced"
+cat "$workdir/policyrefs" >> "$workdir/referenced"
 # The generous textual pass, for the PE-only files only.
 if [ -f "$workdir/textscan" ]; then
 	while IFS="$(printf '\t')" read -r t why; do
@@ -350,6 +390,17 @@ if [ -s "$workdir/nocompile" ]; then
 	printf 'lint-unreferenced: never leave it silently uncounted.\n' >&2
 	floor_failed=1
 fi
+if [ -s "$workdir/policyfail" ]; then
+	printf 'lint-unreferenced: FAILED -- policy-fence preprocessing failed for:\n' >&2
+	while read -r t; do
+		n=$(basename "$t" .c)
+		printf 'lint-unreferenced:   %s\n' "$t" >&2
+		sed -n '1,3p' "$workdir/policy/$n.err" 2>/dev/null |
+			sed 's/^/lint-unreferenced:     /' >&2
+	done < "$workdir/policyfail"
+	printf 'lint-unreferenced: those cases contribute no trustworthy references.\n' >&2
+	floor_failed=1
+fi
 # Counted on the nm output alone, not on the merged set: the textual pass
 # over the two PE-only files contributes ~370 identifiers no matter what
 # the symbol scan does, so a floor on the merged set could not tell a
@@ -388,6 +439,8 @@ printf 'lint-unreferenced: %s name(s) referenced: %s undefined symbol(s) over %d
 	"$nref" "$nsym" "$ncompiled"
 printf 'lint-unreferenced:   test object(s), plus %d PE-only source(s) scanned textually.\n' \
 	"$nexcluded"
+printf 'lint-unreferenced:   %s call name(s) recovered from buildable policy fences.\n' \
+	"$npolicy"
 printf 'lint-unreferenced: %s declaration(s) excluded as macro-shadowed: %s\n' \
 	"$nshadow" "$(tr '\n' ' ' < "$workdir/shadowed")"
 printf 'lint-unreferenced: %s declared-and-implemented function(s) no test references' "$findings"

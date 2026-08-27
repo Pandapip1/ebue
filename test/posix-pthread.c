@@ -151,8 +151,11 @@ static void test_pthread_detach_join_esrch(void)
 
 static void test_pthread_attr_roundtrip(void)
 {
-	pthread_attr_t attr;
-	int state = -1, scope = -1, inherit = -1;
+	static unsigned char stack_area[PTHREAD_STACK_MIN];
+	pthread_attr_t attr, current;
+	struct sched_param parameter;
+	void *address = NULL;
+	int state = -1, scope = -1, inherit = -1, policy = -1;
 	size_t stack = 0, guard = (size_t)-1;
 
 	/* pthread_attr_init.html: "shall initialize a thread attributes
@@ -192,6 +195,39 @@ static void test_pthread_attr_roundtrip(void)
 	CHECK(scope == PTHREAD_SCOPE_SYSTEM || scope == PTHREAD_SCOPE_PROCESS);
 	CHECK(pthread_attr_getinheritsched(&attr, &inherit) == 0);
 	CHECK(inherit == PTHREAD_INHERIT_SCHED || inherit == PTHREAD_EXPLICIT_SCHED);
+	CHECK(pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED) == 0);
+	CHECK(pthread_attr_getinheritsched(&attr, &inherit) == 0);
+	CHECK(inherit == PTHREAD_EXPLICIT_SCHED);
+	CHECK(pthread_attr_setscope(&attr, PTHREAD_SCOPE_SYSTEM) == 0);
+	CHECK(pthread_attr_getscope(&attr, &scope) == 0);
+	CHECK(scope == PTHREAD_SCOPE_SYSTEM);
+
+	/* The scheduling policy and its parameter are a coupled attribute.
+	 * Reading the defaults and writing that same valid pair back exercises
+	 * both halves without assuming an implementation-specific priority. */
+	CHECK(pthread_attr_getschedpolicy(&attr, &policy) == 0);
+	CHECK(pthread_attr_getschedparam(&attr, &parameter) == 0);
+	CHECK(pthread_attr_setschedpolicy(&attr, policy) == 0);
+	CHECK(pthread_attr_setschedparam(&attr, &parameter) == 0);
+
+	/* The obsolete get/setstackaddr pair remains declared for source
+	 * compatibility, alongside the preferred combined get/setstack API. */
+	CHECK(pthread_attr_setstack(&attr, stack_area, sizeof stack_area) == 0);
+	CHECK(pthread_attr_getstack(&attr, &address, &stack) == 0);
+	CHECK(address == stack_area);
+	CHECK(stack == sizeof stack_area);
+	CHECK(pthread_attr_setstackaddr(&attr, stack_area) == 0);
+	address = NULL;
+	CHECK(pthread_attr_getstackaddr(&attr, &address) == 0);
+	CHECK(address == stack_area);
+
+	/* pthread_getattr_np() is the live-thread counterpart: its result is
+	 * an initialized attribute object with a nonempty current stack. */
+	CHECK(pthread_getattr_np(pthread_self(), &current) == 0);
+	CHECK(pthread_attr_getstack(&current, &address, &stack) == 0);
+	CHECK(address != NULL);
+	CHECK(stack >= PTHREAD_STACK_MIN);
+	CHECK(pthread_attr_destroy(&current) == 0);
 
 	/* "shall destroy a thread attributes object ... A destroyed attr
 	 * attributes object can be reinitialized using
@@ -199,6 +235,30 @@ static void test_pthread_attr_roundtrip(void)
 	CHECK(pthread_attr_destroy(&attr) == 0);
 	CHECK(pthread_attr_init(&attr) == 0);
 	CHECK(pthread_attr_destroy(&attr) == 0);
+}
+#endif
+
+#if NTLIBC_TEST(PASS, posix_pthread_cleanup_push_pop)
+#include <pthread.h>
+
+static void cleanup_increment(void *argument)
+{
+	(*(int *)argument)++;
+}
+
+static void test_pthread_cleanup_push_pop(void)
+{
+	int calls = 0;
+
+	/* The lexical pair executes its top handler exactly when pop's
+	 * argument is nonzero, independently of thread cancellation. */
+	pthread_cleanup_push(cleanup_increment, &calls);
+	pthread_cleanup_pop(1);
+	CHECK(calls == 1);
+
+	pthread_cleanup_push(cleanup_increment, &calls);
+	pthread_cleanup_pop(0);
+	CHECK(calls == 1);
 }
 #endif
 
