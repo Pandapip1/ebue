@@ -205,6 +205,7 @@ int __alertable_delay(long long ticks, long long *left)
 	LARGE_INTEGER start, now, t;
 
 	NtQuerySystemTime(&start);
+	__pthread_testcancel();
 	while (ticks > 0) {
 		/* Background signal sources (the cross-process delivery thread
 		 * and the POSIX timer manager) run handlers on their own thread.
@@ -214,6 +215,7 @@ int __alertable_delay(long long ticks, long long *left)
 		t = -slice;
 		if (!t) t = -1;   /* a 0 timeout means "yield", not "no wait" */
 		NtDelayExecution(1, &t);
+		__pthread_testcancel();
 
 		NtQuerySystemTime(&now);
 		ticks -= now - start;

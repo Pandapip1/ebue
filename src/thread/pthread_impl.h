@@ -39,6 +39,7 @@ struct __pthread {
 	int cancel_state;
 	int cancel_type;
 	int cancel_pending;
+	int cancel_queued;
 	int sched_policy;
 	int sched_priority;
 	struct __pthread_cleanup *cleanup;
@@ -49,5 +50,6 @@ extern __thread struct __pthread *__pthread_self_control;
 struct __pthread *__pthread_current(void);
 void __pthread_run_specific_destructors(struct __pthread *);
 _Noreturn void __pthread_cancel_current(void);
+void __pthread_testcancel(void);
 
 #endif

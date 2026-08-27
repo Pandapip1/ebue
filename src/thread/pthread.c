@@ -40,11 +40,16 @@ static int valid_attr(const pthread_attr_t *attr)
 struct __pthread *__pthread_current(void)
 {
 	struct __pthread *self = __pthread_self_control;
+	HANDLE handle;
 	if (self) return self;
 	self = calloc(1, sizeof *self);
 	if (!self) return 0;
 	self->magic = PTHREAD_MAGIC;
-	self->handle = NtCurrentThread();
+	if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
+		NtCurrentProcess(), &handle, 0, 0, DUPLICATE_SAME_ACCESS)))
+		self->handle = handle;
+	else
+		self->handle = NtCurrentThread();
 	self->cancel_state = PTHREAD_CANCEL_ENABLE;
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;

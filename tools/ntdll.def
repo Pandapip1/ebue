@@ -79,6 +79,7 @@ NtOpenSymbolicLinkObject                ; 3.51
 NtQuerySymbolicLinkObject               ; 3.51
 NtOpenThread                            ; 3.51
 NtProtectVirtualMemory                  ; 3.51
+NtQueueApcThread                        ; 3.51
 NtQueryAttributesFile                   ; 3.51
 NtQueryDirectoryFile                    ; 3.51
 NtQueryEaFile                           ; 3.51

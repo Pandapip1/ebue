@@ -515,6 +515,9 @@ int __sigchld_nocldwait(void);
  * and the clone arrives with the parent's deadline in its copied address
  * space (src/unistd/sleep.c). */
 void __alarm_reset_after_fork(void);
+/* Cancellation-point hook used by alertable sleeps without forcing a
+ * pthread control block to be allocated for threads with no request. */
+void __pthread_testcancel(void);
 
 /* ---- cross-process signal delivery (src/signal/sigdelivery.c) --------- */
 /* Started by __signal_init(); see that file's banner for the whole

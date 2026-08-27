@@ -660,7 +660,7 @@ static void test_pthread_specific_key(void)
  * pthread_setcancelstate.html, pthread_cleanup_push.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_cancel_cleanup)
+#if NTLIBC_TEST(PASS, posix_pthread_cancel_cleanup)
 #include <pthread.h>
 
 static int cleanup_ran;

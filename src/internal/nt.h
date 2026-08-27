@@ -1364,6 +1364,8 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE, BOOLEAN, LARGE_INTEGER *);
 NTSTATUS NTAPI NtWaitForMultipleObjects(ULONG, HANDLE *, ULONG, BOOLEAN, LARGE_INTEGER *);
 NTSTATUS NTAPI NtResumeThread(HANDLE, PULONG);
 NTSTATUS NTAPI NtSuspendThread(HANDLE, PULONG);
+typedef void (NTAPI *PKNORMAL_ROUTINE)(PVOID, PVOID, PVOID);
+NTSTATUS NTAPI NtQueueApcThread(HANDLE, PKNORMAL_ROUTINE, PVOID, PVOID, PVOID);
 
 /* Whole-process suspend and resume, the primitive kill(pid, SIGSTOP)
  * and kill(pid, SIGCONT) are built on (src/signal/signal.c).  Each
