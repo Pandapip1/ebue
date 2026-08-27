@@ -895,7 +895,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 		case I_JMP:
 			if (in->x <= pc) {
 				regoff_t off = sp - ms->begin;
-				if (ms->progress[pc] == off) goto backtrack;
+				if (off <= ms->progress[pc]) goto backtrack;
 				ms->progress[pc] = off;
 			}
 			pc = in->x; continue;
@@ -904,7 +904,7 @@ static int run(struct mstate *ms, int pc, const char *sp)
 			 * as `if (run(ms, in->x, sp)) return 1; pc = in->y;`. */
 			if (in->x <= pc) {
 				regoff_t off = sp - ms->begin;
-				if (ms->progress[pc] == off) { pc = in->y; continue; }
+				if (off <= ms->progress[pc]) { pc = in->y; continue; }
 				ms->progress[pc] = off;
 			}
 			if (!bt_push_try(ms, in->y, sp)) return -1;
