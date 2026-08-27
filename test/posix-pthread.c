@@ -459,7 +459,7 @@ static void test_pthread_condattr_clock(void)
  * pthread_rwlock_rdlock.html, pthread_rwlock_wrlock.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_rwlock_shared_read)
+#if NTLIBC_TEST(PASS, posix_pthread_rwlock_shared_read)
 #include <pthread.h>
 #include <errno.h>
 
