@@ -57,6 +57,7 @@ NtCreateFile                            ; 3.51
 NtCreateJobObject                       ; 5.0
 NtCreateNamedPipeFile                   ; 3.51
 NtCreateSection                         ; 3.51
+NtCreateThreadEx                        ; 6.0
 NtCreateTimer                           ; 3.51
 NtDelayExecution                        ; 3.51
 NtDeleteFile                            ; 3.51

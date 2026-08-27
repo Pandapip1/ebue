@@ -3,12 +3,34 @@
  *
  * Signals, as far as they can be had.
  *
- * There is no asynchronous delivery from other processes: kill() can
- * only end a process, not interrupt it.  What does work is what a single
- * program generates itself -- raise(), abort(), a write to a broken
- * pipe, and hardware faults (SIGSEGV, SIGFPE, SIGILL, SIGBUS), which
- * arrive as NT exceptions and are turned into signals by a vectored
- * exception handler installed at startup.
+ * What a single program generates for itself -- raise(), abort(), a
+ * write to a broken pipe, and hardware faults (SIGSEGV, SIGFPE, SIGILL,
+ * SIGBUS), which arrive as NT exceptions and are turned into signals by
+ * a vectored exception handler installed at startup -- has always been
+ * synchronous, and still is: every one of those still calls
+ * __raise_internal() directly, on the thread that generated the signal,
+ * exactly as before.
+ *
+ * kill() to ANOTHER process is different, in one specific and bounded
+ * way, as of src/signal/sigdelivery.c: it first tries to hand the target
+ * process's own listener a small packet naming the signal, so that
+ * process's own delivery thread can drive its own real disposition
+ * (sa_handler/SIG_IGN, not just the default action) through
+ * __raise_internal() -- see that file's banner for the whole mechanism,
+ * including the fast-fail guarantee for a target with no listener. What
+ * this does NOT do is interrupt the target thread wherever it happens
+ * to be: nothing here touches another thread's register state
+ * (thread-context hijacking -- SuspendThread/GetThreadContext/
+ * SetThreadContext plus an instruction-pointer rewrite, the way a real
+ * kernel or Cygwin's exceptions.cc does it -- is out of scope; see
+ * sigdelivery.c's banner for why). A signal delivered this way is only
+ * guaranteed to be acted on the next time the target thread reaches a
+ * point that checks for one: sig_delivery_thread() calling
+ * __raise_internal() itself (immediately, on its own thread, for a
+ * signal that is not blocked), or src/select/select.c's poll loop,
+ * which is taught to notice one early because it already polls. Code
+ * running ordinary instructions between syscalls on the application
+ * thread does not get interrupted out of them by this.
  *
  * Ctrl-C and Ctrl-Break are a separate story: csrss delivers those
  * through kernel32's console control mechanism, not as NT exceptions,
@@ -47,9 +69,12 @@ static int sig_valid(int sig) { return sig > 0 && sig < _NSIG; }
  * __raise_internal(), so a SIGSEGV/SIGBUS/SIGILL/SIGFPE handler
  * installed with SA_SIGINFO can be told this delivery came from a
  * hardware fault rather than kill()/raise() -- see the siginfo_t
- * construction in __raise_internal() below. No locking, same as every
- * other global here (this file's header comment: no threading support
- * to speak of, and delivery is synchronous). */
+ * construction in __raise_internal() below. Guarded by
+ * __sig_lock()/__sig_unlock() at exception_handler()'s call site (see
+ * there): now that src/signal/sigdelivery.c's delivery thread can be
+ * inside its own __raise_internal() call at the same time, these three
+ * globals are no longer implicitly single-threaded the way every other
+ * global in this file still is. */
 static int fault_active;
 static void *fault_addr;
 static int fault_si_code;   /* computed by exception_handler(), see there */
@@ -84,14 +109,22 @@ void (*signal(int sig, void (*h)(int)))(int)
 {
 	void (*old)(int);
 	if (!sig_valid(sig) || sig == SIGKILL || sig == SIGSTOP) { errno = EINVAL; return SIG_ERR; }
+	__sig_lock();
 	old = handlers[sig];
 	handlers[sig] = h;
+	__sig_unlock();
 	return old;
 }
 
 int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 {
 	if (!sig_valid(sig) || sig == SIGKILL || sig == SIGSTOP) { errno = EINVAL; return -1; }
+	/* Locked for the whole read-then-write: sig_delivery_thread()
+	 * (src/signal/sigdelivery.c) reads handlers[]/act_mask[]/act_flags[]
+	 * inside __raise_internal() on its own thread, and a caller reading
+	 * `old` back here is entitled to a consistent snapshot rather than
+	 * one torn between an in-flight update and a concurrent delivery. */
+	__sig_lock();
 	if (old) {
 		memset(old, 0, sizeof *old);
 		old->sa_handler = handlers[sig];
@@ -101,12 +134,16 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 	if (act) {
 		handlers[sig] = act->sa_handler;
 		act_mask[sig] = act->sa_mask;
-		/* SA_RESTART: meaningless here.  ntlibc never suspends a thread
-		 * mid-syscall waiting on a signal in the first place -- there is
-		 * no asynchronous delivery to interrupt anything with (see this
-		 * file's header comment) -- so there is no EINTR-vs-restart
-		 * choice for it to make.  Accepted and remembered (round-trips
-		 * through sigaction(..., &old)) but otherwise a no-op.
+		/* SA_RESTART: meaningful for exactly one caller now,
+		 * src/select/select.c's select()/pselect() -- see that file's
+		 * banner for the choice it makes with the flag once a signal
+		 * really can interrupt it. Every OTHER blocking point in this
+		 * library still cannot be interrupted mid-syscall (no
+		 * NtCancelSynchronousIoFile -- see src/signal/sigdelivery.c's
+		 * banner for why not), so for everything but select()/pselect()
+		 * this remains what it always was: accepted and remembered
+		 * (round-trips through sigaction(..., &old)) but otherwise a
+		 * no-op.
 		 *
 		 * SA_ONSTACK: implemented. sigaltstack() below keeps the
 		 * registered stack and sig_dispatch() switches to it around
@@ -125,6 +162,7 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 		 * genuinely implemented. */
 		act_flags[sig] = act->sa_flags;
 	}
+	__sig_unlock();
 	return 0;
 }
 
@@ -377,7 +415,7 @@ int __raise_internal(int sig)
 	return 0;
 }
 
-int raise(int sig) { return __raise_internal(sig) < 0 ? -1 : 0; }
+int raise(int sig) { int r; __sig_lock(); r = __raise_internal(sig); __sig_unlock(); return r < 0 ? -1 : 0; }
 
 /* The signals whose default action is "stop the process" -- action S in
  * signal.h.html's Default Action column: SIGSTOP, and the three
@@ -460,10 +498,13 @@ int kill(pid_t pid, int sig)
 	 * sig_valid() answers false for 0 (it means "no signal", not "a
 	 * signal"), which would otherwise reject the one call kill(pid, 0)
 	 * exists to make. This used to validate sig only inside
-	 * __raise_internal(), which the cross-process arm below never
-	 * calls -- so kill()/killpg() to another pid with a bogus sig
-	 * reached NtTerminateProcess()/NtSuspendProcess() instead of ever
-	 * being rejected. */
+	 * __raise_internal() -- and the cross-process arm below
+	 * (src/signal/sigdelivery.c's __sig_try_deliver_remote()) only ever
+	 * reaches that check inside the TARGET process, on a thread this
+	 * one has no way to read an error back from -- so kill()/killpg() to
+	 * another pid with a bogus sig reached NtTerminateProcess()/
+	 * NtSuspendProcess() (or, now, a delivered-but-silently-dropped
+	 * packet) instead of ever being rejected here. */
 	if (sig != 0 && !sig_valid(sig)) { errno = EINVAL; return -1; }
 
 	/* kill.html DESCRIPTION: pid == 0 reaches "all processes ... whose
@@ -559,6 +600,29 @@ int kill(pid_t pid, int sig)
 		if (!c) NtClose(h);
 		return r;
 	}
+	/* Try the target's own listener before falling back to this
+	 * process's blind default-action guess. src/signal/sigdelivery.c's
+	 * __sig_try_deliver_remote() hands the packet to `pid`'s own
+	 * delivery thread, which applies THAT process's real disposition
+	 * (sa_handler/SIG_IGN, not just whatever default_action() would
+	 * assume here) through the same __raise_internal() raise() uses --
+	 * so success here is strictly more correct than the
+	 * NtTerminateProcess() path below, and this function is done: no
+	 * fallthrough on success. Failure (no listener -- no such process
+	 * under this name, a non-ntlibc process, or one still inside
+	 * __signal_init() -- or any other reason the packet did not land)
+	 * falls straight through to the existing behaviour unchanged; see
+	 * that function's own comment for why it does not try to
+	 * distinguish those cases. This does not apply to the sig_stops()/
+	 * SIGCONT branch above: NtSuspendProcess/NtResumeProcess are a real
+	 * process-suspension primitive, not a disposition-consulting one,
+	 * and stay exactly as they were (the target's-DEFAULT-disposition-
+	 * only limitation for STOP-shaped signals is a separate, still-open
+	 * problem -- see this file's header comment). */
+	if (__sig_try_deliver_remote((int)pid, sig)) {
+		if (!c) NtClose(h);
+		return 0;
+	}
 	st = NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig));
 	if (!c) NtClose(h);
 	if (!NT_SUCCESS(st) && st != STATUS_PROCESS_IS_TERMINATING) return __set_errno_status(st);
@@ -578,13 +642,23 @@ int sigorset(sigset_t *d, const sigset_t *a, const sigset_t *b) { size_t i; for 
 int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 {
 	int i;
+	/* Locked for the whole call, `old` snapshot included: this is also
+	 * why __raise_internal() below is safe to call without locking
+	 * itself -- see src/signal/sigdelivery.c's banner for the invariant
+	 * (__raise_internal() assumes its caller already holds the lock).
+	 * __sig_lock() is recursive (same file), which is what lets THIS
+	 * call site nest safely even when it is itself reached from inside
+	 * a signal handler that raise() is still running under the same
+	 * lock for -- see sigdelivery.c's banner for exactly that shape
+	 * (test/posix-signal.c's mask_check_handler()). */
+	__sig_lock();
 	if (old) *old = blocked;
 	if (set) {
 		switch (how) {
 		case SIG_BLOCK: sigorset(&blocked, &blocked, set); break;
 		case SIG_UNBLOCK: for (i = 1; i < _NSIG; i++) if (sigismember(set, i)) sigdelset(&blocked, i); break;
 		case SIG_SETMASK: blocked = *set; break;
-		default: errno = EINVAL; return -1;
+		default: __sig_unlock(); errno = EINVAL; return -1;
 		}
 		sigdelset(&blocked, SIGKILL);
 		sigdelset(&blocked, SIGSTOP);
@@ -592,10 +666,11 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 		for (i = 1; i < _NSIG; i++)
 			if (sigismember(&pending, i) && !sigismember(&blocked, i)) { sigdelset(&pending, i); __raise_internal(i); }
 	}
+	__sig_unlock();
 	return 0;
 }
 
-int sigpending(sigset_t *s) { *s = pending; return 0; }
+int sigpending(sigset_t *s) { __sig_lock(); *s = pending; __sig_unlock(); return 0; }
 int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
 /* sigwait.html DESCRIPTION: "shall select a pending signal from set,
  * atomically clear it from the system's set of pending signals, and
@@ -633,13 +708,22 @@ int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
  *
  * The suspend path is a real wait, not a fabricated return.  Nothing on
  * the main thread can make a signal pending while it is parked inside
- * this loop -- delivery here is synchronous (see this file's banner) --
- * but the NTLIBC_USE_KERNEL32 console-control handler runs on a thread
- * kernel32 creates and reaches `pending` through __raise_internal(), so
- * a blocked SIGINT genuinely can arrive from outside.  Where it cannot,
- * this waits forever, which is what POSIX specifies for a thread that
- * asks for a signal nothing will ever send; inventing an EINTR or an
- * EAGAIN to escape would be reporting an event that did not happen.
+ * this loop -- self-generated delivery is synchronous (see this file's
+ * banner) -- but two other threads reach `pending` through
+ * __raise_internal() from outside this loop: the NTLIBC_USE_KERNEL32
+ * console-control handler kernel32 creates, and (as of
+ * src/signal/sigdelivery.c) this process's own cross-process-signal
+ * delivery thread, driven by another process's kill(). So a blocked
+ * signal genuinely can arrive here from outside. This loop does not
+ * wake early for either -- it is a 100ms poll, not a wait on
+ * sigdelivery.c's wake_event the way select() is taught to be -- so a
+ * signal delivered this way is still seen, just on this loop's own
+ * schedule rather than the instant it arrives; that is within the
+ * 100ms-poll design already documented below, not a new gap. Where
+ * nothing can ever signal this process from outside either, this waits
+ * forever, which is what POSIX specifies for a thread that asks for a
+ * signal nothing will ever send; inventing an EINTR or an EAGAIN to
+ * escape would be reporting an event that did not happen.
  * NtDelayExecution() rather than a spin keeps that wait off the CPU. */
 int sigwait(const sigset_t *s, int *sig)
 {
@@ -665,15 +749,24 @@ int sigwait(const sigset_t *s, int *sig)
 }
 /* siginterrupt.html ERRORS, shall-fail: "[EINVAL] The sig argument is not
  * a valid signal number."  The effect the page names -- clearing or
- * setting SA_RESTART -- is a no-op here, since nothing on this platform
- * is ever interrupted mid-call by an asynchronously delivered signal, so
- * there is no restart-vs-[EINTR] decision for flag to steer.  That does
- * not excuse dropping the argument check: [EINVAL] is a clause about the
- * argument, not about the effect, and a caller that passes a bad signal
- * number is entitled to hear about it here exactly as it would from
- * signal() or sigaction().  Unlike those two, SIGKILL and SIGSTOP are
- * accepted: this page lists no uncatchable-signal error, and with the
- * flag a no-op there is nothing about them to refuse. */
+ * setting SA_RESTART -- is still a no-op here, but the reasoning
+ * changed: a signal CAN now interrupt a blocked call mid-wait --
+ * select()/pselect(), from another process's kill() routed through
+ * src/signal/sigdelivery.c -- and that call's own banner explains why
+ * it is chosen to behave as Linux's select()/poll() do: EINTR
+ * regardless of SA_RESTART, one of the two answers select.html leaves
+ * implementation-defined. So the flag genuinely has nothing to steer
+ * there either, for a different reason than "nothing is ever
+ * interrupted" -- every OTHER blocking call in this library still
+ * cannot be interrupted mid-syscall at all (no NtCancelSynchronousIoFile;
+ * see sigdelivery.c's banner), so for those the original reasoning
+ * still holds outright. Either way this does not excuse dropping the
+ * argument check: [EINVAL] is a clause about the argument, not about
+ * the effect, and a caller that passes a bad signal number is entitled
+ * to hear about it here exactly as it would from signal() or
+ * sigaction(). Unlike those two, SIGKILL and SIGSTOP are accepted: this
+ * page lists no uncatchable-signal error, and with the flag a no-op
+ * there is nothing about them to refuse. */
 int siginterrupt(int sig, int flag) { if (!sig_valid(sig)) { errno = EINVAL; return -1; } (void)flag; return 0; }
 /* The alternate signal stack, and whether a handler is running on it.
  *
@@ -685,11 +778,15 @@ int siginterrupt(int sig, int flag) { if (!sig_valid(sig)) { errno = EINVAL; ret
  * sigaction cases died on exactly that, exiting 255 rather than failing
  * cleanly, which is why they read as ABNORMAL rather than FAIL.
  *
- * No locking, the same as every other piece of state in this file: there
- * are no threads to speak of and delivery is synchronous. */
+ * Locked (__sig_lock()/__sig_unlock(), src/signal/sigdelivery.c):
+ * alt_stack/alt_active used to need no locking because delivery was
+ * synchronous and single-threaded; sig_delivery_thread() can now run a
+ * handler on alt_stack (via sig_dispatch(), inside __raise_internal())
+ * concurrently with this function reading or changing it. */
 
 int sigaltstack(const stack_t *ss, stack_t *old)
 {
+	__sig_lock();
 	/* sigaltstack.html: old is filled in before any change from ss is
 	 * applied, so a caller may swap stacks in one call. */
 	if (old) {
@@ -701,10 +798,10 @@ int sigaltstack(const stack_t *ss, stack_t *old)
 	}
 	if (ss) {
 		/* "[EPERM] An attempt was made to modify an active stack." */
-		if (alt_active) { errno = EPERM; return -1; }
+		if (alt_active) { __sig_unlock(); errno = EPERM; return -1; }
 		/* "[EINVAL] The ss argument is not a null pointer, and the
 		 * ss_flags member ... contains flags other than SS_DISABLE." */
-		if (ss->ss_flags & ~(int)SS_DISABLE) { errno = EINVAL; return -1; }
+		if (ss->ss_flags & ~(int)SS_DISABLE) { __sig_unlock(); errno = EINVAL; return -1; }
 		if (ss->ss_flags & SS_DISABLE) {
 			alt_stack.ss_sp = 0;
 			alt_stack.ss_size = 0;
@@ -712,13 +809,14 @@ int sigaltstack(const stack_t *ss, stack_t *old)
 		} else {
 			/* "[ENOMEM] The size of the alternate stack area is less
 			 * than MINSIGSTKSZ." */
-			if (ss->ss_size < MINSIGSTKSZ) { errno = ENOMEM; return -1; }
-			if (!ss->ss_sp) { errno = EINVAL; return -1; }
+			if (ss->ss_size < MINSIGSTKSZ) { __sig_unlock(); errno = ENOMEM; return -1; }
+			if (!ss->ss_sp) { __sig_unlock(); errno = EINVAL; return -1; }
 			alt_stack.ss_sp = ss->ss_sp;
 			alt_stack.ss_size = ss->ss_size;
 			alt_stack.ss_flags = 0;
 		}
 	}
+	__sig_unlock();
 	return 0;
 }
 
@@ -928,12 +1026,20 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	 * faulting address (src/internal/nt.h); the others (misalignment,
 	 * illegal instruction, arithmetic traps, breakpoints, Ctrl-C) carry
 	 * no such address, so fault_addr stays NULL for them. */
+	/* Locked from here through the __raise_internal() call: fault_active/
+	 * fault_addr/fault_si_code are read back inside __raise_internal()'s
+	 * SA_SIGINFO construction, and now that sig_delivery_thread()
+	 * (src/signal/sigdelivery.c) can be inside its own __raise_internal()
+	 * call on another thread at the same moment, an unlocked write here
+	 * could be read back by that call instead of this one. */
+	__sig_lock();
 	fault_active = 1;
 	fault_addr = (excode == EXCEPTION_ACCESS_VIOLATION || excode == EXCEPTION_IN_PAGE_ERROR)
 	           ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL;
 	fault_si_code = code;
 	__raise_internal(sig);
 	fault_active = 0;
+	__sig_unlock();
 	/* A handler that returns from a fault re-executes the instruction,
 	 * as on Unix; for SIGINT/SIGTRAP continuing is the right thing. */
 	return EXCEPTION_CONTINUE_EXECUTION;
@@ -941,13 +1047,18 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 
 #ifdef NTLIBC_USE_KERNEL32
 /* Runs on a thread kernel32 creates for the purpose, not on the main
- * thread -- so this can race a main thread that is, say, in the middle
- * of sigprocmask() touching the same `handlers`/`blocked`/`pending`
- * globals.  ntlibc has no locking anywhere else either (there is no
- * threading support to speak of), so this is no worse than the existing
- * exception_handler(), which has the same race against a genuine
- * hardware fault; it is just now reachable from a real extra thread
- * instead of only in theory. */
+ * thread -- so this races a main thread that is, say, in the middle of
+ * sigprocmask() touching the same `handlers`/`blocked`/`pending`
+ * globals, exactly the way src/signal/sigdelivery.c's delivery thread
+ * does. __sig_lock()/__sig_unlock() (defined there) cover both: this
+ * was the first real extra thread in this library, before this change
+ * added a second one on purpose, and both are now handled the same way
+ * rather than only the new one. The unlocked `handlers[SIGINT] ==
+ * SIG_DFL` read below is a deliberate exception, not an oversight: it
+ * is a fast-path check for "let the default action run" that
+ * __raise_internal() (locked, below) re-derives correctly regardless of
+ * what this read saw, so a torn read here costs at most one redundant
+ * dispatch, never a wrong outcome. */
 static BOOL NTAPI ctrl_handler(DWORD type)
 {
 	switch (type) {
@@ -957,7 +1068,9 @@ static BOOL NTAPI ctrl_handler(DWORD type)
 		 * for DBG_CONTROL_C/DBG_CONTROL_BREAK: this library has no
 		 * SIGBREAK, and neither does POSIX. */
 		if (handlers[SIGINT] == SIG_DFL) return FALSE;  /* let the default action run */
+		__sig_lock();
 		__raise_internal(SIGINT);
+		__sig_unlock();
 		return TRUE;
 	default:
 		/* CTRL_CLOSE_EVENT/CTRL_LOGOFF_EVENT/CTRL_SHUTDOWN_EVENT:
@@ -1011,6 +1124,14 @@ void __signal_init(void)
 	 * CONTRIBUTING.md); nothing to install.  Ctrl-C keeps ending the
 	 * process via the console's own default handling. */
 #endif
+	/* Cross-process signal delivery (src/signal/sigdelivery.c): the
+	 * mutex, listener pipe and delivery thread this process's own
+	 * kill()/select() need. Last, deliberately: it starts a real second
+	 * thread that can immediately begin calling __raise_internal(), so
+	 * every other piece of this process's signal state (the vectored
+	 * handler above, and NTLIBC_USE_KERNEL32's console handler) is
+	 * already installed before that thread could possibly race it. */
+	__sig_delivery_init();
 }
 
 /* psignal.html DESCRIPTION: "shall write a message to the standard

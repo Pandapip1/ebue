@@ -482,6 +482,25 @@ int __sigchld_nocldwait(void);
  * space (src/unistd/sleep.c). */
 void __alarm_reset_after_fork(void);
 
+/* ---- cross-process signal delivery (src/signal/sigdelivery.c) --------- */
+/* Started by __signal_init(); see that file's banner for the whole
+ * design. __sig_delivery_event() is select()'s (src/select/select.c)
+ * read of the per-process "a packet arrived" auto-reset event -- 0 if
+ * this process never got a working listener, which select() must treat
+ * as "nothing to add to the wait set", not an error.
+ * __sig_try_deliver_remote() is kill()'s (src/signal/signal.c)
+ * cross-process arm. __sig_lock()/__sig_unlock() guard every piece of
+ * shared state signal.c's own functions touch, now that a second real
+ * thread exists to race them; __raise_internal() itself assumes the
+ * caller already holds this lock rather than taking it -- see
+ * sigdelivery.c's banner for why. */
+void __sig_delivery_init(void);
+void __sig_delivery_reinit_after_fork(void);
+HANDLE __sig_delivery_event(void);
+int __sig_try_deliver_remote(int pid, int sig);
+void __sig_lock(void);
+void __sig_unlock(void);
+
 /* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/
  * wait4() (src/process/wait.c); exposed non-static so tests can drive its
  * boundary cases directly instead of only through a spawned process. */

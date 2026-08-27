@@ -868,6 +868,22 @@ typedef struct _REPARSE_DATA_BUFFER {
 #define FSCTL_GET_REPARSE_POINT     0x000900A8
 #define FSCTL_SET_REPARSE_POINT     0x000900A4
 #define FSCTL_PIPE_PEEK             0x0011400C
+/* FSCTL_PIPE_LISTEN: CTL_CODE(FILE_DEVICE_NAMED_PIPE=0x11, function=2,
+ * METHOD_BUFFERED, FILE_ANY_ACCESS) -- confirmed against Wine's
+ * include/winioctl.h (FSCTL_PIPE_PEEK above, function=3 with
+ * FILE_READ_DATA access, computes to the same 0x0011400C already in
+ * this file, so the derivation is the same one used for the constant
+ * that was already trusted here). What it does, and why
+ * src/signal/sigdelivery.c's server loop cannot skip it: a freshly
+ * created (or freshly reconnected) named pipe server instance starts in
+ * NPFS's "listening" state, not "connected" -- an NtReadFile against it
+ * in that state fails immediately with STATUS_PIPE_LISTENING rather
+ * than blocking (ReactOS's drivers/filesystems/npfs/read.c, which
+ * checks NamedPipeState before ever queuing a read). FSCTL_PIPE_LISTEN
+ * is the operation that blocks until a client actually connects and
+ * moves the instance to "connected"; it is what kernel32's
+ * ConnectNamedPipe wraps for the exact same reason. */
+#define FSCTL_PIPE_LISTEN           0x00110008
 #define MAXIMUM_REPARSE_DATA_BUFFER_SIZE 16384
 
 typedef struct _FILE_PIPE_PEEK_BUFFER {
@@ -1394,8 +1410,37 @@ NTSTATUS NTAPI NtQueryPerformanceCounter(LARGE_INTEGER *, LARGE_INTEGER *);
 NTSTATUS NTAPI NtDelayExecution(BOOLEAN, LARGE_INTEGER *);
 NTSTATUS NTAPI NtYieldExecution(void);
 NTSTATUS NTAPI NtQuerySystemInformation(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+/* A NotificationEvent stays signalled once set, until something
+ * explicitly resets it; a SynchronizationEvent auto-resets the instant
+ * one waiter is released by it -- the same NotificationTimer/
+ * SynchronizationTimer distinction TIMER_TYPE below makes, and for the
+ * same reason: src/signal/sigdelivery.c wants auto-reset for both its
+ * mutex-over-an-event (each acquirer's wait must consume the "free"
+ * signal so the next acquirer blocks) and its "a packet arrived" wakeup
+ * for select() (one wakeup must not persist past the pass that consumes
+ * it). */
+typedef enum _EVENT_TYPE {
+	NotificationEvent,
+	SynchronizationEvent
+} EVENT_TYPE;
+#define EVENT_ALL_ACCESS (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0x3)
 NTSTATUS NTAPI NtCreateEvent(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, ULONG, BOOLEAN);
 NTSTATUS NTAPI NtSetEvent(HANDLE, LONG *);
+
+/* THREAD_ALL_ACCESS: same STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0xFFFF
+ * shape as PROCESS_ALL_ACCESS above -- the classic (pre-Vista-widened)
+ * value, which is all src/signal/sigdelivery.c needs for a handle it
+ * only ever hands to NtClose(). */
+#define THREAD_ALL_ACCESS (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0xFFFF)
+/* NtCreateThreadEx: introduced NTDLL 6.0 (Vista) --
+ * https://www.geoffchappell.com/studies/windows/win32/ntdll/history/names60.htm
+ * -- below this library's Windows-7 floor (tools/ntdll.def), so adding
+ * it does not raise that floor. The AttributeList parameter (a
+ * PS_ATTRIBUTE_LIST*) is declared PVOID here rather than defining that
+ * struct: src/signal/sigdelivery.c, the only caller, always passes NULL
+ * for it, which the API treats as "no extended attributes". */
+NTSTATUS NTAPI NtCreateThreadEx(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, HANDLE,
+                                 PVOID, PVOID, ULONG, SIZE_T, SIZE_T, SIZE_T, PVOID);
 
 /* Waitable timers.  A NotificationTimer stays signalled once it expires
  * (a SynchronizationTimer auto-resets on the first waiter); alarm()

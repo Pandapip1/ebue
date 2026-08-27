@@ -1,0 +1,355 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Cross-process signal delivery: kill() to another ntlibc process now
+ * consults THAT process's own disposition instead of only ever guessing
+ * the default action -- see src/signal/sigdelivery.c and
+ * src/signal/signal.c's file banner for the whole mechanism. This file
+ * is the real-Windows/real-Wine coverage for it: windows-test builds
+ * TEST_SRCS = test/*.c (Makefile) and runs every one of them, so this is
+ * checked against an actual NT kernel, not only Wine.
+ *
+ * Every scenario below uses __spawn(), the same real-second-process
+ * primitive test/posix-sigpipe.c and test/posix-signal.c already use for
+ * every child-process case in those files, and for the identical
+ * reason: fork() needs RtlCloneUserProcess, which stock Wine's stub
+ * hard-aborts the whole process for rather than failing it gracefully
+ * (see src/process/fork.c's banner and the CI notes this project
+ * carries elsewhere). __spawn() gives a genuinely separate process with
+ * its own pid either way, which is exactly what cross-process delivery
+ * needs to exercise -- and unlike fork(), it works identically whether
+ * this binary happens to be running under stock or patched Wine.
+ * src/signal/sigdelivery.c's fork-repair path (__sig_delivery_reinit_after_fork(),
+ * called from src/process/fork.c) is therefore NOT covered here; it was
+ * checked by hand against the RtlCloneUserProcess-patched Wine build
+ * named in this change's own test run instead, for the same reason
+ * fork() itself is absent from every other file in this directory.
+ *
+ * The one race every scenario below has to account for: __sig_delivery_init()
+ * runs unconditionally during __signal_init(), which crt1.c calls before
+ * main() -- but a freshly __spawn()'d process still has to be scheduled
+ * and reach that point before its named pipe exists at all. A fixed
+ * short grace period after __spawn() before sending the signal that
+ * matters for each scenario's assertion is the same shape
+ * test/posix-signal.c's own test_sa_nocldwait() already uses ("Give the
+ * child a moment to actually run") for an unrelated race against the
+ * same __spawn() primitive.
+ */
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <sys/select.h>
+#include <sys/time.h>
+
+extern char **environ;
+extern int __spawn(const char *, char *const *, char *const *);
+
+static int fails;
+#define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
+
+/* Milliseconds since an arbitrary but fixed epoch, for the elapsed-time
+ * assertions below -- none of them care about wall-clock time of day,
+ * only about the difference between two readings. */
+static long long now_ms(void)
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+static void sleep_ms(long ms)
+{
+	struct timeval tv;
+	tv.tv_sec = ms / 1000;
+	tv.tv_usec = (ms % 1000) * 1000;
+	select(0, NULL, NULL, NULL, &tv);
+}
+
+/* Give a freshly __spawn()'d ntlibc process time to reach
+ * __sig_delivery_init() before this process's first kill() targets it --
+ * see this file's banner. Generous on purpose (this project's own notes
+ * record that a busy CI box manufactures false failures out of tight
+ * timing margins): __signal_init() itself is a handful of NT calls, so
+ * this is not a close race under any real load, only a race against
+ * literally not having been scheduled yet. */
+#define STARTUP_GRACE_MS 300
+
+/* ------------------------------------------------------------------ *
+ * Child scenarios.  Each is entered by re-executing this same binary
+ * with a marker argument; the parent adjudicates the exit status (and,
+ * for some, the elapsed time).
+ * ------------------------------------------------------------------ */
+
+static void handler_exit42(int sig) { (void)sig; _exit(42); }
+static volatile sig_atomic_t handler_ran;
+static void handler_mark(int sig) { (void)sig; handler_ran = 1; }
+
+/* The positive case: a real handler, installed with sigaction(), must
+ * run for a signal delivered by ANOTHER process's kill() -- the exact
+ * thing src/signal/signal.c's old header comment said could never
+ * happen ("kill() can only end a process, not interrupt it"). SIGUSR1's
+ * default action is terminate, so exit(42) from inside the handler is
+ * only reachable if the real disposition was consulted; the old
+ * default-action-only path would have left this process WIFSIGNALED
+ * instead. */
+static int child_handler(void)
+{
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_exit42;
+	if (sigaction(SIGUSR1, &sa, NULL) != 0) return 90;
+	/* Block until something happens -- either the signal (which exits
+	 * this process from inside the handler and never returns here) or
+	 * this loop's own patience running out, which only happens if
+	 * delivery never arrived at all. */
+	sleep_ms(10000);
+	return 91;   /* the signal never arrived */
+}
+
+/* The SIG_IGN case: a signal whose default action is terminate must NOT
+ * end this process when ignored, even though this process never asked
+ * to be interrupted for it -- proving the target's OWN disposition, not
+ * this process's, is what gets consulted. */
+static int child_ignore(void)
+{
+	if (signal(SIGUSR2, SIG_IGN) == SIG_ERR) return 90;
+	sleep_ms(2000);
+	return 55;   /* survived, which is the point */
+}
+
+/* Blocked-then-unblocked: a signal delivered while SIGUSR1 is blocked
+ * must go to `pending`, not run the handler early, and must be drained
+ * the instant sigprocmask() unblocks it -- src/signal/sigdelivery.c's
+ * banner promises exactly this ("a blocked signal must go to pending
+ * and be drained by the existing sigprocmask() unblock path, NOT
+ * dropped"). The blocked window below (900ms, starting at THIS
+ * process's own birth) is deliberately longer than the parent's
+ * STARTUP_GRACE_MS(300) before it sends the signal, so the signal is
+ * guaranteed to still find SIGUSR1 blocked when it arrives rather than
+ * racing this process's own unblock -- the parent's elapsed-time check
+ * is against the REMAINDER of this window counted from when the parent
+ * sent the signal, not the whole 900ms. */
+static int child_blocked(void)
+{
+	sigset_t set, old;
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_exit42;
+	if (sigaction(SIGUSR1, &sa, NULL) != 0) return 90;
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	if (sigprocmask(SIG_BLOCK, &set, &old) != 0) return 92;
+
+	sleep_ms(900);   /* the window a premature delivery would cut short */
+
+	if (sigprocmask(SIG_SETMASK, &old, NULL) != 0) return 93;
+	/* If the unblock above did not drain and deliver a pending SIGUSR1,
+	 * execution falls through to here instead of exiting 42 from the
+	 * handler. */
+	sleep_ms(500);
+	return 60;
+}
+
+/* select()/pselect() EINTR: src/select/select.c's banner explains the
+ * choice (EINTR regardless of SA_RESTART, matching Linux's select()/
+ * poll()). handler_mark() does not exit -- the point is to see select()
+ * itself return, not merely observe the process dying -- so a genuine
+ * EINTR return proves src/signal/sigdelivery.c's wake_event actually
+ * woke this wait rather than the fixed 5-second timeout doing it. */
+static int child_select_eintr(void)
+{
+	struct sigaction sa;
+	struct timeval tv;
+	int r;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_mark;
+	if (sigaction(SIGUSR1, &sa, NULL) != 0) return 90;
+
+	tv.tv_sec = 5; tv.tv_usec = 0;
+	r = select(0, NULL, NULL, NULL, &tv);
+	if (r == -1 && errno == EINTR && handler_ran) return 42;
+	if (r == 0) return 43;      /* timed out -- the wakeup never happened */
+	return 44;                  /* something else entirely */
+}
+
+/* ------------------------------------------------------------------ *
+ * Parent side.
+ * ------------------------------------------------------------------ */
+
+static int spawn_child(const char *self, const char *mode, pid_t *pid)
+{
+	char *argv[3];
+	argv[0] = (char *)self; argv[1] = (char *)mode; argv[2] = NULL;
+	*pid = __spawn(self, argv, environ);
+	return *pid > 0 ? 0 : -1;
+}
+
+static void describe(const char *what, int status)
+{
+	if (WIFEXITED(status))
+		printf("    %s: exited %d\n", what, WEXITSTATUS(status));
+	else if (WIFSIGNALED(status))
+		printf("    %s: killed by signal %d\n", what, WTERMSIG(status));
+	else
+		printf("    %s: raw status 0x%x\n", what, (unsigned)status);
+}
+
+static void test_handler_runs_for_remote_kill(const char *self)
+{
+	pid_t pid;
+	int status;
+	long long t0, t1;
+
+	if (spawn_child(self, "--child-handler", &pid) < 0) { CHECK(0 && "spawn failed"); return; }
+	sleep_ms(STARTUP_GRACE_MS);
+
+	t0 = now_ms();
+	CHECK(kill(pid, SIGUSR1) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	t1 = now_ms();
+	describe("remote handler", status);
+
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+	/* Never a wait, never a hang -- the whole exchange (grace period
+	 * excluded) should be over well inside a couple of seconds even on
+	 * a loaded box. */
+	CHECK(t1 - t0 < 5000);
+}
+
+static void test_sig_ign_survives_remote_kill(const char *self)
+{
+	pid_t pid;
+	int status;
+
+	if (spawn_child(self, "--child-ignore", &pid) < 0) { CHECK(0 && "spawn failed"); return; }
+	sleep_ms(STARTUP_GRACE_MS);
+
+	CHECK(kill(pid, SIGUSR2) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe("remote SIG_IGN", status);
+
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 55);
+}
+
+static void test_blocked_signal_goes_pending(const char *self)
+{
+	pid_t pid;
+	int status;
+	long long t0, t1;
+
+	if (spawn_child(self, "--child-blocked", &pid) < 0) { CHECK(0 && "spawn failed"); return; }
+	sleep_ms(STARTUP_GRACE_MS);
+
+	t0 = now_ms();
+	CHECK(kill(pid, SIGUSR1) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	t1 = now_ms();
+	describe("blocked-then-unblocked", status);
+
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+	/* The child's own 900ms blocked window started around the same time
+	 * as this process's STARTUP_GRACE_MS(300) wait, so roughly 600ms of
+	 * it should still be left when the signal lands -- a premature
+	 * delivery (the bug this guards against) would instead see the
+	 * handler exit within a few ms of kill(), the same shape measured
+	 * and fixed in src/select/select.c's timeout accounting while this
+	 * test was being written. Generous margins in both directions:
+	 * loaded-CI-box tolerant on the low side, hang-catching on the
+	 * high side. */
+	printf("    blocked-window elapsed: %lldms\n", t1 - t0);
+	CHECK(t1 - t0 >= 400);
+	CHECK(t1 - t0 < 5000);
+}
+
+static void test_select_returns_eintr(const char *self)
+{
+	pid_t pid;
+	int status;
+	long long t0, t1;
+
+	if (spawn_child(self, "--child-select-eintr", &pid) < 0) { CHECK(0 && "spawn failed"); return; }
+	sleep_ms(STARTUP_GRACE_MS);
+
+	t0 = now_ms();
+	CHECK(kill(pid, SIGUSR1) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	t1 = now_ms();
+	describe("select() EINTR", status);
+
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+	/* The child's select() had a 5-second timeout; if it took anywhere
+	 * near that, the wake_event path did not fire and the timeout did
+	 * the work instead -- exit code 42 alone cannot tell those apart
+	 * (both eventually get there), but the clock can. */
+	CHECK(t1 - t0 < 4000);
+}
+
+/* No hang for a target that has no listener yet -- __sig_try_deliver_remote()
+ * (src/signal/sigdelivery.c) must fail fast on NtOpenFile rather than
+ * wait for one to appear (that function's own comment cites the NT
+ * mechanics; this is the runtime check). Sent with NO grace period at
+ * all, racing __sig_delivery_init() in the just-spawned child on
+ * purpose, so this genuinely exercises "no listener yet" rather than
+ * "no listener ever" on at least some runs.
+ *
+ * Deliberately does NOT assert what happens to the child. Whichever
+ * side of the race this lands on, kill() takes the SAME action it took
+ * before this change existed for a signal whose target it cannot reach
+ * (fall through to the unconditional NtTerminateProcess path) -- and
+ * that path terminates the child outright even for a signal like
+ * SIGWINCH whose default_action() (src/signal/signal.c) is "ignore",
+ * which is a real, PRE-EXISTING gap (kill() to a process with no
+ * listener has never consulted default_action() at all, only ever
+ * assumed "terminate") that is not this change's to fix -- see this
+ * file's header comment on scope. The only property under test here is
+ * the one this change is actually responsible for: that reaching for a
+ * listener that is not there yet costs milliseconds, not a hang. */
+static void test_no_listener_does_not_hang(const char *self)
+{
+	pid_t pid;
+	int status;
+	long long t0, t1;
+
+	if (spawn_child(self, "--child-ignore", &pid) < 0) { CHECK(0 && "spawn failed"); return; }
+
+	t0 = now_ms();
+	CHECK(kill(pid, SIGWINCH) == 0);
+	t1 = now_ms();
+	printf("    kill() racing startup: %lldms\n", t1 - t0);
+	CHECK(t1 - t0 < 3000);
+
+	/* Whatever that first kill() did to it, this reaps it either way:
+	 * SIGUSR2 is ignored if the child is still alive (its own --child-ignore
+	 * body), and waitpid() on an already-dead child just as readily
+	 * reports how it died. */
+	kill(pid, SIGUSR2);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe("post-race child", status);
+}
+
+int main(int argc, char **argv)
+{
+	if (argc > 1) {
+		if (!strcmp(argv[1], "--child-handler")) return child_handler();
+		if (!strcmp(argv[1], "--child-ignore")) return child_ignore();
+		if (!strcmp(argv[1], "--child-blocked")) return child_blocked();
+		if (!strcmp(argv[1], "--child-select-eintr")) return child_select_eintr();
+	}
+
+	test_handler_runs_for_remote_kill(argv[0]);
+	test_sig_ign_survives_remote_kill(argv[0]);
+	test_blocked_signal_goes_pending(argv[0]);
+	test_select_returns_eintr(argv[0]);
+	test_no_listener_does_not_hang(argv[0]);
+
+	if (fails) printf("posix-signal-crossproc: %d failure(s)\n", fails);
+	else printf("posix-signal-crossproc: ok\n");
+	return fails != 0;
+}

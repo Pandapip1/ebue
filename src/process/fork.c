@@ -231,6 +231,24 @@ pid_t fork(void)
 		 * and would resume a sibling out from under the parent on its
 		 * own exit (src/process/children.c). */
 		__child_forget_stops();
+		/* Same family, one more member: src/signal/sigdelivery.c's
+		 * per-process listener pipe, delivery thread and mutex event.
+		 * RtlCloneUserProcess clones only the calling thread (this
+		 * file's banner), so the delivery thread that clone thinks it
+		 * has does not exist here at all, and the pipe/mutex handle
+		 * values it carried over name nothing live in this process --
+		 * possibly something NT has since recycled onto that slot,
+		 * exactly the hazard this file's banner describes for
+		 * descriptor and child-process handles. Unconditional, like the
+		 * three calls above it: it does not check whether this process
+		 * already has a listener (it never can, immediately after a
+		 * clone) and does not NtClose()/wait on the stale handles,
+		 * only forgets them and builds fresh ones under this process's
+		 * own, correctly-cloned pid. Left undone, the child would be
+		 * permanently deaf to cross-process signals for its entire
+		 * life: not merely delayed, since nothing would ever retry
+		 * this. */
+		__sig_delivery_reinit_after_fork();
 		return 0;
 	}
 
