@@ -83,6 +83,7 @@ long sysconf(int name)
 	case _SC_REGEXP: return _POSIX_VERSION;          /* src/regex/regex.c */
 	case _SC_SPAWN: return _POSIX_VERSION;           /* src/process/posix_spawn.c */
 	case _SC_MONOTONIC_CLOCK: return _POSIX_VERSION; /* src/time/clock_gettime.c */
+	case _SC_SHARED_MEMORY_OBJECTS: return _POSIX_VERSION; /* src/mman/shm.c */
 	case _SC_XOPEN_UNIX: return _XOPEN_UNIX;
 	case _SC_XOPEN_ENH_I18N: return _XOPEN_ENH_I18N;
 
@@ -116,9 +117,8 @@ long sysconf(int name)
 	 *                              _SC_PRIORITIZED_IO
 	 *   no <semaphore.h>        -- _SC_SEMAPHORES, _SC_SEM_*
 	 *   no <mqueue.h>           -- _SC_MESSAGE_PASSING, _SC_MQ_*
-	 *   no <sys/mman.h>         -- _SC_MAPPED_FILES, _SC_MEMLOCK*,
+	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES, _SC_MEMLOCK*,
 	 *                              _SC_MEMORY_PROTECTION,
-	 *                              _SC_SHARED_MEMORY_OBJECTS,
 	 *                              _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
 	 *   no timer_create()       -- _SC_TIMERS, _SC_TIMER_MAX,
 	 *                              _SC_DELAYTIMER_MAX
@@ -178,7 +178,6 @@ long sysconf(int name)
 	case _SC_MEMORY_PROTECTION:
 	case _SC_MESSAGE_PASSING:
 	case _SC_SEMAPHORES:
-	case _SC_SHARED_MEMORY_OBJECTS:
 	case _SC_AIO_LISTIO_MAX:
 	case _SC_AIO_MAX:
 	case _SC_AIO_PRIO_DELTA_MAX:

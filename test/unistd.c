@@ -483,6 +483,11 @@ int main(void)
 	errno = 0;
 	CHECK(ftruncate(fd, -1) == -1 && errno == EINVAL);
 	CHECK(close(fd) == 0);
+	fd = open("a.txt", O_RDONLY);
+	CHECK(fd >= 0);
+	errno = 0;
+	CHECK(ftruncate(fd, 1) == -1 && errno == EINVAL);
+	CHECK(close(fd) == 0);
 	errno = 0;
 	CHECK(ftruncate(999, 0) == -1 && errno == EBADF);
 	CHECK(truncate("a.txt", 5) == 0);

@@ -81,12 +81,14 @@
  * is, because no case measured against this library needs a partial
  * unmap of a section view).
  *
- * Only six of the header's fourteen interfaces are declared.  mlockall,
+ * Eight of the header's fourteen interfaces are declared.  mlockall,
  * munlockall, posix_madvise, posix_mem_offset, posix_typed_mem_get_info,
- * posix_typed_mem_open, shm_open and shm_unlink are deliberately absent,
- * on the same ground as <sched.h>'s omissions: declaring one so it could
- * return an error is worse than not declaring it, because a probe that
- * finds the symbol concludes the facility is present.
+ * and posix_typed_mem_open are deliberately absent, on the same ground as
+ * <sched.h>'s omissions: declaring one so it could return an error is worse
+ * than not declaring it, because a probe that finds the symbol concludes the
+ * facility is present.  shm_open() and shm_unlink() use regular NTFS-backed
+ * files in a private temporary-directory namespace; the regular-file shape
+ * is intentional because mmap() already maps those through NT sections.
  */
 #ifndef _SYS_MMAN_H
 #define _SYS_MMAN_H
@@ -160,6 +162,8 @@ int mprotect(void *, size_t, int);
 int msync(void *, size_t, int);
 int mlock(const void *, size_t);
 int munlock(const void *, size_t);
+int shm_open(const char *, int, mode_t);
+int shm_unlink(const char *);
 
 #ifdef __cplusplus
 }

@@ -904,45 +904,45 @@ sem_wait/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A:
 sem_wait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by semaphore.h
 sem_wait/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by semaphore.h
 sem_wait/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by semaphore.h
-shm_open/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/14-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/17-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/20-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/20-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by semaphore.h sys/mman.h
-shm_open/25-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/26-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/26-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/28-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/28-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/28-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/32-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/34-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/37-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/38-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/39-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/39-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/41-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_open/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/10-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
-shm_unlink/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by sys/mman.h
+shm_open/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/14-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/17-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	shm_open creates the object, but stat intentionally consumes only execute bits from $LXMOD and cannot report the requested owner/group/other read/write mode independently
+shm_open/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/20-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/20-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by semaphore.h
+shm_open/25-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/26-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/26-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED: the case requires a non-root identity distinct from the current user, but ntlibc exposes one fixed Windows-SID-derived identity
+shm_open/28-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/28-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	Wine denies the POSIX delete disposition while an NtCreateSection view remains mapped, so shm_unlink returns EACCES instead of removing the name while preserving the mapping
+shm_open/28-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/32-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/34-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/37-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/38-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/39-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/39-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/41-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_open/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/10-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+shm_unlink/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED: the case requires a non-root identity distinct from the current user, but ntlibc exposes one fixed Windows-SID-derived identity
+shm_unlink/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED: the case requires a non-root identity distinct from the current user, but ntlibc exposes one fixed Windows-SID-derived identity
 sigaction/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/1-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/1-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-

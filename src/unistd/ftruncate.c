@@ -14,6 +14,12 @@ int ftruncate(int fd, off_t len)
 	NTSTATUS st;
 	if (!f) return -1;
 	if (len < 0) { errno = EINVAL; return -1; }
+	/* ftruncate.html: "The fildes argument is not a file descriptor open
+	 * for writing" is a mandatory [EINVAL].  Letting NT reject the
+	 * FileEndOfFileInformation request mapped STATUS_ACCESS_DENIED to EBADF
+	 * instead, which is observably the wrong clause for an otherwise-valid
+	 * O_RDONLY descriptor. */
+	if ((f->flags & O_ACCMODE) == O_RDONLY) { errno = EINVAL; return -1; }
 	/* RLIMIT_FSIZE (src/misc/resource.c).  ftruncate cannot partially
 	 * succeed, so it fails outright rather than clamping the way write()
 	 * does -- measured against Linux/glibc, where ftruncate above the

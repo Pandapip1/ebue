@@ -506,35 +506,40 @@ static int test_mlock_munlock(void)
 }
 
 /* ================================================================
- * The eight interfaces this header's own banner declines, made
- * testable.  include/sys/mman.h says, in prose: "Only six of the
- * header's fourteen interfaces are declared.  mlockall, munlockall,
- * posix_madvise, posix_mem_offset, posix_typed_mem_get_info,
- * posix_typed_mem_open, shm_open and shm_unlink are deliberately
- * absent, on the same ground as <sched.h>'s omissions: declaring one so
- * it could return an error is worse than not declaring it, because a
+ * The six interfaces this header's own banner still declines, plus the
+ * shared-memory pair that graduated from this group.  include/sys/mman.h
+ * says, in prose: "Eight of the header's fourteen interfaces are
+ * declared.  mlockall, munlockall, posix_madvise, posix_mem_offset,
+ * posix_typed_mem_get_info, and posix_typed_mem_open are deliberately
+ * absent, on the same ground
+ * as <sched.h>'s omissions: declaring one so it could return an error is
+ * worse than not declaring it, because a
  * probe that finds the symbol concludes the facility is present."
  *
  * That reasoning stands and nothing below disputes it.  What was
  * missing is that the sentence was ONLY a sentence: a name-level
  * cross-index of the 1190 POSIX.1-2017 interfaces (see
  * test/posix-pthread.c's banner for the method and the edition) against
- * every identifier in test/*.c found all eight with no mention anywhere
+ * every identifier in test/*.c found them with no mention anywhere
  * in the suite.  This repo counts "I chose not to" as UNIMPL, so these
  * are UNIMPL fences with real bodies -- what should pass the day the
  * decision is revisited, not prose restating the decision.
  *
- * They fail at LINK, not at the preprocessor, because <sys/mman.h>
- * itself exists and includes cleanly; the declarations are what is
- * absent.  tools/test-policy.py --pedantic decides that, not this
- * comment.
+ * The six remaining fences fail at LINK, not at the preprocessor,
+ * because <sys/mman.h> itself exists and includes cleanly; the
+ * declarations are what is absent.  tools/test-policy.py --pedantic
+ * decides that, not this comment.  The PASS fence below preserves the
+ * end-to-end descriptor, mapping, close, and unlink behavior that
+ * shm_open()/shm_unlink() now provide.
  * ================================================================ */
 
-#if NTLIBC_TEST(UNIMPL, posix_mman_shm_open_unlink)
+#if NTLIBC_TEST(PASS, posix_mman_shm_open_unlink)
 static void test_posix_mman_shm_open_unlink(void)
 {
 	int fd, again;
 	void *p;
+	CHECK(_POSIX_SHARED_MEMORY_OBJECTS > 0);
+	CHECK(sysconf(_SC_SHARED_MEMORY_OBJECTS) > 0);
 
 	/* shm_open.html: "shall establish a connection between a shared
 	 * memory object and a file descriptor ... The name argument
@@ -556,10 +561,8 @@ static void test_posix_mman_shm_open_unlink(void)
 
 	/* The descriptor's whole purpose: "can be used by other functions
 	 * to refer to that shared memory object", mmap() being the one
-	 * that matters.  This tree's mmap() refuses every file type with
-	 * [ENODEV] today (see this file's banner), so the day shm_open()
-	 * arrives this assertion is also the statement that a shared
-	 * memory object is the one type it must stop refusing. */
+	 * that matters.  shm_open() deliberately returns the regular-file
+	 * descriptor shape mmap() already maps through an NT section. */
 	p = mmap(NULL, PG, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	CHECK(p != MAP_FAILED);
 	if (p != MAP_FAILED) {

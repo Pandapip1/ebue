@@ -250,6 +250,10 @@ pid_t gettid(void);
  * rather than the 100 ns clock_getres() advertises. */
 #define _POSIX_MONOTONIC_CLOCK  200809L
 
+/* shm_open()/shm_unlink() and file-backed MAP_SHARED mappings together
+ * provide the Shared Memory Objects option. */
+#define _POSIX_SHARED_MEMORY_OBJECTS 200809L
+
 /* unistd.h.html, "Constants for Functions": "_POSIX_VDISABLE ... shall
  * always be set to a value other than -1."  0, not the BSD '\377',
  * because src/unistd/sysconf.c's pathconf() already answers
