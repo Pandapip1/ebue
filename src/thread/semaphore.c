@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <errno.h>
 #include "libc.h"
+#include "pthread_impl.h"
 
 #define SEM_MAGIC 0x53454d31u
 #define NAMED_MAX 64
@@ -290,9 +291,11 @@ int sem_wait(sem_t *sem)
 	unsigned long caught;
 	int r;
 	if (!valid(sem)) { errno = EINVAL; return -1; }
+	__pthread_testcancel();
 	caught = __sig_caught_count();
 	for (;;) {
 		r = wait_handle(sem, &slice);
+		__pthread_testcancel();
 		if (!r) return 0;
 		if (errno != EAGAIN) return -1;
 		if (__sig_caught_count() != caught) { errno = EINTR; return -1; }
@@ -305,6 +308,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 	LARGE_INTEGER rel;
 	long long ns;
 	unsigned long caught;
+	__pthread_testcancel();
 	if (sem_trywait(sem) == 0) return 0;
 	if (errno != EAGAIN) return -1;
 	if (!abstime || abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L) {
@@ -317,7 +321,11 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 		if (ns <= 0) { errno = ETIMEDOUT; return -1; }
 		if (ns > 50000000LL) ns = 50000000LL;
 		rel = -(ns / 100);
-		if (wait_handle(sem, &rel) == 0) return 0;
+		if (wait_handle(sem, &rel) == 0) {
+			__pthread_testcancel();
+			return 0;
+		}
+		__pthread_testcancel();
 		if (errno != EAGAIN) return -1;
 		if (__sig_caught_count() != caught) { errno = EINTR; return -1; }
 	}
