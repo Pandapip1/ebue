@@ -25,7 +25,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=73 BUG=14 UNIMPL=46 NA=13 FLAKY=0
+# COUNTS PASS=76 BUG=11 UNIMPL=46 NA=13 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -55,9 +55,9 @@ getpwnam_r-crash                  runtime=wine,target_arch=x86_64,kernel32=no  P
 getpwnam_r-errno                  runtime=wine,target_arch=x86_64,kernel32=no  PASS
 iconv_open                        runtime=wine,target_arch=x86_64,kernel32=no  PASS
 iconv-roundtrips                  runtime=wine,target_arch=x86_64,kernel32=no  PASS
-inet_ntop-v4mapped                runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:242; inet_pton(AF_INET6,"::ffff:1.2.3.4") fails outright
-inet_pton                         runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:242 arpa/inet.h not clause-audited; embedded space accepted, AF_INET6 "::" rejected
-inet_pton-empty-last-field        runtime=wine,target_arch=x86_64,kernel32=no  BUG  GAP-ACCOUNTING.md:242; "1:2:3:4:5:6:7::" mis-parsed and an over-long address accepted
+inet_ntop-v4mapped                runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed: AF_INET6 conversion emits IPv4-mapped addresses in mixed notation
+inet_pton                         runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed: strict IPv4 and full, compressed, and mixed IPv6 forms parse and round-trip
+inet_pton-empty-last-field        runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed: terminal zero compression is accepted without permitting excess fields
 ipc_msg                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_msg.c:9: error: include file 'sys/msg.h' not found
 ipc_sem                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_sem.c:9: error: include file 'sys/sem.h' not found
 ipc_shm                           runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  ipc_shm.c:9: error: include file 'sys/shm.h' not found
