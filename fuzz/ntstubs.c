@@ -3861,6 +3861,39 @@ void *__memcpy_chk(void *d, const void *s, size_t n, size_t dlen)
 	return memcpy(d, s, n);
 }
 
+/* ---------------------------------------- cross-process signal delivery
+ *
+ * src/signal/sigdelivery.c is deliberately absent from the native build:
+ * its transport is made entirely from named NT events and an NT manager
+ * thread.  The signal core still calls the transport boundary, however,
+ * and select() asks it for a wake event.  Keep those calls linkable without
+ * pretending that the ELF shim has implemented the Windows transport.
+ *
+ * Self-signals do not depend on these functions (signal.c handles them
+ * before trying the remote arm), and the native tests which require a real
+ * foreign-process signal transport are excluded explicitly by
+ * tools/asan-build.sh.  There is no delivery thread in this build, so its
+ * recursive serialization lock is also correctly a no-op here.
+ */
+void __sig_delivery_init(void) { }
+void __sig_delivery_reinit_after_fork(void) { }
+HANDLE __sig_delivery_event(void) { return 0; }
+int __sig_try_deliver_remote(int pid, int sig)
+{
+	(void)pid;
+	(void)sig;
+	return 0;
+}
+int __sig_try_deliver_remote_info(int pid, int sig, const void *info)
+{
+	(void)pid;
+	(void)sig;
+	(void)info;
+	return 0;
+}
+void __sig_lock(void) { }
+void __sig_unlock(void) { }
+
 /* ------------------------------------------------- everything not native */
 
 #define NOTIMPL(name, proto) NTSTATUS NTAPI name proto { return STATUS_NOT_IMPLEMENTED; }
