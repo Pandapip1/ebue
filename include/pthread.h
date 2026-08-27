@@ -180,6 +180,21 @@ int pthread_rwlockattr_destroy(pthread_rwlockattr_t *);
 int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict, int *__restrict);
 int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *, int);
 
+int pthread_barrier_init(pthread_barrier_t *__restrict,
+	const pthread_barrierattr_t *__restrict, unsigned);
+int pthread_barrier_destroy(pthread_barrier_t *);
+int pthread_barrier_wait(pthread_barrier_t *);
+int pthread_barrierattr_init(pthread_barrierattr_t *);
+int pthread_barrierattr_destroy(pthread_barrierattr_t *);
+int pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict, int *__restrict);
+int pthread_barrierattr_setpshared(pthread_barrierattr_t *, int);
+
+int pthread_spin_init(pthread_spinlock_t *, int);
+int pthread_spin_destroy(pthread_spinlock_t *);
+int pthread_spin_lock(pthread_spinlock_t *);
+int pthread_spin_trylock(pthread_spinlock_t *);
+int pthread_spin_unlock(pthread_spinlock_t *);
+
 int pthread_getschedparam(pthread_t, int *__restrict, struct sched_param *__restrict);
 int pthread_setschedparam(pthread_t, int, const struct sched_param *);
 int pthread_setschedprio(pthread_t, int);
