@@ -45,7 +45,7 @@ static void drain_heredocs(struct pctx *c)
 	while (h) {
 		struct hdq *n = h->next;
 		if (h->r->heredoc) fputs(h->r->heredoc, c->f);
-		fputs(h->r->word, c->f);
+		fputs(h->r->heredoc_delim ? h->r->heredoc_delim : h->r->word, c->f);
 		fputc('\n', c->f);
 		__free(h);
 		h = n;
@@ -75,7 +75,8 @@ static void print_words(struct pctx *c, const struct sh_word *w, int leading_spa
 	for (; w; w = w->next) {
 		if (leading_space) fputc(' ', c->f);
 		leading_space = 1;
-		fputs(w->text, c->f);
+		if (!strcmp(w->text, "!")) fputs("'!'", c->f);
+		else fputs(w->text, c->f);
 	}
 }
 

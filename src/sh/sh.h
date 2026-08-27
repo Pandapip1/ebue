@@ -95,6 +95,7 @@ struct sh_redir {
 	int fd;              /* explicit io_number, or -1 for the operator's default */
 	char *word;           /* target word / heredoc delimiter, raw text */
 	char *heredoc;         /* SH_R_DLESS(DASH) only: the literal body text */
+	char *heredoc_delim;   /* SH_R_DLESS(DASH) only: quote-removed delimiter */
 	int heredoc_quoted;     /* SH_R_DLESS(DASH) only: delimiter was quoted -> body gets no expansion */
 	struct sh_redir *next;
 };

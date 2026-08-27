@@ -763,7 +763,7 @@ static void test_funcdef_heredoc_before_list_operator(void)
 	}
 }
 
-#if NTLIBC_TEST(BUG, sh_engine_heredoc_quoted_delim_roundtrip) /* BUG: the printer writes a here-document's terminator line as
+#if NTLIBC_TEST(PASS, sh_engine_heredoc_quoted_delim_roundtrip) /* The printer writes a here-document's quote-removed terminator.
 	 * the delimiter word was WRITTEN, while the parser matches
 	 * terminator lines against the delimiter with quote removal
 	 * APPLIED.  A quoted delimiter's printed terminator therefore
@@ -805,7 +805,7 @@ static void test_heredoc_quoted_delim_roundtrip(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, sh_engine_bang_word_roundtrip) /* BUG: parse -> print -> parse -> print is not a fixed point for
+#if NTLIBC_TEST(PASS, sh_engine_bang_word_roundtrip) /* parse -> print -> parse -> print is a fixed point for
 	 * a command word that is literally "!".  2.9.2 makes "!" a
 	 * reserved word when it is the first word of a pipeline, and 2.4
 	 * requires it to be quoted to be used as an ordinary word there;
@@ -829,7 +829,7 @@ static void test_bang_word_roundtrip(void)
 }
 #endif
 
-#if NTLIBC_TEST(BUG, sh_engine_funcdef_list_operator_roundtrip) /* BUG: parse -> print -> parse -> print is not a fixed point for a
+#if NTLIBC_TEST(PASS, sh_engine_funcdef_list_operator_roundtrip) /* parse -> print -> parse -> print is a fixed point for a
 	 * function definition followed by a list operator.  Every round
 	 * trip inserts one more <blank> between the body and the operator,
 	 * so like the here-document fence above this does not merely fail,

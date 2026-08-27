@@ -134,11 +134,6 @@ static int heredoc_fence(const char *src)
  *
  * When the fence is lifted, delete hdquote_fence() and its
  * caller. */
-static int hdquote_fence(const char *src)
-{
-	return strstr(src, "<<") != 0 && src[strcspn(src, "'\"\\")] != 0;
-}
-
 /* BUG: the printer does not quote a word that is literally "!" when it
  * lands where a pipeline's negation operator would be, so its output
  * does not reparse to the same tree.  2.9.2 makes "!" a reserved word
@@ -167,11 +162,6 @@ static int hdquote_fence(const char *src)
  * precisely would mean reimplementing the lexer in the harness.
  *
  * When the fence is lifted, delete bang_fence() and its caller. */
-static int bang_fence(const char *src)
-{
-	return strchr(src, '!') != 0;
-}
-
 /* BUG, fenced in test/sh-engine.c as
  * test_funcdef_before_list_operator_roundtrip(): a function definition
  * followed by a list operator does not reach a fixed point, and does not
@@ -212,21 +202,6 @@ static int bang_fence(const char *src)
  * this corpus than a function definition is, and neither is matched.
  *
  * When the fence is lifted, delete funcdef_fence() and its caller. */
-static int funcdef_fence(const char *src)
-{
-	size_t i;
-
-	if (!strchr(src, '&') && !strchr(src, '|')) return 0;
-	for (i = 1; src[i]; i++) {
-		char c = src[i - 1];
-		if (src[i] == '(' &&
-		    ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-		     (c >= '0' && c <= '9') || c == '_'))
-			return 1;
-	}
-	return 0;
-}
-
 /* Reprint `l` into a fresh heap string, or NULL if the memstream could
  * not be created.  The caller frees. */
 static char *reprint(const struct sh_list *l)
@@ -296,8 +271,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)
 		p2 = reprint(l2);
 		__sh_list_free(l2);
 		if (p2) {
-			if (strcmp(p1, p2) != 0 && !bang_fence(src) && !hdquote_fence(src) &&
-			    !funcdef_fence(src))
+			if (strcmp(p1, p2) != 0)
 				oracle_mismatch_s("parse/print is not a fixed point", src, p2, p1);
 			free(p2);
 		}

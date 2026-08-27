@@ -24,6 +24,7 @@ void __sh_free_redirs(struct sh_redir *r)
 		struct sh_redir *n = r->next;
 		__free(r->word);
 		__free(r->heredoc);
+		__free(r->heredoc_delim);
 		__free(r);
 		r = n;
 	}

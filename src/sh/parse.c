@@ -323,7 +323,7 @@ static int drain_heredocs(struct lexer *lx)
 		}
 		if (gbuf_push(&body, 0)) { lex_errf(lx, "out of memory"); __free(lit); __free(body.d); __free(h); return -1; }
 		h->redir->heredoc = body.d;
-		__free(lit);
+		h->redir->heredoc_delim = lit;
 		__free(h);
 		h = next;
 	}
@@ -572,6 +572,7 @@ static struct sh_redir *parse_redir(struct parser *p)
 	r->fd = fd;
 	r->word = xstrdup(p->cur.text);
 	r->heredoc = 0;
+	r->heredoc_delim = 0;
 	r->heredoc_quoted = 0;
 	r->next = 0;
 	if (!r->word) { __free(r); perr(p, "out of memory"); return 0; }
@@ -939,6 +940,7 @@ static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd
 	                            * one too, pointing at the NUL, so there
 	                            * is no end-of-input special case */
 	if (end < start) end = start;
+	while (end > start && isspace((unsigned char)end[-1])) end--;
 
 	cmd->kind = SH_CMD_FUNCDEF;
 	cmd->name = fname;
