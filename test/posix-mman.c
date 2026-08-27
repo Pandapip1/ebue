@@ -595,6 +595,33 @@ static void test_posix_mman_shm_open_unlink(void)
 	errno = 0;
 	CHECK(shm_unlink("/ntlibc_mman_shm") == -1);
 	CHECK(errno == ENOENT);
+
+	/* A mapping is itself a reference to the object.  Removing the name
+	 * must therefore succeed after the descriptor is closed, while the
+	 * mapping and its contents remain valid until munmap().  Windows's
+	 * ordinary file-delete disposition rejects this shape, so keep it
+	 * explicit here instead of letting the simpler unmapped lifecycle
+	 * above stand in for it. */
+	fd = shm_open("/ntlibc_mman_shm_mapped", O_CREAT | O_EXCL | O_RDWR, 0600);
+	CHECK(fd >= 0);
+	if (fd < 0)
+		return;
+	CHECK(ftruncate(fd, PG) == 0);
+	p = mmap(NULL, PG, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	CHECK(p != MAP_FAILED);
+	if (p == MAP_FAILED) {
+		close(fd);
+		shm_unlink("/ntlibc_mman_shm_mapped");
+		return;
+	}
+	memcpy(p, "mapped", sizeof "mapped");
+	CHECK(close(fd) == 0);
+	CHECK(shm_unlink("/ntlibc_mman_shm_mapped") == 0);
+	errno = 0;
+	CHECK(shm_open("/ntlibc_mman_shm_mapped", O_RDWR, 0) == -1);
+	CHECK(errno == ENOENT);
+	CHECK(!memcmp(p, "mapped", sizeof "mapped"));
+	CHECK(munmap(p, PG) == 0);
 }
 #endif
 
