@@ -61,6 +61,25 @@ struct __pthread *__pthread_current(void)
 	return self;
 }
 
+void __pthread_reset_after_fork(void)
+{
+	struct __pthread *self = __pthread_self_control;
+	HANDLE handle;
+	RtlAcquirePebLock();
+	live_threads = self ? 1 : 0;
+	if (self) {
+		self->exited = 0;
+		self->joined = 0;
+		self->joining = 0;
+		self->detached = 0;
+		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
+			NtCurrentProcess(), &handle, 0, 0, DUPLICATE_SAME_ACCESS)))
+			self->handle = handle;
+		else self->handle = NtCurrentThread();
+	}
+	RtlReleasePebLock();
+}
+
 pthread_t pthread_self(void)
 {
 	return __pthread_current();

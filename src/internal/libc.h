@@ -201,6 +201,11 @@ extern struct __fd __fds[FD_MAX];
  * resource.c. */
 extern int __fd_limit;
 
+void __pthread_atfork_prepare(void);
+void __pthread_atfork_parent(void);
+void __pthread_atfork_child(void);
+void __pthread_reset_after_fork(void);
+
 int __fd_alloc(int lowest);                  /* a free slot >= lowest, or -1 (EMFILE) */
 int __fd_install(HANDLE, unsigned flags, int type);    /* alloc + fill; -1 with errno */
 int __fd_install_at(int fd, HANDLE, unsigned flags, int type);

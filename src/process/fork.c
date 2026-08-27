@@ -180,12 +180,13 @@ static void mark_children_inheritable(int inherit)
 	}
 }
 
-pid_t fork(void)
+static pid_t fork_impl(int run_handlers)
 {
 	RTL_USER_PROCESS_INFORMATION info;
 	NTSTATUS st;
 	int pid;
 
+	if (run_handlers) __pthread_atfork_prepare();
 	mark_fds_inheritable();
 	mark_children_inheritable(1);
 
@@ -207,6 +208,7 @@ pid_t fork(void)
 		 * __children made the trip; stop them travelling any further,
 		 * and put the close-on-exec descriptors back to non-inheritable
 		 * now that they have arrived. */
+		__pthread_reset_after_fork();
 		mark_children_inheritable(0);
 		unmark_cloexec_fds();
 		/* ...except the reaped-children time accounting, which is
@@ -258,12 +260,16 @@ pid_t fork(void)
 		 * life: not merely delayed, since nothing would ever retry
 		 * this. */
 		__sig_delivery_reinit_after_fork();
+		if (run_handlers) __pthread_atfork_child();
 		return 0;
 	}
 
 	mark_children_inheritable(0);
 	unmark_cloexec_fds();
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (!NT_SUCCESS(st)) {
+		if (run_handlers) __pthread_atfork_parent();
+		return __set_errno_status(st);
+	}
 
 	/* The parent.  The child exists, suspended; track it like any other
 	 * child and let it run. */
@@ -281,7 +287,13 @@ pid_t fork(void)
 	if (__is_wow64()) __wow64_fixup_clone(info.Process, info.Thread);
 	NtResumeThread(info.Thread, 0);
 	NtClose(info.Thread);
+	if (run_handlers) __pthread_atfork_parent();
 	return pid;
+}
+
+pid_t fork(void)
+{
+	return fork_impl(1);
 }
 
 /* _Fork(): kept deliberately, and no test references it -- so it will
@@ -302,5 +314,5 @@ pid_t fork(void)
  * library ever grows real threads. */
 pid_t _Fork(void)
 {
-	return fork();
+	return fork_impl(0);
 }
