@@ -247,25 +247,28 @@ static void test_clock_settime_bad_nsec(void)
 
 /* clock_nanosleep.html ERRORS: "[EINVAL] The rqtp argument specified a
  * nanosecond value less than zero or greater than or equal to 1000
- * million, or specified a clock ID that is not supported." */
+ * million, or specified a clock ID that is not supported."
+ *
+ * RETURN VALUE: "If the call is interrupted by a signal, ... or if the
+ * function is unable to be executed for any other reason, ...
+ * clock_nanosleep() function shall return the corresponding value of
+ * errno. ... These functions shall not set errno." -- clock_nanosleep(),
+ * like the other pthread_*-shaped functions, returns the error number
+ * DIRECTLY, not -1 with errno set. This used to assert the -1/errno
+ * contract, which matched src/time/clock_nanosleep.c's old (wrong)
+ * implementation rather than the spec; both are fixed together. */
 static void test_clock_nanosleep_einval(void)
 {
 	struct timespec req;
 
 	req.tv_sec = 0; req.tv_nsec = 0;
-	errno = 0;
-	CHECK(clock_nanosleep((clockid_t)999, 0, &req, NULL) == -1);
-	CHECK(errno == EINVAL);
+	CHECK(clock_nanosleep((clockid_t)999, 0, &req, NULL) == EINVAL);
 
 	req.tv_sec = 0; req.tv_nsec = 1000000000L; /* == 1e9, out of range */
-	errno = 0;
-	CHECK(clock_nanosleep(CLOCK_REALTIME, 0, &req, NULL) == -1);
-	CHECK(errno == EINVAL);
+	CHECK(clock_nanosleep(CLOCK_REALTIME, 0, &req, NULL) == EINVAL);
 
 	req.tv_sec = 0; req.tv_nsec = -1;
-	errno = 0;
-	CHECK(clock_nanosleep(CLOCK_MONOTONIC, 0, &req, NULL) == -1);
-	CHECK(errno == EINVAL);
+	CHECK(clock_nanosleep(CLOCK_MONOTONIC, 0, &req, NULL) == EINVAL);
 }
 
 /* clock_nanosleep.html DESCRIPTION: relative-mode (flags==0) suspends

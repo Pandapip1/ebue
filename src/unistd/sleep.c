@@ -215,7 +215,7 @@ void __alarm_reset_after_fork(void)
  * having either one step-proof.  A wait that is never alerted -- every
  * call that is not interrupted -- is a single relative
  * NtDelayExecution and reads no clock at all. */
-static int alertable_delay(long long ticks, long long *left)
+int __alertable_delay(long long ticks, long long *left)
 {
 	unsigned long caught = __sig_caught_count();
 	LARGE_INTEGER start, now, t;
@@ -244,7 +244,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 
 	if (!req || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L || req->tv_sec < 0) { errno = EINVAL; return -1; }
 	ticks = req->tv_sec * __TICKS_PER_SEC + (req->tv_nsec + 99) / 100;
-	if (alertable_delay(ticks, &owed) < 0) {
+	if (__alertable_delay(ticks, &owed) < 0) {
 		/* nanosleep.html: "If the rmtp argument is non-NULL, the
 		 * timespec structure referenced by it is updated to contain
 		 * the amount of time remaining in the interval (the requested
@@ -262,7 +262,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 unsigned sleep(unsigned s)
 {
 	long long owed = 0;
-	if (alertable_delay((long long)s * __TICKS_PER_SEC, &owed) < 0)
+	if (__alertable_delay((long long)s * __TICKS_PER_SEC, &owed) < 0)
 		/* sleep.html RETURN VALUE: "If sleep() returns because the
 		 * requested time has elapsed, the value returned shall be 0.
 		 * If sleep() returns due to the delivery of a signal, the

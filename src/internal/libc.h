@@ -397,6 +397,17 @@ static inline long long __nt_to_unix_sec(long long t) { return (t - __TICKS_1601
 static inline long __nt_to_unix_nsec(long long t) { return (long)((t - __TICKS_1601_TO_1970) % __TICKS_PER_SEC) * 100; }
 static inline long long __unix_to_nt(long long sec, long nsec) { return sec * __TICKS_PER_SEC + nsec / 100 + __TICKS_1601_TO_1970; }
 
+/* src/unistd/sleep.c's alertable, signal-interruptible wait -- the one
+ * place nanosleep()/sleep()/usleep() actually honour EINTR against a
+ * signal-catching function.  Shared with clock_nanosleep()
+ * (src/time/clock_nanosleep.c), which used to call NtDelayExecution()
+ * directly, non-alertably, and therefore could never be interrupted or
+ * report EINTR at all -- see that file for the rest of the story.
+ * Returns 0 if the whole interval (`ticks`, 100ns units) elapsed, or -1
+ * with errno=EINTR and *left set to the 100ns units still owed if a
+ * signal-catching function ran first. */
+int __alertable_delay(long long ticks, long long *left);
+
 /* ---- stdio internals --------------------------------------------------- */
 void __stdio_exit(void);                     /* flush everything at exit */
 
