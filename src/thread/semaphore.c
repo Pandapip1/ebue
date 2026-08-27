@@ -103,7 +103,7 @@ static void object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
 	us->Length = (USHORT)(n * sizeof(WCHAR));
 	us->MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
 	us->Buffer = wide;
-	InitializeObjectAttributes(oa, us, OBJ_CASE_INSENSITIVE, 0, 0);
+	InitializeObjectAttributes(oa, us, OBJ_CASE_INSENSITIVE | OBJ_INHERIT, 0, 0);
 }
 
 static struct named_sem *find_path(const char *path)
@@ -136,7 +136,10 @@ int sem_init(sem_t *sem, int pshared, unsigned value)
 	NTSTATUS st;
 	(void)pshared;
 	if (!sem || value > SEM_VALUE_MAX) { errno = EINVAL; return -1; }
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+	/* fork() only clones OBJ_INHERIT handles. A process-shared sem_t
+	 * stores this handle value in shared memory, and named semaphores
+	 * have the same requirement when already open across fork. */
+	InitializeObjectAttributes(&oa, 0, OBJ_INHERIT, 0, 0);
 	st = NtCreateSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa, (LONG)value, SEM_VALUE_MAX);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	sem->__handle = h; sem->__magic = SEM_MAGIC; sem->__named = 0;
@@ -180,12 +183,18 @@ sem_t *sem_open(const char *name, int oflag, ...)
 			RtlReleasePebLock(); free(path); errno = EEXIST; return SEM_FAILED;
 		}
 		entry->refs++;
-		RtlReleasePebLock(); free(path); return &entry->sem;
+		RtlReleasePebLock(); free(path); errno = 0; return &entry->sem;
 	}
 	RtlReleasePebLock();
 	if (ensure_dir(path) < 0) { free(path); return SEM_FAILED; }
 	if (oflag & O_CREAT) {
-		fd = open(path, O_CREAT | O_EXCL | O_RDWR, mode);
+		/* The record is implementation metadata, not the semaphore's
+		 * permission object. Keeping it owner-writable is necessary on
+		 * this filesystem mapping: clearing owner-write maps to NT's
+		 * read-only attribute and would make the POSIX-required
+		 * sem_unlink() fail merely because mode was 0444 or 0. */
+		(void)mode;
+		fd = open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
 		if (fd >= 0) created = 1;
 		else if (errno == EEXIST && !(oflag & O_EXCL)) fd = open(path, O_RDONLY, 0);
 	} else fd = open(path, O_RDONLY, 0);
@@ -216,6 +225,7 @@ sem_t *sem_open(const char *name, int oflag, ...)
 	entry->sem.__handle = h; entry->sem.__magic = SEM_MAGIC; entry->sem.__named = 1;
 	entry->path = path; entry->refs = 1; entry->linked = 1;
 	RtlReleasePebLock();
+	errno = 0;
 	return &entry->sem;
 }
 
