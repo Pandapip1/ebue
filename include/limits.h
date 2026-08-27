@@ -50,6 +50,8 @@
 #define RTSIG_MAX 30
 #define SIGQUEUE_MAX 32
 #define TIMER_MAX 32
+#define MQ_OPEN_MAX 1024
+#define MQ_PRIO_MAX 32768
 
 #define _POSIX_AIO_LISTIO_MAX   2
 #define _POSIX_AIO_MAX          1
@@ -60,6 +62,8 @@
 #define _POSIX_HOST_NAME_MAX    255
 #define _POSIX_LINK_MAX         8
 #define _POSIX_LOGIN_NAME_MAX   9
+#define _POSIX_MQ_OPEN_MAX      8
+#define _POSIX_MQ_PRIO_MAX      32
 #define _POSIX_MAX_CANON        255
 #define _POSIX_MAX_INPUT        255
 #define _POSIX_NAME_MAX         14

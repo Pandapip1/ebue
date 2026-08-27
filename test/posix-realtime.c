@@ -221,7 +221,7 @@ static void test_posix_realtime_sem_open_named(void)
  * mq_receive.html, mq_getattr.html, mq_notify.html, mq_close.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_mq_send_receive_priority)
+#if NTLIBC_TEST(PASS, posix_realtime_mq_send_receive_priority)
 #include <mqueue.h>
 #include <fcntl.h>
 #include <string.h>
@@ -285,7 +285,7 @@ static void test_posix_realtime_mq_send_receive_priority(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_mq_attr_nonblock)
+#if NTLIBC_TEST(PASS, posix_realtime_mq_attr_nonblock)
 #include <mqueue.h>
 #include <fcntl.h>
 #include <string.h>
@@ -352,7 +352,7 @@ static void test_posix_realtime_mq_attr_nonblock(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_realtime_mq_notify_single_registration)
+#if NTLIBC_TEST(PASS, posix_realtime_mq_notify_single_registration)
 #include <mqueue.h>
 #include <fcntl.h>
 #include <signal.h>

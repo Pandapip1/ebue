@@ -264,6 +264,9 @@ pid_t gettid(void);
 /* Named and unnamed counting semaphores. */
 #define _POSIX_SEMAPHORES 200809L
 
+/* Named, priority-ordered process-shared message queues. */
+#define _POSIX_MESSAGE_PASSING 200809L
+
 /* Queued real-time signals, including payload-preserving cross-process
  * sigqueue() delivery and the two synchronous wait interfaces. */
 #define _POSIX_REALTIME_SIGNALS 200809L

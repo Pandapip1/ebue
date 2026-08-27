@@ -67,6 +67,9 @@ long sysconf(int name)
 	case _SC_SEMAPHORES: return _POSIX_SEMAPHORES;
 	case _SC_SEM_NSEMS_MAX: return 64;
 	case _SC_SEM_VALUE_MAX: return 2147483647L;
+	case _SC_MESSAGE_PASSING: return _POSIX_MESSAGE_PASSING;
+	case _SC_MQ_OPEN_MAX: return MQ_OPEN_MAX;
+	case _SC_MQ_PRIO_MAX: return MQ_PRIO_MAX;
 	/* The <limits.h> Runtime Increasable Values, which that header
 	 * documents as the compile-time minimum this library promises;
 	 * reporting anything smaller here would break the promise. */
@@ -127,7 +130,6 @@ long sysconf(int name)
 	 *                              the clock_nanosleep() we have)
 	 *   no <aio.h>              -- _SC_ASYNCHRONOUS_IO, _SC_AIO_*,
 	 *                              _SC_PRIORITIZED_IO
-	 *   no <mqueue.h>           -- _SC_MESSAGE_PASSING, _SC_MQ_*
 	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES,
 	 *                              _SC_MEMORY_PROTECTION,
 	 *                              _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
@@ -176,12 +178,9 @@ long sysconf(int name)
 	case _SC_SYNCHRONIZED_IO:
 	case _SC_MAPPED_FILES:
 	case _SC_MEMORY_PROTECTION:
-	case _SC_MESSAGE_PASSING:
 	case _SC_AIO_LISTIO_MAX:
 	case _SC_AIO_MAX:
 	case _SC_AIO_PRIO_DELTA_MAX:
-	case _SC_MQ_OPEN_MAX:
-	case _SC_MQ_PRIO_MAX:
 	case _SC_2_C_BIND:
 	case _SC_2_C_DEV:
 	case _SC_2_FORT_DEV:

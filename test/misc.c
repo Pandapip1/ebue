@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sched.h>
 #include <semaphore.h>
+#include <mqueue.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -134,6 +135,40 @@ static void test_semaphore(void)
 	CHECK(named != SEM_FAILED);
 	if (named != SEM_FAILED) CHECK(sem_close(named) == 0);
 	CHECK(sem_unlink("/ntlibc_misc_sem") == 0);
+}
+
+/* ---- message queues ---- */
+static void test_mqueue(void)
+{
+	struct mq_attr attr = {0}, got, old;
+	struct sigevent event = {0};
+	struct timespec deadline;
+	mqd_t q;
+	char buf[8];
+	unsigned prio;
+
+	attr.mq_maxmsg = 2;
+	attr.mq_msgsize = sizeof buf;
+	mq_unlink("/ntlibc_misc_mq");
+	q = mq_open("/ntlibc_misc_mq", O_CREAT | O_EXCL | O_RDWR, 0600, &attr);
+	CHECK(q != (mqd_t)-1);
+	if (q == (mqd_t)-1) return;
+	event.sigev_notify = SIGEV_NONE;
+	CHECK(mq_notify(q, &event) == 0);
+	CHECK(mq_notify(q, NULL) == 0);
+	CHECK(mq_send(q, "low", 3, 1) == 0);
+	CHECK(mq_getattr(q, &got) == 0 && got.mq_curmsgs == 1);
+	got.mq_flags = O_NONBLOCK;
+	CHECK(mq_setattr(q, &got, &old) == 0 && old.mq_flags == 0);
+	CHECK(mq_receive(q, buf, sizeof buf, &prio) == 3 && prio == 1 &&
+	      !memcmp(buf, "low", 3));
+	CHECK(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
+	deadline.tv_sec++;
+	CHECK(mq_timedsend(q, "high", 4, 9, &deadline) == 0);
+	CHECK(mq_timedreceive(q, buf, sizeof buf, &prio, &deadline) == 4 &&
+	      prio == 9 && !memcmp(buf, "high", 4));
+	CHECK(mq_close(q) == 0);
+	CHECK(mq_unlink("/ntlibc_misc_mq") == 0);
 }
 
 /* ---- system() ---- */
@@ -428,6 +463,7 @@ int main(int argc, char **argv)
 	test_sched();
 	test_mlockall();
 	test_semaphore();
+	test_mqueue();
 	test_system();
 	test_setjmp();
 	test_signal();
