@@ -332,20 +332,50 @@ int pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
 	return 0;
 }
 
-#define ATTR_GET(name, member) \
-	int name(const pthread_mutexattr_t *__restrict attr, int *__restrict output) \
-	{ \
-		if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC) \
-			return EINVAL; \
-		*output = const_mutexattr_data(attr)->member; \
-		return 0; \
-	}
+int pthread_mutexattr_getpshared(const pthread_mutexattr_t *__restrict attr,
+	int *__restrict output)
+{
+	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
+		return EINVAL;
+	*output = const_mutexattr_data(attr)->pshared;
+	return 0;
+}
 
-ATTR_GET(pthread_mutexattr_getpshared, pshared)
-ATTR_GET(pthread_mutexattr_gettype, type)
-ATTR_GET(pthread_mutexattr_getprotocol, protocol)
-ATTR_GET(pthread_mutexattr_getprioceiling, prioceiling)
-ATTR_GET(pthread_mutexattr_getrobust, robust)
+int pthread_mutexattr_gettype(const pthread_mutexattr_t *__restrict attr,
+	int *__restrict output)
+{
+	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
+		return EINVAL;
+	*output = const_mutexattr_data(attr)->type;
+	return 0;
+}
+
+int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *__restrict attr,
+	int *__restrict output)
+{
+	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
+		return EINVAL;
+	*output = const_mutexattr_data(attr)->protocol;
+	return 0;
+}
+
+int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *__restrict attr,
+	int *__restrict output)
+{
+	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
+		return EINVAL;
+	*output = const_mutexattr_data(attr)->prioceiling;
+	return 0;
+}
+
+int pthread_mutexattr_getrobust(const pthread_mutexattr_t *__restrict attr,
+	int *__restrict output)
+{
+	if (!attr || !output || const_mutexattr_data(attr)->magic != MUTEXATTR_MAGIC)
+		return EINVAL;
+	*output = const_mutexattr_data(attr)->robust;
+	return 0;
+}
 
 int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int value)
 {
