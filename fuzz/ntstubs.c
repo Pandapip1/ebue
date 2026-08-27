@@ -3935,6 +3935,18 @@ NOTIMPL(NtSetSystemTime, (LARGE_INTEGER *a, LARGE_INTEGER *b))
 NOTIMPL(NtCreateJobObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
 NOTIMPL(NtAssignProcessToJobObject, (HANDLE a, HANDLE b))
 NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULONG d))
+/* The whole-library native link now contains pthread, AIO, and the synthetic
+ * VFS-directory handle path.  None of the fuzz targets exercises their NT
+ * dispatcher/thread substrate, and a Linux process has no NT TEB or native
+ * thread handle to model faithfully.  Refuse those boundaries explicitly:
+ * this keeps unrelated harnesses linkable without making their results
+ * depend on an invented thread or event implementation. */
+NOTIMPL(NtCreateEvent, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, ULONG d, BOOLEAN e))
+NOTIMPL(NtSetEvent, (HANDLE a, LONG *b))
+NOTIMPL(NtCreateThreadEx, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, HANDLE d,
+	PVOID e, PVOID f, ULONG g, SIZE_T h, SIZE_T i, SIZE_T j, PVOID k))
+NOTIMPL(NtTerminateThread, (HANDLE a, NTSTATUS b))
+NOTIMPL(NtQueryInformationThread, (HANDLE a, THREADINFOCLASS b, PVOID c, ULONG d, PULONG e))
 /* POSIX semaphores are backed by NT dispatcher objects.  The current fuzz
  * targets do not exercise that transport; refuse it explicitly so adding
  * semaphore.c to the native whole-library link does not invent semantics. */
