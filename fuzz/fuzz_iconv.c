@@ -57,20 +57,34 @@ static size_t run(iconv_t cd, const char *what, const unsigned char *in,
 {
 	char *ip = (char *)in, *op = (char *)out;
 	size_t il = inlen, ol = cap, rc;
+	uintptr_t ibase = (uintptr_t)(const void *)in;
+	uintptr_t obase = (uintptr_t)(void *)out;
+	uintptr_t ipos, opos;
+	size_t consumed = 0;
 
 	errno = 0;
 	rc = iconv(cd, &ip, &il, &op, &ol);
 	*err = errno;
-	*produced = (size_t)(op - (char *)out);
+	ipos = (uintptr_t)(void *)ip;
+	opos = (uintptr_t)(void *)op;
+	*produced = 0;
 
-	if (ip < (char *)in || ip > (char *)in + inlen)
+	/* Compare integer representations first: subtracting or ordering
+	 * pointers outside the same object would itself make a corrupt
+	 * pointer reported by the implementation undefined in the harness. */
+	if (ipos < ibase || ipos - ibase > inlen)
 		oracle_mismatch_i(what, "input pointer escaped its buffer",
-		                  (long long)(ip - (char *)in), (long long)inlen);
-	if ((size_t)(ip - (char *)in) + il != inlen)
+		                  (long long)(ipos - ibase), (long long)inlen);
+	else consumed = (size_t)(ipos - ibase);
+	if (il != inlen - consumed)
 		oracle_mismatch_i(what, "input pointer/count disagree",
-		                  (long long)(ip - (char *)in) + (long long)il,
+		                  (long long)consumed + (long long)il,
 		                  (long long)inlen);
-	if (*produced > cap || *produced + ol != cap)
+	if (opos < obase || opos - obase > cap)
+		oracle_mismatch_i(what, "output pointer escaped its buffer",
+		                  (long long)(opos - obase), (long long)cap);
+	else *produced = (size_t)(opos - obase);
+	if (ol != cap - *produced)
 		oracle_mismatch_i(what, "output pointer/count disagree",
 		                  (long long)*produced + (long long)ol,
 		                  (long long)cap);
