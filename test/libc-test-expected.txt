@@ -25,7 +25,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=82 BUG=5 UNIMPL=46 NA=13 FLAKY=0
+# COUNTS PASS=83 BUG=4 UNIMPL=46 NA=13 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -134,7 +134,7 @@ sscanf-eof                        runtime=wine,target_arch=x86_64,kernel32=no  P
 sscanf_long                       runtime=wine,target_arch=x86_64,kernel32=no  NA  NOT-YET-TRIAGED -- unverifiable in this environment (t_setrlim stubbed; the test needs an enforced RLIMIT_STACK), so it never reaches adjudication here.
 stat                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 statvfs                           runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed vendored assumption: POSIX permits unavailable file-node counts, while their ordering checks still apply
-strftime                          runtime=wine,target_arch=x86_64,kernel32=no  BUG  COVERAGE.md:286-287 covers %U %W %V %G %g pass-through only; flags and field width (%03C %+3C %012F) are unimplemented and emitted literally
+strftime                          runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed: extended years, epoch seconds, and numeric year flags and field widths are formatted without int overflow
 string                            runtime=wine,target_arch=x86_64,kernel32=no  PASS
 string_memcpy                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
 string_memmem                     runtime=wine,target_arch=x86_64,kernel32=no  PASS
