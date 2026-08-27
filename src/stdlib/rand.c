@@ -6,7 +6,8 @@
 #include <stdint.h>
 #include <features.h>
 
-static uint64_t seed = 1;
+/* rand() before srand() must use the same state as srand(1). */
+static uint64_t seed;
 
 /* s - 1 wraps to UINT_MAX for srand(0): still a perfectly usable 64-bit
  * seed once widened, not a bug the caller can observe. */

@@ -23,7 +23,7 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
 	if (fd < 0) {
 		/* a directory might refuse O_RDONLY; try it as one */
 		if (errno == EISDIR || errno == EACCES) fd = open(path, O_RDONLY | O_DIRECTORY);
-		if (fd < 0) { if (errno != EACCES) errno = ENOENT; return 0; }
+		if (fd < 0) return 0;
 	}
 	p = __handle_path(__fd_handle(fd));
 	saved = errno;

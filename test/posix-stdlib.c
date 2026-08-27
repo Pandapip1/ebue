@@ -204,7 +204,7 @@ static void test_rand48_ranges(void)
 	}
 }
 
-#if NTLIBC_TEST(BUG, posix_stdlib_rand_default_seed_is_srand_1) /* BUG: the un-seeded rand() stream is not the srand(1) stream.
+#if NTLIBC_TEST(PASS, posix_stdlib_rand_default_seed_is_srand_1) /* The un-seeded rand() stream is the srand(1) stream.
 	 * rand.html DESCRIPTION: "If rand() is called before any calls to
 	 * srand() are made, the same sequence shall be generated as when
 	 * srand() is first called with a seed value of 1."  (ISO C99
@@ -493,7 +493,7 @@ static void test_mkstemp_permission_bits(void)
 }
 
 /* ---- realpath.html: caller-supplied (non-NULL) resolved_name buffer. ---- */
-#if NTLIBC_TEST(BUG, posix_stdlib_realpath_errno_not_flattened) /* BUG: realpath() rewrites every open() failure except EACCES to
+#if NTLIBC_TEST(PASS, posix_stdlib_realpath_errno_not_flattened) /* realpath() preserves the errno from open().
 	 * ENOENT, losing two shall-fail errors.  realpath.html ERRORS, "The
 	 * realpath() function shall fail if": "[ENOTDIR] A component of the
 	 * path prefix names an existing file that is neither a directory
