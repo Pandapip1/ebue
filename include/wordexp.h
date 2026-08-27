@@ -78,14 +78,12 @@
  * __sh_cmdsub() grew positional parameters and `f $1` with none set
  * passing one empty argument is the same defect under another name.
  *
- * The *positional* and *special* parameters of XCU 2.5.1/2.5.2 ($1,
- * ${10}, $@, $*, $#, $0, $?) are deliberately NOT expanded by wordexp():
- * the caller is an arbitrary program, which has no positional
- * parameters and no exit status of a last pipeline, so a '$' before a
- * digit, an '@' or a '?' stays the literal character it always was
- * here.  The shell expands them through a
- * private entry point into the same scan -- see __wordexp_sh() in
- * src/internal/libc.h, and src/sh/param.c for the list itself.
+ * The caller has no positional-parameter context, so $1/${10}/$@/$*
+ * expand as an empty parameter list and $# expands to "0".  The shell
+ * supplies its real positional parameters through the private
+ * __wordexp_sh() entry point; see src/internal/libc.h and
+ * src/sh/param.c.  $? remains private to that entry point because an
+ * arbitrary wordexp() caller has no last-pipeline status.
  *
  * wordexp_t layout and the WRDE_* flags plus WRDE_BADCHAR through
  * WRDE_SYNTAX values are fixed at test/posix-glob.c's choices (that file predates this

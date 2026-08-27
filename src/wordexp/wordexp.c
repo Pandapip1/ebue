@@ -193,7 +193,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int 
 	}
 	start = p;
 
-	if (sh && *p >= '0' && *p <= '9') {
+	if (*p >= '0' && *p <= '9') {
 		/* 2.5.1: "The digits denoting the positional parameters shall
 		 * always be interpreted as a decimal value, even if there is a
 		 * leading zero."  Unbraced, exactly one digit is consumed --
@@ -217,7 +217,10 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int 
 		/* 2.5.2: '0' "[e]xpands to the name of the shell or shell
 		 * script" -- a special parameter, never a positional one, so it
 		 * cannot be unset and does not go through __sh_param_get(). */
-		val = idx == 0 ? __sh_param_zero() : __sh_param_get((int)idx);
+		/* wordexp() has no positional-parameter context.  Its parameters
+		 * are therefore all unset; the private shell entry point supplies
+		 * the real list (and $0) instead. */
+		val = sh ? (idx == 0 ? __sh_param_zero() : __sh_param_get((int)idx)) : 0;
 		if (!val) {
 			if (flags & WRDE_UNDEF) return WRDE_BADVAL;
 			return 0;
@@ -233,14 +236,14 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh, int 
 		*pp = p;
 		return fbuf_push_long(b, (long)__sh_last_status()) ? WRDE_NOSPACE : 0;
 	}
-	if (sh && *p == '#' && (!braced || p[1] == '}')) {
+	if (*p == '#' && (!braced || p[1] == '}')) {
 		/* 2.5.2 '#': "Expands to the decimal number of positional
 		 * parameters."  ${#NAME} is string length, a different
 		 * expansion this does not implement, and is excluded by
 		 * requiring the '}' to come straight after the '#'. */
 		p += braced ? 2 : 1;
 		*pp = p;
-		return fbuf_push_long(b, (long)__sh_param_count()) ? WRDE_NOSPACE : 0;
+		return fbuf_push_long(b, sh ? (long)__sh_param_count() : 0) ? WRDE_NOSPACE : 0;
 	}
 
 	if (!is_namestart(*p)) {
@@ -823,11 +826,13 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 			}
 			if (c == '$') {
 				const char *end;
-				int k = sh ? at_or_star(p, &end) : 0;
+				int k = at_or_star(p, &end);
 				size_t before;
 				if (k) {
-					rc = push_params(&field, &out, &active, k == '*', 0);
-					if (rc) goto fail;
+					if (sh) {
+						rc = push_params(&field, &out, &active, k == '*', 0);
+						if (rc) goto fail;
+					}
 					p = end;
 					continue;
 				}
@@ -901,11 +906,13 @@ static int expand(const char *words, wordexp_t *pwordexp, int flags, int sh)
 			}
 			if (c == '$') {
 				const char *end;
-				int k = sh ? at_or_star(p, &end) : 0;
+				int k = at_or_star(p, &end);
 				if (k) {
-					if (k == '@' && __sh_param_count() == 0) dq_null_at = 1;
-					rc = push_params(&field, &out, &active, k == '*', 1);
-					if (rc) goto fail;
+					if (k == '@' && (!sh || __sh_param_count() == 0)) dq_null_at = 1;
+					if (sh) {
+						rc = push_params(&field, &out, &active, k == '*', 1);
+						if (rc) goto fail;
+					}
 					p = end;
 					continue;
 				}

@@ -698,6 +698,15 @@ static void test_wordexp_tilde_and_param(void)
 	 * shell variable" */
 	unsetenv("NO_SUCH_VAR_XYZ");
 	CHECK(wordexp("$NO_SUCH_VAR_XYZ", &we, WRDE_UNDEF) == WRDE_BADVAL);
+
+	/* A wordexp() caller has no positional parameters. */
+	CHECK(wordexp("$1 $* $@", &we, 0) == 0);
+	CHECK(we.we_wordc == 0);
+	wordfree(&we);
+
+	CHECK(wordexp("$#", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "0") == 0);
+	wordfree(&we);
 }
 
 /* UNIMPL: wordexp.html DESCRIPTION -- pathname expansion delegates
