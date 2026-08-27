@@ -1638,6 +1638,21 @@ static pid_t waitid_spawn(const char *mode)
 	return pid;
 }
 
+static volatile sig_atomic_t job_sig_count;
+static volatile sig_atomic_t job_sig_code;
+static volatile sig_atomic_t job_sig_status;
+static volatile sig_atomic_t job_sig_pid;
+
+static void job_sigchld_handler(int sig, siginfo_t *si, void *context)
+{
+	(void)context;
+	if (sig != SIGCHLD || !si) return;
+	job_sig_code = si->si_code;
+	job_sig_status = si->si_status;
+	job_sig_pid = si->si_pid;
+	job_sig_count++;
+}
+
 /* waitid.html DESCRIPTION: "the si_signo member shall be set equal to
  * SIGCHLD"; si_code distinguishes CLD_EXITED from the death-by-signal
  * codes, and si_status carries the exit status in the first case and
@@ -1807,16 +1822,28 @@ static void test_waitid_errors(void)
  * The waitpid() half is asserted alongside the waitid() half on purpose:
  * they read the same child-table state through the same lookup, and the
  * two disagreeing about one child would be a bug this test exists to
- * catch. */
+ * catch.  The SIGCHLD handler checks the third observer of each transition,
+ * including siginfo_t and SA_NOCLDSTOP suppression. */
 static void test_waitid_stopped_continued(void)
 {
+	struct sigaction sa, oldsa;
 	siginfo_t si;
 	int status = 0;
 	pid_t pid = waitid_spawn("--waitid-sleep");
 
 	if (pid < 0) return;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_sigaction = job_sigchld_handler;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	CHECK(sigaction(SIGCHLD, &sa, &oldsa) == 0);
+	job_sig_count = 0;
 
 	CHECK(kill(pid, SIGSTOP) == 0);
+	CHECK(job_sig_count == 1);
+	CHECK(job_sig_code == CLD_STOPPED);
+	CHECK(job_sig_status == SIGSTOP);
+	CHECK(job_sig_pid == pid);
 	CHECK(waitid(P_PID, (id_t)pid, &si, WSTOPPED) == 0);
 	CHECK(si.si_signo == SIGCHLD);
 	CHECK(si.si_code == CLD_STOPPED);
@@ -1835,6 +1862,10 @@ static void test_waitid_stopped_continued(void)
 	CHECK(waitpid(pid, &status, WNOHANG) == 0);
 
 	CHECK(kill(pid, SIGCONT) == 0);
+	CHECK(job_sig_count == 2);
+	CHECK(job_sig_code == CLD_CONTINUED);
+	CHECK(job_sig_status == SIGCONT);
+	CHECK(job_sig_pid == pid);
 	CHECK(waitid(P_PID, (id_t)pid, &si, WCONTINUED) == 0);
 	CHECK(si.si_code == CLD_CONTINUED);
 	CHECK(si.si_pid == pid);
@@ -1845,9 +1876,13 @@ static void test_waitid_stopped_continued(void)
 
 	/* The same state through waitpid(), and through a different stop
 	 * signal: signal.h.html gives SIGTSTP the same "stop the process"
-	 * default action as SIGSTOP, and cross-process delivery here can
-	 * only ever take a signal's default action. */
+	 * default action as SIGSTOP. SA_NOCLDSTOP suppresses both halves of
+	 * the notification while the
+	 * independently consumable wait status remains available. */
+	sa.sa_flags |= SA_NOCLDSTOP;
+	CHECK(sigaction(SIGCHLD, &sa, NULL) == 0);
 	CHECK(kill(pid, SIGTSTP) == 0);
+	CHECK(job_sig_count == 2);
 	status = 0;
 	CHECK(waitpid(pid, &status, WUNTRACED) == pid);
 	CHECK(WIFSTOPPED(status) && WSTOPSIG(status) == SIGTSTP);
@@ -1856,6 +1891,7 @@ static void test_waitid_stopped_continued(void)
 	CHECK(waitpid(pid, &status, WUNTRACED | WNOHANG) == 0);
 
 	CHECK(kill(pid, SIGCONT) == 0);
+	CHECK(job_sig_count == 2);
 	status = 0;
 	CHECK(waitpid(pid, &status, WCONTINUED) == pid);
 	CHECK(WIFCONTINUED(status));
@@ -1864,8 +1900,10 @@ static void test_waitid_stopped_continued(void)
 	/* A SIGCONT to a child that is not stopped continues nothing and so
 	 * reports nothing (kill.html). */
 	CHECK(kill(pid, SIGCONT) == 0);
+	CHECK(job_sig_count == 2);
 	CHECK(waitpid(pid, &status, WCONTINUED | WNOHANG) == 0);
 
+	CHECK(sigaction(SIGCHLD, &oldsa, NULL) == 0);
 	CHECK(kill(pid, SIGKILL) == 0);
 	CHECK(waitid(P_PID, (id_t)pid, &si, WEXITED) == 0);
 	CHECK(si.si_code == CLD_KILLED);
