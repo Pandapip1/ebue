@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=953 BUG=32 UNIMPL=528 NA=94 FLAKY=3
+# COUNTS PASS=954 BUG=31 UNIMPL=528 NA=94 FLAKY=3
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
@@ -151,7 +151,7 @@ kill/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 kill/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 2-2.c:58, reached unconditionally after a kill(999999, 0) ESRCH check that is itself timing-independent, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
 kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	structural UNRESOLVED, not load noise: the case returns PTS_UNRESOLVED from its own setuid(1) privilege-drop guard at 3-1.c:26, its first statement, before any test work runs, and setuid() now refuses every id but this platform's single identity, so it cannot resolve on any box, quiet or loaded. A PASS or FAIL here means setuid() stopped refusing: re-adjudicate this row, do not retry it
 killpg/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
-killpg/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	sigignore() and pthread_sigmask() implementation made the case build; measured with the repository's patched Wine build (wine-11.16-3-gb0e948b98, including RtlCloneUserProcess) and it runs to "Child did not exit normally" / FAIL: after the child calls setpgrp(), killpg(child_pgid, SIGUSR1) does not drive the child's installed handler to _exit(1)
+killpg/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	getpgid observes a child's setpgrp transition and killpg routes SIGUSR1 through cross-process delivery
 killpg/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once kill()'s self-fast-path also recognises pid==getpgrp(): killpg(getpgrp(), sig) is kill(getpgrp(), sig), and getpgrp() is neither 0 nor getpid() by design (src/unistd/ids.c's sentinel-1), so it fell through to the cross-process branch and tried to NtOpenProcess a pid that names no real process. Fixed in src/signal/signal.c
 killpg/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNRESOLVED
 killpg/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-

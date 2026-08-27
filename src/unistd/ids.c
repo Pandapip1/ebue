@@ -39,15 +39,15 @@
  * the calling process to the process ID of the calling process") is the
  * entire call, and it did not happen.
  *
- * So the two ids live in statics below.  NT has no process-group or
- * session object to hang them on -- a console process group
+ * So this process's two ids live in statics below.  NT has no POSIX
+ * process-group or session object to hang them on -- a console process group
  * (CREATE_NEW_PROCESS_GROUP) is the nearest thing and cannot be joined;
  * src/process/posix_spawn.c's banner has that argument in full -- so
- * this is per-process bookkeeping and nothing more.  It is also exactly
- * as much of the model as a process can observe about *itself*, which
- * is all these six calls specify once there is no second process to
- * name (the clauses that do need one stay N/A; test/posix-unistd-ids.c
- * records which).
+ * this is primarily per-process bookkeeping.  A process that becomes its
+ * own group leader additionally publishes a named event keyed by its pid.
+ * That single cross-process bit lets getpgid(child) and killpg(child_pgid)
+ * observe the transition without pretending NT can enumerate or join
+ * arbitrary POSIX groups.
  *
  * The initial value, 1, is load-bearing twice over.  POSIX starts a
  * process in the group and session of whoever started it, so it is not
@@ -56,13 +56,11 @@
  * number no process can answer getpid() with -- NT process ids are
  * multiples of four (0 is the idle process, 4 is System) -- so that
  * comparison is false at startup for every process by construction
- * rather than by luck.  Reading 1 back as one *shared* group would be
- * the wrong reading: nothing here can name another process's group --
- * getpgid()/getsid() validate their pid (pid_exists() below answers the
- * [ESRCH] both pages make a shall-fail) but have no per-pid group to
- * report once it exists, so what comes back is always this process's
- * own.  1 therefore means "the group this process was born into, whose
- * other members this library cannot see".
+ * rather than by luck.  1 means "the group this process was born into,
+ * whose membership this library cannot enumerate".  getpgid() returns
+ * that inherited value for another live process unless its named event
+ * says it has since become a group leader, in which case its pid is the
+ * group id.
  *
  * fork() needs no fixup for any of this and gets it right for free: the
  * clone carries these statics over with the rest of the address space
@@ -73,9 +71,8 @@
  * moment its own pid differs.  __spawn (src/process/spawn.c) cannot do
  * the same: the child is a fresh image with fresh statics, so it starts
  * in the born-into group rather than the caller's.  That divergence
- * from exec.html's inheritance rule is left standing deliberately --
- * closing it means widening the RuntimeData block crt1 reads back, for
- * a value no call in this library can report about another process. */
+ * from exec.html's inheritance rule remains; closing it means widening
+ * the RuntimeData block crt1 reads back. */
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -403,9 +400,68 @@ int getgroups(int n, gid_t *g)
 	return held;
 }
 /* The group and session this process is in; see the banner for why they
- * start at 1 and why a plain static is the whole of the model. */
+ * start at 1 and how group-leader transitions are published. */
 static pid_t pgid = 1;
 static pid_t sid = 1;
+static HANDLE pgid_event;
+static pid_t pgid_event_owner;
+
+/* A process which becomes its own group leader publishes that one bit of
+ * cross-process state as a named event.  NT has no query for POSIX pgids,
+ * but this is enough to distinguish the transition setpgrp()/setsid()
+ * make in another process without inventing a central process registry. */
+static void pgid_event_name(pid_t pid, WCHAR name[48], UNICODE_STRING *us)
+{
+	static const char prefix[] = "\\BaseNamedObjects\\ntlibc-pgrp.";
+	unsigned upid = (unsigned)pid;
+	int i = 0, n;
+
+	for (; prefix[i]; i++) name[i] = (unsigned char)prefix[i];
+	for (n = 8; n > 0;) {
+		n--;
+		name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15];
+	}
+	name[i] = 0;
+	us->Buffer = name;
+	us->Length = (USHORT)(i * sizeof(WCHAR));
+	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
+}
+
+static void publish_own_process_group(void)
+{
+	OBJECT_ATTRIBUTES oa;
+	UNICODE_STRING us;
+	WCHAR name[48];
+	HANDLE h;
+
+	if (pgid_event && pgid_event_owner == getpid()) return;
+	/* fork() copies the handle value in memory, but this private event is
+	 * not inheritable.  A different owner means the value is stale. */
+	pgid_event = 0;
+	pgid_event_name(getpid(), name, &us);
+	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
+	if (NT_SUCCESS(NtCreateEvent(&h, EVENT_ALL_ACCESS, &oa,
+	                             NotificationEvent, FALSE))) {
+		pgid_event = h;
+		pgid_event_owner = getpid();
+	}
+}
+
+static int is_process_group_leader(pid_t pid)
+{
+	OBJECT_ATTRIBUTES oa;
+	UNICODE_STRING us;
+	WCHAR name[48];
+	HANDLE h;
+	NTSTATUS st;
+
+	pgid_event_name(pid, name, &us);
+	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
+	st = NtCreateEvent(&h, EVENT_ALL_ACCESS, &oa, NotificationEvent, FALSE);
+	if (!NT_SUCCESS(st)) return 0;
+	NtClose(h);
+	return st == STATUS_OBJECT_NAME_EXISTS;
+}
 
 pid_t getpgrp(void) { return pgid; }
 
@@ -414,8 +470,9 @@ pid_t getpgrp(void) { return pgid; }
  * process with a process ID equal to pid" a *shall*-fail, and that
  * clause is about the existence of a process rather than about
  * sessions: it binds this per-process implementation exactly as much as
- * any other.  The two getters below can only report this process's own
- * group and session, but they do so only for a pid that names something.
+ * any other.  getsid() can only report this process's own session;
+ * getpgid() can additionally recognize another process's published
+ * group-leader transition.  Both first require a pid that exists.
  *
  * Existence is decided the way kill() and getpriority() already decide
  * it (src/signal/signal.c, src/misc/resource.c), in three steps:
@@ -472,6 +529,7 @@ static int pid_exists(pid_t p)
 pid_t getpgid(pid_t p)
 {
 	if (!pid_exists(p)) { errno = ESRCH; return -1; }
+	if (p != 0 && p != getpid() && is_process_group_leader(p)) return p;
 	return pgid;
 }
 /* setpgid()'s [ESRCH] asks a *narrower* question than pid_exists()
@@ -548,7 +606,10 @@ int setpgid(pid_t pid, pid_t group)
 pid_t setpgrp(void)
 {
 	pid_t self = getpid();
-	if (sid != self) pgid = self;
+	if (sid != self) {
+		pgid = self;
+		publish_own_process_group();
+	}
 	return pgid;
 }
 
@@ -576,6 +637,7 @@ pid_t setsid(void)
 	pid_t self = getpid();
 	if (pgid == self) { errno = EPERM; return -1; }
 	sid = pgid = self;
+	publish_own_process_group();
 	return pgid;
 }
 

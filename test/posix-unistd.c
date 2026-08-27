@@ -694,10 +694,10 @@ static void test_kill_neg1_reaches_self(void)
 
 /* kill.html DESCRIPTION: "If pid is 0 ... sig shall be sent to all
  * processes ... whose process group ID is equal to the process group
- * ID of the sender" -- a process group here is per-process bookkeeping
- * with no registry behind it (src/unistd/ids.c's banner: no call can
- * name another process's group), so the sender is the only member of
- * its own group this platform can enumerate, per the ledger's kill
+ * ID of the sender" -- process-group membership has no enumerable
+ * registry here (src/unistd/ids.c only publishes the narrower fact that
+ * a process became its own group leader), so the sender is the only
+ * member of its own group this platform can enumerate, per the ledger's kill
  * pid==0/pid<-1 N/A note.  "All processes in the sender's group"
  * therefore reduces exactly to "the sender", and
  * src/signal/signal.c's kill() implements precisely that: "pid ==
