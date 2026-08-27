@@ -139,6 +139,13 @@ static ULONG NTAPI timer_manager(PVOID unused)
 
 static int start_manager(void)
 {
+#ifdef _NTLIBC_NATIVE_BUILD
+	/* The native sanitizer shim has no NT thread or signal-delivery
+	 * transport.  SIGEV_NONE timers need neither: their remaining time
+	 * is derived from the selected clock whenever it is queried. */
+	errno = EAGAIN;
+	return -1;
+#else
 	HANDLE thread;
 	NTSTATUS st;
 	if (manager_started) return 0;
@@ -148,6 +155,7 @@ static int start_manager(void)
 	manager_started = 1;
 	NtClose(thread);
 	return 0;
+#endif
 }
 
 int timer_create(clockid_t clock, struct sigevent *event, timer_t *id)
@@ -167,7 +175,8 @@ int timer_create(clockid_t clock, struct sigevent *event, timer_t *id)
 	for (i = 0; i < TIMER_MAX; i++)
 		if (!timers[i].active) { timer = &timers[i]; break; }
 	if (!timer) { __sig_unlock(); errno = EAGAIN; return -1; }
-	if (start_manager() < 0) { __sig_unlock(); return -1; }
+	if ((!event || event->sigev_notify == SIGEV_SIGNAL) &&
+	    start_manager() < 0) { __sig_unlock(); return -1; }
 	memset(timer, 0, sizeof *timer);
 	timer->active = 1;
 	timer->clock = clock;
