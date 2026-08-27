@@ -727,6 +727,13 @@ static void test_wordexp_tilde_and_param(void)
 	      strcmp(we.we_wordv[3], "xax") == 0);
 	wordfree(&we);
 	CHECK(wordexp("${WORDEXP_NEVER_SET:?required}", &we, 0) == WRDE_SYNTAX);
+	CHECK(wordexp("${WORDEXP_NEVER_SET-x }#${WORDEXP_NEVER_SET-y}", &we, 0) == 0);
+	CHECK(we.we_wordc == 2 && strcmp(we.we_wordv[0], "x") == 0 &&
+	      strcmp(we.we_wordv[1], "#y") == 0);
+	wordfree(&we);
+	CHECK(wordexp("\"${WORDEXP_NEVER_SET-~}\"", &we, 0) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "~") == 0);
+	wordfree(&we);
 	unsetenv("WORDEXP_SET");
 	unsetenv("WORDEXP_UNSET");
 	unsetenv("WORDEXP_TRIM");

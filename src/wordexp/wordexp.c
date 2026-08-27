@@ -246,19 +246,25 @@ static const char *param_word_end(const char *p)
  * the first IFS byte, as shell "$*" is; the caller performs the final
  * field splitting when the outer expansion is unquoted. */
 static int expand_param_word(const char *start, const char *end, int flags,
-                             int sh, struct assign_ctx *ctx, char **result)
+                             int sh, int quoted, struct assign_ctx *ctx,
+                             char **result)
 {
 	wordexp_t we;
 	char *text, *s;
 	const char *ifs;
-	size_t i, n = 0;
+	size_t i, n = 0, input_len = (size_t)(end - start), prefix = 0;
 	int rc;
 
 	*result = 0;
-	text = __malloc((size_t)(end - start) + 1);
+	/* Tilde expansion is suppressed by surrounding double-quotes.  The
+	 * recursive scanner cannot otherwise see those outer quotes, so
+	 * protect a leading tilde exactly as an input backslash would. */
+	if (quoted && input_len && *start == '~') prefix = 1;
+	text = __malloc(input_len + prefix + 1);
 	if (!text) return WRDE_NOSPACE;
-	memcpy(text, start, (size_t)(end - start));
-	text[end - start] = 0;
+	if (prefix) text[0] = '\\';
+	memcpy(text + prefix, start, input_len);
+	text[input_len + prefix] = 0;
 	memset(&we, 0, sizeof we);
 	rc = expand_impl(text, &we, flags & (WRDE_NOCMD | WRDE_SHOWERR | WRDE_UNDEF), sh, ctx);
 	__free(text);
@@ -268,6 +274,10 @@ static int expand_param_word(const char *start, const char *end, int flags,
 	if (!ifs) ifs = " ";
 	for (i = 0; i < we.we_wordc; i++) n += strlen(we.we_wordv[i]);
 	if (we.we_wordc > 1 && *ifs) n += we.we_wordc - 1;
+	/* A trailing unquoted IFS byte is a field terminator even though it
+	 * contributes no field of its own.  Preserve one so the caller's
+	 * final split does not concatenate following literal text. */
+	if (!quoted && input_len && is_split_char(end[-1])) n++;
 	s = __malloc(n + 1);
 	if (!s) { wordfree(&we); return WRDE_NOSPACE; }
 	n = 0;
@@ -277,6 +287,7 @@ static int expand_param_word(const char *start, const char *end, int flags,
 		memcpy(s + n, we.we_wordv[i], z);
 		n += z;
 	}
+	if (!quoted && input_len && is_split_char(end[-1])) s[n++] = end[-1];
 	s[n] = 0;
 	wordfree(&we);
 	*result = s;
@@ -468,7 +479,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 			if (op == '+') return 0;
 			return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
 		}
-		rc = expand_param_word(word, end, flags, sh, ctx, &replacement);
+		rc = expand_param_word(word, end, flags, sh, quoted, ctx, &replacement);
 		if (rc) return rc;
 		if (op == '?') {
 			if (flags & WRDE_SHOWERR) {
