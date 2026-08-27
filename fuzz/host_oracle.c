@@ -122,7 +122,7 @@ unsigned long long host_strtoull(const char *s, size_t *endoff, int base, int *e
 }
 
 /* The printf harness's oracle: glibc's snprintf, one argument at a time. */
-/* inet_pton(AF_INET), the host's.  A differential oracle is only worth
+/* inet_pton(AF_INET/AF_INET6), the host's.  A differential oracle is only worth
  * having where the two implementations are answering the same question,
  * and here they are: inet_pton.html specifies the strict dotted-quad
  * grammar with no short forms and no octal or hex parts, and glibc and
@@ -140,6 +140,13 @@ int host_inet_pton4(const char *s, unsigned char out[4])
 	static inet_pton_fn f;
 	if (!f) f = (inet_pton_fn)sym("inet_pton");
 	return f(2 /* AF_INET, and it is 2 on both sides */, s, out);
+}
+
+int host_inet_pton6(const char *s, unsigned char out[16])
+{
+	static inet_pton_fn f;
+	if (!f) f = (inet_pton_fn)sym("inet_pton");
+	return f(10 /* Linux AF_INET6; ntlibc's Windows value is 23 */, s, out);
 }
 
 /* The time harness's oracle: glibc's timegm() and gmtime_r().
