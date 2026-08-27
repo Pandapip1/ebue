@@ -50,6 +50,7 @@ ssize_t pread(int fd, void *buf, size_t count, off_t off)
 	if (!f) return -1;
 	if ((f->flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -1; }
 	if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }
+	if (off < 0) { errno = EINVAL; return -1; }
 	if (count > 0x7fffffff) count = 0x7fffffff;
 	/* NT moves a synchronous handle's position to the end of a positioned
 	 * transfer; POSIX says it must not move.  See src/internal/fdpos.c. */

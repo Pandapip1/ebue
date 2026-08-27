@@ -9,7 +9,23 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
 #include "libc.h"
+
+static int final_component_is_dot(const char *path)
+{
+	const char *start, *end;
+	size_t n;
+
+	if (!path) return 0;
+	end = path + strlen(path);
+	while (end > path && (end[-1] == '/' || end[-1] == '\\')) end--;
+	start = end;
+	while (start > path && start[-1] != '/' && start[-1] != '\\') start--;
+	n = (size_t)(end - start);
+	return (n == 1 && start[0] == '.') ||
+	       (n == 2 && start[0] == '.' && start[1] == '.');
+}
 
 int __unlink_at(int dirfd, const char *path, int isdir)
 {
@@ -21,6 +37,7 @@ int __unlink_at(int dirfd, const char *path, int isdir)
 	FILE_DISPOSITION_INFORMATION d;
 	FILE_BASIC_INFORMATION bi;
 
+	if (isdir && final_component_is_dot(path)) { errno = EINVAL; return -1; }
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	st = NtOpenFile(&h, DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT |

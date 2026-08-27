@@ -164,7 +164,7 @@ static void test_read_write(void)
 }
 
 /* ---- lseek: lseek.html ---- */
-#if NTLIBC_TEST(BUG, posix_io_pread_pwrite_negative_offset) /* BUG: pread()/pwrite() accept a negative offset, and transfer at
+#if NTLIBC_TEST(PASS, posix_io_pread_pwrite_negative_offset) /* pread()/pwrite() reject a negative offset.
 	 * the current file position instead.  read.html ERRORS, shall fail:
 	 * "The pread() function shall fail if: [EINVAL] The file offset is
 	 * negative."  write.html carries the identical clause for pwrite().
@@ -262,7 +262,7 @@ static void test_lseek(void)
 	unlink("t-ls.txt");
 }
 
-#if NTLIBC_TEST(BUG, posix_io_lseek_eoverflow) /* BUG: lseek() has no [EOVERFLOW] arm, and reaches [EINVAL]
+#if NTLIBC_TEST(PASS, posix_io_lseek_eoverflow) /* lseek() reports [EOVERFLOW] separately from [EINVAL].
 	 * through signed overflow instead.  lseek.html ERRORS, shall fail:
 	 * "[EOVERFLOW] The resulting file offset would be a value which
 	 * cannot be represented correctly in an object of type off_t."
@@ -402,7 +402,7 @@ static void test_fs(void)
  * drive root.  Every individual component stays within {NAME_MAX}
  * (255), so this is a statement about path length only and does not
  * quietly re-test the component limit. */
-#if NTLIBC_TEST(BUG, posix_io_rmdir_rejects_dot) /* BUG: rmdir("d/.") deletes d.  rmdir.html DESCRIPTION: "If the
+#if NTLIBC_TEST(PASS, posix_io_rmdir_rejects_dot) /* rmdir() rejects final dot and dot-dot components.  rmdir.html DESCRIPTION: "If the
 	 * path argument refers to a path whose final component is either
 	 * dot or dot-dot, rmdir() shall fail."  ERRORS, shall fail:
 	 * "[EINVAL] The path argument contains a last component that is

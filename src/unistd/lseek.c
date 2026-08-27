@@ -31,6 +31,7 @@ off_t lseek(int fd, off_t off, int whence)
 		break;
 	default: errno = EINVAL; return -1;
 	}
+	if (off > 0 && base > __OFF_MAX - off) { errno = EOVERFLOW; return -1; }
 	if (base + off < 0) { errno = EINVAL; return -1; }
 	pi.CurrentByteOffset = base + off;
 	st = NtSetInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation);
