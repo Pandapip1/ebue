@@ -46,8 +46,9 @@ char *initstate(unsigned s, char *state, size_t size)
 {
 	char *old;
 	ensure_init();
-	old = (char *)(x - 1);
 	if (size < 8) return 0;
+	x[-1] = (uint32_t)((n << 16) | ((unsigned)i << 8) | (unsigned)j);
+	old = (char *)(x - 1);
 	if (size < 32) n = 0;
 	else if (size < 64) n = 7;
 	else if (size < 128) n = 15;
@@ -87,4 +88,3 @@ __wraps long random(void)
 	if (++j == n) j = 0;
 	return (long)k;
 }
-

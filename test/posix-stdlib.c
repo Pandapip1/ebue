@@ -259,6 +259,7 @@ static void test_random_state(void)
 {
 	static char st8[8], st16[16], st32[32], st64[64], st128[128], st256[256];
 	char *old;
+	long expected;
 
 	/* "If size bytes are not available to be used by the state array
 	 * ... the initstate() function shall fail and return a null
@@ -297,6 +298,18 @@ static void test_random_state(void)
 	CHECK(random() >= 0);
 	old = setstate(st256);
 	CHECK(old == st128);
+
+	/* initstate() must preserve the current generator metadata as well as
+	 * return its storage, so setstate() resumes that exact stream. */
+	srandom(123);
+	random();
+	expected = random();
+	srandom(123);
+	random();
+	old = initstate(456, st128, sizeof st128);
+	random();
+	CHECK(setstate(old) == st128);
+	CHECK(random() == expected);
 
 	/* srandom(1) reproducibility already covered by test/stdlib.c;
 	 * here just confirm switching back to the default (128-byte)
