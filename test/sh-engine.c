@@ -3032,15 +3032,10 @@ static void test_at_and_star_fields(const char *self)
 	CHECK(__sh_params_replace(args, 0) == 0);
 }
 
-/* The braced spellings this shell does *not* implement must not be
- * mistaken for the ones it does.  ${#NAME} is string length, a
- * different expansion from ${#}; ${@...} and ${*...} are the
- * ${parameter:-word} family, not ${@}.  sh/main.c refuses all three up
- * front, so the *binary* can never reach them -- which is exactly why
- * they are asserted here instead: test/sh-engine.c drives the engine
- * with no preflight in the way, and a refusal that hides a wrong
- * expansion is a fence, not a test. */
-static void test_unimplemented_brace_forms_do_not_expand(void)
+/* Braced spellings must not be mistaken for the special parameters they
+ * begin with.  ${#NAME} is string length, not ${#}; ${@...} and
+ * ${*...} are parameter-operator forms, not ${@} and ${*}. */
+static void test_brace_form_disambiguation(void)
 {
 	char *args[3];
 	int status;
@@ -3048,10 +3043,13 @@ static void test_unimplemented_brace_forms_do_not_expand(void)
 	args[0] = (char *)"a"; args[1] = (char *)"b"; args[2] = (char *)"c";
 	CHECK(__sh_params_replace(args, 3) == 0);
 
-	/* Not the parameter count: with three parameters set, a ${#x} that
-	 * expanded like ${#} would compare equal to 3. */
-	CHECK(run("test \"${#x}\" = 3", &status) == 0 && status == 1);
-	CHECK(run("test \"${#x}\" = '${#x}'", &status) == 0 && status == 0);
+	/* Not the parameter count: with three parameters set, an unset x has
+	 * length zero.  Also exercise a nonempty value. */
+	unsetenv("x");
+	CHECK(run("test \"${#x}\" = 0", &status) == 0 && status == 0);
+	CHECK(setenv("x", "four", 1) == 0);
+	CHECK(run("test \"${#x}\" = 4", &status) == 0 && status == 0);
+	unsetenv("x");
 
 	/* Not "$@": a ${@x} that expanded like ${@} would start with "a". */
 	CHECK(run("test \"${@x}\" = '${@x}'", &status) == 0 && status == 0);
@@ -4243,7 +4241,7 @@ int main(int argc, char **argv)
 	test_positional_single_and_multi_digit();
 	test_positional_count_and_zero();
 	test_at_and_star_fields(argv[0]);
-	test_unimplemented_brace_forms_do_not_expand();
+	test_brace_form_disambiguation();
 	test_empty_field_deletion(argv[0]);
 	test_builtin_set(argv[0]);
 	test_builtin_shift();
