@@ -550,17 +550,35 @@ static void test_setjmp(void)
 	}
 	CHECK(v == 42);
 
-	/* sigsetjmp/siglongjmp: same value contract as plain setjmp/longjmp
-	 * (setjmp.html covers both under one DESCRIPTION; ntlibc has no
-	 * real signal mask to save/restore -- see the setjmp.S files under
-	 * src/setjmp -- so the savemask argument is exercised but not
-	 * itself checked for an observable effect). */
+	/* sigsetjmp/siglongjmp: same value contract as plain setjmp/longjmp. */
 	r = sigsetjmp(sjb, 1);
 	if (r == 0) siglongjmp(sjb, 7);
 	CHECK(r == 7);
 	r = sigsetjmp(sjb, 0);
 	if (r == 0) siglongjmp(sjb, 0);
 	CHECK(r == 1);
+	{
+		sigset_t one, cur;
+		sigemptyset(&one);
+		sigaddset(&one, SIGUSR1);
+		CHECK(sigprocmask(SIG_UNBLOCK, &one, NULL) == 0);
+		r = sigsetjmp(sjb, 1);
+		if (r == 0) {
+			CHECK(sigprocmask(SIG_BLOCK, &one, NULL) == 0);
+			siglongjmp(sjb, 1);
+		}
+		CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+		CHECK(sigismember(&cur, SIGUSR1) == 0);
+
+		r = sigsetjmp(sjb, 0);
+		if (r == 0) {
+			CHECK(sigprocmask(SIG_BLOCK, &one, NULL) == 0);
+			siglongjmp(sjb, 1);
+		}
+		CHECK(sigprocmask(SIG_BLOCK, NULL, &cur) == 0);
+		CHECK(sigismember(&cur, SIGUSR1) == 1);
+		CHECK(sigprocmask(SIG_UNBLOCK, &one, NULL) == 0);
+	}
 
 	/* _setjmp/_longjmp (XSI, obsolescent).
 	 * https://pubs.opengroup.org/onlinepubs/9699919799/functions/_longjmp.html
@@ -573,12 +591,8 @@ static void test_setjmp(void)
 	 * src/setjmp/{i386,x86_64}/setjmp.S and longjmp.S both export the
 	 * underscored names as aliases of the plain ones.
 	 *
-	 * The mask-restriction clause is N/A here for the same reason
-	 * sigsetjmp()'s savemask is just above: nothing in
-	 * src/setjmp (either arch) saves or restores a signal mask at all, so
-	 * "does not manipulate the mask" is trivially and unobservably true
-	 * -- there is no manipulation anywhere to be absent.  What is
-	 * observable is the value contract, asserted the same way. */
+	 * Unlike sigsetjmp()/siglongjmp() above, these entry points do not
+	 * save or restore the signal mask. */
 	for (i = 1; i <= 5; i++) {
 		r = _setjmp(jb);
 		if (r == 0) _longjmp(jb, i);
@@ -588,8 +602,7 @@ static void test_setjmp(void)
 	if (r == 0) _longjmp(jb, 0);
 	CHECK(r == 1);
 
-	/* the mask really is untouched across the pair (vacuously so, per
-	 * the N/A above, but a regression net if a mask is ever added) */
+	/* The mask really is untouched across the pair. */
 	{
 		sigset_t before, after;
 		sigemptyset(&before);

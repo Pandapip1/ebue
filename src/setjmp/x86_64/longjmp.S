@@ -4,7 +4,7 @@
  * longjmp for x86_64 Windows: restore what setjmp saved (see setjmp.S
  * for the layout) and resume at the saved rip with the saved rsp, making
  * the setjmp call appear to return val, or 1 if val is 0.  env in %rcx,
- * val in %rdx.  siglongjmp is identical because sigsetjmp saves no mask.
+ * val in %rdx.  siglongjmp first restores a mask saved by sigsetjmp.
  */
 
 #ifdef __leading_underscore
@@ -15,9 +15,18 @@
 
 .text
 .globl _(longjmp), _(_longjmp), _(siglongjmp)
+_(siglongjmp):
+	sub	$56,%rsp
+	mov	%rcx,32(%rsp)
+	mov	%rdx,40(%rsp)
+	call	_(__siglongjmp_restore)
+	mov	32(%rsp),%rcx
+	mov	40(%rsp),%rdx
+	add	$56,%rsp
+	jmp	1f
 _(longjmp):
 _(_longjmp):
-_(siglongjmp):
+1:
 	mov	(%rcx),%rbx
 	mov	8(%rcx),%rbp
 	mov	16(%rcx),%rsi
@@ -47,6 +56,6 @@ _(siglongjmp):
 	mov	64(%rcx),%rsp
 	mov	%edx,%eax
 	test	%eax,%eax
-	jnz	1f
+	jnz	2f
 	inc	%eax			/* longjmp(env, 0) returns 1 */
-1:	jmp	*72(%rcx)
+2:	jmp	*72(%rcx)

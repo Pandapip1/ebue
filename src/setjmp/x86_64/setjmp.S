@@ -9,9 +9,9 @@
  * used throughout.  tcc's assembler does not know xmm8-xmm15, so those
  * movups instructions are emitted as raw bytes (44 0f 11/10 modrm disp32).
  *
- * sigsetjmp saves no signal mask (there is none to save on NT), so all
- * three entry points share one body.  env arrives in %rcx, and for
- * sigsetjmp the (ignored) savemask in %rdx.
+ * sigsetjmp first asks the C helper to save the emulated POSIX signal
+ * mask, then joins the register-saving body.  env arrives in %rcx and
+ * savemask in %rdx.
  */
 
 #ifdef __leading_underscore
@@ -22,9 +22,16 @@
 
 .text
 .globl _(setjmp), _(_setjmp), _(sigsetjmp)
+_(sigsetjmp):
+	sub	$40,%rsp
+	mov	%rcx,32(%rsp)
+	call	_(__sigsetjmp_save)
+	mov	32(%rsp),%rcx
+	add	$40,%rsp
+	jmp	1f
 _(setjmp):
 _(_setjmp):
-_(sigsetjmp):
+1:
 	mov	%rbx,(%rcx)
 	mov	%rbp,8(%rcx)
 	mov	%rsi,16(%rcx)

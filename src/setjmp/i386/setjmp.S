@@ -3,9 +3,8 @@
  *
  * setjmp for i386 Windows (cdecl).  jmp_buf.__jb holds ebx, esi, edi,
  * ebp, esp, eip in that order; esp is saved as it will be after our ret
- * (argument still in place, return address popped).  sigsetjmp saves no
- * signal mask, so all three entry points share one body; sigsetjmp's
- * extra argument is simply ignored.
+ * (argument still in place, return address popped).  sigsetjmp first
+ * asks the C helper to save the emulated POSIX signal mask.
  */
 
 #ifdef __leading_underscore
@@ -16,9 +15,17 @@
 
 .text
 .globl _(setjmp), _(_setjmp), _(sigsetjmp)
+_(sigsetjmp):
+	mov	4(%esp),%eax		/* env */
+	mov	8(%esp),%ecx		/* savemask */
+	push	%ecx
+	push	%eax
+	call	_(__sigsetjmp_save)
+	add	$8,%esp
+	jmp	1f
 _(setjmp):
 _(_setjmp):
-_(sigsetjmp):
+1:
 	mov	4(%esp),%eax		/* env */
 	mov	%ebx,(%eax)
 	mov	%esi,4(%eax)
