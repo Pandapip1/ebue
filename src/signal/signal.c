@@ -670,6 +670,22 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 	return 0;
 }
 
+/* pthread_sigmask.html gives this the same mask operation as
+ * sigprocmask(), but pthread interfaces return the error number directly
+ * and do not report it through errno.  There is one process-wide mask while
+ * ntlibc has only its initial thread; keeping the wrapper here makes that
+ * contract usable now and leaves the storage boundary obvious when real
+ * per-thread masks arrive. */
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)
+{
+	int saved = errno;
+	int result = sigprocmask(how, set, old);
+	int error = errno;
+
+	errno = saved;
+	return result == 0 ? 0 : error;
+}
+
 int sigpending(sigset_t *s) { __sig_lock(); *s = pending; __sig_unlock(); return 0; }
 int sigsuspend(const sigset_t *s) { (void)s; errno = EINTR; return -1; }
 /* sigwait.html DESCRIPTION: "shall select a pending signal from set,
@@ -822,6 +838,22 @@ int sigaltstack(const stack_t *ss, stack_t *old)
 
 int __libc_current_sigrtmin(void) { return 35; }
 int __libc_current_sigrtmax(void) { return _NSIG - 1; }
+
+/* sigignore.html is the disposition-only half of sigset(sig, SIG_IGN):
+ * it makes sig ignored without changing whether it is blocked.  Keeping
+ * this as sigaction(), rather than spelling it as signal(), also makes the
+ * POSIX requirement explicit: SIGKILL, SIGSTOP and invalid signal numbers
+ * fail with EINVAL through the same validation used by every other
+ * disposition-setting interface. */
+int sigignore(int sig)
+{
+	struct sigaction act;
+
+	memset(&act, 0, sizeof act);
+	act.sa_handler = SIG_IGN;
+	return sigaction(sig, &act, 0);
+}
+
 /* sigaddset() is the only place these two ever look at sig, so its
  * failure is the whole of sigset.html's "[EINVAL] The sig argument is an
  * illegal signal number" for them: dropping it does not degrade to a

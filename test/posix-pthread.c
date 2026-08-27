@@ -803,19 +803,14 @@ static void test_pthread_getcpuclockid(void)
 
 /* ==================================================================
  * Per-thread signal interfaces.  POSIX declares both in <signal.h>, not
- * <pthread.h>, and ntlibc HAS <signal.h> -- so these two do not fail
- * the same way as everything above, and the difference was measured
- * rather than assumed.  pthread_sigmask() gets through the compiler on
- * an implicit declaration (this tcc warns rather than errors) and dies
- * at "unresolved reference to 'pthread_sigmask'"; pthread_kill()'s
- * fence needs pthread_self() for a thread ID, so it still stops at the
- * missing <pthread.h>.  Both are absences, so both are UNIMPL, and
- * --pedantic agrees: failing to produce the probe binary is what it
- * measures, and a link failure is that as much as a compile error is.
+ * <pthread.h>.  pthread_sigmask() is implemented over the one mask the
+ * single-threaded runtime has today; pthread_kill() still needs
+ * pthread_self() for a thread ID and therefore stops at the missing
+ * <pthread.h>.
  * .../functions/pthread_kill.html, pthread_sigmask.html
  * ================================================================== */
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_sigmask_roundtrip)
+#if NTLIBC_TEST(PASS, posix_pthread_sigmask_roundtrip)
 #include <signal.h>
 
 static void test_pthread_sigmask_roundtrip(void)

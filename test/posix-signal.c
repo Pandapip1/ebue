@@ -1510,6 +1510,30 @@ static void test_sigset(void)
 	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
 }
 
+static void test_sigignore(void)
+{
+	struct sigaction act;
+	sigset_t before, after;
+
+	/* sigignore.html: install SIG_IGN and leave the signal mask alone. */
+	sigemptyset(&before);
+	sigaddset(&before, SIGUSR1);
+	CHECK(sigprocmask(SIG_BLOCK, &before, 0) == 0);
+	CHECK(sigignore(SIGUSR1) == 0);
+	CHECK(sigaction(SIGUSR1, 0, &act) == 0);
+	CHECK(act.sa_handler == SIG_IGN);
+	CHECK(sigprocmask(SIG_SETMASK, 0, &after) == 0);
+	CHECK(sigismember(&after, SIGUSR1) == 1);
+	CHECK(sigprocmask(SIG_UNBLOCK, &before, 0) == 0);
+
+	errno = 0;
+	CHECK(sigignore(-1) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(sigignore(SIGKILL) == -1 && errno == EINVAL);
+	errno = 0;
+	CHECK(sigignore(SIGSTOP) == -1 && errno == EINVAL);
+}
+
 static void test_sigpause(void)
 {
 	/* "whereupon it shall return -1 and set errno to [EINTR]".  See the
@@ -1798,6 +1822,7 @@ int main(int argc, char **argv)
 	test_sigaltstack_disabled();
 	test_sighold_sigrelse();
 	test_sigset();
+	test_sigignore();
 	test_sigpause();
 	test_siginterrupt();
 	test_signal_si_code_constants();

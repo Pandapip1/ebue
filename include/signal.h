@@ -268,6 +268,7 @@ int sigsuspend(const sigset_t *);
 int sigaction(int, const struct sigaction *__restrict, struct sigaction *__restrict);
 int sigpending(sigset_t *);
 int sigwait(const sigset_t *__restrict, int *__restrict);
+int pthread_sigmask(int, const sigset_t *__restrict, sigset_t *__restrict);
 int sigwaitinfo(const sigset_t *__restrict, siginfo_t *__restrict);  /* undefined-ok:
 	src/signal/signal.c's sigwait() is already a permanent stub
 	(errno = EINVAL) for the same reason this would be -- there is no
@@ -302,6 +303,7 @@ typedef void (*sig_t)(int);
 int killpg(pid_t, int);
 int sigpause(int);
 int siginterrupt(int, int);
+int sigignore(int);
 int sighold(int);
 int sigrelse(int);
 void (*sigset(int, void (*)(int)))(int);
