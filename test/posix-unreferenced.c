@@ -2229,6 +2229,9 @@ int main(void)
 	test_renameat_enotdir_dir_over_file();
 	test_renameat_new_relative_to_dirfd();
 	test_renameat_empty_at_dirfd();
+#if NTLIBC_TEST(PASS, posix_unreferenced_renameat_einval) /* see the definition fence above */
+	test_renameat_einval();
+#endif
 	test_fchmodat_success();
 	test_fchmodat_errors();
 	test_fchmodat_empty();
