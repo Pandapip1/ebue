@@ -710,19 +710,28 @@ static int expand_dollar_single(const char **pp, struct fbuf *b)
  * as an arithmetic expansion" -- arithmetic wins whenever the text
  * parses as one, which is exactly what wordexp.c's caller already
  * guarantees by only reaching here when p[1]/p[2] are both '('. */
-static int expand_arith(const char **pp, struct fbuf *b, int flags)
+static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
+                        struct assign_ctx *ctx)
 {
 	const char *p = *pp + 3;
 	const char *start = p;
 	const char *end;
 	int depth = 0;
 	char *expr;
+	struct fbuf expanded = { 0 };
 	size_t len;
 	long result;
 	int rc;
 
 	for (;;) {
 		if (!*p) return WRDE_SYNTAX;	/* unterminated $(( */
+		if (*p == '\\' && p[1]) { p += 2; continue; }
+		if (p[0] == '$' && p[1] == '{') {
+			const char *close = param_word_end(p + 2);
+			if (!close) return WRDE_SYNTAX;
+			p = close + 1;
+			continue;
+		}
 		if (*p == '(') { depth++; p++; continue; }
 		if (*p == ')') {
 			if (depth > 0) { depth--; p++; continue; }
@@ -738,7 +747,34 @@ static int expand_arith(const char **pp, struct fbuf *b, int flags)
 	memcpy(expr, start, len);
 	expr[len] = 0;
 
-	rc = __wordexp_arith(expr, &result, flags);
+	/* XBD 2.6.4 performs parameter expansion and nested arithmetic
+	 * expansion on the expression before evaluating it. */
+	{
+		const char *s = expr;
+		while (*s) {
+			if (s[0] == '$' && s[1] == '(' && s[2] == '(') {
+				rc = expand_arith(&s, &expanded, flags, sh, ctx);
+				if (rc) goto arithmetic_done;
+				continue;
+			}
+			if (*s == '$') {
+				rc = expand_param(&s, &expanded, flags, sh, 1, ctx);
+				if (rc) goto arithmetic_done;
+				continue;
+			}
+			if (fbuf_push(&expanded, *s++, 1)) {
+				rc = WRDE_NOSPACE;
+				goto arithmetic_done;
+			}
+		}
+		if (fbuf_push(&expanded, 0, 1)) {
+			rc = WRDE_NOSPACE;
+			goto arithmetic_done;
+		}
+	}
+	rc = __wordexp_arith(expanded.data, &result, flags);
+arithmetic_done:
+	fbuf_free(&expanded);
 	__free(expr);
 	if (rc) return rc;
 
@@ -1238,7 +1274,7 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 			}
 			if (c == '$' && p[1] == '(' && p[2] == '(') {
 				active = 1;
-				rc = expand_arith(&p, &field, flags);
+				rc = expand_arith(&p, &field, flags, sh, ctx);
 				if (rc) goto fail;
 				continue;
 			}
@@ -1332,7 +1368,7 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 				continue;
 			}
 			if (c == '$' && p[1] == '(' && p[2] == '(') {
-				rc = expand_arith(&p, &field, flags);
+				rc = expand_arith(&p, &field, flags, sh, ctx);
 				if (rc) goto fail;
 				continue;
 			}

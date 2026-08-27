@@ -913,6 +913,11 @@ static void test_wordexp_arith(void)
 	CHECK(wordexp("$((1+2))", &we, WRDE_NOCMD) == 0);
 	CHECK(strcmp(we.we_wordv[0], "3") == 0);
 	wordfree(&we);
+	unsetenv("WORDEXP_ARITH_DEFAULT");
+	CHECK(wordexp("$((${WORDEXP_ARITH_DEFAULT-2}+$((1+2))))", &we,
+	              WRDE_NOCMD) == 0);
+	CHECK(we.we_wordc == 1 && strcmp(we.we_wordv[0], "5") == 0);
+	wordfree(&we);
 
 	/* quoted: the result is still substituted, just not re-glob-scanned
 	 * (moot for a decimal integer, but the field itself still comes
