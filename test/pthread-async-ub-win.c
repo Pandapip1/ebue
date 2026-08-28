@@ -112,10 +112,20 @@ static void *safe_waiter(void *argument)
 		clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, 0);
 		break;
 	case WAIT_CLOCK_ABSOLUTE:
-		if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0)
+		/* CLOCK_REALTIME, not CLOCK_MONOTONIC: the same absolute
+		 * combination test_pthread_cancel_huge_timeouts (test/
+		 * posix-pthread.c) already exercises and is known safe.
+		 * CLOCK_MONOTONIC+TIMER_ABSTIME takes a different internal
+		 * path (src/time/clock_nanosleep.c's own header explains
+		 * why) that nothing else in the suite exercises for real
+		 * cancellation -- real-Windows CI hung on exactly that
+		 * combination (i386 and the x86_64-kernel32 leg both stuck
+		 * at 120s, x86_64 alone passed), a narrower finding than
+		 * this file exists to pin down and worth its own look. */
+		if (clock_gettime(CLOCK_REALTIME, &deadline) != 0)
 			return (void *)(intptr_t)72;
 		deadline.tv_sec += 30;
-		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, 0);
+		clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &deadline, 0);
 		break;
 	case WAIT_PAUSE:
 		pause();
