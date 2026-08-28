@@ -746,7 +746,13 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 		{
 			int assign = 1, width = -1, lm = LM_NONE, alloc = 0;
 			if (gf(fp, st) == '*') { assign = 0; fp += st; }
-			while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { if (width < 0) width = 0; width = width * 10 + (int)(gf(fp, st) - '0'); fp += st; }
+			while (gf(fp, st) >= '0' && gf(fp, st) <= '9') {
+				int digit = (int)(gf(fp, st) - '0');
+				if (width < 0) width = 0;
+				if (width > (INT_MAX - digit) / 10) width = INT_MAX;
+				else width = width * 10 + digit;
+				fp += st;
+			}
 			/* fscanf.html puts the assignment-allocation character
 			 * 'm' between the field width and the length modifier,
 			 * which is where this loop picks it up; taking it in the

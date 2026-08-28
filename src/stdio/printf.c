@@ -135,6 +135,15 @@ struct sink {
 	mbstate_t ost;
 };
 
+static int count_fits(struct sink *sk, size_t n)
+{
+	if (n <= (size_t)(INT_MAX - sk->count)) return 1;
+	errno = EOVERFLOW;
+	sk->f->err = 1;
+	sk->bad = 1;
+	return 0;
+}
+
 /* Emit n bytes of ASCII text -- everything this file GENERATES (digits,
  * signs, padding, exponents, "0x", "(nil)", "(null)"), and nothing that
  * came from a caller's string.  That restriction is what makes a wide
@@ -149,6 +158,7 @@ struct sink {
 static void out(struct sink *sk, const char *s, size_t n)
 {
 	if (sk->bad) return;
+	if (!count_fits(sk, n)) return;
 	if (sk->widemem) {
 		while (n) {
 			wchar_t stage[32];
@@ -171,12 +181,33 @@ static void out(struct sink *sk, const char *s, size_t n)
 static void pad(struct sink *sk, char c, size_t n)
 {
 	char buf[16];
-	memset(buf, c, sizeof buf);
-	while (n && !sk->bad) {
-		size_t k = n < sizeof buf ? n : sizeof buf;
-		out(sk, buf, k);
-		n -= k;
+	size_t emit = n;
+	size_t skipped = 0;
+
+	if (sk->bad || !count_fits(sk, n)) return;
+	/* A fixed memory sink still counts everything snprintf()/swprintf()
+	 * would have written, but bytes past its capacity are discarded.  Do
+	 * not visit that discarded tail 16 bytes at a time: besides making a
+	 * perfectly valid large width take linear time, that would make the
+	 * aggregate INT_MAX return-value check practically unreachable.  The
+	 * memory bookkeeping is in bytes; a wide memory sink consumes one
+	 * wchar_t-sized unit for each padding character. */
+	if (sk->f->is_mem && !sk->f->mem_dynamic) {
+		size_t avail = sk->f->mem_pos < sk->f->mem_size
+		             ? sk->f->mem_size - sk->f->mem_pos : 0;
+		if (sk->widemem) avail /= sizeof(wchar_t);
+		if (emit > avail) { skipped = emit - avail; emit = avail; }
 	}
+	memset(buf, c, sizeof buf);
+	while (emit && !sk->bad) {
+		size_t k = emit < sizeof buf ? emit : sizeof buf;
+		out(sk, buf, k);
+		emit -= k;
+	}
+	/* count_fits() above proved this whole run representable.  out()
+	 * counted the stored prefix; account for the fixed buffer's discarded
+	 * tail without touching it. */
+	if (!sk->bad) sk->count += (long)skipped;
 }
 
 /* Emit n wide characters that came from a CALLER (%ls, %lc, or a %s
@@ -192,6 +223,7 @@ static void pad(struct sink *sk, char c, size_t n)
 static void out_units(struct sink *sk, const wchar_t *w, size_t n)
 {
 	if (sk->bad) return;
+	if (!count_fits(sk, n)) return;
 	if (sk->f->wmem) {
 		if (n && __fwrite(w, sizeof *w, n, sk->f) != n) {
 			if (!sk->f->is_mem || sk->f->mem_dynamic) { sk->f->err = 1; sk->bad = 1; return; }
@@ -835,6 +867,7 @@ struct spec {
 	int lm;
 	int conv;       /* the conversion character, 0 at end of format */
 	int type;       /* arg_type(lm, conv) */
+	int width_overflow;
 };
 
 /* "%n$" and "*n$": a digit run terminated by '$'.  It cannot be told
@@ -886,6 +919,7 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 	sp->prec = -1;
 	sp->ppos = -1;
 	sp->lm = LM_NONE;
+	sp->width_overflow = 0;
 
 	/* The guard, rather than letting scan_argno() return early on its
 	 * own: tcc does not inline, so on the overwhelmingly common
@@ -938,14 +972,27 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 		sp->wpos = n;
 	} else {
 		while (gf(fp, st) >= '0' && gf(fp, st) <= '9') {
-			sp->width = sp->width * 10 + (int)(gf(fp, st) - '0');
+			int digit = (int)(gf(fp, st) - '0');
+			if (sp->width > (INT_MAX - digit) / 10) {
+				sp->width = INT_MAX;
+				sp->width_overflow = 1;
+			} else sp->width = sp->width * 10 + digit;
 			fp += st;
 		}
 	}
 	if (gf(fp, st) == '.') {
 		fp += st;
 		if (gf(fp, st) == '*') { fp = scan_argno(fp + st, st, &n); sp->ppos = n; }
-		else { sp->prec = 0; while (gf(fp, st) >= '0' && gf(fp, st) <= '9') { sp->prec = sp->prec * 10 + (int)(gf(fp, st) - '0'); fp += st; } }
+		else {
+			sp->prec = 0;
+			while (gf(fp, st) >= '0' && gf(fp, st) <= '9') {
+				int digit = (int)(gf(fp, st) - '0');
+				if (sp->prec > (INT_MAX - digit) / 10)
+					sp->prec = INT_MAX;
+				else sp->prec = sp->prec * 10 + digit;
+				fp += st;
+			}
+		}
 	}
 	for (;;) {
 		if (gf(fp, st) == 'h') { sp->lm = sp->lm == LM_h ? LM_hh : LM_h; fp += st; }
@@ -986,6 +1033,7 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 		if (gf(fp, st) == '%') { fp += st; continue; }
 		fp = parse_spec(fp, st, &sp);
 		if (sp.conv) fp += st;
+		if (sp.width_overflow) return -2;
 
 		/* The unnumbered forms, in a format that has already shown a
 		 * numbered one: a '*' naming no argument, or a conversion that
@@ -1107,6 +1155,12 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			int flags, width, prec;
 
 			fp = parse_spec(fp, st, &sp);
+			if (sp.width_overflow) {
+				errno = EOVERFLOW;
+				sk->f->err = 1;
+				sk->bad = 1;
+				break;
+			}
 
 			/* The first specification that names an argument settles
 			 * the whole format: from here every argument comes out of
@@ -1116,7 +1170,8 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 			 * twice and nothing is stored, so an unnumbered format runs
 			 * exactly as it did before numbered ones existed. */
 			if (!argtab && (sp.argpos || sp.wpos > 0 || sp.ppos > 0)) {
-				if (build_argtab(fmt, st, argv, &aq) < 0) {
+				int argresult = build_argtab(fmt, st, argv, &aq);
+				if (argresult < 0) {
 					/* fprintf.html ERRORS: "[EINVAL] There are
 					 * insufficient arguments" -- the nearest named
 					 * failure, and the honest one to report for a
@@ -1126,7 +1181,8 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 					 * set it: nothing went wrong with the stream, and
 					 * ferror() answers for the file rather than for the
 					 * caller's format string. */
-					errno = EINVAL;
+					errno = argresult == -2 ? EOVERFLOW : EINVAL;
+					if (argresult == -2) sk->f->err = 1;
 					sk->bad = 1;
 					break;
 				}

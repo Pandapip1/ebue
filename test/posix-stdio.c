@@ -1228,6 +1228,22 @@ static void test_snprintf_eoverflow(void)
 	CHECK(!strcmp(b, "z"));
 }
 
+/* An L"..." literal follows the compiler host's wchar_t width.  The
+ * native sanitizer build uses a 4-byte host wchar_t while ntlibc's public
+ * type, matching NT, is 2 bytes, so construct wide test strings in the
+ * library's actual type.  Four rotating slots also make two stdio_w()
+ * calls in one expression independent of argument evaluation order. */
+static const wchar_t *stdio_w(const char *s)
+{
+	static wchar_t pool[4][64];
+	static int slot;
+	wchar_t *b = pool[slot++ % 4];
+	size_t i;
+	for (i = 0; s[i] && i < 63; i++) b[i] = (wchar_t)(unsigned char)s[i];
+	b[i] = 0;
+	return b;
+}
+
 /* fprintf.html: a negative '*' width is a '-' flag followed by its
  * positive magnitude.  INT_MIN's magnitude is INT_MAX+1, so the required
  * output count cannot fit the return type and [EOVERFLOW] is the defined
@@ -1237,6 +1253,8 @@ static void test_snprintf_eoverflow(void)
 static void test_printf_int_min_width_no_overflow(void)
 {
 	char b[8];
+	wchar_t wb[8];
+	int n;
 
 	errno = 0;
 	CHECK(snprintf(b, sizeof b, "%*d", INT_MIN, 7) == -1);
@@ -1245,6 +1263,41 @@ static void test_printf_int_min_width_no_overflow(void)
 	errno = 0;
 	CHECK(snprintf(b, sizeof b, "%1$*2$d", 7, INT_MIN) == -1);
 	CHECK(errno == EOVERFLOW);
+
+	/* Literal width and precision digit runs are caller-controlled too.
+	 * The byte and wide formatters share one parser, and the byte and wide
+	 * scanners share the other, so exercise both strides at the endpoint. */
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%999999999999999999d", 7) == -1);
+	CHECK(errno == EOVERFLOW);
+	errno = 0;
+	CHECK(swprintf(wb, sizeof wb / sizeof *wb,
+	               stdio_w("%999999999999999999d"), 7) == -1);
+	CHECK(errno == EOVERFLOW);
+	/* The parser boundary itself is valid, but two individually valid
+	 * conversions can make the aggregate return value unrepresentable.
+	 * Fixed-buffer padding is deliberately bounded, so these exercise the
+	 * sink's count check without doing billions of writes. */
+	CHECK(snprintf(b, sizeof b, "%2147483647d", 7) == INT_MAX);
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%1073741824d%1073741824d", 1, 2) == -1);
+	CHECK(errno == EOVERFLOW);
+	errno = 0;
+	CHECK(swprintf(wb, sizeof wb / sizeof *wb,
+	               stdio_w("%1073741824d%1073741824d"), 1, 2) == -1);
+	CHECK(errno == EOVERFLOW);
+	CHECK(snprintf(b, sizeof b, "%.999999999999999999s", "x") == 1);
+	CHECK(!strcmp(b, "x"));
+	CHECK(swprintf(wb, sizeof wb / sizeof *wb,
+	               stdio_w("%.999999999999999999ls"), stdio_w("x")) == 1);
+	CHECK(wb[0] == (wchar_t)'x' && wb[1] == 0);
+
+	n = -1;
+	CHECK(sscanf("abc", "%*999999999999999999s%n", &n) == 0);
+	CHECK(n == 3);
+	n = -1;
+	CHECK(swscanf(stdio_w("abc"), stdio_w("%*999999999999999999s%n"), &n) == 0);
+	CHECK(n == 3);
 }
 
 /* fprintf.html, the length modifiers: "z  Specifies that a following
