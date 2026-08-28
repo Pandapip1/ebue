@@ -52,6 +52,9 @@
 #             loads do not read definitely uninitialized storage.
 #   fallible  currently opt-in; rejects discarded results from known fallible
 #             system, I/O, mapping, semaphore, and pthread APIs.
+#   provenance
+#             currently opt-in; proves common provenance for ordered pointer
+#             comparisons and subtraction, and rejects integer-derived pointers.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -1189,6 +1192,61 @@ stage_fallible() {
 	return $any
 }
 
+stage_provenance() {
+	hdr "pointer-provenance proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	require_tool clang++-18 || return $missing
+	require_tool llvm-config-18 || return $missing
+	libdir=$(llvm-config-18 --libdir)
+	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' -print 2>/dev/null | sort | head -n 1)
+	[ -n "$clang_cpp" ] || { report_missing "Clang 18 development libraries are required for provenance proofs."; return $missing; }
+	plugin=$builddir/ntlibc-pointer-provenance-checker.so
+	# shellcheck disable=SC2046
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+		tools/clang/PointerProvenanceChecker.cpp -o "$plugin" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+	fixture_log=$builddir/pointer-provenance-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-pointer-provenance-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.PointerProvenance \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+	tools/lint-pointer-provenance.py --fixtures "$fixture_log" || any=1
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.pointer-provenance.log
+		report=$builddir/$arch.pointer-provenance.report
+		pardir=$(mktemp -d "$builddir/pointer-provenance.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; plugin=$3; target=$4; shift 4
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.PointerProvenance \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$plugin" "$target" $flags
+		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; continue; fi
+		analyzed=$((analyzed + 1))
+		if tools/lint-pointer-provenance.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
+			note "pointer provenance [$arch]: proved -> $report"
+		else
+			note "pointer provenance [$arch]: findings -> $report"; show_findings "$report"; any=1
+		fi
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -1222,6 +1280,7 @@ for s in $stages; do
 		memcontracts) stage_memcontracts ;;
 		initproof)  stage_initproof ;;
 		fallible)   stage_fallible ;;
+		provenance) stage_provenance ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
