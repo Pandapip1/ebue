@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <limits.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -549,6 +550,23 @@ int main(void)
 		ts[1].tv_sec = 1500000000; ts[1].tv_nsec = 0;
 		CHECK(futimens(fd, ts) == 0);
 		CHECK(fstat(fd, &st) == 0 && st.st_mtime == 1500000000);
+		ts[0].tv_sec = LLONG_MAX;
+		ts[0].tv_nsec = 0;
+		ts[1].tv_nsec = UTIME_OMIT;
+		errno = 0;
+		CHECK(utimensat(AT_FDCWD, "a.txt", ts, 0) == -1 && errno == EOVERFLOW);
+		errno = 0;
+		CHECK(futimens(fd, ts) == -1 && errno == EOVERFLOW);
+		ts[0].tv_sec = LLONG_MIN;
+		errno = 0;
+		CHECK(utimensat(AT_FDCWD, "a.txt", ts, 0) == -1 && errno == EOVERFLOW);
+		ts[0].tv_sec = 0;
+		ts[0].tv_nsec = -1;
+		errno = 0;
+		CHECK(utimensat(AT_FDCWD, "a.txt", ts, 0) == -1 && errno == EINVAL);
+		ts[0].tv_nsec = 1000000000L;
+		errno = 0;
+		CHECK(futimens(fd, ts) == -1 && errno == EINVAL);
 		CHECK(close(fd) == 0);
 		errno = 0;
 		CHECK(utimensat(AT_FDCWD, "nope", ts, 0) == -1 && errno == ENOENT);
@@ -566,6 +584,15 @@ int main(void)
 			CHECK(st.st_mtime == 1650000000);
 			CHECK(st.st_mtim.tv_nsec == 250000000);
 			CHECK(st.st_atime == 1600000000);
+			tv[0].tv_usec = LONG_MAX;
+			errno = 0;
+			CHECK(utimes("a.txt", tv) == -1 && errno == EINVAL);
+			errno = 0;
+			CHECK(futimesat(AT_FDCWD, "a.txt", tv) == -1 && errno == EINVAL);
+			tv[0].tv_usec = -1;
+			errno = 0;
+			CHECK(utimes("a.txt", tv) == -1 && errno == EINVAL);
+			tv[0].tv_usec = 0;
 			errno = 0;
 			CHECK(futimesat(AT_FDCWD, "nope", tv) == -1 && errno == ENOENT);
 		}

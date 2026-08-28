@@ -11,6 +11,7 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <limits.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -680,6 +681,12 @@ int main(void)
 			CHECK(after >= before - 1 && after - before <= 5);
 			errno = 0;
 			CHECK(clock_settime(CLOCK_MONOTONIC, &ts) == -1 && errno == EINVAL);
+			target = LLONG_MAX;
+			errno = 0;
+			CHECK(stime(&target) == -1 && errno == EOVERFLOW);
+			target = LLONG_MIN;
+			errno = 0;
+			CHECK(stime(&target) == -1 && errno == EOVERFLOW);
 		}
 
 		/* gettimeofday: agrees with time()/clock_gettime(CLOCK_REALTIME) */

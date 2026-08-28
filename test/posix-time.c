@@ -243,6 +243,18 @@ static void test_clock_settime_bad_nsec(void)
 	errno = 0;
 	CHECK(clock_settime(CLOCK_REALTIME, &ts) == -1);
 	CHECK(errno == EINVAL);
+
+	/* Reject an epoch outside NT's signed 100ns range before attempting
+	 * the privileged syscall, making the result account-independent. */
+	ts.tv_sec = LLONG_MAX;
+	ts.tv_nsec = 0;
+	errno = 0;
+	CHECK(clock_settime(CLOCK_REALTIME, &ts) == -1);
+	CHECK(errno == EINVAL);
+	ts.tv_sec = LLONG_MIN;
+	errno = 0;
+	CHECK(clock_settime(CLOCK_REALTIME, &ts) == -1);
+	CHECK(errno == EINVAL);
 }
 
 /* clock_nanosleep.html ERRORS: "[EINVAL] The rqtp argument specified a

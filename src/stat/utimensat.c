@@ -14,7 +14,25 @@ static int set_times_handle(HANDLE h, const struct timespec ts[2])
 	IO_STATUS_BLOCK io;
 	FILE_BASIC_INFORMATION bi;
 	LARGE_INTEGER now;
+	LARGE_INTEGER converted[2] = { 0, 0 };
 	NTSTATUS st;
+	int i;
+
+	if (ts) {
+		for (i = 0; i < 2; i++) {
+			if (ts[i].tv_nsec == UTIME_NOW || ts[i].tv_nsec == UTIME_OMIT)
+				continue;
+			if (ts[i].tv_nsec < 0 || ts[i].tv_nsec >= 1000000000L) {
+				errno = EINVAL;
+				return -1;
+			}
+			if (!__unix_to_nt(ts[i].tv_sec, ts[i].tv_nsec,
+			    &converted[i])) {
+				errno = EOVERFLOW;
+				return -1;
+			}
+		}
+	}
 
 	/* utime.html DESCRIPTION says only the access/modification times
 	 * change -- the mode must survive untouched.  FILE_BASIC_INFORMATION
@@ -39,9 +57,9 @@ static int set_times_handle(HANDLE h, const struct timespec ts[2])
 	if (!ts) { bi.LastAccessTime = bi.LastWriteTime = now; }
 	else {
 		if (ts[0].tv_nsec == UTIME_NOW) bi.LastAccessTime = now;
-		else if (ts[0].tv_nsec != UTIME_OMIT) bi.LastAccessTime = __unix_to_nt(ts[0].tv_sec, ts[0].tv_nsec);
+		else if (ts[0].tv_nsec != UTIME_OMIT) bi.LastAccessTime = converted[0];
 		if (ts[1].tv_nsec == UTIME_NOW) bi.LastWriteTime = now;
-		else if (ts[1].tv_nsec != UTIME_OMIT) bi.LastWriteTime = __unix_to_nt(ts[1].tv_sec, ts[1].tv_nsec);
+		else if (ts[1].tv_nsec != UTIME_OMIT) bi.LastWriteTime = converted[1];
 	}
 	st = NtSetInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -108,6 +126,11 @@ int utimes(const char *path, const struct timeval tv[2])
 {
 	struct timespec ts[2];
 	if (!tv) return utimensat(AT_FDCWD, path, 0, 0);
+	if (tv[0].tv_usec < 0 || tv[0].tv_usec >= 1000000 ||
+	    tv[1].tv_usec < 0 || tv[1].tv_usec >= 1000000) {
+		errno = EINVAL;
+		return -1;
+	}
 	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
 	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
 	return utimensat(AT_FDCWD, path, ts, 0);
@@ -126,6 +149,11 @@ int futimesat(int dirfd, const char *path, const struct timeval tv[2])
 {
 	struct timespec ts[2];
 	if (!tv) return utimensat(dirfd, path, 0, 0);
+	if (tv[0].tv_usec < 0 || tv[0].tv_usec >= 1000000 ||
+	    tv[1].tv_usec < 0 || tv[1].tv_usec >= 1000000) {
+		errno = EINVAL;
+		return -1;
+	}
 	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
 	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
 	return utimensat(dirfd, path, ts, 0);

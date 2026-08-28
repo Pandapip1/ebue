@@ -11,8 +11,10 @@
 
 int stime(const time_t *tp)
 {
-	LARGE_INTEGER nt = __unix_to_nt(*tp, 0);
-	NTSTATUS st = NtSetSystemTime(&nt, NULL);
+	LARGE_INTEGER nt;
+	NTSTATUS st;
+	if (!__unix_to_nt(*tp, 0, &nt)) { errno = EOVERFLOW; return -1; }
+	st = NtSetSystemTime(&nt, NULL);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }

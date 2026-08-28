@@ -432,7 +432,19 @@ void __free(void *);
 #define __TICKS_1601_TO_1970 116444736000000000LL
 static inline long long __nt_to_unix_sec(long long t) { return (t - __TICKS_1601_TO_1970) / __TICKS_PER_SEC; }
 static inline long __nt_to_unix_nsec(long long t) { return (long)((t - __TICKS_1601_TO_1970) % __TICKS_PER_SEC) * 100; }
-static inline long long __unix_to_nt(long long sec, long nsec) { return sec * __TICKS_PER_SEC + nsec / 100 + __TICKS_1601_TO_1970; }
+static inline int __unix_to_nt(long long sec, long nsec, long long *result)
+{
+	long long ticks, subsecond = nsec / 100;
+	if (sec > INT64_MAX / __TICKS_PER_SEC ||
+	    sec < INT64_MIN / __TICKS_PER_SEC) return 0;
+	ticks = sec * __TICKS_PER_SEC;
+	if (subsecond > 0 && ticks > INT64_MAX - subsecond) return 0;
+	if (subsecond < 0 && ticks < INT64_MIN - subsecond) return 0;
+	ticks += subsecond;
+	if (ticks > INT64_MAX - __TICKS_1601_TO_1970) return 0;
+	*result = ticks + __TICKS_1601_TO_1970;
+	return 1;
+}
 
 /* Return the positive distance from start to end in NT's 100 ns units,
  * rounded up and saturated at the largest relative LARGE_INTEGER.  The

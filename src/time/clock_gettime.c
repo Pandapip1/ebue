@@ -80,7 +80,10 @@ int clock_settime(clockid_t id, const struct timespec *ts)
 
 	if (id != CLOCK_REALTIME) { errno = EINVAL; return -1; }
 	if (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) { errno = EINVAL; return -1; }
-	nt = __unix_to_nt(ts->tv_sec, ts->tv_nsec);
+	if (!__unix_to_nt(ts->tv_sec, ts->tv_nsec, &nt)) {
+		errno = EINVAL;
+		return -1;
+	}
 	st = NtSetSystemTime(&nt, NULL);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
