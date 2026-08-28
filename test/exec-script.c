@@ -268,6 +268,7 @@ int main(int argc, char **argv)
 {
 	char self[1024], cwd[1024], pathdir[1100];
 	char script[512];
+	struct stat script_st, path_script_st;
 	char *av[8];
 	int st;
 
@@ -296,6 +297,22 @@ int main(int argc, char **argv)
 	 * alone would pass. */
 	if (mkdir(PATHDIR, 0755) < 0) { printf("FAIL mkdir " PATHDIR "\n"); return 1; }
 	if (writefile(PATHDIR "/" SCRIPT, script) < 0) { printf("FAIL write path script\n"); return 1; }
+	/* Wine does not retain the $LXMOD EA supplied at file creation. Since
+	 * execvp() now performs the POSIX execute-permission check before asking
+	 * NT to load an image, Wine consequently reports these non-PE scripts as
+	 * 0644 and cannot reach the [ENOEXEC] fallback this test measures. Real
+	 * NTFS retains the 0755 EA. Detect the missing prerequisite rather than
+	 * misreporting the resulting EACCES as an exec implementation failure. */
+	if (stat(SCRIPT, &script_st) < 0 ||
+	    stat(PATHDIR "/" SCRIPT, &path_script_st) < 0 ||
+	    !(script_st.st_mode & 0111) || !(path_script_st.st_mode & 0111)) {
+		printf("SKIP exec-script: filesystem did not retain executable mode metadata; ENOEXEC fallback is unreachable\n");
+		unlink(CHILD);
+		unlink(SCRIPT);
+		unlink(PATHDIR "/" SCRIPT);
+		rmdir(PATHDIR);
+		return 77;
+	}
 	snprintf(pathdir, sizeof pathdir, "%s\\" PATHDIR, cwd);
 
 	/* The two decoys.  One beside the calling image (the cwd, where the
