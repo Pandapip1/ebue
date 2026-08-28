@@ -321,16 +321,17 @@ static HANDLE sig_create_pipe(UNICODE_STRING *us)
 /* The delivery thread: one per process, started by __sig_delivery_init()
  * and never joined or cancelled -- NT tears down every thread of a
  * process at exit, which is the only "shutdown" this loop ever needs.
- * `arg` is the pid this thread's pipe name was built for, captured at
- * creation time rather than re-read with getpid() on every cycle so a
- * fork()'d child's brand-new thread (see __sig_delivery_reinit_after_fork()
- * below) can never end up racing its own pid against a stale capture. */
+ * `arg` is the first listening pipe, created synchronously by init before
+ * application startup can report itself ready. Publishing that instance in
+ * the creating thread closes the old interval in which a target had installed
+ * a handler but kill() could still miss its not-yet-scheduled listener thread
+ * and fall back to the signal's default action. */
 static ULONG NTAPI sig_delivery_thread(PVOID arg)
 {
-	pid_t pid = (pid_t)(ULONG_PTR)arg;
+	pid_t pid = getpid();
 	WCHAR name[40];
 	UNICODE_STRING us;
-	HANDLE pipe = 0;
+	HANDLE pipe = (HANDLE)arg;
 
 	sig_pipe_name(pid, name, &us);
 
@@ -440,9 +441,9 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 void __sig_delivery_init(void)
 {
 	OBJECT_ATTRIBUTES oa;
-	UNICODE_STRING lock_us;
-	WCHAR lock_name[48];
-	HANDLE ev, mutant, thr;
+	UNICODE_STRING lock_us, pipe_us;
+	WCHAR lock_name[48], pipe_name[40];
+	HANDLE ev, mutant, pipe, thr;
 	NTSTATUS st;
 	pid_t pid;
 
@@ -468,11 +469,30 @@ void __sig_delivery_init(void)
 	if (!NT_SUCCESS(st)) { NtClose(ev); return; }
 	send_mutant = mutant;
 
+	/* Create and publish the first server instance here, not in the new
+	 * thread. NtCreateThreadEx returning says only that the thread object
+	 * exists; it does not say the thread has run. A child can therefore
+	 * install a handler and notify its parent while the listener is still
+	 * unscheduled. The parent then sees no pipe and applies the default
+	 * action despite the installed handler. Passing an already-named pipe
+	 * to the thread makes init's return the explicit publication boundary.
+	 * A client which connects before the thread reaches FSCTL_PIPE_LISTEN is
+	 * handled as STATUS_PIPE_CONNECTED by the loop above. */
+	sig_pipe_name(pid, pipe_name, &pipe_us);
+	pipe = sig_create_pipe(&pipe_us);
+	if (!pipe) {
+		send_mutant = 0;
+		NtClose(mutant);
+		NtClose(ev);
+		return;
+	}
+
 	st = NtCreateThreadEx(&thr, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
-	                       (PVOID)sig_delivery_thread, (PVOID)(ULONG_PTR)pid,
+	                       (PVOID)sig_delivery_thread, pipe,
 	                       0, 0, 0, 0, 0);
 	if (!NT_SUCCESS(st)) {
 		send_mutant = 0;
+		NtClose(pipe);
 		NtClose(mutant);
 		NtClose(ev);
 		return;
