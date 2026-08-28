@@ -55,6 +55,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include "libc.h"
 
 struct level {
 	struct level *lru_prev, *lru_next;	/* only meaningful while dp != NULL */
@@ -437,7 +438,14 @@ int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, str
 			if (getcwd(buf, cap)) { ws.cwd0 = buf; break; }
 			free(buf);
 			if (errno != ERANGE) break;
-			cap *= 2;
+			{
+				size_t next;
+				if (!__array_next_capacity(cap, cap, 1, 256, 1, &next)) {
+					errno = ENOMEM;
+					break;
+				}
+				cap = next;
+			}
 		}
 	}
 

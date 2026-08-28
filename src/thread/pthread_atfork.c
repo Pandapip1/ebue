@@ -23,7 +23,11 @@ int pthread_atfork(void (*prepare)(void), void (*parent)(void),
 	size_t capacity;
 	RtlAcquirePebLock();
 	if (handler_count == handler_capacity) {
-		capacity = handler_capacity ? handler_capacity * 2 : 8;
+		if (!__array_next_capacity(handler_capacity, handler_count, 1, 8,
+		    sizeof *handlers, &capacity)) {
+			RtlReleasePebLock();
+			return ENOMEM;
+		}
 		new_handlers = realloc(handlers, capacity * sizeof *handlers);
 		if (!new_handlers) {
 			RtlReleasePebLock();

@@ -16,7 +16,10 @@ static int fails;
 
 static void test_atfork(void)
 {
-	CHECK(pthread_atfork(0, 0, 0) == 0);
+	int i;
+	/* Cross the initial eight-handler allocation so the checked
+	 * collection-growth path is part of the public integration test. */
+	for (i = 0; i < 10; i++) CHECK(pthread_atfork(0, 0, 0) == 0);
 }
 
 static void test_barrier_attributes(void)
