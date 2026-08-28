@@ -768,7 +768,22 @@ static void test_pthread_specific_key(void)
 #if NTLIBC_TEST(PASS, posix_pthread_cancel_cleanup)
 #include <pthread.h>
 #include <semaphore.h>
-#include <time.h>
+
+/* Only pthread_cancel(), pthread_setcancelstate(), and
+ * pthread_setcanceltype() are required to be async-cancel-safe.  Keep the
+ * asynchronous redirect probe out of every other POSIX interface: cancelling
+ * inside one of those has undefined behaviour and can strand that interface's
+ * private state instead of measuring context redirection.  This direct,
+ * alertable NT wait still leaves the target suspended inside a syscall when
+ * pthread_cancel() redirects it, which is the boundary the probe needs. */
+typedef int NTSTATUS;
+typedef long long LARGE_INTEGER;
+#ifdef __i386__
+#define NTAPI __attribute__((stdcall))
+#else
+#define NTAPI
+#endif
+NTSTATUS NTAPI NtDelayExecution(unsigned char, LARGE_INTEGER *);
 
 static int cleanup_ran;
 static volatile int async_cleanup_ran;
@@ -820,13 +835,13 @@ static void async_cleanup_handler(void *arg)
 
 static void *async_cancel_start(void *arg)
 {
-	struct timespec delay = {0, 1000000};
+	LARGE_INTEGER delay = -10000; /* 1 ms, in relative 100 ns units */
 	(void)arg;
 	CHECK(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL) == 0);
 	pthread_cleanup_push(async_cleanup_handler, NULL);
 	CHECK(sem_post(&async_cancel_ready) == 0);
 	for (;;)
-		nanosleep(&delay, NULL);
+		NtDelayExecution(1, &delay);
 	pthread_cleanup_pop(0);
 	return NULL;
 }
