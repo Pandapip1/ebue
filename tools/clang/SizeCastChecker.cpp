@@ -464,6 +464,156 @@ public:
   }
 };
 
+static std::string arithmeticOrigin(const Expr *Expression, CheckerContext &C) {
+  const SourceManager &SM = C.getSourceManager();
+  return SM.getFilename(SM.getExpansionLoc(Expression->getBeginLoc())).str();
+}
+
+static std::string arithmeticText(const Stmt *Statement, CheckerContext &C) {
+  const SourceManager &SM = C.getSourceManager();
+  SourceLocation Begin = SM.getSpellingLoc(Statement->getBeginLoc());
+  SourceLocation End = SM.getSpellingLoc(Statement->getEndLoc());
+  StringRef Raw = Lexer::getSourceText(
+      CharSourceRange::getTokenRange(Begin, End), SM, C.getLangOpts());
+  std::string Result;
+  bool Space = false;
+  for (char Character : Raw) {
+    if (std::isspace(static_cast<unsigned char>(Character))) {
+      Space = !Result.empty();
+    } else {
+      if (Space)
+        Result += ' ';
+      Result += Character;
+      Space = false;
+    }
+  }
+  return Result.empty() ? Statement->getStmtClassName() : Result;
+}
+
+static std::string arithmeticSite(const Expr *Expression, CheckerContext &C) {
+  const SourceManager &SM = C.getSourceManager();
+  SourceLocation Location = SM.getExpansionLoc(Expression->getBeginLoc());
+  FileID File = SM.getFileID(Location);
+  bool Invalid = false;
+  StringRef Buffer = SM.getBufferData(File, &Invalid);
+  if (Invalid)
+    return Expression->getStmtClassName();
+  unsigned Offset = SM.getFileOffset(Location);
+  size_t Begin = Buffer.rfind('\n', Offset);
+  Begin = Begin == StringRef::npos ? 0 : Begin + 1;
+  size_t End = Buffer.find('\n', Offset);
+  if (End == StringRef::npos)
+    End = Buffer.size();
+  StringRef Raw = Buffer.slice(Begin, End);
+  std::string Result;
+  bool Space = false;
+  for (char Character : Raw) {
+    if (std::isspace(static_cast<unsigned char>(Character))) {
+      Space = !Result.empty();
+    } else {
+      if (Space)
+        Result += ' ';
+      Result += Character;
+      Space = false;
+    }
+  }
+  return Result;
+}
+
+static std::string arithmeticContext(CheckerContext &C) {
+  const Decl *Current = C.getLocationContext()->getDecl();
+  if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
+    return Named->getQualifiedNameAsString();
+  return Current ? Current->getDeclKindName() : "unknown";
+}
+
+static ProgramStateRef arithmeticInputState(CheckerContext &C) {
+  ExplodedNode *Predecessor = C.getPredecessor();
+  if (Predecessor && !Predecessor->pred_empty())
+    return Predecessor->getFirstPred()->getState();
+  return C.getState();
+}
+
+class DivisorChecker : public Checker<check::PreStmt<BinaryOperator>> {
+  mutable std::unique_ptr<BugType> BT;
+
+public:
+  void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
+    BinaryOperatorKind Opcode = Operation->getOpcode();
+    if (Opcode != BO_Div && Opcode != BO_Rem && Opcode != BO_DivAssign &&
+        Opcode != BO_RemAssign)
+      return;
+    if (!Operation->getLHS()->getType()->isIntegerType() ||
+        !Operation->getRHS()->getType()->isIntegerType())
+      return;
+    ProgramStateRef Violation = arithmeticInputState(C);
+    if (std::optional<DefinedOrUnknownSVal> Divisor =
+            C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
+      Violation = Violation->assume(*Divisor, false);
+      if (!Violation)
+        return;
+    }
+    ExplodedNode *Node = C.generateNonFatalErrorNode(Violation);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Unproven nonzero divisor",
+                                     categories::LogicError);
+    std::string Message = "divisor is not proven nonzero; origin '" +
+                          arithmeticOrigin(Operation, C) + "'; context '" +
+                          arithmeticContext(C) + "'; expression '" +
+                          arithmeticText(Operation, C) + "'; site '" +
+                          arithmeticSite(Operation, C) + "'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Operation->getRHS()->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+};
+
+class ShiftCountChecker : public Checker<check::PreStmt<BinaryOperator>> {
+  mutable std::unique_ptr<BugType> BT;
+
+public:
+  void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
+    BinaryOperatorKind Opcode = Operation->getOpcode();
+    if (Opcode != BO_Shl && Opcode != BO_Shr && Opcode != BO_ShlAssign &&
+        Opcode != BO_ShrAssign)
+      return;
+    ASTContext &Context = C.getASTContext();
+    QualType ValueType = Operation->getLHS()->getType();
+    QualType CountType = Operation->getRHS()->getType();
+    if (!ValueType->isIntegerType() || !CountType->isIntegerType())
+      return;
+    unsigned Width = Context.getIntWidth(ValueType);
+    unsigned CountBits = Context.getIntWidth(CountType);
+    bool CountUnsigned = CountType->isUnsignedIntegerOrEnumerationType();
+    llvm::APSInt Low(llvm::APInt(CountBits, 0), CountUnsigned);
+    llvm::APSInt High(llvm::APInt(CountBits, Width - 1), CountUnsigned);
+    ProgramStateRef Violation = arithmeticInputState(C);
+    if (std::optional<DefinedOrUnknownSVal> Count =
+            C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
+      Violation = Violation->assumeInclusiveRange(*Count, Low, High, false);
+      if (!Violation)
+        return;
+    }
+    ExplodedNode *Node = C.generateNonFatalErrorNode(Violation);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Unproven shift count",
+                                     categories::LogicError);
+    std::string Message = "shift count is not proven in range [0, " +
+                          std::to_string(Width) + "); origin '" +
+                          arithmeticOrigin(Operation, C) + "'; context '" +
+                          arithmeticContext(C) + "'; expression '" +
+                          arithmeticText(Operation, C) + "'; site '" +
+                          arithmeticSite(Operation, C) + "'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Operation->getRHS()->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+};
+
 class TaggedResultChecker : public Checker<check::Location> {
   mutable std::unique_ptr<BugType> BT;
 
@@ -566,4 +716,8 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<TaggedResultChecker>(
       "ntlibc.TaggedResult",
       "Proves that tagged normal and special result fields are selected", "");
+  Registry.addChecker<DivisorChecker>(
+      "ntlibc.Divisor", "Proves that integer divisors are nonzero", "");
+  Registry.addChecker<ShiftCountChecker>(
+      "ntlibc.ShiftCount", "Proves that integer shift counts are in range", "");
 }
