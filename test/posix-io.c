@@ -262,37 +262,23 @@ static void test_lseek(void)
 	unlink("t-ls.txt");
 }
 
-#if NTLIBC_TEST(PASS, posix_io_lseek_eoverflow) /* lseek() reports [EOVERFLOW] separately from [EINVAL].
-	 * through signed overflow instead.  lseek.html ERRORS, shall fail:
-	 * "[EOVERFLOW] The resulting file offset would be a value which
-	 * cannot be represented correctly in an object of type off_t."
-	 * That is a separate clause from the [EINVAL] one, which covers
-	 * only "whence is not a proper value, or the resulting file offset
-	 * would be negative for a regular file, block special file, or
-	 * directory".  A caller cannot distinguish "you asked for a
-	 * negative position" from "the arithmetic did not fit" if both
-	 * arrive as EINVAL.
-	 *
-	 * Mechanism: src/unistd/lseek.c ends with
-	 *
-	 *     if (base + off < 0) { errno = EINVAL; return -1; }
-	 *     pi.CurrentByteOffset = base + off;
-	 *
-	 * base and off are both signed 64-bit.  There is no EOVERFLOW arm
-	 * anywhere in the function.  For a positive base and an off near
-	 * OFF_MAX the sum overflows -- undefined behaviour in its own
-	 * right -- and on the two's-complement wrap it lands negative, so
-	 * the negative-offset test fires and reports EINVAL.  The overflow
-	 * case is not merely unreported; it is actively disguised as the
-	 * other one.
-	 *
-	 * The check has to be done before the addition, on the operands.
-	 *
-	 * The fixture must be non-empty: with base == 0 the sum is exactly
-	 * OFF_MAX, nothing overflows, and the seek legitimately succeeds.
-	 *
-	 * Re-enable when lseek() detects the overflow before performing
-	 * it. */
+/* lseek() reports [EOVERFLOW] separately from [EINVAL].
+ * lseek.html ERRORS, shall fail:
+ * "[EOVERFLOW] The resulting file offset would be a value which
+ * cannot be represented correctly in an object of type off_t."
+ * That is a separate clause from the [EINVAL] one, which covers
+ * only "whence is not a proper value, or the resulting file offset
+ * would be negative for a regular file, block special file, or
+ * directory".  A caller cannot distinguish "you asked for a
+ * negative position" from "the arithmetic did not fit" if both
+ * arrive as EINVAL.
+ *
+ * The representability check has to run on the operands before the
+ * signed addition; otherwise the attempt to classify the result is
+ * already undefined behavior.
+ *
+ * The fixture must be non-empty: with base == 0 the sum is exactly
+ * OFF_MAX, nothing overflows, and the seek legitimately succeeds. */
 static void test_lseek_eoverflow(void)
 {
 	int fd;
@@ -313,7 +299,6 @@ static void test_lseek_eoverflow(void)
 	CHECK(close(fd) == 0);
 	unlink("t-ovf.txt");
 }
-#endif
 
 /* ---- stat/mkdir/rmdir/unlink/rename ---- */
 static void test_fs(void)
@@ -710,6 +695,7 @@ int main(void)
 	test_open_close();
 	test_read_write();
 	test_lseek();
+	test_lseek_eoverflow();
 	test_fs();
 	test_long_path();
 	test_dup_fcntl();

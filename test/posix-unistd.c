@@ -1863,7 +1863,6 @@ static void test_unistd_posix_vdisable(void)
  * value cannot be represented by pid_t, so no child can have that group;
  * the implementation must report [ECHILD] without evaluating -INT_MIN,
  * which is signed-overflow undefined behavior in C. */
-#if NTLIBC_TEST(PASS, posix_unistd_waitpid_int_min_no_overflow)
 static void test_waitpid_int_min_no_overflow(void)
 {
 	int status = 0;
@@ -1871,7 +1870,6 @@ static void test_waitpid_int_min_no_overflow(void)
 	CHECK(waitpid(INT_MIN, &status, WNOHANG) == -1);
 	CHECK(errno == ECHILD);
 }
-#endif
 
 int main(void)
 {
@@ -1929,9 +1927,7 @@ int main(void)
 	test_unistd_pathconf_names();
 	test_unistd_confstr_names();
 	test_unistd_posix_vdisable();
-#if NTLIBC_TEST(PASS, posix_unistd_waitpid_int_min_no_overflow)
 	test_waitpid_int_min_no_overflow();
-#endif
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);

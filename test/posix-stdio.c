@@ -1234,7 +1234,6 @@ static void test_snprintf_eoverflow(void)
  * failure.  Evaluating `-width` first is signed-overflow UB; cover both
  * ordinary and numbered argument paths because they fetch independently
  * before converging on the same normalization. */
-#if NTLIBC_TEST(PASS, posix_stdio_printf_int_min_width_no_overflow)
 static void test_printf_int_min_width_no_overflow(void)
 {
 	char b[8];
@@ -1247,7 +1246,6 @@ static void test_printf_int_min_width_no_overflow(void)
 	CHECK(snprintf(b, sizeof b, "%1$*2$d", 7, INT_MIN) == -1);
 	CHECK(errno == EOVERFLOW);
 }
-#endif
 
 /* fprintf.html, the length modifiers: "z  Specifies that a following
  * d, i, o, u, x, or X conversion specifier applies to a size_t or the
@@ -2339,9 +2337,7 @@ int main(void)
 
 	test_snprintf_boundaries();
 	test_snprintf_eoverflow();
-#if NTLIBC_TEST(PASS, posix_stdio_printf_int_min_width_no_overflow)
 	test_printf_int_min_width_no_overflow();
-#endif
 	test_printf_z_modifier_width();
 	test_printf_l_modifier();
 	test_printf_positional_arguments();
