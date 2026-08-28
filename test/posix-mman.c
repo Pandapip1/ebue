@@ -418,6 +418,53 @@ static void test_msync_anonymous_succeeds(void)
 	CHECK(munmap(p, PG) == 0);
 }
 
+/* "The msync() function shall write all modified copies of pages over the
+ * range [addr,addr+len) to the underlying hardware" and shall mark st_mtime
+ * and st_ctime for update when it writes a file block.  mmap.html also says
+ * closing the descriptor does not unmap the region.  Exercise both clauses
+ * together: msync must retain everything it needs after close(fd), update
+ * the shared file data, and advance both timestamps. */
+static void test_msync_shared_file_after_close(void)
+{
+	static const char name[] = "mman-msync.tmp";
+	struct stat before, after;
+	char byte = 0;
+	char *p;
+	int fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0600);
+
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(ftruncate(fd, PG) == 0);
+	CHECK(fstat(fd, &before) == 0);
+	p = mmap(NULL, PG, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	CHECK(p != MAP_FAILED);
+	CHECK(close(fd) == 0);
+	if (p == MAP_FAILED) { unlink(name); return; }
+
+	/* Leave a full clock tick between the original metadata and msync so
+	 * this remains meaningful on file systems with one-second precision. */
+	CHECK(sleep(1) == 0);
+	p[0] = 'M';
+	CHECK(msync(p, PG, MS_SYNC) == 0);
+	CHECK(stat(name, &after) == 0);
+	CHECK(after.st_mtim.tv_sec > before.st_mtim.tv_sec
+	   || (after.st_mtim.tv_sec == before.st_mtim.tv_sec
+	    && after.st_mtim.tv_nsec > before.st_mtim.tv_nsec));
+	CHECK(after.st_ctim.tv_sec > before.st_ctim.tv_sec
+	   || (after.st_ctim.tv_sec == before.st_ctim.tv_sec
+	    && after.st_ctim.tv_nsec > before.st_ctim.tv_nsec));
+
+	fd = open(name, O_RDONLY);
+	CHECK(fd >= 0);
+	if (fd >= 0) {
+		CHECK(pread(fd, &byte, 1, 0) == 1);
+		CHECK(byte == 'M');
+		CHECK(close(fd) == 0);
+	}
+	CHECK(munmap(p, PG) == 0);
+	CHECK(unlink(name) == 0);
+}
+
 /* ERRORS: "[EINVAL] The value of addr is not a multiple of the page size
  * as returned by sysconf()", "[EINVAL] The value of flags is invalid",
  * and "[EINVAL] The value of flags includes both MS_ASYNC and MS_SYNC."
@@ -855,6 +902,7 @@ int main(int argc, char **argv)
 	test_mprotect_einval();
 
 	test_msync_anonymous_succeeds();
+	test_msync_shared_file_after_close();
 	test_msync_einval();
 
 	mlock_verified = test_mlock_munlock();

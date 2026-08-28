@@ -65,6 +65,7 @@ NtDeleteFile                            ; 3.51
 NtDeviceIoControlFile                   ; 3.51
 NtDuplicateObject                       ; 3.51
 NtFlushBuffersFile                      ; 3.51
+NtFlushVirtualMemory                    ; 3.51
 NtFreeVirtualMemory                     ; 3.51
 NtFsControlFile                         ; 3.51
 NtGetContextThread                      ; 3.51

@@ -78,15 +78,13 @@
  * msync
  * -----
  *
- * Explicit success, and an honest no-op rather than a fabricated one --
- * the precedent is src/termios/termios.c's tcflush() on the output side.
- * Under anonymous-only mappings there is never anything to flush: there
- * is no underlying object for "writes all modified copies of pages ...
- * back to the filesystem" to write back to.  The postcondition holds
- * vacuously, so returning 0 states something true.  Returning -1 would
- * be worse than useless: msync.html gives no error meaning "there was
- * nothing to do", so any failure this returned would be indistinguishable
- * from a genuine one.
+ * Shared file views are flushed with NtFlushVirtualMemory.  NT and Wine do
+ * not reliably mark the file timestamps when a section's dirty pages are
+ * flushed, so writable shared mappings retain an independent file handle
+ * and explicitly mark LastWriteTime and ChangeTime.  The independent handle
+ * matters because POSIX permits the caller to close fildes after mmap().
+ * Anonymous mappings and private file views have no object to update, so
+ * success for those remains a real no-op.
  *
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/mmap.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/munmap.html
@@ -119,6 +117,7 @@ struct mapping {
 	unsigned char *locked;
 	int filebacked;         /* section view (NtMapViewOfSection), not a
 	                          * private NtAllocateVirtualMemory reservation */
+	HANDLE writeback;       /* independent writable MAP_SHARED file handle */
 };
 
 /* mmap.html ERRORS: "[EMFILE] The number of mapped regions would exceed
@@ -291,8 +290,8 @@ static int alloc_page_state(struct mapping *m, size_t npages)
  * file-backed mapping it is NtUnmapViewOfSection instead: a section view
  * is not memory NtFreeVirtualMemory owns, and MEM_RELEASE on it fails.
  * The section handle itself was already closed at map time (the view
- * holds its own reference -- see mmap()), so this is the only cleanup
- * a file-backed mapping needs. */
+ * holds its own reference -- see mmap()); writable shared views also close
+ * the independent writeback handle retained for msync(). */
 static void drop_if_dead(struct mapping *m)
 {
 	size_t i;
@@ -302,6 +301,7 @@ static void drop_if_dead(struct mapping *m)
 	b = m->base;
 	if (m->filebacked) NtUnmapViewOfSection(NtCurrentProcess(), b);
 	else NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
+	if (m->writeback) NtClose(m->writeback);
 	free(m->live);
 	free(m->locked);
 	m->base = NULL;
@@ -309,6 +309,7 @@ static void drop_if_dead(struct mapping *m)
 	m->locked = NULL;
 	m->npages = 0;
 	m->filebacked = 0;
+	m->writeback = NULL;
 }
 
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
@@ -320,6 +321,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	size_t npages;
 	int anon;
 	struct __fd *f = NULL;
+	HANDLE writeback = NULL;
 
 	/* "[EINVAL] The value of len is zero." (shall fail) */
 	if (len == 0) { errno = EINVAL; return MAP_FAILED; }
@@ -449,6 +451,16 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 				errno = ENOMEM;
 				return MAP_FAILED;
 			}
+			if ((flags & MAP_SHARED) &&
+			    (f->flags & O_ACCMODE) == O_RDWR) {
+				st = NtDuplicateObject(NtCurrentProcess(), f->h,
+				                       NtCurrentProcess(), &writeback, 0, 0,
+				                       DUPLICATE_SAME_ACCESS);
+				if (!NT_SUCCESS(st)) {
+					__set_errno_status(st);
+					return MAP_FAILED;
+				}
+			}
 			/* Unlike the anonymous MAP_FIXED path's decommit,
 			 * this has no separate "discard" step: a section
 			 * view occupies its address range for as long as it
@@ -462,10 +474,12 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			 * clause requires the old mapping discarded, not
 			 * preserved on failure. */
 			NtUnmapViewOfSection(NtCurrentProcess(), m->base);
+			if (m->writeback) NtClose(m->writeback);
 			base = addr;
 			st = map_file(f->h, prot, flags, off,
 			             npages * MMAP_PAGE, &base);
 			if (!NT_SUCCESS(st)) {
+				if (writeback) NtClose(writeback);
 				free(m->live);
 				free(m->locked);
 				m->base = NULL;
@@ -473,6 +487,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 				m->locked = NULL;
 				m->npages = 0;
 				m->filebacked = 0;
+				m->writeback = NULL;
 				if (st == (NTSTATUS)STATUS_NO_MEMORY)
 					errno = ENOMEM;
 				else
@@ -489,13 +504,16 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 				m->base = base;
 				m->npages = 0;
 				m->filebacked = 1;
+				m->writeback = writeback;
 				return base;
 			}
 			m->base = base;
 			m->npages = npages;
 			m->filebacked = 1;
+			m->writeback = writeback;
 			if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
 				NtUnmapViewOfSection(NtCurrentProcess(), base);
+				if (m->writeback) NtClose(m->writeback);
 				free(m->live);
 				free(m->locked);
 				memset(m, 0, sizeof *m);
@@ -545,23 +563,36 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	if (!m) { errno = EMFILE; return MAP_FAILED; }
 
 	if (!anon) {
+		if ((flags & MAP_SHARED) && (f->flags & O_ACCMODE) == O_RDWR) {
+			st = NtDuplicateObject(NtCurrentProcess(), f->h,
+			                       NtCurrentProcess(), &writeback, 0, 0,
+			                       DUPLICATE_SAME_ACCESS);
+			if (!NT_SUCCESS(st)) {
+				__set_errno_status(st);
+				return MAP_FAILED;
+			}
+		}
 		base = NULL;
 		st = map_file(f->h, prot, flags, off, npages * MMAP_PAGE, &base);
 		if (!NT_SUCCESS(st)) {
+			if (writeback) NtClose(writeback);
 			if (st == (NTSTATUS)STATUS_NO_MEMORY) errno = ENOMEM;
 			else errno = ENOTSUP;
 			return MAP_FAILED;
 		}
 		if (alloc_page_state(m, npages) < 0) {
 			NtUnmapViewOfSection(NtCurrentProcess(), base);
+			if (writeback) NtClose(writeback);
 			errno = ENOMEM;
 			return MAP_FAILED;
 		}
 		m->base = base;
 		m->npages = npages;
 		m->filebacked = 1;
+		m->writeback = writeback;
 		if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
 			NtUnmapViewOfSection(NtCurrentProcess(), base);
+			if (m->writeback) NtClose(m->writeback);
 			free(m->live);
 			free(m->locked);
 			memset(m, 0, sizeof *m);
@@ -587,6 +618,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	m->base = base;
 	m->npages = npages;
 	m->filebacked = 0;
+	m->writeback = NULL;
 	if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
 		PVOID b = base;
 		SIZE_T z = 0;
@@ -675,8 +707,10 @@ int mprotect(void *addr, size_t len, int prot)
 int msync(void *addr, size_t len, int flags)
 {
 	int k;
-	/* An honest no-op, not a fabricated success -- see the banner.
-	 * The arguments are still validated, because a caller who passes a
+	char *a = addr;
+	char *end;
+	/* The arguments are validated even when the range contains no shared
+	 * file view, because a caller who passes a
 	 * misaligned address has made an error whether or not there is
 	 * anything to flush, and msync.html does give an error for it:
 	 * "[EINVAL] The value of addr is not a multiple of the page size as
@@ -686,9 +720,8 @@ int msync(void *addr, size_t len, int flags)
 	if ((flags & ~(MS_ASYNC | MS_SYNC | MS_INVALIDATE)) != 0) { errno = EINVAL; return -1; }
 	/* "[EINVAL] The value of flags includes both MS_ASYNC and MS_SYNC." */
 	if ((flags & MS_ASYNC) && (flags & MS_SYNC)) { errno = EINVAL; return -1; }
+	end = a + pground(len);
 	if (flags & MS_INVALIDATE) {
-		char *a = addr;
-		char *end = a + pground(len);
 		for (k = 0; k < MMAP_MAX; k++) {
 			struct mapping *m = &maps[k];
 			char *lo, *hi;
@@ -705,6 +738,38 @@ int msync(void *addr, size_t len, int flags)
 				return -1;
 			}
 		}
+	}
+	for (k = 0; k < MMAP_MAX; k++) {
+		struct mapping *m = &maps[k];
+		const void *p;
+		SIZE_T z;
+		IO_STATUS_BLOCK io;
+		char *lo, *hi;
+		NTSTATUS st;
+		FILE_BASIC_INFORMATION bi;
+		LARGE_INTEGER now;
+		if (!m->base || !m->filebacked || !m->writeback) continue;
+		lo = a > m->base ? a : m->base;
+		hi = end < m->base + m->npages * MMAP_PAGE
+		   ? end : m->base + m->npages * MMAP_PAGE;
+		if (lo >= hi) continue;
+		p = lo;
+		z = (SIZE_T)(hi - lo);
+		st = NtFlushVirtualMemory(NtCurrentProcess(), &p, &z, &io);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		/* The section flush above writes data but does not consistently
+		 * advance the file times.  Preserve the attributes explicitly:
+		 * Wine clears FILE_ATTRIBUTE_READONLY when FileAttributes is zero,
+		 * unlike real NT (the same quirk is documented in utimensat.c). */
+		st = NtQueryInformationFile(m->writeback, &io, &bi, sizeof bi,
+		                            FileBasicInformation);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		NtQuerySystemTime(&now);
+		bi.CreationTime = bi.LastAccessTime = 0;
+		bi.LastWriteTime = bi.ChangeTime = now;
+		st = NtSetInformationFile(m->writeback, &io, &bi, sizeof bi,
+		                          FileBasicInformation);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	}
 	return 0;
 }

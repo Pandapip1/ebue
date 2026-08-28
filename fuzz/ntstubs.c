@@ -4465,6 +4465,41 @@ NTSTATUS NTAPI NtProtectVirtualMemory(HANDLE proc, PVOID *base, SIZE_T *size,
 	return STATUS_SUCCESS;
 }
 
+/* Flush a tracked shared section view back into its vnode.  The native
+ * sanitizer build has no host file descriptor behind an OF_VFS file (see
+ * the file-backed-section banner below), so this is the same explicit
+ * copyback NtUnmapViewOfSection performs, limited to the requested range.
+ * It keeps msync() observable before munmap(), which is the distinction the
+ * real NtFlushVirtualMemory call exists to provide. */
+NTSTATUS NTAPI NtFlushVirtualMemory(HANDLE proc, const void **base,
+                                    SIZE_T *size, PIO_STATUS_BLOCK io)
+{
+	int i;
+	const unsigned char *lo, *hi;
+	if (proc != NtCurrentProcess() || !base || !*base || !size || !*size)
+		return STATUS_INVALID_PARAMETER;
+	lo = *base;
+	hi = lo + *size;
+	for (i = 0; i < NTSTUB_VIEW_MAX; i++) {
+		struct ntstub_view *v = &ntstub_views[i];
+		const unsigned char *vlo, *vhi;
+		long long off, n;
+		if (!v->base) continue;
+		vlo = v->base;
+		vhi = vlo + v->size;
+		if (lo < vlo || hi > vhi) continue;
+		if (v->writable_shared && v->v->data) {
+			off = v->off + (long long)(lo - vlo);
+			n = (long long)(hi - lo);
+			if (off + n > v->v->size) n = v->v->size - off;
+			if (n > 0) memcpy(v->v->data + off, lo, (size_t)n);
+		}
+		if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; }
+		return STATUS_SUCCESS;
+	}
+	return STATUS_INVALID_PARAMETER;
+}
+
 /* mlock(2)/munlock(2) -- which is what Wine's NtLockVirtualMemory does
  * for the current process too (dlls/ntdll/unix/virtual.c:6254).  Bounded
  * by RLIMIT_MEMLOCK here exactly as it is there, so test/posix-mman.c's
