@@ -10,6 +10,10 @@
 #define MUTEX_MAGIC ((ULONG_PTR)0x4d555458u)
 #define MUTEX_DEAD  ((ULONG_PTR)0x4d555444u)
 #define MUTEXATTR_MAGIC ((ULONG_PTR)0x4d415454u)
+#define ROBUST_CONSISTENT 0
+#define ROBUST_OWNER_DEAD 1
+#define ROBUST_NOT_RECOVERABLE 2
+#define ROBUST_POLL_TICKS 100000LL
 
 struct mutex_data {
 	ULONG_PTR magic;
@@ -22,6 +26,7 @@ struct mutex_data {
 	unsigned char protocol;
 	unsigned char prioceiling;
 	unsigned char robust;
+	unsigned char robust_state;
 };
 
 struct mutexattr_data {
@@ -195,11 +200,25 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 		LARGE_INTEGER timeout, *timeout_pointer = 0;
 		NTSTATUS status;
 		RtlAcquirePebLock();
+		if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner &&
+		    data->owner->exited) {
+			data->owner = self;
+			data->recursion = 1;
+			data->robust_state = ROBUST_OWNER_DEAD;
+			RtlReleasePebLock();
+			return EOWNERDEAD;
+		}
 		if (!data->owner) {
+			if (data->robust == PTHREAD_MUTEX_ROBUST &&
+			    data->robust_state == ROBUST_NOT_RECOVERABLE) {
+				RtlReleasePebLock();
+				return ENOTRECOVERABLE;
+			}
 			data->owner = self;
 			data->recursion = 1;
 			RtlReleasePebLock();
-			return 0;
+			return data->robust == PTHREAD_MUTEX_ROBUST &&
+				data->robust_state == ROBUST_OWNER_DEAD ? EOWNERDEAD : 0;
 		}
 		if (data->owner == self) {
 			if (data->type == PTHREAD_MUTEX_RECURSIVE) {
@@ -229,6 +248,11 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 			timeout = -ticks;
 			timeout_pointer = &timeout;
 		}
+		if (data->robust == PTHREAD_MUTEX_ROBUST &&
+		    (!timeout_pointer || timeout < -ROBUST_POLL_TICKS)) {
+			timeout = -ROBUST_POLL_TICKS;
+			timeout_pointer = &timeout;
+		}
 		data->waiters++;
 		semaphore = data->semaphore;
 		RtlReleasePebLock();
@@ -236,7 +260,12 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 		RtlAcquirePebLock();
 		if (data->waiters) data->waiters--;
 		RtlReleasePebLock();
-		if (status == STATUS_TIMEOUT) return ETIMEDOUT;
+		if (status == STATUS_TIMEOUT) {
+			/* Recheck a robust owner's exit before deciding that an
+			 * absolute deadline has expired. */
+			if (data->robust == PTHREAD_MUTEX_ROBUST) continue;
+			return ETIMEDOUT;
+		}
 		if (!NT_SUCCESS(status) && status != STATUS_USER_APC &&
 		    status != STATUS_ALERTED) return EINVAL;
 	}
@@ -269,11 +298,15 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	if (!self) return EINVAL;
 	data = mutex_data(mutex);
 	RtlAcquirePebLock();
-	if (data->owner != self && data->type != PTHREAD_MUTEX_NORMAL) {
+	if (data->owner != self && (data->type != PTHREAD_MUTEX_NORMAL ||
+	    data->robust == PTHREAD_MUTEX_ROBUST)) {
 		RtlReleasePebLock();
 		return EPERM;
 	}
 	if (--data->recursion == 0) {
+		if (data->robust == PTHREAD_MUTEX_ROBUST &&
+		    data->robust_state == ROBUST_OWNER_DEAD)
+			data->robust_state = ROBUST_NOT_RECOVERABLE;
 		data->owner = 0;
 		wake = data->waiters != 0;
 	}
@@ -311,8 +344,21 @@ int pthread_mutex_setprioceiling(pthread_mutex_t *__restrict mutex,
 
 int pthread_mutex_consistent(pthread_mutex_t *mutex)
 {
+	struct mutex_data *data;
+	struct __pthread *self;
+	int error = EINVAL;
 	if (!mutex || mutex_data(mutex)->magic != MUTEX_MAGIC) return EINVAL;
-	return mutex_data(mutex)->robust == PTHREAD_MUTEX_ROBUST ? 0 : EINVAL;
+	self = __pthread_current();
+	if (!self) return EINVAL;
+	data = mutex_data(mutex);
+	RtlAcquirePebLock();
+	if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner == self &&
+	    data->robust_state == ROBUST_OWNER_DEAD) {
+		data->robust_state = ROBUST_CONSISTENT;
+		error = 0;
+	}
+	RtlReleasePebLock();
+	return error;
 }
 
 int pthread_mutexattr_init(pthread_mutexattr_t *attr)
