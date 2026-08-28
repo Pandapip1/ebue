@@ -86,6 +86,10 @@ static void test_open_umask_bug(void)
  * so chmod() on a 0444 file was permanently EACCES.  This is what
 	 * broke GNU tar extraction downstream: tar creates most files 0444,
 	 * then chmod()s/utimensat()s them. */
+#if NTLIBC_TEST(PASS, posix_unistd_chmod_readonly_roundtrip) /* Wine's
+ * read-only reopen fallback accepts NtSetInformationFile but reports that
+ * the attribute flags are unsupported and leaves the file writable. Real
+ * NT takes the primary FILE_WRITE_ATTRIBUTES handle instead. */
 static void test_chmod_owner_can_always_chmod_readonly(void)
 {
 	struct stat st;
@@ -107,6 +111,7 @@ static void test_chmod_owner_can_always_chmod_readonly(void)
 	CHECK(chmod("t-chmod-ro.txt", 0644) == 0);
 	unlink("t-chmod-ro.txt");
 }
+#endif
 
 /* utime.html DESCRIPTION: with a non-null times argument "a process
  * must have write permission for the file, or be the owner of the
@@ -1864,7 +1869,9 @@ int main(void)
 	CHECK(chdir(dir) == 0);
 
 	test_open_umask_bug();
+#if NTLIBC_TEST(PASS, posix_unistd_chmod_readonly_roundtrip)
 	test_chmod_owner_can_always_chmod_readonly();
+#endif
 	test_utimensat_owner_can_touch_readonly();
 	test_chmod_utimensat_attr_state_after_failure();
 	test_dup2_self_preserves_cloexec();

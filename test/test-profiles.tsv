@@ -91,3 +91,5 @@ ntlibc	sh_engine_heredoc_queue_leak	runtime=windows	NA	memory leak is observable
 ntlibc	sh_engine_heredoc_queue_leak	runtime=reactos	NA	memory leak is observable only under the native sanitizer profile
 ntlibc	posix_termios_tcflush_discards_input	capability.console=no	NA	the runner has no console input queue to flush
 ntlibc	posix_statvfs_statvfs_eloop	runtime=wine,capability.symlink=no	NA	the runner cannot construct the symbolic-link loop
+ntlibc	posix_unistd_chmod_readonly_roundtrip	runtime=wine	NA	Wine accepts the readonly attribute update on its fallback handle but does not apply it
+ntlibc	posix_unreferenced_fchmodat_wine_readonly	runtime=wine	NA	Wine does not apply readonly attributes through root-relative or reparse-point handles
