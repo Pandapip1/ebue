@@ -9,6 +9,8 @@
  * normalization) for free.
  */
 #include <time.h>
+#include <errno.h>
+#include <limits.h>
 #include "time_impl.h"
 
 struct tm *localtime_r(const time_t *restrict tp, struct tm *restrict result)
@@ -16,6 +18,11 @@ struct tm *localtime_r(const time_t *restrict tp, struct tm *restrict result)
 	time_t t;
 
 	tzset();
+	if ((timezone > 0 && *tp < LLONG_MIN + timezone) ||
+	    (timezone < 0 && *tp > LLONG_MAX + timezone)) {
+		errno = EOVERFLOW;
+		return NULL;
+	}
 	t = *tp - timezone;
 	if (!gmtime_r(&t, result)) return NULL;
 	result->tm_isdst = 0;

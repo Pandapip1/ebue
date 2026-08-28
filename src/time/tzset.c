@@ -101,7 +101,10 @@ void tzset(void)
 		long long total = (long long)h * 3600 + (long long)mn * 60 + (long long)s;
 		if (sign < 0) total = -total;
 		if (total > LONG_MAX) total = LONG_MAX;
-		else if (total < LONG_MIN) total = LONG_MIN;
+		/* localtime_r publishes -timezone in the same signed-long
+		 * representation.  Keep the negative endpoint symmetric so that
+		 * inverse is representable too; LONG_MIN has no positive mate. */
+		else if (total < -LONG_MAX) total = -LONG_MAX;
 		timezone = (long)total;
 	}
 }

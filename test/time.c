@@ -574,6 +574,25 @@ int main(void)
 		CHECK(!strcmp(buf, "+0530"));
 		CHECK(mktime(&tm) == 0);
 
+		/* localtime's fixed-offset subtraction is checked before it can
+		 * overflow either time_t endpoint. */
+		CHECK(setenv("TZ", "X1", 1) == 0);
+		t = LLONG_MIN;
+		errno = 0;
+		CHECK(localtime_r(&t, &tm) == NULL && errno == EOVERFLOW);
+		CHECK(setenv("TZ", "X-1", 1) == 0);
+		t = LLONG_MAX;
+		errno = 0;
+		CHECK(localtime_r(&t, &tm) == NULL && errno == EOVERFLOW);
+
+		/* timezone is negated into tm_gmtoff, so its saturated range must
+		 * be symmetric rather than including the unnegatable LONG_MIN. */
+		CHECK(setenv("TZ", "X-9999999999999999", 1) == 0);
+		t = 0;
+		CHECK(localtime_r(&t, &tm) == &tm);
+		CHECK(timezone == -LONG_MAX && tm.__tm_gmtoff == LONG_MAX);
+		t = 0;
+
 		/* angle-bracket-quoted name */
 		CHECK(setenv("TZ", "<+03>-3", 1) == 0);
 		tzset();
