@@ -985,6 +985,23 @@ static void test_file_io(void)
 		free(line);
 		CHECK(fclose(f) == 0);
 	}
+	{
+		char input[301];
+		char *line = 0;
+		size_t cap = 0;
+		memset(input, 'x', 299);
+		input[299] = '\n';
+		input[300] = 0;
+		f = fmemopen(input, 300, "r");
+		CHECK(f != 0);
+		if (f) {
+			CHECK(getline(&line, &cap, f) == 300);
+			CHECK(line && !memcmp(line, input, 300) && line[300] == 0);
+			CHECK(cap >= 301);
+			free(line);
+			CHECK(fclose(f) == 0);
+		}
+	}
 
 	/* fseek/ftell/rewind/fgetpos/fsetpos on a read stream */
 	f = fopen(name, "rb");

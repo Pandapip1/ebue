@@ -35,7 +35,12 @@ static void touch(const char *path)
 int main(void)
 {
 	const char *dir = "dirent_test.d";
-	const char *names[] = { "alpha", "beta", "gamma10", "gamma9" };
+	const char *names[] = {
+		"alpha", "beta", "gamma10", "gamma9",
+		"grow00", "grow01", "grow02", "grow03", "grow04", "grow05",
+		"grow06", "grow07", "grow08", "grow09", "grow10", "grow11",
+		"grow12", "grow13"
+	};
 	size_t i;
 	DIR *dp;
 	struct dirent *d;
@@ -68,7 +73,7 @@ int main(void)
 	dp = opendir(dir);
 	CHECK(dp != 0);
 	if (dp) {
-		int counts[8] = { 0 };
+		int counts[32] = { 0 };
 		while ((d = readdir(dp))) {
 			n++;
 			if (!strcmp(d->d_name, ".")) seen_dot = 1;
@@ -131,7 +136,8 @@ int main(void)
 	}
 
 	/* scandir + alphasort: results come back sorted, "." and ".." are
-	 * ordinary entries scandir() includes just like readdir() does. */
+	 * ordinary entries scandir() includes just like readdir() does.  The
+	 * fixture deliberately exceeds the initial 16-pointer capacity. */
 	nlist = scandir(dir, &list, 0, alphasort);
 	CHECK(nlist == 2 + (int)(sizeof names / sizeof *names) + 1);
 	if (nlist > 0) {

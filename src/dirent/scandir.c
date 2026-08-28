@@ -49,7 +49,9 @@ int scandir(const char *path, struct dirent ***res,
 		if (filter && !filter(d)) continue;
 
 		if (n == cap) {
-			size_t newcap = cap ? cap * 2 : 16;
+			size_t newcap;
+			if (!__array_next_capacity(cap, n, 1, 16,
+			    sizeof *list, &newcap)) { errno = ENOMEM; goto fail; }
 			struct dirent **nl = __malloc(newcap * sizeof *nl); // NOLINT(bugprone-sizeof-expression) -- nl is dirent**, *nl is dirent*, the array holds pointers
 			if (!nl) goto fail;
 			if (list) memcpy(nl, list, n * sizeof *nl); // NOLINT(bugprone-sizeof-expression)

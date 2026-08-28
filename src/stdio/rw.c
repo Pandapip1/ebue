@@ -251,8 +251,11 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
 			if (len == 0) { *buf = b; *n = cap; return -1; }
 			break;
 		}
-		if (len + 1 >= cap) {
-			size_t nc = cap * 2;
+		if (len >= cap - 1) {
+			size_t nc;
+			if (!__array_next_capacity(cap, len, 2, 128, 1, &nc)) {
+				*buf = b; *n = cap; errno = ENOMEM; return -1;
+			}
 			char *nb = realloc(b, nc); // NOLINT(clang-analyzer-unix.Malloc) -- see the note above getdelim()
 			if (!nb) { *buf = b; *n = cap; errno = ENOMEM; return -1; }
 			b = nb; cap = nc;
