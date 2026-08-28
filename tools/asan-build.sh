@@ -9,8 +9,10 @@
 # that ends up calling into ntdll needs a stub.  fuzz/ntstubs.c provides
 # those.  Which src/*.c take part is decided *mechanically* -- every file
 # is compiled, and the ones the compiler accepts are kept -- rather than
-# from a hand-maintained list that would rot.  Likewise for the tests: a
-# test is run if and only if it links.
+# from a hand-maintained list that would rot.  The pure-C floating-point
+# runtime helper under arch/$ARCH is included too: it is directly testable
+# and is exactly where compiler-generated integer conversions land.  Likewise
+# for the tests: a test is run if and only if it links.
 #
 # Usage: tools/asan-build.sh [--quiet | --objects-only]
 #   --objects-only  build the instrumented library objects and stop; used
@@ -344,10 +346,12 @@ fi
 cwork="$OBJ/compile-worklist"
 : > "$cwork"
 cidx=0
-for f in $(cd "$srcdir" && find src -name '*.c' | sort); do
+for f in $(cd "$srcdir" && { find src -name '*.c';
+	[ ! -f "arch/$ARCH/src/fpconv.c" ] || echo "arch/$ARCH/src/fpconv.c";
+} | sort); do
 	cidx=$((cidx + 1))
 	# src/<area>/<arch>/<file>.c overrides src/<area>/<file>.c; keep only ours
-	sub=$(echo "$f" | awk -F/ 'NF==4{print $3}')
+	sub=$(echo "$f" | awk -F/ '$1 == "src" && NF == 4 { print $3 }')
 	if [ -n "$sub" ] && [ "$sub" != "$ARCH" ]; then
 		printf '%06d\t%s\tskip\t(other architecture)\n' "$cidx" "$f" >> "$cwork"
 		continue

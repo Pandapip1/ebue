@@ -68,22 +68,34 @@ unsigned long long __fixunsxfdi(long double a)
 	return scale64(m, exp - 16383 - 63);
 }
 
+static long long signed_magnitude(unsigned long long magnitude, int negative)
+{
+	/* -2^63 is representable, but casting its magnitude to long long and
+	 * then negating evaluates -LLONG_MIN.  Values beyond the signed range
+	 * have undefined conversion semantics in C; saturating them also keeps
+	 * this toolchain helper itself free of UB and implementation-defined
+	 * unsigned-to-signed narrowing. */
+	if (magnitude >= 0x8000000000000000uLL)
+		return negative ? (-0x7fffffffffffffffLL - 1) : 0x7fffffffffffffffLL;
+	return negative ? -(long long)magnitude : (long long)magnitude;
+}
+
 long long __fixsfdi(float a)
 {
-	if (a < 0) return -(long long)__fixunssfdi(-a);
-	return (long long)__fixunssfdi(a);
+	return a < 0 ? signed_magnitude(__fixunssfdi(-a), 1)
+		: signed_magnitude(__fixunssfdi(a), 0);
 }
 
 long long __fixdfdi(double a)
 {
-	if (a < 0) return -(long long)__fixunsdfdi(-a);
-	return (long long)__fixunsdfdi(a);
+	return a < 0 ? signed_magnitude(__fixunsdfdi(-a), 1)
+		: signed_magnitude(__fixunsdfdi(a), 0);
 }
 
 long long __fixxfdi(long double a)
 {
-	if (a < 0) return -(long long)__fixunsxfdi(-a);
-	return (long long)__fixunsxfdi(a);
+	return a < 0 ? signed_magnitude(__fixunsxfdi(-a), 1)
+		: signed_magnitude(__fixunsxfdi(a), 0);
 }
 
 /* unsigned long long -> floating point.  The signed conversion is native

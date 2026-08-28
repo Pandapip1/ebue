@@ -14,8 +14,6 @@
 
 union fbits { float f; unsigned u; };
 union dbits { double d; struct { unsigned lo, hi; } u; };
-/* x87 extended: 64-bit explicit mantissa, then sign+15-bit exponent. */
-union xbits { long double x; struct { unsigned lo, hi; unsigned short se; } u; };
 
 /* Build a 64-bit value from a 64-bit mantissa `m` scaled by 2^e. */
 static unsigned long long scale64(unsigned long long m, int e)
@@ -57,33 +55,40 @@ unsigned long long __fixunsdfdi(double a)
 
 unsigned long long __fixunsxfdi(long double a)
 {
-	union xbits b;
-	int exp;
-	unsigned long long m;
-	b.x = a;
-	exp = b.u.se & 0x7fff;
-	if (!exp || (b.u.se & 0x8000)) return 0;
-	if (exp == 0x7fff) return ~0uLL;
-	m = ((unsigned long long)b.u.hi << 32) | b.u.lo;
-	return scale64(m, exp - 16383 - 63);
+	/* TinyCC follows the Win64 ABI: long double is the same 8-byte format
+	 * as double.  Decoding 80-bit x87 storage here used to read beyond the
+	 * object and returned zero for every ordinary input. */
+	return __fixunsdfdi((double)a);
+}
+
+static long long signed_magnitude(unsigned long long magnitude, int negative)
+{
+	/* -2^63 is representable, but casting its magnitude to long long and
+	 * then negating evaluates -LLONG_MIN.  Values beyond the signed range
+	 * have undefined conversion semantics in C; saturating them also keeps
+	 * this toolchain helper itself free of UB and implementation-defined
+	 * unsigned-to-signed narrowing. */
+	if (magnitude >= 0x8000000000000000uLL)
+		return negative ? (-0x7fffffffffffffffLL - 1) : 0x7fffffffffffffffLL;
+	return negative ? -(long long)magnitude : (long long)magnitude;
 }
 
 long long __fixsfdi(float a)
 {
-	if (a < 0) return -(long long)__fixunssfdi(-a);
-	return (long long)__fixunssfdi(a);
+	return a < 0 ? signed_magnitude(__fixunssfdi(-a), 1)
+		: signed_magnitude(__fixunssfdi(a), 0);
 }
 
 long long __fixdfdi(double a)
 {
-	if (a < 0) return -(long long)__fixunsdfdi(-a);
-	return (long long)__fixunsdfdi(a);
+	return a < 0 ? signed_magnitude(__fixunsdfdi(-a), 1)
+		: signed_magnitude(__fixunsdfdi(a), 0);
 }
 
 long long __fixxfdi(long double a)
 {
-	if (a < 0) return -(long long)__fixunsxfdi(-a);
-	return (long long)__fixunsxfdi(a);
+	return a < 0 ? signed_magnitude(__fixunsxfdi(-a), 1)
+		: signed_magnitude(__fixunsxfdi(a), 0);
 }
 
 /* unsigned long long -> floating point.  The signed conversion is native
