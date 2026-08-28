@@ -228,8 +228,12 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 		if (!nb) { errno = ENOMEM; return -1; }
 		*buf = nb; *cap = nc;
 	}
-	if (need_quote) (*buf)[(*len)++] = '"';
-	memcpy(*buf + *len, arg, n * sizeof(WCHAR));
+	if (need_quote) (*buf)[(*len)++] = '"'; // NOLINT(clang-analyzer-core.NullDereference) -- the analyzer
+		// considers *buf == NULL reachable here without the realloc above having run, but
+		// __array_next_capacity's initial-capacity floor (32 above) makes nc >= 32 > 0
+		// whenever *cap starts at 0, so nc != *cap is always true on that path and the
+		// realloc always runs first; it cannot reason through that arithmetic.
+	memcpy(*buf + *len, arg, n * sizeof(WCHAR)); // NOLINT(clang-analyzer-unix.cstring.NullArg) -- same reachability the note above rules out
 	*len += n;
 	if (need_quote) (*buf)[(*len)++] = '"';
 	return 0;
