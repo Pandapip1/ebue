@@ -793,9 +793,9 @@ sched_rr_get_interval/speculative/5-1.c	runtime=wine,target_arch=x86_64,kernel32
 sched_setparam/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setparam/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test measures hard FIFO scheduling behavior from a priority-scheduling option ntlibc does not claim and NT does not provide
 sched_setparam/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test measures hard round-robin scheduling behavior from a priority-scheduling option ntlibc does not claim and NT does not provide
-sched_setparam/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sched_setparam/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sched_setparam/21-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sched_setparam/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
+sched_setparam/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
+sched_setparam/21-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
 sched_setparam/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setparam/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setparam/23-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
@@ -813,8 +813,8 @@ sched_setparam/27-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setparam/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setparam/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: this scheduling test uses non-POSIX System V shared memory, and its portability helper also names platform-specific BSD and HP-UX headers
 sched_setscheduler/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sched_setscheduler/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sched_setscheduler/15-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sched_setscheduler/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
+sched_setscheduler/15-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
 sched_setscheduler/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setscheduler/17-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setscheduler/17-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite outcome UNSUPPORTED
@@ -830,10 +830,10 @@ sched_setscheduler/19-4.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baselin
 sched_setscheduler/19-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sched_setscheduler/20-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test assumes a Unix PID 1 owned by a different identity; this runtime has neither that PID namespace nor multiple identities
 sched_setscheduler/21-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sched_setscheduler/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sched_setscheduler/22-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sched_setscheduler/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
+sched_setscheduler/22-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires optional PTHREAD_SCOPE_PROCESS contention scope, which this one-to-one NT thread implementation does not support
 sched_setscheduler/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sched_yield/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sched_yield/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires a non-POSIX CPU-affinity helper that ntlibc does not provide
 sched_yield/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sem_close/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_close/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
@@ -888,11 +888,11 @@ sem_timedwait/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PA
 sem_timedwait/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_unlink/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_unlink/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_unlink/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-sem_unlink/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_unlink/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test hard-codes exec of /bin/ls, which does not exist in the Windows target environment
+sem_unlink/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	test requires changing to a second Unix effective identity, which ntlibc's single-identity runtime does not support
 sem_unlink/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- the case passes an uninitialized automatic char array to sem_unlink(), then treats only ENOENT as success. That is undefined input rather than a semaphore name and produced a deterministic FAIL here; the three valid-name sem_unlink cases independently pass unlink, post-unlink handle use, and name removal
 sem_unlink/4-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
-sem_unlink/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_unlink/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture says it tests a component longer than NAME_MAX but constructs exactly NAME_MAX bytes, which is a valid semaphore name
 sem_unlink/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_unlink/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_unlink/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
