@@ -478,7 +478,7 @@ struct vnode {
 	size_t namelen;
 };
 
-enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVENT };
+enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVENT, OF_MUTANT };
 
 /* An anonymous pipe, which src/unistd/pipe.c makes the way kernel32's
  * CreatePipe does: NtCreateNamedPipeFile for the read end and NtOpenFile
@@ -556,6 +556,7 @@ struct ofile {
 	struct vsem *sem;            /* OF_SEM */
 	ULONG event_type;            /* OF_EVENT */
 	int event_state;             /* OF_EVENT */
+	LONG mutant_state;           /* OF_MUTANT: NT count, 1 when unowned */
 };
 
 static struct ofile *vhandles[VFS_HANDLES];
@@ -3605,6 +3606,13 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE h, BOOLEAN alertable, LARGE_INTEGER 
 	int r;
 	(void)alertable;
 	if (!f) return STATUS_INVALID_HANDLE;
+	if (f->kind == OF_MUTANT) {
+		/* Native pthread creation is unavailable below, so every wait is
+		 * either an uncontended acquisition or recursion by the sole shim
+		 * thread.  NT mutant counts start at one and decrease on waits. */
+		f->mutant_state--;
+		return STATUS_WAIT_0;
+	}
 	if (f->kind == OF_EVENT) {
 		if (!f->event_state) return STATUS_TIMEOUT;
 		if (f->event_type == SynchronizationEvent) f->event_state = 0;
@@ -4134,6 +4142,34 @@ NTSTATUS NTAPI NtSetEvent(HANDLE handle, LONG *previous)
 	if (!file || file->kind != OF_EVENT) return STATUS_INVALID_HANDLE;
 	if (previous) *previous = file->event_state;
 	file->event_state = 1;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtCreateMutant(PHANDLE output, ACCESS_MASK access,
+	POBJECT_ATTRIBUTES oa, BOOLEAN initial_owner)
+{
+	struct ofile *file;
+	NTSTATUS status;
+	(void)access;
+	(void)oa;
+	if (!output) return STATUS_INVALID_PARAMETER;
+	file = vmalloc(sizeof *file);
+	if (!file) return STATUS_NO_MEMORY;
+	memset(file, 0, sizeof *file);
+	file->kind = OF_MUTANT;
+	file->mutant_state = initial_owner ? 0 : 1;
+	status = of_install(file, output);
+	if (!NT_SUCCESS(status)) vfree(file);
+	return status;
+}
+
+NTSTATUS NTAPI NtReleaseMutant(HANDLE handle, LONG *previous)
+{
+	struct ofile *file = of_get(handle);
+	if (!file || file->kind != OF_MUTANT) return STATUS_INVALID_HANDLE;
+	if (file->mutant_state >= 1) return STATUS_INVALID_PARAMETER;
+	if (previous) *previous = file->mutant_state;
+	file->mutant_state++;
 	return STATUS_SUCCESS;
 }
 NOTIMPL(NtCreateThreadEx, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, HANDLE d,
