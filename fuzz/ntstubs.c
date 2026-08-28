@@ -3897,6 +3897,12 @@ int __sig_try_deliver_remote_info(int pid, int sig, const void *info)
 	(void)info;
 	return 0;
 }
+int __sig_try_deliver_remote_nondefault(int pid, int sig)
+{
+	(void)pid;
+	(void)sig;
+	return 0;
+}
 void __sig_lock(void) { }
 void __sig_unlock(void) { }
 
