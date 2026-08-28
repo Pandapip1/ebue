@@ -1151,7 +1151,7 @@ int sigwait(const sigset_t *s, int *sig)
 			 * negative means relative, in 100ns units, so this is 100ms
 			 * -- the same convention src/unistd/sleep.c uses. */
 			LARGE_INTEGER d = -1000000;
-			NtDelayExecution(FALSE, &d);
+			NtDelayExecution(TRUE, &d);
 		}
 	}
 }
@@ -1174,7 +1174,7 @@ int sigwaitinfo(const sigset_t *set, siginfo_t *info)
 		__sig_unlock();
 		{
 			LARGE_INTEGER d = -100000; /* 10ms */
-			NtDelayExecution(FALSE, &d);
+			NtDelayExecution(TRUE, &d);
 		}
 	}
 }
@@ -1218,7 +1218,7 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 		{
 			long long left = limit - elapsed;
 			LARGE_INTEGER d = -(left < 10000000LL ? (left + 99) / 100 : 100000);
-			NtDelayExecution(FALSE, &d);
+			NtDelayExecution(TRUE, &d);
 		}
 	}
 }
@@ -1364,7 +1364,15 @@ void (*sigset(int sig, void (*h)(int)))(int)
 	if (sigprocmask(SIG_UNBLOCK, &one, 0) < 0) return SIG_ERR;
 	return SIG_HOLD;
 }
-int sigpause(int sig) { (void)sig; errno = EINTR; return -1; }
+int sigpause(int sig)
+{
+	sigset_t mask;
+
+	if (!sig_valid(sig)) { errno = EINVAL; return -1; }
+	mask = blocked;
+	sigdelset(&mask, sig);
+	return sigsuspend(&mask);
+}
 
 /* SEGV_MAPERR vs SEGV_ACCERR (signal.h.html siginfo_t DESCRIPTION) for
  * an EXCEPTION_ACCESS_VIOLATION/EXCEPTION_IN_PAGE_ERROR fault: NT's
