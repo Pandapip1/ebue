@@ -5,13 +5,78 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 from pathlib import Path
+import signal
+import subprocess
 
 
 DISPOSITIONS = ("PASS", "BUG", "UNIMPL", "NA", "FLAKY")
 PROFILE_KEYS = {
     "runtime", "target_arch", "host_arch", "wow64", "kernel32",
 }
+
+
+@dataclasses.dataclass(frozen=True)
+class CapturedProcess:
+    returncode: int | None
+    output: str
+    timed_out: bool
+
+
+def _text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value or ""
+
+
+def run_captured(command: list[str], *, cwd: Path,
+                 env: dict[str, str], timeout: int) -> CapturedProcess:
+    """Run a test with a timeout that also disposes of its process tree."""
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, errors="replace", start_new_session=os.name != "nt",
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+        return CapturedProcess(process.returncode, output, False)
+    except subprocess.TimeoutExpired as error:
+        captured = _text(error.output)
+
+    if os.name == "nt":
+        # Popen.kill() only terminates the test image.  A child which inherited
+        # stdout keeps communicate() waiting for EOF forever, which used to
+        # turn one test timeout into the Windows job's 25-minute cancellation.
+        try:
+            subprocess.run(
+                ["taskkill", "/pid", str(process.pid), "/t", "/f"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=10, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            process.kill()
+    else:
+        # start_new_session above makes the test the leader of a private
+        # process group.  Kill Wine and ordinary descendants together.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    try:
+        output, _ = process.communicate(timeout=5)
+        captured = output
+    except subprocess.TimeoutExpired:
+        # A Wine child may have been forked by the persistent wineserver and
+        # therefore escaped the wrapper's Unix process group.  Do not wait on
+        # its inherited pipe: the per-case verdict is still TIMEOUT.
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+    return CapturedProcess(None, captured, True)
 
 
 @dataclasses.dataclass(frozen=True)

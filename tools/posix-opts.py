@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from testlib import policy_accepts
+from testlib import policy_accepts, run_captured
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -233,26 +233,16 @@ def attempt(executable: Path, runner: list[str], work: Path, timeout: int,
         environment["WINEDEBUG"] = "-all"
         environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
     try:
-        result = subprocess.run(
-            [*runner, str(executable)], cwd=directory, env=environment,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, errors="replace",
-            timeout=timeout, check=False,
+        result = run_captured(
+            [*runner, str(executable)], cwd=directory,
+            env=environment, timeout=timeout,
         )
-    except subprocess.TimeoutExpired as error:
-        # subprocess does NOT decode what it captured before the kill, even
-        # under text=True: TimeoutExpired.stdout is bytes (CPython 3.12).
-        # Returning it raw poisons the "\n".join(logs) in run_one() with a
-        # TypeError, so a single timing-out case aborts the whole sweep
-        # instead of being recorded as TIMEOUT.
-        captured = error.stdout or ""
-        if isinstance(captured, bytes):
-            captured = captured.decode("utf-8", "replace")
-        return "TIMEOUT", captured
     except OSError as error:
         return "ERROR", str(error)
+    if result.timed_out:
+        return "TIMEOUT", result.output
     outcomes = {0: "PASS", 1: "FAIL", 2: "UNRESOLVED", 4: "UNSUPPORTED", 5: "UNTESTED"}
-    return outcomes.get(result.returncode, "ABNORMAL"), result.stdout
+    return outcomes.get(result.returncode, "ABNORMAL"), result.output
 
 
 def run_one(result: CaseResult, runner: list[str], work: Path,

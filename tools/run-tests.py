@@ -12,11 +12,10 @@ import os
 from pathlib import Path
 import platform
 import shlex
-import subprocess
 import sys
 import tempfile
 
-from testlib import parse_profile
+from testlib import parse_profile, run_captured
 
 
 SERIAL_PREFIXES = ("fork", "waitpid", "exec", "spawn", "posix-signal")
@@ -77,25 +76,15 @@ def run_one(path: Path, runner: list[str], root: Path, timeout: int) -> Result:
         environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
     with tempfile.TemporaryDirectory(prefix="work.", dir=root) as work:
         try:
-            completed = subprocess.run(
-                [*runner, str(path.resolve())],
-                cwd=work,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                errors="replace",
-                timeout=timeout,
-                check=False,
+            completed = run_captured(
+                [*runner, str(path.resolve())], cwd=work,
+                env=environment, timeout=timeout,
             )
-        except subprocess.TimeoutExpired as error:
-            output = error.stdout or ""
-            if isinstance(output, bytes):
-                output = output.decode(errors="replace")
-            return Result(path, "TIMEOUT", None, output)
         except OSError as error:
             return Result(path, "ERROR", None, str(error))
+
+    if completed.timed_out:
+        return Result(path, "TIMEOUT", None, completed.output)
 
     if completed.returncode == 0:
         outcome = "PASS"
@@ -105,7 +94,7 @@ def run_one(path: Path, runner: list[str], root: Path, timeout: int) -> Result:
         outcome = "NA"
     else:
         outcome = "FAIL"
-    return Result(path, outcome, completed.returncode, completed.stdout)
+    return Result(path, outcome, completed.returncode, completed.output)
 
 
 def discover_artifact(root: Path) -> list[Path]:
