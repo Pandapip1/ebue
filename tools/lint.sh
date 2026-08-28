@@ -23,8 +23,10 @@
 #   sizearith tools/lint-sizearith.py checks allocator arithmetic and raw
 #             geometric growth.  A Clang 18 analyzer plugin additionally
 #             proves every explicit integer narrowing cast and array index
-#             from real types, extents, and path constraints.  Every part
-#             self-tests before scanning the tree.
+#             from real types, extents, and path constraints, and proves
+#             that tagged result values are read only from their selected
+#             normal or special arm.  Every part self-tests before scanning
+#             the tree.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -646,7 +648,7 @@ stage_shell() {
 }
 
 stage_sizearith() {
-	hdr "checked size arithmetic and integer casts"
+	hdr "checked size arithmetic, integer casts, indices, and tagged results"
 	any=0
 	tools/lint-sizearith.py || any=1
 
@@ -684,6 +686,14 @@ stage_sizearith() {
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$array_fixture_log" 2>&1 || any=1
 	done
+	tagged_fixture_log=$builddir/tagged-result-fixtures.log
+	: > "$tagged_fixture_log"
+	for fixture in tools/lint-tagged-result-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.TaggedResult \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$tagged_fixture_log" 2>&1 || any=1
+	done
 
 	cast_logs=
 	analyzed=0
@@ -701,7 +711,7 @@ stage_sizearith() {
 			id=$(printf %s "$f" | tr / _)
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.SizeCast,ntlibc.ArrayIndex \
+				-Xclang -analyzer-checker=ntlibc.SizeCast,ntlibc.ArrayIndex,ntlibc.TaggedResult \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
@@ -728,6 +738,8 @@ stage_sizearith() {
 	tools/lint-cast-range.py --fixtures "$fixture_log" $cast_logs || any=1
 	# shellcheck disable=SC2086
 	tools/lint-array-index.py --fixtures "$array_fixture_log" $cast_logs || any=1
+	# shellcheck disable=SC2086
+	tools/lint-tagged-result.py --fixtures "$tagged_fixture_log" $cast_logs || any=1
 	return $any
 }
 

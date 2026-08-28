@@ -552,7 +552,7 @@ src/sh/execute.c	__sh_exec_pipeline	deferred[i]	deferred[i] = 1; @column 4	exist
 src/sh/execute.c	__sh_exec_pipeline	deferred[i]	if (!deferred[i]) continue; @column 8	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pids[i]	if (pids[i] < 0) continue; @column 7	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pids[i]	pids[i] = -1; @column 3	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	pids[i]	pids[i] = sr.pid; @column 3	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	pids[i]	pids[i] = sr.kind ? -1 : sr.normal; @column 3	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pipes[i - 1]	if (i > 0) close(pipes[i - 1][0]); @column 20	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pipes[i - 1][0]	if (i > 0) close(pipes[i - 1][0]); @column 20	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pipes[i]	if (i + 1 < n) close(pipes[i][1]); @column 24	existing site; prove while completing the bounds audit
@@ -569,7 +569,7 @@ src/sh/execute.c	__sh_exec_pipeline	pl->commands[i]	if (pl->commands[i].kind != 
 src/sh/execute.c	__sh_exec_pipeline	pl->commands[i]	} else if (apply_redirs(pl->commands[i].redirs, &rs, &failed)) { @column 28	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pl->commands[i]	} else if (exec_group_stage_inline(&pl->commands[i], &st)) { @column 40	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	pl->commands[i]	} else if (run_stage(&pl->commands[i], &sr, 0)) { @column 26	existing site; prove while completing the bounds audit
-src/sh/execute.c	__sh_exec_pipeline	statuses[i]	statuses[i] = sr.pid < 0 ? cmdsub_status_rule(&sr, gen0) : sr.status; @column 3	existing site; prove while completing the bounds audit
+src/sh/execute.c	__sh_exec_pipeline	statuses[i]	statuses[i] = sr.kind ? cmdsub_status_rule(&sr, gen0) : 0; @column 3	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	statuses[i]	statuses[i] = st; @column 3	existing site; prove while completing the bounds audit
 src/sh/execute.c	__sh_exec_pipeline	statuses[n - 1]	rc = statuses[n - 1]; @column 7	existing site; prove while completing the bounds audit
 src/sh/execute.c	apply_one_redir	word[0]	if (word[0] && !*end && n >= 0 && n < FD_MAX) { @column 7	existing site; prove while completing the bounds audit

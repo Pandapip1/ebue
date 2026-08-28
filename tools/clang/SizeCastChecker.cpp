@@ -464,6 +464,95 @@ public:
   }
 };
 
+class TaggedResultChecker : public Checker<check::Location> {
+  mutable std::unique_ptr<BugType> BT;
+
+  static std::string sourceOrigin(const Stmt *Statement, CheckerContext &C) {
+    const SourceManager &SM = C.getSourceManager();
+    return SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())).str();
+  }
+
+  static std::string sourceText(const Stmt *Statement, CheckerContext &C) {
+    const SourceManager &SM = C.getSourceManager();
+    SourceLocation Begin = SM.getSpellingLoc(Statement->getBeginLoc());
+    SourceLocation End = SM.getSpellingLoc(Statement->getEndLoc());
+    StringRef Raw = Lexer::getSourceText(
+        CharSourceRange::getTokenRange(Begin, End), SM, C.getLangOpts());
+    std::string Result;
+    bool Space = false;
+    for (char Character : Raw) {
+      if (std::isspace(static_cast<unsigned char>(Character))) {
+        Space = !Result.empty();
+      } else {
+        if (Space)
+          Result += ' ';
+        Result += Character;
+        Space = false;
+      }
+    }
+    return Result.empty() ? Statement->getStmtClassName() : Result;
+  }
+
+public:
+  void checkLocation(SVal Location, bool IsLoad, const Stmt *Statement,
+                     CheckerContext &C) const {
+    if (!IsLoad)
+      return;
+    const auto *Field = dyn_cast_or_null<FieldRegion>(Location.getAsRegion());
+    if (!Field)
+      return;
+    const FieldDecl *Accessed = Field->getDecl();
+    StringRef FieldName = Accessed->getName();
+    bool WantsNormal = FieldName == "normal";
+    bool WantsSpecial = FieldName == "special";
+    if (!WantsNormal && !WantsSpecial)
+      return;
+    const RecordDecl *Record = Accessed->getParent();
+    if (!Record->getName().ends_with("_variant_result"))
+      return;
+
+    const FieldDecl *Kind = nullptr;
+    for (const FieldDecl *Candidate : Record->fields()) {
+      if (Candidate->getName() == "kind") {
+        Kind = Candidate;
+        break;
+      }
+    }
+    ProgramStateRef State = C.getState();
+    ProgramStateRef Violation = State;
+    const auto *Super = dyn_cast<SubRegion>(Field->getSuperRegion());
+    if (Kind && Super) {
+      const FieldRegion *KindRegion = C.getSValBuilder()
+                                          .getRegionManager()
+                                          .getFieldRegion(Kind, Super);
+      SVal KindValue = State->getSVal(KindRegion);
+      if (std::optional<NonLoc> Defined = KindValue.getAs<NonLoc>()) {
+        Violation = State->assume(*Defined, WantsNormal);
+        if (!Violation)
+          return;
+      }
+    }
+
+    ExplodedNode *Node = C.generateNonFatalErrorNode(Violation);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Unselected tagged result field",
+                                     categories::LogicError);
+    const Decl *Current = C.getLocationContext()->getDecl();
+    std::string Context = Current ? Current->getDeclKindName() : "unknown";
+    if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
+      Context = Named->getQualifiedNameAsString();
+    std::string Message = "tagged result field '" + FieldName.str() +
+                          "' is not proven selected; origin '" +
+                          sourceOrigin(Statement, C) + "'; context '" + Context +
+                          "'; access '" + sourceText(Statement, C) + "'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+};
+
 } // namespace
 
 extern "C" const char clang_analyzerAPIVersionString[] =
@@ -474,4 +563,7 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
       "ntlibc.SizeCast", "Proves that explicit integer casts preserve values", "");
   Registry.addChecker<ArrayIndexChecker>(
       "ntlibc.ArrayIndex", "Proves that array indices are in bounds", "");
+  Registry.addChecker<TaggedResultChecker>(
+      "ntlibc.TaggedResult",
+      "Proves that tagged normal and special result fields are selected", "");
 }

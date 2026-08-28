@@ -272,7 +272,7 @@ src/sh/builtin.c	set_list_variables	(size_t)(eq - *e)	fwrite(*e, 1, (size_t)(eq 
 src/sh/execute.c	env_snapshot_restore	(size_t)(eq - e)	size_t nlen = eq ? (size_t)(eq - e) : strlen(e); @column 23	existing site; prove while completing the cast audit
 src/sh/execute.c	env_snapshot_take	(size_t)(eq - e)	size_t nlen = eq ? (size_t)(eq - e) : strlen(e); @column 22	existing site; prove while completing the cast audit
 src/sh/execute.c	spawn_stage	(int)we.we_wordc	ctx.argc = (int)we.we_wordc; @column 14	existing site; prove while completing the cast audit
-src/sh/execute.c	spawn_stage	(int)we.we_wordc	we.we_wordv, (int)we.we_wordc, &out->status); @column 36	existing site; prove while completing the cast audit
+src/sh/execute.c	spawn_stage	(int)we.we_wordc	we.we_wordv, (int)we.we_wordc, &out->special); @column 36	existing site; prove while completing the cast audit
 src/sh/execute.c	split_assignment	(size_t)(eq - raw)	nlen = (size_t)(eq - raw); @column 9	existing site; prove while completing the cast audit
 src/sh/parse.c	drain_heredocs	(size_t)(eol - line)	linelen = (size_t)(eol - line); @column 14	existing site; prove while completing the cast audit
 src/sh/parse.c	is_assignment_word	(unsigned char)*p	if (!(isalpha((unsigned char)*p) || *p == '_')) return 0; @column 16	existing site; prove while completing the cast audit

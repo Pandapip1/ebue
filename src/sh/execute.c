@@ -814,13 +814,14 @@ static int call_function(const char *name, const char *body,
 
 /* ==== Spawning one already-redirected simple command ==================== */
 
-struct stage_result {
-	pid_t pid;   /* >= 0: a real process was spawned; caller must waitpid() it */
-	int status;  /* meaningful only when pid < 0: the result is already final */
+typedef struct stage_variant_result {
+	int kind;    /* 0: normal holds a pid; nonzero: special holds a status */
+	pid_t normal;
+	int special;
 	int had_name; /* 2.9.1 step 2 actually produced a command name (so the
 	               * "no command name, but the command contained a command
 	               * substitution" status rule below does not apply) */
-};
+} stage_result_t;
 
 /* ==== Built-in utilities: dispatch, not a strcmp chain =================
  *
@@ -945,7 +946,7 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 	return 0;
 }
 
-static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, int env_mutate)
+static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	wordexp_t we;
 	const struct sh_word *w;
@@ -953,9 +954,10 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 	char *resolved;
 	char **envp = 0;
 	size_t envn = 0;
+	pid_t pid;
 	const struct sh_builtin *bi;
 
-	out->pid = -1;
+	out->kind = 1;
 	out->had_name = 0;
 
 	/* run_stage() never calls this with cmd->words == NULL (that is
@@ -964,7 +966,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 	 * `we` as read uninitialized on a hypothetical zero-iteration
 	 * loop below -- so this makes the invariant an explicit, checked
 	 * fact rather than something only a comment promises. */
-	if (!cmd->words) { out->status = 0; return 0; }
+	if (!cmd->words) { out->special = 0; return 0; }
 
 	for (w = cmd->words; w; w = w->next) {
 		rc = __wordexp_sh(w->text, &we, first ? 0 : WRDE_APPEND);
@@ -975,7 +977,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 		}
 		first = 0;
 	}
-	if (we.we_wordc == 0) { wordfree(&we); out->status = 0; return 0; } /* every word expanded away -- 2.9.1: "no command name results" */
+	if (we.we_wordc == 0) { wordfree(&we); out->special = 0; return 0; } /* every word expanded away -- 2.9.1: "no command name results" */
 	out->had_name = 1;
 
 	/* 2.9.1 step 1d: "If the command name matches the name of a
@@ -1020,12 +1022,12 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 				 * environment (2.12) that this shell does not fork
 				 * for; a function body may `cd` or assign, so running
 				 * it here would leak.  See run_stage()'s comment. */
-				out->status = 0;
+				out->special = 0;
 				wordfree(&we);
 				return 0;
 			}
 			rc = call_function(we.we_wordv[0], body,
-			                   we.we_wordv, (int)we.we_wordc, &out->status);
+			                   we.we_wordv, (int)we.we_wordc, &out->special);
 			wordfree(&we);
 			return rc;
 		}
@@ -1039,7 +1041,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 			 * puts that stage in a subshell environment, so not
 			 * doing it is indistinguishable from doing it in a
 			 * subshell that is then discarded. */
-			out->status = 0;
+			out->special = 0;
 			wordfree(&we);
 			return 0;
 		}
@@ -1049,7 +1051,7 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 		ctx.last_status = sh_last_status;
 		ctx.status = 0;
 		rc = bi->fn(&ctx);
-		out->status = ctx.status;
+		out->special = ctx.status;
 		wordfree(&we);
 		return rc;
 	}
@@ -1061,31 +1063,34 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
 
 	resolved = __find_program(we.we_wordv[0], 1);
 	if (!resolved) {
-		out->status = 127; /* command not found -- matches system()'s exit-127 clause */
+		out->special = 127; /* command not found -- matches system()'s exit-127 clause */
 		wordfree(&we);
 		free_strv(envp, envn);
 		return 0;
 	}
 
-	out->pid = __spawn(resolved, we.we_wordv, envp);
+	pid = __spawn(resolved, we.we_wordv, envp);
 	/* XCU 2.9.1's [ENOEXEC] fallback -- the shell's own half of the
 	 * requirement whose libc half is execvp()'s (src/process/exec.c).
 	 * errno is read here, before __free()/wordfree()/free_strv() get a
 	 * chance to write it.
 	 *
 	 * The interpreter runs in this process, so on success there is no
-	 * pid: `ran` says out->status is already final, which is exactly
-	 * what stage_result's pid < 0 means to the caller -- it just must
+	 * pid: `ran` says out->special is already final, which is exactly
+	 * what stage_variant_result's special arm means to the caller -- it must
 	 * not then be overwritten with 126 below. */
-	if (out->pid < 0 && errno == ENOEXEC &&
-	    run_interpreted(resolved, &we, &out->status) == 0)
+	if (pid < 0 && errno == ENOEXEC &&
+	    run_interpreted(resolved, &we, &out->special) == 0)
 		ran = 1;
 	__free(resolved);
 	wordfree(&we);
 	free_strv(envp, envn);
-	if (out->pid < 0) {
-		out->pid = -1;
-		if (!ran) out->status = 126; /* found but could not execute */
+	if (pid < 0) {
+		out->kind = 1;
+		if (!ran) out->special = 126; /* found but could not execute */
+	} else {
+		out->kind = 0;
+		out->normal = pid;
 	}
 	return 0;
 }
@@ -1109,13 +1114,13 @@ static int spawn_stage(const struct sh_command *cmd, struct stage_result *out, i
  * then discarded -- nothing downstream of the pipeline can tell the
  * difference -- and it is what keeps this file's "no fork()" pipeline
  * design correct rather than merely convenient. */
-static int run_stage(const struct sh_command *cmd, struct stage_result *out, int env_mutate)
+static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	if (!cmd->words) {
-		out->pid = -1;
+		out->kind = 1;
 		out->had_name = 0;
-		if (env_mutate) exec_assignment_only(cmd, &out->status);
-		else out->status = 0;
+		if (env_mutate) exec_assignment_only(cmd, &out->special);
+		else out->special = 0;
 		return 0;
 	}
 	return spawn_stage(cmd, out, env_mutate);
@@ -1143,17 +1148,18 @@ static int wait_status(pid_t pid)
  * no command name that "contained a command substitution" just as much
  * as "$(...)" alone is), so every caller samples it before its own
  * apply_redirs(), not just before run_stage(). */
-static int cmdsub_status_rule(const struct stage_result *sr, unsigned long gen0)
+static int cmdsub_status_rule(const stage_result_t *sr, unsigned long gen0)
 {
+	if (!sr->kind) return 0;
 	if (!sr->had_name && cmdsub_generation != gen0) return cmdsub_status;
-	return sr->status;
+	return sr->special;
 }
 
 static int exec_simple(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
 	int failed = 0;
-	struct stage_result sr;
+	stage_result_t sr;
 	int st;
 	unsigned long gen0 = cmdsub_generation;
 
@@ -1174,8 +1180,8 @@ static int exec_simple(const struct sh_command *cmd, int *status)
 	if (run_stage(cmd, &sr, 1)) { restore_fds(&rs); return -1; }
 	restore_fds(&rs);
 
-	if (sr.pid < 0) { *status = cmdsub_status_rule(&sr, gen0); return 0; }
-	st = wait_status(sr.pid);
+	if (sr.kind) { *status = cmdsub_status_rule(&sr, gen0); return 0; }
+	st = wait_status(sr.normal);
 	if (st < 0) return -1;
 	*status = st;
 	return 0;
@@ -1969,7 +1975,7 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
  * process's fds and environ/cwd before returning -- there being no
  * child process whose exit already discarded all of that for free.
  * Returns 0 with *status set to the body's own exit status (the
- * pipeline loop's existing per-stage struct stage_result is not needed
+ * pipeline loop's existing per-stage stage_result_t is not needed
  * here: this always finishes before returning, unlike a spawned stage,
  * so there is no pid to wait for later), or -1 if `cmd`'s own
  * redirections fail to apply (the caller folds that into the same
@@ -2120,12 +2126,12 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	 * yet; pass 2 below does all of that when it finally is. */
 	for (i = 0; i < n; i++) {
 		struct redir_state rs;
-		struct stage_result sr;
+		stage_result_t sr;
 		int failed = 0;
 		unsigned long gen0 = cmdsub_generation;
 
-		sr.pid = -1;
-		sr.status = 0;
+		sr.kind = 1;
+		sr.special = 0;
 		sr.had_name = 1;
 
 		if (pl->commands[i].kind != SH_CMD_SIMPLE) {
@@ -2153,7 +2159,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 				 * the rest of the pipeline still runs normally
 				 * (its reader just sees an immediate EOF from
 				 * this stage's never-written pipe end). */
-				sr.status = 1;
+				sr.special = 1;
 			} else if (run_stage(&pl->commands[i], &sr, 0)) {
 				abort_unsupported = 1;
 			}
@@ -2176,8 +2182,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		if (i > 0) close(pipes[i - 1][0]);
 		if (i + 1 < n) close(pipes[i][1]);
 
-		pids[i] = sr.pid;
-		statuses[i] = sr.pid < 0 ? cmdsub_status_rule(&sr, gen0) : sr.status;
+		pids[i] = sr.kind ? -1 : sr.normal;
+		statuses[i] = sr.kind ? cmdsub_status_rule(&sr, gen0) : 0;
 	}
 
 	/* Pass 2: run every compound-command stage's body, left to right,
