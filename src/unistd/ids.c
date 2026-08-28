@@ -423,9 +423,11 @@ static void pgid_event_name(pid_t pid, WCHAR name[48], UNICODE_STRING *us)
 	}
 	name[i] = 0;
 	us->Buffer = name;
-	/* sizearith-safe: fixed prefix plus eight pid digits fits name[48]. */
+	if ((size_t)i > __US_MAX_WCHARS) {
+		us->Length = us->MaximumLength = 0;
+		return;
+	}
 	us->Length = (USHORT)(i * sizeof(WCHAR));
-	/* sizearith-safe: us->Length plus one WCHAR has the same fixed bound. */
 	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
 }
 

@@ -42,13 +42,8 @@ NTSTATUS __pipe_handles(HANDLE *rp, HANDLE *wp, int inherit)
 	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(serial >> (n * 4)) & 15]; }
 	name[i] = 0;
 	us.Buffer = name;
-	/* Nothing here is caller-supplied: the name is the 25-character
-	 * prefix, 8 hex digits of pid, a dot and 8 hex digits of serial --
-	 * 42 code units, fixed.  It fits `name` and is three orders of
-	 * magnitude below what the USHORT Length holds, so this narrowing
-	 * cannot wrap.  sizearith-safe: fixed 42-code-unit name. */
+	if ((size_t)i > __US_MAX_WCHARS) return STATUS_NAME_TOO_LONG;
 	us.Length = (USHORT)(i * sizeof(WCHAR));
-	/* sizearith-safe: same fixed name, one WCHAR longer. */
 	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
 	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | (inherit ? OBJ_INHERIT : 0), 0, 0);
 

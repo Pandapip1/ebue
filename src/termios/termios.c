@@ -175,16 +175,13 @@ static PVOID k32_proc(const char *name)
 {
 	PVOID dll = k32_dll(), proc;
 	ANSI_STRING procname;
+	size_t len;
 
 	if (!dll) return 0;
+	len = strlen(name);
+	if (len > 0xffffu) return 0;
 	procname.Buffer = (char *)name;
-	/* k32_proc() is static to this file and every one of its five call
-	 * sites passes a string literal -- "GetConsoleMode",
-	 * "SetConsoleMode", "FlushConsoleInputBuffer", 14 to 23 bytes.  No
-	 * caller-supplied name reaches here, so this narrowing to the
-	 * ANSI_STRING's USHORT lengths cannot wrap.
-	 * sizearith-safe: static function, string-literal call sites only. */
-	procname.Length = procname.MaximumLength = (USHORT)strlen(name);
+	procname.Length = procname.MaximumLength = (USHORT)len;
 	if (!NT_SUCCESS(LdrGetProcedureAddress(dll, &procname, 0, &proc))) return 0;
 	return proc;
 }

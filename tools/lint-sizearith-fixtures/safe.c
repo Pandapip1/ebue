@@ -42,7 +42,7 @@ void *fixed_object(void)
 
 size_t proved_growth(size_t cap)
 {
-	/* sizearith-safe: fixture proves the explicit documented escape. */
+	if (cap > (size_t)-1 / 2) { return 0; }
 	return cap * 2;
 }
 
@@ -78,7 +78,7 @@ USHORT decimal_guarded_ushort_narrowing(size_t length)
 
 USHORT proved_ushort_narrowing(size_t length)
 {
-	/* sizearith-safe: fixture supplies the construction proof. */
+	if (length > 0xffffu) return 0;
 	return (USHORT)length;
 }
 

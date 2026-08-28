@@ -20,11 +20,11 @@
 #             uninitialised-value and leak paths rather than style nits.
 #   cppcheck  cppcheck --enable=warning,portability, if installed.
 #   shell     shellcheck over configure, the git hooks and tools/*.sh.
-#   sizearith tools/lint-sizearith.py: unchecked arithmetic in allocator
-#             size arguments, raw geometric capacity growth, and direct
-#             narrowing of length-like values to ULONG/int plus unguarded
-#             USHORT narrowing.  Its lexer self-tests on positive and
-#             negative fixtures before scanning the tree.
+#   sizearith tools/lint-sizearith.py checks allocator arithmetic and raw
+#             geometric growth.  A Clang 18 analyzer plugin additionally
+#             proves every explicit integer narrowing cast from its real
+#             types and path constraints.  Both halves self-test before
+#             scanning the tree.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -645,6 +645,82 @@ stage_shell() {
 	return 1
 }
 
+stage_sizearith() {
+	hdr "checked size arithmetic and integer casts"
+	any=0
+	tools/lint-sizearith.py || any=1
+
+	require_tool clang-18 || return $missing
+	require_tool clang++-18 || return $missing
+	require_tool llvm-config-18 || return $missing
+	libdir=$(llvm-config-18 --libdir)
+	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
+		-print 2>/dev/null | sort | head -n 1)
+	if [ -z "$clang_cpp" ]; then
+		report_missing "Clang 18 development libraries are not installed, so integer casts cannot be proved."
+		return $missing
+	fi
+
+	plugin=$builddir/ntlibc-size-cast-checker.so
+	# llvm-config deliberately returns shell words, not one argument.
+	# shellcheck disable=SC2046
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+		tools/clang/SizeCastChecker.cpp -o "$plugin" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+
+	fixture_log=$builddir/cast-range-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-cast-range-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.SizeCast \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+
+	cast_logs=
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch")
+		target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.cast-range.log
+		pardir=$(mktemp -d "$builddir/cast-range.XXXXXX") || return 1
+		# Each analyzer owns a log, avoiding interleaved path diagnostics.
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; plugin=$3; target=$4; shift 4
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.SizeCast \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$plugin" "$target" $flags
+		runrc=$?
+		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
+		: > "$out"
+		ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"
+		rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nsrc" -eq 0 ] || [ "$nlog" -ne "$nsrc" ]; then
+			note "cast analyzer [$arch]: FAILED -- $nlog of $nsrc source file(s) completed."
+			show_findings "$out"
+			any=1
+			continue
+		fi
+		analyzed=$((analyzed + 1))
+		cast_logs="$cast_logs $out"
+	done
+	if [ "$analyzed" -eq 0 ]; then
+		note "cast analyzer: FAILED -- no architecture was analyzed."
+		return 1
+	fi
+	# The logs are intentionally word-split: one argument per architecture.
+	# shellcheck disable=SC2086
+	tools/lint-cast-range.py --fixtures "$fixture_log" $cast_logs || any=1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -671,7 +747,7 @@ for s in $stages; do
 		analyze)   stage_analyze ;;
 		cppcheck)  stage_cppcheck ;;
 		shell)     stage_shell ;;
-		sizearith) tools/lint-sizearith.py ;;
+		sizearith) stage_sizearith ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;

@@ -1,0 +1,510 @@
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Existing explicit integer casts not yet proved by the Clang analyzer.
+# Fields: ORIGIN<TAB>CONTEXT<TAB>CAST<TAB>REASON.
+# New and stale entries both fail; remove entries as casts are proved.
+arch/i386/src/int64.c	__ashrdi3	(int)x.h.hi	existing site; prove while completing the cast audit
+arch/i386/src/int64.c	__ashrdi3	(unsigned)((int)x.h.hi >> (b - 32))	existing site; prove while completing the cast audit
+arch/i386/src/int64.c	__ashrdi3	(unsigned)((int)x.h.hi >> 31)	existing site; prove while completing the cast audit
+arch/i386/src/int64.c	__ashrdi3	(unsigned)((int)x.h.hi >> b)	existing site; prove while completing the cast audit
+arch/i386/src/wow64_fixup.c	gate_call	(ULONG)-1	existing site; prove while completing the cast audit
+arch/i386/src/wow64_fixup.c	wow64_module_base	(char)wide[i * 2]	existing site; prove while completing the cast audit
+crt/delayload2.c	__delayLoadHelper2	(unsigned long)(piat - iat)	existing site; prove while completing the cast audit
+crt/delayload2.c	name_eq_ci	(unsigned char)ascii[i]	existing site; prove while completing the cast audit
+include/sys/wait.h	macro:WIFSTOPPED	(short)((((unsigned)(s)&0xffff)*0x10001u)>>8)	existing site; prove while completing the cast audit
+include/sys/wait.h	macro:WIFSTOPPED	(unsigned)(s)	existing site; prove while completing the cast audit
+src/ctype/isalpha.c	isalpha	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/iscntrl.c	iscntrl	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/isdigit.c	isdigit	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/isgraph.c	isgraph	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/islower.c	islower	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/isprint.c	isprint	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/isspace.c	isspace	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/isupper.c	isupper	(unsigned)c	existing site; prove while completing the cast audit
+src/ctype/iswalnum.c	iswalnum	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswalpha.c	iswalpha	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswblank.c	iswblank	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswcntrl.c	iswcntrl	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswdigit.c	iswdigit	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswgraph.c	iswgraph	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswlower.c	iswlower	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswprint.c	iswprint	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswpunct.c	iswpunct	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswspace.c	iswspace	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswupper.c	iswupper	(int)wc	existing site; prove while completing the cast audit
+src/ctype/iswxdigit.c	iswxdigit	(int)wc	existing site; prove while completing the cast audit
+src/ctype/isxdigit.c	isxdigit	(unsigned)c	existing site; prove while completing the cast audit
+src/dirent/dirent_internal.h	__dirent_ascii_casecmp	(unsigned char)*a++	existing site; prove while completing the cast audit
+src/dirent/getdents.c	getdents	(ino_t)fi->FileId	existing site; prove while completing the cast audit
+src/dirent/getdents.c	getdents	(size_t)f->pos	existing site; prove while completing the cast audit
+src/dirent/readdir.c	fill	(size_t)dp->tell	existing site; prove while completing the cast audit
+src/dirent/readdir.c	make_real	(ino_t)fi->FileId	existing site; prove while completing the cast audit
+src/env/getenv.c	name_eq	(unsigned char)e[i]	existing site; prove while completing the cast audit
+src/env/getenv.c	name_eq	(unsigned char)name[i]	existing site; prove while completing the cast audit
+src/fcntl/open.c	openat	(unsigned char)vfs	existing site; prove while completing the cast audit
+src/fcntl/open.c	openat	(unsigned char)vfs_native	existing site; prove while completing the cast audit
+src/fnmatch/fnmatch.c	bracket_match	(size_t)(q - (p + 2))	existing site; prove while completing the cast audit
+src/fnmatch/fnmatch.c	bracket_match	(unsigned char)*p	existing site; prove while completing the cast audit
+src/fnmatch/fnmatch.c	bracket_match	(unsigned char)p[2]	existing site; prove while completing the cast audit
+src/fnmatch/fnmatch.c	fnm_match	(unsigned char)*s	existing site; prove while completing the cast audit
+src/ftw/ftw.c	base_offset	(int)(slash - path + 1)	existing site; prove while completing the cast audit
+src/glob/glob.c	do_glob	(size_t)(slash - pat)	existing site; prove while completing the cast audit
+src/glob/glob.c	finish	(size_t)-1	existing site; prove while completing the cast audit
+src/internal/delayload.c	ntlibc_delayLoadHelper2	(unsigned long)(piat - descr->iat)	existing site; prove while completing the cast audit
+src/internal/fd.c	__fd_init	(size_t)count	existing site; prove while completing the cast audit
+src/internal/fd.c	__fd_init	(unsigned)count	existing site; prove while completing the cast audit
+src/internal/fd.c	__fd_install_at	(unsigned char)(type ? type : __handle_type(h))	existing site; prove while completing the cast audit
+src/internal/libc.h	__array_next_capacity	(size_t)-1	existing site; prove while completing the cast audit
+src/internal/libc.h	__clock_qpc_resolution	(long)(1000000000LL / freq)	existing site; prove while completing the cast audit
+src/internal/libc.h	__duration_ticks	(unsigned long long)(INT64_MAX - subsecond)	existing site; prove while completing the cast audit
+src/internal/libc.h	__duration_ticks	(unsigned long long)seconds	existing site; prove while completing the cast audit
+src/internal/libc.h	__file_remaining_count	(int)remain	existing site; prove while completing the cast audit
+src/internal/libc.h	__nt_to_unix_nsec	(unsigned long long)t	existing site; prove while completing the cast audit
+src/internal/libc.h	__nt_to_unix_sec	(long long)(delta / __TICKS_PER_SEC)	existing site; prove while completing the cast audit
+src/internal/libc.h	__nt_to_unix_sec	(unsigned long long)t	existing site; prove while completing the cast audit
+src/internal/libc.h	__size_add_checked	(size_t)-1	existing site; prove while completing the cast audit
+src/internal/libc.h	__size_mul_checked	(size_t)-1	existing site; prove while completing the cast audit
+src/internal/libc.h	__timespec_diff_ticks	(long long)seconds	existing site; prove while completing the cast audit
+src/internal/libc.h	__timespec_diff_ticks	(unsigned long long)(INT64_MAX - subsecond)	existing site; prove while completing the cast audit
+src/internal/libc.h	__timespec_diff_ticks	(unsigned long long)end_sec	existing site; prove while completing the cast audit
+src/internal/libc.h	__timespec_diff_ticks	(unsigned long long)start_sec	existing site; prove while completing the cast audit
+src/internal/libc.h	macro:__NT_SIGNAL_EXIT	(int)(__NT_SIGNAL_EXIT_BASE | ((unsigned)(sig) & 0x7fu))	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_ACCESS_DENIED	(NTSTATUS)0xC0000022L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_BUFFER_TOO_SMALL	(NTSTATUS)0xC0000023L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_CONNECTION_ABORTED	(NTSTATUS)0xC0000241L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_CONNECTION_DISCONNECTED	(NTSTATUS)0xC000020CL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_CONNECTION_RESET	(NTSTATUS)0xC000020DL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_DIRECTORY_NOT_EMPTY	(NTSTATUS)0xC0000101L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_DLL_NOT_FOUND	(NTSTATUS)0xC0000135L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_END_OF_FILE	(NTSTATUS)0xC0000011L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_ENTRYPOINT_NOT_FOUND	(NTSTATUS)0xC0000139L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_FILE_IS_A_DIRECTORY	(NTSTATUS)0xC00000BAL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_FILE_LOCK_CONFLICT	(NTSTATUS)0xC0000054L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_INVALID_DEVICE_REQUEST	(NTSTATUS)0xC0000010L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_INVALID_FILE_FOR_SECTION	(NTSTATUS)0xC0000020L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_INVALID_IMAGE_FORMAT	(NTSTATUS)0xC000007BL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_INVALID_IMAGE_NOT_MZ	(NTSTATUS)0xC000012FL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_INVALID_INFO_CLASS	(NTSTATUS)0xC0000003L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_INVALID_PARAMETER	(NTSTATUS)0xC000000DL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_IO_REPARSE_TAG_NOT_HANDLED	(NTSTATUS)0xC0000279L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_LOCAL_DISCONNECT	(NTSTATUS)0xC000013BL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_LOCK_NOT_GRANTED	(NTSTATUS)0xC0000055L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NAME_TOO_LONG	(NTSTATUS)0xC0000106L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NOT_A_DIRECTORY	(NTSTATUS)0xC0000103L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NOT_A_REPARSE_POINT	(NTSTATUS)0xC0000275L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NOT_FOUND	(NTSTATUS)0xC0000225L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NOT_IMPLEMENTED	(NTSTATUS)0xC0000002L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NOT_SAME_DEVICE	(NTSTATUS)0xC00000D4L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NOT_SUPPORTED	(NTSTATUS)0xC00000BBL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NO_MEMORY	(NTSTATUS)0xC0000017L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NO_MORE_FILES	(NTSTATUS)0x80000006L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_NO_SUCH_FILE	(NTSTATUS)0xC000000FL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_OBJECT_NAME_COLLISION	(NTSTATUS)0xC0000035L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_OBJECT_NAME_NOT_FOUND	(NTSTATUS)0xC0000034L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_OBJECT_PATH_NOT_FOUND	(NTSTATUS)0xC000003AL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PIPE_BROKEN	(NTSTATUS)0xC000014BL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PIPE_CLOSING	(NTSTATUS)0xC00000B1L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PIPE_CONNECTED	(NTSTATUS)0xC00000B2L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PIPE_DISCONNECTED	(NTSTATUS)0xC00000B0L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PIPE_EMPTY	(NTSTATUS)0xC00000D9L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PRIVILEGE_NOT_HELD	(NTSTATUS)0xC0000061L	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_PROCESS_IS_TERMINATING	(NTSTATUS)0xC000010AL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_REMOTE_DISCONNECT	(NTSTATUS)0xC000013CL	existing site; prove while completing the cast audit
+src/internal/nt.h	macro:STATUS_SEMAPHORE_LIMIT_EXCEEDED	(NTSTATUS)0xC0000047L	existing site; prove while completing the cast audit
+src/internal/path.c	__name_too_long	(size_t)(p - start)	existing site; prove while completing the cast audit
+src/internal/path.c	nt_path_over_max_path	(USHORT)(out->nt.Length + sizeof(WCHAR))	existing site; prove while completing the cast audit
+src/internal/path.c	ntpath_at_impl	(USHORT)(out->nt.Length + sizeof(WCHAR))	existing site; prove while completing the cast audit
+src/internal/rpath.c	ntlibc_rpath_error	(unsigned long)last_err.status	existing site; prove while completing the cast audit
+src/internal/rpath.c	try_load	(USHORT)(us.Length + sizeof(WCHAR))	existing site; prove while completing the cast audit
+src/internal/utf.c	__utf16_to_utf8_buf	(ULONG)input_bytes	existing site; prove while completing the cast audit
+src/internal/utf.c	__utf16_to_utf8_buf	(int)outlen	existing site; prove while completing the cast audit
+src/internal/utf.c	__utf8_to_utf16	(ULONG)(allocation - sizeof(WCHAR))	existing site; prove while completing the cast audit
+src/internal/vfs.c	__vfs_resolve_at	(unsigned char)path[0]	existing site; prove while completing the cast audit
+src/internal/vfs.c	__vfs_stat	(ino_t)kind	existing site; prove while completing the cast audit
+src/internal/vfs.c	component	(int)(p - *start)	existing site; prove while completing the cast audit
+src/internal/vfs.c	same	(size_t)n	existing site; prove while completing the cast audit
+src/malloc/malloc.c	calloc	(size_t)-1	existing site; prove while completing the cast audit
+src/malloc/malloc.c	posix_memalign	(size_t)-1	existing site; prove while completing the cast audit
+src/malloc/malloc.c	reallocarray	(size_t)-1	existing site; prove while completing the cast audit
+src/math/copysign.c	copysign	(uint64_t)-1	existing site; prove while completing the cast audit
+src/math/fabs.c	fabs	(uint64_t)-1	existing site; prove while completing the cast audit
+src/math/nextafter.c	nextafterl	(uint16_t)((ux.i.se & 0x8000) | e)	existing site; prove while completing the cast audit
+src/math/nextafter.c	nextafterl	(uint16_t)(uy.i.se & 0x8000)	existing site; prove while completing the cast audit
+src/math/nextafter.c	nextafterl	(uint64_t)-1	existing site; prove while completing the cast audit
+src/math/x87.h	__x87_rndint	(unsigned short)((cw & ~0x0c00) | (rc << 10))	existing site; prove while completing the cast audit
+src/misc/basename.c	basename	(unsigned)(s[0] | 32)	existing site; prove while completing the cast audit
+src/misc/catgets.c	catgets	(uint32_t)msg_id	existing site; prove while completing the cast audit
+src/misc/catgets.c	catgets	(uint32_t)set_id	existing site; prove while completing the cast audit
+src/misc/catgets.c	catopen	(size_t)-1	existing site; prove while completing the cast audit
+src/misc/catgets.c	expand	(size_t)-1	existing site; prove while completing the cast audit
+src/misc/catgets.c	read_catalog	(size_t)-1	existing site; prove while completing the cast audit
+src/misc/dirname.c	dirname	(unsigned)(s[0] | 32)	existing site; prove while completing the cast audit
+src/misc/getopt.c	getopt	(char)c	existing site; prove while completing the cast audit
+src/misc/getopt.c	getopt	(unsigned char)*p	existing site; prove while completing the cast audit
+src/misc/getopt.c	getopt	(unsigned char)argv[optind][__optpos]	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf16le	(unsigned char)(cp >> 8)	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf16le	(unsigned char)(hi >> 8)	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf16le	(unsigned char)(lo >> 8)	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf8	(unsigned char)(0x80 | ((cp >> 12) & 0x3f))	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf8	(unsigned char)(0x80 | ((cp >> 6) & 0x3f))	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf8	(unsigned char)(0x80 | (cp & 0x3f))	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf8	(unsigned char)(0xc0 | (cp >> 6))	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf8	(unsigned char)(0xe0 | (cp >> 12))	existing site; prove while completing the cast audit
+src/misc/iconv.c	encode_utf8	(unsigned char)(0xf0 | (cp >> 18))	existing site; prove while completing the cast audit
+src/misc/iconv.c	iconv	(size_t)-1	existing site; prove while completing the cast audit
+src/misc/resource.c	__fsize_allow	(long long)fsize_cur	existing site; prove while completing the cast audit
+src/misc/resource.c	__fsize_clamp	(long long)count	existing site; prove while completing the cast audit
+src/misc/resource.c	__fsize_clamp	(long long)fsize_cur	existing site; prove while completing the cast audit
+src/misc/resource.c	__fsize_room_at	(long long)fsize_cur	existing site; prove while completing the cast audit
+src/misc/resource.c	apply_job_limits	(LARGE_INTEGER)(cpu_cur * 10000000ULL)	existing site; prove while completing the cast audit
+src/misc/resource.c	apply_job_limits	(SIZE_T)lim	existing site; prove while completing the cast audit
+src/misc/resource.c	getrlimit	(rlim_t)__fd_limit	existing site; prove while completing the cast audit
+src/misc/resource.c	nice	(int)v	existing site; prove while completing the cast audit
+src/misc/strfmon.c	vstrfmon	(size_t)(dot - num)	existing site; prove while completing the cast audit
+src/misc/strfmon.c	vstrfmon	(size_t)*g	existing site; prove while completing the cast audit
+src/misc/strfmon.c	vstrfmon	(ssize_t)o.written	existing site; prove while completing the cast audit
+src/misc/strfmon.c	vstrfmon	(unsigned long)-1	existing site; prove while completing the cast audit
+src/misc/times.c	nt100ns_to_ticks	(clock_t)(t100ns / (__TICKS_PER_SEC / 100))	existing site; prove while completing the cast audit
+src/misc/times.c	times	(unsigned long long)kt.KernelTime	existing site; prove while completing the cast audit
+src/misc/times.c	times	(unsigned long long)kt.UserTime	existing site; prove while completing the cast audit
+src/misc/times.c	times	(unsigned long long)mono.tv_nsec	existing site; prove while completing the cast audit
+src/misc/times.c	times	(unsigned long long)mono.tv_sec	existing site; prove while completing the cast audit
+src/misc/times.c	timeval_to_ticks	(unsigned long long)tv->tv_sec	existing site; prove while completing the cast audit
+src/misc/times.c	timeval_to_ticks	(unsigned long long)tv->tv_usec	existing site; prove while completing the cast audit
+src/mman/mman.c	lock_range	(size_t)(hi - lo)	existing site; prove while completing the cast audit
+src/mman/mman.c	lock_range	(size_t)(lo - m->base)	existing site; prove while completing the cast audit
+src/mman/mman.c	map_file	(size_t)(eof - off)	existing site; prove while completing the cast audit
+src/mman/mman.c	map_file	(unsigned long long)(eof - off)	existing site; prove while completing the cast audit
+src/mman/mman.c	mmap	(size_t)(((char *)addr - m->base) / MMAP_PAGE)	existing site; prove while completing the cast audit
+src/mman/mman.c	msync	(SIZE_T)(hi - lo)	existing site; prove while completing the cast audit
+src/mman/mman.c	msync	(size_t)(hi - lo)	existing site; prove while completing the cast audit
+src/mman/mman.c	msync	(size_t)(lo - m->base)	existing site; prove while completing the cast audit
+src/mman/mman.c	munmap	(SIZE_T)(hi - lo)	existing site; prove while completing the cast audit
+src/mman/mman.c	munmap	(size_t)(hi - lo)	existing site; prove while completing the cast audit
+src/mman/mman.c	munmap	(size_t)(lo - m->base)	existing site; prove while completing the cast audit
+src/mman/shm.c	rename_mapped_away	(size_t)(slash - path + 1)	existing site; prove while completing the cast audit
+src/mman/shm.c	rename_mapped_away	(unsigned)getpid()	existing site; prove while completing the cast audit
+src/mman/shm.c	rename_mapped_away	(unsigned)gettid()	existing site; prove while completing the cast audit
+src/mman/shm.c	shm_mode_path	(size_t)(slash - path)	existing site; prove while completing the cast audit
+src/mman/shm.c	shm_mode_write	(unsigned char)(mode >> 16)	existing site; prove while completing the cast audit
+src/mman/shm.c	shm_mode_write	(unsigned char)(mode >> 8)	existing site; prove while completing the cast audit
+src/mman/shm.c	shm_mode_write	(unsigned char)mode	existing site; prove while completing the cast audit
+src/mman/shm.c	shm_path	(unsigned char)component[i]	existing site; prove while completing the cast audit
+src/process/children.c	child_grow	(size_t)(cap - __child_cap)	existing site; prove while completing the cast audit
+src/process/children.c	child_grow	(size_t)__child_cap	existing site; prove while completing the cast audit
+src/process/children.c	child_grow	(size_t)cap	existing site; prove while completing the cast audit
+src/process/find_program.c	__find_program	(size_t)(e - p)	existing site; prove while completing the cast audit
+src/process/fork.c	fork_impl	(int)(ULONG_PTR)info.ClientId.UniqueProcess	existing site; prove while completing the cast audit
+src/process/posix_spawn.c	spawn_common	(size_t)cap	existing site; prove while completing the cast audit
+src/process/spawn.c	__spawn	(USHORT)(cmdLine.Length + sizeof(WCHAR))	existing site; prove while completing the cast audit
+src/process/spawn.c	__spawn	(USHORT)runtime_len	existing site; prove while completing the cast audit
+src/process/spawn.c	__spawn	(int)(ULONG_PTR)info.ClientId.UniqueProcess	existing site; prove while completing the cast audit
+src/process/spawn_file_actions.c	fa_push	(size_t)cap	existing site; prove while completing the cast audit
+src/process/wait.c	__wait_encode_status	(unsigned)exitcode	existing site; prove while completing the cast audit
+src/process/wait.c	fill_child_rusage	(unsigned long long)kt.KernelTime	existing site; prove while completing the cast audit
+src/process/wait.c	fill_child_rusage	(unsigned long long)kt.UserTime	existing site; prove while completing the cast audit
+src/process/wait.c	ticks_to_timeval	(suseconds_t)((t100ns % 10000000ULL) / 10)	existing site; prove while completing the cast audit
+src/process/wait.c	ticks_to_timeval	(time_t)(t100ns / 10000000ULL)	existing site; prove while completing the cast audit
+src/process/wait.c	waitid	(pid_t)id	existing site; prove while completing the cast audit
+src/regex/regex.c	apply_repeat	(size_t)len	existing site; prove while completing the cast audit
+src/regex/regex.c	apply_repeat	(unsigned long)(MAX_PROG - start)	existing site; prove while completing the cast audit
+src/regex/regex.c	apply_repeat	(unsigned long)len	existing site; prove while completing the cast audit
+src/regex/regex.c	apply_repeat	(unsigned long)m	existing site; prove while completing the cast audit
+src/regex/regex.c	apply_repeat	(unsigned long)n	existing site; prove while completing the cast audit
+src/regex/regex.c	bre_atom	(unsigned char)*ps->p	existing site; prove while completing the cast audit
+src/regex/regex.c	bre_branch	(unsigned char)ps->p[0]	existing site; prove while completing the cast audit
+src/regex/regex.c	bre_branch	(unsigned char)ps->p[1]	existing site; prove while completing the cast audit
+src/regex/regex.c	bt_grow	(size_t)cap	existing site; prove while completing the cast audit
+src/regex/regex.c	emit	(size_t)ncap	existing site; prove while completing the cast audit
+src/regex/regex.c	ere_alt	(size_t)len1	existing site; prove while completing the cast audit
+src/regex/regex.c	ere_atom	(unsigned char)*ps->p	existing site; prove while completing the cast audit
+src/regex/regex.c	ere_branch	(unsigned char)*ps->p	existing site; prove while completing the cast audit
+src/regex/regex.c	esc_literal	(unsigned char)*ps->p++	existing site; prove while completing the cast audit
+src/regex/regex.c	newset	(size_t)ncap	existing site; prove while completing the cast audit
+src/regex/regex.c	parse_bound	(unsigned char)*ps->p	existing site; prove while completing the cast audit
+src/regex/regex.c	parse_bracket	(size_t)(q - start)	existing site; prove while completing the cast audit
+src/regex/regex.c	parse_bracket	(unsigned char)*ps->p++	existing site; prove while completing the cast audit
+src/regex/regex.c	parse_bracket	(unsigned char)*start	existing site; prove while completing the cast audit
+src/regex/regex.c	parse_bracket	(unsigned char)~bs->bits[i]	existing site; prove while completing the cast audit
+src/regex/regex.c	regcomp	(size_t)(ps.ngroup - 1)	existing site; prove while completing the cast audit
+src/regex/regex.c	regexec	(size_t)nslot	existing site; prove while completing the cast audit
+src/regex/regex.c	regexec	(size_t)rx->nprog	existing site; prove while completing the cast audit
+src/regex/regex.c	setbit	(unsigned char)(1u << (cc & 7))	existing site; prove while completing the cast audit
+src/regex/regex.c	setbit	(unsigned char)c	existing site; prove while completing the cast audit
+src/regex/regex.c	setbit	(unsigned char)tolower(cc)	existing site; prove while completing the cast audit
+src/regex/regex.c	testbit	(unsigned char)c	existing site; prove while completing the cast audit
+src/regex/regex.c	testbit	(unsigned char)tolower(cc)	existing site; prove while completing the cast audit
+src/search/hsearch.c	hash_str	(unsigned char)*s++	existing site; prove while completing the cast audit
+src/search/hsearch.c	hcreate	(size_t)-1	existing site; prove while completing the cast audit
+src/sh/builtin.c	set_list_variables	(size_t)(eq - *e)	existing site; prove while completing the cast audit
+src/sh/execute.c	env_snapshot_restore	(size_t)(eq - e)	existing site; prove while completing the cast audit
+src/sh/execute.c	env_snapshot_take	(size_t)(eq - e)	existing site; prove while completing the cast audit
+src/sh/execute.c	spawn_stage	(int)we.we_wordc	existing site; prove while completing the cast audit
+src/sh/execute.c	split_assignment	(size_t)(eq - raw)	existing site; prove while completing the cast audit
+src/sh/parse.c	drain_heredocs	(size_t)(eol - line)	existing site; prove while completing the cast audit
+src/sh/parse.c	is_assignment_word	(unsigned char)*p	existing site; prove while completing the cast audit
+src/sh/parse.c	is_name	(unsigned char)*q	existing site; prove while completing the cast audit
+src/sh/parse.c	next_raw_token	(unsigned char)w[i]	existing site; prove while completing the cast audit
+src/sh/parse.c	parse_funcdef	(size_t)(end - start)	existing site; prove while completing the cast audit
+src/sh/parse.c	parse_funcdef	(unsigned char)end[-1]	existing site; prove while completing the cast audit
+src/sh/script.c	slurp	(size_t)-1	existing site; prove while completing the cast audit
+src/signal/sigdelivery.c	sig_delivery_thread	(pid_t)pkt.sender_pid	existing site; prove while completing the cast audit
+src/signal/sigdelivery.c	sig_pipe_name	(unsigned)pid	existing site; prove while completing the cast audit
+src/signal/sigdelivery.c	sig_send_lock_name	(unsigned)pid	existing site; prove while completing the cast audit
+src/signal/sigdelivery.c	sig_try_deliver_remote_info	(ULONG)(si ? si->si_pid : getpid())	existing site; prove while completing the cast audit
+src/signal/sigdelivery.c	sig_try_deliver_remote_info	(ULONG)sig	existing site; prove while completing the cast audit
+src/signal/signal.c	stop_event_name	(unsigned)pid	existing site; prove while completing the cast audit
+src/socket/afdsupport.c	__afd_poll_request_size	CStyleCastExpr	existing site; prove while completing the cast audit
+src/socket/inet.c	htons	(uint16_t)(((h & 0x00ffU) << 8) | ((h & 0xff00U) >> 8))	existing site; prove while completing the cast audit
+src/socket/inet.c	pton6	(unsigned char)*src	existing site; prove while completing the cast audit
+src/socket/sendrecv.c	recv	(ssize_t)io.Information	existing site; prove while completing the cast audit
+src/socket/sendrecv.c	send	(ssize_t)io.Information	existing site; prove while completing the cast audit
+src/stat/lxmod.c	putle32	(unsigned char)(v >> 16)	existing site; prove while completing the cast audit
+src/stat/lxmod.c	putle32	(unsigned char)(v >> 8)	existing site; prove while completing the cast audit
+src/stat/lxmod.c	putle32	(unsigned char)v	existing site; prove while completing the cast audit
+src/stat/stat.c	__fstat_handle	(ino_t)ii.IndexNumber	existing site; prove while completing the cast audit
+src/stat/stat.c	__fstat_synthetic_ino	(ino_t)ii.IndexNumber	existing site; prove while completing the cast audit
+src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)fsi.ActualAvailableAllocationUnits	existing site; prove while completing the cast audit
+src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)fsi.CallerAvailableAllocationUnits	existing site; prove while completing the cast audit
+src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)fsi.TotalAllocationUnits	existing site; prove while completing the cast audit
+src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)si.AvailableAllocationUnits	existing site; prove while completing the cast audit
+src/stat/statvfs.c	statvfs_handle	(fsblkcnt_t)si.TotalAllocationUnits	existing site; prove while completing the cast audit
+src/stat/statvfs.c	statvfs_handle	(unsigned long)-1	existing site; prove while completing the cast audit
+src/stdio/buf.c	__fflush_locked	(long long)(f->rend - f->rpos)	existing site; prove while completing the cast audit
+src/stdio/buf.c	__fflush_locked	(size_t)n	existing site; prove while completing the cast audit
+src/stdio/buf.c	__file_read	(ssize_t)n	existing site; prove while completing the cast audit
+src/stdio/buf.c	__file_write	(ssize_t)n	existing site; prove while completing the cast audit
+src/stdio/buf.c	__file_write	CStyleCastExpr	existing site; prove while completing the cast audit
+src/stdio/buf.c	__fill	(int)n	existing site; prove while completing the cast audit
+src/stdio/buf.c	__fill	(size_t)n	existing site; prove while completing the cast audit
+src/stdio/buf.c	__towrite	(long long)(f->rend - f->rpos)	existing site; prove while completing the cast audit
+src/stdio/printf.c	build_argtab	(unsigned char)sp.type	existing site; prove while completing the cast audit
+src/stdio/printf.c	count_fits	(size_t)(INT_MAX - sk->count)	existing site; prove while completing the cast audit
+src/stdio/printf.c	emit_float	(char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' : conv == 'A' ? 'a' : conv)	existing site; prove while completing the cast audit
+src/stdio/printf.c	macro:gf	(unsigned char)*(q)	existing site; prove while completing the cast audit
+src/stdio/printf.c	out	(unsigned char)s[i]	existing site; prove while completing the cast audit
+src/stdio/printf.c	out_body	(size_t)(n - zpos)	existing site; prove while completing the cast audit
+src/stdio/printf.c	out_body	(size_t)zpos	existing site; prove while completing the cast audit
+src/stdio/printf.c	out_units	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/printf.c	pad	(long)skipped	existing site; prove while completing the cast audit
+src/stdio/printf.c	parse_spec	(int)(gf(fp, st) - '0')	existing site; prove while completing the cast audit
+src/stdio/printf.c	parse_spec	CStyleCastExpr	existing site; prove while completing the cast audit
+src/stdio/printf.c	scan_argno	(int)(gf(q, st) - '0')	existing site; prove while completing the cast audit
+src/stdio/printf.c	str_arg	(long)n	existing site; prove while completing the cast audit
+src/stdio/printf.c	str_arg	(long)r	existing site; prove while completing the cast audit
+src/stdio/printf.c	str_arg	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/printf.c	str_arg	(size_t)-2	existing site; prove while completing the cast audit
+src/stdio/printf.c	str_arg	(size_t)-3	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(int)a.i	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(size_t)((fp - start) / st)	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(unsigned char)a.u	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(unsigned long long)a.i	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(unsigned short)a.u	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(wchar_t)a.i	existing site; prove while completing the cast audit
+src/stdio/printf.c	vfprintf_st	(wchar_t)b	existing site; prove while completing the cast audit
+src/stdio/printf.c	vsprintf	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/rw.c	__fread	(unsigned char)f->unget[--f->nunget]	existing site; prove while completing the cast audit
+src/stdio/rw.c	fgets	(char)c	existing site; prove while completing the cast audit
+src/stdio/rw.c	getdelim	(char)c	existing site; prove while completing the cast audit
+src/stdio/rw.c	gets	(char)c	existing site; prove while completing the cast audit
+src/stdio/rw.c	ungetc	(unsigned char)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	ab_give	(size_t)b->esz	existing site; prove while completing the cast audit
+src/stdio/scanf.c	macro:gf	(unsigned char)*(q)	existing site; prove while completing the cast audit
+src/stdio/scanf.c	nb_put	(char)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	rd	(int)w	existing site; prove while completing the cast audit
+src/stdio/scanf.c	store_unit	(char)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	store_unit	(int)r	existing site; prove while completing the cast audit
+src/stdio/scanf.c	store_unit	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/scanf.c	store_unit	(wchar_t)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	unrd	(size_t)cap	existing site; prove while completing the cast audit
+src/stdio/scanf.c	unrd	(unsigned char)sc->lastnb	existing site; prove while completing the cast audit
+src/stdio/scanf.c	unrd	(wchar_t)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	(int)(gf(fp, st) - '0')	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	(uintptr_t)uv	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	(unsigned int)uv	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	(unsigned)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	CStyleCastExpr	existing site; prove while completing the cast audit
+src/stdio/scanf.c	wide_put	(char)c	existing site; prove while completing the cast audit
+src/stdio/scanf.c	wide_put	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/scanf.c	wide_put	(size_t)-2	existing site; prove while completing the cast audit
+src/stdio/scanf.c	wide_put	(size_t)-3	existing site; prove while completing the cast audit
+src/stdio/seek.c	fseeko	(size_t)f->nunget	existing site; prove while completing the cast audit
+src/stdio/seek.c	fseeko	CStyleCastExpr	existing site; prove while completing the cast audit
+src/stdio/seek.c	ftell	(long)o	existing site; prove while completing the cast audit
+src/stdio/seek.c	ftello	(long long)f->wpos	existing site; prove while completing the cast audit
+src/stdio/seek.c	ftello	(long long)unread	existing site; prove while completing the cast audit
+src/stdio/seek.c	ftello	(size_t)(LLONG_MAX - pos)	existing site; prove while completing the cast audit
+src/stdio/seek.c	ftello	(size_t)f->nunget	existing site; prove while completing the cast audit
+src/stdio/seek.c	ftello	(size_t)pos	existing site; prove while completing the cast audit
+src/stdio/wide.c	fgetws	(wchar_t)c	existing site; prove while completing the cast audit
+src/stdio/wide.c	getwc_core	(char)c	existing site; prove while completing the cast audit
+src/stdio/wide.c	getwc_core	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/wide.c	getwc_core	(size_t)-2	existing site; prove while completing the cast audit
+src/stdio/wide.c	getwc_core	(size_t)-3	existing site; prove while completing the cast audit
+src/stdio/wide.c	getwc_core	(unsigned char)c	existing site; prove while completing the cast audit
+src/stdio/wide.c	putwc_core	(size_t)-1	existing site; prove while completing the cast audit
+src/stdio/wide.c	putwc_core	(unsigned char)buf[i]	existing site; prove while completing the cast audit
+src/stdio/wide.c	ungetwc	(wchar_t)wc	existing site; prove while completing the cast audit
+src/stdlib/a64l.c	a64l	(int32_t)x	existing site; prove while completing the cast audit
+src/stdlib/a64l.c	a64l	(uint32_t)(d - digits)	existing site; prove while completing the cast audit
+src/stdlib/a64l.c	l64a	(uint32_t)v	existing site; prove while completing the cast audit
+src/stdlib/ecvt.c	ecvt	(unsigned char)tmp[i]	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	btowc	(unsigned char)c	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbrtowc	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbrtowc	(size_t)-2	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbrtowc	(size_t)-3	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbrtowc	(wchar_t)(0xd800 + (cp >> 10))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbrtowc	(wchar_t)st->__opaque2	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbsnrtowcs	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbsnrtowcs	(size_t)-2	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbsnrtowcs	(size_t)-3	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbsrtowcs	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbsrtowcs	(size_t)-2	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	mbsrtowcs	(size_t)-3	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0x80 | ((c >> 6) & 0x3f))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0x80 | ((cp >> 12) & 0x3f))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0x80 | ((cp >> 6) & 0x3f))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0x80 | (c & 0x3f))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0x80 | (cp & 0x3f))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0xc0 | (c >> 6))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0xe0 | (c >> 12))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(char)(0xf0 | (cp >> 18))	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcrtomb	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcsnrtombs	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbrtowc.c	wcsrtombs	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbtowc.c	mbtowc	(int)r	existing site; prove while completing the cast audit
+src/stdlib/mbtowc.c	mbtowc	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mbtowc.c	mbtowc	(size_t)-2	existing site; prove while completing the cast audit
+src/stdlib/mbtowc.c	wctomb	(int)r	existing site; prove while completing the cast audit
+src/stdlib/mbtowc.c	wctomb	(size_t)-1	existing site; prove while completing the cast audit
+src/stdlib/mktemp.c	rnd	(uint32_t)(uintptr_t)&local	existing site; prove while completing the cast audit
+src/stdlib/mktemp.c	rnd	(uint32_t)(uintptr_t)&rnd_state	existing site; prove while completing the cast audit
+src/stdlib/mktemp.c	rnd	(uint32_t)getpid()	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	jrand48	(int32_t)(uint32_t)(step(s) >> 16)	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	jrand48	(uint32_t)(step(s) >> 16)	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	nrand48	(long)(step(s) >> 17)	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	srand48	(unsigned long)seed	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	srand48	(unsigned short)seed	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	step	(unsigned short)(x >> 16)	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	step	(unsigned short)(x >> 32)	existing site; prove while completing the cast audit
+src/stdlib/rand48.c	step	(unsigned short)x	existing site; prove while completing the cast audit
+src/stdlib/random.c	initstate	(unsigned)i	existing site; prove while completing the cast audit
+src/stdlib/random.c	initstate	(unsigned)j	existing site; prove while completing the cast audit
+src/stdlib/random.c	random	(long)k	existing site; prove while completing the cast audit
+src/stdlib/random.c	setstate	(unsigned)i	existing site; prove while completing the cast audit
+src/stdlib/random.c	setstate	(unsigned)j	existing site; prove while completing the cast audit
+src/stdlib/strtod.c	bn_muladd	(uint32_t)carry	existing site; prove while completing the cast audit
+src/stdlib/strtod.c	bn_sub	(uint32_t)t	existing site; prove while completing the cast audit
+src/stdlib/strtod.c	parse_hex	(uint32_t)m	existing site; prove while completing the cast audit
+src/stdlib/strtod.c	strtox	(int)(c = gc(q, st))	existing site; prove while completing the cast audit
+src/stdlib/strtod.c	strtox	(size_t)(n2 ? n2 : n)	existing site; prove while completing the cast audit
+src/stdlib/strtod.c	strtox	(size_t)n	existing site; prove while completing the cast audit
+src/stdlib/strtol.c	parse	(unsigned char)*s	existing site; prove while completing the cast audit
+src/stdlib/wcstol.c	wcstoimax	(intmax_t)wcstox(s, e, b, INTMAX_MAX)	existing site; prove while completing the cast audit
+src/stdlib/wcstol.c	wcstol	(intmax_t)wcstox(s, e, b, LONG_MAX)	existing site; prove while completing the cast audit
+src/stdlib/wcstol.c	wcstol	(long)(intmax_t)wcstox(s, e, b, LONG_MAX)	existing site; prove while completing the cast audit
+src/stdlib/wcstol.c	wcstoll	(long long)wcstox(s, e, b, LLONG_MAX)	existing site; prove while completing the cast audit
+src/string/memccpy.c	memccpy	(unsigned char)c	existing site; prove while completing the cast audit
+src/string/memchr.c	memchr	(unsigned char)c	existing site; prove while completing the cast audit
+src/string/memrchr.c	memrchr	(unsigned char)c	existing site; prove while completing the cast audit
+src/string/memset.c	memset	(unsigned char)c	existing site; prove while completing the cast audit
+src/string/strchr.c	strchr	(unsigned char)c	existing site; prove while completing the cast audit
+src/string/strchrnul.c	strchrnul	(unsigned char)c	existing site; prove while completing the cast audit
+src/string/strlen.c	macro:ONES	(size_t)-1	existing site; prove while completing the cast audit
+src/string/strnlen.c	strnlen	(size_t)(p-s)	existing site; prove while completing the cast audit
+src/string/strverscmp.c	strverscmp	(unsigned char)(l[i]-'0')	existing site; prove while completing the cast audit
+src/string/strverscmp.c	strverscmp	(unsigned char)(r[i]-'0')	existing site; prove while completing the cast audit
+src/string/wcscasecmp.c	wcscasecmp	(int)towlower(*l)	existing site; prove while completing the cast audit
+src/string/wcscasecmp.c	wcscasecmp	(int)towlower(*r)	existing site; prove while completing the cast audit
+src/string/wcscasecmp.c	wcsncasecmp	(int)towlower(*l)	existing site; prove while completing the cast audit
+src/string/wcscasecmp.c	wcsncasecmp	(int)towlower(*r)	existing site; prove while completing the cast audit
+src/string/wcsnlen.c	wcsnlen	(size_t)(p - s)	existing site; prove while completing the cast audit
+src/string/wcsspn.c	wcscspn	(size_t)(s - a)	existing site; prove while completing the cast audit
+src/string/wcsspn.c	wcsspn	(size_t)(s - a)	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_open	CStyleCastExpr	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_path	(unsigned char)component[i]	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_timedreceive	(ssize_t)best.length	existing site; prove while completing the cast audit
+src/thread/mqueue.c	mq_timedsend	(unsigned)len	existing site; prove while completing the cast audit
+src/thread/mqueue.c	object_attributes	(unsigned char)ascii[i]	existing site; prove while completing the cast audit
+src/thread/mqueue.c	path_hash	(unsigned char)*s++	existing site; prove while completing the cast audit
+src/thread/pthread.c	pthread_getattr_np	(size_t)((char *)teb->NtTib.StackBase - (char *)teb->NtTib.StackLimit)	existing site; prove while completing the cast audit
+src/thread/pthread_signal.c	signal_apc	(int)(ULONG_PTR)signal_value	existing site; prove while completing the cast audit
+src/thread/semaphore.c	namespace_lock	(unsigned)hash	existing site; prove while completing the cast audit
+src/thread/semaphore.c	object_attributes	(unsigned char)ascii[i]	existing site; prove while completing the cast audit
+src/thread/semaphore.c	path_hash	(unsigned char)*s++	existing site; prove while completing the cast audit
+src/thread/semaphore.c	sem_open	CStyleCastExpr	existing site; prove while completing the cast audit
+src/thread/semaphore.c	sem_path	(unsigned char)component[i]	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned long)((long long)tm->tm_year + 1900)	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned)tm->tm_hour	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned)tm->tm_mday	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned)tm->tm_min	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned)tm->tm_mon	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned)tm->tm_sec	existing site; prove while completing the cast audit
+src/time/asctime.c	asctime_r	(unsigned)tm->tm_wday	existing site; prove while completing the cast audit
+src/time/getdate.c	days_in_month	(int)(__days_from_civil(y2, (unsigned)m2, 1) - __days_from_civil(y, (unsigned)m, 1))	existing site; prove while completing the cast audit
+src/time/gmtime.c	gmtime_r	(int)(days - __days_from_civil(y, 1, 1))	existing site; prove while completing the cast audit
+src/time/gmtime.c	gmtime_r	(int)(rem % 3600 / 60)	existing site; prove while completing the cast audit
+src/time/gmtime.c	gmtime_r	(int)(rem / 3600)	existing site; prove while completing the cast audit
+src/time/gmtime.c	gmtime_r	(int)d	existing site; prove while completing the cast audit
+src/time/gmtime.c	gmtime_r	(int)m	existing site; prove while completing the cast audit
+src/time/strftime.c	do_strftime	(unsigned)tm->tm_mon	existing site; prove while completing the cast audit
+src/time/strftime.c	do_strftime	(unsigned)tm->tm_wday	existing site; prove while completing the cast audit
+src/time/strftime.c	macro:PUT_NUM	(unsigned long)(-(_v + 1))	existing site; prove while completing the cast audit
+src/time/strftime.c	macro:PUT_NUM	(unsigned long)_v	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(unsigned char)*f	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(unsigned char)*s	existing site; prove while completing the cast audit
+src/time/strptime.c	read_num	(unsigned char)*s	existing site; prove while completing the cast audit
+src/time/strptime.c	skip_ws	(unsigned char)*s	existing site; prove while completing the cast audit
+src/time/time_impl.h	__civil_from_days	(unsigned)(z - era * 146097)	existing site; prove while completing the cast audit
+src/time/time_impl.h	__days_from_civil	(unsigned)(y - era * 400)	existing site; prove while completing the cast audit
+src/time/timer.c	timer_signal	(int)(expirations - 1)	existing site; prove while completing the cast audit
+src/time/timer.c	timer_signal	(int)(timer - timers)	existing site; prove while completing the cast audit
+src/time/timer.c	timer_signal	(int)overrun	existing site; prove while completing the cast audit
+src/time/tzset.c	read_name	(unsigned char)*p	existing site; prove while completing the cast audit
+src/time/tzset.c	tzset	(unsigned char)*tz	existing site; prove while completing the cast audit
+src/time/wcsftime.c	wcsftime	(size_t)-1	existing site; prove while completing the cast audit
+src/time/wcsftime.c	wcsftime	(size_t)-2	existing site; prove while completing the cast audit
+src/time/wcsftime.c	wcsftime	(size_t)-3	existing site; prove while completing the cast audit
+src/unistd/getpid.c	getpid	(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess	existing site; prove while completing the cast audit
+src/unistd/getpid.c	getppid	(pid_t)pbi.InheritedFromUniqueProcessId	existing site; prove while completing the cast audit
+src/unistd/getpid.c	gettid	(pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread	existing site; prove while completing the cast audit
+src/unistd/ids.c	ascii_case_equal	(unsigned char)*a++	existing site; prove while completing the cast audit
+src/unistd/ids.c	ascii_case_equal	(unsigned char)*b++	existing site; prove while completing the cast audit
+src/unistd/ids.c	getuid	(uid_t)-1	existing site; prove while completing the cast audit
+src/unistd/ids.c	id_supported	(uid_t)-1	existing site; prove while completing the cast audit
+src/unistd/ids.c	pgid_event_name	(unsigned)pid	existing site; prove while completing the cast audit
+src/unistd/ids.c	set_two_ids	(uid_t)-1	existing site; prove while completing the cast audit
+src/unistd/ids.c	sid_uid	(uid_t)-1	existing site; prove while completing the cast audit
+src/unistd/link.c	readlinkat	(int)bufsz	existing site; prove while completing the cast audit
+src/unistd/link.c	readlinkat	(int)strlen(u)	existing site; prove while completing the cast audit
+src/unistd/link.c	readlinkat	(size_t)n	existing site; prove while completing the cast audit
+src/unistd/link.c	readlinkat	(ssize_t)tl	existing site; prove while completing the cast audit
+src/unistd/pipe.c	__pipe_handles	(unsigned)(ULONG_PTR)__teb()->ClientId.UniqueProcess	existing site; prove while completing the cast audit
+src/unistd/read.c	pread	(ssize_t)io.Information	existing site; prove while completing the cast audit
+src/unistd/read.c	read	(ssize_t)io.Information	existing site; prove while completing the cast audit
+src/unistd/sleep.c	alarm_apc	(unsigned long)(ULONG_PTR)ctx	existing site; prove while completing the cast audit
+src/unistd/sleep.c	alarm_remaining	(unsigned)((left + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC)	existing site; prove while completing the cast audit
+src/unistd/sleep.c	sleep	(unsigned)((owed + __TICKS_PER_SEC - 1) / __TICKS_PER_SEC)	existing site; prove while completing the cast audit
+src/unistd/sysconf.c	sysconf	(long)((unsigned long long)sbi.NumberOfPhysicalPages * sbi.PageSize / 4096)	existing site; prove while completing the cast audit
+src/unistd/unlink.c	final_component_is_dot	(size_t)(end - start)	existing site; prove while completing the cast audit
+src/unistd/write.c	pwrite	(ULONG)count	existing site; prove while completing the cast audit
+src/unistd/write.c	pwrite	(long long)count	existing site; prove while completing the cast audit
+src/unistd/write.c	pwrite	(size_t)(__OFF_MAX - off)	existing site; prove while completing the cast audit
+src/unistd/write.c	pwrite	(size_t)room	existing site; prove while completing the cast audit
+src/unistd/write.c	pwrite	(ssize_t)io.Information	existing site; prove while completing the cast audit
+src/unistd/write.c	write	(ULONG)count	existing site; prove while completing the cast audit
+src/unistd/write.c	write	(size_t)room	existing site; prove while completing the cast audit
+src/unistd/write.c	write	(ssize_t)io.Information	existing site; prove while completing the cast audit
+src/wordexp/arith.c	arith_primary	(unsigned char)*a->p	existing site; prove while completing the cast audit
+src/wordexp/arith.c	is_namechar	(unsigned char)c	existing site; prove while completing the cast audit
+src/wordexp/arith.c	is_namestart	(unsigned char)c	existing site; prove while completing the cast audit
+src/wordexp/arith.c	negate	(unsigned long)v	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_arith	(size_t)(end - start)	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_dollar_single	(char)c	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_dollar_single	(unsigned char)*p++	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_param_word	(size_t)(end - start)	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_trim_pattern	(size_t)(end - start)	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	is_namechar	(unsigned char)c	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	is_namestart	(unsigned char)c	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	pv_pack	(size_t)-1	existing site; prove while completing the cast audit

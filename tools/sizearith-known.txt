@@ -5,12 +5,8 @@
 # Fields: RULE<TAB>FILE<TAB>NORMALISED EXPRESSION<TAB>REASON.
 # New sites fail.  Entries that no longer match also fail, so delete each
 # entry in the same commit that converts its source to checked arithmetic.
-length-narrowing	src/dirent/getdents.c	(int)used	existing site; remove while completing the checked-size audit
-length-narrowing	src/dirent/getdents.c	(int)used	existing site; remove while completing the checked-size audit
-length-narrowing	src/dirent/getdents.c	(int)used	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/dirent/scandir.c	__malloc(newcap * sizeof *nl)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/dirent/scandir.c	__malloc(offsetof(struct dirent, d_name) + namelen + 1)	existing site; remove while completing the checked-size audit
-length-narrowing	src/dirent/scandir.c	(int)n	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/env/setenv.c	realloc(__environ, sizeof(char *) * (n + 2))	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/env/setenv.c	malloc(l1 + l2 + 2)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/env/setenv.c	realloc(putenv_strings, sizeof(char *) * (nputenv + 1))	existing site; remove while completing the checked-size audit
@@ -27,17 +23,10 @@ allocation-arithmetic	src/internal/path.c	__malloc((rest + 3) * sizeof(WCHAR))	e
 allocation-arithmetic	src/internal/rpath.c	__malloc(i + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/internal/rpath.c	__malloc(dl + 1 + tl + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/internal/rpath.c	__malloc(strlen(*entry) + 1)	existing site; remove while completing the checked-size audit
-length-narrowing	src/internal/utf.c	(ULONG)length	existing site; remove while completing the checked-size audit
-length-narrowing	src/internal/utf.c	(ULONG)(allocation - sizeof(WCHAR))	existing site; remove while completing the checked-size audit
-length-narrowing	src/internal/utf.c	(ULONG)input_bytes	existing site; remove while completing the checked-size audit
-length-narrowing	src/internal/utf.c	(int)outlen	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/internal/vfs.c	__malloc(dl + 1 + pl + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/malloc/malloc.c	RtlAllocateHeap(__process_heap(), HEAP_ZERO_MEMORY, m * n)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/malloc/malloc.c	realloc(p, m * n)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/malloc/malloc.c	malloc(len + align)	existing site; remove while completing the checked-size audit
-length-narrowing	src/math/scalbln.c	(int)n	existing site; remove while completing the checked-size audit
-length-narrowing	src/math/scalbln.c	(int)n	existing site; remove while completing the checked-size audit
-length-narrowing	src/math/scalbln.c	(int)n	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/misc/catgets.c	realloc(buf, cap * 2)	existing site; remove while completing the checked-size audit
 unchecked-growth	src/misc/catgets.c	cap *= 2	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/mman/shm.c	malloc(pathlen + 1)	existing site; remove while completing the checked-size audit
@@ -47,7 +36,6 @@ unchecked-growth	src/process/children.c	__child_cap * 2	existing site; remove wh
 allocation-arithmetic	src/process/exec.c	malloc((n + 3) * sizeof *av)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/process/exec.c	malloc(cap * sizeof(char *))	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/process/exec.c	realloc(v, nc * sizeof *v)	existing site; remove while completing the checked-size audit
-length-narrowing	src/process/exec.c	(int)(n ? n : 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/process/find_program.c	malloc(dlen + 1 + nlen + 4 + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/process/find_program.c	malloc(strlen(name) + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/process/posix_spawn.c	malloc((size_t)cap * sizeof *sv)	existing site; remove while completing the checked-size audit
@@ -69,10 +57,6 @@ unchecked-growth	src/regex/regex.c	capprog * 2	existing site; remove while compl
 unchecked-growth	src/regex/regex.c	capsets * 2	existing site; remove while completing the checked-size audit
 unchecked-growth	src/regex/regex.c	capbt * 2	existing site; remove while completing the checked-size audit
 unchecked-growth	src/regex/regex.c	ncap * 2	existing site; remove while completing the checked-size audit
-length-narrowing	src/select/select.c	(ULONG)len	existing site; remove while completing the checked-size audit
-length-narrowing	src/select/select.c	(ULONG)n	existing site; remove while completing the checked-size audit
-length-narrowing	src/select/select.c	(ULONG)n	existing site; remove while completing the checked-size audit
-length-narrowing	src/sh/builtin.c	(int)n	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/execute.c	__malloc(nlen + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/execute.c	__malloc((nc + 1) * sizeof *nv)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/execute.c	__malloc((cap + 1) * sizeof *v)	existing site; remove while completing the checked-size audit
@@ -93,8 +77,6 @@ unchecked-growth	src/sh/execute.c	cap * 2	existing site; remove while completing
 unchecked-growth	src/sh/execute.c	cap * 2	existing site; remove while completing the checked-size audit
 unchecked-growth	src/sh/execute.c	cap * 2	existing site; remove while completing the checked-size audit
 unchecked-growth	src/sh/execute.c	nc *= 2	existing site; remove while completing the checked-size audit
-length-narrowing	src/sh/execute.c	(int)n	existing site; remove while completing the checked-size audit
-length-narrowing	src/sh/execute.c	(int)(n ? n : 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/param.c	__malloc((size_t)n * sizeof *nv)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/parse.c	__malloc(n + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/parse.c	__malloc(nc * sizeof *na)	existing site; remove while completing the checked-size audit
@@ -103,14 +85,8 @@ unchecked-growth	src/sh/parse.c	cap * 2	existing site; remove while completing t
 allocation-arithmetic	src/sh/script.c	realloc(buf, cap * 2)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/sh/script.c	malloc(strlen(cmdstr) + 1)	existing site; remove while completing the checked-size audit
 unchecked-growth	src/sh/script.c	cap *= 2	existing site; remove while completing the checked-size audit
-length-narrowing	src/socket/bind.c	(ULONG)__afd_bind_request_size	existing site; remove while completing the checked-size audit
-length-narrowing	src/socket/connect.c	(ULONG)__afd_connect_request_size	existing site; remove while completing the checked-size audit
-length-narrowing	src/socket/getname.c	(ULONG)__afd_sockname_reply_size	existing site; remove while completing the checked-size audit
-length-narrowing	src/stdio/buf.c	(int)n	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/stdio/misc.c	malloc(n + sizeof "/ntlibcXXXXXX")	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/stdio/misc.c	malloc(n + 1 + pn + sizeof "XXXXXX")	existing site; remove while completing the checked-size audit
-length-narrowing	src/stdio/misc.c	(ULONG)bufsz	existing site; remove while completing the checked-size audit
-length-narrowing	src/stdio/misc.c	(ULONG)bufsz	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/stdio/printf.c	malloc((size_t)n + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/stdio/scanf.c	malloc((size_t)cap * sizeof *q)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/stdio/scanf.c	realloc(sc->pb, (size_t)cap * sizeof *q)	existing site; remove while completing the checked-size audit
@@ -123,20 +99,10 @@ allocation-arithmetic	src/stdlib/realpath.c	malloc(len + 1)	existing site; remov
 allocation-arithmetic	src/stdlib/system.c	malloc(strlen(cs) + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/string/strdup.c	malloc(l+1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/string/strndup.c	malloc(l+1)	existing site; remove while completing the checked-size audit
-length-narrowing	src/thread/aio.c	(ULONG)handle_count	existing site; remove while completing the checked-size audit
-length-narrowing	src/thread/aio.c	(ULONG)handle_count	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/thread/mqueue.c	malloc(d + sizeof "/ntlibc-mq/" - 1 + n + 1)	existing site; remove while completing the checked-size audit
-length-narrowing	src/thread/mqueue.c	(ULONG)len	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/thread/pthread_atfork.c	realloc(handlers, capacity * sizeof *handlers)	existing site; remove while completing the checked-size audit
-length-narrowing	src/thread/pthread_cancel.c	(ULONG)length	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/thread/semaphore.c	malloc(d + sizeof "/ntlibc-sem/" - 1 + n + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/unistd/link.c	__malloc((nlen + 1) * sizeof(WCHAR))	existing site; remove while completing the checked-size audit
-length-narrowing	src/unistd/link.c	(int)strlen	existing site; remove while completing the checked-size audit
-length-narrowing	src/unistd/link.c	(int)bufsz	existing site; remove while completing the checked-size audit
-length-narrowing	src/unistd/read.c	(ULONG)count	existing site; remove while completing the checked-size audit
-length-narrowing	src/unistd/read.c	(ULONG)count	existing site; remove while completing the checked-size audit
-length-narrowing	src/unistd/write.c	(ULONG)count	existing site; remove while completing the checked-size audit
-length-narrowing	src/unistd/write.c	(ULONG)count	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(nc * sizeof *nv)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(total * sizeof *v)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(input_len + prefix + 1)	existing site; remove while completing the checked-size audit

@@ -588,7 +588,6 @@ static inline int __array_next_capacity(size_t current, size_t used,
 	if (capacity > maximum) capacity = minimum;
 	while (capacity < minimum) {
 		if (capacity > maximum / 2) { capacity = minimum; break; }
-		/* sizearith-safe: capacity <= (SIZE_MAX / element_size) / 2. */
 		capacity *= 2;
 	}
 	*result = capacity;

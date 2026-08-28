@@ -41,24 +41,44 @@ size_t raw_linear_growth(size_t cap, size_t amount)
 	return cap;
 }
 
+size_t division_guard_does_not_prove_addition(size_t cap)
+{
+	if (cap > (size_t)-1 / 2) { return 0; }
+	cap += 2; /* sizearith-expect: unchecked-growth */
+	return cap;
+}
+
+size_t late_guarded_growth(size_t cap)
+{
+	size_t result = cap * 2; /* sizearith-expect: unchecked-growth */
+	if (cap > (size_t)-1 / 2) { return 0; }
+	return result;
+}
+
 ULONG raw_ulong_narrowing(size_t length)
 {
-	return (ULONG)length; /* sizearith-expect: length-narrowing */
+	return (ULONG)length;
 }
 
 int raw_int_narrowing(size_t byte_count)
 {
-	return (int)byte_count; /* sizearith-expect: length-narrowing */
+	return (int)byte_count;
 }
 
 USHORT raw_ushort_narrowing(size_t length)
 {
-	return (USHORT)length; /* sizearith-expect: length-narrowing */
+	return (USHORT)length;
 }
 
 USHORT late_guarded_ushort_narrowing(size_t length)
 {
-	USHORT result = (USHORT)length; /* sizearith-expect: length-narrowing */
+	USHORT result = (USHORT)length;
 	if (length > 0xffffu) return 0;
 	return result;
+}
+
+/* sizearith-safe: sizearith-expect: forbidden-escape */
+size_t obsolete_escape_marker(size_t value)
+{
+	return value;
 }

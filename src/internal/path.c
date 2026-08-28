@@ -195,16 +195,12 @@ int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 	size_t floor = root ? 0 : nt_prefix_root(nt);
 	size_t i = nt->Length / sizeof(WCHAR);
 
+	if (i > 0xffffu / sizeof(WCHAR)) return 0;
 	InitializeObjectAttributes(&oa, &cut, OBJ_CASE_INSENSITIVE, root, 0);
 	while (i > floor) {
 		NTSTATUS st;
 		if (nt->Buffer[--i] != '\\') continue;
-		/* `i` starts at nt->Length / sizeof(WCHAR) and only ever
-		 * decreases, so i * sizeof(WCHAR) <= nt->Length, and nt->Length
-		 * is itself a USHORT the caller already fits.  This narrowing
-		 * re-narrows a value that arrived as a USHORT, so it cannot
-		 * wrap.
-		 * sizearith-safe: bounded by the source string's own Length. */
+		/* `i` starts at nt->Length / sizeof(WCHAR) and only decreases. */
 		cut.Length = (USHORT)(i * sizeof(WCHAR));
 		st = NtQueryAttributesFile(&oa, &bi);
 		if (NT_SUCCESS(st))
@@ -507,8 +503,6 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 
 	memset(out, 0, sizeof *out);
 	out->nt.Buffer = w;
-	/* sizearith-safe: len is bounded by __US_MAX_WCHARS just above, so
-	 * (len + 1) * sizeof(WCHAR) still fits a USHORT. */
 	out->nt.Length = (USHORT)(len * sizeof(WCHAR));
 	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));
 	out->buf = 0;                   /* w is freed as ->dos */

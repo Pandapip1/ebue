@@ -288,12 +288,11 @@ static void sig_pipe_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 	for (n = 8; n > 0;) { n--; name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15]; }
 	name[i] = 0;
 	us->Buffer = name;
-	/* Fixed 29-character prefix plus 8 hex digits, 37 WCHARs total,
-	 * three orders of magnitude below the USHORT Length this narrows
-	 * into -- same reasoning pipe.c's own name gives. */
-	/* sizearith-safe: fixed 37-WCHAR name, see above. */
+	if ((size_t)i > __US_MAX_WCHARS) {
+		us->Length = us->MaximumLength = 0;
+		return;
+	}
 	us->Length = (USHORT)(i * sizeof(WCHAR));
-	/* sizearith-safe: us->Length plus one WCHAR, same bound as above. */
 	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
 }
 
@@ -314,9 +313,11 @@ static void sig_send_lock_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 	}
 	name[i] = 0;
 	us->Buffer = name;
-	/* sizearith-safe: fixed prefix plus eight pid digits fits name[48]. */
+	if ((size_t)i > __US_MAX_WCHARS) {
+		us->Length = us->MaximumLength = 0;
+		return;
+	}
 	us->Length = (USHORT)(i * sizeof(WCHAR));
-	/* sizearith-safe: us->Length plus one WCHAR has the same fixed bound. */
 	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
 }
 

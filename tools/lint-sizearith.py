@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Reject unchecked allocation arithmetic, capacity growth, and narrowing.
+"""Reject unchecked allocation arithmetic and capacity growth.
 
 This is a deliberately small C lexer, not a regular-expression grep.  It
 keeps source positions while masking comments and literals, balances call
@@ -9,11 +9,10 @@ parentheses, and examines the actual size argument of the allocators used by
 this tree.  Existing debt is recorded by exact source expression in
 tools/sizearith-known.txt; new sites and stale entries both fail the stage.
 
-USHORT casts additionally accept a preceding __US_MAX_WCHARS, USHRT_MAX,
-0xffff, or 65535 bound in their function.  Use a ``sizearith-safe: reason``
-comment on the same or preceding line only when a bound is proved by
-construction.  Checked arithmetic should normally be expressed through
-src/internal/libc.h's __size_* and __array_next_capacity helpers instead.
+Integer casts are handled separately by the Clang path-sensitive checker;
+this lexer does not guess from type, variable, or limit names.  Checked
+arithmetic should normally be expressed through src/internal/libc.h's
+__size_* and __array_next_capacity helpers.  Escape comments are rejected.
 """
 
 from __future__ import annotations
@@ -44,11 +43,6 @@ TOKEN = re.compile(
     r"<<|>>|->|\+\+|--|&&|\|\||==|!=|<=|>=|[^\s]"
 )
 GROWTH_NAME = re.compile(r"(?:^|_)(?:cap|capacity|newcap|new_cap|nc)$|cap", re.I)
-LENGTH_NAME = re.compile(
-    r"^(?:n|used|total|argc)$|len|length|size|count|cap|bytes?|alloc|"
-    r"wordc|bufsz|nslot|nprog",
-    re.I,
-)
 
 
 @dataclass(frozen=True)
@@ -206,22 +200,42 @@ def normalise(source: str, begin: int, end: int) -> str:
     return " ".join(source[begin:end].split()).replace("\t", " ")
 
 
-def exempt(source_lines: list[str], line: int) -> bool:
-    here = source_lines[line - 1] if 0 < line <= len(source_lines) else ""
-    prev = source_lines[line - 2] if line > 1 else ""
-    return "sizearith-safe:" in here or "sizearith-safe:" in prev
-
-
-def ushort_guarded(toks: list[Tok], cast: int, braces: dict[int, int]) -> bool:
-    """Return whether a USHORT bound appears before this cast's function body."""
-    containing = [begin for begin, end in braces.items() if begin < cast < end]
+def growth_guarded(toks: list[Tok], variable: int, factor: str, operation: int,
+                   parens: dict[int, int], braces: dict[int, int]) -> bool:
+    """Recognise an immediately dominating overflow guard with an exit."""
+    name = toks[variable].text
+    containing = [begin for begin, end in braces.items() if begin < operation < end]
     if not containing:
         return False
     body = min(containing)
-    for tok in toks[body + 1:cast]:
-        low = tok.text.lower()
-        if (low in ("__us_max_wchars", "ushrt_max", "65535") or
-                re.fullmatch(r"0xffff(?:u|ul|ull)?", low)):
+    for i in range(body + 1, operation):
+        if toks[i].text != "if" or i + 1 >= len(toks) or toks[i + 1].text != "(":
+            continue
+        cond_open = i + 1
+        cond_close = parens.get(cond_open)
+        if cond_close is None or cond_close >= operation:
+            continue
+        cond = [tok.text for tok in toks[cond_open + 1:cond_close]]
+        try:
+            variable_at = cond.index(name)
+            greater_at = cond.index(">", variable_at + 1)
+            divide_at = cond.index("/", greater_at + 1)
+            factor_at = cond.index(factor, divide_at + 1)
+        except ValueError:
+            continue
+        if not (variable_at < greater_at < divide_at < factor_at):
+            continue
+        statement = cond_close + 1
+        if statement >= len(toks) or toks[statement].text != "{":
+            continue
+        statement_end = braces.get(statement)
+        if statement_end is None or statement_end >= operation:
+            continue
+        if not any(tok.text in ("break", "return")
+                   for tok in toks[statement + 1:statement_end]):
+            continue
+        between = [tok.text for tok in toks[statement_end + 1:operation]]
+        if all(tok in ("return",) for tok in between):
             return True
     return False
 
@@ -237,6 +251,10 @@ def scan(path: pathlib.Path) -> list[Site]:
     sites: list[Site] = []
     allocation_spans: list[tuple[int, int]] = []
 
+    for number, line in enumerate(lines, 1):
+        if "sizearith-safe:" in line:
+            sites.append(Site("forbidden-escape", rel, number, line.strip()))
+
     for i, tok in enumerate(toks[:-1]):
         argnos = ALLOC_SIZE_ARGS.get(tok.text)
         if argnos is None or toks[i + 1].text != "(" or i + 1 not in parens:
@@ -251,8 +269,6 @@ def scan(path: pathlib.Path) -> list[Site]:
         if not bad:
             continue
         line = tok.line
-        if exempt(lines, line):
-            continue
         sites.append(Site("allocation-arithmetic", rel, line,
                           normalise(source, tok.start, toks[close].end)))
         allocation_spans.append((i, close))
@@ -265,55 +281,38 @@ def scan(path: pathlib.Path) -> list[Site]:
             continue
         found = False
         end = i
+        variable = i
+        factor = ""
+        guarded_multiply = False
         if GROWTH_NAME.search(tok.text):
             if i + 1 < len(toks) and toks[i + 1].text in ("*=", "+=", "<<="):
                 found, end = True, min(i + 2, len(toks) - 1)
+                factor = toks[end].text
+                guarded_multiply = toks[i + 1].text == "*="
             elif (i + 2 < len(toks) and toks[i + 1].text == "*" and
                   i + 1 not in ignored and re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|\d+)",
                                                         toks[i + 2].text)):
                 found, end = True, i + 2
+                factor = toks[end].text
+                guarded_multiply = True
             elif (i + 2 < len(toks) and toks[i + 1].text == "<<" and
                   toks[i + 2].text == "1"):
                 found, end = True, i + 2
+                factor = "2"
         elif (re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|\d+)", tok.text) and
               i + 2 < len(toks) and toks[i + 1].text == "*" and
               i + 1 not in ignored and GROWTH_NAME.search(toks[i + 2].text)):
             found, end = True, i + 2
+            variable, factor = i + 2, tok.text
+            guarded_multiply = True
         if found:
             line = tok.line
-            if not exempt(lines, line):
+            if (guarded_multiply and factor and
+                    growth_guarded(toks, variable, factor, i, parens, braces)):
+                continue
+            else:
                 sites.append(Site("unchecked-growth", rel, line,
                                   normalise(source, tok.start, toks[end].end)))
-
-    for i in range(len(toks) - 3):
-        if toks[i].text != "(" or toks[i + 2].text != ")":
-            continue
-        ctype = toks[i + 1].text
-        if ctype not in ("USHORT", "ULONG", "int"):
-            continue
-        if i > 0 and toks[i - 1].text == "sizeof":
-            continue
-        begin = i + 3
-        end = begin + 1
-        if toks[begin].text == "(" and begin in parens:
-            end = parens[begin] + 1
-        elif toks[begin].text in ("+", "-", "*", "~", "!") and end < len(toks):
-            end += 1
-        operand = toks[begin:end]
-        # A direct sizeof operand is a compile-time constant.  This rule
-        # targets run-time lengths that can exceed the destination type.
-        first = next((t.text for t in operand if t.text not in ("(", ")")), "")
-        relevant = ctype == "USHORT" or (first != "sizeof" and any(
-            t.text == "sizeof" or LENGTH_NAME.search(t.text)
-            for t in operand if re.match(r"[A-Za-z_]", t.text)
-        ))
-        if not relevant:
-            continue
-        line = toks[i].line
-        if exempt(lines, line) or (ctype == "USHORT" and ushort_guarded(toks, i, braces)):
-            continue
-        sites.append(Site("length-narrowing", rel, line,
-                          normalise(source, toks[i].start, toks[end - 1].end)))
 
     # Repeated tokens in one expression can make the growth matcher report
     # the same site twice.  Preserve source order while collapsing them.
@@ -397,7 +396,7 @@ def main() -> int:
     stale = list(remaining.elements())
     for site in new:
         print(f"{site.path}:{site.line}: {site.rule}: {site.snippet}")
-        print("  use checked size/growth conversion, or sizearith-safe: with a proof")
+        print("  use checked size/growth conversion or a mechanically visible bound")
     for rule, path, snippet in stale:
         print(f"{KNOWN.relative_to(ROOT)}: stale {rule} entry: {path}: {snippet}", file=sys.stderr)
     if new or stale:
