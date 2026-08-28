@@ -28,6 +28,49 @@ LIBDIR  = $(srcdir)/obj/fuzzlib$(MODESUF)
 OUT     = $(srcdir)/obj/fuzz$(MODESUF)
 FUZZ_TIME ?= 60
 
+# ENGINE picks which fuzzing driver a harness is linked against.  Every
+# fuzz_*.c file defines LLVMFuzzerTestOneInput() and nothing else on
+# purpose: that is the portable seam both engines drive, so switching
+# ENGINE never touches a harness source file.
+#
+#   libfuzzer  (default) linked against clang's built-in libFuzzer via
+#              -fsanitize=fuzzer[-no-link], as everything below this
+#              comment historically assumed.  ../tools/fuzz.sh drives it.
+#
+#   afl        linked against AFL++'s aflpp_driver -- a libFuzzer-driver
+#              work-alike that supplies main(), and, when the binary is
+#              built by afl-clang-fast, AFL++'s shared-memory persistent
+#              loop (__afl_persistent_loop over __afl_fuzz_ptr /
+#              __afl_fuzz_len) -- instead of clang's libFuzzer runtime.
+#              Coverage feedback comes from afl-clang-fast's own LLVM
+#              pass, not SanitizerCoverage, so -fsanitize=fuzzer is never
+#              added in this mode: linking both would put two competing
+#              edge-coverage instrumentations in one binary for no gain,
+#              since afl-clang-fast does not need SanitizerCoverage to
+#              begin with.  ../tools/afl-fuzz.sh drives this engine.
+#              `apt-get install afl++` provides afl-clang-fast and the
+#              driver archive; see that script for the checks it runs
+#              before starting a campaign.
+ENGINE ?= libfuzzer
+ifeq ($(ENGINE),afl)
+CC := afl-clang-fast
+# The archive providing main() and ExecuteFilesOnyByOne().  Overridable
+# because /usr/lib/afl is a Debian/Ubuntu packaging path; a source build
+# of AFL++ puts it under the checkout's own directory instead.
+AFL_DRIVER ?= /usr/lib/afl/libAFLDriver.a
+ENGINESUF   = -afl
+# The library build (below) is told to instrument for libFuzzer's
+# SanitizerCoverage via NTLIBC_ASAN_EXTRA; afl-clang-fast instruments
+# every object it compiles on its own; this flag is unneeded for it
+# and unrelated to it, so it is empty in this engine.
+LIBCOV_EXTRA =
+else ifeq ($(ENGINE),libfuzzer)
+ENGINESUF   =
+LIBCOV_EXTRA = -fsanitize=fuzzer-no-link
+else
+$(error ENGINE must be libfuzzer or afl, not $(ENGINE))
+endif
+
 # SAN_MODE: WHICH SANITIZER, AND WHY THERE IS A CHOICE.
 #
 #   asan   (default) ASan + UBSan.  The only mode whose runs are evidence
@@ -94,17 +137,26 @@ FUZZ_TIME ?= 60
 # recipe to lean on.
 SAN_MODE ?= asan
 ifeq ($(SAN_MODE),asan)
+ifeq ($(ENGINE),afl)
+# No -fsanitize=fuzzer: see the ENGINE comment above.  afl-clang-fast
+# still honours -fsanitize=address,undefined exactly as plain clang does
+# -- AFL++'s instrumentation pass and ASan/UBSan's are independent, and
+# this is the same flag set the libfuzzer+asan combination below uses.
+SAN        = -fsanitize=address,undefined -fno-sanitize-recover=undefined
+FUZZER_LIB = $(AFL_DRIVER)
+else
 SAN       = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
-SAN_RT    = libclang_rt.asan-$(ARCH).so
-SAN_LINK  = -shared-libasan
 # The driver's own -fsanitize=fuzzer supplies libFuzzer here.
 FUZZER_LIB =
+endif
+SAN_RT    = libclang_rt.asan-$(ARCH).so
+SAN_LINK  = -shared-libasan
 CFLAGS_ORACLE = -fsanitize=address,undefined -g -O1 -w
 # ntstubs.c's __interceptor_malloc and friends ARE the ASan runtime's in
 # this mode; a local definition would collide with it.
 SHIM_SRC  =
 RUNFLAGS  =
-MODESUF   =
+MODESUF   = $(ENGINESUF)
 else ifeq ($(SAN_MODE),ubsan)
 # -fsanitize=fuzzer-no-link, and libFuzzer named explicitly below,
 # rather than -fsanitize=fuzzer.  WITHOUT AddressSanitizer the driver
@@ -120,7 +172,18 @@ else ifeq ($(SAN_MODE),ubsan)
 # thing not to leave to link order.  libFuzzer loses its string-compare
 # feedback in this mode; that is a fuzzing-efficiency cost, not a
 # correctness one.
+ifeq ($(ENGINE),afl)
+# No -fsanitize=fuzzer-no-link here either, and so no interceptor
+# collision to route around: this mode links AFL++'s driver archive, not
+# a libFuzzer runtime, and the archive defines no strcmp/strncmp/strstr
+# of its own (confirmed with `nm` -- it references them as undefined,
+# same as any other caller of ntlibc).
+SAN        = -fsanitize=undefined -fno-sanitize-recover=undefined
+FUZZER_LIB = $(AFL_DRIVER)
+else
 SAN       = -fsanitize=fuzzer-no-link,undefined -fno-sanitize-recover=undefined
+FUZZER_LIB = $(dir $(SAN_SO))libclang_rt.fuzzer-$(ARCH).a -lstdc++
+endif
 SAN_RT    = libclang_rt.ubsan_standalone-$(ARCH).so
 # -shared-libsan is not optional.  With the static UBSan runtime, its
 # start-up call to sysconf(_SC_SIGSTKSZ) binds at link time to ntlibc's
@@ -128,7 +191,6 @@ SAN_RT    = libclang_rt.ubsan_standalone-$(ARCH).so
 # SetAlternateSignalStack before the program starts.  Same failure, same
 # cause, as the -shared-libasan note in ../tools/asan-build.sh.
 SAN_LINK  = -shared-libsan
-FUZZER_LIB = $(dir $(SAN_SO))libclang_rt.fuzzer-$(ARCH).a -lstdc++
 CFLAGS_ORACLE = -fsanitize=undefined -g -O1 -w
 # ...and here they are undefined, so ubsanshim.c supplies them.  See the
 # file itself for what that costs.
@@ -137,8 +199,10 @@ SHIM_SRC  = ubsanshim.c
 # heuristic plus __lsan_do_recoverable_leak_check.  There is no
 # LeakSanitizer behind that here (ubsanshim.c's __lsan_* are no-ops), so
 # leave it off rather than let it report a "leak" it cannot confirm.
+# Meaningless to the afl engine too (it does not read libFuzzer flags at
+# all), but harmless to leave set.
 RUNFLAGS  = -detect_leaks=0
-MODESUF   = -ubsan
+MODESUF   = -ubsan$(ENGINESUF)
 else
 $(error SAN_MODE must be asan or ubsan, not $(SAN_MODE))
 endif
@@ -226,9 +290,10 @@ all: $(EXES)
 # corrupt -- the inputs are the same files the script itself reads, and
 # the only way to fool the stamp is to `touch` it by hand.
 $(LIBDIR)/.built: $(LIBDEP)
+	NTLIBC_CC=$(CC) \
 	NTLIBC_SAN_MODE=$(SAN_MODE) \
 	NTLIBC_ASAN_OBJ=$(abspath $(LIBDIR)) \
-	NTLIBC_ASAN_EXTRA=-fsanitize=fuzzer-no-link \
+	NTLIBC_ASAN_EXTRA=$(LIBCOV_EXTRA) \
 	$(srcdir)/tools/asan-build.sh --objects-only
 	for o in $(LIBDIR)/obj/*.o; do objcopy --redefine-sym $(STATRENAME) "$$o"; done
 	touch $@
@@ -435,6 +500,19 @@ ubrun:
 ubcoverage:
 	@$(MAKE) SAN_MODE=ubsan coverage
 
+# The AFL++ engine, both sanitizer modes.  Thin recursions, exactly like
+# ub/ubrun above: one set of build rules, and MODESUF (via ENGINESUF)
+# keeps every combination's objects in its own tree, so `make -C fuzz
+# all` and `make -C fuzz afl` can both be up to date at once.  There is
+# no `aflfuzz` analogue of `run`: afl-fuzz is a separate binary with its
+# own flags (-i/-o/-V, not libFuzzer's -max_total_time/-artifact_prefix),
+# so campaigns are driven by ../tools/afl-fuzz.sh, not by this Makefile.
+afl:
+	@$(MAKE) ENGINE=afl all
+
+aflub:
+	@$(MAKE) ENGINE=afl SAN_MODE=ubsan all
+
 # Both modes' trees, whichever mode this invocation is in: a `clean` that
 # left the other mode's objects behind would be a `clean` that has to be
 # run twice, and nobody would.
@@ -443,9 +521,11 @@ clean:
 	       $(srcdir)/obj/fuzzcov $(srcdir)/obj/fuzzcovlib $(srcdir)/obj/fuzzcovdata \
 	       $(srcdir)/obj/fuzz-ubsan $(srcdir)/obj/fuzzlib-ubsan \
 	       $(srcdir)/obj/fuzzcov-ubsan $(srcdir)/obj/fuzzcovlib-ubsan \
-	       $(srcdir)/obj/fuzzcovdata-ubsan
+	       $(srcdir)/obj/fuzzcovdata-ubsan \
+	       $(srcdir)/obj/fuzz-afl $(srcdir)/obj/fuzzlib-afl \
+	       $(srcdir)/obj/fuzz-ubsan-afl $(srcdir)/obj/fuzzlib-ubsan-afl
 
-.PHONY: all run clean coverage ub ubrun ubcoverage
+.PHONY: all run clean coverage ub ubrun ubcoverage afl aflub
 
 # A half-written object or executable left behind by a failed compile is
 # newer than its sources, so make would consider it up to date next time.
