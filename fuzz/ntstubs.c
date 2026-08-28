@@ -33,13 +33,18 @@
  * write()/read()/malloc(), because those names belong to ntlibc in this
  * link and calling them would recurse straight back into the library.
  *
- * A caveat that outranks everything in this file: NTSTATUS is `long`
- * (src/internal/nt.h), which is 32-bit on the NT target and 64-bit here,
- * so nt.h's own ((NTSTATUS)0xC0000034L) is a *positive* number natively
- * and NT_SUCCESS() answers "success" for every failure status.  Until
- * that typedef is int, no error this file reports is seen as an error by
- * the library, and the tests that check an error path are skipped by
- * tools/asan-build.sh for that reason.
+ * A caveat that used to outrank everything in this file, kept here so
+ * nobody re-derives it: NTSTATUS was once `long` (src/internal/nt.h),
+ * which is 32-bit on the NT target but 64-bit on a native x86_64 build,
+ * so nt.h's own ((NTSTATUS)0xC0000034L) came out *positive* natively and
+ * NT_SUCCESS() answered "success" for every failure status this file
+ * reported.  Fixed in `ee85d92` (nt.h's typedef is `int`); no per-test
+ * skip was ever needed for it in tools/asan-build.sh, because nothing
+ * had shipped depending on the bug by the time it was found.  Left
+ * documented rather than deleted because thirty-nine commits have
+ * touched this file since without anyone noticing the fix, which is
+ * itself worth knowing: check src/internal/nt.h before believing a
+ * comment about it, this one included.
  */
 #include <stddef.h>
 #include <stdio.h>
