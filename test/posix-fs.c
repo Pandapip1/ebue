@@ -69,14 +69,11 @@ static int inherited_child(void)
 {
 	struct stat st;
 	char cwd[4096];
-	int fd;
 	if (!getcwd(cwd, sizeof cwd)) return 2;
 	if (fstat(9, &st) < 0 || !S_ISDIR(st.st_mode)) return 3;
 	/* console is commonly absent from a native /dev, so this also verifies
 	 * that the native-directory overlay marker survived process creation. */
-	fd = openat(9, "console", O_RDONLY);
-	if (fd < 0) return 4;
-	close(fd);
+	if (fstatat(9, "console", &st, 0) < 0 || !S_ISCHR(st.st_mode)) return 4;
 	return 0;
 }
 

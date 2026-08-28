@@ -39,6 +39,7 @@ int __fd_limit = FD_MAX;
 #define FTEXT      0x80
 
 #define VFS_RUNTIME_MAGIC 0x32534656u /* "VFS2", little-endian */
+#define VFS_RUNTIME_CWD_NATIVE 0x80
 
 int __handle_type(HANDLE h)
 {
@@ -227,7 +228,10 @@ void __fd_init(void)
 					vfs_native = vfs + count;
 					vseen = vfs_native + count;
 					vnext = vseen + count;
-					__vfs_cwd_set(vnext[count]);
+					int cwd = vnext[count];
+					if (cwd & VFS_RUNTIME_CWD_NATIVE)
+						cwd = __VFS_NATIVE | (cwd & ~VFS_RUNTIME_CWD_NATIVE);
+					__vfs_cwd_set(cwd);
 				}
 			}
 			for (i = 0; i < count; i++) {
@@ -316,6 +320,7 @@ void *__fd_runtime_data(size_t *len)
 	}
 	if (have_vfs) {
 		unsigned magic = VFS_RUNTIME_MAGIC, trailer_count = (unsigned)count;
+		int cwd = __vfs_cwd_get();
 		unsigned char *trailer = osfhnd + count * sizeof(HANDLE);
 		memcpy(trailer, &magic, sizeof magic);
 		memcpy(trailer + 4, &trailer_count, sizeof trailer_count);
@@ -323,7 +328,8 @@ void *__fd_runtime_data(size_t *len)
 		for (i = 0; i < count; i++) trailer[8 + count + i] = __fds[i].vfs_native;
 		for (i = 0; i < count; i++) trailer[8 + 2 * count + i] = __fds[i].vseen;
 		for (i = 0; i < count; i++) trailer[8 + 3 * count + i] = __fds[i].vnext;
-		trailer[8 + 4 * count] = (unsigned char)__vfs_cwd_get();
+		trailer[8 + 4 * count] = (unsigned char)(__VFS_KIND(cwd) |
+			((cwd & __VFS_NATIVE) ? VFS_RUNTIME_CWD_NATIVE : 0));
 	}
 	return blk;
 }

@@ -84,8 +84,9 @@ int __vfs_resolve_at(int dirfd, const char *path)
 		rooted = 1;
 		can_probe = basefd->vfs_native;
 	} else if (cwd_kind) {
-		state = cwd_kind;
+		state = __VFS_KIND(cwd_kind);
 		rooted = 1;
+		can_probe = (cwd_kind & __VFS_NATIVE) != 0;
 	} else {
 		return __VFS_NONE;
 	}

@@ -13,21 +13,21 @@ int chdir(const char *path)
 	size_t n, i;
 	UNICODE_STRING us;
 	NTSTATUS st;
-	int vfs, native;
+	int vfs, kind, native;
 
 	if (!path || !*path) { errno = ENOENT; return -1; }
 	vfs = __vfs_resolve_at(AT_FDCWD, path);
 	if (vfs < 0) return -1;
 	native = (vfs & __VFS_NATIVE) != 0;
-	if (native) vfs = __VFS_NONE;
-	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
-	if (vfs != __VFS_NONE && vfs != __VFS_ROOT && vfs != __VFS_DEV) {
+	kind = __VFS_KIND(vfs);
+	if (kind == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (kind != __VFS_NONE && kind != __VFS_ROOT && kind != __VFS_DEV) {
 		errno = ENOTDIR;
 		return -1;
 	}
 	/* Both virtual directories use the native drive root only as the
 	 * process-parameter carrier; pathname dispatch uses vfs above. */
-	if (vfs != __VFS_NONE) path = "/";
+	if (kind != __VFS_NONE && !native) path = "/";
 	/* chdir.html ERRORS, shall fail: "[ENAMETOOLONG] The length of a
 	 * component of a pathname is longer than {NAME_MAX}."  chdir does
 	 * not go through src/internal/path.c's builder -- it hand-builds a
