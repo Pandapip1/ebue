@@ -152,13 +152,18 @@
  * contains whitespace, a quote, or is empty. */
 static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 {
-	size_t n = 0, i;
+	size_t n = 0, i, extra, nc;
 	int need_quote = arg[0] == 0;
 	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1;
 	n = i;
 	/* worst case: quotes + every char doubled (backslashes) + a space */
-	if (*len + 2 * n + 4 >= *cap) {
-		size_t nc = (*cap + 2 * n + 16) * 2;
+	if (!__size_mul_checked(n, 2, &extra) ||
+	    !__size_add_checked(extra, 4, &extra) ||
+	    !__array_next_capacity(*cap, *len, extra, 32, sizeof(WCHAR), &nc)) {
+		errno = E2BIG;
+		return -1;
+	}
+	if (nc != *cap) {
 		WCHAR *nb = realloc(*buf, nc * sizeof(WCHAR));
 		if (!nb) { errno = ENOMEM; return -1; }
 		*buf = nb; *cap = nc;
@@ -206,15 +211,19 @@ static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
  * to be silently mangled into a different name and a stray argument. */
 static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 {
-	size_t n, i;
+	size_t n, i, extra, nc;
 	int need_quote = arg[0] == 0;
 	for (i = 0; arg[i]; i++) {
 		if (arg[i] == '"') { errno = EINVAL; return -1; }
 		if (arg[i] == ' ' || arg[i] == '\t') need_quote = 1;
 	}
 	n = i;
-	if (*len + n + 4 >= *cap) {
-		size_t nc = (*cap + n + 16) * 2;
+	if (!__size_add_checked(n, 4, &extra) ||
+	    !__array_next_capacity(*cap, *len, extra, 32, sizeof(WCHAR), &nc)) {
+		errno = E2BIG;
+		return -1;
+	}
+	if (nc != *cap) {
 		WCHAR *nb = realloc(*buf, nc * sizeof(WCHAR));
 		if (!nb) { errno = ENOMEM; return -1; }
 		*buf = nb; *cap = nc;
@@ -230,7 +239,7 @@ static WCHAR *build_cmdline(char *const argv[])
 {
 	WCHAR *buf = 0;
 	size_t len = 0, cap = 0;
-	int i;
+	size_t i;
 	for (i = 0; argv[i]; i++) {
 		size_t wl;
 		WCHAR *w = __utf8_to_utf16(argv[i], &wl);
@@ -258,7 +267,7 @@ static WCHAR *build_env_block(char *const envp[])
 	int i;
 	if (!blk) return 0;
 	for (i = 0; envp && envp[i]; i++) {
-		size_t wl;
+		size_t wl, extra, nc;
 		WCHAR *w;
 		/* Two shapes of entry cannot be expressed in a Windows
 		 * environment block at all, and are dropped rather than passed
@@ -295,12 +304,19 @@ static WCHAR *build_env_block(char *const envp[])
 		if (!envp[i][0] || !strchr(envp[i], '=')) continue;
 		w = __utf8_to_utf16(envp[i], &wl);
 		if (!w) { free(blk); return 0; }
-		if (len + wl + 2 >= cap) {
+		if (!__size_add_checked(wl, 2, &extra) ||
+		    !__array_next_capacity(cap, len, extra, 256, sizeof(WCHAR), &nc)) {
+			__free(w);
+			free(blk);
+			errno = E2BIG;
+			return 0;
+		}
+		if (nc != cap) {
 			WCHAR *nb;
-			while (len + wl + 2 >= cap) cap *= 2;
-			nb = realloc(blk, cap * sizeof(WCHAR));
+			nb = realloc(blk, nc * sizeof(WCHAR));
 			if (!nb) { __free(w); free(blk); return 0; }
 			blk = nb;
+			cap = nc;
 		}
 		memcpy(blk + len, w, wl * sizeof(WCHAR));
 		len += wl;
@@ -364,7 +380,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	wcmd = build_cmdline(argv);
 	if (!wcmd) goto out;   /* errno set by build_cmdline */
 	wenv = build_env_block(envp ? envp : __environ);
-	if (!wenv) { errno = ENOMEM; goto out; }
+	if (!wenv) goto out;   /* errno set by build_env_block */
 
 	/* Everything below goes into a UNICODE_STRING, whose Length is a
 	 * USHORT counting *bytes*.  A longer string does not truncate, it

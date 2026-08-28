@@ -269,10 +269,16 @@ static char **build_argv(const char *arg0, va_list ap, char ***envout)
 	if (!v) return 0;
 	v[n++] = (char *)arg0;
 	while (v[n-1]) {
-		if (n + 1 >= cap) {
-			char **nv = realloc(v, (cap *= 2) * sizeof(char *));
+		if (n >= cap - 1) {
+			size_t nc;
+			char **nv;
+			if (!__array_next_capacity(cap, n, 2, 8, sizeof *v, &nc)) {
+				free(v); errno = ENOMEM; return 0;
+			}
+			nv = realloc(v, nc * sizeof *v);
 			if (!nv) { free(v); return 0; }
 			v = nv;
+			cap = nc;
 		}
 		v[n++] = va_arg(ap, char *);
 	}
