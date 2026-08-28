@@ -300,6 +300,7 @@ jobs:
           - { stage: analyze, packages: "clang clang-tidy-18" }
           - { stage: cppcheck, packages: cppcheck }
           - { stage: shell, packages: shellcheck }
+          - { stage: sizearith, packages: "" }
           - { stage: undefined, packages: "" }
           - { stage: ushort, packages: "" }
           - { stage: unreferenced, packages: clang }

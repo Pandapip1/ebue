@@ -20,6 +20,11 @@
 #             uninitialised-value and leak paths rather than style nits.
 #   cppcheck  cppcheck --enable=warning,portability, if installed.
 #   shell     shellcheck over configure, the git hooks and tools/*.sh.
+#   sizearith tools/lint-sizearith.py: unchecked arithmetic in allocator
+#             size arguments, raw geometric capacity growth, and direct
+#             narrowing of length-like values to ULONG/int; the ushort
+#             stage handles USHORT.  Its lexer self-tests on
+#             positive and negative fixtures before scanning the tree.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -647,7 +652,7 @@ stage_shell() {
 	return 1
 }
 
-stages=${*:-warn analyze cppcheck shell undefined ushort unreferenced widthmod}
+stages=${*:-warn analyze cppcheck shell sizearith undefined ushort unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
@@ -673,6 +678,7 @@ for s in $stages; do
 		analyze)   stage_analyze ;;
 		cppcheck)  stage_cppcheck ;;
 		shell)     stage_shell ;;
+		sizearith) tools/lint-sizearith.py ;;
 		ushort)    tools/lint-ushort.sh ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
