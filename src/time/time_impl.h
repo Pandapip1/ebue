@@ -108,7 +108,7 @@ static inline int __iso_weeks_in_year(long long y)
 static inline void __iso_week(long long year, int yday, int wday, long long *out_year, int *out_week)
 {
 	int isodow = wday == 0 ? 7 : wday;             /* Monday=1..Sunday=7 */
-	long long week = (yday + 1 - isodow + 10) / 7;
+	long long week = ((long long)yday + 1 - isodow + 10) / 7;
 
 	if (week < 1) {
 		*out_year = year - 1;

@@ -56,10 +56,12 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 #define PUT_CH(c) do { if (pos + 1 >= max) { overflow = 1; goto done; } s[pos++] = (char)(c); } while (0)
 #define PUT_STR(str) do { const char *_s = (str); while (*_s) PUT_CH(*_s++); } while (0)
 #define PUT_NUM(v, w, pad) do { \
-		long _v = (long)(v); \
+		long long _v = (long long)(v); \
+		unsigned long _mag = _v < 0 \
+			? (unsigned long)(-(_v + 1)) + 1 : (unsigned long)_v; \
 		char _tmp[24]; int _n; \
-		if (_v < 0) { PUT_CH('-'); _v = -_v; } \
-		_n = __num_digits(_tmp, (int)sizeof _tmp, (unsigned long)_v, (w), (pad)); \
+		if (_v < 0) PUT_CH('-'); \
+		_n = __num_digits(_tmp, (int)sizeof _tmp, _mag, (w), (pad)); \
 		for (int _i = 0; _i < _n; _i++) PUT_CH(_tmp[_i]); \
 	} while (0)
 
@@ -125,9 +127,9 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 		}
 		case 'd': PUT_NUM(tm->tm_mday, 2, '0'); break;
 		case 'D':
-			PUT_NUM(tm->tm_mon + 1, 2, '0'); PUT_CH('/');
+			PUT_NUM((long long)tm->tm_mon + 1, 2, '0'); PUT_CH('/');
 			PUT_NUM(tm->tm_mday, 2, '0'); PUT_CH('/');
-			PUT_NUM((tm->tm_year + 1900) % 100, 2, '0');
+			PUT_NUM(((long long)tm->tm_year + 1900) % 100, 2, '0');
 			break;
 		case 'e': PUT_NUM(tm->tm_mday, 2, ' '); break;
 		case 'F': {
@@ -138,14 +140,14 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			if (n < 0) { overflow = 1; goto done; }
 			pos += (size_t)n;
 			PUT_CH('-');
-			PUT_NUM(tm->tm_mon + 1, 2, '0'); PUT_CH('-');
+			PUT_NUM((long long)tm->tm_mon + 1, 2, '0'); PUT_CH('-');
 			PUT_NUM(tm->tm_mday, 2, '0');
 			break;
 		}
 		case 'H': PUT_NUM(tm->tm_hour, 2, '0'); break;
 		case 'I': { int h = tm->tm_hour % 12; PUT_NUM(h ? h : 12, 2, '0'); break; }
-		case 'j': PUT_NUM(tm->tm_yday + 1, 3, '0'); break;
-		case 'm': PUT_NUM(tm->tm_mon + 1, 2, '0'); break;
+		case 'j': PUT_NUM((long long)tm->tm_yday + 1, 3, '0'); break;
+		case 'm': PUT_NUM((long long)tm->tm_mon + 1, 2, '0'); break;
 		case 'M': PUT_NUM(tm->tm_min, 2, '0'); break;
 		case 'n': PUT_CH('\n'); break;
 		case 'p': PUT_STR(tm->tm_hour < 12 ? "AM" : "PM"); break;
@@ -164,7 +166,7 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			PUT_NUM(tm->tm_sec, 2, '0');
 			break;
 		case 'u': PUT_NUM(wday ? wday : 7, 1, '0'); break;
-		case 'U': PUT_NUM((tm->tm_yday + 7 - wday) / 7, 2, '0'); break;
+		case 'U': PUT_NUM(((long long)tm->tm_yday + 7 - wday) / 7, 2, '0'); break;
 		case 'V': case 'G': case 'g': {
 			long long iso_year;
 			int iso_week;
@@ -180,11 +182,11 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			break;
 		}
 		case 'w': PUT_NUM(wday, 1, '0'); break;
-		case 'W': PUT_NUM((tm->tm_yday + 7 - (wday ? wday - 1 : 6)) / 7, 2, '0'); break;
+		case 'W': PUT_NUM(((long long)tm->tm_yday + 7 - (wday ? wday - 1 : 6)) / 7, 2, '0'); break;
 		case 'x':
-			PUT_NUM(tm->tm_mon + 1, 2, '0'); PUT_CH('/');
+			PUT_NUM((long long)tm->tm_mon + 1, 2, '0'); PUT_CH('/');
 			PUT_NUM(tm->tm_mday, 2, '0'); PUT_CH('/');
-			PUT_NUM((tm->tm_year + 1900) % 100, 2, '0');
+			PUT_NUM(((long long)tm->tm_year + 1900) % 100, 2, '0');
 			break;
 		case 'X':
 			PUT_NUM(tm->tm_hour, 2, '0'); PUT_CH(':');
@@ -209,7 +211,7 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			break;
 		}
 		case 'z': {
-			long off = tm->__tm_gmtoff;
+			long long off = tm->__tm_gmtoff;
 			PUT_CH(off < 0 ? '-' : '+');
 			if (off < 0) off = -off;
 			PUT_NUM(off / 3600, 2, '0');

@@ -323,6 +323,27 @@ int main(void)
 		FMT("%z", "+0530");
 		tm.__tm_zone = "EST";
 		FMT("%Z", "EST");
+
+		/* Every struct tm arithmetic input is caller-controlled.  Exercise
+		 * both ends of each distinct expression so UBSan also runs these
+		 * paths: signed magnitude, +1/+1900, week arithmetic, and %z's
+		 * absolute offset. */
+		memset(&tm, 0, sizeof tm);
+		tm.tm_mday = INT_MIN;
+		FMT("%d", "-2147483648");
+		tm.tm_mon = INT_MAX;
+		FMT("%m", "2147483648");
+		tm.tm_mday = 0;
+		tm.tm_year = INT_MAX;
+		FMT("%D", "2147483648/00/47");
+		tm.tm_yday = INT_MAX;
+		tm.tm_wday = 0;
+		FMT("%j", "2147483648");
+		FMT("%U", "306783379");
+		FMT("%W", "306783378");
+		FMT("%V", "01");
+		tm.__tm_gmtoff = LONG_MIN;
+		FMT("%z", "-59652314");
 #undef FMT
 	}
 
