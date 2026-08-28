@@ -386,12 +386,20 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 	LARGE_INTEGER zero = 0, slice;
 	struct timespec now;
 	struct mq_header h;
-	unsigned long caught = __sig_caught_count();
+	/* Cross-process delivery publishes a process-pending signal and wakes
+	 * signal-aware waits; it never runs the handler on the listener thread.
+	 * This semaphore is not part of that wake set, so the bounded waits below
+	 * must drain pending signals on this application thread.  Use the thread
+	 * counter so a handler run by an unrelated thread cannot spuriously
+	 * interrupt this descriptor operation. */
+	unsigned long caught = __sig_thread_caught_count();
 	int registered = 0;
 	NTSTATUS st = NtWaitForSingleObject(count, TRUE, &zero);
 	if (st == STATUS_WAIT_0) return 0;
 	if (st != STATUS_TIMEOUT && st != STATUS_ALERTED && st != STATUS_USER_APC)
 		return __set_errno_status(st);
+	__sig_drain_pending();
+	if (__sig_thread_caught_count() != caught) { errno = EINTR; return -1; }
 	if (nonblock) { errno = EAGAIN; return -1; }
 	if (timed && (!abstime || abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)) {
 		errno = EINVAL; return -1;
@@ -405,6 +413,8 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 		registered = 1;
 	}
 	for (;;) {
+		__sig_drain_pending();
+		if (__sig_thread_caught_count() != caught) { errno = EINTR; break; }
 		if (timed) {
 			long long ns;
 			clock_gettime(CLOCK_REALTIME, &now);
@@ -419,7 +429,8 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 		if (st != STATUS_TIMEOUT && st != STATUS_ALERTED && st != STATUS_USER_APC) {
 			__set_errno_status(st); break;
 		}
-		if (__sig_caught_count() != caught) { errno = EINTR; break; }
+		__sig_drain_pending();
+		if (__sig_thread_caught_count() != caught) { errno = EINTR; break; }
 	}
 	if (registered) {
 		int saved = errno;
