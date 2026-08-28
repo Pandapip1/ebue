@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 int unchecked_division(int value, int divisor)
 {
 	return value / divisor; /* arithmetic-ub-expect */

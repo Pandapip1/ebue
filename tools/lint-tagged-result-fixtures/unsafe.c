@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 typedef struct operation_variant_result {
 	int kind;
 	int normal;

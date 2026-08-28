@@ -101,8 +101,8 @@ def main() -> int:
 
     findings = {finding.key: finding for log in arguments.logs for finding in parse_log(log)}
     if arguments.emit_baseline:
-        print("# SPDX-FileCopyrightText: (C) 2026 Gavin John")
-        print("# SPDX-License-Identifier: GPL-3.0-or-later")
+        print("# SPDX" "-FileCopyrightText: (C) 2026 Gavin John")
+        print("# SPDX" "-License-Identifier: GPL-3.0-or-later")
         print("#")
         print("# Existing array subscripts not yet proved in bounds by Clang.")
         print("# Fields: ORIGIN<TAB>CONTEXT<TAB>SUBSCRIPT<TAB>SITE<TAB>REASON.")

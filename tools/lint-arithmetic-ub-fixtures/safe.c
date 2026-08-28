@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 int checked_division(int value, int divisor)
 {
 	if (divisor == 0 || value == (-2147483647 - 1))
