@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <stdint.h>
 #include <limits.h>
 #include <wchar.h>
 #include <signal.h>
@@ -185,6 +186,37 @@ static void test_update_stream_rule(const char *name)
 	CHECK(fread(buf, 1, 11, f) == 11);
 	CHECK(memcmp(buf, "01234XY789!", 11) == 0);
 	CHECK(fclose(f) == 0);
+}
+
+/* fread()/fwrite() describe the transfer as size*nmemb bytes.  That
+ * product is caller-controlled and must be rejected before it wraps to a
+ * smaller operation.  These streams are deliberately valid for the
+ * requested direction; the failure is the unrepresentable byte count,
+ * which is reported through both errno and the stream error indicator. */
+static void test_block_io_size_overflow(void)
+{
+	unsigned char mem[2] = { 'x', 0 }, byte = 0;
+	FILE *f;
+
+	f = fmemopen(mem, sizeof mem, "r");
+	CHECK(f != 0);
+	if (f) {
+		errno = 0;
+		CHECK(fread(&byte, SIZE_MAX, 2, f) == 0);
+		CHECK(errno == EOVERFLOW);
+		CHECK(ferror(f));
+		CHECK(fclose(f) == 0);
+	}
+
+	f = fmemopen(mem, sizeof mem, "w");
+	CHECK(f != 0);
+	if (f) {
+		errno = 0;
+		CHECK(fwrite(&byte, 2, SIZE_MAX, f) == 0);
+		CHECK(errno == EOVERFLOW);
+		CHECK(ferror(f));
+		CHECK(fclose(f) == 0);
+	}
 }
 
 /* setvbuf.html DESCRIPTION: "may be used after the stream ... is
@@ -2390,6 +2422,7 @@ int main(void)
 
 	test_snprintf_boundaries();
 	test_snprintf_eoverflow();
+	test_block_io_size_overflow();
 	test_printf_int_min_width_no_overflow();
 	test_printf_z_modifier_width();
 	test_printf_l_modifier();

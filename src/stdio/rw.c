@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <errno.h>
 #include "stdio_impl.h"
 
@@ -74,11 +75,17 @@ int ungetc(int c, FILE *f)
 
 size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 {
-	size_t total = size * nmemb, got = 0;
+	size_t total, got = 0;
 	unsigned char *p = ptr;
 
 	__byte_oriented(f);
 	if (!size || !nmemb) return 0;
+	if (nmemb > SIZE_MAX / size) {
+		errno = EOVERFLOW;
+		f->err = 1;
+		return 0;
+	}
+	total = size * nmemb;
 	if (!f->readable) { errno = EBADF; f->err = 1; return 0; }
 	while (f->nunget && got < total) p[got++] = (unsigned char)f->unget[--f->nunget];
 	if (got < total && __toread(f) < 0) return got / size;
@@ -106,11 +113,17 @@ size_t __fread(void *ptr, size_t size, size_t nmemb, FILE *f)
 
 size_t __fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 {
-	size_t total = size * nmemb, put = 0;
+	size_t total, put = 0;
 	const unsigned char *p = ptr;
 
 	__byte_oriented(f);
 	if (!size || !nmemb) return 0;
+	if (nmemb > SIZE_MAX / size) {
+		errno = EOVERFLOW;
+		f->err = 1;
+		return 0;
+	}
+	total = size * nmemb;
 	if (!f->writable) { errno = EBADF; f->err = 1; return 0; }
 	if (__towrite(f) < 0) return 0;
 	while (put < total) {
