@@ -59,6 +59,8 @@
 #             spinlock acquire/release, wait, destroy, and function-exit state.
 #   variadic  currently opt-in; proves printf/scanf format literalness, argument
 #             counts, promoted types, pointer targets, and length modifiers.
+#   signals   currently opt-in; checks directly registered signal handlers for
+#             async-signal-safe calls and volatile sig_atomic_t-only writes.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -1347,6 +1349,59 @@ stage_variadic() {
 	return $any
 }
 
+stage_signals() {
+	hdr "signal-handler safety proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	require_tool clang++-18 || return $missing
+	require_tool llvm-config-18 || return $missing
+	libdir=$(llvm-config-18 --libdir)
+	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' -print 2>/dev/null | sort | head -n 1)
+	[ -n "$clang_cpp" ] || { report_missing "Clang 18 development libraries are required for signal-safety proofs."; return $missing; }
+	plugin=$builddir/ntlibc-signal-safety-checker.so
+	# shellcheck disable=SC2046
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+		tools/clang/SignalSafetyChecker.cpp -o "$plugin" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+	fixture_log=$builddir/signal-safety-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-signal-safety-fixtures/*.c; do
+		clang-18 -fsyntax-only -Xclang -load -Xclang "$plugin" \
+			-Xclang -add-plugin -Xclang ntlibc-signal-safety "$fixture" \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+	tools/lint-signal-safety.py --fixtures "$fixture_log" || any=1
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.signal-safety.log
+		report=$builddir/$arch.signal-safety.report
+		pardir=$(mktemp -d "$builddir/signal-safety.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; plugin=$3; target=$4; shift 4
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target -fsyntax-only -Xclang -load -Xclang "$plugin" \
+				-Xclang -add-plugin -Xclang ntlibc-signal-safety "$@" "$f" \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$plugin" "$target" $flags
+		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; show_findings "$out"; continue; fi
+		analyzed=$((analyzed + 1))
+		if tools/lint-signal-safety.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
+			note "signal safety [$arch]: proved -> $report"
+		else
+			note "signal safety [$arch]: findings -> $report"; show_findings "$report"; any=1
+		fi
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -1383,6 +1438,7 @@ for s in $stages; do
 		provenance) stage_provenance ;;
 		locks)      stage_locks ;;
 		variadic)   stage_variadic ;;
+		signals)    stage_signals ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
