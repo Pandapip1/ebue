@@ -331,6 +331,12 @@ int sem_wait(sem_t *sem)
 	for (;;) {
 		r = wait_handle(sem, &slice);
 		__pthread_testcancel();
+		/* Cross-process delivery queues the signal for an application
+		 * thread; the listener must not run user handlers itself.  NT
+		 * semaphore waits are not part of that delivery path, so bounded
+		 * waits must explicitly run pending handlers before deciding
+		 * whether this operation was interrupted. */
+		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
 			if (restartable_interruption(&caught, &restarted) > 0) continue;
@@ -366,6 +372,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 		rel = -(ns / 100);
 		r = wait_handle(sem, &rel);
 		__pthread_testcancel();
+		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
 			if (restartable_interruption(&caught, &restarted) > 0) continue;

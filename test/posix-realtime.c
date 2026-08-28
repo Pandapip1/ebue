@@ -144,6 +144,82 @@ static void test_posix_realtime_sem_timedwait_etimedout(void)
 }
 #endif
 
+#if NTLIBC_TEST(PASS, posix_realtime_sem_timedwait_remote_signal_eintr)
+#include <semaphore.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+
+static volatile sig_atomic_t sem_interrupt_seen;
+
+static void sem_interrupt_handler(int signo)
+{
+	(void)signo;
+	sem_interrupt_seen = 1;
+}
+
+static void test_posix_realtime_sem_timedwait_remote_signal_eintr(void)
+{
+	struct sigaction action;
+	struct timespec deadline, settle = { 0, 100000000L };
+	sem_t sem;
+	pid_t child;
+	int ready[2], status;
+	char byte;
+
+	if (sem_init(&sem, 0, 0) != 0) {
+		CHECK(0);
+		return;
+	}
+	if (pipe(ready) != 0) {
+		CHECK(0);
+		sem_destroy(&sem);
+		return;
+	}
+	child = fork();
+	if (child < 0) {
+		CHECK(0);
+		close(ready[0]);
+		close(ready[1]);
+		sem_destroy(&sem);
+		return;
+	}
+	if (child == 0) {
+		close(ready[0]);
+		memset(&action, 0, sizeof action);
+		action.sa_handler = sem_interrupt_handler;
+		sigemptyset(&action.sa_mask);
+		if (sigaction(SIGUSR1, &action, NULL) != 0 ||
+		    write(ready[1], "x", 1) != 1 ||
+		    clock_gettime(CLOCK_REALTIME, &deadline) != 0)
+			_exit(2);
+		close(ready[1]);
+		deadline.tv_sec += 3;
+		errno = 0;
+		if (sem_timedwait(&sem, &deadline) != -1 || errno != EINTR ||
+		    !sem_interrupt_seen)
+			_exit(1);
+		_exit(0);
+	}
+	if (child > 0) {
+		close(ready[1]);
+		CHECK(read(ready[0], &byte, 1) == 1);
+		/* The byte says the disposition is installed.  Give the child a
+		 * scheduling turn to enter the semaphore wait so this checks an
+		 * interruption, rather than a signal completed before the call. */
+		nanosleep(&settle, NULL);
+		CHECK(kill(child, SIGUSR1) == 0);
+		CHECK(waitpid(child, &status, 0) == child);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+		close(ready[0]);
+	}
+	CHECK(sem_destroy(&sem) == 0);
+}
+#endif
+
 #if NTLIBC_TEST(PASS, posix_realtime_sem_open_named)
 #include <semaphore.h>
 #include <fcntl.h>
