@@ -10,6 +10,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <cctype>
 #include <memory>
@@ -49,6 +50,7 @@ class MemoryContractChecker : public Checker<check::PreCall> {
     return std::nullopt;
   }
 
+public:
   static std::string text(const Stmt *Statement, CheckerContext &C) {
     const SourceManager &SM = C.getSourceManager();
     StringRef Raw =
@@ -203,6 +205,89 @@ public:
   }
 };
 
+class StringSentinelChecker : public Checker<check::PreCall> {
+  mutable std::unique_ptr<BugType> BT;
+
+  static void requiredArguments(const CallEvent &Call,
+                                SmallVectorImpl<unsigned> &Arguments) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function || !Function->getIdentifier())
+      return;
+    StringRef Name = Function->getName();
+    if (Name == "strlen" || Name == "strchr" || Name == "strrchr" ||
+        Name == "strdup" || Name == "puts")
+      Arguments.push_back(0);
+    else if (Name == "strcmp" || Name == "strcasecmp" || Name == "strcoll" ||
+             Name == "fopen") {
+      Arguments.push_back(0);
+      Arguments.push_back(1);
+    } else if (Name == "strcpy")
+      Arguments.push_back(1);
+    else if (Name == "strcat") {
+      Arguments.push_back(0);
+      Arguments.push_back(1);
+    }
+  }
+
+  static bool initializedByString(const VarRegion *Variable) {
+    const Expr *Initializer = Variable->getDecl()->getInit();
+    if (!Initializer)
+      return false;
+    Initializer = Initializer->IgnoreParenImpCasts();
+    if (isa<StringLiteral>(Initializer))
+      return true;
+    if (const auto *List = dyn_cast<InitListExpr>(Initializer))
+      return List->getNumInits() == 1 &&
+             isa<StringLiteral>(List->getInit(0)->IgnoreParenImpCasts());
+    return false;
+  }
+
+  static bool sentinelProven(SVal Pointer) {
+    const MemRegion *Region = Pointer.getAsRegion();
+    if (!Region)
+      return false;
+    const MemRegion *Base = Region->getBaseRegion();
+    if (isa<StringRegion>(Base))
+      return true;
+    if (const auto *Variable = dyn_cast<VarRegion>(Base))
+      return initializedByString(Variable);
+    return false;
+  }
+
+public:
+  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    SmallVector<unsigned, 2> Arguments;
+    requiredArguments(Call, Arguments);
+    for (unsigned Argument : Arguments) {
+      if (Argument >= Call.getNumArgs() ||
+          sentinelProven(Call.getArgSVal(Argument)))
+        continue;
+      const Stmt *Statement = Call.getOriginExpr();
+      if (!Statement)
+        return;
+      ExplodedNode *Node = C.generateNonFatalErrorNode();
+      if (!Node)
+        return;
+      if (!BT)
+        BT = std::make_unique<BugType>(this, "Unproven string sentinel",
+                                       categories::MemoryError);
+      const SourceManager &SM = C.getSourceManager();
+      std::string Message =
+          (StringRef("string argument is not proven NUL-terminated; origin '") +
+           SM.getFilename(SM.getExpansionLoc(Statement->getBeginLoc())) +
+           "'; context '" + MemoryContractChecker::context(C) +
+           "'; expression '" + MemoryContractChecker::text(Statement, C) +
+           "'; site '" + MemoryContractChecker::site(Statement, C) + "'")
+              .str();
+      auto Report =
+          std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+      Report->addRange(Statement->getSourceRange());
+      C.emitReport(std::move(Report));
+      return;
+    }
+  }
+};
+
 } // namespace
 
 extern "C" const char clang_analyzerAPIVersionString[] =
@@ -212,4 +297,7 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<MemoryContractChecker>(
       "ntlibc.MemoryContract",
       "Proves memory spans and memcpy non-overlap contracts", "");
+  Registry.addChecker<StringSentinelChecker>(
+      "ntlibc.StringSentinel",
+      "Proves string API arguments have reachable NUL sentinels", "");
 }

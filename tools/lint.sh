@@ -44,7 +44,8 @@
 #             dereference to have nonnull, live, in-bounds, aligned storage.
 #   memcontracts
 #             currently opt-in; proves spans for memory and I/O operations and
-#             proves memcpy source and destination ranges do not overlap.
+#             proves memcpy ranges do not overlap and string API arguments have
+#             reachable NUL sentinels.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -1035,7 +1036,7 @@ stage_memcontracts() {
 	: > "$fixture_log"
 	for fixture in tools/lint-memory-contract-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.MemoryContract \
+			-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
@@ -1054,7 +1055,7 @@ stage_memcontracts() {
 			id=$(printf %s "$f" | tr / _)
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.MemoryContract \
+				-Xclang -analyzer-checker=ntlibc.MemoryContract,ntlibc.StringSentinel \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags
