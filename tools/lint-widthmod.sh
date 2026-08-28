@@ -39,8 +39,8 @@
 #   * the parser assigning one (`lm = LM_z;`), which selects the
 #     modifier and touches no value;
 #   * a line carrying a `widthmod-ok:` comment and a reason, on the line
-#     itself or the one above -- the same escape tools/lint-ushort.sh's
-#     `USHORT-safe` and tools/lint-undefined.sh's `undefined-ok:`
+#     itself or the one above -- the same escape tools/lint-sizearith.py's
+#     `sizearith-safe:` and tools/lint-undefined.sh's `undefined-ok:`
 #     provide.  It means "this is correct"; it is NOT for recording a
 #     known bug, which is what the next paragraph is for.
 #

@@ -33,17 +33,16 @@
 # declares an Nt*/Ldr* name directly today, but the check is there in
 # case one ever does.
 #
-# This is text-only, like tools/lint-ushort.sh: no build, no compiler,
+# This is text-only, like tools/lint-sizearith.py: no build, no compiler,
 # nothing to fall back to when a tool is missing.  A single character-at-
 # a-time awk scanner (comments, string/char literals, and multi-line
 # preprocessor directives all stripped or skipped first) tracks brace and
-# paren nesting to find each top-level declarator, exactly the way
-# lint-ushort.sh's own signature/brace state machine does, generalised
-# here two ways: it runs over headers *and* .c files with the same
+# paren nesting to find each top-level declarator.  It runs over headers
+# *and* .c files with the same
 # nesting tracker, and a one-line function definition (several of
 # src/signal/signal.c's sig*set functions, raise(), killpg()...) is
 # recognised, not just the "signature, then a lone '{' on its own line"
-# shape lint-ushort.sh looks for.
+# common split-line definition shape.
 #
 # What counts as "declared": a top-level statement in a header that is
 # not a typedef and contains an identifier immediately followed by '(':
@@ -75,7 +74,7 @@
 #
 # Exit status is 1 if any finding was reported (unless LINT_STRICT=0).
 #
-# Known limits (the same honesty tools/lint-ushort.sh keeps): this does
+# Known limits (the same honesty tools/lint-sizearith.py keeps): this does
 # not parse C.  Comments and string/char literals are stripped, and
 # multi-line preprocessor directives are skipped in full, but a
 # declarator too unusual for the two shapes above (there are none in

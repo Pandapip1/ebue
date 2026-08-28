@@ -302,7 +302,6 @@ jobs:
           - { stage: shell, packages: shellcheck }
           - { stage: sizearith, packages: "" }
           - { stage: undefined, packages: "" }
-          - { stage: ushort, packages: "" }
           - { stage: unreferenced, packages: clang }
           - { stage: widthmod, packages: "" }
     name: lint (${{ matrix.stage }})

@@ -204,7 +204,7 @@ int __nt_prefix_not_dir(const UNICODE_STRING *nt, HANDLE root)
 		 * is itself a USHORT the caller already fits.  This narrowing
 		 * re-narrows a value that arrived as a USHORT, so it cannot
 		 * wrap.
-		 * USHORT-safe: bounded by the source string's own Length. */
+		 * sizearith-safe: bounded by the source string's own Length. */
 		cut.Length = (USHORT)(i * sizeof(WCHAR));
 		st = NtQueryAttributesFile(&oa, &bi);
 		if (NT_SUCCESS(st))
@@ -507,7 +507,7 @@ static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
 
 	memset(out, 0, sizeof *out);
 	out->nt.Buffer = w;
-	/* USHORT-safe: len is bounded by __US_MAX_WCHARS just above, so
+	/* sizearith-safe: len is bounded by __US_MAX_WCHARS just above, so
 	 * (len + 1) * sizeof(WCHAR) still fits a USHORT. */
 	out->nt.Length = (USHORT)(len * sizeof(WCHAR));
 	out->nt.MaximumLength = (USHORT)(out->nt.Length + sizeof(WCHAR));

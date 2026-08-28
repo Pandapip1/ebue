@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 typedef __SIZE_TYPE__ size_t;
+typedef unsigned short USHORT;
+#define __US_MAX_WCHARS ((size_t)32766)
+#define USHRT_MAX 65535
 void *malloc(size_t);
 void *calloc(size_t, size_t);
 void *reallocarray(void *, size_t, size_t);
@@ -47,4 +50,39 @@ const char *noncode_is_ignored(void)
 {
 	/* malloc(count + 1); cap *= 2; (ULONG)length */
 	return "realloc(p, cap * sizeof(int))";
+}
+
+USHORT guarded_ushort_narrowing(size_t length)
+{
+	if (length > 0xffffu) return 0;
+	return (USHORT)length;
+}
+
+USHORT macro_guarded_ushort_narrowing(size_t length)
+{
+	if (length > __US_MAX_WCHARS) return 0;
+	return (USHORT)length;
+}
+
+USHORT limit_guarded_ushort_narrowing(size_t length)
+{
+	if (length > USHRT_MAX) return 0;
+	return (USHORT)length;
+}
+
+USHORT decimal_guarded_ushort_narrowing(size_t length)
+{
+	if (length > 65535) return 0;
+	return (USHORT)length;
+}
+
+USHORT proved_ushort_narrowing(size_t length)
+{
+	/* sizearith-safe: fixture supplies the construction proof. */
+	return (USHORT)length;
+}
+
+size_t ushort_type_width(void)
+{
+	return sizeof(USHORT);
 }

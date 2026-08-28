@@ -3,6 +3,7 @@
 
 typedef __SIZE_TYPE__ size_t;
 typedef unsigned long ULONG;
+typedef unsigned short USHORT;
 void *malloc(size_t);
 void *calloc(size_t, size_t);
 void *realloc(void *, size_t);
@@ -48,4 +49,16 @@ ULONG raw_ulong_narrowing(size_t length)
 int raw_int_narrowing(size_t byte_count)
 {
 	return (int)byte_count; /* sizearith-expect: length-narrowing */
+}
+
+USHORT raw_ushort_narrowing(size_t length)
+{
+	return (USHORT)length; /* sizearith-expect: length-narrowing */
+}
+
+USHORT late_guarded_ushort_narrowing(size_t length)
+{
+	USHORT result = (USHORT)length; /* sizearith-expect: length-narrowing */
+	if (length > 0xffffu) return 0;
+	return result;
 }

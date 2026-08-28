@@ -335,9 +335,9 @@ static void stop_event_name(pid_t pid, int sig, WCHAR name[56],
 	name[i++] = (unsigned char)"0123456789abcdef"[usig & 15];
 	name[i] = 0;
 	us->Buffer = name;
-	/* USHORT-safe: the fixed-format name fits in the 56-WCHAR buffer. */
+	/* sizearith-safe: the fixed-format name fits in the 56-WCHAR buffer. */
 	us->Length = (USHORT)(i * sizeof(WCHAR));
-	/* USHORT-safe: us->Length plus one WCHAR has the same fixed bound. */
+	/* sizearith-safe: us->Length plus one WCHAR has the same fixed bound. */
 	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
 }
 
@@ -1624,7 +1624,7 @@ static void install_ctrl_handler(void)
 	procname.Buffer = "SetConsoleCtrlHandler";
 	/* A 21-byte string literal, not anything a caller supplies, so this
 	 * narrowing to the ANSI_STRING's USHORT lengths cannot wrap.
-	 * USHORT-safe: 21-byte string literal. */
+	 * sizearith-safe: 21-byte string literal. */
 	procname.Length = procname.MaximumLength = (USHORT)strlen(procname.Buffer);
 	if (!NT_SUCCESS(LdrGetProcedureAddress(kernel32, &procname, 0, &proc))) return;
 

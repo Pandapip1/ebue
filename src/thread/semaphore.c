@@ -120,9 +120,9 @@ static void object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
 	if (n >= cap) n = cap - 1;
 	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i];
 	wide[n] = 0;
-	/* USHORT-safe: n is capped at wide[96]'s caller-supplied capacity. */
+	/* sizearith-safe: n is capped at wide[96]'s caller-supplied capacity. */
 	us->Length = (USHORT)(n * sizeof(WCHAR));
-	/* USHORT-safe: n + 1 is at most the same 96-WCHAR capacity. */
+	/* sizearith-safe: n + 1 is at most the same 96-WCHAR capacity. */
 	us->MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
 	us->Buffer = wide;
 	InitializeObjectAttributes(oa, us, OBJ_CASE_INSENSITIVE | OBJ_INHERIT, 0, 0);

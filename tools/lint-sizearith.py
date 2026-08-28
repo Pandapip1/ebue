@@ -9,10 +9,11 @@ parentheses, and examines the actual size argument of the allocators used by
 this tree.  Existing debt is recorded by exact source expression in
 tools/sizearith-known.txt; new sites and stale entries both fail the stage.
 
-Use a ``sizearith-safe: reason`` comment on the same or preceding line only
-when a bound is proved by construction.  Checked arithmetic should normally
-be expressed through src/internal/libc.h's __size_* and
-__array_next_capacity helpers instead.
+USHORT casts additionally accept a preceding __US_MAX_WCHARS, USHRT_MAX,
+0xffff, or 65535 bound in their function.  Use a ``sizearith-safe: reason``
+comment on the same or preceding line only when a bound is proved by
+construction.  Checked arithmetic should normally be expressed through
+src/internal/libc.h's __size_* and __array_next_capacity helpers instead.
 """
 
 from __future__ import annotations
@@ -211,11 +212,26 @@ def exempt(source_lines: list[str], line: int) -> bool:
     return "sizearith-safe:" in here or "sizearith-safe:" in prev
 
 
+def ushort_guarded(toks: list[Tok], cast: int, braces: dict[int, int]) -> bool:
+    """Return whether a USHORT bound appears before this cast's function body."""
+    containing = [begin for begin, end in braces.items() if begin < cast < end]
+    if not containing:
+        return False
+    body = min(containing)
+    for tok in toks[body + 1:cast]:
+        low = tok.text.lower()
+        if (low in ("__us_max_wchars", "ushrt_max", "65535") or
+                re.fullmatch(r"0xffff(?:u|ul|ull)?", low)):
+            return True
+    return False
+
+
 def scan(path: pathlib.Path) -> list[Site]:
     source = path.read_text(encoding="utf-8")
     lines = source.splitlines()
     toks = lex(mask_noncode(source))
     parens = pairs(toks, "(", ")")
+    braces = pairs(toks, "{", "}")
     ignored = sizeof_ignored(toks, parens)
     rel = path.relative_to(ROOT).as_posix()
     sites: list[Site] = []
@@ -273,7 +289,7 @@ def scan(path: pathlib.Path) -> list[Site]:
         if toks[i].text != "(" or toks[i + 2].text != ")":
             continue
         ctype = toks[i + 1].text
-        if ctype not in ("ULONG", "int"):
+        if ctype not in ("USHORT", "ULONG", "int"):
             continue
         if i > 0 and toks[i - 1].text == "sizeof":
             continue
@@ -287,14 +303,14 @@ def scan(path: pathlib.Path) -> list[Site]:
         # A direct sizeof operand is a compile-time constant.  This rule
         # targets run-time lengths that can exceed the destination type.
         first = next((t.text for t in operand if t.text not in ("(", ")")), "")
-        relevant = first != "sizeof" and any(
+        relevant = ctype == "USHORT" or (first != "sizeof" and any(
             t.text == "sizeof" or LENGTH_NAME.search(t.text)
             for t in operand if re.match(r"[A-Za-z_]", t.text)
-        )
+        ))
         if not relevant:
             continue
         line = toks[i].line
-        if exempt(lines, line):
+        if exempt(lines, line) or (ctype == "USHORT" and ushort_guarded(toks, i, braces)):
             continue
         sites.append(Site("length-narrowing", rel, line,
                           normalise(source, toks[i].start, toks[end - 1].end)))
