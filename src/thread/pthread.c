@@ -134,13 +134,22 @@ static ULONG NTAPI thread_entry(PVOID argument)
 {
 	struct __pthread *self = argument;
 	void *result;
-	if (__pthread_self_control != self) {
-		__pthread_self_control = self;
-		__sig_current_mask_install(&self->sigmask);
-	}
+	__pthread_adopt_current(self);
 	result = self->start(self->argument);
 	finish(self, result);
 	return 0;
+}
+
+void __pthread_adopt_current(struct __pthread *self)
+{
+	if (__pthread_self_control == self) return;
+	__pthread_self_control = self;
+	__sig_current_mask_install(&self->sigmask);
+}
+
+int __pthread_is_current(struct __pthread *thread)
+{
+	return thread == __pthread_self_control;
 }
 
 int pthread_create(pthread_t *__restrict output,

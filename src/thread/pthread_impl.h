@@ -51,6 +51,8 @@ struct __pthread {
 
 extern __thread struct __pthread *__pthread_self_control;
 struct __pthread *__pthread_current(void);
+void __pthread_adopt_current(struct __pthread *);
+int __pthread_is_current(struct __pthread *);
 void __pthread_run_specific_destructors(struct __pthread *);
 _Noreturn void __pthread_cancel_current(void);
 void __pthread_testcancel(void);

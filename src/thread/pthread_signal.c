@@ -12,10 +12,7 @@ static void NTAPI signal_apc(PVOID argument, PVOID signal_value, PVOID unused)
 	/* Native user APCs queued immediately after creation may run before
 	 * thread_entry().  Establish the control block and inherited mask before
 	 * invoking user code so pthread_self() already names the target thread. */
-	if (!__pthread_self_control) {
-		__pthread_self_control = thread;
-		__sig_current_mask_install(&thread->sigmask);
-	}
+	__pthread_adopt_current(thread);
 	__sig_lock();
 	__raise_thread_internal((int)(ULONG_PTR)signal_value);
 	__sig_unlock();
@@ -33,7 +30,7 @@ int pthread_kill(pthread_t thread, int sig)
 	}
 	RtlReleasePebLock();
 	if (!sig) return 0;
-	if (thread == __pthread_self_control) {
+	if (__pthread_is_current(thread)) {
 		signal_apc(thread, (PVOID)(ULONG_PTR)sig, 0);
 		return 0;
 	}
