@@ -12,6 +12,8 @@
 #define BARRIER_DEAD ((ULONG_PTR)0x42415258u)
 #define BARATTR_MAGIC ((ULONG_PTR)0x42415454u)
 
+struct barrier_waiter;
+
 struct barrier_data {
 	ULONG_PTR magic;
 	volatile int guard;
@@ -19,6 +21,14 @@ struct barrier_data {
 	unsigned count;
 	unsigned waiting;
 	int pshared;
+	struct barrier_waiter *waiters;
+};
+
+struct barrier_waiter {
+	struct barrier_data *barrier;
+	struct barrier_waiter *next;
+	HANDLE event;
+	unsigned generation;
 };
 
 struct barrierattr_data {
@@ -117,6 +127,28 @@ static const struct barrierattr_data *const_barrierattr_data(
 	return (const struct barrierattr_data *)(const void *)attr;
 }
 
+/* Process-private barrier state is serialized by the PEB lock. Each caller
+ * waits on its own event so releasing a generation is a broadcast rather than
+ * an auto-reset wake that one peer can steal. Process-shared barriers retain
+ * their address-only atomic algorithm below because handles are process-local. */
+static void wake_barrier_waiters_locked(struct barrier_data *data,
+	unsigned generation)
+{
+	struct barrier_waiter *waiter;
+	for (waiter = data->waiters; waiter; waiter = waiter->next) {
+		LONG previous;
+		if (waiter->generation == generation && waiter->event)
+			NtSetEvent(waiter->event, &previous);
+	}
+}
+
+static void unlink_barrier_waiter_locked(struct barrier_waiter *waiter)
+{
+	struct barrier_waiter **link = &waiter->barrier->waiters;
+	while (*link && *link != waiter) link = &(*link)->next;
+	if (*link) *link = waiter->next;
+}
+
 int pthread_barrier_init(pthread_barrier_t *__restrict barrier,
 	const pthread_barrierattr_t *__restrict attr, unsigned count)
 {
@@ -143,20 +175,67 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 	if (!barrier) return EINVAL;
 	data = barrier_data(barrier);
 	if (data->magic != BARRIER_MAGIC) return EINVAL;
-	acquire_guard(&data->guard);
-	if (data->waiting) result = EBUSY;
-	else data->magic = BARRIER_DEAD;
-	release_guard(&data->guard);
+	if (data->pshared == PTHREAD_PROCESS_SHARED) {
+		acquire_guard(&data->guard);
+		if (data->waiting) result = EBUSY;
+		else data->magic = BARRIER_DEAD;
+		release_guard(&data->guard);
+	} else {
+		RtlAcquirePebLock();
+		if (data->waiting) result = EBUSY;
+		else data->magic = BARRIER_DEAD;
+		RtlReleasePebLock();
+	}
 	return result;
 }
 
 int pthread_barrier_wait(pthread_barrier_t *barrier)
 {
 	struct barrier_data *data;
+	struct barrier_waiter waiter;
+	OBJECT_ATTRIBUTES attributes;
+	NTSTATUS status;
 	unsigned generation;
 	if (!barrier) return EINVAL;
 	data = barrier_data(barrier);
 	if (data->magic != BARRIER_MAGIC) return EINVAL;
+	if (data->pshared == PTHREAD_PROCESS_PRIVATE) {
+		InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
+		status = NtCreateEvent(&waiter.event, EVENT_ALL_ACCESS, &attributes,
+		                       SynchronizationEvent, FALSE);
+		if (!NT_SUCCESS(status)) waiter.event = 0;
+		waiter.barrier = data;
+		RtlAcquirePebLock();
+		generation = data->generation;
+		if (++data->waiting == data->count) {
+			data->waiting = 0;
+			data->generation++;
+			wake_barrier_waiters_locked(data, generation);
+			RtlReleasePebLock();
+			if (waiter.event) NtClose(waiter.event);
+			return PTHREAD_BARRIER_SERIAL_THREAD;
+		}
+		if (waiter.event) {
+			waiter.generation = generation;
+			waiter.next = data->waiters;
+			data->waiters = &waiter;
+		}
+		RtlReleasePebLock();
+		if (waiter.event) {
+			do {
+				status = NtWaitForSingleObject(waiter.event, TRUE, 0);
+			} while (status == STATUS_USER_APC || status == STATUS_ALERTED);
+			RtlAcquirePebLock();
+			unlink_barrier_waiter_locked(&waiter);
+			RtlReleasePebLock();
+			NtClose(waiter.event);
+		} else {
+			/* pthread_barrier_wait() has no resource-error return. Retain
+			 * generation polling only for degraded event-allocation failure. */
+			while (data->generation == generation) alertable_yield();
+		}
+		return 0;
+	}
 	acquire_guard(&data->guard);
 	generation = data->generation;
 	if (++data->waiting == data->count) {
