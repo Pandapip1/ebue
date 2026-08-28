@@ -521,8 +521,8 @@ pthread_create/1-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS cla
 pthread_create/1-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/pstat.h sys/sysctl.h
 pthread_create/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 pthread_create/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_create/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_create/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_create/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
+pthread_create/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_create/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_create/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_create/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
@@ -531,24 +531,24 @@ pthread_create/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: obse
 pthread_create/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	blocked raise() signals remain pending only for the calling thread while new threads inherit the mask with an empty pending set
 pthread_detach/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_detach/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
-pthread_detach/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_detach/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_detach/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_detach/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_detach/4-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_detach/4-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_detach/4-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_equal/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_equal/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_equal/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_exit/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_exit/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_exit/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_exit/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_exit/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_exit/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_exit/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
-pthread_exit/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_exit/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_exit/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_exit/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h sys/mman.h
-pthread_exit/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_exit/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
+pthread_exit/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
+pthread_exit/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
+pthread_exit/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
+pthread_exit/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_getcpuclockid/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_getcpuclockid/speculative/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_getschedparam/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
@@ -557,13 +557,13 @@ pthread_getschedparam/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	mea
 pthread_getspecific/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
 pthread_getspecific/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
 pthread_join/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_join/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_join/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_join/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_join/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_join/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_join/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_join/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_join/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_join/6-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after advertising implemented pthread limits and options
 pthread_join/speculative/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_key_create/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
 pthread_key_create/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
