@@ -133,7 +133,18 @@ PPEB NTAPI RtlGetCurrentPeb(void) { return &shim_peb; }
 
 /* The native fuzz harness is single-threaded while library startup and
  * teardown manipulate process-global tables.  These stand in only for
- * ntdll's serialization boundary; no NT PEB exists to lock here. */
+ * ntdll's serialization boundary; no NT PEB exists to lock here.
+ *
+ * #undef first: src/internal/libc.h's own RtlAcquirePebLock()/
+ * RtlReleasePebLock() are call-wrapper macros (cancellation-deferred
+ * regions around the real ntdll functions of the same name), and a
+ * function-like macro is expanded anywhere its name is followed by `(`
+ * -- including right here, at the definition itself.  Left defined,
+ * `void NTAPI RtlAcquirePebLock(void) { }` stopped being a function
+ * definition and became `void NTAPI (__pthread_cancel_defer_enter(),
+ * RtlAcquirePebLock()) { }`, which is not valid C. */
+#undef RtlAcquirePebLock
+#undef RtlReleasePebLock
 void NTAPI RtlAcquirePebLock(void) { }
 void NTAPI RtlReleasePebLock(void) { }
 
