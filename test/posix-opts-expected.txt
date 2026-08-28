@@ -136,7 +136,7 @@ fork/22-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after
 fork/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 fork/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after pthread_atfork and child-thread reset implementation
 fork/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after pthread_atfork and child-thread reset implementation
-fork/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by nl_types.h pthread.h
+fork/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires an external gencat utility to generate its message catalog
 fork/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after pthread_atfork and child-thread reset implementation
 fork/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after pthread_atfork and child-thread reset implementation
 fsync/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -353,7 +353,7 @@ munlock/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 munlockall/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after _POSIX_MEMLOCK and munlockall() implementation: the call returned zero
 munmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 munmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
-munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
+munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test hard-codes the Unix /dev/zero device, which does not exist in the Windows target environment
 munmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 munmap/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 munmap/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
@@ -411,7 +411,7 @@ pthread_attr_setschedparam/speculative/3-2.c	runtime=wine,target_arch=x86_64,ker
 pthread_attr_setschedpolicy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_attr_setschedpolicy/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_attr_setschedpolicy/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
-pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_attr_setschedpolicy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: the test requires a non-POSIX CPU-affinity helper that ntlibc does not provide
 pthread_attr_setschedpolicy/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_attr_setschedpolicy/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_attr_setscope/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
@@ -446,7 +446,7 @@ pthread_cancel/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: obse
 pthread_cancel/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread cancellation implementation
 pthread_cancel/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread cancellation implementation
-pthread_cancel/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_cancel/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture calls clock_gettime and uses CLOCK_REALTIME without including the required time.h header
 pthread_cancel/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread cancellation implementation
 pthread_cancel/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread cancellation implementation
 pthread_cancel/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread cancellation implementation
@@ -501,13 +501,13 @@ pthread_condattr_destroy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	
 pthread_condattr_destroy/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_destroy/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_getclock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
-pthread_condattr_getclock/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_condattr_getclock/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture uses CLOCK_REALTIME without including the required time.h header
 pthread_condattr_getpshared/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_getpshared/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_getpshared/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_init/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_init/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
-pthread_condattr_setclock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_condattr_setclock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture uses CLOCK_REALTIME without including the required time.h header
 pthread_condattr_setclock/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_setclock/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
 pthread_condattr_setclock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX condition-variable implementation
@@ -597,7 +597,7 @@ pthread_mutex_init/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: 
 pthread_mutex_init/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_init/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_init/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
-pthread_mutex_init/speculative/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_mutex_init/speculative/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	speculative privilege test only defines expectations for Linux, AIX, and Solaris and reports other systems untested
 pthread_mutex_lock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_lock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_lock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
@@ -667,7 +667,7 @@ pthread_once/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observ
 pthread_once/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_once/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_once/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread cancellation implementation
-pthread_once/4-1-buildonly.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_once/4-1-buildonly.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite build-only helper has no test_main entry point and is not an executable conformance case
 pthread_once/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 pthread_rwlock_destroy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_rwlock_destroy/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
@@ -686,13 +686,13 @@ pthread_rwlock_timedrdlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PAS
 pthread_rwlock_timedrdlock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedrdlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedrdlock/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
-pthread_rwlock_timedrdlock/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_rwlock_timedrdlock/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture destroys the rwlock while its worker still owns the acquired read lock; POSIX leaves that destruction undefined
 pthread_rwlock_timedwrlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedwrlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedwrlock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedwrlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedwrlock/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
-pthread_rwlock_timedwrlock/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_rwlock_timedwrlock/6-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite fixture destroys the rwlock while its worker still owns the acquired write lock; POSIX leaves that destruction undefined
 pthread_rwlock_tryrdlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_trywrlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_trywrlock/speculative/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
@@ -1566,7 +1566,7 @@ strftime/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strlen/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strncpy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 strncpy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-testfrmw/testfrmw.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+testfrmw/testfrmw.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite framework source has no test_main entry point and is not an executable conformance case
 testfrmw/threads_scenarii.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite helper source is not a standalone test and requires the optional pthread type surface
 time/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 timer_create/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
