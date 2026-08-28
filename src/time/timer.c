@@ -6,9 +6,10 @@
  * event. That is deliberately one thread for the process, not one thread per
  * timer: timer_create() has a fixed, honest TIMER_MAX resource bound, and
  * fork() has only one background thread to forget and restart. Signal
- * delivery uses signal.c's existing recursive lock, queue, and siginfo path,
- * so a blocked timer signal coalesces and its missed interval expirations
- * become timer_getoverrun()'s count.
+ * delivery uses signal.c's process-pending queue, so the application
+ * thread's mask -- not the manager thread's empty TLS mask -- decides when a
+ * notification is consumed. A blocked timer signal therefore coalesces and
+ * its missed interval expirations become timer_getoverrun()'s count.
  */
 #include <time.h>
 #include <signal.h>
@@ -98,10 +99,11 @@ static void timer_signal(struct posix_timer *timer, long long expirations)
 	si.si_timerid = (int)(timer - timers);
 	si.si_overrun = timer->overrun;
 	si.si_value = timer->event.sigev_value;
-	__raise_internal_info(si.si_signo, &si);
-	/* Unblocked signals are handled synchronously and leave no queued
-	 * notification.  A blocked one remains pending until sigprocmask(),
-	 * sigwaitinfo(), or sigtimedwait() consumes it. */
+	/* A timer expiration is process-directed. The manager is an internal
+	 * service thread, so delivering against its TLS mask would make a signal
+	 * blocked by the application look unblocked and would run the handler on
+	 * the wrong thread. Queue it for an application signal-aware point. */
+	__sig_queue_process_info(si.si_signo, &si);
 	timer->notification_pending = __sig_pending_member(si.si_signo);
 }
 
