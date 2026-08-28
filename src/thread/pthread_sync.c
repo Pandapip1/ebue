@@ -47,6 +47,13 @@ static void release_guard(volatile int *guard)
 	*guard = 0;
 }
 
+static void alertable_yield(void)
+{
+	LARGE_INTEGER delay = 0;
+	NtDelayExecution(TRUE, &delay);
+	sched_yield();
+}
+
 int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
 {
 	if (!lock || (pshared != PTHREAD_PROCESS_PRIVATE &&
@@ -71,7 +78,7 @@ int pthread_spin_lock(pthread_spinlock_t *lock)
 		if (state == SPIN_UNLOCKED &&
 		    compare_exchange(&lock->__value, SPIN_UNLOCKED,
 			SPIN_LOCKED) == SPIN_UNLOCKED) return 0;
-		sched_yield();
+		alertable_yield();
 	}
 }
 
@@ -159,7 +166,7 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 		return PTHREAD_BARRIER_SERIAL_THREAD;
 	}
 	release_guard(&data->guard);
-	while (data->generation == generation) sched_yield();
+	while (data->generation == generation) alertable_yield();
 	return 0;
 }
 
