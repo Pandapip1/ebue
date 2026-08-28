@@ -324,11 +324,12 @@ for t in test/*.c; do
 	case " $NOT_NATIVE " in
 	*" $n "*) continue ;;
 	esac
-	sed -E 's/^([[:space:]]*#[[:space:]]*if[[:space:]]+)NTLIBC_TEST\([[:space:]]*(PASS|BUG|FLAKY),[^)]*\)/\1 1/' "$t" |
+	# TINC deliberately expands to the four generated/source include options.
+	# shellcheck disable=SC2086
+	if ! sed -E 's/^([[:space:]]*#[[:space:]]*if[[:space:]]+)NTLIBC_TEST\([[:space:]]*(PASS|BUG|FLAKY),[^)]*\)/\1 1/' "$t" |
 		"$CC_NATIVE" -E -std=c99 -nostdinc -fno-builtin -D_XOPEN_SOURCE=700 \
 		-D_GNU_SOURCE -I"$srcdir/test" $TINC -x c - \
-		> "$workdir/policy/$n.i" 2> "$workdir/policy/$n.err"
-	if [ $? -ne 0 ]; then
+		> "$workdir/policy/$n.i" 2> "$workdir/policy/$n.err"; then
 		printf '%s\n' "$t" >> "$workdir/policyfail"
 		continue
 	fi
