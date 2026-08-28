@@ -193,7 +193,7 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	if (!absolute || absolute->tv_sec < 0 || absolute->tv_nsec < 0 ||
 	    absolute->tv_nsec >= 1000000000L) {
 		RtlReleasePebLock();
-		return absolute ? EINVAL : EINVAL;
+		return EINVAL;
 	}
 	memset(&waiter, 0, sizeof waiter);
 	waiter.lock = data;
