@@ -78,6 +78,7 @@ int posix_memalign(void **res, size_t align, size_t len)
 		*res = p;
 		return 0;
 	}
+	if (len > (size_t)-1 - align) return ENOMEM;
 	r = malloc(sizeof *r);
 	if (!r) return ENOMEM;
 	base = malloc(len + align);

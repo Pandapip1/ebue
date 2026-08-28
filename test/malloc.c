@@ -187,6 +187,7 @@ int main(void)
 	/* aligned_alloc / memalign / valloc */
 	{
 		void *p;
+		size_t huge = SIZE_MAX & ~(size_t)4095;
 		errno = 0;
 		p = aligned_alloc(48, 100);
 		CHECK(p == 0 && errno == EINVAL);
@@ -207,6 +208,19 @@ int main(void)
 		CHECK(p != 0 && aligned_to(p, 4096));
 		if (p) memset(p, 0xaa, 100);
 		free(p);
+
+		/* The over-allocation used to align a block must itself be
+		 * checked.  `huge` is a valid multiple of 4096 (including for
+		 * aligned_alloc's size restriction), but huge+4096 wraps. */
+		p = (void *)1;
+		CHECK(posix_memalign(&p, 4096, huge) == ENOMEM);
+		CHECK(p == (void *)1);
+		errno = 0;
+		CHECK(aligned_alloc(4096, huge) == 0 && errno == ENOMEM);
+		errno = 0;
+		CHECK(memalign(4096, huge) == 0 && errno == ENOMEM);
+		errno = 0;
+		CHECK(valloc(huge) == 0 && errno == ENOMEM);
 	}
 	/* aligned blocks: fill and check non-overlap, free in various orders */
 	{
