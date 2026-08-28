@@ -17,21 +17,26 @@ struct mutex_data {
 	pthread_t owner;
 	unsigned recursion;
 	unsigned waiters;
-	int type;
-	int pshared;
-	int protocol;
-	int prioceiling;
-	int robust;
+	unsigned char type;
+	unsigned char pshared;
+	unsigned char protocol;
+	unsigned char prioceiling;
+	unsigned char robust;
 };
 
 struct mutexattr_data {
 	ULONG_PTR magic;
-	int type;
-	int pshared;
-	int protocol;
-	int prioceiling;
-	int robust;
+	unsigned char type;
+	unsigned char pshared;
+	unsigned char protocol;
+	unsigned char prioceiling;
+	unsigned char robust;
 };
+
+typedef char mutex_data_fits_public_storage[
+	sizeof(struct mutex_data) <= sizeof(pthread_mutex_t) ? 1 : -1];
+typedef char mutexattr_data_fits_public_storage[
+	sizeof(struct mutexattr_data) <= sizeof(pthread_mutexattr_t) ? 1 : -1];
 
 static struct mutex_data *mutex_data(pthread_mutex_t *mutex)
 {
