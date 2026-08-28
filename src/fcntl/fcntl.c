@@ -10,9 +10,9 @@
 
 struct record_lock_state {
 	HANDLE h;
-	pid_t owner;
 	LARGE_INTEGER off;
 	LARGE_INTEGER len;
+	pid_t owner;
 	unsigned char held;
 };
 
@@ -82,7 +82,7 @@ static int record_lock(int fd, struct __fd *f, int cmd, struct flock *l)
 {
 	struct record_lock_state *held = &record_locks[fd];
 	IO_STATUS_BLOCK io;
-	LARGE_INTEGER off, len;
+	LARGE_INTEGER off = 0, len = 0;
 	NTSTATUS st;
 	pid_t owner = getpid();
 	int exclusive;
