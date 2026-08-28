@@ -270,6 +270,55 @@ static void test_posix_realtime_sem_open_named(void)
 }
 #endif
 
+#if NTLIBC_TEST(PASS, posix_realtime_sem_open_recovers_interrupted_publish)
+#include <semaphore.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <limits.h>
+#include <errno.h>
+
+static void test_posix_realtime_sem_open_recovers_interrupted_publish(void)
+{
+	const char *dir = getenv("TMPDIR");
+	const char *name = "/ntlibc_posix_realtime_stale";
+	char namespace[PATH_MAX], record[PATH_MAX];
+	sem_t *sem;
+	int fd;
+
+	if (!dir || !*dir) dir = getenv("TMP");
+	if (!dir || !*dir) dir = getenv("TEMP");
+	if (!dir || !*dir) dir = ".";
+	CHECK(snprintf(namespace, sizeof namespace, "%s/ntlibc-sem", dir)
+	      < (int)sizeof namespace);
+	CHECK(snprintf(record, sizeof record, "%s/ntlibc_posix_realtime_stale",
+	               namespace) < (int)sizeof record);
+	CHECK(mkdir(namespace, 0777) == 0 || errno == EEXIST);
+	/* This is the durable state left if a creator dies between publishing
+	 * the record and filling it with the NT object name.  O_CREAT must be
+	 * able to create the named semaphore, rather than leaving this POSIX
+	 * name permanently poisoned. */
+	unlink(record);
+	fd = open(record, O_CREAT | O_EXCL | O_WRONLY, 0600);
+	CHECK(fd >= 0);
+	if (fd < 0) return;
+	CHECK(close(fd) == 0);
+
+	sem = sem_open(name, O_CREAT, 0600, 1);
+	CHECK(sem != SEM_FAILED);
+	if (sem == SEM_FAILED) {
+		unlink(record);
+		return;
+	}
+	CHECK(sem_trywait(sem) == 0);
+	CHECK(sem_close(sem) == 0);
+	CHECK(sem_unlink(name) == 0);
+}
+#endif
+
 /* ==================================================================
  * Message queues -- .../functions/mq_open.html, mq_send.html,
  * mq_receive.html, mq_getattr.html, mq_notify.html, mq_close.html

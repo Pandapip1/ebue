@@ -95,6 +95,24 @@ static int ensure_dir(const char *path)
 	return 0;
 }
 
+/* A named semaphore's filesystem record is its publication point.  Creating
+ * the file and filling it cannot be one filesystem operation, so serialize
+ * that interval across processes.  Without this lock, two sem_open(O_CREAT)
+ * callers can race as follows: one creates the empty record while the other
+ * opens and reads it, then both abandon the name.  fork/1-1.c has exactly
+ * that shape because parent and child open the same name immediately after
+ * the clone.
+ *
+ * FNV-1a's unsigned wrap is the hash operation itself.  The full path is
+ * used, rather than only the POSIX name, so processes with different temp
+ * namespaces do not unnecessarily share a lock. */
+__wraps static unsigned long long path_hash(const char *s)
+{
+	unsigned long long h = 1469598103934665603ULL;
+	while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+	return h;
+}
+
 static void object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
 	UNICODE_STRING *us, WCHAR *wide, size_t cap)
 {
@@ -108,6 +126,36 @@ static void object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
 	us->MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
 	us->Buffer = wide;
 	InitializeObjectAttributes(oa, us, OBJ_CASE_INSENSITIVE | OBJ_INHERIT, 0, 0);
+}
+
+static int namespace_lock(const char *path, HANDLE *out)
+{
+	char name[96];
+	WCHAR wide[96];
+	UNICODE_STRING us;
+	OBJECT_ATTRIBUTES oa;
+	unsigned long long hash = path_hash(path);
+	NTSTATUS st;
+
+	snprintf(name, sizeof name, "\\BaseNamedObjects\\ntlibc.sem.name.%08x%08x",
+	         (unsigned)(hash >> 32), (unsigned)hash);
+	object_attributes(name, &oa, &us, wide, sizeof wide / sizeof wide[0]);
+	oa.Attributes = (oa.Attributes & ~OBJ_INHERIT) | OBJ_OPENIF;
+	st = NtCreateMutant(out, MUTANT_ALL_ACCESS, &oa, FALSE);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	st = NtWaitForSingleObject(*out, FALSE, NULL);
+	if (!NT_SUCCESS(st)) {
+		NtClose(*out);
+		*out = 0;
+		return __set_errno_status(st);
+	}
+	return 0;
+}
+
+static void namespace_unlock(HANDLE lock)
+{
+	NtReleaseMutant(lock, NULL);
+	NtClose(lock);
 }
 
 static struct named_sem *find_path(const char *path)
@@ -181,9 +229,9 @@ sem_t *sem_open(const char *name, int oflag, ...)
 	UNICODE_STRING us;
 	OBJECT_ATTRIBUTES oa;
 	struct named_sem *entry;
-	HANDLE h;
+	HANDLE h, ns = 0;
 	NTSTATUS st;
-	int fd = -1, created = 0, saved;
+	int fd = -1, created = 0, saved, recover = 0;
 	unsigned value = 0;
 	mode_t mode = 0;
 	ssize_t got;
@@ -207,6 +255,24 @@ sem_t *sem_open(const char *name, int oflag, ...)
 	}
 	RtlReleasePebLock();
 	if (ensure_dir(path) < 0) { free(path); return SEM_FAILED; }
+	if (namespace_lock(path, &ns) < 0) { free(path); return SEM_FAILED; }
+	/* A same-process opener may have populated the cache while this caller
+	 * waited for the cross-process publication lock. */
+	RtlAcquirePebLock();
+	entry = find_path(path);
+	if (entry) {
+		if ((oflag & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
+			RtlReleasePebLock(); namespace_unlock(ns); free(path);
+			errno = EEXIST; return SEM_FAILED;
+		}
+		entry->refs++;
+		RtlReleasePebLock(); namespace_unlock(ns); free(path);
+		errno = 0; return &entry->sem;
+	}
+	RtlReleasePebLock();
+
+retry_record:
+	created = 0;
 	if (oflag & O_CREAT) {
 		/* The record is implementation metadata, not the semaphore's
 		 * permission object. Keeping it owner-writable is necessary on
@@ -218,7 +284,7 @@ sem_t *sem_open(const char *name, int oflag, ...)
 		if (fd >= 0) created = 1;
 		else if (errno == EEXIST && !(oflag & O_EXCL)) fd = open(path, O_RDONLY, 0);
 	} else fd = open(path, O_RDONLY, 0);
-	if (fd < 0) { free(path); return SEM_FAILED; }
+	if (fd < 0) { saved = errno; goto fail_locked; }
 	if (created) {
 		snprintf(object, sizeof object, "\\BaseNamedObjects\\ntlibc.sem.%d.%u",
 		         (int)getpid(), ++object_sequence);
@@ -226,27 +292,60 @@ sem_t *sem_open(const char *name, int oflag, ...)
 		st = NtCreateSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa, (LONG)value, SEM_VALUE_MAX);
 		if (!NT_SUCCESS(st) || write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
 			saved = NT_SUCCESS(st) ? EIO : (__set_errno_status(st), errno);
-			close(fd); unlink(path); free(path); errno = saved; return SEM_FAILED;
+			close(fd); unlink(path); goto fail_locked;
 		}
 	} else {
 		got = read(fd, object, sizeof object - 1);
-		if (got <= 0) { saved = got < 0 ? errno : EIO; close(fd); free(path); errno = saved; return SEM_FAILED; }
+		if (got <= 0) {
+			saved = got < 0 ? errno : EIO;
+			close(fd);
+			/* A creator can die after publishing the record but before
+			 * filling it.  O_CREAT without O_EXCL owns recovery while the
+			 * namespace lock proves nobody can still be publishing it. */
+			if ((oflag & O_CREAT) && !(oflag & O_EXCL) && !recover) {
+				recover = 1;
+				if (unlink(path) == 0) goto retry_record;
+				saved = errno;
+			}
+			goto fail_locked;
+		}
 		object[got] = 0;
 		object_attributes(object, &oa, &us, wide, sizeof wide / sizeof wide[0]);
 		st = NtOpenSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa);
-		if (!NT_SUCCESS(st)) { close(fd); free(path); __set_errno_status(st); return SEM_FAILED; }
+		if (!NT_SUCCESS(st)) {
+			close(fd);
+			if ((oflag & O_CREAT) && !(oflag & O_EXCL) && !recover &&
+			    st == STATUS_OBJECT_NAME_NOT_FOUND) {
+				recover = 1;
+				if (unlink(path) == 0) goto retry_record;
+				saved = errno;
+			} else {
+				__set_errno_status(st);
+				saved = errno;
+			}
+			goto fail_locked;
+		}
 	}
 	close(fd);
 	RtlAcquirePebLock();
 	entry = free_slot();
 	if (!entry) {
-		RtlReleasePebLock(); NtClose(h); free(path); errno = EMFILE; return SEM_FAILED;
+		RtlReleasePebLock(); NtClose(h);
+		if (created) unlink(path);
+		saved = EMFILE; goto fail_locked;
 	}
 	entry->sem.__handle = h; entry->sem.__magic = SEM_MAGIC; entry->sem.__named = 1;
 	entry->path = path; entry->refs = 1; entry->linked = 1;
 	RtlReleasePebLock();
+	namespace_unlock(ns);
 	errno = 0;
 	return &entry->sem;
+
+fail_locked:
+	namespace_unlock(ns);
+	free(path);
+	errno = saved;
+	return SEM_FAILED;
 }
 
 int sem_close(sem_t *sem)
@@ -268,8 +367,11 @@ int sem_unlink(const char *name)
 {
 	char *path = sem_path(name);
 	struct named_sem *entry;
+	HANDLE ns = 0;
 	int result, saved;
 	if (!path) return -1;
+	if (ensure_dir(path) < 0) { free(path); return -1; }
+	if (namespace_lock(path, &ns) < 0) { free(path); return -1; }
 	result = unlink(path); saved = errno;
 	if (!result) {
 		RtlAcquirePebLock();
@@ -282,6 +384,7 @@ int sem_unlink(const char *name)
 		}
 		RtlReleasePebLock();
 	}
+	namespace_unlock(ns);
 	free(path); errno = saved; return result;
 }
 
