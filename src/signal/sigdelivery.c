@@ -320,7 +320,6 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 						accepted = 0;
 				}
 				if (!accepted) { __sig_unlock(); NtClose(pipe); continue; }
-				if (wake_event) { LONG prev; NtSetEvent(wake_event, &prev); }
 				memset(&si, 0, sizeof si);
 				si.si_signo = (int)pkt.signo;
 				si.si_code = (int)pkt.code;
@@ -328,9 +327,14 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 				si.si_uid = (uid_t)pkt.sender_uid;
 				si.si_value = pkt.value;
 				/* Never deliver on this service thread: its empty TLS mask is
-				 * unrelated to every POSIX application thread's mask. */
-				__sig_queue_process_info((int)pkt.signo, &si);
+				 * unrelated to every POSIX application thread's mask.  Drop the
+				 * disposition lock first: the queue helper takes that same
+				 * non-recursive lock around the process-pending queue. */
 				__sig_unlock();
+				__sig_queue_process_info((int)pkt.signo, &si);
+				/* Publish the wake only after the record is visible.  A waiter
+				 * which drains immediately must not observe an empty queue. */
+				if (wake_event) { LONG prev; NtSetEvent(wake_event, &prev); }
 			}
 		}
 
