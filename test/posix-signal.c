@@ -528,6 +528,7 @@ static void test_sigpending(void)
 	signal(SIGUSR1, SIG_DFL);
 }
 
+#ifdef _WIN32
 struct new_thread_signal_state {
 	sigset_t mask;
 	sigset_t pending;
@@ -585,6 +586,16 @@ static void test_new_thread_pending_empty(void)
 	if (old_usr1 != SIG_ERR) CHECK(signal(SIGUSR1, old_usr1) != SIG_ERR);
 	if (old_usr2 != SIG_ERR) CHECK(signal(SIGUSR2, old_usr2) != SIG_ERR);
 }
+#else
+static void test_new_thread_pending_empty(void)
+{
+	/* The native sanitizer shim deliberately refuses NtCreateThreadEx: it
+	 * has no NT thread/APC substrate.  The PE test runs this case under Wine
+	 * and real Windows; do not dereference pthread_create()'s untouched
+	 * output after that explicit native refusal. */
+	puts("note: native sanitizer shim has no NT thread substrate; new-thread signal state skipped");
+}
+#endif
 
 static volatile sig_atomic_t queued_handler_value;
 
