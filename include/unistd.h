@@ -284,48 +284,17 @@ pid_t gettid(void);
  * defect rather than a fix.  If one changes, change both. */
 #define _POSIX_VDISABLE 0
 
-/* DELIBERATELY ABSENT: the remaining "Constants for Options and Option
- * Groups" whose text on that page reads "This symbol shall always be
- * set to the value 200809L" -- _POSIX_ASYNCHRONOUS_IO, _POSIX_BARRIERS,
- * _POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES, _POSIX_MEMORY_PROTECTION,
- * _POSIX_READER_WRITER_LOCKS,
- * _POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS,
- * _POSIX_TIMEOUTS.  Their absence IS a conformance
- * hole and is recorded as one -- test/POSIX-COVERAGE.md group U, and
- * test/posix-unistd.c's still-fenced
- * test_unistd_mandatory_option_constants -- so this note exists to stop
- * the hole being silent to someone reading the header, which is where a
- * consumer meets it.
- *
- * Why the hole is not closed by adding nine #defines.  200809L is a
- * COMPILE-TIME promise; the whole reason for a constant an application
- * tests with #if is that it cannot be re-checked at run time, so a wrong
- * answer here cannot be corrected the way a wrong sysconf() answer can.
- * Not one of the nine names an option this tree actually supplies:
- *
- *   - there is no <pthread.h> at all, which leaves _POSIX_THREADS,
- *     _POSIX_BARRIERS, _POSIX_READER_WRITER_LOCKS, _POSIX_SPIN_LOCKS
- *     and _POSIX_TIMEOUTS with no interfaces behind them;
- *   - no <sys/mman.h> (_POSIX_MAPPED_FILES,
- *     _POSIX_MEMORY_PROTECTION);
- *   - _POSIX_CLOCK_SELECTION needs pthread_condattr_setclock() as well
- *     as the clock_nanosleep() we do have.
- *
- * _POSIX_THREAD_SAFE_FUNCTIONS is the one arguable case, and is left out
- * with the rest: all nineteen of its interfaces do exist here
- * (getpwnam_r(), localtime_r(), flockfile(), ...), but the constant sits
- * inside the option group _POSIX_THREADS heads, and a consumer reading
- * the two together would be misled by a tree with no threads.
- * sysconf(_SC_THREAD_SAFE_FUNCTIONS) answers -1 to match, because a
- * header that stays silent while sysconf() says "supported" is the same
- * contradiction pointing the other way.
- *
- * And POSIX leaves no third answer.  For every OTHER constant in that
- * section the page says "if defined ... shall have a value of -1, 0, or
- * greater", so -1 spells "not supported"; these nine have no such
- * form, and silence is the only truthful signal left.  Same distinction
- * <limits.h> already records against _POSIX_THREAD_KEYS_MAX and friends:
- * a number the standard prints is not a claim, an option constant is. */
+/* Mandatory option-group constants.  Keep these compile-time promises in
+ * step with sysconf() and the implementations in src/thread and src/mman. */
+#define _POSIX_BARRIERS 200809L
+#define _POSIX_CLOCK_SELECTION 200809L
+#define _POSIX_MAPPED_FILES 200809L
+#define _POSIX_MEMORY_PROTECTION 200809L
+#define _POSIX_READER_WRITER_LOCKS 200809L
+#define _POSIX_SPIN_LOCKS 200809L
+#define _POSIX_THREADS 200809L
+#define _POSIX_THREAD_SAFE_FUNCTIONS 200809L
+#define _POSIX_TIMEOUTS 200809L
 
 /* unistd.h.html: "The <unistd.h> header shall define the following
  * symbolic constants for pathconf()".  Unconditional -- a variable an

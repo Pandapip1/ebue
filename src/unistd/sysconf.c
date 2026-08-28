@@ -29,6 +29,7 @@
  */
 #include <unistd.h>
 #include <limits.h>
+#include <pthread.h>
 #include <errno.h>
 #include "libc.h"
 
@@ -74,6 +75,10 @@ long sysconf(int name)
 	case _SC_AIO_LISTIO_MAX: return AIO_LISTIO_MAX;
 	case _SC_AIO_MAX: return AIO_MAX;
 	case _SC_AIO_PRIO_DELTA_MAX: return AIO_PRIO_DELTA_MAX;
+	case _SC_THREAD_DESTRUCTOR_ITERATIONS: return PTHREAD_DESTRUCTOR_ITERATIONS;
+	case _SC_THREAD_KEYS_MAX: return PTHREAD_KEYS_MAX;
+	case _SC_THREAD_STACK_MIN: return PTHREAD_STACK_MIN;
+	case _SC_THREAD_THREADS_MAX: return PTHREAD_THREADS_MAX;
 	/* The <limits.h> Runtime Increasable Values, which that header
 	 * documents as the compile-time minimum this library promises;
 	 * reporting anything smaller here would break the promise. */
@@ -103,6 +108,18 @@ long sysconf(int name)
 	case _SC_SPAWN: return _POSIX_VERSION;           /* src/process/posix_spawn.c */
 	case _SC_MONOTONIC_CLOCK: return _POSIX_VERSION; /* src/time/clock_gettime.c */
 	case _SC_SHARED_MEMORY_OBJECTS: return _POSIX_VERSION; /* src/mman/shm.c */
+	case _SC_MAPPED_FILES: return _POSIX_MAPPED_FILES;
+	case _SC_MEMORY_PROTECTION: return _POSIX_MEMORY_PROTECTION;
+	case _SC_THREADS: return _POSIX_THREADS;
+	case _SC_THREAD_SAFE_FUNCTIONS: return _POSIX_THREAD_SAFE_FUNCTIONS;
+	case _SC_THREAD_ATTR_STACKADDR:
+	case _SC_THREAD_ATTR_STACKSIZE: return _POSIX_THREADS;
+	case _SC_THREAD_PROCESS_SHARED: return _POSIX_THREADS;
+	case _SC_BARRIERS: return _POSIX_BARRIERS;
+	case _SC_CLOCK_SELECTION: return _POSIX_CLOCK_SELECTION;
+	case _SC_READER_WRITER_LOCKS: return _POSIX_READER_WRITER_LOCKS;
+	case _SC_SPIN_LOCKS: return _POSIX_SPIN_LOCKS;
+	case _SC_TIMEOUTS: return _POSIX_TIMEOUTS;
 	case _SC_XOPEN_UNIX: return _XOPEN_UNIX;
 	case _SC_XOPEN_ENH_I18N: return _XOPEN_ENH_I18N;
 
@@ -125,17 +142,8 @@ long sysconf(int name)
 	/*
 	 * Absent option groups, by what is missing:
 	 *
-	 *   no <pthread.h>          -- _SC_THREADS and the whole _SC_THREAD_*
-	 *                              block, _SC_BARRIERS,
-	 *                              _SC_READER_WRITER_LOCKS,
-	 *                              _SC_SPIN_LOCKS, _SC_TIMEOUTS,
-	 *                              _SC_CLOCK_SELECTION (which needs
-	 *                              pthread_condattr_setclock() as well as
-	 *                              the clock_nanosleep() we have)
 	 *   no prioritized AIO      -- _SC_PRIORITIZED_IO
-	 *   incomplete <sys/mman.h> -- _SC_MAPPED_FILES,
-	 *                              _SC_MEMORY_PROTECTION,
-	 *                              _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
+	 *   no typed memory objects -- _SC_TYPED_MEMORY_OBJECTS, _SC_XOPEN_SHM
 	 *   no utilities            -- the _SC_2_* development-utility set
 	 *                              (c99, fort77, localedef, PBS, ...);
 	 *                              sh/ implements a documented subset of
@@ -178,8 +186,6 @@ long sysconf(int name)
 	case _SC_PRIORITY_SCHEDULING:
 	case _SC_PRIORITIZED_IO:
 	case _SC_SYNCHRONIZED_IO:
-	case _SC_MAPPED_FILES:
-	case _SC_MEMORY_PROTECTION:
 	case _SC_2_C_BIND:
 	case _SC_2_C_DEV:
 	case _SC_2_FORT_DEV:
@@ -194,18 +200,9 @@ long sysconf(int name)
 	case _SC_2_PBS_LOCATE:
 	case _SC_2_PBS_MESSAGE:
 	case _SC_2_PBS_TRACK:
-	case _SC_THREADS:
-	case _SC_THREAD_SAFE_FUNCTIONS:
-	case _SC_THREAD_DESTRUCTOR_ITERATIONS:
-	case _SC_THREAD_KEYS_MAX:
-	case _SC_THREAD_STACK_MIN:
-	case _SC_THREAD_THREADS_MAX:
-	case _SC_THREAD_ATTR_STACKADDR:
-	case _SC_THREAD_ATTR_STACKSIZE:
 	case _SC_THREAD_PRIORITY_SCHEDULING:
 	case _SC_THREAD_PRIO_INHERIT:
 	case _SC_THREAD_PRIO_PROTECT:
-	case _SC_THREAD_PROCESS_SHARED:
 	case _SC_THREAD_CPUTIME:
 	case _SC_THREAD_SPORADIC_SERVER:
 	case _SC_THREAD_ROBUST_PRIO_INHERIT:
@@ -220,14 +217,9 @@ long sysconf(int name)
 	case _SC_XOPEN_STREAMS:
 	case _SC_XOPEN_UUCP:
 	case _SC_ADVISORY_INFO:
-	case _SC_BARRIERS:
-	case _SC_CLOCK_SELECTION:
-	case _SC_READER_WRITER_LOCKS:
-	case _SC_SPIN_LOCKS:
 	case _SC_SHELL:
 	case _SC_SPORADIC_SERVER:
 	case _SC_SS_REPL_MAX:
-	case _SC_TIMEOUTS:
 	case _SC_TYPED_MEMORY_OBJECTS:
 	case _SC_TRACE:
 	case _SC_TRACE_EVENT_FILTER:

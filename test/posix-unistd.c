@@ -1790,50 +1790,10 @@ static void test_unistd_confstr_names(void)
 	CHECK(sizeof names / sizeof names[0] == 31);
 }
 
-#if NTLIBC_TEST(UNIMPL, posix_unistd_unistd_mandatory_option_constants) /* UNIMPL: unistd.h.html "Constants for Options and Option Groups"
-	gives these remaining nine constants the wording "This symbol shall
-	always be set to the value 200809L" -- _POSIX_BARRIERS,
-	_POSIX_CLOCK_SELECTION, _POSIX_MAPPED_FILES,
-	_POSIX_MEMORY_PROTECTION, _POSIX_READER_WRITER_LOCKS,
-	_POSIX_SPIN_LOCKS, _POSIX_THREADS, _POSIX_THREAD_SAFE_FUNCTIONS and
-	_POSIX_TIMEOUTS.  "Always" is the operative word: unlike every other
-	entry in that section, which the same page introduces with "The
-	following symbolic constants, IF DEFINED in <unistd.h>, shall have
-	a value of -1, 0, or greater", these nine are not optional to
-	define.  ntlibc defines none of the nine.  Triage: ABSENT.
-
-	THIS FENCE'S ACCEPTANCE CRITERION IS NOT "ADD A #define", and that
-	is why it is a clause of its own rather than part of the _SC_/_PC_/
-	_CS_ fences above.  The value 200809L is a compile-time PROMISE to
-	the application that the option is present -- that is the entire
-	purpose of a constant an application may test with #if.  Seven of
-	the nine are thread-related and the pthread family is a
-	recorded absence (test/POSIX-GAP-ACCOUNTING.md); defining
-	_POSIX_THREADS as 200809L with no threads behind it would be a
-	false claim, and strictly worse than the omission, because an
-	application that believes it cannot be corrected at runtime.  So
-	the gap here is the OPTION, not the constant, and closing it means
-	implementing the option.  What the omission costs today is
-	smaller but real and previously unrecorded: an application asking
-	"#ifdef _POSIX_TIMERS" gets the same silence from a libc that has
-	clock_gettime()/clock_nanosleep() as from one that has nothing.
-
-	Re-examined as the realtime signals, semaphores, timers and AIO
-	options were implemented, and left standing.  Each of the nine was
-	checked against the tree one by one, and not one names an option
-	this library supplies -- including _POSIX_THREAD_SAFE_FUNCTIONS,
-	whose nineteen interfaces do all exist but which sits inside the
-	option group _POSIX_THREADS heads.  Nor is there a legal way to
-	spell "absent": every OTHER constant in that section may be defined
-	as -1, and these nine may not, so silence is the only truthful
-	signal POSIX leaves.  What DID change is that the silence is no
-	longer undocumented -- include/unistd.h now carries the same
-	reasoning where a reader of the header will meet it, and
-	sysconf() answers -1 for the matching _SC_ names so the header and
-	the runtime cannot contradict each other.
-
-	Observed today: fails to COMPILE, "'_POSIX_BARRIERS'
-	undeclared". */
+#if NTLIBC_TEST(PASS, posix_unistd_unistd_mandatory_option_constants) /*
+	The thread, mapping, memory-protection, clock-selection and timeout
+	option groups now have implementations behind their mandatory 200809L
+	compile-time promises.  This checks both the value and #if usability. */
 static void test_unistd_mandatory_option_constants(void)
 {
 	static const long always[] = {
