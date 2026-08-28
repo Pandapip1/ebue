@@ -25,7 +25,7 @@
 # nothing here is Wine-fork-blocked; on stock Wine several of these
 # become NA at run time instead, by design).
 #
-# COUNTS PASS=100 BUG=1 UNIMPL=30 NA=15 FLAKY=0
+# COUNTS PASS=102 BUG=2 UNIMPL=26 NA=16 FLAKY=0
 #
 argv                              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 basename                          runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -80,7 +80,7 @@ printf-1e9-oob                    runtime=wine,target_arch=x86_64,kernel32=no  P
 printf-fmt-g-round                runtime=wine,target_arch=x86_64,kernel32=no  PASS
 printf-fmt-g-zeros                runtime=wine,target_arch=x86_64,kernel32=no  PASS
 printf-fmt-n                      runtime=wine,target_arch=x86_64,kernel32=no  PASS
-pthread_atfork-errno-clobber      runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_atfork-errno-clobber.c:2: error: include file 'pthread.h' not found
+pthread_atfork-errno-clobber      runtime=wine,target_arch=x86_64,kernel32=no  NA      t_setrlim exits 77 because setrlimit() is not enforced on this target, so the errno-preservation premise cannot be exercised
 pthread_cancel                    runtime=wine,target_arch=x86_64,kernel32=no  PASS
 pthread_cancel-points             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_cancel-points.c:3: error: include file 'pthread.h' not found
 pthread_cancel-sem_wait           runtime=wine,target_arch=x86_64,kernel32=no  PASS
@@ -94,13 +94,13 @@ pthread_exit-dtor                 runtime=wine,target_arch=x86_64,kernel32=no  P
 pthread_mutex                     runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_mutex.c:2: error: include file 'pthread.h' not found
 pthread_mutex_pi                  runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_mutex_pi.c:2: error: include file 'pthread.h' not found
 pthread_once-deadlock             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_once-deadlock.c:3: error: include file 'pthread.h' not found
-pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread_robust.c:1: error: include file 'pthread.h' not found
-pthread-robust-detach             runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  pthread-robust-detach.c:3: error: include file 'pthread.h' not found
+pthread_robust                    runtime=wine,target_arch=x86_64,kernel32=no  BUG     owner death, EOWNERDEAD recovery, consistency, and ENOTRECOVERABLE pass; the remaining case destroys a mutex while still locked, for which ntlibc deliberately returns EBUSY
+pthread-robust-detach             runtime=wine,target_arch=x86_64,kernel32=no  PASS    measured PASS after robust mutexes began detecting exited detached owners
 pthread_rwlock-ebusy              runtime=wine,target_arch=x86_64,kernel32=no  PASS
 pthread_tsd                       runtime=wine,target_arch=x86_64,kernel32=no  PASS
 putenv-doublefree                 runtime=wine,target_arch=x86_64,kernel32=no  PASS
 qsort                             runtime=wine,target_arch=x86_64,kernel32=no  PASS
-raise-race                        runtime=wine,target_arch=x86_64,kernel32=no  UNIMPL  raise-race.c:4: error: include file 'pthread.h' not found
+raise-race                        runtime=wine,target_arch=x86_64,kernel32=no  PASS    measured PASS after pthread and signal support made the regression buildable
 random                            runtime=wine,target_arch=x86_64,kernel32=no  PASS  fixed: initstate() saves the prior generator indices so setstate() resumes its exact stream
 regex-backref-0                   runtime=wine,target_arch=x86_64,kernel32=no  PASS
 regex-bracket-icase               runtime=wine,target_arch=x86_64,kernel32=no  PASS
