@@ -61,32 +61,37 @@ CC := afl-clang-fast
 # and a harness that avoided it would stop testing that part of the ntdll
 # shim rather than fixing what was wrong with it.  See fuzz/aflshim.c for
 # what "wrong with it" turned out to mean and how it is fixed.
-# Overridable because /usr/lib/afl is a Debian/Ubuntu packaging path; a
-# source build of AFL++ puts it under the checkout's own directory
-# instead.
-AFL_DRIVER ?= /usr/lib/afl/libAFLDriver.a
+# The *system* archive AFL_DRIVER (below) is patched from.  Overridable
+# because /usr/lib/afl is a Debian/Ubuntu packaging path; a source build
+# of AFL++ puts it under the checkout's own directory instead.
+AFL_DRIVER_SYS ?= /usr/lib/afl/libAFLDriver.a
 # Where afl-clang-fast finds its *system* runtime -- the directory
 # AFL_RTDIR (below) is patched from.  Overridable for the same reason
-# AFL_DRIVER is.
+# AFL_DRIVER_SYS is.
 AFL_SYSDIR ?= /usr/lib/afl
 ENGINESUF   = -afl
 # AFL++'s runtime -- afl-compiler-rt.o, linked into every harness
-# automatically, and libAFLDriver.a's aflpp_driver.o above -- calls
-# open()/read()/write()/close()/shmat()/shmdt()/getenv()/fork()/
-# sigaction()/signal() to talk to afl-fuzz and to run the persistent-mode
-# fast path (fork a fresh child per test case, in this very process,
-# rather than paying execve() each time).  Every one of those names is
-# also a strong symbol in ntlibc, which wins the link -- the same class
-# of bug, and the same fix, STATRENAME already applies to stat().  See
+# automatically, and libAFLDriver.a's aflpp_driver.o, linked explicitly
+# below as AFL_DRIVER -- calls open()/read()/write()/close()/shmat()/
+# shmdt()/getenv()/fork()/waitpid()/sigaction()/signal()/fcntl() to talk
+# to afl-fuzz and to run the persistent-mode fast path (fork a fresh
+# child per test case, in this very process, rather than paying
+# execve() each time).  Every one of those names is also a strong
+# symbol in ntlibc, which wins the link -- the same class of bug, and
+# the same fix, STATRENAME already applies to stat().  See
 # fuzz/aflshim.c for which of them actually needed it (measured, not
 # assumed: several of AFL++'s own calls tolerate ntlibc's versions well
 # enough to still work) and what each fix cost.  AFL_RTDIR is a local
-# copy of $(AFL_SYSDIR) with those symbols in afl-compiler-rt*.o renamed
-# to the __real_* names fuzz/aflshim.c defines; AFL_PATH -- an AFL++
-# option since classic AFL, meant for exactly this, relocating its
-# runtime directory -- is exported for the whole recipe so
-# afl-clang-fast's own link step picks the patched copy over its
-# compiled-in default instead of $(AFL_SYSDIR).
+# copy of $(AFL_SYSDIR) with those symbols in afl-compiler-rt*.o (and,
+# separately, in a patched copy of aflpp_driver.o repackaged as
+# AFL_DRIVER, since it is a different object entirely and ships in its
+# own archive rather than under AFL_SYSDIR) renamed to the __real_*
+# names fuzz/aflshim.c defines; AFL_PATH -- an AFL++ option since
+# classic AFL, meant for exactly this, relocating its runtime directory
+# -- is exported for the whole recipe so afl-clang-fast's own link step
+# picks the patched copy over its compiled-in default instead of
+# $(AFL_SYSDIR).
+AFL_DRIVER = $(AFL_RTDIR)/libAFLDriver.a
 AFL_RTDIR := $(abspath $(srcdir)/obj/afl-rt)
 export AFL_PATH := $(AFL_RTDIR)
 # The library build (below) is told to instrument for libFuzzer's
@@ -352,9 +357,18 @@ $(OUT)/aflshim.o: aflshim.c | $(OUT)
 # A local, patched copy of AFL++'s runtime directory: everything under
 # $(AFL_SYSDIR) is symlinked through unchanged except afl-compiler-rt*.o,
 # which is copied and then has the symbols fuzz/aflshim.c defines
-# redirected to it -- see that file for which six and why.  Not keyed to
-# MODESUF: its content depends only on the installed AFL++ version, so
-# the asan and ubsan engine=afl builds share one copy.
+# redirected to it -- see that file for which ones and why.  The same
+# treatment is given to a copy of libAFLDriver.a's one member,
+# aflpp_driver.o, repackaged as $(AFL_DRIVER): that object ships in its
+# own archive rather than under $(AFL_SYSDIR), so it cannot be patched
+# by the loop below, but it needs the same getenv()/fcntl() redirects
+# for the reason fuzz/aflshim.c's banner gives (its own is-this-AFL-fuzz
+# detection, LLVMFuzzerRunDriver()'s `in_afl`, calls getenv() and
+# fcntl(FORKSRV_FD, F_GETFD) directly -- and the getenv() short-circuits
+# the fcntl() out of ever running at all when it, too, is unpatched).
+# Not keyed to MODESUF: this
+# content depends only on the installed AFL++ version, so the asan and
+# ubsan engine=afl builds share one copy.
 #
 # No dependency on the system files' mtimes: an `apt upgrade` of afl++
 # between builds is not a case this tree tries to detect on its own,
@@ -377,12 +391,23 @@ $(AFL_RTDIR)/.built:
 	        --redefine-sym shmdt=__real_shmdt \
 	        --redefine-sym getenv=__real_getenv \
 	        --redefine-sym fork=__real_fork \
+	        --redefine-sym waitpid=__real_waitpid \
 	        --redefine-sym sigaction=__real_sigaction \
 	        --redefine-sym signal=__real_signal \
+	        --redefine-sym fcntl=__real_fcntl \
+	        --redefine-sym raise=__real_raise \
+	        --redefine-sym kill=__real_kill \
 	        "$(AFL_RTDIR)/$$b" ;; \
+	    libAFLDriver.a) ;; \
 	    *) ln -s "$$f" "$(AFL_RTDIR)/$$b" ;; \
 	  esac; \
 	done
+	cd "$(AFL_RTDIR)" && ar x "$(abspath $(AFL_DRIVER_SYS))" aflpp_driver.o
+	objcopy \
+	  --redefine-sym fcntl=__real_fcntl \
+	  --redefine-sym getenv=__real_getenv \
+	  "$(AFL_RTDIR)/aflpp_driver.o"
+	ar rcs "$(AFL_RTDIR)/libAFLDriver.a" "$(AFL_RTDIR)/aflpp_driver.o"
 	touch $@
 
 # -DNTLIBC_FUZZ_STATWRAP turns on the struct stat seam (fuzz/statshim.h).

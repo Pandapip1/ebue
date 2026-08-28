@@ -4,9 +4,9 @@
  * Built only for ENGINE=afl (see fuzz/Makefile).  AFL++'s runtime object,
  * afl-compiler-rt.o -- which afl-clang-fast links into every instrumented
  * binary automatically -- calls open()/read()/write()/close()/shmat()/
- * shmdt()/getenv()/fork()/sigaction()/signal() to talk to afl-fuzz and to
- * run its persistent-mode fast path: it maps the coverage bitmap
- * afl-fuzz allocated (shmat, keyed by the __AFL_SHM_ID environment
+ * shmdt()/getenv()/fork()/waitpid()/sigaction()/signal() to talk to
+ * afl-fuzz and to run its persistent-mode fast path: it maps the coverage
+ * bitmap afl-fuzz allocated (shmat, keyed by the __AFL_SHM_ID environment
  * variable), reads/writes the FORKSRV_FD control pipes afl-fuzz set up
  * before execve(), and fork()s a fresh child in this very process for
  * every test case rather than paying execve() each time -- the whole
@@ -77,15 +77,71 @@
  * a correctly-behaving no-op beats a hand-rolled kernel ABI shim with no
  * way to be sure it is right.
  *
- * The fix mirrors STATRENAME: fuzz/Makefile's AFL_RTDIR rule objcopies a
- * local copy of afl-compiler-rt.o, redirecting exactly these nine
- * undefined references to the __real_* names below, so this one object
- * -- and only this one, not the harness or the library under test --
- * reaches the host's real kernel and real environment (or, for
- * sigaction/signal, a real no-op).  pipe, waitpid and kill are left
- * alone: the forkserver evidently reaches the point above using
- * ntlibc's versions of those without issue.  Patch what measurement
- * shows is actually broken, not everything that could plausibly be.
+ * A fourth failure, found only once the first three no longer masked it:
+ * the persistent forkserver would fork() correctly (raw syscall, by
+ * then) and report success to afl-fuzz over FORKSRV_FD -- and then
+ * immediately call waitpid() on the child it had just created, which
+ * -- unpatched -- is ntlibc's, consulting ntlibc's own process table.
+ * That table knows nothing about a child __real_fork() created with a
+ * bare syscall, so it answers ECHILD ("No child process"), and
+ * afl-compiler-rt.o's own error path
+ * (instrumentation/afl-compiler-rt.o.c:1307, `Error(waitpid): No child
+ * process`) exit()s the forkserver on the spot -- which afl-fuzz sees,
+ * from its side of FORKSRV_FD, as the connection simply going away:
+ * "Unable to communicate with fork server", indistinguishable at that
+ * remove from a crash, a hang, or the forkserver never having started
+ * at all.  Measured with strace, not guessed from the message: the
+ * fork() and the first write(199, ...) both succeed, and the very next
+ * line is waitpid()'s ECHILD followed by the error print and exit_group.
+ *
+ * A fifth and sixth failure share one cause, in two different objects,
+ * and cost the most time to find because the symptom -- afl-fuzz's dry
+ * run timing out rather than erroring -- looked like a real performance
+ * problem instead of a wiring one.  Once the fork()/waitpid() fix above
+ * let the persistent loop actually start, the forked child that runs
+ * each test case did nothing at all (not even a syscall) until afl-fuzz's
+ * own watchdog SIGKILLed it a second later.  The cause: AFL++'s
+ * shared-memory *testcase* transfer (as opposed to the coverage bitmap,
+ * which already worked) is opt-in, gated by
+ * `__afl_sharedmem_fuzzing`, a flag three different places check and
+ * can clear, and every one of those places calls fcntl(FORKSRV_FD,
+ * F_GETFD) as part of deciding "am I really running under afl-fuzz":
+ *
+ *   - fuzz/Makefile's own AFL_RTDIR loop already redirected
+ *     afl-compiler-rt.o's getenv()/fork()/sigaction()/etc., but not its
+ *     fcntl() -- so its own is-this-afl-fuzz check
+ *     (instrumentation/afl-compiler-rt.o.c, the constructor that also
+ *     handles the coverage map) saw ntlibc's fcntl() answer -1 for a
+ *     host-inherited fd it does not recognise, concluded "not really
+ *     under afl-fuzz", and cleared the flag before main() ever ran.
+ *   - aflpp_driver.o (libAFLDriver.a) does the identical check a second
+ *     time, in its own LLVMFuzzerRunDriver(), and needed the identical
+ *     fcntl() redirect -- plus getenv(), whose absence made the check's
+ *     `||` chain short-circuit before fcntl() was even reached, so
+ *     fixing fcntl() alone here changed nothing until getenv() was
+ *     fixed too.  This object ships in its own archive, not under
+ *     $(AFL_SYSDIR), so it needed its own copy-and-patch step
+ *     (AFL_DRIVER, extracted and objcopied from AFL_DRIVER_SYS) rather
+ *     than falling out of the loop that already handles
+ *     afl-compiler-rt.o.
+ *
+ * With the flag correctly staying set in both places, afl-compiler-rt.o's
+ * own __afl_map_shm_fuzz() attaches the testcase shared-memory segment
+ * (a second, smaller shmat -- confirmed by strace, distinct from the
+ * coverage bitmap's) and the persistent loop's forked child has real
+ * input to read instead of spinning on memory nothing ever populated.
+ *
+ * The fix mirrors STATRENAME throughout: local, objcopied copies of the
+ * two objects that need it, redirecting exactly the undefined
+ * references below to the __real_* names in this file, so only those
+ * two objects -- never the harness or the library under test -- reach
+ * the host's real kernel and real environment (or, for sigaction/
+ * signal, a real no-op).  pipe is left alone: the forkserver evidently
+ * reaches the point above using ntlibc's version of it without issue.
+ * Patch what measurement shows is actually broken, not everything that
+ * could plausibly be -- which is also this comment's own history in
+ * miniature: kill() was reasoned to be one of the safe, untouched ones
+ * right up until the SIGCONT hang above showed it was not.
  *
  * Raw syscall()s throughout, for the same reason fuzz/ntstubs.c already
  * uses them in several places (its xstatus_init(), for one): a plain
@@ -176,6 +232,77 @@ int __real_close(int fd)
 int __real_fork(void)
 {
 	return (int)syscall(SYS_fork);
+}
+
+/* wait4(2) directly: a real child of a real fork() needs the kernel's
+ * own accounting, not ntlibc's process table, which has no entry for a
+ * child __real_fork() created -- see the file comment's fourth failure
+ * for what asking ntlibc's waitpid() about it produces instead
+ * (ECHILD, immediately, every time). */
+#define SYS_wait4 61
+int __real_waitpid(int pid, int *status, int options)
+{
+	return (int)syscall(SYS_wait4, pid, status, options, 0);
+}
+
+/* fcntl(2), for aflpp_driver.o (libAFLDriver.a) -- see this file's
+ * banner for the fifth failure this one is.  Only ever called here with
+ * F_GETFD/F_SETFD/F_GETFL/F_SETFL, none of which read the third argument
+ * as anything but an integer, so a plain va_arg(long) covers every
+ * caller without needing to know which command was passed -- the same
+ * simplification musl's own fcntl() makes internally. */
+#define SYS_fcntl 72
+int __real_fcntl(int fd, int cmd, ...)
+{
+	long arg;
+	va_list ap;
+	va_start(ap, cmd);
+	arg = va_arg(ap, long);
+	va_end(ap);
+	return (int)syscall(SYS_fcntl, fd, cmd, arg);
+}
+
+/* raise(SIGSTOP), from __afl_persistent_loop() -- see this file's
+ * banner for the sixth failure, the one that took longest to find
+ * because the symptom (a silent, syscall-free hang) looked nothing like
+ * its cause.  AFL++'s persistent loop synchronises with the forkserver
+ * parent by stopping itself: the parent's wait4(..., WUNTRACED) detects
+ * the real kernel STOPPED state, refills the shared testcase buffer in
+ * place (the same memory, inherited by fork()), and SIGCONTs the child.
+ * ntlibc's raise() -- layered on this codebase's own simulated signal
+ * delivery, the same machinery the sigaction()/signal() no-ops above
+ * exist to route around -- does not put the process into that real
+ * kernel state, so the parent's wait4() never returns and the child
+ * never resumes: exactly the "closes 198/199, then nothing, for a full
+ * second" hang strace showed, with no syscall to explain it because
+ * ntlibc's raise() never reached one. raise(sig) is POSIX sugar for
+ * kill(getpid(), sig); this spells that out directly with two raw
+ * syscalls rather than also redirecting kill() and getpid() themselves,
+ * since nothing else here calls either of those under names this file
+ * would otherwise have to chase down. */
+#define SYS_getpid 39
+#define SYS_kill   62
+int __real_raise(int sig)
+{
+	return (int)syscall(SYS_kill, syscall(SYS_getpid), sig);
+}
+
+/* kill(2), for the other half of the same mechanism: after detecting a
+ * persistent-mode child's real SIGSTOP (via __real_waitpid's WUNTRACED,
+ * itself only meaningful because raise() above delivers a real one),
+ * afl-compiler-rt.o's forkserver loop resumes it for the next iteration
+ * with kill(child_pid, SIGCONT) rather than forking again -- and that
+ * call needs the same redirection raise() did, for the same reason:
+ * ntlibc's kill() does not deliver a real SIGCONT to a real stopped
+ * process, so the child never wakes and the loop hangs on its next
+ * wait4() until afl-fuzz's own watchdog SIGKILLs everything a second
+ * later.  Measured with strace: the first SIGSTOP and its WIFSTOPPED
+ * detection both work (raise() already fixed), and the very next thing
+ * in the trace is the parent's second wait4() never returning -- no
+ * SIGCONT delivered in between, anywhere. */
+int __real_kill(int pid, int sig)
+{
+	return (int)syscall(SYS_kill, pid, sig);
 }
 
 /* afl-compiler-rt.o only ever opens existing files (its own coverage
