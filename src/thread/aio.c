@@ -49,6 +49,18 @@ struct aio_request {
 	struct aio_group *group;
 };
 
+/* Each aio_suspend() call owns one event and registers this stack record while
+ * blocked. A request completion sets every matching waiter's event under the
+ * queue lock, giving condition-variable broadcast semantics without polling
+ * or letting an unrelated waiter consume the only completion wake. */
+struct aio_waiter {
+	const struct aiocb *const *list;
+	int count;
+	int triggered;
+	HANDLE event;
+	struct aio_waiter *next;
+};
+
 struct thread_notice {
 	void (*function)(union sigval);
 	union sigval value;
@@ -60,6 +72,22 @@ static unsigned long long next_sequence;
 static HANDLE worker_wake;
 static int worker_started;
 static int worker_synchronous;
+static struct aio_waiter *waiters;
+
+static void wake_waiters_locked(const struct aio_request *request)
+{
+	struct aio_waiter *waiter;
+	int i;
+	for (waiter = waiters; waiter; waiter = waiter->next) {
+		for (i = 0; i < waiter->count; i++) {
+			LONG previous;
+			if (waiter->list[i] != request->cb) continue;
+			waiter->triggered = 1;
+			NtSetEvent(waiter->event, &previous);
+			break;
+		}
+	}
+}
 
 static ULONG NTAPI notice_thread(PVOID argument)
 {
@@ -111,6 +139,7 @@ static void finish_locked(struct aio_request *request, int error, ssize_t result
 	request->error = error;
 	request->result = result;
 	request->state = REQ_DONE;
+	wake_waiters_locked(request);
 	*individual = request->cb->aio_sigevent;
 	*have_individual = individual->sigev_notify != SIGEV_NONE &&
 		(individual->sigev_notify != SIGEV_SIGNAL || individual->sigev_signo != 0);
@@ -355,39 +384,129 @@ static int timeout_valid(const struct timespec *timeout)
 	                    timeout->tv_nsec < 1000000000L);
 }
 
+/* Called with the queue lock held. Invalid request identities have already
+ * ceased being outstanding and therefore satisfy aio_suspend() just like a
+ * request another thread completed and collected with aio_return(). */
+static int suspend_list_ready(const struct aiocb *const list[], int count,
+	int *any)
+{
+	int i;
+	*any = 0;
+	for (i = 0; i < count; i++) {
+		struct aio_request *request;
+		if (!list[i]) continue;
+		request = lookup(list[i]);
+		if (!request || request->state == REQ_DONE) return 1;
+		*any = 1;
+	}
+	return 0;
+}
+
+static void remove_waiter_locked(struct aio_waiter *waiter)
+{
+	struct aio_waiter **link = &waiters;
+	while (*link && *link != waiter) link = &(*link)->next;
+	if (*link) *link = waiter->next;
+}
+
 int aio_suspend(const struct aiocb *const list[], int count,
 	const struct timespec *timeout)
 {
-	long long left = 0;
+	OBJECT_ATTRIBUTES attributes;
+	struct aio_waiter waiter;
+	LARGE_INTEGER start = 0, deadline = 0;
+	HANDLE handles[2];
+	HANDLE signal_event;
+	NTSTATUS status;
 	unsigned long caught = __sig_caught_count();
-	int i, any;
+	int any, handle_count;
 	if (count < 0 || !timeout_valid(timeout)) { errno = EINVAL; return -1; }
-	if (timeout)
-		left = (long long)timeout->tv_sec * 10000000LL +
-		       (timeout->tv_nsec + 99) / 100;
+	if (timeout) {
+		long long subsecond = (timeout->tv_nsec + 99) / 100;
+		long long ticks;
+		if (timeout->tv_sec > (LLONG_MAX - subsecond) / 10000000LL)
+			ticks = LLONG_MAX;
+		else
+			ticks = (long long)timeout->tv_sec * 10000000LL + subsecond;
+		NtQuerySystemTime(&start);
+		deadline = ticks > LLONG_MAX - start ? LLONG_MAX : start + ticks;
+	}
+
+	/* Avoid requiring an event on the synchronous fallback path, where every
+	 * valid request is already done before aio_suspend() can observe it. */
+	__sig_lock();
+	if (suspend_list_ready(list, count, &any) || !any) {
+		__sig_unlock();
+		return 0;
+	}
+	__sig_unlock();
+
+	InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
+	status = NtCreateEvent(&waiter.event, EVENT_ALL_ACCESS, &attributes,
+	                       SynchronizationEvent, FALSE);
+	if (!NT_SUCCESS(status)) { errno = EAGAIN; return -1; }
+	waiter.list = list;
+	waiter.count = count;
+	waiter.triggered = 0;
+
+	/* The second state check and registration share the producer's lock. A
+	 * completion can therefore occur before the check or after registration,
+	 * but never in a lost-wakeup gap between them. */
+	__sig_lock();
+	if (suspend_list_ready(list, count, &any) || !any) {
+		__sig_unlock();
+		NtClose(waiter.event);
+		return 0;
+	}
+	if (timeout && deadline <= start) {
+		__sig_unlock();
+		NtClose(waiter.event);
+		errno = EAGAIN;
+		return -1;
+	}
+	waiter.next = waiters;
+	waiters = &waiter;
+	__sig_unlock();
+
+	handles[0] = waiter.event;
+	handle_count = 1;
+	signal_event = __sig_delivery_event();
+	if (signal_event) handles[handle_count++] = signal_event;
 	for (;;) {
-		any = 0;
-		__sig_lock();
-		for (i = 0; i < count; i++) {
-			struct aio_request *request;
-			if (!list[i]) continue;
-			request = lookup(list[i]);
-			if (!request || request->state == REQ_DONE) {
-				__sig_unlock();
-				return 0;
+		LARGE_INTEGER relative, now;
+		if (timeout) {
+			NtQuerySystemTime(&now);
+			if (now >= deadline) status = STATUS_TIMEOUT;
+			else {
+				relative = -(deadline - now);
+				status = NtWaitForMultipleObjects((ULONG)handle_count, handles,
+				                                  1 /* WaitAny */, TRUE, &relative);
 			}
-			any = 1;
+		} else {
+			status = NtWaitForMultipleObjects((ULONG)handle_count, handles,
+			                                  1 /* WaitAny */, TRUE, 0);
+		}
+
+		__sig_drain_pending();
+		__sig_lock();
+		if (waiter.triggered || suspend_list_ready(list, count, &any) || !any) {
+			remove_waiter_locked(&waiter);
+			__sig_unlock();
+			NtClose(waiter.event);
+			return 0;
+		}
+		if (__sig_caught_count() != caught || status == STATUS_TIMEOUT ||
+		    (!NT_SUCCESS(status) && status != STATUS_USER_APC &&
+		     status != STATUS_ALERTED)) {
+			int wait_error = !NT_SUCCESS(status) && status != STATUS_TIMEOUT &&
+			                 status != STATUS_USER_APC && status != STATUS_ALERTED;
+			remove_waiter_locked(&waiter);
+			__sig_unlock();
+			NtClose(waiter.event);
+			errno = status == STATUS_TIMEOUT ? EAGAIN : wait_error ? EINVAL : EINTR;
+			return -1;
 		}
 		__sig_unlock();
-		if (!any) return 0;
-		if (timeout && left <= 0) { errno = EAGAIN; return -1; }
-		{
-			LARGE_INTEGER delay = -10000; /* 1 ms, bounded for EINTR polling */
-			if (timeout && left < 10000) delay = -left;
-			NtDelayExecution(TRUE, &delay);
-			if (timeout) left -= -delay;
-		}
-		if (__sig_caught_count() != caught) { errno = EINTR; return -1; }
 	}
 }
 
@@ -460,8 +579,9 @@ int lio_listio(int mode, struct aiocb *const list[], int count,
 	struct sigevent *event)
 {
 	struct aio_group *group = 0;
+	const struct aiocb *pending[AIO_LISTIO_MAX];
 	int candidates = 0, submitted = 0, failed = 0;
-	int i;
+	int i, remaining;
 	if ((mode != LIO_WAIT && mode != LIO_NOWAIT) || count < 0 ||
 	    count > AIO_LISTIO_MAX || (event && !valid_event(event))) {
 		errno = EINVAL;
@@ -484,7 +604,7 @@ int lio_listio(int mode, struct aiocb *const list[], int count,
 		if (submit(cb, op, group) < 0) {
 			failed = 1;
 			group_drop(group);
-		} else submitted++;
+		} else pending[submitted++] = cb;
 	}
 	if (mode == LIO_NOWAIT) {
 		if (!candidates && event) notify(event);
@@ -493,15 +613,14 @@ int lio_listio(int mode, struct aiocb *const list[], int count,
 	}
 	/* LIO_WAIT waits for every operation that was successfully queued,
 	 * even when another list member had an invalid opcode. */
-	while (submitted) {
-		submitted = 0;
-		for (i = 0; i < count; i++)
-			if (list[i] && lookup(list[i]) && aio_error(list[i]) == EINPROGRESS)
-				submitted++;
-		if (submitted) {
-			LARGE_INTEGER delay = -10000;
-			NtDelayExecution(TRUE, &delay);
+	remaining = submitted;
+	while (remaining) {
+		for (i = 0; i < submitted; i++) {
+			if (!pending[i] || aio_error(pending[i]) == EINPROGRESS) continue;
+			pending[i] = 0;
+			remaining--;
 		}
+		if (remaining && aio_suspend(pending, submitted, 0) < 0) return -1;
 	}
 	if (failed) { errno = EIO; return -1; }
 	return 0;
@@ -517,5 +636,7 @@ void __aio_reset_after_fork(void)
 	memset(groups, 0, sizeof groups);
 	worker_wake = 0;
 	worker_started = 0;
+	worker_synchronous = 0;
+	waiters = 0;
 	next_sequence = 0;
 }
