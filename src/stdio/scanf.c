@@ -184,7 +184,8 @@ static void unrd(struct sc *sc, int c)
 	 * sc_done() below knows the exact byte length of everything it
 	 * still owes the stream -- ungetwc() would take the character but
 	 * tell us nothing about how many bytes it stood for. */
-	if (!sc->wide && sc->npb == 0 && ungetc(c, sc->f) != EOF) { sc->nread--; return; }
+	if (!sc->wide && sc->npb == 0 &&
+	    ungetc((unsigned char)c, sc->f) != EOF) { sc->nread--; return; }
 	if (sc->npb >= sc->pbcap) {
 		struct pbent *q;
 		int cap;
