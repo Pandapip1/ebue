@@ -480,7 +480,8 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	for (i = 0; i < 3; i++) if (ph[i]) NtClose(ph[i]);
 	if (!NT_SUCCESS(st)) {
 		if (st == STATUS_OBJECT_NAME_NOT_FOUND || st == STATUS_OBJECT_PATH_NOT_FOUND) errno = ENOENT;
-		else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ) errno = ENOEXEC;
+		else if (st == STATUS_INVALID_IMAGE_FORMAT || st == STATUS_INVALID_IMAGE_NOT_MZ ||
+		         st == STATUS_INVALID_FILE_FOR_SECTION) errno = ENOEXEC;
 		else __set_errno_status(st);
 		goto out;
 	}

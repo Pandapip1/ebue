@@ -31,8 +31,8 @@
  * Oracle: mixed.  The empty-string and directory cases below are
  * decided inside ntlibc (src/process/find_program.c and
  * src/process/spawn.c's own checks), so Wine is sound for them; the
- * [ENOEXEC] answer comes from RtlCreateUserProcess refusing a
- * non-PE image, which the real-Windows legs are the authority on.
+ * [ENOEXEC] answer comes from RtlCreateUserProcess refusing an invalid
+ * image, which the real-Windows legs are the authority on.
  */
 #define _GNU_SOURCE
 #include "test-policy.h"
@@ -62,39 +62,56 @@ static int reached;
  * execvp(), shall fail if: [ENOEXEC] The new process image file has
  * the appropriate access permission but has an unrecognized format."
  *
- * A file of plain text with the executable bit set is exactly that
- * case, and it is the one error on the page that distinguishes the
- * p-forms from the rest -- hence the fenced UNIMPL below. */
+ * A deliberately truncated image with enough PE header to carry execute
+ * permission on a no-$LXMOD Wine filesystem is exactly that case.  It is
+ * also the one error on the page that distinguishes the p-forms from the
+ * rest. */
 static void test_enoexec(void)
 {
 	char *av[2];
+	unsigned char image[90] = { 0 };
 	int fd;
 
-	fd = open("ex-text.sh", O_CREAT | O_WRONLY | O_TRUNC, 0755);
+	/* Give stat() the minimal PE markers it uses for the no-$LXMOD Wine
+	 * compatibility default, but omit the image they describe.  Process
+	 * creation must reject this truncated, unrecognized format. */
+	image[0] = 'M'; image[1] = 'Z';
+	image[0x3c] = 0x40;              /* e_lfanew */
+	image[0x40] = 'P'; image[0x41] = 'E';
+#ifdef __x86_64__
+	image[0x44] = 0x64; image[0x45] = 0x86; /* AMD64 */
+	image[0x58] = 0x0b; image[0x59] = 0x02; /* PE32+ */
+#else
+	image[0x44] = 0x4c; image[0x45] = 0x01; /* i386 */
+	image[0x58] = 0x0b; image[0x59] = 0x01; /* PE32 */
+#endif
+	image[0x54] = 2;                 /* optional-header size */
+	image[0x56] = 2;                 /* IMAGE_FILE_EXECUTABLE_IMAGE */
+	fd = open("ex-bad-image", O_CREAT | O_WRONLY | O_TRUNC, 0755);
 	CHECK(fd >= 0);
 	if (fd < 0) return;
-	CHECK(write(fd, "#!/bin/sh\necho hello\n", 21) == 21);
+	CHECK(write(fd, image, sizeof image) == (ssize_t)sizeof image);
 	CHECK(close(fd) == 0);
 
-	av[0] = (char *)"ex-text.sh";
+	av[0] = (char *)"ex-bad-image";
 	av[1] = 0;
 
 	errno = 0;
-	CHECK(execv("./ex-text.sh", av) == -1 && errno == ENOEXEC);
+	CHECK(execv("./ex-bad-image", av) == -1 && errno == ENOEXEC);
 	reached++;
 	errno = 0;
-	CHECK(execve("./ex-text.sh", av, environ) == -1 && errno == ENOEXEC);
+	CHECK(execve("./ex-bad-image", av, environ) == -1 && errno == ENOEXEC);
 	reached++;
 	errno = 0;
-	CHECK(execl("./ex-text.sh", "ex-text.sh", (char *)0) == -1 && errno == ENOEXEC);
+	CHECK(execl("./ex-bad-image", "ex-bad-image", (char *)0) == -1 && errno == ENOEXEC);
 	reached++;
 	errno = 0;
-	CHECK(execle("./ex-text.sh", "ex-text.sh", (char *)0, environ) == -1 && errno == ENOEXEC);
+	CHECK(execle("./ex-bad-image", "ex-bad-image", (char *)0, environ) == -1 && errno == ENOEXEC);
 	reached++;
 
 	/* fexecve() is not in the "except for" list, so it carries the
 	 * same [ENOEXEC]. */
-	fd = open("ex-text.sh", O_RDONLY);
+	fd = open("ex-bad-image", O_RDONLY);
 	CHECK(fd >= 0);
 	if (fd >= 0) {
 		errno = 0;
@@ -122,8 +139,8 @@ static void test_enoexec(void)
 	 *
 	 * They are not replaced by the inverse assertion, because a working
 	 * fallback cannot be observed from here: it does not return.  The
-	 * script becomes what this process is running, and whatever it exits
-	 * with becomes this test's exit status -- so an inline `CHECK(execvp
+	 * interpreter becomes what this process is running, and whatever it
+	 * exits with becomes this test's exit status -- so an inline `CHECK(execvp
 	 * (...) != -1)` cannot pass, cannot fail, and cannot even reach the
 	 * clauses below it.  The observation needs a child process to spend,
 	 * and a marker file for it to leave behind; that is exactly what
@@ -133,7 +150,7 @@ static void test_enoexec(void)
 	 * observable in-process: the non-p-forms above, which must still
 	 * fail with [ENOEXEC] on the very same file. */
 
-	CHECK(unlink("ex-text.sh") == 0);
+	CHECK(unlink("ex-bad-image") == 0);
 
 	/* N/A: "[EINVAL] The new process image file has appropriate
 	 * privileges and has a recognized executable binary format, but
@@ -435,7 +452,7 @@ int main(void)
 	 * fuzz/ntstubs.c rather than against ntdll: its
 	 * RtlCreateUserProcess is a real host execve(2), not NT process
 	 * creation.  Every clause in this file is about what NT does with
-	 * a new process image file -- which errno a non-PE image, a
+	 * a new process image file -- which errno an invalid image, a
 	 * directory or an empty name produces -- so under that build the
 	 * subject of the test is not present and a green run would be
 	 * evidence about glibc's execve, not about src/process/exec.c.

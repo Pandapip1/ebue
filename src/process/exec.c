@@ -332,12 +332,10 @@ int fexecve(int fd, char *const argv[], char *const envp[])
 	 * comes back as an image-section failure, whose NTSTATUS is about
 	 * the *file* and carries nothing about the descriptor.  Measured on
 	 * Windows 11 22621, NtCreateSection(SEC_IMAGE) on a directory handle
-	 * is STATUS_INVALID_FILE_FOR_SECTION (0xc0000020), which
-	 * src/internal/errno.c does not name, so it reaches
-	 * RtlNtStatusToDosError -> ERROR_BAD_EXE_FORMAT (193) ->
-	 * __errno_from_doserror()'s default arm -> EIO.  Wine gets there by
-	 * another route and produces EBADF, which is why the windows-test
-	 * legs are red on this clause and the Wine leg is green.
+	 * is STATUS_INVALID_FILE_FOR_SECTION (0xc0000020).  spawn.c maps that
+	 * status to ENOEXEC when it describes process creation, but that still
+	 * cannot recover fexecve()'s descriptor-specific EBADF distinction.
+	 * Wine gets there by another route and produces EBADF.
 	 *
 	 * So the clause is decided here, where the descriptor still exists,
 	 * rather than left to a status that is not about it.  A descriptor
