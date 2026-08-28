@@ -38,6 +38,7 @@ extern int __spawn(const char *, char *const *, char *const *);
 extern void __pthread_cancel_unsafe_enter(const char *);
 extern void __pthread_cancel_unsafe_leave(void);
 extern int __pthread_cancel_unsafe_active(pthread_t);
+extern void __sig_lock(void);
 
 #define SURVIVED_EXIT 70
 
@@ -47,7 +48,8 @@ enum wait_kind {
 	WAIT_USLEEP,
 	WAIT_CLOCK_RELATIVE,
 	WAIT_CLOCK_ABSOLUTE,
-	WAIT_PAUSE
+	WAIT_PAUSE,
+	WAIT_SIGNAL_LOCK
 };
 
 static int fails;
@@ -83,6 +85,9 @@ static void *unsafe_waiter(void *argument)
 	case WAIT_PAUSE:
 		pause();
 		break;
+	case WAIT_SIGNAL_LOCK:
+		__sig_lock();
+		for (;;) sched_yield();
 	}
 	return (void *)(intptr_t)SURVIVED_EXIT;
 }
@@ -228,11 +233,11 @@ int main(int argc, char **argv)
 {
 	static const char *const remote_modes[] = {
 		"--nanosleep", "--sleep", "--usleep", "--clock-relative",
-		"--clock-absolute", "--pause"
+		"--clock-absolute", "--pause", "--signal-lock"
 	};
 	static const char *const remote_regions[] = {
 		"nanosleep()", "sleep()", "usleep()", "clock_nanosleep()",
-		"clock_nanosleep()", "pause()"
+		"clock_nanosleep()", "pause()", "signal-state lock"
 	};
 	int i;
 

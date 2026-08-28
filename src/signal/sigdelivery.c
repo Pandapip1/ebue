@@ -213,6 +213,7 @@ void __sig_lock(void)
 {
 	pid_t me;
 	if (!lock_event) return;
+	__pthread_cancel_unsafe_enter("signal-state lock");
 	me = gettid();
 	if (lock_depth > 0 && lock_owner == me) { lock_depth++; return; }
 	NtWaitForSingleObject(lock_event, 0, 0);
@@ -224,9 +225,13 @@ void __sig_unlock(void)
 {
 	LONG prev;
 	if (!lock_event) return;
-	if (--lock_depth > 0) return;
+	if (--lock_depth > 0) {
+		__pthread_cancel_unsafe_leave();
+		return;
+	}
 	lock_owner = 0;
 	NtSetEvent(lock_event, &prev);
+	__pthread_cancel_unsafe_leave();
 }
 
 /* Publish delivery state before entering application code, then let other
