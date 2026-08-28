@@ -152,10 +152,10 @@ static void fill_child_rusage(HANDLE h, struct rusage *ru)
  * (<sys/wait.h>), so one lookup serves both interfaces and they cannot
  * come to disagree about a child.
  *
- * There is nothing to poll and nothing to ask the kernel.  A child stops
- * here only because kill() suspended it (src/signal/signal.c), and it
- * recorded the resulting wait status in the table entry at that moment;
- * this just finds it.
+ * A stop sent by this parent is recorded immediately by kill().  A child
+ * that stopped itself cannot write this private table, so it publishes an
+ * auto-reset named event before suspending; discover_self_stops() consumes
+ * that event and records the same status here.
  *
  * `want` is a pid, or 0 for any child.  `which` is WSTOPPED (== WUNTRACED)
  * and/or WCONTINUED.  Consuming is the caller's job -- it clears
@@ -175,6 +175,24 @@ static struct __child *job_report(pid_t want, int which)
 		return c;
 	}
 	return 0;
+}
+
+static void discover_self_stops(pid_t want)
+{
+	int i;
+
+	for (i = 0; i < __child_cap; i++) {
+		struct __child *c = &__children[i];
+		int sig;
+
+		if (!c->pid || c->done || c->stopsig) continue;
+		if (want && c->pid != want) continue;
+		sig = __sig_consume_child_stop(c->pid);
+		if (!sig) continue;
+		c->stopsig = sig;
+		c->jobstat = __W_STOPPED(sig);
+		__sigchld_job_control(c, sig);
+	}
 }
 
 /* One reaping engine for wait/waitpid/wait3/wait4/waitid.
@@ -199,6 +217,7 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 {
 	struct __child *c;
 	LARGE_INTEGER zero = 0;
+	LARGE_INTEGER poll = -100000; /* 10ms: self-stop markers are not handles in the wait set */
 	NTSTATUS st;
 	PROCESS_BASIC_INFORMATION pbi;
 
@@ -209,6 +228,7 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	 * checking here covers all of them uniformly. */
 	if (options & ~(WNOHANG | WUNTRACED | WCONTINUED)) { errno = EINVAL; return -1; }
 
+	retry:
 	/* A stopped or continued child, ahead of any exit wait.  The order
 	 * matters and is not a preference: a stopped child never becomes
 	 * signalled, so waiting on its handle first would block forever
@@ -216,6 +236,8 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	 * here.  The entry is not removed -- the child has not exited and
 	 * is still to be waited for -- only the report is consumed. */
 	if (options & (WUNTRACED | WCONTINUED)) {
+		if (options & WUNTRACED)
+			discover_self_stops(pid == -1 || pid == 0 ? 0 : pid < 0 ? -pid : pid);
 		c = job_report(pid == -1 || pid == 0 ? 0 : pid < 0 ? -pid : pid,
 		               options & (WUNTRACED | WCONTINUED));
 		if (c) {
@@ -246,7 +268,9 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		for (i = 0; i < __child_cap; i++) {
 			if (!__children[i].pid || __children[i].done) continue;
 			any = 1;
-			st = NtWaitForSingleObject(__children[i].h, 0, options & WNOHANG ? &zero : 0);
+			st = NtWaitForSingleObject(__children[i].h, 0,
+			                           options & WNOHANG ? &zero :
+			                           options & WUNTRACED ? &poll : 0);
 			if (st == STATUS_TIMEOUT) continue;
 			if (!NT_SUCCESS(st)) return __set_errno_status(st);
 			c = &__children[i];
@@ -254,6 +278,7 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		}
 		if (!any) { errno = ECHILD; return -1; }
 		if (options & WNOHANG) return 0;
+		if (options & WUNTRACED) goto retry;
 		/* Every remaining child is live; wait on the first live one. */
 		for (i = 0; i < __child_cap; i++)
 			if (__children[i].pid && !__children[i].done) {
@@ -294,8 +319,13 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	}
 	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); if (!nowait) __child_remove(c); return pid; }
 
-	st = NtWaitForSingleObject(c->h, 0, options & WNOHANG ? &zero : 0);
-	if (st == STATUS_TIMEOUT) return 0;
+	st = NtWaitForSingleObject(c->h, 0,
+	                           options & WNOHANG ? &zero :
+	                           options & WUNTRACED ? &poll : 0);
+	if (st == STATUS_TIMEOUT) {
+		if (options & WNOHANG) return 0;
+		goto retry;
+	}
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 reap:
@@ -361,10 +391,8 @@ pid_t wait(int *status)
  *
  * WSTOPPED and WCONTINUED are real, and share every part of their
  * implementation with waitpid()'s WUNTRACED/WCONTINUED -- see
- * job_report() above.  A child stops only because kill() suspended it
- * (NtSuspendProcess, src/signal/signal.c), so the stop is one this
- * library performed and recorded rather than one it has to be told
- * about; NT's lack of a waitable stop transition costs nothing here.
+ * job_report() above.  Parent-sent stops are recorded directly; a
+ * self-stopping child publishes the named marker discovered above.
  *
  * What that same lack does cost: a child suspended by anything *else*
  * -- a debugger, another program calling NtSuspendProcess on it -- is

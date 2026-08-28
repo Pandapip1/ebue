@@ -300,11 +300,10 @@ struct __child {
 	HANDLE h;
 	int done;               /* reaped status is available */
 	int status;
-	/* Job control.  A stop on this platform is always one this library
-	 * performed itself -- kill(pid, SIGSTOP) is NtSuspendProcess (see
-	 * kill() in src/signal/signal.c) -- so there is nothing to learn
-	 * from the kernel and the two fields below are the whole record of
-	 * it.  stopsig is the signal the child is stopped with right now,
+	/* Job control.  A stop sent by this parent is recorded by kill(); a
+	 * child that stops itself publishes a named event which wait.c folds
+	 * into these same fields.  stopsig is the signal the child is stopped
+	 * with right now,
 	 * or 0 if it is running; jobstat is the stop-or-continue wait
 	 * status that has not yet been reported to a waiter, or 0 if there
 	 * is none, which is how waitpid(WUNTRACED)/waitid(WSTOPPED) meet
@@ -543,6 +542,8 @@ int __sig_try_deliver_remote(int pid, int sig);
 int __sig_try_deliver_remote_info(int pid, int sig, const void *);
 int __sig_try_deliver_remote_nondefault(int pid, int sig);
 int __sig_disposition_is_default(int sig);
+int __sig_consume_child_stop(int pid);
+void __sigchld_job_control(struct __child *, int sig);
 void __sig_pending_reset_after_fork(void);
 int __sig_pending_member(int sig);
 void __timer_reinit_after_fork(void);

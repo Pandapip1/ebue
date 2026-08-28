@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=1264 BUG=27 UNIMPL=222 NA=94 FLAKY=3
+# COUNTS PASS=1290 BUG=1 UNIMPL=222 NA=94 FLAKY=3
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
@@ -1311,35 +1311,35 @@ sigaction/4-23.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PA
 sigaction/4-24.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-24.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/4-25.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-25.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/4-26.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-26.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
-sigaction/4-27.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-28.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-29.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigaction/4-27.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-28.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-29.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
 sigaction/4-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-3.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
-sigaction/4-30.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-31.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-32.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-33.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-34.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-35.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-36.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-37.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-38.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-39.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigaction/4-30.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-31.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-32.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-33.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-34.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-35.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-36.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-37.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-38.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-39.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
 sigaction/4-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-4.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
-sigaction/4-40.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-41.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-42.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-43.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-44.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-45.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-46.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-47.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-48.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-49.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigaction/4-40.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-41.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-42.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-43.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-44.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-45.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-46.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-47.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-48.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-49.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
 sigaction/4-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-5.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
-sigaction/4-50.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-51.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
-sigaction/4-52.c	runtime=wine,target_arch=x86_64,kernel32=no	BUG	baseline compiled and failed (FAIL)
+sigaction/4-50.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-51.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
+sigaction/4-52.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	self-SIGSTOP publishes a waitable child stop while handler masks keep SIGSTOP unblockable
 sigaction/4-53.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/4-54.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/4-55.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-

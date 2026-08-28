@@ -95,6 +95,29 @@ static void handler_suspend(int sig)
 	if (sig == SIGUSR2) suspend_seen |= 2;
 }
 
+static void handler_self_stop(int sig)
+{
+	(void)sig;
+	raise(SIGSTOP);
+}
+
+static int child_self_stop(void)
+{
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = handler_self_stop;
+	sigemptyset(&sa.sa_mask);
+	/* SIGSTOP is forbidden from the handler mask.  sigaction() may accept
+	 * it in the supplied set, but delivery must remove it so this raise
+	 * stops immediately rather than becoming pending. */
+	sigaddset(&sa.sa_mask, SIGSTOP);
+	if (sigaction(SIGUSR1, &sa, NULL) != 0) return 90;
+	raise(SIGUSR1);
+	/* Reached only after SIGCONT lets the handler return. */
+	for (;;) sleep_ms(1000);
+}
+
 /* The positive case: a real handler, installed with sigaction(), must
  * run for a signal delivered by ANOTHER process's kill() -- the exact
  * thing src/signal/signal.c's old header comment said could never
@@ -406,6 +429,31 @@ static void test_job_signal_handler(const char *self, const char *mode,
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
 }
 
+static void test_self_stop_is_waitable(const char *self)
+{
+	pid_t pid;
+	int status;
+
+	if (spawn_child(self, "--child-self-stop", &pid) < 0) {
+		CHECK(0 && "spawn failed");
+		return;
+	}
+	CHECK(waitpid(pid, &status, WUNTRACED) == pid);
+	CHECK(WIFSTOPPED(status) && WSTOPSIG(status) == SIGSTOP);
+	/* The marker must describe a real suspension, not merely race ahead of
+	 * one: after giving the child time to run, it is still live and has no
+	 * exit status available. */
+	sleep_ms(200);
+	CHECK(waitpid(pid, &status, WNOHANG) == 0);
+	CHECK(kill(pid, SIGCONT) == 0);
+	CHECK(waitpid(pid, &status, WCONTINUED) == pid);
+	CHECK(WIFCONTINUED(status));
+	CHECK(kill(pid, SIGKILL) == 0);
+	CHECK(waitpid(pid, &status, 0) == pid);
+	describe("self-stop cleanup", status);
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+}
+
 static void test_sigsuspend_mask_and_wakeup(const char *self)
 {
 	pid_t pid;
@@ -495,6 +543,7 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[1], "--child-sigtstp")) return child_job_signal_eintr(SIGTSTP);
 		if (!strcmp(argv[1], "--child-sigttin")) return child_job_signal_eintr(SIGTTIN);
 		if (!strcmp(argv[1], "--child-sigttou")) return child_job_signal_eintr(SIGTTOU);
+		if (!strcmp(argv[1], "--child-self-stop")) return child_self_stop();
 		if (!strcmp(argv[1], "--child-sigsuspend")) return child_sigsuspend();
 		if (!strcmp(argv[1], "--child-sigwait")) return child_sigwait();
 		if (!strcmp(argv[1], "--child-nanosleep")) return child_nanosleep();
@@ -513,6 +562,7 @@ int main(int argc, char **argv)
 	                        "remote SIGTTIN handler");
 	test_job_signal_handler(argv[0], "--child-sigttou", SIGTTOU,
 	                        "remote SIGTTOU handler");
+	test_self_stop_is_waitable(argv[0]);
 	test_sigsuspend_mask_and_wakeup(argv[0]);
 	test_remote_wait_interface(argv[0], "--child-sigwait", SIGUSR1,
 	                           "remote sigwait");

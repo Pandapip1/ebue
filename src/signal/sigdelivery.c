@@ -435,7 +435,7 @@ void __sig_delivery_reinit_after_fork(void)
  * distinction between "no listener" and any other reason the attempt
  * did not land.
  *
- * Catchable job-control signals set nondefault_only.  Their sender needs
+ * Catchable stop signals set nondefault_only.  Their sender needs
  * to know whether to deliver a caught/ignored disposition or apply the
  * default NtSuspendProcess action, so the target replies while holding the
  * disposition lock and before running a handler.  A zero reply leaves the

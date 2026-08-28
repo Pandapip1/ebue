@@ -162,6 +162,7 @@ static unsigned long caught_count;
 unsigned long __sig_caught_count(void) { return caught_count; }
 
 static int default_action(int sig);
+static int sig_stops(int sig);
 
 /* sigaction.html, SA_NOCLDWAIT: "If ... set for SIGCHLD ... and the
  * calling process subsequently forks, ... the behavior is unspecified
@@ -259,6 +260,103 @@ static int default_action(int sig)
 	}
 }
 
+/* A process that stops itself cannot update its parent's private child
+ * table.  Publish the transition through an auto-reset named event before
+ * entering NtSuspendProcess; waitpid() consumes that one notification and
+ * records the ordinary __W_STOPPED status in its own table. */
+static HANDLE self_stop_event;
+static pid_t self_stop_owner;
+static int self_stop_signal;
+
+static void stop_event_name(pid_t pid, int sig, WCHAR name[56],
+			    UNICODE_STRING *us)
+{
+	static const char prefix[] = "\\BaseNamedObjects\\ntlibc-stop.";
+	unsigned upid = (unsigned)pid;
+	unsigned usig = (unsigned)sig;
+	int i = 0, n;
+
+	for (; prefix[i]; i++) name[i] = (unsigned char)prefix[i];
+	for (n = 8; n > 0;) {
+		n--;
+		name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15];
+	}
+	name[i++] = '.';
+	name[i++] = (unsigned char)"0123456789abcdef"[(usig >> 4) & 15];
+	name[i++] = (unsigned char)"0123456789abcdef"[usig & 15];
+	name[i] = 0;
+	us->Buffer = name;
+	/* USHORT-safe: the fixed-format name fits in the 56-WCHAR buffer. */
+	us->Length = (USHORT)(i * sizeof(WCHAR));
+	/* USHORT-safe: us->Length plus one WCHAR has the same fixed bound. */
+	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
+}
+
+static int stop_self(int sig)
+{
+	OBJECT_ATTRIBUTES oa;
+	UNICODE_STRING us;
+	WCHAR name[56];
+	NTSTATUS st;
+	LONG previous;
+	LARGE_INTEGER zero = 0;
+	pid_t pid = getpid();
+
+	/* RtlCloneUserProcess copied only the numeric value of a parent's
+	 * private handle.  A different pid makes that copy stale, just as for
+	 * the process-group publication event in src/unistd/ids.c. */
+	if (self_stop_owner != pid) self_stop_event = 0;
+	if (!self_stop_event || self_stop_signal != sig) {
+		if (self_stop_event) NtClose(self_stop_event);
+		stop_event_name(pid, sig, name, &us);
+		InitializeObjectAttributes(&oa, &us,
+		                           OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
+		st = NtCreateEvent(&self_stop_event, EVENT_ALL_ACCESS, &oa,
+		                   SynchronizationEvent, FALSE);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		self_stop_owner = pid;
+		self_stop_signal = sig;
+	}
+	st = NtSetEvent(self_stop_event, &previous);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	st = NtSuspendProcess(NtCurrentProcess());
+	if (!NT_SUCCESS(st)) {
+		/* Retract a notification for a stop that did not happen. */
+		NtWaitForSingleObject(self_stop_event, 0, &zero);
+		return __set_errno_status(st);
+	}
+	/* Reached only after another process sends SIGCONT. */
+	return 0;
+}
+
+int __sig_consume_child_stop(pid_t pid)
+{
+	static const int stops[] = { SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU };
+	OBJECT_ATTRIBUTES oa;
+	UNICODE_STRING us;
+	WCHAR name[56];
+	LARGE_INTEGER zero = 0;
+	HANDLE h;
+	NTSTATUS st;
+	size_t i;
+
+	for (i = 0; i < sizeof stops / sizeof stops[0]; i++) {
+		stop_event_name(pid, stops[i], name, &us);
+		InitializeObjectAttributes(&oa, &us,
+		                           OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
+		st = NtCreateEvent(&h, EVENT_ALL_ACCESS, &oa,
+		                   SynchronizationEvent, FALSE);
+		if (!NT_SUCCESS(st)) continue;
+		if (st == STATUS_OBJECT_NAME_EXISTS &&
+		    NtWaitForSingleObject(h, 0, &zero) == STATUS_SUCCESS) {
+			NtClose(h);
+			return stops[i];
+		}
+		NtClose(h);
+	}
+	return 0;
+}
+
 /* Deliver a signal to this process now.  Returns 0 if it was handled or
  * ignored and control may continue; does not return if the default
  * action is to die. */
@@ -353,6 +451,7 @@ int __raise_internal_info(int sig, const void *data)
 	h = handlers[sig];
 	if (h == SIG_IGN) return 0;
 	if (h == SIG_DFL) {
+		if (sig_stops(sig)) return stop_self(sig);
 		if (!default_action(sig)) return 0;
 		/* SIGABRT ONLY, and the asymmetry is the whole point.
 		 *
@@ -541,7 +640,7 @@ static int sig_job_control(struct __child *c, HANDLE h, int sig)
  * transition described by siginfo_t.  NT does not announce suspension
  * changes, but kill() is the actor performing this one and therefore has
  * the complete child identity and transition at the point it succeeds. */
-static void sigchld_job_control(struct __child *c, int sig)
+void __sigchld_job_control(struct __child *c, int sig)
 {
 	siginfo_t si;
 
@@ -615,14 +714,8 @@ int kill(pid_t pid, int sig)
 	 * requires to succeed against the caller's own, real, group. */
 	if (pid == getpid() || pid == getpgrp() || pid == 0 || pid == -1) {
 		if (!sig) return 0;
-		/* Including a stop signal, which is *not* routed through
-		 * NtSuspendProcess the way the cross-process arm below is.
-		 * Suspending yourself here is not a stop but a hang: nothing
-		 * delivers asynchronously (this file's header comment), so the
-		 * only code that could ever call kill(pid, SIGCONT) is code in
-		 * this same suspended process.  raise() therefore applies the
-		 * ordinary default action -- terminate -- which is at least an
-		 * outcome the caller's parent can see and report. */
+		/* raise() also handles self-stops: it publishes a waitable marker
+		 * for the parent before suspending this process. */
 		return raise(sig);
 	}
 	if (pid < 0) { errno = ESRCH; return -1; }
@@ -674,32 +767,36 @@ int kill(pid_t pid, int sig)
 	if (!sig) { if (!c) NtClose(h); return 0; }
 	if (sig == SIGSTOP) {
 		int changed = sig_job_control(c, h, sig);
-		if (changed > 0) sigchld_job_control(c, sig);
+		if (changed > 0) __sigchld_job_control(c, sig);
 		if (!c) NtClose(h);
 		return changed < 0 ? -1 : 0;
 	}
-	/* SIGCONT always resumes a child that this process previously stopped,
-	 * even when the child caught or ignored SIGCONT.  Resume first so its
-	 * delivery thread is able to receive the packet, then consult its real
-	 * disposition below. */
-	if (sig == SIGCONT && c && c->stopsig) {
+	/* SIGCONT resumes before it is delivered, even when caught or ignored.
+	 * Its default action is already ignore, so ordinary one-way delivery is
+	 * sufficient and avoids waiting for a disposition acknowledgement from
+	 * a child that may have stopped while holding its signal lock. */
+	if (sig == SIGCONT) {
 		int changed = sig_job_control(c, h, sig);
-		if (changed < 0) return -1;
-		if (changed > 0) sigchld_job_control(c, sig);
-	}
-	/* SIGTSTP, SIGTTIN and SIGTTOU are catchable; SIGCONT is catchable as
-	 * well despite its default action being ignore.  Ask the target to
-	 * accept the packet only when its disposition is non-default.  If it
-	 * declines, retain the NT suspend/resume fallback which implements the
-	 * default job-control action. */
-	if ((sig_stops(sig) || sig == SIGCONT) &&
-	    __sig_try_deliver_remote_nondefault((int)pid, sig)) {
+		if (changed < 0) { if (!c) NtClose(h); return -1; }
+		if (changed > 0) __sigchld_job_control(c, sig);
+		if (__sig_try_deliver_remote((int)pid, sig)) {
+			if (!c) NtClose(h);
+			return 0;
+		}
 		if (!c) NtClose(h);
 		return 0;
 	}
-	if (sig_stops(sig) || sig == SIGCONT) {
+	/* SIGTSTP, SIGTTIN and SIGTTOU are catchable.  Ask the target to
+	 * accept the packet only when its disposition is non-default.  If it
+	 * declines, retain the NT suspend/resume fallback which implements the
+	 * default job-control action. */
+	if (sig_stops(sig) && __sig_try_deliver_remote_nondefault((int)pid, sig)) {
+		if (!c) NtClose(h);
+		return 0;
+	}
+	if (sig_stops(sig)) {
 		int changed = sig_job_control(c, h, sig);
-		if (changed > 0) sigchld_job_control(c, sig);
+		if (changed > 0) __sigchld_job_control(c, sig);
 		if (!c) NtClose(h);
 		return changed < 0 ? -1 : 0;
 	}
