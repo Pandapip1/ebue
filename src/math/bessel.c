@@ -33,7 +33,7 @@
  *    where H_k is the k-th harmonic number (H_0 = 0) and
  *    gamma is the Euler-Mascheroni constant.
  *
- *  - J_n, |n| >= 2: the three-term recurrence
+ *  - J_n, 2 <= |n| <= 10000: the three-term recurrence
  *      J_{k-1}(x) = (2k/x) J_k(x) - J_{k+1}(x)
  *    is numerically unstable computed upward when n exceeds x, so
  *    this file always uses Miller's algorithm instead: recur the same
@@ -42,10 +42,15 @@
  *    stable), and normalize the whole run by comparing the downward
  *    run's own J_0 against this file's j0(x).
  *
- *  - Y_n, |n| >= 2: the same recurrence
+ *  - Y_n, 2 <= |n| <= 10000: the same recurrence
  *      Y_{k+1}(x) = (2k/x) Y_k(x) - Y_{k-1}(x)
  *    is stable computed *upward*, so a plain upward recurrence from
  *    y0(x)/y1(x) is used directly.
+ *
+ *  - Larger orders: a bounded uniform Airy expansion covers both sides
+ *    of the x=n turning point.  When x is far beyond n, the ordinary
+ *    Hankel expansion above is used instead.  This avoids making runtime
+ *    proportional to an arbitrary caller-supplied int order.
  *
  * None of this is derived from any specific library's source (Cephes,
  * musl, glibc, Boost, ...) -- it is written from the public-domain
@@ -53,6 +58,8 @@
  */
 #include <math.h>
 #include <fenv.h>
+#include <float.h>
+#include <stdint.h>
 
 static double j_series(int n, double x)
 {
@@ -71,9 +78,9 @@ static double j_series(int n, double x)
 	return sum;
 }
 
-static void asymp_pq(int n, double x, double *p, double *q)
+static void asymp_pq(double n, double x, double *p, double *q)
 {
-	double mu = 4.0 * (double)n * (double)n;
+	double mu = 4.0 * n * n;
 	double t = 1.0 / (8.0 * x);
 	double t2 = t * t;
 
@@ -81,21 +88,21 @@ static void asymp_pq(int n, double x, double *p, double *q)
 	*q = (mu - 1.0) * t - (mu - 1.0) * (mu - 9.0) * (mu - 25.0) * t2 * t / 6.0;
 }
 
-static double j_asymp(int n, double x)
+static double j_asymp(double n, double x)
 {
 	double p, q, chi, s, c;
 	asymp_pq(n, x, &p, &q);
-	chi = x - (double)n * M_PI_2 - M_PI_4;
+	chi = x - n * M_PI_2 - M_PI_4;
 	s = sin(chi);
 	c = cos(chi);
 	return sqrt(2.0 / (M_PI * x)) * (p * c - q * s);
 }
 
-static double y_asymp(int n, double x)
+static double y_asymp(double n, double x)
 {
 	double p, q, chi, s, c;
 	asymp_pq(n, x, &p, &q);
-	chi = x - (double)n * M_PI_2 - M_PI_4;
+	chi = x - n * M_PI_2 - M_PI_4;
 	s = sin(chi);
 	c = cos(chi);
 	return sqrt(2.0 / (M_PI * x)) * (p * s + q * c);
@@ -126,13 +133,13 @@ double j1(double x)
  * down to 0, tracking the (unnormalized) value at k == n along the
  * way, then rescales the whole run by matching the run's own J_0
  * against j0(x). */
-static double jn_miller(int n, double x)
+static double jn_miller(unsigned int n, double x)
 {
-	int nstart, k;
+	uint64_t nstart, k;
 	double jkp1, jk, jkm1, j_target;
 
-	nstart = n + (int)sqrt(40.0 * (double)n) + 10;
-	if (nstart < n + 20) nstart = n + 20;
+	nstart = (uint64_t)n + (uint64_t)sqrt(40.0 * (double)n) + 10;
+	if (nstart < (uint64_t)n + 20) nstart = (uint64_t)n + 20;
 
 	jkp1 = 0.0;
 	jk = 1e-30;
@@ -154,29 +161,150 @@ static double jn_miller(int n, double x)
 	return j_target * (j0(x) / jk);
 }
 
-static double jn_recur(int n, double x)
+static int jn_underflows(unsigned int n, double x)
+{
+	double nd = (double)n;
+	double log_bound;
+
+	/* From the absolute-value sum of J_n's defining series:
+	 *
+	 * |J_n(x)| <= (x/2)^n / n! * exp(x^2 / (4(n+1))).
+	 *
+	 * If even that upper bound is below the smallest positive double,
+	 * zero is the only representable result.  Besides avoiding pointless
+	 * work, this gives extreme int orders a finite path into Miller's
+	 * algorithm without approximating the transition region n ~= x. */
+	if (x == 0.0) return 1;
+	if (x * x > 2.0 * (nd + 1.0)) return 0;
+	log_bound = nd * log(x * 0.5) - lgamma(nd + 1.0)
+		+ x * x / (4.0 * (nd + 1.0));
+	return log_bound < log(DBL_MIN) + log(DBL_EPSILON);
+}
+
+/* Linear recurrences are both unnecessary and an effective denial of
+ * service once the order itself is enormous.  The leading uniform Airy
+ * expansion is valid on both sides of the turning point x=n and, unlike
+ * separate Debye expansions, stays finite at that point.  It is therefore
+ * the bounded fallback for orders above this file's practical recurrence
+ * limit.  Far beyond the turning point the ordinary Hankel expansion above
+ * is more accurate and cheaper still. */
+#define RECURRENCE_ORDER_LIMIT 10000u
+
+static void airy_pair(double x, double *ai, double *bi)
+{
+	const double ai0 = 0.35502805388781723926;
+	const double aip0 = -0.25881940379280679841;
+	const double bi0 = 0.61492662744600073515;
+	const double bip0 = 0.44828835735382635791;
+	double a, amp, phase;
+
+	if (x > 5.0) {
+		phase = (2.0 / 3.0) * x * sqrt(x);
+		amp = 1.0 / (sqrt(M_PI) * sqrt(sqrt(x)));
+		*ai = 0.5 * amp * exp(-phase);
+		*bi = amp * exp(phase);
+		return;
+	}
+	if (x < -5.0) {
+		a = -x;
+		phase = (2.0 / 3.0) * a * sqrt(a) + M_PI_4;
+		amp = 1.0 / (sqrt(M_PI) * sqrt(sqrt(a)));
+		*ai = amp * sin(phase);
+		*bi = amp * cos(phase);
+		return;
+	}
+	{
+		double ca[64] = { ai0, aip0, 0.0 };
+		double cb[64] = { bi0, bip0, 0.0 };
+		int i;
+		for (i = 1; i + 2 < 64; i++) {
+			ca[i + 2] = ca[i - 1] / ((double)(i + 2) * (i + 1));
+			cb[i + 2] = cb[i - 1] / ((double)(i + 2) * (i + 1));
+		}
+		*ai = ca[63];
+		*bi = cb[63];
+		for (i = 62; i >= 0; i--) {
+			*ai = *ai * x + ca[i];
+			*bi = *bi * x + cb[i];
+		}
+	}
+}
+
+static void large_order_uniform(unsigned int n, double x, double *j, double *y)
+{
+	double nu = (double)n;
+	double z = x / nu;
+	double zeta, factor, eta, q, ai, bi;
+	double nu13 = cbrt(nu);
+	const double cbrt2 = 1.2599210498948731648;
+
+	if (z == 0.0) {
+		*j = 0.0;
+		*y = -HUGE_VAL;
+		return;
+	}
+	/* The exact zeta formula subtracts two nearly equal quantities at
+	 * the turning point.  Its analytic limit avoids that cancellation
+	 * and is the part that makes x==n itself well defined. */
+	if (fabs(z - 1.0) < 1e-4) {
+		zeta = cbrt2 * (1.0 - z);
+		factor = cbrt2;
+	} else if (z < 1.0) {
+		q = sqrt(1.0 - z * z);
+		eta = log((1.0 + q) / z) - q;
+		zeta = pow(1.5 * eta, 2.0 / 3.0);
+		factor = sqrt(sqrt(4.0 * zeta / (1.0 - z * z)));
+	} else {
+		q = sqrt(z * z - 1.0);
+		eta = q - acos(1.0 / z);
+		zeta = -pow(1.5 * eta, 2.0 / 3.0);
+		factor = sqrt(sqrt(-4.0 * zeta / (z * z - 1.0)));
+	}
+	airy_pair(nu13 * nu13 * zeta, &ai, &bi);
+	*j = factor * ai / nu13;
+	*y = -factor * bi / nu13;
+}
+
+static void large_order(unsigned int n, double x, double *j, double *y)
+{
+	double nu = (double)n;
+	if (x > 8.0 * nu * nu) {
+		*j = j_asymp(nu, x);
+		*y = y_asymp(nu, x);
+	} else {
+		large_order_uniform(n, x, j, y);
+	}
+}
+
+static double jn_recur(unsigned int n, double x)
 {
 	double ax = fabs(x);
 	int neg = x < 0.0 && (n % 2);
-	double r;
+	double r, unused;
 
 	if (isinf(ax)) return 0.0;
 	if (ax == 0.0) return 0.0;
-	r = jn_miller(n, ax);
+	if (jn_underflows(n, ax)) return neg ? -0.0 : 0.0;
+	if (n > RECURRENCE_ORDER_LIMIT) large_order(n, ax, &r, &unused);
+	else r = jn_miller(n, ax);
 	return neg ? -r : r;
 }
 
 double jn(int n, double x)
 {
+	unsigned int order;
+	int negate;
+	double r;
+
 	if (x != x) return x;
-	if (n < 0) {
-		int m = -n;
-		double r = jn(m, x);
-		return (m % 2) ? -r : r;   /* J_{-n} = (-1)^n J_n */
-	}
-	if (n == 0) return j0(x);
-	if (n == 1) return j1(x);
-	return jn_recur(n, x);
+	/* n+1 is representable even at INT_MIN; negate that first, then add
+	 * the final unit in unsigned space where INT_MAX+1 is representable. */
+	order = n < 0 ? (unsigned int)(-(n + 1)) + 1u : (unsigned int)n;
+	negate = n < 0 && (order % 2);       /* J_-n = (-1)^n J_n */
+	if (order == 0) r = j0(x);
+	else if (order == 1) r = j1(x);
+	else r = jn_recur(order, x);
+	return negate ? -r : r;
 }
 
 static double y0_series(double x)
@@ -255,8 +383,9 @@ double y1(double x)
 
 double yn(int n, double x)
 {
-	double ym1, y, ynext;
-	int k;
+	double ym1, y, ynext, unused;
+	unsigned int order, k;
+	int negate;
 
 	if (x != x) return x;
 	if (x < 0.0) {
@@ -269,21 +398,23 @@ double yn(int n, double x)
 	}
 	if (isinf(x)) return 0.0;
 
-	if (n < 0) {
-		int m = -n;
-		double r = yn(m, x);
-		return (m % 2) ? -r : r;   /* Y_{-n} = (-1)^n Y_n */
+	order = n < 0 ? (unsigned int)(-(n + 1)) + 1u : (unsigned int)n;
+	negate = n < 0 && (order % 2);       /* Y_-n = (-1)^n Y_n */
+	if (order == 0) return y0(x);
+	if (order == 1) return negate ? -y1(x) : y1(x);
+	if (order > RECURRENCE_ORDER_LIMIT) {
+		large_order(order, x, &unused, &y);
+		return negate ? -y : y;
 	}
-	if (n == 0) return y0(x);
-	if (n == 1) return y1(x);
 
 	/* Stable upward recurrence. */
 	ym1 = y0(x);
 	y = y1(x);
-	for (k = 1; k < n; k++) {
+	for (k = 1; k < order; k++) {
 		ynext = (2.0 * (double)k / x) * y - ym1;
+		if (isinf(ynext)) return negate ? -ynext : ynext;
 		ym1 = y;
 		y = ynext;
 	}
-	return y;
+	return negate ? -y : y;
 }

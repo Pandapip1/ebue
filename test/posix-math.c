@@ -886,11 +886,31 @@ static void test_gamma(void)
  * None of the six are declared by include/math.h. */
 static void test_bessel(void)
 {
+	double j, y;
+
 	CHECK(isnan(j0(NAN)) && isnan(j1(NAN)) && isnan(jn(2, NAN)));
 	CHECK(isnan(y0(NAN)) && isnan(y1(NAN)) && isnan(yn(2, NAN)));
 	CHECK(j0(0.0) == 1.0);                 /* informational: known closed value */
 	CHECK(y0(0.0) == -HUGE_VAL);           /* x==0: pole error */
 	CHECK(isnan(y0(-1.0)) || y0(-1.0) == -HUGE_VAL);   /* x<0: domain error, either return permitted */
+	/* Both negative-order identities used to evaluate -INT_MIN.  The
+	 * positive extreme separately overflowed Miller's int starting order. */
+	CHECK(jn(INT_MIN, 0.0) == 0.0);
+	CHECK(jn(INT_MIN, 1.0) == 0.0);
+	CHECK(jn(INT_MAX, 1.0) == 0.0);
+	CHECK(yn(INT_MIN, 1.0) == -HUGE_VAL);
+	/* Large finite x avoids the small-x underflow/overflow shortcuts.  The
+	 * first pair exercises the bounded Hankel path; the second pair is the
+	 * uniform asymptotic's x==n turning point.  All four used to enter a
+	 * recurrence with more than two billion iterations. */
+	j = jn(INT_MIN, 1e20);
+	y = yn(INT_MIN, 1e20);
+	CHECK(isfinite(j) && fabs(j) < 1.0);
+	CHECK(isfinite(y) && fabs(y) < 1.0);
+	j = jn(INT_MAX, (double)INT_MAX);
+	y = yn(INT_MIN, 2147483648.0);
+	CHECK(isfinite(j) && j > 0.0);
+	CHECK(isfinite(y) && y < 0.0);
 }
 
 /* remainder.html RETURN VALUE/ERRORS -- x REM y (IEEE
