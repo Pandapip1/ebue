@@ -83,10 +83,15 @@ char *__progname_full;
  * argument is then converted to UTF-8. */
 static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
 {
-	WCHAR *buf = __malloc((n + 1) * sizeof(WCHAR));
-	char **argv = __malloc(sizeof(char *) * 2);
-	int argc = 0, cap = 2;
-	size_t i = 0;
+	WCHAR *buf;
+	char **argv;
+	int argc = 0;
+	size_t i = 0, cap = 2, units, bytes;
+
+	if (!__size_add_checked(n, 1, &units) ||
+	    !__size_mul_checked(units, sizeof(WCHAR), &bytes)) return -1;
+	buf = __malloc(bytes);
+	argv = __malloc(sizeof(char *[2]));
 
 	if (!buf || !argv) return -1;
 
@@ -132,13 +137,18 @@ static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
 			if (!inq && (p[i] == ' ' || p[i] == '\t')) break;
 			buf[o++] = p[i++];
 		}
-		if (argc + 1 >= cap) {
-			char **nv = __malloc(sizeof(char *) * cap * 2);
+		if ((size_t)argc + 1 >= cap) {
+			size_t next;
+			char **nv;
+			if (!__array_next_capacity(cap, (size_t)argc, 2, 2,
+			    sizeof *argv, &next) ||
+			    !__size_mul_checked(next, sizeof *argv, &bytes)) return -1;
+			nv = __malloc(bytes);
 			if (!nv) return -1;
-			memcpy(nv, argv, sizeof(char *) * argc);
+			memcpy(nv, argv, sizeof *argv * (size_t)argc);
 			__free(argv);
 			argv = nv;
-			cap *= 2;
+			cap = next;
 		}
 		argv[argc++] = __utf16_to_utf8(buf, o);
 	}
@@ -154,7 +164,7 @@ static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
  * Cygwin keep them, since a child may need them. */
 static char **build_environ(const WCHAR *env)
 {
-	size_t count = 0, i;
+	size_t count = 0, i, slots, bytes;
 	const WCHAR *p;
 	char **ev;
 
@@ -164,7 +174,9 @@ static char **build_environ(const WCHAR *env)
 		return ev;
 	}
 	for (p = env; *p; p += wcslen_(p) + 1) count++;
-	ev = __malloc(sizeof(char *) * (count + 1));
+	if (!__size_add_checked(count, 1, &slots) ||
+	    !__size_mul_checked(slots, sizeof *ev, &bytes)) return 0;
+	ev = __malloc(bytes);
 	if (!ev) return 0;
 	for (p = env, i = 0; *p; p += wcslen_(p) + 1)
 		ev[i++] = __utf16_to_utf8(p, wcslen_(p));

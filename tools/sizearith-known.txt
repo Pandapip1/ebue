@@ -5,11 +5,6 @@
 # Fields: RULE<TAB>FILE<TAB>NORMALISED EXPRESSION<TAB>REASON.
 # New sites fail.  Entries that no longer match also fail, so delete each
 # entry in the same commit that converts its source to checked arithmetic.
-allocation-arithmetic	crt/crt1.c	__malloc((n + 1) * sizeof(WCHAR))	existing site; remove while completing the checked-size audit
-allocation-arithmetic	crt/crt1.c	__malloc(sizeof(char *) * 2)	existing site; remove while completing the checked-size audit
-allocation-arithmetic	crt/crt1.c	__malloc(sizeof(char *) * cap * 2)	existing site; remove while completing the checked-size audit
-allocation-arithmetic	crt/crt1.c	__malloc(sizeof(char *) * (count + 1))	existing site; remove while completing the checked-size audit
-unchecked-growth	crt/crt1.c	cap *= 2	existing site; remove while completing the checked-size audit
 length-narrowing	src/dirent/getdents.c	(int)used	existing site; remove while completing the checked-size audit
 length-narrowing	src/dirent/getdents.c	(int)used	existing site; remove while completing the checked-size audit
 length-narrowing	src/dirent/getdents.c	(int)used	existing site; remove while completing the checked-size audit
