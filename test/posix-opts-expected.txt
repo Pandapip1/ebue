@@ -432,8 +432,8 @@ pthread_barrier_init/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	meas
 pthread_barrier_init/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_barrier_wait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_barrier_wait/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
-pthread_barrier_wait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_barrier_wait/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_barrier_wait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
+pthread_barrier_wait/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 pthread_barrierattr_destroy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_barrierattr_getpshared/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_barrierattr_getpshared/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after live shared-memory unlink fallback
@@ -747,9 +747,9 @@ pthread_spin_init/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measure
 pthread_spin_init/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after live shared-memory unlink fallback
 pthread_spin_init/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after live shared-memory unlink fallback
 pthread_spin_init/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
-pthread_spin_lock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_spin_lock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 pthread_spin_lock/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
-pthread_spin_lock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_spin_lock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 pthread_spin_lock/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_spin_trylock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_spin_trylock/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
