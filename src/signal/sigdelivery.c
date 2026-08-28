@@ -213,7 +213,22 @@ void __sig_lock(void)
 {
 	pid_t me;
 	if (!lock_event) return;
-	__pthread_cancel_unsafe_enter("signal-state lock");
+	/* A defer region, not an unsafe one: __sig_lock()/__sig_unlock() run
+	 * on the way into and out of ordinary, POSIX-legal blocking calls
+	 * (sleep(), sigwait(), and friends), not only inside calls the
+	 * application chose to make async-cancel-unsafe on purpose.  Marking
+	 * this region unsafe (as it was before this fix, for eight minutes
+	 * of this codebase's own history -- see [[wine-clone-process-hazards]]
+	 * and 3d8ff6c, which converted the PEB lock to defer immediately
+	 * after and should have moved this one too) meant any async
+	 * cancellation landing while a thread was merely checking pending
+	 * signals hit cancel_unsafe_abort() and took the whole process down
+	 * with it: a regression this project's own OPTS legs (pthread_cancel/
+	 * 2-1, 3-1, 4-1, pthread_cleanup_push/1-2, all "expected PASS" ->
+	 * ABNORMAL) caught directly. Deferring instead lets the redirect
+	 * wait for this lock to be released and then deliver promptly, the
+	 * same as the PEB lock already does. */
+	__pthread_cancel_defer_enter();
 	me = gettid();
 	if (lock_depth > 0 && lock_owner == me) { lock_depth++; return; }
 	NtWaitForSingleObject(lock_event, 0, 0);
@@ -226,12 +241,12 @@ void __sig_unlock(void)
 	LONG prev;
 	if (!lock_event) return;
 	if (--lock_depth > 0) {
-		__pthread_cancel_unsafe_leave();
+		__pthread_cancel_defer_leave();
 		return;
 	}
 	lock_owner = 0;
 	NtSetEvent(lock_event, &prev);
-	__pthread_cancel_unsafe_leave();
+	__pthread_cancel_defer_leave();
 }
 
 /* Publish delivery state before entering application code, then let other

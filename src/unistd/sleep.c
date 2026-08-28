@@ -206,14 +206,22 @@ int __alertable_delay(long long ticks, long long *left, const char *operation)
 	unsigned long caught = __sig_caught_count();
 	LARGE_INTEGER start, now, t;
 
-	__pthread_cancel_unsafe_enter(operation);
+	/* No unsafe/defer region here: the only shared state this function
+	 * touches is reached through __sig_drain_pending()/__sig_wait_delivery(),
+	 * which take __sig_lock() internally and that lock is itself a defer
+	 * region (src/signal/sigdelivery.c).  Everything else below is a local
+	 * (start/now/t/ticks/caught) that an abandoned, exiting thread can
+	 * safely leave half-updated.  Asynchronous cancellation landing anywhere
+	 * in this function -- including mid-wait in __sig_wait_delivery() -- is
+	 * therefore safe, and is exactly the case the pthread_cancel/2-1, 3-1,
+	 * 4-1 conformance tests exercise: they cancel a peer that is asleep. */
+	(void)operation;
 	NtQuerySystemTime(&start);
 	__pthread_testcancel();
 	__sig_drain_pending();
 	if (__sig_caught_count() != caught) {
 		if (left) *left = ticks;
 		errno = EINTR;
-		__pthread_cancel_unsafe_leave();
 		return -1;
 	}
 	while (ticks > 0) {
@@ -231,11 +239,9 @@ int __alertable_delay(long long ticks, long long *left, const char *operation)
 		if (__sig_caught_count() != caught) {
 			if (left) *left = ticks > 0 ? ticks : 0;
 			errno = EINTR;
-			__pthread_cancel_unsafe_leave();
 			return -1;
 		}
 	}
-	__pthread_cancel_unsafe_leave();
 	return 0;
 }
 
@@ -291,14 +297,16 @@ int pause(void)
 	 * APC ends it.  Signals delivered by a background delivery thread
 	 * set the delivery event and are observed through the caught counter.
 	 * An ignored signal changes no counter and therefore leaves pause()
-	 * waiting, as POSIX requires. */
-	__pthread_cancel_unsafe_enter("pause()");
+	 * waiting, as POSIX requires.  No unsafe/defer region: see the comment
+	 * in __alertable_delay() above -- the shared state here is reached only
+	 * through __sig_drain_pending()/__sig_wait_delivery(), which are already
+	 * defer-protected by __sig_lock(). */
 	while (__sig_caught_count() == caught) {
+		__pthread_testcancel();
 		__sig_drain_pending();
 		if (__sig_caught_count() != caught) break;
 		__sig_wait_delivery(0);
 	}
-	__pthread_cancel_unsafe_leave();
 	errno = EINTR;
 	return -1;
 }
