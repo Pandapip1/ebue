@@ -7,14 +7,28 @@
  * unwritten ones when writing.
  */
 #include <stdio.h>
+#include <stdint.h>
+#include <limits.h>
+#include <errno.h>
 #include "stdio_impl.h"
 
 int fseeko(FILE *f, off_t off, int whence)
 {
 	long long r;
 	if (f->wpos && __fflush_locked(f) < 0) return -1;
-	if (whence == SEEK_CUR)
-		off -= (off_t)(f->rend - f->rpos) + (off_t)f->nunget;
+	if (whence == SEEK_CUR) {
+		size_t adjust = f->rend - f->rpos;
+		if (adjust > SIZE_MAX - (size_t)f->nunget) {
+			errno = EOVERFLOW;
+			return -1;
+		}
+		adjust += (size_t)f->nunget;
+		if (adjust > (size_t)LLONG_MAX || off < LLONG_MIN + (off_t)adjust) {
+			errno = EOVERFLOW;
+			return -1;
+		}
+		off -= (off_t)adjust;
+	}
 	/* Seek FIRST, discard the buffered read-ahead only once it has
 	 * succeeded.  fseek.html: on failure "the file offset ... shall
 	 * remain unchanged", and ftello() reconstructs the logical position
@@ -43,11 +57,26 @@ int fseek(FILE *f, long off, int whence) { return fseeko(f, (off_t)off, whence);
 off_t ftello(FILE *f)
 {
 	long long pos = __file_seek(f, 0, SEEK_CUR);
+	size_t unread;
 	if (pos < 0) return -1;
 	/* The buffer is never both a read and a write buffer at once, so
 	 * whichever of these is nonzero is the one that applies; on a "w+"
 	 * or "r+" stream either may be, so test the buffer, not the mode. */
-	pos -= (long long)(f->rend - f->rpos) + f->nunget;
+	unread = f->rend - f->rpos;
+	if (unread > SIZE_MAX - (size_t)f->nunget) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	unread += (size_t)f->nunget;
+	if (unread > (size_t)pos) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	pos -= (long long)unread;
+	if (f->wpos > (size_t)(LLONG_MAX - pos)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	pos += (long long)f->wpos;
 	return (off_t)pos;
 }

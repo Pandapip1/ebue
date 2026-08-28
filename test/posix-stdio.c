@@ -219,6 +219,64 @@ static void test_block_io_size_overflow(void)
 	}
 }
 
+/* Memory streams calculate a requested position from their current
+ * position, buffered read-ahead, and buffered writes.  Each term can be
+ * individually representable while their signed sum is not.  Exercise
+ * all three arithmetic boundaries and require failure before the stream
+ * position is changed. */
+static void test_memory_stream_position_overflow(void)
+{
+	char mem[4] = "abc";
+	char *out = 0;
+	size_t outsz = 0;
+	FILE *f;
+
+	f = fmemopen(mem, sizeof mem, "r");
+	CHECK(f != 0);
+	if (f) {
+		CHECK(fseeko(f, 1, SEEK_SET) == 0);
+		errno = 0;
+		CHECK(fseeko(f, (off_t)LLONG_MAX, SEEK_CUR) == -1);
+		CHECK(errno == EOVERFLOW);
+		CHECK(ftello(f) == 1);
+
+		CHECK(fseeko(f, 0, SEEK_SET) == 0);
+		CHECK(fgetc(f) == 'a');
+		errno = 0;
+		CHECK(fseeko(f, (off_t)LLONG_MIN, SEEK_CUR) == -1);
+		CHECK(errno == EOVERFLOW);
+		CHECK(ftello(f) == 1);
+		CHECK(fclose(f) == 0);
+	}
+
+	f = open_memstream(&out, &outsz);
+	CHECK(f != 0);
+	if (f) {
+		/* The logical endpoint still fits in off_t, but the extra byte
+		 * needed for the mandatory terminator exceeds ntlibc's object-size
+		 * range. */
+		CHECK(fseeko(f, (off_t)LLONG_MAX - 1, SEEK_SET) == 0);
+		CHECK(fputc('x', f) == 'x');
+		CHECK(ftello(f) == (off_t)LLONG_MAX);
+		errno = 0;
+		CHECK(fflush(f) == EOF);
+		CHECK(errno == ENOMEM);
+
+		CHECK(fseeko(f, (off_t)LLONG_MAX, SEEK_SET) == 0);
+		CHECK(fputc('x', f) == 'x');
+		errno = 0;
+		CHECK(ftello(f) == (off_t)-1);
+		CHECK(errno == EOVERFLOW);
+		errno = 0;
+		CHECK(fflush(f) == EOF);
+		CHECK(errno == EOVERFLOW);
+		/* Closing retries the intentionally impossible flush and may fail;
+		 * its only purpose here is releasing the FILE object. */
+		(void)fclose(f);
+		free(out);
+	}
+}
+
 /* setvbuf.html DESCRIPTION: "may be used after the stream ... is
  * associated with an open file but before any other operation ... is
  * performed on the stream." setvbuf.html RETURN VALUE: 0 on success,
@@ -2423,6 +2481,7 @@ int main(void)
 	test_snprintf_boundaries();
 	test_snprintf_eoverflow();
 	test_block_io_size_overflow();
+	test_memory_stream_position_overflow();
 	test_printf_int_min_width_no_overflow();
 	test_printf_z_modifier_width();
 	test_printf_l_modifier();

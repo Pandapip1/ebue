@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <limits.h>
 #include <errno.h>
 #include "stdio_impl.h"
 
@@ -68,6 +70,7 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 {
 	if (f->is_mem) {
 		size_t avail;
+		size_t need;
 		/* The terminator this block keeps past mem_len is one null
 		 * BYTE for a byte stream and one null WIDE CHARACTER for an
 		 * open_wmemstream() one, which is why it is a width and not a
@@ -83,20 +86,47 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 		 * required -- the write landed at the seek position and
 		 * overwrote live content. */
 		if (f->mem_append) f->mem_pos = f->mem_len;
-		if (f->mem_dynamic && f->mem_pos + n + term > f->mem_size) {
-			size_t ns = f->mem_size ? f->mem_size : 128;
-			while (ns < f->mem_pos + n + term) ns *= 2;
-			unsigned char *nb = realloc(f->mem_buf, ns);
-			if (!nb) { errno = ENOMEM; return -1; }
-			f->mem_buf = nb;
-			f->mem_size = ns;
+		if (f->mem_dynamic) {
+			if (f->mem_pos > (size_t)LLONG_MAX ||
+			    n > (size_t)LLONG_MAX - f->mem_pos) {
+				errno = EOVERFLOW;
+				return -1;
+			}
+			need = f->mem_pos + n;
+			if (need > SIZE_MAX - term) {
+				errno = EOVERFLOW;
+				return -1;
+			}
+			need += term;
+			/* ntlibc's usable object-size range ends at PTRDIFF_MAX: offsets
+			 * and differences within an allocated object must remain in the
+			 * ABI's signed pointer-difference type.  Reject a larger request
+			 * before the geometric growth itself crosses the size_t boundary. */
+			if (need > (size_t)PTRDIFF_MAX) {
+				errno = ENOMEM;
+				return -1;
+			}
+			if (need > f->mem_size) {
+				size_t ns = f->mem_size ? f->mem_size : 128;
+				while (ns < need) {
+					if (ns > (size_t)PTRDIFF_MAX / 2) { ns = need; break; }
+					ns *= 2;
+				}
+				{
+					unsigned char *nb = realloc(f->mem_buf, ns);
+					if (!nb) { errno = ENOMEM; return -1; }
+					f->mem_buf = nb;
+					f->mem_size = ns;
+				}
+			}
 		}
 		avail = f->mem_pos < f->mem_size ? f->mem_size - f->mem_pos : 0;
 		if (n > avail) n = avail;   /* fmemopen: silently truncate, like a full device */
 		if (n) memcpy(f->mem_buf + f->mem_pos, buf, n);
 		f->mem_pos += n;
 		if (f->mem_pos > f->mem_len) f->mem_len = f->mem_pos;
-		if (f->mem_len + term <= f->mem_size) memset(f->mem_buf + f->mem_len, 0, term);
+		if (f->mem_len <= f->mem_size && term <= f->mem_size - f->mem_len)
+			memset(f->mem_buf + f->mem_len, 0, term);
 		mem_publish(f);
 		return (ssize_t)n;
 	}
@@ -107,14 +137,26 @@ ssize_t __file_write(FILE *f, const void *buf, size_t n)
 long long __file_seek(FILE *f, long long off, int whence)
 {
 	if (f->is_mem) {
-		long long base;
+		long long base, pos;
 		switch (whence) {
 		case SEEK_SET: base = 0; break;
-		case SEEK_CUR: base = (long long)f->mem_pos; break;
-		case SEEK_END: base = (long long)f->mem_len; break;
+		case SEEK_CUR:
+			if (f->mem_pos > (size_t)LLONG_MAX) { errno = EOVERFLOW; return -1; }
+			base = (long long)f->mem_pos;
+			break;
+		case SEEK_END:
+			if (f->mem_len > (size_t)LLONG_MAX) { errno = EOVERFLOW; return -1; }
+			base = (long long)f->mem_len;
+			break;
 		default: errno = EINVAL; return -1;
 		}
-		if (base + off < 0) { errno = EINVAL; return -1; }
+		if ((off > 0 && base > LLONG_MAX - off) ||
+		    (off < 0 && base < LLONG_MIN - off)) {
+			errno = EOVERFLOW;
+			return -1;
+		}
+		pos = base + off;
+		if (pos < 0) { errno = EINVAL; return -1; }
 		/* fmemopen.html: "An attempt to seek a memory buffer stream to
 		 * a negative position or to a position larger than the buffer
 		 * size shall fail."  A FIXED buffer has a size to exceed; an
@@ -122,11 +164,11 @@ long long __file_seek(FILE *f, long long off, int whence)
 		 * half of that clause applies to it and mem_dynamic is exempt
 		 * here.  Without this an fmemopen(buf, 10, "r+") stream would
 		 * seek to 11 and report ftell() == 11 for a ten-byte buffer. */
-		if (!f->mem_dynamic && (unsigned long long)(base + off) > f->mem_size) {
+		if (!f->mem_dynamic && (unsigned long long)pos > f->mem_size) {
 			errno = EINVAL;
 			return -1;
 		}
-		f->mem_pos = (size_t)(base + off);
+		f->mem_pos = (size_t)pos;
 		return (long long)f->mem_pos;
 	}
 	if (f->fd < 0) { errno = EBADF; return -1; }
