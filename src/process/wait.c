@@ -28,6 +28,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 #include "libc.h"
 
@@ -227,6 +228,11 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	 * options through wait3/wait4, which share this same contract), so
 	 * checking here covers all of them uniformly. */
 	if (options & ~(WNOHANG | WUNTRACED | WCONTINUED)) { errno = EINVAL; return -1; }
+	/* pid < -1 selects the process group whose ID is the absolute value
+	 * of pid.  INT_MIN has no positive pid_t counterpart; negating it in
+	 * the job-control lookup below is signed-overflow UB.  Since no pid_t
+	 * can name that mathematical group ID, it cannot contain a child. */
+	if (pid == INT_MIN) { errno = ECHILD; return -1; }
 
 	retry:
 	/* A stopped or continued child, ahead of any exit wait.  The order

@@ -25,6 +25,7 @@
 #include <limits.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1857,6 +1858,21 @@ static void test_unistd_posix_vdisable(void)
 #endif
 }
 
+/* waitpid.html DESCRIPTION: pid less than -1 selects the process group
+ * whose ID is the absolute value of pid.  INT_MIN's mathematical absolute
+ * value cannot be represented by pid_t, so no child can have that group;
+ * the implementation must report [ECHILD] without evaluating -INT_MIN,
+ * which is signed-overflow undefined behavior in C. */
+#if NTLIBC_TEST(PASS, posix_unistd_waitpid_int_min_no_overflow)
+static void test_waitpid_int_min_no_overflow(void)
+{
+	int status = 0;
+	errno = 0;
+	CHECK(waitpid(INT_MIN, &status, WNOHANG) == -1);
+	CHECK(errno == ECHILD);
+}
+#endif
+
 int main(void)
 {
 	char tmpl[] = "posixunistd-XXXXXX";
@@ -1913,6 +1929,9 @@ int main(void)
 	test_unistd_pathconf_names();
 	test_unistd_confstr_names();
 	test_unistd_posix_vdisable();
+#if NTLIBC_TEST(PASS, posix_unistd_waitpid_int_min_no_overflow)
+	test_waitpid_int_min_no_overflow();
+#endif
 
 	CHECK(chdir(origcwd) == 0);
 	CHECK(rmdir(dir) == 0);
