@@ -5,6 +5,7 @@
 #include <sched.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "pthread_impl.h"
 
 #define MUTEX_MAGIC ((ULONG_PTR)0x4d555458u)
@@ -19,6 +20,7 @@ struct mutex_data {
 	ULONG_PTR magic;
 	HANDLE semaphore;
 	pthread_t owner;
+	pid_t owner_pid;
 	unsigned recursion;
 	unsigned waiters;
 	unsigned char type;
@@ -97,6 +99,15 @@ static int create_semaphore(HANDLE *output)
 	NTSTATUS status = NtCreateSemaphore(output, SEMAPHORE_ALL_ACCESS, 0, 0,
 		0x7fffffff);
 	return NT_SUCCESS(status) ? 0 : EAGAIN;
+}
+
+static int owned_by(const struct mutex_data *data, struct __pthread *thread)
+{
+	/* fork() preserves virtual addresses, so the child's initial pthread
+	 * control block can have the same pointer value as its parent's.  A
+	 * process-shared recursive mutex must not mistake that address match for
+	 * ownership by the same thread. */
+	return data->owner == thread && data->owner_pid == getpid();
 }
 
 static int mutex_ready(pthread_mutex_t *mutex)
@@ -203,8 +214,10 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 		NTSTATUS status;
 		RtlAcquirePebLock();
 		if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner &&
+		    data->owner_pid == getpid() &&
 		    data->owner->exited) {
 			data->owner = self;
+			data->owner_pid = getpid();
 			data->recursion = 1;
 			data->robust_state = ROBUST_OWNER_DEAD;
 			RtlReleasePebLock();
@@ -217,12 +230,13 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 				return ENOTRECOVERABLE;
 			}
 			data->owner = self;
+			data->owner_pid = getpid();
 			data->recursion = 1;
 			RtlReleasePebLock();
 			return data->robust == PTHREAD_MUTEX_ROBUST &&
 				data->robust_state == ROBUST_OWNER_DEAD ? EOWNERDEAD : 0;
 		}
-		if (data->owner == self) {
+		if (owned_by(data, self)) {
 			if (data->type == PTHREAD_MUTEX_RECURSIVE) {
 				data->recursion++;
 				RtlReleasePebLock();
@@ -300,7 +314,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	if (!self) return EINVAL;
 	data = mutex_data(mutex);
 	RtlAcquirePebLock();
-	if (data->owner != self && (data->type != PTHREAD_MUTEX_NORMAL ||
+	if (!owned_by(data, self) && (data->type != PTHREAD_MUTEX_NORMAL ||
 	    data->robust == PTHREAD_MUTEX_ROBUST)) {
 		RtlReleasePebLock();
 		return EPERM;
@@ -310,6 +324,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 		    data->robust_state == ROBUST_OWNER_DEAD)
 			data->robust_state = ROBUST_NOT_RECOVERABLE;
 		data->owner = 0;
+		data->owner_pid = 0;
 		wake = data->waiters != 0;
 	}
 	RtlReleasePebLock();
@@ -354,7 +369,7 @@ int pthread_mutex_consistent(pthread_mutex_t *mutex)
 	if (!self) return EINVAL;
 	data = mutex_data(mutex);
 	RtlAcquirePebLock();
-	if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner == self &&
+	if (data->robust == PTHREAD_MUTEX_ROBUST && owned_by(data, self) &&
 	    data->robust_state == ROBUST_OWNER_DEAD) {
 		data->robust_state = ROBUST_CONSISTENT;
 		error = 0;

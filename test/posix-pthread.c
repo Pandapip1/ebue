@@ -361,6 +361,51 @@ static void test_pthread_mutexattr_type_relock(void)
 }
 #endif
 
+#if NTLIBC_TEST(PASS, posix_pthread_pshared_recursive_owner_after_fork)
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <errno.h>
+
+static void test_pthread_pshared_recursive_owner_after_fork(void)
+{
+	pthread_mutexattr_t attr;
+	pthread_mutex_t *mutex;
+	pid_t child;
+	int status;
+
+	mutex = mmap(NULL, sizeof *mutex, PROT_READ | PROT_WRITE,
+	             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (mutex == MAP_FAILED) {
+		CHECK(0);
+		return;
+	}
+	CHECK(pthread_mutexattr_init(&attr) == 0);
+	CHECK(pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED) == 0);
+	CHECK(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) == 0);
+	CHECK(pthread_mutex_init(mutex, &attr) == 0);
+	CHECK(pthread_mutex_lock(mutex) == 0);
+
+	child = fork();
+	if (child == 0)
+		_exit(pthread_mutex_trylock(mutex) == EBUSY ? 0 : 1);
+	if (child < 0) {
+		CHECK(0);
+	} else {
+		CHECK(waitpid(child, &status, 0) == child);
+		/* fork() preserves the parent's pthread_t pointer value in the
+		 * child, but the child is not the recursive mutex's owner. */
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	}
+
+	CHECK(pthread_mutex_unlock(mutex) == 0);
+	CHECK(pthread_mutex_destroy(mutex) == 0);
+	CHECK(pthread_mutexattr_destroy(&attr) == 0);
+	CHECK(munmap(mutex, sizeof *mutex) == 0);
+}
+#endif
+
 /* ==================================================================
  * Condition variables -- .../functions/pthread_cond_init.html,
  * pthread_cond_timedwait.html, pthread_condattr_getclock.html
