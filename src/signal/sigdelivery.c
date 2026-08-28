@@ -101,8 +101,9 @@
  * control handler thread), unguarded. This file adds a second, ordinary
  * one: sig_delivery_thread() calls __raise_internal() concurrently with
  * whatever the application thread is doing, and both sides read and
- * write signal.c's shared handlers[]/act_mask[]/act_flags[]/blocked/
- * pending/alt_stack/alt_active. __sig_lock()/__sig_unlock() below are a
+ * write signal.c's shared dispositions and process-pending queue.
+ * Thread masks, thread-pending state and alternate stacks are TLS.
+ * __sig_lock()/__sig_unlock() below are a
  * RECURSIVE mutex built from a SynchronizationEvent (auto-reset: the
  * first waiter to see it signalled is the only one released, the "P"/"V"
  * a binary semaphore needs) plus an owning-thread id and a re-entry
@@ -115,33 +116,20 @@
  * already holds the lock, which sigprocmask()'s own internal call to it
  * (draining newly-unblocked pending signals) depends on.
  *
- * Recursive is not a nicety here, it is load-bearing: __raise_internal()
- * holds the lock for the FULL duration of a caught handler's call (see
- * below), and an ordinary, POSIX-sanctioned handler is free to call
- * straight back into sigprocmask()/sigaction()/raise()/sigpending()/
- * sigaltstack() -- all on the async-signal-safe list, signal.h.html --
- * from inside itself, on the SAME thread that is already holding the
- * lock. test/posix-signal.c's mask_check_handler() does exactly that
- * (sigprocmask() from inside a handler raise() invoked). A first version
- * of this was a plain, non-recursive acquire, and it hung every one of
- * those calls forever the moment it was actually exercised --
- * test/posix-signal.exe timing out under real testing is what caught
- * it, not inspection. The owner-id-plus-depth pair is what lets the
- * SAME thread walk back in without waiting on itself while a genuinely
- * DIFFERENT thread (sig_delivery_thread() below, the reason this lock
- * exists at all) still blocks for real; lock_owner/lock_depth are
+ * Recursive is still load-bearing for nested internal delivery before and
+ * after the application callback. The callback itself runs outside the lock:
+ * otherwise a handler waiting for another thread deadlocks when that thread
+ * reaches any signal-aware cancellation point. The owner-id-plus-depth pair
+ * lets the SAME thread walk back in without waiting on itself while a
+ * genuinely DIFFERENT thread still blocks for real; lock_owner/lock_depth are
  * touched only by whichever thread currently owns the lock, or is in
  * the middle of acquiring it, where a torn read of a stale owner value
  * only ever costs one spurious real wait, never a wrong grant -- actual
  * exclusion is still lock_event, an NT synchronization primitive.
  *
- * The one deliberate consequence of holding the lock across the whole
- * handler call: a handler that blocks for a while genuinely stalls the
- * OTHER thread's next signal-related call (same-thread reentrance is
- * free; cross-thread contention is not). That is a real, documented
- * tradeoff, not an accident -- it is also what keeps two handlers from
- * ever running concurrently and racing sig_dispatch()'s alt_active,
- * which phase 1 has no other way to rule out.
+ * Per-thread masks, pending queues, wait state, fault metadata, and alternate
+ * stacks make concurrent handlers independent while dispositions and the
+ * process-pending queue remain protected by this lock.
  *
  * __sig_lock()/__sig_unlock() are no-ops if the mutex event was never
  * created (lock_event == 0): a process whose __sig_delivery_init() ran
@@ -178,26 +166,11 @@ static HANDLE wake_event;   /* auto-reset; set on every packet arrival. 0 = not 
 static HANDLE lock_event;   /* auto-reset-as-mutex, initially signalled (free). 0 = no locking done. */
 static HANDLE send_mutant;  /* named per target; serializes clients across processes. */
 
-/* RECURSIVE, deliberately -- a plain acquire-per-call mutex over
- * lock_event self-deadlocks the instant any signal handler calls back
- * into signal.c, which is completely ordinary, POSIX-sanctioned code:
- * sigprocmask(), sigaction(), raise(), sigpending() and sigaltstack()
- * are all on the async-signal-safe list (signal.h.html), and
- * test/posix-signal.c's own mask_check_handler() does exactly this --
- * calls sigprocmask() from inside a handler while raise() is still on
- * the stack. __raise_internal() holds this lock for the full duration
- * of the handler call (see this file's banner: that is deliberate, not
- * incidental), so raise() -> lock -> __raise_internal() -> the handler
- * -> sigprocmask() -> lock() again, ALL ON THE SAME THREAD, is not a
- * rare race -- it is the ordinary shape of a large fraction of this
- * library's own signal test suite. A non-recursive version of this
- * hung every one of those calls forever the first time it was actually
- * run (caught by test/posix-signal.exe timing out under real testing,
- * not by inspection); tracking the owning thread and a re-entry depth
- * is what makes the same thread able to walk back in without waiting
- * on itself, while a genuinely different thread (src/signal/sigdelivery.c's
- * delivery thread, the common case this lock exists for at all) still
- * blocks for real. lock_owner/lock_depth are touched only by whichever
+/* RECURSIVE, deliberately: internal signal paths can nest before or after a
+ * user handler, even though the handler callback itself temporarily drops the
+ * lock. Tracking the owning thread and a re-entry depth makes the same thread
+ * able to walk back in without waiting on itself, while a genuinely different
+ * thread still blocks for real. lock_owner/lock_depth are touched only by whichever
  * thread currently owns the lock (or is in the middle of acquiring it,
  * where a torn read of a stale owner value only ever costs a spurious
  * real wait, never a wrong grant -- the actual exclusion is still
@@ -254,6 +227,29 @@ void __sig_unlock(void)
 	if (--lock_depth > 0) return;
 	lock_owner = 0;
 	NtSetEvent(lock_event, &prev);
+}
+
+/* Publish delivery state before entering application code, then let other
+ * threads make progress while the handler runs. Preserve recursion depth so
+ * the internal caller which eventually unwinds still owns exactly the
+ * acquisitions it made before the callback. */
+int __sig_unlock_for_handler(void)
+{
+	LONG previous;
+	int depth;
+	if (!lock_event) return 0;
+	depth = lock_depth;
+	lock_depth = 0;
+	lock_owner = 0;
+	NtSetEvent(lock_event, &previous);
+	return depth;
+}
+
+void __sig_relock_after_handler(int depth)
+{
+	if (!lock_event || depth <= 0) return;
+	__sig_lock();
+	lock_depth = depth;
 }
 
 /* \Device\NamedPipe\ntlibc-sig.<pid, 8 hex digits> -- the same prefix-

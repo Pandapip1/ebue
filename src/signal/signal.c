@@ -73,8 +73,8 @@ static __thread struct pending_state thread_pending;
  * are process-directed and retain the shared pending queue used by the
  * cross-process delivery thread. */
 static __thread int thread_directed;
-static sigset_t waiting_set;
-static int wait_active;
+static __thread sigset_t waiting_set;
+static __thread int wait_active;
 
 /* Per-signal sa_mask/sa_flags, as installed by sigaction().  signal()
  * and sigset() leave these at their zero-initialized defaults (empty
@@ -96,15 +96,13 @@ void __sig_current_mask_install(const sigset_t *mask)
 }
 
 /* Set only by exception_handler(), immediately around its call into
- * __raise_internal(), so a SIGSEGV/SIGBUS/SIGILL/SIGFPE handler
- * installed with SA_SIGINFO can be told this delivery came from a
- * hardware fault rather than kill()/raise().  Guarded by
- * __sig_lock()/__sig_unlock() at exception_handler()'s call site: the
- * delivery thread can otherwise be inside its own signal delivery while
- * these values are being changed. */
-static int fault_active;
-static void *fault_addr;
-static int fault_si_code;   /* computed by exception_handler(), see there */
+ * __raise_internal(), so a SIGSEGV/SIGBUS/SIGILL/SIGFPE handler installed
+ * with SA_SIGINFO can distinguish a hardware fault from kill()/raise(). The
+ * metadata is thread-local because the signal lock is released around the
+ * user callback and another thread may deliver independently. */
+static __thread int fault_active;
+static __thread void *fault_addr;
+static __thread int fault_si_code;   /* computed by exception_handler(), see there */
 
 static void make_siginfo(siginfo_t *si, int sig)
 {
@@ -411,8 +409,8 @@ int __sig_consume_child_stop(pid_t pid)
 /* Deliver a signal to this process now.  Returns 0 if it was handled or
  * ignored and control may continue; does not return if the default
  * action is to die. */
-static stack_t alt_stack;   /* ss_sp == 0 means none is installed */
-static int alt_active;      /* nonzero while a handler runs on it */
+static __thread stack_t alt_stack;   /* ss_sp == 0 means none is installed */
+static __thread int alt_active;      /* nonzero while a handler runs on it */
 
 /* Defined in src/signal/$ARCH/altstack.S -- PE builds only.
  *
@@ -552,6 +550,7 @@ int __raise_internal_info(int sig, const void *data)
 	else {
 		sigset_t saved = blocked;
 		int flags = act_flags[sig];
+		int delivery_lock_depth;
 		struct sig_delivery d;
 		int i;
 
@@ -608,6 +607,7 @@ int __raise_internal_info(int sig, const void *data)
 		 * same union slot in struct sigaction (include/signal.h) -- so
 		 * h already holds the right function pointer; it is only cast
 		 * back to its real, three-argument type here. */
+		delivery_lock_depth = __sig_unlock_for_handler();
 		if (flags & SA_SIGINFO) {
 			void (*hsi)(int, siginfo_t *, void *) =
 				(void (*)(int, siginfo_t *, void *))(void *)h;
@@ -618,6 +618,7 @@ int __raise_internal_info(int sig, const void *data)
 			d.h = h;
 			sig_dispatch(&d, flags);
 		}
+		__sig_relock_after_handler(delivery_lock_depth);
 
 		blocked = saved;
 		/* raise() and pthread_kill() are thread-directed.  If the handler
@@ -960,8 +961,8 @@ int sigismember(const sigset_t *s, int sig) { if (!sig_valid(sig)) { errno = EIN
 int sigisemptyset(const sigset_t *s) { size_t i; for (i = 0; i < sizeof s->__bits / sizeof s->__bits[0]; i++) if (s->__bits[i]) return 0; return 1; }
 int sigorset(sigset_t *d, const sigset_t *a, const sigset_t *b) { size_t i; for (i = 0; i < sizeof d->__bits / sizeof d->__bits[0]; i++) d->__bits[i] = a->__bits[i] | b->__bits[i]; return 0; }
 
-/* Called with the signal lock held.  Delivery may run a handler, which is
- * safe because the lock is recursive on the owning thread. */
+/* Called with the signal lock held. Delivery drops it only around the user
+ * callback and reacquires it before returning here. */
 static void drain_unblocked_pending(void)
 {
 	int i;
@@ -988,11 +989,8 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 	 * why __raise_internal() below is safe to call without locking
 	 * itself -- see src/signal/sigdelivery.c's banner for the invariant
 	 * (__raise_internal() assumes its caller already holds the lock).
-	 * __sig_lock() is recursive (same file), which is what lets THIS
-	 * call site nest safely even when it is itself reached from inside
-	 * a signal handler that raise() is still running under the same
-	 * lock for -- see sigdelivery.c's banner for exactly that shape
-	 * (test/posix-signal.c's mask_check_handler()). */
+	 * A handler callback runs outside the lock, so async-signal-safe mask
+	 * changes made by that callback acquire it normally. */
 	__sig_lock();
 	if (old) *old = blocked;
 	if (set) {
@@ -1279,11 +1277,9 @@ int siginterrupt(int sig, int flag) { if (!sig_valid(sig)) { errno = EINVAL; ret
  * sigaction cases died on exactly that, exiting 255 rather than failing
  * cleanly, which is why they read as ABNORMAL rather than FAIL.
  *
- * Locked (__sig_lock()/__sig_unlock(), src/signal/sigdelivery.c):
- * alt_stack/alt_active used to need no locking because delivery was
- * synchronous and single-threaded; sig_delivery_thread() can now run a
- * handler on alt_stack (via sig_dispatch(), inside __raise_internal())
- * concurrently with this function reading or changing it. */
+ * Both values are thread-local, as POSIX alternate stacks are. The signal
+ * lock still serializes disposition and pending-state changes made by this
+ * async-signal-safe entry point. */
 
 int sigaltstack(const stack_t *ss, stack_t *old)
 {
@@ -1551,12 +1547,8 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	 * faulting address (src/internal/nt.h); the others (misalignment,
 	 * illegal instruction, arithmetic traps, breakpoints, Ctrl-C) carry
 	 * no such address, so fault_addr stays NULL for them. */
-	/* Locked from here through the __raise_internal() call: fault_active/
-	 * fault_addr/fault_si_code are read back inside __raise_internal()'s
-	 * SA_SIGINFO construction, and now that sig_delivery_thread()
-	 * (src/signal/sigdelivery.c) can be inside its own __raise_internal()
-	 * call on another thread at the same moment, an unlocked write here
-	 * could be read back by that call instead of this one. */
+	/* Fault metadata is thread-local, so another thread may deliver while the
+	 * application handler runs without inheriting this exception's siginfo. */
 	__sig_lock();
 	fault_active = 1;
 	fault_addr = (excode == EXCEPTION_ACCESS_VIOLATION || excode == EXCEPTION_IN_PAGE_ERROR)

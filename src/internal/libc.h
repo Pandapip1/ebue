@@ -569,6 +569,8 @@ void __mman_reset_after_fork(void);
 void __aio_reset_after_fork(void);
 void __sig_lock(void);
 void __sig_unlock(void);
+int __sig_unlock_for_handler(void);
+void __sig_relock_after_handler(int);
 
 /* Pure exit-code -> wait-status mapping used by waitpid()/wait()/wait3()/
  * wait4() (src/process/wait.c); exposed non-static so tests can drive its

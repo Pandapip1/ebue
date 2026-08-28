@@ -4060,6 +4060,8 @@ int __sig_try_deliver_remote_nondefault(int pid, int sig)
 }
 void __sig_lock(void) { }
 void __sig_unlock(void) { }
+int __sig_unlock_for_handler(void) { return 0; }
+void __sig_relock_after_handler(int depth) { (void)depth; }
 
 /* ------------------------------------------------- everything not native */
 
