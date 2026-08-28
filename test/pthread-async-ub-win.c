@@ -74,18 +74,20 @@ enum wait_kind {
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
-/* None of the waits below mark an unsafe or defer region of their own
- * (see src/unistd/sleep.c), so there is no internal flag to poll for
- * "the peer has entered the wrapper" the way the synthetic death-test
- * regions below can be polled. Every wrapper here blocks for a full 30
- * seconds; yielding a bounded, generous number of times before cancelling
- * leaves an enormous margin against ever landing before the peer thread
- * has reached its wait, without needing a dedicated marker. */
+/* Busy-loop cases (nothing to enter, no window to miss) can be handed a
+ * fixed, generous yield count before cancelling. Anything that blocks in
+ * a real wait cannot: a fixed count is a guess at how long thread startup
+ * takes, and guessing wrong reads as a hang, not a fast failure -- exactly
+ * what happened here on a loaded CI runner. Every case below instead has
+ * its waiter set a flag at the specific instant the parent needs to have
+ * observed before it is safe to cancel. */
 static void settle_into_wait(void)
 {
 	int i;
 	for (i = 0; i < 1000; i++) sched_yield();
 }
+
+static volatile int waiter_ready;
 
 static void *safe_waiter(void *argument)
 {
@@ -95,6 +97,7 @@ static void *safe_waiter(void *argument)
 
 	if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0) != 0)
 		return (void *)(intptr_t)71;
+	waiter_ready = 1;
 	switch (kind) {
 	case WAIT_NANOSLEEP:
 		nanosleep(&delay, 0);
@@ -125,9 +128,10 @@ static int child_remote(enum wait_kind kind)
 {
 	pthread_t thread;
 	void *result = 0;
+	waiter_ready = 0;
 	if (pthread_create(&thread, 0, safe_waiter,
 	    (void *)(intptr_t)kind) != 0) return 73;
-	settle_into_wait();
+	while (!waiter_ready) sched_yield();
 	if (pthread_cancel(thread) != 0) return 75;
 	if (pthread_join(thread, &result) != 0) return 76;
 	return result == PTHREAD_CANCELED ? SURVIVED_EXIT : 77;
@@ -182,6 +186,7 @@ static void *deferred_waiter(void *unused)
 {
 	struct timespec delay = { 30, 0 };
 	(void)unused;
+	waiter_ready = 1;
 	nanosleep(&delay, 0);
 	return (void *)(intptr_t)SURVIVED_EXIT;
 }
@@ -196,14 +201,16 @@ static int control_deferred_inside_unsafe(void)
 {
 	pthread_t thread;
 	void *result = 0;
+	waiter_ready = 0;
 	if (pthread_create(&thread, 0, deferred_waiter, 0) != 0) return -1;
-	settle_into_wait();
+	while (!waiter_ready) sched_yield();
 	if (pthread_cancel(thread) != 0) return -1;
 	if (pthread_join(thread, &result) != 0) return -1;
 	return result == PTHREAD_CANCELED ? 0 : -1;
 }
 
 static volatile int sig_lock_release;
+static volatile int sig_lock_held;
 
 static void *sig_lock_waiter(void *unused)
 {
@@ -211,6 +218,7 @@ static void *sig_lock_waiter(void *unused)
 	if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0) != 0)
 		return (void *)(intptr_t)71;
 	__sig_lock();
+	sig_lock_held = 1;
 	while (!sig_lock_release) sched_yield();
 	__sig_unlock();
 	/* Reached only if cancellation was NOT correctly deferred and
@@ -221,16 +229,18 @@ static void *sig_lock_waiter(void *unused)
 /* __sig_lock()/__sig_unlock() are a defer region, not an unsafe one (see
  * src/signal/sigdelivery.c). Cancelling a peer while it holds the lock
  * must not abort and must not take effect until the lock is released:
- * pthread_cancel() is issued while sig_lock_waiter() is still spinning
- * inside the lock, and only after that does this function let it proceed
- * to __sig_unlock(), where the deferred cancellation is expected to fire. */
+ * pthread_cancel() is issued only once sig_lock_held confirms the peer has
+ * actually acquired the lock and is spinning inside it, and only after
+ * that does this function let it proceed to __sig_unlock(), where the
+ * deferred cancellation is expected to fire. */
 static int control_sig_lock_defers(void)
 {
 	pthread_t thread;
 	void *result = 0;
 	sig_lock_release = 0;
+	sig_lock_held = 0;
 	if (pthread_create(&thread, 0, sig_lock_waiter, 0) != 0) return -1;
-	settle_into_wait();
+	while (!sig_lock_held) sched_yield();
 	if (pthread_cancel(thread) != 0) return -1;
 	sig_lock_release = 1;
 	if (pthread_join(thread, &result) != 0) return -1;
