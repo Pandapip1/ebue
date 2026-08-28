@@ -26,6 +26,28 @@
 #include <limits.h>
 #include "time_impl.h"
 
+static int format_number(char *out, size_t out_size, long long value,
+	int width, int plus, int automatic_plus)
+{
+	char rev[32];
+	unsigned long long mag = value < 0
+		? (unsigned long long)(-(value + 1)) + 1 : (unsigned long long)value;
+	int digits = 0, sign, zeroes, needed, n = 0;
+
+	do { rev[digits++] = (char)('0' + mag % 10); mag /= 10; } while (mag);
+	sign = value < 0 || (plus && digits < width)
+		|| (value >= 0 && automatic_plus && digits > automatic_plus);
+	zeroes = width - digits - sign;
+	if (zeroes < 0) zeroes = 0;
+	needed = sign + zeroes + digits;
+	if ((size_t)needed >= out_size) return -1;
+	if (sign) out[n++] = value < 0 ? '-' : '+';
+	while (zeroes--) out[n++] = '0';
+	while (digits) out[n++] = rev[--digits];
+	out[n] = 0;
+	return n;
+}
+
 static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, const struct tm *restrict tm)
 {
 	size_t pos = 0;
@@ -39,21 +61,6 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 		if (_v < 0) { PUT_CH('-'); _v = -_v; } \
 		_n = __num_digits(_tmp, (int)sizeof _tmp, (unsigned long)_v, (w), (pad)); \
 		for (int _i = 0; _i < _n; _i++) PUT_CH(_tmp[_i]); \
-	} while (0)
-#define PUT_FORMAT_NUMBER(v, w, p, a) do { \
-		long long _v = (long long)(v); \
-		int _width = (w), _digits = 0, _sign, _zeroes; \
-		char _rev[32]; \
-		unsigned long long _mag = _v < 0 \
-			? (unsigned long long)(-(_v + 1)) + 1 : (unsigned long long)_v; \
-		do { _rev[_digits++] = (char)('0' + _mag % 10); _mag /= 10; } while (_mag); \
-		_sign = _v < 0 || ((p) && _digits < _width) \
-			|| (_v >= 0 && (a) && _digits > (a)); \
-		_zeroes = _width - _digits - _sign; \
-		if (_zeroes < 0) _zeroes = 0; \
-		if (_sign) PUT_CH(_v < 0 ? '-' : '+'); \
-		while (_zeroes--) PUT_CH('0'); \
-		while (_digits) PUT_CH(_rev[--_digits]); \
 	} while (0)
 
 	for (; *f; f++) {
@@ -96,18 +103,24 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 		case 'B': PUT_STR(__ntlibc_month_name[mon]); break;
 		case 'c': {
 			long long year = (long long)tm->tm_year + 1900;
+			int n;
 			PUT_STR(__ntlibc_day_name_abbr[wday]); PUT_CH(' ');
 			PUT_STR(__ntlibc_month_name_abbr[mon]); PUT_CH(' ');
 			PUT_NUM(tm->tm_mday, 2, ' '); PUT_CH(' ');
 			PUT_NUM(tm->tm_hour, 2, '0'); PUT_CH(':');
 			PUT_NUM(tm->tm_min, 2, '0'); PUT_CH(':');
 			PUT_NUM(tm->tm_sec, 2, '0'); PUT_CH(' ');
-			PUT_FORMAT_NUMBER(year, 4, 0, 4);
+			n = format_number(s + pos, max - pos, year, 4, 0, 4);
+			if (n < 0) { overflow = 1; goto done; }
+			pos += (size_t)n;
 			break;
 		}
 		case 'C': {
 			long long year = (long long)tm->tm_year + 1900;
-			PUT_FORMAT_NUMBER(__floordiv(year, 100), explicit_width ? width : 2, plus, 0);
+			int n = format_number(s + pos, max - pos, __floordiv(year, 100),
+				explicit_width ? width : 2, plus, 0);
+			if (n < 0) { overflow = 1; goto done; }
+			pos += (size_t)n;
 			break;
 		}
 		case 'd': PUT_NUM(tm->tm_mday, 2, '0'); break;
@@ -120,7 +133,10 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 		case 'F': {
 			long long year = (long long)tm->tm_year + 1900;
 			int yw = explicit_width ? (width > 6 ? width - 6 : 1) : 4;
-			PUT_FORMAT_NUMBER(year, yw, plus, explicit_width ? 0 : 4);
+			int n = format_number(s + pos, max - pos, year, yw, plus,
+				explicit_width ? 0 : 4);
+			if (n < 0) { overflow = 1; goto done; }
+			pos += (size_t)n;
 			PUT_CH('-');
 			PUT_NUM(tm->tm_mon + 1, 2, '0'); PUT_CH('-');
 			PUT_NUM(tm->tm_mday, 2, '0');
@@ -155,8 +171,10 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			__iso_week((long long)tm->tm_year + 1900, tm->tm_yday, wday, &iso_year, &iso_week);
 			if (*f == 'V') PUT_NUM(iso_week, 2, '0');
 			else if (*f == 'G') {
-				PUT_FORMAT_NUMBER(iso_year, explicit_width ? width : 4,
-					plus, explicit_width ? 0 : 4);
+				int n = format_number(s + pos, max - pos, iso_year,
+					explicit_width ? width : 4, plus, explicit_width ? 0 : 4);
+				if (n < 0) { overflow = 1; goto done; }
+				pos += (size_t)n;
 			}
 			else PUT_NUM(__floormod(iso_year, 100), 2, '0');
 			break;
@@ -175,13 +193,19 @@ static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, 
 			break;
 		case 'y': PUT_NUM(__floormod((long long)tm->tm_year + 1900, 100), 2, '0'); break;
 		case 'Y': {
-			PUT_FORMAT_NUMBER((long long)tm->tm_year + 1900,
-				explicit_width ? width : 4, plus, explicit_width ? 0 : 4);
+			int n = format_number(s + pos, max - pos,
+				(long long)tm->tm_year + 1900, explicit_width ? width : 4,
+				plus, explicit_width ? 0 : 4);
+			if (n < 0) { overflow = 1; goto done; }
+			pos += (size_t)n;
 			break;
 		}
 		case 's': {
 			struct tm copy = *tm;
-			PUT_FORMAT_NUMBER((long long)mktime(&copy), 1, 0, 0);
+			int n = format_number(s + pos, max - pos,
+				(long long)mktime(&copy), 1, 0, 0);
+			if (n < 0) { overflow = 1; goto done; }
+			pos += (size_t)n;
 			break;
 		}
 		case 'z': {
