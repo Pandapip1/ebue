@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <limits.h>
+#include "../src/internal/libc.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -55,6 +56,22 @@ static void check_tm(const struct tm *tm, const struct known *k)
 	CHECK(tm->tm_isdst == 0);
 }
 
+static void test_nt_tick_extremes(void)
+{
+	/* Kernel timestamps normally describe real dates, but these helpers
+	 * are the trust boundary for raw signed LARGE_INTEGER values.  Both
+	 * endpoints used to overflow while subtracting the NT epoch before
+	 * division made the result small again. */
+	CHECK(__nt_to_unix_sec(LLONG_MIN) == -933981677285LL);
+	CHECK(__nt_to_unix_nsec(LLONG_MIN) == -477580800L);
+	CHECK(__nt_to_unix_sec(LLONG_MAX) == 910692730085LL);
+	CHECK(__nt_to_unix_nsec(LLONG_MAX) == 477580700L);
+	CHECK(__nt_to_unix_sec(__TICKS_1601_TO_1970 - 1) == 0);
+	CHECK(__nt_to_unix_nsec(__TICKS_1601_TO_1970 - 1) == -100L);
+	CHECK(__nt_to_unix_sec(__TICKS_1601_TO_1970 + 1) == 0);
+	CHECK(__nt_to_unix_nsec(__TICKS_1601_TO_1970 + 1) == 100L);
+}
+
 static void fill(struct tm *tm, int y, int mo, int d, int h, int mi, int s)
 {
 	memset(tm, 0, sizeof *tm);
@@ -70,6 +87,7 @@ int main(void)
 {
 	size_t i;
 	char buf[128];
+	test_nt_tick_extremes();
 
 	/* Per-process timers: cover all five entry points without depending
 	 * on scheduler timing or asynchronous signal delivery. */

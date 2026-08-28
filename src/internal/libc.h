@@ -430,8 +430,22 @@ void __free(void *);
 /* ---- time -------------------------------------------------------------- */
 #define __TICKS_PER_SEC 10000000LL
 #define __TICKS_1601_TO_1970 116444736000000000LL
-static inline long long __nt_to_unix_sec(long long t) { return (t - __TICKS_1601_TO_1970) / __TICKS_PER_SEC; }
-static inline long __nt_to_unix_nsec(long long t) { return (long)((t - __TICKS_1601_TO_1970) % __TICKS_PER_SEC) * 100; }
+static inline long long __nt_to_unix_sec(long long t)
+{
+	unsigned long long delta;
+	if (t >= __TICKS_1601_TO_1970)
+		return (t - __TICKS_1601_TO_1970) / __TICKS_PER_SEC;
+	delta = (unsigned long long)__TICKS_1601_TO_1970 - (unsigned long long)t;
+	return -(long long)(delta / __TICKS_PER_SEC);
+}
+static inline long __nt_to_unix_nsec(long long t)
+{
+	unsigned long long delta;
+	if (t >= __TICKS_1601_TO_1970)
+		return (long)((t - __TICKS_1601_TO_1970) % __TICKS_PER_SEC) * 100;
+	delta = (unsigned long long)__TICKS_1601_TO_1970 - (unsigned long long)t;
+	return -(long)(delta % __TICKS_PER_SEC) * 100;
+}
 static inline int __unix_to_nt(long long sec, long nsec, long long *result)
 {
 	long long ticks, subsecond = nsec / 100;
