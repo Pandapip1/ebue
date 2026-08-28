@@ -199,7 +199,7 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 	data = mutex_data(mutex);
 	for (;;) {
 		HANDLE semaphore;
-		LARGE_INTEGER timeout, *timeout_pointer = 0;
+		LARGE_INTEGER timeout = 0, *timeout_pointer = 0;
 		NTSTATUS status;
 		RtlAcquirePebLock();
 		if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner &&
