@@ -13,5 +13,5 @@ _(__pthread_cancel_trampoline):
 	/* Context redirection is not a call, so normalize the interrupted
 	 * stack before entering the non-returning cancellation path. */
 	and	$-16,%esp
-	call	_(__pthread_cancel_current)
+	call	_(__pthread_cancel_redirected)
 	ud2

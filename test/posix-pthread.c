@@ -771,9 +771,9 @@ static void test_pthread_specific_key(void)
 #include <time.h>
 
 static int cleanup_ran;
-static volatile int async_cancel_returned;
 static volatile int async_cleanup_ran;
 static sem_t async_cancel_ready;
+static sem_t async_cancel_returned;
 
 static void cleanup_handler(void *arg)
 {
@@ -813,12 +813,9 @@ static void *cancel_start(void *arg)
 
 static void async_cleanup_handler(void *arg)
 {
-	struct timespec delay = {0, 1000000};
 	(void)arg;
-	do {
-		nanosleep(&delay, NULL);
+	if (sem_wait(&async_cancel_returned) == 0)
 		async_cleanup_ran++;
-	} while (!async_cancel_returned && async_cleanup_ran < 5000);
 }
 
 static void *async_cancel_start(void *arg)
@@ -851,17 +848,18 @@ static void test_pthread_cancel_cleanup(void)
 	/* A cancellation point may consume an asynchronous request while
 	 * pthread_cancel() is preparing its suspension fallback.  The fallback
 	 * must not redirect a cleanup handler which has already started. */
-	async_cancel_returned = 0;
 	async_cleanup_ran = 0;
 	CHECK(sem_init(&async_cancel_ready, 0, 0) == 0);
+	CHECK(sem_init(&async_cancel_returned, 0, 0) == 0);
 	CHECK(pthread_create(&th, NULL, async_cancel_start, NULL) == 0);
 	CHECK(sem_wait(&async_cancel_ready) == 0);
 	CHECK(pthread_cancel(th) == 0);
-	async_cancel_returned = 1;
+	CHECK(sem_post(&async_cancel_returned) == 0);
 	CHECK(pthread_join(th, &result) == 0);
 	CHECK(result == PTHREAD_CANCELED);
 	CHECK(async_cleanup_ran > 0);
 	CHECK(sem_destroy(&async_cancel_ready) == 0);
+	CHECK(sem_destroy(&async_cancel_returned) == 0);
 }
 #endif
 

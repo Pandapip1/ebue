@@ -15,5 +15,5 @@ _(__pthread_cancel_trampoline):
 	 * space, then enter the non-returning cancellation path. */
 	and	$-16,%rsp
 	sub	$32,%rsp
-	call	_(__pthread_cancel_current)
+	call	_(__pthread_cancel_redirected)
 	ud2

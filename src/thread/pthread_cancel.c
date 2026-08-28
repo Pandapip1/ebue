@@ -7,6 +7,16 @@
 
 _Noreturn void __pthread_cancel_trampoline(void);
 
+static int compare_exchange(volatile int *address, int old_value,
+	int new_value)
+{
+	int previous;
+	__asm__ __volatile__("lock; cmpxchgl %2, %1"
+		: "=a"(previous), "+m"(*address)
+		: "r"(new_value), "0"(old_value) : "memory");
+	return previous;
+}
+
 /* A normal user APC is only delivered when the target enters an alertable
  * wait.  Asynchronous cancellation also has to stop a thread which never
  * waits (the conformance test intentionally uses a tight loop), so redirect
@@ -45,25 +55,31 @@ static int redirect_async_cancel(struct __pthread *thread)
 		handled = 1;
 	} else if (thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
 	    thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS) {
-		status = NtGetContextThread(thread->handle, context);
-		if (NT_SUCCESS(status)) {
-			memcpy(context + ip_offset, &ip, sizeof ip);
-			status = NtSetContextThread(thread->handle, context);
+		/* Claim the cancellation before changing the instruction pointer.
+		 * The target makes the same atomic claim on its cancellation-point
+		 * path, closing the interval in which both paths used to observe the
+		 * plain volatile marker as zero and enter cleanup twice. */
+		if (compare_exchange(&thread->cancel_running, 0, 1) != 0) {
+			handled = 1;
+		} else {
+			status = NtGetContextThread(thread->handle, context);
+			if (NT_SUCCESS(status)) {
+				memcpy(context + ip_offset, &ip, sizeof ip);
+				status = NtSetContextThread(thread->handle, context);
+			}
+			handled = NT_SUCCESS(status);
+			if (!handled)
+				compare_exchange(&thread->cancel_running, 1, 0);
 		}
-		handled = NT_SUCCESS(status);
 	}
 	NtResumeThread(thread->handle, &previous);
 	return handled;
 }
 
-_Noreturn void __pthread_cancel_current(void)
+static _Noreturn void cancel_current_claimed(void)
 {
 	struct __pthread *self = __pthread_self_control;
 	if (self) {
-		/* Publish this before taking the shared lock.  A concurrent
-		 * redirector suspends this thread before consulting the marker, so
-		 * it cannot race past a completed store. */
-		self->cancel_running = 1;
 		RtlAcquirePebLock();
 		self->cancel_pending = 0;
 		self->cancel_queued = 0;
@@ -71,6 +87,20 @@ _Noreturn void __pthread_cancel_current(void)
 		RtlReleasePebLock();
 	}
 	pthread_exit(PTHREAD_CANCELED);
+}
+
+_Noreturn void __pthread_cancel_current(void)
+{
+	struct __pthread *self = __pthread_self_control;
+	if (self) compare_exchange(&self->cancel_running, 0, 1);
+	cancel_current_claimed();
+}
+
+/* The suspend/context path claimed cancel_running before publishing this
+ * instruction pointer, so its trampoline must not try to claim it again. */
+_Noreturn void __pthread_cancel_redirected(void)
+{
+	cancel_current_claimed();
 }
 
 void __pthread_testcancel(void)
