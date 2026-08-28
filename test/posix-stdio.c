@@ -1228,6 +1228,27 @@ static void test_snprintf_eoverflow(void)
 	CHECK(!strcmp(b, "z"));
 }
 
+/* fprintf.html: a negative '*' width is a '-' flag followed by its
+ * positive magnitude.  INT_MIN's magnitude is INT_MAX+1, so the required
+ * output count cannot fit the return type and [EOVERFLOW] is the defined
+ * failure.  Evaluating `-width` first is signed-overflow UB; cover both
+ * ordinary and numbered argument paths because they fetch independently
+ * before converging on the same normalization. */
+#if NTLIBC_TEST(PASS, posix_stdio_printf_int_min_width_no_overflow)
+static void test_printf_int_min_width_no_overflow(void)
+{
+	char b[8];
+
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%*d", INT_MIN, 7) == -1);
+	CHECK(errno == EOVERFLOW);
+
+	errno = 0;
+	CHECK(snprintf(b, sizeof b, "%1$*2$d", 7, INT_MIN) == -1);
+	CHECK(errno == EOVERFLOW);
+}
+#endif
+
 /* fprintf.html, the length modifiers: "z  Specifies that a following
  * d, i, o, u, x, or X conversion specifier applies to a size_t or the
  * corresponding signed integer type argument; or that a following n
@@ -2318,6 +2339,9 @@ int main(void)
 
 	test_snprintf_boundaries();
 	test_snprintf_eoverflow();
+#if NTLIBC_TEST(PASS, posix_stdio_printf_int_min_width_no_overflow)
+	test_printf_int_min_width_no_overflow();
+#endif
 	test_printf_z_modifier_width();
 	test_printf_l_modifier();
 	test_printf_positional_arguments();

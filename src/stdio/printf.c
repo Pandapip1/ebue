@@ -1142,7 +1142,16 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 				TAKE(a, sp.wpos, A_INT);
 				width = (int)a.i;
 				/* "A negative field width is taken as a '-' flag
-				 * followed by a positive field width." */
+				 * followed by a positive field width."  INT_MIN's
+				 * mathematical magnitude is INT_MAX+1: it cannot be
+				 * returned by these int-returning interfaces, and a
+				 * plain `-width` would itself be signed-overflow UB. */
+				if (width == INT_MIN) {
+					errno = EOVERFLOW;
+					sk->f->err = 1;
+					sk->bad = 1;
+					break;
+				}
 				if (width < 0) { flags |= 4; width = -width; }
 			}
 			prec = sp.prec;
