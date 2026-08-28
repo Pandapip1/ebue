@@ -521,6 +521,11 @@ unsigned long __sig_thread_caught_count(void);
 unsigned long __sig_thread_restart_count(void);
 /* Deliver pending signals which the calling thread can accept. */
 void __sig_drain_pending(void);
+/* Per-thread signal state shared with the pthread implementation. */
+struct __sigset_t;
+void __sig_current_mask_copy(struct __sigset_t *);
+void __sig_current_mask_install(const struct __sigset_t *);
+int __raise_thread_internal(int);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
 int __sigchld_nocldwait(void);
