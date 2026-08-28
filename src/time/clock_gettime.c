@@ -36,8 +36,10 @@ static int monotonic_get(struct timespec *ts)
 	LARGE_INTEGER count, freq;
 	NTSTATUS st = NtQueryPerformanceCounter(&count, &freq);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	ts->tv_sec = (time_t)(count / freq);
-	ts->tv_nsec = (long)((count % freq) * 1000000000LL / freq);
+	if (!__clock_qpc_to_timespec(count, freq, &ts->tv_sec, &ts->tv_nsec)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	return 0;
 }
 
@@ -47,7 +49,10 @@ static int cputime_get(struct timespec *ts)
 	NTSTATUS st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, NULL);
 	long long ticks; /* 100ns units, kernel + user */
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	ticks = kt.KernelTime + kt.UserTime;
+	if (!__clock_combine_cpu_ticks(kt.KernelTime, kt.UserTime, &ticks)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	ts->tv_sec = (time_t)(ticks / __TICKS_PER_SEC);
 	ts->tv_nsec = (long)(ticks % __TICKS_PER_SEC) * 100;
 	return 0;
@@ -110,8 +115,10 @@ int clock_getres(clockid_t id, struct timespec *res)
 		if (!res) return 0;
 		st = NtQueryPerformanceCounter(&count, &freq);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		res->tv_sec = 0;
-		res->tv_nsec = freq > 1000000000LL ? 1 : (long)(1000000000LL / (freq ? freq : 1));
+		if (!__clock_qpc_resolution(freq, &res->tv_sec, &res->tv_nsec)) {
+			errno = EOVERFLOW;
+			return -1;
+		}
 		return 0;
 	}
 	default:

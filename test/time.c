@@ -58,6 +58,9 @@ static void check_tm(const struct tm *tm, const struct known *k)
 
 static void test_nt_tick_extremes(void)
 {
+	long long ticks, sec;
+	long nsec;
+
 	/* Kernel timestamps normally describe real dates, but these helpers
 	 * are the trust boundary for raw signed LARGE_INTEGER values.  Both
 	 * endpoints used to overflow while subtracting the NT epoch before
@@ -70,6 +73,33 @@ static void test_nt_tick_extremes(void)
 	CHECK(__nt_to_unix_nsec(__TICKS_1601_TO_1970 - 1) == -100L);
 	CHECK(__nt_to_unix_sec(__TICKS_1601_TO_1970 + 1) == 0);
 	CHECK(__nt_to_unix_nsec(__TICKS_1601_TO_1970 + 1) == 100L);
+
+	/* Process times and performance counters are signed NT fields.  A
+	 * successful but malformed kernel response must be rejected without
+	 * overflowing, dividing by zero, or constructing an invalid timespec. */
+	CHECK(__clock_combine_cpu_ticks(0, 0, &ticks) && ticks == 0);
+	CHECK(__clock_combine_cpu_ticks(LLONG_MAX, 0, &ticks) &&
+	      ticks == LLONG_MAX);
+	CHECK(!__clock_combine_cpu_ticks(-1, 0, &ticks));
+	CHECK(!__clock_combine_cpu_ticks(0, -1, &ticks));
+	CHECK(!__clock_combine_cpu_ticks(LLONG_MAX, 1, &ticks));
+
+	CHECK(__clock_qpc_to_timespec(10000001, 10000000, &sec, &nsec) &&
+	      sec == 1 && nsec == 100);
+	CHECK(__clock_qpc_to_timespec(LLONG_MAX - 1, LLONG_MAX, &sec, &nsec) &&
+	      sec == 0 && nsec == 999999999L);
+	CHECK(!__clock_qpc_to_timespec(-1, 1, &sec, &nsec));
+	CHECK(!__clock_qpc_to_timespec(0, 0, &sec, &nsec));
+	CHECK(!__clock_qpc_to_timespec(0, -1, &sec, &nsec));
+
+	CHECK(__clock_qpc_resolution(1, &sec, &nsec) &&
+	      sec == 1 && nsec == 0);
+	CHECK(__clock_qpc_resolution(2, &sec, &nsec) &&
+	      sec == 0 && nsec == 500000000L);
+	CHECK(__clock_qpc_resolution(LLONG_MAX, &sec, &nsec) &&
+	      sec == 0 && nsec == 1);
+	CHECK(!__clock_qpc_resolution(0, &sec, &nsec));
+	CHECK(!__clock_qpc_resolution(-1, &sec, &nsec));
 }
 
 static void fill(struct tm *tm, int y, int mo, int d, int h, int mi, int s)

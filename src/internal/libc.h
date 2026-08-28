@@ -460,6 +460,46 @@ static inline int __unix_to_nt(long long sec, long nsec, long long *result)
 	return 1;
 }
 
+/* Successful kernel queries are still a trust boundary.  Keep their signed
+ * counters out of unchecked arithmetic so a malformed response cannot turn
+ * into libc UB before it can be rejected. */
+static inline int __clock_combine_cpu_ticks(long long kernel,
+	long long user, long long *result)
+{
+	if (kernel < 0 || user < 0 || kernel > INT64_MAX - user) return 0;
+	*result = kernel + user;
+	return 1;
+}
+
+static inline int __clock_qpc_to_timespec(long long count, long long freq,
+	long long *sec, long *nsec)
+{
+	double scaled;
+	if (count < 0 || freq <= 0) return 0;
+	*sec = count / freq;
+	/* The remainder can be almost INT64_MAX, so multiplying it by 1e9
+	 * as an integer is not representable.  Floating scaling is bounded
+	 * here; clamp the possible final rounding-up to a valid timespec. */
+	scaled = (double)(count % freq) * 1000000000.0 / (double)freq;
+	*nsec = scaled >= 1000000000.0 ? 999999999L : (long)scaled;
+	return 1;
+}
+
+static inline int __clock_qpc_resolution(long long freq,
+	long long *sec, long *nsec)
+{
+	if (freq <= 0) return 0;
+	if (freq == 1) {
+		*sec = 1;
+		*nsec = 0;
+	} else {
+		*sec = 0;
+		*nsec = freq > 1000000000LL ? 1L
+			: (long)(1000000000LL / freq);
+	}
+	return 1;
+}
+
 /* Return the positive distance from start to end in NT's 100 ns units,
  * rounded up and saturated at the largest relative LARGE_INTEGER.  The
  * unsigned subtraction is intentional: after the lexical ordering check it

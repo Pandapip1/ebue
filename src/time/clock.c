@@ -14,6 +14,7 @@ clock_t clock(void)
 	NTSTATUS st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, NULL);
 	long long ticks;
 	if (!NT_SUCCESS(st)) return (clock_t)-1;
-	ticks = kt.KernelTime + kt.UserTime;
+	if (!__clock_combine_cpu_ticks(kt.KernelTime, kt.UserTime, &ticks))
+		return (clock_t)-1;
 	return (clock_t)(ticks / (__TICKS_PER_SEC / CLOCKS_PER_SEC));
 }
