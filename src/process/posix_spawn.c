@@ -180,6 +180,11 @@
 #include "libc.h"
 #include "spawn_internal.h"
 
+/* signal.c always provides this helper; signal.h exposes its public
+ * declaration only for BSD/GNU feature profiles.  The implementation uses
+ * it internally regardless of the caller-facing feature selection. */
+int sigisemptyset(const sigset_t *);
+
 /* One saved descriptor-table slot.
  *
  * `slot` is the struct __fd as it stood before the actions ran; the

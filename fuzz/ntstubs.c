@@ -186,6 +186,7 @@ static char *shim_argv[2] = { (char *)"ntlibc-native", 0 };
 #define XCHILD_MARK "_NTLIBC_XCHILD=1"
 #define XHOST_PREFIX "_NTLIBC_XHOST="
 #define XVFS_PREFIX "_NTLIBC_XVFS="
+#define XRUNTIME_PREFIX "_NTLIBC_XRUNTIME="
 static char *host_self;
 static int vfs_snapshot_fd = -1;
 
@@ -263,6 +264,7 @@ static void vfs_init(void);            /* the simulated file system, below */
 static void materialize_argv0(const char *name, const char *host);  /* below, once nodes exist */
 static void vfs_snapshot_init(char **envp);       /* below, once nodes exist */
 static int vfs_snapshot_export(void);             /* below, once nodes exist */
+static void runtime_init(char **envp);            /* below, once handles exist */
 static void mirror_init(char **envp);             /* the corpus mirror, below */
 
 __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char **envp)
@@ -304,6 +306,7 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 				if (!strncmp(envp[i], XSTATUS_FD_PREFIX, sizeof(XSTATUS_FD_PREFIX) - 1)) continue;
 				if (!strncmp(envp[i], XHOST_PREFIX, sizeof(XHOST_PREFIX) - 1)) continue;
 				if (!strncmp(envp[i], XVFS_PREFIX, sizeof(XVFS_PREFIX) - 1)) continue;
+				if (!strncmp(envp[i], XRUNTIME_PREFIX, sizeof(XRUNTIME_PREFIX) - 1)) continue;
 				environ[j] = __interceptor_malloc(strlen(envp[i]) + 1);
 				if (environ[j]) strcpy(environ[j], envp[i]);
 				j++;
@@ -315,6 +318,7 @@ __attribute__((constructor(200))) void __ntshim_init(int argc, char **argv, char
 		}
 	}
 	vfs_snapshot_init(envp);
+	runtime_init(envp);
 	__fd_init();
 	/* crt1.c calls __fenv_init() here too, and natively there is no
 	 * crt1.  Without this the startup floating-point environment is
@@ -1379,6 +1383,77 @@ static void of_drop(struct ofile *f)
 		}
 	}
 	vfree(f);
+}
+
+/* Carry the msvcrt-compatible RuntimeData block through the shim's real
+ * execve.  Ordinary host file handles need a real host-fd inheritance
+ * mapping and remain outside this model; the fixed VFS directories use
+ * unnamed events solely as lifetime carriers, so those can be recreated
+ * exactly enough for __fd_init() to restore their namespace metadata. */
+static int hex_digit(unsigned char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+static void runtime_init(char **envp)
+{
+	const char *encoded = 0;
+	unsigned char *block, *osfile, *osfhnd, *vfs;
+	size_t hexlen, length, base, i;
+	unsigned magic, trailer_count;
+	int count;
+
+	if (envp) for (i = 0; envp[i]; i++)
+		if (!strncmp(envp[i], XRUNTIME_PREFIX, sizeof(XRUNTIME_PREFIX) - 1)) {
+			encoded = envp[i] + sizeof(XRUNTIME_PREFIX) - 1;
+			break;
+		}
+	if (!encoded) return;
+	hexlen = strlen(encoded);
+	if ((hexlen & 1) || hexlen / 2 > 0xffffu) return;
+	length = hexlen / 2;
+	block = __interceptor_malloc(length ? length : 1);
+	if (!block) return;
+	for (i = 0; i < length; i++) {
+		int high = hex_digit((unsigned char)encoded[2 * i]);
+		int low = hex_digit((unsigned char)encoded[2 * i + 1]);
+		if (high < 0 || low < 0) { __interceptor_free(block); return; }
+		block[i] = (unsigned char)(high << 4 | low);
+	}
+	shim_pp.RuntimeData.Buffer = (PWSTR)block;
+	shim_pp.RuntimeData.Length = (USHORT)length;
+	shim_pp.RuntimeData.MaximumLength = (USHORT)length;
+	if (length < sizeof count) return;
+	memcpy(&count, block, sizeof count);
+	if (count < 0 || count > FD_MAX) return;
+	base = sizeof count + (size_t)count * (1 + sizeof(HANDLE));
+	if (length < base + 9 + 4 * (size_t)count) return;
+	memcpy(&magic, block + base, sizeof magic);
+	memcpy(&trailer_count, block + base + 4, sizeof trailer_count);
+	if (magic != 0x32534656u || trailer_count != (unsigned)count) return;
+	osfile = block + sizeof count;
+	osfhnd = osfile + count;
+	vfs = block + base + 8;
+	for (i = 0; i < (size_t)count; i++) {
+		HANDLE handle;
+		long slot;
+		struct ofile *file;
+		if (!(osfile[i] & 1) ||
+		    (vfs[i] != __VFS_ROOT && vfs[i] != __VFS_DEV)) continue;
+		memcpy(&handle, osfhnd + i * sizeof handle, sizeof handle);
+		slot = (long)handle - 1;
+		if (slot < 0 || slot >= VFS_HANDLES || vhandles[slot]) continue;
+		file = vmalloc(sizeof *file);
+		if (!file) continue;
+		memset(file, 0, sizeof *file);
+		file->kind = OF_EVENT;
+		file->refs = 1;
+		file->event_type = SynchronizationEvent;
+		vhandles[slot] = file;
+	}
 }
 
 /* ---- resolving an NT path to a (directory, leaf) pair ---- */
@@ -3261,6 +3336,13 @@ NTSTATUS NTAPI RtlCreateProcessParametersEx(PRTL_USER_PROCESS_PARAMETERS *out,
 		memcpy(pp->Environment, env, n * sizeof(WCHAR));
 		pp->EnvironmentSize = n * sizeof(WCHAR);
 	}
+	if (runtime && runtime->Buffer && runtime->Length) {
+		pp->RuntimeData.Buffer = vmalloc(runtime->Length);
+		if (!pp->RuntimeData.Buffer) { RtlDestroyProcessParameters(pp); return STATUS_NO_MEMORY; }
+		memcpy(pp->RuntimeData.Buffer, runtime->Buffer, runtime->Length);
+		pp->RuntimeData.Length = runtime->Length;
+		pp->RuntimeData.MaximumLength = runtime->Length;
+	}
 	*out = pp;
 	return STATUS_SUCCESS;
 }
@@ -3268,13 +3350,13 @@ NTSTATUS NTAPI RtlCreateProcessParametersEx(PRTL_USER_PROCESS_PARAMETERS *out,
 NTSTATUS NTAPI RtlDestroyProcessParameters(PRTL_USER_PROCESS_PARAMETERS pp)
 {
 	if (!pp) return STATUS_SUCCESS;
-	/* Only what RtlCreateProcessParametersEx allocated: RuntimeData points
-	 * at the caller's own buffer. */
+	/* Only what RtlCreateProcessParametersEx allocated. */
 	vfree(pp->ImagePathName.Buffer);
 	vfree(pp->CommandLine.Buffer);
 	vfree(pp->DllPath.Buffer);
 	vfree(pp->CurrentDirectory.DosPath.Buffer);
 	vfree(pp->Environment);
+	vfree(pp->RuntimeData.Buffer);
 	vfree(pp);
 	return STATUS_SUCCESS;
 }
@@ -3289,6 +3371,7 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	char *xstatus_entry = 0;
 	char *xhost_entry = 0;
 	char *xvfs_entry = 0;
+	char *xruntime_entry = 0;
 	struct ofile *f;
 	NTSTATUS st;
 	long pid;
@@ -3333,7 +3416,7 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 	 * envp's entries in a new array; the strings themselves are still
 	 * envp's to free below. */
 	for (n = 0; envp[n]; n++) ;
-	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 5));
+	xenvp = vmalloc(sizeof(char *) * (size_t)(n + 6));
 	if (xenvp) {
 		int m = n;
 		memcpy(xenvp, envp, sizeof(char *) * (size_t)n);
@@ -3364,6 +3447,22 @@ NTSTATUS NTAPI RtlCreateUserProcess(PUNICODE_STRING image, ULONG attrs,
 				snprintf(xstatus_entry, sizeof(XSTATUS_FD_PREFIX) + 10, "%s%d",
 				         XSTATUS_FD_PREFIX, xstatus_fd);
 				xenvp[m++] = xstatus_entry;
+			}
+		}
+		if (pp->RuntimeData.Buffer && pp->RuntimeData.Length) {
+			static const char hex[] = "0123456789abcdef";
+			const unsigned char *data = (const unsigned char *)pp->RuntimeData.Buffer;
+			size_t bytes = pp->RuntimeData.Length, j;
+			size_t prefix = sizeof(XRUNTIME_PREFIX) - 1;
+			xruntime_entry = vmalloc(prefix + 2 * bytes + 1);
+			if (xruntime_entry) {
+				memcpy(xruntime_entry, XRUNTIME_PREFIX, prefix);
+				for (j = 0; j < bytes; j++) {
+					xruntime_entry[prefix + 2 * j] = hex[data[j] >> 4];
+					xruntime_entry[prefix + 2 * j + 1] = hex[data[j] & 15];
+				}
+				xruntime_entry[prefix + 2 * bytes] = 0;
+				xenvp[m++] = xruntime_entry;
 			}
 		}
 		xenvp[m] = 0;
@@ -3401,6 +3500,7 @@ out:
 	vfree(xstatus_entry);
 	vfree(xhost_entry);
 	vfree(xvfs_entry);
+	vfree(xruntime_entry);
 	return st;
 }
 
