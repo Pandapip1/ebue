@@ -855,7 +855,7 @@ sem_init/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in
 sem_init/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_init/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_init/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sem_open/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_open/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_open/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
