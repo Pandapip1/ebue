@@ -5,19 +5,35 @@
  * while any function other than pthread_cancel(), pthread_setcancelstate(),
  * or pthread_setcanceltype() is executing.  ntlibc diagnoses the dangerous
  * subset in which redirecting a thread would abandon one of its internal
- * synchronization states.  These are death tests because the diagnostic
- * deliberately terminates the process instead of attempting recovery from
- * undefined behavior.
+ * synchronization states -- but the sleep family (nanosleep(), sleep(),
+ * usleep(), clock_nanosleep(), pause()) and the internal signal-state lock
+ * are NOT in that subset: none of them leave shared state half-updated if
+ * abandoned at an arbitrary instant (see src/unistd/sleep.c's comment on
+ * __alertable_delay(), and src/signal/sigdelivery.c's on __sig_lock()), and
+ * the OPEN POSIX Test Suite's pthread_cancel/2-1, 3-1, 4-1 and
+ * pthread_cleanup_push/1-2 depend on exactly this: they cancel a peer that
+ * is asleep and require it to unwind cleanly, not abort.  This file used to
+ * enshrine the opposite (a set of death tests asserting sleep()-family
+ * cancellation crashed the process); the OPTS regression the old behavior
+ * caused is what makes the corrected expectation here authoritative.
  *
- * Each sleep-family wrapper is tested separately.  Polling the internal
- * marker makes cancellation deterministic: the parent does not merely hope
- * a scheduling delay lands inside the wrapper.  The three current-thread
- * cases cover every non-redirect delivery gateway: direct self-cancel, a
- * pending request becoming enabled, and a pending request becoming async.
- * A nested deferred region proves that protecting an internal lock postpones
- * delivery without suppressing an enclosing unsafe-operation diagnostic.
- * Finally, deferred cancellation inside the same marked wait and async
- * cancellation outside it prove the check does not reject defined uses.
+ * What remains a genuine death test is the four cases that call
+ * __pthread_cancel_unsafe_enter()/_leave() directly with a synthetic
+ * region name: self-cancel, a pending request becoming enabled, a pending
+ * request becoming async, and a nested defer inside an unsafe region. None
+ * of these are tied to a real ntlibc wrapper -- they exercise the abort
+ * mechanism itself (every non-redirect delivery gateway, plus the rule
+ * that a nested defer inside an unsafe region postpones delivery without
+ * suppressing the enclosing diagnostic), so the mechanism stays covered
+ * even though no production code currently opts into it.
+ *
+ * The sleep-family and signal-lock cases instead prove safe, successful
+ * cancellation: a peer blocked in the wrapper (or holding the lock) is
+ * cancelled and joins as PTHREAD_CANCELED, not aborted. The signal-lock
+ * case additionally proves the lock still postpones delivery -- the
+ * request lands while the lock is held, and completion is checked only
+ * after the loop that holds it releases -- without needing the "unsafe"
+ * diagnostic to do it: __sig_lock() is a defer region, not an unsafe one.
  *
  * The -win suffix is intentional.  Under Wine, NtTerminateProcess() ends
  * each diagnostic child, but the corresponding NT process handle is not
@@ -39,10 +55,10 @@ extern char **environ;
 extern int __spawn(const char *, char *const *, char *const *);
 extern void __pthread_cancel_unsafe_enter(const char *);
 extern void __pthread_cancel_unsafe_leave(void);
-extern int __pthread_cancel_unsafe_active(pthread_t);
 extern void __pthread_cancel_defer_enter(void);
 extern void __pthread_cancel_defer_leave(void);
 extern void __sig_lock(void);
+extern void __sig_unlock(void);
 
 #define SURVIVED_EXIT 70
 
@@ -52,14 +68,26 @@ enum wait_kind {
 	WAIT_USLEEP,
 	WAIT_CLOCK_RELATIVE,
 	WAIT_CLOCK_ABSOLUTE,
-	WAIT_PAUSE,
-	WAIT_SIGNAL_LOCK
+	WAIT_PAUSE
 };
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
-static void *unsafe_waiter(void *argument)
+/* None of the waits below mark an unsafe or defer region of their own
+ * (see src/unistd/sleep.c), so there is no internal flag to poll for
+ * "the peer has entered the wrapper" the way the synthetic death-test
+ * regions below can be polled. Every wrapper here blocks for a full 30
+ * seconds; yielding a bounded, generous number of times before cancelling
+ * leaves an enormous margin against ever landing before the peer thread
+ * has reached its wait, without needing a dedicated marker. */
+static void settle_into_wait(void)
+{
+	int i;
+	for (i = 0; i < 1000; i++) sched_yield();
+}
+
+static void *safe_waiter(void *argument)
 {
 	enum wait_kind kind = (enum wait_kind)(intptr_t)argument;
 	struct timespec delay = { 30, 0 };
@@ -89,30 +117,17 @@ static void *unsafe_waiter(void *argument)
 	case WAIT_PAUSE:
 		pause();
 		break;
-	case WAIT_SIGNAL_LOCK:
-		__sig_lock();
-		for (;;) sched_yield();
 	}
 	return (void *)(intptr_t)SURVIVED_EXIT;
-}
-
-static int wait_until_unsafe(pthread_t thread)
-{
-	int i;
-	for (i = 0; i < 1000000; i++) {
-		if (__pthread_cancel_unsafe_active(thread)) return 0;
-		sched_yield();
-	}
-	return -1;
 }
 
 static int child_remote(enum wait_kind kind)
 {
 	pthread_t thread;
 	void *result = 0;
-	if (pthread_create(&thread, 0, unsafe_waiter,
+	if (pthread_create(&thread, 0, safe_waiter,
 	    (void *)(intptr_t)kind) != 0) return 73;
-	if (wait_until_unsafe(thread) != 0) return 74;
+	settle_into_wait();
 	if (pthread_cancel(thread) != 0) return 75;
 	if (pthread_join(thread, &result) != 0) return 76;
 	return result == PTHREAD_CANCELED ? SURVIVED_EXIT : 77;
@@ -171,13 +186,53 @@ static void *deferred_waiter(void *unused)
 	return (void *)(intptr_t)SURVIVED_EXIT;
 }
 
+/* nanosleep() no longer marks any unsafe/defer region of its own (see
+ * safe_waiter() above), so this is now simply the ordinary case: a
+ * default-DEFERRED-type peer blocked in an alertable wait, cancelled and
+ * expected to unwind via __pthread_testcancel() like any other deferred
+ * cancellation point. Kept as its own check because it is exactly the
+ * shape the OPTS pthread_cancel/2-1 conformance case exercises. */
 static int control_deferred_inside_unsafe(void)
 {
 	pthread_t thread;
 	void *result = 0;
 	if (pthread_create(&thread, 0, deferred_waiter, 0) != 0) return -1;
-	if (wait_until_unsafe(thread) != 0) return -1;
+	settle_into_wait();
 	if (pthread_cancel(thread) != 0) return -1;
+	if (pthread_join(thread, &result) != 0) return -1;
+	return result == PTHREAD_CANCELED ? 0 : -1;
+}
+
+static volatile int sig_lock_release;
+
+static void *sig_lock_waiter(void *unused)
+{
+	(void)unused;
+	if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0) != 0)
+		return (void *)(intptr_t)71;
+	__sig_lock();
+	while (!sig_lock_release) sched_yield();
+	__sig_unlock();
+	/* Reached only if cancellation was NOT correctly deferred and
+	 * delivered from inside __sig_unlock()'s outermost defer_leave. */
+	return (void *)(intptr_t)SURVIVED_EXIT;
+}
+
+/* __sig_lock()/__sig_unlock() are a defer region, not an unsafe one (see
+ * src/signal/sigdelivery.c). Cancelling a peer while it holds the lock
+ * must not abort and must not take effect until the lock is released:
+ * pthread_cancel() is issued while sig_lock_waiter() is still spinning
+ * inside the lock, and only after that does this function let it proceed
+ * to __sig_unlock(), where the deferred cancellation is expected to fire. */
+static int control_sig_lock_defers(void)
+{
+	pthread_t thread;
+	void *result = 0;
+	sig_lock_release = 0;
+	if (pthread_create(&thread, 0, sig_lock_waiter, 0) != 0) return -1;
+	settle_into_wait();
+	if (pthread_cancel(thread) != 0) return -1;
+	sig_lock_release = 1;
 	if (pthread_join(thread, &result) != 0) return -1;
 	return result == PTHREAD_CANCELED ? 0 : -1;
 }
@@ -245,15 +300,22 @@ static void expect_ub(const char *self, const char *mode, const char *region)
 	CHECK(strstr(output, region) != 0);
 }
 
+/* The mirror image of expect_ub() above: the peer must unwind cleanly
+ * through PTHREAD_CANCELED, not abort. */
+static void expect_safe_cancel(const char *self, const char *mode)
+{
+	char output[256] = { 0 };
+	int status = 0;
+	CHECK(run_child(self, mode, &status, output, sizeof output) == 0);
+	CHECK(WIFEXITED(status));
+	if (WIFEXITED(status)) CHECK(WEXITSTATUS(status) == SURVIVED_EXIT);
+}
+
 int main(int argc, char **argv)
 {
 	static const char *const remote_modes[] = {
 		"--nanosleep", "--sleep", "--usleep", "--clock-relative",
-		"--clock-absolute", "--pause", "--signal-lock"
-	};
-	static const char *const remote_regions[] = {
-		"nanosleep()", "sleep()", "usleep()", "clock_nanosleep()",
-		"clock_nanosleep()", "pause()", "signal-state lock"
+		"--clock-absolute", "--pause"
 	};
 	int i;
 
@@ -271,11 +333,13 @@ int main(int argc, char **argv)
 			return control_deferred_inside_unsafe() != 0;
 		if (!strcmp(argv[1], "--control-async"))
 			return control_async_outside_unsafe() != 0;
+		if (!strcmp(argv[1], "--control-sig-lock"))
+			return control_sig_lock_defers() != 0;
 		return 78;
 	}
 
 	for (i = 0; i < (int)(sizeof remote_modes / sizeof remote_modes[0]); i++)
-		expect_ub(argv[0], remote_modes[i], remote_regions[i]);
+		expect_safe_cancel(argv[0], remote_modes[i]);
 	expect_ub(argv[0], "--self-cancel", "self-cancel test region");
 	expect_ub(argv[0], "--enable-pending", "cancel-enable test region");
 	expect_ub(argv[0], "--make-pending-async", "cancel-type test region");
@@ -283,6 +347,7 @@ int main(int argc, char **argv)
 		"unsafe operation around state lock");
 	CHECK(control_deferred_inside_unsafe() == 0);
 	CHECK(control_async_outside_unsafe() == 0);
+	CHECK(control_sig_lock_defers() == 0);
 
 	if (fails) printf("pthread-async-ub: %d failure(s)\n", fails);
 	else printf("pthread-async-ub: ok\n");
