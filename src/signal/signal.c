@@ -57,15 +57,22 @@
 
 static void (*handlers[_NSIG])(int);
 static __thread sigset_t blocked;
-static __thread sigset_t thread_pending;
-static sigset_t pending;
 
 /* Standard signals coalesce while pending. Real-time signals retain one
  * record per generation, in FIFO order within a signal number.  Selection
  * scans signal numbers first, which gives POSIX's lowest-real-time-signal
  * priority without disturbing that FIFO. */
-static siginfo_t pending_info[SIGQUEUE_MAX];
-static int pending_count;
+struct pending_state {
+	sigset_t set;
+	siginfo_t info[SIGQUEUE_MAX];
+	int count;
+};
+static struct pending_state process_pending;
+static __thread struct pending_state thread_pending;
+/* raise() is thread-directed.  Other entries into __raise_internal_info()
+ * are process-directed and retain the shared pending queue used by the
+ * cross-process delivery thread. */
+static __thread int thread_directed;
 static sigset_t waiting_set;
 static int wait_active;
 
@@ -85,7 +92,7 @@ void __sig_current_mask_copy(sigset_t *mask)
 void __sig_current_mask_install(const sigset_t *mask)
 {
 	blocked = *mask;
-	sigemptyset(&thread_pending);
+	memset(&thread_pending, 0, sizeof thread_pending);
 }
 
 /* Set only by exception_handler(), immediately around its call into
@@ -115,44 +122,59 @@ static void make_siginfo(siginfo_t *si, int sig)
 
 static int queue_pending(int sig, const siginfo_t *si)
 {
+	struct pending_state *state = thread_directed ? &thread_pending : &process_pending;
 	int realtime = sig >= SIGRTMIN && sig <= SIGRTMAX;
-	if (!realtime && sigismember(&pending, sig)) return 0;
-	if (pending_count >= SIGQUEUE_MAX) { errno = EAGAIN; return -1; }
-	pending_info[pending_count++] = *si;
-	sigaddset(&pending, sig);
+	if (!realtime && sigismember(&state->set, sig)) return 0;
+	if (state->count >= SIGQUEUE_MAX) { errno = EAGAIN; return -1; }
+	state->info[state->count++] = *si;
+	sigaddset(&state->set, sig);
 	return 0;
 }
 
-static int take_pending_signal(int sig, siginfo_t *si)
+static int take_pending_signal_from(struct pending_state *state, int sig,
+				    siginfo_t *si)
 {
 	int i;
-	for (i = 0; i < pending_count; i++) {
-		if (pending_info[i].si_signo != sig) continue;
-		if (si) *si = pending_info[i];
-		pending_count--;
-		memmove(&pending_info[i], &pending_info[i + 1],
-		        (size_t)(pending_count - i) * sizeof pending_info[0]);
-		for (i = 0; i < pending_count; i++)
-			if (pending_info[i].si_signo == sig) return 1;
-		sigdelset(&pending, sig);
+	for (i = 0; i < state->count; i++) {
+		if (state->info[i].si_signo != sig) continue;
+		if (si) *si = state->info[i];
+		state->count--;
+		memmove(&state->info[i], &state->info[i + 1],
+		        (size_t)(state->count - i) * sizeof state->info[0]);
+		for (i = 0; i < state->count; i++)
+			if (state->info[i].si_signo == sig) return 1;
+		sigdelset(&state->set, sig);
 		return 1;
 	}
 	/* Accommodate pending state copied from an older process image or
 	 * produced before the queue existed: it has no payload, but it is
 	 * still a real pending signal and must remain consumable. */
-	if (sigismember(&pending, sig)) {
+	if (sigismember(&state->set, sig)) {
 		if (si) make_siginfo(si, sig);
-		sigdelset(&pending, sig);
+		sigdelset(&state->set, sig);
 		return 1;
 	}
 	return 0;
+}
+
+static int pending_member(int sig)
+{
+	return sigismember(&thread_pending.set, sig) ||
+	       sigismember(&process_pending.set, sig);
+}
+
+static int take_pending_signal(int sig, siginfo_t *si)
+{
+	if (sigismember(&thread_pending.set, sig))
+		return take_pending_signal_from(&thread_pending, sig, si);
+	return take_pending_signal_from(&process_pending, sig, si);
 }
 
 static int take_pending_from_set(const sigset_t *set, siginfo_t *si)
 {
 	int sig;
 	for (sig = 1; sig < _NSIG; sig++)
-		if (sigismember(set, sig) && sigismember(&pending, sig)) {
+		if (sigismember(set, sig) && pending_member(sig)) {
 			take_pending_signal(sig, si);
 			return sig;
 		}
@@ -208,8 +230,10 @@ void (*signal(int sig, void (*h)(int)))(int)
 	__sig_lock();
 	old = handlers[sig];
 	handlers[sig] = h;
-	if (h == SIG_IGN || (h == SIG_DFL && !default_action(sig)))
-		sigdelset(&pending, sig);
+	if (h == SIG_IGN || (h == SIG_DFL && !default_action(sig))) {
+		sigdelset(&process_pending.set, sig);
+		sigdelset(&thread_pending.set, sig);
+	}
 	__sig_unlock();
 	return old;
 }
@@ -232,8 +256,10 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
 	if (act) {
 		handlers[sig] = act->sa_handler;
 		if (act->sa_handler == SIG_IGN ||
-		    (act->sa_handler == SIG_DFL && !default_action(sig)))
-			sigdelset(&pending, sig);
+		    (act->sa_handler == SIG_DFL && !default_action(sig))) {
+			sigdelset(&process_pending.set, sig);
+			sigdelset(&thread_pending.set, sig);
+		}
 		act_mask[sig] = act->sa_mask;
 		/* SA_RESTART: meaningful for exactly one caller now,
 		 * src/select/select.c's select()/pselect() -- see that file's
@@ -592,27 +618,36 @@ int __raise_internal(int sig) { return __raise_internal_info(sig, 0); }
 int __raise_thread_internal(int sig)
 {
 	int pending_sig;
+	int result;
 
 	/* A process-directed signal generated by a thread which blocks it is
 	 * left process-pending.  A later thread-directed delivery is a safe
 	 * point on the target thread: claim every process-pending signal that
 	 * this thread can accept before delivering the requested one. */
 	for (pending_sig = 1; pending_sig < _NSIG; pending_sig++) {
-		while (sigismember(&pending, pending_sig) &&
+		while (sigismember(&process_pending.set, pending_sig) &&
 		       !sigismember(&blocked, pending_sig)) {
 			siginfo_t info;
-			take_pending_signal(pending_sig, &info);
+			take_pending_signal_from(&process_pending, pending_sig, &info);
 			__raise_internal_info(pending_sig, &info);
 		}
 	}
-	if (sigismember(&blocked, sig)) {
-		sigaddset(&thread_pending, sig);
-		return 0;
-	}
-	return __raise_internal(sig);
+	thread_directed++;
+	result = __raise_internal(sig);
+	thread_directed--;
+	return result;
 }
 
-int raise(int sig) { int r; __sig_lock(); r = __raise_internal(sig); __sig_unlock(); return r < 0 ? -1 : 0; }
+int raise(int sig)
+{
+	int r;
+	__sig_lock();
+	thread_directed++;
+	r = __raise_internal(sig);
+	thread_directed--;
+	__sig_unlock();
+	return r < 0 ? -1 : 0;
+}
 
 /* The signals whose default action is "stop the process" -- action S in
  * signal.h.html's Default Action column: SIGSTOP, and the three
@@ -753,10 +788,17 @@ int kill(pid_t pid, int sig)
 	 * (1) that names no real process -- ESRCH for a call POSIX
 	 * requires to succeed against the caller's own, real, group. */
 	if (pid == getpid() || pid == getpgrp() || pid == 0 || pid == -1) {
+		int result;
 		if (!sig) return 0;
-		/* raise() also handles self-stops: it publishes a waitable marker
-		 * for the parent before suspending this process. */
-		return raise(sig);
+		/* kill() is process-directed even when its target set contains only
+		 * this process.  Do not route it through raise(), whose pending state
+		 * belongs specifically to the calling thread.  The shared internal
+		 * path still handles self-stops by publishing a waitable marker for
+		 * the parent before suspending this process. */
+		__sig_lock();
+		result = __raise_internal(sig);
+		__sig_unlock();
+		return result < 0 ? -1 : 0;
 	}
 	if (pid < 0) { errno = ESRCH; return -1; }
 	c = __child_find(pid);
@@ -881,15 +923,10 @@ static void drain_unblocked_pending(void)
 {
 	int i;
 	for (i = 1; i < _NSIG; i++) {
-		while (sigismember(&pending, i) && !sigismember(&blocked, i)) {
+		while (pending_member(i) && !sigismember(&blocked, i)) {
 			siginfo_t si;
 			take_pending_signal(i, &si);
 			__raise_internal_info(i, &si);
-		}
-		if (sigismember(&thread_pending, i) &&
-		    !sigismember(&blocked, i)) {
-			sigdelset(&thread_pending, i);
-			__raise_internal(i);
 		}
 	}
 }
@@ -943,17 +980,12 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)
 int sigpending(sigset_t *s)
 {
 	__sig_lock();
-	*s = pending;
-	sigorset(s, s, &thread_pending);
+	sigorset(s, &process_pending.set, &thread_pending.set);
 	__sig_unlock();
 	return 0;
 }
 
-int __sig_pending_member(int sig)
-{
-	return sigismember(&pending, sig) ||
-		sigismember(&thread_pending, sig);
-}
+int __sig_pending_member(int sig) { return pending_member(sig); }
 
 int sigsuspend(const sigset_t *s)
 {
@@ -993,9 +1025,8 @@ int sigsuspend(const sigset_t *s)
 
 void __sig_pending_reset_after_fork(void)
 {
-	sigemptyset(&pending);
-	sigemptyset(&thread_pending);
-	pending_count = 0;
+	memset(&process_pending, 0, sizeof process_pending);
+	memset(&thread_pending, 0, sizeof thread_pending);
 	wait_active = 0;
 }
 
@@ -1065,7 +1096,7 @@ int sigqueue(pid_t pid, int sig, union sigval value)
  * The suspend path is a real wait, not a fabricated return.  Nothing on
  * the main thread can make a signal pending while it is parked inside
  * this loop -- self-generated delivery is synchronous (see this file's
- * banner) -- but two other threads reach `pending` through
+ * banner) -- but two other threads reach the process-pending queue through
  * __raise_internal() from outside this loop: the NTLIBC_USE_KERNEL32
  * console-control handler kernel32 creates, and (as of
  * src/signal/sigdelivery.c) this process's own cross-process-signal
@@ -1494,7 +1525,8 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 #ifdef NTLIBC_USE_KERNEL32
 /* Runs on a thread kernel32 creates for the purpose, not on the main
  * thread -- so this races a main thread that is, say, in the middle of
- * sigprocmask() touching the same `handlers`/`blocked`/`pending`
+ * sigprocmask() touching the same `handlers`, `blocked`, and
+ * `process_pending`
  * globals, exactly the way src/signal/sigdelivery.c's delivery thread
  * does. __sig_lock()/__sig_unlock() (defined there) cover both: this
  * was the first real extra thread in this library, before this change

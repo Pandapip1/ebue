@@ -21,6 +21,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
@@ -525,6 +526,64 @@ static void test_sigpending(void)
 	CHECK(sigpending(&pend) == 0);
 	CHECK(sigismember(&pend, SIGUSR1) == 0);   /* no longer pending once delivered */
 	signal(SIGUSR1, SIG_DFL);
+}
+
+struct new_thread_signal_state {
+	sigset_t mask;
+	sigset_t pending;
+	int mask_result;
+	int pending_result;
+};
+
+static void *capture_new_thread_signal_state(void *argument)
+{
+	struct new_thread_signal_state *state = argument;
+	state->mask_result = pthread_sigmask(SIG_SETMASK, NULL, &state->mask);
+	state->pending_result = sigpending(&state->pending);
+	return NULL;
+}
+
+static void test_new_thread_pending_empty(void)
+{
+	struct new_thread_signal_state state;
+	void (*old_usr1)(int), (*old_usr2)(int);
+	sigset_t block, old, pending;
+	pthread_t thread;
+
+	/* pthread_create.html: "The signal mask shall be inherited from the
+	 * creating thread" but "The set of signals pending for the new thread
+	 * shall be empty."  raise() is thread-directed, so signals pending for
+	 * this thread must not leak into the new thread's initial state. */
+	memset(&state, 0, sizeof state);
+	CHECK(sigemptyset(&block) == 0);
+	CHECK(sigaddset(&block, SIGUSR1) == 0);
+	CHECK(sigaddset(&block, SIGUSR2) == 0);
+	CHECK(pthread_sigmask(SIG_BLOCK, &block, &old) == 0);
+	CHECK(raise(SIGUSR1) == 0);
+	CHECK(raise(SIGUSR2) == 0);
+	CHECK(sigpending(&pending) == 0);
+	CHECK(sigismember(&pending, SIGUSR1) == 1);
+	CHECK(sigismember(&pending, SIGUSR2) == 1);
+
+	CHECK(pthread_create(&thread, NULL, capture_new_thread_signal_state,
+	                     &state) == 0);
+	CHECK(pthread_join(thread, NULL) == 0);
+	CHECK(state.mask_result == 0);
+	CHECK(state.pending_result == 0);
+	CHECK(sigismember(&state.mask, SIGUSR1) == 1);
+	CHECK(sigismember(&state.mask, SIGUSR2) == 1);
+	CHECK(sigismember(&state.pending, SIGUSR1) == 0);
+	CHECK(sigismember(&state.pending, SIGUSR2) == 0);
+
+	/* Discard this thread's two pending signals before restoring its mask,
+	 * without disturbing whatever dispositions the caller had installed. */
+	old_usr1 = signal(SIGUSR1, SIG_IGN);
+	old_usr2 = signal(SIGUSR2, SIG_IGN);
+	CHECK(old_usr1 != SIG_ERR);
+	CHECK(old_usr2 != SIG_ERR);
+	CHECK(pthread_sigmask(SIG_SETMASK, &old, NULL) == 0);
+	if (old_usr1 != SIG_ERR) CHECK(signal(SIGUSR1, old_usr1) != SIG_ERR);
+	if (old_usr2 != SIG_ERR) CHECK(signal(SIGUSR2, old_usr2) != SIG_ERR);
 }
 
 static volatile sig_atomic_t queued_handler_value;
@@ -1863,6 +1922,7 @@ int main(int argc, char **argv)
 	test_sigsetops();
 	test_sigprocmask();
 	test_sigpending();
+	test_new_thread_pending_empty();
 	test_realtime_signal_queue();
 	test_sigsuspend_wait();
 	test_abort_overrides(argv[0]);
