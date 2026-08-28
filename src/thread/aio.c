@@ -59,6 +59,7 @@ static struct aio_group groups[AIO_MAX];
 static unsigned long long next_sequence;
 static HANDLE worker_wake;
 static int worker_started;
+static int worker_synchronous;
 
 static ULONG NTAPI notice_thread(PVOID argument)
 {
@@ -200,6 +201,11 @@ static int start_worker(void)
 	InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
 	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, &attributes,
 	                       SynchronizationEvent, FALSE);
+	if (status == STATUS_NOT_IMPLEMENTED) {
+		worker_synchronous = 1;
+		worker_started = 1;
+		return 0;
+	}
 	if (!NT_SUCCESS(status)) { errno = EAGAIN; return -1; }
 	worker_wake = event;
 	status = NtCreateThreadEx(&thread, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
@@ -207,6 +213,11 @@ static int start_worker(void)
 	if (!NT_SUCCESS(status)) {
 		worker_wake = 0;
 		NtClose(event);
+		if (status == STATUS_NOT_IMPLEMENTED) {
+			worker_synchronous = 1;
+			worker_started = 1;
+			return 0;
+		}
 		errno = EAGAIN;
 		return -1;
 	}
@@ -228,8 +239,10 @@ static int valid_event(const struct sigevent *event)
 static int submit(struct aiocb *cb, int op, struct aio_group *group)
 {
 	struct aio_request *request = 0;
+	struct sigevent individual, list;
+	ssize_t result;
 	LONG previous;
-	int i;
+	int error, have_individual, have_list, i;
 
 	if (!cb ||
 	    ((op == OP_READ || op == OP_WRITE) &&
@@ -262,6 +275,18 @@ static int submit(struct aiocb *cb, int op, struct aio_group *group)
 	request->cb = cb;
 	request->group = group;
 	cb->__nt_request = request;
+	if (worker_synchronous) {
+		request->state = REQ_RUNNING;
+		__sig_unlock();
+		result = perform(request, &error);
+		__sig_lock();
+		finish_locked(request, error, result, &individual, &have_individual,
+		              &list, &have_list);
+		__sig_unlock();
+		if (have_individual) notify(&individual);
+		if (have_list) notify(&list);
+		return 0;
+	}
 	NtSetEvent(worker_wake, &previous);
 	__sig_unlock();
 	return 0;
