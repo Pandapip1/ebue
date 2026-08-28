@@ -434,6 +434,31 @@ static inline long long __nt_to_unix_sec(long long t) { return (t - __TICKS_1601
 static inline long __nt_to_unix_nsec(long long t) { return (long)((t - __TICKS_1601_TO_1970) % __TICKS_PER_SEC) * 100; }
 static inline long long __unix_to_nt(long long sec, long nsec) { return sec * __TICKS_PER_SEC + nsec / 100 + __TICKS_1601_TO_1970; }
 
+/* Return the positive distance from start to end in NT's 100 ns units,
+ * rounded up and saturated at the largest relative LARGE_INTEGER.  The
+ * unsigned subtraction is intentional: after the lexical ordering check it
+ * is the mathematical difference even when the two signed seconds straddle
+ * zero, without evaluating an overflowing signed subtraction first. */
+static inline long long __timespec_diff_ticks(long long end_sec, long end_nsec,
+	long long start_sec, long start_nsec)
+{
+	unsigned long long seconds;
+	long nseconds;
+	long long subsecond;
+	if (end_sec < start_sec ||
+	    (end_sec == start_sec && end_nsec <= start_nsec)) return 0;
+	seconds = (unsigned long long)end_sec - (unsigned long long)start_sec;
+	nseconds = end_nsec - start_nsec;
+	if (nseconds < 0) {
+		seconds--;
+		nseconds += 1000000000L;
+	}
+	subsecond = (nseconds + 99L) / 100L;
+	if (seconds > (unsigned long long)(INT64_MAX - subsecond) /
+	    (unsigned long long)__TICKS_PER_SEC) return INT64_MAX;
+	return (long long)seconds * __TICKS_PER_SEC + subsecond;
+}
+
 /* src/unistd/sleep.c's alertable, signal-interruptible wait -- the one
  * place nanosleep()/sleep()/usleep() actually honour EINTR against a
  * signal-catching function.  Shared with clock_nanosleep()

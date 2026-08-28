@@ -243,11 +243,11 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 		long long ticks;
 		NTSTATUS status;
 		clock_gettime(CLOCK_REALTIME, &now);
-		ticks = ((long long)absolute->tv_sec - now.tv_sec) * 10000000LL +
-			(absolute->tv_nsec - now.tv_nsec + 99) / 100;
+		ticks = __timespec_diff_ticks(absolute->tv_sec,
+			absolute->tv_nsec, now.tv_sec, now.tv_nsec);
 		if (ticks <= 0) status = STATUS_TIMEOUT;
 		else {
-			ticks += 10000;
+			if (ticks <= INT64_MAX - 10000) ticks += 10000;
 			timeout = -ticks;
 			status = NtWaitForSingleObject(waiter->semaphore, TRUE, &timeout);
 		}

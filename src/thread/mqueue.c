@@ -416,13 +416,13 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 		__sig_drain_pending();
 		if (__sig_thread_caught_count() != caught) { errno = EINTR; break; }
 		if (timed) {
-			long long ns;
+			long long ticks;
 			clock_gettime(CLOCK_REALTIME, &now);
-			ns = (long long)(abstime->tv_sec - now.tv_sec) * 1000000000LL +
-			     abstime->tv_nsec - now.tv_nsec;
-			if (ns <= 0) { errno = ETIMEDOUT; break; }
-			if (ns > 50000000LL) ns = 50000000LL;
-			slice = -(ns / 100);
+			ticks = __timespec_diff_ticks(abstime->tv_sec,
+				abstime->tv_nsec, now.tv_sec, now.tv_nsec);
+			if (ticks <= 0) { errno = ETIMEDOUT; break; }
+			if (ticks > 500000) ticks = 500000;
+			slice = -ticks;
 		} else slice = -500000;
 		st = NtWaitForSingleObject(count, TRUE, &slice);
 		if (st == STATUS_WAIT_0) break;

@@ -269,12 +269,33 @@ static void test_pthread_cleanup_push_pop(void)
 
 #if NTLIBC_TEST(PASS, posix_pthread_mutex_lock_unlock)
 #include <pthread.h>
+#include <semaphore.h>
 #include <errno.h>
+#include <limits.h>
+
+struct timed_mutex_case {
+	pthread_mutex_t *mutex;
+	sem_t ready;
+};
+
+static void *release_timed_mutex(void *argument)
+{
+	struct timed_mutex_case *test = argument;
+	struct timespec delay = { 0, 20000000L };
+	CHECK(pthread_mutex_lock(test->mutex) == 0);
+	CHECK(sem_post(&test->ready) == 0);
+	nanosleep(&delay, NULL);
+	CHECK(pthread_mutex_unlock(test->mutex) == 0);
+	return NULL;
+}
 
 static void test_pthread_mutex_lock_unlock(void)
 {
 	pthread_mutex_t stat_mtx = PTHREAD_MUTEX_INITIALIZER;
 	pthread_mutex_t mtx;
+	struct timed_mutex_case timed;
+	struct timespec extreme_future = { LLONG_MAX, 999999999L };
+	pthread_t releaser;
 
 	/* pthread_mutex_init.html: "In cases where default mutex
 	 * attributes are appropriate, the macro PTHREAD_MUTEX_INITIALIZER
@@ -299,8 +320,18 @@ static void test_pthread_mutex_lock_unlock(void)
 	 * ERRORS: "[EBUSY] The mutex could not be acquired because it was
 	 * already locked." */
 	CHECK(pthread_mutex_trylock(&mtx) == EBUSY);
-
 	CHECK(pthread_mutex_unlock(&mtx) == 0);
+
+	/* A deadline at time_t's upper bound is valid and far in the future.
+	 * The old signed conversion wrapped it into an expired timeout. */
+	timed.mutex = &mtx;
+	CHECK(sem_init(&timed.ready, 0, 0) == 0);
+	CHECK(pthread_create(&releaser, NULL, release_timed_mutex, &timed) == 0);
+	CHECK(sem_wait(&timed.ready) == 0);
+	CHECK(pthread_mutex_timedlock(&mtx, &extreme_future) == 0);
+	CHECK(pthread_mutex_unlock(&mtx) == 0);
+	CHECK(pthread_join(releaser, NULL) == 0);
+	CHECK(sem_destroy(&timed.ready) == 0);
 	CHECK(pthread_mutex_trylock(&mtx) == 0);
 	CHECK(pthread_mutex_unlock(&mtx) == 0);
 	CHECK(pthread_mutex_destroy(&mtx) == 0);
@@ -415,6 +446,21 @@ static void test_pthread_pshared_recursive_owner_after_fork(void)
 #include <pthread.h>
 #include <time.h>
 #include <errno.h>
+#include <limits.h>
+
+struct timed_cond_case {
+	pthread_cond_t *cond;
+	pthread_mutex_t *mutex;
+};
+
+static void *signal_timed_cond(void *argument)
+{
+	struct timed_cond_case *test = argument;
+	CHECK(pthread_mutex_lock(test->mutex) == 0);
+	CHECK(pthread_cond_signal(test->cond) == 0);
+	CHECK(pthread_mutex_unlock(test->mutex) == 0);
+	return NULL;
+}
 
 static void test_pthread_cond_timedwait_etimedout(void)
 {
@@ -422,6 +468,8 @@ static void test_pthread_cond_timedwait_etimedout(void)
 	pthread_cond_t cv;
 	pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 	struct timespec ts;
+	struct timed_cond_case timed;
+	pthread_t signaler;
 
 	/* pthread_cond_init.html: "In cases where default condition
 	 * variable attributes are appropriate, the macro
@@ -454,6 +502,18 @@ static void test_pthread_cond_timedwait_etimedout(void)
 	ts.tv_sec -= 1;
 	CHECK(pthread_cond_timedwait(&cv, &mtx, &ts) == ETIMEDOUT);
 	CHECK(pthread_mutex_unlock(&mtx) == 0);
+
+	/* Registering the waiter while holding mtx forces the signaler below
+	 * to run only after cond_wait has atomically released it. */
+	timed.cond = &cv;
+	timed.mutex = &mtx;
+	CHECK(pthread_mutex_lock(&mtx) == 0);
+	CHECK(pthread_create(&signaler, NULL, signal_timed_cond, &timed) == 0);
+	ts.tv_sec = LLONG_MAX;
+	ts.tv_nsec = 999999999L;
+	CHECK(pthread_cond_timedwait(&cv, &mtx, &ts) == 0);
+	CHECK(pthread_mutex_unlock(&mtx) == 0);
+	CHECK(pthread_join(signaler, NULL) == 0);
 
 	CHECK(pthread_cond_destroy(&cv) == 0);
 	CHECK(pthread_mutex_destroy(&mtx) == 0);
@@ -506,13 +566,34 @@ static void test_pthread_condattr_clock(void)
 
 #if NTLIBC_TEST(PASS, posix_pthread_rwlock_shared_read)
 #include <pthread.h>
+#include <semaphore.h>
 #include <errno.h>
+#include <limits.h>
+
+struct timed_rwlock_case {
+	pthread_rwlock_t *lock;
+	sem_t ready;
+};
+
+static void *release_timed_rwlock(void *argument)
+{
+	struct timed_rwlock_case *test = argument;
+	struct timespec delay = { 0, 20000000L };
+	CHECK(pthread_rwlock_rdlock(test->lock) == 0);
+	CHECK(sem_post(&test->ready) == 0);
+	nanosleep(&delay, NULL);
+	CHECK(pthread_rwlock_unlock(test->lock) == 0);
+	return NULL;
+}
 
 static void test_pthread_rwlock_shared_read(void)
 {
 	pthread_rwlock_t stat_rw = PTHREAD_RWLOCK_INITIALIZER;
 	pthread_rwlock_t rw;
 	pthread_rwlockattr_t attr;
+	struct timed_rwlock_case timed;
+	struct timespec extreme_future = { LLONG_MAX, 999999999L };
+	pthread_t releaser;
 	int pshared = -1;
 
 	/* pthread_rwlock_init.html: "In cases where default read-write
@@ -543,10 +624,18 @@ static void test_pthread_rwlock_shared_read(void)
 	 * read-write lock could not be acquired for writing because it was
 	 * already locked for reading or writing." */
 	CHECK(pthread_rwlock_trywrlock(&rw) == EBUSY);
+	CHECK(pthread_rwlock_unlock(&rw) == 0);
+	CHECK(pthread_rwlock_unlock(&rw) == 0);
+	CHECK(pthread_rwlock_unlock(&rw) == 0);
 
+	timed.lock = &rw;
+	CHECK(sem_init(&timed.ready, 0, 0) == 0);
+	CHECK(pthread_create(&releaser, NULL, release_timed_rwlock, &timed) == 0);
+	CHECK(sem_wait(&timed.ready) == 0);
+	CHECK(pthread_rwlock_timedwrlock(&rw, &extreme_future) == 0);
 	CHECK(pthread_rwlock_unlock(&rw) == 0);
-	CHECK(pthread_rwlock_unlock(&rw) == 0);
-	CHECK(pthread_rwlock_unlock(&rw) == 0);
+	CHECK(pthread_join(releaser, NULL) == 0);
+	CHECK(sem_destroy(&timed.ready) == 0);
 
 	/* All reads released: the write lock is now available, and while
 	 * it is held a read must report [EBUSY] in turn. */

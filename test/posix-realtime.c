@@ -111,11 +111,25 @@ static void test_posix_realtime_sem_init_count(void)
 #include <semaphore.h>
 #include <time.h>
 #include <errno.h>
+#include <limits.h>
+#include <pthread.h>
+
+static sem_t *timed_sem_to_post;
+
+static void *post_timed_sem(void *unused)
+{
+	struct timespec delay = { 0, 20000000L };
+	(void)unused;
+	nanosleep(&delay, NULL);
+	CHECK(sem_post(timed_sem_to_post) == 0);
+	return NULL;
+}
 
 static void test_posix_realtime_sem_timedwait_etimedout(void)
 {
 	sem_t sem;
 	struct timespec ts;
+	pthread_t poster;
 
 	CHECK(sem_init(&sem, 0, 0) == 0);
 
@@ -139,6 +153,15 @@ static void test_posix_realtime_sem_timedwait_etimedout(void)
 	 * checked." */
 	CHECK(sem_post(&sem) == 0);
 	CHECK(sem_timedwait(&sem, &ts) == 0);
+
+	/* Force the timeout conversion before another thread makes the
+	 * semaphore available.  LLONG_MAX used to wrap to a past deadline. */
+	timed_sem_to_post = &sem;
+	CHECK(pthread_create(&poster, NULL, post_timed_sem, NULL) == 0);
+	ts.tv_sec = LLONG_MAX;
+	ts.tv_nsec = 999999999L;
+	CHECK(sem_timedwait(&sem, &ts) == 0);
+	CHECK(pthread_join(poster, NULL) == 0);
 
 	CHECK(sem_destroy(&sem) == 0);
 }
@@ -385,6 +408,71 @@ static void test_posix_realtime_mq_send_receive_priority(void)
 
 	CHECK(mq_close(q) == 0);
 	CHECK(mq_unlink("/ntlibc_posix_realtime_q") == 0);
+}
+#endif
+
+#if NTLIBC_TEST(PASS, posix_realtime_mq_timed_extreme_past)
+#include <mqueue.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <time.h>
+#include <pthread.h>
+
+struct timed_mq_case {
+	mqd_t q;
+	int send;
+};
+
+static void *release_timed_mq(void *argument)
+{
+	struct timed_mq_case *test = argument;
+	struct timespec delay = { 0, 20000000L };
+	char byte;
+	nanosleep(&delay, NULL);
+	if (test->send)
+		CHECK(mq_send(test->q, "x", 1, 0) == 0);
+	else
+		CHECK(mq_receive(test->q, &byte, 1, NULL) == 1);
+	return NULL;
+}
+
+static void test_posix_realtime_mq_timed_extreme_past(void)
+{
+	struct mq_attr attr;
+	struct timespec future = { LLONG_MAX, 999999999L };
+	struct timed_mq_case timed;
+	pthread_t releaser;
+	mqd_t q;
+	char byte;
+
+	memset(&attr, 0, sizeof attr);
+	attr.mq_maxmsg = 1;
+	attr.mq_msgsize = 1;
+	mq_unlink("/ntlibc_posix_realtime_timed");
+	q = mq_open("/ntlibc_posix_realtime_timed",
+		O_CREAT | O_EXCL | O_RDWR, 0600, &attr);
+	CHECK(q != (mqd_t)-1);
+	if (q == (mqd_t)-1) return;
+
+	/* Both interfaces must keep waiting on a valid extreme-future
+	 * deadline until the peer makes progress; the old subtraction and
+	 * nanosecond multiplication wrapped and reported ETIMEDOUT. */
+	timed.q = q;
+	timed.send = 1;
+	CHECK(pthread_create(&releaser, NULL, release_timed_mq, &timed) == 0);
+	CHECK(mq_timedreceive(q, &byte, 1, NULL, &future) == 1);
+	CHECK(byte == 'x');
+	CHECK(pthread_join(releaser, NULL) == 0);
+	CHECK(mq_send(q, "x", 1, 0) == 0);
+	timed.send = 0;
+	CHECK(pthread_create(&releaser, NULL, release_timed_mq, &timed) == 0);
+	CHECK(mq_timedsend(q, "y", 1, 0, &future) == 0);
+	CHECK(pthread_join(releaser, NULL) == 0);
+
+	CHECK(mq_close(q) == 0);
+	CHECK(mq_unlink("/ntlibc_posix_realtime_timed") == 0);
 }
 #endif
 

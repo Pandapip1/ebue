@@ -255,8 +255,8 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 			struct timespec now;
 			long long ticks;
 			clock_gettime(CLOCK_REALTIME, &now);
-			ticks = ((long long)absolute->tv_sec - now.tv_sec) *
-				10000000LL + (absolute->tv_nsec - now.tv_nsec + 99) / 100;
+			ticks = __timespec_diff_ticks(absolute->tv_sec,
+				absolute->tv_nsec, now.tv_sec, now.tv_nsec);
 			if (ticks <= 0) {
 				RtlReleasePebLock();
 				return ETIMEDOUT;

@@ -455,7 +455,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 {
 	struct timespec now;
 	LARGE_INTEGER rel;
-	long long ns;
+	long long ticks;
 	unsigned long caught;
 	unsigned long restarted;
 	int r;
@@ -469,10 +469,11 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 	restarted = __sig_thread_restart_count();
 	for (;;) {
 		clock_gettime(CLOCK_REALTIME, &now);
-		ns = (long long)(abstime->tv_sec - now.tv_sec) * 1000000000LL + abstime->tv_nsec - now.tv_nsec;
-		if (ns <= 0) { errno = ETIMEDOUT; return -1; }
-		if (ns > 50000000LL) ns = 50000000LL;
-		rel = -(ns / 100);
+		ticks = __timespec_diff_ticks(abstime->tv_sec, abstime->tv_nsec,
+			now.tv_sec, now.tv_nsec);
+		if (ticks <= 0) { errno = ETIMEDOUT; return -1; }
+		if (ticks > 500000) ticks = 500000;
+		rel = -ticks;
 		r = wait_handle(sem, &rel);
 		__pthread_testcancel();
 		__sig_drain_pending();
