@@ -67,7 +67,7 @@ int clock_nanosleep(clockid_t id, int flags, const struct timespec *req, struct 
 		ticks = req->tv_sec * __TICKS_PER_SEC + (req->tv_nsec + 99) / 100;
 	}
 
-	if (__alertable_delay(ticks, &owed) < 0) {
+	if (__alertable_delay(ticks, &owed, "clock_nanosleep()") < 0) {
 		/* "If clock_nanosleep() is interrupted by a signal ... and
 		 * the rmtp argument is non-NULL ... the timespec structure
 		 * ... is updated to contain the amount of time remaining ...

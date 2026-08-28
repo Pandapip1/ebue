@@ -443,7 +443,7 @@ static inline long long __unix_to_nt(long long sec, long nsec) { return sec * __
  * Returns 0 if the whole interval (`ticks`, 100ns units) elapsed, or -1
  * with errno=EINTR and *left set to the 100ns units still owed if a
  * signal-catching function ran first. */
-int __alertable_delay(long long ticks, long long *left);
+int __alertable_delay(long long ticks, long long *left, const char *operation);
 
 /* ---- stdio internals --------------------------------------------------- */
 void __stdio_exit(void);                     /* flush everything at exit */
@@ -538,6 +538,8 @@ void __alarm_reset_after_fork(void);
 /* Cancellation-point hook used by alertable sleeps without forcing a
  * pthread control block to be allocated for threads with no request. */
 void __pthread_testcancel(void);
+void __pthread_cancel_unsafe_enter(const char *);
+void __pthread_cancel_unsafe_leave(void);
 
 /* ---- cross-process signal delivery (src/signal/sigdelivery.c) --------- */
 /* Started by __signal_init(); see that file's banner for the whole

@@ -201,17 +201,19 @@ void __alarm_reset_after_fork(void)
  * here than making either one step-proof. The delivery event permits one
  * wait for the whole remaining interval while retaining exact elapsed-time
  * accounting across early wakes. */
-int __alertable_delay(long long ticks, long long *left)
+int __alertable_delay(long long ticks, long long *left, const char *operation)
 {
 	unsigned long caught = __sig_caught_count();
 	LARGE_INTEGER start, now, t;
 
+	__pthread_cancel_unsafe_enter(operation);
 	NtQuerySystemTime(&start);
 	__pthread_testcancel();
 	__sig_drain_pending();
 	if (__sig_caught_count() != caught) {
 		if (left) *left = ticks;
 		errno = EINTR;
+		__pthread_cancel_unsafe_leave();
 		return -1;
 	}
 	while (ticks > 0) {
@@ -229,9 +231,11 @@ int __alertable_delay(long long ticks, long long *left)
 		if (__sig_caught_count() != caught) {
 			if (left) *left = ticks > 0 ? ticks : 0;
 			errno = EINTR;
+			__pthread_cancel_unsafe_leave();
 			return -1;
 		}
 	}
+	__pthread_cancel_unsafe_leave();
 	return 0;
 }
 
@@ -241,7 +245,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 
 	if (!req || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L || req->tv_sec < 0) { errno = EINVAL; return -1; }
 	ticks = req->tv_sec * __TICKS_PER_SEC + (req->tv_nsec + 99) / 100;
-	if (__alertable_delay(ticks, &owed) < 0) {
+	if (__alertable_delay(ticks, &owed, "nanosleep()") < 0) {
 		/* nanosleep.html: "If the rmtp argument is non-NULL, the
 		 * timespec structure referenced by it is updated to contain
 		 * the amount of time remaining in the interval (the requested
@@ -259,7 +263,8 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 unsigned sleep(unsigned s)
 {
 	long long owed = 0;
-	if (__alertable_delay((long long)s * __TICKS_PER_SEC, &owed) < 0)
+	if (__alertable_delay((long long)s * __TICKS_PER_SEC, &owed,
+	    "sleep()") < 0)
 		/* sleep.html RETURN VALUE: "If sleep() returns because the
 		 * requested time has elapsed, the value returned shall be 0.
 		 * If sleep() returns due to the delivery of a signal, the
@@ -272,8 +277,8 @@ unsigned sleep(unsigned s)
 
 int usleep(unsigned us)
 {
-	struct timespec ts = { us / 1000000, (us % 1000000) * 1000 };
-	return nanosleep(&ts, 0);
+	long long ticks = ((long long)us * __TICKS_PER_SEC + 999999) / 1000000;
+	return __alertable_delay(ticks, 0, "usleep()");
 }
 
 int pause(void)
@@ -287,11 +292,13 @@ int pause(void)
 	 * set the delivery event and are observed through the caught counter.
 	 * An ignored signal changes no counter and therefore leaves pause()
 	 * waiting, as POSIX requires. */
+	__pthread_cancel_unsafe_enter("pause()");
 	while (__sig_caught_count() == caught) {
 		__sig_drain_pending();
 		if (__sig_caught_count() != caught) break;
 		__sig_wait_delivery(0);
 	}
+	__pthread_cancel_unsafe_leave();
 	errno = EINTR;
 	return -1;
 }
