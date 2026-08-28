@@ -1,13 +1,14 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * POSIX per-process timers.  One detached manager thread polls every active
- * clock against an absolute deadline.  That is deliberately one thread for
- * the process, not one thread per timer: timer_create() has a fixed, honest
- * TIMER_MAX resource bound, and fork() has only one background thread to
- * forget and restart.  Signal delivery uses signal.c's existing recursive
- * lock, queue, and siginfo path, so a blocked timer signal coalesces and its
- * missed interval expirations become timer_getoverrun()'s count.
+ * POSIX per-process timers. One detached manager thread waits until the
+ * nearest absolute deadline or until a timer operation signals its wake
+ * event. That is deliberately one thread for the process, not one thread per
+ * timer: timer_create() has a fixed, honest TIMER_MAX resource bound, and
+ * fork() has only one background thread to forget and restart. Signal
+ * delivery uses signal.c's existing recursive lock, queue, and siginfo path,
+ * so a blocked timer signal coalesces and its missed interval expirations
+ * become timer_getoverrun()'s count.
  */
 #include <time.h>
 #include <signal.h>
@@ -28,6 +29,7 @@ struct posix_timer {
 
 static struct posix_timer timers[TIMER_MAX];
 static int manager_started;
+static HANDLE manager_wake;
 
 static int clock_supported(clockid_t clock)
 {
@@ -121,18 +123,39 @@ static ULONG NTAPI timer_manager(PVOID unused)
 {
 	(void)unused;
 	for (;;) {
-		LARGE_INTEGER delay = -10000; /* 1ms */
+		LARGE_INTEGER timeout, *wait = 0;
+		long long nearest = 0;
 		int i;
-		NtDelayExecution(FALSE, &delay);
+
 		__sig_lock();
 		for (i = 0; i < TIMER_MAX; i++) {
 			struct posix_timer *timer = &timers[i];
-			long long now;
+			long long now, left;
 			if (!timer->active || !timer->due) continue;
 			now = clock_ns(timer->clock);
 			timer_expire(timer, now);
+			if (!timer->due) continue;
+			left = timer->due - now;
+			if (left < 0) left = 0;
+			/* A process-CPU clock has no wall-clock deadline to wait on: its
+			 * time advances only while a process thread runs. Keep that one
+			 * optional clock on a bounded probe while all wall clocks use their
+			 * exact next deadline. */
+			if (timer->clock == CLOCK_PROCESS_CPUTIME_ID && left > 1000000)
+				left = 1000000; /* 1 ms of wall time */
+			if (!nearest || left < nearest) nearest = left;
 		}
 		__sig_unlock();
+
+		if (nearest) {
+			long long ticks = (nearest + 99) / 100;
+			timeout = -(ticks ? ticks : 1);
+			wait = &timeout;
+		}
+		/* Auto-reset manager_wake closes the scan/wait race: a settime() or
+		 * delete() between the scan above and this wait leaves the event
+		 * signalled, so the wait returns immediately and recomputes state. */
+		NtWaitForSingleObject(manager_wake, FALSE, wait);
 	}
 	return 0;
 }
@@ -146,12 +169,23 @@ static int start_manager(void)
 	errno = EAGAIN;
 	return -1;
 #else
-	HANDLE thread;
+	OBJECT_ATTRIBUTES oa;
+	HANDLE event, thread;
 	NTSTATUS st;
 	if (manager_started) return 0;
+	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
+	st = NtCreateEvent(&event, EVENT_ALL_ACCESS, &oa,
+	                   SynchronizationEvent, FALSE);
+	if (!NT_SUCCESS(st)) { errno = EAGAIN; return -1; }
+	manager_wake = event;
 	st = NtCreateThreadEx(&thread, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
 	                      (PVOID)timer_manager, 0, 0, 0, 0, 0, 0);
-	if (!NT_SUCCESS(st)) { errno = EAGAIN; return -1; }
+	if (!NT_SUCCESS(st)) {
+		manager_wake = 0;
+		NtClose(event);
+		errno = EAGAIN;
+		return -1;
+	}
 	manager_started = 1;
 	NtClose(thread);
 	return 0;
@@ -203,6 +237,7 @@ int timer_settime(timer_t id, int flags, const struct itimerspec *value,
 {
 	struct posix_timer *timer;
 	long long first;
+	LONG previous;
 
 	if ((flags & ~TIMER_ABSTIME) || !timespec_valid(&value->it_value) ||
 	    !timespec_valid(&value->it_interval)) { errno = EINVAL; return -1; }
@@ -216,6 +251,7 @@ int timer_settime(timer_t id, int flags, const struct itimerspec *value,
 	if (!first) timer->due = 0;
 	else if (flags & TIMER_ABSTIME) timer->due = first;
 	else timer->due = clock_ns(timer->clock) + first;
+	if (manager_wake) NtSetEvent(manager_wake, &previous);
 	__sig_unlock();
 	return 0;
 }
@@ -251,10 +287,12 @@ int timer_getoverrun(timer_t id)
 int timer_delete(timer_t id)
 {
 	struct posix_timer *timer;
+	LONG previous;
 	__sig_lock();
 	timer = timer_lookup(id);
 	if (!timer) { __sig_unlock(); errno = EINVAL; return -1; }
 	memset(timer, 0, sizeof *timer);
+	if (manager_wake) NtSetEvent(manager_wake, &previous);
 	__sig_unlock();
 	return 0;
 }
@@ -263,4 +301,5 @@ void __timer_reinit_after_fork(void)
 {
 	memset(timers, 0, sizeof timers);
 	manager_started = 0;
+	manager_wake = 0;
 }
