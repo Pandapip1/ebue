@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <pthread.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
@@ -142,13 +143,15 @@ static void cond_wait_cleanup(void *argument)
 		pthread_mutex_lock(cleanup->mutex);
 		cleanup->mutex_held = 1;
 	}
+	free(cleanup->waiter);
+	cleanup->waiter = 0;
 }
 
 static int cond_wait(pthread_cond_t *__restrict cond,
 	pthread_mutex_t *__restrict mutex, const struct timespec *absolute)
 {
 	struct cond_data *data;
-	struct cond_waiter waiter;
+	struct cond_waiter *waiter;
 	struct cond_cleanup cleanup;
 	int result = 0, lock_error = 0, old_state = PTHREAD_CANCEL_ENABLE;
 	int error = cond_ready(cond);
@@ -157,22 +160,26 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	if (absolute && (absolute->tv_sec < 0 || absolute->tv_nsec < 0 ||
 	    absolute->tv_nsec >= 1000000000L)) return EINVAL;
 	data = cond_data(cond);
-	memset(&waiter, 0, sizeof waiter);
-	if (!NT_SUCCESS(NtCreateSemaphore(&waiter.semaphore, SEMAPHORE_ALL_ACCESS,
-		0, 0, 1))) return EAGAIN;
+	waiter = calloc(1, sizeof *waiter);
+	if (!waiter) return EAGAIN;
+	if (!NT_SUCCESS(NtCreateSemaphore(&waiter->semaphore, SEMAPHORE_ALL_ACCESS,
+		0, 0, 1))) {
+		free(waiter);
+		return EAGAIN;
+	}
 	cleanup.cond = data;
-	cleanup.waiter = &waiter;
+	cleanup.waiter = waiter;
 	cleanup.mutex = mutex;
 	cleanup.mutex_held = 0;
 	pthread_cleanup_push(cond_wait_cleanup, &cleanup);
 	RtlAcquirePebLock();
-	waiter.next = data->waiters;
-	if (waiter.next) waiter.next->previous = &waiter;
-	data->waiters = &waiter;
-	waiter.linked = 1;
+	waiter->next = data->waiters;
+	if (waiter->next) waiter->next->previous = waiter;
+	data->waiters = waiter;
+	waiter->linked = 1;
 	error = pthread_mutex_unlock(mutex);
 	if (error) {
-		unlink_waiter(data, &waiter);
+		unlink_waiter(data, waiter);
 		cleanup.mutex_held = 1;
 	}
 	RtlReleasePebLock();
@@ -190,15 +197,15 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 			} else {
 				timeout = -ticks;
 				timeout_pointer = &timeout;
-				status = NtWaitForSingleObject(waiter.semaphore, TRUE,
+				status = NtWaitForSingleObject(waiter->semaphore, TRUE,
 					timeout_pointer);
 			}
 		} else {
-			status = NtWaitForSingleObject(waiter.semaphore, TRUE, 0);
+			status = NtWaitForSingleObject(waiter->semaphore, TRUE, 0);
 		}
 		if (status == STATUS_TIMEOUT) {
 			RtlAcquirePebLock();
-			if (waiter.linked) unlink_waiter(data, &waiter);
+			if (waiter->linked) unlink_waiter(data, waiter);
 			else status = STATUS_SUCCESS;
 			RtlReleasePebLock();
 			result = status == STATUS_TIMEOUT ? ETIMEDOUT : 0;
@@ -212,7 +219,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 			break;
 		}
 		RtlAcquirePebLock();
-		if (waiter.linked) unlink_waiter(data, &waiter);
+		if (waiter->linked) unlink_waiter(data, waiter);
 		RtlReleasePebLock();
 		result = EINVAL;
 		break;
@@ -224,7 +231,8 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 		pthread_setcancelstate(old_state, 0);
 	}
 	pthread_cleanup_pop(0);
-	if (waiter.semaphore) NtClose(waiter.semaphore);
+	if (waiter->semaphore) NtClose(waiter->semaphore);
+	free(waiter);
 	if (error) return error;
 	return lock_error ? lock_error : result;
 }
