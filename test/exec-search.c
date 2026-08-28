@@ -21,9 +21,10 @@
  *     AC_PROG_INSTALL could never succeed.  A structural ceiling on an
  *     autoconf build, not a nuisance.
  *
- * The split now in the tree: $LXMOD supplies st_mode/access(X_OK), while
- * __is_program() reads the first two bytes to distinguish an MZ image or
- * shebang script from executable-permission data files.  PATH requires
+ * The split now in the tree: $LXMOD supplies explicit mode bits, while a
+ * metadata-free Windows file receives default execute bits only when stat()
+ * validates an executable PE32/PE32+ header.  __is_program() separately
+ * recognizes an image or shebang script as a PATH candidate.  PATH requires
  * both answers.
  *
  * The format half keeps an executable-permission data file named `cat`
@@ -98,10 +99,21 @@ static int writefile(const char *p, const char *data)
 	return close(fd);
 }
 
-/* $LXMOD, rather than a suffix or content sniff, owns execute permission. */
-static int test_mode_bits(void)
+/* Explicit $LXMOD wins; otherwise only a validated PE image defaults to
+ * executable.  A filename suffix alone has no permission meaning. */
+static int test_mode_bits(const char *self)
 {
 	struct stat st;
+
+	/* A linker-created PE has no ntlibc $LXMOD stream.  Its image header,
+	 * not its .exe suffix, supplies the default execute bits; the same file
+	 * remains executable through a hard-link name with no suffix at all. */
+	CHECK(stat(self, &st) == 0 && S_ISREG(st.st_mode));
+	CHECK((st.st_mode & 0111) == 0111);
+	CHECK(link(self, "xs-pe-no-suffix") == 0);
+	CHECK(stat("xs-pe-no-suffix", &st) == 0 && S_ISREG(st.st_mode));
+	CHECK((st.st_mode & 0111) == 0111);
+	CHECK(access("xs-pe-no-suffix", X_OK) == 0);
 
 	CHECK(writefile("xs-plain.txt", "not a program\n") == 0);
 	CHECK(stat("xs-plain.txt", &st) == 0);
@@ -127,7 +139,8 @@ static int test_mode_bits(void)
 	CHECK(stat("xs-plain.txt", &st) == 0);
 	CHECK((st.st_mode & 07777) == 0644);
 
-	/* Creation metadata beats the legacy suffix fallback. */
+	/* Creation metadata beats the PE-aware compatibility fallback; a suffix
+	 * by itself never grants execute permission. */
 	CHECK(writefile("xs-plain.exe", "not a program\n") == 0);
 	CHECK(stat("xs-plain.exe", &st) == 0);
 	CHECK((st.st_mode & 07777) == 0644);
@@ -306,7 +319,7 @@ int main(int argc, char **argv)
 	if (!mkdtemp(dir)) { printf("FAIL mkdtemp\n"); return 1; }
 	if (chdir(dir) < 0) { printf("FAIL chdir\n"); return 1; }
 
-	if (!test_mode_bits()) {
+	if (!test_mode_bits(argv[0])) {
 		if (chdir(origcwd) == 0) rmtree(dir);
 		return 77;
 	}

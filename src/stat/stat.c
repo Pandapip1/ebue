@@ -9,11 +9,11 @@
  * not create $LXUID or $LXGID: those are literal IDs in a WSL distribution
  * and cannot be derived from ntlibc's Windows process identity.
  *
- * A file with no $LXMOD keeps the compatibility rule used before mode
- * metadata was supported: directories are 0755, ordinary files 0644,
- * recognized executable suffixes add 0111, and FILE_ATTRIBUTE_READONLY
- * removes 0222.  New files made by ntlibc receive $LXMOD at creation, so
- * the fallback is principally for pre-existing Windows files.
+ * A file with no $LXMOD keeps a compatibility default for pre-existing
+ * Windows files: directories are 0755, ordinary files 0644, and an actual
+ * executable PE32/PE32+ image receives 0111 regardless of its suffix.
+ * FILE_ATTRIBUTE_READONLY removes 0222.  A suffix alone never grants execute
+ * permission, and explicit $LXMOD metadata always wins.
  *
  * Pipes, consoles, character devices and the "couldn't classify it"
  * fallback get a synthetic st_dev/st_ino instead: stat.html's DESCRIPTION
@@ -116,21 +116,64 @@ static ino_t __fstat_synthetic_ino(HANDLE h)
 	return (ino_t)(ULONG_PTR)h;
 }
 
-static int has_exe_suffix(const WCHAR *name, size_t n)
+static unsigned getle16(const unsigned char *p)
 {
-	static const char *const sfx[] = { ".exe", ".com", ".bat", ".cmd", ".sh", 0 };
-	int i;
-	for (i = 0; sfx[i]; i++) {
-		size_t l = strlen(sfx[i]), k;
-		if (n < l) continue;
-		for (k = 0; k < l; k++) {
-			WCHAR c = name[n - l + k];
-			if (c >= 'A' && c <= 'Z') c += 32;
-			if (c != (unsigned char)sfx[i][k]) break;
-		}
-		if (k == l) return 1;
+	return (unsigned)p[0] | (unsigned)p[1] << 8;
+}
+
+static unsigned long getle32(const unsigned char *p)
+{
+	return (unsigned long)p[0] | (unsigned long)p[1] << 8 |
+	       (unsigned long)p[2] << 16 | (unsigned long)p[3] << 24;
+}
+
+static int read_at(HANDLE h, void *buffer, unsigned length, long long offset)
+{
+	IO_STATUS_BLOCK io;
+	LARGE_INTEGER position = offset;
+	NTSTATUS status;
+
+	io.Information = 0;
+	status = NtReadFile(h, 0, 0, 0, &io, buffer, length, &position, 0);
+	if (status == STATUS_PENDING) {
+		NtWaitForSingleObject(h, 0, 0);
+		status = io.Status;
 	}
-	return 0;
+	return NT_SUCCESS(status) && io.Information == length;
+}
+
+/* Validate enough of the on-disk PE header to distinguish an executable
+ * image from a DOS file, DLL, text file with an executable-looking suffix,
+ * or an arbitrary file beginning with MZ.  Both PE32 and PE32+ are Windows
+ * executable formats; IMAGE_FILE_EXECUTABLE_IMAGE must be set and the DLL
+ * characteristic must be clear. */
+static int pe_executable(HANDLE h, long long size)
+{
+	unsigned char dos[64], nt[26];
+	unsigned long peoff;
+	unsigned characteristics, optional_size, optional_magic;
+	long long saved;
+	int result = 0;
+
+	if (size < (long long)sizeof dos || __fd_pos_save(h, &saved) < 0)
+		return 0;
+	if (!read_at(h, dos, sizeof dos, 0) || dos[0] != 'M' || dos[1] != 'Z')
+		goto done;
+	peoff = getle32(dos + 0x3c);
+	if ((long long)peoff > size - (long long)sizeof nt ||
+	    !read_at(h, nt, sizeof nt, peoff))
+		goto done;
+	if (nt[0] != 'P' || nt[1] != 'E' || nt[2] || nt[3]) goto done;
+	optional_size = getle16(nt + 20);
+	characteristics = getle16(nt + 22);
+	optional_magic = getle16(nt + 24);
+	if (optional_size >= 2 &&
+	    (optional_magic == 0x10b || optional_magic == 0x20b) &&
+	    (characteristics & 0x0002) && !(characteristics & 0x2000))
+		result = 1;
+done:
+	__fd_pos_restore(h, saved);
+	return result;
 }
 
 static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
@@ -150,7 +193,7 @@ static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
 	/* $LXMOD is the POSIX mode record, not merely an execute-bit sidecar.
 	 * Keep the type derived from the live NT object, but report every
 	 * permission and special bit from the metadata.  Files without the EA
-	 * retain the historical attribute/suffix compatibility fallback. */
+	 * use the validated-PE compatibility fallback. */
 	if (have_lxmod) m = (m & S_IFMT) | (lxmod & 07777);
 	else if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
 	return m;
@@ -191,15 +234,11 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 		st->st_dev = vi.VolumeSerialNumber;
 	have_lxmod = __lxmod_get(h, &lxmod);
 
-	if (!have_lxmod && !(bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-		char nb[sizeof(FILE_NAME_INFORMATION) + 520];
-		FILE_NAME_INFORMATION *ni = (FILE_NAME_INFORMATION *)nb;
-		s = NtQueryInformationFile(h, &io, ni, sizeof nb, FileNameInformation);
-		if (NT_SUCCESS(s) || s == STATUS_BUFFER_OVERFLOW) {
-			size_t n = ni->FileNameLength / sizeof(WCHAR);
-			if (n > 260) n = 260;
-			exe = has_exe_suffix(ni->FileName, n);
-		}
+	if (!have_lxmod && !(bi.FileAttributes &
+	    (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE))) {
+		int saved = errno;
+		exe = pe_executable(h, si.EndOfFile);
+		errno = saved;
 	}
 
 	st->st_ino = (ino_t)ii.IndexNumber;
@@ -258,13 +297,28 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 	if (vfs != __VFS_NONE) return __vfs_stat(vfs, st);
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+	s = NtOpenFile(&h, FILE_READ_DATA | FILE_READ_ATTRIBUTES | FILE_READ_EA |
+	               SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 	               (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
+	/* stat() must not require permission to read file data.  Reading is only
+	 * needed for the metadata-free PE default, so retain the ordinary
+	 * attribute-only result when that extra access is denied. */
+	if (!NT_SUCCESS(s) && s != STATUS_IO_REPARSE_TAG_NOT_HANDLED)
+		s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
+		               &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+		               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
+		               (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
 	if (s == STATUS_IO_REPARSE_TAG_NOT_HANDLED && !(flags & AT_SYMLINK_NOFOLLOW)) {
 		/* A reparse point of a kind nothing resolves (WSL links): report it as is. */
-		s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+		s = NtOpenFile(&h, FILE_READ_DATA | FILE_READ_ATTRIBUTES | FILE_READ_EA |
+		               SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 		               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT);
+		if (!NT_SUCCESS(s))
+			s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
+			               &np.oa, &io, FILE_SHARE_VALID_FLAGS,
+			               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
+			               FILE_OPEN_REPARSE_POINT);
 	}
 	__ntpath_free(&np);
 	if (!NT_SUCCESS(s)) return __set_errno_status(s);
