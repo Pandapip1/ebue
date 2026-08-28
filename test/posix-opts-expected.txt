@@ -573,12 +573,12 @@ pthread_key_create/speculative/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no
 pthread_key_delete/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
 pthread_key_delete/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
 pthread_key_delete/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
-pthread_kill/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_kill/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_kill/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_kill/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_kill/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+pthread_kill/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_kill/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_kill/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_kill/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_kill/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_kill/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
 pthread_mutex_destroy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
 pthread_mutex_destroy/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_destroy/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
@@ -727,20 +727,20 @@ pthread_setschedparam/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	O
 pthread_setschedprio/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread lifecycle and scheduling implementation
 pthread_setspecific/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
 pthread_setspecific/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread_once and thread-specific-data implementation
-pthread_sigmask/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_sigmask/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
 pthread_sigmask/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-pthread_sigmask/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-pthread_sigmask/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/8-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/8-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_sigmask/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_sigmask/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/8-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/8-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
+pthread_sigmask/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal-mask and pthread_kill implementation
 pthread_spin_destroy/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_spin_destroy/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
 pthread_spin_init/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX barrier and spin-lock implementation
