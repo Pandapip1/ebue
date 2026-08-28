@@ -26,7 +26,15 @@ static int chmod_handle(HANDLE h, mode_t mode)
 	set.FileAttributes = bi.FileAttributes;
 	if (mode & 0222) set.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
 	else set.FileAttributes |= FILE_ATTRIBUTE_READONLY;
-	if (!(set.FileAttributes & ~FILE_ATTRIBUTE_ARCHIVE)) set.FileAttributes |= FILE_ATTRIBUTE_NORMAL;
+	/* FILE_ATTRIBUTE_NORMAL is valid only by itself.  A queried plain file
+	 * commonly carries NORMAL, so adding READONLY without removing NORMAL
+	 * asks NT to ignore the very transition chmod() is making.  Conversely,
+	 * clearing READONLY from an archived file must leave ARCHIVE alone rather
+	 * than manufacture the invalid ARCHIVE|NORMAL pair. */
+	if (set.FileAttributes & ~FILE_ATTRIBUTE_NORMAL)
+		set.FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
+	else
+		set.FileAttributes = FILE_ATTRIBUTE_NORMAL;
 	if (set.FileAttributes != bi.FileAttributes) {
 		st = NtSetInformationFile(h, &io, &set, sizeof set, FileBasicInformation);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
