@@ -247,6 +247,15 @@ int main(void)
 		n = strftime(buf, sizeof buf, "%s", &tm);
 		CHECK(n > 1 && buf[0] == '-');
 
+		/* Fuzz run 33134051092, crash-6a40031ce286bfd536c454bfe579a43d8a634350:
+		 * parsing an unbounded field width must not overflow int, and applying
+		 * one must fail through the caller's buffer bound rather than overflow
+		 * a fixed-size intermediate buffer. */
+		n = strftime(buf, sizeof buf, "%3333333333g", &tm);
+		CHECK(n == 2);
+		n = strftime(buf, sizeof buf, "%3333333333Y", &tm);
+		CHECK(n == 0);
+
 		/* Sunday: %u is 7, %w is 0; single-digit %e is space padded */
 		t = 1078012800;   /* Sun 2004-02-29 */
 		gmtime_r(&t, &tm);
