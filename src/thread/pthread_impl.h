@@ -4,6 +4,7 @@
 #define PTHREAD_IMPL_H
 
 #include <pthread.h>
+#include <signal.h>
 #include "libc.h"
 
 #define PTHREAD_MAGIC 0x50544852u
@@ -42,6 +43,7 @@ struct __pthread {
 	int cancel_queued;
 	int sched_policy;
 	int sched_priority;
+	sigset_t sigmask;
 	struct __pthread_cleanup *cleanup;
 	struct __pthread_specific *specific;
 };
@@ -51,5 +53,8 @@ struct __pthread *__pthread_current(void);
 void __pthread_run_specific_destructors(struct __pthread *);
 _Noreturn void __pthread_cancel_current(void);
 void __pthread_testcancel(void);
+void __sig_current_mask_copy(sigset_t *);
+void __sig_current_mask_install(const sigset_t *);
+int __raise_thread_internal(int);
 
 #endif

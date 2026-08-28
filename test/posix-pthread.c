@@ -863,10 +863,9 @@ static void test_pthread_getcpuclockid(void)
 
 /* ==================================================================
  * Per-thread signal interfaces.  POSIX declares both in <signal.h>, not
- * <pthread.h>.  pthread_sigmask() is implemented over the one mask the
- * single-threaded runtime has today; pthread_kill() still needs
- * pthread_self() for a thread ID and therefore stops at the missing
- * <pthread.h>.
+ * <pthread.h>.  The runtime keeps masks and thread-directed pending signals
+ * in TLS, inherits the creator's mask, and delivers pthread_kill() through a
+ * native APC on the selected thread.
  * .../functions/pthread_kill.html, pthread_sigmask.html
  * ================================================================== */
 
@@ -897,7 +896,7 @@ static void test_pthread_sigmask_roundtrip(void)
 }
 #endif
 
-#if NTLIBC_TEST(UNIMPL, posix_pthread_kill_signal_zero)
+#if NTLIBC_TEST(PASS, posix_pthread_kill_signal_zero)
 #include <signal.h>
 #include <pthread.h>
 #include <errno.h>

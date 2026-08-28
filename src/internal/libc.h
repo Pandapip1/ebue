@@ -511,6 +511,8 @@ int __raise_internal_info(int, const void *);
  * (the wait ends, [EINTR]) from an ignored one (it does not) -- see the
  * comment on caught_count in src/signal/signal.c. */
 unsigned long __sig_caught_count(void);
+/* Same count, restricted to handlers entered by the calling thread. */
+unsigned long __sig_thread_caught_count(void);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
 int __sigchld_nocldwait(void);

@@ -54,6 +54,7 @@ struct __pthread *__pthread_current(void)
 	self->cancel_state = PTHREAD_CANCEL_ENABLE;
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;
+	__sig_current_mask_copy(&self->sigmask);
 	RtlAcquirePebLock();
 	live_threads++;
 	RtlReleasePebLock();
@@ -133,7 +134,10 @@ static ULONG NTAPI thread_entry(PVOID argument)
 {
 	struct __pthread *self = argument;
 	void *result;
-	__pthread_self_control = self;
+	if (__pthread_self_control != self) {
+		__pthread_self_control = self;
+		__sig_current_mask_install(&self->sigmask);
+	}
 	result = self->start(self->argument);
 	finish(self, result);
 	return 0;
@@ -167,6 +171,7 @@ int pthread_create(pthread_t *__restrict output,
 	thread->detached = data && data->detach_state == PTHREAD_CREATE_DETACHED;
 	thread->cancel_state = PTHREAD_CANCEL_ENABLE;
 	thread->cancel_type = PTHREAD_CANCEL_DEFERRED;
+	__sig_current_mask_copy(&thread->sigmask);
 	if (creator) {
 		RtlAcquirePebLock();
 		thread->sched_policy = creator->sched_policy;
