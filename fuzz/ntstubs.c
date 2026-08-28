@@ -4033,6 +4033,12 @@ void *__memcpy_chk(void *d, const void *s, size_t n, size_t dlen)
 void __sig_delivery_init(void) { }
 void __sig_delivery_reinit_after_fork(void) { }
 HANDLE __sig_delivery_event(void) { return 0; }
+NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout)
+{
+	LARGE_INTEGER fallback = -1000000; /* 100 ms */
+	return NtDelayExecution(TRUE, timeout ? timeout : &fallback);
+}
+void __sig_notify_delivery(void) { }
 int __sig_try_deliver_remote(int pid, int sig)
 {
 	(void)pid;
