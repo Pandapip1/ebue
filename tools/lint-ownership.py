@@ -25,9 +25,11 @@ DIAGNOSTIC = re.compile(
     r"pointer target is not proven live storage|"
     r"dereference extent is not proven sufficient|"
     r"dereference alignment is not proven valid|"
-    r"dereference accesses consumed storage); origin '(.*)'; context '(.*)'; "
+    r"dereference accesses consumed storage|resource is not proven live|"
+    r"resource is already released|operation uses a released resource|"
+    r"resource family does not match operation); origin '(.*)'; context '(.*)'; "
     r"expression '(.*)'; site '(.*)' "
-    r"\[ntlibc\.(Ownership|OwnedConstruct|ValidPointer)\]$"
+    r"\[ntlibc\.(Ownership|OwnedConstruct|ValidPointer|Resource)\]$"
 )
 
 
@@ -109,11 +111,14 @@ def main() -> int:
                          for finding in findings.values())
         pointers = sum(finding.checker == "ValidPointer"
                        for finding in findings.values())
+        resources = sum(finding.checker == "Resource"
+                        for finding in findings.values())
         print(f"lint-ownership: {releases} unproved release(s), "
               f"{repeats} repeated consumption(s), "
               f"{borrows} expired borrow access(es), "
               f"{constructs} construct lifecycle obligation(s), "
-              f"{pointers} pointer validity obligation(s)")
+              f"{pointers} pointer validity obligation(s), "
+              f"{resources} resource lifecycle obligation(s)")
         return 1
     print("lint-ownership: no findings (fixtures passed)")
     return 0

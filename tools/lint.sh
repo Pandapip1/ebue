@@ -42,6 +42,8 @@
 #             allocator families, treats aliases as borrows, proves every
 #             release and synchronization-object lifecycle, and requires every
 #             dereference to have nonnull, live, in-bounds, aligned storage.
+#             Descriptor, stream, directory, semaphore, mapping, and handle
+#             acquire/use/release state is tracked as well.
 #   memcontracts
 #             currently opt-in; proves spans for memory and I/O operations and
 #             proves memcpy ranges do not overlap and string API arguments have
@@ -951,7 +953,7 @@ stage_ownership() {
 	: > "$fixture_log"
 	for fixture in tools/lint-ownership-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.ValidPointer \
+			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.ValidPointer,ntlibc.Resource \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
@@ -977,7 +979,7 @@ stage_ownership() {
 			# exploration budget needed by ownership/lifecycle proofs.
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct \
+				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.Resource \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "$owner" 2>&1
 			owner_rc=$?

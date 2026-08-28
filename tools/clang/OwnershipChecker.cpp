@@ -28,6 +28,8 @@ REGISTER_MAP_WITH_PROGRAMSTATE(OwnershipMap, SymbolRef, OwnershipKind)
 enum class ConstructKind : unsigned char { Live, Destroyed };
 REGISTER_MAP_WITH_PROGRAMSTATE(ConstructMap, const MemRegion *, ConstructKind)
 
+REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
+
 namespace {
 
 static std::string diagnosticText(const Stmt *Statement, CheckerContext &C) {
@@ -707,6 +709,158 @@ public:
   }
 };
 
+class ResourceLifecycleChecker
+    : public Checker<check::PreCall, check::PostCall> {
+  mutable std::unique_ptr<BugType> BT;
+
+  enum Family : unsigned {
+    Descriptor = 1,
+    Stream,
+    Directory,
+    Semaphore,
+    Mapping,
+    Handle
+  };
+
+  static unsigned live(Family Value) {
+    return static_cast<unsigned>(Value) * 2;
+  }
+  static unsigned released(Family Value) { return live(Value) + 1; }
+
+  static const FunctionDecl *function(const CallEvent &Call) {
+    return dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+  }
+
+  static std::optional<Family> acquiredFamily(const CallEvent &Call) {
+    const FunctionDecl *Function = function(Call);
+    if (!Function || !Function->getIdentifier())
+      return std::nullopt;
+    StringRef Name = Function->getName();
+    if (Name == "open" || Name == "openat" || Name == "creat" ||
+        Name == "socket" || Name == "accept" || Name == "dup" || Name == "dup2")
+      return Descriptor;
+    if (Name == "fopen" || Name == "fdopen" || Name == "tmpfile" ||
+        Name == "popen")
+      return Stream;
+    if (Name == "opendir" || Name == "fdopendir")
+      return Directory;
+    if (Name == "sem_open")
+      return Semaphore;
+    if (Name == "mmap")
+      return Mapping;
+    return std::nullopt;
+  }
+
+  static std::optional<std::pair<Family, unsigned>>
+  release(const CallEvent &Call) {
+    const FunctionDecl *Function = function(Call);
+    if (!Function || !Function->getIdentifier())
+      return std::nullopt;
+    StringRef Name = Function->getName();
+    if (Name == "close")
+      return std::pair{Descriptor, 0u};
+    if (Name == "fclose" || Name == "pclose")
+      return std::pair{Stream, 0u};
+    if (Name == "closedir")
+      return std::pair{Directory, 0u};
+    if (Name == "sem_close")
+      return std::pair{Semaphore, 0u};
+    if (Name == "munmap")
+      return std::pair{Mapping, 0u};
+    if (Name == "NtClose")
+      return std::pair{Handle, 0u};
+    return std::nullopt;
+  }
+
+  static std::optional<std::pair<Family, unsigned>> use(const CallEvent &Call) {
+    const FunctionDecl *Function = function(Call);
+    if (!Function || !Function->getIdentifier())
+      return std::nullopt;
+    StringRef Name = Function->getName();
+    if (Name == "read" || Name == "write" || Name == "pread" ||
+        Name == "pwrite" || Name == "lseek" || Name == "fstat" ||
+        Name == "fsync")
+      return std::pair{Descriptor, 0u};
+    if (Name == "fread" || Name == "fwrite")
+      return std::pair{Stream, 3u};
+    if (Name == "fflush" || Name == "fileno" || Name == "rewind")
+      return std::pair{Stream, 0u};
+    if (Name == "fseek")
+      return std::pair{Stream, 0u};
+    if (Name == "readdir" || Name == "rewinddir" || Name == "dirfd")
+      return std::pair{Directory, 0u};
+    if (Name == "sem_wait" || Name == "sem_trywait" ||
+        Name == "sem_timedwait" || Name == "sem_post")
+      return std::pair{Semaphore, 0u};
+    return std::nullopt;
+  }
+
+  void report(StringRef Reason, const CallEvent &Call,
+              CheckerContext &C) const {
+    const Stmt *Statement = Call.getOriginExpr();
+    if (!Statement)
+      return;
+    ExplodedNode *Node = C.generateNonFatalErrorNode();
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Unproven resource lifecycle",
+                                     categories::MemoryError);
+    auto Report = std::make_unique<PathSensitiveBugReport>(
+        *BT, diagnosticMessage(Reason, Statement, C), Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
+  void checkResource(const CallEvent &Call, Family Expected, unsigned Argument,
+                     bool Consume, CheckerContext &C) const {
+    if (Argument >= Call.getNumArgs())
+      return;
+    SymbolRef Symbol = Call.getArgSVal(Argument).getAsSymbol(true);
+    const unsigned *State =
+        Symbol ? C.getState()->get<ResourceMap>(Symbol) : nullptr;
+    if (!State) {
+      // sem_wait/post also operate on caller-owned unnamed sem_t objects;
+      // OwnedConstruct proves those. Resource state applies only after
+      // sem_open has introduced a named semaphore.
+      if (Expected == Semaphore && !Consume)
+        return;
+      report("resource is not proven live", Call, C);
+      return;
+    }
+    if (*State == released(Expected)) {
+      report(Consume ? "resource is already released"
+                     : "operation uses a released resource",
+             Call, C);
+      return;
+    }
+    if (*State != live(Expected)) {
+      report("resource family does not match operation", Call, C);
+      return;
+    }
+    if (Consume)
+      C.addTransition(
+          C.getState()->set<ResourceMap>(Symbol, released(Expected)));
+  }
+
+public:
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    std::optional<Family> Family = acquiredFamily(Call);
+    if (!Family)
+      return;
+    SymbolRef Symbol = Call.getReturnValue().getAsSymbol(true);
+    if (Symbol)
+      C.addTransition(C.getState()->set<ResourceMap>(Symbol, live(*Family)));
+  }
+
+  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    if (auto Release = release(Call))
+      checkResource(Call, Release->first, Release->second, true, C);
+    else if (auto Use = use(Call))
+      checkResource(Call, Use->first, Use->second, false, C);
+  }
+};
+
 } // namespace
 
 extern "C" const char clang_analyzerAPIVersionString[] =
@@ -723,5 +877,8 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
       "ntlibc.ValidPointer",
       "Proves every memory access has a nonnull, live, in-bounds, aligned "
       "pointer",
+      "");
+  Registry.addChecker<ResourceLifecycleChecker>(
+      "ntlibc.Resource", "Proves acquire, use, and release resource lifecycles",
       "");
 }
