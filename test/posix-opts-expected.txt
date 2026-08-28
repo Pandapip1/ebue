@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=1310 BUG=0 UNIMPL=203 NA=94 FLAKY=3
+# COUNTS PASS=1391 BUG=0 UNIMPL=122 NA=94 FLAKY=3
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
@@ -1049,7 +1049,7 @@ sigaction/13-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/13-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/13-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/13-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigaction/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sigaction/16-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
 sigaction/17-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process signal delivery runs the target's installed handler and wakes select with EINTR
 sigaction/17-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process signal delivery runs the target's installed handler and wakes select with EINTR
 sigaction/17-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process signal delivery runs the target's installed handler and wakes select with EINTR
@@ -1076,58 +1076,58 @@ sigaction/17-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process 
 sigaction/17-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process signal delivery runs the target's installed handler and wakes select with EINTR
 sigaction/17-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process signal delivery runs the target's installed handler and wakes select with EINTR
 sigaction/17-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	cross-process signal delivery runs the target's installed handler and wakes select with EINTR
-sigaction/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-10.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-11.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-12.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-13.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-14.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-15.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-16.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-17.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-18.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-19.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-20.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-21.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-22.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-23.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-24.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-25.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-26.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-7.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-8.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/18-9.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-10.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-11.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-12.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-13.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-14.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-15.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-16.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-17.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-18.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-19.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-20.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-21.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-22.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-23.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-24.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-25.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-26.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-7.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-8.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/19-9.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sigaction/18-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-12.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-13.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-14.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-15.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-16.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-17.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-18.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-19.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-20.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-21.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-22.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-23.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-24.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-25.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-26.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/18-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-12.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-13.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-14.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-15.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-16.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-17.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-18.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-19.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-20.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-21.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-22.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-23.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-24.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-25.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-26.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/19-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
 sigaction/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/2-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/2-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -1181,32 +1181,32 @@ sigaction/22-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PA
 sigaction/22-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/22-7.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/22-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/22-8.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/22-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/22-9.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
-sigaction/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-10.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-11.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-12.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-13.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-14.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-15.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-16.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-17.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-18.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-19.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-20.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-21.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-22.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-23.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-24.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-25.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-26.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-4.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-5.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-6.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-7.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-8.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-sigaction/23-9.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sigaction/23-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-12.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-13.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-14.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-15.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-16.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-17.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-18.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-19.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-20.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-21.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-22.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-23.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-24.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-25.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-26.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-5.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
+sigaction/23-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
 sigaction/25-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/25-1.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/25-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/25-10.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/25-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/25-11.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
@@ -1259,7 +1259,7 @@ sigaction/28-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/28-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/28-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/28-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigaction/29-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sigaction/29-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
 sigaction/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/3-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/3-11.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -1286,7 +1286,7 @@ sigaction/3-6.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/3-7.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/3-8.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sigaction/3-9.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
-sigaction/30-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+sigaction/30-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after per-thread signal delivery and SA_RESTART implementation
 sigaction/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-1.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/4-10.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	restored to PASS: CI's posix-optsrun job now builds and runs under our patched Wine fork (.github/actions/setup-wine's build-wine job, which succeeded) instead of stock apt Wine -- confirmed by the absence of the 'unimplemented function ntdll.dll.RtlCloneUserProcess, aborting' abort anywhere in the job log. CI run 33027560032, job 98382984861 (commit c6a3624, make posix-optsrun-pedantic) directly observed this fork-touching case PASS across all 3 attempts (log line: 'BUG sigaction/4-10.c [PASS]', a policy mismatch against the stale BUG disposition left by 9332793's stock-Wine revert). Moved back to PASS on CI's own observation, not a local re-run.
 sigaction/4-100.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
