@@ -13,9 +13,9 @@
  * owns a named pipe (\Device\NamedPipe\ntlibc-sig.<pid>) and one
  * dedicated OS thread blocked reading it; kill() to another ntlibc
  * process writes a small packet to *its* pipe instead of guessing, and
- * that process's own delivery thread turns the packet into exactly the
- * same __raise_internal() call raise()/kill(getpid(),...) already make,
- * so sigprocmask()'s blocked/pending bookkeeping applies for free.
+ * that process's own delivery thread queues the packet process-wide.
+ * An eligible application thread drains it at a signal-aware safe point,
+ * so that thread's sigprocmask() state controls delivery.
  *
  * What this deliberately does NOT do -- thread-context hijacking
  * (SuspendThread/GetThreadContext/SetThreadContext + instruction-pointer
@@ -300,7 +300,7 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 			if (NT_SUCCESS(st) && io.Information == sizeof pkt && pkt.magic == SIGPACKET_MAGIC) {
 				siginfo_t si;
 				unsigned char accepted = 1;
-				/* __raise_internal() validates signo itself (sig_valid()
+				/* The queue helper validates signo itself (sig_valid()
 				 * in signal.c) and does nothing for a bad one beyond
 				 * setting errno on a thread with no caller to read it --
 				 * harmless, and simpler than duplicating the range
@@ -327,7 +327,9 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 				si.si_pid = (pid_t)pkt.sender_pid;
 				si.si_uid = (uid_t)pkt.sender_uid;
 				si.si_value = pkt.value;
-				__raise_internal_info((int)pkt.signo, &si);
+				/* Never deliver on this service thread: its empty TLS mask is
+				 * unrelated to every POSIX application thread's mask. */
+				__sig_queue_process_info((int)pkt.signo, &si);
 				__sig_unlock();
 			}
 		}

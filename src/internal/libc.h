@@ -510,6 +510,7 @@ int __fsize_allow(long long size);
 int __fsize_exceeded(void);
 int __raise_internal(int);
 int __raise_internal_info(int, const void *);
+int __sig_queue_process_info(int, const void *);
 /* How many times a signal-catching function has been entered.  Compared
  * across an alertable wait by src/unistd/sleep.c to tell a caught signal
  * (the wait ends, [EINTR]) from an ignored one (it does not) -- see the

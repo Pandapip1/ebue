@@ -637,6 +637,8 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 	}
 
 	for (;;) {
+		__sig_drain_pending();
+		if (__sig_caught_count() != sig_start) { errno = EINTR; return -1; }
 		total = poll_pass(nfds, rfds ? &in_r : 0, wfds ? &in_w : 0, efds ? &in_e : 0,
 		                   &out_r, &out_w, &have_poll, console_h, console_fd, &ncons);
 		if (total > 0) break;
@@ -686,17 +688,13 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 		 * src/signal/sigdelivery.c's wake_event (see that function),
 		 * so a cross-process signal wakes this promptly instead of
 		 * waiting out the rest of POLL_INTERVAL_TICKS or the timeout.
-		 * sig_delivery_thread() sets that event BEFORE it calls
-		 * __raise_internal(), not after -- so waking here is no proof
-		 * the delivery, if any, has finished running. __sig_lock()/
-		 * __sig_unlock() with nothing between them is a deliberate
-		 * rendezvous: __raise_internal() always runs with that lock
-		 * held (src/signal/sigdelivery.c's banner), so acquiring and
-		 * immediately releasing it blocks until any in-flight delivery
-		 * completes, and only then is __sig_caught_count() final for
-		 * this wakeup. */
+		 * sig_delivery_thread() sets that event before it queues the packet,
+		 * so waking here is no proof the pending record is ready.  The empty
+		 * lock/unlock is a rendezvous with that enqueue; the drain then runs
+		 * any eligible handler on this application thread. */
 		__sig_lock();
 		__sig_unlock();
+		__sig_drain_pending();
 		if (__sig_caught_count() != sig_start) { errno = EINTR; return -1; }
 	}
 

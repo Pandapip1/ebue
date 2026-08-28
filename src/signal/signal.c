@@ -120,15 +120,21 @@ static void make_siginfo(siginfo_t *si, int sig)
 	}
 }
 
-static int queue_pending(int sig, const siginfo_t *si)
+static int queue_pending_to(struct pending_state *state, int sig,
+			    const siginfo_t *si)
 {
-	struct pending_state *state = thread_directed ? &thread_pending : &process_pending;
 	int realtime = sig >= SIGRTMIN && sig <= SIGRTMAX;
 	if (!realtime && sigismember(&state->set, sig)) return 0;
 	if (state->count >= SIGQUEUE_MAX) { errno = EAGAIN; return -1; }
 	state->info[state->count++] = *si;
 	sigaddset(&state->set, sig);
 	return 0;
+}
+
+static int queue_pending(int sig, const siginfo_t *si)
+{
+	return queue_pending_to(thread_directed ? &thread_pending : &process_pending,
+	                        sig, si);
 }
 
 static int take_pending_signal_from(struct pending_state *state, int sig,
@@ -631,6 +637,27 @@ int __raise_internal_info(int sig, const void *data)
 
 int __raise_internal(int sig) { return __raise_internal_info(sig, 0); }
 
+/* Queue a process-directed signal without consulting this helper thread's
+ * signal mask.  In particular, the cross-process listener is an internal NT
+ * service thread whose empty TLS mask must not make a signal eligible; an
+ * application thread drains this record against its own mask at a safe point. */
+int __sig_queue_process_info(int sig, const void *data)
+{
+	siginfo_t generated;
+	const siginfo_t *supplied = data;
+	int result;
+
+	if (!sig_valid(sig)) { errno = EINVAL; return -1; }
+	if (!supplied) {
+		make_siginfo(&generated, sig);
+		supplied = &generated;
+	}
+	__sig_lock();
+	result = queue_pending_to(&process_pending, sig, supplied);
+	__sig_unlock();
+	return result;
+}
+
 int __raise_thread_internal(int sig)
 {
 	int pending_sig;
@@ -1027,12 +1054,13 @@ int sigsuspend(const sigset_t *s)
 	drain_unblocked_pending();
 	__sig_unlock();
 
-	/* Cross-process delivery runs on the listener thread.  Polling keeps
-	 * this thread parked without needing register-context injection, and
-	 * ignored signals do not change caught_count so they do not wake the
-	 * suspension. */
+	/* Polling keeps this thread parked without needing register-context
+	 * injection.  Drain on this application thread so its temporary mask,
+	 * not the listener thread's TLS mask, decides which signals are eligible. */
 	while (__sig_caught_count() == caught) {
 		LARGE_INTEGER delay = -100000; /* 10ms */
+		__sig_drain_pending();
+		if (__sig_caught_count() != caught) break;
 		NtDelayExecution(TRUE, &delay);
 	}
 

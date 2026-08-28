@@ -206,16 +206,21 @@ int __alertable_delay(long long ticks, long long *left)
 
 	NtQuerySystemTime(&start);
 	__pthread_testcancel();
+	__sig_drain_pending();
+	if (__sig_caught_count() != caught) {
+		if (left) *left = ticks;
+		errno = EINTR;
+		return -1;
+	}
 	while (ticks > 0) {
-		/* Background signal sources (the cross-process delivery thread
-		 * and the POSIX timer manager) run handlers on their own thread.
-		 * A bounded slice lets this thread observe caught_count and return
-		 * EINTR without requiring thread-context injection. */
+		/* A bounded slice lets this thread drain cross-process delivery and
+		 * observe timer handlers without requiring thread-context injection. */
 		long long slice = ticks < 100000 ? ticks : 100000; /* at most 10ms */
 		t = -slice;
 		if (!t) t = -1;   /* a 0 timeout means "yield", not "no wait" */
 		NtDelayExecution(1, &t);
 		__pthread_testcancel();
+		__sig_drain_pending();
 
 		NtQuerySystemTime(&now);
 		ticks -= now - start;
@@ -282,7 +287,11 @@ int pause(void)
 	 * are observed through the caught counter on the next bounded poll.
 	 * An ignored signal changes no counter and therefore leaves pause()
 	 * waiting, as POSIX requires. */
-	while (__sig_caught_count() == caught) NtDelayExecution(1, &slice);
+	while (__sig_caught_count() == caught) {
+		__sig_drain_pending();
+		if (__sig_caught_count() != caught) break;
+		NtDelayExecution(1, &slice);
+	}
 	errno = EINTR;
 	return -1;
 }
