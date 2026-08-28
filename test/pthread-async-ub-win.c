@@ -348,15 +348,28 @@ int main(int argc, char **argv)
 		return 78;
 	}
 
-	for (i = 0; i < (int)(sizeof remote_modes / sizeof remote_modes[0]); i++)
+	/* A hang anywhere below produces zero output under run-tests.py's
+	 * TIMEOUT reporting (nothing has failed yet, so CHECK() has printed
+	 * nothing) -- which is indistinguishable from a hang on the very
+	 * first line without a marker naming what was last attempted. */
+	for (i = 0; i < (int)(sizeof remote_modes / sizeof remote_modes[0]); i++) {
+		printf("progress: %s\n", remote_modes[i]); fflush(stdout);
 		expect_safe_cancel(argv[0], remote_modes[i]);
+	}
+	printf("progress: --self-cancel\n"); fflush(stdout);
 	expect_ub(argv[0], "--self-cancel", "self-cancel test region");
+	printf("progress: --enable-pending\n"); fflush(stdout);
 	expect_ub(argv[0], "--enable-pending", "cancel-enable test region");
+	printf("progress: --make-pending-async\n"); fflush(stdout);
 	expect_ub(argv[0], "--make-pending-async", "cancel-type test region");
+	printf("progress: --unsafe-deferred\n"); fflush(stdout);
 	expect_ub(argv[0], "--unsafe-deferred",
 		"unsafe operation around state lock");
+	printf("progress: control_deferred_inside_unsafe\n"); fflush(stdout);
 	CHECK(control_deferred_inside_unsafe() == 0);
+	printf("progress: control_async_outside_unsafe\n"); fflush(stdout);
 	CHECK(control_async_outside_unsafe() == 0);
+	printf("progress: control_sig_lock_defers\n"); fflush(stdout);
 	CHECK(control_sig_lock_defers() == 0);
 
 	if (fails) printf("pthread-async-ub: %d failure(s)\n", fails);
