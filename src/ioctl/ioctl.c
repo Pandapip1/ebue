@@ -53,6 +53,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <string.h>
+#include <limits.h>
 #include <errno.h>
 #include "libc.h"
 #ifdef NTLIBC_USE_KERNEL32
@@ -65,7 +66,8 @@ static int fionread_pipe(struct __fd *f, int *out)
 	FILE_PIPE_LOCAL_INFORMATION pli;
 	NTSTATUS st = NtQueryInformationFile(f->h, &io, &pli, sizeof pli, FilePipeLocalInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	*out = (int)pli.ReadDataAvailable;
+	*out = pli.ReadDataAvailable > (ULONG)INT_MAX ? INT_MAX
+	     : (int)pli.ReadDataAvailable;
 	return 0;
 }
 
@@ -75,14 +77,15 @@ static int fionread_file(struct __fd *f, int *out)
 	FILE_STANDARD_INFORMATION si;
 	FILE_POSITION_INFORMATION pi;
 	NTSTATUS st;
-	long long remain;
 
 	st = NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	st = NtQueryInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	remain = si.EndOfFile - pi.CurrentByteOffset;
-	*out = remain > 0 ? (remain > 0x7fffffff ? 0x7fffffff : (int)remain) : 0;
+	if (!__file_remaining_count(si.EndOfFile, pi.CurrentByteOffset, out)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	return 0;
 }
 

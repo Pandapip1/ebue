@@ -12,7 +12,7 @@ off_t lseek(int fd, off_t off, int whence)
 	FILE_POSITION_INFORMATION pi;
 	FILE_STANDARD_INFORMATION si;
 	NTSTATUS st;
-	long long base;
+	long long base, target;
 
 	if (!f) return -1;
 	if (f->type != __FD_FILE) { errno = ESPIPE; return -1; }
@@ -31,9 +31,11 @@ off_t lseek(int fd, off_t off, int whence)
 		break;
 	default: errno = EINVAL; return -1;
 	}
-	if (off > 0 && base > __OFF_MAX - off) { errno = EOVERFLOW; return -1; }
-	if (base + off < 0) { errno = EINVAL; return -1; }
-	pi.CurrentByteOffset = base + off;
+	if (!__file_offset_add(base, off, &target)) {
+		errno = base >= 0 && off < 0 ? EINVAL : EOVERFLOW;
+		return -1;
+	}
+	pi.CurrentByteOffset = target;
 	st = NtSetInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return pi.CurrentByteOffset;

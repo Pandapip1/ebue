@@ -17,6 +17,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <limits.h>
+#include "../src/internal/libc.h"
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -298,6 +300,39 @@ static void test_lseek_eoverflow(void)
 
 	CHECK(close(fd) == 0);
 	unlink("t-ovf.txt");
+}
+
+/* Successful NT metadata queries are still a trust boundary.  Drive the
+ * pure checked arithmetic used by lseek(), regular-file FIONREAD, and
+ * fstat() through valid endpoints and every malformed signed endpoint;
+ * the public functions' ordinary paths are covered by the tests around
+ * this one. */
+static void test_kernel_file_arithmetic(void)
+{
+	long long value;
+	int count;
+
+	CHECK(__file_offset_add(0, 0, &value) && value == 0);
+	CHECK(__file_offset_add(5, -5, &value) && value == 0);
+	CHECK(__file_offset_add(LLONG_MAX, 0, &value) && value == LLONG_MAX);
+	CHECK(!__file_offset_add(-1, 0, &value));
+	CHECK(!__file_offset_add(0, LLONG_MIN, &value));
+	CHECK(!__file_offset_add(LLONG_MAX, 1, &value));
+
+	CHECK(__file_remaining_count(9, 4, &count) && count == 5);
+	CHECK(__file_remaining_count(0, LLONG_MAX, &count) && count == 0);
+	CHECK(__file_remaining_count(LLONG_MAX, 0, &count) && count == INT_MAX);
+	CHECK(!__file_remaining_count(-1, 0, &count));
+	CHECK(!__file_remaining_count(0, -1, &count));
+
+	CHECK(__file_allocation_blocks(0, &value) && value == 0);
+	CHECK(__file_allocation_blocks(1, &value) && value == 1);
+	CHECK(__file_allocation_blocks(511, &value) && value == 1);
+	CHECK(__file_allocation_blocks(512, &value) && value == 1);
+	CHECK(__file_allocation_blocks(513, &value) && value == 2);
+	CHECK(__file_allocation_blocks(LLONG_MAX, &value) &&
+	      value == LLONG_MAX / 512 + 1);
+	CHECK(!__file_allocation_blocks(-1, &value));
 }
 
 /* ---- stat/mkdir/rmdir/unlink/rename ---- */
@@ -696,6 +731,7 @@ int main(void)
 	test_read_write();
 	test_lseek();
 	test_lseek_eoverflow();
+	test_kernel_file_arithmetic();
 	test_fs();
 	test_long_path();
 	test_dup_fcntl();

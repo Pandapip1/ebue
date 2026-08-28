@@ -207,6 +207,7 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	FILE_INTERNAL_INFORMATION ii;
 	FILE_ATTRIBUTE_TAG_INFORMATION ti;
 	FILE_FS_VOLUME_INFORMATION vi;
+	long long blocks;
 	NTSTATUS s;
 	unsigned lxmod = 0;
 	int have_lxmod, exe = 0;
@@ -227,6 +228,11 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	if (!NT_SUCCESS(s)) return __set_errno_status(s);
 	s = NtQueryInformationFile(h, &io, &si, sizeof si, FileStandardInformation);
 	if (!NT_SUCCESS(s)) return __set_errno_status(s);
+	if (si.EndOfFile < 0 ||
+	    !__file_allocation_blocks(si.AllocationSize, &blocks)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	if (!NT_SUCCESS(NtQueryInformationFile(h, &io, &ii, sizeof ii, FileInternalInformation))) ii.IndexNumber = 0;
 	if (!NT_SUCCESS(NtQueryInformationFile(h, &io, &ti, sizeof ti, FileAttributeTagInformation))) ti.ReparseTag = 0;
 	if (NT_SUCCESS(NtQueryVolumeInformationFile(h, &io, &vi, sizeof vi, FileFsVolumeInformation)) ||
@@ -249,7 +255,7 @@ int __fstat_handle(HANDLE h, int type, struct stat *st)
 	st->st_gid = getgid();
 	st->st_size = S_ISDIR(st->st_mode) ? 0 : si.EndOfFile;
 	st->st_blksize = 4096;
-	st->st_blocks = (si.AllocationSize + 511) / 512;
+	st->st_blocks = (blkcnt_t)blocks;
 	st->st_atim.tv_sec = __nt_to_unix_sec(bi.LastAccessTime);
 	st->st_atim.tv_nsec = __nt_to_unix_nsec(bi.LastAccessTime);
 	st->st_mtim.tv_sec = __nt_to_unix_sec(bi.LastWriteTime);

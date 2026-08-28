@@ -500,6 +500,38 @@ static inline int __clock_qpc_resolution(long long freq,
 	return 1;
 }
 
+/* File positions and sizes arrive as signed LARGE_INTEGER fields even when
+ * the successful operation should only produce nonnegative values.  Keep a
+ * malformed kernel/stub response out of signed arithmetic in the callers. */
+static inline int __file_offset_add(long long base, long long delta,
+	long long *result)
+{
+	if (base < 0) return 0;
+	if (delta > 0 && base > INT64_MAX - delta) return 0;
+	if (delta < 0 && delta < -base) return 0;
+	*result = base + delta;
+	return 1;
+}
+
+static inline int __file_remaining_count(long long end, long long pos,
+	int *result)
+{
+	long long remain;
+	if (end < 0 || pos < 0) return 0;
+	if (end <= pos) { *result = 0; return 1; }
+	remain = end - pos;
+	*result = remain > INT32_MAX ? INT32_MAX : (int)remain;
+	return 1;
+}
+
+static inline int __file_allocation_blocks(long long allocation,
+	long long *result)
+{
+	if (allocation < 0) return 0;
+	*result = allocation / 512 + (allocation % 512 != 0);
+	return 1;
+}
+
 /* Return the positive distance from start to end in NT's 100 ns units,
  * rounded up and saturated at the largest relative LARGE_INTEGER.  The
  * unsigned subtraction is intentional: after the lexical ordering check it
