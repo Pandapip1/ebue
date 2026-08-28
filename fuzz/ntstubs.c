@@ -470,7 +470,7 @@ struct vnode {
 	size_t namelen;
 };
 
-enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC };
+enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM };
 
 /* An anonymous pipe, which src/unistd/pipe.c makes the way kernel32's
  * CreatePipe does: NtCreateNamedPipeFile for the read end and NtOpenFile
@@ -517,6 +517,15 @@ struct vpipe {
 	int readers, writers;
 };
 
+struct vsem {
+	struct vsem *next;
+	WCHAR *name;
+	size_t namelen;
+	LONG count;
+	LONG maximum;
+	unsigned refs;
+};
+
 struct ofile {
 	int kind;
 	int refs;                    /* handles onto this file object */
@@ -536,10 +545,12 @@ struct ofile {
 	int exited;
 	int exitcode;
 	int snapshot_fd;             /* OF_PROC: child's shared VFS snapshot */
+	struct vsem *sem;            /* OF_SEM */
 };
 
 static struct ofile *vhandles[VFS_HANDLES];
 static struct vpipe *vpipes;
+static struct vsem *vsems;
 static struct ofile stdfiles[3];
 static struct vnode *vroot;
 static struct vnode *vcwd;
@@ -1356,6 +1367,15 @@ static void of_drop(struct ofile *f)
 	}
 	if (f->kind == OF_PROC && f->snapshot_fd >= 0)
 		syscall(SYS_close, f->snapshot_fd);
+	if (f->kind == OF_SEM) {
+		struct vsem *s = f->sem, **p;
+		if (--s->refs == 0) {
+			for (p = &vsems; *p; p = &(*p)->next)
+				if (*p == s) { *p = s->next; break; }
+			vfree(s->name);
+			vfree(s);
+		}
+	}
 	vfree(f);
 }
 
@@ -3472,6 +3492,17 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE h, BOOLEAN alertable, LARGE_INTEGER 
 	int r;
 	(void)alertable;
 	if (!f) return STATUS_INVALID_HANDLE;
+	if (f->kind == OF_SEM) {
+		if (f->sem->count > 0) {
+			f->sem->count--;
+			return STATUS_WAIT_0;
+		}
+		/* Native tests use zero or bounded waits when the count is zero.
+		 * There is no native pthread substrate in this shim that could
+		 * release an indefinitely waited-on semaphore. */
+		(void)timeout;
+		return STATUS_TIMEOUT;
+	}
 	if (f->kind != OF_PROC) {
 		/* A file or pipe handle is signalled when its I/O completes, and
 		 * every transfer here completes before it returns. */
@@ -3966,13 +3997,112 @@ _Noreturn void __pthread_cancel_trampoline(void)
 {
 	for (;;) { }
 }
-/* POSIX semaphores are backed by NT dispatcher objects.  The current fuzz
- * targets do not exercise that transport; refuse it explicitly so adding
- * semaphore.c to the native whole-library link does not invent semantics. */
-NOTIMPL(NtCreateSemaphore, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, LONG d, LONG e))
-NOTIMPL(NtOpenSemaphore, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
-NOTIMPL(NtQuerySemaphore, (HANDLE a, SEMAPHORE_INFORMATION_CLASS b, PVOID c, ULONG d, PULONG e))
-NOTIMPL(NtReleaseSemaphore, (HANDLE a, LONG b, LONG *c))
+/* POSIX semaphores use these four calls directly, so the native sanitizer
+ * suite needs a small dispatcher-object substrate rather than refusing the
+ * boundary.  It models counts, limits, names, handles, and zero/bounded
+ * waits; native pthread creation remains deliberately unavailable above. */
+static struct vsem *vsem_find(POBJECT_ATTRIBUTES oa)
+{
+	struct vsem *s;
+	PUNICODE_STRING name = oa ? oa->ObjectName : 0;
+	size_t length;
+	if (!name || !name->Buffer || !name->Length) return 0;
+	length = name->Length / sizeof(WCHAR);
+	for (s = vsems; s; s = s->next)
+		if (s->name && wieq(s->name, s->namelen, name->Buffer, length))
+			return s;
+	return 0;
+}
+
+static NTSTATUS vsem_install(struct vsem *sem, PHANDLE output)
+{
+	struct ofile *file;
+	NTSTATUS status;
+	if (!output) return STATUS_INVALID_PARAMETER;
+	file = vmalloc(sizeof *file);
+	if (!file) return STATUS_NO_MEMORY;
+	memset(file, 0, sizeof *file);
+	file->kind = OF_SEM;
+	file->sem = sem;
+	sem->refs++;
+	status = of_install(file, output);
+	if (!NT_SUCCESS(status)) {
+		sem->refs--;
+		vfree(file);
+	}
+	return status;
+}
+
+NTSTATUS NTAPI NtCreateSemaphore(PHANDLE output, ACCESS_MASK access,
+	POBJECT_ATTRIBUTES oa, LONG initial, LONG maximum)
+{
+	struct vsem *sem;
+	PUNICODE_STRING name = oa ? oa->ObjectName : 0;
+	NTSTATUS status;
+	(void)access;
+	if (!output || initial < 0 || maximum <= 0 || initial > maximum)
+		return STATUS_INVALID_PARAMETER;
+	sem = vsem_find(oa);
+	if (sem) return vsem_install(sem, output);
+	sem = vmalloc(sizeof *sem);
+	if (!sem) return STATUS_NO_MEMORY;
+	memset(sem, 0, sizeof *sem);
+	sem->count = initial;
+	sem->maximum = maximum;
+	if (name && name->Buffer && name->Length) {
+		sem->namelen = name->Length / sizeof(WCHAR);
+		sem->name = wdup(name->Buffer, sem->namelen);
+		if (!sem->name) { vfree(sem); return STATUS_NO_MEMORY; }
+	}
+	sem->next = vsems;
+	vsems = sem;
+	status = vsem_install(sem, output);
+	if (!NT_SUCCESS(status)) {
+		vsems = sem->next;
+		vfree(sem->name);
+		vfree(sem);
+	}
+	return status;
+}
+
+NTSTATUS NTAPI NtOpenSemaphore(PHANDLE output, ACCESS_MASK access,
+	POBJECT_ATTRIBUTES oa)
+{
+	struct vsem *sem;
+	(void)access;
+	if (!output) return STATUS_INVALID_PARAMETER;
+	sem = vsem_find(oa);
+	return sem ? vsem_install(sem, output) : STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
+NTSTATUS NTAPI NtQuerySemaphore(HANDLE handle,
+	SEMAPHORE_INFORMATION_CLASS information_class, PVOID buffer,
+	ULONG length, PULONG returned)
+{
+	struct ofile *file = of_get(handle);
+	SEMAPHORE_BASIC_INFORMATION *info = buffer;
+	if (!file || file->kind != OF_SEM) return STATUS_INVALID_HANDLE;
+	if (information_class != SemaphoreBasicInformation)
+		return STATUS_INVALID_INFO_CLASS;
+	if (!buffer || length < sizeof *info) return STATUS_INFO_LENGTH_MISMATCH;
+	info->CurrentCount = file->sem->count;
+	info->MaximumCount = file->sem->maximum;
+	if (returned) *returned = sizeof *info;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtReleaseSemaphore(HANDLE handle, LONG release,
+	LONG *previous)
+{
+	struct ofile *file = of_get(handle);
+	if (!file || file->kind != OF_SEM) return STATUS_INVALID_HANDLE;
+	if (release <= 0) return STATUS_INVALID_PARAMETER;
+	if (release > file->sem->maximum - file->sem->count)
+		return STATUS_SEMAPHORE_LIMIT_EXCEEDED;
+	if (previous) *previous = file->sem->count;
+	file->sem->count += release;
+	return STATUS_SUCCESS;
+}
 /* src/signal/signal.c's segv_code() calls this to tell SEGV_MAPERR from
  * SEGV_ACCERR, but only from inside exception_handler(), which this
  * file's RtlAddVectoredExceptionHandler() (below) never actually
