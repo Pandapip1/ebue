@@ -1213,7 +1213,7 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 		errno = EINVAL;
 		return -1;
 	}
-	limit = (long long)timeout->tv_sec * 1000000000LL + timeout->tv_nsec;
+	limit = __duration_ticks(timeout->tv_sec, timeout->tv_nsec);
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	__sig_lock();
 	waiting_set = *set;
@@ -1229,8 +1229,8 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 		}
 		__sig_unlock();
 		clock_gettime(CLOCK_MONOTONIC, &now);
-		elapsed = (long long)(now.tv_sec - start.tv_sec) * 1000000000LL
-		        + now.tv_nsec - start.tv_nsec;
+		elapsed = __timespec_diff_ticks(now.tv_sec, now.tv_nsec,
+			start.tv_sec, start.tv_nsec);
 		if (elapsed >= limit) {
 			__sig_lock();
 			wait_active = 0;
@@ -1240,7 +1240,7 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 		}
 		{
 			long long left = limit - elapsed;
-			LARGE_INTEGER d = -((left + 99) / 100);
+			LARGE_INTEGER d = -left;
 			if (!d) d = -1;
 			__sig_wait_delivery(&d);
 		}

@@ -1053,6 +1053,63 @@ static void test_pthread_cancel_cleanup(void)
 }
 #endif
 
+#if NTLIBC_TEST(PASS, posix_pthread_cancel_huge_timeouts)
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
+#include <limits.h>
+
+extern int __pthread_cancel_unsafe_active(pthread_t);
+
+enum huge_wait_kind {
+	HUGE_NANOSLEEP,
+	HUGE_CLOCK_RELATIVE,
+	HUGE_CLOCK_ABSOLUTE
+};
+
+static void *huge_wait_start(void *argument)
+{
+	enum huge_wait_kind kind = (enum huge_wait_kind)(long long)argument;
+	struct timespec request = { LLONG_MAX, 999999999L };
+	int result;
+
+	if (kind == HUGE_NANOSLEEP)
+		result = nanosleep(&request, NULL);
+	else if (kind == HUGE_CLOCK_RELATIVE)
+		result = clock_nanosleep(CLOCK_MONOTONIC, 0, &request, NULL);
+	else
+		result = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME,
+			&request, NULL);
+	return (void *)(long long)(result + 2);
+}
+
+static void test_pthread_cancel_huge_timeouts(void)
+{
+	int kind;
+	for (kind = HUGE_NANOSLEEP; kind <= HUGE_CLOCK_ABSOLUTE; kind++) {
+		pthread_t thread;
+		void *result = NULL;
+		int i, active = 0;
+		CHECK(pthread_create(&thread, NULL, huge_wait_start,
+			(void *)(long long)kind) == 0);
+		for (i = 0; i < 1000000; i++) {
+			if (__pthread_cancel_unsafe_active(thread)) {
+				active = 1;
+				break;
+			}
+			sched_yield();
+		}
+		/* The pre-fix multiplication wraps before the unsafe interval,
+		 * making these valid huge waits return instead of remaining a
+		 * cancellation point. */
+		CHECK(active);
+		CHECK(pthread_cancel(thread) == 0);
+		CHECK(pthread_join(thread, &result) == 0);
+		CHECK(result == PTHREAD_CANCELED);
+	}
+}
+#endif
+
 /* ==================================================================
  * Thread scheduling and concurrency --
  * .../functions/pthread_getschedparam.html,

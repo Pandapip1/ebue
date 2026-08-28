@@ -459,6 +459,21 @@ static inline long long __timespec_diff_ticks(long long end_sec, long end_nsec,
 	return (long long)seconds * __TICKS_PER_SEC + subsecond;
 }
 
+/* Non-negative relative duration to 100 ns units.  A LARGE_INTEGER cannot
+ * describe all of time_t in one kernel wait; saturation makes an oversized
+ * request the longest representable wait (roughly 29,000 years) instead of
+ * signed-overflowing into an already-expired or short interval.  Absolute
+ * deadline callers naturally recompute after a wake; relative callers expose
+ * this kernel-representation ceiling only if that entire wait elapses. */
+static inline long long __duration_ticks(long long seconds, long nseconds)
+{
+	long long subsecond = (nseconds + 99L) / 100L;
+	if ((unsigned long long)seconds >
+	    (unsigned long long)(INT64_MAX - subsecond) /
+	    (unsigned long long)__TICKS_PER_SEC) return INT64_MAX;
+	return seconds * __TICKS_PER_SEC + subsecond;
+}
+
 /* src/unistd/sleep.c's alertable, signal-interruptible wait -- the one
  * place nanosleep()/sleep()/usleep() actually honour EINTR against a
  * signal-catching function.  Shared with clock_nanosleep()

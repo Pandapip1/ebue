@@ -77,6 +77,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <limits.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -806,6 +807,15 @@ static void test_select_ready_count(void)
 	CHECK(FD_ISSET(fds[0], &rfds));
 	CHECK(FD_ISSET(fds[1], &wfds));
 
+	/* Conversion is performed even though readiness is immediate.  This
+	 * boundary keeps UBSan coverage on time_t-to-100ns multiplication. */
+	FD_ZERO(&rfds);
+	FD_SET(fds[0], &rfds);
+	tv.tv_sec = LLONG_MAX;
+	tv.tv_usec = 999999;
+	CHECK(select(fds[0] + 1, &rfds, 0, 0, &tv) == 1);
+	CHECK(FD_ISSET(fds[0], &rfds));
+
 	close(fds[0]);
 	close(fds[1]);
 }
@@ -895,6 +905,14 @@ static void test_pselect_timespec_and_mask(void)
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGUSR1);
 	CHECK(pselect(fds[0] + 1, &rfds, 0, 0, &ts, &mask) == 0);
+
+	CHECK(write(fds[1], "x", 1) == 1);
+	FD_ZERO(&rfds);
+	FD_SET(fds[0], &rfds);
+	ts.tv_sec = LLONG_MAX;
+	ts.tv_nsec = 999999999L;
+	CHECK(pselect(fds[0] + 1, &rfds, 0, 0, &ts, &mask) == 1);
+	CHECK(FD_ISSET(fds[0], &rfds));
 
 	/* signal mask restored to what it was before the call, not left
 	 * as `mask` -- DESCRIPTION's "shall be restored ... prior to

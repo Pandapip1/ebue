@@ -27,6 +27,7 @@
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <limits.h>
 
 static int fails;
 #define CHECK(cond) do { if (!(cond)) { fails++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -610,6 +611,7 @@ static void test_realtime_signal_queue(void)
 {
 	struct sigaction sa;
 	struct timespec zero = { 0, 0 };
+	struct timespec huge = { LLONG_MAX, 999999999L };
 	union sigval value;
 	siginfo_t info;
 	sigset_t set, pend;
@@ -635,6 +637,14 @@ static void test_realtime_signal_queue(void)
 	CHECK(sigwaitinfo(&set, &info) == sig);
 	CHECK(info.si_value.sival_int == 22);
 	CHECK(sigpending(&pend) == 0 && sigismember(&pend, sig) == 0);
+
+	/* A pending member must be returned immediately even with the largest
+	 * valid relative timeout; UBSan covers the conversion before the queue
+	 * scan, which used to overflow in signed nanoseconds. */
+	value.sival_int = 33;
+	CHECK(sigqueue(getpid(), sig, value) == 0);
+	CHECK(sigtimedwait(&set, &info, &huge) == sig);
+	CHECK(info.si_value.sival_int == 33);
 
 	errno = 0;
 	CHECK(sigtimedwait(&set, &info, &zero) == -1 && errno == EAGAIN);

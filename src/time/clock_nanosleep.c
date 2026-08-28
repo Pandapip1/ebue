@@ -54,17 +54,12 @@ int clock_nanosleep(clockid_t id, int flags, const struct timespec *req, struct 
 
 	if (flags & TIMER_ABSTIME) {
 		struct timespec now;
-		long long delta_sec, delta_nsec;
 
 		clock_gettime(id, &now);
-		delta_sec = (long long)req->tv_sec - now.tv_sec;
-		delta_nsec = (long long)req->tv_nsec - now.tv_nsec;
-		if (delta_nsec < 0) { delta_nsec += 1000000000LL; delta_sec--; }
-		if (delta_sec < 0) { delta_sec = 0; delta_nsec = 0; }   /* already due */
-
-		ticks = delta_sec * __TICKS_PER_SEC + (delta_nsec + 99) / 100;
+		ticks = __timespec_diff_ticks(req->tv_sec, req->tv_nsec,
+			now.tv_sec, now.tv_nsec);
 	} else {
-		ticks = req->tv_sec * __TICKS_PER_SEC + (req->tv_nsec + 99) / 100;
+		ticks = __duration_ticks(req->tv_sec, req->tv_nsec);
 	}
 
 	if (__alertable_delay(ticks, &owed, "clock_nanosleep()") < 0) {

@@ -712,7 +712,8 @@ int select(int nfds, fd_set *__restrict rfds, fd_set *__restrict wfds, fd_set *_
 	if (nfds < 0 || nfds > FD_SETSIZE) { errno = EINVAL; return -1; }
 	if (timeout) {
 		if (timeout->tv_sec < 0 || timeout->tv_usec < 0 || timeout->tv_usec >= 1000000) { errno = EINVAL; return -1; }
-		remaining = (long long)timeout->tv_sec * __TICKS_PER_SEC + (long long)timeout->tv_usec * 10;
+		remaining = __duration_ticks(timeout->tv_sec,
+			(long)timeout->tv_usec * 1000L);
 		infinite = 0;
 	} else {
 		remaining = 0;
@@ -731,7 +732,7 @@ int pselect(int nfds, fd_set *__restrict rfds, fd_set *__restrict wfds, fd_set *
 	if (nfds < 0 || nfds > FD_SETSIZE) { errno = EINVAL; return -1; }
 	if (timeout) {
 		if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000L) { errno = EINVAL; return -1; }
-		remaining = (long long)timeout->tv_sec * __TICKS_PER_SEC + (timeout->tv_nsec + 99) / 100;
+		remaining = __duration_ticks(timeout->tv_sec, timeout->tv_nsec);
 		infinite = 0;
 	} else {
 		remaining = 0;

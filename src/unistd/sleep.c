@@ -244,7 +244,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 	long long ticks, owed = 0;
 
 	if (!req || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L || req->tv_sec < 0) { errno = EINVAL; return -1; }
-	ticks = req->tv_sec * __TICKS_PER_SEC + (req->tv_nsec + 99) / 100;
+	ticks = __duration_ticks(req->tv_sec, req->tv_nsec);
 	if (__alertable_delay(ticks, &owed, "nanosleep()") < 0) {
 		/* nanosleep.html: "If the rmtp argument is non-NULL, the
 		 * timespec structure referenced by it is updated to contain
