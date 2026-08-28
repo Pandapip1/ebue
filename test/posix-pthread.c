@@ -789,6 +789,15 @@ static int cleanup_ran;
 static volatile int async_cleanup_ran;
 static sem_t async_cancel_ready;
 static sem_t async_cancel_returned;
+static sem_t defer_cancel_ready;
+static sem_t defer_cancel_release;
+static volatile int defer_cleanup_ran;
+static volatile int defer_operation_returned;
+
+/* Internal hooks used here to deterministically put a target in the same
+ * cancellation-deferred region which protects ntlibc's state locks. */
+void __pthread_cancel_defer_enter(void);
+void __pthread_cancel_defer_leave(void);
 
 static void cleanup_handler(void *arg)
 {
@@ -846,6 +855,74 @@ static void *async_cancel_start(void *arg)
 	return NULL;
 }
 
+enum defer_cancel_mode {
+	DEFER_CANCEL_REMOTE,
+	DEFER_CANCEL_SELF,
+	DEFER_CANCEL_ENABLE,
+	DEFER_CANCEL_TYPE
+};
+
+static void defer_cleanup_handler(void *arg)
+{
+	(void)arg;
+	defer_cleanup_ran++;
+}
+
+static void *defer_cancel_start(void *arg)
+{
+	enum defer_cancel_mode mode = (enum defer_cancel_mode)(long long)arg;
+
+	if (mode == DEFER_CANCEL_ENABLE)
+		CHECK(pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL) == 0);
+	else if (mode == DEFER_CANCEL_TYPE)
+		CHECK(pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL) == 0);
+	else
+		CHECK(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL) == 0);
+
+	pthread_cleanup_push(defer_cleanup_handler, NULL);
+	__pthread_cancel_defer_enter();
+	CHECK(sem_post(&defer_cancel_ready) == 0);
+	if (mode == DEFER_CANCEL_REMOTE) {
+		CHECK(sem_wait(&defer_cancel_release) == 0);
+	} else {
+		CHECK(pthread_cancel(pthread_self()) == 0);
+		if (mode == DEFER_CANCEL_ENABLE)
+			CHECK(pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) == 0);
+		else if (mode == DEFER_CANCEL_TYPE)
+			CHECK(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL) == 0);
+		defer_operation_returned++;
+	}
+	__pthread_cancel_defer_leave();
+	CHECK(0 && "pending asynchronous cancellation was not delivered");
+	pthread_cleanup_pop(0);
+	return NULL;
+}
+
+static void check_deferred_cancel(enum defer_cancel_mode mode)
+{
+	pthread_t th;
+	void *result = NULL;
+
+	defer_cleanup_ran = 0;
+	defer_operation_returned = 0;
+	CHECK(sem_init(&defer_cancel_ready, 0, 0) == 0);
+	CHECK(sem_init(&defer_cancel_release, 0, 0) == 0);
+	CHECK(pthread_create(&th, NULL, defer_cancel_start,
+		(void *)(long long)mode) == 0);
+	CHECK(sem_wait(&defer_cancel_ready) == 0);
+	if (mode == DEFER_CANCEL_REMOTE) {
+		CHECK(pthread_cancel(th) == 0);
+		CHECK(defer_cleanup_ran == 0);
+		CHECK(sem_post(&defer_cancel_release) == 0);
+	}
+	CHECK(pthread_join(th, &result) == 0);
+	CHECK(result == PTHREAD_CANCELED);
+	CHECK(defer_cleanup_ran == 1);
+	CHECK(defer_operation_returned == (mode == DEFER_CANCEL_REMOTE ? 0 : 1));
+	CHECK(sem_destroy(&defer_cancel_ready) == 0);
+	CHECK(sem_destroy(&defer_cancel_release) == 0);
+}
+
 static void test_pthread_cancel_cleanup(void)
 {
 	pthread_t th;
@@ -875,6 +952,15 @@ static void test_pthread_cancel_cleanup(void)
 	CHECK(async_cleanup_ran > 0);
 	CHECK(sem_destroy(&async_cancel_ready) == 0);
 	CHECK(sem_destroy(&async_cancel_returned) == 0);
+
+	/* Delivery is postponed until the outer state transaction commits.
+	 * Cover a remote redirect and all three current-thread transitions:
+	 * self cancellation, enabling a pending request, and making a pending
+	 * request asynchronous.  Cleanup proves the request is delivered once. */
+	check_deferred_cancel(DEFER_CANCEL_REMOTE);
+	check_deferred_cancel(DEFER_CANCEL_SELF);
+	check_deferred_cancel(DEFER_CANCEL_ENABLE);
+	check_deferred_cancel(DEFER_CANCEL_TYPE);
 }
 #endif
 

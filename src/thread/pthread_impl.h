@@ -44,6 +44,7 @@ struct __pthread {
 	volatile int cancel_running;
 	volatile int cancel_unsafe_depth;
 	const char *cancel_unsafe_region;
+	volatile int cancel_defer_depth;
 	int sched_policy;
 	int sched_priority;
 	sigset_t sigmask;
@@ -56,11 +57,13 @@ struct __pthread *__pthread_current(void);
 void __pthread_adopt_current(struct __pthread *);
 int __pthread_is_current(struct __pthread *);
 void __pthread_run_specific_destructors(struct __pthread *);
-_Noreturn void __pthread_cancel_current(void);
+void __pthread_cancel_current(void);
 _Noreturn void __pthread_cancel_redirected(void);
 void __pthread_testcancel(void);
 void __pthread_cancel_unsafe_enter(const char *);
 void __pthread_cancel_unsafe_leave(void);
 int __pthread_cancel_unsafe_active(pthread_t);
+void __pthread_cancel_defer_enter(void);
+void __pthread_cancel_defer_leave(void);
 
 #endif

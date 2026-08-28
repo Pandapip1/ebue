@@ -14,6 +14,8 @@
  * a scheduling delay lands inside the wrapper.  The three current-thread
  * cases cover every non-redirect delivery gateway: direct self-cancel, a
  * pending request becoming enabled, and a pending request becoming async.
+ * A nested deferred region proves that protecting an internal lock postpones
+ * delivery without suppressing an enclosing unsafe-operation diagnostic.
  * Finally, deferred cancellation inside the same marked wait and async
  * cancellation outside it prove the check does not reject defined uses.
  *
@@ -38,6 +40,8 @@ extern int __spawn(const char *, char *const *, char *const *);
 extern void __pthread_cancel_unsafe_enter(const char *);
 extern void __pthread_cancel_unsafe_leave(void);
 extern int __pthread_cancel_unsafe_active(pthread_t);
+extern void __pthread_cancel_defer_enter(void);
+extern void __pthread_cancel_defer_leave(void);
 extern void __sig_lock(void);
 
 #define SURVIVED_EXIT 70
@@ -147,6 +151,18 @@ static int child_make_pending_async(void)
 	return SURVIVED_EXIT;
 }
 
+static int child_unsafe_deferred(void)
+{
+	if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, 0) != 0)
+		return 71;
+	__pthread_cancel_unsafe_enter("unsafe operation around state lock");
+	__pthread_cancel_defer_enter();
+	if (pthread_cancel(pthread_self()) != 0) return 72;
+	__pthread_cancel_defer_leave();
+	__pthread_cancel_unsafe_leave();
+	return SURVIVED_EXIT;
+}
+
 static void *deferred_waiter(void *unused)
 {
 	struct timespec delay = { 30, 0 };
@@ -249,6 +265,8 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[1], "--enable-pending")) return child_enable_pending();
 		if (!strcmp(argv[1], "--make-pending-async"))
 			return child_make_pending_async();
+		if (!strcmp(argv[1], "--unsafe-deferred"))
+			return child_unsafe_deferred();
 		if (!strcmp(argv[1], "--control-deferred"))
 			return control_deferred_inside_unsafe() != 0;
 		if (!strcmp(argv[1], "--control-async"))
@@ -261,6 +279,8 @@ int main(int argc, char **argv)
 	expect_ub(argv[0], "--self-cancel", "self-cancel test region");
 	expect_ub(argv[0], "--enable-pending", "cancel-enable test region");
 	expect_ub(argv[0], "--make-pending-async", "cancel-type test region");
+	expect_ub(argv[0], "--unsafe-deferred",
+		"unsafe operation around state lock");
 	CHECK(control_deferred_inside_unsafe() == 0);
 	CHECK(control_async_outside_unsafe() == 0);
 

@@ -90,6 +90,30 @@ int __pthread_cancel_unsafe_active(pthread_t thread)
 	return atomic_load(&thread->cancel_unsafe_depth) > 0;
 }
 
+/* Internal locks are not cancellation boundaries.  If an asynchronous
+ * request arrives while one is owned, remember it and act immediately after
+ * the outermost protected transaction commits.  This is separate from the
+ * unsafe-region diagnostic: the three POSIX async-cancel-safe operations use
+ * this mechanism around their entire transaction, so cancellation cannot
+ * expose their intermediate state. */
+void __pthread_cancel_defer_enter(void)
+{
+	struct __pthread *self = __pthread_self_control;
+	if (self) exchange_add(&self->cancel_defer_depth, 1);
+}
+
+void __pthread_cancel_defer_leave(void)
+{
+	struct __pthread *self = __pthread_self_control;
+	int previous;
+	if (!self || atomic_load(&self->cancel_defer_depth) <= 0) return;
+	previous = exchange_add(&self->cancel_defer_depth, -1);
+	if (previous == 1 && self->cancel_state == PTHREAD_CANCEL_ENABLE &&
+	    self->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS &&
+	    self->cancel_pending)
+		__pthread_cancel_current();
+}
+
 /* A normal user APC is only delivered when the target enters an alertable
  * wait.  Asynchronous cancellation also has to stop a thread which never
  * waits (the conformance test intentionally uses a tight loop), so redirect
@@ -130,7 +154,12 @@ static int redirect_async_cancel(struct __pthread *thread)
 		handled = 1;
 	} else if (thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
 	    thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS) {
-		if (atomic_load(&thread->cancel_unsafe_depth) > 0) {
+		if (atomic_load(&thread->cancel_defer_depth) > 0) {
+			/* The outermost leave observes cancel_pending and delivers it.
+			 * Report failure so pthread_cancel() also queues the APC needed
+			 * if the target is already in an alertable wait. */
+			handled = 0;
+		} else if (atomic_load(&thread->cancel_unsafe_depth) > 0) {
 			unsafe_region = thread->cancel_unsafe_region;
 			unsafe = 1;
 			handled = 1;
@@ -171,14 +200,15 @@ static _Noreturn void cancel_current_claimed(void)
 	pthread_exit(PTHREAD_CANCELED);
 }
 
-_Noreturn void __pthread_cancel_current(void)
+void __pthread_cancel_current(void)
 {
 	struct __pthread *self = __pthread_self_control;
+	if (self && atomic_load(&self->cancel_defer_depth) > 0) return;
 	if (self && self->cancel_state == PTHREAD_CANCEL_ENABLE &&
 	    self->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS &&
 	    atomic_load(&self->cancel_unsafe_depth) > 0)
 		cancel_unsafe_abort(self->cancel_unsafe_region);
-	if (self) compare_exchange(&self->cancel_running, 0, 1);
+	if (self && compare_exchange(&self->cancel_running, 0, 1) != 0) return;
 	cancel_current_claimed();
 }
 
@@ -222,9 +252,11 @@ int pthread_cancel(pthread_t thread)
 	int redirect = 0;
 	int cancel_self = 0;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
+	__pthread_cancel_defer_enter();
 	RtlAcquirePebLock();
 	if (thread->joined || (!thread->handle && thread->exited)) {
 		RtlReleasePebLock();
+		__pthread_cancel_defer_leave();
 		return ESRCH;
 	}
 	thread->cancel_pending = 1;
@@ -247,6 +279,7 @@ int pthread_cancel(pthread_t thread)
 		thread->cancel_queued = 0;
 		RtlReleasePebLock();
 	}
+	__pthread_cancel_defer_leave();
 	return 0;
 }
 
@@ -258,6 +291,7 @@ int pthread_setcancelstate(int state, int *old_state)
 		return EINVAL;
 	self = __pthread_current();
 	if (!self) return ENOMEM;
+	__pthread_cancel_defer_enter();
 	RtlAcquirePebLock();
 	if (old_state) *old_state = self->cancel_state;
 	self->cancel_state = state;
@@ -265,6 +299,7 @@ int pthread_setcancelstate(int state, int *old_state)
 	         self->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS;
 	RtlReleasePebLock();
 	if (cancel) __pthread_cancel_current();
+	__pthread_cancel_defer_leave();
 	return 0;
 }
 
@@ -276,6 +311,7 @@ int pthread_setcanceltype(int type, int *old_type)
 	    type != PTHREAD_CANCEL_ASYNCHRONOUS) return EINVAL;
 	self = __pthread_current();
 	if (!self) return ENOMEM;
+	__pthread_cancel_defer_enter();
 	RtlAcquirePebLock();
 	if (old_type) *old_type = self->cancel_type;
 	self->cancel_type = type;
@@ -283,6 +319,7 @@ int pthread_setcanceltype(int type, int *old_type)
 	         self->cancel_state == PTHREAD_CANCEL_ENABLE;
 	RtlReleasePebLock();
 	if (cancel) __pthread_cancel_current();
+	__pthread_cancel_defer_leave();
 	return 0;
 }
 

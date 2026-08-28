@@ -540,6 +540,18 @@ void __alarm_reset_after_fork(void);
 void __pthread_testcancel(void);
 void __pthread_cancel_unsafe_enter(const char *);
 void __pthread_cancel_unsafe_leave(void);
+void __pthread_cancel_defer_enter(void);
+void __pthread_cancel_defer_leave(void);
+
+/* Asynchronous cancellation must never redirect a thread while it owns the
+ * PEB lock, or between the kernel consuming that lock's event and the Rtl
+ * publishing its ownership metadata.  Make ownership a cancellation-deferred
+ * region.  The self-reference in each replacement list intentionally resolves
+ * to the real ntdll function while that macro is disabled during expansion. */
+#define RtlAcquirePebLock() \
+	(__pthread_cancel_defer_enter(), RtlAcquirePebLock())
+#define RtlReleasePebLock() \
+	(RtlReleasePebLock(), __pthread_cancel_defer_leave())
 
 /* ---- cross-process signal delivery (src/signal/sigdelivery.c) --------- */
 /* Started by __signal_init(); see that file's banner for the whole
