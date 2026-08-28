@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <pthread.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
@@ -158,15 +159,16 @@ static void wait_cleanup(void *argument)
 		NtClose(waiter->semaphore);
 		waiter->semaphore = 0;
 	}
+	free(waiter);
 }
 
 static int rwlock_acquire(pthread_rwlock_t *lock,
 	const struct timespec *absolute, int try_only, int write)
 {
 	struct rwlock_data *data;
-	struct rw_waiter waiter;
+	struct rw_waiter *waiter;
 	pthread_t self;
-	int result = 0;
+	int result = 0, old_state = PTHREAD_CANCEL_ENABLE;
 	int error = rwlock_ready(lock);
 	if (error) return error;
 	self = pthread_self();
@@ -195,23 +197,46 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 		RtlReleasePebLock();
 		return EINVAL;
 	}
-	memset(&waiter, 0, sizeof waiter);
-	waiter.lock = data;
-	waiter.write = write;
-	waiter.owner = self;
-	if (!NT_SUCCESS(NtCreateSemaphore(&waiter.semaphore, SEMAPHORE_ALL_ACCESS,
-		0, 0, 1))) {
-		RtlReleasePebLock();
+	RtlReleasePebLock();
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
+	waiter = calloc(1, sizeof *waiter);
+	if (!waiter) {
+		pthread_setcancelstate(old_state, 0);
 		return EAGAIN;
 	}
-	waiter.previous = data->tail;
-	if (data->tail) data->tail->next = &waiter;
-	else data->head = &waiter;
-	data->tail = &waiter;
-	waiter.linked = 1;
+	waiter->lock = data;
+	waiter->write = write;
+	waiter->owner = self;
+	if (!NT_SUCCESS(NtCreateSemaphore(&waiter->semaphore, SEMAPHORE_ALL_ACCESS,
+		0, 0, 1))) {
+		free(waiter);
+		pthread_setcancelstate(old_state, 0);
+		return EAGAIN;
+	}
+	pthread_cleanup_push(wait_cleanup, waiter);
+	RtlAcquirePebLock();
+	if (write ? (!data->writer && !data->readers) :
+	    (!data->writer && !data->waiting_writers)) {
+		if (write) data->writer = self;
+		else data->readers++;
+		RtlReleasePebLock();
+		pthread_setcancelstate(old_state, 0);
+		goto done;
+	}
+	if (data->writer == self) {
+		result = EDEADLK;
+		RtlReleasePebLock();
+		pthread_setcancelstate(old_state, 0);
+		goto done;
+	}
+	waiter->previous = data->tail;
+	if (data->tail) data->tail->next = waiter;
+	else data->head = waiter;
+	data->tail = waiter;
+	waiter->linked = 1;
 	if (write) data->waiting_writers++;
 	RtlReleasePebLock();
-	pthread_cleanup_push(wait_cleanup, &waiter);
+	pthread_setcancelstate(old_state, 0);
 	for (;;) {
 		struct timespec now;
 		LARGE_INTEGER timeout;
@@ -224,13 +249,13 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 		else {
 			ticks += 10000;
 			timeout = -ticks;
-			status = NtWaitForSingleObject(waiter.semaphore, TRUE, &timeout);
+			status = NtWaitForSingleObject(waiter->semaphore, TRUE, &timeout);
 		}
 		if (status == STATUS_USER_APC || status == STATUS_ALERTED) continue;
 		if (status == STATUS_TIMEOUT) {
 			RtlAcquirePebLock();
-			if (waiter.linked) {
-				unlink_waiter(&waiter);
+			if (waiter->linked) {
+				unlink_waiter(waiter);
 				wake_waiters(data);
 				result = ETIMEDOUT;
 			}
@@ -240,8 +265,8 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 		if (!NT_SUCCESS(status)) result = EINVAL;
 		break;
 	}
-	pthread_cleanup_pop(0);
-	NtClose(waiter.semaphore);
+	done:
+	pthread_cleanup_pop(1);
 	return result;
 }
 
