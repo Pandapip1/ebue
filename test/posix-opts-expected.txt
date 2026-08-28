@@ -142,7 +142,7 @@ fork/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after 
 fsync/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 fsync/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 fsync/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	PASS once fsync()/fdatasync() reject a non-regular-file descriptor with [EINVAL] instead of reporting success; fsync.html: "[EINVAL] fildes is bound to a special file which does not support synchronization." Fixed in src/unistd/fsync.c; test/unistd.c's own unconditional fsync(pipe)==0 assertion was wrong the same way and is corrected alongside it
-getpid/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
+getpid/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 gmtime/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 gmtime/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 kill/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
@@ -321,7 +321,7 @@ mq_timedsend/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PAS
 mq_timedsend/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX message queue implementation
 mq_timedsend/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX message queue implementation
 mq_timedsend/11-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX message queue implementation
-mq_timedsend/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by mqueue.h pthread.h
+mq_timedsend/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 mq_timedsend/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX message queue implementation
 mq_timedsend/14-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX message queue implementation
 mq_timedsend/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX message queue implementation
@@ -351,13 +351,13 @@ munlock/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	baseline suite out
 munlock/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 munlock/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 munlockall/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after _POSIX_MEMLOCK and munlockall() implementation: the call returned zero
-munmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-munmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
+munmap/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+munmap/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 munmap/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-munmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-munmap/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-munmap/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
-munmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h sys/mman.h
+munmap/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+munmap/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+munmap/8-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+munmap/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 nanosleep/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 nanosleep/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
 nanosleep/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	requires fork(), but Wine does not implement ntdll RtlCloneUserProcess
@@ -838,20 +838,20 @@ sched_yield/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	-
 sem_close/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_close/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_close/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_close/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-sem_destroy/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_close/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+sem_destroy/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_destroy/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_getvalue/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_getvalue/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_getvalue/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_getvalue/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_getvalue/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_getvalue/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_init/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-sem_init/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h sys/mman.h
-sem_init/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h sys/mman.h
+sem_init/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+sem_init/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+sem_init/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_init/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_init/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
@@ -861,7 +861,7 @@ sem_open/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS af
 sem_open/1-3.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_open/1-4.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_open/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_open/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_open/15-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_open/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_open/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_open/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- built after semaphore implementation but returned UNRESOLVED: the case expects a Unix effective-uid transition plus mode 0444/0222 to manufacture EACCES. ntlibc exposes one fixed NT identity, so the second sem_open() remains the same principal opening the same object and succeeds; this platform cannot establish the case's permission-model prerequisite
@@ -891,16 +891,16 @@ sem_unlink/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS 
 sem_unlink/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 sem_unlink/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
 sem_unlink/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	NA -- the case passes an uninitialized automatic char array to sem_unlink(), then treats only ENOENT as success. That is undefined input rather than a semaphore name and produced a deterministic FAIL here; the three valid-name sem_unlink cases independently pass unlink, post-unlink handle use, and name removal
-sem_unlink/4-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_unlink/4-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_unlink/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-sem_unlink/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-sem_unlink/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
-sem_unlink/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_unlink/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+sem_unlink/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
+sem_unlink/9-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_wait/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_wait/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_wait/11-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_wait/12-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
-sem_wait/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h semaphore.h
+sem_wait/13-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in remaining-interface audit
 sem_wait/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_wait/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
 sem_wait/7-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX semaphore implementation
