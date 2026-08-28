@@ -836,6 +836,7 @@ static void test_posix_realtime_aio_cancel_notcanceled(void)
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 static void test_posix_realtime_timer_settime_gettime(void)
 {
@@ -886,6 +887,32 @@ static void test_posix_realtime_timer_settime_gettime(void)
 	 * that caused the signal to be queued or delivered"; nothing has
 	 * expired, so the count is zero. */
 	CHECK(timer_getoverrun(tid) == 0);
+
+	/* The timer engine stores 100ns ticks.  Cover both ways a valid
+	 * timespec can exceed that representation: multiplication itself,
+	 * and a maximum representable relative interval added to a nonzero
+	 * current clock.  A failed set leaves the prior one-hour timer armed. */
+	memset(&its, 0, sizeof its);
+	its.it_value.tv_sec = LLONG_MAX;
+	errno = 0;
+	CHECK(timer_settime(tid, 0, &its, NULL) == -1);
+	CHECK(errno == EOVERFLOW);
+	its.it_value.tv_sec = LLONG_MAX / 10000000LL;
+	its.it_value.tv_nsec = (long)(LLONG_MAX % 10000000LL) * 100L;
+	errno = 0;
+	CHECK(timer_settime(tid, 0, &its, NULL) == -1);
+	CHECK(errno == EOVERFLOW);
+	memset(&back, 0, sizeof back);
+	CHECK(timer_gettime(tid, &back) == 0);
+	CHECK(back.it_value.tv_sec > 0 && back.it_value.tv_sec <= 3600);
+
+	/* The reload value has the same representation and must be checked
+	 * even when a zero it_value would otherwise disarm the timer. */
+	memset(&its, 0, sizeof its);
+	its.it_interval.tv_sec = LLONG_MAX;
+	errno = 0;
+	CHECK(timer_settime(tid, 0, &its, NULL) == -1);
+	CHECK(errno == EOVERFLOW);
 
 	/* "If the it_value member of value is zero, the timer shall be
 	 * disarmed." */

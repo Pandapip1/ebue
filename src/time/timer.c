@@ -43,23 +43,27 @@ static int timespec_valid(const struct timespec *ts)
 	return ts->tv_sec >= 0 && ts->tv_nsec >= 0 && ts->tv_nsec < 1000000000L;
 }
 
-static long long timespec_ns(const struct timespec *ts)
+static int timespec_ticks(const struct timespec *ts, long long *ticks)
 {
-	return (long long)ts->tv_sec * 1000000000LL + ts->tv_nsec;
+	long long subsecond = (ts->tv_nsec + 99L) / 100L;
+	if (ts->tv_sec > (INT64_MAX - subsecond) / __TICKS_PER_SEC)
+		return 0;
+	*ticks = ts->tv_sec * __TICKS_PER_SEC + subsecond;
+	return 1;
 }
 
-static void ns_timespec(long long ns, struct timespec *ts)
+static void ticks_timespec(long long ticks, struct timespec *ts)
 {
-	if (ns < 0) ns = 0;
-	ts->tv_sec = (time_t)(ns / 1000000000LL);
-	ts->tv_nsec = (long)(ns % 1000000000LL);
+	if (ticks < 0) ticks = 0;
+	ts->tv_sec = (time_t)(ticks / __TICKS_PER_SEC);
+	ts->tv_nsec = (long)(ticks % __TICKS_PER_SEC) * 100L;
 }
 
-static long long clock_ns(clockid_t clock)
+static long long clock_ticks(clockid_t clock)
 {
 	struct timespec now;
 	if (clock_gettime(clock, &now) < 0) return 0;
-	return timespec_ns(&now);
+	return __duration_ticks(now.tv_sec, now.tv_nsec);
 }
 
 static struct posix_timer *timer_lookup(timer_t id)
@@ -77,8 +81,9 @@ static void timer_signal(struct posix_timer *timer, long long expirations)
 
 	if (timer->event.sigev_notify != SIGEV_SIGNAL) return;
 	if (__sig_pending_member(timer->event.sigev_signo)) {
-		overrun = (long long)timer->overrun + expirations;
-		timer->overrun = overrun > INT_MAX ? INT_MAX : (int)overrun;
+		overrun = expirations > INT_MAX - timer->overrun ?
+			INT_MAX : timer->overrun + expirations;
+		timer->overrun = (int)overrun;
 		timer->notification_pending = 1;
 		return;
 	}
@@ -87,8 +92,9 @@ static void timer_signal(struct posix_timer *timer, long long expirations)
 	 * into that notification rather than racing a second signal past the
 	 * handler before it can call timer_getoverrun(). */
 	if (timer->notification_pending) {
-		overrun = (long long)timer->overrun + expirations;
-		timer->overrun = overrun > INT_MAX ? INT_MAX : (int)overrun;
+		overrun = expirations > INT_MAX - timer->overrun ?
+			INT_MAX : timer->overrun + expirations;
+		timer->overrun = (int)overrun;
 		timer->notification_pending = 0;
 		return;
 	}
@@ -109,12 +115,17 @@ static void timer_signal(struct posix_timer *timer, long long expirations)
 
 static void timer_expire(struct posix_timer *timer, long long now)
 {
-	long long expirations;
+	long long expirations, elapsed, base;
 	if (!timer->due || now < timer->due) return;
 	expirations = 1;
 	if (timer->interval) {
-		expirations += (now - timer->due) / timer->interval;
-		timer->due += expirations * timer->interval;
+		elapsed = now - timer->due;
+		expirations += elapsed / timer->interval;
+		/* Compute the first deadline after now without multiplying the
+		 * possibly enormous expiration count by the interval. */
+		base = now - elapsed % timer->interval;
+		timer->due = timer->interval > INT64_MAX - base ?
+			INT64_MAX : base + timer->interval;
 	} else {
 		timer->due = 0;
 	}
@@ -134,7 +145,7 @@ static ULONG NTAPI timer_manager(PVOID unused)
 			struct posix_timer *timer = &timers[i];
 			long long now, left;
 			if (!timer->active || !timer->due) continue;
-			now = clock_ns(timer->clock);
+			now = clock_ticks(timer->clock);
 			timer_expire(timer, now);
 			if (!timer->due) continue;
 			left = timer->due - now;
@@ -150,8 +161,7 @@ static ULONG NTAPI timer_manager(PVOID unused)
 		__sig_unlock();
 
 		if (nearest) {
-			long long ticks = (nearest + 99) / 100;
-			timeout = -(ticks ? ticks : 1);
+			timeout = -nearest;
 			wait = &timeout;
 		}
 		/* Auto-reset manager_wake closes the scan/wait race: a settime() or
@@ -229,30 +239,42 @@ int timer_create(clockid_t clock, struct sigevent *event, timer_t *id)
 
 static void timer_value(struct posix_timer *timer, struct itimerspec *value)
 {
-	long long left = timer->due ? timer->due - clock_ns(timer->clock) : 0;
-	ns_timespec(left, &value->it_value);
-	ns_timespec(timer->interval, &value->it_interval);
+	long long left = timer->due ? timer->due - clock_ticks(timer->clock) : 0;
+	ticks_timespec(left, &value->it_value);
+	ticks_timespec(timer->interval, &value->it_interval);
 }
 
 int timer_settime(timer_t id, int flags, const struct itimerspec *value,
                   struct itimerspec *old)
 {
 	struct posix_timer *timer;
-	long long first;
+	long long first, interval, now;
 	LONG previous;
 
 	if ((flags & ~TIMER_ABSTIME) || !timespec_valid(&value->it_value) ||
 	    !timespec_valid(&value->it_interval)) { errno = EINVAL; return -1; }
+	if (!timespec_ticks(&value->it_value, &first) ||
+	    !timespec_ticks(&value->it_interval, &interval)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
 	__sig_lock();
 	timer = timer_lookup(id);
 	if (!timer) { __sig_unlock(); errno = EINVAL; return -1; }
 	if (old) timer_value(timer, old);
-	first = timespec_ns(&value->it_value);
-	timer->interval = timespec_ns(&value->it_interval);
+	if (first && !(flags & TIMER_ABSTIME)) {
+		now = clock_ticks(timer->clock);
+		if (first > INT64_MAX - now) {
+			__sig_unlock();
+			errno = EOVERFLOW;
+			return -1;
+		}
+	}
+	timer->interval = interval;
 	timer->overrun = 0;
 	if (!first) timer->due = 0;
 	else if (flags & TIMER_ABSTIME) timer->due = first;
-	else timer->due = clock_ns(timer->clock) + first;
+	else timer->due = now + first;
 	if (manager_wake) NtSetEvent(manager_wake, &previous);
 	__sig_unlock();
 	return 0;
@@ -279,7 +301,7 @@ int timer_getoverrun(timer_t id)
 	/* Account for sub-millisecond intervals even when the manager thread
 	 * has not yet received a scheduling slice.  Expirations are a clock
 	 * property, not a count of manager wakeups. */
-	timer_expire(timer, clock_ns(timer->clock));
+	timer_expire(timer, clock_ticks(timer->clock));
 	result = timer->overrun;
 	timer->notification_pending = 0;
 	__sig_unlock();
