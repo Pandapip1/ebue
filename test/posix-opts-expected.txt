@@ -586,10 +586,10 @@ pthread_mutex_destroy/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	mea
 pthread_mutex_destroy/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_destroy/5-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_destroy/speculative/4-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
-pthread_mutex_getprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_mutex_getprioceiling/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_mutex_getprioceiling/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_mutex_getprioceiling/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_mutex_getprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
+pthread_mutex_getprioceiling/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
+pthread_mutex_getprioceiling/3-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
+pthread_mutex_getprioceiling/3-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_mutex_init/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_init/1-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_init/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
@@ -603,7 +603,7 @@ pthread_mutex_lock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: 
 pthread_mutex_lock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_mutex_lock/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_lock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
-pthread_mutex_setprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_mutex_setprioceiling/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_mutex_timedlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_timedlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
 pthread_mutex_timedlock/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	OPTS: observed PASS after pthread mutex implementation
@@ -676,9 +676,9 @@ pthread_rwlock_init/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measu
 pthread_rwlock_init/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_init/6-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_rdlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
-pthread_rwlock_rdlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_rwlock_rdlock/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
-pthread_rwlock_rdlock/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_rwlock_rdlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
+pthread_rwlock_rdlock/2-2.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
+pthread_rwlock_rdlock/2-3.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_rwlock_rdlock/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS in pthread-wide audit after pthread implementation
 pthread_rwlock_rdlock/5-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_timedrdlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
@@ -698,7 +698,7 @@ pthread_rwlock_trywrlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	
 pthread_rwlock_trywrlock/speculative/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_unlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_unlock/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
-pthread_rwlock_unlock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	UNIMPL	OPTS class A: compile/link blocked by pthread.h
+pthread_rwlock_unlock/3-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	measured UNSUPPORTED: optional thread priority scheduling is not advertised
 pthread_rwlock_unlock/4-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_unlock/4-2.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
 pthread_rwlock_wrlock/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX read-write lock implementation
