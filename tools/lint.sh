@@ -607,11 +607,16 @@ stage_cppcheck() {
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || continue
 		out=$builddir/$arch.cppcheck.log
+		case "$arch" in
+		i386) arch_define=-D__i386__=1 ;;
+		x86_64) arch_define=-D__x86_64__=1 ;;
+		esac
 		# shellcheck disable=SC2046,SC2086
 		cppcheck --quiet --enable=warning,portability --std=c99 --max-configs=12 \
 			--inline-suppr --suppressions-list="$suppr" \
 			--error-exitcode=0 -j "$LINT_JOBS" \
 			-DNTLIBC_LINT=1 -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL \
+			"$arch_define" \
 			-Iarch/"$arch" -Iarch/generic -I"$builddir/$arch/include" \
 			-Iinclude -Isrc/internal \
 			$(sources_for "$arch") > "$out" 2>&1
