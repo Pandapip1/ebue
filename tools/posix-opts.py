@@ -306,6 +306,41 @@ def main() -> int:
             policy_accepts("pedantic", "UNIMPL", False, "UNBUILDABLE"),
             not policy_accepts("strict", "UNIMPL", False, "UNBUILDABLE"),
         ]
+        # run_captured must adjudicate the root test process, not wait for an
+        # unrelated descendant which inherited its output pipe. This is the
+        # exact shape of mq_timedsend/5-1: the test parent exits PASS without
+        # wait()ing for its blocked child. Keep the process-group assertion on
+        # Unix, where this CI invariant runs and private sessions are available.
+        if os.name != "nt":
+            with tempfile.TemporaryDirectory(prefix="ntlibc-runner-selftest.") as name:
+                started = time.monotonic()
+                result = run_captured(
+                    [sys.executable, "-c",
+                     "import subprocess,sys,time; "
+                     "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+                     "print('parent-exited', flush=True); raise SystemExit(7)"],
+                    cwd=Path(name), env=os.environ.copy(), timeout=10,
+                )
+                checks += [
+                    not result.timed_out,
+                    result.returncode == 7,
+                    result.output.strip() == "parent-exited",
+                    time.monotonic() - started < 5,
+                ]
+                started = time.monotonic()
+                result = run_captured(
+                    [sys.executable, "-c",
+                     "import subprocess,sys,time; "
+                     "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+                     "print('root-timed-out', flush=True); time.sleep(30)"],
+                    cwd=Path(name), env=os.environ.copy(), timeout=1,
+                )
+                checks += [
+                    result.timed_out,
+                    result.returncode is None,
+                    result.output.strip() == "root-timed-out",
+                    time.monotonic() - started < 8,
+                ]
         print("posix-opts selftest: PASS" if all(checks) else "posix-opts selftest: FAIL")
         return 0 if all(checks) else 1
     if min(args.jobs, args.attempts, args.timeout) < 1:

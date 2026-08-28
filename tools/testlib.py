@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import threading
 
 
 DISPOSITIONS = ("PASS", "BUG", "UNIMPL", "NA", "FLAKY")
@@ -24,30 +25,12 @@ class CapturedProcess:
     timed_out: bool
 
 
-def _text(value: str | bytes | None) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", "replace")
-    return value or ""
-
-
-def run_captured(command: list[str], *, cwd: Path,
-                 env: dict[str, str], timeout: int) -> CapturedProcess:
-    """Run a test with a timeout that also disposes of its process tree."""
-    process = subprocess.Popen(
-        command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, errors="replace", start_new_session=os.name != "nt",
-    )
-    try:
-        output, _ = process.communicate(timeout=timeout)
-        return CapturedProcess(process.returncode, output, False)
-    except subprocess.TimeoutExpired as error:
-        captured = _text(error.output)
-
+def _terminate_tree(process: subprocess.Popen[bytes]) -> None:
+    """Best-effort termination of the private tree started below."""
     if os.name == "nt":
-        # Popen.kill() only terminates the test image.  A child which inherited
-        # stdout keeps communicate() waiting for EOF forever, which used to
-        # turn one test timeout into the Windows job's 25-minute cancellation.
+        # Popen.kill() only terminates the test image. A child which inherited
+        # stdout keeps the reader waiting for EOF, so ask Windows to terminate
+        # the whole descendant tree while that relationship is still known.
         try:
             subprocess.run(
                 ["taskkill", "/pid", str(process.pid), "/t", "/f"],
@@ -55,28 +38,74 @@ def run_captured(command: list[str], *, cwd: Path,
                 stderr=subprocess.DEVNULL, timeout=10, check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
-            process.kill()
+            if process.poll() is None:
+                process.kill()
     else:
-        # start_new_session above makes the test the leader of a private
-        # process group.  Kill Wine and ordinary descendants together.
+        # start_new_session below makes the test the leader of a private
+        # process group. Kill Wine and ordinary descendants together.
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 
+
+def run_captured(command: list[str], *, cwd: Path,
+                 env: dict[str, str], timeout: int) -> CapturedProcess:
+    """Run a test, bounding both its lifetime and inherited output pipes."""
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=os.name != "nt",
+    )
+    assert process.stdout is not None
+    chunks: list[bytes] = []
+
+    # communicate() waits for BOTH the process and pipe EOF. That conflates a
+    # test parent which exited successfully with an orphan child which merely
+    # inherited stdout: mq_timedsend/5-1 does exactly that, so its four-second
+    # PASS became a 120-second TIMEOUT. Drain on a separate thread and wait for
+    # the test process independently, then dispose of descendants as soon as
+    # the root verdict is known.
+    def drain() -> None:
+        try:
+            while True:
+                chunk = process.stdout.read1(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except (OSError, ValueError):
+            pass
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    timed_out = False
     try:
-        output, _ = process.communicate(timeout=5)
-        captured = output
+        process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        # A Wine child may have been forked by the persistent wineserver and
-        # therefore escaped the wrapper's Unix process group.  Do not wait on
-        # its inherited pipe: the per-case verdict is still TIMEOUT.
-        if process.stdout is not None:
-            process.stdout.close()
-        if process.poll() is None:
+        timed_out = True
+        _terminate_tree(process)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             process.kill()
-        process.wait(timeout=5)
-    return CapturedProcess(None, captured, True)
+            process.wait(timeout=5)
+
+    # The root return code is the test verdict. Dispose of every descendant
+    # immediately after it is known, even if the pipe happens to reach EOF on
+    # its own: mq_timedsend/5-1's un-waited child can send one last SIGABRT at
+    # a PID Wine has already reused for the next case. A one-second pipe grace
+    # made that race reproducible as an intermittent rc=6 in the next run.
+    _terminate_tree(process)
+    reader.join(timeout=5)
+    if reader.is_alive():
+        # A Wine child may have been forked by the persistent wineserver and
+        # therefore escaped the wrapper's Unix process group. Do not wait on
+        # its inherited pipe once the root verdict is known.
+        process.stdout.close()
+        reader.join(timeout=1)
+    output = b"".join(chunks).decode("utf-8", "replace")
+    return CapturedProcess(None if timed_out else process.returncode,
+                           output, timed_out)
 
 
 @dataclasses.dataclass(frozen=True)
