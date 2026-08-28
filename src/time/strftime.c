@@ -29,8 +29,12 @@ static int format_number(char *out, long long value, int width,
 	int plus, int automatic_plus)
 {
 	char rev[32];
+	/* Negating after conversion to unsigned produces the right magnitude,
+	 * but -fsanitize=unsigned-integer-overflow still diagnoses the deliberate
+	 * wrap.  -(value + 1) is representable even for LLONG_MIN; add the final
+	 * unit after converting that non-negative value to unsigned. */
 	unsigned long long mag = value < 0
-		? 0ULL - (unsigned long long)value : (unsigned long long)value;
+		? (unsigned long long)(-(value + 1)) + 1 : (unsigned long long)value;
 	int digits = 0, sign, zeroes, n = 0;
 
 	do { rev[digits++] = (char)('0' + mag % 10); mag /= 10; } while (mag);

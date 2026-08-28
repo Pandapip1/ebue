@@ -236,6 +236,17 @@ int main(void)
 		FMT("plain text", "plain text");
 		FMT("%Y-%m-%dT%H:%M:%SZ", "2000-02-29T13:05:09Z");
 
+		/* Fuzz run 33133459536, crash-b07ca7a157a73b30dad93f4ce2ad4f086357a7ee
+		 * (Base64 ACVyJyVjsa5BJyVz): %s formats the negative epoch from
+		 * this deliberately unnormalised struct tm.  Computing its magnitude
+		 * must not rely on unsigned wraparound, which UBSan diagnoses. */
+		memset(&tm, 0, sizeof tm);
+		tm.tm_sec = -8; tm.tm_min = -16; tm.tm_hour = -8;
+		tm.tm_mday = -8; tm.tm_mon = -64; tm.tm_year = -384;
+		tm.tm_wday = -64; tm.tm_yday = -64;
+		n = strftime(buf, sizeof buf, "%s", &tm);
+		CHECK(n > 1 && buf[0] == '-');
+
 		/* Sunday: %u is 7, %w is 0; single-digit %e is space padded */
 		t = 1078012800;   /* Sun 2004-02-29 */
 		gmtime_r(&t, &tm);
