@@ -1496,16 +1496,9 @@ static void test_sigaltstack_disabled(void)
  * signal is received, whereupon it shall return -1 and set errno to
  * [EINTR]".  ERRORS [EINVAL]: "The sig argument is an illegal signal
  * number", for all of them.
- *
- * N/A, with the reason: sigpause()'s "suspend execution ... until a
- * signal is received" half.  src/signal/signal.c's header comment is the
- * governing fact -- there is no asynchronous delivery on this platform,
- * so a call that genuinely suspended could only ever hang.  ntlibc
- * returns the -1/[EINTR] the page requires *of the wakeup* immediately;
- * the suspension itself has nothing that could ever end it, so there is
- * nothing to observe and nothing a test could assert without deadlocking
- * the suite.  Same reasoning the file header already gives for
- * sigwait()/sigtimedwait()/sigsuspend(). */
+ * sigpause() is tested with a signal already pending under the current
+ * mask.  Its temporary mask makes that signal eligible atomically, so the
+ * test exercises a real delivery and wakeup without a timing race. */
 static void hold_handler(int sig) { (void)sig; }
 
 static void test_sighold_sigrelse(void)
@@ -1663,10 +1656,19 @@ static void test_sigignore(void)
 
 static void test_sigpause(void)
 {
-	/* "whereupon it shall return -1 and set errno to [EINTR]".  See the
-	 * banner above for why only the wakeup half is observable here. */
+	sigset_t one;
+
+	/* Hold a real pending signal, then let sigpause() temporarily unblock
+	 * it.  The call must deliver that signal and report EINTR. */
+	CHECK(signal(SIGUSR1, hold_handler) != SIG_ERR);
+	CHECK(sigemptyset(&one) == 0);
+	CHECK(sigaddset(&one, SIGUSR1) == 0);
+	CHECK(sigprocmask(SIG_BLOCK, &one, NULL) == 0);
+	CHECK(raise(SIGUSR1) == 0);
 	errno = 0;
 	CHECK(sigpause(SIGUSR1) == -1 && errno == EINTR);
+	CHECK(sigprocmask(SIG_UNBLOCK, &one, NULL) == 0);
+	CHECK(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
 }
 
 static void test_siginterrupt(void)
