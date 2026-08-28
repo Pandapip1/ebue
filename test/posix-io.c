@@ -340,7 +340,7 @@ static void test_kernel_file_arithmetic(void)
  * directly; the public glob()/wordexp() tests exercise their integrations. */
 static void test_array_capacity_arithmetic(void)
 {
-	size_t cap;
+	size_t cap, size;
 	const size_t maximum = (size_t)-1;
 	const size_t max_four_byte_elements = maximum / 4;
 
@@ -355,6 +355,20 @@ static void test_array_capacity_arithmetic(void)
 	CHECK(!__array_next_capacity(maximum / 4 + 1, 1, 1, 1, 4, &cap));
 	CHECK(!__array_next_capacity(0, 0, 1, 0, 1, &cap));
 	CHECK(!__array_next_capacity(0, 0, 1, 1, 0, &cap));
+
+	CHECK(__size_add_checked(7, 9, &size) && size == 16);
+	CHECK(__size_add_checked(maximum, 0, &size) && size == maximum);
+	CHECK(!__size_add_checked(maximum, 1, &size));
+	CHECK(__size_mul_checked(7, 9, &size) && size == 63);
+	CHECK(__size_mul_checked(maximum, 0, &size) && size == 0);
+	CHECK(!__size_mul_checked(maximum / 2 + 1, 2, &size));
+
+	CHECK(__utf8_to_utf16_allocation(3, &size) && size == 8);
+	CHECK(!__utf8_to_utf16_allocation((size_t)UINT32_MAX / 2 + 1, &size));
+	CHECK(__utf16_input_bytes(3, &size) && size == 6);
+	CHECK(!__utf16_input_bytes((size_t)UINT32_MAX / 2 + 1, &size));
+	CHECK(__utf16_to_utf8_capacity(3, &size) && size == 10);
+	CHECK(!__utf16_to_utf8_capacity((size_t)UINT32_MAX / 2 + 1, &size));
 }
 
 /* ---- stat/mkdir/rmdir/unlink/rename ---- */

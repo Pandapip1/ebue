@@ -532,6 +532,45 @@ static inline int __file_allocation_blocks(long long allocation,
 	return 1;
 }
 
+static inline int __size_add_checked(size_t left, size_t right, size_t *result)
+{
+	if (right > (size_t)-1 - left) return 0;
+	*result = left + right;
+	return 1;
+}
+
+static inline int __size_mul_checked(size_t left, size_t right, size_t *result)
+{
+	if (right && left > (size_t)-1 / right) return 0;
+	*result = left * right;
+	return 1;
+}
+
+/* Size the buffers passed through ntdll's ULONG-length UTF conversion
+ * interfaces.  These checks cover both size_t arithmetic and the narrower
+ * length fields before either value is cast. */
+static inline int __utf8_to_utf16_allocation(size_t bytes, size_t *allocation)
+{
+	size_t units;
+	if (bytes > UINT32_MAX / sizeof(WCHAR)) return 0;
+	return __size_add_checked(bytes, 1, &units) &&
+	       __size_mul_checked(units, sizeof(WCHAR), allocation);
+}
+
+static inline int __utf16_input_bytes(size_t units, size_t *bytes)
+{
+	return units <= UINT32_MAX / sizeof(WCHAR) &&
+	       __size_mul_checked(units, sizeof(WCHAR), bytes);
+}
+
+static inline int __utf16_to_utf8_capacity(size_t units, size_t *capacity)
+{
+	size_t bytes;
+	if (!__utf16_input_bytes(units, &bytes) ||
+	    !__size_mul_checked(units, 3, &bytes) || bytes > UINT32_MAX) return 0;
+	return __size_add_checked(bytes, 1, capacity);
+}
+
 /* Choose a geometrically grown array capacity without letting either the
  * requested element count or its byte size wrap.  Growth is bounded by the
  * machine word width: when another doubling would exceed the representable
@@ -541,8 +580,8 @@ static inline int __array_next_capacity(size_t current, size_t used,
 {
 	size_t minimum, maximum, capacity;
 
-	if (!initial || !element_size || additional > (size_t)-1 - used) return 0;
-	minimum = used + additional;
+	if (!initial || !element_size ||
+	    !__size_add_checked(used, additional, &minimum)) return 0;
 	maximum = (size_t)-1 / element_size;
 	if (minimum > maximum || current > maximum) return 0;
 	capacity = current < initial ? initial : current;
