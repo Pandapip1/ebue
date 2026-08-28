@@ -470,7 +470,7 @@ struct vnode {
 	size_t namelen;
 };
 
-enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM };
+enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVENT };
 
 /* An anonymous pipe, which src/unistd/pipe.c makes the way kernel32's
  * CreatePipe does: NtCreateNamedPipeFile for the read end and NtOpenFile
@@ -546,6 +546,8 @@ struct ofile {
 	int exitcode;
 	int snapshot_fd;             /* OF_PROC: child's shared VFS snapshot */
 	struct vsem *sem;            /* OF_SEM */
+	ULONG event_type;            /* OF_EVENT */
+	int event_state;             /* OF_EVENT */
 };
 
 static struct ofile *vhandles[VFS_HANDLES];
@@ -3492,6 +3494,11 @@ NTSTATUS NTAPI NtWaitForSingleObject(HANDLE h, BOOLEAN alertable, LARGE_INTEGER 
 	int r;
 	(void)alertable;
 	if (!f) return STATUS_INVALID_HANDLE;
+	if (f->kind == OF_EVENT) {
+		if (!f->event_state) return STATUS_TIMEOUT;
+		if (f->event_type == SynchronizationEvent) f->event_state = 0;
+		return STATUS_WAIT_0;
+	}
 	if (f->kind == OF_SEM) {
 		if (f->sem->count > 0) {
 			f->sem->count--;
@@ -3978,8 +3985,38 @@ NOTIMPL(NtSetInformationJobObject, (HANDLE a, JOBOBJECTINFOCLASS b, PVOID c, ULO
  * thread handle to model faithfully.  Refuse those boundaries explicitly:
  * this keeps unrelated harnesses linkable without making their results
  * depend on an invented thread or event implementation. */
-NOTIMPL(NtCreateEvent, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, ULONG d, BOOLEAN e))
-NOTIMPL(NtSetEvent, (HANDLE a, LONG *b))
+NTSTATUS NTAPI NtCreateEvent(PHANDLE output, ACCESS_MASK access,
+	POBJECT_ATTRIBUTES oa, ULONG type, BOOLEAN initial)
+{
+	struct ofile *file;
+	NTSTATUS status;
+	(void)access;
+	if (!output || (type != NotificationEvent && type != SynchronizationEvent))
+		return STATUS_INVALID_PARAMETER;
+	/* Named events belong to the unmodelled cross-process signal
+	 * transport.  Unnamed events are sufficient as VFS lifetime handles
+	 * and for local dispatcher consumers. */
+	if (oa && oa->ObjectName && oa->ObjectName->Length)
+		return STATUS_NOT_IMPLEMENTED;
+	file = vmalloc(sizeof *file);
+	if (!file) return STATUS_NO_MEMORY;
+	memset(file, 0, sizeof *file);
+	file->kind = OF_EVENT;
+	file->event_type = type;
+	file->event_state = initial != FALSE;
+	status = of_install(file, output);
+	if (!NT_SUCCESS(status)) vfree(file);
+	return status;
+}
+
+NTSTATUS NTAPI NtSetEvent(HANDLE handle, LONG *previous)
+{
+	struct ofile *file = of_get(handle);
+	if (!file || file->kind != OF_EVENT) return STATUS_INVALID_HANDLE;
+	if (previous) *previous = file->event_state;
+	file->event_state = 1;
+	return STATUS_SUCCESS;
+}
 NOTIMPL(NtCreateThreadEx, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, HANDLE d,
 	PVOID e, PVOID f, ULONG g, SIZE_T h, SIZE_T i, SIZE_T j, PVOID k))
 NOTIMPL(NtTerminateThread, (HANDLE a, NTSTATUS b))
