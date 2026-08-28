@@ -55,6 +55,7 @@ NtClose                                 ; 3.51
 NtCreateEvent                           ; 3.51
 NtCreateFile                            ; 3.51
 NtCreateJobObject                       ; 5.0
+NtCreateMutant                          ; 3.51
 NtCreateNamedPipeFile                   ; 3.51
 NtCreateSection                         ; 3.51
 NtCreateSemaphore                       ; 3.51
@@ -99,6 +100,7 @@ NtQueryVolumeInformationFile            ; 3.51
 NtRaiseHardError                        ; 3.51
 NtReadFile                              ; 3.51
 NtReadVirtualMemory                     ; 3.51
+NtReleaseMutant                         ; 3.51
 NtReleaseSemaphore                      ; 3.51
 NtResumeProcess                         ; 5.1
 NtResumeThread                          ; 3.51

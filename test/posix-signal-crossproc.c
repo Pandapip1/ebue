@@ -465,7 +465,8 @@ static void test_sigsuspend_mask_and_wakeup(const char *self)
 	}
 	sleep_ms(STARTUP_GRACE_MS);
 	CHECK(kill(pid, SIGUSR2) == 0);
-	sleep_ms(100);
+	/* No grace between packets: kill() must not return from the first
+	 * request until the listener has published its replacement instance. */
 	CHECK(kill(pid, SIGUSR1) == 0);
 	CHECK(waitpid(pid, &status, 0) == pid);
 	describe("sigsuspend mask/restore", status);
