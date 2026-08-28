@@ -41,6 +41,7 @@ struct __pthread {
 	int cancel_type;
 	int cancel_pending;
 	int cancel_queued;
+	volatile int cancel_running;
 	int sched_policy;
 	int sched_priority;
 	sigset_t sigmask;

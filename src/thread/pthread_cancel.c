@@ -11,7 +11,7 @@ _Noreturn void __pthread_cancel_trampoline(void);
  * wait.  Asynchronous cancellation also has to stop a thread which never
  * waits (the conformance test intentionally uses a tight loop), so redirect
  * the suspended target to an arch trampoline which cannot return. */
-static int redirect_async_cancel(HANDLE handle)
+static int redirect_async_cancel(struct __pthread *thread)
 {
 #if defined(__x86_64__)
 	unsigned char storage[0x4d0 + 15];
@@ -31,24 +31,39 @@ static int redirect_async_cancel(HANDLE handle)
 	ULONG_PTR ip = (ULONG_PTR)__pthread_cancel_trampoline;
 	ULONG previous;
 	NTSTATUS status;
+	int handled = 0;
 
 	memset(context, 0, sizeof storage - 15);
 	memcpy(context + flags_offset, &flags, sizeof flags);
-	status = NtSuspendThread(handle, &previous);
+	status = NtSuspendThread(thread->handle, &previous);
 	if (!NT_SUCCESS(status)) return 0;
-	status = NtGetContextThread(handle, context);
-	if (NT_SUCCESS(status)) {
-		memcpy(context + ip_offset, &ip, sizeof ip);
-		status = NtSetContextThread(handle, context);
+	/* The target can consume the request at a cancellation point after
+	 * pthread_cancel() drops the PEB lock but before it is suspended.  Do
+	 * not redirect it a second time while its cleanup handlers are already
+	 * running: that abandons the first handler's stack frame. */
+	if (!thread->cancel_pending || thread->cancel_running || thread->exited) {
+		handled = 1;
+	} else if (thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
+	    thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS) {
+		status = NtGetContextThread(thread->handle, context);
+		if (NT_SUCCESS(status)) {
+			memcpy(context + ip_offset, &ip, sizeof ip);
+			status = NtSetContextThread(thread->handle, context);
+		}
+		handled = NT_SUCCESS(status);
 	}
-	NtResumeThread(handle, &previous);
-	return NT_SUCCESS(status);
+	NtResumeThread(thread->handle, &previous);
+	return handled;
 }
 
 _Noreturn void __pthread_cancel_current(void)
 {
 	struct __pthread *self = __pthread_self_control;
 	if (self) {
+		/* Publish this before taking the shared lock.  A concurrent
+		 * redirector suspends this thread before consulting the marker, so
+		 * it cannot race past a completed store. */
+		self->cancel_running = 1;
 		RtlAcquirePebLock();
 		self->cancel_pending = 0;
 		self->cancel_queued = 0;
@@ -109,7 +124,7 @@ int pthread_cancel(pthread_t thread)
 		thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS;
 	RtlReleasePebLock();
 	if (cancel_self) __pthread_cancel_current();
-	if (redirect && !redirect_async_cancel(thread->handle)) queue = 1;
+	if (redirect && !redirect_async_cancel(thread)) queue = 1;
 	if (queue && !NT_SUCCESS(NtQueueApcThread(thread->handle, cancel_apc,
 		thread, 0, 0))) {
 		RtlAcquirePebLock();

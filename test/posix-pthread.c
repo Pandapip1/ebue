@@ -722,8 +722,13 @@ static void test_pthread_specific_key(void)
 
 #if NTLIBC_TEST(PASS, posix_pthread_cancel_cleanup)
 #include <pthread.h>
+#include <semaphore.h>
+#include <time.h>
 
 static int cleanup_ran;
+static volatile int async_cancel_returned;
+static volatile int async_cleanup_ran;
+static sem_t async_cancel_ready;
 
 static void cleanup_handler(void *arg)
 {
@@ -761,6 +766,29 @@ static void *cancel_start(void *arg)
 	return NULL;
 }
 
+static void async_cleanup_handler(void *arg)
+{
+	struct timespec delay = {0, 1000000};
+	(void)arg;
+	do {
+		nanosleep(&delay, NULL);
+		async_cleanup_ran++;
+	} while (!async_cancel_returned && async_cleanup_ran < 5000);
+}
+
+static void *async_cancel_start(void *arg)
+{
+	struct timespec delay = {0, 1000000};
+	(void)arg;
+	CHECK(pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL) == 0);
+	pthread_cleanup_push(async_cleanup_handler, NULL);
+	CHECK(sem_post(&async_cancel_ready) == 0);
+	for (;;)
+		nanosleep(&delay, NULL);
+	pthread_cleanup_pop(0);
+	return NULL;
+}
+
 static void test_pthread_cancel_cleanup(void)
 {
 	pthread_t th;
@@ -774,6 +802,21 @@ static void test_pthread_cancel_cleanup(void)
 	 * PTHREAD_CANCELED shall be placed in *value_ptr." */
 	CHECK(result == PTHREAD_CANCELED);
 	CHECK(cleanup_ran == 1);
+
+	/* A cancellation point may consume an asynchronous request while
+	 * pthread_cancel() is preparing its suspension fallback.  The fallback
+	 * must not redirect a cleanup handler which has already started. */
+	async_cancel_returned = 0;
+	async_cleanup_ran = 0;
+	CHECK(sem_init(&async_cancel_ready, 0, 0) == 0);
+	CHECK(pthread_create(&th, NULL, async_cancel_start, NULL) == 0);
+	CHECK(sem_wait(&async_cancel_ready) == 0);
+	CHECK(pthread_cancel(th) == 0);
+	async_cancel_returned = 1;
+	CHECK(pthread_join(th, &result) == 0);
+	CHECK(result == PTHREAD_CANCELED);
+	CHECK(async_cleanup_ran > 0);
+	CHECK(sem_destroy(&async_cancel_ready) == 0);
 }
 #endif
 
