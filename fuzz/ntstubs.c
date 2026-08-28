@@ -49,7 +49,12 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include "libc.h"
+#include "afd.h"
 
 extern long syscall(long, ...);
 extern void *__interceptor_malloc(size_t);
@@ -494,7 +499,7 @@ struct vnode {
 	size_t namelen;
 };
 
-enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVENT, OF_MUTANT };
+enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVENT, OF_MUTANT, OF_SOCKET };
 
 /* An anonymous pipe, which src/unistd/pipe.c makes the way kernel32's
  * CreatePipe does: NtCreateNamedPipeFile for the read end and NtOpenFile
@@ -573,6 +578,27 @@ struct ofile {
 	ULONG event_type;            /* OF_EVENT */
 	int event_state;             /* OF_EVENT */
 	LONG mutant_state;           /* OF_MUTANT: NT count, 1 when unowned */
+	/* OF_SOCKET: `fd` above is the real host AF_INET/SOCK_STREAM socket
+	 * -- src/socket/socket.c validates the family/type/protocol before
+	 * __afd_open() is ever reached, so every \Device\Afd\Endpoint open
+	 * this file sees is for exactly that pair.  A LISTENING endpoint's
+	 * pending-accept queue is the only extra state the driver side
+	 * needs: IOCTL_AFD_WAIT_FOR_LISTEN does a real accept(2) and parks
+	 * the result here under an incrementing sequence number;
+	 * IOCTL_AFD_ACCEPT (issued on this same listening handle) looks a
+	 * number up and transfers its fd onto a different, already-open
+	 * endpoint (AFD_ACCEPT_DATA.ListenHandle -- confusingly named; see
+	 * accept.c).  Everything else (bind/listen/connect/send/recv/
+	 * shutdown/poll/getsockname) needs nothing beyond the host fd
+	 * itself: the host kernel already enforces "not bound yet",
+	 * "already connected" and so on the same way real AFD does, so
+	 * this file does not duplicate that bookkeeping. */
+	struct {
+		unsigned seq;
+		int fd;
+		struct sockaddr_in peer;
+	} sock_pending[8];
+	int sock_npending;
 };
 
 static struct ofile *vhandles[VFS_HANDLES];
@@ -606,6 +632,12 @@ static const WCHAR w_empty[1] = { 0 };
 /* the NT name of the named-pipe device */
 static const WCHAR w_pipedev[18] = { '\\','D','e','v','i','c','e','\\',
 	'N','a','m','e','d','P','i','p','e','\\' };
+/* \Device\Afd\Endpoint -- src/internal/afd.h's AFD_ENDPOINT_DEVICE,
+ * reused rather than retyped so the two can never quietly disagree.
+ * Every socket() and every accept()ed connection opens exactly this
+ * literal path (see __afd_open()); there is no per-socket name in it,
+ * unlike the named-pipe namespace above. */
+static const WCHAR w_afddev[] = AFD_ENDPOINT_DEVICE; /* 20 chars + the NUL the macro also spells */
 static const WCHAR w_ntpfx[6] = { '\\', '?', '?', '\\', 'C', ':' };
 
 static void *vmalloc(size_t n) { return __interceptor_malloc(n ? n : 1); }
@@ -1401,6 +1433,16 @@ static void of_drop(struct ofile *f)
 	}
 	if (f->kind == OF_PROC && f->snapshot_fd >= 0)
 		syscall(SYS_close, f->snapshot_fd);
+	if (f->kind == OF_SOCKET) {
+		int i;
+		/* A listening endpoint's own accept queue may still hold
+		 * connections nobody accept()ed -- host accept(2) already
+		 * completed those, so a real fd sits behind each one and
+		 * would otherwise leak with this handle. */
+		for (i = 0; i < f->sock_npending; i++)
+			syscall(SYS_close, f->sock_pending[i].fd);
+		syscall(SYS_close, f->fd);
+	}
 	if (f->kind == OF_SEM) {
 		struct vsem *s = f->sem, **p;
 		if (--s->refs == 0) {
@@ -1492,6 +1534,7 @@ struct vpath {
 	size_t leaflen;
 	int nulldev;                 /* \??\NUL */
 	int condev;                  /* \??\CON */
+	int afddev;                  /* \Device\Afd\Endpoint */
 	const WCHAR *pipename;       /* the named-pipe device namespace */
 	size_t pipelen;
 };
@@ -1513,6 +1556,13 @@ static NTSTATUS resolve(POBJECT_ATTRIBUTES oa, struct vpath *out)
 	if (!oa->RootDirectory && n > 18 && wieq(p, 18, w_pipedev, 18)) {
 		out->pipename = p + 18;
 		out->pipelen = n - 18;
+		return STATUS_SUCCESS;
+	}
+	/* \Device\Afd\Endpoint: an exact literal, not a namespace with a
+	 * per-socket suffix (every socket() opens the identical path; see
+	 * w_afddev's own comment). */
+	if (!oa->RootDirectory && n == 20 && wieq(p, 20, w_afddev, 20)) {
+		out->afddev = 1;
 		return STATUS_SUCCESS;
 	}
 	if (oa->RootDirectory) {
@@ -1674,6 +1724,28 @@ static NTSTATUS do_create(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES oa
 		st = of_install(f, out);
 		if (!NT_SUCCESS(st)) { vfree(f); return st; }
 		if (f->writer) p->writers++; else p->readers++;
+		if (io) { io->Status = STATUS_SUCCESS; io->Information = FILE_OPENED; }
+		return STATUS_SUCCESS;
+	}
+
+	if (vp.afddev) {
+		/* A fresh AF_INET/SOCK_STREAM endpoint -- see the ofile
+		 * comment for why nothing from the EA buffer (whichever of
+		 * the two AFD_OPEN_PACKET/AFD_CREATE_PACKET shapes it is)
+		 * needs reading: src/socket/socket.c has already rejected
+		 * every other domain/type/protocol before __afd_open() is
+		 * ever called, so the pair is fixed by construction. */
+		#define SYS_socket 41
+		int hostfd = (int)syscall(SYS_socket, AF_INET, SOCK_STREAM, 0);
+		if (hostfd < 0) return STATUS_INSUFFICIENT_RESOURCES;
+		f = vmalloc(sizeof *f);
+		if (!f) { syscall(SYS_close, hostfd); return STATUS_NO_MEMORY; }
+		memset(f, 0, sizeof *f);
+		f->kind = OF_SOCKET;
+		f->fd = hostfd;
+		f->access = access;
+		st = of_install(f, out);
+		if (!NT_SUCCESS(st)) { syscall(SYS_close, hostfd); vfree(f); return st; }
 		if (io) { io->Status = STATUS_SUCCESS; io->Information = FILE_OPENED; }
 		return STATUS_SUCCESS;
 	}
@@ -4093,23 +4165,402 @@ void __sig_relock_after_handler(int depth) { (void)depth; }
 
 NOTIMPL(NtFsControlFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
                           ULONG f, PVOID g, ULONG h, PVOID i, ULONG j))
-/* src/socket/afdsupport.c's __afd_ioctl(): every AFD request (bind,
- * listen, connect, accept, send, recv, select/poll, disconnect) goes
- * through this.  No simulated \Device\Afd exists over this file's
- * in-memory volume -- modelling a real TCP/IP stack is out of scope for
- * this stub file -- so it always refuses, the same as NtFsControlFile
- * above.  __afd_open() itself (NtCreateFile against \Device\Afd\Endpoint)
- * still goes through the ordinary NtCreateFile() stub below and is not
- * refused by this; only the ioctls past that point are.  This makes
- * every AFD call fail the same honest way test/posix-socket.c's own
- * runtime capability probe already handles for Wine (see that file's
- * banner) -- bind() fails, the probe prints one SKIP line, and the
- * network-dependent assertions are skipped rather than run against a
- * socket that was never really wired up.  Needed only so the link
- * succeeds; src/socket/*.c itself is fully exercised under `make check`
- * against real ntdll/Wine. */
-NOTIMPL(NtDeviceIoControlFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
-                                ULONG f, PVOID g, ULONG h, PVOID i, ULONG j))
+
+/* ------------------------------------------------------------- \Device\Afd
+ *
+ * src/socket/afdsupport.c's __afd_ioctl(): every AFD request (bind,
+ * listen, connect, accept, send, recv, select/poll, disconnect,
+ * getsockname) goes through NtDeviceIoControlFile below, against the
+ * real host AF_INET/SOCK_STREAM socket __afd_open() (NtCreateFile
+ * against \Device\Afd\Endpoint, above) already created.  Every request
+ * and reply is read and written through src/internal/afd.h's own
+ * AFD_*_OFF_* byte offsets -- the same ones src/socket/*.c's request
+ * builders use -- so this parses exactly what the library sends rather
+ * than a second, independently guessed layout; the offset disputes that
+ * header's banners document (phnt vs. ReactOS, on x86_64 only) are
+ * therefore not this file's problem to get right a second time.
+ *
+ * Everything here blocks on the real host syscall, deliberately:
+ * src/socket/connect.c's own comment records that this project "only
+ * ever opens sockets non-blocking-unaware ... so this is always the
+ * blocking form", and __afd_ioctl() only ever waits for STATUS_PENDING
+ * synchronously (NtWaitForSingleObject immediately after issuing the
+ * ioctl) -- so a blocking host syscall is not a simplification, it is
+ * what every caller already assumes.  Nothing below returns
+ * STATUS_PENDING.
+ *
+ * Raw syscalls throughout, and a hand-rolled one at that (raw_syscall()
+ * below), not glibc's syscall(3): this file needs the exact host errno
+ * a failed bind()/connect()/... produced (EADDRINUSE vs ECONNREFUSED
+ * vs ...) to answer with a meaningfully different NTSTATUS, and
+ * glibc's syscall(3) wrapper converts a negative-range kernel return
+ * into "-1, with errno set" the same way every other libc wrapper
+ * does -- which would mean trusting that glibc's own errno-setting code
+ * path, compiled into libc.so, correctly reaches *this* executable's
+ * overridden errno storage rather than some other copy.  fuzz/aflshim.c
+ * exists because that exact kind of trust was measured to fail for
+ * AFL++'s runtime; raw_syscall() sidesteps the question entirely by
+ * reading the kernel's own return value (0 or positive on success, the
+ * negative errno on failure) directly out of the syscall instruction,
+ * the same guarantee ntlibc's own syscall wrappers rely on. */
+static long raw_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile ("syscall"
+		: "=a"(ret)
+		: "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+		: "rcx", "r11", "memory");
+	return ret;
+}
+
+#define SYS_recvfrom_    45
+#define SYS_bind_        49
+#define SYS_listen_      50
+#define SYS_getsockname_ 51
+#define SYS_connect_     42
+#define SYS_accept_      43
+#define SYS_sendto_      44
+#define SYS_shutdown_    48
+#define SYS_poll_        7
+#define SYS_getsockopt_  55
+
+/* The KERNEL's own numbering, not src/internal's <sys/socket.h> --
+ * that header's SOL_SOCKET/SO_ACCEPTCONN are winsock's own numeric
+ * values (0xffff, 0x1009), chosen there for fidelity to real
+ * getsockopt() on the NT target, and would ask the Linux kernel for a
+ * nonsense option if handed to it directly here. */
+#define HOST_SOL_SOCKET    1
+#define HOST_SO_ACCEPTCONN 30
+
+/* An incrementing SequenceNumber source for IOCTL_AFD_WAIT_FOR_LISTEN
+ * -> IOCTL_AFD_ACCEPT handoffs; see struct ofile's sock_pending
+ * comment.  Shared across every listening endpoint in the process --
+ * uniqueness across endpoints costs nothing and removes any question
+ * of two listeners' sequence numbers colliding. */
+static unsigned afd_seq_next;
+
+/* Maps the handful of host errno values this project's socket layer
+ * distinguishes back to the NTSTATUS whose own __errno_from_status()
+ * (src/internal/errno.c) recovers that same errno -- so a round trip
+ * through this file is the identity on every one of them.  Not
+ * exhaustive: anything else collapses to STATUS_UNSUCCESSFUL, this
+ * project's own generic fallback (-> EIO, errno.c's `default`). */
+static NTSTATUS afd_status_from_errno(int e)
+{
+	switch (e) {
+	case EADDRINUSE:   return STATUS_ADDRESS_ALREADY_ASSOCIATED;
+	case ECONNREFUSED: return STATUS_CONNECTION_REFUSED;
+	case ECONNRESET:   return STATUS_CONNECTION_RESET;
+	case ECONNABORTED: return STATUS_CONNECTION_ABORTED;
+	case ENOTCONN:     return STATUS_CONNECTION_INVALID;
+	case EISCONN:      return STATUS_CONNECTION_ACTIVE;
+	case ENETUNREACH:  return STATUS_NETWORK_UNREACHABLE;
+	case EHOSTUNREACH: return STATUS_HOST_UNREACHABLE;
+	case ETIMEDOUT:    return STATUS_IO_TIMEOUT;
+	case EPIPE:        return STATUS_LOCAL_DISCONNECT;
+	case EBADF:        return STATUS_INVALID_HANDLE;
+	case EINVAL:
+	case EADDRNOTAVAIL:
+	case EAFNOSUPPORT:
+	case EOPNOTSUPP:   return STATUS_INVALID_PARAMETER;
+	default:           return STATUS_UNSUCCESSFUL;
+	}
+}
+
+/* sockaddr_in <-> the 14-byte packed TDI_ADDRESS_IP image, through the
+ * same TDI_IP_OFF_* offsets src/socket/afdsupport.c's own
+ * __afd_addr_from_sockaddr()/__afd_addr_to_sockaddr() use -- see
+ * src/internal/afd.h's TDI banner for why this is offsets, not a
+ * struct with tdi.h's pack(1) nobody here has a header for. */
+static void afd_wire_put_addr(unsigned char *w, const struct sockaddr_in *sin)
+{
+	memset(w, 0, TDI_ADDRESS_LENGTH_IP);
+	memcpy(w + TDI_IP_OFF_PORT, &sin->sin_port, 2);
+	memcpy(w + TDI_IP_OFF_ADDR, &sin->sin_addr.s_addr, 4);
+}
+
+static void afd_wire_get_addr(const unsigned char *w, struct sockaddr_in *sin)
+{
+	memset(sin, 0, sizeof *sin);
+	sin->sin_family = AF_INET;
+	memcpy(&sin->sin_port, w + TDI_IP_OFF_PORT, 2);
+	memcpy(&sin->sin_addr.s_addr, w + TDI_IP_OFF_ADDR, 4);
+}
+
+/* A TDI_ADDRESS_INFO-shaped reply -- ULONG ActivityCount, then a
+ * one-address TRANSPORT_ADDRESS -- at `out`, from a real sockaddr_in.
+ * IOCTL_AFD_BIND and IOCTL_AFD_GET_SOCK_NAME both answer with exactly
+ * this shape (AFD_SOCKNAME_RSP_OFF_* and AFD_TDI_ADDRESS_INFO_SIZE_IP); the
+ * TRANSPORT_ADDRESS half is the same one AFD_BIND_REQ_OFF_ADDR_COUNT
+ * etc. describe for the request side of bind. */
+static void afd_build_addr_info(unsigned char *out, const struct sockaddr_in *sin)
+{
+	uint32_t one = 1;
+	unsigned short len = TDI_ADDRESS_LENGTH_IP, type = TDI_ADDRESS_TYPE_IP;
+	memcpy(out + AFD_SOCKNAME_RSP_OFF_ACTIVITY, &one, 4);
+	memcpy(out + AFD_SOCKNAME_RSP_OFF_ADDR + 0, &one, 4);   /* TAAddressCount */
+	memcpy(out + AFD_SOCKNAME_RSP_OFF_ADDR + 4, &len, 2);   /* AddressLength */
+	memcpy(out + AFD_SOCKNAME_RSP_OFF_ADDR + 6, &type, 2);  /* AddressType */
+	afd_wire_put_addr(out + AFD_SOCKNAME_RSP_OFF_ADDR + 8, sin);
+}
+
+/* IOCTL_AFD_SELECT: real host poll(2) on the underlying fds, translated
+ * both ways through AFD_EVENT_*.  See src/internal/afd.h's poll banner
+ * for why the reply must be compacted (only fired handles get an
+ * entry, front-packed) and must never alias the request buffer -- both
+ * matter here because this function is what the caller's compaction
+ * and separate-buffer conventions exist to be correct *against*. */
+static NTSTATUS afd_do_select(const void *in, ULONG inlen, void *out, ULONG outlen, IO_STATUS_BLOCK *io)
+{
+	unsigned long i, n, fired = 0;
+	long long timeout;
+	struct pollfd pfds[32];
+	HANDLE handles[32];
+	uint32_t reqevents[32];
+	long ms;
+	long rc;
+
+	if (!in || inlen < AFD_POLL_REQ_OFF_HANDLES) return STATUS_INVALID_PARAMETER;
+	memcpy(&timeout, (const unsigned char *)in + AFD_POLL_REQ_OFF_TIMEOUT, 8);
+	memcpy(&n, (const unsigned char *)in + AFD_POLL_REQ_OFF_HANDLE_COUNT, 4);
+	n &= 0xffffffffUL;
+	if (n < 1 || n > 32 || inlen < AFD_POLL_REQ_SIZE(n)) return STATUS_INVALID_PARAMETER;
+
+	for (i = 0; i < n; i++) {
+		const unsigned char *he = (const unsigned char *)in + AFD_POLL_REQ_OFF_HANDLES + i * AFD_POLL_H_SIZE;
+		HANDLE h;
+		uint32_t ev;
+		struct ofile *sf;
+		memcpy(&h, he + AFD_POLL_H_OFF_HANDLE, sizeof(HANDLE));
+		memcpy(&ev, he + AFD_POLL_H_OFF_EVENTS, 4);
+		sf = of_get(h);
+		handles[i] = h;
+		reqevents[i] = ev;
+		pfds[i].fd = (sf && sf->kind == OF_SOCKET) ? sf->fd : -1;
+		pfds[i].events = 0;
+		if (ev & AFD_POLL_READ_BITS) pfds[i].events |= POLLIN;
+		if (ev & AFD_POLL_WRITE_BITS) pfds[i].events |= POLLOUT;
+		pfds[i].revents = 0;
+	}
+
+	/* Timeout: 0 never waits (select.c's own case); negative is
+	 * relative, in 100ns units, the same convention NtDelayExecution
+	 * uses; positive is absolute NT FILETIME, converted the same way
+	 * NtDelayExecution converts one, via NtQuerySystemTime -- untested
+	 * by this project's own callers (select.c always passes 0), kept
+	 * faithful anyway rather than refused, since nothing about a wait
+	 * this file can genuinely perform (a host poll()) makes the
+	 * absolute case harder than the relative one. */
+	if (timeout == 0) {
+		ms = 0;
+	} else if (timeout < 0) {
+		long long ticks = -timeout;
+		ms = (long)(ticks / 10000);
+	} else {
+		LARGE_INTEGER nowt;
+		long long left;
+		NtQuerySystemTime(&nowt);
+		left = timeout - nowt;
+		ms = left <= 0 ? 0 : (long)(left / 10000);
+	}
+
+	rc = raw_syscall(SYS_poll_, (long)pfds, (long)n, ms, 0, 0, 0);
+	if (rc < 0) return afd_status_from_errno((int)-rc);
+
+	if (!out || outlen < AFD_POLL_REQ_OFF_HANDLES) return STATUS_INVALID_PARAMETER;
+	memset(out, 0, outlen);
+	for (i = 0; i < n && fired < 32; i++) {
+		uint32_t got = 0;
+
+		if (pfds[i].revents & (POLLHUP | POLLERR)) {
+			got |= AFD_EVENT_CLOSE | AFD_EVENT_DISCONNECT | AFD_EVENT_ABORT | AFD_EVENT_SEND;
+			if (reqevents[i] & AFD_EVENT_RECEIVE) got |= AFD_EVENT_RECEIVE;
+		}
+		if (pfds[i].revents & POLLIN) {
+			/* SO_ACCEPTCONN tells a listening socket apart from a
+			 * connected one: both report POLLIN for "would not
+			 * block", but a listener's POLLIN means a pending
+			 * accept, not data to read. */
+			long sockopt_rc;
+			int val = 0, vlen = (int)sizeof val;
+			sockopt_rc = raw_syscall(SYS_getsockopt_, pfds[i].fd, HOST_SOL_SOCKET, HOST_SO_ACCEPTCONN,
+			                         (long)&val, (long)&vlen, 0);
+			got |= (sockopt_rc == 0 && val != 0) ? AFD_EVENT_ACCEPT : AFD_EVENT_RECEIVE;
+		}
+		if (pfds[i].revents & POLLOUT) got |= AFD_EVENT_SEND;
+		got &= reqevents[i] | AFD_EVENT_CLOSE | AFD_EVENT_DISCONNECT | AFD_EVENT_ABORT;
+		if (!got) continue;
+
+		{
+			unsigned char *oe = (unsigned char *)out + AFD_POLL_REQ_OFF_HANDLES + fired * AFD_POLL_H_SIZE;
+			NTSTATUS okst = STATUS_SUCCESS;
+			if ((fired + 1) * AFD_POLL_H_SIZE + AFD_POLL_REQ_OFF_HANDLES > outlen) break;
+			memcpy(oe + AFD_POLL_H_OFF_HANDLE, &handles[i], sizeof(HANDLE));
+			memcpy(oe + AFD_POLL_H_OFF_EVENTS, &got, 4);
+			memcpy(oe + AFD_POLL_H_OFF_STATUS, &okst, 4);
+		}
+		fired++;
+	}
+	{
+		uint32_t fc = (uint32_t)fired;
+		memcpy((unsigned char *)out + AFD_POLL_REQ_OFF_HANDLE_COUNT, &fc, 4);
+	}
+	if (io) io->Information = AFD_POLL_REQ_OFF_HANDLES + fired * AFD_POLL_H_SIZE;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtDeviceIoControlFile(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID apcctx,
+                                     PIO_STATUS_BLOCK io, ULONG code,
+                                     PVOID in, ULONG inlen, PVOID out, ULONG outlen)
+{
+	struct ofile *f = of_get(h);
+	long rc;
+	(void)ev; (void)apc; (void)apcctx;
+
+	if (io) { io->Status = 0; io->Information = 0; }
+	if (!f || f->kind != OF_SOCKET) return STATUS_INVALID_HANDLE;
+
+	switch (code) {
+	case IOCTL_AFD_BIND: {
+		struct sockaddr_in sin;
+		struct sockaddr_in bound;
+		long blen = sizeof bound;
+		if (!in || inlen < AFD_BIND_REQ_SIZE) return STATUS_INVALID_PARAMETER;
+		afd_wire_get_addr((const unsigned char *)in + AFD_BIND_REQ_OFF_ADDR, &sin);
+		rc = raw_syscall(SYS_bind_, f->fd, (long)&sin, sizeof sin, 0, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		memset(&bound, 0, sizeof bound);
+		raw_syscall(SYS_getsockname_, f->fd, (long)&bound, (long)&blen, 0, 0, 0);
+		if (out && outlen >= AFD_TDI_ADDRESS_INFO_SIZE_IP) {
+			afd_build_addr_info((unsigned char *)out, &bound);
+			if (io) io->Information = AFD_TDI_ADDRESS_INFO_SIZE_IP;
+		}
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_CONNECT: {
+		struct sockaddr_in sin;
+		if (!in || inlen < AFD_CONNECT_REQ_SIZE) return STATUS_INVALID_PARAMETER;
+		afd_wire_get_addr((const unsigned char *)in + AFD_CONNECT_REQ_OFF_ADDR, &sin);
+		rc = raw_syscall(SYS_connect_, f->fd, (long)&sin, sizeof sin, 0, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_START_LISTEN: {
+		const AFD_LISTEN_DATA *ld = (const AFD_LISTEN_DATA *)in;
+		long backlog;
+		if (!in || inlen < sizeof *ld) return STATUS_INVALID_PARAMETER;
+		backlog = (long)ld->Backlog;
+		rc = raw_syscall(SYS_listen_, f->fd, backlog, 0, 0, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_WAIT_FOR_LISTEN: {
+		struct sockaddr_in peer;
+		long plen = sizeof peer;
+		int idx;
+		if (!out || outlen < AFD_ACCEPT_RSP_SIZE) return STATUS_INVALID_PARAMETER;
+		if (f->sock_npending >= (int)(sizeof f->sock_pending / sizeof f->sock_pending[0]))
+			return STATUS_INSUFFICIENT_RESOURCES;
+		memset(&peer, 0, sizeof peer);
+		rc = raw_syscall(SYS_accept_, f->fd, (long)&peer, (long)&plen, 0, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		idx = f->sock_npending++;
+		f->sock_pending[idx].seq = ++afd_seq_next;
+		f->sock_pending[idx].fd = (int)rc;
+		f->sock_pending[idx].peer = peer;
+		{
+			uint32_t seq = f->sock_pending[idx].seq;
+			memcpy((unsigned char *)out + AFD_ACCEPT_RSP_OFF_SEQUENCE, &seq, 4);
+		}
+		{
+			uint32_t one = 1;
+			unsigned short len = TDI_ADDRESS_LENGTH_IP, type = TDI_ADDRESS_TYPE_IP;
+			memcpy((unsigned char *)out + AFD_ACCEPT_RSP_OFF_ADDR_COUNT, &one, 4);
+			memcpy((unsigned char *)out + AFD_ACCEPT_RSP_OFF_ADDR_LENGTH, &len, 2);
+			memcpy((unsigned char *)out + AFD_ACCEPT_RSP_OFF_ADDR_TYPE, &type, 2);
+			afd_wire_put_addr((unsigned char *)out + AFD_ACCEPT_RSP_OFF_ADDR, &peer);
+		}
+		if (io) io->Information = AFD_ACCEPT_RSP_SIZE;
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_ACCEPT: {
+		const AFD_ACCEPT_DATA *ad = (const AFD_ACCEPT_DATA *)in;
+		struct ofile *nf;
+		int idx = -1, i;
+		if (!in || inlen < sizeof *ad) return STATUS_INVALID_PARAMETER;
+		for (i = 0; i < f->sock_npending; i++)
+			if (f->sock_pending[i].seq == ad->SequenceNumber) { idx = i; break; }
+		if (idx < 0) return STATUS_INVALID_PARAMETER;
+		nf = of_get(ad->ListenHandle);
+		if (!nf || nf->kind != OF_SOCKET) return STATUS_INVALID_HANDLE;
+		/* Replace the throwaway socket() __afd_open() gave the new
+		 * endpoint with the one host accept(2) already produced for
+		 * this pending connection. */
+		raw_syscall(SYS_close, nf->fd, 0, 0, 0, 0, 0);
+		nf->fd = f->sock_pending[idx].fd;
+		for (i = idx; i + 1 < f->sock_npending; i++) f->sock_pending[i] = f->sock_pending[i + 1];
+		f->sock_npending--;
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_RECV: {
+		const AFD_RECV_INFO *ri = (const AFD_RECV_INFO *)in;
+		AFD_WSABUF wb;
+		long flags = 0;
+		if (!in || inlen < sizeof *ri || ri->BufferCount != 1) return STATUS_INVALID_PARAMETER;
+		wb = ri->BufferArray[0];
+		if (ri->TdiFlags & TDI_RECEIVE_PEEK) flags |= MSG_PEEK;
+		if (ri->TdiFlags & TDI_RECEIVE_EXPEDITED) flags |= MSG_OOB;
+		rc = raw_syscall(SYS_recvfrom_, f->fd, (long)wb.buf, (long)wb.len, flags, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		if (rc == 0) return STATUS_REMOTE_DISCONNECT; /* recv.html: 0 is peer EOF, not empty success */
+		if (io) io->Information = (ULONG)rc;
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_SEND: {
+		const AFD_SEND_INFO *si = (const AFD_SEND_INFO *)in;
+		AFD_WSABUF wb;
+		long flags = 0x4000 /* MSG_NOSIGNAL: this file raises SIGPIPE itself */;
+		if (!in || inlen < sizeof *si || si->BufferCount != 1) return STATUS_INVALID_PARAMETER;
+		wb = si->BufferArray[0];
+		if (si->TdiFlags & TDI_SEND_EXPEDITED) flags |= MSG_OOB;
+		rc = raw_syscall(SYS_sendto_, f->fd, (long)wb.buf, (long)wb.len, flags, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		if (io) io->Information = (ULONG)rc;
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_DISCONNECT: {
+		const AFD_DISCONNECT_INFO *di = (const AFD_DISCONNECT_INFO *)in;
+		long how;
+		if (!in || inlen < sizeof *di) return STATUS_INVALID_PARAMETER;
+		if ((di->DisconnectType & (AFD_DISCONNECT_SEND | AFD_DISCONNECT_RECV))
+		    == (AFD_DISCONNECT_SEND | AFD_DISCONNECT_RECV) || (di->DisconnectType & AFD_DISCONNECT_ABORT))
+			how = 2 /*SHUT_RDWR*/;
+		else if (di->DisconnectType & AFD_DISCONNECT_SEND) how = 1 /*SHUT_WR*/;
+		else how = 0 /*SHUT_RD*/;
+		rc = raw_syscall(SYS_shutdown_, f->fd, how, 0, 0, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_GET_SOCK_NAME: {
+		struct sockaddr_in sin;
+		long alen = sizeof sin;
+		if (!out || outlen < AFD_SOCKNAME_RSP_SIZE) return STATUS_INVALID_PARAMETER;
+		memset(&sin, 0, sizeof sin);
+		rc = raw_syscall(SYS_getsockname_, f->fd, (long)&sin, (long)&alen, 0, 0, 0);
+		if (rc < 0) return afd_status_from_errno((int)-rc);
+		afd_build_addr_info((unsigned char *)out, &sin);
+		if (io) io->Information = AFD_SOCKNAME_RSP_SIZE;
+		return STATUS_SUCCESS;
+	}
+	case IOCTL_AFD_SELECT:
+		return afd_do_select(in, inlen, out, outlen, io);
+	default:
+		return STATUS_NOT_IMPLEMENTED;
+	}
+}
 NOTIMPL(NtOpenProcess, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c, PCLIENT_ID d))
 NOTIMPL(NtOpenSymbolicLinkObject, (PHANDLE a, ACCESS_MASK b, POBJECT_ATTRIBUTES c))
 NOTIMPL(NtQuerySymbolicLinkObject, (HANDLE a, PUNICODE_STRING b, PULONG c))
