@@ -37,4 +37,3 @@ unsigned constant_shift(unsigned value)
 	value <<= 7;
 	return value;
 }
-
