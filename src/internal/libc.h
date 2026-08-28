@@ -532,6 +532,29 @@ static inline int __file_allocation_blocks(long long allocation,
 	return 1;
 }
 
+/* Choose a geometrically grown array capacity without letting either the
+ * requested element count or its byte size wrap.  Growth is bounded by the
+ * machine word width: when another doubling would exceed the representable
+ * byte limit, use the exact requested capacity instead. */
+static inline int __array_next_capacity(size_t current, size_t used,
+	size_t additional, size_t initial, size_t element_size, size_t *result)
+{
+	size_t minimum, maximum, capacity;
+
+	if (!initial || !element_size || additional > (size_t)-1 - used) return 0;
+	minimum = used + additional;
+	maximum = (size_t)-1 / element_size;
+	if (minimum > maximum || current > maximum) return 0;
+	capacity = current < initial ? initial : current;
+	if (capacity > maximum) capacity = minimum;
+	while (capacity < minimum) {
+		if (capacity > maximum / 2) { capacity = minimum; break; }
+		capacity *= 2;
+	}
+	*result = capacity;
+	return 1;
+}
+
 /* Return the positive distance from start to end in NT's 100 ns units,
  * rounded up and saturated at the largest relative LARGE_INTEGER.  The
  * unsigned subtraction is intentional: after the lexical ordering check it

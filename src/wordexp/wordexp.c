@@ -62,7 +62,8 @@ struct fbuf {
 static int fbuf_push(struct fbuf *b, char c, int literal)
 {
 	if (b->n == b->cap) {
-		size_t nc = b->cap ? b->cap * 2 : 64;
+		size_t nc;
+		if (!__array_next_capacity(b->cap, b->n, 1, 64, 1, &nc)) return -1;
 		char *nd = __malloc(nc);
 		unsigned char *nl = __malloc(nc);
 		if (!nd || !nl) { __free(nd); __free(nl); return -1; }
@@ -107,7 +108,9 @@ static int pv_push(struct pv *p, char *s)
 {
 	if (!s) return -1;
 	if (p->n == p->cap) {
-		size_t nc = p->cap ? p->cap * 2 : 16;
+		size_t nc;
+		if (!__array_next_capacity(p->cap, p->n, 1, 16,
+		    sizeof *p->v, &nc)) { __free(s); return -1; }
 		char **nv = __malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
 		if (p->v) memcpy(nv, p->v, p->n * sizeof *nv);

@@ -49,7 +49,9 @@ static int pv_push(struct pv *p, char *s)
 {
 	if (!s) return -1;
 	if (p->n == p->cap) {
-		size_t nc = p->cap ? p->cap * 2 : 16;
+		size_t nc;
+		if (!__array_next_capacity(p->cap, p->n, 1, 16,
+		    sizeof *p->v, &nc)) { __free(s); errno = ENOMEM; return -1; }
 		char **nv = __malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
 		if (p->v) memcpy(nv, p->v, p->n * sizeof *nv);

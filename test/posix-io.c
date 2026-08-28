@@ -335,6 +335,28 @@ static void test_kernel_file_arithmetic(void)
 	CHECK(!__file_allocation_blocks(-1, &value));
 }
 
+/* Collection builders share this checked growth primitive.  Test its
+ * ordinary initial/doubling paths and each representability boundary
+ * directly; the public glob()/wordexp() tests exercise their integrations. */
+static void test_array_capacity_arithmetic(void)
+{
+	size_t cap;
+	const size_t maximum = (size_t)-1;
+	const size_t max_four_byte_elements = maximum / 4;
+
+	CHECK(__array_next_capacity(0, 0, 1, 16, sizeof(void *), &cap) && cap == 16);
+	CHECK(__array_next_capacity(16, 16, 1, 16, sizeof(void *), &cap) && cap == 32);
+	CHECK(__array_next_capacity(16, 16, 100, 16, 1, &cap) && cap == 128);
+	CHECK(__array_next_capacity(max_four_byte_elements / 2 + 1,
+	      max_four_byte_elements / 2 + 1, 1, 1, 4, &cap) &&
+	      cap == max_four_byte_elements / 2 + 2);
+	CHECK(!__array_next_capacity(1, maximum, 1, 1, 1, &cap));
+	CHECK(!__array_next_capacity(1, maximum / 8, 1, 1, 8, &cap));
+	CHECK(!__array_next_capacity(maximum / 4 + 1, 1, 1, 1, 4, &cap));
+	CHECK(!__array_next_capacity(0, 0, 1, 0, 1, &cap));
+	CHECK(!__array_next_capacity(0, 0, 1, 1, 0, &cap));
+}
+
 /* ---- stat/mkdir/rmdir/unlink/rename ---- */
 static void test_fs(void)
 {
@@ -732,6 +754,7 @@ int main(void)
 	test_lseek();
 	test_lseek_eoverflow();
 	test_kernel_file_arithmetic();
+	test_array_capacity_arithmetic();
 	test_fs();
 	test_long_path();
 	test_dup_fcntl();
