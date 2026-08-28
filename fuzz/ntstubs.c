@@ -4371,7 +4371,16 @@ static NTSTATUS afd_do_select(const void *in, ULONG inlen, void *out, ULONG outl
 	if (rc < 0) return afd_status_from_errno((int)-rc);
 
 	if (!out || outlen < AFD_POLL_REQ_OFF_HANDLES) return STATUS_INVALID_PARAMETER;
-	memset(out, 0, outlen);
+	/* No blanket memset here: IOCTL_AFD_SELECT is METHOD_BUFFERED, and
+	 * the real driver only ever writes NumberOfHandles plus one entry
+	 * per handle that actually fired -- the I/O manager then copies
+	 * back exactly IoStatus.Information bytes, leaving everything past
+	 * that as whatever the caller's own (separate, pre-zeroed) buffer
+	 * already held.  Zeroing the whole thing here was measured wrong
+	 * against test/posix-socket-pollmulti.c, which deliberately
+	 * poisons its reply buffer first and asserts the poison survives a
+	 * zero-fired poll -- proof that nothing wrote there, not merely
+	 * that nothing found anything. */
 	for (i = 0; i < n && fired < 32; i++) {
 		uint32_t got = 0;
 
