@@ -42,6 +42,9 @@
 #             allocator families, treats aliases as borrows, proves every
 #             release and synchronization-object lifecycle, and requires every
 #             dereference to have nonnull, live, in-bounds, aligned storage.
+#   memcontracts
+#             currently opt-in; proves spans for memory and I/O operations and
+#             proves memcpy source and destination ranges do not overlap.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -1014,6 +1017,61 @@ stage_ownership() {
 	return $any
 }
 
+stage_memcontracts() {
+	hdr "memory span and overlap proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	require_tool clang++-18 || return $missing
+	require_tool llvm-config-18 || return $missing
+	libdir=$(llvm-config-18 --libdir)
+	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' -print 2>/dev/null | sort | head -n 1)
+	[ -n "$clang_cpp" ] || { report_missing "Clang 18 development libraries are required for memory contracts."; return $missing; }
+	plugin=$builddir/ntlibc-memory-contract-checker.so
+	# shellcheck disable=SC2046
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+		tools/clang/MemoryContractChecker.cpp -o "$plugin" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+	fixture_log=$builddir/memory-contract-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-memory-contract-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.MemoryContract \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+	tools/lint-memory-contracts.py --fixtures "$fixture_log" || any=1
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.memory-contract.log
+		report=$builddir/$arch.memory-contract.report
+		pardir=$(mktemp -d "$builddir/memory-contract.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; plugin=$3; target=$4; shift 4
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.MemoryContract \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$plugin" "$target" $flags
+		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; continue; fi
+		analyzed=$((analyzed + 1))
+		if tools/lint-memory-contracts.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
+			note "memory contracts [$arch]: proved -> $report"
+		else
+			note "memory contracts [$arch]: findings -> $report"; show_findings "$report"; any=1
+		fi
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -1044,6 +1102,7 @@ for s in $stages; do
 		totality)  stage_totality ;;
 		arithub)    stage_arithub ;;
 		ownership)  stage_ownership ;;
+		memcontracts) stage_memcontracts ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
