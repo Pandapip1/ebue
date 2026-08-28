@@ -57,6 +57,8 @@
 #             comparisons and subtraction, and rejects integer-derived pointers.
 #   locks     currently opt-in; path-sensitively proves mutex, rwlock, and
 #             spinlock acquire/release, wait, destroy, and function-exit state.
+#   variadic  currently opt-in; proves printf/scanf format literalness, argument
+#             counts, promoted types, pointer targets, and length modifiers.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -1304,6 +1306,47 @@ stage_locks() {
 	return $any
 }
 
+stage_variadic() {
+	hdr "variadic ABI and format proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	fixture_log=$builddir/variadic-abi-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-variadic-abi-fixtures/*.c; do
+		clang-18 -fsyntax-only -Wformat=2 -Wformat-pedantic "$fixture" \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+	tools/lint-variadic-abi.py --fixtures "$fixture_log" || any=1
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.variadic-abi.log
+		report=$builddir/$arch.variadic-abi.report
+		pardir=$(mktemp -d "$builddir/variadic-abi.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; target=$3; shift 3
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target -fsyntax-only -Wformat=2 -Wformat-pedantic \
+				"$@" "$f" > "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$target" $flags
+		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; show_findings "$out"; continue; fi
+		analyzed=$((analyzed + 1))
+		if tools/lint-variadic-abi.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
+			note "variadic ABI [$arch]: proved -> $report"
+		else
+			note "variadic ABI [$arch]: findings -> $report"; show_findings "$report"; any=1
+		fi
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -1339,6 +1382,7 @@ for s in $stages; do
 		fallible)   stage_fallible ;;
 		provenance) stage_provenance ;;
 		locks)      stage_locks ;;
+		variadic)   stage_variadic ;;
 		widthmod)  tools/lint-widthmod.sh ;;
 		unreferenced) tools/lint-unreferenced.sh ;;
 		undefined) tools/lint-undefined.sh ;;
