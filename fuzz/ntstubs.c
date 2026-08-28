@@ -497,6 +497,17 @@ struct vnode {
 	struct vnode *parent;        /* directories only */
 	WCHAR *name;                 /* directories only: name in the parent */
 	size_t namelen;
+	/* A reparse point (src/unistd/link.c's symlinkat()/readlinkat()):
+	 * the exact bytes FSCTL_SET_REPARSE_POINT was handed, replayed
+	 * verbatim by FSCTL_GET_REPARSE_POINT.  reparse_tag is also kept
+	 * separately (rather than re-read out of reparse_data every time)
+	 * because FileAttributeTagInformation needs it whether or not the
+	 * caller ever issues either ioctl, and 0 doubles as "not a reparse
+	 * point" -- IO_REPARSE_TAG_SYMLINK and friends are all non-zero by
+	 * construction (the high bit marks a Microsoft tag). */
+	unsigned char *reparse_data;
+	unsigned short reparse_len;
+	ULONG reparse_tag;
 };
 
 enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVENT, OF_MUTANT, OF_SOCKET };
@@ -717,6 +728,7 @@ static void node_release(struct vnode *v)
 	 * what makes tmpfile()'s "unlink it and keep writing" work. */
 	if (!v || v->nlink > 0 || v->refs > 0) return;
 	vfree(v->data);
+	vfree(v->reparse_data);
 	vfree(v->name);
 	vfree(v);
 }
@@ -1539,6 +1551,46 @@ struct vpath {
 	size_t pipelen;
 };
 
+/* The component walk, shared by resolve() (below) and follow_symlink()'s
+ * relative-target case: both start from a known directory vnode and a
+ * remaining WCHAR path, and neither needs the drive-letter/RootDirectory
+ * setup the other has already done. */
+static NTSTATUS walk(struct vnode *dir, const WCHAR *p, size_t n, struct vpath *out)
+{
+	while (n) {
+		size_t len;
+		struct vent *e;
+		for (len = 0; len < n && p[len] != '\\'; len++) ;
+		if (!len) return STATUS_OBJECT_NAME_INVALID;   /* "a\\b" */
+		if (len == n) {
+			/* the leaf; "." and ".." still name a directory */
+			if (len == 1 && p[0] == '.') { out->dir = dir; return STATUS_SUCCESS; }
+			if (len == 2 && p[0] == '.' && p[1] == '.') {
+				out->dir = dir->parent ? dir->parent : dir;
+				return STATUS_SUCCESS;
+			}
+			out->dir = dir;
+			out->leaf = p;
+			out->leaflen = len;
+			return STATUS_SUCCESS;
+		}
+		if (len == 1 && p[0] == '.') { p += 2; n -= 2; continue; }
+		if (len == 2 && p[0] == '.' && p[1] == '.') {
+			if (dir->parent) dir = dir->parent;
+			p += 3; n -= 3;
+			continue;
+		}
+		e = dir_find(dir, p, len);
+		if (!e) return STATUS_OBJECT_PATH_NOT_FOUND;
+		if (!e->node->isdir) return STATUS_OBJECT_PATH_NOT_FOUND;
+		dir = e->node;
+		p += len + 1; n -= len + 1;
+		if (!n) { out->dir = dir; return STATUS_SUCCESS; }   /* trailing "\" */
+	}
+	out->dir = dir;   /* the path named a directory outright */
+	return STATUS_SUCCESS;
+}
+
 static NTSTATUS resolve(POBJECT_ATTRIBUTES oa, struct vpath *out)
 {
 	const WCHAR *p;
@@ -1585,40 +1637,9 @@ static NTSTATUS resolve(POBJECT_ATTRIBUTES oa, struct vpath *out)
 		dir = vroot;
 	}
 
-	/* Walk the components.  The last one is the leaf and is not required
-	 * to exist; every one before it must be an existing directory. */
-	while (n) {
-		size_t len;
-		struct vent *e;
-		for (len = 0; len < n && p[len] != '\\'; len++) ;
-		if (!len) return STATUS_OBJECT_NAME_INVALID;   /* "a\\b" */
-		if (len == n) {
-			/* the leaf; "." and ".." still name a directory */
-			if (len == 1 && p[0] == '.') { out->dir = dir; return STATUS_SUCCESS; }
-			if (len == 2 && p[0] == '.' && p[1] == '.') {
-				out->dir = dir->parent ? dir->parent : dir;
-				return STATUS_SUCCESS;
-			}
-			out->dir = dir;
-			out->leaf = p;
-			out->leaflen = len;
-			return STATUS_SUCCESS;
-		}
-		if (len == 1 && p[0] == '.') { p += 2; n -= 2; continue; }
-		if (len == 2 && p[0] == '.' && p[1] == '.') {
-			if (dir->parent) dir = dir->parent;
-			p += 3; n -= 3;
-			continue;
-		}
-		e = dir_find(dir, p, len);
-		if (!e) return STATUS_OBJECT_PATH_NOT_FOUND;
-		if (!e->node->isdir) return STATUS_OBJECT_PATH_NOT_FOUND;
-		dir = e->node;
-		p += len + 1; n -= len + 1;
-		if (!n) { out->dir = dir; return STATUS_SUCCESS; }   /* trailing "\" */
-	}
-	out->dir = dir;   /* the path named a directory outright */
-	return STATUS_SUCCESS;
+	/* The last component is the leaf and is not required to exist; every
+	 * one before it must be an existing directory -- see walk() above. */
+	return walk(dir, p, n, out);
 }
 
 /* The node a resolved path names, or 0 if it does not exist. */
@@ -1628,6 +1649,67 @@ static struct vnode *vpath_node(struct vpath *vp)
 	if (!vp->leaf) return vp->dir;
 	e = dir_find(vp->dir, vp->leaf, vp->leaflen);
 	return e ? e->node : 0;
+}
+
+/* Resolves `node` -- already known to be a symlink reparse point -- to
+ * whatever it points at, the way NtCreateFile/NtOpenFile do implicitly
+ * when FILE_OPEN_REPARSE_POINT is absent (see the call site).
+ * `link_dir` is the directory that held the symlink, needed for a
+ * relative target (readlink()'s own callers, and every POSIX symlink()
+ * implementation, resolve a relative target against the link's own
+ * directory, not the resolving process's cwd).  Recurses through a
+ * chain of symlinks up to a small depth limit -- the same purpose
+ * MAXSYMLINKS/ELOOP serves on a host filesystem -- rather than looping
+ * forever on a symlink that points at itself. */
+#define MAX_SYMLINK_DEPTH 8
+
+static NTSTATUS follow_symlink(struct vnode *link_dir, struct vnode *node, struct vpath *out, int depth)
+{
+	REPARSE_DATA_BUFFER *r;
+	const WCHAR *sub;
+	size_t sublen;
+	NTSTATUS st;
+	struct vnode *target;
+
+	if (depth >= MAX_SYMLINK_DEPTH) return STATUS_OBJECT_PATH_NOT_FOUND;
+	if (!node->reparse_data || node->reparse_tag != IO_REPARSE_TAG_SYMLINK)
+		return STATUS_OBJECT_PATH_NOT_FOUND;
+
+	/* Read through the same struct src/unistd/link.c's symlinkat() wrote
+	 * with -- reparse_data is that call's own buffer, byte for byte,
+	 * and both sides are this same native build, so there is no
+	 * cross-ABI offset question here the way there is for AFD_CONNECT_INFO
+	 * and friends. SubstituteName, not PrintName: real NT resolves
+	 * opens through the substitute name, keeping PrintName for display
+	 * only (readlink() itself prefers PrintName, a display choice that
+	 * has no bearing on which name an open actually follows). */
+	r = (REPARSE_DATA_BUFFER *)node->reparse_data;
+	sub = r->SymbolicLinkReparseBuffer.PathBuffer +
+	      r->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
+	sublen = r->SymbolicLinkReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
+
+	memset(out, 0, sizeof *out);
+	if (sublen >= 4 && sub[0] == '\\' && sub[1] == '?' && sub[2] == '?' && sub[3] == '\\') {
+		UNICODE_STRING us;
+		OBJECT_ATTRIBUTES oa2;
+		us.Buffer = (WCHAR *)sub;
+		us.Length = (unsigned short)(sublen * sizeof(WCHAR));
+		us.MaximumLength = us.Length;
+		InitializeObjectAttributes(&oa2, &us, OBJ_CASE_INSENSITIVE, 0, 0);
+		st = resolve(&oa2, out);
+	} else {
+		st = walk(link_dir, sub, sublen, out);
+	}
+	if (!NT_SUCCESS(st)) return st;
+
+	target = vpath_node(out);
+	if (target && (target->attrs & FILE_ATTRIBUTE_REPARSE_POINT) && target->reparse_tag == IO_REPARSE_TAG_SYMLINK) {
+		struct vpath out2;
+		st = follow_symlink(out->dir, target, &out2, depth + 1);
+		if (!NT_SUCCESS(st)) return st;
+		*out = out2;
+	}
+	return STATUS_SUCCESS;
 }
 
 /* ---- NtCreateFile and NtOpenFile ---- */
@@ -1751,6 +1833,23 @@ static NTSTATUS do_create(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBUTES oa
 	}
 
 	node = vpath_node(&vp);
+	/* NT resolves a reparse point during an open unless the caller asks
+	 * not to (FILE_OPEN_REPARSE_POINT) -- src/unistd/link.c's linkat()
+	 * relies on exactly this distinction for AT_SYMLINK_FOLLOW, and it
+	 * is what makes a plain open()/stat() through a symlink transparent.
+	 * Middle-of-path reparse points are not handled (only a path's
+	 * final component can be one here; see follow_symlink()), which
+	 * this build already documents as out of scope alongside the
+	 * NT-loader-only pieces of directory reparse points -- symlinkat()
+	 * itself never creates one, so nothing in this VFS can have one. */
+	if (node && (node->attrs & FILE_ATTRIBUTE_REPARSE_POINT) &&
+	    node->reparse_tag == IO_REPARSE_TAG_SYMLINK && !(options & FILE_OPEN_REPARSE_POINT)) {
+		struct vpath vp2;
+		st = follow_symlink(vp.dir, node, &vp2, 0);
+		if (!NT_SUCCESS(st)) return st;
+		vp = vp2;
+		node = vpath_node(&vp);
+	}
 	if (node && node->delete_pending) return STATUS_DELETE_PENDING;
 
 	if (!node) {
@@ -2312,7 +2411,7 @@ NTSTATUS NTAPI NtQueryInformationFile(HANDLE h, PIO_STATUS_BLOCK io, PVOID buf,
 		FILE_ATTRIBUTE_TAG_INFORMATION *ti = buf;
 		if (len < sizeof *ti) return STATUS_INFO_LENGTH_MISMATCH;
 		ti->FileAttributes = v->attrs;
-		ti->ReparseTag = 0;      /* nothing here is a reparse point */
+		ti->ReparseTag = v->reparse_tag;
 		if (io) io->Information = sizeof *ti;
 		return STATUS_SUCCESS;
 	}
@@ -4163,8 +4262,60 @@ void __sig_relock_after_handler(int depth) { (void)depth; }
 
 #define NOTIMPL(name, proto) NTSTATUS NTAPI name proto { return STATUS_NOT_IMPLEMENTED; }
 
-NOTIMPL(NtFsControlFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
-                          ULONG f, PVOID g, ULONG h, PVOID i, ULONG j))
+/* FSCTL_SET_REPARSE_POINT/FSCTL_GET_REPARSE_POINT: src/unistd/link.c's
+ * symlinkat()/readlinkat(), the only two callers.  Stored and replayed
+ * as opaque bytes -- the whole REPARSE_DATA_BUFFER, ReparseTag through
+ * the tag-specific payload, verbatim -- rather than parsed into a
+ * target string here: src/unistd/link.c already builds and reads that
+ * struct entirely on its own (see RDB_HDR/SL_HDR there), so the only
+ * thing this file needs to get right is giving it back exactly what it
+ * wrote.  See struct vnode's reparse_data comment for why the tag is
+ * also kept unpacked, for FileAttributeTagInformation.
+ *
+ * Nothing else reaches NtFsControlFile natively: named-pipe listen
+ * (FSCTL_PIPE_LISTEN, src/signal/sigdelivery.c) is cross-process/NT-only
+ * and already excluded from this build (tools/asan-build.sh's
+ * not_native() list), so any other code is refused the same way it
+ * always was. */
+NTSTATUS NTAPI NtFsControlFile(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID apcctx,
+                               PIO_STATUS_BLOCK io, ULONG code,
+                               PVOID in, ULONG inlen, PVOID out, ULONG outlen)
+{
+	struct ofile *f = of_get(h);
+	struct vnode *v;
+	(void)ev; (void)apc; (void)apcctx;
+
+	if (io) { io->Status = 0; io->Information = 0; }
+	if (!f || f->kind != OF_VFS) return STATUS_INVALID_HANDLE;
+	v = f->node;
+
+	switch (code) {
+	case FSCTL_SET_REPARSE_POINT: {
+		REPARSE_DATA_BUFFER *r = (REPARSE_DATA_BUFFER *)in;
+		unsigned char *copy;
+		if (!in || inlen < 8 || inlen > MAXIMUM_REPARSE_DATA_BUFFER_SIZE) return STATUS_INVALID_PARAMETER;
+		copy = vmalloc(inlen);
+		if (!copy) return STATUS_NO_MEMORY;
+		memcpy(copy, in, inlen);
+		vfree(v->reparse_data);
+		v->reparse_data = copy;
+		v->reparse_len = (unsigned short)inlen;
+		v->reparse_tag = r->ReparseTag;
+		v->attrs |= FILE_ATTRIBUTE_REPARSE_POINT;
+		return STATUS_SUCCESS;
+	}
+	case FSCTL_GET_REPARSE_POINT: {
+		ULONG n;
+		if (!v->reparse_data || !v->reparse_tag) return STATUS_NOT_A_REPARSE_POINT;
+		n = v->reparse_len < outlen ? v->reparse_len : outlen;
+		if (out && n) memcpy(out, v->reparse_data, n);
+		if (io) io->Information = n;
+		return STATUS_SUCCESS;
+	}
+	default:
+		return STATUS_NOT_IMPLEMENTED;
+	}
+}
 
 /* ------------------------------------------------------------- \Device\Afd
  *
