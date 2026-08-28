@@ -769,6 +769,18 @@ int main(void)
 			CHECK(r == 0 || (r == -1 && errno != 0));
 			CHECK(gettimeofday(&after, NULL) == 0);
 			CHECK(after.tv_sec >= before.tv_sec && after.tv_sec - before.tv_sec <= 5);
+			tv.tv_usec = -1;
+			errno = 0;
+			CHECK(settimeofday(&tv, NULL) == -1 && errno == EINVAL);
+			tv.tv_usec = 1000000;
+			errno = 0;
+			CHECK(settimeofday(&tv, NULL) == -1 && errno == EINVAL);
+			tv.tv_usec = LONG_MIN;
+			errno = 0;
+			CHECK(settimeofday(&tv, NULL) == -1 && errno == EINVAL);
+			tv.tv_usec = LONG_MAX;
+			errno = 0;
+			CHECK(settimeofday(&tv, NULL) == -1 && errno == EINVAL);
 		}
 
 		/* getrlimit: real, enforced numbers -- not just any value */

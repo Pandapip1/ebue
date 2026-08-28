@@ -24,6 +24,7 @@
 #define _GNU_SOURCE
 #include <sys/time.h>
 #include <time.h>
+#include <errno.h>
 
 int gettimeofday(struct timeval *__restrict tv, void *__restrict tz)
 {
@@ -39,6 +40,10 @@ int settimeofday(const struct timeval *tv, const struct timezone *tz)
 {
 	struct timespec ts;
 	(void)tz;
+	if (tv->tv_usec < 0 || tv->tv_usec >= 1000000L) {
+		errno = EINVAL;
+		return -1;
+	}
 	ts.tv_sec = tv->tv_sec;
 	ts.tv_nsec = tv->tv_usec * 1000;
 	return clock_settime(CLOCK_REALTIME, &ts);
