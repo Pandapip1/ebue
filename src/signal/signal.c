@@ -27,8 +27,8 @@
  * guaranteed to be acted on the next time the target thread reaches a
  * point that checks for one: sig_delivery_thread() calling
  * __raise_internal() itself (immediately, on its own thread, for a
- * signal that is not blocked), or src/select/select.c's poll loop,
- * which is taught to notice one early because it already polls. Code
+ * signal that is not blocked), or a signal-aware wait blocked on the
+ * listener's delivery event. Code
  * running ordinary instructions between syscalls on the application
  * thread does not get interrupted out of them by this.
  *
@@ -128,6 +128,7 @@ static int queue_pending_to(struct pending_state *state, int sig,
 	if (state->count >= SIGQUEUE_MAX) { errno = EAGAIN; return -1; }
 	state->info[state->count++] = *si;
 	sigaddset(&state->set, sig);
+	__sig_notify_delivery();
 	return 0;
 }
 
@@ -196,7 +197,7 @@ static int take_pending_from_set(const sigset_t *set, siginfo_t *si)
  * the process", and __raise_internal() below answers 0 for the handled
  * and the ignored case alike.  A counter rather than a flag so a caller
  * can compare against a value taken before the wait and needs nothing
- * cleared afterwards.  The process counter preserves polling for the
+ * cleared afterwards.  The process counter preserves detection for the
  * background delivery thread; the thread counter keeps one thread's handler
  * from spuriously interrupting another thread's semaphore wait. */
 static unsigned long caught_count;
@@ -597,6 +598,7 @@ int __raise_internal_info(int sig, const void *data)
 		caught_count++;
 		thread_caught_count++;
 		if (flags & SA_RESTART) thread_restart_count++;
+		__sig_notify_delivery();
 
 		/* sigaction.html DESCRIPTION: "If SA_SIGINFO is set ...
 		 * sa_sigaction ... specif[ies] a signal-catching function" that
@@ -1054,14 +1056,14 @@ int sigsuspend(const sigset_t *s)
 	drain_unblocked_pending();
 	__sig_unlock();
 
-	/* Polling keeps this thread parked without needing register-context
-	 * injection.  Drain on this application thread so its temporary mask,
-	 * not the listener thread's TLS mask, decides which signals are eligible. */
+	/* Drain on this application thread so its temporary mask, not the
+	 * listener thread's TLS mask, decides which signals are eligible. The
+	 * delivery event retains a wake that lands after the state check, so no
+	 * bounded polling interval is needed. */
 	while (__sig_caught_count() == caught) {
-		LARGE_INTEGER delay = -100000; /* 10ms */
 		__sig_drain_pending();
 		if (__sig_caught_count() != caught) break;
-		NtDelayExecution(TRUE, &delay);
+		__sig_wait_delivery(0);
 	}
 
 	/* Restoring the old mask may itself release a signal that arrived
@@ -1150,17 +1152,14 @@ int sigqueue(pid_t pid, int sig, union sigval value)
  * console-control handler kernel32 creates, and (as of
  * src/signal/sigdelivery.c) this process's own cross-process-signal
  * delivery thread, driven by another process's kill(). So a blocked
- * signal genuinely can arrive here from outside. This loop does not
- * wake early for either -- it is a 100ms poll, not a wait on
- * sigdelivery.c's wake_event the way select() is taught to be -- so a
- * signal delivered this way is still seen, just on this loop's own
- * schedule rather than the instant it arrives; that is within the
- * 100ms-poll design already documented below, not a new gap. Where
+ * signal genuinely can arrive here from outside. The same delivery
+ * event select() uses wakes this loop as soon as either source queues a
+ * signal; the state is always rechecked after waking, so stale events
+ * are harmless. Where
  * nothing can ever signal this process from outside either, this waits
  * forever, which is what POSIX specifies for a thread that asks for a
  * signal nothing will ever send; inventing an EINTR or an EAGAIN to
- * escape would be reporting an event that did not happen.
- * NtDelayExecution() rather than a spin keeps that wait off the CPU. */
+ * escape would be reporting an event that did not happen. */
 int sigwait(const sigset_t *s, int *sig)
 {
 	int saved_errno = errno;
@@ -1181,13 +1180,7 @@ int sigwait(const sigset_t *s, int *sig)
 			return 0;
 		}
 		__sig_unlock();
-		{
-			/* LARGE_INTEGER is a plain LONGLONG here (src/internal/nt.h);
-			 * negative means relative, in 100ns units, so this is 100ms
-			 * -- the same convention src/unistd/sleep.c uses. */
-			LARGE_INTEGER d = -1000000;
-			NtDelayExecution(TRUE, &d);
-		}
+		__sig_wait_delivery(0);
 	}
 }
 
@@ -1207,10 +1200,7 @@ int sigwaitinfo(const sigset_t *set, siginfo_t *info)
 			return selected;
 		}
 		__sig_unlock();
-		{
-			LARGE_INTEGER d = -100000; /* 10ms */
-			NtDelayExecution(TRUE, &d);
-		}
+		__sig_wait_delivery(0);
 	}
 }
 
@@ -1252,8 +1242,9 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 		}
 		{
 			long long left = limit - elapsed;
-			LARGE_INTEGER d = -(left < 10000000LL ? (left + 99) / 100 : 100000);
-			NtDelayExecution(TRUE, &d);
+			LARGE_INTEGER d = -((left + 99) / 100);
+			if (!d) d = -1;
+			__sig_wait_delivery(&d);
 		}
 	}
 }

@@ -211,6 +211,31 @@ static int lock_depth;
  * it. */
 HANDLE __sig_delivery_event(void) { return wake_event; }
 
+/* State-checking wait loops in signal.c and sleep.c use the same event as
+ * select(), but wait alertably so timer APCs remain deliverable. A set that
+ * lands between a caller's state check and this wait is retained by the
+ * auto-reset event, closing the lost-wakeup window without a polling slice. */
+NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout)
+{
+	if (wake_event)
+		return NtWaitForSingleObject(wake_event, TRUE, timeout);
+	if (timeout) return NtDelayExecution(TRUE, timeout);
+	/* Event creation failure is a degraded startup path. Keep indefinite
+	 * signal waits functional there, at their old latency, rather than spin. */
+	{
+		LARGE_INTEGER fallback = -1000000; /* 100 ms */
+		return NtDelayExecution(TRUE, &fallback);
+	}
+}
+
+void __sig_notify_delivery(void)
+{
+	if (wake_event) {
+		LONG previous;
+		NtSetEvent(wake_event, &previous);
+	}
+}
+
 void __sig_lock(void)
 {
 	pid_t me;
@@ -376,7 +401,7 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 					__sig_queue_process_info((int)pkt.signo, &si);
 					/* Publish the wake only after the record is visible.  A waiter
 					 * which drains immediately must not observe an empty queue. */
-					if (wake_event) { LONG prev; NtSetEvent(wake_event, &prev); }
+					__sig_notify_delivery();
 				}
 
 				st = NtWriteFile(pipe, 0, 0, 0, &io, &accepted,

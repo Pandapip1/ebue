@@ -688,10 +688,10 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 		 * src/signal/sigdelivery.c's wake_event (see that function),
 		 * so a cross-process signal wakes this promptly instead of
 		 * waiting out the rest of POLL_INTERVAL_TICKS or the timeout.
-		 * sig_delivery_thread() sets that event before it queues the packet,
-		 * so waking here is no proof the pending record is ready.  The empty
-		 * lock/unlock is a rendezvous with that enqueue; the drain then runs
-		 * any eligible handler on this application thread. */
+		 * sig_delivery_thread() publishes the pending record before it sets
+		 * that event.  The empty lock/unlock also rendezvous with other signal
+		 * producers; the drain then runs any eligible handler on this
+		 * application thread. */
 		__sig_lock();
 		__sig_unlock();
 		__sig_drain_pending();

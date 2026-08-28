@@ -542,9 +542,9 @@ void __pthread_testcancel(void);
 /* ---- cross-process signal delivery (src/signal/sigdelivery.c) --------- */
 /* Started by __signal_init(); see that file's banner for the whole
  * design. __sig_delivery_event() is select()'s (src/select/select.c)
- * read of the per-process "a packet arrived" auto-reset event -- 0 if
- * this process never got a working listener, which select() must treat
- * as "nothing to add to the wait set", not an error.
+ * read of the per-process "signal state changed" auto-reset event -- 0
+ * if this process never got a working listener, which select() must
+ * treat as "nothing to add to the wait set", not an error.
  * __sig_try_deliver_remote() is kill()'s (src/signal/signal.c)
  * cross-process arm. __sig_lock()/__sig_unlock() guard every piece of
  * shared state signal.c's own functions touch, now that a second real
@@ -554,6 +554,8 @@ void __pthread_testcancel(void);
 void __sig_delivery_init(void);
 void __sig_delivery_reinit_after_fork(void);
 HANDLE __sig_delivery_event(void);
+NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout);
+void __sig_notify_delivery(void);
 int __sig_try_deliver_remote(int pid, int sig);
 int __sig_try_deliver_remote_info(int pid, int sig, const void *);
 int __sig_try_deliver_remote_nondefault(int pid, int sig);

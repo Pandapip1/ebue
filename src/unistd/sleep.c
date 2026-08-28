@@ -26,8 +26,9 @@
  * test/POSIX-GAP-ACCOUNTING.md rather than glossed over.
  *
  * POSIX timers now use a dedicated manager thread (src/time/timer.c).
- * The bounded polling in __alertable_delay() below notices handlers run
- * by that thread and turns them into EINTR for sleep()/nanosleep().
+ * That thread signals the delivery event when it queues or catches a
+ * signal, waking __alertable_delay() below and turning a caught handler
+ * into EINTR for sleep()/nanosleep().
  *
  * The deadline is kept as an absolute NT system time, the same
  * NtQuerySystemTime clock time() and clock_gettime(CLOCK_REALTIME) read
@@ -197,8 +198,9 @@ void __alarm_reset_after_fork(void)
  * Elapsed time is measured on NtQuerySystemTime rather than the
  * performance counter, which would be immune to a clock step: alarm()
  * deadlines use the system clock, and having the two agree matters more
- * here than making either one step-proof.  Bounded polling is required
- * for background signal delivery, so every slice is measured. */
+ * here than making either one step-proof. The delivery event permits one
+ * wait for the whole remaining interval while retaining exact elapsed-time
+ * accounting across early wakes. */
 int __alertable_delay(long long ticks, long long *left)
 {
 	unsigned long caught = __sig_caught_count();
@@ -213,12 +215,11 @@ int __alertable_delay(long long ticks, long long *left)
 		return -1;
 	}
 	while (ticks > 0) {
-		/* A bounded slice lets this thread drain cross-process delivery and
-		 * observe timer handlers without requiring thread-context injection. */
-		long long slice = ticks < 100000 ? ticks : 100000; /* at most 10ms */
-		t = -slice;
+		/* The signal-delivery event closes the check/wait race and wakes this
+		 * thread as soon as a background source queues or catches a signal. */
+		t = -ticks;
 		if (!t) t = -1;   /* a 0 timeout means "yield", not "no wait" */
-		NtDelayExecution(1, &t);
+		__sig_wait_delivery(&t);
 		__pthread_testcancel();
 		__sig_drain_pending();
 
@@ -278,19 +279,18 @@ int usleep(unsigned us)
 int pause(void)
 {
 	unsigned long caught = __sig_caught_count();
-	LARGE_INTEGER slice = -1000000; /* 100ms */
 	/* pause.html: "suspend the calling thread until delivery of a
 	 * signal whose action is either to execute a signal-catching
 	 * function or to terminate the process", after which "-1 shall be
 	 * returned and errno set" to [EINTR].  Alertable, so an alarm()
 	 * APC ends it.  Signals delivered by a background delivery thread
-	 * are observed through the caught counter on the next bounded poll.
+	 * set the delivery event and are observed through the caught counter.
 	 * An ignored signal changes no counter and therefore leaves pause()
 	 * waiting, as POSIX requires. */
 	while (__sig_caught_count() == caught) {
 		__sig_drain_pending();
 		if (__sig_caught_count() != caught) break;
-		NtDelayExecution(1, &slice);
+		__sig_wait_delivery(0);
 	}
 	errno = EINTR;
 	return -1;
