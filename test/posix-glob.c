@@ -418,6 +418,26 @@ static void test_glob_doffs(void)
 	globfree(&g);
 
 	unlink("a.txt");
+
+	/* gl_offs is supplied by the caller.  Its reserved slots, the
+	 * pathname, and the terminating NULL cannot wrap into a smaller
+	 * allocation followed by an out-of-bounds fill. */
+	memset(&g, 0, sizeof g);
+	g.gl_offs = (size_t)-1;
+	errno = 0;
+	CHECK(glob("no-such-path", GLOB_DOOFFS | GLOB_NOCHECK, NULL, &g) == GLOB_NOSPACE);
+	CHECK(errno == ENOMEM);
+	CHECK(g.gl_pathc == 0 && g.gl_pathv == NULL);
+	globfree(&g);
+
+	/* The count itself can fit while count * sizeof(char *) cannot. */
+	memset(&g, 0, sizeof g);
+	g.gl_offs = (size_t)-1 / sizeof(char *);
+	errno = 0;
+	CHECK(glob("no-such-path", GLOB_DOOFFS | GLOB_NOCHECK, NULL, &g) == GLOB_NOSPACE);
+	CHECK(errno == ENOMEM);
+	CHECK(g.gl_pathc == 0 && g.gl_pathv == NULL);
+	globfree(&g);
 }
 
 /* UNIMPL: glob.html GLOB_MARK -- "Each pathname that is a directory
@@ -783,6 +803,23 @@ static void test_wordexp_bookkeeping_flags(void)
 	CHECK(we.we_wordc == 2);
 	CHECK(wordexp("c d", &we, WRDE_APPEND) == 0);
 	CHECK(we.we_wordc == 4);
+	wordfree(&we);
+
+	/* Same caller-controlled offset endpoint as GLOB_DOOFFS. */
+	memset(&we, 0, sizeof we);
+	we.we_offs = (size_t)-1;
+	errno = 0;
+	CHECK(wordexp("a", &we, WRDE_DOOFFS) == WRDE_NOSPACE);
+	CHECK(errno == ENOMEM);
+	CHECK(we.we_wordc == 0 && we.we_wordv == NULL);
+	wordfree(&we);
+
+	memset(&we, 0, sizeof we);
+	we.we_offs = (size_t)-1 / sizeof(char *);
+	errno = 0;
+	CHECK(wordexp("a", &we, WRDE_DOOFFS) == WRDE_NOSPACE);
+	CHECK(errno == ENOMEM);
+	CHECK(we.we_wordc == 0 && we.we_wordv == NULL);
 	wordfree(&we);
 }
 

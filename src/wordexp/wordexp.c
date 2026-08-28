@@ -141,6 +141,28 @@ static void pv_free_from(struct pv *p, size_t from)
 	p->n = p->cap = 0;
 }
 
+/* Allocate the caller-visible pointer vector and transfer the pointer
+ * entries into it.  offs is caller-controlled under WRDE_DOOFFS, so
+ * validate both additions and the final conversion to bytes before
+ * allocating or filling the reserved slots. */
+static char **pv_pack(struct pv *p, size_t offs)
+{
+	size_t i, total;
+	char **v;
+
+	if (p->n == (size_t)-1 || offs > (size_t)-1 - p->n - 1) return 0;
+	total = offs + p->n + 1;
+	if (total > (size_t)-1 / sizeof *v) return 0;
+	v = __malloc(total * sizeof *v);
+	if (!v) return 0;
+	for (i = 0; i < offs; i++) v[i] = 0;
+	for (i = 0; i < p->n; i++) v[offs + i] = p->v[i];
+	v[offs + p->n] = 0;
+	__free(p->v);
+	p->v = 0;
+	return v;
+}
+
 static char *xstrdup(const char *s)
 {
 	size_t n = strlen(s) + 1;
@@ -1203,6 +1225,7 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 	int active = 0;	/* current field has at least one byte, or was opened by a quote */
 	int rc;
 	size_t base = 0;
+	int pack_failed = 0;
 	/* State for the one case where a double-quote must *not* keep the
 	 * field alive: 2.5.2 says "$@" with no positional parameters
 	 * generates zero fields "even when '@' is within double-quotes",
@@ -1427,13 +1450,8 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 
 	{
 		size_t offs = (flags & WRDE_DOOFFS) ? pwordexp->we_offs : 0;
-		size_t i, total = offs + out.n + 1;
-		char **v = __malloc(total * sizeof *v);
-		if (!v) { rc = WRDE_NOSPACE; goto fail; }
-		for (i = 0; i < offs; i++) v[i] = 0;
-		for (i = 0; i < out.n; i++) v[offs + i] = out.v[i];
-		v[offs + out.n] = 0;
-		__free(out.v);
+		char **v = pv_pack(&out, offs);
+		if (!v) { rc = WRDE_NOSPACE; pack_failed = 1; goto fail; }
 		if (flags & WRDE_APPEND) __free(pwordexp->we_wordv);
 		pwordexp->we_wordv = v;
 		pwordexp->we_wordc = out.n;
@@ -1447,13 +1465,8 @@ fail:
 		/* RETURN VALUE: on WRDE_NOSPACE, we_wordc/we_wordv are updated
 		 * to reflect the words successfully expanded so far. */
 		size_t offs = (flags & WRDE_DOOFFS) ? pwordexp->we_offs : 0;
-		size_t i, total = offs + out.n + 1;
-		char **v = __malloc(total * sizeof *v);
+		char **v = pack_failed ? 0 : pv_pack(&out, offs);
 		if (v) {
-			for (i = 0; i < offs; i++) v[i] = 0;
-			for (i = 0; i < out.n; i++) v[offs + i] = out.v[i];
-			v[offs + out.n] = 0;
-			__free(out.v);
 			if (flags & WRDE_APPEND) __free(pwordexp->we_wordv);
 			pwordexp->we_wordv = v;
 			pwordexp->we_wordc = out.n;
@@ -1463,6 +1476,10 @@ fail:
 			 * was (same reasoning as the "other errors" branch
 			 * below), and free only what this call itself added. */
 			pv_free_from(&out, base);
+			if (!(flags & WRDE_APPEND)) {
+				pwordexp->we_wordc = 0;
+				pwordexp->we_wordv = 0;
+			}
 		}
 	} else {
 		/* RETURN VALUE: "on other errors ... these fields remain

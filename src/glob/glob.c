@@ -271,10 +271,17 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 static int finish(struct pv *out, int flags, glob_t *pglob)
 {
 	size_t offs = (flags & GLOB_DOOFFS) ? pglob->gl_offs : 0;
-	size_t i, total = offs + out->n + 1;
-	char **v = __malloc(total * sizeof *v);
+	size_t i, total;
+	char **v;
 
-	if (!v) { pv_free_from(out, 0); errno = ENOMEM; return GLOB_NOSPACE; }
+	/* gl_offs is caller-controlled.  Check both the element count and
+	 * its conversion to bytes before either can wrap into a small
+	 * allocation followed by an out-of-bounds NULL-fill loop. */
+	if (out->n == (size_t)-1 || offs > (size_t)-1 - out->n - 1) goto nospace;
+	total = offs + out->n + 1;
+	if (total > (size_t)-1 / sizeof *v) goto nospace;
+	v = __malloc(total * sizeof *v);
+	if (!v) goto nospace;
 	for (i = 0; i < offs; i++) v[i] = 0;
 	for (i = 0; i < out->n; i++) v[offs + i] = out->v[i];
 	v[offs + out->n] = 0;
@@ -284,6 +291,16 @@ static int finish(struct pv *out, int flags, glob_t *pglob)
 	pglob->gl_pathc = out->n;
 	if (!(flags & GLOB_DOOFFS) && !(flags & GLOB_APPEND)) pglob->gl_offs = offs;
 	return 0;
+
+nospace:
+	pv_free_from(out, 0);
+	/* GLOB_APPEND has already released the old wrapper, and every entry
+	 * it owned is now freed above.  An empty result also gives ordinary
+	 * callers a safe globfree()-able state after this failure. */
+	pglob->gl_pathv = 0;
+	pglob->gl_pathc = 0;
+	errno = ENOMEM;
+	return GLOB_NOSPACE;
 }
 
 int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob)
@@ -354,8 +371,8 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 		return GLOB_NOSPACE;
 	}
 	if (rc == 1) {
-		finish(&out, flags, pglob);
-		return GLOB_ABORTED;
+		int frc = finish(&out, flags, pglob);
+		return frc ? frc : GLOB_ABORTED;
 	}
 
 	if (out.n == base) {
@@ -394,12 +411,14 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 		 * state: nothing was ever allocated for this call, so nothing
 		 * needs freeing, and globfree() on a NULL gl_pathv is already
 		 * a no-op (see below). */
-		if (flags & GLOB_APPEND) finish(&out, flags, pglob);
+		if (flags & GLOB_APPEND) {
+			int frc = finish(&out, flags, pglob);
+			if (frc) return frc;
+		}
 		else { pv_free_from(&out, 0); pglob->gl_pathc = 0; pglob->gl_pathv = 0; }
 		return GLOB_NOMATCH;
 	}
-	finish(&out, flags, pglob);
-	return 0;
+	return finish(&out, flags, pglob);
 }
 
 void globfree(glob_t *pglob)
