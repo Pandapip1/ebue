@@ -66,7 +66,7 @@ long sysconf(int name)
 	case _SC_MEMLOCK: return _POSIX_MEMLOCK;
 	case _SC_MEMLOCK_RANGE: return _POSIX_MEMLOCK_RANGE;
 	case _SC_SEMAPHORES: return _POSIX_SEMAPHORES;
-	case _SC_SEM_NSEMS_MAX: return 64;
+	case _SC_SEM_NSEMS_MAX: return SEM_NSEMS_MAX_;
 	case _SC_SEM_VALUE_MAX: return 2147483647L;
 	case _SC_MESSAGE_PASSING: return _POSIX_MESSAGE_PASSING;
 	case _SC_MQ_OPEN_MAX: return MQ_OPEN_MAX;

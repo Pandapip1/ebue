@@ -32,6 +32,7 @@ struct named_sem {
 
 static struct named_sem named[NAMED_MAX];
 static unsigned object_sequence;
+static unsigned unnamed_count;
 
 static int valid(const sem_t *sem)
 {
@@ -139,12 +140,25 @@ int sem_init(sem_t *sem, int pshared, unsigned value)
 	NTSTATUS st;
 	(void)pshared;
 	if (!sem || value > SEM_VALUE_MAX) { errno = EINVAL; return -1; }
+	RtlAcquirePebLock();
+	if (unnamed_count == SEM_NSEMS_MAX_) {
+		RtlReleasePebLock();
+		errno = ENOSPC;
+		return -1;
+	}
+	unnamed_count++;
+	RtlReleasePebLock();
 	/* fork() only clones OBJ_INHERIT handles. A process-shared sem_t
 	 * stores this handle value in shared memory, and named semaphores
 	 * have the same requirement when already open across fork. */
 	InitializeObjectAttributes(&oa, 0, OBJ_INHERIT, 0, 0);
 	st = NtCreateSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa, (LONG)value, SEM_VALUE_MAX);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (!NT_SUCCESS(st)) {
+		RtlAcquirePebLock();
+		unnamed_count--;
+		RtlReleasePebLock();
+		return __set_errno_status(st);
+	}
 	sem->__handle = h; sem->__magic = SEM_MAGIC; sem->__named = 0;
 	return 0;
 }
@@ -154,6 +168,9 @@ int sem_destroy(sem_t *sem)
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
 	NtClose(sem->__handle);
 	memset(sem, 0, sizeof *sem);
+	RtlAcquirePebLock();
+	unnamed_count--;
+	RtlReleasePebLock();
 	return 0;
 }
 

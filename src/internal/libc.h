@@ -458,6 +458,10 @@ void __funcs_on_exit(void);
 void __libc_exit_fini(void);
 _Noreturn void __nt_exit(int);
 
+/* Keep the unnamed semaphore limit reported by sysconf() coupled to the
+ * implementation that enforces it. */
+#define SEM_NSEMS_MAX_ 64
+
 /* ---- signals ------------------------------------------------------------ */
 /* Windows has no separate "killed by signal" field: a process exit code is
  * one 32-bit DWORD, and waitpid() has nothing else to look at.  A process
