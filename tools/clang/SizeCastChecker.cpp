@@ -8,6 +8,7 @@
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/APSInt.h"
 
@@ -260,7 +261,37 @@ class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
 
   static std::string sourceOrigin(const Expr *Expr, CheckerContext &C) {
     const SourceManager &SM = C.getSourceManager();
-    return SM.getFilename(SM.getSpellingLoc(Expr->getBeginLoc())).str();
+    return SM.getFilename(SM.getExpansionLoc(Expr->getBeginLoc())).str();
+  }
+
+  static std::string sourceSite(const Expr *Expr, CheckerContext &C) {
+    const SourceManager &SM = C.getSourceManager();
+    SourceLocation Location = SM.getExpansionLoc(Expr->getBeginLoc());
+    FileID File = SM.getFileID(Location);
+    bool Invalid = false;
+    StringRef Buffer = SM.getBufferData(File, &Invalid);
+    if (Invalid)
+      return Expr->getStmtClassName();
+    unsigned Offset = SM.getFileOffset(Location);
+    size_t Begin = Buffer.rfind('\n', Offset);
+    Begin = Begin == StringRef::npos ? 0 : Begin + 1;
+    size_t End = Buffer.find('\n', Offset);
+    if (End == StringRef::npos)
+      End = Buffer.size();
+    StringRef Raw = Buffer.slice(Begin, End);
+    std::string Result;
+    bool Space = false;
+    for (char Character : Raw) {
+      if (std::isspace(static_cast<unsigned char>(Character))) {
+        Space = !Result.empty();
+      } else {
+        if (Space)
+          Result += ' ';
+        Result += Character;
+        Space = false;
+      }
+    }
+    return Result;
   }
 
 public:
@@ -317,18 +348,118 @@ public:
     std::string Context = Current ? Current->getDeclKindName() : "unknown";
     if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
       Context = Named->getQualifiedNameAsString();
-    if (Cast->getBeginLoc().isMacroID())
-      Context = "macro:" + Lexer::getImmediateMacroNameForDiagnostics(
-                                Cast->getBeginLoc(), C.getSourceManager(),
-                                C.getLangOpts())
-                                .str();
     std::string Message = "integer cast from '" + Source.getAsString() +
                           "' to '" + Dest.getAsString() +
                           "' is not proven to preserve its value; origin '" +
                           sourceOrigin(Cast, C) + "'; context '" + Context +
-                          "'; cast '" + sourceText(Cast, C) + "'";
+                          "'; cast '" + sourceText(Cast, C) + "'; site '" +
+                          sourceSite(Cast, C) + "'";
     auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
     Report->addRange(Cast->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+};
+
+class ArrayIndexChecker : public Checker<check::PreStmt<ArraySubscriptExpr>> {
+  mutable std::unique_ptr<BugType> BT;
+
+  static std::string sourceText(const Expr *Expr, CheckerContext &C) {
+    const SourceManager &SM = C.getSourceManager();
+    SourceLocation Begin = SM.getSpellingLoc(Expr->getBeginLoc());
+    SourceLocation End = SM.getSpellingLoc(Expr->getEndLoc());
+    StringRef Raw = Lexer::getSourceText(
+        CharSourceRange::getTokenRange(Begin, End), SM, C.getLangOpts());
+    std::string Result;
+    bool Space = false;
+    for (char Character : Raw) {
+      if (std::isspace(static_cast<unsigned char>(Character))) {
+        Space = !Result.empty();
+      } else {
+        if (Space)
+          Result += ' ';
+        Result += Character;
+        Space = false;
+      }
+    }
+    if (Result.empty() && Expr->getBeginLoc().isMacroID())
+      Result = Lexer::getImmediateMacroNameForDiagnostics(
+                   Expr->getBeginLoc(), SM, C.getLangOpts())
+                   .str();
+    if (Result.empty())
+      Result = Expr->getStmtClassName();
+    return Result;
+  }
+
+  static std::string sourceOrigin(const Expr *Expr, CheckerContext &C) {
+    const SourceManager &SM = C.getSourceManager();
+    return SM.getFilename(SM.getExpansionLoc(Expr->getBeginLoc())).str();
+  }
+
+  static std::string sourceSite(const Expr *Expr, CheckerContext &C) {
+    const SourceManager &SM = C.getSourceManager();
+    SourceLocation Location = SM.getExpansionLoc(Expr->getBeginLoc());
+    FileID File = SM.getFileID(Location);
+    bool Invalid = false;
+    StringRef Buffer = SM.getBufferData(File, &Invalid);
+    if (Invalid)
+      return Expr->getStmtClassName();
+    unsigned Offset = SM.getFileOffset(Location);
+    size_t Begin = Buffer.rfind('\n', Offset);
+    Begin = Begin == StringRef::npos ? 0 : Begin + 1;
+    size_t End = Buffer.find('\n', Offset);
+    if (End == StringRef::npos)
+      End = Buffer.size();
+    StringRef Raw = Buffer.slice(Begin, End);
+    std::string Result;
+    bool Space = false;
+    for (char Character : Raw) {
+      if (std::isspace(static_cast<unsigned char>(Character))) {
+        Space = !Result.empty();
+      } else {
+        if (Space)
+          Result += ' ';
+        Result += Character;
+        Space = false;
+      }
+    }
+    return Result;
+  }
+
+public:
+  void checkPreStmt(const ArraySubscriptExpr *Subscript,
+                    CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    SVal Base = C.getSVal(Subscript->getBase());
+    DefinedOrUnknownSVal Count = getDynamicElementCountWithOffset(
+        State, Base, Subscript->getType());
+    SVal Index = C.getSVal(Subscript->getIdx());
+    std::optional<NonLoc> DefinedIndex = Index.getAs<NonLoc>();
+    ProgramStateRef Outside = State;
+    if (DefinedIndex) {
+      Outside = State->assumeInBound(*DefinedIndex, Count, false,
+                                     Subscript->getIdx()->getType());
+      if (!Outside)
+        return;
+    }
+
+    ExplodedNode *Node = C.generateNonFatalErrorNode(Outside);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Unproven array index",
+                                     categories::LogicError);
+
+    const Decl *Current = C.getLocationContext()->getDecl();
+    std::string Context = Current ? Current->getDeclKindName() : "unknown";
+    if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
+      Context = Named->getQualifiedNameAsString();
+    std::string Message =
+        "array index is not proven in bounds; origin '" +
+        sourceOrigin(Subscript, C) + "'; context '" + Context +
+        "'; subscript '" + sourceText(Subscript, C) + "'; site '" +
+        sourceSite(Subscript, C) + "'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Subscript->getSourceRange());
     C.emitReport(std::move(Report));
   }
 };
@@ -341,4 +472,6 @@ extern "C" const char clang_analyzerAPIVersionString[] =
 extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<SizeCastChecker>(
       "ntlibc.SizeCast", "Proves that explicit integer casts preserve values", "");
+  Registry.addChecker<ArrayIndexChecker>(
+      "ntlibc.ArrayIndex", "Proves that array indices are in bounds", "");
 }

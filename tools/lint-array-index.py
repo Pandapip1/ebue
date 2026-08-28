@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Check the Clang range-checker's fixtures and existing-debt baseline."""
+"""Check the Clang array-index checker's fixtures and debt baseline."""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from dataclasses import dataclass
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-KNOWN = ROOT / "tools/cast-range-known.txt"
-FIXTURES = ROOT / "tools/lint-cast-range-fixtures"
+KNOWN = ROOT / "tools/array-index-known.txt"
+FIXTURES = ROOT / "tools/lint-array-index-fixtures"
 DIAGNOSTIC = re.compile(
-    r"^(.*?):(\d+):(\d+): warning: .*; origin '(.*)'; context '(.*)'; cast '(.*)'; site '(.*)' "
-    r"\[ntlibc\.SizeCast\]$"
+    r"^(.*?):(\d+):(\d+): warning: array index is not proven in bounds; "
+    r"origin '(.*)'; context '(.*)'; subscript '(.*)'; site '(.*)' "
+    r"\[ntlibc\.ArrayIndex\]$"
 )
 
 
@@ -25,13 +26,13 @@ DIAGNOSTIC = re.compile(
 class Finding:
     path: str
     context: str
-    cast: str
+    subscript: str
     site: str
     line: int
 
     @property
     def key(self) -> tuple[str, str, str, str]:
-        return self.path, self.context, self.cast, self.site
+        return self.path, self.context, self.subscript, self.site
 
 
 def relative(name: str) -> str:
@@ -47,7 +48,7 @@ def relative(name: str) -> str:
 def parse_log(path: pathlib.Path) -> list[Finding]:
     text = path.read_text(encoding="utf-8", errors="replace")
     if "PLEASE submit a bug report" in text or "clang frontend command failed" in text:
-        raise SystemExit(f"lint-cast-range: analyzer crashed; see {path}")
+        raise SystemExit(f"lint-array-index: analyzer crashed; see {path}")
     findings = []
     for line in text.splitlines():
         match = DIAGNOSTIC.match(line)
@@ -63,11 +64,11 @@ def fixture_test(path: pathlib.Path) -> None:
     expected = set()
     for source in FIXTURES.glob("*.c"):
         for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
-            if "cast-range-expect" in line:
+            if "array-index-expect" in line:
                 expected.add((source.relative_to(ROOT).as_posix(), number))
     actual = {(finding.path, finding.line) for finding in parse_log(path)}
     if actual != expected:
-        print("lint-cast-range: fixture self-test failed", file=sys.stderr)
+        print("lint-array-index: fixture self-test failed", file=sys.stderr)
         print(f"  expected: {sorted(expected)}", file=sys.stderr)
         print(f"  actual:   {sorted(actual)}", file=sys.stderr)
         raise SystemExit(1)
@@ -103,11 +104,11 @@ def main() -> int:
         print("# SPDX-FileCopyrightText: (C) 2026 Gavin John")
         print("# SPDX-License-Identifier: GPL-3.0-or-later")
         print("#")
-        print("# Existing explicit integer casts not yet proved by the Clang analyzer.")
-        print("# Fields: ORIGIN<TAB>CONTEXT<TAB>CAST<TAB>SITE<TAB>REASON.")
-        print("# New and stale entries both fail; remove entries as casts are proved.")
+        print("# Existing array subscripts not yet proved in bounds by Clang.")
+        print("# Fields: ORIGIN<TAB>CONTEXT<TAB>SUBSCRIPT<TAB>SITE<TAB>REASON.")
+        print("# New and stale entries both fail; remove entries as bounds are proved.")
         for finding in sorted(findings.values()):
-            print("\t".join((*finding.key, "existing site; prove while completing the cast audit")))
+            print("\t".join((*finding.key, "existing site; prove while completing the bounds audit")))
         return 0
 
     known = read_known()
@@ -116,16 +117,17 @@ def main() -> int:
     stale = sorted(known - actual)
     for key in new:
         finding = findings[key]
-        print(f"{finding.path}:{finding.line}: unproven integer cast in {finding.context}: {finding.cast}")
-        print("  add a dominating bound or use an operation whose result range proves the cast")
-    for path, context, cast, site in stale:
-        print(f"{KNOWN.relative_to(ROOT)}: stale entry: {path}: {context}: {cast}: {site}",
+        print(f"{finding.path}:{finding.line}: unproven array index in "
+              f"{finding.context}: {finding.subscript}")
+        print("  add a dominating lower/upper bound or preserve the allocation extent")
+    for path, context, subscript, site in stale:
+        print(f"{KNOWN.relative_to(ROOT)}: stale entry: {path}: {context}: {subscript}: {site}",
               file=sys.stderr)
     if new or stale:
-        print(f"lint-cast-range: {len(new)} new finding(s), {len(stale)} stale baseline "
+        print(f"lint-array-index: {len(new)} new finding(s), {len(stale)} stale baseline "
               f"entry/entries, {len(actual & known)} known site(s)")
         return 1
-    print(f"lint-cast-range: no new findings ({len(actual)} known site(s); fixtures passed)")
+    print(f"lint-array-index: no new findings ({len(actual)} known site(s); fixtures passed)")
     return 0
 
 
