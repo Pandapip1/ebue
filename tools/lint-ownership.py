@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Check allocator provenance, single consumption, and borrow lifetimes."""
+"""Check heap ownership, construct lifecycles, and pointer validity proofs."""
 
 from __future__ import annotations
 
@@ -18,14 +18,23 @@ DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
     r"(deallocator argument is not proven owned|reallocator argument is not proven owned|"
     r"ownership is already consumed|"
-    r"borrow accesses a consumed owner); origin '(.*)'; context '(.*)'; "
-    r"expression '(.*)'; site '(.*)' \[ntlibc\.Ownership\]$"
+    r"borrow accesses a consumed owner|owned construct is not proven initialized|"
+    r"owned construct is already initialized|owned construct is already destroyed|"
+    r"operation accesses a destroyed owned construct|"
+    r"pointer dereference is not proven nonnull|"
+    r"pointer target is not proven live storage|"
+    r"dereference extent is not proven sufficient|"
+    r"dereference alignment is not proven valid|"
+    r"dereference accesses consumed storage); origin '(.*)'; context '(.*)'; "
+    r"expression '(.*)'; site '(.*)' "
+    r"\[ntlibc\.(Ownership|OwnedConstruct|ValidPointer)\]$"
 )
 
 
 @dataclass(frozen=True, order=True)
 class Finding:
     path: str
+    checker: str
     reason: str
     context: str
     expression: str
@@ -33,8 +42,9 @@ class Finding:
     line: int
 
     @property
-    def key(self) -> tuple[str, str, str, str, str]:
-        return self.path, self.reason, self.context, self.expression, self.site
+    def key(self) -> tuple[str, str, str, str, str, str]:
+        return (self.path, self.checker, self.reason, self.context,
+                self.expression, self.site)
 
 
 def relative(name: str) -> str:
@@ -55,8 +65,8 @@ def parse_log(path: pathlib.Path) -> list[Finding]:
     for line in text.splitlines():
         match = DIAGNOSTIC.match(line)
         if match:
-            findings.append(Finding(relative(match.group(5)), match.group(4),
-                                    match.group(6), match.group(7),
+            findings.append(Finding(relative(match.group(5)), match.group(9),
+                                    match.group(4), match.group(6), match.group(7),
                                     f"{match.group(8)} @column {match.group(3)}",
                                     int(match.group(2))))
     return findings
@@ -93,10 +103,17 @@ def main() -> int:
                        for finding in findings.values())
         repeats = sum(finding.reason == "ownership is already consumed"
                       for finding in findings.values())
-        borrows = len(findings) - releases - repeats
+        borrows = sum(finding.reason == "borrow accesses a consumed owner"
+                      for finding in findings.values())
+        constructs = sum(finding.checker == "OwnedConstruct"
+                         for finding in findings.values())
+        pointers = sum(finding.checker == "ValidPointer"
+                       for finding in findings.values())
         print(f"lint-ownership: {releases} unproved release(s), "
               f"{repeats} repeated consumption(s), "
-              f"{borrows} expired borrow access(es)")
+              f"{borrows} expired borrow access(es), "
+              f"{constructs} construct lifecycle obligation(s), "
+              f"{pointers} pointer validity obligation(s)")
         return 1
     print("lint-ownership: no findings (fixtures passed)")
     return 0

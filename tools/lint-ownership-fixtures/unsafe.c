@@ -32,6 +32,8 @@ void consume_twice(void)
 int use_borrow_after_consume(void)
 {
 	int *owner = malloc(sizeof *owner);
+	if (!owner)
+		return 0;
 	int *borrow = owner;
 	free(owner);
 	return *borrow; /* ownership-expect: consumed-borrow */

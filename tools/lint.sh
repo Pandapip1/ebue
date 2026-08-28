@@ -38,8 +38,9 @@
 #             promoted left operand's width.
 #   ownership currently opt-in while its initial proof backlog is triaged.
 #             A path-sensitive Clang checker infers ownership from ntlibc's
-#             allocator families, treats aliases as borrows, and proves every
-#             release, single consumption, and access through a live owner.
+#             allocator families, treats aliases as borrows, proves every
+#             release and synchronization-object lifecycle, and requires every
+#             dereference to have nonnull, live, in-bounds, aligned storage.
 #   undefined tools/lint-undefined.sh: a public header declaring a
 #             function nothing defines.  No tool needed.
 #   unreferenced
@@ -945,7 +946,7 @@ stage_ownership() {
 	: > "$fixture_log"
 	for fixture in tools/lint-ownership-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.Ownership \
+			-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct,ntlibc.ValidPointer \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
@@ -964,11 +965,26 @@ stage_ownership() {
 		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
 			f=$1; clang=$2; plugin=$3; target=$4; shift 4
 			id=$(printf %s "$f" | tr / _)
+			owner="'"$pardir"'/$id.owner"
+			pointer="'"$pardir"'/$id.pointer"
+			combined="'"$pardir"'/$id.log"
+			# Keep the high-volume pointer proof search from consuming the
+			# exploration budget needed by ownership/lifecycle proofs.
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Ownership \
+				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.OwnedConstruct \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
-				> "'"$pardir"'/$id.log" 2>&1
+				> "$owner" 2>&1
+			owner_rc=$?
+			# Ownership also supplies allocation provenance to ValidPointer.
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.Ownership,ntlibc.ValidPointer \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "$pointer" 2>&1
+			pointer_rc=$?
+			cat "$owner" "$pointer" > "$combined"
+			[ "$owner_rc" -eq 0 ] && [ "$pointer_rc" -eq 0 ]
 		' _ {} clang-18 "$plugin" "$target" $flags
 		runrc=$?
 		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
