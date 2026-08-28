@@ -54,11 +54,41 @@ FUZZ_TIME ?= 60
 ENGINE ?= libfuzzer
 ifeq ($(ENGINE),afl)
 CC := afl-clang-fast
-# The archive providing main() and ExecuteFilesOnyByOne().  Overridable
-# because /usr/lib/afl is a Debian/Ubuntu packaging path; a source build
-# of AFL++ puts it under the checkout's own directory instead.
+# The archive providing main() and ExecuteFilesOnyByOne() -- AFL++'s own
+# driver, deliberately kept rather than replaced with a smaller one that
+# would dodge the persistent-mode/forkserver path: that path is the one
+# that actually drives ntlibc's fork() and signal delivery under load,
+# and a harness that avoided it would stop testing that part of the ntdll
+# shim rather than fixing what was wrong with it.  See fuzz/aflshim.c for
+# what "wrong with it" turned out to mean and how it is fixed.
+# Overridable because /usr/lib/afl is a Debian/Ubuntu packaging path; a
+# source build of AFL++ puts it under the checkout's own directory
+# instead.
 AFL_DRIVER ?= /usr/lib/afl/libAFLDriver.a
+# Where afl-clang-fast finds its *system* runtime -- the directory
+# AFL_RTDIR (below) is patched from.  Overridable for the same reason
+# AFL_DRIVER is.
+AFL_SYSDIR ?= /usr/lib/afl
 ENGINESUF   = -afl
+# AFL++'s runtime -- afl-compiler-rt.o, linked into every harness
+# automatically, and libAFLDriver.a's aflpp_driver.o above -- calls
+# open()/read()/write()/close()/shmat()/shmdt()/getenv()/fork()/
+# sigaction()/signal() to talk to afl-fuzz and to run the persistent-mode
+# fast path (fork a fresh child per test case, in this very process,
+# rather than paying execve() each time).  Every one of those names is
+# also a strong symbol in ntlibc, which wins the link -- the same class
+# of bug, and the same fix, STATRENAME already applies to stat().  See
+# fuzz/aflshim.c for which of them actually needed it (measured, not
+# assumed: several of AFL++'s own calls tolerate ntlibc's versions well
+# enough to still work) and what each fix cost.  AFL_RTDIR is a local
+# copy of $(AFL_SYSDIR) with those symbols in afl-compiler-rt*.o renamed
+# to the __real_* names fuzz/aflshim.c defines; AFL_PATH -- an AFL++
+# option since classic AFL, meant for exactly this, relocating its
+# runtime directory -- is exported for the whole recipe so
+# afl-clang-fast's own link step picks the patched copy over its
+# compiled-in default instead of $(AFL_SYSDIR).
+AFL_RTDIR := $(abspath $(srcdir)/obj/afl-rt)
+export AFL_PATH := $(AFL_RTDIR)
 # The library build (below) is told to instrument for libFuzzer's
 # SanitizerCoverage via NTLIBC_ASAN_EXTRA; afl-clang-fast instruments
 # every object it compiles on its own; this flag is unneeded for it
@@ -257,6 +287,11 @@ HARNESSES = strtod printf scanf utf path strptime strtol strftime \
 EXES = $(HARNESSES:%=$(OUT)/fuzz_%)
 SHIM_OBJ = $(SHIM_SRC:%.c=$(OUT)/%.o)
 COVSHIM_OBJ = $(SHIM_SRC:%.c=$(COVOUT)/%.o)
+# fuzz/aflshim.c, and the local patched runtime copy it pairs with (see
+# the ENGINE=afl comment above): both are specific to that engine, so
+# both are empty and pull nothing into a libfuzzer-engine link.
+AFLSHIM_OBJ = $(if $(filter afl,$(ENGINE)),$(OUT)/aflshim.o,)
+AFLRT_DEP   = $(if $(filter afl,$(ENGINE)),$(AFL_RTDIR)/.built,)
 
 # What the instrumented library is built from.  Derived with find, never
 # written out by hand: a hand-listed prerequisite set stops mentioning the
@@ -309,6 +344,47 @@ $(OUT)/host_oracle.o: host_oracle.c statshim.h | $(OUT)
 $(OUT)/ubsanshim.o: ubsanshim.c | $(OUT)
 	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
 
+# Built only for ENGINE=afl.  Against the host headers, like
+# host_oracle.c -- see the file itself for what it does and why.
+$(OUT)/aflshim.o: aflshim.c | $(OUT)
+	$(CC) $(CFLAGS_ORACLE) -c $< -o $@
+
+# A local, patched copy of AFL++'s runtime directory: everything under
+# $(AFL_SYSDIR) is symlinked through unchanged except afl-compiler-rt*.o,
+# which is copied and then has the symbols fuzz/aflshim.c defines
+# redirected to it -- see that file for which six and why.  Not keyed to
+# MODESUF: its content depends only on the installed AFL++ version, so
+# the asan and ubsan engine=afl builds share one copy.
+#
+# No dependency on the system files' mtimes: an `apt upgrade` of afl++
+# between builds is not a case this tree tries to detect on its own,
+# same as it does not re-run tools/asan-build.sh because /usr/bin/clang
+# changed underneath it.  `rm -rf obj/afl-rt` forces a refresh.
+$(AFL_RTDIR)/.built:
+	rm -rf "$(AFL_RTDIR)"
+	mkdir -p "$(AFL_RTDIR)"
+	for f in "$(AFL_SYSDIR)"/*; do \
+	  b=$$(basename "$$f"); \
+	  case "$$b" in \
+	    afl-compiler-rt*.o) \
+	      cp "$$f" "$(AFL_RTDIR)/$$b"; \
+	      objcopy \
+	        --redefine-sym open=__real_open \
+	        --redefine-sym read=__real_read \
+	        --redefine-sym write=__real_write \
+	        --redefine-sym close=__real_close \
+	        --redefine-sym shmat=__real_shmat \
+	        --redefine-sym shmdt=__real_shmdt \
+	        --redefine-sym getenv=__real_getenv \
+	        --redefine-sym fork=__real_fork \
+	        --redefine-sym sigaction=__real_sigaction \
+	        --redefine-sym signal=__real_signal \
+	        "$(AFL_RTDIR)/$$b" ;; \
+	    *) ln -s "$$f" "$(AFL_RTDIR)/$$b" ;; \
+	  esac; \
+	done
+	touch $@
+
 # -DNTLIBC_FUZZ_STATWRAP turns on the struct stat seam (fuzz/statshim.h).
 # Only here: tools/asan-build.sh compiles its own copy of ntstubs.c for the
 # test binaries, and those must keep seeing ntlibc's stat() as it is.
@@ -319,9 +395,9 @@ $(OUT)/ntstubs.o: ntstubs.c statshim.h $(LIBHDR) $(LIBDIR)/.built | $(OUT)
 # would be expanded by make against a directory it may have cached before
 # the stamp rule refilled it, and an empty expansion links a harness with
 # no ntlibc in it at all.
-$(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(SHIM_OBJ) $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT)
+$(OUT)/fuzz_%: fuzz_%.c $(LIBHDR) $(OUT)/host_oracle.o $(SHIM_OBJ) $(AFLSHIM_OBJ) $(OUT)/ntstubs.o $(LIBDIR)/.built | $(OUT) $(AFLRT_DEP)
 	$(CC) $(CFLAGS_HARNESS) $(SAN_LINK) $(RPATH) \
-	  $(SAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o $(SHIM_OBJ) \
+	  $(SAN_SO) $< $(OUT)/ntstubs.o $(OUT)/host_oracle.o $(SHIM_OBJ) $(AFLSHIM_OBJ) \
 	  $(LIBDIR)/obj/*.o $(FUZZER_LIB) -ldl -lm -o $@
 
 # Leak detection on; see tools/asan-build.sh for why it can be trusted here.
@@ -523,7 +599,8 @@ clean:
 	       $(srcdir)/obj/fuzzcov-ubsan $(srcdir)/obj/fuzzcovlib-ubsan \
 	       $(srcdir)/obj/fuzzcovdata-ubsan \
 	       $(srcdir)/obj/fuzz-afl $(srcdir)/obj/fuzzlib-afl \
-	       $(srcdir)/obj/fuzz-ubsan-afl $(srcdir)/obj/fuzzlib-ubsan-afl
+	       $(srcdir)/obj/fuzz-ubsan-afl $(srcdir)/obj/fuzzlib-ubsan-afl \
+	       $(srcdir)/obj/afl-rt
 
 .PHONY: all run clean coverage ub ubrun ubcoverage afl aflub
 

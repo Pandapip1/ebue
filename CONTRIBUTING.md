@@ -326,6 +326,27 @@ developer invocation; CI sets it to the runner's CPU count. A finding exits
 non-zero and leaves its input under the harness's `crashes/` directory.
 Promote durable reproducers into the matching `test/*.c` file.
 
+The same `fuzz/fuzz_*.c` harnesses also run under AFL++, a second and
+independent fuzzing engine (`ENGINE=afl` in `fuzz/Makefile`, driven by
+`tools/afl-fuzz.sh`) -- no harness source changes needed, since every one
+already defines only `LLVMFuzzerTestOneInput()`. Requires `afl++`
+(`apt-get install afl++` on Debian/Ubuntu; CI installs it the same way).
+AFL++'s own runtime collides with several of ntlibc's own strong symbols
+the same way `stat()` used to for libFuzzer -- see `fuzz/aflshim.c` for
+which ones and why. Common commands mirror the libFuzzer ones above:
+
+```sh
+make -C fuzz ENGINE=afl
+FUZZ_JOBS=4 tools/afl-fuzz.sh 60
+tools/afl-fuzz.sh 60 strtod printf
+tools/afl-fuzz.sh --repro /absolute/path/to/crash-input strtod
+```
+
+Its corpus defaults to `obj/aflcorpus/<harness>/default/`, in afl-fuzz's
+own layout, and is a separate tree from libFuzzer's: the two engines find
+different things at different rates, and neither corpus is a subset of
+the other's format.
+
 Three additional opt-in detectors sit beyond the default loop. `make cfi`
 adds clang's `cfi-icall` check and LTO to the ASan/UBSan build; it is separate
 because LTO materially increases every test link. `make hwasan` builds the
@@ -344,7 +365,8 @@ The workflows deliberately keep different schedules and meanings separate:
   libc-test, the Open POSIX suite, linkcheck, header hygiene, lint,
   sanitizers and REUSE.
 - `fuzz.yml` runs a short corpus-backed net on pushes to main and a longer
-  corpus-writing scheduled search.
+  corpus-writing scheduled search, as two jobs (`fuzz` for libFuzzer,
+  `afl-fuzz` for AFL++) over the same harnesses with separate corpora.
 - `ltp-pin-drift.yml` reports how far the pinned LTP submodule has drifted
   from upstream. It builds nothing: the suite itself is adjudicated on every
   push by `ci.yml`, and drift is the one thing a per-push job cannot see.

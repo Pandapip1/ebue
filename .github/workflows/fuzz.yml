@@ -12,6 +12,7 @@ on:
       - 'include/**'
       - 'arch/**'
       - 'tools/fuzz.sh'
+      - 'tools/afl-fuzz.sh'
       - 'tools/asan-build.sh'
       - 'Makefile'
       - '.github/workflows/fuzz.yml'
@@ -143,6 +144,128 @@ jobs:
               "" "Run: $RUN_URL" "" \
               "Download the run artifact and replay its crashing input with:" \
               "\`tools/fuzz.sh --repro <absolute-path-to-input> $harness\`" \
+              "" "Keep a durable reproducer in the matching test/*.c file.")
+            if [ -n "$existing" ]; then
+              gh issue reopen "$existing" 2>/dev/null || true
+              gh issue comment "$existing" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body" --label fuzz 2>/dev/null \
+                || gh issue create --title "$title" --body "$body"
+            fi
+          done
+
+  # A second, independent engine over the same fuzz/fuzz_*.c harnesses
+  # the job above drives with libFuzzer -- see tools/afl-fuzz.sh and the
+  # ENGINE comment at the top of fuzz/Makefile for why a second engine
+  # over one set of harnesses is worth having.  A separate job, not
+  # separate steps in the job above: the two engines don't share a
+  # build (ENGINE=afl vs the default), a corpus, or a cache key, and a
+  # slow or wedged AFL++ run should not hold up the libFuzzer job's
+  # results or vice versa.  Structured as closely as possible after the
+  # `fuzz` job (corpus caching, summary format, issue-filing) so the two
+  # stay easy to compare; the corpus, cache key and issue titles are
+  # kept separate so a libFuzzer-only finding and an AFL++-only finding
+  # never collide.
+  afl-fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install clang and afl++
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang afl++
+
+      - name: Restore and save corpus
+        id: corpus_rw
+        if: ${{ github.event_name != 'push' && github.event.inputs.reset_corpus != 'yes' }}
+        uses: actions/cache@v6
+        with:
+          path: obj/aflcorpus
+          key: afl-fuzz-corpus-${{ github.run_id }}
+          restore-keys: afl-fuzz-corpus-
+
+      - name: Restore corpus read-only
+        id: corpus_ro
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/cache/restore@v6
+        with:
+          path: obj/aflcorpus
+          key: afl-fuzz-corpus-${{ github.run_id }}
+          restore-keys: afl-fuzz-corpus-
+
+      - name: Report corpus restore
+        shell: bash
+        run: |
+          mkdir -p obj/aflcorpus
+          matched='${{ steps.corpus_rw.outputs.cache-matched-key }}${{ steps.corpus_ro.outputs.cache-matched-key }}'
+          count=$(find obj/aflcorpus -type f | wc -l)
+          echo "corpus: $count file(s) restored from '${matched:-<none>}'"
+          echo "## Corpus" >> "$GITHUB_STEP_SUMMARY"
+          echo "- restored files: $count" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -eq 0 ]; then
+            echo "::warning title=Cold fuzzing start::No corpus was restored."
+          fi
+
+      - name: Generate headers
+        run: make ARCH=x86_64 obj/include/bits/alltypes.h
+
+      - name: Fuzz
+        id: fuzz
+        shell: bash
+        env:
+          SECONDS_PER: ${{ github.event.inputs.seconds || (github.event_name == 'push' && '20') || '300' }}
+          HARNESSES: ${{ github.event.inputs.harnesses || '' }}
+        run: |
+          : > afl-fuzz.log
+          if [ -n "$HARNESSES" ]; then
+            read -ra selected <<< "$HARNESSES"
+            FUZZ_JOBS=$(nproc) tools/afl-fuzz.sh "$SECONDS_PER" "${selected[@]}" 2>&1 | tee afl-fuzz.log
+          else
+            FUZZ_JOBS=$(nproc) tools/afl-fuzz.sh "$SECONDS_PER" 2>&1 | tee afl-fuzz.log
+          fi
+
+      - name: Summarize
+        id: summary
+        if: always()
+        shell: bash
+        run: |
+          touch afl-fuzz.log
+          {
+            echo '## AFL++ fuzz run'
+            grep -E '^   corpus [0-9]+ -> [0-9]+$' afl-fuzz.log || echo '(no corpus counts reported)'
+          } >> "$GITHUB_STEP_SUMMARY"
+          found=$(grep -oE '^   fuzz_[a-z]+ FOUND SOMETHING' afl-fuzz.log \
+                  | awk '{print $1}' | sed 's/^fuzz_//' | sort -u | tr '\n' ' ' || true)
+          echo "found=${found% }" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: afl-fuzz-${{ github.run_id }}
+          path: |
+            afl-fuzz.log
+            obj/aflcorpus/*/default/crashes
+          if-no-files-found: warn
+
+      - name: Open or update finding issues
+        if: ${{ failure() && steps.summary.outputs.found != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUND: ${{ steps.summary.outputs.found }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          for harness in $FOUND; do
+            title="fuzz: fuzz_$harness found something (AFL++)"
+            existing=$(gh issue list --state all --search "$title in:title" \
+              --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+            body=$(printf '%s\n' \
+              "\`tools/afl-fuzz.sh\` reported a finding in \`fuzz_$harness\`." \
+              "" "Run: $RUN_URL" "" \
+              "Download the run artifact and replay its crashing input with:" \
+              "\`tools/afl-fuzz.sh --repro <absolute-path-to-input> $harness\`" \
               "" "Keep a durable reproducer in the matching test/*.c file.")
             if [ -n "$existing" ]; then
               gh issue reopen "$existing" 2>/dev/null || true
