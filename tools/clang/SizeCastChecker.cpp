@@ -3,11 +3,11 @@
 
 #include "clang/AST/Expr.h"
 #include "clang/Lex/Lexer.h"
-#include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
+#include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/APSInt.h"
@@ -26,6 +26,7 @@ namespace {
 class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
   mutable std::unique_ptr<BugType> BT;
 
+public:
   struct Interval {
     llvm::APSInt Min;
     llvm::APSInt Max;
@@ -45,11 +46,12 @@ class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
     return llvm::APSInt::getMaxValue(Bits, Unsigned);
   }
 
-  static llvm::APSInt asSourceType(const llvm::APSInt &Value,
-                                   unsigned Bits, bool Unsigned) {
+  static llvm::APSInt asSourceType(const llvm::APSInt &Value, unsigned Bits,
+                                   bool Unsigned) {
     llvm::APInt Converted = Value;
     if (Converted.getBitWidth() < Bits)
-      Converted = Value.isUnsigned() ? Converted.zext(Bits) : Converted.sext(Bits);
+      Converted =
+          Value.isUnsigned() ? Converted.zext(Bits) : Converted.sext(Bits);
     else if (Converted.getBitWidth() > Bits)
       Converted = Converted.trunc(Bits);
     return llvm::APSInt(Converted, Unsigned);
@@ -76,16 +78,16 @@ class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
 
   static llvm::APSInt minValue(std::initializer_list<llvm::APSInt> Values) {
     return *std::min_element(Values.begin(), Values.end(),
-                            [](const auto &A, const auto &B) {
-                              return llvm::APSInt::compareValues(A, B) < 0;
-                            });
+                             [](const auto &A, const auto &B) {
+                               return llvm::APSInt::compareValues(A, B) < 0;
+                             });
   }
 
   static llvm::APSInt maxValue(std::initializer_list<llvm::APSInt> Values) {
     return *std::max_element(Values.begin(), Values.end(),
-                            [](const auto &A, const auto &B) {
-                              return llvm::APSInt::compareValues(A, B) < 0;
-                            });
+                             [](const auto &A, const auto &B) {
+                               return llvm::APSInt::compareValues(A, B) < 0;
+                             });
   }
 
   static std::optional<Interval> constrainedInterval(const Expr *Expr,
@@ -113,7 +115,8 @@ class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
     while (Low < High) {
       llvm::APSInt Mid = Low + (High - Low) / Two;
       llvm::APSInt NativeMid = asSourceType(Mid, Bits, Unsigned);
-      if (C.getState()->assumeInclusiveRange(*Defined, NativeMin, NativeMid, true))
+      if (C.getState()->assumeInclusiveRange(*Defined, NativeMin, NativeMid,
+                                             true))
         High = Mid;
       else
         Low = Mid + One;
@@ -125,7 +128,8 @@ class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
     while (Low < High) {
       llvm::APSInt Mid = Low + (High - Low + One) / Two;
       llvm::APSInt NativeMid = asSourceType(Mid, Bits, Unsigned);
-      if (C.getState()->assumeInclusiveRange(*Defined, NativeMid, NativeMax, true))
+      if (C.getState()->assumeInclusiveRange(*Defined, NativeMid, NativeMax,
+                                             true))
         Low = Mid;
       else
         High = Mid - One;
@@ -251,8 +255,8 @@ class SizeCastChecker : public Checker<check::PreStmt<ExplicitCastExpr>> {
       }
     }
     if (Result.empty() && Expr->getBeginLoc().isMacroID())
-      Result = Lexer::getImmediateMacroNameForDiagnostics(
-                   Expr->getBeginLoc(), SM, C.getLangOpts())
+      Result = Lexer::getImmediateMacroNameForDiagnostics(Expr->getBeginLoc(),
+                                                          SM, C.getLangOpts())
                    .str();
     if (Result.empty())
       Result = Expr->getStmtClassName();
@@ -318,9 +322,11 @@ public:
       return;
 
     const llvm::APSInt &Lower =
-        llvm::APSInt::compareValues(SourceMin, DestMin) >= 0 ? SourceMin : DestMin;
+        llvm::APSInt::compareValues(SourceMin, DestMin) >= 0 ? SourceMin
+                                                             : DestMin;
     const llvm::APSInt &Upper =
-        llvm::APSInt::compareValues(SourceMax, DestMax) <= 0 ? SourceMax : DestMax;
+        llvm::APSInt::compareValues(SourceMax, DestMax) <= 0 ? SourceMax
+                                                             : DestMax;
     bool Disjoint = llvm::APSInt::compareValues(Lower, Upper) > 0;
     SVal Value = C.getSVal(Cast->getSubExpr());
     std::optional<NonLoc> Defined = Value.getAs<NonLoc>();
@@ -342,18 +348,18 @@ public:
     if (!Node)
       return;
     if (!BT)
-      BT = std::make_unique<BugType>(this, "Unproven integer cast", categories::LogicError);
+      BT = std::make_unique<BugType>(this, "Unproven integer cast",
+                                     categories::LogicError);
 
     const Decl *Current = C.getLocationContext()->getDecl();
     std::string Context = Current ? Current->getDeclKindName() : "unknown";
     if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
       Context = Named->getQualifiedNameAsString();
-    std::string Message = "integer cast from '" + Source.getAsString() +
-                          "' to '" + Dest.getAsString() +
-                          "' is not proven to preserve its value; origin '" +
-                          sourceOrigin(Cast, C) + "'; context '" + Context +
-                          "'; cast '" + sourceText(Cast, C) + "'; site '" +
-                          sourceSite(Cast, C) + "'";
+    std::string Message =
+        "integer cast from '" + Source.getAsString() + "' to '" +
+        Dest.getAsString() + "' is not proven to preserve its value; origin '" +
+        sourceOrigin(Cast, C) + "'; context '" + Context + "'; cast '" +
+        sourceText(Cast, C) + "'; site '" + sourceSite(Cast, C) + "'";
     auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
     Report->addRange(Cast->getSourceRange());
     C.emitReport(std::move(Report));
@@ -382,8 +388,8 @@ class ArrayIndexChecker : public Checker<check::PreStmt<ArraySubscriptExpr>> {
       }
     }
     if (Result.empty() && Expr->getBeginLoc().isMacroID())
-      Result = Lexer::getImmediateMacroNameForDiagnostics(
-                   Expr->getBeginLoc(), SM, C.getLangOpts())
+      Result = Lexer::getImmediateMacroNameForDiagnostics(Expr->getBeginLoc(),
+                                                          SM, C.getLangOpts())
                    .str();
     if (Result.empty())
       Result = Expr->getStmtClassName();
@@ -430,8 +436,8 @@ public:
                     CheckerContext &C) const {
     ProgramStateRef State = C.getState();
     SVal Base = C.getSVal(Subscript->getBase());
-    DefinedOrUnknownSVal Count = getDynamicElementCountWithOffset(
-        State, Base, Subscript->getType());
+    DefinedOrUnknownSVal Count =
+        getDynamicElementCountWithOffset(State, Base, Subscript->getType());
     SVal Index = C.getSVal(Subscript->getIdx());
     std::optional<NonLoc> DefinedIndex = Index.getAs<NonLoc>();
     ProgramStateRef Outside = State;
@@ -453,14 +459,132 @@ public:
     std::string Context = Current ? Current->getDeclKindName() : "unknown";
     if (const auto *Named = dyn_cast_or_null<NamedDecl>(Current))
       Context = Named->getQualifiedNameAsString();
-    std::string Message =
-        "array index is not proven in bounds; origin '" +
-        sourceOrigin(Subscript, C) + "'; context '" + Context +
-        "'; subscript '" + sourceText(Subscript, C) + "'; site '" +
-        sourceSite(Subscript, C) + "'";
+    std::string Message = "array index is not proven in bounds; origin '" +
+                          sourceOrigin(Subscript, C) + "'; context '" +
+                          Context + "'; subscript '" +
+                          sourceText(Subscript, C) + "'; site '" +
+                          sourceSite(Subscript, C) + "'";
     auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
     Report->addRange(Subscript->getSourceRange());
     C.emitReport(std::move(Report));
+  }
+};
+
+static std::string arithmeticOrigin(const Expr *Expression, CheckerContext &C);
+static std::string arithmeticText(const Stmt *Statement, CheckerContext &C);
+static std::string arithmeticSite(const Expr *Expression, CheckerContext &C);
+static std::string arithmeticContext(CheckerContext &C);
+static ProgramStateRef arithmeticInputState(CheckerContext &C);
+
+class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
+                                               check::PreStmt<UnaryOperator>> {
+  mutable std::unique_ptr<BugType> BT;
+
+  static bool outside(const SizeCastChecker::Interval &Range,
+                      const SizeCastChecker::Interval &Type) {
+    return llvm::APSInt::compareValues(Range.Min, Type.Min) < 0 ||
+           llvm::APSInt::compareValues(Range.Max, Type.Max) > 0;
+  }
+
+  void report(const Expr *Expression, CheckerContext &C) const {
+    ExplodedNode *Node = C.generateNonFatalErrorNode(arithmeticInputState(C));
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Unproven signed arithmetic",
+                                     categories::LogicError);
+    std::string Message =
+        "signed arithmetic result is not proven representable; origin '" +
+        arithmeticOrigin(Expression, C) + "'; context '" +
+        arithmeticContext(C) + "'; expression '" +
+        arithmeticText(Expression, C) + "'; site '" +
+        arithmeticSite(Expression, C) + "'";
+    auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
+    Report->addRange(Expression->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
+public:
+  void checkPreStmt(const BinaryOperator *Operation, CheckerContext &C) const {
+    QualType Type = Operation->getType();
+    if (!Type->isSignedIntegerType())
+      return;
+    auto Left = SizeCastChecker::expressionInterval(Operation->getLHS(), C);
+    auto Right = SizeCastChecker::expressionInterval(Operation->getRHS(), C);
+    auto Bounds = SizeCastChecker::typeInterval(C.getASTContext(), Type);
+    std::optional<SizeCastChecker::Interval> Result;
+    switch (Operation->getOpcode()) {
+    case BO_Add:
+    case BO_AddAssign:
+      Result =
+          SizeCastChecker::Interval{Left.Min + Right.Min, Left.Max + Right.Max};
+      break;
+    case BO_Sub:
+    case BO_SubAssign:
+      Result =
+          SizeCastChecker::Interval{Left.Min - Right.Max, Left.Max - Right.Min};
+      break;
+    case BO_Mul:
+    case BO_MulAssign: {
+      llvm::APSInt A = Left.Min * Right.Min;
+      llvm::APSInt B = Left.Min * Right.Max;
+      llvm::APSInt D = Left.Max * Right.Min;
+      llvm::APSInt E = Left.Max * Right.Max;
+      Result =
+          SizeCastChecker::Interval{SizeCastChecker::minValue({A, B, D, E}),
+                                    SizeCastChecker::maxValue({A, B, D, E})};
+      break;
+    }
+    case BO_Shl:
+    case BO_ShlAssign: {
+      unsigned Width = C.getASTContext().getIntWidth(Type);
+      if (Left.Min.isNegative() || Right.Min.isNegative() ||
+          Right.Max.getLimitedValue() >= Width) {
+        report(Operation, C);
+        return;
+      }
+      unsigned LowShift = static_cast<unsigned>(Right.Min.getLimitedValue());
+      unsigned HighShift = static_cast<unsigned>(Right.Max.getLimitedValue());
+      Result = SizeCastChecker::Interval{
+          llvm::APSInt(Left.Min.shl(LowShift), false),
+          llvm::APSInt(Left.Max.shl(HighShift), false)};
+      break;
+    }
+    case BO_Div:
+    case BO_Rem:
+    case BO_DivAssign:
+    case BO_RemAssign: {
+      llvm::APSInt MinusOne(llvm::APInt(SizeCastChecker::MathBits, 1), false);
+      MinusOne = -MinusOne;
+      if (Left.Min <= Bounds.Min && Left.Max >= Bounds.Min &&
+          Right.Min <= MinusOne && Right.Max >= MinusOne)
+        report(Operation, C);
+      return;
+    }
+    default:
+      return;
+    }
+    if (Result && outside(*Result, Bounds))
+      report(Operation, C);
+  }
+
+  void checkPreStmt(const UnaryOperator *Operation, CheckerContext &C) const {
+    UnaryOperatorKind Opcode = Operation->getOpcode();
+    if (Opcode != UO_Minus && Opcode != UO_PreInc && Opcode != UO_PostInc &&
+        Opcode != UO_PreDec && Opcode != UO_PostDec)
+      return;
+    QualType Type = Operation->getType();
+    if (!Type->isSignedIntegerType())
+      return;
+    auto Operand =
+        SizeCastChecker::expressionInterval(Operation->getSubExpr(), C);
+    auto Bounds = SizeCastChecker::typeInterval(C.getASTContext(), Type);
+    bool Unsafe = Opcode == UO_Minus ? Operand.Min <= Bounds.Min
+                  : (Opcode == UO_PreInc || Opcode == UO_PostInc)
+                      ? Operand.Max >= Bounds.Max
+                      : Operand.Min <= Bounds.Min;
+    if (Unsafe)
+      report(Operation, C);
   }
 };
 
@@ -672,9 +796,8 @@ public:
     ProgramStateRef Violation = State;
     const auto *Super = dyn_cast<SubRegion>(Field->getSuperRegion());
     if (Kind && Super) {
-      const FieldRegion *KindRegion = C.getSValBuilder()
-                                          .getRegionManager()
-                                          .getFieldRegion(Kind, Super);
+      const FieldRegion *KindRegion =
+          C.getSValBuilder().getRegionManager().getFieldRegion(Kind, Super);
       SVal KindValue = State->getSVal(KindRegion);
       if (std::optional<NonLoc> Defined = KindValue.getAs<NonLoc>()) {
         Violation = State->assume(*Defined, WantsNormal);
@@ -695,8 +818,9 @@ public:
       Context = Named->getQualifiedNameAsString();
     std::string Message = "tagged result field '" + FieldName.str() +
                           "' is not proven selected; origin '" +
-                          sourceOrigin(Statement, C) + "'; context '" + Context +
-                          "'; access '" + sourceText(Statement, C) + "'";
+                          sourceOrigin(Statement, C) + "'; context '" +
+                          Context + "'; access '" + sourceText(Statement, C) +
+                          "'";
     auto Report = std::make_unique<PathSensitiveBugReport>(*BT, Message, Node);
     Report->addRange(Statement->getSourceRange());
     C.emitReport(std::move(Report));
@@ -710,7 +834,8 @@ extern "C" const char clang_analyzerAPIVersionString[] =
 
 extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<SizeCastChecker>(
-      "ntlibc.SizeCast", "Proves that explicit integer casts preserve values", "");
+      "ntlibc.SizeCast", "Proves that explicit integer casts preserve values",
+      "");
   Registry.addChecker<ArrayIndexChecker>(
       "ntlibc.ArrayIndex", "Proves that array indices are in bounds", "");
   Registry.addChecker<TaggedResultChecker>(
@@ -720,4 +845,7 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
       "ntlibc.Divisor", "Proves that integer divisors are nonzero", "");
   Registry.addChecker<ShiftCountChecker>(
       "ntlibc.ShiftCount", "Proves that integer shift counts are in range", "");
+  Registry.addChecker<SignedArithmeticChecker>(
+      "ntlibc.SignedArithmetic",
+      "Proves that signed arithmetic results are representable", "");
 }

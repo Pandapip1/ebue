@@ -35,7 +35,8 @@
 #   arithub   currently opt-in while its initial proof backlog is triaged.
 #             Path-sensitive Clang checkers require every integer divisor to
 #             be proven nonzero and every shift count to be proven within the
-#             promoted left operand's width.
+#             promoted left operand's width, and every signed arithmetic result
+#             to remain representable.
 #   ownership currently opt-in while its initial proof backlog is triaged.
 #             A path-sensitive Clang checker infers ownership from ntlibc's
 #             allocator families, treats aliases as borrows, proves every
@@ -869,7 +870,7 @@ stage_arithub() {
 	: > "$fixture_log"
 	for fixture in tools/lint-arithmetic-ub-fixtures/*.c; do
 		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount \
+			-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic \
 			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
 			>> "$fixture_log" 2>&1 || any=1
 	done
@@ -890,7 +891,7 @@ stage_arithub() {
 			id=$(printf %s "$f" | tr / _)
 			# shellcheck disable=SC2086
 			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount \
+				-Xclang -analyzer-checker=ntlibc.Divisor,ntlibc.ShiftCount,ntlibc.SignedArithmetic \
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "'"$pardir"'/$id.log" 2>&1
 		' _ {} clang-18 "$plugin" "$target" $flags

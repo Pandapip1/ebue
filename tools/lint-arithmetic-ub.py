@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Check proofs for nonzero divisors and in-range shift counts."""
+"""Check proofs for division, shifts, and representable signed arithmetic."""
 
 from __future__ import annotations
 
@@ -16,9 +16,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tools/lint-arithmetic-ub-fixtures"
 DIAGNOSTIC = re.compile(
     r"^(.*?):(\d+):(\d+): warning: "
-    r"(divisor is not proven nonzero|shift count is not proven in range \[0, \d+\)); "
+    r"(divisor is not proven nonzero|shift count is not proven in range \[0, \d+\)|"
+    r"signed arithmetic result is not proven representable); "
     r"origin '(.*)'; context '(.*)'; expression '(.*)'; site '(.*)' "
-    r"\[ntlibc\.(Divisor|ShiftCount)\]$"
+    r"\[ntlibc\.(Divisor|ShiftCount|SignedArithmetic)\]$"
 )
 
 
@@ -86,14 +87,17 @@ def main() -> int:
                 for log in arguments.logs for finding in parse_log(log)}
     for finding in sorted(findings.values()):
         obligation = ("nonzero divisor" if finding.checker == "Divisor"
-                      else "shift count range")
+                      else "shift count range" if finding.checker == "ShiftCount"
+                      else "signed arithmetic range")
         print(f"{finding.path}:{finding.line}: unproved {obligation} in "
               f"{finding.context}: {finding.expression}")
     if findings:
         divisors = sum(finding.checker == "Divisor" for finding in findings.values())
-        shifts = len(findings) - divisors
+        shifts = sum(finding.checker == "ShiftCount" for finding in findings.values())
+        arithmetic = len(findings) - divisors - shifts
         print(f"lint-arithmetic-ub: {divisors} unproved divisor(s), "
-              f"{shifts} unproved shift count(s)")
+              f"{shifts} unproved shift count(s), "
+              f"{arithmetic} unproved signed arithmetic result(s)")
         return 1
     print("lint-arithmetic-ub: no findings (fixtures passed)")
     return 0

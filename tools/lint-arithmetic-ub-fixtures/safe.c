@@ -1,6 +1,6 @@
 int checked_division(int value, int divisor)
 {
-	if (divisor == 0)
+	if (divisor == 0 || value == (-2147483647 - 1))
 		return 0;
 	return value / divisor;
 }
@@ -36,4 +36,25 @@ unsigned constant_shift(unsigned value)
 {
 	value <<= 7;
 	return value;
+}
+
+int checked_addition(int value)
+{
+	if (value > 2147483647 - 7)
+		return 0;
+	return value + 7;
+}
+
+int checked_subtraction(int value)
+{
+	if (value < (-2147483647 - 1) + 7)
+		return 0;
+	return value - 7;
+}
+
+int checked_negation(int value)
+{
+	if (value == (-2147483647 - 1))
+		return 0;
+	return -value;
 }
