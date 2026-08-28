@@ -93,3 +93,4 @@ ntlibc	posix_termios_tcflush_discards_input	capability.console=no	NA	the runner 
 ntlibc	posix_statvfs_statvfs_eloop	runtime=wine,capability.symlink=no	NA	the runner cannot construct the symbolic-link loop
 ntlibc	posix_unistd_chmod_readonly_roundtrip	runtime=wine	NA	Wine accepts the readonly attribute update on its fallback handle but does not apply it
 ntlibc	posix_unreferenced_fchmodat_wine_readonly	runtime=wine	NA	Wine does not apply readonly attributes through root-relative or reparse-point handles
+ntlibc	posix_pthread_cancel_cleanup	runtime=wine	NA	patched Wine can stall or replay a thread after suspended-context redirection: the atomic cancellation path measured 99/100 serial passes and 996/1000 passes at 20-way concurrency, with no assertion failure
