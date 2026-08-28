@@ -4371,6 +4371,7 @@ static long raw_syscall(long n, long a1, long a2, long a3, long a4, long a5, lon
 #define SYS_bind_        49
 #define SYS_listen_      50
 #define SYS_getsockname_ 51
+#define SYS_getpeername_ 52
 #define SYS_connect_     42
 #define SYS_accept_      43
 #define SYS_sendto_      44
@@ -4536,8 +4537,28 @@ static NTSTATUS afd_do_select(const void *in, ULONG inlen, void *out, ULONG outl
 		uint32_t got = 0;
 
 		if (pfds[i].revents & (POLLHUP | POLLERR)) {
-			got |= AFD_EVENT_CLOSE | AFD_EVENT_DISCONNECT | AFD_EVENT_ABORT | AFD_EVENT_SEND;
-			if (reqevents[i] & AFD_EVENT_RECEIVE) got |= AFD_EVENT_RECEIVE;
+			/* POLLHUP alone does not mean "this connection closed":
+			 * measured directly, a freshly socket()'d, never bound/
+			 * connected/listened-on descriptor also reports
+			 * POLLHUP|POLLOUT from a real host poll(2) -- there is
+			 * nothing to hang up FROM yet.  test/posix-select-socket.c's
+			 * test_idle_socket_not_readable() asserts exactly this
+			 * case must poll as not-ready at all, and originally
+			 * failed here: every POLLHUP was being read as a genuine
+			 * disconnect and reported as CLOSE/DISCONNECT/ABORT
+			 * (which src/internal/afd.h's AFD_POLL_READ_BITS already
+			 * makes readable on their own, with no need for the
+			 * explicit RECEIVE this block used to also add).
+			 * getpeername() tells the two apart without this file
+			 * tracking connection state itself: a socket that was
+			 * connect()ed or accept()ed always has a peer address to
+			 * report, even after the peer later disconnects, where a
+			 * socket that never had one answers ENOTCONN. */
+			struct sockaddr_in peer;
+			long plen = sizeof peer;
+			if (raw_syscall(SYS_getpeername_, pfds[i].fd, (long)&peer, (long)&plen, 0, 0, 0) == 0) {
+				got |= AFD_EVENT_CLOSE | AFD_EVENT_DISCONNECT | AFD_EVENT_ABORT | AFD_EVENT_SEND;
+			}
 		}
 		if (pfds[i].revents & POLLIN) {
 			/* SO_ACCEPTCONN tells a listening socket apart from a
