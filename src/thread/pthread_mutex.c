@@ -188,7 +188,9 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 {
 	struct mutex_data *data;
 	struct __pthread *self;
-	int error = mutex_ready(mutex);
+	int error;
+	__sig_drain_pending();
+	error = mutex_ready(mutex);
 	if (error) return error;
 	if (absolute && (absolute->tv_sec < 0 || absolute->tv_nsec < 0 ||
 	    absolute->tv_nsec >= 1000000000L)) return EINVAL;

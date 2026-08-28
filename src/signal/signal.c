@@ -945,6 +945,13 @@ static void drain_unblocked_pending(void)
 	}
 }
 
+void __sig_drain_pending(void)
+{
+	__sig_lock();
+	drain_unblocked_pending();
+	__sig_unlock();
+}
+
 int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 {
 	int i;

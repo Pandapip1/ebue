@@ -519,6 +519,8 @@ unsigned long __sig_caught_count(void);
 unsigned long __sig_thread_caught_count(void);
 /* Subset of that count whose installed action requested SA_RESTART. */
 unsigned long __sig_thread_restart_count(void);
+/* Deliver pending signals which the calling thread can accept. */
+void __sig_drain_pending(void);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
 int __sigchld_nocldwait(void);
