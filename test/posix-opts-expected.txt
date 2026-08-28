@@ -10,7 +10,7 @@
 # kernel32 disabled. These rules deliberately make no claim about another
 # profile; add measured profile rules rather than copying these blindly.
 #
-# COUNTS PASS=1458 BUG=0 UNIMPL=24 NA=125 FLAKY=3
+# COUNTS PASS=1462 BUG=0 UNIMPL=20 NA=125 FLAKY=3
 aio_cancel/1-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/10-1.c	runtime=wine,target_arch=x86_64,kernel32=no	PASS	measured PASS after POSIX asynchronous I/O implementation
 aio_cancel/2-1.c	runtime=wine,target_arch=x86_64,kernel32=no	NA	suite prerequisite is unavailable: cancellation fixture requires socketpair(AF_UNIX, SOCK_DGRAM), while ntlibc supports stream socketpair but not datagram sockets
