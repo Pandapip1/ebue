@@ -195,9 +195,11 @@ static int take_pending_from_set(const sigset_t *set, siginfo_t *si)
  * from spuriously interrupting another thread's semaphore wait. */
 static unsigned long caught_count;
 static __thread unsigned long thread_caught_count;
+static __thread unsigned long thread_restart_count;
 
 unsigned long __sig_caught_count(void) { return caught_count; }
 unsigned long __sig_thread_caught_count(void) { return thread_caught_count; }
+unsigned long __sig_thread_restart_count(void) { return thread_restart_count; }
 
 static int default_action(int sig);
 static int sig_stops(int sig);
@@ -588,6 +590,7 @@ int __raise_internal_info(int sig, const void *data)
 		 * interrupted still has to see that it did. */
 		caught_count++;
 		thread_caught_count++;
+		if (flags & SA_RESTART) thread_restart_count++;
 
 		/* sigaction.html DESCRIPTION: "If SA_SIGINFO is set ...
 		 * sa_sigaction ... specif[ies] a signal-catching function" that
@@ -609,6 +612,19 @@ int __raise_internal_info(int sig, const void *data)
 		}
 
 		blocked = saved;
+		/* raise() and pthread_kill() are thread-directed.  If the handler
+		 * deferred one of those signals, restoring its entry mask is the
+		 * point at which the newly-unblocked pending signal is delivered. */
+		for (i = 1; i < _NSIG; i++) {
+			while (sigismember(&thread_pending.set, i) &&
+			       !sigismember(&blocked, i)) {
+				siginfo_t info;
+				take_pending_signal_from(&thread_pending, i, &info);
+				thread_directed++;
+				__raise_internal_info(i, &info);
+				thread_directed--;
+			}
+		}
 	}
 	return 0;
 }
@@ -642,9 +658,7 @@ int raise(int sig)
 {
 	int r;
 	__sig_lock();
-	thread_directed++;
-	r = __raise_internal(sig);
-	thread_directed--;
+	r = __raise_thread_internal(sig);
 	__sig_unlock();
 	return r < 0 ? -1 : 0;
 }
