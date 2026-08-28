@@ -468,6 +468,10 @@ struct vnode {
 	unsigned char *data;         /* file contents */
 	long long size;
 	size_t cap;
+	long long lock_off;
+	long long lock_len;
+	int lock_owner;
+	int lock_exclusive;
 	struct vent *entries;        /* directory contents, creation order */
 	struct vnode *parent;        /* directories only */
 	WCHAR *name;                 /* directories only: name in the parent */
@@ -1357,6 +1361,13 @@ static void of_drop(struct ofile *f)
 	if (f->kind == OF_VFS) {
 		struct vnode *n = f->node;
 		int unlinked = 0;
+		/* POSIX record locks are process-associated and closing any
+		 * descriptor for the file releases this process's locks. */
+		if (n->lock_owner == (int)syscall(SYS_getpid)) {
+			n->lock_owner = 0;
+			n->lock_off = n->lock_len = 0;
+			n->lock_exclusive = 0;
+		}
 		/* Before the node is touched: the last handle onto a mirrored
 		 * file that was opened for writing is what puts it on the host. */
 		mirror_flush(f);
@@ -4623,19 +4634,58 @@ NTSTATUS NTAPI NtUnmapViewOfSection(HANDLE proc, PVOID base)
 	return STATUS_INVALID_PARAMETER;
 }
 
-/* src/file/flock.c's NtLockFile()/NtUnlockFile() pair: no simulated
- * byte-range lock table exists over the in-memory volume this file's
- * NtCreateFile() stub above serves, so there is nothing genuine to
- * grant or release here. flock()'s own tracking (lockstate[] there)
- * never calls NtUnlockFile() unless an earlier NtLockFile() reported
- * success, so a lock request that always refuses leaves that side
- * consistent too -- test/posix-termios.c's flock() coverage already
- * tolerates a failing lock/unlock as a note rather than a hard
- * assertion for exactly this kind of environment gap (see that file
- * and src/file/flock.c's own banners). */
-NOTIMPL(NtLockFile, (HANDLE a, HANDLE b, PIO_APC_ROUTINE c, PVOID d, PIO_STATUS_BLOCK e,
-                     LARGE_INTEGER *f, LARGE_INTEGER *g, PULONG h, BOOLEAN i, BOOLEAN j))
-NOTIMPL(NtUnlockFile, (HANDLE a, PIO_STATUS_BLOCK b, LARGE_INTEGER *c, LARGE_INTEGER *d, PULONG e))
+/* Same-process byte-range locking for the sanitizer volume.  The shim's
+ * synthetic file tree is private process memory, so an exec-created child
+ * cannot share this table; tools/asan-build.sh classifies that one distinct
+ * cross-exec test separately.  A real fork inherits the held owner id and
+ * therefore still observes its parent's lock as a conflict. */
+static int ranges_overlap(long long ao, long long al, long long bo, long long bl)
+{
+	return ao < bo ? bo - ao < al : ao - bo < bl;
+}
+
+NTSTATUS NTAPI NtLockFile(HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc,
+	PVOID context, PIO_STATUS_BLOCK io, LARGE_INTEGER *off, LARGE_INTEGER *len,
+	PULONG key, BOOLEAN immediate, BOOLEAN exclusive)
+{
+	struct ofile *f = of_get(handle);
+	struct vnode *v;
+	int owner = (int)syscall(SYS_getpid);
+	(void)event; (void)apc; (void)context; (void)key; (void)immediate;
+	if (!f || f->kind != OF_VFS || !off || !len || *off < 0 || *len <= 0)
+		return STATUS_INVALID_PARAMETER;
+	v = f->node;
+	if (v->lock_owner && v->lock_owner != owner &&
+	    ranges_overlap(*off, *len, v->lock_off, v->lock_len) &&
+	    (exclusive || v->lock_exclusive))
+		return STATUS_LOCK_NOT_GRANTED;
+	/* The current native tests need one range per file.  Re-locking by the
+	 * same process replaces that range, matching their F_SETLK use. */
+	v->lock_owner = owner;
+	v->lock_off = *off;
+	v->lock_len = *len;
+	v->lock_exclusive = exclusive != FALSE;
+	if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; }
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI NtUnlockFile(HANDLE handle, PIO_STATUS_BLOCK io,
+	LARGE_INTEGER *off, LARGE_INTEGER *len, PULONG key)
+{
+	struct ofile *f = of_get(handle);
+	struct vnode *v;
+	(void)key;
+	if (!f || f->kind != OF_VFS || !off || !len) return STATUS_INVALID_PARAMETER;
+	v = f->node;
+	if (v->lock_owner != (int)syscall(SYS_getpid) ||
+	    v->lock_off != *off || v->lock_len != *len)
+		return STATUS_RANGE_NOT_LOCKED;
+	v->lock_owner = 0;
+	v->lock_off = v->lock_len = 0;
+	v->lock_exclusive = 0;
+	if (io) { io->Status = STATUS_SUCCESS; io->Information = 0; }
+	return STATUS_SUCCESS;
+}
 
 PVOID NTAPI RtlAddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HANDLER h)
 {
