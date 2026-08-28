@@ -1059,13 +1059,13 @@ static void test_pthread_cancel_cleanup(void)
 #include <time.h>
 #include <limits.h>
 
-extern int __pthread_cancel_unsafe_active(pthread_t);
-
 enum huge_wait_kind {
 	HUGE_NANOSLEEP,
 	HUGE_CLOCK_RELATIVE,
 	HUGE_CLOCK_ABSOLUTE
 };
+
+static volatile int huge_wait_returned;
 
 static void *huge_wait_start(void *argument)
 {
@@ -1080,6 +1080,7 @@ static void *huge_wait_start(void *argument)
 	else
 		result = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME,
 			&request, NULL);
+	huge_wait_returned = 1;
 	return (void *)(long long)(result + 2);
 }
 
@@ -1089,20 +1090,21 @@ static void test_pthread_cancel_huge_timeouts(void)
 	for (kind = HUGE_NANOSLEEP; kind <= HUGE_CLOCK_ABSOLUTE; kind++) {
 		pthread_t thread;
 		void *result = NULL;
-		int i, active = 0;
+		int i;
+		huge_wait_returned = 0;
 		CHECK(pthread_create(&thread, NULL, huge_wait_start,
 			(void *)(long long)kind) == 0);
-		for (i = 0; i < 1000000; i++) {
-			if (__pthread_cancel_unsafe_active(thread)) {
-				active = 1;
-				break;
-			}
+		/* __alertable_delay() no longer marks an unsafe interval (see
+		 * src/unistd/sleep.c), so there is nothing left to poll for
+		 * "still waiting". A generous yield budget serves the same
+		 * purpose: the pre-fix multiplication wraps before entering
+		 * the wait, making these valid huge waits return almost
+		 * immediately instead of actually blocking, and this budget
+		 * is far larger than any such immediate return would need to
+		 * set the flag below. */
+		for (i = 0; i < 1000000 && !huge_wait_returned; i++)
 			sched_yield();
-		}
-		/* The pre-fix multiplication wraps before the unsafe interval,
-		 * making these valid huge waits return instead of remaining a
-		 * cancellation point. */
-		CHECK(active);
+		CHECK(!huge_wait_returned);
 		CHECK(pthread_cancel(thread) == 0);
 		CHECK(pthread_join(thread, &result) == 0);
 		CHECK(result == PTHREAD_CANCELED);
