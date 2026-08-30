@@ -21,11 +21,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_time.h"
 
 static int realtime_get(struct timespec *ts)
 {
-	LARGE_INTEGER now;
-	NtQuerySystemTime(&now);
+	long long now;
+	__plat_realtime_get(&now);
 	ts->tv_sec = (time_t)__nt_to_unix_sec(now);
 	ts->tv_nsec = __nt_to_unix_nsec(now);
 	return 0;
@@ -33,9 +34,8 @@ static int realtime_get(struct timespec *ts)
 
 static int monotonic_get(struct timespec *ts)
 {
-	LARGE_INTEGER count, freq;
-	NTSTATUS st = NtQueryPerformanceCounter(&count, &freq);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	long long count, freq;
+	if (__plat_perfcounter_get(&count, &freq) < 0) return -1;
 	if (!__clock_qpc_to_timespec(count, freq, &ts->tv_sec, &ts->tv_nsec)) {
 		errno = EOVERFLOW;
 		return -1;
@@ -45,11 +45,9 @@ static int monotonic_get(struct timespec *ts)
 
 static int cputime_get(struct timespec *ts)
 {
-	KERNEL_USER_TIMES kt;
-	NTSTATUS st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, NULL);
-	long long ticks; /* 100ns units, kernel + user */
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	if (!__clock_combine_cpu_ticks(kt.KernelTime, kt.UserTime, &ticks)) {
+	long long kernel, user, ticks; /* 100ns units, kernel + user */
+	if (__plat_process_cpu_ticks(&kernel, &user) < 0) return -1;
+	if (!__clock_combine_cpu_ticks(kernel, user, &ticks)) {
 		errno = EOVERFLOW;
 		return -1;
 	}
@@ -80,8 +78,7 @@ int clock_gettime(clockid_t id, struct timespec *ts)
 
 int clock_settime(clockid_t id, const struct timespec *ts)
 {
-	LARGE_INTEGER nt;
-	NTSTATUS st;
+	long long nt;
 
 	if (id != CLOCK_REALTIME) { errno = EINVAL; return -1; }
 	if (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) { errno = EINVAL; return -1; }
@@ -89,9 +86,7 @@ int clock_settime(clockid_t id, const struct timespec *ts)
 		errno = EINVAL;
 		return -1;
 	}
-	st = NtSetSystemTime(&nt, NULL);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	return __plat_realtime_set(nt);
 }
 
 int clock_getres(clockid_t id, struct timespec *res)
@@ -110,11 +105,9 @@ int clock_getres(clockid_t id, struct timespec *res)
 	case CLOCK_MONOTONIC_RAW:
 	case CLOCK_MONOTONIC_COARSE:
 	case CLOCK_BOOTTIME: {
-		LARGE_INTEGER count, freq;
-		NTSTATUS st;
+		long long count, freq;
 		if (!res) return 0;
-		st = NtQueryPerformanceCounter(&count, &freq);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (__plat_perfcounter_get(&count, &freq) < 0) return -1;
 		if (!__clock_qpc_resolution(freq, &res->tv_sec, &res->tv_nsec)) {
 			errno = EOVERFLOW;
 			return -1;

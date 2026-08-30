@@ -8,13 +8,11 @@
  */
 #include <time.h>
 #include "libc.h"
+#include "plat_time.h"
 
 int stime(const time_t *tp)
 {
-	LARGE_INTEGER nt;
-	NTSTATUS st;
+	long long nt;
 	if (!__unix_to_nt(*tp, 0, &nt)) { errno = EOVERFLOW; return -1; }
-	st = NtSetSystemTime(&nt, NULL);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	return __plat_realtime_set(nt);
 }

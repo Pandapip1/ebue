@@ -17,6 +17,7 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_time.h"
 
 struct posix_timer {
 	int active;
@@ -30,7 +31,7 @@ struct posix_timer {
 
 static struct posix_timer timers[TIMER_MAX];
 static int manager_started;
-static HANDLE manager_wake;
+static __plat_handle_t manager_wake;
 
 static int clock_supported(clockid_t clock)
 {
@@ -132,11 +133,9 @@ static void timer_expire(struct posix_timer *timer, long long now)
 	timer_signal(timer, expirations);
 }
 
-static ULONG NTAPI timer_manager(PVOID unused)
+static void timer_manager(void)
 {
-	(void)unused;
 	for (;;) {
-		LARGE_INTEGER timeout, *wait = 0;
 		long long nearest = 0;
 		int i;
 
@@ -160,48 +159,18 @@ static ULONG NTAPI timer_manager(PVOID unused)
 		}
 		__sig_unlock();
 
-		if (nearest) {
-			timeout = -nearest;
-			wait = &timeout;
-		}
-		/* Auto-reset manager_wake closes the scan/wait race: a settime() or
-		 * delete() between the scan above and this wait leaves the event
-		 * signalled, so the wait returns immediately and recomputes state. */
-		NtWaitForSingleObject(manager_wake, FALSE, wait);
+		__plat_timer_manager_wait(manager_wake, nearest, nearest != 0);
 	}
-	return 0;
 }
 
 static int start_manager(void)
 {
-#ifdef _NTLIBC_NATIVE_BUILD
-	/* The native sanitizer shim has no NT thread or signal-delivery
-	 * transport.  SIGEV_NONE timers need neither: their remaining time
-	 * is derived from the selected clock whenever it is queried. */
-	errno = EAGAIN;
-	return -1;
-#else
-	OBJECT_ATTRIBUTES oa;
-	HANDLE event, thread;
-	NTSTATUS st;
+	__plat_handle_t wake;
 	if (manager_started) return 0;
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-	st = NtCreateEvent(&event, EVENT_ALL_ACCESS, &oa,
-	                   SynchronizationEvent, FALSE);
-	if (!NT_SUCCESS(st)) { errno = EAGAIN; return -1; }
-	manager_wake = event;
-	st = NtCreateThreadEx(&thread, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
-	                      (PVOID)timer_manager, 0, 0, 0, 0, 0, 0);
-	if (!NT_SUCCESS(st)) {
-		manager_wake = 0;
-		NtClose(event);
-		errno = EAGAIN;
-		return -1;
-	}
+	if (__plat_timer_manager_start(timer_manager, &wake) < 0) return -1;
+	manager_wake = wake;
 	manager_started = 1;
-	NtClose(thread);
 	return 0;
-#endif
 }
 
 int timer_create(clockid_t clock, struct sigevent *event, timer_t *id)
@@ -249,7 +218,6 @@ int timer_settime(timer_t id, int flags, const struct itimerspec *value,
 {
 	struct posix_timer *timer;
 	long long first, interval, now;
-	LONG previous;
 
 	if ((flags & ~TIMER_ABSTIME) || !timespec_valid(&value->it_value) ||
 	    !timespec_valid(&value->it_interval)) { errno = EINVAL; return -1; }
@@ -275,7 +243,7 @@ int timer_settime(timer_t id, int flags, const struct itimerspec *value,
 	if (!first) timer->due = 0;
 	else if (flags & TIMER_ABSTIME) timer->due = first;
 	else timer->due = now + first;
-	if (manager_wake) NtSetEvent(manager_wake, &previous);
+	if (manager_wake) __plat_timer_wake(manager_wake);
 	__sig_unlock();
 	return 0;
 }
@@ -311,12 +279,11 @@ int timer_getoverrun(timer_t id)
 int timer_delete(timer_t id)
 {
 	struct posix_timer *timer;
-	LONG previous;
 	__sig_lock();
 	timer = timer_lookup(id);
 	if (!timer) { __sig_unlock(); errno = EINVAL; return -1; }
 	memset(timer, 0, sizeof *timer);
-	if (manager_wake) NtSetEvent(manager_wake, &previous);
+	if (manager_wake) __plat_timer_wake(manager_wake);
 	__sig_unlock();
 	return 0;
 }
@@ -325,5 +292,5 @@ void __timer_reinit_after_fork(void)
 {
 	memset(timers, 0, sizeof timers);
 	manager_started = 0;
-	manager_wake = 0;
+	manager_wake = __PLAT_HANDLE_NULL;
 }
