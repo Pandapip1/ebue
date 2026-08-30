@@ -96,7 +96,46 @@
 #define SYS_setpgid           154
 #define SYS_getpgid           155
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all. NOT `extern long syscall(long, ...)`: that
+ * symbol is satisfied by the HOST's real glibc at link time in a
+ * non-freestanding build (this file's own -nostdinc only avoids the
+ * host's headers, not its final link step), and glibc's syscall()
+ * performs its own error translation: on failure it always returns
+ * exactly -1 and sets glibc's OWN errno (a different memory location
+ * than ntlibc's own errno global, src/internal/errno.c), never the
+ * raw kernel -errno in [-4095,-1] this file's is_sys_error()/
+ * `errno = (int)-ret` translation requires -- and, worse than a
+ * merely-wrong errno, __plat_process_exists() below reads `-ret`
+ * directly and compares it to EPERM to distinguish "exists, not
+ * mine to signal" from "does not exist": under the glibc-wrapped
+ * syscall(), every kill(2) failure collapses to ret==-1, so
+ * `-ret==EPERM` would be true unconditionally and this function
+ * would report every nonexistent pid as existing. Confirmed both by
+ * inspecting a linked pilot binary (nm -D shows an undefined
+ * `syscall@GLIBC_*`) and independently by five sibling Linux backends
+ * (src/mman/linux/plat_mem.c, src/unistd/linux/plat_fd.c,
+ * src/socket/linux/plat_socket.c, src/time/linux/plat_time.c,
+ * src/process/linux/plat_process.c) and src/thread/linux/plat_thread.c,
+ * each of which independently hit and fixed the identical bug; this
+ * is the same fix applied here. aarch64's syscall calling convention:
+ * x8 = syscall number, x0..x5 = up to 6 arguments, result (or -errno
+ * in [-4095,-1]) in x0. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 /* A raw Linux syscall returns the result on success, or -errno (an
  * unsigned value in [-4095, -1]) on failure -- see plat_mem.c's banner
@@ -137,7 +176,7 @@ long long __plat_time_now(void)
 	 * historical 32-bit padding tail to worry about. */
 	struct { long tv_sec; long tv_nsec; } ts;
 	long long nt;
-	long ret = syscall(SYS_clock_gettime, 0L /* CLOCK_REALTIME */, &ts);
+	long ret = raw_syscall(SYS_clock_gettime, 0L /* CLOCK_REALTIME */, (long)&ts, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) return __TICKS_1601_TO_1970; /* the epoch: never actually fails on Linux */
 	/* __unix_to_nt() (src/internal/libc.h) is the same NT-epoch/100ns-
 	 * tick conversion src/time/clock_gettime.c and every other clock
@@ -172,7 +211,7 @@ void __plat_alarm_reset_after_fork(void)
 
 pid_t __plat_getppid(void)
 {
-	long ret = syscall(SYS_getppid);
+	long ret = raw_syscall(SYS_getppid, 0L, 0L, 0L, 0L, 0L, 0L);
 	/* getppid(2) cannot fail on Linux (getppid.html reserves no error
 	 * return either); init's conventional pid is the only sane
 	 * fallback if it somehow did. */
@@ -185,7 +224,7 @@ pid_t __plat_getppid(void)
 
 int __plat_ftruncate(__plat_handle_t h, off_t len)
 {
-	long ret = syscall(SYS_ftruncate, unbox(h), (long)len);
+	long ret = raw_syscall(SYS_ftruncate, (long)unbox(h), (long)len, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -196,7 +235,7 @@ int __plat_ftruncate(__plat_handle_t h, off_t len)
 
 int __plat_fsync(__plat_handle_t h)
 {
-	long ret = syscall(SYS_fsync, unbox(h));
+	long ret = raw_syscall(SYS_fsync, (long)unbox(h), 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -208,7 +247,7 @@ int __plat_fsync(__plat_handle_t h)
 int __plat_pipe(__plat_handle_t *rp, __plat_handle_t *wp, int inheritable)
 {
 	int fds[2];
-	long ret = syscall(SYS_pipe2, fds, (long)(inheritable ? 0 : O_CLOEXEC));
+	long ret = raw_syscall(SYS_pipe2, (long)fds, (long)(inheritable ? 0 : O_CLOEXEC), 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	*rp = (__plat_handle_t)(long)(fds[0] + 1);
 	*wp = (__plat_handle_t)(long)(fds[1] + 1);
@@ -230,7 +269,7 @@ long __plat_nprocessors(void)
 	unsigned char mask[128];
 	long ret, i, count = 0;
 	for (i = 0; i < (long)sizeof mask; i++) mask[i] = 0;
-	ret = syscall(SYS_sched_getaffinity, 0L, (long)sizeof mask, mask);
+	ret = raw_syscall(SYS_sched_getaffinity, 0L, (long)sizeof mask, (long)mask, 0L, 0L, 0L);
 	if (is_sys_error(ret) || ret <= 0) return 1;
 	for (i = 0; i < ret; i++) {
 		unsigned char b = mask[i];
@@ -258,7 +297,7 @@ long __plat_phys_pages(void)
 	unsigned int mem_unit;
 	long ret, i;
 	for (i = 0; i < (long)sizeof raw; i++) raw[i] = 0;
-	ret = syscall(SYS_sysinfo, raw);
+	ret = raw_syscall(SYS_sysinfo, (long)raw, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) return -1;
 	totalram = 0;
 	for (i = 7; i >= 0; i--) totalram = (totalram << 8) | raw[32 + i];
@@ -277,7 +316,7 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 	int rd = resolve_dirfd(dirfd);
 	long ret;
 	if (rd == -1 && dirfd != AT_FDCWD) return -1; /* errno already set */
-	ret = syscall(SYS_unlinkat, (long)rd, path, (long)(isdir ? AT_REMOVEDIR : 0));
+	ret = raw_syscall(SYS_unlinkat, (long)rd, (long)path, (long)(isdir ? AT_REMOVEDIR : 0), 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -288,7 +327,7 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 
 int __plat_chdir(const char *path)
 {
-	long ret = syscall(SYS_chdir, path);
+	long ret = raw_syscall(SYS_chdir, (long)path, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -305,8 +344,8 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 	if (rold == -1 && olddirfd != AT_FDCWD) return -1;
 	rnew = resolve_dirfd(newdirfd);
 	if (rnew == -1 && newdirfd != AT_FDCWD) return -1;
-	ret = syscall(SYS_linkat, (long)rold, oldpath, (long)rnew, newpath,
-	             (long)(followsym ? AT_SYMLINK_FOLLOW : 0));
+	ret = raw_syscall(SYS_linkat, (long)rold, (long)oldpath, (long)rnew, (long)newpath,
+	                 (long)(followsym ? AT_SYMLINK_FOLLOW : 0), 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -321,7 +360,7 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	 * contract verbatim -- unlike the NT backend, which has to build
 	 * that behaviour out of a reparse-point buffer by hand, nothing
 	 * here needs to special-case it. */
-	ret = syscall(SYS_readlinkat, (long)rd, path, buf, (long)bufsz);
+	ret = raw_syscall(SYS_readlinkat, (long)rd, (long)path, (long)buf, (long)bufsz, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }
@@ -331,7 +370,7 @@ int __plat_symlink(const char *target, int newdirfd, const char *linkpath)
 	int rd = resolve_dirfd(newdirfd);
 	long ret;
 	if (rd == -1 && newdirfd != AT_FDCWD) return -1;
-	ret = syscall(SYS_symlinkat, target, (long)rd, linkpath);
+	ret = raw_syscall(SYS_symlinkat, (long)target, (long)rd, (long)linkpath, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -348,7 +387,7 @@ uid_t __plat_detect_uid(void)
 	/* getuid(2) cannot fail on Linux, and getuid.html reserves no
 	 * error return either -- the raw return is always the real uid,
 	 * never in is_sys_error()'s [-4095,-1] failure window. */
-	return (uid_t)syscall(SYS_getuid);
+	return (uid_t)raw_syscall(SYS_getuid, 0L, 0L, 0L, 0L, 0L, 0L);
 }
 
 void __plat_pgrp_publish_self(pid_t self)
@@ -361,12 +400,12 @@ void __plat_pgrp_publish_self(pid_t self)
 	 * silent on failure, matching setpgrp.html's "no errors are
 	 * defined" the front door (src/unistd/ids.c) already relies on. */
 	(void)self;
-	syscall(SYS_setpgid, 0L, 0L);
+	raw_syscall(SYS_setpgid, 0L, 0L, 0L, 0L, 0L, 0L);
 }
 
 int __plat_pgrp_is_leader(pid_t pid)
 {
-	long ret = syscall(SYS_getpgid, (long)pid);
+	long ret = raw_syscall(SYS_getpgid, (long)pid, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) return 0;
 	return ret == (long)pid;
 }
@@ -378,7 +417,7 @@ int __plat_process_exists(pid_t pid)
 	 * merely is not ours to signal (the direct Linux analogue of the
 	 * NT backend's STATUS_ACCESS_DENIED-counts-as-existing rule), and
 	 * anything else (ESRCH first among them) means it does not. */
-	long ret = syscall(SYS_kill, (long)pid, 0L);
+	long ret = raw_syscall(SYS_kill, (long)pid, 0L, 0L, 0L, 0L, 0L);
 	if (!is_sys_error(ret)) return 1;
 	return (int)-ret == EPERM;
 }
@@ -402,8 +441,8 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	unsigned char stbuf[256];
 	long ret;
 	if (rd == -1 && dirfd != AT_FDCWD) return -1;
-	ret = syscall(SYS_newfstatat, (long)rd, path, stbuf,
-	             (long)(flags & AT_SYMLINK_NOFOLLOW));
+	ret = raw_syscall(SYS_newfstatat, (long)rd, (long)path, (long)stbuf,
+	                 (long)(flags & AT_SYMLINK_NOFOLLOW), 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
