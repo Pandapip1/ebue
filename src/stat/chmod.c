@@ -34,8 +34,6 @@ int fchmod(int fd, mode_t mode)
 
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 {
-	struct __ntpath np;
-	int r;
 	/* fchmodat.html ERRORS: "[EINVAL] The value of the flag argument is
 	 * invalid."  AT_SYMLINK_NOFOLLOW is the only flag this page defines,
 	 * so every other bit is invalid.  It is a *may fail* error, so
@@ -43,13 +41,12 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags)
 	 * flag the caller believes it asked for is the worse of the two legal
 	 * answers, and glibc reports EINVAL here (measured: fchmodat(AT_FDCWD,
 	 * path, 0644, 0x4000) -> -1/EINVAL, while AT_SYMLINK_NOFOLLOW and 0
-	 * both succeed).  Checked before __ntpath_at() so a bad flag costs no
-	 * path conversion and cannot be masked by a path error. */
+	 * both succeed).  Checked here, in the portable front door, rather
+	 * than inside __plat_chmodat(): it needs no path resolution and is
+	 * not platform-specific, so failing fast here costs no path
+	 * conversion on any backend and cannot be masked by a path error. */
 	if (flags & ~AT_SYMLINK_NOFOLLOW) { errno = EINVAL; return -1; }
-	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	r = __plat_chmodat(&np, flags, mode);
-	__ntpath_free(&np);
-	return r;
+	return __plat_chmodat(dirfd, path, flags, mode);
 }
 
 int chmod(const char *path, mode_t mode) { return fchmodat(AT_FDCWD, path, mode, 0); }

@@ -95,24 +95,6 @@ int fstatvfs(int fd, struct statvfs *buf)
 
 int statvfs(const char *__restrict path, struct statvfs *__restrict buf)
 {
-	struct __ntpath np;
-	int r, vfs;
-
 	if (!buf) { errno = EFAULT; return -1; }
-	vfs = __vfs_resolve_at(AT_FDCWD, path);
-	if (vfs < 0) return -1;
-	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
-	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
-	if (vfs != __VFS_NONE) {
-		memset(buf, 0, sizeof *buf);
-		buf->f_bsize = buf->f_frsize = 4096;
-		buf->f_fsid = 0xffffffffu;
-		buf->f_flag = ST_RDONLY | ST_NOSUID;
-		buf->f_namemax = 255;
-		return 0;
-	}
-	if (__ntpath(path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	r = __plat_statvfs_path(&np, buf);
-	__ntpath_free(&np);
-	return r;
+	return __plat_statvfs_path(path, buf);
 }

@@ -20,12 +20,7 @@ int futimens(int fd, const struct timespec ts[2])
 
 int utimensat(int dirfd, const char *path, const struct timespec ts[2], int flags)
 {
-	struct __ntpath np;
-	int r;
-	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	r = __plat_set_times_at(&np, flags, ts);
-	__ntpath_free(&np);
-	return r;
+	return __plat_set_times_at(dirfd, path, flags, ts);
 }
 
 int utimes(const char *path, const struct timeval tv[2])

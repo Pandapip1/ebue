@@ -51,10 +51,13 @@ int fstat(int fd, struct stat *st)
 
 int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 {
-	struct __ntpath np;
-	int r, vfs;
-
 	if (!path) { errno = EFAULT; return -1; }
+	/* /dev/stdin, /dev/stdout, /dev/stderr are the fd table -- genuinely
+	 * portable POSIX-shaped logic (every backend's fd table works the
+	 * same way), so this stays in the front door rather than moving into
+	 * __plat_fstatat() alongside the NT-specific VFS-overlay/path-
+	 * resolution machinery below it -- see src/fcntl/open.c's own /dev/
+	 * std* special case for the precedent this mirrors. */
 	if (!strncmp(path, "/dev/", 5)) {
 		int fd = -1;
 		if (!strcmp(path, "/dev/stdin")) fd = 0;
@@ -62,16 +65,7 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 		else if (!strcmp(path, "/dev/stderr")) fd = 2;
 		if (fd >= 0) return fstat(fd, st);
 	}
-	vfs = __vfs_resolve_at(dirfd, path);
-	if (vfs < 0) return -1;
-	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
-	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
-	if (vfs != __VFS_NONE) return __vfs_stat(vfs, st);
-
-	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	r = __plat_fstatat(&np, flags, st);
-	__ntpath_free(&np);
-	return r;
+	return __plat_fstatat(dirfd, path, flags, st);
 }
 
 int stat(const char *path, struct stat *st) { return fstatat(AT_FDCWD, path, st, 0); }

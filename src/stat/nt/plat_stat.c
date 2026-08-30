@@ -7,6 +7,22 @@
  * statvfs,utimensat}.c; nothing changed in substance, only location and
  * the addition of a POSIX-shaped return (0/-1 with errno set) in place
  * of a raw NTSTATUS.
+ *
+ * __plat_chmodat()/__plat_mkdir()/__plat_fstatat()/__plat_statvfs_path()/
+ * __plat_set_times_at() absorbed a second layer of what used to be their
+ * front doors' own bodies: the __vfs_resolve_at() overlay check (where
+ * the front door had one -- mkdirat(), fstatat(), statvfs(); fchmodat()
+ * and utimensat() never called it) and the __ntpath_at()/__ntpath() path
+ * resolution itself, exactly the same relocation src/fcntl/nt/
+ * plat_fcntl.c's __plat_open() already got for open() (commit ce4763c).
+ * This backend now owns the ENTIRE NT-specific path-to-handle journey
+ * for each of these five, not just the tail that runs once a handle is
+ * already open. __vfs_resolve_at()/__vfs_open_dir() themselves are
+ * untouched -- see plat_stat.h's own banner for why they stay exactly
+ * where they are (src/internal/vfs.c) and only their call sites moved.
+ * Nothing in the moved logic changed in substance, only location -- this
+ * is the identical sequence each front door used to run inline, verified
+ * line for line against the pre-refactor version.
  */
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -110,8 +126,9 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	return 0;
 }
 
-int __plat_chmodat(struct __ntpath *np, int flags, mode_t mode)
+int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode)
 {
+	struct __ntpath np;
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS st;
@@ -119,9 +136,10 @@ int __plat_chmodat(struct __ntpath *np, int flags, mode_t mode)
 	                (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
 	int r;
 
+	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
 	               FILE_READ_EA | FILE_WRITE_EA | SYNCHRONIZE,
-	               &np->oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	               &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	if (st == STATUS_ACCESS_DENIED) {
 		/* chmod.html DESCRIPTION: the owner of a file "may always
 		 * change the permission of the file" -- a file's own mode
@@ -136,8 +154,9 @@ int __plat_chmodat(struct __ntpath *np, int flags, mode_t mode)
 		 * handle, the same workaround test/unistd.c already applies
 		 * by hand via fchmod() on an O_RDONLY descriptor. */
 		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
-		                &np->oa, &io, FILE_SHARE_VALID_FLAGS, options);
+		                &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	}
+	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	r = __plat_chmod(h, mode);
 	NtClose(h);
@@ -146,14 +165,30 @@ int __plat_chmodat(struct __ntpath *np, int flags, mode_t mode)
 
 /* ---- mkdir (src/stat/mkdir.c) ------------------------------------------ */
 
-int __plat_mkdir(struct __ntpath *np, void *ea, unsigned ea_len)
+int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 {
+	struct __ntpath np;
 	IO_STATUS_BLOCK io;
 	HANDLE h;
-	NTSTATUS st = NtCreateFile(&h, FILE_LIST_DIRECTORY | SYNCHRONIZE, &np->oa, &io, 0,
+	NTSTATUS st;
+	unsigned char mode_ea[32];
+	unsigned ea_len;
+	int vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs != __VFS_NONE) {
+		errno = vfs == __VFS_MISSING ? EROFS : EEXIST;
+		return -1;
+	}
+
+	mode = mode & ~__umask_get() & 07777;
+	ea_len = __lxmod_create_buffer(mode_ea, S_IFDIR | mode);
+
+	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
+	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | SYNCHRONIZE, &np.oa, &io, 0,
 	                          FILE_ATTRIBUTE_NORMAL, FILE_SHARE_VALID_FLAGS, FILE_CREATE,
 	                          FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT,
-	                          ea, ea_len);
+	                          mode_ea, ea_len);
 	/* mkdir.html requires [EEXIST] when the named file exists, whatever
 	 * kind of file it is -- and this call reaches that case through NT's
 	 * *collision* status rather than through a type mismatch, which is
@@ -180,6 +215,7 @@ int __plat_mkdir(struct __ntpath *np, void *ea, unsigned ea_len)
 	 * (reactos-divergences 7ee3248c); had it instead been "fixed" to check
 	 * both options before the disposition -- the symmetric-looking change
 	 * -- this function would have started returning the wrong errno there. */
+	__ntpath_free(&np);
 	if (st == STATUS_OBJECT_NAME_COLLISION) { errno = EEXIST; return -1; }
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	NtClose(h);
@@ -415,15 +451,23 @@ int __plat_fstat(__plat_handle_t h, int type, struct stat *st)
 	return 0;
 }
 
-int __plat_fstatat(struct __ntpath *np, int flags, struct stat *st)
+int __plat_fstatat(int dirfd, const char *path, int flags, struct stat *st)
 {
+	struct __ntpath np;
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS s;
-	int r;
+	int r, vfs;
 
+	vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE) return __vfs_stat(vfs, st);
+
+	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	s = NtOpenFile(&h, FILE_READ_DATA | FILE_READ_ATTRIBUTES | FILE_READ_EA |
-	               SYNCHRONIZE, &np->oa, &io, FILE_SHARE_VALID_FLAGS,
+	               SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 	               (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
 	/* stat() must not require permission to read file data.  Reading is only
@@ -431,20 +475,21 @@ int __plat_fstatat(struct __ntpath *np, int flags, struct stat *st)
 	 * attribute-only result when that extra access is denied. */
 	if (!NT_SUCCESS(s) && s != STATUS_IO_REPARSE_TAG_NOT_HANDLED)
 		s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
-		               &np->oa, &io, FILE_SHARE_VALID_FLAGS,
+		               &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 		               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 		               (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0));
 	if (s == STATUS_IO_REPARSE_TAG_NOT_HANDLED && !(flags & AT_SYMLINK_NOFOLLOW)) {
 		/* A reparse point of a kind nothing resolves (WSL links): report it as is. */
 		s = NtOpenFile(&h, FILE_READ_DATA | FILE_READ_ATTRIBUTES | FILE_READ_EA |
-		               SYNCHRONIZE, &np->oa, &io, FILE_SHARE_VALID_FLAGS,
+		               SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 		               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT);
 		if (!NT_SUCCESS(s))
 			s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE,
-			               &np->oa, &io, FILE_SHARE_VALID_FLAGS,
+			               &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 			               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
 			               FILE_OPEN_REPARSE_POINT);
 	}
+	__ntpath_free(&np);
 	if (!NT_SUCCESS(s)) return __set_errno_status(s);
 	r = __plat_fstat(h, __FD_FILE, st);
 	NtClose(h);
@@ -517,18 +562,33 @@ int __plat_statvfs(__plat_handle_t h, struct statvfs *buf)
 	return 0;
 }
 
-int __plat_statvfs_path(struct __ntpath *np, struct statvfs *buf)
+int __plat_statvfs_path(const char *path, struct statvfs *buf)
 {
+	struct __ntpath np;
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS s;
-	int r;
+	int r, vfs;
 
+	vfs = __vfs_resolve_at(AT_FDCWD, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE) {
+		memset(buf, 0, sizeof *buf);
+		buf->f_bsize = buf->f_frsize = 4096;
+		buf->f_fsid = 0xffffffffu;
+		buf->f_flag = ST_RDONLY | ST_NOSUID;
+		buf->f_namemax = 255;
+		return 0;
+	}
 	/* "Read, write, or execute permission of the named file is not
 	 * required" (DESCRIPTION) -- FILE_READ_ATTRIBUTES is the NT access
 	 * mask that asks for none of the three. */
-	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np->oa, &io, FILE_SHARE_VALID_FLAGS,
+	if (__ntpath(path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
+	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
 	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
+	__ntpath_free(&np);
 	if (!NT_SUCCESS(s)) return __set_errno_status(s);
 	r = __plat_statvfs(h, buf);
 	NtClose(h);
@@ -595,8 +655,9 @@ int __plat_set_times(__plat_handle_t h, const struct timespec ts[2])
 	return 0;
 }
 
-int __plat_set_times_at(struct __ntpath *np, int flags, const struct timespec ts[2])
+int __plat_set_times_at(int dirfd, const char *path, int flags, const struct timespec ts[2])
 {
+	struct __ntpath np;
 	IO_STATUS_BLOCK io;
 	HANDLE h;
 	NTSTATUS st;
@@ -604,6 +665,7 @@ int __plat_set_times_at(struct __ntpath *np, int flags, const struct timespec ts
 	                (flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
 	int r;
 
+	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	/* FILE_READ_ATTRIBUTES is requested alongside FILE_WRITE_ATTRIBUTES
 	 * because __plat_set_times() above round-trips the current
 	 * attributes through NtQueryInformationFile before writing them
@@ -613,7 +675,7 @@ int __plat_set_times_at(struct __ntpath *np, int flags, const struct timespec ts
 	 * check, but real NT does, and omitting it here is exactly what
 	 * turned every ordinary utimensat() into STATUS_ACCESS_DENIED on
 	 * real Windows before. */
-	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np->oa, &io, FILE_SHARE_VALID_FLAGS, options);
+	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	if (st == STATUS_ACCESS_DENIED) {
 		/* utime.html DESCRIPTION: only write permission on the file
 		 * OR ownership is required, never "the file's own mode
@@ -633,8 +695,9 @@ int __plat_set_times_at(struct __ntpath *np, int flags, const struct timespec ts
 		 * __plat_set_times()'s query needs; it does not need
 		 * FILE_WRITE_ATTRIBUTES again because that's precisely the
 		 * access Wine already told us the file cannot grant. */
-		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np->oa, &io, FILE_SHARE_VALID_FLAGS, options);
+		st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS, options);
 	}
+	__ntpath_free(&np);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	r = __plat_set_times(h, ts);
 	NtClose(h);
