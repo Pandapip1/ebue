@@ -19,21 +19,19 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
-#include "afd.h"
+#include "plat_socket.h"
 
 int listen(int fd, int backlog)
 {
 	struct __fd *f = __fd_get(fd);
-	AFD_LISTEN_DATA ld;
-	NTSTATUS st;
 
 	if (!f) return -1;
 	if (f->type != __FD_SOCKET) { errno = ENOTSOCK; return -1; }
-	if (f->pad & AFD_ST_CONNECTED) { errno = EINVAL; return -1; }
+	if (f->pad & __SOCK_ST_CONNECTED) { errno = EINVAL; return -1; }
 
-	if (f->pad & AFD_ST_LISTENING) return 0; /* listen.html doesn't forbid a repeat call */
+	if (f->pad & __SOCK_ST_LISTENING) return 0; /* listen.html doesn't forbid a repeat call */
 
-	if (!(f->pad & AFD_ST_BOUND)) {
+	if (!(f->pad & __SOCK_ST_BOUND)) {
 		struct sockaddr_in wild;
 		memset(&wild, 0, sizeof(wild));
 		wild.sin_family = AF_INET;
@@ -44,13 +42,8 @@ int listen(int fd, int backlog)
 	if (backlog < 0) backlog = 0;
 	if (backlog > SOMAXCONN) backlog = SOMAXCONN;
 
-	ld.UseSAN = 0;
-	ld.UseDelayedAcceptance = 0;
-	ld.Backlog = (unsigned long)backlog;
+	if (__plat_socket_listen(f->h, (unsigned long)backlog) < 0) return -1;
 
-	st = __afd_ioctl(f->h, IOCTL_AFD_START_LISTEN, &ld, sizeof(ld), 0, 0, 0);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-
-	f->pad |= AFD_ST_LISTENING;
+	f->pad |= __SOCK_ST_LISTENING;
 	return 0;
 }

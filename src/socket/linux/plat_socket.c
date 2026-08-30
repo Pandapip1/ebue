@@ -7,20 +7,26 @@
  * ntlibc's own headers, aarch64 syscall numbers confirmed against this
  * host).
  *
- * Scope, deliberately narrow: ONLY __plat_sock_recv()/__plat_sock_send(),
- * the genuine POSIX-shaped half of plat_socket.h. Unlike plat_mem.h/
- * plat_fd.h, this interface does not cover socket creation at all --
- * socket()/accept()/bind()/connect()/listen() (src/socket/{socket,accept,
- * bind,connect,listen}.c) call __afd_open()/__afd_ioctl()
- * (src/internal/afd.h) directly, which is raw NT `\Device\Afd` wire-
- * protocol machinery (EA-buffer-encoded open packets, AFD_BIND_DATA,
- * AFD_CONNECT_INFO, ...) with no portable abstraction whatsoever, not
- * even the incomplete one open()'s path-resolution front door has. That
- * is a separate, larger architectural gap -- an entirely different
- * socket-creation abstraction would need designing before any of those
- * five front doors could be ported -- and is deliberately NOT attempted
- * here. This file, and the __plat_sock_* pair it implements, is the
- * entire scope of this backend.
+ * __plat_sock_recv()/__plat_sock_send() are the genuine POSIX-shaped
+ * half of plat_socket.h that predates the rest of it.  Below them,
+ * __plat_socket_{open,bind,connect,listen,accept}() are the socket-
+ * CREATION half: real socket(2)/bind(2)/connect(2)/listen(2)/accept4(2)
+ * syscalls, genuinely simple compared to the NT backend's \Device\Afd
+ * wire protocol -- no EA-buffer-encoded open packets, no AFD_BIND_DATA/
+ * AFD_CONNECT_INFO, no two-step wait-for-listen-then-accept dance, just
+ * the kernel's own socket ABI, which ntlibc's own AF_INET (2), SOCK_
+ * STREAM (1), IPPROTO_TCP (6) and struct sockaddr_in layout (family at
+ * +0, port at +2, addr at +4, 16 bytes total) all already match exactly
+ * -- confirmed against this host's real <sys/socket.h>/<netinet/in.h>
+ * via a throwaway host-gcc oracle program, the same way plat_fcntl.c's
+ * O_DIRECTORY/O_NOFOLLOW/O_DIRECT mismatch was caught, so nothing here
+ * is assumed rather than verified. SOL_SOCKET/SO_REUSEADDR are the one
+ * exception -- ntlibc's own <sys/socket.h> gives them a private encoding
+ * (0xffff/0x0004) that does NOT match the real kernel ABI (1/2,
+ * confirmed the same way), so __plat_socket_bind()'s reuseaddr flag is
+ * translated to the kernel's own SOL_SOCKET/SO_REUSEADDR via an explicit
+ * setsockopt(2) before bind(2) -- exactly the LX_MSG_* translation
+ * pattern to_linux_flags() below already uses for send()/recv().
  *
  * __plat_handle_t encoding: matches src/unistd/linux/plat_fd.c's own
  * boxed-fd scheme exactly (a real fd is stored as fd+1, so
@@ -47,6 +53,7 @@
  * synthesize itself the way the NT backend's __raise_internal() does.
  */
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <errno.h>
 #include "plat_socket.h"
 
@@ -57,8 +64,14 @@
  * ABI" Linux port) has no separate SYS_recv/SYS_send at all -- glibc's
  * own recv()/send() are thin wrappers over these same two syscalls with
  * a NULL address argument, which is exactly what this file does too. */
-#define SYS_recvfrom 207
-#define SYS_sendto   206
+#define SYS_recvfrom   207
+#define SYS_sendto     206
+#define SYS_socket     198
+#define SYS_bind       200
+#define SYS_listen     201
+#define SYS_connect    203
+#define SYS_setsockopt 208
+#define SYS_accept4    242
 
 /* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
  * the call path at all. NOT `extern long syscall(long, ...)`: that
@@ -107,6 +120,27 @@ static int unbox(__plat_handle_t h)
 {
 	return (int)((long)h - 1);
 }
+
+/* The other direction, for the two calls that hand back a brand new fd
+ * (__plat_socket_open()'s socket(2), __plat_socket_accept()'s
+ * accept4(2)) rather than operating on an already-boxed one -- matches
+ * src/unistd/linux/plat_fd.c's __plat_dup() (`*out = (__plat_handle_t)
+ * (newfd + 1);`), which does the same boxing inline rather than through
+ * a named helper; named here because __plat_socket_open() and
+ * __plat_socket_accept() both need it. */
+static __plat_handle_t box(int fd)
+{
+	return (__plat_handle_t)(long)(fd + 1);
+}
+
+/* ntlibc's own <sys/socket.h> SOL_SOCKET/SO_REUSEADDR are, like MSG_*
+ * above, a private encoding (0xffff/0x0004) that does not match the
+ * real Linux kernel ABI (1/2, confirmed against this host's own
+ * <sys/socket.h> via a throwaway oracle program) -- so bind()'s
+ * reuseaddr flag is translated to the kernel's own numbers explicitly,
+ * never passed through. */
+#define LX_SOL_SOCKET   1
+#define LX_SO_REUSEADDR 2
 
 /* ntlibc's own <sys/socket.h> MSG_* bits are a private encoding, not a
  * copy of any host ABI (see that header's own comment: they exist "so
@@ -172,4 +206,86 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 	                       (long)to_linux_flags(flags), 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
+}
+
+/* socket(): a real socket(2), AF_INET/SOCK_STREAM/IPPROTO_TCP always --
+ * this project's only supported triple (src/socket/socket.c's front door
+ * has already rejected anything else before calling here), and the same
+ * fixed pair the NT backend's __afd_open() bakes into its own open
+ * packet rather than taking as parameters. */
+int __plat_socket_open(__plat_handle_t *out)
+{
+	long fd = raw_syscall(SYS_socket, (long)AF_INET, (long)SOCK_STREAM, (long)IPPROTO_TCP, 0L, 0L, 0L);
+	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
+	*out = box((int)fd);
+	return 0;
+}
+
+/* bind(): SO_REUSEADDR (if requested) via a real setsockopt(2), then a
+ * real bind(2) -- unlike the NT backend, which folds the equivalent
+ * choice (AFD_SHARE_REUSE vs AFD_SHARE_UNIQUE) into the bind request
+ * itself, Linux's socket ABI has no such share-mode field on bind(2): the
+ * option must already be set on the fd before bind(2) runs. addr/len are
+ * passed straight through -- ntlibc's struct sockaddr_in is already
+ * byte-identical to the kernel's (see this file's banner), so no
+ * marshaling is needed the way AFD's TDI_ADDRESS_IP translation needs. */
+int __plat_socket_bind(__plat_handle_t h, int reuseaddr, const struct sockaddr *addr, socklen_t len)
+{
+	int fd = unbox(h);
+	long ret;
+
+	if (reuseaddr) {
+		int one = 1;
+		ret = raw_syscall(SYS_setsockopt, (long)fd, (long)LX_SOL_SOCKET, (long)LX_SO_REUSEADDR,
+		                  (long)&one, (long)sizeof(one), 0L);
+		if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	}
+
+	ret = raw_syscall(SYS_bind, (long)fd, (long)addr, (long)len, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* connect(): a real connect(2).  The front door's implicit
+ * wildcard-bind-before-connect step (POSIX's own "if the initiating
+ * socket is not bound, it will be bound to an address selected by the
+ * transport layer") stays in src/socket/connect.c, unchanged -- by the
+ * time this function runs, the socket is always already bound, so there
+ * is nothing left for connect(2) itself to do implicitly. */
+int __plat_socket_connect(__plat_handle_t h, const struct sockaddr *addr, socklen_t len)
+{
+	long ret = raw_syscall(SYS_connect, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* listen(): a real listen(2).  `backlog` arrives here already clamped to
+ * SOMAXCONN by the front door. */
+int __plat_socket_listen(__plat_handle_t h, unsigned long backlog)
+{
+	long ret = raw_syscall(SYS_listen, (long)unbox(h), (long)backlog, 0L, 0L, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* accept(): a real accept4(2) (flags 0 -- this project has no
+ * SOCK_NONBLOCK/SOCK_CLOEXEC wiring for sockets yet, same as the NT
+ * backend's blocking-only accept()).  One syscall does the whole job
+ * natively: no separate wait-for-a-pending-connection step, and no
+ * separately opened endpoint to bind the connection onto afterward --
+ * Linux's accept4(2) already returns a live, connected fd for the new
+ * peer in one call, unlike AFD's two-step WAIT_FOR_LISTEN + fresh
+ * __afd_open() + ACCEPT dance.  addr/len are the front door's own
+ * full-sized local buffer, passed straight through: accept4(2) already
+ * implements accept.html's own truncate-if-too-small contract natively
+ * (SUSv4 accept(): "If the actual length of the address is greater than
+ * the length of the supplied sockaddr structure, the stored address
+ * shall be truncated"), so there is nothing left for this backend to
+ * interpret. */
+int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *len, __plat_handle_t *out)
+{
+	long fd = raw_syscall(SYS_accept4, (long)unbox(h), (long)addr, (long)len, 0L, 0L, 0L);
+	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
+	*out = box((int)fd);
+	return 0;
 }

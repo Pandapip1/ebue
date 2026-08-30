@@ -12,7 +12,7 @@
 #include <netinet/in.h>
 #include <errno.h>
 #include "libc.h"
-#include "afd.h"
+#include "plat_socket.h"
 #include "plat_fd.h"
 
 int socket(int domain, int type, int protocol)
@@ -24,7 +24,7 @@ int socket(int domain, int type, int protocol)
 	if (type != SOCK_STREAM) { errno = EPROTOTYPE; return -1; }
 	if (protocol != 0 && protocol != IPPROTO_TCP) { errno = EPROTONOSUPPORT; return -1; }
 
-	if (__afd_open(&h) < 0) return -1;
+	if (__plat_socket_open(&h) < 0) return -1;
 
 	fd = __fd_install(h, 0, __FD_SOCKET);
 	if (fd < 0) { __plat_close(h); return -1; }

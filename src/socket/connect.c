@@ -18,43 +18,35 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
-#include "afd.h"
+#include "plat_socket.h"
 
 int connect(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	struct __fd *f = __fd_get(fd);
-	AFD_CONNECT_INFO ci;
-	NTSTATUS st;
 
 	if (!f) return -1;
 	if (f->type != __FD_SOCKET) { errno = ENOTSOCK; return -1; }
-	if (f->pad & AFD_ST_CONNECTED) { errno = EISCONN; return -1; }
-	if (f->pad & AFD_ST_LISTENING) { errno = EOPNOTSUPP; return -1; }
+	if (f->pad & __SOCK_ST_CONNECTED) { errno = EISCONN; return -1; }
+	if (f->pad & __SOCK_ST_LISTENING) { errno = EOPNOTSUPP; return -1; }
 
-	if (!(f->pad & AFD_ST_BOUND)) {
+	if (!(f->pad & __SOCK_ST_BOUND)) {
 		struct sockaddr_in wild;
 		memset(&wild, 0, sizeof(wild));
 		wild.sin_family = AF_INET;
 		wild.sin_addr.s_addr = INADDR_ANY;
+		/* A recursive call to this file's own bind() front door, not
+		 * a direct __plat_socket_bind(): bind() is itself fully
+		 * portable after this refactor (src/socket/bind.c), so
+		 * calling it recursively reruns its ENOTSOCK/already-bound
+		 * checks and its f->pad |= __SOCK_ST_BOUND bookkeeping for
+		 * free, exactly like the pre-refactor NT-only version did.
+		 * There is no NT-specific step here to relocate. */
 		if (bind(fd, (struct sockaddr *)&wild, sizeof(wild)) < 0) return -1;
 	}
 
-	/* Built through src/internal/afd.h's AFD_CONNECT_REQ_OFF_*, not
-	 * through AFD_CONNECT_INFO's members: see that header's connect
-	 * banner for why the address's offset is pointer-sized, and why
-	 * ReactOS's AFD_CONNECT_INFO puts it 12 bytes too early on
-	 * x86_64.  `ci` is only the (correctly aligned, large enough)
-	 * storage. */
-	memset(&ci, 0, sizeof(ci));
-	if (__afd_build_connect_request(&ci, addr, len) < 0) return -1;
+	if (__plat_socket_connect(f->h, addr, len) < 0) return -1;
 
-	/* __afd_connect_request_size(), not sizeof(ci): IOCTL_AFD_CONNECT
-	 * is METHOD_NEITHER, so the declared length is what afd.sys
-	 * bounds its read of the address by, and sizeof() rounds up. */
-	st = __afd_ioctl(f->h, IOCTL_AFD_CONNECT, &ci, (ULONG)__afd_connect_request_size(), 0, 0, 0);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-
-	f->pad |= AFD_ST_CONNECTED;
+	f->pad |= __SOCK_ST_CONNECTED;
 	memcpy(f->peer, addr, sizeof(struct sockaddr_in));
 	f->peer_len = sizeof(struct sockaddr_in);
 	return 0;

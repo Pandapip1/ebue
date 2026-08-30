@@ -13,12 +13,15 @@
  * door had to interpret itself.
  */
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 #include "libc.h"
 #include "afd.h"
 #include "plat_socket.h"
+#include "plat_fd.h"
 
 /* Open a fresh \Device\Afd\Endpoint handle carrying the AF_INET/
  * SOCK_STREAM transport ("\Device\Tcp") -- a FILE_FULL_EA_INFORMATION
@@ -136,6 +139,168 @@ ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
 		return 0;
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return (ssize_t)io.Information;
+}
+
+/* socket(): open a fresh AFD endpoint.  __afd_open() (above) already IS
+ * the entire body socket()'s front door used to run before this move --
+ * this is a thin __plat_handle_t-shaped wrapper over it, not new logic. */
+int __plat_socket_open(__plat_handle_t *out)
+{
+	HANDLE h;
+
+	if (__afd_open(&h) < 0) return -1;
+	*out = h;
+	return 0;
+}
+
+/* bind(): build the AFD_BIND_DATA request and issue IOCTL_AFD_BIND.
+ * Relocated verbatim from src/socket/bind.c's pre-refactor body; only
+ * the AFD_SHARE_REUSE/AFD_SHARE_UNIQUE choice, an NT-specific
+ * interpretation of the front door's plain `reuseaddr` boolean, is new
+ * here (it used to read f->pad & AFD_ST_REUSEADDR itself). */
+int __plat_socket_bind(__plat_handle_t h, int reuseaddr, const struct sockaddr *addr, socklen_t len)
+{
+	AFD_BIND_DATA bd;
+	/* IOCTL_AFD_BIND replies with a TDI_ADDRESS_INFO (phnt ntafd.h,
+	 * AFD_BIND: "out: TDI_ADDRESS_INFO"), which is 26 bytes for one
+	 * AF_INET address -- two bytes *more* than the request's 24-byte
+	 * TRANSPORT_ADDRESS payload, so it does not fit back into `bd`.
+	 * Spelled as uint32_t[] to get 4-byte alignment without an
+	 * alignment attribute. */
+	uint32_t reply[(AFD_TDI_ADDRESS_INFO_SIZE_IP + 3) / 4];
+	NTSTATUS st;
+
+	if (__afd_build_bind_request(&bd, reuseaddr ? AFD_SHARE_REUSE : AFD_SHARE_UNIQUE, addr, len) < 0)
+		return -1;
+
+	/* __afd_bind_request_size(), not sizeof(bd): the request is 26
+	 * bytes and sizeof(AFD_BIND_DATA) is 28.  IOCTL_AFD_BIND is
+	 * METHOD_NEITHER, so the declared length is what afd.sys bounds
+	 * its read of the address by. */
+	st = __afd_ioctl(h, IOCTL_AFD_BIND, &bd, (ULONG)__afd_bind_request_size(),
+	                 reply, (ULONG)sizeof(reply), 0);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return 0;
+}
+
+/* connect(): build the AFD_CONNECT_INFO request and issue
+ * IOCTL_AFD_CONNECT.  Relocated verbatim from src/socket/connect.c's
+ * pre-refactor body; the implicit wildcard-bind-first step and the
+ * f->pad/f->peer bookkeeping stay in the front door (see plat_socket.h's
+ * banner) -- this is only the wire-protocol step. */
+int __plat_socket_connect(__plat_handle_t h, const struct sockaddr *addr, socklen_t len)
+{
+	AFD_CONNECT_INFO ci;
+	NTSTATUS st;
+
+	/* Built through src/internal/afd.h's AFD_CONNECT_REQ_OFF_*, not
+	 * through AFD_CONNECT_INFO's members: see that header's connect
+	 * banner for why the address's offset is pointer-sized, and why
+	 * ReactOS's AFD_CONNECT_INFO puts it 12 bytes too early on
+	 * x86_64.  `ci` is only the (correctly aligned, large enough)
+	 * storage. */
+	memset(&ci, 0, sizeof(ci));
+	if (__afd_build_connect_request(&ci, addr, len) < 0) return -1;
+
+	/* __afd_connect_request_size(), not sizeof(ci): IOCTL_AFD_CONNECT
+	 * is METHOD_NEITHER, so the declared length is what afd.sys
+	 * bounds its read of the address by, and sizeof() rounds up. */
+	st = __afd_ioctl(h, IOCTL_AFD_CONNECT, &ci, (ULONG)__afd_connect_request_size(), 0, 0, 0);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return 0;
+}
+
+/* listen(): issue IOCTL_AFD_START_LISTEN.  Relocated verbatim from
+ * src/socket/listen.c's pre-refactor body; the backlog clamp to
+ * SOMAXCONN, the implicit wildcard bind, and the f->pad bookkeeping all
+ * stay in the front door -- `backlog` arrives here already clamped. */
+int __plat_socket_listen(__plat_handle_t h, unsigned long backlog)
+{
+	AFD_LISTEN_DATA ld;
+	NTSTATUS st;
+
+	ld.UseSAN = 0;
+	ld.UseDelayedAcceptance = 0;
+	ld.Backlog = (uint32_t)backlog;
+
+	st = __afd_ioctl(h, IOCTL_AFD_START_LISTEN, &ld, sizeof(ld), 0, 0, 0);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	return 0;
+}
+
+/* accept(): the two-step AFD sequence, per ReactOS's WSPAccept
+ * (dll/win32/msafd/misc/dllmain.c): IOCTL_AFD_WAIT_FOR_LISTEN blocks
+ * until a connection is pending and returns its SequenceNumber plus the
+ * peer's TDI address; a *new* AFD endpoint is then opened exactly like
+ * socket() does, and IOCTL_AFD_ACCEPT -- issued on the *listening*
+ * handle, naming the new endpoint's handle in
+ * AFD_ACCEPT_DATA.ListenHandle -- binds the pending connection onto it.
+ * Relocated verbatim from src/socket/accept.c's pre-refactor body; the
+ * f->pad/f->peer bookkeeping and the caller's addr/len truncate-and-copy
+ * both stay in the front door (see plat_socket.h's banner) -- `addr`/
+ * `len` here are the front door's own full-sized local buffer, which
+ * IOCTL_AFD_WAIT_FOR_LISTEN's 16-byte AF_INET reply can never overflow,
+ * so no truncation actually happens on this path; the truncating
+ * function (__afd_accept_reply_addr() -> __afd_transport_addr_out() ->
+ * __afd_addr_to_sockaddr()) is shared with getname.c and always applies
+ * the same *len-bounded copy regardless. */
+int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *len, __plat_handle_t *out)
+{
+	AFD_RECEIVED_ACCEPT_DATA recvd;
+	AFD_ACCEPT_DATA ad;
+	HANDLE newh;
+	NTSTATUS st;
+
+	/* Zeroed before the call, not after it, and not left to the
+	 * driver.  IOCTL_AFD_WAIT_FOR_LISTEN is METHOD_BUFFERED with an
+	 * out-only buffer: the I/O manager copies back exactly
+	 * IoStatus.Information bytes from the kernel's SystemBuffer and
+	 * leaves everything past that as the caller left it.  Whatever
+	 * AfdWaitForListen() does or does not write to its own copy is
+	 * therefore not the question -- the question is what is in *this*
+	 * buffer past the copy-back, and for an out-only buffer that is
+	 * uninitialised stack unless it is put there first.  See the
+	 * AFD_ACCEPT_RSP_OFF_* banner in afd.h; this is the same mechanism
+	 * that made an aliased IOCTL_AFD_SELECT reply read back as its own
+	 * request, with the worse ending, since here the bytes were never
+	 * the caller's to begin with. */
+	memset(&recvd, 0, sizeof recvd);
+	st = __afd_ioctl(h, IOCTL_AFD_WAIT_FOR_LISTEN, 0, 0, &recvd, sizeof(recvd), 0);
+	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+
+	/* Interpreted here, before any endpoint is created, rather than
+	 * beside the `if (addr)` at the bottom.  The sequence number and
+	 * the peer address arrive in one Information-bounded copy-back, so
+	 * a reply that failed to deliver the address is not evidence that
+	 * the sequence number beside it is a connection worth accepting --
+	 * and failing before __afd_open() keeps accept() all-or-nothing
+	 * rather than leaking an endpoint on the way out.
+	 *
+	 * ECONNABORTED, from accept.html's ERRORS: "A connection has been
+	 * aborted."  The connection has already been taken off the listen
+	 * queue by the ioctl above and cannot be handed to the caller, so
+	 * from the caller's side this pending connection is gone -- which
+	 * is exactly the case ECONNABORTED names, and which portable accept
+	 * loops already handle by going round again rather than giving up.
+	 * EPROTO, the other candidate in that list, is glossed as the
+	 * protocol stack not being initialised: it would claim every later
+	 * accept() is doomed too, which this does not establish. */
+	if (__afd_accept_reply_addr(&recvd, addr, len) < 0) {
+		errno = ECONNABORTED;
+		return -1;
+	}
+
+	if (__afd_open(&newh) < 0) return -1;
+
+	ad.UseSAN = 0;
+	ad.SequenceNumber = recvd.SequenceNumber;
+	ad.ListenHandle = newh;
+
+	st = __afd_ioctl(h, IOCTL_AFD_ACCEPT, &ad, sizeof(ad), 0, 0, 0);
+	if (!NT_SUCCESS(st)) { __plat_close(newh); return __set_errno_status(st); }
+
+	*out = newh;
+	return 0;
 }
 
 /* send(): build the AFD_SEND_INFO request (MSG_OOB -> TDI_SEND_EXPEDITED)
