@@ -51,8 +51,13 @@ struct _UNICODE_STRING;
 /* ---- sigdelivery.c -------------------------------------------------- */
 
 /* Create a SynchronizationEvent, initially signalled iff
- * `initially_signalled`.  __PLAT_HANDLE_NULL on failure. */
-__plat_handle_t __plat_event_create(int initially_signalled);
+ * `initially_signalled`.  __PLAT_HANDLE_NULL on failure.  Named
+ * __plat_sigevent_create(), not __plat_event_create(), to stay distinct
+ * from plat_thread.h's __plat_event_create(__plat_handle_t *) -- same
+ * underlying NT primitive, different calling convention (this one
+ * returns the handle directly rather than through an out-param, and
+ * takes an initial-signal-state flag thread's does not need). */
+__plat_handle_t __plat_sigevent_create(int initially_signalled);
 
 /* Signal `ev`.  0/-1(errno) via return. */
 int __plat_event_set(__plat_handle_t ev);

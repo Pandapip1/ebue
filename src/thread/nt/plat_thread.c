@@ -214,13 +214,14 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	return 0;
 }
 
-int __plat_thread_resume(__plat_handle_t h)
-{
-	ULONG previous;
-	NTSTATUS status = NtResumeThread(h, &previous);
-	if (!NT_SUCCESS(status)) return __set_errno_status(status);
-	return 0;
-}
+/* __plat_thread_resume() is declared above (this file's own header
+ * comment) but defined in src/process/nt/plat_process.c, not here: both
+ * this file (pthread_create()/pthread_cancel()'s deferred-cancellation
+ * resume) and the process subsystem's own post-fork/post-spawn resume
+ * independently arrived at an NtResumeThread()-wrapping implementation
+ * during the platform-abstraction migration, and only one definition
+ * may exist per the ODR. Kept where process/thread lifecycle otherwise
+ * lives; this file just uses it. */
 
 int __plat_thread_suspend(__plat_handle_t h)
 {

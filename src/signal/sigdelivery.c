@@ -453,10 +453,10 @@ void __sig_delivery_init(void)
 	 * thread (a second real thread already exists under
 	 * NTLIBC_USE_KERNEL32 -- see this file's banner -- so the mutex earns
 	 * its keep even when the rest of this function gives up below). */
-	ev = __plat_event_create(1);
+	ev = __plat_sigevent_create(1);
 	if (ev) lock_event = ev;
 
-	ev = __plat_event_create(0);
+	ev = __plat_sigevent_create(0);
 	if (!ev) return;
 
 	pid = getpid();

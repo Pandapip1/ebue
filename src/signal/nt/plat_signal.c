@@ -13,7 +13,7 @@
 #include "libc.h"
 #include "plat_signal.h"
 
-__plat_handle_t __plat_event_create(int initially_signalled)
+__plat_handle_t __plat_sigevent_create(int initially_signalled)
 {
 	OBJECT_ATTRIBUTES oa;
 	HANDLE ev;
@@ -25,13 +25,13 @@ __plat_handle_t __plat_event_create(int initially_signalled)
 	return ev;
 }
 
-int __plat_event_set(__plat_handle_t ev)
-{
-	LONG previous;
-	NTSTATUS st = NtSetEvent(ev, &previous);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
-}
+/* __plat_event_set() is declared above (this file's own header comment)
+ * but defined in src/thread/nt/plat_thread.c, not here: both this file
+ * and the thread subsystem's own generic-event path independently
+ * arrived at an identical NtSetEvent()-wrapping implementation during
+ * the platform-abstraction migration, and only one definition may
+ * exist per the ODR. Kept where the other generic sync primitives
+ * (__plat_event_create() et al.) live; this file just uses it. */
 
 void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks)
 {
