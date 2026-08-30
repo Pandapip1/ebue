@@ -31,13 +31,14 @@
 #include <string.h>
 #include "libc.h"
 #include "afd.h"
+#include "plat_fd.h"
 
 int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 {
 	struct __fd *f = __fd_get(fd);
 	AFD_RECEIVED_ACCEPT_DATA recvd;
 	AFD_ACCEPT_DATA ad;
-	HANDLE newh;
+	__plat_handle_t newh;
 	NTSTATUS st;
 	int newfd;
 	struct sockaddr_in peer;
@@ -93,10 +94,10 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 	ad.ListenHandle = newh;
 
 	st = __afd_ioctl(f->h, IOCTL_AFD_ACCEPT, &ad, sizeof(ad), 0, 0, 0);
-	if (!NT_SUCCESS(st)) { NtClose(newh); return __set_errno_status(st); }
+	if (!NT_SUCCESS(st)) { __plat_close(newh); return __set_errno_status(st); }
 
 	newfd = __fd_install(newh, 0, __FD_SOCKET);
-	if (newfd < 0) { NtClose(newh); return -1; }
+	if (newfd < 0) { __plat_close(newh); return -1; }
 	__fd_get(newfd)->pad = AFD_ST_BOUND | AFD_ST_CONNECTED;
 	memcpy(__fd_get(newfd)->peer, &peer, sizeof peer);
 	__fd_get(newfd)->peer_len = sizeof peer;

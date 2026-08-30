@@ -13,10 +13,11 @@
 #include <errno.h>
 #include "libc.h"
 #include "afd.h"
+#include "plat_fd.h"
 
 int socket(int domain, int type, int protocol)
 {
-	HANDLE h;
+	__plat_handle_t h;
 	int fd;
 
 	if (domain != AF_INET) { errno = EAFNOSUPPORT; return -1; }
@@ -26,7 +27,7 @@ int socket(int domain, int type, int protocol)
 	if (__afd_open(&h) < 0) return -1;
 
 	fd = __fd_install(h, 0, __FD_SOCKET);
-	if (fd < 0) { NtClose(h); return -1; }
+	if (fd < 0) { __plat_close(h); return -1; }
 	__fd_get(fd)->pad = 0;
 	return fd;
 }
