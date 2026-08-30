@@ -9,6 +9,15 @@
  * mask saved by sigsetjmp, parking x0/x1 across that call since both
  * are caller-saved and __siglongjmp_restore is an ordinary C call free
  * to clobber them.
+ *
+ * The final "return 1 if val==0, else val" step avoids CMP and CSINC:
+ * this file is also built by tcc's arm64-win32 backend (PLATFORM=nt),
+ * whose inline/.S assembler implements only a small integer/branch
+ * mnemonic subset -- empirically probed to accept SUBS but reject CMP
+ * (its own zero-result alias) and reject the whole conditional-select
+ * family (CSEL/CSINC/CSINV/CSNEG/CSET) outright, "not implemented".
+ * SUBS plus an ordinary branch does the identical comparison and
+ * selection with instructions both backends accept.
  */
 	.text
 	.globl longjmp
@@ -39,7 +48,9 @@ _longjmp:
 	ldp	d12, d13, [x0, #136]
 	ldp	d14, d15, [x0, #152]
 	mov	sp, x8
-	cmp	w1, #0
-	csinc	w0, w1, wzr, ne		/* longjmp(env, 0) returns 1 */
+	subs	w0, w1, #0		/* w0 = val; sets Z iff val == 0 */
+	bne	1f
+	mov	w0, #1			/* longjmp(env, 0) returns 1 */
+1:
 	ret
 	.size longjmp, . - longjmp
