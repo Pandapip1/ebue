@@ -19,7 +19,18 @@ _Noreturn void __pthread_cancel_trampoline(void);
  * assemble, so the builtin compiles to the correct native primitive
  * there instead (`cmpxchg`/`xadd` on x86, an LL/SC loop or `cas`/
  * `ldadd` on aarch64), same full-barrier semantics
- * (__ATOMIC_SEQ_CST). */
+ * (__ATOMIC_SEQ_CST).
+ *
+ * That "any other arch is always a real gcc/clang" premise held until
+ * PLATFORM=nt ARCH=aarch64 (WOA, tcc on aarch64): a combination that
+ * did not exist when it was written, and breaks it the same way x86
+ * does (`'__ATOMIC_SEQ_CST' undeclared`, confirmed against the actual
+ * pinned arm64-win32-tcc) -- for a more severe reason than x86, in
+ * fact: that tcc target has no exclusive-access or LSE atomic
+ * mnemonics AT ALL, not even the ones a hand LL/SC loop would use
+ * directly, so src/thread/nt/aarch64/atomic32.S's own banner is where
+ * the real story (raw `.word`-encoded instructions, independently
+ * verified) lives; this branch just calls into it. */
 static int compare_exchange(volatile int *address, int old_value,
 	int new_value)
 {
@@ -29,6 +40,10 @@ static int compare_exchange(volatile int *address, int old_value,
 		: "=a"(previous), "+m"(*address)
 		: "r"(new_value), "0"(old_value) : "memory");
 	return previous;
+#elif defined(__aarch64__) && defined(_WIN32)
+	extern int __ntlibc_aarch64_cas32(volatile int *address,
+		int old_value, int new_value);
+	return __ntlibc_aarch64_cas32(address, old_value, new_value);
 #else
 	__atomic_compare_exchange_n(address, &old_value, new_value, 0,
 	                            __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
@@ -42,6 +57,9 @@ static int exchange_add(volatile int *address, int value)
 	__asm__ __volatile__("lock; xaddl %0, %1"
 		: "+r"(value), "+m"(*address) : : "memory");
 	return value;
+#elif defined(__aarch64__) && defined(_WIN32)
+	extern int __ntlibc_aarch64_xadd32(volatile int *address, int value);
+	return __ntlibc_aarch64_xadd32(address, value);
 #else
 	return __atomic_fetch_add(address, value, __ATOMIC_SEQ_CST);
 #endif

@@ -41,7 +41,8 @@ struct barrierattr_data {
 /* x86 branch stays the literal asm tcc needs; see
  * src/thread/pthread_cancel.c's own copy of this function for why
  * (duplicated in three files, not shared, but the reasoning is
- * identical). */
+ * identical) and for the aarch64/tcc (PLATFORM=nt ARCH=aarch64) branch
+ * below's own story -- src/thread/nt/aarch64/atomic32.S's banner. */
 static int compare_exchange(volatile int *address, int old_value,
 	int new_value)
 {
@@ -51,6 +52,10 @@ static int compare_exchange(volatile int *address, int old_value,
 		: "=a"(previous), "+m"(*address)
 		: "r"(new_value), "0"(old_value) : "memory");
 	return previous;
+#elif defined(__aarch64__) && defined(_WIN32)
+	extern int __ntlibc_aarch64_cas32(volatile int *address,
+		int old_value, int new_value);
+	return __ntlibc_aarch64_cas32(address, old_value, new_value);
 #else
 	__atomic_compare_exchange_n(address, &old_value, new_value, 0,
 	                            __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
