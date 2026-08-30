@@ -16,14 +16,18 @@ Usage: $0 [OPTION]... [VAR=VALUE]...
   --libdir=DIR            library files for the linker [PREFIX/lib]
   --includedir=DIR        include files for the C compiler [PREFIX/include]
   --syslibdir=DIR         unused, accepted for musl compatibility
-  --host=HOST             the system ntlibc will RUN on: i386-win32 or
-                          x86_64-win32 [guess from CC]
+  --host=HOST             the system ntlibc will RUN on: i386-win32,
+                          x86_64-win32, aarch64-linux or x86_64-linux
+                          [guess from CC]
   --target=TARGET         accepted as an alias of --host, for musl
                           compatibility.  Autoconf's --target means "what
                           the compiler in this package emits code for",
                           which is meaningless here: ntlibc is a library,
                           not a toolchain.  Cross-compiling ntlibc is the
                           normal case and --host is the knob for it.
+  --platform=PLATFORM     which OS-level backend to build: nt [default] or
+                          linux.  Independent of --host's ARCH (CPU width);
+                          see Makefile's PLAT_GLOBS comment.
   --enable-debug          build with debugging information (-g)
   --disable-debug         build without debugging information [default]
   --enable-warnings       build with recommended warnings flags [default]
@@ -97,6 +101,7 @@ libdir='$(prefix)/lib'
 # shellcheck disable=SC2016
 includedir='$(prefix)/include'
 target=
+platform=nt
 debug=no
 warnings=yes
 wrapper=yes
@@ -113,6 +118,7 @@ case "$arg" in
 --includedir=*) includedir=${arg#*=} ;;
 --syslibdir=*) ;;
 --host=*|--target=*) target=${arg#*=} ;;
+--platform=*) platform=${arg#*=} ;;
 --build=*) ;;
 --enable-debug|--enable-debug=yes) debug=yes ;;
 --disable-debug|--enable-debug=no) debug=no ;;
@@ -168,10 +174,33 @@ trap 'rm "$tmpc"' EXIT QUIT TERM HUP
 trap 'rm "$tmpc" ; exit 1' INT
 
 #
-# Find a C compiler to use.  Only tcc is known to work, but anything
-# producing PE objects with the same calling conventions should.
+# platform must be known before compiler discovery, which branches on it.
+#
+case "$platform" in
+nt|linux) ;;
+*) fail "$0: unsupported platform \"$platform\" (only \"nt\" and \"linux\" are implemented)" ;;
+esac
+
+#
+# Find a C compiler to use.
+#
+# platform=nt: only tcc is known to work, but anything producing PE
+# objects with the same calling conventions should.
+#
+# platform=linux: any native compiler that emits real ELF for the host
+# -- gcc or clang, nothing win32-shaped about it.  This is the same
+# native build tools/linux-build*.sh have used ad hoc all along (see
+# their own banners); configure now knows about it directly rather than
+# leaving it to a script's NTLIBC_CC default.
 #
 printf "checking for C compiler... "
+if [ "$platform" = linux ] ; then
+trycc "${CROSS_COMPILE}cc"
+trycc "${CROSS_COMPILE}clang"
+trycc "${CROSS_COMPILE}gcc"
+printf "%s\n" "$CC"
+test -n "$CC" || { echo "$0: cannot find a native C compiler (try CC=clang)" ; exit 1 ; }
+else
 # A candidate must exist and must target Windows (define _WIN32); the
 # native tcc on a Unix host does not, so it is skipped.
 tryccwin () {
@@ -197,6 +226,7 @@ test -z "$target" && tryccwin i386-win32-tcc
 test -z "$target" && tryccwin x86_64-win32-tcc
 printf "%s\n" "$CC"
 test -n "$CC" || { echo "$0: cannot find a C compiler targeting Windows (try CC=i386-win32-tcc)" ; exit 1 ; }
+fi
 
 printf "checking whether C compiler works... "
 echo "typedef int x;" > "$tmpc"
@@ -213,6 +243,24 @@ fi
 #
 if test -z "$target" ; then
 printf "checking target architecture... "
+if [ "$platform" = linux ] ; then
+# `#undef linux`: gcc/clang predefine `linux` as an object-like macro
+# (equal to 1) in gnu* modes, and "aarch64-linux" below is three
+# preprocessing tokens (linux is its own token, delimited by the
+# hyphens) -- without the #undef the substitution turns the intended
+# "aarch64-linux" output into "aarch64-1", silently naming the wrong
+# target. Confirmed empirically, not theoretical.
+cat > "$tmpc" <<'EOC'
+#undef linux
+#if defined(__aarch64__)
+aarch64-linux
+#elif defined(__x86_64__)
+x86_64-linux
+#else
+unknown
+#endif
+EOC
+else
 cat > "$tmpc" <<'EOC'
 #if defined(__x86_64__) || defined(_WIN64)
 x86_64-win32
@@ -222,6 +270,7 @@ i386-win32
 unknown
 #endif
 EOC
+fi
 # shellcheck disable=SC2086
 target=$($CC $CPPFLAGS -E "$tmpc" 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$' | tail -n1 | tr -d '[:space:]')
 printf "%s\n" "$target"
@@ -230,22 +279,11 @@ fi
 case "$target" in
 i386*|i486*|i586*|i686*|x86) ARCH=i386 ;;
 x86_64*|amd64*) ARCH=x86_64 ;;
+aarch64*|arm64*) ARCH=aarch64 ;;
 *) fail "$0: unknown or unsupported target \"$target\"" ;;
 esac
 
-# The platform axis (which OS-level backend src/*/nt/*.c-shaped
-# directories under src/<module>/ supply) is independent of ARCH (CPU
-# width/calling convention, above). Only one platform is implemented --
-# ntdll/NT -- so this is not yet a --platform flag to parse, just a
-# validated, fail-loud constant in the same shape --host's ARCH
-# derivation has, so a later platform is one case arm here, not a
-# silent Makefile constant nobody finds.
-platform=nt
-case "$platform" in
-nt) ;;
-*) fail "$0: unsupported platform \"$platform\" (only \"nt\" is implemented)" ;;
-esac
-
+if [ "$platform" = nt ] ; then
 #
 # The compiler must be targeting Windows/PE at all.
 #
@@ -262,6 +300,7 @@ printf "yes\n"
 else
 printf "no\n"
 fail "$0: $CC does not define _WIN32; a win32-targeting compiler is required"
+fi
 fi
 
 #
@@ -282,9 +321,11 @@ printf "%s\n" "$AR"
 fi
 
 #
-# Wine, for 'make check' only.
+# Wine, for 'make check' only -- meaningless for platform=linux, which
+# runs its own binaries natively and has no `make check`/`linkcheck`
+# equivalent wired up yet (see Makefile).
 #
-if test -z "$WINE" ; then
+if [ "$platform" = nt ] && test -z "$WINE" ; then
 case "$ARCH" in
 x86_64) for w in wine64 /usr/lib/wine/wine64 wine ; do cmdexists "$w" && { WINE=$w ; break ; } ; done ;;
 *) cmdexists wine && WINE=wine ;;
@@ -307,6 +348,7 @@ fi
 # recognised, not whether the whole delay-load runtime link-succeeds --
 # that part is exercised for real by the actual test build.
 #
+if [ "$platform" = nt ] ; then
 printf "checking whether linker accepts -Wl,--delay-all... "
 echo "void _start(void) {}" > "$tmpc"
 tmpexe="$tmpc.exe"
@@ -319,6 +361,9 @@ printf "no\n"
 delay_all=no
 fi
 rm -f "$tmpexe"
+else
+delay_all=no
+fi
 
 #
 # Flags.

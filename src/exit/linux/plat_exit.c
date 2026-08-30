@@ -24,7 +24,21 @@
  * technique src/mman/linux/plat_mem.c's banner describes). */
 #define SYS_exit_group 94
 
-extern long syscall(long number, ...);
+/* Not `extern long syscall(long, ...)`: that symbol is satisfied by the
+ * HOST's real glibc at link time, which every other Linux backend in
+ * this tree already avoids for exactly that reason (see plat_mem.c's
+ * banner) -- missed here until a real -nostdlib link (crt/linux/
+ * crt1.c's own verification build, which has no host libc to resolve
+ * it against at all) turned the gap from "silently wrong errno" into
+ * "does not link". Same raw `svc #0` trampoline every other backend
+ * defines for itself. */
+static long raw_syscall(long nr, long a1)
+{
+	register long x0 __asm__("x0") = a1;
+	register long x8 __asm__("x8") = nr;
+	__asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory", "cc");
+	return x0;
+}
 
 _Noreturn void __plat_terminate(int code)
 {
@@ -33,5 +47,5 @@ _Noreturn void __plat_terminate(int code)
 	 * defensive loop the NT backend keeps (src/exit/nt/plat_exit.c),
 	 * and required here too: this function is _Noreturn, so the
 	 * compiler must see a path that provably never falls off the end. */
-	for (;;) syscall(SYS_exit_group, code);
+	for (;;) raw_syscall(SYS_exit_group, code);
 }

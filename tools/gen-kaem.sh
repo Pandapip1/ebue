@@ -72,11 +72,27 @@ if [ ! -f config.mak ]; then
 	exit 1
 fi
 
-# Every arch/<a>/ except the shared arch/generic/ fallback headers.
+# Every arch/<a>/ except the shared arch/generic/ fallback headers, AND
+# except an arch with no arch/<a>/src/ files of its own (arch/aarch64,
+# a real target but only for PLATFORM=linux -- see configure's own
+# --platform flag and Makefile's PLAT_GLOBS comment). kaem exclusively
+# bootstraps the NT/tcc toolchain (CONTRIBUTING.md), and CC below is
+# always forced to "${ARCH}-win32-tcc" -- an arch/<a> with nothing
+# under src/ was never a real NT target to begin with, "aarch64-win32-
+# tcc" names a compiler that has never existed. Skipping it here, not
+# papering over it further down, is why: below this point every path
+# assumes at least one ARCHCC-classified dry-run line exists (real for
+# i386/x86_64, each of which has real arch/<a>/src/*.[cS] files) --
+# without this guard, an empty arch/aarch64/src/ silently reached
+# `field ARCHCC | ...`, whose `grep` found nothing and returned 1,
+# which -- under this script's own `set -euo pipefail` -- aborted the
+# whole run with NO error message at all. Caught by a real pre-commit
+# hook failure with empty stderr, not anticipated.
 kaem_arches() {
 	for d in arch/*/; do
 		a=${d%/}; a=${a#arch/}
 		[ "$a" = generic ] && continue
+		[ -n "$(find "arch/$a/src" -maxdepth 1 \( -name '*.c' -o -name '*.S' \) 2>/dev/null)" ] || continue
 		echo "$a"
 	done
 }

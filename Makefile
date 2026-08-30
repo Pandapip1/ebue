@@ -51,16 +51,33 @@ ARCH_GLOBS = $(addsuffix /$(ARCH)/*.[csS],$(SRC_DIRS)) $(srcdir)/arch/$(ARCH)/sr
 # filenames), so this never actually replaces anything today, but
 # REPLACED_OBJS is extended symmetrically so the machinery would do the
 # right thing if one ever existed.
-PLAT_GLOBS = $(addsuffix /$(PLATFORM)/*.c,$(SRC_DIRS))
+# PLAT_GLOBS matches .[csS], not just .c: a platform backend can need real
+# assembly the way arch/$(ARCH)/src/ already does (e.g. clone(2)'s
+# trampoline, src/thread/linux/$(ARCH)/clone.S below -- see its own
+# header for why that one specifically cannot be plain C).
+PLAT_GLOBS = $(addsuffix /$(PLATFORM)/*.[csS],$(SRC_DIRS))
+# PLAT_ARCH_GLOBS is a third, innermost axis for a file that is specific
+# to BOTH the platform and the arch at once (crt/linux/aarch64/start.S:
+# the raw ELF entry point, whose calling convention and register set are
+# as arch-specific as clone(2)'s trampoline, but only exist under
+# PLATFORM=linux at all -- NT has no equivalent, the loader hands crt1.c
+# an already-built PEB). Same additive-override shape one level deeper;
+# REPLACED_OBJS' subst below strips both the PLATFORM and ARCH path
+# components so a file here can, symmetrically with the other two axes,
+# override a same-named base file (nothing does today).
+PLAT_ARCH_GLOBS = $(addsuffix /$(PLATFORM)/$(ARCH)/*.[csS],$(SRC_DIRS))
 BASE_SRCS = $(sort $(wildcard $(BASE_GLOBS)))
 ARCH_SRCS = $(sort $(wildcard $(ARCH_GLOBS)))
 PLAT_SRCS = $(sort $(wildcard $(PLAT_GLOBS)))
+PLAT_ARCH_SRCS = $(sort $(wildcard $(PLAT_ARCH_GLOBS)))
 BASE_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(BASE_SRCS)))
 ARCH_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(ARCH_SRCS)))
 PLAT_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(PLAT_SRCS)))
+PLAT_ARCH_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(PLAT_ARCH_SRCS)))
 REPLACED_OBJS = $(sort $(subst /$(ARCH)/,/,$(filter-out arch/%,$(ARCH_OBJS))) \
-                       $(subst /$(PLATFORM)/,/,$(PLAT_OBJS)))
-ALL_OBJS = $(addprefix obj/, $(filter-out $(REPLACED_OBJS), $(sort $(BASE_OBJS) $(ARCH_OBJS) $(PLAT_OBJS))))
+                       $(subst /$(PLATFORM)/,/,$(PLAT_OBJS)) \
+                       $(subst /$(PLATFORM)/$(ARCH)/,/,$(PLAT_ARCH_OBJS)))
+ALL_OBJS = $(addprefix obj/, $(filter-out $(REPLACED_OBJS), $(sort $(BASE_OBJS) $(ARCH_OBJS) $(PLAT_OBJS) $(PLAT_ARCH_OBJS))))
 
 LIBC_OBJS = $(filter obj/src/%,$(ALL_OBJS)) $(filter obj/arch/%,$(ALL_OBJS))
 CRT_OBJS = $(filter obj/crt/%,$(ALL_OBJS))
@@ -96,8 +113,6 @@ EMPTY_LIBS = $(EMPTY_LIB_NAMES:%=lib/lib%.a)
 STATIC_LIBS = lib/libc.a
 DEF_FILES = lib/ntdll.def
 CRT_LIBS = $(addprefix lib/,$(notdir $(CRT_OBJS)))
-ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS) $(DEF_FILES)
-ALL_TOOLS = obj/ntlibc-tcc
 
 # sh(1p): a PE program, not part of libc.a.  Its sources live in the
 # top-level sh/ directory rather than under src/ -- test/sh-design.md's
@@ -115,6 +130,28 @@ SH_EXE = obj/sh/sh.exe
 WRAPCC_TCC = $(CC)
 
 -include config.mak
+
+# ntdll.def only means anything for the NT platform (it lists ntdll's own
+# exports, for -lntdll to link against) -- a platform=linux `all` has no
+# use for it and no NT ntlibc-tcc wrapper either (ALL_TOOLS wraps a
+# win32-targeting tcc specifically).  ntdll.def's absence also matters
+# for `all`'s own recipe list below: SH_EXE links -lntdll unconditionally,
+# so `all` only chases it on the platform that can satisfy that.
+#
+# Must come after -include config.mak, not before: ifeq is a parse-time
+# directive, evaluated against whatever $(PLATFORM) is AT THAT LINE, and
+# config.mak (not a default anywhere above) is the only thing that ever
+# sets it away from empty -- an ifeq placed before the include always
+# saw PLATFORM as empty and silently took the "else" branch, even when
+# actually building nt. Caught by an actual nt build failing to find
+# lib/ntdll.def's consumer, -lntdll, not by inspection.
+ifeq ($(PLATFORM),nt)
+ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS) $(DEF_FILES)
+ALL_TOOLS = obj/ntlibc-tcc
+else
+ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(EMPTY_LIBS)
+ALL_TOOLS =
+endif
 
 ifeq ($(WRAPPER),yes)
 ALL_TOOLS_BUILT = $(ALL_TOOLS)
@@ -137,7 +174,16 @@ endif
 # process group, so make never runs its own cleanup).
 .DELETE_ON_ERROR:
 
+# sh(1p), the test binaries and install-check all link -lntdll (or
+# probe wine/PE-only tooling), so `all` only chases them on PLATFORM=nt;
+# platform=linux's `all` stops at the library + crt objects themselves
+# (ALL_LIBS above already omits DEF_FILES/ALL_TOOLS the same way) --
+# see the Makefile PLAT_GLOBS comment and configure's --platform flag.
+ifeq ($(PLATFORM),nt)
 all: $(ALL_LIBS) $(ALL_TOOLS_BUILT) $(SH_EXE)
+else
+all: $(ALL_LIBS)
+endif
 
 OBJ_DIRS = $(sort $(patsubst %/,%,$(dir $(ALL_LIBS) $(ALL_TOOLS) $(ALL_OBJS) $(GENH))) obj/include)
 
@@ -191,8 +237,22 @@ $(EMPTY_LIBS):
 	rm -f $@
 	$(AR) rcs $@
 
-lib/%.o: obj/crt/%.o
-	cp $< $@
+# Not a plain `lib/%.o: obj/crt/%.o` pattern rule: that stem-matches on
+# the TARGET's basename alone, so for a crt object that lives in a
+# subdirectory of obj/crt/ (crt/linux/crt1.c, crt/linux/$(ARCH)/start.S
+# -- PLAT_GLOBS/PLAT_ARCH_GLOBS both nest one or two levels under crt/,
+# unlike crt/crt1.c's own unprefixed NT original) the pattern rule would
+# go looking for a same-named object directly under obj/crt/ that was
+# never built, rather than the real one PLAT_GLOBS/PLAT_ARCH_GLOBS's
+# override actually produced -- confirmed by hand-tracing CRT_OBJS for
+# PLATFORM=linux before this was caught, not hypothetical. An explicit
+# per-object rule, generated from CRT_OBJS' own already-correct full
+# paths, has no stem to guess wrong.
+define CRT_LIB_RULE
+lib/$(notdir $(1)): $(1)
+	cp $$< $$@
+endef
+$(foreach o,$(CRT_OBJS),$(eval $(call CRT_LIB_RULE,$(o))))
 
 lib/ntdll.def: $(srcdir)/tools/ntdll.def
 	cp $< $@
