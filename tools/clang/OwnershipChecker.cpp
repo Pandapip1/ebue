@@ -1226,6 +1226,87 @@ class ResourceLifecycleChecker
     return C.getState()->isNull(Call.getArgSVal(Argument)).isConstrainedTrue();
   }
 
+  // A hard-coded integer literal at the call site (resource-unsafe.c's
+  // bogus_literal: `write(99, "x", 1)`) is real, checkable evidence that
+  // this descriptor was authored out of thin air -- it is not, and could
+  // never be, the result of any open()/socket()/... this analysis could
+  // have tracked. A *computed* argument that merely evaluates concrete
+  // on some explored path is a different claim entirely: the single most
+  // common shape is a bounded `for` loop's own induction variable, e.g.
+  // src/internal/fd.c's __fd_close_all_cloexec():
+  //   for (i = 0; i < FD_MAX; i++)
+  //     if (__fds[i].h && (__fds[i].flags & O_CLOEXEC)) close(i);
+  // clang's analyzer explores only a handful of concrete values of `i`
+  // before giving up and widening it to a fresh, unconstrained symbol
+  // (FD_MAX == 1024) -- on those first few concrete iterations, `i` is
+  // indistinguishable from a hand-written literal by SVal alone, even
+  // though the source never wrote any such number down, and the loop's
+  // own `__fds[i].h` guard is real, checkable evidence (of exactly the
+  // same "someone else's acquire, invisible to this per-function
+  // analysis" shape as a borrowed parameter) that whatever integer `i`
+  // is on this path names a live descriptor this process's own table
+  // says is open. The two are only distinguishable at the AST level --
+  // by whether the argument expression is itself the literal, or merely
+  // a variable/expression the analyzer's own limited exploration reduced
+  // to a concrete value -- so that is what this checks, instead of the
+  // SVal's concreteness.
+  //
+  // Deliberately scoped to Descriptor only: unlike Semaphore/Stream (see
+  // the Stream/Semaphore-use carve-out in checkResource below), the file
+  // descriptor namespace has exactly one acquire surface (open/socket/
+  // accept/dup/...) and exactly one release function (close()), so there
+  // is no "used the wrong release API for this concretely-addressed
+  // object" hazard (sem_close() on an unnamed, sem_init()'d semaphore,
+  // say) that a broader-than-literal trust could hide.
+  static bool isLiteralArgument(const CallEvent &Call, unsigned Argument) {
+    const Expr *ArgExpr = Call.getArgExpr(Argument);
+    if (!ArgExpr)
+      return false;
+    ArgExpr = ArgExpr->IgnoreParenCasts();
+    if (const auto *Unary = dyn_cast<UnaryOperator>(ArgExpr))
+      if (Unary->getOpcode() == UO_Minus || Unary->getOpcode() == UO_Plus)
+        ArgExpr = Unary->getSubExpr()->IgnoreParenCasts();
+    return isa<IntegerLiteral>(ArgExpr);
+  }
+
+  // A resource read back through a data-dependent (symbolic) array index
+  // -- src/sh/execute.c's __sh_exec_pipeline(), closing `pipes[i][1]`
+  // inside a `for (i = 0; i < n; i++)` loop over each pipeline stage's
+  // own pipe, is the concrete case that motivated this -- is a claim
+  // this checker's per-symbol ResourceMap structurally cannot evaluate,
+  // for a reason one level deeper than every other "no information"
+  // case above: once such a loop's index is widened past its first few
+  // concrete iterations, clang's RegionStore models a symbolic-index
+  // ElementRegion read with one shared "default value" representative
+  // for the *entire* array, not one distinct symbol per logical element
+  // -- so `pipes[i][1]` at one loop iteration and `pipes[i][1]` at a
+  // later, logically different iteration (a different pipeline stage
+  // entirely) can resolve to the exact same SymbolRef purely as an
+  // artifact of the memory model, not because they are really the same
+  // resource. __sh_exec_pipeline() closes each pipeline index's ends in
+  // exactly one of its two passes -- pass 1 for a real (SH_CMD_SIMPLE)
+  // stage, pass 2 for a deferred compound-command stage -- gated by a
+  // `deferred[]` array set once, before either pass runs, and never
+  // revisited; genuinely correct, but a correlation between "which index
+  // this iteration is" and "which pass already closed it" that this
+  // per-symbol tracking has no way to see either way, on top of no
+  // longer even being able to name the two array elements distinctly.
+  // Trusted the same way any other "no information" shape is -- neither
+  // direction (acquired-but-not-seen, or released-and-then-reused) is
+  // provable when the underlying representation itself cannot tell two
+  // different elements apart, so this returns before the state lookup,
+  // for every resource operation on such an argument, symmetrically.
+  static bool hasSymbolicArrayIndex(const Expr *ArgExpr, CheckerContext &C) {
+    ArgExpr = ArgExpr->IgnoreParenCasts();
+    const auto *Subscript = dyn_cast<ArraySubscriptExpr>(ArgExpr);
+    if (!Subscript)
+      return false;
+    SVal Index = C.getSVal(Subscript->getIdx());
+    if (!Index.getAs<nonloc::ConcreteInt>())
+      return true;
+    return hasSymbolicArrayIndex(Subscript->getBase(), C);
+  }
+
   void checkResource(const CallEvent &Call, Family Expected, unsigned Argument,
                      bool Consume, CheckerContext &C) const {
     if (Argument >= Call.getNumArgs())
@@ -1234,6 +1315,9 @@ class ResourceLifecycleChecker
       return;
     if (Expected == Stream && !Consume && isFflushAll(Call, Argument, C))
       return;
+    if (const Expr *ArgExpr = Call.getArgExpr(Argument))
+      if (hasSymbolicArrayIndex(ArgExpr, C))
+        return;
     SymbolRef Symbol = Call.getArgSVal(Argument).getAsSymbol(true);
     const unsigned *State =
         Symbol ? C.getState()->get<ResourceMap>(Symbol) : nullptr;
@@ -1243,21 +1327,39 @@ class ResourceLifecycleChecker
         // non-symbolic value the analyzer can name outright -- the
         // address of a stack-local/global (e.g. `sem_t s; sem_wait(&s);`
         // for an unnamed, caller-owned semaphore, whose lifecycle
-        // OwnedConstructChecker proves separately, not this checker), a
-        // literal constant, or similar. That is real, checkable
-        // evidence for every family except Semaphore-use, so it is kept
-        // reported there: sem_wait/post's own unnamed-object case is the
-        // one legitimate use of this shape, so it keeps its carve-out.
-        // A genuinely Unknown/Undef value is a third, different case
-        // from either: the analyzer itself lost track of what this is
-        // (most commonly a loop variable widened away after clang's
-        // default max-loop iteration cap -- __fd_close_all_cloexec's
-        // `for (i = 0; i < FD_MAX; i++) ... close(i);` with FD_MAX ==
-        // 1024 is exactly this shape), which is "no information" just
-        // like an untracked symbol below, not positive evidence.
+        // OwnedConstructChecker proves separately, not this checker; or
+        // src/stdio/printf.c's vdprintf(), which builds a throwaway
+        // stack `FILE f;` never passed through fopen/fdopen/tmpfile/
+        // popen and calls `fflush(&f)` directly on it, exactly the same
+        // "unnamed, caller-managed object" shape as the semaphore case,
+        // just for Stream instead), a literal constant, or similar.
+        // That is real, checkable evidence for every family except a
+        // *use* (not release) of Semaphore or Stream, so it is kept
+        // reported everywhere else: sem_wait/post and fflush's own
+        // unnamed/ad-hoc-object cases are the two legitimate uses of
+        // this shape (fclose(&f) on that same ad-hoc FILE, or
+        // sem_close(&s) on that same unnamed semaphore, would still be
+        // real bugs -- neither Semaphore nor Stream's carve-out here
+        // extends to Consume, on purpose). A genuinely Unknown/Undef
+        // value is a different case from either: the analyzer itself
+        // lost track of what this is (most commonly a loop variable
+        // widened away after clang's default max-loop iteration cap),
+        // which is "no information" just like an untracked symbol
+        // below, not positive evidence.
         if (Call.getArgSVal(Argument).isUnknownOrUndef())
           return;
-        if (Expected == Semaphore && !Consume)
+        if ((Expected == Semaphore || Expected == Stream) && !Consume)
+          return;
+        // Descriptor is a separate carve-out, and applies regardless of
+        // Consume (see isLiteralArgument's own comment for why that is
+        // safe specifically for this one family): a concrete descriptor
+        // this analysis merely could not trace back to an open()/
+        // socket()/... call is only real evidence of a fabricated
+        // resource when the source itself wrote the number down as a
+        // literal, not when it is a loop induction variable or other
+        // computed expression the analyzer's own limited exploration
+        // happened to concretize.
+        if (Expected == Descriptor && !isLiteralArgument(Call, Argument))
           return;
         report("resource is not proven live", Call, C);
         return;

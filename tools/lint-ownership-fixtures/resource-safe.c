@@ -75,3 +75,57 @@ void flush_all(void)
 {
 	fflush(0);
 }
+
+/* A bounded loop's own induction variable, checked live against this
+ * process's own table before being closed -- src/internal/fd.c's own
+ * __fd_close_all_cloexec() shape. clang's analyzer only explores a
+ * handful of concrete values of `i` before widening it away, so on
+ * those first few concrete iterations `i` looks, by SVal alone,
+ * indistinguishable from a hand-authored literal -- but the source
+ * never wrote any number down, and `live[i]` is real evidence (of
+ * exactly the same "someone else's acquire, invisible to this
+ * per-function analysis" shape as a borrowed parameter) that this slot
+ * really is open. See isLiteralArgument's own comment for why this
+ * carve-out is scoped to Descriptor only. */
+static int live[8];
+void close_table(void)
+{
+	int i;
+	for (i = 0; i < 8; i++)
+		if (live[i]) close(i);
+}
+
+/* vdprintf()'s own shape (src/stdio/printf.c): a throwaway stack FILE,
+ * never passed through fopen/fdopen/tmpfile/popen, used directly and
+ * never fclose()d -- flushed here exactly like sem_wait(&s) uses an
+ * unnamed, stack semaphore directly. fclose(&f) on this same object
+ * would still be a real bug, so the carve-out only ever applies to a
+ * *use*, never Consume (see checkResource's own comment). */
+void flush_stack_file(void)
+{
+	FILE f;
+	fflush(&f);
+}
+
+/* A pipe array closed across two passes gated by a shared, once-set
+ * boolean array -- src/sh/execute.c's __sh_exec_pipeline() shape (pass
+ * 1 closes stage i's pipe ends if `!deferred[i]`, pass 2 closes the
+ * same index's ends if `deferred[i]`, so every index is closed in
+ * exactly one pass). Under a widened, symbolic loop index, RegionStore's
+ * default-value binding can return the exact same SymbolRef for
+ * `pipes[i][1]` at two logically different indices/passes, so this
+ * checker's per-symbol ResourceMap cannot tell them apart -- neither
+ * "acquired but not seen" nor "already released" is provable once the
+ * underlying model itself conflates the two elements, so
+ * hasSymbolicArrayIndex() treats a symbolic-index resource operation as
+ * "no information", the same as any other opaque-provenance case. */
+void close_pipe_array(int pipes[][2], char *deferred, int n)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		if (!deferred[i] && i + 1 < n)
+			close(pipes[i][1]);
+	for (i = 0; i < n; i++)
+		if (deferred[i] && i + 1 < n)
+			close(pipes[i][1]);
+}
