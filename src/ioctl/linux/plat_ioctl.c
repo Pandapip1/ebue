@@ -56,7 +56,31 @@
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all -- NOT `extern long syscall(long, ...)`, which
+ * is satisfied by the HOST's real glibc at link time in a non-
+ * freestanding build and collapses every failure to exactly -1 with
+ * glibc's OWN errno rather than the raw kernel -errno this file's
+ * is_sys_error()/`errno = (int)-ret` translation requires -- see
+ * src/mman/linux/plat_mem.c's fix (commit 299458a) for the fuller
+ * account, confirmed independently across six other Linux backends.
+ * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
+ * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 static int is_sys_error(long ret)
 {
@@ -112,7 +136,7 @@ struct __lx_statx {
 int __plat_fionread_pipe(__plat_handle_t h, int *out)
 {
 	int n = 0;
-	long ret = syscall(SYS_ioctl, unbox(h), (long)FIONREAD, &n);
+	long ret = raw_syscall(SYS_ioctl, (long)unbox(h), (long)FIONREAD, (long)&n, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	*out = n;
 	return 0;
@@ -125,10 +149,11 @@ int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos)
 	long ret;
 
 	memset(&stx, 0, sizeof stx);
-	ret = syscall(SYS_statx, fd, "", AT_EMPTY_PATH_LX, STATX_BASIC_STATS_LX, &stx);
+	ret = raw_syscall(SYS_statx, (long)fd, (long)"", (long)AT_EMPTY_PATH_LX,
+	                 (long)STATX_BASIC_STATS_LX, (long)&stx, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 
-	ret = syscall(SYS_lseek, fd, 0L, 1 /* SEEK_CUR */);
+	ret = raw_syscall(SYS_lseek, (long)fd, 0L, 1L /* SEEK_CUR */, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 
 	*eof = (long long)stx.stx_size;

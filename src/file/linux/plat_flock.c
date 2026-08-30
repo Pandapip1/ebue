@@ -39,7 +39,31 @@
  * itself. */
 #define SYS_flock 32
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all -- NOT `extern long syscall(long, ...)`, which
+ * is satisfied by the HOST's real glibc at link time in a non-
+ * freestanding build and collapses every failure to exactly -1 with
+ * glibc's OWN errno rather than the raw kernel -errno this file's
+ * is_sys_error()/`errno = (int)-ret` translation requires -- see
+ * src/mman/linux/plat_mem.c's fix (commit 299458a) for the fuller
+ * account, confirmed independently across six other Linux backends.
+ * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
+ * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 static int is_sys_error(long ret)
 {
@@ -54,14 +78,14 @@ static int unbox(__plat_handle_t h)
 int __plat_flock_lock(__plat_handle_t h, int nb, int exclusive)
 {
 	int op = (exclusive ? LOCK_EX : LOCK_SH) | (nb ? LOCK_NB : 0);
-	long ret = syscall(SYS_flock, unbox(h), (long)op);
+	long ret = raw_syscall(SYS_flock, (long)unbox(h), (long)op, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
 
 int __plat_flock_unlock(__plat_handle_t h)
 {
-	long ret = syscall(SYS_flock, unbox(h), (long)LOCK_UN);
+	long ret = raw_syscall(SYS_flock, (long)unbox(h), (long)LOCK_UN, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }

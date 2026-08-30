@@ -90,7 +90,38 @@
 #define F_WRLCK_LX  1
 #define F_UNLCK_LX  2
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all. NOT `extern long syscall(long, ...)`: that
+ * symbol is satisfied by the HOST's real glibc at link time in a
+ * non-freestanding build, and glibc's syscall() performs its own
+ * error translation: on failure it always returns exactly -1 and
+ * sets glibc's OWN errno, never the raw kernel -errno in [-4095,-1]
+ * this file's is_sys_error()/`errno = (int)-ret` translation requires
+ * -- and, worse than a merely-wrong errno, __plat_fallocate() below
+ * reads `-ret` directly and compares it to EOPNOTSUPP/ENOSYS to
+ * decide whether to degrade to ftruncate(): under the glibc-wrapped
+ * syscall(), every fallocate(2) failure collapses to ret==-1, so
+ * that comparison would never match and the degradation path would
+ * never trigger even when it should. See src/mman/linux/plat_mem.c's
+ * fix (commit 299458a) for the fuller account of this bug, confirmed
+ * independently across six other Linux backends. aarch64's syscall
+ * calling convention: x8 = syscall number, x0..x5 = up to 6
+ * arguments, result (or -errno in [-4095,-1]) in x0. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 static int is_sys_error(long ret)
 {
@@ -137,7 +168,7 @@ int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclu
 	fl.l_len = (long)len;
 	fl.l_pid = 0;
 
-	ret = syscall(SYS_fcntl, unbox(h), F_GETLK_LX, &fl);
+	ret = raw_syscall(SYS_fcntl, (long)unbox(h), (long)F_GETLK_LX, (long)&fl, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	*conflicting = fl.l_type != F_UNLCK_LX;
 	return 0;
@@ -154,7 +185,7 @@ int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusi
 	fl.l_len = (long)len;
 	fl.l_pid = 0;
 
-	ret = syscall(SYS_fcntl, unbox(h), wait ? F_SETLKW_LX : F_SETLK_LX, &fl);
+	ret = raw_syscall(SYS_fcntl, (long)unbox(h), (long)(wait ? F_SETLKW_LX : F_SETLK_LX), (long)&fl, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -170,7 +201,7 @@ int __plat_lock_clear(__plat_handle_t h, long long off, long long len)
 	fl.l_len = (long)len;
 	fl.l_pid = 0;
 
-	ret = syscall(SYS_fcntl, unbox(h), F_SETLK_LX, &fl);
+	ret = raw_syscall(SYS_fcntl, (long)unbox(h), (long)F_SETLK_LX, (long)&fl, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -217,7 +248,8 @@ int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
 	long ret;
 
 	memset(&stx, 0, sizeof stx);
-	ret = syscall(SYS_statx, unbox(h), "", AT_EMPTY_PATH_LX, STATX_BASIC_STATS_LX, &stx);
+	ret = raw_syscall(SYS_statx, (long)unbox(h), (long)"", (long)AT_EMPTY_PATH_LX,
+	                 (long)STATX_BASIC_STATS_LX, (long)&stx, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	*alloc_size = (long long)stx.stx_blocks * 512; /* stx_blocks is
 	                             * always counted in 512-byte units, the
@@ -233,7 +265,7 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 	long ret;
 	(void)grow_alloc; (void)eof;
 
-	ret = syscall(SYS_fallocate, fd, 0, (long)0, (long)want);
+	ret = raw_syscall(SYS_fallocate, (long)fd, 0L, 0L, (long)want, 0L, 0L);
 	if (!is_sys_error(ret)) return 0;
 
 	if (-ret == EOPNOTSUPP || -ret == ENOSYS) {
@@ -246,7 +278,7 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 		 * permits exactly this: the storage-reservation guarantee
 		 * is what degrades, not correctness. */
 		if (want > eof) {
-			ret = syscall(SYS_ftruncate, fd, (long)want);
+			ret = raw_syscall(SYS_ftruncate, (long)fd, (long)want, 0L, 0L, 0L, 0L);
 			if (!is_sys_error(ret)) return 0;
 		} else {
 			return 0; /* nothing to grow; the weaker guarantee is moot */
