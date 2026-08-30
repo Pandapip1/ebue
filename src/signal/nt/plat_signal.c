@@ -197,12 +197,13 @@ int __plat_process_suspend(__plat_handle_t h)
 	return 0;
 }
 
-int __plat_process_resume(__plat_handle_t h)
-{
-	NTSTATUS st = NtResumeProcess(h);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
-}
+/* __plat_process_resume() is declared above (this file's own header
+ * comment) but defined in src/process/nt/plat_process.c, not here: both
+ * this file and the process subsystem's own resume-a-stopped-child path
+ * (src/process/children.c) independently arrived at the identical
+ * NtResumeProcess()-wrapping implementation during the platform-
+ * abstraction migration, and only one definition may exist per the ODR.
+ * Kept where process lifecycle otherwise lives; this file just uses it. */
 
 int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out)
 {
