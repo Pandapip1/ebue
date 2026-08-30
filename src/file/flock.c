@@ -75,16 +75,13 @@
 #include <sys/file.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_flock.h"
 
-static struct { HANDLE h; unsigned char held; unsigned char exclusive; } lockstate[FD_MAX];
+static struct { __plat_handle_t h; unsigned char held; unsigned char exclusive; } lockstate[FD_MAX];
 
 int flock(int fd, int op)
 {
 	struct __fd *f = __fd_get(fd);
-	IO_STATUS_BLOCK io;
-	LARGE_INTEGER off = 0;
-	LARGE_INTEGER len = 0x7fffffffffffffffLL;
-	NTSTATUS st;
 	int want_exclusive;
 
 	if (!f) return -1;
@@ -97,28 +94,19 @@ int flock(int fd, int op)
 		want_exclusive = (op & ~LOCK_NB) == LOCK_EX;
 		if (lockstate[fd].held && lockstate[fd].exclusive == want_exclusive) return 0;   /* already exactly this */
 		if (lockstate[fd].held) {
-			NtUnlockFile(f->h, &io, &off, &len, 0);
+			__plat_flock_unlock(f->h);
 			lockstate[fd].held = 0;
 		}
-		/* IoStatusBlock is NULL, not &io, on NtLockFile specifically:
-		 * Wine's NtLockFile (dlls/ntdll/unix/file.c) hard-fails
-		 * STATUS_NOT_IMPLEMENTED whenever it is given a non-NULL one
-		 * ("Unimplemented yet parameter") -- confirmed against the
-		 * same environment. NtUnlockFile has the opposite requirement
-		 * (it dereferences io_status unconditionally), so it keeps
-		 * &io, above. */
-		st = NtLockFile(f->h, 0, 0, 0, 0, &off, &len, 0,
-		                (op & LOCK_NB) ? 1 : 0, want_exclusive);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (__plat_flock_lock(f->h, op & LOCK_NB, want_exclusive) < 0) return -1;
 		lockstate[fd].h = f->h;
 		lockstate[fd].held = 1;
 		lockstate[fd].exclusive = (unsigned char)want_exclusive;
 		return 0;
 	case LOCK_UN:
 		if (lockstate[fd].held) {
-			st = NtUnlockFile(f->h, &io, &off, &len, 0);
+			int r = __plat_flock_unlock(f->h);
 			lockstate[fd].held = 0;
-			if (!NT_SUCCESS(st)) return __set_errno_status(st);
+			if (r < 0) return -1;
 		}
 		/* Nothing held by this fd (never locked, or already
 		 * unlocked): flock(2) DESCRIPTION does not document this as

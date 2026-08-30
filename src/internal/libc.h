@@ -152,11 +152,9 @@ unsigned __umask_get(void);
 /* The guts of unlink()/rmdir()/unlinkat(); isdir selects the rmdir
  * behaviour.  Returns 0, or -1 with errno. */
 int __unlink_at(int dirfd, const char *path, int isdir);
-/* The guts of stat()/fstat(): fill *st from an open handle of __FD_* type
- * `type`.  Returns 0, or -1 with errno.  (struct stat is only ever used
- * through this pointer here, so <sys/stat.h> stays out of this header.) */
+/* The guts of stat()/fstat() is __plat_fstat() (src/internal/plat_stat.h)
+ * now; struct stat is still forward-declared here for __vfs_stat() below. */
 struct stat;
-int __fstat_handle(HANDLE h, int type, struct stat *st);
 
 /* ---- the descriptor table ---------------------------------------------- */
 #define FD_MAX 1024
@@ -375,9 +373,10 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
 char *__find_program(const char *name, int use_path);
 int __is_program(const char *path);
 /* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the
- * mode attribute is used: ntlibc must not manufacture Linux UID/GID values. */
-int __lxmod_get(HANDLE, unsigned *mode);       /* 1 found, 0 absent/invalid */
-int __lxmod_set(HANDLE, unsigned mode);       /* 0 or -1 with errno */
+ * mode attribute is used: ntlibc must not manufacture Linux UID/GID values.
+ * The platform calls that read/write it are __plat_lxmod_get()/
+ * __plat_lxmod_set() (src/internal/plat_stat.h); only the buffer builder,
+ * which makes no platform call, is declared cross-module here. */
 unsigned __lxmod_create_buffer(void *, unsigned mode); /* NtCreateFile EA */
 /* The [ENOEXEC] command interpreter of XSH exec and XCU 2.9.1: runs
  * argv -- { arg0, command_file, argument..., 0 } -- as one invocation

@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <limits.h>
 #include "libc.h"
+#include "plat_fcntl.h"
 
 int posix_fadvise(int fd, off_t offset, off_t len, int advice)
 {
@@ -131,30 +132,17 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
  * Under Wine the numbers describe the HOST file system rather than an
  * NTFS volume (ext4 reports a 4096 cluster, which happens to give the
  * same 16 TiB).  That is a divergence, but a harmless one: it can only
- * move the bound, and the fallback is permissive either way. */
-static long long volume_max_file_size(HANDLE h)
-{
-	IO_STATUS_BLOCK io;
-	FILE_FS_SIZE_INFORMATION fsi;
-	unsigned long long cluster, lim;
-
-	if (!NT_SUCCESS(NtQueryVolumeInformationFile(h, &io, &fsi, sizeof fsi, FileFsSizeInformation)))
-		return LLONG_MAX;
-	cluster = (unsigned long long)fsi.SectorsPerAllocationUnit * fsi.BytesPerSector;
-	if (!cluster) return LLONG_MAX;
-	lim = cluster * 4294967295ULL;
-	return lim > (unsigned long long)LLONG_MAX ? LLONG_MAX : (long long)lim;
-}
+ * move the bound, and the fallback is permissive either way.
+ *
+ * The query itself and the derivation above now live in
+ * __plat_volume_max_file_size() (src/internal/plat_fcntl.h) -- this
+ * comment stays here, where the decision it documents is made. */
 
 int posix_fallocate(int fd, off_t offset, off_t len)
 {
 	struct __fd *f = __fd_get(fd);
-	IO_STATUS_BLOCK io;
-	FILE_STANDARD_INFORMATION si;
-	FILE_ALLOCATION_INFORMATION ai;
-	FILE_END_OF_FILE_INFORMATION eof;
-	NTSTATUS st;
-	long long want;
+	long long want, alloc_size, eof;
+	int grow_alloc;
 
 	if (!f) return EBADF;
 	if (offset < 0 || len < 0) return EINVAL;
@@ -225,104 +213,18 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 	 * greater than the maximum file size".  Like ftruncate, this cannot
 	 * partially succeed, so it fails outright. */
 	if (__fsize_allow(want) < 0) return EFBIG;
-	if (want > 4LL * 1024 * 1024 * 1024 && want > volume_max_file_size(f->h))
+	if (want > 4LL * 1024 * 1024 * 1024 && want > __plat_volume_max_file_size(f->h))
 		return EFBIG;
 
-	st = NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation);
-	if (!NT_SUCCESS(st)) return __errno_from_status(st);
+	if (__plat_file_extent(f->h, &alloc_size, &eof) < 0) return errno;
 
 	/* The second half of this guard is a data-loss interlock, not an
-	 * optimisation.  ZwSetInformationFile(FileAllocationInformation) is
-	 * documented (ntifs.h FILE_ALLOCATION_INFORMATION, "Remarks") as: "If
-	 * the allocation size is set to a value that is less than the
-	 * end-of-file position, the end-of-file position is automatically
-	 * adjusted to match the allocation size."  The requested size is also
-	 * rounded up to the filesystem's cluster size first, so the value that
-	 * is compared against EndOfFile is not the one passed in.
-	 *
-	 * `want > si.AllocationSize` alone is safe only while AllocationSize
-	 * >= EndOfFile, which is the ordinary NTFS case but is exactly what a
-	 * sparse or compressed file breaks: such a file's allocation is
-	 * deliberately smaller than its size.  On one -- EndOfFile 16384,
-	 * AllocationSize 0 -- posix_fallocate(fd, 0, 100) would have passed
-	 * the guard, requested an allocation of 100, had it rounded to one
-	 * cluster, and had the file truncated to that cluster.  POSIX
-	 * (posix_fallocate) never shrinks a file: "If the offset+len is beyond
-	 * the current file size, then posix_fallocate() shall adjust the file
-	 * size"; below that it changes no size at all.  So requesting an
-	 * allocation smaller than the current EndOfFile is never something
-	 * this function may do.
-	 *
-	 * Skipping the call is preferred to clamping the request up to
-	 * si.EndOfFile.  Clamping would satisfy the allocation guarantee for
-	 * the requested range, but it would also de-sparsify the entire file:
-	 * posix_fallocate(fd, 0, 1) on a terabyte-sized sparse file would ask
-	 * for a terabyte of clusters and most likely return ENOSPC.  Turning a
-	 * hundred-byte request into a whole-file materialisation -- or into a
-	 * hard failure -- is a worse outcome than under-delivering an
-	 * allocation guarantee on a file shape whose whole purpose is to not
-	 * have that allocation.  Nothing is destroyed either way.
-	 *
-	 * DO NOT DELETE THE SECOND CONJUNCT AS REDUNDANT.  It reads that way
-	 * from here -- on a file whose AllocationSize >= EndOfFile, want >
-	 * AllocationSize already implies want > EndOfFile -- and that is true
-	 * of real NTFS, where a file extended with SetEndOfFile gets real
-	 * clusters.  It is not true under Wine, which implements extension
-	 * with ftruncate(), producing a hole: st_blocks is 0, so
-	 * AllocationSize reads 0 for an ORDINARY file created the normal way,
-	 * not merely for one deliberately marked sparse.  Under Wine the
-	 * first test is therefore trivially true in the common case and this
-	 * conjunct is the only thing preventing the truncation.  Measured on
-	 * Windows 11 22621 by the Wine-divergence session: a non-sparse file
-	 * of EndOfFile 16384 reports AllocationSize 16384 on NTFS, and 0
-	 * under Wine.  (A genuinely sparse file reports 0 on both -- that
-	 * part Wine gets right.)
-	 *
-	 * Not reproduced from inside this tree: ntlibc has no FSCTL_SET_SPARSE
-	 * and Wine's FSCTL_SET_ZERO_DATA returns STATUS_NOT_SUPPORTED, so a
-	 * deliberately sparse file cannot be built here.  That negative result
-	 * is what the interlock was written without -- it rests on the
-	 * documented FileAllocationInformation rule above.  The Wine finding
-	 * arrived afterwards and says the guard is exercised in practice
-	 * anyway, by ordinary files, without anyone creating a sparse one. */
-	if (want > si.AllocationSize && want >= si.EndOfFile) {
-		ai.AllocationSize = want;
-		st = NtSetInformationFile(f->h, &io, &ai, sizeof ai, FileAllocationInformation);
-		/* Real Windows honours this; Wine's ntdll does not implement
-		 * FileAllocationInformation at all (it appears only in the
-		 * set-info size table in dlls/ntdll/unix/file.c and falls
-		 * through to the default arm) and every other failure short of
-		 * that is a real error worth reporting (e.g. ENOSPC). Falling
-		 * through on "no such information class here" still leaves the
-		 * EndOfFile extension below to grow the file -- a strict
-		 * reading of posix_fallocate() loses the "no later write can
-		 * ENOSPC" guarantee on such a system, but the alternative is
-		 * failing a real Windows-capable call every time it merely runs
-		 * under Wine, which is worse than the degraded guarantee.
-		 *
-		 * Branch on the *status*, not on __errno_from_status().  The
-		 * errno mapping is a lossy projection: it folds many distinct
-		 * statuses onto one value, so a test against it silently
-		 * widens.  Concretely, Wine reports the same missing set-info
-		 * case as STATUS_NOT_IMPLEMENTED natively but as
-		 * STATUS_INVALID_INFO_CLASS under WOW64; the latter maps to
-		 * EINVAL, so an ENOSYS test tolerated the gap on x86_64 and
-		 * rejected it on i386.  Widening the test to EINVAL would be
-		 * worse still -- EINVAL also carries STATUS_INVALID_PARAMETER,
-		 * STATUS_INFO_LENGTH_MISMATCH and STATUS_DATATYPE_MISALIGNMENT,
-		 * turning this fallback into a bug-hider.  Whenever the status
-		 * is in hand, decide from it. */
-		if (!NT_SUCCESS(st)
-		    && st != STATUS_NOT_IMPLEMENTED
-		    && st != STATUS_NOT_SUPPORTED
-		    && st != STATUS_INVALID_DEVICE_REQUEST
-		    && st != STATUS_INVALID_INFO_CLASS)
-			return __errno_from_status(st);
-	}
-	if (want > si.EndOfFile) {
-		eof.EndOfFile = want;
-		st = NtSetInformationFile(f->h, &io, &eof, sizeof eof, FileEndOfFileInformation);
-		if (!NT_SUCCESS(st)) return __errno_from_status(st);
-	}
-	return 0;
+	 * optimisation -- see src/internal/plat_fcntl.h's __plat_fallocate()
+	 * and its implementation (src/fcntl/nt/plat_fcntl.c) for the full
+	 * account of why AllocationSize and EndOfFile must be compared
+	 * separately rather than just against `want`, including the sparse-
+	 * file and Wine-hole cases that make the second conjunct load-
+	 * bearing rather than redundant. */
+	grow_alloc = want > alloc_size && want >= eof;
+	return __plat_fallocate(f->h, want, eof, grow_alloc);
 }

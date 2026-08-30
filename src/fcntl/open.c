@@ -21,20 +21,17 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_fd.h"
+#include "plat_fcntl.h"
 
 int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
-                  HANDLE *out, int *typeout, int *vfsout, int *vfsnativeout)
+                  __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
 {
 	struct __ntpath np;
-	IO_STATUS_BLOCK io;
-	ACCESS_MASK access;
-	ULONG disposition, options, attrs;
-	NTSTATUS st;
-	HANDLE h;
 	int type;
 	unsigned char mode_ea[32];
 	void *ea = 0;
-	ULONG ea_len = 0;
+	unsigned ea_len = 0;
 	int vfs, native;
 
 	*vfsout = __VFS_NONE;
@@ -51,10 +48,8 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
 		if (fd >= 0) {
 			struct __fd *f = __fd_get(fd);
 			if (!f) return -1;
-			st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
-			                       flags & O_CLOEXEC ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
-			if (!NT_SUCCESS(st)) { __set_errno_status(st); return -1; }
-			*out = h; *typeout = f->type;
+			if (__plat_dup(f->h, !(flags & O_CLOEXEC), out) < 0) return -1;
+			*typeout = f->type;
 			*vfsout = f->vfs; *vfsnativeout = f->vfs_native;
 			return 0;
 		}
@@ -91,84 +86,24 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE | (flags & O_CLOEXEC ? 0 : OBJ_INHERIT)) < 0)
 		return -1;
 
-	access = SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_READ_EA;
-	switch (flags & O_ACCMODE) {
-	case O_RDONLY: access |= FILE_GENERIC_READ; break;
-	case O_WRONLY: access |= FILE_GENERIC_WRITE; break;
-	case O_RDWR:   access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE; break; // NOLINT(misc-redundant-expression) -- both masks include SYNCHRONIZE, harmless ORed twice
-	/* The fourth access mode, 03, is O_EXEC and O_SEARCH -- equal
-	 * values, as fcntl.h.html permits.  Refused, not served: each asks
-	 * for a handle that can do LESS than a read handle (execute-only on
-	 * a file, traverse-only on a directory), so quietly widening either
-	 * to O_RDONLY would grant more access than the caller asked for and
-	 * return success -- the one way a request to be restricted must not
-	 * fail.  [EINVAL] "The value of the oflag argument is not valid" is
-	 * also what this arm answered before those two names existed, so
-	 * naming them changed no behaviour.  Serving them for real means
-	 * FILE_EXECUTE / FILE_TRAVERSE access masks and the fd-table and
-	 * read()/write() checks that go with a mode neither reads nor
-	 * writes; that is not done here. */
-	default: __ntpath_free(&np); errno = EINVAL; return -1;
-	}
-	if (flags & O_APPEND) access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA;
-	if (flags & O_TRUNC) access |= FILE_WRITE_DATA;   /* overwrite needs it */
-	if (flags & O_PATH) access = SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_READ_EA;
-
-	switch (flags & (O_CREAT | O_EXCL | O_TRUNC)) {
-	case 0:
-	case O_EXCL:                  disposition = FILE_OPEN; break;
-	case O_CREAT:                 disposition = FILE_OPEN_IF; break;
-	case O_CREAT | O_EXCL:
-	case O_CREAT | O_EXCL | O_TRUNC: disposition = FILE_CREATE; break;
-	case O_TRUNC:
-	case O_TRUNC | O_EXCL:        disposition = FILE_OVERWRITE; break;
-	case O_CREAT | O_TRUNC:       disposition = FILE_OVERWRITE_IF; break;
-	default: disposition = FILE_OPEN; break;
-	}
-
-	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT;
-	if (flags & O_DIRECTORY) options |= FILE_DIRECTORY_FILE;
-	else if (disposition != FILE_OPEN && disposition != FILE_OPEN_IF) options |= FILE_NON_DIRECTORY_FILE;
-	if (flags & O_NOFOLLOW) options |= FILE_OPEN_REPARSE_POINT;
-	if (flags & (O_SYNC | O_DSYNC)) options |= FILE_WRITE_THROUGH;
-	if (flags & O_DIRECT) options |= FILE_NO_INTERMEDIATE_BUFFERING;
-
-	attrs = FILE_ATTRIBUTE_NORMAL;
 	/* open.html DESCRIPTION: mode is ANDed with the complement of umask.
-	 * NtCreateFile only applies its EA buffer when it creates the object,
-	 * so O_CREAT on an existing file cannot overwrite that file's mode. */
+	 * The $LXMOD extended-attribute buffer is this library's own POSIX-
+	 * mode-persistence strategy (see src/stat/lxmod.c), built here and
+	 * handed to the backend rather than built there, exactly like
+	 * mman.c's reservation table stays in the front door: it is not an
+	 * NT interpretation step, it is this library's own choice of how to
+	 * remember a POSIX mode at all. */
 	if (flags & O_CREAT) {
 		mode = mode & ~__umask_get() & 07777;
-		if (!(mode & 0222)) attrs = FILE_ATTRIBUTE_READONLY;
 		ea_len = __lxmod_create_buffer(mode_ea, S_IFREG | mode);
 		ea = mode_ea;
 	}
 
-	st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS,
-	                  disposition, options, ea, ea_len);
-
-	/* A directory opened without O_DIRECTORY for reading: allowed by
-	 * POSIX (reads then fail with EISDIR); NT refuses FILE_NON_DIRECTORY
-	 * only when we asked for it, and refuses data access on directories
-	 * with STATUS_FILE_IS_A_DIRECTORY, so retry as a directory. */
-	if (st == STATUS_FILE_IS_A_DIRECTORY && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_CREAT)) {
-		options |= FILE_DIRECTORY_FILE;
-		access = SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES |
-		         FILE_READ_EA | FILE_TRAVERSE;
-		st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS, FILE_OPEN, options, 0, 0);
+	{
+		int r = __plat_create_file(&np, flags, mode, ea, ea_len, out, &type);
+		__ntpath_free(&np);
+		if (r < 0) return -1;
 	}
-	/* Writing to a directory is EISDIR, not EACCES. */
-	if (st == STATUS_FILE_IS_A_DIRECTORY) { __ntpath_free(&np); errno = EISDIR; return -1; }
-	__ntpath_free(&np);
-	if (!NT_SUCCESS(st)) {
-		/* FILE_CREATE on an existing directory, etc. */
-		if (st == STATUS_OBJECT_NAME_COLLISION) errno = EEXIST;
-		else __set_errno_status(st);
-		return -1;
-	}
-
-	type = (options & FILE_DIRECTORY_FILE) ? __FD_DIR : 0;
-	*out = h;
 	*typeout = type;
 	return 0;
 }
@@ -176,7 +111,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
 int openat(int dirfd, const char *path, int flags, ...)
 {
 	mode_t mode = 0;
-	HANDLE h;
+	__plat_handle_t h;
 	int type, fd, vfs, vfs_native;
 
 	if (flags & O_CREAT) {
@@ -187,7 +122,7 @@ int openat(int dirfd, const char *path, int flags, ...)
 	}
 	if (__open_handle(dirfd, path, flags, mode, &h, &type, &vfs, &vfs_native) < 0) return -1;
 	fd = __fd_install(h, flags & (O_APPEND | O_NONBLOCK | O_CLOEXEC | O_ACCMODE), type);
-	if (fd < 0) { NtClose(h); return -1; }
+	if (fd < 0) { __plat_close(h); return -1; }
 	__fds[fd].vfs = (unsigned char)vfs;
 	__fds[fd].vfs_native = (unsigned char)vfs_native;
 	return fd;

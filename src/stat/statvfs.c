@@ -75,70 +75,7 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
-
-static int statvfs_handle(HANDLE h, struct statvfs *buf)
-{
-	IO_STATUS_BLOCK io;
-	FILE_FS_FULL_SIZE_INFORMATION fsi;
-	FILE_FS_SIZE_INFORMATION si;
-	FILE_FS_DEVICE_INFORMATION di;
-	/* FileSystemName/VolumeLabel are variable-length; over-allocate so
-	 * the fixed head is never truncated by a long name.  Only the
-	 * fixed members are read. */
-	union { FILE_FS_ATTRIBUTE_INFORMATION a; char pad[sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 256 * sizeof(WCHAR)]; } ab;
-	union { FILE_FS_VOLUME_INFORMATION v; char pad[sizeof(FILE_FS_VOLUME_INFORMATION) + 256 * sizeof(WCHAR)]; } vb;
-	NTSTATUS s;
-	unsigned long long cluster;
-
-	memset(buf, 0, sizeof *buf);
-
-	s = NtQueryVolumeInformationFile(h, &io, &fsi, sizeof fsi, FileFsFullSizeInformation);
-	if (NT_SUCCESS(s)) {
-		cluster = (unsigned long long)fsi.SectorsPerAllocationUnit * fsi.BytesPerSector;
-		buf->f_blocks = (fsblkcnt_t)fsi.TotalAllocationUnits;
-		buf->f_bfree = (fsblkcnt_t)fsi.ActualAvailableAllocationUnits;
-		buf->f_bavail = (fsblkcnt_t)fsi.CallerAvailableAllocationUnits;
-	} else {
-		s = NtQueryVolumeInformationFile(h, &io, &si, sizeof si, FileFsSizeInformation);
-		if (!NT_SUCCESS(s)) return __set_errno_status(s);
-		cluster = (unsigned long long)si.SectorsPerAllocationUnit * si.BytesPerSector;
-		buf->f_blocks = (fsblkcnt_t)si.TotalAllocationUnits;
-		/* This class reports only the caller-visible free count; with
-		 * no second figure to distinguish them, f_bfree is that same
-		 * number rather than a guess at what quota is hiding. */
-		buf->f_bavail = buf->f_bfree = (fsblkcnt_t)si.AvailableAllocationUnits;
-	}
-
-	/* fstatvfs.html ERRORS: [EOVERFLOW] "One of the values to be
-	 * returned cannot be represented correctly in the structure
-	 * pointed to by buf."  f_bsize/f_frsize are `unsigned long`, which
-	 * is 32-bit under this target's LLP64 model on both arches, while
-	 * the cluster size is computed from two ULONGs and could in
-	 * principle exceed it.  The block *counts* cannot overflow:
-	 * fsblkcnt_t is unsigned 64-bit and the NT counters are signed
-	 * 64-bit LARGE_INTEGERs. */
-	if (cluster > (unsigned long)-1) { errno = EOVERFLOW; return -1; }
-	buf->f_bsize = buf->f_frsize = (unsigned long)cluster;
-
-	/* f_files/f_ffree/f_favail stay 0 from the memset above -- see the
-	 * banner.  NT exposes no file-serial-number pool. */
-
-	buf->f_flag = ST_NOSUID;
-
-	s = NtQueryVolumeInformationFile(h, &io, &ab, sizeof ab, FileFsAttributeInformation);
-	if (NT_SUCCESS(s)) {
-		if (ab.a.FileSystemAttributes & FILE_READ_ONLY_VOLUME) buf->f_flag |= ST_RDONLY;
-		if (ab.a.MaximumComponentNameLength > 0) buf->f_namemax = (unsigned long)ab.a.MaximumComponentNameLength;
-	}
-
-	s = NtQueryVolumeInformationFile(h, &io, &di, sizeof di, FileFsDeviceInformation);
-	if (NT_SUCCESS(s) && (di.Characteristics & FILE_READ_ONLY_DEVICE)) buf->f_flag |= ST_RDONLY;
-
-	s = NtQueryVolumeInformationFile(h, &io, &vb, sizeof vb, FileFsVolumeInformation);
-	if (NT_SUCCESS(s)) buf->f_fsid = vb.v.VolumeSerialNumber;
-
-	return 0;
-}
+#include "plat_stat.h"
 
 int fstatvfs(int fd, struct statvfs *buf)
 {
@@ -153,15 +90,12 @@ int fstatvfs(int fd, struct statvfs *buf)
 		buf->f_namemax = 255;
 		return 0;
 	}
-	return statvfs_handle(f->h, buf);
+	return __plat_statvfs(f->h, buf);
 }
 
 int statvfs(const char *__restrict path, struct statvfs *__restrict buf)
 {
 	struct __ntpath np;
-	IO_STATUS_BLOCK io;
-	HANDLE h;
-	NTSTATUS s;
 	int r, vfs;
 
 	if (!buf) { errno = EFAULT; return -1; }
@@ -177,15 +111,8 @@ int statvfs(const char *__restrict path, struct statvfs *__restrict buf)
 		buf->f_namemax = 255;
 		return 0;
 	}
-	/* "Read, write, or execute permission of the named file is not
-	 * required" (DESCRIPTION) -- FILE_READ_ATTRIBUTES is the NT access
-	 * mask that asks for none of the three. */
 	if (__ntpath(path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	s = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,
-	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
+	r = __plat_statvfs_path(&np, buf);
 	__ntpath_free(&np);
-	if (!NT_SUCCESS(s)) return __set_errno_status(s);
-	r = statvfs_handle(h, buf);
-	NtClose(h);
 	return r;
 }

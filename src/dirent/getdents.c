@@ -16,6 +16,7 @@
 #include <string.h>
 #include <errno.h>
 #include "dirent_internal.h"
+#include "plat_dirent.h"
 
 static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 {
@@ -41,9 +42,8 @@ int getdents(int fd, struct dirent *out, size_t size)
 {
 	struct __fd *f = __fd_get(fd);
 	unsigned char buf[8192];
-	IO_STATUS_BLOCK io;
-	NTSTATUS st;
 	FILE_ID_BOTH_DIR_INFORMATION *fi;
+	ssize_t n;
 	size_t used = 0;
 
 	if (!f) return -1;
@@ -75,11 +75,10 @@ int getdents(int fd, struct dirent *out, size_t size)
 		return (int)used;
 	}
 
-	st = NtQueryDirectoryFile(f->h, 0, 0, 0, &io, buf, sizeof buf,
-	                          FileIdBothDirectoryInformation, FALSE, 0, FALSE);
-	if (st == STATUS_NO_MORE_FILES)
+	n = __plat_dir_read(f->h, buf, sizeof buf, 0);
+	if (n < 0) return -1;
+	if (n == 0)
 		return f->vfs_native ? append_missing(f, out, size) : 0;
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 
 	fi = (FILE_ID_BOTH_DIR_INFORMATION *)buf;
 	for (;;) {

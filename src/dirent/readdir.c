@@ -15,13 +15,13 @@
 #include <string.h>
 #include <errno.h>
 #include "dirent_internal.h"
+#include "plat_dirent.h"
 
 FILE_ID_BOTH_DIR_INFORMATION *__dirstream_next(DIR *dp)
 {
 	FILE_ID_BOTH_DIR_INFORMATION *fi;
-	IO_STATUS_BLOCK io;
-	NTSTATUS st;
-	HANDLE h;
+	__plat_handle_t h;
+	ssize_t n;
 
 	if (dp->bufpos < dp->buflen) {
 		fi = (FILE_ID_BOTH_DIR_INFORMATION *)(dp->buf + dp->bufpos);
@@ -33,13 +33,12 @@ FILE_ID_BOTH_DIR_INFORMATION *__dirstream_next(DIR *dp)
 	h = __fd_handle(dp->fd);
 	if (!h) return 0;      /* __fd_handle already set errno = EBADF */
 
-	st = NtQueryDirectoryFile(h, 0, 0, 0, &io, dp->buf, __DIRBUF_SIZE,
-	                          FileIdBothDirectoryInformation, FALSE, 0, dp->restart);
+	n = __plat_dir_read(h, dp->buf, __DIRBUF_SIZE, dp->restart);
 	dp->restart = 0;
-	if (st == STATUS_NO_MORE_FILES) { dp->done = 1; return 0; }
-	if (!NT_SUCCESS(st)) { __set_errno_status(st); return 0; }
+	if (n < 0) return 0;   /* errno already set by the backend */
+	if (n == 0) { dp->done = 1; return 0; }
 
-	dp->buflen = (size_t)io.Information;
+	dp->buflen = (size_t)n;
 	dp->bufpos = 0;
 	fi = (FILE_ID_BOTH_DIR_INFORMATION *)dp->buf;
 	dp->bufpos += fi->NextEntryOffset ? fi->NextEntryOffset : dp->buflen;

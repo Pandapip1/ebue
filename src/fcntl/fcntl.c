@@ -7,11 +7,13 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
+#include "plat_fd.h"
+#include "plat_fcntl.h"
 
 struct record_lock_state {
-	HANDLE h;
-	LARGE_INTEGER off;
-	LARGE_INTEGER len;
+	__plat_handle_t h;
+	long long off;
+	long long len;
 	pid_t owner;
 	unsigned char held;
 };
@@ -24,12 +26,8 @@ struct record_lock_state {
 static struct record_lock_state record_locks[FD_MAX];
 
 static int record_lock_range(struct __fd *f, const struct flock *l,
-			     LARGE_INTEGER *off, LARGE_INTEGER *len)
+			     long long *off, long long *len)
 {
-	IO_STATUS_BLOCK io;
-	FILE_POSITION_INFORMATION pi;
-	FILE_STANDARD_INFORMATION si;
-	NTSTATUS st;
 	long long base, start, length;
 
 	switch (l->l_whence) {
@@ -37,16 +35,12 @@ static int record_lock_range(struct __fd *f, const struct flock *l,
 		base = 0;
 		break;
 	case SEEK_CUR:
-		st = NtQueryInformationFile(f->h, &io, &pi, sizeof pi,
-		                            FilePositionInformation);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		base = pi.CurrentByteOffset;
+		base = __plat_seek_query(f->h, 0);
+		if (base < 0) return -1;
 		break;
 	case SEEK_END:
-		st = NtQueryInformationFile(f->h, &io, &si, sizeof si,
-		                            FileStandardInformation);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		base = si.EndOfFile;
+		base = __plat_seek_query(f->h, 1);
+		if (base < 0) return -1;
 		break;
 	default:
 		errno = EINVAL;
@@ -81,9 +75,7 @@ static int record_lock_range(struct __fd *f, const struct flock *l,
 static int record_lock(int fd, struct __fd *f, int cmd, struct flock *l)
 {
 	struct record_lock_state *held = &record_locks[fd];
-	IO_STATUS_BLOCK io;
-	LARGE_INTEGER off = 0, len = 0;
-	NTSTATUS st;
+	long long off = 0, len = 0;
 	pid_t owner = getpid();
 	int exclusive;
 
@@ -97,6 +89,7 @@ static int record_lock(int fd, struct __fd *f, int cmd, struct flock *l)
 		held->held = 0;
 
 	if (cmd == F_GETLK) {
+		int conflicting;
 		if (l->l_type == F_UNLCK) { errno = EINVAL; return -1; }
 		if (held->held && off < held->off + held->len &&
 		    held->off < off + len) {
@@ -104,34 +97,29 @@ static int record_lock(int fd, struct __fd *f, int cmd, struct flock *l)
 			return 0;
 		}
 		exclusive = l->l_type == F_WRLCK;
-		st = NtLockFile(f->h, 0, 0, 0, 0, &off, &len, 0, 1, exclusive);
-		if (NT_SUCCESS(st)) {
-			st = NtUnlockFile(f->h, &io, &off, &len, 0);
-			if (!NT_SUCCESS(st)) return __set_errno_status(st);
-			l->l_type = F_UNLCK;
-			return 0;
-		}
-		if (st == STATUS_FILE_LOCK_CONFLICT || st == STATUS_LOCK_NOT_GRANTED) {
+		if (__plat_lock_probe(f->h, off, len, exclusive, &conflicting) < 0) return -1;
+		if (conflicting) {
 			/* NT does not expose the owning process for a byte-range lock. */
 			l->l_pid = (pid_t)-1;
 			return 0;
 		}
-		return __set_errno_status(st);
+		l->l_type = F_UNLCK;
+		return 0;
 	}
 
 	if (l->l_type == F_UNLCK) {
 		/* See record_locks' Wine note above. */
 		if (!held->held || held->off != off || held->len != len) return 0;
-		st = NtUnlockFile(f->h, &io, &off, &len, 0);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		held->held = 0;
+		{
+			int r = __plat_lock_clear(f->h, off, len);
+			held->held = 0;
+			if (r < 0) return -1;
+		}
 		return 0;
 	}
 
 	exclusive = l->l_type == F_WRLCK;
-	st = NtLockFile(f->h, 0, 0, 0, 0, &off, &len, 0,
-	                cmd == F_SETLK, exclusive);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (__plat_lock_set(f->h, off, len, exclusive, cmd == F_SETLKW) < 0) return -1;
 	held->h = f->h;
 	held->owner = owner;
 	held->off = off;
@@ -155,14 +143,11 @@ int fcntl(int fd, int cmd, ...)
 	case F_DUPFD:
 	case F_DUPFD_CLOEXEC: {
 		int nfd;
-		HANDLE h;
-		NTSTATUS st;
+		__plat_handle_t h;
 		if (arg < 0 || arg >= FD_MAX) { errno = EINVAL; return -1; }
 		nfd = __fd_alloc((int)arg);
 		if (nfd < 0) return -1;
-		st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
-		                       cmd == F_DUPFD_CLOEXEC ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (__plat_dup(f->h, cmd != F_DUPFD_CLOEXEC, &h) < 0) return -1;
 		__fd_install_at(nfd, h, (f->flags & ~O_CLOEXEC) | (cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0), f->type);
 		__fds[nfd].pad = f->pad;
 		__fds[nfd].shm_mode_valid = f->shm_mode_valid;
@@ -178,15 +163,12 @@ int fcntl(int fd, int cmd, ...)
 	case F_GETFD:
 		return f->flags & O_CLOEXEC ? FD_CLOEXEC : 0;
 	case F_SETFD: {
-		HANDLE h;
-		NTSTATUS st;
+		__plat_handle_t h;
 		unsigned want = arg & FD_CLOEXEC ? O_CLOEXEC : 0;
 		if ((f->flags & O_CLOEXEC) == want) return 0;
 		/* Inheritability is a property of the handle; remake it. */
-		st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
-		                       want ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		NtClose(f->h);
+		if (__plat_dup(f->h, !want, &h) < 0) return -1;
+		__plat_close(f->h);
 		f->h = h;
 		__mq_fd_replaced(fd, h);
 		f->flags = (f->flags & ~O_CLOEXEC) | want;

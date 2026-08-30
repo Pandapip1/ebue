@@ -53,36 +53,23 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <string.h>
-#include <limits.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_ioctl.h"
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
 #endif
 
 static int fionread_pipe(struct __fd *f, int *out)
 {
-	IO_STATUS_BLOCK io;
-	FILE_PIPE_LOCAL_INFORMATION pli;
-	NTSTATUS st = NtQueryInformationFile(f->h, &io, &pli, sizeof pli, FilePipeLocalInformation);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	*out = pli.ReadDataAvailable > (ULONG)INT_MAX ? INT_MAX
-	     : (int)pli.ReadDataAvailable;
-	return 0;
+	return __plat_fionread_pipe(f->h, out);
 }
 
 static int fionread_file(struct __fd *f, int *out)
 {
-	IO_STATUS_BLOCK io;
-	FILE_STANDARD_INFORMATION si;
-	FILE_POSITION_INFORMATION pi;
-	NTSTATUS st;
-
-	st = NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	st = NtQueryInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	if (!__file_remaining_count(si.EndOfFile, pi.CurrentByteOffset, out)) {
+	long long eof, pos;
+	if (__plat_file_eof_and_pos(f->h, &eof, &pos) < 0) return -1;
+	if (!__file_remaining_count(eof, pos, out)) {
 		errno = EOVERFLOW;
 		return -1;
 	}
