@@ -6,9 +6,16 @@ int open(const char *, int, ...);
 int close(int);
 long write(int, const void *, size_t);
 
-void opaque(int fd)
+/* A literal, made-up descriptor -- concretely known to this analysis to
+ * not be the result of any open()/socket()/... it could have tracked
+ * (it is not even a symbol, see ResourceLifecycleChecker::checkResource's
+ * own comment), and not one of the standard streams isStandardDescriptor()
+ * recognises either. Real, checked evidence of a bug, unlike an opaque
+ * parameter (see resource-safe.c's descriptor_borrow for why that shape
+ * is trusted instead). */
+void bogus_literal(void)
 {
-	write(fd, "x", 1); /* ownership-expect: resource-unproved */
+	write(99, "x", 1); /* ownership-expect: resource-unproved */
 }
 
 void release_twice(void)

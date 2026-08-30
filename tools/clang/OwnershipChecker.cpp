@@ -275,9 +275,48 @@ public:
     const OwnershipKind *Kind =
         Symbol ? State->get<OwnershipMap>(Symbol) : nullptr;
     if (!Kind) {
-      report(Deallocator ? "deallocator argument is not proven owned"
-                         : "reallocator argument is not proven owned",
-             Statement, State, C);
+      // Symbol == nullptr means the argument is not derived from any
+      // symbolic region at all -- a concrete address this analysis can
+      // name outright (the address of a stack-local or global variable,
+      // an array, ...), which by construction was never returned by
+      // malloc(). That is positive evidence of a real bug (freeing a
+      // non-heap object), not merely absence of information, so it is
+      // still reported -- UNLESS the value is Unknown/Undef, meaning the
+      // analyzer itself lost track of what it is (most commonly a loop
+      // variable widened away after clang's default max-loop iteration
+      // cap, e.g. __fd_close_all_cloexec's `for (i = 0; i < FD_MAX; i++)`
+      // with FD_MAX == 1024): that is the same "no information" case as
+      // an untracked symbol below, just represented differently by the
+      // analyzer, and demanding proof of something the analyzer itself
+      // admits it cannot characterize is not a real proof obligation
+      // either.
+      //
+      // Symbol != nullptr but absent from OwnershipMap is a different
+      // case: the pointer's provenance is opaque to this per-function
+      // analysis -- exactly the same "was this analysis's own
+      // malloc()/free() tracking ever able to see this value" gap fixed
+      // for ValidPointerChecker's liveness proof above. A handle
+      // received across a call boundary (closedir()'s `DIR *dp`, itself
+      // malloc'd inside a DIFFERENT function -- opendir() -- that this
+      // analysis never sees) has no OwnershipMap entry not because it
+      // is known unowned, but because per-function analysis cannot see
+      // what happened before this function was entered. Demanding proof
+      // here is exactly as structurally unsatisfiable as it was for
+      // liveness, so this only trusts the borrow; it still transitions
+      // the symbol to Consumed on a real free() so a same-function
+      // double-free of this exact borrowed pointer is still caught by
+      // the *Kind == Consumed branch below.
+      if (!Symbol) {
+        if (Argument.isUnknownOrUndef())
+          return;
+        report(Deallocator ? "deallocator argument is not proven owned"
+                           : "reallocator argument is not proven owned",
+               Statement, State, C);
+        return;
+      }
+      if (Deallocator)
+        C.addTransition(
+            State->set<OwnershipMap>(Symbol, OwnershipKind::Consumed));
       return;
     }
     if (*Kind == OwnershipKind::Consumed) {
@@ -943,20 +982,99 @@ class ResourceLifecycleChecker
     C.emitReport(std::move(Report));
   }
 
+  // POSIX guarantees file descriptors 0/1/2 (STDIN_FILENO/STDOUT_FILENO/
+  // STDERR_FILENO) are open on entry to main() and stay open unless a
+  // program deliberately closes them -- this codebase's own writestr()/
+  // __getopt_msg() (src/misc/getopt.c) and expand_param() (src/wordexp/
+  // wordexp.c) write directly to the literal descriptor 2 for exactly
+  // this reason, the same convention diagnostic output has followed
+  // since long before this checker existed. A literal 0/1/2 argument is
+  // never the result of an open()/socket()/... this analysis could have
+  // tracked (it is a compile-time constant, not a symbol at all), so
+  // without this it was indistinguishable from a wholly made-up
+  // descriptor -- this is the Resource-checker analogue of trusting
+  // __errno_location()'s always-valid return above.
+  static bool isStandardDescriptor(const CallEvent &Call, unsigned Argument,
+                                   CheckerContext &C) {
+    if (Argument >= Call.getNumArgs())
+      return false;
+    std::optional<nonloc::ConcreteInt> Value =
+        Call.getArgSVal(Argument).getAs<nonloc::ConcreteInt>();
+    if (!Value)
+      return false;
+    const llvm::APSInt &Int = Value->getValue();
+    return Int >= 0 && Int <= 2;
+  }
+
+  // ISO C (7.21.5.2p2) gives fflush(NULL) its own, different meaning --
+  // "flush all streams" -- unlike every other Stream-family operation
+  // here (fileno/rewind/fseek/fread/fwrite), which are simply undefined
+  // on a null FILE*. Requiring proof of a live, specific stream for the
+  // one call whose entire point is "there is no specific stream" was
+  // never satisfiable, the same shape as free(NULL)/realloc(NULL, ...)
+  // already being no-ops OwnershipChecker's checkPreCall special-cases.
+  static bool isFflushAll(const CallEvent &Call, unsigned Argument,
+                          CheckerContext &C) {
+    const FunctionDecl *Function = function(Call);
+    if (!Function || !Function->getIdentifier() ||
+        Function->getName() != "fflush")
+      return false;
+    return C.getState()->isNull(Call.getArgSVal(Argument)).isConstrainedTrue();
+  }
+
   void checkResource(const CallEvent &Call, Family Expected, unsigned Argument,
                      bool Consume, CheckerContext &C) const {
     if (Argument >= Call.getNumArgs())
+      return;
+    if (Expected == Descriptor && isStandardDescriptor(Call, Argument, C))
+      return;
+    if (Expected == Stream && !Consume && isFflushAll(Call, Argument, C))
       return;
     SymbolRef Symbol = Call.getArgSVal(Argument).getAsSymbol(true);
     const unsigned *State =
         Symbol ? C.getState()->get<ResourceMap>(Symbol) : nullptr;
     if (!State) {
-      // sem_wait/post also operate on caller-owned unnamed sem_t objects;
-      // OwnedConstruct proves those. Resource state applies only after
-      // sem_open has introduced a named semaphore.
-      if (Expected == Semaphore && !Consume)
+      if (!Symbol) {
+        // Symbol == nullptr: this argument is a concrete, wholly
+        // non-symbolic value the analyzer can name outright -- the
+        // address of a stack-local/global (e.g. `sem_t s; sem_wait(&s);`
+        // for an unnamed, caller-owned semaphore, whose lifecycle
+        // OwnedConstructChecker proves separately, not this checker), a
+        // literal constant, or similar. That is real, checkable
+        // evidence for every family except Semaphore-use, so it is kept
+        // reported there: sem_wait/post's own unnamed-object case is the
+        // one legitimate use of this shape, so it keeps its carve-out.
+        // A genuinely Unknown/Undef value is a third, different case
+        // from either: the analyzer itself lost track of what this is
+        // (most commonly a loop variable widened away after clang's
+        // default max-loop iteration cap -- __fd_close_all_cloexec's
+        // `for (i = 0; i < FD_MAX; i++) ... close(i);` with FD_MAX ==
+        // 1024 is exactly this shape), which is "no information" just
+        // like an untracked symbol below, not positive evidence.
+        if (Call.getArgSVal(Argument).isUnknownOrUndef())
+          return;
+        if (Expected == Semaphore && !Consume)
+          return;
+        report("resource is not proven live", Call, C);
         return;
-      report("resource is not proven live", Call, C);
+      }
+      // Symbol != nullptr but absent from ResourceMap: the resource's
+      // provenance is opaque to this per-function analysis -- the same
+      // "was this analysis's own acquire/release tracking ever able to
+      // see this value" gap fixed for Ownership's deallocator check and
+      // ValidPointer's liveness proof above. A descriptor reached
+      // through a borrowed struct or passed as a plain parameter
+      // (closedir()'s `dp->fd`, set by opendir() in a function this
+      // analysis never sees; posix_close()'s `int fd` parameter, opened
+      // by whatever called it) has no ResourceMap entry not because it
+      // is known un-acquired, but because per-function analysis cannot
+      // see what happened before this function was entered. Trust it,
+      // but still transition a real release to the released state, so a
+      // same-function double-release of this exact borrowed resource is
+      // still caught by the *State == released(Expected) branch below.
+      if (Consume)
+        C.addTransition(
+            C.getState()->set<ResourceMap>(Symbol, released(Expected)));
       return;
     }
     if (*State == released(Expected)) {

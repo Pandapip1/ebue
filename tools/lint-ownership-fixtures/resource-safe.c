@@ -8,6 +8,7 @@ int close(int);
 long write(int, const void *, size_t);
 FILE *fopen(const char *, const char *);
 int fclose(FILE *);
+int fflush(FILE *);
 
 void descriptor(void)
 {
@@ -49,4 +50,28 @@ void handle_lifecycle(void)
 	HANDLE h;
 	NtCreateFile(&h, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 	NtClose(h);
+}
+
+/* A descriptor received as a plain parameter -- posix_close(int fd)'s
+ * own shape (src/unistd/posix_close.c: `return close(fd);`), and
+ * closedir()'s `dp->fd` read through a borrowed struct pointer. Just
+ * like Ownership's release_borrow (see safe.c's own comment for the
+ * full reasoning), ResourceMap can only ever gain a live entry for a
+ * symbol by watching THIS analysis's own open()/socket()/opendir()/...
+ * acquire it; a parameter's value exists before any code in this
+ * function has run, so no code on the callee side can ever satisfy that
+ * check. A literal, made-up descriptor is real evidence of a bug and is
+ * still reported (see resource-unsafe.c's bogus_literal). */
+void descriptor_borrow(int fd)
+{
+	write(fd, "x", 1);
+}
+
+/* fflush(NULL) is ISO C's own "flush every open stream" spelling (7.21.5.2p2),
+ * not a use of any one, specific FILE* this checker could ever have proof
+ * for -- see __assert_fail's real fflush(0) in src/exit/assert.c, matching
+ * musl's own convention here. */
+void flush_all(void)
+{
+	fflush(0);
 }

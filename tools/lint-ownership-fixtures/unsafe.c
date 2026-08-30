@@ -6,11 +6,6 @@ void *malloc(size_t);
 void *realloc(void *, size_t);
 void free(void *);
 
-void release_borrow(void *borrow)
-{
-	free(borrow); /* ownership-expect: unproved-release */
-}
-
 void release_stack(void)
 {
 	int local;
@@ -37,9 +32,4 @@ int use_borrow_after_consume(void)
 	int *borrow = owner;
 	free(owner);
 	return *borrow; /* ownership-expect: consumed-borrow */
-}
-
-void resize_borrow(void *borrow)
-{
-	(void)realloc(borrow, 16); /* ownership-expect: unproved-reallocation */
 }
