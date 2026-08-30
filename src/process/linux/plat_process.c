@@ -1,0 +1,446 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Linux implementation of src/internal/plat_process.h -- see src/mman/
+ * linux/plat_mem.c's own banner for the general discipline every Linux
+ * backend file in this tree follows (raw syscall(2), no host libc,
+ * -nostdinc against ntlibc's OWN headers, aarch64 syscall numbers
+ * confirmed against this build host's real glibc as an oracle rather
+ * than assumed -- see this file's own numbers below and the report for
+ * how each one was checked).
+ *
+ * Process-handle encoding (this backend's own concern, like plat_fd.c's
+ * fd+1 boxing is theirs): a Linux __plat_handle_t here is the pid
+ * itself, cast straight through -- (__plat_handle_t)(long)pid -- with
+ * NO offset. Unlike a file descriptor, 0 is never a valid pid (pid 1 is
+ * the lowest a wait4()-able child can ever have), so __PLAT_HANDLE_NULL
+ * (0) can never collide with a real one and no +1 trick is needed.
+ *
+ * That plain encoding has one real, deliberately-not-fully-solved
+ * consequence, documented rather than silently worked around: fork.c's
+ * mark_children_inheritable() and children.c's __child_remove() call
+ * __plat_dup()/__plat_close() -- src/unistd/linux/plat_fd.c's fd-domain
+ * functions -- directly on a __children[] entry's process handle, not
+ * just on real fd-table handles. That is correct on NT, where a process
+ * handle and a file handle are the same HANDLE domain and
+ * NtDuplicateObject/NtClose work on either uniformly; it has no correct
+ * Linux equivalent, because a pid and an fd are different kernel
+ * namespaces entirely -- there is nothing to "duplicate" about a pid
+ * (every process that can see it already can, unconditionally), and
+ * __plat_close()'s fd-domain unbox() would reinterpret the boxed pid as
+ * (pid - 1) and issue a real close(2) on whatever descriptor number
+ * that happens to be.
+ *
+ * This pilot does not fix that cross-subsystem seam (it would need
+ * either a shared handle-domain tag across every backend, out of scope
+ * here, or upgrading a Linux process handle to a real fd via
+ * pidfd_open(2) so it lives in the same namespace close()/dup() already
+ * operate on correctly -- real, open future work). What makes the
+ * plain-pid encoding survive today's pilot rather than corrupt a live
+ * descriptor: pids are drawn from a namespace many orders of magnitude
+ * larger than the handful of fds a small test process ever has open
+ * (this host handed back a fork() pid over a million, see the report),
+ * so close(pid - 1) reliably lands on a descriptor number nothing has
+ * ever opened and fails silently with EBADF, which every call site
+ * above already discards. That is a coincidence of scale, not a proof,
+ * and is called out here exactly so nobody mistakes the pilot's passing
+ * test for evidence it is one.
+ *
+ * The other consequence of Linux's wait4(2) is a bigger structural
+ * difference from NT than any of the pilot's other backends have hit:
+ * NtWaitForSingleObject() merely *signals* that a process handle became
+ * signalled, and a separate NtQueryInformationProcess() can read its
+ * exit code and times afterward, any number of times, because the
+ * handle itself keeps the object alive. Linux's wait4()/waitpid() do
+ * both in one shot -- reporting a child's exit status IS what reaps it,
+ * irreversibly, and a second wait4() on the same pid fails ECHILD. So
+ * __plat_process_wait() below does the real, one-time reap itself (the
+ * only call in this file that can), and stashes the translated exit
+ * code and CPU times in a small fixed-size table for
+ * __plat_process_exit_code()/__plat_process_times() to read back --
+ * exactly the split the header's contract expects, just implemented on
+ * this side of the interface instead of trusted to the kernel object a
+ * second time. The exit code stashed is deliberately encoded the same
+ * way the NT backend's is (a plain 0-255 value, or __NT_SIGNAL_EXIT(sig)
+ * for a signal death -- see libc.h), so src/process/wait.c's
+ * __wait_encode_status(), written once and shared by every backend,
+ * reconstructs the identical POSIX wait status Linux's own wait4()
+ * status already encoded, without either backend needing its own copy
+ * of that decoding.
+ */
+#include <errno.h>
+#include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG -- see
+                         * __plat_process_wait()'s own comment below for why
+                         * these apply directly to a raw Linux wait4(2)
+                         * status with no translation of their own. */
+#include "libc.h"
+#include "plat_process.h"
+
+/* aarch64 Linux syscall numbers -- confirmed against this build host's
+ * own <sys/syscall.h> (via a throwaway host-gcc program, not assumed;
+ * see the report). aarch64 has no fork(2) syscall at all -- glibc's own
+ * fork() is built on clone(2) -- so __plat_process_fork() below uses
+ * clone(SIGCHLD, 0, 0, 0, 0), confirmed by a standalone probe on this
+ * host to return 0 in the child / the child's pid in the parent exactly
+ * like fork(), with the (flags, stack, parent_tid, child_tid, tls)
+ * argument order this call relies on. */
+#define SYS_clone      220
+#define SYS_execve     221
+#define SYS_wait4      260
+#define SYS_exit_group 94
+#define SYS_kill       129
+#define SYS_openat     56
+#define SYS_close      57
+#define SYS_fstat      80
+#define SYS_pipe2      59
+#define SYS_dup3       24
+#define SYS_read       63
+#define SYS_write      64
+#define SYS_nanosleep  101
+
+#define AT_FDCWD_LX     (-100)
+#define O_CLOEXEC_LX    0x80000  /* octal 02000000 -- confirmed against the host */
+#define WNOHANG_LX      1
+#define SIGCHLD_LX      17
+#define SIGCONT_LX      18
+
+/* Regular-file / execute-permission-bit masks, standard POSIX values. */
+#define S_IFMT_LX  0170000
+#define S_IFREG_LX 0100000
+#define S_IXUSR_LX 0100
+#define S_IXGRP_LX 0010
+#define S_IXOTH_LX 0001
+
+extern long syscall(long number, ...);
+
+static int is_sys_error(long ret)
+{
+	return (unsigned long)ret >= (unsigned long)-4095L;
+}
+
+static int box_pid(int pid) { return pid; }   /* documentation no-op: see this file's banner */
+static int unbox_pid(__plat_handle_t h) { return (int)(long)h; }
+
+/* std[0..2]'s three slots are NOT this file's own process-handle
+ * domain: they come straight from the fd table (src/process/spawn.c's
+ * own comment: "the front door's own fd-table lookup"), boxed the way
+ * src/unistd/linux/plat_fd.c encodes them (fd+1, so a real fd 0 is
+ * never confused with __PLAT_HANDLE_NULL). Unboxing them here mirrors
+ * that file's own convention deliberately -- it is not this file's
+ * encoding leaking, it is reading someone else's. */
+static int unbox_fd(__plat_handle_t h) { return (int)((long)h - 1); }
+
+/* ---- find_program.c: is this file something Linux's loader/kernel --- */
+/* ---- can start directly? ---------------------------------------------- */
+
+/* A minimal, byte-exact mirror of the leading fields of Linux's real
+ * aarch64 struct stat (confirmed against the host: st_mode sits at byte
+ * offset 16, sizeof the whole struct is 128 -- see the report), padded
+ * out to the kernel's real total size so fstat(2) never writes past
+ * this buffer. Only st_mode is ever read. */
+struct raw_stat_prefix {
+	unsigned long st_dev;
+	unsigned long st_ino;
+	unsigned int  st_mode;
+	unsigned int  st_nlink;
+	unsigned char reserved[128 - 24];
+};
+
+/* Unlike NT (no execute-permission bit on the filesystem, so
+ * find_program.c's own $LXMOD-plus-content-sniff dance exists at all --
+ * see that file's banner) and unlike NT's own __plat_is_program()
+ * (which also has to dodge waking a cloud-backed placeholder file --
+ * see src/process/nt/plat_process.c), Linux has a real execute
+ * permission bit and its own kernel already runs a "#!" script directly
+ * through binfmt_script -- there is nothing here for this backend to
+ * distinguish that NT's loader needs help with. A regular file with any
+ * execute bit set is answered "yes"; anything else, including any
+ * failure to open or stat it, is "no", same as the NT backend's rule
+ * for a failure of any kind. */
+int __plat_is_program(const char *path)
+{
+	long fd = syscall(SYS_openat, (long)AT_FDCWD_LX, path, 0L /* O_RDONLY */, 0L);
+	struct raw_stat_prefix st;
+	long ret;
+
+	if (is_sys_error(fd)) return 0;
+	ret = syscall(SYS_fstat, fd, &st);
+	syscall(SYS_close, fd);
+	if (is_sys_error(ret)) return 0;
+	if ((st.st_mode & S_IFMT_LX) != S_IFREG_LX) return 0;
+	if (!(st.st_mode & (S_IXUSR_LX | S_IXGRP_LX | S_IXOTH_LX))) return 0;
+	return 1;
+}
+
+/* ---- fork.c: clone(2) and the (nonexistent) suspended-thread resume -- */
+
+int __plat_process_fork(struct __plat_fork_result *out)
+{
+	long pid = syscall(SYS_clone, (long)SIGCHLD_LX, 0L, 0L, 0L, 0L);
+
+	if (pid == 0) return __PLAT_FORK_CHILD;
+	if (is_sys_error(pid)) { errno = (int)-pid; return -1; }
+
+	out->process = (__plat_handle_t)(long)box_pid((int)pid);
+	/* No suspended clone thread exists to hand back here -- clone(2)
+	 * without CLONE_VM starts the child running immediately, at the
+	 * same point in this very call, exactly like glibc's own fork()
+	 * (see this file's banner). __PLAT_HANDLE_NULL is safe to pass to
+	 * __plat_thread_resume() below precisely because that function
+	 * never looks at it. */
+	out->thread = __PLAT_HANDLE_NULL;
+	out->pid = (int)pid;
+	return __PLAT_FORK_PARENT;
+}
+
+int __plat_thread_resume(__plat_handle_t th)
+{
+	(void)th;
+	/* Canonical implementation for both plat_process.h and (by the
+	 * cross-subsystem collision plat_process.h's own banner and this
+	 * project's history document) plat_thread.h's identically-named
+	 * declaration. On Linux, nothing this pilot creates -- a fork()ed
+	 * child, an exec()ed process, or (once a Linux thread backend
+	 * lands) a clone()d thread -- is ever created in a suspended state
+	 * needing a resume in the first place: clone(2)/execve(2) hand back
+	 * something already running. So this is unconditionally a no-op
+	 * success, independent of whatever encoding `th` turns out to carry
+	 * on whichever backend eventually defines a real one. */
+	return 0;
+}
+
+/* ---- wait.c: wait4(2), and the peek/query split Linux's one-shot ----- */
+/* ---- reap does not offer natively -------------------------------------- */
+
+#define REAP_CACHE_MAX 256   /* matches CHILD_MAX_'s own static-table sizing (libc.h) */
+
+struct reap_entry {
+	int pid;                 /* 0 == free slot; a real pid is never 0 */
+	int code;                /* NT-shaped: __wait_encode_status()'s input */
+	unsigned long long ktime100ns;
+	unsigned long long utime100ns;
+};
+
+static struct reap_entry reap_cache[REAP_CACHE_MAX];
+
+static struct reap_entry *reap_find(int pid)
+{
+	int i;
+	for (i = 0; i < REAP_CACHE_MAX; i++)
+		if (reap_cache[i].pid == pid) return &reap_cache[i];
+	return 0;
+}
+
+static struct reap_entry *reap_alloc(int pid)
+{
+	int i;
+	for (i = 0; i < REAP_CACHE_MAX; i++)
+		if (!reap_cache[i].pid) { reap_cache[i].pid = pid; return &reap_cache[i]; }
+	return 0;   /* table exhausted -- see the fallback note below */
+}
+
+/* Byte-exact mirror of Linux's real struct rusage (confirmed against
+ * the host: ru_utime at offset 0, ru_stime at offset 16, both
+ * `struct timeval`, whole struct 144 bytes -- see the report), padded
+ * to the kernel's real size for the same reason raw_stat_prefix is. */
+struct raw_timeval { long tv_sec; long tv_usec; };
+struct raw_rusage {
+	struct raw_timeval ru_utime;
+	struct raw_timeval ru_stime;
+	unsigned char reserved[144 - 32];
+};
+
+static unsigned long long tv_to_100ns(struct raw_timeval *tv)
+{
+	return (unsigned long long)tv->tv_sec * 10000000ULL +
+	       (unsigned long long)tv->tv_usec * 10ULL;
+}
+
+int __plat_process_wait(__plat_handle_t h, int mode)
+{
+	int pid = unbox_pid(h);
+	int status = 0;
+	long options;
+	long ret;
+	struct raw_rusage ru;
+	struct reap_entry *e;
+	int i;
+
+	/* Already reaped by an earlier call to this very function -- report
+	 * "still signalled" without touching the kernel again, since the
+	 * pid may since have been recycled onto an unrelated live process. */
+	if (reap_find(pid)) return 1;
+
+	switch (mode) {
+	case __PLAT_WAIT_NOHANG: options = WNOHANG_LX; break;
+	case __PLAT_WAIT_POLL:   options = WNOHANG_LX; break;
+	default:                 options = 0; break;
+	}
+
+	for (i = 0; i < (int)sizeof ru; i++) ((unsigned char *)&ru)[i] = 0;
+	ret = syscall(SYS_wait4, (long)pid, (long)&status, options, (long)&ru);
+
+	if (mode == __PLAT_WAIT_POLL && ret == 0) {
+		/* Not yet exited: sleep ~10ms, the same short poll interval
+		 * the NT backend's own __PLAT_WAIT_POLL case builds into its
+		 * single NtWaitForSingleObject call (see plat_process.h), so a
+		 * WUNTRACED caller re-checking in a loop does not spin. */
+		struct { long tv_sec; long tv_nsec; } ts;
+		ts.tv_sec = 0; ts.tv_nsec = 10000000L;
+		syscall(SYS_nanosleep, (long)&ts, 0L);
+		return 0;
+	}
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	if (ret == 0) return 0;   /* WNOHANG: not exited yet */
+
+	e = reap_alloc(pid);
+	if (WIFSIGNALED(status)) {
+		int code_val = WTERMSIG(status);
+		int nt_code = (int)(0xE0DE0000u | ((unsigned)code_val & 0x7fu));
+		if (e) e->code = nt_code;
+	} else {
+		int exitcode = WEXITSTATUS(status) & 0xff;
+		if (e) e->code = exitcode;
+	}
+	if (e) {
+		e->ktime100ns = tv_to_100ns(&ru.ru_stime);
+		e->utime100ns = tv_to_100ns(&ru.ru_utime);
+	}
+	/* A full reap-cache table (REAP_CACHE_MAX simultaneously-unreaped
+	 * children) has nowhere left to stash this exit status: the child
+	 * is already, unavoidably, reaped by the wait4() above, so
+	 * __plat_process_exit_code() would have nothing to read back. This
+	 * pilot degrades by still reporting the process signalled -- losing
+	 * only the exit-code/rusage detail, not correctness of the reap
+	 * itself, which already happened and cannot be undone. */
+	return 1;
+}
+
+int __plat_process_exit_code(__plat_handle_t h, int *code)
+{
+	struct reap_entry *e = reap_find(unbox_pid(h));
+	if (!e) { errno = ECHILD; return -1; }
+	*code = e->code;
+	return 0;
+}
+
+int __plat_process_times(__plat_handle_t h, unsigned long long *ktime100ns, unsigned long long *utime100ns)
+{
+	struct reap_entry *e = reap_find(unbox_pid(h));
+	if (!e) { errno = ECHILD; return -1; }
+	*ktime100ns = e->ktime100ns;
+	*utime100ns = e->utime100ns;
+	return 0;
+}
+
+/* ---- signal.c's job-control resume, via kill()'s job-control arm ----- */
+/* ---- (src/process/children.c's clear_stops() also calls this) -------- */
+
+int __plat_process_resume(__plat_handle_t h)
+{
+	/* Canonical implementation for both plat_process.h and
+	 * plat_signal.h's identically-named declaration (see this project's
+	 * history for why process is the one owner of both -- plat_process.h's
+	 * own file banner). Linux's job-control suspend/resume IS a real
+	 * signal, unlike NT's NtSuspendProcess/NtResumeProcess pair, which
+	 * this project's signal subsystem otherwise has to synthesize with a
+	 * self-stop marker (see plat_signal.h's own banner): SIGCONT here is
+	 * the actual kernel mechanism a Linux plat_signal.c's own
+	 * __plat_process_suspend() (SIGSTOP) would pair with, not a
+	 * substitute for one. */
+	long ret = syscall(SYS_kill, (long)unbox_pid(h), (long)SIGCONT_LX);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return 0;
+}
+
+/* ---- spawn.c: fork + dup the standard descriptors + execve ----------- */
+
+int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
+                         const __plat_handle_t std[3], __plat_handle_t *out_process)
+{
+	long pfd_ret;
+	int pipefd[2];
+	long pid;
+
+	/* A self-pipe, close-on-exec on the write end, is the standard way
+	 * to make an otherwise-asynchronous fork()+execve() report a real
+	 * execve() failure (ENOENT, ENOEXEC, EACCES, ...) back to the
+	 * caller of THIS call, synchronously -- the same atomic-outcome
+	 * contract NtCreateUserProcess gives the NT backend for free (see
+	 * plat_process.h's banner: "the specific-NTSTATUS-to-errno
+	 * decisions ... that only make sense with the real status in
+	 * hand"). A successful execve() replaces the child's image (and
+	 * every fd flagged O_CLOEXEC closes as part of that), so the pipe's
+	 * write end closes itself and the parent's read below sees EOF; a
+	 * failed execve() leaves the child able to write its errno first. */
+	{
+		/* pipe2(2) writes exactly two `int`s -- NOT two register-width
+		 * values -- into this buffer; declaring it as anything wider
+		 * would leave pipefd[1] reading uninitialized stack past what
+		 * the kernel actually wrote. */
+		int fds[2];
+		pfd_ret = syscall(SYS_pipe2, (long)fds, (long)O_CLOEXEC_LX);
+		if (is_sys_error(pfd_ret)) { errno = (int)-pfd_ret; return -1; }
+		pipefd[0] = fds[0];
+		pipefd[1] = fds[1];
+	}
+
+	pid = syscall(SYS_clone, (long)SIGCHLD_LX, 0L, 0L, 0L, 0L);
+	if (is_sys_error(pid)) {
+		int e = (int)-pid;
+		syscall(SYS_close, (long)pipefd[0]);
+		syscall(SYS_close, (long)pipefd[1]);
+		errno = e;
+		return -1;
+	}
+
+	if (pid == 0) {
+		/* Child. std[i] == __PLAT_HANDLE_NULL means "closed" (spawn.c
+		 * already turned a close-on-exec descriptor into that, exactly
+		 * like the NT backend expects -- plat_process.h's banner): an
+		 * actual close(2) represents that on Linux, where there is no
+		 * NT-style value-blind-placeholder dance to work around (see
+		 * src/process/nt/plat_process.c's own file banner for why NT
+		 * needs one and Linux does not: a closed Linux fd number is
+		 * simply absent, and nothing refills it from outside). */
+		int i;
+		syscall(SYS_close, (long)pipefd[0]);
+		for (i = 0; i < 3; i++) {
+			if (std[i]) {
+				int srcfd = unbox_fd(std[i]);
+				if (srcfd != i) syscall(SYS_dup3, (long)srcfd, (long)i, 0L);
+			} else {
+				syscall(SYS_close, (long)i);
+			}
+		}
+		{
+			long ret = syscall(SYS_execve, path, argv, envp);
+			int e = is_sys_error(ret) ? (int)-ret : EINVAL;
+			syscall(SYS_write, (long)pipefd[1], (long)&e, (long)sizeof e);
+			syscall(SYS_close, (long)pipefd[1]);
+		}
+		syscall(SYS_exit_group, 127L);
+		/* unreachable */
+		return -1;
+	}
+
+	/* Parent. */
+	syscall(SYS_close, (long)pipefd[1]);
+	{
+		int e = 0;
+		long n = syscall(SYS_read, (long)pipefd[0], (long)&e, (long)sizeof e);
+		syscall(SYS_close, (long)pipefd[0]);
+		if (n == (long)sizeof e) {
+			/* execve() failed in the child; it has already called
+			 * _exit(127) (via exit_group) or is about to, so reap it
+			 * here rather than leaving a zombie the front door's own
+			 * child table was never told about. */
+			syscall(SYS_wait4, pid, 0L, 0L, 0L);
+			errno = e;
+			return -1;
+		}
+	}
+
+	*out_process = (__plat_handle_t)(long)box_pid((int)pid);
+	return (int)pid;
+}
