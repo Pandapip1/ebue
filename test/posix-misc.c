@@ -201,11 +201,12 @@ static void test_dirent(void)
  * https://man7.org/linux/man-pages/man3/readdir.3.html under "d_type":
  * "not specified in POSIX.1... available on most BSD systems... on
  * Linux". Tested here as an extension against its own documented
- * contract, not folded into the POSIX table above. ntlibc's
- * src/dirent/dirent_internal.h's __dirent_dtype() only ever returns
- * DT_LNK (reparse points), DT_DIR or DT_REG -- DT_FIFO/DT_CHR/DT_BLK/
- * DT_SOCK/DT_WHT/DT_UNKNOWN are simply unreachable through NTFS
- * directory enumeration, so only DT_REG/DT_DIR are checked below. */
+ * contract, not folded into the POSIX table above. ntlibc's NT backend
+ * (src/dirent/nt/plat_dirent.c's dtype_from_attrs(), formerly
+ * dirent_internal.h's __dirent_dtype()) only ever returns DT_LNK
+ * (reparse points), DT_DIR or DT_REG -- DT_FIFO/DT_CHR/DT_BLK/DT_SOCK/
+ * DT_WHT/DT_UNKNOWN are simply unreachable through NTFS directory
+ * enumeration, so only DT_REG/DT_DIR are checked below. */
 static void test_dtype(void)
 {
 	char tmpl[] = "posix_misc_dtype.XXXXXX";

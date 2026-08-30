@@ -2,21 +2,38 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * getdents: the GNU raw-directory-read call, taken directly off a fd
- * rather than a DIR.  Continuation across calls comes for free from
- * NtQueryDirectoryFile itself -- RestartScan = FALSE (the default state
- * of a freshly opened handle) picks up from wherever the kernel's own
- * cursor on that handle left off, so nothing needs to be remembered here
- * between calls.
+ * rather than a DIR.  Continuation across calls comes for free from the
+ * backend's own enumeration cursor -- NT: RestartScan = FALSE (the
+ * default state of a freshly opened handle) picks up from wherever the
+ * kernel's own cursor on that handle left off; Linux: the directory fd's
+ * own file-position cursor advances the same way a real getdents64(2)
+ * caller's would -- so nothing needs to be remembered here between
+ * calls.
  *
- * Like readdir(), "." and ".." come through as ordinary records straight
- * from NT (see dirent_internal.h) and need no special handling here.
- */
+ * Record decoding goes through __plat_dir_decode_one() (src/internal/
+ * plat_dirent.h), the same one src/dirent/readdir.c's __dirstream_next()
+ * uses; this file no longer parses FILE_ID_BOTH_DIR_INFORMATION or
+ * linux_dirent64 itself. Like readdir(), "." and ".." come through as
+ * ordinary records straight from the backend (see dirent_internal.h) and
+ * need no special handling here.
+ *
+ * One pre-existing limitation this refactor carries forward unchanged,
+ * not introduced by it: a single call only ever decodes as much of ONE
+ * __plat_dir_read() fill as fits in the caller's `out`/`size`. If that
+ * fill holds more records than `out` has room for, the rest are not
+ * returned by this or any later call -- the backend's cursor has already
+ * advanced past all of them by the time this function sees the buffer.
+ * True of the original NT-only implementation this replaces too (it
+ * `break`s out of its own NextEntryOffset walk the same way); fixing it
+ * would mean carrying a decode position across getdents() calls the way
+ * DIR does, which is a real behavior change out of scope for a
+ * redesign whose job is to keep every backend's observable behavior
+ * exactly as it was, just decoded through a shared, portable step. */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <string.h>
 #include <errno.h>
 #include "dirent_internal.h"
-#include "plat_dirent.h"
 
 static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 {
@@ -42,7 +59,8 @@ int getdents(int fd, struct dirent *out, size_t size)
 {
 	struct __fd *f = __fd_get(fd);
 	unsigned char buf[8192];
-	FILE_ID_BOTH_DIR_INFORMATION *fi;
+	struct __dirent_raw r;
+	size_t bufpos, buflen;
 	ssize_t n;
 	size_t used = 0;
 
@@ -80,23 +98,19 @@ int getdents(int fd, struct dirent *out, size_t size)
 	if (n == 0)
 		return f->vfs_native ? append_missing(f, out, size) : 0;
 
-	fi = (FILE_ID_BOTH_DIR_INFORMATION *)buf;
-	for (;;) {
-		struct dirent *d;
-		if (used + sizeof(struct dirent) > size) break;
-
-		d = (struct dirent *)((char *)out + used);
+	bufpos = 0;
+	buflen = (size_t)n;
+	while (used + sizeof(struct dirent) <= size &&
+	       __plat_dir_decode_one(buf, buflen, &bufpos, &r)) {
+		struct dirent *d = (struct dirent *)((char *)out + used);
 		memset(d, 0, sizeof *d);
-		d->d_ino = (ino_t)fi->FileId;
-		d->d_type = __dirent_dtype(fi->FileAttributes);
+		d->d_ino = r.ino;
+		d->d_type = r.type;
 		d->d_reclen = sizeof *d;
-		__utf16_to_utf8_buf(fi->FileName, fi->FileNameLength / sizeof(WCHAR), d->d_name, sizeof d->d_name);
+		memcpy(d->d_name, r.name, sizeof d->d_name);
 		if (f->vfs_native) f->vseen |= __vfs_mandatory_seen(f->vfs, d->d_name);
 		used += sizeof *d;
 		d->d_off = (off_t)used;
-
-		if (!fi->NextEntryOffset) break;
-		fi = (FILE_ID_BOTH_DIR_INFORMATION *)((char *)fi + fi->NextEntryOffset);
 	}
 	return (int)used;
 }

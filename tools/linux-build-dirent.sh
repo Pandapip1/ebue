@@ -2,27 +2,21 @@
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# linux-build-fs.sh -- build and run the Linux filesystem-subsystem
-# pilot natively. See tools/linux-build.sh (the original mman/unistd
-# fd-ops pilot) for the pattern this mirrors; this script is a separate
-# copy, not a generalisation of it, matching that file's own "Usage"
-# banner and this pilot's distinct fuzz/linux_pilot_{test,harness}_fs.c
-# naming.
+# linux-build-dirent.sh -- build and run the Linux dirent pilot
+# natively. See tools/linux-build-open.sh for the pattern this mirrors
+# (compile flags, -nostdinc, -ffunction-sections/-Wl,--gc-sections); a
+# separate script, not a generalisation of it, matching every other
+# tools/linux-build-*.sh script's own precedent.
 #
-# Proves src/{dirent,fcntl,file,ioctl,stat}/linux/plat_*.c against the
-# REAL src/fcntl/{fcntl,fadvise}.c, src/file/flock.c, src/ioctl/ioctl.c,
-# and src/stat/{chmod,stat,statvfs,utimensat}.c front doors, statically
-# linked into one native, runnable ELF binary -- no Wine, no emulation,
-# on whatever host this script runs on.
+# Proves src/internal/plat_dirent.h's new __plat_dir_decode_one()
+# redesign (see that header's own banner) end to end: the real
+# src/dirent/{opendir,readdir,getdents,closedir,rewinddir}.c front doors,
+# statically linked against the real src/dirent/linux/plat_dirent.c
+# backend and the real src/fcntl/open.c/src/fcntl/linux/plat_fcntl.c
+# open() path -- running as a real, native aarch64 Linux process on
+# whatever host this script runs on, no Wine, no emulation.
 #
-# src/dirent/linux/plat_dirent.c is compiled (so it stays part of the
-# ordinary build) but is NOT exercised by this test: it is now a real
-# implementation (see that file's own banner), exercised instead by the
-# dedicated tools/linux-build-dirent.sh pilot alongside the real
-# src/dirent/{opendir,readdir,getdents,closedir,rewinddir}.c front
-# doors.
-#
-# Usage: tools/linux-build-fs.sh
+# Usage: tools/linux-build-dirent.sh
 # Env:   NTLIBC_CC (default clang), NTLIBC_ARCH (default x86_64 -- see
 #          tools/linux-build.sh's own banner for why this is unrelated
 #          to the host's real CPU architecture)
@@ -32,8 +26,8 @@ set -eu
 srcdir=$(cd "$(dirname "$0")/.." && pwd)
 CC=${NTLIBC_CC:-clang}
 ARCH=${NTLIBC_ARCH:-x86_64}
-OBJ=${NTLIBC_LINUX_OBJ:-$srcdir/obj/linux-pilot-fs}
-TAG=linux-build-fs
+OBJ=${NTLIBC_LINUX_OBJ:-$srcdir/obj/linux-pilot-dirent}
+TAG=linux-build-dirent
 
 cd "$srcdir"
 
@@ -57,29 +51,22 @@ CFLAGS="-std=c99 -nostdinc -fno-builtin -g -O0 -ffunction-sections -fdata-sectio
 $INC -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Wall -Wno-unused-function"
 
 FILES="
-	src/fcntl/fcntl.c
-	src/fcntl/fadvise.c
-	src/fcntl/linux/plat_fcntl.c
-	src/file/flock.c
-	src/file/linux/plat_flock.c
-	src/ioctl/ioctl.c
-	src/ioctl/linux/plat_ioctl.c
-	src/stat/chmod.c
-	src/stat/stat.c
-	src/stat/statvfs.c
-	src/stat/utimensat.c
-	src/stat/linux/plat_stat.c
+	src/dirent/opendir.c
+	src/dirent/readdir.c
+	src/dirent/getdents.c
+	src/dirent/closedir.c
+	src/dirent/rewinddir.c
 	src/dirent/linux/plat_dirent.c
+	src/fcntl/open.c
+	src/fcntl/linux/plat_fcntl.c
 	src/unistd/close.c
-	src/unistd/read.c
-	src/unistd/write.c
-	src/unistd/lseek.c
-	src/unistd/dup.c
 	src/unistd/linux/plat_fd.c
 	src/string/memcpy.c
+	src/string/memset.c
+	src/string/strcpy.c
 	src/internal/errno.c
-	fuzz/linux_pilot_harness_fs.c
-	fuzz/linux_pilot_test_fs.c
+	fuzz/linux_pilot_harness_dirent.c
+	fuzz/linux_pilot_test_dirent.c
 "
 
 echo "$TAG: compiling ($CC, native ELF)..."
@@ -96,13 +83,13 @@ done
 
 echo "$TAG: linking..."
 # shellcheck disable=SC2086
-if ! $CC -g -O0 -Wl,--gc-sections -o "$OBJ/linux_pilot_test_fs" $objs; then
+if ! $CC -g -O0 -Wl,--gc-sections -o "$OBJ/linux_pilot_test_dirent" $objs; then
 	echo "$TAG: FAILED linking" >&2
 	exit 1
 fi
 
 echo "$TAG: running..."
-if "$OBJ/linux_pilot_test_fs"; then
+if "$OBJ/linux_pilot_test_dirent"; then
 	echo "$TAG: PASS"
 	exit 0
 else

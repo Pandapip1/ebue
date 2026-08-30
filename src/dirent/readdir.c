@@ -3,55 +3,60 @@
  *
  * readdir/readdir_r, and __dirstream_next which every other file in this
  * directory that walks a DIR's entries (scandir, seekdir) goes through.
+ * __dirstream_next() is now entirely backend-neutral: it refills dp->buf
+ * via __plat_dir_read() and decodes one record at a time via
+ * __plat_dir_decode_one() (src/internal/plat_dirent.h) -- neither this
+ * file nor dirent_internal.h parses FILE_ID_BOTH_DIR_INFORMATION or
+ * linux_dirent64 directly anymore; that moved into each backend's own
+ * src/dirent/{nt,linux}/plat_dirent.c.
  *
  * d_reclen is always sizeof(struct dirent): unlike Linux's real getdents,
  * nothing here ever packs entries tighter than that, so there is no
  * shorter length to report.  d_off is dp->tell after the entry is
  * counted -- see dirent_internal.h for why that, and not a kernel byte
  * offset, is what telldir()/seekdir() work with.  "." and ".." arrive as
- * ordinary records straight from NT (see dirent_internal.h); nothing
- * here treats them specially.
+ * ordinary records straight from the backend (see dirent_internal.h);
+ * nothing here treats them specially.
  */
 #include <string.h>
 #include <errno.h>
 #include "dirent_internal.h"
-#include "plat_dirent.h"
 
-FILE_ID_BOTH_DIR_INFORMATION *__dirstream_next(DIR *dp)
+int __dirstream_next(DIR *dp, struct __dirent_raw *out)
 {
-	FILE_ID_BOTH_DIR_INFORMATION *fi;
 	__plat_handle_t h;
 	ssize_t n;
 
-	if (dp->bufpos < dp->buflen) {
-		fi = (FILE_ID_BOTH_DIR_INFORMATION *)(dp->buf + dp->bufpos);
-		dp->bufpos += fi->NextEntryOffset ? fi->NextEntryOffset : dp->buflen - dp->bufpos;
-		return fi;
+	for (;;) {
+		if (dp->bufpos < dp->buflen &&
+		    __plat_dir_decode_one(dp->buf, dp->buflen, &dp->bufpos, out))
+			return 1;
+		/* Either the buffer was already exhausted, or
+		 * __plat_dir_decode_one() says nothing is left at/after
+		 * bufpos in THIS fill -- either way, a refill is needed. */
+		dp->bufpos = dp->buflen;
+		if (dp->done) return 0;
+
+		h = __fd_handle(dp->fd);
+		if (!h) return 0;      /* __fd_handle already set errno = EBADF */
+
+		n = __plat_dir_read(h, dp->buf, __DIRBUF_SIZE, dp->restart);
+		dp->restart = 0;
+		if (n < 0) return 0;   /* errno already set by the backend */
+		if (n == 0) { dp->done = 1; return 0; }
+
+		dp->buflen = (size_t)n;
+		dp->bufpos = 0;
 	}
-	if (dp->done) return 0;
-
-	h = __fd_handle(dp->fd);
-	if (!h) return 0;      /* __fd_handle already set errno = EBADF */
-
-	n = __plat_dir_read(h, dp->buf, __DIRBUF_SIZE, dp->restart);
-	dp->restart = 0;
-	if (n < 0) return 0;   /* errno already set by the backend */
-	if (n == 0) { dp->done = 1; return 0; }
-
-	dp->buflen = (size_t)n;
-	dp->bufpos = 0;
-	fi = (FILE_ID_BOTH_DIR_INFORMATION *)dp->buf;
-	dp->bufpos += fi->NextEntryOffset ? fi->NextEntryOffset : dp->buflen;
-	return fi;
 }
 
-static void make_real(DIR *dp, FILE_ID_BOTH_DIR_INFORMATION *fi, struct dirent *out)
+static void make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
 {
 	memset(out, 0, sizeof *out);
-	out->d_ino = (ino_t)fi->FileId;
-	out->d_type = __dirent_dtype(fi->FileAttributes);
+	out->d_ino = r->ino;
+	out->d_type = r->type;
 	out->d_reclen = sizeof *out;
-	__utf16_to_utf8_buf(fi->FileName, fi->FileNameLength / sizeof(WCHAR), out->d_name, sizeof out->d_name);
+	memcpy(out->d_name, r->name, sizeof out->d_name);
 	dp->tell++;
 	out->d_off = dp->tell;
 }
@@ -82,9 +87,9 @@ static int fill(DIR *dp, struct dirent *out)
 		return 0;
 	}
 	{
-		FILE_ID_BOTH_DIR_INFORMATION *fi = __dirstream_next(dp);
-		if (fi) {
-			make_real(dp, fi, out);
+		struct __dirent_raw r;
+		if (__dirstream_next(dp, &r)) {
+			make_real(dp, &r, out);
 			if (f->vfs_native) dp->vseen |= __vfs_mandatory_seen(f->vfs, out->d_name);
 			return 0;
 		}

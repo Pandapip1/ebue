@@ -20,11 +20,13 @@
  * already does, and the raw fd is registered into ntlibc's own fd table
  * via __fd_install() the identical way.
  *
- * __plat_dir_read() (src/dirent/linux/plat_dirent.c) is not exercised
- * at all: it is a documented stub (see that file's own banner) because
- * the front door that would consume its output (src/dirent/readdir.c,
- * getdents.c) hardcodes NT's own directory-record shape, which a real
- * Linux getdents64(2) call cannot honestly produce.
+ * __plat_dir_read()/__plat_dir_decode_one() (src/dirent/linux/
+ * plat_dirent.c) are not exercised here at all: they are real, but this
+ * pilot's own fixed fd table (see fuzz/linux_pilot_harness_fs.c) never
+ * installs a directory descriptor. See tools/linux-build-dirent.sh for
+ * the dedicated pilot that exercises them, through the real
+ * src/dirent/{opendir,readdir,getdents,closedir,rewinddir}.c front
+ * doors.
  */
 #include <fcntl.h>
 #include <unistd.h>

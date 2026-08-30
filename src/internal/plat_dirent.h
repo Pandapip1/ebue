@@ -3,21 +3,27 @@
  *
  * The platform-directory interface src/dirent/{readdir,getdents}.c's
  * POSIX-facing front doors call into instead of a raw
- * NtQueryDirectoryFile call.  See src/dirent/nt/plat_dirent.c for the
- * implementation this declares.
+ * NtQueryDirectoryFile/getdents64(2) call.  See src/dirent/nt/
+ * plat_dirent.c and src/dirent/linux/plat_dirent.c for the two
+ * implementations this declares.
  *
- * The raw record format a successful read fills `buf` with is NOT part
- * of this interface -- it stays whatever the backend's native directory-
- * enumeration call produces (NT: FILE_ID_BOTH_DIR_INFORMATION records
- * chained by NextEntryOffset), and every caller of this function already
- * parses that format directly (see src/dirent/dirent_internal.h's own
- * banner for why: it is this library's shared, NT-specific record shape,
- * used identically by readdir()'s buffering and getdents()'s raw
- * pass-through, and re-deriving a backend-neutral record shape here
- * would be a bigger redesign than this seam is scoped to make).  What
- * this interface DOES hide is the syscall itself and its status
- * handling -- STATUS_NO_MORE_FILES becomes a plain empty read, exactly
- * like __plat_read()'s end-of-file convention. */
+ * This is the redesign this header's own banner used to say was out of
+ * scope ("re-deriving a backend-neutral record shape here would be a
+ * bigger redesign than this seam is scoped to make") -- now done, in
+ * the smallest shape that unblocks a real Linux backend: __plat_dir_read()
+ * itself is UNCHANGED (still hands back the backend's own raw bytes,
+ * still hides only the syscall and its status handling -- see its own
+ * comment below), and one new function, __plat_dir_decode_one(), is
+ * added alongside it to decode a single record out of a buffer
+ * __plat_dir_read() already filled into a POSIX-neutral shape
+ * (`struct __dirent_raw`) that src/dirent/readdir.c's __dirstream_next()
+ * and src/dirent/getdents.c's getdents() both now go through instead of
+ * hardcoding FILE_ID_BOTH_DIR_INFORMATION themselves. The raw buffer
+ * format `buf` holds between the two calls is still entirely the
+ * backend's own business (NT: FILE_ID_BOTH_DIR_INFORMATION records
+ * chained by NextEntryOffset; Linux: linux_dirent64 records chained by
+ * d_reclen) -- nothing outside a backend's own plat_dirent.c ever looks
+ * at those bytes directly anymore. */
 #ifndef _NTLIBC_PLAT_DIRENT_H
 #define _NTLIBC_PLAT_DIRENT_H
 
@@ -32,5 +38,35 @@
  * number of bytes filled (> 0), 0 at end-of-directory, or -1 with
  * errno set. */
 ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restart);
+
+/* One directory entry, decoded out of a backend's own raw record shape
+ * into a POSIX-neutral form every front door can read without knowing
+ * which backend filled the buffer.  `type` is a DT_* value using the
+ * same numeric convention dirent.h's own DT_* constants (and this
+ * library's internal duplicates, src/dirent/dirent_internal.h's
+ * __DT_*) use -- POSIX/glibc/Linux-kernel values, not anything
+ * NT-specific; NT's backend computes it from FileAttributes, Linux's
+ * backend already gets it as exactly this from the kernel and copies it
+ * straight through (see that backend's own comment). `name` is always
+ * NUL-terminated; 256 (NAME_MAX+1) is enough for every name either
+ * backend can produce, matching struct dirent's own d_name[256]. */
+struct __dirent_raw {
+	ino_t ino;
+	unsigned char type;
+	char name[256];
+};
+
+/* Decodes the one record starting at byte offset *pos within `buf`
+ * (`buflen` bytes, exactly as filled by a single __plat_dir_read()
+ * call), filling *out and advancing *pos past the record on success
+ * (returns 1).  Returns 0 if there is no record left at or past *pos in
+ * this buffer -- end of what this fill produced, not end of the
+ * directory -- meaning the caller should refill via another
+ * __plat_dir_read() and resume decoding from *pos = 0 there.  No error
+ * return: a buffer __plat_dir_read() itself already validated is
+ * trusted the same way the rest of this backend already trusts
+ * kernel-produced data (see e.g. src/dirent/nt/plat_dirent.c's own
+ * comment on NtQueryDirectoryFile's guarantees). */
+int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __dirent_raw *out);
 
 #endif
