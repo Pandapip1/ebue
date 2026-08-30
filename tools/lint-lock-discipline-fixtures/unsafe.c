@@ -29,3 +29,17 @@ int destroy_held(mutex_t *mutex) {
     __builtin_unreachable();
   return result;
 }
+
+/* Proves the hand-off exemption safe.c's cond_wait/cond_wait_cleanup
+ * fixtures rely on is scoped to the one designated region
+ * (RequiresHeldOnEntry's argument index 1), not the whole function: a
+ * *second*, ordinary mutex this same cond_wait leaks must still be
+ * reported. If LockDisciplineChecker.cpp's exemption were ever
+ * broadened to skip the whole function by name instead of tagging the
+ * specific MemRegion, this finding would silently vanish along with the
+ * real one. */
+int cond_wait(void *cond, mutex_t *mutex, mutex_t *extra) {
+  if (pthread_mutex_lock(extra) != 0)
+    return -1;
+  return 0; /* lock-discipline-expect */
+}
