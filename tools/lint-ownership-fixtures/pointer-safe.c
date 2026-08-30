@@ -70,3 +70,35 @@ int errno_is_always_valid(void)
 {
 	return *__errno_location();
 }
+
+/* A fixed-size static array with an explicit bounds guard immediately
+ * before the write. The guard proves the index in bounds directly; the
+ * generic byte-extent machinery below (getDynamicExtentWithOffset)
+ * turns that same fact into a compound "extent_of_slots_in_bytes minus
+ * index*sizeof(*slots)" expression the constraint solver generally
+ * cannot simplify back down to the plain "index < CAP" comparison it
+ * started as, so this pattern -- among the most common in systems code:
+ * a static table plus a bounds-checked counter -- was reported as
+ * unproven even though the bound was checked one line above.
+ * arrayIndexProvenInBounds() asks the solver the exact question the
+ * guard itself answered instead. Deliberately `unsigned`: an
+ * *unconstrained signed* counter needs a separate, real proof that it
+ * cannot be negative too (a whole-file invariant -- "only ever
+ * incremented from a zero-initialized static, never decremented past
+ * it" -- that no single function can see, and getting it wrong would
+ * hide a genuine buffer-underflow shape), so arrayIndexProvenInBounds()
+ * only fires unconditionally for `unsigned`, where "not negative" is
+ * true by type and only the upper bound needs checking; a signed
+ * counter still requires provable non-negativity, exactly like
+ * src/exit/exit.c's own `static int nhandlers` remains unresolved by
+ * this fix (see the commit message for the fuller accounting). */
+static void (*slots[8])(void);
+static unsigned nslots;
+
+int bounded_table_push(void (*f)(void))
+{
+	if (nslots >= 8)
+		return -1;
+	slots[nslots++] = f;
+	return 0;
+}
