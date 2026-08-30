@@ -279,8 +279,14 @@ static pid_t fork_impl(int run_handlers)
 		__plat_close(r.process);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,
-	 * before the child ever runs a single instruction of it. */
+	 * before the child ever runs a single instruction of it.
+	 * __is_wow64()/__wow64_fixup_clone() are only ever defined for the
+	 * x86/x86_64 arches that WOW64 exists for at all (src/internal/
+	 * {i386,x86_64}/wow64.c) -- guarded here so aarch64 (which has
+	 * neither) never references either symbol. */
+#if defined(__i386__) || defined(__x86_64__)
 	if (__is_wow64()) __wow64_fixup_clone(r.process, r.thread);
+#endif
 	__plat_thread_resume(r.thread);
 	__plat_close(r.thread);
 	if (run_handlers) __pthread_atfork_parent();

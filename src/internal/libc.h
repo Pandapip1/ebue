@@ -775,9 +775,13 @@ void __pthread_cancel_defer_leave(void);
 #define RtlReleasePebLock() \
 	(RtlReleasePebLock(), __pthread_cancel_defer_leave())
 
-/* ---- cross-process signal delivery (src/signal/sigdelivery.c) --------- */
-/* Started by __signal_init(); see that file's banner for the whole
- * design. __sig_delivery_event() is select()'s (src/select/select.c)
+/* ---- cross-process signal delivery (src/signal/nt/sigdelivery.c,
+ * src/signal/linux/sigdelivery.c) ---------------------------------------- */
+/* Started by __signal_init(); see src/signal/nt/sigdelivery.c's banner
+ * for the full NT design (a named-pipe-plus-mutant RPC, since NT has
+ * no real signal delivery of its own) and src/signal/linux/
+ * sigdelivery.c's own banner for what Linux does instead and does not
+ * yet do. __sig_delivery_event() is select()'s (src/select/select.c)
  * read of the per-process "signal state changed" auto-reset event -- 0
  * if this process never got a working listener, which select() must
  * treat as "nothing to add to the wait set", not an error.

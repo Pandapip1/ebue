@@ -169,11 +169,11 @@ static _Noreturn void cancel_current_claimed(void)
 {
 	struct __pthread *self = __pthread_self_control;
 	if (self) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		self->cancel_pending = 0;
 		self->cancel_queued = 0;
 		self->cancel_state = PTHREAD_CANCEL_DISABLE;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 	}
 	pthread_exit(PTHREAD_CANCELED);
 }
@@ -202,10 +202,10 @@ void __pthread_testcancel(void)
 	struct __pthread *self = __pthread_self_control;
 	int cancel = 0;
 	if (!self) return;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (self->cancel_state == PTHREAD_CANCEL_ENABLE && self->cancel_pending)
 		cancel = 1;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (cancel) __pthread_cancel_current();
 }
 
@@ -215,12 +215,12 @@ static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unus
 	int cancel = 0;
 	(void)unused1;
 	(void)unused2;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	self->cancel_queued = 0;
 	if (self->cancel_state == PTHREAD_CANCEL_ENABLE && self->cancel_pending &&
 	    self->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS)
 		cancel = 1;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (cancel) __pthread_cancel_current();
 }
 
@@ -231,9 +231,9 @@ int pthread_cancel(pthread_t thread)
 	int cancel_self = 0;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	__pthread_cancel_defer_enter();
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (thread->joined || (!thread->handle && thread->exited)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		__pthread_cancel_defer_leave();
 		return ESRCH;
 	}
@@ -248,14 +248,14 @@ int pthread_cancel(pthread_t thread)
 	cancel_self = thread == __pthread_self_control &&
 		thread->cancel_state == PTHREAD_CANCEL_ENABLE &&
 		thread->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (cancel_self) __pthread_cancel_current();
 	if (redirect && !redirect_async_cancel(thread)) queue = 1;
 	if (queue && __plat_thread_queue_apc(thread->handle, cancel_apc,
 		thread, 0) < 0) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		thread->cancel_queued = 0;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 	}
 	__pthread_cancel_defer_leave();
 	return 0;
@@ -270,12 +270,12 @@ int pthread_setcancelstate(int state, int *old_state)
 	self = __pthread_current();
 	if (!self) return ENOMEM;
 	__pthread_cancel_defer_enter();
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (old_state) *old_state = self->cancel_state;
 	self->cancel_state = state;
 	cancel = state == PTHREAD_CANCEL_ENABLE && self->cancel_pending &&
 	         self->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (cancel) __pthread_cancel_current();
 	__pthread_cancel_defer_leave();
 	return 0;
@@ -290,12 +290,12 @@ int pthread_setcanceltype(int type, int *old_type)
 	self = __pthread_current();
 	if (!self) return ENOMEM;
 	__pthread_cancel_defer_enter();
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (old_type) *old_type = self->cancel_type;
 	self->cancel_type = type;
 	cancel = type == PTHREAD_CANCEL_ASYNCHRONOUS && self->cancel_pending &&
 	         self->cancel_state == PTHREAD_CANCEL_ENABLE;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (cancel) __pthread_cancel_current();
 	__pthread_cancel_defer_leave();
 	return 0;

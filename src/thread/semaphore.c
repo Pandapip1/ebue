@@ -158,21 +158,21 @@ int sem_init(sem_t *sem, int pshared, unsigned value)
 	__plat_handle_t h;
 	(void)pshared;
 	if (!sem || value > SEM_VALUE_MAX) { errno = EINVAL; return -1; }
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (unnamed_count == SEM_NSEMS_MAX_) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		errno = ENOSPC;
 		return -1;
 	}
 	unnamed_count++;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	/* fork() only clones OBJ_INHERIT handles. A process-shared sem_t
 	 * stores this handle value in shared memory, and named semaphores
 	 * have the same requirement when already open across fork. */
 	if (__plat_semaphore_create((long)value, SEM_VALUE_MAX, 1, &h) < 0) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		unnamed_count--;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return -1;
 	}
 	sem->__handle = h; sem->__magic = SEM_MAGIC; sem->__named = 0;
@@ -184,9 +184,9 @@ int sem_destroy(sem_t *sem)
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
 	__plat_close(sem->__handle);
 	memset(sem, 0, sizeof *sem);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	unnamed_count--;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -208,32 +208,32 @@ sem_t *sem_open(const char *name, int oflag, ...)
 	}
 	path = sem_path(name);
 	if (!path) return SEM_FAILED;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	entry = find_path(path);
 	if (entry) {
 		if ((oflag & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
-			RtlReleasePebLock(); free(path); errno = EEXIST; return SEM_FAILED;
+			__plat_fast_unlock(); free(path); errno = EEXIST; return SEM_FAILED;
 		}
 		entry->refs++;
-		RtlReleasePebLock(); free(path); errno = 0; return &entry->sem;
+		__plat_fast_unlock(); free(path); errno = 0; return &entry->sem;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (ensure_dir(path) < 0) { free(path); return SEM_FAILED; }
 	if (namespace_lock(path, &ns) < 0) { free(path); return SEM_FAILED; }
 	/* A same-process opener may have populated the cache while this caller
 	 * waited for the cross-process publication lock. */
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	entry = find_path(path);
 	if (entry) {
 		if ((oflag & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
-			RtlReleasePebLock(); namespace_unlock(ns); free(path);
+			__plat_fast_unlock(); namespace_unlock(ns); free(path);
 			errno = EEXIST; return SEM_FAILED;
 		}
 		entry->refs++;
-		RtlReleasePebLock(); namespace_unlock(ns); free(path);
+		__plat_fast_unlock(); namespace_unlock(ns); free(path);
 		errno = 0; return &entry->sem;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 
 retry_record:
 	created = 0;
@@ -292,16 +292,16 @@ retry_record:
 		}
 	}
 	close(fd);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	entry = free_slot();
 	if (!entry) {
-		RtlReleasePebLock(); __plat_close(h);
+		__plat_fast_unlock(); __plat_close(h);
 		if (created) unlink(path);
 		saved = EMFILE; goto fail_locked;
 	}
 	entry->sem.__handle = h; entry->sem.__magic = SEM_MAGIC; entry->sem.__named = 1;
 	entry->path = path; entry->refs = 1; entry->linked = 1;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	namespace_unlock(ns);
 	errno = 0;
 	return &entry->sem;
@@ -317,14 +317,14 @@ int sem_close(sem_t *sem)
 {
 	struct named_sem *entry;
 	if (!valid(sem) || !sem->__named) { errno = EINVAL; return -1; }
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	entry = find_sem(sem);
-	if (!entry || !entry->refs) { RtlReleasePebLock(); errno = EINVAL; return -1; }
+	if (!entry || !entry->refs) { __plat_fast_unlock(); errno = EINVAL; return -1; }
 	entry->refs--;
 	if (!entry->linked && !entry->refs) {
 		__plat_close(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -339,7 +339,7 @@ int sem_unlink(const char *name)
 	if (namespace_lock(path, &ns) < 0) { free(path); return -1; }
 	result = unlink(path); saved = errno;
 	if (!result) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		entry = find_path(path);
 		if (entry) {
 			entry->linked = 0;
@@ -347,7 +347,7 @@ int sem_unlink(const char *name)
 				__plat_close(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
 			}
 		}
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 	}
 	namespace_unlock(ns);
 	free(path); errno = saved; return result;

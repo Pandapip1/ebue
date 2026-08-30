@@ -68,13 +68,13 @@ static int cond_ready(pthread_cond_t *cond)
 	struct cond_data *data;
 	if (!cond) return EINVAL;
 	data = cond_data(cond);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->magic == COND_MAGIC) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return 0;
 	}
 	if (data->magic == COND_DEAD || data->magic != 0) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
 	if (data->magic == 0) {
@@ -83,7 +83,7 @@ static int cond_ready(pthread_cond_t *cond)
 		data->pshared = PTHREAD_PROCESS_PRIVATE;
 		data->clock = CLOCK_REALTIME;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return data->magic == COND_MAGIC ? 0 : EINVAL;
 }
 
@@ -111,13 +111,13 @@ int pthread_cond_destroy(pthread_cond_t *cond)
 	int error = cond_ready(cond);
 	if (error) return error;
 	data = cond_data(cond);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->waiters) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EBUSY;
 	}
 	data->magic = COND_DEAD;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -133,10 +133,10 @@ static void unlink_waiter(struct cond_data *cond, struct cond_waiter *waiter)
 static void cond_wait_cleanup(void *argument)
 {
 	struct cond_cleanup *cleanup = argument;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (cleanup->waiter->linked)
 		unlink_waiter(cleanup->cond, cleanup->waiter);
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (cleanup->waiter->semaphore) {
 		__plat_close(cleanup->waiter->semaphore);
 		cleanup->waiter->semaphore = 0;
@@ -175,7 +175,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	cleanup.mutex = mutex;
 	cleanup.mutex_held = 0;
 	pthread_cleanup_push(cond_wait_cleanup, &cleanup);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	waiter->next = data->waiters;
 	if (waiter->next) waiter->next->previous = waiter;
 	data->waiters = waiter;
@@ -185,7 +185,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 		unlink_waiter(data, waiter);
 		cleanup.mutex_held = 1;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	while (!error) {
 		int status;
 		if (absolute) {
@@ -203,10 +203,10 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 			status = __plat_wait_one(waiter->semaphore, 1, 0, 0);
 		}
 		if (status == __PLAT_WAIT_TIMEOUT) {
-			RtlAcquirePebLock();
+			__plat_fast_lock();
 			if (waiter->linked) unlink_waiter(data, waiter);
 			else status = __PLAT_WAIT_OK;
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			result = status == __PLAT_WAIT_TIMEOUT ? ETIMEDOUT : 0;
 			break;
 		}
@@ -217,9 +217,9 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 		if (status == __PLAT_WAIT_OK) {
 			break;
 		}
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		if (waiter->linked) unlink_waiter(data, waiter);
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		result = EINVAL;
 		break;
 	}
@@ -258,13 +258,13 @@ int pthread_cond_signal(pthread_cond_t *cond)
 	error = cond_ready(cond);
 	if (error) return error;
 	data = cond_data(cond);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	waiter = data->waiters;
 	if (waiter) {
 		unlink_waiter(data, waiter);
 		__plat_semaphore_post(waiter->semaphore);
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -277,12 +277,12 @@ int pthread_cond_broadcast(pthread_cond_t *cond)
 	error = cond_ready(cond);
 	if (error) return error;
 	data = cond_data(cond);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	while ((waiter = data->waiters)) {
 		unlink_waiter(data, waiter);
 		__plat_semaphore_post(waiter->semaphore);
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 

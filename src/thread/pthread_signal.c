@@ -23,12 +23,12 @@ int pthread_kill(pthread_t thread, int sig)
 {
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	if (sig < 0 || sig >= _NSIG) return EINVAL;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (thread->joined || (!thread->handle && thread->exited)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return ESRCH;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (!sig) return 0;
 	if (__pthread_is_current(thread)) {
 		signal_apc(thread, (void *)(ULONG_PTR)sig, 0);

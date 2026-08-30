@@ -27,39 +27,45 @@
  *     -- an abstract-namespace socket path, say -- is not the same
  *     kind of thing NT's object manager namespace is), not attempted
  *     here.
- *   - __plat_thread_start(): its only caller is
- *     __sig_delivery_init() (src/signal/sigdelivery.c), to launch the
- *     transport's own listener thread -- unreachable, and therefore not
- *     implemented, without the transport it exists to serve.
- *   - __plat_stop_event_create()/__plat_stop_event_probe(): NOT part of
- *     the pipe/mutant transport, but the same family of problem --
- *     src/signal/signal.c's stop_self()/__sig_consume_child_stop() use
- *     a NAMED, cross-process-visible event (looked up by a name derived
- *     from (pid, signal), \BaseNamedObjects\ntlibc-stop.<pid>.<sig>) so
- *     that a process which stops ITSELF can still publish that fact to
- *     a parent's waitpid() that has no handle to be signalled on. NT's
- *     global object-manager namespace makes "create or open by a
- *     well-known name, from either side, race-free" a single syscall;
- *     Linux has no equivalent single primitive (a named POSIX semaphore
- *     via sem_open(3), or a well-known path under /dev/shm, could be
- *     made to do this, but is a real design decision -- naming scheme,
- *     collision/cleanup story, permissions -- not a mechanical syscall
- *     substitution, so it is scoped out here alongside the transport
- *     rather than rushed).
+ *   - __plat_thread_start(): its only caller was
+ *     __sig_delivery_init() in the NT-only sigdelivery.c (src/signal/
+ *     nt/sigdelivery.c, after this migration's own relocation), to
+ *     launch the transport's own listener thread -- unreachable, and
+ *     therefore not implemented, without the transport it exists to
+ *     serve. src/signal/linux/sigdelivery.c's own real, portable
+ *     __sig_delivery_init() needs no such thread at all.
+ *
+ * UPDATE, since the paragraph above was first written:
+ * __plat_stop_event_create()/__plat_stop_event_probe() ARE now
+ * implemented below, using a real (if scoped-down) design: the
+ * filesystem namespace under /tmp, shared by every process on this
+ * host exactly like \BaseNamedObjects is, plus O_CREAT|O_EXCL for
+ * atomic create-vs-open detection and a MAP_SHARED mapping of a small
+ * backing file so every process that opens the same path sees the
+ * SAME futex word -- see src/thread/linux/plat_thread.c's own copy of
+ * this same technique (named semaphores) for the fuller writeup of the
+ * approach and its one disclosed race (a second opener's mmap can, in
+ * principle, race the creator's ftruncate()).
  *
  * What IS implemented below is every function that is either required
  * (__plat_sigevent_create(), by this task's own instruction) or
  * genuinely NT-primitive-shaped-but-portable-in-spirit: event create/
- * wait/peek, and signal.c's kill()-adjacent job-control primitives
+ * wait/peek, signal.c's kill()-adjacent job-control primitives
  * (__plat_process_suspend{,_self}(), __plat_kill_{open,terminate}(),
- * __plat_segv_code()), none of which touch the pipe/mutant transport or
- * the named-stop-event namespace at all.
+ * __plat_segv_code()), and now the named stop-event pair -- none of
+ * which touch the still-unimplemented pipe/mutant transport at all.
  */
 #include <errno.h>
 #include <signal.h>
 #include <poll.h>
 #include <time.h>
+#include "libc.h"       /* struct _UNICODE_STRING's real definition (nt.h) --
+                         * a type-only use, same as every other Linux backend
+                         * in this tree that reads an NT-shaped struct passed
+                         * across a still-NT-shaped seam; see plat_signal.h's
+                         * own banner on why this one is unavoidable. */
 #include "plat_signal.h"
+#include "linux/sync.h"
 
 /* aarch64 Linux syscall numbers (confirmed via a throwaway host program
  * printing the SYS_* macros from <sys/syscall.h>, the same oracle
@@ -75,6 +81,9 @@
 #define SYS_getpid            172
 #define SYS_pidfd_open        434
 #define SYS_pidfd_send_signal 424
+#define SYS_mmap_ps           222
+#define PROT_READ_PS          0x1
+#define PROT_WRITE_PS         0x2
 
 /* A genuine raw syscall trampoline, not a call through the host's own
  * glibc syscall(2) wrapper -- see src/misc/linux/plat_misc.c's own
@@ -346,4 +355,80 @@ int __plat_segv_code(void *addr)
 	long ret = syscall(SYS_msync, (void *)page, (unsigned long)4096, 4 /* MS_ASYNC */);
 	if (is_sys_error(ret) && (int)-ret == ENOMEM) return SEGV_MAPERR;
 	return SEGV_ACCERR;
+}
+
+/* ---- named stop-events, keyed by the filesystem namespace ----------------
+ * See this file's own updated banner. `name`'s wide chars are ASCII by
+ * construction (signal.c's own stop_event_name() builds them from a
+ * fixed prefix plus hex digits), so narrowing byte-by-byte is exact,
+ * not an approximation. */
+#define SYS_openat_ps    56
+#define SYS_ftruncate_ps 46
+#define AT_FDCWD_PS      (-100)
+#define O_RDWR_PS        02
+#define O_CREAT_PS       0100
+#define O_EXCL_PS        0200
+#define MAP_SHARED_PS    0x01
+
+static void stop_event_path(const struct _UNICODE_STRING *name, char *buf, size_t bufsz)
+{
+	static const char prefix[] = "/tmp/.ntlibc-stopev.";
+	size_t plen = sizeof(prefix) - 1, i, j = 0;
+	size_t n = name->Length / sizeof(unsigned short);
+	for (i = 0; i < plen && j < bufsz - 1; i++) buf[j++] = prefix[i];
+	for (i = 0; i < n && j < bufsz - 1; i++) {
+		unsigned short c = name->Buffer[i];
+		buf[j++] = (c == '\\' || c == 0) ? '_' : (char)c;
+	}
+	buf[j] = 0;
+}
+
+/* Opens-or-creates the backing file for `name` and hands back its
+ * MAP_SHARED mapping plus whether THIS call created it. See
+ * src/thread/linux/plat_thread.c's map_named_sem() for the identical
+ * technique and its one disclosed race (a second opener's mmap can, in
+ * principle, race the creator's ftruncate()) -- not repeated here. */
+static int open_shared_stop_event(const struct _UNICODE_STRING *name, int *created,
+                                  struct ntlibc_linux_sync **out)
+{
+	char path[128];
+	long fd, r;
+
+	stop_event_path(name, path, sizeof path);
+	fd = syscall(SYS_openat_ps, (long)AT_FDCWD_PS, (long)path,
+	            (long)(O_RDWR_PS | O_CREAT_PS | O_EXCL_PS), 0600L, 0L, 0L);
+	if (is_sys_error(fd)) {
+		*created = 0;
+		fd = syscall(SYS_openat_ps, (long)AT_FDCWD_PS, (long)path, (long)O_RDWR_PS, 0L, 0L, 0L);
+		if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
+	} else {
+		*created = 1;
+		syscall(SYS_ftruncate_ps, fd, (long)sizeof(struct ntlibc_linux_sync), 0L, 0L, 0L, 0L);
+	}
+	r = syscall(SYS_mmap_ps, 0L, (long)sizeof(struct ntlibc_linux_sync),
+	           (long)(PROT_READ_PS | PROT_WRITE_PS), (long)MAP_SHARED_PS, fd, 0L);
+	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
+	if (is_sys_error(r)) { errno = (int)-r; return -1; }
+	*out = (struct ntlibc_linux_sync *)r;
+	if (*created) { (*out)->futex = 0; (*out)->max = 0; (*out)->kind = 2 /* NTLIBC_LX_SYNC_EVENT */; }
+	return 0;
+}
+
+__plat_handle_t __plat_stop_event_create(const struct _UNICODE_STRING *name)
+{
+	struct ntlibc_linux_sync *obj;
+	int created;
+	if (open_shared_stop_event(name, &created, &obj) < 0) return __PLAT_HANDLE_NULL;
+	return (__plat_handle_t)obj;
+}
+
+int __plat_stop_event_probe(const struct _UNICODE_STRING *name, __plat_handle_t *out,
+                            int *already_existed)
+{
+	struct ntlibc_linux_sync *obj;
+	int created;
+	if (open_shared_stop_event(name, &created, &obj) < 0) return -1;
+	*out = (__plat_handle_t)obj;
+	*already_existed = !created;
+	return 0;
 }

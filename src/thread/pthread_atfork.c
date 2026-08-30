@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
 
 struct atfork_handler {
 	void (*prepare)(void);
@@ -21,16 +22,16 @@ int pthread_atfork(void (*prepare)(void), void (*parent)(void),
 {
 	struct atfork_handler *new_handlers;
 	size_t capacity;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (handler_count == handler_capacity) {
 		if (!__array_next_capacity(handler_capacity, handler_count, 1, 8,
 		    sizeof *handlers, &capacity)) {
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			return ENOMEM;
 		}
 		new_handlers = realloc(handlers, capacity * sizeof *handlers);
 		if (!new_handlers) {
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			return ENOMEM;
 		}
 		handlers = new_handlers;
@@ -40,16 +41,16 @@ int pthread_atfork(void (*prepare)(void), void (*parent)(void),
 	handlers[handler_count].parent = parent;
 	handlers[handler_count].child = child;
 	handler_count++;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
 void __pthread_atfork_prepare(void)
 {
 	size_t i;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	active_count = handler_count;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	for (i = active_count; i; i--)
 		if (handlers[i - 1].prepare) handlers[i - 1].prepare();
 }

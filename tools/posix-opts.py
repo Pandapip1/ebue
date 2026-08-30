@@ -228,7 +228,19 @@ def compile_command(cfg: dict[str, str], source: Path, output: Path) -> list[str
         # link line, which has never used -l/-L at all and works.
         # Named directly, an .a is just another link input to ld, no
         # -l-specific search/compatibility path involved.
-        command += ["-static", "-no-pie", "-fno-stack-protector"]
+        # -mno-outline-atomics: clang's default on aarch64 emits calls
+        # to runtime-detected LSE helpers (__aarch64_cas4_acq_rel and
+        # friends) for anything above the weakest __atomic_* memory
+        # orders, normally satisfied by libgcc/compiler-rt at link
+        # time. This build links neither (-nostdlib, no host runtime),
+        # so those calls were undefined references on every single
+        # OPTS case -- confirmed the same four symbols appeared
+        # whether or not the case itself used threads, since they come
+        # from this tree's OWN library code (plat_thread.c's __atomic_*
+        # builtins), not from anything case-specific. This flag forces
+        # inline LL/SC atomics instead, which every baseline ARMv8.0
+        # target (this one) already supports natively.
+        command += ["-static", "-no-pie", "-fno-stack-protector", "-mno-outline-atomics"]
         command += [
             "-o", str(output),
             str(ROOT / "lib" / "crt1.o"), str(ROOT / "lib" / "start.o"),

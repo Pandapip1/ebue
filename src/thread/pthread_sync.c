@@ -191,10 +191,10 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 		else data->magic = BARRIER_DEAD;
 		release_guard(&data->guard);
 	} else {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		if (data->waiting) result = EBUSY;
 		else data->magic = BARRIER_DEAD;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 	}
 	return result;
 }
@@ -210,13 +210,13 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 	if (data->pshared == PTHREAD_PROCESS_PRIVATE) {
 		if (__plat_event_create(&waiter.event) < 0) waiter.event = 0;
 		waiter.barrier = data;
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		generation = data->generation;
 		if (++data->waiting == data->count) {
 			data->waiting = 0;
 			data->generation++;
 			wake_barrier_waiters_locked(data, generation);
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			if (waiter.event) __plat_close(waiter.event);
 			return PTHREAD_BARRIER_SERIAL_THREAD;
 		}
@@ -225,15 +225,15 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 			waiter.next = data->waiters;
 			data->waiters = &waiter;
 		}
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		if (waiter.event) {
 			int wait_result;
 			do {
 				wait_result = __plat_wait_one(waiter.event, 1, 0, 0);
 			} while (wait_result == __PLAT_WAIT_INTR);
-			RtlAcquirePebLock();
+			__plat_fast_lock();
 			unlink_barrier_waiter_locked(&waiter);
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			__plat_close(waiter.event);
 		} else {
 			/* pthread_barrier_wait() has no resource-error return. Retain

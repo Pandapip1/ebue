@@ -62,19 +62,19 @@ static int rwlock_ready(pthread_rwlock_t *lock)
 	struct rwlock_data *data;
 	if (!lock) return EINVAL;
 	data = rwlock_data(lock);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->magic == RWLOCK_MAGIC) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return 0;
 	}
 	if (data->magic == RWLOCK_DEAD || data->magic != 0) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
 	memset(data, 0, sizeof *data);
 	data->magic = RWLOCK_MAGIC;
 	data->pshared = PTHREAD_PROCESS_PRIVATE;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -161,12 +161,12 @@ static void wake_waiters(struct rwlock_data *data)
 static void wait_cleanup(void *argument)
 {
 	struct rw_waiter *waiter = argument;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (waiter->linked) {
 		unlink_waiter(waiter);
 		wake_waiters(waiter->lock);
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (waiter->semaphore) {
 		__plat_close(waiter->semaphore);
 		waiter->semaphore = 0;
@@ -188,28 +188,28 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	data = rwlock_data(lock);
 	if (data->pshared == PTHREAD_PROCESS_SHARED)
 		return shared_acquire(data, absolute, try_only, write);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (write ? (!data->writer && !data->readers) :
 	    (!data->writer && !data->waiting_writers)) {
 		if (write) data->writer = self;
 		else data->readers++;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return 0;
 	}
 	if (data->writer == self) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return try_only ? EBUSY : EDEADLK;
 	}
 	if (try_only) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EBUSY;
 	}
 	if (!absolute || absolute->tv_sec < 0 || absolute->tv_nsec < 0 ||
 	    absolute->tv_nsec >= 1000000000L) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
 	waiter = calloc(1, sizeof *waiter);
 	if (!waiter) {
@@ -225,18 +225,18 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 		return EAGAIN;
 	}
 	pthread_cleanup_push(wait_cleanup, waiter);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (write ? (!data->writer && !data->readers) :
 	    (!data->writer && !data->waiting_writers)) {
 		if (write) data->writer = self;
 		else data->readers++;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		pthread_setcancelstate(old_state, 0);
 		goto done;
 	}
 	if (data->writer == self) {
 		result = EDEADLK;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		pthread_setcancelstate(old_state, 0);
 		goto done;
 	}
@@ -246,7 +246,7 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	data->tail = waiter;
 	waiter->linked = 1;
 	if (write) data->waiting_writers++;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	pthread_setcancelstate(old_state, 0);
 	for (;;) {
 		struct timespec now;
@@ -262,13 +262,13 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 		}
 		if (status == __PLAT_WAIT_INTR) continue;
 		if (status == __PLAT_WAIT_TIMEOUT) {
-			RtlAcquirePebLock();
+			__plat_fast_lock();
 			if (waiter->linked) {
 				unlink_waiter(waiter);
 				wake_waiters(data);
 				result = ETIMEDOUT;
 			}
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			break;
 		}
 		if (status == __PLAT_WAIT_ERROR) result = EINVAL;
@@ -307,10 +307,10 @@ int pthread_rwlock_destroy(pthread_rwlock_t *lock)
 		data->magic = RWLOCK_DEAD;
 		return 0;
 	}
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->writer || data->readers || data->head) error = EBUSY;
 	else data->magic = RWLOCK_DEAD;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return error;
 }
 
@@ -363,12 +363,12 @@ int pthread_rwlock_unlock(pthread_rwlock_t *lock)
 				state < 0 ? 0 : state - 1) == state) return 0;
 		}
 	}
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->writer == self) data->writer = 0;
 	else if (data->readers) data->readers--;
 	else error = EINVAL;
 	if (!error) wake_waiters(data);
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return error;
 }
 

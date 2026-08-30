@@ -51,8 +51,8 @@ struct __pthread *__pthread_current(void)
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;
 	__sig_current_mask_copy(&self->sigmask);
-	/* Only this one call site (of the many RtlAcquirePebLock()/
-	 * RtlReleasePebLock() pairs elsewhere in this file) was relocated to
+	/* Only this one call site (of the many __plat_fast_lock()/
+	 * __plat_fast_unlock() pairs elsewhere in this file) was relocated to
 	 * the portable __plat_fast_lock()/__plat_fast_unlock() (src/internal/
 	 * plat_thread.h) -- __pthread_current() is a hard dependency of
 	 * pthread_mutex.c's own mutex_ready()/mutex_acquire(), which now
@@ -72,7 +72,7 @@ struct __pthread *__pthread_current(void)
 void __pthread_reset_after_fork(void)
 {
 	struct __pthread *self = __pthread_self_control;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	live_threads = self ? 1 : 0;
 	if (self) {
 		self->exited = 0;
@@ -81,7 +81,7 @@ void __pthread_reset_after_fork(void)
 		self->detached = 0;
 		self->handle = __plat_thread_duplicate_self();
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 }
 
 pthread_t pthread_self(void)
@@ -120,12 +120,12 @@ static void finish(struct __pthread *self, void *result)
 		cleanup->__routine(cleanup->__argument);
 	}
 	__pthread_run_specific_destructors(self);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	self->result = result;
 	self->exited = 1;
 	last = --live_threads == 0;
 	detached = self->detached;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (last) exit(0);
 	if (detached && self->handle && self->handle != __plat_thread_current_pseudo()) {
 		__plat_close(self->handle);
@@ -183,10 +183,10 @@ int pthread_create(pthread_t *__restrict output,
 	thread->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	__sig_current_mask_copy(&thread->sigmask);
 	if (creator) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		thread->sched_policy = creator->sched_policy;
 		thread->sched_priority = creator->sched_priority;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 	} else {
 		thread->sched_policy = data->sched_policy;
 		thread->sched_priority = data->sched_priority;
@@ -197,17 +197,17 @@ int pthread_create(pthread_t *__restrict output,
 		return EAGAIN;
 	}
 	thread->handle = handle;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	live_threads++;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	*output = thread;
 	if (__plat_thread_resume(handle) < 0) {
 		__plat_close(handle);
 		thread->handle = 0;
 		thread->joined = 1;
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		live_threads--;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EAGAIN;
 	}
 	return 0;
@@ -218,17 +218,17 @@ int pthread_join(pthread_t thread, void **result)
 	int wait_result;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	if (thread == __pthread_current()) return EDEADLK;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (thread->detached) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
 	if (thread->joined || thread->joining || !thread->handle) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return ESRCH;
 	}
 	thread->joining = 1;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	/* __PLAT_WAIT_INTR (NT's STATUS_USER_APC/STATUS_ALERTED) is treated
 	 * as a completed wait below, matching the original NTSTATUS check
 	 * exactly: both statuses satisfy NT_SUCCESS(), so the original
@@ -237,9 +237,9 @@ int pthread_join(pthread_t thread, void **result)
 	 * (__PLAT_WAIT_ERROR here) took this branch. */
 	wait_result = __plat_wait_one(thread->handle, 1, 0, 0);
 	if (wait_result == __PLAT_WAIT_ERROR) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		thread->joining = 0;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
 	if (result) *result = thread->result;
@@ -254,18 +254,18 @@ int pthread_detach(pthread_t thread)
 {
 	int close_handle;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (thread->joined || (!thread->handle && thread->exited)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return ESRCH;
 	}
 	if (thread->detached || thread->joining) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
 	thread->detached = 1;
 	close_handle = thread->exited && thread->handle != 0;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (close_handle) {
 		__plat_close(thread->handle);
 		thread->handle = 0;
@@ -490,10 +490,10 @@ int pthread_getschedparam(pthread_t thread, int *__restrict policy,
 	if (!thread || thread->magic != PTHREAD_MAGIC || thread->joined ||
 	    (!thread->handle && thread->exited)) return ESRCH;
 	if (!policy || !parameter) return EINVAL;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	*policy = thread->sched_policy;
 	parameter->sched_priority = thread->sched_priority;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -504,10 +504,10 @@ int pthread_setschedparam(pthread_t thread, int policy,
 	    (!thread->handle && thread->exited)) return ESRCH;
 	if (!parameter || !valid_policy(policy) ||
 	    !valid_priority(policy, parameter->sched_priority)) return EINVAL;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	thread->sched_policy = policy;
 	thread->sched_priority = parameter->sched_priority;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -518,9 +518,9 @@ int pthread_setschedprio(pthread_t thread, int priority)
 	    (!thread->handle && thread->exited)) return ESRCH;
 	policy = thread->sched_policy;
 	if (!valid_priority(policy, priority)) return EINVAL;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	thread->sched_priority = priority;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 

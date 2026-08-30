@@ -1604,7 +1604,17 @@ static void install_ctrl_handler(void)
 
 void __signal_init(void)
 {
+#ifdef _WIN32
+	/* NT hardware faults (SIGSEGV/SIGFPE/SIGILL/SIGBUS) arrive as NT
+	 * exceptions and are turned into signals by this vectored handler
+	 * -- see this file's own banner. Linux already delivers these as
+	 * real kernel signals; a real Linux fault path needs its own
+	 * rt_sigaction(2)-installed handler (disclosed follow-up, see
+	 * src/signal/linux/sigdelivery.c's banner for the same class of
+	 * gap on the delivery side), not this NT-only call, which has no
+	 * meaning off NT at all. */
 	RtlAddVectoredExceptionHandler(1, exception_handler);
+#endif
 #ifdef NTLIBC_USE_KERNEL32
 	install_ctrl_handler();
 #else

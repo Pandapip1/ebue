@@ -15,7 +15,7 @@ struct key_slot {
 };
 
 /* Guarded by the ntdll PEB lock -- every function below takes it via the
- * RtlAcquirePebLock()/RtlReleasePebLock() macros (src/internal/libc.h)
+ * __plat_fast_lock()/__plat_fast_unlock() macros (src/internal/libc.h)
  * before touching a slot. */
 static struct key_slot keys[PTHREAD_KEYS_MAX] NTLIBC_GUARDED_BY(__ntlibc_peb_lock_token);
 
@@ -40,31 +40,31 @@ int pthread_key_create(pthread_key_t *output, void (*destructor)(void *))
 {
 	unsigned index;
 	if (!output) return EINVAL;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	for (index = 0; index < PTHREAD_KEYS_MAX; index++) {
 		if (keys[index].allocated) continue;
 		keys[index].allocated = 1;
 		keys[index].destructor = destructor;
 		*output = key_value(index, keys[index].generation);
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return 0;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return EAGAIN;
 }
 
 int pthread_key_delete(pthread_key_t key)
 {
 	unsigned index = key_index(key);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (!valid_key(key)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
 	keys[index].allocated = 0;
 	keys[index].destructor = 0;
 	keys[index].generation++;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -72,12 +72,12 @@ void *pthread_getspecific(pthread_key_t key)
 {
 	struct __pthread *self;
 	unsigned index = key_index(key);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (!valid_key(key)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return 0;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	self = __pthread_current();
 	if (!self || !self->specific || self->specific[index].key != key)
 		return 0;
@@ -88,12 +88,12 @@ int pthread_setspecific(pthread_key_t key, const void *value)
 {
 	struct __pthread *self;
 	unsigned index = key_index(key);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (!valid_key(key)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	self = __pthread_current();
 	if (!self) return ENOMEM;
 	if (!self->specific) {
@@ -117,11 +117,11 @@ void __pthread_run_specific_destructors(struct __pthread *self)
 			void (*destructor)(void *) = 0;
 			void *value = specific->value;
 			if (!value) continue;
-			RtlAcquirePebLock();
+			__plat_fast_lock();
 			if (valid_key(specific->key))
 				destructor = keys[index].destructor;
 			specific->value = 0;
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			if (destructor) {
 				called = 1;
 				destructor(value);
@@ -170,10 +170,10 @@ static void remove_once_waiter_locked(struct once_waiter *waiter)
 static void reset_once(void *argument)
 {
 	struct once_cleanup *cleanup = argument;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	*cleanup->control = PTHREAD_ONCE_INIT;
 	wake_once_waiters_locked(cleanup->control);
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 }
 
 int pthread_once(pthread_once_t *control, void (*initialize)(void))
@@ -181,24 +181,24 @@ int pthread_once(pthread_once_t *control, void (*initialize)(void))
 	__plat_handle_t event = 0;
 	struct once_waiter waiter;
 	for (;;) {
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		if (*control == 2) {
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			if (event) __plat_close(event);
 			return 0;
 		}
 		if (*control == PTHREAD_ONCE_INIT) {
 			struct once_cleanup reset = { control };
 			*control = 1;
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			if (event) { __plat_close(event); event = 0; }
 			pthread_cleanup_push(reset_once, &reset);
 			initialize();
 			pthread_cleanup_pop(0);
-			RtlAcquirePebLock();
+			__plat_fast_lock();
 			*control = 2;
 			wake_once_waiters_locked(control);
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			return 0;
 		}
 		if (event) {
@@ -206,16 +206,16 @@ int pthread_once(pthread_once_t *control, void (*initialize)(void))
 			waiter.event = event;
 			waiter.next = once_waiters;
 			once_waiters = &waiter;
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			__plat_wait_one(event, 0, 0, 0);
-			RtlAcquirePebLock();
+			__plat_fast_lock();
 			remove_once_waiter_locked(&waiter);
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			__plat_close(event);
 			event = 0;
 			continue;
 		}
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		{
 			if (__plat_event_create(&event) < 0) {
 				/* pthread_once() has no resource-error return. Preserve the old
