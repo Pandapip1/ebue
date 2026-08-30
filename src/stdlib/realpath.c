@@ -4,31 +4,22 @@
  * that does not exist cannot be canonicalised that way, so it is an
  * ENOENT like POSIX says.
  *
- * DELIBERATELY LEFT AN NT-ONLY FRONT DOOR, not behind the platform-
- * abstraction seam (src/internal/plat_unistd.h etc) at all -- documented
- * here rather than silently, matching this migration's own standard
- * (see src/internal/plat_fcntl.h's history: "honest partial progress
- * with a documented gap beats a forced, fragile fix").
- *
- * The __vfs_resolve_at() call below IS the same NT-only-overlay call
- * chdir()/readlinkat() used to make directly from their own front doors
- * before being moved behind __plat_chdir()/__plat_readlink() -- but
- * moving just that one call here would not make this function portable,
- * because everything AFTER it depends just as completely on __handle_path()
- * (src/internal/path.c), which does not merely interpret an NT status the
- * way __ntpath_at()/__vfs_resolve_at() do: it takes a raw NT `HANDLE`
- * (not the abstract __plat_handle_t src/internal/plat_handle.h's whole
- * seam is built around) and asks NT itself what path a handle was
- * opened through -- there is no POSIX or Linux equivalent call, and a
- * real Linux backend would need an entirely different algorithm (e.g.
- * readlink() on /proc/self/fd/N, or the openat2(2) RESOLVE_* flags),
- * not a translation of this one. __handle_path() also has three other
- * NT-only callers (src/internal/vfs.c, src/stat/chmod.c,
- * src/process/exec.c) that would need the same treatment for a Linux
- * realpath() to mean anything -- restructuring only this front door
- * would be a forced, fragile fix for a small fraction of the real gap.
- * Left as future work; the whole function stays exactly as it always
- * was, calling __vfs_resolve_at()/__handle_path() directly. */
+ * This front door is genuinely portable, not NT-only despite reading
+ * that way at a glance: __vfs_resolve_at() (src/internal/vfs.c) and
+ * __handle_path() (src/internal/{nt,linux}/handle_path.c) are both
+ * real, correct, two-backend platform interfaces now -- the former
+ * since the vfs.c/vfs_resolve.c split, the latter since the OPTS
+ * shm_open/shm_unlink/mmap link gap traced fchmod()'s EACCES retry
+ * (src/stat/chmod.c) to this exact function and got it a real Linux
+ * body (readlinkat(2) on /proc/self/fd/N -- exactly the algorithm this
+ * comment used to say a Linux backend "would need", before one existed).
+ * __handle_path()'s Linux banner documents its own remaining honest
+ * limitation (an unlinked-while-open descriptor's " (deleted)" suffix,
+ * inherited from /proc/self/fd itself, not introduced here); nothing
+ * else about this function is NT-specific any more, so it keeps calling
+ * __vfs_resolve_at()/__handle_path() directly rather than being routed
+ * through a dedicated __plat_realpath() of its own -- there is no
+ * platform-specific behavior left here for such a seam to hide. */
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>

@@ -54,6 +54,26 @@
  * (__plat_process_suspend{,_self}(), __plat_kill_{open,terminate}(),
  * __plat_segv_code()), and now the named stop-event pair -- none of
  * which touch the still-unimplemented pipe/mutant transport at all.
+ *
+ * UPDATE, since the paragraph above was first written: __plat_kill_open(),
+ * __plat_process_suspend() and __plat_kill_terminate() below used to box
+ * their process handle as fd+1, this file's OWN event-handle convention,
+ * on the assumption that a process handle was always a fresh
+ * pidfd_open(2) result. It is not: src/signal/signal.c's kill() also
+ * feeds these functions `h` straight from struct __child's own .h field
+ * for a tracked child, and src/process/linux/plat_process.c's box_pid()
+ * sets that to the bare pid, no offset (that file's own banner states
+ * the convention outright). Two functions sharing one argument,
+ * disagreeing about its encoding, is exactly the bug that let
+ * killpg/1-2.c (third_party/ltp's OPEN POSIX suite) leave an orphaned
+ * child spinning in sigsuspend() forever: the SIGUSR1 meant to wake it
+ * went through __plat_kill_terminate() with `h` misread as fd+1, handed
+ * pidfd_send_signal(2) a garbage descriptor number, failed EBADF, and
+ * nothing ever retried. Fixed by making these three functions agree with
+ * plat_process.c's own choice instead of keeping a second, silently
+ * incompatible one -- see __plat_process_suspend()'s own comment for the
+ * detail and the one hazard this reopens (already disclosed and already
+ * accepted, for the identical reason, by plat_process.c's own banner).
  */
 #include <errno.h>
 #include <signal.h>
@@ -285,22 +305,51 @@ int __plat_process_suspend_self(void)
 	return 0;
 }
 
+/* `h` here is a process handle in src/process/linux/plat_process.c's own
+ * domain -- the pid itself, cast straight through, NO offset (that
+ * file's banner states the convention outright) -- NOT this file's own
+ * box()/unbox() (fd+1), which is a DIFFERENT __plat_handle_t domain
+ * belonging to event handles (__plat_sigevent_create() below): the two
+ * happen to share a C type only because plat_signal.h/plat_process.h
+ * inherited one universal `__plat_handle_t` typedef from the NT side,
+ * where every kind of handle really is interchangeable.
+ *
+ * This was box()/unbox() (fd+1) here too, silently assuming a real
+ * pidfd_open(2) result -- wrong on every path that actually matters:
+ * signal.c's kill() populates `h` from struct __child's own .h field
+ * (src/process/children.c), set at fork() time by
+ * src/process/linux/plat_process.c's box_pid(), which is a documented
+ * no-op (that file's own banner: "the pid itself, cast straight
+ * through"). Feeding a raw pid through this file's fd+1 unbox() reads
+ * pid-1 as an fd number and hands it to pidfd_send_signal(2), which
+ * fails EBADF against whatever garbage descriptor that number names --
+ * confirmed live: killpg/1-2.c (third_party/ltp's OPEN POSIX suite)
+ * left an orphaned, un-signalable grandchild spinning forever in its own
+ * sigsuspend() wait loop, because the SIGUSR1 delivery that was supposed
+ * to wake it silently failed this way and the parent that would have
+ * retried already exited. __plat_process_resume() (SIGCONT,
+ * src/process/linux/plat_process.c) was ALREADY correct against this
+ * exact `h` -- it is the pid-domain owner, unbox_pid() there is a plain
+ * cast -- which is what exposed the split: two functions sharing one
+ * argument, silently disagreeing about what it meant.
+ *
+ * Fixed by making every process-handle-consuming function in THIS file
+ * (this one, __plat_kill_open(), __plat_kill_terminate() below) agree
+ * with plat_process.c's own choice instead of inventing a second one:
+ * `h` is the raw pid. A pidfd is opened here, used once, and closed --
+ * still real pidfd_send_signal(2) delivery (SIGSTOP is uncatchable
+ * regardless, but pidfd_send_signal keeps the same pid-reuse-immunity
+ * property __plat_kill_open()'s existence probe already relies on,
+ * rather than quietly downgrading to plain kill(2) the way
+ * __plat_process_resume() already, separately, does). */
 int __plat_process_suspend(__plat_handle_t h)
 {
-	/* `h` here is a process handle -- a boxed pidfd (fd+1), the SAME
-	 * convention src/misc/linux/plat_misc.c's process handles use, and
-	 * for the identical reason (see that file's banner at length):
-	 * src/signal/signal.c's kill() calls plat_fd.h's shared
-	 * __plat_close() on any handle __plat_kill_open() below vends, and
-	 * that function only does the right thing on a real fd. Signal
-	 * delivery goes through pidfd_send_signal(2), not kill(pid, ...),
-	 * for the same pid-reuse-immunity reason __plat_process_alive()
-	 * (plat_misc.c) does -- SIGSTOP is Linux's own real, uncatchable
-	 * stop signal, and kill()'s job-control arm needs nothing more than
-	 * delivering it, unlike NT's NtSuspendProcess/NtResumeProcess pair,
-	 * which exists only because NT has no signal delivery at all (see
-	 * src/signal/signal.c's own comment on sig_job_control()). */
-	long ret = syscall(SYS_pidfd_send_signal, (long)unbox(h), (long)SIGSTOP, 0L, 0L);
+	long pid = (long)(int)(long)h;
+	long fd = syscall(SYS_pidfd_open, pid, 0L);
+	long ret;
+	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
+	ret = syscall(SYS_pidfd_send_signal, fd, (long)SIGSTOP, 0L, 0L);
+	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -317,41 +366,59 @@ int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out)
 {
 	/* Linux has no "open a process object" step for most per-process
 	 * syscalls (kill(2), and, via src/misc/linux/plat_misc.c,
-	 * getpriority(2)/setpriority(2), all take a bare pid_t directly),
-	 * but this handle specifically must survive a later
-	 * plat_fd.h __plat_close() call from kill() (src/signal/signal.c:
-	 * `if (!c) __plat_close(h);`, on every path through this function),
-	 * and that shared close function only does the right thing on a
-	 * real fd -- see src/misc/linux/plat_misc.c's banner for the full
-	 * reasoning already worked out there for the identical constraint.
-	 * So this hands back a pidfd_open(2) handle, boxed fd+1 the same
-	 * way, not a bare boxed pid.
+	 * getpriority(2)/setpriority(2), all take a bare pid_t directly).
+	 *
+	 * This used to hand back a pidfd_open(2) handle, boxed fd+1, on the
+	 * reasoning that the result has to survive a later plat_fd.h
+	 * __plat_close() call from kill() (src/signal/signal.c:
+	 * `if (!c) __plat_close(h);`) which only does the right thing on a
+	 * real fd. That reasoning was sound for THAT one call site but broke
+	 * every other consumer of this same __plat_handle_t: kill()'s other
+	 * paths (sig_job_control(), __plat_kill_terminate() below) also
+	 * receive `h` from struct __child's own .h field for a TRACKED
+	 * child, which src/process/linux/plat_process.c's box_pid() sets to
+	 * the bare pid, no offset (that file's own banner states the
+	 * convention outright) -- so the same downstream functions were
+	 * being fed fd+1 on one path and a bare pid on the other, silently
+	 * disagreeing about what their own argument meant. See
+	 * __plat_process_suspend()'s updated comment above for the live
+	 * failure this produced (an orphaned, un-signalable child in
+	 * killpg/1-2.c) and the fix: every process-handle consumer in this
+	 * file now agrees with plat_process.c's choice -- `h` is the bare
+	 * pid -- rather than each function guessing its own encoding.
+	 *
+	 * That does reopen the __plat_close() hazard this used to dodge: a
+	 * bare pid handed to plat_fd.h's fd-domain close() reads pid-1 as an
+	 * fd number and closes whatever real descriptor happens to have that
+	 * value, if any. src/process/linux/plat_process.c's own banner
+	 * already accepts the identical risk for struct __child's .h field
+	 * (mark_children_inheritable()/__child_remove() call the same
+	 * fd-domain __plat_dup()/__plat_close() on a bare-pid handle today)
+	 * with the same disclosed reasoning: real pids on this host run past
+	 * a million (that file's own report), so pid-1 reliably lands on an
+	 * fd number this small a process never opened, and the close fails
+	 * silently EBADF rather than closing something real. A coincidence
+	 * of scale, not a proof, exactly as that banner says -- and now the
+	 * SAME coincidence this function also leans on, rather than a new
+	 * and different one.
 	 *
 	 * kill(pid, 0) is still the existence-and-permission probe
-	 * kill.html's own semantics already want (no signal sent) and the
-	 * one pidfd_open(2) itself does NOT perform (it only requires the
-	 * pid to exist, not that this process may signal it) -- its real
-	 * errno IS the [EPERM]-vs-[ESRCH] distinction this contract asks
-	 * for, a strictly more direct match than NT's STATUS_ACCESS_DENIED
-	 * narrowing (src/signal/nt/plat_signal.c's own __plat_kill_open()),
-	 * not an approximation of it. `want_suspend_resume` has nothing to
-	 * translate: unlike NT's PROCESS_SUSPEND_RESUME access right, a
-	 * pidfd_send_signal(2) SIGSTOP/SIGCONT to a pid this process
+	 * kill.html's own semantics already want (no signal sent) -- its
+	 * real errno IS the [EPERM]-vs-[ESRCH] distinction this contract
+	 * asks for, a strictly more direct match than NT's
+	 * STATUS_ACCESS_DENIED narrowing (src/signal/nt/plat_signal.c's own
+	 * __plat_kill_open()), not an approximation of it.
+	 * `want_suspend_resume` has nothing to translate: unlike NT's
+	 * PROCESS_SUSPEND_RESUME access right, signalling a pid this process
 	 * already has permission to signal at all needs no separate right. */
-	long ret, fd;
+	long ret;
 	(void)want_suspend_resume;
 	ret = syscall(SYS_kill, (long)pid, 0L);
 	if (is_sys_error(ret)) {
 		errno = ((int)-ret == EPERM) ? EPERM : ESRCH;
 		return -1;
 	}
-	fd = syscall(SYS_pidfd_open, (long)pid, 0L);
-	if (is_sys_error(fd)) { errno = ESRCH; return -1; } /* the target
-	                                                      * exited in the
-	                                                      * race between
-	                                                      * the two calls
-	                                                      * above */
-	*out = box((int)fd);
+	*out = (__plat_handle_t)(long)pid;
 	return 0;
 }
 
@@ -372,9 +439,18 @@ int __plat_kill_terminate(__plat_handle_t h, int exitcode)
 	 * is returned only once the process is genuinely gone -- which is
 	 * already the correct, honest POSIX answer for "no such process to
 	 * kill", not a case this needs to paper over the way NT's status
-	 * does. */
-	long ret = syscall(SYS_pidfd_send_signal, (long)unbox(h), (long)SIGKILL, 0L, 0L);
+	 * does.
+	 *
+	 * `h` is the bare pid, same as __plat_process_suspend() above and
+	 * for the identical reason (see that function's updated comment) --
+	 * a fresh pidfd is opened, used once for the kill, and closed. */
+	long pid = (long)(int)(long)h;
+	long fd = syscall(SYS_pidfd_open, pid, 0L);
+	long ret;
 	(void)exitcode;
+	if (is_sys_error(fd)) { errno = (int)-fd; return -1; }
+	ret = syscall(SYS_pidfd_send_signal, fd, (long)SIGKILL, 0L, 0L);
+	syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }

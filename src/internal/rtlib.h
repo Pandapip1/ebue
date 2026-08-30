@@ -47,6 +47,18 @@ double __floatundidf(unsigned long long);
 float __floatundisf(unsigned long long);
 long double __floatundixf(unsigned long long);
 
+/* ---- binary128 <-> binary64/binary32 helpers (arch/aarch64/src/
+ * ld128_convert.c) ---------------------------------------------------- */
+/* Emitted for every `long double` <-> `double`/`float` conversion on
+ * aarch64, where `long double` is real IEEE 754 binary128 ("quad") and
+ * the CPU has no hardware for it at all -- see that file's own banner
+ * for why this build needs its own, real implementation rather than
+ * linking libgcc/compiler-rt (it links neither; this build is
+ * -nostdlib). Signatures match libgcc's/compiler-rt's own. */
+long double __extenddftf2(double);
+double __trunctfdf2(long double);
+float __trunctfsf2(long double);
+
 /* ---- program entry (crt/crt1.c) ---------------------------------------- */
 /* tcc's PE linker picks _start up as the image entry point by name.
  * Neither of these is ever called from C.
