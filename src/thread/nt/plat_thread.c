@@ -365,3 +365,12 @@ ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return (ssize_t)io.Information;
 }
+
+/* src/internal/plat_thread.h's own banner explains why this pair needs
+ * no creation step: the PEB lock is set up by the OS before any user
+ * code runs, so these are trivial one-line wrappers, exactly what
+ * src/thread/pthread_mutex.c's/pthread.c's own direct
+ * RtlAcquirePebLock()/RtlReleasePebLock() calls already were before
+ * being relocated here -- no behavior change, only relocation. */
+void __plat_fast_lock(void) { RtlAcquirePebLock(); }
+void __plat_fast_unlock(void) { RtlReleasePebLock(); }

@@ -96,6 +96,18 @@ pid_t __plat_getppid(void)
 	return (pid_t)pbi.InheritedFromUniqueProcessId;
 }
 
+/* Moved verbatim from src/unistd/getpid.c's own front door -- no
+ * behavior change, only relocation (see plat_unistd.h's own banner). */
+pid_t __plat_getpid(void)
+{
+	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess;
+}
+
+pid_t __plat_gettid(void)
+{
+	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread;
+}
+
 /* ======================================================================
  * ftruncate.c
  * ====================================================================== */

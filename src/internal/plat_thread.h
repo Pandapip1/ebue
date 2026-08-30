@@ -239,4 +239,30 @@ long long __plat_query_system_time(void);
 ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
                               off_t off, int write_op);
 
+/* ---- src/thread/pthread_mutex.c's/pthread.c's process-wide fast lock ------
+ *
+ * NT's own PEB lock (RtlAcquirePebLock()/RtlReleasePebLock()), used
+ * directly by both files today to guard pthread_mutex_t's own internal
+ * bookkeeping (owner/recursion/waiters/robust_state) and (in
+ * __pthread_current()) the process-wide live_threads counter -- the
+ * same "this library's real userspace CRT would have one process-wide
+ * fast lock for exactly this" primitive every real libc keeps
+ * somewhere, just not previously named as a seam of its own because
+ * NT hands it to every process pre-built and pre-initialized.
+ *
+ * Unlike every other function in this header, this pair needs no
+ * _create() call and no __plat_handle_t: it is available from the
+ * very first call, always exactly one, process-wide, on every backend
+ * -- NT's PEB lock already has this property (the OS sets it up before
+ * any user code runs), and a backend with no such OS-provided lock
+ * (Linux) can give it the same property for free with a single
+ * zero-initialized static word, no allocation and no lazy-init race to
+ * get wrong. Recursive acquisition by the SAME thread is UNDEFINED --
+ * neither RtlAcquirePebLock() nor a plain futex-based mutex supports
+ * it, and no caller in this tree relies on it (pthread_mutex.c's own
+ * recursive-mutex support is layered on TOP of this lock, in its own
+ * bookkeeping, never by re-entering the lock itself). */
+void __plat_fast_lock(void);
+void __plat_fast_unlock(void);
+
 #endif

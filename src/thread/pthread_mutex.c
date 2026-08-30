@@ -117,19 +117,19 @@ static int mutex_ready(pthread_mutex_t *mutex)
 	int error;
 	if (!mutex) return EINVAL;
 	data = mutex_data(mutex);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->magic == MUTEX_MAGIC) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return 0;
 	}
 	if (data->magic == MUTEX_DEAD || data->magic != 0) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EINVAL;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	error = create_semaphore(&semaphore);
 	if (error) return error;
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->magic == 0) {
 		memset(data, 0, sizeof *data);
 		data->magic = MUTEX_MAGIC;
@@ -142,7 +142,7 @@ static int mutex_ready(pthread_mutex_t *mutex)
 		semaphore = 0;
 	}
 	error = data->magic == MUTEX_MAGIC ? 0 : EINVAL;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (semaphore) __plat_close(semaphore);
 	return error;
 }
@@ -181,15 +181,15 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
 	int error = mutex_ready(mutex);
 	if (error) return error;
 	data = mutex_data(mutex);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->owner || data->waiters) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EBUSY;
 	}
 	semaphore = data->semaphore;
 	data->semaphore = 0;
 	data->magic = MUTEX_DEAD;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (semaphore) __plat_close(semaphore);
 	return 0;
 }
@@ -213,7 +213,7 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 		long long timeout = 0;
 		int has_timeout = 0;
 		int wait_result;
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner &&
 		    data->owner_pid == getpid() &&
 		    data->owner->exited) {
@@ -221,35 +221,35 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 			data->owner_pid = getpid();
 			data->recursion = 1;
 			data->robust_state = ROBUST_OWNER_DEAD;
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			return EOWNERDEAD;
 		}
 		if (!data->owner) {
 			if (data->robust == PTHREAD_MUTEX_ROBUST &&
 			    data->robust_state == ROBUST_NOT_RECOVERABLE) {
-				RtlReleasePebLock();
+				__plat_fast_unlock();
 				return ENOTRECOVERABLE;
 			}
 			data->owner = self;
 			data->owner_pid = getpid();
 			data->recursion = 1;
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			return data->robust == PTHREAD_MUTEX_ROBUST &&
 				data->robust_state == ROBUST_OWNER_DEAD ? EOWNERDEAD : 0;
 		}
 		if (owned_by(data, self)) {
 			if (data->type == PTHREAD_MUTEX_RECURSIVE) {
 				data->recursion++;
-				RtlReleasePebLock();
+				__plat_fast_unlock();
 				return 0;
 			}
 			if (data->type == PTHREAD_MUTEX_ERRORCHECK || try_only) {
-				RtlReleasePebLock();
+				__plat_fast_unlock();
 				return try_only ? EBUSY : EDEADLK;
 			}
 		}
 		if (try_only) {
-			RtlReleasePebLock();
+			__plat_fast_unlock();
 			return EBUSY;
 		}
 		if (absolute) {
@@ -259,7 +259,7 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 			ticks = __timespec_diff_ticks(absolute->tv_sec,
 				absolute->tv_nsec, now.tv_sec, now.tv_nsec);
 			if (ticks <= 0) {
-				RtlReleasePebLock();
+				__plat_fast_unlock();
 				return ETIMEDOUT;
 			}
 			timeout = -ticks;
@@ -272,11 +272,11 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 		}
 		data->waiters++;
 		semaphore = data->semaphore;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		wait_result = __plat_wait_one(semaphore, 1, has_timeout, timeout);
-		RtlAcquirePebLock();
+		__plat_fast_lock();
 		if (data->waiters) data->waiters--;
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		if (wait_result == __PLAT_WAIT_TIMEOUT) {
 			/* Recheck a robust owner's exit before deciding that an
 			 * absolute deadline has expired. */
@@ -313,10 +313,10 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	if (error) return error;
 	if (!self) return EINVAL;
 	data = mutex_data(mutex);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (!owned_by(data, self) && (data->type != PTHREAD_MUTEX_NORMAL ||
 	    data->robust == PTHREAD_MUTEX_ROBUST)) {
-		RtlReleasePebLock();
+		__plat_fast_unlock();
 		return EPERM;
 	}
 	if (--data->recursion == 0) {
@@ -327,7 +327,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 		data->owner_pid = 0;
 		wake = data->waiters != 0;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	if (wake) __plat_semaphore_post(data->semaphore);
 	return 0;
 }
@@ -339,9 +339,9 @@ int pthread_mutex_getprioceiling(const pthread_mutex_t *__restrict mutex,
 	if (!mutex || !ceiling || const_mutex_data(mutex)->magic != MUTEX_MAGIC)
 		return EINVAL;
 	data = const_mutex_data(mutex);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	*ceiling = data->prioceiling;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return 0;
 }
 
@@ -368,13 +368,13 @@ int pthread_mutex_consistent(pthread_mutex_t *mutex)
 	self = __pthread_current();
 	if (!self) return EINVAL;
 	data = mutex_data(mutex);
-	RtlAcquirePebLock();
+	__plat_fast_lock();
 	if (data->robust == PTHREAD_MUTEX_ROBUST && owned_by(data, self) &&
 	    data->robust_state == ROBUST_OWNER_DEAD) {
 		data->robust_state = ROBUST_CONSISTENT;
 		error = 0;
 	}
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	return error;
 }
 

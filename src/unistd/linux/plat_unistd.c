@@ -76,14 +76,13 @@
  * implemented, including __plat_time_now(), the same realtime clock
  * alarm()'s deadline math runs on.
  *
- * ALSO NOT part of this interface at all, and therefore not here: the
- * front door src/unistd/getpid.c's own getpid()/gettid() read NT's TEB
- * (__teb()->ClientId.{UniqueProcess,UniqueThread}) directly, never going
- * through plat_unistd.h -- only getppid() is behind __plat_getppid()
- * below.  That is the same shape of gap plat_fcntl.h's banner documents
- * for open(): a real one, needing a new front door (or a new interface
- * function) for getpid()/gettid() themselves, out of scope for a
- * plat_unistd.h backend alone.
+ * getpid()/gettid() are ALSO real here now, via __plat_getpid()/
+ * __plat_gettid() below (plat_unistd.h gained both): they used to read
+ * NT's TEB directly in src/unistd/getpid.c's own front door, never
+ * going through plat_unistd.h at all -- a real gap noted when this file
+ * was first written, closed once pthread_mutex.c's own port needed a
+ * working getpid() to be reachable on this backend at all (see the
+ * pthread front-door work's own commit for the fuller account).
  */
 #include <fcntl.h>
 #include <errno.h>
@@ -104,6 +103,8 @@
 #define SYS_fsync              82
 #define SYS_pipe2              59
 #define SYS_getppid           173
+#define SYS_getpid            172
+#define SYS_gettid            178
 #define SYS_getuid            174
 #define SYS_clock_gettime     113
 #define SYS_sched_getaffinity 123
@@ -220,10 +221,20 @@ void __plat_alarm_reset_after_fork(void)
 }
 
 /* ======================================================================
- * getpid.c: only getppid() is behind this interface -- see this file's
- * banner for why getpid()/gettid() themselves are a different, larger
- * gap.
+ * getpid.c: getpid()/gettid() are real here now (see plat_unistd.h's
+ * own updated banner) -- neither can fail on Linux any more than
+ * getppid(2) below can, so neither checks is_sys_error() at all.
  * ====================================================================== */
+
+pid_t __plat_getpid(void)
+{
+	return (pid_t)raw_syscall(SYS_getpid, 0L, 0L, 0L, 0L, 0L, 0L);
+}
+
+pid_t __plat_gettid(void)
+{
+	return (pid_t)raw_syscall(SYS_gettid, 0L, 0L, 0L, 0L, 0L, 0L);
+}
 
 pid_t __plat_getppid(void)
 {

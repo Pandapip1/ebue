@@ -51,9 +51,20 @@ struct __pthread *__pthread_current(void)
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;
 	__sig_current_mask_copy(&self->sigmask);
-	RtlAcquirePebLock();
+	/* Only this one call site (of the many RtlAcquirePebLock()/
+	 * RtlReleasePebLock() pairs elsewhere in this file) was relocated to
+	 * the portable __plat_fast_lock()/__plat_fast_unlock() (src/internal/
+	 * plat_thread.h) -- __pthread_current() is a hard dependency of
+	 * pthread_mutex.c's own mutex_ready()/mutex_acquire(), which now
+	 * needs to work on a non-NT backend; the REST of this file
+	 * (pthread_create()/join()/detach()/exit()/cancel()/tsd internals)
+	 * is a separate, larger task deliberately left untouched and NT-only
+	 * for now, not silently ignored -- see this project's own standard
+	 * of disclosing a gap rather than forcing a fix past what a single
+	 * pass can verify carefully. */
+	__plat_fast_lock();
 	live_threads++;
-	RtlReleasePebLock();
+	__plat_fast_unlock();
 	__pthread_self_control = self;
 	return self;
 }

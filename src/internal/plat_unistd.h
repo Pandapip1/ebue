@@ -69,6 +69,17 @@ void __plat_alarm_reset_after_fork(void);
  * pid. */
 pid_t __plat_getppid(void);
 
+/* getpid()/gettid(): this process's own pid, and the calling thread's
+ * own tid. Both used to read NT's TEB directly in src/unistd/getpid.c's
+ * own front door, never behind any plat_* interface at all -- a real
+ * gap other Linux-backend work in this tree already documented and
+ * left for later (see src/unistd/linux/plat_unistd.c's own banner
+ * history). Neither call has a documented failure mode on any backend
+ * (getpid.html/gettid(2) both reserve no error return), so neither
+ * function here does either. */
+pid_t __plat_getpid(void);
+pid_t __plat_gettid(void);
+
 /* ---- src/unistd/ftruncate.c --------------------------------------------- */
 
 /* ftruncate(): set the object `h` refers to to exactly `len` bytes,

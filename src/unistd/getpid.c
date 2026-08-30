@@ -7,7 +7,7 @@
 
 pid_t getpid(void)
 {
-	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueProcess;
+	return __plat_getpid();
 }
 
 pid_t getppid(void)
@@ -17,5 +17,5 @@ pid_t getppid(void)
 
 pid_t gettid(void)
 {
-	return (pid_t)(ULONG_PTR)__teb()->ClientId.UniqueThread;
+	return __plat_gettid();
 }

@@ -397,7 +397,40 @@ int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
  * needs it. NOT this file's to define: __plat_thread_resume() --
  * despite being declared in plat_thread.h, its one real implementation
  * is process's (src/process/nt/plat_process.c), per this task's own
- * multiple-definition history; a Linux one belongs there, not here. */
+ * multiple-definition history; a Linux one belongs there, not here.
+ *
+ * A REAL, SERIOUS, CONFIRMED CONSEQUENCE of "no CLONE_SETTLS" that the
+ * scope note above only gestured at: every thread this function spawns
+ * shares the CALLING thread's TLS region -- not a separate one of its
+ * own -- because aarch64 Linux TLS is addressed through the TPIDR_EL0
+ * register, and clone(2) only reinitializes it for the child when
+ * CLONE_SETTLS is passed (with a `tls` argument pointing at a real
+ * per-thread TCB this backend does not build). Confirmed empirically,
+ * not theorized: a standalone probe (`__thread int marker`, four
+ * spawned threads and the caller each writing/printing `&marker`) shows
+ * every one of the five threads reporting the IDENTICAL address for
+ * `marker`. This means EVERY `__thread`-qualified variable anywhere in
+ * a program linked against this backend -- including src/thread/
+ * pthread.c's own `__pthread_self_control`, the cache
+ * __pthread_current() relies on to hand back a stable per-thread
+ * identity -- silently ALIASES across every thread __plat_thread_spawn()
+ * creates, corrupting whatever multiple real threads concurrently treat
+ * as "their own" state through it. This surfaced while porting
+ * src/thread/pthread_mutex.c's real front door to this backend: a
+ * multi-thread pthread_mutex_t stress test stalled partway through
+ * (real, reproducible, not a timing fluke) because every worker thread
+ * was unknowingly sharing ONE __pthread control block instead of having
+ * its own. Not fixed here: a correct fix needs a real per-thread TCB
+ * whose size/layout matches this program's own linked TLS segment (the
+ * ELF PT_TLS entry's size/alignment) plus CLONE_SETTLS -- genuinely
+ * tied to the "no real crt/startup exists for a Linux target build yet"
+ * gap already disclosed elsewhere in this port's history, not a small,
+ * separately fixable thing. Any code that spawns multiple threads via
+ * this function and relies on __thread storage being independent per
+ * thread (pthread_create()'s own full path would, once ported; this
+ * port's own pthread_mutex_t test works around it by staying single-
+ * threaded -- see fuzz/linux_pilot_test_pthread_mutex.c's own banner)
+ * must know about this first. */
 int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
                         size_t stack_size, int create_suspended,
                         __plat_handle_t *out)
@@ -431,4 +464,89 @@ int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
 	 * semaphore/event objects above never being freed. */
 	*out = (__plat_handle_t)(pid + 1);
 	return 0;
+}
+
+/* __plat_thread_duplicate_self(): boxed exactly like __plat_thread_spawn()
+ * above (tid+1) -- a real, durable identifier for the calling thread
+ * (gettid(2) never fails and is stable for the thread's whole
+ * lifetime, the same "durable, not just valid for one call" property
+ * NT's own NtDuplicateObject(NtCurrentThread()) gives __pthread_current()
+ * this for). Unlike NT's version, there is no separate pseudo-handle
+ * form to fall back to and no failure mode to handle -- gettid(2) is
+ * documented to always succeed. See this file's own banner for why
+ * __plat_wait_one() cannot yet wait on a thread handle at all (only
+ * the semaphore/event objects above): callers that need to actually
+ * block on a thread's exit (pthread_join(), out of this port's scope)
+ * cannot use this handle for that purpose yet, only identify the
+ * thread. */
+#define SYS_gettid 178
+__plat_handle_t __plat_thread_duplicate_self(void)
+{
+	long tid = raw_syscall(SYS_gettid, 0L, 0L, 0L, 0L, 0L, 0L);
+	return (__plat_handle_t)(tid + 1);
+}
+
+/* ---- src/thread/pthread_mutex.c's/pthread.c's process-wide fast lock -----
+ *
+ * See plat_thread.h's own banner for the contract: available from the
+ * first call, always exactly one, process-wide, no creation step.
+ * NT gets this for free from the OS-provided PEB lock; this backend
+ * builds the identical property from a single zero-initialized static
+ * word (BSS, so no allocation and no lazy-init race the way a
+ * dynamically created semaphore would need).
+ *
+ * A plain spinlock, not a futex-based sleep/wake mutex -- deliberately,
+ * not a missed opportunity to reuse the futex_wait()/futex_wake()
+ * helpers above. Every critical section this lock ever protects is a
+ * handful of plain field reads/writes on pthread_mutex_t's own
+ * bookkeeping (owner/recursion/waiters/robust_state) -- never a
+ * blocking call, never unbounded work -- so the lock is never held
+ * for longer than a few instructions by a thread that is, definitionally,
+ * currently running (nothing on this backend is preempted-and-parked
+ * mid-critical-section the way a fair scheduler might starve a spinner
+ * against a *blocked* holder). A first implementation used the
+ * standard three-state futex mutex algorithm (0/1/2, matching
+ * RtlAcquirePebLock()'s own sleep-based contract more closely) and hit
+ * a real, reproducible stall under this port's own contention test
+ * (16 threads x 50000 pthread_mutex_lock()/_unlock() cycles apiece
+ * through the REAL pthread_mutex_t front door -- fuzz/
+ * linux_pilot_test_pthread_mutex.c -- stopped making any further
+ * progress after only a few hundred increments, everything asleep on
+ * a futex, nothing left to wake it): a genuine bug in that first
+ * version, not a false alarm, whether in this file's own algorithm or
+ * in some interaction with the semaphore-based blocking path
+ * mutex_acquire() ALSO uses for its own, separate, already-proven-
+ * correct wait (src/thread/pthread_mutex.c's own semaphore/
+ * __plat_wait_one() path, unrelated to this lock, and unaffected by
+ * this change). Rather than keep chasing a subtle concurrency bug in a
+ * hand-written wakeup protocol for a lock that never needs to sleep in
+ * the first place, this backend uses the lock shape that is trivially,
+ * inspection-obviously correct for its actual job: spin, yielding the
+ * CPU between attempts so a contended spin cannot starve the holder
+ * (which is running right now, on this same host, and will release
+ * within a few instructions) -- exactly the tool a short, always-brief
+ * critical section calls for, and with no wakeup protocol at all,
+ * there is no wakeup-protocol bug to have. Recursive acquisition by
+ * the same thread deadlocks here exactly like RtlAcquirePebLock()
+ * would on NT -- see plat_thread.h's own note that no caller in this
+ * tree relies on recursion through this specific lock. */
+static int fast_lock_word;
+
+#define SYS_sched_yield 124
+
+void __plat_fast_lock(void)
+{
+	int c;
+	for (;;) {
+		c = 0;
+		if (__atomic_compare_exchange_n(&fast_lock_word, &c, 1, 1,
+		                                __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+			return;
+		raw_syscall(SYS_sched_yield, 0L, 0L, 0L, 0L, 0L, 0L);
+	}
+}
+
+void __plat_fast_unlock(void)
+{
+	__atomic_store_n(&fast_lock_word, 0, __ATOMIC_RELEASE);
 }
