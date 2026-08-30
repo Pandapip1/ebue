@@ -10,13 +10,6 @@ int nullable_pointer(int *pointer)
 	return *pointer; /* ownership-expect: pointer-null */
 }
 
-int opaque_borrow(int *pointer)
-{
-	if (!pointer)
-		return 0;
-	return *pointer; /* ownership-expect: pointer-lifetime */
-}
-
 int out_of_bounds(void)
 {
 	int values[2] = {1, 2};

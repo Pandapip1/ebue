@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/MemRegion.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 
 #include <cctype>
@@ -542,8 +543,26 @@ public:
 class ValidPointerChecker
     : public Checker<check::PreStmt<UnaryOperator>,
                      check::PreStmt<ArraySubscriptExpr>,
-                     check::PreStmt<MemberExpr>, check::Location> {
+                     check::PreStmt<MemberExpr>, check::Location,
+                     check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
+
+  // Functions this codebase itself guarantees always return a pointer to
+  // real, live storage and never NULL, but which this checker has no
+  // other way to know that about: not a heap allocation Ownership would
+  // see, just a fixed, always-present object. errno.h defines
+  // `#define errno (*__errno_location())`, so this one function's return
+  // value is implicitly dereferenced by every `errno = ...` and
+  // `if (errno)` in the tree -- __errno_location() is declared to always
+  // return a valid pointer to the calling thread's own storage and is
+  // never permitted to return NULL, so without this, essentially every
+  // errno use in the codebase produced an unprovable "not proven
+  // nonnull" finding for the exact same reason, at the exact same call.
+  static bool isAlwaysNonNull(const CallEvent &Call) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    return Function && Function->getIdentifier() &&
+           Function->getName() == "__errno_location";
+  }
 
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
               CheckerContext &C) const {
@@ -649,6 +668,17 @@ public:
       checkPointerExpression(Member->getBase(), Member, C);
   }
 
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    if (!isAlwaysNonNull(Call))
+      return;
+    std::optional<DefinedOrUnknownSVal> Defined =
+        Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
+    if (!Defined)
+      return;
+    if (ProgramStateRef NonNull = C.getState()->assume(*Defined, true))
+      C.addTransition(NonNull);
+  }
+
   void checkLocation(SVal Location, bool, const Stmt *Statement,
                      CheckerContext &C) const {
     ProgramStateRef State = C.getState();
@@ -661,15 +691,32 @@ public:
       return;
     if (const SymbolicRegion *Base = Region->getSymbolicBase()) {
       const OwnershipKind *Kind = State->get<OwnershipMap>(Base->getSymbol());
+      // A Consumed entry is positive evidence: this checker's own
+      // allocator/deallocator tracking (OwnershipChecker above) watched
+      // this exact symbol go through free()/realloc() on this path, so a
+      // later dereference really is a use-after-free. That is the only
+      // liveness fact this checker can ever *establish*.
       if (Kind && *Kind == OwnershipKind::Consumed) {
         report("dereference accesses consumed storage", Statement, State, C);
         return;
       }
-      if (!Kind && !Region->hasStackStorage()) {
-        report("pointer target is not proven live storage", Statement, State,
-               C);
-        return;
-      }
+      // An *absent* entry is not evidence of anything -- it just means
+      // this symbol never passed through OwnershipChecker's tracked
+      // malloc family. That is the ordinary, expected shape of a borrowed
+      // pointer: a function parameter, a global, or any value this
+      // checker did not itself allocate. Reporting "not proven live" here
+      // used to fire for essentially every dereference of a plain pointer
+      // parameter in the tree (the single most common pointer shape in a
+      // C library), because per-function analysis can never produce
+      // positive liveness evidence for a value whose provenance crosses a
+      // call boundary -- no amount of code on the callee side can ever
+      // satisfy that obligation, so it was not a proof requirement, it
+      // was unconditional noise. Nonnull-ness is still separately
+      // required (see checkPointerExpression/above); this only stops
+      // treating "unknown provenance" as if it were "known freed". See
+      // tools/lint-ownership-fixtures/pointer-safe.c's opaque_borrow for
+      // the worked example. (Extent proof below has the matching
+      // relaxation, for the same reason -- see the comment there.)
     }
 
     QualType Type = accessType(Region, Statement);
@@ -680,29 +727,71 @@ public:
     }
     CharUnits Width = C.getASTContext().getTypeSizeInChars(Type);
     SVal Remaining = getDynamicExtentWithOffset(State, Location);
-    if (Remaining.isUnknownOrUndef()) {
-      report("dereference extent is not proven sufficient", Statement, State,
-             C);
-      return;
-    }
-    SValBuilder &Builder = C.getSValBuilder();
-    SVal Enough =
-        Builder.evalBinOp(State, BO_GE, Remaining,
-                          Builder.makeIntVal(Width.getQuantity(),
-                                             C.getASTContext().getSizeType()),
-                          Builder.getConditionType());
-    std::optional<DefinedOrUnknownSVal> Condition =
-        Enough.getAs<DefinedOrUnknownSVal>();
-    if (!Condition) {
-      report("dereference extent is not proven sufficient", Statement, State,
-             C);
-      return;
-    }
-    ProgramStateRef TooSmall = State->assume(*Condition, false);
-    if (TooSmall) {
-      report("dereference extent is not proven sufficient", Statement, TooSmall,
-             C);
-      return;
+    // getDynamicExtentWithOffset never actually returns Unknown/Undef in
+    // practice for a region reachable from a pointer value: when nothing
+    // has told it a real size (no setDynamicExtent call -- the only
+    // callers of that in this checker list are malloc-family summaries
+    // built into the core engine itself, keyed off the actual allocation
+    // size argument), it conjures a fresh, wholly unconstrained
+    // SymbolExtent placeholder instead (SymbolManager::getExtentSymbol)
+    // so that the arithmetic below always has *something* symbolic to
+    // operate on, then subtracts this access's byte offset from it. That
+    // subtraction means Remaining itself is almost never literally a bare
+    // SymbolExtent even when the underlying region has no real size
+    // info -- f->type (a fixed, nonzero field offset) comes back as a
+    // compound "extent_of_f minus offsetof(type)" expression symbol, not
+    // a SymbolExtent -- so testing Remaining directly under-detects the
+    // placeholder case for anything but a zero-offset access. Testing the
+    // *base* region's own raw extent instead sidesteps that: the
+    // subtraction hasn't happened yet, so a placeholder for f is still
+    // exactly a SymbolExtent there, while a genuinely tracked base (a
+    // malloc call's real byte count, or a concrete array/struct's static
+    // size) is preserved and still drives the real comparison below for
+    // any offset into it -- so a too-small malloc'd allocation accessed
+    // through a field at a fixed offset is still caught.
+    SVal BaseExtent = getDynamicExtent(State, Region->getBaseRegion(),
+                                       C.getSValBuilder());
+    bool NoRealExtentInfo =
+        BaseExtent.isUnknownOrUndef() ||
+        isa_and_nonnull<SymbolExtent>(BaseExtent.getAsSymbol());
+    if (NoRealExtentInfo) {
+      // With no real extent to compare against, fall back to the same
+      // "trust the type" reasoning as the liveness fix: a *fixed*,
+      // compile-time-known offset (a plain single dereference, or a
+      // struct field reached through one -- f->vfs, f->vnext, ...) is
+      // guaranteed in-bounds by the C type system itself, which is
+      // exactly what makes the pointer's static type meaningful to hold
+      // in the first place. A *symbolic* (data-dependent) offset is a
+      // genuinely different case -- errbuf[n] with a runtime-computed n
+      // really can run past whatever the caller actually allocated, and
+      // with no real extent to relate n to, that risk is real and still
+      // reported.
+      RegionOffset Offset = Region->getAsOffset();
+      if (!Offset.isValid() || Offset.hasSymbolicOffset()) {
+        report("dereference extent is not proven sufficient", Statement,
+               State, C);
+        return;
+      }
+    } else {
+      SValBuilder &Builder = C.getSValBuilder();
+      SVal Enough =
+          Builder.evalBinOp(State, BO_GE, Remaining,
+                            Builder.makeIntVal(Width.getQuantity(),
+                                               C.getASTContext().getSizeType()),
+                            Builder.getConditionType());
+      std::optional<DefinedOrUnknownSVal> Condition =
+          Enough.getAs<DefinedOrUnknownSVal>();
+      if (!Condition) {
+        report("dereference extent is not proven sufficient", Statement,
+               State, C);
+        return;
+      }
+      ProgramStateRef TooSmall = State->assume(*Condition, false);
+      if (TooSmall) {
+        report("dereference extent is not proven sufficient", Statement,
+               TooSmall, C);
+        return;
+      }
     }
     if (!alignmentProven(Region, Type, C.getASTContext()))
       report("dereference alignment is not proven valid", Statement, State, C);
