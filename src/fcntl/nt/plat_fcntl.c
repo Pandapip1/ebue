@@ -8,22 +8,78 @@
  * POSIX-shaped return (0/-1 with errno set, or a POSIX error number
  * directly for __plat_fallocate() -- see its own comment) in place of
  * a raw NTSTATUS.
+ *
+ * __plat_open() absorbed the rest of what used to be src/fcntl/open.c's
+ * __open_handle() (everything past its portable /dev/std* special case:
+ * VFS-overlay resolution, __ntpath_at(), the $LXMOD extended-attribute
+ * buffer) on top of what was already here as __plat_create_file() --
+ * this backend now owns the ENTIRE NT-specific path-to-handle journey,
+ * not just the NtCreateFile call at the end of it, matching
+ * plat_fcntl.h's own updated banner. Nothing in the moved logic
+ * changed in substance, only location -- this is the identical
+ * sequence __open_handle() used to run inline, verified line for line
+ * against the pre-refactor version.
  */
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include <limits.h>
 #include "libc.h"
 #include "plat_fcntl.h"
 
-int __plat_create_file(struct __ntpath *np, int flags, unsigned mode,
-                        void *ea, unsigned ea_len,
-                        __plat_handle_t *out, int *typeout)
+int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
+                __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
 {
+	struct __ntpath np;
+	unsigned char mode_ea[32];
+	void *ea = 0;
+	unsigned ea_len = 0;
+	int vfs, native;
 	IO_STATUS_BLOCK io;
 	ACCESS_MASK access;
 	ULONG disposition, options, attrs;
 	NTSTATUS st;
 	HANDLE h;
+
+	vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	native = (vfs & __VFS_NATIVE) != 0;
+	if (native) {
+		*vfsout = __VFS_KIND(vfs);
+		*vfsnativeout = 1;
+		vfs = __VFS_NONE;
+	}
+	if (vfs == __VFS_MISSING) {
+		errno = flags & O_CREAT ? EROFS : ENOENT;
+		return -1;
+	}
+	if (vfs == __VFS_ROOT || vfs == __VFS_DEV) {
+		if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { errno = EEXIST; return -1; }
+		if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC)) { errno = EISDIR; return -1; }
+		if (__vfs_open_dir(vfs, flags & O_CLOEXEC, out) < 0) return -1;
+		*typeout = __FD_DIR;
+		*vfsout = vfs;
+		return 0;
+	}
+	if (vfs == __VFS_CONSOLE || vfs == __VFS_NULL || vfs == __VFS_TTY) {
+		if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { errno = EEXIST; return -1; }
+		if (flags & O_DIRECTORY) { errno = ENOTDIR; return -1; }
+		path = vfs == __VFS_NULL ? "NUL" : "CON";
+		dirfd = AT_FDCWD;
+		*vfsout = vfs;
+	}
+
+	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE | (flags & O_CLOEXEC ? 0 : OBJ_INHERIT)) < 0)
+		return -1;
+
+	/* open.html DESCRIPTION: mode is ANDed with the complement of umask.
+	 * The $LXMOD extended-attribute buffer is this library's own POSIX-
+	 * mode-persistence strategy (see src/stat/lxmod.c). */
+	if (flags & O_CREAT) {
+		mode = mode & ~__umask_get() & 07777;
+		ea_len = __lxmod_create_buffer(mode_ea, S_IFREG | mode);
+		ea = mode_ea;
+	}
 
 	access = SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_READ_EA;
 	switch (flags & O_ACCMODE) {
@@ -42,7 +98,7 @@ int __plat_create_file(struct __ntpath *np, int flags, unsigned mode,
 	 * FILE_EXECUTE / FILE_TRAVERSE access masks and the fd-table and
 	 * read()/write() checks that go with a mode neither reads nor
 	 * writes; that is not done here. */
-	default: errno = EINVAL; return -1;
+	default: __ntpath_free(&np); errno = EINVAL; return -1;
 	}
 	if (flags & O_APPEND) access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA;
 	if (flags & O_TRUNC) access |= FILE_WRITE_DATA;   /* overwrite needs it */
@@ -75,7 +131,7 @@ int __plat_create_file(struct __ntpath *np, int flags, unsigned mode,
 		if (!(mode & 0222)) attrs = FILE_ATTRIBUTE_READONLY;
 	}
 
-	st = NtCreateFile(&h, access, &np->oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS,
+	st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS,
 	                  disposition, options, ea, ea_len);
 
 	/* A directory opened without O_DIRECTORY for reading: allowed by
@@ -86,8 +142,9 @@ int __plat_create_file(struct __ntpath *np, int flags, unsigned mode,
 		options |= FILE_DIRECTORY_FILE;
 		access = SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES |
 		         FILE_READ_EA | FILE_TRAVERSE;
-		st = NtCreateFile(&h, access, &np->oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS, FILE_OPEN, options, 0, 0);
+		st = NtCreateFile(&h, access, &np.oa, &io, 0, attrs, FILE_SHARE_VALID_FLAGS, FILE_OPEN, options, 0, 0);
 	}
+	__ntpath_free(&np);
 	/* Writing to a directory is EISDIR, not EACCES. */
 	if (st == STATUS_FILE_IS_A_DIRECTORY) { errno = EISDIR; return -1; }
 	if (!NT_SUCCESS(st)) {

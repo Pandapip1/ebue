@@ -8,18 +8,71 @@
  * syscall numbers confirmed against this host's own <sys/syscall.h> as
  * an oracle).
  *
- * __plat_create_file() is NOT implemented here. plat_fcntl.h's own
- * banner says why up front: it takes `struct __ntpath *np`, an
- * already-NT-resolved path object, because path resolution
- * (src/internal/path.c) is explicitly out of scope for this migration
- * -- and src/fcntl/open.c's front door calls NT-only __ntpath_at()
- * itself, before this interface is ever reached. There is no POSIX- or
- * Linux-shaped way to hand this function a resolved path; a real Linux
- * open() needs an entirely different front door, not a Linux body for
- * this signature. Stubbed, not attempted -- see this file's ENOSYS body
- * below and fuzz/linux_pilot_test_fs.c's own banner, which stands a raw
- * openat(2) in for it during testing, exactly as fuzz/
- * linux_pilot_test.c already does for the mman/unistd pilot.
+ * __plat_open() IS implemented here now. plat_fcntl.h used to take a
+ * `struct __ntpath *np` -- an already-NT-resolved path object -- built
+ * entirely by src/fcntl/open.c's own front door before this interface
+ * was ever reached, with no POSIX- or Linux-shaped way to hand a
+ * resolved path to a non-NT backend. That coupling is gone: the
+ * interface now hands __plat_open() a raw, unresolved (dirfd, path)
+ * pair (see plat_fcntl.h's own updated banner), and the NT-specific
+ * resolution machinery (VFS-overlay lookup, __ntpath_at(), the $LXMOD
+ * extended-attribute buffer) moved into src/fcntl/nt/plat_fcntl.c's
+ * own __plat_open() body instead -- the same relocation every other
+ * NT-specific interpretation step in this migration already got.
+ *
+ * This backend's own __plat_open() needs almost none of NT's flag
+ * translation: Linux's real openat(2) already takes (dirfd, path)
+ * directly, and MOST of ntlibc's own O_* flag values already match the
+ * Linux kernel ABI bit-for-bit (confirmed against this host's real
+ * <fcntl.h> via a throwaway oracle program, not assumed: O_CREAT=0100,
+ * O_EXCL=0200, O_TRUNC=01000, O_APPEND=02000, O_NONBLOCK=04000,
+ * O_DSYNC=010000, O_SYNC=04010000, O_CLOEXEC=02000000, O_PATH=010000000).
+ *
+ * THREE do not, discovered only by actually running open(O_DIRECTORY)
+ * against a real kernel and getting EINVAL back, not by inspection:
+ * ntlibc's own <fcntl.h> has O_DIRECTORY=0200000/O_NOFOLLOW=0400000/
+ * O_DIRECT=040000, but the real Linux kernel ABI (this same oracle
+ * program) is O_DIRECTORY=040000/O_NOFOLLOW=0100000/O_DIRECT=0200000 --
+ * O_DIRECTORY and O_DIRECT are transposed, and O_NOFOLLOW is a value
+ * neither of those swaps produces. This is a real, pre-existing
+ * mismatch in include/fcntl.h itself, invisible until this exact
+ * moment: every consumer of these three macros anywhere else in
+ * ntlibc -- the NT backend's own flag-to-CreateOptions translation,
+ * every front door that only ever tests `flags & O_DIRECTORY` by
+ * name -- is entirely self-referential (define and consume the same
+ * value, whatever it is), so nothing before this file ever needed
+ * O_DIRECTORY's bit position to equal anything outside ntlibc itself.
+ * A real Linux openat(2) call is the first place that assumption gets
+ * tested against an external ABI. Fixed here, not in include/fcntl.h:
+ * changing a public header's flag values is a much larger-blast-radius
+ * edit than translating three bits in one backend function, exactly
+ * the same judgment call the NT backend already makes for its own
+ * ACCESS_MASK/CreateDisposition/CreateOptions three-way split below.
+ * Every OTHER already-merged Linux backend was checked (grep) for any
+ * other real syscall call site touching these three macros: none
+ * exists, so this is the only place the bug was reachable.
+ *
+ * Everything else needs no translation table, and Linux already has
+ * real, native `/dev/null` etc, so the VFS-overlay machinery this
+ * interface's *vfsout and *vfsnativeout report is simply never
+ * invoked here -- left untouched at whatever
+ * the front door (src/fcntl/open.c) already initialized them to
+ * (__VFS_NONE/0), matching the header's own contract for a non-NT
+ * backend. `dirfd` is resolved the same way src/unistd/linux/
+ * plat_unistd.c's resolve_dirfd() already does (AT_FDCWD passed
+ * straight through, an ntlibc fd-table index unboxed via the fd
+ * table's own fd+1 encoding), duplicated here rather than shared
+ * across translation units, matching every other Linux backend file's
+ * own-syscall-table discipline.
+ *
+ * The one piece of real work left: Linux's openat(2), like NT's
+ * NtCreateFile after its own retry-as-directory dance, allows opening
+ * a directory for reading without O_DIRECTORY (POSIX-legal; only later
+ * reads fail EISDIR) -- so *typeout cannot be decided from the O_
+ * flags alone the way it might look like it can. A real statx(2) on
+ * the freshly opened fd (the same technique src/stat/linux/
+ * plat_stat.c/src/ioctl/linux/plat_ioctl.c already use) answers this
+ * for real.
  *
  * Everything else below takes only an already-open __plat_handle_t --
  * src/fcntl/fcntl.c's record_lock() and src/fcntl/fadvise.c's
@@ -69,6 +122,7 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include "libc.h"
 #include "plat_fcntl.h"
 
 /* aarch64 Linux syscall numbers -- see plat_mem.c's banner for why
@@ -77,9 +131,36 @@
 #define SYS_fallocate 47
 #define SYS_ftruncate 46
 #define SYS_statx     291
+#define SYS_openat    56
+#define SYS_close     57
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
+
+/* File-type mode-bits, standard POSIX/Linux kernel values. */
+#define S_IFMT_LX   0170000
+#define S_IFSOCK_LX 0140000
+#define S_IFREG_LX  0100000
+#define S_IFDIR_LX  0040000
+#define S_IFCHR_LX  0020000
+#define S_IFIFO_LX  0010000
+
+/* ntlibc's own O_DIRECTORY/O_NOFOLLOW/O_DIRECT values do NOT match the
+ * real Linux kernel ABI -- see this file's own banner for how that was
+ * discovered and why it is fixed here, not in include/fcntl.h. Every
+ * other O_* flag already matches and is passed straight through. */
+#define LX_O_DIRECTORY 040000
+#define LX_O_NOFOLLOW  0100000
+#define LX_O_DIRECT    0200000
+
+static int to_linux_open_flags(int flags)
+{
+	int out = flags & ~(O_DIRECTORY | O_NOFOLLOW | O_DIRECT);
+	if (flags & O_DIRECTORY) out |= LX_O_DIRECTORY;
+	if (flags & O_NOFOLLOW)  out |= LX_O_NOFOLLOW;
+	if (flags & O_DIRECT)    out |= LX_O_DIRECT;
+	return out;
+}
 
 /* fcntl(2) lock commands and lock types: confirmed against this host's
  * own <fcntl.h> -- identical across 64-bit Linux architectures. */
@@ -133,6 +214,22 @@ static int unbox(__plat_handle_t h)
 	return (int)((long)h - 1);
 }
 
+/* See src/unistd/linux/plat_unistd.c's own resolve_dirfd() -- identical
+ * logic, duplicated per this tree's own-syscall-table-per-file
+ * discipline: turns ntlibc's own AT_FDCWD sentinel or fd-table index
+ * into what the raw *at() syscalls need. Returns -1 with errno already
+ * set (by __fd_get()) only on a bad table index -- never a legitimate
+ * result otherwise, since AT_FDCWD is -100 and every unboxed real fd is
+ * >= 0. */
+static int resolve_dirfd(int dirfd)
+{
+	struct __fd *f;
+	if (dirfd == AT_FDCWD) return AT_FDCWD;
+	f = __fd_get(dirfd);
+	if (!f) return -1;
+	return unbox(f->h);
+}
+
 /* The kernel's raw 64-bit struct flock (fcntl(2) F_GETLK/F_SETLK/
  * F_SETLKW): confirmed field-for-field against this host's own
  * <fcntl.h> via offsetof()/sizeof() (l_type/l_whence at 0/2, l_start at
@@ -146,14 +243,95 @@ struct __lx_flock {
 	int l_pid;
 };
 
-int __plat_create_file(struct __ntpath *np, int flags, unsigned mode,
-                        void *ea, unsigned ea_len,
-                        __plat_handle_t *out, int *typeout)
+/* The kernel's fixed, architecture-independent struct statx (linux/
+ * stat.h) -- see src/stat/linux/plat_stat.c's banner for why this
+ * layout, unlike the classic kernel struct stat, needs no per-
+ * architecture variant, and for the fuller field-by-field confirmation
+ * against this host's own header. Moved up here (rather than staying
+ * next to __plat_file_extent(), its only reader before __plat_open()
+ * needed one too) since __plat_open() below also needs it to decide
+ * *typeout. */
+struct __lx_statx_timestamp {
+	long long tv_sec;
+	unsigned int tv_nsec;
+	int __reserved;
+};
+struct __lx_statx {
+	unsigned int stx_mask;
+	unsigned int stx_blksize;
+	unsigned long long stx_attributes;
+	unsigned int stx_nlink;
+	unsigned int stx_uid;
+	unsigned int stx_gid;
+	unsigned short stx_mode;
+	unsigned short __spare0[1];
+	unsigned long long stx_ino;
+	unsigned long long stx_size;
+	unsigned long long stx_blocks;
+	unsigned long long __rest[26]; /* attributes_mask, four timestamps,
+	                                * rdev/dev major/minor, mnt_id,
+	                                * dio alignment, and the kernel's own
+	                                * reserved tail -- 256 bytes total. */
+};
+
+int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
+                __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
 {
-	(void)np; (void)flags; (void)mode; (void)ea; (void)ea_len;
-	(void)out; (void)typeout;
-	errno = ENOSYS;
-	return -1;
+	int rd, fd;
+	long ret;
+	struct __lx_statx stx;
+
+	/* Never touched: no VFS overlay exists on this backend at all (see
+	 * this file's own banner) -- *vfsout and *vfsnativeout stay whatever
+	 * the front door (src/fcntl/open.c) already initialized them to. */
+	(void)vfsout; (void)vfsnativeout;
+
+	rd = resolve_dirfd(dirfd);
+	if (rd == -1 && dirfd != AT_FDCWD) return -1; /* errno already set */
+
+	ret = raw_syscall(SYS_openat, (long)rd, (long)path, (long)to_linux_open_flags(flags), (long)mode, 0L, 0L);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	fd = (int)ret;
+
+	/* *typeout cannot be decided from the O_ flags alone: Linux, like
+	 * NT after its own retry-as-directory dance, allows opening a
+	 * directory for reading without O_DIRECTORY (POSIX-legal; only
+	 * later reads fail EISDIR) -- see this file's own banner. A real
+	 * statx(2) on the freshly opened fd answers this for real.
+	 *
+	 * Unlike the NT backend, __FD_FILE (or whichever __FD_* fits) must
+	 * be reported explicitly here, not left at 0: on NT, src/internal/
+	 * fd.c's __fd_install_at() auto-classifies a zero typeout itself
+	 * via __handle_type() (NtQueryVolumeInformationFile/
+	 * NtQueryInformationFile), so __plat_create_file()'s original NT
+	 * implementation never needed to name anything but __FD_DIR. This
+	 * backend has no such auto-classification step behind it (every
+	 * Linux pilot test harness so far reimplements a minimal fd table
+	 * specifically because fd.c's __handle_type() is NT-only and
+	 * unported), so leaving *typeout at 0 here would silently hand
+	 * back a value nothing else resolves into __FD_FILE -- confirmed
+	 * the hard way: lseek()'s own `f->type != __FD_FILE` check reads
+	 * type 0 as "not seekable" and reports ESPIPE on an ordinary
+	 * regular file. */
+	memset(&stx, 0, sizeof stx);
+	ret = raw_syscall(SYS_statx, (long)fd, (long)"", (long)AT_EMPTY_PATH_LX,
+	                  (long)STATX_BASIC_STATS_LX, (long)&stx, 0L);
+	if (is_sys_error(ret)) {
+		int e = (int)-ret;
+		raw_syscall(SYS_close, (long)fd, 0L, 0L, 0L, 0L, 0L);
+		errno = e;
+		return -1;
+	}
+	switch (stx.stx_mode & S_IFMT_LX) {
+	case S_IFDIR_LX:  *typeout = __FD_DIR; break;
+	case S_IFIFO_LX:  *typeout = __FD_PIPE; break;
+	case S_IFCHR_LX:  *typeout = __FD_CHAR; break;
+	case S_IFSOCK_LX: *typeout = __FD_SOCKET; break;
+	default:          *typeout = __FD_FILE; break; /* S_IFREG, S_IFBLK, or anything else */
+	}
+
+	*out = (__plat_handle_t)(long)(fd + 1);
+	return 0;
 }
 
 int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting)
@@ -212,36 +390,10 @@ long long __plat_volume_max_file_size(__plat_handle_t h)
 	return LLONG_MAX;
 }
 
-/* The kernel's fixed, architecture-independent struct statx (linux/
- * stat.h) -- see src/stat/linux/plat_stat.c's banner for why this
- * layout, unlike the classic kernel struct stat, needs no per-
- * architecture variant, and for the fuller field-by-field confirmation
- * against this host's own header. Only stx_size/stx_blocks are read
- * here; everything past them collapses into the trailing __spare
- * padding since nothing else is needed in this file. */
-struct __lx_statx_timestamp {
-	long long tv_sec;
-	unsigned int tv_nsec;
-	int __reserved;
-};
-struct __lx_statx {
-	unsigned int stx_mask;
-	unsigned int stx_blksize;
-	unsigned long long stx_attributes;
-	unsigned int stx_nlink;
-	unsigned int stx_uid;
-	unsigned int stx_gid;
-	unsigned short stx_mode;
-	unsigned short __spare0[1];
-	unsigned long long stx_ino;
-	unsigned long long stx_size;
-	unsigned long long stx_blocks;
-	unsigned long long __rest[26]; /* attributes_mask, four timestamps,
-	                                * rdev/dev major/minor, mnt_id,
-	                                * dio alignment, and the kernel's own
-	                                * reserved tail -- 256 bytes total. */
-};
-
+/* struct __lx_statx/__lx_statx_timestamp: defined once, above, next to
+ * __plat_open() (its first reader in this file). Only stx_size/
+ * stx_blocks are read below; everything past them collapses into the
+ * trailing __spare padding since nothing else is needed here. */
 int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
 {
 	struct __lx_statx stx;

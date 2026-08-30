@@ -27,18 +27,15 @@
 int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
                   __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
 {
-	struct __ntpath np;
-	int type;
-	unsigned char mode_ea[32];
-	void *ea = 0;
-	unsigned ea_len = 0;
-	int vfs, native;
-
 	*vfsout = __VFS_NONE;
 	*vfsnativeout = 0;
 	if (!path) { errno = EFAULT; return -1; }
 
-	/* /dev/stdin, /dev/stdout, /dev/stderr and /dev/fd/N are the fd table. */
+	/* /dev/stdin, /dev/stdout, /dev/stderr and /dev/fd/N are the fd
+	 * table -- genuinely portable POSIX-shaped logic (every backend's fd
+	 * table works the same way), so this stays in the front door rather
+	 * than moving into __plat_open() alongside the NT-specific VFS-
+	 * overlay/path-resolution/$LXMOD machinery below it. */
 	if (!strncmp(path, "/dev/", 5)) {
 		int fd = -1;
 		if (!strcmp(path, "/dev/stdin")) fd = 0;
@@ -55,57 +52,7 @@ int __open_handle(int dirfd, const char *path, int flags, unsigned mode,
 		}
 	}
 
-	vfs = __vfs_resolve_at(dirfd, path);
-	if (vfs < 0) return -1;
-	native = (vfs & __VFS_NATIVE) != 0;
-	if (native) {
-		*vfsout = __VFS_KIND(vfs);
-		*vfsnativeout = 1;
-		vfs = __VFS_NONE;
-	}
-	if (vfs == __VFS_MISSING) {
-		errno = flags & O_CREAT ? EROFS : ENOENT;
-		return -1;
-	}
-	if (vfs == __VFS_ROOT || vfs == __VFS_DEV) {
-		if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { errno = EEXIST; return -1; }
-		if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC)) { errno = EISDIR; return -1; }
-		if (__vfs_open_dir(vfs, flags & O_CLOEXEC, out) < 0) return -1;
-		*typeout = __FD_DIR;
-		*vfsout = vfs;
-		return 0;
-	}
-	if (vfs == __VFS_CONSOLE || vfs == __VFS_NULL || vfs == __VFS_TTY) {
-		if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { errno = EEXIST; return -1; }
-		if (flags & O_DIRECTORY) { errno = ENOTDIR; return -1; }
-		path = vfs == __VFS_NULL ? "NUL" : "CON";
-		dirfd = AT_FDCWD;
-		*vfsout = vfs;
-	}
-
-	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE | (flags & O_CLOEXEC ? 0 : OBJ_INHERIT)) < 0)
-		return -1;
-
-	/* open.html DESCRIPTION: mode is ANDed with the complement of umask.
-	 * The $LXMOD extended-attribute buffer is this library's own POSIX-
-	 * mode-persistence strategy (see src/stat/lxmod.c), built here and
-	 * handed to the backend rather than built there, exactly like
-	 * mman.c's reservation table stays in the front door: it is not an
-	 * NT interpretation step, it is this library's own choice of how to
-	 * remember a POSIX mode at all. */
-	if (flags & O_CREAT) {
-		mode = mode & ~__umask_get() & 07777;
-		ea_len = __lxmod_create_buffer(mode_ea, S_IFREG | mode);
-		ea = mode_ea;
-	}
-
-	{
-		int r = __plat_create_file(&np, flags, mode, ea, ea_len, out, &type);
-		__ntpath_free(&np);
-		if (r < 0) return -1;
-	}
-	*typeout = type;
-	return 0;
+	return __plat_open(dirfd, path, flags, mode, out, typeout, vfsout, vfsnativeout);
 }
 
 int openat(int dirfd, const char *path, int flags, ...)

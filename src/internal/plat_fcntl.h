@@ -14,15 +14,23 @@
  * the one documented exception below, and is the front door's own
  * adaptation of that result, not a different backend contract).
  *
- * `struct __ntpath *` appears directly in two signatures below rather
- * than something more abstract.  That is deliberate, not an oversight:
- * path resolution (src/internal/path.c) is explicitly out of scope for
- * this migration and stays exactly what it always was -- a step that
- * only NT (or a close Windows relative) could ever need in the first
- * place, done once by the front door via __ntpath_at()/__ntpath() -- so
- * there is no POSIX-shaped way to describe "a resolved path" to hand a
- * future backend; a non-NT backend will need an entirely different
- * front door for path resolution regardless of anything decided here.
+ * __plat_open() takes a raw, UNRESOLVED (dirfd, path) pair rather than
+ * a `struct __ntpath *` -- unlike the rest of this header's history.
+ * Path resolution (src/internal/path.c, src/internal/vfs.c) used to be
+ * "explicitly out of scope for this migration" (every previous version
+ * of this comment said so) because there seemed to be no POSIX-shaped
+ * way to describe "a resolved path" to a future backend. There still
+ * isn't -- but there does not need to be: __plat_open() below hands the
+ * RAW path straight through, and each backend resolves it however it
+ * needs to (the NT backend still calls __ntpath_at()/__vfs_resolve_at()
+ * internally, exactly as before, just moved from the front door into
+ * the backend's own function body -- the same relocation every other
+ * NT-specific interpretation step in this migration already got). A
+ * Linux backend needs no resolution step at all: openat(2) already
+ * takes (dirfd, path) directly, so its __plat_open() is close to a
+ * straight pass-through. See src/fcntl/open.c's own banner for what
+ * stays in the front door (only the genuinely portable /dev/std*
+ * fd-table special case) versus what moved here.
  */
 #ifndef _NTLIBC_PLAT_FCNTL_H
 #define _NTLIBC_PLAT_FCNTL_H
@@ -30,32 +38,27 @@
 #include <sys/types.h>
 #include "plat_handle.h"
 
-struct __ntpath;
-
-/* open()/openat(): translate `flags`/`mode` into NT's own
- * DesiredAccess/CreateDisposition/CreateOptions/FileAttributes and
- * call NtCreateFile against the already-resolved `np` -- see
+/* open()/openat(): resolve `path` (relative to `dirfd`, ntlibc's own
+ * AT_FDCWD sentinel or an already-open dirfd) and translate `flags`/
+ * `mode` into whatever the backend's native open call needs -- see
  * src/fcntl/open.c's own banner for the access-mode/synchronous/share-
- * mode policy this encodes.  `mode` is the already-umask-applied
- * creation mode (0 unless O_CREAT is set, meaningful here only for the
- * FILE_ATTRIBUTE_READONLY decision); `ea`/`ea_len` is the $LXMOD
- * extended-attribute buffer (__lxmod_create_buffer(),
- * src/stat/lxmod.c) when O_CREAT is set, NULL/0 otherwise.
+ * mode policy this replaces on the NT side. `mode` is the already-
+ * umask-applied creation mode (0 unless O_CREAT is set).
  *
- * Two NT-specific special cases live here, not in the front door: a
- * directory opened for reading without O_DIRECTORY (POSIX-legal; reads
- * then fail with EISDIR) needs a second NtCreateFile with different
- * access/options after the first refuses FILE_NON_DIRECTORY_FILE
- * against a directory, and NtCreateFile's own name-collision status
- * (FILE_CREATE against an existing name) reports as EEXIST rather than
- * through the generic status table.
+ * *vfsout and *vfsnativeout report ntlibc's own POSIX-namespace-overlay
+ * state (src/internal/libc.h's __VFS_* enum: is this descriptor one of
+ * the synthetic `/`, `/dev`, `/dev/null` etc. entries NT needs because
+ * it has no native concept of them, and if so does a real native object
+ * also exist there) -- purely an NT backend concern (see plat_dirent.h/
+ * src/internal/vfs.c for why: real POSIX filesystems, Linux included,
+ * already have real `/dev/null` etc, so nothing needs synthesizing). A
+ * non-NT backend has nothing to report here: __VFS_NONE/0, always.
  *
- * On success, *out/*typeout are filled (*typeout is __FD_DIR when the
+ * On success, *out and *typeout are filled (*typeout is __FD_DIR when the
  * result is a directory, 0 otherwise) and 0 is returned.  On failure,
  * -1/errno. */
-int __plat_create_file(struct __ntpath *np, int flags, unsigned mode,
-                        void *ea, unsigned ea_len,
-                        __plat_handle_t *out, int *typeout);
+int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
+                 __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout);
 
 /* fcntl(F_GETLK): does a lock of the given range/exclusivity conflict
  * with anything already held?  NT has no separate "would this
