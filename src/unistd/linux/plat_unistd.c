@@ -86,6 +86,8 @@
  */
 #include <fcntl.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <unistd.h>   /* syscall()'s own public prototype (-Wmissing-prototypes) */
 #include "libc.h"
 #include "plat_unistd.h"
 
@@ -160,6 +162,54 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 static int is_sys_error(long ret)
 {
 	return (unsigned long)ret >= (unsigned long)-4095L;
+}
+
+/* syscall(): include/unistd.h's own declaration is marked "undefined-ok:
+ * NT has no stable, numbered raw-syscall ABI exposed to user mode" --
+ * true of NT, not of Linux, which has had exactly that ABI (a fixed
+ * per-architecture syscall number in x8, up to six arguments in x0..x5,
+ * `svc #0`, the result or -errno in x0) as public, stable interface
+ * since long before this pilot existed. So unlike the rest of this file,
+ * which exists to satisfy plat_unistd.h's own __plat_*() seam, this is
+ * the plain POSIX front door itself: every argument this function's own
+ * caller supplied is unknown in count (that is what "..." means), so all
+ * six slots raw_syscall() always takes are read regardless of how many
+ * the caller actually passed -- exactly the same unconditional six-slot
+ * va_arg() extraction src/signal/linux/plat_signal.c's own file-local
+ * `syscall()` trampoline already does for the identical reason (that
+ * one is static and unrelated to this one beyond sharing a name and a
+ * technique -- two independent files independently discovering they
+ * both need a raw `svc #0` wrapper is the whole reason every Linux
+ * backend in this tree defines its own rather than sharing one, per
+ * src/mman/linux/plat_mem.c's own banner). A kernel syscall that takes
+ * fewer than six arguments simply ignores the extra ones, so handing it
+ * uninitialized register/stack content past what the caller actually
+ * supplied is harmless in practice on this ABI, if formally
+ * unspecified-but-not-undefined C (reading a va_arg the caller never
+ * provided) -- exactly the same tradeoff already accepted at the sibling
+ * call site.
+ *
+ * syscall(2)'s own contract for the return value: the raw kernel result
+ * on success, or errno set plus -1 on failure -- is_sys_error()/
+ * `errno = (int)-ret` above is that exact translation, already proven
+ * correct by every other function in this file. */
+long syscall(long number, ...)
+{
+	va_list ap;
+	long a1, a2, a3, a4, a5, a6, ret;
+
+	va_start(ap, number);
+	a1 = va_arg(ap, long);
+	a2 = va_arg(ap, long);
+	a3 = va_arg(ap, long);
+	a4 = va_arg(ap, long);
+	a5 = va_arg(ap, long);
+	a6 = va_arg(ap, long);
+	va_end(ap);
+
+	ret = raw_syscall(number, a1, a2, a3, a4, a5, a6);
+	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	return ret;
 }
 
 static int unbox(__plat_handle_t h)

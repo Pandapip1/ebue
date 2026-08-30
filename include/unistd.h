@@ -196,7 +196,10 @@ int acct(const char *);  /* undefined-ok: Unix process accounting is a
 	kernel facility NT has no equivalent of */
 long syscall(long, ...);  /* undefined-ok: NT has no stable, numbered
 	raw-syscall ABI exposed to user mode the way this presumes; the Nt*
-	entry points this library calls directly are the closest analogue */
+	entry points this library calls directly are the closest analogue.
+	Linux has exactly that ABI and does define this one, in
+	src/unistd/linux/plat_unistd.c -- the marker stays because it is
+	still true of, and only checked against, the NT build. */
 int execvpe(const char *, char *const [], char *const []);
 int issetugid(void);
 int getentropy(void *, size_t);  /* undefined-ok: no entropy source is
