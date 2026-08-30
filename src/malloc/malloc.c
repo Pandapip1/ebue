@@ -1,29 +1,31 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * malloc on top of the NT heap.
+ * The POSIX-facing allocator front door: argument validation and the
+ * overflow checks (calloc()/reallocarray()) stay here, portable across
+ * every platform; the four primitives with no portable equivalent --
+ * allocate, resize, query a live allocation's usable size, free --
+ * live behind src/internal/plat_malloc.h (see that header and each
+ * platform's own plat_malloc.c for why: NT delegates to ntdll's own
+ * process heap, already a serious allocator with size classes,
+ * coalescing and guard-page support; a platform with nothing
+ * equivalent to delegate to, like Linux, needs a real one written out
+ * -- see src/malloc/linux/plat_malloc.c's own banner).
  *
- * Every process has a heap ntdll made for it before the first instruction
- * of the program ran, and ntdll's own allocator is a serious one: size
- * classes, a low-fragmentation front end, coalescing, guard pages under
- * the debugger.  Writing another on top of NtAllocateVirtualMemory would
- * be more code for a worse result, so malloc is RtlAllocateHeap on the
- * process heap.  The heap lives in the address space, so it survives
- * fork the same way every other piece of memory does.
- *
- * RtlAllocateHeap(0) returns a usable pointer, which is what malloc(0)
- * is allowed to do.  Alignment is 8 on i386 and 16 on x86_64, which is
- * what the heap gives; aligned_alloc for anything larger over-allocates
- * and remembers the real block just before the returned one.
+ * posix_memalign()/aligned_alloc()/memalign()/valloc() below were
+ * already expressed purely in terms of malloc()/free() rather than any
+ * raw heap call, so they needed no change at all from the split that
+ * produced this file's own shape.
  */
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_malloc.h"
 
 void *malloc(size_t n)
 {
-	void *p = RtlAllocateHeap(__process_heap(), 0, n);
+	void *p = __plat_alloc(n, 0);
 	if (!p) errno = ENOMEM;
 	return p;
 }
@@ -32,7 +34,7 @@ void *calloc(size_t m, size_t n)
 {
 	void *p;
 	if (n && m > (size_t)-1 / n) { errno = ENOMEM; return 0; }
-	p = RtlAllocateHeap(__process_heap(), HEAP_ZERO_MEMORY, m * n);
+	p = __plat_alloc(m * n, 1);
 	if (!p) errno = ENOMEM;
 	return p;
 }
@@ -41,7 +43,7 @@ void *realloc(void *p, size_t n)
 {
 	void *q;
 	if (!p) return malloc(n);
-	q = RtlReAllocateHeap(__process_heap(), 0, p, n);
+	q = __plat_realloc(p, n);
 	if (!q) errno = ENOMEM;
 	return q;
 }
@@ -51,7 +53,7 @@ void __free(void *p) { free(p); }
 
 size_t malloc_usable_size(void *p)
 {
-	return p ? RtlSizeHeap(__process_heap(), 0, p) : 0;
+	return p ? __plat_alloc_size(p) : 0;
 }
 
 void *reallocarray(void *p, size_t m, size_t n)
@@ -108,10 +110,10 @@ void free(void *p)
 		if ((*pp)->user == p) {
 			struct aligned_rec *r = *pp;
 			*pp = r->next;
-			RtlFreeHeap(__process_heap(), 0, r->base);
-			RtlFreeHeap(__process_heap(), 0, r);
+			__plat_dealloc(r->base);
+			__plat_dealloc(r);
 			return;
 		}
 	}
-	RtlFreeHeap(__process_heap(), 0, p);
+	__plat_dealloc(p);
 }

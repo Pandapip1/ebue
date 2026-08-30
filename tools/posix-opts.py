@@ -219,12 +219,21 @@ def compile_command(cfg: dict[str, str], source: Path, output: Path) -> list[str
         # them anyway and the link fails on two undefined symbols
         # otherwise (see tools/linux-build-crt.sh's own comment, the
         # first place this was hit).
+        # libc.a named directly, not -L/-lc: under -static, this host's
+        # ld.bfd rejected the -lc spelling of this exact archive
+        # outright ("skipping incompatible ... when searching for -lc"
+        # followed by "cannot find -lc") even though the archive itself
+        # is fine -- confirmed by linking the identical objects with
+        # tools/linux-build-crt.sh's own plain-positional-arguments
+        # link line, which has never used -l/-L at all and works.
+        # Named directly, an .a is just another link input to ld, no
+        # -l-specific search/compatibility path involved.
         command += ["-static", "-no-pie", "-fno-stack-protector"]
         command += [
             "-o", str(output),
             str(ROOT / "lib" / "crt1.o"), str(ROOT / "lib" / "start.o"),
             str(source), str(SUITE / "lib" / "common.c"),
-            f"-L{ROOT / 'lib'}", "-lc",
+            str(ROOT / "lib" / "libc.a"),
         ]
     else:
         command += [
