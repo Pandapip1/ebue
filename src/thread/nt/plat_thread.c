@@ -251,6 +251,23 @@ int __plat_thread_redirect_ip(__plat_handle_t h, void *target)
 	const ULONG flags = 0x10001; /* CONTEXT_i386 | CONTEXT_CONTROL */
 	const size_t flags_offset = 0;
 	const size_t ip_offset = 0xb8;
+#elif defined(__aarch64__)
+	/* ARM64_NT_CONTEXT (winnt.h): ContextFlags (ULONG) at 0x000, Cpsr
+	 * (ULONG) at 0x004, X0..X28/Fp/Lr (31 * 8 bytes) at 0x008-0x0ff,
+	 * Sp at 0x100, Pc at 0x108, V[32] NEON128 (32*16 bytes) at
+	 * 0x110-0x30f, Fpcr/Fpsr at 0x310/0x314, Bcr[8]/Bvr[8]/Wcr[2]/
+	 * Wvr[2] (debug regs) filling out to a 0x390-byte total. Offsets
+	 * and the CONTEXT_ARM64* flag bits confirmed against Wine's
+	 * include/winnt.h (a real, current, independently-maintained
+	 * implementation of the documented Windows ARM64 ABI -- not
+	 * transcribed from memory) rather than assumed from the x86
+	 * layouts' shape. CONTEXT_CONTROL here also covers Sp, unlike
+	 * AMD64/i386's own CONTEXT_CONTROL, but only Pc is touched below,
+	 * matching those two branches' own scope. */
+	unsigned char storage[0x390 + 15];
+	const ULONG flags = 0x400001; /* CONTEXT_ARM64 | CONTEXT_ARM64_CONTROL */
+	const size_t flags_offset = 0;
+	const size_t ip_offset = 0x108;
 #else
 # error unsupported architecture
 #endif
