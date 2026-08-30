@@ -1,0 +1,110 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: (C) 2026 Gavin John
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# linux-build-fs.sh -- build and run the Linux filesystem-subsystem
+# pilot natively. See tools/linux-build.sh (the original mman/unistd
+# fd-ops pilot) for the pattern this mirrors; this script is a separate
+# copy, not a generalisation of it, matching that file's own "Usage"
+# banner and this pilot's distinct fuzz/linux_pilot_{test,harness}_fs.c
+# naming.
+#
+# Proves src/{dirent,fcntl,file,ioctl,stat}/linux/plat_*.c against the
+# REAL src/fcntl/{fcntl,fadvise}.c, src/file/flock.c, src/ioctl/ioctl.c,
+# and src/stat/{chmod,stat,statvfs,utimensat}.c front doors, statically
+# linked into one native, runnable ELF binary -- no Wine, no emulation,
+# on whatever host this script runs on.
+#
+# src/dirent/linux/plat_dirent.c is compiled (so it stays part of the
+# ordinary build) but is NOT exercised by the test: its one function is
+# a documented stub -- see that file's own banner for why (the front
+# door that would consume its output hardcodes NT's own directory-
+# record shape).
+#
+# Usage: tools/linux-build-fs.sh
+# Env:   NTLIBC_CC (default clang), NTLIBC_ARCH (default x86_64 -- see
+#          tools/linux-build.sh's own banner for why this is unrelated
+#          to the host's real CPU architecture)
+
+set -eu
+
+srcdir=$(cd "$(dirname "$0")/.." && pwd)
+CC=${NTLIBC_CC:-clang}
+ARCH=${NTLIBC_ARCH:-x86_64}
+OBJ=${NTLIBC_LINUX_OBJ:-$srcdir/obj/linux-pilot-fs}
+TAG=linux-build-fs
+
+cd "$srcdir"
+
+if [ -f config.mak ]; then
+	cfg_arch=$(sed -n 's/^ARCH *= *//p' config.mak | head -1)
+	if [ -n "$cfg_arch" ] && [ "$cfg_arch" != "$ARCH" ]; then
+		echo "$TAG: tree is configured for ARCH=$cfg_arch but this build is $ARCH." >&2
+		echo "$TAG: reconfigure (./configure --host=$ARCH-win32 CC=...) or set NTLIBC_ARCH=$cfg_arch." >&2
+		exit 1
+	fi
+fi
+
+mkdir -p "$OBJ"
+if [ ! -f obj/include/bits/alltypes.h ]; then
+	echo "$TAG: obj/include/bits/alltypes.h is missing -- run './configure --host=$ARCH-win32 CC=$ARCH-win32-tcc' and 'make ARCH=$ARCH obj/include/bits/alltypes.h' first (the generated header this build needs, same one 'make'/'make asan' use)." >&2
+	exit 1
+fi
+
+INC="-Isrc/internal -Iobj/include -Iinclude -Iarch/$ARCH -Iarch/generic"
+CFLAGS="-std=c99 -nostdinc -fno-builtin -g -O0 -ffunction-sections -fdata-sections \
+$INC -D_XOPEN_SOURCE=700 -D_ALL_SOURCE -D_NTLIBC_INTERNAL -Wall -Wno-unused-function"
+
+FILES="
+	src/fcntl/fcntl.c
+	src/fcntl/fadvise.c
+	src/fcntl/linux/plat_fcntl.c
+	src/file/flock.c
+	src/file/linux/plat_flock.c
+	src/ioctl/ioctl.c
+	src/ioctl/linux/plat_ioctl.c
+	src/stat/chmod.c
+	src/stat/stat.c
+	src/stat/statvfs.c
+	src/stat/utimensat.c
+	src/stat/linux/plat_stat.c
+	src/dirent/linux/plat_dirent.c
+	src/unistd/close.c
+	src/unistd/read.c
+	src/unistd/write.c
+	src/unistd/lseek.c
+	src/unistd/dup.c
+	src/unistd/linux/plat_fd.c
+	src/string/memcpy.c
+	src/internal/errno.c
+	fuzz/linux_pilot_harness_fs.c
+	fuzz/linux_pilot_test_fs.c
+"
+
+echo "$TAG: compiling ($CC, native ELF)..."
+objs=""
+for f in $FILES; do
+	o="$OBJ/$(basename "$f" .c).o"
+	# shellcheck disable=SC2086
+	if ! $CC $CFLAGS -c -o "$o" "$f"; then
+		echo "$TAG: FAILED compiling $f" >&2
+		exit 1
+	fi
+	objs="$objs $o"
+done
+
+echo "$TAG: linking..."
+# shellcheck disable=SC2086
+if ! $CC -g -O0 -Wl,--gc-sections -o "$OBJ/linux_pilot_test_fs" $objs; then
+	echo "$TAG: FAILED linking" >&2
+	exit 1
+fi
+
+echo "$TAG: running..."
+if "$OBJ/linux_pilot_test_fs"; then
+	echo "$TAG: PASS"
+	exit 0
+else
+	echo "$TAG: FAIL" >&2
+	exit 1
+fi
