@@ -5,6 +5,8 @@
 #include <sched.h>
 #include <stdlib.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 struct key_slot {
 	unsigned generation;
@@ -137,7 +139,7 @@ struct once_cleanup {
 
 struct once_waiter {
 	pthread_once_t *control;
-	HANDLE event;
+	__plat_handle_t event;
 	struct once_waiter *next;
 };
 
@@ -153,9 +155,8 @@ static void wake_once_waiters_locked(pthread_once_t *control)
 {
 	struct once_waiter *waiter;
 	for (waiter = once_waiters; waiter; waiter = waiter->next) {
-		LONG previous;
 		if (waiter->control == control)
-			NtSetEvent(waiter->event, &previous);
+			__plat_event_set(waiter->event);
 	}
 }
 
@@ -177,20 +178,20 @@ static void reset_once(void *argument)
 
 int pthread_once(pthread_once_t *control, void (*initialize)(void))
 {
-	HANDLE event = 0;
+	__plat_handle_t event = 0;
 	struct once_waiter waiter;
 	for (;;) {
 		RtlAcquirePebLock();
 		if (*control == 2) {
 			RtlReleasePebLock();
-			if (event) NtClose(event);
+			if (event) __plat_close(event);
 			return 0;
 		}
 		if (*control == PTHREAD_ONCE_INIT) {
 			struct once_cleanup reset = { control };
 			*control = 1;
 			RtlReleasePebLock();
-			if (event) { NtClose(event); event = 0; }
+			if (event) { __plat_close(event); event = 0; }
 			pthread_cleanup_push(reset_once, &reset);
 			initialize();
 			pthread_cleanup_pop(0);
@@ -206,20 +207,17 @@ int pthread_once(pthread_once_t *control, void (*initialize)(void))
 			waiter.next = once_waiters;
 			once_waiters = &waiter;
 			RtlReleasePebLock();
-			NtWaitForSingleObject(event, FALSE, 0);
+			__plat_wait_one(event, 0, 0, 0);
 			RtlAcquirePebLock();
 			remove_once_waiter_locked(&waiter);
 			RtlReleasePebLock();
-			NtClose(event);
+			__plat_close(event);
 			event = 0;
 			continue;
 		}
 		RtlReleasePebLock();
 		{
-			OBJECT_ATTRIBUTES attributes;
-			InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
-			if (!NT_SUCCESS(NtCreateEvent(&event, EVENT_ALL_ACCESS, &attributes,
-			                              SynchronizationEvent, FALSE))) {
+			if (__plat_event_create(&event) < 0) {
 				/* pthread_once() has no resource-error return. Preserve the old
 				 * yield path only for this degraded event-allocation failure. */
 				event = 0;

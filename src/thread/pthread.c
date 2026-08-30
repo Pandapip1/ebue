@@ -13,8 +13,9 @@
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
-#define THREAD_CREATE_FLAGS_CREATE_SUSPENDED 1u
 #define DEFAULT_STACK_SIZE ((size_t)1024 * 1024)
 #define DEFAULT_GUARD_SIZE ((size_t)4096)
 
@@ -41,16 +42,11 @@ static int valid_attr(const pthread_attr_t *attr)
 struct __pthread *__pthread_current(void)
 {
 	struct __pthread *self = __pthread_self_control;
-	HANDLE handle;
 	if (self) return self;
 	self = calloc(1, sizeof *self);
 	if (!self) return 0;
 	self->magic = PTHREAD_MAGIC;
-	if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
-		NtCurrentProcess(), &handle, 0, 0, DUPLICATE_SAME_ACCESS)))
-		self->handle = handle;
-	else
-		self->handle = NtCurrentThread();
+	self->handle = __plat_thread_duplicate_self();
 	self->cancel_state = PTHREAD_CANCEL_ENABLE;
 	self->cancel_type = PTHREAD_CANCEL_DEFERRED;
 	self->sched_policy = SCHED_OTHER;
@@ -65,7 +61,6 @@ struct __pthread *__pthread_current(void)
 void __pthread_reset_after_fork(void)
 {
 	struct __pthread *self = __pthread_self_control;
-	HANDLE handle;
 	RtlAcquirePebLock();
 	live_threads = self ? 1 : 0;
 	if (self) {
@@ -73,10 +68,7 @@ void __pthread_reset_after_fork(void)
 		self->joined = 0;
 		self->joining = 0;
 		self->detached = 0;
-		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
-			NtCurrentProcess(), &handle, 0, 0, DUPLICATE_SAME_ACCESS)))
-			self->handle = handle;
-		else self->handle = NtCurrentThread();
+		self->handle = __plat_thread_duplicate_self();
 	}
 	RtlReleasePebLock();
 }
@@ -124,13 +116,13 @@ static void finish(struct __pthread *self, void *result)
 	detached = self->detached;
 	RtlReleasePebLock();
 	if (last) exit(0);
-	if (detached && self->handle && self->handle != NtCurrentThread()) {
-		NtClose(self->handle);
+	if (detached && self->handle && self->handle != __plat_thread_current_pseudo()) {
+		__plat_close(self->handle);
 		self->handle = 0;
 	}
 }
 
-static ULONG NTAPI thread_entry(PVOID argument)
+static unsigned __PLAT_APC_CALL thread_entry(void *argument)
 {
 	struct __pthread *self = argument;
 	void *result;
@@ -159,9 +151,7 @@ int pthread_create(pthread_t *__restrict output,
 	const struct __pthread_attr_data *data = 0;
 	struct __pthread *creator = 0;
 	struct __pthread *thread;
-	HANDLE handle;
-	NTSTATUS status;
-	ULONG previous;
+	__plat_handle_t handle;
 
 	if (!output || !start) return EINVAL;
 	if (attr) {
@@ -190,11 +180,8 @@ int pthread_create(pthread_t *__restrict output,
 		thread->sched_policy = data->sched_policy;
 		thread->sched_priority = data->sched_priority;
 	}
-	status = NtCreateThreadEx(&handle, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
-		(PVOID)thread_entry, thread, THREAD_CREATE_FLAGS_CREATE_SUSPENDED,
-		0, data ? data->stack_size : DEFAULT_STACK_SIZE,
-		data ? data->stack_size : DEFAULT_STACK_SIZE, 0);
-	if (!NT_SUCCESS(status)) {
+	if (__plat_thread_spawn(thread_entry, thread,
+		data ? data->stack_size : DEFAULT_STACK_SIZE, 1, &handle) < 0) {
 		free(thread);
 		return EAGAIN;
 	}
@@ -203,9 +190,8 @@ int pthread_create(pthread_t *__restrict output,
 	live_threads++;
 	RtlReleasePebLock();
 	*output = thread;
-	status = NtResumeThread(handle, &previous);
-	if (!NT_SUCCESS(status)) {
-		NtClose(handle);
+	if (__plat_thread_resume(handle) < 0) {
+		__plat_close(handle);
 		thread->handle = 0;
 		thread->joined = 1;
 		RtlAcquirePebLock();
@@ -218,7 +204,7 @@ int pthread_create(pthread_t *__restrict output,
 
 int pthread_join(pthread_t thread, void **result)
 {
-	NTSTATUS status;
+	int wait_result;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	if (thread == __pthread_current()) return EDEADLK;
 	RtlAcquirePebLock();
@@ -232,15 +218,21 @@ int pthread_join(pthread_t thread, void **result)
 	}
 	thread->joining = 1;
 	RtlReleasePebLock();
-	status = NtWaitForSingleObject(thread->handle, TRUE, 0);
-	if (!NT_SUCCESS(status)) {
+	/* __PLAT_WAIT_INTR (NT's STATUS_USER_APC/STATUS_ALERTED) is treated
+	 * as a completed wait below, matching the original NTSTATUS check
+	 * exactly: both statuses satisfy NT_SUCCESS(), so the original
+	 * `!NT_SUCCESS(status)` guard never actually reached its own
+	 * USER_APC/ALERTED sub-case either -- only a genuine wait failure
+	 * (__PLAT_WAIT_ERROR here) took this branch. */
+	wait_result = __plat_wait_one(thread->handle, 1, 0, 0);
+	if (wait_result == __PLAT_WAIT_ERROR) {
 		RtlAcquirePebLock();
 		thread->joining = 0;
 		RtlReleasePebLock();
-		return status == STATUS_USER_APC || status == STATUS_ALERTED ? EINTR : EINVAL;
+		return EINVAL;
 	}
 	if (result) *result = thread->result;
-	NtClose(thread->handle);
+	__plat_close(thread->handle);
 	thread->handle = 0;
 	thread->joining = 0;
 	thread->joined = 1;
@@ -264,7 +256,7 @@ int pthread_detach(pthread_t thread)
 	close_handle = thread->exited && thread->handle != 0;
 	RtlReleasePebLock();
 	if (close_handle) {
-		NtClose(thread->handle);
+		__plat_close(thread->handle);
 		thread->handle = 0;
 	}
 	return 0;
@@ -274,8 +266,7 @@ _Noreturn void pthread_exit(void *result)
 {
 	struct __pthread *self = __pthread_current();
 	if (self) finish(self, result);
-	NtTerminateThread(NtCurrentThread(), 0);
-	for (;;) NtTerminateThread(NtCurrentThread(), 0);
+	__plat_thread_terminate_self();
 }
 
 int pthread_attr_init(pthread_attr_t *attr)
@@ -453,21 +444,16 @@ int pthread_attr_setstackaddr(pthread_attr_t *attr, void *address)
 
 int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr)
 {
-	THREAD_BASIC_INFORMATION information;
-	PTEB teb;
-	HANDLE handle;
-	NTSTATUS status;
+	__plat_handle_t handle;
+	void *stack_address;
+	size_t stack_size;
 	if (!thread || thread->magic != PTHREAD_MAGIC || !attr) return ESRCH;
 	if (pthread_attr_init(attr)) return EINVAL;
-	handle = thread == __pthread_current() ? NtCurrentThread() : thread->handle;
+	handle = thread == __pthread_current() ? __plat_thread_current_pseudo() : thread->handle;
 	if (!handle) return ESRCH;
-	status = NtQueryInformationThread(handle, ThreadBasicInformation,
-		&information, sizeof information, 0);
-	if (!NT_SUCCESS(status)) return ESRCH;
-	teb = information.TebBaseAddress;
-	attr_data(attr)->stack_address = teb->NtTib.StackLimit;
-	attr_data(attr)->stack_size = (size_t)((char *)teb->NtTib.StackBase -
-		(char *)teb->NtTib.StackLimit);
+	if (__plat_thread_stack_extent(handle, &stack_address, &stack_size) < 0) return ESRCH;
+	attr_data(attr)->stack_address = stack_address;
+	attr_data(attr)->stack_size = stack_size;
 	attr_data(attr)->detach_state = thread->detached ?
 		PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE;
 	return 0;

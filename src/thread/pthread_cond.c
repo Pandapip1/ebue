@@ -6,6 +6,8 @@
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 #define COND_MAGIC ((ULONG_PTR)0x434f4e44u)
 #define COND_DEAD ((ULONG_PTR)0x434f4e58u)
@@ -23,7 +25,7 @@ struct cond_data {
 struct cond_waiter {
 	struct cond_waiter *previous;
 	struct cond_waiter *next;
-	HANDLE semaphore;
+	__plat_handle_t semaphore;
 	int linked;
 };
 
@@ -136,7 +138,7 @@ static void cond_wait_cleanup(void *argument)
 		unlink_waiter(cleanup->cond, cleanup->waiter);
 	RtlReleasePebLock();
 	if (cleanup->waiter->semaphore) {
-		NtClose(cleanup->waiter->semaphore);
+		__plat_close(cleanup->waiter->semaphore);
 		cleanup->waiter->semaphore = 0;
 	}
 	if (!cleanup->mutex_held) {
@@ -164,8 +166,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	data = cond_data(cond);
 	waiter = calloc(1, sizeof *waiter);
 	if (!waiter) return EAGAIN;
-	if (!NT_SUCCESS(NtCreateSemaphore(&waiter->semaphore, SEMAPHORE_ALL_ACCESS,
-		0, 0, 1))) {
+	if (__plat_semaphore_create(0, 1, 0, &waiter->semaphore) < 0) {
 		free(waiter);
 		return EAGAIN;
 	}
@@ -186,8 +187,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 	}
 	RtlReleasePebLock();
 	while (!error) {
-		LARGE_INTEGER timeout, *timeout_pointer = 0;
-		NTSTATUS status;
+		int status;
 		if (absolute) {
 			struct timespec now;
 			long long ticks;
@@ -195,29 +195,26 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 			ticks = __timespec_diff_ticks(absolute->tv_sec,
 				absolute->tv_nsec, now.tv_sec, now.tv_nsec);
 			if (ticks <= 0) {
-				status = STATUS_TIMEOUT;
+				status = __PLAT_WAIT_TIMEOUT;
 			} else {
-				timeout = -ticks;
-				timeout_pointer = &timeout;
-				status = NtWaitForSingleObject(waiter->semaphore, TRUE,
-					timeout_pointer);
+				status = __plat_wait_one(waiter->semaphore, 1, 1, -ticks);
 			}
 		} else {
-			status = NtWaitForSingleObject(waiter->semaphore, TRUE, 0);
+			status = __plat_wait_one(waiter->semaphore, 1, 0, 0);
 		}
-		if (status == STATUS_TIMEOUT) {
+		if (status == __PLAT_WAIT_TIMEOUT) {
 			RtlAcquirePebLock();
 			if (waiter->linked) unlink_waiter(data, waiter);
-			else status = STATUS_SUCCESS;
+			else status = __PLAT_WAIT_OK;
 			RtlReleasePebLock();
-			result = status == STATUS_TIMEOUT ? ETIMEDOUT : 0;
+			result = status == __PLAT_WAIT_TIMEOUT ? ETIMEDOUT : 0;
 			break;
 		}
-		if (status == STATUS_USER_APC || status == STATUS_ALERTED) {
+		if (status == __PLAT_WAIT_INTR) {
 			__pthread_testcancel();
 			continue;
 		}
-		if (NT_SUCCESS(status)) {
+		if (status == __PLAT_WAIT_OK) {
 			break;
 		}
 		RtlAcquirePebLock();
@@ -233,7 +230,7 @@ static int cond_wait(pthread_cond_t *__restrict cond,
 		pthread_setcancelstate(old_state, 0);
 	}
 	pthread_cleanup_pop(0);
-	if (waiter->semaphore) NtClose(waiter->semaphore);
+	if (waiter->semaphore) __plat_close(waiter->semaphore);
 	free(waiter);
 	if (error) return error;
 	return lock_error ? lock_error : result;
@@ -265,7 +262,7 @@ int pthread_cond_signal(pthread_cond_t *cond)
 	waiter = data->waiters;
 	if (waiter) {
 		unlink_waiter(data, waiter);
-		NtReleaseSemaphore(waiter->semaphore, 1, 0);
+		__plat_semaphore_post(waiter->semaphore);
 	}
 	RtlReleasePebLock();
 	return 0;
@@ -283,7 +280,7 @@ int pthread_cond_broadcast(pthread_cond_t *cond)
 	RtlAcquirePebLock();
 	while ((waiter = data->waiters)) {
 		unlink_waiter(data, waiter);
-		NtReleaseSemaphore(waiter->semaphore, 1, 0);
+		__plat_semaphore_post(waiter->semaphore);
 	}
 	RtlReleasePebLock();
 	return 0;

@@ -238,7 +238,7 @@ int __handle_type(HANDLE);                   /* classify by device type */
 int __fd_close_all_cloexec(void);
 void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from RuntimeData */
 void __mq_fd_closed(int);                    /* release side handles for an mqd_t */
-void __mq_fd_replaced(int, HANDLE);           /* follow fork/fcntl handle remakes */
+void __mq_fd_replaced(int, __plat_handle_t);  /* follow fork/fcntl handle remakes */
 /* Serialise the inheritable part of the descriptor table into a freshly
  * malloc'd blob for a child's RTL_USER_PROCESS_PARAMETERS RuntimeData;
  * *len receives its size.  NULL with errno on failure. */

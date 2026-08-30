@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include "libc.h"
+#include "plat_handle.h"
 
 #define PTHREAD_MAGIC 0x50544852u
 #define PTHREAD_ATTR_MAGIC ((ULONG_PTR)0x41545452u)
@@ -29,7 +30,7 @@ struct __pthread_specific {
 
 struct __pthread {
 	unsigned magic;
-	HANDLE handle;
+	__plat_handle_t handle;
 	void *result;
 	void *(*start)(void *);
 	void *argument;

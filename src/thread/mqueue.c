@@ -28,6 +28,8 @@
 #include <stdint.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 #define MQ_MAGIC 0x4e544d51u
 #define MQ_VERSION 1
@@ -66,10 +68,10 @@ struct mq_slot {
 
 struct mq_desc {
 	unsigned magic;
-	HANDLE file;
-	HANDLE lock;
-	HANDLE items;
-	HANDLE spaces;
+	__plat_handle_t file;
+	__plat_handle_t lock;
+	__plat_handle_t items;
+	__plat_handle_t spaces;
 	unsigned maxmsg;
 	unsigned msgsize;
 };
@@ -142,83 +144,42 @@ __wraps static unsigned long long path_hash(const char *s)
 	return h;
 }
 
-static void object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
-	UNICODE_STRING *us, WCHAR *wide, size_t cap)
+static int create_sem(const char *name, long initial, long maximum, __plat_handle_t *out)
 {
-	size_t i, n = strlen(ascii);
-	if (n >= cap) n = cap - 1;
-	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i];
-	wide[n] = 0;
-	if (n > __US_MAX_WCHARS) n = __US_MAX_WCHARS;
-	us->Length = (USHORT)(n * sizeof(WCHAR));
-	us->MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
-	us->Buffer = wide;
-	InitializeObjectAttributes(oa, us, OBJ_CASE_INSENSITIVE | OBJ_INHERIT, 0, 0);
+	return __plat_named_semaphore_open_or_create(name, initial, maximum, out);
 }
 
-static int create_sem(const char *name, LONG initial, LONG maximum, HANDLE *out)
+static int take(__plat_handle_t h)
 {
-	OBJECT_ATTRIBUTES oa;
-	UNICODE_STRING us;
-	WCHAR wide[128];
-	NTSTATUS st;
-	object_attributes(name, &oa, &us, wide, sizeof wide / sizeof wide[0]);
-	st = NtCreateSemaphore(out, SEMAPHORE_ALL_ACCESS, &oa, initial, maximum);
-	/* Wine reports an existing named semaphore as the error status
-	 * STATUS_OBJECT_NAME_COLLISION rather than NT's informational
-	 * STATUS_OBJECT_NAME_EXISTS.  Opening it is the same create-or-open
-	 * contract mq_open needs and avoids turning a second mq_open into
-	 * the unrelated filesystem-looking EEXIST. */
-	if (st == STATUS_OBJECT_NAME_COLLISION)
-		st = NtOpenSemaphore(out, SEMAPHORE_ALL_ACCESS, &oa);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	int r = __plat_wait_one(h, 0, 0, 0);
+	return r == __PLAT_WAIT_OK ? 0 : -1;
 }
 
-static int take(HANDLE h)
+static void give(__plat_handle_t h)
 {
-	NTSTATUS st = NtWaitForSingleObject(h, FALSE, NULL);
-	if (st == STATUS_WAIT_0) return 0;
-	return __set_errno_status(st);
+	__plat_semaphore_post(h);
 }
 
-static void give(HANDLE h)
-{
-	NtReleaseSemaphore(h, 1, NULL);
-}
-
-static int raw_io(HANDLE h, void *buf, size_t len, off_t off, int write_op)
+static int raw_io(__plat_handle_t h, void *buf, size_t len, off_t off, int write_op)
 {
 	unsigned char *p = buf;
 	while (len) {
-		IO_STATUS_BLOCK io;
-		LARGE_INTEGER pos = off;
-		ULONG part = len > 0x7fffffff ? 0x7fffffff : (ULONG)len;
-		NTSTATUS st;
-		io.Information = 0;
-		if (write_op)
-			st = NtWriteFile(h, 0, 0, 0, &io, p, part, &pos, 0);
-		else
-			st = NtReadFile(h, 0, 0, 0, &io, p, part, &pos, 0);
-		if (st == STATUS_PENDING) {
-			NtWaitForSingleObject(h, FALSE, NULL);
-			st = io.Status;
-		}
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		if (!io.Information) { errno = EIO; return -1; }
-		p += io.Information;
-		off += io.Information;
-		len -= io.Information;
+		ssize_t got = __plat_thread_file_io(h, p, len, off, write_op);
+		if (got < 0) return -1;
+		if (!got) { errno = EIO; return -1; }
+		p += got;
+		off += got;
+		len -= (size_t)got;
 	}
 	return 0;
 }
 
-static int raw_read(HANDLE h, void *buf, size_t len, off_t off)
+static int raw_read(__plat_handle_t h, void *buf, size_t len, off_t off)
 {
 	return raw_io(h, buf, len, off, 0);
 }
 
-static int raw_write(HANDLE h, const void *buf, size_t len, off_t off)
+static int raw_write(__plat_handle_t h, const void *buf, size_t len, off_t off)
 {
 	return raw_io(h, (void *)buf, len, off, 1);
 }
@@ -263,7 +224,7 @@ mqd_t mq_open(const char *name, int oflag, ...)
 	struct mq_header h;
 	struct mq_attr supplied, *attr = NULL;
 	struct mq_desc *d;
-	HANDLE ns = 0, lock = 0, items = 0, spaces = 0;
+	__plat_handle_t ns = 0, lock = 0, items = 0, spaces = 0;
 	int fd = -1, created = 0, saved = 0, access = oflag & O_ACCMODE;
 	mode_t mode = 0;
 	size_t file_size;
@@ -331,12 +292,12 @@ mqd_t mq_open(const char *name, int oflag, ...)
 	/* The state lock makes these counts an atomic snapshot when all NT
 	 * objects had disappeared and are being reconstructed. */
 	if (raw_read(__fds[fd].h, &h, sizeof h, 0) < 0) goto fail_qlocked;
-	if (create_sem(h.items_name, (LONG)h.curmsgs, (LONG)h.maxmsg, &items) < 0 ||
-	    create_sem(h.spaces_name, (LONG)(h.maxmsg - h.curmsgs), (LONG)h.maxmsg, &spaces) < 0)
+	if (create_sem(h.items_name, (long)h.curmsgs, (long)h.maxmsg, &items) < 0 ||
+	    create_sem(h.spaces_name, (long)(h.maxmsg - h.curmsgs), (long)h.maxmsg, &spaces) < 0)
 		goto fail_qlocked;
 	give(lock);
 	give(ns);
-	NtClose(ns);
+	__plat_close(ns);
 
 	d = &mqds[fd];
 	memset(d, 0, sizeof *d);
@@ -370,19 +331,18 @@ fail_locked_saved:
 	give(ns);
 fail:
 	if (!saved) saved = errno;
-	if (spaces) NtClose(spaces);
-	if (items) NtClose(items);
-	if (lock) NtClose(lock);
-	if (ns) NtClose(ns);
+	if (spaces) __plat_close(spaces);
+	if (items) __plat_close(items);
+	if (lock) __plat_close(lock);
+	if (ns) __plat_close(ns);
 	free(path);
 	errno = saved;
 	return (mqd_t)-1;
 }
 
-static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
+static int wait_count(struct mq_desc *d, __plat_handle_t count, int nonblock,
 	const struct timespec *abstime, int timed, int receiver)
 {
-	LARGE_INTEGER zero = 0, slice;
 	struct timespec now;
 	struct mq_header h;
 	/* Cross-process delivery publishes a process-pending signal and wakes
@@ -393,10 +353,10 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 	 * interrupt this descriptor operation. */
 	unsigned long caught = __sig_thread_caught_count();
 	int registered = 0;
-	NTSTATUS st = NtWaitForSingleObject(count, TRUE, &zero);
-	if (st == STATUS_WAIT_0) return 0;
-	if (st != STATUS_TIMEOUT && st != STATUS_ALERTED && st != STATUS_USER_APC)
-		return __set_errno_status(st);
+	int status = __plat_wait_one(count, 1, 1, 0);
+	if (status == __PLAT_WAIT_OK) return 0;
+	if (status != __PLAT_WAIT_TIMEOUT && status != __PLAT_WAIT_INTR)
+		return -1; /* errno already set by __plat_wait_one */
 	__sig_drain_pending();
 	if (__sig_thread_caught_count() != caught) { errno = EINTR; return -1; }
 	if (nonblock) { errno = EAGAIN; return -1; }
@@ -412,6 +372,7 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 		registered = 1;
 	}
 	for (;;) {
+		long long slice;
 		__sig_drain_pending();
 		if (__sig_thread_caught_count() != caught) { errno = EINTR; break; }
 		if (timed) {
@@ -423,10 +384,11 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 			if (ticks > 500000) ticks = 500000;
 			slice = -ticks;
 		} else slice = -500000;
-		st = NtWaitForSingleObject(count, TRUE, &slice);
-		if (st == STATUS_WAIT_0) break;
-		if (st != STATUS_TIMEOUT && st != STATUS_ALERTED && st != STATUS_USER_APC) {
-			__set_errno_status(st); break;
+		status = __plat_wait_one(count, 1, 1, slice);
+		if (status == __PLAT_WAIT_OK) break;
+		if (status != __PLAT_WAIT_TIMEOUT && status != __PLAT_WAIT_INTR) {
+			/* errno already set by __plat_wait_one */
+			break;
 		}
 		__sig_drain_pending();
 		if (__sig_thread_caught_count() != caught) { errno = EINTR; break; }
@@ -442,7 +404,7 @@ static int wait_count(struct mq_desc *d, HANDLE count, int nonblock,
 		}
 		errno = saved;
 	}
-	return st == STATUS_WAIT_0 ? 0 : -1;
+	return status == __PLAT_WAIT_OK ? 0 : -1;
 }
 
 int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
@@ -614,13 +576,13 @@ void __mq_fd_closed(int fd)
 		}
 		give(d->lock);
 	}
-	NtClose(d->spaces);
-	NtClose(d->items);
-	NtClose(d->lock);
+	__plat_close(d->spaces);
+	__plat_close(d->items);
+	__plat_close(d->lock);
 	memset(d, 0, sizeof *d);
 }
 
-void __mq_fd_replaced(int fd, HANDLE handle)
+void __mq_fd_replaced(int fd, __plat_handle_t handle)
 {
 	if (fd >= 0 && fd < FD_MAX && mqds[fd].magic == MQ_DESC_MAGIC)
 		mqds[fd].file = handle;
@@ -636,7 +598,7 @@ int mq_unlink(const char *name)
 {
 	char *path = mq_path(name), nsname[96];
 	unsigned long long hash;
-	HANDLE ns = 0;
+	__plat_handle_t ns = 0;
 	int result, saved;
 	if (!path) return -1;
 	if (ensure_dir(path) < 0) { free(path); return -1; }
@@ -644,9 +606,9 @@ int mq_unlink(const char *name)
 	snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
 	if (create_sem(nsname, 1, 1, &ns) < 0 || take(ns) < 0) {
-		saved = errno; if (ns) NtClose(ns); free(path); errno = saved; return -1;
+		saved = errno; if (ns) __plat_close(ns); free(path); errno = saved; return -1;
 	}
 	result = unlink(path); saved = errno;
-	give(ns); NtClose(ns); free(path); errno = saved;
+	give(ns); __plat_close(ns); free(path); errno = saved;
 	return result;
 }

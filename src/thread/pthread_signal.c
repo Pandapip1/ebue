@@ -4,8 +4,9 @@
 #include <signal.h>
 #include <errno.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
 
-static void NTAPI signal_apc(PVOID argument, PVOID signal_value, PVOID unused)
+static void __PLAT_APC_CALL signal_apc(void *argument, void *signal_value, void *unused)
 {
 	struct __pthread *thread = argument;
 	(void)unused;
@@ -20,7 +21,6 @@ static void NTAPI signal_apc(PVOID argument, PVOID signal_value, PVOID unused)
 
 int pthread_kill(pthread_t thread, int sig)
 {
-	NTSTATUS status;
 	if (!thread || thread->magic != PTHREAD_MAGIC) return ESRCH;
 	if (sig < 0 || sig >= _NSIG) return EINVAL;
 	RtlAcquirePebLock();
@@ -31,10 +31,9 @@ int pthread_kill(pthread_t thread, int sig)
 	RtlReleasePebLock();
 	if (!sig) return 0;
 	if (__pthread_is_current(thread)) {
-		signal_apc(thread, (PVOID)(ULONG_PTR)sig, 0);
+		signal_apc(thread, (void *)(ULONG_PTR)sig, 0);
 		return 0;
 	}
-	status = NtQueueApcThread(thread->handle, signal_apc, thread,
-		(PVOID)(ULONG_PTR)sig, 0);
-	return NT_SUCCESS(status) ? 0 : ESRCH;
+	return __plat_thread_queue_apc(thread->handle, signal_apc, thread,
+		(void *)(ULONG_PTR)sig) == 0 ? 0 : ESRCH;
 }

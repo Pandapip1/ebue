@@ -7,6 +7,8 @@
 #include <time.h>
 #include <unistd.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 #define MUTEX_MAGIC ((ULONG_PTR)0x4d555458u)
 #define MUTEX_DEAD  ((ULONG_PTR)0x4d555444u)
@@ -18,7 +20,7 @@
 
 struct mutex_data {
 	ULONG_PTR magic;
-	HANDLE semaphore;
+	__plat_handle_t semaphore;
 	pthread_t owner;
 	pid_t owner_pid;
 	unsigned recursion;
@@ -94,11 +96,9 @@ static int valid_ceiling(int value)
 	       value <= sched_get_priority_max(SCHED_FIFO);
 }
 
-static int create_semaphore(HANDLE *output)
+static int create_semaphore(__plat_handle_t *output)
 {
-	NTSTATUS status = NtCreateSemaphore(output, SEMAPHORE_ALL_ACCESS, 0, 0,
-		0x7fffffff);
-	return NT_SUCCESS(status) ? 0 : EAGAIN;
+	return __plat_semaphore_create(0, 0x7fffffff, 0, output) == 0 ? 0 : EAGAIN;
 }
 
 static int owned_by(const struct mutex_data *data, struct __pthread *thread)
@@ -113,7 +113,7 @@ static int owned_by(const struct mutex_data *data, struct __pthread *thread)
 static int mutex_ready(pthread_mutex_t *mutex)
 {
 	struct mutex_data *data;
-	HANDLE semaphore;
+	__plat_handle_t semaphore;
 	int error;
 	if (!mutex) return EINVAL;
 	data = mutex_data(mutex);
@@ -143,7 +143,7 @@ static int mutex_ready(pthread_mutex_t *mutex)
 	}
 	error = data->magic == MUTEX_MAGIC ? 0 : EINVAL;
 	RtlReleasePebLock();
-	if (semaphore) NtClose(semaphore);
+	if (semaphore) __plat_close(semaphore);
 	return error;
 }
 
@@ -152,7 +152,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 {
 	struct mutex_data *data;
 	const struct mutexattr_data *attributes = 0;
-	HANDLE semaphore;
+	__plat_handle_t semaphore;
 	int error;
 	if (!mutex) return EINVAL;
 	if (attr) {
@@ -177,7 +177,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
 	struct mutex_data *data;
-	HANDLE semaphore;
+	__plat_handle_t semaphore;
 	int error = mutex_ready(mutex);
 	if (error) return error;
 	data = mutex_data(mutex);
@@ -190,7 +190,7 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
 	data->semaphore = 0;
 	data->magic = MUTEX_DEAD;
 	RtlReleasePebLock();
-	if (semaphore) NtClose(semaphore);
+	if (semaphore) __plat_close(semaphore);
 	return 0;
 }
 
@@ -209,9 +209,10 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 	if (!self) return EAGAIN;
 	data = mutex_data(mutex);
 	for (;;) {
-		HANDLE semaphore;
-		LARGE_INTEGER timeout = 0, *timeout_pointer = 0;
-		NTSTATUS status;
+		__plat_handle_t semaphore;
+		long long timeout = 0;
+		int has_timeout = 0;
+		int wait_result;
 		RtlAcquirePebLock();
 		if (data->robust == PTHREAD_MUTEX_ROBUST && data->owner &&
 		    data->owner_pid == getpid() &&
@@ -262,28 +263,27 @@ static int mutex_acquire(pthread_mutex_t *mutex,
 				return ETIMEDOUT;
 			}
 			timeout = -ticks;
-			timeout_pointer = &timeout;
+			has_timeout = 1;
 		}
 		if (data->robust == PTHREAD_MUTEX_ROBUST &&
-		    (!timeout_pointer || timeout < -ROBUST_POLL_TICKS)) {
+		    (!has_timeout || timeout < -ROBUST_POLL_TICKS)) {
 			timeout = -ROBUST_POLL_TICKS;
-			timeout_pointer = &timeout;
+			has_timeout = 1;
 		}
 		data->waiters++;
 		semaphore = data->semaphore;
 		RtlReleasePebLock();
-		status = NtWaitForSingleObject(semaphore, TRUE, timeout_pointer);
+		wait_result = __plat_wait_one(semaphore, 1, has_timeout, timeout);
 		RtlAcquirePebLock();
 		if (data->waiters) data->waiters--;
 		RtlReleasePebLock();
-		if (status == STATUS_TIMEOUT) {
+		if (wait_result == __PLAT_WAIT_TIMEOUT) {
 			/* Recheck a robust owner's exit before deciding that an
 			 * absolute deadline has expired. */
 			if (data->robust == PTHREAD_MUTEX_ROBUST) continue;
 			return ETIMEDOUT;
 		}
-		if (!NT_SUCCESS(status) && status != STATUS_USER_APC &&
-		    status != STATUS_ALERTED) return EINVAL;
+		if (wait_result == __PLAT_WAIT_ERROR) return EINVAL;
 	}
 }
 
@@ -328,7 +328,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 		wake = data->waiters != 0;
 	}
 	RtlReleasePebLock();
-	if (wake) NtReleaseSemaphore(data->semaphore, 1, 0);
+	if (wake) __plat_semaphore_post(data->semaphore);
 	return 0;
 }
 

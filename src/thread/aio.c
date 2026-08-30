@@ -19,6 +19,8 @@
 #include <string.h>
 #include <unistd.h>
 #include "libc.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 enum request_state {
 	REQ_FREE,
@@ -57,7 +59,7 @@ struct aio_waiter {
 	const struct aiocb *const *list;
 	int count;
 	int triggered;
-	HANDLE event;
+	__plat_handle_t event;
 	struct aio_waiter *next;
 };
 
@@ -72,7 +74,7 @@ struct thread_notice {
 static struct aio_request requests[AIO_MAX] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static struct aio_group groups[AIO_MAX] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static unsigned long long next_sequence NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
-static HANDLE worker_wake NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static __plat_handle_t worker_wake NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_started NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static int worker_synchronous NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
@@ -83,16 +85,15 @@ static void wake_waiters_locked(const struct aio_request *request)
 	int i;
 	for (waiter = waiters; waiter; waiter = waiter->next) {
 		for (i = 0; i < waiter->count; i++) {
-			LONG previous;
 			if (waiter->list[i] != request->cb) continue;
 			waiter->triggered = 1;
-			NtSetEvent(waiter->event, &previous);
+			__plat_event_set(waiter->event);
 			break;
 		}
 	}
 }
 
-static ULONG NTAPI notice_thread(PVOID argument)
+static unsigned __PLAT_APC_CALL notice_thread(void *argument)
 {
 	struct thread_notice *notice = argument;
 	void (*function)(union sigval) = notice->function;
@@ -119,16 +120,15 @@ static void notify(const struct sigevent *event)
 	}
 	if (event->sigev_notify == SIGEV_THREAD && event->sigev_notify_function) {
 		struct thread_notice *notice = malloc(sizeof *notice);
-		HANDLE thread;
+		__plat_handle_t thread;
 		if (!notice) return;
 		notice->function = event->sigev_notify_function;
 		notice->value = event->sigev_value;
-		if (!NT_SUCCESS(NtCreateThreadEx(&thread, THREAD_ALL_ACCESS, 0,
-		    NtCurrentProcess(), (PVOID)notice_thread, notice, 0, 0, 0, 0, 0))) {
+		if (__plat_thread_spawn(notice_thread, notice, 0, 0, &thread) < 0) {
 			free(notice);
 			return;
 		}
-		NtClose(thread);
+		__plat_close(thread);
 	}
 }
 
@@ -195,7 +195,7 @@ static struct aio_request *next_queued(void)
 	return best;
 }
 
-static ULONG NTAPI aio_worker(PVOID unused)
+static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 {
 	(void)unused;
 	for (;;) {
@@ -209,7 +209,7 @@ static ULONG NTAPI aio_worker(PVOID unused)
 		if (request) request->state = REQ_RUNNING;
 		__sig_unlock();
 		if (!request) {
-			NtWaitForSingleObject(worker_wake, FALSE, 0);
+			__plat_wait_one(worker_wake, 0, 0, 0);
 			continue;
 		}
 
@@ -226,26 +226,22 @@ static ULONG NTAPI aio_worker(PVOID unused)
 
 static int start_worker(void)
 {
-	OBJECT_ATTRIBUTES attributes;
-	HANDLE thread, event;
-	NTSTATUS status;
+	__plat_handle_t thread, event;
+	int result;
 	if (worker_started) return 0;
-	InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
-	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, &attributes,
-	                       SynchronizationEvent, FALSE);
-	if (status == STATUS_NOT_IMPLEMENTED) {
+	result = __plat_event_create(&event);
+	if (result == -2) {
 		worker_synchronous = 1;
 		worker_started = 1;
 		return 0;
 	}
-	if (!NT_SUCCESS(status)) { errno = EAGAIN; return -1; }
+	if (result < 0) { errno = EAGAIN; return -1; }
 	worker_wake = event;
-	status = NtCreateThreadEx(&thread, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
-	                          (PVOID)aio_worker, 0, 0, 0, 0, 0, 0);
-	if (!NT_SUCCESS(status)) {
+	result = __plat_thread_spawn(aio_worker, 0, 0, 0, &thread);
+	if (result < 0) {
 		worker_wake = 0;
-		NtClose(event);
-		if (status == STATUS_NOT_IMPLEMENTED) {
+		__plat_close(event);
+		if (result == -2) {
 			worker_synchronous = 1;
 			worker_started = 1;
 			return 0;
@@ -254,7 +250,7 @@ static int start_worker(void)
 		return -1;
 	}
 	worker_started = 1;
-	NtClose(thread);
+	__plat_close(thread);
 	return 0;
 }
 
@@ -273,7 +269,6 @@ static int submit(struct aiocb *cb, int op, struct aio_group *group)
 	struct aio_request *request = 0;
 	struct sigevent individual, list;
 	ssize_t result;
-	LONG previous;
 	int error, have_individual, have_list, i;
 
 	if (!cb ||
@@ -319,7 +314,7 @@ static int submit(struct aiocb *cb, int op, struct aio_group *group)
 		if (have_list) notify(&list);
 		return 0;
 	}
-	NtSetEvent(worker_wake, &previous);
+	__plat_event_set(worker_wake);
 	__sig_unlock();
 	return 0;
 }
@@ -415,12 +410,10 @@ static void remove_waiter_locked(struct aio_waiter *waiter)
 int aio_suspend(const struct aiocb *const list[], int count,
 	const struct timespec *timeout)
 {
-	OBJECT_ATTRIBUTES attributes;
 	struct aio_waiter waiter;
-	LARGE_INTEGER start = 0, deadline = 0;
-	HANDLE handles[2];
-	HANDLE signal_event;
-	NTSTATUS status;
+	long long start = 0, deadline = 0;
+	__plat_handle_t handles[2];
+	__plat_handle_t signal_event;
 	unsigned long caught = __sig_caught_count();
 	int any, handle_count;
 	if (count < 0 || !timeout_valid(timeout)) { errno = EINVAL; return -1; }
@@ -431,7 +424,7 @@ int aio_suspend(const struct aiocb *const list[], int count,
 			ticks = LLONG_MAX;
 		else
 			ticks = (long long)timeout->tv_sec * 10000000LL + subsecond;
-		NtQuerySystemTime(&start);
+		start = __plat_query_system_time();
 		deadline = ticks > LLONG_MAX - start ? LLONG_MAX : start + ticks;
 	}
 
@@ -444,10 +437,7 @@ int aio_suspend(const struct aiocb *const list[], int count,
 	}
 	__sig_unlock();
 
-	InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
-	status = NtCreateEvent(&waiter.event, EVENT_ALL_ACCESS, &attributes,
-	                       SynchronizationEvent, FALSE);
-	if (!NT_SUCCESS(status)) { errno = EAGAIN; return -1; }
+	if (__plat_event_create(&waiter.event) < 0) { errno = EAGAIN; return -1; }
 	waiter.list = list;
 	waiter.count = count;
 	waiter.triggered = 0;
@@ -458,12 +448,12 @@ int aio_suspend(const struct aiocb *const list[], int count,
 	__sig_lock();
 	if (suspend_list_ready(list, count, &any) || !any) {
 		__sig_unlock();
-		NtClose(waiter.event);
+		__plat_close(waiter.event);
 		return 0;
 	}
 	if (timeout && deadline <= start) {
 		__sig_unlock();
-		NtClose(waiter.event);
+		__plat_close(waiter.event);
 		errno = EAGAIN;
 		return -1;
 	}
@@ -476,18 +466,15 @@ int aio_suspend(const struct aiocb *const list[], int count,
 	signal_event = __sig_delivery_event();
 	if (signal_event) handles[handle_count++] = signal_event;
 	for (;;) {
-		LARGE_INTEGER relative, now;
+		long long now;
+		int status;
 		if (timeout) {
-			NtQuerySystemTime(&now);
-			if (now >= deadline) status = STATUS_TIMEOUT;
-			else {
-				relative = -(deadline - now);
-				status = NtWaitForMultipleObjects((ULONG)handle_count, handles,
-				                                  1 /* WaitAny */, TRUE, &relative);
-			}
+			now = __plat_query_system_time();
+			if (now >= deadline) status = __PLAT_WAIT_TIMEOUT;
+			else status = __plat_wait_any(handles, (unsigned)handle_count, 1,
+			                              1, -(deadline - now));
 		} else {
-			status = NtWaitForMultipleObjects((ULONG)handle_count, handles,
-			                                  1 /* WaitAny */, TRUE, 0);
+			status = __plat_wait_any(handles, (unsigned)handle_count, 1, 0, 0);
 		}
 
 		__sig_drain_pending();
@@ -495,18 +482,16 @@ int aio_suspend(const struct aiocb *const list[], int count,
 		if (waiter.triggered || suspend_list_ready(list, count, &any) || !any) {
 			remove_waiter_locked(&waiter);
 			__sig_unlock();
-			NtClose(waiter.event);
+			__plat_close(waiter.event);
 			return 0;
 		}
-		if (__sig_caught_count() != caught || status == STATUS_TIMEOUT ||
-		    (!NT_SUCCESS(status) && status != STATUS_USER_APC &&
-		     status != STATUS_ALERTED)) {
-			int wait_error = !NT_SUCCESS(status) && status != STATUS_TIMEOUT &&
-			                 status != STATUS_USER_APC && status != STATUS_ALERTED;
+		if (__sig_caught_count() != caught || status == __PLAT_WAIT_TIMEOUT ||
+		    status == __PLAT_WAIT_ERROR) {
+			int wait_error = status == __PLAT_WAIT_ERROR;
 			remove_waiter_locked(&waiter);
 			__sig_unlock();
-			NtClose(waiter.event);
-			errno = status == STATUS_TIMEOUT ? EAGAIN : wait_error ? EINVAL : EINTR;
+			__plat_close(waiter.event);
+			errno = status == __PLAT_WAIT_TIMEOUT ? EAGAIN : wait_error ? EINVAL : EINTR;
 			return -1;
 		}
 		__sig_unlock();

@@ -5,6 +5,8 @@
 #include <sched.h>
 #include <string.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 #define SPIN_UNLOCKED 1
 #define SPIN_LOCKED 2
@@ -27,7 +29,7 @@ struct barrier_data {
 struct barrier_waiter {
 	struct barrier_data *barrier;
 	struct barrier_waiter *next;
-	HANDLE event;
+	__plat_handle_t event;
 	unsigned generation;
 };
 
@@ -59,8 +61,7 @@ static void release_guard(volatile int *guard)
 
 static void alertable_yield(void)
 {
-	LARGE_INTEGER delay = 0;
-	NtDelayExecution(TRUE, &delay);
+	__plat_thread_alertable_yield();
 	sched_yield();
 }
 
@@ -136,9 +137,8 @@ static void wake_barrier_waiters_locked(struct barrier_data *data,
 {
 	struct barrier_waiter *waiter;
 	for (waiter = data->waiters; waiter; waiter = waiter->next) {
-		LONG previous;
 		if (waiter->generation == generation && waiter->event)
-			NtSetEvent(waiter->event, &previous);
+			__plat_event_set(waiter->event);
 	}
 }
 
@@ -193,17 +193,12 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 {
 	struct barrier_data *data;
 	struct barrier_waiter waiter;
-	OBJECT_ATTRIBUTES attributes;
-	NTSTATUS status;
 	unsigned generation;
 	if (!barrier) return EINVAL;
 	data = barrier_data(barrier);
 	if (data->magic != BARRIER_MAGIC) return EINVAL;
 	if (data->pshared == PTHREAD_PROCESS_PRIVATE) {
-		InitializeObjectAttributes(&attributes, 0, 0, 0, 0);
-		status = NtCreateEvent(&waiter.event, EVENT_ALL_ACCESS, &attributes,
-		                       SynchronizationEvent, FALSE);
-		if (!NT_SUCCESS(status)) waiter.event = 0;
+		if (__plat_event_create(&waiter.event) < 0) waiter.event = 0;
 		waiter.barrier = data;
 		RtlAcquirePebLock();
 		generation = data->generation;
@@ -212,7 +207,7 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 			data->generation++;
 			wake_barrier_waiters_locked(data, generation);
 			RtlReleasePebLock();
-			if (waiter.event) NtClose(waiter.event);
+			if (waiter.event) __plat_close(waiter.event);
 			return PTHREAD_BARRIER_SERIAL_THREAD;
 		}
 		if (waiter.event) {
@@ -222,13 +217,14 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 		}
 		RtlReleasePebLock();
 		if (waiter.event) {
+			int wait_result;
 			do {
-				status = NtWaitForSingleObject(waiter.event, TRUE, 0);
-			} while (status == STATUS_USER_APC || status == STATUS_ALERTED);
+				wait_result = __plat_wait_one(waiter.event, 1, 0, 0);
+			} while (wait_result == __PLAT_WAIT_INTR);
 			RtlAcquirePebLock();
 			unlink_barrier_waiter_locked(&waiter);
 			RtlReleasePebLock();
-			NtClose(waiter.event);
+			__plat_close(waiter.event);
 		} else {
 			/* pthread_barrier_wait() has no resource-error return. Retain
 			 * generation polling only for degraded event-allocation failure. */

@@ -6,6 +6,8 @@
 #include <string.h>
 #include <time.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 #define RWLOCK_MAGIC ((ULONG_PTR)0x52574c4bu)
 #define RWLOCK_DEAD ((ULONG_PTR)0x52574c58u)
@@ -28,7 +30,7 @@ struct rw_waiter {
 	struct rw_waiter *previous;
 	struct rw_waiter *next;
 	struct rwlock_data *lock;
-	HANDLE semaphore;
+	__plat_handle_t semaphore;
 	pthread_t owner;
 	int write;
 	int linked;
@@ -132,7 +134,7 @@ static void wake_waiters(struct rwlock_data *data)
 			if (!waiter->write) continue;
 			data->writer = waiter->owner;
 			unlink_waiter(waiter);
-			NtReleaseSemaphore(waiter->semaphore, 1, 0);
+			__plat_semaphore_post(waiter->semaphore);
 			return;
 		}
 	}
@@ -142,7 +144,7 @@ static void wake_waiters(struct rwlock_data *data)
 		if (waiter->write) continue;
 		data->readers++;
 		unlink_waiter(waiter);
-		NtReleaseSemaphore(waiter->semaphore, 1, 0);
+		__plat_semaphore_post(waiter->semaphore);
 	}
 }
 
@@ -156,7 +158,7 @@ static void wait_cleanup(void *argument)
 	}
 	RtlReleasePebLock();
 	if (waiter->semaphore) {
-		NtClose(waiter->semaphore);
+		__plat_close(waiter->semaphore);
 		waiter->semaphore = 0;
 	}
 	free(waiter);
@@ -207,8 +209,7 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	waiter->lock = data;
 	waiter->write = write;
 	waiter->owner = self;
-	if (!NT_SUCCESS(NtCreateSemaphore(&waiter->semaphore, SEMAPHORE_ALL_ACCESS,
-		0, 0, 1))) {
+	if (__plat_semaphore_create(0, 1, 0, &waiter->semaphore) < 0) {
 		free(waiter);
 		pthread_setcancelstate(old_state, 0);
 		return EAGAIN;
@@ -239,20 +240,18 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 	pthread_setcancelstate(old_state, 0);
 	for (;;) {
 		struct timespec now;
-		LARGE_INTEGER timeout;
 		long long ticks;
-		NTSTATUS status;
+		int status;
 		clock_gettime(CLOCK_REALTIME, &now);
 		ticks = __timespec_diff_ticks(absolute->tv_sec,
 			absolute->tv_nsec, now.tv_sec, now.tv_nsec);
-		if (ticks <= 0) status = STATUS_TIMEOUT;
+		if (ticks <= 0) status = __PLAT_WAIT_TIMEOUT;
 		else {
 			if (ticks <= INT64_MAX - 10000) ticks += 10000;
-			timeout = -ticks;
-			status = NtWaitForSingleObject(waiter->semaphore, TRUE, &timeout);
+			status = __plat_wait_one(waiter->semaphore, 1, 1, -ticks);
 		}
-		if (status == STATUS_USER_APC || status == STATUS_ALERTED) continue;
-		if (status == STATUS_TIMEOUT) {
+		if (status == __PLAT_WAIT_INTR) continue;
+		if (status == __PLAT_WAIT_TIMEOUT) {
 			RtlAcquirePebLock();
 			if (waiter->linked) {
 				unlink_waiter(waiter);
@@ -262,7 +261,7 @@ static int rwlock_acquire(pthread_rwlock_t *lock,
 			RtlReleasePebLock();
 			break;
 		}
-		if (!NT_SUCCESS(status)) result = EINVAL;
+		if (status == __PLAT_WAIT_ERROR) result = EINVAL;
 		break;
 	}
 	done:

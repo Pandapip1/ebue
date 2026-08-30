@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <string.h>
 #include "pthread_impl.h"
+#include "plat_thread.h"
 
 _Noreturn void __pthread_cancel_trampoline(void);
 
@@ -41,27 +42,7 @@ static int atomic_load(volatile int *address)
  * are not async-cancel-safe themselves. */
 static _Noreturn void cancel_unsafe_abort(const char *region)
 {
-	static const char prefix[] =
-		"ntlibc: undefined behavior: asynchronous cancellation during ";
-	static const char suffix[] = "\r\n";
-	IO_STATUS_BLOCK io;
-	HANDLE error = 0;
-	size_t length = 0;
-
-	if (__peb && __peb->ProcessParameters)
-		error = __peb->ProcessParameters->StandardError;
-	if (!region) region = "an async-cancel-unsafe operation";
-	while (region[length]) length++;
-	if (error) {
-		NtWriteFile(error, 0, 0, 0, &io, prefix,
-			sizeof prefix - 1, 0, 0);
-		NtWriteFile(error, 0, 0, 0, &io, region, (ULONG)length, 0, 0);
-		NtWriteFile(error, 0, 0, 0, &io, suffix,
-			sizeof suffix - 1, 0, 0);
-	}
-	NtTerminateProcess(NtCurrentProcess(), __NT_SIGNAL_EXIT(SIGABRT));
-	for (;;) NtTerminateProcess(NtCurrentProcess(),
-		__NT_SIGNAL_EXIT(SIGABRT));
+	__plat_cancel_unsafe_abort(region);
 }
 
 void __pthread_cancel_unsafe_enter(const char *region)
@@ -120,32 +101,11 @@ void __pthread_cancel_defer_leave(void)
  * the suspended target to an arch trampoline which cannot return. */
 static int redirect_async_cancel(struct __pthread *thread)
 {
-#if defined(__x86_64__)
-	unsigned char storage[0x4d0 + 15];
-	const ULONG flags = 0x100001; /* CONTEXT_AMD64 | CONTEXT_CONTROL */
-	const size_t flags_offset = 0x30;
-	const size_t ip_offset = 0xf8;
-#elif defined(__i386__)
-	unsigned char storage[0x2cc + 15];
-	const ULONG flags = 0x10001; /* CONTEXT_i386 | CONTEXT_CONTROL */
-	const size_t flags_offset = 0;
-	const size_t ip_offset = 0xb8;
-#else
-# error unsupported architecture
-#endif
-	unsigned char *context = (unsigned char *)
-		(((ULONG_PTR)storage + 15) & ~(ULONG_PTR)15);
-	ULONG_PTR ip = (ULONG_PTR)__pthread_cancel_trampoline;
-	ULONG previous;
-	NTSTATUS status;
 	int handled = 0;
 	int unsafe = 0;
 	const char *unsafe_region = 0;
 
-	memset(context, 0, sizeof storage - 15);
-	memcpy(context + flags_offset, &flags, sizeof flags);
-	status = NtSuspendThread(thread->handle, &previous);
-	if (!NT_SUCCESS(status)) return 0;
+	if (__plat_thread_suspend(thread->handle) < 0) return 0;
 	/* The target can consume the request at a cancellation point after
 	 * pthread_cancel() drops the PEB lock but before it is suspended.  Do
 	 * not redirect it a second time while its cleanup handlers are already
@@ -171,18 +131,14 @@ static int redirect_async_cancel(struct __pthread *thread)
 			if (compare_exchange(&thread->cancel_running, 0, 1) != 0) {
 				handled = 1;
 			} else {
-				status = NtGetContextThread(thread->handle, context);
-				if (NT_SUCCESS(status)) {
-					memcpy(context + ip_offset, &ip, sizeof ip);
-					status = NtSetContextThread(thread->handle, context);
-				}
-				handled = NT_SUCCESS(status);
+				handled = __plat_thread_redirect_ip(thread->handle,
+					(void *)__pthread_cancel_trampoline) == 0;
 				if (!handled)
 					compare_exchange(&thread->cancel_running, 1, 0);
 			}
 		}
 	}
-	NtResumeThread(thread->handle, &previous);
+	__plat_thread_resume(thread->handle);
 	if (unsafe) cancel_unsafe_abort(unsafe_region);
 	return handled;
 }
@@ -231,7 +187,7 @@ void __pthread_testcancel(void)
 	if (cancel) __pthread_cancel_current();
 }
 
-static void NTAPI cancel_apc(PVOID argument, PVOID unused1, PVOID unused2)
+static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2)
 {
 	struct __pthread *self = argument;
 	int cancel = 0;
@@ -273,8 +229,8 @@ int pthread_cancel(pthread_t thread)
 	RtlReleasePebLock();
 	if (cancel_self) __pthread_cancel_current();
 	if (redirect && !redirect_async_cancel(thread)) queue = 1;
-	if (queue && !NT_SUCCESS(NtQueueApcThread(thread->handle, cancel_apc,
-		thread, 0, 0))) {
+	if (queue && __plat_thread_queue_apc(thread->handle, cancel_apc,
+		thread, 0) < 0) {
 		RtlAcquirePebLock();
 		thread->cancel_queued = 0;
 		RtlReleasePebLock();

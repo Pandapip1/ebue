@@ -19,6 +19,8 @@
 #include <errno.h>
 #include "libc.h"
 #include "pthread_impl.h"
+#include "plat_thread.h"
+#include "plat_fd.h"
 
 #define SEM_MAGIC 0x53454d31u
 #define NAMED_MAX 64
@@ -113,48 +115,19 @@ __wraps static unsigned long long path_hash(const char *s)
 	return h;
 }
 
-static void object_attributes(const char *ascii, OBJECT_ATTRIBUTES *oa,
-	UNICODE_STRING *us, WCHAR *wide, size_t cap)
-{
-	size_t i, n = strlen(ascii);
-	if (n >= cap) n = cap - 1;
-	for (i = 0; i < n; i++) wide[i] = (unsigned char)ascii[i];
-	wide[n] = 0;
-	if (n > __US_MAX_WCHARS) n = __US_MAX_WCHARS;
-	us->Length = (USHORT)(n * sizeof(WCHAR));
-	us->MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
-	us->Buffer = wide;
-	InitializeObjectAttributes(oa, us, OBJ_CASE_INSENSITIVE | OBJ_INHERIT, 0, 0);
-}
-
-static int namespace_lock(const char *path, HANDLE *out)
+static int namespace_lock(const char *path, __plat_handle_t *out)
 {
 	char name[96];
-	WCHAR wide[96];
-	UNICODE_STRING us;
-	OBJECT_ATTRIBUTES oa;
 	unsigned long long hash = path_hash(path);
-	NTSTATUS st;
 
 	snprintf(name, sizeof name, "\\BaseNamedObjects\\ntlibc.sem.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
-	object_attributes(name, &oa, &us, wide, sizeof wide / sizeof wide[0]);
-	oa.Attributes = (oa.Attributes & ~OBJ_INHERIT) | OBJ_OPENIF;
-	st = NtCreateMutant(out, MUTANT_ALL_ACCESS, &oa, FALSE);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	st = NtWaitForSingleObject(*out, FALSE, NULL);
-	if (!NT_SUCCESS(st)) {
-		NtClose(*out);
-		*out = 0;
-		return __set_errno_status(st);
-	}
-	return 0;
+	return __plat_named_mutant_acquire(name, out);
 }
 
-static void namespace_unlock(HANDLE lock)
+static void namespace_unlock(__plat_handle_t lock)
 {
-	NtReleaseMutant(lock, NULL);
-	NtClose(lock);
+	__plat_named_mutant_release(lock);
 }
 
 static struct named_sem *find_path(const char *path)
@@ -182,9 +155,7 @@ static struct named_sem *free_slot(void)
 
 int sem_init(sem_t *sem, int pshared, unsigned value)
 {
-	OBJECT_ATTRIBUTES oa;
-	HANDLE h;
-	NTSTATUS st;
+	__plat_handle_t h;
 	(void)pshared;
 	if (!sem || value > SEM_VALUE_MAX) { errno = EINVAL; return -1; }
 	RtlAcquirePebLock();
@@ -198,13 +169,11 @@ int sem_init(sem_t *sem, int pshared, unsigned value)
 	/* fork() only clones OBJ_INHERIT handles. A process-shared sem_t
 	 * stores this handle value in shared memory, and named semaphores
 	 * have the same requirement when already open across fork. */
-	InitializeObjectAttributes(&oa, 0, OBJ_INHERIT, 0, 0);
-	st = NtCreateSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa, (LONG)value, SEM_VALUE_MAX);
-	if (!NT_SUCCESS(st)) {
+	if (__plat_semaphore_create((long)value, SEM_VALUE_MAX, 1, &h) < 0) {
 		RtlAcquirePebLock();
 		unnamed_count--;
 		RtlReleasePebLock();
-		return __set_errno_status(st);
+		return -1;
 	}
 	sem->__handle = h; sem->__magic = SEM_MAGIC; sem->__named = 0;
 	return 0;
@@ -213,7 +182,7 @@ int sem_init(sem_t *sem, int pshared, unsigned value)
 int sem_destroy(sem_t *sem)
 {
 	if (!valid(sem) || sem->__named) { errno = EINVAL; return -1; }
-	NtClose(sem->__handle);
+	__plat_close(sem->__handle);
 	memset(sem, 0, sizeof *sem);
 	RtlAcquirePebLock();
 	unnamed_count--;
@@ -224,12 +193,8 @@ int sem_destroy(sem_t *sem)
 sem_t *sem_open(const char *name, int oflag, ...)
 {
 	char *path, object[96];
-	WCHAR wide[96];
-	UNICODE_STRING us;
-	OBJECT_ATTRIBUTES oa;
 	struct named_sem *entry;
-	HANDLE h, ns = 0;
-	NTSTATUS st;
+	__plat_handle_t h, ns = 0;
 	int fd = -1, created = 0, saved, recover = 0;
 	unsigned value = 0;
 	mode_t mode = 0;
@@ -285,15 +250,17 @@ retry_record:
 	} else fd = open(path, O_RDONLY, 0);
 	if (fd < 0) { saved = errno; goto fail_locked; }
 	if (created) {
+		int create_result;
 		snprintf(object, sizeof object, "\\BaseNamedObjects\\ntlibc.sem.%d.%u",
 		         (int)getpid(), ++object_sequence);
-		object_attributes(object, &oa, &us, wide, sizeof wide / sizeof wide[0]);
-		st = NtCreateSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa, (LONG)value, SEM_VALUE_MAX);
-		if (!NT_SUCCESS(st) || write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
-			saved = NT_SUCCESS(st) ? EIO : (__set_errno_status(st), errno);
+		create_result = __plat_named_semaphore_create(object, (long)value, SEM_VALUE_MAX, &h);
+		if (create_result < 0 ||
+		    write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
+			saved = create_result == 0 ? EIO : errno;
 			close(fd); unlink(path); goto fail_locked;
 		}
 	} else {
+		int open_result;
 		got = read(fd, object, sizeof object - 1);
 		if (got <= 0) {
 			saved = got < 0 ? errno : EIO;
@@ -309,17 +276,16 @@ retry_record:
 			goto fail_locked;
 		}
 		object[got] = 0;
-		object_attributes(object, &oa, &us, wide, sizeof wide / sizeof wide[0]);
-		st = NtOpenSemaphore(&h, SEMAPHORE_ALL_ACCESS, &oa);
-		if (!NT_SUCCESS(st)) {
+		open_result = __plat_named_semaphore_open(object, &h);
+		if (open_result < 0) {
 			close(fd);
 			if ((oflag & O_CREAT) && !(oflag & O_EXCL) && !recover &&
-			    st == STATUS_OBJECT_NAME_NOT_FOUND) {
+			    open_result == -2) {
 				recover = 1;
 				if (unlink(path) == 0) goto retry_record;
 				saved = errno;
 			} else {
-				__set_errno_status(st);
+				if (open_result == -2) errno = ENOENT;
 				saved = errno;
 			}
 			goto fail_locked;
@@ -329,7 +295,7 @@ retry_record:
 	RtlAcquirePebLock();
 	entry = free_slot();
 	if (!entry) {
-		RtlReleasePebLock(); NtClose(h);
+		RtlReleasePebLock(); __plat_close(h);
 		if (created) unlink(path);
 		saved = EMFILE; goto fail_locked;
 	}
@@ -356,7 +322,7 @@ int sem_close(sem_t *sem)
 	if (!entry || !entry->refs) { RtlReleasePebLock(); errno = EINVAL; return -1; }
 	entry->refs--;
 	if (!entry->linked && !entry->refs) {
-		NtClose(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
+		__plat_close(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
 	}
 	RtlReleasePebLock();
 	return 0;
@@ -366,7 +332,7 @@ int sem_unlink(const char *name)
 {
 	char *path = sem_path(name);
 	struct named_sem *entry;
-	HANDLE ns = 0;
+	__plat_handle_t ns = 0;
 	int result, saved;
 	if (!path) return -1;
 	if (ensure_dir(path) < 0) { free(path); return -1; }
@@ -378,7 +344,7 @@ int sem_unlink(const char *name)
 		if (entry) {
 			entry->linked = 0;
 			if (!entry->refs) {
-				NtClose(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
+				__plat_close(entry->sem.__handle); free(entry->path); memset(entry, 0, sizeof *entry);
 			}
 		}
 		RtlReleasePebLock();
@@ -387,15 +353,15 @@ int sem_unlink(const char *name)
 	free(path); errno = saved; return result;
 }
 
-static int wait_handle(sem_t *sem, LARGE_INTEGER *timeout)
+static int wait_handle(sem_t *sem, long long ticks)
 {
-	NTSTATUS st;
+	int r;
 	if (!valid(sem)) { errno = EINVAL; return -1; }
-	st = NtWaitForSingleObject(sem->__handle, TRUE, timeout);
-	if (st == STATUS_WAIT_0) return 0;
-	if (st == STATUS_TIMEOUT) { errno = EAGAIN; return -1; }
-	if (st == STATUS_USER_APC || st == STATUS_ALERTED) { errno = EINTR; return -1; }
-	return __set_errno_status(st);
+	r = __plat_wait_one(sem->__handle, 1, 1, ticks);
+	if (r == __PLAT_WAIT_OK) return 0;
+	if (r == __PLAT_WAIT_TIMEOUT) { errno = EAGAIN; return -1; }
+	if (r == __PLAT_WAIT_INTR) { errno = EINTR; return -1; }
+	return -1; /* __PLAT_WAIT_ERROR: errno already set */
 }
 
 static int restartable_interruption(unsigned long *caught,
@@ -416,13 +382,12 @@ static int restartable_interruption(unsigned long *caught,
 
 int sem_trywait(sem_t *sem)
 {
-	LARGE_INTEGER zero = 0;
-	return wait_handle(sem, &zero);
+	return wait_handle(sem, 0);
 }
 
 int sem_wait(sem_t *sem)
 {
-	LARGE_INTEGER slice = -500000; /* 50 ms: observe handlers run elsewhere. */
+	const long long slice = -500000; /* 50 ms: observe handlers run elsewhere. */
 	unsigned long caught;
 	unsigned long restarted;
 	int r;
@@ -431,7 +396,7 @@ int sem_wait(sem_t *sem)
 	caught = __sig_thread_caught_count();
 	restarted = __sig_thread_restart_count();
 	for (;;) {
-		r = wait_handle(sem, &slice);
+		r = wait_handle(sem, slice);
 		__pthread_testcancel();
 		/* Cross-process delivery queues the signal for an application
 		 * thread; the listener must not run user handlers itself.  NT
@@ -453,7 +418,6 @@ int sem_wait(sem_t *sem)
 int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 {
 	struct timespec now;
-	LARGE_INTEGER rel;
 	long long ticks;
 	unsigned long caught;
 	unsigned long restarted;
@@ -472,8 +436,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 			now.tv_sec, now.tv_nsec);
 		if (ticks <= 0) { errno = ETIMEDOUT; return -1; }
 		if (ticks > 500000) ticks = 500000;
-		rel = -ticks;
-		r = wait_handle(sem, &rel);
+		r = wait_handle(sem, -ticks);
 		__pthread_testcancel();
 		__sig_drain_pending();
 		if (!r) return 0;
@@ -489,22 +452,12 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 
 int sem_post(sem_t *sem)
 {
-	NTSTATUS st;
 	if (!valid(sem)) { errno = EINVAL; return -1; }
-	st = NtReleaseSemaphore(sem->__handle, 1, NULL);
-	if (st == STATUS_SEMAPHORE_LIMIT_EXCEEDED) { errno = EOVERFLOW; return -1; }
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	return __plat_semaphore_post(sem->__handle);
 }
 
 int sem_getvalue(sem_t *sem, int *value)
 {
-	SEMAPHORE_BASIC_INFORMATION info;
-	NTSTATUS st;
 	if (!valid(sem) || !value) { errno = EINVAL; return -1; }
-	st = NtQuerySemaphore(sem->__handle, SemaphoreBasicInformation,
-	                      &info, sizeof info, NULL);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	*value = info.CurrentCount;
-	return 0;
+	return __plat_semaphore_getvalue(sem->__handle, value);
 }
