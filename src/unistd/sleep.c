@@ -45,54 +45,53 @@
 #include <string.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_unistd.h"
 
-/* The process-wide alarm.  Created on the first alarm() that asks for
- * one and then kept for the life of the process: it is a single handle,
- * re-armable in place, and never closing it is what lets fork()'s child
- * simply forget it (see __alarm_reset_after_fork below) instead of
- * having to decide whether a handle number is safe to close. */
-static HANDLE alarm_timer;
-/* Absolute NT time the pending SIGALRM is due; 0 means no request. */
+/* Absolute time (see __plat_time_now()) the pending SIGALRM is due; 0
+ * means no request. */
 static long long alarm_due;
 /* Which request the pending APC belongs to.  Bumped by every alarm(),
- * so a queued APC can name the request that queued it; see alarm_apc. */
+ * so a queued APC can name the request that queued it; see
+ * alarm_apc_fire. */
 static unsigned long alarm_seq;
 
-static void NTAPI alarm_apc(PVOID ctx, ULONG lo, LONG hi)
+/* Called by the backend (src/unistd/nt/plat_unistd.c) when the alarm
+ * timer __plat_alarm_arm() armed expires, on the thread that armed it,
+ * only while that thread is in an alertable wait -- see this file's
+ * header comment for exactly what that does and does not reach.
+ *
+ * Do not trust the queue: this may belong to a request that is already
+ * gone.  __plat_alarm_cancel() withdraws a timer, but it cannot recall
+ * an APC that the expiry has already handed to this thread -- and a
+ * handed-over APC is not *run* until the next alertable wait, so a
+ * program that lets an alarm expire while it is computing and only then
+ * calls alarm(0), or re-arms for later, reaches here with the request it
+ * names already spent.
+ *
+ * WHICH REQUEST THIS IS FOR IS ASKED BY IDENTITY, NOT BY THE CLOCK, and
+ * that distinction is the whole of this comment.  The obvious test --
+ * re-read the time and drop the notification if the deadline has not
+ * passed -- is wrong, because it cannot tell a superseded notification
+ * from a punctual one: an NT timer may run its APC a hair BEFORE
+ * __plat_time_now() agrees the due time has arrived, the two being
+ * different clocks sampled at different moments.  A dropped notification
+ * is not retried, and alarm_due stays set, so that loses the SIGALRM
+ * permanently.  Measured under Wine before this was changed, with the
+ * comparison instrumented: the APC ran with `now - alarm_due` at -9886
+ * ticks (0.99ms early) and the signal was silently swallowed, on roughly
+ * one run in three; the same binary passed the other two.  A tolerance
+ * would only move the boundary, not remove it.
+ *
+ * The generation counter answers the question exactly instead.  Every
+ * alarm() bumps alarm_seq and hands the new value to __plat_alarm_arm()
+ * as the request's identity, so `seq == alarm_seq` is true for precisely
+ * the notification of the current request and false for every stale one
+ * -- no clock is read, and an early expiry is delivered as the expiry it
+ * is.  alarm_due == 0 covers the cancelled case, where there is no
+ * current request for any notification to match. */
+static void alarm_apc_fire(unsigned long seq)
 {
-	(void)lo; (void)hi;
-
-	/* Do not trust the queue: this APC may belong to a request that is
-	 * already gone.  NtCancelTimer withdraws a timer, but it cannot
-	 * recall an APC that the expiry has already handed to this thread
-	 * -- and a handed-over APC is not *run* until the next alertable
-	 * wait, so a program that lets an alarm expire while it is
-	 * computing and only then calls alarm(0), or re-arms for later,
-	 * reaches here with the request it names already spent.
-	 *
-	 * WHICH REQUEST THIS APC IS FOR IS ASKED BY IDENTITY, NOT BY THE
-	 * CLOCK, and that distinction is the whole of this comment.  The
-	 * obvious test -- re-read the time and drop the APC if the deadline
-	 * has not passed -- is wrong, because it cannot tell a superseded
-	 * APC from a punctual one: an NT timer may run its APC a hair
-	 * BEFORE NtQuerySystemTime() agrees the due time has arrived, the
-	 * two being different clocks sampled at different moments.  A
-	 * dropped APC is not retried, and alarm_due stays set, so that
-	 * loses the SIGALRM permanently.  Measured under Wine before this
-	 * was changed, with the comparison instrumented: the APC ran with
-	 * `now - alarm_due` at -9886 ticks (0.99ms early) and the signal
-	 * was silently swallowed, on roughly one run in three; the same
-	 * binary passed the other two.  A tolerance would only move the
-	 * boundary, not remove it.
-	 *
-	 * The generation counter answers the question exactly instead.
-	 * Every alarm() bumps alarm_seq and hands the new value to
-	 * NtSetTimer as the APC context, so `ctx == alarm_seq` is true for
-	 * precisely the APC of the current request and false for every
-	 * stale one -- no clock is read, and an early expiry is delivered
-	 * as the expiry it is.  alarm_due == 0 covers the cancelled case,
-	 * where there is no current request for any APC to match. */
-	if (!alarm_due || (unsigned long)(ULONG_PTR)ctx != alarm_seq) return;
+	if (!alarm_due || seq != alarm_seq) return;
 
 	/* Cleared before delivery, not after: SIGALRM's default action is
 	 * to terminate, so __raise_internal() does not return in that
@@ -121,46 +120,28 @@ static unsigned alarm_remaining(long long now)
 
 unsigned alarm(unsigned s)
 {
-	LARGE_INTEGER now, due;
-	unsigned prev;
-
-	NtQuerySystemTime(&now);
-	prev = alarm_remaining(now);
+	long long now = __plat_time_now();
+	long long due;
+	unsigned prev = alarm_remaining(now);
 
 	/* "If seconds is 0, a pending alarm request, if any, is canceled"
 	 * -- and a new request replaces the old one, so both paths start
 	 * by withdrawing what is there. */
-	if (alarm_timer) NtCancelTimer(alarm_timer, NULL);
+	__plat_alarm_cancel();
 	alarm_due = 0;
-	/* Retire the old request's identity before arming a new one, so an
-	 * APC already handed over for it can no longer match (alarm_apc). */
+	/* Retire the old request's identity before arming a new one, so a
+	 * notification already handed over for it can no longer match
+	 * (alarm_apc_fire). */
 	alarm_seq++;
 
 	if (s) {
-		if (!alarm_timer) {
-			OBJECT_ATTRIBUTES oa;
-			memset(&oa, 0, sizeof oa);
-			oa.Length = sizeof oa;
-			/* Unnamed and, deliberately, not OBJ_INHERIT: fork()
-			 * must not hand the child a live copy of the parent's
-			 * alarm (fork.html), and leaving the handle
-			 * non-inheritable means RtlCloneUserProcess's
-			 * INHERIT_HANDLES never copies it in the first place. */
-			if (!NT_SUCCESS(NtCreateTimer(&alarm_timer, TIMER_ALL_ACCESS, &oa, NotificationTimer))) {
-				/* alarm.html ERRORS: "The alarm() function is
-				 * always successful, and no return value is
-				 * reserved to indicate an error."  There is
-				 * nothing to report with, so report the previous
-				 * request's remaining time and leave no alarm
-				 * set -- the same shape as a request the system
-				 * silently could not honour. */
-				alarm_timer = 0;
-				return prev;
-			}
-		}
 		due = now + (long long)s * __TICKS_PER_SEC;
-		if (NT_SUCCESS(NtSetTimer(alarm_timer, &due, alarm_apc,
-		                          (PVOID)(ULONG_PTR)alarm_seq, 0, 0, NULL)))
+		/* alarm.html ERRORS: "The alarm() function is always
+		 * successful, and no return value is reserved to indicate an
+		 * error."  There is nothing to report a failed arm with, so
+		 * a request the system silently could not honour just leaves
+		 * alarm_due at 0, same as the cancelled case above. */
+		if (__plat_alarm_arm(due, alarm_seq, alarm_apc_fire) == 0)
 			alarm_due = due;
 	}
 	return prev;
@@ -178,7 +159,7 @@ unsigned alarm(unsigned s)
 void __alarm_reset_after_fork(void)
 {
 	alarm_due = 0;
-	alarm_timer = 0;
+	__plat_alarm_reset_after_fork();
 	alarm_seq++;
 }
 
@@ -195,7 +176,7 @@ void __alarm_reset_after_fork(void)
  * returns 0 for the handled and the ignored case alike, and the
  * terminate case does not come back here at all.
  *
- * Elapsed time is measured on NtQuerySystemTime rather than the
+ * Elapsed time is measured on __plat_time_now() rather than the
  * performance counter, which would be immune to a clock step: alarm()
  * deadlines use the system clock, and having the two agree matters more
  * here than making either one step-proof. The delivery event permits one
@@ -204,7 +185,7 @@ void __alarm_reset_after_fork(void)
 int __alertable_delay(long long ticks, long long *left, const char *operation)
 {
 	unsigned long caught = __sig_caught_count();
-	LARGE_INTEGER start, now, t;
+	long long start, now, t;
 
 	/* No unsafe/defer region here: the only shared state this function
 	 * touches is reached through __sig_drain_pending()/__sig_wait_delivery(),
@@ -216,7 +197,7 @@ int __alertable_delay(long long ticks, long long *left, const char *operation)
 	 * therefore safe, and is exactly the case the pthread_cancel/2-1, 3-1,
 	 * 4-1 conformance tests exercise: they cancel a peer that is asleep. */
 	(void)operation;
-	NtQuerySystemTime(&start);
+	start = __plat_time_now();
 	__pthread_testcancel();
 	__sig_drain_pending();
 	if (__sig_caught_count() != caught) {
@@ -233,7 +214,7 @@ int __alertable_delay(long long ticks, long long *left, const char *operation)
 		__pthread_testcancel();
 		__sig_drain_pending();
 
-		NtQuerySystemTime(&now);
+		now = __plat_time_now();
 		ticks -= now - start;
 		start = now;
 		if (__sig_caught_count() != caught) {

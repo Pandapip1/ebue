@@ -4,12 +4,11 @@
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_unistd.h"
 
 int fsync(int fd)
 {
 	struct __fd *f = __fd_get(fd);
-	IO_STATUS_BLOCK io;
-	NTSTATUS st;
 	if (!f) return -1;
 	/* fsync.html ERRORS: "[EINVAL] fildes is bound to a special file
 	 * which does not support synchronization." A pipe, socket,
@@ -23,9 +22,7 @@ int fsync(int fd)
 	 * has no object to flush, unlike a pipe, which POSIX gives an
 	 * errno to decline with instead). */
 	if (f->type != __FD_FILE) { errno = EINVAL; return -1; }
-	st = NtFlushBuffersFile(f->h, &io);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	return __plat_fsync(f->h);
 }
 
 int fdatasync(int fd) { return fsync(fd); }

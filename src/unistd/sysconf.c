@@ -32,6 +32,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_unistd.h"
 
 long sysconf(int name)
 {
@@ -125,18 +126,8 @@ long sysconf(int name)
 
 	/* ---- ntlibc extensions ------------------------------------ */
 	case _SC_NPROCESSORS_CONF:
-	case _SC_NPROCESSORS_ONLN: {
-		SYSTEM_BASIC_INFORMATION sbi;
-		if (NT_SUCCESS(NtQuerySystemInformation(SystemBasicInformation, &sbi, sizeof sbi, 0)))
-			return sbi.NumberOfProcessors;
-		return 1;
-	}
-	case _SC_PHYS_PAGES: {
-		SYSTEM_BASIC_INFORMATION sbi;
-		if (NT_SUCCESS(NtQuerySystemInformation(SystemBasicInformation, &sbi, sizeof sbi, 0)))
-			return (long)((unsigned long long)sbi.NumberOfPhysicalPages * sbi.PageSize / 4096);
-		return -1;
-	}
+	case _SC_NPROCESSORS_ONLN: return __plat_nprocessors();
+	case _SC_PHYS_PAGES: return __plat_phys_pages();
 
 	/* ---- the rest of the mandated list: -1, errno untouched ---- */
 	/*

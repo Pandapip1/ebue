@@ -79,232 +79,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "libc.h"
-
-#define UID_FALLBACK               ((uid_t)1000)
-#define SAM_POSIX_OFFSET           ((uid_t)0x00030000)
-#define PRIMARY_POSIX_OFFSET       ((uid_t)0x00100000)
-#define NOACCESS_POSIX_OFFSET      ((uid_t)0xfe500000)
-
-enum domain_kind {
-	DOMAIN_UNKNOWN,
-	DOMAIN_SAM,
-	DOMAIN_PRIMARY,
-	DOMAIN_TRUSTED
-};
-
-static int sid_valid(const SID *sid)
-{
-	return sid && sid->Revision == SID_REVISION &&
-	       sid->SubAuthorityCount > 0 &&
-	       sid->SubAuthorityCount <= SID_MAX_SUB_AUTHORITIES;
-}
-
-static int sid_authority(const SID *sid)
-{
-	int i;
-	for (i = 0; i < 5; i++)
-		if (sid->IdentifierAuthority.Value[i]) return -1;
-	return sid->IdentifierAuthority.Value[5];
-}
-
-/* domain is a SID with the account RID removed. */
-static int sid_in_domain(const SID *sid, const SID *domain)
-{
-	size_t n;
-
-	if (!sid_valid(sid) || !sid_valid(domain) ||
-	    sid->SubAuthorityCount != domain->SubAuthorityCount + 1)
-		return 0;
-	if (sid->Revision != domain->Revision ||
-	    memcmp(&sid->IdentifierAuthority, &domain->IdentifierAuthority,
-	           sizeof sid->IdentifierAuthority) != 0)
-		return 0;
-	n = (size_t)domain->SubAuthorityCount * sizeof(ULONG);
-	return memcmp(sid->SubAuthority, domain->SubAuthority, n) == 0;
-}
-
-#ifdef NTLIBC_USE_KERNEL32
-/* advapi32 is reached dynamically and only in the explicitly enabled
- * higher-level-DLL build, as required by CONTRIBUTING.md. */
-typedef NTSTATUS (NTAPI *lsa_open_policy_fn)(UNICODE_STRING *,
-    OBJECT_ATTRIBUTES *, ACCESS_MASK, HANDLE *);
-typedef NTSTATUS (NTAPI *lsa_query_policy_fn)(HANDLE, ULONG, PVOID *);
-typedef NTSTATUS (NTAPI *lsa_free_memory_fn)(PVOID);
-typedef NTSTATUS (NTAPI *lsa_close_fn)(HANDLE);
-
-typedef struct {
-	UNICODE_STRING DomainName;
-	SID *DomainSid;
-} POLICY_ACCOUNT_DOMAIN_INFO;
-
-typedef struct {
-	UNICODE_STRING Name;
-	SID *Sid;
-} POLICY_PRIMARY_DOMAIN_INFO;
-
-static int advapi_proc(PVOID dll, const char *name, PVOID *proc)
-{
-	STRING s;
-	size_t n = strlen(name);
-	if (n > 0xffffu) return 0;
-	s.Length = s.MaximumLength = (USHORT)n;
-	s.Buffer = (char *)name;
-	return NT_SUCCESS(LdrGetProcedureAddress(dll, &s, 0, proc));
-}
-
-static enum domain_kind lsa_domain_kind(const SID *sid)
-{
-	static WCHAR dllname_buf[] = {
-		'a','d','v','a','p','i','3','2','.','d','l','l',0
-	};
-	UNICODE_STRING dllname;
-	PVOID dll = 0, p;
-	lsa_open_policy_fn open_policy;
-	lsa_query_policy_fn query_policy;
-	lsa_free_memory_fn free_memory;
-	lsa_close_fn close_policy;
-	OBJECT_ATTRIBUTES oa;
-	POLICY_ACCOUNT_DOMAIN_INFO *account = 0;
-	POLICY_PRIMARY_DOMAIN_INFO *primary = 0;
-	HANDLE policy = 0;
-	enum domain_kind kind = DOMAIN_UNKNOWN;
-
-	RtlInitUnicodeString(&dllname, dllname_buf);
-	if (!NT_SUCCESS(LdrLoadDll(0, 0, &dllname, &dll))) return kind;
-	if (!advapi_proc(dll, "LsaOpenPolicy", &p)) goto out;
-	open_policy = (lsa_open_policy_fn)p;
-	if (!advapi_proc(dll, "LsaQueryInformationPolicy", &p)) goto out;
-	query_policy = (lsa_query_policy_fn)p;
-	if (!advapi_proc(dll, "LsaFreeMemory", &p)) goto out;
-	free_memory = (lsa_free_memory_fn)p;
-	if (!advapi_proc(dll, "LsaClose", &p)) goto out;
-	close_policy = (lsa_close_fn)p;
-
-	memset(&oa, 0, sizeof oa);
-	if (!NT_SUCCESS(open_policy(0, &oa, 0x00000001, &policy))) goto out;
-	/* POLICY_INFORMATION_CLASS: PrimaryDomain=3, AccountDomain=5. */
-	if (!NT_SUCCESS(query_policy(policy, 3, (PVOID *)&primary))) goto close;
-	if (!NT_SUCCESS(query_policy(policy, 5, (PVOID *)&account))) goto close;
-
-	/* On a domain controller both policy entries name the AD domain;
-	 * primary wins, matching Cygwin's treatment of that case. */
-	if (primary->Sid && sid_in_domain(sid, primary->Sid))
-		kind = DOMAIN_PRIMARY;
-	else if (account->DomainSid && sid_in_domain(sid, account->DomainSid))
-		kind = DOMAIN_SAM;
-	else
-		kind = DOMAIN_TRUSTED;
-
-close:
-	if (account) free_memory(account);
-	if (primary) free_memory(primary);
-	close_policy(policy);
-out:
-	LdrUnloadDll(dll);
-	return kind;
-}
-#endif
-
-static int ascii_case_equal(const char *a, const char *b)
-{
-	unsigned char x, y;
-	if (!a || !b || !*a || !*b) return 0;
-	do {
-		x = (unsigned char)*a++;
-		y = (unsigned char)*b++;
-		if (x >= 'a' && x <= 'z') x -= 'a' - 'A';
-		if (y >= 'a' && y <= 'z') y -= 'a' - 'A';
-		if (x != y) return 0;
-	} while (x);
-	return 1;
-}
-
-static enum domain_kind current_domain_kind(const SID *sid)
-{
-	const char *user_domain, *computer;
-#ifdef NTLIBC_USE_KERNEL32
-	enum domain_kind kind = lsa_domain_kind(sid);
-	if (kind != DOMAIN_UNKNOWN) return kind;
-#else
-	(void)sid;
-#endif
-	user_domain = getenv("USERDOMAIN");
-	computer = getenv("COMPUTERNAME");
-	if (user_domain && *user_domain && computer && *computer)
-		return ascii_case_equal(user_domain, computer) ?
-		       DOMAIN_SAM : DOMAIN_PRIMARY;
-	return DOMAIN_SAM;
-}
-
-static uid_t sid_uid(const SID *sid)
-{
-	ULONG rid;
-	int authority;
-	uid_t uid;
-
-	if (!sid_valid(sid)) return UID_FALLBACK;
-	rid = sid->SubAuthority[sid->SubAuthorityCount - 1];
-	authority = sid_authority(sid);
-
-	/* SAM, AD and trusted-domain accounts: S-1-5-21-X-Y-Z-RID. */
-	if (authority == 5 && sid->SubAuthorityCount == 5 &&
-	    sid->SubAuthority[0] == 21) {
-		switch (current_domain_kind(sid)) {
-		case DOMAIN_PRIMARY: uid = PRIMARY_POSIX_OFFSET + rid; break;
-		case DOMAIN_TRUSTED: uid = NOACCESS_POSIX_OFFSET + rid; break;
-		default:             uid = SAM_POSIX_OFFSET + rid; break;
-		}
-		return uid == (uid_t)-1 ? UID_FALLBACK : uid;
-	}
-
-	/* Cygwin's fixed mappings for well-known principals. */
-	if (authority == 5 &&
-	    (sid->SubAuthorityCount == 1 || sid->SubAuthority[0] == 32))
-		uid = rid;
-	else if (authority == 5 && sid->SubAuthorityCount > 1)
-		uid = (uid_t)(0x1000u * sid->SubAuthority[0] + (rid & 0xffffu));
-	else if (authority == 16)
-		uid = (uid_t)(0x60000u + rid);
-	else if (authority >= 0)
-		uid = (uid_t)(0x10000u + 0x100u * (unsigned)authority +
-		              (rid & 0xffu));
-	else
-		return UID_FALLBACK;
-	return uid == (uid_t)-1 ? UID_FALLBACK : uid;
-}
-
-static uid_t detect_uid(void)
-{
-	union {
-		ULONG_PTR align;
-		UCHAR bytes[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
-	} buf;
-	TOKEN_USER *user = (TOKEN_USER *)buf.bytes;
-	SID *sid;
-	HANDLE token;
-	ULONG got = 0;
-	NTSTATUS st;
-	uintptr_t start, end, sp;
-	size_t sidlen;
-
-	st = NtOpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &token);
-	if (!NT_SUCCESS(st)) return UID_FALLBACK;
-	st = NtQueryInformationToken(token, TokenUser, buf.bytes, sizeof buf.bytes,
-	                             &got);
-	NtClose(token);
-	if (!NT_SUCCESS(st) || got > sizeof buf.bytes || got < sizeof(TOKEN_USER))
-		return UID_FALLBACK;
-
-	sid = user->User.Sid;
-	start = (uintptr_t)buf.bytes;
-	end = start + got;
-	sp = (uintptr_t)sid;
-	if (!sid || sp < start || sp > end || end - sp < 8) return UID_FALLBACK;
-	if (!sid_valid(sid)) return UID_FALLBACK;
-	sidlen = 8 + (size_t)sid->SubAuthorityCount * sizeof(ULONG);
-	if (sidlen > end - sp) return UID_FALLBACK;
-	return sid_uid(sid);
-}
+#include "plat_unistd.h"
 
 static uid_t cached_uid = (uid_t)-1;
 
@@ -313,7 +88,7 @@ uid_t getuid(void)
 	/* The primary token is immutable through this API.  Caching also keeps
 	 * the ntdll-only environment fallback stable if callers change env. */
 	uid_t uid = cached_uid;
-	if (uid == (uid_t)-1) cached_uid = uid = detect_uid();
+	if (uid == (uid_t)-1) cached_uid = uid = __plat_detect_uid();
 	return uid;
 }
 uid_t geteuid(void) { return getuid(); }
@@ -403,69 +178,14 @@ int getgroups(int n, gid_t *g)
  * start at 1 and how group-leader transitions are published. */
 static pid_t pgid = 1;
 static pid_t sid = 1;
-static HANDLE pgid_event;
-static pid_t pgid_event_owner;
 
 /* A process which becomes its own group leader publishes that one bit of
- * cross-process state as a named event.  NT has no query for POSIX pgids,
- * but this is enough to distinguish the transition setpgrp()/setsid()
- * make in another process without inventing a central process registry. */
-static void pgid_event_name(pid_t pid, WCHAR name[48], UNICODE_STRING *us)
-{
-	static const char prefix[] = "\\BaseNamedObjects\\ntlibc-pgrp.";
-	unsigned upid = (unsigned)pid;
-	int i = 0, n;
-
-	for (; prefix[i]; i++) name[i] = (unsigned char)prefix[i];
-	for (n = 8; n > 0;) {
-		n--;
-		name[i++] = (unsigned char)"0123456789abcdef"[(upid >> (n * 4)) & 15];
-	}
-	name[i] = 0;
-	us->Buffer = name;
-	if ((size_t)i > __US_MAX_WCHARS) {
-		us->Length = us->MaximumLength = 0;
-		return;
-	}
-	us->Length = (USHORT)(i * sizeof(WCHAR));
-	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
-}
-
-static void publish_own_process_group(void)
-{
-	OBJECT_ATTRIBUTES oa;
-	UNICODE_STRING us;
-	WCHAR name[48];
-	HANDLE h;
-
-	if (pgid_event && pgid_event_owner == getpid()) return;
-	/* fork() copies the handle value in memory, but this private event is
-	 * not inheritable.  A different owner means the value is stale. */
-	pgid_event = 0;
-	pgid_event_name(getpid(), name, &us);
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
-	if (NT_SUCCESS(NtCreateEvent(&h, EVENT_ALL_ACCESS, &oa,
-	                             NotificationEvent, FALSE))) {
-		pgid_event = h;
-		pgid_event_owner = getpid();
-	}
-}
-
-static int is_process_group_leader(pid_t pid)
-{
-	OBJECT_ATTRIBUTES oa;
-	UNICODE_STRING us;
-	WCHAR name[48];
-	HANDLE h;
-	NTSTATUS st;
-
-	pgid_event_name(pid, name, &us);
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
-	st = NtCreateEvent(&h, EVENT_ALL_ACCESS, &oa, NotificationEvent, FALSE);
-	if (!NT_SUCCESS(st)) return 0;
-	NtClose(h);
-	return st == STATUS_OBJECT_NAME_EXISTS;
-}
+ * cross-process state via a named, idempotent event keyed by pid (see
+ * src/unistd/nt/plat_unistd.c).  NT has no query for POSIX pgids, but
+ * this is enough to distinguish the transition setpgrp()/setsid() make
+ * in another process without inventing a central process registry. */
+static void publish_own_process_group(void) { __plat_pgrp_publish_self(getpid()); }
+static int is_process_group_leader(pid_t pid) { return __plat_pgrp_is_leader(pid); }
 
 pid_t getpgrp(void) { return pgid; }
 
@@ -487,8 +207,9 @@ pid_t getpgrp(void) { return pgid; }
  *     call, so the common form of both calls stays free of one.
  *   - a pid in the child table (src/process/children.c) is a process
  *     this one created and has not yet reaped.  This arm is not an
- *     optimisation of the NtOpenProcess below, because the two answer
- *     different questions: POSIX existence lasts until wait() collects
+ *     optimisation of __plat_process_exists()'s NtOpenProcess call,
+ *     because the two answer different questions: POSIX existence lasts
+ *     until wait() collects
  *     the pid -- an exited-but-unreaped child is still a process, and
  *     the table entry src/process/wait.c holds open is precisely that
  *     state -- while openability by CLIENT_ID is a property of the NT
@@ -506,28 +227,17 @@ pid_t getpgrp(void) { return pgid; }
  *     *different session* and there is only the one.
  *
  * A negative pid names no process (kill() answers ESRCH for one too),
- * and is rejected without troubling NT: NtOpenProcess takes an unsigned
- * CLIENT_ID, so sign-extending -1 into it would ask about pid
- * 0xffffffffffffffff instead of reporting the error.
+ * and is rejected without troubling NT: __plat_process_exists()'s
+ * NtOpenProcess call takes an unsigned CLIENT_ID, so sign-extending -1
+ * into it would ask about pid 0xffffffffffffffff instead of reporting
+ * the error.
  */
 static int pid_exists(pid_t p)
 {
-	HANDLE h;
-	NTSTATUS st;
-	OBJECT_ATTRIBUTES oa;
-	CLIENT_ID cid;
-
 	if (p == 0 || p == getpid()) return 1;
 	if (p < 0) return 0;
 	if (__child_find((int)p)) return 1;
-
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-	cid.UniqueProcess = (HANDLE)(ULONG_PTR)p;
-	cid.UniqueThread = 0;
-	st = NtOpenProcess(&h, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
-	if (!NT_SUCCESS(st)) return st == STATUS_ACCESS_DENIED;
-	NtClose(h);
-	return 1;
+	return __plat_process_exists(p);
 }
 
 pid_t getpgid(pid_t p)
@@ -683,30 +393,10 @@ pid_t getsid(pid_t p)
  * read out of them.  FILE_OPEN_FOR_BACKUP_INTENT, and neither
  * FILE_DIRECTORY_FILE nor FILE_NON_DIRECTORY_FILE, so that the call
  * works on a directory and on a regular file alike. */
-static int chown_resolve(int dirfd, const char *path, int flags)
-{
-	struct __ntpath np;
-	IO_STATUS_BLOCK io;
-	OBJECT_ATTRIBUTES *oa;
-	HANDLE h;
-	NTSTATUS st;
-	ULONG options;
-
-	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT |
-		(flags & AT_SYMLINK_NOFOLLOW ? FILE_OPEN_REPARSE_POINT : 0);
-	oa = &np.oa;
-	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, oa, &io, FILE_SHARE_VALID_FLAGS, options);
-	__ntpath_free(&np);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	NtClose(h);
-	return 0;
-}
-
 int fchownat(int d, const char *p, uid_t u, gid_t g, int f)
 {
 	(void)u; (void)g;
-	return chown_resolve(d, p, f);
+	return __plat_chown_probe(d, p, f);
 }
 int chown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, 0); }
 int lchown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, AT_SYMLINK_NOFOLLOW); }
