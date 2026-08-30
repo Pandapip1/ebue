@@ -9,7 +9,7 @@
  * for a double or even an 80-bit long double) preserve that outcome
  * exactly. scalbn()/__x87_scalbn() already produce the correctly
  * signed +-HUGE_VAL or 0.0/subnormal via the real x87 fscale+store
- * hardware overflow/underflow behaviour (see src/math/x87.h and
+ * hardware overflow/underflow behaviour (see src/math/ldbl_math.h and
  * src/math/scalbn.c, which raise nothing explicitly either), so this
  * follows that same, already-established convention rather than
  * duplicating it with explicit feraiseexcept() calls. */

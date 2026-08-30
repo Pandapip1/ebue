@@ -4,15 +4,15 @@
 #define FLT_EVAL_METHOD 0
 
 /* ntlibc's own `long double` has two incompatible layouts depending on
- * which compiler built it (see src/math/x87.h, NTLIBC_LDBL_EXTENDED,
+ * which compiler built it (see src/math/ldbl_math.h, NTLIBC_LDBL_EXTENDED,
  * and test/posix-math.c): under this project's tcc, "long double" is
  * an alias for `double` (sizeof == 8, no 80-bit range/precision) on
  * the actual NT target; under the mingw-w64/gcc fallback compiler (and
  * under a native gcc/clang used only for `make asan`), it is genuinely
  * the 80-bit x87 extended format.  __SIZEOF_LONG_DOUBLE__ is the same
- * signal x87.h uses to tell the two apart (gcc/mingw predefine it to
+ * signal ldbl_math.h uses to tell the two apart (gcc/mingw predefine it to
  * the true sizeof(long double); this tcc predefines no such macro at
- * all, confirmed empirically -- see x87.h's long comment).  Before
+ * all, confirmed empirically -- see ldbl_math.h's long comment).  Before
  * this fix, LDBL_MANT_DIG/LDBL_MAX/etc. below were hardcoded to the
  * 80-bit values unconditionally, which is wrong for every tcc-built PE
  * binary this library actually ships: LDBL_MAX (~1.19e4932L) does not

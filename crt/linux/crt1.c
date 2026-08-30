@@ -103,6 +103,7 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 }
 
 #define SYS_mmap 222
+#define SYS_write 64
 
 /* Minimal local ELF64/auxv shapes -- this project ships no <elf.h> yet
  * (a real one is separate future work; nothing outside this file needs
@@ -214,6 +215,29 @@ _Noreturn void __linux_start_main(long *sp)
 	long *auxv = (long *)envp;
 	char *slash;
 	int rc;
+
+	/* Checked before anything else in this function -- see
+	 * src/internal/ldbl_layout_check.c's own banner. Needs no argv/
+	 * envp/auxv/TLS, nothing this function sets up below; safe, and
+	 * necessary, to check before all of it. Unlike the NT side (crt/
+	 * crt1.c), fd 2 needs no setup at all -- it is stderr from the
+	 * kernel's own exec(2) contract, before a single instruction of
+	 * this program has run -- so this can both report AND run as the
+	 * literal first statement, no reordering trade-off to make. A raw
+	 * write(2), not stdio: stdio does not exist yet, and the message
+	 * is a single static string, so nothing here needs to allocate.
+	 * Exit code 111 is a plain, distinct sentinel (this platform's
+	 * __plat_terminate() takes an ordinary process exit code, not a
+	 * rich status the way NT's NtTerminateProcess() does) -- picked to
+	 * be unambiguous in a shell's $? or a test harness's exit-status
+	 * log, not mistakable for this program's own exit(3) value or a
+	 * signal-death encoding (128+n). */
+	if (!__verify_ldbl_layout()) {
+		static const char msg[] =
+			"ntlibc: long double bit-layout assumption failed at startup\n";
+		raw_syscall(SYS_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
+		__plat_terminate(111);
+	}
 
 	while (*auxv) auxv++;
 	auxv++; /* skip envp's own NULL terminator -- auxv starts right after */

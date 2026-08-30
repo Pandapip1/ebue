@@ -10,7 +10,7 @@
  * every other flag (and a pre-existing FE_INEXACT) untouched. */
 #include <math.h>
 #include <fenv.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 double nearbyint(double x)
 {

@@ -12,7 +12,7 @@
  * conversion on a target where `long double` is not already the CPU's
  * native float register width -- true here, since aarch64 has hardware
  * for single/double precision only, none for quad. That is not a
- * hypothetical: it is exactly what src/math/x87.h's own
+ * hypothetical: it is exactly what src/math/ldbl_math.h's own
  * __x87_sqrt()/__x87_sin()/etc. wrappers do on this arch (their own
  * comment: "every long double argument/result is narrowed to/from
  * `double` at the boundary" -- src/math/aarch64_math.h's banner states

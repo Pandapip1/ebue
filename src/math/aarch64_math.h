@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * aarch64 implementations of the __x87_* primitives x87.h declares for
+ * aarch64 implementations of the __x87_* primitives ldbl_math.h declares for
  * every other arch via real x87 hardware instructions (FSIN/FCOS/
  * FPTAN/FYL2X/F2XM1/FPREM/FPREM1/...) -- aarch64 has no equivalents
  * for the transcendental ones at all, so this file is real software,
- * not a translation of x87.h's asm into different mnemonics.
+ * not a translation of ldbl_math.h's asm into different mnemonics.
  *
  * Precision policy, stated once here rather than per function: every
  * long double argument/result is narrowed to/from `double` at the

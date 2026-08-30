@@ -21,7 +21,7 @@
  * and log1p(-0.0) == -0.0 here without any extra sign-of-zero code. */
 #include <math.h>
 #include <fenv.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 static const long double log2e = 1.4426950408889634073599246810019L;
 static const long double ln2 = 0.69314718055994530941723212145818L;
@@ -33,7 +33,7 @@ static const long double yl2xp1_max = 0.29289321881345247559915563789515L;
  * aarch64_math.h's own __aa64_expm1()/__aa64_log1p() for the real
  * algorithms (both computed directly in terms of the catastrophic-
  * cancellation-prone quantity, same as f2xm1/fyl2xp1 are, just via a
- * software series instead of hardware) and x87.h's own banner for the
+ * software series instead of hardware) and ldbl_math.h's own banner for the
  * double-precision-quality scope boundary every helper in this file
  * inherits from narrowing long double to double at the call boundary. */
 static long double raw_f2xm1(long double t) { return (long double)__aa64_expm1((double)t); }
@@ -53,7 +53,7 @@ static long double raw_f2xm1(long double t)
 }
 
 /* y * log2(x+1), same fldl/fldl/op/fstpl-into-first-operand shape and
- * argument order as x87.h's __x87_yl2x. */
+ * argument order as ldbl_math.h's __x87_yl2x. */
 static long double raw_yl2xp1(long double x, long double y)
 {
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfyl2xp1\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");

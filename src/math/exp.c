@@ -5,7 +5,7 @@
  * 80-bit format, and f2xm1 is within 1 ulp of 80-bit, so the double
  * results are accurate to well within 1 ulp. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 static const long double log2e = 1.4426950408889634073599246810019L;
 

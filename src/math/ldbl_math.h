@@ -1,11 +1,19 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * x87 helpers shared by the math sources.  Everything goes through
- * memory with a pointer in a general register, which is the one asm
- * shape that is identical on i386 and x86_64 (double/float arguments
- * arrive in xmm registers on x86_64, so they are moved via these long
- * double temporaries anyway).
+ * long double-precision arithmetic helpers shared by the math sources
+ * -- named ldbl_math.h rather than x87.h (this file's name until a
+ * later pass renamed it) because half its job, on any arch besides
+ * i386/x86_64, is delegating to src/math/aarch64_math.h's own real
+ * algorithms instead: every __x87_* name below exists on every arch
+ * this tree builds for, x87 hardware or not, precisely so the
+ * portable math sources including this header never need to know
+ * which case they are in.
+ *
+ * On i386/x86_64, everything goes through memory with a pointer in a
+ * general register, which is the one asm shape that is identical on
+ * both (double/float arguments arrive in xmm registers on x86_64, so
+ * they are moved via these long double temporaries anyway).
  *
  * ntlibc targets Windows NT only, but it is built with two different
  * compilers with two different, incompatible ideas of what "long
@@ -57,14 +65,10 @@
  * results are computed in 80 bits internally and rounded once to
  * double (or float) at the store, the results here are well within
  * 1 ulp for ordinary arguments. */
-#ifndef X87_H
-#define X87_H
+#ifndef LDBL_MATH_H
+#define LDBL_MATH_H
 
-#if defined(__SIZEOF_LONG_DOUBLE__) && __SIZEOF_LONG_DOUBLE__ > 8
-#define NTLIBC_LDBL_EXTENDED 1
-#else
-#define NTLIBC_LDBL_EXTENDED 0
-#endif
+#include "ldbl_format.h"
 
 #if NTLIBC_LDBL_EXTENDED
 #define NTLIBC_FLDL "fldt"

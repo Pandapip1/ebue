@@ -312,6 +312,36 @@ void __libc_start_main(void)
 	__peb = __teb()->ProcessEnvironmentBlock;
 	pp = __peb->ProcessParameters;
 
+	/* Checked as early as this function CAN check it while still being
+	 * able to report why: see src/internal/ldbl_layout_check.c's own
+	 * banner for what this proves and why it matters before anything
+	 * below (__fenv_init() included) touches a long double. It cannot
+	 * run any earlier than this -- reporting a real diagnostic needs
+	 * pp->StandardError, which does not exist before the two lines
+	 * above resolve it from the TEB -- and nothing between process
+	 * entry and here touches a long double, so this loses nothing by
+	 * not being literally the first statement in the function.
+	 *
+	 * The write is a direct NtWriteFile to the raw handle, not stdio:
+	 * __plat_cancel_unsafe_abort's own diagnostic path (src/thread/nt/
+	 * plat_thread.c) uses the identical shape for the identical reason
+	 * -- this runs before stdio is initialized at all, and the
+	 * message is a single static string, so nothing here needs to
+	 * allocate. STATUS_INVALID_IMAGE_FORMAT is NT's own status for
+	 * "this image does not match the ABI the loader expected" -- the
+	 * same real category of failure this is, just discovered one layer
+	 * up (a compiler's own ABI promise not matching what it actually
+	 * generated) rather than by the PE loader itself. */
+	if (!__verify_ldbl_layout()) {
+		static const char msg[] =
+			"ntlibc: long double bit-layout assumption failed at startup\r\n";
+		IO_STATUS_BLOCK io;
+		if (pp->StandardError)
+			NtWriteFile(pp->StandardError, 0, 0, 0, &io, msg,
+				sizeof msg - 1, 0, 0);
+		NtTerminateProcess(NtCurrentProcess(), STATUS_INVALID_IMAGE_FORMAT);
+	}
+
 	__argc = split_cmdline(pp->CommandLine.Buffer, pp->CommandLine.Length / sizeof(WCHAR), &__argv);
 	if (__argc < 0) NtTerminateProcess(NtCurrentProcess(), STATUS_NO_MEMORY);
 	__progname = __argv[0];

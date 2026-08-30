@@ -20,7 +20,7 @@
  * split.
  *
  * Included as a header rather than built as its own PLAT_GLOBS object
- * for the same reason src/math/x87.h and src/math/aarch64_math.h are:
+ * for the same reason src/math/ldbl_math.h and src/math/aarch64_math.h are:
  * NT must never link this allocator at all (RtlAllocateHeap is
  * strictly the better choice there, see above), so this cannot be a
  * base file every platform compiles by default with NT overriding it
@@ -29,7 +29,7 @@
  * __plat_alloc()/__plat_realloc()/__plat_alloc_size()/__plat_dealloc()
  * names this header defines. A platform opts into this allocator by
  * #include-ing it from its own plat_malloc.c, the same way a math
- * backend opts into x87.h's non-x86 branch; nothing opts in by
+ * backend opts into ldbl_math.h's non-x86 branch; nothing opts in by
  * default.
  *
  * Deliberately NOT a general-purpose, competitively-tuned allocator

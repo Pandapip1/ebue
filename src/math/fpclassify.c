@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <math.h>
 #include <stdint.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 /* Rather than shift the sign/exponent bits off the top -- which is
  * exactly the "does this discard set bits" pattern
@@ -29,7 +29,7 @@ int __fpclassifyf(float x)
 }
 
 /* ntlibc is built with two compilers with two different long double
- * formats - see the NTLIBC_LDBL_EXTENDED comment in src/math/x87.h.
+ * formats - see the NTLIBC_LDBL_EXTENDED comment in src/math/ldbl_math.h.
  *
  * Under tcc, "long double" is really just "double" (8 bytes, no 80-bit
  * extended format), so this classifies the same 64-bit layout as

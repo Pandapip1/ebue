@@ -9,7 +9,7 @@
  * double/float forms round only once, at the final cast. */
 #include <math.h>
 #include <fenv.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 static long double remainder_impl(long double x, long double y, int *quop)
 {

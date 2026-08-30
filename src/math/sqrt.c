@@ -6,7 +6,7 @@
  * rounded except for arguments in a ~2^-30 sliver of cases, where they
  * are off by at most 1 ulp. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 double sqrt(double x) { return (double)__x87_sqrt(x); }
 float sqrtf(float x) { return (float)__x87_sqrt(x); }

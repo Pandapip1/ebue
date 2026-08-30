@@ -237,6 +237,18 @@ void __fd_pos_restore(HANDLE, long long pos);/* put it back after positioned I/O
 int __handle_type(HANDLE);                   /* classify by device type */
 int __fd_close_all_cloexec(void);
 void __fd_init(void);                        /* fds 0-2 from the PEB, 3+ from RuntimeData */
+/* src/internal/ldbl_layout_check.c -- called by every platform's own
+ * __libc_start_main()/__linux_start_main() as early as that platform
+ * can while still being able to report a real diagnostic on failure
+ * (on NT: right after pp->StandardError exists; on Linux: literally
+ * first, since fd 2 needs no setup), before any long double bit-layout
+ * assumption (src/internal/ldbl_format.h) is trusted. 1 if this
+ * build's real `long double` layout matches what was assumed at
+ * compile time, 0 if not -- the caller writes a diagnostic and
+ * terminates the process on 0, using its own platform's native
+ * mechanism, since every math function touching a long double's raw
+ * bits is unsafe past this point otherwise. */
+int __verify_ldbl_layout(void);
 void __mq_fd_closed(int);                    /* release side handles for an mqd_t */
 void __mq_fd_replaced(int, __plat_handle_t);  /* follow fork/fcntl handle remakes */
 /* Serialise the inheritable part of the descriptor table into a freshly

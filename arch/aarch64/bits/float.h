@@ -17,7 +17,7 @@
  * range, different mantissa width. clang on this target predefines
  * __SIZEOF_LONG_DOUBLE__ == 16 for real quad `long double`; this
  * project's tcc (NT-only, never builds for this arch) predefines
- * nothing, the same signal src/math/x87.h already relies on to tell
+ * nothing, the same signal src/math/ldbl_math.h already relies on to tell
  * "genuinely extended" apart from "long double is just double" -- see
  * that file and arch/x86_64/bits/float.h's own comment.
  */

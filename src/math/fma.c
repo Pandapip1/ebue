@@ -5,7 +5,7 @@
  * is not asserted by this codebase's tests, so a plain `x*y+z` is an
  * acceptable implementation; it is computed in long double for a
  * little extra accuracy where that type has extra range, at no cost
- * where it doesn't (see src/math/x87.h). */
+ * where it doesn't (see src/math/ldbl_math.h). */
 #include <math.h>
 #include <fenv.h>
 

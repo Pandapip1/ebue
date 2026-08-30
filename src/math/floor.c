@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 double floor(double x) { return (double)__x87_rndint(x, 1); }
 float floorf(float x) { return (float)__x87_rndint(x, 1); }

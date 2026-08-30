@@ -5,7 +5,7 @@
  * even results subnormal in double are correct because the scaled value
  * is exact in extended precision. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 long double scalbnl(long double x, int n) { return __x87_scalbn(x, n); }
 double scalbn(double x, int n) { return (double)__x87_scalbn(x, n); }

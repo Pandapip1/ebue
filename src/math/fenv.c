@@ -4,7 +4,7 @@
  * See include/fenv.h for why both the x87 status word and (on x86_64
  * only) MXCSR must be consulted: tcc/i386 compiles plain `double`
  * arithmetic to x87 instructions, tcc/x86_64 compiles it to SSE2, and
- * src/math/x87.h's inline-asm helpers (fsqrt, fsin, fyl2x, ...) are
+ * src/math/ldbl_math.h's inline-asm helpers (fsqrt, fsin, fyl2x, ...) are
  * x87 on both arches -- so on x86_64 either unit can be the one that
  * actually raised a given flag.
  *
@@ -210,7 +210,7 @@ int fesetenv(const fenv_t *envp)
 		 * (double), 0x037F is 64-bit (extended).  So every
 		 * fesetenv(FE_DFL_ENV), including the one inside
 		 * feupdateenv(FE_DFL_ENV), silently WIDENED x87 precision and
-		 * changed the double-rounding behaviour of every src/math/x87.h
+		 * changed the double-rounding behaviour of every src/math/ldbl_math.h
 		 * helper on both arches, and of all plain `double` arithmetic on
 		 * i386 (where tcc emits x87 rather than SSE -- see
 		 * include/fenv.h's banner).  Measured startup values on this

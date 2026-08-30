@@ -10,7 +10,7 @@
  * catastrophic-cancellation accuracy of naive argument reduction --
  * but a double of that size has an ulp of ~2^11 anyway. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 static const long double twopi = 6.283185307179586476925286766559L;
 

@@ -5,7 +5,7 @@
  * fyl2x itself produces -inf for +-0 (with divide-by-zero), nan for
  * negative input (invalid), +inf for +inf. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 static const long double ln2 = 0.69314718055994530941723212145818L;
 static const long double lg2 = 0.30102999566398119521373889472449L;

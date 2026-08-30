@@ -8,8 +8,8 @@
  * FE_INEXACT too) real, observable exception flags -- not just macros.
  *
  * Both build arches route through real x87 hardware for every helper
- * in src/math/x87.h (fsqrt, fsin, fyl2x, ...), regardless of arch:
- * x87.h's helpers are inline x87 asm on both i386 and
+ * in src/math/ldbl_math.h (fsqrt, fsin, fyl2x, ...), regardless of arch:
+ * ldbl_math.h's helpers are inline x87 asm on both i386 and
  * x86_64. But arithmetic the *compiler itself* emits for a plain
  * `double` expression (`a*b`, `a/b`, comparisons, ...) differs by
  * arch and by compiler:
@@ -25,7 +25,7 @@
  *
  * So on i386, the x87 status word alone is authoritative: nothing in
  * this codebase's compiler output ever touches SSE. On x86_64, both
- * units are live -- x87.h's helpers set x87 flags, ordinary compiled
+ * units are live -- ldbl_math.h's helpers set x87 flags, ordinary compiled
  * arithmetic sets MXCSR flags -- and a correct implementation must
  * observe and clear *both*; every function below does exactly that
  * (compile-time `#ifdef __i386__`, not a runtime CPU-feature probe,

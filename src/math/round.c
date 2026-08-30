@@ -5,7 +5,7 @@
 #include <math.h>
 #include <fenv.h>
 #include <limits.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 long double roundl(long double x)
 {

@@ -13,7 +13,7 @@
  * double), with worst cases around 1-2 ulp near the overflow
  * threshold. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 static int is_int(long double y) { return __x87_rndint(y, 3) == y; }
 static int is_odd_int(long double y)

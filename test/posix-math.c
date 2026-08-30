@@ -19,7 +19,7 @@
  *
  * arch/i386 runs the x87 unit at 80-bit internal precision even though
  * ntlibc's own `long double` is 64-bit on the NT target (see
- * src/math/x87.h); results can legitimately differ in the last bit(s)
+ * src/math/ldbl_math.h); results can legitimately differ in the last bit(s)
  * between arches for the same reason test/math.c is skipped on host
  * ASan builds (tools/asan-build.sh, not_native()).  Run `make check`
  * on both arches and compare rather than assuming one is correct.
@@ -415,7 +415,7 @@ static void test_errhandling(void)
 	CHECK(feclearexcept(FE_DIVBYZERO) == 0 && fetestexcept(FE_ALL_EXCEPT) == 0);
 
 	/* DBL_MAX*DBL_MAX overflows -- this is plain compiler-emitted `*`,
-	 * not a src/math/x87.h helper, so on x86_64 it exercises the SSE2
+	 * not a src/math/ldbl_math.h helper, so on x86_64 it exercises the SSE2
 	 * mulsd path (MXCSR) rather than x87; on i386 tcc still emits x87
 	 * fmul for `double`.  Either way fetestexcept() must see it.  The
 	 * result must actually land in a real `double` (not be discarded):
@@ -516,7 +516,7 @@ static int poszerol(long double x) { return x == 0.0L && !signbit(x); }
  * apply verbatim to sinf/sinl, cosf/cosl, tanf/tanl, atanf/atanl,
  * atan2f/atan2l ("shall be equivalent to" the double function).
  * ntlibc's `long double` is 64-bit on this PE target -- bit-identical
- * layout to `double` (src/math/x87.h's NTLIBC_LDBL_EXTENDED note) --
+ * layout to `double` (src/math/ldbl_math.h's NTLIBC_LDBL_EXTENDED note) --
  * so unlike a genuine 80-bit long double there is no extra internal
  * precision to lose at the l-variant's own store; any float/long
  * double vs. double numeric difference reported here is purely
@@ -1174,7 +1174,7 @@ static void test_fmaxmin_variants(void)
  * and nothing in this tree had ever looked.
  *
  * `long double` is the same width as `double` on this NT target (see the
- * file banner and src/math/x87.h), so the l-forms are expected to agree
+ * file banner and src/math/ldbl_math.h), so the l-forms are expected to agree
  * exactly with the doubles here; on the native `make asan` build they
  * need not, which is why nothing below compares an l-result against a
  * double-typed constant that would lose bits.

@@ -38,7 +38,7 @@
  * file's other, unrelated coverage under `make asan`, the few
  * assertions that actually depend on the compiler's own `long` being
  * 32-bit are guarded by `__SIZEOF_LONG__` (which this tcc predefines,
- * same trick src/math/x87.h uses for __SIZEOF_LONG_DOUBLE__) so they
+ * same trick src/math/ldbl_math.h uses for __SIZEOF_LONG_DOUBLE__) so they
  * simply do not run when the real compiler disagrees.
  */
 #include <stdio.h>
@@ -317,7 +317,7 @@ static void test_float_dbl(void)
  * double` is 64-bit (an alias for `double`) under this tcc on the NT
  * target, but genuinely 80-bit under the mingw-w64/gcc fallback
  * compiler and under native gcc/clang (`make asan`) -- see
- * src/math/x87.h's NTLIBC_LDBL_EXTENDED and this file's #if below,
+ * src/math/ldbl_math.h's NTLIBC_LDBL_EXTENDED and this file's #if below,
  * which uses the identical __SIZEOF_LONG_DOUBLE__ test.
  *
  * BUG found and fixed this session: arch/i386/bits/float.h and

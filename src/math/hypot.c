@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 /* ntlibc targets Windows NT only; under this tcc's -win32 target "long
- * double" is really just "double" (see src/math/x87.h), so squaring
+ * double" is really just "double" (see src/math/ldbl_math.h), so squaring
  * two doubles near DBL_MAX (as hypot(1e300, 1e300) does) overflows the
  * intermediate the same as it would in plain double arithmetic - there
  * is no extra 80-bit exponent range to hide behind here.  So scale by
@@ -9,7 +9,7 @@
  * [0, 1], max*sqrt(1 + r*r) is exact up to the final sqrt rounding and
  * cannot overflow unless the true result itself would. */
 #include <math.h>
-#include "x87.h"
+#include "ldbl_math.h"
 
 long double hypotl(long double x, long double y)
 {

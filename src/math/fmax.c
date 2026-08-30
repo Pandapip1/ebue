@@ -13,7 +13,7 @@
  * The float and long double variants are written out rather than
  * forwarded through the double one: on this project's mingw-w64 builds
  * `long double` is genuine x87 80-bit extended precision (see
- * src/math/x87.h), so fmaxl(a, b) must not round its operands through
+ * src/math/ldbl_math.h), so fmaxl(a, b) must not round its operands through
  * double, and fmaxf must not widen a float NaN payload.  Under this
  * tcc's -win32 targets long double *is* double and the l forms are then
  * numerically identical to the double ones -- but that is an ABI
