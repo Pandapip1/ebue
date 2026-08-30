@@ -1,6 +1,26 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
+ * __ntpath()/__ntpath_at() and their supporting machinery -- moved
+ * verbatim out of src/internal/path.c, which the OPTS shm_open/shm_unlink/
+ * mmap link gap traced straight to (undefined NtOpenSymbolicLinkObject,
+ * NtQueryAttributesFile, NtQueryObject, RtlDosPathNameToNtPathName_U_
+ * WithStatus, __peb, ... pulled into a native-Linux build through
+ * src/stat/chmod.c's fchmod(), which called this file's __handle_path()
+ * unconditionally as its EACCES retry path).
+ *
+ * That fix (see src/internal/nt/handle_path.c and src/internal/linux/
+ * handle_path.c) is NOT this file: turning a POSIX path into an NT one
+ * is inherently NT's own object-manager encoding (UNICODE_STRING,
+ * OBJECT_ATTRIBUTES, RtlDosPathNameToNtPathName_U's DOS->NT conversion),
+ * not a POSIX-shaped interface that merely has an NT body today. Every
+ * caller left standing once __handle_path() moved out (grep confirms:
+ * src/internal/nt/vfs_resolve.c, plat_fcntl.c, plat_stat.c,
+ * plat_unistd.c, plat_process.c, plat_stdio.c) already lives under nt/
+ * itself. So unlike fdpos.c/vfs.c/sigdelivery.c before it, this file
+ * gets no portable declaration and no Linux counterpart at all -- there
+ * is nothing left calling it from outside nt/ for one to satisfy.
+ *
  * Turning the paths programs use into the paths the object manager wants.
  *
  * A program hands in UTF-8 with either kind of slash, relative or
@@ -654,75 +674,4 @@ void __ntpath_free(struct __ntpath *p)
 	if (p->buf) RtlFreeHeap(__process_heap(), 0, p->buf);
 	if (p->dos) __free(p->dos);
 	p->buf = 0; p->dos = 0;
-}
-
-/* The DOS path of an open handle: FileNameInformation gives the path
- * below the volume's device; the volume itself is found by matching the
- * device name against each drive letter's. That is what kernel32's
- * GetFinalPathNameByHandle does too.  Here the cheaper route is taken:
- * NtQueryObject's ObjectNameInformation gives the full NT name
- * (\Device\HarddiskVolume3\dir\file), and the drive is found by asking
- * each of A: through Z: for its target.  Returns a malloc'd UTF-8 path. */
-NTSTATUS NTAPI NtOpenSymbolicLinkObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
-NTSTATUS NTAPI NtQuerySymbolicLinkObject(HANDLE, PUNICODE_STRING, PULONG);
-
-char *__handle_path(HANDLE h)
-{
-	char buf[sizeof(OBJECT_NAME_INFORMATION) + 2048 * sizeof(WCHAR)];
-	OBJECT_NAME_INFORMATION *oni = (OBJECT_NAME_INFORMATION *)buf;
-	ULONG len = 0;
-	NTSTATUS st;
-	WCHAR drive[7] = { '\\', '?', '?', '\\', 'A', ':', 0 };
-	WCHAR target[512];
-	UNICODE_STRING us, tus;
-	OBJECT_ATTRIBUTES oa;
-	int c;
-
-	st = NtQueryObject(h, ObjectNameInformation, oni, sizeof buf, &len);
-	if (!NT_SUCCESS(st)) { __set_errno_status(st); return 0; }
-
-	/* Under Wine (and in some other cases) ObjectNameInformation comes
-	 * back already in \??\C:\... form instead of \Device\HarddiskVolumeN\...;
-	 * such a name is already a drive path, so just strip the \??\ prefix
-	 * rather than going through the device/symlink matching below, which
-	 * only knows how to match \Device\... names. */
-	{
-		size_t nlen = oni->Name.Length / sizeof(WCHAR);
-		WCHAR *nb = oni->Name.Buffer;
-		if (nlen >= 6 && nb[0] == '\\' && nb[1] == '?' && nb[2] == '?' && nb[3] == '\\' &&
-		    ((nb[4] >= 'A' && nb[4] <= 'Z') || (nb[4] >= 'a' && nb[4] <= 'z')) && nb[5] == ':') {
-			return __utf16_to_utf8(nb + 4, nlen - 4);
-		}
-	}
-
-	RtlInitUnicodeString(&us, drive);
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, 0, 0);
-	for (c = 'A'; c <= 'Z'; c++) {
-		HANDLE lh;
-		ULONG tl;
-		drive[4] = (WCHAR)c;
-		us.Length = 6 * sizeof(WCHAR);
-		if (!NT_SUCCESS(NtOpenSymbolicLinkObject(&lh, 0x1 /* SYMBOLIC_LINK_QUERY */, &oa))) continue;
-		tus.Buffer = target; tus.Length = 0; tus.MaximumLength = sizeof target;
-		st = NtQuerySymbolicLinkObject(lh, &tus, &tl);
-		NtClose(lh);
-		if (!NT_SUCCESS(st)) continue;
-		tl = tus.Length / sizeof(WCHAR);
-		if (oni->Name.Length / sizeof(WCHAR) >= tl &&
-		    !memcmp(oni->Name.Buffer, target, tl * sizeof(WCHAR)) &&
-		    (oni->Name.Length / sizeof(WCHAR) == tl || oni->Name.Buffer[tl] == '\\')) {
-			size_t rest = oni->Name.Length / sizeof(WCHAR) - tl;
-			WCHAR *w = __malloc((rest + 3) * sizeof(WCHAR));
-			char *r;
-			if (!w) return 0;
-			w[0] = (WCHAR)c; w[1] = ':';
-			memcpy(w + 2, oni->Name.Buffer + tl, rest * sizeof(WCHAR));
-			if (!rest) { w[2] = '\\'; rest = 1; }
-			r = __utf16_to_utf8(w, rest + 2);
-			__free(w);
-			return r;
-		}
-	}
-	/* Not on a drive letter (a pipe, a UNC path): give the NT name. */
-	return __utf16_to_utf8(oni->Name.Buffer, oni->Name.Length / sizeof(WCHAR));
 }
