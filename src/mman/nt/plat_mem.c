@@ -92,11 +92,13 @@ int __plat_mem_decommit(void *base, size_t len)
 	return 0;
 }
 
-int __plat_mem_release(void *base)
+int __plat_mem_release(void *base, size_t len)
 {
 	PVOID b = base;
 	SIZE_T z = 0;
-	NTSTATUS st = NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
+	NTSTATUS st;
+	(void)len; /* MEM_RELEASE takes the whole reservation; see plat_mem.h */
+	st = NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
@@ -206,9 +208,11 @@ int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off,
 	return 0;
 }
 
-int __plat_mem_unmap_view(void *base)
+int __plat_mem_unmap_view(void *base, size_t len)
 {
-	NTSTATUS st = NtUnmapViewOfSection(NtCurrentProcess(), base);
+	NTSTATUS st;
+	(void)len; /* a view knows its own extent; see plat_mem.h */
+	st = NtUnmapViewOfSection(NtCurrentProcess(), base);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }

@@ -185,8 +185,8 @@ static void drop_if_dead(struct mapping *m)
 {
 	size_t i;
 	for (i = 0; i < m->npages; i++) if (m->live[i]) return;
-	if (m->filebacked) __plat_mem_unmap_view(m->base);
-	else __plat_mem_release(m->base);
+	if (m->filebacked) __plat_mem_unmap_view(m->base, m->npages * MMAP_PAGE);
+	else __plat_mem_release(m->base, m->npages * MMAP_PAGE);
 	if (m->writeback) __plat_close(m->writeback);
 	free(m->live);
 	free(m->locked);
@@ -352,7 +352,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			 * above) for the same reason: mmap.html's MAP_FIXED
 			 * clause requires the old mapping discarded, not
 			 * preserved on failure. */
-			__plat_mem_unmap_view(m->base);
+			__plat_mem_unmap_view(m->base, m->npages * MMAP_PAGE);
 			if (m->writeback) __plat_close(m->writeback);
 			base = addr;
 			if (__plat_mem_map_file(f->h, prot, flags, off,
@@ -386,7 +386,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			m->filebacked = 1;
 			m->writeback = writeback;
 			if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
-				__plat_mem_unmap_view(base);
+				__plat_mem_unmap_view(base, npages * MMAP_PAGE);
 				if (m->writeback) __plat_close(m->writeback);
 				free(m->live);
 				free(m->locked);
@@ -434,7 +434,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			return MAP_FAILED;
 		}
 		if (alloc_page_state(m, npages) < 0) {
-			__plat_mem_unmap_view(base);
+			__plat_mem_unmap_view(base, npages * MMAP_PAGE);
 			if (writeback) __plat_close(writeback);
 			errno = ENOMEM;
 			return MAP_FAILED;
@@ -444,7 +444,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 		m->filebacked = 1;
 		m->writeback = writeback;
 		if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
-			__plat_mem_unmap_view(base);
+			__plat_mem_unmap_view(base, npages * MMAP_PAGE);
 			if (m->writeback) __plat_close(m->writeback);
 			free(m->live);
 			free(m->locked);
@@ -460,7 +460,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	if (__plat_mem_reserve(&base, size, prot) < 0) return MAP_FAILED;
 
 	if (alloc_page_state(m, npages) < 0) {
-		__plat_mem_release(base);
+		__plat_mem_release(base, size);
 		errno = ENOMEM;
 		return MAP_FAILED;
 	}
@@ -469,7 +469,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	m->filebacked = 0;
 	m->writeback = __PLAT_HANDLE_NULL;
 	if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
-		__plat_mem_release(base);
+		__plat_mem_release(base, size);
 		free(m->live);
 		free(m->locked);
 		memset(m, 0, sizeof *m);

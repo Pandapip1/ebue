@@ -43,8 +43,14 @@ int __plat_mem_commit_fixed(void *base, size_t len, int prot);
 int __plat_mem_decommit(void *base, size_t len);
 
 /* Release a reservation `base` owns in its entirety (MEM_RELEASE);
- * called only once no page of it is still live. */
-int __plat_mem_release(void *base);
+ * called only once no page of it is still live.  `len` is the
+ * reservation's own size in bytes (the caller always has it -- the
+ * mapping's npages*MMAP_PAGE, in mman.c's own bookkeeping): NT's
+ * MEM_RELEASE does not need it (a reservation knows its own extent),
+ * but a backend whose native release call is page-granular munmap()
+ * does, so the interface carries it for every backend's sake rather
+ * than only the ones that happen to need it. */
+int __plat_mem_release(void *base, size_t len);
 
 /* mprotect(): change [addr, addr+len)'s protection to `prot`. */
 int __plat_mem_protect(void *addr, size_t len, int prot);
@@ -69,8 +75,11 @@ int __plat_mem_unlock(void *addr, size_t len);
 int __plat_mem_map_file(__plat_handle_t fh, int prot, int flags, off_t off,
                         size_t viewbytes, void **base_inout);
 
-/* Remove a view `__plat_mem_map_file` created. */
-int __plat_mem_unmap_view(void *base);
+/* Remove a view `__plat_mem_map_file` created.  `len` is the view's own
+ * size in bytes, for the same reason __plat_mem_release() above takes
+ * one: NT's NtUnmapViewOfSection does not need it, but a backend that
+ * removes a mapping via munmap() does. */
+int __plat_mem_unmap_view(void *base, size_t len);
 
 /* msync(): flush [addr, addr+len)'s dirty pages back to the object,
  * and make sure the object's mtime reflects it.  `writeback` is the
