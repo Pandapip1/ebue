@@ -387,8 +387,11 @@ rather than treating an environment-limited test as a pass.
 ## Generated build files
 
 `tools/gen-alltypes.sh` expands the small `*.h.in` type descriptions into
-the committed `*.h.gen` files. `tools/gen-kaem.sh` derives the two kaem
-bootstrap recipes from the Makefile's source lists. Use:
+the committed `*.h.gen` files. `tools/gen-kaem.sh` derives the kaem
+bootstrap recipes from the Makefile's source lists -- one per platform+arch
+pair it knows how to generate for (today: `nt` x `{i386,x86_64,aarch64}`,
+named `boot/kaem/build-nt-{i386,x86_64,aarch64}.kaem`; see its own header
+for why the filename carries both axes). Use:
 
 ```sh
 make generated
@@ -397,7 +400,7 @@ git diff -- 'arch/*/bits/*.h.gen' 'include/*.h.gen' boot/kaem/
 
 `./configure` installs `.githooks/pre-commit`, which checks both generated
 families plus staged conflict markers. It also registers the
-`ntlibc-kaem` merge driver for the two kaem files. If configure has not run
+`ntlibc-kaem` merge driver for every kaem file. If configure has not run
 in a checkout, install these manually:
 
 ```sh
@@ -407,7 +410,7 @@ git config merge.ntlibc-kaem.driver 'tools/merge-kaem.sh %O %A %B %P'
 
 The merge driver handles independent source-list insertions and archive
 member additions. It leaves unfamiliar conflicts for a human; after any
-manual resolution, run `make kaem` and stage both generated files.
+manual resolution, run `make kaem` and stage every generated file.
 
 ## Dependency updates
 

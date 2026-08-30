@@ -4,21 +4,28 @@
 #
 # merge-kaem.sh -- git merge driver for boot/kaem/build-*.kaem.
 #
-# boot/kaem/build-i386.kaem and build-x86_64.kaem are generated (by
-# tools/gen-kaem.sh, driven by `make kaem`) from the Makefile's own source
-# file list, and committed. Any two branches that each add a source file
-# therefore conflict textually in these two files: the compile-command
-# list gets a new line inserted at the same point from both sides (an
-# add/add hunk plain diff3 cannot order), and the single `${CC} -ar rcs
-# lib/libc.a ...` line -- every object in one line -- is rewritten
-# differently by each side, so it conflicts every time either side
-# changes at all. Left to git's default text merge, a human resolves this
-# by hand, always the same mechanical way (pick a side, `make kaem`,
+# boot/kaem/build-nt-i386.kaem, build-nt-x86_64.kaem and build-nt-aarch64.kaem
+# are generated (by tools/gen-kaem.sh, driven by `make kaem`) from the
+# Makefile's own source file list, and committed. Any two branches that
+# each add a source file therefore conflict textually in these files: the
+# compile-command list gets a new line inserted at the same point from
+# both sides (an add/add hunk plain diff3 cannot order), and the single
+# `${CC} -ar rcs lib/libc.a ...` line -- every object in one line -- is
+# rewritten differently by each side, so it conflicts every time either
+# side changes at all. Left to git's default text merge, a human resolves
+# this by hand, always the same mechanical way (pick a side, `make kaem`,
 # `git add`) -- and twice that resolution has gone wrong badly enough to
 # leave conflict markers committed straight into a generated bootstrap
 # script, which then sits broken until a from-scratch kaem bootstrap
 # actually runs it. See CONTRIBUTING.md and .githooks/pre-commit (which
 # now refuses staged conflict markers for exactly this reason).
+#
+# Filenames are keyed on platform+arch, not arch alone -- see
+# tools/gen-kaem.sh's own header for why (arch/aarch64 now backs both
+# PLATFORM=linux, no kaem leg, and PLATFORM=nt, this one). The case
+# statement below lists every platform+arch pair kaem currently generates
+# for; a real PLATFORM=linux leg, if one is ever added, would add its own
+# entries here rather than needing another rename.
 #
 # WHY THIS DOES NOT JUST CALL tools/gen-kaem.sh
 # ----------------------------------------------
@@ -129,11 +136,11 @@ other=$3
 path=$4
 
 case $path in
-	boot/kaem/build-i386.kaem | boot/kaem/build-x86_64.kaem) ;;
+	boot/kaem/build-nt-i386.kaem | boot/kaem/build-nt-x86_64.kaem | boot/kaem/build-nt-aarch64.kaem) ;;
 	*)
 		echo "merge-kaem.sh: registered for an unexpected path '$path'" >&2
 		echo "merge-kaem.sh: (.gitattributes should only ever route" >&2
-		echo "merge-kaem.sh: boot/kaem/build-i386.kaem and build-x86_64.kaem here)" >&2
+		echo "merge-kaem.sh: boot/kaem/build-nt-{i386,x86_64,aarch64}.kaem here)" >&2
 		exit 1
 		;;
 esac

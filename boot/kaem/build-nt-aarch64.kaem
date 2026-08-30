@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# boot/kaem/build-aarch64.kaem -- kaem-only bootstrap build of ntlibc for
-# aarch64-win32, producing lib/libc.a and lib/crt1.o without make, without a
-# real shell, and without a general-purpose ar.
+# boot/kaem/build-nt-aarch64.kaem -- kaem-only bootstrap build of
+# ntlibc for aarch64-win32, producing lib/libc.a and lib/crt1.o without
+# make, without a real shell, and without a general-purpose ar.
 #
 # GENERATED FILE -- do not hand-edit. Regenerate with:
 #   ${srcdir}/configure --host=aarch64-win32 CC=aarch64-win32-tcc
@@ -56,12 +56,12 @@
 # tools are installed with either.  Give absolute paths and neither matters.
 #
 # From the repository root, in place, with the tools in one directory:
-#   srcdir=. CC=/path/to/aarch64-win32-tcc.exe bin_mkdir=/path/to/mkdir.exe bin_cp=/path/to/cp.exe bin_catm=/path/to/catm.exe kaem --strict --file boot/kaem/build-aarch64.kaem
+#   srcdir=. CC=/path/to/aarch64-win32-tcc.exe bin_mkdir=/path/to/mkdir.exe bin_cp=/path/to/cp.exe bin_catm=/path/to/catm.exe kaem --strict --file boot/kaem/build-nt-aarch64.kaem
 # Or with the sources read-only somewhere else, which is the case a
 # from-scratch bootstrap actually has -- an unpacked tarball or a store path
 # it may not write to, and no recursive copy at this stage to stage it with:
 #   cd /some/empty/writable/dir
-#   srcdir=/path/to/ntlibc CC=... bin_mkdir=... bin_cp=... bin_catm=... kaem --strict --file .../build-aarch64.kaem
+#   srcdir=/path/to/ntlibc CC=... bin_mkdir=... bin_cp=... bin_catm=... kaem --strict --file .../build-nt-aarch64.kaem
 # (On a developer machine with a POSIX shell the tools are unsuffixed and
 # `command -v' fills these in, e.g. bin_cp=$(command -v cp).)
 #

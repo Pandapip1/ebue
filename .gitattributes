@@ -5,14 +5,21 @@
 # list (tools/gen-kaem.sh, `make kaem`) -- a three-way text merge of it is
 # never the right resolution, since two branches that each add a source
 # file conflict here textually even though the "right" merge is just
-# regenerating from the merged tree. Route both files through the
-# ntlibc-kaem merge driver (tools/merge-kaem.sh) instead of git's default
-# text merge, during `merge`, `rebase` and `cherry-pick` alike.
+# regenerating from the merged tree. Route every one of these files through
+# the ntlibc-kaem merge driver (tools/merge-kaem.sh) instead of git's
+# default text merge, during `merge`, `rebase` and `cherry-pick` alike.
+#
+# Filenames are keyed on platform+arch (build-$platform-$arch.kaem), not
+# arch alone -- see tools/gen-kaem.sh's own header for why: arch/aarch64
+# now backs both PLATFORM=linux (no kaem leg) and PLATFORM=nt (this one),
+# so ARCH by itself stopped being a unique key for a kaem script the
+# moment a second platform started reusing the same arch/.
 #
 # The driver command itself is per-clone config (git does not read
 # merge.*.driver from the repository) -- see ./configure, which sets it up
 # the same way it sets core.hooksPath for .githooks, and CONTRIBUTING.md's
 # "Merging/rebasing/cherry-picking across a source-file add" section for
 # how it actually resolves a conflict and the manual fallback.
-boot/kaem/build-i386.kaem merge=ntlibc-kaem
-boot/kaem/build-x86_64.kaem merge=ntlibc-kaem
+boot/kaem/build-nt-i386.kaem merge=ntlibc-kaem
+boot/kaem/build-nt-x86_64.kaem merge=ntlibc-kaem
+boot/kaem/build-nt-aarch64.kaem merge=ntlibc-kaem

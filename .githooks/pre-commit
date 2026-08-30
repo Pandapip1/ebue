@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Regenerates the files that are both generated and committed: the expanded
-# bits/*.h.gen headers and boot/kaem/build-$(ARCH).kaem.  The external-suite
-# reports are CI artefacts now, so they deliberately do not participate in
-# commits or merges.
+# bits/*.h.gen headers and boot/kaem/build-$(PLATFORM)-$(ARCH).kaem.  The
+# external-suite reports are CI artefacts now, so they deliberately do not
+# participate in commits or merges.
 #
 # Enabled automatically by ./configure; to enable by hand:
 #   git config core.hooksPath .githooks

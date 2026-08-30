@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# tools/gen-kaem.sh -- regenerate boot/kaem/build-$(ARCH).kaem from the real
-# Makefile's own build recipe, so the kaem bootstrap script can never
-# silently drift out of sync with the Makefile as source files are added,
-# removed, or renamed.
+# tools/gen-kaem.sh -- regenerate boot/kaem/build-$(PLATFORM)-$(ARCH).kaem
+# from the real Makefile's own build recipe, so the kaem bootstrap script
+# can never silently drift out of sync with the Makefile as source files
+# are added, removed, or renamed.
 #
 # This script itself requires a normal dev environment (bash, GNU make,
 # sed, awk, sort, mktemp) -- it is a *generator*, run by a developer (or by
@@ -44,23 +44,42 @@
 #
 # Usage:
 #   ./configure --host=x86_64-win32 CC=x86_64-win32-tcc   # if not already done
-#   ./tools/gen-kaem.sh                    # regenerate every arch (the default)
-#   ./tools/gen-kaem.sh --arch=i386 [out]  # just one, for debugging
+#   ./tools/gen-kaem.sh                          # regenerate every platform+arch pair (the default)
+#   ./tools/gen-kaem.sh --arch=i386 [out]        # just one arch of the default platform, for debugging
+#   ./tools/gen-kaem.sh --platform=nt --arch=aarch64 [out]  # explicit platform+arch
 #
-# With no --arch, this regenerates boot/kaem/build-$a.kaem for *every* arch
-# under arch/ (bar arch/generic, which is not a target of its own). Doing
-# them all every time is deliberate: a new source file otherwise lands in
-# whichever bootstrap script the developer happened to have configured and
-# silently misses the others, and CI's drift check only regenerates one leg,
-# so the stale one can sit broken indefinitely.
+# With no --arch, this regenerates boot/kaem/build-$platform-$a.kaem for
+# *every* arch under arch/ (bar arch/generic, which is not a target of its
+# own) under $platform (--platform, "nt" if not given -- see the PLATFORM
+# derivation below for why that is the only value this generator knows how
+# to produce today). Doing them all every time is deliberate: a new source
+# file otherwise lands in whichever bootstrap script the developer happened
+# to have configured and silently misses the others, and CI's drift check
+# only regenerates one leg, so the stale one can sit broken indefinitely.
 #
-# The compiler name is *not* taken from config.mak. It is derived per arch
-# as $a-win32-tcc (with AR = $CC -ar, mirroring the Makefile), and handed to
-# make as a command-line override, so the committed scripts are a pure
-# function of the source tree rather than of whatever path ./configure was
-# last pointed at -- an absolute CC in config.mak used to get baked into the
-# generated output verbatim. config.mak is still required and still supplies
-# the arch-independent bits (CFLAGS_C99FSE, CFLAGS_AUTO, KERNEL32, ...).
+# The compiler name is *not* taken from config.mak. It is derived per
+# platform+arch pair -- for --platform=nt (the default, and the only
+# platform this generator currently knows a naming rule for), $a-win32-tcc
+# (with AR = $CC -ar, mirroring the Makefile) -- and handed to make as a
+# command-line override, so the committed scripts are a pure function of
+# the source tree rather than of whatever path ./configure was last pointed
+# at -- an absolute CC in config.mak used to get baked into the generated
+# output verbatim. config.mak is still required and still supplies the
+# platform/arch-independent bits (CFLAGS_C99FSE, CFLAGS_AUTO, KERNEL32, ...).
+#
+# --platform exists because arch/ and PLATFORM are independent axes (see
+# the Makefile's own PLAT_GLOBS comment): arch/aarch64 alone now backs both
+# PLATFORM=linux (native, no kaem bootstrap -- Linux never needs one, see
+# CONTRIBUTING.md's live-bootstrap rationale, which is inherently a
+# from-scratch-tcc-on-Windows story) and PLATFORM=nt (this Windows-on-ARM64
+# bootstrap). The filename therefore keys on *both* platform and arch, not
+# arch alone -- ARCH by itself stopped being unambiguous the day a second
+# platform started reusing the same arch/aarch64/. Only "nt" has a real
+# compiler-naming rule below; a future PLATFORM=linux kaem leg (not
+# implemented, and not needed yet -- native Linux is not a from-scratch
+# bootstrap target the way "the moment mes finishes building tcc" is) would
+# add a case here and land at boot/kaem/build-linux-$a.kaem, no further
+# renaming required.
 
 set -euo pipefail
 
@@ -73,21 +92,29 @@ if [ ! -f config.mak ]; then
 fi
 
 # Every arch/<a>/ except the shared arch/generic/ fallback headers, AND
-# except an arch with no arch/<a>/src/ files of its own (arch/aarch64,
-# a real target but only for PLATFORM=linux -- see configure's own
-# --platform flag and Makefile's PLAT_GLOBS comment). kaem exclusively
-# bootstraps the NT/tcc toolchain (CONTRIBUTING.md), and CC below is
-# always forced to "${ARCH}-win32-tcc" -- an arch/<a> with nothing
-# under src/ was never a real NT target to begin with, "aarch64-win32-
-# tcc" names a compiler that has never existed. Skipping it here, not
-# papering over it further down, is why: below this point every path
-# assumes at least one ARCHCC-classified dry-run line exists (real for
-# i386/x86_64, each of which has real arch/<a>/src/*.[cS] files) --
-# without this guard, an empty arch/aarch64/src/ silently reached
-# `field ARCHCC | ...`, whose `grep` found nothing and returned 1,
-# which -- under this script's own `set -euo pipefail` -- aborted the
-# whole run with NO error message at all. Caught by a real pre-commit
-# hook failure with empty stderr, not anticipated.
+# except an arch with no arch/<a>/src/ files of its own at all, for any
+# platform. This is a defensive guard rather than a live filter today --
+# arch/i386, arch/x86_64 and arch/aarch64 all have real arch/<a>/src/*.[cS]
+# files now (arch/aarch64 didn't, briefly: it grew its first ones only once
+# Windows-on-ARM64 work started needing arch-specific code of its own, e.g.
+# chkstk.S; before that it was PLATFORM=linux's alone and this guard did
+# skip it). It stays because ARCH_GLOBS is keyed on arch, not on
+# --platform, so a *future* arch added for exactly one platform, before it
+# has any arch/<a>/src/ files of its own yet, would hit it again: below
+# this point every path assumes at least one ARCHCC-classified dry-run line
+# exists -- without this guard, an empty arch/<a>/src/ would silently reach
+# `field ARCHCC | ...`, whose `grep` finds nothing and returns 1, which --
+# under this script's own `set -euo pipefail` -- aborts the whole run with
+# NO error message at all. That exact failure mode is how this guard was
+# discovered the first time: a real pre-commit hook failure with empty
+# stderr, not anticipated.
+#
+# Note this says nothing about *which platforms* an arch's src/ files are
+# for -- ARCH_GLOBS applies them to every PLATFORM build of that arch
+# (files there may still be internally #ifdef'd per platform, e.g.
+# cancel_trampoline.S's NT-vs-not landing pad). Whether a given
+# platform+arch pair is one this generator actually knows how to name a
+# compiler for is decided separately, by --platform below.
 kaem_arches() {
 	for d in arch/*/; do
 		a=${d%/}; a=${a#arch/}
@@ -98,10 +125,12 @@ kaem_arches() {
 }
 
 ARCH=""
+PLATFORM="nt"
 OUT=""
 for arg in "$@"; do
 	case $arg in
 		--arch=*) ARCH=${arg#--arch=} ;;
+		--platform=*) PLATFORM=${arg#--platform=} ;;
 		-*)
 			echo "gen-kaem.sh: unknown option '$arg'" >&2
 			exit 1
@@ -110,6 +139,27 @@ for arg in "$@"; do
 	esac
 done
 
+# The only per-platform knowledge this generator has: how to name that
+# platform's cross-compiler from an arch alone. "nt" is both the default
+# and, today, the only entry -- kaem exclusively bootstraps the NT/tcc
+# toolchain (CONTRIBUTING.md); PLATFORM=linux is a real, working configure/
+# Makefile target (see Makefile's PLAT_GLOBS comment) but has no kaem
+# bootstrap path of its own, deliberately -- native Linux is not the
+# from-scratch "mes just finished building tcc" scenario kaem exists for.
+# A real --platform=linux leg would add a case here, not touch the
+# filename scheme below: that is the whole point of keying the output name
+# on platform+arch now, before a second platform makes ARCH alone
+# ambiguous in a way nobody planned for.
+case "$PLATFORM" in
+	nt) CC_SUFFIX="-win32-tcc" ;;
+	*)
+		echo "gen-kaem.sh: unsupported --platform='$PLATFORM' -- this generator only" >&2
+		echo "gen-kaem.sh: knows a compiler-naming rule for 'nt' today (kaem has no" >&2
+		echo "gen-kaem.sh: real bootstrap path for any other platform yet)." >&2
+		exit 1
+		;;
+esac
+
 # No --arch: do the whole set, one child invocation each.
 if [ -z "$ARCH" ]; then
 	if [ -n "$OUT" ]; then
@@ -117,7 +167,7 @@ if [ -z "$ARCH" ]; then
 		exit 1
 	fi
 	for a in $(kaem_arches); do
-		"$0" --arch="$a"
+		"$0" --platform="$PLATFORM" --arch="$a"
 	done
 	exit 0
 fi
@@ -127,22 +177,27 @@ if [ ! -d "arch/$ARCH" ]; then
 	exit 1
 fi
 
-CC="${ARCH}-win32-tcc"
+CC="${ARCH}${CC_SUFFIX}"
 AR="$CC -ar"
 
-OUT=${OUT:-boot/kaem/build-${ARCH}.kaem}
+OUT=${OUT:-boot/kaem/build-${PLATFORM}-${ARCH}.kaem}
 mkdir -p "$(dirname "$OUT")"
 
 DRYRUN=$(mktemp)
 trap 'rm -f "$DRYRUN"' EXIT
 
-# ARCH/CC/AR are forced on the command line (which beats config.mak's own
-# assignments) so this works for any arch regardless of what ./configure was
-# last run with -- see the note at the top of this file.
+# PLATFORM/ARCH/CC/AR are forced on the command line (which beats
+# config.mak's own assignments) so this works for any platform+arch
+# regardless of what ./configure was last run with -- see the note at the
+# top of this file. Forcing PLATFORM here specifically closes a real
+# footgun: without it, a config.mak left over from `./configure
+# --platform=linux` would make this dry run (and so the "nt" bootstrap
+# script it produces) silently describe a PLATFORM=linux object list
+# instead -- wrong content under a name that promises NT.
 if ! make --no-print-directory -j1 -n -B \
-		ARCH="$ARCH" CC="$CC" AR="$AR" \
+		PLATFORM="$PLATFORM" ARCH="$ARCH" CC="$CC" AR="$AR" \
 		lib/libc.a lib/crt1.o >"$DRYRUN" 2>&1; then
-	echo "gen-kaem.sh: 'make -n -B lib/libc.a lib/crt1.o' failed for $ARCH:" >&2
+	echo "gen-kaem.sh: 'make -n -B lib/libc.a lib/crt1.o' failed for $PLATFORM/$ARCH:" >&2
 	cat "$DRYRUN" >&2
 	exit 1
 fi
@@ -233,9 +288,9 @@ fi
 # SPDX-FileCopyrightText: (C) 2026 Gavin John
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# boot/kaem/build-${ARCH}.kaem -- kaem-only bootstrap build of ntlibc for
-# ${ARCH}-win32, producing lib/libc.a and lib/crt1.o without make, without a
-# real shell, and without a general-purpose ar.
+# boot/kaem/build-${PLATFORM}-${ARCH}.kaem -- kaem-only bootstrap build of
+# ntlibc for ${ARCH}-win32, producing lib/libc.a and lib/crt1.o without
+# make, without a real shell, and without a general-purpose ar.
 #
 # GENERATED FILE -- do not hand-edit. Regenerate with:
 #   ./configure --host=${ARCH}-win32 CC=${CC}
@@ -288,12 +343,12 @@ fi
 # tools are installed with either.  Give absolute paths and neither matters.
 #
 # From the repository root, in place, with the tools in one directory:
-#   srcdir=. CC=/path/to/${CC}.exe bin_mkdir=/path/to/mkdir.exe bin_cp=/path/to/cp.exe bin_catm=/path/to/catm.exe kaem --strict --file boot/kaem/build-${ARCH}.kaem
+#   srcdir=. CC=/path/to/${CC}.exe bin_mkdir=/path/to/mkdir.exe bin_cp=/path/to/cp.exe bin_catm=/path/to/catm.exe kaem --strict --file boot/kaem/build-${PLATFORM}-${ARCH}.kaem
 # Or with the sources read-only somewhere else, which is the case a
 # from-scratch bootstrap actually has -- an unpacked tarball or a store path
 # it may not write to, and no recursive copy at this stage to stage it with:
 #   cd /some/empty/writable/dir
-#   srcdir=/path/to/ntlibc CC=... bin_mkdir=... bin_cp=... bin_catm=... kaem --strict --file .../build-${ARCH}.kaem
+#   srcdir=/path/to/ntlibc CC=... bin_mkdir=... bin_cp=... bin_catm=... kaem --strict --file .../build-${PLATFORM}-${ARCH}.kaem
 # (On a developer machine with a POSIX shell the tools are unsuffixed and
 # \`command -v' fills these in, e.g. bin_cp=\$(command -v cp).)
 #
