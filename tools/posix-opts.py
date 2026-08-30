@@ -198,6 +198,7 @@ def resolved_policy(profile_terms: list[str]) -> dict[str, tuple[str, str]]:
 
 def compile_command(cfg: dict[str, str], source: Path, output: Path) -> list[str]:
     arch = cfg["ARCH"]
+    platform = cfg.get("PLATFORM", "nt")
     command = shlex.split(cfg["CC"])
     command += shlex.split(cfg.get("CFLAGS_C99FSE", ""))
     command += shlex.split(cfg.get("CFLAGS_AUTO", ""))
@@ -205,10 +206,32 @@ def compile_command(cfg: dict[str, str], source: Path, output: Path) -> list[str
         "-D_GNU_SOURCE", f"-I{ROOT / 'arch' / arch}",
         f"-I{ROOT / 'arch' / 'generic'}", f"-I{ROOT / 'obj' / 'include'}",
         f"-I{ROOT / 'include'}", f"-I{SUITE / 'include'}", f"-I{SUITE}",
-        "-nostdlib", "-o", str(output), str(ROOT / "lib" / "crt1.o"),
-        str(source), str(SUITE / "lib" / "common.c"),
-        f"-L{ROOT / 'lib'}", "-lc", "-lntdll",
+        "-nostdlib",
     ]
+    if platform == "linux":
+        # -static -no-pie: this build's own crt/linux/crt1.c reads
+        # AT_PHDR out of auxv and treats it as an already-relocated
+        # absolute address (see that file's own linux_setup_tls()
+        # comment) -- correct only for a non-PIE static binary.
+        # -fno-stack-protector: this tree has no __stack_chk_guard/
+        # _fail (tcc, the only NT compiler, never inserts stack-
+        # protector calls); a native host cc defaults to inserting
+        # them anyway and the link fails on two undefined symbols
+        # otherwise (see tools/linux-build-crt.sh's own comment, the
+        # first place this was hit).
+        command += ["-static", "-no-pie", "-fno-stack-protector"]
+        command += [
+            "-o", str(output),
+            str(ROOT / "lib" / "crt1.o"), str(ROOT / "lib" / "start.o"),
+            str(source), str(SUITE / "lib" / "common.c"),
+            f"-L{ROOT / 'lib'}", "-lc",
+        ]
+    else:
+        command += [
+            "-o", str(output), str(ROOT / "lib" / "crt1.o"),
+            str(source), str(SUITE / "lib" / "common.c"),
+            f"-L{ROOT / 'lib'}", "-lc", "-lntdll",
+        ]
     return command
 
 
@@ -367,7 +390,11 @@ def main() -> int:
             f"unannotated={missing[:8]}, stale={stale[:8]}"
         )
     runner = shlex.split(args.runner, posix=os.name != "nt")
-    if args.runtime != "windows" and not runner:
+    # "windows": a real-Windows leg runs the built .exe directly, no
+    # Wine prefix. "linux": the same shape, for a native PLATFORM=linux
+    # build's own crt (compile_command() above) -- also runs the
+    # binary directly, no runner needed.
+    if args.runtime not in ("windows", "linux") and not runner:
         raise RuntimeError("no runner configured")
 
     started = time.monotonic()
