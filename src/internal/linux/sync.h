@@ -14,11 +14,26 @@
  * event's zero/nonzero flag), `max` is a semaphore's ceiling (unused
  * for an event), `kind` distinguishes the two so __plat_wait_one() can
  * tell a decrementing P/V wait from a manual-reset non-consuming one.
- */
+ *
+ * NTLIBC_LX_SYNC_INITIALIZING: a third, transient `kind` value used
+ * ONLY by __plat_named_mutant_acquire() (plat_thread.c) to make its
+ * first-touch lazy initialization of a freshly created (or not-yet-
+ * initialized) MAP_SHARED backing file race-free across processes --
+ * see that function's own comment for the real, confirmed bug this
+ * closes (two processes racing a brand-new mutant file could both
+ * observe kind==0 and both plainly, non-atomically write max/futex/
+ * kind, and if one write landed after the other had already
+ * decremented futex via a real acquire, it silently stomped the count
+ * back up, letting both processes believe they held the same supposedly
+ * exclusive lock at once). Never a value __plat_wait_one()/
+ * __plat_event_set()/__plat_semaphore_post() need to understand: by the
+ * time any of those see the object, kind has always already settled to
+ * SEMAPHORE or EVENT. */
 #ifndef _NTLIBC_LINUX_SYNC_H
 #define _NTLIBC_LINUX_SYNC_H
 
-enum { NTLIBC_LX_SYNC_SEMAPHORE = 1, NTLIBC_LX_SYNC_EVENT = 2 };
+enum { NTLIBC_LX_SYNC_SEMAPHORE = 1, NTLIBC_LX_SYNC_EVENT = 2,
+       NTLIBC_LX_SYNC_INITIALIZING = 3 };
 
 struct ntlibc_linux_sync {
 	int futex;

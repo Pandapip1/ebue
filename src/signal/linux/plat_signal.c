@@ -166,7 +166,58 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled)
 void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks)
 {
 	struct timespec ts, *tsp;
-	long ns;
+	long long magnitude, ns;
+
+	/* `ticks` carries NT's own relative/absolute LARGE_INTEGER encoding
+	 * (plat_signal.h's own comment on this function: "passed through
+	 * unchanged") -- negative means "relative, this many 100ns units
+	 * from now", positive means "absolute NT time". Every real caller
+	 * that reaches this backend (src/unistd/sleep.c's __alertable_delay(),
+	 * signal.c's sigtimedwait()-shaped waits) only ever constructs a
+	 * relative (negative) value -- confirmed by grep across every
+	 * __sig_wait_delivery() call site in this tree, all of which pass
+	 * either `-something` or a null timeout, never a raw positive
+	 * deadline -- so decoding "negative" is the one real case; a
+	 * genuinely absolute (positive) `ticks` has no Linux-native
+	 * equivalent built here yet (it would need converting through
+	 * __plat_query_system_time() to a relative offset first, unlike
+	 * NtWaitForSingleObject()/NtDelayExecution(), which understand the
+	 * absolute form natively), same class of disclosed, narrower-than-
+	 * the-full-contract gap as this file's own banner already lists for
+	 * the pipe/mutant transport. What is fixed here is a real,
+	 * confirmed bug, not a new gap: this function used to pass `ticks`
+	 * straight through to the `ns = ticks * 100L` conversion below with
+	 * no sign handling at all, unlike src/thread/linux/plat_thread.c's
+	 * own __plat_wait_one() (`ticks = relative_ticks < 0 ?
+	 * -relative_ticks : relative_ticks`), which decodes the identical
+	 * convention correctly. A relative (negative) `ticks` therefore
+	 * produced a NEGATIVE ts.tv_sec/ts.tv_nsec handed straight to the
+	 * real nanosleep(2)/ppoll(2) syscalls below, which the kernel
+	 * rejects outright (EINVAL) instead of sleeping at all -- confirmed
+	 * with strace against a real sleep(1) call reaching this function
+	 * through __alertable_delay(): `nanosleep({tv_sec=-1, tv_nsec=0})
+	 * = -1 EINVAL`, immediately, every time, never once actually
+	 * sleeping. Silently ignoring that failure (this function has never
+	 * checked the syscall's return value -- see the two bare
+	 * `syscall(SYS_nanosleep, ...)` statements below) turned every
+	 * timed __sig_wait_delivery() call into a zero-duration busy-spin:
+	 * __alertable_delay()'s `while (ticks > 0)` loop calls this
+	 * function, gets back instantly with nothing slept, subtracts
+	 * whatever sub-microsecond amount __plat_time_now() advanced by,
+	 * and calls again -- thousands of times over, per real second of
+	 * requested sleep, pegging a CPU core instead of blocking. That is
+	 * the real root cause behind the cluster of conformance-suite
+	 * TIMEOUT results across fork, pthread_atfork, the sem_ family,
+	 * mqueue, sigsuspend and sigwait: every one of those interfaces' test cases
+	 * either calls sleep()/usleep() directly for parent/child
+	 * synchronization (fork/1-1.c's own sleep(1), literally the case
+	 * this bug was diagnosed against) or waits through this exact
+	 * function's timed path (sigsuspend/sigwait/sigwaitinfo's own
+	 * bounded waits, signal.c's sigtimedwait()-shaped loop above), and
+	 * a thread pegged at 100% CPU failing to make timely progress is
+	 * indistinguishable, from outside, from one that is genuinely
+	 * hung. */
+	magnitude = ticks < 0 ? -ticks : ticks;
 
 	if (wake_event) {
 		int fd = unbox(wake_event);
@@ -175,8 +226,8 @@ void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long t
 
 		pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
 		if (has_timeout) {
-			ns = ticks * 100L;
-			ts.tv_sec = ns / 1000000000L; ts.tv_nsec = ns % 1000000000L;
+			ns = magnitude * 100LL;
+			ts.tv_sec = (time_t)(ns / 1000000000LL); ts.tv_nsec = (long)(ns % 1000000000LL);
 			tsp = &ts;
 		} else {
 			tsp = 0;
@@ -186,8 +237,8 @@ void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long t
 		return;
 	}
 	if (has_timeout) {
-		ns = ticks * 100L;
-		ts.tv_sec = ns / 1000000000L; ts.tv_nsec = ns % 1000000000L;
+		ns = magnitude * 100LL;
+		ts.tv_sec = (time_t)(ns / 1000000000LL); ts.tv_nsec = (long)(ns % 1000000000LL);
 		syscall(SYS_nanosleep, &ts, 0L);
 		return;
 	}

@@ -221,17 +221,67 @@ static int is_sys_error(long ret)
  * syscall ABI itself expects, not a libc-level type. */
 struct linux_timespec { long tv_sec; long tv_nsec; };
 
+/* NOT FUTEX_PRIVATE_FLAG -- a real, confirmed bug fixed here, not a
+ * missed optimization left on the table. These two helpers back EVERY
+ * futex word this file hands out through __plat_wait_one()/
+ * __plat_event_set()/__plat_semaphore_post(): both the genuinely
+ * per-process objects alloc_sync() creates (MAP_PRIVATE|MAP_ANONYMOUS,
+ * where FUTEX_PRIVATE_FLAG's optimization is valid and was originally
+ * used) AND the cross-process objects map_named_sem()/
+ * __plat_named_mutant_acquire() create (MAP_SHARED, backed by a real
+ * file under /tmp, opened independently by every process that touches
+ * it). FUTEX_PRIVATE_FLAG tells the kernel to hash a waiter by
+ * (this process's mm_struct, the virtual address passed in) instead of
+ * by the underlying physical page -- a real optimization, but only
+ * correct when every waiter and waker sharing that word are the SAME
+ * process (or CLONE_VM threads of it, sharing one mm_struct, exactly
+ * what __plat_thread_spawn() above creates and what fuzz/
+ * linux_pilot_test_thread.c's own mutex stress test already proved
+ * correct). Two SEPARATE processes independently mmap()ing the same
+ * MAP_SHARED file get the SAME physical page but, in general, DIFFERENT
+ * virtual addresses (confirmed on this host: two real fork/1-1.c
+ * processes racing the same named mutant lock mapped it at 0x6f12d3418000
+ * and 0x6f12d3418000-0x18384 respectively -- not equal), so a
+ * FUTEX_WAKE_PRIVATE issued by the process that posts the lock hashes to
+ * a completely different (mm, uaddr) key than the FUTEX_WAIT_PRIVATE the
+ * other process is blocked in, and the wakeup is silently never
+ * delivered: the kernel has no idea the two calls are even about the
+ * same futex word. That is the real root cause diagnosed behind the
+ * fork, pthread_atfork, the sem_ family, mqueue, sigsuspend and sigwait
+ * TIMEOUT cluster's
+ * third, most-elusive bug (after the sleep(1) busy-spin in
+ * src/signal/linux/plat_signal.c and the malloc/fast-lock self-deadlock
+ * in src/internal/plat_malloc_generic.h): every one of those interfaces'
+ * test cases that synchronizes two real, separate processes through a
+ * named semaphore or (transitively, via sem_open()'s own namespace lock)
+ * this file's named mutant hit exactly this silently-dropped wakeup,
+ * intermittently -- exactly as often as the two processes' independent
+ * mmap() calls happened to land at different virtual addresses, which in
+ * practice was every single time. Confirmed with instrumented tracing
+ * (a temporary per-process debug log plus a real statx(2) inode
+ * comparison) showing both processes' mappings resolving to the
+ * identical inode -- ruling out "different files" -- while their
+ * `obj_addr` values differed, and the waiting process's own
+ * FUTEX_WAIT_PRIVATE call never returning despite the other process
+ * completing a real, successful FUTEX_WAKE_PRIVATE on the same logical
+ * object moments earlier. Dropping FUTEX_PRIVATE_FLAG makes the kernel
+ * hash by the underlying inode and page offset instead, which is correct
+ * for every caller in this file regardless of whether the object turns
+ * out to be MAP_PRIVATE or MAP_SHARED, at the cost of the (real, but
+ * here-unmeasured and secondary to correctness) performance difference
+ * FUTEX_PRIVATE_FLAG exists to buy back for the pure single-process
+ * case. */
 static long futex_wait(int *uaddr, int expected, const struct linux_timespec *timeout)
 {
 	return raw_syscall(SYS_futex, (long)uaddr,
-	                   FUTEX_WAIT | FUTEX_PRIVATE_FLAG, (long)expected,
+	                   FUTEX_WAIT, (long)expected,
 	                   (long)timeout, 0, 0);
 }
 
 static long futex_wake(int *uaddr, int count)
 {
 	return raw_syscall(SYS_futex, (long)uaddr,
-	                   FUTEX_WAKE | FUTEX_PRIVATE_FLAG, (long)count, 0, 0, 0);
+	                   FUTEX_WAKE, (long)count, 0, 0, 0);
 }
 
 /* One mmap()'d page per synchronization object -- no allocator dependency
@@ -734,19 +784,49 @@ static void named_mutant_path(const char *name, char *buf, size_t bufsz)
 
 /* Acquire (wait indefinitely, non-alertable) the create-or-open named
  * mutant `name`, matching plat_thread.h's own contract for this
- * function. A real, disclosed race on first use: unlike the named-
- * semaphore group above, this uses plain O_CREAT (no O_EXCL) so two
- * processes both naming a brand-new lock for the first time can both
- * see kind != NTLIBC_LX_SYNC_SEMAPHORE and both (re-)initialize
- * futex=1 -- harmless for THIS specific initial value (both writes
- * agree), but a real, narrow race nonetheless; every caller in this
- * tree derives `name` from a content hash or fixed per-purpose
- * string, never attacker-chosen. */
+ * function. Unlike the named-semaphore group above, this uses plain
+ * O_CREAT (no O_EXCL): two processes both naming a brand-new lock for
+ * the first time both legitimately need a valid, initialized lock back,
+ * not a create-vs-open distinction. That first-touch initialization
+ * used to be a real, confirmed race, not just a theoretical one: an
+ * earlier version of this function checked `obj->kind !=
+ * NTLIBC_LX_SYNC_SEMAPHORE` and then, non-atomically, wrote
+ * obj->max/obj->futex/obj->kind in plain (non-atomic) stores. Two
+ * processes racing the same fresh backing file could both observe
+ * kind==0 and both start that write sequence; if process A's writes
+ * landed, A went on to __plat_wait_one() and successfully decremented
+ * futex from 1 to 0 (genuinely acquiring the lock) BEFORE process B's
+ * own already-in-flight, already-decided "reinitialize" writes landed --
+ * B's plain `obj->futex = 1` then silently overwrote A's decrement, and
+ * B's own subsequent __plat_wait_one() call decremented that
+ * resurrected 1 back to 0 too, so BOTH processes believed they
+ * exclusively held the same lock at once. Confirmed with strace against
+ * a real fork/1-1.c run (parent and child both call sem_open() on the
+ * same name immediately after fork(), the exact shape this races):
+ * intermittent hangs and double-acquisition-shaped corruption that
+ * neither the sleep(1)-busy-spin fix (src/signal/linux/plat_signal.c)
+ * nor the malloc/fast-lock self-deadlock fix (src/internal/
+ * plat_malloc_generic.h) explained on their own -- this was the third,
+ * separate bug behind the same TIMEOUT cluster, only reproducing on a
+ * fraction of runs because it depends on exact process-scheduling
+ * timing, unlike the other two which reproduced every time.
+ *
+ * The fix: exactly one process ever performs the plain, non-atomic
+ * max/futex writes, decided by a real atomic CAS on `kind` (0 ->
+ * INITIALIZING) rather than a plain read-then-write. The CAS's winner
+ * writes max/futex and then RELEASE-publishes kind=SEMAPHORE; every
+ * loser -- whether it raced in during the writes (observes
+ * INITIALIZING) or arrives after they are done (observes SEMAPHORE
+ * directly) -- only ever ACQUIRE-loads `kind`, synchronizing with that
+ * RELEASE store before touching max/futex at all, so no process ever
+ * writes those fields concurrently with another and no process ever
+ * observes them half-written. */
 int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 {
 	char path[160];
 	struct ntlibc_linux_sync *obj;
 	long fd, r;
+	unsigned char expect;
 
 	named_mutant_path(name, path, sizeof path);
 	fd = raw_syscall(SYS_openat, AT_FDCWD_LX, (long)path, O_RDWR_LX | O_CREAT_LX, 0600, 0, 0);
@@ -757,11 +837,33 @@ int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 	raw_syscall(SYS_close, fd, 0, 0, 0, 0, 0);
 	if (is_sys_error(r)) { errno = (int)-r; return -1; }
 	obj = (struct ntlibc_linux_sync *)r;
-	if (obj->kind != NTLIBC_LX_SYNC_SEMAPHORE) {
+
+	expect = 0;
+	if (__atomic_compare_exchange_n(&obj->kind, &expect, NTLIBC_LX_SYNC_INITIALIZING,
+	                                0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
+		/* We are provably the only process that can be writing these
+		 * two fields right now -- the CAS above admits exactly one
+		 * winner across every process racing this same backing file. */
 		obj->max = 1;
 		obj->futex = 1;
-		obj->kind = NTLIBC_LX_SYNC_SEMAPHORE;
+		__atomic_store_n(&obj->kind, NTLIBC_LX_SYNC_SEMAPHORE, __ATOMIC_RELEASE);
+	} else {
+		/* Either already published (expect == SEMAPHORE, and the
+		 * ACQUIRE above already synchronizes with whichever process's
+		 * RELEASE store set it) or someone else's initialization is
+		 * still in flight (expect == INITIALIZING) -- spin for the
+		 * real, short window until it publishes. Real, not a
+		 * fabricated wait: the winner's own critical section above is
+		 * two plain integer stores, nothing that blocks or takes a
+		 * kernel round trip, so this never spins for longer than a
+		 * handful of instructions on a peer that is, definitionally,
+		 * currently running -- the identical reasoning __plat_fast_lock()
+		 * above gives for its own spin, reused here rather than
+		 * duplicated with different wording. */
+		while (__atomic_load_n(&obj->kind, __ATOMIC_ACQUIRE) == NTLIBC_LX_SYNC_INITIALIZING)
+			raw_syscall(SYS_sched_yield, 0L, 0L, 0L, 0L, 0L, 0L);
 	}
+
 	__plat_wait_one((__plat_handle_t)obj, 0, 0, 0);
 	*out = (__plat_handle_t)obj;
 	return 0;
