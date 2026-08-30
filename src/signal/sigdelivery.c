@@ -142,6 +142,8 @@
 #include <unistd.h>
 #include <string.h>
 #include "libc.h"
+#include "plat_signal.h"
+#include "plat_fd.h"
 
 /* Wire format: one fixed-size NT message per signal. FILE_PIPE_MESSAGE_TYPE
  * (below) is what makes "one NtWriteFile call == one NtReadFile call"
@@ -162,9 +164,13 @@ struct sigpacket {
 #define SIGPACKET_MAGIC 0x736c746eu /* "ntls", little-endian as stored */
 #define SIGPACKET_NONDEFAULT_ONLY 1u
 
-static HANDLE wake_event;   /* auto-reset; set on every packet arrival. 0 = not running. */
-static HANDLE lock_event;   /* auto-reset-as-mutex, initially signalled (free). 0 = no locking done. */
-static HANDLE send_mutant;  /* named per target; serializes clients across processes. */
+static __plat_handle_t wake_event;   /* auto-reset; set on every packet arrival. 0 = not running. */
+static HANDLE lock_event;   /* auto-reset-as-mutex, initially signalled (free). 0 = no locking done.
+                              * Kept as a raw HANDLE, and __sig_lock()/__sig_unlock() below kept
+                              * calling Nt{Wait,Set}Event on it directly: those four functions are
+                              * explicitly out of scope for this migration (see this file's own
+                              * Locking banner and plat_signal.h's file banner). */
+static __plat_handle_t send_mutant;  /* named per target; serializes clients across processes. */
 
 /* RECURSIVE, deliberately: internal signal paths can nest before or after a
  * user handler, even though the handler callback itself temporarily drops the
@@ -178,35 +184,33 @@ static HANDLE send_mutant;  /* named per target; serializes clients across proce
 static pid_t lock_owner;
 static int lock_depth;
 
-/* HANDLE __sig_delivery_event(void), declared in libc.h, is select()'s
- * read of wake_event -- deliberately not exposed as a variable so a
- * caller outside this file can never accidentally NtClose() or NtSetEvent()
- * it. */
-HANDLE __sig_delivery_event(void) { return wake_event; }
+/* __plat_handle_t __sig_delivery_event(void), declared in libc.h, is
+ * select()'s read of wake_event -- deliberately not exposed as a
+ * variable so a caller outside this file can never accidentally close
+ * or signal it directly. */
+__plat_handle_t __sig_delivery_event(void) { return wake_event; }
 
 /* State-checking wait loops in signal.c and sleep.c use the same event as
  * select(), but wait alertably so timer APCs remain deliverable. A set that
  * lands between a caller's state check and this wait is retained by the
- * auto-reset event, closing the lost-wakeup window without a polling slice. */
+ * auto-reset event, closing the lost-wakeup window without a polling slice.
+ *
+ * The NTSTATUS return and LARGE_INTEGER* parameter stay exactly as they
+ * were: src/unistd/sleep.c, outside this migration, calls this directly
+ * with a LARGE_INTEGER it builds itself, so the signature cannot change.
+ * No caller of this function (here or in signal.c/sleep.c) ever inspects
+ * the returned status, so folding every real outcome into one reported
+ * STATUS_SUCCESS below is not a behavior change -- see plat_signal.h's
+ * file banner. */
 NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout)
 {
-	if (wake_event)
-		return NtWaitForSingleObject(wake_event, TRUE, timeout);
-	if (timeout) return NtDelayExecution(TRUE, timeout);
-	/* Event creation failure is a degraded startup path. Keep indefinite
-	 * signal waits functional there, at their old latency, rather than spin. */
-	{
-		LARGE_INTEGER fallback = -1000000; /* 100 ms */
-		return NtDelayExecution(TRUE, &fallback);
-	}
+	__plat_signal_wait(wake_event, timeout != 0, timeout ? (long long)*timeout : 0);
+	return STATUS_SUCCESS;
 }
 
 void __sig_notify_delivery(void)
 {
-	if (wake_event) {
-		LONG previous;
-		NtSetEvent(wake_event, &previous);
-	}
+	if (wake_event) __plat_event_set(wake_event);
 }
 
 /* NTLIBC_NO_THREAD_SAFETY_ANALYSIS: this and the three functions below it
@@ -328,24 +332,6 @@ static void sig_send_lock_name(pid_t pid, WCHAR *name, UNICODE_STRING *us)
 	us->MaximumLength = (USHORT)(us->Length + sizeof(WCHAR));
 }
 
-static HANDLE sig_create_pipe(UNICODE_STRING *us)
-{
-	OBJECT_ATTRIBUTES oa;
-	IO_STATUS_BLOCK io;
-	LARGE_INTEGER timeout = -1200000000LL;
-	HANDLE pipe;
-	NTSTATUS st;
-
-	InitializeObjectAttributes(&oa, us, OBJ_CASE_INSENSITIVE, 0, 0);
-	st = NtCreateNamedPipeFile(&pipe,
-		GENERIC_READ | GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
-		&oa, &io, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN_IF,
-		FILE_SYNCHRONOUS_IO_NONALERT, FILE_PIPE_MESSAGE_TYPE,
-		FILE_PIPE_MESSAGE_MODE, FILE_PIPE_QUEUE_OPERATION, 2, 4096, 4096,
-		&timeout);
-	return NT_SUCCESS(st) ? pipe : 0;
-}
-
 /* The delivery thread: one per process, started by __sig_delivery_init()
  * and never joined or cancelled -- NT tears down every thread of a
  * process at exit, which is the only "shutdown" this loop ever needs.
@@ -359,15 +345,12 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 	pid_t pid = getpid();
 	WCHAR name[40];
 	UNICODE_STRING us;
-	HANDLE pipe = (HANDLE)arg;
+	__plat_handle_t pipe = (__plat_handle_t)arg;
 
 	sig_pipe_name(pid, name, &us);
 
 	for (;;) {
-		IO_STATUS_BLOCK io;
-		NTSTATUS st;
-
-		if (!pipe) pipe = sig_create_pipe(&us);
+		if (!pipe) pipe = __plat_signal_pipe_create(&us);
 		if (!pipe) {
 			/* Nowhere to report this to -- a background service thread
 			 * with no caller waiting on it. A transient failure (heap
@@ -375,28 +358,19 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 			 * previous instance) is worth a short backoff and another
 			 * try rather than giving up and leaving this process deaf
 			 * to cross-process signals for the rest of its life. */
-			LARGE_INTEGER d = -1000000; /* 100ms, src/unistd/sleep.c's own idiom */
-			NtDelayExecution(0, &d);
+			__plat_signal_backoff();
 			continue;
 		}
 
 		/* Block until a client connects -- see this file's banner for
-		 * why a plain NtReadFile here would only ever work once. */
-		st = NtFsControlFile(pipe, 0, 0, 0, &io, FSCTL_PIPE_LISTEN, 0, 0, 0, 0);
-		if (st == STATUS_PENDING) { NtWaitForSingleObject(pipe, 0, 0); st = io.Status; }
-		/* A serialized sender can connect to the replacement instance after
-		 * it is created but before this thread reaches LISTEN.  The instance
-		 * is already connected in that case, which is the desired state. */
-		if (st == STATUS_PIPE_CONNECTED) st = STATUS_SUCCESS;
-
-		if (NT_SUCCESS(st)) {
+		 * why a plain read here would only ever work once. */
+		if (__plat_signal_pipe_listen(pipe)) {
 			struct sigpacket pkt;
+			size_t got = 0;
 			memset(&pkt, 0, sizeof pkt);
-			st = NtReadFile(pipe, 0, 0, 0, &io, &pkt, sizeof pkt, 0, 0);
-			if (st == STATUS_PENDING) { NtWaitForSingleObject(pipe, 0, 0); st = io.Status; }
-			if (NT_SUCCESS(st) && io.Information == sizeof pkt) {
+			if (__plat_signal_pipe_read(pipe, &pkt, sizeof pkt, &got) == 0 && got == sizeof pkt) {
 				siginfo_t si;
-				HANDLE next;
+				__plat_handle_t next;
 				unsigned char accepted = pkt.magic == SIGPACKET_MAGIC &&
 					pkt.signo > 0 && pkt.signo < _NSIG;
 
@@ -411,7 +385,7 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 				 * request.  send_mutant keeps every other process targeting this
 				 * pid outside NtOpenFile until this reply releases its owner, so
 				 * there is no close/recreate interval for a sender to race. */
-				next = sig_create_pipe(&us);
+				next = __plat_signal_pipe_create(&us);
 				if (!next) accepted = 0;
 
 				if (accepted) {
@@ -429,11 +403,11 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 					__sig_notify_delivery();
 				}
 
-				st = NtWriteFile(pipe, 0, 0, 0, &io, &accepted,
-				                 sizeof accepted, 0, 0);
-				if (st == STATUS_PENDING)
-					NtWaitForSingleObject(pipe, 0, 0);
-				NtClose(pipe);
+				{
+					size_t sent = 0;
+					__plat_signal_pipe_write(pipe, &accepted, sizeof accepted, &sent);
+				}
+				__plat_close(pipe);
 				pipe = next;
 				continue;
 			}
@@ -444,8 +418,8 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
 		 * named mutant until its read fails, so publishing first preserves
 		 * the same handoff invariant as the acknowledged path above. */
 		{
-			HANDLE next = sig_create_pipe(&us);
-			NtClose(pipe);
+			__plat_handle_t next = __plat_signal_pipe_create(&us);
+			__plat_close(pipe);
 			pipe = next;
 		}
 	}
@@ -468,11 +442,9 @@ static ULONG NTAPI sig_delivery_thread(PVOID arg)
  * were not an ntlibc process at all. */
 void __sig_delivery_init(void)
 {
-	OBJECT_ATTRIBUTES oa;
 	UNICODE_STRING lock_us, pipe_us;
 	WCHAR lock_name[48], pipe_name[40];
-	HANDLE ev, mutant, pipe, thr;
-	NTSTATUS st;
+	__plat_handle_t ev, mutant, pipe, thr;
 	pid_t pid;
 
 	/* The mutex is created independently of everything below it: every
@@ -481,20 +453,16 @@ void __sig_delivery_init(void)
 	 * thread (a second real thread already exists under
 	 * NTLIBC_USE_KERNEL32 -- see this file's banner -- so the mutex earns
 	 * its keep even when the rest of this function gives up below). */
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-	if (NT_SUCCESS(NtCreateEvent(&ev, EVENT_ALL_ACCESS, &oa, SynchronizationEvent, TRUE)))
-		lock_event = ev;
+	ev = __plat_event_create(1);
+	if (ev) lock_event = ev;
 
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-	if (!NT_SUCCESS(NtCreateEvent(&ev, EVENT_ALL_ACCESS, &oa, SynchronizationEvent, FALSE)))
-		return;
+	ev = __plat_event_create(0);
+	if (!ev) return;
 
 	pid = getpid();
 	sig_send_lock_name(pid, lock_name, &lock_us);
-	InitializeObjectAttributes(&oa, &lock_us,
-		OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
-	st = NtCreateMutant(&mutant, MUTANT_ALL_ACCESS, &oa, FALSE);
-	if (!NT_SUCCESS(st)) { NtClose(ev); return; }
+	mutant = __plat_signal_mutant_create(&lock_us);
+	if (!mutant) { __plat_close(ev); return; }
 	send_mutant = mutant;
 
 	/* Create and publish the first server instance here, not in the new
@@ -507,22 +475,19 @@ void __sig_delivery_init(void)
 	 * A client which connects before the thread reaches FSCTL_PIPE_LISTEN is
 	 * handled as STATUS_PIPE_CONNECTED by the loop above. */
 	sig_pipe_name(pid, pipe_name, &pipe_us);
-	pipe = sig_create_pipe(&pipe_us);
+	pipe = __plat_signal_pipe_create(&pipe_us);
 	if (!pipe) {
-		send_mutant = 0;
-		NtClose(mutant);
-		NtClose(ev);
+		send_mutant = __PLAT_HANDLE_NULL;
+		__plat_close(mutant);
+		__plat_close(ev);
 		return;
 	}
 
-	st = NtCreateThreadEx(&thr, THREAD_ALL_ACCESS, 0, NtCurrentProcess(),
-	                       (PVOID)sig_delivery_thread, pipe,
-	                       0, 0, 0, 0, 0);
-	if (!NT_SUCCESS(st)) {
-		send_mutant = 0;
-		NtClose(pipe);
-		NtClose(mutant);
-		NtClose(ev);
+	if (__plat_thread_start((void *)sig_delivery_thread, pipe, &thr) < 0) {
+		send_mutant = __PLAT_HANDLE_NULL;
+		__plat_close(pipe);
+		__plat_close(mutant);
+		__plat_close(ev);
 		return;
 	}
 
@@ -535,7 +500,7 @@ void __sig_delivery_init(void)
 	 * that is never signalled yet, which is indistinguishable from
 	 * "not running" for every purpose select() has for it. */
 	wake_event = ev;
-	NtClose(thr);  /* the thread runs detached; nothing here ever waits on or terminates it */
+	__plat_close(thr);  /* the thread runs detached; nothing here ever waits on or terminates it */
 }
 
 /* fork.c's STATUS_PROCESS_CLONED arm calls this unconditionally, the
@@ -593,31 +558,23 @@ static int sig_try_deliver_remote_info(int pid, int sig, const void *data,
 	const siginfo_t *si = data;
 	WCHAR name[48];
 	UNICODE_STRING us, lock_us;
-	OBJECT_ATTRIBUTES oa;
-	IO_STATUS_BLOCK io;
-	HANDLE h, mutant;
-	NTSTATUS st;
+	__plat_handle_t h, mutant;
 	struct sigpacket pkt;
 	unsigned char accepted = 0;
+	size_t sent, got;
 
 	sig_send_lock_name(pid, name, &lock_us);
-	InitializeObjectAttributes(&oa, &lock_us,
-		OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
-	st = NtCreateMutant(&mutant, MUTANT_ALL_ACCESS, &oa, FALSE);
-	if (!NT_SUCCESS(st)) return 0;
-	st = NtWaitForSingleObject(mutant, 0, 0);
-	if (!NT_SUCCESS(st)) { NtClose(mutant); return 0; }
+	mutant = __plat_signal_mutant_create(&lock_us);
+	if (!mutant) return 0;
+	if (!__plat_wait_acquire(mutant)) { __plat_close(mutant); return 0; }
 
 	sig_pipe_name(pid, name, &us);
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, 0, 0);
 	/* See this file's banner: a missing name resolves synchronously. The
 	 * named mutant plus replacement-before-reply handoff guarantees that a
 	 * cooperating sender never observes a missing or busy instance between
 	 * two successful requests; no retry or timeout is involved. */
-	st = NtOpenFile(&h, GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE, &oa, &io,
-	                FILE_SHARE_READ | FILE_SHARE_WRITE,
-	                FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
-	if (!NT_SUCCESS(st)) goto out;
+	h = __plat_signal_pipe_open(&us);
+	if (!h) goto out;
 
 	pkt.magic = SIGPACKET_MAGIC;
 	pkt.signo = (ULONG)sig;
@@ -627,18 +584,15 @@ static int sig_try_deliver_remote_info(int pid, int sig, const void *data,
 	pkt.code = (LONG)(si ? si->si_code : SI_USER);
 	if (si) pkt.value = si->si_value;
 	else memset(&pkt.value, 0, sizeof pkt.value);
-	st = NtWriteFile(h, 0, 0, 0, &io, &pkt, sizeof pkt, 0, 0);
-	if (st == STATUS_PENDING) { NtWaitForSingleObject(h, 0, 0); st = io.Status; }
-	if (NT_SUCCESS(st) && io.Information == sizeof pkt) {
-		st = NtReadFile(h, 0, 0, 0, &io, &accepted, sizeof accepted, 0, 0);
-		if (st == STATUS_PENDING) { NtWaitForSingleObject(h, 0, 0); st = io.Status; }
-		if (!NT_SUCCESS(st) || io.Information != sizeof accepted)
+	sent = 0; got = 0;
+	if (__plat_signal_pipe_write(h, &pkt, sizeof pkt, &sent) == 0 && sent == sizeof pkt) {
+		if (__plat_signal_pipe_read(h, &accepted, sizeof accepted, &got) != 0 || got != sizeof accepted)
 			accepted = 0;
 	}
-	NtClose(h);
+	__plat_close(h);
 out:
-	NtReleaseMutant(mutant, 0);
-	NtClose(mutant);
+	__plat_mutant_release(mutant);
+	__plat_close(mutant);
 	return accepted != 0;
 }
 

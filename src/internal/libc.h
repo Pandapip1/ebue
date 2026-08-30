@@ -297,7 +297,7 @@ NTSTATUS __pipe_handles(HANDLE *rp, HANDLE *wp, int inherit);
  * or indefinitely if `infinite` is non-zero (wait_ticks is then
  * ignored).  Used as the sleep between __fd_probe() polls of pipes --
  * see the caller for how the interval is chosen. */
-void __fd_wait_or_delay(HANDLE *console_handles, int ncons, long long wait_ticks, int infinite);
+void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long wait_ticks, int infinite);
 
 /* ---- children ---------------------------------------------------------- */
 /* The size of the statically allocated part of the child table.  It is
@@ -726,7 +726,7 @@ void __fenv_init(void);
 #define __OFF_MAX 0x7fffffffffffffffLL
 
 int __fsize_limited(void);
-long long __fsize_clamp(HANDLE h, int append, size_t count);
+long long __fsize_clamp(__plat_handle_t h, int append, size_t count);
 long long __fsize_room_at(long long off);
 int __fsize_allow(long long size);
 int __fsize_exceeded(void);
@@ -789,7 +789,7 @@ void __pthread_cancel_defer_leave(void);
  * sigdelivery.c's banner for why. */
 void __sig_delivery_init(void);
 void __sig_delivery_reinit_after_fork(void);
-HANDLE __sig_delivery_event(void);
+__plat_handle_t __sig_delivery_event(void);
 NTSTATUS __sig_wait_delivery(LARGE_INTEGER *timeout);
 void __sig_notify_delivery(void);
 int __sig_try_deliver_remote(int pid, int sig);

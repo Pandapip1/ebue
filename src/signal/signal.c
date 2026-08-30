@@ -51,6 +51,8 @@
 #include <limits.h>
 #include <time.h>
 #include "libc.h"
+#include "plat_signal.h"
+#include "plat_fd.h"
 #ifdef NTLIBC_USE_KERNEL32
 #include "kernel32.h"
 #endif
@@ -320,7 +322,7 @@ static int default_action(int sig)
  * table.  Publish the transition through an auto-reset named event before
  * entering NtSuspendProcess; waitpid() consumes that one notification and
  * records the ordinary __W_STOPPED status in its own table. */
-static HANDLE self_stop_event;
+static __plat_handle_t self_stop_event;
 static pid_t self_stop_owner;
 static int self_stop_signal;
 
@@ -352,36 +354,27 @@ static void stop_event_name(pid_t pid, int sig, WCHAR name[56],
 
 static int stop_self(int sig)
 {
-	OBJECT_ATTRIBUTES oa;
 	UNICODE_STRING us;
 	WCHAR name[56];
-	NTSTATUS st;
-	LONG previous;
-	LARGE_INTEGER zero = 0;
 	pid_t pid = getpid();
 
 	/* RtlCloneUserProcess copied only the numeric value of a parent's
 	 * private handle.  A different pid makes that copy stale, just as for
 	 * the process-group publication event in src/unistd/ids.c. */
-	if (self_stop_owner != pid) self_stop_event = 0;
+	if (self_stop_owner != pid) self_stop_event = __PLAT_HANDLE_NULL;
 	if (!self_stop_event || self_stop_signal != sig) {
-		if (self_stop_event) NtClose(self_stop_event);
+		if (self_stop_event) __plat_close(self_stop_event);
 		stop_event_name(pid, sig, name, &us);
-		InitializeObjectAttributes(&oa, &us,
-		                           OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
-		st = NtCreateEvent(&self_stop_event, EVENT_ALL_ACCESS, &oa,
-		                   SynchronizationEvent, FALSE);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		self_stop_event = __plat_stop_event_create(&us);
+		if (!self_stop_event) return -1;
 		self_stop_owner = pid;
 		self_stop_signal = sig;
 	}
-	st = NtSetEvent(self_stop_event, &previous);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	st = NtSuspendProcess(NtCurrentProcess());
-	if (!NT_SUCCESS(st)) {
+	if (__plat_event_set(self_stop_event) < 0) return -1;
+	if (__plat_process_suspend_self() < 0) {
 		/* Retract a notification for a stop that did not happen. */
-		NtWaitForSingleObject(self_stop_event, 0, &zero);
-		return __set_errno_status(st);
+		__plat_event_peek(self_stop_event);
+		return -1;
 	}
 	/* Reached only after another process sends SIGCONT. */
 	return 0;
@@ -390,27 +383,20 @@ static int stop_self(int sig)
 int __sig_consume_child_stop(pid_t pid)
 {
 	static const int stops[] = { SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU };
-	OBJECT_ATTRIBUTES oa;
 	UNICODE_STRING us;
 	WCHAR name[56];
-	LARGE_INTEGER zero = 0;
-	HANDLE h;
-	NTSTATUS st;
+	__plat_handle_t h;
+	int already_existed;
 	size_t i;
 
 	for (i = 0; i < sizeof stops / sizeof stops[0]; i++) {
 		stop_event_name(pid, stops[i], name, &us);
-		InitializeObjectAttributes(&oa, &us,
-		                           OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, 0);
-		st = NtCreateEvent(&h, EVENT_ALL_ACCESS, &oa,
-		                   SynchronizationEvent, FALSE);
-		if (!NT_SUCCESS(st)) continue;
-		if (st == STATUS_OBJECT_NAME_EXISTS &&
-		    NtWaitForSingleObject(h, 0, &zero) == STATUS_SUCCESS) {
-			NtClose(h);
+		if (__plat_stop_event_probe(&us, &h, &already_existed) < 0) continue;
+		if (already_existed && __plat_event_peek(h)) {
+			__plat_close(h);
 			return stops[i];
 		}
-		NtClose(h);
+		__plat_close(h);
 	}
 	return 0;
 }
@@ -741,24 +727,20 @@ static int sig_stops(int sig)
  * -- so a repeated SIGSTOP must not deepen the suspension into one a
  * single SIGCONT can no longer undo.  Returns 1 for a real transition,
  * 0 for an already-satisfied state, and -1 for an NT failure. */
-static int sig_job_control(struct __child *c, HANDLE h, int sig)
+static int sig_job_control(struct __child *c, __plat_handle_t h, int sig)
 {
-	NTSTATUS st;
-
 	if (sig == SIGCONT) {
 		/* kill.html: SIGCONT continues a stopped process.  Sent to one
 		 * that is already running it does nothing -- and in particular
 		 * produces no WCONTINUED status, which is reserved for a child
 		 * that actually was continued. */
 		if (c && !c->stopsig) return 0;
-		st = NtResumeProcess(h);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (__plat_process_resume(h) < 0) return -1;
 		if (c) { c->stopsig = 0; c->jobstat = __W_CONTINUED; }
 		return 1;
 	}
 	if (c && c->stopsig) return 0;
-	st = NtSuspendProcess(h);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (__plat_process_suspend(h) < 0) return -1;
 	if (c) { c->stopsig = sig; c->jobstat = __W_STOPPED(sig); }
 	return 1;
 }
@@ -789,11 +771,7 @@ void __sigchld_job_control(struct __child *c, int sig)
 int kill(pid_t pid, int sig)
 {
 	struct __child *c;
-	HANDLE h;
-	NTSTATUS st;
-	ACCESS_MASK want;
-	OBJECT_ATTRIBUTES oa;
-	CLIENT_ID cid;
+	__plat_handle_t h;
 
 	/* kill.html ERRORS: "[EINVAL] The value of the sig argument is an
 	 * invalid or unsupported signal number." sig==0 is exempted --
@@ -857,9 +835,6 @@ int kill(pid_t pid, int sig)
 	c = __child_find(pid);
 	if (c) h = c->h;
 	else {
-		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-		cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid;
-		cid.UniqueThread = 0;
 		/* The access mask below decides which errno the caller sees,
 		 * so it is load-bearing and not merely "enough rights for
 		 * what we do next".  kill.html's "[EPERM] The process does
@@ -888,22 +863,19 @@ int kill(pid_t pid, int sig)
 		 * The ESRCH arm below is a genuinely different status, not a
 		 * second reading of the same failure: a nonexistent pid
 		 * answered STATUS_INVALID_CID (c000000b) in the same run. */
-		want = PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION;
 		/* PROCESS_SUSPEND_RESUME is asked for only when the signal
-		 * actually needs it, and not folded into the mask above for
-		 * every kill(): a right that is not needed can still be
-		 * refused, and one more bit in the mask would turn the
-		 * measured EPERM/ESRCH answers documented above into an EPERM
-		 * for targets that today accept a plain signal. */
-		if (sig_stops(sig) || sig == SIGCONT) want |= PROCESS_SUSPEND_RESUME;
-		st = NtOpenProcess(&h, want, &oa, &cid);
-		if (!NT_SUCCESS(st)) { errno = st == STATUS_ACCESS_DENIED ? EPERM : ESRCH; return -1; }
+		 * actually needs it, and not folded into the mask for every
+		 * kill(): a right that is not needed can still be refused,
+		 * and one more bit in the mask would turn the measured
+		 * EPERM/ESRCH answers documented above into an EPERM for
+		 * targets that today accept a plain signal. */
+		if (__plat_kill_open((int)pid, sig_stops(sig) || sig == SIGCONT, &h) < 0) return -1;
 	}
-	if (!sig) { if (!c) NtClose(h); return 0; }
+	if (!sig) { if (!c) __plat_close(h); return 0; }
 	if (sig == SIGSTOP) {
 		int changed = sig_job_control(c, h, sig);
 		if (changed > 0) __sigchld_job_control(c, sig);
-		if (!c) NtClose(h);
+		if (!c) __plat_close(h);
 		return changed < 0 ? -1 : 0;
 	}
 	/* SIGCONT resumes before it is delivered, even when caught or ignored.
@@ -912,13 +884,13 @@ int kill(pid_t pid, int sig)
 	 * a child that may have stopped while holding its signal lock. */
 	if (sig == SIGCONT) {
 		int changed = sig_job_control(c, h, sig);
-		if (changed < 0) { if (!c) NtClose(h); return -1; }
+		if (changed < 0) { if (!c) __plat_close(h); return -1; }
 		if (changed > 0) __sigchld_job_control(c, sig);
 		if (__sig_try_deliver_remote((int)pid, sig)) {
-			if (!c) NtClose(h);
+			if (!c) __plat_close(h);
 			return 0;
 		}
-		if (!c) NtClose(h);
+		if (!c) __plat_close(h);
 		return 0;
 	}
 	/* SIGTSTP, SIGTTIN and SIGTTOU are catchable.  Ask the target to
@@ -926,13 +898,13 @@ int kill(pid_t pid, int sig)
 	 * declines, retain the NT suspend/resume fallback which implements the
 	 * default job-control action. */
 	if (sig_stops(sig) && __sig_try_deliver_remote_nondefault((int)pid, sig)) {
-		if (!c) NtClose(h);
+		if (!c) __plat_close(h);
 		return 0;
 	}
 	if (sig_stops(sig)) {
 		int changed = sig_job_control(c, h, sig);
 		if (changed > 0) __sigchld_job_control(c, sig);
-		if (!c) NtClose(h);
+		if (!c) __plat_close(h);
 		return changed < 0 ? -1 : 0;
 	}
 	/* Try the target's own listener before falling back to this
@@ -942,7 +914,7 @@ int kill(pid_t pid, int sig)
 	 * (sa_handler/SIG_IGN, not just whatever default_action() would
 	 * assume here) through the same __raise_internal() raise() uses --
 	 * so success here is strictly more correct than the
-	 * NtTerminateProcess() path below, and this function is done: no
+	 * termination path below, and this function is done: no
 	 * fallthrough on success. Failure (no listener -- no such process
 	 * under this name, a non-ntlibc process, or one still inside
 	 * __signal_init() -- or any other reason the packet did not land)
@@ -951,13 +923,14 @@ int kill(pid_t pid, int sig)
 	 * distinguish those cases.  The catchable job-control signals already
 	 * took their acknowledgement-based disposition path above. */
 	if (__sig_try_deliver_remote((int)pid, sig)) {
-		if (!c) NtClose(h);
+		if (!c) __plat_close(h);
 		return 0;
 	}
-	st = NtTerminateProcess(h, __NT_SIGNAL_EXIT(sig));
-	if (!c) NtClose(h);
-	if (!NT_SUCCESS(st) && st != STATUS_PROCESS_IS_TERMINATING) return __set_errno_status(st);
-	return 0;
+	{
+		int r = __plat_kill_terminate(h, __NT_SIGNAL_EXIT(sig));
+		if (!c) __plat_close(h);
+		return r;
+	}
 }
 
 int killpg(pid_t pg, int sig) { return kill(pg, sig); }
@@ -1430,17 +1403,7 @@ int sigpause(int sig)
  * kernel address, an already-torn-down process, etc.) SEGV_MAPERR is
  * the honest fallback: "cannot even ask" is closer to "not mapped"
  * than to "mapped but protected". */
-static int segv_code(void *addr)
-{
-	MEMORY_BASIC_INFORMATION mbi;
-	SIZE_T ret = 0;
-	NTSTATUS st;
-
-	memset(&mbi, 0, sizeof mbi);
-	st = NtQueryVirtualMemory(NtCurrentProcess(), addr, MemoryBasicInformation, &mbi, sizeof mbi, &ret);
-	if (!NT_SUCCESS(st)) return SEGV_MAPERR;
-	return mbi.State == MEM_COMMIT ? SEGV_ACCERR : SEGV_MAPERR;
-}
+static int segv_code(void *addr) { return __plat_segv_code(addr); }
 
 /* NT exceptions that correspond to synchronous signals, and (for the
  * fault-shaped ones) the si_code that names the fault precisely --

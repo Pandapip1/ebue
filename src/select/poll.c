@@ -44,6 +44,7 @@
 #include <poll.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_select.h"
 
 #define POLL_INTERVAL_TICKS 200000LL  /* 20ms; see select.c's file banner */
 
@@ -56,7 +57,7 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 	remaining = infinite ? 0 : (long long)timeout * 10000LL;  /* ms -> 100ns ticks */
 
 	for (;;) {
-		HANDLE console_h[FD_MAX];
+		__plat_handle_t console_h[FD_MAX];
 		int console_idx[FD_MAX];
 		int ncons = 0, have_poll = 0;
 		nfds_t i;
@@ -106,9 +107,8 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 		/* Zero-timeout peek at every still-pending console read. */
 		{
 			int k;
-			LARGE_INTEGER zero = 0;
 			for (k = 0; k < ncons; k++) {
-				if (NtWaitForSingleObject(console_h[k], 0, &zero) == STATUS_WAIT_0) {
+				if (__plat_wait_ready(console_h[k])) {
 					struct pollfd *p = &pfds[console_idx[k]];
 					if (!p->revents) total++;
 					p->revents |= (short)(p->events & (POLLIN | POLLRDNORM));

@@ -82,6 +82,8 @@
 #include <signal.h>
 #include <string.h>
 #include "libc.h"
+#include "plat_misc.h"
+#include "plat_fd.h"
 
 /* ---- getrlimit()/setrlimit() -------------------------------------------
  * Soft/hard state for the four resources setrlimit() actually accepts a
@@ -193,22 +195,9 @@ int __fsize_limited(void)
 /* The offset a write on this handle will start at.  `append` selects the
  * end of the file rather than the current position, matching what
  * NtWriteFile does for FILE_WRITE_TO_END_OF_FILE. */
-static int fsize_start(HANDLE h, int append, long long *out)
+static int fsize_start(__plat_handle_t h, int append, long long *out)
 {
-	IO_STATUS_BLOCK io;
-
-	if (append) {
-		FILE_STANDARD_INFORMATION si;
-		if (!NT_SUCCESS(NtQueryInformationFile(h, &io, &si, sizeof si, FileStandardInformation)))
-			return -1;
-		*out = si.EndOfFile;
-	} else {
-		FILE_POSITION_INFORMATION pi;
-		if (!NT_SUCCESS(NtQueryInformationFile(h, &io, &pi, sizeof pi, FilePositionInformation)))
-			return -1;
-		*out = pi.CurrentByteOffset;
-	}
-	return 0;
+	return __plat_write_start_offset(h, append, out);
 }
 
 /* How many of `count` bytes may be written on this handle.  Returns
@@ -217,7 +206,7 @@ static int fsize_start(HANDLE h, int append, long long *out)
  * caller's write), a smaller count when the write would cross the limit,
  * or __fsize_exceeded()'s -1 -- SIGXFSZ, then errno EFBIG -- when not
  * one byte may be written. */
-long long __fsize_clamp(HANDLE h, int append, size_t count)
+long long __fsize_clamp(__plat_handle_t h, int append, size_t count)
 {
 	long long off, room;
 
@@ -292,51 +281,12 @@ int getrlimit(int resource, struct rlimit *rl)
  * stub, as Wine's NtQueryInformationJobObject is), the soft/hard state
  * above is still exactly what getrlimit() reports back, so the round
  * trip setrlimit() then getrlimit() promises stays intact either way. */
-static HANDLE job_handle;
-
-static HANDLE ensure_job(void)
-{
-	OBJECT_ATTRIBUTES oa;
-	HANDLE h;
-
-	if (job_handle) return job_handle;
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-	if (!NT_SUCCESS(NtCreateJobObject(&h, JOB_OBJECT_ALL_ACCESS, &oa)))
-		return 0;
-	if (!NT_SUCCESS(NtAssignProcessToJobObject(h, NtCurrentProcess()))) {
-		NtClose(h);
-		return 0;
-	}
-	job_handle = h;
-	return job_handle;
-}
-
 /* Push the current soft limits for the four enforceable resources onto
- * the job object, best-effort (failure is not reported to the caller --
- * see the comment above ensure_job()). */
+ * the lazily-created job object, best-effort (failure is not reported
+ * to the caller -- see the comment above). */
 static void apply_job_limits(void)
 {
-	JOBOBJECT_EXTENDED_LIMIT_INFORMATION eli;
-	HANDLE h = ensure_job();
-
-	if (!h) return;
-	memset(&eli, 0, sizeof eli);
-	if (nproc_cur != RLIM_INFINITY) {
-		eli.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-		eli.BasicLimitInformation.ActiveProcessLimit = nproc_cur > 0xFFFFFFFFu ? 0xFFFFFFFFu : (ULONG)nproc_cur;
-	}
-	if (cpu_cur != RLIM_INFINITY) {
-		eli.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME;
-		eli.BasicLimitInformation.PerProcessUserTimeLimit = (LARGE_INTEGER)(cpu_cur * 10000000ULL);
-	}
-	if (as_cur != RLIM_INFINITY || data_cur != RLIM_INFINITY) {
-		rlim_t lim = as_cur;
-		if (data_cur != RLIM_INFINITY && (as_cur == RLIM_INFINITY || data_cur < as_cur))
-			lim = data_cur;
-		eli.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-		eli.ProcessMemoryLimit = (SIZE_T)lim;
-	}
-	NtSetInformationJobObject(h, JobObjectExtendedLimitInformation, &eli, sizeof eli);
+	__plat_job_apply_limits(nproc_cur, cpu_cur, as_cur, data_cur);
 }
 
 int setrlimit(int resource, const struct rlimit *rl)
@@ -420,8 +370,7 @@ int setrlimit(int resource, const struct rlimit *rl)
 
 int getrusage(int who, struct rusage *ru)
 {
-	KERNEL_USER_TIMES kt;
-	NTSTATUS st;
+	unsigned long long user100ns, kernel100ns;
 
 	if (!ru) { errno = EFAULT; return -1; }
 	switch (who) {
@@ -437,12 +386,11 @@ int getrusage(int who, struct rusage *ru)
 	}
 
 	memset(ru, 0, sizeof *ru);
-	st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, 0);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	ru->ru_stime.tv_sec = (time_t)(kt.KernelTime / 10000000LL);
-	ru->ru_stime.tv_usec = (suseconds_t)((kt.KernelTime % 10000000LL) / 10);
-	ru->ru_utime.tv_sec = (time_t)(kt.UserTime / 10000000LL);
-	ru->ru_utime.tv_usec = (suseconds_t)((kt.UserTime % 10000000LL) / 10);
+	if (__plat_process_times_self(&user100ns, &kernel100ns) < 0) return -1;
+	ru->ru_stime.tv_sec = (time_t)(kernel100ns / 10000000ULL);
+	ru->ru_stime.tv_usec = (suseconds_t)((kernel100ns % 10000000ULL) / 10);
+	ru->ru_utime.tv_sec = (time_t)(user100ns / 10000000ULL);
+	ru->ru_utime.tv_usec = (suseconds_t)((user100ns % 10000000ULL) / 10);
 	return 0;
 }
 
@@ -462,21 +410,6 @@ int getrusage(int who, struct rusage *ru)
  * in commit b9dd7d114 ("ntdll: Implement ProcessBasePriority class in
  * NtSetInformationProcess."), first released in wine-10.7, well after
  * the wine-9.0 this project's own CI environment ships. */
-static UCHAR priorityclass_from_nice(int nice)
-{
-	if (nice <= 0) return PROCESS_PRIOCLASS_NORMAL;
-	if (nice < 10) return PROCESS_PRIOCLASS_BELOW_NORMAL;
-	return PROCESS_PRIOCLASS_IDLE;
-}
-
-static int nice_from_baseprio(int bp)
-{
-	int nice = 8 - bp;
-	if (nice < -NZERO) nice = -NZERO;
-	if (nice > NZERO - 1) nice = NZERO - 1;
-	return nice;
-}
-
 /* This process's own nice value: the authoritative source getpriority()
  * reads back for PRIO_PROCESS on self, so that set-then-get is always
  * exact for this process regardless of where the mapping above is lossy
@@ -487,11 +420,8 @@ int getpriority(int which, id_t who)
 {
 	int self;
 	struct __child *c;
-	HANDLE h;
-	NTSTATUS st;
-	OBJECT_ATTRIBUTES oa;
-	CLIENT_ID cid;
-	PROCESS_BASIC_INFORMATION pbi;
+	__plat_handle_t h;
+	int nice_value;
 
 	switch (which) {
 	case PRIO_PROCESS: self = (who == 0 || who == (id_t)getpid()); break;
@@ -510,27 +440,21 @@ int getpriority(int which, id_t who)
 	if (c) {
 		h = c->h;
 	} else {
-		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-		cid.UniqueProcess = (HANDLE)(ULONG_PTR)who;
-		cid.UniqueThread = 0;
-		st = NtOpenProcess(&h, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
-		if (!NT_SUCCESS(st)) { errno = ESRCH; return -1; }
+		if (__plat_process_open((int)who, &h) < 0) return -1;
 	}
-	st = NtQueryInformationProcess(h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
-	if (!c) NtClose(h);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return nice_from_baseprio((int)pbi.BasePriority);
+	{
+		int r = __plat_priority_get(h, &nice_value);
+		if (!c) __plat_close(h);
+		if (r < 0) return -1;
+	}
+	return nice_value;
 }
 
 int setpriority(int which, id_t who, int value)
 {
 	int self;
 	struct __child *c;
-	HANDLE h;
-	NTSTATUS st;
-	OBJECT_ATTRIBUTES oa;
-	CLIENT_ID cid;
-	PROCESS_PRIORITY_CLASS pc;
+	__plat_handle_t h;
 
 	switch (which) {
 	case PRIO_PROCESS: self = (who == 0 || who == (id_t)getpid()); break;
@@ -550,10 +474,7 @@ int setpriority(int which, id_t who, int value)
 		 * down to a value this process held a moment ago, is always
 		 * allowed. */
 		if (value < 0) { errno = EACCES; return -1; }
-		pc.Foreground = 0;
-		pc.PriorityClass = priorityclass_from_nice(value);
-		st = NtSetInformationProcess(NtCurrentProcess(), ProcessPriorityClass, &pc, sizeof pc);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (__plat_priority_set_self(0, value) < 0) return -1;
 		self_nice = value;
 		return 0;
 	}
@@ -561,25 +482,15 @@ int setpriority(int which, id_t who, int value)
 	if (which != PRIO_PROCESS) { errno = ESRCH; return -1; }
 
 	c = __child_find((int)who);
-	if (c) {
-		pc.Foreground = 0;
-		pc.PriorityClass = priorityclass_from_nice(value);
-		st = NtSetInformationProcess(c->h, ProcessPriorityClass, &pc, sizeof pc);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		return 0;
-	}
+	if (c) return __plat_priority_set(c->h, 0, value);
 
 	/* A process exists but this library did not spawn it: "the real
 	 * [or] effective user ID of the executing process [does not]
 	 * match the effective user ID of the process whose nice value is
 	 * being changed" is the only way that can be true here, since
 	 * ntlibc's one-user model has nothing else to check. */
-	InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-	cid.UniqueProcess = (HANDLE)(ULONG_PTR)who;
-	cid.UniqueThread = 0;
-	st = NtOpenProcess(&h, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
-	if (!NT_SUCCESS(st)) { errno = ESRCH; return -1; }
-	NtClose(h);
+	if (__plat_process_open((int)who, &h) < 0) return -1;
+	__plat_close(h);
 	errno = EPERM;
 	return -1;
 }

@@ -40,6 +40,7 @@
 #include <sys/resource.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_misc.h"
 
 static clock_t nt100ns_to_ticks(unsigned long long t100ns)
 {
@@ -55,16 +56,14 @@ static clock_t timeval_to_ticks(const struct timeval *tv)
 
 clock_t times(struct tms *buf)
 {
-	KERNEL_USER_TIMES kt;
-	NTSTATUS st;
+	unsigned long long user100ns, kernel100ns;
 	struct rusage cru;
 	struct timespec mono;
 
 	if (buf) {
-		st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, 0);
-		if (!NT_SUCCESS(st)) return (clock_t)__set_errno_status(st);
-		buf->tms_utime = nt100ns_to_ticks((unsigned long long)kt.UserTime);
-		buf->tms_stime = nt100ns_to_ticks((unsigned long long)kt.KernelTime);
+		if (__plat_process_times_self(&user100ns, &kernel100ns) < 0) return (clock_t)-1;
+		buf->tms_utime = nt100ns_to_ticks(user100ns);
+		buf->tms_stime = nt100ns_to_ticks(kernel100ns);
 
 		__rusage_children(&cru);
 		buf->tms_cutime = timeval_to_ticks(&cru.ru_utime);

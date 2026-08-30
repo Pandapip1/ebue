@@ -196,7 +196,7 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
-#include "afd.h"
+#include "plat_select.h"
 
 /* 20ms, in 100ns units (see file banner for why). */
 #define POLL_INTERVAL_TICKS 200000LL
@@ -249,24 +249,8 @@ static int wqa_works(void)
 	 * probe and reach the same answer; this library is single-threaded
 	 * regardless (see the banner in src/internal/libc.h). */
 	static int cached = -1;
-	HANDLE r, w;
-	IO_STATUS_BLOCK io;
-	FILE_PIPE_LOCAL_INFORMATION pli;
-	NTSTATUS st;
 
-	if (cached >= 0) return cached;
-
-	cached = 0;
-	if (!NT_SUCCESS(__pipe_handles(&r, &w, 0))) return cached;
-
-	/* w is the client end, empty, with a 65536-byte inbound quota. */
-	memset(&pli, 0, sizeof pli);
-	st = NtQueryInformationFile(w, &io, &pli, sizeof pli, FilePipeLocalInformation);
-	if (NT_SUCCESS(st) && pli.WriteQuotaAvailable > 0)
-		cached = 1;
-
-	NtClose(w);
-	NtClose(r);
+	if (cached < 0) cached = __plat_pipe_wqa_trustworthy();
 	return cached;
 }
 
@@ -276,10 +260,8 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 	*hup = 0;
 	switch (f->type) {
 	case __FD_PIPE: {
-		IO_STATUS_BLOCK io;
-		FILE_PIPE_LOCAL_INFORMATION pli;
-		NTSTATUS st = NtQueryInformationFile(f->h, &io, &pli, sizeof pli, FilePipeLocalInformation);
-		if (!NT_SUCCESS(st) || pli.NamedPipeState != FILE_PIPE_CONNECTED_STATE) {
+		unsigned long read_avail, write_quota;
+		if (!__plat_pipe_probe(f->h, &read_avail, &write_quota)) {
 			/* Broken/disconnected: a read() would return 0 (EOF) or an
 			 * error, a write() would fail -- neither would block, so
 			 * both count as ready, same as a hung-up descriptor does
@@ -306,7 +288,7 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 			*canread = 1; *canwrite = 1; *hup = 1;
 			break;
 		}
-		*canread = pli.ReadDataAvailable > 0;
+		*canread = read_avail > 0;
 		/* WriteQuotaAvailable is the field documented for exactly
 		 * this, and on real NT it works: measured on Windows Server
 		 * 2025 build 26100, an end's WriteQuotaAvailable is its
@@ -349,7 +331,7 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		 * cannot arise on this side.  That clamp is the pipe
 		 * implementation's job; see fuzz/ntstubs.c for this project's
 		 * own instance of it. */
-		*canwrite = wqa_works() ? pli.WriteQuotaAvailable > 0 : 1;
+		*canwrite = wqa_works() ? write_quota > 0 : 1;
 		break;
 	}
 	case __FD_CONSOLE:
@@ -362,101 +344,18 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
 		*canread = 0;
 		*canwrite = 1;
 		break;
-	case __FD_SOCKET: {
+	case __FD_SOCKET:
 		/* test/networking-audit.md sec 3: a single non-blocking
 		 * IOCTL_AFD_SELECT (== Wine's IOCTL_AFD_POLL, same wire
 		 * request -- src/internal/afd.h) against just this one
-		 * socket, Timeout=0 so it never waits.  AFD_POLL_READ_BITS/
-		 * WRITE_BITS (afd.h) are the same fd_set-bit mapping
-		 * ReactOS's WSPSelect uses. A close/abort/disconnect event
-		 * counts as both readable and writable and as hup, the same
-		 * way a broken pipe does above -- a read or write on it
-		 * would return immediately rather than block. */
-		/* `pi` is storage only -- correctly aligned and large
-		 * enough.  Every field is written and read through
-		 * src/internal/afd.h's AFD_POLL_REQ_OFF_* and AFD_POLL_H_OFF_*
-		 * offsets, because ReactOS's ULONG_PTR Exclusive puts
-		 * Handles at +24 on x86_64, where the AFD driver's own
-		 * source, phnt, wepoll and libuv all put it at +16; see
-		 * that header's poll banner. */
-		/* Separate request and reply buffers, deliberately -- see
-		 * below and afd.h's poll banner.  They were once one
-		 * buffer, which is what made the reply unreadable. */
-		AFD_POLL_INFO req, rep;
-		unsigned long len = __afd_poll_request_size(1);
-		uint32_t events;
-		NTSTATUS st;
-
-		/* Timeout 0: never wait, just sample. */
-		__afd_build_poll_request(&req, 0, 1);
-		__afd_poll_set_handle(&req, 0, f->h, AFD_POLL_READ_BITS | AFD_POLL_WRITE_BITS);
-
-		/* The reply buffer is zeroed before the call, and is *not*
-		 * the request buffer.  IOCTL_AFD_SELECT is METHOD_BUFFERED,
-		 * so afd.sys works on a kernel copy and the I/O manager
-		 * copies back only IoStatus.Information bytes -- 16, the
-		 * header alone, whenever no event fired.  Anything past +16
-		 * therefore keeps whatever the caller left there.  Aliasing
-		 * the request into the output buffer meant "nothing fired"
-		 * read back as the requested mask, i.e. as everything fired;
-		 * zeroing a separate buffer makes the same silence read back
-		 * as zero, which fails closed.
-		 *
-		 * The obvious check clears the buggy code, so state it here:
-		 * the driver *does* zero Handles[0].PollEvents, at the top of
-		 * every iteration of its scan -- but into the kernel's copy,
-		 * which is not the copy that comes back.  "Does the driver
-		 * clear it?" answers yes and is the wrong question.
-		 *
-		 * The request's own event mask cannot be zeroed instead: it
-		 * *is* the request the driver is about to read.
-		 *
-		 * __afd_poll_request_size(1), not sizeof(...), which rounds
-		 * the tail up for Timeout's alignment. */
-		memset(&rep, 0, sizeof rep);
-		st = __afd_ioctl(f->h, IOCTL_AFD_SELECT, &req, (ULONG)len, &rep, (ULONG)len, 0);
-		if (!NT_SUCCESS(st)) {
-			/* No honest answer available: the driver refused to
-			 * tell us.  Report ready-and-hung-up, exactly as the
-			 * __FD_PIPE case above does when its
-			 * NtQueryInformationFile fails, and for the same
-			 * reason -- a descriptor whose state cannot be
-			 * sampled must not be reported *never* ready, or an
-			 * infinite-timeout select()/poll() on it hangs for
-			 * good with no diagnostic.  Reported ready, the
-			 * caller's next read()/write() runs immediately and
-			 * surfaces the real error through errno, which is
-			 * where a caller can actually see it.  This is the
-			 * same over-eager-not-under-eager stance this file
-			 * already takes for a pipe's unavailable
-			 * WriteQuotaAvailable and for exceptfds.
-			 *
-			 * This is a failure path, not the normal one: a
-			 * probe that silently starts failing would show up
-			 * as test/posix-select-socket.c's "an idle socket is
-			 * not readable" assertions failing on the
-			 * real-Windows legs, since ready-on-failure is
-			 * exactly what those reject. */
-			*canread = 1; *canwrite = 1; *hup = 1;
-			break;
-		}
-
-		/* Bounded by the reply's own NumberOfHandles and matched
-		 * on the handle, never read as slot 0 unconditionally: the
-		 * driver zeroes that count before its readiness scan and
-		 * writes -- compacted -- only the handles that actually
-		 * fired.  A socket the reply does not name has no event
-		 * pending, which is a real "not ready" answer and must not
-		 * take the ready-and-hung-up path above; that path is for a
-		 * probe that could not be taken at all. */
-		events = __afd_poll_events_for(&rep, 1, f->h);
-		*canread = (events & AFD_POLL_READ_BITS) != 0;
-		*canwrite = (events & AFD_POLL_WRITE_BITS) != 0;
-		if (events & (AFD_EVENT_CLOSE | AFD_EVENT_ABORT | AFD_EVENT_DISCONNECT)) {
-			*canread = 1; *canwrite = 1; *hup = 1;
-		}
+		 * socket, Timeout=0 so it never waits.  A close/abort/
+		 * disconnect event counts as both readable and writable and
+		 * as hup, the same way a broken pipe does above -- a read or
+		 * write on it would return immediately rather than block.
+		 * See src/select/nt/plat_select.c's __plat_socket_probe() for
+		 * the full reasoning behind the request/reply shape. */
+		__plat_socket_probe(f->h, canread, canwrite, hup);
 		break;
-	}
 	case __FD_FILE:
 	case __FD_DIR:
 	case __FD_CHAR:
@@ -500,37 +399,20 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
  * descriptors already use costs nothing extra when it is not signalled,
  * and turns every one of those latencies into "immediately" when it
  * is. */
-void __fd_wait_or_delay(HANDLE *console_handles, int ncons, long long wait_ticks, int infinite)
+void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long wait_ticks, int infinite)
 {
-	LARGE_INTEGER t;
-	HANDLE handles[FD_SETSIZE + 1];
-	HANDLE sigev = __sig_delivery_event();
+	__plat_handle_t handles[FD_SETSIZE + 1];
+	__plat_handle_t sigev = __sig_delivery_event();
 	int n = 0, i;
 
 	for (i = 0; i < ncons; i++) handles[n++] = console_handles[i];
 	if (sigev) handles[n++] = sigev;
 
 	if (n > 0) {
-		if (infinite) {
-			NtWaitForMultipleObjects((ULONG)n, handles, 1 /* WaitAny */, 0, 0);
-		} else {
-			t = -wait_ticks;
-			NtWaitForMultipleObjects((ULONG)n, handles, 1 /* WaitAny */, 0, &t);
-		}
+		__plat_wait_multiple(handles, n, wait_ticks, infinite);
 		return;
 	}
-	if (infinite) {
-		/* NtDelayExecution has no NULL-means-forever convention (unlike
-		 * the Nt*Wait*Object family read.c relies on); an absolute
-		 * deadline far in the future is this library's existing idiom
-		 * for "forever" -- see pause() in src/unistd/sleep.c. */
-		LARGE_INTEGER never = 0x7fffffffffffffffLL;
-		NtDelayExecution(0, &never);
-	} else {
-		t = -wait_ticks;
-		if (!t) t = -1;
-		NtDelayExecution(0, &t);
-	}
+	__plat_delay(wait_ticks, infinite);
 }
 
 /* One poll pass: build fresh output sets from the (unchanging) snapshot
@@ -546,7 +428,7 @@ void __fd_wait_or_delay(HANDLE *console_handles, int ncons, long long wait_ticks
  * that timer rather than waited on. */
 static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_set *in_e,
                       fd_set *out_r, fd_set *out_w, int *have_poll,
-                      HANDLE *console_h, int *console_fd, int *ncons)
+                      __plat_handle_t *console_h, int *console_fd, int *ncons)
 {
 	int d, total = 0, n = 0, hp = 0;
 
@@ -590,9 +472,8 @@ static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_
 	 * be reported ready without ever sleeping. */
 	{
 		int i;
-		LARGE_INTEGER zero = 0;
 		for (i = 0; i < n; i++)
-			if (NtWaitForSingleObject(console_h[i], 0, &zero) == STATUS_WAIT_0) {
+			if (__plat_wait_ready(console_h[i])) {
 				FD_SET(console_fd[i], out_r);
 				total++;
 			}
@@ -613,7 +494,7 @@ static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_
 static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long long *remaining, int infinite)
 {
 	fd_set in_r, in_w, in_e, out_r, out_w;
-	HANDLE console_h[FD_SETSIZE];
+	__plat_handle_t console_h[FD_SETSIZE];
 	int console_fd[FD_SETSIZE];
 	int d, total, have_poll, ncons;
 	/* EINTR (select.html ERRORS): see this file's banner for why this
@@ -647,7 +528,7 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 		{
 			long long wait_ticks;
 			int wait_infinite;
-			LARGE_INTEGER before, after;
+			long long before, after;
 
 			if (infinite) {
 				wait_infinite = !have_poll;
@@ -672,11 +553,11 @@ static int select_core(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long 
 			 * src/time/clock_gettime.c's CLOCK_REALTIME already reads;
 			 * good enough for a same-process, sub-second interval like
 			 * this one. */
-			if (!infinite) NtQuerySystemTime(&before);
+			if (!infinite) before = __plat_now_100ns();
 			__fd_wait_or_delay(console_h, ncons, wait_ticks, wait_infinite);
 			if (!infinite) {
 				long long elapsed;
-				NtQuerySystemTime(&after);
+				after = __plat_now_100ns();
 				elapsed = after - before;
 				if (elapsed < 0) elapsed = 0;
 				if (elapsed > *remaining) elapsed = *remaining;

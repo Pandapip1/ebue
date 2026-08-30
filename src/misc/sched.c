@@ -35,6 +35,8 @@
 #include <time.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_misc.h"
+#include "plat_fd.h"
 
 #define SCHED_STATE_MAX 64
 #define SCHED_PRIORITY_MAX 31
@@ -68,41 +70,21 @@ static int priority_valid(int policy, int priority)
 static int process_exists(pid_t pid)
 {
 	struct __child *child;
-	PROCESS_BASIC_INFORMATION pbi;
-	OBJECT_ATTRIBUTES oa;
-	CLIENT_ID cid;
-	HANDLE process;
-	NTSTATUS status;
+	__plat_handle_t process;
 	int close_process = 0;
+	int alive;
 
 	if (pid == 0 || pid == getpid()) return 1;
 	if (pid < 0) { errno = ESRCH; return 0; }
 	child = __child_find((int)pid);
 	if (child) process = child->h;
 	else {
-		InitializeObjectAttributes(&oa, 0, 0, 0, 0);
-		cid.UniqueProcess = (HANDLE)(ULONG_PTR)pid;
-		cid.UniqueThread = 0;
-		status = NtOpenProcess(&process, PROCESS_QUERY_LIMITED_INFORMATION,
-		                       &oa, &cid);
-		if (!NT_SUCCESS(status)) {
-			errno = status == STATUS_ACCESS_DENIED ? EPERM : ESRCH;
-			return 0;
-		}
+		if (__plat_process_open_checked(pid, &process) < 0) return 0;
 		close_process = 1;
 	}
-	status = NtQueryInformationProcess(process, ProcessBasicInformation,
-	                                   &pbi, sizeof pbi, 0);
-	if (close_process) NtClose(process);
-	if (!NT_SUCCESS(status)) {
-		errno = ESRCH;
-		return 0;
-	}
-	/* NT may keep a reaped process object openable.  ExitStatus, rather
-	 * than openability alone, distinguishes that object from a process
-	 * POSIX still considers to exist. */
-	if (pbi.ExitStatus != STATUS_PENDING) { errno = ESRCH; return 0; }
-	return 1;
+	alive = __plat_process_alive(process);
+	if (close_process) __plat_close(process);
+	return alive;
 }
 
 static struct sched_state *state_for(pid_t pid, int create)
@@ -208,6 +190,6 @@ int sched_rr_get_interval(pid_t pid, struct timespec *interval)
 
 int sched_yield(void)
 {
-	NtYieldExecution();
+	__plat_yield();
 	return 0;
 }

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "libc.h"
+#include "plat_exit.h"
 
 /* ATEXIT_CAP_ is in libc.h, shared with sysconf(_SC_ATEXIT_MAX). */
 static void (*handlers[ATEXIT_CAP_])(void);
@@ -47,8 +48,7 @@ _Noreturn void __nt_exit(int code)
 	 * _exit() and _Exit() -- and the exec() stand-in, which ends
 	 * through here -- cannot skip it. */
 	__child_resume_stopped();
-	NtTerminateProcess(NtCurrentProcess(), code);
-	for (;;) NtTerminateProcess(NtCurrentProcess(), code);
+	__plat_terminate(code);
 }
 
 _Noreturn void _Exit(int code) { __nt_exit(code); }
