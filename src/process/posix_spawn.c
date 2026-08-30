@@ -179,6 +179,7 @@
 #include <signal.h>
 #include "libc.h"
 #include "spawn_internal.h"
+#include "plat_fd.h"
 
 /* signal.c always provides this helper; signal.h exposes its public
  * declaration only for BSD/GNU feature profiles.  The implementation uses
@@ -213,7 +214,7 @@ static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
 	int i;
 	for (i = 0; i < *nsv; i++) {
 		if (sv[i].fd != fd) continue;
-		if (__fds[fd].h) NtClose(__fds[fd].h);
+		if (__fds[fd].h) __plat_close(__fds[fd].h);
 		memset(&__fds[fd], 0, sizeof __fds[fd]);
 		return 0;
 	}
@@ -233,7 +234,7 @@ static void restore_slots(struct saved_slot *sv, int nsv)
 	int i;
 	for (i = nsv - 1; i >= 0; i--) {
 		int fd = sv[i].fd;
-		if (__fds[fd].h) NtClose(__fds[fd].h);
+		if (__fds[fd].h) __plat_close(__fds[fd].h);
 		__fds[fd] = sv[i].slot;
 	}
 }
@@ -266,18 +267,15 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		 * anything -- POSIX's step 4 closes every FD_CLOEXEC
 		 * descriptor in the child, so naming a descriptor as its own
 		 * dup2 target is how a caller says "keep this one". */
-		HANDLE h;
-		NTSTATUS st;
+		__plat_handle_t h;
 		unsigned flags;
 		int type;
 		struct __fd *f = __fd_get(a->fd);
 		if (!f) return EBADF;
 		flags = f->flags & ~(unsigned)O_CLOEXEC;
 		type = f->type;
-		st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
-		                       OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
-		if (!NT_SUCCESS(st)) { __set_errno_status(st); return errno; }
-		if (take_slot(sv, nsv, cap, a->newfd) < 0) { NtClose(h); return ENOMEM; }
+		if (__plat_dup(f->h, 1, &h) < 0) return errno;
+		if (take_slot(sv, nsv, cap, a->newfd) < 0) { __plat_close(h); return ENOMEM; }
 		__fd_install_at(a->newfd, h, flags, type);
 		return 0;
 	}

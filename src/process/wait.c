@@ -31,6 +31,7 @@
 #include <limits.h>
 #include <string.h>
 #include "libc.h"
+#include "plat_process.h"
 
 /* WIFSIGNALED, WTERMSIG == sig, plus the WCOREDUMP bit for the signals
  * whose default action on Unix is "terminate and dump core". */
@@ -127,19 +128,17 @@ void __rusage_children_reset(void)
  * rather than failing the whole wait: the pid was already reaped
  * successfully, and losing the accounting detail is not worth losing
  * that. */
-static void fill_child_rusage(HANDLE h, struct rusage *ru)
+static void fill_child_rusage(__plat_handle_t h, struct rusage *ru)
 {
-	KERNEL_USER_TIMES kt;
-	NTSTATUS st;
+	unsigned long long ktime = 0, utime = 0;
 
 	memset(ru, 0, sizeof *ru);
 	if (!h) return;
-	st = NtQueryInformationProcess(h, ProcessTimes, &kt, sizeof kt, 0);
-	if (!NT_SUCCESS(st)) return;
-	ticks_to_timeval((unsigned long long)kt.KernelTime, &ru->ru_stime);
-	ticks_to_timeval((unsigned long long)kt.UserTime, &ru->ru_utime);
-	children_ktime100ns += (unsigned long long)kt.KernelTime;
-	children_utime100ns += (unsigned long long)kt.UserTime;
+	if (__plat_process_times(h, &ktime, &utime) < 0) return;
+	ticks_to_timeval(ktime, &ru->ru_stime);
+	ticks_to_timeval(utime, &ru->ru_utime);
+	children_ktime100ns += ktime;
+	children_utime100ns += utime;
 }
 
 /* The pending stop-or-continue report for a child, if any.
@@ -214,13 +213,22 @@ static void discover_self_stops(pid_t want)
  * already-known statuses first; without that it would skip such an
  * entry and report ECHILD for a child whose status POSIX requires it
  * to hand back again. */
+/* The __PLAT_WAIT_* mode a wait on a child's handle should use for this
+ * call's options: NOHANG polls once and returns; WUNTRACED cannot block
+ * indefinitely because a self-stop marker is not a handle any wait can
+ * see, so it has to keep re-checking; anything else blocks until the
+ * child exits. */
+static int wait_mode(int options)
+{
+	if (options & WNOHANG) return __PLAT_WAIT_NOHANG;
+	if (options & WUNTRACED) return __PLAT_WAIT_POLL;
+	return __PLAT_WAIT_BLOCK;
+}
+
 static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, int nowait)
 {
 	struct __child *c;
-	LARGE_INTEGER zero = 0;
-	LARGE_INTEGER poll = -100000; /* 10ms: self-stop markers are not handles in the wait set */
-	NTSTATUS st;
-	PROCESS_BASIC_INFORMATION pbi;
+	int wr;
 
 	/* wait.html ERRORS (waitpid() only): "[EINVAL] The value of the
 	 * options argument is not valid."  wait()/wait3()/wait4() always
@@ -274,11 +282,9 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		for (i = 0; i < __child_cap; i++) {
 			if (!__children[i].pid || __children[i].done) continue;
 			any = 1;
-			st = NtWaitForSingleObject(__children[i].h, 0,
-			                           options & WNOHANG ? &zero :
-			                           options & WUNTRACED ? &poll : 0);
-			if (st == STATUS_TIMEOUT) continue;
-			if (!NT_SUCCESS(st)) return __set_errno_status(st);
+			wr = __plat_process_wait(__children[i].h, wait_mode(options));
+			if (wr == 0) continue;
+			if (wr < 0) return -1;
 			c = &__children[i];
 			goto reap;
 		}
@@ -289,8 +295,8 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 		for (i = 0; i < __child_cap; i++)
 			if (__children[i].pid && !__children[i].done) {
 				c = &__children[i];
-				st = NtWaitForSingleObject(c->h, 0, 0);
-				if (!NT_SUCCESS(st)) return __set_errno_status(st);
+				wr = __plat_process_wait(c->h, __PLAT_WAIT_BLOCK);
+				if (wr < 0) return -1;
 				goto reap;
 			}
 		errno = ECHILD;
@@ -325,22 +331,22 @@ static pid_t do_waitpid(pid_t pid, int *status, int options, struct rusage *ru, 
 	}
 	if (c->done) { if (status) *status = c->status; pid = c->pid; if (ru) memset(ru, 0, sizeof *ru); if (!nowait) __child_remove(c); return pid; }
 
-	st = NtWaitForSingleObject(c->h, 0,
-	                           options & WNOHANG ? &zero :
-	                           options & WUNTRACED ? &poll : 0);
-	if (st == STATUS_TIMEOUT) {
+	wr = __plat_process_wait(c->h, wait_mode(options));
+	if (wr == 0) {
 		if (options & WNOHANG) return 0;
 		goto retry;
 	}
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	if (wr < 0) return -1;
 
 reap:
-	st = NtQueryInformationProcess(c->h, ProcessBasicInformation, &pbi, sizeof pbi, 0);
 	/* Never invent a status: if the handle can't be queried, the entry is
 	 * left as it is (a retry may still reach it) and the caller gets the
 	 * real error rather than a fabricated "exited 0". */
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	c->status = __wait_encode_status((int)pbi.ExitStatus);
+	{
+		int code;
+		if (__plat_process_exit_code(c->h, &code) < 0) return -1;
+		c->status = __wait_encode_status(code);
+	}
 	c->done = 1;
 	if (status) *status = c->status;
 	pid = c->pid;

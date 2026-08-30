@@ -118,6 +118,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_fd.h"
+#include "plat_process.h"
 
 /* Set (inherit != 0) or clear the OBJ_INHERIT attribute on one open
  * descriptor's handle, in place: NtDuplicateObject with the attribute
@@ -128,11 +130,10 @@
  * one -- for the same reason mark_children_inheritable does not use it. */
 static void set_fd_inherit(int i, int inherit)
 {
-	HANDLE dup;
+	__plat_handle_t dup;
 	if (!__fds[i].h) return;
-	if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __fds[i].h, NtCurrentProcess(), &dup,
-	                                 0, inherit ? OBJ_INHERIT : 0, DUPLICATE_SAME_ACCESS))) {
-		NtClose(__fds[i].h);
+	if (__plat_dup(__fds[i].h, inherit, &dup) == 0) {
+		__plat_close(__fds[i].h);
 		__fds[i].h = dup;
 		__mq_fd_replaced(i, dup);
 	}
@@ -170,11 +171,10 @@ static void mark_children_inheritable(int inherit)
 {
 	int i;
 	for (i = 0; i < __child_cap; i++) {
-		HANDLE dup;
+		__plat_handle_t dup;
 		if (!__children[i].pid || !__children[i].h) continue;
-		if (NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), __children[i].h, NtCurrentProcess(), &dup,
-		                                 0, inherit ? OBJ_INHERIT : 0, DUPLICATE_SAME_ACCESS))) {
-			NtClose(__children[i].h);
+		if (__plat_dup(__children[i].h, inherit, &dup) == 0) {
+			__plat_close(__children[i].h);
 			__children[i].h = dup;
 		}
 	}
@@ -182,21 +182,17 @@ static void mark_children_inheritable(int inherit)
 
 static pid_t fork_impl(int run_handlers)
 {
-	RTL_USER_PROCESS_INFORMATION info;
-	NTSTATUS st;
+	struct __plat_fork_result r;
+	int rc;
 	int pid;
 
 	if (run_handlers) __pthread_atfork_prepare();
 	mark_fds_inheritable();
 	mark_children_inheritable(1);
 
-	memset(&info, 0, sizeof info);
-	info.Length = sizeof info;
+	rc = __plat_process_fork(&r);
 
-	st = RtlCloneUserProcess(RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED | RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES,
-	                          0, 0, 0, &info);
-
-	if (st == STATUS_PROCESS_CLONED) {
+	if (rc == __PLAT_FORK_CHILD) {
 		/* The child: this call is returning for the second time, in a
 		 * thread the kernel built by copying the one that called it, in
 		 * a process that is a copy of this one.  Almost nothing needs
@@ -266,27 +262,27 @@ static pid_t fork_impl(int run_handlers)
 
 	mark_children_inheritable(0);
 	unmark_cloexec_fds();
-	if (!NT_SUCCESS(st)) {
+	if (rc < 0) {
 		if (run_handlers) __pthread_atfork_parent();
-		return __set_errno_status(st);
+		return -1;   /* errno already set by __plat_process_fork */
 	}
 
 	/* The parent.  The child exists, suspended; track it like any other
 	 * child and let it run. */
-	pid = (int)(ULONG_PTR)info.ClientId.UniqueProcess;
-	if (__child_add(pid, info.Process) < 0) {
+	pid = r.pid;
+	if (__child_add(pid, r.process) < 0) {
 		/* The table grows on demand, so this only happens when it could
 		 * not be grown -- the heap is exhausted.  Degrade rather than
 		 * fail the fork: the child still runs, but it is unwaitable --
 		 * waitpid() only ever consults the table (src/process/wait.c) --
 		 * the same tradeoff __spawn makes. */
-		NtClose(info.Process);
+		__plat_close(r.process);
 	}
 	/* Still suspended: repair the WOW64-specific clone damage, if any,
 	 * before the child ever runs a single instruction of it. */
-	if (__is_wow64()) __wow64_fixup_clone(info.Process, info.Thread);
-	NtResumeThread(info.Thread, 0);
-	NtClose(info.Thread);
+	if (__is_wow64()) __wow64_fixup_clone(r.process, r.thread);
+	__plat_thread_resume(r.thread);
+	__plat_close(r.thread);
 	if (run_handlers) __pthread_atfork_parent();
 	return pid;
 }

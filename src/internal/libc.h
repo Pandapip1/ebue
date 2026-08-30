@@ -345,7 +345,7 @@ struct __child {
 #define __W_CONTINUED    0xffff
 extern struct __child *__children;   /* __child_cap entries, pid==0 is free */
 extern int __child_cap;
-int __child_add(int pid, HANDLE);
+int __child_add(int pid, __plat_handle_t);
 struct __child *__child_find(int pid);
 void __child_remove(struct __child *);
 /* Resume every child this process left stopped, and forget the stop.

@@ -35,6 +35,8 @@
  */
 #include <string.h>
 #include "libc.h"
+#include "plat_fd.h"
+#include "plat_process.h"
 
 static struct __child __child_seed[CHILD_MAX_];
 
@@ -58,7 +60,7 @@ static int child_grow(void)
 	return 0;
 }
 
-int __child_add(int pid, HANDLE h)
+int __child_add(int pid, __plat_handle_t h)
 {
 	int i;
 	/* SA_NOCLDWAIT: this child must never be something wait()/waitpid()
@@ -92,9 +94,9 @@ struct __child *__child_find(int pid)
 
 void __child_remove(struct __child *c)
 {
-	if (c->h) NtClose(c->h);
+	if (c->h) __plat_close(c->h);
 	c->pid = 0;
-	c->h = 0;
+	c->h = __PLAT_HANDLE_NULL;
 }
 
 static void clear_stops(int resume)
@@ -107,7 +109,7 @@ static void clear_stops(int resume)
 		 * only a child that is actually stopped; jobstat may instead hold
 		 * an already-running child's pending WCONTINUED report. */
 		if (resume && __children[i].stopsig && __children[i].h)
-			NtResumeProcess(__children[i].h);
+			__plat_process_resume(__children[i].h);
 		__children[i].stopsig = 0;
 		/* A forked child did not cause either a sibling's stop or its
 		 * continue, so neither inherited report belongs to it.  Clearing

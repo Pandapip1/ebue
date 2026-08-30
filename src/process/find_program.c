@@ -68,6 +68,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include "libc.h"
+#include "plat_process.h"
 
 /* Can NT start this file, or is it a script something else can run?
  *
@@ -91,42 +92,7 @@
  */
 int __is_program(const char *path)
 {
-	struct __ntpath np;
-	IO_STATUS_BLOCK io;
-	FILE_BASIC_INFORMATION bi;
-	LARGE_INTEGER off = 0;
-	HANDLE h;
-	NTSTATUS s;
-	unsigned char b[4];
-
-	if (__ntpath_at(AT_FDCWD, path, &np, OBJ_CASE_INSENSITIVE) < 0) return 0;
-	s = NtOpenFile(&h, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io,
-	               FILE_SHARE_VALID_FLAGS,
-	               FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE | FILE_OPEN_NO_RECALL);
-	__ntpath_free(&np);
-	if (!NT_SUCCESS(s)) return 0;
-
-	/* Offline or not-yet-hydrated: do not touch the data. */
-	if (NT_SUCCESS(NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation)) &&
-	    (bi.FileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN |
-	                          FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS))) {
-		NtClose(h);
-		return 0;
-	}
-
-	io.Information = 0;
-	s = NtReadFile(h, 0, 0, 0, &io, b, sizeof b, &off, 0);
-	NtClose(h);
-	if (!NT_SUCCESS(s) || io.Information < 2) return 0;
-	if ((b[0] == 'M' && b[1] == 'Z') || (b[0] == '#' && b[1] == '!')) return 1;
-#ifdef _NTLIBC_NATIVE_BUILD
-	/* The sanitizer shim starts copied test images as their native ELF
-	 * host binary.  Treat that native image signature exactly as the NT
-	 * build treats MZ; this branch cannot enter a PE build. */
-	if (io.Information >= 4 && b[0] == 0x7f && b[1] == 'E' &&
-	    b[2] == 'L' && b[3] == 'F') return 1;
-#endif
-	return 0;
+	return __plat_is_program(path);
 }
 
 static int has_dir(const char *name)
