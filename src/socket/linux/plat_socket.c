@@ -60,7 +60,37 @@
 #define SYS_recvfrom 207
 #define SYS_sendto   206
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all. NOT `extern long syscall(long, ...)`: that
+ * symbol is satisfied by the HOST's real glibc at link time (this
+ * build is -nostdinc, not -nostdlib -- only compiling avoids the host
+ * headers, the final link step still pulls in host libc), and glibc's
+ * syscall() performs its own error translation: on failure it returns
+ * exactly -1 and sets glibc's OWN errno (a different memory location
+ * than ntlibc's own errno global, src/internal/errno.c) to the real
+ * code -- it does NOT hand back the raw kernel -errno in [-4095,-1]
+ * this file's is_sys_error()/`errno = (int)-ret` translation requires.
+ * Confirmed both by inspecting the linked pilot binary (nm -D shows an
+ * undefined `syscall@GLIBC_*`, resolved by ld-linux at runtime) and
+ * independently by src/thread/linux/plat_thread.c's own port, which
+ * hit the identical bug and is this fix's model. aarch64's syscall
+ * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
+ * result (or -errno in [-4095,-1]) in x0. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 /* A raw Linux syscall returns the result on success, or -errno (as an
  * unsigned value in [-4095, -1]) on failure -- see plat_mem.c's own
@@ -122,8 +152,8 @@ static int to_linux_flags(int flags)
  * unlike the NT backend (see this file's banner). */
 ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
 {
-	long ret = syscall(SYS_recvfrom, (long)unbox(h), buf, len,
-	                   (long)to_linux_flags(flags), (long)0, (long)0);
+	long ret = raw_syscall(SYS_recvfrom, (long)unbox(h), (long)buf, (long)len,
+	                       (long)to_linux_flags(flags), 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }
@@ -138,8 +168,8 @@ ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
  * (see this file's banner). */
 ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int flags)
 {
-	long ret = syscall(SYS_sendto, (long)unbox(h), buf, len,
-	                   (long)to_linux_flags(flags), (long)0, (long)0);
+	long ret = raw_syscall(SYS_sendto, (long)unbox(h), (long)buf, (long)len,
+	                       (long)to_linux_flags(flags), 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }

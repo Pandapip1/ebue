@@ -111,7 +111,46 @@
 #define S_IXGRP_LX 0010
 #define S_IXOTH_LX 0001
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all. NOT `extern long syscall(long, ...)`: that
+ * symbol is satisfied by the HOST's real glibc at link time (this
+ * build is -nostdinc, not -nostdlib -- only compiling avoids the host
+ * headers, the final link step still pulls in host libc), and glibc's
+ * syscall() performs its own error translation: on failure it returns
+ * exactly -1 and sets glibc's OWN errno (a different memory location
+ * than ntlibc's own errno global, src/internal/errno.c) to the real
+ * code -- it does NOT hand back the raw kernel -errno in [-4095,-1]
+ * this file's is_sys_error()/`errno = (int)-ret` translation requires.
+ * Confirmed both by inspecting the linked pilot binary (nm -D shows an
+ * undefined `syscall@GLIBC_*`, resolved by ld-linux at runtime) and
+ * independently by src/thread/linux/plat_thread.c's own port, which
+ * hit the identical bug and is this fix's model. aarch64's syscall
+ * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
+ * result (or -errno in [-4095,-1]) in x0. Notably: __plat_process_fork()
+ * below relies on this returning zero exactly once from the *child*
+ * side of a real clone(2), the same way a bare `svc #0` does and glibc's
+ * own fork()/clone() wrappers must -- this is not merely an errno-
+ * correctness fix for this file, a glibc `syscall(SYS_clone, ...)` call
+ * would also be unsafe here for the reason src/thread/linux/plat_thread.c's
+ * own banner documents for its clone() trampoline (a C function's
+ * still-live stack frame across the child/parent split), though
+ * SIGCHLD-only clone (no CLONE_VM) happens to share the parent's stack
+ * so that particular hazard does not apply to this file's simpler use. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 static int is_sys_error(long ret)
 {
@@ -159,13 +198,13 @@ struct raw_stat_prefix {
  * for a failure of any kind. */
 int __plat_is_program(const char *path)
 {
-	long fd = syscall(SYS_openat, (long)AT_FDCWD_LX, path, 0L /* O_RDONLY */, 0L);
+	long fd = raw_syscall(SYS_openat, (long)AT_FDCWD_LX, (long)path, 0L /* O_RDONLY */, 0L, 0L, 0L);
 	struct raw_stat_prefix st;
 	long ret;
 
 	if (is_sys_error(fd)) return 0;
-	ret = syscall(SYS_fstat, fd, &st);
-	syscall(SYS_close, fd);
+	ret = raw_syscall(SYS_fstat, fd, (long)&st, 0L, 0L, 0L, 0L);
+	raw_syscall(SYS_close, fd, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) return 0;
 	if ((st.st_mode & S_IFMT_LX) != S_IFREG_LX) return 0;
 	if (!(st.st_mode & (S_IXUSR_LX | S_IXGRP_LX | S_IXOTH_LX))) return 0;
@@ -176,7 +215,7 @@ int __plat_is_program(const char *path)
 
 int __plat_process_fork(struct __plat_fork_result *out)
 {
-	long pid = syscall(SYS_clone, (long)SIGCHLD_LX, 0L, 0L, 0L, 0L);
+	long pid = raw_syscall(SYS_clone, (long)SIGCHLD_LX, 0L, 0L, 0L, 0L, 0L);
 
 	if (pid == 0) return __PLAT_FORK_CHILD;
 	if (is_sys_error(pid)) { errno = (int)-pid; return -1; }
@@ -278,7 +317,7 @@ int __plat_process_wait(__plat_handle_t h, int mode)
 	}
 
 	for (i = 0; i < (int)sizeof ru; i++) ((unsigned char *)&ru)[i] = 0;
-	ret = syscall(SYS_wait4, (long)pid, (long)&status, options, (long)&ru);
+	ret = raw_syscall(SYS_wait4, (long)pid, (long)&status, options, (long)&ru, 0L, 0L);
 
 	if (mode == __PLAT_WAIT_POLL && ret == 0) {
 		/* Not yet exited: sleep ~10ms, the same short poll interval
@@ -287,7 +326,7 @@ int __plat_process_wait(__plat_handle_t h, int mode)
 		 * WUNTRACED caller re-checking in a loop does not spin. */
 		struct { long tv_sec; long tv_nsec; } ts;
 		ts.tv_sec = 0; ts.tv_nsec = 10000000L;
-		syscall(SYS_nanosleep, (long)&ts, 0L);
+		raw_syscall(SYS_nanosleep, (long)&ts, 0L, 0L, 0L, 0L, 0L);
 		return 0;
 	}
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
@@ -348,7 +387,7 @@ int __plat_process_resume(__plat_handle_t h)
 	 * the actual kernel mechanism a Linux plat_signal.c's own
 	 * __plat_process_suspend() (SIGSTOP) would pair with, not a
 	 * substitute for one. */
-	long ret = syscall(SYS_kill, (long)unbox_pid(h), (long)SIGCONT_LX);
+	long ret = raw_syscall(SYS_kill, (long)unbox_pid(h), (long)SIGCONT_LX, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
@@ -379,17 +418,17 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		 * would leave pipefd[1] reading uninitialized stack past what
 		 * the kernel actually wrote. */
 		int fds[2];
-		pfd_ret = syscall(SYS_pipe2, (long)fds, (long)O_CLOEXEC_LX);
+		pfd_ret = raw_syscall(SYS_pipe2, (long)fds, (long)O_CLOEXEC_LX, 0L, 0L, 0L, 0L);
 		if (is_sys_error(pfd_ret)) { errno = (int)-pfd_ret; return -1; }
 		pipefd[0] = fds[0];
 		pipefd[1] = fds[1];
 	}
 
-	pid = syscall(SYS_clone, (long)SIGCHLD_LX, 0L, 0L, 0L, 0L);
+	pid = raw_syscall(SYS_clone, (long)SIGCHLD_LX, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(pid)) {
 		int e = (int)-pid;
-		syscall(SYS_close, (long)pipefd[0]);
-		syscall(SYS_close, (long)pipefd[1]);
+		raw_syscall(SYS_close, (long)pipefd[0], 0L, 0L, 0L, 0L, 0L);
+		raw_syscall(SYS_close, (long)pipefd[1], 0L, 0L, 0L, 0L, 0L);
 		errno = e;
 		return -1;
 	}
@@ -404,38 +443,38 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		 * needs one and Linux does not: a closed Linux fd number is
 		 * simply absent, and nothing refills it from outside). */
 		int i;
-		syscall(SYS_close, (long)pipefd[0]);
+		raw_syscall(SYS_close, (long)pipefd[0], 0L, 0L, 0L, 0L, 0L);
 		for (i = 0; i < 3; i++) {
 			if (std[i]) {
 				int srcfd = unbox_fd(std[i]);
-				if (srcfd != i) syscall(SYS_dup3, (long)srcfd, (long)i, 0L);
+				if (srcfd != i) raw_syscall(SYS_dup3, (long)srcfd, (long)i, 0L, 0L, 0L, 0L);
 			} else {
-				syscall(SYS_close, (long)i);
+				raw_syscall(SYS_close, (long)i, 0L, 0L, 0L, 0L, 0L);
 			}
 		}
 		{
-			long ret = syscall(SYS_execve, path, argv, envp);
+			long ret = raw_syscall(SYS_execve, (long)path, (long)argv, (long)envp, 0L, 0L, 0L);
 			int e = is_sys_error(ret) ? (int)-ret : EINVAL;
-			syscall(SYS_write, (long)pipefd[1], (long)&e, (long)sizeof e);
-			syscall(SYS_close, (long)pipefd[1]);
+			raw_syscall(SYS_write, (long)pipefd[1], (long)&e, (long)sizeof e, 0L, 0L, 0L);
+			raw_syscall(SYS_close, (long)pipefd[1], 0L, 0L, 0L, 0L, 0L);
 		}
-		syscall(SYS_exit_group, 127L);
+		raw_syscall(SYS_exit_group, 127L, 0L, 0L, 0L, 0L, 0L);
 		/* unreachable */
 		return -1;
 	}
 
 	/* Parent. */
-	syscall(SYS_close, (long)pipefd[1]);
+	raw_syscall(SYS_close, (long)pipefd[1], 0L, 0L, 0L, 0L, 0L);
 	{
 		int e = 0;
-		long n = syscall(SYS_read, (long)pipefd[0], (long)&e, (long)sizeof e);
-		syscall(SYS_close, (long)pipefd[0]);
+		long n = raw_syscall(SYS_read, (long)pipefd[0], (long)&e, (long)sizeof e, 0L, 0L, 0L);
+		raw_syscall(SYS_close, (long)pipefd[0], 0L, 0L, 0L, 0L, 0L);
 		if (n == (long)sizeof e) {
 			/* execve() failed in the child; it has already called
 			 * _exit(127) (via exit_group) or is about to, so reap it
 			 * here rather than leaving a zombie the front door's own
 			 * child table was never told about. */
-			syscall(SYS_wait4, pid, 0L, 0L, 0L);
+			raw_syscall(SYS_wait4, pid, 0L, 0L, 0L, 0L, 0L);
 			errno = e;
 			return -1;
 		}

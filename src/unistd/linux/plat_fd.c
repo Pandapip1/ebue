@@ -42,7 +42,37 @@
 #define F_SETFD_LX   2
 #define FD_CLOEXEC_LX 1
 
-extern long syscall(long number, ...);
+/* A minimal 6-argument raw syscall: `svc #0` directly, no host libc in
+ * the call path at all. NOT `extern long syscall(long, ...)`: that
+ * symbol is satisfied by the HOST's real glibc at link time (this
+ * build is -nostdinc, not -nostdlib -- only compiling avoids the host
+ * headers, the final link step still pulls in host libc), and glibc's
+ * syscall() performs its own error translation: on failure it returns
+ * exactly -1 and sets glibc's OWN errno (a different memory location
+ * than ntlibc's own errno global, src/internal/errno.c) to the real
+ * code -- it does NOT hand back the raw kernel -errno in [-4095,-1]
+ * this file's is_sys_error()/`errno = (int)-ret` translation requires.
+ * Confirmed both by inspecting the linked pilot binary (nm -D shows an
+ * undefined `syscall@GLIBC_*`, resolved by ld-linux at runtime) and
+ * independently by src/thread/linux/plat_thread.c's own port, which
+ * hit the identical bug and is this fix's model. aarch64's syscall
+ * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
+ * result (or -errno in [-4095,-1]) in x0. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	register long x8 __asm__("x8") = nr;
+	register long x0 __asm__("x0") = a1;
+	register long x1 __asm__("x1") = a2;
+	register long x2 __asm__("x2") = a3;
+	register long x3 __asm__("x3") = a4;
+	register long x4 __asm__("x4") = a5;
+	register long x5 __asm__("x5") = a6;
+	__asm__ volatile("svc #0"
+		: "+r"(x0)
+		: "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+		: "memory", "cc");
+	return x0;
+}
 
 static int is_sys_error(long ret)
 {
@@ -56,21 +86,21 @@ static int unbox(__plat_handle_t h)
 
 int __plat_close(__plat_handle_t h)
 {
-	long ret = syscall(SYS_close, unbox(h));
+	long ret = raw_syscall(SYS_close, (long)unbox(h), 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
 
 ssize_t __plat_read(__plat_handle_t h, void *buf, size_t count)
 {
-	long ret = syscall(SYS_read, unbox(h), buf, count);
+	long ret = raw_syscall(SYS_read, (long)unbox(h), (long)buf, (long)count, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }
 
 ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off)
 {
-	long ret = syscall(SYS_pread64, unbox(h), buf, count, (long)off);
+	long ret = raw_syscall(SYS_pread64, (long)unbox(h), (long)buf, (long)count, (long)off, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }
@@ -85,14 +115,14 @@ ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int appen
 	 * -- the kernel already does the right thing for a plain write()
 	 * regardless of which case this is. */
 	(void)append;
-	ret = syscall(SYS_write, unbox(h), buf, count);
+	ret = raw_syscall(SYS_write, (long)unbox(h), (long)buf, (long)count, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }
 
 ssize_t __plat_pwrite(__plat_handle_t h, const void *buf, size_t count, off_t off)
 {
-	long ret = syscall(SYS_pwrite64, unbox(h), buf, count, (long)off);
+	long ret = raw_syscall(SYS_pwrite64, (long)unbox(h), (long)buf, (long)count, (long)off, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return (ssize_t)ret;
 }
@@ -105,7 +135,7 @@ long long __plat_seek_query(__plat_handle_t h, int at_eof)
 	if (!at_eof) {
 		/* SEEK_CUR with a zero offset is a pure query: it reports the
 		 * position without moving it, exactly this contract's promise. */
-		ret = syscall(SYS_lseek, fd, 0L, 1 /* SEEK_CUR */);
+		ret = raw_syscall(SYS_lseek, (long)fd, 0L, 1L /* SEEK_CUR */, 0L, 0L, 0L);
 		if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 		return ret;
 	}
@@ -117,32 +147,32 @@ long long __plat_seek_query(__plat_handle_t h, int at_eof)
 	 * cost of this file needing to hardcode aarch64's raw kernel
 	 * `struct stat` layout; not worth it for a pilot backend, and
 	 * documented here rather than silently assumed correct. */
-	cur = syscall(SYS_lseek, fd, 0L, 1 /* SEEK_CUR */);
+	cur = raw_syscall(SYS_lseek, (long)fd, 0L, 1L /* SEEK_CUR */, 0L, 0L, 0L);
 	if (is_sys_error(cur)) { errno = (int)-cur; return -1; }
-	ret = syscall(SYS_lseek, fd, 0L, 2 /* SEEK_END */);
+	ret = raw_syscall(SYS_lseek, (long)fd, 0L, 2L /* SEEK_END */, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
-	syscall(SYS_lseek, fd, cur, 0 /* SEEK_SET */);
+	raw_syscall(SYS_lseek, (long)fd, cur, 0L /* SEEK_SET */, 0L, 0L, 0L);
 	return ret;
 }
 
 int __plat_seek_set(__plat_handle_t h, long long target)
 {
-	long ret = syscall(SYS_lseek, unbox(h), (long)target, 0 /* SEEK_SET */);
+	long ret = raw_syscall(SYS_lseek, (long)unbox(h), (long)target, 0L /* SEEK_SET */, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
 
 int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
 {
-	long newfd = syscall(SYS_dup, unbox(h));
+	long newfd = raw_syscall(SYS_dup, (long)unbox(h), 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(newfd)) { errno = (int)-newfd; return -1; }
 	if (!inheritable) {
 		/* dup(2) never sets O_CLOEXEC on the new descriptor (matching
 		 * `inheritable` true); ask for it explicitly otherwise. */
-		long fc = syscall(SYS_fcntl, newfd, F_SETFD_LX, FD_CLOEXEC_LX);
+		long fc = raw_syscall(SYS_fcntl, newfd, (long)F_SETFD_LX, (long)FD_CLOEXEC_LX, 0L, 0L, 0L);
 		if (is_sys_error(fc)) {
 			int e = (int)-fc;
-			syscall(SYS_close, newfd);
+			raw_syscall(SYS_close, newfd, 0L, 0L, 0L, 0L, 0L);
 			errno = e;
 			return -1;
 		}
