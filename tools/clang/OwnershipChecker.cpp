@@ -628,6 +628,80 @@ class ValidPointerChecker
     return QualType();
   }
 
+  // For a[i] into a fixed-size, compile-time-known array `a`, prove the
+  // access in-bounds by comparing the index directly against the array's
+  // own element count, instead of through the generic byte-extent
+  // machinery below. That machinery computes "bytes remaining" as
+  // extent_of_a_in_bytes MINUS i*sizeof(element) -- an entirely correct
+  // but *compound*, derived symbolic expression -- and then asks the
+  // constraint solver whether that compound value can be proven >=
+  // sizeof(element). clang's default range-based solver reasons well
+  // about a single symbol's own range (exactly what a guard like
+  // src/exit/exit.c's atexit() -- `if (nhandlers >= ATEXIT_CAP_) return
+  // -1; handlers[nhandlers++] = f;` -- establishes directly: nhandlers
+  // < ATEXIT_CAP_) but does not generally re-derive that same fact once
+  // it has been folded into a multiplication/subtraction over a fresh
+  // symbol -- so a genuinely bounds-checked write into a real, fixed-
+  // size array was reported as if the check had never happened. Asking
+  // the exact question the guard itself answered (is the raw index
+  // symbol below the array's own element count?) is precisely what the
+  // solver handles well, so this only helps the shape that is provable
+  // by construction, and returns false (falling through to the existing
+  // machinery, unchanged) for anything it cannot establish outright --
+  // including every heap-allocated "array" (a struct field's calloc'd
+  // buffer, whose real capacity was fixed by an argument to a *different*
+  // call this per-function analysis cannot see) reached only through a
+  // pointer, which has no compile-time array type to compare against at
+  // all.
+  static bool arrayIndexProvenInBounds(const ElementRegion *Element,
+                                       ProgramStateRef State,
+                                       CheckerContext &C) {
+    const auto *Super =
+        dyn_cast<TypedValueRegion>(Element->getSuperRegion());
+    if (!Super)
+      return false;
+    const ConstantArrayType *ArrayType =
+        C.getASTContext().getAsConstantArrayType(Super->getValueType());
+    if (!ArrayType)
+      return false;
+    SVal Index = Element->getIndex();
+    std::optional<DefinedOrUnknownSVal> DefinedIndex =
+        Index.getAs<DefinedOrUnknownSVal>();
+    if (!DefinedIndex)
+      return false;
+    QualType IndexType = Index.getType(C.getASTContext());
+    if (IndexType.isNull() || !IndexType->isIntegralOrEnumerationType())
+      return false;
+    SValBuilder &Builder = C.getSValBuilder();
+    SVal Count = Builder.makeIntVal(ArrayType->getSize().getZExtValue(),
+                                    IndexType);
+    SVal Below =
+        Builder.evalBinOp(State, BO_LT, *DefinedIndex, Count,
+                          Builder.getConditionType());
+    std::optional<DefinedOrUnknownSVal> BelowCondition =
+        Below.getAs<DefinedOrUnknownSVal>();
+    if (!BelowCondition)
+      return false;
+    // If assuming "index is at or past the count" is itself feasible,
+    // the bound is not proven -- fall through to the existing machinery
+    // rather than claim a fact that is not actually established.
+    if (State->assume(*BelowCondition, false))
+      return false;
+    if (IndexType->isSignedIntegerOrEnumerationType()) {
+      SVal NonNegative =
+          Builder.evalBinOp(State, BO_GE, *DefinedIndex,
+                            Builder.makeIntVal(0, IndexType),
+                            Builder.getConditionType());
+      std::optional<DefinedOrUnknownSVal> NonNegativeCondition =
+          NonNegative.getAs<DefinedOrUnknownSVal>();
+      if (!NonNegativeCondition)
+        return false;
+      if (State->assume(*NonNegativeCondition, false))
+        return false;
+    }
+    return true;
+  }
+
   static bool alignmentProven(const MemRegion *Region, QualType Type,
                               ASTContext &Ctx) {
     if (Type.isNull() || Type->isIncompleteType())
@@ -765,6 +839,14 @@ public:
       return;
     }
     CharUnits Width = C.getASTContext().getTypeSizeInChars(Type);
+    if (const auto *Element = dyn_cast<ElementRegion>(Region)) {
+      if (arrayIndexProvenInBounds(Element, State, C)) {
+        if (!alignmentProven(Region, Type, C.getASTContext()))
+          report("dereference alignment is not proven valid", Statement,
+                 State, C);
+        return;
+      }
+    }
     SVal Remaining = getDynamicExtentWithOffset(State, Location);
     // getDynamicExtentWithOffset never actually returns Unknown/Undef in
     // practice for a region reachable from a pointer value: when nothing
