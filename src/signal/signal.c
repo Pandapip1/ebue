@@ -55,7 +55,11 @@
 #include "kernel32.h"
 #endif
 
-static void (*handlers[_NSIG])(int);
+/* Dispositions, guarded by __sig_lock()/__sig_unlock() -- see this file's
+ * own note further down and sigdelivery.c's banner ("Locking."), which
+ * says outright that signal.c acquires that lock around every external
+ * entry point touching this state. */
+static void (*handlers[_NSIG])(int) NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static __thread sigset_t blocked;
 
 /* Standard signals coalesce while pending. Real-time signals retain one
@@ -67,7 +71,9 @@ struct pending_state {
 	siginfo_t info[SIGQUEUE_MAX];
 	int count;
 };
-static struct pending_state process_pending;
+/* The process-wide queue, guarded the same way handlers[] above is; the
+ * per-thread one right below it is TLS and needs no lock at all. */
+static struct pending_state process_pending NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 static __thread struct pending_state thread_pending;
 /* raise() is thread-directed.  Other entries into __raise_internal_info()
  * are process-directed and retain the shared pending queue used by the
@@ -78,9 +84,10 @@ static __thread int wait_active;
 
 /* Per-signal sa_mask/sa_flags, as installed by sigaction().  signal()
  * and sigset() leave these at their zero-initialized defaults (empty
- * mask, no flags), matching their simpler contract. */
-static sigset_t act_mask[_NSIG];
-static int act_flags[_NSIG];
+ * mask, no flags), matching their simpler contract.  Same lock as
+ * handlers[] above -- sigaction() installs all three together. */
+static sigset_t act_mask[_NSIG] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static int act_flags[_NSIG] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
 static int sig_valid(int sig) { return sig > 0 && sig < _NSIG; }
 

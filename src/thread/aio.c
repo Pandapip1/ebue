@@ -66,13 +66,16 @@ struct thread_notice {
 	union sigval value;
 };
 
-static struct aio_request requests[AIO_MAX];
-static struct aio_group groups[AIO_MAX];
-static unsigned long long next_sequence;
-static HANDLE worker_wake;
-static int worker_started;
-static int worker_synchronous;
-static struct aio_waiter *waiters;
+/* "The signal subsystem's recursive event mutex protects the queue" (see
+ * this file's own banner above) -- every one of these is __sig_lock()/
+ * __sig_unlock()'s to guard, not a second home-grown lock's. */
+static struct aio_request requests[AIO_MAX] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static struct aio_group groups[AIO_MAX] NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static unsigned long long next_sequence NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static HANDLE worker_wake NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static int worker_started NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static int worker_synchronous NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
+static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
 static void wake_waiters_locked(const struct aio_request *request)
 {

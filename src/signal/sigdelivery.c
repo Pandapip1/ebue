@@ -209,7 +209,14 @@ void __sig_notify_delivery(void)
 	}
 }
 
-void __sig_lock(void)
+/* NTLIBC_NO_THREAD_SAFETY_ANALYSIS: this and the three functions below it
+ * are __ntlibc_sig_lock_token's actual implementation -- the raw NT
+ * primitives (lock_event/lock_owner/lock_depth) a lockset checker cannot
+ * see through are exactly what "holding the capability" means here, so
+ * asking it to re-derive that from these bodies is circular.  Every
+ * caller still sees the ACQUIRE()/RELEASE() contract from libc.h; only
+ * self-checking these four definitions' own insides is turned off. */
+void __sig_lock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 {
 	pid_t me;
 	if (!lock_event) return;
@@ -236,7 +243,7 @@ void __sig_lock(void)
 	lock_depth = 1;
 }
 
-void __sig_unlock(void)
+void __sig_unlock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 {
 	LONG prev;
 	if (!lock_event) return;
@@ -253,7 +260,7 @@ void __sig_unlock(void)
  * threads make progress while the handler runs. Preserve recursion depth so
  * the internal caller which eventually unwinds still owns exactly the
  * acquisitions it made before the callback. */
-int __sig_unlock_for_handler(void)
+int __sig_unlock_for_handler(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 {
 	LONG previous;
 	int depth;
@@ -265,7 +272,7 @@ int __sig_unlock_for_handler(void)
 	return depth;
 }
 
-void __sig_relock_after_handler(int depth)
+void __sig_relock_after_handler(int depth) NTLIBC_NO_THREAD_SAFETY_ANALYSIS
 {
 	if (!lock_event || depth <= 0) return;
 	__sig_lock();

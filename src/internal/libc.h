@@ -12,6 +12,28 @@
 #include <errno.h>
 #include <wordexp.h>
 #include "nt.h"
+#include "thread_annotations.h"
+
+/* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
+ * Two internal locks get a NTLIBC_CAPABILITY token here: __sig_lock()/
+ * __sig_unlock() (a real function pair, acquire/release-annotated
+ * directly below) and the ntdll PEB lock, reached everywhere in this
+ * tree only through the RtlAcquirePebLock()/RtlReleasePebLock() macros
+ * below -- so the *real* RtlAcquirePebLock/RtlReleasePebLock functions
+ * (declared by nt.h, above) are the ones annotated: every macro call
+ * site's self-referential expansion (see the macros' own comment)
+ * resolves to these exact declarations, so no call site anywhere in the
+ * tree needs to change for this to take effect.
+ *
+ * Both are gated the same way every NTLIBC_* macro is: invisible outside
+ * clang, and invisible outside tools/lint.sh's `lockset` stage even under
+ * clang.  See thread_annotations.h. */
+#ifdef NTLIBC_LOCKSET_ANALYSIS
+extern __ntlibc_lock_capability __ntlibc_sig_lock_token;
+extern __ntlibc_lock_capability __ntlibc_peb_lock_token;
+void NTAPI RtlAcquirePebLock(void) NTLIBC_ACQUIRE(__ntlibc_peb_lock_token);
+void NTAPI RtlReleasePebLock(void) NTLIBC_RELEASE(__ntlibc_peb_lock_token);
+#endif
 
 /* ---- process-wide state ------------------------------------------------ */
 extern PPEB __peb;                           /* this process's PEB */
@@ -781,8 +803,8 @@ int __sig_pending_member(int sig);
 void __timer_reinit_after_fork(void);
 void __mman_reset_after_fork(void);
 void __aio_reset_after_fork(void);
-void __sig_lock(void);
-void __sig_unlock(void);
+void __sig_lock(void) NTLIBC_ACQUIRE(__ntlibc_sig_lock_token);
+void __sig_unlock(void) NTLIBC_RELEASE(__ntlibc_sig_lock_token);
 int __sig_unlock_for_handler(void);
 void __sig_relock_after_handler(int);
 

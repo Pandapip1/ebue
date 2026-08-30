@@ -71,6 +71,15 @@
 #             back into internal static storage is not read, dereferenced,
 #             or passed on after a later call to the same (or, in general, a
 #             sibling) family member has invalidated it.
+#   lockset   currently opt-in while its initial proof backlog is triaged.
+#             Clang's own Thread Safety Analysis (-Wthread-safety), driven by
+#             capability/guarded_by/acquire_capability/release_capability
+#             attributes behind src/internal/thread_annotations.h's
+#             clang-and-lockset-stage-only macros, proves that ntlibc's own
+#             guarded internal globals are only ever touched while the
+#             internal lock that is supposed to protect them is held --
+#             the "which lock guards this data" question `locks` above does
+#             not ask at all.
 #   variadic  currently opt-in; proves printf/scanf format literalness, argument
 #             counts, promoted types, pointer targets, and length modifiers.
 #   signals   currently opt-in; checks directly registered signal handlers for
@@ -1329,6 +1338,81 @@ stage_locks() {
 	return $any
 }
 
+# Clang's own Thread Safety Analysis, driven entirely by attributes behind
+# src/internal/thread_annotations.h -- unlike the stages above and below
+# this one, there is no custom checker plugin to build: -Wthread-safety and
+# its diagnostics are the ground truth, so this is a plain -fsyntax-only
+# flags-only pass, structurally the closest thing in this file to
+# stage_warn()/stage_variadic() rather than to stage_locks()/
+# stage_signals(). NTLIBC_LOCKSET_ANALYSIS is the macro
+# thread_annotations.h requires (on top of __clang__) before any
+# NTLIBC_* annotation macro emits a real attribute at all; every other
+# clang-based stage in this file compiles the same tree without it and so
+# never sees these attributes.
+stage_lockset() {
+	hdr "lockset (guarded-by) proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	lockset_flags="-DNTLIBC_LOCKSET_ANALYSIS -Wthread-safety -Wthread-safety-analysis -Wthread-safety-precise -Wno-unused-function"
+	fixture_log=$builddir/lockset-fixtures.log
+	: > "$fixture_log"
+	# Two fixtures, two expectations: the correctly guarded one must stay
+	# silent, and the clear violation must not.  A self-test that only
+	# checked "no crash" would pass just as happily if -Wthread-safety
+	# never fired at all -- see tools/lint-lockset-fixtures/*.c.
+	# shellcheck disable=SC2086
+	safe_out=$(clang-18 -fsyntax-only $lockset_flags tools/lint-lockset-fixtures/safe.c 2>&1)
+	printf '%s\n' "$safe_out" >> "$fixture_log"
+	if printf '%s' "$safe_out" | grep -q 'warning:\|error:'; then
+		note "lockset: FAILED -- tools/lint-lockset-fixtures/safe.c is a correctly guarded"
+		note "  case and must compile silent; it did not:"
+		printf '%s\n' "$safe_out" | sed 's/^/    /'
+		any=1
+	fi
+	# shellcheck disable=SC2086
+	unsafe_out=$(clang-18 -fsyntax-only $lockset_flags tools/lint-lockset-fixtures/unsafe.c 2>&1)
+	printf '%s\n' "$unsafe_out" >> "$fixture_log"
+	if ! printf '%s' "$unsafe_out" | grep -q 'thread-safety'; then
+		note "lockset: FAILED -- tools/lint-lockset-fixtures/unsafe.c is a clear violation"
+		note "  (an unguarded write to a guarded_by global) and produced no"
+		note "  -Wthread-safety diagnostic at all; the fixture pair cannot tell"
+		note "  a working checker from a silently disabled one."
+		any=1
+	fi
+	[ "$any" -eq 0 ] && note "lockset: fixtures ok -> $fixture_log"
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.lockset.log
+		pardir=$(mktemp -d "$builddir/lockset.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; target=$3; shift 3
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target -fsyntax-only "$@" "$f" \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$target" $flags $lockset_flags
+		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$nsrc" -eq 0 ] || [ "$nlog" -ne "$nsrc" ]; then
+			note "lockset [$arch]: FAILED -- $nlog of $nsrc source file(s) were compiled."
+			any=1
+			continue
+		fi
+		analyzed=$((analyzed + 1))
+		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
+			| tee "$out.uniq" | wc -l)
+		note "lockset [$arch]: $nsrc file(s), $n unique diagnostic(s) -> $out.uniq"
+		show_findings "$out.uniq"
+		[ "$n" -gt 0 ] && any=1
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stage_abizeroinit() {
 	hdr "Nt*/Zw* ABI zero-initialization proof obligations"
 	any=0
@@ -1623,6 +1707,7 @@ for s in $stages; do
 		fallible)   stage_fallible ;;
 		provenance) stage_provenance ;;
 		locks)      stage_locks ;;
+		lockset)    stage_lockset ;;
 		abizeroinit) stage_abizeroinit ;;
 		reentrancy) stage_reentrancy ;;
 		variadic)   stage_variadic ;;

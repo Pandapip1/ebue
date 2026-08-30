@@ -12,7 +12,10 @@ struct key_slot {
 	void (*destructor)(void *);
 };
 
-static struct key_slot keys[PTHREAD_KEYS_MAX];
+/* Guarded by the ntdll PEB lock -- every function below takes it via the
+ * RtlAcquirePebLock()/RtlReleasePebLock() macros (src/internal/libc.h)
+ * before touching a slot. */
+static struct key_slot keys[PTHREAD_KEYS_MAX] NTLIBC_GUARDED_BY(__ntlibc_peb_lock_token);
 
 static unsigned key_index(pthread_key_t key)
 {
@@ -138,11 +141,14 @@ struct once_waiter {
 	struct once_waiter *next;
 };
 
-static struct once_waiter *once_waiters;
+/* The PEB lock protects both the once state and this waiter list -- see
+ * the comment just below, which said so before this token existed to say
+ * it in an attribute too. */
+static struct once_waiter *once_waiters NTLIBC_GUARDED_BY(__ntlibc_peb_lock_token);
 
-/* The PEB lock protects both the once state and this waiter list. Giving each
- * caller its own event makes completion a broadcast: no waiter can consume a
- * shared auto-reset wake intended for another once control. */
+/* Giving each caller its own event makes completion a broadcast: no
+ * waiter can consume a shared auto-reset wake intended for another once
+ * control. */
 static void wake_once_waiters_locked(pthread_once_t *control)
 {
 	struct once_waiter *waiter;
