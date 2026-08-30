@@ -65,6 +65,12 @@
 #             footgun of setting fields one at a time and never proving
 #             the whole object (and, cheaply from the same state, an OUT
 #             parameter nothing ever reads back).
+#   reentrancy
+#             currently opt-in; a path-sensitive Clang checker proves that
+#             the pointer strtok/gmtime/localtime/asctime/ctime/getdate hand
+#             back into internal static storage is not read, dereferenced,
+#             or passed on after a later call to the same (or, in general, a
+#             sibling) family member has invalidated it.
 #   variadic  currently opt-in; proves printf/scanf format literalness, argument
 #             counts, promoted types, pointer targets, and length modifiers.
 #   signals   currently opt-in; checks directly registered signal handlers for
@@ -1527,6 +1533,61 @@ stage_errno() {
 	return $any
 }
 
+stage_reentrancy() {
+	hdr "reentrant-static-storage proof obligations"
+	any=0
+	require_tool clang-18 || return $missing
+	require_tool clang++-18 || return $missing
+	require_tool llvm-config-18 || return $missing
+	libdir=$(llvm-config-18 --libdir)
+	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' -print 2>/dev/null | sort | head -n 1)
+	[ -n "$clang_cpp" ] || { report_missing "Clang 18 development libraries are required for reentrancy proofs."; return $missing; }
+	plugin=$builddir/ntlibc-reentrancy-checker.so
+	# shellcheck disable=SC2046
+	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
+		tools/clang/ReentrancyChecker.cpp -o "$plugin" "$clang_cpp" \
+		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
+	fixture_log=$builddir/reentrancy-fixtures.log
+	: > "$fixture_log"
+	for fixture in tools/lint-reentrancy-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.Reentrancy \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$fixture_log" 2>&1 || any=1
+	done
+	tools/lint-reentrancy.py --fixtures "$fixture_log" || any=1
+	analyzed=0
+	for arch in $LINT_ARCHS; do
+		gen_alltypes "$arch" || { any=1; continue; }
+		flags=$(cppflags_for "$arch"); target=$(pick_target "$arch")
+		nsrc=$(sources_for "$arch" | grep -c . || true)
+		out=$builddir/$arch.reentrancy.log
+		report=$builddir/$arch.reentrancy.report
+		pardir=$(mktemp -d "$builddir/reentrancy.XXXXXX") || return 1
+		# shellcheck disable=SC2086,SC2016
+		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
+			f=$1; clang=$2; plugin=$3; target=$4; shift 4
+			id=$(printf %s "$f" | tr / _)
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.Reentrancy \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "'"$pardir"'/$id.log" 2>&1
+		' _ {} clang-18 "$plugin" "$target" $flags
+		runrc=$?; nlog=$(find "$pardir" -name '*.log' | grep -c . || true)
+		: > "$out"; ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"; rm -rf "$pardir"
+		if [ "$runrc" -ne 0 ] || [ "$nlog" -ne "$nsrc" ]; then any=1; continue; fi
+		analyzed=$((analyzed + 1))
+		if tools/lint-reentrancy.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
+			note "reentrancy [$arch]: proved -> $report"
+		else
+			note "reentrancy [$arch]: findings -> $report"; show_findings "$report"; any=1
+		fi
+	done
+	[ "$analyzed" -gt 0 ] || return 1
+	return $any
+}
+
 stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
@@ -1563,6 +1624,7 @@ for s in $stages; do
 		provenance) stage_provenance ;;
 		locks)      stage_locks ;;
 		abizeroinit) stage_abizeroinit ;;
+		reentrancy) stage_reentrancy ;;
 		variadic)   stage_variadic ;;
 		signals)    stage_signals ;;
 		errno)      stage_errno ;;
