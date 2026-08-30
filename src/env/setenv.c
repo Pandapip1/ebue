@@ -14,6 +14,10 @@
 static char **putenv_strings;
 static size_t nputenv;
 
+/* s is required: both call sites below pass *e straight from
+ * __env_find's return, which is only ever a slot this file's own
+ * name_eq-driven search already found truthy (`*e`, i.e. non-null). */
+static int is_putenv(char *s) __attribute__((nonnull(1)));
 static int is_putenv(char *s)
 {
 	size_t i;

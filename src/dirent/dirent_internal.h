@@ -109,6 +109,16 @@ static inline unsigned __vfs_mandatory_seen(int kind, const char *name)
  * (src/internal/plat_dirent.h). Fills *out and returns 1, or returns 0
  * at end-of-directory (dp->done is then true) or on error (errno set by
  * the backend). */
-int __dirstream_next(DIR *dp, struct __dirent_raw *out);
+/* dp is the same required, non-optional DIR * handle as every public
+ * function in this family (see include/dirent.h's own comment) -- every
+ * caller in this tree (readdir.c's fill()) already holds one proven
+ * nonnull by its own caller's contract, and this function dereferences
+ * it unconditionally itself. out is likewise never optional: its one
+ * caller always passes the address of a real local (`struct __dirent_raw
+ * r; ... __dirstream_next(dp, &r)`), never NULL, and NULL would be
+ * meaningless here anyway (there is no "discard the record" mode -- the
+ * return value alone already says whether one was found). */
+int __dirstream_next(DIR *dp, struct __dirent_raw *out)
+    __attribute__((nonnull(1, 2)));
 
 #endif

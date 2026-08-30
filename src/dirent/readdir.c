@@ -50,6 +50,14 @@ int __dirstream_next(DIR *dp, struct __dirent_raw *out)
 	}
 }
 
+/* All three are required by every one of this static helper's callers
+ * (this file's own fill(), single call site): dp and out are the same
+ * always-valid handles their own callers hold (see this family's
+ * comments in include/dirent.h and dirent_internal.h), and r is always
+ * `&r`, the address of fill()'s own on-stack __dirstream_next() output,
+ * never NULL. */
+static void make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
+    __attribute__((nonnull(1, 2, 3)));
 static void make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
 {
 	memset(out, 0, sizeof *out);
@@ -61,7 +69,14 @@ static void make_real(DIR *dp, const struct __dirent_raw *r, struct dirent *out)
 	out->d_off = dp->tell;
 }
 
-/* 0 = filled *out; 1 = end of directory; -1 = error, errno set. */
+/* 0 = filled *out; 1 = end of directory; -1 = error, errno set.
+ *
+ * dp is this family's usual required handle; out is required too --
+ * both of fill()'s callers below pass a real object's address
+ * (readdir_r's own `entry` parameter, or readdir's `&dp->ent`), never
+ * NULL, and nothing in this function ever checks out for NULL before
+ * writing through it. */
+static int fill(DIR *dp, struct dirent *out) __attribute__((nonnull(1, 2)));
 static int fill(DIR *dp, struct dirent *out)
 {
 	struct __fd *f = __fd_get(dp->fd);

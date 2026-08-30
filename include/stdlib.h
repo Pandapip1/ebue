@@ -51,7 +51,14 @@ _Noreturn void _Exit (int);
 int at_quick_exit (void (*) (void));
 _Noreturn void quick_exit (int);
 
-char *getenv (const char *);
+/* getenv's name is required (POSIX: behaviour undefined if name is a
+ * null pointer), and src/env/getenv.c never checks it -- unlike
+ * setenv()/unsetenv() below, which deliberately DO check their own name
+ * argument and return EINVAL on NULL (a defensive convention beyond what
+ * POSIX requires), so those two are left unmarked: a nonnull attribute
+ * there would tell the compiler their own `if (!name ...)` guard is dead
+ * code, which is false. */
+char *getenv (const char *) __attribute__((nonnull(1)));
 
 int system (const char *);
 
@@ -116,7 +123,12 @@ long int random (void);
 void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);
 char *setstate (char *);
-int putenv (char *);
+/* Like getenv, putenv's argument is required and src/env/setenv.c's
+ * putenv() never null-checks it -- POSIX again leaves NULL undefined
+ * rather than specifying an error return, and unlike setenv/unsetenv
+ * this function does not opt into the defensive EINVAL convention
+ * either. */
+int putenv (char *) __attribute__((nonnull(1)));
 int posix_openpt (int);  /* undefined-ok: Unix98 pseudo-terminal allocation
 	has no NT counterpart (NT's console/pipe model is a different shape
 	entirely); grantpt/unlockpt/ptsname[_r] below are the rest of the

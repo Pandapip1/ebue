@@ -87,9 +87,14 @@ long double sqrtl(long double);
 double      fmod(double, double);
 float       fmodf(float, float);
 long double fmodl(long double, long double);
-double      frexp(double, int *);
-float       frexpf(float, int *);
-long double frexpl(long double, int *);
+/* e is a required output parameter, not an optional one: ISO C's frexp
+ * family has no "discard the exponent" calling convention (unlike, say,
+ * fesetenv's FE_DFL_ENV sentinel), and src/math/frexp.c's three bodies
+ * write through it on every path with no NULL check, matching musl and
+ * glibc, neither of which check it either. */
+double      frexp(double, int *) __attribute__((nonnull(2)));
+float       frexpf(float, int *) __attribute__((nonnull(2)));
+long double frexpl(long double, int *) __attribute__((nonnull(2)));
 double      ldexp(double, int);
 float       ldexpf(float, int);
 long double ldexpl(long double, int);

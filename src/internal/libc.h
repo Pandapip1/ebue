@@ -48,9 +48,15 @@ extern char *__progname_full;                /* image path, UTF-8 */
 /* environ helpers shared by getenv.c and setenv.c.  __env_find returns the
  * slot in environ holding "name=..." for the first l bytes of name, or
  * NULL.  __putenv installs s (which must contain a '='; l is the length of
- * the name part) and takes ownership of `owned` if non-NULL. */
-char **__env_find(const char *name, size_t l);
-int __putenv(char *s, size_t l, char *owned);
+ * the name part) and takes ownership of `owned` if non-NULL.
+ *
+ * name/s are required at every one of this tree's own call sites (each
+ * already validated -- getenv's/putenv's own now-nonnull parameter,
+ * setenv's malloc() result already null-checked, unsetenv's own
+ * already-checked name); owned is deliberately left unmarked, since NULL
+ * is its documented, legitimate "no ownership to transfer" value. */
+char **__env_find(const char *name, size_t l) __attribute__((nonnull(1)));
+int __putenv(char *s, size_t l, char *owned) __attribute__((nonnull(1)));
 
 PTEB __teb(void);                            /* this thread's TEB */
 extern void *__entry_arg0;                   /* raw arg 1 to _start; measured, never used */
@@ -86,7 +92,10 @@ char *__utf16_to_utf8(const WCHAR *, size_t n);
 /* Convert into a caller-supplied buffer; returns bytes written excluding
  * the terminator, or -1 with errno (ERANGE if the buffer is too small). */
 int __utf16_to_utf8_buf(const WCHAR *, size_t n, char *, size_t);
-size_t wcslen_(const WCHAR *);
+/* Required, the same as libc's own strlen -- no caller in this tree
+ * passes it a possibly-null buffer, and its body dereferences s
+ * unconditionally with no NUL/NULL special case. */
+size_t wcslen_(const WCHAR *) __attribute__((nonnull(1)));
 
 /* ---- UNICODE_STRING ---------------------------------------------------- */
 /* The longest string a UNICODE_STRING can describe: Length counts bytes

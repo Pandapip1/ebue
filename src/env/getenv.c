@@ -6,7 +6,14 @@
 #include "libc.h"
 
 /* Windows environment names are case-insensitive, and a program asking
- * for "PATH" must find "Path", which is how Windows spells it. */
+ * for "PATH" must find "Path", which is how Windows spells it.
+ *
+ * e/name are both required: __env_find's only caller of this helper
+ * already checked *e truthy (the loop's own `*e` condition) before
+ * passing it as e, and name is __env_find's own now-nonnull parameter
+ * (see src/internal/libc.h). */
+static int name_eq(const char *e, const char *name, size_t l)
+    __attribute__((nonnull(1, 2)));
 static int name_eq(const char *e, const char *name, size_t l)
 {
 	size_t i;

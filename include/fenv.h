@@ -94,18 +94,32 @@ typedef __fenv_t fenv_t;
 
 #define FE_DFL_ENV ((const fenv_t *)-1)
 
+/* fegetexceptflag/fesetexceptflag's flagp is a required output/input
+ * parameter (ISO C 7.6.4.3/7.6.4.4) with no "skip it" convention, and
+ * src/math/fenv.c writes/reads through it on every path, unconditionally
+ * -- unlike fesetenv/fegetenv below, there is no FE_DFL_ENV-style
+ * sentinel value here that a nonnull attribute could conflict with. */
 int feclearexcept(int);
-int fegetexceptflag(fexcept_t *, int);
+int fegetexceptflag(fexcept_t *, int) __attribute__((nonnull(1)));
 int feraiseexcept(int);
-int fesetexceptflag(const fexcept_t *, int);
+int fesetexceptflag(const fexcept_t *, int) __attribute__((nonnull(1)));
 int fetestexcept(int);
 
 int fegetround(void);
 int fesetround(int);
 
-int fegetenv(fenv_t *);
+/* fegetenv/fesetenv's envp is likewise required, and src/math/fenv.c
+ * dereferences it directly with no NULL check on either -- fesetenv only
+ * special-cases FE_DFL_ENV (`(const fenv_t *)-1`, defined above), which
+ * already satisfies `nonnull` (the attribute only excludes the literal
+ * null pointer, not -1), so marking it does not conflict with that
+ * sentinel. feholdexcept/feupdateenv are left unmarked: both simply
+ * forward envp into fegetenv/fesetenv without dereferencing it
+ * themselves, so there is nothing in THEIR own bodies for a nonnull
+ * attribute to describe. */
+int fegetenv(fenv_t *) __attribute__((nonnull(1)));
 int feholdexcept(fenv_t *);
-int fesetenv(const fenv_t *);
+int fesetenv(const fenv_t *) __attribute__((nonnull(1)));
 int feupdateenv(const fenv_t *);
 
 #ifdef __cplusplus
