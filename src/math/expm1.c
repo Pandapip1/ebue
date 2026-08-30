@@ -28,6 +28,23 @@ static const long double ln2 = 0.69314718055994530941723212145818L;
 /* 1 - sqrt(2)/2, fyl2xp1's documented operand limit. */
 static const long double yl2xp1_max = 0.29289321881345247559915563789515L;
 
+#if !defined(__i386__) && !defined(__x86_64__)
+/* No f2xm1/fyl2xp1 (or any x87) on this arch -- see src/math/
+ * aarch64_math.h's own __aa64_expm1()/__aa64_log1p() for the real
+ * algorithms (both computed directly in terms of the catastrophic-
+ * cancellation-prone quantity, same as f2xm1/fyl2xp1 are, just via a
+ * software series instead of hardware) and x87.h's own banner for the
+ * double-precision-quality scope boundary every helper in this file
+ * inherits from narrowing long double to double at the call boundary. */
+static long double raw_f2xm1(long double t) { return (long double)__aa64_expm1((double)t); }
+static long double raw_yl2xp1(long double x, long double y)
+{
+	(void)y; /* always ln2 at this file's one call site -- see
+	          * __aa64_log1p's own comment for why the general y*log2(x+1)
+	          * form isn't needed here. */
+	return (long double)__aa64_log1p((double)x);
+}
+#else
 /* 2^t - 1 for |t| <= 1 (we only ever call this with |t| <~ 0.7213). */
 static long double raw_f2xm1(long double t)
 {
@@ -42,6 +59,7 @@ static long double raw_yl2xp1(long double x, long double y)
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfyl2xp1\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");
 	return y;
 }
+#endif
 
 long double expm1l(long double x)
 {

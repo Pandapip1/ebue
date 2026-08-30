@@ -15,8 +15,45 @@
  * six FE_* exception bits), tag word/instruction pointer/data pointer
  * beyond that, round-tripped opaquely by fegetenv/fesetenv without
  * this file caring what they mean.
+ *
+ * AArch64 (the #else branch below) has none of this: one floating-
+ * point unit, its entire control/status state in two plain 32-bit
+ * registers (FPCR/FPSR, read/written by mrs/msr, no memory image at
+ * all), and a FE_*-bit layout that does not match FPSR's own bit
+ * numbering (see FE_TO_FPSR/FPSR_TO_FE below) -- ntlibc's own FE_*
+ * values stay the fixed, portable ones every arch's caller sees
+ * (include/fenv.h's own banner explains why), translated internally
+ * here, the same way this file always has been the one place that
+ * knows what the public FE_* numbers really mean in hardware terms.
  */
 #include <fenv.h>
+
+/* The floating-point environment as it was at program startup, which is
+ * what <fenv.h> defines FE_DFL_ENV to mean.  Captured by __fenv_init(),
+ * called from crt1 before main -- the only moment at which "at program
+ * startup" is still true.
+ *
+ * dfl_env_ok guards the case of a program that did not come through
+ * crt1 at all (a DLL, a bare -nostdlib entry point of its own).  Such a
+ * caller gets a capture taken at first use instead, which is strictly
+ * better than a hardcoded constant and honestly worse than a startup
+ * capture: it is only "the environment when FE_DFL_ENV was first
+ * needed".  Nothing better is available without a startup hook.
+ *
+ * Declared up here, ahead of both arch branches below, since fesetenv()
+ * and feholdexcept() in each one reference them -- a file-scope static
+ * needs to be in scope at its use, unlike a function prototype the
+ * compiler will forward-reference across a whole translation unit. */
+static fenv_t dfl_env;
+static int dfl_env_ok;
+
+/* Declared here rather than by including src/internal/libc.h, where the
+ * matching declaration lives beside __fd_init() and __signal_init():
+ * libc.h includes nt.h, which is NT-specific, and this file is also
+ * compiled natively by tools/asan-build.sh.  Keep the two in step. */
+void __fenv_init(void);
+
+#if defined(__i386__) || defined(__x86_64__)
 
 int feclearexcept(int excepts)
 {
@@ -97,20 +134,6 @@ int fetestexcept(int excepts)
 #endif
 }
 
-int fegetexceptflag(fexcept_t *flagp, int excepts)
-{
-	*flagp = (fexcept_t)fetestexcept(excepts);
-	return 0;
-}
-
-int fesetexceptflag(const fexcept_t *flagp, int excepts)
-{
-	excepts &= FE_ALL_EXCEPT;
-	(void)feclearexcept(~*flagp & excepts);
-	(void)feraiseexcept(*flagp & excepts);
-	return 0;
-}
-
 int fegetround(void)
 {
 	unsigned short cw = 0;
@@ -136,36 +159,6 @@ int fesetround(int round)
 	}
 #endif
 	return 0;
-}
-
-/* The floating-point environment as it was at program startup, which is
- * what <fenv.h> defines FE_DFL_ENV to mean.  Captured by __fenv_init(),
- * called from crt1 before main -- the only moment at which "at program
- * startup" is still true.
- *
- * dfl_env_ok guards the case of a program that did not come through
- * crt1 at all (a DLL, a bare -nostdlib entry point of its own).  Such a
- * caller gets a capture taken at first use instead, which is strictly
- * better than a hardcoded constant and honestly worse than a startup
- * capture: it is only "the environment when FE_DFL_ENV was first
- * needed".  Nothing better is available without a startup hook. */
-static fenv_t dfl_env;
-static int dfl_env_ok;
-
-/* Declared here rather than by including src/internal/libc.h, where the
- * matching declaration lives beside __fd_init() and __signal_init():
- * libc.h includes nt.h, which is NT-specific, and this file is also
- * compiled natively by tools/asan-build.sh.  Keep the two in step. */
-void __fenv_init(void);
-
-void __fenv_init(void)
-{
-	/* Captured exactly, status flags included: the clause says "the one
-	 * installed at program startup", not "a cleared version of it".  On
-	 * this target the startup status flags are clear anyway, so the
-	 * distinction is theoretical -- but copying is what the clause says
-	 * and needs no justification, while clearing would. */
-	dfl_env_ok = (fegetenv(&dfl_env) == 0);
 }
 
 /* fegetenv.html DESCRIPTION: "The fegetenv() function shall attempt to
@@ -308,6 +301,213 @@ int feholdexcept(fenv_t *envp)
 		if ((mxcsr & 0x1f80u) != 0x1f80u) return -1;
 	}
 #endif
+	return 0;
+}
+
+#else /* aarch64 and any other non-x86 arch: FPCR/FPSR, no memory image */
+
+/* FE_* (include/fenv.h: 0x01/0x04/0x08/0x10/0x20, the x87 status-word
+ * bit positions) do not match FPSR's own numbering (bit 0 invalid, 1
+ * divide-by-zero, 2 overflow, 3 underflow, 4 inexact -- no gap) -- see
+ * this file's own banner for why the public numbers stay fixed anyway.
+ * Translated explicitly both ways rather than via a shift-and-mask
+ * trick: the bit orders happen to agree (I,Z,O,U,X in that sequence on
+ * both), only the spacing differs, but writing that out loud once here
+ * is worth more than a clever formula every future reader has to
+ * re-derive. */
+static unsigned int fe_to_fpsr_bits(int excepts)
+{
+	unsigned int r = 0;
+	if (excepts & FE_INVALID)   r |= 1u << 0;
+	if (excepts & FE_DIVBYZERO) r |= 1u << 1;
+	if (excepts & FE_OVERFLOW)  r |= 1u << 2;
+	if (excepts & FE_UNDERFLOW) r |= 1u << 3;
+	if (excepts & FE_INEXACT)   r |= 1u << 4;
+	return r;
+}
+
+static int fpsr_bits_to_fe(unsigned int fpsr)
+{
+	int r = 0;
+	if (fpsr & (1u << 0)) r |= FE_INVALID;
+	if (fpsr & (1u << 1)) r |= FE_DIVBYZERO;
+	if (fpsr & (1u << 2)) r |= FE_OVERFLOW;
+	if (fpsr & (1u << 3)) r |= FE_UNDERFLOW;
+	if (fpsr & (1u << 4)) r |= FE_INEXACT;
+	return r;
+}
+
+/* FPCR's RMode field (bits 22-23): 00 nearest, 01 +inf (up), 10 -inf
+ * (down), 11 toward zero -- NOT the same 2-bit order the x87 control
+ * word/MXCSR use (see include/fenv.h: FE_DOWNWARD=0x400 < FE_UPWARD=
+ * 0x800 there; AArch64 numbers +inf before -inf). Translated
+ * explicitly for the same reason as the exception bits above. */
+static unsigned int fe_round_to_rmode(int round)
+{
+	switch (round) {
+	case FE_UPWARD:     return 1;
+	case FE_DOWNWARD:   return 2;
+	case FE_TOWARDZERO: return 3;
+	default:            return 0; /* FE_TONEAREST */
+	}
+}
+
+static int rmode_to_fe_round(unsigned int rmode)
+{
+	switch (rmode & 3u) {
+	case 1:  return FE_UPWARD;
+	case 2:  return FE_DOWNWARD;
+	case 3:  return FE_TOWARDZERO;
+	default: return FE_TONEAREST;
+	}
+}
+
+static unsigned int read_fpcr(void)
+{
+	unsigned long v;
+	__asm__ __volatile__("mrs %0, fpcr" : "=r"(v));
+	return (unsigned int)v;
+}
+
+static void write_fpcr(unsigned int v)
+{
+	unsigned long vv = v;
+	__asm__ __volatile__("msr fpcr, %0" : : "r"(vv));
+}
+
+static unsigned int read_fpsr(void)
+{
+	unsigned long v;
+	__asm__ __volatile__("mrs %0, fpsr" : "=r"(v));
+	return (unsigned int)v;
+}
+
+static void write_fpsr(unsigned int v)
+{
+	unsigned long vv = v;
+	__asm__ __volatile__("msr fpsr, %0" : : "r"(vv));
+}
+
+int feclearexcept(int excepts)
+{
+	unsigned int fpsr = read_fpsr();
+	excepts &= FE_ALL_EXCEPT;
+	fpsr &= ~fe_to_fpsr_bits(excepts);
+	write_fpsr(fpsr);
+	return 0;
+}
+
+/* See the x86 branch's own comment above (same clause, same
+ * reasoning): pokes the sticky FPSR bits directly rather than
+ * triggering a real trap, which C99 7.6.2.3 permits, and which stays
+ * observationally identical to a real raise as long as every
+ * exception's FPCR trap-enable bit stays clear -- true throughout
+ * this library, and true of a fresh AArch64 FPCR by default. */
+int feraiseexcept(int excepts)
+{
+	unsigned int fpsr = read_fpsr();
+	excepts &= FE_ALL_EXCEPT;
+	fpsr |= fe_to_fpsr_bits(excepts);
+	write_fpsr(fpsr);
+	return 0;
+}
+
+int fetestexcept(int excepts)
+{
+	excepts &= FE_ALL_EXCEPT;
+	return fpsr_bits_to_fe(read_fpsr()) & excepts;
+}
+
+int fegetround(void)
+{
+	return rmode_to_fe_round(read_fpcr() >> 22);
+}
+
+int fesetround(int round)
+{
+	unsigned int fpcr;
+	if (round != FE_TONEAREST && round != FE_DOWNWARD &&
+	    round != FE_UPWARD && round != FE_TOWARDZERO)
+		return -1;
+	fpcr = read_fpcr();
+	fpcr = (fpcr & ~(3u << 22)) | (fe_round_to_rmode(round) << 22);
+	write_fpcr(fpcr);
+	return 0;
+}
+
+/* No FNSTENV-style side effect to undo here (see the x86 branch's own
+ * long comment on why its fegetenv() needs a reload after the store):
+ * mrs is a plain register read, it does not touch FPCR/FPSR as a side
+ * effect of being read. */
+int fegetenv(fenv_t *envp)
+{
+	envp->__fpcr = read_fpcr();
+	envp->__fpsr = read_fpsr();
+	return 0;
+}
+
+int fesetenv(const fenv_t *envp)
+{
+	/* See the x86 branch's own long comment on FE_DFL_ENV -- same
+	 * clause, same reasoning, same __fenv_init()-captures-the-real-
+	 * startup-state fix, just no per-target hardcoded-word history to
+	 * recount here: this port never shipped a wrong hardcoded aarch64
+	 * default in the first place. */
+	if (envp == FE_DFL_ENV) {
+		if (!dfl_env_ok) __fenv_init();
+		write_fpcr(dfl_env.__fpcr);
+		write_fpsr(dfl_env.__fpsr);
+		return 0;
+	}
+	write_fpcr(envp->__fpcr);
+	write_fpsr(envp->__fpsr);
+	return 0;
+}
+
+/* See the x86 branch's own long comment on feholdexcept's actual
+ * contract (save + clear + INSTALL NON-STOP MODE, the part that is
+ * easy to leave out). Non-stop mode here means clearing FPCR's five
+ * trap-enable bits (IOE/DZE/OFE/UFE/IXE at bits 8-12) -- masked is
+ * always available on this arch too, so the check below is, like the
+ * x86 branch's, a check of what was actually established rather than
+ * an unconditional success. */
+int feholdexcept(fenv_t *envp)
+{
+	unsigned int fpcr;
+
+	(void)fegetenv(envp);
+	(void)feclearexcept(FE_ALL_EXCEPT);
+
+	fpcr = read_fpcr();
+	fpcr &= ~(0x1fu << 8);
+	write_fpcr(fpcr);
+	if (read_fpcr() & (0x1fu << 8)) return -1;
+	return 0;
+}
+
+#endif
+
+void __fenv_init(void)
+{
+	/* Captured exactly, status flags included: the clause says "the one
+	 * installed at program startup", not "a cleared version of it".  On
+	 * this target the startup status flags are clear anyway, so the
+	 * distinction is theoretical -- but copying is what the clause says
+	 * and needs no justification, while clearing would. */
+	dfl_env_ok = (fegetenv(&dfl_env) == 0);
+}
+
+int fegetexceptflag(fexcept_t *flagp, int excepts)
+{
+	*flagp = (fexcept_t)fetestexcept(excepts);
+	return 0;
+}
+
+int fesetexceptflag(const fexcept_t *flagp, int excepts)
+{
+	excepts &= FE_ALL_EXCEPT;
+	(void)feclearexcept(~*flagp & excepts);
+	(void)feraiseexcept(*flagp & excepts);
 	return 0;
 }
 

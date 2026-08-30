@@ -8,21 +8,43 @@
 
 _Noreturn void __pthread_cancel_trampoline(void);
 
+/* x86 branch: unchanged, still the literal `lock; cmpxchgl`/`lock;
+ * xaddl` this project's pinned tcc (the only compiler the NT target
+ * ever builds with) needs -- tcc has no __atomic_* builtins at all
+ * (`'__atomic_compare_exchange_n' implicit declaration`, confirmed
+ * against the actual pinned x86_64-win32-tcc), so those builtins are
+ * only safe to reach on a target tcc never compiles for. On any other
+ * arch (aarch64 today, always a real gcc/clang -- tcc is Windows/PE-
+ * only) these unrecognized x86 instruction mnemonics would not even
+ * assemble, so the builtin compiles to the correct native primitive
+ * there instead (`cmpxchg`/`xadd` on x86, an LL/SC loop or `cas`/
+ * `ldadd` on aarch64), same full-barrier semantics
+ * (__ATOMIC_SEQ_CST). */
 static int compare_exchange(volatile int *address, int old_value,
 	int new_value)
 {
+#if defined(__i386__) || defined(__x86_64__)
 	int previous;
 	__asm__ __volatile__("lock; cmpxchgl %2, %1"
 		: "=a"(previous), "+m"(*address)
 		: "r"(new_value), "0"(old_value) : "memory");
 	return previous;
+#else
+	__atomic_compare_exchange_n(address, &old_value, new_value, 0,
+	                            __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+	return old_value;
+#endif
 }
 
 static int exchange_add(volatile int *address, int value)
 {
+#if defined(__i386__) || defined(__x86_64__)
 	__asm__ __volatile__("lock; xaddl %0, %1"
 		: "+r"(value), "+m"(*address) : : "memory");
 	return value;
+#else
+	return __atomic_fetch_add(address, value, __ATOMIC_SEQ_CST);
+#endif
 }
 
 static int atomic_load(volatile int *address)

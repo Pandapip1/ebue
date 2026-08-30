@@ -38,14 +38,24 @@ struct barrierattr_data {
 	int pshared;
 };
 
+/* x86 branch stays the literal asm tcc needs; see
+ * src/thread/pthread_cancel.c's own copy of this function for why
+ * (duplicated in three files, not shared, but the reasoning is
+ * identical). */
 static int compare_exchange(volatile int *address, int old_value,
 	int new_value)
 {
+#if defined(__i386__) || defined(__x86_64__)
 	int previous;
 	__asm__ __volatile__("lock; cmpxchgl %2, %1"
 		: "=a"(previous), "+m"(*address)
 		: "r"(new_value), "0"(old_value) : "memory");
 	return previous;
+#else
+	__atomic_compare_exchange_n(address, &old_value, new_value, 0,
+	                            __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+	return old_value;
+#endif
 }
 
 static void acquire_guard(volatile int *guard)

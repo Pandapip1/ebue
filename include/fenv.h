@@ -44,9 +44,25 @@
  * underflow, 5 inexact -- bit 1, denormal, is not part of the C99 set
  * and is left unnamed) follow the same well-proven encoding musl uses
  * for these two arches (src/fenv/{i386,x86_64}/fenv.s upstream).
+ *
+ * The FE_* NUMBERS themselves stay the same fixed, portable values on
+ * every arch this library builds for, including ones (aarch64) whose
+ * real hardware status register numbers them completely differently
+ * (FPSR: bit 0 invalid, 1 divide-by-zero, 2 overflow, 3 underflow, 4
+ * inexact -- no gap at bit 1) -- src/math/fenv.c's own aarch64 half
+ * translates between the two internally, the same way it is the one
+ * place that knows x87 bit 1 (denormal) has no FE_* name at all. Only
+ * fenv_t's actual STORAGE layout is genuinely arch-specific (this
+ * header's one real ABI difference across arches), which is why only
+ * that piece moved out to bits/fenv.h -- the same split arch/$(ARCH)/
+ * bits/setjmp.h already has from include/setjmp.h, for the same
+ * reason (jmp_buf's real layout is a hard arch fact; the FE_-macro
+ * and setjmp() call surface is not).
  */
 #ifndef _FENV_H
 #define _FENV_H
+
+#include <bits/fenv.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,17 +87,10 @@ extern "C" {
 
 typedef unsigned short fexcept_t;
 
-/* The x87 FSTENV/FLDENV 28-byte image (control word, status word, tag
- * word, last instruction pointer/opcode, last data pointer -- only
- * the control and status words are meaningful to this header; the
- * rest round-trips opaquely), plus MXCSR on x86_64 where it is a
- * second, independent piece of live state. */
-typedef struct {
-	unsigned char __x87env[28];
-#ifndef __i386__
-	unsigned int __mxcsr;
-#endif
-} fenv_t;
+/* __fenv_t comes from bits/fenv.h -- see that header for the real,
+ * arch-specific layout (x87 FSTENV/FLDENV image (+ MXCSR on x86_64)
+ * here; FPCR+FPSR on aarch64). */
+typedef __fenv_t fenv_t;
 
 #define FE_DFL_ENV ((const fenv_t *)-1)
 

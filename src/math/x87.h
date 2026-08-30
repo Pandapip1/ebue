@@ -74,6 +74,32 @@
 #define NTLIBC_FSTPL "fstpl"
 #endif
 
+#if !defined(__i386__) && !defined(__x86_64__)
+/* No x87 (or any hardware transcendental unit) on this arch at all --
+ * see src/math/aarch64_math.h's own banner for the real algorithms and
+ * the double-precision-quality scope boundary every one of these
+ * wrappers inherits by narrowing long double to double at the call
+ * boundary. NTLIBC_LDBL_EXTENDED is still meaningful here (this arch's
+ * real long double is IEEE binary128, __SIZEOF_LONG_DOUBLE__==16, so
+ * it reads as 1) -- it is fpclassify.c/frexp.c/copysign.c/fabs.c's
+ * concern, about long double's STORAGE layout, entirely orthogonal to
+ * what precision these particular helpers COMPUTE at. */
+#include "aarch64_math.h"
+
+static long double __x87_sqrt(long double x) { return (long double)__aa64_sqrt((double)x); }
+static long double __x87_rndint(long double x, int rc) { return (long double)__aa64_rndint((double)x, rc); }
+static long double __x87_fmod(long double x, long double y) { return (long double)__aa64_fmod((double)x, (double)y); }
+static long double __x87_remainder(long double x, long double y, int *quo) { return (long double)__aa64_remquo((double)x, (double)y, quo); }
+static long double __x87_sin(long double x) { return (long double)__aa64_sin((double)x); }
+static long double __x87_cos(long double x) { return (long double)__aa64_cos((double)x); }
+static long double __x87_tan(long double x) { return (long double)__aa64_tan((double)x); }
+static long double __x87_atan2(long double y, long double x) { return (long double)__aa64_atan2((double)y, (double)x); }
+static long double __x87_yl2x(long double x, long double y) { return (long double)__aa64_yl2x((double)x, (double)y); }
+static long double __x87_exp2(long double t) { return (long double)__aa64_exp2((double)t); }
+static long double __x87_scalbn(long double x, int n) { return (long double)__aa64_scalbn((double)x, n); }
+
+#else
+
 static long double __x87_sqrt(long double x)
 {
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\tfsqrt\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&x) : "memory");
@@ -204,5 +230,7 @@ static long double __x87_scalbn(long double x, int n)
 		: : "r"(&x), "r"(&d) : "memory");
 	return x;
 }
+
+#endif /* !__i386__ && !__x86_64__ */
 
 #endif
