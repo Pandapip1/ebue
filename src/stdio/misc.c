@@ -45,18 +45,6 @@ int remove(const char *path)
 	return -1;
 }
 
-/* POSIX classifies a symbolic link as a non-directory file whatever it
- * points at; NT gives a directory symlink FILE_ATTRIBUTE_DIRECTORY on
- * the link itself.  Same predicate as src/stat/stat.c's
- * mode_from_attrs(), so renameat() and lstat() agree on what a link is. */
-static int isdir_attrs(ULONG attrs, ULONG tag)
-{
-	if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) &&
-	    (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT || tag == IO_REPARSE_TAG_LX_SYMLINK))
-		return 0;
-	return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
-}
-
 static int final_dot_component(const char *path)
 {
 	const char *end = path + strlen(path), *start;
@@ -67,91 +55,21 @@ static int final_dot_component(const char *path)
 	       (end - start == 2 && start[0] == '.' && start[1] == '.');
 }
 
-static int ntpath_is_ancestor(const struct __ntpath *old,
-		const struct __ntpath *new)
-{
-	size_t i, on = old->nt.Length / sizeof(WCHAR);
-	size_t nn = new->nt.Length / sizeof(WCHAR);
-	if (old->oa.RootDirectory != new->oa.RootDirectory || on >= nn)
-		return 0;
-	for (i = 0; i < on; i++) {
-		WCHAR a = old->nt.Buffer[i], b = new->nt.Buffer[i];
-		if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
-		if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
-		if (a == '/') a = '\\';
-		if (b == '/') b = '\\';
-		if (a != b) return 0;
-	}
-	return new->nt.Buffer[on] == '\\' || new->nt.Buffer[on] == '/';
-}
-
 int renameat(int olddirfd, const char *old, int newdirfd, const char *new)
 {
-	struct __ntpath op, np;
-	__plat_handle_t h;
-	unsigned long old_attrs, old_tag, new_attrs, new_tag;
-	int old_isdir, new_exists, new_isdir;
-
+	/* rename.html ERRORS: [EINVAL] "The old argument names an ancestor
+	 * directory of the new argument, or old or new names a terminal ..,
+	 * or .." -- this one piece stays portable (pure string logic on the
+	 * final path component, no backend involvement), unlike everything
+	 * else renameat() used to do here inline (NT path resolution, the
+	 * directory-vs-non-directory type check, the actual rename), which
+	 * moved into __plat_rename() -- see plat_stdio.h's own updated
+	 * banner. */
 	if (final_dot_component(old) || final_dot_component(new)) {
 		errno = EINVAL;
 		return -1;
 	}
-	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	if (__ntpath_at(newdirfd, new, &np, OBJ_CASE_INSENSITIVE) < 0) { __ntpath_free(&op); return -1; }
-	if (ntpath_is_ancestor(&op, &np)) {
-		__ntpath_free(&op);
-		__ntpath_free(&np);
-		errno = EINVAL;
-		return -1;
-	}
-
-	if (__plat_rename_open_old(&op, &h, &old_attrs, &old_tag) < 0) {
-		__ntpath_free(&op);
-		__ntpath_free(&np);
-		return -1;
-	}
-	__ntpath_free(&op);
-
-	/* rename.html ERRORS: "the old argument names a directory and the new
-	 * argument names a non-directory file" is [ENOTDIR], and RETURN VALUE
-	 * requires that on failure "neither the file named by old nor the file
-	 * named by new shall be changed or created".  NT honours neither:
-	 * FileRenameInformation[Ex] with FILE_RENAME_REPLACE_IF_EXISTS will
-	 * rename a directory straight over an existing regular file, unlink
-	 * the victim and report success.  The check therefore has to happen
-	 * HERE, before the set -- once NT has run, the file is already gone
-	 * and there is nothing left to diagnose.
-	 *
-	 * old's type comes from the handle already open on it (which is why
-	 * __plat_rename_open_old() asks for FILE_READ_ATTRIBUTES); new's from
-	 * a handle-less attribute query, since new is never opened.  Both are
-	 * reused by the STATUS_ACCESS_DENIED disambiguation inside
-	 * __plat_rename_set(), which used to make these same two queries for
-	 * itself after the fact. */
-	old_isdir = isdir_attrs(old_attrs, old_tag);
-	__plat_query_new_attrs(&np, &new_exists, &new_attrs, &new_tag);
-	new_isdir = new_exists && isdir_attrs(new_attrs, new_tag);
-
-	if (old_isdir && new_exists && !new_isdir) {
-		__plat_close(h);
-		__ntpath_free(&np);
-		errno = ENOTDIR;
-		return -1;
-	}
-
-	/* renameat.html DESCRIPTION: "If new is a relative path, the file is
-	 * located relative to the directory associated with the file
-	 * descriptor newfd instead of the current working directory."
-	 * __ntpath_at() expresses exactly that by putting newfd's handle in
-	 * np.oa.RootDirectory and leaving np.nt unqualified; __plat_rename_
-	 * set() carries that RootDirectory into the rename request itself,
-	 * exactly the way FILE_RENAME_INFORMATION's own RootDirectory field
-	 * expects. */
-	{
-		int r = __plat_rename_set(h, &np, old_isdir, new_isdir);
-		__ntpath_free(&np);
-		return r;
-	}
+	return __plat_rename(olddirfd, old, newdirfd, new);
 }
 
 int rename(const char *old, const char *new) { return renameat(AT_FDCWD, old, AT_FDCWD, new); }
