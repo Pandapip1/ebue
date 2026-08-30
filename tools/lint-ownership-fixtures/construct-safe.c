@@ -32,6 +32,8 @@ int pthread_spin_unlock(spinlock_t *);
 int sem_init(semaphore_t *, int, unsigned);
 int sem_destroy(semaphore_t *);
 int sem_post(semaphore_t *);
+int sem_trywait(semaphore_t *);
+int pthread_cond_timedwait(cond_t *, mutex_t *, const void *);
 
 static mutex_t static_mutex;
 
@@ -85,4 +87,37 @@ void other_constructs(void)
 		sem_post(&semaphore);
 		sem_destroy(&semaphore);
 	}
+}
+
+/* A synchronization object received as a plain pointer PARAMETER -- the
+ * exact shape of pthread_cond_wait's own `mutex` argument, or
+ * sem_timedwait's `sem`: POSIX requires the CALLER to have already
+ * initialized it, in code this per-function analysis cannot see at all
+ * (a different translation unit, in the general case). ConstructMap can
+ * only ever gain an entry by watching THIS analysis's own
+ * pthread_*_init()/sem_init() call directly -- a borrowed parameter's
+ * value exists before any code in this function has run, so no code on
+ * the callee side could ever satisfy that check. This mirrors exactly
+ * why Ownership's release_borrow and Resource's descriptor_borrow (see
+ * their own comments in safe.c/resource-safe.c) trust a borrowed
+ * pointer's liveness instead of demanding proof this per-function
+ * analysis structurally cannot produce. A genuinely never-initialized
+ * ON-STACK object (construct-unsafe.c's use_uninitialized/
+ * destroy_uninitialized, both `&local`) is real, checkable evidence and
+ * remains flagged -- only a borrowed pointer's opaque, cross-boundary
+ * provenance is trusted here. */
+void lock_via_borrowed_pointer(mutex_t *mutex)
+{
+	pthread_mutex_lock(mutex);
+	pthread_mutex_unlock(mutex);
+}
+
+void wait_on_borrowed_mutex(cond_t *cond, mutex_t *mutex)
+{
+	pthread_cond_timedwait(cond, mutex, 0);
+}
+
+void wait_on_borrowed_semaphore(semaphore_t *sem)
+{
+	sem_trywait(sem);
 }

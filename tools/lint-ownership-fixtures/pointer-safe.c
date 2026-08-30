@@ -102,3 +102,51 @@ int bounded_table_push(void (*f)(void))
 	slots[nslots++] = f;
 	return 0;
 }
+
+/* __teb() and the global __peb it bootstraps (src/internal/libc.h) are
+ * NT's own OS-guaranteed-present per-thread/per-process control blocks:
+ * every live thread has a TEB (read via a two-instruction segment-
+ * register access, not something application code can ever observe as
+ * absent), and __peb is set from it, unconditionally, before anything
+ * else in the program runs (crt/crt1.c's __libc_start_main), never
+ * reassigned or cleared afterward. Pinned here so a regression in
+ * ValidPointerChecker::isAlwaysNonNull/isAlwaysNonNullGlobal is caught
+ * locally instead of silently reappearing as ~14 findings tree-wide
+ * (dlfcn's __peb->ImageBaseAddress, every NT malloc/free/realloc's
+ * __peb->ProcessHeap, ...). */
+typedef struct { void *ImageBaseAddress; } *PPEB_FIXTURE;
+extern PPEB_FIXTURE __teb(void);
+PPEB_FIXTURE __peb;
+
+/* Each tests its own mechanism in isolation: teb_is_always_valid never
+ * touches __peb, so it cannot pass merely because assigning __peb from
+ * __teb()'s already-proven-nonnull return would locally taint __peb too
+ * -- and peb_is_always_valid dereferences __peb with no preceding
+ * assignment or check anywhere in the function, so it can only pass via
+ * isAlwaysNonNullGlobal recognising the global's own identity. */
+void *teb_is_always_valid(void)
+{
+	return __teb()->ImageBaseAddress;
+}
+
+void *peb_is_always_valid(void)
+{
+	return __peb->ImageBaseAddress;
+}
+
+/* GCC/Clang's `nonnull` attribute is the C ecosystem's own standard way
+ * to say a pointer parameter is required, not optional -- real compilers
+ * already diagnose a provably-NULL argument at the call site under
+ * -Wnonnull. Trusting it here (ValidPointerChecker::checkBeginFunction)
+ * means an ordinary parameter dereferenced with no in-function guard is
+ * no longer unconditionally flagged once its own header truthfully
+ * states the function's real contract -- unlike a blanket relaxation of
+ * every unchecked parameter (which would also silence pointer-unsafe.c's
+ * nullable_pointer, a genuine unguarded-dereference shape this checker
+ * must keep catching), this only trusts parameters this project has
+ * itself explicitly annotated. */
+int nonnull_attribute_is_trusted(int *pointer) __attribute__((nonnull(1)));
+int nonnull_attribute_is_trusted(int *pointer)
+{
+	return *pointer;
+}

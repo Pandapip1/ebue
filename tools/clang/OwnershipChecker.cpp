@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Gavin John
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "clang/AST/Attr.h"
 #include "clang/AST/Expr.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
@@ -471,6 +472,31 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     C.emitReport(std::move(Report));
   }
 
+  // True when Region's identity itself crosses a call boundary this
+  // per-function analysis cannot see through -- the exact same "was this
+  // value ever visible to my own tracking" gap already fixed for
+  // OwnershipChecker::checkPreCall's deallocator argument and
+  // ResourceLifecycleChecker::checkResource's liveness proof (see their
+  // own comments), just never applied to construct lifecycles. A
+  // SymbolicRegion base means this object's address came in as an
+  // opaque, borrowed pointer -- overwhelmingly a plain parameter, e.g.
+  // pthread_cond_wait's own `mutex`, or sem_timedwait's `sem`, both of
+  // which POSIX requires the CALLER to have already initialized, in code
+  // this per-function analysis never sees at all (a different TU
+  // entirely, in the general case). ConstructMap can only ever gain an
+  // entry for a construct by watching THIS analysis's own
+  // pthread_*_init()/sem_init() call it directly, so an absent entry for
+  // a borrowed object is not evidence it was never initialized, it is
+  // simply the ordinary, expected shape of "someone else's problem to
+  // have set up". A concrete VarRegion/local or global, by contrast, is
+  // an object this analysis DOES see the entire lifetime of within the
+  // current function, so an absent entry there remains real, checkable
+  // evidence of a genuinely never-initialized on-stack synchronization
+  // object -- that case is unchanged and still reported.
+  static bool isOpaqueBorrow(const MemRegion *Region) {
+    return Region && Region->getSymbolicBase() != nullptr;
+  }
+
   void requireLive(const CallEvent &Call, unsigned Argument,
                    ConstructFamily Family, CheckerContext &C) const {
     const MemRegion *Region = argumentRegion(Call, Argument);
@@ -478,7 +504,8 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
         C.getState()->isNull(Call.getArgSVal(Argument)).isConstrainedTrue())
       return;
     const ConstructKind *Kind = C.getState()->get<ConstructMap>(Region);
-    if (!Kind && hasStaticInitialization(Region, Family))
+    if (!Kind &&
+        (hasStaticInitialization(Region, Family) || isOpaqueBorrow(Region)))
       return;
     const Stmt *Statement = Call.getOriginExpr();
     if (!Statement)
@@ -528,12 +555,22 @@ public:
       return;
 
     if (Protocol->Operation == ConstructOperation::Construct) {
+      // Deliberately NOT extended with isOpaqueBorrow here: unlike the
+      // "not proven initialized" check below, "no information" must
+      // stay "no information" for a double-construct proof specifically
+      // -- trusting an opaque borrow as evidence of "definitely already
+      // live" would risk hiding a real double pthread_mutex_init() on a
+      // borrowed pointer, which is exactly backwards. This path already
+      // does not misreport an opaque borrow as "already initialized"
+      // today (StaticLive is false for a SymbolicRegion, since
+      // hasStaticInitialization only matches a VarRegion), so there is
+      // nothing to fix on this branch.
       if ((Kind && *Kind == ConstructKind::Live) || StaticLive)
         report("owned construct is already initialized", Statement,
                C.getState(), C);
       return;
     }
-    if (!Kind && !StaticLive) {
+    if (!Kind && !StaticLive && !isOpaqueBorrow(Region)) {
       report("owned construct is not proven initialized", Statement,
              C.getState(), C);
       return;
@@ -583,7 +620,7 @@ class ValidPointerChecker
     : public Checker<check::PreStmt<UnaryOperator>,
                      check::PreStmt<ArraySubscriptExpr>,
                      check::PreStmt<MemberExpr>, check::Location,
-                     check::PostCall> {
+                     check::PostCall, check::BeginFunction> {
   mutable std::unique_ptr<BugType> BT;
 
   // Functions this codebase itself guarantees always return a pointer to
@@ -597,10 +634,48 @@ class ValidPointerChecker
   // never permitted to return NULL, so without this, essentially every
   // errno use in the codebase produced an unprovable "not proven
   // nonnull" finding for the exact same reason, at the exact same call.
+  //
+  // __teb() (src/internal/libc.h: `PTEB __teb(void);`) is the same shape
+  // for NT: it reads the current thread's Thread Environment Block via
+  // the GS/FS segment (x86_64/i386) or TPIDR register (aarch64), which
+  // the OS itself guarantees exists for any running thread -- there is
+  // no code path, on any arch this tree supports, where a live thread
+  // observes its own TEB as absent. crt/crt1.c's __libc_start_main uses
+  // exactly this fact to bootstrap __peb itself (see
+  // isAlwaysNonNullGlobal below) before anything else in the program has
+  // run: `__peb = __teb()->ProcessEnvironmentBlock;`.
   static bool isAlwaysNonNull(const CallEvent &Call) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    return Function && Function->getIdentifier() &&
-           Function->getName() == "__errno_location";
+    if (!Function || !Function->getIdentifier())
+      return false;
+    StringRef Name = Function->getName();
+    return Name == "__errno_location" || Name == "__teb";
+  }
+
+  // __peb (src/internal/libc.h: `extern PPEB __peb;`) is a plain global
+  // pointer, not a call result, so isAlwaysNonNull's checkPostCall-based
+  // mechanism cannot cover it -- it is set exactly once, unconditionally,
+  // in crt/crt1.c's __libc_start_main, from __teb()->ProcessEnvironmentBlock
+  // (itself always-valid, see isAlwaysNonNull above) before any other
+  // code in the program runs, and nothing anywhere in this tree ever
+  // reassigns or clears it afterward. That makes every later dereference
+  // of __peb (dlfcn.c's __peb->ImageBaseAddress, plat_malloc.c's
+  // __peb->ProcessHeap used by every malloc/free/realloc on NT, ...) the
+  // exact same "always valid, but not something this per-function
+  // analysis can derive from its own tracking" shape as __errno_location,
+  // just expressed as a global's identity instead of a call's return
+  // value. This is checked structurally (a DeclRefExpr naming this one
+  // specific, by-name-identified global) rather than through SVal/region
+  // state, because unlike a call result there is no "after this call"
+  // point to assume the fact at -- the value already exists in the
+  // global's storage by the time any TU's code runs.
+  static bool isAlwaysNonNullGlobal(const Expr *PointerExpr) {
+    const auto *Ref = dyn_cast<DeclRefExpr>(PointerExpr->IgnoreParenCasts());
+    if (!Ref)
+      return false;
+    const auto *Variable = dyn_cast<VarDecl>(Ref->getDecl());
+    return Variable && Variable->getIdentifier() &&
+           Variable->hasGlobalStorage() && Variable->getName() == "__peb";
   }
 
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
@@ -752,6 +827,8 @@ class ValidPointerChecker
 public:
   void checkPointerExpression(const Expr *Pointer, const Stmt *Dereference,
                               CheckerContext &C) const {
+    if (isAlwaysNonNullGlobal(Pointer))
+      return;
     SVal Value = C.getSVal(Pointer);
     const MemRegion *Region = Value.getAsRegion();
     if (Region && !Region->getSymbolicBase())
@@ -790,6 +867,51 @@ public:
       return;
     if (ProgramStateRef NonNull = C.getState()->assume(*Defined, true))
       C.addTransition(NonNull);
+  }
+
+  // GCC/Clang's own `nonnull` attribute (`__attribute__((nonnull(N,...)))`,
+  // or no argument list at all, meaning every pointer parameter) is the
+  // C ecosystem's standard, general-purpose way to say exactly the fact
+  // this whole checker otherwise has no way to learn about an ordinary
+  // parameter: that it is a REQUIRED, non-optional pointer by the
+  // function's own real, published contract, not a value the callee is
+  // ever expected to validate. Real compilers already understand it (GCC
+  // and Clang both diagnose a provably-NULL argument at a call site under
+  // -Wnonnull), so recognizing it here piggybacks on a fact this project
+  // is expected to state truthfully in its own headers anyway, rather
+  // than inventing a checker-only heuristic. This assumes each nonnull
+  // parameter is proven at function entry, the same way an explicit
+  // `if (!p) return;` guard would establish it -- the difference is that
+  // the guard the analyzer would otherwise need is the caller's job, not
+  // this function's, per the attribute's own meaning.
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function)
+      return;
+    const auto *NonNull = Function->getAttr<NonNullAttr>();
+    if (!NonNull)
+      return;
+    ProgramStateRef State = C.getState();
+    const LocationContext *LC = C.getLocationContext();
+    bool Changed = false;
+    unsigned Index = 0;
+    for (const ParmVarDecl *Param : Function->parameters()) {
+      unsigned ThisIndex = Index++;
+      if (!Param->getType()->isPointerType() || !NonNull->isNonNull(ThisIndex))
+        continue;
+      SVal ParamValue = State->getSVal(State->getLValue(Param, LC));
+      std::optional<DefinedOrUnknownSVal> Defined =
+          ParamValue.getAs<DefinedOrUnknownSVal>();
+      if (!Defined)
+        continue;
+      if (ProgramStateRef NonNullState = State->assume(*Defined, true)) {
+        State = NonNullState;
+        Changed = true;
+      }
+    }
+    if (Changed)
+      C.addTransition(State);
   }
 
   void checkLocation(SVal Location, bool, const Stmt *Statement,

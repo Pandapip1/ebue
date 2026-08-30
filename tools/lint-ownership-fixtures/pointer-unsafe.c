@@ -31,3 +31,16 @@ int consumed_storage(void)
 	free(pointer);
 	return *pointer; /* ownership-expect: pointer-consumed */
 }
+
+/* `nonnull(1)` covers only the first parameter; the second is exactly as
+ * unguarded as nullable_pointer above and must still be flagged --
+ * checkBeginFunction (OwnershipChecker.cpp) must not over-generalize a
+ * single-argument nonnull attribute into trusting every pointer
+ * parameter of the function. */
+int nonnull_attribute_does_not_cover_every_param(int *checked, int *unchecked)
+    __attribute__((nonnull(1)));
+int nonnull_attribute_does_not_cover_every_param(int *checked, int *unchecked)
+{
+	(void)*checked;
+	return *unchecked; /* ownership-expect: pointer-null */
+}
