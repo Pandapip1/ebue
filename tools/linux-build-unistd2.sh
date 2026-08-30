@@ -12,14 +12,19 @@
 #
 # fuzz/linux_pilot_test_unistd2.c exercises the REAL front doors
 # (src/unistd/{close,read,write,lseek,dup,fsync,pipe,ftruncate,sysconf,
-# unlink,ids}.c) statically linked, unmodified, against the new backend,
-# as one native, runnable ELF binary -- no Wine, no emulation.  A few
-# plat_unistd.h functions (__plat_chdir, __plat_link, __plat_readlink,
-# __plat_symlink, __plat_getppid, the sleep.c clock/alarm pair) are
-# exercised directly instead, because THEIR OWN front doors depend on
-# unrelated NT-only machinery (__vfs_resolve_at(), NT's TEB) that has
-# nothing to do with this interface -- see fuzz/linux_pilot_test_unistd2.c
-# and src/unistd/linux/plat_unistd.c's own banners for the full argument.
+# unlink,ids,chdir,link}.c) statically linked, unmodified, against the new
+# backend, as one native, runnable ELF binary -- no Wine, no emulation.
+# chdir.c and link.c joined this list once their own front doors
+# (chdir(), link.c's readlinkat()) stopped calling __vfs_resolve_at()
+# (src/internal/vfs.c) themselves -- that NT-only-overlay call moved
+# behind __plat_chdir()/__plat_readlink() (src/internal/plat_unistd.h),
+# exactly the shape __plat_open() (src/fcntl/nt/plat_fcntl.c) already
+# got. A couple of functions still have no plat_unistd.h front door at
+# all to test through (__plat_getppid, the sleep.c clock/alarm pair --
+# getpid()/gettid() read NT's TEB directly, out of scope for this
+# interface) and are exercised directly instead -- see
+# fuzz/linux_pilot_test_unistd2.c and src/unistd/linux/plat_unistd.c's
+# own banners for the full argument.
 #
 # Usage: tools/linux-build-unistd2.sh
 # Env:   NTLIBC_CC (default clang), NTLIBC_ARCH (default x86_64 -- see
@@ -67,6 +72,8 @@ FILES="
 	src/unistd/sysconf.c
 	src/unistd/unlink.c
 	src/unistd/ids.c
+	src/unistd/chdir.c
+	src/unistd/link.c
 	src/unistd/linux/plat_unistd.c
 	fuzz/linux_pilot_harness_unistd2.c
 	fuzz/linux_pilot_test_unistd2.c

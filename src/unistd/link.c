@@ -6,10 +6,12 @@
  * Windows, so symlink tries and reports EPERM when it cannot; readlink
  * reads both NTFS symlinks and junctions.  Every NT-specific step (the
  * reparse-point interpretation, the FileLinkInformation/FSCTL calls
- * themselves) lives in src/unistd/nt/plat_unistd.c's __plat_link()/
- * __plat_readlink()/__plat_symlink(); these front doors are left with
- * only the vfs pre-check readlinkat() owes and the AT_SYMLINK_FOLLOW
- * flag linkat() forwards. */
+ * themselves, and -- as of the same fix open()'s own front door got,
+ * src/fcntl/open.c -- readlinkat()'s vfs pre-check, since that calls
+ * __vfs_resolve_at() too) lives in src/unistd/nt/plat_unistd.c's
+ * __plat_link()/__plat_readlink()/__plat_symlink(); these front doors
+ * are left with only the AT_SYMLINK_FOLLOW flag linkat() forwards --
+ * genuinely portable, not an NT interpretation step. */
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
@@ -31,11 +33,14 @@ int link(const char *a, const char *b) { return linkat(AT_FDCWD, a, AT_FDCWD, b,
 
 ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsz)
 {
-	int vfs = __vfs_resolve_at(dirfd, path);
-	if (vfs < 0) return -1;
-	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
-	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
-	if (vfs != __VFS_NONE) { errno = EINVAL; return -1; }
+	/* The vfs pre-check this front door used to run itself (reject a
+	 * fixed-POSIX-namespace path with EINVAL/ENOENT before ever asking
+	 * the backend) called __vfs_resolve_at() (src/internal/vfs.c)
+	 * directly -- NT-only-overlay machinery, exactly the gap open()'s
+	 * own front door had (src/fcntl/open.c). Moved into __plat_readlink()
+	 * (src/internal/plat_unistd.h) alongside the rest of the NT-specific
+	 * reparse-point interpretation it already owned; a backend with no
+	 * such overlay (Linux) needs no equivalent check at all. */
 	return __plat_readlink(dirfd, path, buf, bufsz);
 }
 

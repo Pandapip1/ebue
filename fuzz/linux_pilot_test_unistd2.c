@@ -13,28 +13,32 @@
  *
  *   Through the REAL front door, statically linked unmodified --
  *   src/unistd/{close,read,write,lseek,dup,fsync,pipe,ftruncate,
- *   sysconf,unlink,ids}.c -- for every plat_unistd.h function whose
- *   front door has no NT-only dependency beyond plat_unistd.h itself.
- *   That turned out to be most of them: unlike src/fcntl/open.c, none of
- *   src/unistd/{unlink,ids}.c's front doors call __ntpath_at() -- see
- *   src/unistd/linux/plat_unistd.c's own banner for the full argument.
+ *   sysconf,unlink,ids,chdir,link}.c -- for every plat_unistd.h function
+ *   whose front door has no NT-only dependency beyond plat_unistd.h
+ *   itself.  That turned out to be all but two of them: unlike
+ *   src/fcntl/open.c's ORIGINAL shape, none of src/unistd/{unlink,ids,
+ *   chdir,link}.c's front doors call __ntpath_at()/__vfs_resolve_at()
+ *   themselves any more -- src/unistd/chdir.c's chdir() and
+ *   src/unistd/link.c's readlinkat() used to call __vfs_resolve_at()
+ *   (src/internal/vfs.c) directly, the same shape of gap open()'s own
+ *   front door had, fixed the same way: that call moved behind
+ *   __plat_chdir()/__plat_readlink() (src/internal/plat_unistd.h) and
+ *   into the NT backend's own function bodies (src/unistd/nt/
+ *   plat_unistd.c). This backend's __plat_chdir() below always reports
+ *   __VFS_NONE (no overlay on this backend at all -- see
+ *   src/unistd/linux/plat_unistd.c's own banner) and __plat_readlink()
+ *   needs no vfs pre-check whatsoever, so both front doors now port
+ *   directly. See src/unistd/linux/plat_unistd.c's own banner for the
+ *   full argument.
  *
- *   Directly against __plat_* -- for __plat_chdir(), __plat_link(),
- *   __plat_readlink(), __plat_symlink(), __plat_getppid() and the
- *   sleep.c clock/alarm pair.  Not because THOSE functions take an NT-
- *   only argument (they do not; see the banner above) but because their
- *   OWN front doors (src/unistd/{chdir,link}.c, and
- *   src/unistd/getpid.c for getppid()'s sibling getpid()) call other,
- *   unrelated NT-only machinery first: src/internal/vfs.c's
- *   __vfs_resolve_at() (NtQueryAttributesFile, __ntpath_native --
- *   exactly the "a non-NT backend will need an entirely different front
- *   door" gap plat_fcntl.h's banner names for open(), just reached from
- *   a different direction) for chdir()/readlinkat(), and NT's TEB
- *   directly for getpid()/gettid(). Faithfully reproducing either one
- *   here would mean reimplementing real NT-only path/vfs logic, not
- *   testing this pilot's own backend -- so, exactly like the original
- *   pilot's raw openat(2) standing in for open(), these are exercised at
- *   the __plat_* boundary directly instead.
+ *   Directly against __plat_* -- only for __plat_getppid() and the
+ *   sleep.c clock/alarm pair, which have no plat_unistd.h front door to
+ *   test through at all here: src/unistd/getpid.c's getpid()/gettid()
+ *   read NT's TEB directly (__teb()->ClientId...), never going through
+ *   this interface, so getppid()'s own front door cannot be linked into
+ *   a freestanding Linux pilot -- the same shape of gap plat_fcntl.h's
+ *   banner documents for open(), just landing on getpid()/gettid()
+ *   themselves rather than any plat_unistd.h function.
  *
  * fuzz/linux_pilot_harness_unistd2.c supplies the fd table and a handful
  * of other internal helpers these front doors need but that are
@@ -235,24 +239,26 @@ int main(void)
 		printf("ok   - __plat_alarm_cancel()/__plat_alarm_reset_after_fork() are safe no-ops\n");
 	}
 
-	/* ---- unistd/linux/plat_unistd.c: __plat_chdir() directly (front door depends on __vfs_resolve_at(), NT-only -- see banner) --- */
+	/* ---- unistd/chdir.c: chdir() through the REAL front door, now that it no longer calls __vfs_resolve_at() itself --- */
 	{
 		long mk = syscall(SYS_mkdirat, AT_FDCWD_RAW, "/tmp/ntlibc-linux-pilot-unistd2-cwd", 0755L);
 		char cwdbuf[256];
 		long n;
-		CHECK(mk == 0, "raw mkdirat() setup for __plat_chdir() test succeeded");
-		CHECK(__plat_chdir("/tmp/ntlibc-linux-pilot-unistd2-cwd") == 0, "__plat_chdir() succeeded");
+		CHECK(mk == 0, "raw mkdirat() setup for chdir() test succeeded");
+		CHECK(chdir("/tmp/ntlibc-linux-pilot-unistd2-cwd") == 0, "chdir() succeeded through the real front door");
 		memset(cwdbuf, 0, sizeof cwdbuf);
 		n = syscall(SYS_getcwd, cwdbuf, sizeof cwdbuf);
 		CHECK(n > 0 && !memcmp(cwdbuf, "/tmp/ntlibc-linux-pilot-unistd2-cwd", strlen("/tmp/ntlibc-linux-pilot-unistd2-cwd")),
 		      "a raw getcwd(2) confirms the real process cwd actually moved");
-		CHECK(__plat_chdir("/nonexistent-ntlibc-pilot-path") == -1 && errno == ENOENT,
-		      "__plat_chdir() to a missing directory fails ENOENT");
+		CHECK(chdir("/nonexistent-ntlibc-pilot-path") == -1 && errno == ENOENT,
+		      "chdir() to a missing directory fails ENOENT");
+		CHECK(chdir("") == -1 && errno == ENOENT,
+		      "chdir(\"\") fails ENOENT via the front door's own NUL/empty-string check");
 		syscall(SYS_chdir, "/tmp");
 		syscall(SYS_unlinkat, AT_FDCWD_RAW, "/tmp/ntlibc-linux-pilot-unistd2-cwd", AT_REMOVEDIR);
 	}
 
-	/* ---- unistd/linux/plat_unistd.c: __plat_link()/__plat_readlink()/__plat_symlink() directly (readlinkat()'s front door also depends on __vfs_resolve_at()) --- */
+	/* ---- unistd/link.c: link()/readlink()/symlink() through the REAL front doors, now that readlinkat() no longer calls __vfs_resolve_at() itself --- */
 	{
 		long rawfd = syscall(SYS_openat, AT_FDCWD_RAW, "/tmp/ntlibc-linux-pilot-unistd2-target",
 		                     O_CREAT | O_TRUNC | O_WRONLY, 0644L);
@@ -260,23 +266,23 @@ int main(void)
 		CHECK(rawfd >= 0, "raw openat() setup for link()/symlink() test succeeded");
 		syscall(SYS_close, rawfd);
 
-		CHECK(__plat_link(AT_FDCWD, "/tmp/ntlibc-linux-pilot-unistd2-target",
-		                  AT_FDCWD, "/tmp/ntlibc-linux-pilot-unistd2-hardlink", 0) == 0,
-		      "__plat_link() created a hard link");
+		CHECK(link("/tmp/ntlibc-linux-pilot-unistd2-target",
+		           "/tmp/ntlibc-linux-pilot-unistd2-hardlink") == 0,
+		      "link() created a hard link through the real front door");
 		{
 			long f1 = syscall(SYS_openat, AT_FDCWD_RAW, "/tmp/ntlibc-linux-pilot-unistd2-hardlink", O_RDONLY);
 			CHECK(f1 >= 0, "the hard link opens as a real file");
 			if (f1 >= 0) syscall(SYS_close, f1);
 		}
 
-		CHECK(__plat_symlink("/tmp/ntlibc-linux-pilot-unistd2-target", AT_FDCWD,
-		                     "/tmp/ntlibc-linux-pilot-unistd2-symlink") == 0,
-		      "__plat_symlink() created a symbolic link");
+		CHECK(symlink("/tmp/ntlibc-linux-pilot-unistd2-target",
+		              "/tmp/ntlibc-linux-pilot-unistd2-symlink") == 0,
+		      "symlink() created a symbolic link through the real front door");
 		memset(buf, 0, sizeof buf);
-		n = __plat_readlink(AT_FDCWD, "/tmp/ntlibc-linux-pilot-unistd2-symlink", buf, sizeof buf);
-		CHECK(n == (ssize_t)strlen("/tmp/ntlibc-linux-pilot-unistd2-target"), "__plat_readlink() reports the right length");
+		n = readlink("/tmp/ntlibc-linux-pilot-unistd2-symlink", buf, sizeof buf);
+		CHECK(n == (ssize_t)strlen("/tmp/ntlibc-linux-pilot-unistd2-target"), "readlink() reports the right length");
 		CHECK(!memcmp(buf, "/tmp/ntlibc-linux-pilot-unistd2-target", (size_t)n),
-		      "__plat_readlink() content matches the real symlink target");
+		      "readlink() content matches the real symlink target");
 
 		syscall(SYS_unlinkat, AT_FDCWD_RAW, "/tmp/ntlibc-linux-pilot-unistd2-symlink", 0);
 		syscall(SYS_unlinkat, AT_FDCWD_RAW, "/tmp/ntlibc-linux-pilot-unistd2-hardlink", 0);

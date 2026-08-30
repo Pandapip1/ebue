@@ -2,7 +2,33 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 /* realpath: open the file and ask the kernel what it is called.  A path
  * that does not exist cannot be canonicalised that way, so it is an
- * ENOENT like POSIX says. */
+ * ENOENT like POSIX says.
+ *
+ * DELIBERATELY LEFT AN NT-ONLY FRONT DOOR, not behind the platform-
+ * abstraction seam (src/internal/plat_unistd.h etc) at all -- documented
+ * here rather than silently, matching this migration's own standard
+ * (see src/internal/plat_fcntl.h's history: "honest partial progress
+ * with a documented gap beats a forced, fragile fix").
+ *
+ * The __vfs_resolve_at() call below IS the same NT-only-overlay call
+ * chdir()/readlinkat() used to make directly from their own front doors
+ * before being moved behind __plat_chdir()/__plat_readlink() -- but
+ * moving just that one call here would not make this function portable,
+ * because everything AFTER it depends just as completely on __handle_path()
+ * (src/internal/path.c), which does not merely interpret an NT status the
+ * way __ntpath_at()/__vfs_resolve_at() do: it takes a raw NT `HANDLE`
+ * (not the abstract __plat_handle_t src/internal/plat_handle.h's whole
+ * seam is built around) and asks NT itself what path a handle was
+ * opened through -- there is no POSIX or Linux equivalent call, and a
+ * real Linux backend would need an entirely different algorithm (e.g.
+ * readlink() on /proc/self/fd/N, or the openat2(2) RESOLVE_* flags),
+ * not a translation of this one. __handle_path() also has three other
+ * NT-only callers (src/internal/vfs.c, src/stat/chmod.c,
+ * src/process/exec.c) that would need the same treatment for a Linux
+ * realpath() to mean anything -- restructuring only this front door
+ * would be a forced, fragile fix for a small fraction of the real gap.
+ * Left as future work; the whole function stays exactly as it always
+ * was, calling __vfs_resolve_at()/__handle_path() directly. */
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>

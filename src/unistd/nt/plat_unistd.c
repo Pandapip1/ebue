@@ -264,14 +264,53 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
 
 /* ======================================================================
  * chdir.c
+ *
+ * __plat_chdir() absorbed everything src/unistd/chdir.c's own chdir()
+ * used to do between its NUL/empty-string check and the old bare
+ * __plat_chdir(path) call: __vfs_resolve_at() (src/internal/vfs.c) --
+ * the fixed POSIX namespace overlay NT needs because it has no native
+ * concept of `/`/`/dev` as anything other than ordinary directories --
+ * the kind/native checks, the "/" substitution for a non-native virtual
+ * directory, and the {NAME_MAX}-per-component check ordinarily done by
+ * src/internal/path.c's own builder (not used here: RtlSetCurrentDirectory_U
+ * takes the DOS form directly, so this function hand-builds its own
+ * UNICODE_STRING rather than routing through __ntpath()/__ntpath_at()).
+ * Nothing below changed in substance from what chdir.c used to run
+ * inline, only location -- the same relocation __plat_open() (src/fcntl/
+ * nt/plat_fcntl.c) already got. *vfsout reports the resolved vfs kind
+ * back to the front door for __vfs_cwd_set() (portable bookkeeping that
+ * stays there, see chdir.c's own comment).
  * ====================================================================== */
 
-int __plat_chdir(const char *path)
+int __plat_chdir(const char *path, int *vfsout)
 {
 	WCHAR *w;
 	size_t n, i;
 	UNICODE_STRING us;
 	NTSTATUS st;
+	int vfs, kind, native;
+
+	vfs = __vfs_resolve_at(AT_FDCWD, path);
+	if (vfs < 0) return -1;
+	native = (vfs & __VFS_NATIVE) != 0;
+	kind = __VFS_KIND(vfs);
+	if (kind == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (kind != __VFS_NONE && kind != __VFS_ROOT && kind != __VFS_DEV) {
+		errno = ENOTDIR;
+		return -1;
+	}
+	/* Both virtual directories use the native drive root only as the
+	 * process-parameter carrier; pathname dispatch uses vfs above. */
+	if (kind != __VFS_NONE && !native) path = "/";
+	/* chdir.html ERRORS, shall fail: "[ENAMETOOLONG] The length of a
+	 * component of a pathname is longer than {NAME_MAX}."  chdir does
+	 * not go through src/internal/path.c's builder -- this function
+	 * hand-builds its own UNICODE_STRING for RtlSetCurrentDirectory_U --
+	 * so it has to ask for itself, or it would be the one path-taking
+	 * interface in the library without the check.  Distinct from the
+	 * whole-path bound __US_MAX_WCHARS applies to its own UNICODE_STRING
+	 * below; see __name_too_long()'s banner. */
+	if (__name_too_long(path)) { errno = ENAMETOOLONG; return -1; }
 
 	w = __utf8_to_utf16(path, &n);
 	if (!w) return -1;
@@ -308,6 +347,7 @@ int __plat_chdir(const char *path)
 	}
 	__free(w);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	*vfsout = vfs;
 	return 0;
 }
 
@@ -435,7 +475,19 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	const WCHAR *name;
 	size_t nlen, i;
 	WCHAR *tmp;
-	int n;
+	int n, vfs;
+
+	/* Ruling out a virtual-fs path used to be src/unistd/link.c's own
+	 * readlinkat() front-door job; moved here for the same reason
+	 * __plat_open()/__plat_chdir() absorbed their own vfs pre-checks --
+	 * __vfs_resolve_at() (src/internal/vfs.c) is NT-only-overlay
+	 * machinery a backend with real native symlinks (Linux) has no use
+	 * for at all. */
+	vfs = __vfs_resolve_at(dirfd, path);
+	if (vfs < 0) return -1;
+	if (vfs & __VFS_NATIVE) vfs = __VFS_NONE;
+	if (vfs == __VFS_MISSING) { errno = ENOENT; return -1; }
+	if (vfs != __VFS_NONE) { errno = EINVAL; return -1; }
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
 	st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &np.oa, &io, FILE_SHARE_VALID_FLAGS,

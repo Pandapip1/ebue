@@ -71,6 +71,36 @@
  *   else's Linux backend for the same reason as __child_find() above.
  *   "No limit" (0) is __fsize_allow()'s own answer when RLIMIT_FSIZE was
  *   never lowered, which is always true in this pilot.
+ *
+ * Added once src/unistd/{chdir,link}.c joined the real front doors this
+ * pilot links (see tools/linux-build-unistd2.sh's own updated banner):
+ *
+ *   __vfs_cwd_set() -- src/internal/vfs.c's real definition is a single
+ *   `static int cwd_kind; void __vfs_cwd_set(int kind) { cwd_kind =
+ *   kind; }`, genuinely portable process-wide bookkeeping (chdir()'s own
+ *   front door calls it, not __plat_chdir()) -- but that whole
+ *   translation unit also defines __vfs_resolve_at(), which references
+ *   real NT types (HANDLE, NTSTATUS, OBJECT_ATTRIBUTES,
+ *   FILE_BASIC_INFORMATION) unconditionally, so linking the file at all
+ *   would need NT headers this freestanding-Linux pilot has none of.
+ *   Nothing this pilot calls (chdir() with this backend's __plat_chdir(),
+ *   which always reports __VFS_NONE) ever reads cwd_kind back through
+ *   __vfs_cwd_get() -- that only happens inside __vfs_resolve_at()
+ *   itself, never linked here -- so a bare store with no reader is a
+ *   faithful stand-in for what this pilot can actually observe.
+ *
+ *   __handle_path() -- pulled in by chdir.c's fchdir(), on the non-
+ *   overlay branch (an fd whose f->vfs is not __VFS_ROOT/__VFS_DEV).
+ *   This pilot's fd table never sets vfs at all (see __fd_install_at()
+ *   above), so every fd it hands fchdir() takes that branch -- but the
+ *   compiler cannot prove it statically, so the symbol is still needed;
+ *   same reasoning, and same NULL "no reopenable name" stand-in, as
+ *   fuzz/linux_pilot_harness_fs.c's own __handle_path() stub.
+ *
+ *   __free() -- pulled in by that same fchdir() branch (freeing the
+ *   path __handle_path() returned). Never actually reached here since
+ *   __handle_path() always returns NULL first, so a no-op body is
+ *   enough to satisfy the linker.
  */
 #include <string.h>
 #include <unistd.h>
@@ -255,3 +285,20 @@ pid_t getpid(void)
  * (matching glibc's naming) means the symbol to define is `environ`
  * itself, declared in <unistd.h>. */
 char **environ;
+
+/* See this file's own banner: chdir.c's real front door, portable
+ * process-wide cwd-kind bookkeeping with no NT dependency of its own,
+ * just not linkable here because it lives in the same translation unit
+ * (src/internal/vfs.c) as genuinely NT-only __vfs_resolve_at(). */
+void __vfs_cwd_set(int kind) { (void)kind; }
+
+char *__handle_path(HANDLE h)
+{
+	(void)h;
+	return 0;
+}
+
+void __free(void *p)
+{
+	(void)p;
+}

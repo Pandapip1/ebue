@@ -111,9 +111,31 @@ int __plat_unlink(int dirfd, const char *path, int isdir);
 /* ---- src/unistd/chdir.c ---------------------------------------------------- */
 
 /* chdir(): set the process's current directory to `path` (UTF-8, POSIX
- * form -- already resolved through the vfs and length-checked by the
- * front door). */
-int __plat_chdir(const char *path);
+ * form; only NUL/empty-string rejection happens in the front door).
+ * Resolving `path` through the fixed POSIX namespace (src/internal/
+ * vfs.c's __vfs_resolve_at()) -- rejecting anything that is not the
+ * overlay root/dev directory or a native object, and substituting the
+ * native drive-root spelling for a non-native virtual directory -- is
+ * this backend's own job, exactly like __plat_open()'s VFS-overlay
+ * dance (src/internal/plat_fcntl.h). __vfs_resolve_at()/__vfs_open_dir()
+ * themselves are shared, portable-shaped helpers (see their own
+ * comments in libc.h) that ANY backend with no native concept of
+ * `/dev/null` etc -- NT today, a future UEFI backend most likely --
+ * calls the exact same way; only a backend that (like Linux) already
+ * has real native devices has no use for them at all.
+ *
+ * The whole-pathname-component length check (__name_too_long(),
+ * src/internal/path.c) also belongs here rather than the front door:
+ * it exists only because this call does not otherwise route through
+ * that file's usual path-building step (see the NT backend's own
+ * __plat_chdir() comment) -- a backend whose native chdir(2) already
+ * enforces {NAME_MAX} itself (Linux) needs no equivalent check at all.
+ *
+ * On success, *vfsout reports what __vfs_resolve_at() decided (so the
+ * front door can hand it to __vfs_cwd_set(), portable process-wide
+ * bookkeeping that stays in the front door -- see chdir.c) -- __VFS_NONE
+ * for a backend with no overlay concept, always. */
+int __plat_chdir(const char *path, int *vfsout);
 
 /* ---- src/unistd/link.c ------------------------------------------------------ */
 
@@ -125,9 +147,16 @@ int __plat_link(int olddirfd, const char *oldpath, int newdirfd, const char *new
 
 /* readlinkat(): read the target of the symbolic link `path` (relative to
  * `dirfd`) into `buf`/`bufsz`, POSIX truncate-silently semantics.
- * Returns the number of bytes placed, or -1(errno).  The front door has
- * already ruled out a virtual-fs path; every reparse-point interpretation
- * step (NTFS symlink, junction, WSL symlink) lives here. */
+ * Returns the number of bytes placed, or -1(errno).  Ruling out a
+ * virtual-fs path (EINVAL: it is one of the fixed POSIX namespace's own
+ * entries, never a symlink; ENOENT: it is inside that namespace but
+ * absent) is this backend's own job now, exactly like __plat_chdir()'s
+ * -- via the same shared __vfs_resolve_at() (src/internal/vfs.c) a
+ * future UEFI backend would call too. A backend with no such namespace
+ * at all (Linux, which already has real symlinks and a real ENOENT/
+ * EINVAL from its own readlinkat(2)) has nothing to rule out and skips
+ * this step entirely. Every reparse-point interpretation step (NTFS
+ * symlink, junction, WSL symlink) lives here too, unchanged. */
 ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz);
 
 /* symlinkat(): create a new symbolic link `linkpath` (relative to

@@ -15,15 +15,31 @@
  * (__plat_unlink, __plat_chdir, __plat_link, __plat_readlink,
  * __plat_symlink, __plat_chown_probe) takes a plain `const char *path`
  * and, where relevant, a plain `int dirfd`.  Checked against every one
- * of their front doors (src/unistd/{unlink,chdir,link,ids}.c) before
- * writing this file: none of them calls __ntpath_at()/__ntpath()
- * themselves -- that resolution happens only inside the NT backend's own
- * __plat_unlink()/__plat_link()/etc. bodies (src/unistd/nt/
- * plat_unistd.c), which is exactly what "every NT-specific interpretation
- * step lives entirely inside the backend function's body" (plat_unistd.h's
- * own banner) promises.  So this whole family ports directly onto Linux's
- * own *at() syscalls, which take the identical (dirfd, path) shape POSIX
- * already gives them -- no second front door needed, unlike open().
+ * of their front doors (src/unistd/{unlink,chdir,link,ids}.c): none of
+ * them calls __ntpath_at()/__ntpath() themselves -- that resolution
+ * happens only inside the NT backend's own __plat_unlink()/__plat_link()/
+ * etc. bodies (src/unistd/nt/plat_unistd.c).
+ *
+ * __plat_chdir() and (as of the same fix open()'s own front door got,
+ * src/fcntl/open.c) __plat_readlink() are the two exceptions to "none of
+ * them calls anything NT-only": their front doors (chdir.c, link.c's
+ * readlinkat()) used to call __vfs_resolve_at() (src/internal/vfs.c)
+ * directly -- not __ntpath_at(), but still the same fixed-POSIX-
+ * namespace overlay machinery NT needs because it has no native concept
+ * of `/`, `/dev`, `/dev/null` etc, and a future UEFI backend most likely
+ * will too. That call moved into the NT backend's own __plat_chdir()/
+ * __plat_readlink() bodies for the identical reason __plat_open() itself
+ * absorbed __vfs_resolve_at() -- and Linux, unlike NT or a hypothetical
+ * UEFI backend, has real native devices and a real native root, so it
+ * needs no overlay and no equivalent call at all: __plat_chdir() below
+ * always reports __VFS_NONE via its *vfsout parameter (the plat_unistd.h
+ * contract for a backend with nothing to report there), and
+ * __plat_readlink() needs no vfs pre-check whatsoever -- Linux's own
+ * readlinkat(2) already answers ENOENT/EINVAL correctly on its own.
+ *
+ * So this whole family ports directly onto Linux's own *at() syscalls,
+ * which take the identical (dirfd, path) shape POSIX already gives
+ * them -- no second front door needed, unlike open().
  *
  * `dirfd` here may be ntlibc's own AT_FDCWD sentinel or an ntlibc fd-
  * table index (an int the POSIX front door received directly, e.g.
@@ -325,10 +341,14 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
  * chdir.c
  * ====================================================================== */
 
-int __plat_chdir(const char *path)
+int __plat_chdir(const char *path, int *vfsout)
 {
 	long ret = raw_syscall(SYS_chdir, (long)path, 0L, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
+	/* No overlay on this backend at all -- see this file's own banner --
+	 * so nothing to report beyond the plat_unistd.h contract's own
+	 * "__VFS_NONE, always" for a backend with no overlay concept. */
+	*vfsout = __VFS_NONE;
 	return 0;
 }
 
