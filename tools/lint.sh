@@ -55,7 +55,7 @@
 #   provenance
 #             currently opt-in; proves common provenance for ordered pointer
 #             comparisons and subtraction, and rejects integer-derived pointers.
-#   locks     currently opt-in; path-sensitively proves mutex, rwlock, and
+#   locks     on by default; path-sensitively proves mutex, rwlock, and
 #             spinlock acquire/release, wait, destroy, and function-exit state.
 #   abizeroinit
 #             currently opt-in; proves that a stack-local struct or array
@@ -318,9 +318,36 @@ cppflags_for() {
 	     "-Iarch/$1 -Iarch/generic -I$builddir/$1/include -Iinclude -Isrc/internal"
 }
 
+# Which of configure's two --platform values a given ARCH actually builds
+# under -- see the Makefile's own PLATFORM/PLAT_GLOBS comment for the
+# axis this mirrors. sources_for() below used to hardcode "nt" here,
+# which was correct for i386/x86_64 (both win32-only) but silently wrong
+# for aarch64: it pulled every NT-only backend file (src/*/nt/*.c) into
+# the one arch that can never build or run them, AND never pulled in the
+# aarch64 leg's own real backend (src/*/linux/*.c) at all. The first half
+# of that bug is not hypothetical -- it is exactly what made the
+# signal-safety stage hit a hard `#error unsupported architecture` out of
+# src/thread/nt/plat_thread.c's `#if defined(__x86_64__)/#elif
+# defined(__i386__)` chain when LINT_ARCHS included aarch64, because that
+# file has no aarch64 arm and was never supposed to be compiled under it
+# in the first place -- `make`, via PLATFORM=linux, never puts it in
+# lib/libc.a for a Linux build. This function is what has to agree with
+# that. There is no arch this tree builds under platform=nt other than
+# the two win32 ones, and no arch under platform=linux other than
+# aarch64 today, so the mapping is a plain per-arch table, not derived
+# from triple_for() (a different axis -- see its own comment) or
+# inferred from whether a mingw triple exists.
+platform_for() {
+	case $1 in
+	i386|x86_64) echo nt ;;
+	aarch64)     echo linux ;;
+	esac
+}
+
 # The same source set the Makefile builds: base sources, minus any that an
 # arch/ subdirectory of the same module overrides, plus the arch sources,
-# plus src/*/nt/*.c (the PLATFORM axis's own additive backend files --
+# plus src/*/$(platform)/*.c and crt/$(platform)/*.c (the PLATFORM axis's
+# own additive backend files, keyed per-arch by platform_for() above --
 # see the Makefile's PLAT_GLOBS and src/internal/plat_handle.h) --
 # plus sh/*.c, the sh(1p) binary. sh/ is not part of libc.a (it is a
 # program, see the Makefile's SH_SRCS comment), but it is first-party C in
@@ -329,7 +356,9 @@ cppflags_for() {
 # user actually runs is the one file gcc/clang/cppcheck never look at.
 sources_for() {
 	arch=$1
-	for f in src/*/*.c crt/*.c sh/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c src/*/nt/*.c; do
+	plat=$(platform_for "$arch")
+	for f in src/*/*.c crt/*.c sh/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c \
+	         src/*/"$plat"/*.c crt/"$plat"/*.c; do
 		[ -e "$f" ] || continue
 		case $f in
 		src/*/*.c)
@@ -676,6 +705,7 @@ stage_cppcheck() {
 		case "$arch" in
 		i386) arch_define=-D__i386__=1 ;;
 		x86_64) arch_define=-D__x86_64__=1 ;;
+		aarch64) arch_define=-D__aarch64__=1 ;;
 		esac
 		# shellcheck disable=SC2046,SC2086
 		cppcheck --quiet --enable=warning,portability --std=c99 --max-configs=12 \
@@ -1674,7 +1704,7 @@ stage_reentrancy() {
 	return $any
 }
 
-stages=${*:-warn analyze cppcheck shell sizearith undefined unreferenced widthmod}
+stages=${*:-warn analyze cppcheck shell sizearith locks undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
