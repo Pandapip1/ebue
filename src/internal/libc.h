@@ -13,6 +13,7 @@
 #include <wordexp.h>
 #include "nt.h"
 #include "thread_annotations.h"
+#include "plat_handle.h"
 
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
  * Two internal locks get a NTLIBC_CAPABILITY token here: __sig_lock()/
@@ -185,7 +186,7 @@ enum {
 #define __VFS_KIND(v) ((v) & 0xff)
 
 struct __fd {
-	HANDLE h;              /* NULL when the slot is free */
+	__plat_handle_t h;     /* NULL when the slot is free */
 	unsigned flags;        /* O_ACCMODE, O_APPEND, O_NONBLOCK, O_CLOEXEC as given
 	                        * to open -- the access mode is load-bearing, not
 	                        * decorative: write() refuses an O_RDONLY descriptor,
@@ -319,7 +320,7 @@ void __fd_wait_or_delay(HANDLE *console_handles, int ncons, long long wait_ticks
 #define CHILD_CAP_LIMIT_ (1 << 20)
 struct __child {
 	int pid;
-	HANDLE h;
+	__plat_handle_t h;
 	int done;               /* reaped status is available */
 	int status;
 	/* Job control.  A stop sent by this parent is recorded by kill(); a

@@ -4,15 +4,15 @@
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_fd.h"
 
 int close(int fd)
 {
 	struct __fd *f = __fd_get(fd);
-	NTSTATUS st;
+	int r;
 	if (!f) return -1;
 	__mq_fd_closed(fd);
-	st = NtClose(f->h);
-	f->h = 0;
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	r = __plat_close(f->h);
+	f->h = __PLAT_HANDLE_NULL;
+	return r;
 }

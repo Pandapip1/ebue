@@ -10,32 +10,32 @@
  * form, because it is the one load-bearing decision this file still
  * makes about it: munmap.html's ERRORS are exactly three -- addr not
  * page-aligned, range outside the address space, len of zero -- so
- * THERE IS NO ERRNO FOR A PARTIAL munmap, and NtUnmapViewOfSection()
- * only ever drops a section view WHOLE.  That bounds one thing --
- * MAP_FIXED cannot replace part of a file-backed mapping, only its
- * entire current extent (see mmap()'s MAP_FIXED branch) -- and no
- * longer the mapping itself: ordinary munmap() of a file-backed mapping
- * this library created is always whole-extent in every case measured
- * against it, so the reservation-table bookkeeping below (`live`,
- * page-granular for the anonymous path) simply is not exercised
- * partially on the file-backed side either.
+ * THERE IS NO ERRNO FOR A PARTIAL munmap, and the platform's unmap-view
+ * primitive only ever drops a section view WHOLE (see
+ * src/internal/plat_mem.h).  That bounds one thing -- MAP_FIXED cannot
+ * replace part of a file-backed mapping, only its entire current extent
+ * (see mmap()'s MAP_FIXED branch) -- and no longer the mapping itself:
+ * ordinary munmap() of a file-backed mapping this library created is
+ * always whole-extent in every case measured against it, so the
+ * reservation-table bookkeeping below (`live`, page-granular for the
+ * anonymous path) simply is not exercised partially on the file-backed
+ * side either.
  *
  *
  * One reservation per mapping, and why
  * ------------------------------------
  *
- * NT's reserve/commit split is what makes a conforming partial munmap()
- * possible.  Each mmap() takes its OWN reservation via
- * NtAllocateVirtualMemory(MEM_RESERVE|MEM_COMMIT).  A partial munmap()
- * then MEM_DECOMMITs just the subrange -- page-granular, which is what
- * POSIX needs -- and keeps the reservation, so the surviving pages of
- * the same mapping are untouched and still at their own addresses.  Only
+ * The platform's reserve/commit split (see plat_mem.h) is what makes a
+ * conforming partial munmap() possible.  Each mmap() takes its OWN
+ * reservation via __plat_mem_reserve().  A partial munmap() then
+ * decommits just the subrange -- page-granular, which is what POSIX
+ * needs -- and keeps the reservation, so the surviving pages of the
+ * same mapping are untouched and still at their own addresses.  Only
  * when the last live page of a mapping goes does the reservation itself
- * get MEM_RELEASEd.  MEM_RELEASE cannot free part of a reservation
- * (it takes the whole thing, base address and size zero), which is
- * exactly why one reservation per mapping rather than one big arena:
- * a shared arena could never release anything until every mapping in it
- * died.
+ * get released.  Releasing a reservation cannot free part of it (it
+ * takes the whole thing, base address and size zero), which is exactly
+ * why one reservation per mapping rather than one big arena: a shared
+ * arena could never release anything until every mapping in it died.
  *
  * THE DIVERGENCE THIS BUYS, WRITTEN DOWN BECAUSE IT IS UNOBSERVABLE.
  * After a partial munmap() the decommitted pages stay RESERVED, not
@@ -48,14 +48,14 @@
  * unmaps and remaps in a loop.  It is a leak of reservation, bounded by
  * the number of live mappings, not of committed memory.
  *
- * The 64 KiB question, which bites reservations and not commits.
- * NtAllocateVirtualMemory rounds a *reservation* base up to the
- * allocation granularity (64 KiB, SYSTEM_INFO.AllocationGranularity),
- * not to the 4 KiB page.  That constraint binds only when a reservation
- * is created.  MEM_COMMIT and MEM_DECOMMIT over a subrange of an
- * existing reservation are page-granular, which is why MAP_FIXED can be
- * honoured at page granularity inside a mapping we already own, and why
- * it cannot be honoured anywhere else.
+ * This is an NT reservation-granularity property (64 KiB allocation
+ * granularity, page-granular commit/decommit within it); a backend
+ * whose native mmap/munmap are page-granular end to end would not need
+ * this reservation-table strategy at all.  It stays in this file rather
+ * than behind __plat_mem_* because it is this library's OWN chosen
+ * strategy for satisfying POSIX's partial-munmap requirement -- shared
+ * verbatim by whichever backend is compiled in, not something each
+ * backend reimplements or could opt out of.
  *
  *
  * MAP_FIXED
@@ -66,25 +66,26 @@
  * mappings in [addr, addr+len) are discarded", and "If a mapping to be
  * replaced was private, ... the modifications shall be discarded".  Both
  * halves are implemented, the second one deliberately: the range is
- * MEM_DECOMMITted and then MEM_COMMITted again, which is what actually
- * discards the old contents (NT zero-fills a freshly committed page).  A
- * bare MEM_COMMIT over already-committed pages succeeds and leaves the
- * old bytes in place, so it would have satisfied "the address is
- * honoured" while quietly failing "the modifications shall be
- * discarded" -- a test checking only the returned address cannot tell
- * those two apart.
+ * decommitted and then committed again (__plat_mem_commit_fixed), which
+ * is what actually discards the old contents (a freshly committed page
+ * comes back zero-filled).  A bare commit over already-committed pages
+ * succeeds and leaves the old bytes in place, so it would have satisfied
+ * "the address is honoured" while quietly failing "the modifications
+ * shall be discarded" -- a test checking only the returned address
+ * cannot tell those two apart.
  *
  *
  * msync
  * -----
  *
- * Shared file views are flushed with NtFlushVirtualMemory.  NT and Wine do
- * not reliably mark the file timestamps when a section's dirty pages are
- * flushed, so writable shared mappings retain an independent file handle
- * and explicitly mark LastWriteTime and ChangeTime.  The independent handle
- * matters because POSIX permits the caller to close fildes after mmap().
- * Anonymous mappings and private file views have no object to update, so
- * success for those remains a real no-op.
+ * Shared file views are flushed through __plat_mem_flush_view().  NT and
+ * Wine do not reliably mark the file timestamps when a section's dirty
+ * pages are flushed, so writable shared mappings retain an independent
+ * file handle and that call explicitly marks LastWriteTime and
+ * ChangeTime.  The independent handle matters because POSIX permits the
+ * caller to close fildes after mmap().  Anonymous mappings and private
+ * file views have no object to update, so success for those remains a
+ * real no-op.
  *
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/mmap.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/munmap.html
@@ -100,6 +101,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include "libc.h"
+#include "plat_mem.h"
+#include "plat_fd.h"
 
 #define MMAP_PAGE 4096u
 
@@ -115,9 +118,9 @@ struct mapping {
 	size_t npages;
 	unsigned char *live;
 	unsigned char *locked;
-	int filebacked;         /* section view (NtMapViewOfSection), not a
-	                          * private NtAllocateVirtualMemory reservation */
-	HANDLE writeback;       /* independent writable MAP_SHARED file handle */
+	int filebacked;         /* section view, not a private anonymous
+	                          * reservation -- see plat_mem.h */
+	__plat_handle_t writeback; /* independent writable MAP_SHARED file handle */
 };
 
 /* mmap.html ERRORS: "[EMFILE] The number of mapped regions would exceed
@@ -131,120 +134,6 @@ static int lock_future;
 
 static size_t pground(size_t n) { return (n + MMAP_PAGE - 1) & ~(size_t)(MMAP_PAGE - 1); }
 static int pgaligned(const void *p) { return ((uintptr_t)p & (MMAP_PAGE - 1)) == 0; }
-
-/* mmap.html "Protection Options" -> NT page protection.  PROT_WRITE
- * without PROT_READ has no NT spelling (there is no write-only page
- * protection), so it widens to read/write; POSIX permits that outright:
- * "an implementation may permit accesses other than those specified by
- * prot". */
-static ULONG prot_to_page(int prot)
-{
-	if (prot & PROT_EXEC) {
-		if (prot & PROT_WRITE) return PAGE_EXECUTE_READWRITE;
-		if (prot & PROT_READ)  return PAGE_EXECUTE_READ;
-		return PAGE_EXECUTE;
-	}
-	if (prot & PROT_WRITE) return PAGE_READWRITE;
-	if (prot & PROT_READ)  return PAGE_READONLY;
-	return PAGE_NOACCESS;
-}
-
-/* Same table, but for a MAP_PRIVATE section view: mmap.html says a
- * MAP_PRIVATE write "shall be visible only to the calling process" and
- * "It is unspecified whether this change to the mapped file is visible
- * to other processes... or is carried through to the underlying object."
- * -- i.e. the write must not reach the file. NT's answer to that is
- * copy-on-write (PAGE_WRITECOPY/PAGE_EXECUTE_WRITECOPY): the first write
- * to a page forks it to a private, pagefile-backed copy instead of
- * dirtying the section. Win32's own FILE_MAP_COPY works against a
- * section created with PAGE_READONLY, so this needs no extra access
- * beyond what the file was opened with. */
-static ULONG prot_to_view(int prot, int private)
-{
-	if (!private) return prot_to_page(prot);
-	if (prot & PROT_EXEC) {
-		if (prot & PROT_WRITE) return PAGE_EXECUTE_WRITECOPY;
-		if (prot & PROT_READ)  return PAGE_EXECUTE_READ;
-		return PAGE_EXECUTE;
-	}
-	if (prot & PROT_WRITE) return PAGE_WRITECOPY;
-	if (prot & PROT_READ)  return PAGE_READONLY;
-	return PAGE_NOACCESS;
-}
-
-/* Create a section over `fh` and map a view of it at *base_inout (a
- * hint, or NULL to let NT choose).  Tries the broadest section
- * protection the caller's prot/flags could need first, and falls back
- * to a read-only section on [STATUS_ACCESS_DENIED] -- a handle opened
- * O_RDONLY cannot back a PAGE_READWRITE section, but MAP_PRIVATE still
- * works against a PAGE_READONLY one via copy-on-write (see
- * prot_to_view).  The section handle is closed before returning either
- * way: the view holds its own reference, so nothing is leaked by not
- * keeping it. */
-static NTSTATUS map_file(HANDLE fh, int prot, int flags, off_t off,
-                         size_t viewbytes, PVOID *base_inout)
-{
-	HANDLE section;
-	IO_STATUS_BLOCK io;
-	FILE_STANDARD_INFORMATION si;
-	NTSTATUS st;
-	LARGE_INTEGER secoff;
-	SIZE_T viewsize;
-	ULONG maxprot;
-	int private = (flags & MAP_PRIVATE) != 0;
-	long long eof = -1;
-
-	/* Wine can retain writes made past EOF in the shared cache page even
-	 * across close()+reopen()+NtCreateSection().  POSIX requires every
-	 * mapping operation to zero-fill that partial page.  Capture the
-	 * logical EOF before mapping so a writable shared view can restore
-	 * the required zero tail below without extending the file. */
-	if (!private && (prot & PROT_WRITE)) {
-		st = NtQueryInformationFile(fh, &io, &si, sizeof si,
-		                            FileStandardInformation);
-		if (!NT_SUCCESS(st)) return st;
-		eof = si.EndOfFile;
-	}
-
-	maxprot = (prot & PROT_EXEC) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
-	st = NtCreateSection(&section, SECTION_ALL_ACCESS, NULL, NULL,
-	                     maxprot, SEC_COMMIT, fh);
-	if (st == (NTSTATUS)STATUS_ACCESS_DENIED) {
-		maxprot = (prot & PROT_EXEC) ? PAGE_EXECUTE_READ : PAGE_READONLY;
-		st = NtCreateSection(&section, SECTION_ALL_ACCESS, NULL, NULL,
-		                     maxprot, SEC_COMMIT, fh);
-	}
-	if (!NT_SUCCESS(st)) return st;
-
-	/* ViewSize=0 means "map from SectionOffset to the end of the
-	 * section" -- NtCreateSection above set the section's size to the
-	 * file's own length (MaximumSize=NULL), so this maps exactly the
-	 * bytes the file has, and NT rounds the accessible range up to the
-	 * next page boundary and zero-fills the tail on its own (the same
-	 * behaviour mmap.html requires: "the system shall always zero-fill
-	 * any partial page at the end of an object").  An explicit ViewSize
-	 * of the caller's rounded `len` was tried first and rejected with
-	 * [STATUS_INVALID_VIEW_SIZE] whenever `len` rounds past the file's
-	 * exact byte length, which is every mapping that covers a whole
-	 * small file -- i.e. the common case, not an edge one. `viewbytes`
-	 * still bounds what mmap() tells its caller was mapped; NT's actual
-	 * view can only be smaller when the file is shorter than `len`
-	 * implies, which is the caller's own error to make. */
-	secoff = (LARGE_INTEGER)off;
-	viewsize = 0;
-	st = NtMapViewOfSection(section, NtCurrentProcess(), base_inout, 0, 0,
-	                        &secoff, &viewsize, ViewShare, 0,
-	                        prot_to_view(prot, private));
-	NtClose(section);
-	if (NT_SUCCESS(st) && eof > off && (eof & (MMAP_PAGE - 1)) != 0 &&
-	    (unsigned long long)(eof - off) < viewbytes) {
-		size_t tail = (size_t)(eof - off);
-		size_t end = pground(tail);
-		if (end > viewbytes) end = viewbytes;
-		memset((char *)*base_inout + tail, 0, end - tail);
-	}
-	return st;
-}
 
 /* The mapping owning [p, p+len), or NULL.  A range that straddles two
  * mappings belongs to neither: POSIX lets one munmap() span several
@@ -286,22 +175,19 @@ static int alloc_page_state(struct mapping *m, size_t npages)
 }
 
 /* Release the whole reservation once no page of it is live.  For an
- * anonymous mapping that is MEM_RELEASE, same as always.  For a
- * file-backed mapping it is NtUnmapViewOfSection instead: a section view
- * is not memory NtFreeVirtualMemory owns, and MEM_RELEASE on it fails.
- * The section handle itself was already closed at map time (the view
- * holds its own reference -- see mmap()); writable shared views also close
- * the independent writeback handle retained for msync(). */
+ * anonymous mapping that is __plat_mem_release(), same as always.  For a
+ * file-backed mapping it is __plat_mem_unmap_view() instead: a section
+ * view is not memory a reservation-release call owns.  The section
+ * handle itself was already closed at map time (the view holds its own
+ * reference -- see mmap()); writable shared views also close the
+ * independent writeback handle retained for msync(). */
 static void drop_if_dead(struct mapping *m)
 {
 	size_t i;
-	PVOID b;
-	SIZE_T z = 0;
 	for (i = 0; i < m->npages; i++) if (m->live[i]) return;
-	b = m->base;
-	if (m->filebacked) NtUnmapViewOfSection(NtCurrentProcess(), b);
-	else NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
-	if (m->writeback) NtClose(m->writeback);
+	if (m->filebacked) __plat_mem_unmap_view(m->base);
+	else __plat_mem_release(m->base);
+	if (m->writeback) __plat_close(m->writeback);
 	free(m->live);
 	free(m->locked);
 	m->base = NULL;
@@ -309,19 +195,18 @@ static void drop_if_dead(struct mapping *m)
 	m->locked = NULL;
 	m->npages = 0;
 	m->filebacked = 0;
-	m->writeback = NULL;
+	m->writeback = __PLAT_HANDLE_NULL;
 }
 
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 {
 	struct mapping *m;
-	PVOID base;
-	SIZE_T size;
-	NTSTATUS st;
+	void *base;
+	size_t size;
 	size_t npages;
 	int anon;
 	struct __fd *f = NULL;
-	HANDLE writeback = NULL;
+	__plat_handle_t writeback = __PLAT_HANDLE_NULL;
 
 	/* "[EINVAL] The value of len is zero." (shall fail) */
 	if (len == 0) { errno = EINVAL; return MAP_FAILED; }
@@ -387,8 +272,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 		 * not open for write and PROT_WRITE was specified for a
 		 * MAP_SHARED type mapping."  A MAP_PRIVATE writer needs no
 		 * write access to the file at all -- its writes never reach
-		 * the object (see prot_to_view) -- so the second half is
-		 * MAP_SHARED-only, deliberately. */
+		 * the object (see prot_to_view in the backend) -- so the
+		 * second half is MAP_SHARED-only, deliberately. */
 		if ((f->flags & O_ACCMODE) == O_WRONLY) {
 			errno = EACCES;
 			return MAP_FAILED;
@@ -404,16 +289,14 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 
 	if (flags & MAP_FIXED) {
 		size_t first, i;
-		PVOID p;
-		SIZE_T z;
 		/* "[EINVAL] MAP_FIXED was specified, and ... addr is not a
 		 * multiple of the page size." */
 		if (!pgaligned(addr)) { errno = EINVAL; return MAP_FAILED; }
 		/* Page-granular commit works only inside a reservation we
 		 * already own; there is no way to plant a mapping at an
 		 * arbitrary address otherwise, and inventing one would mean
-		 * reserving at 64 KiB granularity and lying about the base.
-		 * "[ENOMEM] MAP_FIXED was specified, and the range
+		 * reserving at allocation granularity and lying about the
+		 * base. "[ENOMEM] MAP_FIXED was specified, and the range
 		 * [addr,addr+len) exceeds that allowed for the address space
 		 * of a process." */
 		m = find_containing(addr, len);
@@ -421,7 +304,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 
 		if (m->filebacked) {
 			/* A section view is placed and removed as a whole --
-			 * there is no NT primitive for decommitting or
+			 * there is no primitive for decommitting or
 			 * re-mapping part of one, the same "no error for a
 			 * partial operation" problem the anonymous path
 			 * solves with page-granular reserve/commit (see this
@@ -438,34 +321,30 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			 * on a file-backed mapping's extent.  POSIX allows a
 			 * MAP_FIXED to replace any previous mapping regardless
 			 * of its kind, but the replacement path below is
-			 * map_file(), which needs a real file descriptor (`f`)
-			 * -- present only when THIS call is itself file-backed
-			 * (`!anon`, set above). Without this check `f` is NULL
-			 * here whenever the current call is anonymous, which
-			 * is exactly the null dereference on f->h that
-			 * `clang --analyze` [core.NullDereference] catches. No
-			 * case reaching this library replaces a file-backed
-			 * mapping with an anonymous one; an honest [ENOMEM]
-			 * beats silently misbehaving here too. */
+			 * __plat_mem_map_file(), which needs a real file
+			 * descriptor (`f`) -- present only when THIS call is
+			 * itself file-backed (`!anon`, set above). Without
+			 * this check `f` is NULL here whenever the current
+			 * call is anonymous, which is exactly the null
+			 * dereference on f->h that `clang --analyze`
+			 * [core.NullDereference] catches. No case reaching
+			 * this library replaces a file-backed mapping with an
+			 * anonymous one; an honest [ENOMEM] beats silently
+			 * misbehaving here too. */
 			if ((char *)addr != m->base || npages != m->npages || anon) {
 				errno = ENOMEM;
 				return MAP_FAILED;
 			}
 			if ((flags & MAP_SHARED) &&
 			    (f->flags & O_ACCMODE) == O_RDWR) {
-				st = NtDuplicateObject(NtCurrentProcess(), f->h,
-				                       NtCurrentProcess(), &writeback, 0, 0,
-				                       DUPLICATE_SAME_ACCESS);
-				if (!NT_SUCCESS(st)) {
-					__set_errno_status(st);
+				if (__plat_dup(f->h, 0, &writeback) < 0)
 					return MAP_FAILED;
-				}
 			}
 			/* Unlike the anonymous MAP_FIXED path's decommit,
 			 * this has no separate "discard" step: a section
 			 * view occupies its address range for as long as it
-			 * exists, so NT will not place the new view until the
-			 * old one is gone from under it (measured:
+			 * exists, so the platform will not place the new view
+			 * until the old one is gone from under it (measured:
 			 * [STATUS_CONFLICTING_ADDRESSES] otherwise). The old
 			 * mapping's contents are therefore lost even if the
 			 * replacement below fails -- the same trade the
@@ -473,13 +352,12 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			 * above) for the same reason: mmap.html's MAP_FIXED
 			 * clause requires the old mapping discarded, not
 			 * preserved on failure. */
-			NtUnmapViewOfSection(NtCurrentProcess(), m->base);
-			if (m->writeback) NtClose(m->writeback);
+			__plat_mem_unmap_view(m->base);
+			if (m->writeback) __plat_close(m->writeback);
 			base = addr;
-			st = map_file(f->h, prot, flags, off,
-			             npages * MMAP_PAGE, &base);
-			if (!NT_SUCCESS(st)) {
-				if (writeback) NtClose(writeback);
+			if (__plat_mem_map_file(f->h, prot, flags, off,
+			                        npages * MMAP_PAGE, &base) < 0) {
+				if (writeback) __plat_close(writeback);
 				free(m->live);
 				free(m->locked);
 				m->base = NULL;
@@ -487,11 +365,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 				m->locked = NULL;
 				m->npages = 0;
 				m->filebacked = 0;
-				m->writeback = NULL;
-				if (st == (NTSTATUS)STATUS_NO_MEMORY)
-					errno = ENOMEM;
-				else
-					errno = ENOTSUP;
+				m->writeback = __PLAT_HANDLE_NULL;
 				return MAP_FAILED;
 			}
 			free(m->live);
@@ -512,8 +386,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			m->filebacked = 1;
 			m->writeback = writeback;
 			if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
-				NtUnmapViewOfSection(NtCurrentProcess(), base);
-				if (m->writeback) NtClose(m->writeback);
+				__plat_mem_unmap_view(base);
+				if (m->writeback) __plat_close(m->writeback);
 				free(m->live);
 				free(m->locked);
 				memset(m, 0, sizeof *m);
@@ -525,22 +399,11 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 
 		first = (size_t)(((char *)addr - m->base) / MMAP_PAGE);
 
-		/* Decommit then commit, so the previous mapping's
-		 * modifications are actually discarded -- see the banner. */
-		p = addr;
-		z = npages * MMAP_PAGE;
-		NtFreeVirtualMemory(NtCurrentProcess(), &p, &z, MEM_DECOMMIT);
-
-		p = addr;
-		z = npages * MMAP_PAGE;
-		st = NtAllocateVirtualMemory(NtCurrentProcess(), &p, 0, &z,
-		                             MEM_COMMIT, prot_to_page(prot));
-		if (!NT_SUCCESS(st)) {
+		if (__plat_mem_commit_fixed(addr, npages * MMAP_PAGE, prot) < 0) {
 			/* The old contents are gone either way; the pages are
 			 * dead, and saying so keeps the bookkeeping true. */
 			for (i = 0; i < npages && first + i < m->npages; i++) m->live[first + i] = 0;
 			drop_if_dead(m);
-			__set_errno_status(st);
 			return MAP_FAILED;
 		}
 		for (i = 0; i < npages && first + i < m->npages; i++) {
@@ -548,9 +411,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			m->locked[first + i] = 0;
 		}
 		if (lock_future && mlock(addr, npages * MMAP_PAGE) < 0) {
-			p = addr;
-			z = npages * MMAP_PAGE;
-			NtFreeVirtualMemory(NtCurrentProcess(), &p, &z, MEM_DECOMMIT);
+			__plat_mem_decommit(addr, npages * MMAP_PAGE);
 			for (i = 0; i < npages && first + i < m->npages; i++) m->live[first + i] = 0;
 			drop_if_dead(m);
 			errno = EAGAIN;
@@ -564,25 +425,17 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 
 	if (!anon) {
 		if ((flags & MAP_SHARED) && (f->flags & O_ACCMODE) == O_RDWR) {
-			st = NtDuplicateObject(NtCurrentProcess(), f->h,
-			                       NtCurrentProcess(), &writeback, 0, 0,
-			                       DUPLICATE_SAME_ACCESS);
-			if (!NT_SUCCESS(st)) {
-				__set_errno_status(st);
+			if (__plat_dup(f->h, 0, &writeback) < 0)
 				return MAP_FAILED;
-			}
 		}
 		base = NULL;
-		st = map_file(f->h, prot, flags, off, npages * MMAP_PAGE, &base);
-		if (!NT_SUCCESS(st)) {
-			if (writeback) NtClose(writeback);
-			if (st == (NTSTATUS)STATUS_NO_MEMORY) errno = ENOMEM;
-			else errno = ENOTSUP;
+		if (__plat_mem_map_file(f->h, prot, flags, off, npages * MMAP_PAGE, &base) < 0) {
+			if (writeback) __plat_close(writeback);
 			return MAP_FAILED;
 		}
 		if (alloc_page_state(m, npages) < 0) {
-			NtUnmapViewOfSection(NtCurrentProcess(), base);
-			if (writeback) NtClose(writeback);
+			__plat_mem_unmap_view(base);
+			if (writeback) __plat_close(writeback);
 			errno = ENOMEM;
 			return MAP_FAILED;
 		}
@@ -591,8 +444,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 		m->filebacked = 1;
 		m->writeback = writeback;
 		if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
-			NtUnmapViewOfSection(NtCurrentProcess(), base);
-			if (m->writeback) NtClose(m->writeback);
+			__plat_mem_unmap_view(base);
+			if (m->writeback) __plat_close(m->writeback);
 			free(m->live);
 			free(m->locked);
 			memset(m, 0, sizeof *m);
@@ -604,25 +457,19 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 
 	base = NULL;
 	size = npages * MMAP_PAGE;
-	st = NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size,
-	                             MEM_RESERVE | MEM_COMMIT, prot_to_page(prot));
-	if (!NT_SUCCESS(st)) { __set_errno_status(st); return MAP_FAILED; }
+	if (__plat_mem_reserve(&base, size, prot) < 0) return MAP_FAILED;
 
 	if (alloc_page_state(m, npages) < 0) {
-		PVOID b = base;
-		SIZE_T z = 0;
-		NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
+		__plat_mem_release(base);
 		errno = ENOMEM;
 		return MAP_FAILED;
 	}
 	m->base = base;
 	m->npages = npages;
 	m->filebacked = 0;
-	m->writeback = NULL;
+	m->writeback = __PLAT_HANDLE_NULL;
 	if (lock_future && mlock(base, npages * MMAP_PAGE) < 0) {
-		PVOID b = base;
-		SIZE_T z = 0;
-		NtFreeVirtualMemory(NtCurrentProcess(), &b, &z, MEM_RELEASE);
+		__plat_mem_release(base);
 		free(m->live);
 		free(m->locked);
 		memset(m, 0, sizeof *m);
@@ -668,14 +515,12 @@ int munmap(void *addr, size_t len)
 		if (hi > m->base + m->npages * MMAP_PAGE) hi = m->base + m->npages * MMAP_PAGE;
 		if (lo >= hi) continue;
 		{
-			PVOID p = lo;
-			SIZE_T z = (SIZE_T)(hi - lo);
 			size_t first = (size_t)(lo - m->base) / MMAP_PAGE;
 			size_t n = (size_t)(hi - lo) / MMAP_PAGE;
-			/* MEM_DECOMMIT over the subrange: page-granular, keeps
-			 * the reservation, leaves the rest of the mapping
-			 * exactly where it was. */
-			NtFreeVirtualMemory(NtCurrentProcess(), &p, &z, MEM_DECOMMIT);
+			/* Page-granular decommit: keeps the reservation,
+			 * leaves the rest of the mapping exactly where it
+			 * was. */
+			__plat_mem_decommit(lo, (size_t)(hi - lo));
 			for (i = 0; i < n; i++) {
 				m->live[first + i] = 0;
 				m->locked[first + i] = 0;
@@ -688,20 +533,12 @@ int munmap(void *addr, size_t len)
 
 int mprotect(void *addr, size_t len, int prot)
 {
-	PVOID p = addr;
-	SIZE_T z;
-	ULONG old = 0;
-	NTSTATUS st;
-
 	/* mprotect.html ERRORS: "[EINVAL] The addr argument is not a
 	 * multiple of the page size as returned by sysconf()." */
 	if (!pgaligned(addr)) { errno = EINVAL; return -1; }
 	if (len == 0) return 0;
 
-	z = pground(len);
-	st = NtProtectVirtualMemory(NtCurrentProcess(), &p, &z, prot_to_page(prot), &old);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return 0;
+	return __plat_mem_protect(addr, pground(len), prot);
 }
 
 int msync(void *addr, size_t len, int flags)
@@ -741,35 +578,14 @@ int msync(void *addr, size_t len, int flags)
 	}
 	for (k = 0; k < MMAP_MAX; k++) {
 		struct mapping *m = &maps[k];
-		const void *p;
-		SIZE_T z;
-		IO_STATUS_BLOCK io;
 		char *lo, *hi;
-		NTSTATUS st;
-		FILE_BASIC_INFORMATION bi;
-		LARGE_INTEGER now;
 		if (!m->base || !m->filebacked || !m->writeback) continue;
 		lo = a > m->base ? a : m->base;
 		hi = end < m->base + m->npages * MMAP_PAGE
 		   ? end : m->base + m->npages * MMAP_PAGE;
 		if (lo >= hi) continue;
-		p = lo;
-		z = (SIZE_T)(hi - lo);
-		st = NtFlushVirtualMemory(NtCurrentProcess(), &p, &z, &io);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		/* The section flush above writes data but does not consistently
-		 * advance the file times.  Preserve the attributes explicitly:
-		 * Wine clears FILE_ATTRIBUTE_READONLY when FileAttributes is zero,
-		 * unlike real NT (the same quirk is documented in utimensat.c). */
-		st = NtQueryInformationFile(m->writeback, &io, &bi, sizeof bi,
-		                            FileBasicInformation);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		NtQuerySystemTime(&now);
-		bi.CreationTime = bi.LastAccessTime = 0;
-		bi.LastWriteTime = bi.ChangeTime = now;
-		st = NtSetInformationFile(m->writeback, &io, &bi, sizeof bi,
-		                          FileBasicInformation);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		if (__plat_mem_flush_view(lo, (size_t)(hi - lo), m->writeback) < 0)
+			return -1;
 	}
 	return 0;
 }
@@ -777,29 +593,28 @@ int msync(void *addr, size_t len, int flags)
 /* mlock.html: "shall cause those whole pages containing any part of the
  * address space ... to be memory-resident until unlocked".
  *
- * NtLockVirtualMemory is a real export and really implemented, on NT and
- * in Wine alike (see src/internal/nt.h's note), so this is a genuine
- * lock rather than a wrapper that reports success without doing
- * anything.  It is bounded by a resource limit on both -- a working-set
- * quota on NT, RLIMIT_MEMLOCK on the host under Wine -- and that limit is
- * an ENVIRONMENT property, not a platform one: the same binary succeeds
- * on a machine with a generous limit and fails on one without.  That is
- * why test/posix-mman.c keys its skip on the limit it measures rather
- * than on which system it believes it is running. */
+ * __plat_mem_lock() is a real, genuine lock on every backend this
+ * interface is defined against (NT and Wine alike -- see
+ * src/internal/nt.h's note on NtLockVirtualMemory), rather than a
+ * wrapper that reports success without doing anything.  It is bounded
+ * by a resource limit on both -- a working-set quota on NT,
+ * RLIMIT_MEMLOCK on the host under Wine -- and that limit is an
+ * ENVIRONMENT property, not a platform one: the same binary succeeds on
+ * a machine with a generous limit and fails on one without.  That is why
+ * test/posix-mman.c keys its skip on the limit it measures rather than
+ * on which system it believes it is running. */
 static int lock_range(const void *addr, size_t len, int lock)
 {
-	PVOID p = (PVOID)(uintptr_t)addr;
-	SIZE_T z;
-	NTSTATUS st;
+	uintptr_t base;
+	size_t z;
 
 	if (len == 0) { errno = EINVAL; return -1; }
 	z = pground(len + ((uintptr_t)addr & (MMAP_PAGE - 1)));
-	p = (PVOID)((uintptr_t)addr & ~(uintptr_t)(MMAP_PAGE - 1));
-	st = lock ? NtLockVirtualMemory(NtCurrentProcess(), &p, &z, 1)
-	          : NtUnlockVirtualMemory(NtCurrentProcess(), &p, &z, 1);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	base = (uintptr_t)addr & ~(uintptr_t)(MMAP_PAGE - 1);
+	if (lock ? __plat_mem_lock((void *)base, z) : __plat_mem_unlock((void *)base, z))
+		return -1;
 	{
-		char *a = p;
+		char *a = (char *)base;
 		char *end = a + z;
 		int k;
 		for (k = 0; k < MMAP_MAX; k++) {

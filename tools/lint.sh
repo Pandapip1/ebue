@@ -319,7 +319,9 @@ cppflags_for() {
 }
 
 # The same source set the Makefile builds: base sources, minus any that an
-# arch/ subdirectory of the same module overrides, plus the arch sources --
+# arch/ subdirectory of the same module overrides, plus the arch sources,
+# plus src/*/nt/*.c (the PLATFORM axis's own additive backend files --
+# see the Makefile's PLAT_GLOBS and src/internal/plat_handle.h) --
 # plus sh/*.c, the sh(1p) binary. sh/ is not part of libc.a (it is a
 # program, see the Makefile's SH_SRCS comment), but it is first-party C in
 # this repo built by `make all`, and nothing else in these gates compiles
@@ -327,7 +329,7 @@ cppflags_for() {
 # user actually runs is the one file gcc/clang/cppcheck never look at.
 sources_for() {
 	arch=$1
-	for f in src/*/*.c crt/*.c sh/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c; do
+	for f in src/*/*.c crt/*.c sh/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c src/*/nt/*.c; do
 		[ -e "$f" ] || continue
 		case $f in
 		src/*/*.c)

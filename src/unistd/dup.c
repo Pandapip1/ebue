@@ -6,19 +6,17 @@
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
+#include "plat_fd.h"
 
 static int dup_to(int fd, int newfd, int cloexec)
 {
 	struct __fd *f = __fd_get(fd);
 	struct __fd state;
-	HANDLE h;
-	NTSTATUS st;
+	__plat_handle_t h;
 	if (!f) return -1;
 	state = *f;
-	st = NtDuplicateObject(NtCurrentProcess(), f->h, NtCurrentProcess(), &h, 0,
-	                       cloexec ? 0 : OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	if (__fds[newfd].h) NtClose(__fds[newfd].h);
+	if (__plat_dup(f->h, !cloexec, &h) < 0) return -1;
+	if (__fds[newfd].h) __plat_close(__fds[newfd].h);
 	__fd_install_at(newfd, h, (state.flags & ~O_CLOEXEC) | (cloexec ? O_CLOEXEC : 0), state.type);
 	__fds[newfd].pad = state.pad;
 	__fds[newfd].shm_mode_valid = state.shm_mode_valid;

@@ -233,6 +233,19 @@ x86_64*|amd64*) ARCH=x86_64 ;;
 *) fail "$0: unknown or unsupported target \"$target\"" ;;
 esac
 
+# The platform axis (which OS-level backend src/*/nt/*.c-shaped
+# directories under src/<module>/ supply) is independent of ARCH (CPU
+# width/calling convention, above). Only one platform is implemented --
+# ntdll/NT -- so this is not yet a --platform flag to parse, just a
+# validated, fail-loud constant in the same shape --host's ARCH
+# derivation has, so a later platform is one case arm here, not a
+# silent Makefile constant nobody finds.
+platform=nt
+case "$platform" in
+nt) ;;
+*) fail "$0: unsupported platform \"$platform\" (only \"nt\" is implemented)" ;;
+esac
+
 #
 # The compiler must be targeting Windows/PE at all.
 #
@@ -336,6 +349,7 @@ cat << EOM
 # Any changes made here will be lost if configure is re-run
 AR = $AR
 ARCH = $ARCH
+PLATFORM = $platform
 srcdir = $srcdir
 TARGET = $target
 prefix = $prefix

@@ -4,14 +4,11 @@
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
+#include "plat_fd.h"
 
 off_t lseek(int fd, off_t off, int whence)
 {
 	struct __fd *f = __fd_get(fd);
-	IO_STATUS_BLOCK io;
-	FILE_POSITION_INFORMATION pi;
-	FILE_STANDARD_INFORMATION si;
-	NTSTATUS st;
 	long long base, target;
 
 	if (!f) return -1;
@@ -20,14 +17,12 @@ off_t lseek(int fd, off_t off, int whence)
 	switch (whence) {
 	case SEEK_SET: base = 0; break;
 	case SEEK_CUR:
-		st = NtQueryInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		base = pi.CurrentByteOffset;
+		base = __plat_seek_query(f->h, 0);
+		if (base < 0) return -1;
 		break;
 	case SEEK_END:
-		st = NtQueryInformationFile(f->h, &io, &si, sizeof si, FileStandardInformation);
-		if (!NT_SUCCESS(st)) return __set_errno_status(st);
-		base = si.EndOfFile;
+		base = __plat_seek_query(f->h, 1);
+		if (base < 0) return -1;
 		break;
 	default: errno = EINVAL; return -1;
 	}
@@ -35,8 +30,6 @@ off_t lseek(int fd, off_t off, int whence)
 		errno = base >= 0 && off < 0 ? EINVAL : EOVERFLOW;
 		return -1;
 	}
-	pi.CurrentByteOffset = target;
-	st = NtSetInformationFile(f->h, &io, &pi, sizeof pi, FilePositionInformation);
-	if (!NT_SUCCESS(st)) return __set_errno_status(st);
-	return pi.CurrentByteOffset;
+	if (__plat_seek_set(f->h, target) < 0) return -1;
+	return target;
 }

@@ -9,6 +9,12 @@
 # and a handful of per-arch files under arch/$(ARCH)/.  Sources in
 # arch/$(ARCH)/src/ override sources of the same name under src/.
 #
+# A second, independent axis selects the OS-level backend a module's
+# front door calls into (see src/internal/plat_handle.h/plat_mem.h/
+# plat_fd.h): src/<module>/$(PLATFORM)/*.c, additive the same way
+# arch/$(ARCH)/src/ is.  Only PLATFORM=nt (the default, and today the
+# only accepted value -- see configure) is implemented.
+#
 # Targets:
 #   all       build lib/libc.a, lib/crt1.o, lib/ntdll.def (and the wrapper),
 #             plus obj/sh/sh.exe, the sh(1p) binary over the shell engine
@@ -35,12 +41,26 @@ includedir = $(prefix)/include
 SRC_DIRS = $(wildcard $(addprefix $(srcdir)/,src/* crt))
 BASE_GLOBS = $(addsuffix /*.c,$(SRC_DIRS))
 ARCH_GLOBS = $(addsuffix /$(ARCH)/*.[csS],$(SRC_DIRS)) $(srcdir)/arch/$(ARCH)/src/*.[csS]
+# PLAT_GLOBS is the platform axis's own additive glob, the same shape as
+# ARCH_GLOBS but keyed on PLATFORM (which OS-level backend, e.g.
+# src/mman/nt/plat_mem.c) rather than ARCH (CPU width).  The two axes are
+# independent -- see src/internal/plat_handle.h and the headers it
+# backs (plat_mem.h, plat_fd.h) for what crosses this seam and why.
+# Like ARCH_GLOBS's per-module override half, no basename collision is
+# intended (a front-door file and its backend are always different
+# filenames), so this never actually replaces anything today, but
+# REPLACED_OBJS is extended symmetrically so the machinery would do the
+# right thing if one ever existed.
+PLAT_GLOBS = $(addsuffix /$(PLATFORM)/*.c,$(SRC_DIRS))
 BASE_SRCS = $(sort $(wildcard $(BASE_GLOBS)))
 ARCH_SRCS = $(sort $(wildcard $(ARCH_GLOBS)))
+PLAT_SRCS = $(sort $(wildcard $(PLAT_GLOBS)))
 BASE_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(BASE_SRCS)))
 ARCH_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(ARCH_SRCS)))
-REPLACED_OBJS = $(sort $(subst /$(ARCH)/,/,$(filter-out arch/%,$(ARCH_OBJS))))
-ALL_OBJS = $(addprefix obj/, $(filter-out $(REPLACED_OBJS), $(sort $(BASE_OBJS) $(ARCH_OBJS))))
+PLAT_OBJS = $(patsubst $(srcdir)/%,%.o,$(basename $(PLAT_SRCS)))
+REPLACED_OBJS = $(sort $(subst /$(ARCH)/,/,$(filter-out arch/%,$(ARCH_OBJS))) \
+                       $(subst /$(PLATFORM)/,/,$(PLAT_OBJS)))
+ALL_OBJS = $(addprefix obj/, $(filter-out $(REPLACED_OBJS), $(sort $(BASE_OBJS) $(ARCH_OBJS) $(PLAT_OBJS))))
 
 LIBC_OBJS = $(filter obj/src/%,$(ALL_OBJS)) $(filter obj/arch/%,$(ALL_OBJS))
 CRT_OBJS = $(filter obj/crt/%,$(ALL_OBJS))
