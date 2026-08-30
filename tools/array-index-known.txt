@@ -1145,12 +1145,12 @@ src/wordexp/wordexp.c	expand_impl	p[2]	if (c == '$' && p[1] == '(' && p[2] == '(
 src/wordexp/wordexp.c	expand_param	p[1]	if (*p == '#' && (!braced || p[1] == '}')) { @column 31	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param	p[1]	if (braced && *p == '#' && is_namestart(p[1])) { @column 42	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param	p[1]	if (sh && *p == '?' && (!braced || p[1] == '}')) { @column 37	existing site; prove while completing the bounds audit
-src/wordexp/wordexp.c	expand_param_word	end[-1]	if (!quoted && input_len && is_split_char(end[-1])) n++; @column 44	existing site; prove while completing the bounds audit
-src/wordexp/wordexp.c	expand_param_word	end[-1]	if (!quoted && input_len && is_split_char(end[-1])) s[n++] = end[-1]; @column 44	existing site; prove while completing the bounds audit
-src/wordexp/wordexp.c	expand_param_word	end[-1]	if (!quoted && input_len && is_split_char(end[-1])) s[n++] = end[-1]; @column 63	existing site; prove while completing the bounds audit
-src/wordexp/wordexp.c	expand_param_word	s[n++]	if (!quoted && input_len && is_split_char(end[-1])) s[n++] = end[-1]; @column 54	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param_word	s[n++]	if (!quoted && input_len && is_split_char(start[input_len - 1])) s[n++] = start[input_len - 1]; @column 67	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	s[n++]	if (i && *ifs) s[n++] = *ifs; @column 18	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	s[n]	s[n] = 0; @column 2	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param_word	start[input_len - 1]	if (!quoted && input_len && is_split_char(start[input_len - 1])) n++; @column 44	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param_word	start[input_len - 1]	if (!quoted && input_len && is_split_char(start[input_len - 1])) s[n++] = start[input_len - 1]; @column 44	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_param_word	start[input_len - 1]	if (!quoted && input_len && is_split_char(start[input_len - 1])) s[n++] = start[input_len - 1]; @column 76	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	text[0]	if (prefix) text[0] = '\\'; @column 14	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	text[input_len + prefix]	text[input_len + prefix] = 0; @column 2	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_param_word	we.we_wordv[i]	for (i = 0; i < we.we_wordc; i++) n += strlen(we.we_wordv[i]); @column 48	existing site; prove while completing the bounds audit
@@ -1166,7 +1166,7 @@ src/wordexp/wordexp.c	expand_trim_pattern	p[1]	if (fbuf_push(&b, p[1], 1)) { rc 
 src/wordexp/wordexp.c	expand_trim_pattern	pattern[n++]	if (b.lit[i] && strchr("*?[\\", b.data[i])) pattern[n++] = '\\'; @column 47	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_trim_pattern	pattern[n++]	pattern[n++] = b.data[i]; @column 3	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	expand_trim_pattern	pattern[n]	pattern[n] = 0; @column 2	existing site; prove while completing the bounds audit
-src/wordexp/wordexp.c	expand_trim_pattern	text[end - start]	text[end - start] = 0; @column 2	existing site; prove while completing the bounds audit
+src/wordexp/wordexp.c	expand_trim_pattern	text[len]	text[len] = 0; @column 2	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	fbuf_push	b->data[b->n]	b->data[b->n] = c; @column 2	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	fbuf_push	b->lit[b->n]	b->lit[b->n] = (unsigned char)literal; @column 2	existing site; prove while completing the bounds audit
 src/wordexp/wordexp.c	pv_free_all	p->v[i]	for (i = 0; i < p->n; i++) __free(p->v[i]); @column 36	existing site; prove while completing the bounds audit

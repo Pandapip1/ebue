@@ -136,6 +136,7 @@ src/misc/catgets.c	catgets	(uint32_t)msg_id	if ((uint32_t)msg_id < mid_id) hi = 
 src/misc/catgets.c	catgets	(uint32_t)msg_id	if ((uint32_t)msg_id == mid_id) @column 9	existing site; prove while completing the cast audit
 src/misc/catgets.c	catgets	(uint32_t)set_id	if ((uint32_t)set_id < id) hi = mid; @column 7	existing site; prove while completing the cast audit
 src/misc/catgets.c	catgets	(uint32_t)set_id	if ((uint32_t)set_id == id) { @column 7	existing site; prove while completing the cast audit
+src/misc/catgets.c	catopen	(size_t)(z - p)	: expand(buf, sizeof buf, p, (size_t)(z - p), name, lang); @column 43	existing site; prove while completing the cast audit
 src/misc/catgets.c	catopen	(size_t)-1	if (n != (size_t)-1) { @column 12	existing site; prove while completing the cast audit
 src/misc/catgets.c	expand	(size_t)-1	default: return (size_t)-1; @column 19	existing site; prove while completing the cast audit
 src/misc/catgets.c	expand	(size_t)-1	else if (++p >= end) return (size_t)-1; @column 31	existing site; prove while completing the cast audit
@@ -187,20 +188,11 @@ src/misc/times.c	times	(unsigned long long)mono.tv_nsec	+ (unsigned long long)mo
 src/misc/times.c	times	(unsigned long long)mono.tv_sec	return nt100ns_to_ticks((unsigned long long)mono.tv_sec * __TICKS_PER_SEC @column 26	existing site; prove while completing the cast audit
 src/misc/times.c	timeval_to_ticks	(unsigned long long)tv->tv_sec	unsigned long long t100ns = (unsigned long long)tv->tv_sec * __TICKS_PER_SEC @column 30	existing site; prove while completing the cast audit
 src/misc/times.c	timeval_to_ticks	(unsigned long long)tv->tv_usec	+ (unsigned long long)tv->tv_usec * 10; @column 8	existing site; prove while completing the cast audit
-src/mman/mman.c	lock_range	(size_t)(hi - lo)	n = (size_t)(hi - lo) / MMAP_PAGE; @column 8	existing site; prove while completing the cast audit
-src/mman/mman.c	lock_range	(size_t)(lo - m->base)	first = (size_t)(lo - m->base) / MMAP_PAGE; @column 12	existing site; prove while completing the cast audit
 src/mman/mman.c	map_file	(NTSTATUS)0xC0000022L	if (st == (NTSTATUS)STATUS_ACCESS_DENIED) { @column 22	existing site; prove while completing the cast audit
 src/mman/mman.c	map_file	(size_t)(eof - off)	size_t tail = (size_t)(eof - off); @column 17	existing site; prove while completing the cast audit
 src/mman/mman.c	map_file	(unsigned long long)(eof - off)	(unsigned long long)(eof - off) < viewbytes) { @column 6	existing site; prove while completing the cast audit
 src/mman/mman.c	mmap	(NTSTATUS)0xC0000017L	if (st == (NTSTATUS)STATUS_NO_MEMORY) @column 25	existing site; prove while completing the cast audit
 src/mman/mman.c	mmap	(NTSTATUS)0xC0000017L	if (st == (NTSTATUS)STATUS_NO_MEMORY) errno = ENOMEM; @column 24	existing site; prove while completing the cast audit
-src/mman/mman.c	mmap	(size_t)(((char *)addr - m->base) / MMAP_PAGE)	first = (size_t)(((char *)addr - m->base) / MMAP_PAGE); @column 11	existing site; prove while completing the cast audit
-src/mman/mman.c	msync	(SIZE_T)(hi - lo)	z = (SIZE_T)(hi - lo); @column 7	existing site; prove while completing the cast audit
-src/mman/mman.c	msync	(size_t)(hi - lo)	n = (size_t)(hi - lo) / MMAP_PAGE; @column 8	existing site; prove while completing the cast audit
-src/mman/mman.c	msync	(size_t)(lo - m->base)	first = (size_t)(lo - m->base) / MMAP_PAGE; @column 12	existing site; prove while completing the cast audit
-src/mman/mman.c	munmap	(SIZE_T)(hi - lo)	SIZE_T z = (SIZE_T)(hi - lo); @column 15	existing site; prove while completing the cast audit
-src/mman/mman.c	munmap	(size_t)(hi - lo)	size_t n = (size_t)(hi - lo) / MMAP_PAGE; @column 15	existing site; prove while completing the cast audit
-src/mman/mman.c	munmap	(size_t)(lo - m->base)	size_t first = (size_t)(lo - m->base) / MMAP_PAGE; @column 19	existing site; prove while completing the cast audit
 src/mman/shm.c	rename_mapped_away	(size_t)(slash - path + 1)	size_t dirlen = slash ? (size_t)(slash - path + 1) : 0; @column 26	existing site; prove while completing the cast audit
 src/mman/shm.c	rename_mapped_away	(unsigned)getpid()	"%s%08x-%08x-%08x", stem, (unsigned)getpid(), @column 38	existing site; prove while completing the cast audit
 src/mman/shm.c	rename_mapped_away	(unsigned)gettid()	(unsigned)gettid(), serial); @column 12	existing site; prove while completing the cast audit
@@ -404,6 +396,7 @@ src/stdio/scanf.c	unrd	(size_t)cap	: realloc(sc->pb, (size_t)cap * sizeof *q); @
 src/stdio/scanf.c	unrd	(unsigned char)sc->lastnb	sc->pb[sc->npb].nb = (unsigned char)sc->lastnb; @column 23	existing site; prove while completing the cast audit
 src/stdio/scanf.c	unrd	(wchar_t)c	sc->pb[sc->npb].wc = (wchar_t)c; @column 23	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(int)(gf(fp, st) - '0')	int digit = (int)(gf(fp, st) - '0'); @column 17	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	(size_t)(setend - setstart)	: anyhigh && wset_has(setstart, (size_t)(setend - setstart), st, (unsigned)c)) != neg) @column 49	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(uintptr_t)uv	if (assign) { *pp = (void *)(uintptr_t)uv; nmatched++; } @column 33	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	for (; gf(fp, st); fp += st) { @column 9	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	if ((unsigned)c != gf(fp, st)) { unrd(&sc, c); goto done; } @column 23	existing site; prove while completing the cast audit
@@ -411,7 +404,7 @@ src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	if (gf(fp, st) != '%') { @colum
 src/stdio/scanf.c	vfscanf_st	(unsigned char)*(q)	if (isspace((int)gf(fp, st))) { @column 20	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned int)uv	default: *(unsigned int *)va_arg(ap, void *) = (unsigned int)uv; break; @column 53	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned)c	&& (((unsigned)c < 256 ? set[c] != 0 @column 17	existing site; prove while completing the cast audit
-src/stdio/scanf.c	vfscanf_st	(unsigned)c	: anyhigh && wset_has(setstart, setend, st, (unsigned)c)) != neg) @column 61	existing site; prove while completing the cast audit
+src/stdio/scanf.c	vfscanf_st	(unsigned)c	: anyhigh && wset_has(setstart, (size_t)(setend - setstart), st, (unsigned)c)) != neg) @column 82	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	(unsigned)c	if ((unsigned)c != gf(fp, st)) { unrd(&sc, c); goto done; } @column 8	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	CStyleCastExpr	if (isspace((int)gf(fp, st))) { @column 15	existing site; prove while completing the cast audit
 src/stdio/scanf.c	vfscanf_st	CStyleCastExpr	switch ((int)gf(fp, st)) { @column 12	existing site; prove while completing the cast audit
@@ -643,9 +636,7 @@ src/wordexp/arith.c	negate	(unsigned long)v	return wrap_to_long(0UL - (unsigned 
 src/wordexp/wordexp.c	expand_arith	(size_t)(end - start)	len = (size_t)(end - start); @column 8	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	expand_dollar_single	(char)c	if (fbuf_push(b, (char)c, 1)) return WRDE_NOSPACE; @column 20	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	expand_dollar_single	(unsigned char)*p++	unsigned char c = (unsigned char)*p++; @column 21	existing site; prove while completing the cast audit
-src/wordexp/wordexp.c	expand_param_word	(size_t)(end - start)	size_t i, n = 0, input_len = (size_t)(end - start), prefix = 0; @column 31	existing site; prove while completing the cast audit
-src/wordexp/wordexp.c	expand_trim_pattern	(size_t)(end - start)	memcpy(text, start, (size_t)(end - start)); @column 22	existing site; prove while completing the cast audit
-src/wordexp/wordexp.c	expand_trim_pattern	(size_t)(end - start)	text = __malloc((size_t)(end - start) + 1); @column 18	existing site; prove while completing the cast audit
+src/wordexp/wordexp.c	expand_param	(size_t)(end - word)	rc = expand_param_word(word, (size_t)(end - word), flags, sh, quoted, ctx, &replacement); @column 32	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	is_namechar	(unsigned char)c	static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; } @column 49	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	is_namestart	(unsigned char)c	static int is_namestart(char c) { return isalpha((unsigned char)c) || c == '_'; } @column 50	existing site; prove while completing the cast audit
 src/wordexp/wordexp.c	pv_pack	(size_t)-1	if (p->n == (size_t)-1 || offs > (size_t)-1 - p->n - 1) return 0; @column 14	existing site; prove while completing the cast audit

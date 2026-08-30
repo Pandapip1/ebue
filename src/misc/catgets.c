@@ -218,12 +218,22 @@ fail:
  *
  * Expands one template into buf; returns its length, or (size_t)-1 if
  * it does not fit or uses an undefined keyword (in which case the
- * template is skipped, not treated as a literal). */
+ * template is skipped, not treated as a literal).
+ *
+ * Takes the template's length rather than an end pointer so that `end`
+ * is computed here, locally, from `tmpl` -- both callers already have a
+ * length or an equally-local same-object end pointer at hand (see
+ * catopen() below), and a length crossing the call as a plain size_t
+ * carries no pointer-provenance obligation at all, unlike an end
+ * pointer, which a static analyzer checking this function on its own
+ * (as tools/lint.sh's provenance stage does) has no way to know shares
+ * `tmpl`'s object -- that invariant lived only in catopen()'s two call
+ * sites, not in anything expand() itself could see. */
 static size_t expand(char *buf, size_t bufsz, const char *tmpl,
-                     const char *end, const char *name, const char *lang)
+                     size_t tmpllen, const char *name, const char *lang)
 {
 	size_t i = 0;
-	const char *p;
+	const char *p, *end = tmpl + tmpllen;
 
 	for (p = tmpl; p < end; p++) {
 		const char *v;
@@ -258,12 +268,15 @@ static size_t expand(char *buf, size_t bufsz, const char *tmpl,
 
 nl_catd catopen(const char *name, int oflag)
 {
-	/* One array, not two literals: `end` is an exclusive end pointer
-	 * into the *same* object as `tmpl` (expand() compares them with
-	 * `<`), and C does not guarantee two identical string literals are
-	 * one object -- so `expand(..., "%N", "%N" + 2, ...)` was both a
-	 * -Wstring-plus-int finding and a relational comparison of pointers
-	 * into potentially distinct arrays. */
+	/* A named array rather than a second "%N" literal purely so
+	 * `sizeof dflt - 1` names its length without a magic 2: expand()
+	 * takes a length now (see its own comment), not an end pointer, so
+	 * the historical reason this had to be one array -- two identical
+	 * string literals are not guaranteed to be one object, and the old
+	 * `expand(..., "%N", "%N" + 2, ...)` shape relied on comparing
+	 * pointers into what would otherwise have been potentially distinct
+	 * arrays -- no longer applies, but there is still no reason to
+	 * spell the template twice. */
 	static const char dflt[] = "%N";
 	char buf[PATH_MAX];
 	const char *path, *lang, *p, *z;
@@ -306,9 +319,9 @@ nl_catd catopen(const char *name, int oflag)
 
 		/* "A leading or two adjacent <colon> characters ( "::" ) is
 		 * equivalent to specifying %N." */
-		n = z == p ? expand(buf, sizeof buf, dflt, dflt + sizeof dflt - 1,
+		n = z == p ? expand(buf, sizeof buf, dflt, sizeof dflt - 1,
 		                    name, lang)
-		           : expand(buf, sizeof buf, p, z, name, lang);
+		           : expand(buf, sizeof buf, p, (size_t)(z - p), name, lang);
 		if (n != (size_t)-1) {
 			cd = read_catalog(buf);
 			if (cd != (nl_catd)-1) return cd;

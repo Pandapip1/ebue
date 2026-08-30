@@ -140,6 +140,24 @@ static int pgaligned(const void *p) { return ((uintptr_t)p & (MMAP_PAGE - 1)) ==
  * mappings, but MAP_FIXED replacement is defined against the mapping it
  * lands in, so the two callers want different things and only this one
  * wants containment. */
+/* Address-range containment and intersection against this allocator's
+ * own bookkept mapping bases (below, and in munmap()/msync()/
+ * lock_range()/mmap()'s MAP_FIXED-replacement branch) is a flat-
+ * address-space question about two independently obtained pointers --
+ * a caller's argument and one of `maps[]`'s own bases, populated by an
+ * earlier, unrelated mmap() call -- not a same-object relationship.
+ * ISO C only defines <, <=, >, >=, and - between pointers into the same
+ * array object (6.5.6p9, 6.5.8p5); comparing or subtracting across
+ * `maps[]`'s entries needs uintptr_t for the same reason src/string/
+ * memmove.c's copy-direction test does.  Centralised here rather than
+ * cast at each of the five call sites so the reasoning is written down
+ * once. */
+static int addr_lt(const void *a, const void *b) { return (uintptr_t)a < (uintptr_t)b; }
+static int addr_le(const void *a, const void *b) { return (uintptr_t)a <= (uintptr_t)b; }
+static int addr_gt(const void *a, const void *b) { return (uintptr_t)a > (uintptr_t)b; }
+static int addr_ge(const void *a, const void *b) { return (uintptr_t)a >= (uintptr_t)b; }
+static size_t addr_diff(const void *a, const void *b) { return (size_t)((uintptr_t)a - (uintptr_t)b); }
+
 static struct mapping *find_containing(const void *p, size_t len)
 {
 	int i;
@@ -147,7 +165,7 @@ static struct mapping *find_containing(const void *p, size_t len)
 	for (i = 0; i < MMAP_MAX; i++) {
 		struct mapping *m = &maps[i];
 		if (!m->base) continue;
-		if (a >= m->base && a + len <= m->base + m->npages * MMAP_PAGE) return m;
+		if (addr_ge(a, m->base) && addr_le(a + len, m->base + m->npages * MMAP_PAGE)) return m;
 	}
 	return NULL;
 }
@@ -397,7 +415,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 			return base;
 		}
 
-		first = (size_t)(((char *)addr - m->base) / MMAP_PAGE);
+		first = addr_diff(addr, m->base) / MMAP_PAGE;
 
 		if (__plat_mem_commit_fixed(addr, npages * MMAP_PAGE, prot) < 0) {
 			/* The old contents are gone either way; the pages are
@@ -510,17 +528,17 @@ int munmap(void *addr, size_t len)
 		struct mapping *m = &maps[k];
 		char *lo, *hi;
 		if (!m->base) continue;
-		lo = a > m->base ? a : m->base;
+		lo = addr_gt(a, m->base) ? a : m->base;
 		hi = a + npages * MMAP_PAGE;
-		if (hi > m->base + m->npages * MMAP_PAGE) hi = m->base + m->npages * MMAP_PAGE;
-		if (lo >= hi) continue;
+		if (addr_gt(hi, m->base + m->npages * MMAP_PAGE)) hi = m->base + m->npages * MMAP_PAGE;
+		if (addr_ge(lo, hi)) continue;
 		{
-			size_t first = (size_t)(lo - m->base) / MMAP_PAGE;
-			size_t n = (size_t)(hi - lo) / MMAP_PAGE;
+			size_t first = addr_diff(lo, m->base) / MMAP_PAGE;
+			size_t n = addr_diff(hi, lo) / MMAP_PAGE;
 			/* Page-granular decommit: keeps the reservation,
 			 * leaves the rest of the mapping exactly where it
 			 * was. */
-			__plat_mem_decommit(lo, (size_t)(hi - lo));
+			__plat_mem_decommit(lo, addr_diff(hi, lo));
 			for (i = 0; i < n; i++) {
 				m->live[first + i] = 0;
 				m->locked[first + i] = 0;
@@ -564,12 +582,12 @@ int msync(void *addr, size_t len, int flags)
 			char *lo, *hi;
 			size_t first, n, i;
 			if (!m->base) continue;
-			lo = a > m->base ? a : m->base;
-			hi = end < m->base + m->npages * MMAP_PAGE
+			lo = addr_gt(a, m->base) ? a : m->base;
+			hi = addr_lt(end, m->base + m->npages * MMAP_PAGE)
 			   ? end : m->base + m->npages * MMAP_PAGE;
-			if (lo >= hi) continue;
-			first = (size_t)(lo - m->base) / MMAP_PAGE;
-			n = (size_t)(hi - lo) / MMAP_PAGE;
+			if (addr_ge(lo, hi)) continue;
+			first = addr_diff(lo, m->base) / MMAP_PAGE;
+			n = addr_diff(hi, lo) / MMAP_PAGE;
 			for (i = 0; i < n; i++) if (m->locked[first + i]) {
 				errno = EBUSY;
 				return -1;
@@ -580,11 +598,11 @@ int msync(void *addr, size_t len, int flags)
 		struct mapping *m = &maps[k];
 		char *lo, *hi;
 		if (!m->base || !m->filebacked || !m->writeback) continue;
-		lo = a > m->base ? a : m->base;
-		hi = end < m->base + m->npages * MMAP_PAGE
+		lo = addr_gt(a, m->base) ? a : m->base;
+		hi = addr_lt(end, m->base + m->npages * MMAP_PAGE)
 		   ? end : m->base + m->npages * MMAP_PAGE;
-		if (lo >= hi) continue;
-		if (__plat_mem_flush_view(lo, (size_t)(hi - lo), m->writeback) < 0)
+		if (addr_ge(lo, hi)) continue;
+		if (__plat_mem_flush_view(lo, addr_diff(hi, lo), m->writeback) < 0)
 			return -1;
 	}
 	return 0;
@@ -622,12 +640,12 @@ static int lock_range(const void *addr, size_t len, int lock)
 			char *lo, *hi;
 			size_t first, n, i;
 			if (!m->base) continue;
-			lo = a > m->base ? a : m->base;
-			hi = end < m->base + m->npages * MMAP_PAGE
+			lo = addr_gt(a, m->base) ? a : m->base;
+			hi = addr_lt(end, m->base + m->npages * MMAP_PAGE)
 			   ? end : m->base + m->npages * MMAP_PAGE;
-			if (lo >= hi) continue;
-			first = (size_t)(lo - m->base) / MMAP_PAGE;
-			n = (size_t)(hi - lo) / MMAP_PAGE;
+			if (addr_ge(lo, hi)) continue;
+			first = addr_diff(lo, m->base) / MMAP_PAGE;
+			n = addr_diff(hi, lo) / MMAP_PAGE;
 			for (i = 0; i < n; i++) if (m->live[first + i])
 				m->locked[first + i] = (unsigned char)lock;
 		}

@@ -107,8 +107,8 @@ allocation-arithmetic	src/wordexp/wordexp.c	__malloc(nc * sizeof *nv)	existing s
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(total * sizeof *v)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(input_len + prefix + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(n + 1)	existing site; remove while completing the checked-size audit
-allocation-arithmetic	src/wordexp/wordexp.c	__malloc((size_t)(end - start) + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(b.n * 2 + 1)	existing site; remove while completing the checked-size audit
+allocation-arithmetic	src/wordexp/wordexp.c	__malloc(len + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(len + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc(len + 1)	existing site; remove while completing the checked-size audit
 allocation-arithmetic	src/wordexp/wordexp.c	__malloc((size_t)(p - start) + 1)	existing site; remove while completing the checked-size audit

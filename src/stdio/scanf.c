@@ -698,10 +698,21 @@ static void store_term(void *dst, int nn, int wide_out)
  * The range rule is src/stdio/scanf.c's own, mirrored deliberately
  * rather than re-derived: a '-' that is neither the first character of
  * the set nor immediately before the closing ']' makes a range of the
- * characters either side of it. */
-static int wset_has(const char *b, const char *e, int st, unsigned c)
+ * characters either side of it.
+ *
+ * Takes the scanset's length rather than an end pointer, computed once
+ * by the caller from `setend - setstart` -- both, within vfscanf_st()
+ * (which vswscanf_impl() reaches this code through too, via its own
+ * `st` step size), positions of the same format-string cursor `fp`,
+ * so the subtraction is an ordinary, locally traceable derivation --
+ * so that this function's own body does not need tools/lint.sh's
+ * provenance stage to take on faith that a `b`/`e` pointer pair
+ * arriving as two independent parameters share an object, an
+ * invariant only true because of how the one caller happens to
+ * construct them. */
+static int wset_has(const char *b, size_t blen, int st, unsigned c)
 {
-	const char *q;
+	const char *q, *e = b + blen;
 	for (q = b; q < e; q += st) {
 		unsigned x = gf(q, st);
 		if (x == '-' && q != b && q + st < e) {
@@ -999,7 +1010,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 				c = rd(&sc);
 				while (c != EOF
 				       && (((unsigned)c < 256 ? set[c] != 0
-				            : anyhigh && wset_has(setstart, setend, st, (unsigned)c)) != neg)
+				            : anyhigh && wset_has(setstart, (size_t)(setend - setstart), st, (unsigned)c)) != neg)
 				       && (width < 0 || nu < width)) {
 					if (alc) {
 						if (!ab_room(&ab, ALLOC_HEAD(nn))) { oom = 1; ab_free(&ab); goto done; }

@@ -53,8 +53,18 @@
 #   fallible  currently opt-in; rejects discarded results from known fallible
 #             system, I/O, mapping, semaphore, and pthread APIs.
 #   provenance
-#             currently opt-in; proves common provenance for ordered pointer
-#             comparisons and subtraction, and rejects integer-derived pointers.
+#             on by default. A Clang 18 analyzer plugin proves common
+#             provenance for ordered pointer comparisons and subtraction, and
+#             rejects integer-derived pointers.  Constant sentinels (NT's own
+#             pseudo-handle convention, SIG_DFL/SIG_IGN/SIG_ERR, MAP_FAILED,
+#             and this tree's own invalid nl_catd/iconv_t/sem_t/fenv_t
+#             markers), pointer/integer/pointer alignment round trips, and a
+#             short, explicit, individually-justified table of call sites
+#             that cross a boundary no C-level analysis can see across
+#             (hand-written assembly, the kernel's own ABI, a hardware fault
+#             handler) are recognised rather than flagged; see
+#             tools/clang/PointerProvenanceChecker.cpp's own comments for the
+#             reasoning behind each.
 #   locks     on by default; path-sensitively proves mutex, rwlock, and
 #             spinlock acquire/release, wait, destroy, and function-exit state.
 #   abizeroinit
@@ -1704,7 +1714,7 @@ stage_reentrancy() {
 	return $any
 }
 
-stages=${*:-warn analyze cppcheck shell sizearith locks undefined unreferenced widthmod}
+stages=${*:-warn analyze cppcheck shell sizearith locks provenance undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that

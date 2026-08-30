@@ -16,7 +16,17 @@ __wraps void *memmove(void *dest, const void *src, size_t n)
 	 * worth restating byte-range-overlap logic just to dodge a check
 	 * that exists to police unmarked wraparound, not this one. */
 	if ((uintptr_t)s - (uintptr_t)d - n <= -2*n) return memcpy(d, s, n);
-	if (d < s) {
+	/* Copy direction is a flat-address-space question, the same one the
+	 * overlap test above already answers through uintptr_t rather than
+	 * through relational pointer comparison: dest and src are two
+	 * independent caller-supplied buffers in the general case, not
+	 * necessarily one object, so `d < s` is exactly the comparison ISO C
+	 * leaves undefined for pointers into unrelated objects (6.5.8p5).
+	 * Every real target this ships to has one flat address space where
+	 * that comparison is well-defined in practice, but there is no
+	 * reason to rely on it a second time in the same function when the
+	 * first relies on uintptr_t instead. */
+	if ((uintptr_t)d < (uintptr_t)s) {
 		for (; n; n--) *d++ = *s++;
 	} else {
 		while (n) n--, d[n] = s[n];

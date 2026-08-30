@@ -195,7 +195,7 @@ struct assignment {
 struct assign_ctx { struct assignment *head; };
 
 static int expand_impl(const char *, wordexp_t *, int, int, struct assign_ctx *);
-static int expand_trim_pattern(const char *, const char *, int, int,
+static int expand_trim_pattern(const char *, size_t, int, int,
                                struct assign_ctx *, char **);
 
 static int assign_param(struct assign_ctx *ctx, const char *name, const char *value)
@@ -283,14 +283,14 @@ static const char *param_word_end(const char *p)
  * parameter expansion operates.  A multi-field result is joined with
  * the first IFS byte, as shell "$*" is; the caller performs the final
  * field splitting when the outer expansion is unquoted. */
-static int expand_param_word(const char *start, const char *end, int flags,
+static int expand_param_word(const char *start, size_t input_len, int flags,
                              int sh, int quoted, struct assign_ctx *ctx,
                              char **result)
 {
 	wordexp_t we;
 	char *text, *s;
 	const char *ifs;
-	size_t i, n = 0, input_len = (size_t)(end - start), prefix = 0;
+	size_t i, n = 0, prefix = 0;
 	int rc;
 
 	*result = 0;
@@ -315,7 +315,7 @@ static int expand_param_word(const char *start, const char *end, int flags,
 	/* A trailing unquoted IFS byte is a field terminator even though it
 	 * contributes no field of its own.  Preserve one so the caller's
 	 * final split does not concatenate following literal text. */
-	if (!quoted && input_len && is_split_char(end[-1])) n++;
+	if (!quoted && input_len && is_split_char(start[input_len - 1])) n++;
 	s = __malloc(n + 1);
 	if (!s) { wordfree(&we); return WRDE_NOSPACE; }
 	n = 0;
@@ -325,7 +325,7 @@ static int expand_param_word(const char *start, const char *end, int flags,
 		memcpy(s + n, we.we_wordv[i], z);
 		n += z;
 	}
-	if (!quoted && input_len && is_split_char(end[-1])) s[n++] = end[-1];
+	if (!quoted && input_len && is_split_char(start[input_len - 1])) s[n++] = start[input_len - 1];
 	s[n] = 0;
 	wordfree(&we);
 	*result = s;
@@ -468,7 +468,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 				if (flags & WRDE_UNDEF) return WRDE_BADVAL;
 				return 0;
 			}
-			rc = expand_trim_pattern(word, end, flags, sh, ctx, &pattern);
+			rc = expand_trim_pattern(word, (size_t)(end - word), flags, sh, ctx, &pattern);
 			if (rc) return rc;
 			vlen = strlen(val);
 			candidate = xstrdup(val);
@@ -517,7 +517,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 			if (op == '+') return 0;
 			return fbuf_push_str(b, val, quoted) ? WRDE_NOSPACE : 0;
 		}
-		rc = expand_param_word(word, end, flags, sh, quoted, ctx, &replacement);
+		rc = expand_param_word(word, (size_t)(end - word), flags, sh, quoted, ctx, &replacement);
 		if (rc) return rc;
 		if (op == '?') {
 			if (flags & WRDE_SHOWERR) {
@@ -550,7 +550,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
  * deliberately not expand_param_word(): pathname expansion is the
  * following word-expansion phase and must not turn the pattern into a
  * list of files before it is matched against the parameter value. */
-static int expand_trim_pattern(const char *start, const char *end, int flags,
+static int expand_trim_pattern(const char *start, size_t len, int flags,
                                int sh, struct assign_ctx *ctx, char **result)
 {
 	struct fbuf b = { 0 };
@@ -560,10 +560,10 @@ static int expand_trim_pattern(const char *start, const char *end, int flags,
 	int rc = 0;
 
 	*result = 0;
-	text = __malloc((size_t)(end - start) + 1);
+	text = __malloc(len + 1);
 	if (!text) return WRDE_NOSPACE;
-	memcpy(text, start, (size_t)(end - start));
-	text[end - start] = 0;
+	memcpy(text, start, len);
+	text[len] = 0;
 	for (p = text; *p;) {
 		char c = *p;
 		if (q == T_NONE) {
