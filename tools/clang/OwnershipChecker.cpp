@@ -840,6 +840,48 @@ class ResourceLifecycleChecker
     return std::nullopt;
   }
 
+  // NT's own syscalls (unlike the POSIX open()/socket()/... family above)
+  // never return the handle they acquire: they return an NTSTATUS and
+  // write the handle through an out-pointer argument instead --
+  // NtCreateFile(&h, ...), NtDuplicateObject(..., &h, ...), and so on.
+  // acquiredFamily()/checkPostCall's `Call.getReturnValue()` can only ever
+  // see the NTSTATUS for these, so every Handle this codebase's NT
+  // backend acquires was previously invisible to ResourceMap -- and every
+  // later NtClose() on it was therefore unprovable by construction, not
+  // because of any real lifecycle problem. This table is every NT handle-
+  // acquiring syscall this codebase actually calls before an NtClose
+  // (found by tracing each NtClose call site back to its handle's
+  // origin); the argument index is almost always the first (NT's own
+  // convention puts the out-handle first), except where a handle is
+  // acquired alongside another one already in scope, as with
+  // NtDuplicateObject's *target* handle (its 4th argument) and
+  // NtOpenProcessToken's access-token handle (its 3rd).
+  struct HandleOutParam {
+    llvm::StringLiteral Name;
+    unsigned Argument;
+  };
+  static std::optional<unsigned> handleOutParamArgument(const CallEvent &Call) {
+    const FunctionDecl *Function = function(Call);
+    if (!Function || !Function->getIdentifier())
+      return std::nullopt;
+    StringRef Name = Function->getName();
+    static constexpr HandleOutParam OutParams[] = {
+        {"NtCreateFile", 0},          {"NtOpenFile", 0},
+        {"NtCreateEvent", 0},         {"NtCreateSemaphore", 0},
+        {"NtOpenSemaphore", 0},       {"NtCreateMutant", 0},
+        {"NtCreateThreadEx", 0},      {"NtOpenProcess", 0},
+        {"NtCreateJobObject", 0},     {"NtCreateSection", 0},
+        {"NtCreateNamedPipeFile", 0}, {"NtCreateTimer", 0},
+        {"NtOpenSymbolicLinkObject", 0},
+        {"NtDuplicateObject", 3},
+        {"NtOpenProcessToken", 2},
+    };
+    for (const HandleOutParam &Candidate : OutParams)
+      if (Name == Candidate.Name)
+        return Candidate.Argument;
+    return std::nullopt;
+  }
+
   static std::optional<std::pair<Family, unsigned>>
   release(const CallEvent &Call) {
     const FunctionDecl *Function = function(Call);
@@ -934,12 +976,28 @@ class ResourceLifecycleChecker
 
 public:
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
-    std::optional<Family> Family = acquiredFamily(Call);
-    if (!Family)
+    if (std::optional<Family> Family = acquiredFamily(Call)) {
+      SymbolRef Symbol = Call.getReturnValue().getAsSymbol(true);
+      if (Symbol)
+        C.addTransition(C.getState()->set<ResourceMap>(Symbol, live(*Family)));
       return;
-    SymbolRef Symbol = Call.getReturnValue().getAsSymbol(true);
-    if (Symbol)
-      C.addTransition(C.getState()->set<ResourceMap>(Symbol, live(*Family)));
+    }
+    if (std::optional<unsigned> Argument = handleOutParamArgument(Call)) {
+      if (*Argument >= Call.getNumArgs())
+        return;
+      const MemRegion *Out = Call.getArgSVal(*Argument).getAsRegion();
+      if (!Out)
+        return;
+      // The call is opaque to the analyzer, so by the time checkPostCall
+      // runs, the engine's own default conservative evaluation has
+      // already invalidated *Out and bound a fresh symbolic value there
+      // (every non-const pointer argument to an unmodeled call gets this
+      // treatment) -- reading it back here is exactly how MallocChecker-
+      // style checkers recover an out-parameter's acquired value.
+      SymbolRef Symbol = C.getState()->getSVal(Out).getAsSymbol(true);
+      if (Symbol)
+        C.addTransition(C.getState()->set<ResourceMap>(Symbol, live(Handle)));
+    }
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
