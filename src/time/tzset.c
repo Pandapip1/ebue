@@ -12,6 +12,7 @@
  * know better.  daylight is always 0: without rules there is no DST to
  * apply, ever.
  */
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
