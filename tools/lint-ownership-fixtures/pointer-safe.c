@@ -6,6 +6,17 @@ void *malloc(size_t);
 void free(void *);
 void *__malloc(size_t);
 void *realloc(void *, size_t);
+size_t strcspn(const char *, const char *);
+size_t strspn(const char *, const char *);
+/* Deliberately `unsigned short`, NOT whatever clang's own builtin
+ * wchar_t happens to be on the host running this fixture -- this is
+ * ntlibc's own real `wchar_t` typedef (arch/*\/bits/alltypes.h.in's
+ * `TYPEDEF unsigned short wchar_t`, kept 2 bytes on every arch this
+ * tree builds for), and the whole point of wide_scan_return_value_
+ * extent_is_trusted below is to prove trackScanExtent() uses THIS
+ * type's real size, not ASTContext::getWCharType()'s. */
+typedef unsigned short wchar_t;
+size_t wcsspn(const wchar_t *, const wchar_t *);
 
 int local_object(void)
 {
@@ -253,4 +264,58 @@ char *returns_nonnull_attribute_is_trusted(const char *s, int c)
 {
 	char *r = always_nonnull_helper(s, c);
 	return *r ? r : 0;
+}
+
+/* OwnershipChecker::isScanExtentFunction/trackScanExtent: nothing in
+ * clang's own builtin summaries relates a NUL-terminated-string scan's
+ * return value to the dynamic extent of the pointer it scanned, the
+ * same gap allocationSizeInBytes closes for this tree's own __malloc
+ * family above. src/string/strsep.c's real body -- `end = s +
+ * strcspn(s, sep); if (*end) *end++ = 0;` -- is the concrete case this
+ * mirrors: strcspn(s, sep) cannot return without having read s[L]
+ * itself (whichever of "hit a byte in sep" or "hit the NUL" is what
+ * stopped it), so the region s points to has to have at least L+1
+ * bytes, even though s is a plain borrowed parameter this function
+ * never allocated and has no other extent information about at all. */
+char *scan_return_value_extent_is_trusted(char *s, const char *sep)
+{
+	char *end;
+	if (!s)
+		return 0;
+	end = s + strcspn(s, sep);
+	if (*end)
+		*end = 0;
+	return end;
+}
+
+/* src/string/strtok.c's/strtok_r.c's real body -- `s += strspn(s,
+ * sep); if (!*s) ...` -- the strspn() twin of the strcspn() case
+ * above: strspn(s, accept) equally cannot return without having read
+ * s[L] itself (the first byte NOT in accept, or the NUL), so the same
+ * "L scanned plus one more" bound holds. */
+int strspn_return_value_extent_is_trusted(char *s, const char *accept)
+{
+	if (!s)
+		return 0;
+	s += strspn(s, accept);
+	return *s;
+}
+
+/* src/string/wcstok.c's real body -- `s += wcsspn(s, sep); if (!*s)
+ * ...` -- the wide-scanner twin of strspn_return_value_extent_is_trusted
+ * above, pinning that trackScanExtent()'s byte multiplier is read off
+ * the scanned argument's OWN pointee type (this file's `wchar_t`,
+ * `unsigned short`, deliberately declared above to differ in size from
+ * whatever clang's builtin wchar_t is on the host compiling this
+ * fixture) rather than ASTContext::getWCharType() -- a real regression
+ * during this fix's own development: using getWCharType() proved this
+ * exact shape fine when the two happened to agree in size and left it
+ * reported the moment they did not (see trackScanExtent's own comment
+ * for the full account). */
+int wide_scan_return_value_extent_is_trusted(wchar_t *s, const wchar_t *accept)
+{
+	if (!s)
+		return 0;
+	s += wcsspn(s, accept);
+	return *s;
 }

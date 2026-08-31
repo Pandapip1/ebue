@@ -185,6 +185,148 @@ class OwnershipChecker
     return std::nullopt;
   }
 
+  // Nothing in clang's own builtin summaries relates a NUL-terminated
+  // string SCAN's return value to the dynamic extent of the pointer it
+  // scanned -- the same gap allocationSizeInBytes above closes for this
+  // tree's own __malloc family, just on the other side of the same
+  // relationship: strlen(s)/wcslen(s) cannot return a value L without
+  // having read s[0..L] (the L scanned bytes plus the NUL itself) to
+  // find it, so the region s points to really does have at least L+1
+  // bytes/wchar_t's, exactly as real and exactly as directly available
+  // as an allocator's own size argument is. strcspn(s,reject)/
+  // wcscspn(s,reject) and strspn(s,accept)/wcsspn(s,accept) share the
+  // identical shape: each one stops the instant s[L] is a byte the call
+  // itself had to inspect to decide whether to keep going (a member
+  // of/absent from the reject/accept set, OR the string's own NUL), so
+  // s[L] was read either way and the same "L scanned plus one more"
+  // bound holds no matter which of the two stopping conditions actually
+  // ended the scan.
+  //
+  // src/string/strsep.c's real `end = s + strcspn(s, sep); if (*end)
+  // *end++ = 0;`, src/string/strtok.c's and strtok_r.c's real `s +=
+  // strspn(s, sep); if (!*s) ...`, and src/misc/catgets.c's expand()
+  // real `v = lang + strcspn(lang, "_"); if (*v) v++;` are the concrete
+  // code this was developed against: all three dereference exactly the
+  // scan's own return-value offset into the exact same pointer that was
+  // just scanned, with no allocator anywhere in sight -- before this
+  // fix, every one of them had nothing but an unconstrained placeholder
+  // extent for a plain borrowed parameter no allocator ever touched,
+  // and was reported, even though the scan that had *just* run is
+  // exactly what proves it safe.
+  static bool isScanExtentFunction(const CallEvent &Call) {
+    static constexpr llvm::StringLiteral Names[] = {
+        "strlen", "strcspn", "strspn", "wcslen", "wcscspn", "wcsspn"};
+    for (StringRef Name : Names)
+      if (hasName(Call, Name))
+        return true;
+    return false;
+  }
+
+  // Sets the scanned argument's own dynamic extent from the scan's
+  // return value, per isScanExtentFunction's comment above.
+  //
+  // Deliberately narrow in the same way allocationSizeInBytes is
+  // deliberately narrow: only fires when the scanned argument's own
+  // region IS the base region already -- no pointer arithmetic already
+  // applied to it (not itself an ElementRegion at a nonzero offset). A
+  // scan of an already-advanced cursor (strtok_r.c's SECOND strcspn()
+  // call, scanning `s` after `s += strspn(...)` already moved it) would
+  // need the offset already walked PLUS this scan's own return value
+  // composed together, which this narrow form does not attempt; that
+  // case is left exactly where it already was, an unprovable (but
+  // still correct) residual, rather than risk getting the composition
+  // wrong.
+  //
+  // Only ever WRITES an extent that is not already real -- the same
+  // "placeholder or nothing" test getDynamicExtentWithOffset's own
+  // NoRealExtentInfo branch already applies at the actual dereference
+  // site. A base region a previous, unrelated scan or allocation
+  // already gave a real extent to is left alone even if THIS scan's
+  // own bound happens to be larger: there is no general way to compare
+  // two symbolic bounds against each other, so whichever fact was
+  // established FIRST along a given path is simply kept. That costs
+  // completeness, never soundness -- every one of these scan contracts
+  // is a true LOWER bound on the real allocation, never an upper one,
+  // so keeping an earlier, possibly smaller, established bound is
+  // always still a true fact about the region; it just is not always
+  // the tightest one available.
+  // The element width used to convert the scan's return value (always
+  // in ELEMENTS: a wcslen() count is a count of wchar_t's, not bytes)
+  // into the bytes getDynamicExtent()/setDynamicExtent() actually deal
+  // in is read off the scanned argument's own real, AST-declared
+  // pointee type -- NOT clang's built-in notion of "the target's
+  // wchar_t" (ASTContext::getWCharType(), what a wide string LITERAL's
+  // own type is built from). Those two are not the same type in this
+  // tree and do not even always have the same SIZE: this codebase's own
+  // `wchar_t` (arch/*/bits/alltypes.h.in's `TYPEDEF unsigned short
+  // wchar_t`) is deliberately kept 2 bytes on EVERY arch it builds for
+  // (this tree's own UTF-16 convention, not the platform's native
+  // wide-character width) -- confirmed empirically to differ from
+  // clang's own builtin wchar_t on a target with no explicit --target
+  // triple (aarch64 here, analyzed with the host's native clang and so
+  // getWCharType()'s builtin default -- `int`, 4 bytes, glibc's usual
+  // UCS-4 convention), while the i386/x86_64 legs' `--target=*-w64-
+  // mingw32` happens to make clang's OWN builtin wchar_t 2 bytes too, by
+  // coincidence of that target's own ABI matching this tree's typedef.
+  // Using getWCharType() worked on i386/x86_64 by that coincidence and
+  // silently produced the WRONG byte multiplier on aarch64 (4 instead of
+  // 2) -- confirmed by a real regression during development:
+  // src/string/wcstok.c's `s += wcsspn(s, sep); if (!*s) ...` (this
+  // fix's own wide-scanner target, the wcsspn() twin of strtok_r.c's
+  // narrow one) proved fine on i386/x86_64 and stayed reported on
+  // aarch64 until this fix switched to the argument's own pointee type.
+  // Reading the actual pointee type off the argument is also strictly
+  // more general: it needs no separate "is this call one of the wide
+  // names" check at all, and does the right thing even if some entirely
+  // different fixed-width scanner were ever added to
+  // isScanExtentFunction above.
+  static void trackScanExtent(const CallEvent &Call, CheckerContext &C) {
+    if (Call.getNumArgs() < 1)
+      return;
+    const MemRegion *Region = Call.getArgSVal(0).getAsRegion();
+    if (!Region || Region != Region->getBaseRegion())
+      return;
+    const Expr *ArgExpr = Call.getArgExpr(0);
+    if (!ArgExpr)
+      return;
+    QualType PointerTy = ArgExpr->IgnoreParenCasts()->getType();
+    if (!PointerTy->isPointerType())
+      return;
+    QualType ElemTy = PointerTy->getPointeeType();
+    if (ElemTy.isNull() || ElemTy->isIncompleteType())
+      return;
+    CharUnits ElemWidth = C.getASTContext().getTypeSizeInChars(ElemTy);
+    if (ElemWidth.isZero())
+      return;
+    ProgramStateRef State = C.getState();
+    SValBuilder &Builder = C.getSValBuilder();
+    SVal CurrentExtent = getDynamicExtent(State, Region, Builder);
+    bool NoRealExtentInfo =
+        CurrentExtent.isUnknownOrUndef() ||
+        isa_and_nonnull<SymbolExtent>(CurrentExtent.getAsSymbol());
+    if (!NoRealExtentInfo)
+      return;
+    std::optional<DefinedOrUnknownSVal> Scanned =
+        Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
+    if (!Scanned)
+      return;
+    QualType SizeTy = C.getASTContext().getSizeType();
+    SVal Elements = Builder.evalBinOp(
+        State, BO_Add, *Scanned, Builder.makeIntVal(1, SizeTy), SizeTy);
+    SVal Bytes =
+        ElemWidth.isOne()
+            ? Elements
+            : Builder.evalBinOp(State, BO_Mul, Elements,
+                                Builder.makeIntVal(ElemWidth.getQuantity(),
+                                                    SizeTy),
+                                SizeTy);
+    std::optional<DefinedOrUnknownSVal> DefinedBytes =
+        Bytes.getAs<DefinedOrUnknownSVal>();
+    if (!DefinedBytes)
+      return;
+    C.addTransition(setDynamicExtent(State, Region, *DefinedBytes, Builder));
+  }
+
   static bool insideOwnershipConsumer(CheckerContext &C) {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
@@ -290,6 +432,10 @@ class OwnershipChecker
 
 public:
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    if (isScanExtentFunction(Call)) {
+      trackScanExtent(Call, C);
+      return;
+    }
     if (!isAllocator(Call))
       return;
     ProgramStateRef State = C.getState();
