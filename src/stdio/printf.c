@@ -923,7 +923,10 @@ static const char *scan_argno(const char *fp, int st, int *n)
 	*n = 0;
 	if (gf(q, st) < '1' || gf(q, st) > '9') return fp;
 	while (gf(q, st) >= '0' && gf(q, st) <= '9') {
-		if (v <= NL_ARGMAX) v = v * 10 + (int)(gf(q, st) - '0');
+		if (v <= NL_ARGMAX) {
+			unsigned digit = (unsigned)(gf(q, st) - '0');
+			v = (int)((unsigned)v * 10u + digit);
+		}
 		q += st;
 	}
 	if (gf(q, st) != '$') return fp;
@@ -1014,7 +1017,8 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 			if (sp->width > (INT_MAX - digit) / 10) {
 				sp->width = INT_MAX;
 				sp->width_overflow = 1;
-			} else sp->width = sp->width * 10 + digit;
+			} else sp->width = (int)((unsigned)sp->width * 10u +
+				(unsigned)digit);
 			fp += st;
 		}
 	}
@@ -1027,7 +1031,8 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
 				int digit = (int)(gf(fp, st) - '0');
 				if (sp->prec > (INT_MAX - digit) / 10)
 					sp->prec = INT_MAX;
-				else sp->prec = sp->prec * 10 + digit;
+				else sp->prec = (int)((unsigned)sp->prec * 10u +
+					(unsigned)digit);
 				fp += st;
 			}
 		}
