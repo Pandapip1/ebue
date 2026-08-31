@@ -21,6 +21,7 @@ DIAGNOSTIC = re.compile(
     r"borrow accesses a consumed owner|owned construct is not proven initialized|"
     r"owned construct is already initialized|owned construct is already destroyed|"
     r"operation accesses a destroyed owned construct|"
+    r"owned construct ownership class does not match operation|"
     r"pointer dereference is not proven nonnull|"
     r"pointer target is not proven live storage|"
     r"dereference extent is not proven sufficient|"

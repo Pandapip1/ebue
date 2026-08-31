@@ -32,10 +32,39 @@ attachArgumentAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
     return ParsedAttrInfo::AttributeNotApplied;
   }
   std::string Annotation =
-      (AnnotationName + ":" + llvm::Twine(Value->getZExtValue()))
-          .str();
-  D->addAttr(AnnotateAttr::Create(S.Context, Annotation, nullptr, 0,
-                                  Attr.getRange()));
+      (AnnotationName + ":" + llvm::Twine(Value->getZExtValue())).str();
+  D->addAttr(
+      AnnotateAttr::Create(S.Context, Annotation, nullptr, 0, Attr.getRange()));
+  return ParsedAttrInfo::AttributeApplied;
+}
+
+static ParsedAttrInfo::AttrHandling
+attachFamilyArgumentAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
+                               StringRef AnnotationName) {
+  const auto *Function = dyn_cast<FunctionDecl>(D);
+  IdentifierInfo *Family = Attr.getNumArgs() == 2 && Attr.isArgIdent(0)
+                               ? Attr.getArgAsIdent(0)->Ident
+                               : nullptr;
+  const Expr *Argument = Attr.getNumArgs() == 2 && Attr.isArgExpr(1)
+                             ? Attr.getArgAsExpr(1)
+                             : nullptr;
+  std::optional<llvm::APSInt> Value =
+      Argument ? Argument->getIntegerConstantExpr(S.Context) : std::nullopt;
+  if (!Function || !Family || !Value ||
+      (Value->isSigned() && Value->isNegative()) || Value->isZero() ||
+      Value->ugt(Function->getNumParams())) {
+    unsigned ID = S.getDiagnostics().getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "%0 requires an ownership-family identifier followed by a one-based "
+        "function-parameter index");
+    S.Diag(Attr.getLoc(), ID) << Attr;
+    return ParsedAttrInfo::AttributeNotApplied;
+  }
+  std::string Annotation = (AnnotationName + ":" + Family->getName() + ":" +
+                            llvm::Twine(Value->getZExtValue()))
+                               .str();
+  D->addAttr(
+      AnnotateAttr::Create(S.Context, Annotation, nullptr, 0, Attr.getRange()));
   return ParsedAttrInfo::AttributeApplied;
 }
 
@@ -67,10 +96,40 @@ struct OwnershipReturnsArgumentAttrInfo final : ParsedAttrInfo {
 
   AttrHandling handleDeclAttribute(Sema &S, Decl *D,
                                    const ParsedAttr &Attr) const override {
-    return attachArgumentAnnotation(S, D, Attr,
-                                    "ownership_returns_argument");
+    return attachArgumentAnnotation(S, D, Attr, "ownership_returns_argument");
   }
 };
+
+#define DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(ClassName, SpellingName,             \
+                                          AnnotationName)                      \
+  struct ClassName final : ParsedAttrInfo {                                    \
+    ClassName() {                                                              \
+      OptArgs = 2;                                                             \
+      static constexpr Spelling SpellingsList[] = {                            \
+          {ParsedAttr::AS_GNU, SpellingName},                                  \
+          {ParsedAttr::AS_C23, SpellingName},                                  \
+          {ParsedAttr::AS_CXX11, SpellingName}};                               \
+      Spellings = SpellingsList;                                               \
+    }                                                                          \
+                                                                               \
+    AttrHandling handleDeclAttribute(Sema &S, Decl *D,                         \
+                                     const ParsedAttr &Attr) const override {  \
+      return attachFamilyArgumentAnnotation(S, D, Attr, AnnotationName);       \
+    }                                                                          \
+  }
+
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipConstructsAttrInfo,
+                                  "ownership_constructs",
+                                  "ownership_constructs");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipDestroysAttrInfo,
+                                  "ownership_destroys", "ownership_destroys");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipRequiresHandleAttrInfo,
+                                  "ownership_requires_handle",
+                                  "ownership_requires_handle");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipStaticAttrInfo, "ownership_static",
+                                  "ownership_static");
+
+#undef DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE
 
 } // namespace
 
@@ -79,3 +138,12 @@ static ParsedAttrInfoRegistry::Add<OwnershipReallocatesAttrInfo>
 static ParsedAttrInfoRegistry::Add<OwnershipReturnsArgumentAttrInfo>
     ReturnsArgument("ownership_returns_argument",
                     "argument-preserving returned ownership");
+static ParsedAttrInfoRegistry::Add<OwnershipConstructsAttrInfo>
+    Constructs("ownership_constructs", "constructs an owned object");
+static ParsedAttrInfoRegistry::Add<OwnershipDestroysAttrInfo>
+    Destroys("ownership_destroys", "destroys an owned object");
+static ParsedAttrInfoRegistry::Add<OwnershipRequiresHandleAttrInfo>
+    RequiresHandle("ownership_requires_handle",
+                   "requires an explicit live-object handle");
+static ParsedAttrInfoRegistry::Add<OwnershipStaticAttrInfo>
+    Static("ownership_static", "accepts static object initialization");

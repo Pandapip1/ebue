@@ -16,6 +16,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <cctype>
 #include <memory>
@@ -30,6 +31,8 @@ REGISTER_MAP_WITH_PROGRAMSTATE(OwnershipMap, SymbolRef, OwnershipKind)
 
 enum class ConstructKind : unsigned char { Live, Destroyed };
 REGISTER_MAP_WITH_PROGRAMSTATE(ConstructMap, const MemRegion *, ConstructKind)
+REGISTER_MAP_WITH_PROGRAMSTATE(ConstructFamilyMap, const MemRegion *,
+                               const IdentifierInfo *)
 
 REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 
@@ -126,8 +129,8 @@ class OwnershipChecker
     return nullptr;
   }
 
-  static std::optional<unsigned>
-  annotatedArgument(const FunctionDecl *Function, StringRef Prefix) {
+  static std::optional<unsigned> annotatedArgument(const FunctionDecl *Function,
+                                                   StringRef Prefix) {
     if (!Function)
       return std::nullopt;
     for (const AnnotateAttr *Attribute :
@@ -203,7 +206,7 @@ class OwnershipChecker
   // argument SVal here that IS the answer the way there is for the rest
   // of this family.
   static std::optional<SVal> allocationSizeInBytes(const CallEvent &Call,
-                                                    CheckerContext &C) {
+                                                   CheckerContext &C) {
     SValBuilder &Builder = C.getSValBuilder();
     QualType SizeTy = C.getASTContext().getSizeType();
     unsigned NumArgs = Call.getNumArgs();
@@ -354,15 +357,14 @@ class OwnershipChecker
     if (!Scanned)
       return;
     QualType SizeTy = C.getASTContext().getSizeType();
-    SVal Elements = Builder.evalBinOp(
-        State, BO_Add, *Scanned, Builder.makeIntVal(1, SizeTy), SizeTy);
+    SVal Elements = Builder.evalBinOp(State, BO_Add, *Scanned,
+                                      Builder.makeIntVal(1, SizeTy), SizeTy);
     SVal Bytes =
         ElemWidth.isOne()
             ? Elements
-            : Builder.evalBinOp(State, BO_Mul, Elements,
-                                Builder.makeIntVal(ElemWidth.getQuantity(),
-                                                    SizeTy),
-                                SizeTy);
+            : Builder.evalBinOp(
+                  State, BO_Mul, Elements,
+                  Builder.makeIntVal(ElemWidth.getQuantity(), SizeTy), SizeTy);
     std::optional<DefinedOrUnknownSVal> DefinedBytes =
         Bytes.getAs<DefinedOrUnknownSVal>();
     if (!DefinedBytes)
@@ -480,8 +482,7 @@ public:
       return;
     ProgramStateRef State = C.getState();
     const FunctionDecl *Function = functionOf(Call);
-    if (std::optional<unsigned> Argument =
-            returnedArgument(Function)) {
+    if (std::optional<unsigned> Argument = returnedArgument(Function)) {
       if (*Argument >= Call.getNumArgs())
         return;
       std::optional<DefinedOrUnknownSVal> ArgumentValue =
@@ -512,8 +513,8 @@ public:
       if (std::optional<DefinedOrUnknownSVal> DefinedSize =
               SizeInBytes->getAs<DefinedOrUnknownSVal>()) {
         if (const MemRegion *Region = ReturnValue.getAsRegion())
-          State = setDynamicExtent(State, Region->getBaseRegion(),
-                                   *DefinedSize, C.getSValBuilder());
+          State = setDynamicExtent(State, Region->getBaseRegion(), *DefinedSize,
+                                   C.getSValBuilder());
       }
     }
     C.addTransition(State);
@@ -609,84 +610,76 @@ public:
   }
 };
 
-enum class ConstructFamily : unsigned char {
-  ThreadAttr,
-  Mutex,
-  MutexAttr,
-  Condition,
-  ConditionAttr,
-  Rwlock,
-  RwlockAttr,
-  Barrier,
-  BarrierAttr,
-  Spinlock,
-  Semaphore
-};
-
 enum class ConstructOperation : unsigned char { Construct, Destroy, Use };
 
 struct ConstructCall {
-  ConstructFamily Family;
   ConstructOperation Operation;
+  const IdentifierInfo *Family;
   unsigned Argument;
+  bool StaticInitialization;
 };
 
 class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
 
-  static std::optional<ConstructCall> protocolFor(const CallEvent &Call) {
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (!Function || !Function->getIdentifier())
+  struct FamilyArgument {
+    const IdentifierInfo *Family;
+    unsigned Argument;
+  };
+
+  static std::optional<FamilyArgument>
+  annotationArgument(const FunctionDecl *Function, const AnnotateAttr *Attr,
+                     StringRef Prefix) {
+    StringRef Text = Attr->getAnnotation();
+    if (!Text.consume_front(Prefix))
       return std::nullopt;
-    StringRef Name = Function->getName();
-
-    struct Prefix {
-      llvm::StringLiteral Text;
-      ConstructFamily Family;
-    };
-    static constexpr Prefix Prefixes[] = {
-        {"pthread_mutex_", ConstructFamily::Mutex},
-        {"pthread_mutexattr_", ConstructFamily::MutexAttr},
-        {"pthread_cond_", ConstructFamily::Condition},
-        {"pthread_condattr_", ConstructFamily::ConditionAttr},
-        {"pthread_rwlock_", ConstructFamily::Rwlock},
-        {"pthread_rwlockattr_", ConstructFamily::RwlockAttr},
-        {"pthread_barrier_", ConstructFamily::Barrier},
-        {"pthread_barrierattr_", ConstructFamily::BarrierAttr},
-        {"pthread_spin_", ConstructFamily::Spinlock},
-        {"pthread_attr_", ConstructFamily::ThreadAttr},
-    };
-    for (const Prefix &Candidate : Prefixes) {
-      if (!Name.starts_with(Candidate.Text))
-        continue;
-      StringRef Suffix = Name.drop_front(Candidate.Text.size());
-      ConstructOperation Operation = ConstructOperation::Use;
-      if (Suffix == "init")
-        Operation = ConstructOperation::Construct;
-      else if (Suffix == "destroy")
-        Operation = ConstructOperation::Destroy;
-      return ConstructCall{Candidate.Family, Operation, 0};
-    }
-
-    static constexpr llvm::StringLiteral SemaphoreUses[] = {
-        "sem_wait", "sem_trywait", "sem_timedwait", "sem_post", "sem_getvalue"};
-    if (Name == "sem_init")
-      return ConstructCall{ConstructFamily::Semaphore,
-                           ConstructOperation::Construct, 0};
-    if (Name == "sem_destroy")
-      return ConstructCall{ConstructFamily::Semaphore,
-                           ConstructOperation::Destroy, 0};
-    for (StringRef Use : SemaphoreUses)
-      if (Name == Use)
-        return ConstructCall{ConstructFamily::Semaphore,
-                             ConstructOperation::Use, 0};
-    return std::nullopt;
+    auto [FamilyName, ArgumentText] = Text.split(':');
+    if (FamilyName.empty() || ArgumentText.empty())
+      return std::nullopt;
+    unsigned Argument = 0;
+    if (ArgumentText.getAsInteger(10, Argument) || Argument == 0)
+      return std::nullopt;
+    return FamilyArgument{&Function->getASTContext().Idents.get(FamilyName),
+                          Argument - 1};
   }
 
-  static bool isLazyFamily(ConstructFamily Family) {
-    return Family == ConstructFamily::Mutex ||
-           Family == ConstructFamily::Condition ||
-           Family == ConstructFamily::Rwlock;
+  static bool hasArgumentAnnotation(const FunctionDecl *Function,
+                                    StringRef Prefix,
+                                    const IdentifierInfo *Family,
+                                    unsigned Argument) {
+    if (!Function)
+      return false;
+    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
+      if (std::optional<FamilyArgument> Parsed =
+              annotationArgument(Function, Attr, Prefix))
+        if (Parsed->Family == Family && Parsed->Argument == Argument)
+          return true;
+    return false;
+  }
+
+  static llvm::SmallVector<ConstructCall, 4>
+  protocolsFor(const CallEvent &Call) {
+    llvm::SmallVector<ConstructCall, 4> Protocols;
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function)
+      return Protocols;
+    struct OperationAnnotation {
+      llvm::StringLiteral Prefix;
+      ConstructOperation Operation;
+    };
+    static constexpr OperationAnnotation Operations[] = {
+        {"ownership_constructs:", ConstructOperation::Construct},
+        {"ownership_destroys:", ConstructOperation::Destroy},
+        {"ownership_requires_handle:", ConstructOperation::Use}};
+    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
+      for (const OperationAnnotation &Candidate : Operations)
+        if (std::optional<FamilyArgument> Parsed =
+                annotationArgument(Function, Attr, Candidate.Prefix))
+          Protocols.push_back(
+              {Candidate.Operation, Parsed->Family, Parsed->Argument,
+               hasArgumentAnnotation(Function, "ownership_static:",
+                                     Parsed->Family, Parsed->Argument)});
+    return Protocols;
   }
 
   static bool isZeroInitializer(const Expr *Initializer) {
@@ -707,9 +700,8 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     return false;
   }
 
-  static bool hasStaticInitialization(const MemRegion *Region,
-                                      ConstructFamily Family) {
-    if (!isLazyFamily(Family))
+  static bool hasStaticInitialization(const MemRegion *Region, bool Accepted) {
+    if (!Accepted)
       return false;
     const auto *Variable = dyn_cast<VarRegion>(Region);
     if (!Variable)
@@ -766,15 +758,17 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     return Region && Region->getSymbolicBase() != nullptr;
   }
 
-  void requireLive(const CallEvent &Call, unsigned Argument,
-                   ConstructFamily Family, CheckerContext &C) const {
+  void requireLive(const CallEvent &Call, const ConstructCall &Protocol,
+                   CheckerContext &C) const {
+    unsigned Argument = Protocol.Argument;
     const MemRegion *Region = argumentRegion(Call, Argument);
     if (!Region ||
         C.getState()->isNull(Call.getArgSVal(Argument)).isConstrainedTrue())
       return;
     const ConstructKind *Kind = C.getState()->get<ConstructMap>(Region);
     if (!Kind &&
-        (hasStaticInitialization(Region, Family) || isOpaqueBorrow(Region)))
+        (hasStaticInitialization(Region, Protocol.StaticInitialization) ||
+         isOpaqueBorrow(Region)))
       return;
     const Stmt *Statement = Call.getOriginExpr();
     if (!Statement)
@@ -783,81 +777,58 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
       report("owned construct is not proven initialized", Statement,
              C.getState(), C);
     else if (*Kind == ConstructKind::Destroyed)
-      report("operation accesses a destroyed owned construct", Statement,
-             C.getState(), C);
-  }
-
-  void checkBorrowedAttributes(const CallEvent &Call, CheckerContext &C) const {
-    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
-    if (!Function || !Function->getIdentifier())
-      return;
-    StringRef Name = Function->getName();
-    if (Name == "pthread_mutex_init")
-      requireLive(Call, 1, ConstructFamily::MutexAttr, C);
-    else if (Name == "pthread_cond_init")
-      requireLive(Call, 1, ConstructFamily::ConditionAttr, C);
-    else if (Name == "pthread_rwlock_init")
-      requireLive(Call, 1, ConstructFamily::RwlockAttr, C);
-    else if (Name == "pthread_barrier_init")
-      requireLive(Call, 1, ConstructFamily::BarrierAttr, C);
-    else if (Name == "pthread_create")
-      requireLive(Call, 1, ConstructFamily::ThreadAttr, C);
-    if ((Name == "pthread_cond_wait" || Name == "pthread_cond_timedwait") &&
-        Call.getNumArgs() > 1)
-      requireLive(Call, 1, ConstructFamily::Mutex, C);
+      report(Protocol.Operation == ConstructOperation::Destroy
+                 ? "owned construct is already destroyed"
+                 : "operation accesses a destroyed owned construct",
+             Statement, C.getState(), C);
+    else if (const IdentifierInfo *const *Actual =
+                 C.getState()->get<ConstructFamilyMap>(Region)) {
+      if (*Actual != Protocol.Family)
+        report("owned construct ownership class does not match operation",
+               Statement, C.getState(), C);
+    }
   }
 
 public:
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
-    checkBorrowedAttributes(Call, C);
-    std::optional<ConstructCall> Protocol = protocolFor(Call);
-    if (!Protocol)
-      return;
-    const MemRegion *Region = argumentRegion(Call, Protocol->Argument);
-    if (!Region)
-      return;
-    const ConstructKind *Kind = C.getState()->get<ConstructMap>(Region);
-    bool StaticLive =
-        !Kind && hasStaticInitialization(Region, Protocol->Family);
-    const Stmt *Statement = Call.getOriginExpr();
-    if (!Statement)
-      return;
+    for (const ConstructCall &Protocol : protocolsFor(Call)) {
+      if (Protocol.Operation == ConstructOperation::Use) {
+        requireLive(Call, Protocol, C);
+        continue;
+      }
+      const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
+      if (!Region)
+        continue;
+      const ConstructKind *Kind = C.getState()->get<ConstructMap>(Region);
+      bool StaticLive = !Kind && hasStaticInitialization(
+                                     Region, Protocol.StaticInitialization);
+      const Stmt *Statement = Call.getOriginExpr();
+      if (!Statement)
+        continue;
 
-    if (Protocol->Operation == ConstructOperation::Construct) {
-      // Deliberately NOT extended with isOpaqueBorrow here: unlike the
-      // "not proven initialized" check below, "no information" must
-      // stay "no information" for a double-construct proof specifically
-      // -- trusting an opaque borrow as evidence of "definitely already
-      // live" would risk hiding a real double pthread_mutex_init() on a
-      // borrowed pointer, which is exactly backwards. This path already
-      // does not misreport an opaque borrow as "already initialized"
-      // today (StaticLive is false for a SymbolicRegion, since
-      // hasStaticInitialization only matches a VarRegion), so there is
-      // nothing to fix on this branch.
-      if ((Kind && *Kind == ConstructKind::Live) || StaticLive)
-        report("owned construct is already initialized", Statement,
-               C.getState(), C);
-      return;
-    }
-    if (!Kind && !StaticLive && !isOpaqueBorrow(Region)) {
-      report("owned construct is not proven initialized", Statement,
-             C.getState(), C);
-      return;
-    }
-    if (Kind && *Kind == ConstructKind::Destroyed) {
-      report(Protocol->Operation == ConstructOperation::Destroy
-                 ? "owned construct is already destroyed"
-                 : "operation accesses a destroyed owned construct",
-             Statement, C.getState(), C);
+      if (Protocol.Operation == ConstructOperation::Construct) {
+        // Deliberately NOT extended with isOpaqueBorrow here: unlike the
+        // "not proven initialized" check below, "no information" must
+        // stay "no information" for a double-construct proof specifically
+        // -- trusting an opaque borrow as evidence of "definitely already
+        // live" would risk hiding a real double pthread_mutex_init() on a
+        // borrowed pointer, which is exactly backwards. This path already
+        // does not misreport an opaque borrow as "already initialized"
+        // today (StaticLive is false for a SymbolicRegion, since
+        // hasStaticInitialization only matches a VarRegion), so there is
+        // nothing to fix on this branch.
+        if ((Kind && *Kind == ConstructKind::Live) || StaticLive)
+          report("owned construct is already initialized", Statement,
+                 C.getState(), C);
+        continue;
+      }
+      requireLive(Call, Protocol, C);
     }
   }
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
-    std::optional<ConstructCall> Protocol = protocolFor(Call);
-    if (!Protocol || Protocol->Operation == ConstructOperation::Use)
-      return;
-    const MemRegion *Region = argumentRegion(Call, Protocol->Argument);
-    if (!Region)
+    llvm::SmallVector<ConstructCall, 4> Protocols = protocolsFor(Call);
+    if (Protocols.empty())
       return;
     SVal Return = Call.getReturnValue();
     if (Return.isUnknownOrUndef())
@@ -875,10 +846,21 @@ public:
                        Builder.makeZeroVal(Function->getReturnType()));
     auto [Succeeded, Failed] = C.getState()->assume(Success);
     if (Succeeded) {
-      ConstructKind Next = Protocol->Operation == ConstructOperation::Construct
-                               ? ConstructKind::Live
-                               : ConstructKind::Destroyed;
-      C.addTransition(Succeeded->set<ConstructMap>(Region, Next));
+      for (const ConstructCall &Protocol : Protocols) {
+        if (Protocol.Operation == ConstructOperation::Use)
+          continue;
+        const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
+        if (!Region)
+          continue;
+        ConstructKind Next = Protocol.Operation == ConstructOperation::Construct
+                                 ? ConstructKind::Live
+                                 : ConstructKind::Destroyed;
+        Succeeded = Succeeded->set<ConstructMap>(Region, Next);
+        if (Protocol.Operation == ConstructOperation::Construct)
+          Succeeded =
+              Succeeded->set<ConstructFamilyMap>(Region, Protocol.Family);
+      }
+      C.addTransition(Succeeded);
     }
     if (Failed)
       C.addTransition(Failed);
@@ -965,7 +947,7 @@ class ValidPointerChecker
       return false;
     StringRef Name = Function->getName();
     static constexpr llvm::StringLiteral Names[] = {
-        "strtod",  "strtof",   "strtold", "strtol",   "strtoll",
+        "strtod",  "strtof",   "strtold", "strtol",  "strtoll",
         "strtoul", "strtoull", "wcstod",  "wcstof",  "wcstold",
         "wcstol",  "wcstoll",  "wcstoul", "wcstoull"};
     for (StringRef Candidate : Names)
@@ -1088,8 +1070,7 @@ class ValidPointerChecker
   static bool arrayIndexProvenInBounds(const ElementRegion *Element,
                                        ProgramStateRef State,
                                        CheckerContext &C) {
-    const auto *Super =
-        dyn_cast<TypedValueRegion>(Element->getSuperRegion());
+    const auto *Super = dyn_cast<TypedValueRegion>(Element->getSuperRegion());
     if (!Super)
       return false;
     const ConstantArrayType *ArrayType =
@@ -1105,11 +1086,10 @@ class ValidPointerChecker
     if (IndexType.isNull() || !IndexType->isIntegralOrEnumerationType())
       return false;
     SValBuilder &Builder = C.getSValBuilder();
-    SVal Count = Builder.makeIntVal(ArrayType->getSize().getZExtValue(),
-                                    IndexType);
-    SVal Below =
-        Builder.evalBinOp(State, BO_LT, *DefinedIndex, Count,
-                          Builder.getConditionType());
+    SVal Count =
+        Builder.makeIntVal(ArrayType->getSize().getZExtValue(), IndexType);
+    SVal Below = Builder.evalBinOp(State, BO_LT, *DefinedIndex, Count,
+                                   Builder.getConditionType());
     std::optional<DefinedOrUnknownSVal> BelowCondition =
         Below.getAs<DefinedOrUnknownSVal>();
     if (!BelowCondition)
@@ -1120,10 +1100,9 @@ class ValidPointerChecker
     if (State->assume(*BelowCondition, false))
       return false;
     if (IndexType->isSignedIntegerOrEnumerationType()) {
-      SVal NonNegative =
-          Builder.evalBinOp(State, BO_GE, *DefinedIndex,
-                            Builder.makeIntVal(0, IndexType),
-                            Builder.getConditionType());
+      SVal NonNegative = Builder.evalBinOp(State, BO_GE, *DefinedIndex,
+                                           Builder.makeIntVal(0, IndexType),
+                                           Builder.getConditionType());
       std::optional<DefinedOrUnknownSVal> NonNegativeCondition =
           NonNegative.getAs<DefinedOrUnknownSVal>();
       if (!NonNegativeCondition)
@@ -1246,8 +1225,8 @@ class ValidPointerChecker
       BinaryOperator::Opcode Op = SymExprB->getOpcode();
       if (Op == BO_Add || Op == BO_Sub) {
         collectLinearTerms(SymExprB->getLHS(), Negate, Terms, Constant);
-        collectLinearTerms(SymExprB->getRHS(),
-                           Op == BO_Sub ? !Negate : Negate, Terms, Constant);
+        collectLinearTerms(SymExprB->getRHS(), Op == BO_Sub ? !Negate : Negate,
+                           Terms, Constant);
         return;
       }
     }
@@ -1332,8 +1311,8 @@ class ValidPointerChecker
       if (SymType.isNull() || !SymType->isUnsignedIntegerOrEnumerationType())
         return false;
     }
-    return Constant >= 0 && static_cast<uint64_t>(Constant) >=
-                                static_cast<uint64_t>(Required);
+    return Constant >= 0 &&
+           static_cast<uint64_t>(Constant) >= static_cast<uint64_t>(Required);
   }
 
   static bool alignmentProven(const MemRegion *Region, QualType Type,
@@ -1481,16 +1460,14 @@ public:
       if (Function && Result) {
         SValBuilder &Builder = C.getSValBuilder();
         QualType ReturnTy = Function->getReturnType();
-        SVal NonNegative =
-            Builder.evalBinOp(State, BO_GE, *Result,
-                              Builder.makeZeroVal(ReturnTy),
-                              Builder.getConditionType());
+        SVal NonNegative = Builder.evalBinOp(State, BO_GE, *Result,
+                                             Builder.makeZeroVal(ReturnTy),
+                                             Builder.getConditionType());
         if (std::optional<DefinedOrUnknownSVal> Condition =
                 NonNegative.getAs<DefinedOrUnknownSVal>()) {
           auto [Succeeded, Failed] = State->assume(*Condition);
           if (Succeeded) {
-            const MemRegion *BufferStorage =
-                Call.getArgSVal(0).getAsRegion();
+            const MemRegion *BufferStorage = Call.getArgSVal(0).getAsRegion();
             SVal Buffer = BufferStorage ? Succeeded->getSVal(BufferStorage)
                                         : UnknownVal();
             if (std::optional<DefinedOrUnknownSVal> DefinedBuffer =
@@ -1500,9 +1477,9 @@ public:
               const MemRegion *BufferRegion = Buffer.getAsRegion();
               QualType SizeTy = C.getASTContext().getSizeType();
               SVal SizeResult = Builder.evalCast(*Result, SizeTy, ReturnTy);
-              SVal Extent = Builder.evalBinOp(
-                  Succeeded, BO_Add, SizeResult,
-                  Builder.makeIntVal(1, SizeTy), SizeTy);
+              SVal Extent =
+                  Builder.evalBinOp(Succeeded, BO_Add, SizeResult,
+                                    Builder.makeIntVal(1, SizeTy), SizeTy);
               if (BufferRegion) {
                 if (std::optional<DefinedOrUnknownSVal> DefinedExtent =
                         Extent.getAs<DefinedOrUnknownSVal>())
@@ -1643,8 +1620,8 @@ public:
     if (const auto *Element = dyn_cast<ElementRegion>(Region)) {
       if (arrayIndexProvenInBounds(Element, State, C)) {
         if (!alignmentProven(Region, Type, C.getASTContext()))
-          report("dereference alignment is not proven valid", Statement,
-                 State, C);
+          report("dereference alignment is not proven valid", Statement, State,
+                 C);
         return;
       }
     }
@@ -1671,8 +1648,8 @@ public:
     // size) is preserved and still drives the real comparison below for
     // any offset into it -- so a too-small malloc'd allocation accessed
     // through a field at a fixed offset is still caught.
-    SVal BaseExtent = getDynamicExtent(State, Region->getBaseRegion(),
-                                       C.getSValBuilder());
+    SVal BaseExtent =
+        getDynamicExtent(State, Region->getBaseRegion(), C.getSValBuilder());
     bool NoRealExtentInfo =
         BaseExtent.isUnknownOrUndef() ||
         isa_and_nonnull<SymbolExtent>(BaseExtent.getAsSymbol());
@@ -1700,8 +1677,8 @@ public:
       // reported.
       RegionOffset Offset = Region->getAsOffset();
       if (!Offset.isValid() || Offset.hasSymbolicOffset()) {
-        report("dereference extent is not proven sufficient", Statement,
-               State, C);
+        report("dereference extent is not proven sufficient", Statement, State,
+               C);
         return;
       }
     } else {
@@ -1840,12 +1817,18 @@ class ResourceLifecycleChecker
       return std::nullopt;
     StringRef Name = Function->getName();
     static constexpr HandleOutParam OutParams[] = {
-        {"NtCreateFile", 0},          {"NtOpenFile", 0},
-        {"NtCreateEvent", 0},         {"NtCreateSemaphore", 0},
-        {"NtOpenSemaphore", 0},       {"NtCreateMutant", 0},
-        {"NtCreateThreadEx", 0},      {"NtOpenProcess", 0},
-        {"NtCreateJobObject", 0},     {"NtCreateSection", 0},
-        {"NtCreateNamedPipeFile", 0}, {"NtCreateTimer", 0},
+        {"NtCreateFile", 0},
+        {"NtOpenFile", 0},
+        {"NtCreateEvent", 0},
+        {"NtCreateSemaphore", 0},
+        {"NtOpenSemaphore", 0},
+        {"NtCreateMutant", 0},
+        {"NtCreateThreadEx", 0},
+        {"NtOpenProcess", 0},
+        {"NtCreateJobObject", 0},
+        {"NtCreateSection", 0},
+        {"NtCreateNamedPipeFile", 0},
+        {"NtCreateTimer", 0},
         {"NtOpenSymbolicLinkObject", 0},
         {"NtDuplicateObject", 3},
         {"NtOpenProcessToken", 2},
@@ -2052,8 +2035,7 @@ class ResourceLifecycleChecker
     const Expr *ArgExpr = Call.getArgExpr(Argument);
     if (!ArgExpr)
       return false;
-    const auto *Ref =
-        dyn_cast<DeclRefExpr>(ArgExpr->IgnoreParenCasts());
+    const auto *Ref = dyn_cast<DeclRefExpr>(ArgExpr->IgnoreParenCasts());
     return Ref && isa<ParmVarDecl>(Ref->getDecl());
   }
 
