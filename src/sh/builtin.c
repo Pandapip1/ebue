@@ -258,6 +258,59 @@ static int bi_touch(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 2: text-formatting/file-splitting utilities =================
+ *
+ * printf(1p), od(1p), pr(1p), tabs(1p), split(1p), csplit(1p) -- same
+ * reasoning as the tier above: each also exists as a real standalone
+ * obj/bin/<name>.exe (src/util/<name>.c, or src/util/util_printf.c for
+ * printf -- see that file's own header for the ar member-name collision
+ * it avoids -- declared in src/internal/util.h), and stays registered
+ * here too so a script run before PATH lookup or __spawn() can be
+ * trusted still has them.  None of these six is a 2.14 special built-in
+ * and none has any effect on the shell execution environment itself
+ * (2.12's list), so `env_effect` is 0 for all six. */
+static int bi_printf(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_printf(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_printf_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_od(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_od(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_od_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_pr(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_pr(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_pr_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_tabs(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tabs(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tabs_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_split(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_split(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_split_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_csplit(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_csplit(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_csplit_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -599,6 +652,12 @@ static const struct sh_builtin builtins[] = {
 	{ "ln",     0, 0, bi_ln },
 	{ "chmod",  0, 0, bi_chmod },
 	{ "touch",  0, 0, bi_touch },
+	{ "printf", 0, 0, bi_printf },
+	{ "od",     0, 0, bi_od },
+	{ "pr",     0, 0, bi_pr },
+	{ "tabs",   0, 0, bi_tabs },
+	{ "split",  0, 0, bi_split },
+	{ "csplit", 0, 0, bi_csplit },
 	{ 0, 0, 0, 0 }
 };
 
