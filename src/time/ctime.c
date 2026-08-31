@@ -6,7 +6,7 @@ char *ctime_r(const time_t *tp, char *buf)
 {
 	struct tm tm;
 	if (!localtime_r(tp, &tm)) return NULL;
-	return asctime_r(&tm, buf);
+	return asctime_r(&tm, buf); // NOLINT(bugprone-unsafe-functions,cert-msc24-c,cert-msc33-c) -- ctime_r is required to produce asctime's fixed format in its caller-provided result buffer
 }
 
 char *ctime(const time_t *tp)
