@@ -1161,6 +1161,12 @@ static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
 	struct sink sink, *sk = &sink;
 	const char *fp = fmt;
+	/* Internal callers use bytes or wchar_t units.  Keep that contract local
+	 * to the pointer-difference division as well as at the call sites. */
+	if (st != 1 && st != (int)sizeof(wchar_t)) {
+		errno = EINVAL;
+		return -1;
+	}
 	/* Only a numbered format ever touches these.  Eighty-odd bytes of
 	 * frame is what buys the common path its freedom from a malloc. */
 	union varg argv[NL_ARGMAX + 1];

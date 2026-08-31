@@ -427,7 +427,10 @@ static double __aa64_fmod(double x, double y)
 		uxi -= (uint64_t)1 << 52;
 		uxi |= (uint64_t)ex << 52;
 	} else {
-		uxi >>= -ex + 1;
+		/* Normalization above can lower ex only to -52.  Keep the bound
+		 * explicit at the shift as a defensive invariant. */
+		if (ex < -62) return 0 * x;
+		uxi >>= (unsigned)(1 - ex);
 	}
 	uxi |= (uint64_t)sx << 63;
 	ux.i = uxi;
@@ -488,7 +491,10 @@ static double __aa64_remquo(double x, double y, int *quo)
 		uxi -= (uint64_t)1 << 52;
 		uxi |= (uint64_t)ex << 52;
 	} else {
-		uxi >>= -ex + 1;
+		/* ex is -60 for an exact zero or no lower than -52 after
+		 * normalization; spell out the bound required by the shift. */
+		if (ex < -62) return 0 * x;
+		uxi >>= (unsigned)(1 - ex);
 	}
 	ux.i = uxi;
 	x = ux.f;

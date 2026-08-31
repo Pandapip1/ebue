@@ -101,12 +101,16 @@ void hdestroy(void)
 ENTRY *hsearch(ENTRY item, ACTION action)
 {
 	unsigned long h;
-	size_t i, start;
+	size_t i, start, size;
 
-	if (!table) return NULL;
+	/* table_size is published and cleared with table.  Check both halves of
+	 * that invariant here so the modulo below is locally protected even if a
+	 * future initialization path is changed incompletely. */
+	if (!table || !table_size) return NULL;
+	size = table_size;
 
 	h = hash_str(item.key);
-	start = h % table_size;
+	start = h % size;
 	i = start;
 	do {
 		if (!table[i].used) {
@@ -119,7 +123,7 @@ ENTRY *hsearch(ENTRY item, ACTION action)
 		}
 		if (table[i].h == h && strcmp(table[i].key, item.key) == 0)
 			return (ENTRY *)&table[i];	/* ENTER on a hit: leave existing data alone */
-		i = (i + 1) % table_size;
+		i = (i + 1) % size;
 	} while (i != start);
 
 	return NULL;	/* table full */

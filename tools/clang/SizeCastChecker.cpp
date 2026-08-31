@@ -9,6 +9,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SValBuilder.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/APSInt.h"
@@ -314,6 +315,15 @@ public:
     if (!State)
       State = C.getState();
     SVal Value = State->getSVal(Expr, C.getLocationContext());
+    // Unary ++/-- hand us their lvalue operand directly, rather than the
+    // ImplicitCastExpr(CK_LValueToRValue) that a binary arithmetic operand
+    // contains.  Load that location explicitly so the range solver sees the
+    // path constraints on the variable.  Treating the location as an unknown
+    // integer interval made every guarded loop induction step look capable of
+    // overflowing even at `i < 3`.
+    if (Expr->isLValue() && Expr->getType()->isIntegerType())
+      if (std::optional<Loc> Location = Value.getAs<Loc>())
+        Value = State->getSVal(*Location, Expr->getType());
     if (const llvm::APSInt *Integer = Value.getAsInteger()) {
       llvm::APSInt Exact = asMath(*Integer);
       return Interval{Exact, Exact};
@@ -676,6 +686,133 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
                                                check::PreStmt<UnaryOperator>> {
   mutable std::unique_ptr<BugType> BT;
 
+  static std::optional<NonLoc> integerValue(const Expr *Expression,
+                                             ProgramStateRef State,
+                                             CheckerContext &C) {
+    SVal Value = State->getSVal(Expression, C.getLocationContext());
+    if (Expression->isLValue())
+      if (std::optional<Loc> Location = Value.getAs<Loc>())
+        Value = State->getSVal(*Location, Expression->getType());
+    return Value.getAs<NonLoc>();
+  }
+
+  static ProgramStateRef assumeComparison(ProgramStateRef State, NonLoc Left,
+                                          NonLoc Right,
+                                          BinaryOperator::Opcode Opcode,
+                                          CheckerContext &C) {
+    SVal Comparison = C.getSValBuilder().evalBinOpNN(
+        State, Opcode, Left, Right, C.getASTContext().IntTy);
+    std::optional<DefinedOrUnknownSVal> Defined =
+        Comparison.getAs<DefinedOrUnknownSVal>();
+    // An unmodelled comparison cannot establish safety.
+    return Defined ? State->assume(*Defined, true) : State;
+  }
+
+  static std::optional<NonLoc>
+  evaluate(ProgramStateRef State, NonLoc Left, NonLoc Right,
+           BinaryOperator::Opcode Opcode, QualType Type, CheckerContext &C) {
+    return C.getSValBuilder()
+        .evalBinOpNN(State, Opcode, Left, Right, Type)
+        .getAs<NonLoc>();
+  }
+
+  // Independent operand intervals lose relational facts such as `i < n`
+  // together with n's own type bound.  Ask the path solver the standard
+  // overflow predicates before reporting.  This is only an additional proof
+  // of safety: any predicate the solver cannot model remains feasible.
+  static bool addOrSubOverflowFeasible(const BinaryOperator *Operation,
+                                       CheckerContext &C, bool Subtract) {
+    ProgramStateRef Input = C.getState();
+    QualType Type = Operation->getType();
+    std::optional<NonLoc> Left =
+        integerValue(Operation->getLHS(), Input, C);
+    std::optional<NonLoc> Right =
+        integerValue(Operation->getRHS(), Input, C);
+    if (!Left || !Right)
+      return true;
+    SValBuilder &Builder = C.getSValBuilder();
+    NonLoc Zero = Builder.makeIntVal(0, Type).castAs<NonLoc>();
+    NonLoc Maximum = Builder.makeIntVal(
+        SizeCastChecker::typeMax(C.getASTContext(), Type));
+    NonLoc Minimum = Builder.makeIntVal(
+        SizeCastChecker::typeMin(C.getASTContext(), Type));
+
+    ProgramStateRef Positive =
+        assumeComparison(Input, *Right, Zero, BO_GT, C);
+    if (Positive) {
+      BinaryOperator::Opcode LimitOp = Subtract ? BO_Add : BO_Sub;
+      NonLoc BoundBase = Subtract ? Minimum : Maximum;
+      std::optional<NonLoc> Limit =
+          evaluate(Positive, BoundBase, *Right, LimitOp, Type, C);
+      if (!Limit || assumeComparison(Positive, *Left, *Limit,
+                                     Subtract ? BO_LT : BO_GT, C))
+        return true;
+    }
+
+    ProgramStateRef Negative =
+        assumeComparison(Input, *Right, Zero, BO_LT, C);
+    if (Negative) {
+      BinaryOperator::Opcode LimitOp = Subtract ? BO_Add : BO_Sub;
+      NonLoc BoundBase = Subtract ? Maximum : Minimum;
+      std::optional<NonLoc> Limit =
+          evaluate(Negative, BoundBase, *Right, LimitOp, Type, C);
+      if (!Limit || assumeComparison(Negative, *Left, *Limit,
+                                     Subtract ? BO_GT : BO_LT, C))
+        return true;
+    }
+    return false;
+  }
+
+  static bool multiplicationOverflowFeasible(const BinaryOperator *Operation,
+                                              CheckerContext &C) {
+    ProgramStateRef Input = C.getState();
+    QualType Type = Operation->getType();
+    std::optional<NonLoc> Left =
+        integerValue(Operation->getLHS(), Input, C);
+    std::optional<NonLoc> Right =
+        integerValue(Operation->getRHS(), Input, C);
+    if (!Left || !Right)
+      return true;
+    SValBuilder &Builder = C.getSValBuilder();
+    NonLoc Zero = Builder.makeIntVal(0, Type).castAs<NonLoc>();
+    NonLoc MinusOne = Builder.makeIntVal(llvm::APSInt(
+        llvm::APInt::getAllOnes(C.getASTContext().getIntWidth(Type)), false));
+    NonLoc Maximum = Builder.makeIntVal(
+        SizeCastChecker::typeMax(C.getASTContext(), Type));
+    NonLoc Minimum = Builder.makeIntVal(
+        SizeCastChecker::typeMin(C.getASTContext(), Type));
+
+    struct SignCase {
+      BinaryOperator::Opcode LeftSign;
+      BinaryOperator::Opcode RightSign;
+      NonLoc RightBound;
+      NonLoc Numerator;
+      BinaryOperator::Opcode OverflowComparison;
+    };
+    const SignCase Cases[] = {
+        {BO_GT, BO_GT, Zero, Maximum, BO_GT},
+        {BO_GT, BO_LT, MinusOne, Minimum, BO_GT},
+        {BO_LT, BO_GT, Zero, Minimum, BO_LT},
+        {BO_LT, BO_LT, Zero, Maximum, BO_LT},
+    };
+    for (const SignCase &Case : Cases) {
+      ProgramStateRef State =
+          assumeComparison(Input, *Left, Zero, Case.LeftSign, C);
+      if (!State)
+        continue;
+      State = assumeComparison(State, *Right, Case.RightBound, Case.RightSign,
+                               C);
+      if (!State)
+        continue;
+      std::optional<NonLoc> Limit =
+          evaluate(State, Case.Numerator, *Right, BO_Div, Type, C);
+      if (!Limit || assumeComparison(State, *Left, *Limit,
+                                     Case.OverflowComparison, C))
+        return true;
+    }
+    return false;
+  }
+
   static bool outside(const SizeCastChecker::Interval &Range,
                       const SizeCastChecker::Interval &Type) {
     return llvm::APSInt::compareValues(Range.Min, Type.Min) < 0 ||
@@ -714,11 +851,17 @@ public:
     case BO_AddAssign:
       Result =
           SizeCastChecker::Interval{Left.Min + Right.Min, Left.Max + Right.Max};
+      if (outside(*Result, Bounds) &&
+          !addOrSubOverflowFeasible(Operation, C, false))
+        return;
       break;
     case BO_Sub:
     case BO_SubAssign:
       Result =
           SizeCastChecker::Interval{Left.Min - Right.Max, Left.Max - Right.Min};
+      if (outside(*Result, Bounds) &&
+          !addOrSubOverflowFeasible(Operation, C, true))
+        return;
       break;
     case BO_Mul:
     case BO_MulAssign: {
@@ -729,6 +872,9 @@ public:
       Result =
           SizeCastChecker::Interval{SizeCastChecker::minValue({A, B, D, E}),
                                     SizeCastChecker::maxValue({A, B, D, E})};
+      if (outside(*Result, Bounds) &&
+          !multiplicationOverflowFeasible(Operation, C))
+        return;
       break;
     }
     case BO_Shl:

@@ -149,6 +149,18 @@ void *peb_is_always_valid(void)
 	return __peb->ImageBaseAddress;
 }
 
+/* The process child table is initialized to a fixed seed array and its only
+ * replacement is published after a checked allocation.  It is never cleared,
+ * so the checker may trust this one reserved global's cross-TU invariant. */
+struct __child { int pid; };
+static struct __child child_seed[4];
+struct __child *__children = child_seed;
+
+int child_table_is_always_valid(void)
+{
+	return __children[0].pid;
+}
+
 /* GCC/Clang's `nonnull` attribute is the C ecosystem's own standard way
  * to say a pointer parameter is required, not optional -- real compilers
  * already diagnose a provably-NULL argument at the call site under

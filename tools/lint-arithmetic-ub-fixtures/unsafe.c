@@ -58,6 +58,34 @@ int unchecked_multiplication(int left, int right)
 	return left * right; /* arithmetic-ub-expect */
 }
 
+int overflowing_positive_multiplication(int left)
+{
+	if (left <= 1073741823)
+		return 0;
+	return left * 2; /* arithmetic-ub-expect */
+}
+
+int overflowing_positive_negative_multiplication(int left)
+{
+	if (left <= 1073741824)
+		return 0;
+	return left * -2; /* arithmetic-ub-expect */
+}
+
+int overflowing_negative_positive_multiplication(int left)
+{
+	if (left >= -1073741824)
+		return 0;
+	return left * 2; /* arithmetic-ub-expect */
+}
+
+int overflowing_negative_multiplication(int left)
+{
+	if (left >= -1073741823)
+		return 0;
+	return left * -2; /* arithmetic-ub-expect */
+}
+
 int unchecked_negation(int value)
 {
 	return -value; /* arithmetic-ub-expect */
