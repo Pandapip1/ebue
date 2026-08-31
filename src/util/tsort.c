@@ -59,8 +59,8 @@ static size_t nnodes, nodecap;
 
 static int find_node(const char *name)
 {
-	size_t i;
-	for (i = 0; i < nnodes; i++)
+	size_t i, count = nnodes;
+	for (i = 0; i < count; i++)
 		if (!strcmp(nodes[i].name, name)) return (int)i;
 	return -1;
 }
@@ -218,24 +218,26 @@ int __util_tsort_main(int argc, char **argv)
 	free(buf);
 
 	{
-		int *queue = __util_mallocarray(nnodes ? nnodes : 1, sizeof *queue);
+		size_t node_count = nnodes;
+		int *queue = __util_mallocarray(node_count ? node_count : 1, sizeof *queue);
 		size_t qtail = 0;
-		size_t n;
+		size_t n, remaining;
 
-		if (!queue && nnodes) { __util_diagf("tsort: out of memory\n"); return 1; }
+		if (!queue && node_count) { __util_diagf("tsort: out of memory\n"); return 1; }
 
-		for (n = 0; n < nnodes; n++)
+		for (n = 0; n < node_count; n++)
 			if (nodes[n].indeg == 0) queue[qtail++] = (int)n;
 
 		queue_head = 0;
 		ready_count = 0;
-		while (queue_head < qtail) {
+		for (remaining = node_count;
+		     remaining > 0 && queue_head < qtail; remaining--) {
 			int cur = queue[queue_head++];
-			size_t s;
+			size_t s, succ_count = nodes[cur].nsucc;
 			ready_count++;
 			nodes[cur].done = 1;
 			printf("%s\n", nodes[cur].name);
-			for (s = 0; s < nodes[cur].nsucc; s++) {
+			for (s = 0; s < succ_count; s++) {
 				int nb = nodes[cur].succ[s];
 				/* Each node's indegree reaches exactly zero at most
 				 * once, so it is pushed onto queue[] at most once --
@@ -248,16 +250,19 @@ int __util_tsort_main(int argc, char **argv)
 
 	cycle = ready_count < nnodes;
 	if (cycle) {
-		size_t n;
+		size_t n, node_count = nnodes;
 		__util_diagf("tsort: cycle in input; unresolved:");
-		for (n = 0; n < nnodes; n++)
+		for (n = 0; n < node_count; n++)
 			if (!nodes[n].done) __util_diagf(" %s", nodes[n].name);
 		__util_diagf("\n");
 	}
 
-	for (i = 0; i < nnodes; i++) {
-		free(nodes[i].name);
-		free(nodes[i].succ);
+	{
+		size_t node_count = nnodes;
+		for (i = 0; i < node_count; i++) {
+			free(nodes[i].name);
+			free(nodes[i].succ);
+		}
 	}
 	free(nodes);
 

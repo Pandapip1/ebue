@@ -267,7 +267,7 @@ static void assign_var(struct arith *a, const char *name, long v)
 {
 	/* sign + up to 20 digits (64-bit LONG_MIN) + NUL, rounded up */
 	char buf[32];
-	int n = 0, i, j;
+	int n = 0, i;
 	unsigned long u;
 	int neg = v < 0;
 
@@ -277,7 +277,11 @@ static void assign_var(struct arith *a, const char *name, long v)
 	while (u) { buf[n++] = (char)('0' + (u % 10)); u /= 10; }
 	if (neg) buf[n++] = '-';
 	buf[n] = 0;
-	for (i = 0, j = n - 1; i < j; i++, j--) { char t = buf[i]; buf[i] = buf[j]; buf[j] = t; }
+	for (i = 0; i < n / 2; i++) {
+		char t = buf[i];
+		buf[i] = buf[n - 1 - i];
+		buf[n - 1 - i] = t;
+	}
 	if (setenv(name, buf, 1) < 0) fail(a, WRDE_NOSPACE);
 }
 

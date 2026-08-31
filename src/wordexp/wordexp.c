@@ -742,13 +742,17 @@ static int expand_tilde(const char **pp, struct fbuf *b)
 static int fbuf_push_long(struct fbuf *b, long v)
 {
 	char buf[32];	/* sign + up to 20 digits (64-bit LONG_MIN) + NUL */
-	int n = 0, i, j;
+	int n = 0, i;
 	unsigned long u = v < 0 ? (unsigned long)(-(v + 1)) + 1UL : (unsigned long)v;
 
 	if (u == 0) buf[n++] = '0';
 	while (u) { buf[n++] = (char)('0' + (u % 10)); u /= 10; }
 	if (v < 0) buf[n++] = '-';
-	for (i = 0, j = n - 1; i < j; i++, j--) { char t = buf[i]; buf[i] = buf[j]; buf[j] = t; }
+	for (i = 0; i < n / 2; i++) {
+		char t = buf[i];
+		buf[i] = buf[n - 1 - i];
+		buf[n - 1 - i] = t;
+	}
 	buf[n] = 0;
 	return fbuf_push_str(b, buf, 0);
 }
