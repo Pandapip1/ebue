@@ -28,6 +28,12 @@ struct pctx {
 	struct hdq *head, *tail;
 };
 
+/* c is required: `c->tail`/`c->head` are dereferenced directly once
+ * `n` (the freshly __malloc'd queue node) is non-NULL, and every real
+ * call site passes the address of a real pctx. r is left unmarked --
+ * only ever stored as a raw pointer value (`n->r = r;`), never
+ * dereferenced by this function itself. */
+static void queue_heredoc(struct pctx *c, const struct sh_redir *r) __attribute__((nonnull(1)));
 static void queue_heredoc(struct pctx *c, const struct sh_redir *r)
 {
 	struct hdq *n = __malloc(sizeof *n);
@@ -45,6 +51,12 @@ static void queue_nested_heredocs_list(struct pctx *, const struct sh_list *);
  * definition.  Walk that retained tree in source order so the bodies are
  * emitted after the definition's terminating newline just like any other
  * queued here-document. */
+/* cmd is required: `switch (cmd->kind)` is this function's first
+ * statement. c is left unmarked -- only ever forwarded into
+ * queue_nested_heredocs_list()/queue_heredoc(), never dereferenced by
+ * this function itself. */
+static void queue_nested_heredocs_command(struct pctx *c,
+		const struct sh_command *cmd) __attribute__((nonnull(2)));
 static void queue_nested_heredocs_command(struct pctx *c,
 		const struct sh_command *cmd)
 {
@@ -82,6 +94,17 @@ static void queue_nested_heredocs_command(struct pctx *c,
 			queue_heredoc(c, r);
 }
 
+/* Neither parameter is marked here: list is genuinely optional --
+ * `if (!list) return;` right below is a real, working check, exercised
+ * whenever a compound command's optional part (e.g. an `if` with no
+ * `else`) is absent -- and c is forward-only, never dereferenced
+ * directly by this function itself.
+ *
+ * Not fixed by this: the flagged `andor->pipeline.commands[i]` deref is
+ * about `andor`, a local loop variable walking `item->andor`, and its
+ * own `.pipeline.commands` array pointer -- an internal AST invariant
+ * neither parameter here can express via `nonnull`, the same class of
+ * residual as execute.c's we.we_wordv[0]/__environ[i]. */
 static void queue_nested_heredocs_list(struct pctx *c,
 		const struct sh_list *list)
 {
@@ -97,6 +120,14 @@ static void queue_nested_heredocs_list(struct pctx *c,
 				    &andor->pipeline.commands[i]);
 }
 
+/* c is required: `struct hdq *h = c->head;` is this function's first
+ * statement. __sh_print_list() below is the only real entry point,
+ * always via `&c` where c is its own on-stack pctx.
+ *
+ * Not fixed by this: the flagged `h->r->heredoc` deref is about `h->r`,
+ * set by queue_heredoc() elsewhere (always a real redir there, but not
+ * an invariant this function's own parameter can express), not about c. */
+static void drain_heredocs(struct pctx *c) __attribute__((nonnull(1)));
 static void drain_heredocs(struct pctx *c)
 {
 	struct hdq *h = c->head;
@@ -111,6 +142,12 @@ static void drain_heredocs(struct pctx *c)
 	}
 }
 
+/* Both required: `fputc(' ', c->f);` is this function's first statement,
+ * and `if (r->fd >= 0)` right after it is equally unconditional, with
+ * no branch between them. print_redirs() below (the only caller)
+ * always passes a real c and a real list node. */
+static void print_redir(struct pctx *c, const struct sh_redir *r)
+    __attribute__((nonnull(1, 2)));
 static void print_redir(struct pctx *c, const struct sh_redir *r)
 {
 	static const char *const opstr[] = {
@@ -129,6 +166,13 @@ static void print_redirs(struct pctx *c, const struct sh_redir *r)
 	for (; r; r = r->next) print_redir(c, r);
 }
 
+/* c is required: whenever the loop body runs at all, `c->f` is
+ * dereferenced with no NULL check, and every real call site passes a
+ * real pctx. w is deliberately left unmarked -- `for (; w; w = w->next)`
+ * is the usual NULL-safe "empty list" walk, and a command with no words
+ * (e.g. an assignment-only simple command) genuinely passes NULL here. */
+static void print_words(struct pctx *c, const struct sh_word *w, int leading_space)
+    __attribute__((nonnull(1)));
 static void print_words(struct pctx *c, const struct sh_word *w, int leading_space)
 {
 	for (; w; w = w->next) {
@@ -141,6 +185,12 @@ static void print_words(struct pctx *c, const struct sh_word *w, int leading_spa
 
 static void print_list(struct pctx *c, const struct sh_list *list);
 
+/* cmd is required: `switch (cmd->kind)` is this function's first
+ * statement. c is required too: most switch arms directly dereference
+ * `c->f` (fputc()/fputs() calls), and print_list()/print_pipeline()
+ * below always pass a real pctx. */
+static void print_command(struct pctx *c, const struct sh_command *cmd)
+    __attribute__((nonnull(1, 2)));
 static void print_command(struct pctx *c, const struct sh_command *cmd)
 {
 	switch (cmd->kind) {
@@ -217,6 +267,13 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	print_redirs(c, cmd->redirs);
 }
 
+/* pl is required: `if (pl->bang)` is this function's first statement.
+ * c is required too: reached directly (`fputs(" ! ", c->f)`) on the
+ * real, reachable `pl->bang` path and the real, reachable `i > 0`
+ * path of a multi-command pipeline, and print_andor() below always
+ * passes a real pctx and `&a->pipeline`. */
+static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
+    __attribute__((nonnull(1, 2)));
 static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
 {
 	size_t i;

@@ -54,6 +54,7 @@
 /* ---- growable buffers --------------------------------------------------- */
 struct gbuf { char *d; size_t n, cap; };
 
+static int gbuf_push(struct gbuf *b, char c) __attribute__((nonnull(1)));
 static int gbuf_push(struct gbuf *b, char c)
 {
 	if (b->n == b->cap) {
@@ -69,6 +70,12 @@ static int gbuf_push(struct gbuf *b, char c)
 	return 0;
 }
 
+/* s is required: `s[i]` is indexed directly whenever the loop runs, and
+ * every real call site passes a real substring pointer regardless of
+ * length. b is left unmarked -- only ever forwarded into gbuf_push(),
+ * which states its own contract above. */
+static int gbuf_push_n(struct gbuf *b, const char *s, size_t n)
+    __attribute__((nonnull(2)));
 static int gbuf_push_n(struct gbuf *b, const char *s, size_t n)
 {
 	size_t i;
@@ -108,6 +115,11 @@ static char *xstrdup(const char *s)
  * state has no matching awareness of command substitution either --
  * out of scope for this bounded fix, same as the double-quote branch's
  * other limits. */
+/* pp is required by all four copy_*quoted()/copy_balanced() helpers
+ * below: each dereferences `*pp` unconditionally as its first statement.
+ * b is left unmarked in each -- only ever forwarded into gbuf_push(),
+ * which states its own contract above. */
+static int copy_squoted(const char **pp, struct gbuf *b) __attribute__((nonnull(1)));
 static int copy_squoted(const char **pp, struct gbuf *b)
 {
 	const char *p = *pp;
@@ -121,6 +133,7 @@ static int copy_squoted(const char **pp, struct gbuf *b)
 	return 0;
 }
 
+static int copy_dquoted(const char **pp, struct gbuf *b) __attribute__((nonnull(1)));
 static int copy_dquoted(const char **pp, struct gbuf *b)
 {
 	const char *p = *pp;
@@ -141,6 +154,8 @@ static int copy_dquoted(const char **pp, struct gbuf *b)
 /* *pp points at `open` ('(' or '{'). Copies through the matching
  * `close`, tracking nesting depth and skipping quoted regions, into b
  * (both delimiters included). */
+static int copy_balanced(const char **pp, struct gbuf *b, char open, char close)
+    __attribute__((nonnull(1)));
 static int copy_balanced(const char **pp, struct gbuf *b, char open, char close)
 {
 	const char *p = *pp;
@@ -164,6 +179,7 @@ static int copy_balanced(const char **pp, struct gbuf *b, char open, char close)
 
 /* *pp points at the opening '`'. Copies through the matching closing
  * '`' (old-form command substitution does not nest), into b. */
+static int copy_backquoted(const char **pp, struct gbuf *b) __attribute__((nonnull(1)));
 static int copy_backquoted(const char **pp, struct gbuf *b)
 {
 	const char *p = *pp;
@@ -233,6 +249,11 @@ struct lexer {
 	size_t errbuflen;
 };
 
+/* lx is required: `if (!lx->err && lx->errbuflen)` is this function's
+ * first statement. fmt is left unmarked -- only touched (via vsnprintf())
+ * inside that conditional block, and every real call site passes a
+ * literal format string anyway. */
+static void lex_errf(struct lexer *lx, const char *fmt, ...) __attribute__((nonnull(1)));
 static void lex_errf(struct lexer *lx, const char *fmt, ...)
 {
 	va_list ap;
@@ -249,6 +270,13 @@ static void lex_errf(struct lexer *lx, const char *fmt, ...)
  * exactly the processing XCU 2.7.4 requires before comparing candidate
  * terminator lines. *quoted is set if any quoting/escaping was present
  * at all, which per 2.7.4 disables expansions within the body. */
+/* raw and quoted are both required: `while (*p)` (p aliases raw)
+ * dereferences raw at least once unconditionally on entry, even for an
+ * empty string, and `*quoted = 0;` is this function's first statement.
+ * drain_heredocs() below is the only caller, always with a real
+ * heredoc-delimiter word and the address of a real redir's own
+ * heredoc_quoted field. */
+static char *strip_delim(const char *raw, int *quoted) __attribute__((nonnull(1, 2)));
 static char *strip_delim(const char *raw, int *quoted)
 {
 	struct gbuf b = {0, 0, 0};
@@ -281,6 +309,7 @@ oom:
 	return 0;
 }
 
+static int drain_heredocs(struct lexer *lx) __attribute__((nonnull(1)));
 static int drain_heredocs(struct lexer *lx)
 {
 	struct pending_hd *h = lx->pending_head;
@@ -330,6 +359,7 @@ static int drain_heredocs(struct lexer *lx)
 	return 0;
 }
 
+static void discard_heredocs(struct lexer *lx) __attribute__((nonnull(1)));
 static void discard_heredocs(struct lexer *lx)
 {
 	struct pending_hd *h = lx->pending_head;
@@ -346,6 +376,7 @@ static void discard_heredocs(struct lexer *lx)
  * lx->p past it. Returns the raw text (quotes/backslashes intact),
  * NUL-terminated, or NULL on OOM/unterminated-quote (lx->err is set
  * either way it fails). */
+static char *scan_word(struct lexer *lx) __attribute__((nonnull(1)));
 static char *scan_word(struct lexer *lx)
 {
 	struct gbuf b = {0, 0, 0};
@@ -409,6 +440,7 @@ fail:
 
 static struct token mktok(enum tok_type t) { struct token tok; tok.type = t; tok.text = 0; tok.ionum = 0; tok.start = 0; return tok; }
 
+static struct token next_raw_token(struct lexer *lx) __attribute__((nonnull(1)));
 static struct token next_raw_token(struct lexer *lx)
 {
 	for (;;) {
@@ -507,6 +539,7 @@ struct parser {
 	int had_error;
 };
 
+static void advance(struct parser *p) __attribute__((nonnull(1)));
 static void advance(struct parser *p)
 {
 	if (p->cur.type == T_WORD) { __free(p->cur.text); p->cur.text = 0; }
@@ -530,6 +563,9 @@ static void advance(struct parser *p)
 	if (p->cur.type == T_ERROR) p->had_error = 1;
 }
 
+/* p is required: `if (!p->had_error)` is this function's first
+ * statement. fmt is left unmarked, same reasoning as lex_errf() above. */
+static void perr(struct parser *p, const char *fmt, ...) __attribute__((nonnull(1)));
 static void perr(struct parser *p, const char *fmt, ...)
 {
 	va_list ap;
@@ -541,11 +577,13 @@ static void perr(struct parser *p, const char *fmt, ...)
 	p->had_error = 1;
 }
 
+static void skip_newlines(struct parser *p) __attribute__((nonnull(1)));
 static void skip_newlines(struct parser *p)
 {
 	while (!p->had_error && p->cur.type == T_NEWLINE) advance(p);
 }
 
+static int is_assignment_word(const char *s) __attribute__((nonnull(1)));
 static int is_assignment_word(const char *s)
 {
 	const char *p = s;
@@ -554,6 +592,7 @@ static int is_assignment_word(const char *s)
 	return p != s && *p == '=';
 }
 
+static struct sh_redir *parse_redir(struct parser *p) __attribute__((nonnull(1)));
 static struct sh_redir *parse_redir(struct parser *p)
 {
 	struct sh_redir *r;
@@ -636,11 +675,18 @@ static struct sh_redir *parse_redir(struct parser *p)
 static struct sh_list *parse_list(struct parser *p, unsigned stops);
 
 /* A bare, unquoted WORD token whose text is exactly `w`. */
+/* p is required: `p->cur.type == T_WORD` is dereferenced unconditionally
+ * in the return expression's left operand (evaluated regardless of its
+ * truth, by C's own evaluation rules). w is left unmarked -- only
+ * reached via strcmp() and only when the left operand is already true
+ * (short-circuit `&&`), never dereferenced by this function itself. */
+static int is_resword(struct parser *p, const char *w) __attribute__((nonnull(1)));
 static int is_resword(struct parser *p, const char *w)
 {
 	return p->cur.type == T_WORD && strcmp(p->cur.text, w) == 0;
 }
 
+static int expect_resword(struct parser *p, const char *w) __attribute__((nonnull(1)));
 static int expect_resword(struct parser *p, const char *w)
 {
 	if (p->had_error) return -1;
@@ -652,6 +698,7 @@ static int expect_resword(struct parser *p, const char *w)
 	return p->had_error ? -1 : 0;
 }
 
+static int at_group_stop(struct parser *p, unsigned stops) __attribute__((nonnull(1)));
 static int at_group_stop(struct parser *p, unsigned stops)
 {
 	if (p->cur.type == T_EOF) return 1;
@@ -720,6 +767,7 @@ static void free_command(struct sh_command *c)
 /* XBD Name: "a word consisting solely of underscores, digits, and
  * alphabetics from the portable character set, the first character of
  * which is not a digit" -- XCU 2.10.1's rule 5 ("NAME in for"). */
+static int is_name(const char *s) __attribute__((nonnull(1)));
 static int is_name(const char *s)
 {
 	const char *q = s;
@@ -964,6 +1012,7 @@ fail:
 	return 0;
 }
 
+static struct sh_command *parse_command(struct parser *p) __attribute__((nonnull(1)));
 static struct sh_command *parse_command(struct parser *p)
 {
 	struct sh_command *cmd;
@@ -1109,6 +1158,14 @@ trailing_redirs:
 	return cmd;
 }
 
+/* p is required: `p->cur.type == T_WORD` in the `if` guarding the `!`
+ * check is this function's first statement. out is required too: the
+ * checker flagged only `p->cur` here, but `out->bang = 0;` right before
+ * it is an equally unconditional, unguarded direct dereference -- both
+ * real call sites in parse_list() below always pass `&head->pipeline`/
+ * `&node->pipeline`, never NULL. */
+static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
+    __attribute__((nonnull(1, 2)));
 static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
 {
 	struct sh_command *arr = 0;

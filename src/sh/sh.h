@@ -253,7 +253,12 @@ void __sh_free_redirs(struct sh_redir *r);
 /* Frees everything a sh_command *owns* (words/assigns/redirs/body), but
  * not the struct itself -- callers that store sh_command by value in an
  * array (see sh_pipeline.commands) free the array separately. */
-void __sh_free_command_contents(struct sh_command *c);
+/* c is required, unlike __sh_free_words()/__sh_free_redirs() above: this
+ * frees a command's own contents, not a linked-list node walk, so there
+ * is no "NULL means empty list" reading available -- free.c's own body
+ * dereferences c unconditionally on entry, and every real call site
+ * passes a real struct (see free.c). */
+void __sh_free_command_contents(struct sh_command *c) __attribute__((nonnull(1)));
 
 /* Reprints `list` in a canonical, re-parseable form. Used by stage 1's
  * parse-and-print tests and (harmlessly) available to anything that
@@ -324,10 +329,21 @@ struct sh_funcs { struct sh_fn *head; };
 
 int __sh_func_define(const char *name, const char *body);
 const char *__sh_func_lookup(const char *name);
-void __sh_funcs_take(struct sh_funcs *out);     /* move out, leaving none */
-int __sh_funcs_copy(const struct sh_funcs *src); /* install a duplicate of src */
-void __sh_funcs_install(struct sh_funcs *in);   /* move in, freeing current */
-void __sh_funcs_free(struct sh_funcs *f);       /* release a taken table */
+/* out/src/in/f are each required: func.c's own body dereferences the
+ * struct sh_funcs * directly and unconditionally on entry to every one
+ * of these four (`out->head = table;`, `for (f = src->head; ...)`,
+ * `table = in->head;`, `free_chain(f->head);`), and every real call site
+ * -- execute.c's params_subshell_enter()/params_subshell_leave()/
+ * __sh_cmdsub(), script.c's __sh_run_script() -- always passes the
+ * address of a real local. */
+void __sh_funcs_take(struct sh_funcs *out)      /* move out, leaving none */
+    __attribute__((nonnull(1)));
+int __sh_funcs_copy(const struct sh_funcs *src) /* install a duplicate of src */
+    __attribute__((nonnull(1)));
+void __sh_funcs_install(struct sh_funcs *in)    /* move in, freeing current */
+    __attribute__((nonnull(1)));
+void __sh_funcs_free(struct sh_funcs *f)        /* release a taken table */
+    __attribute__((nonnull(1)));
 
 /* ---- positional and special parameters (XCU 2.5.1, 2.5.2) -----------
  *
@@ -348,11 +364,26 @@ const char *__sh_param_zero(void);
 int __sh_param_set_zero(const char *s);
 int __sh_param_count(void);
 const char *__sh_param_get(int n);            /* 1-based; NULL if unset */
+/* argv is deliberately left unmarked: param.c's own `for (i = 0; i < n;
+ * i++) nv[i] = dup_str(argv[i]);` is gated by `if (n > 0)`, and a real
+ * caller -- execute.c's params_subshell_enter(), `__sh_params_replace(
+ * saved->v, saved->n)` -- genuinely passes NULL for argv when saved->n
+ * is 0, matching this very struct's own "v[k] ... NULL iff n == 0"
+ * comment above. */
 int __sh_params_replace(char *const *argv, int n);
 int __sh_params_shift(int n);                 /* -1 if n > $# */
-void __sh_params_take(struct sh_params *out);     /* move out, leaving none */
-void __sh_params_install(struct sh_params *in);   /* move in, freeing current */
-void __sh_params_free(struct sh_params *p);
+/* out/in/p are each required: param.c's own body dereferences the
+ * struct sh_params * directly and unconditionally on entry to every one
+ * of these three (`out->v = pv;`, `pv = in->v;`, `free_vec(p->v, p->n);`),
+ * and every real call site always passes the address of a real local
+ * (execute.c's subshell/cmdsub save-restore pairs, script.c's
+ * __sh_run_script(), test/sh-engine.c). */
+void __sh_params_take(struct sh_params *out)      /* move out, leaving none */
+    __attribute__((nonnull(1)));
+void __sh_params_install(struct sh_params *in)    /* move in, freeing current */
+    __attribute__((nonnull(1)));
+void __sh_params_free(struct sh_params *p)
+    __attribute__((nonnull(1)));
 
 /* ---- shell-wide control flow ----------------------------------------
  *
@@ -392,10 +423,23 @@ int __sh_in_function(void);
  * exec.c and read by `exit` with no operand. */
 int __sh_last_status(void);
 
-int __sh_exec_command(const struct sh_command *cmd, int *status);
-int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status);
-int __sh_exec_andor(const struct sh_andor *a, int *status);
-int __sh_exec_list(const struct sh_list *list, int *status);
+/* cmd/pl/a are required in each case (see execute.c's own definitions
+ * for exactly which unconditional dereference proves it); status is
+ * required for __sh_exec_pipeline() and __sh_exec_andor(), which both
+ * dereference it directly and not merely forward it, but deliberately
+ * NOT for __sh_exec_command() (forward-only) or __sh_exec_list() (whose
+ * OTHER parameter, list, is the one genuinely optional here -- NULL
+ * means an empty compound-command body, e.g. an absent `else`, and
+ * execute.c's own `if (!list) return 0;` is the real, working check for
+ * it). */
+int __sh_exec_command(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1)));
+int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
+    __attribute__((nonnull(1, 2)));
+int __sh_exec_andor(const struct sh_andor *a, int *status)
+    __attribute__((nonnull(1, 2)));
+int __sh_exec_list(const struct sh_list *list, int *status)
+    __attribute__((nonnull(2)));
 
 /* ---- the utility (src/sh/script.c) ----------------------------------
  *
@@ -406,6 +450,13 @@ int __sh_exec_list(const struct sh_list *list, int *status);
  * already have a shell running in this process; it is the only one of
  * the two declared in src/internal/libc.h, because it is the only one
  * anything outside src/sh/ and sh/ calls. */
-int __sh_main(int argc, char **argv);
+/* argv is required: `argv[0]` is indexed to decide `progname` in this
+ * function's own preamble, and the `argc > 0` guard alongside it does
+ * not by itself prove argv non-null to a static analyzer (nor, for that
+ * matter, at runtime -- a caller could pass a positive argc with a NULL
+ * argv). Both real callers -- sh/main.c's own main(), and
+ * __sh_run_script() below -- always forward a real argv, matching the
+ * standard C convention that argv is never NULL even when argc is 0. */
+int __sh_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 #endif

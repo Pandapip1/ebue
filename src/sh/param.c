@@ -100,6 +100,13 @@ int __sh_param_count(void)
  * "each positional parameter that is set", and an out-of-range index is
  * simply not set.  Callers must not pass 0: that is $0, which is not a
  * positional parameter and comes from __sh_param_zero(). */
+/* `pv[n - 1]` is flagged as not proven nonnull, but there is no pointer
+ * parameter here to attach `nonnull` to -- `n` is an int, and `pv` is
+ * this file's own static array, guarded by `n > pn` above (pn tracks
+ * exactly how many of pv's slots are populated) rather than by any
+ * caller-supplied contract.  Left as a genuine residual: the checker
+ * cannot see across a static global the same way it sees across a
+ * parameter, and there is no parameter-level fix available for it. */
 const char *__sh_param_get(int n)
 {
 	if (n < 1 || n > pn) return 0;
@@ -141,6 +148,9 @@ int __sh_params_replace(char *const *argv, int n)
  *
  * Returns -1 without touching anything for an out-of-range n, which is
  * the case shift(1p)'s EXIT STATUS makes a nonzero status. */
+/* Same residual as __sh_param_get() above: `pv[i]` is this file's own
+ * static array, not reachable via `n` (an int), so there is no
+ * parameter-level `nonnull` fix for the flagged deref here either. */
 int __sh_params_shift(int n)
 {
 	int i;

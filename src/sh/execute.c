@@ -293,6 +293,21 @@ static void free_strv(char **v, size_t n)
  * and owned by the caller; returns 0, or -1 on a malformed assignment word
  * (should not happen given is_assignment_word) or OOM.
  */
+/* name/val are required out-parameters: `*name = __malloc(...)` and
+ * both arms of the `if (eq[1] && ...)` below write `*val` unconditionally
+ * on every path that does not already return -1, with no NULL check --
+ * every real call site (build_child_envp(), exec_assignment_only()
+ * below) always passes the address of a real local. raw is forward-only
+ * here (only ever handed to strchr()/__wordexp_sh(), never dereferenced
+ * by this function's own body directly).
+ *
+ * Not fixed by this: the `we.we_wordv[0]` access above is a local
+ * wordexp_t this function itself populated via __wordexp_sh(), gated by
+ * `we.we_wordc ? ... : ""` -- a real, working guard the analyzer cannot
+ * trace across the wordexp_t ABI boundary, not a missing check on any
+ * parameter here. */
+static int split_assignment(const char *raw, char **name, char **val)
+    __attribute__((nonnull(2, 3)));
 static int split_assignment(const char *raw, char **name, char **val)
 {
 	const char *eq = strchr(raw, '=');
@@ -353,6 +368,20 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
  * command must never be able to clobber the caller's environ) with
  * each assignment applied on top. *out_n receives the entry count
  * (excluding the NULL terminator); returns NULL on OOM. */
+/* out_n is a required out-parameter: `*out_n = n;` is unconditional on
+ * the only path that does not already return 0 (OOM), and no real call
+ * site (spawn_stage() below) passes NULL. assigns is deliberately left
+ * unmarked: `for (a = assigns; a; a = a->next)` is the same NULL-safe
+ * "empty list" traversal every sh_word chain in this file uses, and a
+ * command with no assignment prefix genuinely passes cmd->assigns as
+ * NULL here.
+ *
+ * Not fixed by this: the flagged subscript around `__environ[i]`/`v[i]`
+ * is about the global `environ` this loop walks, not about either
+ * parameter -- the same class of residual as split_assignment()'s
+ * we.we_wordv[0] above. */
+static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
+    __attribute__((nonnull(2)));
 static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 {
 	size_t n = 0, cap, i;
@@ -398,6 +427,8 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
  * cmdsub_status_rule() below, which is where 2.9.1's "no command name,
  * but the command contained a command substitution" rule lives. */
 static int exec_assignment_only(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
+static int exec_assignment_only(const struct sh_command *cmd, int *status)
 {
 	const struct sh_word *a;
 	for (a = cmd->assigns; a; a = a->next) {
@@ -439,6 +470,7 @@ struct redir_state {
  * redirection, not to the intermediate state after the first one).
  * Returns -1 only on OOM growing the table; a plain "fd was not open"
  * is not an error here, it is exactly what `have = 0` records. */
+static int save_fd(struct redir_state *rs, int fd) __attribute__((nonnull(1)));
 static int save_fd(struct redir_state *rs, int fd)
 {
 	size_t i;
@@ -462,6 +494,7 @@ static int save_fd(struct redir_state *rs, int fd)
  * particular order (each entry names a distinct fd, so they are
  * independent), and frees the bookkeeping array. Safe to call on an
  * all-zero (never touched) redir_state. */
+static void restore_fds(struct redir_state *rs) __attribute__((nonnull(1)));
 static void restore_fds(struct redir_state *rs)
 {
 	size_t i;
@@ -508,6 +541,15 @@ static int default_redir_fd(enum sh_redir_op op)
  * sets *unsupported on a wordexp() failure (WRDE_CMDSUB, most
  * commonly -- stage 5) or OOM; the caller propagates that as this
  * file's usual -1 "cannot execute this yet". */
+/* unsupported is a required out-parameter: every path that leaves this
+ * function without a result writes through it with no NULL check, and
+ * apply_one_redir() below always passes the address of a real local.
+ * raw is forward-only (only ever handed to __wordexp_sh()).
+ *
+ * Not fixed by this: we.we_wordv[0] is the same local-wordexp_t residual
+ * as split_assignment()'s above. */
+static char *expand_redir_word(const char *raw, int *unsupported)
+    __attribute__((nonnull(2)));
 static char *expand_redir_word(const char *raw, int *unsupported)
 {
 	wordexp_t we;
@@ -541,6 +583,16 @@ static char *expand_redir_word(const char *raw, int *unsupported)
  * place a heredoc can run a command at all -- therefore runs for real,
  * through the same wordexp() call-out as any other double-quoted
  * word. Returns NULL and sets *unsupported on failure. */
+/* body and unsupported are both required: `body[i]` is indexed directly
+ * in this function's own scan loop with no NULL check, and unsupported
+ * is written unconditionally on every failure path. apply_one_redir()
+ * below is the only caller, always with a real heredoc body string and
+ * the address of a real local.
+ *
+ * Not fixed by this: we.we_wordv[0] is the same local-wordexp_t residual
+ * as split_assignment()'s above. */
+static char *expand_heredoc(const char *body, int *unsupported)
+    __attribute__((nonnull(1, 2)));
 static char *expand_heredoc(const char *body, int *unsupported)
 {
 	size_t n = strlen(body), i;
@@ -608,6 +660,14 @@ static int heredoc_open(const char *text)
  * 5), or 1 for a genuine redirection failure (bad path, permission
  * denied, duplicating a closed fd, ...) that the caller reports as the
  * *command's* exit status per 2.8.1, not as this file's -1. */
+/* r is required: `switch (r->op)` dereferences it unconditionally on
+ * entry, and apply_redirs() below (the only caller) always passes a
+ * real node off its `redirs` list. unsupported is left unmarked -- this
+ * function never touches it directly itself, only forwards it into
+ * expand_redir_word()/expand_heredoc(), which state their own
+ * contracts above. */
+static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
+    __attribute__((nonnull(1)));
 static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
 {
 	char *word;
@@ -716,6 +776,16 @@ static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
  * shell, it just fails that one command). Returns -1 (caller
  * propagates as "cannot execute this yet") or 0 with *failed telling
  * the caller whether the command should actually run. */
+/* failed is required: `*failed = 0;` is this function's first statement,
+ * unconditional, and every real call site (exec_simple(), exec_group(),
+ * exec_group_stage_inline() below) always passes the address of a real
+ * local. redirs is deliberately left unmarked -- `for (r = redirs; r;
+ * r = r->next)` is the usual NULL-safe "empty list" walk, and a command
+ * with no redirections genuinely passes cmd->redirs as NULL. rs is left
+ * unmarked too: never dereferenced directly by this function's own body,
+ * only forwarded into save_fd(), which states its own contract above. */
+static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, int *failed)
+    __attribute__((nonnull(3)));
 static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, int *failed)
 {
 	const struct sh_redir *r;
@@ -769,6 +839,16 @@ static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, i
  * *status -- unless `return` ran, whose own operand replaces it. */
 #define SH_FUNC_DEPTH_MAX 128
 
+/* status is required: every path through this function that returns 0
+ * (rather than the sh.h-wide "-1, status left untouched" convention)
+ * writes through it with no NULL check, and spawn_stage() below (the
+ * only caller) always passes the address of its own out->special field.
+ * name/body/argv are left unmarked -- none of them is dereferenced
+ * directly by this function's own body, only forwarded into fprintf(),
+ * __sh_parse() and __sh_params_replace(). */
+static int call_function(const char *name, const char *body,
+                         char **argv, int argc, int *status)
+    __attribute__((nonnull(5)));
 static int call_function(const char *name, const char *body,
                          char **argv, int argc, int *status)
 {
@@ -918,6 +998,15 @@ typedef struct stage_variant_result {
  * Returns 0 with *status set -- the command has already run by the time
  * this returns, so there is no pid for the caller to wait on -- or -1
  * with the caller's 126 to follow. */
+/* we and status are required: `size_t n = we->we_wordc` dereferences we
+ * unconditionally on entry, and `*status = __sh_run_script(...)` is
+ * unconditional on the only path that does not already return -1 for
+ * OOM. resolved is left unmarked: stored into av[1] as a raw pointer
+ * value, never itself dereferenced by this function. spawn_stage()
+ * below is the only caller, always with a real resolved path, `&we`
+ * and the address of its own out->special field. */
+static int run_interpreted(const char *resolved, const wordexp_t *we, int *status)
+    __attribute__((nonnull(2, 3)));
 static int run_interpreted(const char *resolved, const wordexp_t *we, int *status)
 {
 	char **av;
@@ -946,6 +1035,12 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 	return 0;
 }
 
+/* cmd and out are both required: `out->kind = 1;` is this function's
+ * first statement, and `if (!cmd->words)` right after it is unconditional
+ * too -- no branch precedes either. run_stage() below (the only caller)
+ * always passes a real cmd and the address of a real stage_result_t. */
+static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
+    __attribute__((nonnull(1, 2)));
 static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	wordexp_t we;
@@ -1114,6 +1209,14 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
  * then discarded -- nothing downstream of the pipeline can tell the
  * difference -- and it is what keeps this file's "no fork()" pipeline
  * design correct rather than merely convenient. */
+/* cmd is required: `if (!cmd->words)` is this function's first
+ * statement. out is required too: it is either dereferenced directly in
+ * the assignment-only branch (`out->kind = 1;`) or forwarded to
+ * spawn_stage(), which requires it nonnull above -- every path
+ * dereferences it one way or the other. exec_simple() below is the only
+ * caller, always with a real cmd and `&sr`. */
+static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
+    __attribute__((nonnull(1, 2)));
 static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	if (!cmd->words) {
@@ -1149,12 +1252,16 @@ static int wait_status(pid_t pid)
  * as "$(...)" alone is), so every caller samples it before its own
  * apply_redirs(), not just before run_stage(). */
 static int cmdsub_status_rule(const stage_result_t *sr, unsigned long gen0)
+    __attribute__((nonnull(1)));
+static int cmdsub_status_rule(const stage_result_t *sr, unsigned long gen0)
 {
 	if (!sr->kind) return 0;
 	if (!sr->had_name && cmdsub_generation != gen0) return cmdsub_status;
 	return sr->special;
 }
 
+static int exec_simple(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_simple(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1376,6 +1483,12 @@ static int exec_simple(const struct sh_command *cmd, int *status)
  * subshell's own copy out of it.  One owner per array at every moment,
  * which is what makes nesting safe.  Returns -1 on OOM with the
  * caller's list already restored. */
+/* saved is required: `__sh_params_replace(saved->v, saved->n)` right
+ * after the take dereferences it directly. fsaved is left unmarked --
+ * this function only ever forwards it into __sh_funcs_take()/
+ * __sh_funcs_copy()/__sh_funcs_install(), never touching it itself. */
+static int params_subshell_enter(struct sh_params *saved, struct sh_funcs *fsaved)
+    __attribute__((nonnull(1)));
 static int params_subshell_enter(struct sh_params *saved, struct sh_funcs *fsaved)
 {
 	__sh_params_take(saved);
@@ -1407,6 +1520,7 @@ struct env_snapshot {
 	size_t n;
 };
 
+static void free_env_snapshot(struct env_snapshot *es) __attribute__((nonnull(1)));
 static void free_env_snapshot(struct env_snapshot *es)
 {
 	size_t i;
@@ -1417,6 +1531,7 @@ static void free_env_snapshot(struct env_snapshot *es)
 }
 
 /* Returns 0 on success, -1 on OOM (nothing left half-allocated either way). */
+static int env_snapshot_take(struct env_snapshot *es) __attribute__((nonnull(1)));
 static int env_snapshot_take(struct env_snapshot *es)
 {
 	size_t n, i;
@@ -1439,6 +1554,12 @@ static int env_snapshot_take(struct env_snapshot *es)
 	return 0;
 }
 
+/* es is required: `for (i = 0; i < es->n; i++)` is the first statement,
+ * unconditional. name is left unmarked -- only ever forwarded to
+ * strcmp(), never dereferenced directly here; env_snapshot_restore()
+ * below only ever calls this with an already-truthy-checked cur[i]. */
+static int name_in_snapshot(const struct env_snapshot *es, const char *name)
+    __attribute__((nonnull(1)));
 static int name_in_snapshot(const struct env_snapshot *es, const char *name)
 {
 	size_t i;
@@ -1453,6 +1574,14 @@ static int name_in_snapshot(const struct env_snapshot *es, const char *name)
  * unsetenv() API so src/env/setenv.c's own putenv()-ownership
  * bookkeeping (a static table this file has no access to) stays
  * correct, per this function group's header comment above. */
+/* es is required: the closing `for (i = 0; i < es->n; i++) setenv(...)`
+ * is unconditional on every path through this function.
+ *
+ * Not fixed by this: the flagged `__environ[i]` subscript inside the
+ * `if (n && cur)` block is the same global-`environ` residual as
+ * build_child_envp()'s above, unrelated to es. */
+static void env_snapshot_restore(const struct env_snapshot *es)
+    __attribute__((nonnull(1)));
 static void env_snapshot_restore(const struct env_snapshot *es)
 {
 	size_t n, i;
@@ -1531,6 +1660,14 @@ static void env_snapshot_restore(const struct env_snapshot *es)
  * compound-list shall be executed."  Exit status: "the exit status of
  * the then or else compound-list that was executed, or zero, if none
  * was executed." */
+/* exec_if()/exec_loop()/exec_for() all share the same shape: `*status =
+ * 0;` is each one's first statement (status required), immediately
+ * followed by an unconditional `cmd->...` access with no branch between
+ * them (cmd required). exec_compound() below is the only caller of all
+ * three, always with a real cmd and the same status it was itself
+ * handed. */
+static int exec_if(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_if(const struct sh_command *cmd, int *status)
 {
 	const struct sh_ifarm *a;
@@ -1556,6 +1693,8 @@ static int exec_if(const struct sh_command *cmd, int *status)
  * status of the last compound-list-2 executed, or zero if none was
  * executed", which is why *status starts at 0 and is only ever written
  * by the body. */
+static int exec_loop(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_loop(const struct sh_command *cmd, int *status)
 {
 	*status = 0;
@@ -1609,6 +1748,8 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * pre-existing deviation the whole variable story has, not a new one
  * this construct introduces -- `X=1; cmd` already behaves the same way
  * -- and it is stated here rather than left for someone to find. */
+static int exec_for(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_for(const struct sh_command *cmd, int *status)
 {
 	wordexp_t we;
@@ -1677,6 +1818,13 @@ static int exec_for(const struct sh_command *cmd, int *status)
  * expansions shall be performed as normal each time the function is
  * called" -- which is exactly what storing the raw source text
  * delivers, rather than being a rule this file has to remember. */
+/* cmd is required: `__sh_func_define(cmd->name, cmd->func_text)` is
+ * this function's first statement. status is required too, and more
+ * strongly than most of this family: both of this function's returns
+ * write through it (there is no "-1, status untouched" path here at
+ * all). */
+static int exec_funcdef(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_funcdef(const struct sh_command *cmd, int *status)
 {
 	if (__sh_func_define(cmd->name, cmd->func_text) < 0) {
@@ -1688,6 +1836,13 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
 	return 0;
 }
 
+/* cmd is required: `switch (cmd->kind)` is the first statement. status
+ * is left unmarked -- this function never touches it directly itself,
+ * only forwards it to whichever of exec_funcdef()/exec_if()/exec_loop()/
+ * exec_for()/__sh_exec_list() the switch selects, each of which states
+ * its own contract. */
+static int exec_compound(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1)));
 static int exec_compound(const struct sh_command *cmd, int *status)
 {
 	switch (cmd->kind) {
@@ -1707,6 +1862,14 @@ static int exec_compound(const struct sh_command *cmd, int *status)
 	}
 }
 
+/* cmd is required: `int is_subshell = cmd->kind == SH_CMD_SUBSHELL;` is
+ * this function's first real statement, unconditional. status is
+ * required too -- `*status = 1;` in the `if (failed)` branch is a real,
+ * reachable direct dereference, and no real caller of this function
+ * (exec_group_stage_inline() aside, which is a separate function with
+ * its own contract) ever passes it a NULL status. */
+static int exec_group(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_group(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1851,6 +2014,15 @@ static char *slurp_fd(int fd)
 	return buf;
 }
 
+/* out and status are both required, matching src/internal/libc.h's own
+ * documented contract for this function: "*out NULL and *status
+ * untouched" on failure, "*out a __malloc'd ... capture" and "*status
+ * the command's exit status" on success -- out is written on every
+ * path (`*out = 0;` is this function's first statement), status only
+ * on the success path, and no real caller (src/wordexp/wordexp.c's
+ * command-substitution expansion) ever passes NULL for either. program
+ * is left unmarked: only ever forwarded into __sh_parse(), never
+ * dereferenced directly here. */
 int __sh_cmdsub(const char *program, char **out, int *status)
 {
 	struct sh_list *list;
@@ -1952,6 +2124,10 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	return 0;
 }
 
+/* cmd is required: `if (cmd->kind == SH_CMD_SIMPLE)` is this function's
+ * first statement. status is left unmarked -- forwarded, never itself
+ * dereferenced, to whichever of exec_simple()/exec_group() the check
+ * selects. */
 int __sh_exec_command(const struct sh_command *cmd, int *status)
 {
 	if (cmd->kind == SH_CMD_SIMPLE) return exec_simple(cmd, status);
@@ -1982,6 +2158,13 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
  * abort_unsupported path a spawn_stage() OOM would take) or if the
  * body itself hits something this shell cannot execute (propagated the
  * same way __sh_exec_command()'s other callers already propagate it). */
+/* cmd is required: `apply_redirs(cmd->redirs, ...)` is this function's
+ * first substantive statement. status is required too, on the same
+ * "directly dereferenced on a real reachable path, no real caller ever
+ * passes NULL" basis as exec_group()'s above -- `*status = 1;` in the
+ * `if (failed)` branch. */
+static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
+    __attribute__((nonnull(1, 2)));
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -2045,6 +2228,12 @@ static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, s
 	return 0;
 }
 
+/* pl is required: `size_t n = pl->ncommands, i;` is this function's
+ * first statement. status is required too: `*status = pl->bang ? ... :
+ * rc;` near the end is unconditional on the only path that does not
+ * already return -1 (the sh.h-wide "status left untouched" convention),
+ * and every real caller (__sh_exec_andor() below) always passes a real
+ * status. */
 int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 {
 	size_t n = pl->ncommands, i;
@@ -2243,6 +2432,12 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	return 0;
 }
 
+/* a is required: `__sh_exec_pipeline(&a->pipeline, status)` is this
+ * function's first statement. status is required too: `*status != 0`/
+ * `*status == 0` in the and/or short-circuit tests further down are
+ * real, directly-reachable dereferences of this function's own, not
+ * merely forwarded ones, and __sh_exec_list() below always passes a
+ * real status. */
 int __sh_exec_andor(const struct sh_andor *a, int *status)
 {
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
@@ -2277,6 +2472,12 @@ int __sh_exec_andor(const struct sh_andor *a, int *status)
  * signal rather than a latch. */
 static unsigned exec_list_depth;
 
+/* status is required: `*status = 0;` is this function's first statement,
+ * unconditional. list is deliberately left unmarked -- `if (!list)
+ * return 0;` right after is a real, working defensive check: an empty
+ * compound-command body (e.g. cmd->else_body when there is no `else`)
+ * genuinely passes list as NULL here, and every caller in this file
+ * relies on that. */
 int __sh_exec_list(const struct sh_list *list, int *status)
 {
 	const struct sh_list_item *it;

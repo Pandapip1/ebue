@@ -99,6 +99,14 @@ struct texpr {
 	int err;       /* set once a diagnostic has been issued */
 };
 
+/* t and msg are required: every call site below dereferences t->err
+ * unconditionally on entry, and msg is written through the "%s" of
+ * both fprintf() branches with no NULL check. arg is deliberately left
+ * unmarked -- it is genuinely optional (`terr(t, "argument expected", 0)`
+ * in t_primary() below is a real, live NULL, guarded here by
+ * `if (arg) fprintf(...)`). */
+static void terr(struct texpr *t, const char *msg, const char *arg)
+    __attribute__((nonnull(1, 2)));
 static void terr(struct texpr *t, const char *msg, const char *arg)
 {
 	if (t->err) return;
@@ -113,6 +121,13 @@ static void terr(struct texpr *t, const char *msg, const char *arg)
  * silently-zero comparison.  Surrounding blanks are tolerated because
  * field splitting routinely produces them and every historical
  * implementation accepts them. */
+/* s and out are required: `while (*p == ...)` (p aliases s) dereferences
+ * s unconditionally on entry, and every path that does not bail out
+ * through terr() writes `*out` with no NULL check. t is left unmarked --
+ * this function never touches it directly, only forwards it to terr(),
+ * which already states its own contract. */
+static int to_int(struct texpr *t, const char *s, long *out)
+    __attribute__((nonnull(2, 3)));
 static int to_int(struct texpr *t, const char *s, long *out)
 {
 	char *end;
@@ -139,12 +154,21 @@ static int is_binop(const char *s)
  * synonym for -e that some shells provide, and providing it would make
  * `test ! -a foo` ambiguous with the -a binary primary that the same
  * page does specify. */
+static int is_unop(const char *s) __attribute__((nonnull(1)));
 static int is_unop(const char *s)
 {
 	if (s[0] != '-' || s[1] == 0 || s[2] != 0) return 0;
 	return strchr("bcdefghLnprSstuwxz", s[1]) != 0;
 }
 
+/* op and arg are required: `switch (op[1])` dereferences op
+ * unconditionally on entry, and every case of that switch -- plus the
+ * post-switch `stat(arg, &st)` fallback any op not matched by the first
+ * group reaches -- dereferences arg, with no NULL check anywhere in
+ * this function. t is left unmarked: never touched directly here, only
+ * forwarded to terr(). */
+static int do_unary(struct texpr *t, const char *op, const char *arg)
+    __attribute__((nonnull(2, 3)));
 static int do_unary(struct texpr *t, const char *op, const char *arg)
 {
 	struct stat st;
@@ -224,6 +248,7 @@ static int do_binary(struct texpr *t, const char *a, const char *op, const char 
  * never see the "=" it is the left operand of. */
 static int t_oexpr(struct texpr *t);
 
+static int t_primary(struct texpr *t) __attribute__((nonnull(1)));
 static int t_primary(struct texpr *t)
 {
 	const char *tok;
@@ -256,6 +281,7 @@ static int t_primary(struct texpr *t)
 	return tok[0] != 0 ? T_TRUE : T_FALSE;
 }
 
+static int t_nexpr(struct texpr *t) __attribute__((nonnull(1)));
 static int t_nexpr(struct texpr *t)
 {
 	if (t->i < t->n && !strcmp(t->v[t->i], "!")) {
@@ -301,6 +327,7 @@ static int t_oexpr(struct texpr *t)
  * "The algorithm for determining the precedence of the operators and
  * the return value that shall be generated is based on the number of
  * arguments presented to test." */
+static int eval_argc(struct texpr *t) __attribute__((nonnull(1)));
 static int eval_argc(struct texpr *t)
 {
 	char **v = t->v;
@@ -382,6 +409,12 @@ static int eval_argc(struct texpr *t)
 	}
 }
 
+/* Every bi_*() below is reached only through builtins[].fn, always with
+ * the address of a real, on-stack struct sh_builtin_ctx the dispatcher
+ * (execute.c's spawn_stage()) builds itself -- never NULL -- and each
+ * one dereferences ctx unconditionally on entry (ctx->argc, ctx->status
+ * or ctx->last_status), with no defensive check anywhere in this file. */
+static int bi_test(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_test(struct sh_builtin_ctx *ctx)
 {
 	struct texpr t;
@@ -417,6 +450,7 @@ static int bi_test(struct sh_builtin_ctx *ctx)
  * command.  EXIT STATUS: Zero."  The expansion has already happened by
  * the time this runs (exec.c calls the dispatcher with expanded argv),
  * which is exactly the specified behaviour. */
+static int bi_colon(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_colon(struct sh_builtin_ctx *ctx)
 {
 	ctx->status = 0;
@@ -428,12 +462,14 @@ static int bi_colon(struct sh_builtin_ctx *ctx)
  * 2.14 special built-ins -- they are built in here only because this
  * platform has no true.exe/false.exe for __find_program() to find (see
  * this file's header). */
+static int bi_true(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_true(struct sh_builtin_ctx *ctx)
 {
 	ctx->status = 0;
 	return 0;
 }
 
+static int bi_false(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_false(struct sh_builtin_ctx *ctx)
 {
 	ctx->status = 1;
@@ -454,6 +490,7 @@ static int bi_false(struct sh_builtin_ctx *ctx)
  * started.  The same is true of `( exit 3 )`, but that is handled one
  * level up, by exec_group() consuming the pending exit, because a
  * subshell's body is a whole list rather than a single command. */
+static int bi_exit(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_exit(struct sh_builtin_ctx *ctx)
 {
 	int st;
@@ -491,6 +528,7 @@ static int bi_exit(struct sh_builtin_ctx *ctx)
  * Still deliberately not a complete cd(1p): no CDPATH search, no -L/-P
  * logical/physical distinction, no "cd -" to OLDPWD.  PWD and OLDPWD
  * are updated so a later $PWD read is not silently stale. */
+static int bi_cd(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_cd(struct sh_builtin_ctx *ctx)
 {
 	const char *target = ctx->argc > 1 ? ctx->argv[1] : getenv("HOME");
@@ -585,6 +623,7 @@ static void set_list_variables(void)
  * pipeline stage must still do ("set | ..." is an ordinary idiom), so
  * the utility has to run either way and decides for itself which half
  * of its behaviour a subshell environment discards. */
+static int bi_set(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_set(struct sh_builtin_ctx *ctx)
 {
 	int first = 1;
@@ -629,6 +668,7 @@ static int bi_set(struct sh_builtin_ctx *ctx)
  * because `shift $x` with an $x that expanded to nothing or to a word
  * is precisely the case where guessing produces a wrong-but-plausible
  * argument list further down the script. */
+static int bi_shift(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_shift(struct sh_builtin_ctx *ctx)
 {
 	long n = 1;
@@ -689,6 +729,7 @@ static int bi_shift(struct sh_builtin_ctx *ctx)
  * There is no unwinding to do in that case either -- __sh_flow_return()
  * is what a function call consumes, and setting it with no function
  * frame above would stop the rest of the program for no reason. */
+static int bi_return(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
 static int bi_return(struct sh_builtin_ctx *ctx)
 {
 	int st = ctx->last_status;

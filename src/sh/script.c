@@ -194,6 +194,13 @@ static const char *const unimplemented_builtins[] = {
 	0
 };
 
+/* list is required: `list[i]` is indexed unconditionally in the loop's
+ * own init/condition, evaluated at least once regardless. Every real
+ * call site passes one of this file's own static, always-populated
+ * arrays (`reserved`, `unimplemented_builtins`). s is left unmarked --
+ * only ever forwarded into strcmp(), never dereferenced by this
+ * function itself. */
+static int in_list(const char *const *list, const char *s) __attribute__((nonnull(1)));
 static int in_list(const char *const *list, const char *s)
 {
 	size_t i;
@@ -307,6 +314,7 @@ static int check_redirs(const struct sh_redir *r)
 
 static int check_list(const struct sh_list *list);
 
+static int check_command(const struct sh_command *c) __attribute__((nonnull(1)));
 static int check_command(const struct sh_command *c)
 {
 	const char *name;
@@ -383,6 +391,16 @@ static int check_command(const struct sh_command *c)
 	return 0;
 }
 
+/* list is deliberately left unmarked: `if (!list) return 0;` right below
+ * is a real, working check -- check_command()'s own SH_CMD_IF/LOOP/FOR
+ * arms above pass a compound command's optional parts (e.g. cmd->else_body
+ * with no `else`) straight through as NULL.
+ *
+ * Not fixed by this: the flagged `a->pipeline.commands[i]` deref is
+ * about `a`, a local loop variable walking `it->andor`, and its own
+ * `.pipeline.commands` array pointer -- the same class of internal-AST
+ * residual as print.c's queue_nested_heredocs_list() above, not
+ * something list's own nullability can express. */
 static int check_list(const struct sh_list *list)
 {
 	const struct sh_list_item *it;

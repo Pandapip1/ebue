@@ -439,7 +439,8 @@ int __sh_run_script(int argc, char *const argv[]);
  * convention -- see sh.h), or on resource failure; there is no way to
  * distinguish those here and no caller that would act differently.
  */
-int __sh_cmdsub(const char *program, char **out, int *status);
+int __sh_cmdsub(const char *program, char **out, int *status)
+    __attribute__((nonnull(2, 3)));
 
 /* The other direction: the shell asks wordexp() to expand a word *as a
  * shell would*, which differs from the public wordexp() in exactly one

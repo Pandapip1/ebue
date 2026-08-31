@@ -51,6 +51,15 @@ static void free_ifarms(struct sh_ifarm *a)
  * through parsing -- kind already set, fields belonging to a different
  * kind still populated by an earlier goto -- leaked whatever the switch
  * decided not to look at. */
+/* c is required, unlike every free_*() sibling above and below it: this
+ * frees a command's *contents*, not a linked-list node, so there is no
+ * "NULL means empty list" reading available here the way there is for
+ * __sh_free_words()/__sh_free_redirs()/free_ifarms()/__sh_list_free().
+ * `__sh_free_words(c->assigns);` dereferences c unconditionally on
+ * entry, and every real call site -- this file's own recursive
+ * func_body call (guarded by `if (c->func_body)` first), and
+ * free_pipeline_contents() below (always `&pl->commands[i]`, an array
+ * element's address) -- always passes a real struct. */
 void __sh_free_command_contents(struct sh_command *c)
 {
 	__sh_free_words(c->assigns);
@@ -72,6 +81,7 @@ void __sh_free_command_contents(struct sh_command *c)
 	}
 }
 
+static void free_pipeline_contents(struct sh_pipeline *pl) __attribute__((nonnull(1)));
 static void free_pipeline_contents(struct sh_pipeline *pl)
 {
 	size_t i;
