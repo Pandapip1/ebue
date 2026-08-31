@@ -166,7 +166,7 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 	}
 	error = create_semaphore(&semaphore);
 	if (error) return error;
-	memset(mutex, 0, sizeof *mutex);
+	memset(mutex, 0, sizeof *mutex); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes caller-supplied opaque storage before constructing the mutex; no live object is copied
 	data = mutex_data(mutex);
 	data->magic = MUTEX_MAGIC;
 	data->semaphore = semaphore;

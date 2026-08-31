@@ -25,9 +25,9 @@ FILE *__stdio_files;
 
 static unsigned char stdin_buf[BUFSIZ], stdout_buf[BUFSIZ];
 
-static FILE stdin_f  = { .fd = 0, .bufmode = _IOFBF, .user_buf = 1, .readable = 1, .buf = stdin_buf,  .bufsz = sizeof stdin_buf,  .no_close = 1 };
-static FILE stdout_f = { .fd = 1, .bufmode = _IOLBF, .user_buf = 1, .writable = 1, .buf = stdout_buf, .bufsz = sizeof stdout_buf, .no_close = 1 };
-static FILE stderr_f = { .fd = 2, .bufmode = _IONBF, .writable = 1, .no_close = 1 };
+static FILE stdin_f  = { .fd = 0, .bufmode = _IOFBF, .user_buf = 1, .readable = 1, .buf = stdin_buf,  .bufsz = sizeof stdin_buf,  .no_close = 1 }; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation owns this backing object; no FILE is copied
+static FILE stdout_f = { .fd = 1, .bufmode = _IOLBF, .user_buf = 1, .writable = 1, .buf = stdout_buf, .bufsz = sizeof stdout_buf, .no_close = 1 }; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation owns this backing object; no FILE is copied
+static FILE stderr_f = { .fd = 2, .bufmode = _IONBF, .writable = 1, .no_close = 1 }; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation owns this backing object; no FILE is copied
 
 FILE *const stdin = &stdin_f;
 FILE *const stdout = &stdout_f;
@@ -59,9 +59,9 @@ int __fmodeflags(const char *mode)
 
 FILE *__file_new(int fd, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	FILE *f = malloc(sizeof *f);
+	FILE *f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) return 0;
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = fd;
 	f->pid = -1;
 	switch (flags & O_ACCMODE) { // NOLINT(bugprone-switch-missing-default-case) -- parsed stdio modes produce only the three valid access-mode encodings

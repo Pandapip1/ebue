@@ -1190,7 +1190,7 @@ int vscanf(const char *__restrict fmt, __isoc_va_list ap)
 static int vsscanf_impl(const char *s, const char *fmt, va_list ap) __attribute__((nonnull(1, 2)));
 static int vsscanf_impl(const char *s, const char *fmt, va_list ap) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	FILE mf;
+	FILE mf; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient memory-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&mf, 0, sizeof mf);
 	mf.fd = -1;
@@ -1265,7 +1265,7 @@ int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
 static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) __attribute__((nonnull(1, 2)));
 static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
-	FILE mf;
+	FILE mf; // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- implementation-owned transient wide memory-stream adapter is constructed from scratch, not copied
 	int r;
 	memset(&mf, 0, sizeof mf);
 	mf.fd = -1;
