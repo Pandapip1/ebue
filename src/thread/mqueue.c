@@ -319,12 +319,25 @@ mqd_t mq_open(const char *name, int oflag, ...)
 		file_size = sizeof h + (size_t)h.maxmsg * (sizeof(struct mq_slot) + h.msgsize);
 		if (ftruncate(fd, (off_t)file_size) < 0 || raw_write(__fds[fd].h, &h, sizeof h, 0) < 0)
 			goto fail_created;
-	} else if (raw_read(__fds[fd].h, &h, sizeof h, 0) < 0 ||
-	           h.magic != MQ_MAGIC || h.version != MQ_VERSION ||
-	           !h.maxmsg || h.maxmsg > MQ_MAXMSG_LIMIT ||
-	           !h.msgsize || h.msgsize > MQ_MSGSIZE_LIMIT) {
-		if (!errno) errno = EIO;
-		goto fail_fd;
+	} else {
+		/* Distinguish a real I/O failure (raw_read() itself already set
+		 * errno correctly) from a header that read fine but is corrupt
+		 * or from an incompatible version: `if (!errno) errno = EIO`
+		 * used to stand in for this test, but errno is not guaranteed
+		 * to be 0 on entry -- POSIX never resets it on a prior
+		 * function's success, so a thread that happened to have some
+		 * unrelated stale errno sitting in it from an earlier, unrelated
+		 * call would report that wrong cause instead of EIO for a
+		 * corrupt-header mqueue file, exactly the CERT ERR30-C
+		 * "trusting errno without proof this call set it" pattern this
+		 * project's own lint stage exists to catch. */
+		int io_failed = raw_read(__fds[fd].h, &h, sizeof h, 0) < 0;
+		if (io_failed || h.magic != MQ_MAGIC || h.version != MQ_VERSION ||
+		    !h.maxmsg || h.maxmsg > MQ_MAXMSG_LIMIT ||
+		    !h.msgsize || h.msgsize > MQ_MSGSIZE_LIMIT) {
+			if (!io_failed) errno = EIO;
+			goto fail_fd;
+		}
 	}
 
 	if (create_sem(h.lock_name, 1, 1, &lock) < 0 || take(lock) < 0) goto fail_fd;
