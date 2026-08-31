@@ -38,19 +38,15 @@
 #             promoted left operand's width, and every signed arithmetic result
 #             to remain representable.
 #   ownership currently opt-in while its initial proof backlog is triaged.
-#             A path-sensitive Clang checker infers ownership from ntlibc's
-#             allocator families, treats aliases as borrows, proves every
-#             release and synchronization-object lifecycle, and requires every
-#             dereference to have nonnull, live, in-bounds, aligned storage.
-#             Descriptor, stream, directory, semaphore, mapping, and handle
-#             acquire/use/release state is tracked as well.
-#   alloclife currently opt-in while producer/freer contracts are added.
-#             Proves that every dynamic allocation is released before its
-#             function exits unless that function has an ownership_returns
-#             attribute linking the returned object to exactly one
-#             ownership_takes freer.  The freer body is independently proved
-#             to release its designated argument on every path; an attribute
-#             is a checked contract, not a suppression.
+#             Manual header/stub contracts identify producers, reallocations,
+#             and unique freers. Path-sensitive checkers prove every dynamic
+#             allocation is released or transferred before function exit,
+#             independently prove freer bodies, treat aliases as borrows, prove
+#             synchronization-object lifecycles, and require every dereference
+#             to have nonnull, live, in-bounds, aligned storage. Descriptor,
+#             stream, directory, semaphore, mapping, and handle acquire/use/
+#             release state is tracked as well. `alloclife` is a compatibility
+#             alias for this merged stage.
 #   memcontracts
 #             currently opt-in; proves spans for memory and I/O operations and
 #             proves memcpy ranges do not overlap and string API arguments have
@@ -1131,7 +1127,7 @@ stage_arithub() {
 }
 
 stage_ownership() {
-	hdr "borrow and ownership proof obligations"
+	hdr "ownership, allocation lifetime, and borrow proof obligations"
 	any=0
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
@@ -1148,7 +1144,9 @@ stage_ownership() {
 	# llvm-config deliberately returns shell words, not one argument.
 	# shellcheck disable=SC2046
 	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
-		tools/clang/OwnershipChecker.cpp -o "$plugin" "$clang_cpp" \
+		tools/clang/OwnershipChecker.cpp \
+		tools/clang/AllocationLifetimeChecker.cpp \
+		-o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 
 	fixture_log=$builddir/ownership-fixtures.log
@@ -1161,14 +1159,25 @@ stage_ownership() {
 	done
 	tools/lint-ownership.py --fixtures "$fixture_log" || any=1
 
+	allocation_fixture_log=$builddir/allocation-lifetime-fixtures.log
+	: > "$allocation_fixture_log"
+	for fixture in tools/lint-allocation-lifetime-fixtures/*.c; do
+		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
+			-Xclang -analyzer-checker=ntlibc.AllocationLifetime \
+			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
+			>> "$allocation_fixture_log" 2>&1 || any=1
+	done
+	tools/lint-allocation-lifetime.py --fixtures "$allocation_fixture_log" || any=1
+
 	analyzed=0
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || { any=1; continue; }
-		flags=$(cppflags_for "$arch")
+		flags="$(cppflags_for "$arch") -DNTLIBC_ALLOCATION_LIFETIME_ANALYSIS"
 		target=$(pick_target "$arch")
 		nsrc=$(sources_for "$arch" | grep -c . || true)
 		out=$builddir/$arch.ownership.log
 		report=$builddir/$arch.ownership.report
+		allocation_report=$builddir/$arch.allocation-lifetime.report
 		pardir=$(mktemp -d "$builddir/ownership.XXXXXX") || return 1
 		# shellcheck disable=SC2086,SC2016
 		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
@@ -1176,6 +1185,7 @@ stage_ownership() {
 			id=$(printf %s "$f" | tr / _)
 			owner="'"$pardir"'/$id.owner"
 			pointer="'"$pardir"'/$id.pointer"
+			allocation="'"$pardir"'/$id.allocation"
 			combined="'"$pardir"'/$id.log"
 			# Keep the high-volume pointer proof search from consuming the
 			# exploration budget needed by ownership/lifecycle proofs.
@@ -1192,8 +1202,17 @@ stage_ownership() {
 				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
 				> "$pointer" 2>&1
 			pointer_rc=$?
-			cat "$owner" "$pointer" > "$combined"
-			[ "$owner_rc" -eq 0 ] && [ "$pointer_rc" -eq 0 ]
+			# Allocation lifetime has its own state space and path budget, but
+			# consumes the same declaration axioms from this combined plugin.
+			# shellcheck disable=SC2086
+			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
+				-Xclang -analyzer-checker=ntlibc.AllocationLifetime \
+				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
+				> "$allocation" 2>&1
+			allocation_rc=$?
+			cat "$owner" "$pointer" "$allocation" > "$combined"
+			[ "$owner_rc" -eq 0 ] && [ "$pointer_rc" -eq 0 ] && \
+				[ "$allocation_rc" -eq 0 ]
 		' _ {} clang-18 "$plugin" "$target" $flags
 		runrc=$?
 		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
@@ -1214,86 +1233,17 @@ stage_ownership() {
 			show_findings "$report"
 			any=1
 		fi
+		if tools/lint-allocation-lifetime.py --fixtures "$allocation_fixture_log" \
+			"$out" > "$allocation_report" 2>&1; then
+			note "allocation lifetime proofs [$arch]: proved -> $allocation_report"
+		else
+			note "allocation lifetime proofs [$arch]: findings -> $allocation_report"
+			show_findings "$allocation_report"
+			any=1
+		fi
 	done
 	if [ "$analyzed" -eq 0 ]; then
 		note "ownership analyzer: FAILED -- no architecture was analyzed."
-		return 1
-	fi
-	return $any
-}
-
-stage_alloclife() {
-	hdr "dynamic allocation lifetime and producer/freer contracts"
-	any=0
-	require_tool clang-18 || return $missing
-	require_tool clang++-18 || return $missing
-	require_tool llvm-config-18 || return $missing
-	libdir=$(llvm-config-18 --libdir)
-	clang_cpp=$(find "$libdir" -maxdepth 1 -name 'libclang-cpp.so.18*' \
-		-print 2>/dev/null | sort | head -n 1)
-	if [ -z "$clang_cpp" ]; then
-		report_missing "Clang 18 development libraries are not installed, so allocation lifetimes cannot be proved."
-		return $missing
-	fi
-
-	plugin=$builddir/ntlibc-allocation-lifetime-checker.so
-	# llvm-config deliberately returns shell words, not one argument.
-	# shellcheck disable=SC2046
-	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
-		tools/clang/AllocationLifetimeChecker.cpp -o "$plugin" "$clang_cpp" \
-		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
-
-	fixture_log=$builddir/allocation-lifetime-fixtures.log
-	: > "$fixture_log"
-	for fixture in tools/lint-allocation-lifetime-fixtures/*.c; do
-		clang-18 --analyze -Xclang -load -Xclang "$plugin" \
-			-Xclang -analyzer-checker=ntlibc.AllocationLifetime \
-			-Xclang -analyzer-output=text "$fixture" -o /dev/null \
-			>> "$fixture_log" 2>&1 || any=1
-	done
-	tools/lint-allocation-lifetime.py --fixtures "$fixture_log" || any=1
-
-	analyzed=0
-	for arch in $LINT_ARCHS; do
-		gen_alltypes "$arch" || { any=1; continue; }
-		flags="$(cppflags_for "$arch") -DNTLIBC_ALLOCATION_LIFETIME_ANALYSIS"
-		target=$(pick_target "$arch")
-		nsrc=$(sources_for "$arch" | grep -c . || true)
-		out=$builddir/$arch.allocation-lifetime.log
-		report=$builddir/$arch.allocation-lifetime.report
-		pardir=$(mktemp -d "$builddir/allocation-lifetime.XXXXXX") || return 1
-		# shellcheck disable=SC2086,SC2016
-		sources_for "$arch" | xargs -P "$LINT_JOBS" -I{} sh -c '
-			f=$1; clang=$2; plugin=$3; target=$4; shift 4
-			id=$(printf %s "$f" | tr / _)
-			# shellcheck disable=SC2086
-			"$clang" $target --analyze -Xclang -load -Xclang "$plugin" \
-				-Xclang -analyzer-checker=ntlibc.AllocationLifetime \
-				-Xclang -analyzer-output=text "$@" "$f" -o /dev/null \
-				> "'"$pardir"'/$id.log" 2>&1
-		' _ {} clang-18 "$plugin" "$target" $flags
-		runrc=$?
-		nlog=$(find "$pardir" -name '*.log' 2>/dev/null | grep -c . || true)
-		: > "$out"
-		ls "$pardir"/*.log >/dev/null 2>&1 && cat "$pardir"/*.log > "$out"
-		rm -rf "$pardir"
-		if [ "$runrc" -ne 0 ] || [ "$nsrc" -eq 0 ] || [ "$nlog" -ne "$nsrc" ]; then
-			note "allocation lifetime analyzer [$arch]: FAILED -- $nlog of $nsrc source file(s) completed."
-			show_findings "$out"
-			any=1
-			continue
-		fi
-		analyzed=$((analyzed + 1))
-		if tools/lint-allocation-lifetime.py --fixtures "$fixture_log" "$out" > "$report" 2>&1; then
-			note "allocation lifetime proofs [$arch]: proved -> $report"
-		else
-			note "allocation lifetime proofs [$arch]: findings -> $report"
-			show_findings "$report"
-			any=1
-		fi
-	done
-	if [ "$analyzed" -eq 0 ]; then
-		note "allocation lifetime analyzer: FAILED -- no architecture was analyzed."
 		return 1
 	fi
 	return $any
@@ -1966,7 +1916,18 @@ stage_purity() {
 	return $any
 }
 
-stages=${*:-warn analyze cppcheck shell sizearith fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity undefined unreferenced widthmod}
+requested_stages=${*:-warn analyze cppcheck shell sizearith fallible locks lockset provenance reentrancy variadic signals abizeroinit initproof errno purity undefined unreferenced widthmod}
+stages=
+for requested_stage in $requested_stages; do
+	case $requested_stage in
+	alloclife) normalized_stage=ownership ;;
+	*) normalized_stage=$requested_stage ;;
+	esac
+	case " $stages " in
+	*" $normalized_stage "*) ;;
+	*) stages="$stages $normalized_stage" ;;
+	esac
+done
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
@@ -1996,7 +1957,6 @@ for s in $stages; do
 		totality)  stage_totality ;;
 		arithub)    stage_arithub ;;
 		ownership)  stage_ownership ;;
-		alloclife)  stage_alloclife ;;
 		memcontracts) stage_memcontracts ;;
 		initproof)  stage_initproof ;;
 		fallible)   stage_fallible ;;

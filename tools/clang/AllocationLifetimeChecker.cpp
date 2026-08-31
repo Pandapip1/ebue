@@ -438,10 +438,7 @@ public:
 
 } // namespace
 
-extern "C" const char clang_analyzerAPIVersionString[] =
-    CLANG_ANALYZER_API_VERSION_STRING;
-
-extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
+void registerAllocationLifetimeChecker(CheckerRegistry &Registry) {
   Registry.addChecker<AllocationLifetimeChecker>(
       "ntlibc.AllocationLifetime",
       "Proves allocations are freed or transferred through a paired "

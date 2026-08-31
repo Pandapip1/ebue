@@ -2,10 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 typedef __SIZE_TYPE__ size_t;
-void *malloc(size_t);
-void free(void *);
-void *__malloc(size_t);
-void *realloc(void *, size_t);
+void *malloc(size_t) __attribute__((ownership_returns(malloc)));
+void free(void *) __attribute__((ownership_takes(malloc, 1)));
+void *__malloc(size_t) __attribute__((ownership_returns(internal_malloc)));
+void *realloc(void *, size_t)
+	__attribute__((ownership_returns(malloc),
+	               annotate("ntlibc.reallocates:1")));
 size_t strcspn(const char *, const char *);
 size_t strspn(const char *, const char *);
 /* Deliberately `unsigned short`, NOT whatever clang's own builtin

@@ -4,7 +4,8 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Allocation-lifetime contracts for tools/lint.sh's `alloclife` stage.
+ * Allocation-lifetime contracts for tools/lint.sh's `ownership` stage
+ * (`alloclife` remains a compatibility alias).
  * A producer and its unique freer share a family identifier:
  *
  *   object *make_object(void) NTLIBC_RETURNS_OWNERSHIP(object_family);

@@ -111,6 +111,63 @@ class OwnershipChecker
     : public Checker<check::PreCall, check::PostCall, check::Location> {
   mutable std::unique_ptr<BugType> BT;
 
+  static const FunctionDecl *functionOf(const CallEvent &Call) {
+    return dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+  }
+
+  static const OwnershipAttr *returnsOwnership(const CallEvent &Call) {
+    const FunctionDecl *Function = functionOf(Call);
+    if (!Function)
+      return nullptr;
+    for (const OwnershipAttr *Attribute :
+         Function->specific_attrs<OwnershipAttr>())
+      if (Attribute->isReturns())
+        return Attribute;
+    return nullptr;
+  }
+
+  static std::optional<unsigned>
+  annotatedArgument(const FunctionDecl *Function, StringRef Prefix) {
+    if (!Function)
+      return std::nullopt;
+    for (const AnnotateAttr *Attribute :
+         Function->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attribute->getAnnotation();
+      if (!Text.starts_with(Prefix))
+        continue;
+      unsigned SourceIndex = 0;
+      if (!Text.drop_front(Prefix.size()).getAsInteger(10, SourceIndex) &&
+          SourceIndex > 0)
+        return SourceIndex - 1;
+    }
+    return std::nullopt;
+  }
+
+  static std::optional<unsigned>
+  reallocatedArgument(const FunctionDecl *Function) {
+    return annotatedArgument(Function, "ntlibc.reallocates:");
+  }
+
+  static std::optional<unsigned>
+  ownedReturnWhenNullArgument(const FunctionDecl *Function) {
+    return annotatedArgument(Function, "ntlibc.returns-if-null:");
+  }
+
+  static std::optional<unsigned>
+  ownershipTakenArgument(const FunctionDecl *Function) {
+    if (!Function)
+      return std::nullopt;
+    for (const OwnershipAttr *Attribute :
+         Function->specific_attrs<OwnershipAttr>()) {
+      if (!Attribute->isTakes())
+        continue;
+      for (const ParamIdx &Index : Attribute->args())
+        if (Index.isValid())
+          return Index.getASTIndex();
+    }
+    return std::nullopt;
+  }
+
   static bool hasName(const CallEvent &Call, StringRef Wanted) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     return Function && Function->getIdentifier() &&
@@ -118,21 +175,7 @@ class OwnershipChecker
   }
 
   static bool isAllocator(const CallEvent &Call) {
-    static constexpr llvm::StringLiteral Names[] = {
-        "malloc", "__malloc", "calloc",        "realloc",  "reallocarray",
-        "strdup", "strndup",  "aligned_alloc", "memalign", "valloc"};
-    for (StringRef Name : Names)
-      if (hasName(Call, Name))
-        return true;
-    return false;
-  }
-
-  static bool isDeallocator(const CallEvent &Call) {
-    return hasName(Call, "free") || hasName(Call, "__free");
-  }
-
-  static bool isReallocator(const CallEvent &Call) {
-    return hasName(Call, "realloc") || hasName(Call, "reallocarray");
+    return returnsOwnership(Call) != nullptr;
   }
 
   // Clang's own dynamic-extent tracking for an allocator's return value
@@ -330,11 +373,8 @@ class OwnershipChecker
   static bool insideOwnershipConsumer(CheckerContext &C) {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    if (!Function)
-      return false;
-    StringRef Name = Function->getName();
-    return Name == "free" || Name == "__free" || Name == "realloc" ||
-           Name == "reallocarray";
+    return ownershipTakenArgument(Function).has_value() ||
+           reallocatedArgument(Function).has_value();
   }
 
   static std::string sourceText(const Stmt *Statement, CheckerContext &C) {
@@ -439,10 +479,28 @@ public:
     if (!isAllocator(Call))
       return;
     ProgramStateRef State = C.getState();
+    const FunctionDecl *Function = functionOf(Call);
+    if (std::optional<unsigned> Argument =
+            ownedReturnWhenNullArgument(Function)) {
+      if (*Argument >= Call.getNumArgs())
+        return;
+      std::optional<DefinedOrUnknownSVal> ArgumentValue =
+          Call.getArgSVal(*Argument).getAs<DefinedOrUnknownSVal>();
+      if (!ArgumentValue)
+        return;
+      auto [ArgumentNonNullState, ArgumentNullState] =
+          State->assume(*ArgumentValue);
+      if (ArgumentNonNullState)
+        C.addTransition(ArgumentNonNullState);
+      if (!ArgumentNullState)
+        return;
+      State = ArgumentNullState;
+    }
     SVal ReturnValue = Call.getReturnValue();
-    if (isReallocator(Call) && Call.getNumArgs() >= 1 &&
+    if (std::optional<unsigned> Argument = reallocatedArgument(Function);
+        Argument && *Argument < Call.getNumArgs() &&
         State->isNull(ReturnValue).isConstrainedFalse()) {
-      SymbolRef Old = allocationSymbol(Call.getArgSVal(0));
+      SymbolRef Old = allocationSymbol(Call.getArgSVal(*Argument));
       if (Old)
         State = State->set<OwnershipMap>(Old, OwnershipKind::Consumed);
     }
@@ -462,9 +520,15 @@ public:
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
-    bool Deallocator = isDeallocator(Call);
-    bool Reallocator = isReallocator(Call);
-    if ((!Deallocator && !Reallocator) || Call.getNumArgs() < 1)
+    const FunctionDecl *Function = functionOf(Call);
+    std::optional<unsigned> Taken = ownershipTakenArgument(Function);
+    std::optional<unsigned> Reallocated = reallocatedArgument(Function);
+    bool Deallocator = Taken.has_value();
+    bool Reallocator = Reallocated.has_value();
+    if (!Deallocator && !Reallocator)
+      return;
+    unsigned ArgumentIndex = Deallocator ? *Taken : *Reallocated;
+    if (ArgumentIndex >= Call.getNumArgs())
       return;
     if (insideOwnershipConsumer(C))
       return;
@@ -472,7 +536,7 @@ public:
     if (!Statement)
       return;
 
-    SVal Argument = Call.getArgSVal(0);
+    SVal Argument = Call.getArgSVal(ArgumentIndex);
     ProgramStateRef State = C.getState();
     if (State->isNull(Argument).isConstrainedTrue())
       return;
@@ -2126,10 +2190,13 @@ public:
 
 } // namespace
 
+void registerAllocationLifetimeChecker(CheckerRegistry &Registry);
+
 extern "C" const char clang_analyzerAPIVersionString[] =
     CLANG_ANALYZER_API_VERSION_STRING;
 
 extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
+  registerAllocationLifetimeChecker(Registry);
   Registry.addChecker<OwnershipChecker>(
       "ntlibc.Ownership",
       "Proves allocator provenance and borrow lifetime at deallocation", "");

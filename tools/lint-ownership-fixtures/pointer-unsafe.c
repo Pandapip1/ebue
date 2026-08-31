@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 typedef __SIZE_TYPE__ size_t;
-void *malloc(size_t);
-void free(void *);
-void *__malloc(size_t);
+void *malloc(size_t) __attribute__((ownership_returns(malloc)));
+void free(void *) __attribute__((ownership_takes(malloc, 1)));
+void *__malloc(size_t) __attribute__((ownership_returns(internal_malloc)));
 long getline(char **, size_t *, void *);
 
 int nullable_pointer(int *pointer)
