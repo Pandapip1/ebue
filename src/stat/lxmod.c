@@ -67,7 +67,12 @@ int __lxmod_get(HANDLE h, unsigned *mode)
 
 int __lxmod_set(HANDLE h, unsigned mode)
 {
-	unsigned char buffer[LXMOD_EA_LEN];
+	/* __lxmod_create_buffer() below already memsets the whole buffer
+	 * before filling it field by field, but that happens inside the
+	 * callee, one translation unit away from this declaration -- proving
+	 * it here too costs nothing and does not depend on tracing into
+	 * another function's body. */
+	unsigned char buffer[LXMOD_EA_LEN] = {0};
 	IO_STATUS_BLOCK io;
 	NTSTATUS st;
 	unsigned len = __lxmod_create_buffer(buffer, mode);
