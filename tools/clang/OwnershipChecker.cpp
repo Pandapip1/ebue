@@ -42,10 +42,133 @@ REGISTER_MAP_WITH_PROGRAMSTATE(CapabilityMap, CapabilityKey, CapabilityKind)
 using SymbolCapabilityKey = std::pair<SymbolRef, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(SymbolCapabilityMap, SymbolCapabilityKey,
                                CapabilityKind)
+enum class CarrierCapabilityKind : unsigned char { Absent, Linear, Duplicable };
+using CarrierCapabilityKey =
+    std::pair<const MemRegion *, const IdentifierInfo *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(CarrierCapabilityMap, CarrierCapabilityKey,
+                               CarrierCapabilityKind)
 
 REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 
 namespace {
+
+struct CapabilityPresence {
+  bool Known;
+  std::optional<CapabilityKind> Kind;
+};
+
+static CarrierCapabilityKey carrierKey(const MemRegion *Carrier,
+                                       const IdentifierInfo *Family) {
+  return {Carrier, Family};
+}
+
+static const MemRegion *carrierRegion(const Expr *Expression,
+                                      CheckerContext &C) {
+  if (!Expression)
+    return nullptr;
+  const Expr *Core = Expression->IgnoreParenImpCasts();
+  if (const auto *Reference = dyn_cast<DeclRefExpr>(Core))
+    if (const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl()))
+      return C.getState()
+          ->getLValue(Variable, C.getLocationContext())
+          .getAsRegion();
+  if (isa<MemberExpr>(Core))
+    return C.getSVal(Core).getAsRegion();
+  if (const auto *Unary = dyn_cast<UnaryOperator>(Core))
+    if (Unary->getOpcode() == UO_AddrOf)
+      return C.getSVal(Expression).getAsRegion();
+  return nullptr;
+}
+
+static const CapabilityKind *underlyingTokenFor(ProgramStateRef State,
+                                                SVal Value,
+                                                const IdentifierInfo *Family) {
+  if (SymbolRef Symbol = Value.getAsSymbol(true))
+    if (const CapabilityKind *Kind =
+            State->get<SymbolCapabilityMap>({Symbol, Family}))
+      return Kind;
+  if (const MemRegion *Region = Value.getAsRegion())
+    return State->get<CapabilityMap>({Region, Family});
+  return nullptr;
+}
+
+static ProgramStateRef removeUnderlyingToken(ProgramStateRef State, SVal Value,
+                                             const IdentifierInfo *Family) {
+  if (SymbolRef Symbol = Value.getAsSymbol(true))
+    State = State->remove<SymbolCapabilityMap>({Symbol, Family});
+  if (const MemRegion *Region = Value.getAsRegion())
+    State = State->remove<CapabilityMap>({Region, Family});
+  return State;
+}
+
+static ProgramStateRef setUnderlyingToken(ProgramStateRef State, SVal Value,
+                                          const IdentifierInfo *Family,
+                                          CapabilityKind Kind) {
+  if (SymbolRef Symbol = Value.getAsSymbol(true))
+    State = State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
+  if (const MemRegion *Region = Value.getAsRegion())
+    State = State->set<CapabilityMap>({Region, Family}, Kind);
+  return State;
+}
+
+static CapabilityPresence capabilityFor(ProgramStateRef State,
+                                        const MemRegion *Carrier, SVal Value,
+                                        const IdentifierInfo *Family) {
+  if (Carrier)
+    if (const CarrierCapabilityKind *CarrierKind =
+            State->get<CarrierCapabilityMap>(carrierKey(Carrier, Family))) {
+      if (*CarrierKind == CarrierCapabilityKind::Absent)
+        return {true, std::nullopt};
+      return {true, *CarrierKind == CarrierCapabilityKind::Linear
+                        ? CapabilityKind::Linear
+                        : CapabilityKind::Duplicable};
+    }
+  if (const CapabilityKind *Underlying =
+          underlyingTokenFor(State, Value, Family))
+    return {false, *Underlying};
+  return {false, std::nullopt};
+}
+
+static ProgramStateRef setCarrierToken(ProgramStateRef State,
+                                       const MemRegion *Carrier,
+                                       const IdentifierInfo *Family,
+                                       CapabilityKind Kind) {
+  if (!Carrier)
+    return State;
+  return State->set<CarrierCapabilityMap>(
+      carrierKey(Carrier, Family), Kind == CapabilityKind::Linear
+                                       ? CarrierCapabilityKind::Linear
+                                       : CarrierCapabilityKind::Duplicable);
+}
+
+static ProgramStateRef removeCarrierToken(ProgramStateRef State,
+                                          const MemRegion *Carrier,
+                                          const IdentifierInfo *Family) {
+  if (!Carrier)
+    return State;
+  return State->set<CarrierCapabilityMap>(carrierKey(Carrier, Family),
+                                          CarrierCapabilityKind::Absent);
+}
+
+static ProgramStateRef setOperationToken(ProgramStateRef State,
+                                         const MemRegion *Carrier, SVal Value,
+                                         const IdentifierInfo *Family,
+                                         CapabilityKind Kind) {
+  State = setCarrierToken(State, Carrier, Family, Kind);
+  if (const MemRegion *Referent = Value.getAsRegion())
+    State = setCarrierToken(State, Referent, Family, Kind);
+  return setUnderlyingToken(State, Value, Family, Kind);
+}
+
+static ProgramStateRef removeOperationToken(ProgramStateRef State,
+                                            const MemRegion *Carrier,
+                                            SVal Value,
+                                            const IdentifierInfo *Family) {
+  State = removeCarrierToken(State, Carrier, Family);
+  if (const MemRegion *Referent = Value.getAsRegion())
+    State = removeCarrierToken(State, Referent, Family);
+  return removeUnderlyingToken(State, Value, Family);
+}
 
 static std::string diagnosticText(const Stmt *Statement, CheckerContext &C) {
   const SourceManager &SM = C.getSourceManager();
@@ -991,53 +1114,6 @@ class CapabilityTokenChecker
     return Protocols;
   }
 
-  static const MemRegion *argumentRegion(const CallEvent &Call,
-                                         unsigned Argument) {
-    return Argument < Call.getNumArgs()
-               ? Call.getArgSVal(Argument).getAsRegion()
-               : nullptr;
-  }
-
-  static CapabilityKey key(const MemRegion *Region,
-                           const IdentifierInfo *Family) {
-    return {Region, Family};
-  }
-
-  static bool hasToken(ProgramStateRef State, const MemRegion *Region,
-                       const IdentifierInfo *Family) {
-    return State->get<CapabilityMap>(key(Region, Family)) != nullptr;
-  }
-
-  static const CapabilityKind *tokenFor(ProgramStateRef State, SVal Value,
-                                        const IdentifierInfo *Family) {
-    if (SymbolRef Symbol = Value.getAsSymbol(true))
-      if (const CapabilityKind *Kind =
-              State->get<SymbolCapabilityMap>({Symbol, Family}))
-        return Kind;
-    if (const MemRegion *Region = Value.getAsRegion())
-      return State->get<CapabilityMap>(key(Region, Family));
-    return nullptr;
-  }
-
-  static ProgramStateRef removeToken(ProgramStateRef State, SVal Value,
-                                     const IdentifierInfo *Family) {
-    if (SymbolRef Symbol = Value.getAsSymbol(true))
-      State = State->remove<SymbolCapabilityMap>({Symbol, Family});
-    if (const MemRegion *Region = Value.getAsRegion())
-      State = State->remove<CapabilityMap>(key(Region, Family));
-    return State;
-  }
-
-  static ProgramStateRef setToken(ProgramStateRef State, SVal Value,
-                                  const IdentifierInfo *Family,
-                                  CapabilityKind Kind) {
-    if (SymbolRef Symbol = Value.getAsSymbol(true))
-      State = State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
-    if (const MemRegion *Region = Value.getAsRegion())
-      State = State->set<CapabilityMap>(key(Region, Family), Kind);
-    return State;
-  }
-
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
               CheckerContext &C) const {
     ExplodedNode *Node = C.generateNonFatalErrorNode(State);
@@ -1054,41 +1130,44 @@ class CapabilityTokenChecker
 
   bool preconditionsHold(ProgramStateRef State, const CallEvent &Call,
                          ArrayRef<CapabilityProtocol> Protocols,
-                         CheckerContext *C = nullptr) const {
+                         CheckerContext &C, bool EmitDiagnostics) const {
     const Stmt *Statement = Call.getOriginExpr();
     bool Valid = true;
     for (const CapabilityProtocol &Protocol : Protocols) {
       if (Protocol.Argument >= Call.getNumArgs())
         continue;
       SVal Value = Call.getArgSVal(Protocol.Argument);
-      const CapabilityKind *Existing = tokenFor(State, Value, Protocol.Family);
+      CapabilityPresence Existing = capabilityFor(
+          State, carrierRegion(Call.getArgExpr(Protocol.Argument), C), Value,
+          Protocol.Family);
       if (Protocol.Operation == CapabilityOperation::ConsumeAny)
         continue;
       if ((Protocol.Operation == CapabilityOperation::Require ||
            Protocol.Operation == CapabilityOperation::Consume) &&
-          !Existing) {
-        if (C && Statement)
+          !Existing.Kind) {
+        if (EmitDiagnostics && Statement)
           report("required ownership capability token is not held", Statement,
-                 State, *C);
+                 State, C);
         Valid = false;
       } else if (Protocol.Operation == CapabilityOperation::RequireAbsent &&
-                 Existing) {
-        if (C && Statement)
+                 Existing.Kind) {
+        if (EmitDiagnostics && Statement)
           report(
               "operation is blocked while ownership capability token is held",
-              Statement, State, *C);
+              Statement, State, C);
         Valid = false;
       } else if (Protocol.Operation == CapabilityOperation::GrantLinear &&
-                 Existing) {
-        if (C && Statement)
+                 Existing.Kind) {
+        if (EmitDiagnostics && Statement)
           report("linear ownership capability token would be duplicated",
-                 Statement, State, *C);
+                 Statement, State, C);
         Valid = false;
       } else if (Protocol.Operation == CapabilityOperation::GrantDuplicable &&
-                 Existing && *Existing != CapabilityKind::Duplicable) {
-        if (C && Statement)
+                 Existing.Kind &&
+                 *Existing.Kind != CapabilityKind::Duplicable) {
+        if (EmitDiagnostics && Statement)
           report("ownership capability token duplication class does not match",
-                 Statement, State, *C);
+                 Statement, State, C);
         Valid = false;
       }
     }
@@ -1098,21 +1177,21 @@ class CapabilityTokenChecker
           llvm::is_contained(CheckedArguments, Alternative.Argument))
         continue;
       CheckedArguments.push_back(Alternative.Argument);
-      const MemRegion *Region = argumentRegion(Call, Alternative.Argument);
-      if (!Region)
-        continue;
       bool Held = false;
       for (const CapabilityProtocol &Candidate : Protocols)
         if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
             Candidate.Argument == Alternative.Argument &&
-            hasToken(State, Region, Candidate.Family)) {
+            capabilityFor(State,
+                          carrierRegion(Call.getArgExpr(Candidate.Argument), C),
+                          Call.getArgSVal(Candidate.Argument), Candidate.Family)
+                .Kind) {
           Held = true;
           break;
         }
       if (!Held) {
-        if (C && Statement)
+        if (EmitDiagnostics && Statement)
           report("none of the required ownership capability tokens is held",
-                 Statement, State, *C);
+                 Statement, State, C);
         Valid = false;
       }
     }
@@ -1121,27 +1200,30 @@ class CapabilityTokenChecker
 
   static ProgramStateRef transition(ProgramStateRef State,
                                     const CallEvent &Call,
-                                    ArrayRef<CapabilityProtocol> Protocols) {
+                                    ArrayRef<CapabilityProtocol> Protocols,
+                                    CheckerContext &C) {
     for (const CapabilityProtocol &Protocol : Protocols) {
       if (Protocol.Argument >= Call.getNumArgs())
         continue;
+      SVal Value = Call.getArgSVal(Protocol.Argument);
+      const MemRegion *Carrier =
+          carrierRegion(Call.getArgExpr(Protocol.Argument), C);
       switch (Protocol.Operation) {
       case CapabilityOperation::Require:
       case CapabilityOperation::RequireAbsent:
         break;
       case CapabilityOperation::Consume:
-        State = removeToken(State, Call.getArgSVal(Protocol.Argument),
-                            Protocol.Family);
+        State = removeOperationToken(State, Carrier, Value, Protocol.Family);
         break;
       case CapabilityOperation::ConsumeAny:
         break;
       case CapabilityOperation::GrantLinear:
-        State = setToken(State, Call.getArgSVal(Protocol.Argument),
-                         Protocol.Family, CapabilityKind::Linear);
+        State = setOperationToken(State, Carrier, Value, Protocol.Family,
+                                  CapabilityKind::Linear);
         break;
       case CapabilityOperation::GrantDuplicable:
-        State = setToken(State, Call.getArgSVal(Protocol.Argument),
-                         Protocol.Family, CapabilityKind::Duplicable);
+        State = setOperationToken(State, Carrier, Value, Protocol.Family,
+                                  CapabilityKind::Duplicable);
         break;
       }
     }
@@ -1151,15 +1233,15 @@ class CapabilityTokenChecker
           llvm::is_contained(ConsumedArguments, Alternative.Argument))
         continue;
       ConsumedArguments.push_back(Alternative.Argument);
-      const MemRegion *Region = argumentRegion(Call, Alternative.Argument);
-      if (!Region)
-        continue;
       for (const CapabilityProtocol &Candidate : Protocols)
         if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
             Candidate.Argument == Alternative.Argument) {
-          CapabilityKey Key = key(Region, Candidate.Family);
-          if (State->get<CapabilityMap>(Key)) {
-            State = State->remove<CapabilityMap>(Key);
+          SVal Value = Call.getArgSVal(Candidate.Argument);
+          const MemRegion *Carrier =
+              carrierRegion(Call.getArgExpr(Candidate.Argument), C);
+          if (capabilityFor(State, Carrier, Value, Candidate.Family).Kind) {
+            State =
+                removeOperationToken(State, Carrier, Value, Candidate.Family);
             break;
           }
         }
@@ -1181,12 +1263,10 @@ public:
           Protocol.Operation != CapabilityOperation::Consume)
         continue;
       const ParmVarDecl *Parameter = Function->getParamDecl(Protocol.Argument);
-      const MemRegion *Region =
-          State->getSVal(State->getLValue(Parameter, LC)).getAsRegion();
-      if (!Region)
-        continue;
-      State = State->set<CapabilityMap>(key(Region, Protocol.Family),
-                                        CapabilityKind::Linear);
+      SVal Value = State->getSVal(State->getLValue(Parameter, LC));
+      const MemRegion *Carrier = State->getLValue(Parameter, LC).getAsRegion();
+      State = setOperationToken(State, Carrier, Value, Protocol.Family,
+                                CapabilityKind::Linear);
       Changed = true;
     }
     if (Changed)
@@ -1197,18 +1277,19 @@ public:
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     llvm::SmallVector<CapabilityProtocol, 6> Protocols = protocolsFor(Function);
     if (!Protocols.empty())
-      preconditionsHold(C.getState(), Call, Protocols, &C);
+      preconditionsHold(C.getState(), Call, Protocols, C, true);
   }
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     llvm::SmallVector<CapabilityProtocol, 6> Protocols = protocolsFor(Function);
-    if (Protocols.empty() || !preconditionsHold(C.getState(), Call, Protocols))
+    if (Protocols.empty() ||
+        !preconditionsHold(C.getState(), Call, Protocols, C, false))
       return;
 
     ProgramStateRef State = C.getState();
     if (Function->getReturnType()->isVoidType()) {
-      C.addTransition(transition(State, Call, Protocols));
+      C.addTransition(transition(State, Call, Protocols, C));
       return;
     }
     std::optional<DefinedOrUnknownSVal> Return =
@@ -1220,7 +1301,7 @@ public:
         C.getSValBuilder().makeZeroVal(Function->getReturnType()));
     auto [Succeeded, Failed] = State->assume(Success);
     if (Succeeded)
-      C.addTransition(transition(Succeeded, Call, Protocols));
+      C.addTransition(transition(Succeeded, Call, Protocols, C));
     if (Failed)
       C.addTransition(Failed);
   }
@@ -1240,11 +1321,11 @@ struct OwnershipTypeEntry {
 class OwnershipTypeChecker
     : public Checker<
           check::BeginFunction, check::PreStmt<DeclStmt>,
-          check::PreStmt<BinaryOperator>, check::PostStmt<BinaryOperator>,
-          check::PreStmt<UnaryOperator>, check::PreStmt<ArraySubscriptExpr>,
-          check::PreStmt<MemberExpr>, check::PostStmt<ImplicitCastExpr>,
-          check::PreStmt<ReturnStmt>, check::BranchCondition, check::PreCall,
-          check::PostCall> {
+          check::PostStmt<DeclStmt>, check::PreStmt<BinaryOperator>,
+          check::PostStmt<BinaryOperator>, check::PreStmt<UnaryOperator>,
+          check::PreStmt<ArraySubscriptExpr>, check::PreStmt<MemberExpr>,
+          check::PostStmt<ImplicitCastExpr>, check::PreStmt<ReturnStmt>,
+          check::BranchCondition, check::PreCall, check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
 
   static llvm::SmallVector<OwnershipTypeEntry, 4>
@@ -1388,36 +1469,6 @@ class OwnershipTypeChecker
              Statement, C.getState(), C);
   }
 
-  static ProgramStateRef setToken(ProgramStateRef State, SVal Value,
-                                  const IdentifierInfo *Family,
-                                  CapabilityKind Kind) {
-    if (SymbolRef Symbol = Value.getAsSymbol(true))
-      State = State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
-    if (const MemRegion *Region = Value.getAsRegion())
-      State = State->set<CapabilityMap>({Region, Family}, Kind);
-    return State;
-  }
-
-  static const CapabilityKind *tokenFor(ProgramStateRef State, SVal Value,
-                                        const IdentifierInfo *Family) {
-    if (SymbolRef Symbol = Value.getAsSymbol(true))
-      if (const CapabilityKind *Kind =
-              State->get<SymbolCapabilityMap>({Symbol, Family}))
-        return Kind;
-    if (const MemRegion *Region = Value.getAsRegion())
-      return State->get<CapabilityMap>({Region, Family});
-    return nullptr;
-  }
-
-  static ProgramStateRef removeToken(ProgramStateRef State, SVal Value,
-                                     const IdentifierInfo *Family) {
-    if (SymbolRef Symbol = Value.getAsSymbol(true))
-      State = State->remove<SymbolCapabilityMap>({Symbol, Family});
-    if (const MemRegion *Region = Value.getAsRegion())
-      State = State->remove<CapabilityMap>({Region, Family});
-    return State;
-  }
-
   static SVal valueForExpression(const Expr *Expression, CheckerContext &C) {
     const Expr *Core = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
     if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Core))
@@ -1433,14 +1484,63 @@ class OwnershipTypeChecker
                                  CheckerContext &C) const {
     ProgramStateRef State = C.getState();
     SVal Value = C.getSVal(Pointer);
+    const MemRegion *Carrier = carrierRegion(Pointer, C);
     for (const IdentifierInfo *Family : familyTraits(
              declarationFor(Pointer), "ownership_token_blocks_dereference:"))
-      if (tokenFor(State, Value, Family)) {
+      if (capabilityFor(State, Carrier, Value, Family).Kind) {
         report("pointer operation is blocked while unchecked ownership token "
                "is held",
                Statement, State, C);
         return;
       }
+  }
+
+  ProgramStateRef transferTokens(const ValueDecl *Destination,
+                                 const MemRegion *DestinationCarrier,
+                                 const Expr *Source, const Stmt *Statement,
+                                 ProgramStateRef State,
+                                 CheckerContext &C) const {
+    if (!Destination || !Source || !Statement)
+      return State;
+    llvm::SmallVector<OwnershipTypeEntry, 4> DestinationBundle =
+        bundleFor(Destination);
+    llvm::SmallVector<OwnershipTypeEntry, 4> SourceBundle = bundleFor(Source);
+    const MemRegion *SourceCarrier = carrierRegion(Source, C);
+    SVal SourceValue = C.getSVal(Source);
+
+    for (const OwnershipTypeEntry &Entry : SourceBundle) {
+      if (Entry.Member == OwnershipTypeMember::Handle ||
+          contains(DestinationBundle, Entry))
+        continue;
+      State = removeCarrierToken(State, DestinationCarrier, Entry.Family);
+    }
+
+    for (const OwnershipTypeEntry &Entry : DestinationBundle) {
+      if (Entry.Member == OwnershipTypeMember::Handle)
+        continue;
+      if (!contains(SourceBundle, Entry))
+        continue;
+      CapabilityPresence SourceToken =
+          capabilityFor(State, SourceCarrier, SourceValue, Entry.Family);
+      CapabilityKind Required = Entry.Member == OwnershipTypeMember::LinearToken
+                                    ? CapabilityKind::Linear
+                                    : CapabilityKind::Duplicable;
+      if (!SourceToken.Kind) {
+        report("source ownership token has already moved", Statement, State, C);
+        continue;
+      }
+      if (*SourceToken.Kind != Required) {
+        report("ownership token duplication class does not match", Statement,
+               State, C);
+        continue;
+      }
+      State =
+          setCarrierToken(State, DestinationCarrier, Entry.Family, Required);
+      if (Required == CapabilityKind::Linear && SourceCarrier &&
+          SourceCarrier != DestinationCarrier)
+        State = removeCarrierToken(State, SourceCarrier, Entry.Family);
+    }
+    return State;
   }
 
 public:
@@ -1453,14 +1553,17 @@ public:
     const LocationContext *LC = C.getLocationContext();
     bool Changed = false;
     for (const ParmVarDecl *Parameter : Function->parameters()) {
-      SVal Value = State->getSVal(State->getLValue(Parameter, LC));
+      Loc ParameterLocation = State->getLValue(Parameter, LC);
+      SVal Value = State->getSVal(ParameterLocation);
+      const MemRegion *Carrier = ParameterLocation.getAsRegion();
       for (const OwnershipTypeEntry &Entry : bundleFor(Parameter)) {
         if (Entry.Member == OwnershipTypeMember::Handle)
           continue;
-        State = setToken(State, Value, Entry.Family,
-                         Entry.Member == OwnershipTypeMember::LinearToken
-                             ? CapabilityKind::Linear
-                             : CapabilityKind::Duplicable);
+        CapabilityKind Kind = Entry.Member == OwnershipTypeMember::LinearToken
+                                  ? CapabilityKind::Linear
+                                  : CapabilityKind::Duplicable;
+        State = setCarrierToken(State, Carrier, Entry.Family, Kind);
+        State = setUnderlyingToken(State, Value, Entry.Family, Kind);
         Changed = true;
       }
     }
@@ -1474,6 +1577,23 @@ public:
       if (Variable && Variable->hasInit())
         requireSameBundle(Variable, Variable->getInit(), Statement, C);
     }
+  }
+
+  void checkPostStmt(const DeclStmt *Statement, CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (const Decl *Declaration : Statement->decls()) {
+      const auto *Variable = dyn_cast<VarDecl>(Declaration);
+      if (!Variable || !Variable->hasInit())
+        continue;
+      const MemRegion *DestinationCarrier =
+          State->getLValue(Variable, C.getLocationContext()).getAsRegion();
+      State = transferTokens(Variable, DestinationCarrier, Variable->getInit(),
+                             Statement, State, C);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
   }
 
   void checkPreStmt(const BinaryOperator *Statement, CheckerContext &C) const {
@@ -1498,13 +1618,16 @@ public:
       return;
     ProgramStateRef State = C.getState();
     SVal Value = C.getSVal(ValueExpression);
+    const MemRegion *Carrier = carrierRegion(ValueExpression, C);
     bool Changed = false;
     for (const SentinelTrait &Trait :
          sentinelTraits(declarationFor(ValueExpression),
                         "ownership_token_consumed_by_equal:")) {
-      if (Trait.Value != *Sentinel || !tokenFor(State, Value, Trait.Family))
+      if (Trait.Value != *Sentinel ||
+          !capabilityFor(State, Carrier, Value, Trait.Family).Kind)
         continue;
-      State = removeToken(State, Value, Trait.Family);
+      State = removeCarrierToken(State, Carrier, Trait.Family);
+      State = removeUnderlyingToken(State, Value, Trait.Family);
       Changed = true;
     }
     if (Changed)
@@ -1512,6 +1635,16 @@ public:
   }
 
   void checkPostStmt(const BinaryOperator *Statement, CheckerContext &C) const {
+    if (Statement->isAssignmentOp()) {
+      const ValueDecl *Destination = declarationFor(Statement->getLHS());
+      const MemRegion *DestinationCarrier =
+          C.getSVal(Statement->getLHS()->IgnoreParenImpCasts()).getAsRegion();
+      ProgramStateRef State =
+          transferTokens(Destination, DestinationCarrier, Statement->getRHS(),
+                         Statement, C.getState(), C);
+      C.addTransition(State);
+      return;
+    }
     consumeEqualityToken(Statement, C);
   }
 
@@ -1525,6 +1658,7 @@ public:
     const Expr *Condition = Statement->getCond();
     ProgramStateRef State = C.getState();
     SVal Value = valueForExpression(Condition, C);
+    const MemRegion *Carrier = carrierRegion(Condition, C);
     bool Changed = false;
     for (const SentinelTrait &Trait :
          sentinelTraits(declarationFor(Condition),
@@ -1542,9 +1676,11 @@ public:
           break;
         }
       }
-      if (!HasSentinelCase || !tokenFor(State, Value, Trait.Family))
+      if (!HasSentinelCase ||
+          !capabilityFor(State, Carrier, Value, Trait.Family).Kind)
         continue;
-      State = removeToken(State, Value, Trait.Family);
+      State = removeCarrierToken(State, Carrier, Trait.Family);
+      State = removeUnderlyingToken(State, Value, Trait.Family);
       Changed = true;
     }
     if (Changed)
@@ -1584,8 +1720,13 @@ public:
   void checkPreStmt(const ReturnStmt *Statement, CheckerContext &C) const {
     const auto *Function =
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
-    if (Function && Statement->getRetValue())
+    if (Function && Statement->getRetValue()) {
       requireSameBundle(Function, Statement->getRetValue(), Statement, C);
+      ProgramStateRef State =
+          transferTokens(Function, nullptr, Statement->getRetValue(), Statement,
+                         C.getState(), C);
+      C.addTransition(State);
+    }
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
@@ -1593,9 +1734,18 @@ public:
     if (!Function)
       return;
     unsigned Count = std::min(Call.getNumArgs(), Function->getNumParams());
-    for (unsigned Argument = 0; Argument < Count; ++Argument)
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (unsigned Argument = 0; Argument < Count; ++Argument) {
       requireSameBundle(Function->getParamDecl(Argument),
                         Call.getArgExpr(Argument), Call.getOriginExpr(), C);
+      State = transferTokens(Function->getParamDecl(Argument), nullptr,
+                             Call.getArgExpr(Argument), Call.getOriginExpr(),
+                             State, C);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
   }
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
@@ -1607,10 +1757,11 @@ public:
     for (const OwnershipTypeEntry &Entry : bundleFor(Function)) {
       if (Entry.Member == OwnershipTypeMember::Handle)
         continue;
-      State = setToken(State, Call.getReturnValue(), Entry.Family,
-                       Entry.Member == OwnershipTypeMember::LinearToken
-                           ? CapabilityKind::Linear
-                           : CapabilityKind::Duplicable);
+      State =
+          setUnderlyingToken(State, Call.getReturnValue(), Entry.Family,
+                             Entry.Member == OwnershipTypeMember::LinearToken
+                                 ? CapabilityKind::Linear
+                                 : CapabilityKind::Duplicable);
       Changed = true;
     }
     if (Changed)

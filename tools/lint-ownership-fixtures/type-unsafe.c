@@ -43,3 +43,26 @@ void *return_wrong_type(void)
 {
 	return make_plain(); /* ownership-expect: type-return */
 }
+
+void use_after_linear_move(void)
+{
+	void *first [[ownership_holds_handle(heap),
+	             ownership_holds_token(heap_free)]] = make_owner();
+	void *second [[ownership_holds_handle(heap),
+	              ownership_holds_token(heap_free)]] = first;
+	inspect_owner(first); /* ownership-expect: token-moved */
+	(void)second;
+}
+
+void move_linear_token_twice(void)
+{
+	void *first [[ownership_holds_handle(heap),
+	             ownership_holds_token(heap_free)]] = make_owner();
+	void *second [[ownership_holds_handle(heap),
+	              ownership_holds_token(heap_free)]] = first;
+	void *third /* ownership-expect: token-moved */
+	    [[ownership_holds_handle(heap),
+	      ownership_holds_token(heap_free)]] = first;
+	(void)second;
+	(void)third;
+}

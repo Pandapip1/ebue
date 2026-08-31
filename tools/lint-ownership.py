@@ -29,6 +29,7 @@ DIAGNOSTIC = re.compile(
     r"operation is blocked while ownership capability token is held|"
     r"pointer operation is blocked while unchecked ownership token is held|"
     r"source ownership type does not provide destination token bundle|"
+    r"source ownership token has already moved|"
     r"pointer dereference is not proven nonnull|"
     r"pointer target is not proven live storage|"
     r"dereference extent is not proven sufficient|"
