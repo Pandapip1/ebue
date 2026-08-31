@@ -41,6 +41,17 @@ unmatchedSuppression
 # variadic function in the tree, not to any particular one.
 va_list_usedBeforeStarted
 
+# Ubuntu 24.04's cppcheck 2.13 unwraps uintmax_t to unsigned long long,
+# then paradoxically rejects that exact underlying type for %ju.  Every
+# affected argument is explicitly uintmax_t (or returned as uintmax_t),
+# so these are checker-version false positives; newer cppcheck accepts
+# the same calls.  Scope the suppression to the four audited utilities
+# rather than disabling printf type checking tree-wide.
+invalidPrintfArgType_uint:src/util/cksum.c
+invalidPrintfArgType_uint:src/util/dd.c
+invalidPrintfArgType_uint:src/util/df.c
+invalidPrintfArgType_uint:src/util/du.c
+
 # printf.c reverses a digit buffer into a local (`rev`, `b2`) and emits
 # exactly as many bytes as it wrote.  The digit count comes from a
 # do/while, so it is >= 1, but cppcheck's value flow drops that lower

@@ -128,7 +128,9 @@ int __util_touch_main(int argc, char **argv)
 	int opt_a = 0, opt_m = 0, opt_c = 0;
 	const char *ref = 0;
 	const char *tspec = 0;
-	struct timespec want[2]; /* [0]=atime [1]=mtime, only meaningful if have_explicit */
+	/* Keep the fallback value defined even if a future option path changes
+	 * have_explicit without installing both timestamps. */
+	struct timespec want[2] = {{0, 0}, {0, 0}};
 	int have_explicit = 0;
 
 	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
