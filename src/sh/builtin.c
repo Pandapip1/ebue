@@ -258,6 +258,58 @@ static int bi_touch(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 2: text-formatting utilities ================================
+ *
+ * cut(1p), paste(1p), tr(1p), expand(1p), unexpand(1p), fold(1p): same
+ * reasoning as the Tier-1 block above -- each also exists as a real
+ * standalone obj/bin/<name>.exe (src/util/<name>.c, declared in
+ * src/internal/util.h), and stays registered here too so a script run
+ * before PATH lookup or __spawn() can be trusted still has them.  None
+ * of these six is a 2.14 special built-in and none has any effect on
+ * the shell execution environment itself (2.12's list), so `env_effect`
+ * is 0 for all six, same as the Tier-1 block. */
+static int bi_cut(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_cut(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_cut_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_paste(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_paste(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_paste_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_tr(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tr(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tr_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_expand(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_expand(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_expand_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_unexpand(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_unexpand(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_unexpand_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_fold(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_fold(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_fold_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -599,6 +651,12 @@ static const struct sh_builtin builtins[] = {
 	{ "ln",     0, 0, bi_ln },
 	{ "chmod",  0, 0, bi_chmod },
 	{ "touch",  0, 0, bi_touch },
+	{ "cut",      0, 0, bi_cut },
+	{ "paste",    0, 0, bi_paste },
+	{ "tr",       0, 0, bi_tr },
+	{ "expand",   0, 0, bi_expand },
+	{ "unexpand", 0, 0, bi_unexpand },
+	{ "fold",     0, 0, bi_fold },
 	{ 0, 0, 0, 0 }
 };
 
