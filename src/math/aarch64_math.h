@@ -906,7 +906,7 @@ static double __aa64_exp2(double t)
 	int k, ni;
 
 	if (t != t) return t;
-	if (t >= 1024.0) return t + t; /* overflow -> +inf */
+	if (t >= 1024.0) return 1.0 / 0.0; /* overflow -> +inf */
 	if (t <= -1100.0) return 0.0 * t; /* underflow -> 0 (signed) */
 
 	n = __aa64_rndint(t, 0);

@@ -1022,6 +1022,12 @@ static void test_fault_sigill(const char *self)
  * elide it). */
 static void test_fault_sigfpe(const char *self)
 {
+#if defined(__aarch64__)
+	/* AArch64 SDIV defines a zero-divisor result as zero; it does not trap,
+	 * so there is no EXCEPTION_INT_DIVIDE_BY_ZERO to translate here. */
+	(void)self;
+	puts("note: AArch64 integer division by zero does not trap; SIGFPE fault check skipped");
+#else
 	char *argv[3];
 	pid_t pid;
 	int status;
@@ -1038,6 +1044,7 @@ static void test_fault_sigfpe(const char *self)
 #else
 	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGFPE);
 	CHECK(WCOREDUMP(status));
+#endif
 #endif
 }
 
@@ -1068,6 +1075,9 @@ static void code_exit_handler(int sig, siginfo_t *si, void *uctx)
 
 static void test_fault_sigfpe_caught(const char *self)
 {
+#if defined(__aarch64__)
+	(void)self;
+#else
 	char *argv[3];
 	pid_t pid;
 	int status;
@@ -1084,6 +1094,7 @@ static void test_fault_sigfpe_caught(const char *self)
 	printf("note: native ASan build cannot provoke or forward a real SIGFPE; caught-signal check skipped\n");
 #else
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 66);   /* handler ran and chose to exit cleanly */
+#endif
 #endif
 }
 
@@ -1149,6 +1160,9 @@ static void test_fault_sigsegv_accerr(const char *self)
  * signal identity. */
 static void test_fault_sigfpe_code(const char *self)
 {
+#if defined(__aarch64__)
+	(void)self;
+#else
 	char *argv[3];
 	pid_t pid;
 	int status;
@@ -1161,6 +1175,7 @@ static void test_fault_sigfpe_code(const char *self)
 	printf("note: native ASan build cannot provoke or forward a real SIGFPE; FPE_INTDIV check skipped\n");
 #else
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == FPE_INTDIV);
+#endif
 #endif
 }
 
@@ -1851,6 +1866,9 @@ int main(int argc, char **argv)
 	if (argc > 1 && !strcmp(argv[1], "--fault-ill")) {
 #if defined(__i386__) || defined(__x86_64__)
 		__asm__ volatile("ud2");
+#elif defined(__aarch64__)
+		/* Encoding zero is UDF #0, an architecturally undefined instruction. */
+		__asm__ volatile(".long 0");
 #endif
 		_Exit(90);
 	}
@@ -1931,6 +1949,8 @@ int main(int argc, char **argv)
 		sigaction(SIGILL, &sa, NULL);
 #if defined(__i386__) || defined(__x86_64__)
 		__asm__ volatile("ud2");
+#elif defined(__aarch64__)
+		__asm__ volatile(".long 0");
 #endif
 		_Exit(90);   /* must not be reached */
 	}
