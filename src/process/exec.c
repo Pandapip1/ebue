@@ -263,6 +263,7 @@ int execvp(const char *file, char *const argv[])
 }
 
 static char **build_argv(const char *arg0, va_list ap, char ***envout)
+	NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	size_t cap = 8, n = 0;
 	char **v = (char **)malloc(cap * sizeof(char *));

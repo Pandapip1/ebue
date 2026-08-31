@@ -157,6 +157,7 @@ static int cpt_tree_failed;
  * freshly malloc'd string, or NULL (errno ENOMEM) on allocation
  * failure. */
 static char *cpt_dst_path(const char *srcpath)
+	__NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	const char *rel = srcpath + cpt_src_root_len;
 	size_t dstlen = strlen(cpt_dst_root);
@@ -299,7 +300,7 @@ int __util_copy_tree(const char *src, const char *dst, int force)
 
 /* ==== "target/basename(source)", shared with src/util/mv.c ============= */
 
-char *__util_join_basename(const char *dir, const char *src) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+char *__util_join_basename(const char *dir, const char *src) __NTLIBC_RETURNS_OWNERSHIP(malloc) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char *srccopy = strdup(src);
 	char *base, *out;

@@ -235,7 +235,8 @@ int __util_uniq_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_copy_regular_file(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
 int __util_copy_tree(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
 int __util_remove_tree(const char *path) __attribute__((nonnull(1)));
-char *__util_join_basename(const char *dir, const char *src) __attribute__((nonnull(1, 2)));
+char *__util_join_basename(const char *dir, const char *src)
+	__attribute__((nonnull(1, 2))) __NTLIBC_RETURNS_OWNERSHIP(malloc);
 
 #endif
 

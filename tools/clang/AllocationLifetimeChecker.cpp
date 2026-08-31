@@ -186,23 +186,20 @@ class AllocationLifetimeChecker
    * before checkEndFunction, but `if (replacement) free(replacement); else
    * free(old);` has the decisive fact available at each of these two calls. */
   static ProgramStateRef retireReallocationPeer(ProgramStateRef State,
-                                                 SymbolRef Consumed,
-                                                 CheckerContext &C) {
-    if (const SymbolRef *Replacement = State->get<ReplacedBy>(Consumed)) {
-      /* The old pointer remains releasable only on realloc's failure arm.
-       * Thus a valid release of it discharges the null replacement too.  A
-       * release of the old pointer after successful realloc is already an
-       * invalid-free/use-after-realloc defect, not a lifetime escape this
-       * checker should reinterpret as two live allocations. */
-      State = forget(State, *Replacement);
-    }
-    for (const auto &Entry : State->get<ReplacedBy>()) {
-      if (Entry.second != Consumed)
-        continue;
-      DefinedSVal Value = C.getSValBuilder().makeSymbolVal(Consumed);
-      if (State->isNonNull(Value).isConstrainedTrue())
-        State = forget(State, Entry.first);
-      break;
+                                                 SymbolRef Consumed) {
+    SymbolRef Current = Consumed;
+    for (;;) {
+      SymbolRef Predecessor = nullptr;
+      for (const auto &Entry : State->get<ReplacedBy>()) {
+        if (Entry.second == Current) {
+          Predecessor = Entry.first;
+          break;
+        }
+      }
+      if (!Predecessor)
+        break;
+      State = forget(State, Predecessor);
+      Current = Predecessor;
     }
     return State;
   }
@@ -324,7 +321,7 @@ public:
                        takesAnyArgument(Function, Argument));
       if (!Consumed)
         continue;
-      State = retireReallocationPeer(State, Symbol, C);
+      State = retireReallocationPeer(State, Symbol);
       State = forget(State, Symbol);
       Changed = true;
     }

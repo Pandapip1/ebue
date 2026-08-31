@@ -30,6 +30,22 @@ void conditional_reallocation(void)
 		free(old);
 }
 
+void repeated_reallocation(void)
+{
+	void *first = malloc(8);
+	void *second = realloc(first, 16);
+	if (!second) {
+		free(first);
+		return;
+	}
+	void *third = realloc(second, 32);
+	if (!third) {
+		free(second);
+		return;
+	}
+	free(third);
+}
+
 void destroy_widget(void *)
 	__attribute__((ownership_takes(widget, 1)));
 void *make_widget(void)
