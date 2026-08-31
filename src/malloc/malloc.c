@@ -54,7 +54,7 @@ void *realloc(void *p, size_t n)
 }
 
 void *__malloc(size_t n) { return malloc(n); }
-void __free(void *p) { free(p); }
+void __free(void *p) NTLIBC_TAKES_OWNERSHIP(internal_malloc, 1) { free(p); }
 
 size_t malloc_usable_size(void *p)
 {
@@ -107,7 +107,7 @@ void *aligned_alloc(size_t align, size_t len)
 void *memalign(size_t align, size_t len) { return aligned_alloc(align, len); }
 void *valloc(size_t len) { return aligned_alloc(4096, len); }
 
-void free(void *p)
+void free(void *p) NTLIBC_TAKES_OWNERSHIP(malloc, 1)
 {
 	struct aligned_rec **pp;
 	if (!p) return;

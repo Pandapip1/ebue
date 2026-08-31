@@ -555,8 +555,8 @@ const char *__sh_param_get(int n);
 int __sh_last_status(void);
 
 /* ---- heap -------------------------------------------------------------- */
-void *__malloc(size_t);
-void __free(void *);
+void *__malloc(size_t) NTLIBC_RETURNS_OWNERSHIP(internal_malloc);
+void __free(void *) NTLIBC_TAKES_OWNERSHIP(internal_malloc, 1);
 
 /* ---- time -------------------------------------------------------------- */
 #define __TICKS_PER_SEC 10000000LL
