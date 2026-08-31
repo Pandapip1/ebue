@@ -9,6 +9,17 @@ void local_release(void)
 	free(p);
 }
 
+void *nullable_producer(void)
+	__attribute__((ownership_returns(malloc)));
+
+void *nullable_producer(void)
+{
+	void *p = malloc(16);
+	if (!p)
+		return 0;
+	return p;
+}
+
 void conditional_reallocation(void)
 {
 	void *old = malloc(8);

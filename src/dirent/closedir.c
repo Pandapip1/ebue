@@ -12,10 +12,9 @@
 #include <unistd.h>
 #include "dirent_internal.h"
 
-int closedir(DIR *dp)
+int closedir(DIR *dp) NTLIBC_TAKES_OWNERSHIP(dir_stream, 1)
 {
 	int r = close(dp->fd);
-	__free(dp->buf);
 	__free(dp);
 	return r;
 }

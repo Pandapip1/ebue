@@ -278,7 +278,7 @@ public:
             Function->getParamDecl(Index.getASTIndex());
         SVal Value = State->getSVal(
             State->getLValue(Parameter, C.getLocationContext()));
-        SymbolRef Symbol = Value.getAsSymbol(true);
+        SymbolRef Symbol = Value.getAsLocSymbol(true);
         if (!Symbol)
           continue;
         State = track(State, Symbol, nullptr, C.getStackFrame(),
@@ -295,7 +295,7 @@ public:
     bool Changed = false;
     const FunctionDecl *Function = functionOf(Call);
     for (unsigned Argument = 0; Argument < Call.getNumArgs(); ++Argument) {
-      SymbolRef Symbol = Call.getArgSVal(Argument).getAsSymbol(true);
+      SymbolRef Symbol = Call.getArgSVal(Argument).getAsLocSymbol(true);
       if (!Symbol)
         continue;
       const IdentifierInfo *const *Family =
@@ -321,21 +321,30 @@ public:
     const OwnershipAttr *Returns = returnsOwnership(functionOf(Call));
     if (!Returns)
       return;
-    SymbolRef Result = Call.getReturnValue().getAsSymbol(true);
+    SVal ReturnValue = Call.getReturnValue();
+    SymbolRef Result = ReturnValue.getAsLocSymbol(true);
     if (!Result)
       return;
-    ProgramStateRef State = C.getState();
+    std::optional<DefinedOrUnknownSVal> Defined =
+        ReturnValue.getAs<DefinedOrUnknownSVal>();
+    if (!Defined)
+      return;
+    auto [NonNullState, NullState] = C.getState()->assume(*Defined);
+    if (NullState)
+      C.addTransition(NullState);
+    if (!NonNullState)
+      return;
     const IdentifierInfo *Family = familyOf(Returns);
-    State = track(State, Result, Call.getOriginExpr(), C.getStackFrame(),
-                  Family, false);
+    NonNullState = track(NonNullState, Result, Call.getOriginExpr(),
+                         C.getStackFrame(), Family, false);
     if (std::optional<unsigned> Argument =
             reallocatedArgument(functionOf(Call));
         Argument && *Argument < Call.getNumArgs()) {
-      SymbolRef Old = Call.getArgSVal(*Argument).getAsSymbol(true);
-      if (Old && State->get<AllocationFamily>(Old))
-        State = State->set<ReplacedBy>(Old, Result);
+      SymbolRef Old = Call.getArgSVal(*Argument).getAsLocSymbol(true);
+      if (Old && NonNullState->get<AllocationFamily>(Old))
+        NonNullState = NonNullState->set<ReplacedBy>(Old, Result);
     }
-    C.addTransition(State);
+    C.addTransition(NonNullState);
   }
 
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
@@ -345,7 +354,7 @@ public:
     const OwnershipAttr *Returns = returnsOwnership(Function);
     SymbolRef Returned =
         Return && Return->getRetValue()
-            ? C.getSVal(Return->getRetValue()).getAsSymbol(true)
+            ? C.getSVal(Return->getRetValue()).getAsLocSymbol(true)
             : nullptr;
 
     if (Returned && belongsToFrame(State, Returned, C.getStackFrame())) {
