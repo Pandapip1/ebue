@@ -71,8 +71,12 @@ char *strcat (char *__restrict __NTLIBC_STRING,
  * required the same way despite the `while (n && *s) ...` short
  * circuit -- matching mem*'s own "valid even at n == 0" contract, not
  * a genuine escape (there is no legitimate "s may be garbage when n is
- * 0" reading of strncat's own real contract). */
-char *strncat (char *__restrict, const char *__restrict, size_t) __attribute__((nonnull(1, 2)));
+ * 0" reading of strncat's own real contract).  s is deliberately not
+ * __NTLIBC_STRING: it may instead name n readable bytes with no NUL, a
+ * bounded-string disjunction the current annotations cannot express. */
+char *strncat (char *__restrict __NTLIBC_STRING,
+              const char *__restrict, size_t)
+    __attribute__((nonnull(1, 2)));
 
 /* Both l and r are required for strcmp: `*l == *r && *l` evaluates
  * both operands of `==` every time the loop condition is checked, with
@@ -103,7 +107,8 @@ int strncmp (const char *, const char *, size_t) __attribute__((nonnull(1, 2), _
  * regardless of whether l/r's own nullness has been proven. */
 int strcoll (const char * __NTLIBC_STRING, const char * __NTLIBC_STRING)
     __attribute__((__pure__));
-size_t strxfrm (char *__restrict, const char *__restrict, size_t);
+size_t strxfrm (char *__restrict __NTLIBC_SPAN(3),
+                const char *__restrict __NTLIBC_STRING, size_t);
 
 /* src/string/strchr.c forwards to strchrnul(s, c) unconditionally and
  * dereferences its result; s is required (see strchrnul below), c is
@@ -139,7 +144,9 @@ char *strpbrk (const char *, const char *) __attribute__((nonnull(1, 2), __pure_
  * dereferences its first argument once n[0] is known nonzero (see
  * strchrnul's own comment). Reads only, matching glibc's real strstr
  * __attribute__((pure)). */
-char *strstr (const char *, const char *) __attribute__((nonnull(1, 2), __pure__));
+char *strstr (const char * __NTLIBC_STRING,
+              const char * __NTLIBC_STRING)
+    __attribute__((nonnull(1, 2), __pure__));
 char *strtok (char *__restrict, const char *__restrict);
 
 /* strlen (src/string/strlen.c): a read-only scan for the terminating
@@ -208,8 +215,11 @@ char *strsignal(int) __attribute__((__pure__));
  * (see strerror's own comment above) is exactly why there is no second
  * behaviour loc could ever select. */
 char *strerror_l (int, locale_t) __attribute__((__pure__));
-int strcoll_l (const char *, const char *, locale_t) __attribute__((__pure__));
-size_t strxfrm_l (char *__restrict, const char *__restrict, size_t, locale_t);
+int strcoll_l (const char * __NTLIBC_STRING,
+               const char * __NTLIBC_STRING, locale_t)
+    __attribute__((__pure__));
+size_t strxfrm_l (char *__restrict __NTLIBC_SPAN(3),
+                  const char *__restrict __NTLIBC_STRING, size_t, locale_t);
 #endif
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
@@ -247,12 +257,15 @@ int strverscmp (const char *, const char *) __attribute__((nonnull(1, 2), __pure
  * this unblocks: OwnershipChecker.cpp's own isAlwaysNonNull now
  * honors `returns_nonnull` the same way checkBeginFunction already
  * honors `nonnull` on parameters. */
-char *strchrnul(const char *, int) __attribute__((nonnull(1), __pure__, returns_nonnull));
+char *strchrnul(const char * __NTLIBC_STRING, int)
+    __attribute__((nonnull(1), __pure__, returns_nonnull));
 /* strcasestr: h is dereferenced in its own loop condition (`for (;
  * *h; h++)`, evaluated at least once); n is dereferenced first via
  * `strlen(n)`, unconditionally, before h is ever touched. Reads only
  * (via strncasecmp/tolower, both already read-only). */
-char *strcasestr(const char *, const char *) __attribute__((nonnull(1, 2), __pure__));
+char *strcasestr(const char * __NTLIBC_STRING,
+                 const char * __NTLIBC_STRING)
+    __attribute__((nonnull(1, 2), __pure__));
 /* memmem: the needle (n0, param 3) is dereferenced directly (`*n` in
  * `memchr(h0, *n, k)`) whenever there is a non-empty search to do (`if
  * (!l) return h;` is the only escape, and it never touches n0 or h0);
@@ -265,7 +278,8 @@ void *memmem(const void *, size_t, const void *, size_t) __attribute__((nonnull(
 /* Same n == 0 escape as mem*'s own family (glibc: memrchr nonnull(1)).
  * Reads only. */
 void *memrchr(const void *, int, size_t) __attribute__((nonnull(1), __pure__));
-void *mempcpy(void *, const void *, size_t);
+void *mempcpy(void * __NTLIBC_SPAN(3),
+              const void * __NTLIBC_SPAN(3), size_t);
 /* No basename here.  glibc's <string.h> declares a GNU basename that takes
  * a const char * and never modifies it, distinct from the POSIX basename in
  * <libgen.h>; musl used to paper over the difference with an unprototyped

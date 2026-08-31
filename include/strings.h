@@ -27,11 +27,13 @@ extern "C" {
  * rindex.c) are the same one-line forwards to strchr()/strrchr(),
  * likewise already __pure__.  bcopy/bzero are real writers (they copy
  * into/zero their destination buffer) and are correctly left out. */
-int bcmp (const void *, const void *, size_t) __attribute__((__pure__));
-void bcopy (const void *, void *, size_t);
-void bzero (void *, size_t);
-char *index (const char *, int) __attribute__((__pure__));
-char *rindex (const char *, int) __attribute__((__pure__));
+int bcmp (const void * __NTLIBC_SPAN(3),
+          const void * __NTLIBC_SPAN(3), size_t) __attribute__((__pure__));
+void bcopy (const void * __NTLIBC_SPAN(3),
+            void * __NTLIBC_SPAN(3), size_t);
+void bzero (void * __NTLIBC_SPAN(2), size_t);
+char *index (const char * __NTLIBC_STRING, int) __attribute__((__pure__));
+char *rindex (const char * __NTLIBC_STRING, int) __attribute__((__pure__));
 #endif
 
 /* ffs/ffsl/ffsll (src/string/ffs.c, ffsl.c, ffsll.c): pure bit
@@ -63,7 +65,9 @@ int strncasecmp (const char *, const char *, size_t) __attribute__((nonnull(1, 2
  * ASCII-only C/POSIX, so there is no second behaviour to select),
  * inheriting the same requirement on their string arguments and the
  * same __pure__ reasoning. */
-int strcasecmp_l (const char *, const char *, locale_t) __attribute__((nonnull(1, 2), __pure__));
+int strcasecmp_l (const char * __NTLIBC_STRING,
+                  const char * __NTLIBC_STRING, locale_t)
+    __attribute__((nonnull(1, 2), __pure__));
 int strncasecmp_l (const char *, const char *, size_t, locale_t) __attribute__((nonnull(1, 2), __pure__));
 
 #ifdef __cplusplus
