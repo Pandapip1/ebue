@@ -250,8 +250,10 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 /* argv required: subscripted unconditionally (`argv[i]`) at loop
  * entry, matching every execve-family argv contract this tree already
  * treats as required elsewhere. */
-static WCHAR *build_cmdline(char *const argv[]) __attribute__((nonnull(1)));
 static WCHAR *build_cmdline(char *const argv[])
+	__attribute__((nonnull(1))) NTLIBC_RETURNS_OWNERSHIP(malloc);
+static WCHAR *build_cmdline(char *const argv[])
+	NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	WCHAR *buf = 0;
 	size_t len = 0, cap = 0;
@@ -281,6 +283,7 @@ static WCHAR *build_cmdline(char *const argv[])
  * than passed on, and why a leading '=' (Windows' own per-drive
  * current-directory shape) is kept. */
 static WCHAR *build_env_block(char *const envp[])
+	NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	size_t cap = 256, len = 0;
 	WCHAR *blk = malloc(cap * sizeof(WCHAR));
