@@ -3040,6 +3040,31 @@ ULONG NTAPI RtlGetCurrentDirectory_U(ULONG len, PWSTR buf)
 	return (ULONG)((n + 1) * sizeof(WCHAR));
 }
 
+ULONG NTAPI RtlGetFullPathName_U(PCWSTR path, ULONG len, PWSTR buf,
+                                PWSTR *filepart)
+{
+	UNICODE_STRING nt;
+	PCWSTR ntpart = 0;
+	size_t n, partoff = 0;
+	ULONG need;
+	NTSTATUS st;
+
+	st = RtlDosPathNameToNtPathName_U_WithStatus(path, &nt, &ntpart, 0);
+	if (!NT_SUCCESS(st) || nt.Length < 4 * sizeof(WCHAR)) return 0;
+	n = nt.Length / sizeof(WCHAR) - 4; /* strip the internal "\\??\\" prefix */
+	need = (ULONG)((n + 1) * sizeof(WCHAR));
+	if (ntpart) partoff = (size_t)(ntpart - nt.Buffer) - 4;
+	if (len < need) {
+		vfree(nt.Buffer);
+		return need;
+	}
+	memcpy(buf, nt.Buffer + 4, n * sizeof(WCHAR));
+	buf[n] = 0;
+	if (filepart) *filepart = ntpart ? buf + partoff : 0;
+	vfree(nt.Buffer);
+	return (ULONG)(n * sizeof(WCHAR));
+}
+
 NTSTATUS NTAPI RtlSetCurrentDirectory_U(PUNICODE_STRING dos)
 {
 	UNICODE_STRING nt;
