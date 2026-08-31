@@ -55,7 +55,7 @@ static void emit_line(const unsigned char *buf, size_t n)
 {
 	size_t group, groups = n / 3 + (n % 3 != 0);
 
-	putchar(UUENC((int)n));
+	putchar(UUENC((unsigned)n));
 	for (group = 0; group < groups; group++) {
 		size_t i = 3 * group;
 		unsigned char b0 = buf[i];
@@ -81,6 +81,7 @@ int __util_uuencode_main(int argc, char **argv)
 	mode_t mode = 0644; /* traditional stdin-source default -- see header */
 	unsigned char buf[45];
 	size_t n;
+	int noperands;
 	int status = 0;
 
 	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
@@ -94,10 +95,11 @@ int __util_uuencode_main(int argc, char **argv)
 		return 1;
 	}
 
-	if (argc - i == 1) {
+	noperands = i < argc ? argc - i : 0;
+	if (noperands == 1) {
 		decode_name = argv[i];
 		in = stdin;
-	} else if (argc - i == 2) {
+	} else if (noperands == 2) {
 		src_path = argv[i];
 		decode_name = argv[i + 1];
 		in = fopen(src_path, "rb");

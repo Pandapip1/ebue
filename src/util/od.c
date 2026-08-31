@@ -375,8 +375,13 @@ int __util_od_main(int argc, char **argv)
 		return 1;
 	}
 
-	files = argv + i;
-	nfiles = argc - i;
+	if (i < argc) {
+		files = argv + i;
+		nfiles = argc - i;
+	} else {
+		files = argv;
+		nfiles = 0;
+	}
 	instream_init(&is, files, nfiles);
 	status = od_run(&is, &o);
 	return status ? 1 : 0;

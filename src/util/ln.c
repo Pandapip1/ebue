@@ -83,6 +83,10 @@ int __util_ln_main(int argc, char **argv)
 		return 1;
 	}
 
+	if (i >= argc) {
+		__util_diagf("ln: missing operand\n");
+		return 1;
+	}
 	nsrc = argc - i;
 	if (nsrc < 2) {
 		__util_diagf("ln: missing operand\n");
