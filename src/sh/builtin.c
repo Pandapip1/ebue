@@ -258,6 +258,51 @@ static int bi_touch(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 2: sorting/set-operation utilities ==========================
+ *
+ * sort(1p), uniq(1p), comm(1p), join(1p), tsort(1p): same reasoning as
+ * the Tier-1 filesystem utilities above -- each also exists as a real
+ * standalone obj/bin/<name>.exe (src/util/<name>.c, declared in
+ * src/internal/util.h), and stays registered here too so a script run
+ * before PATH lookup or __spawn() can be trusted still has them.  None
+ * of these five is a 2.14 special built-in and none has any effect on
+ * the shell execution environment itself (2.12's list), so `env_effect`
+ * is 0 for all five, same as the rest of this table. */
+static int bi_sort(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_sort(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_sort_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_uniq(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_uniq(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_uniq_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_comm(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_comm(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_comm_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_join(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_join(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_join_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_tsort(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tsort(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tsort_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* XCU 2.14: "exit [n] -- ... shall cause the shell to exit with the
  * exit status specified by the unsigned decimal integer n.  If n is
  * specified, but its value is not between 0 and 255 inclusively, the
@@ -599,6 +644,11 @@ static const struct sh_builtin builtins[] = {
 	{ "ln",     0, 0, bi_ln },
 	{ "chmod",  0, 0, bi_chmod },
 	{ "touch",  0, 0, bi_touch },
+	{ "sort",  0, 0, bi_sort },
+	{ "uniq",  0, 0, bi_uniq },
+	{ "comm",  0, 0, bi_comm },
+	{ "join",  0, 0, bi_join },
+	{ "tsort", 0, 0, bi_tsort },
 	{ 0, 0, 0, 0 }
 };
 

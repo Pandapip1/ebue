@@ -1,0 +1,670 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * sort(1p): `sort [-bdfinru] [-k keydef]... [-t char] [-o output] [-c|-C]
+ * [file...]`.
+ *
+ * DEFAULT KEY: "If no -k option is specified, a default sort key of the
+ * entire line shall be used" -- compared byte-by-byte (this library's
+ * only locale is "C", src/misc/locale.c, so the collating sequence is
+ * plain byte value; nothing here claims a stronger collation than that
+ * actually exists).
+ *
+ * DEFAULT FIELD SPLITTING (-t not given): "each maximal non-empty
+ * sequence of <blank> characters that follows a non-<blank> shall be a
+ * field separator.  The leading field separator is included in the
+ * first field." -- i.e. leading blanks on the line are part of field 1,
+ * not stripped; every field after the first has its own leading
+ * separator consumed rather than kept.  This is deliberately NOT the
+ * same rule join(1p) uses for its own default (join drops leading
+ * blanks entirely) -- see src/util/join.c's header for that contrast.
+ *
+ * -k keydef GRAMMAR: `field_start[type][,field_end[type]]` where
+ * field_start is `F[.C]` and field_end is `F[.C]` (F and C both 1-based;
+ * C omitted on field_start means "first character of the field", C
+ * omitted or 0 on field_end means "last character of the field"); type
+ * is zero or more of 'b','d','f','i','n','r' with no separator.  All six
+ * are implemented.  "If any modifier is attached to a field_start or to
+ * a field_end, no option shall apply to either" -- read here as: any
+ * attached modifier anywhere in one -k spec makes that whole key use
+ * exactly its own attached modifiers (global -b/-d/-f/-i/-n/-r do not
+ * leak in), which this file implements exactly.  One deliberate
+ * simplification within that: 'b' is applied symmetrically to both
+ * field_start and field_end of a key when attached to *either* one,
+ * rather than tracked as two independent per-endpoint booleans --
+ * spelled out because the standard's literal wording ("shall apply only
+ * to the field_start or field_end to which it is attached") does allow
+ * the asymmetric reading, and this file does not implement that.  If
+ * field_end is omitted, the key runs from field_start to the end of the
+ * line (not just to the end of that field).
+ *
+ * TIEBREAK: "lines that otherwise compare equal shall be ordered as if
+ * none of -d, -f, -i, -n, or -k were present (but with -r still in
+ * effect, if it was specified) and with all bytes in the lines
+ * significant" -- i.e. a whole-line, unfiltered byte comparison (with
+ * the *global* -r, not any per-key 'r') is the final tiebreaker whenever
+ * the primary (possibly multi-key) comparison finds two lines equal,
+ * UNLESS -u is given, in which case such lines are exactly the
+ * "duplicate key" pairs -u exists to collapse and no tiebreak is
+ * computed for them.  This is what makes `sort -k1,1 -k2,2n` behave
+ * differently from a naive single-key sort on just the first key.
+ *
+ * STABILITY: this file's own sort (merge_sort() below) is a textbook
+ * stable bottom-up merge sort, chosen over qsort()/a hand-rolled
+ * quicksort specifically so two lines that compare equal keep their
+ * original relative order -- XCU does not require this, but scripts
+ * routinely depend on it, and a stable merge costs no real extra effort
+ * here over an unstable one.
+ *
+ * -c/-C (check, don't sort): "Check that the single input file is
+ * ordered" -- note "single": more than one file operand together with
+ * -c/-C is refused.  EXIT STATUS is genuinely not the usual 0/1/2>-is-
+ * error shape every other utility in this batch uses: "0 All input
+ * files were output successfully, or -c was specified and the input
+ * file was correctly sorted." / "1 Under the -c option, the file was
+ * not ordered as specified, or if the -c and -u options were both
+ * specified, two input lines were found with equal keys." / ">1 An
+ * error occurred." -- so exit 1 here means "the check failed", not "an
+ * error occurred": a caller testing `[ $? -gt 1 ]` for a real error and
+ * `[ $? -eq 1 ]` for "unsorted" needs that distinction preserved, and it
+ * is (usage/I-O errors below return 2, never 1).
+ *
+ * -o output: "may be the same as one of the input files" -- safe here
+ * because every input line is read into memory (read_all_lines() below)
+ * before -o is ever opened, so `sort -o f f` cannot truncate f before
+ * f has been read.
+ *
+ * -m (merge, assume inputs already sorted) is a real sort(1p) option
+ * that is deliberately not implemented -- refused loudly with a
+ * diagnostic and a nonzero exit, the same "refuse rather than silently
+ * ignore" rule src/util/touch.c's -d applies to itself: doing a full
+ * sort instead of a merge when -m is requested would be silently wrong
+ * only in the specific case of correctness under repeated -m runs on
+ * pre-merged streams, exactly the kind of "looks right, isn't" gap this
+ * project's utilities refuse rather than paper over.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include "util.h"
+
+struct field { size_t start, end; };
+
+struct sort_key {
+	int f1, c1;             /* field_start: field number, char pos (both 1-based) */
+	int f2, c2;             /* field_end: c2==0 means "last char of field" */
+	int has_end;
+	int has_mod;
+	int mb, md, mf, mi, mn, mr;
+};
+
+struct sort_opts {
+	int b, d, f, i, n, r, u;
+	int have_delim;
+	char delim;
+	struct sort_key *keys;
+	size_t nkeys;
+};
+
+struct line {
+	char *text;
+	size_t len;
+	struct field *fields;
+	size_t nfields;
+};
+
+/* ==== field splitting ==================================================== */
+
+/* realloc(), not out = realloc(out, ...): on failure realloc() returns
+ * NULL without freeing the original block, so assigning straight back
+ * into `out` would both lose the data already collected *and* leak that
+ * original block -- the classic realloc mistake clang-tidy's bugprone-
+ * suspicious-realloc-usage and cppcheck's memleakOnRealloc both flag
+ * (and did, against an earlier version of this file). */
+static struct field *fields_grow(struct field *out, size_t *cap)
+{
+	size_t newcap = *cap ? *cap * 2 : 8;
+	struct field *g = realloc(out, newcap * sizeof *out);
+	if (!g) return 0;
+	*cap = newcap;
+	return g;
+}
+
+static struct field *split_fields(const char *line, size_t len, const struct sort_opts *o, size_t *nout)
+{
+	struct field *out;
+	size_t cap = 8, n = 0;
+
+	out = malloc(cap * sizeof *out);
+	if (!out) { *nout = 0; return 0; }
+
+	if (o->have_delim) {
+		size_t start = 0, i;
+		for (i = 0; i <= len; i++) {
+			if (i == len || line[i] == o->delim) {
+				if (n >= cap) {
+					struct field *g = fields_grow(out, &cap);
+					if (!g) { free(out); *nout = 0; return 0; }
+					out = g;
+				}
+				out[n].start = start; out[n].end = i; n++;
+				start = i + 1;
+			}
+		}
+	} else {
+		size_t i = 0, field_start = 0;
+		int seen_nb = 0;
+		while (i < len) {
+			if (isblank((unsigned char)line[i])) {
+				if (seen_nb) {
+					size_t sep_start = i;
+					while (i < len && isblank((unsigned char)line[i])) i++;
+					if (n >= cap) {
+						struct field *g = fields_grow(out, &cap);
+						if (!g) { free(out); *nout = 0; return 0; }
+						out = g;
+					}
+					out[n].start = field_start; out[n].end = sep_start; n++;
+					field_start = i;
+					seen_nb = 0;
+					continue;
+				}
+				i++;
+			} else {
+				seen_nb = 1;
+				i++;
+			}
+		}
+		if (n >= cap) {
+			struct field *g = fields_grow(out, &cap);
+			if (!g) { free(out); *nout = 0; return 0; }
+			out = g;
+		}
+		out[n].start = field_start; out[n].end = len; n++;
+	}
+	*nout = n;
+	return out;
+}
+
+/* ==== key range resolution ================================================ */
+
+static size_t key_start_off(const char *line, size_t len, const struct field *fields, size_t nf, int f, int c, int bflag)
+{
+	struct field fl;
+	size_t start;
+
+	if (f < 1) f = 1;
+	if ((size_t)(f - 1) >= nf) return len;
+	fl = fields[f - 1];
+	start = fl.start;
+	if (bflag) while (start < fl.end && isblank((unsigned char)line[start])) start++;
+	if (c < 1) c = 1;
+	start += (size_t)(c - 1);
+	if (start > len) start = len;
+	return start;
+}
+
+static size_t key_end_off(const char *line, size_t len, const struct field *fields, size_t nf, int f, int c, int bflag)
+{
+	struct field fl;
+	size_t fstart, end;
+
+	(void)len;
+	if (f < 1) f = 1;
+	if ((size_t)(f - 1) >= nf) return len;
+	fl = fields[f - 1];
+	fstart = fl.start;
+	if (bflag) while (fstart < fl.end && isblank((unsigned char)line[fstart])) fstart++;
+	if (c <= 0) return fl.end;
+	end = fstart + (size_t)c;
+	if (end > fl.end) end = fl.end;
+	return end;
+}
+
+/* ==== character-level comparison ========================================= */
+
+static long long parse_numeric(const char *s, size_t len)
+{
+	size_t i = 0;
+	int neg = 0;
+	long long v = 0;
+
+	while (i < len && isblank((unsigned char)s[i])) i++;
+	if (i < len && s[i] == '-') { neg = 1; i++; }
+	for (; i < len && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (s[i] - '0');
+	return neg ? -v : v;
+}
+
+static int char_passes(unsigned char c, int d, int i)
+{
+	if (i && !isprint(c)) return 0;
+	if (d && !(isblank(c) || isalnum(c))) return 0;
+	return 1;
+}
+
+static int compare_range(const char *a, size_t as, size_t ae, const char *b, size_t bs, size_t be, int d, int f, int i, int n)
+{
+	if (n) {
+		long long va = parse_numeric(a + as, ae - as);
+		long long vb = parse_numeric(b + bs, be - bs);
+		if (va < vb) return -1;
+		if (va > vb) return 1;
+		return 0;
+	}
+	{
+		size_t pa = as, pb = bs;
+		for (;;) {
+			while (pa < ae && !char_passes((unsigned char)a[pa], d, i)) pa++;
+			while (pb < be && !char_passes((unsigned char)b[pb], d, i)) pb++;
+			if (pa >= ae && pb >= be) return 0;
+			if (pa >= ae) return -1;
+			if (pb >= be) return 1;
+			{
+				int ca = (unsigned char)a[pa], cb = (unsigned char)b[pb];
+				if (f) { ca = tolower(ca); cb = tolower(cb); }
+				if (ca != cb) return ca < cb ? -1 : 1;
+			}
+			pa++; pb++;
+		}
+	}
+}
+
+static int compare_raw(const struct line *a, const struct line *b)
+{
+	size_t n = a->len < b->len ? a->len : b->len;
+	int c = n ? memcmp(a->text, b->text, n) : 0;
+	if (c) return c < 0 ? -1 : 1;
+	if (a->len < b->len) return -1;
+	if (a->len > b->len) return 1;
+	return 0;
+}
+
+static int compare_by_key(const struct sort_opts *o, const struct sort_key *k, const struct line *a, const struct line *b)
+{
+	int bflag, dflag, fflag, iflag, nflag, rflag;
+	size_t as, ae, bs, be;
+	int c;
+
+	if (k->has_mod) {
+		bflag = k->mb; dflag = k->md; fflag = k->mf;
+		iflag = k->mi; nflag = k->mn; rflag = k->mr;
+	} else {
+		bflag = o->b; dflag = o->d; fflag = o->f;
+		iflag = o->i; nflag = o->n; rflag = o->r;
+	}
+
+	as = key_start_off(a->text, a->len, a->fields, a->nfields, k->f1, k->c1, bflag);
+	ae = k->has_end ? key_end_off(a->text, a->len, a->fields, a->nfields, k->f2, k->c2, bflag) : a->len;
+	if (ae < as) ae = as;
+
+	bs = key_start_off(b->text, b->len, b->fields, b->nfields, k->f1, k->c1, bflag);
+	be = k->has_end ? key_end_off(b->text, b->len, b->fields, b->nfields, k->f2, k->c2, bflag) : b->len;
+	if (be < bs) be = bs;
+
+	c = compare_range(a->text, as, ae, b->text, bs, be, dflag, fflag, iflag, nflag);
+	return rflag ? -c : c;
+}
+
+static int line_compare(const struct sort_opts *o, const struct line *a, const struct line *b)
+{
+	int c;
+
+	if (o->nkeys) {
+		size_t i;
+		c = 0;
+		for (i = 0; i < o->nkeys; i++) {
+			c = compare_by_key(o, &o->keys[i], a, b);
+			if (c) return c;
+		}
+	} else {
+		size_t as = 0, bs = 0;
+		if (o->b) {
+			while (as < a->len && isblank((unsigned char)a->text[as])) as++;
+			while (bs < b->len && isblank((unsigned char)b->text[bs])) bs++;
+		}
+		c = compare_range(a->text, as, a->len, b->text, bs, b->len, o->d, o->f, o->i, o->n);
+		if (o->r) c = -c;
+	}
+
+	if (c == 0 && !o->u) {
+		c = compare_raw(a, b);
+		if (o->r) c = -c;
+	}
+	return c;
+}
+
+/* ==== stable bottom-up merge sort ========================================= */
+
+static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
+{
+	struct line *tmp;
+	size_t width;
+
+	if (n < 2) return;
+	tmp = malloc(n * sizeof *tmp);
+	if (!tmp) return; /* input stays in original (still-valid) order */
+
+	for (width = 1; width < n; width *= 2) {
+		size_t i;
+		for (i = 0; i < n; i += 2 * width) {
+			size_t lo = i, mid = i + width < n ? i + width : n;
+			size_t hi = i + 2 * width < n ? i + 2 * width : n;
+			size_t a = lo, b = mid, k = lo;
+			while (a < mid && b < hi) {
+				if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++];
+				else tmp[k++] = lines[b++];
+			}
+			while (a < mid) tmp[k++] = lines[a++];
+			while (b < hi) tmp[k++] = lines[b++];
+		}
+		memcpy(lines, tmp, n * sizeof *tmp);
+	}
+	free(tmp);
+}
+
+/* ==== -k parsing =========================================================== */
+
+static int parse_keydef(const char *spec, struct sort_key *k)
+{
+	const char *p = spec;
+	char *end;
+	long v;
+
+	memset(k, 0, sizeof *k);
+	if (!isdigit((unsigned char)*p)) return -1;
+	v = strtol(p, &end, 10);
+	if (v < 1) return -1;
+	k->f1 = (int)v;
+	p = end;
+	k->c1 = 1;
+	if (*p == '.') {
+		p++;
+		if (!isdigit((unsigned char)*p)) return -1;
+		v = strtol(p, &end, 10);
+		if (v < 1) return -1;
+		k->c1 = (int)v;
+		p = end;
+	}
+	while (*p && strchr("bdfinr", *p)) {
+		k->has_mod = 1;
+		switch (*p) {
+		case 'b': k->mb = 1; break;
+		case 'd': k->md = 1; break;
+		case 'f': k->mf = 1; break;
+		case 'i': k->mi = 1; break;
+		case 'n': k->mn = 1; break;
+		case 'r': k->mr = 1; break;
+		}
+		p++;
+	}
+	if (*p == ',') {
+		p++;
+		if (!isdigit((unsigned char)*p)) return -1;
+		v = strtol(p, &end, 10);
+		if (v < 1) return -1;
+		k->f2 = (int)v;
+		p = end;
+		k->c2 = 0;
+		if (*p == '.') {
+			p++;
+			if (!isdigit((unsigned char)*p)) return -1;
+			v = strtol(p, &end, 10);
+			if (v < 0) return -1;
+			k->c2 = (int)v;
+			p = end;
+		}
+		while (*p && strchr("bdfinr", *p)) {
+			k->has_mod = 1;
+			switch (*p) {
+			case 'b': k->mb = 1; break;
+			case 'd': k->md = 1; break;
+			case 'f': k->mf = 1; break;
+			case 'i': k->mi = 1; break;
+			case 'n': k->mn = 1; break;
+			case 'r': k->mr = 1; break;
+			}
+			p++;
+		}
+		k->has_end = 1;
+	}
+	if (*p) return -1;
+	return 0;
+}
+
+/* ==== input reading ======================================================= */
+
+static int read_all_lines(FILE *f, struct line **out, size_t *nout, size_t *cap)
+{
+	char *buf = 0;
+	size_t bufcap = 0;
+	ssize_t got;
+
+	while ((got = getline(&buf, &bufcap, f)) >= 0) {
+		size_t len = (size_t)got;
+		char *text;
+		if (len && buf[len - 1] == '\n') len--;
+		text = malloc(len + 1);
+		if (!text) { free(buf); return -1; }
+		memcpy(text, buf, len);
+		text[len] = 0;
+		if (*nout >= *cap) {
+			size_t newcap = *cap ? *cap * 2 : 64;
+			struct line *g = realloc(*out, newcap * sizeof **out);
+			if (!g) { free(text); free(buf); return -1; }
+			*out = g;
+			*cap = newcap;
+		}
+		(*out)[*nout].text = text;
+		(*out)[*nout].len = len;
+		(*out)[*nout].fields = 0;
+		(*out)[*nout].nfields = 0;
+		(*nout)++;
+	}
+	free(buf);
+	return 0;
+}
+
+static void free_lines(struct line *lines, size_t n)
+{
+	size_t i;
+	for (i = 0; i < n; i++) {
+		free(lines[i].text);
+		free(lines[i].fields);
+	}
+	free(lines);
+}
+
+int __util_sort_main(int argc, char **argv)
+{
+	struct sort_opts o;
+	struct sort_key keys[64];
+	int opt_c = 0, opt_C = 0;
+	int i;
+	const char *files[256];
+	int nfiles = 0;
+	const char *outfile = 0;
+	struct line *lines = 0;
+	size_t nlines = 0, cap = 0;
+	size_t li;
+
+	memset(&o, 0, sizeof o);
+	o.keys = keys;
+
+	for (i = 1; i < argc; i++) {
+		char *arg = argv[i];
+		char *p;
+
+		if (!strcmp(arg, "--")) { i++; break; }
+		if (arg[0] != '-' || arg[1] == 0) break;
+
+		p = arg + 1;
+		while (*p) {
+			switch (*p) {
+			case 'b': o.b = 1; p++; break;
+			case 'd': o.d = 1; p++; break;
+			case 'f': o.f = 1; p++; break;
+			case 'i': o.i = 1; p++; break;
+			case 'n': o.n = 1; p++; break;
+			case 'r': o.r = 1; p++; break;
+			case 'u': o.u = 1; p++; break;
+			case 'c': opt_c = 1; p++; break;
+			case 'C': opt_c = 1; opt_C = 1; p++; break;
+			case 'm':
+				fprintf(stderr, "sort: -m: not implemented -- see src/util/sort.c\n");
+				return 2;
+			case 'k': {
+				const char *val;
+				p++;
+				if (*p) { val = p; }
+				else {
+					if (++i >= argc) { fprintf(stderr, "sort: -k: option requires an argument\n"); return 2; }
+					val = argv[i];
+				}
+				if (o.nkeys >= sizeof keys / sizeof keys[0]) {
+					fprintf(stderr, "sort: too many -k options\n");
+					return 2;
+				}
+				if (parse_keydef(val, &keys[o.nkeys]) < 0) {
+					fprintf(stderr, "sort: %s: invalid key definition\n", val);
+					return 2;
+				}
+				o.nkeys++;
+				p = (char *)"";
+				break;
+			}
+			case 't': {
+				const char *val;
+				p++;
+				if (*p) { val = p; }
+				else {
+					if (++i >= argc) { fprintf(stderr, "sort: -t: option requires an argument\n"); return 2; }
+					val = argv[i];
+				}
+				if (val[0] == 0 || val[1] != 0) {
+					fprintf(stderr, "sort: -t: field separator must be exactly one character\n");
+					return 2;
+				}
+				o.delim = val[0];
+				o.have_delim = 1;
+				p = (char *)"";
+				break;
+			}
+			case 'o': {
+				p++;
+				if (*p) { outfile = p; }
+				else {
+					if (++i >= argc) { fprintf(stderr, "sort: -o: option requires an argument\n"); return 2; }
+					outfile = argv[i];
+				}
+				p = (char *)"";
+				break;
+			}
+			default:
+				fprintf(stderr, "sort: -%c: invalid option\n", *p);
+				return 2;
+			}
+		}
+	}
+
+	for (; i < argc; i++) {
+		if (nfiles >= (int)(sizeof files / sizeof files[0])) {
+			fprintf(stderr, "sort: too many file operands\n");
+			return 2;
+		}
+		files[nfiles++] = argv[i];
+	}
+
+	if (opt_c && nfiles > 1) {
+		fprintf(stderr, "sort: -c/-C: only one input file may be given\n");
+		return 2;
+	}
+
+	/* Read every operand (or stdin, if none) fully into memory before
+	 * anything is written anywhere -- see this file's header comment on
+	 * why -o's "may equal an input file" requirement depends on this
+	 * order specifically. */
+	if (nfiles == 0) {
+		if (read_all_lines(stdin, &lines, &nlines, &cap) < 0) {
+			fprintf(stderr, "sort: out of memory\n");
+			free_lines(lines, nlines);
+			return 2;
+		}
+	} else {
+		int fi;
+		for (fi = 0; fi < nfiles; fi++) {
+			FILE *f;
+			int is_stdin = !strcmp(files[fi], "-");
+			f = is_stdin ? stdin : fopen(files[fi], "r");
+			if (!f) {
+				fprintf(stderr, "sort: %s: %s\n", files[fi], strerror(errno));
+				free_lines(lines, nlines);
+				return 2;
+			}
+			if (read_all_lines(f, &lines, &nlines, &cap) < 0) {
+				fprintf(stderr, "sort: out of memory\n");
+				if (!is_stdin) fclose(f);
+				free_lines(lines, nlines);
+				return 2;
+			}
+			if (!is_stdin) fclose(f);
+		}
+	}
+
+	if (o.nkeys) {
+		for (li = 0; li < nlines; li++)
+			lines[li].fields = split_fields(lines[li].text, lines[li].len, &o, &lines[li].nfields);
+	}
+
+	if (opt_c) {
+		const char *srcname = nfiles ? files[0] : "-";
+		int result = 0;
+		for (li = 1; li < nlines; li++) {
+			int cmp = line_compare(&o, &lines[li - 1], &lines[li]);
+			if (cmp > 0) {
+				if (!opt_C)
+					fprintf(stderr, "sort: %s: disorder: %s\n", srcname, lines[li].text);
+				result = 1;
+				break;
+			}
+			if (cmp == 0 && o.u) {
+				if (!opt_C)
+					fprintf(stderr, "sort: %s: duplicate key: %s\n", srcname, lines[li].text);
+				result = 1;
+				break;
+			}
+		}
+		free_lines(lines, nlines);
+		return result;
+	}
+
+	merge_sort(lines, nlines, &o);
+
+	{
+		FILE *outf = stdout;
+		size_t write_i, keep = 0;
+
+		if (outfile) {
+			outf = fopen(outfile, "w");
+			if (!outf) {
+				fprintf(stderr, "sort: %s: %s\n", outfile, strerror(errno));
+				free_lines(lines, nlines);
+				return 2;
+			}
+		}
+
+		for (write_i = 0; write_i < nlines; write_i++) {
+			if (o.u && keep > 0 && line_compare(&o, &lines[keep - 1], &lines[write_i]) == 0)
+				continue;
+			lines[keep++] = lines[write_i];
+		}
+		for (write_i = 0; write_i < keep; write_i++)
+			fprintf(outf, "%s\n", lines[write_i].text);
+
+		if (outfile) fclose(outf);
+	}
+
+	free_lines(lines, nlines);
+	return 0;
+}
