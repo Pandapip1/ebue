@@ -148,8 +148,9 @@ char *__find_program(const char *name, int use_path)
 	 * empty string up front for the same reason.) */
 	if (!name[0]) { errno = ENOENT; return 0; }
 	if (!use_path || has_dir(name)) {
-		r = malloc(strlen(name) + 1);
-		if (r) strcpy(r, name);
+		size_t n = strlen(name) + 1;
+		r = malloc(n);
+		if (r) memcpy(r, name, n);
 		return r;
 	}
 	path = getenv("PATH");

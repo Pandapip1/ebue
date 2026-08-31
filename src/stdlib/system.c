@@ -118,8 +118,9 @@ static char *find_shell(void)
 {
 	const char *cs = getenv("ComSpec");
 	if (cs && *cs && access(cs, X_OK) == 0) {
-		char *r = malloc(strlen(cs) + 1);
-		if (r) strcpy(r, cs);
+		size_t n = strlen(cs) + 1;
+		char *r = malloc(n);
+		if (r) memcpy(r, cs, n);
 		return r;
 	}
 	return __find_program("cmd.exe", 1);

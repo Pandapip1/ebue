@@ -647,18 +647,19 @@ static int ntpath_at_impl(int dirfd, const char *path, struct __ntpath *out,
 			 * out from under the caller -- so it is the fallback for the
 			 * one shape that cannot be expressed, not the strategy. */
 			char *dir, *joined;
-			size_t dl;
+			size_t dl, pl;
 			int rc;
 			__free(w);
 			dir = __handle_path(f->h);
 			if (!dir) return -1;
 			dl = strlen(dir);
-			joined = __malloc(dl + 1 + strlen(path) + 1);
+			pl = strlen(path);
+			joined = __malloc(dl + 1 + pl + 1);
 			if (!joined) { __free(dir); errno = ENOMEM; return -1; }
 			memcpy(joined, dir, dl);
 			/* "C:\\" already ends in one */
 			if (dl && dir[dl-1] != '\\' && dir[dl-1] != '/') joined[dl++] = '\\';
-			strcpy(joined + dl, path);
+			memcpy(joined + dl, path, pl + 1);
 			__free(dir);
 			rc = ntpath_impl(joined, out, attributes, overlay);
 			__free(joined);

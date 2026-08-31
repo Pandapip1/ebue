@@ -264,8 +264,9 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname)
 
 			tried = 1;
 			if (is_absolute(*entry)) {
-				dir = __malloc(strlen(*entry) + 1);
-				if (dir) strcpy(dir, *entry);
+				size_t n = strlen(*entry) + 1;
+				dir = __malloc(n);
+				if (dir) memcpy(dir, *entry, n);
 			} else {
 				char *base = image_dir();
 				dir = base ? join(base, *entry) : 0;
