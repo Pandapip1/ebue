@@ -294,6 +294,42 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
  * stays there, see chdir.c's own comment).
  * ====================================================================== */
 
+/* RtlSetCurrentDirectory_U applies Win32's legacy MAX_PATH limit while the
+ * process current-directory field and NTFS both accept a longer DOS path.
+ * Resolve the name first, then retry it with the extended-length prefix that
+ * tells the Rtl not to impose that legacy parsing limit. */
+static NTSTATUS set_long_current_directory(const WCHAR *path)
+{
+	WCHAR *full, *extended;
+	UNICODE_STRING us;
+	ULONG capacity, got;
+	size_t n;
+	NTSTATUS st = STATUS_NAME_TOO_LONG;
+
+	capacity = (ULONG)((__US_MAX_WCHARS - 4) * sizeof(WCHAR));
+	full = __malloc(capacity + sizeof(WCHAR));
+	if (!full) return STATUS_NO_MEMORY;
+	got = RtlGetFullPathName_U(path, capacity, full, 0);
+	if (!got || got >= capacity || got % sizeof(WCHAR)) goto done;
+	n = got / sizeof(WCHAR);
+	/* This retry handles drive paths.  UNC needs the distinct \\?\UNC\ form
+	 * and is left to the original status until that case is implemented. */
+	if (n < 3 || full[1] != ':' || full[2] != '\\') goto done;
+	extended = __malloc((n + 5) * sizeof(WCHAR));
+	if (!extended) { st = STATUS_NO_MEMORY; goto done; }
+	extended[0] = '\\'; extended[1] = '\\';
+	extended[2] = '?';  extended[3] = '\\';
+	memcpy(extended + 4, full, (n + 1) * sizeof(WCHAR));
+	us.Buffer = extended;
+	us.Length = (USHORT)((n + 4) * sizeof(WCHAR));
+	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
+	st = RtlSetCurrentDirectory_U(&us);
+	__free(extended);
+done:
+	__free(full);
+	return st;
+}
+
 int __plat_chdir(const char *path, int *vfsout)
 {
 	WCHAR *w;
@@ -335,6 +371,8 @@ int __plat_chdir(const char *path, int *vfsout)
 	us.Length = (USHORT)(n * sizeof(WCHAR));
 	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
 	st = RtlSetCurrentDirectory_U(&us);
+	if (st == STATUS_NAME_TOO_LONG)
+		st = set_long_current_directory(w);
 	/* chdir.html ERRORS [ENOTDIR]: "A component of the path prefix names
 	 * an existing file that is neither a directory nor a symbolic link to
 	 * a directory."  RtlSetCurrentDirectory_U passes NtOpenFile's status
