@@ -52,6 +52,17 @@ static int isws(wchar_t c)
 /* Same contract as strtol.c's parse(): returns 1 on overflow (out =
  * UINTMAX_MAX), *neg from the sign, *end the first unparsed wchar_t (or
  * nptr if nothing numeric was found). */
+/* Same shape and reasoning as strtol.c's parse(): nptr/end/neg/out are
+ * all required. nptr is dereferenced unconditionally (`while (isws(*s))
+ * s++;`, s == nptr at entry) as this function's first real operation --
+ * the checker's own report names this one. neg is written (`*neg = 0;`)
+ * even before that, unconditionally. end/out are both written on every
+ * return path (the invalid-base early return and the normal
+ * completion), with no NULL check on either. This file's own single
+ * real caller (wcstox()) always passes `&end`/`&neg`/`&v`, on-stack
+ * locals, never NULL. */
+static int wparse(const wchar_t *nptr, const wchar_t **end, int base, int *neg, uintmax_t *out)
+    __attribute__((nonnull(1, 2, 4, 5)));
 static int wparse(const wchar_t *nptr, const wchar_t **end, int base, int *neg, uintmax_t *out)
 {
 	const wchar_t *s = nptr;

@@ -8,6 +8,25 @@
 
 typedef int (*cmp_r)(const void *, const void *, void *);
 
+/* a/b are required: both branches dereference through a/b unconditionally
+ * whenever n > 0 (the aligned branch via `*x`/`*y`, the byte branch via
+ * `*a`/`*b`), with no NULL check in either -- the checker's own report
+ * flags both (one per branch, since they are syntactically separate, not
+ * masked). Every real call site (sift()'s and qsort_r()'s own) computes
+ * a/b as `base + k*sz` from qsort_r()'s own b, which is only ever
+ * reached past the `if (n < 2 || !sz) return;` guard that already
+ * excludes the one documented NULL-base case (n < 2); n itself is sz,
+ * qsort_r()'s own element size, already proven nonzero by that same
+ * guard.
+ *
+ * Marking a/b lets the checker explore further into the aligned
+ * branch's own loop than before, now also flagging `*x`/`*y` (`size_t
+ * *x = (size_t *)a, *y = (size_t *)b;`, then `x++, y++` each
+ * iteration): a cast of an already-nonnull pointer, then advanced by
+ * pointer arithmetic bounded by the same `n` -- sound by construction,
+ * just past what this checker's nonnull propagation currently follows
+ * across a loop increment. */
+static void swap(unsigned char *a, unsigned char *b, size_t n) __attribute__((nonnull(1, 2)));
 static void swap(unsigned char *a, unsigned char *b, size_t n)
 {
 	if (n % sizeof(size_t) == 0 && ((uintptr_t)a | (uintptr_t)b) % sizeof(size_t) == 0) {

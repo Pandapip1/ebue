@@ -150,6 +150,15 @@ size_t mbsrtowcs(wchar_t *__restrict ws, const char **__restrict src, size_t n, 
 	return out;
 }
 
+/* include/wchar.h marks src nonnull; that lets the checker explore
+ * further into this loop than before, now also flagging `ws[0]`/`ws[1]`
+ * (`ws` starts as `*src`, already proven nonnull, but is advanced by
+ * pointer arithmetic -- `ws += 2;`/`ws++;` -- each iteration): sound by
+ * construction (a NUL-terminated wide string this loop's own `if
+ * (!ws[0]) ...` return stops at), just past what this checker's nonnull
+ * propagation currently follows across a loop increment -- the same
+ * class of residual src/stdlib/qsort.c's swap() now discloses for
+ * `x++`/`y++`. wcsnrtombs() below shares the identical shape. */
 size_t wcsrtombs(char *__restrict s, const wchar_t **__restrict src, size_t n, mbstate_t *__restrict st)
 {
 	static mbstate_t internal;

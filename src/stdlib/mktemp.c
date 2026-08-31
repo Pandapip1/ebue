@@ -29,7 +29,14 @@ __wraps static uint32_t rnd(void)
 }
 
 /* Randomise the six X's that end len bytes before the end of template.
- * Returns -1 with EINVAL if they are not there. */
+ * Returns -1 with EINVAL if they are not there.
+ *
+ * tmpl is required: `strlen(tmpl)` is unconditional as this function's
+ * very first real statement, with no NULL check. All three of this
+ * file's real callers (mkostemps(), mkdtemp(), mktemp()) forward their
+ * own tmpl parameter unchanged, and no caller anywhere in this tree
+ * passes NULL for it. */
+static int fill(char *tmpl, int suffix) __attribute__((nonnull(1)));
 static int fill(char *tmpl, int suffix)
 {
 	static const char chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

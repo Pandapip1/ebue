@@ -125,8 +125,18 @@ int unsetenv (const char *);
 int mkstemp (char *);
 int mkostemp (char *, int);
 char *mkdtemp (char *);
-int getsubopt (char **, char *const *, char **);
-int rand_r (unsigned *);
+/* All three required: src/stdlib/getsubopt.c dereferences *opt
+ * unconditionally as its first statement (`char *s = *opt;`), writes
+ * *val unconditionally next (`*val = 0;`), and dereferences keys[i] in
+ * its own loop condition (evaluated even for i == 0), with no NULL
+ * check on any of them; every real call site in this tree passes real
+ * addresses/arrays, never NULL. */
+int getsubopt (char **, char *const *, char **) __attribute__((nonnull(1, 2, 3)));
+/* s is required: src/stdlib/rand.c's rand_r() dereferences `*s`
+ * unconditionally as its very first statement and writes through it
+ * unconditionally next, with no NULL check anywhere; every real caller
+ * in this tree passes the address of a real on-stack seed. */
+int rand_r (unsigned *) __attribute__((nonnull(1)));
 
 #endif
 
@@ -151,7 +161,11 @@ int grantpt (int);  /* undefined-ok: see posix_openpt */
 int unlockpt (int);  /* undefined-ok: see posix_openpt */
 char *ptsname (int);  /* undefined-ok: see posix_openpt */
 char *l64a (long);
-long a64l (const char *);
+/* s is required: src/stdlib/a64l.c's a64l() dereferences s[i] in its
+ * own loop condition (`for (i = 0; i < 6 && s[i]; i++)`), evaluated even
+ * for i == 0, with no NULL check -- every real caller passes a real
+ * string. */
+long a64l (const char *) __attribute__((nonnull(1)));
 void setkey (const char *);  /* undefined-ok: DES-based, like crypt()/
 	encrypt() in unistd.h -- not reimplemented from scratch */
 double drand48 (void);
@@ -167,7 +181,17 @@ void lcong48 (unsigned short [7]);
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 #include <alloca.h>
-char *mktemp (char *);
+/* tmpl is required: src/stdlib/mktemp.c's mktemp() dereferences it
+ * directly itself (`tmpl[0] = 0;` on every failure return, in addition
+ * to forwarding it into fill(), itself now marked nonnull(1)), with no
+ * NULL check anywhere. mkstemps()/mkostemps() are deliberately left
+ * unmarked: neither dereferences tmpl directly in its own body (both
+ * simply forward it into mkostemps()/fill()/open()), so there is
+ * nothing in either's OWN body for the attribute to describe -- the
+ * same "forwarded, callee already owns the contract" shape as time.h's
+ * own ctime_r()/clock_gettime() comments; mkostemps() itself is not
+ * flagged either, for the same reason. */
+char *mktemp (char *) __attribute__((nonnull(1)));
 int mkstemps (char *, int);
 int mkostemps (char *, int, int);
 void *valloc (size_t);
@@ -183,8 +207,19 @@ void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *
 #ifdef _GNU_SOURCE
 int ptsname_r(int, char *, size_t);  /* undefined-ok: see posix_openpt in
 	the _XOPEN_SOURCE block above */
-char *ecvt(double, int, int *, int *);
-char *fcvt(double, int, int *, int *);
+/* dp/sign are both required in ecvt()/fcvt() (src/stdlib/ecvt.c): sign
+ * is dereferenced unconditionally as each function's first real
+ * statement (`*sign = x < 0 || ...;`), and dp is written on every one
+ * of that function's own return paths (the nan/inf early returns and
+ * the normal completion), with no NULL check on either -- the checker's
+ * own report names only *sign (one finding per function); dp's own
+ * direct writes are exactly as unconditional, verified by hand.
+ * gcvt()'s out is deliberately NOT marked: it is only ever forwarded
+ * into sprintf(), never dereferenced by gcvt()'s own body, the same
+ * "forwarded, callee already owns the contract" shape as time.h's own
+ * ctime_r()/clock_gettime() comments -- and it is not flagged either. */
+char *ecvt(double, int, int *, int *) __attribute__((nonnull(3, 4)));
+char *fcvt(double, int, int *, int *) __attribute__((nonnull(3, 4)));
 char *gcvt(double, int, char *);
 #endif
 
