@@ -63,7 +63,7 @@ extern "C" {
 
 int      catclose(nl_catd);
 char    *catgets(nl_catd, int, int, const char *);
-nl_catd  catopen(const char *, int);
+nl_catd  catopen(const char * __NTLIBC_STRING, int);
 
 #ifdef __cplusplus
 }

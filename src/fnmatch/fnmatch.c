@@ -26,7 +26,8 @@
 #include <ctype.h>
 #include <string.h>
 
-static int class_match(const char *name, size_t len, unsigned char c)
+static int class_match(const char *name __NTLIBC_SPAN(2), size_t len,
+	unsigned char c)
 	__attribute__((pure));
 static int class_match(const char *name, size_t len, unsigned char c) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {

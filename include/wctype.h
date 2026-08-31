@@ -87,7 +87,7 @@ int iswxdigit(wint_t) __attribute__((__pure__));
  * and this tree's fixed constant table only -- no locale variation is
  * possible (this tree has exactly one locale), no errno, no writes. */
 int iswctype(wint_t, wctype_t) __attribute__((__pure__));
-wctype_t wctype(const char *) __attribute__((__pure__));
+wctype_t wctype(const char * __NTLIBC_STRING) __attribute__((__pure__));
 
 /* towctrans()/wctrans() (src/ctype/towctrans.c, wctrans.c) are the same
  * shape as iswctype()/wctype() just above: a closed switch/strcmp
@@ -96,7 +96,7 @@ wctype_t wctype(const char *) __attribute__((__pure__));
 wint_t towlower(wint_t) __attribute__((__pure__));
 wint_t towupper(wint_t) __attribute__((__pure__));
 wint_t towctrans(wint_t, wctrans_t) __attribute__((__pure__));
-wctrans_t wctrans(const char *) __attribute__((__pure__));
+wctrans_t wctrans(const char * __NTLIBC_STRING) __attribute__((__pure__));
 
 #ifdef __cplusplus
 }
