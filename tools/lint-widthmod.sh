@@ -259,6 +259,11 @@ if [ "$findings" -eq 0 ]; then
 	exit 0
 fi
 cat "$work/findings"
+# Standalone (see tools/lint.sh's `widthmod) tools/lint-widthmod.sh ;;`
+# dispatch), so it calls the same shared annotation helper tools/lint.sh's
+# stage_* functions reach via show_findings() directly.  A no-op unless
+# GITHUB_ACTIONS=true; see tools/lint-gh-annotate.sh's header.
+tools/lint-gh-annotate.sh error "$work/findings"
 printf 'lint-widthmod: %d NEW finding(s) (%d LM_z/LM_t line(s) in %d file(s): %d judged, %d exempt, %d known)\n' \
 	"$findings" "$nlines" "$nfiles" "$njudged" "$nexempt" "$nknown"
 [ "$LINT_STRICT" = 0 ] && exit 0

@@ -220,6 +220,13 @@ sort -u -t "$(printf '\t')" -k1,1 "$declfile" | while IFS="$(printf '\t')" read 
 done > "$workdir/report"
 
 cat "$workdir/report"
+# tools/lint.sh's stage_* functions all funnel their findings through its
+# show_findings(), which is what calls tools/lint-gh-annotate.sh -- but
+# this script runs standalone (see the dispatch at tools/lint.sh's tail:
+# `undefined) tools/lint-undefined.sh ;;`, not a stage_undefined that
+# could call back into lint.sh), so it calls the same shared helper
+# directly.  A no-op unless GITHUB_ACTIONS=true; see that script's header.
+tools/lint-gh-annotate.sh error "$workdir/report"
 findings=$(grep -c . "$workdir/report")
 
 if [ "$findings" -eq 0 ]; then

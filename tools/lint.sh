@@ -194,7 +194,8 @@ fi
 findings=0
 note() { printf '%s\n' "$*"; }
 
-# show_findings FILE -- print the findings a stage has just counted.
+# show_findings FILE [SEVERITY] -- print the findings a stage has just
+# counted.
 #
 # A count is not something anyone can act on.  These logs are written
 # under obj/lint/, which is a build directory: in CI it lives inside the
@@ -210,6 +211,16 @@ note() { printf '%s\n' "$*"; }
 # of lines and burying the summary underneath them is its own failure
 # mode: the first $LINT_SHOW, then how many were elided and the path that
 # still holds all of them.
+#
+# SEVERITY ("error", the default, or "warning") is passed straight to
+# tools/lint-gh-annotate.sh, which turns FILE into GitHub Actions
+# `::error`/`::warning` workflow-command lines -- inline annotations on
+# the PR diff -- for whichever lines are shaped like a finding.  That
+# script is a no-op unless GITHUB_ACTIONS=true, so this adds nothing to
+# a local run's output: see its header for why the gate belongs there,
+# not here, and why every one of the ~20 call sites below funnels
+# through this one function instead of each deciding for itself whether
+# it is allowed to print a workflow command.
 : "${LINT_SHOW:=40}"
 show_findings() {
 	[ -s "$1" ] || return 0
@@ -217,6 +228,7 @@ show_findings() {
 	_tot=$(grep -c . "$1" || true)
 	[ "$_tot" -le "$LINT_SHOW" ] ||
 		note "    ... and $((_tot - LINT_SHOW)) more, all of them in $1"
+	tools/lint-gh-annotate.sh "${2:-error}" "$1"
 }
 hdr() { printf '\n=== %s ===\n' "$*"; }
 
@@ -498,7 +510,7 @@ stage_warn() {
 			n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 				| tee "$out.uniq" | wc -l)
 			note "$cc [$arch]: $nsrc file(s), $n unique diagnostic(s) -> $out.uniq"
-			show_findings "$out.uniq"
+			show_findings "$out.uniq" warning
 			[ "$n" -gt 0 ] && any=1
 		done
 	done
@@ -685,7 +697,7 @@ stage_analyze() {
 		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 			| tee "$out.uniq" | wc -l)
 		note "analyzer [$arch]: $nsrc file(s), $n unique finding(s) -> $out.uniq"
-		show_findings "$out.uniq"
+		show_findings "$out.uniq" warning
 		[ "$n" -gt 0 ] && any=1
 	done
 	if [ "$analyzed" -eq 0 ] && [ "$LINT_ALLOW_MISSING" != 1 ]; then
@@ -728,7 +740,7 @@ stage_cppcheck() {
 			$(sources_for "$arch") > "$out" 2>&1
 		n=$(grep -c . "$out")
 		note "cppcheck [$arch]: $n line(s) -> $out"
-		show_findings "$out"
+		show_findings "$out" warning
 		[ "$n" -gt 0 ] && any=1
 	done
 	return $any
@@ -749,6 +761,23 @@ stage_shell() {
 	n=$(grep -cE '^In .* line [0-9]+:' "$out")
 	note "shellcheck: $n finding(s) -> $out"
 	show_findings "$out"
+	# show_findings above never emits a GitHub annotation for $out: the
+	# human ("tty") format shellcheck defaults to -- which is what makes
+	# it worth reading at a terminal -- has no "path:line[:col]:" prefix
+	# tools/lint-gh-annotate.sh can parse (a bare "In FILE line N:"
+	# header, then a source-context line, then an indented caret line).
+	# Rather than teach the shared parser that one tool's multi-line
+	# shape, ask shellcheck itself for the same findings a second time,
+	# in its machine-readable `-f gcc` output -- cheap, since it is the
+	# same files and shellcheck is not the slow part of this stage --
+	# purely to drive annotations.  Gated on GITHUB_ACTIONS directly
+	# (matching tools/lint-gh-annotate.sh's own gate) so a local run
+	# never pays for or sees this second pass at all.
+	if [ "${GITHUB_ACTIONS:-}" = true ]; then
+		gccout=$builddir/shellcheck.gcc.log
+		shellcheck -f gcc configure .githooks/pre-commit tools/*.sh > "$gccout" 2>&1
+		tools/lint-gh-annotate.sh warning "$gccout"
+	fi
 	[ "$rc" -eq 0 ] && return 0
 	return 1
 }
@@ -756,7 +785,21 @@ stage_shell() {
 stage_sizearith() {
 	hdr "checked size arithmetic, integer casts, indices, and tagged results"
 	any=0
-	tools/lint-sizearith.py || any=1
+	mkdir -p "$builddir"
+	# Captured to a file, then cat -- not run bare -- purely so the same
+	# real findings this already printed can also reach
+	# tools/lint-gh-annotate.sh: unlike every stage_* above, this driver
+	# scans the whole tree itself and prints straight to this stage's
+	# stdout, with no intermediate log file show_findings could read.
+	# The capture-then-cat prints the identical bytes in the identical
+	# place a plain local run always has, so this changes nothing a
+	# person at a terminal sees.
+	out=$builddir/sizearith.report
+	tools/lint-sizearith.py > "$out" 2>&1
+	rc=$?
+	cat "$out"
+	[ "$rc" -eq 0 ] || any=1
+	tools/lint-gh-annotate.sh error "$out"
 
 	require_tool clang-18 || return $missing
 	require_tool clang++-18 || return $missing
@@ -839,13 +882,34 @@ stage_sizearith() {
 		note "cast analyzer: FAILED -- no architecture was analyzed."
 		return 1
 	fi
+	# Same capture-then-cat-then-annotate shape as tools/lint-sizearith.py
+	# above, and for the same reason: these three drivers print real
+	# per-file findings straight to this stage's stdout, with no log
+	# show_findings could read on their behalf.
 	# The logs are intentionally word-split: one argument per architecture.
+	cast_report=$builddir/cast-range.report
 	# shellcheck disable=SC2086
-	tools/lint-cast-range.py --fixtures "$fixture_log" $cast_logs || any=1
+	tools/lint-cast-range.py --fixtures "$fixture_log" $cast_logs > "$cast_report" 2>&1
+	rc=$?
+	cat "$cast_report"
+	[ "$rc" -eq 0 ] || any=1
+	tools/lint-gh-annotate.sh error "$cast_report"
+
+	array_report=$builddir/array-index.report
 	# shellcheck disable=SC2086
-	tools/lint-array-index.py --fixtures "$array_fixture_log" $cast_logs || any=1
+	tools/lint-array-index.py --fixtures "$array_fixture_log" $cast_logs > "$array_report" 2>&1
+	rc=$?
+	cat "$array_report"
+	[ "$rc" -eq 0 ] || any=1
+	tools/lint-gh-annotate.sh error "$array_report"
+
+	tagged_report=$builddir/tagged-result.report
 	# shellcheck disable=SC2086
-	tools/lint-tagged-result.py --fixtures "$tagged_fixture_log" $cast_logs || any=1
+	tools/lint-tagged-result.py --fixtures "$tagged_fixture_log" $cast_logs > "$tagged_report" 2>&1
+	rc=$?
+	cat "$tagged_report"
+	[ "$rc" -eq 0 ] || any=1
+	tools/lint-gh-annotate.sh error "$tagged_report"
 	return $any
 }
 
@@ -1448,7 +1512,7 @@ stage_lockset() {
 		n=$(grep -E '(warning|error):' "$out" | sed 's/^ *//' | sort -u \
 			| tee "$out.uniq" | wc -l)
 		note "lockset [$arch]: $nsrc file(s), $n unique diagnostic(s) -> $out.uniq"
-		show_findings "$out.uniq"
+		show_findings "$out.uniq" warning
 		[ "$n" -gt 0 ] && any=1
 	done
 	[ "$analyzed" -gt 0 ] || return 1
