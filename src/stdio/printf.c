@@ -135,6 +135,12 @@ struct sink {
 	mbstate_t ost;
 };
 
+/* sk is required by every function in this file that takes one: each
+ * dereferences it unconditionally, first statement in most cases
+ * (`sk->bad`/`sk->count` below), the caller's own struct sink on the
+ * stack (vfprintf_st's own `struct sink sink, *sk = &sink;`), never a
+ * value that could legitimately be null. */
+static int count_fits(struct sink *sk, size_t n) __attribute__((nonnull(1)));
 static int count_fits(struct sink *sk, size_t n)
 {
 	if (n <= (size_t)(INT_MAX - sk->count)) return 1;
@@ -155,6 +161,7 @@ static int count_fits(struct sink *sk, size_t n)
  *
  * A short write is a real error unless f is a fixed memory buffer
  * (sprintf/snprintf), in which case it is just truncation. */
+static void out(struct sink *sk, const char *s, size_t n) __attribute__((nonnull(1)));
 static void out(struct sink *sk, const char *s, size_t n)
 {
 	if (sk->bad) return;
@@ -178,6 +185,7 @@ static void out(struct sink *sk, const char *s, size_t n)
 	sk->count += (long)n;
 }
 
+static void pad(struct sink *sk, char c, size_t n) __attribute__((nonnull(1)));
 static void pad(struct sink *sk, char c, size_t n)
 {
 	char buf[16];
@@ -220,6 +228,7 @@ static void pad(struct sink *sk, char c, size_t n)
  * the high surrogate -- accepted, nothing written -- holding it until
  * the low one arrives.  The count still advances, because what is
  * counted is wide characters. */
+static void out_units(struct sink *sk, const wchar_t *w, size_t n) __attribute__((nonnull(1)));
 static void out_units(struct sink *sk, const wchar_t *w, size_t n)
 {
 	if (sk->bad) return;
@@ -274,6 +283,10 @@ static void out_units(struct sink *sk, const wchar_t *w, size_t n)
  * because a string argument has no bound -- the same reason nothing
  * here is ever sized from a caller's precision (see PREC_MAX).
  * ------------------------------------------------------------------ */
+/* arg is required too: every one of the four branches below
+ * dereferences it, whichever is taken (strlen(s), w[n], *w, or *s). */
+static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit)
+    __attribute__((nonnull(1, 2)));
 static long str_arg(struct sink *sk, const void *arg, int wide_arg, int prec, int emit)
 {
 	mbstate_t st;
@@ -620,6 +633,8 @@ static void out_body(struct sink *sk, const char *body, int n, int zpos, long ze
 }
 
 static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, int flags, int width)
+    __attribute__((nonnull(1)));
+static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, int flags, int width)
 {
 	char body[BODYMAX];
 	struct dec D;
@@ -787,6 +802,16 @@ union varg {
 	void *p;
 };
 
+/* a is written unconditionally on every path through the switch below,
+ * including the default (A_NONE) case (`a->i = 0`); ap is dereferenced
+ * by every case except that same A_NONE default, but at every real
+ * call site in this file ap is the address of a local va_list (`&aq`)
+ * or a parameter that is itself always one (build_argtab's own ap,
+ * below), never a value that could legitimately be null -- the same
+ * "no legitimate NULL value" reasoning as dirent's __dirstream_next()
+ * out parameter (src/dirent/dirent_internal.h). */
+static void pop_arg(union varg *a, int type, va_list *ap)
+    __attribute__((nonnull(1, 3)));
 static void pop_arg(union varg *a, int type, va_list *ap)
 {
 	switch (type) {
@@ -881,6 +906,10 @@ struct spec {
  * The accumulator stops once it is past NL_ARGMAX: the value is only
  * ever compared against that bound, and accumulating an arbitrarily
  * long digit run unclamped is signed overflow. */
+/* fp is dereferenced unconditionally via gf(fp, st) (the very next
+ * statement after *n = 0); n is written unconditionally, first
+ * statement. */
+static const char *scan_argno(const char *fp, int st, int *n) __attribute__((nonnull(1, 3)));
 static const char *scan_argno(const char *fp, int st, int *n)
 {
 	const char *q = fp;
@@ -909,6 +938,10 @@ static const char *scan_argno(const char *fp, int st, int *n)
  * fetched for a conversion.  The cost is one call per DIRECTIVE, which
  * is not the cost gf() above was made a macro to avoid -- that one was
  * a call per format CHARACTER. */
+/* sp is written unconditionally, first statement (`sp->flags = 0;`);
+ * fp is dereferenced unconditionally too, right after those
+ * initializations (`gf(fp, st)`). */
+static const char *parse_spec(const char *fp, int st, struct spec *sp) __attribute__((nonnull(1, 3)));
 static const char *parse_spec(const char *fp, int st, struct spec *sp)
 {
 	int n;
@@ -1019,6 +1052,15 @@ static const char *parse_spec(const char *fp, int st, struct spec *sp)
  * things are refused -- mixing the two forms ("but not both") and an
  * index outside [1,{NL_ARGMAX}] -- and a gap in the numbering is not
  * one of them; see the end of this function for why. */
+/* fmt is dereferenced unconditionally via gf(fp, st) in the main loop
+ * condition; tab and ap are only actually touched once max > 0 (a
+ * format with at least one argument-consuming specification), but at
+ * this file's one real call site both are the address of a real local
+ * (`argv`, a fixed-size array that always decays to a non-null
+ * address; `&aq`) -- never a value a caller could legitimately pass as
+ * null, the same reasoning as pop_arg's own ap above. */
+static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
+    __attribute__((nonnull(1, 3, 4)));
 static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 {
 	unsigned char types[NL_ARGMAX + 1];
@@ -1105,6 +1147,11 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 	else pop_arg(&(dst), (ty), &aq); \
 } while (0)
 
+/* f is dereferenced unconditionally (`sink.widemem = sink.wide &&
+ * f->wmem;`); fmt is dereferenced unconditionally by the main loop's
+ * own gf(fp, st). ap is a va_list BY VALUE, not a pointer this
+ * attribute can describe. */
+static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st) __attribute__((nonnull(1, 2)));
 static int vfprintf_st(FILE *f, const char *fmt, va_list ap, int st)
 {
 	struct sink sink, *sk = &sink;
@@ -1449,6 +1496,18 @@ int __vfprintf(FILE *f, const char *fmt, va_list ap)
 /* sprintf/snprintf/vsprintf/vsnprintf share this: a throwaway FILE that
  * is a fixed (or, for plain sprintf, unbounded) memory buffer exactly
  * as __file_write already knows how to fill. */
+/* fmt is required (forwarded into __vfprintf() unconditionally, which
+ * itself requires it). s is deliberately NOT required: vasprintf()
+ * below calls this with s == 0, cap == 0 to measure a format's length
+ * without writing anything, mirroring vsnprintf(s, 0, ...)'s own
+ * POSIX-documented "s may be a null pointer when n (here, cap) is
+ * zero" convention (fprintf.html/snprintf) -- unlike the mem-family/
+ * str-n family's own "still valid even at n == 0" ISO convention, this
+ * family's own description explicitly carves out the opposite
+ * exception, which is exactly the "unless explicitly stated otherwise"
+ * escape ISO C 7.21.1p2 itself anticipates. Marking s here would be a
+ * false claim about a real, load-bearing caller. */
+static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap) __attribute__((nonnull(3)));
 static int vxprintf_mem(char *s, size_t cap, const char *fmt, va_list ap)
 {
 	FILE mf;
@@ -1634,6 +1693,16 @@ int __vfwprintf(FILE *f, const wchar_t *fmt, va_list ap)
  * compared against n afterwards, and overflow becomes -1/[EOVERFLOW]
  * rather than a length.  One wide character is reserved for the
  * terminating null, which is why the test is `>= n` and not `> n`. */
+/* Unlike vxprintf_mem's own s above, swprintf() has no "just measure"
+ * calling convention to make s optional: `if (!n) { errno = EOVERFLOW;
+ * return -1; }` treats n == 0 as a real error, not a documented
+ * "s may be null" case (swprintf.html has no would-have-been-length to
+ * report, so there is no snprintf(s, 0, ...)-style idiom for it -- see
+ * this function's own comment above). s is written unconditionally
+ * (`s[mf.mem_len / sizeof(wchar_t)] = 0;`) on every path that is not
+ * that n == 0 error; fmt is forwarded into vfprintf_st() the same way. */
+static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
+    __attribute__((nonnull(1, 3)));
 static int vswprintf_impl(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap)
 {
 	FILE mf;

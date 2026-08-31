@@ -65,6 +65,8 @@ static int class_match(const char *name, size_t len, unsigned char c)
  * where the same input is an error -- test_regex_bracket_edges()
  * asserts REG_EBRACK for regcomp("[abc").  The two pattern languages
  * are not the same language and this is one of the places they part. */
+/* pp is dereferenced unconditionally, first statement (`*pp + 1`). */
+static int bracket_match(const char **pp, unsigned char c) __attribute__((nonnull(1)));
 static int bracket_match(const char **pp, unsigned char c)
 {
 	const char *p = *pp + 1;
@@ -122,6 +124,13 @@ static int bracket_match(const char **pp, unsigned char c)
 	return neg ? !matched : matched;
 }
 
+/* s is required: `s[-1]` (reached whenever s != start and
+ * FNM_PATHNAME is set) is the only real dereference in this function,
+ * and there is no documented "s may be invalid" case. start is
+ * deliberately NOT marked -- it is only ever compared by pointer
+ * equality (`s == start`), never dereferenced anywhere in this
+ * function's own body. */
+static int leading(const char *start, const char *s, int flags) __attribute__((nonnull(2)));
 static int leading(const char *start, const char *s, int flags)
 {
 	if (s == start) return 1;
@@ -129,6 +138,16 @@ static int leading(const char *start, const char *s, int flags)
 	return 0;
 }
 
+/* pat is dereferenced unconditionally by the main loop's own `while
+ * (*pat)`; s is required too -- every path through this function
+ * dereferences it somewhere, whether inside the loop (`*pat != *s`,
+ * the first comparison an empty-pattern-free call reaches) or, for an
+ * already-empty pattern, the final `return *s ? ... : 0;`. start is
+ * left unmarked, the same "only ever compared, never dereferenced"
+ * reasoning as leading() above (it is forwarded into leading() itself,
+ * which only compares it too). */
+static int fnm_match(const char *pat, const char *s, const char *start, int flags)
+    __attribute__((nonnull(1, 2)));
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)
 {
 	while (*pat) {

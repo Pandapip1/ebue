@@ -145,6 +145,12 @@ static void sc_init(struct sc *sc, FILE *f, int wide)
  * counts under fwscanf.html, and in each mode a unit is the right thing.
  * That falls out of counting here rather than being special-cased at
  * ~15 call sites. */
+/* sc is required by every function below that takes one: each
+ * dereferences it unconditionally, first statement in most cases, the
+ * caller's own struct sc on the stack (vfscanf_st's own `struct sc
+ * sc; sc_init(&sc, f, ...);`), never a value that could legitimately
+ * be null. */
+static int rd(struct sc *sc) __attribute__((nonnull(1)));
 static int rd(struct sc *sc)
 {
 	int c;
@@ -175,6 +181,7 @@ static int rd(struct sc *sc)
 	}
 }
 
+static void unrd(struct sc *sc, int c) __attribute__((nonnull(1)));
 static void unrd(struct sc *sc, int c)
 {
 	if (c == EOF) return;
@@ -209,6 +216,7 @@ static void unrd(struct sc *sc, int c)
 /* Hand back whatever look-ahead the stream's own pushback could not
  * take, and drop the stack.  A stream that cannot seek cannot be given
  * it back at all, which is the pre-existing cost of over-reading. */
+static void sc_done(struct sc *sc) __attribute__((nonnull(1)));
 static void sc_done(struct sc *sc)
 {
 	if (sc->npb) {
@@ -237,6 +245,10 @@ static int skipspace(struct sc *sc)
 	return c;
 }
 
+/* b is required by every nbuf/abuf function below the same way sc is
+ * above: unconditional first-statement dereference, always a real
+ * local's address at every call site. */
+static void nb_init(struct nbuf *b) __attribute__((nonnull(1)));
 static void nb_init(struct nbuf *b)
 {
 	b->p = b->init;
@@ -245,6 +257,7 @@ static void nb_init(struct nbuf *b)
 	b->oom = 0;
 }
 
+static void nb_done(struct nbuf *b) __attribute__((nonnull(1)));
 static void nb_done(struct nbuf *b)
 {
 	if (b->p != b->init) free(b->p);
@@ -254,6 +267,7 @@ static void nb_done(struct nbuf *b)
 
 /* Append one character, keeping room for the terminator.  0 (and a
  * sticky oom) if the field cannot be staged. */
+static int nb_put(struct nbuf *b, int c) __attribute__((nonnull(1)));
 static int nb_put(struct nbuf *b, int c)
 {
 	if (b->len + 1 >= b->cap) {
@@ -272,6 +286,7 @@ static int nb_put(struct nbuf *b, int c)
 	return 1;
 }
 
+static void ab_init(struct abuf *b, int esz) __attribute__((nonnull(1)));
 static void ab_init(struct abuf *b, int esz)
 {
 	b->p = 0;
@@ -283,6 +298,7 @@ static void ab_init(struct abuf *b, int esz)
  * from an 'm' conversion that is not a success goes through here, which
  * is what keeps a matching failure or an [EILSEQ] from leaking the part
  * of the field that had already been built. */
+static void ab_free(struct abuf *b) __attribute__((nonnull(1)));
 static void ab_free(struct abuf *b)
 {
 	free(b->p);
@@ -296,6 +312,7 @@ static void ab_free(struct abuf *b)
  * three bytes.  0 is out of memory, which the caller turns into
  * [ENOMEM] -- including the two overflow guards, since a size this
  * arithmetic cannot even express is a size no allocator can serve. */
+static int ab_room(struct abuf *b, int need) __attribute__((nonnull(1)));
 static int ab_room(struct abuf *b, int need)
 {
 	void *q;
@@ -327,6 +344,11 @@ static int ab_room(struct abuf *b, int need)
  * fetch their argument as a bare void *: it is char ** without the l
  * qualifier and wchar_t ** with it, and every object pointer has one
  * representation on this target. */
+/* arg is required too: `*(void **)arg = b->p;` is unconditional, the
+ * caller's own now-validated destination pointer (never null -- every
+ * conversion that reaches here has already checked its own argument
+ * before calling ab_give()). */
+static void ab_give(struct abuf *b, void *arg, int n) __attribute__((nonnull(1, 2)));
 static void ab_give(struct abuf *b, void *arg, int n)
 {
 	void *q = realloc(b->p, (size_t)(n > 0 ? n : 1) * (size_t)b->esz);
@@ -336,6 +358,10 @@ static void ab_give(struct abuf *b, void *arg, int n)
 	b->cap = 0;
 }
 
+/* fl is required by both functions below the same way: unconditional
+ * first-statement dereference, always the address of a real local
+ * `struct fld fl;` at every call site in vfscanf_st(). */
+static int fld_get(struct fld *fl) __attribute__((nonnull(1)));
 static int fld_get(struct fld *fl)
 {
 	int c;
@@ -345,6 +371,7 @@ static int fld_get(struct fld *fl)
 	return c;
 }
 
+static void fld_unget(struct fld *fl, int c) __attribute__((nonnull(1)));
 static void fld_unget(struct fld *fl, int c)
 {
 	if (c == EOF) return;
@@ -408,6 +435,12 @@ static int scannan(struct fld *fl, struct nbuf *b, int c)
  * nothing about the value, and a field of a hundred of them should not
  * cost a hundred bytes.  Returns the terminating character in *cp, 0 if
  * there was no digit at all, -1 out of memory. */
+/* cp is required (`int c = *cp;`, unconditional first statement); fl
+ * and b are only actually touched once the loop runs past its first
+ * `break` (a real, content-driven escape on what *cp holds, not a
+ * documented "may be null" convention on either), so they are left to
+ * a future pass rather than guessed at here. */
+static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp) __attribute__((nonnull(4)));
 static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp)
 {
 	int c = *cp, any = 0, dot = 0, lead = 1, nd = 0;
@@ -438,6 +471,12 @@ static int scandigits(struct fld *fl, struct nbuf *b, int base, int *cp)
  * consumed and makes the item as a whole a matching failure.  1 for a
  * complete exponent, 0 for a half-written one, -1 out of memory; the
  * terminating character comes back in *cp. */
+/* cp is required (`int c = *cp;`, unconditional first statement) and
+ * b is required too: `if (!nb_put(b, c)) return -1;` right after is
+ * unconditional, unlike scandigits() above where the equivalent call
+ * is behind a real content-driven branch. fl is left unmarked -- it is
+ * only touched once past that first nb_put(), inside fld_get(). */
+static int scanexp(struct fld *fl, struct nbuf *b, int *cp) __attribute__((nonnull(2, 3)));
 static int scanexp(struct fld *fl, struct nbuf *b, int *cp)
 {
 	int c = *cp, ok = 0;
@@ -645,6 +684,16 @@ static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
  * caller keeps that separately.
  *
  * Returns 0, or -1 for an encoding error ([EILSEQ]). */
+/* nn is dereferenced unconditionally on every path (`(*nn)++;` /
+ * `*nn += (int)r;`, one or the other in every branch). dst is
+ * deliberately NOT required: every store through it is behind `if
+ * (assign)`, and assign == 0 is a real, POSIX-documented calling
+ * convention (fscanf.html's own '*' assignment-suppression conversion
+ * -- "no corresponding argument shall be supplied"), not an omitted
+ * check; mbs is likewise only reached on the branches that actually
+ * convert, not on every path. */
+static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
+                      int assign, int wide_out) __attribute__((nonnull(4)));
 static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
                       int assign, int wide_out)
 {
@@ -685,6 +734,10 @@ static int store_unit(int wide_in, int c, void *dst, int *nn, mbstate_t *mbs,
 
 /* The null that terminates %s and %[ (never %c), in the width the
  * destination actually has. */
+/* Unlike store_unit() above, dst here is dereferenced unconditionally
+ * -- both branches of `if (wide_out) ... else ...` write through it,
+ * with no `assign`-style guard on either. */
+static void store_term(void *dst, int nn, int wide_out) __attribute__((nonnull(1)));
 static void store_term(void *dst, int nn, int wide_out)
 {
 	if (wide_out) ((wchar_t *)dst)[nn] = 0;
@@ -710,6 +763,11 @@ static void store_term(void *dst, int nn, int wide_out)
  * arriving as two independent parameters share an object, an
  * invariant only true because of how the one caller happens to
  * construct them. */
+/* b is required: `e = b + blen;` needs a real pointer value even when
+ * blen == 0 (the same ISO 7.24.1p2 "still valid at n == 0" convention
+ * as the mem-family, since q == b is what the loop's own gf(q, st)
+ * would dereference first were blen nonzero). */
+static int wset_has(const char *b, size_t blen, int st, unsigned c) __attribute__((nonnull(1)));
 static int wset_has(const char *b, size_t blen, int st, unsigned c)
 {
 	const char *q, *e = b + blen;
@@ -726,6 +784,12 @@ static int wset_has(const char *b, size_t blen, int st, unsigned c)
 	return 0;
 }
 
+/* fmt is dereferenced unconditionally by the main loop's own gf(fp,
+ * st). f is left unmarked here: this function only ever stores it
+ * into sc.f via sc_init() without dereferencing it directly itself --
+ * every real dereference of it happens inside rd()/unrd(), a
+ * different function's own proven obligation. */
+static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st) __attribute__((nonnull(2)));
 static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 {
 	int nmatched = 0, gotEOF = 0, ilseq = 0, oom = 0;
@@ -1104,6 +1168,9 @@ int vscanf(const char *__restrict fmt, __isoc_va_list ap)
 	return __vfscanf(stdin, fmt, ap);
 }
 
+/* s is dereferenced unconditionally (`mf.mem_len = strlen(s);`); fmt
+ * is forwarded into __vfscanf(), which itself requires it. */
+static int vsscanf_impl(const char *s, const char *fmt, va_list ap) __attribute__((nonnull(1, 2)));
 static int vsscanf_impl(const char *s, const char *fmt, va_list ap)
 {
 	FILE mf;
@@ -1176,6 +1243,9 @@ int __vfwscanf(FILE *f, const wchar_t *fmt, va_list ap)
  * and the same objection that ruled it out for wcstod() applies here.
  * The cast away from const is safe for the same reason fmemopen()'s
  * read-only mode is: mf.writable is 0, so nothing can reach a write. */
+/* s is dereferenced unconditionally (`mf.mem_len = wcslen(s) * ...`);
+ * fmt is forwarded into vfscanf_st(), which itself requires it. */
+static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap) __attribute__((nonnull(1, 2)));
 static int vswscanf_impl(const wchar_t *s, const wchar_t *fmt, va_list ap)
 {
 	FILE mf;

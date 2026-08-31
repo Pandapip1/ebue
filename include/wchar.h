@@ -33,34 +33,88 @@ extern "C" {
 #define WCHAR_MIN 0
 #define WCHAR_MAX 0xffff
 
-wchar_t *wcscpy (wchar_t *__restrict, const wchar_t *__restrict);
-wchar_t *wcsncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
+/* This whole family mirrors this directory's own str-family/mem-family
+ * .c bodies one for one (several of the .c files above say so explicitly), so the
+ * same per-function reasoning given there applies here; only the
+ * wchar_t-specific escapes are called out again below. wcscat/wcsrchr/
+ * wcsnlen/wcsdup/wmemcpy/wmemmove were never flagged by this tree's own
+ * ownership sweep (wcsrchr's own finding is a bounds/extent proof, not
+ * a nullness one) -- left unmarked for a future, separately-verified
+ * pass rather than guessed at here. */
+/* wcscpy dereferences d and s together, unconditionally, in its own
+ * loop condition (`(*d++ = *s++)`, evaluated at least once). */
+wchar_t *wcscpy (wchar_t *__restrict, const wchar_t *__restrict) __attribute__((nonnull(1, 2)));
+/* wcsncpy's `while (n && *s) ...` short-circuits s on n, and d is only
+ * written inside that same loop body -- but wmemset(d, 0, n) always
+ * runs afterward, unconditionally, and (like wmemset's own n == 0
+ * escape below) dereferences d whenever n >= 1; s is dereferenced by
+ * the loop's own condition on that same n >= 1 path. Both required,
+ * matching mem*'s n == 0 convention, not a genuine escape. */
+wchar_t *wcsncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t) __attribute__((nonnull(1, 2)));
 wchar_t *wcscat (wchar_t *__restrict, const wchar_t *__restrict);
-wchar_t *wcsncat (wchar_t *__restrict, const wchar_t *__restrict, size_t);
-int wcscmp (const wchar_t *, const wchar_t *);
-int wcsncmp (const wchar_t *, const wchar_t *, size_t);
-wchar_t *wcschr (const wchar_t *, wchar_t);
+/* wcsncat's d is required (`d += wcslen(d);` dereferences it via
+ * wcslen() unconditionally, first statement); s is required the same
+ * n == 0 convention as strncat's s above. */
+wchar_t *wcsncat (wchar_t *__restrict, const wchar_t *__restrict, size_t) __attribute__((nonnull(1, 2)));
+/* wcscmp: `*l == *r && *l` evaluates both sides of `==` every time,
+ * same as strcmp -- no short circuit that could skip either. */
+int wcscmp (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+/* wcsncmp's loop condition (`n && *l == *r && *l`) short-circuits
+ * everything on n, and unlike strncmp there is no unconditional
+ * post-loop dereference to fall back on (`return n ? ... : 0;`) -- so
+ * this is the same real "n == 0 means neither pointer is ever
+ * touched" convention as mem*'s own family (matching glibc's real
+ * wcsncmp nonnull(1, 2), not a genuine "may be invalid" reading). */
+int wcsncmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2)));
+/* wcschr forwards straight into its own loop (`for (; *s && *s != c;
+ * s++)`), dereferencing s at least once regardless of c; c is a
+ * wchar_t value, not a pointer. */
+wchar_t *wcschr (const wchar_t *, wchar_t) __attribute__((nonnull(1)));
 wchar_t *wcsrchr (const wchar_t *, wchar_t);
-wchar_t *wcsstr (const wchar_t *, const wchar_t *);
-size_t wcslen (const wchar_t *);
+/* wcsstr requires n (`if (!n[0]) ...` dereferences it first) and h:
+ * `h = wcschr(h, *n)` is reached whenever n[0] != 0, and wcschr always
+ * dereferences its first argument once c is known nonzero. */
+wchar_t *wcsstr (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+size_t wcslen (const wchar_t *) __attribute__((nonnull(1)));
 wchar_t *wmemcpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
 wchar_t *wmemmove (wchar_t *, const wchar_t *, size_t);
-wchar_t *wmemset (wchar_t *, wchar_t, size_t);
-int wmemcmp (const wchar_t *, const wchar_t *, size_t);
-wchar_t *wmemchr (const wchar_t *, wchar_t, size_t);
+/* Same n == 0 escape as mem*'s own family (glibc: wmemset nonnull(1)). */
+wchar_t *wmemset (wchar_t *, wchar_t, size_t) __attribute__((nonnull(1)));
+int wmemcmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2)));
+wchar_t *wmemchr (const wchar_t *, wchar_t, size_t) __attribute__((nonnull(1)));
 
 size_t wcsnlen (const wchar_t *, size_t);
 wchar_t *wcsdup (const wchar_t *);
-wchar_t *wcpcpy (wchar_t *__restrict, const wchar_t *__restrict);
-wchar_t *wcpncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
-wchar_t *wcspbrk (const wchar_t *, const wchar_t *);
-size_t wcsspn (const wchar_t *, const wchar_t *);
-size_t wcscspn (const wchar_t *, const wchar_t *);
-wchar_t *wcstok (wchar_t *__restrict, const wchar_t *__restrict, wchar_t **__restrict);
-int wcscasecmp (const wchar_t *, const wchar_t *);
-int wcsncasecmp (const wchar_t *, const wchar_t *, size_t);
-int wcscasecmp_l (const wchar_t *, const wchar_t *, locale_t);
-int wcsncasecmp_l (const wchar_t *, const wchar_t *, size_t, locale_t);
+/* wcpcpy/wcpncpy dereference d/s the same unconditional way as
+ * stpcpy/stpncpy above (their own header comment applies verbatim;
+ * these two are a literal transliteration of those two). */
+wchar_t *wcpcpy (wchar_t *__restrict, const wchar_t *__restrict) __attribute__((nonnull(1, 2)));
+wchar_t *wcpncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t) __attribute__((nonnull(1, 2)));
+/* wcsspn/wcscspn's own loop condition (`*s && inset(set, *s)`) tests
+ * s's CONTENT via `*s`, not set's nullness -- the short circuit that
+ * skips inset(), and so set, when s is empty is the same "incidentally
+ * unreached, not a documented convention" shape as strspn's own c[0]
+ * escape above, not a real "set may be invalid" contract. Both s and
+ * set are required (matching glibc's real wcsspn/wcscspn, both
+ * nonnull(1, 2)); wcspbrk forwards straight into wcscspn(s, set) with
+ * no check of its own, inheriting the same requirement on both. */
+wchar_t *wcspbrk (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+size_t wcsspn (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+size_t wcscspn (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+/* wcstok's s is optional, the same "resume from *p" convention as
+ * strtok_r's s (see string.h); sep and p are both required the same
+ * way strtok_r's are. */
+wchar_t *wcstok (wchar_t *__restrict, const wchar_t *__restrict, wchar_t **__restrict) __attribute__((nonnull(2, 3)));
+/* wcscasecmp/wcsncasecmp mirror strcasecmp/strncasecmp's own reasoning
+ * exactly (unconditional post-loop `return towlower(*l) -
+ * towlower(*r);`, with wcsncasecmp's `if (!n) return 0;` the only real
+ * escape). wcscasecmp_l/wcsncasecmp_l forward to them unconditionally,
+ * ignoring their own locale_t (same ASCII-only C/POSIX reasoning as
+ * strcasecmp_l above). */
+int wcscasecmp (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+int wcsncasecmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2)));
+int wcscasecmp_l (const wchar_t *, const wchar_t *, locale_t) __attribute__((nonnull(1, 2)));
+int wcsncasecmp_l (const wchar_t *, const wchar_t *, size_t, locale_t) __attribute__((nonnull(1, 2)));
 
 wint_t btowc (int);
 int wctob (wint_t);
@@ -73,30 +127,46 @@ size_t wcsrtombs (char *__restrict, const wchar_t **__restrict, size_t, mbstate_
 size_t mbsnrtowcs (wchar_t *__restrict, const char **__restrict, size_t, size_t, mbstate_t *__restrict);
 size_t wcsnrtombs (char *__restrict, const wchar_t **__restrict, size_t, size_t, mbstate_t *__restrict);
 
-wint_t fgetwc (FILE *);
-wchar_t *fgetws (wchar_t *__restrict, int, FILE *__restrict);
-wint_t fputwc (wchar_t, FILE *);
-int fputws (const wchar_t *__restrict, FILE *__restrict);
-int fwide (FILE *, int);
-wint_t getwc (FILE *);
+/* Every FILE * in this whole wide family (src/stdio/wide.c) is
+ * dereferenced unconditionally, the same "not the callee's job to
+ * validate" contract as the byte-level stdio family (see
+ * include/stdio.h's own comment). fgetws requires ws too (`*p = 0;`
+ * unconditional on every path that is not the same n <= 0 escape
+ * fgets' own s has); fputws requires ws the same way (`for (; *ws;
+ * ws++)`, evaluated at least once). */
+wint_t fgetwc (FILE *) __attribute__((nonnull(1)));
+wchar_t *fgetws (wchar_t *__restrict, int, FILE *__restrict) __attribute__((nonnull(1, 3)));
+wint_t fputwc (wchar_t, FILE *) __attribute__((nonnull(2)));
+int fputws (const wchar_t *__restrict, FILE *__restrict) __attribute__((nonnull(1, 2)));
+int fwide (FILE *, int) __attribute__((nonnull(1)));
+wint_t getwc (FILE *) __attribute__((nonnull(1)));
 wint_t getwchar (void);
-wint_t putwc (wchar_t, FILE *);
+wint_t putwc (wchar_t, FILE *) __attribute__((nonnull(2)));
 wint_t putwchar (wchar_t);
-wint_t ungetwc (wint_t, FILE *);
+/* ungetwc's f is dereferenced via `!f->readable`, a content check, not
+ * a check of f's own nullness (same shape as ungetc above). */
+wint_t ungetwc (wint_t, FILE *) __attribute__((nonnull(2)));
 FILE *open_wmemstream (wchar_t **, size_t *);
 
-int fwprintf (FILE *__restrict, const wchar_t *__restrict, ...);
-int swprintf (wchar_t *__restrict, size_t, const wchar_t *__restrict, ...);
-int wprintf (const wchar_t *__restrict, ...);
-int vfwprintf (FILE *__restrict, const wchar_t *__restrict, __isoc_va_list);
-int vswprintf (wchar_t *__restrict, size_t, const wchar_t *__restrict, __isoc_va_list);
-int vwprintf (const wchar_t *__restrict, __isoc_va_list);
-int fwscanf (FILE *__restrict, const wchar_t *__restrict, ...);
-int swscanf (const wchar_t *__restrict, const wchar_t *__restrict, ...);
-int wscanf (const wchar_t *__restrict, ...);
-int vfwscanf (FILE *__restrict, const wchar_t *__restrict, __isoc_va_list);
-int vswscanf (const wchar_t *__restrict, const wchar_t *__restrict, __isoc_va_list);
-int vwscanf (const wchar_t *__restrict, __isoc_va_list);
+/* fmt/f are required the same way as the byte printf family
+ * (include/stdio.h's own comment); swprintf/vswprintf's s is required
+ * too, unlike snprintf's -- see src/stdio/printf.c's vswprintf_impl()
+ * comment for why swprintf has no "just measure" convention to make it
+ * optional. */
+int fwprintf (FILE *__restrict, const wchar_t *__restrict, ...) __attribute__((nonnull(1, 2)));
+int swprintf (wchar_t *__restrict, size_t, const wchar_t *__restrict, ...) __attribute__((nonnull(1, 3)));
+int wprintf (const wchar_t *__restrict, ...) __attribute__((nonnull(1)));
+int vfwprintf (FILE *__restrict, const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1, 2)));
+int vswprintf (wchar_t *__restrict, size_t, const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1, 3)));
+int vwprintf (const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1)));
+/* Same reasoning as the byte scanf family (include/stdio.h's own
+ * comment): fmt/s required, f deliberately left unmarked. */
+int fwscanf (FILE *__restrict, const wchar_t *__restrict, ...) __attribute__((nonnull(2)));
+int swscanf (const wchar_t *__restrict, const wchar_t *__restrict, ...) __attribute__((nonnull(1, 2)));
+int wscanf (const wchar_t *__restrict, ...) __attribute__((nonnull(1)));
+int vfwscanf (FILE *__restrict, const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(2)));
+int vswscanf (const wchar_t *__restrict, const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1, 2)));
+int vwscanf (const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1)));
 
 size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict);
 

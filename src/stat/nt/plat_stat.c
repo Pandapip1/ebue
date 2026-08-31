@@ -238,6 +238,12 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
  * canonical spec, http://www.isthe.com/chongo/tech/comp/fnv/), used
  * below to fold a variable-length NT object name into a fixed 64-bit
  * st_ino. */
+/* data is required despite the `for (i = 0; i < n; ...)` loop's own
+ * n == 0 escape -- the same ISO 7.24.1p2 "still valid even at n == 0"
+ * convention as the mem-family (this file's own call sites always
+ * pass a real NT-provided name buffer, never a value that could
+ * legitimately be null). */
+static ino_t fnv1a64(const void *data, size_t n) __attribute__((nonnull(1)));
 static ino_t fnv1a64(const void *data, size_t n)
 {
 	const unsigned char *p = data;
