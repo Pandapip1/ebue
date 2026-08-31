@@ -16,6 +16,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <cctype>
@@ -33,6 +34,10 @@ enum class ConstructKind : unsigned char { Live, Destroyed };
 REGISTER_MAP_WITH_PROGRAMSTATE(ConstructMap, const MemRegion *, ConstructKind)
 REGISTER_MAP_WITH_PROGRAMSTATE(ConstructFamilyMap, const MemRegion *,
                                const IdentifierInfo *)
+
+enum class CapabilityKind : unsigned char { Linear, Duplicable };
+using CapabilityKey = std::pair<const MemRegion *, const IdentifierInfo *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(CapabilityMap, CapabilityKey, CapabilityKind)
 
 REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 
@@ -657,6 +662,25 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
     return false;
   }
 
+  static const IdentifierInfo *parameterAnnotation(const FunctionDecl *Function,
+                                                   const AnnotateAttr *Attr,
+                                                   StringRef Prefix) {
+    StringRef Text = Attr->getAnnotation();
+    if (!Text.consume_front(Prefix) || Text.empty() || Text.contains(':'))
+      return nullptr;
+    return &Function->getASTContext().Idents.get(Text);
+  }
+
+  static bool hasParameterAnnotation(const FunctionDecl *Function,
+                                     const ParmVarDecl *Parameter,
+                                     StringRef Prefix,
+                                     const IdentifierInfo *Family) {
+    for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
+      if (parameterAnnotation(Function, Attr, Prefix) == Family)
+        return true;
+    return false;
+  }
+
   static llvm::SmallVector<ConstructCall, 4>
   protocolsFor(const CallEvent &Call) {
     llvm::SmallVector<ConstructCall, 4> Protocols;
@@ -679,6 +703,18 @@ class OwnedConstructChecker : public Checker<check::PreCall, check::PostCall> {
               {Candidate.Operation, Parsed->Family, Parsed->Argument,
                hasArgumentAnnotation(Function, "ownership_static:",
                                      Parsed->Family, Parsed->Argument)});
+    unsigned Argument = 0;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
+        for (const OperationAnnotation &Candidate : Operations)
+          if (const IdentifierInfo *Family =
+                  parameterAnnotation(Function, Attr, Candidate.Prefix))
+            Protocols.push_back(
+                {Candidate.Operation, Family, Argument,
+                 hasParameterAnnotation(Function, Parameter,
+                                        "ownership_static:", Family)});
+      ++Argument;
+    }
     return Protocols;
   }
 
@@ -862,6 +898,284 @@ public:
       }
       C.addTransition(Succeeded);
     }
+    if (Failed)
+      C.addTransition(Failed);
+  }
+};
+
+enum class CapabilityOperation : unsigned char {
+  Require,
+  Consume,
+  ConsumeAny,
+  GrantLinear,
+  GrantDuplicable
+};
+
+struct CapabilityProtocol {
+  CapabilityOperation Operation;
+  const IdentifierInfo *Family;
+  unsigned Argument;
+};
+
+class CapabilityTokenChecker
+    : public Checker<check::BeginFunction, check::PreCall, check::PostCall> {
+  mutable std::unique_ptr<BugType> BT;
+
+  struct FamilyArgument {
+    const IdentifierInfo *Family;
+    unsigned Argument;
+  };
+
+  static std::optional<FamilyArgument>
+  annotationArgument(const FunctionDecl *Function, const AnnotateAttr *Attr,
+                     StringRef Prefix) {
+    StringRef Text = Attr->getAnnotation();
+    if (!Text.consume_front(Prefix))
+      return std::nullopt;
+    auto [FamilyName, ArgumentText] = Text.split(':');
+    unsigned Argument = 0;
+    if (FamilyName.empty() || ArgumentText.getAsInteger(10, Argument) ||
+        Argument == 0 || Argument > Function->getNumParams())
+      return std::nullopt;
+    return FamilyArgument{&Function->getASTContext().Idents.get(FamilyName),
+                          Argument - 1};
+  }
+
+  static const IdentifierInfo *parameterAnnotation(const FunctionDecl *Function,
+                                                   const AnnotateAttr *Attr,
+                                                   StringRef Prefix) {
+    StringRef Text = Attr->getAnnotation();
+    if (!Text.consume_front(Prefix) || Text.empty() || Text.contains(':'))
+      return nullptr;
+    return &Function->getASTContext().Idents.get(Text);
+  }
+
+  static llvm::SmallVector<CapabilityProtocol, 6>
+  protocolsFor(const FunctionDecl *Function) {
+    llvm::SmallVector<CapabilityProtocol, 6> Protocols;
+    if (!Function)
+      return Protocols;
+    struct OperationAnnotation {
+      llvm::StringLiteral Prefix;
+      CapabilityOperation Operation;
+    };
+    static constexpr OperationAnnotation Operations[] = {
+        {"ownership_requires_token:", CapabilityOperation::Require},
+        {"ownership_consumes_token:", CapabilityOperation::Consume},
+        {"ownership_consumes_any_token:", CapabilityOperation::ConsumeAny},
+        {"ownership_grants_token:", CapabilityOperation::GrantLinear},
+        {"ownership_grants_duplicable_token:",
+         CapabilityOperation::GrantDuplicable}};
+    for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
+      for (const OperationAnnotation &Candidate : Operations)
+        if (std::optional<FamilyArgument> Parsed =
+                annotationArgument(Function, Attr, Candidate.Prefix))
+          Protocols.push_back(
+              {Candidate.Operation, Parsed->Family, Parsed->Argument});
+    unsigned Argument = 0;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      for (const AnnotateAttr *Attr : Parameter->specific_attrs<AnnotateAttr>())
+        for (const OperationAnnotation &Candidate : Operations)
+          if (const IdentifierInfo *Family =
+                  parameterAnnotation(Function, Attr, Candidate.Prefix))
+            Protocols.push_back({Candidate.Operation, Family, Argument});
+      ++Argument;
+    }
+    return Protocols;
+  }
+
+  static const MemRegion *argumentRegion(const CallEvent &Call,
+                                         unsigned Argument) {
+    return Argument < Call.getNumArgs()
+               ? Call.getArgSVal(Argument).getAsRegion()
+               : nullptr;
+  }
+
+  static CapabilityKey key(const MemRegion *Region,
+                           const IdentifierInfo *Family) {
+    return {Region, Family};
+  }
+
+  static bool hasToken(ProgramStateRef State, const MemRegion *Region,
+                       const IdentifierInfo *Family) {
+    return State->get<CapabilityMap>(key(Region, Family)) != nullptr;
+  }
+
+  void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
+              CheckerContext &C) const {
+    ExplodedNode *Node = C.generateNonFatalErrorNode(State);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Invalid ownership capability",
+                                     categories::MemoryError);
+    auto Report = std::make_unique<PathSensitiveBugReport>(
+        *BT, diagnosticMessage(Reason, Statement, C), Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
+  bool preconditionsHold(ProgramStateRef State, const CallEvent &Call,
+                         ArrayRef<CapabilityProtocol> Protocols,
+                         CheckerContext *C = nullptr) const {
+    const Stmt *Statement = Call.getOriginExpr();
+    bool Valid = true;
+    for (const CapabilityProtocol &Protocol : Protocols) {
+      const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
+      if (!Region)
+        continue;
+      const CapabilityKind *Existing =
+          State->get<CapabilityMap>(key(Region, Protocol.Family));
+      if (Protocol.Operation == CapabilityOperation::ConsumeAny)
+        continue;
+      if ((Protocol.Operation == CapabilityOperation::Require ||
+           Protocol.Operation == CapabilityOperation::Consume) &&
+          !Existing) {
+        if (C && Statement)
+          report("required ownership capability token is not held", Statement,
+                 State, *C);
+        Valid = false;
+      } else if (Protocol.Operation == CapabilityOperation::GrantLinear &&
+                 Existing) {
+        if (C && Statement)
+          report("linear ownership capability token would be duplicated",
+                 Statement, State, *C);
+        Valid = false;
+      } else if (Protocol.Operation == CapabilityOperation::GrantDuplicable &&
+                 Existing && *Existing != CapabilityKind::Duplicable) {
+        if (C && Statement)
+          report("ownership capability token duplication class does not match",
+                 Statement, State, *C);
+        Valid = false;
+      }
+    }
+    llvm::SmallVector<unsigned, 4> CheckedArguments;
+    for (const CapabilityProtocol &Alternative : Protocols) {
+      if (Alternative.Operation != CapabilityOperation::ConsumeAny ||
+          llvm::is_contained(CheckedArguments, Alternative.Argument))
+        continue;
+      CheckedArguments.push_back(Alternative.Argument);
+      const MemRegion *Region = argumentRegion(Call, Alternative.Argument);
+      if (!Region)
+        continue;
+      bool Held = false;
+      for (const CapabilityProtocol &Candidate : Protocols)
+        if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
+            Candidate.Argument == Alternative.Argument &&
+            hasToken(State, Region, Candidate.Family)) {
+          Held = true;
+          break;
+        }
+      if (!Held) {
+        if (C && Statement)
+          report("none of the required ownership capability tokens is held",
+                 Statement, State, *C);
+        Valid = false;
+      }
+    }
+    return Valid;
+  }
+
+  static ProgramStateRef transition(ProgramStateRef State,
+                                    const CallEvent &Call,
+                                    ArrayRef<CapabilityProtocol> Protocols) {
+    for (const CapabilityProtocol &Protocol : Protocols) {
+      const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
+      if (!Region)
+        continue;
+      CapabilityKey Key = key(Region, Protocol.Family);
+      switch (Protocol.Operation) {
+      case CapabilityOperation::Require:
+        break;
+      case CapabilityOperation::Consume:
+        State = State->remove<CapabilityMap>(Key);
+        break;
+      case CapabilityOperation::ConsumeAny:
+        break;
+      case CapabilityOperation::GrantLinear:
+        State = State->set<CapabilityMap>(Key, CapabilityKind::Linear);
+        break;
+      case CapabilityOperation::GrantDuplicable:
+        State = State->set<CapabilityMap>(Key, CapabilityKind::Duplicable);
+        break;
+      }
+    }
+    llvm::SmallVector<unsigned, 4> ConsumedArguments;
+    for (const CapabilityProtocol &Alternative : Protocols) {
+      if (Alternative.Operation != CapabilityOperation::ConsumeAny ||
+          llvm::is_contained(ConsumedArguments, Alternative.Argument))
+        continue;
+      ConsumedArguments.push_back(Alternative.Argument);
+      const MemRegion *Region = argumentRegion(Call, Alternative.Argument);
+      if (!Region)
+        continue;
+      for (const CapabilityProtocol &Candidate : Protocols)
+        if (Candidate.Operation == CapabilityOperation::ConsumeAny &&
+            Candidate.Argument == Alternative.Argument) {
+          CapabilityKey Key = key(Region, Candidate.Family);
+          if (State->get<CapabilityMap>(Key)) {
+            State = State->remove<CapabilityMap>(Key);
+            break;
+          }
+        }
+    }
+    return State;
+  }
+
+public:
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function)
+      return;
+    ProgramStateRef State = C.getState();
+    const LocationContext *LC = C.getLocationContext();
+    bool Changed = false;
+    for (const CapabilityProtocol &Protocol : protocolsFor(Function)) {
+      if (Protocol.Operation != CapabilityOperation::Require &&
+          Protocol.Operation != CapabilityOperation::Consume)
+        continue;
+      const ParmVarDecl *Parameter = Function->getParamDecl(Protocol.Argument);
+      const MemRegion *Region =
+          State->getSVal(State->getLValue(Parameter, LC)).getAsRegion();
+      if (!Region)
+        continue;
+      State = State->set<CapabilityMap>(key(Region, Protocol.Family),
+                                        CapabilityKind::Linear);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    llvm::SmallVector<CapabilityProtocol, 6> Protocols = protocolsFor(Function);
+    if (!Protocols.empty())
+      preconditionsHold(C.getState(), Call, Protocols, &C);
+  }
+
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    llvm::SmallVector<CapabilityProtocol, 6> Protocols = protocolsFor(Function);
+    if (Protocols.empty() || !preconditionsHold(C.getState(), Call, Protocols))
+      return;
+
+    ProgramStateRef State = C.getState();
+    if (Function->getReturnType()->isVoidType()) {
+      C.addTransition(transition(State, Call, Protocols));
+      return;
+    }
+    std::optional<DefinedOrUnknownSVal> Return =
+        Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
+    if (!Return)
+      return;
+    DefinedOrUnknownSVal Success = C.getSValBuilder().evalEQ(
+        State, *Return,
+        C.getSValBuilder().makeZeroVal(Function->getReturnType()));
+    auto [Succeeded, Failed] = State->assume(Success);
+    if (Succeeded)
+      C.addTransition(transition(Succeeded, Call, Protocols));
     if (Failed)
       C.addTransition(Failed);
   }
@@ -2185,6 +2499,9 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<OwnedConstructChecker>(
       "ntlibc.OwnedConstruct",
       "Proves synchronization object construction and destruction", "");
+  Registry.addChecker<CapabilityTokenChecker>(
+      "ntlibc.CapabilityToken",
+      "Proves explicit linear and duplicable ownership-token transitions", "");
   Registry.addChecker<ValidPointerChecker>(
       "ntlibc.ValidPointer",
       "Proves every memory access has a nonnull, live, in-bounds, aligned "

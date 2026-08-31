@@ -41,6 +41,13 @@ attachArgumentAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
 static ParsedAttrInfo::AttrHandling
 attachFamilyArgumentAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
                                StringRef AnnotationName) {
+  if (isa<ParmVarDecl>(D) && Attr.getNumArgs() == 1 && Attr.isArgIdent(0)) {
+    IdentifierInfo *Family = Attr.getArgAsIdent(0)->Ident;
+    std::string Annotation = (AnnotationName + ":" + Family->getName()).str();
+    D->addAttr(AnnotateAttr::Create(S.Context, Annotation, nullptr, 0,
+                                    Attr.getRange()));
+    return ParsedAttrInfo::AttributeApplied;
+  }
   const auto *Function = dyn_cast<FunctionDecl>(D);
   IdentifierInfo *Family = Attr.getNumArgs() == 2 && Attr.isArgIdent(0)
                                ? Attr.getArgAsIdent(0)->Ident
@@ -55,8 +62,9 @@ attachFamilyArgumentAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
       Value->ugt(Function->getNumParams())) {
     unsigned ID = S.getDiagnostics().getCustomDiagID(
         DiagnosticsEngine::Error,
-        "%0 requires an ownership-family identifier followed by a one-based "
-        "function-parameter index");
+        "%0 requires an ownership-family identifier on a parameter, or an "
+        "ownership-family identifier followed by a one-based parameter index "
+        "on a function");
     S.Diag(Attr.getLoc(), ID) << Attr;
     return ParsedAttrInfo::AttributeNotApplied;
   }
@@ -128,6 +136,21 @@ DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipRequiresHandleAttrInfo,
                                   "ownership_requires_handle");
 DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipStaticAttrInfo, "ownership_static",
                                   "ownership_static");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipRequiresTokenAttrInfo,
+                                  "ownership_requires_token",
+                                  "ownership_requires_token");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipConsumesTokenAttrInfo,
+                                  "ownership_consumes_token",
+                                  "ownership_consumes_token");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipGrantsTokenAttrInfo,
+                                  "ownership_grants_token",
+                                  "ownership_grants_token");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipGrantsDuplicableTokenAttrInfo,
+                                  "ownership_grants_duplicable_token",
+                                  "ownership_grants_duplicable_token");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipConsumesAnyTokenAttrInfo,
+                                  "ownership_consumes_any_token",
+                                  "ownership_consumes_any_token");
 
 #undef DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE
 
@@ -147,3 +170,15 @@ static ParsedAttrInfoRegistry::Add<OwnershipRequiresHandleAttrInfo>
                    "requires an explicit live-object handle");
 static ParsedAttrInfoRegistry::Add<OwnershipStaticAttrInfo>
     Static("ownership_static", "accepts static object initialization");
+static ParsedAttrInfoRegistry::Add<OwnershipRequiresTokenAttrInfo>
+    RequiresToken("ownership_requires_token", "requires a capability token");
+static ParsedAttrInfoRegistry::Add<OwnershipConsumesTokenAttrInfo>
+    ConsumesToken("ownership_consumes_token", "consumes a capability token");
+static ParsedAttrInfoRegistry::Add<OwnershipGrantsTokenAttrInfo>
+    GrantsToken("ownership_grants_token", "grants a linear capability token");
+static ParsedAttrInfoRegistry::Add<OwnershipGrantsDuplicableTokenAttrInfo>
+    GrantsDuplicableToken("ownership_grants_duplicable_token",
+                          "grants a duplicable capability token");
+static ParsedAttrInfoRegistry::Add<OwnershipConsumesAnyTokenAttrInfo>
+    ConsumesAnyToken("ownership_consumes_any_token",
+                     "consumes one member of an alternative token set");
