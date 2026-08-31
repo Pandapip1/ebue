@@ -447,10 +447,23 @@ int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, str
 				cap = next;
 			}
 		}
+		if (!ws.cwd0) return -1;
 	}
 
 	{
 		int r = walk(&ws, &lru, path, 0, 1, NULL);
+		int saved = errno;
+
+		/* FTW_CHDIR may leave walk() in any directory it visited, but the
+		 * caller's working directory must be restored before nftw() returns.
+		 * A restoration failure becomes the result only when the walk itself
+		 * succeeded; otherwise retain the original failure and its errno. */
+		if (ws.cwd0 && chdir(ws.cwd0) < 0) {
+			if (r != 0) errno = saved;
+			else r = -1;
+		} else if (r != 0) {
+			errno = saved;
+		}
 		free(ws.cwd0);
 		return r;
 	}
