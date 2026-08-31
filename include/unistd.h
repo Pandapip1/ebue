@@ -90,8 +90,8 @@ int faccessat(int, const char *, int, int);
 
 int chdir(const char *);
 int fchdir(int);
-char *getcwd(char *, size_t)
-	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 1);
+__attribute__((ownership_returns_argument(1), ownership_returns(malloc)))
+char *getcwd(char *, size_t);
 
 unsigned alarm(unsigned);
 unsigned sleep(unsigned);
@@ -257,7 +257,8 @@ int setresuid(uid_t, uid_t, uid_t);  /* undefined-ok: real/effective/saved
 int setresgid(gid_t, gid_t, gid_t);  /* undefined-ok: see setresuid */
 int getresuid(uid_t *, uid_t *, uid_t *);  /* undefined-ok: see setresuid */
 int getresgid(gid_t *, gid_t *, gid_t *);  /* undefined-ok: see setresuid */
-char *get_current_dir_name(void) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc)))
+char *get_current_dir_name(void);
 int syncfs(int);  /* undefined-ok: syncs an entire filesystem by fd; NT has
 	no per-volume sync primitive this library wires up, and fsync()
 	(src/unistd/fsync.c) already covers the per-descriptor case */

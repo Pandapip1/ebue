@@ -32,13 +32,13 @@
 #include <features.h>
 #include <stddef.h>
 
-void *__plat_alloc(size_t n, int zero)
-	__NTLIBC_RETURNS_OWNERSHIP(plat_heap);
-void *__plat_realloc(void *p, size_t n)
-	__NTLIBC_REALLOCATES(plat_heap, 1);
+__attribute__((ownership_returns(plat_heap)))
+void *__plat_alloc(size_t n, int zero);
+__attribute__((ownership_reallocates(1), ownership_returns(plat_heap)))
+void *__plat_realloc(void *p, size_t n);
 size_t __plat_alloc_size(void *p);
-void __plat_dealloc(void *p)
-	__NTLIBC_TAKES_OWNERSHIP(plat_heap, 1);
+__attribute__((ownership_takes(plat_heap, 1)))
+void __plat_dealloc(void *p);
 
 #endif
 

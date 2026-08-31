@@ -16,8 +16,8 @@
 #include <errno.h>
 #include "libc.h"
 
+__attribute__((ownership_returns_argument(1), ownership_returns(malloc)))
 char *getcwd(char *buf, size_t size)
-	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 1)
 {
 	WCHAR w[4096];
 	char tmp[4096 * 3];
@@ -61,7 +61,8 @@ char *getcwd(char *buf, size_t size)
 	return buf;
 }
 
-char *get_current_dir_name(void) __NTLIBC_RETURNS_OWNERSHIP(malloc)
+__attribute__((ownership_returns(malloc)))
+char *get_current_dir_name(void)
 {
 	return getcwd(0, 0);
 }

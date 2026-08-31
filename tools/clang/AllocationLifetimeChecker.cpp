@@ -62,14 +62,14 @@ static bool takesAnyArgument(const FunctionDecl *Function, unsigned Argument) {
 /* Reallocation is the one ownership transition the standard
  * ownership_returns/ownership_takes vocabulary cannot state: the input is
  * consumed only when the returned pointer is nonnull.  Headers describe that
- * operation with annotate("ntlibc.reallocates:N"), where N is the source-level
+ * operation with [[ownership_reallocates(N)]], where N is the source-level
  * (one-origin) input parameter.  This remains declaration-driven: the checker
  * contains no allocator function names. */
 static std::optional<unsigned>
 reallocatedArgument(const FunctionDecl *Function) {
   if (!Function)
     return std::nullopt;
-  constexpr StringRef Prefix = "ntlibc.reallocates:";
+  constexpr StringRef Prefix = "ownership_reallocates:";
   for (const AnnotateAttr *Attribute : Function->specific_attrs<AnnotateAttr>()) {
     StringRef Text = Attribute->getAnnotation();
     if (!Text.starts_with(Prefix))
@@ -86,10 +86,10 @@ reallocatedArgument(const FunctionDecl *Function) {
  * allocate one only when that argument is null.  The ordinary returns
  * attribute would incorrectly make both results owned. */
 static std::optional<unsigned>
-ownedReturnWhenNullArgument(const FunctionDecl *Function) {
+returnedArgument(const FunctionDecl *Function) {
   if (!Function)
     return std::nullopt;
-  constexpr StringRef Prefix = "ntlibc.returns-if-null:";
+  constexpr StringRef Prefix = "ownership_returns_argument:";
   for (const AnnotateAttr *Attribute : Function->specific_attrs<AnnotateAttr>()) {
     StringRef Text = Attribute->getAnnotation();
     if (!Text.starts_with(Prefix))
@@ -260,7 +260,12 @@ public:
       if (!Family)
         continue;
       if (Attribute->isReturns()) {
-        llvm::errs() << "ntlibc-allocation-contract: returns\t"
+        StringRef Kind = !Function->doesThisDeclarationHaveABody()
+                             ? "returns-declaration"
+                             : Attribute->isInherited()
+                                   ? "returns-definition-inherited"
+                                   : "returns-definition-explicit";
+        llvm::errs() << "ntlibc-allocation-contract: " << Kind << '\t'
                      << Family->getName() << '\t' << Function->getName()
                      << '\t' << Path << '\t' << Line << '\n';
       } else if (Attribute->isTakes()) {
@@ -356,7 +361,7 @@ public:
       return;
     ProgramStateRef State = C.getState();
     if (std::optional<unsigned> Argument =
-            ownedReturnWhenNullArgument(Function)) {
+            returnedArgument(Function)) {
       if (*Argument >= Call.getNumArgs())
         return;
       std::optional<DefinedOrUnknownSVal> ArgumentValue =

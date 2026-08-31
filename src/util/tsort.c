@@ -105,8 +105,8 @@ static int add_edge(int a, int b)
 	return 0;
 }
 
+__attribute__((ownership_returns(malloc)))
 static char *slurp(FILE *f, size_t *outlen)
-	__NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	size_t cap = 65536, len = 0;
 	char *buf = malloc(cap);

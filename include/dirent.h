@@ -55,10 +55,12 @@ struct dirent {
  * caller mistake at compile time; tcc (this project's other target)
  * parses and silently ignores attribute contents it does not know (see
  * include/features.h's own comment on this), so this is free there. */
-int            closedir(DIR *) __attribute__((nonnull(1)))
-    __NTLIBC_TAKES_OWNERSHIP(dir_stream, 1);
-DIR           *fdopendir(int) __NTLIBC_RETURNS_OWNERSHIP(dir_stream);
-DIR           *opendir(const char *) __NTLIBC_RETURNS_OWNERSHIP(dir_stream);
+__attribute__((ownership_takes(dir_stream, 1), nonnull(1)))
+int            closedir(DIR *);
+__attribute__((ownership_returns(dir_stream)))
+DIR           *fdopendir(int);
+__attribute__((ownership_returns(dir_stream)))
+DIR           *opendir(const char *);
 struct dirent *readdir(DIR *) __attribute__((nonnull(1)));
 /* entry/result are required too: src/dirent/readdir.c's readdir_r()
  * writes through *result unconditionally on every path with no NULL

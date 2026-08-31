@@ -9,9 +9,10 @@ void local_release(void)
 	free(p);
 }
 
-void *nullable_producer(void)
-	__attribute__((ownership_returns(malloc)));
+[[clang::ownership_returns(malloc)]]
+void *nullable_producer(void);
 
+[[clang::ownership_returns(malloc)]]
 void *nullable_producer(void)
 {
 	void *p = malloc(16);
@@ -46,9 +47,8 @@ void repeated_reallocation(void)
 	free(third);
 }
 
+[[ownership_returns_argument(1), clang::ownership_returns(malloc)]]
 void *conditional_buffer(void *buffer)
-	__attribute__((ownership_returns(malloc),
-	               annotate("ntlibc.returns-if-null:1")))
 {
 	return buffer ? buffer : malloc(8);
 }
@@ -60,18 +60,19 @@ void conditional_return(void)
 	free(conditional_buffer(0));
 }
 
-void destroy_widget(void *)
-	__attribute__((ownership_takes(widget, 1)));
-void *make_widget(void)
-	__attribute__((ownership_returns(widget)));
+[[clang::ownership_takes(widget, 1)]]
+void destroy_widget(void *);
+[[clang::ownership_returns(widget)]]
+void *make_widget(void);
 
+[[clang::ownership_returns(widget)]]
 void *make_widget(void)
 {
 	return malloc(16);
 }
 
+[[clang::ownership_takes(widget, 1)]]
 void destroy_widget(void *widget)
-	__attribute__((ownership_takes(widget, 1)))
 {
 	free(widget);
 }

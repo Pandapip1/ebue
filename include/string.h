@@ -194,9 +194,10 @@ char *stpncpy(char *__restrict, const char *__restrict, size_t) __attribute__((n
  * against the ownership sweep's own proof obligation), an unrelated,
  * orthogonal claim from __pure__. */
 size_t strnlen (const char *, size_t) __attribute__((__pure__));
-char *strdup (const char * __NTLIBC_STRING)
-    __NTLIBC_RETURNS_OWNERSHIP(malloc);
-char *strndup (const char *, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc)))
+char *strdup (const char * __NTLIBC_STRING);
+__attribute__((ownership_returns(malloc)))
+char *strndup (const char *, size_t);
 /* strsignal (src/string/strsignal.c): same fixed-static-table shape as
  * strerror() above, indexed by sig -- __pure__ for the same reason. */
 char *strsignal(int) __attribute__((__pure__));

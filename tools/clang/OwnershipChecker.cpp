@@ -145,12 +145,12 @@ class OwnershipChecker
 
   static std::optional<unsigned>
   reallocatedArgument(const FunctionDecl *Function) {
-    return annotatedArgument(Function, "ntlibc.reallocates:");
+    return annotatedArgument(Function, "ownership_reallocates:");
   }
 
   static std::optional<unsigned>
-  ownedReturnWhenNullArgument(const FunctionDecl *Function) {
-    return annotatedArgument(Function, "ntlibc.returns-if-null:");
+  returnedArgument(const FunctionDecl *Function) {
+    return annotatedArgument(Function, "ownership_returns_argument:");
   }
 
   static std::optional<unsigned>
@@ -481,7 +481,7 @@ public:
     ProgramStateRef State = C.getState();
     const FunctionDecl *Function = functionOf(Call);
     if (std::optional<unsigned> Argument =
-            ownedReturnWhenNullArgument(Function)) {
+            returnedArgument(Function)) {
       if (*Argument >= Call.getNumArgs())
         return;
       std::optional<DefinedOrUnknownSVal> ArgumentValue =

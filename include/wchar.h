@@ -96,7 +96,8 @@ wchar_t *wmemchr (const wchar_t *, wchar_t, size_t) __attribute__((nonnull(1), _
 /* wcsnlen (src/string/wcsnlen.c) is wmemchr(s, 0, n) plus arithmetic --
  * reads only, same __pure__ reasoning as strnlen (string.h). */
 size_t wcsnlen (const wchar_t *, size_t) __attribute__((__pure__));
-wchar_t *wcsdup (const wchar_t *) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc)))
+wchar_t *wcsdup (const wchar_t *);
 /* wcpcpy/wcpncpy dereference d/s the same unconditional way as
  * stpcpy/stpncpy above (their own header comment applies verbatim;
  * these two are a literal transliteration of those two). */

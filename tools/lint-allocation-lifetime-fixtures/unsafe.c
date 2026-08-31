@@ -27,18 +27,19 @@ void *uncontracted_return(void)
 	return malloc(8); /* allocation-lifetime-expect: return-contract */
 }
 
-void broken_destroy(void *)
-	__attribute__((ownership_takes(broken, 1)));
-void *make_broken(void)
-	__attribute__((ownership_returns(broken)));
+[[clang::ownership_takes(broken, 1)]]
+void broken_destroy(void *);
+[[clang::ownership_returns(broken)]]
+void *make_broken(void);
 
+[[clang::ownership_returns(broken)]]
 void *make_broken(void)
 {
 	return malloc(8);
 }
 
+[[clang::ownership_takes(broken, 1)]]
 void broken_destroy(void *object)
-	__attribute__((ownership_takes(broken, 1)))
 {
 	(void)object;
 } /* allocation-lifetime-expect: broken-freer */
@@ -52,7 +53,7 @@ void wrong_freer(void)
 void *make_inherited(void)
 {
 	return malloc(8);
-}
+} /* allocation-contract-expect: inherited producer attribute is an error */
 
 /* The header-style declaration above is not enough for an in-tree body:
  * this definition must repeat ownership_takes explicitly. */

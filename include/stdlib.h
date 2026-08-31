@@ -43,11 +43,16 @@ unsigned long long strtoull (const char *__restrict, char **__restrict, int);
 int rand (void);
 void srand (unsigned);
 
-void *malloc (size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
-void *calloc (size_t, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
-void *realloc (void *, size_t) __NTLIBC_REALLOCATES(malloc, 1);
-void free (void *) __NTLIBC_TAKES_OWNERSHIP(malloc, 1);
-void *aligned_alloc(size_t, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc)))
+void *malloc (size_t);
+__attribute__((ownership_returns(malloc)))
+void *calloc (size_t, size_t);
+__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
+void *realloc (void *, size_t);
+__attribute__((ownership_takes(malloc, 1)))
+void free (void *);
+__attribute__((ownership_returns(malloc)))
+void *aligned_alloc(size_t, size_t);
 
 _Noreturn void abort (void);
 int atexit (void (*) (void));
@@ -147,8 +152,8 @@ int rand_r (unsigned *) __attribute__((nonnull(1)));
 
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
-char *realpath (const char *__restrict, char *__restrict)
-	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 2);
+__attribute__((ownership_returns_argument(2), ownership_returns(malloc)))
+char *realpath (const char *__restrict, char *__restrict);
 long int random (void);
 void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);
@@ -200,13 +205,16 @@ void lcong48 (unsigned short [7]);
 char *mktemp (char *) __attribute__((nonnull(1)));
 int mkstemps (char *, int);
 int mkostemps (char *, int, int);
-void *valloc (size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
-void *memalign(size_t, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc)))
+void *valloc (size_t);
+__attribute__((ownership_returns(malloc)))
+void *memalign(size_t, size_t);
 size_t malloc_usable_size(void *);
 int getloadavg(double *, int);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
-void *reallocarray (void *, size_t, size_t) __NTLIBC_REALLOCATES(malloc, 1);
+__attribute__((ownership_reallocates(1), ownership_returns(malloc)))
+void *reallocarray (void *, size_t, size_t);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
 #endif
 

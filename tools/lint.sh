@@ -1146,6 +1146,7 @@ stage_ownership() {
 	clang++-18 -fPIC -shared $(llvm-config-18 --cxxflags) \
 		tools/clang/OwnershipChecker.cpp \
 		tools/clang/AllocationLifetimeChecker.cpp \
+		tools/clang/OwnershipAttributes.cpp \
 		-o "$plugin" "$clang_cpp" \
 		$(llvm-config-18 --ldflags --libs --system-libs) || return 1
 
@@ -1172,7 +1173,7 @@ stage_ownership() {
 	analyzed=0
 	for arch in $LINT_ARCHS; do
 		gen_alltypes "$arch" || { any=1; continue; }
-		flags="$(cppflags_for "$arch") -DNTLIBC_ALLOCATION_LIFETIME_ANALYSIS"
+		flags="$(cppflags_for "$arch")"
 		target=$(pick_target "$arch")
 		nsrc=$(sources_for "$arch" | grep -c . || true)
 		out=$builddir/$arch.ownership.log

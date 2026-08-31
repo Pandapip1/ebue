@@ -23,8 +23,10 @@ DIAGNOSTIC = re.compile(
 )
 CONTRACT = re.compile(
     r"^ntlibc-allocation-contract: "
-    r"(returns|definition|takes-declaration|takes-definition-explicit|"
-    r"takes-definition-inherited)\t([^\t]+)\t([^\t]+)\t(.*)$"
+    r"(returns-declaration|returns-definition-explicit|"
+    r"returns-definition-inherited|definition|takes-declaration|"
+    r"takes-definition-explicit|takes-definition-inherited)"
+    r"\t([^\t]+)\t([^\t]+)\t(.*)$"
 )
 
 
@@ -68,14 +70,20 @@ def parse(path: pathlib.Path) -> tuple[list[Finding], set[tuple[str, str, str]]]
 
 def validate_contracts(contracts: set[tuple[str, str, str]], fixture: bool) -> list[str]:
     producers: dict[str, set[str]] = {}
+    producer_explicit: dict[str, set[str]] = {}
+    producer_inherited: dict[str, set[str]] = {}
     declared: dict[str, set[str]] = {}
     explicit: dict[str, set[str]] = {}
     inherited: dict[str, set[str]] = {}
     definitions = {function for kind, _family, function in contracts
                    if kind == "definition"}
     for kind, family, function in contracts:
-        if kind == "returns":
+        if kind.startswith("returns-"):
             producers.setdefault(family, set()).add(function)
+            if kind == "returns-definition-explicit":
+                producer_explicit.setdefault(family, set()).add(function)
+            elif kind == "returns-definition-inherited":
+                producer_inherited.setdefault(family, set()).add(function)
         elif kind == "takes-declaration":
             declared.setdefault(family, set()).add(function)
         elif kind == "takes-definition-explicit":
@@ -83,6 +91,14 @@ def validate_contracts(contracts: set[tuple[str, str, str]], fixture: bool) -> l
         elif kind == "takes-definition-inherited":
             inherited.setdefault(family, set()).add(function)
     errors = []
+    for family, functions in sorted(producer_inherited.items()):
+        for producer in sorted(functions - producer_explicit.get(family, set())):
+            errors.append(
+                f"producer '{producer}' for family '{family}' has an in-tree "
+                "definition but that definition does not repeat "
+                "ownership_returns explicitly (the header attribute was only "
+                "inherited)"
+            )
     for family, functions in sorted(producers.items()):
         linked = declared.get(family, set()) | explicit.get(family, set())
         if len(linked) != 1:

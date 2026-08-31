@@ -45,7 +45,8 @@ static int portable_name_char(unsigned char c)
 	       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
-static char *shm_path(const char *name) NTLIBC_RETURNS_OWNERSHIP(malloc)
+__attribute__((ownership_returns(malloc)))
+static char *shm_path(const char *name)
 {
 	const char *dir;
 	const char *component;
@@ -128,8 +129,8 @@ static int ensure_namespace(const char *path)
  * Real NT stores the same value in $LXMOD on the data file.  Stock Wine
  * accepts that EA in NtCreateFile but drops it, so the sidecar is the
  * compatibility record that makes the mode survive close and reopen. */
+__attribute__((ownership_returns(malloc)))
 static char *shm_mode_path(const char *path)
-	NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	const char *slash = strrchr(path, '/');
 	size_t len = strlen(path);

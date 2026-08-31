@@ -34,14 +34,14 @@
 #include <stddef.h>
 
 /* Returns freshly zeroed memory, or NULL on failure. */
-void *__plat_pages_alloc(size_t n)
-	__NTLIBC_RETURNS_OWNERSHIP(plat_pages);
+__attribute__((ownership_returns(plat_pages)))
+void *__plat_pages_alloc(size_t n);
 
 /* `n` must be the exact size a matching __plat_pages_alloc() call
  * returned (or was rounded up to) -- implementations are free to
  * assume it, the same way munmap(2) itself does. */
-void __plat_pages_free(void *p, size_t n)
-	__NTLIBC_TAKES_OWNERSHIP(plat_pages, 1);
+__attribute__((ownership_takes(plat_pages, 1)))
+void __plat_pages_free(void *p, size_t n);
 
 #endif
 

@@ -112,8 +112,8 @@ void *__plat_pages_alloc(size_t n)
 	return (void *)ret; /* MAP_ANONYMOUS is always zero-filled by the kernel */
 }
 
+__attribute__((ownership_takes(plat_pages, 1)))
 void __plat_pages_free(void *p, size_t n)
-	__NTLIBC_TAKES_OWNERSHIP(plat_pages, 1)
 {
 	raw_syscall(SYS_munmap, (long)p, (long)n, 0, 0, 0, 0);
 }

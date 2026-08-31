@@ -19,7 +19,6 @@
 #include <wordexp.h>
 #include "nt.h"
 #include "thread_annotations.h"
-#include "allocation_annotations.h"
 #include "plat_handle.h"
 
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
@@ -477,8 +476,8 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
  * for its own reasons (execvpe()'s own `strchr(file, ...)` calls
  * before forwarding it as name; posix_spawn.c's/execute.c's own
  * argv[0]-derived strings, never NULL). */
-char *__find_program(const char *name, int use_path)
-    __attribute__((nonnull(1))) NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc), nonnull(1)))
+char *__find_program(const char *name, int use_path);
 int __is_program(const char *path);
 /* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the
  * mode attribute is used: ntlibc must not manufacture Linux UID/GID values.
@@ -555,8 +554,10 @@ const char *__sh_param_get(int n);
 int __sh_last_status(void);
 
 /* ---- heap -------------------------------------------------------------- */
-void *__malloc(size_t) NTLIBC_RETURNS_OWNERSHIP(internal_malloc);
-void __free(void *) NTLIBC_TAKES_OWNERSHIP(internal_malloc, 1);
+__attribute__((ownership_returns(internal_malloc)))
+void *__malloc(size_t);
+__attribute__((ownership_takes(internal_malloc, 1)))
+void __free(void *);
 
 /* ---- time -------------------------------------------------------------- */
 #define __TICKS_PER_SEC 10000000LL

@@ -247,7 +247,8 @@ size_t __plat_alloc_size(void *p)
 	return h->size;
 }
 
-void __plat_dealloc(void *p) __NTLIBC_TAKES_OWNERSHIP(plat_heap, 1)
+__attribute__((ownership_takes(plat_heap, 1)))
+void __plat_dealloc(void *p)
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	if (!p) return;

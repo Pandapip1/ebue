@@ -33,8 +33,8 @@
 #include <errno.h>
 #include "libc.h"
 
+__attribute__((ownership_returns_argument(2), ownership_returns(malloc)))
 char *realpath(const char *__restrict path, char *__restrict resolved)
-	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 2)
 {
 	int fd, saved;
 	char *p, *q;

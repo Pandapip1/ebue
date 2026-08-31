@@ -192,7 +192,8 @@ char *tmpnam(char *s)
 	return s;
 }
 
-char *tempnam(const char *dir, const char *pfx) __NTLIBC_RETURNS_OWNERSHIP(malloc) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+__attribute__((ownership_returns(malloc)))
+char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *d = dir ? dir : tmpdir();
 	size_t n = strlen(d), pn = pfx ? strlen(pfx) : 0;

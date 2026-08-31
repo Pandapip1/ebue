@@ -249,7 +249,8 @@ char *ctermid(char *);
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) \
  || defined(_BSD_SOURCE)
 #define P_tmpdir "/tmp"
-char *tempnam(const char *, const char *) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+__attribute__((ownership_returns(malloc)))
+char *tempnam(const char *, const char *);
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)

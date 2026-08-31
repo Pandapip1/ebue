@@ -12,7 +12,8 @@
 #include <unistd.h>
 #include "dirent_internal.h"
 
-int closedir(DIR *dp) NTLIBC_TAKES_OWNERSHIP(dir_stream, 1)
+__attribute__((ownership_takes(dir_stream, 1)))
+int closedir(DIR *dp)
 {
 	int r = close(dp->fd);
 	__free(dp);

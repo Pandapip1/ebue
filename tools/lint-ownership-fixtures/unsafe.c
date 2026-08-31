@@ -2,11 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 typedef __SIZE_TYPE__ size_t;
-void *malloc(size_t) __attribute__((ownership_returns(malloc)));
-void *realloc(void *, size_t)
-	__attribute__((ownership_returns(malloc),
-	               annotate("ntlibc.reallocates:1")));
-void free(void *) __attribute__((ownership_takes(malloc, 1)));
+[[clang::ownership_returns(malloc)]]
+void *malloc(size_t);
+[[ownership_reallocates(1), clang::ownership_returns(malloc)]]
+void *realloc(void *, size_t);
+[[clang::ownership_takes(malloc, 1)]]
+void free(void *);
 
 void release_stack(void)
 {

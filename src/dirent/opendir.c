@@ -24,7 +24,8 @@
 #include <errno.h>
 #include "dirent_internal.h"
 
-static DIR *alloc_dir(int fd) NTLIBC_RETURNS_OWNERSHIP(dir_stream)
+__attribute__((ownership_returns(dir_stream)))
+static DIR *alloc_dir(int fd)
 {
 	DIR *dp = __malloc(sizeof *dp + __DIRBUF_SIZE);
 	if (!dp) { errno = ENOMEM; return 0; }
@@ -35,7 +36,8 @@ static DIR *alloc_dir(int fd) NTLIBC_RETURNS_OWNERSHIP(dir_stream)
 	return dp;
 }
 
-DIR *fdopendir(int fd) NTLIBC_RETURNS_OWNERSHIP(dir_stream)
+__attribute__((ownership_returns(dir_stream)))
+DIR *fdopendir(int fd)
 {
 	struct __fd *f = __fd_get(fd);
 	if (!f) return 0;
@@ -43,7 +45,8 @@ DIR *fdopendir(int fd) NTLIBC_RETURNS_OWNERSHIP(dir_stream)
 	return alloc_dir(fd);
 }
 
-DIR *opendir(const char *path) NTLIBC_RETURNS_OWNERSHIP(dir_stream)
+__attribute__((ownership_returns(dir_stream)))
+DIR *opendir(const char *path)
 {
 	int fd;
 	DIR *dp;

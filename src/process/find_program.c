@@ -107,8 +107,8 @@ static int has_dir(const char *name)
 	return 0;
 }
 
+__attribute__((ownership_returns(malloc)))
 static char *try_dir(const char *dir, size_t dlen, const char *name)
-	NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	size_t nlen = strlen(name);
 	/* dlen/nlen come from a PATH entry and the program name; the taint
@@ -130,8 +130,8 @@ static char *try_dir(const char *dir, size_t dlen, const char *name)
 	return 0;
 }
 
+__attribute__((nonnull(1), ownership_returns(malloc)))
 char *__find_program(const char *name, int use_path)
-	NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	const char *path, *p;
 	char *r;

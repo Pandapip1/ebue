@@ -85,7 +85,8 @@
 /* __progname_full (crt1.c) is the image path as ImagePathName gave it --
  * a native, backslash-separated path.  Return a fresh string so the search
  * iteration that consumes it also has an explicit, finite lifetime. */
-static char *image_dir(void) NTLIBC_RETURNS_OWNERSHIP(internal_malloc)
+__attribute__((ownership_returns(internal_malloc)))
+static char *image_dir(void)
 {
 	char *dir;
 	size_t n, i;
@@ -125,8 +126,8 @@ static int has_path_component(const char *p)
 }
 
 /* dir "\" tail, with every '/' normalised to '\\'. Malloc'd; NULL on OOM. */
+__attribute__((ownership_returns(internal_malloc)))
 static char *join(const char *dir, const char *tail)
-	NTLIBC_RETURNS_OWNERSHIP(internal_malloc)
 {
 	size_t dl = strlen(dir), tl = strlen(tail), i;
 	char *p = __malloc(dl + 1 + tl + 1);
