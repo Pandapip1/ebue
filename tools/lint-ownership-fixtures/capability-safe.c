@@ -5,38 +5,38 @@ typedef struct { void *opaque[8]; } mutex_t;
 typedef struct { void *opaque[12]; } rwlock_t;
 
 int mutex_init(mutex_t *mutex
-    [[ownership_constructs(mutex), ownership_grants_token(mutex_unlocked)]]);
+    [[ownership_constructs(mutex), ownership_adds_token(mutex_unlocked)]]);
 int mutex_lock(mutex_t *mutex
     [[ownership_requires_handle(mutex),
-      ownership_consumes_token(mutex_unlocked),
-      ownership_grants_duplicable_token(mutex_locked)]]);
+      ownership_drops_token(mutex_unlocked),
+      ownership_adds_duplicable_token(mutex_locked)]]);
 int mutex_unlock(mutex_t *mutex
-    [[ownership_requires_handle(mutex), ownership_consumes_token(mutex_locked),
-      ownership_grants_token(mutex_unlocked)]]);
+    [[ownership_requires_handle(mutex), ownership_drops_token(mutex_locked),
+      ownership_adds_token(mutex_unlocked)]]);
 int duplicate_unlock_authority(mutex_t *mutex
     [[ownership_requires_handle(mutex), ownership_requires_token(mutex_locked),
-      ownership_grants_duplicable_token(mutex_locked)]]);
+      ownership_adds_duplicable_token(mutex_locked)]]);
 int inspect_while_locked(mutex_t *mutex
     [[ownership_requires_handle(mutex), ownership_requires_token(mutex_locked)]]);
 int mutex_destroy(mutex_t *mutex
-    [[ownership_destroys(mutex), ownership_consumes_token(mutex_unlocked)]]);
+    [[ownership_destroys(mutex), ownership_drops_token(mutex_unlocked)]]);
 
 int rwlock_init(rwlock_t *lock
-    [[ownership_constructs(rwlock), ownership_grants_token(rwlock_unlocked)]]);
+    [[ownership_constructs(rwlock), ownership_adds_token(rwlock_unlocked)]]);
 int rwlock_read_lock(rwlock_t *lock
     [[ownership_requires_handle(rwlock),
-      ownership_consumes_token(rwlock_unlocked),
-      ownership_grants_duplicable_token(rwlock_shared)]]);
+      ownership_drops_token(rwlock_unlocked),
+      ownership_adds_duplicable_token(rwlock_shared)]]);
 int rwlock_write_lock(rwlock_t *lock
     [[ownership_requires_handle(rwlock),
-      ownership_consumes_token(rwlock_unlocked),
-      ownership_grants_token(rwlock_exclusive)]]);
+      ownership_drops_token(rwlock_unlocked),
+      ownership_adds_token(rwlock_exclusive)]]);
 int rwlock_unlock(rwlock_t *lock
-    [[ownership_requires_handle(rwlock), ownership_consumes_any_token(rwlock_shared),
-      ownership_consumes_any_token(rwlock_exclusive),
-      ownership_grants_token(rwlock_unlocked)]]);
+    [[ownership_requires_handle(rwlock), ownership_drops_any_token(rwlock_shared),
+      ownership_drops_any_token(rwlock_exclusive),
+      ownership_adds_token(rwlock_unlocked)]]);
 int rwlock_destroy(rwlock_t *lock
-    [[ownership_destroys(rwlock), ownership_consumes_token(rwlock_unlocked)]]);
+    [[ownership_destroys(rwlock), ownership_drops_token(rwlock_unlocked)]]);
 
 void delegated_mutex_unlock(void)
 {

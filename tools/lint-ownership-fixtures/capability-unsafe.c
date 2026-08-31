@@ -5,18 +5,18 @@ typedef struct { void *opaque[8]; } mutex_t;
 typedef struct { void *opaque[12]; } rwlock_t;
 
 int mutex_init(mutex_t *mutex
-    [[ownership_constructs(mutex), ownership_grants_token(mutex_unlocked)]]);
+    [[ownership_constructs(mutex), ownership_adds_token(mutex_unlocked)]]);
 int mutex_lock(mutex_t *mutex
     [[ownership_requires_handle(mutex),
-      ownership_consumes_token(mutex_unlocked),
-      ownership_grants_duplicable_token(mutex_locked)]]);
+      ownership_drops_token(mutex_unlocked),
+      ownership_adds_duplicable_token(mutex_locked)]]);
 int mutex_unlock(mutex_t *mutex
-    [[ownership_requires_handle(mutex), ownership_consumes_token(mutex_locked),
-      ownership_grants_token(mutex_unlocked)]]);
+    [[ownership_requires_handle(mutex), ownership_drops_token(mutex_locked),
+      ownership_adds_token(mutex_unlocked)]]);
 int mutex_destroy(mutex_t *mutex
-    [[ownership_destroys(mutex), ownership_consumes_token(mutex_unlocked)]]);
+    [[ownership_destroys(mutex), ownership_drops_token(mutex_unlocked)]]);
 
-int grant_linear(mutex_t *object [[ownership_grants_token(allocation)]]);
+int grant_linear(mutex_t *object [[ownership_adds_token(allocation)]]);
 
 void lock_without_unlocked_token(mutex_t *mutex)
 {

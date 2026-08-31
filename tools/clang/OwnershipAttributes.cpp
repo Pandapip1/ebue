@@ -96,6 +96,33 @@ attachValueFamilyAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
   return ParsedAttrInfo::AttributeApplied;
 }
 
+static ParsedAttrInfo::AttrHandling
+attachValueFamilyIntegerAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
+                                   StringRef AnnotationName) {
+  IdentifierInfo *Family = Attr.getNumArgs() == 2 && Attr.isArgIdent(0)
+                               ? Attr.getArgAsIdent(0)->Ident
+                               : nullptr;
+  const Expr *Argument = Attr.getNumArgs() == 2 && Attr.isArgExpr(1)
+                             ? Attr.getArgAsExpr(1)
+                             : nullptr;
+  std::optional<llvm::APSInt> Value =
+      Argument ? Argument->getIntegerConstantExpr(S.Context) : std::nullopt;
+  if (!isa<ValueDecl>(D) || !Family || !Value || !Value->isSignedIntN(64)) {
+    unsigned ID = S.getDiagnostics().getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "%0 requires an ownership-family identifier and a signed integer "
+        "sentinel on a value declaration");
+    S.Diag(Attr.getLoc(), ID) << Attr;
+    return ParsedAttrInfo::AttributeNotApplied;
+  }
+  std::string Annotation = (AnnotationName + ":" + Family->getName() + ":" +
+                            llvm::Twine(Value->getSExtValue()))
+                               .str();
+  D->addAttr(
+      AnnotateAttr::Create(S.Context, Annotation, nullptr, 0, Attr.getRange()));
+  return ParsedAttrInfo::AttributeApplied;
+}
+
 struct OwnershipReallocatesAttrInfo final : ParsedAttrInfo {
   OwnershipReallocatesAttrInfo() {
     OptArgs = 1;
@@ -160,17 +187,20 @@ DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipRequiresTokenAttrInfo,
                                   "ownership_requires_token",
                                   "ownership_requires_token");
 DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipConsumesTokenAttrInfo,
-                                  "ownership_consumes_token",
-                                  "ownership_consumes_token");
+                                  "ownership_drops_token",
+                                  "ownership_drops_token");
 DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipGrantsTokenAttrInfo,
-                                  "ownership_grants_token",
-                                  "ownership_grants_token");
+                                  "ownership_adds_token",
+                                  "ownership_adds_token");
 DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipGrantsDuplicableTokenAttrInfo,
-                                  "ownership_grants_duplicable_token",
-                                  "ownership_grants_duplicable_token");
+                                  "ownership_adds_duplicable_token",
+                                  "ownership_adds_duplicable_token");
 DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipConsumesAnyTokenAttrInfo,
-                                  "ownership_consumes_any_token",
-                                  "ownership_consumes_any_token");
+                                  "ownership_drops_any_token",
+                                  "ownership_drops_any_token");
+DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipRequiresAbsentTokenAttrInfo,
+                                  "ownership_requires_absent_token",
+                                  "ownership_requires_absent_token");
 
 #undef DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE
 
@@ -201,8 +231,38 @@ DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(OwnershipHoldsTokenAttrInfo,
 DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(OwnershipHoldsDuplicableTokenAttrInfo,
                                  "ownership_holds_duplicable_token",
                                  "ownership_holds_duplicable_token");
+DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(OwnershipTokenBlocksDereferenceAttrInfo,
+                                 "ownership_token_blocks_dereference",
+                                 "ownership_token_blocks_dereference");
 
 #undef DEFINE_VALUE_OWNERSHIP_ATTRIBUTE
+
+#define DEFINE_SENTINEL_OWNERSHIP_ATTRIBUTE(ClassName, SpellingName,           \
+                                            AnnotationName)                    \
+  struct ClassName final : ParsedAttrInfo {                                    \
+    ClassName() {                                                              \
+      OptArgs = 2;                                                             \
+      static constexpr Spelling SpellingsList[] = {                            \
+          {ParsedAttr::AS_GNU, SpellingName},                                  \
+          {ParsedAttr::AS_C23, SpellingName},                                  \
+          {ParsedAttr::AS_CXX11, SpellingName}};                               \
+      Spellings = SpellingsList;                                               \
+    }                                                                          \
+                                                                               \
+    AttrHandling handleDeclAttribute(Sema &S, Decl *D,                         \
+                                     const ParsedAttr &Attr) const override {  \
+      return attachValueFamilyIntegerAnnotation(S, D, Attr, AnnotationName);   \
+    }                                                                          \
+  }
+
+DEFINE_SENTINEL_OWNERSHIP_ATTRIBUTE(OwnershipTokenConsumedByEqualAttrInfo,
+                                    "ownership_token_consumed_by_equal",
+                                    "ownership_token_consumed_by_equal");
+DEFINE_SENTINEL_OWNERSHIP_ATTRIBUTE(OwnershipTokenConsumedBySwitchAttrInfo,
+                                    "ownership_token_consumed_by_switch",
+                                    "ownership_token_consumed_by_switch");
+
+#undef DEFINE_SENTINEL_OWNERSHIP_ATTRIBUTE
 
 } // namespace
 
@@ -223,15 +283,18 @@ static ParsedAttrInfoRegistry::Add<OwnershipStaticAttrInfo>
 static ParsedAttrInfoRegistry::Add<OwnershipRequiresTokenAttrInfo>
     RequiresToken("ownership_requires_token", "requires a capability token");
 static ParsedAttrInfoRegistry::Add<OwnershipConsumesTokenAttrInfo>
-    ConsumesToken("ownership_consumes_token", "consumes a capability token");
+    ConsumesToken("ownership_drops_token", "consumes a capability token");
 static ParsedAttrInfoRegistry::Add<OwnershipGrantsTokenAttrInfo>
-    GrantsToken("ownership_grants_token", "grants a linear capability token");
+    GrantsToken("ownership_adds_token", "grants a linear capability token");
 static ParsedAttrInfoRegistry::Add<OwnershipGrantsDuplicableTokenAttrInfo>
-    GrantsDuplicableToken("ownership_grants_duplicable_token",
+    GrantsDuplicableToken("ownership_adds_duplicable_token",
                           "grants a duplicable capability token");
 static ParsedAttrInfoRegistry::Add<OwnershipConsumesAnyTokenAttrInfo>
-    ConsumesAnyToken("ownership_consumes_any_token",
+    ConsumesAnyToken("ownership_drops_any_token",
                      "consumes one member of an alternative token set");
+static ParsedAttrInfoRegistry::Add<OwnershipRequiresAbsentTokenAttrInfo>
+    RequiresAbsentToken("ownership_requires_absent_token",
+                        "requires that a capability token not be held");
 static ParsedAttrInfoRegistry::Add<OwnershipHoldsHandleAttrInfo>
     HoldsHandle("ownership_holds_handle",
                 "adds a handle class to a value's ownership type");
@@ -241,3 +304,13 @@ static ParsedAttrInfoRegistry::Add<OwnershipHoldsTokenAttrInfo>
 static ParsedAttrInfoRegistry::Add<OwnershipHoldsDuplicableTokenAttrInfo>
     HoldsDuplicableToken("ownership_holds_duplicable_token",
                          "adds a duplicable token to a value's ownership type");
+static ParsedAttrInfoRegistry::Add<OwnershipTokenBlocksDereferenceAttrInfo>
+    TokenBlocksDereference("ownership_token_blocks_dereference",
+                           "blocks dereference while a token is held");
+static ParsedAttrInfoRegistry::Add<OwnershipTokenConsumedByEqualAttrInfo>
+    TokenConsumedByEqual("ownership_token_consumed_by_equal",
+                         "consumes a token when compared equal to a sentinel");
+static ParsedAttrInfoRegistry::Add<OwnershipTokenConsumedBySwitchAttrInfo>
+    TokenConsumedBySwitch(
+        "ownership_token_consumed_by_switch",
+        "consumes a token when switched over a sentinel case");

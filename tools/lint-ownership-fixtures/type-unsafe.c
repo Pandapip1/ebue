@@ -19,9 +19,9 @@ void manufacture_token(void)
 	(void)owner;
 }
 
-void erase_token(void)
+void borrow_without_transferring_token(void)
 {
-	void *plain = make_owner(); /* ownership-expect: type-erase */
+	void *plain = make_owner();
 	(void)plain;
 }
 

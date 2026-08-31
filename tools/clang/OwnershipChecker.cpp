@@ -3,6 +3,7 @@
 
 #include "clang/AST/Attr.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -908,6 +909,7 @@ public:
 
 enum class CapabilityOperation : unsigned char {
   Require,
+  RequireAbsent,
   Consume,
   ConsumeAny,
   GrantLinear,
@@ -964,10 +966,12 @@ class CapabilityTokenChecker
     };
     static constexpr OperationAnnotation Operations[] = {
         {"ownership_requires_token:", CapabilityOperation::Require},
-        {"ownership_consumes_token:", CapabilityOperation::Consume},
-        {"ownership_consumes_any_token:", CapabilityOperation::ConsumeAny},
-        {"ownership_grants_token:", CapabilityOperation::GrantLinear},
-        {"ownership_grants_duplicable_token:",
+        {"ownership_requires_absent_token:",
+         CapabilityOperation::RequireAbsent},
+        {"ownership_drops_token:", CapabilityOperation::Consume},
+        {"ownership_drops_any_token:", CapabilityOperation::ConsumeAny},
+        {"ownership_adds_token:", CapabilityOperation::GrantLinear},
+        {"ownership_adds_duplicable_token:",
          CapabilityOperation::GrantDuplicable}};
     for (const AnnotateAttr *Attr : Function->specific_attrs<AnnotateAttr>())
       for (const OperationAnnotation &Candidate : Operations)
@@ -1004,6 +1008,36 @@ class CapabilityTokenChecker
     return State->get<CapabilityMap>(key(Region, Family)) != nullptr;
   }
 
+  static const CapabilityKind *tokenFor(ProgramStateRef State, SVal Value,
+                                        const IdentifierInfo *Family) {
+    if (SymbolRef Symbol = Value.getAsSymbol(true))
+      if (const CapabilityKind *Kind =
+              State->get<SymbolCapabilityMap>({Symbol, Family}))
+        return Kind;
+    if (const MemRegion *Region = Value.getAsRegion())
+      return State->get<CapabilityMap>(key(Region, Family));
+    return nullptr;
+  }
+
+  static ProgramStateRef removeToken(ProgramStateRef State, SVal Value,
+                                     const IdentifierInfo *Family) {
+    if (SymbolRef Symbol = Value.getAsSymbol(true))
+      State = State->remove<SymbolCapabilityMap>({Symbol, Family});
+    if (const MemRegion *Region = Value.getAsRegion())
+      State = State->remove<CapabilityMap>(key(Region, Family));
+    return State;
+  }
+
+  static ProgramStateRef setToken(ProgramStateRef State, SVal Value,
+                                  const IdentifierInfo *Family,
+                                  CapabilityKind Kind) {
+    if (SymbolRef Symbol = Value.getAsSymbol(true))
+      State = State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
+    if (const MemRegion *Region = Value.getAsRegion())
+      State = State->set<CapabilityMap>(key(Region, Family), Kind);
+    return State;
+  }
+
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
               CheckerContext &C) const {
     ExplodedNode *Node = C.generateNonFatalErrorNode(State);
@@ -1024,11 +1058,10 @@ class CapabilityTokenChecker
     const Stmt *Statement = Call.getOriginExpr();
     bool Valid = true;
     for (const CapabilityProtocol &Protocol : Protocols) {
-      const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
-      if (!Region)
+      if (Protocol.Argument >= Call.getNumArgs())
         continue;
-      const CapabilityKind *Existing =
-          State->get<CapabilityMap>(key(Region, Protocol.Family));
+      SVal Value = Call.getArgSVal(Protocol.Argument);
+      const CapabilityKind *Existing = tokenFor(State, Value, Protocol.Family);
       if (Protocol.Operation == CapabilityOperation::ConsumeAny)
         continue;
       if ((Protocol.Operation == CapabilityOperation::Require ||
@@ -1037,6 +1070,13 @@ class CapabilityTokenChecker
         if (C && Statement)
           report("required ownership capability token is not held", Statement,
                  State, *C);
+        Valid = false;
+      } else if (Protocol.Operation == CapabilityOperation::RequireAbsent &&
+                 Existing) {
+        if (C && Statement)
+          report(
+              "operation is blocked while ownership capability token is held",
+              Statement, State, *C);
         Valid = false;
       } else if (Protocol.Operation == CapabilityOperation::GrantLinear &&
                  Existing) {
@@ -1083,23 +1123,25 @@ class CapabilityTokenChecker
                                     const CallEvent &Call,
                                     ArrayRef<CapabilityProtocol> Protocols) {
     for (const CapabilityProtocol &Protocol : Protocols) {
-      const MemRegion *Region = argumentRegion(Call, Protocol.Argument);
-      if (!Region)
+      if (Protocol.Argument >= Call.getNumArgs())
         continue;
-      CapabilityKey Key = key(Region, Protocol.Family);
       switch (Protocol.Operation) {
       case CapabilityOperation::Require:
+      case CapabilityOperation::RequireAbsent:
         break;
       case CapabilityOperation::Consume:
-        State = State->remove<CapabilityMap>(Key);
+        State = removeToken(State, Call.getArgSVal(Protocol.Argument),
+                            Protocol.Family);
         break;
       case CapabilityOperation::ConsumeAny:
         break;
       case CapabilityOperation::GrantLinear:
-        State = State->set<CapabilityMap>(Key, CapabilityKind::Linear);
+        State = setToken(State, Call.getArgSVal(Protocol.Argument),
+                         Protocol.Family, CapabilityKind::Linear);
         break;
       case CapabilityOperation::GrantDuplicable:
-        State = State->set<CapabilityMap>(Key, CapabilityKind::Duplicable);
+        State = setToken(State, Call.getArgSVal(Protocol.Argument),
+                         Protocol.Family, CapabilityKind::Duplicable);
         break;
       }
     }
@@ -1196,9 +1238,13 @@ struct OwnershipTypeEntry {
 };
 
 class OwnershipTypeChecker
-    : public Checker<check::BeginFunction, check::PreStmt<DeclStmt>,
-                     check::PreStmt<BinaryOperator>, check::PreStmt<ReturnStmt>,
-                     check::PreCall, check::PostCall> {
+    : public Checker<
+          check::BeginFunction, check::PreStmt<DeclStmt>,
+          check::PreStmt<BinaryOperator>, check::PostStmt<BinaryOperator>,
+          check::PreStmt<UnaryOperator>, check::PreStmt<ArraySubscriptExpr>,
+          check::PreStmt<MemberExpr>, check::PostStmt<ImplicitCastExpr>,
+          check::PreStmt<ReturnStmt>, check::BranchCondition, check::PreCall,
+          check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
 
   static llvm::SmallVector<OwnershipTypeEntry, 4>
@@ -1240,7 +1286,7 @@ class OwnershipTypeChecker
     if (const auto *Call = dyn_cast<CallExpr>(Expression))
       return Call->getDirectCallee();
     if (const auto *Unary = dyn_cast<UnaryOperator>(Expression))
-      if (Unary->getOpcode() == UO_AddrOf || Unary->getOpcode() == UO_Deref)
+      if (Unary->getOpcode() == UO_AddrOf)
         return declarationFor(Unary->getSubExpr());
     return nullptr;
   }
@@ -1250,6 +1296,58 @@ class OwnershipTypeChecker
     return bundleFor(declarationFor(Expression));
   }
 
+  struct SentinelTrait {
+    const IdentifierInfo *Family;
+    int64_t Value;
+  };
+
+  static llvm::SmallVector<SentinelTrait, 2>
+  sentinelTraits(const ValueDecl *Declaration, StringRef Prefix) {
+    llvm::SmallVector<SentinelTrait, 2> Traits;
+    if (!Declaration)
+      return Traits;
+    for (const AnnotateAttr *Attr :
+         Declaration->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attr->getAnnotation();
+      if (!Text.consume_front(Prefix))
+        continue;
+      auto [FamilyName, ValueText] = Text.split(':');
+      int64_t Value = 0;
+      if (FamilyName.empty() || ValueText.getAsInteger(10, Value))
+        continue;
+      Traits.push_back(
+          {&Declaration->getASTContext().Idents.get(FamilyName), Value});
+    }
+    return Traits;
+  }
+
+  static llvm::SmallVector<const IdentifierInfo *, 2>
+  familyTraits(const ValueDecl *Declaration, StringRef Prefix) {
+    llvm::SmallVector<const IdentifierInfo *, 2> Traits;
+    if (!Declaration)
+      return Traits;
+    for (const AnnotateAttr *Attr :
+         Declaration->specific_attrs<AnnotateAttr>()) {
+      StringRef Text = Attr->getAnnotation();
+      if (!Text.consume_front(Prefix) || Text.empty() || Text.contains(':'))
+        continue;
+      Traits.push_back(&Declaration->getASTContext().Idents.get(Text));
+    }
+    return Traits;
+  }
+
+  static std::optional<int64_t> integerConstant(const Expr *Expression,
+                                                ASTContext &Context) {
+    if (!Expression)
+      return std::nullopt;
+    Expression = Expression->IgnoreParenImpCasts();
+    std::optional<llvm::APSInt> Value =
+        Expression->getIntegerConstantExpr(Context);
+    if (!Value || !Value->isSignedIntN(64))
+      return std::nullopt;
+    return Value->getSExtValue();
+  }
+
   static bool contains(ArrayRef<OwnershipTypeEntry> Bundle,
                        const OwnershipTypeEntry &Wanted) {
     return llvm::any_of(Bundle, [&](const OwnershipTypeEntry &Entry) {
@@ -1257,12 +1355,10 @@ class OwnershipTypeChecker
     });
   }
 
-  static bool sameBundle(ArrayRef<OwnershipTypeEntry> First,
-                         ArrayRef<OwnershipTypeEntry> Second) {
-    if (First.size() != Second.size())
-      return false;
-    return llvm::all_of(First, [&](const OwnershipTypeEntry &Entry) {
-      return contains(Second, Entry);
+  static bool sourceProvides(ArrayRef<OwnershipTypeEntry> Destination,
+                             ArrayRef<OwnershipTypeEntry> Source) {
+    return llvm::all_of(Destination, [&](const OwnershipTypeEntry &Entry) {
+      return contains(Source, Entry);
     });
   }
 
@@ -1287,19 +1383,64 @@ class OwnershipTypeChecker
     llvm::SmallVector<OwnershipTypeEntry, 4> DestinationBundle =
         bundleFor(Destination);
     llvm::SmallVector<OwnershipTypeEntry, 4> SourceBundle = bundleFor(Source);
-    if (!sameBundle(DestinationBundle, SourceBundle))
-      report("ownership token bundle does not match destination type",
+    if (!sourceProvides(DestinationBundle, SourceBundle))
+      report("source ownership type does not provide destination token bundle",
              Statement, C.getState(), C);
   }
 
   static ProgramStateRef setToken(ProgramStateRef State, SVal Value,
                                   const IdentifierInfo *Family,
                                   CapabilityKind Kind) {
-    if (const MemRegion *Region = Value.getAsRegion())
-      return State->set<CapabilityMap>({Region, Family}, Kind);
     if (SymbolRef Symbol = Value.getAsSymbol(true))
-      return State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
+      State = State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
+    if (const MemRegion *Region = Value.getAsRegion())
+      State = State->set<CapabilityMap>({Region, Family}, Kind);
     return State;
+  }
+
+  static const CapabilityKind *tokenFor(ProgramStateRef State, SVal Value,
+                                        const IdentifierInfo *Family) {
+    if (SymbolRef Symbol = Value.getAsSymbol(true))
+      if (const CapabilityKind *Kind =
+              State->get<SymbolCapabilityMap>({Symbol, Family}))
+        return Kind;
+    if (const MemRegion *Region = Value.getAsRegion())
+      return State->get<CapabilityMap>({Region, Family});
+    return nullptr;
+  }
+
+  static ProgramStateRef removeToken(ProgramStateRef State, SVal Value,
+                                     const IdentifierInfo *Family) {
+    if (SymbolRef Symbol = Value.getAsSymbol(true))
+      State = State->remove<SymbolCapabilityMap>({Symbol, Family});
+    if (const MemRegion *Region = Value.getAsRegion())
+      State = State->remove<CapabilityMap>({Region, Family});
+    return State;
+  }
+
+  static SVal valueForExpression(const Expr *Expression, CheckerContext &C) {
+    const Expr *Core = Expression ? Expression->IgnoreParenImpCasts() : nullptr;
+    if (const auto *Reference = dyn_cast_or_null<DeclRefExpr>(Core))
+      if (const auto *Variable = dyn_cast<VarDecl>(Reference->getDecl())) {
+        ProgramStateRef State = C.getState();
+        return State->getSVal(
+            State->getLValue(Variable, C.getLocationContext()));
+      }
+    return Expression ? C.getSVal(Expression) : UnknownVal();
+  }
+
+  void requireDereferenceAllowed(const Expr *Pointer, const Stmt *Statement,
+                                 CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    SVal Value = C.getSVal(Pointer);
+    for (const IdentifierInfo *Family : familyTraits(
+             declarationFor(Pointer), "ownership_token_blocks_dereference:"))
+      if (tokenFor(State, Value, Family)) {
+        report("pointer operation is blocked while unchecked ownership token "
+               "is held",
+               Statement, State, C);
+        return;
+      }
   }
 
 public:
@@ -1340,6 +1481,104 @@ public:
       return;
     requireSameBundle(declarationFor(Statement->getLHS()), Statement->getRHS(),
                       Statement, C);
+  }
+
+  void consumeEqualityToken(const BinaryOperator *Statement,
+                            CheckerContext &C) const {
+    if (Statement->getOpcode() != BO_EQ)
+      return;
+    const Expr *ValueExpression = Statement->getLHS();
+    std::optional<int64_t> Sentinel =
+        integerConstant(Statement->getRHS(), C.getASTContext());
+    if (!Sentinel) {
+      ValueExpression = Statement->getRHS();
+      Sentinel = integerConstant(Statement->getLHS(), C.getASTContext());
+    }
+    if (!Sentinel)
+      return;
+    ProgramStateRef State = C.getState();
+    SVal Value = C.getSVal(ValueExpression);
+    bool Changed = false;
+    for (const SentinelTrait &Trait :
+         sentinelTraits(declarationFor(ValueExpression),
+                        "ownership_token_consumed_by_equal:")) {
+      if (Trait.Value != *Sentinel || !tokenFor(State, Value, Trait.Family))
+        continue;
+      State = removeToken(State, Value, Trait.Family);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPostStmt(const BinaryOperator *Statement, CheckerContext &C) const {
+    consumeEqualityToken(Statement, C);
+  }
+
+  void checkBranchCondition(const Stmt *Statement, CheckerContext &C) const {
+    if (const auto *Comparison = dyn_cast<BinaryOperator>(Statement))
+      consumeEqualityToken(Comparison, C);
+  }
+
+  void consumeSwitchToken(const SwitchStmt *Statement,
+                          CheckerContext &C) const {
+    const Expr *Condition = Statement->getCond();
+    ProgramStateRef State = C.getState();
+    SVal Value = valueForExpression(Condition, C);
+    bool Changed = false;
+    for (const SentinelTrait &Trait :
+         sentinelTraits(declarationFor(Condition),
+                        "ownership_token_consumed_by_switch:")) {
+      bool HasSentinelCase = false;
+      for (const SwitchCase *Case = Statement->getSwitchCaseList(); Case;
+           Case = Case->getNextSwitchCase()) {
+        const auto *ValueCase = dyn_cast<CaseStmt>(Case);
+        if (!ValueCase)
+          continue;
+        std::optional<int64_t> CaseValue =
+            integerConstant(ValueCase->getLHS(), C.getASTContext());
+        if (CaseValue && *CaseValue == Trait.Value) {
+          HasSentinelCase = true;
+          break;
+        }
+      }
+      if (!HasSentinelCase || !tokenFor(State, Value, Trait.Family))
+        continue;
+      State = removeToken(State, Value, Trait.Family);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPostStmt(const ImplicitCastExpr *Statement,
+                     CheckerContext &C) const {
+    const Stmt *Current = Statement;
+    for (unsigned Depth = 0; Current && Depth != 4; ++Depth) {
+      DynTypedNodeList Parents = C.getASTContext().getParents(*Current);
+      if (Parents.empty())
+        return;
+      if (const auto *Switch = Parents[0].get<SwitchStmt>()) {
+        consumeSwitchToken(Switch, C);
+        return;
+      }
+      Current = Parents[0].get<Expr>();
+    }
+  }
+
+  void checkPreStmt(const UnaryOperator *Statement, CheckerContext &C) const {
+    if (Statement->getOpcode() == UO_Deref)
+      requireDereferenceAllowed(Statement->getSubExpr(), Statement, C);
+  }
+
+  void checkPreStmt(const ArraySubscriptExpr *Statement,
+                    CheckerContext &C) const {
+    requireDereferenceAllowed(Statement->getBase(), Statement, C);
+  }
+
+  void checkPreStmt(const MemberExpr *Statement, CheckerContext &C) const {
+    if (Statement->isArrow())
+      requireDereferenceAllowed(Statement->getBase(), Statement, C);
   }
 
   void checkPreStmt(const ReturnStmt *Statement, CheckerContext &C) const {
