@@ -43,7 +43,8 @@ runs:
         diff --git a/tccpe.c b/tccpe.c
         --- a/tccpe.c
         +++ b/tccpe.c
-        @@ -1307,7 +1307,8 @@ static void pe_build_delay_imports(struct pe_info *pe)
+        @@ -1307,6 +1307,7 @@ static void pe_build_delay_imports(struct pe_info *pe)
+         static void pe_build_delay_imports(struct pe_info *pe)
          {
              TCCState *s1 = pe->s1;
         -    tcc_error_noabort("--delay-all is only supported for the i386 and x86_64 targets");
