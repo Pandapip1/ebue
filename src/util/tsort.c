@@ -206,9 +206,9 @@ int __util_tsort_main(int argc, char **argv)
 		return 1;
 	}
 
-	for (i = 0; i < ntok; i += 2) {
-		int a = get_or_add(tok[i]);
-		int b = get_or_add(tok[i + 1]);
+	for (i = 0; i < ntok / 2; i++) {
+		int a = get_or_add(tok[2 * i]);
+		int b = get_or_add(tok[2 * i + 1]);
 		if (a < 0 || b < 0) { __util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1; }
 		if (a != b && add_edge(a, b) < 0) {
 			__util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1;

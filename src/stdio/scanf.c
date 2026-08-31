@@ -1075,7 +1075,7 @@ static int vfscanf_st(FILE *f, const char *fmt, va_list ap, size_t st)
 					do {
 						if (gf(fp, st) == '-' && gf(fp + st, st) && gf(fp + st, st) != ']' && fp != start) {
 							unsigned a = gf(fp - st, st), b = gf(fp + st, st), k;
-							if (a < 256 && b < 256) for (k = a; k <= b; k++) set[k] = 1;
+							if (a < 256 && b < 256) for (k = a; k < b + 1; k++) set[k] = 1;
 							else anyhigh = 1;
 							fp += 2 * st;
 						} else {

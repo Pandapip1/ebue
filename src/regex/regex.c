@@ -320,7 +320,7 @@ static void parse_bracket(struct parser *ps)
 			ps->p++;
 			hi = (unsigned char)*ps->p++;
 			if (hi < c) { ps->err = REG_ERANGE; return; }
-			for (k = c; k <= hi; k++) setbit(bs, k, ps->icase);
+			for (k = c; k < hi + 1; k++) setbit(bs, k, ps->icase);
 			continue;
 		}
 		setbit(bs, c, ps->icase);

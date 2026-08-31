@@ -68,7 +68,7 @@ static double j_series(int n, double x) // NOLINT(bugprone-easily-swappable-para
 	double sum;
 	int k;
 
-	for (k = 1; k <= n; k++) term *= half / (double)k;
+	for (k = 1; k < n + 1; k++) term *= half / (double)k;
 	sum = term;
 	for (k = 1; k <= 60; k++) {
 		term *= -(half * half) / ((double)k * (double)(n + k));
@@ -217,7 +217,7 @@ static void airy_pair(double x, double *ai, double *bi)
 		double ca[64] = { ai0, aip0, 0.0 };
 		double cb[64] = { bi0, bip0, 0.0 };
 		int i;
-		for (i = 1; i + 2 < 64; i++) {
+		for (i = 1; i < 62; i++) {
 			ca[i + 2] = ca[i - 1] / ((double)(i + 2) * (i + 1));
 			cb[i + 2] = cb[i - 1] / ((double)(i + 2) * (i + 1));
 		}

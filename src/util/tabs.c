@@ -66,7 +66,7 @@ static int emit_uniform_tabs(int n)
 	int col;
 
 	if (fputs("\033[3g", stdout) < 0 || fputc('\r', stdout) == EOF) return -1;
-	for (col = n; col <= MAX_COLUMN; col += n) {
+	for (col = 0; col < MAX_COLUMN / n; col++) {
 		int i;
 		for (i = 0; i < n; i++) if (fputc(' ', stdout) == EOF) return -1;
 		if (fputs("\033H", stdout) < 0) return -1; /* HTS: set a stop at the cursor's column */

@@ -233,7 +233,7 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 		n = snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 	} else if (af == AF_INET6) {
 		unsigned words[8];
-		int i, best = -1, bestlen = 0;
+		int i, steps, best = -1, bestlen = 0;
 		char *q = buf;
 		size_t left = sizeof buf;
 
@@ -245,7 +245,7 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 				size_t offset = 2 * (size_t)i;
 				words[i] = (unsigned)b[offset] << 8 | b[offset + 1];
 			}
-			for (i = 0; i < 8;) {
+			for (i = 0, steps = 0; i < 8 && steps < 8; steps++) {
 				int j;
 				if (words[i]) { i++; continue; }
 				for (j = i; j < 8 && !words[j]; j++);
@@ -253,7 +253,7 @@ const char *inet_ntop(int af, const void *__restrict src, char *__restrict dst, 
 				i = j;
 			}
 			if (bestlen < 2) best = -1;
-			for (i = 0; i < 8;) {
+			for (i = 0, steps = 0; i < 8 && steps < 8; steps++) {
 				if (i == best) {
 					if (left < 3) { errno = ENOSPC; return 0; }
 					*q++ = ':'; *q++ = ':'; left -= 2;

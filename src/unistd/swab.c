@@ -22,13 +22,15 @@ void swab(const void *__restrict src, void *__restrict dest, ssize_t nbytes) // 
 {
 	const unsigned char *s = src;
 	unsigned char *d = dest;
-	ssize_t i;
+	ssize_t i, pairs;
 
 	if (nbytes <= 0) return;
-	for (i = 0; i + 1 < nbytes; i += 2) {
-		d[i] = s[i + 1];
-		d[i + 1] = s[i];
+	pairs = nbytes / 2;
+	for (i = 0; i < pairs; i++) {
+		d[2 * i] = s[2 * i + 1];
+		d[2 * i + 1] = s[2 * i];
 	}
+	i *= 2;
 	if (i < nbytes) d[i] = s[i];
 }
 

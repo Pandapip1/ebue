@@ -14,7 +14,8 @@ void *memmem(const void *h0, size_t k, const void *n0, size_t l)
 	if (!h) return 0;
 	k -= h - (const unsigned char *)h0;
 	if (l == 1) return (void *)h;
-	for (i = 0; i + l <= k; i++) {
+	if (k < l) return 0;
+	for (i = 0; i < k - l + 1; i++) {
 		if (h[i] == *n && !memcmp(h+i+1, n+1, l-1)) return (void *)(h+i);
 	}
 	return 0;

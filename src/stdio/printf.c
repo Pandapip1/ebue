@@ -539,13 +539,13 @@ static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *ep
 	buf[n++] = D->d[0];
 	if (prec > 0 || alt) {
 		buf[n++] = '.';
-		for (i = 1; i <= prec; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
+		for (i = 1; i < prec + 1; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 	}
 	*epos = n;
 	buf[n++] = upper ? 'E' : 'e';
 	buf[n++] = D->decexp < 0 ? '-' : '+';
 	{
-		int ax = D->decexp < 0 ? -D->decexp : D->decexp;
+		unsigned ax = (unsigned)(D->decexp < 0 ? -D->decexp : D->decexp);
 		char eb[8]; int ei = 0;
 		if (ax == 0) eb[ei++] = '0';
 		while (ax) { eb[ei++] = (char)('0' + ax % 10); ax /= 10; }
@@ -618,7 +618,7 @@ static int fmt_a(char *buf, double v, int prec, int alt, int upper, int *epos) /
 	buf[n++] = upper ? 'P' : 'p';
 	buf[n++] = e < 0 ? '-' : '+';
 	{
-		int ax = e < 0 ? -e : e;
+		unsigned ax = (unsigned)(e < 0 ? -e : e);
 		char eb[8]; int ei = 0;
 		if (ax == 0) eb[ei++] = '0';
 		while (ax) { eb[ei++] = (char)('0' + ax % 10); ax /= 10; }
@@ -1127,10 +1127,10 @@ static int build_argtab(const char *fmt, int st, union varg *tab, va_list *ap)
 	 * makes the guess unobservable there.  Filling the slot rather than
 	 * leaving it alone is the half that matters: after this loop every
 	 * entry in [1,max] has been written before anything can read one. */
-	for (i = 1; i <= max; i++)
+	for (i = 1; i < max + 1; i++)
 		if (types[i] == A_NONE) types[i] = A_INT;
 
-	for (i = 1; i <= max; i++) pop_arg(&tab[i], types[i], ap);
+	for (i = 1; i < max + 1; i++) pop_arg(&tab[i], types[i], ap);
 	return max;
 }
 

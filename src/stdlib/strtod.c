@@ -100,7 +100,7 @@ static void bn_muladd(bn_t *a, uint32_t m, uint32_t c) // NOLINT(bugprone-easily
 	}
 	while (carry && a->n < BN_LIMBS) {
 		a->d[a->n++] = (uint32_t)carry;
-		carry >>= 32;
+		carry /= 0x100000000ULL;
 	}
 }
 
@@ -112,7 +112,7 @@ static int bn_bits(const bn_t *a)
 	if (!a->n) return 0;
 	v = a->d[a->n - 1];
 	b = (a->n - 1) * 32;
-	while (v) { b++; v >>= 1; }
+	while (v) { b++; v /= 2; }
 	return b;
 }
 

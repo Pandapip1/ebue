@@ -548,7 +548,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 						if (fnmatch(pattern, candidate, 0) == 0) { cut = i; break; }
 					}
 				} else {
-					for (i = 0; i <= vlen; i++) {
+					for (i = 0; i < vlen + 1; i++) {
 						candidate[i] = 0;
 						if (fnmatch(pattern, candidate, 0) == 0) { cut = i; break; }
 						candidate[i] = val[i];
@@ -558,7 +558,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 			} else {
 				cut = vlen;
 				if (longest) {
-					for (i = 0; i <= vlen; i++)
+					for (i = 0; i < vlen + 1; i++)
 						if (fnmatch(pattern, val + i, 0) == 0) { cut = i; break; }
 				} else {
 					for (i = vlen + 1; i-- > 0;)

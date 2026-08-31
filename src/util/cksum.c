@@ -134,7 +134,7 @@ static int cksum_one(const char *path, uint32_t *out_crc, uintmax_t *out_len)
 
 	/* Step 3 above: the length itself, byte by byte, least-significant
 	 * first, until nothing remains. */
-	for (l = len; l != 0; l >>= 8)
+	for (l = len; l > 0; l /= 256)
 		crc = crc_byte(crc, (unsigned char)(l & 0xff));
 
 	*out_crc = ~crc;

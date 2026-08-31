@@ -144,7 +144,7 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 
 	if (o->have_delim) {
 		size_t start = 0, i;
-		for (i = 0; i <= len; i++) {
+		for (i = 0; i < len + 1; i++) {
 			if (i == len || line[i] == o->delim) {
 				if (n >= cap) {
 					struct field *g = fields_grow(out, &cap);
