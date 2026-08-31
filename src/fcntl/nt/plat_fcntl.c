@@ -171,7 +171,7 @@ int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclu
 	NTSTATUS st;
 
 	*conflicting = 0;
-	st = NtLockFile(h, 0, 0, 0, 0, &o, &l, 0, 1, exclusive);
+	st = NtLockFile(h, 0, 0, 0, &io, &o, &l, 0, 1, exclusive);
 	if (NT_SUCCESS(st)) {
 		st = NtUnlockFile(h, &io, &o, &l, 0);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -187,8 +187,9 @@ int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclu
 
 int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusive, int wait) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
+	IO_STATUS_BLOCK io;
 	LARGE_INTEGER o = off, l = len;
-	NTSTATUS st = NtLockFile(h, 0, 0, 0, 0, &o, &l, 0, wait ? 0 : 1, exclusive);
+	NTSTATUS st = NtLockFile(h, 0, 0, 0, &io, &o, &l, 0, wait ? 0 : 1, exclusive);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 /* Run headless under Wine: WINEDEBUG=-all WINEDLLOVERRIDES=winedbg.exe=d wine stdio.exe </dev/null
  * (a crashing check would otherwise block on Wine's crash dialog). */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>

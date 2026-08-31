@@ -599,26 +599,30 @@ static void test_nftw_chdir(void)
 		const char *c2 = "ftw-long-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 		const char *c3 = "ftw-long-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 		const char *c4 = "ftw-long-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-		char p2[256], p3[384], p4[512], target[1200];
+		const char *parts[] = { c1, c2, c3, c4 };
+		char target[1200];
+		int depth = 0;
 		int made = 1;
-		snprintf(p2, sizeof p2, "%s/%s", c1, c2);
-		snprintf(p3, sizeof p3, "%s/%s", p2, c3);
-		snprintf(p4, sizeof p4, "%s/%s", p3, c4);
 		snprintf(target, sizeof target, "%s/tailtree", cwd0);
-		if (mkdir(c1, 0755) != 0 || mkdir(p2, 0755) != 0 ||
-		    mkdir(p3, 0755) != 0 || mkdir(p4, 0755) != 0 ||
-		    chdir(p4) != 0) made = 0;
+		for (depth = 0; depth < 4; depth++) {
+			if (mkdir(parts[depth], 0755) != 0 ||
+			    chdir(parts[depth]) != 0) {
+				made = 0;
+				break;
+			}
+		}
 		CHECK(made);
 		if (made) {
 			CHECK(getcwd(cwd1, sizeof cwd1) != NULL && strlen(cwd1) >= 256);
 			reset_walk();
 			CHECK(nftw(target, fn4, 5, FTW_CHDIR) == 0);
 		}
+		while (depth > 0) {
+			CHECK(chdir("..") == 0);
+			depth--;
+			CHECK(rmdir(parts[depth]) == 0);
+		}
 		CHECK(chdir(cwd0) == 0);
-		rmdir(p4);
-		rmdir(p3);
-		rmdir(p2);
-		rmdir(c1);
 	}
 
 	reset_walk();

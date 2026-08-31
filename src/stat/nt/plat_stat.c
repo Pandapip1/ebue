@@ -453,7 +453,10 @@ static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe, // NOLINT(bugpron
 	 * permission and special bit from the metadata.  Files without the EA
 	 * use the validated-PE compatibility fallback. */
 	if (have_lxmod) m = (m & S_IFMT) | (lxmod & 07777);
-	else if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
+	/* The native readonly attribute is independently authoritative.  It may
+	 * have been changed by a Windows program, or an EA query may return an
+	 * older $LXMOD value immediately after the attribute transition. */
+	if (attrs & FILE_ATTRIBUTE_READONLY) m &= ~0222;
 	return m;
 }
 
