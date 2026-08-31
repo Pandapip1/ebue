@@ -10,7 +10,12 @@ extern "C" {
 #include <features.h>
 #include <sys/select.h>
 
-int gettimeofday (struct timeval *__restrict, void *__restrict);
+/* tv is required: src/time/gettimeofday.c's gettimeofday() writes
+ * tv->tv_sec/tv_usec unconditionally on its own success path, with no
+ * NULL check. tz is accepted-and-ignored (`(void)tz;`, matching glibc's
+ * own "obsolete" treatment) and every real caller in this tree already
+ * passes NULL for it, so it is left unmarked. */
+int gettimeofday (struct timeval *__restrict, void *__restrict) __attribute__((nonnull(1)));
 
 #define ITIMER_REAL    0
 #define ITIMER_VIRTUAL 1
@@ -46,7 +51,11 @@ struct timezone {
 	int tz_dsttime;
 };
 int futimesat(int, const char *, const struct timeval [2]);
-int settimeofday(const struct timeval *, const struct timezone *);
+/* tv is required the same way gettimeofday()'s own tv is: settimeofday()
+ * dereferences tv->tv_usec unconditionally as its first real check, with
+ * no NULL guard. tz is accepted-and-ignored the same way (`(void)tz;`)
+ * and left unmarked for the same reason. */
+int settimeofday(const struct timeval *, const struct timezone *) __attribute__((nonnull(1)));
 int adjtime (const struct timeval *, struct timeval *);  /* undefined-ok:
 	adjtime() means a *gradual* slew towards the target, applied a little
 	at a time so nothing observes the clock jumping or running backwards.

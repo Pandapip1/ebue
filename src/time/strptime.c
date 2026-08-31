@@ -16,6 +16,11 @@
 #include <stdlib.h>
 #include "time_impl.h"
 
+/* s is required: the while condition dereferences *s unconditionally
+ * (even for a zero-length skip) as the very first thing this function
+ * does, with no NULL check, and every real call site in this file
+ * already holds a live cursor into the string being parsed. */
+static const char *skip_ws(const char *s) __attribute__((nonnull(1)));
 static const char *skip_ws(const char *s)
 {
 	while (isspace((unsigned char)*s)) s++;
@@ -23,7 +28,21 @@ static const char *skip_ws(const char *s)
 }
 
 /* Parse up to maxdigits decimal digits (after optional leading blanks),
- * the way strptime's numeric conversions do. */
+ * the way strptime's numeric conversions do.
+ *
+ * s is required: after skip_ws(s) returns, this function dereferences
+ * *s directly (`if (*s == '+' ...)`) with no NULL check. out is required
+ * too: `*out = neg ? -v : v;` is unconditional on the only path that
+ * returns non-NULL, and every one of this file's own call sites passes
+ * `&v`, a real on-stack local, never NULL.
+ *
+ * The same `*s` (the line right after `s = skip_ws(s);`) is now itself
+ * flagged: the same "no returns_nonnull-shaped contract this checker
+ * reads yet" gap parse()'s own comment documents -- skip_ws() never
+ * returns NULL, verified by inspection of its own single-statement
+ * body, not just assumed. */
+static const char *read_num(const char *s, int maxdigits, long *out)
+    __attribute__((nonnull(1, 3)));
 static const char *read_num(const char *s, int maxdigits, long *out)
 {
 	int n = 0;
@@ -41,6 +60,20 @@ static const char *read_num(const char *s, int maxdigits, long *out)
  * candidate first isn't necessary since none is a prefix of another
  * within the same table, but abbreviations ARE prefixes of the full
  * names, so try full names before abbreviations. */
+/* full/abbr/idx are required; s is deliberately NOT marked. full is
+ * indexed directly (`strlen(full[i])`) as soon as the first loop runs at
+ * all (n is always 7 or 12 at this file's two real call sites -- the day
+ * and month name tables -- never 0), and abbr the same way in the second
+ * loop whenever no full-name candidate matched first; idx is written
+ * (`*idx = i;`) on every match. Neither table nor idx is ever NULL at
+ * either real call site (__ntlibc_day_name/_abbr, __ntlibc_month_name/
+ * _abbr, and parse()'s own on-stack `idx`). s, by contrast, is only ever
+ * forwarded into strncasecmp() -- never dereferenced directly by this
+ * function's own body -- so it is left unmarked, the same "purely
+ * forwarded, the real callee already owns the contract" reasoning as
+ * time.h's own ctime_r()/clock_gettime() comments. */
+static const char *match_name(const char *s, const char *const *full, const char *const *abbr, int n, int *idx)
+    __attribute__((nonnull(2, 3, 5)));
 static const char *match_name(const char *s, const char *const *full, const char *const *abbr, int n, int *idx)
 {
 	for (int i = 0; i < n; i++) {
@@ -58,6 +91,36 @@ static const char *match_name(const char *s, const char *const *full, const char
  * century value %C parsed (e.g. 19 for the 1900s).  Both are shared
  * across recursive calls so that %r's %p applies to its %I and %C
  * combines correctly with a %y anywhere else in the same format. */
+/* Every pointer parameter here is required, and every one of them is
+ * genuinely dereferenced somewhere in this function's own body (the
+ * checker's own report names only *f, the loop condition -- the same
+ * one-finding-per-function masking prior sweeps have already documented
+ * -- but each of the rest is exactly as real, verified by hand): f is
+ * dereferenced unconditionally by the loop condition itself; s directly
+ * (`if (*s != *f) return NULL;`) whenever the current format character
+ * is a literal; tm on every recognized conversion (`tm->tm_year = ...`
+ * and friends); pm/century/year2 on their own conversions (%p/%C/%y).
+ * strptime() (this file's only real, non-recursive caller) always passes
+ * `&pm`/`&century`/`&year2`, on-stack locals it owns; the recursive
+ * self-call for %c/%D/%F/%r/%R/%T/%x/%X forwards the same pointers
+ * unchanged, never re-deriving a possibly-null one.
+ *
+ * Marking s here lets the checker explore further into this loop than
+ * before, surfacing several more `*s` sites (the literal-character
+ * comparison, `%z`'s post-skip_ws()/read_num() checks, `%Z`'s scan, and
+ * `%%`) that a fresh dataflow pass cannot re-derive as nonnull across a
+ * reassignment from skip_ws()/read_num()/match_name()'s own return
+ * value -- none of the three carries a `returns_nonnull`-shaped
+ * contract this checker currently reads, even though all three are, by
+ * inspection, incapable of returning NULL on any path this loop
+ * actually takes (skip_ws() never returns NULL at all; read_num()/
+ * match_name()'s NULL returns are always caught by this loop's own
+ * `if (!(s = ...)) return NULL;` before `s` is used again). Sound by
+ * hand at every one of these sites; closing the class properly would
+ * mean teaching the checker to trust `returns_nonnull`-shaped
+ * functions, a real but separate lemma this pass did not attempt. */
+static const char *parse(const char *s, const char *f, struct tm *tm,
+	int *pm, int *century, int *year2) __attribute__((nonnull(1, 2, 3, 4, 5, 6)));
 static const char *parse(const char *s, const char *f, struct tm *tm,
 	int *pm, int *century, int *year2)
 {
