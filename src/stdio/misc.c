@@ -218,7 +218,7 @@ char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappa
 char *ctermid(char *s)
 {
 	static char buf[L_ctermid] = "/dev/tty";
-	if (s) { strcpy(s, "/dev/tty"); return s; }
+	if (s) { memcpy(s, "/dev/tty", sizeof "/dev/tty"); return s; }
 	return buf;
 }
 

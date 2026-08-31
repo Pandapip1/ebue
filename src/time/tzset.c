@@ -55,8 +55,8 @@ void tzset(void)
 
 	daylight = 0;
 	if (!tz || !*tz) {
-		strcpy(__tzname_std, "UTC");
-		strcpy(__tzname_dst, "UTC");
+		memcpy(__tzname_std, "UTC", sizeof "UTC");
+		memcpy(__tzname_dst, "UTC", sizeof "UTC");
 		timezone = 0;
 		tzname[0] = __tzname_std;
 		tzname[1] = __tzname_dst;
@@ -65,7 +65,7 @@ void tzset(void)
 
 	/* Name: a run of letters, or a "quoted" run of anything but '>'. */
 	read_name(&tz, __tzname_std, sizeof __tzname_std);
-	if (!__tzname_std[0]) strcpy(__tzname_std, "UTC");
+	if (!__tzname_std[0]) memcpy(__tzname_std, "UTC", sizeof "UTC");
 	tzname[0] = __tzname_std;
 
 	/* Offset: [+-]?H[:MM[:SS]], POSIX sense (added to local time to get
@@ -78,7 +78,8 @@ void tzset(void)
 		if (*tz == ':') { tz++; s = strtol(tz, (char **)&tz, 10); }
 	}
 	read_name(&tz, __tzname_dst, sizeof __tzname_dst);
-	if (!__tzname_dst[0]) strcpy(__tzname_dst, __tzname_std);
+	if (!__tzname_dst[0])
+		(void)strlcpy(__tzname_dst, __tzname_std, sizeof __tzname_dst);
 	tzname[1] = __tzname_dst;
 	/* Combined in `long long`, not in `long`.  h, mn and s come out of
 	 * strtol(), which saturates at LONG_MAX -- 2147483647 on this

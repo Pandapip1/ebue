@@ -9,6 +9,9 @@
 
 char *strcat(char *__restrict dest, const char *__restrict src)
 {
+	/* strcat's specified interface supplies no destination extent; this
+	 * implementation cannot add a bound without changing the public API. */
+	// NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.strcpy)
 	strcpy(dest + strlen(dest), src);
 	return dest;
 }

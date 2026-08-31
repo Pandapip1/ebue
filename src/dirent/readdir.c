@@ -101,7 +101,7 @@ static int fill(DIR *dp, struct dirent *out)
 		                    (f->vfs == __VFS_ROOT ? __VFS_DEV : __VFS_CONSOLE + dp->tell - 2));
 		out->d_type = types[dp->tell];
 		out->d_reclen = sizeof *out;
-		strcpy(out->d_name, names[dp->tell]);
+		(void)strlcpy(out->d_name, names[dp->tell], sizeof out->d_name);
 		dp->tell++;
 		out->d_off = dp->tell;
 		return 0;
@@ -124,7 +124,8 @@ static int fill(DIR *dp, struct dirent *out)
 			out->d_ino = (ino_t)__vfs_mandatory_kind(f->vfs, i);
 			out->d_type = f->vfs == __VFS_ROOT ? __DT_DIR : __DT_CHR;
 			out->d_reclen = sizeof *out;
-			strcpy(out->d_name, __vfs_mandatory_name(f->vfs, i));
+			(void)strlcpy(out->d_name, __vfs_mandatory_name(f->vfs, i),
+			              sizeof out->d_name);
 			dp->tell++;
 			out->d_off = dp->tell;
 			return 0;

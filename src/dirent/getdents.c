@@ -53,7 +53,8 @@ static int append_missing(struct __fd *f, struct dirent *out, size_t size)
 		d->d_ino = (ino_t)__vfs_mandatory_kind(f->vfs, i);
 		d->d_type = f->vfs == __VFS_ROOT ? __DT_DIR : __DT_CHR;
 		d->d_reclen = sizeof *d;
-		strcpy(d->d_name, __vfs_mandatory_name(f->vfs, i));
+		(void)strlcpy(d->d_name, __vfs_mandatory_name(f->vfs, i),
+		              sizeof d->d_name);
 		used += sizeof *d;
 		d->d_off = (off_t)f->vnext;
 	}
@@ -89,7 +90,7 @@ int getdents(int fd, struct dirent *out, size_t size)
 			             (f->vfs == __VFS_ROOT ? __VFS_DEV : __VFS_CONSOLE + index - 2));
 			d->d_type = types[index];
 			d->d_reclen = sizeof *d;
-			strcpy(d->d_name, names[index]);
+			(void)strlcpy(d->d_name, names[index], sizeof d->d_name);
 			index++;
 			used += sizeof *d;
 			d->d_off = (off_t)index;
