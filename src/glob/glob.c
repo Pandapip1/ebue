@@ -114,10 +114,14 @@ static const char *find_slash(const char *p, int flags)
 static int has_meta(const char *s, size_t len, int flags) __attribute__((nonnull(1)));
 static int has_meta(const char *s, size_t len, int flags)
 {
-	size_t i;
-	for (i = 0; i < len; i++) {
-		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) { i++; continue; }
+	size_t i, steps;
+	for (i = 0, steps = 0; i < len && steps < len; steps++) {
+		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) {
+			i += 2;
+			continue;
+		}
 		if (s[i] == '*' || s[i] == '?' || s[i] == '[') return 1;
+		i++;
 	}
 	return 0;
 }
@@ -129,11 +133,15 @@ static char *unescape(const char *s, size_t len, int flags) __attribute__((nonnu
 static char *unescape(const char *s, size_t len, int flags)
 {
 	char *buf = __malloc(len + 1);
-	size_t i, j = 0;
+	size_t i = 0, j = 0, remaining = len;
 	if (!buf) return 0;
-	for (i = 0; i < len; i++) {
-		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && i + 1 < len) i++;
-		buf[j++] = s[i];
+	while (remaining > 0) {
+		if (!(flags & GLOB_NOESCAPE) && s[i] == '\\' && remaining > 1) {
+			i++;
+			remaining--;
+		}
+		buf[j++] = s[i++];
+		remaining--;
 	}
 	buf[j] = 0;
 	return buf;
