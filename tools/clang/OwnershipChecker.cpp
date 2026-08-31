@@ -967,7 +967,54 @@ public:
                               CheckerContext &C) const {
     if (isAlwaysNonNullGlobal(Pointer))
       return;
-    SVal Value = C.getSVal(Pointer);
+    // Reinterpreting an already-nonnull pointer through a pointer-to-
+    // pointer cast never turns it into a null one, but evaluating the
+    // CAST expression's own SVal loses that fact: src/stdio/printf.c's
+    // and scanf.c's shared gf() macro reads one format character as
+    // `*(q)` for a byte format or `*(const wchar_t *)(const void *)(q)`
+    // for a wide one (the cast lets one parser serve both fprintf() and
+    // fwprintf()), where `q` is a cursor walked across an
+    // already-nonnull `fmt`/`fp` by `q += st` each iteration. Only the
+    // CAST side was ever flagged "not proven nonnull" -- the identical
+    // `q`, dereferenced without the cast a few lines away in the very
+    // same loop, was not -- which isolated the cast, not the cursor
+    // arithmetic, as what breaks the proof: evaluating the SVal of a
+    // BitCast/NoOp pointer-to-pointer CastExpr does not, in general,
+    // preserve the symbolic region identity (and so the nonnull fact
+    // already established for it) that evaluating its sub-expression
+    // directly does. Confirmed empirically against four minimal repros
+    // before touching this file: a bare `*q` after `q += st` (symbolic
+    // stride) proves fine; the identical cursor dereferenced through
+    // `*(wchar_t_fake *)q` does not; and looking through the cast fixes
+    // it without hiding a real bug -- `*(T *)p` for a `p` that is
+    // actually unconstrained, or explicitly null (`char *p = 0; *(T
+    // *)(void *)p`), is still caught, both by this checker (the fix
+    // only changes what EvalExpr designates, not whether isNonNull is
+    // asked about it) and independently by clang's own core.NullDereference.
+    // Deliberately narrow: only CK_BitCast/CK_NoOp are looked through
+    // (never CK_LValueToRValue -- an earlier version of this fix walked
+    // into that too and started treating every unconstrained raw
+    // parameter as nonnull, because it ended up evaluating the SVal of
+    // the pointer VARIABLE's own storage location instead of the
+    // pointer VALUE stored there, which is trivially "nonnull" as any
+    // local's address always is; the fixture suite below (the same
+    // pointer-safe.c/pointer-unsafe.c fixtures every other lemma here is
+    // checked against) is what caught that), and only when the
+    // sub-expression is itself of pointer type, so a cast that changes
+    // value category or turns an integer into a pointer is left alone.
+    const Expr *EvalExpr = Pointer;
+    for (;;) {
+      const auto *Cast = dyn_cast<CastExpr>(EvalExpr->IgnoreParens());
+      if (!Cast)
+        break;
+      CastKind Kind = Cast->getCastKind();
+      if (Kind != CK_BitCast && Kind != CK_NoOp)
+        break;
+      if (!Cast->getSubExpr()->getType()->isPointerType())
+        break;
+      EvalExpr = Cast->getSubExpr();
+    }
+    SVal Value = C.getSVal(EvalExpr);
     const MemRegion *Region = Value.getAsRegion();
     if (Region && !Region->getSymbolicBase())
       return;

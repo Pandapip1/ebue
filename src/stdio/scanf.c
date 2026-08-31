@@ -589,7 +589,19 @@ static void scandrain(struct fld *fl)
  * mbrtowc checks its pending-surrogate state BEFORE it checks n, which
  * is what makes the zero-length call work.
  *
- * Returns 0, or -1 for an encoding error ([EILSEQ]). */
+ * Returns 0, or -1 for an encoding error ([EILSEQ]).
+ *
+ * nn is required: `(*nn)++;` runs unconditionally on every path through
+ * this function (the initial store and the drain loop below both
+ * increment it whether or not `assign` is set), the same "counts
+ * regardless of whether anything is actually written" shape store_unit()
+ * above documents for its own nn. ws is deliberately NOT required --
+ * every store through it (`ws[*nn] = wc;`, both places) is behind `if
+ * (assign)`, store_unit()'s own '*' assignment-suppression convention,
+ * which store_unit() already established is a real, POSIX-documented
+ * calling convention here, not an omitted check; st is only reached via
+ * mbrtowc(), a different function's own proven obligation. */
+static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign) __attribute__((nonnull(3)));
 static int wide_put(int c, wchar_t *ws, int *nn, mbstate_t *st, int assign)
 {
 	char ch = (char)c;

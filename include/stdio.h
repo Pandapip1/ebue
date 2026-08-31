@@ -65,7 +65,17 @@ extern FILE *const stderr;
 #define stderr (stderr)
 
 FILE *fopen(const char *__restrict, const char *__restrict);
-FILE *freopen(const char *__restrict, const char *__restrict, FILE *__restrict);
+/* freopen's own stream is required: src/stdio/file.c's freopen() reads
+ * `oldfd = f->fd;` right after its own `fflush(f)` (which, like plain
+ * fflush() below, tolerates a null stream on its own), unconditionally,
+ * with no check of f's own nullness anywhere in the function -- unlike
+ * fopen()'s path/mode, which this project's own freopen() only ever
+ * forwards to __fmodeflags()/open(), never dereferencing here itself.
+ * Every real call site in this tree (test/posix-wchar.c, test/posix-
+ * stdio.c, test/posix-unreferenced.c, test/stdio.c) already guards its
+ * own `f` with `if (f)`/`if (!freopen(...))`-style checks before ever
+ * reaching this call, matching the contract. */
+FILE *freopen(const char *__restrict, const char *__restrict, FILE *__restrict) __attribute__((nonnull(3)));
 /* Every stdio function below that takes a FILE * dereferences it
  * unconditionally in its own body (src/stdio/file.c, buf.c, seek.c,
  * rw.c, wide.c) with no defensive check -- POSIX documents the
