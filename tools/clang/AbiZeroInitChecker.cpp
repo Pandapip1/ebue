@@ -65,6 +65,8 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/RecordLayout.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -86,12 +88,183 @@ using namespace ento;
 enum class AggInit : unsigned char { None, Partial, Full };
 REGISTER_MAP_WITH_PROGRAMSTATE(AggregateInit, const MemRegion *, AggInit)
 REGISTER_MAP_WITH_PROGRAMSTATE(OutParamSite, const MemRegion *, const Stmt *)
+// Bit i set means field i (0-based, declaration order) of the aggregate
+// has been individually written at least once on this path.  Only
+// consulted to prove the record-layout lemma below; a struct with more
+// than 32 fields simply never reaches AggInit::Full through this path,
+// which is conservative (falls back to requiring an explicit whole-object
+// initializer), not unsound.
+REGISTER_MAP_WITH_PROGRAMSTATE(WrittenFieldMask, const MemRegion *, unsigned)
 
 namespace {
 
 struct ArgSlot {
   const char *Func;
   unsigned Index;
+};
+
+// A record type none of whose fields are bitfields, every one of which
+// has been individually written on this path, and whose fields --
+// walked in declaration order against the *real target's* own computed
+// layout, not a guess -- leave no gap before the first field, between
+// any two adjacent fields, or after the last one, has by simple
+// arithmetic had every one of its bytes set exactly once: no compiler
+// padding can exist that this struct's own field set does not already
+// account for. This is what actually justifies not flagging idioms like
+// FILE_POSITION_INFORMATION's single LARGE_INTEGER field (a one-field
+// struct can never have padding at all) or PROCESS_PRIORITY_CLASS's two
+// adjacent UCHAR fields (both 1-byte aligned, nothing between or after
+// them), while still flagging a struct a target's real ABI actually does
+// pad, such as OBJECT_ATTRIBUTES on LLP64 -- computed per call, so it is
+// right for whichever arch is currently being analyzed rather than
+// assuming one layout for all of them.
+static bool allFieldsCoverWholeObject(const RecordDecl *RD, unsigned Mask,
+                                      ASTContext &Ctx) {
+  if (!RD || !RD->isCompleteDefinition())
+    return false;
+  const ASTRecordLayout &Layout = Ctx.getASTRecordLayout(RD);
+  CharUnits Expected = CharUnits::Zero();
+  unsigned Index = 0;
+  for (const FieldDecl *FD : RD->fields()) {
+    if (FD->isBitField() || Index >= 32)
+      return false;
+    if (!(Mask & (1u << Index)))
+      return false;
+    CharUnits Offset = Ctx.toCharUnitsFromBits(Layout.getFieldOffset(Index));
+    if (Offset != Expected)
+      return false;
+    Expected += Ctx.getTypeSizeInChars(FD->getType());
+    ++Index;
+  }
+  return Expected == Layout.getSize();
+}
+
+// True if Callee's body contains, as one of its own top-level statements
+// (unconditional -- not nested inside a branch or loop, so this is not
+// claiming anything about a memset that only sometimes runs), a call to
+// memset/__builtin_memset/bzero whose target is exactly the
+// ParamIndex'th parameter dereferenced, covering the whole pointee.  A
+// locally-defined helper that unconditionally memsets its own
+// by-address out-parameter proves the *caller's* corresponding local
+// just as completely as if that memset were written at the call site --
+// C's pass-by-address semantics make the two identical, no path-
+// sensitive symbolic execution across the call boundary required.  This
+// is what lets a shared setup helper -- e.g. this tree's own per-file
+// object_attributes() in src/thread/semaphore.c and src/thread/
+// mqueue.c, whose only store to its OBJECT_ATTRIBUTES* parameter is a
+// call to InitializeObjectAttributes(), which itself opens with exactly
+// this memset -- prove its callers' locals even though this checker
+// analyzes one function frame at a time and does not itself see across
+// that call.
+static bool isMemsetCallOfParam(const CallExpr *CE, const ParmVarDecl *Param,
+                                QualType PointeeType, ASTContext &Ctx) {
+  const FunctionDecl *Target = CE->getDirectCallee();
+  if (!Target || !Target->getIdentifier())
+    return false;
+  StringRef Name = Target->getName();
+  if (Name != "memset" && Name != "__builtin_memset" && Name != "bzero")
+    return false;
+  if (CE->getNumArgs() < 1)
+    return false;
+  const auto *DRE = dyn_cast<DeclRefExpr>(CE->getArg(0)->IgnoreParenCasts());
+  if (!DRE || DRE->getDecl() != Param)
+    return false;
+  if (CE->getNumArgs() < 3)
+    return true; // e.g. a 2-arg bzero-style wrapper: trust it, the same
+                 // way an unresolvable length does below.
+  Expr::EvalResult Length;
+  if (!CE->getArg(2)->EvaluateAsInt(Length, Ctx))
+    return true; // symbolic length: trust it rather than guess.
+  CharUnits Size = Ctx.getTypeSizeInChars(PointeeType);
+  return Length.Val.getInt().getLimitedValue() >=
+         static_cast<uint64_t>(Size.getQuantity());
+}
+
+// Walked only through statement forms that are reached unconditionally
+// whenever S itself is: a compound statement's own members, and a
+// `do { ... } while (0)` block's body (the standard macro-safety
+// wrapper this project's own InitializeObjectAttributes uses, and the
+// reason a bare top-level-statement scan alone is not enough -- the
+// memset this exists to find is nested one level inside exactly that
+// DoStmt, not a direct statement of the function body).  Deliberately
+// does NOT descend into `if`/`for`/`while`/`switch`: nothing under a
+// real conditional is reached unconditionally, so nothing under one may
+// be credited as always having run.
+static bool unconditionallyMemsetsParam(const Stmt *S,
+                                        const ParmVarDecl *Param,
+                                        QualType PointeeType,
+                                        ASTContext &Ctx) {
+  if (!S)
+    return false;
+  if (const auto *CE = dyn_cast<CallExpr>(S))
+    return isMemsetCallOfParam(CE, Param, PointeeType, Ctx);
+  if (const auto *Compound = dyn_cast<CompoundStmt>(S)) {
+    for (const Stmt *Child : Compound->body())
+      if (unconditionallyMemsetsParam(Child, Param, PointeeType, Ctx))
+        return true;
+    return false;
+  }
+  if (const auto *Do = dyn_cast<DoStmt>(S)) {
+    Expr::EvalResult CondVal;
+    if (Do->getCond()->EvaluateAsInt(CondVal, Ctx) &&
+        CondVal.Val.getInt() == 0)
+      return unconditionallyMemsetsParam(Do->getBody(), Param, PointeeType,
+                                         Ctx);
+    return false;
+  }
+  return false;
+}
+
+static bool calleeMemsetsParam(const FunctionDecl *Callee,
+                               unsigned ParamIndex, ASTContext &Ctx) {
+  if (!Callee->hasBody() || ParamIndex >= Callee->getNumParams())
+    return false;
+  const ParmVarDecl *Param = Callee->getParamDecl(ParamIndex);
+  QualType PointeeType = Param->getType()->getPointeeType();
+  if (PointeeType.isNull())
+    return false;
+  const auto *Body = dyn_cast_or_null<CompoundStmt>(Callee->getBody());
+  if (!Body)
+    return false;
+  for (const Stmt *S : Body->body())
+    if (unconditionallyMemsetsParam(S, Param, PointeeType, Ctx))
+      return true;
+  return false;
+}
+
+// True if the function body -- outside the call statement that itself
+// produced the OUT obligation -- references the tracked local anywhere at
+// all. checkEndFunction's own path-sensitive tracking flags a path that
+// returns before reaching a field read of an already-successful OUT
+// buffer, which fires on the ordinary, safe "second call in this
+// function also failed, so we are unwinding before ever getting to use
+// the first result" idiom (see fionread_file(), __fstat_handle()) and on
+// a boolean short-circuit that deliberately skips reading a buffer NT
+// did not actually fill up to the expected length (see __lxmod_get()) --
+// neither is the wasted round trip this check exists to catch. Trusting
+// any syntactic reference elsewhere in the same function keeps the
+// checker's one genuine positive (a buffer well and truly never touched
+// again, as in the fixture's query_and_ignore()) while dropping these.
+class ReferencedOutsideCall
+    : public RecursiveASTVisitor<ReferencedOutsideCall> {
+  const VarDecl *Target;
+  const Stmt *Skip;
+  bool Found = false;
+
+public:
+  ReferencedOutsideCall(const VarDecl *Target, const Stmt *Skip)
+      : Target(Target), Skip(Skip) {}
+  bool TraverseStmt(Stmt *S) {
+    if (!S || S == Skip)
+      return true;
+    return RecursiveASTVisitor::TraverseStmt(S);
+  }
+  bool VisitDeclRefExpr(DeclRefExpr *DRE) {
+    if (DRE->getDecl() == Target)
+      Found = true;
+    return true;
+  }
+  bool found() const { return Found; }
 };
 
 // Grounded directly in src/internal/nt.h's prototypes: the PVOID slots
@@ -351,9 +524,27 @@ public:
       IsFieldWrite = UO->isIncrementDecrementOp();
     if (!IsFieldWrite)
       return;
+    bool Changed = false;
     const AggInit *Current = State->get<AggregateInit>(Base);
-    if (!Current || *Current == AggInit::None)
-      C.addTransition(State->set<AggregateInit>(Base, AggInit::Partial));
+    if (!Current || *Current == AggInit::None) {
+      State = State->set<AggregateInit>(Base, AggInit::Partial);
+      Changed = true;
+    }
+    if (const auto *FR = dyn_cast<FieldRegion>(R)) {
+      unsigned Index = FR->getDecl()->getFieldIndex();
+      if (Index < 32) {
+        unsigned Mask = 0;
+        if (const unsigned *M = State->get<WrittenFieldMask>(Base))
+          Mask = *M;
+        unsigned Updated = Mask | (1u << Index);
+        if (Updated != Mask) {
+          State = State->set<WrittenFieldMask>(Base, Updated);
+          Changed = true;
+        }
+      }
+    }
+    if (Changed)
+      C.addTransition(State);
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
@@ -378,6 +569,16 @@ public:
         continue;
       const AggInit *St = State->get<AggregateInit>(R);
       if (St && *St == AggInit::Partial) {
+        if (const auto *VR = dyn_cast<VarRegion>(R)) {
+          if (const auto *RT = VR->getValueType()->getAs<RecordType>()) {
+            unsigned Mask = 0;
+            if (const unsigned *M = State->get<WrittenFieldMask>(R))
+              Mask = *M;
+            if (allFieldsCoverWholeObject(RT->getDecl(), Mask,
+                                          C.getASTContext()))
+              continue; // every field individually tiles the object.
+          }
+        }
         report(PartialBT, "Unproven whole-object initialization",
                "local aggregate crosses an Nt*/Zw* syscall boundary without "
                "a proven whole-object initializer",
@@ -391,6 +592,27 @@ public:
     const auto *FD = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!FD || !FD->getIdentifier())
       return;
+
+    // See calleeMemsetsParam's own doc comment: a locally-defined helper
+    // that unconditionally memsets one of its own by-address parameters
+    // proves the corresponding caller-side local, independent of the
+    // Nt*/Zw* handling below.
+    if (FD->hasBody()) {
+      ProgramStateRef ParamState = C.getState();
+      bool ParamChanged = false;
+      for (unsigned Index = 0, N = Call.getNumArgs(); Index < N; ++Index) {
+        if (!calleeMemsetsParam(FD, Index, C.getASTContext()))
+          continue;
+        const MemRegion *R = aggregateRegion(Call, Index);
+        if (!R)
+          continue;
+        ParamState = ParamState->set<AggregateInit>(R, AggInit::Full);
+        ParamChanged = true;
+      }
+      if (ParamChanged)
+        C.addTransition(ParamState);
+    }
+
     StringRef Name = FD->getName();
     if (!isNtName(Name))
       return;
@@ -434,6 +656,17 @@ public:
       if (!R)
         continue;
       MaybeSucceeded = MaybeSucceeded->set<OutParamSite>(R, Origin);
+      // The kernel writes the whole structure passed by size on a
+      // successful query -- exactly the same whole-object proof as a
+      // local memset, just sourced from the syscall's own OUT contract
+      // (already trusted by this checker's IO_STATUS_BLOCK handling)
+      // instead of a statement in this translation unit.  A local that
+      // was never anything but the OUT target of one of these calls
+      // (e.g. src/stat/utimensat.c's `bi`, re-populated then selectively
+      // overwritten before crossing back in as an IN argument) is
+      // therefore fully proven here, not left "partial" by the field
+      // tweaks that follow.
+      MaybeSucceeded = MaybeSucceeded->set<AggregateInit>(R, AggInit::Full);
     }
     C.addTransition(MaybeSucceeded);
   }
@@ -457,11 +690,29 @@ public:
 
   void checkEndFunction(const ReturnStmt *Return, CheckerContext &C) const {
     ProgramStateRef State = C.getState();
+    const auto *EnclosingFD =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    const Stmt *Body = EnclosingFD ? EnclosingFD->getBody() : nullptr;
     for (const auto &Entry : State->get<OutParamSite>()) {
       const auto *VR = dyn_cast<VarRegion>(Entry.first);
       if (!VR || VR->getStackFrame() != C.getStackFrame())
         continue;
       const Stmt *Statement = Entry.second;
+      // This path never reached a field read of the buffer, but that is
+      // also true of the ordinary, safe "a *different*, later call in
+      // this function also failed, so we are unwinding before ever
+      // getting to use this result" idiom, and of a boolean
+      // short-circuit that deliberately skips reading a buffer NT did
+      // not actually fill to the expected length -- see this class's own
+      // doc comment above ReferencedOutsideCall. Trust a syntactic
+      // reference to the same local anywhere else in the function body
+      // over this one path's account of whether it was "used".
+      if (Body && Statement) {
+        ReferencedOutsideCall RV(VR->getDecl(), Statement);
+        RV.TraverseStmt(const_cast<Stmt *>(Body));
+        if (RV.found())
+          continue;
+      }
       if (!Statement)
         Statement = Return;
       report(UnconsumedBT, "Unread syscall OUT parameter",
