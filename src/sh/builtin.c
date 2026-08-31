@@ -85,6 +85,59 @@ static int bi_test(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 1: pathname utilities ========================================
+ *
+ * basename(1p), dirname(1p), pathchk(1p), pwd(1p), and the two non-XCU
+ * fellow travelers readlink and realpath (see src/util/readlink.c's own
+ * comment for why those two are here).  Every one of these has its whole
+ * logic in src/util/<name>.c as __util_<name>_main(), shared with the
+ * standalone obj/bin/<name>.exe the same way bi_test() above shares
+ * src/util/test.c -- see src/internal/util.h's header comment.  None of
+ * the six changes anything XCU 2.12 counts as part of the shell
+ * execution environment (unlike `cd`), so `env_effect` is 0 for all of
+ * them in the table below, the same as test/true/false. */
+static int bi_basename(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_basename(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_basename_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_dirname(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_dirname(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_dirname_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_pathchk(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_pathchk(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_pathchk_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_pwd(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_pwd(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_pwd_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_readlink(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_readlink(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_readlink_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_realpath(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_realpath(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_realpath_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the trivial four ================================================== */
 
 /* XCU 2.14: ": [argument...] -- This utility shall only expand command
@@ -445,6 +498,12 @@ static const struct sh_builtin builtins[] = {
 	{ "[",     0, 0, bi_test },
 	{ "true",  0, 0, bi_true },
 	{ "false", 0, 0, bi_false },
+	{ "basename", 0, 0, bi_basename },
+	{ "dirname",  0, 0, bi_dirname },
+	{ "pathchk",  0, 0, bi_pathchk },
+	{ "pwd",      0, 0, bi_pwd },
+	{ "readlink", 0, 0, bi_readlink },
+	{ "realpath", 0, 0, bi_realpath },
 	{ 0, 0, 0, 0 }
 };
 

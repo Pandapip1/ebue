@@ -26,6 +26,22 @@
 #ifndef _NTLIBC_UTIL_H
 #define _NTLIBC_UTIL_H
 
+/* Tier 1: pathname utilities (XCU basename(1p), dirname(1p), pathchk(1p),
+ * pwd(1p)), plus readlink and realpath -- both real GNU/BSD utilities this
+ * project's own POSIX-utilities plan folds into this tier even though
+ * neither has an XCU page of its own (see src/util/readlink.c and
+ * src/util/realpath.c for the caveat spelled out in full).  None of the
+ * six is __pure__: pwd and realpath read the real filesystem, basename/
+ * dirname/pathchk/readlink still touch errno or stat() a path, so a
+ * repeated call with the same argv is not guaranteed to answer the same
+ * way twice -- unlike true(1p)/false(1p) above. */
+int __util_basename_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_dirname_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_pathchk_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_pwd_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_readlink_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_realpath_main(int argc, char **argv) __attribute__((nonnull(2)));
+
 /* Both ignore their arguments entirely and return a fixed status, so
  * both are genuinely side-effect-free regardless of what is passed --
  * pure in the strict __attribute__ sense, not just in the true(1p)/
