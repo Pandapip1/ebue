@@ -661,10 +661,14 @@ static unsigned long err_seq;
 
 static void seterr(const char *fmt, ...)
 {
+	static const char fallback[] = "dynamic loader error";
 	va_list ap;
+	int rc;
+
 	va_start(ap, fmt);
-	vsnprintf(err_buf, sizeof err_buf, fmt, ap);
+	rc = vsnprintf(err_buf, sizeof err_buf, fmt, ap);
 	va_end(ap);
+	if (rc < 0) memcpy(err_buf, fallback, sizeof fallback);
 	err_seq++;
 }
 
