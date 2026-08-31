@@ -95,9 +95,9 @@ static int wparse(const wchar_t *nptr, const wchar_t **end, int base, int *neg, 
 	cutlim = (int)(UINTMAX_MAX % (unsigned)base);
 	for (;; s++) {
 		c = *s;
-		if (c >= L'0' && c <= L'9') d = c - L'0';
-		else if (c >= L'a' && c <= L'z') d = c - L'a' + 10;
-		else if (c >= L'A' && c <= L'Z') d = c - L'A' + 10;
+		if (c >= L'0' && c <= L'9') d = (int)(c - L'0');
+		else if (c >= L'a' && c <= L'z') d = (int)(c - L'a' + 10);
+		else if (c >= L'A' && c <= L'Z') d = (int)(c - L'A' + 10);
 		else break;
 		if (d >= base) break;
 		any = 1;
