@@ -124,8 +124,10 @@ static const char *match_name(const char *s, const char *const *full, const char
  * hand at every one of these sites; closing the class properly would
  * mean teaching the checker to trust `returns_nonnull`-shaped
  * functions, a real but separate lemma this pass did not attempt. */
+// NOLINTNEXTLINE(misc-no-recursion) -- composite directives recurse into fixed subformats with bounded expansion depth
 static const char *parse(const char *s, const char *f, struct tm *tm,
 	int *pm, int *century, int *year2) __attribute__((nonnull(1, 2, 3, 4, 5, 6)));
+// NOLINTNEXTLINE(misc-no-recursion) -- composite directives recurse into fixed subformats with bounded expansion depth
 static const char *parse(const char *s, const char *f, struct tm *tm,
 	int *pm, int *century, int *year2)
 {

@@ -500,6 +500,7 @@ static void sig_dispatch(struct sig_delivery *d, int flags)
 #endif
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- resumed pending delivery consumes a queued record after restoring the handler mask
 int __raise_internal_info(int sig, const void *data)
 {
 	void (*h)(int);

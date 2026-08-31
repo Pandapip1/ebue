@@ -129,6 +129,7 @@ static void dd_sigint_handler(int sig)
 }
 
 /* dd(1p)'s block-size expression grammar -- see this file's header. */
+// NOLINTNEXTLINE(misc-no-recursion) -- suffix-expression parsing consumes input on every recursive step
 static int parse_dd_num(const char *s, uintmax_t *out)
 {
 	char *end;

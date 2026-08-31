@@ -317,6 +317,7 @@ static int check_redirs(const struct sh_redir *r)
 static int check_list(const struct sh_list *list);
 
 static int check_command(const struct sh_command *c) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- validation mirrors the nested shell-AST hierarchy
 static int check_command(const struct sh_command *c)
 {
 	const char *name;
@@ -403,6 +404,7 @@ static int check_command(const struct sh_command *c)
  * `.pipeline.commands` array pointer -- the same class of internal-AST
  * residual as print.c's queue_nested_heredocs_list() above, not
  * something list's own nullability can express. */
+// NOLINTNEXTLINE(misc-no-recursion) -- validation mirrors the nested shell-AST hierarchy
 static int check_list(const struct sh_list *list)
 {
 	const struct sh_list_item *it;
@@ -562,9 +564,10 @@ int __sh_main(int argc, char **argv)
 	}
 
 	if (cmdstr) {
-		text = malloc(strlen(cmdstr) + 1);
+		size_t n = strlen(cmdstr) + 1;
+		text = malloc(n);
 		if (!text) { diag("out of memory"); return EX_USAGE; }
-		strcpy(text, cmdstr);
+		memcpy(text, cmdstr, n);
 	} else if (file) {
 		FILE *f = fopen(file, "rb");
 		if (!f) { diag("%s: cannot open command_file", file); return EX_NOSCRIPT; }

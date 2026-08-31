@@ -789,6 +789,7 @@ static int is_name(const char *s)
 
 /* `do compound-list done`, shared by the for/while/until loops -- 2.9.4
  * spells the same two reserved words out for each of the three. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_list *parse_do_group(struct parser *p)
 {
 	struct sh_list *body;
@@ -805,6 +806,7 @@ static struct sh_list *parse_do_group(struct parser *p)
  *   if compound-list then compound-list
  *   [elif compound-list then compound-list]... [else compound-list] fi
  */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_if(struct parser *p)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_IF);
@@ -845,6 +847,7 @@ fail:
 /* 2.9.4 "The while Loop" / "The until Loop" -- identical grammar, and
  * the only difference is the sense of the test, which is one bit on the
  * node rather than a duplicated parser. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_loop(struct parser *p, int until)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_LOOP);
@@ -869,6 +872,7 @@ static struct sh_command *parse_loop(struct parser *p, int until)
  * in "$@"".  It is parsed (so the shape is recorded honestly) and
  * refused at execution, because this shell has no positional
  * parameters to iterate -- see exec_for() and sh/main.c. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_for(struct parser *p)
 {
 	struct sh_command *cmd = new_command(p, SH_CMD_FOR);
@@ -949,6 +953,7 @@ static struct sh_command *parse_command(struct parser *p);
  * compound command ends), and validating the body at definition time
  * rather than at first call is what keeps a syntax error inside a
  * function from surfacing halfway through a build script. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_funcdef(struct parser *p, struct sh_command *cmd, char *fname)
 {
 	const struct sh_builtin *bi;
@@ -1024,6 +1029,7 @@ fail:
 }
 
 static struct sh_command *parse_command(struct parser *p) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_command *parse_command(struct parser *p)
 {
 	struct sh_command *cmd;
@@ -1175,8 +1181,10 @@ trailing_redirs:
  * it is an equally unconditional, unguarded direct dereference -- both
  * real call sites in parse_list() below always pass `&head->pipeline`/
  * `&node->pipeline`, never NULL. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static int parse_pipeline(struct parser *p, struct sh_pipeline *out)
 {
 	struct sh_command *arr = 0;
@@ -1217,6 +1225,7 @@ fail:
 	return -1;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_andor *parse_andor(struct parser *p)
 {
 	struct sh_andor *head, *tail;
@@ -1245,6 +1254,7 @@ static struct sh_andor *parse_andor(struct parser *p)
 	return head;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested shell grammar
 static struct sh_list *parse_list(struct parser *p, unsigned stops)
 {
 	struct sh_list *list = __malloc(sizeof *list);

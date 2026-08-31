@@ -253,6 +253,7 @@ static int is_own_ancestor(const struct ancestor *anc, const struct stat *st)
 	return 0;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- the directory walk mirrors the filesystem hierarchy and is path-depth bounded
 static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 		const struct ancestor *anc)
 {

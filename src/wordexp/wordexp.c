@@ -342,6 +342,7 @@ static const char *param_word_end(const char *p)
 static int expand_param_word(const char *start, size_t input_len, int flags,
                              int sh, int quoted, struct assign_ctx *ctx,
                              char **result) __attribute__((nonnull(1, 7)));
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_param_word(const char *start, size_t input_len, int flags, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                              int sh, int quoted, struct assign_ctx *ctx, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                              char **result)
@@ -413,9 +414,11 @@ static int expand_param_word(const char *start, size_t input_len, int flags, // 
 /* pp is dereferenced immediately (`p = *pp + 1`); b/ctx are left
  * unmarked -- both are only ever forwarded into fbuf_push()/
  * fbuf_push_str()/assign_param(), never dereferenced directly here. */
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
                         int quoted, struct assign_ctx *ctx)
     __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
                         int quoted, struct assign_ctx *ctx)
 {
@@ -618,6 +621,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
  * deliberately not expand_param_word(): pathname expansion is the
  * following word-expansion phase and must not turn the pattern into a
  * list of files before it is matched against the parameter value. */
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_trim_pattern(const char *start, size_t len, int flags, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                                int sh, struct assign_ctx *ctx, char **result)
 {
@@ -816,8 +820,10 @@ static int expand_dollar_single(const char **pp, struct fbuf *b)
  * guarantees by only reaching here when p[1]/p[2] are both '('. */
 /* pp dereferenced immediately (`p = *pp + 3`); b/ctx left unmarked --
  * forward-only into fbuf_push_long()/__wordexp_arith()/expand_param(). */
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
                         struct assign_ctx *ctx) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_arith(const char **pp, struct fbuf *b, int flags, int sh,
                         struct assign_ctx *ctx)
 {
@@ -1337,6 +1343,7 @@ static int push_params(struct fbuf *b, struct pv *out, int *active, int star, in
 /* The one scan both wordexp() and __wordexp_sh() run; `sh` is the only
  * difference between them (see src/internal/libc.h on __wordexp_sh()
  * for why it is a parameter rather than a second implementation). */
+// NOLINTNEXTLINE(misc-no-recursion) -- parameter and arithmetic expansion mirror nested shell-word syntax
 static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh,
                        struct assign_ctx *ctx)
 {
