@@ -174,6 +174,17 @@ int pthread_mutex_init(pthread_mutex_t *__restrict mutex,
 	return 0;
 }
 
+/* mutex is deliberately NOT required here (d24fe86): mutex_ready(mutex)
+ * above already has a real `if (!mutex) return EINVAL;` check of its
+ * own, called unconditionally before `data`/`data->owner` is ever
+ * touched -- marking mutex nonnull would tell the compiler that check
+ * is dead code, which is false. `data->owner` below is a genuinely
+ * separate fact (mutex_data() is a reinterpret cast of the SAME already-
+ * validated pointer, not a new allocation) that `nonnull` has no way to
+ * describe on this signature regardless -- verified sound by hand, left
+ * as an honest residual rather than force-fit. pthread_mutex_
+ * setprioceiling() below shares the identical shape via
+ * pthread_mutex_lock(), which bottoms out in the same mutex_ready(). */
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
 	struct mutex_data *data;

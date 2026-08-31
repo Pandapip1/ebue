@@ -300,6 +300,24 @@ static long futex_wake(int *uaddr, int count)
  * understand, rather than inventing a second synchronization
  * primitive). */
 
+/* This function's own `out`, and map_named_sem()'s below, are the
+ * common root of a whole class of findings this sweep leaves as an
+ * honest residual rather than force-fitting `nonnull`: every
+ * __plat_*_create()/_open()/_open_or_create() below writes
+ * `obj->futex`/`obj->kind`/`obj->max` unconditionally right after
+ * calling this function (or map_named_sem()), and `obj` is that
+ * checked call's own OUTPUT -- `*out = (struct ntlibc_linux_sync
+ * *)ret;`, only reached past `if (is_sys_error(ret)) { ...; return
+ * -1; }` -- the identical "checked allocation, then use" shape this
+ * tree's own malloc() already gets trusted for elsewhere (see
+ * tools/clang/OwnershipChecker.cpp's own allocator-family extent
+ * tracking, 8a56a66), just via this backend's raw_syscall(SYS_mmap,
+ * ...) instead of a call the checker already recognizes as an
+ * allocator. Verified sound by hand at every one of this file's own
+ * call sites (is_sys_error() is checked before `obj`/`*out` is ever
+ * touched, with no path that skips it); teaching the checker to trust
+ * this specific raw-syscall idiom the same way is a real, narrow lemma
+ * this pass did not attempt, not a shortcut taken here. */
 static int alloc_sync(struct ntlibc_linux_sync **out)
 {
 	long ret = raw_syscall(SYS_mmap, 0, (long)sizeof(struct ntlibc_linux_sync),
@@ -698,7 +716,12 @@ static void named_sem_path(const char *name, char *buf, size_t bufsz)
  * a zero-length mmap that would fail. Narrow in practice (the window
  * is a handful of instructions between two syscalls on the SAME
  * creator), not eliminated; a real fix would retry the mmap on
- * failure, disclosed as follow-up rather than papered over here. */
+ * failure, disclosed as follow-up rather than papered over here.
+ *
+ * Every one of this function's own callers' obj->futex/obj->kind/obj->max
+ * findings share alloc_sync()'s own "checked raw_syscall(SYS_mmap, ...)
+ * allocation, then use" residual, above -- see that function's comment;
+ * not repeated at each call site below. */
 static int map_named_sem(const char *name, long flags, long mode,
                          struct ntlibc_linux_sync **out)
 {
@@ -820,7 +843,16 @@ static void named_mutant_path(const char *name, char *buf, size_t bufsz)
  * directly) -- only ever ACQUIRE-loads `kind`, synchronizing with that
  * RELEASE store before touching max/futex at all, so no process ever
  * writes those fields concurrently with another and no process ever
- * observes them half-written. */
+ * observes them half-written.
+ *
+ * obj->kind/obj->max below are the same "checked raw_syscall(SYS_mmap,
+ * ...) allocation, then use" residual alloc_sync()'s own comment above
+ * documents -- this function inlines its own copy of that pattern
+ * (`r = raw_syscall(SYS_mmap, ...); if (is_sys_error(r)) ...; obj =
+ * (struct ntlibc_linux_sync *)r;`) rather than sharing alloc_sync()
+ * itself, since it maps a real file, not an anonymous page -- same
+ * verified-sound-by-hand reasoning, not expressible as a `nonnull` on
+ * this function's own name/out parameters. */
 int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
 {
 	char path[160];

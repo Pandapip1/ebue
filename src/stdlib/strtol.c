@@ -13,6 +13,18 @@
 /* Parse into *out.  Returns 1 on overflow (out = UINTMAX_MAX), 0 else.
  * *neg is set from the sign.  *end is the first unparsed character, or
  * nptr when nothing numeric was found. */
+/* nptr/end/neg/out are all required. nptr is dereferenced unconditionally
+ * (`while (isspace((unsigned char)*s)) s++;`, s == nptr at entry) as this
+ * function's first real operation -- the checker's own report names this
+ * one. neg is written (`*neg = 0;`) even before that, unconditionally.
+ * end/out are both written on EVERY return path: the invalid-base early
+ * return (`*end = nptr; *out = 0;`) and the normal completion (`*end =
+ * any ? s : nptr; *out = ovf ? UINTMAX_MAX : v;`), with no NULL check on
+ * either. This file's own single real caller (strtox()) always passes
+ * `&end`/`&neg`/`&v`, on-stack locals, never NULL, and forwards its own
+ * (required, see below) nptr unchanged. */
+static int parse(const char *nptr, const char **end, int base, int *neg, uintmax_t *out)
+    __attribute__((nonnull(1, 2, 4, 5)));
 static int parse(const char *nptr, const char **end, int base, int *neg, uintmax_t *out)
 {
 	const char *s = nptr, *start;

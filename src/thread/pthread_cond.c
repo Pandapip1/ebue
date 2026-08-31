@@ -136,7 +136,13 @@ static void unlink_waiter(struct cond_data *cond, struct cond_waiter *waiter)
 }
 
 /* argument required: aliased into cleanup and dereferenced
- * unconditionally (`cleanup->waiter->linked`) right after the lock. */
+ * unconditionally (`cleanup->waiter->linked`) right after the lock.
+ * `cleanup->waiter` itself is not fixable via nonnull on this
+ * signature (a struct FIELD's value, not a parameter), but is sound by
+ * hand: cond_wait() below only ever registers this as a cleanup
+ * (`pthread_cleanup_push(cond_wait_cleanup, &cleanup)`) after
+ * `cleanup.waiter = waiter;`, where waiter is `calloc()`'d and already
+ * null-checked (`if (!waiter) return EAGAIN;`) a few lines earlier. */
 static void cond_wait_cleanup(void *argument) __attribute__((nonnull(1)));
 static void cond_wait_cleanup(void *argument)
 {

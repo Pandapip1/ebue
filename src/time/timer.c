@@ -39,6 +39,18 @@ static int clock_supported(clockid_t clock)
 	       clock == CLOCK_PROCESS_CPUTIME_ID;
 }
 
+/* ts is required in both: timespec_valid() dereferences ts->tv_sec
+ * unconditionally as its first operand, and timespec_ticks() the same
+ * way via ts->tv_nsec, with no NULL check in either. Both of this file's
+ * two call sites (timer_settime()'s `&value->it_value`/
+ * `&value->it_interval`) are addresses of fields of value, itself
+ * required below -- never NULL. ticks (timespec_ticks()'s own 2nd
+ * parameter) is written (`*ticks = ...`) only on the success path, but
+ * every real call site passes `&first`/`&interval`, on-stack locals,
+ * never NULL. */
+static int timespec_valid(const struct timespec *ts) __attribute__((nonnull(1)));
+static int timespec_ticks(const struct timespec *ts, long long *ticks) __attribute__((nonnull(1, 2)));
+
 static int timespec_valid(const struct timespec *ts)
 {
 	return ts->tv_sec >= 0 && ts->tv_nsec >= 0 && ts->tv_nsec < 1000000000L;
@@ -53,6 +65,12 @@ static int timespec_ticks(const struct timespec *ts, long long *ticks)
 	return 1;
 }
 
+/* ts is required: ticks_timespec() writes ts->tv_sec/tv_nsec
+ * unconditionally regardless of the `ticks < 0` clamp above it, with no
+ * NULL check, and its only two call sites (timer_value()'s
+ * `&value->it_value`/`&value->it_interval`) are field addresses of
+ * value, itself required below -- never NULL. */
+static void ticks_timespec(long long ticks, struct timespec *ts) __attribute__((nonnull(2)));
 static void ticks_timespec(long long ticks, struct timespec *ts)
 {
 	if (ticks < 0) ticks = 0;
@@ -206,6 +224,16 @@ int timer_create(clockid_t clock, struct sigevent *event, timer_t *id)
 	return 0;
 }
 
+/* Both required: timer->due is dereferenced unconditionally to compute
+ * `left`, and value->it_value/it_interval (via ticks_timespec(), which
+ * requires its own ts nonnull -- see above) unconditionally too, with no
+ * NULL check on either. Both real call sites -- timer_settime()'s `if
+ * (old) timer_value(timer, old);` (old already proven truthy by the
+ * guard) and timer_gettime()'s own `value` (itself forwarded from a
+ * caller that never passes NULL, see below) -- always supply a real
+ * object. */
+static void timer_value(struct posix_timer *timer, struct itimerspec *value)
+    __attribute__((nonnull(1, 2)));
 static void timer_value(struct posix_timer *timer, struct itimerspec *value)
 {
 	long long left = timer->due ? timer->due - clock_ticks(timer->clock) : 0;

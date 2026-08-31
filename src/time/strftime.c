@@ -26,6 +26,14 @@
 #include <limits.h>
 #include "time_impl.h"
 
+/* out is required: `out[n++] = ...`/`out[n] = 0;` are unconditional
+ * whenever the computed digit count fits (`needed < out_size`), with no
+ * NULL check of out itself, and every one of this file's own call sites
+ * passes `s + pos` where s is do_strftime()'s own (now-required) buffer
+ * -- never NULL, since pointer arithmetic on a non-null pointer stays
+ * non-null. */
+static int format_number(char *out, size_t out_size, long long value,
+	int width, int plus, int automatic_plus) __attribute__((nonnull(1)));
 static int format_number(char *out, size_t out_size, long long value,
 	int width, int plus, int automatic_plus)
 {
@@ -48,6 +56,30 @@ static int format_number(char *out, size_t out_size, long long value,
 	return n;
 }
 
+/* s/f/tm are all required. f is dereferenced unconditionally by the
+ * main loop's own condition (`for (; *f; f++)`) as soon as this
+ * function is called at all. s is written unconditionally at `done`
+ * (`s[pos] = 0;`) on every non-overflow return, and directly by PUT_CH
+ * whenever anything is emitted -- strftime() (this function's only real
+ * caller) already refuses to call it at all when max == 0, so there is
+ * always room for at least the check that decides overflow. tm is
+ * dereferenced unconditionally near the top of the loop body
+ * (`tm->tm_wday`/`tm->tm_mon`, computing wday/mon for every conversion
+ * that follows) whenever the format string is non-empty; no caller in
+ * this tree ever passes a NULL tm together with a non-empty format
+ * (test/time.c and friends always pass a real `struct tm`).
+ *
+ * Marking s/f/tm here lets the checker explore deeper into this
+ * function's own body than before, surfacing PUT_STR's own `*_s`
+ * (`const char *_s = (str); while (*_s) PUT_CH(*_s++);`) as a new
+ * finding at each of its call sites (%a/%A/%h/%b/%B/%p/%r). Not a
+ * parameter of this function at all -- _s is PUT_STR's own macro-local,
+ * always one of __ntlibc_day_name[_abbr]/__ntlibc_month_name[_abbr]'s
+ * fixed, non-null string-literal elements (time_impl.h's own extern
+ * arrays, populated by names.c) or the literal "AM"/"PM" -- sound by
+ * hand, left as a residual rather than force-fit. */
+static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, const struct tm *restrict tm)
+    __attribute__((nonnull(1, 3, 4)));
 static size_t do_strftime(char *restrict s, size_t max, const char *restrict f, const struct tm *restrict tm)
 {
 	size_t pos = 0;
@@ -233,6 +265,12 @@ done:
 #undef PUT_NUM
 }
 
+/* s/f/tm are deliberately NOT marked here, unlike do_strftime() above:
+ * strftime()'s own body never dereferences any of the three itself, only
+ * checks max and forwards all three unchanged, so there is nothing in
+ * ITS OWN body for the attribute to describe -- the same "forwarded,
+ * callee already owns the contract" shape as time.h's own ctime_r()/
+ * clock_gettime() comments. */
 size_t strftime(char *restrict s, size_t max, const char *restrict f, const struct tm *restrict tm)
 {
 	if (!max) return 0;

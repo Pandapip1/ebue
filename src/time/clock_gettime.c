@@ -23,6 +23,15 @@
 #include "libc.h"
 #include "plat_time.h"
 
+/* ts is required in all three: each writes ts->tv_sec/tv_nsec (directly,
+ * or via &ts->tv_sec/&ts->tv_nsec passed to a helper) unconditionally on
+ * its own success path, with no NULL check anywhere, and both of
+ * clock_gettime()'s own call sites for each forward its own now-required
+ * ts parameter unchanged. */
+static int realtime_get(struct timespec *ts) __attribute__((nonnull(1)));
+static int monotonic_get(struct timespec *ts) __attribute__((nonnull(1)));
+static int cputime_get(struct timespec *ts) __attribute__((nonnull(1)));
+
 static int realtime_get(struct timespec *ts)
 {
 	long long now;

@@ -94,36 +94,75 @@ typedef void (__PLAT_APC_CALL *__plat_apc_fn)(void *, void *, void *);
  * (100ns units, already negative/relative or exactly zero for an
  * immediate poll -- the caller's own convention, unchanged) is passed
  * through verbatim. */
+/* h is required: the Linux backend (src/thread/linux/plat_thread.c) casts
+ * it straight to `struct ntlibc_linux_sync *obj` and dereferences
+ * obj->kind/obj->futex unconditionally, with no NULL check -- the NT
+ * backend merely forwards h to NtWaitForSingleObject() as an opaque
+ * value, but this one shared declaration's contract is set by whichever
+ * backend actually dereferences it (the same precedent as plat_time.h's
+ * own __plat_realtime_get()/__plat_timer_manager_start() comments), and
+ * no real caller anywhere in this tree ever passes a zero/uninitialized
+ * handle -- several (src/signal/linux/sigdelivery.c's own `if
+ * (wake_event) __plat_event_set(wake_event);`) explicitly skip the call
+ * instead of ever passing a null one through. */
 int __plat_wait_one(__plat_handle_t h, int alertable, int has_timeout,
-                    long long relative_ticks);
+                    long long relative_ticks) __attribute__((nonnull(1)));
 /* Same, for NtWaitForMultipleObjects' WaitAny mode -- the only mode any
  * caller in this subsystem uses.  Which of `handles[0..count)` woke the
  * wait is never reported: no existing caller needs it (each re-derives
  * what happened from its own state under its own lock after the wait
  * returns), matching NtWaitForMultipleObjects' STATUS_WAIT_0+n encoding
- * folding uniformly into __PLAT_WAIT_OK here. */
+ * folding uniformly into __PLAT_WAIT_OK here.
+ *
+ * handles is required: the Linux backend subscripts it directly
+ * (`handles[i]`) to build each element's own obj cast, unconditionally
+ * whenever count > 0, and this subsystem's one real caller (aio.c's
+ * aio_suspend(), via its own on-stack `handles[2]`) never passes NULL. */
 int __plat_wait_any(__plat_handle_t *handles, unsigned count, int alertable,
-                    int has_timeout, long long relative_ticks);
+                    int has_timeout, long long relative_ticks)
+    __attribute__((nonnull(1)));
 
 /* ---- events (SynchronizationEvent, initially unset) ---------------------
- * __plat_event_create()'s -2 is explained in this file's banner. */
-int __plat_event_create(__plat_handle_t *out);
-int __plat_event_set(__plat_handle_t h);
+ * __plat_event_create()'s -2 is explained in this file's banner.
+ *
+ * out is required in both: each backend writes `*out = ...;`
+ * unconditionally on its own success path (the NT backend via
+ * NtCreateEvent()'s own out-param convention, the Linux backend directly),
+ * with no NULL check in either, and every real call site in this tree
+ * passes the address of a real on-stack/struct-field handle, never NULL.
+ * __plat_event_set()'s h is required the same way __plat_wait_one()'s is
+ * above -- the Linux backend dereferences it (cast to obj) unconditionally,
+ * with no NULL check, and no real caller ever passes a null one through
+ * (the same `if (handle) ...`-before-calling pattern documented on
+ * __plat_wait_one() above). */
+int __plat_event_create(__plat_handle_t *out) __attribute__((nonnull(1)));
+int __plat_event_set(__plat_handle_t h) __attribute__((nonnull(1)));
 
 /* ---- unnamed semaphores --------------------------------------------------
  * `inheritable` requests OBJ_INHERIT, needed only by sem_init()'s
  * process-shared/fork-surviving semaphores -- every internal wait object
  * this subsystem builds for its own bookkeeping (a mutex/cond/rwlock
- * waiter's private wake object) passes 0. */
+ * waiter's private wake object) passes 0.
+ *
+ * out is required the same way __plat_event_create()'s is above. */
 int __plat_semaphore_create(long initial, long maximum, int inheritable,
-                            __plat_handle_t *out);
+                            __plat_handle_t *out) __attribute__((nonnull(4)));
 /* Release by exactly 1 -- the only count any caller in this subsystem
  * ever releases by.  NT's STATUS_SEMAPHORE_LIMIT_EXCEEDED becomes
  * [EOVERFLOW] here, not reconstructed afterward: see write.c's SIGPIPE
  * comment (src/unistd/nt/plat_fd.c) for why this class of decision belongs
- * inside the backend function that still has the real status in hand. */
-int __plat_semaphore_post(__plat_handle_t h);
-int __plat_semaphore_getvalue(__plat_handle_t h, int *value);
+ * inside the backend function that still has the real status in hand.
+ *
+ * h is required the same way __plat_event_set()'s is above. */
+int __plat_semaphore_post(__plat_handle_t h) __attribute__((nonnull(1)));
+/* h/value are both required: the Linux backend dereferences h (cast to
+ * obj) and writes `*value = ...;` unconditionally, with no NULL check on
+ * either; the NT backend writes `*value = info.CurrentCount;`
+ * unconditionally on its own success path too. Every real call site
+ * (src/thread/semaphore.c's own `sem->__handle`/`value`) passes real,
+ * non-null arguments. */
+int __plat_semaphore_getvalue(__plat_handle_t h, int *value)
+    __attribute__((nonnull(1, 2)));
 
 /* ---- named objects under \BaseNamedObjects -------------------------------
  * `name` is the already-fully-qualified NT object-manager path, ASCII
@@ -135,25 +174,39 @@ int __plat_semaphore_getvalue(__plat_handle_t h, int *value);
 /* A fresh, believed-unique name (the front door has already embedded a
  * pid/sequence counter in it) -- collision is a plain error, not a
  * create-or-open contract. */
+/* out is required the same way __plat_event_create()'s is above: every
+ * backend writes `*out = ...;` unconditionally on its own success path
+ * (the Linux backend's implementation of this one always fails first,
+ * see that file's own banner, but the shared contract is set by the
+ * backend that actually uses it, the same precedent as
+ * __plat_thread_stack_extent() below), and this subsystem's real call
+ * sites (src/thread/semaphore.c's own `&h`) never pass NULL. */
 int __plat_named_semaphore_create(const char *name, long initial,
-                                  long maximum, __plat_handle_t *out);
+                                  long maximum, __plat_handle_t *out)
+    __attribute__((nonnull(4)));
 /* -2 (distinct from the usual -1/errno), rather than a generic ENOENT,
  * reports NT's STATUS_OBJECT_NAME_NOT_FOUND specifically: sem_open()'s
  * O_CREAT-without-O_EXCL recovery path (a creator can die after
  * publishing the filesystem record but before filling it in with a real
  * object name) must fire on exactly that condition and no other -- see
  * this file's banner on why that decision is made here, not
- * reconstructed from errno afterward. */
-int __plat_named_semaphore_open(const char *name, __plat_handle_t *out);
+ * reconstructed from errno afterward.
+ *
+ * out is required the same way. */
+int __plat_named_semaphore_open(const char *name, __plat_handle_t *out)
+    __attribute__((nonnull(2)));
 /* Create it, or open the existing one if the name is already taken.
  * Wine reports an existing named semaphore as the ERROR status
  * STATUS_OBJECT_NAME_COLLISION rather than NT's own informational
  * STATUS_OBJECT_NAME_EXISTS; falling back to an open on exactly that
  * status -- decided here, while it is still in hand -- is what makes this
  * a create-or-open primitive at all rather than one that merely fails
- * under Wine every time the name is reused. */
+ * under Wine every time the name is reused.
+ *
+ * out is required the same way. */
 int __plat_named_semaphore_open_or_create(const char *name, long initial,
-                                          long maximum, __plat_handle_t *out);
+                                          long maximum, __plat_handle_t *out)
+    __attribute__((nonnull(4)));
 
 /* A named binary mutant used as a cross-process advisory lock: create-or-
  * open it (NT's OBJ_OPENIF) and wait on it, infinitely and non-alertably,
@@ -161,7 +214,13 @@ int __plat_named_semaphore_open_or_create(const char *name, long initial,
  * against a second creator racing the same name, so splitting them across
  * two backend calls would reintroduce exactly the race this pattern
  * exists to avoid. */
-int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out);
+/* out is required the same way __plat_event_create()'s is above: both
+ * backends write `*out = ...;` unconditionally on their own success
+ * path, with no NULL check, and this subsystem's real call sites
+ * (src/thread/semaphore.c's own `out`, itself the front door's already-
+ * required output) never pass NULL. */
+int __plat_named_mutant_acquire(const char *name, __plat_handle_t *out)
+    __attribute__((nonnull(2)));
 void __plat_named_mutant_release(__plat_handle_t lock);
 
 /* ---- thread lifecycle ----------------------------------------------------
@@ -169,10 +228,17 @@ void __plat_named_mutant_release(__plat_handle_t lock);
  * `stack_size` 0 requests the image's own default (NtCreateThreadEx's own
  * meaning for a zero reserve/commit size); nonzero is used for both the
  * reserve and commit size, matching every existing call site, which never
- * asked for the two to differ. */
+ * asked for the two to differ.
+ *
+ * out is required the same way: both backends write `*out = ...;`
+ * unconditionally on their own success path (the NT backend via
+ * NtCreateThreadEx()'s own out-param convention, the Linux backend
+ * directly, `*out = (__plat_handle_t)(pid + 1);`), with no NULL check
+ * in either, and every real call site (pthread.c's pthread_create(),
+ * aio.c's start_worker()/notify()) passes a real on-stack local. */
 int __plat_thread_spawn(__plat_thread_entry_t entry, void *arg,
                         size_t stack_size, int create_suspended,
-                        __plat_handle_t *out);
+                        __plat_handle_t *out) __attribute__((nonnull(5)));
 int __plat_thread_resume(__plat_handle_t h);
 int __plat_thread_suspend(__plat_handle_t h);
 /* Queue `fn(arg1, arg2, 0)` to run the next time `h` becomes alertable
@@ -190,8 +256,21 @@ int __plat_thread_queue_apc(__plat_handle_t h, __plat_apc_fn fn, void *arg1,
  * call). */
 int __plat_thread_redirect_ip(__plat_handle_t h, void *target);
 /* The stack [base, base+size) of a live thread, read via its TEB --
- * pthread_getattr_np()'s one platform-specific step. */
-int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size);
+ * pthread_getattr_np()'s one platform-specific step.
+ *
+ * base/size are required: the NT backend writes `*base = ...; *size =
+ * ...;` unconditionally on its own success path, with no NULL check on
+ * either (the Linux backend always fails with ENOSYS first, `(void)h;
+ * (void)base; (void)size;`, but the shared contract is set by the
+ * backend that actually uses them). h is deliberately NOT marked:
+ * neither backend dereferences it directly itself (NT only forwards it
+ * to NtQueryInformationThread(); the flagged `teb->NtTib` finding is
+ * about `teb`, a LOCAL derived from that syscall's own out-param, a
+ * kernel-trusted pointer this checker already has an established "trust
+ * NT's own returned pointers" precedent for -- not about h, base, or
+ * size at all). */
+int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size)
+    __attribute__((nonnull(2, 3)));
 /* A durable handle on the calling thread, safe to store past this call
  * (unlike NtCurrentThread()'s pseudo-handle, which is only ever valid for
  * an operation performed *by* that thread on itself).  Always succeeds
@@ -215,7 +294,20 @@ _Noreturn void __plat_thread_terminate_self(void);
  * for SIGABRT.  One call because there is no POSIX-facing decision
  * anywhere inside it to leave in a front door -- see
  * pthread_cancel.c's cancel_unsafe_abort() banner for why this exists at
- * all. */
+ * all.
+ *
+ * region is deliberately NOT marked nonnull, even though the Linux
+ * backend dereferences it unconditionally (`while (region[len])
+ * len++;`, no NULL check) and every real caller in this tree already
+ * only ever passes a string literal: the NT backend has a genuine, live
+ * fallback for it (`if (!region) region = "an async-cancel-unsafe
+ * operation";`), the same "one backend defensively checks what the
+ * other doesn't" shape 9be895e's own setenv()/unsetenv() precedent
+ * established for a single-backend function -- marking nonnull here
+ * would tell the compiler NT's own real, working fallback is dead code,
+ * which is false. A latent inconsistency between the two backends
+ * (disclosed, not fixed: no real caller reaches it either way), not a
+ * reachable bug. */
 _Noreturn void __plat_cancel_unsafe_abort(const char *region);
 /* An alertable, zero-length delay -- "yield the processor, but let a
  * pending APC run first if there is one." */

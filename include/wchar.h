@@ -129,10 +129,25 @@ int mbsinit (const mbstate_t *);
 size_t mbrtowc (wchar_t *__restrict, const char *__restrict, size_t, mbstate_t *__restrict);
 size_t wcrtomb (char *__restrict, wchar_t, mbstate_t *__restrict);
 size_t mbrlen (const char *__restrict, size_t, mbstate_t *__restrict);
-size_t mbsrtowcs (wchar_t *__restrict, const char **__restrict, size_t, mbstate_t *__restrict);
-size_t wcsrtombs (char *__restrict, const wchar_t **__restrict, size_t, mbstate_t *__restrict);
-size_t mbsnrtowcs (wchar_t *__restrict, const char **__restrict, size_t, size_t, mbstate_t *__restrict);
-size_t wcsnrtombs (char *__restrict, const wchar_t **__restrict, size_t, size_t, mbstate_t *__restrict);
+/* src is required in all four (src/stdlib/mbrtowc.c): each dereferences
+ * `*src` unconditionally as its own very first statement, with no NULL
+ * check -- every real call site in this tree (src/stdlib/mbtowc.c,
+ * test/posix-wchar.c) always passes `&src`, a real on-stack local,
+ * never NULL. The output buffer (ws/s, 1st parameter) and st (last
+ * parameter) are both genuinely optional and left unmarked: `if (ws)
+ * .../if (s) ...` throughout each body is a real, live "just count,
+ * don't write" guard (POSIX's own documented convention for this
+ * family), and `if (!st) st = &internal;` is a real, live "use my own
+ * static state" guard, the same shape as setenv()/unsetenv()'s own name
+ * check. */
+size_t mbsrtowcs (wchar_t *__restrict, const char **__restrict, size_t, mbstate_t *__restrict)
+    __attribute__((nonnull(2)));
+size_t wcsrtombs (char *__restrict, const wchar_t **__restrict, size_t, mbstate_t *__restrict)
+    __attribute__((nonnull(2)));
+size_t mbsnrtowcs (wchar_t *__restrict, const char **__restrict, size_t, size_t, mbstate_t *__restrict)
+    __attribute__((nonnull(2)));
+size_t wcsnrtombs (char *__restrict, const wchar_t **__restrict, size_t, size_t, mbstate_t *__restrict)
+    __attribute__((nonnull(2)));
 
 /* Every FILE * in this whole wide family (src/stdio/wide.c) is
  * dereferenced unconditionally, the same "not the callee's job to
@@ -175,7 +190,21 @@ int vfwscanf (FILE *__restrict, const wchar_t *__restrict, __isoc_va_list) __att
 int vswscanf (const wchar_t *__restrict, const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1, 2)));
 int vwscanf (const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1)));
 
-size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict);
+/* s/f are required: src/time/wcsftime.c's wcsftime() itself dereferences
+ * *f unconditionally (`for (; *f; f++)`) and writes through s directly
+ * (its own PUT_WC macro's `s[pos++] = ...`, plus the unconditional
+ * `s[pos] = 0;` on the non-overflow return), with no NULL check on
+ * either -- test/posix-wchar.c's own `wcsftime(buf, 0, W(""), &tm)`
+ * confirms n == 0 is a real, live case, but s itself is always a real
+ * buffer there, never NULL. tm is deliberately NOT marked: wcsftime()'s
+ * own body only ever forwards it into strftime() (`strftime(out, sizeof
+ * out, fmt, tm)`) without dereferencing it itself, and strftime() is
+ * itself left unmarked for the same "forwarded, callee already owns the
+ * contract" reason (see time.h's own clock_gettime()/ctime_r() comments)
+ * -- do_strftime(), strftime()'s static internal helper, is the one that
+ * actually requires tm. */
+size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict)
+    __attribute__((nonnull(1, 3)));
 
 /* wcscoll/wcscoll_l (src/string/wcscoll.c): one-line forwards to
  * wcscmp() (already __pure__ above), same "one fixed C/POSIX locale"

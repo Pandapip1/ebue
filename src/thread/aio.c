@@ -81,7 +81,19 @@ static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
 
 /* request required: dereferenced unconditionally (`request->cb`) in
  * the loop's own comparison, and every real call site passes a
- * pointer into the file-static `requests[]` table, never NULL. */
+ * pointer into the file-static `requests[]` table, never NULL.
+ * `waiter->list[i]` below is a different, unrelated residual: `waiter`
+ * is not a parameter of this function at all -- it is walked from the
+ * file-static `waiters` linked list, the same "global's own invariant"
+ * class as pthread_atfork.c's handlers[i] residuals -- and its `list`
+ * field's own liveness traces back to aio_suspend()'s own `list`
+ * parameter (POSIX-required, and never NULL-checked there, the
+ * identical contract lio_listio()'s own already-marked `list` has;
+ * aio_suspend()'s `list` itself is not marked because aio_suspend()'s
+ * own body never dereferences it directly, only stores it into
+ * `waiter.list` and forwards it to suspend_list_ready(), itself already
+ * required nonnull(1)) -- verified sound by hand across that chain, not
+ * expressible as a `nonnull` on this function's own signature. */
 static void wake_waiters_locked(const struct aio_request *request)
     __attribute__((nonnull(1)));
 static void wake_waiters_locked(const struct aio_request *request)
@@ -152,7 +164,18 @@ static void notify(const struct sigevent *event)
  * conditional branch that may additionally touch `list`. `list` itself
  * is deliberately NOT marked -- `*list = request->group->event;` only
  * happens inside that branch (`request->group && request->group->active
- * && ...`), not on every call. */
+ * && ...`), not on every call.
+ *
+ * A newer sweep's report also flags `request->cb->aio_sigevent`
+ * (line below) -- the same "global table entry's own FIELD liveness,
+ * not a parameter" residual class as aio_cancel()'s own comment
+ * documents for `request->cb->aio_fildes`: request->cb is only ever
+ * non-NULL once submit() has set it (after its own `if (!cb ...)`
+ * check), and finish_locked()/perform() are only ever called on a
+ * request already past that point (REQ_RUNNING, transitioning to
+ * REQ_DONE) -- verified sound by hand, not force-fit to `nonnull`,
+ * which has no way to describe a struct field's own conditional
+ * liveness. */
 static void finish_locked(struct aio_request *request, int error, ssize_t result,
 	struct sigevent *individual, int *have_individual,
 	struct sigevent *list, int *have_list)
@@ -179,7 +202,10 @@ static void finish_locked(struct aio_request *request, int error, ssize_t result
 
 /* request required (dereferenced immediately, `request->cb`); error
  * required (`*error = ...;` unconditional at the very end -- this
- * function has no early-return path that skips it). */
+ * function has no early-return path that skips it). `cb->aio_fildes`
+ * below is the same request->cb field-liveness residual documented on
+ * finish_locked() above and aio_cancel() below -- not a fact about
+ * this function's own `request`/`error` parameters. */
 static ssize_t perform(struct aio_request *request, int *error)
     __attribute__((nonnull(1, 2)));
 static ssize_t perform(struct aio_request *request, int *error)
