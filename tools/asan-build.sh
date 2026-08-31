@@ -259,12 +259,15 @@ INTSAN="-fsanitize=unsigned-integer-overflow,unsigned-shift-base \
 # simulation here.
 # -D_NTLIBC_NATIVE_BUILD says out loud what four files under src/ need to
 # know: that this is the native (ELF) compile-and-link, not a build for
-# NT.  src/internal/{rpath,pe,delayload}.c and src/dlfcn/dlfcn.c call
-# Ldr* entry points that fuzz/ntstubs.c does not answer, and #error
-# themselves out of this build so their objects never reach a link that
-# would then fail for every *other* test too.  They used to infer it from
-# AddressSanitizer being active; see the long comment in
-# src/internal/rpath.c for why that proxy had to go.
+# NT.  src/internal/{rpath,pe,delayload}.c and src/dlfcn/nt/plat_dlfcn.c
+# (the guard used to live directly in src/dlfcn/dlfcn.c, before that file
+# was split into a thin platform-agnostic front door plus this NT
+# backend -- see src/internal/plat_dlfcn.h's own banner) call Ldr* entry
+# points that fuzz/ntstubs.c does not answer, and #error themselves out
+# of this build so their objects never reach a link that would then fail
+# for every *other* test too.  They used to infer it from AddressSanitizer
+# being active; see the long comment in src/internal/rpath.c for why that
+# proxy had to go.
 CFLAGS="$SAN $CONVSAN $INTSAN $LTOFLAGS -g -O1 -std=c99 -nostdinc -fno-builtin -fvisibility=hidden \
         -D_XOPEN_SOURCE=700 -D_NTLIBC_INTERNAL -D_NTLIBC_NATIVE_BUILD $INC $EXTRA"
 
