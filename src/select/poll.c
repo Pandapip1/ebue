@@ -48,6 +48,13 @@
 
 #define POLL_INTERVAL_TICKS 200000LL  /* 20ms; see select.c's file banner */
 
+/* pfds is deliberately NOT required (nonnull): every dereference of it
+ * below is inside `for (i = 0; i < nfds; i++)`, so poll(NULL, 0,
+ * timeout) -- the well-known portable "sleep" idiom several real-world
+ * programs use poll() for -- already works correctly as written, with
+ * no unconditional dereference for the attribute to describe. Nothing
+ * in this tree exercises that pattern today, but a libc's own public
+ * poll() must not foreclose it for code linked against this one. */
 int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 {
 	long long remaining;
@@ -64,6 +71,12 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 
 		total = 0;
 		for (i = 0; i < nfds; i++) {
+			/* p->revents just below is a second, related residual: p is
+			 * &pfds[i], a LOCAL, not a parameter of poll() itself, so
+			 * nonnull has nothing on poll()'s own signature to describe
+			 * even though pfds is real (see this function's own
+			 * definition-site comment on why pfds itself stays
+			 * unmarked). */
 			struct pollfd *p = &pfds[i];
 			struct __fd *f;
 			int cr, cw, hup;

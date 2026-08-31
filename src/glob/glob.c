@@ -44,7 +44,17 @@ static char *xstrdup(const char *s)
 	return p;
 }
 
-/* -1 on allocation failure (frees s either way it owns it) */
+/* -1 on allocation failure (frees s either way it owns it).
+ *
+ * p is required: p->n/p->cap are read unconditionally below, and every
+ * real call site passes &out, the address of a caller's own local
+ * struct pv, never NULL. s is deliberately NOT required -- the
+ * `if (!s) return -1;` right below is real and load-bearing: every
+ * caller passes an xstrdup()/unescape() result that can genuinely be
+ * NULL on allocation failure (see xstrdup's/unescape's own `if (!p)
+ * return 0;`), and this is how that OOM propagates as an ordinary
+ * GLOB_NOSPACE rather than a crash. */
+static int pv_push(struct pv *p, char *s) __attribute__((nonnull(1)));
 static int pv_push(struct pv *p, char *s)
 {
 	if (!s) return -1;
@@ -59,10 +69,23 @@ static int pv_push(struct pv *p, char *s)
 		p->v = nv;
 		p->cap = nc;
 	}
+	/* p->v is non-NULL here either way, by the same shape as
+	 * src/process/spawn_file_actions.c's own fa_push() comment on
+	 * fa->__actions: either the growth branch above just set it, or
+	 * p->n != p->cap already meant p->cap > 0, which by this function's
+	 * own invariant only holds after an earlier successful growth
+	 * already set p->v. Not expressible via nonnull on p itself (already
+	 * marked above) -- a fact about one of p's FIELDS, not p, and a
+	 * local proof the checker cannot follow through the conditional
+	 * reassignment. */
 	p->v[p->n++] = s;
 	return 0;
 }
 
+/* p required: p->n is read unconditionally by the loop condition below,
+ * and every real call site (do_glob()'s/glob()'s own &out) passes the
+ * address of a local struct pv, never NULL. */
+static void pv_free_from(struct pv *p, size_t from) __attribute__((nonnull(1)));
 static void pv_free_from(struct pv *p, size_t from)
 {
 	size_t i;
@@ -72,6 +95,10 @@ static void pv_free_from(struct pv *p, size_t from)
 	p->n = p->cap = 0;
 }
 
+/* p required: `*p` is read unconditionally at the loop's own entry, and
+ * its one real call site (do_glob()) passes pat, itself required (see
+ * do_glob()'s own comment below), never NULL. */
+static const char *find_slash(const char *p, int flags) __attribute__((nonnull(1)));
 static const char *find_slash(const char *p, int flags)
 {
 	for (; *p; p++) {
@@ -81,6 +108,10 @@ static const char *find_slash(const char *p, int flags)
 	return 0;
 }
 
+/* s required: subscripted unconditionally (`s[i]`) whenever len >= 1,
+ * and its one real call site (do_glob()) passes pat, itself required,
+ * never NULL. */
+static int has_meta(const char *s, size_t len, int flags) __attribute__((nonnull(1)));
 static int has_meta(const char *s, size_t len, int flags)
 {
 	size_t i;
@@ -91,6 +122,10 @@ static int has_meta(const char *s, size_t len, int flags)
 	return 0;
 }
 
+/* s required: subscripted unconditionally (`s[i]`) whenever len >= 1,
+ * and its one real call site (do_glob()) passes pat, itself required,
+ * never NULL. */
+static char *unescape(const char *s, size_t len, int flags) __attribute__((nonnull(1)));
 static char *unescape(const char *s, size_t len, int flags)
 {
 	char *buf = __malloc(len + 1);
@@ -104,6 +139,13 @@ static char *unescape(const char *s, size_t len, int flags)
 	return buf;
 }
 
+/* a/b required: this is qsort()'s own comparator, called (src/stdlib/
+ * qsort.c's sift()/qsort_r()) only as cmp(base + i*sz, base + j*sz, ...)
+ * for i, j inside [0, n) of the real array being sorted -- an internal
+ * heapsort never invents an out-of-range index or a NULL element
+ * address, so both arguments are always the address of a real char* in
+ * out.v, never NULL, whenever this is actually reached. */
+static int cmpstrp(const void *a, const void *b) __attribute__((nonnull(1, 2)));
 static int cmpstrp(const void *a, const void *b)
 {
 	return strcmp(*(char *const *)a, *(char *const *)b);
@@ -125,7 +167,24 @@ static int join(char *out, const char *prefix, size_t preflen,
 }
 
 /* Returns 0 (call handled, possibly zero matches added), 1 (GLOB_ABORTED
- * -- stop the whole scan), or -1 (GLOB_NOSPACE). */
+ * -- stop the whole scan), or -1 (GLOB_NOSPACE).
+ *
+ * pat required: `*pat` is read unconditionally at entry (the leading-
+ * slash skip loop). Every real call site agrees: glob()'s own initial
+ * call passes pat, advanced from pattern (required there -- see glob()'s
+ * own comment -- and never past its own NUL, so never NULL), and both
+ * recursive calls pass rest, which is only ever reached from inside an
+ * `if (rest)` guard, so rest is always a live pointer into pat's own
+ * string, not the 0 find_slash()/the `rest = slash ? slash + 1 : 0;`
+ * assignment can otherwise produce. prefix/out are not marked here: out
+ * is already required by pv_push()/finish() at its own real dereference
+ * sites, and prefix, though written through in several branches, is
+ * only read back conditionally per-branch (never unconditionally at
+ * entry the way pat is), so there is no single unconditional dereference
+ * this attribute could describe for it. */
+static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
+                    int (*errfunc)(const char *, int), struct pv *out)
+    __attribute__((nonnull(3)));
 static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
 {
@@ -270,6 +329,14 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 	}
 }
 
+/* out/pglob both required: out->n is read unconditionally in the loop
+ * bound just below, and pglob->gl_pathv/gl_pathc are written
+ * unconditionally further down (both the success path and the nospace:
+ * label's own reset) -- no branch of this function leaves pglob
+ * untouched. Every real call site (glob(), three of them) passes &out
+ * and its own pglob parameter straight through, and glob()'s own pglob
+ * is itself required (see glob()'s comment) -- never NULL either way. */
+static int finish(struct pv *out, int flags, glob_t *pglob) __attribute__((nonnull(1, 3)));
 static int finish(struct pv *out, int flags, glob_t *pglob)
 {
 	size_t offs = (flags & GLOB_DOOFFS) ? pglob->gl_offs : 0;

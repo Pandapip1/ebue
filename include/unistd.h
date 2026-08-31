@@ -36,7 +36,14 @@ extern "C" {
 #include <bits/alltypes.h>
 
 int pipe(int [2]);
-int pipe2(int [2], int);
+/* fds required: src/unistd/pipe.c's own pipe2() writes `fds[0] = rfd;
+ * fds[1] = wfd;` unconditionally on its only success path, with no NULL
+ * check anywhere in its body. Every real call site in this tree (this
+ * file's own pipe(), src/sh/execute.c, and every pipe2() test) always
+ * passes a real 2-element array, never NULL. pipe() itself is NOT
+ * marked: it only forwards fds into pipe2() without dereferencing it
+ * directly itself. */
+int pipe2(int [2], int) __attribute__((nonnull(1)));
 int close(int);
 int posix_close(int, int);
 int dup(int);
@@ -112,6 +119,12 @@ uid_t getuid(void);
 uid_t geteuid(void);
 gid_t getgid(void);
 gid_t getegid(void);
+/* the gid_t[] is deliberately NOT required: src/unistd/ids.c's own
+ * `if (n != 0) g[0] = getegid();` is real and tested
+ * (test/unistd.c's own `CHECK(getgroups(0, 0) >= 1);`) -- gidsetsize 0
+ * asks for the count alone and POSIX-conforming callers pass a null
+ * pointer for that form, the same "genuinely optional, defensively
+ * checked" shape as setenv()/unsetenv()'s own name. */
 int getgroups(int, gid_t []);
 int setuid(uid_t);
 int seteuid(uid_t);
@@ -119,7 +132,12 @@ int setgid(gid_t);
 int setegid(gid_t);
 
 char *getlogin(void);
-int getlogin_r(char *, size_t);
+/* buf required: src/unistd/ids.c's own getlogin_r() writes `buf[i] = 0;`
+ * unconditionally once past the copy loop -- reached even when n == 0
+ * or the login name is empty, since neither skips this final write --
+ * with no NULL check of buf anywhere. Every real call site
+ * (test/posix-unistd.c) passes a real local buffer, never NULL. */
+int getlogin_r(char *, size_t) __attribute__((nonnull(1)));
 int gethostname(char *, size_t);
 
 int getopt(int, char * const [], const char *);
@@ -129,6 +147,12 @@ extern int optind, opterr, optopt;
 long pathconf(const char *, int);
 long fpathconf(int, int);
 long sysconf(int);
+/* buf is deliberately NOT required: src/unistd/sysconf.c's own confstr()
+ * only ever touches buf behind `i + 1 < len`/`if (len)` guards, and
+ * confstr(name, NULL, 0) -- query the needed length without writing
+ * anything -- is real, POSIX-documented (confstr.html: "If len is 0
+ * ... buf may be a null pointer") and tested
+ * (test/posix-unistd.c's own `CHECK(confstr(_CS_PATH, NULL, 0) == n);`). */
 size_t confstr(int, char *, size_t);
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
@@ -148,7 +172,12 @@ pid_t setpgrp(void);
 char *crypt(const char *, const char *);  /* undefined-ok: DES password
 	hashing is not something this library implements from scratch */
 void encrypt(char *, int);  /* undefined-ok: same DES machinery as crypt() */
-void swab(const void *__restrict, void *__restrict, ssize_t);
+/* src/dest required: src/unistd/swab.c's own swab() subscripts both
+ * (s[i]/s[i+1], d[i]/d[i+1]) whenever nbytes > 0, with no NULL check of
+ * either anywhere in its body. Every real call in this tree
+ * (test/posix-unistd.c's test_swab(), including its own nbytes == 0 and
+ * nbytes < 0 cases) always passes real buffers, never NULL. */
+void swab(const void *__restrict, void *__restrict, ssize_t) __attribute__((nonnull(1, 2)));
 #endif
 
 #if (defined(_XOPEN_SOURCE) && _XOPEN_SOURCE+0 < 700) \

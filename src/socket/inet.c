@@ -41,11 +41,28 @@ in_addr_t inet_addr(const char *s)
 {
 	unsigned long parts[4];
 	int nparts = 0;
-	const char *p = s;
+	const char *p;
 	in_addr_t result = INADDR_NONE;
 	int saved_errno = errno;
 
+	/* s is deliberately NOT nonnull: this check is real and tested
+	 * (test/posix-socket.c's own `CHECK(inet_addr(0) == INADDR_NONE);`),
+	 * matching the setenv()/unsetenv() "genuinely optional, defensively
+	 * checked" precedent this tree already applies elsewhere. p is
+	 * assigned only AFTER this check rather than before it, so by hand
+	 * its own dereferences below are sound (s is non-NULL by construction
+	 * everywhere p is read): a real, if modest, improvement over the
+	 * previous ordering, where p was a pre-check snapshot of s taken
+	 * before the check had run at all. The checker still flags `*p`
+	 * below regardless of this ordering -- a residual, not a bug it
+	 * found: it does not narrow a variable's nullability across this
+	 * function's own `goto done;` early exit the way it does across an
+	 * ordinary `if (...) return;`, so no reordering of plain assignments
+	 * changes what it can prove here. Left as a disclosed residual
+	 * rather than a checker lemma fix -- goto-based narrowing is a
+	 * bigger change than this one call site justifies. */
 	if (!s) goto done;
+	p = s;
 	for (;;) {
 		char *end;
 		unsigned long v;

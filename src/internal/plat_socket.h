@@ -85,10 +85,26 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 #define __SOCK_ST_CONNECTED 0x04
 #define __SOCK_ST_REUSEADDR 0x08
 
-int __plat_socket_open(__plat_handle_t *out);
+/* out required: both real implementations (linux/plat_socket.c,
+ * nt/plat_socket.c) write `*out = box(...)`/`*out = ...` unconditionally
+ * on their success path, with no NULL check of out itself anywhere.
+ * socket.c's one real call site always passes `&h`, the address of its
+ * own local, never NULL. */
+int __plat_socket_open(__plat_handle_t *out) __attribute__((nonnull(1)));
 int __plat_socket_bind(__plat_handle_t h, int reuseaddr, const struct sockaddr *addr, socklen_t len);
 int __plat_socket_connect(__plat_handle_t h, const struct sockaddr *addr, socklen_t len);
 int __plat_socket_listen(__plat_handle_t h, unsigned long backlog);
-int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *len, __plat_handle_t *out);
+/* out required, same shape as __plat_socket_open()'s own: both real
+ * implementations write `*out = ...` unconditionally on the success
+ * path. accept.c's one real call site always passes `&newh`, never
+ * NULL. addr/len are NOT required here: neither backend dereferences
+ * them directly in C (both only forward the raw pointer/length into a
+ * syscall -- SYS_accept4's own arguments on Linux, the AFD wait/accept
+ * request on NT), so there is nothing at this level for the attribute
+ * to describe, matching this tree's own "forwarding-only, not marked"
+ * precedent (e.g. posix_spawn_file_actions.c's add*() functions and
+ * fa). */
+int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *len, __plat_handle_t *out)
+    __attribute__((nonnull(4)));
 
 #endif

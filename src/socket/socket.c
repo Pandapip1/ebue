@@ -28,6 +28,10 @@ int socket(int domain, int type, int protocol)
 
 	fd = __fd_install(h, 0, __FD_SOCKET);
 	if (fd < 0) { __plat_close(h); return -1; }
+	/* Same residual as src/socket/accept.c's own __fd_get(newfd)->pad:
+	 * not expressible via nonnull (fd is not a pointer, and __fd_get()'s
+	 * return is a local, not a parameter), never NULL in practice since
+	 * fd just came back from a successful __fd_install(). */
 	__fd_get(fd)->pad = 0;
 	return fd;
 }

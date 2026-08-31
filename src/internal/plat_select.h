@@ -23,13 +23,20 @@
 #include "plat_handle.h"
 
 /* Query a pipe end's local state for select()/poll()'s per-descriptor
- * probe.  Returns 1 and fills *read_avail/*write_quota when `h` is a
+ * probe.  Returns 1 and fills *read_avail / *write_quota when `h` is a
  * healthy, connected pipe whose FILE_PIPE_LOCAL_INFORMATION was
  * successfully read; 0 (out-params untouched) when the query failed or
  * the pipe is not in the connected state -- __fd_probe() (select.c)
  * treats a 0 here as "ready and hung up", the platform's own fact
  * rather than a decision this interface makes. */
-int __plat_pipe_probe(__plat_handle_t h, unsigned long *read_avail, unsigned long *write_quota);
+/* read_avail/write_quota required: both real implementations write
+ * `*read_avail = ...`/`*write_quota = ...` unconditionally on the
+ * success (return 1) path, with no NULL check of either anywhere. Its
+ * one real call site (select.c's __fd_probe(), __FD_PIPE case) always
+ * passes `&read_avail, &write_quota`, the addresses of its own locals,
+ * never NULL. */
+int __plat_pipe_probe(__plat_handle_t h, unsigned long *read_avail, unsigned long *write_quota)
+    __attribute__((nonnull(2, 3)));
 
 /* Behavioral, uncached probe: does this platform's pipe implementation
  * actually populate FILE_PIPE_LOCAL_INFORMATION's WriteQuotaAvailable?
@@ -46,11 +53,26 @@ int __plat_wait_ready(__plat_handle_t h);
 
 /* The IOCTL_AFD_SELECT probe for a socket -- see select.c's __fd_probe()
  * __FD_SOCKET case (moved here verbatim) for the reasoning behind every
- * field of afd.h this touches.  Always sets *canread/*canwrite/*hup;
+ * field of afd.h this touches.  Always sets *canread / *canwrite / *hup;
  * there is no failure this reports outward -- a probe that could not be
  * taken at all reports ready-and-hung-up, the same over-eager stance
  * the pipe/console cases take for their own unanswerable queries. */
-void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hup);
+/* canread/canwrite/hup required: all three are written directly by
+ * name in both real implementations (unconditionally in
+ * linux/plat_select.c's own body; nt/plat_select.c's own body writes
+ * *canread / *canwrite unconditionally on every path and *hup whenever an
+ * event actually needs reporting, relying on its one real caller --
+ * select.c's __fd_probe(), which does `*hup = 0;` as its own very first
+ * statement before ever dispatching here -- to have it already
+ * zeroed on the "nothing to report" path; not a NULL-safety concern
+ * either way, just why "always sets" in this comment's own banner above
+ * is about the observable *value*, not about which statement in which
+ * backend writes it). No NULL check of canread/canwrite/hup exists
+ * anywhere in this file's own body. The one real call site forwards its
+ * own canread/canwrite/hup straight through -- already required at
+ * __fd_probe()'s own signature -- never NULL. */
+void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hup)
+    __attribute__((nonnull(2, 3, 4)));
 
 /* Wait for any of nhandles waitable handles to become signalled, or
  * wait_ticks 100ns ticks to pass (ignored when infinite), whichever
@@ -58,7 +80,15 @@ void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hu
  * neither select() nor poll() distinguishes "woke because something
  * signalled" from "woke because the budget ran out" -- the next poll
  * pass re-probes everything either way. */
-void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long long wait_ticks, int infinite);
+/* handles required: subscripted unconditionally (`handles[i]`) whenever
+ * nhandles >= 1 (clamped to FD_SETSIZE + 1), with no NULL check anywhere
+ * in either real implementation. Its one real call site
+ * (select.c's __fd_wait_or_delay()) always passes `handles`, the
+ * address of its own fixed-size local array, and only when n > 0 (this
+ * comment's own "Called only when nhandles > 0" above) -- never NULL
+ * either way. */
+void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long long wait_ticks, int infinite)
+    __attribute__((nonnull(1)));
 
 /* Sleep for wait_ticks 100ns ticks, or indefinitely when infinite --
  * used when there is nothing to wait on at all. */

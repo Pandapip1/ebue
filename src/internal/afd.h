@@ -955,8 +955,18 @@ int __afd_open_shape(void);
  * test/posix-socket-bind.c re-parses the result by offset with no
  * reference to this header, and runs with no \Device\Afd at all. */
 unsigned long __afd_bind_request_size(void);
+/* buf required: cast to AFD_BIND_DATA * and written through
+ * unconditionally (`bd->Address`/`bd->ShareType`), with no NULL check
+ * anywhere in src/socket/afdsupport.c's own body. Its one real call
+ * site (src/socket/nt/plat_socket.c) always passes `&bd`, the address
+ * of its own local AFD_BIND_DATA. addr is NOT required here: it is only
+ * ever forwarded into __afd_addr_from_sockaddr(), which already carries
+ * its own real `if (!addr || ...)` check -- addr is genuinely optional
+ * at that function's own contract, matching bind()'s/connect()'s shared
+ * validation shape. */
 int __afd_build_bind_request(void *buf, unsigned long share_type,
-                             const struct sockaddr *addr, unsigned len);
+                             const struct sockaddr *addr, unsigned len)
+    __attribute__((nonnull(1)));
 /* The IOCTL_AFD_CONNECT request body, split out and inspected exactly
  * the same way, and for a sharper reason: its layout is the one place
  * ReactOS and phnt disagree, and they disagree only on x86_64, so no
@@ -1048,8 +1058,19 @@ uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE
  * recv()/send()'s byte counts come from). */
 NTSTATUS __afd_ioctl(HANDLE h, ULONG code, void *in, ULONG inlen, void *out, ULONG outlen, IO_STATUS_BLOCK *io_out);
 /* sockaddr_in -> TRANSPORT_ADDRESS, validating family/length.  Returns
- * 0, or -1 with errno=EINVAL/EAFNOSUPPORT. */
-int __afd_addr_from_sockaddr(const struct sockaddr *addr, unsigned len, TRANSPORT_ADDRESS *out);
+ * 0, or -1 with errno=EINVAL/EAFNOSUPPORT.
+ *
+ * out required: written unconditionally (`out->TAAddressCount`, ...)
+ * once past the two early-return validation checks, with no NULL check
+ * of out itself anywhere. Both real call sites (src/socket/afdsupport.c's
+ * own __afd_build_bind_request()/__afd_build_connect_request()) pass
+ * &bd->Address/&ta, never NULL. addr is NOT required: this function's
+ * own `if (!addr || len < ...) { errno = EINVAL; return -1; }` is real
+ * and load-bearing, not decoration -- it is what makes addr genuinely
+ * optional at every one of ITS OWN callers' contracts (bind()/
+ * connect()'s shared validation shape) too. */
+int __afd_addr_from_sockaddr(const struct sockaddr *addr, unsigned len, TRANSPORT_ADDRESS *out)
+    __attribute__((nonnull(3)));
 /* TA_ADDRESS (as embedded in a TRANSPORT_ADDRESS) -> sockaddr_in,
  * truncating into *addr and *len the way accept()/recvfrom() are specified
  * to. */
