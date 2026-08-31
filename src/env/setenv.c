@@ -31,9 +31,9 @@ static int is_putenv(char *s)
 	return 0;
 }
 
-static int env_count(void)
+static size_t env_count(void)
 {
-	int n = 0;
+	size_t n = 0;
 	if (__environ) while (__environ[n]) n++;
 	return n;
 }
@@ -45,7 +45,12 @@ int __putenv(char *s, size_t l, char *owned)
 		if (!is_putenv(*e)) free(*e);
 		*e = s;
 	} else {
-		int n = env_count();
+		size_t n = env_count();
+		if (n > (size_t)-1 / sizeof(char *) - 2) {
+			errno = ENOMEM;
+			free(owned);
+			return -1;
+		}
 		char **ne = (char **)realloc((void *)__environ, sizeof(char *) * (n + 2));
 		if (!ne) { free(owned); return -1; }
 		ne[n] = s;

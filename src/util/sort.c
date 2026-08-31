@@ -283,6 +283,13 @@ static int compare_raw(const struct line *a, const struct line *b)
 	return 0;
 }
 
+static int reverse_comparison(int comparison)
+{
+	if (comparison < 0) return 1;
+	if (comparison > 0) return -1;
+	return 0;
+}
+
 static int compare_by_key(const struct sort_opts *o, const struct sort_key *k, const struct line *a, const struct line *b)
 {
 	int bflag, dflag, fflag, iflag, nflag, rflag;
@@ -306,7 +313,7 @@ static int compare_by_key(const struct sort_opts *o, const struct sort_key *k, c
 	if (be < bs) be = bs;
 
 	c = compare_range(a->text, as, ae, b->text, bs, be, dflag, fflag, iflag, nflag);
-	return rflag ? -c : c;
+	return rflag ? reverse_comparison(c) : c;
 }
 
 static int line_compare(const struct sort_opts *o, const struct line *a, const struct line *b)
@@ -327,12 +334,12 @@ static int line_compare(const struct sort_opts *o, const struct line *a, const s
 			while (bs < b->len && isblank((unsigned char)b->text[bs])) bs++;
 		}
 		c = compare_range(a->text, as, a->len, b->text, bs, b->len, o->d, o->f, o->i, o->n);
-		if (o->r) c = -c;
+		if (o->r) c = reverse_comparison(c);
 	}
 
 	if (c == 0 && !o->u) {
 		c = compare_raw(a, b);
-		if (o->r) c = -c;
+		if (o->r) c = reverse_comparison(c);
 	}
 	return c;
 }

@@ -58,6 +58,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <unistd.h>
 #include "util.h"
 
@@ -149,7 +150,10 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 	 * "at least the whole file") before any (size_t) cast below -- a
 	 * huge -c/-n argument must behave like "the whole file", not wrap
 	 * around through size_t's narrower range on an ILP32 build. */
-	if (number > (long long)len + 1) number = (long long)len + 1;
+	if (sizeof len < sizeof number || len < (size_t)LLONG_MAX) {
+		long long limit = (long long)len + 1;
+		if (number > limit) number = limit;
+	}
 
 	if (mode == TAIL_BYTES) {
 		if (from_end) {

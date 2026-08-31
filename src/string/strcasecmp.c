@@ -6,8 +6,12 @@
 int strcasecmp(const char *_l, const char *_r)
 {
 	const unsigned char *l = (void *)_l, *r = (void *)_r;
+	int lc, rc;
 	for (; *l && *r && (*l == *r || tolower(*l) == tolower(*r)); l++, r++);
-	return tolower(*l) - tolower(*r);
+	lc = tolower(*l);
+	rc = tolower(*r);
+	if (lc < rc) return -1;
+	return lc > rc;
 }
 
 int strcasecmp_l(const char *l, const char *r, locale_t loc)

@@ -6,10 +6,14 @@
 int strncasecmp(const char *_l, const char *_r, size_t n)
 {
 	const unsigned char *l = (void *)_l, *r = (void *)_r;
+	int lc, rc;
 	if (!n) return 0;
 	n--;
 	for (; *l && *r && n && (*l == *r || tolower(*l) == tolower(*r)); l++, r++, n--);
-	return tolower(*l) - tolower(*r);
+	lc = tolower(*l);
+	rc = tolower(*r);
+	if (lc < rc) return -1;
+	return lc > rc;
 }
 
 int strncasecmp_l(const char *l, const char *r, size_t n, locale_t loc)

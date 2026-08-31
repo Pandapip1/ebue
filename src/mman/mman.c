@@ -205,10 +205,15 @@ static void set_page_live(struct mapping *m, size_t page, int live) // NOLINT(bu
 
 static unsigned page_lock_state(const struct mapping *m, size_t page)
 {
-	unsigned shift;
+	unsigned char byte;
 	if (!m->locked) return 0;
-	shift = (unsigned)((page & 3) << 1);
-	return (m->locked[page >> 2] >> shift) & 3u;
+	byte = m->locked[page >> 2];
+	switch (page & 3) {
+	case 0: return byte & 3u;
+	case 1: return (byte >> 2) & 3u;
+	case 2: return (byte >> 4) & 3u;
+	default: return (byte >> 6) & 3u;
+	}
 }
 
 static int ensure_lock_bitmap(struct mapping *m)
@@ -223,10 +228,22 @@ static int ensure_lock_bitmap(struct mapping *m)
 
 static void set_page_lock_state(struct mapping *m, size_t page, unsigned state) // NOLINT(bugprone-easily-swappable-parameters) -- page selects a bitmap slot while state supplies its two-bit value
 {
-	unsigned shift = (unsigned)((page & 3) << 1);
-	unsigned char mask = (unsigned char)(3u << shift);
 	unsigned char *byte = &m->locked[page >> 2];
-	*byte = (unsigned char)((*byte & ~mask) | ((state & 3u) << shift));
+	state &= 3u;
+	switch (page & 3) {
+	case 0:
+		*byte = (unsigned char)((*byte & ~3u) | state);
+		break;
+	case 1:
+		*byte = (unsigned char)((*byte & ~(3u << 2)) | (state << 2));
+		break;
+	case 2:
+		*byte = (unsigned char)((*byte & ~(3u << 4)) | (state << 4));
+		break;
+	default:
+		*byte = (unsigned char)((*byte & ~(3u << 6)) | (state << 6));
+		break;
+	}
 }
 
 /* Wine reports a whole page beyond a mapped file's end as an access
