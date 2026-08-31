@@ -83,19 +83,14 @@
 /* ---- the image's own directory ($ORIGIN) ------------------------------ */
 
 /* __progname_full (crt1.c) is the image path as ImagePathName gave it --
- * a native, backslash-separated path.  Computed once, on first use, and
- * cached: this is the only state this file keeps beyond the per-call
- * error record below. */
-static char *image_dir(void)
+ * a native, backslash-separated path.  Return a fresh string so the search
+ * iteration that consumes it also has an explicit, finite lifetime. */
+static char *image_dir(void) NTLIBC_RETURNS_OWNERSHIP(internal_malloc)
 {
-	static char *dir;
-	static int done;
+	char *dir;
 	size_t n, i;
 
-	if (done) return dir;
-	done = 1;
-
-	if (!__progname_full) return dir; /* NULL: caller sees the same as OOM */
+	if (!__progname_full) return NULL; /* caller sees the same as OOM */
 
 	n = strlen(__progname_full);
 	for (i = n; i > 0 && __progname_full[i-1] != '\\' && __progname_full[i-1] != '/'; i--) ;
@@ -131,6 +126,7 @@ static int has_path_component(const char *p)
 
 /* dir "\" tail, with every '/' normalised to '\\'. Malloc'd; NULL on OOM. */
 static char *join(const char *dir, const char *tail)
+	NTLIBC_RETURNS_OWNERSHIP(internal_malloc)
 {
 	size_t dl = strlen(dir), tl = strlen(tail), i;
 	char *p = __malloc(dl + 1 + tl + 1);
@@ -270,6 +266,7 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname)
 			} else {
 				char *base = image_dir();
 				dir = base ? join(base, *entry) : 0;
+				__free(base);
 			}
 			if (!dir) { set_err(STATUS_NO_MEMORY, dllname); return 0; }
 			full = join(dir, dllname);
