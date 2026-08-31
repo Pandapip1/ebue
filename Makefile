@@ -127,6 +127,19 @@ CRT_LIBS = $(addprefix lib/,$(notdir $(CRT_OBJS)))
 SH_SRCS = $(sort $(wildcard $(srcdir)/sh/*.c))
 SH_EXE = obj/sh/sh.exe
 
+# POSIX standard utilities (XCU): same shape as sh/ above and for the same
+# reason -- each is a real PE program, not part of libc.a, so it cannot
+# live under src/*'s wildcard.  Unlike sh/, this is *one file per
+# program* rather than one directory per program: bin/cp.c is the whole
+# of obj/bin/cp.exe, a thin main() over __util_cp_main() (src/util/cp.c,
+# declared in src/internal/util.h), the same "entry point out here, logic
+# in the library" split sh/main.c uses for __sh_main().  Each utility's
+# logic is also reachable in-process as a shell builtin (src/sh/builtin.c)
+# without going through this .exe at all -- see that file's own comment
+# for why both forms exist.
+BIN_SRCS = $(sort $(wildcard $(srcdir)/bin/*.c))
+BIN_EXES = $(patsubst $(srcdir)/bin/%.c,obj/bin/%.exe,$(BIN_SRCS))
+
 WRAPCC_TCC = $(CC)
 
 -include config.mak
@@ -180,7 +193,7 @@ endif
 # (ALL_LIBS above already omits DEF_FILES/ALL_TOOLS the same way) --
 # see the Makefile PLAT_GLOBS comment and configure's --platform flag.
 ifeq ($(PLATFORM),nt)
-all: $(ALL_LIBS) $(ALL_TOOLS_BUILT) $(SH_EXE)
+all: $(ALL_LIBS) $(ALL_TOOLS_BUILT) $(SH_EXE) $(BIN_EXES)
 else
 all: $(ALL_LIBS)
 endif
@@ -267,6 +280,9 @@ $(DESTDIR)$(bindir)/%: obj/%
 $(DESTDIR)$(bindir)/%: obj/sh/%
 	$(INSTALL) -D $< $@
 
+$(DESTDIR)$(bindir)/%: obj/bin/%
+	$(INSTALL) -D $< $@
+
 $(DESTDIR)$(libdir)/%: lib/%
 	$(INSTALL) -D -m 644 $< $@
 
@@ -288,7 +304,7 @@ install-headers: $(ALL_INCLUDES:include/%=$(DESTDIR)$(includedir)/%)
 
 install-tools: $(ALL_TOOLS_BUILT:obj/%=$(DESTDIR)$(bindir)/%)
 
-install-progs: $(DESTDIR)$(bindir)/$(notdir $(SH_EXE))
+install-progs: $(DESTDIR)$(bindir)/$(notdir $(SH_EXE)) $(BIN_EXES:obj/bin/%=$(DESTDIR)$(bindir)/%)
 
 install: install-libs install-headers install-tools install-progs
 
@@ -376,6 +392,22 @@ $(SH_EXE): $(SH_SRCS) $(srcdir)/src/sh/sh.h $(ALL_LIBS) | obj/sh
 	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $(SH_SRCS) -Llib -lc -lntdll
 
 sh: $(SH_EXE)
+
+# obj/bin gets its own order-only directory target for the same reason
+# obj/sh does, immediately above: it is a program directory the kaem
+# bootstrap generator's dry run of `lib/libc.a`/`lib/crt1.o` never writes
+# into, so it does not belong in OBJ_DIRS.
+obj/bin:
+	mkdir -p $@
+
+# One file, one program: unlike $(SH_EXE) above (one link from several
+# sh/*.c), each bin/*.c is already the complete source of its own .exe,
+# so this is a pattern rule, the same shape as obj/test/%.exe further
+# down -- and links the same way for the same reason (a real PE program
+# gets the *library's* consumer environment, not CFLAGS_ALL's
+# -D_NTLIBC_INTERNAL -Isrc/internal one; see that rule's own comment).
+obj/bin/%.exe: $(srcdir)/bin/%.c $(ALL_LIBS) | obj/bin
+	$(CC) $(CFLAGS_C99FSE) $(CFLAGS_AUTO) -I$(srcdir)/arch/$(ARCH) -I$(srcdir)/arch/generic -Iobj/include -I$(srcdir)/include -nostdlib -o $@ lib/crt1.o $< -Llib -lc -lntdll
 
 .PHONY: sh install-progs
 
@@ -500,6 +532,13 @@ obj/test/rpath.exe: obj/test/rpath-plugin.dll
 # only wiring needed here is making sure the exe exists before the test
 # runs.
 obj/test/sh-main.exe: $(SH_EXE)
+
+# test/util-trivial.c is the same idea as test/sh-main.c immediately
+# above, but for the first tier of POSIX standard utilities: it spawns
+# obj/bin/true.exe, obj/bin/false.exe and obj/bin/test.exe (and, to
+# check the shell built-in agrees, obj/sh/sh.exe) as real processes, so
+# all four need to exist first.
+obj/test/util-trivial.exe: obj/bin/true.exe obj/bin/false.exe obj/bin/test.exe $(SH_EXE)
 
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call

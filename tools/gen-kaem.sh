@@ -330,6 +330,36 @@ case "$PLATFORM" in
 	linux) MAKE_OVERRIDES+=(CFLAGS="-fno-stack-protector -mno-outline-atomics") ;;
 esac
 
+# bin/*.exe -- the standalone POSIX utility programs (true, false, test,
+# and whatever else lands in bin/ as this grows) -- get built by the nt
+# leg too, unlike sh(1p): sh/main.c is deliberately NOT a kaem target
+# (see the Makefile's own "boot/kaem/ builds the *library*, not this
+# program" comment on obj/sh's directory rule), because system()/popen()/
+# wordexp() are the only things that need a real shell at all, and none
+# of those matter until well past this bootstrap stage. The POSIX
+# utilities are different: their whole reason for existing (see the
+# project's POSIX-utilities plan) is to remove the bootstrap's own
+# dependency on mescc-tools-extra's cp/mkdir -- a value this script's
+# own boot/kaem/*.kaem output provides nothing toward if it never builds
+# them. Computed as a real glob over bin/*.c, not hand-listed, so a new
+# utility added there is picked up the next time this script runs with
+# no edit here.
+#
+# linux does NOT get these: bin/*.exe's real link recipe hardcodes
+# -lntdll (obj/bin/%.exe's Makefile rule, unconditionally, the same way
+# $(SH_EXE)'s does) and the Makefile's own `all:` target only ever
+# chases $(BIN_EXES) under PLATFORM=nt for exactly that reason -- there
+# is no rule that would let this dry run produce a linux recipe for
+# them at all yet. Extending bin/*.c's own build to cover platform=linux
+# is a separate, not-yet-done piece of the platform-abstraction work,
+# out of scope here.
+BIN_TARGETS=()
+for f in bin/*.c; do
+	[ -e "$f" ] || continue
+	name=${f#bin/}
+	BIN_TARGETS+=("obj/bin/${name%.c}.exe")
+done
+
 # The kaem bootstrap stage's real target list. Both platforms build
 # lib/libc.a and lib/crt1.o; linux additionally needs lib/start.o, the real
 # ELF entry point object crt/crt1.c's single-file nt equivalent has no
@@ -338,7 +368,7 @@ esac
 # using -Wl,--delay-all, not something the bootstrap stage itself needs, on
 # either platform.
 case "$PLATFORM" in
-	nt) TARGETS=(lib/libc.a lib/crt1.o) ;;
+	nt) TARGETS=(lib/libc.a lib/crt1.o "${BIN_TARGETS[@]}") ;;
 	linux) TARGETS=(lib/libc.a lib/crt1.o lib/start.o) ;;
 esac
 
@@ -398,6 +428,30 @@ awk -v cc="$CC" -v arcmd="$AR" '
 	function norm(s) { gsub(/  +/, " ", s); sub(/^ +/, "", s); sub(/ +$/, "", s); return s }
 	/^mkdir -p /      { next }
 	/^rm -f lib\/libc\.a$/ { next }
+	# The obj/bin/%.exe Makefile rule depends on $(ALL_LIBS), the same
+	# broad prerequisite $(SH_EXE) already has (both, unlike lib/libc.a
+	# itself, ask for the *whole* library surface, not just what they
+	# actually link against) -- so once BIN_TARGETS makes any bin/*.exe
+	# a real dry-run target, the empty stub libs ($(EMPTY_LIBS): libm.a,
+	# librt.a, libpthread.a, libcrypt.a, libutil.a, libxnet.a,
+	# libresolv.a, libdl.a) show up in the dry run for the first time.
+	# Dropped here for the same reason this script own header comment
+	# already gives for excluding them from TARGETS entirely: nothing in
+	# a bin/*.exe real link line references (-Llib -lc -lntdll, never
+	# -lm/-lpthread/...) needs them built. Matched by requiring the line
+	# END right after the archive name (no object arguments follow,
+	# because these archives are empty) -- lib/libc.a own real rm/AR
+	# lines never match either pattern, since that one has a genuine
+	# object list after it.
+	/^rm -f lib\/lib[A-Za-z]+\.a$/ { next }
+	$0 ~ ("^" arcmd " rcs lib/lib[A-Za-z]+\\.a$") { next }
+	# lib/ntdll.def, by contrast, IS genuinely needed: tcc resolves
+	# `-lntdll` by finding lib/ntdll.def on its -L path and reading it as
+	# the DLL import surface (the same way the Makefile own
+	# `$(DEF_FILES)` prerequisite already documents), so any bin/*.exe
+	# link line that ends in -lntdll (all of them) is unlinkable without
+	# this file copy having run first.
+	/^cp tools\/ntdll\.def lib\/ntdll\.def$/ { print "DEFCOPY\t" norm($0); next }
 	/^cat / {
 		# kaem has no shell redirection (`>` is just another argument
 		# token, not a redirect), so this becomes a catm invocation
@@ -412,8 +466,25 @@ awk -v cc="$CC" -v arcmd="$AR" '
 		print "CATM\t" a[5] "\t" a[2] "\t" a[3]
 		next
 	}
+	# delayload2.o, like the empty stub libs above, is only visible in
+	# this dry run at all because $(ALL_LIBS) (via $(CRT_LIBS)) is a
+	# blanket prerequisite of obj/bin/%.exe/$(SH_EXE) -- it is an
+	# optional helper only programs using -Wl,--delay-all need (see the
+	# top-of-file note on why TARGETS never included it), and no
+	# bin/*.exe link line below passes that flag. Dropped for the same
+	# reason, matched (like the empty-lib rules) before the generic
+	# CRTCOPY/compile rules so it never reaches them.
+	/^cp obj\/crt\/delayload2\.o lib\/delayload2\.o$/ { next }
+	$0 ~ ("^" cc " .*-c -o obj/crt/delayload2\\.o ") { next }
 	/^cp obj\/crt\//  { print "CRTCOPY\t" norm($0); next }
 	$0 ~ ("^" arcmd " rcs lib/libc\\.a ") { print "AR\t" norm($0); next }
+	# A bin/*.exe link line: same $(CC) as every MODCC/ARCHCC/CRTCC
+	# compile line, but a *link* (no "-c", "-o obj/bin/NAME.exe" rather
+	# than "-o obj/.../NAME.o") -- matched before the generic "-c -o"
+	# compile rule below so it never falls through into MODCC/ARCHCC by
+	# mistake, even though the two patterns cannot actually overlap (a
+	# link line has no "-c").
+	$0 ~ ("^" cc " ") && $0 ~ /-o obj\/bin\/[^ ]+\.exe /  { print "BINLINK\t" norm($0); next }
 	$0 ~ ("^" cc " .* -c -o ") {
 		line = norm($0)
 		# find the object file named after "-o "
@@ -445,11 +516,34 @@ CATM_IN2=$(printf '%s' "$CATM_ROW" | cut -f4)
 CRT_CC=$(field CRTCC)
 CRT_COPY=$(field CRTCOPY)
 AR_LINE=$(field AR)
+# Empty for platform=linux by construction (BIN_TARGETS is only ever
+# non-empty for nt -- see its own comment above), so this is deliberately
+# not part of the "missing a required step" check below the way AR_LINE
+# etc. are: an empty BIN_LINES is only wrong on the nt leg, checked
+# separately, right after.
+BIN_LINES=$(field BINLINK || true)
+DEF_LINE=$(field DEFCOPY || true)
 
 if [ -z "$CATM_OUT" ] || [ -z "$CRT_CC" ] || [ -z "$CRT_COPY" ] || [ -z "$AR_LINE" ]; then
 	echo "gen-kaem.sh: dry run is missing one of the expected single-shot" >&2
 	echo "steps (alltypes.h concatenation, crt object compile(s), crt" >&2
 	echo "object copy/copies, libc.a archive)." >&2
+	exit 1
+fi
+
+if [ "$PLATFORM" = nt ] && [ -z "$BIN_LINES" ]; then
+	echo "gen-kaem.sh: expected at least one bin/*.exe link line in the nt" >&2
+	echo "dry run (bin/*.c is not empty) but found none -- BIN_TARGETS/the" >&2
+	echo "BINLINK classify rule must have gone out of sync with the" >&2
+	echo "Makefile's obj/bin/%.exe recipe." >&2
+	exit 1
+fi
+
+if [ -n "$BIN_LINES" ] && [ -z "$DEF_LINE" ]; then
+	echo "gen-kaem.sh: found bin/*.exe link line(s) but no lib/ntdll.def" >&2
+	echo "copy in the dry run -- every bin/*.exe link ends in -lntdll, so" >&2
+	echo "this should be impossible; the DEFCOPY classify rule must have" >&2
+	echo "gone out of sync with the Makefile." >&2
 	exit 1
 fi
 
@@ -466,10 +560,12 @@ case "$PLATFORM" in
 nt)
 	TARGET_DESC="${ARCH}-win32"
 	PRODUCES_LINE="# boot/kaem/build-${PLATFORM}-${ARCH}.kaem -- kaem-only bootstrap build of
-# ntlibc for ${TARGET_DESC}, producing lib/libc.a and lib/crt1.o without
-# make, without a real shell, and without a general-purpose ar."
+# ntlibc for ${TARGET_DESC}, producing lib/libc.a, lib/crt1.o and the
+# standalone POSIX utility programs (obj/bin/*.exe -- true, false, test,
+# ...) without make, without a real shell, and without a general-purpose
+# ar."
 	CONFIGURE_LINE="#   ./configure --host=${ARCH}-win32 CC=${CC}"
-	MAKEKAEM_TARGETS="lib/libc.a and lib/crt1.o"
+	MAKEKAEM_TARGETS="lib/libc.a, lib/crt1.o and every obj/bin/*.exe"
 	GUIX_TAIL="# for the full rationale and the analogy to Guix's gzip-mesboot0."
 	CC_BULLET="#   - \${CC}, a win32-cross tcc for ${ARCH} (${CC}), acting as both
 #     compiler and archiver (tcc -ar rcs, no external ar/ranlib needed --
@@ -494,6 +590,15 @@ nt)
 # Archive every libc/arch object into lib/libc.a using tcc's built-in
 # self-archiving mode (tcc -ar), exactly as the Makefile's AR = \$(CC) -ar
 # does -- no standalone binutils ar required.
+#"
+	BINLINK_COMMENT="#
+# Link each standalone POSIX utility program (obj/bin/*.exe) against the
+# lib/libc.a and lib/crt1.o just built above -- mirrors the Makefile's
+# \`obj/bin/%.exe: \$(srcdir)/bin/%.c \$(ALL_LIBS)\` pattern rule, one link
+# per source file under that directory, no different in kind from that
+# rule's own \${CC} ... -nostdlib -o ... -Llib -lc -lntdll invocation.
+# This is why these lines come last: every one of them needs lib/libc.a
+# to already exist, which the archive step directly above just produced.
 #"
 	;;
 linux)
@@ -720,12 +825,22 @@ MID4
 	field ARCHCC
 	printf '\n%s\n' "$ARCHIVE_COMMENT"
 	printf '%s\n' "$AR_LINE"
+	if [ -n "$BIN_LINES" ]; then
+		printf '\n#\n# lib/ntdll.def: every link line below (one per standalone utility\n'
+		printf '# program) ends in -lntdll,\n'
+		printf '# which tcc resolves by finding lib/ntdll.def on its -L path and\n'
+		printf '# reading it as ntdll.dll'"'"'s import surface -- so this copy has to\n'
+		printf '# happen before any of them can link.\n#\n'
+		printf '%s\n' "$DEF_LINE"
+		printf '\n%s\n' "$BINLINK_COMMENT"
+		printf '%s\n' "$BIN_LINES"
+	fi
 } >"$OUT.tmp"
 
 # Source paths become ${srcdir}-relative; output paths stay relative to the
 # working directory.  The two are already distinguishable in what make -n
 # printed: everything the build *writes* is under obj/ or lib/, and
-# everything it *reads* from the tree is ./arch, ./include, src/ or crt/.
+# everything it *reads* from the tree is ./arch, ./include, src/, crt/, bin/ or tools/.
 #
 # Without this the script can only run with the working directory set to the
 # source tree, which is the one thing a from-scratch bootstrap cannot
@@ -771,7 +886,7 @@ MID4
 # shellcheck disable=SC2016
 sed -e 's,-I\./,-I${srcdir}/,g' \
     -e 's,\([ \t]\)\./,\1${srcdir}/,g' \
-    -e 's,\([ \t]\)\(src/\|crt/\|arch/\),\1${srcdir}/\2,g' \
+    -e 's,\([ \t]\)\(src/\|crt/\|arch/\|bin/\|tools/\),\1${srcdir}/\2,g' \
     -e 's,^mkdir ,${bin_mkdir} ,' \
     -e 's,^cp ,${bin_cp} ,' \
     -e 's,^catm ,${bin_catm} ,' \

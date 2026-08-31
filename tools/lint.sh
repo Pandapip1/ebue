@@ -399,15 +399,17 @@ platform_for() {
 # plus src/*/$(platform)/*.c and crt/$(platform)/*.c (the PLATFORM axis's
 # own additive backend files, keyed per-arch by platform_for() above --
 # see the Makefile's PLAT_GLOBS and src/internal/plat_handle.h) --
-# plus sh/*.c, the sh(1p) binary. sh/ is not part of libc.a (it is a
-# program, see the Makefile's SH_SRCS comment), but it is first-party C in
-# this repo built by `make all`, and nothing else in these gates compiles
-# it with a warning set: leaving it out would mean the one deliverable a
-# user actually runs is the one file gcc/clang/cppcheck never look at.
+# plus sh/*.c and bin/*.c, the sh(1p) binary and the standalone POSIX
+# utility binaries.  Neither is part of libc.a (both are programs, see
+# the Makefile's SH_SRCS/BIN_SRCS comments), but both are first-party C
+# in this repo built by `make all`, and nothing else in these gates
+# compiles them with a warning set: leaving them out would mean the
+# deliverables a user actually runs are the ones gcc/clang/cppcheck
+# never look at.
 sources_for() {
 	arch=$1
 	plat=$(platform_for "$arch")
-	for f in src/*/*.c crt/*.c sh/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c \
+	for f in src/*/*.c crt/*.c sh/*.c bin/*.c arch/"$arch"/src/*.c src/*/"$arch"/*.c \
 	         src/*/"$plat"/*.c crt/"$plat"/*.c; do
 		[ -e "$f" ] || continue
 		case $f in
