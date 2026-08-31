@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <math.h>
 #include <stdint.h>
 #include "ldbl_math.h"
@@ -90,3 +95,5 @@ int __signbitl(long double x)
 	return (int)(u.i >> 63);
 #endif
 }
+
+// NOLINTEND(misc-include-cleaner)

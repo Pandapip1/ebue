@@ -53,6 +53,11 @@
  * literally, so that is what happens here, with the character emitted
  * as the wchar_t it already is.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <wchar.h>
 #include <time.h>
 #include <string.h>
@@ -130,3 +135,5 @@ size_t wcsftime(wchar_t *__restrict s, size_t n, const wchar_t *__restrict f,
 
 #undef PUT_WC
 }
+
+// NOLINTEND(misc-include-cleaner)

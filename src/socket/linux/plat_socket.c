@@ -52,6 +52,11 @@
  * signal is real and kernel-delivered, not something ntlibc must
  * synthesize itself the way the NT backend's __raise_internal() does.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -103,7 +108,7 @@
  * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
  * result (or -errno in [-4095,-1]) in x0. */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -317,3 +322,5 @@ int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *le
 	*out = box((int)fd);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -130,7 +130,7 @@ static const struct ldbl_bits ldbl_expect[3] = {
 };
 #endif
 
-int __verify_ldbl_layout(void)
+int __verify_ldbl_layout(void) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 {
 	int i, ok = 1;
 	for (i = 0; i < 3; i++) {

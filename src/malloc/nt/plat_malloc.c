@@ -17,6 +17,11 @@
  * allocates for anything larger and remembers the real block itself,
  * entirely above this interface.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "plat_malloc.h"
 #include "libc.h"
 
@@ -39,3 +44,5 @@ void __plat_dealloc(void *p)
 {
 	RtlFreeHeap(__process_heap(), 0, p);
 }
+
+// NOLINTEND(misc-include-cleaner)

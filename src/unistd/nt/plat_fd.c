@@ -8,6 +8,11 @@
  * of a POSIX-shaped return (errno already set) in place of a raw
  * NTSTATUS or a signal the caller had to raise itself.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
@@ -40,7 +45,7 @@ ssize_t __plat_read(__plat_handle_t h, void *buf, size_t count)
 	return (ssize_t)io.Information;
 }
 
-ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off)
+ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER pos = off;
@@ -93,7 +98,7 @@ static int start_at_offset_max(__plat_handle_t h, int append)
 	}
 }
 
-ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int append)
+ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int append) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER pos, *pp = 0;
@@ -131,7 +136,7 @@ ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int appen
 	return (ssize_t)io.Information;
 }
 
-ssize_t __plat_pwrite(__plat_handle_t h, const void *buf, size_t count, off_t off)
+ssize_t __plat_pwrite(__plat_handle_t h, const void *buf, size_t count, off_t off) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER pos = off;
@@ -181,3 +186,5 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

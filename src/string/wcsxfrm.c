@@ -27,6 +27,11 @@
  * value is outside a code-unit-ordered domain, so errno is left alone
  * (test/posix-string.c pins the same property for strxfrm()).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <wchar.h>
 #include <locale.h>
 
@@ -43,3 +48,5 @@ size_t wcsxfrm_l(wchar_t *__restrict dest, const wchar_t *__restrict src, size_t
 	(void)loc;
 	return wcsxfrm(dest, src, n);
 }
+
+// NOLINTEND(misc-include-cleaner)

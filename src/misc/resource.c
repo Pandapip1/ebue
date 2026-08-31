@@ -76,6 +76,11 @@
  * rather than beside them: one copy of the state, no way for the two
  * pages' arithmetic to disagree about this process's priority.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/resource.h>
 #include <unistd.h>
 #include <errno.h>
@@ -213,7 +218,7 @@ static int fsize_start(__plat_handle_t h, int append, long long *out)
  * caller's write), a smaller count when the write would cross the limit,
  * or __fsize_exceeded()'s -1 -- SIGXFSZ, then errno EFBIG -- when not
  * one byte may be written. */
-long long __fsize_clamp(__plat_handle_t h, int append, size_t count)
+long long __fsize_clamp(__plat_handle_t h, int append, size_t count) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long long off, room;
 
@@ -423,7 +428,7 @@ int getrusage(int who, struct rusage *ru)
  * (see include/sys/resource.h). Starts at the POSIX default, 0. */
 static int self_nice;
 
-int getpriority(int which, id_t who)
+int getpriority(int which, id_t who) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int self;
 	struct __child *c;
@@ -457,7 +462,7 @@ int getpriority(int which, id_t who)
 	return nice_value;
 }
 
-int setpriority(int which, id_t who, int value)
+int setpriority(int which, id_t who, int value) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int self;
 	struct __child *c;
@@ -580,3 +585,5 @@ int nice(int incr)
 	if (setpriority(PRIO_PROCESS, 0, (int)v) != 0) return -1;
 	return getpriority(PRIO_PROCESS, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

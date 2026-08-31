@@ -14,6 +14,11 @@
  * lexer drains pending here-documents on the newline that ends the
  * line containing '<<'/'<<-'.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 #include "sh.h"
@@ -26,7 +31,23 @@ struct hdq {
 struct pctx {
 	FILE *f;
 	struct hdq *head, *tail;
+	int failed;
 };
+
+static void emit_char(struct pctx *c, int ch)
+{
+	if (!c->failed && fputc(ch, c->f) == EOF) c->failed = 1;
+}
+
+static void emit_string(struct pctx *c, const char *s)
+{
+	if (!c->failed && fputs(s, c->f) < 0) c->failed = 1;
+}
+
+static void emit_fd(struct pctx *c, int fd)
+{
+	if (!c->failed && fprintf(c->f, "%d", fd) < 0) c->failed = 1;
+}
 
 /* c is required: `c->tail`/`c->head` are dereferenced directly once
  * `n` (the freshly __malloc'd queue node) is non-NULL, and every real
@@ -37,7 +58,7 @@ static void queue_heredoc(struct pctx *c, const struct sh_redir *r) __attribute_
 static void queue_heredoc(struct pctx *c, const struct sh_redir *r)
 {
 	struct hdq *n = __malloc(sizeof *n);
-	if (!n) return; /* best-effort: printing is a debug/test aid, never the only copy of the AST */
+	if (!n) { c->failed = 1; return; }
 	n->r = r;
 	n->next = 0;
 	if (c->tail) c->tail->next = n; else c->head = n;
@@ -134,15 +155,15 @@ static void drain_heredocs(struct pctx *c)
 	c->head = c->tail = 0;
 	while (h) {
 		struct hdq *n = h->next;
-		if (h->r->heredoc) fputs(h->r->heredoc, c->f);
-		fputs(h->r->heredoc_delim ? h->r->heredoc_delim : h->r->word, c->f);
-		fputc('\n', c->f);
+		if (h->r->heredoc) emit_string(c, h->r->heredoc);
+		emit_string(c, h->r->heredoc_delim ? h->r->heredoc_delim : h->r->word);
+		emit_char(c, '\n');
 		__free(h);
 		h = n;
 	}
 }
 
-/* Both required: `fputc(' ', c->f);` is this function's first statement,
+/* Both required: `emit_char(c, ' ');` is this function's first statement,
  * and `if (r->fd >= 0)` right after it is equally unconditional, with
  * no branch between them. print_redirs() below (the only caller)
  * always passes a real c and a real list node. */
@@ -153,11 +174,11 @@ static void print_redir(struct pctx *c, const struct sh_redir *r)
 	static const char *const opstr[] = {
 		"<", ">", ">>", "<&", ">&", "<>", ">|", "<<", "<<-"
 	};
-	fputc(' ', c->f);
-	if (r->fd >= 0) fprintf(c->f, "%d", r->fd);
-	fputs(opstr[r->op], c->f);
-	fputc(' ', c->f);
-	fputs(r->word, c->f);
+	emit_char(c, ' ');
+	if (r->fd >= 0) emit_fd(c, r->fd);
+	emit_string(c, opstr[r->op]);
+	emit_char(c, ' ');
+	emit_string(c, r->word);
 	if (r->op == SH_R_DLESS || r->op == SH_R_DLESSDASH) queue_heredoc(c, r);
 }
 
@@ -176,10 +197,10 @@ static void print_words(struct pctx *c, const struct sh_word *w, int leading_spa
 static void print_words(struct pctx *c, const struct sh_word *w, int leading_space)
 {
 	for (; w; w = w->next) {
-		if (leading_space) fputc(' ', c->f);
+		if (leading_space) emit_char(c, ' ');
 		leading_space = 1;
-		if (!strcmp(w->text, "!")) fputs("'!'", c->f);
-		else fputs(w->text, c->f);
+		if (!strcmp(w->text, "!")) emit_string(c, "'!'");
+		else emit_string(c, w->text);
 	}
 }
 
@@ -195,14 +216,14 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 {
 	switch (cmd->kind) {
 	case SH_CMD_SUBSHELL:
-		fputc('(', c->f);
+		emit_char(c, '(');
 		print_list(c, cmd->body);
-		fputc(')', c->f);
+		emit_char(c, ')');
 		break;
 	case SH_CMD_BRACE:
-		fputs("{ ", c->f);
+		emit_string(c, "{ ");
 		print_list(c, cmd->body);
-		fputs("}", c->f);
+		emit_string(c, "}");
 		break;
 	/* The compound commands are reprinted in the multi-line form XCU
 	 * 2.9.4 gives them, with a real <newline> before each terminator
@@ -215,35 +236,35 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	case SH_CMD_IF: {
 		const struct sh_ifarm *a;
 		for (a = cmd->arms; a; a = a->next) {
-			fputs(a == cmd->arms ? "if " : "elif ", c->f);
+			emit_string(c, a == cmd->arms ? "if " : "elif ");
 			print_list(c, a->cond);
-			fputs("then\n", c->f);
+			emit_string(c, "then\n");
 			print_list(c, a->body);
 		}
 		if (cmd->else_body) {
-			fputs("else\n", c->f);
+			emit_string(c, "else\n");
 			print_list(c, cmd->else_body);
 		}
-		fputs("fi", c->f);
+		emit_string(c, "fi");
 		break;
 	}
 	case SH_CMD_LOOP:
-		fputs(cmd->until ? "until " : "while ", c->f);
+		emit_string(c, cmd->until ? "until " : "while ");
 		print_list(c, cmd->cond);
-		fputs("do\n", c->f);
+		emit_string(c, "do\n");
 		print_list(c, cmd->body);
-		fputs("done", c->f);
+		emit_string(c, "done");
 		break;
 	case SH_CMD_FOR:
-		fputs("for ", c->f);
-		fputs(cmd->name, c->f);
+		emit_string(c, "for ");
+		emit_string(c, cmd->name);
 		if (cmd->have_in) {
-			fputs(" in", c->f);
+			emit_string(c, " in");
 			print_words(c, cmd->words, 1);
 		}
-		fputs("\ndo\n", c->f);
+		emit_string(c, "\ndo\n");
 		print_list(c, cmd->body);
-		fputs("done", c->f);
+		emit_string(c, "done");
 		break;
 	/* XCU 2.9.5: "fname ( ) compound-command [io-redirect...]".  The
 	 * body is reprinted as the raw source text the parser captured
@@ -253,9 +274,9 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 	 * reprint of a body this file never parsed could not promise
 	 * that. */
 	case SH_CMD_FUNCDEF:
-		fputs(cmd->name, c->f);
-		fputs("() ", c->f);
-		fputs(cmd->func_text, c->f);
+		emit_string(c, cmd->name);
+		emit_string(c, "() ");
+		emit_string(c, cmd->func_text);
 		if (cmd->func_body)
 			queue_nested_heredocs_command(c, cmd->func_body);
 		break;
@@ -268,7 +289,7 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
 }
 
 /* pl is required: `if (pl->bang)` is this function's first statement.
- * c is required too: reached directly (`fputs(" ! ", c->f)`) on the
+ * c is required too: reached directly (`emit_string(c, " ! ")`) on the
  * real, reachable `pl->bang` path and the real, reachable `i > 0`
  * path of a multi-command pipeline, and print_andor() below always
  * passes a real pctx and `&a->pipeline`. */
@@ -277,9 +298,9 @@ static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
 static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
 {
 	size_t i;
-	if (pl->bang) fputs("! ", c->f);
+	if (pl->bang) emit_string(c, "! ");
 	for (i = 0; i < pl->ncommands; i++) {
-		if (i) fputs(" | ", c->f);
+		if (i) emit_string(c, " | ");
 		print_command(c, &pl->commands[i]);
 	}
 }
@@ -287,8 +308,8 @@ static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
 static void print_andor(struct pctx *c, const struct sh_andor *a)
 {
 	for (; a; a = a->next) {
-		if (a->op == SH_AO_AND) fputs(" && ", c->f);
-		else if (a->op == SH_AO_OR) fputs(" || ", c->f);
+		if (a->op == SH_AO_AND) emit_string(c, " && ");
+		else if (a->op == SH_AO_OR) emit_string(c, " || ");
 		print_pipeline(c, &a->pipeline);
 	}
 }
@@ -299,16 +320,20 @@ static void print_list(struct pctx *c, const struct sh_list *list)
 	if (!list) return;
 	for (it = list->items; it; it = it->next) {
 		print_andor(c, it->andor);
-		if (it->sep == SH_SEP_AMP) fputs(" &", c->f);
-		fputc('\n', c->f);
+		if (it->sep == SH_SEP_AMP) emit_string(c, " &");
+		emit_char(c, '\n');
 		drain_heredocs(c);
 	}
 }
 
-void __sh_print_list(FILE *f, const struct sh_list *list)
+int __sh_print_list(FILE *f, const struct sh_list *list)
 {
 	struct pctx c;
 	c.f = f;
 	c.head = c.tail = 0;
+	c.failed = 0;
 	print_list(&c, list);
+	return c.failed ? -1 : 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

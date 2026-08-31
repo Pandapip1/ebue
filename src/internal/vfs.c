@@ -19,6 +19,11 @@
  * for why a future UEFI backend needs NT's real logic while Linux's
  * own version is a few lines returning "always native".
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -26,7 +31,7 @@
 #include <errno.h>
 #include "libc.h"
 
-#define __VFS_STAT_DEV ((dev_t)0xffffffff00000003ULL)
+#define __VFS_STAT_DEV ((dev_t)0xffffffff00000003ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 static int cwd_kind;
 
@@ -56,3 +61,5 @@ int __vfs_stat(int kind, struct stat *st)
 
 int __vfs_cwd_get(void) { return cwd_kind; }
 void __vfs_cwd_set(int kind) { cwd_kind = kind; }
+
+// NOLINTEND(misc-include-cleaner)

@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* NT exposes priority classes and a scheduler quantum, but not distinct
  * POSIX FIFO and round-robin process policies.  Keep the observable
  * policy/priority tuple here so applications can set it and read it back,
@@ -89,7 +94,7 @@ static int process_exists(pid_t pid)
 	return alive;
 }
 
-static struct sched_state *state_for(pid_t pid, int create)
+static struct sched_state *state_for(pid_t pid, int create) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct sched_state *empty = 0;
 	int i;
@@ -160,7 +165,7 @@ int sched_getparam(pid_t pid, struct sched_param *param)
 	return 0;
 }
 
-static int set_state(pid_t pid, int policy, int priority)
+static int set_state(pid_t pid, int policy, int priority) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct sched_state *state;
 	if (!process_exists(pid)) return -1;
@@ -213,3 +218,5 @@ int sched_yield(void)
 	__plat_yield();
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

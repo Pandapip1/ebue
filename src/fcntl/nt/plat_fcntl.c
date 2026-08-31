@@ -20,6 +20,11 @@
  * sequence __open_handle() used to run inline, verified line for line
  * against the pre-refactor version.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -27,8 +32,8 @@
 #include "libc.h"
 #include "plat_fcntl.h"
 
-int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
-                __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
+int __plat_open(int dirfd, const char *path, int flags, unsigned mode, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+                __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __ntpath np;
 	unsigned char mode_ea[32];
@@ -159,7 +164,7 @@ int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
 	return 0;
 }
 
-int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting)
+int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER o = off, l = len;
@@ -180,7 +185,7 @@ int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclu
 	return __set_errno_status(st);
 }
 
-int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusive, int wait)
+int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusive, int wait) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER o = off, l = len;
@@ -189,7 +194,7 @@ int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusi
 	return 0;
 }
 
-int __plat_lock_clear(__plat_handle_t h, long long off, long long len)
+int __plat_lock_clear(__plat_handle_t h, long long off, long long len) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER o = off, l = len;
@@ -216,7 +221,7 @@ long long __plat_volume_max_file_size(__plat_handle_t h)
 	return lim > (unsigned long long)LLONG_MAX ? LLONG_MAX : (long long)lim;
 }
 
-int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
+int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	FILE_STANDARD_INFORMATION si;
@@ -319,7 +324,7 @@ static int materialize_zero_tail(HANDLE h, long long from, long long to)
  * documented FileAllocationInformation rule above.  The Wine finding
  * arrived afterwards and says the guard is exercised in practice
  * anyway, by ordinary files, without anyone creating a sparse one. */
-int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_alloc)
+int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_alloc) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	FILE_ALLOCATION_INFORMATION ai;
@@ -374,3 +379,5 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 	}
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

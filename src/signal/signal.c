@@ -42,6 +42,11 @@
  * Ctrl-C is never turned into a signal; the default console behaviour,
  * which ends the process, stays in effect.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <signal.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -333,7 +338,7 @@ static __plat_handle_t self_stop_event;
 static pid_t self_stop_owner;
 static int self_stop_signal;
 
-static void stop_event_name(pid_t pid, int sig, WCHAR name[56],
+static void stop_event_name(pid_t pid, int sig, WCHAR name[56], // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 			    UNICODE_STRING *us)
 {
 	static const char prefix[] = "\\BaseNamedObjects\\ntlibc-stop.";
@@ -423,7 +428,7 @@ static __thread int alt_active;      /* nonzero while a handler runs on it */
  * arguments in rcx/rdx/r8 per the Windows x64 ABI, which is not where a
  * SysV ELF caller puts them. */
 #ifdef _WIN32
-void __sig_call_on_altstack(void *sp, void (*fn)(void *), void *arg);
+void __sig_call_on_altstack(void *sp, void (*fn)(void *), void *arg); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 #endif
 
 /* One shape for both handler signatures, so the stack switch below has a
@@ -621,7 +626,7 @@ int __raise_internal_info(int sig, const void *data)
 		delivery_lock_depth = __sig_unlock_for_handler();
 		if (flags & SA_SIGINFO) {
 			void (*hsi)(int, siginfo_t *, void *) =
-				(void (*)(int, siginfo_t *, void *))(void *)h;
+				(void (*)(int, siginfo_t *, void *))(void *)h; // NOLINT(bugprone-casting-through-void) -- sigaction's union ABI requires recovering the three-argument handler from the shared slot
 			d.hsi = hsi;
 			d.si = (siginfo_t *)supplied;
 			sig_dispatch(&d, flags);
@@ -1266,7 +1271,7 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
  * sigaction(). Unlike those two, SIGKILL and SIGSTOP are accepted: this
  * page lists no uncatchable-signal error, and with the flag a no-op
  * there is nothing about them to refuse. */
-int siginterrupt(int sig, int flag) { if (!sig_valid(sig)) { errno = EINVAL; return -1; } (void)flag; return 0; }
+int siginterrupt(int sig, int flag) { if (!sig_valid(sig)) { errno = EINVAL; return -1; } (void)flag; return 0; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 /* The alternate signal stack, and whether a handler is running on it.
  *
  * This used to be a stub that ignored ss, reported SS_DISABLE, and
@@ -1406,8 +1411,8 @@ int sigpause(int sig)
  * address answers exactly that, through State (src/internal/nt.h):
  *
  *   MEM_FREE     nothing is mapped there at all         -> SEGV_MAPERR
- *   MEM_RESERVE  address space reserved, never committed
- *                (no backing page to access either)      -> SEGV_MAPERR
+ *   MEM_RESERVE  normally no mapped page                -> SEGV_MAPERR
+ *                but a live lazy PROT_NONE mmap          -> SEGV_ACCERR
  *   MEM_COMMIT   a real page exists; the fault is
  *                Protect denying this exact access       -> SEGV_ACCERR
  *
@@ -1423,7 +1428,16 @@ int sigpause(int sig)
  * kernel address, an already-torn-down process, etc.) SEGV_MAPERR is
  * the honest fallback: "cannot even ask" is closer to "not mapped"
  * than to "mapped but protected". */
-static int segv_code(void *addr) { return __plat_segv_code(addr); }
+/* The backend classifies raw NT state. The mapping registry supplies the
+ * one distinction NT state cannot: a lazy PROT_NONE mmap is reserved but
+ * still mapped in POSIX terms. */
+static int segv_code(void *addr)
+{
+	int code = __plat_segv_code(addr);
+	if (code == SEGV_MAPERR && __mman_address_is_live(addr))
+		return SEGV_ACCERR;
+	return code;
+}
 
 /* NT exceptions that correspond to synchronous signals, and (for the
  * fault-shaped ones) the si_code that names the fault precisely --
@@ -1447,10 +1461,23 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	ULONG excode = ep->ExceptionRecord->ExceptionCode;
 
 	switch (excode) {
-	case EXCEPTION_ACCESS_VIOLATION:
+	case EXCEPTION_ACCESS_VIOLATION: {
+		void *addr = (void *)ep->ExceptionRecord->ExceptionInformation[1];
+		code = segv_code(addr);
+		if (code == SEGV_MAPERR && __mman_fault_is_object_error(addr)) {
+			sig = SIGBUS;
+			code = BUS_OBJERR;
+		} else {
+			sig = SIGSEGV;
+		}
+		break;
+	}
 	case EXCEPTION_IN_PAGE_ERROR:
-		sig = SIGSEGV;
-		code = segv_code((void *)ep->ExceptionRecord->ExceptionInformation[1]);
+		/* The address is mapped, but its backing object could not supply
+		 * the page (including a whole page beyond a mapped file's end).
+		 * That is SIGBUS/BUS_OBJERR, not an address/protection SIGSEGV. */
+		sig = SIGBUS;
+		code = BUS_OBJERR;
 		break;
 	case EXCEPTION_STACK_OVERFLOW:
 		/* Running off the end of the reserved stack region: by
@@ -1670,8 +1697,10 @@ void __signal_init(void)
  * for the text, stdio for the write. */
 void psignal(int sig, const char *s)
 {
-	if (s && *s) fprintf(stderr, "%s: %s\n", s, strsignal(sig));
-	else fprintf(stderr, "%s\n", strsignal(sig));
+	/* psignal() is itself the diagnostic and has no return channel through
+	 * which a secondary stderr failure could be reported. */
+	if (s && *s) (void)fprintf(stderr, "%s: %s\n", s, strsignal(sig));
+	else (void)fprintf(stderr, "%s\n", strsignal(sig));
 }
 
 /* psiginfo.html DESCRIPTION: same message shape as psignal(), driven
@@ -1682,3 +1711,5 @@ void psiginfo(const siginfo_t *pinfo, const char *s)
 {
 	psignal(pinfo->si_signo, s);
 }
+
+// NOLINTEND(misc-include-cleaner)

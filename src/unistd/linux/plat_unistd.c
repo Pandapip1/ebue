@@ -84,6 +84,11 @@
  * working getpid() to be reachable on this backend at all (see the
  * pthread front-door work's own commit for the fuller account).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -140,7 +145,7 @@
  * is the same fix applied here. aarch64's syscall calling convention:
  * x8 = syscall number, x0..x5 = up to 6 arguments, result (or -errno
  * in [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -253,7 +258,7 @@ long long __plat_time_now(void)
 	return nt;
 }
 
-int __plat_alarm_arm(long long due, unsigned long seq, __plat_alarm_fn deliver)
+int __plat_alarm_arm(long long due, unsigned long seq, __plat_alarm_fn deliver) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; due time and sequence have distinct roles
 {
 	(void)due; (void)seq; (void)deliver;
 	return -1; /* see this file's banner: SIGALRM/timer machinery, deliberately out of scope */
@@ -527,3 +532,5 @@ int __plat_chown_probe(int dirfd, const char *path, int flags)
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

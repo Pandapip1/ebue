@@ -18,6 +18,11 @@
  * split is mechanical, verified by diff against vfs.c before this
  * file existed.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,7 +32,7 @@
 
 static int issep(char c) { return c == '/' || c == '\\'; }
 
-static int component(const char **pp, const char **start)
+static int component(const char **pp, const char **start) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *p = *pp;
 	int n;
@@ -182,7 +187,7 @@ int __vfs_resolve_at(int dirfd, const char *path)
 	return rooted ? state : __VFS_NONE;
 }
 
-int __vfs_open_dir(int kind, int cloexec, HANDLE *out)
+int __vfs_open_dir(int kind, int cloexec, HANDLE *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	OBJECT_ATTRIBUTES oa;
 	NTSTATUS st;
@@ -192,3 +197,5 @@ int __vfs_open_dir(int kind, int cloexec, HANDLE *out)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

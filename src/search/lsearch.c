@@ -8,7 +8,7 @@
 #include <search.h>
 #include <string.h>
 
-void *lfind(const void *key, const void *base, size_t *nelp, size_t width,
+void *lfind(const void *key, const void *base, size_t *nelp, size_t width, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	    int (*compar)(const void *, const void *))
 {
 	const char *p = base;

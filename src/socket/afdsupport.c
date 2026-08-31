@@ -5,6 +5,11 @@
  * src/socket/ (every .c there) file shares.  See src/internal/afd.h's banner for the
  * two sources this is checked against.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -181,7 +186,7 @@ int __afd_addr_from_sockaddr(const struct sockaddr *addr, socklen_t len, TRANSPO
 	if (!addr || len < (socklen_t)sizeof(struct sockaddr_in)) { errno = EINVAL; return -1; }
 	if (addr->sa_family != AF_INET) { errno = EAFNOSUPPORT; return -1; }
 
-	sin = (const struct sockaddr_in *)(const void *)addr;
+	sin = (const struct sockaddr_in *)addr;
 	out->TAAddressCount = 1;
 	/* Length of the *address*, i.e. the sockaddr minus its family --
 	 * 14 for sockaddr_in, never sizeof() of a padded struct. */
@@ -280,7 +285,7 @@ unsigned long __afd_poll_request_size(unsigned long nhandles)
 /* See afd.h.  Timeout is a plain LONGLONG here (src/internal/nt.h has
  * no .QuadPart union), memcpy'd rather than stored through a cast so
  * the buffer needs no more than pointer alignment. */
-void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandles)
+void __afd_build_poll_request(void *buf, long long timeout, unsigned long nhandles) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *p = (unsigned char *)buf;
 	uint32_t count = (uint32_t)nhandles;
@@ -312,7 +317,7 @@ void __afd_poll_set_handle(void *buf, unsigned long i, HANDLE h, uint32_t events
 	unsigned char *e = (unsigned char *)buf + AFD_POLL_REQ_OFF_HANDLES + (size_t)i * AFD_POLL_H_SIZE;
 	uint32_t zero = 0;
 
-	memcpy(e + AFD_POLL_H_OFF_HANDLE, &h, sizeof(h));
+	memcpy(e + AFD_POLL_H_OFF_HANDLE, (const void *)&h, sizeof(h));
 	memcpy(e + AFD_POLL_H_OFF_EVENTS, &events, sizeof(events));
 	memcpy(e + AFD_POLL_H_OFF_STATUS, &zero, sizeof(zero));
 }
@@ -370,7 +375,7 @@ uint32_t __afd_poll_events_for(const void *buf, unsigned long nrequested, HANDLE
 		                       + (size_t)i * AFD_POLL_H_SIZE;
 		HANDLE eh;
 
-		memcpy(&eh, e + AFD_POLL_H_OFF_HANDLE, sizeof(eh));
+		memcpy((void *)&eh, e + AFD_POLL_H_OFF_HANDLE, sizeof(eh));
 		if (eh == h) {
 			uint32_t events;
 			memcpy(&events, e + AFD_POLL_H_OFF_EVENTS, sizeof(events));
@@ -506,3 +511,5 @@ int __afd_peername_reply_addr(const void *reply, struct sockaddr *addr, socklen_
 	return __afd_transport_addr_out((const unsigned char *)reply + AFD_PEERNAME_RSP_OFF_ADDR,
 	                                addr, len);
 }
+
+// NOLINTEND(misc-include-cleaner)

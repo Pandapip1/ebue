@@ -58,6 +58,11 @@
  * both a legal "unspecified" value and the one every BSD-derived
  * implementation actually produces.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -135,3 +140,5 @@ int getpeername(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict 
 	*len = f->peer_len;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

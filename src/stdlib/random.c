@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* random/srandom/initstate/setstate: the BSD additive feedback
  * generator (x[i] = x[i-3] + x[i-31]), the same sequence glibc and musl
  * produce for the default 128-byte state. */
@@ -88,3 +93,5 @@ __wraps long random(void)
 	if (++j == n) j = 0;
 	return (long)k;
 }
+
+// NOLINTEND(misc-include-cleaner)

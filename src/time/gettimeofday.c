@@ -21,7 +21,12 @@
  * this is the only way this translation unit can reliably match the
  * header's declaration when _GNU_SOURCE/_BSD_SOURCE isn't otherwise on.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <sys/time.h>
 #include <time.h>
 #include <errno.h>
@@ -49,3 +54,5 @@ int settimeofday(const struct timeval *tv, const struct timezone *tz)
 	ts.tv_nsec = (long)(tv->tv_usec * 1000);
 	return clock_settime(CLOCK_REALTIME, &ts);
 }
+
+// NOLINTEND(misc-include-cleaner)

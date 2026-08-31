@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
@@ -43,7 +48,7 @@ struct barrierattr_data {
  * (duplicated in three files, not shared, but the reasoning is
  * identical) and for the aarch64/tcc (PLATFORM=nt ARCH=aarch64) branch
  * below's own story -- src/thread/nt/aarch64/atomic32.S's banner. */
-static int compare_exchange(volatile int *address, int old_value,
+static int compare_exchange(volatile int *address, int old_value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int new_value)
 {
 #if defined(__i386__) || defined(__x86_64__)
@@ -129,18 +134,18 @@ int pthread_spin_unlock(pthread_spinlock_t *lock)
 
 static struct barrier_data *barrier_data(pthread_barrier_t *barrier)
 {
-	return (struct barrier_data *)(void *)barrier;
+	return (struct barrier_data *)(void *)barrier; // NOLINT(bugprone-casting-through-void) -- public pthread_barrier_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct barrierattr_data *barrierattr_data(pthread_barrierattr_t *attr)
 {
-	return (struct barrierattr_data *)(void *)attr;
+	return (struct barrierattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_barrierattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct barrierattr_data *const_barrierattr_data(
 	const pthread_barrierattr_t *attr)
 {
-	return (const struct barrierattr_data *)(const void *)attr;
+	return (const struct barrierattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_barrierattr_t is opaque storage for this ABI-defined internal layout
 }
 
 /* Process-private barrier state is serialized by the PEB lock. Each caller
@@ -295,3 +300,5 @@ int pthread_barrierattr_setpshared(pthread_barrierattr_t *attr, int pshared)
 	barrierattr_data(attr)->pshared = pshared;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

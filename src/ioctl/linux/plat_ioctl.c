@@ -41,6 +41,11 @@
  * the identical struct and makes the fuller case for it (this file only
  * needs stx_size out of it).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <limits.h>
 #include <string.h>
 #include <errno.h>
@@ -66,7 +71,7 @@
  * account, confirmed independently across six other Linux backends.
  * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
  * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -100,13 +105,13 @@ static int unbox(__plat_handle_t h)
  * everything else is absorbed into the trailing __spare padding so the
  * kernel always has at least as much room as it expects regardless of
  * which fields a future kernel adds within that reserved tail. */
-struct __lx_statx_timestamp {
+struct __lx_statx_timestamp { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long long tv_sec;
 	unsigned int tv_nsec;
-	int __reserved;
+	int __reserved; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
 
-struct __lx_statx {
+struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned int stx_mask;
 	unsigned int stx_blksize;
 	unsigned long long stx_attributes;
@@ -114,7 +119,7 @@ struct __lx_statx {
 	unsigned int stx_uid;
 	unsigned int stx_gid;
 	unsigned short stx_mode;
-	unsigned short __spare0[1];
+	unsigned short __spare0[1]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long stx_ino;
 	unsigned long long stx_size;
 	unsigned long long stx_blocks;
@@ -130,7 +135,7 @@ struct __lx_statx {
 	unsigned long long stx_mnt_id;
 	unsigned int stx_dio_mem_align;
 	unsigned int stx_dio_offset_align;
-	unsigned long long __spare3[12];
+	unsigned long long __spare3[12]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
 
 int __plat_fionread_pipe(__plat_handle_t h, int *out)
@@ -142,7 +147,7 @@ int __plat_fionread_pipe(__plat_handle_t h, int *out)
 	return 0;
 }
 
-int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos)
+int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; EOF and position outputs have distinct roles
 {
 	int fd = unbox(h);
 	struct __lx_statx stx;
@@ -160,3 +165,5 @@ int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos)
 	*pos = ret;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

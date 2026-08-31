@@ -58,6 +58,11 @@
  * installed a handler, the same honest degrade every NT process
  * without a listener already gets.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
@@ -156,7 +161,7 @@ void __sig_delivery_reinit_after_fork(void)
  * needs a real kernel signal handler this file does not install yet.
  * Reporting "not delivered" here is signal.c's own already-documented
  * fallback contract, not a fabrication. */
-int __sig_try_deliver_remote_info(int pid, int sig, const void *data)
+int __sig_try_deliver_remote_info(int pid, int sig, const void *data) // NOLINT(bugprone-easily-swappable-parameters) -- fixed signal-delivery contract; process ID and signal number have distinct roles
 {
 	(void)pid; (void)sig; (void)data;
 	return 0;
@@ -167,8 +172,10 @@ int __sig_try_deliver_remote(int pid, int sig)
 	return __sig_try_deliver_remote_info(pid, sig, 0);
 }
 
-int __sig_try_deliver_remote_nondefault(int pid, int sig)
+int __sig_try_deliver_remote_nondefault(int pid, int sig) // NOLINT(bugprone-easily-swappable-parameters) -- fixed signal-delivery contract; process ID and signal number have distinct roles
 {
 	(void)pid; (void)sig;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

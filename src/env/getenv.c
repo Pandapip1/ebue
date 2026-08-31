@@ -14,7 +14,7 @@
  * (see src/internal/libc.h). */
 static int name_eq(const char *entry, const char *name, size_t name_length)
     __attribute__((nonnull(1, 2)));
-static int name_eq(const char *entry, const char *name, size_t name_length)
+static int name_eq(const char *entry, const char *name, size_t name_length) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t i;
 	for (i = 0; i < name_length; i++) {

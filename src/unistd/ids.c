@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 /* NT has one immutable process identity, represented by the user SID in
  * its primary access token.  SAM and Active Directory account SIDs have
  * the shape S-1-5-21-X-Y-Z-RID.  The final subauthority is the account's
@@ -298,7 +303,7 @@ static int pid_is_self_or_child(pid_t p)
 	return __child_find((int)p) != 0;
 }
 
-int setpgid(pid_t pid, pid_t group)
+int setpgid(pid_t pid, pid_t group) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (!pid_is_self_or_child(pid)) { errno = ESRCH; return -1; }
 	if (group < 0) { errno = EINVAL; return -1; }
@@ -393,14 +398,14 @@ pid_t getsid(pid_t p)
  * read out of them.  FILE_OPEN_FOR_BACKUP_INTENT, and neither
  * FILE_DIRECTORY_FILE nor FILE_NON_DIRECTORY_FILE, so that the call
  * works on a directory and on a regular file alike. */
-int fchownat(int d, const char *p, uid_t u, gid_t g, int f)
+int fchownat(int d, const char *p, uid_t u, gid_t g, int f) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	(void)u; (void)g;
 	return __plat_chown_probe(d, p, f);
 }
 int chown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, 0); }
 int lchown(const char *p, uid_t u, gid_t g) { return fchownat(AT_FDCWD, p, u, g, AT_SYMLINK_NOFOLLOW); }
-int fchown(int f, uid_t u, gid_t g) { (void)u; (void)g; return __fd_get(f) ? 0 : -1; }
+int fchown(int f, uid_t u, gid_t g) { (void)u; (void)g; return __fd_get(f) ? 0 : -1; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 /* nice() used to be `(void)incr; return 0;` here, among identity calls it
  * has nothing to do with.  It moved to src/misc/resource.c, beside the
  * one piece of state getpriority()/setpriority() already keep this
@@ -424,3 +429,5 @@ int getlogin_r(char *buf, size_t n)
 	buf[i] = 0;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

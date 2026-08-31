@@ -26,6 +26,11 @@
  * everything NT-specific about turning a handle into a struct stat is
  * there, not here.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -70,3 +75,5 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 
 int stat(const char *path, struct stat *st) { return fstatat(AT_FDCWD, path, st, 0); }
 int lstat(const char *path, struct stat *st) { return fstatat(AT_FDCWD, path, st, AT_SYMLINK_NOFOLLOW); }
+
+// NOLINTEND(misc-include-cleaner)

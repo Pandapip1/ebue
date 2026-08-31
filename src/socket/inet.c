@@ -9,6 +9,11 @@
  * is no third architecture here for a compile-time endianness probe to
  * matter for.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -109,7 +114,9 @@ char *inet_ntoa(struct in_addr in)
 {
 	static char buf[INET_ADDRSTRLEN];
 	unsigned char *b = (unsigned char *)&in.s_addr;
-	snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+	/* INET_ADDRSTRLEN exactly covers four decimal uint8 octets and separators;
+	 * inet_ntoa() has no failure return for an impossible truncation. */
+	(void)snprintf(buf, sizeof buf, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 	return buf;
 }
 
@@ -293,3 +300,5 @@ int inet_pton(int af, const char *__restrict src, void *__restrict dst)
 	memcpy(dst, tmp, 16);
 	return 1;
 }
+
+// NOLINTEND(misc-include-cleaner)

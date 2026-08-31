@@ -47,6 +47,11 @@
  * it fresh means uname() can never go stale relative to the OS it is
  * actually running under.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/utsname.h>
 #include <unistd.h>
 #include <string.h>
@@ -56,6 +61,7 @@
 int uname(struct utsname *u)
 {
 	RTL_OSVERSIONINFOW vi;
+	int n;
 
 	if (!u) { errno = EFAULT; return -1; }
 
@@ -68,10 +74,14 @@ int uname(struct utsname *u)
 	if (gethostname(u->nodename, sizeof u->nodename) < 0)
 		strcpy(u->nodename, "localhost");
 
-	snprintf(u->release, sizeof u->release, "%lu.%lu",
+	n = snprintf(u->release, sizeof u->release, "%lu.%lu",
 	    (unsigned long)vi.dwMajorVersion, (unsigned long)vi.dwMinorVersion);
-	snprintf(u->version, sizeof u->version, "Build %lu",
+	if (n < 0) return -1;
+	if ((size_t)n >= sizeof u->release) { errno = EOVERFLOW; return -1; }
+	n = snprintf(u->version, sizeof u->version, "Build %lu",
 	    (unsigned long)vi.dwBuildNumber);
+	if (n < 0) return -1;
+	if ((size_t)n >= sizeof u->version) { errno = EOVERFLOW; return -1; }
 
 #if defined(__x86_64__)
 	strcpy(u->machine, "x86_64");
@@ -83,3 +93,5 @@ int uname(struct utsname *u)
 
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

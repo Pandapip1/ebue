@@ -14,6 +14,11 @@
  * __mq_fd_closed() so using close(mqdes), although not the POSIX interface,
  * cannot leave a stale descriptor association or notification registration.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <mqueue.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -174,7 +179,7 @@ static void give(__plat_handle_t h)
 	__plat_semaphore_post(h);
 }
 
-static int raw_io(__plat_handle_t h, void *buf, size_t len, off_t off, int write_op)
+static int raw_io(__plat_handle_t h, void *buf, size_t len, off_t off, int write_op) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *p = buf;
 	while (len) {
@@ -240,7 +245,7 @@ mqd_t mq_open(const char *name, int oflag, ...)
 	struct mq_attr supplied, *attr = NULL;
 	struct mq_desc *d;
 	__plat_handle_t ns = 0, lock = 0, items = 0, spaces = 0;
-	int fd = -1, created = 0, saved = 0, access = oflag & O_ACCMODE;
+	int fd = -1, created = 0, saved = 0, access = oflag & O_ACCMODE, n;
 	mode_t mode = 0;
 	size_t file_size;
 
@@ -263,8 +268,12 @@ mqd_t mq_open(const char *name, int oflag, ...)
 	if (!path) return (mqd_t)-1;
 	if (ensure_dir(path) < 0) goto fail;
 	hash = path_hash(path);
-	snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
+	n = snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
+	if (n < 0 || (size_t)n >= sizeof nsname) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		goto fail;
+	}
 	if (create_sem(nsname, 1, 1, &ns) < 0 || take(ns) < 0) goto fail;
 
 	if (oflag & O_CREAT) {
@@ -286,12 +295,24 @@ mqd_t mq_open(const char *name, int oflag, ...)
 		h.msgsize = attr ? (unsigned)supplied.mq_msgsize : MQ_DEFAULT_MSGSIZE;
 		h.sequence = 1;
 		object_sequence++;
-		snprintf(h.lock_name, sizeof h.lock_name,
+		n = snprintf(h.lock_name, sizeof h.lock_name,
 		         "\\BaseNamedObjects\\ntlibc.mq.%d.%u.lock", (int)getpid(), object_sequence);
-		snprintf(h.items_name, sizeof h.items_name,
+		if (n < 0 || (size_t)n >= sizeof h.lock_name) {
+			if (n >= 0) errno = ENAMETOOLONG;
+			goto fail_created;
+		}
+		n = snprintf(h.items_name, sizeof h.items_name,
 		         "\\BaseNamedObjects\\ntlibc.mq.%d.%u.items", (int)getpid(), object_sequence);
-		snprintf(h.spaces_name, sizeof h.spaces_name,
+		if (n < 0 || (size_t)n >= sizeof h.items_name) {
+			if (n >= 0) errno = ENAMETOOLONG;
+			goto fail_created;
+		}
+		n = snprintf(h.spaces_name, sizeof h.spaces_name,
 		         "\\BaseNamedObjects\\ntlibc.mq.%d.%u.spaces", (int)getpid(), object_sequence);
+		if (n < 0 || (size_t)n >= sizeof h.spaces_name) {
+			if (n >= 0) errno = ENAMETOOLONG;
+			goto fail_created;
+		}
 		file_size = sizeof h + (size_t)h.maxmsg * (sizeof(struct mq_slot) + h.msgsize);
 		if (ftruncate(fd, (off_t)file_size) < 0 || raw_write(__fds[fd].h, &h, sizeof h, 0) < 0)
 			goto fail_created;
@@ -369,7 +390,7 @@ fail:
 }
 
 static int wait_count(struct mq_desc *d, __plat_handle_t count, int nonblock,
-	const struct timespec *abstime, int timed, int receiver)
+	const struct timespec *abstime, int timed, int receiver) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct timespec now;
 	struct mq_header h;
@@ -435,7 +456,7 @@ static int wait_count(struct mq_desc *d, __plat_handle_t count, int nonblock,
 	return status == __PLAT_WAIT_OK ? 0 : -1;
 }
 
-int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
+int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	const struct timespec *abstime)
 {
 	struct mq_desc *d = get_desc(mqdes);
@@ -628,12 +649,17 @@ int mq_unlink(const char *name)
 	char *path = mq_path(name), nsname[96];
 	unsigned long long hash;
 	__plat_handle_t ns = 0;
-	int result, saved;
+	int result, saved, n;
 	if (!path) return -1;
 	if (ensure_dir(path) < 0) { free(path); return -1; }
 	hash = path_hash(path);
-	snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
+	n = snprintf(nsname, sizeof nsname, "\\BaseNamedObjects\\ntlibc.mq.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
+	if (n < 0 || (size_t)n >= sizeof nsname) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		free(path);
+		return -1;
+	}
 	if (create_sem(nsname, 1, 1, &ns) < 0 || take(ns) < 0) {
 		saved = errno; if (ns) __plat_close(ns); free(path); errno = saved; return -1;
 	}
@@ -641,3 +667,5 @@ int mq_unlink(const char *name)
 	give(ns); __plat_close(ns); free(path); errno = saved;
 	return result;
 }
+
+// NOLINTEND(misc-include-cleaner)

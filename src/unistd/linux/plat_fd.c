@@ -25,6 +25,11 @@
  * disposition on a broken pipe (ntlibc's signal delivery still sees it
  * the normal POSIX way), and needs no offset-maximum probe at all.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include "plat_fd.h"
 
@@ -100,7 +105,7 @@
  * pwrite64 pass a 64-bit offset, so i386's version below needs a 7-word
  * array, not the 6-argument crt1.c uses for its own single mmap2 call). */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -208,7 +213,7 @@ ssize_t __plat_pread(__plat_handle_t h, void *buf, size_t count, off_t off)
 	return (ssize_t)ret;
 }
 
-ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int append)
+ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int append) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; byte count and append flag have distinct roles
 {
 	long ret;
 	/* `append` needs nothing here: on Linux, whether a write() goes to
@@ -292,3 +297,5 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
 	*out = (__plat_handle_t)(newfd + 1);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -62,10 +62,10 @@ static int pv_push(struct pv *p, char *s)
 		size_t nc;
 		if (!__array_next_capacity(p->cap, p->n, 1, 16,
 		    sizeof *p->v, &nc)) { __free(s); errno = ENOMEM; return -1; }
-		char **nv = __malloc(nc * sizeof *nv);
+		char **nv = (char **)__malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
-		if (p->v) memcpy(nv, p->v, p->n * sizeof *nv);
-		__free(p->v);
+		if (p->v) memcpy((void *)nv, (const void *)p->v, p->n * sizeof *nv);
+		__free((void *)p->v);
 		p->v = nv;
 		p->cap = nc;
 	}
@@ -90,7 +90,7 @@ static void pv_free_from(struct pv *p, size_t from)
 {
 	size_t i;
 	for (i = from; i < p->n; i++) __free(p->v[i]);
-	__free(p->v);
+	__free((void *)p->v);
 	p->v = 0;
 	p->n = p->cap = 0;
 }
@@ -349,12 +349,12 @@ static int finish(struct pv *out, int flags, glob_t *pglob)
 	if (out->n == (size_t)-1 || offs > (size_t)-1 - out->n - 1) goto nospace;
 	total = offs + out->n + 1;
 	if (total > (size_t)-1 / sizeof *v) goto nospace;
-	v = __malloc(total * sizeof *v);
+	v = (char **)__malloc(total * sizeof *v);
 	if (!v) goto nospace;
 	for (i = 0; i < offs; i++) v[i] = 0;
 	for (i = 0; i < out->n; i++) v[offs + i] = out->v[i];
 	v[offs + out->n] = 0;
-	__free(out->v);
+	__free((void *)out->v);
 
 	pglob->gl_pathv = v;
 	pglob->gl_pathc = out->n;
@@ -386,11 +386,11 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 	if (flags & GLOB_APPEND) {
 		out.n = out.cap = pglob->gl_pathc;
 		if (out.n) {
-			out.v = __malloc(out.n * sizeof *out.v);
+			out.v = (char **)__malloc(out.n * sizeof *out.v);
 			if (!out.v) { errno = ENOMEM; return GLOB_NOSPACE; }
-			memcpy(out.v, pglob->gl_pathv + pglob->gl_offs, out.n * sizeof *out.v);
+			memcpy((void *)out.v, (const void *)(pglob->gl_pathv + pglob->gl_offs), out.n * sizeof *out.v);
 		}
-		__free(pglob->gl_pathv);
+		__free((void *)pglob->gl_pathv);
 	}
 	base = out.n;
 
@@ -467,7 +467,7 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
 		 *
 		 * base is 0 for a non-GLOB_APPEND call, so this is the same
 		 * whole-vector sort as before in the ordinary case. */
-		qsort(out.v + base, out.n - base, sizeof *out.v, cmpstrp);
+		qsort((void *)(out.v + base), out.n - base, sizeof *out.v, cmpstrp);
 	}
 
 	if (out.n == base && !(flags & GLOB_NOCHECK)) {
@@ -497,7 +497,7 @@ void globfree(glob_t *pglob)
 	if (!pglob || !pglob->gl_pathv) return;
 	offs = pglob->gl_offs;
 	for (i = 0; i < pglob->gl_pathc; i++) __free(pglob->gl_pathv[offs + i]);
-	__free(pglob->gl_pathv);
+	__free((void *)pglob->gl_pathv);
 	pglob->gl_pathv = 0;
 	pglob->gl_pathc = 0;
 }

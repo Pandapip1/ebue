@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -17,7 +22,7 @@ static size_t handler_count;
 static size_t handler_capacity;
 static __thread size_t active_count;
 
-int pthread_atfork(void (*prepare)(void), void (*parent)(void),
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	void (*child)(void))
 {
 	struct atfork_handler *new_handlers;
@@ -70,3 +75,5 @@ void __pthread_atfork_child(void)
 	for (i = 0; i < count; i++)
 		if (handlers[i].child) handlers[i].child();
 }
+
+// NOLINTEND(misc-include-cleaner)

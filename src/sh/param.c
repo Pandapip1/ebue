@@ -74,7 +74,7 @@ static void free_vec(char **v, int n)
 	int i;
 	if (!v) return;
 	for (i = 0; i < n; i++) __free(v[i]);
-	__free(v);
+	__free((void *)v);
 }
 
 const char *__sh_param_zero(void)
@@ -128,7 +128,7 @@ int __sh_params_replace(char *const *argv, int n)
 
 	if (n < 0) n = 0;
 	if (n > 0) {
-		nv = __malloc((size_t)n * sizeof *nv);
+		nv = (char **)__malloc((size_t)n * sizeof *nv);
 		if (!nv) return -1;
 		for (i = 0; i < n; i++) {
 			nv[i] = dup_str(argv[i]);

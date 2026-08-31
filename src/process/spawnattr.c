@@ -36,6 +36,11 @@
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawnattr_getschedparam.html
  * https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_spawnattr_getschedpolicy.html
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <spawn.h>
 #include <string.h>
 #include <signal.h>
@@ -134,3 +139,5 @@ int posix_spawnattr_setschedpolicy(posix_spawnattr_t *a, int policy)
 	a->__policy = policy;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

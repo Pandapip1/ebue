@@ -88,6 +88,7 @@ struct pr_opts {
 };
 
 static long g_page_no; /* continuous across every file operand */
+static int pr_output_failed;
 
 static void emit_offset(const struct pr_opts *o)
 {
@@ -101,7 +102,10 @@ static void emit_header(const struct pr_opts *o, const char *fname)
 	time_t now = time(0);
 	struct tm *tmv = now != (time_t)-1 ? localtime(&now) : 0;
 
-	if (tmv) strftime(datebuf, sizeof datebuf, "%b %e %H:%M %Y", tmv);
+	if (tmv && strftime(datebuf, sizeof datebuf, "%b %e %H:%M %Y", tmv) == 0) {
+		datebuf[0] = 0;
+		pr_output_failed = 1;
+	}
 	else datebuf[0] = 0;
 
 	emit_offset(o); putchar('\n');
@@ -159,7 +163,7 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 	st.page_open = 0;
 	st.budget = o->opt_t ? o->page_len : (o->page_len - 10);
 	if (st.budget <= 0) {
-		fprintf(stderr, "pr: page length %d is too small for a header and trailer\n", o->page_len);
+		__util_diagf("pr: page length %d is too small for a header and trailer\n", o->page_len);
 		return -1;
 	}
 
@@ -177,7 +181,7 @@ static int process_stream(const struct pr_opts *o, FILE *f, const char *fname)
 
 		if (o->opt_n) printf("%*ld%c", o->n_width, st.lineno, o->n_sepchar);
 		emit_offset(o);
-		fputs(line, stdout);
+		if (fputs(line, stdout) < 0) pr_output_failed = 1;
 		putchar('\n');
 		st.lines_on_page++;
 
@@ -206,12 +210,13 @@ static int process_file(const struct pr_opts *o, const char *path)
 	} else {
 		f = fopen(path, "r");
 		if (!f) {
-			if (!o->opt_r) fprintf(stderr, "pr: %s: %s\n", path, strerror(errno));
+			if (!o->opt_r) __util_diagf("pr: %s: %s\n", path, strerror(errno));
 			return -1;
 		}
 	}
 	rc = process_stream(o, f, fname);
-	if (f != stdin) fclose(f);
+	if (f != stdin && fclose(f) != 0) rc = -1;
+	if (pr_output_failed || fflush(stdout) != 0) rc = -1;
 	return rc;
 }
 
@@ -235,6 +240,7 @@ int __util_pr_main(int argc, char **argv)
 	struct pr_opts o;
 	int i = 1;
 	int had_error = 0;
+	pr_output_failed = 0;
 
 	/* g_page_no is file-scope so emit_header()/emit_trailer() (called
 	 * many stack frames down, across every file operand) don't need it
@@ -257,13 +263,13 @@ int __util_pr_main(int argc, char **argv)
 		char *a = argv[i];
 
 		if (a[0] == '+') {
-			fprintf(stderr, "pr: %s: +page is not implemented -- see src/util/pr.c\n", a);
+			__util_diagf("pr: %s: +page is not implemented -- see src/util/pr.c\n", a);
 			return 1;
 		}
 		if (a[0] != '-' || a[1] == 0) break;
 		if (!strcmp(a, "--")) { i++; break; }
 		if (a[1] >= '0' && a[1] <= '9') {
-			fprintf(stderr, "pr: %s: multi-column mode is not implemented -- "
+			__util_diagf("pr: %s: multi-column mode is not implemented -- "
 			                "see src/util/pr.c\n", a);
 			return 1;
 		}
@@ -272,53 +278,53 @@ int __util_pr_main(int argc, char **argv)
 		if (!strcmp(a, "-F") || !strcmp(a, "-f")) { o.opt_F = 1; continue; }
 		if (!strcmp(a, "-r")) { o.opt_r = 1; continue; }
 		if (!strcmp(a, "-h")) {
-			if (i + 1 >= argc) { fprintf(stderr, "pr: -h: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("pr: -h: option requires an argument\n"); return 1; }
 			o.header = argv[++i];
 			continue;
 		}
 		if (!strcmp(a, "-l")) {
 			char *end;
-			if (i + 1 >= argc) { fprintf(stderr, "pr: -l: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("pr: -l: option requires an argument\n"); return 1; }
 			o.page_len = (int)strtol(argv[++i], &end, 10);
-			if (*end || o.page_len <= 0) { fprintf(stderr, "pr: -l: invalid page length\n"); return 1; }
+			if (*end || o.page_len <= 0) { __util_diagf("pr: -l: invalid page length\n"); return 1; }
 			continue;
 		}
 		if (!strcmp(a, "-o")) {
 			char *end;
-			if (i + 1 >= argc) { fprintf(stderr, "pr: -o: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("pr: -o: option requires an argument\n"); return 1; }
 			o.offset = (int)strtol(argv[++i], &end, 10);
-			if (*end || o.offset < 0) { fprintf(stderr, "pr: -o: invalid offset\n"); return 1; }
+			if (*end || o.offset < 0) { __util_diagf("pr: -o: invalid offset\n"); return 1; }
 			continue;
 		}
 		if (!strcmp(a, "-w")) {
 			char *end;
-			if (i + 1 >= argc) { fprintf(stderr, "pr: -w: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("pr: -w: option requires an argument\n"); return 1; }
 			o.width = (int)strtol(argv[++i], &end, 10);
-			if (*end || o.width <= 0) { fprintf(stderr, "pr: -w: invalid width\n"); return 1; }
+			if (*end || o.width <= 0) { __util_diagf("pr: -w: invalid width\n"); return 1; }
 			continue;
 		}
 		if (a[1] == 'n') {
 			if (parse_n_opt(a + 2, &o) < 0) {
-				fprintf(stderr, "pr: %s: invalid -n argument\n", a);
+				__util_diagf("pr: %s: invalid -n argument\n", a);
 				return 1;
 			}
 			continue;
 		}
 		if (!strcmp(a, "-m")) {
-			fprintf(stderr, "pr: -m: merging files side by side is not implemented "
+			__util_diagf("pr: -m: merging files side by side is not implemented "
 			                "-- see src/util/pr.c\n");
 			return 1;
 		}
 		if (!strcmp(a, "-e") || !strcmp(a, "-i")) {
-			fprintf(stderr, "pr: %s: tab expansion is not implemented -- see "
+			__util_diagf("pr: %s: tab expansion is not implemented -- see "
 			                "src/util/pr.c\n", a);
 			return 1;
 		}
 		if (!strcmp(a, "-a") || !strcmp(a, "-s")) {
-			fprintf(stderr, "pr: %s: is not implemented -- see src/util/pr.c\n", a);
+			__util_diagf("pr: %s: is not implemented -- see src/util/pr.c\n", a);
 			return 1;
 		}
-		fprintf(stderr, "pr: %s: invalid option\n", a);
+		__util_diagf("pr: %s: invalid option\n", a);
 		return 1;
 	}
 

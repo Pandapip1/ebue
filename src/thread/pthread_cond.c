@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -44,23 +49,23 @@ struct cond_cleanup {
 
 static struct cond_data *cond_data(pthread_cond_t *cond)
 {
-	return (struct cond_data *)(void *)cond;
+	return (struct cond_data *)(void *)cond; // NOLINT(bugprone-casting-through-void) -- public pthread_cond_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct cond_data *const_cond_data(const pthread_cond_t *cond)
 {
-	return (const struct cond_data *)(const void *)cond;
+	return (const struct cond_data *)(const void *)cond; // NOLINT(bugprone-casting-through-void) -- public pthread_cond_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct condattr_data *condattr_data(pthread_condattr_t *attr)
 {
-	return (struct condattr_data *)(void *)attr;
+	return (struct condattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_condattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct condattr_data *const_condattr_data(
 	const pthread_condattr_t *attr)
 {
-	return (const struct condattr_data *)(const void *)attr;
+	return (const struct condattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_condattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int cond_ready(pthread_cond_t *cond)
@@ -353,3 +358,5 @@ int pthread_condattr_setpshared(pthread_condattr_t *attr, int pshared)
 	condattr_data(attr)->pshared = pshared;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

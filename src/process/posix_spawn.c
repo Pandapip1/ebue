@@ -170,6 +170,11 @@
  * botched thing about these two functions -- so errno is captured on
  * entry and put back on every path out, including the successful one.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,7 +224,7 @@ struct saved_slot {
  * access does. */
 static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
     __attribute__((nonnull(2)));
-static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
+static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i;
 	for (i = 0; i < *nsv; i++) {
@@ -407,3 +412,5 @@ int posix_spawnp(pid_t *__restrict pid, const char *__restrict file,
 {
 	return spawn_common(pid, file, fa, at, argv, envp, 1);
 }
+
+// NOLINTEND(misc-include-cleaner)

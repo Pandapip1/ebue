@@ -21,6 +21,11 @@
  * is exactly the kind of NT-specific interpretation step this backend
  * exists to own -- FILE_ATTRIBUTE_* bits mean nothing to any other
  * backend. */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 #include "plat_dirent.h"
@@ -47,9 +52,9 @@ ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restar
  * duplicated here rather than pulled from a header the same way
  * src/dirent/dirent_internal.h's own __DT_* duplicates them -- see
  * plat_dirent.h's own comment on struct __dirent_raw's `type` field. */
-#define __NT_DT_REG 8
-#define __NT_DT_DIR 4
-#define __NT_DT_LNK 10
+#define __NT_DT_REG 8 // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling follows the NT ABI
+#define __NT_DT_DIR 4 // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling follows the NT ABI
+#define __NT_DT_LNK 10 // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling follows the NT ABI
 
 static unsigned char dtype_from_attrs(ULONG attrs)
 {
@@ -98,3 +103,5 @@ int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __
 	*pos += next;
 	return 1;
 }
+
+// NOLINTEND(misc-include-cleaner)

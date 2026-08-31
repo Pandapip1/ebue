@@ -149,7 +149,7 @@ static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
 	pad = (sizeof(char *) - ((uintptr_t)buf % sizeof(char *))) % sizeof(char *);
 	need = pad + sizeof(char *) * 2;
 	if (bufsz < need) return ERANGE;
-	mem = (char **)(void *)(buf + pad);
+	mem = (char **)(buf + pad);
 	buf += need;
 	bufsz -= need;
 	return fill_current(gr, mem, buf, bufsz, 0);

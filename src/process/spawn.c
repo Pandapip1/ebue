@@ -142,6 +142,11 @@
  * every Windows C runtime agree on, so that an argument with spaces,
  * quotes or backslashes survives the round trip into the child's argv.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -199,3 +204,5 @@ int __spawn(const char *path, char *const argv[], char *const envp[])
 	}
 	return pid;
 }
+
+// NOLINTEND(misc-include-cleaner)

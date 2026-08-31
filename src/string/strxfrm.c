@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <locale.h>
 
@@ -16,3 +21,5 @@ size_t strxfrm_l(char *__restrict dest, const char *__restrict src, size_t n, lo
 	(void)loc;
 	return strxfrm(dest, src, n);
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -13,6 +13,11 @@
  * now one function, verified line for line against the pre-refactor
  * version (commit ce4763c did the same relocation for open()).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
@@ -80,7 +85,7 @@ static int ntpath_is_ancestor(const struct __ntpath *old,
  * via return -- only the OPEN's own failure is reported; the attribute
  * query's failure is absorbed as above. */
 static int rename_open_old(struct __ntpath *op, __plat_handle_t *h_out,
-                           unsigned long *attrs, unsigned long *tag)
+                           unsigned long *attrs, unsigned long *tag) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	HANDLE h;
@@ -114,7 +119,7 @@ static int rename_open_old(struct __ntpath *op, __plat_handle_t *h_out,
  * reported outward: an unreadable `new` is exactly like a nonexistent
  * one here. */
 static void query_new_attrs(struct __ntpath *np, int *exists,
-                            unsigned long *attrs, unsigned long *tag)
+                            unsigned long *attrs, unsigned long *tag) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	HANDLE nh;
@@ -145,7 +150,7 @@ static void query_new_attrs(struct __ntpath *np, int *exists,
  * `old_isdir`) when NT's STATUS_ACCESS_DENIED is standing in for a
  * directory-shaped refusal rather than a real permission failure, and
  * the generic mapping for everything else. */
-static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int new_isdir)
+static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int new_isdir) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	FILE_RENAME_INFORMATION *ri;
@@ -254,3 +259,5 @@ int __plat_rename(int olddirfd, const char *old, int newdirfd, const char *new)
 		return r;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

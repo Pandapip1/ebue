@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -13,8 +18,8 @@
  * -- 0/-1 with errno already set on failure, never a raw NTSTATUS for
  * the front door to interpret, since a future backend has no NTSTATUS
  * to hand back.  mman.c's own reservation-tracking bookkeeping (the
- * `maps[]`/`live`/`locked` table) is NOT part of this interface: that
- * table is this library's own POSIX-partial-munmap strategy, shared
+ * dynamic mapping registry and its `live`/`locked` state) is NOT part of
+ * this interface: that registry is this library's own POSIX-partial-munmap strategy, shared
  * verbatim by whichever backend is compiled in, not something each
  * backend reimplements.
  */
@@ -25,10 +30,13 @@
 #include <sys/types.h>
 #include "plat_handle.h"
 
-/* Reserve and commit `len` bytes of fresh anonymous memory.
+/* Reserve `len` bytes of fresh anonymous memory, committing it immediately
+ * unless `prot` is PROT_NONE. A no-access mapping remains a real tracked
+ * mapping, but deferring its commit avoids charging physical/host commit for
+ * address-space-only reservations; __plat_mem_protect commits such pages when
+ * later protections make them accessible.
  * *base_inout is a hint on entry (NULL for "anywhere"); the actual base
- * on success.  Corresponds to NT's MEM_RESERVE|MEM_COMMIT in one call
- * -- mmap()'s anonymous path never reserves without also committing.
+ * on success.
  * base_inout itself is required (note: what it POINTS TO may be NULL,
  * meaning "anywhere" -- it is base_inout, not *base_inout, this
  * attribute describes): both real implementations
@@ -102,3 +110,5 @@ int __plat_mem_unmap_view(void *base, size_t len);
 int __plat_mem_flush_view(void *addr, size_t len, __plat_handle_t writeback);
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

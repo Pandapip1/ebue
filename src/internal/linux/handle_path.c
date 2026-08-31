@@ -35,6 +35,11 @@
  * callers (fchmod's reopen, fchdir, realpath) reaches this path on a
  * file that was just created and is still linked.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <limits.h>
 #include <string.h>
@@ -43,7 +48,7 @@
 /* Same 6-argument raw syscall trampoline every Linux backend defines
  * for itself. File-scoped by convention, not shared, the same as every
  * other Linux backend in this tree. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x0 __asm__("x0") = a1;
 	register long x1 __asm__("x1") = a2;
@@ -122,3 +127,5 @@ char *__handle_path(HANDLE h)
 	r[n] = 0;
 	return r;
 }
+
+// NOLINTEND(misc-include-cleaner)

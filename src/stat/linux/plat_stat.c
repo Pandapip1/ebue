@@ -162,6 +162,11 @@
  * FILE_ATTRIBUTE_READONLY on any timestamp-only call -- nothing
  * analogous exists here.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <string.h>
@@ -194,7 +199,7 @@
  * account, confirmed independently across six other Linux backends.
  * aarch64's syscall calling convention: x8 = syscall number, x0..x5 =
  * up to 6 arguments, result (or -errno in [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -239,12 +244,12 @@ static int resolve_dirfd(int dirfd)
 /* The kernel's fixed, architecture-independent struct statx (linux/
  * stat.h) -- see this file's own banner for the field-by-field
  * confirmation against this host's real header. */
-struct __lx_statx_timestamp {
+struct __lx_statx_timestamp { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long long tv_sec;
 	unsigned int tv_nsec;
-	int __reserved;
+	int __reserved; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
-struct __lx_statx {
+struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned int stx_mask;
 	unsigned int stx_blksize;
 	unsigned long long stx_attributes;
@@ -252,7 +257,7 @@ struct __lx_statx {
 	unsigned int stx_uid;
 	unsigned int stx_gid;
 	unsigned short stx_mode;
-	unsigned short __spare0[1];
+	unsigned short __spare0[1]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long stx_ino;
 	unsigned long long stx_size;
 	unsigned long long stx_blocks;
@@ -268,7 +273,7 @@ struct __lx_statx {
 	unsigned long long stx_mnt_id;
 	unsigned int stx_dio_mem_align;
 	unsigned int stx_dio_offset_align;
-	unsigned long long __spare3[12];
+	unsigned long long __spare3[12]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
 
 /* The kernel's raw struct statfs (fstatfs(2)): confirmed field-for-
@@ -276,7 +281,7 @@ struct __lx_statx {
  * sizeof() -- sizeof 120, each named field 8 bytes wide at the offset
  * given, f_fsid packed as two ints occupying one 8-byte slot. Identical
  * to glibc's own struct statfs on every 64-bit Linux architecture. */
-struct __lx_statfs {
+struct __lx_statfs { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long f_type;
 	long f_bsize;
 	unsigned long f_blocks;
@@ -312,7 +317,7 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
  * constant matches, so it is passed straight through with no
  * translation, the same "already matches the ABI" situation this file's
  * banner and plat_mem.c's describe for several other flag families. */
-int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode)
+int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; flags and file mode have distinct roles
 {
 	int rd = resolve_dirfd(dirfd);
 	long ret;
@@ -506,3 +511,5 @@ int __plat_set_times_at(int dirfd, const char *path, int flags, const struct tim
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

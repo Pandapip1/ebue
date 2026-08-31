@@ -32,6 +32,11 @@
  * file, non-recursive form is the one this project's own bootstrap
  * scripts need; -R is a real, tracked gap, not an oversight.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -46,11 +51,11 @@ int __util_chmod_main(int argc, char **argv)
 	const char *mode_spec;
 
 	if (argc > 1 && !strcmp(argv[1], "-R")) {
-		fprintf(stderr, "chmod: -R: not implemented -- see src/util/chmod_util.c\n");
+		__util_diagf("chmod: -R: not implemented -- see src/util/chmod_util.c\n");
 		return 1;
 	}
 	if (argc < 3) {
-		fprintf(stderr, "chmod: missing operand\n");
+		__util_diagf("chmod: missing operand\n");
 		return 1;
 	}
 	mode_spec = argv[1];
@@ -60,7 +65,7 @@ int __util_chmod_main(int argc, char **argv)
 		mode_t newmode;
 
 		if (stat(argv[i], &st) != 0) {
-			fprintf(stderr, "chmod: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("chmod: %s: %s\n", argv[i], strerror(errno));
 			fail = 1;
 			continue;
 		}
@@ -72,9 +77,11 @@ int __util_chmod_main(int argc, char **argv)
 		                      (mode_t)__umask_get(), &newmode) < 0)
 			return 1; /* malformed mode operand: usage error, not per-file */
 		if (chmod(argv[i], newmode) != 0) {
-			fprintf(stderr, "chmod: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("chmod: %s: %s\n", argv[i], strerror(errno));
 			fail = 1;
 		}
 	}
 	return fail;
 }
+
+// NOLINTEND(misc-include-cleaner)

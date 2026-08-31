@@ -57,6 +57,11 @@
  * implementation, which does exactly this on Linux). One extra syscall
  * versus NT's single combined call, only paid when `restart` is set.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <string.h>
 #include "plat_dirent.h"
@@ -78,7 +83,7 @@
  * is_sys_error()/`errno = (int)-ret` translation). aarch64's syscall
  * calling convention: x8 = syscall number, x0..x5 = up to 6 arguments,
  * result (or -errno in [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -104,7 +109,7 @@ static int unbox(__plat_handle_t h)
 	return (int)((long)h - 1);
 }
 
-ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restart)
+ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restart) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; parameter names distinguish roles
 {
 	int fd = unbox(h);
 	long ret;
@@ -131,7 +136,7 @@ ssize_t __plat_dir_read(__plat_handle_t h, void *buf, size_t bufsize, int restar
  * natural (unpacked) layout for u64/u64/u16/u8/char[] already puts
  * d_name at offset 19 with no padding, matching the real kernel layout
  * exactly, so no explicit packing pragma is needed either. */
-struct __lx_dirent64 {
+struct __lx_dirent64 { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long d_ino;
 	long long d_off;
 	unsigned short d_reclen;
@@ -186,3 +191,5 @@ int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __
 	*pos += d->d_reclen;
 	return 1;
 }
+
+// NOLINTEND(misc-include-cleaner)

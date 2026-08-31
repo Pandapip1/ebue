@@ -12,6 +12,11 @@
  * delegate to, the way src/malloc/nt/plat_malloc.c can) only needs to
  * supply this same small pair of functions, not rewrite the allocator.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "plat_pages.h"
 
 #if defined(__aarch64__)
@@ -39,7 +44,7 @@
  * crt/linux/crt1.c's own raw_syscall() banner for the fuller per-arch
  * rationale). */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x0 __asm__("x0") = a1;
 	register long x1 __asm__("x1") = a2;
@@ -113,3 +118,5 @@ void __plat_pages_free(void *p, size_t n)
 }
 
 #include "plat_malloc_generic.h"
+
+// NOLINTEND(misc-include-cleaner)

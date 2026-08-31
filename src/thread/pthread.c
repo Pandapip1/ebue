@@ -6,6 +6,11 @@
  * or detached termination and supplies the kernel-signalled completion
  * object.  Control blocks remain as tombstones after resource reclamation,
  * which makes stale IDs diagnosable without dereferencing freed storage. */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
@@ -26,12 +31,12 @@ __thread struct __pthread *__pthread_self_control;
 
 static struct __pthread_attr_data *attr_data(pthread_attr_t *attr)
 {
-	return (struct __pthread_attr_data *)(void *)attr;
+	return (struct __pthread_attr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_attr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct __pthread_attr_data *const_attr_data(const pthread_attr_t *attr)
 {
-	return (const struct __pthread_attr_data *)(const void *)attr;
+	return (const struct __pthread_attr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_attr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int valid_attr(const pthread_attr_t *attr)
@@ -483,7 +488,7 @@ static int valid_policy(int policy)
 	       policy == SCHED_RR || policy == SCHED_SPORADIC;
 }
 
-static int valid_priority(int policy, int priority)
+static int valid_priority(int policy, int priority) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int minimum = sched_get_priority_min(policy);
 	int maximum = sched_get_priority_max(policy);
@@ -554,3 +559,5 @@ int pthread_setconcurrency(int level)
 	concurrency = level;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

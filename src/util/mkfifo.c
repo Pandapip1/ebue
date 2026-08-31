@@ -26,6 +26,11 @@
  * malformed -m argument is reported as such (a usage error) rather than
  * being swallowed by the ENOSYS from mkfifo() itself.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -44,17 +49,17 @@ int __util_mkfifo_main(int argc, char **argv)
 		if (!strcmp(argv[i], "--")) { i++; break; }
 		if (!strcmp(argv[i], "-m")) {
 			if (i + 1 >= argc) {
-				fprintf(stderr, "mkfifo: -m: option requires an argument\n");
+				__util_diagf("mkfifo: -m: option requires an argument\n");
 				return 1;
 			}
 			mode_spec = argv[++i];
 			continue;
 		}
-		fprintf(stderr, "mkfifo: %s: invalid option\n", argv[i]);
+		__util_diagf("mkfifo: %s: invalid option\n", argv[i]);
 		return 1;
 	}
 	if (i >= argc) {
-		fprintf(stderr, "mkfifo: missing operand\n");
+		__util_diagf("mkfifo: missing operand\n");
 		return 1;
 	}
 
@@ -67,9 +72,11 @@ int __util_mkfifo_main(int argc, char **argv)
 
 	for (; i < argc; i++) {
 		if (mkfifo(argv[i], mode) != 0) {
-			fprintf(stderr, "mkfifo: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("mkfifo: %s: %s\n", argv[i], strerror(errno));
 			fail = 1;
 		}
 	}
 	return fail;
 }
+
+// NOLINTEND(misc-include-cleaner)

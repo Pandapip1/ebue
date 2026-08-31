@@ -14,6 +14,11 @@
  * value wording -- *result yields the stored key, matching glibc/BSD
  * behaviour that programs written against this API rely on.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <search.h>
 #include <stdlib.h>
 
@@ -108,7 +113,7 @@ void *tdelete(const void *__restrict key, void **__restrict rootp,
 	 * the search above, is exactly the node whose child link was just
 	 * rewritten. "... or an unspecified non-null pointer if the
 	 * deleted node was the root node" -- rootp itself qualifies. */
-	if (!parent) return rootp;
+	if (!parent) return (void *)rootp;
 	return parent;
 }
 
@@ -129,3 +134,5 @@ void twalk(const void *root, void (*action)(const void *, VISIT, int))
 {
 	if (root) trecurse((struct node *)root, action, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

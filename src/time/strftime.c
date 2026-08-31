@@ -21,6 +21,11 @@
  * like snprintf; PUT_CH below detects that and bails to `done` with
  * overflow set.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include <string.h>
 #include <limits.h>
@@ -34,7 +39,7 @@
  * non-null. */
 static int format_number(char *out, size_t out_size, long long value,
 	int width, int plus, int automatic_plus) __attribute__((nonnull(1)));
-static int format_number(char *out, size_t out_size, long long value,
+static int format_number(char *out, size_t out_size, long long value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int width, int plus, int automatic_plus)
 {
 	char rev[32];
@@ -282,3 +287,5 @@ size_t strftime_l(char *restrict s, size_t max, const char *restrict f, const st
 	(void)loc;
 	return strftime(s, max, f, tm);
 }
+
+// NOLINTEND(misc-include-cleaner)

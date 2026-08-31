@@ -18,6 +18,11 @@
  * is the FIRST pad unit (the terminating null), which is what
  * stpncpy.c's `return d` before the memset-advance likewise gives.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <wchar.h>
 
 wchar_t *wcpcpy(wchar_t *__restrict d, const wchar_t *__restrict s)
@@ -32,3 +37,5 @@ wchar_t *wcpncpy(wchar_t *__restrict d, const wchar_t *__restrict s, size_t n)
 	wmemset(d, 0, n);
 	return d;
 }
+
+// NOLINTEND(misc-include-cleaner)

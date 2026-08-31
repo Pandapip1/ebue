@@ -30,6 +30,11 @@
  * ntpath_is_ancestor() has no portable form worth writing because
  * Linux needs no equivalent check at all.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <errno.h>
 #include "libc.h"
@@ -48,7 +53,7 @@
  * the call path at all. aarch64's syscall calling convention: x8 =
  * syscall number, x0..x5 = up to 6 arguments, result (or -errno in
  * [-4095,-1]) in x0. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -104,3 +109,5 @@ int __plat_rename(int olddirfd, const char *old, int newdirfd, const char *new)
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

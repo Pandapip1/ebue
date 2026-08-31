@@ -7,7 +7,7 @@
 #include <errno.h>
 #include "libc.h"
 
-int faccessat(int dirfd, const char *path, int mode, int flags)
+int faccessat(int dirfd, const char *path, int mode, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct stat st;
 	(void)flags;

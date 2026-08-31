@@ -72,6 +72,11 @@
  * so that `make check` does not hang on a confirmed Wine bug rather
  * than an ntlibc one.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/file.h>
 #include <errno.h>
 #include "libc.h"
@@ -79,7 +84,7 @@
 
 static struct { __plat_handle_t h; unsigned char held; unsigned char exclusive; } lockstate[FD_MAX];
 
-int flock(int fd, int op)
+int flock(int fd, int op) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	int want_exclusive;
@@ -119,3 +124,5 @@ int flock(int fd, int op)
 		return -1;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

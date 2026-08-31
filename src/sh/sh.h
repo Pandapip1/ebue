@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -262,9 +267,9 @@ void __sh_free_command_contents(struct sh_command *c) __attribute__((nonnull(1))
 
 /* Reprints `list` in a canonical, re-parseable form. Used by stage 1's
  * parse-and-print tests and (harmlessly) available to anything that
- * wants to log a parsed command. Never fails; short of a write error on
- * `f` it always terminates. */
-void __sh_print_list(FILE *f, const struct sh_list *list);
+ * wants to log a parsed command. Returns 0 for a complete print, -1 for
+ * an allocation or stream-write failure. */
+int __sh_print_list(FILE *f, const struct sh_list *list);
 
 /* ---- execution (stage 2 on -- see src/sh/execute.c) --------------------
  *
@@ -460,3 +465,5 @@ int __sh_exec_list(const struct sh_list *list, int *status)
 int __sh_main(int argc, char **argv) __attribute__((nonnull(2)));
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

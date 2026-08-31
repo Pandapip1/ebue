@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -198,7 +203,7 @@ static void ntlibc_malloc_refill_locked(int class)
 	}
 }
 
-void *__plat_alloc(size_t n, int zero)
+void *__plat_alloc(size_t n, int zero) // NOLINT(bugprone-easily-swappable-parameters) -- fixed allocator-backend contract; size and zero-fill flag have distinct roles
 {
 	struct ntlibc_malloc_chunk_hdr *h;
 	void *user;
@@ -282,3 +287,5 @@ void *__plat_realloc(void *p, size_t n)
 }
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

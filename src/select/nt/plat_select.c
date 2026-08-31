@@ -6,12 +6,17 @@
  * this file existed, inline inside src/select/select.c and poll.c;
  * nothing changed in substance, only location.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 #include "plat_select.h"
 #include "afd.h"
 
-int __plat_pipe_probe(__plat_handle_t h, unsigned long *read_avail, unsigned long *write_quota)
+int __plat_pipe_probe(__plat_handle_t h, unsigned long *read_avail, unsigned long *write_quota) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	FILE_PIPE_LOCAL_INFORMATION pli;
@@ -48,7 +53,7 @@ int __plat_wait_ready(__plat_handle_t h)
 	return NtWaitForSingleObject(h, 0, &zero) == STATUS_WAIT_0;
 }
 
-void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hup)
+void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hup) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	/* `pi` is storage only -- correctly aligned and large enough; every
 	 * field is written and read through src/internal/afd.h's
@@ -90,7 +95,7 @@ void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hu
 	}
 }
 
-void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long long wait_ticks, int infinite)
+void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long long wait_ticks, int infinite) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	LARGE_INTEGER t;
 	if (infinite) {
@@ -101,7 +106,7 @@ void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long lon
 	NtWaitForMultipleObjects((ULONG)nhandles, (HANDLE *)handles, 1 /* WaitAny */, 0, &t);
 }
 
-void __plat_delay(long long wait_ticks, int infinite)
+void __plat_delay(long long wait_ticks, int infinite) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	LARGE_INTEGER t;
 	if (infinite) {
@@ -124,3 +129,5 @@ long long __plat_now_100ns(void)
 	NtQuerySystemTime(&t);
 	return t;
 }
+
+// NOLINTEND(misc-include-cleaner)

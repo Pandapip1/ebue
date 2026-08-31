@@ -62,6 +62,11 @@
  * a cache to serve; the fix for Cygwin's problem is not to add a cache
  * here but to keep the sniff out of stat(), which src/stat/stat.c does.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -161,3 +166,5 @@ char *__find_program(const char *name, int use_path)
 	errno = ENOENT;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

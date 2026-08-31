@@ -27,6 +27,11 @@
  * (\Device\HarddiskVolume3\dir\file), and the drive is found by asking
  * each of A: through Z: for its target.  Returns a malloc'd UTF-8 path.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 
@@ -111,3 +116,5 @@ char *__handle_path(HANDLE h)
 	/* Not on a drive letter (a pipe, a UNC path): give the NT name. */
 	return __utf16_to_utf8(oni->Name.Buffer, oni->Name.Length / sizeof(WCHAR));
 }
+
+// NOLINTEND(misc-include-cleaner)

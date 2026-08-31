@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* realpath: open the file and ask the kernel what it is called.  A path
  * that does not exist cannot be canonicalised that way, so it is an
  * ENOENT like POSIX says.
@@ -72,3 +77,5 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
 	free(p);
 	return resolved;
 }
+
+// NOLINTEND(misc-include-cleaner)

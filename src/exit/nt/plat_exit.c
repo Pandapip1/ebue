@@ -6,6 +6,11 @@
  * src/exit/exit.c's __nt_exit(); nothing changed in substance, only
  * location.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 #include "plat_exit.h"
 
@@ -14,3 +19,5 @@ _Noreturn void __plat_terminate(int code)
 	NtTerminateProcess(NtCurrentProcess(), code);
 	for (;;) NtTerminateProcess(NtCurrentProcess(), code);
 }
+
+// NOLINTEND(misc-include-cleaner)

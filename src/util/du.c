@@ -96,11 +96,11 @@ static int du_cb(const char *path, const struct stat *st, int type, struct FTW *
 
 	switch (type) {
 	case FTW_NS:
-		if (du_rflag) fprintf(stderr, "du: cannot access '%s'\n", path);
+		if (du_rflag) __util_diagf("du: cannot access '%s'\n", path);
 		du_had_error = 1;
 		return 0;
 	case FTW_DNR:
-		if (du_rflag) fprintf(stderr, "du: cannot read directory '%s'\n", path);
+		if (du_rflag) __util_diagf("du: cannot read directory '%s'\n", path);
 		du_had_error = 1;
 		return 0;
 	case FTW_F:
@@ -132,7 +132,7 @@ static int du_one(const char *path)
 {
 	memset(level_sum, 0, sizeof level_sum);
 	if (nftw(path, du_cb, 15, FTW_PHYS | FTW_DEPTH) < 0) {
-		fprintf(stderr, "du: %s: %s\n", path, strerror(errno));
+		__util_diagf("du: %s: %s\n", path, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -155,7 +155,7 @@ int __util_du_main(int argc, char **argv)
 			if (*p == 's') { du_summary = 1; continue; }
 			if (*p == 'r') { du_rflag = 1; continue; }
 			if (*p == 'k') { du_blocksize = 1024; continue; }
-			fprintf(stderr, "du: invalid option -- '%c'\n", *p);
+			__util_diagf("du: invalid option -- '%c'\n", *p);
 			return 1;
 		}
 	}

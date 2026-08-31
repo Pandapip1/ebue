@@ -192,7 +192,7 @@ static int g_status; /* sticky: any per-conversion error makes the whole run fai
 
 static void numeric_error(const char *arg)
 {
-	fprintf(stderr, "printf: %s: expected a numeric value\n", arg);
+	__util_diagf("printf: %s: expected a numeric value\n", arg);
 	g_status = 1;
 }
 
@@ -327,17 +327,17 @@ static void emit_padded(const char *sign, const char *body, const struct spec *s
 	int pad = sp->width > total ? sp->width - total : 0;
 
 	if (sp->left) {
-		if (sign) fputs(sign, stdout);
-		fputs(body, stdout);
+		if (sign && fputs(sign, stdout) < 0) g_status = 1;
+		if (fputs(body, stdout) < 0) g_status = 1;
 		while (pad-- > 0) putchar(' ');
 	} else if (zero_ok && sp->zero) {
-		if (sign) fputs(sign, stdout);
+		if (sign && fputs(sign, stdout) < 0) g_status = 1;
 		while (pad-- > 0) putchar('0');
-		fputs(body, stdout);
+		if (fputs(body, stdout) < 0) g_status = 1;
 	} else {
 		while (pad-- > 0) putchar(' ');
-		if (sign) fputs(sign, stdout);
-		fputs(body, stdout);
+		if (sign && fputs(sign, stdout) < 0) g_status = 1;
+		if (fputs(body, stdout) < 0) g_status = 1;
 	}
 }
 
@@ -374,7 +374,7 @@ static void format_signed(const char *arg, const struct spec *sp)
 	emit_padded(sign, digs, sp, sp->prec < 0);
 }
 
-static void format_unsigned(const char *arg, const struct spec *sp, int base, int upper)
+static void format_unsigned(const char *arg, const struct spec *sp, int base, int upper) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned long v, orig;
 	char tmp[DIGBUF_MAX], digs[DIGBUF_MAX];
@@ -408,7 +408,11 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 		 * grew to fill DIGBUF_MAX (a large -- but SPEC_MAX-clamped,
 		 * so still bounded -- precision). */
 		char withpfx[DIGBUF_MAX + 4];
-		snprintf(withpfx, sizeof withpfx, "%s%s", prefix, digs);
+		int n = snprintf(withpfx, sizeof withpfx, "%s%s", prefix, digs);
+		if (n < 0 || (size_t)n >= sizeof withpfx) {
+			withpfx[0] = 0;
+			g_status = 1;
+		}
 		emit_padded("", withpfx, sp, sp->prec < 0);
 	}
 }
@@ -425,11 +429,11 @@ static void format_str(const char *arg, const struct spec *sp)
 	if (sp->prec >= 0 && (size_t)sp->prec < len) len = (size_t)sp->prec;
 	pad = sp->width > (int)len ? sp->width - (int)len : 0;
 	if (sp->left) {
-		fwrite(arg, 1, len, stdout);
+		if (fwrite(arg, 1, len, stdout) != len) g_status = 1;
 		while (pad-- > 0) putchar(' ');
 	} else {
 		while (pad-- > 0) putchar(' ');
-		fwrite(arg, 1, len, stdout);
+		if (fwrite(arg, 1, len, stdout) != len) g_status = 1;
 	}
 }
 
@@ -462,6 +466,7 @@ static void format_float(const char *arg, const struct spec *sp, char conv)
 	int prec = sp->prec < 0 ? 6 : sp->prec;
 	const char *sign = "";
 	const char *body = buf;
+	int n;
 
 	if (arg_double(arg, &v) < 0) numeric_error(arg);
 
@@ -469,8 +474,17 @@ static void format_float(const char *arg, const struct spec *sp, char conv)
 	else if (sp->plus) sign = "+";
 	else if (sp->space) sign = " ";
 
-	snprintf(subfmt, sizeof subfmt, "%%.%d%c", prec, conv);
-	snprintf(buf, sizeof buf, subfmt, v);
+	n = snprintf(subfmt, sizeof subfmt, "%%.%d%c", prec, conv);
+	if (n < 0 || (size_t)n >= sizeof subfmt) {
+		buf[0] = 0;
+		g_status = 1;
+	} else {
+		n = snprintf(buf, sizeof buf, subfmt, v);
+		if (n < 0 || (size_t)n >= sizeof buf) {
+			buf[0] = 0;
+			g_status = 1;
+		}
+	}
 	emit_padded(sign, body, sp, sp->prec >= 0 ? 0 : 1);
 }
 
@@ -527,7 +541,7 @@ static int run_one_pass(const char *format, struct argcur *a)
 				if (expand_b_arg(arg)) return 1; /* \c: stop everything */
 				break;
 			default:
-				fprintf(stderr, "printf: %%%c: invalid conversion\n",
+				__util_diagf("printf: %%%c: invalid conversion\n",
 					sp.conv ? sp.conv : '?');
 				g_status = 1;
 				return 1; /* malformed format: stop rather than guess */
@@ -543,7 +557,7 @@ int __util_printf_main(int argc, char **argv)
 	const char *format;
 
 	if (argc < 2) {
-		fprintf(stderr, "printf: missing operand\n");
+		__util_diagf("printf: missing operand\n");
 		return 1;
 	}
 	format = argv[1];
@@ -561,5 +575,6 @@ int __util_printf_main(int argc, char **argv)
 		if (run_one_pass(format, &a)) break;
 	} while (a.i < a.n && a.any_this_pass);
 
+	if (fflush(stdout) != 0) g_status = 1;
 	return g_status;
 }

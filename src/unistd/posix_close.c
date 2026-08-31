@@ -30,7 +30,7 @@
  */
 #include <unistd.h>
 
-int posix_close(int fd, int flags)
+int posix_close(int fd, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	(void)flags;   /* POSIX_CLOSE_RESTART is moot here; see above. */
 	return close(fd);

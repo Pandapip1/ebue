@@ -62,6 +62,11 @@
  * natively, reached here without needing that script (which is out of
  * this change's scope) to name this file specifically.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #ifndef __has_feature
 #define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
 #endif
@@ -153,7 +158,9 @@ static void set_err(NTSTATUS st, const char *what)
 	last_err.valid = 1;
 	last_err.status = st;
 	last_err.seq++;
-	snprintf(last_err.what, sizeof last_err.what, "%s", what);
+	/* Error text is a bounded best-effort record; truncation cannot replace
+	 * the NTSTATUS and this void recorder has no failure channel. */
+	(void)snprintf(last_err.what, sizeof last_err.what, "%s", what);
 }
 
 /* Monotonic counter, bumped once per set_err() (i.e. once per failure
@@ -200,10 +207,12 @@ const char *ntlibc_rpath_error(void)
 	default:
 		reason = 0;
 	}
+	/* The accessor must return its bounded diagnostic buffer even if the
+	 * descriptive text is truncated; the recorded NTSTATUS remains primary. */
 	if (reason)
-		snprintf(buf, sizeof buf, "%s: %s (NTSTATUS 0x%08lx)", last_err.what, reason, (unsigned long)last_err.status);
+		(void)snprintf(buf, sizeof buf, "%s: %s (NTSTATUS 0x%08lx)", last_err.what, reason, (unsigned long)last_err.status);
 	else
-		snprintf(buf, sizeof buf, "%s: NTSTATUS 0x%08lx", last_err.what, (unsigned long)last_err.status);
+		(void)snprintf(buf, sizeof buf, "%s: NTSTATUS 0x%08lx", last_err.what, (unsigned long)last_err.status);
 	return buf;
 }
 
@@ -236,13 +245,8 @@ ntlibc_dll_t *ntlibc_rpath_load(const char *dllname)
 	if (!dllname || !*dllname) { set_err(STATUS_OBJECT_NAME_NOT_FOUND, ""); return 0; }
 
 	if (has_path_component(dllname)) {
-		if (is_absolute(dllname)) {
-			path = join("", dllname); /* normalises slashes; dir="" leaves a leading '\\' */
-			if (path && path[0] == '\\') memmove(path, path + 1, strlen(path));
-		} else {
-			path = join("", dllname);
-			if (path && path[0] == '\\') memmove(path, path + 1, strlen(path));
-		}
+		path = join("", dllname); /* normalises slashes; dir="" leaves a leading '\\' */
+		if (path && path[0] == '\\') memmove(path, path + 1, strlen(path));
 		if (!path) { set_err(STATUS_NO_MEMORY, dllname); return 0; }
 		st = try_load(path, &handle);
 		if (!NT_SUCCESS(st)) { set_err(st, path); __free(path); return 0; }
@@ -329,7 +333,11 @@ int ntlibc_rpath_unload(ntlibc_dll_t *dll)
 
 _Noreturn void ntlibc_rpath_fail(const char *dllfile, const char *symbol)
 {
-	fprintf(stderr, "%s: delay-load of %s!%s failed: %s\n",
+	/* This is the final fatal diagnostic; abort is unconditional and a
+	 * secondary stderr failure cannot be reported through another channel. */
+	(void)fprintf(stderr, "%s: delay-load of %s!%s failed: %s\n",
 	        __progname ? __progname : "?", dllfile, symbol, ntlibc_rpath_error());
 	abort();
 }
+
+// NOLINTEND(misc-include-cleaner)

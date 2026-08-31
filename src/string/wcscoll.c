@@ -27,6 +27,11 @@
  * The _l form ignores its locale_t for the same reason strcoll_l()
  * does: there is no second locale to select.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <wchar.h>
 #include <locale.h>
 
@@ -40,3 +45,5 @@ int wcscoll_l(const wchar_t *l, const wchar_t *r, locale_t loc)
 	(void)loc;
 	return wcscmp(l, r);
 }
+
+// NOLINTEND(misc-include-cleaner)

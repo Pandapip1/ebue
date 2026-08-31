@@ -111,7 +111,7 @@ static int cksum_one(const char *path, uint32_t *out_crc, uintmax_t *out_len)
 		f = fopen(path, "rb");
 		if (!f) {
 			int saved = errno;
-			fprintf(stderr, "cksum: %s: %s\n", path, strerror(saved));
+			__util_diagf("cksum: %s: %s\n", path, strerror(saved));
 			return -1;
 		}
 	} else {
@@ -120,13 +120,17 @@ static int cksum_one(const char *path, uint32_t *out_crc, uintmax_t *out_len)
 
 	r = cksum_stream(f, &crc, &len);
 	if (r < 0) {
-		int saved = errno;
+		int saved = errno ? errno : EIO;
+		/* The read failure is primary; closing the input is cleanup only. */
 		if (path) (void)fclose(f);
 		errno = saved;
-		fprintf(stderr, "cksum: %s: %s\n", path ? path : "stdin", strerror(errno));
+		__util_diagf("cksum: %s: %s\n", path ? path : "stdin", strerror(errno));
 		return -1;
 	}
-	if (path) (void)fclose(f);
+	if (path && fclose(f) != 0) {
+		__util_diagf("cksum: %s: %s\n", path, strerror(errno));
+		return -1;
+	}
 
 	/* Step 3 above: the length itself, byte by byte, least-significant
 	 * first, until nothing remains. */

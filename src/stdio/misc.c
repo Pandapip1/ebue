@@ -18,7 +18,12 @@
  * %ComSpec% is the one every other Windows program trusts for the same
  * reason.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,9 +38,11 @@
 void perror(const char *s)
 {
 	int e = errno;
-	if (s && *s) { fputs(s, stderr); fputs(": ", stderr); }
-	fputs(strerror(e), stderr);
-	fputc('\n', stderr);
+	/* perror() is the diagnostic and returns void; a failure writing stderr
+	 * cannot be recursively reported or replace the caller's saved errno. */
+	if (s && *s) { (void)fputs(s, stderr); (void)fputs(": ", stderr); }
+	(void)fputs(strerror(e), stderr);
+	(void)fputc('\n', stderr);
 }
 
 int remove(const char *path)
@@ -185,7 +192,7 @@ char *tmpnam(char *s)
 	return s;
 }
 
-char *tempnam(const char *dir, const char *pfx)
+char *tempnam(const char *dir, const char *pfx) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *d = dir ? dir : tmpdir();
 	size_t n = strlen(d), pn = pfx ? strlen(pfx) : 0;
@@ -215,7 +222,7 @@ char *ctermid(char *s)
 	return buf;
 }
 
-FILE *popen(const char *cmd, const char *mode)
+FILE *popen(const char *cmd, const char *mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int rw = mode[0] == 'w';
 	int fds[2], saved, child_std;
@@ -285,3 +292,5 @@ int pclose(FILE *f)
 	if (waitpid(pid, &status, 0) < 0) return -1;
 	return status;
 }
+
+// NOLINTEND(misc-include-cleaner)

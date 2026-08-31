@@ -48,6 +48,11 @@
  * of the walk's filesystem access (chdir, lstat, stat, opendir), not
  * just the chdir; see its comment.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <ftw.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -206,7 +211,7 @@ static int base_offset(const char *path)
 	return slash ? (int)(slash - path + 1) : 0;
 }
 
-static int report(struct walkstate *ws, const char *path, const struct stat *st, int type, int level)
+static int report(struct walkstate *ws, const char *path, const struct stat *st, int type, int level) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct FTW f;
 	int saved_errno, r;
@@ -248,7 +253,7 @@ static int is_own_ancestor(const struct ancestor *anc, const struct stat *st)
 	return 0;
 }
 
-static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root,
+static int walk(struct walkstate *ws, struct lru *lru, const char *path, int level, int is_root, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 		const struct ancestor *anc)
 {
 	struct stat lst, st, zero;
@@ -357,15 +362,17 @@ static int walk(struct walkstate *ws, struct lru *lru, const char *path, int lev
 		r = 0;
 		while ((de = readdir(lv.dp)) != NULL) {
 			char *child;
-			size_t clen;
+			size_t clen, off;
 
 			if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
 
 			clen = plen + (had_trailing_slash ? 0 : 1) + strlen(de->d_name) + 1;
 			child = malloc(clen);
 			if (!child) { r = -1; errno = ENOMEM; break; }
-			if (had_trailing_slash) snprintf(child, clen, "%s%s", path, de->d_name);
-			else snprintf(child, clen, "%s/%s", path, de->d_name);
+			memcpy(child, path, plen);
+			off = plen;
+			if (!had_trailing_slash) child[off++] = '/';
+			memcpy(child + off, de->d_name, strlen(de->d_name) + 1);
 
 			/* level_open() may have closed lv.dp to make room for a
 			 * descendant's own directory; reopen (and replay via
@@ -414,7 +421,7 @@ int ftw(const char *path, int (*fn)(const char *, const struct stat *, int), int
 }
 
 int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, struct FTW *),
-	 int nopenfd, int flags)
+	 int nopenfd, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct walkstate ws;
 	struct lru lru;
@@ -468,3 +475,5 @@ int nftw(const char *path, int (*fn)(const char *, const struct stat *, int, str
 		return r;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

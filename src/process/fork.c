@@ -113,6 +113,11 @@
  * other threads simply do not exist in the child, which is the same
  * contract POSIX fork() has always had.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
@@ -318,3 +323,5 @@ pid_t _Fork(void)
 {
 	return fork_impl(0);
 }
+
+// NOLINTEND(misc-include-cleaner)

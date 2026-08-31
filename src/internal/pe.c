@@ -10,6 +10,11 @@
  * only from delayload2.c, which is already excluded from a native
  * ASan/UBSan build.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #ifndef __has_feature
 #define __has_feature(x) 0
 #endif
@@ -105,3 +110,5 @@ void *ntlibc_pe_find_export(void *base, const char *name)
 	}
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -31,13 +31,18 @@
  * no-op, so a caller relying on one finds out rather than being told
  * it worked.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <errno.h>
 #include <string.h>
 #include "libc.h"
 #include "afd.h"
 
-int setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen)
+int setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	int v;
@@ -58,7 +63,7 @@ int setsockopt(int fd, int level, int optname, const void *optval, socklen_t opt
 	}
 }
 
-int getsockopt(int fd, int level, int optname, void *__restrict optval, socklen_t *__restrict optlen)
+int getsockopt(int fd, int level, int optname, void *__restrict optval, socklen_t *__restrict optlen) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	int v;
@@ -84,3 +89,5 @@ int getsockopt(int fd, int level, int optname, void *__restrict optval, socklen_
 	}
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

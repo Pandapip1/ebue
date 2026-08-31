@@ -10,6 +10,11 @@
  * already initialized before user code can submit AIO, is safe to enter from
  * completion handlers, and avoids introducing a second home-grown lock.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <aio.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -182,7 +187,7 @@ static void finish_locked(struct aio_request *request, int error, ssize_t result
 	struct sigevent *list, int *have_list)
     __attribute__((nonnull(1, 4, 5, 7)))
     NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
-static void finish_locked(struct aio_request *request, int error, ssize_t result,
+static void finish_locked(struct aio_request *request, int error, ssize_t result, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	struct sigevent *individual, int *have_individual,
 	struct sigevent *list, int *have_list)
 {
@@ -711,3 +716,5 @@ void __aio_reset_after_fork(void)
 	waiters = 0;
 	next_sequence = 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

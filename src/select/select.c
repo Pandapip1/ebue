@@ -191,6 +191,11 @@
  * of those, and test/posix-socket-poll.c's check_reply() for the
  * device-free negative control.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/select.h>
 #include <signal.h>
 #include <errno.h>
@@ -399,7 +404,7 @@ void __fd_probe(struct __fd *f, int *canread, int *canwrite, int *hup)
  * descriptors already use costs nothing extra when it is not signalled,
  * and turns every one of those latencies into "immediately" when it
  * is. */
-void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long wait_ticks, int infinite)
+void __fd_wait_or_delay(__plat_handle_t *console_handles, int ncons, long long wait_ticks, int infinite) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__plat_handle_t handles[FD_SETSIZE + 1];
 	__plat_handle_t sigev = __sig_delivery_event();
@@ -448,7 +453,7 @@ static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_
     __attribute__((nonnull(5, 6, 7, 10)));
 static int poll_pass(int nfds, const fd_set *in_r, const fd_set *in_w, const fd_set *in_e,
                       fd_set *out_r, fd_set *out_w, int *have_poll,
-                      __plat_handle_t *console_h, int *console_fd, int *ncons)
+                      __plat_handle_t *console_h, int *console_fd, int *ncons) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int d, total = 0, n = 0, hp = 0;
 
@@ -645,3 +650,5 @@ int pselect(int nfds, fd_set *__restrict rfds, fd_set *__restrict wfds, fd_set *
 	if (sigmask) sigprocmask(SIG_SETMASK, &omask, 0);
 	return r;
 }
+
+// NOLINTEND(misc-include-cleaner)

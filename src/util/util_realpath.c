@@ -32,7 +32,7 @@ int __util_realpath_main(int argc, char **argv)
 	int i, status = 0;
 
 	if (argc < 2) {
-		fprintf(stderr, "realpath: missing operand\n");
+		__util_diagf("realpath: missing operand\n");
 		return 2;
 	}
 
@@ -42,13 +42,13 @@ int __util_realpath_main(int argc, char **argv)
 		 * realpath.c implements exactly this NULL-buffer form. */
 		char *r = realpath(argv[i], 0);
 		if (!r) {
-			fprintf(stderr, "realpath: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("realpath: %s: %s\n", argv[i], strerror(errno));
 			status = 1;
 			continue;
 		}
-		fputs(r, stdout);
-		fputc('\n', stdout);
+		if (fputs(r, stdout) < 0 || fputc('\n', stdout) == EOF) status = 1;
 		free(r);
 	}
+	if (fflush(stdout) != 0) status = 1;
 	return status;
 }

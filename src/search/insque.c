@@ -12,7 +12,7 @@ struct qnode {
 	struct qnode *fwd, *bwd;
 };
 
-void insque(void *element, void *pred)
+void insque(void *element, void *pred) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct qnode *e = element, *p = pred;
 

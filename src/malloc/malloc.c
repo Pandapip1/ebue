@@ -17,6 +17,11 @@
  * raw heap call, so they needed no change at all from the split that
  * produced this file's own shape.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -117,3 +122,5 @@ void free(void *p)
 	}
 	__plat_dealloc(p);
 }
+
+// NOLINTEND(misc-include-cleaner)

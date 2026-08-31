@@ -9,6 +9,11 @@
  * in a Linux distribution's user namespace, while ntlibc's getuid() is a
  * Windows-SID-derived process identity and is not a WSL UID mapping.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 
@@ -43,3 +48,5 @@ unsigned __lxmod_create_buffer(void *buffer, unsigned mode)
 	putle32((unsigned char *)ea->EaName + LXMOD_NAME_LEN + 1, mode);
 	return LXMOD_EA_LEN;
 }
+
+// NOLINTEND(misc-include-cleaner)

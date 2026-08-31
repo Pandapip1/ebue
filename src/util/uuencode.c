@@ -80,15 +80,16 @@ int __util_uuencode_main(int argc, char **argv)
 	mode_t mode = 0644; /* traditional stdin-source default -- see header */
 	unsigned char buf[45];
 	size_t n;
+	int status = 0;
 
 	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		if (!strcmp(argv[i], "--")) { i++; break; }
 		if (!strcmp(argv[i], "-m")) {
-			fprintf(stderr, "uuencode: -m: Base64 encoding is not supported "
+			__util_diagf("uuencode: -m: Base64 encoding is not supported "
 			                "by this build -- see src/util/uuencode.c\n");
 			return 1;
 		}
-		fprintf(stderr, "uuencode: %s: invalid option\n", argv[i]);
+		__util_diagf("uuencode: %s: invalid option\n", argv[i]);
 		return 1;
 	}
 
@@ -100,11 +101,11 @@ int __util_uuencode_main(int argc, char **argv)
 		decode_name = argv[i + 1];
 		in = fopen(src_path, "rb");
 		if (!in) {
-			fprintf(stderr, "uuencode: %s: %s\n", src_path, strerror(errno));
+			__util_diagf("uuencode: %s: %s\n", src_path, strerror(errno));
 			return 1;
 		}
 	} else {
-		fprintf(stderr, "uuencode: usage: uuencode [-m] [source_file] decode_pathname\n");
+		__util_diagf("uuencode: usage: uuencode [-m] [source_file] decode_pathname\n");
 		return 1;
 	}
 
@@ -117,12 +118,14 @@ int __util_uuencode_main(int argc, char **argv)
 
 	while ((n = fread(buf, 1, sizeof buf, in)) > 0) emit_line(buf, n);
 	if (ferror(in)) {
-		fprintf(stderr, "uuencode: %s: %s\n", src_path ? src_path : "stdin", strerror(errno));
-		if (src_path) fclose(in);
+		__util_diagf("uuencode: %s: %s\n", src_path ? src_path : "stdin", strerror(errno));
+		/* The input error is primary; close is cleanup only. */
+		if (src_path) (void)fclose(in);
 		return 1;
 	}
 
 	printf("`\nend\n");
-	if (src_path) fclose(in);
-	return 0;
+	if (src_path && fclose(in) != 0) status = 1;
+	if (fflush(stdout) != 0) status = 1;
+	return status;
 }

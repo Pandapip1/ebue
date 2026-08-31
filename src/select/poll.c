@@ -41,6 +41,11 @@
  * converted here from milliseconds to the same 100ns tick unit
  * select.c's core already works in.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <poll.h>
 #include <errno.h>
 #include "libc.h"
@@ -55,7 +60,7 @@
  * no unconditional dereference for the attribute to describe. Nothing
  * in this tree exercises that pattern today, but a libc's own public
  * poll() must not foreclose it for code linked against this one. */
-int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
+int poll(struct pollfd *pfds, nfds_t nfds, int timeout) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long long remaining;
 	int infinite, total;
@@ -150,3 +155,5 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 
 	return total;
 }
+
+// NOLINTEND(misc-include-cleaner)

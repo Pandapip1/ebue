@@ -47,7 +47,7 @@
  * its own version is simpler than that 6-argument one, but the same
  * three ISAs/conventions apply). */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1)
+static long raw_syscall(long nr, long a1) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x0 __asm__("x0") = a1;
 	register long x8 __asm__("x8") = nr;

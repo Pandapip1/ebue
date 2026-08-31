@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 
-void *memset(void *dest, int c, size_t n)
+void *memset(void *dest, int c, size_t n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char *s = dest;
 	size_t k;

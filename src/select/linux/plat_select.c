@@ -42,6 +42,11 @@
  * analog stdin fd) already went through __fd_install()'s same boxing,
  * whichever backend originally opened it.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <poll.h>
 #include <errno.h>
 #include <string.h>
@@ -74,7 +79,7 @@ static int unbox(__plat_handle_t h) { return (int)((long)h - 1); }
 
 static long long ticks_to_ns(long long ticks) { return ticks * 100LL; }
 
-int __plat_pipe_probe(__plat_handle_t h, unsigned long *read_avail, unsigned long *write_quota)
+int __plat_pipe_probe(__plat_handle_t h, unsigned long *read_avail, unsigned long *write_quota) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; read and write outputs have distinct roles
 {
 	struct pollfd pfd;
 	struct timespec zero;
@@ -140,7 +145,7 @@ int __plat_wait_ready(__plat_handle_t h)
 	return (pfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
 }
 
-void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hup)
+void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hup) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; readiness outputs have distinct roles
 {
 	struct pollfd pfd;
 	struct timespec zero;
@@ -164,7 +169,7 @@ void __plat_socket_probe(__plat_handle_t h, int *canread, int *canwrite, int *hu
 	if (*hup) { *canread = 1; *canwrite = 1; }
 }
 
-void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long long wait_ticks, int infinite)
+void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long long wait_ticks, int infinite) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; count and timeout controls have distinct roles
 {
 	/* select.c's own bound (__fd_wait_or_delay(), src/select/select.c):
 	 * up to FD_SETSIZE console-analog handles plus one signal-delivery
@@ -199,7 +204,7 @@ void __plat_wait_multiple(const __plat_handle_t *handles, int nhandles, long lon
 	 * something signalled" from "woke because the budget ran out". */
 }
 
-void __plat_delay(long long wait_ticks, int infinite)
+void __plat_delay(long long wait_ticks, int infinite) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; duration and infinite flag have distinct roles
 {
 	struct timespec ts;
 
@@ -239,3 +244,5 @@ long long __plat_now_100ns(void)
 	syscall(SYS_clock_gettime, 1L /* CLOCK_MONOTONIC */, &ts);
 	return (long long)ts.tv_sec * 10000000LL + (long long)ts.tv_nsec / 100LL;
 }
+
+// NOLINTEND(misc-include-cleaner)

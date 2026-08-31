@@ -41,7 +41,7 @@
 #include <errno.h>
 #include "util.h"
 
-static int read_line(FILE *f, char **buf, size_t *cap, size_t *len)
+static int read_line(FILE *f, char **buf, size_t *cap, size_t *len) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	ssize_t got = getline(buf, cap, f);
 	if (got < 0) return -1;
@@ -61,6 +61,7 @@ int __util_comm_main(int argc, char **argv)
 	size_t c1 = 0, c2 = 0, n1 = 0, n2 = 0;
 	int have1, have2;
 	int tabs2, tabs3, t;
+	int status = 0;
 
 	for (i = 1; i < argc; i++) {
 		char *arg = argv[i];
@@ -75,7 +76,7 @@ int __util_comm_main(int argc, char **argv)
 				else if (*p == '2') { show2 = 0; p++; }
 				else if (*p == '3') { show3 = 0; p++; }
 				else {
-					fprintf(stderr, "comm: -%c: invalid option\n", *p);
+					__util_diagf("comm: -%c: invalid option\n", *p);
 					return 1;
 				}
 			}
@@ -83,24 +84,25 @@ int __util_comm_main(int argc, char **argv)
 	}
 
 	for (; i < argc; i++) {
-		if (npaths >= 2) { fprintf(stderr, "comm: too many operands\n"); return 1; }
+		if (npaths >= 2) { __util_diagf("comm: too many operands\n"); return 1; }
 		paths[npaths++] = argv[i];
 	}
 	if (npaths != 2) {
-		fprintf(stderr, "comm: usage: comm [-123] file1 file2\n");
+		__util_diagf("comm: usage: comm [-123] file1 file2\n");
 		return 1;
 	}
 
 	f1 = !strcmp(paths[0], "-") ? stdin : fopen(paths[0], "r");
 	if (!f1) {
 		int saved = errno;
-		fprintf(stderr, "comm: %s: %s\n", paths[0], strerror(saved));
+		__util_diagf("comm: %s: %s\n", paths[0], strerror(saved));
 		return 1;
 	}
 	f2 = !strcmp(paths[1], "-") ? stdin : fopen(paths[1], "r");
 	if (!f2) {
-		fprintf(stderr, "comm: %s: %s\n", paths[1], strerror(errno));
-		if (f1 != stdin) fclose(f1);
+		__util_diagf("comm: %s: %s\n", paths[1], strerror(errno));
+		/* Cleanup cannot supersede the primary failure to open file2. */
+		if (f1 != stdin) (void)fclose(f1);
 		return 1;
 	}
 
@@ -137,7 +139,8 @@ int __util_comm_main(int argc, char **argv)
 
 	free(l1);
 	free(l2);
-	if (f1 != stdin) fclose(f1);
-	if (f2 != stdin) fclose(f2);
-	return 0;
+	if (f1 != stdin && fclose(f1) != 0) status = 1;
+	if (f2 != stdin && fclose(f2) != 0) status = 1;
+	if (fflush(stdout) != 0) status = 1;
+	return status;
 }

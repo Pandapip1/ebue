@@ -8,6 +8,11 @@
  * the field arithmetic (including the running-into-gmtime overflow
  * normalization) for free.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include <errno.h>
 #include <limits.h>
@@ -36,3 +41,5 @@ struct tm *localtime(const time_t *tp)
 	static struct tm tm;
 	return localtime_r(tp, &tm);
 }
+
+// NOLINTEND(misc-include-cleaner)

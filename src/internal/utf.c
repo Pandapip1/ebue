@@ -6,6 +6,11 @@
  * ntdll also provides the two conversions, so they are used rather than
  * written again.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include "libc.h"
@@ -67,3 +72,5 @@ char *__utf16_to_utf8(const WCHAR *w, size_t n)
 	if (__utf16_to_utf8_buf(w, n, s, cap) < 0) { __free(s); return 0; }
 	return s;
 }
+
+// NOLINTEND(misc-include-cleaner)
