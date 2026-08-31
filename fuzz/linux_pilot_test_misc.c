@@ -303,13 +303,21 @@ static void test_signal_events(void)
  * banner). */
 static void test_signal_process(pid_t target)
 {
-	__plat_handle_t h, h2;
+	__plat_handle_t h = __PLAT_HANDLE_NULL;
+	__plat_handle_t h2 = __PLAT_HANDLE_NULL;
+	__plat_handle_t process = __PLAT_HANDLE_NULL;
 
 	CHECK(__plat_kill_open(target, 1, &h) == 0,
-	      "__plat_kill_open() on the real background `sleep` process (real kill(pid,0) probe + pidfd_open(2))");
+	      "__plat_kill_open() on the real background `sleep` process (real kill(pid,0) probe)");
 	if (h == __PLAT_HANDLE_NULL) return;
 
-	CHECK(__plat_process_alive(h) == 1, "__plat_process_alive() reports the sleep process alive (via plat_misc.c, sharing the pidfd)");
+	CHECK(__plat_process_open_checked(target, &process) == 0,
+	      "__plat_process_open_checked() opens a pidfd for the sleep process");
+	if (process != __PLAT_HANDLE_NULL) {
+		CHECK(__plat_process_alive(process) == 1,
+		      "__plat_process_alive() reports the sleep process alive via its pidfd");
+		syscall(SYS_close, (long)((long)process - 1));
+	}
 
 	CHECK(__plat_process_suspend(h) == 0,
 	      "__plat_process_suspend() (real pidfd_send_signal(SIGSTOP)) on the sleep process");
