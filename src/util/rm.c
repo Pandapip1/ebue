@@ -74,9 +74,9 @@
  * process file ever starts a second walk while one is in progress. */
 static int rm_tree_failed;
 
-static int rm_diag(const char *path)
+static int rm_diag(const char *path, int error)
 {
-	fprintf(stderr, "rm: cannot remove '%s': %s\n", path, strerror(errno));
+	fprintf(stderr, "rm: cannot remove '%s': %s\n", path, strerror(error));
 	rm_tree_failed = 1;
 	return 0;
 }
@@ -87,25 +87,26 @@ static int rm_diag(const char *path)
  * empty, then remove it, from the leaves up". */
 static int rm_walk_cb(const char *path, const struct stat *st, int type, struct FTW *ftwbuf)
 {
+	int saved_errno = errno;
 	(void)st;
 	(void)ftwbuf;
 	switch (type) {
 	case FTW_DP:
-		if (rmdir(path) < 0) return rm_diag(path);
+		if (rmdir(path) < 0) return rm_diag(path, errno);
 		return 0;
 	case FTW_DNR:
-		fprintf(stderr, "rm: cannot read directory '%s': %s\n", path, strerror(errno));
+		fprintf(stderr, "rm: cannot read directory '%s': %s\n", path, strerror(saved_errno));
 		rm_tree_failed = 1;
 		return 0;
 	case FTW_NS:
-		return rm_diag(path);
+		return rm_diag(path, saved_errno);
 	default:
 		/* FTW_F (regular file) and FTW_SL (symbolic link, not
 		 * followed -- FTW_PHYS below): both go through unlink(),
 		 * which is rm(1p)'s own "if the current file is not a
 		 * directory, rm shall perform actions equivalent to the
 		 * unlink() function" for a link exactly as for a file. */
-		if (unlink(path) < 0) return rm_diag(path);
+		if (unlink(path) < 0) return rm_diag(path, errno);
 		return 0;
 	}
 }

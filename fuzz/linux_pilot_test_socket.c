@@ -34,8 +34,8 @@
 
 extern long syscall(long number, ...);
 extern int printf(const char *, ...);
-extern void *memset(void *, int, unsigned long);
-extern int memcmp(const void *, const void *, unsigned long);
+extern void *memset(void *, int, size_t);
+extern int memcmp(const void *, const void *, size_t);
 
 #define SYS_socketpair 199 /* aarch64; confirmed against this host's own <sys/syscall.h> */
 #define SYS_close      57

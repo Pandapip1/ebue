@@ -92,7 +92,11 @@ int __util_comm_main(int argc, char **argv)
 	}
 
 	f1 = !strcmp(paths[0], "-") ? stdin : fopen(paths[0], "r");
-	if (!f1) { fprintf(stderr, "comm: %s: %s\n", paths[0], strerror(errno)); return 1; }
+	if (!f1) {
+		int saved = errno;
+		fprintf(stderr, "comm: %s: %s\n", paths[0], strerror(saved));
+		return 1;
+	}
 	f2 = !strcmp(paths[1], "-") ? stdin : fopen(paths[1], "r");
 	if (!f2) {
 		fprintf(stderr, "comm: %s: %s\n", paths[1], strerror(errno));

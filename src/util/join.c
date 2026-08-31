@@ -88,8 +88,10 @@ struct outspec { int file; int field; }; /* file: 0, 1 or 2 */
  * (and did, against an earlier version of this file). */
 static struct field *fields_grow(struct field *out, size_t *cap)
 {
-	size_t newcap = *cap ? *cap * 2 : 8;
-	struct field *g = realloc(out, newcap * sizeof *out);
+	size_t newcap;
+	struct field *g;
+	if (!__util_array_capacity(*cap, *cap, 1, 8, sizeof *out, &newcap)) return 0;
+	g = __util_reallocarray(out, newcap, sizeof *out);
 	if (!g) return 0;
 	*cap = newcap;
 	return g;
@@ -100,7 +102,7 @@ static struct field *split_fields(const char *line, size_t len, int have_delim, 
 	struct field *out;
 	size_t cap = 8, n = 0;
 
-	out = malloc(cap * sizeof *out);
+	out = __util_mallocarray(cap, sizeof *out);
 	if (!out) { *nout = 0; return 0; }
 
 	if (have_delim) {
@@ -166,13 +168,21 @@ static int read_all(const char *path, struct jline **out, size_t *nout, int have
 		size_t len = (size_t)got;
 		char *text;
 		if (len && buf[len - 1] == '\n') len--;
-		text = malloc(len + 1);
+		{
+			size_t bytes;
+			if (!__util_size_add(len, 1, &bytes)) { free(buf); if (f != stdin) fclose(f); return -1; }
+			text = malloc(bytes);
+		}
 		if (!text) { free(buf); if (f != stdin) fclose(f); return -1; }
 		memcpy(text, buf, len);
 		text[len] = 0;
 		if (*nout >= cap) {
-			size_t newcap = cap ? cap * 2 : 64;
-			struct jline *g = realloc(*out, newcap * sizeof **out);
+			size_t newcap;
+			struct jline *g;
+			if (!__util_array_capacity(cap, *nout, 1, 64, sizeof **out, &newcap)) {
+				free(text); free(buf); if (f != stdin) fclose(f); return -1;
+			}
+			g = __util_reallocarray(*out, newcap, sizeof **out);
 			if (!g) { free(text); free(buf); if (f != stdin) fclose(f); return -1; }
 			*out = g;
 			cap = newcap;
@@ -313,8 +323,10 @@ static int parse_o_list(const char *val, struct outspec **specs, size_t *nspecs,
 			p = end;
 		}
 		if (*nspecs >= *cap) {
-			size_t newcap = *cap ? *cap * 2 : 16;
-			struct outspec *g = realloc(*specs, newcap * sizeof **specs);
+			size_t newcap;
+			struct outspec *g;
+			if (!__util_array_capacity(*cap, *nspecs, 1, 16, sizeof **specs, &newcap)) return -1;
+			g = __util_reallocarray(*specs, newcap, sizeof **specs);
 			if (!g) return -1;
 			*specs = g;
 			*cap = newcap;
@@ -426,11 +438,13 @@ int __util_join_main(int argc, char **argv)
 	}
 
 	if (read_all(paths[0], &L1, &n1, have_delim, delim) < 0) {
-		fprintf(stderr, "join: %s: %s\n", paths[0], strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "join: %s: %s\n", paths[0], strerror(saved));
 		goto bad;
 	}
 	if (read_all(paths[1], &L2, &n2, have_delim, delim) < 0) {
-		fprintf(stderr, "join: %s: %s\n", paths[1], strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "join: %s: %s\n", paths[1], strerror(saved));
 		goto bad;
 	}
 

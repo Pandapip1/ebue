@@ -72,7 +72,7 @@ static int ntpath_is_ancestor(const struct __ntpath *old,
 /* Open `old`'s already-resolved NT path (op) with DELETE|FILE_READ_
  * ATTRIBUTES|SYNCHRONIZE -- the eventual FILE_RENAME_INFORMATION[Ex]
  * set's own handle, kept open across the rest of this function.
- * *attrs/*tag are FileAttributeTagInformation's two fields, needed by
+	 * *attrs and *tag are FileAttributeTagInformation's two fields, needed by
  * isdir_attrs() to decide whether `old` is a directory; a failed query
  * (rather than a failed open) leaves them 0, which reads as "not a
  * reparse point, not a directory" either way -- not a behavior change
@@ -109,7 +109,7 @@ static int rename_open_old(struct __ntpath *op, __plat_handle_t *h_out,
 
 /* Best-effort probe of `new`'s NT path: does it exist, and if so, what
  * are its FileAttributeTagInformation fields?  *exists is always
- * written; *attrs/*tag only when *exists is set.  No handle is kept --
+	 * written; *attrs and *tag only when *exists is set.  No handle is kept --
  * new is never opened again after this call -- and no failure is
  * reported outward: an unreadable `new` is exactly like a nonexistent
  * one here. */
@@ -194,8 +194,8 @@ static int rename_set(__plat_handle_t h, struct __ntpath *np, int old_isdir, int
 int __plat_rename(int olddirfd, const char *old, int newdirfd, const char *new)
 {
 	struct __ntpath op, np;
-	__plat_handle_t h;
-	unsigned long old_attrs, old_tag, new_attrs, new_tag;
+	__plat_handle_t h = 0;
+	unsigned long old_attrs = 0, old_tag = 0, new_attrs = 0, new_tag = 0;
 	int old_isdir, new_exists, new_isdir;
 
 	if (__ntpath_at(olddirfd, old, &op, OBJ_CASE_INSENSITIVE) < 0) return -1;

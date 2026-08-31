@@ -45,6 +45,7 @@ int settimeofday(const struct timeval *tv, const struct timezone *tz)
 		return -1;
 	}
 	ts.tv_sec = tv->tv_sec;
-	ts.tv_nsec = tv->tv_usec * 1000;
+	/* tv_usec validation bounds the product to [0, 999999000]. */
+	ts.tv_nsec = (long)(tv->tv_usec * 1000);
 	return clock_settime(CLOCK_REALTIME, &ts);
 }

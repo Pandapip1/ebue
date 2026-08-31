@@ -295,7 +295,11 @@ int __plat_thread_stack_extent(__plat_handle_t h, void **base, size_t *size)
 	if (!NT_SUCCESS(status)) return __set_errno_status(status);
 	teb = information.TebBaseAddress;
 	*base = teb->NtTib.StackLimit;
-	*size = (size_t)((char *)teb->NtTib.StackBase - (char *)teb->NtTib.StackLimit);
+	/* The kernel supplies these as the two numeric bounds of one stack.
+	 * Integer subtraction expresses that address-space fact without C's
+	 * same-array requirement for pointer subtraction. */
+	*size = (size_t)((uintptr_t)teb->NtTib.StackBase -
+	                 (uintptr_t)teb->NtTib.StackLimit);
 	return 0;
 }
 

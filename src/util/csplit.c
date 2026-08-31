@@ -50,6 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include <regex.h>
 #include "util.h"
@@ -90,6 +91,7 @@ static int read_all_lines(FILE *f, struct lines *L)
 		ssize_t got = getline(&buf, &cap, f);
 		if (got < 0) break;
 		if (L->n >= alloc) {
+			if (alloc > INT_MAX / 2) { free(buf); return -1; }
 			int newalloc = alloc ? alloc * 2 : 64;
 			/* realloc()'s own contract: on success the old block is
 			 * gone (freed or moved) regardless of what the caller does
@@ -98,16 +100,20 @@ static int read_all_lines(FILE *f, struct lines *L)
 			 * never left holding a stale pointer to memory realloc()
 			 * has already invalidated while a *second* realloc() (for
 			 * the other array) is still pending and might fail. */
-			char **nt = realloc(L->text, (size_t)newalloc * sizeof *nt);
+			char **nt = __util_reallocarray(L->text, (size_t)newalloc, sizeof *nt);
 			size_t *nl;
 			if (!nt) { free(buf); return -1; }
 			L->text = nt;
-			nl = realloc(L->len, (size_t)newalloc * sizeof *nl);
+			nl = __util_reallocarray(L->len, (size_t)newalloc, sizeof *nl);
 			if (!nl) { free(buf); return -1; }
 			L->len = nl;
 			alloc = newalloc;
 		}
-		L->text[L->n] = malloc((size_t)got + 1);
+		{
+			size_t bytes;
+			if (!__util_size_add((size_t)got, 1, &bytes)) { free(buf); return -1; }
+			L->text[L->n] = malloc(bytes);
+		}
 		if (!L->text[L->n]) { free(buf); return -1; }
 		memcpy(L->text[L->n], buf, (size_t)got + 1);
 		L->len[L->n] = (size_t)got;
@@ -169,8 +175,12 @@ struct created {
 static int remember_created(struct created *c, const char *name)
 {
 	if (c->n >= c->cap) {
-		int newcap = c->cap ? c->cap * 2 : 16;
-		char **nn = realloc(c->names, (size_t)newcap * sizeof *nn);
+		size_t grown;
+		int newcap;
+		if (!__util_array_capacity((size_t)c->cap, (size_t)c->n, 1, 16,
+		    sizeof *c->names, &grown) || grown > INT_MAX) return -1;
+		newcap = (int)grown;
+		char **nn = __util_reallocarray(c->names, (size_t)newcap, sizeof *nn);
 		if (!nn) return -1;
 		c->names = nn;
 		c->cap = newcap;
@@ -273,7 +283,8 @@ int __util_csplit_main(int argc, char **argv)
 
 	f = strcmp(filename, "-") == 0 ? stdin : fopen(filename, "rb");
 	if (!f) {
-		fprintf(stderr, "csplit: %s: %s\n", filename, strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "csplit: %s: %s\n", filename, strerror(saved));
 		return 1;
 	}
 	if (read_all_lines(f, &L) < 0) {

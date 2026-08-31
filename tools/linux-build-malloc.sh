@@ -62,23 +62,17 @@ for f in $FILES; do
 	objs="$objs $o"
 done
 
-# __plat_fast_lock()/__plat_fast_unlock() (src/internal/plat_thread.h):
-# plat_malloc.c's free lists are guarded by the real process-wide fast
-# lock, but linking the whole src/thread/linux/plat_thread.c object
-# for it would pull in __plat_thread_spawn() and its own dependency
-# chain -- the same whole-object-linking hazard every other pilot in
-# this tree works around the same way, with a small local stand-in.
-# No-op is a correct stand-in here specifically because this pilot is
-# single-threaded (real concurrency needs pthread_create(), which has
-# no Linux backend yet -- a separate, disclosed gap), not a general
-# substitute for the real lock.
+# The allocator's private spin lock yields only when another thread owns
+# it.  This pilot is single-threaded, so contention is impossible and a
+# no-op yield is the precise local stand-in.  Linking the whole platform
+# thread backend merely for that unreachable slow path would pull in its
+# unrelated spawn/wait dependency chain.
 cat > "$OBJ/harness.c" <<'EOF'
-void __plat_fast_lock(void) {}
-void __plat_fast_unlock(void) {}
+void __plat_thread_alertable_yield(void) {}
 EOF
 # shellcheck disable=SC2086
 if ! $CC $CFLAGS -c -o "$OBJ/harness.o" "$OBJ/harness.c"; then
-	echo "$TAG: FAILED compiling the lock-stub harness" >&2
+	echo "$TAG: FAILED compiling the yield-stub harness" >&2
 	exit 1
 fi
 objs="$objs $OBJ/harness.o"

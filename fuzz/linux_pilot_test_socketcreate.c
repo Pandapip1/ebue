@@ -33,8 +33,8 @@
 #include "libc.h"
 
 extern int printf(const char *, ...);
-extern void *memset(void *, int, unsigned long);
-extern int memcmp(const void *, const void *, unsigned long);
+extern void *memset(void *, int, size_t);
+extern int memcmp(const void *, const void *, size_t);
 
 static int failures;
 

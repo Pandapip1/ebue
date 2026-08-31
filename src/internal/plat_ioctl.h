@@ -33,7 +33,7 @@ int __plat_fionread_pipe(__plat_handle_t h, int *out)
  * FileStandardInformation's EndOfFile and FilePositionInformation's
  * CurrentByteOffset.  The front door does the actual subtraction (and
  * its own [EOVERFLOW] check, which has nothing to do with NT) via
- * __file_remaining_count(). 0/-1(errno) via *eof/*pos.
+	 * __file_remaining_count(). 0/-1(errno) via *eof and *pos.
  *
  * eof/pos are both required: both backends write through both
  * unconditionally on the success path (NT: `*eof = si.EndOfFile; *pos

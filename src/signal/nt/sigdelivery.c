@@ -140,6 +140,7 @@
  * of failing __signal_init() outright. */
 #include <signal.h>
 #include <unistd.h>
+#include <unistd.h>
 #include <string.h>
 #include "libc.h"
 #include "plat_signal.h"

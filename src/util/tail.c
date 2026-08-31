@@ -90,10 +90,14 @@ static size_t read_all(int fd, char **out)
 	for (;;) {
 		if (len == cap) {
 			char *nb;
-			cap *= 2;
-			nb = realloc(buf, cap);
+			size_t newcap;
+			if (!__util_array_capacity(cap, len, 1, 65536, 1, &newcap)) {
+				free(buf); *out = 0; return (size_t)-1;
+			}
+			nb = realloc(buf, newcap);
 			if (!nb) { free(buf); *out = 0; return (size_t)-1; }
 			buf = nb;
+			cap = newcap;
 		}
 		r = read(fd, buf + len, cap - len);
 		if (r < 0) { free(buf); *out = 0; return (size_t)-1; }
@@ -136,7 +140,8 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 
 	len = read_all(fd, &buf);
 	if (len == (size_t)-1) {
-		fprintf(stderr, "tail: %s: %s\n", label, strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "tail: %s: %s\n", label, strerror(saved));
 		return -1;
 	}
 
@@ -173,7 +178,8 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 	}
 
 	if (write_all(buf + start, len - start) < 0) {
-		fprintf(stderr, "tail: %s: %s\n", label, strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "tail: %s: %s\n", label, strerror(saved));
 		rc = -1;
 	}
 	free(buf);

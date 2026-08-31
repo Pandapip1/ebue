@@ -89,12 +89,16 @@ char *__handle_path(HANDLE h)
 		NtClose(lh);
 		if (!NT_SUCCESS(st)) continue;
 		tl = tus.Length / sizeof(WCHAR);
-		if (oni->Name.Length / sizeof(WCHAR) >= tl &&
+			if (oni->Name.Length / sizeof(WCHAR) >= tl &&
 		    !memcmp(oni->Name.Buffer, target, tl * sizeof(WCHAR)) &&
 		    (oni->Name.Length / sizeof(WCHAR) == tl || oni->Name.Buffer[tl] == '\\')) {
 			size_t rest = oni->Name.Length / sizeof(WCHAR) - tl;
-			WCHAR *w = __malloc((rest + 3) * sizeof(WCHAR));
-			char *r;
+				size_t units, bytes;
+				WCHAR *w;
+				char *r;
+				if (!__size_add_checked(rest, 3, &units) ||
+				    !__size_mul_checked(units, sizeof(WCHAR), &bytes)) return 0;
+				w = __malloc(bytes);
 			if (!w) return 0;
 			w[0] = (WCHAR)c; w[1] = ':';
 			memcpy(w + 2, oni->Name.Buffer + tl, rest * sizeof(WCHAR));

@@ -1025,9 +1025,10 @@ void __plat_thread_alertable_yield(void)
  * constant every Windows-interop codebase uses for this conversion). */
 long long __plat_query_system_time(void)
 {
-	struct linux_timespec ts;
+	struct linux_timespec ts = {0};
 	long long secs_since_1601;
-	raw_syscall(SYS_clock_gettime_lx, 0L /* CLOCK_REALTIME */, (long)&ts, 0, 0, 0, 0);
+	long ret = raw_syscall(SYS_clock_gettime_lx, 0L /* CLOCK_REALTIME */, (long)&ts, 0, 0, 0, 0);
+	if (is_sys_error(ret)) return 116444736000000000LL;
 	secs_since_1601 = (long long)ts.tv_sec + 11644473600LL;
 	return secs_since_1601 * 10000000LL + (long long)ts.tv_nsec / 100LL;
 }

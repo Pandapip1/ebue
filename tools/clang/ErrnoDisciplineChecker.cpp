@@ -87,10 +87,10 @@ class ErrnoDisciplineChecker
          * errno set." */
         "__vfs_resolve_at", "__vfs_open_dir", "__vfs_stat",
         /* Process/exec and WSL mode-attribute helpers: "-1 with errno." */
-        "__spawn", "__lxmod_set", "__find_program",
+        "__spawn", "__lxmod_set", "__find_program", "__plat_dup",
         /* nanosleep()/sleep()/clock_nanosleep()'s shared alertable wait:
          * "-1 with errno=EINTR". */
-        "__alertable_delay",
+        "__alertable_delay", "wait_handle", "sem_trywait",
         /* RLIMIT_FSIZE enforcement: "sets errno to EFBIG". */
         "__fsize_exceeded",
         /* UTF-8/UTF-16 conversion: "NULL with errno" / "-1 with errno". */
@@ -99,7 +99,7 @@ class ErrnoDisciplineChecker
          * handle-to-path resolver: each contains its own "errno = ..."
          * assignment. */
         "__afd_open", "__afd_addr_from_sockaddr", "__dirstream_next",
-        "__handle_path",
+        "__handle_path", "raw_mmap",
         /* close() sets errno via __fd_get()/__set_errno_status()
          * internally; munmap() sets it directly.  Both are exactly the
          * "cleanup after a diagnosed failure" call that clobbers errno. */
@@ -109,7 +109,14 @@ class ErrnoDisciplineChecker
          * under src/unistd, src/fcntl/open.c and src/stat, confirming
          * each really does set errno on its own failure return rather
          * than assumed from glibc convention. */
-        "read", "open", "unlink", "mkdir", "stat", "isatty", "getcwd",
+        "read", "write", "open", "unlink", "mkdir", "mkfifo", "stat",
+        "lstat", "statvfs", "nftw", "rmdir", "readlink", "utimensat",
+        "chmod", "realpath", "link", "symlink", "isatty", "getcwd",
+        /* stdio entry points whose failure paths in this implementation
+         * set errno, plus utility-local wrappers that preserve those
+         * failure returns for their callers. */
+        "fopen", "fread", "fwrite", "fclose", "fflush",
+        "cksum_stream", "read_all", "write_all", "link_one", "mkdir_p",
         /* src/stdio/buf.c's own fd-and-buffer-position seek helper,
          * shared by fflush()/fseek()/rewind(); each of its own failure
          * returns sets errno directly. */

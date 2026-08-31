@@ -36,7 +36,7 @@
 
 extern long syscall(long number, ...);
 extern int printf(const char *, ...);
-extern void *memset(void *, int, unsigned long);
+extern void *memset(void *, int, size_t);
 
 #define SYS_openat    56
 #define SYS_close     57

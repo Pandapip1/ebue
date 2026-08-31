@@ -125,8 +125,10 @@ struct line {
  * (and did, against an earlier version of this file). */
 static struct field *fields_grow(struct field *out, size_t *cap)
 {
-	size_t newcap = *cap ? *cap * 2 : 8;
-	struct field *g = realloc(out, newcap * sizeof *out);
+	size_t newcap;
+	struct field *g;
+	if (!__util_array_capacity(*cap, *cap, 1, 8, sizeof *out, &newcap)) return 0;
+	g = __util_reallocarray(out, newcap, sizeof *out);
 	if (!g) return 0;
 	*cap = newcap;
 	return g;
@@ -137,7 +139,7 @@ static struct field *split_fields(const char *line, size_t len, const struct sor
 	struct field *out;
 	size_t cap = 8, n = 0;
 
-	out = malloc(cap * sizeof *out);
+	out = __util_mallocarray(cap, sizeof *out);
 	if (!out) { *nout = 0; return 0; }
 
 	if (o->have_delim) {
@@ -343,14 +345,14 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 	size_t width;
 
 	if (n < 2) return;
-	tmp = malloc(n * sizeof *tmp);
+	tmp = __util_mallocarray(n, sizeof *tmp);
 	if (!tmp) return; /* input stays in original (still-valid) order */
 
-	for (width = 1; width < n; width *= 2) {
+	for (width = 1; width < n;) {
 		size_t i;
-		for (i = 0; i < n; i += 2 * width) {
-			size_t lo = i, mid = i + width < n ? i + width : n;
-			size_t hi = i + 2 * width < n ? i + 2 * width : n;
+		for (i = 0; i < n;) {
+			size_t lo = i, mid = n - i < width ? n : i + width;
+			size_t hi = n - mid < width ? n : mid + width;
 			size_t a = lo, b = mid, k = lo;
 			while (a < mid && b < hi) {
 				if (line_compare(o, &lines[a], &lines[b]) <= 0) tmp[k++] = lines[a++];
@@ -358,8 +360,11 @@ static void merge_sort(struct line *lines, size_t n, const struct sort_opts *o)
 			}
 			while (a < mid) tmp[k++] = lines[a++];
 			while (b < hi) tmp[k++] = lines[b++];
+			i = hi;
 		}
 		memcpy(lines, tmp, n * sizeof *tmp);
+		if (width > n / 2) break;
+		width *= 2;
 	}
 	free(tmp);
 }
@@ -445,13 +450,21 @@ static int read_all_lines(FILE *f, struct line **out, size_t *nout, size_t *cap)
 		size_t len = (size_t)got;
 		char *text;
 		if (len && buf[len - 1] == '\n') len--;
-		text = malloc(len + 1);
+		{
+			size_t bytes;
+			if (!__util_size_add(len, 1, &bytes)) { free(buf); return -1; }
+			text = malloc(bytes);
+		}
 		if (!text) { free(buf); return -1; }
 		memcpy(text, buf, len);
 		text[len] = 0;
 		if (*nout >= *cap) {
-			size_t newcap = *cap ? *cap * 2 : 64;
-			struct line *g = realloc(*out, newcap * sizeof **out);
+			size_t newcap;
+			struct line *g;
+			if (!__util_array_capacity(*cap, *nout, 1, 64, sizeof **out, &newcap)) {
+				free(text); free(buf); return -1;
+			}
+			g = __util_reallocarray(*out, newcap, sizeof **out);
 			if (!g) { free(text); free(buf); return -1; }
 			*out = g;
 			*cap = newcap;
@@ -598,7 +611,8 @@ int __util_sort_main(int argc, char **argv)
 			int is_stdin = !strcmp(files[fi], "-");
 			f = is_stdin ? stdin : fopen(files[fi], "r");
 			if (!f) {
-				fprintf(stderr, "sort: %s: %s\n", files[fi], strerror(errno));
+				int saved = errno;
+				fprintf(stderr, "sort: %s: %s\n", files[fi], strerror(saved));
 				free_lines(lines, nlines);
 				return 2;
 			}

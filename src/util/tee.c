@@ -88,8 +88,8 @@ int __util_tee_main(int argc, char **argv)
 
 	if (i < argc) {
 		int count = argc - i;
-		fds = malloc((size_t)count * sizeof *fds);
-		paths = malloc((size_t)count * sizeof *paths);
+		fds = __util_mallocarray((size_t)count, sizeof *fds);
+		paths = __util_mallocarray((size_t)count, sizeof *paths);
 		if (!fds || !paths) {
 			fprintf(stderr, "tee: out of memory\n");
 			free(fds);

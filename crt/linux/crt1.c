@@ -502,6 +502,7 @@ _Noreturn void __linux_start_main(long *sp)
     __attribute__((nonnull(1)));
 _Noreturn void __linux_start_main(long *sp)
 {
+	static char empty_progname[] = "";
 	long argc = sp[0];
 	char **argv = (char **)(sp + 1);
 	char **envp = argv + argc + 1;
@@ -550,7 +551,7 @@ _Noreturn void __linux_start_main(long *sp)
 	__argc = (int)argc;
 	__argv = argv;
 	environ = envp;
-	__progname_full = argc > 0 ? argv[0] : "";
+	__progname_full = argc > 0 ? argv[0] : empty_progname;
 	slash = __progname_full;
 	for (char *p = __progname_full; *p; p++)
 		if (*p == '/') slash = p + 1;

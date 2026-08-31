@@ -1161,7 +1161,7 @@ static int emit_field(struct fbuf *b, struct pv *out)
 
 	plain = __malloc(b->n + 1);
 	if (!plain) return WRDE_NOSPACE;
-	memcpy(plain, b->data, b->n);
+	if (b->n) memcpy(plain, b->data, b->n);
 	plain[b->n] = 0;
 
 	if (!has_meta) return pv_push(out, plain) ? WRDE_NOSPACE : 0;

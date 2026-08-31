@@ -779,8 +779,8 @@ static void store_term(void *dst, int nn, int wide_out)
  * blen == 0 (the same ISO 7.24.1p2 "still valid at n == 0" convention
  * as the mem-family, since q == b is what the loop's own gf(q, st)
  * would dereference first were blen nonzero). */
-static int wset_has(const char *b, size_t blen, int st, unsigned c) __attribute__((nonnull(1)));
-static int wset_has(const char *b, size_t blen, int st, unsigned c)
+static int wset_has(const char *b, size_t blen, size_t st, unsigned c) __attribute__((nonnull(1)));
+static int wset_has(const char *b, size_t blen, size_t st, unsigned c)
 {
 	const char *q, *e = b + blen;
 	for (q = b; q < e; q += st) {

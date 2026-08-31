@@ -175,7 +175,8 @@ int fcntl(int fd, int cmd, ...)
 		return 0;
 	}
 	case F_GETFL:
-		return f->flags & (O_ACCMODE | O_APPEND | O_NONBLOCK);
+		/* Only these public, int-representable flag bits survive the mask. */
+		return (int)(f->flags & (O_ACCMODE | O_APPEND | O_NONBLOCK));
 	case F_SETFL:
 		f->flags = (f->flags & ~(O_APPEND | O_NONBLOCK)) | (arg & (O_APPEND | O_NONBLOCK));
 		return 0;

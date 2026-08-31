@@ -199,7 +199,7 @@ struct raw_stat_prefix {
 int __plat_is_program(const char *path)
 {
 	long fd = raw_syscall(SYS_openat, (long)AT_FDCWD_LX, (long)path, 0L /* O_RDONLY */, 0L, 0L, 0L);
-	struct raw_stat_prefix st;
+	struct raw_stat_prefix st = {0};
 	long ret;
 
 	if (is_sys_error(fd)) return 0;
@@ -422,7 +422,7 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 		 * values -- into this buffer; declaring it as anything wider
 		 * would leave pipefd[1] reading uninitialized stack past what
 		 * the kernel actually wrote. */
-		int fds[2];
+		int fds[2] = {-1, -1};
 		pfd_ret = raw_syscall(SYS_pipe2, (long)fds, (long)O_CLOEXEC_LX, 0L, 0L, 0L, 0L);
 		if (is_sys_error(pfd_ret)) { errno = (int)-pfd_ret; return -1; }
 		pipefd[0] = fds[0];

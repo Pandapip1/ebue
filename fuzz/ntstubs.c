@@ -82,6 +82,7 @@ extern size_t __sanitizer_get_allocated_size(const void *);
 #define SYS_memfd_create 319
 #define SYS_ioctl 16
 #define SYS_lseek 8
+#define SYS_socketpair 53
 
 /* Handles are (fd + 1), so that 0 stays "no handle". */
 #define H2FD(h) ((int)(long)(h) - 1)
@@ -514,11 +515,10 @@ enum { OF_FREE = 0, OF_STD, OF_NULLDEV, OF_VFS, OF_PIPE, OF_PROC, OF_SEM, OF_EVE
 
 /* An anonymous pipe, which src/unistd/pipe.c makes the way kernel32's
  * CreatePipe does: NtCreateNamedPipeFile for the read end and NtOpenFile
- * of the same named-pipe device name for the write end.  A byte queue
- * with an end count reproduces what the tests observe; there is no
- * blocking (see NtReadFile). */
-/* Matches the quotas src/unistd/pipe.c asks NtCreateNamedPipeFile for,
- * and the host pipe(2) capacity Linux gives by default. */
+ * of the same named-pipe device name for the write end.  A kernel byte
+ * stream plus an end count reproduces what the tests observe; blocking
+ * is delegated to that stream (see NtReadFile). */
+/* Matches the quotas src/unistd/pipe.c asks NtCreateNamedPipeFile for. */
 #define PIPE_QUOTA 65536
 
 #ifndef FILE_PIPE_CLIENT_END
@@ -530,15 +530,15 @@ struct vpipe {
 	struct vpipe *next;
 	WCHAR *name;
 	size_t namelen;
-	/* Backed by a real host pipe(2), not a heap buffer: RtlCloneUserProcess
+	/* Backed by a real host byte stream, not a heap buffer: RtlCloneUserProcess
 	 * below makes a real fork(2) child, and a heap-backed queue would be
 	 * ordinary process memory -- private to whichever side's copy wrote to
 	 * it, invisible to the other, exactly the "handle value that means
 	 * nothing in the child" problem fork.c's own header describes for a
-	 * table entry that wasn't marked inheritable.  A real pipe does not
+	 * table entry that wasn't marked inheritable.  A kernel stream does not
 	 * have that problem: the host kernel duplicates the fd table across a
 	 * real fork(2) (or a real fork+execve -- RtlCreateUserProcess above),
-	 * both ends keep pointing at the same kernel pipe object, and a write
+	 * both ends keep pointing at the same kernel stream object, and a write
 	 * from one process is readable from the other, same as two ends of an
 	 * anonymous pipe are meant to behave.
 	 *
@@ -2040,7 +2040,12 @@ NTSTATUS NTAPI NtCreateNamedPipeFile(PHANDLE out, ULONG access, POBJECT_ATTRIBUT
 		p->name = wdup(vp.pipename, vp.pipelen);
 		p->namelen = vp.pipelen;
 		if (!p->name) { vfree(p); return STATUS_NO_MEMORY; }
-		if (syscall(SYS_pipe2, fds, 0) < 0) {
+		/* A host pipe can be as small as 8192 bytes when an unprivileged
+		 * process may not raise F_SETPIPE_SZ, while the NT pipe contract we
+		 * model has the requested 65536-byte quota.  A local stream socket
+		 * pair has the same read/write, EOF, fork and FIONREAD properties
+		 * used below, with enough kernel buffering for that declared quota. */
+		if (syscall(SYS_socketpair, 1 /* AF_UNIX */, 1 /* SOCK_STREAM */, 0, fds) < 0) {
 			vfree(p->name); vfree(p); return STATUS_INSUFFICIENT_RESOURCES;
 		}
 		p->rfd = fds[0];

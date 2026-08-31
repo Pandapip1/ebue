@@ -374,6 +374,13 @@
 #include <sys/mman.h>
 #include "plat_dlfcn.h"
 
+static int table_bytes(size_t count, size_t element_size, size_t *out)
+{
+	if (element_size && count > (size_t)-1 / element_size) return -1;
+	*out = count * element_size;
+	return 0;
+}
+
 /* The real kernel page size -- NOT hardcoded, and deliberately not
  * reused from this tree's existing src/mman/mman.c (`MMAP_PAGE 4096u`)
  * or src/unistd/sysconf.c (`_SC_PAGESIZE`/`getpagesize()`, both
@@ -688,6 +695,7 @@ static int self_symtab_load(void)
 	int fd;
 	Elf64_Ehdr eh;
 	Elf64_Shdr *shdrs = NULL;
+	size_t shdr_bytes;
 	size_t i;
 	int symtab_idx = -1;
 
@@ -705,10 +713,12 @@ static int self_symtab_load(void)
 		goto fail;
 	}
 
-	shdrs = malloc((size_t)eh.e_shnum * sizeof *shdrs);
+	if (table_bytes((size_t)eh.e_shnum, sizeof *shdrs, &shdr_bytes) < 0) {
+		seterr("dlopen: own section header table is too large"); goto fail;
+	}
+	shdrs = malloc(shdr_bytes);
 	if (!shdrs) { seterr("dlopen: out of memory reading own section headers"); goto fail; }
-	if (pread(fd, shdrs, (size_t)eh.e_shnum * sizeof *shdrs, (off_t)eh.e_shoff) !=
-	    (ssize_t)((size_t)eh.e_shnum * sizeof *shdrs)) {
+	if (pread(fd, shdrs, shdr_bytes, (off_t)eh.e_shoff) != (ssize_t)shdr_bytes) {
 		seterr("dlopen: short read on own section header table");
 		goto fail;
 	}
@@ -913,6 +923,7 @@ void *__plat_dlopen(const char *file, int mode)
 	int fd = -1;
 	Elf64_Ehdr eh;
 	Elf64_Phdr *phdrs = NULL;
+	size_t phdr_bytes;
 	Elf64_Phdr *pt_dynamic = NULL;
 	unsigned long lo = (unsigned long)-1, hi = 0;
 	void *map_base = MAP_FAILED;
@@ -966,10 +977,12 @@ void *__plat_dlopen(const char *file, int mode)
 		goto fail;
 	}
 
-	phdrs = malloc((size_t)eh.e_phnum * sizeof *phdrs);
+	if (table_bytes((size_t)eh.e_phnum, sizeof *phdrs, &phdr_bytes) < 0) {
+		seterr("dlopen: %s: program header table is too large", file); errno = ENOEXEC; goto fail;
+	}
+	phdrs = malloc(phdr_bytes);
 	if (!phdrs) { seterr("dlopen: out of memory"); errno = ENOMEM; goto fail; }
-	if (pread(fd, phdrs, (size_t)eh.e_phnum * sizeof *phdrs, (off_t)eh.e_phoff) !=
-	    (ssize_t)((size_t)eh.e_phnum * sizeof *phdrs)) {
+	if (pread(fd, phdrs, phdr_bytes, (off_t)eh.e_phoff) != (ssize_t)phdr_bytes) {
 		seterr("dlopen: %s: short read on program header table", file);
 		goto fail;
 	}
@@ -996,9 +1009,10 @@ void *__plat_dlopen(const char *file, int mode)
 	hi = pgup(hi);
 	map_len = hi - lo;
 
-	map_base = raw_mmap(NULL, map_len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	map_base = raw_mmap(NULL, map_len, PROT_NONE, MAP_PRIVATE | __MAP_ANONYMOUS, -1, 0);
 	if (map_base == MAP_FAILED) {
-		seterr("dlopen: %s: cannot reserve %zu bytes of address space: %s", file, map_len, strerror(errno));
+		int saved = errno;
+		seterr("dlopen: %s: cannot reserve %zu bytes of address space: %s", file, map_len, strerror(saved));
 		goto fail;
 	}
 
@@ -1031,7 +1045,8 @@ void *__plat_dlopen(const char *file, int mode)
 			void *r = raw_mmap(segbase, filelen, PROT_READ | PROT_WRITE,
 			               MAP_PRIVATE | MAP_FIXED, fd, (long)pgdown(ph->p_offset));
 			if (r == MAP_FAILED) {
-				seterr("dlopen: %s: cannot map PT_LOAD segment %u: %s", file, i, strerror(errno));
+				int saved = errno;
+				seterr("dlopen: %s: cannot map PT_LOAD segment %u: %s", file, i, strerror(saved));
 				goto fail;
 			}
 			/* Zero the tail of the last file-backed page past p_filesz
@@ -1050,9 +1065,10 @@ void *__plat_dlopen(const char *file, int mode)
 		alloclen = memend > filelen ? memend : filelen;
 		if (alloclen > filelen) {
 			void *r = raw_mmap((char *)segbase + filelen, alloclen - filelen, PROT_READ | PROT_WRITE,
-			               MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
+				               MAP_PRIVATE | MAP_FIXED | __MAP_ANONYMOUS, -1, 0);
 			if (r == MAP_FAILED) {
-				seterr("dlopen: %s: cannot map bss tail of segment %u: %s", file, i, strerror(errno));
+				int saved = errno;
+				seterr("dlopen: %s: cannot map bss tail of segment %u: %s", file, i, strerror(saved));
 				goto fail;
 			}
 		}

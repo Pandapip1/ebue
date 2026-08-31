@@ -125,6 +125,11 @@ static void *errno_isolation_thread(void *argument)
 
 static void test_errno_thread_isolation(void)
 {
+#ifdef _NTLIBC_NATIVE_BUILD
+	/* fuzz/ntstubs.c deliberately refuses NtCreateThreadEx: the native
+	 * sanitizer harness has no NT thread/TEB substrate to test against. */
+	printf("note: native sanitizer shim has no NT thread substrate; errno isolation skipped\n");
+#else
 	struct errno_isolation_case c;
 	pthread_t th;
 
@@ -154,6 +159,7 @@ static void test_errno_thread_isolation(void)
 
 	CHECK(sem_destroy(&c.child_set) == 0);
 	CHECK(sem_destroy(&c.parent_checked) == 0);
+#endif
 }
 
 int main(void)

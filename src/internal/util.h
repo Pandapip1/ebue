@@ -31,6 +31,58 @@
 #ifndef _NTLIBC_UTIL_H
 #define _NTLIBC_UTIL_H
 
+#include <stddef.h>
+#include <stdlib.h>
+
+/* Shared checked sizing for the utility implementations below.  Keep the
+ * arithmetic out of malloc/realloc arguments so an untrusted input length
+ * cannot wrap into a small allocation. */
+static inline int __util_size_add(size_t a, size_t b, size_t *out)
+{
+	if (b > (size_t)-1 - a) return 0;
+	*out = a + b;
+	return 1;
+}
+
+static inline int __util_size_mul(size_t a, size_t b, size_t *out)
+{
+	if (b && a > (size_t)-1 / b) return 0;
+	*out = a * b;
+	return 1;
+}
+
+static inline void *__util_mallocarray(size_t count, size_t element_size)
+{
+	size_t bytes;
+	if (!__util_size_mul(count, element_size, &bytes)) return NULL;
+	return malloc(bytes);
+}
+
+static inline void *__util_reallocarray(void *ptr, size_t count,
+	size_t element_size)
+{
+	size_t bytes;
+	if (!__util_size_mul(count, element_size, &bytes)) return NULL;
+	return realloc(ptr, bytes);
+}
+
+static inline int __util_array_capacity(size_t current, size_t used,
+	size_t additional, size_t initial, size_t element_size, size_t *out)
+{
+	size_t minimum, maximum, capacity;
+	if (!initial || !element_size ||
+	    !__util_size_add(used, additional, &minimum)) return 0;
+	maximum = (size_t)-1 / element_size;
+	if (minimum > maximum || current > maximum) return 0;
+	capacity = current < initial ? initial : current;
+	while (capacity < minimum) {
+		if (capacity > maximum / 2) { capacity = minimum; break; }
+		capacity *= 2;
+	}
+	*out = capacity;
+	return 1;
+}
+
 /* Tier 1: pathname utilities (XCU basename(1p), dirname(1p), pathchk(1p),
  * pwd(1p)), plus readlink and realpath -- both real GNU/BSD utilities this
  * project's own POSIX-utilities plan folds into this tier even though

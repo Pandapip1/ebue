@@ -97,11 +97,11 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 				 * than by one named type. */
 				have_poll = 1;
 				__fd_probe(f, &cr, &cw, &hup);
-				if (hup) p->revents |= POLLHUP;
-				if (cr) p->revents |= (short)(p->events & (POLLIN | POLLRDNORM));
-				if (cw && !hup) p->revents |= (short)(p->events & (POLLOUT | POLLWRNORM));
+				if (hup) p->revents = (short)(p->revents | POLLHUP);
+				if (cr) p->revents = (short)(p->revents | (p->events & (POLLIN | POLLRDNORM)));
+				if (cw && !hup) p->revents = (short)(p->revents | (p->events & (POLLOUT | POLLWRNORM)));
 			} else if (f->type == __FD_CONSOLE) {
-				p->revents |= (short)(p->events & (POLLOUT | POLLWRNORM));  /* output: always ready */
+				p->revents = (short)(p->revents | (p->events & (POLLOUT | POLLWRNORM)));  /* output: always ready */
 				if ((p->events & (POLLIN | POLLRDNORM)) && ncons < FD_MAX) {
 					console_h[ncons] = f->h;
 					console_idx[ncons] = (int)i;
@@ -112,7 +112,7 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 				 * always ready, same as select(). The right
 				 * answer for these shapes, not a fallback --
 				 * see __fd_probe()'s default case. */
-				p->revents |= (short)(p->events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM));
+				p->revents = (short)(p->revents | (p->events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)));
 			}
 			if (p->revents) total++;
 		}
@@ -124,7 +124,7 @@ int poll(struct pollfd *pfds, nfds_t nfds, int timeout)
 				if (__plat_wait_ready(console_h[k])) {
 					struct pollfd *p = &pfds[console_idx[k]];
 					if (!p->revents) total++;
-					p->revents |= (short)(p->events & (POLLIN | POLLRDNORM));
+					p->revents = (short)(p->revents | (p->events & (POLLIN | POLLRDNORM)));
 				}
 			}
 		}

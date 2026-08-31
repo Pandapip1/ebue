@@ -239,7 +239,7 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		if (rp == (unsigned long)-1) {
 			/* "If a right precision is not included, a default
 			 * specified by the current locale is used." */
-			char fd = intl ? lc->int_frac_digits : lc->frac_digits;
+			char fd = (char)(intl ? lc->int_frac_digits : lc->frac_digits);
 			rp = (fd >= 0 && fd < CHAR_MAX) ? (unsigned long)fd : 2;
 		}
 

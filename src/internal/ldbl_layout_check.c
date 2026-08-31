@@ -63,6 +63,7 @@
  * written exactly once, below, shared by every branch.
  */
 #include <stdint.h>
+#include "libc.h"
 #include "ldbl_format.h"
 
 /* The three probe values every branch checks, declared once: one place

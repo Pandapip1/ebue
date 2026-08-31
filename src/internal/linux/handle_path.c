@@ -106,6 +106,7 @@ char *__handle_path(HANDLE h)
 	char buf[PATH_MAX];
 	char *r;
 	long n;
+	size_t bytes;
 
 	if (fd < 0) { errno = EBADF; return 0; }
 	fd_path(fd, path);
@@ -114,7 +115,8 @@ char *__handle_path(HANDLE h)
 	/* readlinkat(2) never NUL-terminates; it fills up to n bytes and
 	 * reports the count, exactly like the POSIX readlink() this mirrors
 	 * (see __plat_readlink()'s own comment on the same call). */
-	r = __malloc((size_t)n + 1);
+	if (!__size_add_checked((size_t)n, 1, &bytes)) { errno = ENOMEM; return 0; }
+	r = __malloc(bytes);
 	if (!r) return 0;
 	if (n) memcpy(r, buf, (size_t)n);
 	r[n] = 0;

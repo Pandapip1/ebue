@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 #include <errno.h>
 #include <wordexp.h>
 #include "nt.h"
@@ -44,6 +45,12 @@ extern char **__argv;
 extern int __argc;
 extern char *__progname;                     /* argv[0] */
 extern char *__progname_full;                /* image path, UTF-8 */
+
+/* Internal users need the thread id regardless of whether the public
+ * GNU-extension declaration in <unistd.h> is visible under the current
+ * feature-test macros. */
+pid_t gettid(void);
+int __verify_ldbl_layout(void);
 
 /* environ helpers shared by getenv.c and setenv.c.  __env_find returns the
  * slot in environ holding "name=..." for the first l bytes of name, or

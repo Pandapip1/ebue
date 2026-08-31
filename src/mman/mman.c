@@ -653,16 +653,16 @@ int msync(void *addr, size_t len, int flags)
  * on which system it believes it is running. */
 static int lock_range(const void *addr, size_t len, int lock)
 {
-	uintptr_t base;
+	char *base;
 	size_t z;
 
 	if (len == 0) { errno = EINVAL; return -1; }
 	z = pground(len + ((uintptr_t)addr & (MMAP_PAGE - 1)));
-	base = (uintptr_t)addr & ~(uintptr_t)(MMAP_PAGE - 1);
-	if (lock ? __plat_mem_lock((void *)base, z) : __plat_mem_unlock((void *)base, z))
+	base = (char *)((uintptr_t)addr & ~(uintptr_t)(MMAP_PAGE - 1));
+	if (lock ? __plat_mem_lock(base, z) : __plat_mem_unlock(base, z))
 		return -1;
 	{
-		char *a = (char *)base;
+		char *a = base;
 		char *end = a + z;
 		int k;
 		for (k = 0; k < MMAP_MAX; k++) {

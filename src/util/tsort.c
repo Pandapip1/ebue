@@ -71,8 +71,10 @@ static int get_or_add(const char *name)
 	if (idx >= 0) return idx;
 
 	if (nnodes >= nodecap) {
-		size_t newcap = nodecap ? nodecap * 2 : 64;
-		struct node *g = realloc(nodes, newcap * sizeof *nodes);
+		size_t newcap;
+		struct node *g;
+		if (!__util_array_capacity(nodecap, nnodes, 1, 64, sizeof *nodes, &newcap)) return -1;
+		g = __util_reallocarray(nodes, newcap, sizeof *nodes);
 		if (!g) return -1;
 		nodes = g;
 		nodecap = newcap;
@@ -86,17 +88,21 @@ static int get_or_add(const char *name)
 	return (int)nnodes++;
 }
 
-static void add_edge(int a, int b)
+static int add_edge(int a, int b)
 {
 	if (nodes[a].nsucc >= nodes[a].cap) {
-		size_t newcap = nodes[a].cap ? nodes[a].cap * 2 : 8;
-		int *g = realloc(nodes[a].succ, newcap * sizeof *nodes[a].succ);
-		if (!g) return;
+		size_t newcap;
+		int *g;
+		if (!__util_array_capacity(nodes[a].cap, nodes[a].nsucc, 1, 8,
+		    sizeof *nodes[a].succ, &newcap)) return -1;
+		g = __util_reallocarray(nodes[a].succ, newcap, sizeof *nodes[a].succ);
+		if (!g) return -1;
 		nodes[a].succ = g;
 		nodes[a].cap = newcap;
 	}
 	nodes[a].succ[nodes[a].nsucc++] = b;
 	nodes[b].indeg++;
+	return 0;
 }
 
 static char *slurp(FILE *f, size_t *outlen)
@@ -108,11 +114,15 @@ static char *slurp(FILE *f, size_t *outlen)
 	if (!buf) return 0;
 	for (;;) {
 		if (len == cap) {
-			cap *= 2;
+			size_t newcap;
+			if (!__util_array_capacity(cap, len, 1, 65536, 1, &newcap)) {
+				free(buf); return 0;
+			}
 			{
-				char *g = realloc(buf, cap);
+				char *g = realloc(buf, newcap);
 				if (!g) { free(buf); return 0; }
 				buf = g;
+				cap = newcap;
 			}
 		}
 		got = fread(buf + len, 1, cap - len, f);
@@ -161,8 +171,12 @@ int __util_tsort_main(int argc, char **argv)
 		start = pos;
 		while (pos < len && !isspace((unsigned char)buf[pos])) pos++;
 		if (ntok >= tokcap) {
-			size_t newcap = tokcap ? tokcap * 2 : 64;
-			char **g = realloc(tok, newcap * sizeof *tok);
+			size_t newcap;
+			char **g;
+			if (!__util_array_capacity(tokcap, ntok, 1, 64, sizeof *tok, &newcap)) {
+				fprintf(stderr, "tsort: out of memory\n"); free(buf); return 1;
+			}
+			g = __util_reallocarray(tok, newcap, sizeof *tok);
 			if (!g) { fprintf(stderr, "tsort: out of memory\n"); free(buf); return 1; }
 			tok = g;
 			tokcap = newcap;
@@ -188,13 +202,15 @@ int __util_tsort_main(int argc, char **argv)
 		int a = get_or_add(tok[i]);
 		int b = get_or_add(tok[i + 1]);
 		if (a < 0 || b < 0) { fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1; }
-		if (a != b) add_edge(a, b);
+		if (a != b && add_edge(a, b) < 0) {
+			fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1;
+		}
 	}
 	free(tok);
 	free(buf);
 
 	{
-		int *queue = malloc((nnodes ? nnodes : 1) * sizeof *queue);
+		int *queue = __util_mallocarray(nnodes ? nnodes : 1, sizeof *queue);
 		size_t qtail = 0;
 		size_t n;
 

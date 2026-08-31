@@ -32,8 +32,9 @@ int utimes(const char *path, const struct timeval tv[2])
 		errno = EINVAL;
 		return -1;
 	}
-	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
-	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
+	/* The validation above bounds each product to [0, 999999000]. */
+	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000);
+	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000);
 	return utimensat(AT_FDCWD, path, ts, 0);
 }
 
@@ -55,7 +56,8 @@ int futimesat(int dirfd, const char *path, const struct timeval tv[2])
 		errno = EINVAL;
 		return -1;
 	}
-	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = tv[0].tv_usec * 1000;
-	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = tv[1].tv_usec * 1000;
+	/* The validation above bounds each product to [0, 999999000]. */
+	ts[0].tv_sec = tv[0].tv_sec; ts[0].tv_nsec = (long)(tv[0].tv_usec * 1000);
+	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000);
 	return utimensat(dirfd, path, ts, 0);
 }

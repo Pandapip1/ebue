@@ -145,7 +145,8 @@ int __util_mkdir_main(int argc, char **argv)
 		}
 		memcpy(path, argv[i], n + 1);
 		if (mkdir_p(path, leaf_mode, 1, opt_p) < 0) {
-			fprintf(stderr, "mkdir: %s: %s\n", argv[i], strerror(errno));
+			int saved = errno;
+			fprintf(stderr, "mkdir: %s: %s\n", argv[i], strerror(saved));
 			fail = 1;
 		}
 	}

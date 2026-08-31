@@ -163,7 +163,7 @@ int __plat_process_cpu_ticks(long long *kernel, long long *user)
 	 * sys/resource.h struct rusage/getrusage() prototype directly. Its
 	 * 144-byte size was confirmed to match this host's raw
 	 * SYS_getrusage output exactly via the same oracle program. */
-	struct rusage ru;
+	struct rusage ru = {0};
 	long ret = raw_syscall(SYS_getrusage, (long)RUSAGE_SELF, (long)&ru, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	/* getrusage() reports microsecond resolution; the interface wants

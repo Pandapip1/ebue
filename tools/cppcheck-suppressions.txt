@@ -24,6 +24,7 @@ missingIncludeSystem
 # cppcheck's value-flow engine has no model for that and reports the
 # results as uninitialised reads.
 uninitvar:src/math/x87.h
+uninitvar:src/math/aarch64_math.h
 uninitvar:arch/i386/src/*.c
 uninitvar:arch/x86_64/src/*.c
 uninitvar:src/setjmp/*
@@ -64,7 +65,11 @@ intToPointerCast:src/util/tee.c
 # small integer ids, which is what a pid_t is; the cast back is the
 # documented way to read them.  Nothing is truncated: pid_t and the id
 # space are both 32-bit on either win32 target.
-CastAddressToIntegerAtReturn:src/unistd/getpid.c
+CastAddressToIntegerAtReturn:src/unistd/nt/plat_unistd.c
+# Linux process handles deliberately box a pid in the otherwise opaque
+# pointer-shaped platform handle type.  The backend banner documents why
+# pid 0 is the null sentinel and why the conversion cannot truncate.
+CastAddressToIntegerAtReturn:src/process/linux/plat_process.c
 
 # memmove's overlap test is musl's: the unsigned wrap in `- 2*n` is the
 # point of it, computing the "distance is at least n in either direction"

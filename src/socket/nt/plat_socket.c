@@ -48,7 +48,7 @@ int __afd_open(HANDLE *out)
 	UNICODE_STRING devname;
 	OBJECT_ATTRIBUTES oa;
 	IO_STATUS_BLOCK io;
-	HANDLE h;
+	HANDLE h = 0;
 	NTSTATUS st;
 
 	buf = malloc(ea_size);
@@ -146,7 +146,7 @@ ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
  * this is a thin __plat_handle_t-shaped wrapper over it, not new logic. */
 int __plat_socket_open(__plat_handle_t *out)
 {
-	HANDLE h;
+	HANDLE h = 0;
 
 	if (__afd_open(&h) < 0) return -1;
 	*out = h;
@@ -248,7 +248,7 @@ int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *le
 {
 	AFD_RECEIVED_ACCEPT_DATA recvd;
 	AFD_ACCEPT_DATA ad;
-	HANDLE newh;
+	HANDLE newh = 0;
 	NTSTATUS st;
 
 	/* Zeroed before the call, not after it, and not left to the

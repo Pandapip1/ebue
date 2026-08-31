@@ -37,7 +37,7 @@
 
 extern long syscall(long number, ...);
 extern int printf(const char *, ...);
-extern int memcmp(const void *, const void *, unsigned long);
+extern int memcmp(const void *, const void *, size_t);
 
 #define SYS_pipe2      59
 #define SYS_kill       129

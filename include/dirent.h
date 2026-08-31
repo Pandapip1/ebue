@@ -43,7 +43,7 @@ struct dirent {
  * stream obtained from opendir()/fdopendir(), the same "not the callee's
  * job to validate" contract every other libc (glibc, musl) implements
  * this family under -- confirmed against this tree's own bodies
- * (src/dirent/*.c), none of which null-check dp anywhere; it is
+	 * (the C files under src/dirent), none of which null-check dp anywhere; it is
  * unconditionally dereferenced on function entry in every one of them.
  * __attribute__((nonnull)) makes that real, pre-existing contract
  * explicit and lets GCC/Clang's own -Wnonnull catch a provably-NULL
@@ -75,7 +75,7 @@ int            dirfd(DIR *) __attribute__((nonnull(1)));
  * explicitly optional (`if (filter...)`/`if (compar)` guard each use).
  *
  * A residual remains past nonnull(1, 2) on both: `(*a)->d_name` and
- * `(*b)->d_name` are about the VALUE *a/*b point to (a struct dirent*
+	 * `(*b)->d_name` are about the values pointed to by *a and *b (a struct dirent*
  * one level further in), not about a/b themselves -- a fact `nonnull`
  * cannot describe on any signature, since it only ever asserts that
  * the parameter's own pointer value is non-NULL, not what a double

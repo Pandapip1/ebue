@@ -557,7 +557,14 @@ ssize_t __plat_readlink(int dirfd, const char *path, char *buf, size_t bufsz)
 	}
 	/* Strip a \??\ prefix and turn backslashes into slashes. */
 	if (nlen >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\') { name += 4; nlen -= 4; }
-	tmp = __malloc((nlen + 1) * sizeof(WCHAR));
+	{
+		size_t units, bytes;
+		if (!__size_add_checked(nlen, 1, &units) ||
+		    !__size_mul_checked(units, sizeof(WCHAR), &bytes)) {
+			errno = ENOMEM; return -1;
+		}
+		tmp = __malloc(bytes);
+	}
 	if (!tmp) return -1;
 	for (i = 0; i < nlen; i++) tmp[i] = name[i] == '\\' ? '/' : name[i];
 	{

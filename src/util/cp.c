@@ -160,12 +160,16 @@ static char *cpt_dst_path(const char *srcpath)
 {
 	const char *rel = srcpath + cpt_src_root_len;
 	size_t dstlen = strlen(cpt_dst_root);
+	size_t rellen, bytes;
 	char *out;
 
 	while (*rel == '/' || *rel == '\\') rel++;
 	if (!*rel) return strdup(cpt_dst_root);
 
-	out = malloc(dstlen + 1 + strlen(rel) + 1);
+	rellen = strlen(rel);
+	if (!__util_size_add(dstlen, rellen, &bytes) ||
+	    !__util_size_add(bytes, 2, &bytes)) { errno = ENOMEM; return NULL; }
+	out = malloc(bytes);
 	if (!out) { errno = ENOMEM; return NULL; }
 	sprintf(out, "%s/%s", cpt_dst_root, rel);
 	return out;
@@ -173,6 +177,7 @@ static char *cpt_dst_path(const char *srcpath)
 
 static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW *ftwbuf)
 {
+	int saved_errno = errno;
 	char *dstpath;
 
 	(void)ftwbuf;
@@ -206,11 +211,11 @@ static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW 
 		cpt_tree_failed = 1;
 		break;
 	case FTW_DNR:
-		fprintf(stderr, "cp: cannot read directory '%s': %s\n", path, strerror(errno));
+		fprintf(stderr, "cp: cannot read directory '%s': %s\n", path, strerror(saved_errno));
 		cpt_tree_failed = 1;
 		break;
 	case FTW_NS:
-		fprintf(stderr, "cp: cannot stat '%s': %s\n", path, strerror(errno));
+		fprintf(stderr, "cp: cannot stat '%s': %s\n", path, strerror(saved_errno));
 		cpt_tree_failed = 1;
 		break;
 	default:

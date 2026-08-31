@@ -37,7 +37,7 @@ static int fails;
  * hardware fault to it, on purpose -- see the SIGSEGV/SIGFPE tests below
  * for why bridging one in would cost more than it buys here. Reused
  * verbatim from test/malloc.c / test/posix-alloc.c's ASan detection. */
-#if defined(__SANITIZE_ADDRESS__) || \
+#if defined(_NTLIBC_NATIVE_BUILD) || defined(__SANITIZE_ADDRESS__) || \
     (defined(__has_feature) && __has_feature(address_sanitizer))
 #define NATIVE_NO_FAULT_BRIDGE 1
 #endif

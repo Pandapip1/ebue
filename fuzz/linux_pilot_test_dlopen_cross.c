@@ -47,6 +47,15 @@ int host_provided_value(void) { return 7; }
 
 static int fails;
 
+/* The curated link includes resource.c because write.c's RLIMIT_FSIZE
+ * path references it.  This pilot never exercises signals or that public
+ * write() path (report() deliberately uses __plat_write()), so pulling in
+ * the complete signal-delivery and pthread substrate would test unrelated
+ * code.  Supply the two lock hooks resource.c needs, just as this pilot
+ * supplies only the other support needed by the loader under test. */
+void __sig_lock(void) { }
+void __sig_unlock(void) { }
+
 static size_t rawlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
 
 static void report(int ok, const char *msg)

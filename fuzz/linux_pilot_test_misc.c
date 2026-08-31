@@ -52,7 +52,7 @@
 
 extern long syscall(long number, ...);
 extern int printf(const char *, ...);
-extern void *memset(void *, int, unsigned long);
+extern void *memset(void *, int, size_t);
 extern int fflush(void *stream);
 
 /* __plat_terminate() (src/exit/linux/plat_exit.c) is a raw exit_group(2)

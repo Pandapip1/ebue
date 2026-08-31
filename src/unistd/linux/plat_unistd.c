@@ -241,7 +241,7 @@ long long __plat_time_now(void)
 	/* Raw kernel struct timespec: two `long`s on every 64-bit Linux
 	 * ABI (tv_sec, tv_nsec), unlike struct stat/sysinfo there is no
 	 * historical 32-bit padding tail to worry about. */
-	struct { long tv_sec; long tv_nsec; } ts;
+	struct { long tv_sec; long tv_nsec; } ts = {0, 0};
 	long long nt;
 	long ret = raw_syscall(SYS_clock_gettime, 0L /* CLOCK_REALTIME */, (long)&ts, 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) return __TICKS_1601_TO_1970; /* the epoch: never actually fails on Linux */
@@ -323,7 +323,7 @@ int __plat_fsync(__plat_handle_t h)
 
 int __plat_pipe(__plat_handle_t *rp, __plat_handle_t *wp, int inheritable)
 {
-	int fds[2];
+	int fds[2] = {-1, -1};
 	long ret = raw_syscall(SYS_pipe2, (long)fds, (long)(inheritable ? 0 : O_CLOEXEC), 0L, 0L, 0L, 0L);
 	if (is_sys_error(ret)) { errno = (int)-ret; return -1; }
 	*rp = (__plat_handle_t)(long)(fds[0] + 1);
