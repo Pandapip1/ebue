@@ -114,7 +114,7 @@
 /* Resolve the shell to run commands through, or 0 (errno set) if none
  * can be found.  See the header comment for why ComSpec, checked with
  * access() ourselves, comes first. */
-static char *find_shell(void)
+static char *find_shell(void) NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	const char *cs = getenv("ComSpec");
 	if (cs && *cs && access(cs, X_OK) == 0) {

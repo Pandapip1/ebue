@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-wchar_t *wcsdup(const wchar_t *s)
+wchar_t *wcsdup(const wchar_t *s) __NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	size_t n = (wcslen(s) + 1) * sizeof(wchar_t);
 	wchar_t *d = malloc(n);

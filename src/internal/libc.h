@@ -478,7 +478,7 @@ int __spawn(const char *path, char *const argv[], char *const envp[]);
  * before forwarding it as name; posix_spawn.c's/execute.c's own
  * argv[0]-derived strings, never NULL). */
 char *__find_program(const char *name, int use_path)
-    __attribute__((nonnull(1)));
+    __attribute__((nonnull(1))) NTLIBC_RETURNS_OWNERSHIP(malloc);
 int __is_program(const char *path);
 /* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the
  * mode attribute is used: ntlibc must not manufacture Linux UID/GID values.

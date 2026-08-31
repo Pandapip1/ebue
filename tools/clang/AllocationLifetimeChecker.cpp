@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
@@ -266,7 +267,7 @@ public:
         dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
     if (!Function)
       return;
-    ProgramStateRef State = C.getState();
+    llvm::SmallVector<ProgramStateRef, 4> States{C.getState()};
     bool Changed = false;
     for (const OwnershipAttr *Attribute : Function->specific_attrs<OwnershipAttr>()) {
       if (!Attribute->isTakes() || !familyOf(Attribute))
@@ -276,18 +277,32 @@ public:
           continue;
         const ParmVarDecl *Parameter =
             Function->getParamDecl(Index.getASTIndex());
-        SVal Value = State->getSVal(
-            State->getLValue(Parameter, C.getLocationContext()));
-        SymbolRef Symbol = Value.getAsLocSymbol(true);
-        if (!Symbol)
-          continue;
-        State = track(State, Symbol, nullptr, C.getStackFrame(),
-                      familyOf(Attribute), true);
-        Changed = true;
+        llvm::SmallVector<ProgramStateRef, 4> NextStates;
+        for (ProgramStateRef State : States) {
+          SVal Value = State->getSVal(
+              State->getLValue(Parameter, C.getLocationContext()));
+          SymbolRef Symbol = Value.getAsLocSymbol(true);
+          std::optional<DefinedOrUnknownSVal> Defined =
+              Value.getAs<DefinedOrUnknownSVal>();
+          if (!Symbol || !Defined) {
+            NextStates.push_back(State);
+            continue;
+          }
+          auto [NonNullState, NullState] = State->assume(*Defined);
+          if (NullState)
+            NextStates.push_back(NullState);
+          if (NonNullState)
+            NextStates.push_back(track(NonNullState, Symbol, nullptr,
+                                       C.getStackFrame(), familyOf(Attribute),
+                                       true));
+          Changed = true;
+        }
+        States = std::move(NextStates);
       }
     }
     if (Changed)
-      C.addTransition(State);
+      for (ProgramStateRef State : States)
+        C.addTransition(State);
   }
 
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
