@@ -590,13 +590,13 @@ static int set_list_variables(void)
 	char **e;
 
 	for (e = environ; e && *e; e++) {
-		const char *eq = strchr(*e, '=');
-		if (!eq) {
+		size_t name_length = strcspn(*e, "=");
+		if (!(*e)[name_length]) {
 			if (fputs(*e, stdout) < 0 || fputc('\n', stdout) == EOF) return -1;
 			continue;
 		}
-		if (fwrite(*e, 1, (size_t)(eq - *e), stdout) != (size_t)(eq - *e) ||
-		    fputc('=', stdout) == EOF || write_quoted(eq + 1) < 0 ||
+		if (fwrite(*e, 1, name_length, stdout) != name_length ||
+		    fputc('=', stdout) == EOF || write_quoted(*e + name_length + 1) < 0 ||
 		    fputc('\n', stdout) == EOF) return -1;
 	}
 	return fflush(stdout) == 0 ? 0 : -1;

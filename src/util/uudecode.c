@@ -90,9 +90,9 @@ static int decode_line(const char *prog, const char *line, unsigned n, FILE *out
 		}
 		{
 			int d1 = UUDEC(c1), d2 = UUDEC(c2), d3 = UUDEC(c3), d4 = UUDEC(c4);
-			outbuf[0] = (unsigned char)((d1 << 2) | (d2 >> 4));
-			outbuf[1] = (unsigned char)(((d2 & 0xf) << 4) | (d3 >> 2));
-			outbuf[2] = (unsigned char)(((d3 & 0x3) << 6) | d4);
+			outbuf[0] = (unsigned char)(((unsigned)d1 << 2) | (unsigned)d2 >> 4);
+			outbuf[1] = (unsigned char)(((unsigned)(d2 & 0xf) << 4) | (unsigned)d3 >> 2);
+			outbuf[2] = (unsigned char)(((unsigned)(d3 & 0x3) << 6) | (unsigned)d4);
 		}
 		take = n - written;
 		if (take > 3) take = 3;

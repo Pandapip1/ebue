@@ -49,6 +49,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include "util.h"
 
 static int od_output_failed;
@@ -81,6 +82,7 @@ static int parse_odnum(const char *s, long long *out)
 	errno = 0;
 	v = strtoll(buf, &end, 0); /* base 0: honors od's own 0x/0-prefix rules */
 	if (end == buf || *end || errno == ERANGE || v < 0) return -1;
+	if (v > LLONG_MAX / mult) return -1;
 	*out = v * mult;
 	return 0;
 }

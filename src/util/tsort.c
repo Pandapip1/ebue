@@ -48,7 +48,7 @@
 
 struct node {
 	char *name;
-	int indeg;
+	size_t indeg;
 	int *succ;
 	size_t nsucc, cap;
 	int done;

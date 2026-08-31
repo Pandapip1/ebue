@@ -15,7 +15,10 @@ struct tm *gmtime_r(const time_t *restrict tp, struct tm *restrict result)
 
 	if (rem < 0) { rem += 86400; days--; }
 	__civil_from_days(days, &y, &m, &d);
-	if (y - 1900 < INT_MIN || y - 1900 > INT_MAX) { errno = EOVERFLOW; return NULL; }
+	if (y < (long long)INT_MIN + 1900 || y > (long long)INT_MAX + 1900) {
+		errno = EOVERFLOW;
+		return NULL;
+	}
 
 	result->tm_year = (int)(y - 1900);
 	result->tm_mon = (int)m - 1;
