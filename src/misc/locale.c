@@ -102,7 +102,7 @@ static struct newlocale_result newlocale_compute(int mask, const char *name)
 	 * part of the contract a caller relies on to detect its own bad
 	 * argument. */
 	if (mask & ~LC_ALL_MASK) { r.err = EINVAL; return r; }
-	if (name && *name && strcmp(name, "C") && strcmp(name, "POSIX")) {
+	if (name && *name && strcmp(name, "C") && strcmp(name, "POSIX")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero from both calls intentionally means neither locale name matches
 		r.err = ENOENT;
 		return r;
 	}

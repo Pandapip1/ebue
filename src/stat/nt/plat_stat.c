@@ -67,7 +67,7 @@ int __plat_lxmod_get(__plat_handle_t h, unsigned *mode)
 	if (!NT_SUCCESS(st) || io.Information < LXMOD_EA_LEN ||
 	    ea->EaNameLength != LXMOD_NAME_LEN ||
 	    ea->EaValueLength != LXMOD_VALUE_LEN ||
-	    memcmp(ea->EaName, LXMOD_NAME, LXMOD_NAME_LEN))
+	    memcmp(ea->EaName, LXMOD_NAME, LXMOD_NAME_LEN)) // NOLINT(bugprone-suspicious-string-compare) -- any nonzero result intentionally rejects a mismatched EA name
 		return 0;
 	*mode = getle32((unsigned char *)ea->EaName + LXMOD_NAME_LEN + 1);
 	return 1;
