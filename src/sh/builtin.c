@@ -258,6 +258,59 @@ static int bi_touch(struct sh_builtin_ctx *ctx)
 	return 0;
 }
 
+/* ==== Tier 2: text I/O utilities =======================================
+ *
+ * cat(1p), echo(1p), tee(1p), wc(1p), head(1p), tail(1p) -- the first
+ * batch of the tier after the Tier-1 filesystem utilities above.  Same
+ * reasoning as every other batch in this file for staying registered
+ * here even though each also exists as a real standalone
+ * obj/bin/<name>.exe (src/util/<name>.c, declared in src/internal/
+ * util.h): a builtin runs in this process, unconditionally, without
+ * depending on __find_program()/__spawn() succeeding.  None of the six
+ * changes anything XCU 2.12 lists as part of the shell execution
+ * environment, so `env_effect` is 0 for all six below. */
+static int bi_cat(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_cat(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_cat_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_echo(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_echo(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_echo_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_tee(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tee(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tee_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_wc(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_wc(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_wc_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_head(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_head(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_head_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
+static int bi_tail(struct sh_builtin_ctx *ctx) __attribute__((nonnull(1)));
+static int bi_tail(struct sh_builtin_ctx *ctx)
+{
+	ctx->status = __util_tail_main(ctx->argc, ctx->argv);
+	return 0;
+}
+
 /* ==== the data-copying/reporting tier ===================================
  *
  * dd(1p), df(1p), du(1p), cksum(1p), uuencode(1p), uudecode(1p): same
@@ -657,6 +710,12 @@ static const struct sh_builtin builtins[] = {
 	{ "ln",     0, 0, bi_ln },
 	{ "chmod",  0, 0, bi_chmod },
 	{ "touch",  0, 0, bi_touch },
+	{ "cat",    0, 0, bi_cat },
+	{ "echo",   0, 0, bi_echo },
+	{ "tee",    0, 0, bi_tee },
+	{ "wc",     0, 0, bi_wc },
+	{ "head",   0, 0, bi_head },
+	{ "tail",   0, 0, bi_tail },
 	{ "dd",       0, 0, bi_dd },
 	{ "df",       0, 0, bi_df },
 	{ "du",       0, 0, bi_du },

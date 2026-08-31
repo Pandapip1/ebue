@@ -75,8 +75,23 @@ int __util_test_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_touch_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_true_main(int argc, char **argv) __attribute__((__pure__));
 
-/* Tier 2: the data-copying/reporting tier (dd(1p), df(1p), du(1p),
- * cksum(1p)) plus the two uuencoding utilities (uuencode(1p),
+/* Tier 2: text I/O utilities (XCU cat(1p), echo(1p), tee(1p), wc(1p),
+ * head(1p), tail(1p)) -- the first batch of the tier after Tier 1's
+ * pathname/filesystem utilities above.  Every one of these reads
+ * standard input, a file, or both and writes to standard output, so
+ * none is __pure__ the way true/false are; each still gets nonnull(2)
+ * for the same reason the Tier-1 filesystem utilities above do -- a
+ * real argv from a real caller is never NULL, and each formats argv[0]
+ * or an operand from argv into a diagnostic on at least one path. */
+int __util_cat_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_echo_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_head_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tail_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_tee_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_wc_main(int argc, char **argv) __attribute__((nonnull(2)));
+
+/* Tier 2 continued: the data-copying/reporting tier (dd(1p), df(1p),
+ * du(1p), cksum(1p)) plus the two uuencoding utilities (uuencode(1p),
  * uudecode(1p)) -- see each src/util/<name>.c for its own XCU citations
  * and documented scope narrowings (df's "no operands" case, dd's conv=
  * coverage, du's -r reading).  None is __pure__: dd/uuencode/uudecode
