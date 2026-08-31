@@ -321,10 +321,30 @@ WARN_FLAGS="-Wall -Wextra -Wno-unused-function \
 # against.  The two inputs total 8KB, so generating unconditionally and
 # comparing costs nothing measurable, and it keeps the temp-plus-`mv`
 # shape the concurrency note above depends on.
+#
+# The temp name itself has to be unique per concurrent caller, not merely
+# per top-level process.  Every stage in the dispatch loop below runs as
+# `( ... ) &` -- a background subshell of this same script -- and `$$`
+# names the *top-level* process in a subshell exactly as it does in its
+# parent; it does not pick up the subshell's own (different) pid. Two
+# stages that both want the same arch's header (nearly every stage does)
+# and land in here at close to the same moment used to compute the
+# identical "$dest.$$.tmp" path and then race each other's
+# `cat`/`cmp`/`mv`/`rm` of that one shared file: whichever lost found its
+# tmp already consumed by the winner and failed with "mv: cannot stat
+# ...: No such file or directory" -- confirmed by running two such
+# concurrent callers against the same arch outside this script and
+# watching that exact failure appear intermittently. `mktemp` asks the
+# kernel for a name nobody else, in this process or any other, can also
+# be holding; any name this script computed itself (bigger salt on `$$`,
+# a counter, ...) would just be a fancier way to land on the same
+# collision, since every caller is either literally the same top-level
+# pid (subshells) or would need its own source of the same uniqueness
+# `mktemp` already provides for free.
 gen_alltypes() {
 	dest=$builddir/$1/include/bits/alltypes.h
 	mkdir -p "$builddir/$1/include/bits" || return 1
-	tmp="$dest.$$.tmp"
+	tmp=$(mktemp "$dest.XXXXXX") || return 1
 	cat "arch/$1/bits/alltypes.h.gen" include/alltypes.h.gen > "$tmp" || {
 		rm -f "$tmp"; return 1
 	}
