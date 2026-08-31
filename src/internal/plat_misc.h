@@ -48,13 +48,20 @@ int __plat_process_alive(__plat_handle_t h);
  * [EPERM] iff the platform's own access check specifically refused
  * (STATUS_ACCESS_DENIED), [ESRCH] for every other failure (no such
  * pid). See this header's own banner for why that distinction cannot
- * wait until only errno is left to look at. */
-int __plat_process_open_checked(pid_t pid, __plat_handle_t *out);
+ * wait until only errno is left to look at. out required: both
+ * backends' shared static open_process() writes it unconditionally on
+ * the success path with no NULL check, and this function's one real
+ * call site (src/misc/sched.c) passes &process, never NULL. */
+int __plat_process_open_checked(pid_t pid, __plat_handle_t *out)
+    __attribute__((nonnull(2)));
 
 /* Open pid's process object the same way, for resource.c's
  * getpriority()/setpriority(), which report [ESRCH] for every failure
- * uniformly -- no distinction to make, no status to keep in hand. */
-int __plat_process_open(pid_t pid, __plat_handle_t *out);
+ * uniformly -- no distinction to make, no status to keep in hand. out
+ * required, same evidence as __plat_process_open_checked() above; both
+ * real call sites (src/misc/resource.c) pass &h, never NULL. */
+int __plat_process_open(pid_t pid, __plat_handle_t *out)
+    __attribute__((nonnull(2)));
 
 /* This process's own user/kernel CPU time, in 100ns units (NT's own
  * granularity for these fields, ProcessTimes' UserTime/KernelTime) --
@@ -62,14 +69,22 @@ int __plat_process_open(pid_t pid, __plat_handle_t *out);
  * want exactly this and convert it their own way afterward, which is
  * why the conversion itself stays in the front door: it is this
  * library's own choice of tick size, nothing NT-specific. 0/-1(errno)
- * via return. */
-int __plat_process_times_self(unsigned long long *user100ns, unsigned long long *kernel100ns);
+ * via return. Both outputs required: both backends write them
+ * unconditionally on the success path with no NULL check, and both
+ * real call sites (src/misc/resource.c, src/misc/times.c) pass
+ * &user100ns/&kernel100ns, never NULL. */
+int __plat_process_times_self(unsigned long long *user100ns, unsigned long long *kernel100ns)
+    __attribute__((nonnull(1, 2)));
 
 /* `h`'s base priority, converted to a nice value by this library's own
  * nice<->NT-base-priority mapping (include/sys/resource.h has the full
  * writeup and the round-trip argument) -- getpriority()'s half.
- * 0/-1(errno) via return, *nice_out set on success. */
-int __plat_priority_get(__plat_handle_t h, int *nice_out);
+ * 0/-1(errno) via return, *nice_out set on success. nice_out required:
+ * both backends write it unconditionally on the success path with no
+ * NULL check, and the one real call site (src/misc/resource.c) passes
+ * &nice_value, never NULL. */
+int __plat_priority_get(__plat_handle_t h, int *nice_out)
+    __attribute__((nonnull(2)));
 
 /* Set `h`'s priority class, derived from `nice_value` by the same
  * mapping's other half (see include/sys/resource.h for why the finer-
@@ -97,8 +112,14 @@ int __plat_priority_set_self(int foreground, int nice_value);
  * __fsize_clamp()/fsize_start() (resource.c) just treat "cannot answer"
  * as "no limit applies" and carry on. Setting errno here would leave a
  * stray value behind a write() call that itself goes on to succeed.
- * 0/-1 via return (errno untouched either way); *out set only on 0. */
-int __plat_write_start_offset(__plat_handle_t h, int append, long long *out);
+ * 0/-1 via return (errno untouched either way); *out set only on 0.
+ * out required: both backends write it unconditionally on the success
+ * path with no NULL check, and the one real call site
+ * (src/misc/resource.c's fsize_start(), itself now required the same
+ * way -- forwarded straight through with no guard of its own) passes
+ * &off, never NULL. */
+int __plat_write_start_offset(__plat_handle_t h, int append, long long *out)
+    __attribute__((nonnull(3)));
 
 /* Best-effort push of the current NPROC/CPU/AS/DATA soft limits onto a
  * lazily-created job object this process assigns itself to the first

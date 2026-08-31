@@ -122,7 +122,9 @@ char *getlogin(void);
 int getlogin_r(char *, size_t);
 int gethostname(char *, size_t);
 
-int getopt(int, char * const [], const char *);
+/* Same evidence as the identical declaration in include/getopt.h --
+ * see that comment. */
+int getopt(int, char * const [], const char *) __attribute__((nonnull(2, 3)));
 extern char *optarg;
 extern int optind, opterr, optopt;
 

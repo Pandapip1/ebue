@@ -20,6 +20,11 @@ void __plat_yield(void)
 	NtYieldExecution();
 }
 
+/* out required: written unconditionally (`*out = h;`) on the success
+ * path with no NULL check; both real callers below forward their own
+ * now-required out with no guard of their own. */
+static int open_process(pid_t pid, ACCESS_MASK want, __plat_handle_t *out)
+    __attribute__((nonnull(3)));
 static int open_process(pid_t pid, ACCESS_MASK want, __plat_handle_t *out)
 {
 	OBJECT_ATTRIBUTES oa;

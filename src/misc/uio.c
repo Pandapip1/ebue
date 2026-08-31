@@ -86,6 +86,15 @@
  * sit on the stack of a 32-bit process without thought. */
 #define GATHER_STACK 2048
 
+/* total required: `*total = sum;` is unconditional on the success
+ * path with no guard, and both real call sites (readv()/writev()
+ * below) pass &total, never NULL. iov is deliberately NOT marked --
+ * `if (!iov) { errno = EFAULT; return -1; }` right below is a real,
+ * live guard, not decoration: readv()/writev() forward their own iov
+ * here unchecked, so this is where a caller-supplied NULL is actually
+ * caught. */
+static int check_iov(const struct iovec *iov, int iovcnt, size_t *total)
+    __attribute__((nonnull(3)));
 static int check_iov(const struct iovec *iov, int iovcnt, size_t *total)
 {
 	size_t sum = 0;
@@ -105,6 +114,13 @@ static int check_iov(const struct iovec *iov, int iovcnt, size_t *total)
 /* The index of the only area with a non-zero length, or -1 if several
  * carry data.  Called only when the total is non-zero, so a return of
  * -1 really does mean "more than one" and never "none". */
+/* iov required: `iov[i].iov_len` is dereferenced unconditionally
+ * whenever iovcnt > 0, with no guard of its own -- but both real call
+ * sites (readv()/writev() below) reach this only after their own
+ * check_iov(iov, ...) call has already returned successfully, which
+ * means check_iov()'s own `if (!iov) return -1;` has already ruled
+ * out NULL on this exact path. */
+static int sole_area(const struct iovec *iov, int iovcnt) __attribute__((nonnull(1)));
 static int sole_area(const struct iovec *iov, int iovcnt)
 {
 	int i, found = -1;
@@ -120,6 +136,11 @@ static int sole_area(const struct iovec *iov, int iovcnt)
 /* The pre-2.9.7 loop, kept for the one path that cannot gather: a
  * vector too large for the stack buffer whose allocation failed.  It
  * is correct in every respect except atomicity. */
+/* iov required, same evidence as sole_area() above -- its one real
+ * call site (readv() below) reaches it only after check_iov()'s own
+ * NULL check has already passed on this exact iov. */
+static ssize_t readv_looped(int fd, const struct iovec *iov, int iovcnt)
+    __attribute__((nonnull(2)));
 static ssize_t readv_looped(int fd, const struct iovec *iov, int iovcnt)
 {
 	ssize_t total = 0;
@@ -136,6 +157,9 @@ static ssize_t readv_looped(int fd, const struct iovec *iov, int iovcnt)
 	return total;
 }
 
+/* iov required, same evidence as readv_looped() above. */
+static ssize_t writev_looped(int fd, const struct iovec *iov, int iovcnt)
+    __attribute__((nonnull(2)));
 static ssize_t writev_looped(int fd, const struct iovec *iov, int iovcnt)
 {
 	ssize_t total = 0;

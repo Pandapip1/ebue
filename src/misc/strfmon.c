@@ -104,6 +104,13 @@ struct out {
 	size_t written;
 };
 
+/* o/t both required: o->left is dereferenced unconditionally at
+ * entry with no guard, and t flows into memcpy() unconditionally --
+ * this tree's own established mem/str doctrine (242ed40) treats that
+ * as a genuine use regardless of length. Every real call site passes
+ * &o (a stack local, never NULL) and either fmt (proven live by the
+ * `while (*fmt)` loop that reached it) or field (a stack array). */
+static int put(struct out *o, const char *t, size_t l) __attribute__((nonnull(1, 2)));
 static int put(struct out *o, const char *t, size_t l)
 {
 	if (l > o->left) return -1;
@@ -114,6 +121,8 @@ static int put(struct out *o, const char *t, size_t l)
 	return 0;
 }
 
+/* o required, same as put() above. */
+static int putc_n(struct out *o, char c, size_t n) __attribute__((nonnull(1)));
 static int putc_n(struct out *o, char c, size_t n)
 {
 	if (n > o->left) return -1;
@@ -124,7 +133,13 @@ static int putc_n(struct out *o, char c, size_t n)
 	return 0;
 }
 
-/* Append to the field buffer, refusing to overflow it. */
+/* Append to the field buffer, refusing to overflow it. f/fl/t all
+ * required: *fl is dereferenced unconditionally at entry with no
+ * guard, and f/t both flow into memcpy() unconditionally, same
+ * doctrine as put() above. Every real call site passes field (a
+ * stack array) and &fl (a stack local). */
+static int fappend(char *f, size_t *fl, const char *t, size_t l)
+    __attribute__((nonnull(1, 2, 3)));
 static int fappend(char *f, size_t *fl, const char *t, size_t l)
 {
 	if (l > FIELD_MAX - *fl) return -1;
@@ -133,6 +148,16 @@ static int fappend(char *f, size_t *fl, const char *t, size_t l)
 	return 0;
 }
 
+/* fmt required: dereferenced unconditionally at `while (*fmt)`, no
+ * guard, and every real caller (strfmon()/strfmon_l() below) forwards
+ * its own fmt unchecked. s is deliberately NOT marked: with maxsize
+ * == 0 this returns E2BIG before ever touching s (`if (maxsize == 0)
+ * ...; o.p = s;`), so a NULL s genuinely does not crash on that one
+ * path -- an artifact of the E2BIG check rather than a documented
+ * "s is optional" contract, but not something `nonnull` may
+ * overstate either way. */
+static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
+    __attribute__((nonnull(3)));
 static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 {
 	struct lconv *lc = localeconv();

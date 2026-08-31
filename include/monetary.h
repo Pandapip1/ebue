@@ -37,9 +37,15 @@ extern "C" {
 
 #include <bits/alltypes.h>
 
-ssize_t strfmon(char *__restrict, size_t, const char *__restrict, ...);
+/* fmt required -- forwarded, unguarded, into the static vstrfmon() in
+ * src/misc/strfmon.c, itself required at its own now-explicit
+ * contract (dereferenced unconditionally by the format-scan loop). s
+ * is deliberately NOT marked; see the vstrfmon() comment for the one
+ * real (if incidental) path where a NULL s does not crash. */
+ssize_t strfmon(char *__restrict, size_t, const char *__restrict, ...)
+    __attribute__((nonnull(3)));
 ssize_t strfmon_l(char *__restrict, size_t, locale_t,
-                  const char *__restrict, ...);
+                  const char *__restrict, ...) __attribute__((nonnull(4)));
 
 #ifdef __cplusplus
 }

@@ -90,7 +90,20 @@ static const char *current_name(void)
  * (treated as "not found" by every caller), or ERANGE if buf is too
  * small -- in which case *needp is set to the size that would do.  Never touches the global errno -- callers decide, per
  * function, whether that return travels through errno (getpwnam(),
- * getpwuid()) or is returned directly (the _r variants). */
+ * getpwuid()) or is returned directly (the _r variants). pw is
+ * required: `pw->pw_name = buf;` and friends are unconditional once
+ * name is known and bufsz suffices, with no NULL check of pw itself
+ * anywhere in this function, and every real caller (fill_shared()'s
+ * &g_pw, getpwnam_r()/getpwuid_r()'s own forwarded pwd, itself now
+ * required at those two functions' own contract) passes a real
+ * struct. buf is deliberately NOT marked -- `if (need > bufsz)
+ * return ERANGE;` guards every dereference of it, and a caller
+ * genuinely may pass NULL together with bufsz == 0 (getpwnam_r()/
+ * getpwuid_r()'s own contract), which this correctly answers ERANGE
+ * for rather than crashing on. needp is left unmarked too, guarded by
+ * its own `if (needp)`. */
+static int fill_current(struct passwd *pw, char *buf, size_t bufsz, size_t *needp)
+    __attribute__((nonnull(1)));
 static int fill_current(struct passwd *pw, char *buf, size_t bufsz, size_t *needp)
 {
 	const char *name = current_name();

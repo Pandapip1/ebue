@@ -82,7 +82,21 @@ static const char *current_name(void)
  * (gr_mem[0] aliases the same stored name; gr_mem is not a second
  * copy).  Returns 1 on success, 0 if the name is unknowable (treated
  * as "not found" by every caller), or ERANGE if buf is too small --
- * in which case *needp is set to the size that would do. */
+ * in which case *needp is set to the size that would do.
+ *
+ * gr/mem both required: `gr->gr_name = buf;` and `mem[0] = buf;` are
+ * unconditional once name is known and bufsz suffices, neither
+ * guarded by a NULL check of its own pointer, and every real caller
+ * (fill_shared()'s &g_gr/g_grmem, fill_current_r()'s own forwarded
+ * gr/mem, getgrnam_r()/getgrgid_r()'s own forwarded grp, itself now
+ * required at those two functions' own contract) passes a real
+ * struct/array. buf is deliberately NOT marked, same reasoning as
+ * src/misc/pwd.c's identical fill_current(): `if (nl > bufsz) return
+ * ERANGE;` guards it, and a real caller may pass NULL together with
+ * bufsz == 0. needp is left unmarked too, guarded by its own
+ * `if (needp)`. */
+static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, size_t *needp)
+    __attribute__((nonnull(1, 2)));
 static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, size_t *needp)
 {
 	const char *name = current_name();
@@ -109,7 +123,16 @@ static int fill_current(struct group *gr, char **mem, char *buf, size_t bufsz, s
  * char[] buffer carries no alignment guarantee beyond char, and
  * mem[0]/mem[1] are accessed as char* here, so an unaligned store into
  * them is exactly the kind of thing UBSan's alignment check exists to
- * catch), then the two pointers, then the name after that. */
+ * catch), then the two pointers, then the name after that.
+ *
+ * gr required: forwarded, unguarded, into fill_current()'s own
+ * required gr above -- the readdir_r-forwarding shape again. buf is
+ * NOT required despite the `(uintptr_t)buf % sizeof(char *)`
+ * computation just below: that is pointer arithmetic, not a
+ * dereference, and buf is subsequently forwarded into fill_current()'s
+ * own (deliberately unmarked) buf. */
+static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
+    __attribute__((nonnull(1)));
 static int fill_current_r(struct group *gr, char *buf, size_t bufsz)
 {
 	size_t pad, need;

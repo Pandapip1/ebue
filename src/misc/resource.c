@@ -195,6 +195,11 @@ int __fsize_limited(void)
 /* The offset a write on this handle will start at.  `append` selects the
  * end of the file rather than the current position, matching what
  * NtWriteFile does for FILE_WRITE_TO_END_OF_FILE. */
+/* out forwarded, unguarded, into the now-required
+ * __plat_write_start_offset(); its one real call site below passes
+ * &off, never NULL. */
+static int fsize_start(__plat_handle_t h, int append, long long *out)
+    __attribute__((nonnull(3)));
 static int fsize_start(__plat_handle_t h, int append, long long *out)
 {
 	return __plat_write_start_offset(h, append, out);

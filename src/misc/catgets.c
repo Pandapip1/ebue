@@ -95,7 +95,14 @@
 #define CAT_HDRSZ 20
 #define CAT_RECSZ 12
 
-/* A catalogue is a naked block of bytes; nl_catd is the block. */
+/* A catalogue is a naked block of bytes; nl_catd is the block. p is
+ * required: dereferenced unconditionally (p[0..3]) with no guard of
+ * its own. Every real call site in this file passes a pointer already
+ * proven nonnull by its own caller before V() is ever reached --
+ * catgets()'s own m, checked by a real `if (!m || m == -1) ...`
+ * BEFORE any V(m+...) call; check_catalog()'s own m, itself required
+ * below and always catopen()'s just-null-checked malloc() result. */
+static uint32_t V(const unsigned char *p) __attribute__((nonnull(1)));
 static uint32_t V(const unsigned char *p)
 {
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
@@ -103,7 +110,12 @@ static uint32_t V(const unsigned char *p)
 }
 
 /* Range-check the whole structure once, so catgets() can walk it
- * without a bounds test on every step.  Returns 1 if usable. */
+ * without a bounds test on every step.  Returns 1 if usable. m is
+ * required: V(m)/m[size - 1] are unconditional on real, reachable
+ * paths with no NULL check, and its one real call site (catopen())
+ * passes buf, already checked non-NULL right after its own malloc(). */
+static int check_catalog(const unsigned char *m, size_t size)
+    __attribute__((nonnull(1)));
 static int check_catalog(const unsigned char *m, size_t size)
 {
 	uint32_t nsets, msgoff, stroff, body;
