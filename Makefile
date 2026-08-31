@@ -540,6 +540,12 @@ obj/test/sh-main.exe: $(SH_EXE)
 # all four need to exist first.
 obj/test/util-trivial.exe: obj/bin/true.exe obj/bin/false.exe obj/bin/test.exe $(SH_EXE)
 
+# test/util-fileops.c is the same idea, one tier up: rm/cp/mv actually
+# touch the filesystem, so it spawns obj/bin/rm.exe, obj/bin/cp.exe and
+# obj/bin/mv.exe (plus obj/sh/sh.exe for the builtin-agreement checks)
+# as real processes and needs all four to exist first.
+obj/test/util-fileops.exe: obj/bin/rm.exe obj/bin/cp.exe obj/bin/mv.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and

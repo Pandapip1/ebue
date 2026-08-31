@@ -1,0 +1,401 @@
+/* SPDX-FileCopyrightText: (C) 2026 Gavin John
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * cp(1p). Three SYNOPSIS forms are implemented:
+ *   cp [-f] source_file target_file
+ *   cp [-f] source_file... target_dir
+ *   cp -R [-f] source_file... target
+ *
+ * Single-file form: "cp shall copy the contents of source_file (or, if
+ * source_file is a file of type symbolic link, the contents of the file
+ * referenced by source_file) to the destination path named by
+ * target_file" -- so the source operand is looked up with stat(), not
+ * lstat(): a symlink source is followed and its *referent's* bytes
+ * become a new, ordinary file at the destination.  That is deliberately
+ * different from -R's behaviour on a symlink found *inside* a tree
+ * (see below).
+ *
+ * target_dir form ("source_file... target", target an existing
+ * directory): each destination path is "the concatenation of target, a
+ * single <slash> character if target did not end in a <slash>, and the
+ * last component of source_file" -- __util_join_basename() (shared with
+ * src/util/mv.c's identical construction).
+ *
+ * -R form: recursive tree copy via nftw() (src/ftw/ftw.c), FTW_PHYS so
+ * a symbolic link inside the tree is reported as itself (FTW_SL) and
+ * not followed, and *without* FTW_DEPTH so a directory is reported
+ * before its contents -- required here, since the destination directory
+ * has to exist before anything can be written into it.
+ *
+ * Deliberately out of scope, and refused loudly rather than silently
+ * ignored (same "refuse unsupported options" reasoning as
+ * src/sh/builtin.c's bi_set(), and src/util/rm.c's -i):
+ *   -i  interactive overwrite confirmation -- no terminal-interaction
+ *       story exists at this layer yet.
+ *   -p  preserve mode/ownership/timestamps -- not implemented; every
+ *       file this utility creates gets the platform's ordinary default
+ *       create mode (0666, masked by umask -- see open()'s own umask
+ *       handling), and every directory it creates gets 0777 likewise,
+ *       regardless of the source's actual mode.  A silent partial -p
+ *       (say, timestamps but not owner) would be a worse lie than an
+ *       outright refusal.
+ *   -H/-L/-P  control which symbolic links named *on the command line*
+ *       (as opposed to inside a recursively-copied tree) are followed;
+ *       not implemented, refused rather than guessed at.
+ *
+ * A symbolic link encountered *inside* a -R tree (as opposed to as a
+ * top-level operand) is refused per-entry with a diagnostic rather than
+ * silently skipped or silently dereferenced: cp(1p)'s exact behaviour
+ * there depends on -H/-L/-P, none of which this build implements, and
+ * guessing which one to emulate is exactly the "never guess when an
+ * operation's real effect is ambiguous" case this project's utilities
+ * keep refusing instead of getting quietly wrong.  Likewise FIFOs,
+ * device nodes and sockets encountered in a tree: cp(1p) allows
+ * recreating them "as implementation-defined", which this build declines
+ * to attempt at all rather than inventing a policy the standard leaves
+ * unspecified.
+ *
+ * cp(1p): "If source_file references the same file as dest_file, cp may
+ * write a diagnostic message ... and shall do nothing more with
+ * source_file."  This build takes that option: opening the destination
+ * for writing before finishing the read would truncate the source out
+ * from under itself if the two names refer to one file (st_dev/st_ino
+ * match), so it is refused up front rather than risked.
+ *
+ * __util_copy_tree()'s path_is_under_or_same() also refuses copying a
+ * directory into its own subtree (`cp -R foo foo/sub`) -- see that
+ * function's own comment for the unbounded-growth hazard it closes and
+ * the real limits of a purely textual check.
+ */
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <ftw.h>
+#include <libgen.h>
+#include "util.h"
+
+/* ==== single regular file: open/read/write loop ======================== */
+
+/* Copies one regular file's bytes from `src` to `dst` (creating or
+ * truncating `dst`).  Shared by the single-file form, by -R's per-file
+ * tree-walk callback below, and by src/util/mv.c's cross-filesystem
+ * fallback. `force` is -f's cp(1p) meaning: "If a file descriptor for
+ * dest_file cannot be obtained ... attempt to unlink dest_file and
+ * proceed" -- retried once, on the destination *open* failing, not on
+ * any later error. */
+int __util_copy_regular_file(const char *src, const char *dst, int force)
+{
+	int in, out;
+	char buf[65536];
+	ssize_t n;
+
+	in = open(src, O_RDONLY);
+	if (in < 0) {
+		fprintf(stderr, "cp: cannot open '%s' for reading: %s\n", src, strerror(errno));
+		return -1;
+	}
+
+	out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	if (out < 0 && force) {
+		unlink(dst);
+		out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	}
+	if (out < 0) {
+		fprintf(stderr, "cp: cannot create '%s': %s\n", dst, strerror(errno));
+		close(in);
+		return -1;
+	}
+
+	while ((n = read(in, buf, sizeof buf)) > 0) {
+		char *p = buf;
+		while (n > 0) {
+			ssize_t w = write(out, p, (size_t)n);
+			if (w < 0) {
+				fprintf(stderr, "cp: error writing to '%s': %s\n", dst, strerror(errno));
+				close(in);
+				close(out);
+				return -1;
+			}
+			p += w;
+			n -= w;
+		}
+	}
+	if (n < 0) {
+		fprintf(stderr, "cp: error reading '%s': %s\n", src, strerror(errno));
+		close(in);
+		close(out);
+		return -1;
+	}
+	close(in);
+	if (close(out) < 0) {
+		fprintf(stderr, "cp: error closing '%s': %s\n", dst, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+/* ==== -R: a whole directory tree ======================================== */
+
+/* See src/util/rm.c's header for why this state is file-scope rather
+ * than threaded through nftw()'s callback: the same argument applies
+ * here verbatim (one synchronous nftw() call per __util_copy_tree(),
+ * nothing re-entrant). */
+static const char *cpt_src_root;
+static size_t cpt_src_root_len;
+static const char *cpt_dst_root;
+static int cpt_force;
+static int cpt_tree_failed;
+
+/* `srcpath` is always cpt_src_root itself, or cpt_src_root followed by
+ * "/" and more path -- nftw() builds every path it reports by
+ * appending "/name" to its parent, starting from the root it was
+ * given, so this is guaranteed rather than merely assumed.  Returns a
+ * freshly malloc'd string, or NULL (errno ENOMEM) on allocation
+ * failure. */
+static char *cpt_dst_path(const char *srcpath)
+{
+	const char *rel = srcpath + cpt_src_root_len;
+	size_t dstlen = strlen(cpt_dst_root);
+	char *out;
+
+	while (*rel == '/' || *rel == '\\') rel++;
+	if (!*rel) return strdup(cpt_dst_root);
+
+	out = malloc(dstlen + 1 + strlen(rel) + 1);
+	if (!out) { errno = ENOMEM; return NULL; }
+	sprintf(out, "%s/%s", cpt_dst_root, rel);
+	return out;
+}
+
+static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW *ftwbuf)
+{
+	char *dstpath;
+
+	(void)ftwbuf;
+	dstpath = cpt_dst_path(path);
+	if (!dstpath) {
+		fprintf(stderr, "cp: %s: %s\n", path, strerror(ENOMEM));
+		cpt_tree_failed = 1;
+		return 0;
+	}
+
+	switch (type) {
+	case FTW_D: {
+		struct stat existing;
+		if (mkdir(dstpath, 0777) < 0 &&
+		    !(errno == EEXIST && stat(dstpath, &existing) == 0 && S_ISDIR(existing.st_mode))) {
+			fprintf(stderr, "cp: cannot create directory '%s': %s\n", dstpath, strerror(errno));
+			cpt_tree_failed = 1;
+		}
+		break;
+	}
+	case FTW_F:
+		if (__util_copy_regular_file(path, dstpath, cpt_force) < 0) cpt_tree_failed = 1;
+		break;
+	case FTW_SL:
+		/* See this file's header: which of -H/-L/-P to emulate for
+		 * a link found mid-tree is genuinely ambiguous, and none of
+		 * the three is implemented, so this is refused rather than
+		 * guessed. */
+		fprintf(stderr, "cp: '%s': copying a symbolic link inside a directory "
+		                "tree is not supported by this build\n", path);
+		cpt_tree_failed = 1;
+		break;
+	case FTW_DNR:
+		fprintf(stderr, "cp: cannot read directory '%s': %s\n", path, strerror(errno));
+		cpt_tree_failed = 1;
+		break;
+	case FTW_NS:
+		fprintf(stderr, "cp: cannot stat '%s': %s\n", path, strerror(errno));
+		cpt_tree_failed = 1;
+		break;
+	default:
+		/* FTW_DP never occurs: __util_copy_tree() does not pass
+		 * FTW_DEPTH, so directories are reported once, pre-order,
+		 * as FTW_D above. Anything else nftw() might one day report
+		 * is a file type this build has no policy for -- see this
+		 * file's header on FIFOs/devices/sockets. */
+		fprintf(stderr, "cp: '%s': not a regular file, directory or symbolic "
+		                "link -- not supported by this build\n", path);
+		cpt_tree_failed = 1;
+		break;
+	}
+
+	(void)st;
+	free(dstpath);
+	return 0;
+}
+
+/* A best-effort, purely textual guard against the classic "copy a
+ * directory into its own subtree" hazard: `cp -R foo foo/sub` (or
+ * `cp -R foo foo` itself). Without it, nftw() creating a *destination*
+ * entry underneath the very tree it is still reading the *source* from
+ * risks that entry becoming visible to a not-yet-consumed readdir() on
+ * an ancestor still open in the walk -- POSIX leaves "is an entry added
+ * during a readdir() scan of its directory returned by a later
+ * readdir() on that scan" unspecified, so this can, platform-dependently,
+ * make the walk re-descend into what it just created and grow without
+ * bound until the disk fills. This does not resolve symlinks, "..", or
+ * two differently-spelled paths that name the same place -- only a
+ * literal (case-insensitive, since NT pathnames are) prefix compare of
+ * the two operands exactly as given. That is a real, stated gap, not a
+ * silent guarantee: it catches the direct and by far the most likely
+ * accidental case rather than every disguised one. */
+static int path_is_under_or_same(const char *child, const char *parent)
+{
+	size_t plen = strlen(parent);
+	size_t i;
+
+	for (i = 0; i < plen; i++) {
+		char a = child[i], b = parent[i];
+		if (a >= 'A' && a <= 'Z') a += 32;
+		if (b >= 'A' && b <= 'Z') b += 32;
+		if (a == '\\') a = '/';
+		if (b == '\\') b = '/';
+		if (a != b) return 0;
+	}
+	return child[plen] == 0 || child[plen] == '/' || child[plen] == '\\';
+}
+
+/* Recursively copies the tree rooted at `src` to `dst` (which becomes
+ * the copy's own root -- callers that need "into an existing directory"
+ * semantics build that destination with __util_join_basename() first,
+ * exactly as __util_cp_main() and src/util/mv.c do).  Returns 0 if
+ * every entry was copied, -1 (diagnostics already written) otherwise. */
+int __util_copy_tree(const char *src, const char *dst, int force)
+{
+	if (path_is_under_or_same(dst, src)) {
+		fprintf(stderr, "cp: cannot copy '%s' into itself, '%s'\n", src, dst);
+		return -1;
+	}
+
+	cpt_src_root = src;
+	cpt_src_root_len = strlen(src);
+	cpt_dst_root = dst;
+	cpt_force = force;
+	cpt_tree_failed = 0;
+
+	if (nftw(src, cpt_cb, 15, FTW_PHYS) < 0) {
+		fprintf(stderr, "cp: cannot copy '%s': %s\n", src, strerror(errno));
+		return -1;
+	}
+	return cpt_tree_failed ? -1 : 0;
+}
+
+/* ==== "target/basename(source)", shared with src/util/mv.c ============= */
+
+char *__util_join_basename(const char *dir, const char *src)
+{
+	char *srccopy = strdup(src);
+	char *base, *out;
+	size_t dirlen, need;
+	int need_slash;
+
+	if (!srccopy) return NULL;
+	base = basename(srccopy);   /* libgen.h; may write into srccopy */
+	dirlen = strlen(dir);
+	need_slash = dirlen > 0 && dir[dirlen - 1] != '/' && dir[dirlen - 1] != '\\';
+
+	need = dirlen + (need_slash ? 1 : 0) + strlen(base) + 1;
+	out = malloc(need);
+	if (out) sprintf(out, need_slash ? "%s/%s" : "%s%s", dir, base);
+	free(srccopy);
+	return out;
+}
+
+/* ==== dispatch: one operand ============================================= */
+
+static int cp_one(const char *src, const char *dst, int recursive, int force)
+{
+	struct stat sst, dst_st;
+
+	if (stat(src, &sst) < 0) {
+		fprintf(stderr, "cp: cannot stat '%s': %s\n", src, strerror(errno));
+		return -1;
+	}
+
+	if (stat(dst, &dst_st) == 0 && dst_st.st_dev == sst.st_dev && dst_st.st_ino == sst.st_ino) {
+		fprintf(stderr, "cp: '%s' and '%s' are the same file\n", src, dst);
+		return -1;
+	}
+
+	if (S_ISDIR(sst.st_mode)) {
+		if (!recursive) {
+			fprintf(stderr, "cp: -R not specified; omitting directory '%s'\n", src);
+			return -1;
+		}
+		return __util_copy_tree(src, dst, force);
+	}
+	return __util_copy_regular_file(src, dst, force);
+}
+
+int __util_cp_main(int argc, char **argv)
+{
+	int recursive = 0, force = 0;
+	int i = 1;
+	int nsrc, had_error = 0;
+	const char *target;
+	struct stat tst;
+	int target_is_dir;
+
+	for (; i < argc; i++) {
+		char *a = argv[i];
+		char *p;
+
+		if (a[0] != '-' || a[1] == 0) break;
+		if (!strcmp(a, "--")) { i++; break; }
+
+		for (p = a + 1; *p; p++) {
+			if (*p == 'r' || *p == 'R') { recursive = 1; continue; }
+			if (*p == 'f') { force = 1; continue; }
+			if (*p == 'i' || *p == 'p' || *p == 'H' || *p == 'L' || *p == 'P') {
+				fprintf(stderr, "cp: -%c: not supported by this build; "
+				                "refusing rather than silently ignoring it "
+				                "(see src/util/cp.c)\n", *p);
+				return 2;
+			}
+			fprintf(stderr, "cp: invalid option -- '%c'\n", *p);
+			return 2;
+		}
+	}
+
+	nsrc = argc - 1 - i;
+	if (nsrc < 1) {
+		fprintf(stderr, "cp: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
+		return 2;
+	}
+
+	target = argv[argc - 1];
+	target_is_dir = stat(target, &tst) == 0 && S_ISDIR(tst.st_mode);
+
+	if (nsrc > 1 && !target_is_dir) {
+		/* cp(1p) OPERANDS: "It shall be an error if ... target does
+		 * not name a directory" once more than one source_file is
+		 * given. */
+		fprintf(stderr, "cp: target '%s' is not a directory\n", target);
+		return 2;
+	}
+
+	for (; i < argc - 1; i++) {
+		const char *src = argv[i];
+
+		if (target_is_dir) {
+			char *dst = __util_join_basename(target, src);
+			if (!dst) {
+				fprintf(stderr, "cp: %s: %s\n", src, strerror(ENOMEM));
+				had_error = 1;
+				continue;
+			}
+			if (cp_one(src, dst, recursive, force) < 0) had_error = 1;
+			free(dst);
+		} else {
+			if (cp_one(src, target, recursive, force) < 0) had_error = 1;
+		}
+	}
+
+	return had_error ? 1 : 0;
+}

@@ -26,12 +26,38 @@
 #ifndef _NTLIBC_UTIL_H
 #define _NTLIBC_UTIL_H
 
+/* rm(1p), cp(1p) and mv(1p) do real, potentially destructive filesystem
+ * work, so none of them are __pure__ -- unlike true/false below, or
+ * test(1p) which never affects the filesystem it inspects. */
+int __util_cp_main(int argc, char **argv) __attribute__((nonnull(2)));
 /* Both ignore their arguments entirely and return a fixed status, so
  * both are genuinely side-effect-free regardless of what is passed --
  * pure in the strict __attribute__ sense, not just in the true(1p)/
  * false(1p) naming sense. */
-int __util_true_main(int argc, char **argv) __attribute__((__pure__));
 int __util_false_main(int argc, char **argv) __attribute__((__pure__));
+int __util_mv_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_rm_main(int argc, char **argv) __attribute__((nonnull(2)));
 int __util_test_main(int argc, char **argv) __attribute__((nonnull(2)));
+int __util_true_main(int argc, char **argv) __attribute__((__pure__));
+
+/* ---- plumbing shared between src/util/cp.c, src/util/mv.c and
+ * src/util/rm.c -----------------------------------------------------
+ *
+ * mv(1p)'s cross-filesystem fallback (rename() failing EXDEV) is a
+ * copy-then-remove-source, so it needs cp's file/tree copy and rm's
+ * tree removal; cp's own target_dir form and mv's target_dir form need
+ * the identical "target/basename(source)" path construction.  Declared
+ * here rather than duplicated three times or left static-and-copied,
+ * per this project's "genuine duplication is worth avoiding" rule.
+ *
+ * `force`, where present, is -f's meaning in cp(1p): "If a file
+ * descriptor for dest_file cannot be obtained ... unlink dest_file and
+ * proceed" -- retry once after unlinking the destination rather than
+ * failing outright.  None of the four are __pure__: all touch the
+ * filesystem. */
+int __util_copy_regular_file(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
+int __util_copy_tree(const char *src, const char *dst, int force) __attribute__((nonnull(1, 2)));
+int __util_remove_tree(const char *path) __attribute__((nonnull(1)));
+char *__util_join_basename(const char *dir, const char *src) __attribute__((nonnull(1, 2)));
 
 #endif
