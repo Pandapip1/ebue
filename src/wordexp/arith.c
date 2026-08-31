@@ -148,11 +148,18 @@ struct arith {
 	int live;	/* 0 inside a short-circuited/untaken branch: parse, don't evaluate */
 };
 
+/* a is required throughout this whole file's recursive-descent chain:
+ * every arith_*()/fail()/skip_ws()/read_var()/assign_var() below is
+ * only ever reached forwarding the same pointer __wordexp_arith()
+ * seeds from its own `struct arith a;` local, and none of them
+ * defensively checks it before touching a->p/a->err/a->live/a->flags. */
+static void fail(struct arith *a, int code) __attribute__((nonnull(1)));
 static void fail(struct arith *a, int code)
 {
 	if (a->live && !a->err) a->err = code;
 }
 
+static void skip_ws(struct arith *a) __attribute__((nonnull(1)));
 static void skip_ws(struct arith *a)
 {
 	while (*a->p == ' ' || *a->p == '\t' || *a->p == '\n') a->p++;
@@ -165,6 +172,11 @@ static int is_namechar(char c) { return isalnum((unsigned char)c) || c == '_'; }
  * at least 256 bytes); advances *pp past it. Returns 1 on success, 0 if
  * the name is too long to fit (a WRDE_SYNTAX condition, matching
  * expand_param()'s same-sized buffer in wordexp.c). */
+/* pp is dereferenced unconditionally at entry; buf is unconditionally
+ * written (memcpy + NUL) on every call that does not fail for being
+ * too long -- every real caller passes a real on-stack 256-byte
+ * `char name[256]` buffer, never NULL. */
+static int read_name(const char **pp, char *buf) __attribute__((nonnull(1, 2)));
 static int read_name(const char **pp, char *buf)
 {
 	const char *p = *pp, *start = p;
@@ -186,6 +198,12 @@ static int read_name(const char **pp, char *buf)
  * (XBD 1.1.2 -- "decimal-constant, octal-constant, and
  * hexadecimal-constant ... required to be recognized", exactly what
  * base-0 strtol recognizes). */
+/* s is dereferenced unconditionally at entry (the leading whitespace
+ * skip touches *s before anything else); out is deliberately NOT
+ * marked -- it is only written on the success return (`*out = v;
+ * return 1;`), never on any of the several syntax-failure returns
+ * above it, so there is no path on which every call writes it. */
+static int parse_int_const(const char *s, long *out) __attribute__((nonnull(1)));
 static int parse_int_const(const char *s, long *out)
 {
 	char *end;
@@ -208,6 +226,14 @@ static int parse_int_const(const char *s, long *out)
  * not recognized by the shell, the expansion fails"). fail() itself
  * already no-ops while !a->live, so a suppressed branch's reads are
  * free to be wrong without side effects. */
+/* a is required for the same reason as every other arith_*() function
+ * in this file (see fail()'s own comment above). name is NOT marked
+ * here even though it is genuinely required: it is only ever forwarded
+ * into getenv(), which already carries its own nonnull(1) (see
+ * include/stdlib.h) -- the same "nothing left in this function's own
+ * body for the attribute to describe" reasoning 9be895e's own
+ * feholdexcept/feupdateenv already established. */
+static long read_var(struct arith *a, const char *name) __attribute__((nonnull(1)));
 static long read_var(struct arith *a, const char *name)
 {
 	const char *val = getenv(name);
@@ -227,6 +253,11 @@ static long read_var(struct arith *a, const char *name)
  * side effect 2.6.4 requires ("All changes to variables in an
  * arithmetic expression shall be in effect after the arithmetic
  * expansion"). A no-op inside a suppressed branch. */
+/* a required, same as every arith_*() function above; name is left
+ * unmarked -- it is only ever forwarded into setenv() (which itself
+ * deliberately does NOT require it, per its own defensive check; see
+ * include/stdlib.h), never dereferenced by this function's own body. */
+static void assign_var(struct arith *a, const char *name, long v) __attribute__((nonnull(1)));
 static void assign_var(struct arith *a, const char *name, long v)
 {
 	/* sign + up to 20 digits (64-bit LONG_MIN) + NUL, rounded up */
@@ -251,6 +282,7 @@ static void assign_var(struct arith *a, const char *name, long v)
  * for plain assignment) and advances *pp past the whole token; on no
  * match, returns 0 and *pp is unchanged. Three-character spellings are
  * tried first so "<<=" is never mistaken for "<" followed by "<=". */
+static int match_assign_op(const char **pp) __attribute__((nonnull(1)));
 static int match_assign_op(const char **pp)
 {
 	static const char *const three[] = { "<<=", ">>=", 0 };
@@ -369,10 +401,13 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	return 0; /* unreachable */
 }
 
-static long arith_assign(struct arith *a);
-static long arith_cond(struct arith *a);
+/* a required throughout: see fail()'s own comment above for why every
+ * function in this recursive-descent chain shares the same contract. */
+static long arith_assign(struct arith *a) __attribute__((nonnull(1)));
+static long arith_cond(struct arith *a) __attribute__((nonnull(1)));
 
 /* primary: '(' assignment-expression ')' | constant | [$]NAME */
+static long arith_primary(struct arith *a) __attribute__((nonnull(1)));
 static long arith_primary(struct arith *a)
 {
 	long v;
@@ -409,6 +444,7 @@ static long arith_primary(struct arith *a)
 }
 
 /* unary: ('+' | '-' | '~' | '!')* primary */
+static long arith_unary(struct arith *a) __attribute__((nonnull(1)));
 static long arith_unary(struct arith *a)
 {
 	skip_ws(a);
@@ -422,6 +458,7 @@ static long arith_unary(struct arith *a)
 }
 
 /* multiplicative: unary (('*'|'/'|'%') unary)* */
+static long arith_mul(struct arith *a) __attribute__((nonnull(1)));
 static long arith_mul(struct arith *a)
 {
 	long v = arith_unary(a);
@@ -438,6 +475,7 @@ static long arith_mul(struct arith *a)
 }
 
 /* additive: multiplicative (('+'|'-') multiplicative)* */
+static long arith_add(struct arith *a) __attribute__((nonnull(1)));
 static long arith_add(struct arith *a)
 {
 	long v = arith_mul(a);
@@ -453,6 +491,7 @@ static long arith_add(struct arith *a)
 }
 
 /* shift: additive (('<<'|'>>') additive)* */
+static long arith_shift(struct arith *a) __attribute__((nonnull(1)));
 static long arith_shift(struct arith *a)
 {
 	long v = arith_add(a);
@@ -469,6 +508,7 @@ static long arith_shift(struct arith *a)
 
 /* relational: shift (('<='|'>='|'<'|'>') shift)* -- two-character
  * spellings checked first so "<=" is never read as "<" then "=". */
+static long arith_rel(struct arith *a) __attribute__((nonnull(1)));
 static long arith_rel(struct arith *a)
 {
 	long v = arith_shift(a);
@@ -485,6 +525,7 @@ static long arith_rel(struct arith *a)
 }
 
 /* equality: relational (('=='|'!=') relational)* */
+static long arith_eq(struct arith *a) __attribute__((nonnull(1)));
 static long arith_eq(struct arith *a)
 {
 	long v = arith_rel(a);
@@ -502,6 +543,7 @@ static long arith_eq(struct arith *a)
 /* bitwise-AND: equality ('&' equality)* -- "&&" must never be split
  * into two bitwise-ANDs, so a lone '&' is only consumed when the next
  * byte is not itself '&'. */
+static long arith_band(struct arith *a) __attribute__((nonnull(1)));
 static long arith_band(struct arith *a)
 {
 	long v = arith_eq(a);
@@ -514,6 +556,7 @@ static long arith_band(struct arith *a)
 }
 
 /* bitwise-XOR: bitwise-AND ('^' bitwise-AND)* */
+static long arith_bxor(struct arith *a) __attribute__((nonnull(1)));
 static long arith_bxor(struct arith *a)
 {
 	long v = arith_band(a);
@@ -527,6 +570,7 @@ static long arith_bxor(struct arith *a)
 
 /* bitwise-OR: bitwise-XOR ('|' bitwise-XOR)* -- same "don't split ||"
  * guard as arith_band() above. */
+static long arith_bor(struct arith *a) __attribute__((nonnull(1)));
 static long arith_bor(struct arith *a)
 {
 	long v = arith_bxor(a);
@@ -542,6 +586,7 @@ static long arith_bor(struct arith *a)
  * is known false, every further right-hand operand is parsed with
  * a->live cleared so its own side effects/errors are suppressed, per
  * this file's header comment. */
+static long arith_land(struct arith *a) __attribute__((nonnull(1)));
 static long arith_land(struct arith *a)
 {
 	long v = arith_bor(a);
@@ -561,6 +606,7 @@ static long arith_land(struct arith *a)
 
 /* logical-OR: logical-AND ('||' logical-AND)*, short-circuiting the
  * same way once v is known true. */
+static long arith_lor(struct arith *a) __attribute__((nonnull(1)));
 static long arith_lor(struct arith *a)
 {
 	long v = arith_land(a);
@@ -640,6 +686,7 @@ static long arith_assign(struct arith *a)
  * the whole list is its last element -- ISO C 6.5.17, pulled in by
  * 1.1.2's "equivalent to ... Section 6.5" and not excluded by 2.6.4's
  * exception list. */
+static long arith_comma(struct arith *a) __attribute__((nonnull(1)));
 static long arith_comma(struct arith *a)
 {
 	long v = arith_assign(a);

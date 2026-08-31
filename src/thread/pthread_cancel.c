@@ -227,6 +227,10 @@ void __pthread_testcancel(void)
 	if (cancel) __pthread_cancel_current();
 }
 
+/* argument required: aliased into self and dereferenced unconditionally
+ * (`self->cancel_queued = 0;`) right after the lock, on every call. */
+static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2)
+    __attribute__((nonnull(1)));
 static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2)
 {
 	struct __pthread *self = argument;

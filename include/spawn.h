@@ -104,27 +104,53 @@ int posix_spawnp(pid_t *__restrict, const char *__restrict,
 	const posix_spawnattr_t *__restrict,
 	char *const *__restrict, char *const *__restrict);
 
-int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
-int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *);
+/* init()/destroy() both dereference fa unconditionally
+ * (`fa->__len = 0;` / the `for (i = 0; i < fa->__len; ...)` loop
+ * condition). The add*() functions are deliberately NOT marked for fa:
+ * each only ever forwards it into fa_push() (itself required there,
+ * see src/process/spawn_file_actions.c's own comment), never
+ * dereferencing it directly itself. addopen()'s path IS marked: it is
+ * passed to strlen() unconditionally before fa is ever touched. */
+int posix_spawn_file_actions_init(posix_spawn_file_actions_t *) __attribute__((nonnull(1)));
+int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *) __attribute__((nonnull(1)));
 int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int);
 int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict,
-	int, const char *__restrict, int, mode_t);
+	int, const char *__restrict, int, mode_t) __attribute__((nonnull(3)));
 
-int posix_spawnattr_init(posix_spawnattr_t *);
+/* Every one of these (destroy() excepted) unconditionally dereferences
+ * its posix_spawnattr_t *a -- a plain read/write of one of a's own
+ * fields, no NULL check anywhere in src/process/spawnattr.c. The
+ * getters' out/set/param arguments are equally unconditional (a bare
+ * `*out = a->__field;` or `a->__field = *set;`, nothing else in the
+ * body). destroy() is deliberately NOT marked: its own body is
+ * `(void)a;` -- it never dereferences a at all, so there is nothing
+ * here for the attribute to describe (the same "nothing left in this
+ * function's own body" reasoning as 9be895e's feholdexcept/
+ * feupdateenv). */
+int posix_spawnattr_init(posix_spawnattr_t *) __attribute__((nonnull(1)));
 int posix_spawnattr_destroy(posix_spawnattr_t *);
-int posix_spawnattr_getflags(const posix_spawnattr_t *__restrict, short *__restrict);
-int posix_spawnattr_setflags(posix_spawnattr_t *, short);
-int posix_spawnattr_getpgroup(const posix_spawnattr_t *__restrict, pid_t *__restrict);
-int posix_spawnattr_setpgroup(posix_spawnattr_t *, pid_t);
-int posix_spawnattr_getsigdefault(const posix_spawnattr_t *__restrict, sigset_t *__restrict);
-int posix_spawnattr_setsigdefault(posix_spawnattr_t *__restrict, const sigset_t *__restrict);
-int posix_spawnattr_getsigmask(const posix_spawnattr_t *__restrict, sigset_t *__restrict);
-int posix_spawnattr_setsigmask(posix_spawnattr_t *__restrict, const sigset_t *__restrict);
-int posix_spawnattr_getschedparam(const posix_spawnattr_t *__restrict, struct sched_param *__restrict);
-int posix_spawnattr_setschedparam(posix_spawnattr_t *__restrict, const struct sched_param *__restrict);
-int posix_spawnattr_getschedpolicy(const posix_spawnattr_t *__restrict, int *__restrict);
-int posix_spawnattr_setschedpolicy(posix_spawnattr_t *, int);
+int posix_spawnattr_getflags(const posix_spawnattr_t *__restrict, short *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_setflags(posix_spawnattr_t *, short) __attribute__((nonnull(1)));
+int posix_spawnattr_getpgroup(const posix_spawnattr_t *__restrict, pid_t *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_setpgroup(posix_spawnattr_t *, pid_t) __attribute__((nonnull(1)));
+int posix_spawnattr_getsigdefault(const posix_spawnattr_t *__restrict, sigset_t *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_setsigdefault(posix_spawnattr_t *__restrict, const sigset_t *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_getsigmask(const posix_spawnattr_t *__restrict, sigset_t *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_setsigmask(posix_spawnattr_t *__restrict, const sigset_t *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_getschedparam(const posix_spawnattr_t *__restrict, struct sched_param *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_setschedparam(posix_spawnattr_t *__restrict, const struct sched_param *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_getschedpolicy(const posix_spawnattr_t *__restrict, int *__restrict)
+    __attribute__((nonnull(1, 2)));
+int posix_spawnattr_setschedpolicy(posix_spawnattr_t *, int) __attribute__((nonnull(1)));
 
 #ifdef __cplusplus
 }

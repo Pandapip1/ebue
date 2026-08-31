@@ -82,6 +82,13 @@ static char *sem_path(const char *name)
 	return path;
 }
 
+/* path is required: passed to strdup() unconditionally at entry. Same
+ * "*slash not fixable here, and not a bug either" residual as
+ * src/thread/mqueue.c's own ensure_dir() -- see that function's own
+ * comment; this one's real call sites all pass a path built by
+ * sem_path(), which likewise always embeds a literal "/ntlibc-sem/"
+ * component. */
+static int ensure_dir(const char *path) __attribute__((nonnull(1)));
 static int ensure_dir(const char *path)
 {
 	char *copy = strdup(path);
@@ -108,6 +115,10 @@ static int ensure_dir(const char *path)
  * FNV-1a's unsigned wrap is the hash operation itself.  The full path is
  * used, rather than only the POSIX name, so processes with different temp
  * namespaces do not unnecessarily share a lock. */
+/* s required: dereferenced unconditionally in the loop condition
+ * (`while (*s)`), even for an empty string. */
+__wraps static unsigned long long path_hash(const char *s)
+    __attribute__((nonnull(1)));
 __wraps static unsigned long long path_hash(const char *s)
 {
 	unsigned long long h = 1469598103934665603ULL;

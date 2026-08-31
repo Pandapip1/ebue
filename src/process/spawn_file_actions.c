@@ -34,6 +34,8 @@
  * report by return value, and a caller that had a meaningful errno
  * sitting in it is entitled to still have it afterwards. */
 static struct __spawn_action *fa_push(posix_spawn_file_actions_t *fa)
+    __attribute__((nonnull(1)));
+static struct __spawn_action *fa_push(posix_spawn_file_actions_t *fa)
 {
 	int e = errno;
 	struct __spawn_action *n;

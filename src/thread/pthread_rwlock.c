@@ -128,6 +128,15 @@ static int shared_acquire(struct rwlock_data *data,
 	}
 }
 
+/* waiter required (`waiter->lock`/`waiter->linked` dereferenced
+ * unconditionally at entry). This function's own flagged findings
+ * here (`data->head`/`data->tail`/`data->waiting_writers`) are NOT
+ * fixable on this signature: data is loaded from waiter->lock, a
+ * struct FIELD's own value, a genuinely different symbolic fact from
+ * waiter itself that `nonnull` cannot describe -- verified sound by
+ * hand (every waiter is only ever linked onto the rwlock_data that
+ * initialized it), left as an honest residual rather than force-fit. */
+static void unlink_waiter(struct rw_waiter *waiter) __attribute__((nonnull(1)));
 static void unlink_waiter(struct rw_waiter *waiter)
 {
 	struct rwlock_data *data = waiter->lock;
@@ -163,6 +172,9 @@ static void wake_waiters(struct rwlock_data *data)
 	}
 }
 
+/* argument required: aliased into waiter and dereferenced
+ * unconditionally (`waiter->linked`) right after the lock. */
+static void wait_cleanup(void *argument) __attribute__((nonnull(1)));
 static void wait_cleanup(void *argument)
 {
 	struct rw_waiter *waiter = argument;

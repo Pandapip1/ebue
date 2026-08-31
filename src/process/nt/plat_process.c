@@ -151,6 +151,13 @@ int __plat_process_resume(__plat_handle_t h)
 
 /* Append one argument to a UTF-16 command-line buffer, quoting it if it
  * contains whitespace, a quote, or is empty. */
+/* buf/len/cap/arg all required: *cap and *len are read unconditionally
+ * (via __array_next_capacity(*cap, *len, ...)) before anything else,
+ * and arg[0] is read in the very first statement. Every real call site
+ * (build_cmdline()) passes local stack variables' addresses for
+ * buf/len/cap, never NULL. */
+static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
+    __attribute__((nonnull(1, 2, 3, 4)));
 static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 {
 	size_t n = 0, i, extra, nc;
@@ -202,6 +209,9 @@ static int append_arg(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
  * "whitespace is literal" state on and off and is otherwise dropped.
  * See src/process/spawn.c's file banner (moved from here) for the full
  * accounting; the encoding itself is unchanged. */
+/* Same requirement shape as append_arg() just above. */
+static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
+    __attribute__((nonnull(1, 2, 3, 4)));
 static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 {
 	size_t n, i, extra, nc;
@@ -232,6 +242,10 @@ static int append_prog(WCHAR **buf, size_t *len, size_t *cap, const WCHAR *arg)
 	return 0;
 }
 
+/* argv required: subscripted unconditionally (`argv[i]`) at loop
+ * entry, matching every execve-family argv contract this tree already
+ * treats as required elsewhere. */
+static WCHAR *build_cmdline(char *const argv[]) __attribute__((nonnull(1)));
 static WCHAR *build_cmdline(char *const argv[])
 {
 	WCHAR *buf = 0;
@@ -309,6 +323,9 @@ static WCHAR *build_env_block(char *const envp[])
  * so this deliberately does not disturb errno the way __plat_dup() would
  * (see plat_fd.h) -- any errno it might set would only be clobbered by
  * whatever RtlCreateUserProcess itself decides next. */
+/* out required: `*out = ...;` is written unconditionally at the end,
+ * on every call (this function has no early-return path). */
+static HANDLE closed_placeholder(HANDLE *out) __attribute__((nonnull(1)));
 static HANDLE closed_placeholder(HANDLE *out)
 {
 	HANDLE h = 0;

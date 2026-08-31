@@ -391,7 +391,13 @@ void __rusage_children_reset(void);
 int __spawn(const char *path, char *const argv[], char *const envp[]);
 /* Resolve a program name the way execvp does: PATH search plus the .exe
  * suffix Windows wants.  Returns a malloc'd absolute path or NULL. */
-char *__find_program(const char *name, int use_path);
+/* name is required: dereferenced unconditionally at entry
+ * (`if (!name[0]) ...`), and every real call site already requires it
+ * for its own reasons (execvpe()'s own `strchr(file, ...)` calls
+ * before forwarding it as name; posix_spawn.c's/execute.c's own
+ * argv[0]-derived strings, never NULL). */
+char *__find_program(const char *name, int use_path)
+    __attribute__((nonnull(1)));
 int __is_program(const char *path);
 /* WSL/ntfs3's four-byte little-endian $LXMOD extended attribute.  Only the
  * mode attribute is used: ntlibc must not manufacture Linux UID/GID values.

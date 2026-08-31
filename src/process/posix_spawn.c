@@ -209,6 +209,16 @@ struct saved_slot {
  * Returns 0, or -1 if the save array is full, which cannot happen -- it
  * is sized at one entry per action and each action vacates at most one
  * slot -- but is checked rather than assumed. */
+/* nsv is required: dereferenced unconditionally at entry
+ * (`for (i = 0; i < *nsv; i++)`), and every real call site passes
+ * &nsv, a local, never NULL. sv is left unmarked -- it is genuinely
+ * only reached when cap >= 1 in every real call (do_action() is only
+ * ever invoked with the cap spawn_common() sized to fa->__len, always
+ * >= 1 there), but nothing in take_slot()'s own signature or callers
+ * documents that as a hard invariant the way nsv's unconditional
+ * access does. */
+static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
+    __attribute__((nonnull(2)));
 static int take_slot(struct saved_slot *sv, int *nsv, int cap, int fd)
 {
 	int i;
@@ -240,6 +250,11 @@ static void restore_slots(struct saved_slot *sv, int nsv)
 }
 
 /* Perform one action.  Returns 0, or the error number to hand back. */
+/* a is required (`switch (a->kind)` dereferences it unconditionally at
+ * entry); sv/nsv are left unmarked -- both are only ever forwarded
+ * into take_slot(), never dereferenced by do_action() itself. */
+static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int *nsv, int cap)
+    __attribute__((nonnull(1)));
 static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int *nsv, int cap)
 {
 	switch (a->kind) {

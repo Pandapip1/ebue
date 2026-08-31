@@ -96,6 +96,10 @@ struct rx {
 	int cflags;
 };
 
+/* bs required at every call site (always &ps->rx->sets[idx], a slot
+ * newset() has already allocated within rx->sets, never NULL), and
+ * dereferenced unconditionally here. */
+static void setbit(struct bracket *bs, int c, int icase) __attribute__((nonnull(1)));
 static void setbit(struct bracket *bs, int c, int icase)
 {
 	unsigned char cc = (unsigned char)c;
@@ -103,6 +107,7 @@ static void setbit(struct bracket *bs, int c, int icase)
 	bs->bits[cc >> 3] |= (unsigned char)(1u << (cc & 7));
 }
 
+static int testbit(const struct bracket *bs, int c, int icase) __attribute__((nonnull(1)));
 static int testbit(const struct bracket *bs, int c, int icase)
 {
 	unsigned char cc = (unsigned char)c;
@@ -181,6 +186,13 @@ struct parser {
  * not require lying about the pattern. */
 #define MAX_PROG (1 << 20)
 
+/* ps is required throughout this file's whole recursive-descent parser
+ * chain: every one of the parser functions below ultimately receives
+ * it forwarded from regcomp()'s own `struct parser ps;` local (via
+ * `&ps`), and none of them defensively checks it before touching
+ * ps->p/ps->err/ps->rx/ps->icase/ps->ngroup/ps->ere/ps->closed. */
+static int emit(struct parser *ps, int op, int c, int set, int x, int y)
+    __attribute__((nonnull(1)));
 static int emit(struct parser *ps, int op, int c, int set, int x, int y)
 {
 	struct rx *rx = ps->rx;
@@ -211,6 +223,7 @@ static int emit(struct parser *ps, int op, int c, int set, int x, int y)
 	return rx->nprog++;
 }
 
+static int newset(struct parser *ps) __attribute__((nonnull(1)));
 static int newset(struct parser *ps)
 {
 	struct rx *rx = ps->rx;
@@ -233,6 +246,14 @@ static const struct { const char *name; int (*fn)(int); } classes[] = {
 	{ "graph", isgraph }, { "print", isprint }, { "xdigit", isxdigit },
 };
 
+/* ps required, same as every parser function above. name is passed to
+ * strncmp() unconditionally regardless of len (this tree's own
+ * established mem/str doctrine, see 242ed40), so it is required too
+ * -- every real call site passes a substring pointer straight out of
+ * parse_bracket()'s own scan, never NULL. bs is left unmarked: forward-
+ * only into setbit(), never dereferenced by emit_class() itself. */
+static int emit_class(struct parser *ps, struct bracket *bs, const char *name, size_t len)
+    __attribute__((nonnull(1, 3)));
 static int emit_class(struct parser *ps, struct bracket *bs, const char *name, size_t len)
 {
 	size_t i;
@@ -249,6 +270,7 @@ static int emit_class(struct parser *ps, struct bracket *bs, const char *name, s
 
 /* Parses a bracket expression; ps->p is positioned just after the
  * opening '['. Emits I_SET on success. */
+static void parse_bracket(struct parser *ps) __attribute__((nonnull(1)));
 static void parse_bracket(struct parser *ps)
 {
 	int idx = newset(ps);
@@ -326,14 +348,17 @@ static void parse_bracket(struct parser *ps)
  * DUP_MAX is literally "number too large".) */
 #define DUP_MAX 32767
 
-/* Forward decls for the mutually-recursive ERE/BRE grammars. */
-static void ere_alt(struct parser *ps);
-static void bre_branch(struct parser *ps);
+/* Forward decls for the mutually-recursive ERE/BRE grammars. ps
+ * required, same as every parser function in this file (see emit()'s
+ * own comment above). */
+static void ere_alt(struct parser *ps) __attribute__((nonnull(1)));
+static void bre_branch(struct parser *ps) __attribute__((nonnull(1)));
 
 /* Parses a {m,n} / {m,} / {m} interval body; ps->p is just after '{'.
  * *pm and *pn receive the bounds (*pn == -1 means unbounded). Leaves
  * ps->p just after the interval's own closing brace (ERE: '}'; BRE:
  * the caller consumes the trailing '\}'). */
+static void parse_bound(struct parser *ps, int *pm, int *pn) __attribute__((nonnull(1)));
 static void parse_bound(struct parser *ps, int *pm, int *pn)
 {
 	int m = 0, n = -1, any = 0;
@@ -364,6 +389,12 @@ static void parse_bound(struct parser *ps, int *pm, int *pn)
  * This is what makes it safe to relocate a saved atom that itself
  * contains a nested group or a nested repeat, not just a single plain
  * instruction. */
+/* saved is required (subscripted unconditionally in the loop below,
+ * `saved[i]`, for every one of the len iterations this is called
+ * with); ps is deliberately NOT marked -- this function only ever
+ * forwards it into emit(), never dereferencing it itself. */
+static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta)
+    __attribute__((nonnull(2)));
 static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta)
 {
 	int i;
@@ -379,6 +410,7 @@ static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int
  * compiled -- in whichever repeat operator follows, if any. Reports
  * REG_BADRPT if a repeat operator appears with no preceding atom
  * (start == ps->rx->nprog, i.e. nothing was actually emitted). */
+static void apply_repeat(struct parser *ps, int start, int had_atom) __attribute__((nonnull(1)));
 static void apply_repeat(struct parser *ps, int start, int had_atom)
 {
 	for (;;) {
@@ -512,6 +544,7 @@ static void apply_repeat(struct parser *ps, int start, int had_atom)
  * grammars for an escape this implementation does not give special
  * syntax to (see the file header: undefined escapes fall back to the
  * literal character, backslash dropped). */
+static int esc_literal(struct parser *ps) __attribute__((nonnull(1)));
 static int esc_literal(struct parser *ps)
 {
 	if (*ps->p == '\0') { ps->err = REG_EESCAPE; return -1; }
@@ -520,6 +553,7 @@ static int esc_literal(struct parser *ps)
 
 /* ---- ERE ------------------------------------------------------------ */
 
+static void ere_atom(struct parser *ps) __attribute__((nonnull(1)));
 static void ere_atom(struct parser *ps)
 {
 	int c = (unsigned char)*ps->p;
@@ -549,6 +583,19 @@ static void ere_atom(struct parser *ps)
 	emit(ps, I_CHAR, ps->icase ? tolower(c) : c, 0, 0, 0);
 }
 
+/* ps required, same as every parser function in this file -- though
+ * its own flagged finding here (`*ps->p` at the top of the loop below)
+ * is NOT actually about ps itself: the companion core.NullDereference
+ * diagnostic at that exact line reads "Dereference of null pointer
+ * (loaded from field 'p')", i.e. it is ps->p's own VALUE that is
+ * unproven, not ps. That value is regcomp()'s own `pattern` argument,
+ * unmodified (`ps.p = pattern;`, then straight into `bre_branch(&ps)`/
+ * `ere_alt(&ps)` before ps.p is ever advanced) -- the real fix is
+ * regcomp()'s own now-nonnull `pattern` parameter, not anything
+ * expressible on ere_branch()'s own signature. Marked here anyway
+ * because ps is still independently required for this function's own
+ * other, ordinary field accesses. */
+static void ere_branch(struct parser *ps) __attribute__((nonnull(1)));
 static void ere_branch(struct parser *ps)
 {
 	int first = 1;
@@ -602,6 +649,7 @@ static void ere_alt(struct parser *ps)
  * operator (literal if it is the first character of the whole pattern
  * or of a "\(" subexpression), intervals are "\{m,n\}", and '^'/'$'
  * are anchors only at the very start/end of the whole pattern. */
+static void bre_atom(struct parser *ps, int at_start) __attribute__((nonnull(1)));
 static void bre_atom(struct parser *ps, int at_start)
 {
 	int c = (unsigned char)*ps->p;
@@ -635,6 +683,9 @@ static void bre_atom(struct parser *ps, int at_start)
 	emit(ps, I_CHAR, ps->icase ? tolower(c) : c, 0, 0, 0);
 }
 
+/* Same "ps required, but its own flagged finding (ps->p[0] in the loop
+ * below) traces to regcomp()'s own pattern parameter instead" nuance
+ * as ere_branch() above -- see that function's own comment. */
 static void bre_branch(struct parser *ps)
 {
 	int first = 1;
@@ -772,6 +823,11 @@ struct mstate {
  * out of memory, or MAX_BACKTRACK reached; both are REG_ESPACE to the
  * caller, which is what <regex.h> defines that code to mean ("Out of
  * memory"). */
+/* ms required throughout the matcher: every function below ultimately
+ * receives it forwarded from regexec()'s own `struct mstate ms;`
+ * local, and none of them defensively checks it before touching
+ * ms->capbt/ms->nbt/ms->bt/ms->steps/ms->rx/ms->end/etc. */
+static int bt_grow(struct mstate *ms) __attribute__((nonnull(1)));
 static int bt_grow(struct mstate *ms)
 {
 	int cap = ms->capbt ? ms->capbt * 2 : 64;
@@ -786,6 +842,7 @@ static int bt_grow(struct mstate *ms)
 	return 1;
 }
 
+static int bt_push_try(struct mstate *ms, int pc, const char *sp) __attribute__((nonnull(1)));
 static int bt_push_try(struct mstate *ms, int pc, const char *sp)
 {
 	struct bt *e;
@@ -798,6 +855,7 @@ static int bt_push_try(struct mstate *ms, int pc, const char *sp)
 	return 1;
 }
 
+static int bt_push_undo(struct mstate *ms, int slot, regoff_t old) __attribute__((nonnull(1)));
 static int bt_push_undo(struct mstate *ms, int slot, regoff_t old)
 {
 	struct bt *e;
@@ -825,6 +883,16 @@ static int bt_push_undo(struct mstate *ms, int slot, regoff_t old)
  * and even a well-behaved "a*" needed one C frame per character of
  * subject.  Both are gone: alternatives live on the heap stack above,
  * whose size is bounded and whose exhaustion is reportable. */
+/* ms required, same as bt_grow()/bt_push_try()/bt_push_undo() above.
+ * sp is also required: it is dereferenced directly (`c = (unsigned
+ * char)*sp;` for I_CHAR/I_ANY, `sp[i]` for I_BACKREF) whenever the
+ * bounds guard ahead of each of those cases lets control reach them,
+ * and it is always derived from regexec()'s own `string + start`
+ * (never NULL, since string is now required there too) or from a
+ * previously-pushed bt_push_try() entry's own `sp` (recorded from the
+ * same source). */
+static int run(struct mstate *ms, int pc, const char *sp)
+    __attribute__((nonnull(1, 3)));
 static int run(struct mstate *ms, int pc, const char *sp)
 {
 	int found = 0;

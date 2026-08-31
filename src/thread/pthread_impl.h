@@ -55,9 +55,17 @@ struct __pthread {
 
 extern __thread struct __pthread *__pthread_self_control;
 struct __pthread *__pthread_current(void);
-void __pthread_adopt_current(struct __pthread *);
+/* self required: __sig_current_mask_install(&self->sigmask) at the end
+ * of this function's own body dereferences it whenever
+ * __pthread_self_control != self, which is every real call except the
+ * narrow "already adopted" identity check right above it -- not a
+ * documented NULL-tolerant case, just an early-out for repeat calls
+ * with the same already-known thread. */
+void __pthread_adopt_current(struct __pthread *) __attribute__((nonnull(1)));
 int __pthread_is_current(struct __pthread *);
-void __pthread_run_specific_destructors(struct __pthread *);
+/* self required: dereferenced unconditionally at entry
+ * (`if (!self->specific) return;`). */
+void __pthread_run_specific_destructors(struct __pthread *) __attribute__((nonnull(1)));
 void __pthread_cancel_current(void);
 _Noreturn void __pthread_cancel_redirected(void);
 void __pthread_testcancel(void);
