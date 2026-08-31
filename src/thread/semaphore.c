@@ -283,7 +283,7 @@ retry_record:
 		}
 		create_result = __plat_named_semaphore_create(object, (long)value, SEM_VALUE_MAX, &h);
 		if (create_result < 0 ||
-		    write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
+		    write(fd, object, (size_t)n + 1) != (ssize_t)n + 1) {
 			saved = create_result == 0 ? EIO : errno;
 			(void)close(fd); (void)unlink(path); goto fail_locked;
 		}
