@@ -33,8 +33,23 @@ struct passwd {
 
 struct passwd *getpwnam(const char *);
 struct passwd *getpwuid(uid_t);
-int getpwnam_r(const char *, struct passwd *, char *, size_t, struct passwd **);
-int getpwuid_r(uid_t, struct passwd *, char *, size_t, struct passwd **);
+/* pwd (arg 2) is forwarded, unconditionally and with no guard of its
+ * own, into the static fill_current() in src/misc/pwd.c, whose own
+ * write to pw->pw_name (and friends) is unconditional on the
+ * name-known-and-buffer-big-enough path -- the identical "readdir_r
+ * entry forwarded into fill(), also required" shape the 9be895e sweep
+ * established. result (arg 5) is dereferenced directly (set to zero)
+ * at the top of both real bodies, no guard. name (arg 1) and buffer
+ * (arg 3) are deliberately NOT marked: name has a real, live NULL
+ * check in getpwnam_r() (uid has no such question for getpwuid_r(),
+ * it is not a pointer), and buffer is forwarded into the buf argument
+ * of fill_current(), which is safe with a NULL buffer exactly when
+ * bufsize is 0 (the size comparison ahead of every dereference), not
+ * merely undescribed. */
+int getpwnam_r(const char *, struct passwd *, char *, size_t, struct passwd **)
+    __attribute__((nonnull(2, 5)));
+int getpwuid_r(uid_t, struct passwd *, char *, size_t, struct passwd **)
+    __attribute__((nonnull(2, 5)));
 
 /* XSI; see src/misc/pwd.c for why these are implemented rather than
  * left undeclared -- ntlibc's user database genuinely does have

@@ -702,12 +702,24 @@ class ValidPointerChecker
   // exactly this fact to bootstrap __peb itself (see
   // isAlwaysNonNullGlobal below) before anything else in the program has
   // run: `__peb = __teb()->ProcessEnvironmentBlock;`.
+  //
+  // localeconv() (src/misc/locale.c) is the same shape again, one file
+  // over: `return &__posix_lconv;`, unconditional, the address of a
+  // fixed static object, with no other return statement anywhere in
+  // its one real definition. src/misc/langinfo.c's own
+  // RADIXCHAR/THOUSEP cases (`localeconv()->decimal_point`,
+  // `localeconv()->thousands_sep`) are a different translation unit,
+  // so this checker's own per-TU analysis has no way to see that body
+  // and prove it from first principles the way it could within
+  // locale.c itself -- exactly the cross-file gap __errno_location and
+  // __teb already needed this same mechanism for.
   static bool isAlwaysNonNull(const CallEvent &Call) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!Function || !Function->getIdentifier())
       return false;
     StringRef Name = Function->getName();
-    return Name == "__errno_location" || Name == "__teb";
+    return Name == "__errno_location" || Name == "__teb" ||
+           Name == "localeconv";
   }
 
   // __peb (src/internal/libc.h: `extern PPEB __peb;`) is a plain global

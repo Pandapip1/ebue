@@ -7,6 +7,10 @@
 
 extern int __optpos;
 
+/* argv required: `av[src]` is dereferenced unconditionally at entry
+ * with no guard; its one real call site (__getopt_long() below) always
+ * passes its own now-required argv. */
+static void permute(char *const *argv, int dest, int src) __attribute__((nonnull(1)));
 static void permute(char *const *argv, int dest, int src)
 {
 	char **av = (char **)argv;
@@ -17,6 +21,14 @@ static void permute(char *const *argv, int dest, int src)
 	av[dest] = tmp;
 }
 
+/* argv/optstring required: reached either directly
+ * (`argv[optind][0]`/optstring's own indexing on the longopts-taken
+ * path) or forwarded, unguarded, into the now-required getopt() at
+ * the fallthrough return. longopts/idx are deliberately NOT marked --
+ * see include/getopt.h's own comment on getopt_long()/
+ * getopt_long_only() for why. */
+static int __getopt_long_core(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
+    __attribute__((nonnull(2, 3)));
 static int __getopt_long_core(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
 {
 	optarg = 0;
@@ -93,6 +105,12 @@ static int __getopt_long_core(int argc, char *const *argv, const char *optstring
 	return getopt(argc, argv, optstring);
 }
 
+/* argv/optstring required, same evidence as __getopt_long_core()
+ * above: `argv[optind]`/`optstring[0]` are both dereferenced
+ * unconditionally past the `optind >= argc` bound check, which says
+ * nothing about either pointer's own nullness. */
+static int __getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
+    __attribute__((nonnull(2, 3)));
 static int __getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
 {
 	int ret, skipped, resumed;

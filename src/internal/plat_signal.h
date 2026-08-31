@@ -85,12 +85,21 @@ __plat_handle_t __plat_signal_pipe_create(const struct _UNICODE_STRING *name);
 int __plat_signal_pipe_listen(__plat_handle_t pipe);
 
 /* Read up to `len` bytes from `h` into `buf` (STATUS_PENDING handled
- * internally). 0 with *received set on success, -1 on failure. */
-int __plat_signal_pipe_read(__plat_handle_t h, void *buf, size_t len, size_t *received);
+ * internally). 0 with *received set on success, -1 on failure.
+ * received is required: written unconditionally on the success path
+ * with no NULL check (the outputs being left untouched on FAILURE is
+ * a fact about the value, not about whether the pointer itself may be
+ * NULL -- d24fe86's own __plat_process_fork() precedent); both real
+ * call sites (src/signal/nt/sigdelivery.c) pass &got, never NULL. */
+int __plat_signal_pipe_read(__plat_handle_t h, void *buf, size_t len, size_t *received)
+    __attribute__((nonnull(4)));
 
 /* Write `len` bytes of `buf` to `h` (STATUS_PENDING handled
- * internally). 0 with *sent set on success, -1 on failure. */
-int __plat_signal_pipe_write(__plat_handle_t h, const void *buf, size_t len, size_t *sent);
+ * internally). 0 with *sent set on success, -1 on failure. sent
+ * required, same reasoning and both real call sites (&sent) as
+ * __plat_signal_pipe_read() above. */
+int __plat_signal_pipe_write(__plat_handle_t h, const void *buf, size_t len, size_t *sent)
+    __attribute__((nonnull(4)));
 
 /* 100ms backoff delay -- sig_delivery_thread()'s retry pause after a
  * failed pipe (re)create. */
@@ -128,8 +137,14 @@ __plat_handle_t __plat_signal_pipe_open(const struct _UNICODE_STRING *name);
  * requirement) -- runs detached, as every thread this library ever
  * creates does (NT tears down every thread of a process at exit).
  * 0/-1 via return, *out set to the new thread's still-open handle on
- * success. */
-int __plat_thread_start(void *entry, void *arg, __plat_handle_t *out);
+ * success. out required: written unconditionally on success, no NULL
+ * check; its one real call site (src/signal/nt/sigdelivery.c) passes
+ * &thr, never NULL. NT-only (this header's own banner on
+ * src/signal/linux/plat_signal.c: the pipe/mutant transport this
+ * thread serves is not yet ported, so there is no Linux definition to
+ * cross-check against). */
+int __plat_thread_start(void *entry, void *arg, __plat_handle_t *out)
+    __attribute__((nonnull(3)));
 
 /* ---- signal.c --------------------------------------------------------- */
 
@@ -148,8 +163,13 @@ __plat_handle_t __plat_stop_event_create(const struct _UNICODE_STRING *name);
  * to 1 iff the name already lived (STATUS_OBJECT_NAME_EXISTS) --
  * exactly the distinguishing fact the loop needs the real status in
  * hand for: an event this call created fresh cannot possibly have a
- * stop already recorded in it. 0/-1 via return. */
-int __plat_stop_event_probe(const struct _UNICODE_STRING *name, __plat_handle_t *out, int *already_existed);
+ * stop already recorded in it. 0/-1 via return. out/already_existed
+ * both required: both backends (NT and Linux) write both
+ * unconditionally on the success path with no NULL check, and the
+ * one real call site (src/signal/signal.c's __sig_consume_child_stop())
+ * passes &h/&already_existed, never NULL. */
+int __plat_stop_event_probe(const struct _UNICODE_STRING *name, __plat_handle_t *out, int *already_existed)
+    __attribute__((nonnull(2, 3)));
 
 /* Suspend/resume THIS process (NtSuspendProcess(NtCurrentProcess())) --
  * stop_self()'s own suspend; distinct from __plat_process_suspend()/
@@ -169,8 +189,12 @@ int __plat_process_resume(__plat_handle_t h);
  * signals only). [EPERM] on failure iff the platform's own access
  * check specifically refused (STATUS_ACCESS_DENIED); [ESRCH] for every
  * other reason (no such process). The distinction is made here, with
- * the real status still in hand -- see this header's own banner. */
-int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out);
+ * the real status still in hand -- see this header's own banner. out
+ * required: both backends write it unconditionally on the success
+ * path with no NULL check, and the one real call site
+ * (src/signal/signal.c's kill()) passes &h, never NULL. */
+int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out)
+    __attribute__((nonnull(3)));
 
 /* NtTerminateProcess(h, exitcode), with kill()'s own tolerance: a
  * target already exiting reports STATUS_PROCESS_IS_TERMINATING, which

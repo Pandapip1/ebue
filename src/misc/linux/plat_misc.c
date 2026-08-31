@@ -206,6 +206,11 @@ void __plat_yield(void)
  * Linux fd (see this file's banner for why that boxing is load-
  * bearing, not cosmetic) and recorded in the pid side table for the
  * priority functions below. */
+/* out required: written unconditionally (`*out = box_fd((int)fd);`) on
+ * the success path with no NULL check; both real callers below
+ * forward their own now-required out with no guard of their own. */
+static int open_process(pid_t pid, int checked, __plat_handle_t *out)
+    __attribute__((nonnull(3)));
 static int open_process(pid_t pid, int checked, __plat_handle_t *out)
 {
 	long fd;

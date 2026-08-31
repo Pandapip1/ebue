@@ -31,8 +31,19 @@ struct group {
 
 struct group *getgrnam(const char *);
 struct group *getgrgid(gid_t);
-int getgrnam_r(const char *, struct group *, char *, size_t, struct group **);
-int getgrgid_r(gid_t, struct group *, char *, size_t, struct group **);
+/* Same shape as the identical getpwnam_r()/getpwuid_r() pair in
+ * include/pwd.h -- see that comment. grp (arg 2) is forwarded,
+ * unguarded, into the static fill_current() in src/misc/grp.c, whose
+ * own write to gr->gr_name is unconditional on the
+ * name-known-and-buffer-big-enough path; result (arg 5) is
+ * dereferenced directly (set to zero) at the top of both real bodies.
+ * name/buffer are left unmarked for the identical reasons (a real
+ * NULL check on name in getgrnam_r(); buffer is safe NULL exactly
+ * when bufsize is 0). */
+int getgrnam_r(const char *, struct group *, char *, size_t, struct group **)
+    __attribute__((nonnull(2, 5)));
+int getgrgid_r(gid_t, struct group *, char *, size_t, struct group **)
+    __attribute__((nonnull(2, 5)));
 
 /* XSI; see src/misc/grp.c for why these are implemented rather than
  * left undeclared -- same reasoning as <pwd.h>'s getpwent() family:

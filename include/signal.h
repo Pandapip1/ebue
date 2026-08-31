@@ -244,25 +244,61 @@ int __libc_current_sigrtmax(void);
 
 int kill(pid_t, int);
 
-int sigemptyset(sigset_t *);
-int sigfillset(sigset_t *);
-int sigaddset(sigset_t *, int);
-int sigdelset(sigset_t *, int);
-int sigismember(const sigset_t *, int);
+/* The whole sigset_t-taking family below shares one contract: every
+ * real body (src/signal/signal.c) touches its set argument(s)
+ * unconditionally -- memset() for sigemptyset()/sigfillset(),
+ * s->__bits[...] for sigaddset()/sigdelset()/sigismember(), a loop
+ * over ->__bits for sigisemptyset()/sigorset() -- with no NULL check
+ * anywhere in this file, and no real call site in this tree (~230
+ * combined, across src/ and test/) ever passes one. The sig argument
+ * to sigismember() is NOT marked nonnull-relevant (it is an int, not
+ * a pointer); the sig_valid(sig) range check inside sigismember() is
+ * a different fact from the nullability of s and does not guard it
+ * either way. */
+int sigemptyset(sigset_t *) __attribute__((nonnull(1)));
+int sigfillset(sigset_t *) __attribute__((nonnull(1)));
+int sigaddset(sigset_t *, int) __attribute__((nonnull(1)));
+int sigdelset(sigset_t *, int) __attribute__((nonnull(1)));
+int sigismember(const sigset_t *, int) __attribute__((nonnull(1)));
 
 int sigprocmask(int, const sigset_t *__restrict, sigset_t *__restrict);
 int sigsuspend(const sigset_t *);
 int sigaction(int, const struct sigaction *__restrict, struct sigaction *__restrict);
-int sigpending(sigset_t *);
-int sigwait(const sigset_t *__restrict, int *__restrict);
+/* s forwarded, unconditionally and with no guard of its own, straight
+ * into the required `d` argument of sigorset(d, a, b) -- the identical
+ * "readdir_r entry forwarded into fill(), also required" shape the
+ * 9be895e sweep already established, not a fresh judgment call. */
+int sigpending(sigset_t *) __attribute__((nonnull(1)));
+/* s (the wait set) is dereferenced unconditionally (`waiting_set =
+ * *s;`) with no guard; sig is deliberately NOT marked -- `if (sig)
+ * *sig = selected;` is a real, live guard in the body of sigwait()
+ * (no real caller in this tree exercises the NULL path, but the guard
+ * itself is not decoration to be told is dead code -- same standard
+ * the 9be895e setenv/unsetenv precedent applies). */
+int sigwait(const sigset_t *__restrict, int *__restrict) __attribute__((nonnull(1)));
 int pthread_sigmask(int, const sigset_t *__restrict, sigset_t *__restrict);
-int sigwaitinfo(const sigset_t *__restrict, siginfo_t *__restrict);
-int sigtimedwait(const sigset_t *__restrict, siginfo_t *__restrict, const struct timespec *__restrict);
+/* set required (`waiting_set = *set;`, unconditional, no guard); info
+ * is forwarded into take_pending_from_set()/take_pending_signal_from(),
+ * which itself only writes through it behind a real `if (si) *si =
+ * ...;` guard -- genuinely optional, not left unmarked by oversight. */
+int sigwaitinfo(const sigset_t *__restrict, siginfo_t *__restrict) __attribute__((nonnull(1)));
+/* set required, same as sigwaitinfo() above. info is optional for the
+ * same reason. timeout is deliberately NOT marked despite being
+ * unconditionally tested (`if (!timeout || timeout->tv_sec < 0 ...)`)
+ * -- that IS the guard: a real, live NULL check whose current effect
+ * (EINVAL) is what a caller here observes, not something `nonnull`
+ * may tell the compiler is unreachable. */
+int sigtimedwait(const sigset_t *__restrict, siginfo_t *__restrict, const struct timespec *__restrict) __attribute__((nonnull(1)));
 int sigqueue(pid_t, int, union sigval);
 
 int sigaltstack(const stack_t *__restrict, stack_t *__restrict);
 
-void psiginfo(const siginfo_t *, const char *);
+/* pinfo is dereferenced unconditionally (`psignal(pinfo->si_signo,
+ * s);`); every real call site in this tree (test/posix-signal.c,
+ * test/posix-unreferenced.c) passes &si, never NULL. s (the optional
+ * message prefix) is unaffected -- psignal() itself already guards it
+ * with a real `if (s && *s)`. */
+void psiginfo(const siginfo_t *, const char *) __attribute__((nonnull(1)));
 
 #endif
 
@@ -301,8 +337,10 @@ void (*sigset(int, void (*)(int)))(int);
 #if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
 typedef void (*sighandler_t)(int);
 void psignal(int, const char *);
-int sigisemptyset(const sigset_t *);
-int sigorset (sigset_t *, const sigset_t *, const sigset_t *);
+/* Same shared sigset_t-family contract as sigemptyset() et al. above;
+ * see that comment. */
+int sigisemptyset(const sigset_t *) __attribute__((nonnull(1)));
+int sigorset (sigset_t *, const sigset_t *, const sigset_t *) __attribute__((nonnull(1, 2, 3)));
 
 #define SA_NOMASK SA_NODEFER
 #define SA_ONESHOT SA_RESETHAND

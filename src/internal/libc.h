@@ -807,8 +807,12 @@ unsigned long __sig_thread_restart_count(void);
 void __sig_drain_pending(void);
 /* Per-thread signal state shared with the pthread implementation. */
 struct __sigset_t;
-void __sig_current_mask_copy(struct __sigset_t *);
-void __sig_current_mask_install(const struct __sigset_t *);
+/* mask required at both real call sites (src/thread/pthread.c:
+ * &self->sigmask, &thread->sigmask, never NULL) and unconditionally
+ * dereferenced -- *mask = blocked / blocked = *mask -- with no guard
+ * in either body. */
+void __sig_current_mask_copy(struct __sigset_t *) __attribute__((nonnull(1)));
+void __sig_current_mask_install(const struct __sigset_t *) __attribute__((nonnull(1)));
 int __raise_thread_internal(int);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
