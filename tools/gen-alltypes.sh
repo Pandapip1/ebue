@@ -20,8 +20,15 @@
 #     TYPEDEF unsigned _Addr size_t;
 # into the four-line `__NEED_`/`__DEFINED_` guarded block that
 # mkalltypes.sed produces. And a helper compiled on the spot is no way out
-# either: the tcc on PATH at that stage is a *cross* compiler emitting
-# win32 PE, so anything it builds is not runnable on the build host.
+# either -- on nt's leg, the tcc on PATH at that stage is a *cross*
+# compiler emitting win32 PE, so anything it builds is not runnable on the
+# build host at all; on linux's leg the compiler is native, so that
+# specific objection does not apply, but the other two still do (no sed,
+# no awk, and there is nothing at this bootstrap point to write, compile
+# and run a capture-group rewrite in anyway -- no libc to link a freshly
+# built helper against until *this* step has already produced one). Either
+# way, pre-expansion is what actually makes both legs possible, not a
+# workaround for one platform's cross-compiler alone.
 #
 # So the expansion is done here, by a developer with a real sed, and the
 # bootstrap does the one thing it *can* do -- concatenate whole files with

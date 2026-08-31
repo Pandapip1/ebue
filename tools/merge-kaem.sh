@@ -4,13 +4,13 @@
 #
 # merge-kaem.sh -- git merge driver for boot/kaem/build-*.kaem.
 #
-# boot/kaem/build-nt-i386.kaem, build-nt-x86_64.kaem and build-nt-aarch64.kaem
-# are generated (by tools/gen-kaem.sh, driven by `make kaem`) from the
-# Makefile's own source file list, and committed. Any two branches that
-# each add a source file therefore conflict textually in these files: the
-# compile-command list gets a new line inserted at the same point from
-# both sides (an add/add hunk plain diff3 cannot order), and the single
-# `${CC} -ar rcs lib/libc.a ...` line -- every object in one line -- is
+# boot/kaem/build-nt-i386.kaem, build-nt-x86_64.kaem, build-nt-aarch64.kaem
+# and build-linux-aarch64.kaem are generated (by tools/gen-kaem.sh, driven
+# by `make kaem`) from the Makefile's own source file list, and committed.
+# Any two branches that each add a source file therefore conflict textually
+# in these files: the compile-command list gets a new line inserted at the
+# same point from both sides (an add/add hunk plain diff3 cannot order),
+# and the single archive-command line -- every object in one line -- is
 # rewritten differently by each side, so it conflicts every time either
 # side changes at all. Left to git's default text merge, a human resolves
 # this by hand, always the same mechanical way (pick a side, `make kaem`,
@@ -21,11 +21,20 @@
 # now refuses staged conflict markers for exactly this reason).
 #
 # Filenames are keyed on platform+arch, not arch alone -- see
-# tools/gen-kaem.sh's own header for why (arch/aarch64 now backs both
-# PLATFORM=linux, no kaem leg, and PLATFORM=nt, this one). The case
-# statement below lists every platform+arch pair kaem currently generates
-# for; a real PLATFORM=linux leg, if one is ever added, would add its own
-# entries here rather than needing another rename.
+# tools/gen-kaem.sh's own header for why (arch/aarch64 backs both
+# PLATFORM=linux and PLATFORM=nt, each with a real kaem leg of its own).
+# The case statement below lists every platform+arch pair kaem currently
+# generates for.
+#
+# The archive line's own command name is NOT the same string across those
+# four files: nt's is `${CC} -ar rcs lib/libc.a ...` (tcc doubles as its
+# own archiver), linux's is `${bin_ar} rcs lib/libc.a ...` (a real,
+# separate archiver -- see tools/gen-kaem.sh's own note on why clang has
+# no self-archiving mode to fall back on). explode() below detects this
+# line structurally (by the fixed `rcs lib/libc.a ` substring every
+# platform's archive line shares, not by which command name precedes it),
+# so the same driver logic below needs no per-platform branch of its own
+# to handle both shapes.
 #
 # WHY THIS DOES NOT JUST CALL tools/gen-kaem.sh
 # ----------------------------------------------
@@ -79,7 +88,8 @@
 # other the same way the surrounding list already is -- is exactly what a
 # fresh gen-kaem.sh run would have produced.
 #
-# The one `${CC} -ar rcs lib/libc.a ...` line needs more care, because it
+# The one archive-command line (`${CC} -ar rcs lib/libc.a ...` for nt,
+# `${bin_ar} rcs lib/libc.a ...` for linux) needs more care, because it
 # is not sorted by a single plain rule: the Makefile builds it as
 # `$(filter obj/src/%,$(ALL_OBJS)) $(filter obj/arch/%,$(ALL_OBJS))` --
 # every obj/src/ object (itself globally sorted, and this is where a
@@ -136,11 +146,12 @@ other=$3
 path=$4
 
 case $path in
-	boot/kaem/build-nt-i386.kaem | boot/kaem/build-nt-x86_64.kaem | boot/kaem/build-nt-aarch64.kaem) ;;
+	boot/kaem/build-nt-i386.kaem | boot/kaem/build-nt-x86_64.kaem | boot/kaem/build-nt-aarch64.kaem | boot/kaem/build-linux-aarch64.kaem) ;;
 	*)
 		echo "merge-kaem.sh: registered for an unexpected path '$path'" >&2
 		echo "merge-kaem.sh: (.gitattributes should only ever route" >&2
-		echo "merge-kaem.sh: boot/kaem/build-nt-{i386,x86_64,aarch64}.kaem here)" >&2
+		echo "merge-kaem.sh: boot/kaem/build-nt-{i386,x86_64,aarch64}.kaem or" >&2
+		echo "merge-kaem.sh: boot/kaem/build-linux-aarch64.kaem here)" >&2
 		exit 1
 		;;
 esac
@@ -153,17 +164,33 @@ trap 'rm -rf "$work"' EXIT
 # sentinels are identical, constant text in every input, so they are never
 # themselves part of a conflict hunk; only the object lines between them
 # can be.
+#
+# The line's own command-name prefix is detected structurally -- by the
+# fixed "rcs lib/libc.a " substring every platform's archive line shares --
+# rather than hardcoded, since it is not the same text for every platform
+# this driver now serves (`${CC} -ar` for nt, `${bin_ar}` for linux; see
+# tools/gen-kaem.sh). The detected prefix is written to $work/prefix so the
+# recollapse pass below (a separate awk invocation, over the merged result)
+# knows what text to reconstruct the line with; whichever of the three
+# inputs is exploded last simply overwrites it, which is safe here because
+# a real gen-kaem.sh run only ever emits one prefix text for a given file
+# -- the command name is a fixed macro for that platform, not something
+# that varies per source-file addition, so $O/$A/$B always agree on it.
 explode() {
-	awk '
-		BEGIN { prefix = "${CC} -ar rcs lib/libc.a " }
-		index($0, prefix) == 1 {
-			print "##ARLINE-BEGIN##"
-			n = split(substr($0, length(prefix) + 1), tok, " ")
-			for (i = 1; i <= n; i++) if (tok[i] != "") print tok[i]
-			print "##ARLINE-END##"
-			next
+	awk -v prefix_file="$work/prefix" '
+		{
+			idx = index($0, "rcs lib/libc.a ")
+			if (idx > 0) {
+				pre = substr($0, 1, idx + length("rcs lib/libc.a ") - 1)
+				print pre >prefix_file
+				print "##ARLINE-BEGIN##"
+				n = split(substr($0, length(pre) + 1), tok, " ")
+				for (i = 1; i <= n; i++) if (tok[i] != "") print tok[i]
+				print "##ARLINE-END##"
+				next
+			}
+			print
 		}
-		{ print }
 	' "$1" >"$2"
 }
 explode "$ancestor" "$work/O"
@@ -186,6 +213,17 @@ if [ "$mfec" -lt 0 ]; then
 	exit 1
 fi
 
+# $work/prefix holds whatever explode() detected the archive line's own
+# command-name prefix to be (see its own comment) -- read back here rather
+# than hardcoded, for the same reason explode() derives it structurally: it
+# is not the same text for every platform this driver serves. Falls back to
+# empty if somehow no exploded region exists at all (e.g. this driver is
+# ever pointed at a kaem file with no archive line yet); a blank arprefix
+# just means the `arline == arprefix` comparisons below never trigger their
+# "first token, no leading space" case incorrectly, since inar itself is
+# never set without a real ##ARLINE-BEGIN## marker to match it.
+arprefix=$(cat "$work/prefix" 2>/dev/null || true)
+
 # Resolve every remaining hunk (there is nothing to do here at all if
 # mfec was already 0) and recollapse the exploded archive line back into
 # a single line, in one pass. A hunk this driver does not recognize --
@@ -193,7 +231,7 @@ fi
 # through as git's own conflict-marker text and clears `ok`, so the
 # driver reports failure and a human sees a normal conflict; it never
 # guesses at an unfamiliar shape.
-awk '
+awk -v arprefix="$arprefix" '
 	# emit() is flush_hunk'"'"'s only way to produce a line: when the hunk
 	# sits inside an exploded archive-line region (inar), a resolved
 	# object token has to feed back into `arline` like any other object
@@ -230,7 +268,7 @@ awk '
 		for (i = 1; i <= theirs_n; i++) print theirs[i]
 		print ">>>>>>> " theirs_label
 	}
-	BEGIN { state = "normal"; ok = 1; inar = 0; arline = ""; arprefix = "${CC} -ar rcs lib/libc.a " }
+	BEGIN { state = "normal"; ok = 1; inar = 0; arline = "" }
 	/^<<<<<<< / { state = "ours"; ours_n = 0; theirs_n = 0; ours_label = substr($0, 9); next }
 	state == "ours" && /^=======$/ { state = "theirs"; next }
 	state == "theirs" && /^>>>>>>> / { theirs_label = substr($0, 9); flush_hunk(); state = "normal"; next }

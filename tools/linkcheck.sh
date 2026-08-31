@@ -137,9 +137,16 @@ done
 # obj/src/sh/exec.o -- collapses into one flat archive namespace whether
 # the build system means it to or not.
 #
-# tcc's ar, which is this project's $(AR) (`AR = $(CC) -ar', and the
-# boot/kaem bootstrap has no other archiver at all), goes one step
-# further: it truncates that basename to 15 characters.  tcctools.c's
+# tcc's ar, which is this project's $(AR) on platform=nt (`AR = $(CC)
+# -ar', and nt's boot/kaem bootstrap leg has no other archiver at all --
+# unlike platform=linux's leg, which uses a real `ar' with no such
+# limitation; see tools/gen-kaem.sh's own note on why clang needs one),
+# goes one step further: it truncates that basename to 15 characters.
+# This check itself is unconditional (ARCH-scoped, not PLATFORM-aware --
+# see the Makefile's `linkcheck:' recipe), so it still runs under
+# platform=linux, just against an archiver that does not actually have
+# this bug; a false positive here is not impossible, just not yet seen.
+# tcctools.c's
 # tcc_tool_ar() clamps `istrlen' to `sizeof(arhdro.ar_name) - 1' and
 # writes the '/' terminator at that offset, and it emits no SysV `//'
 # long-name table to escape to.  So `spawn_file_actions.o' is really
@@ -535,8 +542,10 @@ linkcheck_exception() {
 # (Magic, SectionAlignment, FileAlignment) sit at fixed byte offsets
 # from e_lfanew, so a handful of `od -j/-N` reads is simpler and more
 # portable than adding a new tool dependency for three integers this
-# script's own build-and-link recipe already produced. This stays out
-# of the boot/kaem/ bootstrap path entirely -- that path never invokes
+# script's own build-and-link recipe already produced. PE headers are
+# nt-specific in the first place (linux's real ELF output has no MZ/PE
+# structure for this check to read at all), and this stays out of nt's
+# boot/kaem/ bootstrap leg entirely regardless -- that leg never invokes
 # `make linkcheck`, only tcc + mkdir/cp/catm (see gen-kaem.sh).
 #
 # Bytes are combined explicitly as little-endian (PE's byte order,

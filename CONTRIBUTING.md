@@ -390,8 +390,14 @@ rather than treating an environment-limited test as a pass.
 the committed `*.h.gen` files. `tools/gen-kaem.sh` derives the kaem
 bootstrap recipes from the Makefile's source lists -- one per platform+arch
 pair it knows how to generate for (today: `nt` x `{i386,x86_64,aarch64}`,
-named `boot/kaem/build-nt-{i386,x86_64,aarch64}.kaem`; see its own header
-for why the filename carries both axes). Use:
+named `boot/kaem/build-nt-{i386,x86_64,aarch64}.kaem`, and `linux` x
+`{aarch64}`, named `boot/kaem/build-linux-aarch64.kaem`; see its own header
+for why the filename carries both axes, and for the real, disclosed
+differences between the two platforms' recipes -- a different compiler and
+archiver, a second crt object for the real ELF entry point, and the real
+`-fno-stack-protector -mno-outline-atomics` flags). `make kaem`/`make
+generated` regenerate every platform+arch pair, not just the default
+(`nt`). Use:
 
 ```sh
 make generated

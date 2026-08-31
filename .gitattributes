@@ -11,9 +11,9 @@
 #
 # Filenames are keyed on platform+arch (build-$platform-$arch.kaem), not
 # arch alone -- see tools/gen-kaem.sh's own header for why: arch/aarch64
-# now backs both PLATFORM=linux (no kaem leg) and PLATFORM=nt (this one),
-# so ARCH by itself stopped being a unique key for a kaem script the
-# moment a second platform started reusing the same arch/.
+# backs both PLATFORM=linux and PLATFORM=nt, each with a real kaem leg of
+# its own, so ARCH by itself stopped being a unique key for a kaem script
+# the moment a second platform started reusing the same arch/.
 #
 # The driver command itself is per-clone config (git does not read
 # merge.*.driver from the repository) -- see ./configure, which sets it up
@@ -23,3 +23,4 @@
 boot/kaem/build-nt-i386.kaem merge=ntlibc-kaem
 boot/kaem/build-nt-x86_64.kaem merge=ntlibc-kaem
 boot/kaem/build-nt-aarch64.kaem merge=ntlibc-kaem
+boot/kaem/build-linux-aarch64.kaem merge=ntlibc-kaem

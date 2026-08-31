@@ -295,14 +295,26 @@ install: install-libs install-headers install-tools install-progs
 #
 # kaem: regenerate the kaem-only bootstrap build script from this
 # Makefile's own build recipe (tools/gen-kaem.sh runs `make -n -B
-# lib/libc.a lib/crt1.o` and rewrites the dry-run output into kaem syntax),
-# so boot/kaem/build-*.kaem can never silently drift out of sync with this
-# Makefile as source files are added, removed, or renamed. See
-# CONTRIBUTING.md for what boot/kaem/ is for.
+# lib/libc.a lib/crt1.o [lib/start.o]` and rewrites the dry-run output into
+# kaem syntax), so boot/kaem/build-*.kaem can never silently drift out of
+# sync with this Makefile as source files are added, removed, or renamed.
+# See CONTRIBUTING.md for what boot/kaem/ is for.
 #
-# gen-kaem.sh regenerates *every* arch's script, not just $(ARCH)'s, so a
-# new source file cannot land in one and miss the others (CI only runs this
-# on one matrix leg).
+# Each invocation regenerates *every* arch's script for its --platform, not
+# just $(ARCH)'s, so a new source file cannot land in one and miss the
+# others (CI only runs this on one matrix leg). Both platforms this
+# generator knows are regenerated here, not just the default (nt): a real
+# platform=linux kaem leg exists now (boot/kaem/build-linux-aarch64.kaem)
+# and needs the same drift protection nt's legs already have, or an edit
+# under crt/linux/ or src/*/linux/ could silently go stale there forever.
+# This costs nothing extra on a runner with no real Linux toolchain: both
+# calls are `make -n` dry runs that never invoke $(CC), so gen-kaem.sh's
+# own PLATFORM/ARCH/CC/AR/CFLAGS overrides (see its header) make this a
+# pure function of the source tree regardless of what config.mak's own CC
+# is or whether clang is even installed -- confirmed by regenerating
+# build-linux-aarch64.kaem against an nt-configured config.mak (and again
+# with no clang on PATH at all) and diffing byte-for-byte against the same
+# file generated from a real `./configure --platform=linux CC=clang`: identical.
 #
 # Deliberately unconditional rather than a file target with prerequisites:
 # an mtime rule is defeated by a script that is newer than the sources but
@@ -311,6 +323,7 @@ install: install-libs install-headers install-tools install-progs
 # do nothing and report success.
 kaem:
 	./tools/gen-kaem.sh
+	./tools/gen-kaem.sh --platform=linux
 
 #
 # alltypes: re-expand every bits/*.h.in through tools/mkalltypes.sed into
@@ -331,6 +344,7 @@ alltypes:
 generated:
 	./tools/gen-alltypes.sh
 	./tools/gen-kaem.sh
+	./tools/gen-kaem.sh --platform=linux
 
 .PHONY: kaem alltypes generated
 
