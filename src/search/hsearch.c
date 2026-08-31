@@ -7,6 +7,11 @@
  * only; ENTRY.key/.data are the caller's, never touched here (same
  * rule tdelete()/tsearch.c's free_subtree() follows for tree nodes).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <search.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -128,3 +133,5 @@ ENTRY *hsearch(ENTRY item, ACTION action)
 
 	return NULL;	/* table full */
 }
+
+// NOLINTEND(misc-include-cleaner)
