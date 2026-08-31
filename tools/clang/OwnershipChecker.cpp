@@ -15,6 +15,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
+#include "llvm/ADT/DenseMap.h"
 
 #include <cctype>
 #include <memory>
@@ -875,56 +876,178 @@ class ValidPointerChecker
   // syntactic identity itself, which is exactly what this function does
   // instead, with plain integer arithmetic that needs no solver help at
   // all once the two expressions are known to share a root symbol.
-  // Deliberately narrow: only a byte-stride (`char`) element type is
-  // handled, since that is the only case where the index and the
-  // allocation's own size argument are expressed in the same units
-  // without a further multiplication this function does not attempt to
-  // peel through (a `wchar_t` buffer sized as `(n+1)*sizeof(WCHAR)`
-  // falls through to the existing machinery, unchanged); only a `+`
-  // between the size argument's root symbol and a literal is handled,
-  // not `-` (a shrinking relationship between an allocation and its own
-  // size argument is not a shape this pattern is meant to bless, and
-  // returning false here just falls through to the real proof attempt
-  // below, exactly as for every other case this cannot establish); and
-  // only the exact same symbol is recognized, not a provably-equal-but-
-  // differently-derived one -- src/internal/linux/handle_path.c's
+  // Deliberately narrow in the byte-stride dimension: only a byte-stride
+  // (`char`) element type is handled, since that is the only case where
+  // the index and the allocation's own size argument are expressed in
+  // the same units without a further multiplication this function does
+  // not attempt to peel through (a `wchar_t` buffer sized as
+  // `(n+1)*sizeof(WCHAR)` falls through to the existing machinery,
+  // unchanged). It ORIGINALLY also required the exact same bare symbol
+  // on both sides (only a `+` between that one symbol's root and a
+  // literal, nothing else) -- collectLinearTerms()/linearExtentProvenInBounds()
+  // below generalize that part to any number of summed/subtracted
+  // symbols on either side, folded via ordinary linear-term
+  // cancellation instead of a single pointer-identity comparison; see
+  // that function's own comment for why and for the concrete callers
+  // that need it. A provably-equal-but-differently-DERIVED symbol (two
+  // separate calls that happen to compute the same value) is still not
+  // recognized by either version -- src/internal/linux/handle_path.c's
   // `r = __malloc((size_t)n + 1); if (n) memcpy(...); r[n] = 0;` still
   // reports on its `n == 0` branch (where the index is concretized to
   // the literal 0 rather than staying the symbol `n`), a real remaining
-  // gap this function does not close; see the ownership-lemma commit
-  // message for why that narrower residual was left rather than chased
-  // further. A plain, unchecked width/signedness conversion (`(size_t)n`
-  // at the allocation call vs. the raw `long n` used again as the index,
-  // also from handle_path.c) wraps the same underlying symbol in a
+  // gap neither version closes; see the ownership-lemma commit message
+  // for why that narrower residual was left rather than chased further.
+  // A plain, unchecked width/signedness conversion (`(size_t)n` at the
+  // allocation call vs. the raw `long n` used again as the index, also
+  // from handle_path.c) wraps the same underlying symbol in a
   // SymbolCast, which is a genuinely different SymExpr object from the
   // bare symbol -- so a pointer-identity comparison between the two
   // sides needs to see through any such casts on either side to
   // recognize they still name the same value (this part of that file's
-  // shape IS handled, by stripCasts below).
+  // shape IS handled, by stripCasts below, called from within
+  // collectLinearTerms() too).
   static SymbolRef stripCasts(SymbolRef Symbol) {
     while (const auto *Cast = dyn_cast_or_null<SymbolCast>(Symbol))
       Symbol = Cast->getOperand();
     return Symbol;
   }
 
-  static bool sameSymbolExtentProvenInBounds(const ElementRegion *Element,
-                                             SVal BaseExtent, CharUnits Width,
-                                             CheckerContext &C) {
+  // Generalizes the single-symbol cancellation above (the original
+  // shape this was built for was strictly "extent = S + K, index = S")
+  // to the far more common real shape in this tree's own path-handling
+  // code: an allocation sized from the SUM of two or more independent
+  // length symbols, indexed by an expression that reuses only SOME of
+  // them. src/env/setenv.c's `s = malloc(l1 + l2 + 2); ...; s[l1] =
+  // '=';` (a name, a '=', a value and a NUL) and
+  // src/internal/rpath.c's join() -- `p = __malloc(dl + 1 + tl + 1);
+  // ...; p[dl] = '\\'; ...; p[dl + 1 + tl] = 0;` (a directory, a
+  // separator, a tail and a NUL) are both exactly this: the extent is
+  // "index's own symbols, PLUS at least one more nonnegative term",
+  // which is provably sufficient by plain arithmetic once the shared
+  // symbols are identified and cancelled -- no different in kind from
+  // the S+K case, just with more terms on one or both sides. Recognizing
+  // this syntactically (as the S+K lemma above already does for its own
+  // narrower shape) needs no solver help either.
+  //
+  // collectLinearTerms() walks a SymExpr built purely from BO_Add/BO_Sub
+  // over other SymExprs and integer literals -- which is exactly what
+  // every size/offset expression in this idiom is built from, since
+  // nothing here multiplies two symbolic lengths together -- and reduces
+  // it to a normalized "symbol -> net signed coefficient" map plus a net
+  // integer constant. A node this cannot decompose (a multiplication, a
+  // call result, ...) is folded in as one opaque atomic term instead of
+  // being silently dropped, so it can still cancel by pointer identity
+  // against the identical opaque subexpression on the other side, but
+  // can never be treated as a free pass the way a genuine summed symbol
+  // is; ElemWidth stays restricted to a byte stride for the same reason
+  // as before (a `wchar_t` buffer's `(n+1) * sizeof(WCHAR)` extent has a
+  // BO_Mul node neither this nor the old lemma peels through).
+  static void collectLinearTerms(SymbolRef Sym, bool Negate,
+                                 llvm::DenseMap<SymbolRef, int> &Terms,
+                                 int64_t &Constant) {
+    Sym = stripCasts(Sym);
+    if (const auto *IntExpr = dyn_cast<SymIntExpr>(Sym)) {
+      BinaryOperator::Opcode Op = IntExpr->getOpcode();
+      if (Op == BO_Add || Op == BO_Sub) {
+        collectLinearTerms(IntExpr->getLHS(), Negate, Terms, Constant);
+        int64_t Rhs = IntExpr->getRHS().getExtValue();
+        if (Op == BO_Sub)
+          Rhs = -Rhs;
+        Constant += Negate ? -Rhs : Rhs;
+        return;
+      }
+    } else if (const auto *SymExprB = dyn_cast<SymSymExpr>(Sym)) {
+      BinaryOperator::Opcode Op = SymExprB->getOpcode();
+      if (Op == BO_Add || Op == BO_Sub) {
+        collectLinearTerms(SymExprB->getLHS(), Negate, Terms, Constant);
+        collectLinearTerms(SymExprB->getRHS(),
+                           Op == BO_Sub ? !Negate : Negate, Terms, Constant);
+        return;
+      }
+    }
+    Terms[Sym] += Negate ? -1 : 1;
+  }
+
+  // Strictly more general than the old sameSymbolExtentProvenInBounds
+  // (folded into this function): "extent = S + K, index = S" is just
+  // the case where every term cancels to zero except the constant, which
+  // this reaches the same way, with no special-casing needed -- perfect
+  // cancellation never depends on any symbol's sign, only a leftover
+  // term does. A leftover term is only trusted when it is a symbol whose
+  // own type is unsigned (so it cannot be negative by construction --
+  // every length/offset symbol this idiom ever sums is a size_t) and its
+  // net coefficient is positive (subtracted more than it was added is
+  // never trusted, since that could shrink the real remaining space by
+  // an amount this function has no way to bound).
+  // getDynamicExtent() always answers in BYTES, but a NON-byte element
+  // array's own index (`ne[n]`) is naturally expressed in ELEMENTS, not
+  // bytes -- so the two are not directly comparable the way the
+  // byte-stride case above compares them. This codebase's other
+  // extremely common allocation idiom is exactly this mismatch:
+  // `realloc(p, sizeof(*p) * (n + K))` growing a POINTER (or struct)
+  // array rather than a byte buffer -- src/env/setenv.c's `ne =
+  // realloc(__environ, sizeof(char *) * (n + 2)); ne[n] = s; ne[n + 1]
+  // = 0;` and putenv()'s `putenv_strings = realloc(..., sizeof(char *)
+  // * (nputenv + 1)); putenv_strings[nputenv++] = s;` are both this
+  // shape. Peeling a top-level `ElemWidth * (...)` factor off the
+  // extent expression converts it back to the same element-count units
+  // the index is already naturally in, after which the exact same
+  // linear-term cancellation below applies unchanged -- the required
+  // remaining amount is then simply "at least 1 more element", not "at
+  // least Width more bytes". SValBuilder always normalizes a
+  // symbol-times-constant product into a SymIntExpr (RHS the literal),
+  // regardless of the multiplication's spelling order in the source, so
+  // checking only that shape is not an extra restriction here.
+  static SymbolRef peelElementWidthFactor(SymbolRef Sym, CharUnits ElemWidth) {
+    Sym = stripCasts(Sym);
+    const auto *IntExpr = dyn_cast<SymIntExpr>(Sym);
+    if (!IntExpr || IntExpr->getOpcode() != BO_Mul)
+      return nullptr;
+    if (IntExpr->getRHS().getExtValue() != ElemWidth.getQuantity())
+      return nullptr;
+    return IntExpr->getLHS();
+  }
+
+  static bool linearExtentProvenInBounds(const ElementRegion *Element,
+                                         SVal BaseExtent, CharUnits Width,
+                                         CheckerContext &C) {
     SymbolRef ExtentSym = BaseExtent.getAsSymbol();
-    const auto *IntExpr = dyn_cast_or_null<SymIntExpr>(ExtentSym);
-    if (!IntExpr || IntExpr->getOpcode() != BO_Add)
+    if (!ExtentSym)
       return false;
     CharUnits ElemWidth =
         C.getASTContext().getTypeSizeInChars(Element->getElementType());
-    if (ElemWidth.getQuantity() != 1)
-      return false;
+    // In bytes for the ElemWidth == 1 case (Width IS the byte count
+    // needed); in elements (always exactly 1: "the accessed element
+    // itself") once ElemWidth has been peeled off below.
+    int64_t Required = Width.getQuantity();
+    if (ElemWidth.getQuantity() != 1) {
+      SymbolRef Peeled = peelElementWidthFactor(ExtentSym, ElemWidth);
+      if (!Peeled)
+        return false;
+      ExtentSym = Peeled;
+      Required = 1;
+    }
     SVal Index = Element->getIndex();
     SymbolRef IndexSym = Index.getAsSymbol();
-    if (!IndexSym || stripCasts(IntExpr->getLHS()) != stripCasts(IndexSym))
+    if (!IndexSym)
       return false;
-    const llvm::APSInt &RemainingBytes = IntExpr->getRHS();
-    return RemainingBytes.isNonNegative() &&
-           RemainingBytes.getExtValue() >= Width.getQuantity();
+
+    llvm::DenseMap<SymbolRef, int> Terms;
+    int64_t Constant = 0;
+    collectLinearTerms(ExtentSym, false, Terms, Constant);
+    collectLinearTerms(IndexSym, true, Terms, Constant);
+
+    for (const auto &Entry : Terms) {
+      if (Entry.second == 0)
+        continue;
+      if (Entry.second < 0)
+        return false;
+      QualType SymType = Entry.first->getType();
+      if (SymType.isNull() || !SymType->isUnsignedIntegerOrEnumerationType())
+        return false;
+    }
+    return Constant >= 0 && static_cast<uint64_t>(Constant) >=
+                                static_cast<uint64_t>(Required);
   }
 
   static bool alignmentProven(const MemRegion *Region, QualType Type,
@@ -1196,7 +1319,7 @@ public:
         isa_and_nonnull<SymbolExtent>(BaseExtent.getAsSymbol());
     if (!NoRealExtentInfo) {
       if (const auto *Element = dyn_cast<ElementRegion>(Region)) {
-        if (sameSymbolExtentProvenInBounds(Element, BaseExtent, Width, C)) {
+        if (linearExtentProvenInBounds(Element, BaseExtent, Width, C)) {
           if (!alignmentProven(Region, Type, C.getASTContext()))
             report("dereference alignment is not proven valid", Statement,
                    State, C);

@@ -5,6 +5,7 @@ typedef __SIZE_TYPE__ size_t;
 void *malloc(size_t);
 void free(void *);
 void *__malloc(size_t);
+void *realloc(void *, size_t);
 
 int local_object(void)
 {
@@ -192,4 +193,40 @@ char *same_symbol_extent_cancels(size_t n)
 	if (!d) return 0;
 	d[n] = 0;
 	return d;
+}
+
+/* The generalization one level up from same_symbol_extent_cancels: an
+ * allocation sized from the SUM of two or more independent length
+ * symbols, indexed by an expression that reuses only some of them.
+ * src/internal/rpath.c's join() -- `p = __malloc(dl + 1 + tl + 1); ...;
+ * p[dl] = '\\'; ...; p[dl + 1 + tl] = 0;` -- is exactly this shape (a
+ * directory, a separator, a tail and a NUL); this mirrors it with a
+ * name-then-value idiom instead (src/env/setenv.c's real body). Neither
+ * write can be related to the allocation by pointer-identity of a
+ * single shared symbol the way same_symbol_extent_cancels's `d[n]` can
+ * -- both sides need the linear-term decomposition
+ * linearExtentProvenInBounds() adds to actually cancel. */
+char *linear_combination_extent_cancels(size_t l1, size_t l2)
+{
+	char *s = __malloc(l1 + l2 + 2);
+	if (!s) return 0;
+	s[l1] = '=';
+	s[l1 + 1 + l2] = 0;
+	return s;
+}
+
+/* getDynamicExtent() always answers in bytes, but a non-byte element
+ * array's own index is naturally in ELEMENTS -- src/env/setenv.c's
+ * `ne = realloc(__environ, sizeof(char *) * (n + 2)); ne[n] = s; ne[n +
+ * 1] = 0;` is the real body this mirrors. linearExtentProvenInBounds()
+ * peels the `sizeof(char *) * (...)` factor off the extent expression
+ * before applying the same cancellation same_symbol_extent_cancels/
+ * linear_combination_extent_cancels above already exploit. */
+char **element_width_is_peeled(char **environ, size_t n, char *s)
+{
+	char **ne = realloc(environ, sizeof(char *) * (n + 2));
+	if (!ne) return 0;
+	ne[n] = s;
+	ne[n + 1] = 0;
+	return ne;
 }
