@@ -417,7 +417,16 @@ int sem_wait(sem_t *sem)
 		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
-			if (restartable_interruption(&caught, &restarted) > 0) continue;
+			/* wait_handle() reports EINTR for ANY __PLAT_WAIT_INTR wake,
+			 * and a deferred pthread_cancel() causes exactly such a wake
+			 * when the cancellation cannot be delivered yet
+			 * (__pthread_cancel_defer_enter() is still active) -- see
+			 * src/thread/pthread_cancel.c's redirect_async_cancel().
+			 * That wake delivers no signal at all, so
+			 * restartable_interruption() reports zero delivered here,
+			 * not a negative count; only a genuine, non-restarting
+			 * signal earns the EINTR this call reports to its caller. */
+			if (restartable_interruption(&caught, &restarted) >= 0) continue;
 			return -1;
 		}
 		if (errno != EAGAIN) return -1;
@@ -452,7 +461,11 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 		__sig_drain_pending();
 		if (!r) return 0;
 		if (errno == EINTR) {
-			if (restartable_interruption(&caught, &restarted) > 0) continue;
+			/* See sem_wait()'s comment on this same check: a deferred
+			 * pthread_cancel()'s wake also delivers no signal, so a
+			 * zero (not negative) restartable_interruption() result
+			 * must retry too. */
+			if (restartable_interruption(&caught, &restarted) >= 0) continue;
 			return -1;
 		}
 		if (errno != EAGAIN) return -1;
