@@ -527,6 +527,24 @@ public:
     if (!Function || !Function->getIdentifier())
       return;
     StringRef Name = Function->getName();
+
+    // A normal return from a string-consuming API establishes that every
+    // string argument it traversed had a reachable NUL.  checkPreCall has
+    // already emitted the proof obligation when that fact was unavailable
+    // before the call; retaining the call's postcondition prevents every
+    // later use of the identical pointer from repeating the same obligation.
+    // Keep the exact argument region, just like string-producing returns
+    // below: proving a suffix says nothing about bytes before that suffix.
+    SmallVector<unsigned, 2> Required;
+    requiredArguments(Call, Required);
+    for (unsigned Argument : Required) {
+      if (Argument >= Call.getNumArgs())
+        continue;
+      if (const MemRegion *ArgumentRegion =
+              Call.getArgSVal(Argument).getAsRegion())
+        State = State->add<KnownStringRegion>(ArgumentRegion);
+    }
+
     const MemRegion *Region = nullptr;
     if (returnsString(Call)) {
       Region = Call.getReturnValue().getAsRegion();
@@ -538,8 +556,11 @@ public:
       // by checkPreCall before the append began.
       Region = Call.getArgSVal(0).getAsRegion();
     }
-    if (!Region)
+    if (!Region) {
+      if (State != C.getState())
+        C.addTransition(State);
       return;
+    }
     // Keep the exact start address, not merely its allocation's base:
     // strcpy(buf + 4, "x") proves a sentinel reachable from buf + 4,
     // but says nothing about whether one is reachable from buf itself.

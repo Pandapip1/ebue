@@ -663,7 +663,7 @@ static void bre_atom(struct parser *ps, int at_start)
 		if (ps->p[0] != '\\' || ps->p[1] != ')') { ps->err = REG_EPAREN; return; }
 		ps->p += 2;
 		emit(ps, I_SAVE, 0, 0, 2 * g + 1, 0);
-		if (g <= 9) ps->closed |= 1u << g;
+		if (g >= 0 && g <= 9) ps->closed |= 1u << g;
 		return;
 	}
 	if (c == '\\' && ps->p[1] >= '1' && ps->p[1] <= '9') {

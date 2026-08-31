@@ -319,30 +319,6 @@ static long wrap_to_long(unsigned long u)
 	return (long)(u - half) - (long)(half - 1UL) - 1L;
 }
 
-/* ISO C 6.5.7p3's bound on a shift count, reached from 2.6.4 by way of
- * 1.1.2: the count must be non-negative and strictly less than the
- * width of the promoted left operand, or the shift is undefined and
- * there is no result to return. Returns 1 if the shift may be
- * performed; otherwise records the failure (WRDE_SYNTAX, exactly as
- * '/' and '%' do for a zero divisor) and returns 0.
- *
- * fail() is already a no-op while !a->live, so a count inside a
- * short-circuited branch -- $((0 && (1 << -1))) -- is parsed and
- * ignored rather than failing the whole expansion, which is the same
- * treatment division by zero gets one arm below.
- *
- * LONG_BIT rather than sizeof(long) * CHAR_BIT: see the file header's
- * note on shift counts for why the ceiling is the target's width in
- * the native sanitizer build too. */
-static int shift_count_ok(struct arith *a, long rhs)
-{
-	if (rhs < 0 || rhs >= LONG_BIT) {
-		fail(a, WRDE_SYNTAX);
-		return 0;
-	}
-	return 1;
-}
-
 /* Unary minus, and the quotient of the one division that overflows.
  * __wraps (include/features.h) because the modular subtraction below is
  * the specified behaviour here, not an accident: tools/asan-build.sh
@@ -377,8 +353,12 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	case '&': return cur & rhs;
 	case '^': return cur ^ rhs;
 	case '|': return cur | rhs;
-	/* Both shifts refuse an out-of-range count up front (6.5.7p3);
-	 * see shift_count_ok() above. With the count in range, the left
+	/* Both shifts refuse an out-of-range count up front (6.5.7p3).
+	 * fail() is already a no-op while !a->live, so a count inside a
+	 * short-circuited branch is parsed and ignored rather than failing
+	 * the expansion, just like division by zero above. LONG_BIT is the
+	 * target width even in a native sanitizer build; see the file banner.
+	 * With the count in range, the left
 	 * shift still goes through unsigned long, because 6.5.7p4 makes
 	 * `cur << rhs` undefined a second time when cur is negative or
 	 * the result does not fit -- 1L << 31 on this target's 32-bit
@@ -387,9 +367,13 @@ __wraps static long apply_binop(struct arith *a, int op, long cur, long rhs)
 	 * The right shift is left as written: a negative left operand
 	 * there is implementation-defined (6.5.7p5), not undefined, and
 	 * every compiler this library is built with shifts arithmetically. */
-	case 'L': if (!shift_count_ok(a, rhs)) return 0;
+	case 'L': if (rhs < 0 || rhs >= LONG_BIT) {
+			  fail(a, WRDE_SYNTAX); return 0;
+		  }
 		  return wrap_to_long((unsigned long)cur << rhs);	/* "<<="/"<<" */
-	case 'R': if (!shift_count_ok(a, rhs)) return 0;
+	case 'R': if (rhs < 0 || rhs >= LONG_BIT) {
+			  fail(a, WRDE_SYNTAX); return 0;
+		  }
 		  return cur >> rhs;	/* ">>="/">>" */
 	case '<': return cur < rhs;
 	case '>': return cur > rhs;

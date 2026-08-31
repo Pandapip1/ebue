@@ -10,11 +10,13 @@ double frexp(double x, int *e)
 	int ee = (int)(u.i >> 52 & 0x7ff);
 
 	if (!ee) {
-		if (x) {
-			x = frexp(x * 0x1p64, e);
-			*e -= 64;
-		} else *e = 0;
-		return x;
+		if (!x) { *e = 0; return x; }
+		u.f = x * 0x1p64;
+		ee = (int)(u.i >> 52 & 0x7ff);
+		*e = ee - 0x3fe - 64;
+		u.i &= 0x800fffffffffffffULL;
+		u.i |= 0x3fe0000000000000ULL;
+		return u.f;
 	}
 	if (ee == 0x7ff) { *e = 0; return x; }
 	*e = ee - 0x3fe;
@@ -29,11 +31,13 @@ float frexpf(float x, int *e)
 	int ee = (int)(u.i >> 23 & 0xff);
 
 	if (!ee) {
-		if (x) {
-			x = frexpf(x * 0x1p30f, e);
-			*e -= 30;
-		} else *e = 0;
-		return x;
+		if (!x) { *e = 0; return x; }
+		u.f = x * 0x1p30f;
+		ee = (int)(u.i >> 23 & 0xff);
+		*e = ee - 0x7e - 30;
+		u.i &= 0x807fffff;
+		u.i |= 0x3f000000;
+		return u.f;
 	}
 	if (ee == 0xff) { *e = 0; return x; }
 	*e = ee - 0x7e;
@@ -67,11 +71,13 @@ long double frexpl(long double x, int *e)
 	int ee = u.i.se & 0x7fff;
 
 	if (!ee) {
-		if (x) {
-			x = frexpl(x * 0x1p120L, e);
-			*e -= 120;
-		} else *e = 0;
-		return x;
+		if (!x) { *e = 0; return x; }
+		u.f = x * 0x1p120L;
+		ee = u.i.se & 0x7fff;
+		*e = ee - 0x3ffe - 120;
+		u.i.se &= 0x8000;
+		u.i.se |= 0x3ffe;
+		return u.f;
 	}
 	if (ee == 0x7fff) return x;
 	*e = ee - 0x3ffe;
@@ -83,11 +89,13 @@ long double frexpl(long double x, int *e)
 	int ee = (int)(u.i >> 52 & 0x7ff);
 
 	if (!ee) {
-		if (x) {
-			x = frexpl(x * 0x1p64L, e);
-			*e -= 64;
-		} else *e = 0;
-		return x;
+		if (!x) { *e = 0; return x; }
+		u.f = x * 0x1p64L;
+		ee = (int)(u.i >> 52 & 0x7ff);
+		*e = ee - 0x3fe - 64;
+		u.i &= 0x800fffffffffffffULL;
+		u.i |= 0x3fe0000000000000ULL;
+		return u.f;
 	}
 	if (ee == 0x7ff) { *e = 0; return x; }
 	*e = ee - 0x3fe;

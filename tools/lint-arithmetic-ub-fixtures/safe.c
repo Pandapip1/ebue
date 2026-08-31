@@ -48,6 +48,47 @@ int checked_addition(int value)
 	return value + 7;
 }
 
+int checked_two_operand_addition(int left, int right)
+{
+	if (right > 0 && left > 2147483647 - right)
+		return 0;
+	if (right < 0 && left < (-2147483647 - 1) - right)
+		return 0;
+	return left + right;
+}
+
+int checked_positive_multiplication(int left, int right)
+{
+	if (left < 0 || right <= 0 || left > 2147483647 / right)
+		return 0;
+	return left * right;
+}
+
+int checked_positive_negative_multiplication(int left, int right)
+{
+	if (left <= 0 || right >= 0)
+		return 0;
+	if (right == -1)
+		return -left;
+	if (left > (-2147483647 - 1) / right)
+		return 0;
+	return left * right;
+}
+
+int checked_negative_positive_multiplication(int left, int right)
+{
+	if (left >= 0 || right <= 0 || left < (-2147483647 - 1) / right)
+		return 0;
+	return left * right;
+}
+
+int checked_negative_multiplication(int left, int right)
+{
+	if (left >= 0 || right >= 0 || left < 2147483647 / right)
+		return 0;
+	return left * right;
+}
+
 int checked_subtraction(int value)
 {
 	if (value < (-2147483647 - 1) + 7)
@@ -60,6 +101,14 @@ int checked_negation(int value)
 	if (value == (-2147483647 - 1))
 		return 0;
 	return -value;
+}
+
+int checked_loop_increment(void)
+{
+	int i;
+	for (i = 0; i < 3; i++)
+		;
+	return i;
 }
 
 /* Pins symbolInterval()'s BO_Rem decomposition of a value materialized

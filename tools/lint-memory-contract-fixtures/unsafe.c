@@ -8,6 +8,28 @@ char *strcpy(char *, const char *);
 void *__malloc(size_t);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
+int strcmp(const char *, const char *);
+
+/* The first call must report the unproved sentinel.  If it returns
+ * normally, that call itself establishes the same pointer's string
+ * postcondition, so repeating the identical obligation would be noise. */
+void repeated_string_contract(char *text)
+{
+	(void)strlen(text); /* memory-contract-expect */
+	(void)strlen(text);
+}
+
+/* strcmp traverses both strings before a normal return.  checkPreCall emits
+ * one call-site obligation (rather than duplicate diagnostics for the same
+ * expression), while checkPostCall must retain both established sentinels so
+ * neither later strlen repeats that already-discharged precondition. */
+int repeated_two_string_contract(char *left, char *right)
+{
+	int order = strcmp(left, right); /* memory-contract-expect */
+	(void)strlen(left);
+	(void)strlen(right);
+	return order;
+}
 
 void oversized(void)
 {

@@ -940,8 +940,35 @@ class ValidPointerChecker
     if (!Ref)
       return false;
     const auto *Variable = dyn_cast<VarDecl>(Ref->getDecl());
-    return Variable && Variable->getIdentifier() &&
-           Variable->hasGlobalStorage() && Variable->getName() == "__peb";
+    if (!Variable || !Variable->getIdentifier() ||
+        !Variable->hasGlobalStorage())
+      return false;
+    StringRef Name = Variable->getName();
+    if (Name == "__peb")
+      return true;
+    // The child table has the same cross-translation-unit invariant as
+    // __peb: it starts at the address of the fixed __child_seed array and
+    // child_grow() replaces it only after a checked __malloc succeeds.
+    // The old allocation is freed before publication of the replacement,
+    // but the global itself is never cleared.  Exact-name matching keeps
+    // this OS/process-table contract from becoming a general relaxation
+    // for arbitrary global pointers.  The name alone is insufficient:
+    // require the external-linkage declaration published by libc.h and its
+    // canonical `struct __child *` type, so an unrelated file-local or
+    // differently-typed variable with the same reserved spelling remains
+    // subject to the ordinary proof.
+    if (Name != "__children" || !Variable->hasExternalFormalLinkage())
+      return false;
+    QualType Type = Variable->getType().getCanonicalType();
+    if (!Type->isPointerType())
+      return false;
+    const auto *Record = Type->getPointeeType()->getAs<RecordType>();
+    if (!Record)
+      return false;
+    const auto *Declaration =
+        cast<RecordDecl>(Record->getDecl()->getCanonicalDecl());
+    return Declaration->isStruct() && Declaration->getIdentifier() &&
+           Declaration->getName() == "__child";
   }
 
   void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
@@ -1947,6 +1974,25 @@ class ResourceLifecycleChecker
     return hasSymbolicArrayIndex(Subscript->getBase(), C);
   }
 
+  // A resource passed directly as a function parameter was acquired by
+  // the caller, outside this per-function analysis.  Most scalar resource
+  // parameters retain a SymbolRef and are handled by the absent-ResourceMap
+  // branch below, but opaque pointer resources such as NT HANDLE can be
+  // represented as a region value with no recoverable symbol.  That
+  // representation difference must not turn the same borrowed-resource
+  // contract into a fabricated-resource finding.  Keep this deliberately
+  // direct: values loaded from globals, fields, arrays, or arbitrary
+  // expressions still go through the ordinary proof logic.
+  static bool isDirectParameterArgument(const CallEvent &Call,
+                                        unsigned Argument) {
+    const Expr *ArgExpr = Call.getArgExpr(Argument);
+    if (!ArgExpr)
+      return false;
+    const auto *Ref =
+        dyn_cast<DeclRefExpr>(ArgExpr->IgnoreParenCasts());
+    return Ref && isa<ParmVarDecl>(Ref->getDecl());
+  }
+
   void checkResource(const CallEvent &Call, Family Expected, unsigned Argument,
                      bool Consume, CheckerContext &C) const {
     if (Argument >= Call.getNumArgs())
@@ -1962,6 +2008,12 @@ class ResourceLifecycleChecker
     const unsigned *State =
         Symbol ? C.getState()->get<ResourceMap>(Symbol) : nullptr;
     if (!State) {
+      if (isDirectParameterArgument(Call, Argument)) {
+        if (Consume && Symbol)
+          C.addTransition(
+              C.getState()->set<ResourceMap>(Symbol, released(Expected)));
+        return;
+      }
       if (!Symbol) {
         // Symbol == nullptr: this argument is a concrete, wholly
         // non-symbolic value the analyzer can name outright -- the

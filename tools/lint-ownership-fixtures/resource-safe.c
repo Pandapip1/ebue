@@ -52,6 +52,15 @@ void handle_lifecycle(void)
 	NtClose(h);
 }
 
+/* An opaque handle received from a caller is the HANDLE analogue of
+ * descriptor_borrow below.  Pointer-valued resources do not always retain
+ * a recoverable SymbolRef in the analyzer, but that representation detail
+ * cannot make a direct parameter look like a fabricated resource. */
+void handle_borrow(HANDLE h)
+{
+	NtClose(h);
+}
+
 /* A descriptor received as a plain parameter -- posix_close(int fd)'s
  * own shape (src/unistd/posix_close.c: `return close(fd);`), and
  * closedir()'s `dp->fd` read through a borrowed struct pointer. Just

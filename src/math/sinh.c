@@ -24,15 +24,18 @@
 long double sinhl(long double x)
 {
 	long double t;
+	int neg;
 	if (x != x) return x;
 	if (x == 0.0L) return x;               /* preserves the sign of zero */
-	if (x < 0.0L) return -sinhl(-x);       /* avoid expm1(x) rounding to -1 */
+	neg = x < 0.0L;
+	if (neg) x = -x;                       /* avoid expm1(x) rounding to -1 */
 	t = expm1l(x);
 	if (t == HUGE_VALL) {                  /* x large enough that e^x overflowed */
 		feraiseexcept(FE_OVERFLOW);
-		return HUGE_VALL;
+		return neg ? -HUGE_VALL : HUGE_VALL;
 	}
-	return 0.5L * (t + t / (t + 1.0L));
+	t = 0.5L * (t + t / (t + 1.0L));
+	return neg ? -t : t;
 }
 
 long double coshl(long double x)
