@@ -713,10 +713,27 @@ class ValidPointerChecker
   // and prove it from first principles the way it could within
   // locale.c itself -- exactly the cross-file gap __errno_location and
   // __teb already needed this same mechanism for.
+  //
+  // Beyond these three individually-named cases, also honor GCC/
+  // Clang's own `returns_nonnull` attribute -- the exact return-value
+  // counterpart of the `nonnull` parameter attribute checkBeginFunction
+  // already trusts below, and the standard way a function states "this
+  // never returns NULL" as part of its real, published contract rather
+  // than something a caller must re-derive. src/string/strchr.c's own
+  // `char *r = strchrnul(s, c); return *(unsigned char *)r == ...;` is
+  // the motivating case: strchrnul() (include/string.h) is documented
+  // and marked exactly this way, and without this, every strchr() call
+  // produced an unprovable "not proven nonnull" finding on r for a fact
+  // strchrnul()'s own signature already states truthfully. Symmetric
+  // with the `nonnull` parameter mechanism: this only trusts a return
+  // value for a function this project has itself explicitly annotated,
+  // one function at a time, never a blanket relaxation.
   static bool isAlwaysNonNull(const CallEvent &Call) {
     const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
     if (!Function || !Function->getIdentifier())
       return false;
+    if (Function->hasAttr<ReturnsNonNullAttr>())
+      return true;
     StringRef Name = Function->getName();
     return Name == "__errno_location" || Name == "__teb" ||
            Name == "localeconv";

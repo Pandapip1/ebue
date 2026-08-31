@@ -40,6 +40,19 @@ void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t 
 	 * two-argument helper shape. */
 	index = (unsigned long)(piat - descr->iat);
 
+	/* *descr->modhandle below is a disclosed, deliberately unmarked
+	 * residual, surfaced only after descr's own nonnull mark let this
+	 * checker explore further into this function than before (the
+	 * "deeper exploration unlocked" effect prior sweeps in this tree
+	 * already measured, not a regression): descr->modhandle is a
+	 * struct FIELD's own value, distinct from descr itself (already
+	 * required, see include/ntlibc/delayload.h), and `nonnull`
+	 * cannot describe a field reached through a parameter, only the
+	 * parameter itself. Verified sound by hand regardless: every real
+	 * descr this function is ever called with is NTLIBC_DELAY_DLL's
+	 * own macro-built static (include/ntlibc/delayload.h), whose own
+	 * modhandle field is always `&ntlibc_delay_mod_##dllvar` -- the
+	 * address of a real, file-static variable, never NULL. */
 	dll = *descr->modhandle;
 	if (!dll) {
 		dll = ntlibc_rpath_load(descr->dllname);

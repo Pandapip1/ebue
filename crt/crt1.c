@@ -81,6 +81,21 @@ char *__progname_full;
  * escapes, and only quotes delimit it.  Done on the UTF-16 string so that
  * the quoting rules see the same code units the shell produced; each
  * argument is then converted to UTF-8. */
+/* p is required: every dereference of it below is guarded by `i < n`
+ * (so p itself is never read when n == 0), but this function's one
+ * real call site -- __libc_start_main's own
+ * `split_cmdline(pp->CommandLine.Buffer, pp->CommandLine.Length /
+ * sizeof(WCHAR), &__argv)` -- passes a UNICODE_STRING's own Buffer/
+ * Length pair, and a valid UNICODE_STRING's own invariant (NT itself,
+ * not this tree) is that Buffer is non-NULL whenever Length > 0 -- the
+ * same "genuine invariant established by the real caller, not
+ * derivable from a bound check alone" class as this project's own
+ * fixed-capacity array precedent. argvp is required unconditionally:
+ * `*argvp = argv;` runs on every success path with no guard of argvp
+ * itself, and the same one real call site always passes `&__argv`, a
+ * real global's address, never NULL. */
+static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
+    __attribute__((nonnull(1, 3)));
 static int split_cmdline(const WCHAR *p, size_t n, char ***argvp)
 {
 	WCHAR *buf;
@@ -184,6 +199,23 @@ static char **build_environ(const WCHAR *env)
 	return ev;
 }
 
+/* pp's own two dereferences below (pp->StandardError, pp->CommandLine)
+ * are a disclosed, deliberately unmarked residual, not an oversight:
+ * __libc_start_main takes no parameters at all, so there is no
+ * function signature for `nonnull` to describe this on. pp is a plain
+ * local, `__peb->ProcessParameters` -- a struct FIELD's own value,
+ * distinct from __peb itself (which this checker already trusts
+ * structurally, see OwnershipChecker.cpp's own isAlwaysNonNullGlobal)
+ * -- the same "struct-field-value fact, not expressible via nonnull on
+ * any signature" class this tree's own signal.c exception_handler()
+ * comment and plat_signal.c open_shared_stop_event() comment already
+ * established for two different subsystems. Verified sound by hand
+ * regardless: RTL_USER_PROCESS_PARAMETERS is allocated and populated
+ * by the NT loader before any user-mode instruction of a process runs
+ * (ReactOS's own BasePushProcessParameters/RtlCreateProcessParameters),
+ * so PEB->ProcessParameters is exactly as OS-guaranteed non-NULL as
+ * __peb itself -- just one field access further than this checker's
+ * global-identity mechanism reaches. */
 void __libc_start_main(void)
 {
 	PRTL_USER_PROCESS_PARAMETERS pp;

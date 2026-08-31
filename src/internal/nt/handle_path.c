@@ -52,7 +52,21 @@ char *__handle_path(HANDLE h)
 	 * back already in \??\C:\... form instead of \Device\HarddiskVolumeN\...;
 	 * such a name is already a drive path, so just strip the \??\ prefix
 	 * rather than going through the device/symlink matching below, which
-	 * only knows how to match \Device\... names. */
+	 * only knows how to match \Device\... names.
+	 *
+	 * nb[0..5] below is a disclosed, deliberately unmarked residual: nb
+	 * is oni->Name.Buffer, a struct field's own value populated by the
+	 * NtQueryObject() call just above -- a fact about that call's own
+	 * output, several statements removed from h (this function's only
+	 * parameter), the same "value derived from an external syscall's
+	 * own output struct, not expressible via nonnull on any parameter"
+	 * class this tree's own src/signal/linux/plat_signal.c
+	 * open_shared_stop_event() comment already established for a
+	 * different subsystem. Every access is short-circuit-guarded by
+	 * `nlen >= 6` first, and a successful NtQueryObject(
+	 * ObjectNameInformation) always populates a UNICODE_STRING whose
+	 * Buffer is non-NULL whenever Length > 0 (documented NT behavior,
+	 * not this tree's own guard). */
 	{
 		size_t nlen = oni->Name.Length / sizeof(WCHAR);
 		WCHAR *nb = oni->Name.Buffer;

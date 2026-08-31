@@ -64,6 +64,14 @@ int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __
 	size_t next;
 
 	if (*pos >= buflen) return 0;
+	/* fi->FileId below is a disclosed, deliberately unmarked residual,
+	 * the same "struct/local-derived pointer, not a parameter" class
+	 * this file's own Linux sibling (src/dirent/linux/plat_dirent.c)
+	 * discloses for its own d->d_ino: fi is `buf + *pos`, a local, not
+	 * a parameter, and buf itself is already required (src/internal/
+	 * plat_dirent.h). Verified sound by hand regardless: `*pos <
+	 * buflen` just above proves this offset is within buf's own real,
+	 * NtQueryDirectoryFile-filled extent. */
 	fi = (const FILE_ID_BOTH_DIR_INFORMATION *)((const unsigned char *)buf + *pos);
 
 	/* Zeroed up front, not just the fields set explicitly below: the old

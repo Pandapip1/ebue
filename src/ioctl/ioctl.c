@@ -76,6 +76,18 @@ static int fionread_file(struct __fd *f, int *out)
 	return 0;
 }
 
+/* arg's two unconditional dereferences below (`*(int *)arg` in the
+ * FIONREAD and FIONBIO cases) are a disclosed, deliberately unmarked
+ * residual: arg is not a named parameter at all, only a value pulled
+ * out of ioctl()'s own trailing `...` via va_arg() -- there is no
+ * parameter POSITION for `nonnull` (which only ever describes a
+ * function's own fixed, named parameters) to attach to. This is the
+ * same shape every variadic POSIX call with a request-dependent third
+ * argument has (fcntl(), open()'s mode); trusted the same way this
+ * project already trusts ioctl(2)'s own real-world convention that a
+ * caller issuing a pointer-taking request (FIONREAD, FIONBIO,
+ * TIOCGWINSZ) supplies a real pointer for it, not something this
+ * function's own body could ever validate. */
 int ioctl(int fd, unsigned long req, ...)
 {
 	struct __fd *f = __fd_get(fd);

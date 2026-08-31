@@ -146,6 +146,17 @@ int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __
 	size_t i;
 
 	if (*pos >= buflen) return 0;
+	/* d->d_ino below is a disclosed, deliberately unmarked residual:
+	 * d is `buf + *pos`, a local computed by pointer arithmetic, not
+	 * a parameter of this function -- buf itself is already required
+	 * (see src/internal/plat_dirent.h's own comment) and there is no
+	 * signature for `nonnull` to describe a further-derived local on,
+	 * the same "struct/local-derived pointer, not a parameter" class
+	 * crt/delayload2.c's own find_mapped_module() comment already
+	 * established. Verified sound by hand regardless: `*pos < buflen`
+	 * just above proves this offset is within buf's own real,
+	 * getdents64(2)-filled extent, and buf itself is real (never NULL)
+	 * per plat_dirent.h's own comment. */
 	d = (const struct __lx_dirent64 *)((const unsigned char *)buf + *pos);
 
 	/* Zeroed up front so every byte of `out`, including name[] past the

@@ -221,12 +221,25 @@ struct termios {
 #define B19200    19200
 #define B38400    38400
 
-int tcgetattr(int, struct termios *);
-int tcsetattr(int, int, const struct termios *);
-speed_t cfgetispeed(const struct termios *);
-speed_t cfgetospeed(const struct termios *);
-int cfsetispeed(struct termios *, speed_t);
-int cfsetospeed(struct termios *, speed_t);
+/* t is required by every one of these six: src/termios/termios.c's
+ * own bodies dereference it unconditionally (tcgetattr()'s own
+ * `t->c_iflag = shadow.iflag;` and friends once get_console()
+ * succeeds; tcsetattr()'s own `shadow.iflag = t->c_iflag;` and
+ * friends once the act check passes; the four cf*speed() one-liners
+ * dereference t directly with nothing else in their own bodies at
+ * all), with no NULL check of t itself anywhere. Every real call site
+ * in this tree (test/posix-termios.c, test/posix-dl.c) always passes
+ * the address of a real, on-stack struct termios, never NULL --
+ * confirmed against test/posix-termios.c's own `tcsetattr(consolefd,
+ * 999, 0)` too, whose `0` for t is reached only because the earlier
+ * `act` validation (a real, load-bearing check) rejects the call
+ * before t is ever touched. */
+int tcgetattr(int, struct termios *) __attribute__((nonnull(2)));
+int tcsetattr(int, int, const struct termios *) __attribute__((nonnull(3)));
+speed_t cfgetispeed(const struct termios *) __attribute__((nonnull(1)));
+speed_t cfgetospeed(const struct termios *) __attribute__((nonnull(1)));
+int cfsetispeed(struct termios *, speed_t) __attribute__((nonnull(1)));
+int cfsetospeed(struct termios *, speed_t) __attribute__((nonnull(1)));
 int tcflush(int, int);
 int tcdrain(int);
 int tcflow(int, int);
