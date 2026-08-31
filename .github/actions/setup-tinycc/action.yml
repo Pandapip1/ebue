@@ -45,4 +45,5 @@ runs:
       run: |
         test -x "$HOME/tinycc-install/bin/i386-win32-tcc"
         test -x "$HOME/tinycc-install/bin/x86_64-win32-tcc"
+        test -x "$HOME/tinycc-install/bin/arm64-win32-tcc"
         echo "$HOME/tinycc-install/bin" >> "$GITHUB_PATH"

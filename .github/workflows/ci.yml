@@ -88,6 +88,68 @@ jobs:
           revision: ${{ env.WINE_SHA }}
           build-on-miss: "true"
 
+  # Linux is currently complete on aarch64: unlike the x86 Linux CRT
+  # bring-up legs, this is the whole library rather than a curated source
+  # subset.  Build it on real arm64 hardware so the compiler target and the
+  # runner cannot silently disagree, then exercise both the freestanding
+  # startup path and the in-tree ELF loader with their native smoke suites.
+  # The same runner also cross-builds and executes the supported x86_64/i386
+  # CRT subsets under qemu, including the x86_64 ELF-loader subset.
+  linux-builds:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld qemu-user
+      - name: Configure
+        run: >-
+          ./configure --platform=linux CC=clang
+          CFLAGS="-fno-stack-protector -mno-outline-atomics"
+      - name: Build library and CRT
+        run: make -j"$(nproc)"
+      - name: Run native Linux build suites
+        env:
+          NTLIBC_ARCH: aarch64
+        run: |
+          for script in tools/linux-build*.sh; do
+            case "$script" in
+              *-cross.sh) continue ;;
+            esac
+            "$script"
+          done
+      - name: Run x86 Linux CRT and ELF loader builds
+        run: |
+          tools/linux-build-crt-cross.sh x86_64
+          tools/linux-build-dlfcn-cross.sh x86_64
+      - name: Run i386 Linux CRT build
+        run: tools/linux-build-crt-cross.sh i386
+
+  # The pinned tinycc has a real arm64 PE compiler, and ntlibc's complete
+  # library and CRT compile with it.  Its executable linker does not yet
+  # implement the fork's --delay-all machinery for arm64, however, so this
+  # is deliberately a compile/archive gate rather than another test-exes
+  # matrix leg.  Moving arm64 into build-test-exes/windows-test belongs with
+  # that linker support; until then this still prevents every C and assembly
+  # source in the Windows ARM port from silently rotting.
+  windows-arm64-build:
+    needs: build-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up tinycc
+        uses: ./.github/actions/setup-tinycc
+        with:
+          repository: ${{ env.TINYCC_REPO }}
+          revision: ${{ env.TINYCC_SHA }}
+      - name: Configure
+        run: ./configure --host=arm64-win32 CC=arm64-win32-tcc --disable-kernel32
+      - name: Build library and CRT
+        run: make -j"$(nproc)" lib/libc.a lib/crt1.o lib/delayload2.o
+
   # This produces the exact PE files consumed on real Windows.  Wine jobs
   # rebuild independently so they can run in parallel with this hand-off.
   build-test-exes:
