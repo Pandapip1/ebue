@@ -11,3 +11,6 @@ void free(void *) __attribute__((ownership_takes(malloc, 1)));
 void *realloc(void *, size_t)
 	__attribute__((ownership_returns(malloc),
 	               annotate("ntlibc.reallocates:1")));
+void *conditional_buffer(void *)
+	__attribute__((ownership_returns(malloc),
+	               annotate("ntlibc.returns-if-null:1")));

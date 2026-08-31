@@ -34,6 +34,7 @@
 #include "libc.h"
 
 char *realpath(const char *__restrict path, char *__restrict resolved)
+	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 2)
 {
 	int fd, saved;
 	char *p, *q;

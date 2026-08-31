@@ -17,6 +17,7 @@
 #include "libc.h"
 
 char *getcwd(char *buf, size_t size)
+	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 1)
 {
 	WCHAR w[4096];
 	char tmp[4096 * 3];
@@ -60,7 +61,7 @@ char *getcwd(char *buf, size_t size)
 	return buf;
 }
 
-char *get_current_dir_name(void)
+char *get_current_dir_name(void) __NTLIBC_RETURNS_OWNERSHIP(malloc)
 {
 	return getcwd(0, 0);
 }

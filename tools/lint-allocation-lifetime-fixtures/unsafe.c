@@ -17,6 +17,11 @@ void lost_reallocation(void)
 		free(p);
 } /* allocation-lifetime-expect: realloc failure loses old allocation */
 
+void conditional_return_leak(void)
+{
+	(void)conditional_buffer(0);
+} /* allocation-lifetime-expect: null destination owns return */
+
 void *uncontracted_return(void)
 {
 	return malloc(8); /* allocation-lifetime-expect: return-contract */

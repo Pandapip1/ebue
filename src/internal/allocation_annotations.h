@@ -39,6 +39,8 @@
 	__NTLIBC_TAKES_OWNERSHIP(family, __VA_ARGS__)
 #define NTLIBC_REALLOCATES(family, argument) \
 	__NTLIBC_REALLOCATES(family, argument)
+#define NTLIBC_RETURNS_OWNERSHIP_IF_NULL(family, argument) \
+	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(family, argument)
 
 #endif
 

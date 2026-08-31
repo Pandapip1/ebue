@@ -82,6 +82,26 @@ reallocatedArgument(const FunctionDecl *Function) {
   return std::nullopt;
 }
 
+/* Some POSIX interfaces return the caller's buffer when it is nonnull and
+ * allocate one only when that argument is null.  The ordinary returns
+ * attribute would incorrectly make both results owned. */
+static std::optional<unsigned>
+ownedReturnWhenNullArgument(const FunctionDecl *Function) {
+  if (!Function)
+    return std::nullopt;
+  constexpr StringRef Prefix = "ntlibc.returns-if-null:";
+  for (const AnnotateAttr *Attribute : Function->specific_attrs<AnnotateAttr>()) {
+    StringRef Text = Attribute->getAnnotation();
+    if (!Text.starts_with(Prefix))
+      continue;
+    unsigned SourceIndex = 0;
+    if (!Text.drop_front(Prefix.size()).getAsInteger(10, SourceIndex) &&
+        SourceIndex > 0)
+      return SourceIndex - 1;
+  }
+  return std::nullopt;
+}
+
 static const IdentifierInfo *familyOf(const OwnershipAttr *Attribute) {
   return Attribute ? Attribute->getModule() : nullptr;
 }
@@ -330,9 +350,27 @@ public:
   }
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
-    const OwnershipAttr *Returns = returnsOwnership(functionOf(Call));
+    const FunctionDecl *Function = functionOf(Call);
+    const OwnershipAttr *Returns = returnsOwnership(Function);
     if (!Returns)
       return;
+    ProgramStateRef State = C.getState();
+    if (std::optional<unsigned> Argument =
+            ownedReturnWhenNullArgument(Function)) {
+      if (*Argument >= Call.getNumArgs())
+        return;
+      std::optional<DefinedOrUnknownSVal> ArgumentValue =
+          Call.getArgSVal(*Argument).getAs<DefinedOrUnknownSVal>();
+      if (!ArgumentValue)
+        return;
+      auto [ArgumentNonNullState, ArgumentNullState] =
+          State->assume(*ArgumentValue);
+      if (ArgumentNonNullState)
+        C.addTransition(ArgumentNonNullState);
+      if (!ArgumentNullState)
+        return;
+      State = ArgumentNullState;
+    }
     SVal ReturnValue = Call.getReturnValue();
     SymbolRef Result = ReturnValue.getAsLocSymbol(true);
     if (!Result)
@@ -341,7 +379,7 @@ public:
         ReturnValue.getAs<DefinedOrUnknownSVal>();
     if (!Defined)
       return;
-    auto [NonNullState, NullState] = C.getState()->assume(*Defined);
+    auto [NonNullState, NullState] = State->assume(*Defined);
     if (NullState)
       C.addTransition(NullState);
     if (!NonNullState)

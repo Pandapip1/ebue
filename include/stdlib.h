@@ -147,7 +147,8 @@ int rand_r (unsigned *) __attribute__((nonnull(1)));
 
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
-char *realpath (const char *__restrict, char *__restrict);
+char *realpath (const char *__restrict, char *__restrict)
+	__NTLIBC_RETURNS_OWNERSHIP_IF_NULL(malloc, 2);
 long int random (void);
 void srandom (unsigned int);
 char *initstate (unsigned int, char *, size_t);

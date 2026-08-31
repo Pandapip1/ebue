@@ -1907,11 +1907,11 @@ static int exec_group(const struct sh_command *cmd, int *status)
 
 	if (is_subshell) {
 		oldcwd = getcwd(0, 0);
-		if (env_snapshot_take(&es)) { restore_fds(&rs); return -1; }
+		if (env_snapshot_take(&es)) { free(oldcwd); restore_fds(&rs); return -1; }
 		if (params_subshell_enter(&ps, &fs)) {
 			env_snapshot_restore(&es);
 			free_env_snapshot(&es);
-			if (oldcwd) __free(oldcwd);
+			free(oldcwd);
 			restore_fds(&rs);
 			return -1;
 		}
@@ -1932,7 +1932,7 @@ static int exec_group(const struct sh_command *cmd, int *status)
 		params_subshell_leave(&ps, &fs);
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
-		if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+		if (oldcwd) { chdir(oldcwd); free(oldcwd); }
 	}
 	restore_fds(&rs);
 	return rc;
@@ -2085,7 +2085,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 
 	oldcwd = getcwd(0, 0);
 	if (env_snapshot_take(&es)) {
-		__free(oldcwd);
+		free(oldcwd);
 		restore_fds(&rs);
 		(void)fclose(tf);
 		__sh_list_free(list);
@@ -2094,7 +2094,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
-		__free(oldcwd);
+		free(oldcwd);
 		restore_fds(&rs);
 		(void)fclose(tf);
 		__sh_list_free(list);
@@ -2122,7 +2122,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
-	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+	if (oldcwd) { chdir(oldcwd); free(oldcwd); }
 	if (fflush(stdout)) rc = -1; /* while fd 1 is still the capture */
 	restore_fds(&rs);
 	__sh_list_free(list);
@@ -2207,11 +2207,11 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	if (failed) { restore_fds(&rs); *status = 1; return 0; }
 
 	oldcwd = getcwd(0, 0);
-	if (env_snapshot_take(&es)) { __free(oldcwd); restore_fds(&rs); return -1; }
+	if (env_snapshot_take(&es)) { free(oldcwd); restore_fds(&rs); return -1; }
 	if (params_subshell_enter(&ps, &fs)) {
 		env_snapshot_restore(&es);
 		free_env_snapshot(&es);
-		__free(oldcwd);
+		free(oldcwd);
 		restore_fds(&rs);
 		return -1;
 	}
@@ -2227,7 +2227,7 @@ static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 	params_subshell_leave(&ps, &fs);
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
-	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
+	if (oldcwd) { chdir(oldcwd); free(oldcwd); }
 	restore_fds(&rs);
 	return rc;
 }

@@ -46,6 +46,20 @@ void repeated_reallocation(void)
 	free(third);
 }
 
+void *conditional_buffer(void *buffer)
+	__attribute__((ownership_returns(malloc),
+	               annotate("ntlibc.returns-if-null:1")))
+{
+	return buffer ? buffer : malloc(8);
+}
+
+void conditional_return(void)
+{
+	char supplied[8];
+	(void)conditional_buffer(supplied);
+	free(conditional_buffer(0));
+}
+
 void destroy_widget(void *)
 	__attribute__((ownership_takes(widget, 1)));
 void *make_widget(void)

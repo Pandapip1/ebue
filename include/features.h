@@ -84,8 +84,9 @@
  * in the one analysis that consumes them; installed headers under every real
  * compiler configuration retain their ordinary declarations and ABI.  The
  * family token pairs producers with their unique ownership_takes freer.
- * __NTLIBC_REALLOCATES adds the conditional input transition which Clang's
- * standard ownership attributes cannot express by themselves. */
+ * __NTLIBC_REALLOCATES and __NTLIBC_RETURNS_OWNERSHIP_IF_NULL add conditional
+ * transitions which Clang's standard ownership attributes cannot express by
+ * themselves. */
 #if defined(__clang__) && defined(NTLIBC_ALLOCATION_LIFETIME_ANALYSIS)
 #define __NTLIBC_RETURNS_OWNERSHIP(family) \
 	__attribute__((ownership_returns(family)))
@@ -94,10 +95,14 @@
 #define __NTLIBC_REALLOCATES(family, argument) \
 	__NTLIBC_RETURNS_OWNERSHIP(family) \
 	__attribute__((annotate("ntlibc.reallocates:" #argument)))
+#define __NTLIBC_RETURNS_OWNERSHIP_IF_NULL(family, argument) \
+	__NTLIBC_RETURNS_OWNERSHIP(family) \
+	__attribute__((annotate("ntlibc.returns-if-null:" #argument)))
 #else
 #define __NTLIBC_RETURNS_OWNERSHIP(family)
 #define __NTLIBC_TAKES_OWNERSHIP(family, ...)
 #define __NTLIBC_REALLOCATES(family, argument)
+#define __NTLIBC_RETURNS_OWNERSHIP_IF_NULL(family, argument)
 #endif
 
 #define __REDIR(x,y) __typeof__(x) x __asm__(#y) // NOLINT(bugprone-macro-parentheses) -- x is the redirected declaration's identifier, where an expression-style wrapper is not applicable

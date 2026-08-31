@@ -537,15 +537,15 @@ static int bi_cd(struct sh_builtin_ctx *ctx)
 	}
 	oldcwd = getcwd(0, 0);
 	if (chdir(target) < 0) {
-		__free(oldcwd);
+		free(oldcwd);
 		ctx->status = 1;
 		return 0;
 	}
 	newcwd = getcwd(0, 0);
 	if (oldcwd) setenv("OLDPWD", oldcwd, 1);
 	if (newcwd) setenv("PWD", newcwd, 1);
-	__free(oldcwd);
-	__free(newcwd);
+	free(oldcwd);
+	free(newcwd);
 	ctx->status = 0;
 	return 0;
 }
