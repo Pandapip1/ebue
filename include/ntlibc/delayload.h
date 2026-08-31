@@ -207,7 +207,7 @@ void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t 
 		void *__ntlibc_fp = ntlibc_delay_iat_##dllvar[index].function; \
 		if (!__ntlibc_fp) \
 			__ntlibc_fp = ntlibc_delayLoadHelper2(&ntlibc_delay_descr_##dllvar, &ntlibc_delay_iat_##dllvar[index]); \
-		return ((ret (*) params)__ntlibc_fp) args; \
+		return ((ret (*) params)__ntlibc_fp) args; /* NOLINT(bugprone-macro-parentheses) -- ret and params form a function-pointer type, while args is already the caller-supplied parenthesized argument list */ \
 	}
 
 #define NTLIBC_DELAY_STUB_VOID(dllvar, index, name, params, args) \
@@ -216,7 +216,7 @@ void *ntlibc_delayLoadHelper2(ntlibc_delay_descr_t *descr, ntlibc_delay_thunk_t 
 		void *__ntlibc_fp = ntlibc_delay_iat_##dllvar[index].function; \
 		if (!__ntlibc_fp) \
 			__ntlibc_fp = ntlibc_delayLoadHelper2(&ntlibc_delay_descr_##dllvar, &ntlibc_delay_iat_##dllvar[index]); \
-		((void (*) params)__ntlibc_fp) args; \
+		((void (*) params)__ntlibc_fp) args; /* NOLINT(bugprone-macro-parentheses) -- params forms a function-pointer type and args is already the caller-supplied parenthesized argument list */ \
 	}
 
 #ifdef __cplusplus
