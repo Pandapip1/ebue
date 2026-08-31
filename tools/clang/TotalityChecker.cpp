@@ -467,6 +467,82 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
     return false;
   }
 
+  static bool memberOf(const Expr *Expression, const ValueDecl *Field) {
+    const auto *Member = dyn_cast_or_null<MemberExpr>(ignore(Expression));
+    return Member && Member->getMemberDecl() == Field;
+  }
+
+  // Mirrors writesVariable() exactly, but matches a struct/union FIELD
+  // (any `Base->Field` or `Base.Field`, for ANY base expression) instead of
+  // a single ValueDecl.  Matching on field identity rather than chasing the
+  // specific base expression is deliberately coarser than the alias
+  // tracking below: it cannot tell two same-named fields on two unrelated
+  // objects apart, so a write to an unconnected object's same-named field
+  // makes this return a conservative true where a sharper analysis would
+  // not have to.  That coarseness only ever costs precision (a real-but-
+  // undetected stable bound stays unproved), never soundness -- it can
+  // never miss an actual write to the field this checker is about to rely
+  // on as unchanging.
+  static bool writesMember(const Stmt *Statement, const ValueDecl *Field) {
+    if (!Statement)
+      return false;
+    if (const auto *Expression = dyn_cast<Expr>(Statement)) {
+      const Expr *Plain = ignore(Expression);
+      if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain))
+        if ((Unary->isIncrementDecrementOp() || Unary->getOpcode() == UO_AddrOf) &&
+            memberOf(Unary->getSubExpr(), Field))
+          return true;
+      if (const auto *Binary = dyn_cast_or_null<BinaryOperator>(Plain))
+        if (Binary->isAssignmentOp() && memberOf(Binary->getLHS(), Field))
+          return true;
+    }
+    for (const Stmt *Child : Statement->children())
+      if (writesMember(Child, Field))
+        return true;
+    return false;
+  }
+
+  // A loop bound of the shape `base->field` or `base.field`, where `base`
+  // is a plain parameter or local variable, is stable across the loop when
+  // three things are all true: the base itself is never reseated or
+  // handed to something that could reseat or overwrite it out from under
+  // this read (the same writesVariable/aliasedWrite tests the plain-
+  // variable case above already requires of `base`); nothing in the
+  // tested region writes `*base` wholesale or passes `base` on to a call
+  // that could reach back through it (writesThroughAlias, applied to
+  // `base` directly -- it already recognizes exactly that shape for a
+  // pointer-typed alias, which is exactly what an arrow base is; a dot
+  // base is a struct, not a pointer, so this test is vacuous for it,
+  // which is correct, not a gap: aliasedWrite already covers a struct
+  // local whose OWN address escaped); and no expression anywhere in the
+  // tested region assigns through a member with the same field identity
+  // (writesMember, coarse but sound as documented on it above).
+  //
+  // A member reached through anything other than a single plain base
+  // variable (another member expression, a call result, a subscript) is
+  // deliberately left unrecognized here and falls through to this
+  // function's existing "false" -- there is no local var to run the
+  // escape checks against, so nothing about it can be shown stable this
+  // way, and this lemma does not try.
+  bool memberStable(const MemberExpr *Member, const Stmt *Body,
+                    const Expr *Increment) const {
+    const ValueDecl *Field = Member->getMemberDecl();
+    const ValueDecl *BaseDecl = value(Member->getBase());
+    if (!Field || !BaseDecl)
+      return false;
+    const auto *BaseVar = dyn_cast<VarDecl>(BaseDecl);
+    if (!BaseVar || !(isa<ParmVarDecl>(BaseVar) || BaseVar->hasLocalStorage()) ||
+        BaseVar->getType().isVolatileQualified() || !Current)
+      return false;
+    if (writesVariable(Body, BaseVar) || writesVariable(Increment, BaseVar) ||
+        aliasedWrite(BaseVar, Body))
+      return false;
+    if (Member->isArrow() &&
+        (writesThroughAlias(Body, BaseVar) || writesThroughAlias(Increment, BaseVar)))
+      return false;
+    return !writesMember(Body, Field) && !writesMember(Increment, Field);
+  }
+
   static bool addressOf(const Expr *Expression, const ValueDecl *Variable) {
     const auto *Unary = dyn_cast_or_null<UnaryOperator>(ignore(Expression));
     return Unary && Unary->getOpcode() == UO_AddrOf &&
@@ -557,6 +633,8 @@ class TotalityVisitor : public RecursiveASTVisitor<TotalityVisitor> {
              !aliasedWrite(Variable, Body) && !writesVariable(Body, Variable) &&
              !writesVariable(Increment, Variable);
     }
+    if (const auto *Member = dyn_cast_or_null<MemberExpr>(Plain))
+      return memberStable(Member, Body, Increment);
     if (const auto *Unary = dyn_cast_or_null<UnaryOperator>(Plain)) {
       if (Unary->isIncrementDecrementOp() || Unary->getOpcode() == UO_AddrOf ||
           Unary->getOpcode() == UO_Deref)

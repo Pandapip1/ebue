@@ -110,3 +110,37 @@ const unsigned char *unguarded_pointer_recursion(const unsigned char *p)
 {
 	return unguarded_pointer_recursion(p + 1); /* totality-expect */
 }
+
+struct vec {
+	unsigned n;
+	unsigned *v;
+};
+
+void mutate_vec(struct vec *p);
+
+unsigned member_bound_mutated_in_body(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		p->n++;
+	}
+	return i;
+}
+
+unsigned member_bound_escapes_to_call(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		mutate_vec(p);
+	}
+	return i;
+}
+
+unsigned member_bound_base_reseated(struct vec *p, struct vec *q)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) { /* totality-expect */
+		p = q;
+	}
+	return i;
+}

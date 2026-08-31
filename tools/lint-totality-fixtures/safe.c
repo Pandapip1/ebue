@@ -102,3 +102,46 @@ unsigned guarded_else_recursion(unsigned n)
 	else
 		return guarded_else_recursion(n - 1);
 }
+
+struct vec {
+	unsigned n;
+	unsigned *v;
+};
+
+unsigned member_bound_arrow(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) {
+	}
+	return i;
+}
+
+unsigned member_bound_dot(struct vec v)
+{
+	unsigned i;
+	for (i = 0; i < v.n; i++) {
+	}
+	return i;
+}
+
+unsigned member_bound_while(struct vec *p)
+{
+	unsigned i = 0;
+	while (i < p->n) {
+		if (p->v[i] == 0)
+			return i;
+		i++;
+	}
+	return i;
+}
+
+unsigned member_bound_unrelated_call(struct vec *p)
+{
+	unsigned i;
+	for (i = 0; i < p->n; i++) {
+		/* Calling something that is never handed p itself cannot
+		 * reach back through p->n, so this must stay provable. */
+		(void)guarded_recursion(1);
+	}
+	return i;
+}
