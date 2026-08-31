@@ -22,6 +22,13 @@ static int chmod_handle(HANDLE h, mode_t mode)
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	lxmode = (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ? S_IFDIR : S_IFREG) |
 	         (mode & 07777);
+	/* Unlike `bi` above (fully populated by the kernel's own query), `set`
+	 * is a fresh local this function fills itself: FILE_BASIC_INFORMATION
+	 * mixes four 8-byte LARGE_INTEGER fields with a trailing 4-byte ULONG,
+	 * so a target that pads the struct out to 8-byte alignment leaves
+	 * real uninitialized bytes after FileAttributes even once every named
+	 * field below is set. */
+	memset(&set, 0, sizeof set);
 	set.CreationTime = set.LastAccessTime = set.LastWriteTime = set.ChangeTime = 0;
 	set.FileAttributes = bi.FileAttributes;
 	if (mode & 0222) set.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
