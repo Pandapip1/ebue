@@ -60,7 +60,7 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
 	}
 	p = __handle_path(__fd_handle(fd));
 	saved = errno;
-	close(fd);
+	(void)close(fd);
 	errno = saved;
 	if (!p) return 0;
 	for (q = p; *q; q++) if (*q == '\\') *q = '/';

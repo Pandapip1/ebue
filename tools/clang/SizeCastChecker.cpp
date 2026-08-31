@@ -115,21 +115,11 @@ public:
   // SymbolRef that names no Expr of its own (the whole point of that
   // function is to be reachable from a materialized value that was
   // stored into a variable or field and read back later).
-  // State is a required, explicit parameter (never defaulted to
-  // C.getState() internally) precisely so a caller downstream of another
-  // checker's own PreStmt callback for the SAME statement -- Divisor/
-  // ShiftCountChecker's own div-by-zero/shift-count checks run in the
-  // same PreStmt<BinaryOperator> phase as clang's builtin core.DivideZero,
-  // which (like this codebase's own checkers) narrows the state by
-  // calling addTransition once it has proven a path condition, and
-  // checkers sharing one callback phase see each PRIOR checker's already-
-  // narrowed node -- can pass arithmeticInputState(C) (the state from
-  // BEFORE this phase's checker chain ran, the same "look behind the
-  // current node's predecessor" trick this file's own
-  // arithmeticInputState() already uses for its bug-report state) instead
-  // of silently trusting whatever core.DivideZero already assumed on this
-  // exact symbol. Passing C.getState() explicitly reproduces this
-  // function's old always-current-state behavior exactly.
+  // State is a required, explicit parameter so recursive interval proofs
+  // inspect one consistent program point.  The arithmetic-UB stage disables
+  // Clang's overlapping DivideZero and BitwiseShift checkers; consequently
+  // the current state retains genuine branch constraints without containing
+  // a same-operation assumption supplied by a built-in checker.
   static Interval bisectInterval(NonLoc Value, QualType Type,
                                  ProgramStateRef State, CheckerContext &C) {
     ASTContext &Ctx = C.getASTContext();
@@ -316,11 +306,8 @@ public:
         bisectInterval(nonloc::SymbolVal(Sym), Type, State, C), Bound);
   }
 
-  // State defaults to C.getState() -- the always-current-node behavior
-  // this function had before symbolInterval() and the explicit-State
-  // overload of bisectInterval() existed -- so every pre-existing caller
-  // is unaffected. Divisor/ShiftCountChecker pass arithmeticInputState(C)
-  // explicitly instead; see bisectInterval()'s own comment for why.
+  // State defaults to C.getState(); the explicit overload exists so every
+  // recursive query can be pinned to the same program point.
   static std::optional<Interval>
   constrainedInterval(const Expr *Expr, CheckerContext &C,
                       ProgramStateRef State = nullptr) {
@@ -341,13 +328,8 @@ public:
     return Result;
   }
 
-  // Same State-defaulting rule as constrainedInterval() just above, and
-  // for the same reason: this function recurses into itself and into
-  // constrainedInterval(), so the resolved (possibly caller-supplied)
-  // State has to be threaded through every recursive call explicitly --
-  // re-defaulting to C.getState() partway down the recursion would
-  // silently discard a caller's arithmeticInputState(C) the moment it
-  // reached a nested sub-expression.
+  // Same State-defaulting rule as constrainedInterval() just above: this
+  // function threads one program point through every recursive query.
   static Interval expressionInterval(const Expr *Expr, CheckerContext &C,
                                      ProgramStateRef State = nullptr) {
     if (!State)
@@ -689,7 +671,6 @@ static std::string arithmeticOrigin(const Expr *Expression, CheckerContext &C);
 static std::string arithmeticText(const Stmt *Statement, CheckerContext &C);
 static std::string arithmeticSite(const Expr *Expression, CheckerContext &C);
 static std::string arithmeticContext(CheckerContext &C);
-static ProgramStateRef arithmeticInputState(CheckerContext &C);
 
 class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
                                                check::PreStmt<UnaryOperator>> {
@@ -702,7 +683,7 @@ class SignedArithmeticChecker : public Checker<check::PreStmt<BinaryOperator>,
   }
 
   void report(const Expr *Expression, CheckerContext &C) const {
-    ExplodedNode *Node = C.generateNonFatalErrorNode(arithmeticInputState(C));
+    ExplodedNode *Node = C.generateNonFatalErrorNode(C.getState());
     if (!Node)
       return;
     if (!BT)
@@ -866,13 +847,6 @@ static std::string arithmeticContext(CheckerContext &C) {
   return Current ? Current->getDeclKindName() : "unknown";
 }
 
-static ProgramStateRef arithmeticInputState(CheckerContext &C) {
-  ExplodedNode *Predecessor = C.getPredecessor();
-  if (Predecessor && !Predecessor->pred_empty())
-    return Predecessor->getFirstPred()->getState();
-  return C.getState();
-}
-
 class DivisorChecker : public Checker<check::PreStmt<BinaryOperator>> {
   mutable std::unique_ptr<BugType> BT;
 
@@ -885,7 +859,7 @@ public:
     if (!Operation->getLHS()->getType()->isIntegerType() ||
         !Operation->getRHS()->getType()->isIntegerType())
       return;
-    ProgramStateRef Input = arithmeticInputState(C);
+    ProgramStateRef Input = C.getState();
     ProgramStateRef Violation = Input;
     if (std::optional<DefinedOrUnknownSVal> Divisor =
             C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
@@ -903,16 +877,9 @@ public:
     // and applies just as soundly here: any divisor the solver alone
     // could not rule out zero for, but whose statically-computed range
     // provably excludes zero, is a second, independent, purely-additive
-    // proof this checker never tried before. Queried against
-    // arithmeticInputState(C), not C.getState(): clang's own builtin
-    // core.DivideZero shares this exact PreStmt<BinaryOperator> phase and
-    // narrows the CURRENT node's state (via its own addTransition) the
-    // moment it has proven a path where the divisor is nonzero, which
-    // would otherwise make an entirely UNCHECKED divisor look
-    // artificially safe here too (confirmed directly: querying
-    // C.getState() instead reported this checker's own fixtures'
-    // deliberately-unchecked divisors as already proven nonzero, which
-    // is exactly the false negative this must not reintroduce).
+    // proof this checker never tried before.  The stage disables Clang's
+    // core.DivideZero checker, so querying the current state cannot borrow a
+    // same-operation nonzero assumption from that overlapping checker.
     SizeCastChecker::Interval Range = SizeCastChecker::expressionInterval(
         Operation->getRHS(), C, Input);
     llvm::APSInt Zero(llvm::APInt(SizeCastChecker::MathBits, 0), false);
@@ -954,7 +921,7 @@ public:
     bool CountUnsigned = CountType->isUnsignedIntegerOrEnumerationType();
     llvm::APSInt Low(llvm::APInt(CountBits, 0), CountUnsigned);
     llvm::APSInt High(llvm::APInt(CountBits, Width - 1), CountUnsigned);
-    ProgramStateRef Input = arithmeticInputState(C);
+    ProgramStateRef Input = C.getState();
     ProgramStateRef Violation = Input;
     if (std::optional<DefinedOrUnknownSVal> Count =
             C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
@@ -962,10 +929,8 @@ public:
       if (!Violation)
         return;
     }
-    // Same second, independent proof avenue as DivisorChecker just above,
-    // queried against arithmeticInputState(C) for the same reason (a
-    // builtin core checker sharing this PreStmt<BinaryOperator> phase can
-    // narrow C.getState() before this callback runs): the raw solver's
+    // Same second, independent proof avenue as DivisorChecker just above.
+    // The stage likewise disables core.BitwiseShift, so the raw solver's
     // assumeInclusiveRange() only sees a shift count's own SVal, not the
     // Rem/And/Shr/Add/Sub/Mul structure expressionInterval() (and,
     // through it, symbolInterval() for a materialized local or field)

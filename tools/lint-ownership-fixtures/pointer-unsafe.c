@@ -5,6 +5,7 @@ typedef __SIZE_TYPE__ size_t;
 void *malloc(size_t);
 void free(void *);
 void *__malloc(size_t);
+long getline(char **, size_t *, void *);
 
 int nullable_pointer(int *pointer)
 {
@@ -63,4 +64,19 @@ int too_small_heap_allocation_via_fixed_offset(void)
 	struct pair *p = __malloc(sizeof(int));
 	if (!p) return 0;
 	return p->b; /* ownership-expect: pointer-extent */
+}
+
+/* The getline summary is conditional on a nonnegative return.  Its failure
+ * branch must retain the original, possibly-null output pointer rather than
+ * leaking the success branch's nonnull fact across both outcomes. */
+int failed_line_input_does_not_validate_the_buffer(void *stream)
+    __attribute__((nonnull(1)));
+int failed_line_input_does_not_validate_the_buffer(void *stream)
+{
+	char *line = 0;
+	size_t capacity = 0;
+	long length = getline(&line, &capacity, stream);
+	if (length >= 0)
+		return 0;
+	return *line; /* ownership-expect: pointer-null */
 }

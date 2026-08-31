@@ -164,7 +164,7 @@ static int shm_mode_write(const char *path, mode_t mode)
 		result = written == sizeof value ? 0 : -1;
 		if (written >= 0 && result < 0) errno = EIO;
 		saved = errno;
-		close(fd);
+		(void)close(fd);
 		errno = saved;
 	}
 	saved = errno;
@@ -198,7 +198,7 @@ static int shm_mode_read(const char *path, mode_t *mode)
 			result = 1;
 		}
 		saved = errno;
-		close(fd);
+		(void)close(fd);
 		errno = saved;
 	}
 	saved = errno;
@@ -251,8 +251,8 @@ int shm_open(const char *name, int oflag, mode_t mode)
 		stored = mode & ~__umask_get() & 07777;
 		if (shm_mode_write(path, stored) < 0) {
 			saved = errno;
-			close(fd);
-			unlink(path);
+			(void)close(fd);
+			(void)unlink(path);
 			free(path);
 			errno = saved;
 			return -1;

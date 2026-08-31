@@ -27,7 +27,13 @@ int pipe2(int fds[2], int flags)
 	rfd = __fd_install(r, O_RDONLY | (flags & (O_CLOEXEC | O_NONBLOCK)), __FD_PIPE);
 	if (rfd < 0) { __plat_close(r); __plat_close(w); return -1; }
 	wfd = __fd_install(w, O_WRONLY | (flags & (O_CLOEXEC | O_NONBLOCK)), __FD_PIPE);
-	if (wfd < 0) { close(rfd); __plat_close(w); return -1; }
+	if (wfd < 0) {
+		int saved = errno;
+		(void)close(rfd);
+		__plat_close(w);
+		errno = saved;
+		return -1;
+	}
 	fds[0] = rfd;
 	fds[1] = wfd;
 	return 0;

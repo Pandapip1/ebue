@@ -200,8 +200,9 @@ static int raw_write(__plat_handle_t h, const void *buf, size_t len, off_t off)
 
 static off_t slot_offset(const struct mq_desc *d, unsigned slot)
 {
+	/* Queue creation/read validation bounds slot to 255 and msgsize to 65536. */
 	return (off_t)sizeof(struct mq_header) +
-	       (off_t)slot * (sizeof(struct mq_slot) + d->msgsize);
+	       (off_t)slot * (off_t)(sizeof(struct mq_slot) + d->msgsize);
 }
 
 static struct mq_desc *get_desc(mqd_t mqdes)
@@ -344,13 +345,13 @@ fail_qlocked:
 	give(lock);
 fail_fd:
 	saved = errno;
-	if (fd >= 0) close(fd);
-	if (created) unlink(path);
+	if (fd >= 0) (void)close(fd);
+	if (created) (void)unlink(path);
 	goto fail_locked_saved;
 fail_created:
 	saved = errno;
-	close(fd);
-	unlink(path);
+	(void)close(fd);
+	(void)unlink(path);
 	goto fail_locked_saved;
 fail_locked:
 	saved = errno;
@@ -447,7 +448,7 @@ int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
 	if ((__fds[mqdes].flags & O_ACCMODE) == O_RDONLY) { errno = EBADF; return -1; }
 	if (len > d->msgsize) { errno = EMSGSIZE; return -1; }
 	if (prio >= MQ_PRIO_MAX) { errno = EINVAL; return -1; }
-	if (wait_count(d, d->spaces, __fds[mqdes].flags & O_NONBLOCK,
+	if (wait_count(d, d->spaces, (__fds[mqdes].flags & O_NONBLOCK) != 0,
 	               abstime, abstime != NULL, 0) < 0) return -1;
 	if (take(d->lock) < 0) { give(d->spaces); return -1; }
 	if (read_header(d, &h) < 0) goto rollback;
@@ -459,7 +460,7 @@ int mq_timedsend(mqd_t mqdes, const char *msg, size_t len, unsigned prio,
 	memset(&s, 0, sizeof s);
 	s.used = 1; s.priority = prio; s.length = (unsigned)len; s.sequence = h.sequence++;
 	if (len && raw_write(d->file, msg, len,
-	                     slot_offset(d, free_slot) + sizeof s) < 0) goto rollback;
+	                     slot_offset(d, free_slot) + (off_t)sizeof s) < 0) goto rollback;
 	if (raw_write(d->file, &s, sizeof s, slot_offset(d, free_slot)) < 0) goto rollback;
 	if (!h.curmsgs && h.notify_active && !h.receive_waiters) {
 		notify = 1; notify_kind = h.notify_kind; notify_pid = h.notify_pid;
@@ -494,7 +495,7 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *msg, size_t len, unsigned *prio,
 	if (!d) return -1;
 	if ((__fds[mqdes].flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -1; }
 	if (len < d->msgsize) { errno = EMSGSIZE; return -1; }
-	if (wait_count(d, d->items, __fds[mqdes].flags & O_NONBLOCK,
+	if (wait_count(d, d->items, (__fds[mqdes].flags & O_NONBLOCK) != 0,
 	               abstime, abstime != NULL, 1) < 0) return -1;
 	if (take(d->lock) < 0) { give(d->items); return -1; }
 	if (read_header(d, &h) < 0) goto rollback;
@@ -510,7 +511,7 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *msg, size_t len, unsigned *prio,
 		errno = EIO; goto rollback;
 	}
 	if (best.length && raw_read(d->file, msg, best.length,
-	                            slot_offset(d, selected) + sizeof best) < 0) goto rollback;
+	                            slot_offset(d, selected) + (off_t)sizeof best) < 0) goto rollback;
 	memset(&s, 0, sizeof s);
 	if (raw_write(d->file, &s, sizeof s, slot_offset(d, selected)) < 0) goto rollback;
 	h.curmsgs--;
@@ -539,10 +540,11 @@ int mq_getattr(mqd_t mqdes, struct mq_attr *attr)
 	if (take(d->lock) < 0) return -1;
 	if (read_header(d, &h) < 0) { give(d->lock); return -1; }
 	memset(attr, 0, sizeof *attr);
-	attr->mq_flags = __fds[mqdes].flags & O_NONBLOCK;
-	attr->mq_maxmsg = h.maxmsg;
-	attr->mq_msgsize = h.msgsize;
-	attr->mq_curmsgs = h.curmsgs;
+	/* read_header() preserves creation-time limits before these ABI conversions. */
+	attr->mq_flags = (long)(__fds[mqdes].flags & O_NONBLOCK);
+	attr->mq_maxmsg = (long)h.maxmsg;
+	attr->mq_msgsize = (long)h.msgsize;
+	attr->mq_curmsgs = (long)h.curmsgs;
 	give(d->lock);
 	return 0;
 }

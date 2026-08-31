@@ -9,6 +9,7 @@ long read(int, void *, size_t);
 void *__malloc(size_t);
 size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
+char *strdup(const char *);
 
 void bounded_operations(int fd)
 {
@@ -56,4 +57,12 @@ char *dup_all(void)
 	if (!p) return 0;
 	memcpy(p, s, n);
 	return p;
+}
+
+/* A string-producing API's result retains the API's sentinel contract.
+ * The second strlen must not forget what strdup established. */
+size_t duplicated_length(void)
+{
+	char *s = strdup("example");
+	return s ? strlen(s) : 0;
 }

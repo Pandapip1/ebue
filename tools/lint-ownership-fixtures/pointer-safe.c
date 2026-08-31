@@ -17,6 +17,8 @@ size_t strspn(const char *, const char *);
  * type's real size, not ASTContext::getWCharType()'s. */
 typedef unsigned short wchar_t;
 size_t wcsspn(const wchar_t *, const wchar_t *);
+long strtol(const char *, char **, int);
+long getline(char **, size_t *, void *);
 
 int local_object(void)
 {
@@ -162,6 +164,35 @@ int nonnull_attribute_is_trusted(int *pointer) __attribute__((nonnull(1)));
 int nonnull_attribute_is_trusted(int *pointer)
 {
 	return *pointer;
+}
+
+/* strto* guarantees that a supplied end pointer receives either the input
+ * pointer itself or a pointer to the first unconverted byte within that same
+ * nonnull string.  The generic analyzer invalidates `end` across the call but
+ * does not know that the fresh value is necessarily nonnull; pin the
+ * ValidPointer checkPostCall summary that supplies this standard contract. */
+int string_conversion_end_pointer_is_nonnull(const char *text)
+    __attribute__((nonnull(1)));
+int string_conversion_end_pointer_is_nonnull(const char *text)
+{
+	char *end;
+	(void)strtol(text, &end, 10);
+	return *end;
+}
+
+/* On success getline writes a nonnull buffer containing the returned byte
+ * count followed by a NUL.  This checks both facts: pointer validity and the
+ * return-value-derived dynamic extent. */
+int line_input_result_bounds_the_buffer(void *stream)
+    __attribute__((nonnull(1)));
+int line_input_result_bounds_the_buffer(void *stream)
+{
+	char *line = 0;
+	size_t capacity = 0;
+	long length = getline(&line, &capacity, stream);
+	if (length < 0)
+		return 0;
+	return line[length];
 }
 
 /* clang's own dynamic-extent tracking for an allocator's return value only

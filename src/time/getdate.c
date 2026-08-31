@@ -150,7 +150,7 @@ static int read_templates(const char *path, char storage[][MAX_DATEMSK_LINE], co
 		out[n] = storage[n];
 		n++;
 	}
-	fclose(f);
+	(void)fclose(f);
 	return n;
 }
 

@@ -332,7 +332,11 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 	st = __afd_ioctl(h, IOCTL_AFD_SEND, &si, sizeof(si), 0, 0, &io);
 	if (st == STATUS_CONNECTION_DISCONNECTED || st == STATUS_LOCAL_DISCONNECT ||
 	    st == STATUS_REMOTE_DISCONNECT || st == STATUS_CONNECTION_RESET || st == STATUS_CONNECTION_ABORTED) {
-		if (!(flags & MSG_NOSIGNAL)) __raise_internal(SIGPIPE);
+		if (!(flags & MSG_NOSIGNAL)) {
+			__sig_lock();
+			__raise_internal(SIGPIPE);
+			__sig_unlock();
+		}
 		errno = EPIPE;
 		return -1;
 	}

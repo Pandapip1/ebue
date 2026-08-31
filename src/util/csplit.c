@@ -202,14 +202,28 @@ static int write_piece(struct lines *L, int from, int to, const char *prefix, in
 	snprintf(name, sizeof name, "%s%0*d", prefix, ndigits, piece_no);
 	f = fopen(name, "wb");
 	if (!f) {
-		fprintf(stderr, "csplit: %s: %s\n", name, strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "csplit: %s: %s\n", name, strerror(saved));
 		return -1;
 	}
 	for (i = from; i < to; i++) {
-		fwrite(L->text[i], 1, L->len[i], f);
+		if (fwrite(L->text[i], 1, L->len[i], f) != L->len[i]) {
+			int saved = errno;
+			(void)fclose(f);
+			(void)unlink(name);
+			errno = saved;
+			fprintf(stderr, "csplit: %s: %s\n", name, strerror(errno));
+			return -1;
+		}
 		size += (long)L->len[i];
 	}
-	fclose(f);
+	if (fclose(f) < 0) {
+		int saved = errno;
+		(void)unlink(name);
+		errno = saved;
+		fprintf(stderr, "csplit: %s: %s\n", name, strerror(errno));
+		return -1;
+	}
 	if (remember_created(created, name) < 0) {
 		fprintf(stderr, "csplit: out of memory\n");
 		return -1;

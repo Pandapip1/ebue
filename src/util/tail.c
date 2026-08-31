@@ -257,7 +257,7 @@ int __util_tail_main(int argc, char **argv)
 			if (noperands > 1) {
 				printf("%s==> %s <==\n", first_banner ? "" : "\n", path);
 				first_banner = 0;
-				fflush(stdout);
+				if (fflush(stdout) < 0) had_error = 1;
 			}
 
 			if (!strcmp(path, "-")) {
@@ -272,7 +272,7 @@ int __util_tail_main(int argc, char **argv)
 				continue;
 			}
 			if (tail_one(fd, mode, from_end, number, path) < 0) had_error = 1;
-			close(fd);
+			(void)close(fd);
 		}
 	}
 

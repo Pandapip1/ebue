@@ -202,7 +202,11 @@ int __util_touch_main(int argc, char **argv)
 				fail = 1;
 				continue;
 			}
-			close(fd);
+			if (close(fd) < 0) {
+				fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+				fail = 1;
+				continue;
+			}
 		}
 
 		if (have_explicit) {

@@ -42,16 +42,16 @@ int socketpair(int domain, int type, int protocol, int pair[2])
 		goto fail;
 	server = accept(listener, 0, 0);
 	if (server < 0) goto fail;
-	close(listener);
+	(void)close(listener);
 	pair[0] = client;
 	pair[1] = server;
 	return 0;
 
 fail:
 	saved = errno;
-	if (server >= 0) close(server);
-	if (client >= 0) close(client);
-	if (listener >= 0) close(listener);
+	if (server >= 0) (void)close(server);
+	if (client >= 0) (void)close(client);
+	if (listener >= 0) (void)close(listener);
 	errno = saved;
 	return -1;
 }

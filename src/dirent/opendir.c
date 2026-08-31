@@ -48,6 +48,11 @@ DIR *opendir(const char *path)
 	if (fd < 0) return 0;
 
 	dp = alloc_dir(fd);
-	if (!dp) { close(fd); return 0; }
+	if (!dp) {
+		int saved = errno;
+		(void)close(fd);
+		errno = saved;
+		return 0;
+	}
 	return dp;
 }

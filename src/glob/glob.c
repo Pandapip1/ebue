@@ -324,7 +324,7 @@ static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
 			if ((errfunc && errfunc(dirpath, e)) || (flags & GLOB_ERR)) rc = 1;
 		}
 		__free(segbuf);
-		closedir(dp);
+		(void)closedir(dp);
 		return rc;
 	}
 }

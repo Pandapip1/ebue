@@ -514,11 +514,11 @@ static int fmt_f(char *buf, struct dec *D, int prec, int alt)
 		buf[n++] = '0';
 		if (prec > 0 || alt) buf[n++] = '.';
 		for (i = 0; i < -pos && i < prec; i++) buf[n++] = '0';
-		for (i = 0; i < prec + pos; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
+		for (i = 0; i < prec + pos; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 	} else {
-		for (i = 0; i < pos; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
+		for (i = 0; i < pos; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 		if (prec > 0 || alt) buf[n++] = '.';
-		for (i = 0; i < prec; i++) buf[n++] = pos + i < D->nd ? D->d[pos + i] : '0';
+		for (i = 0; i < prec; i++) buf[n++] = (char)(pos + i < D->nd ? D->d[pos + i] : '0');
 	}
 	return n;
 }
@@ -534,7 +534,7 @@ static int fmt_e(char *buf, struct dec *D, int prec, int alt, int upper, int *ep
 	buf[n++] = D->d[0];
 	if (prec > 0 || alt) {
 		buf[n++] = '.';
-		for (i = 1; i <= prec; i++) buf[n++] = i < D->nd ? D->d[i] : '0';
+		for (i = 1; i <= prec; i++) buf[n++] = (char)(i < D->nd ? D->d[i] : '0');
 	}
 	*epos = n;
 	buf[n++] = upper ? 'E' : 'e';
@@ -641,7 +641,7 @@ static void emit_float(struct sink *sk, double v, int conv, int prec, int alt, i
 	char pfx[3];
 	int n, neg = signbit(v);
 	int upper = conv == 'F' || conv == 'E' || conv == 'G' || conv == 'A';
-	char sign = neg ? '-' : (flags & 1 ? '+' : (flags & 2 ? ' ' : 0));
+	char sign = (char)(neg ? '-' : (flags & 1 ? '+' : (flags & 2 ? ' ' : 0)));
 	char av = (char)(conv == 'F' ? 'f' : conv == 'E' ? 'e' : conv == 'G' ? 'g' :
 	                 conv == 'A' ? 'a' : conv);
 	int prefixlen = 0;
@@ -1622,7 +1622,7 @@ int vdprintf(int fd, const char *__restrict fmt, __isoc_va_list ap)
 	f.writable = 1;
 	f.bufmode = _IONBF;
 	r = __vfprintf(&f, fmt, ap);
-	fflush(&f);
+	if (fflush(&f) < 0) r = -1;
 	/* __ensure_buf() allocated f.buf on the first write (one byte, for
 	 * _IONBF) and nothing else will ever free it: this FILE is a stack
 	 * object that never reaches fclose(), and fflush() only drains the

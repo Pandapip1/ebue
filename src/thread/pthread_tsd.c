@@ -30,6 +30,8 @@ static pthread_key_t key_value(unsigned index, unsigned generation)
 }
 
 static int valid_key(pthread_key_t key)
+    NTLIBC_REQUIRES(__ntlibc_peb_lock_token);
+static int valid_key(pthread_key_t key)
 {
 	unsigned index = key_index(key);
 	return keys[index].allocated &&
@@ -152,6 +154,8 @@ static struct once_waiter *once_waiters NTLIBC_GUARDED_BY(__ntlibc_peb_lock_toke
  * waiter can consume a shared auto-reset wake intended for another once
  * control. */
 static void wake_once_waiters_locked(pthread_once_t *control)
+    NTLIBC_REQUIRES(__ntlibc_peb_lock_token);
+static void wake_once_waiters_locked(pthread_once_t *control)
 {
 	struct once_waiter *waiter;
 	for (waiter = once_waiters; waiter; waiter = waiter->next) {
@@ -160,6 +164,8 @@ static void wake_once_waiters_locked(pthread_once_t *control)
 	}
 }
 
+static void remove_once_waiter_locked(struct once_waiter *waiter)
+    NTLIBC_REQUIRES(__ntlibc_peb_lock_token);
 static void remove_once_waiter_locked(struct once_waiter *waiter)
 {
 	struct once_waiter **link = &once_waiters;

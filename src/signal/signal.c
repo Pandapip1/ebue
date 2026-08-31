@@ -228,7 +228,14 @@ static int sig_stops(int sig);
  * src/process/children.c's __child_add() consults this before adding an
  * entry at all -- the same "leave it untracked, let it run" degrade
  * fork.c and spawn.c already use when the table itself cannot grow. */
-int __sigchld_nocldwait(void) { return (act_flags[SIGCHLD] & SA_NOCLDWAIT) != 0; }
+int __sigchld_nocldwait(void)
+{
+	int result;
+	__sig_lock();
+	result = (act_flags[SIGCHLD] & SA_NOCLDWAIT) != 0;
+	__sig_unlock();
+	return result;
+}
 
 /* Called by sig_delivery_thread() with the signal lock held.  Stop-shaped
  * signals need this distinction before kill() chooses between running the
@@ -955,6 +962,8 @@ int sigorset(sigset_t *d, const sigset_t *a, const sigset_t *b) { size_t i; for 
 /* Called with the signal lock held. Delivery drops it only around the user
  * callback and reacquires it before returning here. */
 static void drain_unblocked_pending(void)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
+static void drain_unblocked_pending(void)
 {
 	int i;
 	for (i = 1; i < _NSIG; i++) {
@@ -1364,9 +1373,11 @@ void (*sigset(int sig, void (*h)(int)))(int)
 	sigaddset(&one, sig);
 
 	if (h == SIG_HOLD) {
+		__sig_lock();
 		old = handlers[sig];   /* read before the mask moves: sigprocmask()
 		                        * runs whatever became deliverable, and a
 		                        * handler may install a new disposition */
+		__sig_unlock();
 		if (sigprocmask(SIG_BLOCK, &one, 0) < 0) return SIG_ERR;
 		return was_blocked ? SIG_HOLD : old;
 	}
@@ -1502,6 +1513,7 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 		 * through to the next handler instead of guessing a signal. */
 	default: return EXCEPTION_CONTINUE_SEARCH;
 	}
+	__sig_lock();
 	if (handlers[sig] == SIG_DFL) {
 		/* No flush, unconditionally -- and for two independent reasons.
 		 *
@@ -1527,6 +1539,7 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	if (handlers[sig] == SIG_IGN) {
 		/* Ignoring a fault would loop forever; POSIX says undefined. Die. */
 		if (sig != SIGINT && sig != SIGTRAP) __nt_exit(__NT_SIGNAL_EXIT(sig));
+		__sig_unlock();
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 	/* Tell __raise_internal() this delivery is not a kill()/raise() --
@@ -1538,7 +1551,6 @@ static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 	 * no such address, so fault_addr stays NULL for them. */
 	/* Fault metadata is thread-local, so another thread may deliver while the
 	 * application handler runs without inheriting this exception's siginfo. */
-	__sig_lock();
 	fault_active = 1;
 	fault_addr = (excode == EXCEPTION_ACCESS_VIOLATION || excode == EXCEPTION_IN_PAGE_ERROR)
 	           ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL;

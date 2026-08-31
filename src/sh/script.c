@@ -565,8 +565,8 @@ int __sh_main(int argc, char **argv)
 	} else if (file) {
 		FILE *f = fopen(file, "rb");
 		if (!f) { diag("%s: cannot open command_file", file); return EX_NOSCRIPT; }
-		if (slurp(f, &text)) { fclose(f); diag("%s: read error", file); return EX_NOSCRIPT; }
-		fclose(f);
+		if (slurp(f, &text)) { (void)fclose(f); diag("%s: read error", file); return EX_NOSCRIPT; }
+		(void)fclose(f);
 	} else {
 		if (slurp(stdin, &text)) { diag("stdin: read error"); return EX_NOSCRIPT; }
 	}

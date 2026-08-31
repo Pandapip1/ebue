@@ -4,7 +4,9 @@
 typedef __SIZE_TYPE__ size_t;
 void *memcpy(void *, const void *, size_t);
 void *memset(void *, int, size_t);
+char *strcpy(char *, const char *);
 void *__malloc(size_t);
+size_t strlen(const char *);
 size_t strnlen(const char *, size_t);
 
 void oversized(void)
@@ -45,4 +47,14 @@ void too_much_from_strnlen(const char *s, size_t n)
 	if (!d) return;
 	memcpy(d, s, l + 1); /* memory-contract-expect */
 	d[0] = 0;
+}
+
+/* Terminating an interior suffix does not prove that bytes before that
+ * suffix contain any NUL at all.  Proven-string state must retain the exact
+ * pointer at which the producing operation began, not its allocation base. */
+void interior_string_does_not_prove_prefix(void)
+{
+	char buffer[8];
+	strcpy(buffer + 4, "x");
+	(void)strlen(buffer); /* memory-contract-expect */
 }

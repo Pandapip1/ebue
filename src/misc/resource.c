@@ -179,7 +179,9 @@ static rlim_t nofile_max = FD_MAX;
  * they must not generate a signal. */
 int __fsize_exceeded(void)
 {
+	__sig_lock();
 	__raise_internal(SIGXFSZ);
+	__sig_unlock();
 	errno = EFBIG;
 	return -1;
 }

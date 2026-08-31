@@ -268,14 +268,14 @@ retry_record:
 		if (create_result < 0 ||
 		    write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
 			saved = create_result == 0 ? EIO : errno;
-			close(fd); unlink(path); goto fail_locked;
+			(void)close(fd); (void)unlink(path); goto fail_locked;
 		}
 	} else {
 		int open_result;
 		got = read(fd, object, sizeof object - 1);
 		if (got <= 0) {
 			saved = got < 0 ? errno : EIO;
-			close(fd);
+			(void)close(fd);
 			/* A creator can die after publishing the record but before
 			 * filling it.  O_CREAT without O_EXCL owns recovery while the
 			 * namespace lock proves nobody can still be publishing it. */
@@ -289,7 +289,7 @@ retry_record:
 		object[got] = 0;
 		open_result = __plat_named_semaphore_open(object, &h);
 		if (open_result < 0) {
-			close(fd);
+			(void)close(fd);
 			if ((oflag & O_CREAT) && !(oflag & O_EXCL) && !recover &&
 			    open_result == -2) {
 				recover = 1;
@@ -302,12 +302,12 @@ retry_record:
 			goto fail_locked;
 		}
 	}
-	close(fd);
+	(void)close(fd);
 	__plat_fast_lock();
 	entry = free_slot();
 	if (!entry) {
 		__plat_fast_unlock(); __plat_close(h);
-		if (created) unlink(path);
+		if (created) (void)unlink(path);
 		saved = EMFILE; goto fail_locked;
 	}
 	entry->sem.__handle = h; entry->sem.__magic = SEM_MAGIC; entry->sem.__named = 1;

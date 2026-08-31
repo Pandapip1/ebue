@@ -90,7 +90,7 @@ FILE *fopen(const char *__restrict path, const char *__restrict mode)
 	fd = open(path, flags, 0666);
 	if (fd < 0) return 0;
 	f = __file_new(fd, flags);
-	if (!f) { int e = errno; close(fd); errno = e; return 0; }
+	if (!f) { int e = errno; (void)close(fd); errno = e; return 0; }
 	return f;
 }
 
@@ -124,7 +124,7 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 	int fd, oldfd;
 
 	if (flags < 0) return 0;
-	fflush(f);
+	(void)fflush(f);
 	oldfd = f->fd;
 
 	if (path) {
@@ -132,7 +132,7 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 			if (f->mem_dynamic && f->mem_buf) free(f->mem_buf);
 			f->is_mem = 0; f->mem_buf = 0; f->mem_size = f->mem_len = f->mem_pos = 0;
 		} else if (oldfd >= 0) {
-			close(oldfd);
+			(void)close(oldfd);
 		}
 		fd = open(path, flags, 0666);
 		if (fd < 0) { __file_free(f); return 0; }
@@ -246,10 +246,10 @@ void __stdio_exit(void)
 	if (in_progress) return;
 	in_progress = 1;
 
-	fflush(stdout);
-	fflush(stderr);
+	(void)fflush(stdout);
+	(void)fflush(stderr);
 	for (f = __stdio_files; f; f = f->next)
-		fflush(f);
+		(void)fflush(f);
 	/* Buffers are not freed and fds not closed: the process is about to
 	 * end and NtTerminateProcess reclaims everything at once. Flushing
 	 * is the only observable effect that matters. */

@@ -95,7 +95,8 @@ static struct aio_waiter *waiters NTLIBC_GUARDED_BY(__ntlibc_sig_lock_token);
  * required nonnull(1)) -- verified sound by hand across that chain, not
  * expressible as a `nonnull` on this function's own signature. */
 static void wake_waiters_locked(const struct aio_request *request)
-    __attribute__((nonnull(1)));
+    __attribute__((nonnull(1)))
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static void wake_waiters_locked(const struct aio_request *request)
 {
 	struct aio_waiter *waiter;
@@ -179,7 +180,8 @@ static void notify(const struct sigevent *event)
 static void finish_locked(struct aio_request *request, int error, ssize_t result,
 	struct sigevent *individual, int *have_individual,
 	struct sigevent *list, int *have_list)
-    __attribute__((nonnull(1, 4, 5, 7)));
+    __attribute__((nonnull(1, 4, 5, 7)))
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static void finish_locked(struct aio_request *request, int error, ssize_t result,
 	struct sigevent *individual, int *have_individual,
 	struct sigevent *list, int *have_list)
@@ -238,6 +240,8 @@ static ssize_t perform(struct aio_request *request, int *error)
 }
 
 static struct aio_request *next_queued(void)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
+static struct aio_request *next_queued(void)
 {
 	struct aio_request *best = 0;
 	int i;
@@ -253,6 +257,7 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 	(void)unused;
 	for (;;) {
 		struct aio_request *request;
+		__plat_handle_t wake;
 		struct sigevent individual, list;
 		int have_individual, have_list, error;
 		ssize_t result;
@@ -260,9 +265,10 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 		__sig_lock();
 		request = next_queued();
 		if (request) request->state = REQ_RUNNING;
+		wake = worker_wake;
 		__sig_unlock();
 		if (!request) {
-			__plat_wait_one(worker_wake, 0, 0, 0);
+			__plat_wait_one(wake, 0, 0, 0);
 			continue;
 		}
 
@@ -277,6 +283,7 @@ static unsigned __PLAT_APC_CALL aio_worker(void *unused)
 	return 0;
 }
 
+static int start_worker(void) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static int start_worker(void)
 {
 	__plat_handle_t thread, event;
@@ -386,6 +393,8 @@ int aio_fsync(int op, struct aiocb *cb)
 }
 
 static struct aio_request *lookup(const struct aiocb *cb)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
+static struct aio_request *lookup(const struct aiocb *cb)
 {
 	struct aio_request *request;
 	if (!cb || !cb->__nt_request) return 0;
@@ -443,7 +452,8 @@ static int timeout_valid(const struct timespec *timeout)
  * count >= 1 -- every real call site (aio_suspend()) forwards its own
  * list argument, which is itself required by POSIX. */
 static int suspend_list_ready(const struct aiocb *const list[], int count,
-	int *any) __attribute__((nonnull(1, 3)));
+	int *any) __attribute__((nonnull(1, 3)))
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static int suspend_list_ready(const struct aiocb *const list[], int count,
 	int *any)
 {
@@ -459,6 +469,8 @@ static int suspend_list_ready(const struct aiocb *const list[], int count,
 	return 0;
 }
 
+static void remove_waiter_locked(struct aio_waiter *waiter)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 static void remove_waiter_locked(struct aio_waiter *waiter)
 {
 	struct aio_waiter **link = &waiters;
@@ -684,6 +696,7 @@ int lio_listio(int mode, struct aiocb *const list[], int count,
 	return 0;
 }
 
+void __aio_reset_after_fork(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS;
 void __aio_reset_after_fork(void)
 {
 	int i;

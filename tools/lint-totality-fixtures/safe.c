@@ -56,6 +56,46 @@ unsigned countdown(unsigned n)
 	return n;
 }
 
+unsigned radix_countdown(unsigned n)
+{
+	while (n)
+		n /= 10;
+	return n;
+}
+
+unsigned assigned_radix_countdown(unsigned n)
+{
+	while (n)
+		n = n / 10;
+	return n;
+}
+
+int signed_extra_progress(int n, int skip)
+{
+	int i;
+	for (i = 0; i < n; i++) {
+		if (skip)
+			i++;
+	}
+	return i;
+}
+
+unsigned two_variable_increment(unsigned n)
+{
+	unsigned i, remaining;
+	for (i = 0, remaining = n; i < n; i++, remaining--) {
+	}
+	return remaining;
+}
+
+unsigned condition_countdown(unsigned n)
+{
+	unsigned sum = 0;
+	while (n-- > 0)
+		sum++;
+	return sum;
+}
+
 unsigned progress_on_every_backedge(unsigned n, int choose)
 {
 	unsigned i = 0;

@@ -169,7 +169,7 @@ static void lru_push_tail(struct lru *lru, struct level *lv)
 static void close_one(struct walkstate *ws, struct lru *lru, struct level *lv)
 {
 	lv->pos = telldir(lv->dp);
-	closedir(lv->dp);
+	(void)closedir(lv->dp);
 	lv->dp = NULL;
 	lru_unlink(lru, lv);
 	ws->open_count--;

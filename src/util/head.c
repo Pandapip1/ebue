@@ -75,7 +75,8 @@ static int head_one(int fd, long n, const char *label)
 			}
 		}
 		if (write_all(buf, (size_t)seglen) < 0) {
-			fprintf(stderr, "head: %s: %s\n", label, strerror(errno));
+			int saved = errno;
+			fprintf(stderr, "head: %s: %s\n", label, strerror(saved));
 			return -1;
 		}
 	}
@@ -133,7 +134,7 @@ int __util_head_main(int argc, char **argv)
 			if (noperands > 1) {
 				printf("%s==> %s <==\n", first_banner ? "" : "\n", path);
 				first_banner = 0;
-				fflush(stdout);
+				if (fflush(stdout) < 0) had_error = 1;
 			}
 
 			if (!strcmp(path, "-")) {
@@ -148,7 +149,7 @@ int __util_head_main(int argc, char **argv)
 				continue;
 			}
 			if (head_one(fd, n, path) < 0) had_error = 1;
-			close(fd);
+			(void)close(fd);
 		}
 	}
 

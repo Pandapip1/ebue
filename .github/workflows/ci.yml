@@ -358,17 +358,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { stage: warn, packages: "clang gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
+          - { stage: warn, packages: "clang gcc-aarch64-linux-gnu gcc-mingw-w64-i686 gcc-mingw-w64-x86-64" }
           - { stage: analyze, packages: "clang clang-tidy-18" }
           - { stage: cppcheck, packages: cppcheck }
           - { stage: shell, packages: shellcheck }
           - { stage: sizearith, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: fallible, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: locks, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: lockset, packages: clang-18 }
+          - { stage: provenance, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: reentrancy, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: variadic, packages: clang-18 }
           - { stage: signals, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: abizeroinit, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: initproof, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: errno, packages: "clang-18 libclang-18-dev llvm-18-dev" }
+          - { stage: purity, packages: "clang-18 libclang-18-dev llvm-18-dev" }
           - { stage: undefined, packages: "" }
           - { stage: unreferenced, packages: clang }
           - { stage: widthmod, packages: "" }

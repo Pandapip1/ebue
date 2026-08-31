@@ -98,7 +98,9 @@ static void alarm_apc_fire(unsigned long seq)
 	 * case, and a handler that calls alarm() must see "no request
 	 * pending" rather than one that is already in the past. */
 	alarm_due = 0;
+	__sig_lock();
 	__raise_internal(SIGALRM);
+	__sig_unlock();
 }
 
 /* alarm.html RETURN VALUE: "a non-zero value that is the number of

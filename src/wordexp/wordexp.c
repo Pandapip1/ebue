@@ -587,8 +587,8 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 		if (op == '?') {
 			if (flags & WRDE_SHOWERR) {
 				const char *message = *replacement ? replacement : "parameter is unset";
-				write(2, message, strlen(message));
-				write(2, "\n", 1);
+				(void)write(2, message, strlen(message));
+				(void)write(2, "\n", 1);
 			}
 			__free(replacement);
 			return WRDE_SYNTAX;

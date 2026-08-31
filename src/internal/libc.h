@@ -826,8 +826,9 @@ long long __fsize_clamp(__plat_handle_t h, int append, size_t count);
 long long __fsize_room_at(long long off);
 int __fsize_allow(long long size);
 int __fsize_exceeded(void);
-int __raise_internal(int);
-int __raise_internal_info(int, const void *);
+int __raise_internal(int) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
+int __raise_internal_info(int, const void *)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 int __sig_queue_process_info(int, const void *);
 /* How many times a signal-catching function has been entered.  Compared
  * across an alertable wait by src/unistd/sleep.c to tell a caught signal
@@ -848,7 +849,7 @@ struct __sigset_t;
  * in either body. */
 void __sig_current_mask_copy(struct __sigset_t *) __attribute__((nonnull(1)));
 void __sig_current_mask_install(const struct __sigset_t *) __attribute__((nonnull(1)));
-int __raise_thread_internal(int);
+int __raise_thread_internal(int) NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 /* Nonzero if SIGCHLD's installed sa_flags has SA_NOCLDWAIT set -- see the
  * comment on __sigchld_nocldwait() in src/signal/signal.c. */
 int __sigchld_nocldwait(void);
@@ -899,7 +900,8 @@ void __sig_notify_delivery(void);
 int __sig_try_deliver_remote(int pid, int sig);
 int __sig_try_deliver_remote_info(int pid, int sig, const void *);
 int __sig_try_deliver_remote_nondefault(int pid, int sig);
-int __sig_disposition_is_default(int sig);
+int __sig_disposition_is_default(int sig)
+    NTLIBC_REQUIRES(__ntlibc_sig_lock_token);
 int __sig_consume_child_stop(int pid);
 void __sigchld_job_control(struct __child *, int sig);
 void __sig_pending_reset_after_fork(void);

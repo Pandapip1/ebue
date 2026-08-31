@@ -106,7 +106,7 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 	}
 	if (out < 0) {
 		fprintf(stderr, "cp: cannot create '%s': %s\n", dst, strerror(errno));
-		close(in);
+		(void)close(in);
 		return -1;
 	}
 
@@ -116,8 +116,8 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 			ssize_t w = write(out, p, (size_t)n);
 			if (w < 0) {
 				fprintf(stderr, "cp: error writing to '%s': %s\n", dst, strerror(errno));
-				close(in);
-				close(out);
+				(void)close(in);
+				(void)close(out);
 				return -1;
 			}
 			p += w;
@@ -126,11 +126,11 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 	}
 	if (n < 0) {
 		fprintf(stderr, "cp: error reading '%s': %s\n", src, strerror(errno));
-		close(in);
-		close(out);
+		(void)close(in);
+		(void)close(out);
 		return -1;
 	}
-	close(in);
+	(void)close(in);
 	if (close(out) < 0) {
 		fprintf(stderr, "cp: error closing '%s': %s\n", dst, strerror(errno));
 		return -1;

@@ -99,10 +99,16 @@ FILE *tmpfile(void)
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
 	/* POSIX semantics: unlinked at once, gone the moment it is closed. */
-	unlink(tmpl);
+	if (unlink(tmpl) < 0) {
+		int e = errno;
+		(void)close(fd);
+		free(tmpl);
+		errno = e;
+		return 0;
+	}
 	free(tmpl);
 	f = __file_new(fd, O_RDWR);
-	if (!f) { int e = errno; close(fd); errno = e; return 0; }
+	if (!f) { int e = errno; (void)close(fd); errno = e; return 0; }
 	return f;
 }
 
@@ -192,8 +198,13 @@ char *tempnam(const char *dir, const char *pfx)
 	memcpy(tmpl + n + 1 + pn, "XXXXXX", sizeof "XXXXXX");
 	fd = mkstemp(tmpl);
 	if (fd < 0) { free(tmpl); return 0; }
-	close(fd);
-	unlink(tmpl);
+	if (close(fd) < 0 || unlink(tmpl) < 0) {
+		int e = errno;
+		(void)unlink(tmpl);
+		free(tmpl);
+		errno = e;
+		return 0;
+	}
 	return tmpl;
 }
 
@@ -221,9 +232,16 @@ FILE *popen(const char *cmd, const char *mode)
 	 * swapped in for the duration of the spawn and put back after. */
 	child_std = rw ? 0 : 1;
 	saved = dup(child_std);
-	if (saved < 0) { close(fds[0]); close(fds[1]); return 0; }
+	if (saved < 0) {
+		int e = errno;
+		(void)close(fds[0]); (void)close(fds[1]);
+		errno = e;
+		return 0;
+	}
 	if (dup2(rw ? fds[0] : fds[1], child_std) < 0) {
-		close(saved); close(fds[0]); close(fds[1]);
+		int e = errno;
+		(void)close(saved); (void)close(fds[0]); (void)close(fds[1]);
+		errno = e;
 		return 0;
 	}
 
@@ -239,14 +257,21 @@ FILE *popen(const char *cmd, const char *mode)
 		free(shell);
 	}
 
-	dup2(saved, child_std);
-	close(saved);
-	close(rw ? fds[0] : fds[1]);
+	if (dup2(saved, child_std) < 0) {
+		int e = errno;
+		(void)close(saved);
+		(void)close(fds[0]);
+		(void)close(fds[1]);
+		errno = e;
+		return 0;
+	}
+	(void)close(saved);
+	(void)close(rw ? fds[0] : fds[1]);
 
-	if (pid < 0) { close(rw ? fds[1] : fds[0]); return 0; }
+	if (pid < 0) { (void)close(rw ? fds[1] : fds[0]); return 0; }
 
 	f = __file_new(rw ? fds[1] : fds[0], rw ? O_WRONLY : O_RDONLY);
-	if (!f) { int e = errno; close(rw ? fds[1] : fds[0]); errno = e; return 0; }
+	if (!f) { int e = errno; (void)close(rw ? fds[1] : fds[0]); errno = e; return 0; }
 	f->pid = pid;
 	return f;
 }
@@ -255,7 +280,7 @@ int pclose(FILE *f)
 {
 	int status;
 	pid_t pid = f->pid;
-	fclose(f);
+	(void)fclose(f);
 	if (pid < 0) { errno = ECHILD; return -1; }
 	if (waitpid(pid, &status, 0) < 0) return -1;
 	return status;

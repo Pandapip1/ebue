@@ -605,6 +605,7 @@ static int fast_lock_word;
 
 #define SYS_sched_yield 124
 
+void __plat_fast_lock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS;
 void __plat_fast_lock(void)
 {
 	int c;
@@ -617,6 +618,7 @@ void __plat_fast_lock(void)
 	}
 }
 
+void __plat_fast_unlock(void) NTLIBC_NO_THREAD_SAFETY_ANALYSIS;
 void __plat_fast_unlock(void)
 {
 	__atomic_store_n(&fast_lock_word, 0, __ATOMIC_RELEASE);

@@ -290,7 +290,7 @@ int setvbuf(FILE *__restrict f, char *__restrict buf, int mode, size_t size)
 		errno = EINVAL;
 		return -1;
 	}
-	fflush(f);
+	if (fflush(f) < 0) return -1;
 	if (f->buf && !f->user_buf) free(f->buf);
 	f->buf = 0;
 	f->bufsz = 0;

@@ -205,7 +205,7 @@ static nl_catd read_catalog(const char *path)
 		if (n == 0) break;
 		len += (size_t)n;
 	}
-	close(fd);
+	(void)close(fd);
 
 	if (!check_catalog(buf, len)) {
 		free(buf);
@@ -216,7 +216,7 @@ static nl_catd read_catalog(const char *path)
 
 fail:
 	saved = saved ? saved : ENOMEM;
-	close(fd);
+	(void)close(fd);
 	free(buf);
 	errno = saved;
 	return (nl_catd)-1;

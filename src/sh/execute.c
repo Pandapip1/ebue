@@ -500,10 +500,10 @@ static void restore_fds(struct redir_state *rs)
 	size_t i;
 	for (i = 0; i < rs->n; i++) {
 		if (rs->saves[i].have) {
-			dup2(rs->saves[i].dup, rs->saves[i].fd);
-			close(rs->saves[i].dup);
+			(void)dup2(rs->saves[i].dup, rs->saves[i].fd);
+			(void)close(rs->saves[i].dup);
 		} else {
-			close(rs->saves[i].fd);
+			(void)close(rs->saves[i].fd);
 		}
 	}
 	__free(rs->saves);
@@ -643,12 +643,12 @@ static int heredoc_open(const char *text)
 
 	if (!f) return -1;
 	len = strlen(text);
-	if (len && fwrite(text, 1, len, f) != len) { fclose(f); return -1; }
-	if (fflush(f)) { fclose(f); return -1; }
+	if (len && fwrite(text, 1, len, f) != len) { (void)fclose(f); return -1; }
+	if (fflush(f)) { (void)fclose(f); return -1; }
 	fd = fileno(f);
-	if (fd < 0 || lseek(fd, 0, SEEK_SET) < 0) { fclose(f); return -1; }
+	if (fd < 0 || lseek(fd, 0, SEEK_SET) < 0) { (void)fclose(f); return -1; }
 	dfd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-	fclose(f);
+	(void)fclose(f);
 	return dfd;
 }
 
@@ -724,7 +724,7 @@ static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
 			 * an fd that was not even open is not treated as a
 			 * failure -- there is nothing left to do either way. */
 			__free(word);
-			close(fd);
+			(void)close(fd);
 			return 0;
 		}
 		n = strtol(word, &end, 10);
@@ -760,8 +760,8 @@ static int apply_one_redir(const struct sh_redir *r, int fd, int *unsupported)
 
 	if (newfd < 0) return 1;
 	if (newfd != fd) {
-		if (dup2(newfd, fd) < 0) { close(newfd); return 1; }
-		close(newfd);
+		if (dup2(newfd, fd) < 0) { (void)close(newfd); return 1; }
+		(void)close(newfd);
 	}
 	return 0;
 }
@@ -2044,17 +2044,21 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	tf = tmpfile();
 	if (!tf) { __sh_list_free(list); return -1; }
 	tfd = fileno(tf);
-	if (tfd < 0) { fclose(tf); __sh_list_free(list); return -1; }
+	if (tfd < 0) { (void)fclose(tf); __sh_list_free(list); return -1; }
 
 	/* Anything this process has buffered for its own stdout belongs on
 	 * the *real* stdout, not in the capture -- fd 1 is about to point
 	 * somewhere else, and stdio's buffer does not know that. */
-	fflush(stdout);
+	if (fflush(stdout)) {
+		(void)fclose(tf);
+		__sh_list_free(list);
+		return -1;
+	}
 
 	rs.saves = 0; rs.n = rs.cap = 0;
 	if (save_fd(&rs, 1) || dup2(tfd, 1) < 0) {
 		restore_fds(&rs);
-		fclose(tf);
+		(void)fclose(tf);
 		__sh_list_free(list);
 		return -1;
 	}
@@ -2063,7 +2067,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	if (env_snapshot_take(&es)) {
 		__free(oldcwd);
 		restore_fds(&rs);
-		fclose(tf);
+		(void)fclose(tf);
 		__sh_list_free(list);
 		return -1;
 	}
@@ -2072,7 +2076,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 		free_env_snapshot(&es);
 		__free(oldcwd);
 		restore_fds(&rs);
-		fclose(tf);
+		(void)fclose(tf);
 		__sh_list_free(list);
 		return -1;
 	}
@@ -2099,15 +2103,15 @@ int __sh_cmdsub(const char *program, char **out, int *status)
 	env_snapshot_restore(&es);
 	free_env_snapshot(&es);
 	if (oldcwd) { chdir(oldcwd); __free(oldcwd); }
-	fflush(stdout);	/* while fd 1 is still the capture */
+	if (fflush(stdout)) rc = -1; /* while fd 1 is still the capture */
 	restore_fds(&rs);
 	__sh_list_free(list);
 
-	if (rc) { fclose(tf); return -1; }
+	if (rc) { (void)fclose(tf); return -1; }
 
-	if (lseek(tfd, 0, SEEK_SET) < 0) { fclose(tf); return -1; }
+	if (lseek(tfd, 0, SEEK_SET) < 0) { (void)fclose(tf); return -1; }
 	buf = slurp_fd(tfd);
-	fclose(tf);
+	(void)fclose(tf);
 	if (!buf) return -1;
 
 	/* 2.6.3: "removing sequences of one or more <newline> characters at
@@ -2219,11 +2223,11 @@ static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, s
 {
 	if (i > 0) {
 		if (save_fd(rs, 0)) return -1;
-		dup2(pipes[i - 1][0], 0);
+		if (dup2(pipes[i - 1][0], 0) < 0) return -1;
 	}
 	if (i + 1 < n) {
 		if (save_fd(rs, 1)) return -1;
-		dup2(pipes[i][1], 1);
+		if (dup2(pipes[i][1], 1) < 0) return -1;
 	}
 	return 0;
 }
@@ -2299,7 +2303,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 	for (i = 0; i + 1 < n; i++) {
 		if (pipe2(pipes[i], O_CLOEXEC) < 0) {
 			size_t j;
-			for (j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); }
+			for (j = 0; j < i; j++) { (void)close(pipes[j][0]); (void)close(pipes[j][1]); }
 			__free(pids); __free(statuses); __free(pipes); __free(deferred);
 			return -1;
 		}
@@ -2368,8 +2372,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		 * open here (and skipped entirely, via the `continue` above,
 		 * before ever reaching this point) -- pass 2 below still needs
 		 * them. */
-		if (i > 0) close(pipes[i - 1][0]);
-		if (i + 1 < n) close(pipes[i][1]);
+		if (i > 0) (void)close(pipes[i - 1][0]);
+		if (i + 1 < n) (void)close(pipes[i][1]);
 
 		pids[i] = sr.kind ? -1 : sr.normal;
 		statuses[i] = sr.kind ? cmdsub_status_rule(&sr, gen0) : 0;
@@ -2398,8 +2402,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 			restore_fds(&rs);
 		}
 
-		if (i > 0) close(pipes[i - 1][0]);
-		if (i + 1 < n) close(pipes[i][1]);
+		if (i > 0) (void)close(pipes[i - 1][0]);
+		if (i + 1 < n) (void)close(pipes[i][1]);
 
 		pids[i] = -1;
 		statuses[i] = st;

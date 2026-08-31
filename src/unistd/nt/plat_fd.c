@@ -113,7 +113,9 @@ ssize_t __plat_write(__plat_handle_t h, const void *buf, size_t count, int appen
 	 * disconnected/closing pipe raises it.  Only this call, which still
 	 * has the real status in hand, can tell the two apart. */
 	if (st == STATUS_PIPE_BROKEN || st == STATUS_PIPE_DISCONNECTED || st == STATUS_PIPE_CLOSING) {
+		__sig_lock();
 		__raise_internal(SIGPIPE);
+		__sig_unlock();
 		errno = EPIPE;
 		return -1;
 	}

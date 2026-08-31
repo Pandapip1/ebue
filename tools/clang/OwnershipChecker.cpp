@@ -886,6 +886,38 @@ class ValidPointerChecker
            Name == "localeconv";
   }
 
+  // The strto* family writes either its input pointer or a pointer later in
+  // that same string through endptr.  Consequently, whenever endptr itself
+  // is supplied, the value written through it cannot be NULL.  Clang's
+  // generic invalidation correctly gives the written value a fresh symbol,
+  // but does not attach this library contract to that symbol; every ordinary
+  // `strtol(s, &end, 10); if (*end) ...` therefore looked like a possible
+  // null dereference even though the conversion call itself established the
+  // opposite.  Keep this list literal and limited to the standard narrow and
+  // wide conversion families whose second argument is endptr.
+  static bool writesNonNullEndPointer(const CallEvent &Call) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function || !Function->getIdentifier())
+      return false;
+    StringRef Name = Function->getName();
+    static constexpr llvm::StringLiteral Names[] = {
+        "strtod",  "strtof",   "strtold", "strtol",   "strtoll",
+        "strtoul", "strtoull", "wcstod",  "wcstof",  "wcstold",
+        "wcstol",  "wcstoll",  "wcstoul", "wcstoull"};
+    for (StringRef Candidate : Names)
+      if (Name == Candidate)
+        return true;
+    return false;
+  }
+
+  static bool isLineInputFunction(const CallEvent &Call) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function || !Function->getIdentifier())
+      return false;
+    StringRef Name = Function->getName();
+    return Name == "getline" || Name == "getdelim";
+  }
+
   // __peb (src/internal/libc.h: `extern PPEB __peb;`) is a plain global
   // pointer, not a call result, so isAlwaysNonNull's checkPostCall-based
   // mechanism cannot cover it -- it is set exactly once, unconditionally,
@@ -1342,14 +1374,87 @@ public:
   }
 
   void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
-    if (!isAlwaysNonNull(Call))
-      return;
-    std::optional<DefinedOrUnknownSVal> Defined =
-        Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
-    if (!Defined)
-      return;
-    if (ProgramStateRef NonNull = C.getState()->assume(*Defined, true))
-      C.addTransition(NonNull);
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+
+    // A successful getline/getdelim call returns the number of bytes read,
+    // stores a nonnull buffer through lineptr, and places a terminating NUL
+    // immediately after those bytes.  Model that lower bound on the success
+    // branch while retaining the untouched failure branch.  Without it,
+    // idiomatic `if (len >= 0) line[len]` callers can prove neither the
+    // pointer nor its extent even though both are the call's contract.
+    if (isLineInputFunction(Call) && Call.getNumArgs() > 0) {
+      const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+      std::optional<DefinedOrUnknownSVal> Result =
+          Call.getReturnValue().getAs<DefinedOrUnknownSVal>();
+      if (Function && Result) {
+        SValBuilder &Builder = C.getSValBuilder();
+        QualType ReturnTy = Function->getReturnType();
+        SVal NonNegative =
+            Builder.evalBinOp(State, BO_GE, *Result,
+                              Builder.makeZeroVal(ReturnTy),
+                              Builder.getConditionType());
+        if (std::optional<DefinedOrUnknownSVal> Condition =
+                NonNegative.getAs<DefinedOrUnknownSVal>()) {
+          auto [Succeeded, Failed] = State->assume(*Condition);
+          if (Succeeded) {
+            const MemRegion *BufferStorage =
+                Call.getArgSVal(0).getAsRegion();
+            SVal Buffer = BufferStorage ? Succeeded->getSVal(BufferStorage)
+                                        : UnknownVal();
+            if (std::optional<DefinedOrUnknownSVal> DefinedBuffer =
+                    Buffer.getAs<DefinedOrUnknownSVal>())
+              Succeeded = Succeeded->assume(*DefinedBuffer, true);
+            if (Succeeded) {
+              const MemRegion *BufferRegion = Buffer.getAsRegion();
+              QualType SizeTy = C.getASTContext().getSizeType();
+              SVal SizeResult = Builder.evalCast(*Result, SizeTy, ReturnTy);
+              SVal Extent = Builder.evalBinOp(
+                  Succeeded, BO_Add, SizeResult,
+                  Builder.makeIntVal(1, SizeTy), SizeTy);
+              if (BufferRegion) {
+                if (std::optional<DefinedOrUnknownSVal> DefinedExtent =
+                        Extent.getAs<DefinedOrUnknownSVal>())
+                  Succeeded = setDynamicExtent(Succeeded, BufferRegion,
+                                               *DefinedExtent, Builder);
+              }
+              C.addTransition(Succeeded);
+            }
+          }
+          if (Failed)
+            C.addTransition(Failed);
+          return;
+        }
+      }
+    }
+
+    if (writesNonNullEndPointer(Call) && Call.getNumArgs() > 1) {
+      const MemRegion *EndStorage = Call.getArgSVal(1).getAsRegion();
+      if (EndStorage &&
+          !State->isNull(Call.getArgSVal(1)).isConstrainedTrue()) {
+        SVal EndValue = State->getSVal(EndStorage);
+        if (std::optional<DefinedOrUnknownSVal> Defined =
+                EndValue.getAs<DefinedOrUnknownSVal>()) {
+          if (ProgramStateRef NonNull = State->assume(*Defined, true)) {
+            State = NonNull;
+            Changed = true;
+          }
+        }
+      }
+    }
+
+    if (isAlwaysNonNull(Call)) {
+      if (std::optional<DefinedOrUnknownSVal> Defined =
+              Call.getReturnValue().getAs<DefinedOrUnknownSVal>()) {
+        if (ProgramStateRef NonNull = State->assume(*Defined, true)) {
+          State = NonNull;
+          Changed = true;
+        }
+      }
+    }
+
+    if (Changed)
+      C.addTransition(State);
   }
 
   // GCC/Clang's own `nonnull` attribute (`__attribute__((nonnull(N,...)))`,

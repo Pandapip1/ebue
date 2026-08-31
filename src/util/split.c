@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include "util.h"
 
 /* index 0 -> suffix_length copies of 'a', counting up like an odometer
@@ -39,12 +40,11 @@
  * 26^suffix_length names a width of suffix_length can spell. */
 static int gen_suffix(char *buf, int suflen, long index)
 {
-	long cap = 1;
 	int i;
 
-	for (i = 0; i < suflen; i++) cap *= 26;
-	if (index >= cap) return -1;
+	if (index < 0) return -1;
 	for (i = suflen - 1; i >= 0; i--) { buf[i] = (char)('a' + index % 26); index /= 26; }
+	if (index != 0) return -1;
 	buf[suflen] = 0;
 	return 0;
 }
@@ -61,7 +61,10 @@ static FILE *open_piece(const char *prefix, int suflen, long index, char *namebu
 	}
 	snprintf(namebuf, namebuf_sz, "%s%s", prefix, suf);
 	f = fopen(namebuf, "wb");
-	if (!f) fprintf(stderr, "split: %s: %s\n", namebuf, strerror(errno));
+	if (!f) {
+		int saved = errno;
+		fprintf(stderr, "split: %s: %s\n", namebuf, strerror(saved));
+	}
 	return f;
 }
 
@@ -82,6 +85,7 @@ static int parse_bytecount(const char *s, long *out)
 	buf[n] = 0;
 	v = strtol(buf, &end, 10);
 	if (end == buf || *end || v <= 0) return -1;
+	if (v > LONG_MAX / mult) return -1;
 	*out = v * mult;
 	return 0;
 }
@@ -135,15 +139,19 @@ static int split_by_bytes(FILE *in, const char *prefix, int suflen, long bcount)
 		if (got == 0) break;
 		out = open_piece(prefix, suflen, piece++, namebuf, sizeof namebuf);
 		if (!out) { free(buf); return -1; }
-		fwrite(buf, 1, got, out);
-		fclose(out);
+		if (fwrite(buf, 1, got, out) != got) {
+			(void)fclose(out);
+			free(buf);
+			return -1;
+		}
+		if (fclose(out) < 0) { free(buf); return -1; }
 		had_output = 1;
 		if (got < (size_t)bcount) break; /* short read: real EOF */
 	}
 	if (!had_output) {
 		FILE *out = open_piece(prefix, suflen, piece, namebuf, sizeof namebuf);
 		if (!out) { free(buf); return -1; }
-		fclose(out);
+		if (fclose(out) < 0) { free(buf); return -1; }
 	}
 	free(buf);
 	return 0;

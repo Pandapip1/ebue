@@ -36,7 +36,7 @@ int scandir(const char *path, struct dirent ***res,
 {
 	DIR *dp;
 	struct dirent *d, **list = 0;
-	size_t n = 0, cap = 0;
+	size_t n = 0, cap = 0, i;
 
 	dp = opendir(path);
 	if (!dp) return -1;
@@ -67,7 +67,13 @@ int scandir(const char *path, struct dirent ***res,
 		list[n++] = copy;
 	}
 	if (errno) goto fail;
-	closedir(dp);
+	if (closedir(dp) < 0) {
+		int e = errno;
+		for (i = 0; i < n; i++) __free(list[i]);
+		__free(list);
+		errno = e;
+		return -1;
+	}
 
 	/* list is struct dirent **, so *list is a pointer and sizeof *list is
 	 * deliberately a pointer size: the array being sorted holds pointers,
@@ -79,11 +85,10 @@ int scandir(const char *path, struct dirent ***res,
 
 fail:
 	{
-		size_t i;
 		int e = errno ? errno : ENOMEM;
 		for (i = 0; i < n; i++) __free(list[i]);
 		__free(list);
-		closedir(dp);
+		(void)closedir(dp);
 		errno = e;
 		return -1;
 	}

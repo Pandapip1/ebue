@@ -130,7 +130,8 @@ int __util_uudecode_main(int argc, char **argv)
 
 	in = in_path ? fopen(in_path, "rb") : stdin;
 	if (!in) {
-		fprintf(stderr, "uudecode: %s: %s\n", in_path, strerror(errno));
+		int saved = errno;
+		fprintf(stderr, "uudecode: %s: %s\n", in_path, strerror(saved));
 		return 1;
 	}
 
@@ -197,8 +198,12 @@ int __util_uudecode_main(int argc, char **argv)
 		goto fail;
 	}
 
-	fclose(out);
-	if (in_path) fclose(in);
+	if (fclose(out) < 0) {
+		fprintf(stderr, "uudecode: %s: %s\n", outname, strerror(errno));
+		if (in_path) (void)fclose(in);
+		return 1;
+	}
+	if (in_path) (void)fclose(in);
 
 	if (chmod(outname, (mode_t)(mode_val & 07777)) != 0) {
 		fprintf(stderr, "uudecode: %s: chmod: %s\n", outname, strerror(errno));
@@ -207,7 +212,7 @@ int __util_uudecode_main(int argc, char **argv)
 	return 0;
 
 fail:
-	fclose(out);
-	if (in_path) fclose(in);
+	(void)fclose(out);
+	if (in_path) (void)fclose(in);
 	return 1;
 }

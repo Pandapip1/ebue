@@ -99,7 +99,7 @@ int __util_cat_main(int argc, char **argv)
 			continue;
 		}
 		if (copy_stream(fd, path) < 0) had_error = 1;
-		close(fd);
+		(void)close(fd);
 	}
 
 	return had_error ? 1 : 0;

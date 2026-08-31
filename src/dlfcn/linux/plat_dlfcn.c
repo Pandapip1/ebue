@@ -411,7 +411,7 @@ static unsigned long real_page_size(void)
 		while (read(fd, pair, sizeof pair) == (ssize_t)sizeof pair && pair[0] != 0) {
 			if (pair[0] == AT_PAGESZ) { cached_page_size = pair[1]; break; }
 		}
-		close(fd);
+		(void)close(fd);
 	}
 	if (!cached_page_size) cached_page_size = 4096; /* conservative last resort */
 	return cached_page_size;
@@ -747,13 +747,13 @@ static int self_symtab_load(void)
 	}
 
 	free(shdrs);
-	close(fd);
+	(void)close(fd);
 	self_symtab_ready = 1;
 	return 0;
 
 fail:
 	free(shdrs);
-	if (fd >= 0) close(fd);
+	if (fd >= 0) (void)close(fd);
 	self_symtab_ready = -1;
 	return -1;
 }
@@ -1123,12 +1123,12 @@ void *__plat_dlopen(const char *file, int mode)
 	}
 
 	free(phdrs);
-	close(fd);
+	(void)close(fd);
 	return obj;
 
 fail:
 	free(phdrs);
-	if (fd >= 0) close(fd);
+	if (fd >= 0) (void)close(fd);
 	if (map_base != MAP_FAILED) raw_munmap(map_base, map_len);
 	free(obj);
 	return NULL;

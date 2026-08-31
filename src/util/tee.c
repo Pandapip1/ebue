@@ -135,7 +135,7 @@ int __util_tee_main(int argc, char **argv)
 				if (w < 0) {
 					fprintf(stderr, "tee: %s: %s\n", paths[j], strerror(errno));
 					had_error = 1;
-					close(fds[j]);
+					(void)close(fds[j]);
 					fds[j] = -1;
 					break;
 				}
@@ -151,8 +151,12 @@ int __util_tee_main(int argc, char **argv)
 
 	{
 		int j;
-		for (j = 0; j < nfiles; j++)
-			if (fds[j] >= 0) close(fds[j]);
+		for (j = 0; j < nfiles; j++) {
+			if (fds[j] >= 0 && close(fds[j]) < 0) {
+				fprintf(stderr, "tee: %s: %s\n", paths[j], strerror(errno));
+				had_error = 1;
+			}
+		}
 	}
 	free(fds);
 	free(paths);

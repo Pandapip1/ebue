@@ -10,3 +10,5 @@ int checked_close(int fd) {
     return -1;
   return 0;
 }
+
+void deliberately_discarded_close(int fd) { (void)close(fd); }

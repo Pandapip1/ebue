@@ -32,6 +32,12 @@ int truncate(const char *path, off_t len)
 	int r;
 	if (fd < 0) return -1;
 	r = ftruncate(fd, len);
-	close(fd);
+	if (r < 0) {
+		int saved = errno;
+		(void)close(fd);
+		errno = saved;
+	} else if (close(fd) < 0) {
+		return -1;
+	}
 	return r;
 }

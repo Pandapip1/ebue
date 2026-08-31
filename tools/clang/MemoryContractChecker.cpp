@@ -40,6 +40,7 @@ using namespace ento;
 // this exact shape.
 REGISTER_MAP_WITH_PROGRAMSTATE(StrlenSource, SymbolRef, const MemRegion *)
 REGISTER_MAP_WITH_PROGRAMSTATE(StrnlenSource, SymbolRef, const MemRegion *)
+REGISTER_SET_WITH_PROGRAMSTATE(KnownStringRegion, const MemRegion *)
 
 namespace {
 
@@ -423,7 +424,8 @@ public:
   }
 };
 
-class StringSentinelChecker : public Checker<check::PreCall> {
+class StringSentinelChecker
+    : public Checker<check::PreCall, check::PostCall> {
   mutable std::unique_ptr<BugType> BT;
 
   static void requiredArguments(const CallEvent &Call,
@@ -460,10 +462,12 @@ class StringSentinelChecker : public Checker<check::PreCall> {
     return false;
   }
 
-  static bool sentinelProven(SVal Pointer) {
+  static bool sentinelProven(SVal Pointer, ProgramStateRef State) {
     const MemRegion *Region = Pointer.getAsRegion();
     if (!Region)
       return false;
+    if (State->contains<KnownStringRegion>(Region))
+      return true;
     const MemRegion *Base = Region->getBaseRegion();
     if (isa<StringRegion>(Base))
       return true;
@@ -472,13 +476,25 @@ class StringSentinelChecker : public Checker<check::PreCall> {
     return false;
   }
 
+  static bool returnsString(const CallEvent &Call) {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function || !Function->getIdentifier())
+      return false;
+    StringRef Name = Function->getName();
+    // These APIs promise that every nonnull result points at a reachable
+    // NUL: either at their own string storage, or at a suffix of an input
+    // string whose sentinel check has already run in checkPreCall.
+    return Name == "getenv" || Name == "strerror" || Name == "strdup" ||
+           Name == "strchr" || Name == "strrchr";
+  }
+
 public:
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
     SmallVector<unsigned, 2> Arguments;
     requiredArguments(Call, Arguments);
     for (unsigned Argument : Arguments) {
       if (Argument >= Call.getNumArgs() ||
-          sentinelProven(Call.getArgSVal(Argument)))
+          sentinelProven(Call.getArgSVal(Argument), C.getState()))
         continue;
       const Stmt *Statement = Call.getOriginExpr();
       if (!Statement)
@@ -503,6 +519,32 @@ public:
       C.emitReport(std::move(Report));
       return;
     }
+  }
+
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    ProgramStateRef State = C.getState();
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function || !Function->getIdentifier())
+      return;
+    StringRef Name = Function->getName();
+    const MemRegion *Region = nullptr;
+    if (returnsString(Call)) {
+      Region = Call.getReturnValue().getAsRegion();
+    } else if ((Name == "strcpy" || Name == "strcat") &&
+               Call.getNumArgs() >= 2 &&
+               sentinelProven(Call.getArgSVal(1), State)) {
+      // A successful strcpy/strcat leaves its destination terminated.
+      // strcat's destination was independently required to be terminated
+      // by checkPreCall before the append began.
+      Region = Call.getArgSVal(0).getAsRegion();
+    }
+    if (!Region)
+      return;
+    // Keep the exact start address, not merely its allocation's base:
+    // strcpy(buf + 4, "x") proves a sentinel reachable from buf + 4,
+    // but says nothing about whether one is reachable from buf itself.
+    State = State->add<KnownStringRegion>(Region);
+    C.addTransition(State);
   }
 };
 

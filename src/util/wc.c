@@ -262,11 +262,11 @@ int __util_wc_main(int argc, char **argv)
 				continue;
 			}
 			if (count_stream(fd, want_chars, &c, path) < 0) {
-				close(fd);
+				(void)close(fd);
 				had_error = 1;
 				continue;
 			}
-			close(fd);
+			(void)close(fd);
 		}
 		print_counts(&c, want_l, want_w, want_bc, path);
 		total.lines += c.lines;

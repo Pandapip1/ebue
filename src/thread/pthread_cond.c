@@ -156,7 +156,7 @@ static void cond_wait_cleanup(void *argument)
 		cleanup->waiter->semaphore = 0;
 	}
 	if (!cleanup->mutex_held) {
-		pthread_mutex_lock(cleanup->mutex);
+		(void)pthread_mutex_lock(cleanup->mutex);
 		cleanup->mutex_held = 1;
 	}
 	free(cleanup->waiter);

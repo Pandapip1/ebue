@@ -306,8 +306,8 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		t = open(a->path, a->oflag, a->mode);
 		if (t < 0) return errno;
 		if (t != a->fd) {
-			if (dup2(t, a->fd) < 0) { int e = errno; close(t); return e; }
-			close(t);
+			if (dup2(t, a->fd) < 0) { int e = errno; (void)close(t); return e; }
+			(void)close(t);
 		}
 		return 0;
 	}

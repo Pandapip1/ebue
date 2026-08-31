@@ -60,6 +60,14 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include "plat_handle.h"
+#include "thread_annotations.h"
+
+#ifdef NTLIBC_LOCKSET_ANALYSIS
+/* The fast lock is the ntdll PEB lock on NT and the corresponding
+ * process-wide futex lock on Linux.  The capability token names the
+ * logical lock, independently of which backend supplies it. */
+extern __ntlibc_lock_capability __ntlibc_peb_lock_token;
+#endif
 
 /* NT's __stdcall on i386, the only calling convention x86_64 has -- the
  * exact condition src/internal/nt.h's own NTAPI macro gates on, reproduced
@@ -354,7 +362,7 @@ ssize_t __plat_thread_file_io(__plat_handle_t h, void *buf, size_t count,
  * it, and no caller in this tree relies on it (pthread_mutex.c's own
  * recursive-mutex support is layered on TOP of this lock, in its own
  * bookkeeping, never by re-entering the lock itself). */
-void __plat_fast_lock(void);
-void __plat_fast_unlock(void);
+void __plat_fast_lock(void) NTLIBC_ACQUIRE(__ntlibc_peb_lock_token);
+void __plat_fast_unlock(void) NTLIBC_RELEASE(__ntlibc_peb_lock_token);
 
 #endif

@@ -8,7 +8,8 @@ correctness bug against a function already marked __attribute__((pure)) in
 this tree today -- a wrong pure claim licenses the compiler to eliminate,
 reorder, or coalesce calls the program actually depends on. A "candidate"
 finding is a function that is not marked pure but structurally qualifies;
-these are reported for a human to spot-check, not applied automatically.
+these are reported for a human to spot-check, not applied automatically and
+are advisory rather than a failed proof.
 """
 
 from __future__ import annotations
@@ -109,8 +110,13 @@ def main() -> int:
     if findings:
         false_claims = sum(f.kind == "false-claim" for f in findings.values())
         candidates = sum(f.kind == "candidate" for f in findings.values())
-        print(f"lint-purity: {false_claims} false pure claim(s), {candidates} pure candidate(s)")
-        return 1
+        if false_claims:
+            print(f"lint-purity: {false_claims} false pure claim(s), "
+                  f"{candidates} advisory pure candidate(s)")
+            return 1
+        print(f"lint-purity: no false pure claims; {candidates} advisory pure "
+              "candidate(s) (fixtures passed)")
+        return 0
     print("lint-purity: no findings (fixtures passed)")
     return 0
 

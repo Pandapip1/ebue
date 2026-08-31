@@ -797,10 +797,16 @@ install-check: config.mak
 # analyzer, cppcheck, shellcheck).  Never a prerequisite of anything: the
 # library is built with tcc, and tools/lint.sh only reports.  It skips any
 # tool that is not installed.  See tools/lint.sh for the flag set and
-# .clang-tidy for the check list.
+# .clang-tidy for the check list. Keep this required-stage list explicit so
+# `make lint` and the per-stage CI matrix cannot silently disagree about
+# which zero-backlog checks are gates.
 #
+LINT_REQUIRED_STAGES = warn analyze cppcheck shell sizearith fallible locks \
+	lockset provenance reentrancy variadic signals abizeroinit initproof \
+	errno purity undefined unreferenced widthmod
+
 lint:
-	./tools/lint.sh
+	./tools/lint.sh $(LINT_REQUIRED_STAGES)
 
 .PHONY: lint
 
