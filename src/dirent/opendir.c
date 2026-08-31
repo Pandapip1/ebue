@@ -12,6 +12,11 @@
  * there, exactly as glibc's does, so the caller must not touch that fd
  * itself afterward and closedir() closes it.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -56,3 +61,5 @@ DIR *opendir(const char *path)
 	}
 	return dp;
 }
+
+// NOLINTEND(misc-include-cleaner)

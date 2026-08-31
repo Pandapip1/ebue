@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -112,7 +117,7 @@ static long double __x87_sqrt(long double x)
 
 /* frndint under rounding control rc: 0 nearest, 1 down, 2 up, 3 trunc;
  * rc < 0 means the current mode. */
-static long double __x87_rndint(long double x, int rc)
+static long double __x87_rndint(long double x, int rc) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned short cw, cw2;
 	if (rc < 0) {
@@ -131,7 +136,7 @@ static long double __x87_rndint(long double x, int rc)
 	return x;
 }
 
-static long double __x87_fmod(long double x, long double y)
+static long double __x87_fmod(long double x, long double y) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__asm__ __volatile__(
 		NTLIBC_FLDL " (%1)\n\t"
@@ -149,7 +154,7 @@ static long double __x87_fmod(long double x, long double y)
 
 /* IEEE remainder via FPREM1.  On the final iteration x87 exposes the
  * low three quotient bits as C0/C3/C1 = Q2/Q1/Q0. */
-static long double __x87_remainder(long double x, long double y, int *quo)
+static long double __x87_remainder(long double x, long double y, int *quo) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned short sw;
 	__asm__ __volatile__(
@@ -187,14 +192,14 @@ static long double __x87_tan(long double x)
 }
 
 /* fpatan: atan2(y, x), full quadrant handling in hardware. */
-static long double __x87_atan2(long double y, long double x)
+static long double __x87_atan2(long double y, long double x) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfpatan\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");
 	return y;
 }
 
 /* y * log2(x) via fyl2x. */
-static long double __x87_yl2x(long double x, long double y)
+static long double __x87_yl2x(long double x, long double y) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfyl2x\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");
 	return y;
@@ -222,7 +227,7 @@ static long double __x87_exp2(long double t)
 }
 
 /* x * 2^n exactly (fscale truncates st1, so feed it an integer). */
-static long double __x87_scalbn(long double x, int n)
+static long double __x87_scalbn(long double x, int n) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long double d = (long double)n;
 	__asm__ __volatile__(
@@ -238,3 +243,5 @@ static long double __x87_scalbn(long double x, int n)
 #endif /* !__i386__ && !__x86_64__ */
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

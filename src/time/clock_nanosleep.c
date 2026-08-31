@@ -45,7 +45,7 @@
 #include <errno.h>
 #include "libc.h"
 
-int clock_nanosleep(clockid_t id, int flags, const struct timespec *req, struct timespec *rem)
+int clock_nanosleep(clockid_t id, int flags, const struct timespec *req, struct timespec *rem) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long long ticks, owed = 0;
 

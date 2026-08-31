@@ -301,9 +301,15 @@ static int rename_mapped_away(const char *path)
 	memcpy(dead, path, dirlen);
 	for (attempt = 0; attempt < 32; attempt++) {
 		unsigned serial = ++tombstone_serial;
-		snprintf(dead + dirlen, size - dirlen,
+		int n = snprintf(dead + dirlen, size - dirlen,
 		         "%s%08x-%08x-%08x", stem, (unsigned)getpid(),
 		         (unsigned)gettid(), serial);
+		if (n < 0 || (size_t)n >= size - dirlen) {
+			int e = n < 0 ? errno : ENAMETOOLONG;
+			free(dead);
+			errno = e;
+			return -1;
+		}
 		if (rename(path, dead) == 0) {
 			/* A live section may keep this private unlink from succeeding.
 			 * The namespace operation already succeeded, so do not turn a

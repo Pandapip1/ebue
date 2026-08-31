@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -27,7 +32,7 @@
  * tools/asan-build.sh for the same expression's other half): the
  * addition itself wraps modulo 2**32, on purpose, to land back at
  * mp - 3 / mp - 9. */
-static inline __wraps long long __days_from_civil(long long y, unsigned m, unsigned d)
+static inline __wraps long long __days_from_civil(long long y, unsigned m, unsigned d) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	y -= m <= 2;
 	long long era = (y >= 0 ? y : y - 399) / 400;
@@ -38,7 +43,7 @@ static inline __wraps long long __days_from_civil(long long y, unsigned m, unsig
 	return era * 146097 + (long long)doe - 719468;
 }
 
-static inline __wraps void __civil_from_days(long long z, long long *y, unsigned *m, unsigned *d)
+static inline __wraps void __civil_from_days(long long z, long long *y, unsigned *m, unsigned *d) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	z += 719468;
 	long long era = (z >= 0 ? z : z - 146096) / 146097;
@@ -105,7 +110,7 @@ static inline int __iso_weeks_in_year(long long y)
  * formula (same source as __iso_weeks_in_year's comment), and a result
  * outside [1, weeks in that year] means the date belongs to the last
  * week of the previous week-based year or week 1 of the next one. */
-static inline void __iso_week(long long year, int yday, int wday, long long *out_year, int *out_week)
+static inline void __iso_week(long long year, int yday, int wday, long long *out_year, int *out_week) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int isodow = wday == 0 ? 7 : wday;             /* Monday=1..Sunday=7 */
 	long long week = ((long long)yday + 1 - isodow + 10) / 7;
@@ -132,7 +137,7 @@ extern const char *const __ntlibc_month_name_abbr[12];
  * truncated.  Returns the digit count written, least-significant-digit
  * bookkeeping done internally; the caller gets the digits in the right
  * (most-significant-first) order in tmp[0..return). */
-static inline int __num_digits(char *tmp, int cap, unsigned long v, int width, char pad)
+static inline int __num_digits(char *tmp, int cap, unsigned long v, int width, char pad) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char rev[24];
 	int n = 0;
@@ -151,3 +156,5 @@ static inline int __num_digits(char *tmp, int cap, unsigned long v, int width, c
 }
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

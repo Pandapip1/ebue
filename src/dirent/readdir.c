@@ -18,6 +18,11 @@
  * ordinary records straight from the backend (see dirent_internal.h);
  * nothing here treats them specially.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <errno.h>
 #include "dirent_internal.h"
@@ -141,3 +146,5 @@ struct dirent *readdir(DIR *dp)
 	int r = fill(dp, &dp->ent);
 	return r ? 0 : &dp->ent;
 }
+
+// NOLINTEND(misc-include-cleaner)

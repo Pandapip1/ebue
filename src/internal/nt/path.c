@@ -35,6 +35,11 @@
  * with "\usr\bin\sh".  Fixed POSIX objects are resolved before this layer;
  * native paths that win that resolution are passed through unchanged.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -270,7 +275,7 @@ static int reject_if_prefix_not_dir(struct __ntpath *out, HANDLE root)
 static int nt_path_over_max_path(const WCHAR *dos, size_t n, int *trailing,
                                  struct __ntpath *out, ULONG attributes);
 
-static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes,
+static int ntpath_impl(const char *path, struct __ntpath *out, ULONG attributes, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                        int overlay)
 {
 	int vfs;
@@ -700,3 +705,5 @@ void __ntpath_free(struct __ntpath *p)
 	if (p->dos) __free(p->dos);
 	p->buf = 0; p->dos = 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -9,6 +9,11 @@
  * raw NTSTATUS or a status-shaped decision the front door had to make
  * for itself.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <string.h>
 #include <sys/resource.h>
@@ -25,7 +30,7 @@ void __plat_yield(void)
  * now-required out with no guard of their own. */
 static int open_process(pid_t pid, ACCESS_MASK want, __plat_handle_t *out)
     __attribute__((nonnull(3)));
-static int open_process(pid_t pid, ACCESS_MASK want, __plat_handle_t *out)
+static int open_process(pid_t pid, ACCESS_MASK want, __plat_handle_t *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	OBJECT_ATTRIBUTES oa;
 	CLIENT_ID cid;
@@ -70,7 +75,7 @@ int __plat_process_alive(__plat_handle_t h)
 	return 1;
 }
 
-int __plat_process_times_self(unsigned long long *user100ns, unsigned long long *kernel100ns)
+int __plat_process_times_self(unsigned long long *user100ns, unsigned long long *kernel100ns) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	KERNEL_USER_TIMES kt;
 	NTSTATUS st = NtQueryInformationProcess(NtCurrentProcess(), ProcessTimes, &kt, sizeof kt, 0);
@@ -109,7 +114,7 @@ int __plat_priority_get(__plat_handle_t h, int *nice_out)
 	return 0;
 }
 
-int __plat_priority_set(__plat_handle_t h, int foreground, int nice_value)
+int __plat_priority_set(__plat_handle_t h, int foreground, int nice_value) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	PROCESS_PRIORITY_CLASS pc;
 	NTSTATUS st;
@@ -167,7 +172,7 @@ static HANDLE ensure_job(void)
 	return job_handle;
 }
 
-void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rlim_t data_cur)
+void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rlim_t data_cur) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	JOBOBJECT_EXTENDED_LIMIT_INFORMATION eli;
 	HANDLE h = ensure_job();
@@ -191,3 +196,5 @@ void __plat_job_apply_limits(rlim_t nproc_cur, rlim_t cpu_cur, rlim_t as_cur, rl
 	}
 	NtSetInformationJobObject(h, JobObjectExtendedLimitInformation, &eli, sizeof eli);
 }
+
+// NOLINTEND(misc-include-cleaner)

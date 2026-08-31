@@ -12,7 +12,7 @@
  * cased domain. */
 #include <wctype.h>
 
-wint_t towctrans(wint_t wc, wctrans_t desc)
+wint_t towctrans(wint_t wc, wctrans_t desc) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	switch (desc) {
 	case 1: return towlower(wc);

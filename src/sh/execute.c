@@ -272,7 +272,7 @@ static void free_strv(char **v, size_t n)
 	size_t i;
 	if (!v) return;
 	for (i = 0; i < n; i++) __free(v[i]);
-	__free(v);
+	__free((void *)v);
 }
 
 /* Splits an assignment word's raw text ("NAME=value...", guaranteed by
@@ -308,7 +308,7 @@ static void free_strv(char **v, size_t n)
  * parameter here. */
 static int split_assignment(const char *raw, char **name, char **val)
     __attribute__((nonnull(2, 3)));
-static int split_assignment(const char *raw, char **name, char **val)
+static int split_assignment(const char *raw, char **name, char **val) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const char *eq = strchr(raw, '=');
 	size_t nlen;
@@ -350,10 +350,10 @@ static int env_set(char ***vp, size_t *n, size_t *cap, char *entry, size_t namel
 	}
 	if (*n + 1 >= *cap) {
 		size_t nc = *cap ? *cap * 2 : 16;
-		char **nv = __malloc((nc + 1) * sizeof *nv);
+		char **nv = (char **)__malloc((nc + 1) * sizeof *nv);
 		if (!nv) { __free(entry); return -1; }
-		memcpy(nv, v, *n * sizeof *nv);
-		__free(v);
+		memcpy((void *)nv, (const void *)v, *n * sizeof *nv);
+		__free((void *)v);
 		v = *vp = nv;
 		*cap = nc;
 	}
@@ -390,7 +390,7 @@ static char **build_child_envp(const struct sh_word *assigns, size_t *out_n)
 
 	for (n = 0; __environ && __environ[n]; n++) continue;
 	cap = n + 8;
-	v = __malloc((cap + 1) * sizeof *v);
+	v = (char **)__malloc((cap + 1) * sizeof *v);
 	if (!v) return 0;
 	for (i = 0; i < n; i++) {
 		v[i] = xstrdup(__environ[i]);
@@ -849,7 +849,7 @@ static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, i
 static int call_function(const char *name, const char *body,
                          char **argv, int argc, int *status)
     __attribute__((nonnull(5)));
-static int call_function(const char *name, const char *body,
+static int call_function(const char *name, const char *body, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                          char **argv, int argc, int *status)
 {
 	struct sh_params saved;
@@ -857,7 +857,9 @@ static int call_function(const char *name, const char *body,
 	int rc;
 
 	if (func_depth >= SH_FUNC_DEPTH_MAX) {
-		fprintf(stderr, "%s: function calls nested more than %d deep\n",
+		/* The semantic failure status is primary; a failed diagnostic cannot
+		 * usefully be reported through the same stderr stream. */
+		(void)fprintf(stderr, "%s: function calls nested more than %d deep\n",
 			name, SH_FUNC_DEPTH_MAX);
 		*status = 1;
 		return 0;
@@ -1013,7 +1015,7 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 	size_t n = we->we_wordc, i;
 	int argc;
 
-	av = malloc((n + 3) * sizeof *av);
+	av = (char **)malloc((n + 3) * sizeof *av);
 	if (!av) return -1;
 	av[0] = n ? we->we_wordv[0] : (char *)"sh";
 	av[1] = (char *)resolved;
@@ -1031,7 +1033,7 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
 	 * a script gets them from the shell it is handed to.  Not
 	 * implemented rather than half-implemented -- see the caller. */
 	*status = __sh_run_script(argc, av);
-	free(av);
+	free((void *)av);
 	return 0;
 }
 
@@ -1525,8 +1527,8 @@ static void free_env_snapshot(struct env_snapshot *es)
 {
 	size_t i;
 	for (i = 0; i < es->n; i++) { __free(es->names[i]); __free(es->vals[i]); }
-	__free(es->names);
-	__free(es->vals);
+	__free((void *)es->names);
+	__free((void *)es->vals);
 	es->names = 0; es->vals = 0; es->n = 0;
 }
 
@@ -1538,9 +1540,9 @@ static int env_snapshot_take(struct env_snapshot *es)
 	es->names = 0; es->vals = 0; es->n = 0;
 	for (n = 0; __environ && __environ[n]; n++) continue;
 	if (!n) return 0;
-	es->names = __malloc(n * sizeof *es->names);
-	es->vals = __malloc(n * sizeof *es->vals);
-	if (!es->names || !es->vals) { __free(es->names); __free(es->vals); es->names = 0; es->vals = 0; return -1; }
+	es->names = (char **)__malloc(n * sizeof *es->names);
+	es->vals = (char **)__malloc(n * sizeof *es->vals);
+	if (!es->names || !es->vals) { __free((void *)es->names); __free((void *)es->vals); es->names = 0; es->vals = 0; return -1; }
 	for (i = 0; i < n; i++) {
 		const char *e = __environ[i];
 		const char *eq = strchr(e, '=');
@@ -1588,7 +1590,7 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 	char **cur;
 
 	for (n = 0; __environ && __environ[n]; n++) continue;
-	cur = n ? __malloc(n * sizeof *cur) : 0;
+	cur = n ? (char **)__malloc(n * sizeof *cur) : 0;
 	if (n && cur) {
 		for (i = 0; i < n; i++) {
 			const char *e = __environ[i];
@@ -1601,7 +1603,7 @@ static void env_snapshot_restore(const struct env_snapshot *es)
 		for (i = 0; i < n; i++)
 			if (cur[i] && !name_in_snapshot(es, cur[i])) unsetenv(cur[i]);
 		for (i = 0; i < n; i++) __free(cur[i]);
-		__free(cur);
+		__free((void *)cur);
 	}
 	/* n && !cur is OOM listing what to remove: best effort continues
 	 * below and still gets every remembered value put back, even though
@@ -1828,7 +1830,8 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
 static int exec_funcdef(const struct sh_command *cmd, int *status)
 {
 	if (__sh_func_define(cmd->name, cmd->func_text) < 0) {
-		fprintf(stderr, "%s: cannot define function\n", cmd->name);
+		/* Function definition already failed and fixes status at one. */
+		(void)fprintf(stderr, "%s: cannot define function\n", cmd->name);
 		*status = 1;
 		return 0;
 	}
@@ -2342,9 +2345,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 			 * left-to-right ordering then makes the explicit "2>&1"
 			 * apply on top of this implicit hookup, which is what
 			 * makes that merge happen at all). */
-			if (wire_stage_stdio(&rs, pipes, n, i)) {
-				abort_unsupported = 1;
-			} else if (apply_redirs(pl->commands[i].redirs, &rs, &failed)) {
+			if (wire_stage_stdio(&rs, pipes, n, i) ||
+			    apply_redirs(pl->commands[i].redirs, &rs, &failed)) {
 				abort_unsupported = 1;
 			} else if (failed) {
 				/* 2.8.1: this stage fails without running, same
@@ -2394,9 +2396,8 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 
 		if (!abort_unsupported) {
 			rs.saves = 0; rs.n = rs.cap = 0;
-			if (wire_stage_stdio(&rs, pipes, n, i)) {
-				abort_unsupported = 1;
-			} else if (exec_group_stage_inline(&pl->commands[i], &st)) {
+			if (wire_stage_stdio(&rs, pipes, n, i) ||
+			    exec_group_stage_inline(&pl->commands[i], &st)) {
 				abort_unsupported = 1;
 			}
 			restore_fds(&rs);

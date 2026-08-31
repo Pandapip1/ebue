@@ -5,6 +5,11 @@
  * parse.c's error-recovery paths reuse the word/redir/command-contents
  * pieces directly instead of duplicating this traversal.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 #include "sh.h"
 
@@ -112,3 +117,5 @@ void __sh_list_free(struct sh_list *list)
 	}
 	__free(list);
 }
+
+// NOLINTEND(misc-include-cleaner)

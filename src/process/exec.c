@@ -168,7 +168,7 @@ int execv(const char *path, char *const argv[])
  * is the thing being fixed.
  *
  * Returns only on failure, like every other exec path here. */
-static int shell_fallback(const char *path, char *const argv[], char *const envp[])
+static int shell_fallback(const char *path, char *const argv[], char *const envp[]) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int enoexec = errno;
 	char **av;
@@ -176,7 +176,7 @@ static int shell_fallback(const char *path, char *const argv[], char *const envp
 	int argc;
 
 	while (argv[n]) n++;
-	av = malloc((n + 3) * sizeof *av);
+	av = (char **)malloc((n + 3) * sizeof *av);
 	if (!av) { errno = enoexec; return -1; }
 	/* arg0, file, arg1, ..., (char *)0 -- the clause's own shape.
 	 * arg0 is the caller's, not the shell's path: glibc substitutes
@@ -265,7 +265,7 @@ int execvp(const char *file, char *const argv[])
 static char **build_argv(const char *arg0, va_list ap, char ***envout)
 {
 	size_t cap = 8, n = 0;
-	char **v = malloc(cap * sizeof(char *));
+	char **v = (char **)malloc(cap * sizeof(char *));
 	if (!v) return 0;
 	v[n++] = (char *)arg0;
 	while (v[n-1]) {
@@ -273,10 +273,10 @@ static char **build_argv(const char *arg0, va_list ap, char ***envout)
 			size_t nc;
 			char **nv;
 			if (!__array_next_capacity(cap, n, 2, 8, sizeof *v, &nc)) {
-				free(v); errno = ENOMEM; return 0;
+				free((void *)v); errno = ENOMEM; return 0;
 			}
-			nv = realloc(v, nc * sizeof *v);
-			if (!nv) { free(v); return 0; }
+			nv = (char **)realloc((void *)v, nc * sizeof *v);
+			if (!nv) { free((void *)v); return 0; }
 			v = nv;
 			cap = nc;
 		}
@@ -286,7 +286,7 @@ static char **build_argv(const char *arg0, va_list ap, char ***envout)
 	return v;
 }
 
-int execl(const char *path, const char *arg0, ...)
+int execl(const char *path, const char *arg0, ...) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	va_list ap; char **v; int r;
 	va_start(ap, arg0);
@@ -294,11 +294,11 @@ int execl(const char *path, const char *arg0, ...)
 	va_end(ap);
 	if (!v) return -1;
 	r = execv(path, v);
-	free(v);
+	free((void *)v);
 	return r;
 }
 
-int execle(const char *path, const char *arg0, ...)
+int execle(const char *path, const char *arg0, ...) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	va_list ap; char **v, **env = 0; int r;
 	va_start(ap, arg0);
@@ -306,11 +306,11 @@ int execle(const char *path, const char *arg0, ...)
 	va_end(ap);
 	if (!v) return -1;
 	r = execve(path, v, env);
-	free(v);
+	free((void *)v);
 	return r;
 }
 
-int execlp(const char *file, const char *arg0, ...)
+int execlp(const char *file, const char *arg0, ...) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	va_list ap; char **v; int r;
 	va_start(ap, arg0);
@@ -318,7 +318,7 @@ int execlp(const char *file, const char *arg0, ...)
 	va_end(ap);
 	if (!v) return -1;
 	r = execvp(file, v);
-	free(v);
+	free((void *)v);
 	return r;
 }
 

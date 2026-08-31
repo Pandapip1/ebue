@@ -118,6 +118,11 @@
  * parameters) but genuinely unused here -- one syscall replaces NT's
  * two-step dance entirely.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -212,7 +217,7 @@ static int to_linux_open_flags(int flags)
  * calling convention: x8 = syscall number, x0..x5 = up to 6
  * arguments, result (or -errno in [-4095,-1]) in x0. */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -301,7 +306,7 @@ static int resolve_dirfd(int dirfd)
  * <fcntl.h> via offsetof()/sizeof() (l_type/l_whence at 0/2, l_start at
  * 8, l_len at 16, l_pid at 24, total size 32) -- identical layout on
  * every 64-bit Linux architecture, no F_GETLK64-style compat split. */
-struct __lx_flock {
+struct __lx_flock { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	short l_type;
 	short l_whence;
 	long l_start;
@@ -317,12 +322,12 @@ struct __lx_flock {
  * next to __plat_file_extent(), its only reader before __plat_open()
  * needed one too) since __plat_open() below also needs it to decide
  * *typeout. */
-struct __lx_statx_timestamp {
+struct __lx_statx_timestamp { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long long tv_sec;
 	unsigned int tv_nsec;
-	int __reserved;
+	int __reserved; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
-struct __lx_statx {
+struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned int stx_mask;
 	unsigned int stx_blksize;
 	unsigned long long stx_attributes;
@@ -330,10 +335,11 @@ struct __lx_statx {
 	unsigned int stx_uid;
 	unsigned int stx_gid;
 	unsigned short stx_mode;
-	unsigned short __spare0[1];
+	unsigned short __spare0[1]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long stx_ino;
 	unsigned long long stx_size;
 	unsigned long long stx_blocks;
+	// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long __rest[26]; /* attributes_mask, four timestamps,
 	                                * rdev/dev major/minor, mnt_id,
 	                                * dio alignment, and the kernel's own
@@ -341,7 +347,7 @@ struct __lx_statx {
 };
 
 int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
-                __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout)
+                __plat_handle_t *out, int *typeout, int *vfsout, int *vfsnativeout) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; output slots have distinct roles
 {
 	int rd, fd;
 	long ret;
@@ -400,7 +406,7 @@ int __plat_open(int dirfd, const char *path, int flags, unsigned mode,
 	return 0;
 }
 
-int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting)
+int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclusive, int *conflicting) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; offset, length, and mode have distinct roles
 {
 	struct __lx_flock fl;
 	long ret;
@@ -418,7 +424,7 @@ int __plat_lock_probe(__plat_handle_t h, long long off, long long len, int exclu
 	return 0;
 }
 
-int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusive, int wait)
+int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusive, int wait) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; offset, length, and modes have distinct roles
 {
 	struct __lx_flock fl;
 	long ret;
@@ -434,7 +440,7 @@ int __plat_lock_set(__plat_handle_t h, long long off, long long len, int exclusi
 	return 0;
 }
 
-int __plat_lock_clear(__plat_handle_t h, long long off, long long len)
+int __plat_lock_clear(__plat_handle_t h, long long off, long long len) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; offset and length have distinct roles
 {
 	struct __lx_flock fl;
 	long ret;
@@ -460,7 +466,7 @@ long long __plat_volume_max_file_size(__plat_handle_t h)
  * __plat_open() (its first reader in this file). Only stx_size/
  * stx_blocks are read below; everything past them collapses into the
  * trailing __spare padding since nothing else is needed here. */
-int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
+int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; allocation and EOF outputs have distinct roles
 {
 	struct __lx_statx stx;
 	long ret;
@@ -477,7 +483,7 @@ int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
 	return 0;
 }
 
-int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_alloc)
+int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_alloc) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; requested extent and EOF have distinct roles
 {
 	int fd = unbox(h);
 	long ret;
@@ -504,3 +510,5 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 	}
 	return (int)-ret;
 }
+
+// NOLINTEND(misc-include-cleaner)

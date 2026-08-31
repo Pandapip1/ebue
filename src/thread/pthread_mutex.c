@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
@@ -49,23 +54,23 @@ typedef char mutexattr_data_fits_public_storage[
 
 static struct mutex_data *mutex_data(pthread_mutex_t *mutex)
 {
-	return (struct mutex_data *)(void *)mutex;
+	return (struct mutex_data *)(void *)mutex; // NOLINT(bugprone-casting-through-void) -- public pthread_mutex_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct mutex_data *const_mutex_data(const pthread_mutex_t *mutex)
 {
-	return (const struct mutex_data *)(const void *)mutex;
+	return (const struct mutex_data *)(const void *)mutex; // NOLINT(bugprone-casting-through-void) -- public pthread_mutex_t is opaque storage for this ABI-defined internal layout
 }
 
 static struct mutexattr_data *mutexattr_data(pthread_mutexattr_t *attr)
 {
-	return (struct mutexattr_data *)(void *)attr;
+	return (struct mutexattr_data *)(void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_mutexattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static const struct mutexattr_data *const_mutexattr_data(
 	const pthread_mutexattr_t *attr)
 {
-	return (const struct mutexattr_data *)(const void *)attr;
+	return (const struct mutexattr_data *)(const void *)attr; // NOLINT(bugprone-casting-through-void) -- public pthread_mutexattr_t is opaque storage for this ABI-defined internal layout
 }
 
 static int valid_type(int type)
@@ -495,3 +500,5 @@ int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr, int value)
 	mutexattr_data(attr)->robust = value;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

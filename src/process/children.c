@@ -33,12 +33,17 @@
  * any further __child_add, so this is safe as written; anything that
  * wants to hold one across a fork/spawn must remember the pid instead.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include "libc.h"
 #include "plat_fd.h"
 #include "plat_process.h"
 
-static struct __child __child_seed[CHILD_MAX_];
+static struct __child __child_seed[CHILD_MAX_]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 struct __child *__children = __child_seed;
 int __child_cap = CHILD_MAX_;
@@ -153,3 +158,5 @@ static void clear_stops(int resume)
 void __child_resume_stopped(void) { clear_stops(1); }
 
 void __child_forget_stops(void) { clear_stops(0); }
+
+// NOLINTEND(misc-include-cleaner)

@@ -31,6 +31,11 @@
  * same way src/internal/nt/plat_fd_init.c's is the NT half (a raw
  * NtQueryVolumeInformationFile/NtQueryInformationFile pair there,
  * where here a single statx(2) answers the same question). */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -63,7 +68,7 @@
  * convention, see crt/linux/crt1.c's own raw_syscall() banner for the
  * fuller per-arch rationale. */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x0 __asm__("x0") = a1;
 	register long x1 __asm__("x1") = a2;
@@ -123,12 +128,12 @@ static int is_sys_error(long ret)
 	return (unsigned long)ret >= (unsigned long)-4095L;
 }
 
-struct __lx_statx_timestamp {
+struct __lx_statx_timestamp { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	long long tv_sec;
 	unsigned int tv_nsec;
-	int __reserved;
+	int __reserved; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
-struct __lx_statx {
+struct __lx_statx { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned int stx_mask;
 	unsigned int stx_blksize;
 	unsigned long long stx_attributes;
@@ -136,11 +141,11 @@ struct __lx_statx {
 	unsigned int stx_uid;
 	unsigned int stx_gid;
 	unsigned short stx_mode;
-	unsigned short __spare0[1];
+	unsigned short __spare0[1]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 	unsigned long long stx_ino;
 	unsigned long long stx_size;
 	unsigned long long stx_blocks;
-	unsigned long long __rest[26];
+	unsigned long long __rest[26]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling mirrors the Linux kernel ABI layout
 };
 
 /* Returns __FD_UNKNOWN (never 0) on a closed/invalid fd, matching
@@ -201,3 +206,5 @@ void __fd_init(void)
 	install_std(1);
 	install_std(2);
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -45,6 +45,11 @@
  * to call through __plat_dlerror()/_seq() instead of ntlibc_rpath_
  * error()/_seq() directly.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stddef.h>
 #include <dlfcn.h>
 #include "plat_dlfcn.h"
@@ -82,3 +87,5 @@ char *dlerror(void)
 	 * chose -- and nothing here writes through it. */
 	return (char *)__plat_dlerror();
 }
+
+// NOLINTEND(misc-include-cleaner)

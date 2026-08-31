@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -105,9 +110,9 @@ extern "C" {
 #define FPE_FLTINV 7   /* EXCEPTION_FLT_INVALID_OPERATION */
 #define FPE_FLTSUB 8   /* EXCEPTION_ARRAY_BOUNDS_EXCEEDED */
 
-#define SEGV_MAPERR 1  /* EXCEPTION_ACCESS_VIOLATION/EXCEPTION_IN_PAGE_ERROR
-                         * on unmapped/reserved-but-uncommitted memory */
-#define SEGV_ACCERR 2  /* same, but on a committed page whose protection
+#define SEGV_MAPERR 1  /* EXCEPTION_ACCESS_VIOLATION on unmapped or
+                         * reserved-but-uncommitted memory */
+#define SEGV_ACCERR 2  /* same exception on a committed page whose protection
                          * denied the access */
 
 #define BUS_ADRALN 1   /* EXCEPTION_DATATYPE_MISALIGNMENT */
@@ -116,13 +121,8 @@ extern "C" {
                         * memory manager turns a mapping it cannot
                         * satisfy into EXCEPTION_ACCESS_VIOLATION, which
                         * is SIGSEGV/SEGV_MAPERR here */
-#define BUS_OBJERR 3   /* not produced: the nearest NT status is
-                        * EXCEPTION_IN_PAGE_ERROR (the filesystem failed
-                        * an I/O to fault a mapped page in), which
-                        * exception_handler() already reports as SIGSEGV
-                        * alongside EXCEPTION_ACCESS_VIOLATION; moving it
-                        * to SIGBUS is a change to a delivered signal,
-                        * not a header question, so it is not made here */
+#define BUS_OBJERR 3   /* EXCEPTION_IN_PAGE_ERROR: a mapped object's backing
+                        * store could not supply the faulted page */
 
 /* si_code values for SIGCHLD (waitid.html, basedefs/signal.h.html).
  * All six are defined even though ntlibc produces only five of them,
@@ -397,3 +397,5 @@ int raise(int);
 #endif
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

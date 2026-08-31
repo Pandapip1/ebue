@@ -6,7 +6,7 @@
  * directly.  Each surviving entry is copied into a malloc'd block sized
  * to its actual name, not a full struct dirent, the way musl does it.
  */
-#define _GNU_SOURCE
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <dirent.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -24,7 +24,7 @@
  * and does the reinterpretation on the *arguments* -- an ordinary object
  * pointer conversion, not a function-pointer one -- before calling compar
  * through its own, correct type. */
-static int scandir_cmp(const void *a, const void *b, void *arg)
+static int scandir_cmp(const void *a, const void *b, void *arg) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int (*compar)(const struct dirent **, const struct dirent **) = arg;
 	return compar((const struct dirent **)a, (const struct dirent **)b);
@@ -52,10 +52,10 @@ int scandir(const char *path, struct dirent ***res,
 			size_t newcap;
 			if (!__array_next_capacity(cap, n, 1, 16,
 			    sizeof *list, &newcap)) { errno = ENOMEM; goto fail; } // NOLINT(bugprone-sizeof-expression) -- list is dirent**, *list is dirent*, the array holds pointers
-			struct dirent **nl = __malloc(newcap * sizeof *nl); // NOLINT(bugprone-sizeof-expression) -- nl is dirent**, *nl is dirent*, the array holds pointers
+			struct dirent **nl = (struct dirent **)__malloc(newcap * sizeof *nl); // NOLINT(bugprone-sizeof-expression) -- nl is dirent**, *nl is dirent*, the array holds pointers
 			if (!nl) goto fail;
-			if (list) memcpy(nl, list, n * sizeof *nl); // NOLINT(bugprone-sizeof-expression)
-			__free(list);
+			if (list) memcpy((void *)nl, (const void *)list, n * sizeof *nl); // NOLINT(bugprone-sizeof-expression)
+			__free((void *)list);
 			list = nl;
 			cap = newcap;
 		}
@@ -70,7 +70,7 @@ int scandir(const char *path, struct dirent ***res,
 	if (closedir(dp) < 0) {
 		int e = errno;
 		for (i = 0; i < n; i++) __free(list[i]);
-		__free(list);
+		__free((void *)list);
 		errno = e;
 		return -1;
 	}
@@ -79,7 +79,7 @@ int scandir(const char *path, struct dirent ***res,
 	 * deliberately a pointer size: the array being sorted holds pointers,
 	 * not structs. */
 	/* NOLINTNEXTLINE(bugprone-sizeof-expression) */
-	if (compar) qsort_r(list, n, sizeof *list, scandir_cmp, (void *)compar);
+	if (compar) qsort_r((void *)list, n, sizeof *list, scandir_cmp, (void *)compar);
 	*res = list;
 	return (int)n;
 
@@ -87,7 +87,7 @@ fail:
 	{
 		int e = errno ? errno : ENOMEM;
 		for (i = 0; i < n; i++) __free(list[i]);
-		__free(list);
+		__free((void *)list);
 		(void)closedir(dp);
 		errno = e;
 		return -1;

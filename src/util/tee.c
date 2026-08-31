@@ -73,7 +73,7 @@ int __util_tee_main(int argc, char **argv)
 		for (p = a + 1; *p; p++) {
 			if (*p == 'a') { opt_a = 1; continue; }
 			if (*p == 'i') { opt_i = 1; continue; }
-			fprintf(stderr, "tee: invalid option -- '%c'\n", *p);
+			__util_diagf("tee: invalid option -- '%c'\n", *p);
 			return 1;
 		}
 	}
@@ -83,24 +83,24 @@ int __util_tee_main(int argc, char **argv)
 		 * header.  Failure here (an unsupported signal number, which
 		 * SIGINT never is on this platform) would be a build-time
 		 * bug, not a runtime condition worth diagnosing to the user. */
-		signal(SIGINT, SIG_IGN);
+		if (signal(SIGINT, SIG_IGN) == SIG_ERR) return 1;
 	}
 
 	if (i < argc) {
 		int count = argc - i;
 		fds = __util_mallocarray((size_t)count, sizeof *fds);
-		paths = __util_mallocarray((size_t)count, sizeof *paths);
+		paths = (char **)__util_mallocarray((size_t)count, sizeof *paths);
 		if (!fds || !paths) {
-			fprintf(stderr, "tee: out of memory\n");
+			__util_diagf("tee: out of memory\n");
 			free(fds);
-			free(paths);
+			free((void *)paths);
 			return 1;
 		}
 		for (; i < argc; i++) {
 			int flags = O_WRONLY | O_CREAT | (opt_a ? O_APPEND : O_TRUNC);
 			int fd = open(argv[i], flags, 0666);
 			if (fd < 0) {
-				fprintf(stderr, "tee: %s: %s\n", argv[i], strerror(errno));
+				__util_diagf("tee: %s: %s\n", argv[i], strerror(errno));
 				had_error = 1;
 				continue;
 			}
@@ -118,7 +118,7 @@ int __util_tee_main(int argc, char **argv)
 		while (left > 0) {
 			ssize_t w = write(STDOUT_FILENO, p, (size_t)left);
 			if (w < 0) {
-				fprintf(stderr, "tee: standard output: %s\n", strerror(errno));
+				__util_diagf("tee: standard output: %s\n", strerror(errno));
 				had_error = 1;
 				break;
 			}
@@ -133,7 +133,7 @@ int __util_tee_main(int argc, char **argv)
 			while (left > 0) {
 				ssize_t w = write(fds[j], p, (size_t)left);
 				if (w < 0) {
-					fprintf(stderr, "tee: %s: %s\n", paths[j], strerror(errno));
+					__util_diagf("tee: %s: %s\n", paths[j], strerror(errno));
 					had_error = 1;
 					(void)close(fds[j]);
 					fds[j] = -1;
@@ -145,7 +145,7 @@ int __util_tee_main(int argc, char **argv)
 		}
 	}
 	if (n < 0) {
-		fprintf(stderr, "tee: standard input: %s\n", strerror(errno));
+		__util_diagf("tee: standard input: %s\n", strerror(errno));
 		had_error = 1;
 	}
 
@@ -153,13 +153,13 @@ int __util_tee_main(int argc, char **argv)
 		int j;
 		for (j = 0; j < nfiles; j++) {
 			if (fds[j] >= 0 && close(fds[j]) < 0) {
-				fprintf(stderr, "tee: %s: %s\n", paths[j], strerror(errno));
+				__util_diagf("tee: %s: %s\n", paths[j], strerror(errno));
 				had_error = 1;
 			}
 		}
 	}
 	free(fds);
-	free(paths);
+	free((void *)paths);
 
 	return had_error ? 1 : 0;
 }

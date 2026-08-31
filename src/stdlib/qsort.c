@@ -63,7 +63,7 @@ void qsort_r(void *b, size_t n, size_t sz, cmp_r cmp, void *arg)
 	}
 }
 
-static int wrap(const void *a, const void *b, void *f)
+static int wrap(const void *a, const void *b, void *f) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	return ((int (*)(const void *, const void *))f)(a, b);
 }

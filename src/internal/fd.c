@@ -21,6 +21,11 @@
  * the kernel already has open) -- see each platform's own plat_fd_init.c
  * for the real story, not this file.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -45,7 +50,7 @@ int __fd_alloc(int lowest)
 	return -1;
 }
 
-int __fd_install_at(int fd, HANDLE h, unsigned flags, int type)
+int __fd_install_at(int fd, HANDLE h, unsigned flags, int type) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = &__fds[fd];
 	memset(f, 0, sizeof *f);
@@ -82,3 +87,5 @@ int __fd_close_all_cloexec(void)
 		if (__fds[i].h && (__fds[i].flags & O_CLOEXEC)) close(i);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

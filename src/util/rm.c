@@ -54,6 +54,11 @@
  * will fail on its own (busy/access denied) and be diagnosed like any
  * other removal failure.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,7 +81,7 @@ static int rm_tree_failed;
 
 static int rm_diag(const char *path, int error)
 {
-	fprintf(stderr, "rm: cannot remove '%s': %s\n", path, strerror(error));
+	__util_diagf("rm: cannot remove '%s': %s\n", path, strerror(error));
 	rm_tree_failed = 1;
 	return 0;
 }
@@ -95,7 +100,7 @@ static int rm_walk_cb(const char *path, const struct stat *st, int type, struct 
 		if (rmdir(path) < 0) return rm_diag(path, errno);
 		return 0;
 	case FTW_DNR:
-		fprintf(stderr, "rm: cannot read directory '%s': %s\n", path, strerror(saved_errno));
+		__util_diagf("rm: cannot read directory '%s': %s\n", path, strerror(saved_errno));
 		rm_tree_failed = 1;
 		return 0;
 	case FTW_NS:
@@ -119,7 +124,7 @@ int __util_remove_tree(const char *path)
 {
 	rm_tree_failed = 0;
 	if (nftw(path, rm_walk_cb, 15, FTW_DEPTH | FTW_PHYS) < 0) {
-		fprintf(stderr, "rm: cannot remove '%s': %s\n", path, strerror(errno));
+		__util_diagf("rm: cannot remove '%s': %s\n", path, strerror(errno));
 		return -1;
 	}
 	return rm_tree_failed ? -1 : 0;
@@ -138,20 +143,20 @@ static int names_dot_or_dotdot(const char *path)
 	       (len == 2 && path[start] == '.' && path[start + 1] == '.');
 }
 
-static int rm_one(const char *path, int recursive, int force)
+static int rm_one(const char *path, int recursive, int force) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct stat lst;
 
 	if (names_dot_or_dotdot(path)) {
 		/* Not suppressed by -f: this is the standard's own outright
 		 * refusal, not a missing-operand or already-gone case. */
-		fprintf(stderr, "rm: refusing to remove '.' or '..' (in '%s')\n", path);
+		__util_diagf("rm: refusing to remove '.' or '..' (in '%s')\n", path);
 		return -1;
 	}
 
 	if (lstat(path, &lst) < 0) {
 		if (force && errno == ENOENT) return 0;
-		fprintf(stderr, "rm: cannot remove '%s': %s\n", path, strerror(errno));
+		__util_diagf("rm: cannot remove '%s': %s\n", path, strerror(errno));
 		return -1;
 	}
 
@@ -161,14 +166,14 @@ static int rm_one(const char *path, int recursive, int force)
 			 * message to standard error, do nothing more with
 			 * file" -- unconditional, not one of -f's two
 			 * suppressions. */
-			fprintf(stderr, "rm: cannot remove '%s': Is a directory\n", path);
+			__util_diagf("rm: cannot remove '%s': Is a directory\n", path);
 			return -1;
 		}
 		return __util_remove_tree(path);
 	}
 
 	if (unlink(path) < 0) {
-		fprintf(stderr, "rm: cannot remove '%s': %s\n", path, strerror(errno));
+		__util_diagf("rm: cannot remove '%s': %s\n", path, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -194,18 +199,18 @@ int __util_rm_main(int argc, char **argv)
 				/* Refuse loudly rather than silently deleting
 				 * without ever having prompted -- see this
 				 * file's header. */
-				fprintf(stderr, "rm: -i: interactive confirmation is not "
+				__util_diagf("rm: -i: interactive confirmation is not "
 				                "supported by this build; refusing rather "
 				                "than deleting without prompting\n");
 				return 2;
 			}
-			fprintf(stderr, "rm: invalid option -- '%c'\n", *p);
+			__util_diagf("rm: invalid option -- '%c'\n", *p);
 			return 2;
 		}
 	}
 
 	if (i >= argc) {
-		fprintf(stderr, "rm: missing operand\n");
+		__util_diagf("rm: missing operand\n");
 		return 2;
 	}
 
@@ -214,3 +219,5 @@ int __util_rm_main(int argc, char **argv)
 
 	return had_error ? 1 : 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

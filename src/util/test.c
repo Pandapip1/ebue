@@ -28,6 +28,11 @@
  * primary.  A silent "false" for a malformed expression would be the
  * same undiagnosable wrongness this project keeps refusing.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,8 +66,8 @@ static void terr(struct texpr *t, const char *msg, const char *arg)
 {
 	if (t->err) return;
 	t->err = 1;
-	if (arg) fprintf(stderr, "test: %s: %s\n", arg, msg);
-	else fprintf(stderr, "test: %s\n", msg);
+	if (arg) __util_diagf("test: %s: %s\n", arg, msg);
+	else __util_diagf("test: %s\n", msg);
 }
 
 /* An integer operand of -eq/-ne/-lt/-le/-gt/-ge.  test(1p) calls these
@@ -120,7 +125,7 @@ static int is_unop(const char *s)
  * forwarded to terr(). */
 static int do_unary(struct texpr *t, const char *op, const char *arg)
     __attribute__((nonnull(2, 3)));
-static int do_unary(struct texpr *t, const char *op, const char *arg)
+static int do_unary(struct texpr *t, const char *op, const char *arg) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct stat st;
 
@@ -167,7 +172,7 @@ static int do_unary(struct texpr *t, const char *op, const char *arg)
 	return T_ERR;
 }
 
-static int do_binary(struct texpr *t, const char *a, const char *op, const char *b)
+static int do_binary(struct texpr *t, const char *a, const char *op, const char *b) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long x, y;
 	if (!strcmp(op, "=")) return strcmp(a, b) == 0 ? T_TRUE : T_FALSE;
@@ -375,7 +380,7 @@ int __util_test_main(int argc, char **argv)
 	 * algorithm". */
 	if (!strcmp(argv[0], "[")) {
 		if (n < 1 || strcmp(argv[argc - 1], "]")) {
-			fprintf(stderr, "[: missing `]'\n");
+			__util_diagf("[: missing `]'\n");
 			return T_ERR;
 		}
 		n--;
@@ -387,3 +392,5 @@ int __util_test_main(int argc, char **argv)
 	t.err = 0;
 	return eval_argc(&t);
 }
+
+// NOLINTEND(misc-include-cleaner)

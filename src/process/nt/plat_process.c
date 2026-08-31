@@ -9,6 +9,11 @@
  * __plat_process_fork() needs) in place of a raw NTSTATUS or NT struct
  * for the front door to interpret.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -335,7 +340,7 @@ static HANDLE closed_placeholder(HANDLE *out)
 	return *out;
 }
 
-int __plat_process_spawn(const char *path, char *const argv[], char *const envp[],
+int __plat_process_spawn(const char *path, char *const argv[], char *const envp[], // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                          const __plat_handle_t std[3], __plat_handle_t *out_process)
 {
 	struct __ntpath np;
@@ -461,3 +466,5 @@ out:
 	if (runtime) __free(runtime);
 	return pid;
 }
+
+// NOLINTEND(misc-include-cleaner)

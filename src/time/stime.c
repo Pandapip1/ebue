@@ -6,6 +6,11 @@
  * STATUS_PRIVILEGE_NOT_HELD in that case, which __set_errno_status maps
  * to EPERM -- the same failure mode POSIX documents for stime().
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <time.h>
 #include "libc.h"
 #include "plat_time.h"
@@ -16,3 +21,5 @@ int stime(const time_t *tp)
 	if (!__unix_to_nt(*tp, 0, &nt)) { errno = EOVERFLOW; return -1; }
 	return __plat_realtime_set(nt);
 }
+
+// NOLINTEND(misc-include-cleaner)

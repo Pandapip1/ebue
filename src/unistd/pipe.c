@@ -10,6 +10,11 @@
  * (and for __pipe_handles(), the lower-level HANDLE-returning form
  * src/select/select.c's own one-shot pipe still calls directly).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -43,3 +48,5 @@ int pipe(int fds[2])
 {
 	return pipe2(fds, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

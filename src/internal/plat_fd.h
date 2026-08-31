@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -65,3 +70,5 @@ int __plat_dup(__plat_handle_t h, int inheritable, __plat_handle_t *out)
     __attribute__((nonnull(3)));
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

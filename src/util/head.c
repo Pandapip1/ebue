@@ -76,12 +76,12 @@ static int head_one(int fd, long n, const char *label)
 		}
 		if (write_all(buf, (size_t)seglen) < 0) {
 			int saved = errno;
-			fprintf(stderr, "head: %s: %s\n", label, strerror(saved));
+			__util_diagf("head: %s: %s\n", label, strerror(saved));
 			return -1;
 		}
 	}
 	if (r < 0) {
-		fprintf(stderr, "head: %s: %s\n", label, strerror(errno));
+		__util_diagf("head: %s: %s\n", label, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -103,19 +103,19 @@ int __util_head_main(int argc, char **argv)
 			long v;
 
 			if (i + 1 >= argc) {
-				fprintf(stderr, "head: -n: option requires an argument\n");
+				__util_diagf("head: -n: option requires an argument\n");
 				return 1;
 			}
 			v = strtol(argv[++i], &end, 10);
 			if (*end || end == argv[i] || v <= 0) {
-				fprintf(stderr, "head: %s: invalid number of lines\n", argv[i]);
+				__util_diagf("head: %s: invalid number of lines\n", argv[i]);
 				return 1;
 			}
 			n = v;
 			continue;
 		}
 		if (a[0] == '-' && a[1] != 0) {
-			fprintf(stderr, "head: invalid option -- '%s'\n", a);
+			__util_diagf("head: invalid option -- '%s'\n", a);
 			return 1;
 		}
 		break;
@@ -144,7 +144,7 @@ int __util_head_main(int argc, char **argv)
 
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
-				fprintf(stderr, "head: %s: %s\n", path, strerror(errno));
+				__util_diagf("head: %s: %s\n", path, strerror(errno));
 				had_error = 1;
 				continue;
 			}

@@ -6,6 +6,11 @@
  * the buffer: subtract unread look-ahead bytes when reading, add
  * unwritten ones when writing.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
@@ -105,3 +110,5 @@ int fsetpos(FILE *f, const fpos_t *pos)
 {
 	return fseeko(f, (off_t)pos->__lldata, SEEK_SET);
 }
+
+// NOLINTEND(misc-include-cleaner)

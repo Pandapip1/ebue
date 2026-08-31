@@ -75,6 +75,11 @@
  * detail and the one hazard this reopens (already disclosed and already
  * accepted, for the identical reason, by plat_process.c's own banner).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <signal.h>
 #include <poll.h>
@@ -183,7 +188,7 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled)
  * hit once during its own migration and fixed by picking exactly one
  * owner per function; this file just uses it, as sigdelivery.c does. */
 
-void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks)
+void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; timeout flag and duration have distinct roles
 {
 	struct timespec ts, *tsp;
 	long long magnitude, ns;
@@ -362,7 +367,7 @@ int __plat_process_suspend(__plat_handle_t h)
  * subsystem session's to define, not this file's; defining it here
  * too would be the same ODR collision __plat_event_set() above avoids. */
 
-int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out)
+int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out) // NOLINT(bugprone-easily-swappable-parameters) -- fixed platform-backend contract; process ID and capability flag have distinct roles
 {
 	/* Linux has no "open a process object" step for most per-process
 	 * syscalls (kill(2), and, via src/misc/linux/plat_misc.c,
@@ -569,3 +574,5 @@ int __plat_stop_event_probe(const struct _UNICODE_STRING *name, __plat_handle_t 
 	*already_existed = !created;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

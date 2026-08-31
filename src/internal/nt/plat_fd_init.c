@@ -16,6 +16,11 @@
  * any of this; this split is purely mechanical, verified by diff
  * against fd.c before this file existed.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -195,7 +200,7 @@ void __fd_init(void)
 			for (i = 0; i < count; i++) {
 				HANDLE h;
 				int vk = vfs ? vfs[i] : __VFS_NONE;
-				memcpy(&h, osfhnd + i * sizeof(HANDLE), sizeof h);
+				memcpy((void *)&h, osfhnd + i * sizeof(HANDLE), sizeof h);
 				if (!(osfile[i] & FOPEN) || !h || h == (HANDLE)(LONG_PTR)-1) continue;
 				if (i < 3 && __fds[i].h) {
 					if (vk) {
@@ -281,7 +286,7 @@ void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 			h = __fds[i].h;
 		}
 		osfile[i] = fl;
-		memcpy(osfhnd + i * sizeof(HANDLE), &h, sizeof h);
+		memcpy(osfhnd + i * sizeof(HANDLE), (const void *)&h, sizeof h);
 	}
 	if (have_vfs) {
 		unsigned magic = VFS_RUNTIME_MAGIC, trailer_count = (unsigned)count;
@@ -298,3 +303,5 @@ void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
 	}
 	return blk;
 }
+
+// NOLINTEND(misc-include-cleaner)

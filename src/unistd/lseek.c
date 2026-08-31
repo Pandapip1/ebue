@@ -1,12 +1,17 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include <unistd.h>
 #include <errno.h>
 #include "libc.h"
 #include "plat_fd.h"
 
-off_t lseek(int fd, off_t off, int whence)
+off_t lseek(int fd, off_t off, int whence) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __fd *f = __fd_get(fd);
 	long long base, target;
@@ -33,3 +38,5 @@ off_t lseek(int fd, off_t off, int whence)
 	if (__plat_seek_set(f->h, target) < 0) return -1;
 	return target;
 }
+
+// NOLINTEND(misc-include-cleaner)

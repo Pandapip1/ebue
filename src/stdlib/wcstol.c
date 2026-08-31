@@ -38,6 +38,11 @@
  * wcstoll() are genuinely different functions with different ranges --
  * unlike on LP64, where a bug conflating them would go unnoticed.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <inttypes.h>
 #include <wchar.h>
 #include <limits.h>
@@ -107,7 +112,7 @@ static int wparse(const wchar_t *nptr, const wchar_t **end, int base, int *neg, 
 
 /* Same "0 - x" two's-complement reasoning as strtol.c's strtox(): see
  * the comment there for why it is deliberate and not a stray sign bug. */
-__wraps static uintmax_t wcstox(const wchar_t *nptr, wchar_t **endptr, int base, uintmax_t lim)
+__wraps static uintmax_t wcstox(const wchar_t *nptr, wchar_t **endptr, int base, uintmax_t lim) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const wchar_t *end;
 	uintmax_t v;
@@ -147,3 +152,5 @@ intmax_t wcstoimax(const wchar_t *__restrict s, wchar_t **__restrict e, int b)
 { return (intmax_t)wcstox(s, e, b, INTMAX_MAX); }
 uintmax_t wcstoumax(const wchar_t *__restrict s, wchar_t **__restrict e, int b)
 { return wcstox(s, e, b, UINTMAX_MAX); }
+
+// NOLINTEND(misc-include-cleaner)

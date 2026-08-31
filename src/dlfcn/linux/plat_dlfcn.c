@@ -362,6 +362,11 @@
  * self_symtab_load()'s init-once check, deferred here the same way
  * every other genuinely separable piece of hardening in this file is.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -475,7 +480,7 @@ static unsigned long pgup(unsigned long v) { unsigned long p = real_page_size();
  * table -- seebelow's own banner update for exactly what a real i386
  * loader port would additionally need. */
 #if defined(__aarch64__)
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -905,7 +910,7 @@ static int apply_one_reloc(struct dlobj *obj, const Elf64_Rela *r,
 	}
 }
 
-static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl_size,
+static int apply_reloc_table(struct dlobj *obj, uint64_t tbl_vaddr, uint64_t tbl_size, // NOLINT(bugprone-easily-swappable-parameters) -- table address and size have distinct relocation roles
                               unsigned long lo, unsigned long hi)
 {
 	Elf64_Rela *relas;
@@ -1110,7 +1115,7 @@ void *__plat_dlopen(const char *file, int mode)
 		 * the symbol table's own entry count by the SysV ELF hash
 		 * table's own specification, giving an exact count with no
 		 * GNU-hash bucket walk needed. */
-		obj->dynsym_count = ((uint32_t *)ADDR(obj, d_hash->d_val))[1];
+		obj->dynsym_count = ((uint32_t *)(uintptr_t)(obj->bias + d_hash->d_val))[1];
 
 		if (apply_reloc_table(obj, d_rela ? d_rela->d_val : 0, d_relasz ? d_relasz->d_val : 0, lo, hi) != 0)
 			goto fail;
@@ -1190,3 +1195,5 @@ int __plat_dlclose(void *handle)
 	free(obj);
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -20,6 +20,11 @@
  * caller's errno is a matter of not clobbering it: __spawn_fa_grow()
  * saves and restores it around the allocation.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
@@ -116,7 +121,7 @@ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int fd, int
 }
 
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict fa,
-                                     int fd, const char *__restrict path, int oflag, mode_t mode)
+                                     int fd, const char *__restrict path, int oflag, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __spawn_action *a;
 	char *copy;
@@ -141,3 +146,5 @@ int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict fa,
 	errno = e;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

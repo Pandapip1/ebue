@@ -77,7 +77,7 @@
 
 enum { CS_UTF8, CS_UTF16LE };
 
-struct __iconv_state {
+struct __iconv_state { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 	int from;
 	int to;
 };

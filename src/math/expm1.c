@@ -1,5 +1,10 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 /* expm1/log1p via the x87 primitives that exist specifically to avoid
  * the catastrophic cancellation a naive exp(x)-1 / log(1+x) suffers
  * for x near 0:
@@ -37,7 +42,7 @@ static const long double yl2xp1_max = 0.29289321881345247559915563789515L;
  * double-precision-quality scope boundary every helper in this file
  * inherits from narrowing long double to double at the call boundary. */
 static long double raw_f2xm1(long double t) { return (long double)__aa64_expm1((double)t); }
-static long double raw_yl2xp1(long double x, long double y)
+static long double raw_yl2xp1(long double x, long double y) // NOLINT(bugprone-easily-swappable-parameters) -- multiplicand and logarithm-base operand have distinct arithmetic roles
 {
 	(void)y; /* always ln2 at this file's one call site -- see
 	          * __aa64_log1p's own comment for why the general y*log2(x+1)
@@ -54,7 +59,7 @@ static long double raw_f2xm1(long double t)
 
 /* y * log2(x+1), same fldl/fldl/op/fstpl-into-first-operand shape and
  * argument order as ldbl_math.h's __x87_yl2x. */
-static long double raw_yl2xp1(long double x, long double y)
+static long double raw_yl2xp1(long double x, long double y) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__asm__ __volatile__(NTLIBC_FLDL " (%0)\n\t" NTLIBC_FLDL " (%1)\n\tfyl2xp1\n\t" NTLIBC_FSTPL " (%0)" : : "r"(&y), "r"(&x) : "memory");
 	return y;
@@ -88,3 +93,5 @@ double expm1(double x) { return (double)expm1l(x); }
 float expm1f(float x) { return (float)expm1l(x); }
 double log1p(double x) { return (double)log1pl(x); }
 float log1pf(float x) { return (float)log1pl(x); }
+
+// NOLINTEND(misc-include-cleaner)

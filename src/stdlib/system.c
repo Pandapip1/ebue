@@ -167,8 +167,10 @@ int system(const char *command)
 		}
 
 		sigprocmask(SIG_SETMASK, &oldmask, 0);
-		signal(SIGQUIT, old_quit);
-		signal(SIGINT, old_int);
+		/* Restoration is cleanup after the command status is fixed; a
+		 * secondary failure must not overwrite that primary result. */
+		(void)signal(SIGQUIT, old_quit);
+		(void)signal(SIGINT, old_int);
 
 		if (status == -1) errno = saved_errno;
 	}

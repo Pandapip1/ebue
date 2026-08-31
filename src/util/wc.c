@@ -71,6 +71,11 @@
  *
  * Spec consulted: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/wc.html
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,7 +98,7 @@ struct wc_counts {
  * instead of a raw byte count -- see this file's header on why that is
  * a real distinction here).  Returns 0 on success, -1 (with a
  * diagnostic already written) on a read failure partway through. */
-static int count_stream(int fd, int want_chars, struct wc_counts *out, const char *label)
+static int count_stream(int fd, int want_chars, struct wc_counts *out, const char *label) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char buf[65536];
 	unsigned char carry[8];
@@ -171,7 +176,7 @@ static int count_stream(int fd, int want_chars, struct wc_counts *out, const cha
 		}
 	}
 	if (n < 0) {
-		fprintf(stderr, "wc: %s: %s\n", label, strerror(errno));
+		__util_diagf("wc: %s: %s\n", label, strerror(errno));
 		return -1;
 	}
 	if (want_chars && carry_len > 0) {
@@ -182,7 +187,7 @@ static int count_stream(int fd, int want_chars, struct wc_counts *out, const cha
 	return 0;
 }
 
-static void print_counts(const struct wc_counts *c, int want_l, int want_w, int want_bc,
+static void print_counts(const struct wc_counts *c, int want_l, int want_w, int want_bc, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                           const char *name)
 {
 	int first = 1;
@@ -214,12 +219,12 @@ int __util_wc_main(int argc, char **argv)
 			if (*p == 'm') { opt_m = 1; continue; }
 			if (*p == 'l') { opt_l = 1; continue; }
 			if (*p == 'w') { opt_w = 1; continue; }
-			fprintf(stderr, "wc: invalid option -- '%c'\n", *p);
+			__util_diagf("wc: invalid option -- '%c'\n", *p);
 			return 1;
 		}
 	}
 	if (opt_c && opt_m) {
-		fprintf(stderr, "wc: -c and -m are mutually exclusive\n");
+		__util_diagf("wc: -c and -m are mutually exclusive\n");
 		return 1;
 	}
 
@@ -257,7 +262,7 @@ int __util_wc_main(int argc, char **argv)
 		} else {
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
-				fprintf(stderr, "wc: %s: %s\n", path, strerror(errno));
+				__util_diagf("wc: %s: %s\n", path, strerror(errno));
 				had_error = 1;
 				continue;
 			}
@@ -278,3 +283,5 @@ int __util_wc_main(int argc, char **argv)
 
 	return had_error ? 1 : 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

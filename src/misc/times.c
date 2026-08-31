@@ -35,6 +35,11 @@
  * care which" contract.  ERRORS: "(clock_t)-1 shall be returned and
  * errno set" -- reachable if either underlying NT query fails.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/times.h>
 #include <time.h>
 #include <sys/resource.h>
@@ -74,3 +79,5 @@ clock_t times(struct tms *buf)
 	return nt100ns_to_ticks((unsigned long long)mono.tv_sec * __TICKS_PER_SEC
 	    + (unsigned long long)mono.tv_nsec / 100);
 }
+
+// NOLINTEND(misc-include-cleaner)

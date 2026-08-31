@@ -159,6 +159,11 @@
  * entirely, but the native-ASan-on-a-PLATFORM=nt-config build this
  * guard defends against is a separate axis from PLATFORM, so the
  * explicit #error stays. */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #ifndef __has_feature
 #define __has_feature(x) 0 /* not clang: never claim a clang-only feature */
 #endif
@@ -251,3 +256,5 @@ int __plat_dlclose(void *handle)
  * on their stickiness. */
 const char *__plat_dlerror(void) { return ntlibc_rpath_error(); }
 unsigned long __plat_dlerror_seq(void) { return ntlibc_rpath_error_seq(); }
+
+// NOLINTEND(misc-include-cleaner)

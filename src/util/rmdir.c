@@ -27,6 +27,11 @@
  * removed successfully." ">0 An error occurred." -- same diagnose-and-
  * continue loop shape as src/util/mkdir_util.c.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -60,7 +65,7 @@ static int rmdir_ascend(const char *dir)
 
 		if (rmdir(parent) != 0) {
 			if (errno == ENOTEMPTY) return 0;
-			fprintf(stderr, "rmdir: %s: %s\n", parent, strerror(errno));
+			__util_diagf("rmdir: %s: %s\n", parent, strerror(errno));
 			return -1;
 		}
 		/* buf == parent already (dirname() mutated it in place);
@@ -75,17 +80,17 @@ int __util_rmdir_main(int argc, char **argv)
 	for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		if (!strcmp(argv[i], "--")) { i++; break; }
 		if (!strcmp(argv[i], "-p")) { opt_p = 1; continue; }
-		fprintf(stderr, "rmdir: %s: invalid option\n", argv[i]);
+		__util_diagf("rmdir: %s: invalid option\n", argv[i]);
 		return 1;
 	}
 	if (i >= argc) {
-		fprintf(stderr, "rmdir: missing operand\n");
+		__util_diagf("rmdir: missing operand\n");
 		return 1;
 	}
 
 	for (; i < argc; i++) {
 		if (rmdir(argv[i]) != 0) {
-			fprintf(stderr, "rmdir: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("rmdir: %s: %s\n", argv[i], strerror(errno));
 			fail = 1;
 			continue;
 		}
@@ -93,3 +98,5 @@ int __util_rmdir_main(int argc, char **argv)
 	}
 	return fail;
 }
+
+// NOLINTEND(misc-include-cleaner)

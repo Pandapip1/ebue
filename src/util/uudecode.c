@@ -67,14 +67,14 @@ static void chomp(char *s)
  * bytes (uuencode.c's own length prefix, already parsed by the caller).
  * Returns 0 on success, -1 (diagnostic already written) on a malformed
  * or truncated line. */
-static int decode_line(const char *prog, const char *line, unsigned n, FILE *out)
+static int decode_line(const char *prog, const char *line, unsigned n, FILE *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t needed = ((size_t)n + 2) / 3 * 4;
 	size_t have = strlen(line);
 	size_t pos, written = 0;
 
 	if (have < needed) {
-		fprintf(stderr, "%s: truncated data line (need %zu characters, got %zu)\n", prog, needed, have);
+		__util_diagf("%s: truncated data line (need %zu characters, got %zu)\n", prog, needed, have);
 		return -1;
 	}
 
@@ -84,7 +84,7 @@ static int decode_line(const char *prog, const char *line, unsigned n, FILE *out
 		size_t take;
 
 		if (!uu_valid_char(c1) || !uu_valid_char(c2) || !uu_valid_char(c3) || !uu_valid_char(c4)) {
-			fprintf(stderr, "%s: invalid character in uuencoded data\n", prog);
+			__util_diagf("%s: invalid character in uuencoded data\n", prog);
 			return -1;
 		}
 		{
@@ -96,7 +96,7 @@ static int decode_line(const char *prog, const char *line, unsigned n, FILE *out
 		take = n - written;
 		if (take > 3) take = 3;
 		if (fwrite(outbuf, 1, take, out) != take) {
-			fprintf(stderr, "%s: write error: %s\n", prog, strerror(errno));
+			__util_diagf("%s: write error: %s\n", prog, strerror(errno));
 			return -1;
 		}
 		written += take;
@@ -110,7 +110,7 @@ int __util_uudecode_main(int argc, char **argv)
 	const char *out_override = 0, *in_path = 0;
 	FILE *in, *out;
 	char line[1024];
-	int found_begin = 0, terminated = 0;
+	int found_begin = 0, terminated = 0, status = 0;
 	unsigned long mode_val;
 	char *p, *end;
 	const char *filename, *outname;
@@ -118,20 +118,20 @@ int __util_uudecode_main(int argc, char **argv)
 	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		if (!strcmp(argv[i], "--")) { i++; break; }
 		if (!strcmp(argv[i], "-o")) {
-			if (i + 1 >= argc) { fprintf(stderr, "uudecode: -o: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("uudecode: -o: option requires an argument\n"); return 1; }
 			out_override = argv[++i];
 			continue;
 		}
-		fprintf(stderr, "uudecode: %s: invalid option\n", argv[i]);
+		__util_diagf("uudecode: %s: invalid option\n", argv[i]);
 		return 1;
 	}
 	if (i < argc) in_path = argv[i++];
-	if (i < argc) { fprintf(stderr, "uudecode: too many operands\n"); return 1; }
+	if (i < argc) { __util_diagf("uudecode: too many operands\n"); return 1; }
 
 	in = in_path ? fopen(in_path, "rb") : stdin;
 	if (!in) {
 		int saved = errno;
-		fprintf(stderr, "uudecode: %s: %s\n", in_path, strerror(saved));
+		__util_diagf("uudecode: %s: %s\n", in_path, strerror(saved));
 		return 1;
 	}
 
@@ -140,31 +140,35 @@ int __util_uudecode_main(int argc, char **argv)
 		if (!strncmp(line, "begin ", 6)) { found_begin = 1; break; }
 	}
 	if (!found_begin) {
-		fprintf(stderr, "uudecode: %s: no valid \"begin\" line found\n", in_path ? in_path : "stdin");
-		if (in_path) fclose(in);
+		__util_diagf("uudecode: %s: no valid \"begin\" line found\n", in_path ? in_path : "stdin");
+		/* Parse failure is primary; these closes are cleanup only. */
+		if (in_path) (void)fclose(in);
 		return 1;
 	}
 
 	p = line + 6;
 	mode_val = strtoul(p, &end, 8);
 	if (end == p || *end != ' ') {
-		fprintf(stderr, "uudecode: %s: malformed begin line\n", in_path ? in_path : "stdin");
-		if (in_path) fclose(in);
+		__util_diagf("uudecode: %s: malformed begin line\n", in_path ? in_path : "stdin");
+		/* The malformed header is primary; close only releases the input. */
+		if (in_path) (void)fclose(in);
 		return 1;
 	}
 	while (*end == ' ') end++;
 	filename = end;
 	if (!*filename) {
-		fprintf(stderr, "uudecode: %s: begin line has no filename\n", in_path ? in_path : "stdin");
-		if (in_path) fclose(in);
+		__util_diagf("uudecode: %s: begin line has no filename\n", in_path ? in_path : "stdin");
+		/* The missing filename is primary; close only releases the input. */
+		if (in_path) (void)fclose(in);
 		return 1;
 	}
 	outname = out_override ? out_override : filename;
 
 	out = fopen(outname, "wb");
 	if (!out) {
-		fprintf(stderr, "uudecode: %s: %s\n", outname, strerror(errno));
-		if (in_path) fclose(in);
+		__util_diagf("uudecode: %s: %s\n", outname, strerror(errno));
+		/* Output-open failure is primary; input close is cleanup only. */
+		if (in_path) (void)fclose(in);
 		return 1;
 	}
 
@@ -173,45 +177,51 @@ int __util_uudecode_main(int argc, char **argv)
 		chomp(line);
 		if (!line[0]) continue; /* tolerate a stray blank line between records */
 		if (!uu_valid_char(line[0])) {
-			fprintf(stderr, "uudecode: %s: invalid length character in data\n", in_path ? in_path : "stdin");
+			__util_diagf("uudecode: %s: invalid length character in data\n", in_path ? in_path : "stdin");
 			goto fail;
 		}
 		n = (unsigned)UUDEC(line[0]);
 		if (n == 0) { terminated = 1; break; }
 		if (n > 45) {
-			fprintf(stderr, "uudecode: %s: data line length %u out of range\n", in_path ? in_path : "stdin", n);
+			__util_diagf("uudecode: %s: data line length %u out of range\n", in_path ? in_path : "stdin", n);
 			goto fail;
 		}
 		if (decode_line("uudecode", line + 1, n, out) < 0) goto fail;
 	}
 	if (!terminated) {
-		fprintf(stderr, "uudecode: %s: truncated uuencoded stream (no terminator line)\n", in_path ? in_path : "stdin");
+		__util_diagf("uudecode: %s: truncated uuencoded stream (no terminator line)\n", in_path ? in_path : "stdin");
 		goto fail;
 	}
 	if (!fgets(line, sizeof line, in)) {
-		fprintf(stderr, "uudecode: %s: truncated uuencoded stream (no \"end\" line)\n", in_path ? in_path : "stdin");
+		__util_diagf("uudecode: %s: truncated uuencoded stream (no \"end\" line)\n", in_path ? in_path : "stdin");
 		goto fail;
 	}
 	chomp(line);
 	if (strcmp(line, "end") != 0) {
-		fprintf(stderr, "uudecode: %s: missing \"end\" line\n", in_path ? in_path : "stdin");
+		__util_diagf("uudecode: %s: missing \"end\" line\n", in_path ? in_path : "stdin");
 		goto fail;
 	}
 
 	if (fclose(out) < 0) {
-		fprintf(stderr, "uudecode: %s: %s\n", outname, strerror(errno));
+		__util_diagf("uudecode: %s: %s\n", outname, strerror(errno));
+		/* Output-close failure is primary; input close is cleanup only. */
 		if (in_path) (void)fclose(in);
 		return 1;
 	}
-	if (in_path) (void)fclose(in);
+	if (in_path && fclose(in) < 0) {
+		__util_diagf("uudecode: %s: %s\n", in_path, strerror(errno));
+		status = 1;
+	}
 
 	if (chmod(outname, (mode_t)(mode_val & 07777)) != 0) {
-		fprintf(stderr, "uudecode: %s: chmod: %s\n", outname, strerror(errno));
-		return 1;
+		__util_diagf("uudecode: %s: chmod: %s\n", outname, strerror(errno));
+		status = 1;
 	}
-	return 0;
+	return status;
 
 fail:
+	/* A decode/parse failure selected this path; both closes are cleanup and
+	 * cannot supersede that primary nonzero result. */
 	(void)fclose(out);
 	if (in_path) (void)fclose(in);
 	return 1;

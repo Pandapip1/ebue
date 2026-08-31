@@ -29,7 +29,12 @@
  * DIR does, which is a real behavior change out of scope for a
  * redesign whose job is to keep every backend's observable behavior
  * exactly as it was, just decoded through a shared, portable step. */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <dirent.h>
 #include <string.h>
 #include <errno.h>
@@ -114,3 +119,5 @@ int getdents(int fd, struct dirent *out, size_t size)
 	}
 	return (int)used;
 }
+
+// NOLINTEND(misc-include-cleaner)

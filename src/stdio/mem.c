@@ -6,6 +6,11 @@
  * in buf.c already know how to talk to one (that is what f->is_mem
  * means to them); all that is done here is setting one up.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,7 +150,7 @@ FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 	f->writable = 1;
 	f->mem_buf = (unsigned char *)b;
 	f->mem_size = sizeof *b;
-	f->mem_out_ptr = (char **)(void *)bufp;
+	f->mem_out_ptr = (char **)(void *)bufp; // NOLINT(bugprone-casting-through-void) -- the shared stream backend stores the ABI-mandated wchar_t ** output slot in its generic char ** field
 	f->mem_out_size = sizep;
 	*bufp = b;
 	*sizep = 0;
@@ -154,3 +159,5 @@ FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 	__stdio_files = f;
 	return f;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <utime.h>
@@ -61,3 +66,5 @@ int futimesat(int dirfd, const char *path, const struct timeval tv[2])
 	ts[1].tv_sec = tv[1].tv_sec; ts[1].tv_nsec = (long)(tv[1].tv_usec * 1000);
 	return utimensat(dirfd, path, ts, 0);
 }
+
+// NOLINTEND(misc-include-cleaner)

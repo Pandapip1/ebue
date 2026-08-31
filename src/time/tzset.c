@@ -22,8 +22,8 @@ int daylight;
 long timezone;
 char *tzname[2] = { (char *)"UTC", (char *)"UTC" };
 
-static char __tzname_std[32] = "UTC";
-static char __tzname_dst[32] = "UTC";
+static char __tzname_std[32] = "UTC"; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+static char __tzname_dst[32] = "UTC"; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 static void read_name(const char **input, char *out, size_t cap)
 {

@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include <stdlib.h>
 #include <signal.h>
 #include "libc.h"
@@ -14,3 +19,5 @@ _Noreturn void abort(void)
 	 * the status a Unix process killed by SIGABRT would have. */
 	__nt_exit(__NT_SIGNAL_EXIT(SIGABRT));
 }
+
+// NOLINTEND(misc-include-cleaner)

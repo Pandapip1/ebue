@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -14,6 +19,7 @@
 #include <wordexp.h>
 #include "nt.h"
 #include "thread_annotations.h"
+#include "allocation_annotations.h"
 #include "plat_handle.h"
 
 /* ---- lockset (Clang Thread Safety Analysis) capability tokens ---------
@@ -700,7 +706,7 @@ static inline int __utf16_to_utf8_capacity(size_t units, size_t *capacity)
  * requested element count or its byte size wrap.  Growth is bounded by the
  * machine word width: when another doubling would exceed the representable
  * byte limit, use the exact requested capacity instead. */
-static inline int __array_next_capacity(size_t current, size_t used,
+static inline int __array_next_capacity(size_t current, size_t used, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	size_t additional, size_t initial, size_t element_size, size_t *result)
 {
 	size_t minimum, maximum, capacity;
@@ -915,6 +921,9 @@ void __sig_pending_reset_after_fork(void);
 int __sig_pending_member(int sig);
 void __timer_reinit_after_fork(void);
 void __mman_reset_after_fork(void);
+int __mman_fault_is_object_error(const void *);
+int __mman_address_is_live(const void *);
+int __mman_range_is_live(const void *, size_t);
 void __aio_reset_after_fork(void);
 void __sig_lock(void) NTLIBC_ACQUIRE(__ntlibc_sig_lock_token);
 void __sig_unlock(void) NTLIBC_RELEASE(__ntlibc_sig_lock_token);
@@ -945,9 +954,11 @@ const char *__strerror_msg(int e);
 #ifdef __i386__
 void __wow64_fixup_clone(HANDLE process, HANDLE thread);
 #else
-static inline void __wow64_fixup_clone(HANDLE process, HANDLE thread) { (void)process; (void)thread; }
+static inline void __wow64_fixup_clone(HANDLE process, HANDLE thread) { (void)process; (void)thread; } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 #endif
 
 #define __container_of(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

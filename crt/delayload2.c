@@ -119,6 +119,11 @@
  *
  * NT-only, same guard and same reason as rpath.c/delayload.c/pe.c.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #ifndef __has_feature
 #define __has_feature(x) 0
 #endif
@@ -136,7 +141,7 @@
  * which is the linker that emits it. Every *RVA field here is an offset
  * from the image base; see the file header comment for the one field
  * (an IAT slot's contents) that is not. */
-typedef struct _IMAGE_DELAYLOAD_DESCRIPTOR {
+typedef struct _IMAGE_DELAYLOAD_DESCRIPTOR { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- spelling follows the NT ABI
 	ULONG Attributes;
 	ULONG DllNameRVA;
 	ULONG ModuleHandleRVA;
@@ -307,3 +312,5 @@ void *__delayLoadHelper2(void *vdescr, void **piat)
 	*piat = proc;
 	return proc;
 }
+
+// NOLINTEND(misc-include-cleaner)

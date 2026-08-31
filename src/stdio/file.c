@@ -7,7 +7,12 @@
  * out is linked into __stdio_files so __stdio_exit can find it without
  * the caller having to remember to.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +57,7 @@ int __fmodeflags(const char *mode)
 	return flags;
 }
 
-FILE *__file_new(int fd, int flags)
+FILE *__file_new(int fd, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	FILE *f = malloc(sizeof *f);
 	if (!f) return 0;
@@ -81,7 +86,7 @@ void __file_free(FILE *f)
 	free(f);
 }
 
-FILE *fopen(const char *__restrict path, const char *__restrict mode)
+FILE *fopen(const char *__restrict path, const char *__restrict mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int flags = __fmodeflags(mode);
 	int fd;
@@ -118,7 +123,7 @@ FILE *fdopen(int fd, const char *mode)
 	return f;
 }
 
-FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__restrict f)
+FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__restrict f) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int flags = __fmodeflags(mode);
 	int fd, oldfd;
@@ -157,7 +162,10 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 	memset(&f->wst_out, 0, sizeof f->wst_out);
 	f->wunget = 0;
 	f->nwunget = 0;
-	if (flags & O_APPEND) fseek(f, 0, SEEK_END);
+	/* O_APPEND enforces append writes even when this best-effort positioning
+	 * cannot seek (for example, on a pipe).  Such streams remain valid. */
+	if (flags & O_APPEND)
+		(void)fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c) -- O_APPEND, not the current offset, guarantees append semantics
 	return f;
 }
 
@@ -259,3 +267,5 @@ void __stdio_exit(void)
 	 * re-arm the recursion for a second fatal signal arriving during the
 	 * same shutdown. */
 }
+
+// NOLINTEND(misc-include-cleaner)

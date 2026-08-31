@@ -6,7 +6,12 @@
  * There is no locking (see flockfile in file.c), so the plain and
  * _unlocked names are the same function.
  */
-#define _GNU_SOURCE
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- GNU feature-test macro has its specified reserved spelling
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -222,7 +227,7 @@ ssize_t getdelim(char **__restrict buf, size_t *__restrict n, int delim, FILE *_
  * It is visible here and not on main only because removing fgetln()
  * from this translation unit changed what the analyzer had budget to
  * explore; the code below is unchanged in that respect.  Suppressed per
- * site rather than over a NOLINTBEGIN region, so unix.Malloc still
+ * site rather than over a broad suppression region, so unix.Malloc still
  * checks the rest of this function -- it is the check most likely to
  * catch a real defect in it.
  */
@@ -273,3 +278,5 @@ ssize_t getline(char **__restrict buf, size_t *__restrict n, FILE *__restrict f)
 {
 	return getdelim(buf, n, '\n', f); // NOLINT(clang-analyzer-unix.Malloc) -- see the note above getdelim()
 }
+
+// NOLINTEND(misc-include-cleaner)

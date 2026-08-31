@@ -64,6 +64,11 @@
  *  - YESEXPR and NOEXPR are "^[yY]" and "^[nN]": extended regular
  *    expressions <regex.h> here compiles and matches.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <langinfo.h>
 #include <locale.h>
 
@@ -74,10 +79,10 @@
  * divergence would be a link-time type error under any checker, and the
  * live cross-check in test/posix-msgcat.c compares every one of these
  * strings against what strftime() prints. */
-extern const char *const __ntlibc_day_name[7];
-extern const char *const __ntlibc_day_name_abbr[7];
-extern const char *const __ntlibc_month_name[12];
-extern const char *const __ntlibc_month_name_abbr[12];
+extern const char *const __ntlibc_day_name[7]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+extern const char *const __ntlibc_day_name_abbr[7]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+extern const char *const __ntlibc_month_name[12]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+extern const char *const __ntlibc_month_name_abbr[12]; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 char *nl_langinfo(nl_item item)
 {
@@ -127,3 +132,5 @@ char *nl_langinfo_l(nl_item item, locale_t locale)
 	(void)locale;
 	return nl_langinfo(item);
 }
+
+// NOLINTEND(misc-include-cleaner)

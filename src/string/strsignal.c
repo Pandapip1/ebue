@@ -1,10 +1,15 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <signal.h>
 
 /* Indexed by signal number, 0 through SIGSYS (31). */
-static const char *const __sigmsgs[] = {
+static const char *const __sigmsgs[] = { // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 	"Unknown signal",
 	"Hangup",
 	"Interrupt",
@@ -45,3 +50,5 @@ char *strsignal(int sig)
 		return (char *)"Unknown signal";
 	return (char *)__sigmsgs[sig];
 }
+
+// NOLINTEND(misc-include-cleaner)

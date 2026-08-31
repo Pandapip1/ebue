@@ -12,6 +12,11 @@
  * real, correct no-ops for this platform, not stubs standing in for
  * unwritten work.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 
 int __fd_pos_save(HANDLE h, long long *pos)
@@ -26,3 +31,5 @@ void __fd_pos_restore(HANDLE h, long long pos)
 	(void)h;
 	(void)pos;
 }
+
+// NOLINTEND(misc-include-cleaner)

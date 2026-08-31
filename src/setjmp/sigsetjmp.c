@@ -7,8 +7,8 @@
  * (`env[0].__fl`); called only from the architecture entry points'
  * assembly, always the real jmp_buf being captured/restored, never a
  * value that could legitimately be null. */
-void __sigsetjmp_save(sigjmp_buf, int) __attribute__((nonnull(1)));
-void __siglongjmp_restore(sigjmp_buf) __attribute__((nonnull(1)));
+void __sigsetjmp_save(sigjmp_buf, int) __attribute__((nonnull(1))); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+void __siglongjmp_restore(sigjmp_buf) __attribute__((nonnull(1))); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 /* Called by the architecture entry points before they capture or restore
  * registers.  Keeping sigprocmask() out of the assembly also keeps jmp_buf's

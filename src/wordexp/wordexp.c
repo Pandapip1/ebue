@@ -64,7 +64,7 @@ struct fbuf {
  * unconditionally here (`b->n == b->cap`) before anything else. */
 static int fbuf_push(struct fbuf *b, char c, int literal)
     __attribute__((nonnull(1)));
-static int fbuf_push(struct fbuf *b, char c, int literal)
+static int fbuf_push(struct fbuf *b, char c, int literal) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	if (b->n == b->cap) {
 		size_t nc;
@@ -131,10 +131,10 @@ static int pv_push(struct pv *p, char *s)
 		size_t nc;
 		if (!__array_next_capacity(p->cap, p->n, 1, 16,
 		    sizeof *p->v, &nc)) { __free(s); return -1; }
-		char **nv = __malloc(nc * sizeof *nv);
+		char **nv = (char **)__malloc(nc * sizeof *nv);
 		if (!nv) { __free(s); return -1; }
-		if (p->v) memcpy(nv, p->v, p->n * sizeof *nv);
-		__free(p->v);
+		if (p->v) memcpy((void *)nv, (const void *)p->v, p->n * sizeof *nv);
+		__free((void *)p->v);
 		p->v = nv;
 		p->cap = nc;
 	}
@@ -152,7 +152,7 @@ static void pv_free_all(struct pv *p)
 {
 	size_t i;
 	for (i = 0; i < p->n; i++) __free(p->v[i]);
-	__free(p->v);
+	__free((void *)p->v);
 	p->v = 0;
 	p->n = p->cap = 0;
 }
@@ -166,7 +166,7 @@ static void pv_free_from(struct pv *p, size_t from)
 {
 	size_t i;
 	for (i = from; i < p->n; i++) __free(p->v[i]);
-	__free(p->v);
+	__free((void *)p->v);
 	p->v = 0;
 	p->n = p->cap = 0;
 }
@@ -184,12 +184,12 @@ static char **pv_pack(struct pv *p, size_t offs)
 	if (p->n == (size_t)-1 || offs > (size_t)-1 - p->n - 1) return 0;
 	total = offs + p->n + 1;
 	if (total > (size_t)-1 / sizeof *v) return 0;
-	v = __malloc(total * sizeof *v);
+	v = (char **)__malloc(total * sizeof *v);
 	if (!v) return 0;
 	for (i = 0; i < offs; i++) v[i] = 0;
 	for (i = 0; i < p->n; i++) v[offs + i] = p->v[i];
 	v[offs + p->n] = 0;
-	__free(p->v);
+	__free((void *)p->v);
 	p->v = 0;
 	return v;
 }
@@ -342,8 +342,8 @@ static const char *param_word_end(const char *p)
 static int expand_param_word(const char *start, size_t input_len, int flags,
                              int sh, int quoted, struct assign_ctx *ctx,
                              char **result) __attribute__((nonnull(1, 7)));
-static int expand_param_word(const char *start, size_t input_len, int flags,
-                             int sh, int quoted, struct assign_ctx *ctx,
+static int expand_param_word(const char *start, size_t input_len, int flags, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
+                             int sh, int quoted, struct assign_ctx *ctx, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                              char **result)
 {
 	wordexp_t we;
@@ -593,9 +593,12 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
 			__free(replacement);
 			return WRDE_SYNTAX;
 		}
-		if (op == '=' && (rc = assign_param(ctx, name, replacement))) {
-			__free(replacement);
-			return rc;
+		if (op == '=') {
+			rc = assign_param(ctx, name, replacement);
+			if (rc) {
+				__free(replacement);
+				return rc;
+			}
 		}
 		rc = fbuf_push_str(b, replacement, quoted) ? WRDE_NOSPACE : 0;
 		__free(replacement);
@@ -615,7 +618,7 @@ static int expand_param(const char **pp, struct fbuf *b, int flags, int sh,
  * deliberately not expand_param_word(): pathname expansion is the
  * following word-expansion phase and must not turn the pattern into a
  * list of files before it is matched against the parameter value. */
-static int expand_trim_pattern(const char *start, size_t len, int flags,
+static int expand_trim_pattern(const char *start, size_t len, int flags, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                                int sh, struct assign_ctx *ctx, char **result)
 {
 	struct fbuf b = { 0 };
@@ -1378,9 +1381,9 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 		 * fields) -- see the "other errors" branch of fail: below. */
 		out.n = out.cap = pwordexp->we_wordc;
 		if (out.n) {
-			out.v = __malloc(out.n * sizeof *out.v);
+			out.v = (char **)__malloc(out.n * sizeof *out.v);
 			if (!out.v) { errno = ENOMEM; return WRDE_NOSPACE; }
-			memcpy(out.v, pwordexp->we_wordv + pwordexp->we_offs, out.n * sizeof *out.v);
+			memcpy((void *)out.v, (const void *)(pwordexp->we_wordv + pwordexp->we_offs), out.n * sizeof *out.v);
 		}
 		base = out.n;
 	}
@@ -1571,7 +1574,7 @@ static int expand_impl(const char *words, wordexp_t *pwordexp, int flags, int sh
 		size_t offs = (flags & WRDE_DOOFFS) ? pwordexp->we_offs : 0;
 		char **v = pv_pack(&out, offs);
 		if (!v) { rc = WRDE_NOSPACE; pack_failed = 1; goto fail; }
-		if (flags & WRDE_APPEND) __free(pwordexp->we_wordv);
+		if (flags & WRDE_APPEND) __free((void *)pwordexp->we_wordv);
 		pwordexp->we_wordv = v;
 		pwordexp->we_wordc = out.n;
 		if (!(flags & WRDE_DOOFFS) && !(flags & WRDE_APPEND)) pwordexp->we_offs = offs;
@@ -1586,7 +1589,7 @@ fail:
 		size_t offs = (flags & WRDE_DOOFFS) ? pwordexp->we_offs : 0;
 		char **v = pack_failed ? 0 : pv_pack(&out, offs);
 		if (v) {
-			if (flags & WRDE_APPEND) __free(pwordexp->we_wordv);
+			if (flags & WRDE_APPEND) __free((void *)pwordexp->we_wordv);
 			pwordexp->we_wordv = v;
 			pwordexp->we_wordc = out.n;
 		} else {
@@ -1649,7 +1652,7 @@ void wordfree(wordexp_t *pwordexp)
 	if (!pwordexp || !pwordexp->we_wordv) return;
 	offs = pwordexp->we_offs;
 	for (i = 0; i < pwordexp->we_wordc; i++) __free(pwordexp->we_wordv[offs + i]);
-	__free(pwordexp->we_wordv);
+	__free((void *)pwordexp->we_wordv);
 	pwordexp->we_wordv = 0;
 	pwordexp->we_wordc = 0;
 }

@@ -1,3 +1,8 @@
+/* C library internals and platform ABI fields intentionally use the
+ * implementation-reserved namespace so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -31,8 +36,28 @@
 #ifndef _NTLIBC_UTIL_H
 #define _NTLIBC_UTIL_H
 
+#include <errno.h>
+#include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
+
+/* Diagnostics are always secondary to an error status the utility is
+ * already returning.  Check the write, but preserve the primary errno and
+ * outcome because a diagnostic failure has no more useful status to report. */
+static inline void __util_diagf(const char *fmt, ...)
+	__attribute__((format(printf, 1, 2), nonnull(1)));
+static inline void __util_diagf(const char *fmt, ...)
+{
+	int saved_errno = errno;
+	va_list ap;
+	va_start(ap, fmt);
+	if (vfprintf(stderr, fmt, ap) < 0) {
+		/* The utility's primary failure remains authoritative. */
+	}
+	va_end(ap);
+	errno = saved_errno;
+}
 
 /* Shared checked sizing for the utility implementations below.  Keep the
  * arithmetic out of malloc/realloc arguments so an untrusted input length
@@ -66,7 +91,7 @@ static inline void *__util_reallocarray(void *ptr, size_t count,
 	return realloc(ptr, bytes);
 }
 
-static inline int __util_array_capacity(size_t current, size_t used,
+static inline int __util_array_capacity(size_t current, size_t used, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	size_t additional, size_t initial, size_t element_size, size_t *out)
 {
 	size_t minimum, maximum, capacity;
@@ -213,3 +238,5 @@ int __util_remove_tree(const char *path) __attribute__((nonnull(1)));
 char *__util_join_basename(const char *dir, const char *src) __attribute__((nonnull(1, 2)));
 
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

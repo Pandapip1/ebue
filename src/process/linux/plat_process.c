@@ -68,6 +68,11 @@
  * status already encoded, without either backend needing its own copy
  * of that decoding.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG -- see
                          * __plat_process_wait()'s own comment below for why
@@ -136,7 +141,7 @@
  * still-live stack frame across the child/parent split), though
  * SIGCHLD-only clone (no CLONE_VM) happens to share the parent's stack
  * so that particular hazard does not apply to this file's simpler use. */
-static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6) // NOLINT(bugprone-easily-swappable-parameters) -- raw syscall ABI slots are positional and semantically distinct
 {
 	register long x8 __asm__("x8") = nr;
 	register long x0 __asm__("x0") = a1;
@@ -488,3 +493,5 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	*out_process = (__plat_handle_t)(long)box_pid((int)pid);
 	return (int)pid;
 }
+
+// NOLINTEND(misc-include-cleaner)

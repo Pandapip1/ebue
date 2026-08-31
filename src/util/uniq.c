@@ -39,7 +39,7 @@
 #include <errno.h>
 #include "util.h"
 
-static size_t skip_prefix(const char *line, size_t len, long fields, long chars)
+static size_t skip_prefix(const char *line, size_t len, long fields, long chars) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t off = 0;
 	long f;
@@ -76,6 +76,7 @@ int __util_uniq_main(int argc, char **argv)
 	size_t curcap = 0, nextcap = 0;
 	ssize_t curlen = -1, nextlen;
 	long count;
+	int status = 0;
 
 	for (i = 1; i < argc; i++) {
 		char *arg = argv[i];
@@ -90,45 +91,46 @@ int __util_uniq_main(int argc, char **argv)
 			const char *val;
 			char *end;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "uniq: -f: option requires an argument\n"); return 1; } val = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("uniq: -f: option requires an argument\n"); return 1; } val = argv[i]; }
 			fields = strtol(val, &end, 10);
-			if (*end || fields < 0) { fprintf(stderr, "uniq: -f: %s: invalid field count\n", val); return 1; }
+			if (*end || fields < 0) { __util_diagf("uniq: -f: %s: invalid field count\n", val); return 1; }
 			continue;
 		}
 		if (!strcmp(arg, "-s") || !strncmp(arg, "-s", 2)) {
 			const char *val;
 			char *end;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "uniq: -s: option requires an argument\n"); return 1; } val = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("uniq: -s: option requires an argument\n"); return 1; } val = argv[i]; }
 			chars = strtol(val, &end, 10);
-			if (*end || chars < 0) { fprintf(stderr, "uniq: -s: %s: invalid character count\n", val); return 1; }
+			if (*end || chars < 0) { __util_diagf("uniq: -s: %s: invalid character count\n", val); return 1; }
 			continue;
 		}
-		fprintf(stderr, "uniq: %s: invalid option\n", arg);
+		__util_diagf("uniq: %s: invalid option\n", arg);
 		return 1;
 	}
 
 	if (opt_c + opt_d + opt_u > 1) {
-		fprintf(stderr, "uniq: -c, -d and -u are mutually exclusive\n");
+		__util_diagf("uniq: -c, -d and -u are mutually exclusive\n");
 		return 1;
 	}
 
 	if (i < argc) infile = argv[i++];
 	if (i < argc) outfile = argv[i++];
 	if (i < argc) {
-		fprintf(stderr, "uniq: too many operands\n");
+		__util_diagf("uniq: too many operands\n");
 		return 1;
 	}
 
 	if (infile && strcmp(infile, "-") != 0) {
 		in = fopen(infile, "r");
-		if (!in) { fprintf(stderr, "uniq: %s: %s\n", infile, strerror(errno)); return 1; }
+		if (!in) { __util_diagf("uniq: %s: %s\n", infile, strerror(errno)); return 1; }
 	}
 	if (outfile && strcmp(outfile, "-") != 0) {
 		out = fopen(outfile, "w");
 		if (!out) {
-			fprintf(stderr, "uniq: %s: %s\n", outfile, strerror(errno));
-			if (in != stdin) fclose(in);
+			__util_diagf("uniq: %s: %s\n", outfile, strerror(errno));
+			/* Output-open failure is primary; input close is cleanup only. */
+			if (in != stdin) (void)fclose(in);
 			return 1;
 		}
 	}
@@ -141,15 +143,11 @@ int __util_uniq_main(int argc, char **argv)
 	for (;;) {
 		nextlen = getline(&next, &nextcap, in);
 		if (nextlen < 0) {
-			if (!opt_d && !opt_u) {
-				if (opt_c) fprintf(out, "%7ld %s\n", count, cur);
-				else fprintf(out, "%s\n", cur);
-			} else if (opt_d && count > 1) {
-				if (opt_c) fprintf(out, "%7ld %s\n", count, cur);
-				else fprintf(out, "%s\n", cur);
-			} else if (opt_u && count == 1) {
-				if (opt_c) fprintf(out, "%7ld %s\n", count, cur);
-				else fprintf(out, "%s\n", cur);
+			if ((!opt_d && !opt_u) || (opt_d && count > 1) ||
+			    (opt_u && count == 1)) {
+				if (opt_c) {
+					if (fprintf(out, "%7ld %s\n", count, cur) < 0) status = 1;
+				} else if (fprintf(out, "%s\n", cur) < 0) status = 1;
 			}
 			break;
 		}
@@ -160,15 +158,11 @@ int __util_uniq_main(int argc, char **argv)
 			continue;
 		}
 
-		if (!opt_d && !opt_u) {
-			if (opt_c) fprintf(out, "%7ld %s\n", count, cur);
-			else fprintf(out, "%s\n", cur);
-		} else if (opt_d && count > 1) {
-			if (opt_c) fprintf(out, "%7ld %s\n", count, cur);
-			else fprintf(out, "%s\n", cur);
-		} else if (opt_u && count == 1) {
-			if (opt_c) fprintf(out, "%7ld %s\n", count, cur);
-			else fprintf(out, "%s\n", cur);
+		if ((!opt_d && !opt_u) || (opt_d && count > 1) ||
+		    (opt_u && count == 1)) {
+			if (opt_c) {
+				if (fprintf(out, "%7ld %s\n", count, cur) < 0) status = 1;
+			} else if (fprintf(out, "%s\n", cur) < 0) status = 1;
 		}
 
 		{
@@ -182,7 +176,9 @@ int __util_uniq_main(int argc, char **argv)
 	free(cur);
 	free(next);
 done:
-	if (in != stdin) fclose(in);
-	if (out != stdout) fclose(out);
-	return 0;
+	if (in != stdin && fclose(in) != 0) status = 1;
+	if (out != stdout) {
+		if (fclose(out) != 0) status = 1;
+	} else if (fflush(out) != 0) status = 1;
+	return status;
 }

@@ -6,6 +6,11 @@
  * NT object. unlink() can therefore remove the discoverable name while
  * already-open handles keep the dispatcher object alive.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <semaphore.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -130,9 +135,14 @@ static int namespace_lock(const char *path, __plat_handle_t *out)
 {
 	char name[96];
 	unsigned long long hash = path_hash(path);
+	int n;
 
-	snprintf(name, sizeof name, "\\BaseNamedObjects\\ntlibc.sem.name.%08x%08x",
+	n = snprintf(name, sizeof name, "\\BaseNamedObjects\\ntlibc.sem.name.%08x%08x",
 	         (unsigned)(hash >> 32), (unsigned)hash);
+	if (n < 0 || (size_t)n >= sizeof name) {
+		if (n >= 0) errno = ENAMETOOLONG;
+		return -1;
+	}
 	return __plat_named_mutant_acquire(name, out);
 }
 
@@ -164,7 +174,7 @@ static struct named_sem *free_slot(void)
 	return NULL;
 }
 
-int sem_init(sem_t *sem, int pshared, unsigned value)
+int sem_init(sem_t *sem, int pshared, unsigned value) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	__plat_handle_t h;
 	(void)pshared;
@@ -206,7 +216,7 @@ sem_t *sem_open(const char *name, int oflag, ...)
 	char *path, object[96];
 	struct named_sem *entry;
 	__plat_handle_t h, ns = 0;
-	int fd = -1, created = 0, saved, recover = 0;
+	int fd = -1, created = 0, saved, recover = 0, n;
 	unsigned value = 0;
 	mode_t mode = 0;
 	ssize_t got;
@@ -262,8 +272,14 @@ retry_record:
 	if (fd < 0) { saved = errno; goto fail_locked; }
 	if (created) {
 		int create_result;
-		snprintf(object, sizeof object, "\\BaseNamedObjects\\ntlibc.sem.%d.%u",
+		n = snprintf(object, sizeof object, "\\BaseNamedObjects\\ntlibc.sem.%d.%u",
 		         (int)getpid(), ++object_sequence);
+		if (n < 0 || (size_t)n >= sizeof object) {
+			saved = n < 0 ? errno : ENAMETOOLONG;
+			(void)close(fd);
+			(void)unlink(path);
+			goto fail_locked;
+		}
 		create_result = __plat_named_semaphore_create(object, (long)value, SEM_VALUE_MAX, &h);
 		if (create_result < 0 ||
 		    write(fd, object, strlen(object) + 1) != (ssize_t)strlen(object) + 1) {
@@ -375,7 +391,7 @@ static int wait_handle(sem_t *sem, long long ticks)
 	return -1; /* __PLAT_WAIT_ERROR: errno already set */
 }
 
-static int restartable_interruption(unsigned long *caught,
+static int restartable_interruption(unsigned long *caught, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	unsigned long *restarted)
 {
 	unsigned long now_caught = __sig_thread_caught_count();
@@ -485,3 +501,5 @@ int sem_getvalue(sem_t *sem, int *value)
 	if (!valid(sem) || !value) { errno = EINVAL; return -1; }
 	return __plat_semaphore_getvalue(sem->__handle, value);
 }
+
+// NOLINTEND(misc-include-cleaner)

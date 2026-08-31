@@ -29,6 +29,11 @@
  * (lpfnCondition et al in ReactOS's version): out of POSIX's accept()
  * scope entirely, it is a WSAAccept()-only Winsock extension.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -76,3 +81,5 @@ int accept(int fd, struct sockaddr *__restrict addr, socklen_t *__restrict len)
 
 	return newfd;
 }
+
+// NOLINTEND(misc-include-cleaner)

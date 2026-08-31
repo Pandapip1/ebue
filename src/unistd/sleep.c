@@ -39,6 +39,11 @@
  * signal actually arrives cannot drift apart, including across a
  * clock_settime().
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
@@ -293,3 +298,5 @@ int pause(void)
 	errno = EINTR;
 	return -1;
 }
+
+// NOLINTEND(misc-include-cleaner)

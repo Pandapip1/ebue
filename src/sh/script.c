@@ -132,11 +132,13 @@ static const char *progname = "sh";
  * and ends in a newline -- XCU sh(1p)'s "STDERR" ("used only for
  * diagnostic messages") plus 2.8.1's requirement that a non-interactive
  * shell say something before it gives up. A macro rather than a
- * function so each call site keeps its own printf arguments. */
+ * function so each call site keeps its own printf arguments.  These writes
+ * are secondary to an exit status already selected; stderr failure cannot
+ * be reported recursively and must not replace that primary outcome. */
 #define diag(...) do { \
-	fprintf(stderr, "%s: ", progname); \
-	fprintf(stderr, __VA_ARGS__); \
-	fputc('\n', stderr); \
+	(void)fprintf(stderr, "%s: ", progname); \
+	(void)fprintf(stderr, __VA_ARGS__); \
+	(void)fputc('\n', stderr); \
 } while (0)
 
 /* One message, three call sites (a word, a redirection target, a
@@ -473,7 +475,8 @@ static int slurp(FILE *f, char **out)
 
 static void usage(void)
 {
-	fprintf(stderr,
+	/* usage() accompanies EX_USAGE and has no independent status channel. */
+	(void)fprintf(stderr,
 		"usage: %s -c command_string [command_name [argument...]]\n"
 		"       %s [-s] [command_file [argument...]]\n",
 		progname, progname);

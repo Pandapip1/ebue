@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
+
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdarg.h>
@@ -26,7 +31,7 @@ struct record_lock_state {
 static struct record_lock_state record_locks[FD_MAX];
 
 static int record_lock_range(struct __fd *f, const struct flock *l,
-			     long long *off, long long *len)
+			     long long *off, long long *len) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	long long base, start, length;
 
@@ -189,3 +194,5 @@ int fcntl(int fd, int cmd, ...)
 		return -1;
 	}
 }
+
+// NOLINTEND(misc-include-cleaner)

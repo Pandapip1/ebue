@@ -1,3 +1,8 @@
+/* C library headers must use the implementation-reserved namespace for guards,
+ * type plumbing, and implementation extensions so they cannot collide with users.
+ */
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef _MQUEUE_H
@@ -44,3 +49,5 @@ ssize_t mq_timedreceive(mqd_t, char *__restrict, size_t,
 }
 #endif
 #endif
+
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

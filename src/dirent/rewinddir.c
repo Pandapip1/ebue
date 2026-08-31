@@ -4,6 +4,11 @@
  * rewinddir: RestartScan = TRUE on the next NtQueryDirectoryFile call so
  * the kernel goes back to the first entry (".", on a regular directory).
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "dirent_internal.h"
 
 void rewinddir(DIR *dp)
@@ -22,3 +27,5 @@ void rewinddir(DIR *dp)
 	dp->vseen = 0;
 	dp->vnext = 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

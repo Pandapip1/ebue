@@ -12,6 +12,11 @@
  * set, SIGPIPE already raised) in place of a raw NTSTATUS the front
  * door had to interpret itself.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -117,7 +122,7 @@ NTSTATUS __afd_ioctl(HANDLE h, ULONG code, void *in, ULONG inlen, void *out, ULO
  * NTSTATUS->errno mapping sends all three of these to ENOTCONN, which
  * is indistinguishable there from a socket that was never connected at
  * all and must NOT read back as EOF. */
-ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags)
+ssize_t __plat_sock_recv(__plat_handle_t h, void *buf, size_t len, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	AFD_WSABUF wb;
 	AFD_RECV_INFO ri;
@@ -315,7 +320,7 @@ int __plat_socket_accept(__plat_handle_t h, struct sockaddr *addr, socklen_t *le
  * real status in hand, can tell a genuinely broken/disconnected/reset
  * connection apart from every other status the generic table happens to
  * map to a similar-looking errno. */
-ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int flags)
+ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int flags) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	AFD_WSABUF wb;
 	AFD_SEND_INFO si;
@@ -343,3 +348,5 @@ ssize_t __plat_sock_send(__plat_handle_t h, const void *buf, size_t len, int fla
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
 	return (ssize_t)io.Information;
 }
+
+// NOLINTEND(misc-include-cleaner)

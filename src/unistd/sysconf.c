@@ -42,10 +42,10 @@ long sysconf(int name)
 	case _SC_CHILD_MAX: return CHILD_CAP_LIMIT_;
 	case _SC_CLK_TCK: return 100;
 	case _SC_NGROUPS_MAX: return NGROUPS_MAX;
-	case _SC_OPEN_MAX: return FD_MAX;
+	case _SC_OPEN_MAX: return FD_MAX; // NOLINT(bugprone-branch-clone) -- OPEN_MAX and STREAM_MAX are independent POSIX limits even though ntlibc currently gives both the descriptor-table bound
 	case _SC_STREAM_MAX: return FD_MAX;
 	case _SC_TZNAME_MAX: return TZNAME_MAX;
-	case _SC_VERSION: return _POSIX_VERSION;
+	case _SC_VERSION: return _POSIX_VERSION; // NOLINT(bugprone-branch-clone) -- POSIX and POSIX.2 version selectors must remain tied to their distinct standard macros even when this release implements the same revision
 	case _SC_2_VERSION: return _POSIX2_VERSION;
 	case _SC_XOPEN_VERSION: return _XOPEN_VERSION;
 	/* Both names, one number: limits.h.html has {PAGESIZE}
@@ -61,9 +61,9 @@ long sysconf(int name)
 	case _SC_RTSIG_MAX: return RTSIG_MAX;
 	case _SC_SIGQUEUE_MAX: return SIGQUEUE_MAX;
 	case _SC_TIMERS: return _POSIX_TIMERS;
-	case _SC_TIMER_MAX: return TIMER_MAX;
+	case _SC_TIMER_MAX: return TIMER_MAX; // NOLINT(bugprone-branch-clone) -- timer-count and delay-timer feature queries are semantically independent despite their current constants comparing equal
 	case _SC_DELAYTIMER_MAX: return _POSIX_DELAYTIMER_MAX;
-	case _SC_CPUTIME: return _POSIX_CPUTIME;
+	case _SC_CPUTIME: return _POSIX_CPUTIME; // NOLINT(bugprone-branch-clone) -- these are independent POSIX option queries whose feature macros happen to name the same supported revision
 	case _SC_MEMLOCK: return _POSIX_MEMLOCK;
 	case _SC_MEMLOCK_RANGE: return _POSIX_MEMLOCK_RANGE;
 	case _SC_SEMAPHORES: return _POSIX_SEMAPHORES;
@@ -104,7 +104,7 @@ long sysconf(int name)
 	 * should be told yes.  <unistd.h> defines no matching _POSIX_*
 	 * constant for any of them, which is exactly the case
 	 * sysconf.html exists for. */
-	case _SC_FSYNC: return _POSIX_VERSION;           /* src/unistd/fsync.c */
+	case _SC_FSYNC: return _POSIX_VERSION;           /* src/unistd/fsync.c */ // NOLINT(bugprone-branch-clone) -- each selector reports a distinct implemented interface and must remain independently adjustable when feature levels diverge
 	case _SC_REGEXP: return _POSIX_VERSION;          /* src/regex/regex.c */
 	case _SC_SPAWN: return _POSIX_VERSION;           /* src/process/posix_spawn.c */
 	case _SC_MONOTONIC_CLOCK: return _POSIX_VERSION; /* src/time/clock_gettime.c */
@@ -121,7 +121,7 @@ long sysconf(int name)
 	case _SC_READER_WRITER_LOCKS: return _POSIX_READER_WRITER_LOCKS;
 	case _SC_SPIN_LOCKS: return _POSIX_SPIN_LOCKS;
 	case _SC_TIMEOUTS: return _POSIX_TIMEOUTS;
-	case _SC_XOPEN_UNIX: return _XOPEN_UNIX;
+	case _SC_XOPEN_UNIX: return _XOPEN_UNIX; // NOLINT(bugprone-branch-clone) -- UNIX and enhanced-I18N are independent XSI option selectors even though their macros currently have the same supported value
 	case _SC_XOPEN_ENH_I18N: return _XOPEN_ENH_I18N;
 
 	/* ---- ntlibc extensions ------------------------------------ */
@@ -256,12 +256,12 @@ long pathconf(const char *path, int name)
 	(void)path;
 	switch (name) {
 	case _PC_LINK_MAX: return 1023;
-	case _PC_MAX_CANON: return 255;
+	case _PC_MAX_CANON: return 255; // NOLINT(bugprone-branch-clone) -- canonical-input, input, and filename limits are distinct pathconf properties that may diverge on another backend
 	case _PC_MAX_INPUT: return 255;
 	case _PC_NAME_MAX: return NAME_MAX;
-	case _PC_PATH_MAX: return PATH_MAX;
+	case _PC_PATH_MAX: return PATH_MAX; // NOLINT(bugprone-branch-clone) -- pathname and pipe-buffer limits are independent properties whose current public constants happen to compare equal
 	case _PC_PIPE_BUF: return PIPE_BUF;
-	case _PC_CHOWN_RESTRICTED: return 1;
+	case _PC_CHOWN_RESTRICTED: return 1; // NOLINT(bugprone-branch-clone) -- ownership restriction and truncation behavior are independent Boolean path properties
 	case _PC_NO_TRUNC: return 1;
 	/* Same character _POSIX_VDISABLE names; keep the two equal. */
 	case _PC_VDISABLE: return 0;
@@ -304,7 +304,7 @@ long pathconf(const char *path, int name)
 	}
 }
 
-long fpathconf(int fd, int name) { (void)fd; return pathconf("", name); }
+long fpathconf(int fd, int name) { (void)fd; return pathconf("", name); } // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 int getpagesize(void) { return 4096; }
 int getdtablesize(void) { return FD_MAX; }
 /* confstr.html RETURN VALUE: an invalid name is 0 with [EINVAL], not the

@@ -97,7 +97,7 @@ static struct field *fields_grow(struct field *out, size_t *cap)
 	return g;
 }
 
-static struct field *split_fields(const char *line, size_t len, int have_delim, char delim, size_t *nout)
+static struct field *split_fields(const char *line, size_t len, int have_delim, char delim, size_t *nout) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct field *out;
 	size_t cap = 8, n = 0;
@@ -148,6 +148,28 @@ static void free_jlines(struct jline *l, size_t n)
 	free(l);
 }
 
+static int join_output_failed;
+
+static void join_putc(int ch)
+{
+	if (!join_output_failed && putchar(ch) == EOF) join_output_failed = 1;
+}
+
+static void join_write(const char *p, size_t len)
+{
+	if (!join_output_failed && fwrite(p, 1, len, stdout) != len)
+		join_output_failed = 1;
+}
+
+static int read_all_failure(FILE *f, int error)
+{
+	/* Closing an input is cleanup after the read/allocation failure.  Check
+	 * no further outcome here, but restore the primary errno for diagnosis. */
+	if (f != stdin) (void)fclose(f);
+	errno = error;
+	return -1;
+}
+
 /* On failure this can still leave *out holding whatever lines were
  * successfully parsed before the failing getline()/malloc()/realloc()
  * call (*nout reflects exactly how many) -- every caller below frees
@@ -170,20 +192,32 @@ static int read_all(const char *path, struct jline **out, size_t *nout, int have
 		if (len && buf[len - 1] == '\n') len--;
 		{
 			size_t bytes;
-			if (!__util_size_add(len, 1, &bytes)) { free(buf); if (f != stdin) fclose(f); return -1; }
+			if (!__util_size_add(len, 1, &bytes)) {
+				free(buf);
+				return read_all_failure(f, EOVERFLOW);
+			}
 			text = malloc(bytes);
 		}
-		if (!text) { free(buf); if (f != stdin) fclose(f); return -1; }
+		if (!text) {
+			int saved = errno;
+			free(buf);
+			return read_all_failure(f, saved ? saved : ENOMEM);
+		}
 		memcpy(text, buf, len);
 		text[len] = 0;
 		if (*nout >= cap) {
 			size_t newcap;
 			struct jline *g;
 			if (!__util_array_capacity(cap, *nout, 1, 64, sizeof **out, &newcap)) {
-				free(text); free(buf); if (f != stdin) fclose(f); return -1;
+				free(text); free(buf);
+				return read_all_failure(f, EOVERFLOW);
 			}
 			g = __util_reallocarray(*out, newcap, sizeof **out);
-			if (!g) { free(text); free(buf); if (f != stdin) fclose(f); return -1; }
+			if (!g) {
+				int saved = errno;
+				free(text); free(buf);
+				return read_all_failure(f, saved ? saved : ENOMEM);
+			}
 			*out = g;
 			cap = newcap;
 		}
@@ -193,7 +227,7 @@ static int read_all(const char *path, struct jline **out, size_t *nout, int have
 		(*nout)++;
 	}
 	free(buf);
-	if (f != stdin) fclose(f);
+	if (f != stdin && fclose(f) != 0) return -1;
 	return 0;
 }
 
@@ -232,15 +266,15 @@ static int keys_cmp(const struct jline *a, int fa, const struct jline *b, int fb
 
 static void put_field_raw(const char *p, size_t len, const char *empty_repl)
 {
-	if (len == 0 && empty_repl) fputs(empty_repl, stdout);
-	else fwrite(p, 1, len, stdout);
+	if (len == 0 && empty_repl) join_write(empty_repl, strlen(empty_repl));
+	else join_write(p, len);
 }
 
 /* Default (no -o) output for a matched pair, or an unpaired single line
  * (l2 or l1 NULL): "the join field, then the remaining fields from
  * file1, then the remaining fields from file2" -- the absent side
  * simply contributes no fields at all (see this file's header). */
-static void print_default(const struct jline *l1, int jf1, const struct jline *l2, int jf2, char outsep)
+static void print_default(const struct jline *l1, int jf1, const struct jline *l2, int jf2, char outsep) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t klen; const char *kp;
 	size_t i;
@@ -248,7 +282,7 @@ static void print_default(const struct jline *l1, int jf1, const struct jline *l
 
 	if (l1) kp = field_ptr(l1, jf1, &klen);
 	else kp = field_ptr(l2, jf2, &klen);
-	fwrite(kp, 1, klen, stdout);
+	join_write(kp, klen);
 	first = 0;
 
 	if (l1) {
@@ -256,8 +290,8 @@ static void print_default(const struct jline *l1, int jf1, const struct jline *l
 			size_t flen; const char *fp;
 			if ((int)i == jf1) continue;
 			fp = field_ptr(l1, (int)i, &flen);
-			if (!first) putchar(outsep);
-			fwrite(fp, 1, flen, stdout);
+			if (!first) join_putc(outsep);
+			join_write(fp, flen);
 			first = 0;
 		}
 	}
@@ -266,12 +300,12 @@ static void print_default(const struct jline *l1, int jf1, const struct jline *l
 			size_t flen; const char *fp;
 			if ((int)i == jf2) continue;
 			fp = field_ptr(l2, (int)i, &flen);
-			if (!first) putchar(outsep);
-			fwrite(fp, 1, flen, stdout);
+			if (!first) join_putc(outsep);
+			join_write(fp, flen);
 			first = 0;
 		}
 	}
-	putchar('\n');
+	join_putc('\n');
 }
 
 /* Every call site below passes at least one of l1/l2 non-NULL (a
@@ -283,12 +317,12 @@ static void print_default(const struct jline *l1, int jf1, const struct jline *l
  * exactly that reason -- a known, accepted false positive, not a real
  * bug: see this file's __util_join_main() for the three call shapes). */
 static void print_o(const struct outspec *specs, size_t nspecs, const struct jline *l1, int jf1,
-                     const struct jline *l2, int jf2, char outsep, const char *empty_repl)
+                     const struct jline *l2, int jf2, char outsep, const char *empty_repl) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t i;
 	for (i = 0; i < nspecs; i++) {
 		size_t len; const char *p;
-		if (i) putchar(outsep);
+		if (i) join_putc(outsep);
 		if (specs[i].file == 0) {
 			p = l1 ? field_ptr(l1, jf1, &len) : field_ptr(l2, jf2, &len);
 		} else if (specs[i].file == 1) {
@@ -298,7 +332,7 @@ static void print_o(const struct outspec *specs, size_t nspecs, const struct jli
 		}
 		put_field_raw(p, len, empty_repl);
 	}
-	putchar('\n');
+	join_putc('\n');
 }
 
 static int parse_o_list(const char *val, struct outspec **specs, size_t *nspecs, size_t *cap)
@@ -351,6 +385,7 @@ int __util_join_main(int argc, char **argv)
 	struct jline *L1 = 0, *L2 = 0;
 	size_t n1 = 0, n2 = 0;
 	int i;
+	join_output_failed = 0;
 
 	/* Every error exit from here down goes through `goto bad;` rather
 	 * than a bare `return 1;`, on purpose: -o may already have run (in
@@ -365,46 +400,46 @@ int __util_join_main(int argc, char **argv)
 		if (arg[0] != '-' || arg[1] == 0) break;
 
 		if (!strcmp(arg, "-v")) {
-			fprintf(stderr, "join: -v: not implemented -- see src/util/join.c\n");
+			__util_diagf("join: -v: not implemented -- see src/util/join.c\n");
 			goto bad;
 		}
 		if (!strncmp(arg, "-1", 2)) {
 			const char *val; char *end; long v;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "join: -1: option requires an argument\n"); goto bad; } val = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("join: -1: option requires an argument\n"); goto bad; } val = argv[i]; }
 			v = strtol(val, &end, 10);
-			if (*end || v < 1) { fprintf(stderr, "join: -1: %s: invalid field\n", val); goto bad; }
+			if (*end || v < 1) { __util_diagf("join: -1: %s: invalid field\n", val); goto bad; }
 			jf1 = (int)v;
 			continue;
 		}
 		if (!strncmp(arg, "-2", 2)) {
 			const char *val; char *end; long v;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "join: -2: option requires an argument\n"); goto bad; } val = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("join: -2: option requires an argument\n"); goto bad; } val = argv[i]; }
 			v = strtol(val, &end, 10);
-			if (*end || v < 1) { fprintf(stderr, "join: -2: %s: invalid field\n", val); goto bad; }
+			if (*end || v < 1) { __util_diagf("join: -2: %s: invalid field\n", val); goto bad; }
 			jf2 = (int)v;
 			continue;
 		}
 		if (!strncmp(arg, "-a", 2)) {
 			const char *val; char *end; long v;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "join: -a: option requires an argument\n"); goto bad; } val = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("join: -a: option requires an argument\n"); goto bad; } val = argv[i]; }
 			v = strtol(val, &end, 10);
-			if (*end || (v != 1 && v != 2)) { fprintf(stderr, "join: -a: %s: must be 1 or 2\n", val); goto bad; }
+			if (*end || (v != 1 && v != 2)) { __util_diagf("join: -a: %s: must be 1 or 2\n", val); goto bad; }
 			if (v == 1) a1 = 1; else a2 = 1;
 			continue;
 		}
 		if (!strncmp(arg, "-e", 2)) {
 			if (arg[2]) empty_repl = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "join: -e: option requires an argument\n"); goto bad; } empty_repl = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("join: -e: option requires an argument\n"); goto bad; } empty_repl = argv[i]; }
 			continue;
 		}
 		if (!strncmp(arg, "-t", 2)) {
 			const char *val;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "join: -t: option requires an argument\n"); goto bad; } val = argv[i]; }
-			if (val[0] == 0 || val[1] != 0) { fprintf(stderr, "join: -t: field separator must be exactly one character\n"); goto bad; }
+			else { if (++i >= argc) { __util_diagf("join: -t: option requires an argument\n"); goto bad; } val = argv[i]; }
+			if (val[0] == 0 || val[1] != 0) { __util_diagf("join: -t: field separator must be exactly one character\n"); goto bad; }
 			delim = val[0];
 			have_delim = 1;
 			outsep = val[0];
@@ -413,38 +448,38 @@ int __util_join_main(int argc, char **argv)
 		if (!strncmp(arg, "-o", 2)) {
 			const char *val;
 			if (arg[2]) val = arg + 2;
-			else { if (++i >= argc) { fprintf(stderr, "join: -o: option requires an argument\n"); goto bad; } val = argv[i]; }
+			else { if (++i >= argc) { __util_diagf("join: -o: option requires an argument\n"); goto bad; } val = argv[i]; }
 			if (parse_o_list(val, &specs, &nspecs, &speccap) < 0) {
-				fprintf(stderr, "join: -o: %s: invalid output list\n", val);
+				__util_diagf("join: -o: %s: invalid output list\n", val);
 				goto bad;
 			}
 			continue;
 		}
-		fprintf(stderr, "join: %s: invalid option\n", arg);
+		__util_diagf("join: %s: invalid option\n", arg);
 		goto bad;
 	}
 
 	for (; i < argc; i++) {
-		if (npaths >= 2) { fprintf(stderr, "join: too many operands\n"); goto bad; }
+		if (npaths >= 2) { __util_diagf("join: too many operands\n"); goto bad; }
 		paths[npaths++] = argv[i];
 	}
 	if (npaths != 2) {
-		fprintf(stderr, "join: usage: join [-a n] [-e string] [-o list] [-t char] [-1 f] [-2 f] file1 file2\n");
+		__util_diagf("join: usage: join [-a n] [-e string] [-o list] [-t char] [-1 f] [-2 f] file1 file2\n");
 		goto bad;
 	}
 	if (!strcmp(paths[0], "-") && !strcmp(paths[1], "-")) {
-		fprintf(stderr, "join: file1 and file2 cannot both be standard input\n");
+		__util_diagf("join: file1 and file2 cannot both be standard input\n");
 		goto bad;
 	}
 
 	if (read_all(paths[0], &L1, &n1, have_delim, delim) < 0) {
 		int saved = errno;
-		fprintf(stderr, "join: %s: %s\n", paths[0], strerror(saved));
+		__util_diagf("join: %s: %s\n", paths[0], strerror(saved));
 		goto bad;
 	}
 	if (read_all(paths[1], &L2, &n2, have_delim, delim) < 0) {
 		int saved = errno;
-		fprintf(stderr, "join: %s: %s\n", paths[1], strerror(saved));
+		__util_diagf("join: %s: %s\n", paths[1], strerror(saved));
 		goto bad;
 	}
 
@@ -490,7 +525,8 @@ int __util_join_main(int argc, char **argv)
 	free(specs);
 	free_jlines(L1, n1);
 	free_jlines(L2, n2);
-	return 0;
+	if (fflush(stdout) != 0) join_output_failed = 1;
+	return join_output_failed ? 1 : 0;
 
 	/* Shared error-exit for every `goto bad;` above -- both those
 	 * reached before either read_all() call (L1/L2/n1/n2 still their

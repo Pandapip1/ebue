@@ -59,19 +59,19 @@ static int mv_one(const char *src, const char *dst)
 
 	if (rename(src, dst) == 0) return 0;
 	if (errno != EXDEV) {
-		fprintf(stderr, "mv: cannot move '%s' to '%s': %s\n", src, dst, strerror(errno));
+		__util_diagf("mv: cannot move '%s' to '%s': %s\n", src, dst, strerror(errno));
 		return -1;
 	}
 
 	/* Cross-volume: rename() cannot do this atomically, so copy the
 	 * source and then remove it -- see this file's header. */
 	if (lstat(src, &sst) < 0) {
-		fprintf(stderr, "mv: cannot stat '%s': %s\n", src, strerror(errno));
+		__util_diagf("mv: cannot stat '%s': %s\n", src, strerror(errno));
 		return -1;
 	}
 
 	if (S_ISLNK(sst.st_mode)) {
-		fprintf(stderr, "mv: '%s': moving a symbolic link across filesystems "
+		__util_diagf("mv: '%s': moving a symbolic link across filesystems "
 		                "is not supported by this build (see src/util/mv.c)\n", src);
 		return -1;
 	}
@@ -79,7 +79,7 @@ static int mv_one(const char *src, const char *dst)
 	if (S_ISDIR(sst.st_mode)) {
 		if (__util_copy_tree(src, dst, 0) < 0) return -1;
 		if (__util_remove_tree(src) < 0) {
-			fprintf(stderr, "mv: '%s' was copied to '%s' but the original could "
+			__util_diagf("mv: '%s' was copied to '%s' but the original could "
 			                "not be fully removed -- manual cleanup is needed\n",
 			                src, dst);
 			return -1;
@@ -89,7 +89,7 @@ static int mv_one(const char *src, const char *dst)
 
 	if (__util_copy_regular_file(src, dst, 0) < 0) return -1;
 	if (unlink(src) < 0) {
-		fprintf(stderr, "mv: '%s' was copied to '%s' but the original could not "
+		__util_diagf("mv: '%s' was copied to '%s' but the original could not "
 		                "be removed: %s\n", src, dst, strerror(errno));
 		return -1;
 	}
@@ -114,19 +114,19 @@ int __util_mv_main(int argc, char **argv)
 		for (p = a + 1; *p; p++) {
 			if (*p == 'f') continue;   /* genuine no-op -- see header */
 			if (*p == 'i') {
-				fprintf(stderr, "mv: -i: interactive confirmation is not "
+				__util_diagf("mv: -i: interactive confirmation is not "
 				                "supported by this build; refusing rather "
 				                "than moving without prompting\n");
 				return 2;
 			}
-			fprintf(stderr, "mv: invalid option -- '%c'\n", *p);
+			__util_diagf("mv: invalid option -- '%c'\n", *p);
 			return 2;
 		}
 	}
 
 	nsrc = argc - 1 - i;
 	if (nsrc < 1) {
-		fprintf(stderr, "mv: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
+		__util_diagf("mv: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
 		return 2;
 	}
 
@@ -134,7 +134,7 @@ int __util_mv_main(int argc, char **argv)
 	target_is_dir = stat(target, &tst) == 0 && S_ISDIR(tst.st_mode);
 
 	if (nsrc > 1 && !target_is_dir) {
-		fprintf(stderr, "mv: target '%s' is not a directory\n", target);
+		__util_diagf("mv: target '%s' is not a directory\n", target);
 		return 2;
 	}
 
@@ -144,7 +144,7 @@ int __util_mv_main(int argc, char **argv)
 		if (target_is_dir) {
 			char *dst = __util_join_basename(target, src);
 			if (!dst) {
-				fprintf(stderr, "mv: %s: %s\n", src, strerror(ENOMEM));
+				__util_diagf("mv: %s: %s\n", src, strerror(ENOMEM));
 				had_error = 1;
 				continue;
 			}

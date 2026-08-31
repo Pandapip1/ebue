@@ -7,6 +7,11 @@
  * which a forked child (which has no csrss connection) can survive, and
  * none of which a program with no DLLs but ntdll needs.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <stdlib.h>
 #include <unistd.h>
 #include "libc.h"
@@ -66,3 +71,5 @@ _Noreturn void quick_exit(int code)
 	while (nqhandlers > 0) qhandlers[--nqhandlers]();
 	__nt_exit(code);
 }
+
+// NOLINTEND(misc-include-cleaner)

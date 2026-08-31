@@ -33,6 +33,11 @@
  * wrong.  -t's fixed-width numeric format has no such open-ended
  * grammar and is implemented in full below.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -137,16 +142,16 @@ int __util_touch_main(int argc, char **argv)
 		const char *a = argv[i];
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-d")) {
-			fprintf(stderr, "touch: -d: not implemented -- see src/util/touch.c\n");
+			__util_diagf("touch: -d: not implemented -- see src/util/touch.c\n");
 			return 1;
 		}
 		if (!strcmp(a, "-r")) {
-			if (i + 1 >= argc) { fprintf(stderr, "touch: -r: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("touch: -r: option requires an argument\n"); return 1; }
 			ref = argv[++i];
 			continue;
 		}
 		if (!strcmp(a, "-t")) {
-			if (i + 1 >= argc) { fprintf(stderr, "touch: -t: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("touch: -t: option requires an argument\n"); return 1; }
 			tspec = argv[++i];
 			continue;
 		}
@@ -156,22 +161,22 @@ int __util_touch_main(int argc, char **argv)
 			if (strchr(a, 'm')) opt_m = 1;
 			continue;
 		}
-		fprintf(stderr, "touch: %s: invalid option\n", a);
+		__util_diagf("touch: %s: invalid option\n", a);
 		return 1;
 	}
 	if (i >= argc) {
-		fprintf(stderr, "touch: missing operand\n");
+		__util_diagf("touch: missing operand\n");
 		return 1;
 	}
 	if (ref && tspec) {
-		fprintf(stderr, "touch: -r and -t are mutually exclusive\n");
+		__util_diagf("touch: -r and -t are mutually exclusive\n");
 		return 1;
 	}
 
 	if (ref) {
 		struct stat st;
 		if (stat(ref, &st) != 0) {
-			fprintf(stderr, "touch: %s: %s\n", ref, strerror(errno));
+			__util_diagf("touch: %s: %s\n", ref, strerror(errno));
 			return 1;
 		}
 		want[0] = st.st_atim;
@@ -180,7 +185,7 @@ int __util_touch_main(int argc, char **argv)
 	} else if (tspec) {
 		struct timespec t;
 		if (parse_touch_t(tspec, &t) < 0) {
-			fprintf(stderr, "touch: %s: invalid time\n", tspec);
+			__util_diagf("touch: %s: invalid time\n", tspec);
 			return 1;
 		}
 		want[0] = t;
@@ -200,12 +205,12 @@ int __util_touch_main(int argc, char **argv)
 			if (opt_c) continue;
 			fd = open(argv[i], O_CREAT | O_WRONLY, 0666);
 			if (fd < 0) {
-				fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+				__util_diagf("touch: %s: %s\n", argv[i], strerror(errno));
 				fail = 1;
 				continue;
 			}
 			if (close(fd) < 0) {
-				fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+				__util_diagf("touch: %s: %s\n", argv[i], strerror(errno));
 				fail = 1;
 				continue;
 			}
@@ -222,9 +227,11 @@ int __util_touch_main(int argc, char **argv)
 		else if (opt_m && !opt_a) ts[0].tv_nsec = UTIME_OMIT;
 
 		if (utimensat(AT_FDCWD, argv[i], ts, 0) != 0) {
-			fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("touch: %s: %s\n", argv[i], strerror(errno));
 			fail = 1;
 		}
 	}
 	return fail;
 }
+
+// NOLINTEND(misc-include-cleaner)

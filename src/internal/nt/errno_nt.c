@@ -7,6 +7,11 @@
  * RtlNtStatusToDosError() -- see errno.c's own banner for why that
  * mattered in practice, not just in principle.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "libc.h"
 
 int __errno_from_status(NTSTATUS st)
@@ -30,7 +35,7 @@ int __errno_from_status(NTSTATUS st)
 	case STATUS_NOT_FOUND:
 	case STATUS_DLL_NOT_FOUND:
 	case STATUS_FILE_DELETED:
-	case STATUS_DELETE_PENDING: return ENOENT;
+	case STATUS_DELETE_PENDING:
 	case STATUS_OBJECT_NAME_INVALID:
 	case STATUS_OBJECT_PATH_INVALID:
 	case STATUS_OBJECT_PATH_SYNTAX_BAD: return ENOENT;
@@ -149,3 +154,5 @@ int __set_errno_status(NTSTATUS st)
 	errno = e ? e : EIO;
 	return -1;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -51,6 +51,8 @@
 #include <errno.h>
 #include "util.h"
 
+static int od_output_failed;
+
 #define ROWBYTES 16
 
 /* ---- od(1p)'s own -j/-N numeric syntax -------------------------------- */
@@ -119,7 +121,7 @@ static size_t instream_read(struct instream *is, unsigned char *buf, size_t want
 				if (is->idx >= is->nfiles) return 0;
 				is->cur = fopen(is->files[is->idx], "rb");
 				if (!is->cur) {
-					fprintf(stderr, "od: %s: %s\n", is->files[is->idx], strerror(errno));
+					__util_diagf("od: %s: %s\n", is->files[is->idx], strerror(errno));
 					is->any_error = 1;
 					is->idx++;
 					continue;
@@ -129,7 +131,7 @@ static size_t instream_read(struct instream *is, unsigned char *buf, size_t want
 		}
 		got = fread(buf, 1, want, is->cur);
 		if (got > 0) return got;
-		if (is->cur != stdin) fclose(is->cur);
+		if (is->cur != stdin && fclose(is->cur) != 0) is->any_error = 1;
 		is->cur = 0;
 		if (is->nfiles == 0) return 0; /* stdin: nothing more, ever */
 		/* else: this file is exhausted, loop around to the next one */
@@ -175,7 +177,10 @@ static const char *char_field(unsigned char b, char tmp[8])
 	case '\v': return "\\v";
 	default:
 		if (b >= 0x20 && b < 0x7f) { tmp[0] = (char)b; tmp[1] = 0; return tmp; }
-		snprintf(tmp, 8, "%03o", b);
+		if (snprintf(tmp, 8, "%03o", b) < 0) {
+			tmp[0] = 0;
+			od_output_failed = 1;
+		}
 		return tmp;
 	}
 }
@@ -266,7 +271,7 @@ static int od_run(struct instream *is, const struct od_opts *o)
 			if (!in_run) { printf("*\n"); in_run = 1; }
 		} else {
 			print_offset(o, off);
-			if (o->abase != 'n') fputc(' ', stdout);
+			if (o->abase != 'n' && fputc(' ', stdout) == EOF) od_output_failed = 1;
 			print_row(o, buf, got);
 			in_run = 0;
 		}
@@ -283,7 +288,8 @@ static int od_run(struct instream *is, const struct od_opts *o)
 		print_offset(o, off);
 		putchar('\n');
 	}
-	return is->any_error;
+	if (fflush(stdout) != 0) od_output_failed = 1;
+	return is->any_error || od_output_failed;
 }
 
 /* ---- argument parsing --------------------------------------------------- */
@@ -310,6 +316,7 @@ int __util_od_main(int argc, char **argv)
 	char **files;
 	int nfiles;
 	int status;
+	od_output_failed = 0;
 
 	o.abase = 'o';
 	o.skip = 0;
@@ -324,45 +331,45 @@ int __util_od_main(int argc, char **argv)
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-v")) { o.verbose = 1; continue; }
 		if (!strcmp(a, "-A")) {
-			if (i + 1 >= argc) { fprintf(stderr, "od: -A: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("od: -A: option requires an argument\n"); return 1; }
 			a = argv[++i];
 			if (strlen(a) != 1 || !strchr("doxn", a[0])) {
-				fprintf(stderr, "od: -A %s: invalid address base\n", a);
+				__util_diagf("od: -A %s: invalid address base\n", a);
 				return 1;
 			}
 			o.abase = a[0];
 			continue;
 		}
 		if (!strcmp(a, "-j")) {
-			if (i + 1 >= argc) { fprintf(stderr, "od: -j: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("od: -j: option requires an argument\n"); return 1; }
 			i++;
 			if (parse_odnum(argv[i], &o.skip) < 0) {
-				fprintf(stderr, "od: -j: invalid skip count\n");
+				__util_diagf("od: -j: invalid skip count\n");
 				return 1;
 			}
 			continue;
 		}
 		if (!strcmp(a, "-N")) {
-			if (i + 1 >= argc) { fprintf(stderr, "od: -N: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("od: -N: option requires an argument\n"); return 1; }
 			i++;
 			if (parse_odnum(argv[i], &o.count) < 0) {
-				fprintf(stderr, "od: -N: invalid count\n");
+				__util_diagf("od: -N: invalid count\n");
 				return 1;
 			}
 			continue;
 		}
 		if (!strcmp(a, "-t")) {
-			if (i + 1 >= argc) { fprintf(stderr, "od: -t: option requires an argument\n"); return 1; }
+			if (i + 1 >= argc) { __util_diagf("od: -t: option requires an argument\n"); return 1; }
 			i++;
 			if (parse_type(argv[i], &o.type, &o.size) < 0) {
-				fprintf(stderr, "od: -t: invalid type (this build supports "
+				__util_diagf("od: -t: invalid type (this build supports "
 				                "x1/x2/x4/x8, o1/o2/o4/o8, d1/d2/d4/d8, u1/u2/u4/u8, c "
 				                "-- not the C/S/I/L letter-size spelling, and not -t a/-t f)\n");
 				return 1;
 			}
 			continue;
 		}
-		fprintf(stderr, "od: %s: invalid option\n", a);
+		__util_diagf("od: %s: invalid option\n", a);
 		return 1;
 	}
 

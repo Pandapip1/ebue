@@ -95,7 +95,7 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 
 	in = open(src, O_RDONLY);
 	if (in < 0) {
-		fprintf(stderr, "cp: cannot open '%s' for reading: %s\n", src, strerror(errno));
+		__util_diagf("cp: cannot open '%s' for reading: %s\n", src, strerror(errno));
 		return -1;
 	}
 
@@ -105,7 +105,7 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 		out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	}
 	if (out < 0) {
-		fprintf(stderr, "cp: cannot create '%s': %s\n", dst, strerror(errno));
+		__util_diagf("cp: cannot create '%s': %s\n", dst, strerror(errno));
 		(void)close(in);
 		return -1;
 	}
@@ -115,7 +115,7 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 		while (n > 0) {
 			ssize_t w = write(out, p, (size_t)n);
 			if (w < 0) {
-				fprintf(stderr, "cp: error writing to '%s': %s\n", dst, strerror(errno));
+				__util_diagf("cp: error writing to '%s': %s\n", dst, strerror(errno));
 				(void)close(in);
 				(void)close(out);
 				return -1;
@@ -125,14 +125,14 @@ int __util_copy_regular_file(const char *src, const char *dst, int force)
 		}
 	}
 	if (n < 0) {
-		fprintf(stderr, "cp: error reading '%s': %s\n", src, strerror(errno));
+		__util_diagf("cp: error reading '%s': %s\n", src, strerror(errno));
 		(void)close(in);
 		(void)close(out);
 		return -1;
 	}
 	(void)close(in);
 	if (close(out) < 0) {
-		fprintf(stderr, "cp: error closing '%s': %s\n", dst, strerror(errno));
+		__util_diagf("cp: error closing '%s': %s\n", dst, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -162,6 +162,7 @@ static char *cpt_dst_path(const char *srcpath)
 	size_t dstlen = strlen(cpt_dst_root);
 	size_t rellen, bytes;
 	char *out;
+	int n;
 
 	while (*rel == '/' || *rel == '\\') rel++;
 	if (!*rel) return strdup(cpt_dst_root);
@@ -171,7 +172,12 @@ static char *cpt_dst_path(const char *srcpath)
 	    !__util_size_add(bytes, 2, &bytes)) { errno = ENOMEM; return NULL; }
 	out = malloc(bytes);
 	if (!out) { errno = ENOMEM; return NULL; }
-	sprintf(out, "%s/%s", cpt_dst_root, rel);
+	n = snprintf(out, bytes, "%s/%s", cpt_dst_root, rel);
+	if (n < 0 || (size_t)n >= bytes) {
+		free(out);
+		if (n >= 0) errno = EOVERFLOW;
+		return NULL;
+	}
 	return out;
 }
 
@@ -183,7 +189,7 @@ static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW 
 	(void)ftwbuf;
 	dstpath = cpt_dst_path(path);
 	if (!dstpath) {
-		fprintf(stderr, "cp: %s: %s\n", path, strerror(ENOMEM));
+		__util_diagf("cp: %s: %s\n", path, strerror(ENOMEM));
 		cpt_tree_failed = 1;
 		return 0;
 	}
@@ -193,7 +199,7 @@ static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW 
 		struct stat existing;
 		if (mkdir(dstpath, 0777) < 0 &&
 		    !(errno == EEXIST && stat(dstpath, &existing) == 0 && S_ISDIR(existing.st_mode))) {
-			fprintf(stderr, "cp: cannot create directory '%s': %s\n", dstpath, strerror(errno));
+			__util_diagf("cp: cannot create directory '%s': %s\n", dstpath, strerror(errno));
 			cpt_tree_failed = 1;
 		}
 		break;
@@ -206,16 +212,16 @@ static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW 
 		 * a link found mid-tree is genuinely ambiguous, and none of
 		 * the three is implemented, so this is refused rather than
 		 * guessed. */
-		fprintf(stderr, "cp: '%s': copying a symbolic link inside a directory "
+		__util_diagf("cp: '%s': copying a symbolic link inside a directory "
 		                "tree is not supported by this build\n", path);
 		cpt_tree_failed = 1;
 		break;
 	case FTW_DNR:
-		fprintf(stderr, "cp: cannot read directory '%s': %s\n", path, strerror(saved_errno));
+		__util_diagf("cp: cannot read directory '%s': %s\n", path, strerror(saved_errno));
 		cpt_tree_failed = 1;
 		break;
 	case FTW_NS:
-		fprintf(stderr, "cp: cannot stat '%s': %s\n", path, strerror(saved_errno));
+		__util_diagf("cp: cannot stat '%s': %s\n", path, strerror(saved_errno));
 		cpt_tree_failed = 1;
 		break;
 	default:
@@ -224,7 +230,7 @@ static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW 
 		 * as FTW_D above. Anything else nftw() might one day report
 		 * is a file type this build has no policy for -- see this
 		 * file's header on FIFOs/devices/sockets. */
-		fprintf(stderr, "cp: '%s': not a regular file, directory or symbolic "
+		__util_diagf("cp: '%s': not a regular file, directory or symbolic "
 		                "link -- not supported by this build\n", path);
 		cpt_tree_failed = 1;
 		break;
@@ -250,7 +256,7 @@ static int cpt_cb(const char *path, const struct stat *st, int type, struct FTW 
  * the two operands exactly as given. That is a real, stated gap, not a
  * silent guarantee: it catches the direct and by far the most likely
  * accidental case rather than every disguised one. */
-static int path_is_under_or_same(const char *child, const char *parent)
+static int path_is_under_or_same(const char *child, const char *parent) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t plen = strlen(parent);
 	size_t i;
@@ -274,7 +280,7 @@ static int path_is_under_or_same(const char *child, const char *parent)
 int __util_copy_tree(const char *src, const char *dst, int force)
 {
 	if (path_is_under_or_same(dst, src)) {
-		fprintf(stderr, "cp: cannot copy '%s' into itself, '%s'\n", src, dst);
+		__util_diagf("cp: cannot copy '%s' into itself, '%s'\n", src, dst);
 		return -1;
 	}
 
@@ -285,7 +291,7 @@ int __util_copy_tree(const char *src, const char *dst, int force)
 	cpt_tree_failed = 0;
 
 	if (nftw(src, cpt_cb, 15, FTW_PHYS) < 0) {
-		fprintf(stderr, "cp: cannot copy '%s': %s\n", src, strerror(errno));
+		__util_diagf("cp: cannot copy '%s': %s\n", src, strerror(errno));
 		return -1;
 	}
 	return cpt_tree_failed ? -1 : 0;
@@ -293,12 +299,12 @@ int __util_copy_tree(const char *src, const char *dst, int force)
 
 /* ==== "target/basename(source)", shared with src/util/mv.c ============= */
 
-char *__util_join_basename(const char *dir, const char *src)
+char *__util_join_basename(const char *dir, const char *src) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char *srccopy = strdup(src);
 	char *base, *out;
 	size_t dirlen, need;
-	int need_slash;
+	int need_slash, n;
 
 	if (!srccopy) return NULL;
 	base = basename(srccopy);   /* libgen.h; may write into srccopy */
@@ -307,30 +313,37 @@ char *__util_join_basename(const char *dir, const char *src)
 
 	need = dirlen + (need_slash ? 1 : 0) + strlen(base) + 1;
 	out = malloc(need);
-	if (out) sprintf(out, need_slash ? "%s/%s" : "%s%s", dir, base);
+	if (out) {
+		n = snprintf(out, need, need_slash ? "%s/%s" : "%s%s", dir, base);
+		if (n < 0 || (size_t)n >= need) {
+			free(out);
+			out = NULL;
+			if (n >= 0) errno = EOVERFLOW;
+		}
+	}
 	free(srccopy);
 	return out;
 }
 
 /* ==== dispatch: one operand ============================================= */
 
-static int cp_one(const char *src, const char *dst, int recursive, int force)
+static int cp_one(const char *src, const char *dst, int recursive, int force) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct stat sst, dst_st;
 
 	if (stat(src, &sst) < 0) {
-		fprintf(stderr, "cp: cannot stat '%s': %s\n", src, strerror(errno));
+		__util_diagf("cp: cannot stat '%s': %s\n", src, strerror(errno));
 		return -1;
 	}
 
 	if (stat(dst, &dst_st) == 0 && dst_st.st_dev == sst.st_dev && dst_st.st_ino == sst.st_ino) {
-		fprintf(stderr, "cp: '%s' and '%s' are the same file\n", src, dst);
+		__util_diagf("cp: '%s' and '%s' are the same file\n", src, dst);
 		return -1;
 	}
 
 	if (S_ISDIR(sst.st_mode)) {
 		if (!recursive) {
-			fprintf(stderr, "cp: -R not specified; omitting directory '%s'\n", src);
+			__util_diagf("cp: -R not specified; omitting directory '%s'\n", src);
 			return -1;
 		}
 		return __util_copy_tree(src, dst, force);
@@ -358,19 +371,19 @@ int __util_cp_main(int argc, char **argv)
 			if (*p == 'r' || *p == 'R') { recursive = 1; continue; }
 			if (*p == 'f') { force = 1; continue; }
 			if (*p == 'i' || *p == 'p' || *p == 'H' || *p == 'L' || *p == 'P') {
-				fprintf(stderr, "cp: -%c: not supported by this build; "
+				__util_diagf("cp: -%c: not supported by this build; "
 				                "refusing rather than silently ignoring it "
 				                "(see src/util/cp.c)\n", *p);
 				return 2;
 			}
-			fprintf(stderr, "cp: invalid option -- '%c'\n", *p);
+			__util_diagf("cp: invalid option -- '%c'\n", *p);
 			return 2;
 		}
 	}
 
 	nsrc = argc - 1 - i;
 	if (nsrc < 1) {
-		fprintf(stderr, "cp: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
+		__util_diagf("cp: missing %s\n", nsrc < 0 ? "operand" : "destination operand");
 		return 2;
 	}
 
@@ -381,7 +394,7 @@ int __util_cp_main(int argc, char **argv)
 		/* cp(1p) OPERANDS: "It shall be an error if ... target does
 		 * not name a directory" once more than one source_file is
 		 * given. */
-		fprintf(stderr, "cp: target '%s' is not a directory\n", target);
+		__util_diagf("cp: target '%s' is not a directory\n", target);
 		return 2;
 	}
 
@@ -391,7 +404,7 @@ int __util_cp_main(int argc, char **argv)
 		if (target_is_dir) {
 			char *dst = __util_join_basename(target, src);
 			if (!dst) {
-				fprintf(stderr, "cp: %s: %s\n", src, strerror(ENOMEM));
+				__util_diagf("cp: %s: %s\n", src, strerror(ENOMEM));
 				had_error = 1;
 				continue;
 			}

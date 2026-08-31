@@ -1,12 +1,17 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
 #include "pthread_impl.h"
 #include "plat_thread.h"
 
-_Noreturn void __pthread_cancel_trampoline(void);
+_Noreturn void __pthread_cancel_trampoline(void); // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 /* x86 branch: unchanged, still the literal `lock; cmpxchgl`/`lock;
  * xaddl` this project's pinned tcc (the only compiler the NT target
@@ -31,7 +36,7 @@ _Noreturn void __pthread_cancel_trampoline(void);
  * directly, so src/thread/nt/aarch64/atomic32.S's own banner is where
  * the real story (raw `.word`-encoded instructions, independently
  * verified) lives; this branch just calls into it. */
-static int compare_exchange(volatile int *address, int old_value,
+static int compare_exchange(volatile int *address, int old_value, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 	int new_value)
 {
 #if defined(__i386__) || defined(__x86_64__)
@@ -231,7 +236,7 @@ void __pthread_testcancel(void)
  * (`self->cancel_queued = 0;`) right after the lock, on every call. */
 static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2)
     __attribute__((nonnull(1)));
-static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2)
+static void __PLAT_APC_CALL cancel_apc(void *argument, void *unused1, void *unused2) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __pthread *self = argument;
 	int cancel = 0;
@@ -327,3 +332,5 @@ void pthread_testcancel(void)
 {
 	__pthread_testcancel();
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -10,6 +10,11 @@
  * returning entries -- telldir() afterward reports how far it actually
  * got, not the requested location.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include "dirent_internal.h"
 
 long telldir(DIR *dp)
@@ -24,3 +29,5 @@ void seekdir(DIR *dp, long loc)
 	while (dp->tell < loc)
 		if (!readdir(dp)) break;
 }
+
+// NOLINTEND(misc-include-cleaner)

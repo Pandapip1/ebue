@@ -113,7 +113,7 @@ static size_t read_all(int fd, char **out)
  * its terminating '\n', except possibly the last, which may run to
  * end-of-buffer instead.  *nlines is set to the total line count.
  * `index >= *nlines` is the caller's responsibility to check first. */
-static size_t nth_line_offset(const char *buf, size_t len, size_t index, size_t *nlines)
+static size_t nth_line_offset(const char *buf, size_t len, size_t index, size_t *nlines) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t i, n = 0, want_offset = 0;
 	int found = 0;
@@ -131,7 +131,7 @@ static size_t nth_line_offset(const char *buf, size_t len, size_t index, size_t 
 	return want_offset;
 }
 
-static int tail_one(int fd, enum tail_mode mode, int from_end, long long number, const char *label)
+static int tail_one(int fd, enum tail_mode mode, int from_end, long long number, const char *label) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	char *buf;
 	size_t len;
@@ -141,7 +141,7 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 	len = read_all(fd, &buf);
 	if (len == (size_t)-1) {
 		int saved = errno;
-		fprintf(stderr, "tail: %s: %s\n", label, strerror(saved));
+		__util_diagf("tail: %s: %s\n", label, strerror(saved));
 		return -1;
 	}
 
@@ -179,7 +179,7 @@ static int tail_one(int fd, enum tail_mode mode, int from_end, long long number,
 
 	if (write_all(buf + start, len - start) < 0) {
 		int saved = errno;
-		fprintf(stderr, "tail: %s: %s\n", label, strerror(saved));
+		__util_diagf("tail: %s: %s\n", label, strerror(saved));
 		rc = -1;
 	}
 	free(buf);
@@ -223,7 +223,7 @@ int __util_tail_main(int argc, char **argv)
 
 		if (!strcmp(a, "--")) { i++; break; }
 		if (!strcmp(a, "-f")) {
-			fprintf(stderr, "tail: -f: not implemented -- see src/util/tail.c\n");
+			__util_diagf("tail: -f: not implemented -- see src/util/tail.c\n");
 			return 1;
 		}
 		if (!strcmp(a, "-c") || !strcmp(a, "-n")) {
@@ -232,18 +232,18 @@ int __util_tail_main(int argc, char **argv)
 			long long num;
 
 			if (i + 1 >= argc) {
-				fprintf(stderr, "tail: %s: option requires an argument\n", a);
+				__util_diagf("tail: %s: option requires an argument\n", a);
 				return 1;
 			}
 			if (parse_signed_number(argv[++i], &fe, &num) < 0) {
-				fprintf(stderr, "tail: %s: invalid number\n", argv[i]);
+				__util_diagf("tail: %s: invalid number\n", argv[i]);
 				return 1;
 			}
 			mode = m; from_end = fe; number = num; mode_given = 1;
 			continue;
 		}
 		if (a[0] == '-' && a[1] != 0) {
-			fprintf(stderr, "tail: invalid option -- '%s'\n", a);
+			__util_diagf("tail: invalid option -- '%s'\n", a);
 			return 1;
 		}
 		break;
@@ -273,7 +273,7 @@ int __util_tail_main(int argc, char **argv)
 
 			fd = open(path, O_RDONLY);
 			if (fd < 0) {
-				fprintf(stderr, "tail: %s: %s\n", path, strerror(errno));
+				__util_diagf("tail: %s: %s\n", path, strerror(errno));
 				had_error = 1;
 				continue;
 			}

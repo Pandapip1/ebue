@@ -32,7 +32,7 @@ int __util_readlink_main(int argc, char **argv)
 	int i, status = 0;
 
 	if (argc < 2) {
-		fprintf(stderr, "readlink: missing operand\n");
+		__util_diagf("readlink: missing operand\n");
 		return 2;
 	}
 
@@ -40,7 +40,7 @@ int __util_readlink_main(int argc, char **argv)
 		char buf[PATH_MAX];
 		ssize_t n = readlink(argv[i], buf, sizeof buf - 1);
 		if (n < 0) {
-			fprintf(stderr, "readlink: %s: %s\n", argv[i], strerror(errno));
+			__util_diagf("readlink: %s: %s\n", argv[i], strerror(errno));
 			status = 1;
 			continue;
 		}
@@ -48,8 +48,8 @@ int __util_readlink_main(int argc, char **argv)
 		 * first byte past what it wrote, always in bounds since n is
 		 * bounded by "sizeof buf - 1" above. */
 		buf[n] = 0;
-		fputs(buf, stdout);
-		fputc('\n', stdout);
+		if (fputs(buf, stdout) < 0 || fputc('\n', stdout) == EOF) status = 1;
 	}
+	if (fflush(stdout) != 0) status = 1;
 	return status;
 }

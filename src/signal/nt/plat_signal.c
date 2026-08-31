@@ -7,6 +7,11 @@
  * this file existed, inline inside src/signal/signal.c and
  * sigdelivery.c; nothing changed in substance, only location.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <errno.h>
 #include <signal.h>
 #include <string.h>
@@ -33,7 +38,7 @@ __plat_handle_t __plat_sigevent_create(int initially_signalled)
  * exist per the ODR. Kept where the other generic sync primitives
  * (__plat_event_create() et al.) live; this file just uses it. */
 
-void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks)
+void __plat_signal_wait(__plat_handle_t wake_event, int has_timeout, long long ticks) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	LARGE_INTEGER t;
 
@@ -205,7 +210,7 @@ int __plat_process_suspend(__plat_handle_t h)
  * abstraction migration, and only one definition may exist per the ODR.
  * Kept where process lifecycle otherwise lives; this file just uses it. */
 
-int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out)
+int __plat_kill_open(pid_t pid, int want_suspend_resume, __plat_handle_t *out) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	OBJECT_ATTRIBUTES oa;
 	CLIENT_ID cid;
@@ -245,3 +250,5 @@ int __plat_segv_code(void *addr)
 	if (!NT_SUCCESS(st)) return SEGV_MAPERR;
 	return mbi.State == MEM_COMMIT ? SEGV_ACCERR : SEGV_MAPERR;
 }
+
+// NOLINTEND(misc-include-cleaner)

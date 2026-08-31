@@ -26,6 +26,11 @@
  * strncasecmp_l() do -- src/misc/locale.c never produces a locale
  * other than C/POSIX, so there is no second behaviour to select.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <wchar.h>
 #include <wctype.h>
 #include <locale.h>
@@ -55,3 +60,5 @@ int wcsncasecmp_l(const wchar_t *l, const wchar_t *r, size_t n, locale_t loc)
 	(void)loc;
 	return wcsncasecmp(l, r, n);
 }
+
+// NOLINTEND(misc-include-cleaner)

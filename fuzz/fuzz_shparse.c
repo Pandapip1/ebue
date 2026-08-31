@@ -171,8 +171,11 @@ static char *reprint(const struct sh_list *l)
 	FILE *f = open_memstream(&buf, &n);
 
 	if (!f) return 0;
-	__sh_print_list(f, l);
-	if (fclose(f) != 0) { free(buf); return 0; }
+	{
+		int printed = __sh_print_list(f, l);
+		int closed = fclose(f);
+		if (printed != 0 || closed != 0) { free(buf); return 0; }
+	}
 	return buf;
 }
 

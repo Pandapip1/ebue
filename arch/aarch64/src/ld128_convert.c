@@ -97,7 +97,7 @@ static uint64_t tf_shr(uint64_t x, int n) { return (n <= 0) ? x : (n >= 64) ? 0 
 static uint64_t tf_shl(uint64_t x, int n) { return (n <= 0) ? x : (n >= 64) ? 0 : (x << n); }
 
 /* Bit `pos` (0 = LSB) of the conceptual 128-bit value (hi:lo). */
-static int tf_bit(uint64_t hi, uint64_t lo, int pos)
+static int tf_bit(uint64_t hi, uint64_t lo, int pos) // NOLINT(bugprone-easily-swappable-parameters) -- hi and lo are distinct halves of the binary128 value
 {
 	if (pos < 0) return 0;
 	if (pos < 64) return (int)((lo >> pos) & 1);
@@ -105,7 +105,7 @@ static int tf_bit(uint64_t hi, uint64_t lo, int pos)
 }
 
 /* Is any bit in [pos-1:0] of (hi:lo) set? (pos <= 0: no such bits) */
-static int tf_any_below(uint64_t hi, uint64_t lo, int pos)
+static int tf_any_below(uint64_t hi, uint64_t lo, int pos) // NOLINT(bugprone-easily-swappable-parameters) -- hi and lo are distinct halves of the binary128 value
 {
 	uint64_t mask_lo, mask_hi;
 	if (pos <= 0) return 0;
@@ -130,7 +130,7 @@ static uint64_t tf_shr128_lo(uint64_t hi, uint64_t lo, int n)
 
 /* Round-to-nearest-even: does adding 1 to `mant` (the caller's job, note
  * the possible carry-out) follow from this guard/sticky pair? */
-static int tf_round_up(uint64_t mant, int guard, int sticky)
+static int tf_round_up(uint64_t mant, int guard, int sticky) // NOLINT(bugprone-easily-swappable-parameters) -- guard and sticky have distinct rounding roles
 {
 	if (!guard) return 0;
 	if (sticky) return 1;

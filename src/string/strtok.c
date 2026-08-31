@@ -1,11 +1,19 @@
 /* SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <string.h>
 
 char *strtok(char *__restrict s, const char *__restrict sep)
 {
 	static char *p;
-	if (!s && !(s = p)) return 0;
+	if (!s) {
+		s = p;
+		if (!s) return 0;
+	}
 	s += strspn(s, sep);
 	if (!*s) return p = 0;
 	p = s + strcspn(s, sep);
@@ -13,3 +21,5 @@ char *strtok(char *__restrict s, const char *__restrict sep)
 	else p = 0;
 	return s;
 }
+
+// NOLINTEND(misc-include-cleaner)

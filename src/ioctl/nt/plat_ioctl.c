@@ -8,6 +8,11 @@
  * addition of a POSIX-shaped return (0/-1 with errno set) in place of
  * a raw NTSTATUS.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <limits.h>
 #include "libc.h"
 #include "plat_ioctl.h"
@@ -23,7 +28,7 @@ int __plat_fionread_pipe(__plat_handle_t h, int *out)
 	return 0;
 }
 
-int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos)
+int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	FILE_STANDARD_INFORMATION si;
@@ -38,3 +43,5 @@ int __plat_file_eof_and_pos(__plat_handle_t h, long long *eof, long long *pos)
 	*pos = pi.CurrentByteOffset;
 	return 0;
 }
+
+// NOLINTEND(misc-include-cleaner)

@@ -146,7 +146,7 @@ int __util_tsort_main(int argc, char **argv)
 	size_t queue_head, ready_count;
 
 	if (argc > 2) {
-		fprintf(stderr, "tsort: too many operands\n");
+		__util_diagf("tsort: too many operands\n");
 		return 1;
 	}
 	if (argc == 2) {
@@ -154,14 +154,21 @@ int __util_tsort_main(int argc, char **argv)
 			f = stdin;
 		} else {
 			f = fopen(argv[1], "r");
-			if (!f) { fprintf(stderr, "tsort: %s: %s\n", argv[1], strerror(errno)); return 1; }
+			if (!f) { __util_diagf("tsort: %s: %s\n", argv[1], strerror(errno)); return 1; }
 			have_file = 1;
 		}
 	}
 
 	buf = slurp(f, &len);
-	if (have_file) fclose(f);
-	if (!buf) { fprintf(stderr, "tsort: out of memory\n"); return 1; }
+	if (!buf) {
+		int saved = errno ? errno : ENOMEM;
+		/* Allocation/read failure is primary; close only releases the input. */
+		if (have_file) (void)fclose(f);
+		errno = saved;
+		__util_diagf("tsort: out of memory\n");
+		return 1;
+	}
+	if (have_file && fclose(f) != 0) { free(buf); return 1; }
 
 	/* Tokenize on runs of whitespace. */
 	while (pos < len) {
@@ -174,10 +181,10 @@ int __util_tsort_main(int argc, char **argv)
 			size_t newcap;
 			char **g;
 			if (!__util_array_capacity(tokcap, ntok, 1, 64, sizeof *tok, &newcap)) {
-				fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1;
+				__util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1;
 			}
-			g = __util_reallocarray(tok, newcap, sizeof *tok);
-			if (!g) { fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1; }
+			g = (char **)__util_reallocarray((void *)tok, newcap, sizeof *tok);
+			if (!g) { __util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1; }
 			tok = g;
 			tokcap = newcap;
 		}
@@ -192,8 +199,8 @@ int __util_tsort_main(int argc, char **argv)
 	}
 
 	if (ntok % 2) {
-		fprintf(stderr, "tsort: odd number of tokens (%lu) -- input is not pairs\n", (unsigned long)ntok);
-		free(tok);
+		__util_diagf("tsort: odd number of tokens (%lu) -- input is not pairs\n", (unsigned long)ntok);
+		free((void *)tok);
 		free(buf);
 		return 1;
 	}
@@ -201,12 +208,12 @@ int __util_tsort_main(int argc, char **argv)
 	for (i = 0; i < ntok; i += 2) {
 		int a = get_or_add(tok[i]);
 		int b = get_or_add(tok[i + 1]);
-		if (a < 0 || b < 0) { fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1; }
+		if (a < 0 || b < 0) { __util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1; }
 		if (a != b && add_edge(a, b) < 0) {
-			fprintf(stderr, "tsort: out of memory\n"); free(tok); free(buf); return 1;
+			__util_diagf("tsort: out of memory\n"); free((void *)tok); free(buf); return 1;
 		}
 	}
-	free(tok);
+	free((void *)tok);
 	free(buf);
 
 	{
@@ -214,7 +221,7 @@ int __util_tsort_main(int argc, char **argv)
 		size_t qtail = 0;
 		size_t n;
 
-		if (!queue && nnodes) { fprintf(stderr, "tsort: out of memory\n"); return 1; }
+		if (!queue && nnodes) { __util_diagf("tsort: out of memory\n"); return 1; }
 
 		for (n = 0; n < nnodes; n++)
 			if (nodes[n].indeg == 0) queue[qtail++] = (int)n;
@@ -241,10 +248,10 @@ int __util_tsort_main(int argc, char **argv)
 	cycle = ready_count < nnodes;
 	if (cycle) {
 		size_t n;
-		fprintf(stderr, "tsort: cycle in input; unresolved:");
+		__util_diagf("tsort: cycle in input; unresolved:");
 		for (n = 0; n < nnodes; n++)
-			if (!nodes[n].done) fprintf(stderr, " %s", nodes[n].name);
-		fprintf(stderr, "\n");
+			if (!nodes[n].done) __util_diagf(" %s", nodes[n].name);
+		__util_diagf("\n");
 	}
 
 	for (i = 0; i < nnodes; i++) {

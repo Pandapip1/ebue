@@ -242,7 +242,7 @@ fail:
  * `tmpl`'s object -- that invariant lived only in catopen()'s two call
  * sites, not in anything expand() itself could see. */
 static size_t expand(char *buf, size_t bufsz, const char *tmpl,
-                     size_t tmpllen, const char *name, const char *lang)
+                     size_t tmpllen, const char *name, const char *lang) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	size_t i = 0;
 	const char *p, *end = tmpl + tmpllen;
@@ -345,7 +345,7 @@ nl_catd catopen(const char *name, int oflag)
 	return (nl_catd)-1;
 }
 
-char *catgets(nl_catd catd, int set_id, int msg_id, const char *s)
+char *catgets(nl_catd catd, int set_id, int msg_id, const char *s) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	const unsigned char *m = (const unsigned char *)catd;
 	const unsigned char *sets, *msgs, *strings;

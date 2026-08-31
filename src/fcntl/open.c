@@ -14,6 +14,11 @@
  * FILE_ATTRIBUTE_READONLY also mirrors the aggregate write bits for
  * ordinary Windows programs.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -91,3 +96,5 @@ int creat(const char *path, mode_t mode)
 {
 	return open(path, O_CREAT | O_WRONLY | O_TRUNC, mode);
 }
+
+// NOLINTEND(misc-include-cleaner)

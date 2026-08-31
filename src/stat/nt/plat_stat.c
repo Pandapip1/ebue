@@ -24,6 +24,11 @@
  * is the identical sequence each front door used to run inline, verified
  * line for line against the pre-refactor version.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <fcntl.h>
@@ -173,7 +178,7 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	return 0;
 }
 
-int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode)
+int __plat_chmodat(int dirfd, const char *path, int flags, mode_t mode) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct __ntpath np;
 	IO_STATUS_BLOCK io;
@@ -291,8 +296,8 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
  * number can ever equal, while still keeping __STAT_DEV_PIPE and
  * __STAT_DEV_CHAR distinct from each other -- so a pipe can never be
  * mistaken for a console/char device, or either for a real file. */
-#define __STAT_DEV_PIPE ((dev_t)0xFFFFFFFF00000001ULL)
-#define __STAT_DEV_CHAR ((dev_t)0xFFFFFFFF00000002ULL)
+#define __STAT_DEV_PIPE ((dev_t)0xFFFFFFFF00000001ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
+#define __STAT_DEV_CHAR ((dev_t)0xFFFFFFFF00000002ULL) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 
 /* FNV-1a, a well-known 64-bit hash (offset basis and prime from the
  * canonical spec, http://www.isthe.com/chongo/tech/comp/fnv/), used
@@ -354,7 +359,7 @@ static ino_t fnv1a64(const void *data, size_t n)
  *    as different files.  This only happens when both a
  *    FileInternalInformation query and an object-name query find
  *    nothing to work with, which nothing observed so far exercises. */
-static ino_t __fstat_synthetic_ino(HANDLE h)
+static ino_t __fstat_synthetic_ino(HANDLE h) // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) -- libc-internal name is intentionally reserved against application collision
 {
 	IO_STATUS_BLOCK io;
 	FILE_INTERNAL_INFORMATION ii;
@@ -380,7 +385,7 @@ static unsigned getle16(const unsigned char *p)
 	return (unsigned)p[0] | (unsigned)p[1] << 8;
 }
 
-static int read_at(HANDLE h, void *buffer, unsigned length, long long offset)
+static int read_at(HANDLE h, void *buffer, unsigned length, long long offset) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	IO_STATUS_BLOCK io;
 	LARGE_INTEGER position = offset;
@@ -429,7 +434,7 @@ done:
 	return result;
 }
 
-static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe,
+static mode_t mode_from_attrs(ULONG attrs, ULONG tag, int exe, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                               int have_lxmod, unsigned lxmod)
 {
 	mode_t m;
@@ -770,3 +775,5 @@ int __plat_set_times_at(int dirfd, const char *path, int flags, const struct tim
 	NtClose(h);
 	return r;
 }
+
+// NOLINTEND(misc-include-cleaner)
