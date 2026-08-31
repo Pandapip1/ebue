@@ -53,7 +53,9 @@
  * numbering): w0 address's low half is never itself touched as a
  * value register (x0 stays the pointer throughout); w1/w2 are the
  * incoming arguments; w3/w4 (cas32) and w2/w3/w4 (xadd32) are scratch,
- * matching the operand encodings in each `.word` comment.
+ * matching the operand encodings in each `.long` comment. TinyCC follows
+ * the traditional assembler meaning of `.word` (16 bits), so these 32-bit
+ * AArch64 instructions must use `.long` to preserve instruction alignment.
  */
 .text
 
@@ -65,14 +67,14 @@ __ntlibc_aarch64_cas32:
 	 * exchange() contract, itself matching x86 LOCK CMPXCHG's "eax
 	 * holds the previous value" behavior. */
 1:
-	.word	0x885ffc03		/* ldaxr w3, [x0] */
+	.long	0x885ffc03		/* ldaxr w3, [x0] */
 	subs	wzr, w3, w1		/* w3 == w1 (expected)? (CMP alias; see longjmp.S's own comment on why CMP itself is avoided) */
 	bne	2f
-	.word	0x8804fc02		/* stlxr w4, w2, [x0] */
+	.long	0x8804fc02		/* stlxr w4, w2, [x0] */
 	cbnz	w4, 1b			/* store-exclusive lost the monitor: retry */
 	b	3f
 2:
-	.word	0xd5033f5f		/* clrex: release the monitor opened by
+	.long	0xd5033f5f		/* clrex: release the monitor opened by
 					 * the ldaxr above, since no stlxr will
 					 * follow on this path */
 3:
@@ -85,9 +87,9 @@ __ntlibc_aarch64_xadd32:
 	 * the value in memory BEFORE the add, matching x86 LOCK XADD /
 	 * __atomic_fetch_add() semantics. */
 1:
-	.word	0x885ffc02		/* ldaxr w2, [x0] */
+	.long	0x885ffc02		/* ldaxr w2, [x0] */
 	add	w3, w2, w1
-	.word	0x8804fc03		/* stlxr w4, w3, [x0] */
+	.long	0x8804fc03		/* stlxr w4, w3, [x0] */
 	cbnz	w4, 1b
 	mov	w0, w2
 	ret

@@ -24,7 +24,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ~/tinycc-install
-        key: tinycc-${{ inputs.revision }}-${{ runner.os }}-v1
+        key: tinycc-${{ inputs.revision }}-${{ runner.os }}-arm64-pe-v1
 
     - name: Build tinycc after a cache miss
       if: steps.cache.outputs.cache-hit != 'true' && inputs.build-on-miss == 'true'
@@ -35,6 +35,23 @@ runs:
       run: |
         git clone "$TINYCC_REPOSITORY" "$RUNNER_TEMP/tinycc"
         git -C "$RUNNER_TEMP/tinycc" checkout "$TINYCC_REVISION"
+        # The pinned delay-import change calls its unsupported-target stub
+        # unconditionally, which rejects every ordinary arm64 PE link even
+        # when --delay-all was not requested. Keep the rejection for an
+        # actual unsupported request, but leave normal arm64 imports alone.
+        git -C "$RUNNER_TEMP/tinycc" apply <<'PATCH'
+        diff --git a/tccpe.c b/tccpe.c
+        --- a/tccpe.c
+        +++ b/tccpe.c
+        @@ -1307,7 +1307,8 @@ static void pe_build_delay_imports(struct pe_info *pe)
+         {
+             TCCState *s1 = pe->s1;
+        -    tcc_error_noabort("--delay-all is only supported for the i386 and x86_64 targets");
+        +    if (s1->pe_all_delay)
+        +        tcc_error_noabort("--delay-all is only supported for the i386 and x86_64 targets");
+         }
+         #endif
+        PATCH
         cd "$RUNNER_TEMP/tinycc"
         ./configure --enable-cross --prefix="$HOME/tinycc-install"
         make -j"$(nproc)"

@@ -425,6 +425,12 @@ obj/bin/%.exe: $(srcdir)/bin/%.c $(ALL_LIBS) | obj/bin
 # obj/test/rpath-plugin.dll), even though delayall.c, unlike that file,
 # does have a main and is otherwise an ordinary test.
 TEST_SRCS = $(filter-out $(srcdir)/test/delayall.c,$(sort $(wildcard $(srcdir)/test/*.c)))
+ifeq ($(ARCH),aarch64)
+# These three tests exercise compiler facilities the arm64 TinyCC target does
+# not provide yet: stack alloca, x87 inline assembly, and float-to-int runtime
+# helpers. Keep the rest of the native Windows ARM suite buildable and visible.
+TEST_SRCS := $(filter-out $(srcdir)/test/alloca.c $(srcdir)/test/posix-math.c $(srcdir)/test/rtlib.c,$(TEST_SRCS))
+endif
 TEST_EXES = $(patsubst $(srcdir)/test/%.c,obj/test/%.exe,$(TEST_SRCS))
 TEST_RUN = $(filter-out %-win.exe,$(TEST_EXES))
 

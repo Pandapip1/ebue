@@ -132,10 +132,9 @@ jobs:
         if: matrix.arch == 'x86_64'
         run: tools/linux-build-dlfcn-cross.sh x86_64
 
-  # The x86 legs produce the exact PE files consumed on real Windows.  The
-  # arm64 row lives in this same build matrix, but stops at the complete
-  # library and CRT archives until tinycc's arm64 PE linker can link ntlibc's
-  # full test images (its branch-relocation support is not there yet).
+  # Every row produces the exact PE files consumed by its matching native
+  # Windows runner below, including arm64 rather than treating that row as a
+  # compile-only archive check.
   build-test-exes:
     needs: build-toolchain
     runs-on: ubuntu-24.04
@@ -147,7 +146,7 @@ jobs:
           - { host: i386-win32, cc: i386-win32-tcc, kernel32: disable, name: i386, target: test-exes, upload: true }
           - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: disable, name: x86_64, target: test-exes, upload: true }
           - { host: x86_64-win32, cc: x86_64-win32-tcc, kernel32: enable, name: x86_64-kernel32, target: test-exes, upload: true }
-          - { host: arm64-win32, cc: arm64-win32-tcc, kernel32: disable, name: arm64, target: "lib/libc.a lib/crt1.o lib/delayload2.o", upload: false }
+          - { host: arm64-win32, cc: arm64-win32-tcc, kernel32: disable, name: arm64, target: test-exes, upload: true }
     name: Windows build (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v7
@@ -263,15 +262,16 @@ jobs:
 
   windows-test:
     needs: build-test-exes
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: i386, arch: i386, kernel32: no }
-          - { name: x86_64, arch: x86_64, kernel32: no }
-          - { name: x86_64-kernel32, arch: x86_64, kernel32: yes }
+          - { name: i386, arch: i386, kernel32: no, runner: windows-latest }
+          - { name: x86_64, arch: x86_64, kernel32: no, runner: windows-latest }
+          - { name: x86_64-kernel32, arch: x86_64, kernel32: yes, runner: windows-latest }
+          - { name: arm64, arch: aarch64, kernel32: no, runner: windows-11-arm }
     steps:
       - uses: actions/checkout@v7
       - name: Download test binaries
