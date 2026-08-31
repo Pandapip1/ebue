@@ -15,7 +15,7 @@ int getsubopt(char **opt, char *const *keys, char **val)
 
 	for (i = 0; keys[i]; i++) {
 		size_t l = strlen(keys[i]);
-		if (strncmp(keys[i], s, l)) continue;
+		if (strncmp(keys[i], s, l)) continue; // NOLINT(bugprone-suspicious-string-compare) -- any nonzero result intentionally skips a nonmatching key prefix
 		if (s[l] == '=') *val = s + l + 1;
 		else if (s[l]) continue;
 		return (int)i;

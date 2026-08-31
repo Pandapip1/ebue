@@ -41,7 +41,7 @@ int __util_pwd_main(int argc, char **argv)
 	char *cwd;
 
 	for (i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-L") && strcmp(argv[i], "-P")) {
+		if (strcmp(argv[i], "-L") && strcmp(argv[i], "-P")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero from both calls intentionally means neither supported option matches
 			__util_diagf("pwd: %s: unsupported option or operand -- "
 			                "pwd(1p) takes no operands\n", argv[i]);
 			return 2;
