@@ -2,16 +2,11 @@
  * SPDX-FileCopyrightText: (C) 2026 Gavin John
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Replacements for the three third_party/libc-test/src/common helpers
- * that cannot do their job against this library -- one that will not
- * compile at all, two that compile and cannot mean anything here.
+ * Replacements for the two helpers whose upstream implementation cannot do
+ * its job against this library.
  *
- * Which three, and why each is here rather than upstream's version:
+ * Which two, and why each is here rather than upstream's version:
  *
- *   t_vmfill   upstream vmfill.c needs <sys/mman.h>; there is no mmap()
- *              in this library and no header to include.  Exhausting
- *              the virtual address space is the *premise* of the two
- *              tests that call it, so a stub cannot substitute for it.
  *   t_setrlim  upstream setrlim.c compiles (we do ship
  *              <sys/resource.h>), but setrlimit() here does not enforce
  *              anything -- see src/misc/resource.c -- so "the limit is
@@ -47,8 +42,8 @@
  * tools/libc-test.sh turns any test whose output contains that marker
  * into rc=77 ("unverified"), never a pass -- the same rule it applies
  * to Wine's RtlCloneUserProcess abort, and for the same reason: on real
- * Windows, or on a future build of this library that has mmap and
- * enforced rlimits, these tests must be able to become real passes or
+ * Windows, or on a future build of this library that has enforced
+ * rlimits, these tests must be able to become real passes or
  * real failures without anyone editing an exclusion list.
  *
  * The marker text is load-bearing.  tools/libc-test.sh greps for it
@@ -61,14 +56,6 @@
 #include "test.h"
 
 #define SHIM_MARK "SHIM-STUBBED: "
-
-int t_vmfill(void **p, size_t *n, int len)
-{
-	(void)p; (void)n; (void)len;
-	t_printf(SHIM_MARK "t_vmfill: no <sys/mman.h>/mmap() on this target;"
-	    " the virtual address space was NOT filled\n");
-	return -1;
-}
 
 int t_setrlim(int r, long lim)
 {
@@ -83,4 +70,3 @@ void t_fdfill(void)
 	t_printf(SHIM_MARK "t_fdfill: no enforced RLIMIT_NOFILE on this"
 	    " target; the descriptor table was NOT filled\n");
 }
-

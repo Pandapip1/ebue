@@ -46,9 +46,9 @@
 #                             accounting restated as a build error, and
 #                             it is evidence of nothing about behaviour.
 #   output contains the    -> NA for this runtime. The shim
-#   shim's stub marker        stubs four helpers it cannot implement here
-#                             (no mmap, no enforced rlimits, no
-#                             langinfo); a test whose premise was stubbed
+#   shim's stub marker        stubs two helpers it cannot implement here
+#                             (both need enforced resource limits); a test
+#                             whose premise was stubbed
 #                             out did not check its premise.
 #   output contains Wine's -> NA for this runtime. Detected at run time from
 #   RtlCloneUserProcess       the output, never from a static list: these
@@ -377,9 +377,10 @@ fi
 
 # ----------------------------------------------------------------- build
 
-# The helpers we keep from upstream's src/common.  vmfill.c, setrlim.c
-# and fdfill.c are deliberately absent: test/libc-test-shim.c replaces
-# them (see its header for each one's reason).
+# The helpers we keep from upstream's src/common. setrlim.c and fdfill.c are
+# deliberately absent: test/libc-test-shim-src/libc-test-shim.c replaces them
+# (see its header for each one's reason). vmfill.c is real: mmap()'s registry
+# grows dynamically, so the helper can run to actual address-space exhaustion.
 #
 # utf8.c used to be on that absent list and no longer is.  It needs
 # <langinfo.h> and nl_langinfo(CODESET), which this library now has
@@ -390,7 +391,7 @@ fi
 # this target, UTF-8 being the only encoding this library has.  Running
 # the real helper rather than a stub is what lets the tests behind it
 # be adjudicated on their behaviour instead of parked as unverified.
-HELPERS="print rand path memfill utf8"
+HELPERS="print rand path memfill utf8 vmfill"
 hobjs=""
 for h in $HELPERS; do
 	# shellcheck disable=SC2086  # $CC/$CFLAGS_*/$INC are word lists from
@@ -507,7 +508,12 @@ export W WINE
 exes=""
 for f in $corpus; do
 	n=$(basename "$f" .c)
-	[ -x "obj/libc-test/$n.exe" ] && exes="$exes $srcdir/obj/libc-test/$n.exe"
+	# A binary from an earlier run may still exist after this profile marks
+	# the case NA/BUG/UNIMPL. Only execute cases this invocation actually
+	# built; filesystem existence alone makes stale artifacts bypass policy.
+	[ "$(cat "$W/out/$n.state" 2>/dev/null)" = built ] &&
+		[ -x "obj/libc-test/$n.exe" ] &&
+		exes="$exes $srcdir/obj/libc-test/$n.exe"
 done
 run_start=$(date +%s)
 echo "libc-test: running $(echo "$exes" | wc -w) built test(s) with $LIBC_TEST_JOBS worker(s) ..." >&2
