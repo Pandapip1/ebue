@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <pthread.h>
 #include <errno.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -87,6 +88,74 @@ static void test_rwlock_timed_acquisition(void)
 	CHECK(pthread_rwlock_destroy(&lock) == 0);
 }
 
+/* XBD 2.3 Error Numbers: "For each thread of a process, the value of
+ * errno shall not be affected by function calls or assignments to
+ * errno by other threads."  src/internal/errno.c already implements
+ * this as a real `static __thread int __errno_val` (cited there
+ * against the same clause plus C11 7.5p2); this is the live,
+ * two-thread proof that the promise holds end to end rather than just
+ * at the storage-class level -- a thread's own errno must read back
+ * unchanged across a sibling thread's own concurrent errno write, and
+ * a freshly created thread must not see a value the creator set in
+ * its own errno beforehand. */
+struct errno_isolation_case {
+	sem_t child_set;
+	sem_t parent_checked;
+	int child_saw_parent_value;
+};
+
+static void *errno_isolation_thread(void *argument)
+{
+	struct errno_isolation_case *c = argument;
+
+	/* Distinct per-thread storage, not a cell shared with the creator:
+	 * a brand new thread must not read back the sentinel the parent
+	 * set in its own errno before creating this one. */
+	c->child_saw_parent_value = (errno == EACCES);
+
+	errno = ENOMEM;
+	CHECK(errno == ENOMEM);
+	CHECK(sem_post(&c->child_set) == 0);
+
+	/* Held here, still with errno == ENOMEM, while the parent checks
+	 * that this write left its own errno untouched. */
+	CHECK(sem_wait(&c->parent_checked) == 0);
+	return NULL;
+}
+
+static void test_errno_thread_isolation(void)
+{
+	struct errno_isolation_case c;
+	pthread_t th;
+
+	errno = EACCES;
+	CHECK(sem_init(&c.child_set, 0, 0) == 0);
+	CHECK(sem_init(&c.parent_checked, 0, 0) == 0);
+	c.child_saw_parent_value = -1;
+
+	CHECK(pthread_create(&th, NULL, errno_isolation_thread, &c) == 0);
+
+	/* Blocks until the child has both read its own initial errno and
+	 * overwritten it with ENOMEM, so the checks below are ordered
+	 * after both. */
+	CHECK(sem_wait(&c.child_set) == 0);
+
+	CHECK(c.child_saw_parent_value == 0);
+	/* The child's assignment to its own errno must not leak back:
+	 * this thread's errno is still exactly what it set before
+	 * pthread_create(), not the child's ENOMEM. */
+	CHECK(errno == EACCES);
+
+	CHECK(sem_post(&c.parent_checked) == 0);
+	CHECK(pthread_join(th, NULL) == 0);
+	/* The join happens-after the child's own errno write; this
+	 * thread's errno must still be untouched by it. */
+	CHECK(errno == EACCES);
+
+	CHECK(sem_destroy(&c.child_set) == 0);
+	CHECK(sem_destroy(&c.parent_checked) == 0);
+}
+
 int main(void)
 {
 	test_atfork();
@@ -94,5 +163,6 @@ int main(void)
 	test_mutex_extensions();
 	test_condition_validation();
 	test_rwlock_timed_acquisition();
+	test_errno_thread_isolation();
 	return fails != 0;
 }

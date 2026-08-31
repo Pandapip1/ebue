@@ -125,6 +125,58 @@ static void test_identity(void)
 }
 
 /* ============================================================
+ * "The new process (child process) shall be an exact copy of the
+ *  calling process (parent process) except as detailed below:" --
+ *  fork.html DESCRIPTION's own lead sentence, followed by the
+ *  enumerated list test_shared_open_file_description() and the other
+ *  clause tests in this file each cover one item of.  errno is not a
+ *  Special Process Attribute, not a file descriptor, not a signal
+ *  disposition, not any of the other named exceptions -- it is
+ *  ordinary per-thread memory in the calling thread's own storage
+ *  (src/internal/errno.c's `static __thread int __errno_val`), so it
+ *  is covered only by the lead sentence itself: whatever the parent's
+ *  errno held at the instant of the call is what the child's copy
+ *  holds too, not 0.  Nothing in this page's DESCRIPTION, RETURN
+ *  VALUE, or APPLICATION USAGE sections says otherwise.
+ * ============================================================ */
+static void test_errno_inherited_not_cleared(void)
+{
+	pid_t pid;
+	int fd[2];
+	int child_errno = -1;
+
+	CHECK(pipe(fd) == 0);
+
+	/* A real failing call, not a bare assignment to errno, so this
+	 * also proves the clause for errno exactly as this library sets
+	 * it, not just for a hand-picked int stashed in the same cell. */
+	errno = 0;
+	CHECK(close(-1) == -1);
+	CHECK(errno == EBADF);
+
+	pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		int e = errno;
+		close(fd[0]);
+		(void)write(fd[1], &e, sizeof e);
+		close(fd[1]);
+		_exit(RC_OK);
+	}
+	close(fd[1]);
+	CHECK(read(fd[0], &child_errno, sizeof child_errno) == (ssize_t)sizeof child_errno);
+	close(fd[0]);
+
+	if (child_errno != EBADF)
+		printf("    errno_inherited: child errno=%d, want EBADF=%d (0 would mean the child cleared it)\n",
+		       child_errno, EBADF);
+	CHECK(child_errno == EBADF);
+	CHECK(errno == EBADF);		/* the parent's own copy is unmoved too */
+
+	CHECK(wait_child(pid) == RC_OK);
+}
+
+/* ============================================================
  * "The child process shall have its own copy of the parent's file
  *  descriptors.  Each of the child's file descriptors shall refer to
  *  the same open file description with the corresponding file
@@ -451,6 +503,7 @@ int main(void)
 	CHECK(chdir(dir) == 0);
 
 	test_identity();
+	test_errno_inherited_not_cleared();
 	test_shared_open_file_description();
 	test_locks_not_inherited();
 	test_child_state_reset();
