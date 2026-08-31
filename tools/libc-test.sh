@@ -13,9 +13,21 @@
 # 22 behavioural defects on the first run. A ledger must make those known
 # states reviewable without turning into an append-only exemption list.
 #
-#   * Every test in the corpus must have exactly one line in
-#     test/libc-test-expected.txt.  A test in the corpus with no line is
-#     a hard error, not a default-to-ignored.
+#   * test/libc-test-expected.txt lists only the tests whose disposition
+#     deviates from PASS, plus one trailing wildcard row (case "*") that
+#     declares PASS as this corpus's own default for every test with no
+#     more specific row -- the same mechanism test/posix-opts-expected.txt
+#     uses (commit 93bbaa3, "test: default posix-opts cases to PASS via an
+#     explicit wildcard row"; tools/testlib.py's resolve() is what applies
+#     it). Which tests are real is independent of what the ledger lists:
+#     this script globs third_party/libc-test/src/{functional,regression}
+#     itself and hands that list to test-policy.py's --cases-file, so a
+#     trimmed ledger cannot silently drop a real test from adjudication --
+#     an unlisted one still resolves, just via the wildcard row rather than
+#     an explicit one. A test built/run here that is in neither the ledger
+#     nor that independently-discovered list is still a hard error: today
+#     that can only be the on-demand math corpus below, which deliberately
+#     carries no ledger rows at all.
 #   * Pedantic requires BUG to compile and fail and UNIMPL not to compile.
 #     A fixed defect therefore forces the ledger to be updated.
 #   * The ledger carries pinned counts in its header, and this script
@@ -107,7 +119,7 @@ case "$NTLIBC_TEST_MODE" in
 	*) echo "libc-test: NTLIBC_TEST_MODE must be normal, pedantic or strict." >&2; exit 2 ;;
 esac
 
-usage() { sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ------------------------------------------------------- the submodule
 
@@ -151,7 +163,13 @@ require_suite() {
 # ---------------------------------------------------------------- ledger
 
 # Parsed once into three shell-safe lookup files rather than re-grepped
-# per test.
+# per test. $2, if given, is a newline-separated file naming the real,
+# independently-discovered case list (see its construction below, right
+# before this is called) -- passed straight through to test-policy.py's
+# --cases-file so an unlisted real case still resolves via the ledger's
+# wildcard row instead of vanishing from adjudication. --selftest calls
+# this with no $2: it only checks that the ledger parses, and does not
+# require the corpus to be checked out at all.
 read_ledger() {
 	[ -f "$LEDGER" ] || { echo "libc-test: missing $LEDGER" >&2; return 1; }
 	awk -v out="$1" '
@@ -179,11 +197,13 @@ read_ledger() {
 	for term in $NTLIBC_TEST_PROFILE; do
 		profile_args="$profile_args --profile $term"
 	done
+	cases_args=""
+	[ -n "${2:-}" ] && cases_args="--cases-file $2"
 	# profile selectors are whitespace-separated, so this one has to split.
 	# shellcheck disable=SC2086
 	"$srcdir/tools/test-policy.py" resolve --suite libc-test \
 		--defaults "$LEDGER" --profile "runtime=$NTLIBC_TEST_RUNTIME" \
-		$profile_args > "$1/rows" || return 1
+		$cases_args $profile_args > "$1/rows" || return 1
 	return 0
 }
 
@@ -329,7 +349,26 @@ W=$(mktemp -d "${TMPDIR:-/tmp}/ntlibc-libctest.XXXXXX") || exit 1
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/out" obj/libc-test
 
-read_ledger "$W" || exit 2
+# The real, independently-discovered case list test/libc-test-expected.txt's
+# wildcard row depends on: every source musl's libc-test ships directly
+# under functional/ and regression/ -- never the on-demand math corpus
+# below, which carries no ledger rows at all and stays unaccounted for on
+# purpose. Built from the filesystem, not from what the (now much shorter)
+# ledger happens to list, for the same reason tools/posix-opts.py passes
+# its own IFACES.rglob("*.c") discovery to --cases-file: trimming the
+# ledger down to its exceptions must not let any real corpus member
+# silently fall out of adjudication. Reused below as the base of $corpus
+# too, so the two lists cannot drift apart.
+ledger_corpus=""
+for f in "$SUITE"/src/functional/*.c "$SUITE"/src/regression/*.c; do
+	[ -f "$f" ] || continue
+	ledger_corpus="$ledger_corpus $f"
+done
+for f in $ledger_corpus; do
+	basename "$f" .c
+done > "$W/cases.txt"
+
+read_ledger "$W" "$W/cases.txt" || exit 2
 if [ -f "$W/errors" ]; then
 	echo "libc-test: test/libc-test-expected.txt is malformed:" >&2
 	sed 's/^/    /' "$W/errors" >&2
@@ -374,11 +413,10 @@ if ! $CC -c $CFLAGS_C99FSE $CFLAGS_AUTO -D_GNU_SOURCE $INC \
 fi
 hobjs="$hobjs obj/libc-test/shim.o"
 
-corpus=""
-for f in "$SUITE"/src/functional/*.c "$SUITE"/src/regression/*.c; do
-	[ -f "$f" ] || continue
-	corpus="$corpus $f"
-done
+# $ledger_corpus (functional/ + regression/, built above for --cases-file)
+# is this build/run list's base; math, when opted in, is appended on top
+# of it and deliberately stays outside the ledger's case list.
+corpus="$ledger_corpus"
 [ -n "$corpus" ] && [ -n "$MATH_SRC" ] && corpus="$corpus $(echo "$MATH_SRC"/src/math/*.c)"
 if [ -z "$corpus" ]; then
 	echo "libc-test: the corpus in $SUITE has no test sources." >&2
@@ -596,11 +634,21 @@ rc=0
 
 if [ -n "$absent" ]; then
 	echo
-	echo "libc-test: FAILED -- test(s) in the corpus with no line in"
-	echo "libc-test: test/libc-test-expected.txt:$absent"
-	echo "libc-test: every test must be accounted for by name.  A test with no"
-	echo "libc-test: ledger line is one nobody decided about, and defaulting it"
-	echo "libc-test: to ignored is how a suite stops meaning anything."
+	echo "libc-test: FAILED -- test(s) built/run here that are outside both"
+	echo "libc-test: test/libc-test-expected.txt and this script's own"
+	echo "libc-test: independently-discovered case list (\$W/cases.txt, built"
+	echo "libc-test: by the functional/regression glob just above 'read_ledger"
+	echo "libc-test: \"\$W\" \"\$W/cases.txt\"'):$absent"
+	echo "libc-test: every functional/regression test already resolves --"
+	echo "libc-test: an explicit ledger row for an exception, or that ledger's"
+	echo "libc-test: trailing wildcard row's PASS default for everything else"
+	echo "libc-test: (mirroring test/posix-opts-expected.txt's own wildcard row,"
+	echo "libc-test: commit 93bbaa3).  The only way to reach this branch today"
+	echo "libc-test: is the on-demand math corpus, which deliberately carries no"
+	echo "libc-test: ledger rows at all (see the 'math' case above); anything"
+	echo "libc-test: else here means a test exists that neither this script's"
+	echo "libc-test: own discovery nor the ledger's wildcard accounts for,"
+	echo "libc-test: which should not be possible without a bug in one of them."
 	rc=1
 fi
 if [ -n "$timeouts" ]; then
@@ -632,10 +680,16 @@ if [ -n "$stale" ]; then
 fi
 # ---- the counts pin ------------------------------------------------------
 #
-# The whole anti-drift mechanism, in six lines.  The ledger's header
-# states, as numbers, how many tests are in each bucket; this compares
-# them against the default rows. Profile overrides live separately in
-# test/test-profiles.tsv, so the base counts remain stable across runners.
+# The whole anti-drift mechanism, in six lines.  The ledger's header states,
+# as numbers, how many of the real, independently-discovered corpus cases
+# (functional/ + regression/, never math) resolve to each disposition once
+# the wildcard default is applied -- this compares them against $W/rows,
+# which is exactly that: one resolved line per case named in $W/cases.txt,
+# built via --cases-file (see read_ledger()), not the raw row count of
+# test/libc-test-expected.txt itself (that file lists only the exceptions
+# plus the wildcard row, so its own row count no longer means "how many
+# tests"). Profile overrides live separately in test/test-profiles.tsv, so
+# these counts remain stable across runners.
 #
 counts=$(sed -n 's/^#[ \t]*COUNTS[ \t]*//p' "$LEDGER" | tail -1)
 if [ -z "$counts" ]; then
@@ -645,7 +699,7 @@ if [ -z "$counts" ]; then
 else
 	for kv in $counts; do
 		k=${kv%%=*}; v=${kv#*=}
-		a=$(awk -F'\t' -v k="$k" '$3==k {c++} END{print c+0}' "$W/base")
+		a=$(awk -F'\t' -v k="$k" '$2==k {c++} END{print c+0}' "$W/rows")
 		if [ "$a" -ne "$v" ]; then
 			echo
 			echo "libc-test: FAILED -- ledger header says $k=$v, resolved profile has $a."
