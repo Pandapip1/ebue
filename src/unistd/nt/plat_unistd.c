@@ -299,14 +299,27 @@ int __plat_unlink(int dirfd, const char *path, int isdir)
  * stays there, see chdir.c's own comment).
  * ====================================================================== */
 
-/* RtlSetCurrentDirectory_U applies Win32's legacy MAX_PATH limit while the
- * process current-directory field and NTFS both accept a longer DOS path.
- * Resolve the name first, then retry it with the extended-length prefix that
- * tells the Rtl not to impose that legacy parsing limit. */
+/* RtlSetCurrentDirectory_U applies Win32's legacy MAX_PATH limit because the
+ * process starts with a MAX_PATH-sized CurrentDirectory.DosPath buffer.  An
+ * extended-length prefix does not help: the Rtl still has to copy the result
+ * into that same process-parameter buffer.  For a longer path, do the Rtl's
+ * operation here: resolve and open the directory, then install a dynamically
+ * sized DOS path and the directory handle under the PEB lock.
+ *
+ * Once installed, the larger buffer remains the process current-directory
+ * buffer.  Ordinary later RtlSetCurrentDirectory_U calls can reuse it, while a
+ * still-longer fallback replaces it and releases the preceding buffer. */
+static WCHAR *long_cwd_buffer;
+
 static NTSTATUS set_long_current_directory(const WCHAR *path)
 {
-	WCHAR *full, *extended;
-	UNICODE_STRING us;
+	WCHAR *full, *extended, *old_buffer;
+	UNICODE_STRING nt;
+	OBJECT_ATTRIBUTES oa;
+	IO_STATUS_BLOCK io;
+	FILE_FS_DEVICE_INFORMATION device;
+	CURDIR *curdir;
+	HANDLE handle, old_handle;
 	ULONG capacity, got;
 	size_t n;
 	NTSTATUS st = STATUS_NAME_TOO_LONG;
@@ -325,11 +338,42 @@ static NTSTATUS set_long_current_directory(const WCHAR *path)
 	extended[0] = '\\'; extended[1] = '\\';
 	extended[2] = '?';  extended[3] = '\\';
 	memcpy(extended + 4, full, (n + 1) * sizeof(WCHAR));
-	us.Buffer = extended;
-	us.Length = (USHORT)((n + 4) * sizeof(WCHAR));
-	us.MaximumLength = (USHORT)(us.Length + sizeof(WCHAR));
-	st = RtlSetCurrentDirectory_U(&us);
+	st = RtlDosPathNameToNtPathName_U_WithStatus(extended, &nt, 0, 0);
 	__free(extended);
+	if (!NT_SUCCESS(st)) goto done;
+	InitializeObjectAttributes(&oa, &nt, OBJ_CASE_INSENSITIVE, 0, 0);
+	st = NtOpenFile(&handle, FILE_TRAVERSE | SYNCHRONIZE, &oa, &io,
+	                FILE_SHARE_READ | FILE_SHARE_WRITE,
+	                FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+	RtlFreeHeap(__process_heap(), 0, nt.Buffer);
+	if (!NT_SUCCESS(st)) goto done;
+
+	/* Match the Rtl's removable-media rule: do not pin such a volume by
+	 * retaining its directory handle. */
+	if (NT_SUCCESS(NtQueryVolumeInformationFile(handle, &io, &device,
+	                                            sizeof device,
+	                                            FileFsDeviceInformation)) &&
+	    (device.Characteristics & FILE_REMOVABLE_MEDIA)) {
+		NtClose(handle);
+		handle = 0;
+	}
+	if (n && full[n-1] != '\\') full[n++] = '\\';
+	full[n] = 0;
+
+	RtlAcquirePebLock();
+	curdir = &__peb->ProcessParameters->CurrentDirectory;
+	old_handle = curdir->Handle;
+	old_buffer = long_cwd_buffer;
+	curdir->Handle = handle;
+	curdir->DosPath.Buffer = full;
+	curdir->DosPath.Length = (USHORT)(n * sizeof(WCHAR));
+	curdir->DosPath.MaximumLength = (USHORT)(capacity + sizeof(WCHAR));
+	long_cwd_buffer = full;
+	RtlReleasePebLock();
+	full = 0;
+	if (old_handle) NtClose(old_handle);
+	if (old_buffer) __free(old_buffer);
+	st = STATUS_SUCCESS;
 done:
 	__free(full);
 	return st;
