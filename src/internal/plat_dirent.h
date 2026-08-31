@@ -67,6 +67,14 @@ struct __dirent_raw {
  * trusted the same way the rest of this backend already trusts
  * kernel-produced data (see e.g. src/dirent/nt/plat_dirent.c's own
  * comment on NtQueryDirectoryFile's guarantees). */
-int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __dirent_raw *out);
+/* pos is required: both backends' own bodies (src/dirent/linux/
+ * plat_dirent.c, src/dirent/nt/plat_dirent.c) dereference it
+ * unconditionally, first statement (`if (*pos >= buflen) return 0;`).
+ * buf/out are only actually touched once that check passes -- a real,
+ * content-driven escape (buflen, not either pointer's own nullness),
+ * so they are left for a future, separately-verified pass rather than
+ * guessed at here. */
+int __plat_dir_decode_one(const void *buf, size_t buflen, size_t *pos, struct __dirent_raw *out)
+    __attribute__((nonnull(3)));
 
 #endif

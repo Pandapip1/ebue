@@ -30,7 +30,10 @@ extern "C" {
 
 #define FNM_NOMATCH	1
 
-int fnmatch(const char *, const char *, int);
+/* pattern/string are both required: src/fnmatch/fnmatch.c forwards
+ * them straight into fnm_match(), which itself dereferences both
+ * unconditionally. */
+int fnmatch(const char *, const char *, int) __attribute__((nonnull(1, 2)));
 
 #ifdef __cplusplus
 }

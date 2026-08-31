@@ -101,9 +101,13 @@ long double ldexpl(long double, int);
 double      scalbn(double, int);
 float       scalbnf(float, int);
 long double scalbnl(long double, int);
-double      modf(double, double *);
-float       modff(float, float *);
-long double modfl(long double, long double *);
+/* ip is a required output parameter, the same "no discard convention"
+ * reasoning as frexp's own e above: src/math/modf.c's three bodies
+ * write through it on every path (including both the NaN and infinite
+ * special cases), with no NULL check anywhere. */
+double      modf(double, double *) __attribute__((nonnull(2)));
+float       modff(float, float *) __attribute__((nonnull(2)));
+long double modfl(long double, long double *) __attribute__((nonnull(2)));
 double      pow(double, double);
 float       powf(float, float);
 long double powl(long double, long double);

@@ -434,6 +434,9 @@ static double __aa64_fmod(double x, double y)
 	return ux.f;
 }
 
+/* quo is a required output parameter: `*quo = 0;` is unconditional,
+ * the first real statement, on every path through this function. */
+static double __aa64_remquo(double x, double y, int *quo) __attribute__((nonnull(3)));
 static double __aa64_remquo(double x, double y, int *quo)
 {
 	union __aa64_bits ux = {x}, uy = {y};

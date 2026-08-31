@@ -25,6 +25,11 @@ static size_t table_size;
 /* FNV-1a: fine for short C-string keys, deliberately wraps mod 2^32
  * (unsigned arithmetic, not UB) -- __wraps documents that instead of
  * letting -fsanitize=unsigned-integer-overflow flag it as accidental. */
+/* s is dereferenced unconditionally: `while (*s)` evaluates it at
+ * least once regardless of content, and this file's one real call
+ * site (`hash_str(item.key)`) always passes a real ENTRY key, never a
+ * value that could legitimately be null. */
+__wraps static unsigned long hash_str(const char *s) __attribute__((nonnull(1)));
 __wraps static unsigned long hash_str(const char *s)
 {
 	unsigned long h = 2166136261UL;

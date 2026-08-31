@@ -45,6 +45,12 @@ static int isdir_attrs(ULONG attrs, ULONG tag)
  * base) and a full path-COMPONENT prefix match (new's next character
  * past old's length must itself be a separator, not just any
  * character, so "/a/bb" is not mistaken for a descendant of "/a/b"). */
+/* old/new are both dereferenced unconditionally, first statement
+ * (`old->nt.Length`/`new->nt.Length`); this function's one real call
+ * site always passes the address of a real local (`&op, &np`), never a
+ * value that could legitimately be null. */
+static int ntpath_is_ancestor(const struct __ntpath *old,
+		const struct __ntpath *new) __attribute__((nonnull(1, 2)));
 static int ntpath_is_ancestor(const struct __ntpath *old,
 		const struct __ntpath *new)
 {
