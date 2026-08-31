@@ -61,3 +61,48 @@ int checked_negation(int value)
 		return 0;
 	return -value;
 }
+
+/* Pins symbolInterval()'s BO_Rem decomposition of a value materialized
+ * into a local and reread past the point where a source-level walk can
+ * see the '%' that narrowed it -- src/stdlib/strtod.c's bn_shl() shape
+ * (`int b = k % 32; ...; carry = v >> (32 - b);`), reread three lines
+ * later rather than used inline. */
+unsigned rem_materialized_then_shift(unsigned v, int k)
+{
+	int b;
+	if (k <= 0)
+		return v;
+	b = k % 32;
+	if (!b)
+		return v;
+	return v >> (32 - b);
+}
+
+/* Pins symbolInterval()'s BO_Add/BO_Sub/BO_Mul decomposition of an affine
+ * chain materialized into a local -- src/stdio/printf.c's fmt_a() shape
+ * (`int shift = (13 - prec) * 4;`, prec bounded [0,12] by two literal
+ * guards immediately above, `shift` reread four times after). 64 bits
+ * wide because (13 - prec) * 4 reaches 52, which only a >=53-bit shifted
+ * value keeps in range -- the same reason the real code shifts a
+ * uint64_t mantissa, not a 32-bit one. */
+unsigned long long affine_materialized_then_shift(unsigned long long man,
+						   int prec)
+{
+	int shift;
+	if (prec < 0 || prec >= 13)
+		return man;
+	shift = (13 - prec) * 4;
+	return man >> shift;
+}
+
+/* Pins the same symbolInterval() BO_Rem decomposition reaching
+ * DivisorChecker (not just SignedArithmeticChecker/ShiftCountChecker):
+ * `d` is materialized from `k % 100` and reread as a divisor two lines
+ * later, plus a `+ 1` (BO_Add) the same decomposition must see through
+ * to prove `d` is never zero. */
+unsigned rem_materialized_then_divide(unsigned value, unsigned k)
+{
+	unsigned d;
+	d = k % 100 + 1;
+	return value % d;
+}

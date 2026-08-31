@@ -74,3 +74,29 @@ int unchecked_signed_left_shift(int value, unsigned count)
 		return 0;
 	return value << count; /* arithmetic-ub-expect */
 }
+
+/* Regression pin for symbolInterval()'s BO_Rem case: same materialized-
+ * local shape as safe.c's rem_materialized_then_shift(), but missing
+ * that fixture's `if (!b) return v;` guard, so b's provable range is
+ * [0, 31] rather than [1, 31] -- b == 0 makes `32 - b` a shift count of
+ * 32, out of range for a 32-bit value. symbolInterval() must not
+ * over-claim safety just because the shape now looks familiar. */
+unsigned rem_materialized_then_shift_unguarded(unsigned v, int k)
+{
+	int b;
+	if (k <= 0)
+		return v;
+	b = k % 32;
+	return v >> (32 - b); /* arithmetic-ub-expect */
+}
+
+/* Regression pin for symbolInterval() reaching DivisorChecker: same
+ * shape as safe.c's rem_materialized_then_divide(), but missing that
+ * fixture's `+ 1`, so `d` is a plain `k % 100` -- provably [0, 99],
+ * which includes zero. */
+unsigned rem_materialized_then_divide_unguarded(unsigned value, unsigned k)
+{
+	unsigned d;
+	d = k % 100;
+	return value % d; /* arithmetic-ub-expect */
+}

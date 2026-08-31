@@ -9,6 +9,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/SymbolManager.h"
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "llvm/ADT/APSInt.h"
 
@@ -90,19 +91,48 @@ public:
                              });
   }
 
-  static std::optional<Interval> constrainedInterval(const Expr *Expr,
-                                                     CheckerContext &C) {
-    SVal Value = C.getSVal(Expr);
-    if (const llvm::APSInt *Integer = Value.getAsInteger()) {
-      llvm::APSInt Exact = asMath(*Integer);
-      return Interval{Exact, Exact};
-    }
-    std::optional<NonLoc> Defined = Value.getAs<NonLoc>();
-    if (!Defined)
-      return std::nullopt;
+  // The tightest of two independently-sound over-approximations is still
+  // sound: whatever the symbol's true value is, it lies in both intervals,
+  // so it lies in their intersection too. Guards the one way that could
+  // stop being true -- a bug in one side computing a genuinely disjoint
+  // range -- by falling back to the solver-derived interval alone, which
+  // this file already shipped and trusted before this lemma existed,
+  // rather than ever handing back an inverted (Min > Max) interval that
+  // callers would read as "no value is possible here", which is a
+  // stronger and therefore unsound claim.
+  static Interval intersectInterval(const Interval &Solver,
+                                    const Interval &Symbolic) {
+    Interval Result{maxValue({Solver.Min, Symbolic.Min}),
+                    minValue({Solver.Max, Symbolic.Max})};
+    if (llvm::APSInt::compareValues(Result.Min, Result.Max) > 0)
+      return Solver;
+    return Result;
+  }
 
+  // The binary-search-over-assume() solver query constrainedInterval()
+  // already performed for a source Expr, generalized to any NonLoc so
+  // symbolInterval() below can run the identical query for a bare
+  // SymbolRef that names no Expr of its own (the whole point of that
+  // function is to be reachable from a materialized value that was
+  // stored into a variable or field and read back later).
+  // State is a required, explicit parameter (never defaulted to
+  // C.getState() internally) precisely so a caller downstream of another
+  // checker's own PreStmt callback for the SAME statement -- Divisor/
+  // ShiftCountChecker's own div-by-zero/shift-count checks run in the
+  // same PreStmt<BinaryOperator> phase as clang's builtin core.DivideZero,
+  // which (like this codebase's own checkers) narrows the state by
+  // calling addTransition once it has proven a path condition, and
+  // checkers sharing one callback phase see each PRIOR checker's already-
+  // narrowed node -- can pass arithmeticInputState(C) (the state from
+  // BEFORE this phase's checker chain ran, the same "look behind the
+  // current node's predecessor" trick this file's own
+  // arithmeticInputState() already uses for its bug-report state) instead
+  // of silently trusting whatever core.DivideZero already assumed on this
+  // exact symbol. Passing C.getState() explicitly reproduces this
+  // function's old always-current-state behavior exactly.
+  static Interval bisectInterval(NonLoc Value, QualType Type,
+                                 ProgramStateRef State, CheckerContext &C) {
     ASTContext &Ctx = C.getASTContext();
-    QualType Type = Expr->getType();
     unsigned Bits = Ctx.getIntWidth(Type);
     bool Unsigned = Type->isUnsignedIntegerOrEnumerationType();
     llvm::APSInt NativeMin = typeMin(Ctx, Type);
@@ -115,8 +145,7 @@ public:
     while (Low < High) {
       llvm::APSInt Mid = Low + (High - Low) / Two;
       llvm::APSInt NativeMid = asSourceType(Mid, Bits, Unsigned);
-      if (C.getState()->assumeInclusiveRange(*Defined, NativeMin, NativeMid,
-                                             true))
+      if (State->assumeInclusiveRange(Value, NativeMin, NativeMid, true))
         High = Mid;
       else
         Low = Mid + One;
@@ -128,8 +157,7 @@ public:
     while (Low < High) {
       llvm::APSInt Mid = Low + (High - Low + One) / Two;
       llvm::APSInt NativeMid = asSourceType(Mid, Bits, Unsigned);
-      if (C.getState()->assumeInclusiveRange(*Defined, NativeMid, NativeMax,
-                                             true))
+      if (State->assumeInclusiveRange(Value, NativeMid, NativeMax, true))
         Low = Mid;
       else
         High = Mid - One;
@@ -137,23 +165,210 @@ public:
     return Interval{Minimum, Low};
   }
 
-  static Interval expressionInterval(const Expr *Expr, CheckerContext &C) {
+  static Interval combineBinary(BinaryOperator::Opcode Op,
+                                const Interval &Left, const Interval &Right) {
+    switch (Op) {
+    case BO_Add:
+      return Interval{Left.Min + Right.Min, Left.Max + Right.Max};
+    case BO_Sub:
+      return Interval{Left.Min - Right.Max, Left.Max - Right.Min};
+    case BO_Mul: {
+      llvm::APSInt A = Left.Min * Right.Min;
+      llvm::APSInt B = Left.Min * Right.Max;
+      llvm::APSInt D = Left.Max * Right.Min;
+      llvm::APSInt E = Left.Max * Right.Max;
+      return Interval{minValue({A, B, D, E}), maxValue({A, B, D, E})};
+    }
+    default:
+      llvm_unreachable("combineBinary called with an unhandled opcode");
+    }
+  }
+
+  static constexpr unsigned MaxSymbolDepth = 16;
+
+  // expressionInterval() below already knows how to narrow `hash % n`,
+  // `mask & bits`, and `value >> shift` past their operands' full type
+  // range when it walks those operators inline in the source AST -- but
+  // that walk starts over from each new Expr, so it only ever sees a
+  // divisor/mask/shift-count that is ITSELF still written out at the use
+  // site. src/stdlib/strtod.c's bn_shl() writes `int b = k % 32;` once
+  // and rereads plain `b` three lines later in `v >> (32 - b)`;
+  // src/stdio/printf.c's fmt_a() writes `int shift = (13 - prec) * 4;`
+  // once (prec itself bounded [0,12] by two literal ifs immediately
+  // above) and rereads plain `shift` four times after. Both are the same
+  // shape: a value ALREADY narrow by construction, materialized into a
+  // local and re-read past the point where the source-level walk can see
+  // the operator that narrowed it.
+  //
+  // RegionStore gives an exact answer for what that reread actually
+  // finds: absent an intervening call that could have written through an
+  // escaped alias, a load from that local returns the very same SVal
+  // that was stored -- so the symbol behind a rereard of `b` IS the
+  // SymIntExpr for `$k % 32`, not a fresh unconstrained symbol. The
+  // default RangeConstraintManager's own solver does not re-derive a
+  // tight range for that compound symbol on its own (nothing ever
+  // branched on `b`'s value to teach it one), which is exactly why
+  // expressionInterval()'s own Rem/And/Shr special cases exist in the
+  // first place; symbolInterval() is that same reasoning run over the
+  // SymExpr the engine already built instead of over the Expr the
+  // programmer wrote, so it reaches a re-read the same way the original
+  // reasoning reaches an inline use.
+  //
+  // Every branch here is a strict subset of what expressionInterval()
+  // already computes for the equivalent AST shape (same Rem/And/Shr sign
+  // and magnitude rules, same interval arithmetic for Add/Sub/Mul), so
+  // this adds no new interval theory, only a second path to the existing
+  // one. A shape this cannot decompose (a call result, a load through a
+  // pointer, anything past MaxSymbolDepth) falls through to the same
+  // solver bisection constrainedInterval() already ran, so this can only
+  // ever tighten a result, never replace a sound one with an unsound
+  // one -- and combined via intersectInterval(), which itself falls back
+  // to the solver-only side on any disagreement.
+  static Interval symbolInterval(SymbolRef Sym, ProgramStateRef State,
+                                 CheckerContext &C, unsigned Depth) {
+    ASTContext &Ctx = C.getASTContext();
+    QualType Type = Sym->getType();
+    // A sub-symbol whose own type is not an integer -- concretely, a
+    // pointer-region-value symbol reached while decomposing an integer
+    // cast of pointer arithmetic, e.g. `(long)p - (long)q` -- can never
+    // be wrapped in nonloc::SymbolVal at all: that constructor asserts
+    // !Loc::isLocType(Sym->getType()), so calling it here is not merely
+    // imprecise but a guaranteed analyzer crash (confirmed directly: an
+    // earlier version of this function called bisectInterval() on such a
+    // symbol unconditionally and crashed clang --analyze on real files,
+    // e.g. arch/aarch64/src/ld128_convert.c, with exactly that
+    // assertion). Fully unbounded -- MathBits' own widest range -- is
+    // always a sound, if useless, answer for a term with no integer type
+    // this function has any way to reason about; the solver bisection
+    // below is likewise skipped once MaxSymbolDepth is reached, for the
+    // same reason expressionInterval() itself never recurses unbounded.
+    if (!Type->isIntegerType())
+      return {llvm::APSInt::getMinValue(MathBits, false),
+             llvm::APSInt::getMaxValue(MathBits, false)};
+    if (Depth >= MaxSymbolDepth)
+      return bisectInterval(nonloc::SymbolVal(Sym), Type, State, C);
+    Interval Bound = typeInterval(Ctx, Type);
+
+    llvm::APSInt Zero(llvm::APInt(MathBits, 0), false);
+    llvm::APSInt One(llvm::APInt(MathBits, 1), false);
+    bool ResultUnsigned = Type->isUnsignedIntegerOrEnumerationType();
+
+    if (const auto *IntExpr = dyn_cast<SymIntExpr>(Sym)) {
+      BinaryOperator::Opcode Op = IntExpr->getOpcode();
+      llvm::APSInt Right = asMath(IntExpr->getRHS());
+      if (Op == BO_Rem && Right.isStrictlyPositive()) {
+        llvm::APSInt Magnitude = Right - One;
+        if (ResultUnsigned)
+          return intersectInterval(Bound, Interval{Zero, Magnitude});
+        Interval Left = symbolInterval(IntExpr->getLHS(), State, C, Depth + 1);
+        if (Left.Min >= Zero)
+          return intersectInterval(Bound, Interval{Zero, Magnitude});
+        if (Left.Max <= Zero)
+          return intersectInterval(Bound, Interval{-Magnitude, Zero});
+        return intersectInterval(Bound, Interval{-Magnitude, Magnitude});
+      }
+      if (Op == BO_And && ResultUnsigned && !Right.isNegative())
+        return intersectInterval(Bound, Interval{Zero, Right});
+      if (Op == BO_Shr && ResultUnsigned) {
+        unsigned Width = Ctx.getIntWidth(Type);
+        if (!Right.isNegative() && Right.getLimitedValue() < Width) {
+          unsigned Shift = static_cast<unsigned>(Right.getLimitedValue());
+          llvm::APSInt Maximum = typeMax(Ctx, Type);
+          Maximum = llvm::APSInt(Maximum.lshr(Shift), Maximum.isUnsigned());
+          return intersectInterval(Bound, Interval{Zero, asMath(Maximum)});
+        }
+      }
+      if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
+        Interval Left = symbolInterval(IntExpr->getLHS(), State, C, Depth + 1);
+        Interval Result = combineBinary(Op, Left, Interval{Right, Right});
+        return intersectInterval(Bound, Result);
+      }
+    } else if (const auto *SymInt = dyn_cast<IntSymExpr>(Sym)) {
+      BinaryOperator::Opcode Op = SymInt->getOpcode();
+      if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
+        llvm::APSInt Left = asMath(SymInt->getLHS());
+        Interval Right = symbolInterval(SymInt->getRHS(), State, C, Depth + 1);
+        Interval Result = combineBinary(Op, Interval{Left, Left}, Right);
+        return intersectInterval(Bound, Result);
+      }
+    } else if (const auto *SymExprB = dyn_cast<SymSymExpr>(Sym)) {
+      BinaryOperator::Opcode Op = SymExprB->getOpcode();
+      if (Op == BO_Add || Op == BO_Sub || Op == BO_Mul) {
+        Interval Left = symbolInterval(SymExprB->getLHS(), State, C, Depth + 1);
+        Interval Right = symbolInterval(SymExprB->getRHS(), State, C, Depth + 1);
+        Interval Result = combineBinary(Op, Left, Right);
+        return intersectInterval(Bound, Result);
+      }
+    } else if (const auto *CastSym = dyn_cast<SymbolCast>(Sym)) {
+      // Only trusted if the operand's own range already fits inside this
+      // cast's destination type without truncation -- the same
+      // contains()-gated rule expressionInterval() applies to an
+      // ImplicitCastExpr, so a genuinely narrowing cast still falls
+      // through to the plain solver bisection below rather than being
+      // handed a pre-cast range that a truncation could have invalidated.
+      Interval Operand =
+          symbolInterval(CastSym->getOperand(), State, C, Depth + 1);
+      if (contains(Bound, Operand))
+        return Operand;
+    }
+
+    return intersectInterval(
+        bisectInterval(nonloc::SymbolVal(Sym), Type, State, C), Bound);
+  }
+
+  // State defaults to C.getState() -- the always-current-node behavior
+  // this function had before symbolInterval() and the explicit-State
+  // overload of bisectInterval() existed -- so every pre-existing caller
+  // is unaffected. Divisor/ShiftCountChecker pass arithmeticInputState(C)
+  // explicitly instead; see bisectInterval()'s own comment for why.
+  static std::optional<Interval>
+  constrainedInterval(const Expr *Expr, CheckerContext &C,
+                      ProgramStateRef State = nullptr) {
+    if (!State)
+      State = C.getState();
+    SVal Value = State->getSVal(Expr, C.getLocationContext());
+    if (const llvm::APSInt *Integer = Value.getAsInteger()) {
+      llvm::APSInt Exact = asMath(*Integer);
+      return Interval{Exact, Exact};
+    }
+    std::optional<NonLoc> Defined = Value.getAs<NonLoc>();
+    if (!Defined)
+      return std::nullopt;
+
+    Interval Result = bisectInterval(*Defined, Expr->getType(), State, C);
+    if (SymbolRef Sym = Value.getAsSymbol())
+      Result = intersectInterval(Result, symbolInterval(Sym, State, C, 0));
+    return Result;
+  }
+
+  // Same State-defaulting rule as constrainedInterval() just above, and
+  // for the same reason: this function recurses into itself and into
+  // constrainedInterval(), so the resolved (possibly caller-supplied)
+  // State has to be threaded through every recursive call explicitly --
+  // re-defaulting to C.getState() partway down the recursion would
+  // silently discard a caller's arithmeticInputState(C) the moment it
+  // reached a nested sub-expression.
+  static Interval expressionInterval(const Expr *Expr, CheckerContext &C,
+                                     ProgramStateRef State = nullptr) {
+    if (!State)
+      State = C.getState();
     Expr = Expr->IgnoreParens();
     ASTContext &Ctx = C.getASTContext();
     Interval ResultType = typeInterval(Ctx, Expr->getType());
 
     if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Expr)) {
       if (Cast->getCastKind() == CK_LValueToRValue) {
-        if (std::optional<Interval> Known = constrainedInterval(Cast, C))
+        if (std::optional<Interval> Known =
+                constrainedInterval(Cast, C, State))
           return *Known;
         return ResultType;
       }
-      Interval Operand = expressionInterval(Cast->getSubExpr(), C);
+      Interval Operand = expressionInterval(Cast->getSubExpr(), C, State);
       return contains(ResultType, Operand) ? Operand : ResultType;
     }
 
     if (const auto *Unary = dyn_cast<UnaryOperator>(Expr)) {
-      Interval Operand = expressionInterval(Unary->getSubExpr(), C);
+      Interval Operand = expressionInterval(Unary->getSubExpr(), C, State);
       if (Unary->getOpcode() == UO_Plus)
         return Operand;
       if (Unary->getOpcode() == UO_Minus) {
@@ -168,14 +383,14 @@ public:
        * bounded by n alone; walking the hash to manufacture bounds would be
        * both slower and less precise. */
       if (Binary->getOpcode() == BO_Rem) {
-        Interval Right = expressionInterval(Binary->getRHS(), C);
+        Interval Right = expressionInterval(Binary->getRHS(), C, State);
         llvm::APSInt Zero(llvm::APInt(MathBits, 0), false);
         llvm::APSInt One(llvm::APInt(MathBits, 1), false);
         if (Right.Min > Zero) {
           llvm::APSInt Magnitude = Right.Max - One;
           if (Expr->getType()->isUnsignedIntegerOrEnumerationType())
             return Interval{Zero, Magnitude};
-          Interval Left = expressionInterval(Binary->getLHS(), C);
+          Interval Left = expressionInterval(Binary->getLHS(), C, State);
           if (Left.Min >= Zero)
             return Interval{Zero, Magnitude};
           if (Left.Max <= Zero)
@@ -185,7 +400,7 @@ public:
       }
       if (Binary->getOpcode() == BO_And &&
           Expr->getType()->isUnsignedIntegerOrEnumerationType()) {
-        Interval Right = expressionInterval(Binary->getRHS(), C);
+        Interval Right = expressionInterval(Binary->getRHS(), C, State);
         if (Right.Min == Right.Max && !Right.Min.isNegative()) {
           llvm::APSInt Zero(llvm::APInt(MathBits, 0), false);
           return Interval{Zero, Right.Max};
@@ -193,7 +408,7 @@ public:
       }
       if (Binary->getOpcode() == BO_Shr &&
           Expr->getType()->isUnsignedIntegerOrEnumerationType()) {
-        Interval Right = expressionInterval(Binary->getRHS(), C);
+        Interval Right = expressionInterval(Binary->getRHS(), C, State);
         unsigned Width = Ctx.getIntWidth(Expr->getType());
         if (Right.Min == Right.Max && !Right.Min.isNegative() &&
             Right.Min.getLimitedValue() < Width) {
@@ -205,8 +420,8 @@ public:
         }
       }
 
-      Interval Left = expressionInterval(Binary->getLHS(), C);
-      Interval Right = expressionInterval(Binary->getRHS(), C);
+      Interval Left = expressionInterval(Binary->getLHS(), C, State);
+      Interval Right = expressionInterval(Binary->getRHS(), C, State);
       std::optional<Interval> Result;
       switch (Binary->getOpcode()) {
       case BO_Add:
@@ -231,7 +446,7 @@ public:
       return ResultType;
     }
 
-    if (std::optional<Interval> Known = constrainedInterval(Expr, C))
+    if (std::optional<Interval> Known = constrainedInterval(Expr, C, State))
       return *Known;
     return ResultType;
   }
@@ -670,13 +885,39 @@ public:
     if (!Operation->getLHS()->getType()->isIntegerType() ||
         !Operation->getRHS()->getType()->isIntegerType())
       return;
-    ProgramStateRef Violation = arithmeticInputState(C);
+    ProgramStateRef Input = arithmeticInputState(C);
+    ProgramStateRef Violation = Input;
     if (std::optional<DefinedOrUnknownSVal> Divisor =
             C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
       Violation = Violation->assume(*Divisor, false);
       if (!Violation)
         return;
     }
+    // The assume() above asks the path-sensitive solver alone, which
+    // (being the default RangeConstraintManager, not an SMT backend)
+    // does not re-derive a divisor's range from an already-narrow
+    // SymExpr the way SizeCastChecker::expressionInterval() does --
+    // that reasoning (the BO_Rem/BO_And/BO_Shr special cases, plus the
+    // symbolInterval() decomposition of a materialized local or field
+    // behind the same SVal) was already built for SignedArithmeticChecker
+    // and applies just as soundly here: any divisor the solver alone
+    // could not rule out zero for, but whose statically-computed range
+    // provably excludes zero, is a second, independent, purely-additive
+    // proof this checker never tried before. Queried against
+    // arithmeticInputState(C), not C.getState(): clang's own builtin
+    // core.DivideZero shares this exact PreStmt<BinaryOperator> phase and
+    // narrows the CURRENT node's state (via its own addTransition) the
+    // moment it has proven a path where the divisor is nonzero, which
+    // would otherwise make an entirely UNCHECKED divisor look
+    // artificially safe here too (confirmed directly: querying
+    // C.getState() instead reported this checker's own fixtures'
+    // deliberately-unchecked divisors as already proven nonzero, which
+    // is exactly the false negative this must not reintroduce).
+    SizeCastChecker::Interval Range = SizeCastChecker::expressionInterval(
+        Operation->getRHS(), C, Input);
+    llvm::APSInt Zero(llvm::APInt(SizeCastChecker::MathBits, 0), false);
+    if (Range.Min > Zero || Range.Max < Zero)
+      return;
     ExplodedNode *Node = C.generateNonFatalErrorNode(Violation);
     if (!Node)
       return;
@@ -713,13 +954,32 @@ public:
     bool CountUnsigned = CountType->isUnsignedIntegerOrEnumerationType();
     llvm::APSInt Low(llvm::APInt(CountBits, 0), CountUnsigned);
     llvm::APSInt High(llvm::APInt(CountBits, Width - 1), CountUnsigned);
-    ProgramStateRef Violation = arithmeticInputState(C);
+    ProgramStateRef Input = arithmeticInputState(C);
+    ProgramStateRef Violation = Input;
     if (std::optional<DefinedOrUnknownSVal> Count =
             C.getSVal(Operation->getRHS()).getAs<DefinedOrUnknownSVal>()) {
       Violation = Violation->assumeInclusiveRange(*Count, Low, High, false);
       if (!Violation)
         return;
     }
+    // Same second, independent proof avenue as DivisorChecker just above,
+    // queried against arithmeticInputState(C) for the same reason (a
+    // builtin core checker sharing this PreStmt<BinaryOperator> phase can
+    // narrow C.getState() before this callback runs): the raw solver's
+    // assumeInclusiveRange() only sees a shift count's own SVal, not the
+    // Rem/And/Shr/Add/Sub/Mul structure expressionInterval() (and,
+    // through it, symbolInterval() for a materialized local or field)
+    // already reconstructs -- e.g. `b = k % 32;` used three lines later
+    // as `v >> (32 - b)` was previously provable as SignedArithmetic's
+    // `32 - b` result but NOT as this checker's own shift count, purely
+    // because this checker never consulted the same interval before
+    // falling back to reporting.
+    SizeCastChecker::Interval CountRange = SizeCastChecker::expressionInterval(
+        Operation->getRHS(), C, Input);
+    SizeCastChecker::Interval Safe{SizeCastChecker::asMath(Low),
+                                   SizeCastChecker::asMath(High)};
+    if (SizeCastChecker::contains(Safe, CountRange))
+      return;
     ExplodedNode *Node = C.generateNonFatalErrorNode(Violation);
     if (!Node)
       return;
