@@ -76,6 +76,26 @@ attachFamilyArgumentAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
   return ParsedAttrInfo::AttributeApplied;
 }
 
+static ParsedAttrInfo::AttrHandling
+attachValueFamilyAnnotation(Sema &S, Decl *D, const ParsedAttr &Attr,
+                            StringRef AnnotationName) {
+  IdentifierInfo *Family = Attr.getNumArgs() == 1 && Attr.isArgIdent(0)
+                               ? Attr.getArgAsIdent(0)->Ident
+                               : nullptr;
+  if (!isa<ValueDecl>(D) || !Family) {
+    unsigned ID = S.getDiagnostics().getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "%0 requires one ownership-family identifier on a value, storage, "
+        "parameter, field, or function return declaration");
+    S.Diag(Attr.getLoc(), ID) << Attr;
+    return ParsedAttrInfo::AttributeNotApplied;
+  }
+  std::string Annotation = (AnnotationName + ":" + Family->getName()).str();
+  D->addAttr(
+      AnnotateAttr::Create(S.Context, Annotation, nullptr, 0, Attr.getRange()));
+  return ParsedAttrInfo::AttributeApplied;
+}
+
 struct OwnershipReallocatesAttrInfo final : ParsedAttrInfo {
   OwnershipReallocatesAttrInfo() {
     OptArgs = 1;
@@ -154,6 +174,36 @@ DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE(OwnershipConsumesAnyTokenAttrInfo,
 
 #undef DEFINE_FAMILY_OWNERSHIP_ATTRIBUTE
 
+#define DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(ClassName, SpellingName,              \
+                                         AnnotationName)                       \
+  struct ClassName final : ParsedAttrInfo {                                    \
+    ClassName() {                                                              \
+      OptArgs = 1;                                                             \
+      static constexpr Spelling SpellingsList[] = {                            \
+          {ParsedAttr::AS_GNU, SpellingName},                                  \
+          {ParsedAttr::AS_C23, SpellingName},                                  \
+          {ParsedAttr::AS_CXX11, SpellingName}};                               \
+      Spellings = SpellingsList;                                               \
+    }                                                                          \
+                                                                               \
+    AttrHandling handleDeclAttribute(Sema &S, Decl *D,                         \
+                                     const ParsedAttr &Attr) const override {  \
+      return attachValueFamilyAnnotation(S, D, Attr, AnnotationName);          \
+    }                                                                          \
+  }
+
+DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(OwnershipHoldsHandleAttrInfo,
+                                 "ownership_holds_handle",
+                                 "ownership_holds_handle");
+DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(OwnershipHoldsTokenAttrInfo,
+                                 "ownership_holds_token",
+                                 "ownership_holds_token");
+DEFINE_VALUE_OWNERSHIP_ATTRIBUTE(OwnershipHoldsDuplicableTokenAttrInfo,
+                                 "ownership_holds_duplicable_token",
+                                 "ownership_holds_duplicable_token");
+
+#undef DEFINE_VALUE_OWNERSHIP_ATTRIBUTE
+
 } // namespace
 
 static ParsedAttrInfoRegistry::Add<OwnershipReallocatesAttrInfo>
@@ -182,3 +232,12 @@ static ParsedAttrInfoRegistry::Add<OwnershipGrantsDuplicableTokenAttrInfo>
 static ParsedAttrInfoRegistry::Add<OwnershipConsumesAnyTokenAttrInfo>
     ConsumesAnyToken("ownership_consumes_any_token",
                      "consumes one member of an alternative token set");
+static ParsedAttrInfoRegistry::Add<OwnershipHoldsHandleAttrInfo>
+    HoldsHandle("ownership_holds_handle",
+                "adds a handle class to a value's ownership type");
+static ParsedAttrInfoRegistry::Add<OwnershipHoldsTokenAttrInfo>
+    HoldsToken("ownership_holds_token",
+               "adds a linear token to a value's ownership type");
+static ParsedAttrInfoRegistry::Add<OwnershipHoldsDuplicableTokenAttrInfo>
+    HoldsDuplicableToken("ownership_holds_duplicable_token",
+                         "adds a duplicable token to a value's ownership type");

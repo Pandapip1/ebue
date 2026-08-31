@@ -26,6 +26,7 @@ DIAGNOSTIC = re.compile(
     r"none of the required ownership capability tokens is held|"
     r"linear ownership capability token would be duplicated|"
     r"ownership capability token duplication class does not match|"
+    r"ownership token bundle does not match destination type|"
     r"pointer dereference is not proven nonnull|"
     r"pointer target is not proven live storage|"
     r"dereference extent is not proven sufficient|"
@@ -34,7 +35,7 @@ DIAGNOSTIC = re.compile(
     r"resource is already released|operation uses a released resource|"
     r"resource family does not match operation); origin '(.*)'; context '(.*)'; "
     r"expression '(.*)'; site '(.*)' "
-    r"\[ntlibc\.(Ownership|OwnedConstruct|CapabilityToken|ValidPointer|Resource)\]$"
+    r"\[ntlibc\.(Ownership|OwnedConstruct|CapabilityToken|OwnershipType|ValidPointer|Resource)\]$"
 )
 
 
@@ -116,6 +117,8 @@ def main() -> int:
                          for finding in findings.values())
         capabilities = sum(finding.checker == "CapabilityToken"
                            for finding in findings.values())
+        ownership_types = sum(finding.checker == "OwnershipType"
+                              for finding in findings.values())
         pointers = sum(finding.checker == "ValidPointer"
                        for finding in findings.values())
         resources = sum(finding.checker == "Resource"
@@ -125,6 +128,7 @@ def main() -> int:
               f"{borrows} expired borrow access(es), "
               f"{constructs} construct lifecycle obligation(s), "
               f"{capabilities} capability token obligation(s), "
+              f"{ownership_types} ownership type mismatch(es), "
               f"{pointers} pointer validity obligation(s), "
               f"{resources} resource lifecycle obligation(s)")
         return 1

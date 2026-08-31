@@ -38,6 +38,9 @@ REGISTER_MAP_WITH_PROGRAMSTATE(ConstructFamilyMap, const MemRegion *,
 enum class CapabilityKind : unsigned char { Linear, Duplicable };
 using CapabilityKey = std::pair<const MemRegion *, const IdentifierInfo *>;
 REGISTER_MAP_WITH_PROGRAMSTATE(CapabilityMap, CapabilityKey, CapabilityKind)
+using SymbolCapabilityKey = std::pair<SymbolRef, const IdentifierInfo *>;
+REGISTER_MAP_WITH_PROGRAMSTATE(SymbolCapabilityMap, SymbolCapabilityKey,
+                               CapabilityKind)
 
 REGISTER_MAP_WITH_PROGRAMSTATE(ResourceMap, SymbolRef, unsigned)
 
@@ -1178,6 +1181,201 @@ public:
       C.addTransition(transition(Succeeded, Call, Protocols));
     if (Failed)
       C.addTransition(Failed);
+  }
+};
+
+enum class OwnershipTypeMember : unsigned char {
+  Handle,
+  LinearToken,
+  DuplicableToken
+};
+
+struct OwnershipTypeEntry {
+  const IdentifierInfo *Family;
+  OwnershipTypeMember Member;
+};
+
+class OwnershipTypeChecker
+    : public Checker<check::BeginFunction, check::PreStmt<DeclStmt>,
+                     check::PreStmt<BinaryOperator>, check::PreStmt<ReturnStmt>,
+                     check::PreCall, check::PostCall> {
+  mutable std::unique_ptr<BugType> BT;
+
+  static llvm::SmallVector<OwnershipTypeEntry, 4>
+  bundleFor(const ValueDecl *Declaration) {
+    llvm::SmallVector<OwnershipTypeEntry, 4> Bundle;
+    if (!Declaration)
+      return Bundle;
+    struct MemberAnnotation {
+      llvm::StringLiteral Prefix;
+      OwnershipTypeMember Member;
+    };
+    static constexpr MemberAnnotation Annotations[] = {
+        {"ownership_holds_handle:", OwnershipTypeMember::Handle},
+        {"ownership_holds_token:", OwnershipTypeMember::LinearToken},
+        {"ownership_holds_duplicable_token:",
+         OwnershipTypeMember::DuplicableToken}};
+    for (const AnnotateAttr *Attr :
+         Declaration->specific_attrs<AnnotateAttr>()) {
+      for (const MemberAnnotation &Candidate : Annotations) {
+        StringRef Text = Attr->getAnnotation();
+        if (!Text.consume_front(Candidate.Prefix) || Text.empty() ||
+            Text.contains(':'))
+          continue;
+        Bundle.push_back(
+            {&Declaration->getASTContext().Idents.get(Text), Candidate.Member});
+      }
+    }
+    return Bundle;
+  }
+
+  static const ValueDecl *declarationFor(const Expr *Expression) {
+    if (!Expression)
+      return nullptr;
+    Expression = Expression->IgnoreParenImpCasts();
+    if (const auto *Reference = dyn_cast<DeclRefExpr>(Expression))
+      return dyn_cast<ValueDecl>(Reference->getDecl());
+    if (const auto *Member = dyn_cast<MemberExpr>(Expression))
+      return Member->getMemberDecl();
+    if (const auto *Call = dyn_cast<CallExpr>(Expression))
+      return Call->getDirectCallee();
+    if (const auto *Unary = dyn_cast<UnaryOperator>(Expression))
+      if (Unary->getOpcode() == UO_AddrOf || Unary->getOpcode() == UO_Deref)
+        return declarationFor(Unary->getSubExpr());
+    return nullptr;
+  }
+
+  static llvm::SmallVector<OwnershipTypeEntry, 4>
+  bundleFor(const Expr *Expression) {
+    return bundleFor(declarationFor(Expression));
+  }
+
+  static bool contains(ArrayRef<OwnershipTypeEntry> Bundle,
+                       const OwnershipTypeEntry &Wanted) {
+    return llvm::any_of(Bundle, [&](const OwnershipTypeEntry &Entry) {
+      return Entry.Family == Wanted.Family && Entry.Member == Wanted.Member;
+    });
+  }
+
+  static bool sameBundle(ArrayRef<OwnershipTypeEntry> First,
+                         ArrayRef<OwnershipTypeEntry> Second) {
+    if (First.size() != Second.size())
+      return false;
+    return llvm::all_of(First, [&](const OwnershipTypeEntry &Entry) {
+      return contains(Second, Entry);
+    });
+  }
+
+  void report(StringRef Reason, const Stmt *Statement, ProgramStateRef State,
+              CheckerContext &C) const {
+    ExplodedNode *Node = C.generateNonFatalErrorNode(State);
+    if (!Node)
+      return;
+    if (!BT)
+      BT = std::make_unique<BugType>(this, "Mismatched ownership type",
+                                     categories::MemoryError);
+    auto Report = std::make_unique<PathSensitiveBugReport>(
+        *BT, diagnosticMessage(Reason, Statement, C), Node);
+    Report->addRange(Statement->getSourceRange());
+    C.emitReport(std::move(Report));
+  }
+
+  void requireSameBundle(const ValueDecl *Destination, const Expr *Source,
+                         const Stmt *Statement, CheckerContext &C) const {
+    if (!Statement)
+      return;
+    llvm::SmallVector<OwnershipTypeEntry, 4> DestinationBundle =
+        bundleFor(Destination);
+    llvm::SmallVector<OwnershipTypeEntry, 4> SourceBundle = bundleFor(Source);
+    if (!sameBundle(DestinationBundle, SourceBundle))
+      report("ownership token bundle does not match destination type",
+             Statement, C.getState(), C);
+  }
+
+  static ProgramStateRef setToken(ProgramStateRef State, SVal Value,
+                                  const IdentifierInfo *Family,
+                                  CapabilityKind Kind) {
+    if (const MemRegion *Region = Value.getAsRegion())
+      return State->set<CapabilityMap>({Region, Family}, Kind);
+    if (SymbolRef Symbol = Value.getAsSymbol(true))
+      return State->set<SymbolCapabilityMap>({Symbol, Family}, Kind);
+    return State;
+  }
+
+public:
+  void checkBeginFunction(CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (!Function)
+      return;
+    ProgramStateRef State = C.getState();
+    const LocationContext *LC = C.getLocationContext();
+    bool Changed = false;
+    for (const ParmVarDecl *Parameter : Function->parameters()) {
+      SVal Value = State->getSVal(State->getLValue(Parameter, LC));
+      for (const OwnershipTypeEntry &Entry : bundleFor(Parameter)) {
+        if (Entry.Member == OwnershipTypeMember::Handle)
+          continue;
+        State = setToken(State, Value, Entry.Family,
+                         Entry.Member == OwnershipTypeMember::LinearToken
+                             ? CapabilityKind::Linear
+                             : CapabilityKind::Duplicable);
+        Changed = true;
+      }
+    }
+    if (Changed)
+      C.addTransition(State);
+  }
+
+  void checkPreStmt(const DeclStmt *Statement, CheckerContext &C) const {
+    for (const Decl *Declaration : Statement->decls()) {
+      const auto *Variable = dyn_cast<VarDecl>(Declaration);
+      if (Variable && Variable->hasInit())
+        requireSameBundle(Variable, Variable->getInit(), Statement, C);
+    }
+  }
+
+  void checkPreStmt(const BinaryOperator *Statement, CheckerContext &C) const {
+    if (!Statement->isAssignmentOp())
+      return;
+    requireSameBundle(declarationFor(Statement->getLHS()), Statement->getRHS(),
+                      Statement, C);
+  }
+
+  void checkPreStmt(const ReturnStmt *Statement, CheckerContext &C) const {
+    const auto *Function =
+        dyn_cast_or_null<FunctionDecl>(C.getLocationContext()->getDecl());
+    if (Function && Statement->getRetValue())
+      requireSameBundle(Function, Statement->getRetValue(), Statement, C);
+  }
+
+  void checkPreCall(const CallEvent &Call, CheckerContext &C) const {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function)
+      return;
+    unsigned Count = std::min(Call.getNumArgs(), Function->getNumParams());
+    for (unsigned Argument = 0; Argument < Count; ++Argument)
+      requireSameBundle(Function->getParamDecl(Argument),
+                        Call.getArgExpr(Argument), Call.getOriginExpr(), C);
+  }
+
+  void checkPostCall(const CallEvent &Call, CheckerContext &C) const {
+    const auto *Function = dyn_cast_or_null<FunctionDecl>(Call.getDecl());
+    if (!Function)
+      return;
+    ProgramStateRef State = C.getState();
+    bool Changed = false;
+    for (const OwnershipTypeEntry &Entry : bundleFor(Function)) {
+      if (Entry.Member == OwnershipTypeMember::Handle)
+        continue;
+      State = setToken(State, Call.getReturnValue(), Entry.Family,
+                       Entry.Member == OwnershipTypeMember::LinearToken
+                           ? CapabilityKind::Linear
+                           : CapabilityKind::Duplicable);
+      Changed = true;
+    }
+    if (Changed)
+      C.addTransition(State);
   }
 };
 
@@ -2502,6 +2700,9 @@ extern "C" void clang_registerCheckers(CheckerRegistry &Registry) {
   Registry.addChecker<CapabilityTokenChecker>(
       "ntlibc.CapabilityToken",
       "Proves explicit linear and duplicable ownership-token transitions", "");
+  Registry.addChecker<OwnershipTypeChecker>(
+      "ntlibc.OwnershipType",
+      "Proves ownership token bundles across value and storage types", "");
   Registry.addChecker<ValidPointerChecker>(
       "ntlibc.ValidPointer",
       "Proves every memory access has a nonnull, live, in-bounds, aligned "
