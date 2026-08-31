@@ -84,6 +84,7 @@ int __wait_encode_status(int exitcode)
 	case (unsigned)STATUS_CONTROL_C_EXIT:
 	case DBG_CONTROL_C:
 	case DBG_CONTROL_BREAK:             return sig_status(SIGINT);
+	default:                            break;
 	}
 
 	return (exitcode & 0xff) << 8;       /* WIFEXITED, WEXITSTATUS */

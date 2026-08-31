@@ -81,7 +81,7 @@ in_addr_t inet_addr(const char *s)
 	}
 	if (*p) goto done; /* trailing garbage */
 
-	switch (nparts) {
+	switch (nparts) { // NOLINT(bugprone-switch-missing-default-case) -- the parser admits only one through four address parts here
 	case 1:
 		if (parts[0] <= 0xffffffffUL) result = htonl((uint32_t)parts[0]);
 		break;
