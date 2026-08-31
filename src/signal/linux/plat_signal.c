@@ -497,6 +497,16 @@ int __plat_segv_code(void *addr)
 #define O_EXCL_PS        0200
 #define MAP_SHARED_PS    0x01
 
+/* name is required: name->Length is dereferenced unconditionally at
+ * entry with no guard, and this file's own two real call sites
+ * (open_shared_stop_event(), forwarded in turn from
+ * __plat_stop_event_create()/__plat_stop_event_probe()) always supply
+ * signal.c's own stop_event_name()-built &us, never NULL. buf is left
+ * unmarked -- writes into it go through buf[j++], guarded at every
+ * step by `j < bufsz - 1`, the same "extent, not nullness" class of
+ * fact 9be895e's own frexp precedent already distinguishes. */
+static void stop_event_path(const struct _UNICODE_STRING *name, char *buf, size_t bufsz)
+    __attribute__((nonnull(1)));
 static void stop_event_path(const struct _UNICODE_STRING *name, char *buf, size_t bufsz)
 {
 	static const char prefix[] = "/tmp/.ntlibc-stopev.";

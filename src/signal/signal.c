@@ -428,6 +428,15 @@ struct sig_delivery {
 	int sig;
 };
 
+/* p is required: aliased into `d` with no intervening computation
+ * (the analyzer treats it as the identical symbolic value, same as
+ * d24fe86's own pthread_*.c APC-callback family) and dereferenced
+ * unconditionally at `d->hsi` immediately below. Both real callers --
+ * sig_dispatch()'s own direct `sig_deliver(d)` and its
+ * `__sig_call_on_altstack(top, sig_deliver, d)` trampoline -- always
+ * pass sig_dispatch's own `d`, which is always __raise_internal_info()'s
+ * `&d` stack local, never NULL. */
+static void sig_deliver(void *p) __attribute__((nonnull(1)));
 static void sig_deliver(void *p)
 {
 	struct sig_delivery *d = p;
@@ -1413,6 +1422,14 @@ static int segv_code(void *addr) { return __plat_segv_code(addr); }
  * some reason not covered by [SI_USER etc.]". Most codes fall straight
  * out of ExceptionCode; only SEGV_MAPERR/SEGV_ACCERR need the extra
  * NtQueryVirtualMemory() lookup above. */
+/* ep is required: dereferenced unconditionally at entry
+ * (`ep->ExceptionRecord->ExceptionCode`) with no guard, and this
+ * function has exactly one real caller -- not anything in this tree,
+ * but NT itself, which invokes every vectored exception handler
+ * registered via RtlAddVectoredExceptionHandler() (__signal_init()
+ * below) with a real, non-NULL EXCEPTION_POINTERS* by construction of
+ * the exception-dispatch mechanism itself. */
+static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep) __attribute__((nonnull(1)));
 static LONG NTAPI exception_handler(EXCEPTION_POINTERS *ep)
 {
 	int sig, code;
