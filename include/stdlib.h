@@ -43,11 +43,11 @@ unsigned long long strtoull (const char *__restrict, char **__restrict, int);
 int rand (void);
 void srand (unsigned);
 
-void *malloc (size_t);
-void *calloc (size_t, size_t);
-void *realloc (void *, size_t);
-void free (void *);
-void *aligned_alloc(size_t, size_t);
+void *malloc (size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+void *calloc (size_t, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+void *realloc (void *, size_t) __NTLIBC_REALLOCATES(malloc, 1);
+void free (void *) __NTLIBC_TAKES_OWNERSHIP(malloc, 1);
+void *aligned_alloc(size_t, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
 
 _Noreturn void abort (void);
 int atexit (void (*) (void));
@@ -199,13 +199,13 @@ void lcong48 (unsigned short [7]);
 char *mktemp (char *) __attribute__((nonnull(1)));
 int mkstemps (char *, int);
 int mkostemps (char *, int, int);
-void *valloc (size_t);
-void *memalign(size_t, size_t);
+void *valloc (size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
+void *memalign(size_t, size_t) __NTLIBC_RETURNS_OWNERSHIP(malloc);
 size_t malloc_usable_size(void *);
 int getloadavg(double *, int);
 #define WCOREDUMP(s) ((s) & 0x80)
 #define WIFCONTINUED(s) ((s) == 0xffff)
-void *reallocarray (void *, size_t, size_t);
+void *reallocarray (void *, size_t, size_t) __NTLIBC_REALLOCATES(malloc, 1);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
 #endif
 

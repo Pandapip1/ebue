@@ -40,7 +40,7 @@ size_t __plat_alloc_size(void *p)
 	return RtlSizeHeap(__process_heap(), 0, p);
 }
 
-void __plat_dealloc(void *p)
+void __plat_dealloc(void *p) NTLIBC_TAKES_OWNERSHIP(plat_heap, 1)
 {
 	RtlFreeHeap(__process_heap(), 0, p);
 }

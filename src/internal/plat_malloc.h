@@ -29,12 +29,16 @@
 #ifndef _NTLIBC_PLAT_MALLOC_H
 #define _NTLIBC_PLAT_MALLOC_H
 
+#include <features.h>
 #include <stddef.h>
 
-void *__plat_alloc(size_t n, int zero);
-void *__plat_realloc(void *p, size_t n);
+void *__plat_alloc(size_t n, int zero)
+	__NTLIBC_RETURNS_OWNERSHIP(plat_heap);
+void *__plat_realloc(void *p, size_t n)
+	__NTLIBC_REALLOCATES(plat_heap, 1);
 size_t __plat_alloc_size(void *p);
-void __plat_dealloc(void *p);
+void __plat_dealloc(void *p)
+	__NTLIBC_TAKES_OWNERSHIP(plat_heap, 1);
 
 #endif
 

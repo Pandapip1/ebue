@@ -30,15 +30,18 @@
 #ifndef _NTLIBC_PLAT_PAGES_H
 #define _NTLIBC_PLAT_PAGES_H
 
+#include <features.h>
 #include <stddef.h>
 
 /* Returns freshly zeroed memory, or NULL on failure. */
-void *__plat_pages_alloc(size_t n);
+void *__plat_pages_alloc(size_t n)
+	__NTLIBC_RETURNS_OWNERSHIP(plat_pages);
 
 /* `n` must be the exact size a matching __plat_pages_alloc() call
  * returned (or was rounded up to) -- implementations are free to
  * assume it, the same way munmap(2) itself does. */
-void __plat_pages_free(void *p, size_t n);
+void __plat_pages_free(void *p, size_t n)
+	__NTLIBC_TAKES_OWNERSHIP(plat_pages, 1);
 
 #endif
 
