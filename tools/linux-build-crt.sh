@@ -78,6 +78,7 @@ FILES="
 	src/internal/fd.c
 	src/internal/linux/plat_fd_init.c
 	src/internal/errno.c
+	src/internal/ldbl_layout_check.c
 	src/exit/linux/plat_exit.c
 	src/string/memcpy.c
 	src/string/memset.c
@@ -85,6 +86,15 @@ FILES="
 	src/string/strcmp.c
 	src/string/strncmp.c
 "
+# src/internal/ldbl_layout_check.c was missing from this list until this
+# same gap surfaced again, for real, while bringing up the x86_64/i386
+# CRT ports (tools/linux-build-crt-cross.sh): crt/linux/crt1.c's own
+# __linux_start_main() has unconditionally called __verify_ldbl_layout()
+# since it was added, and this curated list simply never grew a line for
+# it -- a real, pre-existing link failure on THIS arch too
+# (`undefined reference to __verify_ldbl_layout`), not something the
+# cross port introduced. Confirmed by reproducing it here, natively,
+# before fixing it.
 
 INC="-I$srcdir/src/internal -I$BUILD/obj/include -I$srcdir/include -I$srcdir/arch/aarch64 -I$srcdir/arch/generic"
 # -fno-stack-protector: this build has no __stack_chk_guard/_fail (NT

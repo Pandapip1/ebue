@@ -36,7 +36,15 @@
 #include <string.h>
 #include "libc.h"
 
+#if defined(__aarch64__)
 #define SYS_statx 291
+#elif defined(__x86_64__)
+#define SYS_statx 332
+#elif defined(__i386__)
+#define SYS_statx 383
+#else
+#error "plat_fd_init.c: unsupported architecture"
+#endif
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
@@ -51,7 +59,10 @@
  * for itself (never the host's syscall(2) wrapper -- see plat_mem.c's
  * banner for why that collapses every failure's errno to the wrong
  * value). File-scoped by convention, not shared, the same as every
- * other Linux backend in this tree. */
+ * other Linux backend in this tree -- one body per arch's own calling
+ * convention, see crt/linux/crt1.c's own raw_syscall() banner for the
+ * fuller per-arch rationale. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	register long x0 __asm__("x0") = a1;
@@ -67,6 +78,45 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 	                 : "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#endif
 
 static int is_sys_error(long ret)
 {

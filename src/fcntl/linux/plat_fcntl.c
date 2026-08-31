@@ -125,14 +125,37 @@
 #include "libc.h"
 #include "plat_fcntl.h"
 
-/* aarch64 Linux syscall numbers -- see plat_mem.c's banner for why
- * these are hardcoded rather than pulled from a host header. */
+/* Linux syscall numbers -- see plat_mem.c's banner for why these are
+ * hardcoded rather than pulled from a host header; x86_64/i386 numbers
+ * confirmed against arch/x86/entry/syscalls/syscall_{64,32}.tbl.
+ * i386's SYS_fcntl (55, not fcntl64=221) and SYS_ftruncate (93, not
+ * ftruncate64=194) are the plain 32-bit-offset syscalls -- see this
+ * file's own __plat_lock_probe()/__plat_lock_set()/__plat_lock_clear()
+ * banner below for the disclosed consequence. */
+#if defined(__aarch64__)
 #define SYS_fcntl     25
 #define SYS_fallocate 47
 #define SYS_ftruncate 46
 #define SYS_statx     291
 #define SYS_openat    56
 #define SYS_close     57
+#elif defined(__x86_64__)
+#define SYS_fcntl     72
+#define SYS_fallocate 285
+#define SYS_ftruncate 77
+#define SYS_statx     332
+#define SYS_openat    257
+#define SYS_close     3
+#elif defined(__i386__)
+#define SYS_fcntl     55
+#define SYS_fallocate 324
+#define SYS_ftruncate 93
+#define SYS_statx     383
+#define SYS_openat    295
+#define SYS_close     6
+#else
+#error "plat_fcntl.c: unsupported architecture"
+#endif
 
 #define AT_EMPTY_PATH_LX     0x1000
 #define STATX_BASIC_STATS_LX 0x7ff
@@ -188,6 +211,7 @@ static int to_linux_open_flags(int flags)
  * independently across six other Linux backends. aarch64's syscall
  * calling convention: x8 = syscall number, x0..x5 = up to 6
  * arguments, result (or -errno in [-4095,-1]) in x0. */
+#if defined(__aarch64__)
 static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	register long x8 __asm__("x8") = nr;
@@ -203,6 +227,48 @@ static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, lo
 		: "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+/* See crt/linux/crt1.c's own raw_syscall() banner for the full per-arch
+ * calling-convention rationale -- duplicated here per this tree's own
+ * "own syscall table per file" discipline, not shared. */
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long ret;
+	register long r10 __asm__("r10") = a4;
+	register long r8  __asm__("r8")  = a5;
+	register long r9  __asm__("r9")  = a6;
+	__asm__ volatile("syscall"
+	                 : "=a"(ret)
+	                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+	                 : "rcx", "r11", "memory");
+	return ret;
+}
+#elif defined(__i386__)
+static long raw_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	long args[7];
+	long ret;
+	args[0] = nr; args[1] = a1; args[2] = a2; args[3] = a3;
+	args[4] = a4; args[5] = a5; args[6] = a6;
+	__asm__ volatile(
+		"pushl %%ebp\n\t"
+		"pushl %%ebx\n\t"
+		"movl 4(%%eax), %%ebx\n\t"
+		"movl 8(%%eax), %%ecx\n\t"
+		"movl 12(%%eax), %%edx\n\t"
+		"movl 16(%%eax), %%esi\n\t"
+		"movl 20(%%eax), %%edi\n\t"
+		"movl 24(%%eax), %%ebp\n\t"
+		"movl (%%eax), %%eax\n\t"
+		"int $0x80\n\t"
+		"popl %%ebx\n\t"
+		"popl %%ebp"
+		: "=a"(ret)
+		: "a"(args)
+		: "ecx", "edx", "esi", "edi", "memory", "cc");
+	return ret;
+}
+#endif
 
 static int is_sys_error(long ret)
 {
