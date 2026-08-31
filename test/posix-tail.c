@@ -593,23 +593,27 @@ static void test_nftw_chdir(void)
 	CHECK(getcwd(cwd0, sizeof cwd0) != NULL);
 
 	/* Run once from a cwd longer than the implementation's initial
-	 * 256-byte capture buffer, forcing the checked getcwd growth path. */
+	 * 256-byte capture buffer, forcing the checked getcwd growth path.
+	 * Keep the resulting path below Windows' separate MAX_PATH current-
+	 * directory ceiling: that limit is unrelated to the buffer-growth
+	 * behavior this test covers. */
 	{
-		const char *c1 = "ftw-long-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-		const char *c2 = "ftw-long-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-		const char *c3 = "ftw-long-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-		const char *c4 = "ftw-long-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-		const char *parts[] = { c1, c2, c3, c4 };
+		char part[NAME_MAX + 1];
 		char target[1200];
-		int depth = 0;
+		size_t cwdlen = strlen(cwd0);
+		size_t partlen = 0;
 		int made = 1;
+		int entered = 0;
 		snprintf(target, sizeof target, "%s/tailtree", cwd0);
-		for (depth = 0; depth < 4; depth++) {
-			if (mkdir(parts[depth], 0755) != 0 ||
-			    chdir(parts[depth]) != 0) {
+		if (cwdlen < 256) {
+			partlen = 256 - cwdlen - 1;
+			if (!partlen) partlen = 1;
+			memset(part, 'x', partlen);
+			part[partlen] = 0;
+			if (mkdir(part, 0755) != 0 || chdir(part) != 0)
 				made = 0;
-				break;
-			}
+			else
+				entered = 1;
 		}
 		CHECK(made);
 		if (made) {
@@ -617,10 +621,9 @@ static void test_nftw_chdir(void)
 			reset_walk();
 			CHECK(nftw(target, fn4, 5, FTW_CHDIR) == 0);
 		}
-		while (depth > 0) {
+		if (entered) {
 			CHECK(chdir("..") == 0);
-			depth--;
-			CHECK(rmdir(parts[depth]) == 0);
+			CHECK(rmdir(part) == 0);
 		}
 		CHECK(chdir(cwd0) == 0);
 	}
