@@ -51,12 +51,14 @@ static struct sched_state states[SCHED_STATE_MAX];
 static int self_policy = SCHED_OTHER;
 static int self_priority;
 
+static int policy_valid(int policy) __attribute__((__pure__));
 static int policy_valid(int policy)
 {
 	return policy == SCHED_OTHER || policy == SCHED_FIFO ||
 	       policy == SCHED_RR || policy == SCHED_SPORADIC;
 }
 
+static int priority_min(int policy) __attribute__((__pure__));
 static int priority_min(int policy)
 {
 	return policy == SCHED_OTHER ? 0 : 1;
@@ -106,16 +108,34 @@ static struct sched_state *state_for(pid_t pid, int create)
 	return 0;
 }
 
+/* -1 is never a real success value here (SCHED_PRIORITY_MAX is the
+ * fixed constant 31; priority_min() only returns 0 or 1), so it is an
+ * unambiguous "invalid policy" sentinel and the errno write can live
+ * in a thin non-pure wrapper below. */
+static int priority_max_or_neg1(int policy) __attribute__((__pure__));
+static int priority_max_or_neg1(int policy)
+{
+	return policy_valid(policy) ? SCHED_PRIORITY_MAX : -1;
+}
+
+static int priority_min_or_neg1(int policy) __attribute__((__pure__));
+static int priority_min_or_neg1(int policy)
+{
+	return policy_valid(policy) ? priority_min(policy) : -1;
+}
+
 int sched_get_priority_max(int policy)
 {
-	if (!policy_valid(policy)) { errno = EINVAL; return -1; }
-	return SCHED_PRIORITY_MAX;
+	int r = priority_max_or_neg1(policy);
+	if (r < 0) errno = EINVAL;
+	return r;
 }
 
 int sched_get_priority_min(int policy)
 {
-	if (!policy_valid(policy)) { errno = EINVAL; return -1; }
-	return priority_min(policy);
+	int r = priority_min_or_neg1(policy);
+	if (r < 0) errno = EINVAL;
+	return r;
 }
 
 int sched_getscheduler(pid_t pid)

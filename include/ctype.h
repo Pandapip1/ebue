@@ -10,24 +10,32 @@
 extern "C" {
 #endif
 
-int   isalnum(int);
-int   isalpha(int);
-int   isblank(int);
-int   iscntrl(int);
-int   isdigit(int);
-int   isgraph(int);
-int   islower(int);
-int   isprint(int);
-int   ispunct(int);
-int   isspace(int);
-int   isupper(int);
-int   isxdigit(int);
-int   tolower(int);
-int   toupper(int);
+/* Every function in this header is pure arithmetic on `(unsigned)c`
+ * (see the .c files under src/ctype/): no table lookup, no locale
+ * read (src/misc/locale.c's setlocale() never accepts any locale but
+ * "C"/"POSIX", so there is no second classification table this could
+ * ever pick), no errno, no global/static state, no I/O.  Each is a
+ * total function of its one int argument -- calling any of them twice
+ * with the same c always gives the same answer, with nothing else
+ * observable in between.  Marked __attribute__((__pure__)) accordingly. */
+int   isalnum(int) __attribute__((__pure__));
+int   isalpha(int) __attribute__((__pure__));
+int   isblank(int) __attribute__((__pure__));
+int   iscntrl(int) __attribute__((__pure__));
+int   isdigit(int) __attribute__((__pure__));
+int   isgraph(int) __attribute__((__pure__));
+int   islower(int) __attribute__((__pure__));
+int   isprint(int) __attribute__((__pure__));
+int   ispunct(int) __attribute__((__pure__));
+int   isspace(int) __attribute__((__pure__));
+int   isupper(int) __attribute__((__pure__));
+int   isxdigit(int) __attribute__((__pure__));
+int   tolower(int) __attribute__((__pure__));
+int   toupper(int) __attribute__((__pure__));
 
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
-int   isascii(int);
-int   toascii(int);
+int   isascii(int) __attribute__((__pure__));
+int   toascii(int) __attribute__((__pure__));
 #define _tolower(a) ((a)|0x20)
 #define _toupper(a) ((a)&0x5f)
 #endif

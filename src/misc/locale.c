@@ -10,15 +10,31 @@
 struct __locale_struct { int dummy; };
 static struct __locale_struct __c_locale;
 
+/* Tagged struct rather than an output-pointer parameter: writing
+ * through an out-param would just reintroduce the "writes through a
+ * pointer argument" disqualifier this split exists to remove. */
+struct setlocale_result { char *value; int bad_cat; };
+
+static struct setlocale_result setlocale_compute(int cat, const char *name) __attribute__((__pure__));
+static struct setlocale_result setlocale_compute(int cat, const char *name)
+{
+	struct setlocale_result r = { 0, 0 };
+	if (cat < 0 || cat > LC_ALL) { r.bad_cat = 1; return r; }
+	if (!name) { r.value = (char *)"C"; return r; }
+	if (!*name || !strcmp(name, "C") || !strcmp(name, "POSIX")) {
+		r.value = (char *)"C";
+		return r;
+	}
+	/* setlocale(LC_ALL, "C;C;C;...") style composite names */
+	if (cat == LC_ALL && !strncmp(name, "C;", 2)) r.value = (char *)"C";
+	return r;
+}
+
 char *setlocale(int cat, const char *name)
 {
-	if (cat < 0 || cat > LC_ALL) { errno = EINVAL; return 0; }
-	if (!name) return (char *)"C";
-	if (!*name || !strcmp(name, "C") || !strcmp(name, "POSIX"))
-		return (char *)"C";
-	/* setlocale(LC_ALL, "C;C;C;...") style composite names */
-	if (cat == LC_ALL && !strncmp(name, "C;", 2)) return (char *)"C";
-	return 0;
+	struct setlocale_result r = setlocale_compute(cat, name);
+	if (r.bad_cat) errno = EINVAL;
+	return r.value;
 }
 
 static struct lconv __posix_lconv = {
@@ -53,9 +69,16 @@ struct lconv *localeconv(void)
 	return &__posix_lconv;
 }
 
-locale_t newlocale(int mask, const char *name, locale_t base)
+/* &__c_locale is a fixed address (one static object, never moved), so
+ * returning it is a constant pointer value, not a read of mutable
+ * state -- the same reasoning as strerror()'s pointer into its own
+ * fixed message table (string.h). */
+struct newlocale_result { locale_t value; int err; };
+
+static struct newlocale_result newlocale_compute(int mask, const char *name) __attribute__((__pure__));
+static struct newlocale_result newlocale_compute(int mask, const char *name)
 {
-	(void)base;
+	struct newlocale_result r = { 0, 0 };
 	/* newlocale.html ERRORS, *shall fail* (not "may fail"):
 	 *   "[EINVAL] The category_mask contains a bit that does not
 	 *    correspond to a valid category."
@@ -73,15 +96,21 @@ locale_t newlocale(int mask, const char *name, locale_t base)
 	 * a bitmask needs no locale data at all, and *shall fail* makes it
 	 * part of the contract a caller relies on to detect its own bad
 	 * argument. */
-	if (mask & ~LC_ALL_MASK) {
-		errno = EINVAL;
-		return 0;
-	}
+	if (mask & ~LC_ALL_MASK) { r.err = EINVAL; return r; }
 	if (name && *name && strcmp(name, "C") && strcmp(name, "POSIX")) {
-		errno = ENOENT;
-		return 0;
+		r.err = ENOENT;
+		return r;
 	}
-	return &__c_locale;
+	r.value = &__c_locale;
+	return r;
+}
+
+locale_t newlocale(int mask, const char *name, locale_t base)
+{
+	(void)base;
+	struct newlocale_result r = newlocale_compute(mask, name);
+	if (r.err) errno = r.err;
+	return r.value;
 }
 
 void freelocale(locale_t l)

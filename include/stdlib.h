@@ -65,17 +65,31 @@ int system (const char *);
 void *bsearch (const void *, const void *, size_t, size_t, int (*)(const void *, const void *));
 void qsort (void *, size_t, size_t, int (*)(const void *, const void *));
 
-int abs (int);
-long labs (long);
-long long llabs (long long);
+/* abs/labs/llabs (src/stdlib/abs.c): `a > 0 ? a : -a`, a total
+ * function of the one argument with no writes, no errno, no globals.
+ * (abs(INT_MIN) etc. is signed-overflow UB, exactly like strlen(NULL)
+ * is UB for nonnull-annotated strlen -- pure does not require the
+ * function be defined on every representable input, only that it have
+ * no side effects and be deterministic where it is defined.) */
+int abs (int) __attribute__((__pure__));
+long labs (long) __attribute__((__pure__));
+long long llabs (long long) __attribute__((__pure__));
 
 typedef struct { int quot, rem; } div_t;
 typedef struct { long quot, rem; } ldiv_t;
 typedef struct { long long quot, rem; } lldiv_t;
 
-div_t div (int, int);
-ldiv_t ldiv (long, long);
-lldiv_t lldiv (long long, long long);
+/* div/ldiv/lldiv (src/stdlib/div.c): `n / d`, `n % d` into a struct
+ * returned by value -- the hidden pointer real ABIs use to return a
+ * large struct is a calling-convention detail invisible to the C
+ * abstract machine, not a pointer *argument* the C source itself
+ * writes through, so it does not trip the "writes through a pointer
+ * argument" disqualifier. No errno (integer division does not set it
+ * in C), no globals, no I/O; d == 0 or n == INT_MIN/-1-shaped overflow
+ * is UB, same caveat as abs() above. */
+div_t div (int, int) __attribute__((__pure__));
+ldiv_t ldiv (long, long) __attribute__((__pure__));
+lldiv_t lldiv (long long, long long) __attribute__((__pure__));
 
 int mblen (const char *, size_t);
 int mbtowc (wchar_t *__restrict, const char *__restrict, size_t);

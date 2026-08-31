@@ -58,32 +58,39 @@ wchar_t *wcscat (wchar_t *__restrict, const wchar_t *__restrict);
 wchar_t *wcsncat (wchar_t *__restrict, const wchar_t *__restrict, size_t) __attribute__((nonnull(1, 2)));
 /* wcscmp: `*l == *r && *l` evaluates both sides of `==` every time,
  * same as strcmp -- no short circuit that could skip either. */
-int wcscmp (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+int wcscmp (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
 /* wcsncmp's loop condition (`n && *l == *r && *l`) short-circuits
  * everything on n, and unlike strncmp there is no unconditional
  * post-loop dereference to fall back on (`return n ? ... : 0;`) -- so
  * this is the same real "n == 0 means neither pointer is ever
  * touched" convention as mem*'s own family (matching glibc's real
  * wcsncmp nonnull(1, 2), not a genuine "may be invalid" reading). */
-int wcsncmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2)));
+int wcsncmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2), __pure__));
 /* wcschr forwards straight into its own loop (`for (; *s && *s != c;
  * s++)`), dereferencing s at least once regardless of c; c is a
- * wchar_t value, not a pointer. */
-wchar_t *wcschr (const wchar_t *, wchar_t) __attribute__((nonnull(1)));
-wchar_t *wcsrchr (const wchar_t *, wchar_t);
+ * wchar_t value, not a pointer. Reads only. */
+wchar_t *wcschr (const wchar_t *, wchar_t) __attribute__((nonnull(1), __pure__));
+/* wcsrchr (src/string/wcsrchr.c) walks to the end via wcslen() and
+ * scans backward -- reads only, same __pure__ reasoning as strrchr. */
+wchar_t *wcsrchr (const wchar_t *, wchar_t) __attribute__((__pure__));
 /* wcsstr requires n (`if (!n[0]) ...` dereferences it first) and h:
  * `h = wcschr(h, *n)` is reached whenever n[0] != 0, and wcschr always
- * dereferences its first argument once c is known nonzero. */
-wchar_t *wcsstr (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
-size_t wcslen (const wchar_t *) __attribute__((nonnull(1)));
+ * dereferences its first argument once c is known nonzero. Reads
+ * only. */
+wchar_t *wcsstr (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
+size_t wcslen (const wchar_t *) __attribute__((nonnull(1), __pure__));
 wchar_t *wmemcpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);
 wchar_t *wmemmove (wchar_t *, const wchar_t *, size_t);
 /* Same n == 0 escape as mem*'s own family (glibc: wmemset nonnull(1)). */
 wchar_t *wmemset (wchar_t *, wchar_t, size_t) __attribute__((nonnull(1)));
-int wmemcmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2)));
-wchar_t *wmemchr (const wchar_t *, wchar_t, size_t) __attribute__((nonnull(1)));
+/* wmemcmp/wmemchr (src/string/wmemcmp.c, wmemchr.c): reads only, same
+ * __pure__ reasoning as memcmp/memchr in string.h. */
+int wmemcmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2), __pure__));
+wchar_t *wmemchr (const wchar_t *, wchar_t, size_t) __attribute__((nonnull(1), __pure__));
 
-size_t wcsnlen (const wchar_t *, size_t);
+/* wcsnlen (src/string/wcsnlen.c) is wmemchr(s, 0, n) plus arithmetic --
+ * reads only, same __pure__ reasoning as strnlen (string.h). */
+size_t wcsnlen (const wchar_t *, size_t) __attribute__((__pure__));
 wchar_t *wcsdup (const wchar_t *);
 /* wcpcpy/wcpncpy dereference d/s the same unconditional way as
  * stpcpy/stpncpy above (their own header comment applies verbatim;
@@ -98,9 +105,9 @@ wchar_t *wcpncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t) __attr
  * set are required (matching glibc's real wcsspn/wcscspn, both
  * nonnull(1, 2)); wcspbrk forwards straight into wcscspn(s, set) with
  * no check of its own, inheriting the same requirement on both. */
-wchar_t *wcspbrk (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
-size_t wcsspn (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
-size_t wcscspn (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
+wchar_t *wcspbrk (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
+size_t wcsspn (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
+size_t wcscspn (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
 /* wcstok's s is optional, the same "resume from *p" convention as
  * strtok_r's s (see string.h); sep and p are both required the same
  * way strtok_r's are. */
@@ -111,10 +118,10 @@ wchar_t *wcstok (wchar_t *__restrict, const wchar_t *__restrict, wchar_t **__res
  * escape). wcscasecmp_l/wcsncasecmp_l forward to them unconditionally,
  * ignoring their own locale_t (same ASCII-only C/POSIX reasoning as
  * strcasecmp_l above). */
-int wcscasecmp (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2)));
-int wcsncasecmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2)));
-int wcscasecmp_l (const wchar_t *, const wchar_t *, locale_t) __attribute__((nonnull(1, 2)));
-int wcsncasecmp_l (const wchar_t *, const wchar_t *, size_t, locale_t) __attribute__((nonnull(1, 2)));
+int wcscasecmp (const wchar_t *, const wchar_t *) __attribute__((nonnull(1, 2), __pure__));
+int wcsncasecmp (const wchar_t *, const wchar_t *, size_t) __attribute__((nonnull(1, 2), __pure__));
+int wcscasecmp_l (const wchar_t *, const wchar_t *, locale_t) __attribute__((nonnull(1, 2), __pure__));
+int wcsncasecmp_l (const wchar_t *, const wchar_t *, size_t, locale_t) __attribute__((nonnull(1, 2), __pure__));
 
 wint_t btowc (int);
 int wctob (wint_t);
@@ -170,8 +177,11 @@ int vwscanf (const wchar_t *__restrict, __isoc_va_list) __attribute__((nonnull(1
 
 size_t wcsftime (wchar_t *__restrict, size_t, const wchar_t *__restrict, const struct tm *__restrict);
 
-int wcscoll (const wchar_t *, const wchar_t *);
-int wcscoll_l (const wchar_t *, const wchar_t *, locale_t);
+/* wcscoll/wcscoll_l (src/string/wcscoll.c): one-line forwards to
+ * wcscmp() (already __pure__ above), same "one fixed C/POSIX locale"
+ * reasoning as strcoll (string.h). */
+int wcscoll (const wchar_t *, const wchar_t *) __attribute__((__pure__));
+int wcscoll_l (const wchar_t *, const wchar_t *, locale_t) __attribute__((__pure__));
 size_t wcsxfrm (wchar_t *__restrict, const wchar_t *__restrict, size_t);
 size_t wcsxfrm_l (wchar_t *__restrict, const wchar_t *__restrict, size_t, locale_t);
 

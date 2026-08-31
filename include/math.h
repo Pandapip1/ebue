@@ -26,12 +26,19 @@ extern "C" {
 #define FP_SUBNORMAL 3
 #define FP_NORMAL    4
 
-int __fpclassify(double);
-int __fpclassifyf(float);
-int __fpclassifyl(long double);
-int __signbit(double);
-int __signbitf(float);
-int __signbitl(long double);
+/* __fpclassify{,f,l}/__signbit{,f,l} (src/math/fpclassify.c) are pure
+ * bit-pattern classification: each reinterprets its argument's bytes
+ * through a union and masks/compares the sign/exponent/mantissa
+ * fields -- no FPU comparison instruction is ever executed (unlike,
+ * say, fmax/fmin's `x < y`), so there is no hardware FP exception this
+ * could ever raise, on top of already having no errno, no globals, no
+ * writes.  Deterministic in the argument's bit pattern alone. */
+int __fpclassify(double) __attribute__((__pure__));
+int __fpclassifyf(float) __attribute__((__pure__));
+int __fpclassifyl(long double) __attribute__((__pure__));
+int __signbit(double) __attribute__((__pure__));
+int __signbitf(float) __attribute__((__pure__));
+int __signbitl(long double) __attribute__((__pure__));
 
 #define fpclassify(x) ( \
 	sizeof(x) == sizeof(float) ? __fpclassifyf(x) : \
@@ -66,9 +73,12 @@ int __signbitl(long double);
 #define FP_ILOGBNAN (-1-0x7fffffff)
 #define FP_ILOGB0 FP_ILOGBNAN
 
-double      fabs(double);
-float       fabsf(float);
-long double fabsl(long double);
+/* fabs{,f,l} (src/math/fabs.c) mask off the sign bit through a union,
+ * the same pure bit-pattern manipulation as __fpclassify above -- no
+ * comparison, no FPU exception possible, no errno, no globals. */
+double      fabs(double) __attribute__((__pure__));
+float       fabsf(float) __attribute__((__pure__));
+long double fabsl(long double) __attribute__((__pure__));
 double      floor(double);
 float       floorf(float);
 long double floorl(long double);
@@ -240,9 +250,13 @@ long double fmaxl(long double, long double);
 double      fmin(double, double);
 float       fminf(float, float);
 long double fminl(long double, long double);
-double      copysign(double, double);
-float       copysignf(float, float);
-long double copysignl(long double, long double);
+/* copysign{,f,l} (src/math/copysign.c) combine x's magnitude bits with
+ * y's sign bit through a union, the same pure bit-pattern manipulation
+ * as fabs above -- no comparison, no FPU exception possible, no errno,
+ * no globals. */
+double      copysign(double, double) __attribute__((__pure__));
+float       copysignf(float, float) __attribute__((__pure__));
+long double copysignl(long double, long double) __attribute__((__pure__));
 double      nan(const char *);
 float       nanf(const char *);
 long double nanl(const char *);

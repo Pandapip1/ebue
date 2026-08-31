@@ -32,8 +32,13 @@ extern "C" {
 
 /* pattern/string are both required: src/fnmatch/fnmatch.c forwards
  * them straight into fnm_match(), which itself dereferences both
- * unconditionally. */
-int fnmatch(const char *, const char *, int) __attribute__((nonnull(1, 2)));
+ * unconditionally. fnmatch() and its whole static call graph
+ * (fnm_match/bracket_match/leading/class_match, all in
+ * src/fnmatch/fnmatch.c) are pure recursive-descent matching: no
+ * writes through any pointer, no errno, no global/static state, no
+ * I/O -- each call is a total, deterministic function of pattern,
+ * string, and flags alone. */
+int fnmatch(const char *, const char *, int) __attribute__((nonnull(1, 2), __pure__));
 
 #ifdef __cplusplus
 }

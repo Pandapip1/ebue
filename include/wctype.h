@@ -55,26 +55,43 @@ extern "C" {
  * into (nothing else needs the type), so it is defined right here. */
 typedef int wctrans_t;
 
-int iswalnum(wint_t);
-int iswalpha(wint_t);
-int iswblank(wint_t);
-int iswcntrl(wint_t);
-int iswdigit(wint_t);
-int iswgraph(wint_t);
-int iswlower(wint_t);
-int iswprint(wint_t);
-int iswpunct(wint_t);
-int iswspace(wint_t);
-int iswupper(wint_t);
-int iswxdigit(wint_t);
+/* Every iswXXX() here (src/ctype/isw*.c) is a one-line forward into the
+ * matching ctype.h is*() function, already __pure__ for the reasons
+ * given there; towlower/towupper (src/ctype/tow*.c) are the same ASCII
+ * bit trick as tolower/toupper, gated on iswupper()/iswlower(). None of
+ * this reads locale state beyond the fixed C/POSIX-only design this
+ * whole header's own banner comment documents, touches errno, or does
+ * I/O -- each is a total, deterministic function of its argument(s). */
+int iswalnum(wint_t) __attribute__((__pure__));
+int iswalpha(wint_t) __attribute__((__pure__));
+int iswblank(wint_t) __attribute__((__pure__));
+int iswcntrl(wint_t) __attribute__((__pure__));
+int iswdigit(wint_t) __attribute__((__pure__));
+int iswgraph(wint_t) __attribute__((__pure__));
+int iswlower(wint_t) __attribute__((__pure__));
+int iswprint(wint_t) __attribute__((__pure__));
+int iswpunct(wint_t) __attribute__((__pure__));
+int iswspace(wint_t) __attribute__((__pure__));
+int iswupper(wint_t) __attribute__((__pure__));
+int iswxdigit(wint_t) __attribute__((__pure__));
 
-int iswctype(wint_t, wctype_t);
-wctype_t wctype(const char *);
+/* iswctype() (src/ctype/iswctype.c) is a closed switch over the twelve
+ * iswXXX() functions above, keyed on the wctype_t desc; wctype()
+ * (src/ctype/wctype.c) only strcmp()s name against a fixed static
+ * array of the twelve class-name literals, reading its own arguments
+ * and this tree's fixed constant table only -- no locale variation is
+ * possible (this tree has exactly one locale), no errno, no writes. */
+int iswctype(wint_t, wctype_t) __attribute__((__pure__));
+wctype_t wctype(const char *) __attribute__((__pure__));
 
-wint_t towlower(wint_t);
-wint_t towupper(wint_t);
-wint_t towctrans(wint_t, wctrans_t);
-wctrans_t wctrans(const char *);
+/* towctrans()/wctrans() (src/ctype/towctrans.c, wctrans.c) are the same
+ * shape as iswctype()/wctype() just above: a closed switch/strcmp
+ * dispatch to towlower()/towupper(), with no locale variation, errno,
+ * or writes anywhere in either body. */
+wint_t towlower(wint_t) __attribute__((__pure__));
+wint_t towupper(wint_t) __attribute__((__pure__));
+wint_t towctrans(wint_t, wctrans_t) __attribute__((__pure__));
+wctrans_t wctrans(const char *) __attribute__((__pure__));
 
 #ifdef __cplusplus
 }
