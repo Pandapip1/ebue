@@ -321,7 +321,7 @@ int __plat_process_wait(__plat_handle_t h, int mode)
 	if (reap_find(pid)) return 1;
 
 	switch (mode) {
-	case __PLAT_WAIT_NOHANG: options = WNOHANG_LX; break;
+	case __PLAT_WAIT_NOHANG:
 	case __PLAT_WAIT_POLL:   options = WNOHANG_LX; break;
 	default:                 options = 0; break;
 	}

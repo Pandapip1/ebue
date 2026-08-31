@@ -2345,6 +2345,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 		struct redir_state rs;
 		stage_result_t sr;
 		int failed = 0;
+		int unsupported;
 		unsigned long gen0 = cmdsub_generation;
 
 		sr.kind = 1;
@@ -2366,8 +2367,11 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 			 * left-to-right ordering then makes the explicit "2>&1"
 			 * apply on top of this implicit hookup, which is what
 			 * makes that merge happen at all). */
-			if (wire_stage_stdio(&rs, pipes, n, i) ||
-			    apply_redirs(pl->commands[i].redirs, &rs, &failed)) {
+			unsupported = wire_stage_stdio(&rs, pipes, n, i) ||
+			              apply_redirs(pl->commands[i].redirs, &rs, &failed);
+			if (!unsupported && !failed)
+				unsupported = run_stage(&pl->commands[i], &sr, 0);
+			if (unsupported) {
 				abort_unsupported = 1;
 			} else if (failed) {
 				/* 2.8.1: this stage fails without running, same
@@ -2376,8 +2380,6 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 				 * (its reader just sees an immediate EOF from
 				 * this stage's never-written pipe end). */
 				sr.special = 1;
-			} else if (run_stage(&pl->commands[i], &sr, 0)) {
-				abort_unsupported = 1;
 			}
 			restore_fds(&rs);
 		}
