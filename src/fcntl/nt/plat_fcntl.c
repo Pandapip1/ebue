@@ -226,6 +226,41 @@ int __plat_file_extent(__plat_handle_t h, long long *alloc_size, long long *eof)
 	return 0;
 }
 
+/* Wine versions without FileAllocationInformation can still honour the
+ * useful, non-destructive part of an extending posix_fallocate() request:
+ * every byte from the old EOF to the requested end is specified to read as
+ * zero already, so writing zeroes there changes no file data while forcing
+ * the host file system to back the new tail with storage.  Use positioned
+ * I/O so the caller's file offset is left alone, just as posix_fallocate()
+ * requires.  This is deliberately not used for an extent wholly inside the
+ * file: without an allocation-range query, rewriting that range would need
+ * read access which a valid write-only descriptor need not have. */
+static int materialize_zero_tail(HANDLE h, long long from, long long to)
+{
+	static const unsigned char zeroes[64 * 1024];
+	IO_STATUS_BLOCK io;
+	LARGE_INTEGER pos;
+	NTSTATUS st;
+	ULONG part;
+
+	while (from < to) {
+		part = to - from > (long long)sizeof zeroes
+		     ? (ULONG)sizeof zeroes : (ULONG)(to - from);
+		pos = from;
+		io.Status = 0;
+		io.Information = 0;
+		st = NtWriteFile(h, 0, 0, 0, &io, zeroes, part, &pos, 0);
+		if (st == STATUS_PENDING) {
+			NtWaitForSingleObject(h, 0, 0);
+			st = io.Status;
+		}
+		if (!NT_SUCCESS(st)) return __errno_from_status(st);
+		if (!io.Information) return EIO;
+		from += (long long)io.Information;
+	}
+	return 0;
+}
+
 /* `grow_alloc` decides whether the AllocationSize step below runs at
  * all -- the front door (fadvise.c's posix_fallocate()) computes it as
  * `want > alloc_size && want >= eof`, and here is why both conjuncts
@@ -289,21 +324,22 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 	FILE_ALLOCATION_INFORMATION ai;
 	FILE_END_OF_FILE_INFORMATION eofi;
 	NTSTATUS st;
+	int missing_allocation_api = 0;
 
 	if (grow_alloc) {
 		ai.AllocationSize = want;
 		st = NtSetInformationFile(h, &io, &ai, sizeof ai, FileAllocationInformation);
-		/* Real Windows honours this; Wine's ntdll does not implement
+		/* Real Windows honours this; older Wine ntdll did not implement
 		 * FileAllocationInformation at all (it appears only in the
 		 * set-info size table in dlls/ntdll/unix/file.c and falls
 		 * through to the default arm) and every other failure short of
-		 * that is a real error worth reporting (e.g. ENOSPC). Falling
-		 * through on "no such information class here" still leaves the
-		 * EndOfFile extension below to grow the file -- a strict
-		 * reading of posix_fallocate() loses the "no later write can
-		 * ENOSPC" guarantee on such a system, but the alternative is
-		 * failing a real Windows-capable call every time it merely runs
-		 * under Wine, which is worse than the degraded guarantee.
+		 * that is a real error worth reporting (e.g. ENOSPC).  An
+		 * unsupported class takes materialize_zero_tail() below, which
+		 * supplies the storage guarantee for an extending request rather
+		 * than merely growing a sparse EOF.  A request wholly inside an
+		 * existing file retains the old degraded no-op: emulating that
+		 * safely would require reading and rewriting caller data, but a
+		 * valid O_WRONLY descriptor deliberately grants no read access.
 		 *
 		 * Branch on the *status*, not on __errno_from_status().  The
 		 * errno mapping is a lossy projection: it folds many distinct
@@ -317,12 +353,18 @@ int __plat_fallocate(__plat_handle_t h, long long want, long long eof, int grow_
 		 * STATUS_INFO_LENGTH_MISMATCH and STATUS_DATATYPE_MISALIGNMENT,
 		 * turning this fallback into a bug-hider.  Whenever the status
 		 * is in hand, decide from it. */
-		if (!NT_SUCCESS(st)
-		    && st != STATUS_NOT_IMPLEMENTED
-		    && st != STATUS_NOT_SUPPORTED
-		    && st != STATUS_INVALID_DEVICE_REQUEST
-		    && st != STATUS_INVALID_INFO_CLASS)
-			return __errno_from_status(st);
+		if (!NT_SUCCESS(st)) {
+			missing_allocation_api = st == STATUS_NOT_IMPLEMENTED
+			                      || st == STATUS_NOT_SUPPORTED
+			                      || st == STATUS_INVALID_DEVICE_REQUEST
+			                      || st == STATUS_INVALID_INFO_CLASS;
+			if (!missing_allocation_api) return __errno_from_status(st);
+		}
+	}
+	if (missing_allocation_api && want > eof) {
+		int error = materialize_zero_tail(h, eof, want);
+		if (error) return error;
+		eof = want;
 	}
 	if (want > eof) {
 		eofi.EndOfFile = want;

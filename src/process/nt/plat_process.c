@@ -352,6 +352,7 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
                          const __plat_handle_t std[3], __plat_handle_t *out_process)
 {
 	struct __ntpath np;
+	__plat_handle_t inherited_std[3] = { std[0], std[1], std[2] };
 	RTL_USER_PROCESS_PARAMETERS *pp = 0;
 	RTL_USER_PROCESS_INFORMATION info;
 	UNICODE_STRING imageDos, cmdLine, cur, runtimeUS;
@@ -403,7 +404,7 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * (moved from here) for why a field set *after* creation to point
 	 * outside the block is not safe -- the intermittent parent-address
 	 * bug that used to be. */
-	runtime = __fd_runtime_data(&runtime_len);
+	runtime = __fd_runtime_data(&runtime_len, inherited_std);
 	runtimeUS.Buffer = (PWSTR)runtime;
 	runtimeUS.Length = (USHORT)runtime_len;
 	runtimeUS.MaximumLength = (USHORT)runtime_len;
@@ -418,7 +419,9 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * for the measurements behind closed_placeholder() and why a
 	 * close-on-exec standard descriptor never reaches here (the front
 	 * door already turned it into __PLAT_HANDLE_NULL before calling
-	 * this).
+	 * this).  RuntimeData construction can replace a descriptor's handle
+	 * while making it inheritable; inherited_std tracks those replacements
+	 * so these by-value fields always receive the live handle.
 	 *
 	 * pp->StandardInput: not expressible via nonnull -- pp is a LOCAL
 	 * (`RTL_USER_PROCESS_PARAMETERS *pp = 0;` above), not a parameter of
@@ -427,9 +430,9 @@ int __plat_process_spawn(const char *path, char *const argv[], char *const envp[
 	 * (the `if (!NT_SUCCESS(st)) {...goto out;}` immediately above sets
 	 * *pp on success, per RtlCreateProcessParametersEx's own contract) --
 	 * a fact this function's own signature has no way to restate. */
-	pp->StandardInput = std[0] ? std[0] : closed_placeholder(&ph[0]);
-	pp->StandardOutput = std[1] ? std[1] : closed_placeholder(&ph[1]);
-	pp->StandardError = std[2] ? std[2] : closed_placeholder(&ph[2]);
+	pp->StandardInput = inherited_std[0] ? inherited_std[0] : closed_placeholder(&ph[0]);
+	pp->StandardOutput = inherited_std[1] ? inherited_std[1] : closed_placeholder(&ph[1]);
+	pp->StandardError = inherited_std[2] ? inherited_std[2] : closed_placeholder(&ph[2]);
 	pp->WindowFlags |= STARTF_USESTDHANDLES;
 
 	memset(&info, 0, sizeof info);

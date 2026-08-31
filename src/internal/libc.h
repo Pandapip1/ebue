@@ -293,8 +293,12 @@ void __mq_fd_closed(int);                    /* release side handles for an mqd_
 void __mq_fd_replaced(int, __plat_handle_t);  /* follow fork/fcntl handle remakes */
 /* Serialise the inheritable part of the descriptor table into a freshly
  * malloc'd blob for a child's RTL_USER_PROCESS_PARAMETERS RuntimeData;
- * *len receives its size.  NULL with errno on failure. */
-void *__fd_runtime_data(size_t *len);
+ * *len receives its size.  When making a descriptor inheritable replaces
+ * its handle, update any matching standard-handle snapshot too, so the
+ * process parameters do not retain the now-closed old value.  NULL with
+ * errno on failure. */
+void *__fd_runtime_data(size_t *len, __plat_handle_t std[3])
+    __attribute__((nonnull(1, 2)));
 
 /* Resolve a path in the fixed POSIX namespace.  __VFS_NONE means the path
  * is native, __VFS_MISSING means it is inside the namespace but absent,

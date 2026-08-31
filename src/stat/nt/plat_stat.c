@@ -93,6 +93,7 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 	struct stat before;
 	NTSTATUS st;
 	unsigned lxmode;
+	int making_readonly;
 	int have_before = __plat_fstat(h, __FD_FILE, &before) == 0;
 	st = NtQueryInformationFile(h, &io, &bi, sizeof bi, FileBasicInformation);
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -118,6 +119,39 @@ int __plat_chmod(__plat_handle_t h, mode_t mode)
 		set.FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
 	else
 		set.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+	making_readonly = !(bi.FileAttributes & FILE_ATTRIBUTE_READONLY) &&
+	                  (set.FileAttributes & FILE_ATTRIBUTE_READONLY);
+	/* Wine refuses NtSetEaFile once FILE_ATTRIBUTE_READONLY is set on the
+	 * object, even when this already-open handle was granted FILE_WRITE_EA.
+	 * Persist the exact POSIX mode before making that one-way transition;
+	 * doing it in the old order made chmod(0700 -> 0500) report success via
+	 * the compatibility fallback below while stat() kept seeing the stale
+	 * 0700 $LXMOD record.  The inverse transition must retain the old order:
+	 * clearing READONLY first is what makes the EA writable again. */
+	if (making_readonly) {
+		if (__plat_lxmod_set(h, lxmode) == 0) {
+			st = NtSetInformationFile(h, &io, &set, sizeof set,
+			                          FileBasicInformation);
+			if (NT_SUCCESS(st)) return 0;
+			/* Best-effort observable rollback.  A handle on which fstat failed
+			 * cannot supply an old mode, but that is already an exceptional
+			 * object for which chmod cannot promise a recoverable metadata
+			 * transaction. */
+			if (have_before)
+				__plat_lxmod_set(h,
+				    (bi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ? S_IFDIR : S_IFREG) |
+				    (before.st_mode & 07777));
+			return __set_errno_status(st);
+		}
+		/* Wine versions without writable EAs can still represent a
+		 * write-bit-only change with FILE_ATTRIBUTE_READONLY. */
+		if (!have_before || (mode & 0111) != (before.st_mode & 0111))
+			return -1;
+		st = NtSetInformationFile(h, &io, &set, sizeof set,
+		                          FileBasicInformation);
+		if (!NT_SUCCESS(st)) return __set_errno_status(st);
+		return 0;
+	}
 	if (set.FileAttributes != bi.FileAttributes) {
 		st = NtSetInformationFile(h, &io, &set, sizeof set, FileBasicInformation);
 		if (!NT_SUCCESS(st)) return __set_errno_status(st);
@@ -198,7 +232,11 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	ea_len = __lxmod_create_buffer(mode_ea, S_IFDIR | mode);
 
 	if (__ntpath_at(dirfd, path, &np, OBJ_CASE_INSENSITIVE) < 0) return -1;
-	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | SYNCHRONIZE, &np.oa, &io, 0,
+	/* Wine only consumes NtCreateFile's EA buffer when the requested access
+	 * includes FILE_WRITE_EA.  Without it mkdir() succeeded but silently
+	 * discarded the requested POSIX mode, so stat() fell back to 0755. */
+	st = NtCreateFile(&h, FILE_LIST_DIRECTORY | FILE_WRITE_EA | SYNCHRONIZE,
+	                          &np.oa, &io, 0,
 	                          FILE_ATTRIBUTE_NORMAL, FILE_SHARE_VALID_FLAGS, FILE_CREATE,
 	                          FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT,
 	                          mode_ea, ea_len);
@@ -231,6 +269,16 @@ int __plat_mkdir(int dirfd, const char *path, mode_t mode)
 	__ntpath_free(&np);
 	if (st == STATUS_OBJECT_NAME_COLLISION) { errno = EEXIST; return -1; }
 	if (!NT_SUCCESS(st)) return __set_errno_status(st);
+	/* Wine 11 accepts the create-time EA buffer above but does not attach it
+	 * to a newly-created directory.  Repeat the write on the returned handle,
+	 * which now names the complete object.  Keep this best-effort like the
+	 * create-time EA itself: Wine versions whose NtSetEaFile is still stubbed
+	 * must retain mkdir's historical native-directory fallback. */
+	{
+		int saved_errno = errno;
+		__plat_lxmod_set(h, S_IFDIR | mode);
+		errno = saved_errno;
+	}
 	NtClose(h);
 	return 0;
 }
