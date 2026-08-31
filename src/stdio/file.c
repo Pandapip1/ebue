@@ -64,7 +64,7 @@ FILE *__file_new(int fd, int flags) // NOLINT(bugprone-easily-swappable-paramete
 	memset(f, 0, sizeof *f);
 	f->fd = fd;
 	f->pid = -1;
-	switch (flags & O_ACCMODE) {
+	switch (flags & O_ACCMODE) { // NOLINT(bugprone-switch-missing-default-case) -- parsed stdio modes produce only the three valid access-mode encodings
 	case O_RDONLY: f->readable = 1; break;
 	case O_WRONLY: f->writable = 1; break;
 	case O_RDWR: f->readable = f->writable = 1; break;
@@ -149,7 +149,7 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 	}
 
 	f->readable = f->writable = 0;
-	switch (flags & O_ACCMODE) {
+	switch (flags & O_ACCMODE) { // NOLINT(bugprone-switch-missing-default-case) -- parsed stdio modes produce only the three valid access-mode encodings
 	case O_RDONLY: f->readable = 1; break;
 	case O_WRONLY: f->writable = 1; break;
 	case O_RDWR: f->readable = f->writable = 1; break;

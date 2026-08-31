@@ -316,8 +316,9 @@ static int do_action(const struct __spawn_action *a, struct saved_slot *sv, int 
 		}
 		return 0;
 	}
+	default:
+		return EINVAL;
 	}
-	return EINVAL;
 }
 
 /* Everything posix_spawn() must decide *before* it starts editing the

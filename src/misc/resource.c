@@ -336,7 +336,7 @@ int setrlimit(int resource, const struct rlimit *rl)
 		 * hard limit" -- this library's one always-unprivileged
 		 * user (src/unistd/ids.c) never has that. */
 		if (rl->rlim_max > cur.rlim_max) { errno = EPERM; return -1; }
-		switch (resource) {
+		switch (resource) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing switch admits exactly these four resource values
 		case RLIMIT_NPROC: nproc_cur = rl->rlim_cur; nproc_max = rl->rlim_max; break;
 		case RLIMIT_CPU:   cpu_cur   = rl->rlim_cur; cpu_max   = rl->rlim_max; break;
 		case RLIMIT_AS:    as_cur    = rl->rlim_cur; as_max    = rl->rlim_max; break;

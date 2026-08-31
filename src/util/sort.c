@@ -394,7 +394,7 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 	}
 	while (*p && strchr("bdfinr", *p)) {
 		k->has_mod = 1;
-		switch (*p) {
+		switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
 		case 'b': k->mb = 1; break;
 		case 'd': k->md = 1; break;
 		case 'f': k->mf = 1; break;
@@ -422,7 +422,7 @@ static int parse_keydef(const char *spec, struct sort_key *k)
 		}
 		while (*p && strchr("bdfinr", *p)) {
 			k->has_mod = 1;
-			switch (*p) {
+			switch (*p) { // NOLINT(bugprone-switch-missing-default-case) -- the enclosing strchr guard restricts the modifier to these cases
 			case 'b': k->mb = 1; break;
 			case 'd': k->md = 1; break;
 			case 'f': k->mf = 1; break;
