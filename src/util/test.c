@@ -49,8 +49,8 @@
 
 struct texpr {
 	char **v;      /* the arguments being evaluated, v[0] is the first */
-	int n;         /* how many there are */
-	int i;         /* cursor for the >4-argument grammar */
+	size_t n;      /* how many there are */
+	size_t i;      /* cursor for the >4-argument grammar */
 	int err;       /* set once a diagnostic has been issued */
 };
 
@@ -292,7 +292,7 @@ static int eval_argc(struct texpr *t) __attribute__((nonnull(1)));
 static int eval_argc(struct texpr *t)
 {
 	char **v = t->v;
-	int n = t->n;
+	size_t n = t->n;
 
 	switch (n) {
 	case 0:
@@ -376,7 +376,8 @@ static int eval_argc(struct texpr *t)
 int __util_test_main(int argc, char **argv)
 {
 	struct texpr t;
-	int n = argc - 1;
+	size_t n = (size_t)argc;
+	if (n) n--;
 
 	/* "In the second form of the utility, where the utility name used
 	 * is [ rather than test, the application shall ensure that the
@@ -384,7 +385,7 @@ int __util_test_main(int argc, char **argv)
 	 * an error, and the bracket itself is "not ... counted in this
 	 * algorithm". */
 	if (!strcmp(argv[0], "[")) {
-		if (n < 1 || strcmp(argv[argc - 1], "]")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally detects a mismatched closing bracket argument
+		if (n < 1 || strcmp(argv[n], "]")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally detects a mismatched closing bracket argument
 			__util_diagf("[: missing `]'\n");
 			return T_ERR;
 		}

@@ -321,21 +321,22 @@ static const char *parse_spec(const char *p, struct spec *sp)
  * same C rule src/stdio/printf.c's own formatter follows). */
 static void emit_padded(const char *sign, const char *body, const struct spec *sp, int zero_ok)
 {
-	int slen = sign ? (int)strlen(sign) : 0;
-	int blen = (int)strlen(body);
-	int total = slen + blen;
-	int pad = sp->width > total ? sp->width - total : 0;
+	size_t slen = sign ? strlen(sign) : 0;
+	size_t blen = strlen(body);
+	size_t total = slen + blen;
+	size_t pad = sp->width > 0 && (size_t)sp->width > total ?
+		(size_t)sp->width - total : 0;
 
 	if (sp->left) {
 		if (sign && fputs(sign, stdout) < 0) g_status = 1;
 		if (fputs(body, stdout) < 0) g_status = 1;
-		while (pad-- > 0) putchar(' ');
+		while (pad > 0) { putchar(' '); pad--; }
 	} else if (zero_ok && sp->zero) {
 		if (sign && fputs(sign, stdout) < 0) g_status = 1;
-		while (pad-- > 0) putchar('0');
+		while (pad > 0) { putchar('0'); pad--; }
 		if (fputs(body, stdout) < 0) g_status = 1;
 	} else {
-		while (pad-- > 0) putchar(' ');
+		while (pad > 0) { putchar(' '); pad--; }
 		if (sign && fputs(sign, stdout) < 0) g_status = 1;
 		if (fputs(body, stdout) < 0) g_status = 1;
 	}
@@ -424,15 +425,16 @@ static void format_unsigned(const char *arg, const struct spec *sp, int base, in
 static void format_str(const char *arg, const struct spec *sp)
 {
 	size_t len = strlen(arg);
-	int pad;
+	size_t pad;
 
 	if (sp->prec >= 0 && (size_t)sp->prec < len) len = (size_t)sp->prec;
-	pad = sp->width > (int)len ? sp->width - (int)len : 0;
+	pad = sp->width > 0 && (size_t)sp->width > len ?
+		(size_t)sp->width - len : 0;
 	if (sp->left) {
 		if (fwrite(arg, 1, len, stdout) != len) g_status = 1;
-		while (pad-- > 0) putchar(' ');
+		while (pad > 0) { putchar(' '); pad--; }
 	} else {
-		while (pad-- > 0) putchar(' ');
+		while (pad > 0) { putchar(' '); pad--; }
 		if (fwrite(arg, 1, len, stdout) != len) g_status = 1;
 	}
 }
