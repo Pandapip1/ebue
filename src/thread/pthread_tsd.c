@@ -168,7 +168,16 @@ static void remove_once_waiter_locked(struct once_waiter *waiter)
 }
 
 /* argument required: aliased into cleanup and dereferenced
- * unconditionally (`*cleanup->control = ...`) right after the lock. */
+ * unconditionally (`*cleanup->control = ...`) right after the lock. A
+ * newer sweep's report also flags `*cleanup->control` on its own --
+ * not fixable via nonnull on THIS signature (cleanup->control is a
+ * struct FIELD's value, not a parameter), but sound by hand regardless:
+ * cleanup->control is always pthread_once()'s own `control`
+ * (`struct once_cleanup reset = { control };`), already required
+ * nonnull(1) in include/pthread.h and dereferenced unconditionally by
+ * pthread_once() itself (`if (*control == 2)`, its very first real
+ * operation) before reset_once() is ever registered as a cleanup
+ * against it. */
 static void reset_once(void *argument) __attribute__((nonnull(1)));
 static void reset_once(void *argument)
 {
