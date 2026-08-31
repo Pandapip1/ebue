@@ -35,7 +35,7 @@ unsigned long long __fixunssfdi(float a)
 	int exp;
 	unsigned long long m;
 	b.f = a;
-	exp = (b.u >> 23) & 0xff;
+	exp = (int)((b.u >> 23) & 0xff);
 	if (!exp || (b.u & 0x80000000u)) return 0;   /* zero, denormal, negative */
 	if (exp == 0xff) return ~0uLL;               /* inf/nan: saturate */
 	m = (b.u & 0x7fffffu) | 0x800000u;
@@ -48,7 +48,7 @@ unsigned long long __fixunsdfdi(double a)
 	int exp;
 	unsigned long long m;
 	b.d = a;
-	exp = (b.u.hi >> 20) & 0x7ff;
+	exp = (int)((b.u.hi >> 20) & 0x7ff);
 	if (!exp || (b.u.hi & 0x80000000u)) return 0;
 	if (exp == 0x7ff) return ~0uLL;
 	m = ((unsigned long long)((b.u.hi & 0xfffffu) | 0x100000u) << 32) | b.u.lo;
