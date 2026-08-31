@@ -66,6 +66,11 @@
  * killed the process outright long before MAX_STEPS could count to
  * two million.  Found by fuzz/fuzz_regex.c.
  */
+
+/* This translation unit implements ntlibc's freestanding -nostdinc
+ * public-header contract; transitive ABI declarations are intentional,
+ * so hosted include ownership and unused-include advice do not apply. */
+// NOLINTBEGIN(misc-include-cleaner)
 #include <regex.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -100,7 +105,7 @@ struct rx {
  * newset() has already allocated within rx->sets, never NULL), and
  * dereferenced unconditionally here. */
 static void setbit(struct bracket *bs, int c, int icase) __attribute__((nonnull(1)));
-static void setbit(struct bracket *bs, int c, int icase)
+static void setbit(struct bracket *bs, int c, int icase) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char cc = (unsigned char)c;
 	if (icase) cc = (unsigned char)tolower(cc);
@@ -108,7 +113,7 @@ static void setbit(struct bracket *bs, int c, int icase)
 }
 
 static int testbit(const struct bracket *bs, int c, int icase) __attribute__((nonnull(1)));
-static int testbit(const struct bracket *bs, int c, int icase)
+static int testbit(const struct bracket *bs, int c, int icase) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	unsigned char cc = (unsigned char)c;
 	if (icase) cc = (unsigned char)tolower(cc);
@@ -193,7 +198,7 @@ struct parser {
  * ps->p/ps->err/ps->rx/ps->icase/ps->ngroup/ps->ere/ps->closed. */
 static int emit(struct parser *ps, int op, int c, int set, int x, int y)
     __attribute__((nonnull(1)));
-static int emit(struct parser *ps, int op, int c, int set, int x, int y)
+static int emit(struct parser *ps, int op, int c, int set, int x, int y) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct rx *rx = ps->rx;
 	if (ps->err) return -1;
@@ -395,7 +400,7 @@ static void parse_bound(struct parser *ps, int *pm, int *pn)
  * forwards it into emit(), never dereferencing it itself. */
 static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta)
     __attribute__((nonnull(2)));
-static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta)
+static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int delta) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	int i;
 	for (i = 0; i < len; i++) {
@@ -411,7 +416,7 @@ static void emit_reloc(struct parser *ps, const struct inst *saved, int len, int
  * REG_BADRPT if a repeat operator appears with no preceding atom
  * (start == ps->rx->nprog, i.e. nothing was actually emitted). */
 static void apply_repeat(struct parser *ps, int start, int had_atom) __attribute__((nonnull(1)));
-static void apply_repeat(struct parser *ps, int start, int had_atom)
+static void apply_repeat(struct parser *ps, int start, int had_atom) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	for (;;) {
 		char c = *ps->p;
@@ -554,6 +559,7 @@ static int esc_literal(struct parser *ps)
 /* ---- ERE ------------------------------------------------------------ */
 
 static void ere_atom(struct parser *ps) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void ere_atom(struct parser *ps)
 {
 	int c = (unsigned char)*ps->p;
@@ -596,6 +602,7 @@ static void ere_atom(struct parser *ps)
  * because ps is still independently required for this function's own
  * other, ordinary field accesses. */
 static void ere_branch(struct parser *ps) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void ere_branch(struct parser *ps)
 {
 	int first = 1;
@@ -620,6 +627,7 @@ static void ere_branch(struct parser *ps)
 	}
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void ere_alt(struct parser *ps)
 {
 	int start = ps->rx->nprog;
@@ -650,6 +658,7 @@ static void ere_alt(struct parser *ps)
  * or of a "\(" subexpression), intervals are "\{m,n\}", and '^'/'$'
  * are anchors only at the very start/end of the whole pattern. */
 static void bre_atom(struct parser *ps, int at_start) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void bre_atom(struct parser *ps, int at_start)
 {
 	int c = (unsigned char)*ps->p;
@@ -686,6 +695,7 @@ static void bre_atom(struct parser *ps, int at_start)
 /* Same "ps required, but its own flagged finding (ps->p[0] in the loop
  * below) traces to regcomp()'s own pattern parameter instead" nuance
  * as ere_branch() above -- see that function's own comment. */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested regular-expression grammar
 static void bre_branch(struct parser *ps)
 {
 	int first = 1;
@@ -856,7 +866,7 @@ static int bt_push_try(struct mstate *ms, int pc, const char *sp)
 }
 
 static int bt_push_undo(struct mstate *ms, int slot, regoff_t old) __attribute__((nonnull(1)));
-static int bt_push_undo(struct mstate *ms, int slot, regoff_t old)
+static int bt_push_undo(struct mstate *ms, int slot, regoff_t old) // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
 {
 	struct bt *e;
 	if (ms->nbt == ms->capbt && !bt_grow(ms)) return 0;
@@ -1141,3 +1151,5 @@ void regfree(regex_t *preg)
 	preg->__opaque = NULL;
 	preg->re_nsub = 0;
 }
+
+// NOLINTEND(misc-include-cleaner)
