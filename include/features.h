@@ -80,7 +80,7 @@
 #endif
 #endif
 
-#define __REDIR(x,y) __typeof__(x) x __asm__(#y)
+#define __REDIR(x,y) __typeof__(x) x __asm__(#y) // NOLINT(bugprone-macro-parentheses) -- x is the redirected declaration's identifier, where an expression-style wrapper is not applicable
 
 #endif
 
