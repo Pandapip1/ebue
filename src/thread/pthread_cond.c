@@ -102,7 +102,7 @@ int pthread_cond_init(pthread_cond_t *__restrict cond,
 		attributes = const_condattr_data(attr);
 		if (attributes->magic != CONDATTR_MAGIC) return EINVAL;
 	}
-	memset(cond, 0, sizeof *cond);
+	memset(cond, 0, sizeof *cond); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes caller-supplied opaque storage before constructing the condition variable; no live object is copied
 	data = cond_data(cond);
 	data->magic = COND_MAGIC;
 	data->pshared = attributes ? attributes->pshared : PTHREAD_PROCESS_PRIVATE;

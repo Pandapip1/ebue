@@ -33,9 +33,9 @@ FILE *fmemopen(void *__restrict buf, size_t size, const char *__restrict mode)
 		owned = 1;
 		b[0] = 0;
 	}
-	f = malloc(sizeof *f);
+	f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) { if (owned) free(b); return 0; }
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = -1;
 	f->pid = -1;
 	f->is_mem = 1;
@@ -75,9 +75,9 @@ FILE *open_memstream(char **bufp, size_t *sizep)
 	b = malloc(1);
 	if (!b) return 0;
 	b[0] = 0;
-	f = malloc(sizeof *f);
+	f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) { free(b); return 0; }
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = -1;
 	f->pid = -1;
 	f->is_mem = 1;
@@ -138,9 +138,9 @@ FILE *open_wmemstream(wchar_t **bufp, size_t *sizep)
 	b = malloc(sizeof *b);
 	if (!b) return 0;
 	b[0] = 0;
-	f = malloc(sizeof *f);
+	f = malloc(sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- the stdio implementation allocates its private FILE representation; it does not copy one
 	if (!f) { free(b); return 0; }
-	memset(f, 0, sizeof *f);
+	memset(f, 0, sizeof *f); // NOLINT(cert-fio38-c,misc-non-copyable-objects) -- initializes new private FILE storage before it becomes a stream; no live FILE is copied
 	f->fd = -1;
 	f->pid = -1;
 	f->is_mem = 1;
