@@ -37,6 +37,14 @@ REGISTER_MAP_WITH_PROGRAMSTATE(ErrnoSetterOf, SymbolRef, const Stmt *)
  * set, an errno read has nothing behind it but function-entry state. */
 REGISTER_MAP_WITH_PROGRAMSTATE(CallSlot, unsigned, const Stmt *)
 
+/* A local this path has seen initialized or assigned directly from an
+ * errno read (`V = errno;` or `TYPE V = errno;`), keyed by its own
+ * MemRegion.  See checkPreStmt(UnaryOperator)'s savedInto handling for
+ * why capturing errno's current value this way needs no proof, and
+ * comparedToSavedErrno for the "did it change" read this exists to
+ * recognise as safe afterward. */
+REGISTER_MAP_WITH_PROGRAMSTATE(SavedErrnoVar, const MemRegion *, bool)
+
 namespace {
 
 constexpr unsigned SlotDiagnosed = 0;
@@ -96,6 +104,16 @@ class ErrnoDisciplineChecker
          * internally; munmap() sets it directly.  Both are exactly the
          * "cleanup after a diagnosed failure" call that clobbers errno. */
         "close", "munmap",
+        /* The remaining POSIX-named entries below are each grounded the
+         * same way: read directly, in this project's own implementation
+         * under src/unistd, src/fcntl/open.c and src/stat, confirming
+         * each really does set errno on its own failure return rather
+         * than assumed from glibc convention. */
+        "read", "open", "unlink", "mkdir", "stat", "isatty", "getcwd",
+        /* src/stdio/buf.c's own fd-and-buffer-position seek helper,
+         * shared by fflush()/fseek()/rewind(); each of its own failure
+         * returns sets errno directly. */
+        "__file_seek",
     };
     StringRef Name = Function->getName();
     for (StringRef Candidate : Names)
@@ -146,6 +164,209 @@ class ErrnoDisciplineChecker
       return Parent && Parent->getOpcode() == BO_Assign &&
              Parent->getLHS()->IgnoreParens() == Node;
     }
+  }
+
+  /* True, returning the target VarDecl, when Node (an errno read) is
+   * exactly the right-hand side of `V = errno;` or the initializer of
+   * `TYPE V = errno;`.  Unlike isAssignmentTarget's walk, this one also
+   * has to step over the ImplicitCastExpr (LValueToRValue) the compiler
+   * inserts wherever an lvalue is used as an rvalue, since here errno is
+   * being *read*, not assigned to. Capturing errno's current value into
+   * a fresh local this way -- the textbook "preserve errno across an
+   * unrelated cleanup" idiom this tree uses throughout, e.g.
+   * src/process/spawn_file_actions.c's fa_push() and every shm.c helper
+   * that frees a temporary afterward -- never itself misinterprets
+   * errno as meaning anything in particular, so it needs no proof of a
+   * preceding capable call: the risk this checker exists to catch would
+   * only be in a *later* semantic use of the copy, which is out of
+   * scope for a checker whose obligations are about the literal `errno`
+   * expression. */
+  static const VarDecl *savedInto(const UnaryOperator *Node,
+                                  CheckerContext &C) {
+    DynTypedNode Current = DynTypedNode::create(*Node);
+    for (;;) {
+      auto Parents = C.getASTContext().getParents(Current);
+      if (Parents.size() != 1)
+        return nullptr;
+      if (const auto *Paren = Parents[0].get<ParenExpr>()) {
+        Current = DynTypedNode::create(*Paren);
+        continue;
+      }
+      if (const auto *Cast = Parents[0].get<ImplicitCastExpr>()) {
+        Current = DynTypedNode::create(*Cast);
+        continue;
+      }
+      if (const auto *BO = Parents[0].get<BinaryOperator>()) {
+        if (BO->getOpcode() != BO_Assign)
+          return nullptr;
+        const auto *DRE =
+            dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenCasts());
+        return DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+      }
+      if (const auto *VD = Parents[0].get<VarDecl>())
+        return VD;
+      return nullptr;
+    }
+  }
+
+  /* True when Node (an errno read) is one side of a `==`/`!=` comparison
+   * whose other side names a variable savedInto() has already recorded
+   * -- CERT ERR30-C's own "did errno change since I last looked"
+   * pattern (src/ftw/ftw.c's report(): `saved_errno = errno; ...; if (r
+   * == -1 && errno == saved_errno) errno = EACCES;`), which does not
+   * assert that any particular call set errno to anything: it only asks
+   * whether the value moved, which is well-defined regardless. */
+  static bool comparedToSavedErrno(const UnaryOperator *Node,
+                                   CheckerContext &C,
+                                   ProgramStateRef State) {
+    DynTypedNode Current = DynTypedNode::create(*Node);
+    for (;;) {
+      auto Parents = C.getASTContext().getParents(Current);
+      if (Parents.size() != 1)
+        return false;
+      if (const auto *Paren = Parents[0].get<ParenExpr>()) {
+        Current = DynTypedNode::create(*Paren);
+        continue;
+      }
+      if (const auto *Cast = Parents[0].get<ImplicitCastExpr>()) {
+        Current = DynTypedNode::create(*Cast);
+        continue;
+      }
+      const auto *BO = Parents[0].get<BinaryOperator>();
+      if (!BO || (BO->getOpcode() != BO_EQ && BO->getOpcode() != BO_NE))
+        return false;
+      for (const Expr *Side : {BO->getLHS(), BO->getRHS()}) {
+        const auto *DRE = dyn_cast<DeclRefExpr>(Side->IgnoreParenImpCasts());
+        if (!DRE)
+          continue;
+        const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+        if (!VD)
+          continue;
+        const MemRegion *R =
+            State->getLValue(VD, C.getLocationContext()).getAsRegion();
+        if (R && State->get<SavedErrnoVar>(R))
+          return true;
+      }
+      return false;
+    }
+  }
+
+  /* True when Node (an errno read) is the right-hand operand of a comma
+   * expression whose left-hand operand is exactly CapableCall --
+   * src/thread/semaphore.c's sem_open(): `saved = NT_SUCCESS(st) ? EIO :
+   * (__set_errno_status(st), errno);`.  There is nothing "intervening"
+   * between a capable call and a read that is syntactically part of the
+   * very same expression -- unlike the two-statement `__set_errno_status
+   * (5); if (errno == 9)` shape this checker's Diagnosed/LastCapable
+   * mismatch exists to catch, where a second statement could run first,
+   * this read cannot execute without CapableCall having just executed
+   * immediately before it, in the same expression, with nothing able to
+   * run in between. */
+  static bool isCommaAfterCall(const UnaryOperator *Node, CheckerContext &C,
+                               const Stmt *CapableCall) {
+    DynTypedNode Current = DynTypedNode::create(*Node);
+    for (;;) {
+      auto Parents = C.getASTContext().getParents(Current);
+      if (Parents.size() != 1)
+        return false;
+      if (const auto *Paren = Parents[0].get<ParenExpr>()) {
+        Current = DynTypedNode::create(*Paren);
+        continue;
+      }
+      if (const auto *Cast = Parents[0].get<ImplicitCastExpr>()) {
+        Current = DynTypedNode::create(*Cast);
+        continue;
+      }
+      const auto *BO = Parents[0].get<BinaryOperator>();
+      if (!BO || BO->getOpcode() != BO_Comma)
+        return false;
+      return BO->getLHS()->IgnoreParenCasts() == CapableCall;
+    }
+  }
+
+  /* Walks up from S to the nearest ancestor that is itself a direct
+   * child of a CompoundStmt (a `{ ... }` block) -- i.e. the full
+   * statement S sits inside, whatever expression form S itself takes. */
+  static const Stmt *enclosingBlockStatement(const Stmt *S,
+                                             CheckerContext &C) {
+    DynTypedNode Current = DynTypedNode::create(*S);
+    for (;;) {
+      auto Parents = C.getASTContext().getParents(Current);
+      if (Parents.size() != 1)
+        return nullptr;
+      if (Parents[0].get<CompoundStmt>())
+        return Current.get<Stmt>();
+      const Stmt *ParentStmt = Parents[0].get<Stmt>();
+      if (!ParentStmt)
+        return nullptr;
+      Current = DynTypedNode::create(*ParentStmt);
+    }
+  }
+
+  /* True when Node (an errno read) is, after unwrapping parens and
+   * casts, the direct operand of a `return` statement -- the value is
+   * being handed back to the caller opaquely, the same "not
+   * interpreted, just carried" character as savedInto's capture into a
+   * local, rather than compared against a specific constant the way a
+   * genuine "does this match the call I diagnosed" check
+   * (checkPreStmt(BinaryOperator)'s whole reason to exist) would.  This
+   * is what keeps isImmediatelyAfter below from also excusing the
+   * fixture's real stale_after_cleanup() bug: `if (errno == 9) return
+   * -1;` reads errno to compare it against a constant that only makes
+   * sense as close()'s own diagnosed code, not `return errno;` handing
+   * back whatever the immediately preceding call put there. */
+  static bool isReturnedDirectly(const UnaryOperator *Node,
+                                 CheckerContext &C) {
+    DynTypedNode Current = DynTypedNode::create(*Node);
+    for (;;) {
+      auto Parents = C.getASTContext().getParents(Current);
+      if (Parents.size() != 1)
+        return false;
+      if (const auto *Paren = Parents[0].get<ParenExpr>()) {
+        Current = DynTypedNode::create(*Paren);
+        continue;
+      }
+      if (const auto *Cast = Parents[0].get<ImplicitCastExpr>()) {
+        Current = DynTypedNode::create(*Cast);
+        continue;
+      }
+      return Parents[0].get<ReturnStmt>() != nullptr;
+    }
+  }
+
+  /* True when Later's own enclosing block-statement is the literal next
+   * statement, in the same `{ ... }` block, after Earlier's -- e.g.
+   * src/process/posix_spawn.c's do_action():
+   * `if (!NT_SUCCESS(st)) { __set_errno_status(st); return errno; }`.
+   * Symmetric with isCommaAfterCall above for the two-statement form of
+   * the same idiom: nothing can execute between a capable call and the
+   * very next statement in its own block, so a stale Diagnosed slot
+   * left over from an unrelated earlier branch (a different switch
+   * case, a previous loop iteration inlined into the same frame) cannot
+   * actually have anything intervene here either.  Only paired with
+   * isReturnedDirectly above at the call site below, not sufficient by
+   * itself -- adjacency alone does not distinguish this from
+   * stale_after_cleanup()'s real bug, which is exactly as adjacent. */
+  static bool isImmediatelyAfter(const Stmt *Earlier, const Stmt *Later,
+                                 CheckerContext &C) {
+    const Stmt *EarlierBlock = enclosingBlockStatement(Earlier, C);
+    const Stmt *LaterBlock = enclosingBlockStatement(Later, C);
+    if (!EarlierBlock || !LaterBlock || EarlierBlock == LaterBlock)
+      return false;
+    auto Parents =
+        C.getASTContext().getParents(DynTypedNode::create(*EarlierBlock));
+    if (Parents.size() != 1)
+      return false;
+    const auto *CS = Parents[0].get<CompoundStmt>();
+    if (!CS)
+      return false;
+    const Stmt *Prev = nullptr;
+    for (const Stmt *Child : CS->body()) {
+      if (Prev == EarlierBlock && Child == LaterBlock)
+        return true;
+      Prev = Child;
+    }
+    return false;
   }
 
   static std::string calleeName(const Stmt *CallStmt) {
@@ -268,10 +489,24 @@ public:
       C.addTransition(State);
       return;
     }
+    if (const VarDecl *VD = savedInto(Operation, C)) {
+      const MemRegion *R =
+          State->getLValue(VD, C.getLocationContext()).getAsRegion();
+      if (R)
+        C.addTransition(State->set<SavedErrnoVar>(R, true));
+      return;
+    }
+    if (comparedToSavedErrno(Operation, C, State))
+      return;
     const Stmt *const *Diagnosed = State->get<CallSlot>(SlotDiagnosed);
     const Stmt *const *LastCapable = State->get<CallSlot>(SlotLastCapable);
     if (Diagnosed) {
       if (!LastCapable || *LastCapable != *Diagnosed) {
+        if (LastCapable &&
+            (isCommaAfterCall(Operation, C, *LastCapable) ||
+             (isReturnedDirectly(Operation, C) &&
+              isImmediatelyAfter(*LastCapable, Operation, C))))
+          return;
         std::string Reason =
             "errno read after an intervening call to '" +
             calleeName(LastCapable ? *LastCapable : nullptr) +
