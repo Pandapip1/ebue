@@ -540,6 +540,11 @@ obj/test/sh-main.exe: $(SH_EXE)
 # all four need to exist first.
 obj/test/util-trivial.exe: obj/bin/true.exe obj/bin/false.exe obj/bin/test.exe $(SH_EXE)
 
+# test/util-pathnames.c is the same idea, one tier up: basename, dirname,
+# pathchk, pwd, readlink and realpath (and, again, obj/sh/sh.exe to check
+# the shell built-ins agree), all spawned as real processes.
+obj/test/util-pathnames.exe: obj/bin/basename.exe obj/bin/dirname.exe obj/bin/pathchk.exe obj/bin/pwd.exe obj/bin/readlink.exe obj/bin/realpath.exe $(SH_EXE)
+
 # test/delayall.c and its plugin DLL: proof that an *unmodified* program
 # (plain extern, ordinary call, no ntlibc-specific macro at the call
 # site) gets $ORIGIN delay loading through -Wl,--delay-all and
