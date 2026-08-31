@@ -350,6 +350,7 @@ char *catgets(nl_catd catd, int set_id, int msg_id, const char *s) // NOLINT(bug
 	const unsigned char *m = (const unsigned char *)catd;
 	const unsigned char *sets, *msgs, *strings;
 	uint32_t lo, hi, nsets, nmsgs;
+	unsigned set_steps, msg_steps;
 
 	/* "The results are undefined if catd is not a value returned by
 	 * catopen() for a message catalog still open in the process."  A
@@ -367,17 +368,23 @@ char *catgets(nl_catd catd, int set_id, int msg_id, const char *s) // NOLINT(bug
 	msgs = m + CAT_HDRSZ + V(m + 12);
 	strings = m + CAT_HDRSZ + V(m + 16);
 
-	for (lo = 0, hi = nsets; lo < hi; ) {
-		uint32_t mid = lo + (hi - lo) / 2;
-		uint32_t id = V(sets + (size_t)mid * CAT_RECSZ);
+	/* Each iteration at least halves a uint32_t-sized search interval. */
+	for (lo = 0, hi = nsets, set_steps = 32; set_steps-- > 0; ) {
+		uint32_t mid, id;
+		if (lo >= hi) break;
+		mid = lo + (hi - lo) / 2;
+		id = V(sets + (size_t)mid * CAT_RECSZ);
 
 		if ((uint32_t)set_id == id) {
 			nmsgs = V(sets + (size_t)mid * CAT_RECSZ + 4);
 			msgs += (size_t)V(sets + (size_t)mid * CAT_RECSZ + 8)
 			        * CAT_RECSZ;
-			for (lo = 0, hi = nmsgs; lo < hi; ) {
-				uint32_t k = lo + (hi - lo) / 2;
-				uint32_t mid_id = V(msgs + (size_t)k * CAT_RECSZ);
+			for (lo = 0, hi = nmsgs, msg_steps = 32;
+			     msg_steps-- > 0; ) {
+				uint32_t k, mid_id;
+				if (lo >= hi) break;
+				k = lo + (hi - lo) / 2;
+				mid_id = V(msgs + (size_t)k * CAT_RECSZ);
 
 				if ((uint32_t)msg_id == mid_id)
 					return (char *)strings +

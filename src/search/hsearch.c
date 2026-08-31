@@ -106,7 +106,7 @@ void hdestroy(void)
 ENTRY *hsearch(ENTRY item, ACTION action)
 {
 	unsigned long h;
-	size_t i, start, size;
+	size_t i, start, size, remaining;
 
 	/* table_size is published and cleared with table.  Check both halves of
 	 * that invariant here so the modulo below is locally protected even if a
@@ -116,8 +116,9 @@ ENTRY *hsearch(ENTRY item, ACTION action)
 
 	h = hash_str(item.key);
 	start = h % size;
-	i = start;
-	do {
+	/* Linear probing visits each slot exactly once before the table is full. */
+	for (i = start, remaining = size; remaining-- > 0;
+	     i = (i + 1) % size) {
 		if (!table[i].used) {
 			if (action != ENTER) return NULL;
 			table[i].key = item.key;
@@ -128,8 +129,7 @@ ENTRY *hsearch(ENTRY item, ACTION action)
 		}
 		if (table[i].h == h && strcmp(table[i].key, item.key) == 0)
 			return (ENTRY *)&table[i];	/* ENTER on a hit: leave existing data alone */
-		i = (i + 1) % size;
-	} while (i != start);
+	}
 
 	return NULL;	/* table full */
 }
