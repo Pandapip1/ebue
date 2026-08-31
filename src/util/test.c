@@ -205,6 +205,7 @@ static int do_binary(struct texpr *t, const char *a, const char *op, const char 
 static int t_oexpr(struct texpr *t);
 
 static int t_primary(struct texpr *t) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_primary(struct texpr *t)
 {
 	const char *tok;
@@ -217,7 +218,7 @@ static int t_primary(struct texpr *t)
 		t->i++;
 		r = t_oexpr(t);
 		if (t->err) return T_ERR;
-		if (t->i >= t->n || strcmp(t->v[t->i], ")")) { terr(t, "')' expected", 0); return T_ERR; }
+		if (t->i >= t->n || strcmp(t->v[t->i], ")")) { terr(t, "')' expected", 0); return T_ERR; } // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally detects a mismatched closing token
 		t->i++;
 		return r;
 	}
@@ -238,6 +239,7 @@ static int t_primary(struct texpr *t)
 }
 
 static int t_nexpr(struct texpr *t) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_nexpr(struct texpr *t)
 {
 	if (t->i < t->n && !strcmp(t->v[t->i], "!")) {
@@ -250,6 +252,7 @@ static int t_nexpr(struct texpr *t)
 	return t_primary(t);
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_aexpr(struct texpr *t)
 {
 	int r = t_nexpr(t);
@@ -266,6 +269,7 @@ static int t_aexpr(struct texpr *t)
 	return t->err ? T_ERR : r;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int t_oexpr(struct texpr *t)
 {
 	int r = t_aexpr(t);
@@ -284,6 +288,7 @@ static int t_oexpr(struct texpr *t)
  * the return value that shall be generated is based on the number of
  * arguments presented to test." */
 static int eval_argc(struct texpr *t) __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive descent mirrors nested test-expression grammar
 static int eval_argc(struct texpr *t)
 {
 	char **v = t->v;
@@ -379,7 +384,7 @@ int __util_test_main(int argc, char **argv)
 	 * an error, and the bracket itself is "not ... counted in this
 	 * algorithm". */
 	if (!strcmp(argv[0], "[")) {
-		if (n < 1 || strcmp(argv[argc - 1], "]")) {
+		if (n < 1 || strcmp(argv[argc - 1], "]")) { // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally detects a mismatched closing bracket argument
 			__util_diagf("[: missing `]'\n");
 			return T_ERR;
 		}

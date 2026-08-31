@@ -182,9 +182,11 @@ static int join(char *out, const char *prefix, size_t preflen,
  * only read back conditionally per-branch (never unconditionally at
  * entry the way pat is), so there is no single unconditional dereference
  * this attribute could describe for it. */
+// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
 static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
     __attribute__((nonnull(3)));
+// NOLINTNEXTLINE(misc-no-recursion) -- component expansion mirrors the pathname hierarchy and is pattern/path-depth bounded
 static int do_glob(char *prefix, size_t preflen, const char *pat, int flags,
                     int (*errfunc)(const char *, int), struct pv *out)
 {

@@ -64,6 +64,7 @@ void *tfind(const void *key, void *const *rootp, int (*compar)(const void *, con
 /* Recursively free a subtree's nodes without touching caller key storage
  * (tdelete.html says nothing about freeing keys -- they are the
  * application's, same contract as hdestroy() below). */
+// NOLINTNEXTLINE(misc-no-recursion) -- the operation intentionally follows the caller-provided binary-tree height
 static void free_subtree(struct node *n)
 {
 	if (!n) return;
@@ -117,6 +118,7 @@ void *tdelete(const void *__restrict key, void **__restrict rootp,
 	return parent;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- the operation intentionally follows the caller-provided binary-tree height
 static void trecurse(struct node *n, void (*action)(const void *, VISIT, int), int depth)
 {
 	if (!n->left && !n->right) {

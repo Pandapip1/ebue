@@ -159,8 +159,10 @@ static int leading(const char *start, const char *s, int flags)
  * left unmarked, the same "only ever compared, never dereferenced"
  * reasoning as leading() above (it is forwarded into leading() itself,
  * which only compares it too). */
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive wildcard matching follows pattern/text suffixes and is input-depth bounded
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)
     __attribute__((nonnull(1, 2), pure));
+// NOLINTNEXTLINE(misc-no-recursion) -- recursive wildcard matching follows pattern/text suffixes and is input-depth bounded
 static int fnm_match(const char *pat, const char *s, const char *start, int flags)
 {
 	while (*pat) {

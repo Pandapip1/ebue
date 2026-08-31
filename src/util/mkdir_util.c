@@ -76,6 +76,7 @@
  * automatically-created ancestor's mode should be. Returns 0 on success
  * (including "already existed as a directory" under has_p), -1 with
  * errno set otherwise. */
+// NOLINTNEXTLINE(misc-no-recursion) -- parent creation recurses on a strictly shorter path prefix
 static int mkdir_p(char *path, mode_t leaf_mode, int is_leaf, int has_p)
 {
 	struct stat st;
@@ -100,7 +101,7 @@ static int mkdir_p(char *path, mode_t leaf_mode, int is_leaf, int has_p)
 		 * always exists -- nothing to create, go straight to retrying
 		 * `path` itself.  Otherwise the parent is a real path that
 		 * needs the same treatment, recursively. */
-		if (strcmp(p, ".") && mkdir_p(p, 0, 0, has_p) < 0) return -1;
+		if (strcmp(p, ".") && mkdir_p(p, 0, 0, has_p) < 0) return -1; // NOLINT(bugprone-suspicious-string-compare) -- nonzero intentionally means the parent is not the current-directory sentinel
 		if (mkdir(path, is_leaf ? leaf_mode : 0777) == 0) return 0;
 		if (errno == EEXIST && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) return 0;
 		return -1;

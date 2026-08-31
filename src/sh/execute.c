@@ -849,6 +849,7 @@ static int apply_redirs(const struct sh_redir *redirs, struct redir_state *rs, i
 static int call_function(const char *name, const char *body,
                          char **argv, int argc, int *status)
     __attribute__((nonnull(5)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int call_function(const char *name, const char *body, // NOLINT(bugprone-easily-swappable-parameters) -- positional C interface; parameter names distinguish semantic roles
                          char **argv, int argc, int *status)
 {
@@ -1041,8 +1042,10 @@ static int run_interpreted(const char *resolved, const wordexp_t *we, int *statu
  * first statement, and `if (!cmd->words)` right after it is unconditional
  * too -- no branch precedes either. run_stage() below (the only caller)
  * always passes a real cmd and the address of a real stage_result_t. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	wordexp_t we;
@@ -1217,8 +1220,10 @@ static int spawn_stage(const struct sh_command *cmd, stage_result_t *out, int en
  * spawn_stage(), which requires it nonnull above -- every path
  * dereferences it one way or the other. exec_simple() below is the only
  * caller, always with a real cmd and `&sr`. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int run_stage(const struct sh_command *cmd, stage_result_t *out, int env_mutate)
 {
 	if (!cmd->words) {
@@ -1262,8 +1267,10 @@ static int cmdsub_status_rule(const stage_result_t *sr, unsigned long gen0)
 	return sr->special;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_simple(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_simple(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -1668,8 +1675,10 @@ static void env_snapshot_restore(const struct env_snapshot *es)
  * them (cmd required). exec_compound() below is the only caller of all
  * three, always with a real cmd and the same status it was itself
  * handed. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_if(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_if(const struct sh_command *cmd, int *status)
 {
 	const struct sh_ifarm *a;
@@ -1695,8 +1704,10 @@ static int exec_if(const struct sh_command *cmd, int *status)
  * status of the last compound-list-2 executed, or zero if none was
  * executed", which is why *status starts at 0 and is only ever written
  * by the body. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_loop(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_loop(const struct sh_command *cmd, int *status)
 {
 	*status = 0;
@@ -1750,8 +1761,10 @@ static int exec_loop(const struct sh_command *cmd, int *status)
  * pre-existing deviation the whole variable story has, not a new one
  * this construct introduces -- `X=1; cmd` already behaves the same way
  * -- and it is stated here rather than left for someone to find. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_for(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_for(const struct sh_command *cmd, int *status)
 {
 	wordexp_t we;
@@ -1844,8 +1857,10 @@ static int exec_funcdef(const struct sh_command *cmd, int *status)
  * only forwards it to whichever of exec_funcdef()/exec_if()/exec_loop()/
  * exec_for()/__sh_exec_list() the switch selects, each of which states
  * its own contract. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_compound(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_compound(const struct sh_command *cmd, int *status)
 {
 	switch (cmd->kind) {
@@ -1871,8 +1886,10 @@ static int exec_compound(const struct sh_command *cmd, int *status)
  * reachable direct dereference, and no real caller of this function
  * (exec_group_stage_inline() aside, which is a separate function with
  * its own contract) ever passes it a NULL status. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -2135,6 +2152,7 @@ int __sh_cmdsub(const char *program, char **out, int *status)
  * first statement. status is left unmarked -- forwarded, never itself
  * dereferenced, to whichever of exec_simple()/exec_group() the check
  * selects. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_command(const struct sh_command *cmd, int *status)
 {
 	if (cmd->kind == SH_CMD_SIMPLE) return exec_simple(cmd, status);
@@ -2170,8 +2188,10 @@ int __sh_exec_command(const struct sh_command *cmd, int *status)
  * "directly dereferenced on a real reachable path, no real caller ever
  * passes NULL" basis as exec_group()'s above -- `*status = 1;` in the
  * `if (failed)` branch. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 static int exec_group_stage_inline(const struct sh_command *cmd, int *status)
 {
 	struct redir_state rs;
@@ -2241,6 +2261,7 @@ static int wire_stage_stdio(struct redir_state *rs, int (*pipes)[2], size_t n, s
  * already return -1 (the sh.h-wide "status left untouched" convention),
  * and every real caller (__sh_exec_andor() below) always passes a real
  * status. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
 {
 	size_t n = pl->ncommands, i;
@@ -2443,6 +2464,7 @@ int __sh_exec_pipeline(const struct sh_pipeline *pl, int *status)
  * real, directly-reachable dereferences of this function's own, not
  * merely forwarded ones, and __sh_exec_list() below always passes a
  * real status. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_andor(const struct sh_andor *a, int *status)
 {
 	int rc = __sh_exec_pipeline(&a->pipeline, status);
@@ -2483,6 +2505,7 @@ static unsigned exec_list_depth;
  * compound-command body (e.g. cmd->else_body when there is no `else`)
  * genuinely passes list as NULL here, and every caller in this file
  * relies on that. */
+// NOLINTNEXTLINE(misc-no-recursion) -- shell execution recursively evaluates the parsed AST and is command-nesting bounded
 int __sh_exec_list(const struct sh_list *list, int *status)
 {
 	const struct sh_list_item *it;

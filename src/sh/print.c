@@ -76,8 +76,10 @@ static void queue_nested_heredocs_list(struct pctx *, const struct sh_list *);
  * statement. c is left unmarked -- only ever forwarded into
  * queue_nested_heredocs_list()/queue_heredoc(), never dereferenced by
  * this function itself. */
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void queue_nested_heredocs_command(struct pctx *c,
 		const struct sh_command *cmd) __attribute__((nonnull(2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void queue_nested_heredocs_command(struct pctx *c,
 		const struct sh_command *cmd)
 {
@@ -126,6 +128,7 @@ static void queue_nested_heredocs_command(struct pctx *c,
  * own `.pipeline.commands` array pointer -- an internal AST invariant
  * neither parameter here can express via `nonnull`, the same class of
  * residual as execute.c's we.we_wordv[0]/__environ[i]. */
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void queue_nested_heredocs_list(struct pctx *c,
 		const struct sh_list *list)
 {
@@ -210,8 +213,10 @@ static void print_list(struct pctx *c, const struct sh_list *list);
  * statement. c is required too: most switch arms directly dereference
  * `c->f` (fputc()/fputs() calls), and print_list()/print_pipeline()
  * below always pass a real pctx. */
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_command(struct pctx *c, const struct sh_command *cmd)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_command(struct pctx *c, const struct sh_command *cmd)
 {
 	switch (cmd->kind) {
@@ -293,8 +298,10 @@ static void print_command(struct pctx *c, const struct sh_command *cmd)
  * real, reachable `pl->bang` path and the real, reachable `i > 0`
  * path of a multi-command pipeline, and print_andor() below always
  * passes a real pctx and `&a->pipeline`. */
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
     __attribute__((nonnull(1, 2)));
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
 {
 	size_t i;
@@ -305,6 +312,7 @@ static void print_pipeline(struct pctx *c, const struct sh_pipeline *pl)
 	}
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_andor(struct pctx *c, const struct sh_andor *a)
 {
 	for (; a; a = a->next) {
@@ -314,6 +322,7 @@ static void print_andor(struct pctx *c, const struct sh_andor *a)
 	}
 }
 
+// NOLINTNEXTLINE(misc-no-recursion) -- formatting and heredoc traversal mirror the nested shell-AST hierarchy
 static void print_list(struct pctx *c, const struct sh_list *list)
 {
 	const struct sh_list_item *it;
