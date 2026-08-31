@@ -76,7 +76,7 @@
 #             the whole object (and, cheaply from the same state, an OUT
 #             parameter nothing ever reads back).
 #   reentrancy
-#             currently opt-in; a path-sensitive Clang checker proves that
+#             on by default. A path-sensitive Clang checker proves that
 #             the pointer strtok/gmtime/localtime/asctime/ctime/getdate hand
 #             back into internal static storage is not read, dereferenced,
 #             or passed on after a later call to the same (or, in general, a
@@ -92,7 +92,7 @@
 #             not ask at all.
 #   variadic  currently opt-in; proves printf/scanf format literalness, argument
 #             counts, promoted types, pointer targets, and length modifiers.
-#   signals   currently opt-in; checks directly registered signal handlers for
+#   signals   on by default; checks directly registered signal handlers for
 #             async-signal-safe calls and volatile sig_atomic_t-only writes.
 #   errno     currently opt-in; path-sensitively proves errno discipline in
 #             ntlibc's own implementation: every read of errno is reachable
@@ -1714,7 +1714,7 @@ stage_reentrancy() {
 	return $any
 }
 
-stages=${*:-warn analyze cppcheck shell sizearith locks provenance undefined unreferenced widthmod}
+stages=${*:-warn analyze cppcheck shell sizearith locks provenance reentrancy signals undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that
