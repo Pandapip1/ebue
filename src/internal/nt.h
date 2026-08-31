@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #ifdef __i386__
 #define NTAPI __attribute__((stdcall))
@@ -218,7 +219,20 @@ typedef struct _OBJECT_ATTRIBUTES {
 #define OBJ_OPENIF              0x00000080L
 #define OBJ_OPENLINK            0x00000100L
 
+/* On an LLP64 target (x86_64: ULONG stays 4 bytes, HANDLE/PVOID become 8)
+ * OBJECT_ATTRIBUTES has two real compiler-inserted padding gaps -- 4
+ * bytes after the 4-byte Length before the pointer-sized RootDirectory,
+ * and another 4 bytes after Attributes before SecurityDescriptor -- that
+ * setting only the six named fields below, however completely, can never
+ * reach.  Those bytes are genuinely uninitialized stack garbage, and
+ * every one of this macro's call sites hands its address straight into a
+ * real Nt (or Zw) syscall (NtCreateFile, NtOpenProcess, NtCreateEvent,
+ * and every other NtCreate/NtOpen call in this tree): uninitialized
+ * stack content crossing into the kernel on every OBJECT_ATTRIBUTES-
+ * taking call this library makes.  The memset first proves the whole
+ * object, padding included, before the named fields are set. */
 #define InitializeObjectAttributes(p, n, a, r, s) do { \
+	memset((p), 0, sizeof(*(p))); \
 	(p)->Length = sizeof(OBJECT_ATTRIBUTES); \
 	(p)->RootDirectory = (r); \
 	(p)->Attributes = (a); \

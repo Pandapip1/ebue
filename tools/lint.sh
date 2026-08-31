@@ -48,7 +48,7 @@
 #             currently opt-in; proves spans for memory and I/O operations and
 #             proves memcpy ranges do not overlap and string API arguments have
 #             reachable NUL sentinels.
-#   initproof currently opt-in; path-sensitively proves that scalar and field
+#   initproof on by default; path-sensitively proves that scalar and field
 #             loads do not read definitely uninitialized storage.
 #   fallible  currently opt-in; rejects discarded results from known fallible
 #             system, I/O, mapping, semaphore, and pthread APIs.
@@ -68,7 +68,7 @@
 #   locks     on by default; path-sensitively proves mutex, rwlock, and
 #             spinlock acquire/release, wait, destroy, and function-exit state.
 #   abizeroinit
-#             currently opt-in; proves that a stack-local struct or array
+#             on by default; proves that a stack-local struct or array
 #             passed by address into an OUT or IN-OUT Nt*/Zw* syscall
 #             argument is fully initialized, including padding, before the
 #             call -- catching the InitializeObjectAttributes-style
@@ -94,7 +94,7 @@
 #             counts, promoted types, pointer targets, and length modifiers.
 #   signals   on by default; checks directly registered signal handlers for
 #             async-signal-safe calls and volatile sig_atomic_t-only writes.
-#   errno     currently opt-in; path-sensitively proves errno discipline in
+#   errno     on by default; path-sensitively proves errno discipline in
 #             ntlibc's own implementation: every read of errno is reachable
 #             only from the call whose failure it is checking (no stale
 #             read after an intervening errno-capable call, e.g. a cleanup
@@ -1861,7 +1861,7 @@ stage_purity() {
 	return $any
 }
 
-stages=${*:-warn analyze cppcheck shell sizearith locks provenance reentrancy signals undefined unreferenced widthmod}
+stages=${*:-warn analyze cppcheck shell sizearith locks provenance reentrancy signals abizeroinit initproof errno undefined unreferenced widthmod}
 mkdir -p "$builddir" || exit 1
 
 # Generate every arch's alltypes.h once, up front, before any stage that

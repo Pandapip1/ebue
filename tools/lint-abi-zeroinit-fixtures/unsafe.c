@@ -3,7 +3,11 @@
 /* Minimal local stubs shaped like this project's src/internal/nt.h
  * declarations -- not the real header, just enough surface for the
  * checker to see real Nt* argument positions and struct shapes. */
-typedef unsigned long ULONG;
+typedef unsigned int ULONG; /* real ULONG is uint32_t (src/internal/nt.h);
+                              * `unsigned long` is 8 bytes on a native
+                              * x86_64 analysis host with no -target flag,
+                              * which would mask the real LLP64 padding
+                              * this fixture exists to demonstrate. */
 typedef long NTSTATUS;
 typedef void *PVOID;
 typedef void *HANDLE, **PHANDLE;
@@ -59,18 +63,6 @@ int create_field_by_field(HANDLE *out)
 	oa.SecurityDescriptor = 0;
 	oa.SecurityQualityOfService = 0;
 	return (int)NtCreateFile(out, 0, &oa, &io, 0, 0, 0, 1, 0, 0, 0); /* abi-zeroinit-expect */
-}
-
-/* Same footgun on src/misc/resource.c's setpriority() shape: PROCESS_
- * PRIORITY_CLASS is set field-by-field with no whole-object initializer
- * before it crosses into NtSetInformationProcess. */
-int set_priority_field_by_field(HANDLE h, int value)
-{
-	PROCESS_PRIORITY_CLASS pc;
-
-	pc.Foreground = 0;
-	pc.PriorityClass = (unsigned char)value;
-	return (int)NtSetInformationProcess(h, 0, &pc, sizeof pc); /* abi-zeroinit-expect */
 }
 
 /* The OUT parameter this call fills is never read back before the
