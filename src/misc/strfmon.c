@@ -229,7 +229,6 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		if (*fmt == '.') {
 			for (rp = 0, fmt++; *fmt >= '0' && *fmt <= '9'; fmt++)
 				rp = rp * 10 + (unsigned long)(*fmt - '0');
-			if (rp > PREC_MAX) { errno = E2BIG; return -1; }
 		}
 
 		if (*fmt == 'i') intl = 1;
@@ -239,9 +238,10 @@ static ssize_t vstrfmon(char *s, size_t maxsize, const char *fmt, va_list ap)
 		if (rp == (unsigned long)-1) {
 			/* "If a right precision is not included, a default
 			 * specified by the current locale is used." */
-			unsigned char fd = (unsigned char)(intl ? lc->int_frac_digits : lc->frac_digits);
-			rp = fd < (unsigned char)CHAR_MAX ? (unsigned long)fd : 2;
+			int fd = intl ? lc->int_frac_digits : lc->frac_digits;
+			rp = fd >= 0 && fd < CHAR_MAX ? (unsigned long)fd : 2;
 		}
+		if (rp > PREC_MAX) { errno = E2BIG; return -1; }
 
 		sym = nosym ? "" : (intl ? lc->int_curr_symbol : lc->currency_symbol);
 		radix = lc->mon_decimal_point;

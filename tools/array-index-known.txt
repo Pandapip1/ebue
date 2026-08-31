@@ -428,7 +428,6 @@ src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg
 src/process/nt/plat_process.c	append_arg	arg[i]	for (i = 0; arg[i]; i++) if (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '"' || arg[i] == '\n' || arg[i] == '\v') need_quote = 1; @column 83	existing site; prove while completing the bounds audit
 src/process/nt/plat_process.c	append_arg	arg[i]	while (i < n && arg[i] == '\\') { nb++; i++; } @column 19	existing site; prove while completing the bounds audit
 src/process/nt/plat_process.c	append_arg	arg[i]	} else if (arg[i] == '"') { @column 14	existing site; prove while completing the bounds audit
-src/process/nt/plat_process.c	append_prog	(*buf)[(*len)++]	if (need_quote) (*buf)[(*len)++] = '"'; // NOLINT(clang-analyzer-core.NullDereference) -- the analyzer @column 18	existing site; prove while completing the bounds audit
 src/process/nt/plat_process.c	append_prog	(*buf)[(*len)++]	if (need_quote) (*buf)[(*len)++] = '"'; @column 18	existing site; prove while completing the bounds audit
 src/process/nt/plat_process.c	append_prog	arg[0]	int need_quote = arg[0] == 0; @column 19	existing site; prove while completing the bounds audit
 src/process/nt/plat_process.c	append_prog	arg[i]	for (i = 0; arg[i]; i++) { @column 14	existing site; prove while completing the bounds audit

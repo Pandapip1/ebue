@@ -744,7 +744,7 @@ src/time/strftime.c	do_strftime	(unsigned long)_v	case 'U': PUT_NUM(((long long)
 src/time/strftime.c	do_strftime	(unsigned long)_v	case 'W': PUT_NUM(((long long)tm->tm_yday + 7 - (wday ? wday - 1 : 6)) / 7, 2, '0'); break; @column 13	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned)tm->tm_mon	mon = (unsigned)tm->tm_mon < 12 ? tm->tm_mon : 0; @column 9	existing site; prove while completing the cast audit
 src/time/strftime.c	do_strftime	(unsigned)tm->tm_wday	wday = (unsigned)tm->tm_wday < 7 ? tm->tm_wday : 0; @column 10	existing site; prove while completing the cast audit
-src/time/strptime.c	parse	(int)(*century * 100 + v - 1900)	tm->tm_year = (int)(*century * 100 + v - 1900); @column 19	existing site; prove while completing the cast audit
+src/time/strptime.c	parse	(int)((long)*century * 100 + v - 1900)	tm->tm_year = (int)((long)*century * 100 + v - 1900); @column 19	existing site; prove while completing the cast audit
 src/time/strptime.c	parse	(int)(v * 100 + (*year2 >= 0 ? *year2 : 0) - 1900)	tm->tm_year = (int)(v * 100 + (*year2 >= 0 ? *year2 : 0) - 1900); @column 18	existing site; prove while completing the cast audit
 src/time/strptime.c	parse	(int)(v - 1900)	case 'Y': if (!(s = read_num(s, 4, &v))) return NULL; tm->tm_year = (int)(v - 1900); break; @column 71	existing site; prove while completing the cast audit
 src/time/strptime.c	parse	(int)(v < 69 ? v + 100 : v)	tm->tm_year = (int)(v < 69 ? v + 100 : v); @column 19	existing site; prove while completing the cast audit
