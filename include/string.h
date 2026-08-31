@@ -234,7 +234,10 @@ void *memccpy (void *__restrict, const void *__restrict, int, size_t) __attribut
  * touched, a real structural escape (str's own "resume here" NULL
  * convention, the same shape as strtok_r's s above), not an oversight. */
 char *strsep(char **, const char *) __attribute__((nonnull(1)));
-size_t strlcat (char *, const char *, size_t);
+/* strlcat's destination is deliberately not __NTLIBC_STRING: only its
+ * first n bytes are searched and it may contain no NUL in that range.  Its
+ * source, however, is always traversed to a NUL, including when n is zero. */
+size_t strlcat (char *, const char * __NTLIBC_STRING, size_t);
 size_t strlcpy (char *, const char *, size_t);
 void explicit_bzero (void *, size_t) __attribute__((nonnull(1)));
 #endif
